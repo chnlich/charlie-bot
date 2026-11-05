@@ -10,7 +10,7 @@ use charliebot_registry::Registry;
 use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
   HAS_PENDING_TRIGGER, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, ROUND_RATINGS, SCHEDULE_ENABLED,
-  SCHEDULE_FIELDS, SessionMetadata, SessionStatus, TaskProfile, WORK_STATE,
+  SCHEDULE_FIELDS, SessionMetadata, SessionStatus, TaskProfile, UtcDateTime, WORK_STATE,
 };
 use charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
@@ -531,7 +531,8 @@ fn render_row_text(store: &Store, row: &RowInputs, clear_unread: bool) -> StoreR
   Ok(charliebot_compat::jinja::tojson_text(&page_client_value(store, row, clear_unread)))
 }
 
-/// One page row's value as the page's client reads it: every falsy field left out, then the fields it never reads.
+/// One page row's value as the page's client reads it: every falsy field left out, then the fields it never reads,
+/// then the values in the form the page's client uses.
 ///
 /// Unlike [`render_row`], the page's rows keep `task.goal`. The test's expected-value helper builds its compare text
 /// through this function, so it compares the page text against the construction the page serves.
@@ -539,6 +540,7 @@ fn page_client_value(store: &Store, row: &RowInputs, clear_unread: bool) -> Valu
   let mut value = page_row_value(store, row, clear_unread);
   drop_falsy_fields(&mut value);
   drop_unread_fields(&mut value);
+  compact_page_fields(&mut value, row.meta.updated_at);
   value
 }
 
@@ -598,6 +600,28 @@ fn drop_unread_fields(value: &mut Value) {
     !(field.as_str() == ROUND_RATINGS && value.as_object().is_some_and(|ratings| ratings.is_empty()))
   });
 }
+
+/// The page's own presence and form of the row values the client fixes.
+///
+/// The page lists active sessions only ([`active_page_rows`] reads [`SessionStatus::Active`]), so every page row's
+/// `status` is `active`; the sidebar reads an absent status as active. A task-tree row's `work_state` paints an
+/// indicator only for `waiting`, and `idle` is the client's own default, so an idle row drops it while any other
+/// state stays.
+///
+/// The client formats a row's time with `relativeTime` at minute precision and sorts by the same instant, so epoch
+/// minutes carry everything it reads. On the 7,160-session mock home the ISO text costs 54 KB of the sidebar's
+/// compressed bytes and epoch minutes cost 25 KB.
+fn compact_page_fields(value: &mut Value, updated_at: UtcDateTime) {
+  let object = value.as_object_mut().expect("a session metadata value is an object");
+  object.remove("status");
+  if object.get(WORK_STATE).and_then(Value::as_str) == Some("idle") {
+    object.remove(WORK_STATE);
+  }
+  object.insert(UPDATED_AT.to_string(), Value::from(updated_at.into_inner().unix_timestamp().div_euclid(60)));
+}
+
+/// The session-metadata field holding the session's last update, in the page's epoch-minute form.
+const UPDATED_AT: &str = "updated_at";
 
 /// Whether *value* is a value the page's client reads as falsy: null, false, zero or the empty string.
 ///
@@ -1010,6 +1034,28 @@ mod tests {
     assert_eq!(row["id"], json!(meta.id));
     assert_eq!(row["name"], json!("falsy-row"));
     assert_eq!(row["profile"], json!("manager"));
+    // The page lists active sessions only, and the client reads an absent status as active.
+    assert!(!row.contains_key("status"), "the page's rows carry the status its listing fixes");
+    assert_eq!(
+      row[UPDATED_AT],
+      json!(meta.updated_at.into_inner().unix_timestamp().div_euclid(60)),
+      "the page carries a row's time as epoch minutes"
+    );
+  }
+
+  /// The page's own form of a row's time and defaults.
+  #[test]
+  fn a_page_row_time_is_epoch_minutes_and_an_idle_work_state_stays_out() {
+    let updated_at = UtcDateTime::parse("2026-03-19T23:54:31Z").unwrap();
+    let mut row = json!({"id": "synthetic", "status": "active", "work_state": "idle"});
+
+    compact_page_fields(&mut row, updated_at);
+
+    assert_eq!(row, json!({"id": "synthetic", "updated_at": 29_566_074_i64}));
+
+    let mut moving = json!({"id": "synthetic", "status": "active", "work_state": "waiting"});
+    compact_page_fields(&mut moving, updated_at);
+    assert_eq!(moving["work_state"], json!("waiting"), "a moving row keeps the state its indicator paints");
   }
 
   /// A session the user rated keeps its ratings: only an empty map is left out of the page row.

@@ -143,7 +143,14 @@ const CANCEL_RUN_BODY_FIELDS: &[Field] = &[Field::required("request_id", FieldTy
 const CANCEL_RUN_BODY: BodyModel = BodyModel::required(CANCEL_RUN_BODY_FIELDS).forbid_extra();
 
 const DELEGATE_TASK_TYPE: &[&str] = &["implement", "quick-edit", "script-run", "verify", "cold-read"];
-const COLD_READ_FIELDS: &[Field] = &[
+
+/// The class name every request schema gives the store's `ColdReadSpec` model, in the schema docs and in a
+/// validation error.
+pub const COLD_READ_SPEC_CLASS_NAME: &str = "ColdReadSpec";
+
+/// The fields of the store's `ColdReadSpec` model. The delegate route requires the model and the session create route
+/// accepts it as optional, so both read this one field list.
+pub const COLD_READ_FIELDS: &[Field] = &[
   Field::required("page_path", FieldType::String),
   Field::required("genre", FieldType::String),
   Field::required("trigger", FieldType::String),
@@ -172,7 +179,10 @@ const DELEGATE_BODY_FIELDS: &[Field] = &[
     FieldType::NullableModel { class_name: "DelegateInvocationMetadata", model: &DELEGATE_INVOCATION_BODY },
   ),
   Field::optional(DELEGATE_REQUEST_ID_FIELD, FieldType::NullableString),
-  Field::optional("cold_read", FieldType::NullableModel { class_name: "ColdReadSpec", model: &COLD_READ_BODY }),
+  Field::optional(
+    "cold_read",
+    FieldType::NullableModel { class_name: COLD_READ_SPEC_CLASS_NAME, model: &COLD_READ_BODY },
+  ),
 ];
 const DELEGATE_BODY: BodyModel = BodyModel::required(DELEGATE_BODY_FIELDS);
 

@@ -27,6 +27,7 @@ use charliebot_store::{
   TASK_CREATE_REQUEST_ID_REQUIRED, TaskCaller,
 };
 use charliebot_tasks::dispatch;
+use charliebot_tasks::routes::{COLD_READ_FIELDS, COLD_READ_SPEC_CLASS_NAME};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
@@ -42,13 +43,8 @@ const PROFILE_REQUIRED: &str = "profile must be 'manager' or 'worker'";
 const RENAME_REQUIRES_NAME: &str = "rename requires a non-empty name";
 const APPROVER_NEEDS_TASK: &str = "approver is a field of the task record: send it with a task object";
 
-/// `models.ColdReadSpec`.
-const COLD_READ_SPEC_FIELDS: &[Field] = &[
-  Field::required("page_path", FieldType::String),
-  Field::required("genre", FieldType::String),
-  Field::required("trigger", FieldType::String),
-];
-const COLD_READ_SPEC: BodyModel = BodyModel::optional(COLD_READ_SPEC_FIELDS).forbid_extra();
+/// `models.ColdReadSpec`, which the store's `ColdReadSpec` deserializes. The create route accepts it as optional.
+const COLD_READ_SPEC: BodyModel = BodyModel::optional(COLD_READ_FIELDS).forbid_extra();
 
 /// `models.TaskSpec`. Its model check is `_cold_read_matches_task_type`.
 const TASK_SPEC_FIELDS: &[Field] = &[
@@ -59,7 +55,10 @@ const TASK_SPEC_FIELDS: &[Field] = &[
   Field::optional("base_branch", FieldType::NullableString),
   Field::optional("task_type", FieldType::NullableEnum(TASK_TYPE_CHOICES)),
   Field::optional(KEEP_WORKTREE_FIELD, FieldType::Boolean),
-  Field::optional("cold_read", FieldType::NullableModel { class_name: "ColdReadSpec", model: &COLD_READ_SPEC }),
+  Field::optional(
+    "cold_read",
+    FieldType::NullableModel { class_name: COLD_READ_SPEC_CLASS_NAME, model: &COLD_READ_SPEC },
+  ),
 ];
 const TASK_SPEC: BodyModel = BodyModel::optional(TASK_SPEC_FIELDS).forbid_extra().checked(cold_read_matches_task_type);
 

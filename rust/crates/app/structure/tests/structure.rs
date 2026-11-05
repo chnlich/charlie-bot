@@ -1048,6 +1048,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/session-api",
     hint: "Use `charliebot_session_api::api::SESSION_TREE_INCLUDE_ARCHIVED_QUERY`.",
   },
+  OwnerRow {
+    name: "ColdReadSpec",
+    owner: "runtime/tasks",
+    hint: "Use `charliebot_tasks::routes::COLD_READ_SPEC_CLASS_NAME`.",
+  },
   OwnerRow { name: "application/msword", owner: "infra/compat", hint: MIME_HINT },
   OwnerRow { name: "application/pdf", owner: "infra/compat", hint: MIME_HINT },
   OwnerRow { name: "application/vnd.ms-powerpoint", owner: "infra/compat", hint: MIME_HINT },

@@ -16,6 +16,9 @@ use serde_json::{Value, json};
 
 /// The `source` of a step the agent wrote. A user step's message is the prompt, so it becomes no text event.
 const AGENT_SOURCE: &str = "agent";
+/// The `source` of a step that carries a turn's prompt. The export holds every turn, and each turn's user step starts
+/// the steps that turn added.
+const USER_SOURCE: &str = "user";
 
 #[derive(Deserialize)]
 struct Export {
@@ -61,20 +64,25 @@ struct Metrics {
 /// The events of one turn, in the order the session page shows them: the attached session, each step's text and tool
 /// events, the final answer, and the usage result.
 ///
-/// `answer` is the stdout text, the final answer. The last agent message of the trajectory carries the same answer, so
-/// that message is not repeated as a text event. The usage result has a null cost, because Devin bills in credits and
-/// reports no dollar figure.
+/// The export holds the whole conversation, every earlier turn included, so only the steps after the last user step
+/// become events. `answer` is the stdout text, the final answer. The last agent message of that turn carries the same
+/// answer, so that message is not repeated as a text event. The usage result has a null cost, because Devin bills in
+/// credits and reports no dollar figure.
 pub fn turn_events(export_text: &str, answer: &str) -> anyhow::Result<Vec<Value>> {
   let export: Export = serde_json::from_str(export_text).context("the export is not the trajectory JSON")?;
   let session_id = match export.session_id {
     Some(session_id) if !session_id.is_empty() => session_id,
     _ => bail!("devin export has no session_id"),
   };
-  let final_message = export.steps.iter().rposition(|step| step.source == AGENT_SOURCE && has_text(&step.message));
+  let Some(prompt_step) = export.steps.iter().rposition(|step| step.source == USER_SOURCE) else {
+    bail!("devin export has no user step");
+  };
+  let steps = &export.steps[prompt_step + 1..];
+  let final_message = steps.iter().rposition(|step| step.source == AGENT_SOURCE && has_text(&step.message));
 
   let mut events = vec![json!({"type": event_types::SESSION_ATTACHED, "session_id": session_id})];
   let mut tool_names: HashMap<String, String> = HashMap::new();
-  for (index, step) in export.steps.iter().enumerate() {
+  for (index, step) in steps.iter().enumerate() {
     if let Some(message) = step.message.as_deref()
       && step.source == AGENT_SOURCE
       && final_message != Some(index)
@@ -116,6 +124,7 @@ mod tests {
   use super::*;
 
   const FIXTURE: &str = include_str!("../tests/fixtures/export.json");
+  const MULTITURN_FIXTURE: &str = include_str!("../tests/fixtures/export_multiturn.json");
 
   #[test]
   fn a_trajectory_becomes_the_session_tool_text_and_usage_events() {
@@ -141,6 +150,38 @@ mod tests {
         }),
       ]
     );
+  }
+
+  #[test]
+  fn only_the_steps_after_the_last_user_step_become_events() {
+    let events = turn_events(MULTITURN_FIXTURE, "Fourth turn answer.").unwrap();
+    assert_eq!(
+      events,
+      vec![
+        json!({"type": "session_attached", "session_id": "devin-session-2c9e"}),
+        json!({"type": "tool_use", "name": "exec", "input": {"command": "echo fourth"}}),
+        json!({"type": "tool_result", "tool_name": "exec", "content": "fourth"}),
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Fourth turn answer."}]}}),
+        json!({
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 2400,
+            "output_tokens": 160,
+            "cache_read_input_tokens": 1200,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": null
+        }),
+      ]
+    );
+  }
+
+  #[test]
+  fn an_export_without_a_user_step_is_refused() {
+    let without_user = MULTITURN_FIXTURE.replace("\"source\": \"user\"", "\"source\": \"system\"");
+    let error = turn_events(&without_user, "x").unwrap_err();
+    assert_eq!(error.to_string(), "devin export has no user step");
   }
 
   #[test]

@@ -5,7 +5,6 @@
 //! A Feishu message id is `om_…` and carries no order, so the adapter names each message `<create_time ms>-<om_id>`.
 //! Only this module builds and splits that composite; the core orders it through `IdOrdering::TimeThenId`.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
@@ -25,6 +24,7 @@ use crate::client::{BASE_URL, FeishuAPIError, FeishuClient, Page};
 use crate::config::FeishuConfig;
 use crate::event::{self, Inbound, Message};
 use crate::metadata::{FEISHU_ORIGIN, FeishuOrigin};
+use crate::owners;
 use crate::thread_contract::FEISHU;
 
 /// The namespace of Feishu session ids. Changing it would orphan every existing Feishu-backed session.
@@ -129,7 +129,6 @@ impl FeishuThreadAdapter {
     &self,
     root_id: &str,
     thread_id: Option<&str>,
-    allowed: &BTreeMap<String, String>,
   ) -> anyhow::Result<Vec<ThreadMessage>> {
     let client = self.client().await?;
     let thread_id = match thread_id {
@@ -144,7 +143,7 @@ impl FeishuThreadAdapter {
     loop {
       let Page { items, next_page_token } = client.thread_messages(&thread_id, page_token.as_deref()).await?;
       for item in &items {
-        messages.push(thread_message(item, allowed)?);
+        messages.push(thread_message(item)?);
       }
       match next_page_token {
         Some(token) => page_token = Some(token),
@@ -163,8 +162,9 @@ fn is_own_app_reaction(item: &Value, app_id: &str) -> bool {
 }
 
 /// One thread message from the message list: the composite id, the sender, the text, and the eligibility the follow
-/// and the readback share (`eligible_message`). The bot's own posts carry the app id as `bot_id`.
-pub fn thread_message(item: &Value, allowed: &BTreeMap<String, String>) -> anyhow::Result<ThreadMessage> {
+/// and the readback share (`eligible_message`). Every non-deleted message from a human is eligible; the group's
+/// admission is checked where the thread is read. The bot's own posts carry the app id as `bot_id`.
+pub fn thread_message(item: &Value) -> anyhow::Result<ThreadMessage> {
   let text_of = |object: &Value, name: &str| -> anyhow::Result<String> {
     Ok(object.get(name).and_then(Value::as_str).with_context(|| format!("a message has no {name}"))?.to_string())
   };
@@ -190,7 +190,7 @@ pub fn thread_message(item: &Value, allowed: &BTreeMap<String, String>) -> anyho
     created_at: Some(rfc3339_of_millis(&create_time)?),
     metadata: Some(json!({"message_id": message_id, "message_type": message_type_of(item)?})),
     bot_id: (sender_type == "app").then_some(sender_id.clone()),
-    eligible: is_user && !deleted && allowed.contains_key(&sender_id),
+    eligible: is_user && !deleted,
   })
 }
 
@@ -201,8 +201,15 @@ impl ThreadAdapter for FeishuThreadAdapter {
 
   fn post<'a>(&'a self, address: &'a Value, text: &'a str, post_key: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async move {
+      let chat_id = str_field(address, "chat_id")?;
+      let config = self.bot.config()?;
+      let owners = &config.section::<FeishuConfig>("feishu").allowed_users;
+      let client = self.client().await?;
+      if !owners::chat_has_owner(client, owners, chat_id).await? {
+        bail!("chat {chat_id} has no listed owner among its members, so the reply is refused");
+      }
       let uuid = Uuid::new_v5(&FEISHU_NS, post_key.as_bytes()).to_string();
-      self.client().await?.reply_in_thread(str_field(address, "root_id")?, text, &uuid).await?;
+      client.reply_in_thread(str_field(address, "root_id")?, text, &uuid).await?;
       Ok(())
     })
   }
@@ -220,10 +227,8 @@ impl ThreadAdapter for FeishuThreadAdapter {
       let thread = match messages {
         Some(messages) => messages.to_vec(),
         None => {
-          let config = self.bot.config()?;
-          let allowed = &config.section::<FeishuConfig>("feishu").allowed_users;
           let thread_id = address.get("thread_id").and_then(Value::as_str);
-          self.thread_messages(str_field(address, "root_id")?, thread_id, allowed).await?
+          self.thread_messages(str_field(address, "root_id")?, thread_id).await?
         }
       };
       let created_after = UtcDateTime::parse(created_after)?;
@@ -272,12 +277,11 @@ impl ThreadAdapter for FeishuThreadAdapter {
   fn read_thread<'a>(
     &'a self,
     origin: &'a Value,
-    config: &'a CharlieBotConfig,
+    _config: &'a CharlieBotConfig,
   ) -> BoxFuture<'a, anyhow::Result<Vec<ThreadMessage>>> {
     Box::pin(async move {
       let origin = origin_of(origin)?;
-      let allowed = &config.section::<FeishuConfig>("feishu").allowed_users;
-      self.thread_messages(&origin.root_id, origin.thread_id.as_deref(), allowed).await
+      self.thread_messages(&origin.root_id, origin.thread_id.as_deref()).await
     })
   }
 
@@ -459,6 +463,8 @@ pub async fn route_inbound(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::test_support::{Answer, Home, serve};
+  use charliebot_compat::http_client;
 
   #[test]
   fn a_composite_id_splits_into_its_message_id() {
@@ -498,5 +504,38 @@ mod tests {
     assert_ne!(first, summon_session_id("tk_1", "oc_1", "om_other"));
     assert_ne!(first, summon_session_id("tk_2", "oc_1", "om_root"));
     assert_ne!(first, summon_session_id("tk_1", "oc_2", "om_root"));
+  }
+
+  #[tokio::test]
+  async fn a_reply_into_a_chat_with_no_listed_person_is_refused_before_the_post() {
+    let members = json!({
+      "code": 0,
+      "data": {"items": [{"member_id": "ou_synthetic_member", "member_id_type": "open_id"}], "has_more": false},
+    });
+    let stub = serve(move |_| Answer::json(members.clone())).await;
+    let home = Home::new();
+    let http = http_client::client(&http_client::Settings::from_env()).expect("the HTTP client builds");
+    let client = FeishuClient::new(http, stub.base_url.clone(), "cli_adapter_post", "synthetic-secret");
+    let bot = Bot::new(Arc::clone(&home.features), stub.base_url.clone());
+    let adapter = FeishuThreadAdapter::with_client(bot, client);
+    let address = json!({"chat_id": "oc_synthetic_post", "root_id": "om_root"});
+    let error = adapter.post(&address, "hello", "post-key-1").await.expect_err("the reply is refused");
+    assert!(error.to_string().contains("oc_synthetic_post"), "the error names the chat: {error}");
+    let requests = stub.requests.lock().unwrap();
+    assert!(requests.iter().all(|request| !request.target.contains("/reply")), "no reply was posted");
+  }
+
+  #[test]
+  fn any_human_message_in_a_thread_is_eligible() {
+    let item = json!({
+      "message_id": "om_human",
+      "create_time": "1700000000000",
+      "sender": {"id": "ou_synthetic_stranger", "sender_type": "user"},
+      "msg_type": "text",
+      "body": {"content": "{\"text\":\"hi\"}"},
+    });
+    let message = thread_message(&item).unwrap();
+    assert!(message.eligible);
+    assert_eq!(message.user.as_deref(), Some("ou_synthetic_stranger"));
   }
 }

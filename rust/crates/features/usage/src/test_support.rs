@@ -14,8 +14,8 @@ use charliebot_registry::usage::UsageSource;
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 use charliebot_store::Store;
 
-/// The usage sources in the order the server registers them: Claude Code, Codex, opencode, Antigravity and CLC. The
-/// config types and id prefixes are the ones the backend packages declare.
+/// The usage sources in the order the server registers them: Claude Code, Codex, opencode, Antigravity, CLC and
+/// Devin. The config types and id prefixes are the ones the backend packages declare.
 pub fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.usage_source(UsageSource {
     name: "Claude Code",
@@ -52,6 +52,13 @@ pub fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     implementation: None,
   })?;
   registry.attribute_backend_type("charlie-code", "CLC")?;
+  registry.usage_source(UsageSource {
+    name: "Devin",
+    id_prefixes: &["devin-"],
+    run_logs_only: true,
+    implementation: None,
+  })?;
+  registry.attribute_backend_type("devin", "Devin")?;
   Ok(())
 }
 

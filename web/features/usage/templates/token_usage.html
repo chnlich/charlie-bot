@@ -5,16 +5,19 @@
   :root {
     --grid:#e6eaef;
     --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1baf7a; --series-4:#7c5cd6; --series-5:#b07d1a;
+    --series-6:#c2185b;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) {
       --grid:#2c2c2b;
       --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; --series-4:#9d7ff0; --series-5:#c9962e;
+      --series-6:#e06a9c;
     }
   }
   :root[data-theme="dark"] {
     --grid:#2c2c2b;
     --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; --series-4:#9d7ff0; --series-5:#c9962e;
+    --series-6:#e06a9c;
   }
   [hidden] { display:none !important }
   /* The window label rides beside the section title while both fit on one row. On a phone width it takes its own
@@ -239,7 +242,8 @@
 
 <script>
 const DATA = {{ payload|safe }};
-const SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)'];
+const SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)',
+  'var(--series-6)'];
 // Legend order is the server's source display order (slot 1..n). Each payload row's segments carry their own slot
 // numbers, so a source's colour is its slot's entry in SERIES. The legend key only exists on the server build this
 // page ships with. The template reloads from disk while the serving process runs the build it started with, so the

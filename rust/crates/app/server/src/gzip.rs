@@ -37,32 +37,10 @@ pub const MINIMUM_SIZE: usize = charliebot_compat::compression::MINIMUM_DEFLATE_
 pub const COMPRESS_LEVEL: u32 = 1;
 
 /// `_TRANSPORT_GZIP_SKIP_MEDIA_PREFIXES`: content types already entropy-coded, matched by prefix.
-pub const SKIP_MEDIA_PREFIXES: &[&str] = &[
-  "text/event-stream",
-  "image/gif",
-  "image/heic",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "image/x-icon",
-  "image/vnd.microsoft.icon",
-  "video/",
-  "audio/",
-  "application/pdf",
-  "application/zip",
-  "application/x-zip-compressed",
-  "application/x-7z-compressed",
-  "application/gzip",
-  "application/x-gzip",
-  "application/vnd.openxmlformats-officedocument",
-  "application/vnd.ms-powerpoint",
-  "application/msword",
-  "font/woff",
-  "application/font-woff",
-];
+pub use charliebot_compat::compression::SKIP_MEDIA_PREFIXES;
 
 /// The identity responder's own exclusion (`DEFAULT_EXCLUDED_CONTENT_TYPES`).
-const IDENTITY_EXCLUDED_PREFIX: &str = "text/event-stream";
+const IDENTITY_EXCLUDED_PREFIX: &str = charliebot_compat::compression::TEXT_EVENT_STREAM;
 
 /// Whether the gzip responder passes a response of this content type through untouched.
 pub fn skips_transport_gzip(content_type: &str) -> bool {

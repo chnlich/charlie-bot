@@ -22,6 +22,7 @@ const BOT_INFO_PATH: &str = "/open-apis/bot/v3/info";
 /// fixes.
 pub const BOT_CAPABILITY_CODE: i64 = 11205;
 const MESSAGES_PATH: &str = "/open-apis/im/v1/messages";
+const CHATS_PATH: &str = "/open-apis/im/v1/chats";
 /// A tenant token is replaced this long before Feishu says it expires.
 const TOKEN_REFRESH_MARGIN: Duration = Duration::from_secs(30 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -216,6 +217,17 @@ impl FeishuClient {
       query.push(("page_token", token.to_string()));
     }
     let data = self.call(Method::GET, MESSAGES_PATH, &query, None).await?;
+    page_of(&data)
+  }
+
+  /// One page of a group's members, keyed by open_id (`GET /open-apis/im/v1/chats/:chat_id/members`).
+  pub async fn chat_members(&self, chat_id: &str, page_token: Option<&str>) -> anyhow::Result<Page> {
+    let mut query = vec![("member_id_type", "open_id".to_string()), ("page_size", PAGE_SIZE.to_string())];
+    if let Some(token) = page_token {
+      query.push(("page_token", token.to_string()));
+    }
+    let path = format!("{CHATS_PATH}/{}/members", path_segment(chat_id)?);
+    let data = self.call(Method::GET, &path, &query, None).await?;
     page_of(&data)
   }
 

@@ -1,55 +1,19 @@
 //! Request-body reading and typed model validation.
 //!
-//! A route reads the body before resolving dependencies, then validates the model after them. The reader preserves
-//! raw bytes unless the strict content-type rule selects JSON; JSON bytes use the JSON loader's decoding.
-//!
 //! ```ignore
-//! async fn update(request: Request<Body>) -> Response {
-//!   let (parts, stream) = request.into_parts();
-//!   let body = match read(&parts.headers, stream).await {
-//!     Ok(body) => body,
-//!     Err(response) => return *response,
-//!   };
-//!   let session = match require_session(&parts).await {
-//!     Ok(session) => session,
-//!     Err(response) => return response,
-//!   };
-//!   let model = match body.validate(&SESSION_BODY) {
-//!     Ok(model) => model,
-//!     Err(response) => return *response,
-//!   };
-//!   update_session(session, model).await
-//! }
+//! let (parts, stream) = request.into_parts();
+//! let body = match read(&parts.headers, stream).await {
+//!   Ok(body) => body,
+//!   Err(response) => return *response,
+//! };
+//! let model = match body.validate(&SESSION_BODY) {
+//!   Ok(model) => model,
+//!   Err(response) => return *response,
+//! };
 //! ```
-
-//! ## Model options
 //!
-//! `BodyModel::forbid_extra()` makes an undeclared key an error. A `Field` accepts `ge`, `gt` and `le` bounds
-//! for integer and float fields, and `min_length` and `max_length` bounds for string and list fields. Number bounds
-//! must use the corresponding `validation::Bound` variant. A bound applies only when an optional field has a value.
-//!
-//! The error order: declared fields in declaration order, then forbidden extra keys in input order. A number that
-//! violates multiple bounds reports the first violated bound in the order `le`, `ge`, `gt`. Lists report `max_length`
-//! before their items and `min_length` after their items.
-//!
-//! `FieldType::ModelList` declares a `list[M]` field and `FieldType::NullableModelList` a `list[M] | None` field. Each
-//! item is validated as the model `M`. A non-object item reports `model_attributes_type` at its index, with no
-//! context. An item's own errors sit under its index, in the same order as a top-level model's (fields, then extra
-//! keys). A value that is not a list reports `list_type` at the field; only
-//! the nullable type takes null. The validated list holds each item as a validated object, and a missing optional item
-//! field stays absent.
-//!
-//! `FieldType::NullableTaggedUnionList` declares a `list[A | B | C] | None` field whose items are discriminated on
-//! one key.
-//! Each `TaggedVariant` maps a tag value to its member model, which declares the discriminator as a `Literal` of that
-//! tag, so the validated item keeps its tag. A non-object item reports `model_attributes_type` at its index. An object
-//! without the discriminator key reports `union_tag_not_found` at its index, and one whose tag matches no variant
-//! reports `union_tag_invalid` there, with the tag's text rendering. A member's own errors sit under `[index, tag]`: a
-//! bad `pid` in a `local_pid` item at index 0 reports `["body", "watch_targets", 0, "local_pid", "pid"]`. The field
-//! follows the `ModelList` rules for a non-list value, for null and for the list's bounds.
-//!
-//! `RequestBody::check` returns the ordered `FieldError`s; `validate` wraps them in the 422 response. A missing
-//! optional field stays absent from the returned object so the handler applies the field's default.
+//! The field readers below read one field of a body that a model has validated. Their shape check cannot fail
+//! after `validate`, so they return the value rather than an error.
 
 use std::cmp::Ordering;
 
@@ -72,7 +36,11 @@ pub enum RequestBody {
   Raw(Bytes),
 }
 
-/// Read the request body with the strict content-type rule.
+/// Read the request body with the strict content-type rule: raw bytes unless the type is JSON, which the JSON
+/// loader decodes.
+///
+/// A route reads the body before resolving dependencies, then validates the model after them with
+/// [`RequestBody::validate`].
 pub async fn read(headers: &HeaderMap, body: Body) -> Result<RequestBody, Box<Response>> {
   let raw = match to_bytes(body, usize::MAX).await {
     Ok(raw) => raw,
@@ -151,7 +119,9 @@ pub enum FieldType {
     model: &'static BodyModel,
   },
   /// A `list[M]` field whose items are each validated as the nested model `M`. A non-object item reports
-  /// `model_attributes_type`, which names no model.
+  /// `model_attributes_type`, which names no model. An item's own errors sit under its index, in a top-level model's
+  /// order: fields, then extra keys. A non-list value reports `list_type` at the field, and a validated item keeps
+  /// each of its declared fields, with a missing optional field absent.
   ModelList {
     model: &'static BodyModel,
   },
@@ -160,14 +130,18 @@ pub enum FieldType {
     model: &'static BodyModel,
   },
   /// A `list[A | B | C] | None` field discriminated on `discriminator`: null is valid, and each item of a list is
-  /// validated as the variant whose tag it carries.
+  /// validated as the variant whose tag it carries. An object without the discriminator reports
+  /// `union_tag_not_found` at its index; a tag matching no variant reports `union_tag_invalid` there, with the tag's
+  /// text rendering. A member's errors sit under `[index, tag]`: a bad `pid` in a `local_pid` item at index 0 reports
+  /// `["body", "watch_targets", 0, "local_pid", "pid"]`. Non-list values and list bounds follow `ModelList`.
   NullableTaggedUnionList {
     discriminator: &'static str,
     variants: &'static [TaggedVariant],
   },
 }
 
-/// One member of a tagged union: the tag value that selects it and the model its fields validate as.
+/// One member of a tagged union: the tag value that selects it and the model its fields validate as. The model
+/// declares the discriminator as a `Literal` of the tag, so a validated item keeps its tag.
 #[derive(Debug, Clone, Copy)]
 pub struct TaggedVariant {
   pub tag: &'static str,
@@ -322,7 +296,11 @@ impl BodyModel {
 }
 
 impl RequestBody {
-  /// Validate this body against a model and return its declared fields, or the errors for it.
+  /// Validate this body against a model and return its declared fields, or the ordered errors for it.
+  ///
+  /// Errors come in field declaration order, then forbidden extra keys in input order. A number reports the first
+  /// violated bound in the order `le`, `ge`, `gt`; a list reports `max_length` before its items and `min_length`
+  /// after them. A missing optional field stays absent from the returned object, so the handler applies its default.
   pub fn check(&self, model: &BodyModel) -> Result<Option<Value>, Vec<validation::FieldError>> {
     match self {
       // A JSON `null` body reads as None, which a required model reports as missing.
@@ -353,11 +331,50 @@ impl RequestBody {
   }
 }
 
+/// A string field of a validated body, borrowed from it.
+pub fn text_field_ref<'a>(fields: &'a Map<String, Value>, name: &str) -> &'a str {
+  match fields.get(name).and_then(Value::as_str) {
+    Some(text) => text,
+    None => unreachable!("a validated {name} is a string"),
+  }
+}
+
 /// A string field of a validated body.
 pub fn text_field(fields: &Map<String, Value>, name: &str) -> String {
-  match fields.get(name).and_then(Value::as_str) {
-    Some(text) => text.to_string(),
-    None => unreachable!("a validated {name} is a string"),
+  text_field_ref(fields, name).to_string()
+}
+
+/// An optional string field of a validated body: an absent field and a null one are both `None`.
+pub fn optional_text_field_ref<'a>(fields: &'a Map<String, Value>, name: &str) -> Option<&'a str> {
+  match fields.get(name) {
+    Some(Value::String(text)) => Some(text),
+    Some(Value::Null) | None => None,
+    other => unreachable!("a validated {name} is a string or null, got {other:?}"),
+  }
+}
+
+/// An integer field of a validated body, `None` when it is absent or null. `i128` holds the signed 64-bit range
+/// and the positive values through the unsigned 64-bit maximum that the body reader accepts.
+pub fn integer_field(fields: &Map<String, Value>, name: &str) -> Option<i128> {
+  match fields.get(name) {
+    Some(Value::Number(number)) => Some(
+      number
+        .as_i64()
+        .map(i128::from)
+        .or_else(|| number.as_u64().map(i128::from))
+        .expect("a validated integer is a 64-bit value"),
+    ),
+    Some(Value::Null) | None => None,
+    other => unreachable!("a validated {name} is an integer or null, got {other:?}"),
+  }
+}
+
+/// A boolean field of a validated body, `None` when it is absent or null.
+pub fn flag_field(fields: &Map<String, Value>, name: &str) -> Option<bool> {
+  match fields.get(name) {
+    Some(Value::Bool(flag)) => Some(*flag),
+    Some(Value::Null) | None => None,
+    other => unreachable!("a validated {name} is a bool or null, got {other:?}"),
   }
 }
 
@@ -860,6 +877,29 @@ mod tests {
   fn refuse_worker_kind(values: &Map<String, Value>) -> Option<String> {
     (values.get("mode") == Some(&json!("worker")) && values.get("kind").is_some())
       .then(|| "a worker takes no kind".to_string())
+  }
+
+  #[test]
+  fn a_validated_field_keeps_the_whole_integer_range() {
+    let fields = json!({
+      "text": "value",
+      "nothing": null,
+      "big": u64::MAX,
+      "small": -3,
+      "flag": false,
+    });
+    let fields = fields.as_object().expect("an object");
+
+    assert_eq!(text_field_ref(fields, "text"), "value");
+    assert_eq!(optional_text_field_ref(fields, "text"), Some("value"));
+    assert_eq!(optional_text_field_ref(fields, "nothing"), None);
+    assert_eq!(optional_text_field_ref(fields, "missing"), None);
+    assert_eq!(integer_field(fields, "big"), Some(i128::from(u64::MAX)));
+    assert_eq!(integer_field(fields, "small"), Some(-3));
+    assert_eq!(integer_field(fields, "nothing"), None);
+    assert_eq!(integer_field(fields, "missing"), None);
+    assert_eq!(flag_field(fields, "flag"), Some(false));
+    assert_eq!(flag_field(fields, "missing"), None);
   }
 
   #[test]

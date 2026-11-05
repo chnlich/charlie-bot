@@ -69,13 +69,13 @@ pub struct AccountsConfig {
   pub claude_compaction: ClaudeCompactionConfig,
 }
 
-/// `claude_code:` section: the switch that gives manager turns, work runs and improve iterations Claude Code's own
-/// subagents (the `Agent` tool).
+/// The `claude_code:` config section: the switch that gives manager turns, work runs and improve iterations Claude
+/// Code's own subagents (the `Agent` tool).
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaudeCodeConfig {
-  /// true removes `Agent` from the disallowed tools of manager turns, work runs and improve iterations. false keeps
-  /// `Agent` disallowed on every run kind.
+  /// The subagent switch: `true` removes `Agent` from the disallowed tools of manager turns, work runs and improve
+  /// iterations; `false` keeps `Agent` disallowed on every run kind.
   #[serde(default)]
   pub enable_subagents: bool,
 }

@@ -25,8 +25,8 @@ use crate::config::FeishuConfig;
 use crate::metadata::FeishuOrigin;
 use crate::thread_contract::FEISHU;
 
-/// The readback's view of one thread message: ids, the author and the configured person, the text, the message type,
-/// and the unread and summon flags.
+/// The readback's view of one thread message: ids, the author and the listed person's name when the author is one
+/// (`person` is null otherwise), the text, the message type, and the unread and summon flags.
 fn message_view(message: &ThreadMessage, unread: bool, summon: bool, allowed: &BTreeMap<String, String>) -> Value {
   let meta = message.metadata.as_ref();
   let field = |name: &str| meta.and_then(|meta| meta.get(name)).cloned().unwrap_or(Value::Null);
@@ -96,10 +96,8 @@ pub async fn read_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
   let config = bot.config().map_err(ThreadReplyError::failure)?;
   let allowed = &config.section::<FeishuConfig>("feishu").allowed_users;
   let adapter = Arc::new(FeishuThreadAdapter::new(bot.clone()));
-  let thread_messages = adapter
-    .thread_messages(&origin.root_id, origin.thread_id.as_deref(), allowed)
-    .await
-    .map_err(ThreadReplyError::failure)?;
+  let thread_messages =
+    adapter.thread_messages(&origin.root_id, origin.thread_id.as_deref()).await.map_err(ThreadReplyError::failure)?;
   let pending =
     pending_summon_mention_ids(&load_chat_events(bot, session_id).await?).map_err(ThreadReplyError::failure)?;
   let unread_ids: HashSet<String> = thread_entry::unread_after(
@@ -132,7 +130,7 @@ pub async fn read_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
     watermark_id = ack["watermark_id"].clone();
   }
   let mut messages = Vec::new();
-  if let Some(root) = root_message(bot, &origin, &thread_messages, allowed).await.map_err(api_failure)? {
+  if let Some(root) = root_message(bot, &origin, &thread_messages).await.map_err(api_failure)? {
     messages.push(message_view(&root, false, pending.contains(&root.id), allowed));
   }
   messages.extend(
@@ -153,19 +151,18 @@ async fn root_message(
   bot: &Bot,
   origin: &FeishuOrigin,
   thread_messages: &[ThreadMessage],
-  allowed: &BTreeMap<String, String>,
 ) -> anyhow::Result<Option<ThreadMessage>> {
   if thread_messages.iter().any(|message| message_id_of(&message.id).ok() == Some(origin.root_id.as_str())) {
     return Ok(None);
   }
   let client = bot.client()?;
   let item = client.message(&origin.root_id).await?;
-  Ok(Some(thread_message(&item, allowed)?))
+  Ok(Some(thread_message(&item)?))
 }
 
 /// The readback of `charliebot feishu check`: each setup check with its outcome, and `ok` when all of them pass. The
-/// checks are: a tenant token, the bot's open_id, the long-connection endpoint, and a non-empty allow-list. Refusals:
-/// 409 when the app id or secret is unset.
+/// checks are: a tenant token, the bot's open_id, the long-connection endpoint, and a non-empty owner list
+/// (`allowed_users`). Refusals: 409 when the app id or secret is unset.
 pub async fn check_setup(bot: &Bot) -> Result<Value, ThreadReplyError> {
   let credentials = bot.features.credentials.get().map_err(ThreadReplyError::failure)?;
   for key in ["app_id", "app_secret"] {

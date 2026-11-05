@@ -8,9 +8,11 @@ use std::path::Path;
 use anyhow::Context as _;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config::{self, CONFIG_FILENAME};
-use charliebot_core::text_repr;
 use charliebot_store::metadata::MetadataReadError;
 use serde_json::Value;
+
+/// The repr of a loaded JSON value, from the module that owns it.
+pub(crate) use charliebot_core::text_repr::value_repr;
 
 /// The group's usage line, printed for `--help` and for a bad name or argument count.
 pub(crate) const USAGE: &str = "usage: charliebot switch-helper <name> [args...]";
@@ -27,14 +29,6 @@ pub(crate) fn exact<const N: usize>(args: &[OsString]) -> Result<[String; N], Cl
 /// The failure of a helper's work: a broken file or a bad record exits 1.
 pub(crate) fn failed(error: impl std::fmt::Display) -> CliExit {
   CliExit::error(error.to_string())
-}
-
-/// A value's repr: strings are quoted, and a null prints bare.
-pub(crate) fn value_repr(value: &Value) -> String {
-  match value {
-    Value::String(text) => text_repr::str_repr(text),
-    other => text_repr::value_str(other),
-  }
 }
 
 /// A helper that reports a plain exit code instead of a `CliExit` body, for the polled helpers whose no-match is

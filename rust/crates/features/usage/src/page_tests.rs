@@ -498,7 +498,10 @@ async fn page_legend_names_the_cli_sources_without_charlie_bot() {
   let start = body.find("const LEG = ").expect("the page carries a legend") + "const LEG = ".len();
   let end = start + body[start..].find(']').expect("the legend list closes") + 1;
   let legend: Value = serde_json::from_str(&body[start..end]).expect("the legend is JSON");
-  assert_eq!(legend, json!([CC, CODEX, OC, AGY, CLC]));
+  assert_eq!(legend, json!([CC, CODEX, OC, AGY, CLC, "Devin"]));
+  // Every legend entry takes a series colour; a source past the palette would draw no swatch.
+  let colours = body.matches("'var(--series-").count();
+  assert_eq!(colours, legend.as_array().expect("the legend is a list").len(), "the page has one colour per source");
   assert!(!body.contains("charlie-bot"), "the page names no charlie-bot source");
 }
 

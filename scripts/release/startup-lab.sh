@@ -456,7 +456,8 @@ cmd_prime_snapshot() {
     copied=$(( copied + 1 ))
   done < <(find "$tree/home/.charliebot/sessions" -name fact_checkpoint.json)
   # The startup-only files in the home's state directory, beside the boot marker, for the reset-labelled steady state.
-  for startup_file in "$tree/home/.charliebot"/state/boot_skip_proof.json; do
+  for startup_file in "$tree/home/.charliebot"/state/boot_skip_proof.json \
+    "$tree/home/.charliebot"/state/boot_trigger_index.json; do
     [[ -e $startup_file ]] && cp "$startup_file" "$run/startup/"
   done
   printf 'primed %s fact checkpoints\n' "$copied"

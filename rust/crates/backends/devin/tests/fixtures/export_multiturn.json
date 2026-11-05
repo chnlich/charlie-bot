@@ -1,0 +1,76 @@
+{
+  "schema_version": "ATIF-v1",
+  "session_id": "devin-session-2c9e",
+  "model_name": "swe-2-test",
+  "steps": [
+    {"step_id": 1, "source": "system", "message": "You are a command line agent."},
+    {"step_id": 2, "source": "system", "message": "Available profiles: none."},
+    {"step_id": 3, "source": "system", "message": "You are powered by a test model."},
+    {"step_id": 4, "source": "system", "message": "<system_info>synthetic</system_info>"},
+    {"step_id": 5, "source": "user", "message": "First turn prompt."},
+    {"step_id": 6, "source": "system", "message": "<available_skills>none</available_skills>"},
+    {
+      "step_id": 7,
+      "source": "agent",
+      "message": "",
+      "tool_calls": [
+        {"tool_call_id": "call-1", "function_name": "exec", "arguments": {"command": "echo first"}}
+      ],
+      "observation": {"results": [{"source_call_id": "call-1", "content": "first"}]},
+      "metrics": {"prompt_tokens": 300, "completion_tokens": 20, "cached_tokens": 0}
+    },
+    {
+      "step_id": 8,
+      "source": "agent",
+      "message": "First turn answer.",
+      "metrics": {"prompt_tokens": 350, "completion_tokens": 30, "cached_tokens": 300}
+    },
+    {"step_id": 9, "source": "user", "message": "Second turn prompt."},
+    {
+      "step_id": 10,
+      "source": "agent",
+      "message": "",
+      "tool_calls": [
+        {"tool_call_id": "call-2", "function_name": "exec", "arguments": {"command": "echo second"}}
+      ],
+      "observation": {"results": [{"source_call_id": "call-2", "content": "second"}]},
+      "metrics": {"prompt_tokens": 500, "completion_tokens": 25, "cached_tokens": 350}
+    },
+    {
+      "step_id": 11,
+      "source": "agent",
+      "message": "Second turn answer.",
+      "metrics": {"prompt_tokens": 520, "completion_tokens": 15, "cached_tokens": 500}
+    },
+    {"step_id": 12, "source": "user", "message": "Third turn prompt."},
+    {
+      "step_id": 13,
+      "source": "agent",
+      "message": "Third turn answer.",
+      "metrics": {"prompt_tokens": 700, "completion_tokens": 40, "cached_tokens": 520}
+    },
+    {"step_id": 14, "source": "user", "message": "Fourth turn prompt."},
+    {
+      "step_id": 15,
+      "source": "agent",
+      "message": "",
+      "tool_calls": [
+        {"tool_call_id": "call-4", "function_name": "exec", "arguments": {"command": "echo fourth"}}
+      ],
+      "observation": {"results": [{"source_call_id": "call-4", "content": "fourth"}]},
+      "metrics": {"prompt_tokens": 1500, "completion_tokens": 100, "cached_tokens": 900}
+    },
+    {
+      "step_id": 16,
+      "source": "agent",
+      "message": "Fourth turn answer.",
+      "metrics": {"prompt_tokens": 900, "completion_tokens": 60, "cached_tokens": 300}
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 4770,
+    "total_completion_tokens": 290,
+    "total_cached_tokens": 2870,
+    "total_steps": 16
+  }
+}

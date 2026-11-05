@@ -14,17 +14,33 @@ pub const SUFFIX_MAP: &[(&str, &str)] = &[
 pub const ENCODINGS_MAP: &[(&str, &str)] =
   &[(".gz", "gzip"), (".Z", "compress"), (".bz2", "bzip2"), (".xz", "xz"), (".br", "br")];
 
+/// The content types that the gzip skip policy also names. The table and
+/// `compression::SKIP_MEDIA_PREFIXES` read them here, so each type is spelled once.
+pub const APPLICATION_GZIP: &str = "application/gzip";
+pub const APPLICATION_MSWORD: &str = "application/msword";
+pub const APPLICATION_PDF: &str = "application/pdf";
+pub const APPLICATION_VND_MS_POWERPOINT: &str = "application/vnd.ms-powerpoint";
+pub const APPLICATION_X_7Z_COMPRESSED: &str = "application/x-7z-compressed";
+pub const APPLICATION_ZIP: &str = "application/zip";
+pub const FONT_WOFF: &str = "font/woff";
+pub const IMAGE_GIF: &str = "image/gif";
+pub const IMAGE_HEIC: &str = "image/heic";
+pub const IMAGE_JPEG: &str = "image/jpeg";
+pub const IMAGE_PNG: &str = "image/png";
+pub const IMAGE_VND_MICROSOFT_ICON: &str = "image/vnd.microsoft.icon";
+pub const IMAGE_WEBP: &str = "image/webp";
+
 /// The strict extension -> type table, in insertion order.
 pub const TYPES_MAP: &[(&str, &str)] = &[
   (".js", "text/javascript"),
   (".mjs", "text/javascript"),
   (".epub", "application/epub+zip"),
-  (".gz", "application/gzip"),
+  (".gz", APPLICATION_GZIP),
   (".json", "application/json"),
   (".webmanifest", "application/manifest+json"),
-  (".doc", "application/msword"),
-  (".dot", "application/msword"),
-  (".wiz", "application/msword"),
+  (".doc", APPLICATION_MSWORD),
+  (".dot", APPLICATION_MSWORD),
+  (".wiz", APPLICATION_MSWORD),
   (".nq", "application/n-quads"),
   (".nt", "application/n-triples"),
   (".bin", "application/octet-stream"),
@@ -36,7 +52,7 @@ pub const TYPES_MAP: &[(&str, &str)] = &[
   (".so", "application/octet-stream"),
   (".oda", "application/oda"),
   (".ogx", "application/ogg"),
-  (".pdf", "application/pdf"),
+  (".pdf", APPLICATION_PDF),
   (".p7c", "application/pkcs7-mime"),
   (".ps", "application/postscript"),
   (".ai", "application/postscript"),
@@ -47,11 +63,11 @@ pub const TYPES_MAP: &[(&str, &str)] = &[
   (".xls", "application/vnd.ms-excel"),
   (".xlb", "application/vnd.ms-excel"),
   (".eot", "application/vnd.ms-fontobject"),
-  (".ppt", "application/vnd.ms-powerpoint"),
-  (".pot", "application/vnd.ms-powerpoint"),
-  (".ppa", "application/vnd.ms-powerpoint"),
-  (".pps", "application/vnd.ms-powerpoint"),
-  (".pwz", "application/vnd.ms-powerpoint"),
+  (".ppt", APPLICATION_VND_MS_POWERPOINT),
+  (".pot", APPLICATION_VND_MS_POWERPOINT),
+  (".ppa", APPLICATION_VND_MS_POWERPOINT),
+  (".pps", APPLICATION_VND_MS_POWERPOINT),
+  (".pwz", APPLICATION_VND_MS_POWERPOINT),
   (".odg", "application/vnd.oasis.opendocument.graphics"),
   (".odp", "application/vnd.oasis.opendocument.presentation"),
   (".ods", "application/vnd.oasis.opendocument.spreadsheet"),
@@ -61,7 +77,7 @@ pub const TYPES_MAP: &[(&str, &str)] = &[
   (".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
   (".rar", "application/vnd.rar"),
   (".wasm", "application/wasm"),
-  (".7z", "application/x-7z-compressed"),
+  (".7z", APPLICATION_X_7Z_COMPRESSED),
   (".bcpio", "application/x-bcpio"),
   (".cpio", "application/x-cpio"),
   (".csh", "application/x-csh"),
@@ -105,7 +121,7 @@ pub const TYPES_MAP: &[(&str, &str)] = &[
   (".xpdl", "application/xml"),
   (".yaml", "application/yaml"),
   (".yml", "application/yaml"),
-  (".zip", "application/zip"),
+  (".zip", APPLICATION_ZIP),
   (".3gp", "audio/3gpp"),
   (".3gpp", "audio/3gpp"),
   (".3g2", "audio/3gpp2"),
@@ -131,31 +147,31 @@ pub const TYPES_MAP: &[(&str, &str)] = &[
   (".otf", "font/otf"),
   (".ttf", "font/ttf"),
   (".weba", "audio/webm"),
-  (".woff", "font/woff"),
+  (".woff", FONT_WOFF),
   (".woff2", "font/woff2"),
   (".avif", "image/avif"),
   (".bmp", "image/bmp"),
   (".emf", "image/emf"),
   (".fits", "image/fits"),
   (".g3", "image/g3fax"),
-  (".gif", "image/gif"),
+  (".gif", IMAGE_GIF),
   (".ief", "image/ief"),
   (".jp2", "image/jp2"),
-  (".jpg", "image/jpeg"),
-  (".jpe", "image/jpeg"),
-  (".jpeg", "image/jpeg"),
+  (".jpg", IMAGE_JPEG),
+  (".jpe", IMAGE_JPEG),
+  (".jpeg", IMAGE_JPEG),
   (".jpm", "image/jpm"),
   (".jpx", "image/jpx"),
-  (".heic", "image/heic"),
+  (".heic", IMAGE_HEIC),
   (".heif", "image/heif"),
-  (".png", "image/png"),
+  (".png", IMAGE_PNG),
   (".svg", "image/svg+xml"),
   (".t38", "image/t38"),
   (".tiff", "image/tiff"),
   (".tif", "image/tiff"),
   (".tfx", "image/tiff-fx"),
-  (".ico", "image/vnd.microsoft.icon"),
-  (".webp", "image/webp"),
+  (".ico", IMAGE_VND_MICROSOFT_ICON),
+  (".webp", IMAGE_WEBP),
   (".wmf", "image/wmf"),
   (".ras", "image/x-cmu-raster"),
   (".pnm", "image/x-portable-anymap"),

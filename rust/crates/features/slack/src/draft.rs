@@ -7,9 +7,7 @@
 use std::time::Duration;
 
 use charliebot_compat::http_client::{self, Settings};
-use charliebot_registry::draft::{
-  DraftContext, DraftFailureOutcome, DraftPlatform, DraftPlatformFactory, DraftSendFailure, DraftSent,
-};
+use charliebot_registry::draft::{DraftContext, DraftPlatform, DraftPlatformFactory, DraftSendFailure, DraftSent};
 use futures_util::future::BoxFuture;
 use http::header;
 use serde_json::{Value, json};
@@ -50,7 +48,7 @@ impl SlackDraftSender {
       .get("user_id")
       .and_then(Value::as_str)
       .filter(|user| !user.is_empty())
-      .ok_or_else(|| rejected("auth.test: no user_id"))?
+      .ok_or_else(|| DraftSendFailure::rejected("auth.test: no user_id"))?
       .to_string();
     let channel = self.channel(target).await?;
     let mut payload = json!({"channel": channel, "text": body});
@@ -62,7 +60,7 @@ impl SlackDraftSender {
       .get("ts")
       .and_then(Value::as_str)
       .filter(|ts| !ts.is_empty())
-      .ok_or_else(|| rejected("chat.postMessage: no ts"))?;
+      .ok_or_else(|| DraftSendFailure::rejected("chat.postMessage: no ts"))?;
     let url = format!("https://slack.com/archives/{channel}/p{}", ts.replace('.', ""));
     Ok(DraftSent { sender, url })
   }
@@ -71,7 +69,7 @@ impl SlackDraftSender {
   async fn channel(&self, target: &Value) -> Result<String, DraftSendFailure> {
     if let Some(channel) = target.get("channel").and_then(Value::as_str) {
       if channel.is_empty() {
-        return Err(rejected("the Slack target names no channel"));
+        return Err(DraftSendFailure::rejected("the Slack target names no channel"));
       }
       return Ok(channel.to_string());
     }
@@ -81,7 +79,7 @@ impl SlackDraftSender {
       .map(|users| users.iter().filter_map(Value::as_str).collect())
       .unwrap_or_default();
     if users.is_empty() {
-      return Err(rejected("the Slack target names no channel and no users"));
+      return Err(DraftSendFailure::rejected("the Slack target names no channel and no users"));
     }
     let opened = self.post("conversations.open", json!({"users": users.join(",")})).await?;
     opened
@@ -89,7 +87,7 @@ impl SlackDraftSender {
       .and_then(Value::as_str)
       .filter(|channel| !channel.is_empty())
       .map(str::to_string)
-      .ok_or_else(|| rejected("conversations.open: no channel id"))
+      .ok_or_else(|| DraftSendFailure::rejected("conversations.open: no channel id"))
   }
 
   async fn post(&self, method: &str, payload: Value) -> Result<Value, DraftSendFailure> {
@@ -102,28 +100,21 @@ impl SlackDraftSender {
       .body(serde_json::to_vec(&payload).expect("a JSON payload serializes"))
       .send()
       .await
-      .map_err(|error| unknown(format!("{method}: {error}")))?;
+      .map_err(|error| DraftSendFailure::unknown(format!("{method}: {error}")))?;
     let status = response.status();
-    let body = response.bytes().await.map_err(|error| unknown(format!("{method}: {error}")))?;
+    let body = response.bytes().await.map_err(|error| DraftSendFailure::unknown(format!("{method}: {error}")))?;
     if !status.is_success() {
-      return Err(rejected(format!("{method}: HTTP {status}")));
+      return Err(DraftSendFailure::rejected(format!("{method}: HTTP {status}")));
     }
-    let payload: Value = serde_json::from_slice(&body)
-      .map_err(|_| unknown(format!("{method}: the response is not JSON, so the message may have gone out")))?;
+    let payload: Value = serde_json::from_slice(&body).map_err(|_| {
+      DraftSendFailure::unknown(format!("{method}: the response is not JSON, so the message may have gone out"))
+    })?;
     if payload.get("ok").and_then(Value::as_bool) != Some(true) {
       let error = payload.get("error").and_then(Value::as_str).unwrap_or("unknown_error");
-      return Err(rejected(format!("{method}: {error}")));
+      return Err(DraftSendFailure::rejected(format!("{method}: {error}")));
     }
     Ok(payload)
   }
-}
-
-fn rejected(detail: impl Into<String>) -> DraftSendFailure {
-  DraftSendFailure { detail: detail.into(), outcome: DraftFailureOutcome::Rejected }
-}
-
-fn unknown(detail: impl Into<String>) -> DraftSendFailure {
-  DraftSendFailure { detail: detail.into(), outcome: DraftFailureOutcome::Unknown }
 }
 
 /// The Slack entry in the registry's draft platforms.
@@ -164,6 +155,8 @@ mod tests {
   use std::sync::{Arc, Mutex};
   use std::thread;
   use std::time::Duration;
+
+  use charliebot_registry::draft::DraftFailureOutcome;
 
   use super::*;
 

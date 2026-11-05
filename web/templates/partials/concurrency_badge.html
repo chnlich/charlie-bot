@@ -46,11 +46,13 @@
     border: 1px solid rgba(128, 138, 152, .45); background: rgba(128, 138, 152, .12); color: inherit;
     font: inherit; font-size: 12px; font-weight: 600; line-height: 1.4; white-space: nowrap; cursor: pointer }
   .cb-badge:hover { background: rgba(128, 138, 152, .22) }
-  /* The open badge's accent follows the page theme: #2563eb renders 5.17:1 on white and 2.68:1 on the dark
-     badge background, so a dark page takes blue-300 #93c5fd (7.69:1) and a blue-400 #60a5fa ring. The two dark
-     blocks carry identical declarations, and :where() keeps the media rule at zero specificity so an explicit
-     data-theme choice wins, as in partials/standalone_base_styles.html. */
-  :root { --cb-open-fg: #2563eb; --cb-open-ring: #2563eb }
+  /* The open badge's accent draws on the badge's own tinted fill, not on the page behind it.
+     There #2563eb reads 4.41:1 at rest and 3.97:1 while hovered, under the 4.5:1 floor for 12 px text.
+     Blue-700 #1d4ed8 reads 5.71:1 and 5.14:1, and the blue-500 ring keeps 3.97:1, above the 3:1 border floor.
+     A dark page takes blue-300 #93c5fd (8.74:1, 7.49:1 hovered) and a blue-400 #60a5fa ring.
+     The two dark blocks carry identical declarations, and :where() keeps the media rule at zero specificity
+     so an explicit data-theme choice wins, as in partials/standalone_base_styles.html. */
+  :root { --cb-open-fg: #1d4ed8; --cb-open-ring: #2563eb }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) { --cb-open-fg: #93c5fd; --cb-open-ring: #60a5fa }
   }

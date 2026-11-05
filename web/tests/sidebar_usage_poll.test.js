@@ -6,7 +6,7 @@ const { readStatic } = require('./read_static');
 const { createElement } = require('./dom_element_stub');
 const { escapeHtml } = require('./escape_html_stub');
 const { baseSessionContext, buildSidebarFilterElements, buildUsageElements, createChatSidebarContext,
-  loadCronPackage, makeSessionMeta } = require('./session_context_stub');
+  loadCronPackage, makeSessionMeta, sessionColumns } = require('./session_context_stub');
 
 const WEBSOCKET_JS = readStatic('websocket.js');
 const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
@@ -420,7 +420,7 @@ test('restoreSidebarFromUrl renders initial all sessions through grouped rendere
       ? [filterAll, filterStarred, filterArchived] : [],
   });
 
-  context.INITIAL_SESSIONS = [
+  context.INITIAL_SESSIONS = sessionColumns([
     {
       id: 'session-a',
       name: 'Grouped session',
@@ -447,7 +447,7 @@ test('restoreSidebarFromUrl renders initial all sessions through grouped rendere
       starred: false,
       backend: 'claude-opus-4.6',
     },
-  ];
+  ]);
   context.INITIAL_LOAD_ERRORS = [];
   context.location.search = '';
 

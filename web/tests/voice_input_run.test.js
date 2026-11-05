@@ -45,6 +45,10 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     sockets: [],
     timers: [],
     audioContexts: [],
+    audioContextStartState: 'running', // the state a new AudioContext opens in
+    audioContextResumeStarts: 1, // the 1-based resume() call that starts the engine
+    audioContextResumeHangs: false, // every resume() stays pending and the engine stays suspended
+    audioContextResumePendingCalls: new Set(), // selected resume() calls stay pending, even if the engine starts
     addModuleCalls: 0,
     moduleError: null,
     modulePending: null,
@@ -108,9 +112,29 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
   class FakeAudioContext {
     constructor() {
       this.sampleRate = 48000;
-      this.state = 'running';
+      this.state = state.audioContextStartState;
       this.closed = false;
+      this.resumeCalls = 0;
+      this.stateChangeListeners = new Set();
       state.audioContexts.push(this);
+    }
+    addEventListener(type, listener) {
+      if (type === 'statechange') this.stateChangeListeners.add(listener);
+    }
+    removeEventListener(type, listener) {
+      if (type === 'statechange') this.stateChangeListeners.delete(listener);
+    }
+    resume() {
+      this.resumeCalls += 1;
+      if (!state.audioContextResumeHangs && this.resumeCalls === state.audioContextResumeStarts) {
+        const wasRunning = this.state === 'running';
+        this.state = 'running';
+        if (!wasRunning) this.stateChangeListeners.forEach((listener) => listener({target: this}));
+      }
+      if (state.audioContextResumeHangs || state.audioContextResumePendingCalls.has(this.resumeCalls)) {
+        return new Promise(() => {});
+      }
+      return Promise.resolve();
     }
     get audioWorklet() {
       return {
@@ -1287,6 +1311,8 @@ test('a normal recording reports ready and stop once with every step time filled
   assert.equal(body.samples, 4096);
   assert.equal(body.audio_context_state, 'running');
   assert.equal(body.audio_context_rate, 48000);
+  assert.equal(body.audio_context_settled_state, 'running');
+  assert.equal(body.audio_context_resume, 'not_needed');
   assert.equal(body.mic_permission, 'granted');
   assert.equal(body.track_ready_state, 'live');
   assert.equal(body.track_muted, false);
@@ -1405,6 +1431,72 @@ test('devices ride the report only once collected', async () => {
 
   const [report] = state.startupReports();
   assert.equal(report.body.devices, null);
+});
+
+test('a running engine reaches the recording phase with no resume beyond the click', async () => {
+  const {state} = buildHarness();
+  await state.arm();
+  assert.equal(state.voiceUi().hint.textContent, 'Waiting for microphone signal...');
+  assert.equal(state.audioContexts[0].resumeCalls, 1); // the click's resume only
+
+  await state.stopWithFlush();
+  const [report] = state.startupReports();
+  assert.equal(report.body.audio_context_settled_state, 'running');
+  assert.equal(report.body.audio_context_resume, 'not_needed');
+});
+
+test('a suspended engine that starts on resume() reaches the recording phase and reports started', async () => {
+  const {state} = buildHarness();
+  state.audioContextStartState = 'suspended';
+  // The click's resume does not start the engine here; the resume after both
+  // branches settle does. That call's promise stays pending, so the statechange
+  // must end the wait.
+  state.audioContextResumeStarts = 2;
+  state.audioContextResumePendingCalls.add(2);
+  await state.arm();
+  assert.equal(state.audioContexts[0].resumeCalls, 2);
+  assert.equal(state.voiceUi().hint.textContent, 'Waiting for microphone signal...');
+
+  await state.stopWithFlush();
+  const [report] = state.startupReports();
+  assert.equal(report.body.reached, 'no_frames');
+  assert.equal(report.body.end, 'stop');
+  assert.equal(report.body.audio_context_state, 'running');
+  assert.equal(report.body.audio_context_settled_state, 'suspended');
+  assert.equal(report.body.audio_context_resume, 'started');
+  assert.equal(state.consoleErrors.length, 0);
+});
+
+test('a suspended engine whose resume never settles ends at the bound with a startup error', async () => {
+  const {context, state} = buildHarness();
+  state.audioContextStartState = 'suspended';
+  state.audioContextResumeHangs = true;
+  context.toggleVoice();
+  await tick();
+  await tick();
+  await tick();
+
+  // The wait ends on the bound timer: the pending resume promise never settles.
+  const bound = state.timerByMs(2000);
+  assert.ok(bound);
+  assert.equal(state.startupReports().length, 0);
+  bound.fn();
+  await tick();
+  await tick();
+
+  const [report] = state.startupReports();
+  assert.equal(report.body.end, 'startup_error');
+  assert.equal(report.body.reached, 'mic_opening');
+  assert.equal(report.body.error, 'graph: the audio engine did not start');
+  assert.equal(report.body.audio_context_settled_state, 'suspended');
+  assert.equal(report.body.audio_context_resume, 'timed_out');
+  assert.equal(state.workletNodes.length, 0); // no recording phase was entered
+  assert.equal(state.audioContexts[0].closed, true);
+  assert.equal(state.streams[0].stopped, true);
+  assert.equal(state.buttonClasses.has('bg-amber-600'), false);
+  assert.equal(state.buttonClasses.has('bg-slate-800'), true);
+  assert.equal(state.overlayMap.has('voice-partial-overlay'), false);
+  assert.deepEqual(state.toasts.at(-1), {msg: 'Voice input failed: the audio engine did not start', isError: true});
 });
 
 test('a non-2xx startup response is reported to the console', async () => {

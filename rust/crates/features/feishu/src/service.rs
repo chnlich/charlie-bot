@@ -8,7 +8,7 @@ use futures_util::future::BoxFuture;
 use crate::config::FeishuConfig;
 use crate::listener::FeishuListener;
 
-/// Starts the Feishu long connection and boot backfill when the app's credentials and an allowed user are configured.
+/// Starts the Feishu long connection and boot backfill when the app's credentials and an owner are configured.
 pub(crate) struct FeishuService {
   entrypoint: ChannelService<FeishuListener>,
 }
@@ -64,7 +64,7 @@ mod tests {
   }
 
   #[test]
-  fn the_entrypoint_requires_the_app_credentials_and_an_allowed_user() {
+  fn the_entrypoint_requires_the_app_credentials_and_an_owner() {
     let (_dir, app) = credentials("feishu:\n  app_id: cli_synthetic\n  app_secret: synthetic-secret\n");
     let (_dir, no_secret) = credentials("feishu:\n  app_id: cli_synthetic\n  app_secret: \"\"\n");
     let allowed = FeishuConfig {

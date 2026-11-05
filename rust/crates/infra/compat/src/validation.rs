@@ -7,8 +7,7 @@
 //! their texts; [`FieldError`] is one entry. The `parse_*` functions read a scalar query or path value in
 //! lax mode and return the entry for a value that it rejects.
 //!
-//! The texts are the recorded validation-error texts.
-//! `rust/fixtures/golden/validation_422_golden.json`
+//! The texts are the recorded validation-error texts. `rust/fixtures/golden/validation_422_golden.json`
 //! holds the bodies these inputs answer, and the fixture test compares them.
 //!
 //! Parsing a JSON body is not here: the body is read while the model validates it. The JSON decoder's

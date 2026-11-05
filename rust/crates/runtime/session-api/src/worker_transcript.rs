@@ -16,7 +16,10 @@ use charliebot_store::aggregator;
 use charliebot_store::control_events;
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::projection::MessageProjection;
-use charliebot_store::run_records::{HostBoot, RUN_EVENTS_NAME, RUN_METADATA_NAME, RunKind, RunRecord};
+use charliebot_store::run_records::{
+  HostBoot, OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF, OBSERVATION_RESULT_REF, RUN_EVENTS_NAME,
+  RUN_METADATA_NAME, RunKind, RunRecord,
+};
 use charliebot_store::{SharedChatEvent, Store, StoreError, StoreResult};
 use charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME;
 use lru::LruCache;
@@ -241,7 +244,7 @@ fn run_header_event(
     "run_id": run.id,
     "kind": kind,
     "backend": run.backend.as_deref().unwrap_or(""),
-    "backend_label": backend_label,
+    (event_types::BACKEND_LABEL): backend_label,
     "state": state,
     "error": error,
     "tool_calls": tool_calls,
@@ -251,7 +254,7 @@ fn run_header_event(
     "launched": run.started_at.is_some(),
     "launch_failed": FAILED_STATES.contains(&state) && run.started_at.is_none(),
     "task_spec_ref": run.task_spec_ref.as_deref().unwrap_or(""),
-    "launch_prompt_ref": launch_prompt_ref,
+    (event_types::LAUNCH_PROMPT_REF): launch_prompt_ref,
   })
 }
 
@@ -322,9 +325,9 @@ fn delivery_event(
     "task_state": task_state,
     "summary": summary,
     "result_refs": close_refs,
-    "raw_log_ref": delivered.raw_log_ref.as_deref().unwrap_or(""),
-    "events_ref": delivered.events_ref.as_deref().unwrap_or(""),
-    "result_ref": delivered.result_ref.as_deref().unwrap_or(""),
+    (OBSERVATION_RAW_LOG_REF): delivered.raw_log_ref.as_deref().unwrap_or(""),
+    (OBSERVATION_EVENTS_REF): delivered.events_ref.as_deref().unwrap_or(""),
+    (OBSERVATION_RESULT_REF): delivered.result_ref.as_deref().unwrap_or(""),
     "repo_path": delivered.repo_path.as_deref().unwrap_or(""),
     "base_branch": delivered.base_branch.as_deref().unwrap_or(""),
     "branch_name": delivered.branch_name.as_deref().unwrap_or(""),
@@ -378,7 +381,7 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
       json!({
         "run_id": run.id,
         "kind": serde_json::to_value(run.kind).expect("run kind serializes"),
-        "backend_label": backend_label,
+        (event_types::BACKEND_LABEL): backend_label,
         "state": states.get(&run.id).map(String::as_str).unwrap_or("queued"),
         "started_at": run.started_at.map(UtcDateTime::to_isoformat_text),
         "ended_at": run.ended_at.map(UtcDateTime::to_isoformat_text),
@@ -452,9 +455,9 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
         .unwrap_or(last);
       json!({
         "run_id": delivered.id,
-        "raw_log_ref": delivered.raw_log_ref.as_deref().unwrap_or(""),
-        "events_ref": delivered.events_ref.as_deref().unwrap_or(""),
-        "result_ref": delivered.result_ref.as_deref().unwrap_or(""),
+        (OBSERVATION_RAW_LOG_REF): delivered.raw_log_ref.as_deref().unwrap_or(""),
+        (OBSERVATION_EVENTS_REF): delivered.events_ref.as_deref().unwrap_or(""),
+        (OBSERVATION_RESULT_REF): delivered.result_ref.as_deref().unwrap_or(""),
         "repo_path": delivered.repo_path.as_deref().unwrap_or(""),
         "base_branch": delivered.base_branch.as_deref().unwrap_or(""),
         "branch_name": delivered.branch_name.as_deref().unwrap_or(""),
@@ -470,9 +473,9 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
       let launch_prompt_path = store.run_dir(session_id, &run.id).join(LAUNCH_TEXT_FILENAME);
       json!({
         "task_spec_ref": run.task_spec_ref.as_deref().unwrap_or(""),
-        "launch_prompt_ref": if launch_prompt_path.is_file() { launch_prompt_path.to_string_lossy().into_owned() } else { String::new() },
-        "raw_log_ref": run.raw_log_ref.as_deref().unwrap_or(""),
-        "events_ref": run.events_ref.as_deref().unwrap_or(""),
+        (event_types::LAUNCH_PROMPT_REF): if launch_prompt_path.is_file() { launch_prompt_path.to_string_lossy().into_owned() } else { String::new() },
+        (OBSERVATION_RAW_LOG_REF): run.raw_log_ref.as_deref().unwrap_or(""),
+        (OBSERVATION_EVENTS_REF): run.events_ref.as_deref().unwrap_or(""),
       })
     })
     .unwrap_or_else(|| json!({}));
@@ -711,7 +714,7 @@ mod tests {
     assert_eq!(summary["closing"]["work"], json!({"run_id": "run-work", "text": "All checks pass."}));
     assert_eq!(summary["closing"]["review"], json!({"run_id": "run-review", "text": "Review approved."}));
     assert_eq!(summary["links"]["task_spec_ref"], "");
-    assert_eq!(summary["links"]["launch_prompt_ref"], "");
+    assert_eq!(summary["links"][event_types::LAUNCH_PROMPT_REF], "");
     assert_eq!(summary["delivery"]["raw_log_ref"], "");
     assert!(summary["links"].get("raw_log_ref").is_some());
     assert!(summary["links"].get("events_ref").is_some());

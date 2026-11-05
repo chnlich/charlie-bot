@@ -30,8 +30,8 @@ use crate::page_rows::{self, PageRow, canonical_model, compact, group_thousands}
 
 const TEMPLATE: &str = "token_usage.html";
 
-/// The template's series colours, `--series-1` to `--series-5`: one per usage source.
-const SERIES_COUNT: usize = 5;
+/// The template's series colours, `--series-1` to `--series-6`: one per usage source the server registers.
+const SERIES_COUNT: usize = 6;
 
 /// The rows payload the page's script reads its rows from.
 const PAYLOAD_JSON: JsonStyle =

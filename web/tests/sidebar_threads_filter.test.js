@@ -19,6 +19,7 @@ const {
   createChatSidebarContext,
   inlinePageTimers,
   makeSessionMeta,
+  sessionColumns,
 } = require('./session_context_stub');
 const { createElement } = require('./dom_element_stub');
 const { readPackageStatic } = require('./read_static');
@@ -36,7 +37,7 @@ function buildContext({search = '', sessions = []} = {}) {
   ]);
   const {context} = baseSessionContext({elements});
   context.SESSION_ID = 'none';
-  context.INITIAL_SESSIONS = [];
+  context.INITIAL_SESSIONS = {};
   context.INITIAL_LOAD_ERRORS = [];
   context.location.search = search;
   inlinePageTimers(context);
@@ -118,7 +119,7 @@ test('the Threads view hides the group-header create button, in-place repaints i
 
 test('the Workspace view keeps the group-header create button', () => {
   const {context, nav, fetchRequests} = buildContext();
-  context.INITIAL_SESSIONS = threadRows();
+  context.INITIAL_SESSIONS = sessionColumns(threadRows());
 
   context.restoreSidebarFromUrl();
 

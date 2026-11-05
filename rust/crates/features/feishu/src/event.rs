@@ -1,10 +1,8 @@
 //! The `im.message.receive_v1` event: its parsing, and the drop rules that decide whether it is a summon, a thread
-//! follow or traffic to drop. A summon is a group message that mentions the bot from a user on the allow-list. A follow
-//! is a message from such a user inside a thread of a group. Every other event is dropped before the shared core runs.
-//! Those drops are bot and app messages, senders outside the allow-list, one-to-one chats, and group messages that
-//! neither mention the bot nor sit in a thread.
-
-use std::collections::BTreeMap;
+//! follow or traffic to drop. A summon is a group message that mentions the bot from a human sender. A follow is a
+//! message from a human sender inside a thread of a group. Whether the group is admitted at all is decided after this
+//! module, from the group's members (`owners`). Every other event is dropped before the shared core runs. Those drops
+//! are bot and app messages, one-to-one chats, and group messages that neither mention the bot nor sit in a thread.
 
 use anyhow::{Context, bail};
 use serde_json::Value;
@@ -25,7 +23,7 @@ pub struct Message {
   pub thread_id: Option<String>,
   /// The creation time in milliseconds, as Feishu writes it.
   pub create_time: String,
-  /// The sender's open_id, the key of the allow-list.
+  /// The sender's open_id.
   pub sender_open_id: String,
   pub message_type: String,
   /// The message content as Feishu writes it: a JSON string.
@@ -44,9 +42,9 @@ pub struct Mention {
 /// The verdict on one event.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Inbound {
-  /// A user on the allow-list mentioned the bot in a group.
+  /// A human mentioned the bot in a group.
   Summon(Message),
-  /// A user on the allow-list posted in a thread of a group, without a mention of the bot.
+  /// A human posted in a thread of a group, without a mention of the bot.
   Follow(Message),
   /// The event is not for the thread entrypoint.
   Drop(Drop),
@@ -59,16 +57,17 @@ pub enum Drop {
   OtherEvent,
   /// The sender is a bot or the app itself, not a user.
   NotUser,
-  /// The sender is a user outside the allow-list.
-  NotAllowed,
   /// The message comes from a one-to-one chat.
   NotGroup,
   /// The group message neither mentions the bot nor sits in a thread.
   NoMentionOutsideThread,
+  /// The group has no person listed in `feishu.allowed_users` among its members. Set by the listener, after
+  /// classification.
+  NoOwnerInChat,
 }
 
-/// Classify one event against the bot's open_id and the allow-list (`classify`). A malformed event fails.
-pub fn classify(event: &Value, bot_open_id: &str, allowed_users: &BTreeMap<String, String>) -> anyhow::Result<Inbound> {
+/// Classify one event against the bot's open_id (`classify`). A malformed event fails.
+pub fn classify(event: &Value, bot_open_id: &str) -> anyhow::Result<Inbound> {
   if text_at(event, &["header", "event_type"])? != RECEIVE_EVENT {
     return Ok(Inbound::Drop(Drop::OtherEvent));
   }
@@ -78,9 +77,6 @@ pub fn classify(event: &Value, bot_open_id: &str, allowed_users: &BTreeMap<Strin
     return Ok(Inbound::Drop(Drop::NotUser));
   }
   let sender_open_id = text_at(sender, &["sender_id", "open_id"])?;
-  if !allowed_users.contains_key(sender_open_id) {
-    return Ok(Inbound::Drop(Drop::NotAllowed));
-  }
   let raw = body.get("message").context("the event has no message")?;
   if text_at(raw, &["chat_type"])? != "group" {
     return Ok(Inbound::Drop(Drop::NotGroup));
@@ -189,11 +185,7 @@ mod tests {
   use super::*;
 
   const BOT: &str = "ou_synthetic_bot";
-  const ALLOWED: &str = "ou_synthetic_user";
-
-  fn allowed() -> BTreeMap<String, String> {
-    BTreeMap::from([(ALLOWED.to_string(), "Tester".to_string())])
-  }
+  const HUMAN: &str = "ou_synthetic_user";
 
   /// A group message from `sender` with the given message fields merged over the defaults.
   fn event(sender_type: &str, sender: &str, chat_type: &str, extra: Value) -> Value {
@@ -220,8 +212,8 @@ mod tests {
   }
 
   #[test]
-  fn a_mention_from_an_allowed_user_in_a_group_is_a_summon() {
-    let inbound = classify(&event("user", ALLOWED, "group", json!({})), BOT, &allowed()).unwrap();
+  fn a_mention_from_a_human_in_a_group_is_a_summon() {
+    let inbound = classify(&event("user", HUMAN, "group", json!({})), BOT).unwrap();
     let Inbound::Summon(message) = inbound else { panic!("expected a summon, got {inbound:?}") };
     assert_eq!(message.message_id, "om_100");
     assert_eq!(message.thread_root().unwrap(), "om_100");
@@ -229,9 +221,9 @@ mod tests {
   }
 
   #[test]
-  fn a_thread_message_without_a_mention_from_an_allowed_user_is_a_follow() {
+  fn a_thread_message_without_a_mention_from_a_human_is_a_follow() {
     let extra = json!({"thread_id": "omt_1", "root_id": "om_50", "mentions": []});
-    let inbound = classify(&event("user", ALLOWED, "group", extra), BOT, &allowed()).unwrap();
+    let inbound = classify(&event("user", HUMAN, "group", extra), BOT).unwrap();
     let Inbound::Follow(message) = inbound else { panic!("expected a follow") };
     assert_eq!(message.thread_root().unwrap(), "om_50");
   }
@@ -239,48 +231,48 @@ mod tests {
   #[test]
   fn a_mention_inside_a_thread_summons_that_thread() {
     let extra = json!({"thread_id": "omt_1", "root_id": "om_50"});
-    let inbound = classify(&event("user", ALLOWED, "group", extra), BOT, &allowed()).unwrap();
+    let inbound = classify(&event("user", HUMAN, "group", extra), BOT).unwrap();
     let Inbound::Summon(message) = inbound else { panic!("expected a summon") };
     assert_eq!(message.thread_root().unwrap(), "om_50");
   }
 
   #[test]
-  fn a_sender_outside_the_allow_list_is_dropped() {
-    let inbound = classify(&event("user", "ou_stranger", "group", json!({})), BOT, &allowed()).unwrap();
-    assert_eq!(inbound, Inbound::Drop(Drop::NotAllowed));
+  fn a_mention_from_any_human_is_classified_without_a_list_of_senders() {
+    let inbound = classify(&event("user", "ou_synthetic_stranger", "group", json!({})), BOT).unwrap();
+    assert!(matches!(inbound, Inbound::Summon(_)), "got {inbound:?}");
   }
 
   #[test]
-  fn a_one_to_one_message_is_dropped_even_from_an_allowed_user() {
-    let inbound = classify(&event("user", ALLOWED, "p2p", json!({})), BOT, &allowed()).unwrap();
+  fn a_one_to_one_message_is_dropped_even_from_a_human() {
+    let inbound = classify(&event("user", HUMAN, "p2p", json!({})), BOT).unwrap();
     assert_eq!(inbound, Inbound::Drop(Drop::NotGroup));
   }
 
   #[test]
   fn the_bots_own_and_other_app_messages_are_dropped() {
-    let inbound = classify(&event("app", BOT, "group", json!({})), BOT, &allowed()).unwrap();
+    let inbound = classify(&event("app", BOT, "group", json!({})), BOT).unwrap();
     assert_eq!(inbound, Inbound::Drop(Drop::NotUser));
   }
 
   #[test]
   fn a_group_message_neither_mentioning_the_bot_nor_in_a_thread_is_dropped() {
     let extra = json!({"mentions": []});
-    let inbound = classify(&event("user", ALLOWED, "group", extra), BOT, &allowed()).unwrap();
+    let inbound = classify(&event("user", HUMAN, "group", extra), BOT).unwrap();
     assert_eq!(inbound, Inbound::Drop(Drop::NoMentionOutsideThread));
   }
 
   #[test]
   fn another_event_type_is_dropped() {
-    let mut other = event("user", ALLOWED, "group", json!({}));
+    let mut other = event("user", HUMAN, "group", json!({}));
     other["header"]["event_type"] = json!("im.chat.member.bot.added_v1");
-    assert_eq!(classify(&other, BOT, &allowed()).unwrap(), Inbound::Drop(Drop::OtherEvent));
+    assert_eq!(classify(&other, BOT).unwrap(), Inbound::Drop(Drop::OtherEvent));
   }
 
   #[test]
   fn an_event_without_its_sender_is_an_error() {
-    let mut malformed = event("user", ALLOWED, "group", json!({}));
+    let mut malformed = event("user", HUMAN, "group", json!({}));
     malformed["event"].as_object_mut().unwrap().remove("sender");
-    assert!(classify(&malformed, BOT, &allowed()).is_err());
+    assert!(classify(&malformed, BOT).is_err());
   }
 
   #[test]

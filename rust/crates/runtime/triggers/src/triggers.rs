@@ -37,6 +37,8 @@ use tokio::process::Command;
 use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep, sleep_until, timeout};
 
+use crate::trigger_index::{self, TriggerFileIdentity, TriggerIndex, TriggerIndexRow};
+
 /// The maximum number of pending triggers for one session.
 pub const MAX_PENDING_TRIGGERS: usize = 5;
 
@@ -421,8 +423,12 @@ impl TriggerManager {
   pub async fn recover_pending(self: &Arc<Self>) -> anyhow::Result<()> {
     let stop = self.features.startup.stop();
     let sessions_dir = self.features.store.config().sessions_dir();
+    let home = self.features.store.config().charliebot_home.clone();
+    // A file this index proves not pending needs no read: its row is served only while the file keeps the identity the
+    // row recorded, and a file whose status changed was rewritten since.
+    let index = TriggerIndex::read(&home);
     let walk_stop = stop.clone();
-    let walk = tokio::task::spawn_blocking(move || read_session_triggers(&sessions_dir, &walk_stop))
+    let walk = tokio::task::spawn_blocking(move || read_session_triggers(&sessions_dir, &walk_stop, &index))
       .await
       .context("trigger recovery walk task failed")?;
     for session in walk.sessions {
@@ -456,7 +462,13 @@ impl TriggerManager {
       }
       log_slow_trigger_recovery(&session.dir, recovered, session.read_time);
     }
-    walk.end
+    walk.end?;
+    // The rows this boot proved: the files it read as not pending, and the files the index served. The write keeps the
+    // next boot's walk to the files that are pending or new.
+    if let Err(error) = trigger_index::write(&home, &walk.index_rows) {
+      tracing::warn!(target: "charliebot_triggers", error = %error, "trigger_index_write_failed");
+    }
+    Ok(())
   }
 
   fn start_task(self: &Arc<Self>, trigger: PendingTrigger) {
@@ -1313,25 +1325,29 @@ fn log_slow_trigger_recovery(session_dir: &Path, recovered: u64, read_time: std:
 struct SessionTriggers {
   dir: PathBuf,
   triggers: Vec<(PathBuf, anyhow::Result<PendingTrigger>)>,
+  /// The non-pending files this session's walk proved, for the next boot's index.
+  index_rows: Vec<TriggerIndexRow>,
   read_time: std::time::Duration,
 }
 
-/// The sessions [`read_session_triggers`] read, and how the walk ended: an error ends it at the session it names.
+/// The sessions [`read_session_triggers`] read, the rows they proved, and how the walk ended: an error ends it at the
+/// session it names.
 struct TriggerWalk {
   sessions: Vec<SessionTriggers>,
+  index_rows: Vec<TriggerIndexRow>,
   end: anyhow::Result<()>,
 }
 
 /// Read every session's trigger files under `sessions_dir`, in directory order, until a stop request or an error. The
 /// sessions are read in parallel, and the walk keeps those before the first error in directory order.
-fn read_session_triggers(sessions_dir: &Path, stop: &StartupStop) -> TriggerWalk {
-  let mut sessions = Vec::new();
+fn read_session_triggers(sessions_dir: &Path, stop: &StartupStop, index: &TriggerIndex) -> TriggerWalk {
+  let none_read = |end| TriggerWalk { sessions: Vec::new(), index_rows: Vec::new(), end };
   let entries = match std::fs::read_dir(sessions_dir) {
     Ok(entries) => entries,
-    Err(error) if error.kind() == io::ErrorKind::NotFound => return TriggerWalk { sessions, end: Ok(()) },
+    Err(error) if error.kind() == io::ErrorKind::NotFound => return none_read(Ok(())),
     Err(error) => {
       let end = Err(error).with_context(|| format!("read {}", sessions_dir.display()));
-      return TriggerWalk { sessions, end };
+      return none_read(end);
     }
   };
   // The listing ends at its first error, and the sessions listed before it are read.
@@ -1346,40 +1362,62 @@ fn read_session_triggers(sessions_dir: &Path, stop: &StartupStop) -> TriggerWalk
       }
     }
   }
-  let Some(reads) = parallel_walk::map_until(&listed, &|| stop.is_cancelled(), read_one_session_triggers) else {
-    return TriggerWalk { sessions, end: Ok(()) };
+  let read_one = |entry: &std::fs::DirEntry| read_one_session_triggers(entry, index);
+  let Some(reads) = parallel_walk::map_until(&listed, &|| stop.is_cancelled(), read_one) else {
+    return none_read(Ok(()));
   };
+  let mut sessions: Vec<SessionTriggers> = Vec::new();
+  let mut index_rows = Vec::new();
   for read in reads {
     match read {
-      Ok(Some(session)) => sessions.push(session),
+      Ok(Some(session)) => {
+        index_rows.extend(session.index_rows.iter().cloned());
+        sessions.push(session);
+      }
       Ok(None) => {}
-      Err(error) => return TriggerWalk { sessions, end: Err(error) },
+      // The sessions read before the error keep their place: their pending triggers start, and the error ends the step.
+      Err(error) => return TriggerWalk { sessions, index_rows, end: Err(error) },
     }
   }
-  TriggerWalk { sessions, end }
+  TriggerWalk { sessions, index_rows, end }
 }
 
 /// One session directory's trigger files, each with its load result; `None` for an entry that is not a directory or
 /// holds no triggers directory.
-fn read_one_session_triggers(entry: &std::fs::DirEntry) -> anyhow::Result<Option<SessionTriggers>> {
+fn read_one_session_triggers(
+  entry: &std::fs::DirEntry,
+  index: &TriggerIndex,
+) -> anyhow::Result<Option<SessionTriggers>> {
   if !entry.file_type()?.is_dir() {
     return Ok(None);
   }
   let started = std::time::Instant::now();
+  let session_id = entry.file_name().to_string_lossy().into_owned();
   let directory = layout::triggers_dir(&entry.path());
   let files = match trigger_files::iter_trigger_file_stats(&directory) {
     Ok(files) => files,
     Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
     Err(error) => return Err(error).with_context(|| format!("scan {}", directory.display())),
   };
-  let triggers = files
-    .into_iter()
-    .map(|(path, _stat)| {
-      let loaded = trigger_files::read_trigger(&path);
-      (path, loaded)
-    })
-    .collect();
-  Ok(Some(SessionTriggers { dir: entry.path(), triggers, read_time: started.elapsed() }))
+  let mut triggers = Vec::with_capacity(files.len());
+  let mut index_rows = Vec::new();
+  for (path, stat) in files {
+    let file_name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let identity = TriggerFileIdentity::of(&stat);
+    // A row the file still matches proves it not pending: the status can change only by replacing the file.
+    if index.serves(&session_id, &file_name, identity) {
+      index_rows.push(TriggerIndexRow { session_id: session_id.clone(), file_name, identity });
+      continue;
+    }
+    let loaded = trigger_files::read_trigger(&path);
+    if let Ok(trigger) = &loaded
+      && trigger.status != TriggerStatus::Pending
+    {
+      index_rows.push(TriggerIndexRow { session_id: session_id.clone(), file_name, identity });
+    }
+    triggers.push((path, loaded));
+  }
+  Ok(Some(SessionTriggers { dir: entry.path(), triggers, index_rows, read_time: started.elapsed() }))
 }
 
 fn format_suffix(reason: WaitReason, finished: &[String], still_alive: &[String]) -> String {
@@ -1992,6 +2030,47 @@ mod tests {
       assert!(!tasks.contains_key("synthetic-recovery-cancelled"));
     }
     manager.cancel_trigger(SESSION_ID, "synthetic-recovery-pending").await.expect("cancel recovered waiter");
+  }
+
+  /// The walk records the non-pending trigger files it read, and a later boot serves those rows instead of opening the
+  /// files. A file rewritten after its row was written no longer matches the row, so the boot reads it and starts it.
+  #[tokio::test]
+  async fn the_trigger_index_serves_a_file_status_until_the_file_is_rewritten() {
+    let (home, features) = feature_context();
+    let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
+    let mut filed = pending_trigger("synthetic-index-filed", SESSION_ID, near_future(3600), Vec::new());
+    filed.status = TriggerStatus::Fired;
+    manager.save_trigger(&filed).await.expect("save the filed trigger");
+    manager.recover_pending().await.expect("the recording walk");
+
+    let path = trigger_files::trigger_path(&features.store.session_dir(SESSION_ID), &filed.id);
+    let file_name = format!("{}.json", filed.id);
+    let stat = std::fs::metadata(&path).expect("the trigger file stats");
+    let index = TriggerIndex::read(home.path());
+    assert!(
+      index.serves(SESSION_ID, &file_name, TriggerFileIdentity::of(&stat)),
+      "the walk recorded the filed trigger"
+    );
+
+    crate::trigger_index::reset_served_count();
+    manager.recover_pending().await.expect("the serving walk");
+    assert!(crate::trigger_index::served_count() > 0, "the second walk served the filed file");
+    assert!(
+      !manager.tasks.lock().expect("trigger task map is not poisoned").contains_key(&filed.id),
+      "a served file starts nothing"
+    );
+
+    // The status changes to pending by replacing the file, so the row no longer matches and the fit is read.
+    let mut pending = filed.clone();
+    pending.status = TriggerStatus::Pending;
+    pending.fire_at = near_future(3600);
+    manager.save_trigger(&pending).await.expect("the trigger returns to pending");
+    manager.recover_pending().await.expect("the walk after the rewrite");
+    assert!(
+      manager.tasks.lock().expect("trigger task map is not poisoned").contains_key(&filed.id),
+      "a rewritten file is read and its pending status starts the trigger"
+    );
+    manager.cancel_trigger(SESSION_ID, &filed.id).await.expect("cancel the recovered waiter");
   }
 
   #[tokio::test]

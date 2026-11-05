@@ -41,13 +41,20 @@ pub(crate) struct SkipProofSource {
 }
 
 impl SkipProofSource {
-  /// The identities of `session_dir`'s log and metadata, or `None` when either file is absent. A node without a log
-  /// cannot be skipped by the walk's own check either, so the proof writes no row for it.
-  pub(crate) fn read(session_dir: &Path) -> io::Result<Option<Self>> {
+  /// The identity of `session_dir`'s metadata file, or `None` when it is absent or not a regular file. A directory with
+  /// no metadata file is not a node, so this one stat answers the walk's existence test as well.
+  ///
+  /// Any stat error reads as absent, which is what the walk's own `Path::is_file` test answers; a directory entry that
+  /// is not a directory fails here with `ENOTDIR`.
+  pub(crate) fn metadata_file(session_dir: &Path) -> Option<FileIdentity> {
+    file_identity(&charliebot_store::layout::metadata_path(session_dir)).ok().flatten().filter(|identity| identity.2)
+  }
+
+  /// The identities of `session_dir`'s log and metadata from a metadata identity the caller already read, or `None`
+  /// when the log is absent. A node without a log cannot be skipped by the walk's own check either, so the proof writes
+  /// no row for it.
+  pub(crate) fn read(session_dir: &Path, meta: FileIdentity) -> io::Result<Option<Self>> {
     let Some(log) = file_identity(&charliebot_store::layout::chat_events_path(session_dir))? else {
-      return Ok(None);
-    };
-    let Some(meta) = file_identity(&charliebot_store::layout::metadata_path(session_dir))? else {
       return Ok(None);
     };
     Ok(Some(Self { log_size: log.0, log_mtime_ns: log.1, meta_size: meta.0, meta_mtime_ns: meta.1 }))
@@ -170,14 +177,20 @@ fn parse_row(line: &str) -> Option<SkipProofRow> {
   Some(SkipProofRow { session_id, source, newest_backend: (!backend.is_empty()).then_some(backend) })
 }
 
-/// A file's `(size, mtime_ns)`, or `None` when it is absent. Another read error is returned to the caller, which the
+/// A file's `(size, mtime_ns, is_file)`. The third field lets the one stat of the metadata file answer both the walk's
+/// existence test and the proof's identity check.
+pub(crate) type FileIdentity = (u64, i128, bool);
+
+/// A file's [`FileIdentity`], or `None` when it is absent. Another read error is returned to the caller, which the
 /// skip check turns into a failing node, as its own stat does.
-fn file_identity(path: &Path) -> io::Result<Option<(u64, i128)>> {
+fn file_identity(path: &Path) -> io::Result<Option<FileIdentity>> {
   use std::os::unix::fs::MetadataExt;
   match std::fs::metadata(path) {
-    Ok(metadata) => {
-      Ok(Some((metadata.size(), charliebot_core::timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()))))
-    }
+    Ok(metadata) => Ok(Some((
+      metadata.size(),
+      charliebot_core::timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()),
+      metadata.is_file(),
+    ))),
     Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
     Err(error) => Err(error),
   }

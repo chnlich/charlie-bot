@@ -115,6 +115,25 @@ test('children order logical sessions before worker leaves, newest first, grandc
   assert.deepEqual([...context.Sidebar.treeChildIds('nobody')], []);
 });
 
+test('a page row carries its time as epoch minutes and sorts and renders like an ISO row', () => {
+  const {context, nav} = buildSidebarIndicatorContext([]);
+  const minutes = (iso) => Math.floor(Date.parse(iso) / 60000);
+  const numericChild = (id, iso) =>
+    meta(id, {profile: 'worker', task_parent_id: 'root', updated_at: minutes(iso)});
+
+  context.renderSessionList([
+    manager('root', null, 12),
+    numericChild('early', '2026-04-02T09:00:00Z'),
+    numericChild('late', '2026-04-02T11:30:00Z'),
+  ], 'all');
+
+  // Spread the vm-context array: strict deep equality compares prototypes.
+  assert.deepEqual([...context.Sidebar.treeChildIds('root')], ['late', 'early']);
+  // The row's time attribute names the same instant whether it arrived as
+  // epoch minutes or as ISO text.
+  assert.match(rowHtml(nav.innerHTML, 'late'), /data-time="2026-04-02T11:30:00.000Z"/);
+});
+
 test('a row whose parent is absent from the list renders as a root', () => {
   const {context, nav} = buildSidebarIndicatorContext([]);
 

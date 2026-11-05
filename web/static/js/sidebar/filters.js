@@ -130,9 +130,65 @@ function renderSidebarLoadErrors(errors) {
   ).join('');
 }
 
+// The base64url alphabet: a UUID session id travels as its 16 bytes in this alphabet.
+const UUID_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+// The session id one `uuid-b64` cell carries: 22 base64url characters that encode its 16 bytes, or a `~` id as
+// its text.
+function expandSessionId(cell) {
+  if (cell[0] === '~') return cell.slice(1);
+  if (cell.length !== 22) throw new Error('Encoded session id of ' + cell.length + ' characters');
+  let buffer = 0;
+  let bits = 0;
+  const bytes = [];
+  for (const character of cell) {
+    const index = UUID_ALPHABET.indexOf(character);
+    if (index < 0) throw new Error('Encoded session id character ' + character);
+    buffer = (buffer << 6) | index;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((buffer >> bits) & 0xff);
+    }
+  }
+  if (bytes.length !== 16) throw new Error('Encoded session id of ' + bytes.length + ' bytes');
+  const hex = bytes.map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' +
+    hex.slice(16, 20) + '-' + hex.slice(20);
+}
+
+// The page carries the sidebar rows as columns: one array per field, in row order, with null where a row leaves the
+// field out. The page declares under `$encoded` the columns whose cells are not their field's value: a `uuid-b64`
+// column holds each session id's 16 bytes in base64url, and a `delta` column holds the first value as it stands and
+// every later value as its difference from the row before. Expanding the columns once here gives every sidebar view
+// the row objects it reads.
+function expandSessionColumns(columns) {
+  const encoding = columns.$encoded || {};
+  const fields = Object.keys(columns).filter(field => field !== '$encoded');
+  const count = fields.length ? columns[fields[0]].length : 0;
+  const rows = Array.from({length: count}, () => ({}));
+  fields.forEach(field => {
+    const values = columns[field];
+    const kind = encoding[field];
+    let running = 0;
+    for (let i = 0; i < count; i++) {
+      let value = values[i];
+      if (value == null) continue;
+      if (kind === 'uuid-b64') value = expandSessionId(value);
+      else if (kind === 'delta') {
+        running += value;
+        value = running;
+      }
+      rows[i][field] = value;
+    }
+  });
+  return rows;
+}
+
 function restoreSidebarFromUrl() {
   renderSidebarFilterPills();
-  Sidebar.resyncSessionUnread(INITIAL_SESSIONS);
+  const initialSessions = expandSessionColumns(INITIAL_SESSIONS);
+  Sidebar.resyncSessionUnread(initialSessions);
   const params = new URLSearchParams(location.search);
   const urlFilter = params.get('filter');
   const urlQuery = params.get('q');
@@ -146,7 +202,7 @@ function restoreSidebarFromUrl() {
     if (INITIAL_LOAD_ERRORS.length) {
       renderSidebarLoadErrors(INITIAL_LOAD_ERRORS);
     } else {
-      renderSessionList(INITIAL_SESSIONS, 'all');
+      renderSessionList(initialSessions, 'all');
       // The Workspace badges load on their own so the first paint never waits
       // for them; the repaint discards itself when the view has moved on.
       loadWorkspaceBadges().then(paintWorkspaceBadges);
@@ -249,6 +305,7 @@ const GLOBALS = {
   switchSidebarFilter,
   enterSidebarFilter,
   restoreSidebarFromUrl,
+  expandSessionColumns,
   handleSidebarSearch,
   toggleSessionStar,
 };

@@ -95,7 +95,8 @@ pub fn read(path: &Path, _account: &str, previous: Option<&str>) -> anyhow::Resu
   Ok((format!("{state}:{max_updated}"), records))
 }
 
-/// `<main size>:<main mtime_ns>:<wal size>:<wal mtime_ns>`; an absent WAL file reads `0:0` (`_file_state`).
+/// The file state of a store, `<main size>:<main mtime_ns>:<wal size>:<wal mtime_ns>`; an absent WAL file reads `0:0`
+/// (`_file_state`).
 fn file_state(path: &Path) -> anyhow::Result<String> {
   let main = fs::metadata(path).with_context(|| format!("statting {}", path.display()))?;
   let mut wal_path = path.as_os_str().to_owned();

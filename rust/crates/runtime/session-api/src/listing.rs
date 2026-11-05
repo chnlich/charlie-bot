@@ -6,11 +6,13 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use axum::body::{Body, Bytes};
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use charliebot_registry::Registry;
 use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
-  HAS_PENDING_TRIGGER, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SCHEDULE_ENABLED, SCHEDULE_FIELDS,
-  SessionMetadata, SessionStatus, TaskProfile, WORK_STATE,
+  HAS_PENDING_TRIGGER, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, ROUND_RATINGS, SCHEDULE_ENABLED,
+  SCHEDULE_FIELDS, SessionMetadata, SessionStatus, TaskProfile, UtcDateTime, WORK_STATE,
 };
 use charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
@@ -426,9 +428,9 @@ impl PageTextSource {
 /// The chat page's rendered sidebar texts.
 ///
 /// Every page request renders the same rows from the same inputs, so the memo serves the whole sidebar text until one
-/// of the inputs [`render_row_text`] reads moves. A row whose inputs did not move keeps its text across a rebuild, so
-/// one changed row costs one row render rather than the whole sidebar. The memo holds the page's whole sidebar text,
-/// about as much memory as one response body.
+/// of the inputs [`page_client_value`] reads moves. A row whose inputs did not move keeps its fields across a rebuild,
+/// so one changed row costs one row render rather than the whole sidebar. The memo holds the page's whole sidebar
+/// text, about as much memory as one response body.
 #[derive(Default)]
 pub struct PageRowsMemo {
   state: Mutex<PageRowsMemoState>,
@@ -438,7 +440,7 @@ pub struct PageRowsMemo {
 
 #[derive(Default)]
 struct PageRowsMemoState {
-  rows: HashMap<String, String>,
+  rows: HashMap<String, Arc<PageRowText>>,
   whole: Option<WholePageText>,
 }
 
@@ -449,7 +451,7 @@ impl PageRowsMemo {
   }
 }
 
-/// Render the chat page's sidebar rows as the Jinja `tojson` text of their array.
+/// Render the chat page's sidebar rows as their column text.
 ///
 /// `clear_unread` names the active session. Its row renders with `has_unread` false and is left out of the memo, so
 /// a later request that names another active session does not serve the marked row.
@@ -484,38 +486,32 @@ pub fn active_page_json_text(
     .map_or_else(HashMap::new, |whole| whole.inputs.into_iter().map(|row| (row.meta.id.clone(), row)).collect());
   let current: HashSet<&str> = inputs.iter().map(|row| row.meta.id.as_str()).collect();
   state.rows.retain(|session_id, _| current.contains(session_id.as_str()));
-  let cached_bytes: usize = state.rows.values().map(String::len).sum();
-  let mut text = String::with_capacity(2 + cached_bytes + 256 * inputs.len());
-  text.push('[');
-  for (index, row) in inputs.iter().enumerate() {
-    if index > 0 {
-      text.push_str(", ");
-    }
+  let mut rows = Vec::with_capacity(inputs.len());
+  for row in &inputs {
     let clear = clear_unread == Some(row.meta.id.as_str());
     let inputs_moved = previous.get(row.meta.id.as_str()) != Some(row);
     if !clear
       && !inputs_moved
       && let Some(row_text) = state.rows.get(row.meta.id.as_str())
     {
-      text.push_str(row_text);
+      rows.push(Arc::clone(row_text));
       continue;
     }
     #[cfg(test)]
     memo.renders.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let row_text = render_row_text(store, row, clear)?;
-    text.push_str(&row_text);
+    let row_text = Arc::new(PageRowText::of(page_client_value(store, row, clear)));
     if clear {
-      // The active row renders without its unread mark, so its text cannot answer an ordinary request. A row whose
-      // inputs moved drops its older text here, which keeps that text from serving the next request with them.
+      // The active row renders without its unread mark, so its fields cannot answer an ordinary request. A row whose
+      // inputs moved drops its older fields here, which keeps them from serving the next request with them.
       if inputs_moved {
         state.rows.remove(row.meta.id.as_str());
       }
     } else {
-      state.rows.insert(row.meta.id.clone(), row_text);
+      state.rows.insert(row.meta.id.clone(), Arc::clone(&row_text));
     }
+    rows.push(row_text);
   }
-  text.push(']');
-  let text = Arc::new(text);
+  let text = Arc::new(page_columns_text(&rows));
   state.whole = Some(WholePageText {
     source: PageTextSource::of(page),
     inputs,
@@ -525,14 +521,161 @@ pub fn active_page_json_text(
   Ok(text)
 }
 
-/// One row as the page's JSON text, with its `has_unread` cleared for the active session and every falsy field
-/// left out.
+/// One page row's fields as the JSON text each field carries.
 ///
-/// Unlike [`render_row`], the page's rows keep `task.goal`.
-fn render_row_text(store: &Store, row: &RowInputs, clear_unread: bool) -> StoreResult<String> {
+/// The page's text is written by field, so a row splits into its fields once and the column writer reads the texts
+/// back. The fragments hold about the bytes the row's object text held, so the memo's memory stays at one sidebar
+/// text rather than a value tree of it.
+struct PageRowText {
+  fields: Vec<(String, String)>,
+}
+
+impl PageRowText {
+  /// The fragments of one page row's value.
+  fn of(value: Value) -> Self {
+    let fields = value
+      .as_object()
+      .expect("a page row is a JSON object")
+      .iter()
+      .map(|(field, cell)| (field.clone(), charliebot_compat::jinja::tojson_text(cell)))
+      .collect();
+    Self { fields }
+  }
+
+  /// The JSON text of one field, or `None` when the row leaves the field out.
+  fn cell(&self, field: &str) -> Option<&str> {
+    self.fields.iter().find(|(name, _)| name == field).map(|(_, text)| text.as_str())
+  }
+}
+
+/// The key under which the page declares the encoding of each column it encoded.
+const COLUMN_ENCODING_KEY: &str = "$encoded";
+
+/// The encoding of the page's `id` column: an id written as a canonical UUID travels as its 16 bytes in base64url,
+/// and any other id as `~` and its text.
+const UUID_ENCODING: &str = "uuid-b64";
+
+/// The encoding of the page's `updated_at` column: the first row carries its epoch minutes, and every later row the
+/// difference from the row before it.
+const DELTA_ENCODING: &str = "delta";
+
+/// The page's `id` field, whose UUIDs travel in [`UUID_ENCODING`].
+const ID_FIELD: &str = "id";
+
+/// The page's row text: one array per field, in row order, holding `null` where a row leaves the field out.
+///
+/// The page's rows repeat the same field names and value shapes on every row. A gzip deflator finds the repetition
+/// inside one field's values before it finds any across interleaved rows, so grouping the values by field shrinks
+/// the page: on the 7,160-session mock home the sidebar costs 453 KB of the page's compressed bytes as columns and
+/// 506 KB as row objects.
+///
+/// Two columns carry an encoding the page declares under [`COLUMN_ENCODING_KEY`], because their plain text costs
+/// bytes a client-side expansion removes. A session id is a canonical UUID, so [`UUID_ENCODING`] carries its 16
+/// bytes in base64url (22 characters, near the 16 bytes' entropy) where the 36-character text costs a gzip
+/// deflator's 22 bytes per row. An `updated_at` is epoch minutes in newest-first order, so [`DELTA_ENCODING`] carries
+/// the differences, which are small numbers the deflator packs tightly. On the mock home the two encodings take the
+/// compressed page from 452,820 to 415,790 bytes.
+///
+/// A page row never carries a null value: the falsy fields it keeps are a name and a schedule flag, and
+/// [`drop_falsy_fields`] leaves every other falsy field out before this text is built.
+fn page_columns_text(rows: &[Arc<PageRowText>]) -> String {
+  let mut fields: Vec<&str> = Vec::new();
+  let mut seen: HashSet<&str> = HashSet::new();
+  for row in rows {
+    for (field, _) in &row.fields {
+      if seen.insert(field.as_str()) {
+        fields.push(field.as_str());
+      }
+    }
+  }
+  fields.sort_unstable();
+  let mut text = String::new();
+  text.push('{');
+  text.push_str(&charliebot_compat::jinja::tojson_text(&Value::String(COLUMN_ENCODING_KEY.to_string())));
+  text.push(':');
+  text.push_str(&charliebot_compat::jinja::tojson_text(&Value::Object(Map::from_iter([
+    (ID_FIELD.to_string(), Value::String(UUID_ENCODING.to_string())),
+    (UPDATED_AT.to_string(), Value::String(DELTA_ENCODING.to_string())),
+  ]))));
+  for field in fields {
+    text.push(',');
+    text.push_str(&charliebot_compat::jinja::tojson_text(&Value::String(field.to_string())));
+    text.push_str(":[");
+    match field {
+      ID_FIELD => write_id_column(&mut text, rows),
+      UPDATED_AT => write_updated_at_column(&mut text, rows),
+      _ => write_plain_column(&mut text, rows, field),
+    }
+    text.push(']');
+  }
+  text.push('}');
+  text
+}
+
+/// Write one column's cells as their field's JSON text, with `null` where a row leaves the field out.
+fn write_plain_column(text: &mut String, rows: &[Arc<PageRowText>], field: &str) {
+  for (index, row) in rows.iter().enumerate() {
+    if index > 0 {
+      text.push(',');
+    }
+    text.push_str(row.cell(field).unwrap_or("null"));
+  }
+}
+
+/// Write the `id` column in [`UUID_ENCODING`]: a canonical UUID as its 16 bytes in base64url, any other id as `~` and
+/// its text.
+fn write_id_column(text: &mut String, rows: &[Arc<PageRowText>]) {
+  for (index, row) in rows.iter().enumerate() {
+    if index > 0 {
+      text.push(',');
+    }
+    let Some(cell) = row.cell(ID_FIELD) else {
+      text.push_str("null");
+      continue;
+    };
+    let id: String = serde_json::from_str(cell).expect("an id cell is JSON text");
+    match uuid::Uuid::parse_str(&id) {
+      // The store holds and the routes name an id by its exact text, so only the canonical spelling may travel
+      // encoded: `Uuid::parse_str` also accepts uppercase, simple, braced and URN spellings, and decoding those
+      // would hand the page a different id string.
+      Ok(uuid) if uuid.to_string() == id => {
+        text.push('"');
+        text.push_str(&URL_SAFE_NO_PAD.encode(uuid.as_bytes()));
+        text.push('"');
+      }
+      _ => text.push_str(&charliebot_compat::jinja::tojson_text(&Value::String(format!("~{id}")))),
+    }
+  }
+}
+
+/// Write the `updated_at` column in [`DELTA_ENCODING`]: the first value as it stands, then each difference.
+fn write_updated_at_column(text: &mut String, rows: &[Arc<PageRowText>]) {
+  let mut previous: Option<i64> = None;
+  for (index, row) in rows.iter().enumerate() {
+    if index > 0 {
+      text.push(',');
+    }
+    let Some(cell) = row.cell(UPDATED_AT) else {
+      text.push_str("null");
+      continue;
+    };
+    let value: i64 = cell.parse().expect("an updated_at cell is an integer");
+    text.push_str(&previous.map_or(value, |previous| value - previous).to_string());
+    previous = Some(value);
+  }
+}
+
+/// One page row's value as the page's client reads it: every falsy field left out, then the fields it never reads,
+/// then the values in the form the page's client uses.
+///
+/// Unlike [`render_row`], the page's rows keep `task.goal`. The test's expected-value helper builds its compare text
+/// through this function, so it compares the page text against the construction the page serves.
+fn page_client_value(store: &Store, row: &RowInputs, clear_unread: bool) -> Value {
   let mut value = page_row_value(store, row, clear_unread);
   drop_falsy_fields(&mut value);
-  Ok(charliebot_compat::jinja::tojson_text(&value))
+  drop_unread_fields(&mut value);
+  compact_page_fields(&mut value, row.meta.updated_at);
+  value
 }
 
 /// One page row's value: the session's metadata with its sidebar and controller fields.
@@ -567,6 +710,52 @@ fn drop_falsy_fields(value: &mut Value) {
   let object = value.as_object_mut().expect("a session metadata value is an object");
   object.retain(|field, value| KEPT_FALSY_FIELDS.contains(&field.as_str()) || !is_falsy(value));
 }
+
+/// The fields of a page row that no page client reads: the session's creation time and its stored metadata schema
+/// version.
+///
+/// The page's rows feed the sidebar and the session views under `web/static/js`, and none of them reads either
+/// field: the tree listing orders and pages by `created_at` on the server, and `schema_version` is the store's own
+/// compatibility marker. On the 7,160-session mock home the two fields are 365,160 bytes of the page's 2,347,241-byte
+/// sidebar text.
+const UNREAD_PAGE_FIELDS: [&str; 2] = ["created_at", "schema_version"];
+
+/// Leave out the fields no page client reads, and an empty `round_ratings`.
+///
+/// A row's `round_ratings` is an object of rounds the user rated, so a session with ratings keeps it. The page's
+/// client reads the field as `session.round_ratings || {}`, which draws an absent field exactly like an empty map;
+/// on the mock home every session's map is empty, and the field's 121,720 bytes of the sidebar text carry no value.
+fn drop_unread_fields(value: &mut Value) {
+  let object = value.as_object_mut().expect("a session metadata value is an object");
+  object.retain(|field, value| {
+    if UNREAD_PAGE_FIELDS.contains(&field.as_str()) {
+      return false;
+    }
+    !(field.as_str() == ROUND_RATINGS && value.as_object().is_some_and(|ratings| ratings.is_empty()))
+  });
+}
+
+/// The page's own presence and form of the row values the client fixes.
+///
+/// The page lists active sessions only ([`active_page_rows`] reads [`SessionStatus::Active`]), so every page row's
+/// `status` is `active`; the sidebar reads an absent status as active. A task-tree row's `work_state` paints an
+/// indicator only for `waiting`, and `idle` is the client's own default, so an idle row drops it while any other
+/// state stays.
+///
+/// The client formats a row's time with `relativeTime` at minute precision and sorts by the same instant, so epoch
+/// minutes carry everything it reads. On the 7,160-session mock home the ISO text costs 54 KB of the sidebar's
+/// compressed bytes and epoch minutes cost 25 KB.
+fn compact_page_fields(value: &mut Value, updated_at: UtcDateTime) {
+  let object = value.as_object_mut().expect("a session metadata value is an object");
+  object.remove("status");
+  if object.get(WORK_STATE).and_then(Value::as_str) == Some("idle") {
+    object.remove(WORK_STATE);
+  }
+  object.insert(UPDATED_AT.to_string(), Value::from(updated_at.into_inner().unix_timestamp().div_euclid(60)));
+}
+
+/// The session-metadata field holding the session's last update, in the page's epoch-minute form.
+const UPDATED_AT: &str = "updated_at";
 
 /// Whether *value* is a value the page's client reads as falsy: null, false, zero or the empty string.
 ///
@@ -812,7 +1001,7 @@ fn json_bytes_response(body: Bytes, gzip: bool) -> Response {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+  use charliebot_store::metadata::{RoundRating, RoundRatings, SessionMetadata, TaskProfile};
   use serde_json::json;
 
   async fn list_body(
@@ -862,9 +1051,9 @@ mod tests {
     assert_eq!(memos.state.lock().unwrap().render_calls, 3);
   }
 
-  /// The page's text is the Jinja `tojson` text of the row array, and a row keeps that text until an input moves.
+  /// The page's text expands to the row values the client reads, and a row keeps its value until an input moves.
   #[tokio::test]
-  async fn page_text_matches_the_array_json_and_reuses_unchanged_rows() {
+  async fn page_text_expands_to_the_row_values_and_reuses_unchanged_rows() {
     let (_home, features) = crate::test_support::feature_context();
     let first = crate::test_support::create_node(&features.store, "page-text-a", None, TaskProfile::Manager).await;
     crate::test_support::create_node(&features.store, "page-text-b", None, TaskProfile::Manager).await;
@@ -872,7 +1061,7 @@ mod tests {
 
     let page = active_page_rows(&features.store, &features.registry).unwrap();
     let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
-    assert_eq!(text.as_str(), page_array_text(&features.store, &page, None));
+    assert_eq!(page_rows_of(text.as_str()), page_row_values(&features.store, &page, None));
     let rendered = memo.render_calls();
     assert_eq!(rendered, page.rows.len());
 
@@ -882,7 +1071,7 @@ mod tests {
 
     let page = active_page_rows(&features.store, &features.registry).unwrap();
     let active = active_page_json_text(&features.store, &page, Some(&first.id), &memo).unwrap();
-    assert_eq!(active.as_str(), page_array_text(&features.store, &page, Some(&first.id)));
+    assert_eq!(page_rows_of(active.as_str()), page_row_values(&features.store, &page, Some(&first.id)));
     assert_eq!(memo.render_calls(), rendered + 1);
   }
 
@@ -965,15 +1154,57 @@ mod tests {
     };
 
     let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
-    let rows: Vec<Value> = serde_json::from_str(text.as_str()).unwrap();
+    let rows = page_rows_of(text.as_str());
     let row = rows[0].as_object().expect("a page row is an object");
     // The row writer fills these with null, false or zero, so the client would read them as falsy either way.
     for omitted in ["schedule_task", "cc_session_id", "has_unread", "pending_trigger_count"] {
       assert!(!row.contains_key(omitted), "{omitted} is falsy and stays out of the page row");
     }
+    // No page client reads these: the sidebar and session views never touch a row's creation time or schema
+    // version, and an absent rating map reads like the empty one this row holds.
+    for omitted in UNREAD_PAGE_FIELDS.iter().copied().chain([ROUND_RATINGS]) {
+      assert!(!row.contains_key(omitted), "{omitted} is not a field the page's client reads");
+    }
     assert_eq!(row["id"], json!(meta.id));
     assert_eq!(row["name"], json!("falsy-row"));
     assert_eq!(row["profile"], json!("manager"));
+    // The page lists active sessions only, and the client reads an absent status as active.
+    assert!(!row.contains_key("status"), "the page's rows carry the status its listing fixes");
+    assert_eq!(
+      row[UPDATED_AT],
+      json!(meta.updated_at.into_inner().unix_timestamp().div_euclid(60)),
+      "the page carries a row's time as epoch minutes"
+    );
+  }
+
+  /// The page's own form of a row's time and defaults.
+  #[test]
+  fn a_page_row_time_is_epoch_minutes_and_an_idle_work_state_stays_out() {
+    let updated_at = UtcDateTime::parse("2026-03-19T23:54:31Z").unwrap();
+    let mut row = json!({"id": "synthetic", "status": "active", "work_state": "idle"});
+
+    compact_page_fields(&mut row, updated_at);
+
+    assert_eq!(row, json!({"id": "synthetic", "updated_at": 29_566_074_i64}));
+
+    let mut moving = json!({"id": "synthetic", "status": "active", "work_state": "waiting"});
+    compact_page_fields(&mut moving, updated_at);
+    assert_eq!(moving["work_state"], json!("waiting"), "a moving row keeps the state its indicator paints");
+  }
+
+  /// A session the user rated keeps its ratings: only an empty map is left out of the page row.
+  #[tokio::test]
+  async fn a_page_row_keeps_the_round_ratings_it_holds() {
+    let (_home, features) = crate::test_support::feature_context();
+    let meta = crate::test_support::create_node(&features.store, "rated-row", None, TaskProfile::Manager).await;
+    let mut round_ratings = RoundRatings::default();
+    round_ratings.set("round-a".to_string(), Some(RoundRating::ThumbsUp));
+    let page = page_rows_over(vec![Arc::new(SessionMetadata { round_ratings, ..meta })]);
+    let memo = PageRowsMemo::default();
+
+    let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
+    let rows = page_rows_of(text.as_str());
+    assert_eq!(rows[0][ROUND_RATINGS], json!({"round-a": "thumbs_up"}));
   }
 
   /// The fields the client reads by value stay when their value is falsy.
@@ -1006,12 +1237,12 @@ mod tests {
     let renamed = SessionMetadata { name: "renamed while active".to_string(), has_unread: true, ..meta.clone() };
     let changed = page_rows_over(vec![Arc::new(renamed)]);
     let active_text = active_page_json_text(&features.store, &changed, Some(&meta.id), &memo).unwrap();
-    let active: Vec<Value> = serde_json::from_str(active_text.as_str()).unwrap();
+    let active = page_rows_of(active_text.as_str());
     assert_eq!(active[0]["name"], "renamed while active");
     assert!(active[0].get("has_unread").is_none(), "the active row renders without its unread mark");
 
     let ordinary_text = active_page_json_text(&features.store, &changed, None, &memo).unwrap();
-    let ordinary: Vec<Value> = serde_json::from_str(ordinary_text.as_str()).unwrap();
+    let ordinary = page_rows_of(ordinary_text.as_str());
     assert_eq!(ordinary[0]["name"], "renamed while active");
     assert_eq!(ordinary[0]["has_unread"], true);
   }
@@ -1027,11 +1258,7 @@ mod tests {
     let page = active_page_rows(&features.store, &features.registry).unwrap();
     let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
     let row_of = |text: &str| -> Value {
-      serde_json::from_str::<Vec<Value>>(text)
-        .unwrap()
-        .into_iter()
-        .find(|row| row["id"] == json!(meta.id))
-        .expect("the created row is in the page")
+      page_rows_of(text).into_iter().find(|row| row["id"] == json!(meta.id)).expect("the created row is in the page")
     };
     assert_eq!(row_of(text.as_str())["run_backend"], Value::Null);
 
@@ -1054,20 +1281,83 @@ mod tests {
     assert_eq!(first_page_row_id(&features.store).unwrap().as_deref(), first_row);
   }
 
-  /// The bytes the page must carry: `tojson` of the row values, with the active session's unread mark cleared and
-  /// every falsy field left out.
-  fn page_array_text(store: &Store, page: &PageRows, clear_unread: Option<&str>) -> String {
+  /// The row values the page's client reads, as the page's columns expand to them.
+  fn page_row_values(store: &Store, page: &PageRows, clear_unread: Option<&str>) -> Vec<Value> {
     let inputs =
       row_inputs(store, page.rows.as_slice(), &page.derived, &page.sequence_fields, PAGE_PROJECTION).unwrap();
-    let values: Vec<Value> = inputs
+    inputs.iter().map(|row| page_client_value(store, row, clear_unread == Some(row.meta.id.as_str()))).collect()
+  }
+
+  /// The row values the page's column text carries, with each declared encoding expanded.
+  fn page_rows_of(text: &str) -> Vec<Value> {
+    let columns: Map<String, Value> = serde_json::from_str(text).expect("the page text is a column object");
+    let encodings = columns.get(COLUMN_ENCODING_KEY).and_then(Value::as_object).cloned().unwrap_or_default();
+    let count = columns
       .iter()
-      .map(|row| {
-        let mut value = page_row_value(store, row, clear_unread == Some(row.meta.id.as_str()));
-        drop_falsy_fields(&mut value);
-        value
-      })
+      .find(|(field, _)| field.as_str() != COLUMN_ENCODING_KEY)
+      .and_then(|(_, cells)| cells.as_array())
+      .map_or(0, Vec::len);
+    let mut rows = vec![Map::new(); count];
+    for (field, cells) in columns {
+      if field == COLUMN_ENCODING_KEY {
+        continue;
+      }
+      let encoding = encodings.get(&field).and_then(Value::as_str);
+      let mut running = 0i64;
+      for (index, cell) in cells.as_array().expect("a column is an array").iter().enumerate() {
+        if cell.is_null() {
+          continue;
+        }
+        let value = match encoding {
+          Some(UUID_ENCODING) => Value::String(expand_session_id(cell.as_str().expect("an id cell is a string"))),
+          Some(DELTA_ENCODING) => {
+            running += cell.as_i64().expect("a delta cell is an integer");
+            Value::from(running)
+          }
+          _ => cell.clone(),
+        };
+        rows[index].insert(field.clone(), value);
+      }
+    }
+    rows.into_iter().map(Value::Object).collect()
+  }
+
+  /// The session id a [`UUID_ENCODING`] cell carries: a UUID decoded from its base64url bytes, or a `~` text id.
+  fn expand_session_id(cell: &str) -> String {
+    let Some(encoded) = cell.strip_prefix('~') else {
+      let bytes = URL_SAFE_NO_PAD.decode(cell).expect("a UUID id cell is base64url");
+      return uuid::Uuid::from_slice(&bytes).expect("a UUID id cell holds 16 bytes").to_string();
+    };
+    encoded.to_string()
+  }
+
+  /// A canonical UUID id travels as 22 base64url characters, any other id as `~` and its text, and the expansion
+  /// restores both.
+  #[test]
+  fn a_canonical_uuid_id_travels_as_its_bytes_and_any_other_id_as_text() {
+    let uuid = "e870f19c-96c6-40e7-8da7-71f02b2622e3";
+    let rows: Vec<Arc<PageRowText>> = [uuid, "imported-chat", "E870F19C-96C6-40E7-8DA7-71F02B2622E3"]
+      .into_iter()
+      .enumerate()
+      .map(|(index, id)| Arc::new(PageRowText::of(json!({"id": id, "updated_at": 29_566_074 + index as i64}))))
       .collect();
-    charliebot_compat::jinja::tojson_text(&Value::Array(values))
+
+    let text = page_columns_text(&rows);
+    assert_eq!(
+      text,
+      format!(
+        r#"{{"$encoded":{{"id": "{UUID_ENCODING}", "updated_at": "{DELTA_ENCODING}"}},"id":["{}","~imported-chat","~E870F19C-96C6-40E7-8DA7-71F02B2622E3"],"updated_at":[29566074,1,1]}}"#,
+        URL_SAFE_NO_PAD.encode(uuid::Uuid::parse_str(uuid).unwrap().as_bytes())
+      )
+    );
+    assert_eq!(
+      page_rows_of(&text),
+      vec![
+        json!({"id": uuid, "updated_at": 29_566_074}),
+        json!({"id": "imported-chat", "updated_at": 29_566_075}),
+        json!({"id": "E870F19C-96C6-40E7-8DA7-71F02B2622E3", "updated_at": 29_566_076})
+      ]
+    );
   }
 
   #[tokio::test]

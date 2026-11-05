@@ -12,7 +12,8 @@
 //! - `ThreadReplyError` with `ThreadDetail`: a refusal with its HTTP status and detail; an
 //!   unplanned failure answers 500 "Internal Server Error".
 //! - `load_prompt_doc`, `thread_reply_contract`, `thread_reply_segment`: the reply contract (`LINKED_PAGES_LINE` joins
-//!   it for every platform).
+//!   it for every platform). The scope doc is `<charliebot_home>/prompts/<scope_doc>` when the host has that file,
+//!   else the repo's `prompts/<scope_doc>`; the red line and the reply format always come from the repo.
 //! - Pure helpers: `follow_wake_label`, `follow_floor`, `chunk_text`, `event_by_id`, `summon_of`, `newest_thread_input`,
 //!   `replied`, `nudged`, `noticed`, `lost_summons`, `unread_after`.
 //! - Round side: `post_with_retry`, `ack_clear`, `unread_messages`, `assert_thread_fresh` (the reply gate),
@@ -30,7 +31,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::future::Future;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex as StdMutex, Weak};
 use std::time::Duration;
 
@@ -122,7 +124,8 @@ pub struct ThreadPlatform {
   pub reply_command: &'static str,
   /// The platform's per-message character limit (`max_post_chars`).
   pub max_post_chars: usize,
-  /// The platform's scope doc under `prompts/`: what personal information may enter the platform's threads.
+  /// The platform's scope doc name under `prompts/`: what personal information may enter the platform's threads. The
+  /// host's `prompts/` may hold a file of this name that replaces the repo's.
   pub scope_doc: &'static str,
   /// The label prefix of the session's armed thread-follow record.
   pub follow_trigger_prefix: &'static str,
@@ -351,22 +354,59 @@ pub fn load_prompt_doc(repo: &RepoRoot, name: &str, likely_cause: &str) -> anyho
   let path = repo.path().join("prompts").join(name);
   let bytes =
     std::fs::read(&path).with_context(|| format!("{name} prompt not found at {} — {likely_cause}", path.display()))?;
+  prompt_doc_text(bytes, &path)
+}
+
+/// The text of one prompts doc's bytes, with universal newlines and both-sided whitespace trimmed. Bytes that are not
+/// UTF-8 fail with the doc's path.
+fn prompt_doc_text(bytes: Vec<u8>, path: &Path) -> anyhow::Result<String> {
   let text = String::from_utf8(bytes).with_context(|| format!("{} is not UTF-8", path.display()))?;
   Ok(str_methods::strip(&text.replace("\r\n", "\n").replace('\r', "\n")).to_string())
 }
 
+/// The platform's scope doc and the path it was read from (`load_scope_doc`). The path is the host file's absolute
+/// path, or the repo's `prompts/<scope_doc>`.
+fn load_scope_doc(
+  repo: &RepoRoot,
+  charliebot_home: &Path,
+  platform: &ThreadPlatform,
+) -> anyhow::Result<(String, String)> {
+  let host_path = charliebot_home.join("prompts").join(platform.scope_doc);
+  match std::fs::read(&host_path) {
+    Ok(bytes) => Ok((prompt_doc_text(bytes, &host_path)?, host_path.display().to_string())),
+    // Only an absent host file falls back to the repo default; the same absence `host_supplement` treats as no file.
+    Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) => {
+      let doc = load_prompt_doc(
+        repo,
+        platform.scope_doc,
+        &format!("the repo checkout most likely predates the {} addition commit", platform.scope_doc),
+      )?;
+      Ok((doc, format!("prompts/{}", platform.scope_doc)))
+    }
+    Err(error) => {
+      let what = format!("host scope doc is unreadable: {}", host_path.display());
+      Err(anyhow::Error::new(error).context(what))
+    }
+  }
+}
+
+/// The thread reply contract's text and the source of its scope doc (`thread_reply_contract`).
+#[derive(Debug)]
+pub struct ThreadReplyContract {
+  text: String,
+  scope_source: String,
+}
+
 /// The thread reply contract: `platform_part`, a blank line, then the platform's scope doc, the red line and the
-/// reply format, one per line (`thread_reply_contract`). Each doc is read on every call.
+/// reply format, one per line. The scope doc is the host file `<charliebot_home>/prompts/<scope_doc>` when it exists,
+/// else the repo's; the red line and the reply format always come from the repo. Each doc is read on every call.
 pub fn thread_reply_contract(
   repo: &RepoRoot,
+  charliebot_home: &Path,
   platform: &ThreadPlatform,
   platform_part: &str,
-) -> anyhow::Result<String> {
-  let scope_doc = load_prompt_doc(
-    repo,
-    platform.scope_doc,
-    &format!("the repo checkout most likely predates the {} addition commit", platform.scope_doc),
-  )?;
+) -> anyhow::Result<ThreadReplyContract> {
+  let (scope_doc, scope_source) = load_scope_doc(repo, charliebot_home, platform)?;
   let red_line = load_prompt_doc(
     repo,
     REDLINE_DOC,
@@ -377,21 +417,17 @@ pub fn thread_reply_contract(
     REPLY_FORMAT_DOC,
     "the repo checkout most likely predates the thread-reply-format rename commit",
   )?;
-  Ok(format!("{platform_part}\n\n{scope_doc}\n{red_line}\n{reply_format}"))
+  Ok(ThreadReplyContract { text: format!("{platform_part}\n\n{scope_doc}\n{red_line}\n{reply_format}"), scope_source })
 }
 
-/// The contract text as one full rule segment. Its sources name the three docs the text joins, so the prompt-source
-/// audit reaches each file (`thread_reply_segment`).
-pub fn thread_reply_segment(platform: &ThreadPlatform, text: String) -> RuleSegment {
-  let sources = [platform.scope_doc, REDLINE_DOC, REPLY_FORMAT_DOC]
+/// The contract as one full rule segment. Its sources name the scope doc file actually read and the two repo docs the
+/// text joins, so the prompt-source audit reaches each file (`thread_reply_segment`).
+pub fn thread_reply_segment(contract: ThreadReplyContract) -> RuleSegment {
+  let sources = [contract.scope_source, format!("prompts/{REDLINE_DOC}"), format!("prompts/{REPLY_FORMAT_DOC}")]
     .into_iter()
-    .map(|doc| PromptSource {
-      scope: SCOPE_BASE.to_string(),
-      source_ref: format!("prompts/{doc}"),
-      source_session_id: None,
-    })
+    .map(|source_ref| PromptSource { scope: SCOPE_BASE.to_string(), source_ref, source_session_id: None })
     .collect();
-  RuleSegment { text, sources, delivery: DELIVERY_FULL.to_string() }
+  RuleSegment { text: contract.text, sources, delivery: DELIVERY_FULL.to_string() }
 }
 
 /// The armed follow trigger's label: the platform prefix and the chain floor id (`follow_wake_label`).

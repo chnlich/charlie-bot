@@ -10,6 +10,8 @@ pub const TOOL_USE: &str = "tool_use";
 pub const TOOL_RESULT: &str = "tool_result";
 /// The id that pairs a `tool_result` block with the `tool_use` block it answers.
 pub const TOOL_USE_ID: &str = "tool_use_id";
+/// The tool_use id whose subagent transcript line an event belongs to; an event without it belongs to the turn.
+pub const PARENT_TOOL_USE_ID: &str = "parent_tool_use_id";
 pub const MASTER_DONE: &str = "master_done";
 pub const ASSISTANT_ERROR: &str = "assistant_error";
 pub const QUOTA_EXHAUSTED: &str = "quota_exhausted";
@@ -87,6 +89,10 @@ pub const CHILD_REPORT: &str = "child_report";
 pub const PROMPT_CHANGED: &str = "prompt_changed";
 pub const TASK_IMPORTED: &str = "task_imported";
 pub const RUN_HEADER: &str = "run_header";
+/// The run header's display label for the backend that ran.
+pub const BACKEND_LABEL: &str = "backend_label";
+/// The run header's reference to the run's launch prompt file.
+pub const LAUNCH_PROMPT_REF: &str = "launch_prompt_ref";
 pub const RUN_END: &str = "run_end";
 pub const RUN_ERROR: &str = "run_error";
 pub const RUN_DELIVERY: &str = "run_delivery";

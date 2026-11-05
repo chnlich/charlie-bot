@@ -186,6 +186,21 @@ function makeSessionMeta(id, overrides = {}) {
   };
 }
 
+// The page's sidebar rows as it carries them: one array per field, in row
+// order, with null where a row leaves the field out. A harness that serves
+// rows through INITIAL_SESSIONS builds them with this, as index.html's
+// server-rendered page does.
+function sessionColumns(rows) {
+  const columns = {};
+  rows.forEach((row, index) => {
+    Object.keys(row).forEach((field) => {
+      if (!columns[field]) columns[field] = rows.map(() => null);
+      columns[field][index] = row[field];
+    });
+  });
+  return columns;
+}
+
 // The bootstrap body switchSession renders. oldestMessageOrdinal and hasMore
 // are the two fields the pagination tests vary; everything else is the fixed
 // one-turn shape the switch flow reads.
@@ -319,7 +334,7 @@ function buildSidebarIndicatorContext(ids) {
   const elements = new Map([['session-list', nav], ...buildSidebarFilterElements(), ...buildSidebarIndicatorElements(ids)]);
   const {context} = baseSessionContext({elements});
   context.SESSION_ID = 'none';
-  context.INITIAL_SESSIONS = [];
+  context.INITIAL_SESSIONS = {};
   context.INITIAL_LOAD_ERRORS = [];
   inlinePageTimers(context);
   context.document.getElementById = (id) => elements.get(id) || null;
@@ -368,6 +383,7 @@ module.exports = {
   buildSwitchFlowHarness,
   makeSidebarRow,
   makeSessionMeta,
+  sessionColumns,
   bootstrapPayload,
   installSessionDocumentLookups,
   stubPageTimers,

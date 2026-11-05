@@ -28,9 +28,9 @@ mod backend;
 pub use backend::{
   AnthropicEndpointBackend, CLAUDE_MODEL_ENV_NAMES, ClaudeCodeBackend, DISALLOWED_TOOLS_FLAG,
   EXCLUDE_DYNAMIC_SECTIONS_FLAG, GATEWAY_AUTH_TOKEN_ENV, GATEWAY_BASE_URL_ENV, GATEWAY_CUSTOM_HEADERS_ENV,
-  GATEWAY_ENDPOINT_ENV_NAMES, GATEWAY_EXTRA_BODY_ENV, HEADLESS_DISALLOWED_TOOLS, INSTRUCTIONS_FILE_NAME,
-  INSTRUCTIONS_WRITTEN_EVENT, base_disallowed_tools, claude_child_env, claude_model_env, claude_reading_limits,
-  claude_reading_limits_from, headless_claude_env, out_of_family_served_models, without_gateway_env,
+  GATEWAY_ENDPOINT_ENV_NAMES, GATEWAY_EXTRA_BODY_ENV, HEADLESS_DISALLOWED_TOOLS, INSTRUCTIONS_WRITTEN_EVENT,
+  base_disallowed_tools, claude_child_env, claude_model_env, claude_reading_limits, claude_reading_limits_from,
+  headless_claude_env, out_of_family_served_models, without_gateway_env,
 };
 pub use login_dirs::ClaudeHost;
 pub use usage_logs::USAGE_SOURCE;
@@ -59,7 +59,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   register_with_host(registry, host, http)
 }
 
-/// [`register`] over an explicit host and HTTP client.
+/// The registration `register` performs, with the host and HTTP client supplied by the caller.
 pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: QuotaHttp) -> Result<(), RegistryError> {
   // The lifecycle, the quota accounts and the log source share one state value: the pool's readings and the panel's
   // readings are the same observations.

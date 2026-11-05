@@ -14,7 +14,9 @@ use axum::extract::{FromRequestParts, Path as AxumPath, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use charliebot_compat::form_body::{self, Field, FormModel};
-use charliebot_compat::request_body::{self, BodyModel, Field as BodyField, FieldType};
+use charliebot_compat::request_body::{
+  self, BodyModel, Field as BodyField, FieldType, flag_field, integer_field, optional_text_field_ref, text_field_ref,
+};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::config::CharlieBotConfig;
@@ -87,7 +89,8 @@ pub(crate) struct UploadForm {
   pub(crate) devices: Option<String>,
 }
 
-/// `POST /api/voice/{session_id}`: multipart fields carry the WAV, selected backend and device object.
+/// The recording upload route: multipart fields carry the WAV, selected backend and device object, at
+/// `POST /api/voice/{session_id}`.
 async fn upload_voice_recording(State(features): State<Arc<FeatureContext>>, request: Request) -> Response {
   let (mut parts, stream) = request.into_parts();
   let form = match form_body::read(&parts.headers, stream).await {
@@ -133,6 +136,8 @@ const STARTUP_STEPS: &[&str] = &["mic_opening", "no_frames", "silent", "ready"];
 const STARTUP_ENDS: &[&str] = &["stop", "startup_error", "left", "page_closed"];
 /// The browser's microphone permission at the click.
 const MIC_PERMISSIONS: &[&str] = &["granted", "prompt", "denied"];
+/// How the audio engine's resume after both startup branches settled ended: not needed, started, or timed out.
+const AUDIO_CONTEXT_RESUMES: &[&str] = &["not_needed", "started", "timed_out"];
 /// The microphone track's readyState at the send.
 const TRACK_READY_STATES: &[&str] = &["live", "ended"];
 /// The longest string the startup line keeps, in code points, the same cut the diag route's `error` takes.
@@ -164,6 +169,8 @@ const STARTUP_FIELDS: &[BodyField] = &[
   BodyField::required("samples", FieldType::Integer),
   BodyField::required("audio_context_state", FieldType::NullableString),
   BodyField::required("audio_context_rate", FieldType::NullableInteger),
+  BodyField::required("audio_context_settled_state", FieldType::NullableString),
+  BodyField::required("audio_context_resume", FieldType::NullableLiteral(AUDIO_CONTEXT_RESUMES)),
   BodyField::required("mic_permission", FieldType::NullableLiteral(MIC_PERMISSIONS)),
   BodyField::required("track_ready_state", FieldType::NullableLiteral(TRACK_READY_STATES)),
   BodyField::required("track_muted", FieldType::NullableBoolean),
@@ -174,8 +181,8 @@ const STARTUP_FIELDS: &[BodyField] = &[
 
 const STARTUP_BODY: BodyModel = BodyModel::required(STARTUP_FIELDS).forbid_extra();
 
-/// `POST /api/voice/{session_id}/startup`: validate one startup record, log one `voice_startup` line, answer
-/// `{"ok": true}`. A validation failure answers 422 and logs nothing.
+/// The startup report route: validate one startup record, log one `voice_startup` line, answer `{"ok": true}`.
+/// A validation failure answers 422 and logs nothing. The route answers `POST /api/voice/{session_id}/startup`.
 async fn post_voice_startup(AxumPath(session_id): AxumPath<String>, request: Request) -> Response {
   let (parts, stream) = request.into_parts();
   let body = match request_body::read(&parts.headers, stream).await {
@@ -206,6 +213,8 @@ struct VoiceStartup<'a> {
   samples: i128,
   audio_context_state: Option<&'a str>,
   audio_context_rate: Option<i128>,
+  audio_context_settled_state: Option<&'a str>,
+  audio_context_resume: Option<&'a str>,
   mic_permission: Option<&'a str>,
   track_ready_state: Option<&'a str>,
   track_muted: Option<bool>,
@@ -218,65 +227,28 @@ impl<'a> VoiceStartup<'a> {
   /// Reads the validated fields in model declaration order.
   fn from_values(values: &'a serde_json::Map<String, Value>) -> Self {
     Self {
-      backend: text(values, "backend"),
-      reached: text(values, "reached"),
-      end: text(values, "end"),
-      error: optional_text(values, "error"),
-      mic_open_ms: integer(values, "mic_open_ms"),
-      graph_ready_ms: integer(values, "graph_ready_ms"),
-      first_frame_ms: integer(values, "first_frame_ms"),
-      first_sound_ms: integer(values, "first_sound_ms"),
-      end_ms: integer(values, "end_ms").expect("a required integer validates to a value"),
-      frames: integer(values, "frames").expect("a required integer validates to a value"),
-      samples: integer(values, "samples").expect("a required integer validates to a value"),
-      audio_context_state: optional_text(values, "audio_context_state"),
-      audio_context_rate: integer(values, "audio_context_rate"),
-      mic_permission: optional_text(values, "mic_permission"),
-      track_ready_state: optional_text(values, "track_ready_state"),
-      track_muted: flag(values, "track_muted"),
+      backend: text_field_ref(values, "backend"),
+      reached: text_field_ref(values, "reached"),
+      end: text_field_ref(values, "end"),
+      error: optional_text_field_ref(values, "error"),
+      mic_open_ms: integer_field(values, "mic_open_ms"),
+      graph_ready_ms: integer_field(values, "graph_ready_ms"),
+      first_frame_ms: integer_field(values, "first_frame_ms"),
+      first_sound_ms: integer_field(values, "first_sound_ms"),
+      end_ms: integer_field(values, "end_ms").expect("a required integer validates to a value"),
+      frames: integer_field(values, "frames").expect("a required integer validates to a value"),
+      samples: integer_field(values, "samples").expect("a required integer validates to a value"),
+      audio_context_state: optional_text_field_ref(values, "audio_context_state"),
+      audio_context_rate: integer_field(values, "audio_context_rate"),
+      audio_context_settled_state: optional_text_field_ref(values, "audio_context_settled_state"),
+      audio_context_resume: optional_text_field_ref(values, "audio_context_resume"),
+      mic_permission: optional_text_field_ref(values, "mic_permission"),
+      track_ready_state: optional_text_field_ref(values, "track_ready_state"),
+      track_muted: flag_field(values, "track_muted"),
       devices: values.get("devices").filter(|value| !value.is_null()),
-      user_agent: text(values, "user_agent"),
-      client_ts: text(values, "client_ts"),
+      user_agent: text_field_ref(values, "user_agent"),
+      client_ts: text_field_ref(values, "client_ts"),
     }
-  }
-}
-
-fn text<'a>(values: &'a serde_json::Map<String, Value>, name: &str) -> &'a str {
-  match values.get(name) {
-    Some(Value::String(text)) => text,
-    other => unreachable!("the validated body carries a string {name}, got {other:?}"),
-  }
-}
-
-fn optional_text<'a>(values: &'a serde_json::Map<String, Value>, name: &str) -> Option<&'a str> {
-  match values.get(name) {
-    Some(Value::String(text)) => Some(text),
-    Some(Value::Null) | None => None,
-    other => unreachable!("the validated body carries a string or null {name}, got {other:?}"),
-  }
-}
-
-/// An integer field, `None` when it is null. `i128` holds the whole integer range the body reader accepts.
-fn integer(values: &serde_json::Map<String, Value>, name: &str) -> Option<i128> {
-  match values.get(name) {
-    None | Some(Value::Null) => None,
-    Some(Value::Number(number)) => Some(
-      number
-        .as_i64()
-        .map(i128::from)
-        .or_else(|| number.as_u64().map(i128::from))
-        .expect("the validated body carries a 64-bit integer"),
-    ),
-    other => unreachable!("the validated body carries an integer or null {name}, got {other:?}"),
-  }
-}
-
-/// A boolean field, `None` when it is null.
-fn flag(values: &serde_json::Map<String, Value>, name: &str) -> Option<bool> {
-  match values.get(name) {
-    None | Some(Value::Null) => None,
-    Some(Value::Bool(flag)) => Some(*flag),
-    other => unreachable!("the validated body carries a boolean or null {name}, got {other:?}"),
   }
 }
 
@@ -300,6 +272,8 @@ fn log_voice_startup(session_id: &str, startup: &VoiceStartup<'_>) {
     samples = %startup.samples,
     audio_context_state = %Nullable(startup.audio_context_state.map(cut_startup_text)),
     audio_context_rate = %Nullable(startup.audio_context_rate),
+    audio_context_settled_state = %Nullable(startup.audio_context_settled_state.map(cut_startup_text)),
+    audio_context_resume = %Nullable(startup.audio_context_resume.map(cut_startup_text)),
     mic_permission = %Nullable(startup.mic_permission.map(cut_startup_text)),
     track_ready_state = %Nullable(startup.track_ready_state.map(cut_startup_text)),
     track_muted = %Nullable(startup.track_muted),
@@ -844,6 +818,8 @@ mod tests {
       "samples": 27136,
       "audio_context_state": "running",
       "audio_context_rate": 48000,
+      "audio_context_settled_state": "suspended",
+      "audio_context_resume": "started",
       "mic_permission": "granted",
       "track_ready_state": "live",
       "track_muted": false,
@@ -903,6 +879,8 @@ mod tests {
         "samples",
         "audio_context_state",
         "audio_context_rate",
+        "audio_context_settled_state",
+        "audio_context_resume",
         "mic_permission",
         "track_ready_state",
         "track_muted",
@@ -929,6 +907,8 @@ mod tests {
     assert_eq!(line["samples"], "27136");
     assert_eq!(line["audio_context_state"], "running");
     assert_eq!(line["audio_context_rate"], "48000");
+    assert_eq!(line["audio_context_settled_state"], "suspended");
+    assert_eq!(line["audio_context_resume"], "started");
     assert_eq!(line["mic_permission"], "granted");
     assert_eq!(line["track_ready_state"], "live");
     assert_eq!(line["track_muted"], "false");
@@ -950,6 +930,8 @@ mod tests {
     }
     body["audio_context_state"] = Value::Null;
     body["audio_context_rate"] = Value::Null;
+    body["audio_context_settled_state"] = Value::Null;
+    body["audio_context_resume"] = Value::Null;
     body["mic_permission"] = Value::Null;
     body["track_ready_state"] = Value::Null;
     body["track_muted"] = Value::Null;

@@ -12,6 +12,7 @@ mod event_types;
 mod frame;
 mod listener;
 pub mod metadata;
+mod owners;
 mod service;
 #[cfg(test)]
 mod test_support;

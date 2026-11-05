@@ -8,9 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use charliebot_compat::http_client::{self, Settings};
-use charliebot_registry::draft::{
-  DraftContext, DraftFailureOutcome, DraftPlatform, DraftPlatformFactory, DraftSendFailure, DraftSent,
-};
+use charliebot_registry::draft::{DraftContext, DraftPlatform, DraftPlatformFactory, DraftSendFailure, DraftSent};
 use futures_util::future::BoxFuture;
 use http::header;
 use serde_json::{Value, json};
@@ -57,25 +55,29 @@ impl GithubDraftPlatform {
       .body(serde_json::to_vec(&payload).expect("a JSON payload serializes"))
       .send()
       .await
-      .map_err(|error| unknown(format!("POST {path}: {error}")))?;
+      .map_err(|error| DraftSendFailure::unknown(format!("POST {path}: {error}")))?;
     let status = response.status();
-    let bytes = response.bytes().await.map_err(|error| unknown(format!("POST {path}: {error}")))?;
+    let bytes = response.bytes().await.map_err(|error| DraftSendFailure::unknown(format!("POST {path}: {error}")))?;
     let payload: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     if !status.is_success() {
       let message = payload.get("message").and_then(Value::as_str).unwrap_or("no message");
-      return Err(rejected(format!("POST {path}: HTTP {status}: {message}")));
+      return Err(DraftSendFailure::rejected(format!("POST {path}: HTTP {status}: {message}")));
     }
     let sender = payload
       .pointer("/user/login")
       .and_then(Value::as_str)
       .filter(|login| !login.is_empty())
-      .ok_or_else(|| unknown(format!("POST {path}: the response names no author, so the write may have landed")))?
+      .ok_or_else(|| {
+        DraftSendFailure::unknown(format!("POST {path}: the response names no author, so the write may have landed"))
+      })?
       .to_string();
     let url = payload
       .get("html_url")
       .and_then(Value::as_str)
       .filter(|url| !url.is_empty())
-      .ok_or_else(|| unknown(format!("POST {path}: the response names no URL, so the write may have landed")))?
+      .ok_or_else(|| {
+        DraftSendFailure::unknown(format!("POST {path}: the response names no URL, so the write may have landed"))
+      })?
       .to_string();
     Ok(DraftSent { sender, url })
   }
@@ -83,24 +85,24 @@ impl GithubDraftPlatform {
   /// Run the host's token command and return the token it prints.
   async fn operator_token(&self) -> Result<String, DraftSendFailure> {
     let Some(command) = self.token_command.as_deref().filter(|command| !command.trim().is_empty()) else {
-      return Err(rejected(
+      return Err(DraftSendFailure::rejected(
         "github.user_token_command is not configured, so a GitHub draft cannot be sent from the operator's account",
       ));
     };
     let Some(parts) = shlex::split(command).filter(|parts| !parts.is_empty()) else {
-      return Err(rejected("github.user_token_command is not a valid command line"));
+      return Err(DraftSendFailure::rejected("github.user_token_command is not a valid command line"));
     };
     let output = tokio::process::Command::new(&parts[0])
       .args(&parts[1..])
       .output()
       .await
-      .map_err(|error| rejected(format!("running github.user_token_command: {error}")))?;
+      .map_err(|error| DraftSendFailure::rejected(format!("running github.user_token_command: {error}")))?;
     if !output.status.success() {
-      return Err(rejected(format!("github.user_token_command exited with {}", output.status)));
+      return Err(DraftSendFailure::rejected(format!("github.user_token_command exited with {}", output.status)));
     }
     let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if token.is_empty() {
-      return Err(rejected("github.user_token_command printed no token"));
+      return Err(DraftSendFailure::rejected("github.user_token_command printed no token"));
     }
     Ok(token)
   }
@@ -111,7 +113,7 @@ fn request_for(target: &Value, body: &str) -> Result<(String, Value), DraftSendF
     .get("repo")
     .and_then(Value::as_str)
     .filter(|repo| !repo.is_empty())
-    .ok_or_else(|| rejected("the GitHub target names no repository"))?;
+    .ok_or_else(|| DraftSendFailure::rejected("the GitHub target names no repository"))?;
   if let Some(number) = target.get("number").and_then(Value::as_u64) {
     return Ok((format!("repos/{repo}/issues/{number}/comments"), json!({"body": body})));
   }
@@ -139,14 +141,6 @@ impl DraftPlatform for GithubDraftPlatform {
   }
 }
 
-fn rejected(detail: impl Into<String>) -> DraftSendFailure {
-  DraftSendFailure { detail: detail.into(), outcome: DraftFailureOutcome::Rejected }
-}
-
-fn unknown(detail: impl Into<String>) -> DraftSendFailure {
-  DraftSendFailure { detail: detail.into(), outcome: DraftFailureOutcome::Unknown }
-}
-
 /// The factory the GitHub package registers under the platform name `github`.
 pub fn platform_factory() -> DraftPlatformFactory {
   Arc::new(|context: &DraftContext| {
@@ -162,6 +156,8 @@ mod tests {
   use std::os::unix::fs::PermissionsExt;
   use std::sync::{Arc, Mutex};
   use std::thread;
+
+  use charliebot_registry::draft::DraftFailureOutcome;
 
   use super::*;
 

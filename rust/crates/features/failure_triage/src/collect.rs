@@ -23,7 +23,9 @@ use charliebot_registry::backend::Env;
 use charliebot_store::CompactValue;
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::layout::{chat_events_path, runs_dir};
-use charliebot_store::run_records::{self, RUN_METADATA_NAME, STDERR_LOG_NAME, stop_requested_in_events};
+use charliebot_store::run_records::{
+  self, OBSERVATION_EVENTS_REF, OBSERVATION_RESULT_REF, RUN_METADATA_NAME, STDERR_LOG_NAME, stop_requested_in_events,
+};
 use jiff::Timestamp;
 use jiff::civil;
 use jiff::tz::TimeZone;
@@ -207,7 +209,7 @@ fn run_fields(path: &Path) -> Result<RunFields> {
 /// The event log a run record names: its `events_ref`, else its `result_ref`. The record's fields give the path, so no
 /// file name is joined onto the run directory.
 fn named_event_log(record: &serde_json::Value) -> Option<PathBuf> {
-  ["events_ref", "result_ref"]
+  [OBSERVATION_EVENTS_REF, OBSERVATION_RESULT_REF]
     .into_iter()
     .find_map(|key| record.get(key).and_then(serde_json::Value::as_str))
     .map(PathBuf::from)

@@ -662,8 +662,12 @@ pub trait Translate: Send {
 pub use crate::midturn_delivery::ExitedProbe;
 
 /// The instructions file an agent backend auto-detects in its session cwd. Codex, OpenCode and Charlie Code share
-/// this name; Claude Code names its own file.
+/// this name.
 pub const AGENTS_INSTRUCTIONS_FILE_NAME: &str = "AGENTS.md";
+
+/// The instructions file Claude Code auto-detects. Codex reads it as its project-doc fallback when a worktree holds
+/// no `AGENTS.md`.
+pub const CLAUDE_INSTRUCTIONS_FILE_NAME: &str = "CLAUDE.md";
 
 /// The per-process pieces of the backend template method. The runner in `charliebot-agents` drives them.
 pub trait AgentBackend: Send {

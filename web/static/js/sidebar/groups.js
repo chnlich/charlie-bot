@@ -482,6 +482,21 @@ function renderSessionTimeLine(s, timeIso, timeStr, staticTime = false) {
     + `</span>`;
 }
 
+// The page's initial rows carry updated_at as epoch minutes; every listing
+// route carries it as an ISO string. Both shapes reach the row renderer.
+function sessionUpdatedMs(session) {
+  const value = session && session.updated_at;
+  if (typeof value === 'number') return value * 60000;
+  const parsed = Date.parse(value || '');
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function sessionUpdatedIso(session) {
+  const value = session && session.updated_at;
+  if (typeof value === 'number') return new Date(value * 60000).toISOString();
+  return value || '';
+}
+
 // ---------------------------------------------------------------------------
 // Task-tree nesting: a child task node renders under its parent row.
 // ---------------------------------------------------------------------------
@@ -512,7 +527,7 @@ function buildSessionTree(sessions) {
       roots.push(s);
     }
   });
-  const newestFirst = (a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
+  const newestFirst = (a, b) => sessionUpdatedMs(b) - sessionUpdatedMs(a);
   childrenOf.forEach(list => list.sort((a, b) => {
     const workerOrder = (a.profile === 'worker' ? 1 : 0) - (b.profile === 'worker' ? 1 : 0);
     return workerOrder || newestFirst(a, b);
@@ -644,8 +659,8 @@ function renderSessionItem(s, filter, options = {}) {
   const isWorker = s.profile === 'worker';
   const isWorkerRow = isWorker && !isArchivedRow;
   const activeClass = sessionRowActiveClass(isActive);
-  const timeStr = s.updated_at ? relativeTime(s.updated_at) : '';
-  const timeIso = s.updated_at || '';
+  const timeIso = sessionUpdatedIso(s);
+  const timeStr = timeIso ? relativeTime(timeIso) : '';
   let actions = '';
   if (isContextRow) {
     actions = renderStarButton(s);

@@ -15,14 +15,14 @@ use crate::log::{
 pub fn draft_registered_message(event: &Value) -> Value {
   json!({
     "role": "draft",
-    "draft_id": field(event, DRAFT_ID),
+    (DRAFT_ID): field(event, DRAFT_ID),
     (PLATFORM): field(event, PLATFORM),
     (TARGET): field(event, TARGET),
-    "target_label": field(event, TARGET_LABEL),
+    (TARGET_LABEL): field(event, TARGET_LABEL),
     (BODY): field(event, BODY),
     (REPLACES): field(event, REPLACES),
-    "sha256": field(event, SHA256),
-    "created_at": field(event, CREATED_AT),
+    (SHA256): field(event, SHA256),
+    (CREATED_AT): field(event, CREATED_AT),
   })
 }
 
@@ -30,11 +30,11 @@ pub fn draft_registered_message(event: &Value) -> Value {
 pub fn draft_sent_message(event: &Value) -> Value {
   json!({
     "role": event_types::DRAFT_SENT,
-    "draft_id": field(event, DRAFT_ID),
-    "sha256": field(event, SHA256),
-    "sender": field(event, SENDER),
-    "url": field(event, URL),
-    "sent_at": field(event, SENT_AT),
+    (DRAFT_ID): field(event, DRAFT_ID),
+    (SHA256): field(event, SHA256),
+    (SENDER): field(event, SENDER),
+    (URL): field(event, URL),
+    (SENT_AT): field(event, SENT_AT),
   })
 }
 
@@ -42,9 +42,9 @@ pub fn draft_sent_message(event: &Value) -> Value {
 pub fn draft_failed_message(event: &Value) -> Value {
   json!({
     "role": event_types::DRAFT_FAILED,
-    "draft_id": field(event, DRAFT_ID),
-    "error": field(event, ERROR),
-    "outcome": field(event, OUTCOME),
+    (DRAFT_ID): field(event, DRAFT_ID),
+    (ERROR): field(event, ERROR),
+    (OUTCOME): field(event, OUTCOME),
   })
 }
 

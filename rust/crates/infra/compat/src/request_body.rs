@@ -1,7 +1,5 @@
 //! Request-body reading and typed model validation.
 //!
-//! A route reads the body before resolving dependencies, then validates the model after them.
-//!
 //! ```ignore
 //! let (parts, stream) = request.into_parts();
 //! let body = match read(&parts.headers, stream).await {
@@ -37,6 +35,9 @@ pub enum RequestBody {
 
 /// Read the request body with the strict content-type rule: raw bytes unless the type is JSON, which the JSON
 /// loader decodes.
+///
+/// A route reads the body before resolving dependencies, then validates the model after them with
+/// [`RequestBody::validate`].
 pub async fn read(headers: &HeaderMap, body: Body) -> Result<RequestBody, Box<Response>> {
   let raw = match to_bytes(body, usize::MAX).await {
     Ok(raw) => raw,

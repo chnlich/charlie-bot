@@ -10,9 +10,6 @@
 //! | A peer closes with a normal or an error close frame | `received {received}; then sent {sent}` or `sent {sent}; then received {received}` |
 //! | An incoming message exceeds `max_size` | `sent 1009 (message too big) frame with {size} bytes exceeds limit of {max_size} bytes; no close frame received` |
 //! | A keepalive ping receives no pong before `ping_timeout` | `sent 1011 (internal error) keepalive ping timeout; no close frame received` |
-//!
-//! Close-frame text includes its code and reason; normal and error closes share one base format. TLS, socket and
-//! other transport errors keep their Rust text; the handshake omits `User-Agent` and offers no `permessage-deflate`.
 
 use std::fmt;
 use std::future::pending;
@@ -76,6 +73,9 @@ pub enum Message {
 }
 
 /// A WebSocket connection failure. The display text follows the module table.
+///
+/// Close-frame text includes its code and reason; normal and error closes share one base format. TLS, socket and
+/// other transport errors keep their Rust text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
   InvalidUri(String, String),
@@ -213,6 +213,8 @@ impl Stream for Receiver {
 ///
 /// The open timeout covers TCP connect, an optional HTTP CONNECT tunnel, TLS, and the WebSocket handshake. `ws`
 /// URLs connect directly. `wss` URLs use `HTTPS_PROXY` unless `NO_PROXY` matches the target host.
+///
+/// The handshake omits `User-Agent` and offers no `permessage-deflate`.
 pub async fn connect(url: &str, options: &Options, settings: &Settings) -> Result<(Sender, Receiver), Error> {
   let target = reqwest::Url::parse(url).map_err(|error| Error::InvalidUri(url.to_string(), error.to_string()))?;
   if target.scheme() != "ws" && target.scheme() != "wss" {

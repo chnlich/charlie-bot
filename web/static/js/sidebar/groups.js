@@ -696,9 +696,9 @@ function renderSessionItem(s, filter, options = {}) {
   ].join('\n    ');
   // Every tree row leads with one 12px marker so a level's markers line up
   // in one column. A row with child tasks draws the chevron that expands
-  // them; a row without any draws an inert slot of the same size, so the
-  // row's leading edge still opens the session instead of hitting an
-  // expander with nothing to show. A worker row draws the worker glyph
+  // them. A row without any draws an inert slot of the same size. Its
+  // leading edge still opens the session instead of hitting an expander
+  // with nothing to show. A worker row draws the worker glyph
   // instead, never a chevron. A flat row (the search results) draws neither;
   // the Archived tab paints through this tree, so its rows lead with the same
   // marker. The indicators follow the lead marker.

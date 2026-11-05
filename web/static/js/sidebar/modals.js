@@ -18,7 +18,7 @@ function startRename(e, id) {
   const rect = anchor.getBoundingClientRect();
   const valueRect = valueEl.getBoundingClientRect();
   const input = document.getElementById('rename-input');
-  // The field takes the name line's own height, so the row's second line — the time and the backend — stays
+  // The field takes the name line's own height. The row's second line — the time and the backend — stays
   // below it and readable while the name is edited.
   input.style.top = valueRect.top + 'px';
   input.style.left = rect.left + 'px';
@@ -243,8 +243,8 @@ Chat.registerSeparatorButton(function(sessionId, eventIndex) {
 // stores nothing.
 // ---------------------------------------------------------------------------
 // The dialog's muted tone: its empty values, source labels and prompt table header sit on the
-// modal's slate-800, where slate-500 renders 3.07:1, under the 4.5:1 floor for text this size.
-// slate-400 renders 5.71:1 and stays quieter than the field values.
+// modal's slate-800, where slate-500 renders 3.07:1. That is under the 4.5:1 floor for text
+// this size. Slate-400 renders 5.71:1 and stays quieter than the field values.
 const TASK_CONTEXT_MUTED = 'text-slate-400';
 const TASK_CONTEXT_NONE = `<span class="${TASK_CONTEXT_MUTED}">(none)</span>`;
 

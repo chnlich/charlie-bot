@@ -253,20 +253,28 @@ mod tests {
     BTreeMap::from([(OWNER.to_string(), "Owner".to_string())])
   }
 
-  /// A group message from `sender`, as the classifier hands it on.
-  fn summon_from(sender: &str) -> Inbound {
-    Inbound::Summon(Message {
+  /// A message from `sender`, as the classifier hands it on.
+  fn message_from(sender: &str, root_id: Option<&str>, thread_id: Option<&str>) -> Message {
+    Message {
       tenant_key: "tk_synthetic".to_string(),
       chat_id: "oc_synthetic_admit".to_string(),
       message_id: "om_admit".to_string(),
-      root_id: None,
-      thread_id: None,
+      root_id: root_id.map(str::to_string),
+      thread_id: thread_id.map(str::to_string),
       create_time: "1700000000000".to_string(),
       sender_open_id: sender.to_string(),
       message_type: "text".to_string(),
       content: "{\"text\":\"@_user_1 hello\"}".to_string(),
       mentions: Vec::new(),
-    })
+    }
+  }
+
+  fn summon_from(sender: &str) -> Inbound {
+    Inbound::Summon(message_from(sender, None, None))
+  }
+
+  fn follow_from(sender: &str) -> Inbound {
+    Inbound::Follow(message_from(sender, Some("om_synthetic_root"), Some("omt_synthetic_thread")))
   }
 
   fn client(base_url: &str, app_id: &str) -> FeishuClient {
@@ -284,6 +292,13 @@ mod tests {
     let stub = serve(move |_| Answer::json(members(&[UNLISTED, OWNER]))).await;
     let inbound = admit(summon_from(UNLISTED), &client(&stub.base_url, "cli_admit_present"), &allowed()).await.unwrap();
     assert!(matches!(inbound, Inbound::Summon(_)), "got {inbound:?}");
+  }
+
+  #[tokio::test]
+  async fn a_listed_person_in_the_chat_admits_an_unlisted_members_follow() {
+    let stub = serve(move |_| Answer::json(members(&[UNLISTED, OWNER]))).await;
+    let inbound = admit(follow_from(UNLISTED), &client(&stub.base_url, "cli_admit_follow"), &allowed()).await.unwrap();
+    assert!(matches!(inbound, Inbound::Follow(_)), "got {inbound:?}");
   }
 
   #[tokio::test]

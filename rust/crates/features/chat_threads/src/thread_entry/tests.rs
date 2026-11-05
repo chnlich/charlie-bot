@@ -479,30 +479,97 @@ fn a_missing_doc_names_its_path_and_the_likely_cause() {
   );
 }
 
+/// A synthetic charliebot home whose `prompts/` holds the given host docs. An empty list leaves no host scope doc.
+fn home(docs: &[(&str, &str)]) -> TempDir {
+  let dir = tempfile::tempdir().unwrap();
+  fs::create_dir(dir.path().join("prompts")).unwrap();
+  for (name, text) in docs {
+    fs::write(dir.path().join("prompts").join(name), text).unwrap();
+  }
+  dir
+}
+
 #[test]
 fn the_contract_joins_the_platform_part_and_the_three_docs() {
   let (_dir, repo) = checkout(&all_docs("scope text"));
-  let text = thread_reply_contract(&repo, &FAKECHAT, "platform part").unwrap();
-  assert_eq!(text, "platform part\n\nscope text\nred line\nreply format");
+  let contract = thread_reply_contract(&repo, home(&[]).path(), &FAKECHAT, "platform part").unwrap();
+  assert_eq!(contract.text, "platform part\n\nscope text\nred line\nreply format");
+  assert_eq!(contract.scope_source, format!("prompts/{SCOPE}"));
+}
+
+#[test]
+fn a_host_scope_doc_replaces_the_repo_scope_doc() {
+  let (_dir, repo) = checkout(&all_docs("repo scope"));
+  let host = home(&[(SCOPE, "host scope\r\n")]);
+  let contract = thread_reply_contract(&repo, host.path(), &FAKECHAT, "platform part").unwrap();
+  assert_eq!(contract.text, "platform part\n\nhost scope\nred line\nreply format");
+  assert_eq!(contract.scope_source, host.path().join("prompts").join(SCOPE).display().to_string());
+}
+
+#[test]
+fn an_absent_host_scope_doc_falls_back_to_the_repo_scope_doc() {
+  let (_dir, repo) = checkout(&all_docs("repo scope"));
+  let plain_home = tempfile::tempdir().unwrap();
+  let no_scope_doc = home(&[]);
+  let home_is_a_file = tempfile::NamedTempFile::new().unwrap();
+  for host in [plain_home.path(), no_scope_doc.path(), home_is_a_file.path()] {
+    let contract = thread_reply_contract(&repo, host, &FAKECHAT, "platform part").unwrap();
+    assert_eq!(contract.text, "platform part\n\nrepo scope\nred line\nreply format");
+    assert_eq!(contract.scope_source, format!("prompts/{SCOPE}"));
+  }
+}
+
+#[test]
+fn an_unreadable_host_scope_doc_fails_naming_its_path_and_does_not_fall_back() {
+  let (_dir, repo) = checkout(&all_docs("repo scope"));
+  let directory_at_path = home(&[]);
+  fs::create_dir(directory_at_path.path().join("prompts").join(SCOPE)).unwrap();
+  let not_utf8 = home(&[(SCOPE, "")]);
+  fs::write(not_utf8.path().join("prompts").join(SCOPE), [0xff, 0xfe, b'x']).unwrap();
+
+  for host in [directory_at_path.path(), not_utf8.path()] {
+    let path = host.join("prompts").join(SCOPE);
+    let error = thread_reply_contract(&repo, host, &FAKECHAT, "part").unwrap_err();
+    assert!(format!("{error:#}").contains(&path.display().to_string()), "{error:#}");
+  }
+}
+
+#[test]
+fn an_edited_host_scope_doc_reaches_the_next_contract() {
+  let (_dir, repo) = checkout(&all_docs("repo scope"));
+  let host = home(&[(SCOPE, "first\n")]);
+  let first = thread_reply_contract(&repo, host.path(), &FAKECHAT, "part").unwrap();
+  fs::write(host.path().join("prompts").join(SCOPE), "second\n").unwrap();
+  let second = thread_reply_contract(&repo, host.path(), &FAKECHAT, "part").unwrap();
+  assert!(first.text.contains("\n\nfirst\n"), "{}", first.text);
+  assert!(second.text.contains("\n\nsecond\n"), "{}", second.text);
 }
 
 #[test]
 fn a_missing_contract_doc_fails_with_its_own_likely_cause() {
   let (_dir, repo) = checkout(&[(SCOPE, "scope"), ("thread_reply_redline.md", "red")]);
-  let error = thread_reply_contract(&repo, &FAKECHAT, "part").unwrap_err().to_string();
+  let error = thread_reply_contract(&repo, home(&[]).path(), &FAKECHAT, "part").unwrap_err().to_string();
   assert!(error.starts_with("thread_reply_format.md prompt not found at "), "{error}");
   assert!(error.ends_with("— the repo checkout most likely predates the thread-reply-format rename commit"), "{error}");
 }
 
 #[test]
-fn the_segment_names_the_three_docs_as_base_full_sources() {
-  let segment = thread_reply_segment(&FAKECHAT, "text".to_string());
+fn the_segment_names_the_scope_source_and_the_two_repo_docs_as_base_full_sources() {
+  let contract = ThreadReplyContract {
+    text: "text".to_string(),
+    scope_source: "/synthetic/home/prompts/fakechat_reply_scope.md".to_string(),
+  };
+  let segment = thread_reply_segment(contract);
   assert_eq!(segment.text, "text");
   assert_eq!(segment.delivery, "full");
   let refs: Vec<&str> = segment.sources.iter().map(|source| source.source_ref.as_str()).collect();
   assert_eq!(
     refs,
-    ["prompts/fakechat_reply_scope.md", "prompts/thread_reply_redline.md", "prompts/thread_reply_format.md"]
+    [
+      "/synthetic/home/prompts/fakechat_reply_scope.md",
+      "prompts/thread_reply_redline.md",
+      "prompts/thread_reply_format.md"
+    ]
   );
   assert!(segment.sources.iter().all(|source| source.scope == "base" && source.source_session_id.is_none()));
 }

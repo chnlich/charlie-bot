@@ -32,14 +32,14 @@ impl TurnContribution for FeishuTurnContribution {
     &self,
     meta: &SessionMetadata,
     kind: &str,
-    _cfg: &CharlieBotConfig,
+    cfg: &CharlieBotConfig,
     repo: &RepoRoot,
   ) -> anyhow::Result<Vec<RuleSegment>> {
     if kind != MANAGER_KIND || feishu_origin(meta)?.is_none() {
       return Ok(Vec::new());
     }
-    let text = thread_reply_contract(repo, &FEISHU, &thread_contract_part())?;
-    Ok(vec![thread_reply_segment(&FEISHU, text)])
+    let contract = thread_reply_contract(repo, &cfg.charliebot_home, &FEISHU, &thread_contract_part())?;
+    Ok(vec![thread_reply_segment(contract)])
   }
 
   fn event_renderers(&self) -> Vec<(&'static str, EventRenderer)> {

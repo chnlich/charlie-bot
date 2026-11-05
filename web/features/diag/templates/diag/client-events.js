@@ -1,7 +1,7 @@
-// Client timing telemetry: every kind — a session switch, a message send, a socket disconnect
-// episode, a page load, one tab-minute of background traffic — goes to the server's client-event
-// log as one fire-and-forget POST. Fire-and-forget by design: never awaited, failures dropped, so
-// the telemetry channel never delays a request the user waits on.
+// Client timing telemetry covers every kind: a session switch, a message send, a socket disconnect
+// episode, a page load, one tab-minute of background traffic. Each kind goes to the server's
+// client-event log as one fire-and-forget POST. Fire-and-forget by design: never awaited, failures
+// dropped, so the telemetry channel never delays a request the user waits on.
 (function() {
   const CLIENT_EVENTS_URL = '/api/diag/client-events';
 
@@ -43,8 +43,8 @@
   // --- message sends ----------------------------------------------------------
   // The composer announces the click, every retry, the POST's outcome and the
   // socket echo of the same request id. One send posts when the echo lands on
-  // a response that returned, or at once when the POST was refused (a refusal
-  // gets no echo), with the refused send's echo time null.
+  // a response that returned. A refused POST gets no echo, so its send posts
+  // at once with the echo time null.
   const SEND_TIMING_TTL_MS = 120000;
   const sendTimings = new Map();
 
@@ -137,9 +137,10 @@
   }
 
   // --- page loads --------------------------------------------------------------
-  // The page reports its own Navigation Timing once, after the load event: the
-  // document's responseEnd, the DOMContentLoaded mark and the transfer size,
-  // with the cause a navigating path announced through a page-load-cause event.
+  // The page reports its own Navigation Timing once, after the load event. The
+  // report carries the document's responseEnd, the DOMContentLoaded mark and the
+  // transfer size. It also carries the cause a navigating path announced through
+  // a page-load-cause event.
   const PAGE_LOAD_CAUSE_KEY = 'charliebot-page-load-cause';
   const PAGE_LOAD_CAUSE_TTL_MS = 60000;
 
@@ -173,12 +174,12 @@
   }
 
   // --- background traffic -------------------------------------------------------
-  // One event per tab per flush, flushed every minute through the page timer
-  // registry (a hidden tab does no periodic work, so its flush covers the
-  // minutes it stayed hidden): Resource Timing entries since the last flush,
-  // grouped by endpoint with the session ids folded out of the path. window_s
-  // carries the seconds the event's window covered, so the readback divides
-  // received bytes by tab-time whatever the tab's visibility did.
+  // The page timer registry flushes one event per tab every minute. A hidden tab
+  // does no periodic work, so its flush covers the minutes it stayed hidden. Each
+  // event carries the Resource Timing entries since the last flush, grouped by
+  // endpoint with the session ids folded out of the path. window_s carries the
+  // seconds the event's window covered, so the readback divides received bytes by
+  // tab-time whatever the tab's visibility did.
   const TRAFFIC_FLUSH_MS = 60000;
   const TRAFFIC_MAX_ENDPOINTS = 40;
   const UUID_PATH = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
@@ -220,8 +221,8 @@
     trafficRows.clear();
     trafficWindowStart = now;
     // The observer has counted every entry above, so the buffer can drop them. The browser's
-    // resource timing buffer holds a fixed number of entries (250 by default) and then drops new
-    // ones, which would blind the switch record's bootstrap lookup on a long-lived tab.
+    // resource timing buffer holds a fixed number of entries, 250 by default, and then drops new
+    // ones. Those drops would blind the switch record's bootstrap lookup on a long-lived tab.
     performance.clearResourceTimings();
   }
 })();

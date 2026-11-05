@@ -13,7 +13,7 @@ let _extUsageRows = [];
 // ---------------------------------------------------------------------------
 // Collapse state: one in-memory boolean, evaluated once on DOMContentLoaded.
 // localStorage["ext_usage_strip_collapsed_v1"] holds "1" (collapsed) or "0"
-// (expanded). A missing or invalid value falls back to the platform default
+// (expanded). A missing or invalid value folds the strip to its summary line
 // and is never written back — only a user toggle writes. Any storage failure
 // silently degrades to the in-memory boolean (same guard shape as the
 // sessionStorage draft handling in artifact-comments.js).
@@ -484,15 +484,11 @@ function _refreshResetTimers() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Evaluate the collapsed default exactly once: a recorded preference wins.
-  // A missing or invalid one falls back to the platform: collapsed on mobile,
-  // and expanded when the platform is unavailable — rather show data than hide
-  // it.
-  // The platform-derived default is never written back to storage.
+  // Evaluate the collapsed default exactly once: a recorded preference wins;
+  // a missing or invalid one folds the strip to its summary line at every
+  // width. The default is never written back to storage.
   const stored = _readCollapsedPreference();
-  _extUsageCollapsed = stored !== null
-    ? stored
-    : (typeof platform !== 'undefined' && !!platform.isMobile);
+  _extUsageCollapsed = stored !== null ? stored : true;
 
   const chip = document.getElementById('ext-usage-toggle');
   if (chip) {

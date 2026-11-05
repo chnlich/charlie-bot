@@ -42,6 +42,10 @@ const VOICE_MAX_SAMPLES = 5 * 60 * VOICE_SAMPLE_RATE; // the server's recording 
 // The upload-phase budget: past it the request aborts into the retry state. The
 // decode wait after the body is sent is unbounded but visible ("Decoding...").
 const VOICE_UPLOAD_TIMEOUT_MS = 60 * 1000;
+// The longest wait for a suspended audio engine to start after both startup
+// branches settle. The resume promise can stay pending forever, so this timer
+// ends the wait.
+const VOICE_CONTEXT_RESUME_BOUND_MS = 2 * 1000;
 // The send gate's message while a transcription window (upload + decode) is open.
 const VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE = 'Please wait for the voice transcription to finish';
 // The input_mode a dictated message carries (rust/crates/features/voice/src/lib.rs VOICE_INPUT_MODE).
@@ -406,6 +410,10 @@ async function startRecording() {
   const graphBranch = tagVoiceStartupError(run, 'graph', (async () => {
     const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
     run.audioContext = new AudioContextCtor();
+    // Chrome's autoplay policy counts a resume only inside the click, so this
+    // call stays before the first await. A rejection is logged; the state check
+    // after both branches settle decides the run.
+    run.audioContext.resume().catch((err) => console.error('Voice audio engine resume failed:', err));
     const workletUrl = URL.createObjectURL(new Blob([VOICE_WORKLET_SOURCE], {type: 'application/javascript'}));
     try {
       await run.audioContext.audioWorklet.addModule(workletUrl);
@@ -420,6 +428,15 @@ async function startRecording() {
     if (activeVoiceRun !== run) {
       abortVoiceRun(run);
       return;
+    }
+
+    // Both branches have settled: record the engine's state, then resume it once
+    // if it is still suspended. A timed-out resume throws into the catch below.
+    run.startup.audioContextSettledState = run.audioContext.state;
+    if (run.audioContext.state === 'running') {
+      run.startup.audioContextResume = 'not_needed';
+    } else {
+      await tagVoiceStartupError(run, 'graph', resumeVoiceContext(run));
     }
 
     run.sourceNode = run.audioContext.createMediaStreamSource(run.stream);
@@ -461,6 +478,27 @@ async function startRecording() {
     showToast('Voice input failed: ' + err.message, true);
     releaseVoiceRun(run);
   }
+}
+
+// Resumes a suspended audio engine for at most VOICE_CONTEXT_RESUME_BOUND_MS.
+// The engine's state after the wait decides the outcome, so a resume that never
+// settles and one that settles with the engine still suspended both time out.
+async function resumeVoiceContext(run) {
+  const context = run.audioContext;
+  let timer = null;
+  const bound = new Promise((resolve) => {
+    timer = setTimeout(resolve, VOICE_CONTEXT_RESUME_BOUND_MS);
+  });
+  try {
+    await Promise.race([context.resume(), bound]);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (context.state !== 'running') {
+    run.startup.audioContextResume = 'timed_out';
+    throw new Error('the audio engine did not start');
+  }
+  run.startup.audioContextResume = 'started';
 }
 
 // --- Recording devices ------------------------------------------------------
@@ -522,6 +560,8 @@ function newVoiceStartup() {
     error: null,
     micOpenMs: null,
     graphReadyMs: null,
+    audioContextSettledState: null,
+    audioContextResume: null,
     firstFrameMs: null,
     firstSoundMs: null,
     frames: 0,
@@ -586,6 +626,8 @@ function voiceStartupBody(run) {
     samples: Math.min(run.totalSamples, VOICE_MAX_SAMPLES),
     audio_context_state: context ? context.state : null,
     audio_context_rate: context ? context.sampleRate : null,
+    audio_context_settled_state: startup.audioContextSettledState,
+    audio_context_resume: startup.audioContextResume,
     mic_permission: startup.micPermission,
     track_ready_state: track ? track.readyState : null,
     track_muted: track ? track.muted : null,

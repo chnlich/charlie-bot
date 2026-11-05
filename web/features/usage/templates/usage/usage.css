@@ -40,11 +40,16 @@
 #ext-usage-strip [data-key],
 #ext-usage-strip [data-field="summary"] { padding-right: 44px; }
 /* The summary row is the collapsed-state expand affordance: whole-row click
-   on a 44px touch target. */
+   on a 44px touch target. Its segments wrap inside the width the chip leaves
+   (the 44px right padding above), so no account is cut off under the chip.
+   Seven accounts with their names and percentages do not fit one phone-width
+   line at a readable size, so the row takes as many lines as it needs. */
 #ext-usage-strip [data-field="summary"] {
   min-height: 44px;
   cursor: pointer;
   user-select: none;
+  flex-wrap: wrap;
+  row-gap: 0.25rem;
 }
 @media (max-width: 320px) {
   /* ext-usage-strip: hide 7d bars, shrink further */

@@ -219,5 +219,9 @@
     });
     trafficRows.clear();
     trafficWindowStart = now;
+    // The observer has counted every entry above, so the buffer can drop them. The browser's
+    // resource timing buffer holds a fixed number of entries (250 by default) and then drops new
+    // ones, which would blind the switch record's bootstrap lookup on a long-lived tab.
+    performance.clearResourceTimings();
   }
 })();

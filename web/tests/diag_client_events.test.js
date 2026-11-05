@@ -27,6 +27,7 @@ function buildClientEventsHarness() {
   const resourceEntries = [];  // entries the traffic observer callback is fed
   const flushFns = [];         // the page-timers intervals, flushTraffic first
   let navigationEntries = [];
+  let resourceBufferClears = 0;
   let clock = 1_000_000;       // the harness clock, in ms
 
   const context = {
@@ -55,6 +56,7 @@ function buildClientEventsHarness() {
     URL,
     performance: {
       getEntriesByType: (type) => (type === 'resource' ? resourceEntries : type === 'navigation' ? navigationEntries : []),
+      clearResourceTimings: () => { resourceBufferClears++; },
     },
     fetch: async (url, opts = {}) => {
       if (url === CLIENT_EVENTS_URL) {
@@ -103,6 +105,7 @@ function buildClientEventsHarness() {
     },
     setVisibility(value) { context.document.visibilityState = value; },
     setNavigation(entry) { navigationEntries = entry ? [entry] : []; },
+    resourceBufferClears() { return resourceBufferClears; },
     advance(ms) { clock += ms; },
     clock() { return clock; },
   };
@@ -294,6 +297,17 @@ test('an empty window still flushes, so the tab-hour denominator survives an idl
   h.flush();
   assert.equal(h.posts.length, 1);
   assert.deepEqual([h.posts[0].endpoints, h.posts[0].window_s], [[], 60]);
+});
+
+test('a traffic flush clears the resource buffer the observer has already counted', () => {
+  const h = buildClientEventsHarness();
+  h.observeResources([resourceEntry('http://localhost:8000/api/concurrency/now', 365)]);
+  h.advance(60000);
+  h.flush();
+
+  assert.equal(h.resourceBufferClears(), 1,
+      'the buffer stays under its limit so a switch can still read its bootstrap entry');
+  assert.equal(h.posts[0].endpoints[0].count, 1, 'the observer counted the entry before the buffer dropped it');
 });
 
 test('the traffic flush reports the tab’s visibility', () => {

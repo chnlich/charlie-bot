@@ -59,7 +59,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   register_with_host(registry, host, http)
 }
 
-/// [`register`] over an explicit host and HTTP client.
+/// The registration `register` performs, with the host and HTTP client supplied by the caller.
 pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: QuotaHttp) -> Result<(), RegistryError> {
   // The lifecycle, the quota accounts and the log source share one state value: the pool's readings and the panel's
   // readings are the same observations.

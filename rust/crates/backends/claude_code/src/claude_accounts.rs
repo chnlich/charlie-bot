@@ -65,9 +65,11 @@ pub struct QuotaState {
 
 #[derive(Default)]
 pub(super) struct Warned {
-  /// `(event, credentials path)` pairs. A read of a path that returns a token forgets its pairs.
+  /// The credentials warnings already logged: one `(event, credentials path)` pair each. A read of a path that
+  /// returns a token forgets its pairs.
   pub(super) credentials: HashSet<(&'static str, PathBuf)>,
-  /// `(account, slot, reason)` triples of unrecognized limit shapes, logged once per process.
+  /// The unrecognized limit shapes already warned about: one `(account, slot, reason)` triple each, so a shape
+  /// logs once per process.
   pub(super) limit_shapes: HashSet<(String, String, String)>,
 }
 

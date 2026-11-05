@@ -110,8 +110,9 @@ impl QuotaAccounts {
     Self { state, http, by_dir: Mutex::new(HashMap::new()) }
   }
 
-  /// `quota_accounts()`: the Claude logins in panel order, the default login first and then the pool. A login whose
-  /// directory stays in the config keeps its account object, and a login the config dropped is forgotten.
+  /// The Claude logins in panel order, the default login first and then the pool. A login whose directory stays in
+  /// the config keeps its account object, and a login the config dropped is forgotten. `quota_accounts` returns this
+  /// list.
   pub fn derive(&self, host: &ClaudeHost, cfg: &CharlieBotConfig) -> anyhow::Result<Vec<Arc<dyn QuotaAccount>>> {
     let pool: Vec<(String, String)> = cfg
       .section::<AccountsConfig>("accounts")
@@ -407,8 +408,9 @@ impl QuotaAccount for ClaudeQuotaAccount {
   }
 }
 
-/// `_derive_login_dirs`: the default login directory under label `main`, then the pool entries under their labels. An
-/// entry that names a directory already listed is skipped, and a label already taken is logged and skipped.
+/// The logins the quota panel lists: the default login directory under label `main`, then the pool entries under
+/// their labels. An entry that names a directory already listed is skipped, and a label already taken is logged and
+/// skipped.
 fn derive_login_dirs(host: &ClaudeHost, pool: &[(String, String)]) -> anyhow::Result<Vec<(String, PathBuf)>> {
   let default = abspath(&host.default_dir())?;
   let mut seen = HashSet::from([default.clone()]);
@@ -463,8 +465,8 @@ struct Credentials {
   refresh_token: Option<String>,
 }
 
-/// `_read_credentials`: the tokens in a credentials file, or `None` after a logged warning when the file is missing or
-/// holds no access token. A file that is not JSON, or whose `claudeAiOauth` is not an object, fails the round.
+/// The tokens in a credentials file, or `None` after a logged warning when the file is missing or holds no access
+/// token. A file that is not JSON, or whose `claudeAiOauth` is not an object, fails the round.
 fn read_credentials(quota: &QuotaState, path: &Path) -> anyhow::Result<Option<Credentials>> {
   if !path.exists() {
     warn_credentials_once(quota, "ext_usage_credentials_not_found", path);
@@ -587,8 +589,8 @@ async fn probe_cli_version() -> Option<String> {
   CLI_VERSION.find(&String::from_utf8_lossy(&output.stdout)).map(|version| version.as_str().to_string())
 }
 
-/// `_expires_at_ms`: the renewed token's expiry as the millisecond stamp the CLI's file uses. An absolute `expires_at` may
-/// be in seconds; otherwise `expires_in` is relative to now. Nothing reads the stamp back.
+/// The renewed token's expiry as the millisecond stamp the CLI's file uses. An absolute `expires_at` may be in
+/// seconds; otherwise `expires_in` is relative to now. Nothing reads the stamp back.
 fn expires_at_ms(token: &Map<String, Value>) -> Option<i64> {
   if let Some(absolute) = token.get("expires_at").and_then(Value::as_f64) {
     return Some(if absolute > 1e11 { absolute as i64 } else { (absolute * 1000.0) as i64 });
@@ -644,8 +646,8 @@ struct Window {
   entry: Value,
 }
 
-/// `_transform_response`: the usage the panel stores. The plan windows come first in their fixed order, then the scoped
-/// windows, all sorted by window length and scope label. A reading timestamp and the provider complete it.
+/// The usage the panel stores, built from one response: the plan windows come first in their fixed order, then the
+/// scoped windows, all sorted by window length and scope label. A reading timestamp and the provider complete it.
 pub fn transform_response(raw: &Value, account: &str, quota: &QuotaState) -> anyhow::Result<Map<String, Value>> {
   let raw = raw.as_object().context("the usage response is not a JSON object")?;
   let mut windows = Vec::new();

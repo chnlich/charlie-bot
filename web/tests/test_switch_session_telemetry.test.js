@@ -751,6 +751,6 @@ test('a send posts one client event with both waits once its echo arrives', asyn
   assert.equal(send.request_id, requestId);
   assert.equal(send.click_to_response_ms >= 0, true);
   assert.equal(send.click_to_echo_ms >= send.click_to_response_ms, true,
-      'the echo cannot land before the response that returned first');
+      'this order lands the echo after the response it waits on');
   assert.equal(send.retries, 0);
 });

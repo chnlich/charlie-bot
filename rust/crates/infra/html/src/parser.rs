@@ -159,7 +159,8 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
     self.emit(EventKind::Data, json!([data]), at, None);
   }
 
-  /// Emit `source[start..end]` as data, unescaping character references when this parser converts them.
+  /// The `source[start..end]` slice emitted as data, with character references unescaped when this parser
+  /// converts them.
   fn emit_data_span(&mut self, start: usize, end: usize) {
     let data = &self.source[start..end];
     if self.convert_charrefs && self.reference_mode == ReferenceMode::Resolve {

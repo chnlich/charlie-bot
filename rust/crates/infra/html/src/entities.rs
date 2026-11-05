@@ -5,8 +5,8 @@ static HTML5_ENTITIES: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
   serde_json::from_str(include_str!("html5_entities.json")).expect("generated HTML5 entity table is valid JSON")
 });
 
-/// Escape ampersands, angle brackets, and optionally both quote characters (`quote` selects between the
-/// quoted-attribute and the text entity sets; `/` is never escaped).
+/// The escaped text: ampersands and angle brackets, plus both quote characters when `quote` is set.
+/// `quote` selects between the quoted-attribute and the text entity sets; `/` is never escaped.
 pub fn escape(input: &str, quote: bool) -> String {
   if quote {
     html_escape::encode_quoted_attribute(input).into_owned()
@@ -15,7 +15,7 @@ pub fn escape(input: &str, quote: bool) -> String {
   }
 }
 
-/// Decode the named and numeric character references in the HTML5 table.
+/// The input text with the named and numeric character references in the HTML5 table decoded.
 pub fn unescape(input: &str) -> String {
   if !input.contains('&') {
     return input.to_owned();

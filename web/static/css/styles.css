@@ -117,6 +117,19 @@
    not chain to the page. */
 #messages { overflow-anchor: none; overscroll-behavior: contain; }
 .turn-collapse:hover { color: #cbd5e1; }
+/* A round's controls — clone, Elon-e, explain, the two ratings and Collapse — draw a 14 px glyph in a
+   2 px pad, an 18 px box under the 24 px pointer floor. Each takes a 24 px box with its glyph centred;
+   the separator row grows 6 px and keeps its hairlines. */
+.round-buttons > button,
+.turn-collapse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
 /* A labelled separator row (chat/rendering.js, the run_end row) keeps its label and the
    fold control on one line. The chat list clips horizontal overflow (#messages), and a
    phone is narrower than that line, so the controls past the right edge had no visible

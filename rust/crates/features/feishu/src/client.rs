@@ -80,10 +80,18 @@ pub struct FeishuClient {
   app_secret: String,
 }
 
+/// What one answer's body holds, as its `Content-Type` announces it: JSON for an Open API answer, and the file's
+/// own bytes for a resource download.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BodyKind {
+  Json,
+  Raw,
+}
+
 /// The answer of one HTTP call, before its JSON is read.
 struct Answer {
   status: StatusCode,
-  is_json: bool,
+  body_kind: BodyKind,
   body: Vec<u8>,
 }
 
@@ -143,13 +151,12 @@ impl FeishuClient {
     }
     let response = request.send().await?;
     let status = response.status();
-    let is_json = response
-      .headers()
-      .get(header::CONTENT_TYPE)
-      .and_then(|value| value.to_str().ok())
-      .is_some_and(|value| value.contains("json"));
+    let body_kind = match response.headers().get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok()) {
+      Some(value) if value.contains("json") => BodyKind::Json,
+      Some(_) | None => BodyKind::Raw,
+    };
     let body = response.bytes().await?.to_vec();
-    Ok(Answer { status, is_json, body })
+    Ok(Answer { status, body_kind, body })
   }
 
   /// One Open API call on the tenant token, answered with its JSON `data` (or the whole answer when it has no `data`).
@@ -249,7 +256,7 @@ impl FeishuClient {
     let path = format!("{MESSAGES_PATH}/{}/resources/{}", path_segment(message_id)?, path_segment(file_key)?);
     let token = self.tenant_token().await?;
     let answer = self.send(Method::GET, &path, &[("type", kind.to_string())], Some(&token), None).await?;
-    if answer.is_json || !answer.status.is_success() {
+    if answer.body_kind == BodyKind::Json || !answer.status.is_success() {
       checked(&Method::GET, &path, answer)?;
       bail!("GET {path} answered without the file");
     }
@@ -271,7 +278,8 @@ fn page_of(data: &Value) -> anyhow::Result<Page> {
 
 /// The `data` of an answer that succeeded (HTTP 2xx and code 0). Any other answer fails with a `FeishuAPIError`.
 fn checked(method: &Method, path: &str, answer: Answer) -> anyhow::Result<Value> {
-  let parsed: Option<Value> = if answer.is_json { serde_json::from_slice(&answer.body).ok() } else { None };
+  let parsed: Option<Value> =
+    if answer.body_kind == BodyKind::Json { serde_json::from_slice(&answer.body).ok() } else { None };
   let code = parsed.as_ref().and_then(|value| value.get("code")).and_then(Value::as_i64);
   let succeeded = answer.status.is_success() && code.is_none_or(|code| code == 0);
   if !succeeded {

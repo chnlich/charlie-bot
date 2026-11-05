@@ -193,7 +193,7 @@ pub(crate) mod tests {
     assert!(!source.run_logs_only);
     assert_eq!(
       source.implementation.as_ref().unwrap().ops(),
-      UsageOps { logs: true, read: true, sweep: true, ..UsageOps::default() }
+      UsageOps { logs: true, read: true, live_cli_sessions: false, quota_accounts: false, sweep: true }
     );
   }
 }

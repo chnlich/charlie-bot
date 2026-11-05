@@ -1,4 +1,5 @@
-//! Run cause lines: cleaning, the ordered cause patterns, normalization, the no-cause shapes and the signature keys.
+//! The cause lines of one run: cleaning, the ordered cause patterns, normalization, the no-cause shapes and the
+//! signature keys.
 //!
 //! A run's error material comes from four sources, tried in this order. The first is the error text of the newest
 //! `result` event in the run's event log, when that event reports an error. Then come the `error` events of that log
@@ -269,7 +270,7 @@ pub enum ExtractedCause {
   NoCause { shape: NoCauseShape, anchor: String },
 }
 
-/// Drop ANSI escapes, blank lines and the noise lines that carry no cause.
+/// The text without ANSI escapes, blank lines and the noise lines that carry no cause.
 pub fn clean(text: &str) -> String {
   let plain = ANSI.replace_all(text, "");
   plain
@@ -279,7 +280,7 @@ pub fn clean(text: &str) -> String {
     .join("\n")
 }
 
-/// Remove credentials and long identifiers from text that reaches a row or a model.
+/// The text with credentials and long identifiers removed, before it reaches a row or a model.
 pub fn redact(text: &str) -> String {
   let mut text = text.to_string();
   for (expression, replacement) in REDACTIONS.iter() {

@@ -56,8 +56,8 @@ pub struct ScanOptions {
 }
 
 impl ScanOptions {
-  /// Build the window from the CLI's optional RFC 3339 bounds. `--until` defaults to now, and `--since` to seven days
-  /// before it.
+  /// The window built from the CLI's optional RFC 3339 bounds. `--until` defaults to now, and `--since` to seven
+  /// days before it.
   pub fn new(home: PathBuf, log_dir: PathBuf, since: Option<&str>, until: Option<&str>) -> Result<ScanOptions, String> {
     let until = match until {
       Some(text) => {
@@ -79,7 +79,7 @@ impl ScanOptions {
     Ok(ScanOptions { home, log_dir, since, until })
   }
 
-  /// Build the window from the two latest fires of `task` in the bound session's chat log.
+  /// The window built from the two latest fires of `task` in the bound session's chat log.
   pub fn for_cron(home: PathBuf, log_dir: PathBuf, session_id: &str, task: &str) -> Result<ScanOptions> {
     let window = crate::window::cron_window(&home, session_id, task)?;
     Ok(ScanOptions { home, log_dir, since: window.since, until: window.until })
@@ -146,7 +146,7 @@ impl Group {
   }
 }
 
-/// Collect every signature inside `options`' window.
+/// Every signature inside `options`' window.
 pub fn collect(options: &ScanOptions) -> Result<Vec<CollectedSignature>> {
   let mut groups: BTreeMap<String, Group> = BTreeMap::new();
   collect_runs(options, &mut groups)?;
@@ -560,7 +560,7 @@ mod tests {
     .expect("the test window is valid")
   }
 
-  /// Write one run's record, its files and its session facts. Events name their log in the record, as a worker does.
+  /// One run's record, its files and its session facts. Events name their log in the record, as a worker does.
   fn write_run(
     home: &Path,
     session: &str,

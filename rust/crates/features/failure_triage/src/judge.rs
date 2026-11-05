@@ -114,8 +114,8 @@ pub fn user_prompt(input: &JudgeInput) -> String {
   prompt
 }
 
-/// Read a judge answer and assert its contract: a `known_pattern` verdict cites one of the candidate headings, and
-/// with no candidates it has nothing to cite.
+/// A judge answer checked against its contract: a `known_pattern` verdict cites one of the candidate headings,
+/// and with no candidates it has nothing to cite.
 pub fn evaluate_response(candidates: &[LessonCandidate], answer: &str) -> Result<Judgement, JudgeError> {
   let text = strip_fences(answer.trim());
   let raw: RawJudgement = serde_json::from_str(text)
@@ -186,8 +186,8 @@ impl<'a> JudgeBackends<'a> {
   }
 }
 
-/// Judge one signature over the light backends of the pool: a call failure rotates to the next member, and a contract
-/// failure ends this signature at once. A timed-out member goes into the pool's shared cooldown for
+/// One signature judged over the light backends of the pool: a call failure rotates to the next member, and a
+/// contract failure ends this signature at once. A timed-out member goes into the pool's shared cooldown for
 /// [`JUDGE_COOLDOWN`], so a hung member costs one signature instead of every signature.
 ///
 /// The candidates come from the pool's own `select`, in the rotation order the autonamer advances: the pool holds the
@@ -270,7 +270,7 @@ impl std::fmt::Display for NativeOneShotError {
 
 impl std::error::Error for NativeOneShotError {}
 
-/// Run one native, tool-less one-shot with the judge's cap. A backend without the native path is an error, not a
+/// One native, tool-less one-shot with the judge's cap. A backend without the native path is an error, not a
 /// fallback to the tool-capable one-shot.
 pub async fn native_one_shot_text(
   mut built: BuiltBackend,
@@ -292,7 +292,7 @@ pub async fn native_one_shot_text(
 /// One judge call for one signature, as the scan drives it. It takes `&self` because a scan keeps several calls in
 /// flight; each call's state lives in [`Judgement`] or in the caller.
 pub trait JudgeRunner {
-  /// Judge `input`. `Err` marks only this signature judge_failed.
+  /// The judgement of `input`. `Err` marks only this signature judge_failed.
   fn judge<'a>(&'a self, input: JudgeInput) -> Pin<Box<dyn Future<Output = Result<Judgement, JudgeError>> + 'a>>;
 }
 

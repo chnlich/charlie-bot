@@ -79,6 +79,51 @@ function registerInputMode(mode, badgeHtml) {
   inputModeBadges.set(mode, badgeHtml);
 }
 
+// A user text folds by its rendered height: the clamp (styles.css, .user-msg-clamp) shows its first ten lines, and the
+// 展开全文 control shows only while the clamp hides some of the text. Every text starts clamped and undecided, and the
+// observer below decides it once it is laid out.
+function renderUserTextHtml(text) {
+  return '<div class="user-msg-fold" data-folded="true" data-overflows="false">'
+    + `<div class="user-msg-clamp whitespace-pre-wrap">${escapeHtml(text)}</div>`
+    + `<button type="button" class="user-msg-more"`
+      + ` onclick="this.closest('.user-msg-fold').dataset.folded='false'">展开全文</button>`
+    + '</div>';
+}
+
+// A clamp hides text exactly when its content is taller than its box. A message the reader opened stays open, so only a
+// folded clamp is decided; a clamp that left the page is dropped from the observer.
+function fitUserMessageClamp(clamp, sizes) {
+  if (!clamp.isConnected) {
+    sizes.unobserve(clamp);
+    return;
+  }
+  const fold = clamp.parentElement;
+  if (fold.dataset.folded !== 'true') return;
+  fold.dataset.overflows = String(clamp.scrollHeight > clamp.clientHeight);
+}
+
+// Rows are built detached and mount into the message list later (turn-engine.js, buildNode), so the list is watched.
+// Each clamp that enters it is observed; the observer decides it at its first layout and again at every size change,
+// and a width change is the one that rewraps the text.
+document.addEventListener('DOMContentLoaded', () => {
+  const sizes = new ResizeObserver((entries) => {
+    for (const entry of entries) fitUserMessageClamp(entry.target, sizes);
+  });
+  const observeClamps = (node) => {
+    if (node.matches('.user-msg-clamp')) sizes.observe(node);
+    for (const clamp of node.querySelectorAll('.user-msg-clamp')) sizes.observe(clamp);
+  };
+  const list = document.getElementById('messages');
+  observeClamps(list);
+  new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (node.nodeType === Node.ELEMENT_NODE) observeClamps(node);
+      }
+    }
+  }).observe(list, {childList: true, subtree: true});
+});
+
 function renderUserMessageBubble(content, inputMode, timestamp, uploadedFiles, requestId, deliveryStatus) {
   const normalized = normalizeUserMessage(content, uploadedFiles);
   // On blue-600, slate-100 holds about 4.7:1 for the time and delivery lines, quieter than
@@ -89,9 +134,7 @@ function renderUserMessageBubble(content, inputMode, timestamp, uploadedFiles, r
     ? '<div class="text-[10px] mt-1"><span id="message-delivery-' + escapeHtmlAttr(requestId)
       + '" class="text-slate-100">' + escapeHtml(deliveryStatus) + '</span></div>'
     : '';
-  const textHtml = normalized.content
-    ? `<div class="whitespace-pre-wrap">${escapeHtml(normalized.content)}</div>`
-    : '';
+  const textHtml = normalized.content ? renderUserTextHtml(normalized.content) : '';
   const attachmentsHtml = renderUserAttachments(normalized.uploadedFiles, Boolean(textHtml));
   return `<div class="max-w-[75%] overflow-hidden bg-blue-600 rounded-2xl rounded-br-md px-4 py-2.5 text-sm">`
     + (inputModeBadges.has(inputMode)

@@ -14,8 +14,8 @@ use charliebot_registry::sequence::{SequenceBinding, SequenceController, Sequenc
 use charliebot_registry::wiring::{Phase, Service, ServiceContext};
 use charliebot_store::StoreResult;
 use charliebot_store::metadata::{
-  SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_TIMEZONE, SessionMetadata,
-  UtcDateTime,
+  SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_TASK, SCHEDULE_TIMEZONE,
+  SessionMetadata, UtcDateTime,
 };
 use charliebot_store::run_records::{self, RunKind, RunRecord, SequenceRef};
 use chrono::{Datelike, TimeZone, Utc};
@@ -223,7 +223,7 @@ fn row_schedule_fields(
     // An entry holding only that null would make one map per listed session for every listing response.
     let Some(task) = bound_tasks.get(session_id.as_str()).copied() else { continue };
     let mut fields = Map::new();
-    fields.insert("schedule_task".to_string(), Value::String(task.name.clone()));
+    fields.insert(SCHEDULE_TASK.to_string(), Value::String(task.name.clone()));
     fields.insert(SCHEDULE_CRON.to_string(), Value::String(task.cron.clone()));
     fields.insert(SCHEDULE_TIMEZONE.to_string(), Value::String(task.timezone.clone()));
     fields.insert(SCHEDULE_ENABLED.to_string(), Value::Bool(task.enabled));
@@ -772,7 +772,7 @@ mod tests {
 
   use charliebot_core::event_types;
   use charliebot_registry::sequence::SequenceBinding;
-  use charliebot_store::metadata::{TaskApprover, TaskProfile, TaskSpec, UtcDateTime};
+  use charliebot_store::metadata::{SCHEDULE_TASK, TaskApprover, TaskProfile, TaskSpec, UtcDateTime};
   use charliebot_store::{CreateTask, TaskCaller};
   use serde_json::Map;
   use serde_json::{Value, json};
@@ -827,7 +827,7 @@ mod tests {
     let first = row_schedule_fields(&mut memo, &tasks, 17, &session_ids, now);
     // Only a bound session owns fields; an unbound one renders its default without an entry.
     assert_eq!(first.len(), tasks.len());
-    assert_eq!(first[&session_ids[0]]["schedule_task"], json!("synthetic-task-00"));
+    assert_eq!(first[&session_ids[0]][SCHEDULE_TASK], json!("synthetic-task-00"));
     assert!(!first.contains_key(&session_ids[tasks.len()]));
     let warm = row_schedule_fields(&mut memo, &tasks, 17, &session_ids, now);
     assert_eq!(warm, first);

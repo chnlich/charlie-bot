@@ -12,7 +12,7 @@ use charliebot_registry::Registry;
 use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
   HAS_PENDING_TRIGGER, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, ROUND_RATINGS, SCHEDULE_ENABLED,
-  SCHEDULE_FIELDS, SessionMetadata, SessionStatus, TaskProfile, UtcDateTime, WORK_STATE,
+  SCHEDULE_FIELDS, SCHEDULE_TASK, SessionMetadata, SessionStatus, TaskProfile, UtcDateTime, WORK_STATE,
 };
 use charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
@@ -917,7 +917,7 @@ pub fn apply_listing_fields(dump: &mut Value, fields: Map<String, Value>) {
   for field in SCHEDULE_FIELDS {
     object.remove(field);
   }
-  object.insert("schedule_task".to_string(), Value::Null);
+  object.insert(SCHEDULE_TASK.to_string(), Value::Null);
   object.extend(fields);
 }
 
@@ -1199,7 +1199,7 @@ mod tests {
     let rows = page_rows_of(text.as_str());
     let row = rows[0].as_object().expect("a page row is an object");
     // The row writer fills these with null, false or zero, so the client would read them as falsy either way.
-    for omitted in ["schedule_task", "cc_session_id", "has_unread", "pending_trigger_count"] {
+    for omitted in [SCHEDULE_TASK, "cc_session_id", "has_unread", "pending_trigger_count"] {
       assert!(!row.contains_key(omitted), "{omitted} is falsy and stays out of the page row");
     }
     // No page client reads these: the sidebar and session views never touch a row's creation time or schema
@@ -1467,15 +1467,13 @@ mod tests {
     fields.insert("schedule_cron".to_string(), json!("0 8 * * *"));
     fields.insert("sequence_state".to_string(), json!("ready"));
     apply_listing_fields(&mut value, fields);
-    assert_eq!(
-      value,
-      json!({
-        "name": "Synthetic",
-        "schedule_task": null,
-        "schedule_cron": "0 8 * * *",
-        "sequence_state": "ready"
-      })
-    );
+    let mut expected = json!({
+      "name": "Synthetic",
+      "schedule_cron": "0 8 * * *",
+      "sequence_state": "ready"
+    });
+    expected[SCHEDULE_TASK] = Value::Null;
+    assert_eq!(value, expected);
   }
 
   #[test]

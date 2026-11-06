@@ -3,14 +3,19 @@
 // resolution; it may not run shorter than 90% of its link time.
 
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import net from 'node:net';
+import readline from 'node:readline';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { ShapingProxy } from './proxy.mjs';
 import { LINK } from './profile.mjs';
 
 const BPS = LINK.bytesPerSecond;
 const CONNECT_RESPONSE_BYTES = Buffer.byteLength('HTTP/1.1 200 Connection Established\r\n\r\n');
+const RELAY = fileURLToPath(new URL('./relay.mjs', import.meta.url));
 
 // A loopback server. A tunnel names itself with its first line, `ID <label>`, and the server counts the bytes after it
 // per label. A `GET <n>` request in the data gets n bytes back on the same connection.
@@ -227,4 +232,54 @@ test('the byte counters match the bytes that crossed the link', async () => {
     assert.equal(counters.received, clientBytes + CONNECT_RESPONSE_BYTES);
     socket.destroy();
   });
+});
+
+// Starts the relay entry against a target. Resolves with the child and the port of the address the relay printed.
+async function startRelay(targetPort) {
+  const child = spawn(process.execPath, [RELAY, '--target', `http://127.0.0.1:${targetPort}`], {
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  const lines = readline.createInterface({ input: child.stdout });
+  const [first] = await once(lines, 'line');
+  lines.close();
+  return { child, port: Number(new URL(first).port) };
+}
+
+test('the relay entry carries a tunnel over the bench link and stops on SIGTERM', { timeout: 60000 }, async () => {
+  const target = await startTarget();
+  const { child, port } = await startRelay(target.port);
+  const exited = once(child, 'exit');
+  try {
+    const bytes = 25000;
+    const socket = await tunnel(port, target.port, 'relay');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const start = performance.now();
+    socket.write(Buffer.alloc(bytes, 0x61));
+    const done = await untilReceived(target, 'relay', bytes);
+    assertWithin(done - start, (bytes / BPS) * 1000 + LINK.roundTripMs / 2, '25 KB through the relay');
+    socket.destroy();
+    child.kill('SIGTERM');
+    const [code] = await exited;
+    assert.equal(code, 0);
+    await assert.rejects(tunnel(port, target.port, 'late'));
+  } finally {
+    child.kill('SIGKILL');
+    await target.close();
+  }
+});
+
+test('the relay entry refuses a target without an http port and prints no address', { timeout: 60000 }, async () => {
+  const child = spawn(process.execPath, [RELAY, '--target', 'http://127.0.0.1'], { stdio: 'pipe' });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
+  const [code] = await once(child, 'close');
+  assert.notEqual(code, 0);
+  assert.notEqual(stderr, '');
+  assert.equal(stdout, '');
 });

@@ -123,6 +123,20 @@ Linux with user systemd, `node` 20 or later, `cargo`, `git`, `openssl`, `flock`,
 16 GB memory scope and about 1 GB of free space in `/tmp` for its copy of the mock home. Each run deletes its trial
 tree when it ends; a run that is killed leaves the tree, which the next person removes by hand.
 
+## Relay for the perf loop
+
+`relay.mjs` runs the same shaping proxy as a command, so a trial server's loads cross the bench's link without the
+browser. The perf loop's slow-network measure starts it against the trial's `CHARLIEBOT_SERVE_URL`:
+
+```sh
+node dev/poor-network/relay.mjs --target "$CHARLIEBOT_SERVE_URL"
+```
+
+It prints its own address, `http://127.0.0.1:<port>`, as its first stdout line, and runs until SIGINT or SIGTERM,
+which stops it and every tunnel it holds. Its tunnels reach the target's port only, and they share the link's budget per
+direction, as the bench's connections do. A target without an `http` port or with a path exits non-zero and prints no
+address.
+
 ## Tests
 
 The proxy's tests run through the remote runner:
@@ -132,4 +146,5 @@ dev/remote-run/run.sh node --test dev/poor-network/proxy.test.mjs
 ```
 
 They check the transfer times within tolerance, two concurrent tunnels sharing one budget, the held and reset
-blackouts, and the byte counters.
+blackouts, the byte counters, and the relay entry: its tunnel's transfer time at the link, its stop on SIGTERM, and its
+refusal of a target without a port.

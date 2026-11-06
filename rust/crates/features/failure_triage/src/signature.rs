@@ -8,9 +8,9 @@
 //! `[<backend>:<kind>] {json}` shape, is no cause, so extraction drops it from every text. A record whose only material
 //! is notice lines, or that fits one of the closed no-cause shapes, has no cause to judge.
 
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
-use regex::Regex;
+use regex::{Regex, RegexSet};
 
 /// The longest normalized cause line a signature carries, in characters.
 pub const MAX_CAUSE_CHARS: usize = 240;
@@ -22,33 +22,29 @@ static ANSI: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*m").expect("the ANSI escape expression is valid"));
 
 /// Lines that carry no cause: the LiteLLM banner, a log-retention note and an entry-path note.
-static NOISE: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-  [
+static NOISE: LazyLock<RegexSet> = LazyLock::new(|| {
+  RegexSet::new([
     r"^Provider List: https://docs\.litellm\.ai",
     r"^Give Feedback / Get Help:",
     r"^LiteLLM\.Info: If you need to debug this error",
     r"(?i)^[\w.:/-]*docs/providers$",
     r"^Command logs retained at:",
     r"^loading path=",
-  ]
-  .into_iter()
-  .map(|pattern| Regex::new(pattern).expect("every noise expression is valid"))
-  .collect()
+  ])
+  .expect("every noise expression is valid")
 });
 
 /// A LiteLLM banner line, in its three-line form plus a provider-list URL whose line was cut short. A record made only
 /// of these has no cause to read.
-static BANNER: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-  [
+static BANNER: LazyLock<RegexSet> = LazyLock::new(|| {
+  RegexSet::new([
     r"^Provider List: https://docs\.litellm\.ai",
     r"^Give Feedback / Get Help:",
     r"^LiteLLM\.Info: If you need to debug this error",
     r"(?i)^[\w.:/-]*docs/providers$",
     r"litellm\._turn_on_debug",
-  ]
-  .into_iter()
-  .map(|pattern| Regex::new(pattern).expect("every banner expression is valid"))
-  .collect()
+  ])
+  .expect("every banner expression is valid")
 });
 
 /// A backend notice line: the `[<backend>:<kind>] {json}` shape a backend writes when it reports its own state. The
@@ -180,58 +176,48 @@ enum MatchShape {
 
 /// One ordered cause pattern: its inventory class name, its expression, and the part of the cause material a hit
 /// names.
+#[derive(Clone, Copy)]
 struct CausePattern {
-  /// The Python inventory's class name. The signature keeps the normalized cause line, not this name.
-  #[allow(dead_code)]
-  name: &'static str,
-  expression: Regex,
+  expression: &'static str,
   shape: MatchShape,
 }
 
-impl CausePattern {
-  fn new(name: &'static str, pattern: &str, shape: MatchShape) -> CausePattern {
-    CausePattern { name, expression: Regex::new(pattern).expect("every cause expression is valid"), shape }
-  }
-}
+const PATTERNS: [CausePattern; 18] = [
+  CausePattern { expression: r"the previous round still runs: unit \S+sc?ope exists", shape: MatchShape::Fragment },
+  CausePattern { expression: r"no cron task file under .* names session_id", shape: MatchShape::Fragment },
+  CausePattern { expression: r"No module named '([^']+)'", shape: MatchShape::Fragment },
+  CausePattern { expression: r"failed to load skill \S+: missing YAML frontmatter", shape: MatchShape::Fragment },
+  CausePattern { expression: "内存上限触发", shape: MatchShape::Fragment },
+  CausePattern { expression: r"RateLimitError:.*", shape: MatchShape::WholeText },
+  CausePattern {
+    expression: r"(?i)(service may be temporarily overloaded|overloaded_error|502|503)",
+    shape: MatchShape::WholeText,
+  },
+  CausePattern {
+    expression: r"(?i)(Failed to authenticate|oauth_org_not_allowed|invalid x-api-key|401|Unauthorized|authentication_error)",
+    shape: MatchShape::WholeLine,
+  },
+  CausePattern {
+    expression: r"(?i)(timed out|timeout after|TimeoutError|ETIMEDOUT|deadline exceeded)",
+    shape: MatchShape::WholeLine,
+  },
+  CausePattern { expression: r"(?i)(out of memory|\bOOM\b|\bkilled\b|SIGKILL)", shape: MatchShape::WholeLine },
+  CausePattern { expression: r"Traceback \(most recent call last\)", shape: MatchShape::WholeText },
+  CausePattern { expression: r"(?m)^error(\[E\d+\])?:.*", shape: MatchShape::WholeText },
+  CausePattern { expression: r"(?i)(worktree|already exists|not a git repository)", shape: MatchShape::WholeText },
+  CausePattern { expression: r"(?i)(assertion failed|AssertionError|assert_eq)", shape: MatchShape::WholeText },
+  CausePattern { expression: r"(?i)(Permission denied|EACCES|landlock|read-only file system)", shape: MatchShape::WholeText },
+  CausePattern { expression: r"(?i)(fatal: |CONFLICT \(|rejected|non-fast-forward)", shape: MatchShape::WholeText },
+  CausePattern { expression: r"(?i)(API Error|api_error|invalid_request_error)", shape: MatchShape::WholeText },
+  CausePattern { expression: r"(?i)(^|\W)(error|failed|failure|exception)(\W|$)", shape: MatchShape::WholeLine },
+];
 
-static PATTERNS: LazyLock<Vec<CausePattern>> = LazyLock::new(|| {
-  vec![
-    CausePattern::new("scope-exists", r"the previous round still runs: unit \S+sc?ope exists", MatchShape::Fragment),
-    CausePattern::new("no-cron-task-file", r"no cron task file under .* names session_id", MatchShape::Fragment),
-    CausePattern::new("missing-python-module", r"No module named '([^']+)'", MatchShape::Fragment),
-    CausePattern::new("skill-yaml", r"failed to load skill \S+: missing YAML frontmatter", MatchShape::Fragment),
-    CausePattern::new("mem-cap", "内存上限触发", MatchShape::Fragment),
-    CausePattern::new("ratelimit", r"RateLimitError:.*", MatchShape::WholeText),
-    CausePattern::new(
-      "overloaded",
-      r"(?i)(service may be temporarily overloaded|overloaded_error|502|503)",
-      MatchShape::WholeText,
-    ),
-    CausePattern::new(
-      "auth",
-      r"(?i)(Failed to authenticate|oauth_org_not_allowed|invalid x-api-key|401|Unauthorized|authentication_error)",
-      MatchShape::WholeLine,
-    ),
-    CausePattern::new(
-      "timeout",
-      r"(?i)(timed out|timeout after|TimeoutError|ETIMEDOUT|deadline exceeded)",
-      MatchShape::WholeLine,
-    ),
-    CausePattern::new(r"oom-kill", r"(?i)(out of memory|\bOOM\b|\bkilled\b|SIGKILL)", MatchShape::WholeLine),
-    CausePattern::new("traceback", r"Traceback \(most recent call last\)", MatchShape::WholeText),
-    CausePattern::new("compile-error", r"(?m)^error(\[E\d+\])?:.*", MatchShape::WholeText),
-    CausePattern::new("worktree", r"(?i)(worktree|already exists|not a git repository)", MatchShape::WholeText),
-    CausePattern::new("assertion", r"(?i)(assertion failed|AssertionError|assert_eq)", MatchShape::WholeText),
-    CausePattern::new(
-      "permission",
-      r"(?i)(Permission denied|EACCES|landlock|read-only file system)",
-      MatchShape::WholeText,
-    ),
-    CausePattern::new("git", r"(?i)(fatal: |CONFLICT \(|rejected|non-fast-forward)", MatchShape::WholeText),
-    CausePattern::new("api-error", r"(?i)(API Error|api_error|invalid_request_error)", MatchShape::WholeText),
-    CausePattern::new("failed-word", r"(?i)(^|\W)(error|failed|failure|exception)(\W|$)", MatchShape::WholeLine),
-  ]
+static PATTERN_SET: LazyLock<RegexSet> = LazyLock::new(|| {
+  RegexSet::new(PATTERNS.iter().map(|pattern| pattern.expression)).expect("every cause expression is valid")
 });
+
+static PATTERN_REGEXES: LazyLock<Vec<OnceLock<Regex>>> =
+  LazyLock::new(|| (0..PATTERNS.len()).map(|_| OnceLock::new()).collect());
 
 /// The five shapes of a record whose cause is not in the record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -275,7 +261,7 @@ pub fn clean(text: &str) -> String {
   let plain = ANSI.replace_all(text, "");
   plain
     .lines()
-    .filter(|line| !line.trim().is_empty() && !NOISE.iter().any(|noise| noise.is_match(line)))
+    .filter(|line| !line.trim().is_empty() && !NOISE.is_match(line))
     .collect::<Vec<_>>()
     .join("\n")
 }
@@ -322,7 +308,7 @@ fn banner_only(text: &str) -> bool {
     if line.trim().is_empty() {
       continue;
     }
-    if BANNER.iter().any(|banner| banner.is_match(line)) {
+    if BANNER.is_match(line) {
       saw_banner = true;
       continue;
     }
@@ -341,22 +327,28 @@ fn has_http_status(text: &str) -> bool {
 fn match_cause(text: &str) -> Option<String> {
   let masked = UUID.replace_all(text, "<uuid>");
   let text = masked.as_ref();
-  for pattern in PATTERNS.iter() {
-    let Some(found) = pattern.expression.find(text) else { continue };
-    let cause = match pattern.shape {
-      MatchShape::Fragment => found.as_str(),
-      MatchShape::WholeText => text,
-      MatchShape::WholeLine => {
-        // The class's own `^|\W` guard is part of the match, so the line is read from the word it found.
-        let matched = &text[found.start()..found.end()];
-        let start = found.start() + matched.len() - matched.trim_start().len();
-        let end = start + matched.trim().len();
-        containing_line(text, start, end)
-      }
-    };
-    return Some(cause.to_string());
+  let index = PATTERN_SET.matches(text).iter().next()?;
+  let pattern = PATTERNS[index];
+  match pattern.shape {
+    MatchShape::WholeText => Some(text.to_string()),
+    shape => {
+      let expression = PATTERN_REGEXES[index]
+        .get_or_init(|| Regex::new(pattern.expression).expect("the matching cause expression is valid"));
+      let found = expression.find(text).expect("the matching expression was found by the set");
+      let cause = match shape {
+        MatchShape::Fragment => found.as_str(),
+        MatchShape::WholeLine => {
+          // The class's own `^|\W` guard is part of the match, so the line is read from the word it found.
+          let matched = &text[found.start()..found.end()];
+          let start = found.start() + matched.len() - matched.trim_start().len();
+          let end = start + matched.trim().len();
+          containing_line(text, start, end)
+        }
+        MatchShape::WholeText => unreachable!(),
+      };
+      Some(cause.to_string())
+    }
   }
-  None
 }
 
 fn containing_line(text: &str, start: usize, end: usize) -> &str {

@@ -1023,6 +1023,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::metadata::KEEP_WORKTREE_FIELD`.",
   },
   OwnerRow {
+    name: "parent_session_id",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::PARENT_SESSION_ID`.",
+  },
+  OwnerRow {
     name: "has_pending_trigger",
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::HAS_PENDING_TRIGGER`.",

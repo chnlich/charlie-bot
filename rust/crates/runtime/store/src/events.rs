@@ -2199,26 +2199,30 @@ mod tests {
 
     #[test]
     fn first_page_after_recovery_eviction_reuses_state_and_parses_only_the_tail() {
+      const EVENT_COUNT: usize = 8_000;
+
       let home = tempfile::tempdir().unwrap();
       let store = test_store(home.path());
       let session_id = "synthetic-session";
       let path = store.chat_events_path(session_id);
       std::fs::create_dir_all(path.parent().unwrap()).unwrap();
       let mut body = String::new();
-      for index in 0..20_000 {
+      for index in 0..EVENT_COUNT {
         body.push_str(&format!("{{\"id\":\"event-{index}\",\"text\":\"{}\"}}\n", "x".repeat(40)));
       }
       std::fs::write(&path, body).unwrap();
+      assert!(std::fs::metadata(&path).unwrap().len() > TAIL_WINDOW_SIZE as u64);
 
       store.node_facts(session_id).unwrap();
-      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 20_000);
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), EVENT_COUNT);
       store.evict_recovery_history(session_id);
       let reads = store.history_work().file_reads;
 
       let (tail, total, more) = store.load_chat_events_tail(session_id, 10).unwrap();
-      assert_eq!(total, 20_000);
+      assert_eq!(total, EVENT_COUNT);
       assert!(more);
-      assert_eq!(tail.first().unwrap()["id"].as_str(), Some("event-19990"));
+      let first_tail_id = format!("event-{}", EVENT_COUNT - 10);
+      assert_eq!(tail.first().unwrap()["id"].as_str(), Some(first_tail_id.as_str()));
       let (bytes, parsed) = {
         let caches = store.event_read_caches.lock().unwrap();
         (caches.tail_bytes_read, caches.tail_lines_parsed)

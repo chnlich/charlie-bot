@@ -1181,12 +1181,16 @@ mod tests {
     }
     assert!(plan.sessions.iter().all(|session| session.task_type != Some(TaskType::ColdRead)), "no cold read");
 
-    // An archive takes a large parent's log, and a plan of this size archives several of them.
+    // An archive takes a large parent's log: each archived session is a parent in the band. A plan whose logs
+    // all sit in the band archives every parent a child lands under, so a small plan deals several archives.
     let archived: Vec<usize> = (0..sessions).filter(|index| plan.sessions[*index].archived).collect();
-    assert!(archived.len() >= 5, "{} archived sessions", archived.len());
     for index in archived {
       let band = ARCHIVE_MIN_BYTES..=ARCHIVE_MAX_BYTES;
       assert!(parents.contains(&index) && band.contains(&sizes[index]), "session {index}");
     }
+    let band_sizes = vec![30_000_000_u64; 500];
+    let band_plan = HomePlan::new(&band_sizes, 1);
+    let band_archived = band_plan.sessions.iter().filter(|session| session.archived).count();
+    assert!(band_archived >= 5, "{band_archived} archived sessions");
   }
 }

@@ -1,66 +1,111 @@
 //! The GitHub draft target: a draft pull request, or a pull-request or issue comment.
 //!
 //! The CLI validates the flags with this module before it registers, and the server validates the same target again
-//! when it writes the event, so both sides share one rule.
+//! when it writes the event, so both sides share one rule. `Target::parse` is that rule: it reads the object once and
+//! names the kind, and the label and the HTTP request work from the named kind.
 
 use serde_json::{Value, json};
+
+/// One GitHub target: a comment on a pull request or issue, or a new draft pull request.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Target {
+  /// A comment on a pull request or issue, named by its number.
+  Comment { repo: String, number: u64 },
+  /// A new draft pull request from `head` into `base`.
+  DraftPullRequest { repo: String, title: String, head: String, base: String },
+}
+
+impl Target {
+  /// The target one JSON object holds. An object that carries `number` is a comment, and an object without it is a
+  /// draft pull request that needs `title`, `head` and `base`. Any other set of fields is an error that names what is
+  /// wrong.
+  pub fn parse(target: &Value) -> Result<Target, String> {
+    let Some(object) = target.as_object() else {
+      return Err("the GitHub target must be an object".to_string());
+    };
+    let number = object.get("number");
+    let allowed: &[&str] = if number.is_some() { &["repo", "number"] } else { &["repo", "title", "head", "base"] };
+    if let Some(unknown) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+      return Err(format!("the GitHub target has no field {unknown}"));
+    }
+    let repo = object
+      .get("repo")
+      .and_then(Value::as_str)
+      .filter(|repo| valid_repo(repo))
+      .ok_or_else(|| "target.repo must name owner/repository".to_string())?
+      .to_string();
+    if let Some(number) = number {
+      let number = number
+        .as_u64()
+        .filter(|number| *number > 0)
+        .ok_or_else(|| "target.number must be a positive comment number".to_string())?;
+      return Ok(Target::Comment { repo, number });
+    }
+    let title = object
+      .get("title")
+      .and_then(Value::as_str)
+      .filter(|title| !title.trim().is_empty())
+      .ok_or_else(|| "target.title must be a non-empty pull-request title".to_string())?
+      .to_string();
+    let head = object
+      .get("head")
+      .and_then(Value::as_str)
+      .filter(|head| valid_branch(head))
+      .ok_or_else(|| "target.head must be a pull-request branch".to_string())?
+      .to_string();
+    let base = object
+      .get("base")
+      .and_then(Value::as_str)
+      .filter(|base| valid_branch(base))
+      .ok_or_else(|| "target.base must be a pull-request branch".to_string())?
+      .to_string();
+    Ok(Target::DraftPullRequest { repo, title, head, base })
+  }
+
+  /// The canonical `Value` the event carries.
+  pub fn to_value(&self) -> Value {
+    match self {
+      Target::Comment { repo, number } => json!({"repo": repo, "number": number}),
+      Target::DraftPullRequest { repo, title, head, base } => {
+        json!({"repo": repo, "title": title, "head": head, "base": base})
+      }
+    }
+  }
+
+  /// The target's one-line card label.
+  pub fn label(&self) -> String {
+    match self {
+      Target::Comment { repo, number } => format!("GitHub comment on {repo}#{number}"),
+      Target::DraftPullRequest { repo, title, head, base } => {
+        format!("GitHub draft PR {repo} {head} -> {base}: {title}")
+      }
+    }
+  }
+
+  /// The path and JSON body of the HTTP request that sends `body` to this target.
+  pub fn request(&self, body: &str) -> (String, Value) {
+    match self {
+      Target::Comment { repo, number } => (format!("repos/{repo}/issues/{number}/comments"), json!({"body": body})),
+      Target::DraftPullRequest { repo, title, head, base } => (
+        format!("repos/{repo}/pulls"),
+        json!({"title": title, "head": head, "base": base, "body": body, "draft": true}),
+      ),
+    }
+  }
+}
 
 /// Validate one GitHub target and return it in canonical form: `{repo, title, head, base}` for a draft pull request,
 /// `{repo, number}` for a comment.
 pub fn validate_target(target: &Value) -> Result<Value, String> {
-  let Some(object) = target.as_object() else {
-    return Err("the GitHub target must be an object".to_string());
-  };
-  let allowed: &[&str] =
-    if object.contains_key("number") { &["repo", "number"] } else { &["repo", "title", "head", "base"] };
-  if let Some(unknown) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
-    return Err(format!("the GitHub target has no field {unknown}"));
-  }
-  let repo = object
-    .get("repo")
-    .and_then(Value::as_str)
-    .filter(|repo| valid_repo(repo))
-    .ok_or_else(|| "target.repo must name owner/repository".to_string())?;
-  if object.contains_key("number") {
-    let number = object
-      .get("number")
-      .and_then(Value::as_u64)
-      .filter(|number| *number > 0)
-      .ok_or_else(|| "target.number must be a positive comment number".to_string())?;
-    return Ok(json!({"repo": repo, "number": number}));
-  }
-  let title = object
-    .get("title")
-    .and_then(Value::as_str)
-    .filter(|title| !title.trim().is_empty())
-    .ok_or_else(|| "target.title must be a non-empty pull-request title".to_string())?;
-  let head = object
-    .get("head")
-    .and_then(Value::as_str)
-    .filter(|head| valid_branch(head))
-    .ok_or_else(|| "target.head must be a pull-request branch".to_string())?;
-  let base = object
-    .get("base")
-    .and_then(Value::as_str)
-    .filter(|base| valid_branch(base))
-    .ok_or_else(|| "target.base must be a pull-request branch".to_string())?;
-  Ok(json!({"repo": repo, "title": title, "head": head, "base": base}))
+  Target::parse(target).map(|target| target.to_value())
 }
 
-/// The target's one-line card label.
+/// The target's one-line card label. The caller passes a target that `validate_target` accepted; a target it refuses
+/// gets a label that names the refusal.
 pub fn target_label(target: &Value) -> String {
-  let repo = target.get("repo").and_then(Value::as_str).unwrap_or_default();
-  match (
-    target.get("number").and_then(Value::as_u64),
-    target.get("head").and_then(Value::as_str),
-    target.get("base").and_then(Value::as_str),
-  ) {
-    (Some(number), _, _) => format!("GitHub comment on {repo}#{number}"),
-    (_, Some(head), Some(base)) => {
-      let title = target.get("title").and_then(Value::as_str).unwrap_or_default();
-      format!("GitHub draft PR {repo} {head} -> {base}: {title}")
-    }
-    _ => format!("GitHub {repo}"),
+  match Target::parse(target) {
+    Ok(target) => target.label(),
+    Err(error) => format!("GitHub target ({error})"),
   }
 }
 

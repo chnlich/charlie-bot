@@ -225,7 +225,7 @@ struct VoiceStartup<'a> {
 }
 
 impl<'a> VoiceStartup<'a> {
-  /// Reads the validated fields in model declaration order.
+  /// The startup body, with its fields read from `values` in model declaration order.
   fn from_values(values: &'a serde_json::Map<String, Value>) -> Self {
     Self {
       backend: text_field_ref(values, "backend"),
@@ -309,7 +309,7 @@ impl<T: std::fmt::Display> std::fmt::Display for Nullable<T> {
   }
 }
 
-/// Persist one validated recording before backend selection, then archive its final transcript.
+/// The upload of one validated recording: persisted before backend selection, its final transcript archived after.
 async fn upload_recording(
   cfg: Arc<CharlieBotConfig>,
   credentials: Arc<Credentials>,

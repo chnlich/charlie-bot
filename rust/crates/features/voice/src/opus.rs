@@ -21,7 +21,7 @@ pub(crate) fn pre_skip(opus_head: Option<&[u8]>) -> Result<usize, String> {
   Ok(usize::from(u16::from_le_bytes([bytes[0], bytes[1]])))
 }
 
-/// Decode every packet of `track_id` to mono samples at 48 kHz, without the pre-skip and the end trim.
+/// The mono samples at 48 kHz decoded from every packet of `track_id`, without the pre-skip and the end trim.
 pub(crate) fn decode_track(
   format: &mut dyn FormatReader,
   track_id: u32,
@@ -67,7 +67,7 @@ impl PacketDecoder {
     Ok(Self { raw })
   }
 
-  /// Decode one packet into `pcm` as interleaved frames, returning the frames per channel.
+  /// The frames per channel of one packet, decoded into `pcm` as interleaved frames.
   fn decode(&mut self, packet: &[u8], pcm: &mut [f32]) -> Result<usize, String> {
     let len = i32::try_from(packet.len()).map_err(|_| "Opus packet is too long")?;
     // SAFETY: `packet` is readable for `len` bytes, and `pcm` holds `MAX_FRAMES_PER_PACKET` frames of `channels`

@@ -58,7 +58,7 @@ pub(crate) fn section() -> ConfigSection {
   ConfigSection { key: "voice", legacy_keys: &[], parse: parse_settings, dump: dump_settings }
 }
 
-/// Render the section as its model dumps it (`charliebot config get voice`).
+/// The section as its model dumps it (`charliebot config get voice`).
 fn dump_settings(value: &SectionValue) -> Result<serde_json::Value, String> {
   let settings = value.downcast_ref::<VoiceSettings>().ok_or("the voice section holds an unexpected value")?;
   serde_json::to_value(settings).map_err(|error| error.to_string())

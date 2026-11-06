@@ -118,8 +118,8 @@
 #messages { overflow-anchor: none; overscroll-behavior: contain; }
 .turn-collapse:hover { color: #cbd5e1; }
 /* A round's controls — clone, Elon-e, explain, the two ratings and Collapse — draw a 14 px glyph in a
-   2 px pad, an 18 px box under the 24 px pointer floor. Each takes a 24 px box with its glyph centred;
-   the separator row grows 6 px and keeps its hairlines. */
+   2 px pad. That is an 18 px box, under the 24 px pointer floor. Each takes a 24 px box with its glyph
+   centred; the separator row grows 6 px and keeps its hairlines. */
 .round-buttons > button,
 .turn-collapse {
   display: inline-flex;
@@ -241,11 +241,11 @@ body.resizing { cursor: col-resize; user-select: none; }
 .sidebar-overlay { display: none; }
 .hamburger-btn { display: none !important; }
 /* The header's events link is the one glyph-only control under the 24 px pointer floor: its 16 px
-   icon was the whole box, and no boundary marked the target. (On a phone the Menu button is
-   glyph-only too, in a 36 px box.) The link takes a 24 px box around the glyph and the header's
-   bordered-control surface (index.html), so the target is both large enough and visible. No row,
-   strip or label is added: the header's tallest item still sets its height, and on a phone the box
-   with its margins fills the 2.5rem the tab row reserves. */
+   icon was the whole box, and no boundary marked the target. The Menu button is glyph-only too on a
+   phone, in a 36 px box. The link takes a 24 px box around the glyph and the header's
+   bordered-control surface (index.html). The target is then both large enough and visible. No row,
+   strip or label is added: the header's tallest item still sets its height. On a phone, the box with
+   its margins fills the 2.5rem the tab row reserves. */
 main > header > a[title="View JSONL events"] {
   display: inline-flex;
   align-items: center;
@@ -377,8 +377,8 @@ main > header > a[title="View JSONL events"] {
   box-shadow: 8px 0 0 0 rgb(37, 49, 68);
 }
 /* The current session's row paints its blue tint at rest and takes no hover
-   tint, so its cover is that tint over the panel color, the same composite
-   the row already shows. */
+   tint. Its cover is therefore that tint over the panel color, the same
+   composite the row already shows. */
 .session-row.bg-blue-600\/20:hover > button:not(.\!opacity-100) {
   background-color: #172033;
   background-image: linear-gradient(rgba(37, 99, 235, 0.2), rgba(37, 99, 235, 0.2));

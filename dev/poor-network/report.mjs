@@ -3,7 +3,7 @@
 
 import fs from 'node:fs';
 
-import { CALIBRATION_HOLD_MS, TARGETS, LINK } from './profile.mjs';
+import { CALIBRATION_HOLD_MS, LINK, LIVE_READBACK, TARGETS, VIEW } from './profile.mjs';
 
 const BYTES_PER_MS = LINK.bytesPerSecond / 1000;
 
@@ -144,6 +144,26 @@ export function formatSide(side) {
     const verdict = side.calibration.reproduced ? 'reproduced' : 'NOT reproduced';
     lines.push(
       `calibration: switch hold median ${formatMs(side.calibration.switchHoldMedianMs)} (needs >= ${formatMs(side.calibration.requiredMs)}): ${verdict}`,
+    );
+  }
+  if (side.view) {
+    lines.push(
+      `view: ${side.view.rows} rows, raw median row ${side.view.rawRowMedianBytes} B (live view: ${VIEW.rows} rows, ${VIEW.rawRowMedianBytes} B)`,
+    );
+  }
+  const backgroundReps = side.reps?.background ?? [];
+  if (backgroundReps.length > 0 && backgroundReps[0].receivedByEndpoint) {
+    const parts = Object.keys(backgroundReps[0].receivedByEndpoint).map((name) => {
+      const median = percentile(backgroundReps.map((rep) => rep.receivedByEndpoint[name]), 0.5);
+      return `${name} ${median.toFixed(1)}`;
+    });
+    lines.push(`background received by endpoint, KB/min (median): ${parts.join(', ')}`);
+  }
+  const background = side.metrics['background.received'];
+  if (background) {
+    const gap = background.median - LIVE_READBACK.receivedKbPerMin;
+    lines.push(
+      `live readback: received ${LIVE_READBACK.receivedKbPerMin} KB/min; background received median ${background.median.toFixed(1)} KB/min (gap ${gap.toFixed(1)} KB/min)`,
     );
   }
   return lines.join('\n');

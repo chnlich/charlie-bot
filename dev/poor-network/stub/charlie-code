@@ -1,8 +1,8 @@
 #!/bin/sh
 # The bench's scripted backend: a stand-in for the charlie-code CLI, which the server runs once per turn. It prints the
-# NDJSON that the backend reads: session_attached, the reply that POOR_NETWORK_REPLY_FILE holds, then result. It calls no
-# model and reads no credential. A prompt that carries the marker bench-hold keeps its turn open, so the session stays
-# running for the background load until the bench cancels it.
+# NDJSON that the backend reads: session_attached, the next reply piece of POOR_NETWORK_REPLY_DIR, then result. It
+# calls no model and reads no credential. A prompt carrying the marker bench-hold keeps its turn open, so the session
+# stays running for the background load until the bench cancels it.
 set -eu
 
 task_file=
@@ -23,10 +23,15 @@ else
 fi
 printf '{"type":"session_attached","session_id":"%s"}\n' "$session_id"
 
+# The reply pieces are printed in turn, so consecutive turns carry different text.
+replies=$POOR_NETWORK_REPLY_DIR
+next=$(cat "$replies/next")
+pieces=$(ls "$replies" | grep -c '^reply-')
+printf '%s\n' "$((next + 1))" > "$replies/next"
 while IFS= read -r line; do
   printf '%s\n' "$line"
   sleep 0.05
-done < "$POOR_NETWORK_REPLY_FILE"
+done < "$replies/reply-$((next % pieces)).ndjson"
 
 if [ -n "$task_file" ] && grep -q 'bench-hold' "$task_file"; then
   # A cancel stops this shell; the sleep it waits on ends with it, so no orphan outlives the turn.

@@ -41,3 +41,25 @@ export const REPETITIONS = 5;
 
 // The calibration: the origin/main baseline's switch during the background must take at least this long to render.
 export const CALIBRATION_HOLD_MS = 10000;
+
+// The shape of the view the bench measures, taken from a live release's default "all" view: 124 rows, a raw median row
+// of 3,260 bytes, and a switch target whose bootstrap takes a median 26,592 bytes on the wire. The bench's own sessions
+// are rows of that view, and the mock home holds the rest.
+export const VIEW = Object.freeze({
+  rows: 124,
+  rawRowMedianBytes: 3260,
+  bootstrapWireBytes: 26592,
+});
+
+// The sessions the bench creates on the trial's backend: one open, one running in the background, three for the
+// probes, one switch target and five for the held blackout. They are task-tree nodes, so the server takes a message.
+export const BENCH_SESSIONS = 11;
+
+// The live readback of a release's default view, from one visible tab for 4.02 h: status polls about 20 per minute at
+// 5,767 bytes received each, and full-list fetches, 174 at 113,791 bytes each. Together they receive about 206 KB a
+// minute. The background scenario's before-numbers are compared with it as a second calibration check.
+export const LIVE_READBACK = Object.freeze({
+  receivedKbPerMin: 206,
+  statusPollBytes: 5767,
+  fullListBytes: 113791,
+});

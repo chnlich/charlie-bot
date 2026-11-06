@@ -32,7 +32,8 @@ Chrome comes from `POOR_NETWORK_CHROME`, or else the newest `~/.cache/ms-playwri
 The trial replaces `HOME`, so the discovery happens in `run.sh`.
 
 Output: `DIR/<run id>/before.json` and `after.json`, one per side, with the link, the targets, the Chrome version, the
-asset hashes, the session ids and every repetition's raw numbers. The summary table prints to stdout.
+asset hashes, the session ids, the view as measured against the live view, and every repetition's raw numbers. The
+summary table prints to stdout, with the view line and the live readback line.
 
 ## Link profile and targets
 
@@ -75,16 +76,32 @@ The baseline must reproduce the switch hold: on origin/main, a switch during the
 `CALIBRATION_HOLD_MS` (10 s) to render. If it does not, the proxy does not model the link, and `--side both` stops before
 the after side. The table prints the calibration line.
 
+A second check sets the background scenario's received rate beside the live readback in `LIVE_READBACK`: about 206 KB a
+minute, from one visible tab on a live release. The table prints the gap. The check does not gate the run: a gap is a
+finding to state with the numbers.
+
 ## Sessions and the server
 
-The trial server runs on the mock home. Its sessions carry no task boundary, so the server refuses a message to them.
-The bench therefore creates the sessions it uses through `POST /api/sessions/`, on the trial's backend option. Each one
-gets one seeded turn, which leaves one reply of about 8 KB in its history. The seed text is unique to its session, and
-the page shows the switch once that session's own message renders. The switch floor adjusts for the bootstrap bytes.
+The trial server runs on the mock home, which holds the view's rows that the bench's own sessions do not: `VIEW.rows`
+less `BENCH_SESSIONS` (113 sessions with the current profile), generated with `--shape view`. Each carries a task spec of
+synthetic acceptance criteria and context references, sized so the rows' median matches the live view's; the default
+shape writes no task spec. The mock's sessions carry no task boundary, so the server refuses a message to them. The bench therefore creates its sessions through `POST /api/sessions/`, on the trial's backend
+option. Those sessions are rows of the default view too, so the view holds `VIEW.rows` rows.
 
-The trial's backend is `charlie-code`, which `run.sh` puts on `PATH` as `stub/charlie-code`. The stub prints the
-charlie-code NDJSON of a repository text (`reply.mjs`). It calls no model and reads no credential. A prompt carrying the
-marker `bench-hold` keeps its turn open for the background load, until the bench cancels it.
+The view's shape comes from a live release's default "all" view: 124 rows, a raw median row of 3,260 bytes, and a switch
+target whose bootstrap takes a median 26,592 bytes on the wire. The bench checks the row count before any scenario runs
+and records the median raw row in the JSON. The switch target and the held targets take turns until their bootstrap
+reaches 26,592 bytes on the wire, and the JSON records each one's turns and bytes. The other bench sessions take one
+turn. Each session's last turn carries a seed text unique to it, and the page shows a switch once that text renders. The
+switch floor adjusts for the bootstrap bytes.
+
+The trial's backend is `charlie-code`, which `run.sh` puts on `PATH` as `stub/charlie-code`. Each turn the stub prints the
+next of 16 reply pieces, 8 KB each, cut from repository docs (`reply.mjs`), in the charlie-code NDJSON the backend reads.
+The pieces differ, so the gzip of a session's history does not fold its replies into one copy. Each reply streams as
+about three or four text events of 2.2 KB, and the server keeps each event as one chat message; a bootstrap carries the
+last 40 messages, of which the event size and the turns' own messages set how much reply text a switch target carries. The stub calls no model
+and reads no credential. A prompt carrying the marker `bench-hold` keeps its turn open for the background load, until
+the bench cancels it.
 
 The web client reads its access key from `localStorage` and sends it as the `Authorization` header and as the `token`
 of each WebSocket URL. The bench writes the same `localStorage` entry before each page loads, so the page behaves as
@@ -103,7 +120,7 @@ application's own traffic.
 ## Host requirements
 
 Linux with user systemd, `node` 20 or later, `cargo`, `git`, `openssl`, `flock`, and a Chrome build. The trial needs a
-16 GB memory scope and about 6 GB of free space in `/tmp` for its copy of the mock home. Each run deletes its trial
+16 GB memory scope and about 1 GB of free space in `/tmp` for its copy of the mock home. Each run deletes its trial
 tree when it ends; a run that is killed leaves the tree, which the next person removes by hand.
 
 ## Tests

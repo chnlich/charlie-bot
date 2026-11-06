@@ -4,7 +4,7 @@
 // served home against the mock home, runs the chosen scenarios and writes one JSON file for the side.
 //
 //   node bench.mjs --side before|after --out <file.json> --mock-home <dir> --mock-home-bin <path> \
-//     --reply <reply.ndjson> --assets <dir> --commit <text> [--repetitions N] [--scenarios background,held,reset,stream]
+//     --reply-dir <dir> --assets <dir> --commit <text> [--repetitions N] [--scenarios background,held,reset,stream]
 //
 // Exit: 0 when the scenarios were measured (the verdicts are in the JSON and the table); 1 when a measurement failed.
 
@@ -17,10 +17,18 @@ import { ServerApi } from './api.mjs';
 import { loadAssets } from './assets.mjs';
 import { chromeBinary } from './chrome.mjs';
 import { startFront } from './front.mjs';
-import { LINK, REPETITIONS, TARGETS, TASK_TREE_LOAD } from './profile.mjs';
-import { REPLY_SOURCE } from './reply.mjs';
+import {
+  BENCH_SESSIONS,
+  LINK,
+  LIVE_READBACK,
+  REPETITIONS,
+  TARGETS,
+  TASK_TREE_LOAD,
+  VIEW,
+} from './profile.mjs';
+import { REPLY_PIECES, REPLY_SOURCES } from './reply.mjs';
 import { backgroundRep, heldBlackoutRep, longStreamRep, resetBlackoutRep } from './scenarios.mjs';
-import { METRICS, calibrate, formatSide, summarize } from './report.mjs';
+import { METRICS, calibrate, formatSide, percentile, summarize } from './report.mjs';
 
 const SCENARIOS = Object.freeze({
   background: backgroundRep,
@@ -29,12 +37,14 @@ const SCENARIOS = Object.freeze({
   stream: longStreamRep,
 });
 
-// The sessions the bench needs: one open, one running in the background, three for the probes, one switch target and
-// five for the held blackout. All of them are created on the trial's backend option, which scripts/release/trial.sh
-// writes as charlie-code-release-trial; the charlie-code binary behind it is the stub that run.sh puts on PATH.
-const NEEDED = 11;
+// The sessions the bench needs are created on the trial's backend option, which scripts/release/trial.sh writes as
+// charlie-code-release-trial; the charlie-code binary behind it is the stub that run.sh puts on PATH. Index 1 is the
+// open session, 2 the background one, 3 to 5 the probes, and from FIRST_SIZED_INDEX on the switch target and the held
+// targets, which take turns until their bootstrap reaches the live view's size.
 const STUB_BACKEND_ID = 'charlie-code-release-trial';
 const SEED_TIMEOUT_MS = 120000;
+const FIRST_SIZED_INDEX = 6;
+const MAX_SIZING_TURNS = 30;
 
 function parseArgs(argv) {
   const args = { repetitions: REPETITIONS, scenarios: Object.keys(SCENARIOS) };
@@ -43,7 +53,7 @@ function parseArgs(argv) {
     '--out': 'out',
     '--mock-home': 'mockHome',
     '--mock-home-bin': 'mockHomeBin',
-    '--reply': 'reply',
+    '--reply-dir': 'replyDir',
     '--assets': 'assets',
     '--commit': 'commit',
     '--repetitions': 'repetitions',
@@ -56,7 +66,7 @@ function parseArgs(argv) {
     }
     args[key] = argv[index + 1];
   }
-  for (const required of ['side', 'out', 'mockHome', 'mockHomeBin', 'reply', 'assets', 'commit']) {
+  for (const required of ['side', 'out', 'mockHome', 'mockHomeBin', 'replyDir', 'assets', 'commit']) {
     if (args[required] === undefined) {
       throw new Error(`--${required.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)} is required`);
     }
@@ -86,32 +96,79 @@ function requireEnv(names) {
   return values;
 }
 
-// Creates the sessions the bench uses and gives each one stub turn. The mock home's own sessions hold no task boundary,
-// so the server refuses a message to them; the bench's sessions are task-tree nodes. The seed text is each session's
-// marker: unique to it, so the page shows a switch only when that session's own message is rendered.
+// Creates one bench session and seeds it. A session with `targetBytes` takes turns until its bootstrap reaches that
+// many bytes on the wire, and reports the turns it took; any other takes one turn. The mock home's own sessions hold no
+// task boundary, so the server refuses a message to them; the bench's sessions are task-tree nodes. Each session's
+// marker is its last turn's text, unique to it, so the page shows a switch only when that session's own message is
+// rendered.
+async function seedSession(api, tag, index, targetBytes) {
+  const id = await api.createSession(`pn-${tag}-${index}`, STUB_BACKEND_ID);
+  for (let turn = 1; ; turn++) {
+    const marker = `pn-seed ${tag} ${index} ${turn}`;
+    await api.sendMessage(id, marker);
+    await api.waitForIdle(id, SEED_TIMEOUT_MS);
+    if (targetBytes === null) {
+      return { id, marker, turns: 1, bootstrapWireBytes: null };
+    }
+    const bootstrapWireBytes = await api.bootstrapWireBytes(id);
+    if (bootstrapWireBytes >= targetBytes) {
+      return { id, marker, turns: turn, bootstrapWireBytes };
+    }
+    if (turn === MAX_SIZING_TURNS) {
+      throw new Error(
+        `session ${id} reached ${bootstrapWireBytes} bootstrap bytes in ${turn} turns, short of ${targetBytes}; ` +
+          await describeBootstrap(api, id),
+      );
+    }
+  }
+}
+
+// The messages a session's bootstrap carries, by role, with their raw sizes: what a sizing that falls short reports.
+async function describeBootstrap(api, sessionId) {
+  const page = await api.json('GET', `/api/sessions/${sessionId}/bootstrap`);
+  const roles = {};
+  for (const message of page.messages) {
+    roles[message.role] = (roles[message.role] ?? 0) + 1;
+  }
+  const sizes = page.messages.map((message) => Buffer.byteLength(JSON.stringify(message)));
+  return `the bootstrap carries ${page.messages.length} messages ${JSON.stringify(roles)}, raw ${Buffer.byteLength(JSON.stringify(page))} bytes, largest message ${Math.max(...sizes)} bytes`;
+}
+
+// Creates and seeds the sessions the bench uses.
 async function createSessions(api) {
   const tag = crypto.randomBytes(4).toString('hex');
   const made = [];
-  for (let index = 0; index < NEEDED; index++) {
-    const id = await api.createSession(`pn-${tag}-${index + 1}`, STUB_BACKEND_ID);
-    const marker = `pn-seed ${tag} ${index + 1}`;
-    await api.sendMessage(id, marker);
-    await api.waitForIdle(id, SEED_TIMEOUT_MS);
-    made.push({ id, marker });
+  for (let index = 1; index <= BENCH_SESSIONS; index++) {
+    const targetBytes = index >= FIRST_SIZED_INDEX ? VIEW.bootstrapWireBytes : null;
+    made.push(await seedSession(api, tag, index, targetBytes));
   }
   return {
     open: made[0],
     background: made[1],
     probes: made.slice(2, 5),
-    switchTarget: made[5],
-    held: made.slice(6, NEEDED),
+    switchTarget: made[FIRST_SIZED_INDEX - 1],
+    held: made.slice(FIRST_SIZED_INDEX),
   };
 }
 
-// The scripted reply's text bytes, summed from the NDJSON the stub prints.
-function replyTextBytes(file) {
+// The default "all" view as the server lists it, bench sessions included. The view must hold the live view's rows, so a
+// home of another size fails here, before any scenario runs.
+async function measureView(api) {
+  const rows = await api.json('GET', '/api/sessions/');
+  if (!Array.isArray(rows)) {
+    throw new Error('GET /api/sessions/ did not answer a list of rows');
+  }
+  if (rows.length !== VIEW.rows) {
+    throw new Error(`the default view holds ${rows.length} rows, not the live view's ${VIEW.rows}`);
+  }
+  const sizes = rows.map((row) => Buffer.byteLength(JSON.stringify(row)));
+  return { rows: rows.length, rawRowMedianBytes: percentile(sizes, 0.5) };
+}
+
+// The scripted reply's text bytes: the NDJSON of the first reply piece, summed. Every piece has the same count.
+function replyTextBytes(dir) {
   let bytes = 0;
-  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+  for (const line of fs.readFileSync(path.join(dir, 'reply-0.ndjson'), 'utf8').split('\n')) {
     if (line.length === 0) {
       continue;
     }
@@ -141,7 +198,9 @@ function makeCertificate(dir) {
   return { key: fs.readFileSync(key), cert: fs.readFileSync(cert) };
 }
 
-function buildSide({ args, startedAt, finishedAt, status, error, results, assets, sessions, replyBytes, chromeVersion }) {
+function buildSide({
+  args, startedAt, finishedAt, status, error, results, assets, sessions, view, replyBytes, chromeVersion,
+}) {
   const side = {
     side: args.side,
     commit: args.commit,
@@ -154,14 +213,21 @@ function buildSide({ args, startedAt, finishedAt, status, error, results, assets
     targets: TARGETS,
     taskTreeLoad: TASK_TREE_LOAD,
     repetitions: args.repetitions,
-    reply: { source: REPLY_SOURCE, textBytes: replyBytes },
+    reply: { sources: REPLY_SOURCES, pieces: REPLY_PIECES, textBytes: replyBytes },
     assets: Object.fromEntries([...assets].map(([url, asset]) => [url, asset.sha256])),
+    view: view && { ...view, live: VIEW },
+    liveReadback: LIVE_READBACK,
     sessions: sessions && {
       open: sessions.open.id,
       background: sessions.background.id,
       probes: sessions.probes.map((session) => session.id),
       switchTarget: sessions.switchTarget.id,
       held: sessions.held.map((session) => session.id),
+      sizedTargets: [sessions.switchTarget, ...sessions.held].map(({ id, turns, bootstrapWireBytes }) => ({
+        id,
+        turns,
+        bootstrapWireBytes,
+      })),
     },
     reps: results,
     metrics: {},
@@ -190,6 +256,7 @@ async function main() {
   const ctx = {
     api,
     sessions: null,
+    view: null,
     assets: new Map(),
     replyBytes: 0,
     frontPort: null,
@@ -207,8 +274,9 @@ async function main() {
       throw new Error(`mock-home check exited ${check.status}: the served home is not the mock home`);
     }
     ctx.assets = await loadAssets(args.assets);
-    ctx.replyBytes = replyTextBytes(args.reply);
+    ctx.replyBytes = replyTextBytes(args.replyDir);
     ctx.sessions = await createSessions(api);
+    ctx.view = await measureView(api);
     const serve = new URL(api.base);
     const tls = makeCertificate(path.join(ctx.runDir, `tls-${args.side}`));
     front = await startFront({ ...tls, target: { host: serve.hostname, port: Number(serve.port) } });
@@ -238,6 +306,7 @@ async function main() {
     results,
     assets: ctx.assets,
     sessions: ctx.sessions,
+    view: ctx.view,
     replyBytes: ctx.replyBytes,
     chromeVersion: ctx.chromeVersion,
   });

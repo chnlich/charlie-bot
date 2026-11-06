@@ -133,14 +133,17 @@ if [[ $side != after ]]; then
   [[ -x $before_bin ]] || die 1 "the before build did not produce charliebot-server"
 fi
 
+# The mock home holds the view's rows that the bench's own sessions do not: VIEW.rows less BENCH_SESSIONS, each one a
+# session of the mock's active corpus, with a task spec sized to the live view's rows (the view shape).
 mock_version=$("$mock_bin" version)
-mock_home="$HOME/improve/mock-home/$mock_version"
+mock_sessions=$(node -e 'import(process.argv[1]).then((profile) => process.stdout.write(String(profile.VIEW.rows - profile.BENCH_SESSIONS)))' "file://$BENCH_DIR/profile.mjs")
+mock_home="$HOME/improve/mock-home/$mock_version-view-$mock_sessions"
 if [[ ! -d $mock_home ]]; then
-  echo "poor-network: generating the mock home at $mock_home"
-  "$mock_bin" generate "$mock_home"
+  echo "poor-network: generating the view home of $mock_sessions sessions at $mock_home"
+  "$mock_bin" generate "$mock_home" --sessions "$mock_sessions" --shape view
 fi
 
-node "$BENCH_DIR/reply.mjs" "$tree" "$run_dir/reply.ndjson"
+node "$BENCH_DIR/reply.mjs" "$tree" "$run_dir/replies"
 
 # A bench-owned home for the trial: its config names a stand-in endpoint the stub never calls, and holds no credential,
 # so the trial copies no live key and reaches no live model. The trial reads only this option's api_base; it writes its
@@ -166,13 +169,13 @@ run_side() {
   [[ $name == after ]] && label=$after_label
   export CHARLIEBOT_HOME=$live_home
   export CHARLIEBOT_RELEASE_RUN_DIR="$run_dir/evidence-$name"
-  export POOR_NETWORK_REPLY_FILE="$run_dir/reply.ndjson"
+  export POOR_NETWORK_REPLY_DIR="$run_dir/replies"
   set +e
   systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0 --unit="pn-$run_id-$name" \
     "$trial_script" --serve --in-caller-scope --tree-root "$trial_root" --seed-home "$mock_home" \
     "$commit" "$server_bin" -- \
     node "$BENCH_DIR/bench.mjs" --side "$name" --out "$run_dir/$name.json" \
-      --mock-home "$mock_home" --mock-home-bin "$mock_bin" --reply "$run_dir/reply.ndjson" \
+      --mock-home "$mock_home" --mock-home-bin "$mock_bin" --reply-dir "$run_dir/replies" \
       --assets "$POOR_NETWORK_ASSETS" --commit "$label" \
       --repetitions "$repetitions" --scenarios "$scenarios"
   trial_status=$?

@@ -77,13 +77,19 @@ device's `LIVE_READBACK.status200Share`, and the bytes the tab received per 200 
 ## Status churn
 
 The status body of a live tab changes on its own: the live device answered 200 to 72% of about 20 polls a minute, each
-answer about 5.8 KB, so roughly 14 answers a minute differed from the one before. One row's own activity facts are what
-move: `thinking_since`, `has_running_tasks` and `work_state` flip together when a row starts and ends a turn. The bench
-models that with one row that alternates between a held turn and idle at `STATUS_CHURN`'s rate (14 flips per 75 s
-window, 11.2 flips a minute), which is one changed answer per poll interval of about 5 s. The background scenarios start
-the churn with the task-tree driver and stop it with the load: the Workspace's churn row is the bench's twelfth session,
-the starred view stars that session, and the Threads view churns one of its thread roots. The model's inputs are the
-live readback's numbers, and it runs on both sides, so the before side shows the churn the after side also meets.
+answer about 5.8 KB, so roughly 14 answers a minute differed from the one before. Two kinds of change make that churn,
+and both are one row's own state at `STATUS_CHURN`'s rates, per 75 s window:
+
+- a held turn starts and is cancelled (14 flips), moving `thinking_since`, `has_running_tasks` and `work_state`. The
+  server broadcasts each change, so the page polls at once and the change also costs an extra poll;
+- a delayed trigger appears on the row and is cancelled (18 flips), moving `has_pending_trigger`,
+  `pending_trigger_count` and `next_trigger_at`. Nothing broadcasts it, so the page meets it on its next poll — the poll
+  whose body a delta now keeps small.
+
+The background scenarios start both with the task-tree driver and stop them with the load: the Workspace's churn row is
+the bench's twelfth session, the starred view stars that session, and the Threads view churns one of its thread roots.
+The pair is tuned so that the background tab, which polls about 26 times a minute while the held turn keeps its cadence
+at 3 s, answers a changed body at the live device's share; the report prints the measured share beside the readback's.
 
 ## Other sidebar views
 
@@ -277,4 +283,5 @@ port. Two tests drive the shaping proxy itself: a route reaches its own server o
 refuses every other authority, and a scheduled reset window resets the open tunnels when it starts. The report's tests
 check the calibration gate: it reads the during-refresh holds, not the scored scenario's random-phase holds, and only
 the reference before side's line carries a verdict. The chrome tests check the browser teardown: a closed browser
-fails its unanswered DevTools calls and drops its pipe handles.
+fails its unanswered DevTools calls and drops its pipe handles. The scenario tests check the status counting against
+synthetic poll records of both answer shapes: the baseline's whole row map and the change's `{token, rows, gone}`.

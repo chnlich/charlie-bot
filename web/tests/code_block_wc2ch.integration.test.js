@@ -35,6 +35,20 @@ function unwrapForBaseline(context) {
   context.wrapWideCharsCache.clear();
 }
 
+// A shaped hljs: escapes like the real highlight.js and wraps `const` in a
+// keyword span, so wrap-inside-token nesting is exercised on hljs-shaped
+// bytes.
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\bconst\b/g, '<span class="hljs-keyword">const</span>');
+}
+const shapedHljs = {
+  getLanguage: () => null,
+  highlightAuto: (s) => ({ value: esc(s) }),
+  highlight: (s) => ({ value: esc(s) }),
+};
+
 test('markdown-renderer.js parses whole with the inline W/F range table', async () => {
   const context = await loadRendererContext();
   assert.equal(typeof context.wrapWideChars, 'function');

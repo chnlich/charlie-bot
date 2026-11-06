@@ -116,12 +116,26 @@ pub struct Home {
   running: Arc<Mutex<Vec<String>>>,
 }
 
+#[derive(Clone, Copy)]
+enum PackageSet {
+  Full,
+  StatusOnly,
+}
+
 impl Home {
   pub fn new() -> Self {
-    Self::with_config("")
+    Self::build("", PackageSet::Full)
   }
 
   pub fn with_config(config_yaml: &str) -> Self {
+    Self::build(config_yaml, PackageSet::Full)
+  }
+
+  pub fn status_only() -> Self {
+    Self::build("", PackageSet::StatusOnly)
+  }
+
+  fn build(config_yaml: &str, packages: PackageSet) -> Self {
     let running = Arc::new(Mutex::new(Vec::new()));
     let dir = tempfile::tempdir().expect("temporary directory exists");
     fs::write(dir.path().join("config.yaml"), config_yaml).expect("the synthetic config writes");
@@ -129,15 +143,19 @@ impl Home {
       .expect("the synthetic access key writes");
     write_approval_policy_table(dir.path(), APPROVAL_POLICY_TABLE);
     let mut registry = Registry::new();
-    registry
-      .register_package("features.user_text_checks", charliebot_user_text_checks::register)
-      .expect("the user text checks package registers");
+    if matches!(packages, PackageSet::Full) {
+      registry
+        .register_package("features.user_text_checks", charliebot_user_text_checks::register)
+        .expect("the user text checks package registers");
+    }
     registry.register_package("features.web_reply", crate::register).expect("the web reply package registers");
-    registry.register_package("tests.origins", register_origins).expect("the origin slots register");
-    registry.register_package("tests.plans", register_plans).expect("the plan registry reader registers");
-    registry
-      .register_package("tests.derived_waiting", register_derived_waiting)
-      .expect("the derived Waiting on you reader registers");
+    if matches!(packages, PackageSet::Full) {
+      registry.register_package("tests.origins", register_origins).expect("the origin slots register");
+      registry.register_package("tests.plans", register_plans).expect("the plan registry reader registers");
+      registry
+        .register_package("tests.derived_waiting", register_derived_waiting)
+        .expect("the derived Waiting on you reader registers");
+    }
     let registry = Arc::new(registry);
     let mut loaded = registry.load_config(dir.path()).expect("an empty home loads with the defaults");
     // Task creation takes the first configured backend when a create names none.

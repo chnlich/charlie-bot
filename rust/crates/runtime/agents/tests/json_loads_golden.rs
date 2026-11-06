@@ -64,6 +64,11 @@ struct RecordedCase<'a> {
 }
 
 #[derive(Deserialize)]
+struct RecordedExpected<'a> {
+  expected: RecordedOutcome<'a>,
+}
+
+#[derive(Deserialize)]
 struct RecordedRequest {
   mode: String,
   input: String,
@@ -81,12 +86,13 @@ struct RecordedOutcome<'a> {
 fn json_loads_matches_recorded_over_a_sample_of_the_corpus() {
   let fixture: RecordedFixture = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture.base_commit, "d4021ce3993d7e36b2709f00caf578e1f8541407");
-  let records: Vec<RecordedCase> = serde_json::from_str(fixture.cases.get()).unwrap();
+  let records: Vec<&RawValue> = serde_json::from_str(fixture.cases.get()).unwrap();
   assert!(records.len() > 9000, "the corpus holds {} inputs", records.len());
 
   let mut mismatches = Vec::new();
   let mut sampled = 0;
-  for record in records.iter().step_by(SAMPLE_STEP) {
+  for raw_record in records.iter().step_by(SAMPLE_STEP) {
+    let record: RecordedCase = serde_json::from_str(raw_record.get()).unwrap();
     sampled += 1;
     let request: RecordedRequest = serde_json::from_str(record.request.get()).unwrap();
     let mode = request.mode.as_str();
@@ -114,22 +120,27 @@ fn json_loads_matches_recorded_over_a_sample_of_the_corpus() {
     mismatches[..mismatches.len().min(20)].join("\n")
   );
 
-  let python_errors: Vec<&str> = records
-    .iter()
-    .filter(|record| record.expected.outcome.as_ref() == "error")
-    .filter_map(|record| record.expected.text.as_deref())
-    .collect();
-  for message in REQUIRED_MESSAGES {
-    assert!(
-      python_errors.iter().any(|text| text.starts_with(message) || text.contains(&format!(": {message}"))),
-      "no corpus input reaches {message:?}"
-    );
+  let mut found_messages = [false; REQUIRED_MESSAGES.len()];
+  let mut found_codec_reasons = [false; REQUIRED_CODEC_REASONS.len()];
+  for raw_record in &records {
+    let record: RecordedExpected = serde_json::from_str(raw_record.get()).unwrap();
+    if record.expected.outcome == "error" {
+      if let Some(text) = record.expected.text.as_deref() {
+        for (index, message) in REQUIRED_MESSAGES.iter().enumerate() {
+          found_messages[index] |= text.starts_with(message)
+            || text.match_indices(": ").any(|(offset, _)| text[offset + 2..].starts_with(message));
+        }
+        for (index, reason) in REQUIRED_CODEC_REASONS.iter().enumerate() {
+          found_codec_reasons[index] |= text.contains(reason);
+        }
+      }
+    }
   }
-  for reason in REQUIRED_CODEC_REASONS {
-    assert!(
-      python_errors.iter().any(|text| text.contains(reason)),
-      "no corpus input reaches the codec reason {reason:?}"
-    );
+  for (message, found) in REQUIRED_MESSAGES.iter().zip(found_messages) {
+    assert!(found, "no corpus input reaches {message:?}");
+  }
+  for (reason, found) in REQUIRED_CODEC_REASONS.iter().zip(found_codec_reasons) {
+    assert!(found, "no corpus input reaches the codec reason {reason:?}");
   }
 }
 

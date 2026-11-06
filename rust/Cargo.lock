@@ -377,7 +377,6 @@ name = "charliebot-anthropic-compatible"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "charliebot-agents",
  "charliebot-claude-code",
  "charliebot-core",
  "charliebot-registry",
@@ -1119,7 +1118,6 @@ dependencies = [
  "anyhow",
  "axum",
  "bstr",
- "charliebot-agents",
  "charliebot-claude-code",
  "charliebot-compat",
  "charliebot-core",

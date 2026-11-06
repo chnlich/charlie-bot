@@ -2,12 +2,12 @@
 //! credential's access key and the option's model.
 
 use anyhow::bail;
+use charliebot_core::cgroup::SessionCgroupConfig;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::credentials;
 use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 
 use super::openai_compatible_claude;
-use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_claude_code::factory::{launch_config_dir, launch_with_kwargs};
 
 pub struct OpenAiCompatibleFactory;

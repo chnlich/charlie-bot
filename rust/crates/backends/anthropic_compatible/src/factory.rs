@@ -1,12 +1,12 @@
 //! Build Claude Code for an Anthropic-compatible endpoint.
 
 use anyhow::bail;
+use charliebot_core::cgroup::SessionCgroupConfig;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::credentials;
 use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 
 use super::options::CcAnthropicCompatibleOption;
-use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_claude_code::AnthropicEndpointBackend;
 use charliebot_claude_code::factory::{launch_config_dir, launch_with_kwargs};
 

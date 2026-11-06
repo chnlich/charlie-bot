@@ -249,15 +249,15 @@ pub struct Home {
 impl Home {
   /// A home whose config allows `ALLOWED_USER` and whose credentials hold `TEST_TOKEN` when `token`.
   pub async fn new(token: bool) -> Self {
-    Self::create(token, true).await
+    Self::create_home(token, true).await
   }
 
   /// A home for listener cases with no followed sessions or task dispatch.
   pub async fn new_without_thread_runtime(token: bool) -> Self {
-    Self::create(token, false).await
+    Self::create_home(token, false).await
   }
 
-  async fn create(token: bool, install_thread_runtime: bool) -> Self {
+  async fn create_home(token: bool, install_thread_runtime: bool) -> Self {
     let dir = tempfile::tempdir().expect("temporary directory exists");
     fs::write(
       dir.path().join(CONFIG_FILENAME),

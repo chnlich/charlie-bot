@@ -101,7 +101,7 @@ fn launcher_tee_outlives_sigint_and_records_the_exit_line() {
 #[test]
 #[ignore = "integration"]
 fn the_launcher_group_ends_with_a_killed_test_process() {
-  let mut held_test = hold::HeldTest::start("hold_the_launcher_group_for_the_kill_check");
+  let mut held_test = hold::HeldTest::start("hold_the_launcher_group_subprocess_entry");
   let text = held_test.recorded();
   let field = |name: &str| {
     text
@@ -132,10 +132,10 @@ fn the_launcher_group_ends_with_a_killed_test_process() {
 }
 
 /// Started by `the_launcher_group_ends_with_a_killed_test_process` in a second copy of this binary. Without
-/// `LEAK_CHECK_HOLD` it does nothing, so an ordinary run of this file passes it.
+/// `LEAK_CHECK_HOLD` it does nothing; the `#[ignore]` keeps an ordinary run from holding.
 #[test]
-#[ignore = "integration"]
-fn hold_the_launcher_group_for_the_kill_check() {
+#[ignore = "held by a kill check in a second copy of this binary"]
+fn hold_the_launcher_group_subprocess_entry() {
   let Some(marker) = hold::marker() else { return };
   let sandbox = Sandbox::new();
   sandbox.install_systemd_stubs();

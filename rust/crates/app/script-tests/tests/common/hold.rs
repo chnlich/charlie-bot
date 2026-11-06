@@ -55,7 +55,7 @@ impl HeldTest {
     let log = sandbox.root().join("held-test.log");
     let log_file = fs::File::create(&log).expect("the held test's output file");
     let mut command = harness::command(env::current_exe().expect("the test binary"), &sandbox.env());
-    command.args(["--exact", hold_test, "--test-threads=1"]).env(HOLD, &marker);
+    command.args(["--exact", hold_test, "--ignored", "--test-threads=1"]).env(HOLD, &marker);
     command
       .stdin(Stdio::null())
       .stdout(Stdio::from(log_file.try_clone().expect("a second log handle")))

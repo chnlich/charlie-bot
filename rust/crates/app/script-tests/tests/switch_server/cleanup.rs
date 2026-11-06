@@ -43,7 +43,7 @@ fn a_panicking_version_wait_stops_the_stand_in_server() {
 #[test]
 #[ignore = "integration"]
 fn the_stand_in_server_ends_with_a_killed_test_process() {
-  let mut held_test = hold::HeldTest::start("cleanup::hold_a_stand_in_server_for_the_kill_check");
+  let mut held_test = hold::HeldTest::start("cleanup::hold_a_stand_in_server_subprocess_entry");
   let held = Held::read(&held_test.recorded());
   assert!(held.pids.iter().all(|pid| !hold::has_ended(*pid)), "recorded pids do not run: {:?}", held.pids);
   held_test.kill_and_reap();
@@ -62,7 +62,7 @@ fn the_stand_in_server_ends_with_a_killed_test_process() {
 #[test]
 #[ignore = "integration"]
 fn the_pane_server_ends_with_a_killed_test_process() {
-  let mut held_test = hold::HeldTest::start("cleanup::hold_a_pane_for_the_kill_check");
+  let mut held_test = hold::HeldTest::start("cleanup::hold_a_pane_subprocess_entry");
   let held = Held::read(&held_test.recorded());
   assert!(held.pids.iter().all(|pid| !hold::has_ended(*pid)), "recorded pids do not run: {:?}", held.pids);
   held_test.kill_and_reap();
@@ -78,10 +78,10 @@ fn the_pane_server_ends_with_a_killed_test_process() {
 }
 
 /// Started by `the_stand_in_server_ends_with_a_killed_test_process` in a second copy of this binary. Without
-/// `LEAK_CHECK_HOLD` it does nothing, so an ordinary run of this file passes it.
+/// `LEAK_CHECK_HOLD` it does nothing; the `#[ignore]` keeps an ordinary run from holding.
 #[test]
-#[ignore = "integration"]
-fn hold_a_stand_in_server_for_the_kill_check() {
+#[ignore = "held by a kill check in a second copy of this binary"]
+fn hold_a_stand_in_server_subprocess_entry() {
   let Some(marker) = hold::marker() else { return };
   let world = World::new();
   let server = world.start_fake_server(&[]);
@@ -90,10 +90,10 @@ fn hold_a_stand_in_server_for_the_kill_check() {
 }
 
 /// Started by `the_pane_server_ends_with_a_killed_test_process` in a second copy of this binary. Without
-/// `LEAK_CHECK_HOLD` it does nothing, so an ordinary run of this file passes it.
+/// `LEAK_CHECK_HOLD` it does nothing; the `#[ignore]` keeps an ordinary run from holding.
 #[test]
-#[ignore = "integration"]
-fn hold_a_pane_for_the_kill_check() {
+#[ignore = "held by a kill check in a second copy of this binary"]
+fn hold_a_pane_subprocess_entry() {
   let Some(marker) = hold::marker() else { return };
   let sandbox = Sandbox::new();
   let releases = sandbox.dir("releases");

@@ -36,6 +36,12 @@ jobs:
       - name: Reject Python
         run: dev/check-no-python.sh
 
+      - name: Install integration selector dependencies
+        run: npm ci --prefix dev/integration-selection --ignore-scripts --no-audit --no-fund
+
+      - name: Test integration selector
+        run: node --test dev/integration-selection/select.test.mjs
+
       # The suites that parse JavaScript (sucrase) or build Tailwind resolve devDependencies from node_modules;
       # installing up front keeps the installs the suites run themselves at no-op speed.
       - name: Install frontend dependencies

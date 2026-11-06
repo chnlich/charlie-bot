@@ -6,8 +6,8 @@ import {
   selectIntegrationTests,
 } from './select.mjs';
 
-function mapping(source, cratePackages = []) {
-  return { ...parseIntegrationPaths(source), cratePackages };
+function mapping(source, cratePackages = [], trackedFiles = []) {
+  return { ...parseIntegrationPaths(source), cratePackages, trackedFiles };
 }
 
 test('workspace files select all before crate and mapped-file rules', () => {
@@ -45,7 +45,7 @@ test('a crate file also selects the mapping entries that match it', () => {
   assert.equal(selection.decisions[0].kind, 'crate');
 });
 
-test('mapped files select their Rust and Node entries', () => {
+test('a mapped file selects its Rust filter and the tracked node integration files its glob matches', () => {
   const parsed = mapping(
     [
       '[[entry]]',
@@ -54,37 +54,43 @@ test('mapped files select their Rust and Node entries', () => {
       'node = ["web/tests/*.integration.test.mjs"]',
       '',
     ].join('\n'),
+    [],
+    ['web/tests/a.integration.test.mjs', 'web/tests/a.test.mjs', 'web/tests/b.integration.test.js'],
   );
   const selection = selectIntegrationTests(['scripts/switch-server.sh'], parsed);
 
   assert.equal(selection.rustFilter, 'binary_id(charliebot-script-tests::switch_server)');
-  assert.deepEqual(selection.nodePatterns, ['web/tests/*.integration.test.mjs']);
+  assert.deepEqual(selection.nodeFiles, ['web/tests/a.integration.test.mjs']);
   assert.equal(selection.decisions[0].kind, 'mapped');
 });
 
-test('an unmapped file selects all and appears in the summary', () => {
+test('an unmapped file selects all and every node integration file, and appears in the summary', () => {
   const selection = selectIntegrationTests(
     ['LICENSE', 'NOTICE'],
-    mapping('[[entry]]\npaths = ["docs/**"]\nnone = true\n'),
+    mapping('[[entry]]\npaths = ["docs/**"]\nnone = true\n', [], ['web/tests/a.integration.test.js', 'web/tests/a.test.js']),
   );
   const summary = renderSelectionSummary(selection);
 
   assert.equal(selection.rustFilter, 'all()');
   assert.deepEqual(selection.allFiles.map(({ file }) => file), ['LICENSE', 'NOTICE']);
+  assert.deepEqual(selection.nodeFiles, ['web/tests/a.integration.test.js']);
   assert.match(summary, /`LICENSE` \(no mapping entry matched\)/);
   assert.match(summary, /`NOTICE` \(no mapping entry matched\)/);
+  assert.match(summary, /Node selection \(1\): `web\/tests\/a\.integration\.test\.js`/);
 });
 
-test('none entries produce an empty selection and explain that no integration tests are touched', () => {
+test('none entries produce an empty selection and say that no integration tests are touched', () => {
   const selection = selectIntegrationTests(
     ['docs/README.md'],
-    mapping('[[entry]]\npaths = ["docs/**"]\nnone = true\n'),
+    mapping('[[entry]]\npaths = ["docs/**"]\nnone = true\n', [], ['web/tests/a.integration.test.js']),
   );
   const summary = renderSelectionSummary(selection);
 
   assert.equal(selection.rustFilter, null);
   assert.equal(selection.all, false);
+  assert.deepEqual(selection.nodeFiles, []);
   assert.match(summary, /`docs\/README.md`/);
+  assert.match(summary, /This change touches no integration tests\./);
 });
 
 test('unknown mapping fields fail with their entry number', () => {

@@ -3,6 +3,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
+import TOML from '@iarna/toml';
 import {
   parseIntegrationPaths,
   renderSelectionSummary,
@@ -19,14 +20,18 @@ function main() {
   const reference = requiredEnvironment('GITHUB_REF');
   const mappingPath = path.join(repositoryRoot, 'dev/integration-paths.toml');
   const mapping = parseIntegrationPaths(readFileSync(mappingPath, 'utf8'));
+  mapping.trackedFiles = trackedFiles();
   let selection;
 
   if ((eventName === 'push' || eventName === 'workflow_dispatch') && reference === 'refs/heads/main') {
-    selection = selectAllIntegrationTests(eventName === 'push' ? 'push to main' : 'workflow_dispatch on main');
+    selection = selectAllIntegrationTests(
+      eventName === 'push' ? 'push to main' : 'workflow_dispatch on main',
+      mapping.trackedFiles,
+    );
   } else if (eventName === 'pull_request' || eventName === 'workflow_dispatch') {
     const head = eventName === 'pull_request' ? pullRequestHead() : requiredEnvironment('GITHUB_SHA');
     const changedFiles = changedFilesFromMain(head);
-    mapping.cratePackages = workspaceCratePackages();
+    mapping.cratePackages = workspaceCratePackages(mapping.trackedFiles);
     selection = selectIntegrationTests(changedFiles, mapping);
   } else {
     throw new Error(`unsupported Integration event ${eventName} on ${reference}`);
@@ -35,7 +40,10 @@ function main() {
   const summary = renderSelectionSummary(selection);
   process.stdout.write(summary);
   appendFileSync(requiredEnvironment('GITHUB_STEP_SUMMARY'), summary);
-  appendFileSync(requiredEnvironment('GITHUB_OUTPUT'), `rust_filter=${selection.rustFilter ?? ''}\n`);
+  appendFileSync(
+    requiredEnvironment('GITHUB_OUTPUT'),
+    `rust_filter=${selection.rustFilter ?? ''}\nnode_files=${nodeFileOutput(selection.nodeFiles)}\n`,
+  );
 }
 
 function pullRequestHead() {
@@ -59,20 +67,28 @@ function changedFilesFromMain(head) {
   return paths.split('\0').filter((file) => file !== '').sort();
 }
 
-function workspaceCratePackages() {
-  const output = runCommand(
-    'cargo',
-    ['metadata', '--manifest-path', 'rust/Cargo.toml', '--format-version', '1', '--no-deps', '--locked'],
-    repositoryRoot,
-  );
-  const metadata = JSON.parse(output);
-  return metadata.packages.flatMap((packageMetadata) => {
-    const directory = path.relative(repositoryRoot, path.dirname(packageMetadata.manifest_path));
-    const relativeDirectory = directory.split(path.sep).join('/');
-    return relativeDirectory.startsWith('rust/crates/')
-      ? [{ path: relativeDirectory, name: packageMetadata.name }]
-      : [];
-  });
+function trackedFiles() {
+  return runCommand('git', ['ls-files', '-z'], repositoryRoot).split('\0').filter((file) => file !== '');
+}
+
+// The workspace crates, read from the manifests the checkout tracks under rust/crates. Each crate's package
+// name is literal in its manifest, so no cargo run is needed: a node-only job has no Rust toolchain.
+function workspaceCratePackages(files) {
+  return files
+    .filter((file) => /^rust\/crates\/.+\/Cargo\.toml$/.test(file))
+    .map((file) => {
+      const manifest = TOML.parse(readFileSync(path.join(repositoryRoot, file), 'utf8'));
+      if (typeof manifest.package?.name !== 'string') throw new Error(`${file} has no literal [package] name`);
+      return { path: path.dirname(file), name: manifest.package.name };
+    });
+}
+
+// The job reads this list as whitespace-separated words, so a file name with whitespace would split in two.
+function nodeFileOutput(files) {
+  for (const file of files) {
+    if (/\s/.test(file)) throw new Error(`node integration file name contains whitespace: ${JSON.stringify(file)}`);
+  }
+  return files.join(' ');
 }
 
 function runCommand(command, args, cwd) {

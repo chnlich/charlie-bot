@@ -74,3 +74,43 @@ jobs:
       - name: Check for leaked script-test processes
         if: always()
         run: dev/check-leaked-script-test-processes.sh
+
+  node-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: dev/integration-selection/package-lock.json
+
+      - name: Install selector dependencies
+        run: npm ci --prefix dev/integration-selection --ignore-scripts --no-audit --no-fund
+
+      - name: Select integration tests
+        id: selection
+        run: node dev/integration-selection/run-selection.mjs
+
+      # The suites that parse JavaScript (sucrase) or build Tailwind resolve devDependencies from web/node_modules.
+      - name: Install frontend dependencies
+        if: steps.selection.outputs.node_files != ''
+        working-directory: web
+        run: npm install --no-audit --no-fund
+
+      - name: Run selected node integration tests
+        if: steps.selection.outputs.node_files != ''
+        env:
+          NODE_INTEGRATION_FILES: ${{ steps.selection.outputs.node_files }}
+        run: |
+          read -r -a files <<< "$NODE_INTEGRATION_FILES"
+          timeout 780 node --test "${files[@]}"

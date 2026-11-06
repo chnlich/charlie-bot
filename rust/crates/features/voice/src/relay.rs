@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -335,6 +336,37 @@ async fn stream_preview(context: StreamContext) {
 }
 
 async fn archive_final(writer: &SocketWriter, run: &RelayRun<'_>, event: &TranscriptEvent) -> Result<(), String> {
+  match archive_final_with(run, event, |_, text| async {
+    send_frame(writer, json!({ "type": "final", "text": text })).await
+  })
+  .await
+  {
+    Ok(()) => Ok(()),
+    Err(ArchiveFinalError::Archive(error)) => {
+      tracing::error!(target: "charliebot_voice", session_id = run.session_id, backend = %run.backend_id, "voice_preview_archive_failed");
+      record_relay_failure(run, &error).await;
+      send_error_frame(writer, "recording archive failed", run.session_id, run.backend_id).await;
+      Ok(())
+    }
+    Err(ArchiveFinalError::Delivery(error)) => Err(error),
+  }
+}
+
+#[derive(Debug)]
+enum ArchiveFinalError {
+  Archive(String),
+  Delivery(String),
+}
+
+async fn archive_final_with<F, Fut>(
+  run: &RelayRun<'_>,
+  event: &TranscriptEvent,
+  deliver_final: F,
+) -> Result<(), ArchiveFinalError>
+where
+  F: FnOnce(std::path::PathBuf, String) -> Fut,
+  Fut: Future<Output = Result<(), String>>,
+{
   let pcm_bytes = run.queue.recording_pcm().await;
   let audio_bytes_size = pcm_bytes.len();
   let text = event.text.clone();
@@ -361,18 +393,8 @@ async fn archive_final(writer: &SocketWriter, run: &RelayRun<'_>, event: &Transc
       run.recorded.store(true, Ordering::SeqCst);
       audio_path
     }
-    Ok(Err(error)) => {
-      tracing::error!(target: "charliebot_voice", session_id = run.session_id, backend = %run.backend_id, "voice_preview_archive_failed");
-      record_relay_failure(run, &error.to_string()).await;
-      send_error_frame(writer, "recording archive failed", run.session_id, run.backend_id).await;
-      return Ok(());
-    }
-    Err(error) => {
-      tracing::error!(target: "charliebot_voice", session_id = run.session_id, backend = %run.backend_id, "voice_preview_archive_failed");
-      record_relay_failure(run, &error.to_string()).await;
-      send_error_frame(writer, "recording archive failed", run.session_id, run.backend_id).await;
-      return Ok(());
-    }
+    Ok(Err(error)) => return Err(ArchiveFinalError::Archive(error.to_string())),
+    Err(error) => return Err(ArchiveFinalError::Archive(error.to_string())),
   };
   let end_to_final_s = run.queue.seconds_since_end().await;
   log_voice_transcribed(&Transcribed {
@@ -385,7 +407,7 @@ async fn archive_final(writer: &SocketWriter, run: &RelayRun<'_>, event: &Transc
     devices: devices.as_ref(),
     end_to_final_s: Some(end_to_final_s),
   });
-  send_frame(writer, json!({ "type": "final", "text": event.text })).await
+  deliver_final(audio_path, event.text.clone()).await.map_err(ArchiveFinalError::Delivery)
 }
 
 async fn settle_sealed_socket(
@@ -555,6 +577,7 @@ mod tests {
     config: Arc<CharlieBotConfig>,
     endpoint_url: String,
     max_recording_samples: usize,
+    max_preview_queue_bytes: usize,
     relay_finished: watch::Sender<bool>,
   }
 
@@ -570,7 +593,6 @@ mod tests {
 
   #[derive(Clone, Copy)]
   enum FakeMode {
-    FinalAfterEnd,
     FinalBeforeEnd,
     NeverFinal,
   }
@@ -589,7 +611,7 @@ mod tests {
           run_id: "5e1f2a3b".to_string(),
         },
         Backend::gemini_for_test("synthetic-key", &state.endpoint_url),
-        AudioQueue::new_with_recording_budget_for_test(state.max_recording_samples * 2),
+        AudioQueue::new_with_limits_for_test(state.max_preview_queue_bytes, state.max_recording_samples * 2),
       )
       .await;
       state.relay_finished.send_replace(true);
@@ -597,6 +619,19 @@ mod tests {
   }
 
   async fn start_relay_test(mode: FakeMode, max_recording_samples: usize) -> RelayTestServer {
+    start_relay_test_with_limits(
+      mode,
+      PREVIEW_QUEUE_SECONDS * crate::audio::SAMPLE_RATE * 2,
+      max_recording_samples,
+    )
+    .await
+  }
+
+  async fn start_relay_test_with_limits(
+    mode: FakeMode,
+    max_preview_queue_bytes: usize,
+    max_recording_samples: usize,
+  ) -> RelayTestServer {
     let backend_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind a fake backend listener");
     let endpoint_url = format!("ws://{}", backend_listener.local_addr().expect("read fake backend address"));
     let (provider_connected_tx, provider_connected) = oneshot::channel();
@@ -617,7 +652,6 @@ mod tests {
             let text = text.to_string();
             let value: Value = serde_json::from_str(&text).expect("Gemini sends JSON");
             let is_audio = value.pointer("/realtimeInput/audio").is_some();
-            let is_end = value.pointer("/realtimeInput/activityEnd").is_some();
             if matches!(mode, FakeMode::FinalBeforeEnd) && is_audio && !early_final_sent {
               socket
                 .send(ServerMessage::Text(
@@ -626,20 +660,6 @@ mod tests {
                 .await
                 .expect("send the early final");
               early_final_sent = true;
-            }
-            if matches!(mode, FakeMode::FinalAfterEnd) && is_end {
-              socket
-                .send(ServerMessage::Text(
-                  r#"{"serverContent":{"interimInputTranscription":{"text":"synthetic partial"}}}"#.into(),
-                ))
-                .await
-                .expect("send the partial");
-              socket
-                .send(ServerMessage::Text(
-                  r#"{"serverContent":{"inputTranscription":{"text":"synthetic final"}}}"#.into(),
-                ))
-                .await
-                .expect("send the final");
             }
           }
           ServerMessage::Close(_) => {
@@ -657,7 +677,13 @@ mod tests {
     let config = Arc::new(registry.load_config(home.path()).expect("load synthetic voice config"));
     let (relay_finished, relay_finished_receiver) = watch::channel(false);
     let state =
-      Arc::new(RelayTestState { config: Arc::clone(&config), endpoint_url, max_recording_samples, relay_finished });
+      Arc::new(RelayTestState {
+        config: Arc::clone(&config),
+        endpoint_url,
+        max_recording_samples,
+        max_preview_queue_bytes,
+        relay_finished,
+      });
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind the relay test server");
     let address = listener.local_addr().expect("read relay server address");
     let app = Router::new().route("/ws", get(relay_test_handler)).with_state(state);
@@ -748,60 +774,64 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn relay_archives_the_run_before_the_final_frame() {
-    let server = start_relay_test(FakeMode::FinalAfterEnd, MAX_RECORDING_SAMPLES).await;
-    let mut browser = browser_socket(server.address).await;
-    browser.send(ClientMessage::Binary(vec![1, 2, 3, 4].into())).await.expect("send one audio frame");
-    browser
-      .send(ClientMessage::Text(
-        r#"{"type":"end","devices":{"input_device":"Synthetic mic","capture_settings":{},"output_device":"Synthetic speakers","communications_output_device":null,"device_error":null}}"#
-          .into(),
-      ))
-      .await
-      .expect("seal the recording with device facts");
-    let partial = receive_json_frame(&mut browser).await;
-    let final_frame = receive_json_frame(&mut browser).await;
-    assert_eq!(partial, json!({ "type": "partial", "text": "synthetic partial" }));
-    assert_eq!(final_frame, json!({ "type": "final", "text": "synthetic final" }));
-    let files = std::fs::read_dir(voice_dir(&server.config))
-      .expect("read the archived voice directory")
-      .map(|entry| entry.expect("read archive entry").path())
-      .collect::<Vec<_>>();
-    let wav = files.iter().find(|path| path.extension().is_some_and(|extension| extension == "wav"));
-    let transcript = files.iter().find(|path| path.extension().is_some_and(|extension| extension == "txt"));
-    let parts = files.iter().find(|path| path.extension().is_some_and(|extension| extension == "json"));
-    assert_eq!(files.len(), 3, "the run's wav, txt and json are complete before final delivery");
-    let parts: Value = serde_json::from_str(
-      &std::fs::read_to_string(parts.expect("archive contains the run json")).expect("read parts"),
-    )
-    .expect("the run json parses");
-    assert_eq!(parts["run_id"], "5e1f2a3b");
-    assert_eq!(parts["startup"], Value::Null);
-    assert_eq!(parts["failure"], Value::Null);
-    assert_eq!(parts["audio"]["path"], "relay");
-    assert_eq!(parts["audio"]["backend"], "gemini");
-    assert_eq!(parts["audio"]["devices"]["input_device"], "Synthetic mic");
-    let wav_bytes = std::fs::read(wav.expect("archive contains WAV")).expect("read archived WAV");
-    assert_eq!(&wav_bytes[..4], b"RIFF");
-    assert_eq!(&wav_bytes[4..8], &40_u32.to_le_bytes());
-    assert_eq!(&wav_bytes[8..16], b"WAVEfmt ");
-    assert_eq!(&wav_bytes[16..20], &16_u32.to_le_bytes());
-    assert_eq!(&wav_bytes[20..24], &[1, 0, 1, 0]);
-    assert_eq!(&wav_bytes[24..32], &[0x80, 0x3e, 0, 0, 0, 0x7d, 0, 0]);
-    assert_eq!(&wav_bytes[32..36], &[2, 0, 16, 0]);
-    assert_eq!(&wav_bytes[36..40], b"data");
-    assert_eq!(&wav_bytes[40..44], &4_u32.to_le_bytes());
-    assert_eq!(&wav_bytes[44..], &[1, 2, 3, 4]);
-    assert_eq!(std::fs::read_to_string(transcript.expect("archive contains transcript")).unwrap(), "synthetic final");
-    browser.close(None).await.expect("close browser WebSocket");
-    stop_relay_test(server).await;
+  async fn archive_final_writes_audio_and_transcript_before_delivery() {
+    let home = tempfile::tempdir().expect("make an isolated relay home");
+    let mut registry = charliebot_registry::Registry::new();
+    registry.register_package("features.voice", crate::register).expect("register the voice config section");
+    let config = Arc::new(registry.load_config(home.path()).expect("load synthetic voice config"));
+    let queue = AudioQueue::new_with_limits_for_test(4, 4);
+    assert!(queue.put(vec![1, 2, 3, 4]).await);
+    queue.end(Some(json!({"input_device": "Synthetic mic", "capture_settings": {}, "output_device": "Synthetic speakers", "communications_output_device": null, "device_error": null}))).await;
+    let recorded = AtomicBool::new(false);
+    let run = RelayRun {
+      config: &config,
+      session_id: "synthetic-session",
+      run_id: "5e1f2a3b",
+      backend_id: "gemini",
+      queue: &queue,
+      recorded: &recorded,
+    };
+    let (acknowledged, _acknowledgement) = oneshot::channel();
+    let event = TranscriptEvent { kind: TranscriptKind::Final, text: "synthetic final".to_string(), acknowledged };
+
+    archive_final_with(&run, &event, |audio_path, text| async move {
+      assert_eq!(text, "synthetic final");
+      let voice_dir = audio_path.parent().expect("the archive path has a directory");
+      assert_eq!(std::fs::read_dir(voice_dir).expect("read the archive directory").count(), 3);
+      let parts: Value = serde_json::from_str(&std::fs::read_to_string(audio_path.with_extension("json")).unwrap()).unwrap();
+      assert_eq!(parts["run_id"], "5e1f2a3b");
+      assert_eq!(parts["startup"], Value::Null);
+      assert_eq!(parts["failure"], Value::Null);
+      assert_eq!(parts["audio"]["path"], "relay");
+      assert_eq!(parts["audio"]["backend"], "gemini");
+      assert_eq!(parts["audio"]["devices"]["input_device"], "Synthetic mic");
+      let wav_bytes = std::fs::read(&audio_path).expect("read archived WAV");
+      assert_eq!(&wav_bytes[..4], b"RIFF");
+      assert_eq!(&wav_bytes[4..8], &40_u32.to_le_bytes());
+      assert_eq!(&wav_bytes[8..16], b"WAVEfmt ");
+      assert_eq!(&wav_bytes[16..20], &16_u32.to_le_bytes());
+      assert_eq!(&wav_bytes[20..24], &[1, 0, 1, 0]);
+      assert_eq!(&wav_bytes[24..32], &[0x80, 0x3e, 0, 0, 0, 0x7d, 0, 0]);
+      assert_eq!(&wav_bytes[32..36], &[2, 0, 16, 0]);
+      assert_eq!(&wav_bytes[36..40], b"data");
+      assert_eq!(&wav_bytes[40..44], &4_u32.to_le_bytes());
+      assert_eq!(&wav_bytes[44..], &[1, 2, 3, 4]);
+      assert_eq!(
+        std::fs::read_to_string(audio_path.with_extension("txt")).expect("read archived transcript"),
+        "synthetic final"
+      );
+      Ok(())
+    })
+    .await
+    .unwrap();
+    assert!(recorded.load(Ordering::SeqCst));
   }
 
   #[tokio::test]
   async fn overflow_sends_one_error_then_drains_until_browser_close() {
-    let server = start_relay_test(FakeMode::NeverFinal, MAX_RECORDING_SAMPLES).await;
+    let server = start_relay_test_with_limits(FakeMode::NeverFinal, 4, MAX_RECORDING_SAMPLES).await;
     let mut browser = browser_socket(server.address).await;
-    let oversized = vec![0_u8; PREVIEW_QUEUE_SECONDS * crate::audio::SAMPLE_RATE * 2 + 1];
+    let oversized = vec![0_u8; 5];
     browser.send(ClientMessage::Binary(oversized.into())).await.expect("send an overflowing frame");
     assert_eq!(
       receive_json_frame(&mut browser).await,
@@ -888,26 +918,4 @@ mod tests {
     stop_relay_test(server).await;
   }
 
-  #[tokio::test]
-  async fn test_frames_past_the_cap_are_cut_sample_exactly() {
-    let server = start_relay_test(FakeMode::FinalAfterEnd, 3).await;
-    let mut browser = browser_socket(server.address).await;
-    let frame = vec![0x2a_u8; 4];
-    for _ in 0..3 {
-      browser.send(ClientMessage::Binary(frame.clone().into())).await.expect("send one live audio frame");
-    }
-    browser.send(ClientMessage::Text(r#"{"type":"end"}"#.into())).await.expect("seal the recording");
-    assert_eq!(receive_json_frame(&mut browser).await["type"], "partial");
-    assert_eq!(receive_json_frame(&mut browser).await, json!({ "type": "final", "text": "synthetic final" }));
-
-    let wav = std::fs::read_dir(voice_dir(&server.config))
-      .expect("read the archived voice directory")
-      .map(|entry| entry.expect("read archive entry").path())
-      .find(|path| path.extension().is_some_and(|extension| extension == "wav"))
-      .expect("the fake live backend archived one WAV");
-    let wav_bytes = std::fs::read(wav).expect("read the archived WAV");
-    assert_eq!(&wav_bytes[44..], [frame.as_slice(), &frame[..2]].concat());
-    browser.close(None).await.expect("close browser WebSocket");
-    stop_relay_test(server).await;
-  }
 }

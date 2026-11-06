@@ -23,6 +23,7 @@ pub mod projection;
 mod read_memos;
 mod run_facts;
 pub mod run_identity;
+pub mod run_logs;
 mod run_record;
 pub mod run_records;
 mod session_events;

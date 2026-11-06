@@ -67,6 +67,9 @@ thread branch — the directory name is the branch name with `/` replaced by `-`
 - Individual Worker logs are in `data/runs/{run_id}/`: the raw-log spawn writes `agent.raw.ndjson` (the
   CLI's stream) plus `agent.stderr.log`; the pipe transports write `stdout.log` plus `stderr.log`;
   `events.jsonl` holds the translated events.
+- The `run_log_compaction` cron handler replaces those two log files with `<name>.zst` once the run's record
+  holds an end at least 24 hours old. Metadata refs keep the plain names, and readers resolve each name through
+  `charliebot_store::run_logs`, which opens the plain file or the `.zst` and yields the decompressed bytes.
 - `workspace_dirs`: Config option (`config.yaml`) listing workspace directories to scan for git projects. The diff page's repo picker lists the discovered projects.
 
 ### 3.2 Repository Code Structure (Stateless)

@@ -22,6 +22,7 @@ use crate::layout;
 use crate::metadata::{SessionMetadata, UtcDateTime};
 use crate::ndjson;
 use crate::read_memos::FileSignature;
+use crate::run_logs;
 use crate::store::{CachedChatEvents, HistoryWork};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
@@ -283,7 +284,8 @@ impl Store {
   /// count the transcript latency tests pin.
   pub fn read_ndjson_compact(&self, path: &Path) -> StoreResult<Vec<ChatEvent>> {
     let events = ndjson::read_file_compact(path)?;
-    let bytes = fs::metadata(path).map(|metadata| metadata.size()).unwrap_or(0);
+    // The census counts the bytes of the file that holds the log; a log neither file holds contributes none.
+    let bytes = run_logs::stored_metadata(path).ok().flatten().map_or(0, |metadata| metadata.size());
     self.history_work.run_event_bytes_read.fetch_add(bytes, Ordering::Relaxed);
     Ok(events)
   }

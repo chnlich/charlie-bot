@@ -23,6 +23,7 @@ use charliebot_registry::backend::Env;
 use charliebot_store::CompactValue;
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::layout::{chat_events_path, runs_dir};
+use charliebot_store::run_logs;
 use charliebot_store::run_records::{
   self, OBSERVATION_EVENTS_REF, OBSERVATION_RESULT_REF, RUN_METADATA_NAME, STDERR_LOG_NAME, stop_requested_in_events,
 };
@@ -337,11 +338,9 @@ fn read_named_events(log: Option<&Path>) -> Result<RunEvents> {
   let Some(path) = log else {
     return Ok(RunEvents::default());
   };
-  match fs::metadata(path) {
-    Ok(_) => read_run_events(path),
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-      bail!("the run record names the event log {}, which is missing", path.display())
-    }
+  match run_logs::stored_metadata(path) {
+    Ok(Some(_)) => read_run_events(path),
+    Ok(None) => bail!("the run record names the event log {}, which is missing", path.display()),
     Err(error) => Err(error).with_context(|| format!("stating {}", path.display())),
   }
 }

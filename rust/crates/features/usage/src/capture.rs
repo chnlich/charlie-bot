@@ -12,6 +12,7 @@ use charliebot_registry::Registry;
 use charliebot_registry::usage::{RecordKind, UsageSource, UsageSourceImpl};
 use charliebot_store::layout;
 use charliebot_store::metadata::{MetadataReadError, read_metadata_object};
+use charliebot_store::run_logs as run_log_files;
 use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME, RUN_METADATA_NAME};
 use rusqlite::types::Value as SqlValue;
 use serde_json::{Map, Value};
@@ -216,9 +217,11 @@ fn charliebot_logs(sessions_dir: &Path) -> anyhow::Result<Vec<(CharlieLogKind, P
       };
       for entry in entries {
         let path = log_of(&entry);
-        match fs::metadata(&path) {
-          Ok(metadata) => logs.push((kind, path, metadata)),
-          Err(error) if error.kind() == ErrorKind::NotFound => {}
+        // The plain path keys the ledger, so compressing a log re-records the same rows under the same key; its
+        // signature comes from the file that holds the bytes now.
+        match run_log_files::stored_metadata(&path) {
+          Ok(Some(metadata)) => logs.push((kind, path, metadata)),
+          Ok(None) => {}
           Err(error) => return Err(error).with_context(|| format!("statting {}", path.display())),
         }
       }
@@ -251,9 +254,11 @@ fn run_logs(sessions_dir: &Path) -> anyhow::Result<Vec<(PathBuf, fs::Metadata)>>
     };
     for run in runs {
       let path = run.join(RAW_LOG_NAME);
-      match fs::metadata(&path) {
-        Ok(metadata) => logs.push((path, metadata)),
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
+      // The plain path keys the ledger, so compressing a log re-records the same rows under the same key; its
+      // signature comes from the file that holds the bytes now.
+      match run_log_files::stored_metadata(&path) {
+        Ok(Some(metadata)) => logs.push((path, metadata)),
+        Ok(None) => {}
         Err(error) => return Err(error).with_context(|| format!("statting {}", path.display())),
       }
     }

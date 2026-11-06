@@ -35,3 +35,4 @@ libc.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tower.workspace = true
+zstd.workspace = true

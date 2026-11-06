@@ -9,6 +9,7 @@ use serde::de::DeserializeSeed;
 use serde_json::Value;
 
 use crate::compact::{CompactValue, ParseKeys, ValueSeed};
+use crate::run_logs;
 use crate::{StoreError, StoreResult};
 
 const APPEND_JSON: JsonStyle =
@@ -203,13 +204,10 @@ fn lines_of(bytes: &[u8], line: &impl Fn(&[u8], &ParseKeys) -> Option<CompactVal
   events
 }
 
-/// Map one event log read-only; `None` covers a missing file and a file with no bytes.
+/// Read or map one event log through `run_logs`, so a compressed log reads as its decompressed bytes; `None` covers
+/// a missing log and a log with no bytes.
 fn open_log_map(path: &Path) -> StoreResult<Option<fsutil::FileBytes>> {
-  match fsutil::read_or_map_file(path) {
-    Ok(map) => Ok(map),
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-    Err(error) => Err(StoreError::new(format!("{}: {error}", path.display()))),
-  }
+  run_logs::read_bytes(path).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))
 }
 
 /// Parse every `\n`-bounded slice plus the final fragment, checking `should_stop` before each parse and once

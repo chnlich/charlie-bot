@@ -44,6 +44,7 @@ members = [
     "crates/features/github",
     "crates/features/host_auth",
     "crates/features/memory",
+    "crates/features/run_log_compaction",
     "crates/features/slack",
     "crates/features/taste",
     "crates/features/terminal",
@@ -148,6 +149,9 @@ uuid = { version = "1", features = ["v4", "v5"] }
 wait-timeout = "0.2"
 walkdir = "2"
 which = "8"
+# Run logs are stored as zstd frames once a run has ended: `runtime/store` reads them and `features/run_log_compaction`
+# writes them.
+zstd = "0.13"
 
 charliebot-artifacts = { path = "crates/features/artifacts" }
 charliebot-agents = { path = "crates/runtime/agents" }
@@ -184,6 +188,7 @@ charliebot-opencode = { path = "crates/backends/opencode" }
 charliebot-packages = { path = "crates/app/packages" }
 charliebot-html = { path = "crates/infra/html" }
 charliebot-registry = { path = "crates/runtime/registry" }
+charliebot-run-log-compaction = { path = "crates/features/run_log_compaction" }
 charliebot-slack = { path = "crates/features/slack" }
 charliebot-store = { path = "crates/runtime/store" }
 charliebot-session-api = { path = "crates/runtime/session-api" }

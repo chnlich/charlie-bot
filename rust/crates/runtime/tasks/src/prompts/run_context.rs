@@ -5,6 +5,7 @@ use std::path::Path;
 
 use charliebot_core::json_loads;
 use charliebot_store::Store;
+use charliebot_store::run_logs;
 use charliebot_store::run_records::{
   OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF, OBSERVATION_RESULT_REF, run_not_found_in_task_text,
 };
@@ -60,11 +61,23 @@ pub fn read_run_context(store: &Store, session_id: &str, run_id: &str) -> Result
     "snapshot": snapshot,
     "task_spec": task_spec,
     "logs": {
-      (OBSERVATION_RAW_LOG_REF): run.raw_log_ref,
-      (OBSERVATION_EVENTS_REF): run.events_ref,
-      (OBSERVATION_RESULT_REF): run.result_ref,
+      (OBSERVATION_RAW_LOG_REF): resolved_ref(run.raw_log_ref.as_deref()),
+      (OBSERVATION_EVENTS_REF): resolved_ref(run.events_ref.as_deref()),
+      (OBSERVATION_RESULT_REF): resolved_ref(run.result_ref.as_deref()),
     },
   }))
+}
+
+/// A stored log reference as the file an agent can open: the plain or compressed log the compaction left, or the
+/// stored reference itself when neither file exists, so a missing log still reads as the path the record names.
+fn resolved_ref(reference: Option<&str>) -> Value {
+  match reference.filter(|reference| !reference.is_empty()) {
+    Some(reference) => match run_logs::existing_path(Path::new(reference)) {
+      Some(path) => json!(path.to_string_lossy()),
+      None => json!(reference),
+    },
+    None => Value::Null,
+  }
 }
 
 /// Reads and validates a stored snapshot file, and returns its canonical payload.

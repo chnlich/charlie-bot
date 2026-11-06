@@ -2168,3 +2168,33 @@ fn malformed_master_model_shapes_capture_the_recorded_rows() {
 }
 
 const TS_A: &str = "2026-01-10T08:00:00+00:00";
+
+/// Compressing a finished run's raw log keeps the ledger's totals: the capture keys the ledger by the plain path and
+/// signs it from the file that holds the bytes, so it re-reads the decompressed content into the same rows.
+#[test]
+fn a_compressed_run_log_keeps_the_same_usage_totals() {
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let (config, registry) = fixture(&home);
+  let raw = write_run(
+    &home,
+    "run-session",
+    "run-claude",
+    "claude-main",
+    None,
+    Some("claude-run"),
+    &events(&[&session_line("claude-run"), &result_line(TS_A, 13, 3, 2, 6)]),
+  );
+  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  capture_round(&mut ledger, &config, &registry);
+  let before = page_rows(&mut ledger);
+  assert!(!before.is_empty(), "the run log recorded usage");
+
+  let compressed = charliebot_store::run_logs::compressed_path(&raw);
+  fs::write(&compressed, zstd::stream::encode_all(fs::read(&raw).unwrap().as_slice(), 3).unwrap()).unwrap();
+  fs::remove_file(&raw).unwrap();
+  assert!(compressed.is_file() && !raw.exists(), "the run log is stored compressed");
+
+  capture_round(&mut ledger, &config, &registry);
+  assert_eq!(page_rows(&mut ledger), before, "the compressed log yields the same totals, none counted twice");
+}

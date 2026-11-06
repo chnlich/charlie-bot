@@ -103,7 +103,7 @@ A spec for one of the kinds of work listed under Requester Words in `charliebot 
 - The `goal` field contains the Markdown task text.
 - Workers receive that text in their launch prompt.
 - Edit a running worker's run copy with a JSON parser because the worker reads only that file.
-- Count reads with `grep -c task_spec <run-dir>/agent.raw.ndjson` after an edit.
+- Count reads with `grep -c task_spec <run-dir>/agent.raw.ndjson` after an edit. A finished run stores that log as `agent.raw.ndjson.zst`, whose decompressed content is the same text.
 - Stop the worker and delegate again when the count is zero or does not increase.
 - Later work runs and review runs read the spec from the worker session task record in `metadata.json`.
 - Editing one run copy changes that run only.
@@ -255,6 +255,7 @@ One Claude login carries a five-hour and a weekly window, so a long master turn 
 
 - Run metadata at `<session>/data/runs/<run>/metadata.json` records each run's kind, backend, and times.
 - A relayed run keeps earlier process logs as numbered `agent.raw.ndjson` files; `.1` is oldest.
+- A run whose end is 24 hours or more old stores each log file compressed, as `<name>.zst`, in place of the plain file; when the plain name is missing, read the `.zst` decompressed, which is the same content.
 - Read every rotated log.
 - Claude Code transcripts timestamp each message and may have copies in multiple account directories. Find a delegated run's native session id in its `init` event.
 - A gap ending at assistant content measures model time.
@@ -265,12 +266,12 @@ One Claude login carries a five-hour and a weekly window, so a long master turn 
 - A background command can keep writing its log; cap its tool time at the next step's arrival.
 - Chat event logs can repeat `tool_use` ids across turns.
 - Pair each id with its first same-id `tool_result` inside that turn's time range.
-- Per-run `events.jsonl` ids are unique.
+- Per-run `events.jsonl` ids are unique, and `events.jsonl.zst` holds the same ids.
 
 ### Feature-Use Audits
 
 - Session metadata and chat events provide the complete audit record for backend, profile, origin, creation time, and manager shell commands.
-- Worker shell commands appear only in their runs' `events.jsonl`.
+- Worker shell commands appear only in their runs' `events.jsonl`, compressed or not.
 - Attribute manager shell commands to the `manager_turn` run whose time span contains them.
 - Claude nests `tool_use` in `assistant.message.content`.
 - CLI backends emit top-level `tool_use` events. Codex wraps each command as `/bin/bash -lc '<command>'`.

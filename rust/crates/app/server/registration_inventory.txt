@@ -17,6 +17,7 @@ page_packages	features.github	features.github
 page_packages	features.discord	features.discord
 page_packages	features.feishu	features.feishu
 page_packages	features.disk_sweep	features.disk_sweep
+page_packages	features.run_log_compaction	features.run_log_compaction
 page_packages	features.web_reply	features.web_reply
 page_packages	features.approval	features.approval
 page_packages	features.host_auth	features.host_auth
@@ -118,6 +119,7 @@ home_cards	-	Token usage by model
 home_cards	-	File browser
 scheduled handler	features.backup	backup
 scheduled handler	features.disk_sweep	disk_sweep
+scheduled handler	features.run_log_compaction	run_log_compaction
 scheduled handler	features.usage	usage_ledger
 scheduled handler	features.usage	cool_storage
 metadata_slots	-	backend_pool:Session

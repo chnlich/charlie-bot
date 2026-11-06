@@ -37,6 +37,7 @@ charliebot-taste.workspace = true
 charliebot-openai-compatible.workspace = true
 charliebot-opencode.workspace = true
 charliebot-registry.workspace = true
+charliebot-run-log-compaction.workspace = true
 charliebot-session-api.workspace = true
 charliebot-slack.workspace = true
 charliebot-tasks.workspace = true

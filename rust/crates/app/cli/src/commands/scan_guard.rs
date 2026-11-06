@@ -24,6 +24,7 @@ use charliebot_core::event_types;
 use charliebot_core::home::{CHARLIEBOT_HOME_ENV, DEFAULT_HOME_DIR_NAME};
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_store::layout::DATA_DIR_NAME;
+use charliebot_store::run_logs::COMPRESSED_SUFFIX;
 use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME, STDERR_LOG_NAME};
 use regex::{Captures, Regex};
 use serde_json::{Value, json};
@@ -38,8 +39,11 @@ const RECURSIVE_GREP: &str = r"grep\b[^|;&\n]*?\s(?:--recursive|-[a-zA-Z]*[rR][a
 ///
 /// The transport rotation numbers a stale raw log with a suffix, so the rotated example derives from the raw log name
 /// that `charliebot_store::run_records` owns.
-fn run_log_examples() -> [String; 4] {
-  [RUN_EVENTS_NAME.to_string(), RAW_LOG_NAME.to_string(), format!("{RAW_LOG_NAME}.1"), STDERR_LOG_NAME.to_string()]
+fn run_log_examples() -> Vec<String> {
+  let plain =
+    [RUN_EVENTS_NAME.to_string(), RAW_LOG_NAME.to_string(), format!("{RAW_LOG_NAME}.1"), STDERR_LOG_NAME.to_string()];
+  let compressed = plain.iter().map(|name| format!("{name}{COMPRESSED_SUFFIX}")).collect::<Vec<_>>();
+  compressed.into_iter().chain(plain).collect()
 }
 
 /// The commands that read a file's text, for the glob rule: a glob given to one of them reads every file it names.
@@ -260,18 +264,21 @@ fn is_run_log_glob(name: &str) -> bool {
     || run_log_examples().iter().any(|example| wildcard_matches(name, example))
 }
 
-/// The file-name filters that reach run logs whole, including the raw log's name with any suffix.
-fn run_log_globs() -> [String; 9] {
-  [
+/// The file-name filters that reach run logs whole, including the raw log's name with any suffix and the compressed
+/// forms the compaction leaves in place of a finished run's logs.
+fn run_log_globs() -> Vec<String> {
+  vec![
     "*".to_string(),
     "**".to_string(),
     "*.jsonl".to_string(),
     "*.ndjson".to_string(),
     "*.json".to_string(),
     RUN_EVENTS_NAME.to_string(),
+    format!("{RUN_EVENTS_NAME}{COMPRESSED_SUFFIX}"),
     RAW_LOG_NAME.to_string(),
     format!("{RAW_LOG_NAME}*"),
     "*.log".to_string(),
+    format!("*{COMPRESSED_SUFFIX}"),
   ]
 }
 
@@ -902,6 +909,22 @@ mod tests {
     ];
     for (command, expected) in denied {
       assert_eq!(scan_forms(&command, &home()).unwrap().first(), Some(&expected), "{command}");
+    }
+  }
+
+  /// The compressed names the compaction leaves in place of a finished run's logs are refused exactly as the plain
+  /// names are.
+  #[test]
+  fn run_log_globs_reach_the_compressed_names() {
+    let home = home();
+    let denied = [
+      (format!("cat {home}/.charliebot/sessions/*/data/runs/*/events.jsonl.zst"), ScanForm::RunLogGlob),
+      (format!("cat {home}/.charliebot/sessions/*/data/runs/*/agent.raw.ndjson.1.zst"), ScanForm::RunLogGlob),
+      (format!("rg -l X {home}/.charliebot/sessions -g '*.zst'"), ScanForm::RunLogSearch),
+      (format!("rg -l X {home}/.charliebot/sessions -g 'agent.raw.ndjson.zst'"), ScanForm::RunLogSearch),
+    ];
+    for (command, expected) in denied {
+      assert_eq!(scan_forms(&command, &home).unwrap().first(), Some(&expected), "{command}");
     }
   }
 

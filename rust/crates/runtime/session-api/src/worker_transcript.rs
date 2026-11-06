@@ -16,6 +16,7 @@ use charliebot_store::aggregator;
 use charliebot_store::control_events;
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::projection::MessageProjection;
+use charliebot_store::run_logs;
 use charliebot_store::run_records::{
   HostBoot, OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF,
   OBSERVATION_REPO_PATH, OBSERVATION_RESULT_REF, RUN_EVENTS_NAME, RUN_METADATA_NAME, RunKind, RunRecord,
@@ -191,7 +192,7 @@ fn worker_signature(store: &Store, session_id: &str) -> StoreResult<Signature> {
         parts.push(json!([
           name,
           stat_signature(&path.join(RUN_METADATA_NAME))?,
-          stat_signature(&path.join(RUN_EVENTS_NAME))?
+          run_log_signature(&path.join(RUN_EVENTS_NAME))?
         ]));
       }
     }
@@ -204,10 +205,24 @@ fn worker_signature(store: &Store, session_id: &str) -> StoreResult<Signature> {
 
 fn stat_signature(path: &Path) -> StoreResult<Value> {
   match fs::metadata(path) {
-    Ok(metadata) => Ok(json!([timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64, metadata.size()])),
+    Ok(metadata) => Ok(metadata_signature(&metadata)),
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
     Err(error) => Err(path_error(path, error)),
   }
+}
+
+/// One run event log's signature: the plain or compressed file that holds it decides when the transcript rebuilds,
+/// so compressing a finished run's log changes the signature once.
+fn run_log_signature(plain: &Path) -> StoreResult<Value> {
+  match run_logs::stored_metadata(plain) {
+    Ok(Some(metadata)) => Ok(metadata_signature(&metadata)),
+    Ok(None) => Ok(Value::Null),
+    Err(error) => Err(path_error(plain, error)),
+  }
+}
+
+fn metadata_signature(metadata: &fs::Metadata) -> Value {
+  json!([timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64, metadata.size()])
 }
 
 /// One run's events.jsonl parsed into the compact form; a missing or unreadable log is an empty segment.
@@ -649,6 +664,40 @@ mod tests {
     let path = store.run_dir(session_id, run_id).join("events.jsonl");
     let lines = events.iter().map(|event| serde_json::to_string(event).unwrap()).collect::<Vec<_>>().join("\n");
     fs::write(path, format!("{lines}\n")).unwrap();
+  }
+
+  /// The transcript a worker session projects from its run logs is the same before and after the compaction stores
+  /// those logs compressed: the reader resolves the plain or the `.zst` file and yields the same content.
+  #[tokio::test]
+  async fn a_compressed_run_log_projects_the_same_transcript() {
+    let (_home, features, session_id) = worker_context(&format!("compressed-{}", uuid::Uuid::new_v4())).await;
+    let store = features.store.as_ref();
+    let started = UtcDateTime::parse("2026-10-17T09:00:00Z").unwrap();
+    let ended = UtcDateTime::parse("2026-10-17T09:10:00Z").unwrap();
+    register_run(store, run_record("run-work", &session_id, RunKind::Work, Some(started))).await;
+    write_run_events(
+      store,
+      &session_id,
+      "run-work",
+      &[
+        json!({"type": "tool_use", "name": "Bash", "input": {"command": "cargo test"}, "timestamp": "tool-time"}),
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}]}, "timestamp": "answer-time"}),
+      ],
+    );
+    finish_run(store, &session_id, "run-work", RunOutcomeKind::Success, ended).await;
+
+    let events_of = |store: &Store| -> Vec<Value> {
+      load_worker_transcript(store, &session_id).unwrap().events.iter().map(|event| event.to_value()).collect()
+    };
+    let before = events_of(store);
+
+    let plain = store.run_dir(&session_id, "run-work").join(RUN_EVENTS_NAME);
+    let compressed = run_logs::compressed_path(&plain);
+    fs::write(&compressed, zstd::stream::encode_all(fs::read(&plain).unwrap().as_slice(), 3).unwrap()).unwrap();
+    fs::remove_file(&plain).unwrap();
+    assert!(!plain.exists() && compressed.is_file(), "the log is stored compressed");
+
+    assert_eq!(events_of(store), before, "the transcript reads the same events from the compressed log");
   }
 
   #[tokio::test]

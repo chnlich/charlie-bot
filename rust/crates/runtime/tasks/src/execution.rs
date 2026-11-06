@@ -30,6 +30,7 @@ use charliebot_store::control_events::{self, ACTOR_SYSTEM};
 use charliebot_store::metadata::{
   ColdReadSpec, SessionMetadata, TaskProfile, TaskType, ThreadMetadata, ThreadStatus, UtcDateTime,
 };
+use charliebot_store::run_logs;
 use charliebot_store::run_records::{
   self, OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_MODEL,
   OBSERVATION_NATIVE_SESSION_ID, OBSERVATION_PROMPT_SNAPSHOT_REF, OBSERVATION_RAW_LOG_REF, OBSERVATION_REPO_PATH,
@@ -758,7 +759,9 @@ impl TaskExecutionAdapter {
       } else {
         "this task's managed instructions or sources changed since the previous run, so this run starts a fresh native conversation".to_string()
       };
-      let previous_log = self.features.store.run_dir(session_id, &previous.id).join(run_records::RUN_EVENTS_NAME);
+      let previous_dir = self.features.store.run_dir(session_id, &previous.id);
+      let previous_log = run_logs::existing_path(&previous_dir.join(run_records::RUN_EVENTS_NAME))
+        .unwrap_or_else(|| previous_dir.join(run_records::RUN_EVENTS_NAME));
       prompt = format!("{}\n\n{prompt}", worker_continuation_reset_note(&reason, &previous_log));
     }
     drop(history);

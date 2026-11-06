@@ -670,7 +670,7 @@ mod tests {
       if std::time::Instant::now() >= deadline {
         panic!("the test exceeded its 10 s timeout");
       }
-      std::thread::sleep(Duration::from_millis(20));
+      std::thread::sleep(Duration::from_millis(2));
     }
   }
 
@@ -888,11 +888,26 @@ mod tests {
     .unwrap()
   }
 
+  /// The bound a timeout test pays per timed-out attempt: two timed-out attempts still fit the unit-test
+  /// budget, while the delayed reply stays far past it.
+  fn timeout_limits() -> Limits {
+    Limits { request_timeout: Duration::from_millis(10), rate_limit_wait: test_limits().rate_limit_wait }
+  }
+
   fn run(home: &TestHome, payload: &str, jev: &FakeJev, replies: Vec<(u16, Value)>) -> Result<Value, String> {
+    run_with_limits(home, payload, jev, replies, &test_limits())
+  }
+
+  fn run_with_limits(
+    home: &TestHome,
+    payload: &str,
+    jev: &FakeJev,
+    replies: Vec<(u16, Value)>,
+    limits: &Limits,
+  ) -> Result<Value, String> {
     jev.replies.lock().unwrap().extend(replies);
     let mut pauses = Vec::new();
-    let result =
-      route_in_home(&home.home, &home.rules_path(), payload, &test_limits(), &mut |pause| pauses.push(pause));
+    let result = route_in_home(&home.home, &home.rules_path(), payload, limits, &mut |pause| pauses.push(pause));
     if result.is_ok() {
       assert_eq!(pauses, Vec::<Duration>::new(), "a success path sleeps no rate-limit wait");
     }
@@ -1228,8 +1243,14 @@ mod tests {
 
       let payload = request("implement", "Understand the caching layer.", &STRONG, Some(SESSION));
       jev.delay_next(past_the_timeout());
-      let answer =
-        run(&home, &payload, &jev, vec![jev_reply("context", 0.19, 0.81), jev_reply("context", 0.19, 0.81)]).unwrap();
+      let answer = run_with_limits(
+        &home,
+        &payload,
+        &jev,
+        vec![jev_reply("context", 0.19, 0.81), jev_reply("context", 0.19, 0.81)],
+        &timeout_limits(),
+      )
+      .unwrap();
 
       assert_eq!(
         answer,
@@ -1250,8 +1271,14 @@ mod tests {
       let payload = request("implement", "Add a test for the parser.", &STRONG, None);
       jev.delay_next(past_the_timeout());
       jev.delay_next(past_the_timeout());
-      let error =
-        run(&home, &payload, &jev, vec![jev_reply("routine", 0.9, 0.1), jev_reply("routine", 0.9, 0.1)]).unwrap_err();
+      let error = run_with_limits(
+        &home,
+        &payload,
+        &jev,
+        vec![jev_reply("routine", 0.9, 0.1), jev_reply("routine", 0.9, 0.1)],
+        &timeout_limits(),
+      )
+      .unwrap_err();
 
       assert!(error.contains("timed out"), "{error}");
       assert!(error.contains("retry"), "{error}");
@@ -1268,9 +1295,14 @@ mod tests {
 
       let payload = request("implement", "Add a test for the parser.", &STRONG, None);
       jev.delay_next(past_the_timeout());
-      let error =
-        run(&home, &payload, &jev, vec![jev_reply("routine", 0.9, 0.1), (429, json!({ "error": "still limited" }))])
-          .unwrap_err();
+      let error = run_with_limits(
+        &home,
+        &payload,
+        &jev,
+        vec![jev_reply("routine", 0.9, 0.1), (429, json!({ "error": "still limited" }))],
+        &timeout_limits(),
+      )
+      .unwrap_err();
 
       assert!(error.contains("429"), "{error}");
       assert!(error.contains("still limited"), "{error}");

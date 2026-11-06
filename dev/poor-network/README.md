@@ -21,7 +21,7 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--side both` | Measure the before side, then the after side. If the before side is the reference commit (`CALIBRATION_REFERENCE`) and its calibration does not reproduce, stop with exit 3 and do not run the after side. |
 | `--out-dir DIR` | Where the run's files go, outside the tree. |
 | `--repetitions N` | Repetitions per scenario (default 5). |
-| `--scenarios LIST` | Any of `background,held,reset,stream,starred,threads` (default the first four). |
+| `--scenarios LIST` | Any of `background,held,reset,stream,starred,threads,open` (default the first four). `open` runs its own cells, see below. |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
 | `--detach` | Start a transient systemd user unit and return; the log is `DIR/pn-<id>.log`. |
 | `--lock FILE` | Hold an advisory lock on `FILE` around each side's trial (not the builds), waiting up to 2 h. |
@@ -157,12 +157,75 @@ store no response in its HTTP cache. It would then never revalidate, and every J
 ## CDN assets
 
 The page loads scripts and styles from CDNs (jsDelivr, cdnjs, Google Fonts). `assets.mjs` downloads a copy of each URL
-once into the assets directory, and records its SHA-256 in the JSON. One URL is unpinned (`marked`), so a changed copy
-shows as a changed hash. Chrome serves those copies locally through the
-DevTools Fetch domain. Any other external host fails at once, so nothing outside the trial reaches the link.
+once into the assets directory: the raw bytes as the CDN sends them to a browser that accepts brotli, the headers the
+browser's cache and Resource Timing read, and the decoded body's SHA-256, which the JSON records. One URL is unpinned
+(`marked`), so a changed copy shows as a changed hash. The scenarios other than `open` serve those copies from the
+browser's request interception, so the CDN bytes never cross the shaped link and the bench measures the application's
+own traffic. Any other external host fails at once, so nothing outside the trial reaches the link.
 
-The gap: those CDN bytes do not cross the shaped link, so the bench does not count them. The bench measures the
-application's own traffic.
+## Open scenario (`--scenarios open`)
+
+The cases of plan 2 section 3, under the link's conditions. The cases name the browser's state before the open:
+
+- **A**: this browser opened this session before. Its profile holds the session's record and the CDN files in the HTTP
+  cache, and its pool holds a connection from that visit.
+- **B**: this browser opened a chat page before, but not this session. The record names another session.
+- **C**: the browser never opened a chat page. Its profile is empty.
+
+The record is `localStorage` key `charliebot_opened_pages`, written by `web/static/js/opened-sessions.js`, which owns
+the case. A side whose client predates that module (origin/main before the telemetry lands) gets the same record from
+the bench, so both sides start from the same browser state; the measured page's own case is compared with the cell's
+only when its client reports one.
+
+Conditions, each a fresh browser profile behind a fresh proxy, with the CDN files crossing the link:
+
+| Condition | What the link does during the open |
+|---|---|
+| `link` | Only the link model: 300 ms round trip, 12.5 KB/s per direction, the 1 s stall once a minute. |
+| `held` | A 30 s held blackout starts 1 s before the open navigates, so the open is inside it. |
+| `reset` | As `held`, but the blackout resets every connection when it starts. The pooled connection of A and B ends there. |
+| `flaps` | Up 5 s, then down 5 s, six times (60 s). Each drop resets every connection, so each recovery reconnects. |
+| `offline` | Chrome's network emulation is offline for the open. The navigation fails at once and the open is not reached. |
+| `release` | A held blackout starts; 5 s in, the server's static asset version changes (the bench appends a comment to the trial tree's served `web/static/js/config.js`, and the version the server answers must move); the open navigates 10 s in, inside the hold. |
+
+The open is `switchTarget` (a session whose bootstrap is the view's 26,592 bytes); B's other session is `probes[0]`.
+The CPU rate is `Emulation.setCPUThrottlingRate`. The cells run in this order: a reference cell (A, link, rate 1), the
+other conditions at the derived rate, then the release cells, because each release changes the version and each
+case's warm profile is built at the version then served.
+
+**CPU rate.** `profile.mjs` holds `LIVE_CPU_TAIL`, the median of Chao's device's page loads with cause `open` (13 loads
+on 100.84.122.38 from the live log, 2026-11-06): 297 ms of DOMContentLoaded minus responseEnd. The tail is used instead
+of the raw DOMContentLoaded, because the raw value includes the document's transfer, and the live loads ran about ten
+times faster than the modeled link (a 340 KB document at 2.5 s). The other device has no `open` loads (one
+`stale_asset` load), so it gives no rate. The reference cell's tail median, measured at rate 1 on the same kind of load
+(A, cache-warm, the link), gives the rate: `max(1, live tail / reference tail)`. The run prints both inputs.
+
+**Measured per repetition.** Times are ms from the page's time origin (navigation start): `newest_message_ms` is when the
+text of the session's newest message is in `#messages`, `catchup_ms` is the first `catchup_complete` frame of the page's
+socket, and `load_ms` is the load event. `bytes_to_newest` is the link's bytes (both directions) from the navigation to
+that moment, and `bytes_after_load` the bytes in the 30 s after the load event; the proxy's counters are sampled every
+25 ms. `dcl_ms`, `response_end_ms` and `tail_ms` come from the page's Navigation Timing, and `mark` is whether the
+not-current mark was in the document at any sample. Each repetition also names what the tab and the page saw:
+`sockets` (the WebSocket opens), `frames` and `frame_types` (the socket frames by type), `requests` (the requests),
+`ws_state` (the client's own socket state), and the last console lines and page errors, so a missing time can be read
+against what the page reported.
+
+**The mark's DOM contract (task 3 implements it).** A page marks a stored copy as not current with the attribute
+`data-freshness="not-current"` on one element of its document. The bench watches for that element and reports the
+first time it appears. Before task 3 no page carries the attribute, so every cell reports the mark as absent.
+
+**Page's own timings.** A page reports `newest_message_ms` and `current_ms` in its `page_load` event
+(`web/features/diag/templates/diag/client-events.js`), with the open case, the content source and the render-blocking
+files beside their same-origin timings. `dev/client-readback/readback.mjs` reads them from the server log.
+
+**Gaps.** The CDN stand-in serves the webfont stylesheet empty, as the other scenarios do, so the font files it names
+are not loaded. The bench's DOMContentLoaded and newest-message times are measured from outside the page, so they are
+not compared with the page's own `page_load` numbers in the same run.
+
+**Output.** The JSON's `open` section holds `cpu` (the rate and its inputs), `reference`, and `cells`: each cell's
+`reps`, one object per repetition with the fields above. The table prints one row per cell: the median newest-message
+time, the five values in repetition order, the catch-up median, the bytes to the newest message and after the load, and
+how many repetitions reached the newest message.
 
 ## Host requirements
 
@@ -195,6 +258,8 @@ dev/remote-run/run.sh node --test dev/poor-network/proxy.integration.test.mjs de
 ```
 
 They check the relay's tunnel transfer time at the link, its stop on SIGTERM, and its refusal of a target without a
-port. The report's tests check the calibration gate: it reads the during-refresh holds, not the scored scenario's
-random-phase holds, and only the reference before side's line carries a verdict. The chrome tests check the browser
-teardown: a closed browser fails its unanswered DevTools calls and drops its pipe handles.
+port. Two tests drive the shaping proxy itself: a route reaches its own server over the same link while the proxy
+refuses every other authority, and a scheduled reset window resets the open tunnels when it starts. The report's tests
+check the calibration gate: it reads the during-refresh holds, not the scored scenario's random-phase holds, and only
+the reference before side's line carries a verdict. The chrome tests check the browser teardown: a closed browser
+fails its unanswered DevTools calls and drops its pipe handles.

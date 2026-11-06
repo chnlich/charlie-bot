@@ -17,6 +17,7 @@ import path from 'node:path';
 import { ServerApi } from './api.mjs';
 import { loadAssets } from './assets.mjs';
 import { chromeBinary } from './chrome.mjs';
+import { startCdn } from './cdn.mjs';
 import { startFront } from './front.mjs';
 import {
   BENCH_SESSIONS,
@@ -29,6 +30,7 @@ import {
 } from './profile.mjs';
 import { REPLY_PIECES, REPLY_SOURCES } from './reply.mjs';
 import { backgroundRep, heldBlackoutRep, longStreamRep, resetBlackoutRep, viewBackgroundRep } from './scenarios.mjs';
+import { formatOpen, openScenario } from './open.mjs';
 import { METRICS, calibrate, formatSide, percentile, summarize } from './report.mjs';
 import { TrialWatch } from './trials.mjs';
 
@@ -43,6 +45,10 @@ const SCENARIOS = Object.freeze({
   threads: viewBackgroundRep('threads'),
 });
 const DEFAULT_SCENARIOS = Object.freeze(['background', 'held', 'reset', 'stream']);
+
+// The open scenario runs its own cells, five repetitions each, in cell order, so it is not one of the per-repetition
+// scenarios above. It is selected by name only: the default run keeps the four scenarios of README.md.
+const OPEN_SCENARIO = 'open';
 
 // The sessions the bench needs are created on the trial's backend option, which scripts/release/trial.sh writes as
 // charlie-code-release-trial; the charlie-code binary behind it is the stub that run.sh puts on PATH. Index 1 is the
@@ -82,14 +88,15 @@ function parseArgs(argv) {
     throw new Error(`--side must be before or after, got ${args.side}`);
   }
   args.repetitions = Number(args.repetitions);
-  const named = args.scenarios.split(',');
+  const named = new Set(args.scenarios.split(','));
   for (const name of named) {
-    if (!(name in SCENARIOS)) {
+    if (!(name in SCENARIOS) && name !== OPEN_SCENARIO) {
       throw new Error(`unknown scenario ${name}`);
     }
   }
-  // The scenarios run in SCENARIOS' order, so a view scenario's starred rows never reach the six scenarios' own.
-  args.scenarios = Object.keys(SCENARIOS).filter((name) => named.includes(name));
+  // The scenarios run in SCENARIOS' order, so a view scenario's starred rows never reach the six scenarios' own. The
+  // open scenario runs after them: it is not one of the per-repetition scenarios.
+  args.scenarios = [...Object.keys(SCENARIOS).filter((name) => named.has(name)), ...named.has(OPEN_SCENARIO) ? [OPEN_SCENARIO] : []];
   return args;
 }
 
@@ -215,7 +222,8 @@ function makeCertificate(dir) {
 }
 
 function buildSide({
-  args, startedAt, finishedAt, status, error, results, assets, sessions, view, otherViews, replyBytes, chromeVersion,
+  args, startedAt, finishedAt, status, error, results, openResult, assets, sessions, view, otherViews, replyBytes,
+  chromeVersion,
 }) {
   const side = {
     side: args.side,
@@ -247,6 +255,7 @@ function buildSide({
       })),
     },
     reps: results,
+    open: openResult,
     metrics: {},
     calibration: null,
   };
@@ -285,10 +294,14 @@ async function main() {
     otherViews: {},
   };
   const results = Object.fromEntries(Object.keys(SCENARIOS).map((name) => [name, []]));
+  // The open scenario fills this object cell by cell, so a failure part-way leaves the cells measured so far.
+  const openResult = { cpu: null, reference: null, cells: [], releases: 0 };
   let status = 'measured';
   let error = null;
   let front = null;
+  let cdn = null;
   const trials = new TrialWatch();
+  ctx.trials = trials;
   try {
     trials.start();
     const check = spawnSync(args.mockHomeBin, ['check', args.mockHome, api.base], { stdio: 'inherit' });
@@ -306,7 +319,19 @@ async function main() {
     ctx.frontPort = front.port;
     ctx.trustedSpki = tls.spki;
     ctx.origin = `https://localhost:${front.port}`;
+    if (args.scenarios.includes(OPEN_SCENARIO)) {
+      const cdnTls = makeCertificate(path.join(ctx.runDir, `tls-cdn-${args.side}`));
+      cdn = await startCdn({ key: cdnTls.key, cert: cdnTls.cert, assets: ctx.assets });
+      ctx.cdnPort = cdn.port;
+      // The browser pins both servers' keys: the front's and the CDN stand-in's. Without the stand-in's pin every
+      // CDN file fails the certificate check and no CDN byte crosses the link.
+      ctx.cdnSpki = cdnTls.spki;
+    }
     for (const name of args.scenarios) {
+      if (name === OPEN_SCENARIO) {
+        await openScenario(ctx, args.repetitions, openResult);
+        continue;
+      }
       for (let repetition = 1; repetition <= args.repetitions; repetition++) {
         process.stderr.write(`[${args.side}] ${name} repetition ${repetition}/${args.repetitions}\n`);
         const from = trials.mark();
@@ -321,6 +346,9 @@ async function main() {
     error = caught.stack ?? String(caught);
   } finally {
     trials.stop();
+    if (cdn) {
+      await cdn.close();
+    }
     if (front) {
       await front.close();
     }
@@ -333,6 +361,7 @@ async function main() {
     status,
     error,
     results,
+    openResult,
     assets: ctx.assets,
     sessions: ctx.sessions,
     view: ctx.view,
@@ -348,6 +377,9 @@ async function main() {
     return;
   }
   process.stdout.write(`${formatSide(side)}\n`);
+  if (openResult.cpu !== null) {
+    process.stdout.write(`${formatOpen(openResult)}\n`);
+  }
 }
 
 main().catch((caught) => {

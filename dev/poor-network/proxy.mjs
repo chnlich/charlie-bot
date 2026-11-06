@@ -52,16 +52,22 @@ export class ShapingProxy {
   #startedAt = 0;
   #server = null;
   #dirs = { sent: new Direction('sent'), received: new Direction('received') };
-  #blackout = null;
+  // The routes of the CONNECT authorities other than the target: `host:port` -> {host, port}. Each route shares the
+  // link's budget, so a route's bytes cross the shaped link as the target's do.
+  #routes;
+  // The scheduled holds, each {start, end} in performance.now() milliseconds.
+  #holds = [];
   // Every socket the proxy holds, including a client whose tunnel is not up yet.
   #sockets = new Set();
   // The tunnels that are up.
   #conns = new Set();
   #timers = new Set();
 
-  // `target` is the server the tunnels reach: {host, port}. `link` takes the profile's fields.
-  constructor({ target, link = LINK }) {
+  // `target` is the server the tunnels reach: {host, port}. `routes` maps other CONNECT authorities (`host:port`) to
+  // the servers they reach. `link` takes the profile's fields.
+  constructor({ target, routes = {}, link = LINK }) {
     this.#target = target;
+    this.#routes = new Map(Object.entries(routes));
     this.#bytesPerSecond = link.bytesPerSecond;
     this.#oneWayMs = link.roundTripMs / 2;
     this.#spikeEveryMs = link.spikeEverySeconds * 1000;
@@ -89,19 +95,45 @@ export class ShapingProxy {
   // Holds both directions for `seconds` from now. The `hold` mode keeps the tunnels open. The `reset` mode resets every
   // tunnel at the start, so the browser sees its sockets close.
   blackout({ seconds = LINK.blackoutSeconds, mode }) {
-    if (mode !== 'hold' && mode !== 'reset') {
-      throw new Error(`blackout mode must be hold or reset, got ${mode}`);
-    }
+    this.schedule([{ at: 0, seconds, mode }]);
+  }
+
+  // Schedules holds. Each window is {at, seconds, mode}: it starts `at` milliseconds from now and lasts `seconds`, with
+  // the mode blackout() takes. A reset window resets every tunnel when it starts.
+  schedule(windows) {
     const now = performance.now();
-    this.#blackout = { start: now, end: now + seconds * 1000 };
-    if (mode === 'reset') {
-      for (const conn of this.#conns) {
-        this.#reset(conn);
+    for (const { at, seconds, mode } of windows) {
+      if (mode !== 'hold' && mode !== 'reset') {
+        throw new Error(`blackout mode must be hold or reset, got ${mode}`);
+      }
+      const start = now + at;
+      this.#holds.push({ start, end: start + seconds * 1000 });
+      if (mode === 'reset') {
+        this.#resetAt(start);
       }
     }
     for (const dir of Object.values(this.#dirs)) {
       this.#pump(dir);
     }
+  }
+
+  // Resets every tunnel at `at` (performance.now() milliseconds), now when that time has come.
+  #resetAt(at) {
+    const reset = () => {
+      for (const conn of this.#conns) {
+        this.#reset(conn);
+      }
+    };
+    const delay = at - performance.now();
+    if (delay <= 0) {
+      reset();
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.#timers.delete(timer);
+      reset();
+    }, delay);
+    this.#timers.add(timer);
   }
 
   // The time at or after `at` when the link may start a byte. Skips every hold that covers `at`.
@@ -114,8 +146,9 @@ export class ShapingProxy {
   }
 
   #holdCovering(at) {
-    if (this.#blackout && at >= this.#blackout.start && at < this.#blackout.end) {
-      return this.#blackout;
+    const hold = this.#holds.find((candidate) => at >= candidate.start && at < candidate.end);
+    if (hold) {
+      return hold;
     }
     const sinceStart = at - this.#startedAt;
     if (sinceStart < this.#spikeOffsetMs) {
@@ -150,13 +183,15 @@ export class ShapingProxy {
 
   #connect(client, requestHead, rest) {
     const match = /^CONNECT ([^ ]+) HTTP\/1\.[01]$/.exec(requestHead.split('\r\n')[0]);
-    const port = match ? Number(match[1].split(':')[1]) : NaN;
-    if (port !== this.#target.port) {
-      // Only the bench's server is reachable through the proxy, so no other traffic reaches the link.
+    const authority = match ? match[1] : '';
+    const port = Number(authority.split(':')[1]);
+    // Only the bench's routes are reachable through the proxy, so no other traffic reaches the link.
+    const route = this.#routes.get(authority) ?? (port === this.#target.port ? this.#target : null);
+    if (route === null) {
       client.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
       return;
     }
-    const upstream = net.connect({ host: this.#target.host, port: this.#target.port, allowHalfOpen: true });
+    const upstream = net.connect({ host: route.host, port: route.port, allowHalfOpen: true });
     upstream.setNoDelay(true);
     this.#sockets.add(upstream);
     upstream.on('close', () => this.#sockets.delete(upstream));

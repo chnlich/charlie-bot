@@ -5,7 +5,7 @@
 #   dev/remote-run/run.sh dev/poor-network/run.sh --side both --out-dir <dir> --before-clone <clone>
 #   dev/remote-run/run.sh dev/poor-network/run.sh --side after --out-dir <dir>
 #
-# --side before  measures origin/main (--before-rev, default origin/main, in --before-clone, a git clone that holds it);
+# --side before  measures origin/main (--before-rev, default origin/main, a commit of --before-clone, which holds it);
 # --side after   measures this tree;
 # --side both    runs before, then after, back to back in one invocation. If the before side measures the calibration
 #                reference (CALIBRATION_REFERENCE in profile.mjs) and does not reproduce the switch-during-refresh
@@ -232,7 +232,13 @@ run_side() {
 }
 
 if [[ $side == before || $side == both ]]; then
-  (cd "$before_clone" && run_side before "$before_clone/scripts/release/trial.sh" "$before_commit" "$before_bin") \
+  # The trial script is the measured commit's own. The clone at --before-clone may be on another commit, so a scratch
+  # clone at the commit holds the script; its origin/main is the commit, which the trial's preflight reads.
+  before_repo="$run_dir/before-repo"
+  git clone -q --shared --no-checkout "$before_clone" "$before_repo"
+  git -C "$before_repo" update-ref refs/remotes/origin/main "$before_commit"
+  git -C "$before_repo" checkout -q --detach "$before_commit"
+  (cd "$before_repo" && run_side before "$before_repo/scripts/release/trial.sh" "$before_commit" "$before_bin") \
     || die "$?" "the before side failed; see $run_dir/before.json"
   # The gate reads one before side: the reference commit the plan's condition is checked on. A fix's own before side no
   # longer holds the condition (the earlier fixes removed the bursts it lived on), so only a run whose before side is

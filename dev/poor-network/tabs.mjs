@@ -55,6 +55,10 @@ export class Tab {
   handshakeSends = [];
   // Every WebSocket close the browser saw: {at, requestId, error}.
   socketCloses = [];
+  // The page's console calls and uncaught exceptions, oldest first, capped so a chatty page cannot grow them
+  // without bound: what the page said about its own sockets and failures.
+  consoleLines = [];
+  pageErrors = [];
   // The URLs whose 200 bodies the tab keeps, as `request.body` text: a request's body reads after it finishes. A
   // request that finished before keepBodies has no `body`.
   #bodyPattern = null;
@@ -315,6 +319,18 @@ export class Tab {
       case 'Fetch.requestPaused':
         this.answerAsset(message.params, assets);
         return;
+      case 'Runtime.consoleAPICalled': {
+        const text = message.params.args.map((arg) => arg.value ?? arg.description ?? arg.type).join(' ');
+        this.consoleLines.push({ at, text: text.slice(0, 200) });
+        if (this.consoleLines.length > 50) this.consoleLines.shift();
+        return;
+      }
+      case 'Runtime.exceptionThrown': {
+        const details = message.params.exceptionDetails;
+        const text = `${details.text} ${details.exception?.description ?? details.url ?? ''}`.trim();
+        this.pageErrors.push({ at, text: text.slice(0, 300) });
+        return;
+      }
       default:
     }
   }
@@ -361,14 +377,21 @@ export class Tabs {
   #assets;
   #accessKey;
   #origin;
+  #cdn;
   #tabs = [];
 
-  // `origin` is the TLS front's https origin; the page and its socket live there.
-  constructor({ browser, assets, accessKey, origin }) {
+  // `origin` is the TLS front's https origin; the page and its socket live there. `cdn` says where the CDN files come
+  // from: `local` answers them in the browser from the assets, so they never cross the link; `link` lets the browser
+  // fetch them, through the proxy, from the CDN stand-in.
+  constructor({ browser, assets, accessKey, origin, cdn }) {
+    if (cdn !== 'local' && cdn !== 'link') {
+      throw new Error(`cdn must be local or link, got ${cdn}`);
+    }
     this.#browser = browser;
     this.#assets = assets;
     this.#accessKey = accessKey;
     this.#origin = origin;
+    this.#cdn = cdn;
     browser.onMessage((message) => {
       if (!message.sessionId) {
         return;
@@ -384,24 +407,37 @@ export class Tabs {
     return this.#tabs;
   }
 
-  // Opens a tab, with the access key on every request and the intercepted CDN patterns.
-  async open(name) {
+  // Opens a tab, with the access key on every request and, for `local` CDN files, the intercepted CDN patterns.
+  // `initScript`, when given, runs in each document of the tab before the page's own scripts.
+  async open(name, initScript = null) {
     const page = await this.#browser.newPage();
     const tab = new Tab(name, page);
     this.#tabs.push(tab);
-    await page.send('Fetch.enable', {
-      patterns: INTERCEPT_PATTERNS.map((urlPattern) => ({ urlPattern, requestStage: 'Request' })),
-    });
+    if (this.#cdn === 'local') {
+      await page.send('Fetch.enable', {
+        patterns: INTERCEPT_PATTERNS.map((urlPattern) => ({ urlPattern, requestStage: 'Request' })),
+      });
+    }
     // The page takes its access key from localStorage, where the login page leaves it: the fetch wrapper sends it as a
     // Bearer header and every WebSocket URL carries it as a token. The script runs before each document's own scripts.
     await page.send('Page.addScriptToEvaluateOnNewDocument', {
       source: `localStorage.setItem(${JSON.stringify(ACCESS_KEY_NAME)}, ${JSON.stringify(this.#accessKey)});`,
     });
+    if (initScript !== null) {
+      await page.send('Page.addScriptToEvaluateOnNewDocument', { source: initScript });
+    }
     return tab;
   }
 
+  // Navigates the tab. Resolves with the navigation's answer: its errorText names a navigation that failed.
   async navigate(tab, path) {
-    await tab.page.send('Page.navigate', { url: `${this.#origin}${path}` });
+    return tab.page.send('Page.navigate', { url: `${this.#origin}${path}` });
+  }
+
+  // Closes the tab's target: its sockets and requests end with it.
+  async close(tab) {
+    await this.#browser.send('Target.closeTarget', { targetId: tab.page.targetId });
+    this.#tabs = this.#tabs.filter((candidate) => candidate !== tab);
   }
 
   // Shows `tab` and hides every other tab, as the window does for the tab a person looks at.

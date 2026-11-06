@@ -78,3 +78,37 @@ export const LIVE_READBACK = Object.freeze({
   statusPollBytes: 5767,
   fullListBytes: 113791,
 });
+
+// The open scenario: the three cases of plan 2 section 3 under the link's conditions. A: this browser opened the
+// session before; B: it opened a chat page before, but not this session; C: it never opened a chat page. Every
+// constant the scenario reads is here.
+export const OPEN = Object.freeze({
+  // A session's newest message on screen, from navigation start, on the link (plan 2 section 3).
+  targetMs: 1000,
+  // The page's bytes after its load event are counted for this long.
+  postLoadWindowMs: 30000,
+  // A held or reset blackout starts this long before the open navigates, so the open happens inside it.
+  blackoutLeadMs: 1000,
+  // Repeated drops: the link is up for upSeconds, then down for downSeconds, until totalSeconds have passed. Each
+  // drop resets every connection, so each recovery reconnects.
+  flaps: Object.freeze({upSeconds: 5, downSeconds: 5, totalSeconds: 60}),
+  // The first open after a release: the resource version changes this long after a held blackout starts, and the
+  // open navigates openAfterMs after it, so the open is inside the hold.
+  releaseAtMs: 5000,
+  openAfterMs: 10000,
+  // An open that has not shown its newest message or its catch-up by this time is recorded at the cap.
+  capMs: 240000,
+  // An offline navigation that has not shown the page within this time is recorded as not reached.
+  offlineSettleMs: 5000,
+});
+
+// Chao's devices, from the live server log's page loads (2026-11-06 03:40Z to 08:40Z). A page load's CPU tail is its
+// DOMContentLoaded minus its responseEnd: the time after the document's last byte, which is parsing and running the
+// blocking scripts and styles. The raw DOMContentLoaded includes the document's transfer, and the live link carried
+// that transfer about ten times faster than the modeled link, so the raw value is not compared. The device with
+// enough loads is the one with cause "open" loads, and the other device has none.
+export const LIVE_CPU_TAIL = Object.freeze({
+  device: '100.84.122.38',
+  loads: 13,
+  medianMs: 297,
+});

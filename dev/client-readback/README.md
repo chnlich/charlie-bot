@@ -24,7 +24,11 @@ address the server logged (`forwarded_for`), and prints per device:
 - `cross-origin files` — each render-blocking file the page loaded from another
   origin. A load whose `transfer_size` is 0 is a cache hit (no bytes crossed the
   network); a load whose `transfer_size` is greater than 0 is a network load.
-  The two groups are reported apart. The `link` column is the time the same
+  The rule reads `transfer_size`, which the browser reports for a cross-origin
+  load only when its origin sends `Timing-Allow-Origin`; the page's CDNs
+  (jsDelivr, cdnjs, Google Fonts) do, so the rule holds for the files the page
+  loads. The two groups are reported apart. The `link` column is the time the
+  same
   bytes (the file's `encoded_body_size`) take over the CharlieBot link, from the
   same load's same-origin timings: the round trip is the least
   request-to-first-byte time among them, and the throughput is the bytes over

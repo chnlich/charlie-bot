@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { LINK } from './profile.mjs';
+import { ShapingProxy } from './proxy.mjs';
 
 const BPS = LINK.bytesPerSecond;
 const RELAY = fileURLToPath(new URL('./relay.mjs', import.meta.url));
@@ -53,10 +54,16 @@ async function startTarget() {
 
 // Opens a tunnel through the proxy to the target and names it. Resolves with the socket once the proxy answers 200.
 function tunnel(proxyPort, targetPort, label) {
+  return tunnelTo(proxyPort, `127.0.0.1:${targetPort}`, label);
+}
+
+// Opens a tunnel through the proxy to `authority` (`host:port`) and names it. Resolves with the socket once the proxy
+// answers 200; rejects when the proxy refuses the authority.
+function tunnelTo(proxyPort, authority, label) {
   return new Promise((resolve, reject) => {
     const socket = net.connect(proxyPort, '127.0.0.1');
     socket.once('error', reject);
-    socket.write(`CONNECT 127.0.0.1:${targetPort} HTTP/1.1\r\nHost: 127.0.0.1:${targetPort}\r\n\r\n`);
+    socket.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`);
     let head = Buffer.alloc(0);
     const onData = (chunk) => {
       head = Buffer.concat([head, chunk]);
@@ -109,6 +116,46 @@ async function startRelay(targetPort) {
   lines.close();
   return { child, port: Number(new URL(first).port) };
 }
+
+test('a route reaches its own server over the same link; other authorities are refused', { timeout: 60000 }, async () => {
+  const target = await startTarget();
+  const asset = await startTarget();
+  const proxy = new ShapingProxy({
+    target: { host: '127.0.0.1', port: target.port },
+    routes: { 'cdn.example:443': { host: '127.0.0.1', port: asset.port } },
+  });
+  const proxyPort = await proxy.start();
+  try {
+    const socket = await tunnelTo(proxyPort, 'cdn.example:443', 'asset');
+    socket.write('GET 10');
+    await untilReceived(asset, 'asset', 6);
+    assert.equal(target.received.has('asset'), false, 'the route does not reach the bench server');
+    socket.destroy();
+    await assert.rejects(tunnelTo(proxyPort, 'other.example:443', 'refused'));
+  } finally {
+    await proxy.stop();
+    await target.close();
+    await asset.close();
+  }
+});
+
+test('a scheduled reset window resets the open tunnels when it starts', { timeout: 60000 }, async () => {
+  const target = await startTarget();
+  const proxy = new ShapingProxy({ target: { host: '127.0.0.1', port: target.port } });
+  const proxyPort = await proxy.start();
+  try {
+    const socket = await tunnel(proxyPort, target.port, 'scheduled');
+    const reset = new Promise((resolve) => socket.once('error', resolve));
+    const scheduledAt = performance.now();
+    proxy.schedule([{ at: 300, seconds: 1, mode: 'reset' }]);
+    const error = await reset;
+    assert.equal(error.code, 'ECONNRESET');
+    assert.ok(performance.now() - scheduledAt >= 280, 'the reset waits for its start');
+  } finally {
+    await proxy.stop();
+    await target.close();
+  }
+});
 
 test('the relay entry carries a tunnel over the bench link and stops on SIGTERM', { timeout: 60000 }, async () => {
   const target = await startTarget();

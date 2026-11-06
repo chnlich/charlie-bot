@@ -71,7 +71,9 @@ async function withLink(ctx, label, tabNames, body) {
   });
   ctx.chromeVersion = browser.version;
   try {
-    const tabs = new Tabs({ browser, assets: ctx.assets, accessKey: ctx.api.accessKey, origin: ctx.origin });
+    const tabs = new Tabs({
+      browser, assets: ctx.assets, accessKey: ctx.api.accessKey, origin: ctx.origin, cdn: 'local',
+    });
     const opened = [];
     for (const name of tabNames) {
       opened.push(await tabs.open(name));

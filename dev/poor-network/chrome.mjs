@@ -166,6 +166,15 @@ export class Browser {
     return this.#cdp.send(method, params);
   }
 
+  // Asks Chrome to shut down, so it writes its profile (localStorage and the HTTP cache) to disk, and waits for the exit.
+  // A Chrome that does not answer in time is stopped by close().
+  async shutdown() {
+    const answer = this.#cdp.send('Browser.close').catch(() => {});
+    await Promise.race([answer, new Promise((resolve) => setTimeout(resolve, 5000))]);
+    await Promise.race([this.#exited, new Promise((resolve) => setTimeout(resolve, 10000))]);
+    await this.close();
+  }
+
   // Stops Chrome and every process in its group. The bench calls it on every path, including a failed run.
   async close() {
     if (this.#child.exitCode === null && this.#child.signalCode === null) {

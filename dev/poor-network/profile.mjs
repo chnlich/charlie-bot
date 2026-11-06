@@ -47,9 +47,9 @@ export const TASK_TREE_LOAD = Object.freeze({
 //
 // Both are one row's own state, and the rates are per 75 s window. The background tab polls about 26 times a minute,
 // against the live readback's 20, so reproducing its 72% share takes about 19 changed answers a minute: a silent step
-// every 1.8 s and a broadcast one every 5.4 s. The first pairs of a background repetition measured 12 answered 200s
-// against the 26 polls a minute from `{turnFlipsPerWindow: 14, triggerFlipsPerWindow: 18}`; `report.mjs` prints the
-// measured share beside `LIVE_READBACK.status200Share`.
+// every 2.3 s and a broadcast one every 5.4 s. A background repetition measured 12 answered 200s against the 26 polls a
+// minute from `{turnFlipsPerWindow: 14, triggerFlipsPerWindow: 18}`; `report.mjs` prints the measured share beside
+// `LIVE_READBACK.status200Share`.
 export const STATUS_CHURN = Object.freeze({
   turnFlipsPerWindow: 14,
   triggerFlipsPerWindow: 33,

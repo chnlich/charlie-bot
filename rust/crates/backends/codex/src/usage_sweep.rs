@@ -3,13 +3,15 @@
 //! A rollout's file name embeds the Codex thread id, which is the backend session id CharlieBot metadata references.
 
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::LazyLock;
 
+use charliebot_core::timefmt;
 use charliebot_registry::usage::{CategoryResult, FreelistResult, SourceSweep, SweepScope};
 use regex::Regex;
 
-use super::rollout::{is_rollout_file, mtime_secs, rollout_thread_id, walk_files};
+use super::rollout::{is_rollout_file, rollout_thread_id, walk_files};
 
 const CATEGORY: &str = "codex-rollouts";
 const UNIT: &str = "files";
@@ -67,7 +69,7 @@ fn sweep_rollout(
   if !scope.references.contains_key(&backend_session) {
     match fs::metadata(path) {
       Ok(metadata) => {
-        if scope.idle_past(mtime_secs(&metadata)) {
+        if scope.idle_past(timefmt::float_seconds(metadata.mtime(), metadata.mtime_nsec())) {
           counter.delete_file(path, scope.dry_run);
         }
       }

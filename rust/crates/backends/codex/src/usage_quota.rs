@@ -27,7 +27,7 @@ use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime, UtcOffset};
 
 use super::pricing;
-use super::rollout::{self, mtime_secs, token_count_payload, walk_files};
+use super::rollout::{self, token_count_payload, walk_files};
 use super::text::{empty_object, object_or_empty, splitlines, truthy};
 use charliebot_agents::usage_time::utc_isoformat;
 
@@ -187,13 +187,15 @@ impl Inner {
       return Ok(None);
     }
     let min_mtime = unix_seconds(now) - (SCAN_WINDOW_HOURS * 3600) as f64;
-    let mut scan: Vec<&(&PathBuf, Metadata)> =
-      stats.iter().filter(|(_, metadata)| mtime_secs(metadata) >= min_mtime).collect();
-    let newest = stats.iter().reduce(
-      |best, candidate| {
-        if mtime_secs(&candidate.1) > mtime_secs(&best.1) { candidate } else { best }
-      },
-    );
+    let mut scan: Vec<&(&PathBuf, Metadata)> = stats
+      .iter()
+      .filter(|(_, metadata)| timefmt::float_seconds(metadata.mtime(), metadata.mtime_nsec()) >= min_mtime)
+      .collect();
+    let newest = stats.iter().reduce(|best, candidate| {
+      let candidate_mtime = timefmt::float_seconds(candidate.1.mtime(), candidate.1.mtime_nsec());
+      let best_mtime = timefmt::float_seconds(best.1.mtime(), best.1.mtime_nsec());
+      if candidate_mtime > best_mtime { candidate } else { best }
+    });
     if scan.is_empty() {
       scan = newest.into_iter().collect();
     }
@@ -238,7 +240,7 @@ impl Inner {
           continue;
         }
       };
-      if mtime_secs(&metadata) < min_mtime {
+      if timefmt::float_seconds(metadata.mtime(), metadata.mtime_nsec()) < min_mtime {
         continue;
       }
       live.insert(path.clone());

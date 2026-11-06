@@ -15,6 +15,7 @@ use std::sync::LazyLock;
 use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::git::TRASH_DIR_NAME;
+use charliebot_core::timefmt;
 use charliebot_registry::usage::{CategoryResult, SourceSweep, SweepScope};
 use regex::Regex;
 use walkdir::WalkDir;
@@ -98,7 +99,7 @@ fn newest_mtime(root: &Path) -> Option<f64> {
     }
     match fs::metadata(entry.path()) {
       Ok(metadata) => {
-        let mtime = mtime_secs(&metadata);
+        let mtime = timefmt::float_seconds(metadata.mtime(), metadata.mtime_nsec());
         newest = Some(newest.map_or(mtime, |best| best.max(mtime)));
       }
       Err(error) => {
@@ -106,7 +107,8 @@ fn newest_mtime(root: &Path) -> Option<f64> {
       }
     }
   }
-  newest.or_else(|| fs::metadata(root).ok().map(|metadata| mtime_secs(&metadata)))
+  newest
+    .or_else(|| fs::metadata(root).ok().map(|metadata| timefmt::float_seconds(metadata.mtime(), metadata.mtime_nsec())))
 }
 
 /// The path a walk error names, for the skip log line.
@@ -212,10 +214,6 @@ impl Counter {
       }
     }
   }
-}
-
-fn mtime_secs(metadata: &fs::Metadata) -> f64 {
-  metadata.mtime() as f64 + metadata.mtime_nsec() as f64 / 1e9
 }
 
 /// Deletes the cold sessions' transcript directories and the unreferenced orphan directories.

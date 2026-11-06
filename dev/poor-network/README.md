@@ -27,7 +27,9 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--lock FILE` | Hold an advisory lock on `FILE` around each side's trial (not the builds), waiting up to 2 h. |
 
 Exit codes: 0 both sides measured; 1 a measurement or build failed (the side's JSON still names the error); 2 a
-precondition failed and nothing started; 3 the baseline calibration did not reproduce.
+precondition failed and nothing started; 3 the baseline calibration did not reproduce; 75 a side's wait for the lock
+ran out. One lock hold covers one side attempt: a caller that retries a timed-out side runs the command again, which
+takes the lock again at the back of the queue.
 
 Chrome comes from `POOR_NETWORK_CHROME`, or else the newest `~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome`.
 The trial replaces `HOME`, so the discovery happens in `run.sh`.

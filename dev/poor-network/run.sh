@@ -18,7 +18,7 @@
 # TLS front) end with the bench. The server's charlie-code backend is the scripted stub in dev/poor-network/stub.
 #
 # Exit: 0 both sides measured; 1 a measurement or build failed; 2 a precondition failed, nothing started; 3 the baseline
-# calibration did not reproduce, so the after side did not run.
+# calibration did not reproduce, so the after side did not run; 75 a side's wait for the lock ran out.
 set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -194,7 +194,9 @@ run_side() {
       --repetitions "$repetitions" --scenarios "$scenarios"
   trial_status=$?
   set -e
-  ((trial_status != LOCK_TIMEOUT_EXIT)) || die 1 "the $name side did not get $lock_file within $LOCK_WAIT_SECONDS s"
+  # The timeout keeps flock's own exit code, so a caller that retries can tell it from a failed measurement and take
+  # its place at the back of the queue again. One lock hold covers one side attempt; run.sh never retries inside it.
+  ((trial_status != LOCK_TIMEOUT_EXIT)) || die "$LOCK_TIMEOUT_EXIT" "the $name side did not get $lock_file within $LOCK_WAIT_SECONDS s"
   echo "poor-network: $name side exit $trial_status"
   [[ -f "$run_dir/$name.json" ]] || die 1 "the $name side wrote no JSON"
   return "$trial_status"

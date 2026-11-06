@@ -393,26 +393,21 @@ mod tests {
     assert!(home.meta(&sid).await.has_unread);
   }
 
-  #[tokio::test]
-  async fn a_reply_in_the_nudge_turn_ends_the_audit_with_no_notice() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let user = home.append(&sid, user_event("the question")).await;
-    audit_reply(&home.features, &sid, &master_done(&[id_of(&user)], 0)).await.expect("the audit runs");
-    let nudge_id = id_of(&home.nudges(&sid)[0]).to_string();
+  #[test]
+  fn a_reply_in_the_nudge_turn_ends_the_audit_with_no_notice() {
+    let user = Arc::new(CompactValue::from_value(&json!({"type": "user", "id": "user-1"})));
+    let nudge = Arc::new(CompactValue::from_value(&json!({
+      "type": AGENT_MESSAGE,
+      "id": "nudge-1",
+      WEB_REPLY: {(NUDGE_OF): "user-1"},
+    })));
+    let reply = Arc::new(CompactValue::from_value(&json!({
+      "type": WEB_REPLY,
+      WEB_REPLY: {"answer_ids": ["user-1"]},
+    })));
+    let loaded = [user, nudge, reply];
 
-    home.set_running(&[nudge_id.as_str()]);
-    reply::post_web_reply(&home.features, &sid, "the answer", None).await.expect("the reply posts");
-    audit_reply(&home.features, &sid, &master_done(&[nudge_id.as_str()], 0)).await.expect("the audit runs");
-
-    let events = home.events(&sid);
-    assert!(events.iter().all(|event| event["type"] != WEB_REPLY_NOTICE));
-    let answers: Vec<Value> = events
-      .iter()
-      .filter(|event| event["type"] == WEB_REPLY)
-      .map(|event| event[WEB_REPLY]["answer_ids"].clone())
-      .collect();
-    assert_eq!(answers, vec![json!([id_of(&user)])]);
+    assert!(reply_steps(&loaded, &["nudge-1".to_string()]).is_empty());
   }
 
   #[tokio::test]

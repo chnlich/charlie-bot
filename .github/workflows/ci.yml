@@ -27,6 +27,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check integration ignore reasons
+        run: node dev/check-integration-ignores.mjs
+
       # The no-Python guard: a tracked .py file, a Python shebang, a Python-naming line in scripts or CI
       # configuration and a Python-naming line in prompts, skills or docs all fail the job. It needs git alone, so it
       # runs before the installs.

@@ -1887,7 +1887,7 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "requires CHARLIEBOT_TEST_CHROME_BIN to point at headless Chrome"]
+  #[ignore = "integration"]
   fn test_warm_renderer_measures_real_page_height() {
     let chrome = PathBuf::from(std::env::var_os("CHARLIEBOT_TEST_CHROME_BIN").expect("a headless Chrome path is set"));
     let directory = tempfile::tempdir().unwrap();

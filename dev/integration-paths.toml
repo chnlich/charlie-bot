@@ -1,3 +1,70 @@
 [[entry]]
 paths = ["docs/**"]
 none = true
+
+# The structure checks read the whole workspace: every crate's manifest and source file.
+[[entry]]
+paths = ["rust/crates/**/Cargo.toml", "rust/crates/**/*.rs"]
+rust = "binary_id(charliebot-structure::structure)"
+
+# The script tests run these binaries without a Cargo dependency on them.
+[[entry]]
+paths = ["rust/crates/app/cli/**"]
+rust = "binary_id(charliebot-script-tests::release) + binary_id(charliebot-script-tests::remote_run)"
+
+[[entry]]
+paths = ["rust/crates/app/server/**"]
+rust = "binary_id(charliebot-script-tests::release)"
+
+[[entry]]
+paths = ["rust/crates/app/mock-home/**"]
+rust = "binary_id(charliebot-script-tests::improve) + binary_id(charliebot-script-tests::release)"
+
+# The server-lifecycle scripts call one another, so each selects the four binaries that run them for real.
+[[entry]]
+paths = ["scripts/switch-server.sh", "scripts/start-server.sh", "scripts/install-slice-units.sh", "scripts/release.sh", "scripts/release/**", "scripts/setup.sh", "scripts/systemd/**"]
+rust = "binary_id(charliebot-script-tests::switch_server) + binary_id(charliebot-script-tests::release) + binary_id(charliebot-script-tests::start_server) + binary_id(charliebot-script-tests::setup_scripts)"
+
+[[entry]]
+paths = ["scripts/sync-skills.sh", "scripts/preflight-charlie-code.sh"]
+rust = "binary_id(charliebot-script-tests::setup_scripts)"
+
+[[entry]]
+paths = ["dev/improve/**"]
+rust = "binary_id(charliebot-script-tests::improve_remote) + binary_id(charliebot-script-tests::leak_checks) + binary_id(charliebot-script-tests::no_python)"
+
+[[entry]]
+paths = ["dev/git-hooks/**", "dev/leak-patterns.sh", "dev/check-skills-host-leak.sh"]
+rust = "binary_id(charliebot-script-tests::leak_checks) + binary_id(charliebot-script-tests::setup_scripts)"
+
+[[entry]]
+paths = ["dev/check-no-python.sh", "dev/gen.sh", "dev/note.sh"]
+rust = "binary_id(charliebot-script-tests::no_python)"
+
+[[entry]]
+paths = ["dev/remote-run/**", "dev/local-work-guard/**"]
+rust = "binary_id(charliebot-script-tests::remote_run)"
+
+[[entry]]
+paths = ["dev/week-review/**"]
+rust = "binary_id(charliebot-script-tests::week_review)"
+
+[[entry]]
+paths = ["dev/stress-tests.sh"]
+rust = "binary_id(charliebot-script-tests::setup_scripts)"
+
+# The CLI's setup test validates the committed cron defaults; the router unit test loads the example rules.
+[[entry]]
+paths = ["configs/**"]
+rust = "binary_id(charliebot-cli::setup) + binary_id(charliebot-cli::bin/charliebot)"
+
+# The prompt tree drives the setup seed's validation, the artifact renderer's page checks, and the server's
+# thread-rule tests.
+[[entry]]
+paths = ["prompts/**"]
+rust = "binary_id(charliebot-cli::setup) + binary_id(charliebot-cli::artifact_renderer) + binary_id(charliebot-server::bin/charliebot-server)"
+
+# The package-directory check resolves each frontend package under web/.
+[[entry]]
+paths = ["web/features/**", "web/backends/**"]
+rust = "binary_id(charliebot-server::bin/charliebot-server)"

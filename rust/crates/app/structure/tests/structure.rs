@@ -1010,6 +1010,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::metadata::NEXT_TRIGGER_AT`.",
   },
   OwnerRow {
+    name: "archive_offset",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::ARCHIVE_OFFSET`.",
+  },
+  OwnerRow {
     name: "has_pending_plan_approval",
     owner: "runtime/store",
     hint: "Use `charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL`.",

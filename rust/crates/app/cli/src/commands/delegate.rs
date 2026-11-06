@@ -13,7 +13,9 @@ use charliebot_cli_common::resolve;
 use charliebot_core::config;
 use charliebot_core::event_types;
 use charliebot_store::chat_events::{self, LineRule};
-use charliebot_store::metadata::{KEEP_WORKTREE_FIELD, REQUESTER_WORDS_HEADING, requester_words_heading_line};
+use charliebot_store::metadata::{
+  KEEP_WORKTREE_FIELD, REQUESTER_WORDS_HEADING, TaskType as StoreTaskType, requester_words_heading_line,
+};
 use charliebot_tasks::routes as task_routes;
 use clap::error::ErrorKind;
 use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
@@ -93,28 +95,32 @@ struct DelegateCli {
   keep_worktree: i32,
   #[arg(long, help = "Replay id (v2 task-tree sessions; rule in the epilog)")]
   request_id: Option<String>,
-  #[arg(long, value_enum, default_value = "implement", help = "Task profile (rules in the epilog)")]
+  #[arg(long, value_enum, default_value_t = TaskType::Implement, help = "Task profile (rules in the epilog)")]
   task_type: TaskType,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum TaskType {
   Implement,
-  #[value(name = "quick-edit")]
   QuickEdit,
-  #[value(name = "script-run")]
   ScriptRun,
   Verify,
 }
 
 impl TaskType {
-  fn as_str(self) -> &'static str {
+  fn store_type(self) -> StoreTaskType {
     match self {
-      Self::Implement => "implement",
-      Self::QuickEdit => "quick-edit",
-      Self::ScriptRun => "script-run",
-      Self::Verify => "verify",
+      Self::Implement => StoreTaskType::Implement,
+      Self::QuickEdit => StoreTaskType::QuickEdit,
+      Self::ScriptRun => StoreTaskType::ScriptRun,
+      Self::Verify => StoreTaskType::Verify,
     }
+  }
+}
+
+impl std::fmt::Display for TaskType {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter.write_str(self.store_type().as_str())
   }
 }
 
@@ -143,7 +149,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     );
   }
 
-  let task_type = cli.task_type.as_str();
+  let task_type = cli.task_type.store_type().as_str();
   if let Err(message) = validate_repo_and_branch(cli.task_type, cli.repo.as_deref(), cli.base_branch.as_deref()) {
     parser_error(&mut command, ErrorKind::ValueValidation, message);
   }
@@ -274,7 +280,7 @@ fn validate_repo_and_branch(task_type: TaskType, repo: Option<&str>, base_branch
   } else if repo.is_some() != base_branch.is_some() {
     return Err(format!(
       "--repo and --base-branch are given together for a repo task or omitted together for a repo-less one; exactly one was given for --task-type {}",
-      task_type.as_str()
+      task_type.store_type().as_str()
     ));
   }
   Ok(())
@@ -493,7 +499,7 @@ mod tests {
   #[test]
   fn test_main_help_lists_verify_profile() {
     let help = help_text();
-    assert!(help.contains("verify"));
+    assert!(help.contains(StoreTaskType::Verify.as_str()));
     assert!(help.contains("read-only plan verifier"));
   }
 
@@ -516,8 +522,9 @@ mod tests {
     }
     assert!(!help.contains("--context-work"), "--context-work is still named in help");
     assert!(help.contains("Requester Words"), "Requester Words is missing from help");
-    for choice in ["implement", "quick-edit", "script-run", "verify"] {
-      assert!(help.contains(choice), "{choice} is missing from help");
+    for choice in [StoreTaskType::Implement, StoreTaskType::QuickEdit, StoreTaskType::ScriptRun, StoreTaskType::Verify]
+    {
+      assert!(help.contains(choice.as_str()), "{} is missing from help", choice.as_str());
     }
     for section in [
       "## Goal",
@@ -552,7 +559,7 @@ mod tests {
       for (repo, base_branch) in [(Some("/repo"), None), (None, Some("main"))] {
         let error = validate_repo_and_branch(task_type, repo, base_branch).unwrap_err();
         assert!(error.contains("given together"), "{error}");
-        assert!(error.contains(task_type.as_str()), "{error}");
+        assert!(error.contains(task_type.store_type().as_str()), "{error}");
       }
     }
   }

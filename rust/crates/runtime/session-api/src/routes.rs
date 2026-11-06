@@ -1,10 +1,11 @@
+use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use lru::LruCache;
 
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
@@ -30,7 +31,7 @@ static ACTIVE_MEMOS: LazyLock<SessionsListMemos> = LazyLock::new(SessionsListMem
 static COMPACT_LISTING_MEMO: LazyLock<CompactListingMemo> = LazyLock::new(CompactListingMemo::default);
 const STATUS_BODY_MEMO_LIMIT: usize = 4;
 
-type StatusBodyCache = Mutex<LruCache<StatusKey, Vec<u8>>>;
+type StatusBodyCache = Mutex<LruCache<StatusKey, Arc<StatusBody>>>;
 type GzipBodyCache = Mutex<LruCache<Vec<u8>, Vec<u8>>>;
 
 fn gzip_body_memo(limit: usize) -> GzipBodyCache {
@@ -38,17 +39,65 @@ fn gzip_body_memo(limit: usize) -> GzipBodyCache {
 }
 
 static STATUS_BODY_MEMO: OnceLock<StatusBodyCache> = OnceLock::new();
-static STATUS_GZIP_MEMO: LazyLock<GzipBodyCache> = LazyLock::new(|| gzip_body_memo(16));
 static SEARCH_GZIP_MEMO: LazyLock<GzipBodyCache> = LazyLock::new(|| gzip_body_memo(2));
 static TREE_GZIP_MEMO: LazyLock<GzipBodyCache> = LazyLock::new(|| gzip_body_memo(4));
 
 /// The body length below which the transport middleware leaves a response uncompressed (`GZipMiddleware`).
 const TRANSPORT_GZIP_MINIMUM_SIZE: usize = 1000;
 
+/// The identity of one status body.
+///
+/// A `filter=all` body answers the Workspace's rows, and the listing's derived overlay names that corpus: it holds one
+/// entry per row, and a rebuild replaces it whenever a row, an overlay or the order moves. The key holds that overlay
+/// instead of the 7,160 id strings, so a repeat poll neither clones nor sorts nor compares them. A request that names
+/// its ids keys on the sorted ids. `generation` names the sidebar state the body reads beyond the rows.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-struct StatusKey {
-  ids: Vec<String>,
-  generation: u64,
+enum StatusKey {
+  Listing { derived: ListingOverlay, extra: Vec<String>, generation: u64 },
+  Ids { ids: Vec<String>, generation: u64 },
+}
+
+/// The listing's derived overlay as a key part. It compares and hashes by address, and it holds the overlay so the
+/// address stays this overlay's alone while the entry lives.
+#[derive(Clone, Debug)]
+struct ListingOverlay(Arc<sidebar_state::DerivedSidebarMap>);
+
+impl PartialEq for ListingOverlay {
+  fn eq(&self, other: &Self) -> bool {
+    Arc::ptr_eq(&self.0, &other.0)
+  }
+}
+
+impl Eq for ListingOverlay {}
+
+impl Hash for ListingOverlay {
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    Arc::as_ptr(&self.0).hash(state);
+  }
+}
+
+/// One status body: the plain bytes and, on the first request that accepts gzip, their compressed form.
+///
+/// A repeat request shares both allocations instead of copying the body. The response hands the ETag layer the same
+/// `Bytes` every time, so its tag memo answers the repeat without hashing the body again.
+struct StatusBody {
+  plain: Bytes,
+  gzip: OnceLock<Bytes>,
+}
+
+impl StatusBody {
+  fn new(plain: Bytes) -> Self {
+    Self { plain, gzip: OnceLock::new() }
+  }
+
+  /// The bytes a request that names `wants_gzip` sends.
+  fn bytes(&self, wants_gzip: bool) -> Bytes {
+    if wants_gzip {
+      self.gzip.get_or_init(|| Bytes::from(charliebot_compat::compression::gzip_level_one(&self.plain))).clone()
+    } else {
+      self.plain.clone()
+    }
+  }
 }
 
 /// The route patterns `routes` mounts, the merged writes, fork and detail routers included. The trailing-slash redirect
@@ -307,26 +356,22 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
   }
   // `filter=all` names the Workspace's rows, which the server knows; `ids` names any further sessions the client
   // paints or holds open, such as the open chat and a delegate card's child.
-  let mut ids = Vec::new();
-  match filter {
-    None => {}
+  let page = match filter {
+    None => None,
     Some("all") => match listing::active_page_rows(&features.store, &features.registry) {
-      Ok(page) => ids.extend(page.rows().iter().map(|row| row.id.clone())),
+      Ok(page) => Some(page),
       Err(error) => return store_error(error),
     },
     Some(name) => {
       return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({"detail": format!("unknown filter: {name}")}));
     }
-  }
-  if let Some(raw_ids) = raw_ids {
-    ids.extend(parse_session_ids(raw_ids));
-  }
-  let mut ids = unique_session_ids(ids);
-  // The body's bytes follow its key order, so the order the caller named the ids in must not reach it: `filter=all`
-  // follows the listing, whose rows move as they update, and a moved row would otherwise change the body with no row's
-  // state changed. The poll would then answer 200, never 304.
-  ids.sort();
-  if filter.is_none() && ids.is_empty() {
+  };
+  // The caller's ids name sessions outside the listing, so the listing's order never carries them. Sorting them keeps
+  // the order the caller named them in out of the body bytes and the memo key: a moved row would otherwise change the
+  // body with no row's state changed, and the poll would answer 200, never 304.
+  let mut named = raw_ids.map(parse_session_ids).unwrap_or_default();
+  named.sort();
+  if page.is_none() && named.is_empty() {
     return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({"detail": "ids must name at least one session"}));
   }
   let force = match query.parse_bool("force", false) {
@@ -334,25 +379,23 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
     Err(response) => return *response,
   };
   let generation = sidebar_state::derived_generation();
-  let key = StatusKey { ids: ids.clone(), generation };
+  let key = match &page {
+    Some(page) => StatusKey::Listing { derived: ListingOverlay(Arc::clone(page.derived())), extra: named, generation },
+    None => StatusKey::Ids { ids: named, generation },
+  };
   if !force && let Some(body) = get_status_body(&key) {
     let full_poll = sidebar_state::register_poll(false);
-    let _sessions = if full_poll {
-      match fresh_sessions(features, &ids) {
-        Ok(sessions) => sessions,
-        Err(error) => return store_error(error),
-      }
-    } else {
-      Vec::new()
-    };
-    return gzip_response(request, body, &STATUS_GZIP_MEMO);
+    if full_poll && let Err(error) = fresh_sessions(features, &status_ids(&key, page.as_ref())) {
+      return store_error(error);
+    }
+    return status_response(request, &body);
   }
-  let sessions = match fresh_sessions(features, &ids) {
+  let sessions = match fresh_sessions(features, &status_ids(&key, page.as_ref())) {
     Ok(sessions) => sessions,
     Err(error) => return store_error(error),
   };
   if sessions.is_empty() {
-    return gzip_response(request, b"{}".to_vec(), &STATUS_GZIP_MEMO);
+    return status_response(request, &StatusBody::new(Bytes::from_static(b"{}")));
   }
   let derived =
     match sidebar::resolve_sidebar_state(&features.store, &features.registry, &sessions, true, true, true, force) {
@@ -396,9 +439,33 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
     }
     result.insert(meta.id.clone(), Value::Object(payload));
   }
-  let body = charliebot_compat::json::fast_json_bytes(&Value::Object(result));
-  store_status_body(key, body.clone());
-  gzip_response(request, body, &STATUS_GZIP_MEMO)
+  let body = Arc::new(StatusBody::new(Bytes::from(charliebot_compat::json::fast_json_bytes(&Value::Object(result)))));
+  store_status_body(key, Arc::clone(&body));
+  status_response(request, &body)
+}
+
+/// The ids one status key answers, each once and sorted.
+///
+/// The body's bytes follow this order, so the sorted order keeps a rebuild's bytes equal to the bytes of the same
+/// rows named by `ids`, and it deflates smaller than the listing's update order.
+fn status_ids(key: &StatusKey, page: Option<&listing::PageRows>) -> Vec<String> {
+  match key {
+    StatusKey::Listing { extra, .. } => {
+      let mut ids: Vec<String> =
+        page.map(|page| page.rows().iter().map(|row| row.id.clone()).collect()).unwrap_or_default();
+      ids.extend(extra.iter().cloned());
+      ids.sort();
+      ids.dedup();
+      ids
+    }
+    StatusKey::Ids { ids, .. } => ids.clone(),
+  }
+}
+
+/// The response for one status body, compressed when the request accepts gzip.
+fn status_response(request: &Request<Body>, body: &StatusBody) -> Response {
+  let wants_gzip = accepts_gzip(request);
+  json_bytes_response(body.bytes(wants_gzip), wants_gzip)
 }
 
 async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
@@ -572,7 +639,7 @@ fn unique_session_ids(ids: impl IntoIterator<Item = String>) -> Vec<String> {
   ids.into_iter().filter(|id| seen.insert(id.clone())).collect()
 }
 
-fn get_status_body(key: &StatusKey) -> Option<Vec<u8>> {
+fn get_status_body(key: &StatusKey) -> Option<Arc<StatusBody>> {
   let memo = STATUS_BODY_MEMO.get_or_init(|| {
     Mutex::new(LruCache::new(NonZeroUsize::new(STATUS_BODY_MEMO_LIMIT).expect("the status memo limit is nonzero")))
   });
@@ -580,7 +647,7 @@ fn get_status_body(key: &StatusKey) -> Option<Vec<u8>> {
   memo.get(key).cloned()
 }
 
-fn store_status_body(key: StatusKey, body: Vec<u8>) {
+fn store_status_body(key: StatusKey, body: Arc<StatusBody>) {
   let memo = STATUS_BODY_MEMO.get_or_init(|| {
     Mutex::new(LruCache::new(NonZeroUsize::new(STATUS_BODY_MEMO_LIMIT).expect("the status memo limit is nonzero")))
   });
@@ -588,14 +655,18 @@ fn store_status_body(key: StatusKey, body: Vec<u8>) {
   memo.put(key, body);
 }
 
-fn gzip_response(request: &Request<Body>, body: Vec<u8>, memo: &'static GzipBodyCache) -> Response {
-  let wants_gzip = request
+/// Whether the request accepts a gzip response body.
+fn accepts_gzip(request: &Request<Body>) -> bool {
+  request
     .headers()
     .get(header::ACCEPT_ENCODING)
     .and_then(|value| value.to_str().ok())
-    .is_some_and(|value| value.contains("gzip"));
-  if !wants_gzip {
-    return json_bytes_response(body, None);
+    .is_some_and(|value| value.contains("gzip"))
+}
+
+fn gzip_response(request: &Request<Body>, body: Vec<u8>, memo: &'static GzipBodyCache) -> Response {
+  if !accepts_gzip(request) {
+    return json_bytes_response(Bytes::from(body), false);
   }
   let compressed = {
     let mut cache = memo.lock().expect("gzip body memo mutex is not poisoned");
@@ -608,17 +679,17 @@ fn gzip_response(request: &Request<Body>, body: Vec<u8>, memo: &'static GzipBody
       }
     }
   };
-  json_bytes_response(compressed, Some("gzip"))
+  json_bytes_response(Bytes::from(compressed), true)
 }
 
-fn json_bytes_response(body: Vec<u8>, encoding: Option<&'static str>) -> Response {
+fn json_bytes_response(body: Bytes, gzip: bool) -> Response {
   let mut builder = Response::builder()
     .status(StatusCode::OK)
     .header(header::CONTENT_TYPE, "application/json")
     .header(header::CONTENT_LENGTH, body.len());
-  if let Some(encoding) = encoding {
+  if gzip {
     builder = builder
-      .header(header::CONTENT_ENCODING, HeaderValue::from_static(encoding))
+      .header(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"))
       .header(header::VARY, HeaderValue::from_static("Accept-Encoding"));
   }
   builder.body(Body::from(body)).expect("a JSON response builds")
@@ -757,6 +828,30 @@ mod tests {
     let reverse = body(format!("/api/sessions/status?ids={},{}", second.id, first.id)).await;
 
     assert_eq!(forward, reverse);
+  }
+
+  /// A repeat `filter=all` poll answers the listing as it stands now, not the rows of the body it memoized.
+  #[tokio::test]
+  async fn a_repeat_status_filter_answers_the_listing_as_it_stands_now() {
+    let (_home, features) = crate::test_support::feature_context();
+    let status = || {
+      let features = Arc::clone(&features);
+      async move {
+        let request = Request::builder().uri("/api/sessions/status?filter=all").body(Body::empty()).unwrap();
+        crate::test_support::answer(session_status(State(features), request).await).await
+      }
+    };
+
+    let listed = crate::test_support::create_node(&features.store, "status-listed", None, TaskProfile::Manager).await;
+    let (_, first) = status().await;
+    features.store.mark_unread(&listed.id).await.expect("the row is marked unread");
+    let later = crate::test_support::create_node(&features.store, "status-later", None, TaskProfile::Manager).await;
+    let (_, repeat) = status().await;
+
+    assert_eq!(first[&listed.id][HAS_UNREAD], json!(false));
+    assert!(first.get(&later.id).is_none(), "the first poll answers the rows it listed");
+    assert_eq!(repeat[&listed.id][HAS_UNREAD], json!(true), "the repeat poll answers the row's new state");
+    assert!(repeat.get(&later.id).is_some(), "the repeat poll answers the row that appeared");
   }
 
   #[tokio::test]

@@ -8,7 +8,6 @@ use axum::routing::post;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, TaggedVariant};
 use charliebot_compat::responses;
 use charliebot_compat::validation::Bound;
-use futures_util::future::join_all;
 use reqwest::Client;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -97,7 +96,36 @@ struct Case {
 }
 
 #[tokio::test]
-async fn request_body_matches_recorded_for_the_request_corpus() {
+async fn request_body_matches_recorded_for_item_requests() {
+  let cases = corpus();
+  compare_route("/items", &cases, 0).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_bounded_requests() {
+  let cases = bounded_corpus();
+  compare_route("/bounds", &cases, 40).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_message_requests() {
+  let cases = message_corpus();
+  compare_route("/messages", &cases, 68).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_attachment_requests() {
+  let cases = attachment_corpus();
+  compare_route("/attachments", &cases, 85).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_trigger_requests() {
+  let cases = trigger_corpus();
+  compare_route("/triggers", &cases, 105).await;
+}
+
+async fn compare_route(route: &str, cases: &[Case], fixture_start: usize) {
   rustls::crypto::ring::default_provider().install_default().expect("the test installs its rustls crypto provider");
   let rust_listener = TcpListener::bind("127.0.0.1:0").await.expect("a loopback port is available");
   let rust_address = rust_listener.local_addr().expect("the Rust address is readable");
@@ -116,29 +144,9 @@ async fn request_body_matches_recorded_for_the_request_corpus() {
   assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");
   let fixture_cases = fixture["cases"].as_array().unwrap();
   assert_eq!(fixture_cases.len(), 137);
-  let items = corpus();
-  assert_eq!(items.len(), 40);
-  let bounded = bounded_corpus();
-  assert_eq!(bounded.len(), 28);
-  let messages = message_corpus();
-  assert_eq!(messages.len(), 17);
-  let attachments = attachment_corpus();
-  assert_eq!(attachments.len(), 20);
-  let triggers = trigger_corpus();
-  assert_eq!(triggers.len(), 32);
-  let (items_cases, rest) = fixture_cases.split_at(items.len());
-  let (bounded_cases, rest) = rest.split_at(bounded.len());
-  let (messages_cases, rest) = rest.split_at(messages.len());
-  let (attachments_cases, triggers_cases) = rest.split_at(attachments.len());
-  assert_eq!(triggers_cases.len(), triggers.len());
-  // The requests and their five route groups are independent, so compare the whole corpus concurrently.
-  tokio::join!(
-    compare_corpus(&client, rust_address, "/items", &items, items_cases),
-    compare_corpus(&client, rust_address, "/bounds", &bounded, bounded_cases),
-    compare_corpus(&client, rust_address, "/messages", &messages, messages_cases),
-    compare_corpus(&client, rust_address, "/attachments", &attachments, attachments_cases),
-    compare_corpus(&client, rust_address, "/triggers", &triggers, triggers_cases),
-  );
+  let fixture_end = fixture_start + cases.len();
+  let route_cases = &fixture_cases[fixture_start..fixture_end];
+  compare_corpus(&client, rust_address, route, cases, route_cases).await;
 
   rust_server.abort();
   match rust_server.await {
@@ -193,7 +201,7 @@ async fn compare_corpus(
   cases: &[Case],
   fixture_cases: &[Value],
 ) {
-  let comparisons = cases.iter().zip(fixture_cases).map(|(case, recorded)| async move {
+  for (case, recorded) in cases.iter().zip(fixture_cases) {
     let request = json!({
       "path": format!("{route}/{}", case.item_id),
       "name": case.name,
@@ -213,8 +221,7 @@ async fn compare_corpus(
     } else if recorded_status == StatusCode::UNPROCESSABLE_ENTITY {
       assert_eq!(error_shape(&rust_body), error_shape(recorded_body), "validation shape for {}", case.name);
     }
-  });
-  join_all(comparisons).await;
+  }
 }
 
 fn hex_bytes(bytes: &[u8]) -> String {

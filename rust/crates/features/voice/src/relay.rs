@@ -656,12 +656,8 @@ mod tests {
     registry.register_package("features.voice", crate::register).expect("register the voice config section");
     let config = Arc::new(registry.load_config(home.path()).expect("load synthetic voice config"));
     let (relay_finished, relay_finished_receiver) = watch::channel(false);
-    let state = Arc::new(RelayTestState {
-      config: Arc::clone(&config),
-      endpoint_url,
-      max_recording_samples,
-      relay_finished,
-    });
+    let state =
+      Arc::new(RelayTestState { config: Arc::clone(&config), endpoint_url, max_recording_samples, relay_finished });
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind the relay test server");
     let address = listener.local_addr().expect("read relay server address");
     let app = Router::new().route("/ws", get(relay_test_handler)).with_state(state);

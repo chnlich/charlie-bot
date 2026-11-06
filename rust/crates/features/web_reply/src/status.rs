@@ -1271,11 +1271,8 @@ mod tests {
 
     set_status(&home.features, &root, VALID_SET).await.expect("the root sets");
 
-    let notices: Vec<Value> = drain(&mut root_page)
-      .await
-      .into_iter()
-      .filter(|frame| frame["type"] == SUBTREE_NOTICE_TYPE)
-      .collect();
+    let notices: Vec<Value> =
+      drain(&mut root_page).await.into_iter().filter(|frame| frame["type"] == SUBTREE_NOTICE_TYPE).collect();
     assert!(notices.is_empty(), "the root has no ancestor page to notify");
   }
 

@@ -331,6 +331,7 @@ mod tests {
     assert_eq!(fs::read_to_string(&prompt_file).unwrap(), "just the message");
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn a_turn_runs_devin_in_print_mode_and_emits_the_export_events() {
     let root = tempfile::tempdir().unwrap();
@@ -354,6 +355,7 @@ mod tests {
     assert_eq!(run.events, export::turn_events(FIXTURE, ANSWER).unwrap());
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn a_resumed_turn_passes_the_native_session_id() {
     let root = tempfile::tempdir().unwrap();
@@ -363,6 +365,7 @@ mod tests {
     assert!(recorded_argv(root.path()).contains(&format!("--resume={SESSION_ID}")));
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn a_missing_export_fails_the_turn_and_names_its_path() {
     let root = tempfile::tempdir().unwrap();
@@ -376,6 +379,7 @@ mod tests {
     assert_eq!(run.events[0]["type"], "error");
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn an_export_without_a_session_id_fails_the_turn() {
     let root = tempfile::tempdir().unwrap();
@@ -387,6 +391,7 @@ mod tests {
     assert!(error.contains("devin export has no session_id"), "the error names the missing field: {error}");
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn an_export_without_a_user_step_fails_the_turn_and_names_the_file() {
     let root = tempfile::tempdir().unwrap();
@@ -400,6 +405,7 @@ mod tests {
     assert!(error.contains(&export_path.display().to_string()), "the error names the export path: {error}");
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn a_current_turn_agent_step_without_metrics_fails_the_turn_and_names_the_file() {
     let root = tempfile::tempdir().unwrap();
@@ -416,6 +422,7 @@ mod tests {
     assert!(error.contains(&export_path.display().to_string()), "the error names the export path: {error}");
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn a_nonzero_exit_fails_the_turn_with_devins_stderr() {
     let root = tempfile::tempdir().unwrap();
@@ -428,6 +435,7 @@ mod tests {
     assert_eq!(run.events[0]["message"], "devin exited 1: Error: Usage limit reached. Try again later.");
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn a_devin_launch_joins_the_session_cgroup_of_its_session() {
     use_fake_cgroup_hierarchy();

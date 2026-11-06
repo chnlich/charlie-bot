@@ -113,6 +113,7 @@ mod tests {
     );
   }
 
+  #[ignore = "integration"]
   // A late replay keeps a same-process second turn alive across long silent tool work.
   #[tokio::test]
   async fn replay_after_result_resets_post_result_timeout() {

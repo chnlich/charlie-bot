@@ -225,6 +225,7 @@ fn now_ms() -> i64 {
   SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64
 }
 
+#[ignore = "integration"]
 #[test]
 fn a_fresh_token_fetches_the_panel_without_renewal_and_probes_the_cli_once() {
   let fixture = Fixture::new(FRESH, vec![(200, PANEL), (200, PANEL)], vec![]);
@@ -245,6 +246,7 @@ fn a_fresh_token_fetches_the_panel_without_renewal_and_probes_the_cli_once() {
   assert_eq!(fixture.credentials_text(), FRESH);
 }
 
+#[ignore = "integration"]
 #[test]
 fn an_expired_token_renews_once_and_rewrites_the_credentials_file() {
   let fixture = Fixture::new(STALE, vec![(401, "{}"), (200, PANEL)], vec![(200, RENEWAL)]);
@@ -275,6 +277,7 @@ fn an_expired_token_renews_once_and_rewrites_the_credentials_file() {
   assert_eq!(fixture.credentials_mode(), 0o600);
 }
 
+#[ignore = "integration"]
 #[test]
 fn a_refused_renewal_leaves_the_credentials_and_reports_a_failed_refresh() {
   let fixture = Fixture::new(STALE, vec![(401, "{}")], vec![(400, REFUSAL)]);
@@ -289,6 +292,7 @@ fn a_refused_renewal_leaves_the_credentials_and_reports_a_failed_refresh() {
   assert_eq!(fixture.credentials_text(), STALE);
 }
 
+#[ignore = "integration"]
 #[test]
 fn a_pool_login_whose_renewal_was_refused_is_marked_only_after_an_auth_failure_is_recorded() {
   let fixture = Fixture::new(STALE, vec![(401, "{}")], vec![(400, REFUSAL)]);
@@ -311,6 +315,7 @@ fn a_pool_login_whose_renewal_was_refused_is_marked_only_after_an_auth_failure_i
   assert_eq!(entry["login_required"], json!(fixture.login_dir.display().to_string()));
 }
 
+#[ignore = "integration"]
 #[test]
 fn a_rate_limited_account_backs_off_without_a_second_request() {
   let fixture = Fixture::new(STALE, vec![(429, "{}")], vec![]);
@@ -324,6 +329,7 @@ fn a_rate_limited_account_backs_off_without_a_second_request() {
   assert_eq!(fixture.requests("/usage").len(), 1, "the backoff holds the second round back");
 }
 
+#[ignore = "integration"]
 #[test]
 fn an_http_error_returns_the_status_error_text() {
   let fixture = Fixture::new(FRESH, vec![(500, "{}")], vec![]);

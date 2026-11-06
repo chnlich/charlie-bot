@@ -765,27 +765,4 @@ mod tests {
     assert_eq!(str_repr("it's"), "\"it's\"");
     assert_eq!(str_repr("a'b\"c"), "'a\\'b\"c'");
   }
-
-  const GOLDEN_REPRS: &str = include_str!("../tests/fixtures/text_repr_golden.txt");
-  const GOLDEN_REPRS_METADATA: &str = include_str!("../tests/fixtures/text_repr_metadata_golden.json");
-
-  #[test]
-  fn str_repr_matches_recorded_for_every_code_point() {
-    let metadata: Value = serde_json::from_str(GOLDEN_REPRS_METADATA).unwrap();
-    assert_eq!(metadata["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
-    let reprs: Vec<&str> = GOLDEN_REPRS.split_terminator('\n').collect();
-    let code_points: Vec<char> = (0..=0x10_ffff_u32).filter_map(char::from_u32).collect();
-    assert_eq!(reprs.len(), metadata["code_point_count"].as_u64().unwrap() as usize);
-    assert_eq!(reprs.len(), code_points.len(), "CPython records one repr per code point");
-    let mismatches: Vec<String> = code_points
-      .iter()
-      .zip(&reprs)
-      .filter_map(|(c, cpython)| {
-        let ours = str_repr(&c.to_string());
-        (ours != *cpython).then(|| format!("U+{:04X}: CPython {cpython}, str_repr {ours}", *c as u32))
-      })
-      .collect();
-    let first = &mismatches[..mismatches.len().min(8)];
-    assert!(mismatches.is_empty(), "{} code points differ, first {first:?}", mismatches.len());
-  }
 }

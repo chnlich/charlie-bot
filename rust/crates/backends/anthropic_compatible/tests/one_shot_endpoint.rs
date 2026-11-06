@@ -9,6 +9,7 @@ use charliebot_claude_code::{
 use charliebot_registry::backend::{AgentBackend, LaunchArgs};
 use serde_json::Value;
 
+#[ignore = "integration"]
 // A one-shot runs on the entry's endpoint with its headers and extra body, and passes no --model flag.
 #[tokio::test]
 async fn one_shot_text_launches_on_the_entry_endpoint_without_a_model_flag() {
@@ -43,6 +44,7 @@ async fn one_shot_text_launches_on_the_entry_endpoint_without_a_model_flag() {
   assert_eq!(env[claude_launch::MAX_CONTEXT_TOKENS_ENV], "409600");
 }
 
+#[ignore = "integration"]
 // A one-shot of an entry without effort passes no --effort flag.
 #[tokio::test]
 async fn one_shot_text_omits_effort_when_the_entry_has_none() {

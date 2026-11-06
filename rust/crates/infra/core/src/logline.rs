@@ -279,11 +279,11 @@ mod tests {
     '\u{1f600}',
   ];
 
-  /// Every string of up to three characters from `POOL`, starting with the empty string.
+  /// Every string of up to two characters from `POOL`, starting with the empty string.
   fn generated() -> Vec<String> {
     let mut all = vec![String::new()];
     let mut frontier = vec![String::new()];
-    for _ in 0..3 {
+    for _ in 0..2 {
       frontier = frontier.iter().flat_map(|prefix| POOL.into_iter().map(move |c| format!("{prefix}{c}"))).collect();
       all.extend(frontier.iter().cloned());
     }

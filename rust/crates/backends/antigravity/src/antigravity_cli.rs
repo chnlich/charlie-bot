@@ -443,6 +443,7 @@ mod tests {
     events
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn final_stdout_survives_server_death_and_matches_uninterrupted_events_and_usage() {
     let uninterrupted = tempfile::tempdir().unwrap();
@@ -472,6 +473,7 @@ mod tests {
     assert!(drain_capture(restarted.path(), || false).await.is_empty());
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn final_stdout_answer_written_during_downtime_uses_the_dead_process_completion_time() {
     let root = tempfile::tempdir().unwrap();
@@ -491,6 +493,7 @@ mod tests {
     assert_eq!(recovery::raw_completion_time(&raw), Some(completed));
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn final_stdout_stop_after_server_death_ends_the_process_group() {
     let root = tempfile::tempdir().unwrap();

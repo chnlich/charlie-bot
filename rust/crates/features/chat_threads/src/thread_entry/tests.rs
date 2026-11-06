@@ -351,7 +351,7 @@ fn router_command(directory: &TempDir, body: &str, arguments: &[&str]) -> Vec<St
 struct FakeAdapter {
   posts: Mutex<Vec<(Value, String, String)>>,
   post_keys: Mutex<HashSet<String>>,
-  post_delay: Duration,
+  yield_before_post: bool,
   acks: Mutex<Vec<Value>>,
   removed: Mutex<Vec<Value>>,
   thread: Mutex<Vec<ThreadMessage>>,
@@ -359,11 +359,11 @@ struct FakeAdapter {
 
 impl FakeAdapter {
   fn with_thread(messages: &[(&str, &str)]) -> Arc<Self> {
-    Self::with_thread_and_delay(messages, Duration::ZERO)
+    Self::with_thread_yield_before_post(messages, false)
   }
 
-  fn with_thread_and_delay(messages: &[(&str, &str)], post_delay: Duration) -> Arc<Self> {
-    let adapter = Self { post_delay, ..Self::default() };
+  fn with_thread_yield_before_post(messages: &[(&str, &str)], yield_before_post: bool) -> Arc<Self> {
+    let adapter = Self { yield_before_post, ..Self::default() };
     *adapter.thread.lock().expect("the thread lock is never poisoned") = messages
       .iter()
       .map(|(id, text)| ThreadMessage {
@@ -386,9 +386,11 @@ impl ThreadAdapter for FakeAdapter {
   }
 
   fn post<'a>(&'a self, address: &'a Value, text: &'a str, post_key: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
-    let post_delay = self.post_delay;
+    let yield_before_post = self.yield_before_post;
     Box::pin(async move {
-      tokio::time::sleep(post_delay).await;
+      if yield_before_post {
+        tokio::task::yield_now().await;
+      }
       self.posts.lock().expect("the post log is never poisoned").push((
         address.clone(),
         text.to_string(),
@@ -852,7 +854,7 @@ async fn round_completion_and_boot_audit_emit_one_nudge_then_notice() {
     .startup
     .insert(charliebot_tasks::master_queue::MasterQueue::new(backend_pool))
     .expect("the master queue inserts once");
-  let adapter = FakeAdapter::with_thread_and_delay(&[], Duration::from_millis(50));
+  let adapter = FakeAdapter::with_thread_yield_before_post(&[], true);
   let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
   let summon = home
     .append(

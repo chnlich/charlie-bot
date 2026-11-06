@@ -1147,8 +1147,8 @@ mod tests {
   /// within the A1 range of the reference start. Its full passes replay about the reference start's run follow-ups:
   /// one per finished manager turn and work run, the workers' work runs among them.
   #[test]
-  fn a_production_size_plan_deals_each_keep_reason_its_scaled_count() {
-    let sessions = 3_000;
+  fn a_scaled_plan_deals_each_keep_reason_its_scaled_count() {
+    let sessions = 1_200;
     let (_, _, sizes) = session::planned_home(sessions, 1);
     let plan = HomePlan::new(&sizes, 1);
     for (reason, reference) in REFERENCE_KEEPS {

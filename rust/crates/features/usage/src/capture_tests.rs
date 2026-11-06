@@ -2026,7 +2026,7 @@ fn stored_ts(ledger: &UsageLedger, record_id: &str) -> SqlValue {
 }
 
 #[test]
-fn malformed_timestamp_shapes_capture_the_recorded_rows() {
+fn malformed_timestamp_scalars_capture_the_recorded_rows() {
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
@@ -2091,34 +2091,51 @@ fn malformed_timestamp_shapes_capture_the_recorded_rows() {
   assert_eq!(stored_ts(&ledger, "run:run-float"), SqlValue::Text("1.5".to_string()));
   assert_eq!(stored_ts(&ledger, "run:run-bool"), SqlValue::Text("1".to_string()));
   assert_eq!(stored_ts(&ledger, "run:run-zero"), SqlValue::Text(String::new()));
-  // A list or map timestamp fails the ledger bind, so the capture raises.
-  let raising = [
-    r#"{"type": "result", "timestamp": [1], "usage": {"input_tokens": 1}}"#,
-    r#"{"type": "result", "timestamp": {"a": 1}, "usage": {"input_tokens": 1}}"#,
-  ];
-  for line in raising {
-    let dir = tempfile::tempdir().unwrap();
-    let home = dir.path().join("home");
-    let (config, registry) = fixture(&home);
-    let session = r#"{"session_id": "raise-kept"}"#;
-    write_thread(&home, "s-raise", "t", Some(("claude-main", Some("vendor/claude-model"))), &events(&[line, session]));
-    let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
-    assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
-  }
+}
 
-  // Run metadata uses the same `... or ""` bind as a thread timestamp.
-  let raising_started_at = [
-    r#"{"backend": "claude-main", "model": "vendor/claude-run-ts", "started_at": [1]}"#,
+fn assert_thread_timestamp_fails(line: &str) {
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let (config, registry) = fixture(&home);
+  let session = r#"{"session_id": "raise-kept"}"#;
+  write_thread(&home, "s-raise", "t", Some(("claude-main", Some("vendor/claude-model"))), &events(&[line, session]));
+  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
+}
+
+fn assert_run_started_at_fails(metadata: &str) {
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let (config, registry) = fixture(&home);
+  let run_usage = events(&[
+    r#"{"session_id": "claude-run-ts"}"#,
+    r#"{"type": "result", "usage": {"input_tokens": 13, "output_tokens": 6}}"#,
+  ]);
+  write_run_json(&home, "run-session", "run-bad-ts", metadata, &run_usage);
+  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
+}
+
+#[test]
+fn a_thread_array_timestamp_fails_capture() {
+  assert_thread_timestamp_fails(r#"{"type": "result", "timestamp": [1], "usage": {"input_tokens": 1}}"#);
+}
+
+#[test]
+fn a_thread_map_timestamp_fails_capture() {
+  assert_thread_timestamp_fails(r#"{"type": "result", "timestamp": {"a": 1}, "usage": {"input_tokens": 1}}"#);
+}
+
+#[test]
+fn a_run_array_started_at_fails_capture() {
+  assert_run_started_at_fails(r#"{"backend": "claude-main", "model": "vendor/claude-run-ts", "started_at": [1]}"#);
+}
+
+#[test]
+fn a_run_map_started_at_fails_capture() {
+  assert_run_started_at_fails(
     r#"{"backend": "claude-main", "model": "vendor/claude-run-ts", "started_at": {"a": 1}}"#,
-  ];
-  for (index, metadata) in raising_started_at.into_iter().enumerate() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = dir.path().join("home");
-    let (config, registry) = fixture(&home);
-    write_run_json(&home, "run-session", &format!("run-bad-ts-{index}"), metadata, &run_usage);
-    let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
-    assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
-  }
+  );
 }
 
 const MASTER_RESULT: &str =

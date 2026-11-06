@@ -9,7 +9,6 @@ publish.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 bstr.workspace = true
-charliebot-agents.workspace = true
 charliebot-claude-code.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true

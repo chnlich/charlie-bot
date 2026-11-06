@@ -56,7 +56,7 @@ const PHASES: &[&str] = &["started", "completed", "superseded", "failed", "rende
 /// the per-kind model revalidates the whole body with `forbid_extra`.
 const ENVELOPE_FIELDS: &[Field] = &[
   Field::required("kind", FieldType::Literal(KINDS)),
-  Field::required("client_ts", FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
+  Field::required(request_body::CLIENT_TS, FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
 ];
 const ENVELOPE_BODY: BodyModel = BodyModel::required(ENVELOPE_FIELDS);
 
@@ -71,7 +71,7 @@ const SWITCH_FIELDS: &[Field] = &[
   Field::required("winner_generation", FieldType::NullableInteger),
   Field::optional("elapsed_ms", FieldType::NullableInteger).ge(Bound::Int(0)),
   Field::required("error", FieldType::NullableString),
-  Field::required("client_ts", FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
+  Field::required(request_body::CLIENT_TS, FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
   Field::optional("request_start", FieldType::NullableInteger).ge(Bound::Int(0)),
   Field::optional("response_start", FieldType::NullableInteger).ge(Bound::Int(0)),
   Field::optional("response_end", FieldType::NullableInteger).ge(Bound::Int(0)),
@@ -87,7 +87,7 @@ const SEND_FIELDS: &[Field] = &[
   Field::optional("click_to_response_ms", FieldType::NullableInteger).ge(Bound::Int(0)),
   Field::optional("click_to_echo_ms", FieldType::NullableInteger).ge(Bound::Int(0)),
   Field::required("retries", FieldType::Integer).ge(Bound::Int(0)),
-  Field::required("client_ts", FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
+  Field::required(request_body::CLIENT_TS, FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
 ];
 const SEND_BODY: BodyModel = BodyModel::required(SEND_FIELDS).forbid_extra();
 
@@ -103,7 +103,7 @@ const SOCKET_FIELDS: &[Field] = &[
   Field::optional("reconnect_count", FieldType::NullableInteger).ge(Bound::Int(0)),
   Field::optional("catchup_at", FieldType::NullableString).max_length(MAX_TIMESTAMP_CHARS),
   Field::optional("catchup_bytes", FieldType::NullableInteger).ge(Bound::Int(0)),
-  Field::required("client_ts", FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
+  Field::required(request_body::CLIENT_TS, FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
 ];
 const SOCKET_BODY: BodyModel = BodyModel::required(SOCKET_FIELDS).forbid_extra();
 
@@ -115,7 +115,7 @@ const PAGE_LOAD_FIELDS: &[Field] = &[
   Field::required("dom_content_loaded_ms", FieldType::Integer).ge(Bound::Int(0)),
   Field::optional("transfer_size", FieldType::NullableInteger).ge(Bound::Int(0)),
   Field::required("cause", FieldType::Literal(PAGE_LOAD_CAUSES)),
-  Field::required("client_ts", FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
+  Field::required(request_body::CLIENT_TS, FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
 ];
 const PAGE_LOAD_BODY: BodyModel = BodyModel::required(PAGE_LOAD_FIELDS).forbid_extra();
 
@@ -136,7 +136,7 @@ const TRAFFIC_FIELDS: &[Field] = &[
   Field::required("endpoints", FieldType::ModelList { model: &TRAFFIC_ENDPOINT_BODY })
     .max_length(MAX_TRAFFIC_ENDPOINTS),
   Field::required("visibility_state", FieldType::Literal(VISIBILITY_STATES)),
-  Field::required("client_ts", FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
+  Field::required(request_body::CLIENT_TS, FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
 ];
 const TRAFFIC_BODY: BodyModel = BodyModel::required(TRAFFIC_FIELDS).forbid_extra();
 
@@ -258,7 +258,7 @@ fn log_switch(values: &Map<String, Value>, forwarded_for: &str) {
     winner_generation = %LogValue::of_int(integer_field(values, "winner_generation")),
     elapsed_ms = %LogValue::of_int(integer_field(values, "elapsed_ms")),
     error = %LogValue::of(error.as_deref()),
-    client_ts = %text_field(values, "client_ts"),
+    client_ts = %text_field(values, request_body::CLIENT_TS),
     request_start = %LogValue::of_int(integer_field(values, "request_start")),
     response_start = %LogValue::of_int(integer_field(values, "response_start")),
     response_end = %LogValue::of_int(integer_field(values, "response_end")),
@@ -275,7 +275,7 @@ fn log_send(values: &Map<String, Value>, forwarded_for: &str) {
     click_to_response_ms = %LogValue::of_int(integer_field(values, "click_to_response_ms")),
     click_to_echo_ms = %LogValue::of_int(integer_field(values, "click_to_echo_ms")),
     retries = %integer_field(values, "retries").expect("a required integer validates to a value"),
-    client_ts = %text_field(values, "client_ts"),
+    client_ts = %text_field(values, request_body::CLIENT_TS),
     forwarded_for = %forwarded_for,
     "diag_client"
   );
@@ -291,7 +291,7 @@ fn log_socket(values: &Map<String, Value>, forwarded_for: &str) {
     reconnect_count = %LogValue::of_int(integer_field(values, "reconnect_count")),
     catchup_at = %LogValue::of(optional_text_field_ref(values, "catchup_at")),
     catchup_bytes = %LogValue::of_int(integer_field(values, "catchup_bytes")),
-    client_ts = %text_field(values, "client_ts"),
+    client_ts = %text_field(values, request_body::CLIENT_TS),
     forwarded_for = %forwarded_for,
     "diag_client"
   );
@@ -306,7 +306,7 @@ fn log_page_load(values: &Map<String, Value>, forwarded_for: &str) {
       .expect("a required integer validates to a value"),
     transfer_size = %LogValue::of_int(integer_field(values, "transfer_size")),
     cause = %text_field(values, "cause"),
-    client_ts = %text_field(values, "client_ts"),
+    client_ts = %text_field(values, request_body::CLIENT_TS),
     forwarded_for = %forwarded_for,
     "diag_client"
   );
@@ -318,7 +318,7 @@ fn log_traffic(values: &Map<String, Value>, forwarded_for: &str) {
     window_s = %integer_field(values, "window_s").expect("a required integer validates to a value"),
     endpoints = %values.get("endpoints").expect("a required field validates to a value"),
     visibility_state = %text_field(values, "visibility_state"),
-    client_ts = %text_field(values, "client_ts"),
+    client_ts = %text_field(values, request_body::CLIENT_TS),
     forwarded_for = %forwarded_for,
     "diag_client"
   );

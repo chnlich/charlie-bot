@@ -170,7 +170,26 @@ pub(crate) struct SearchAnswer {
   pub source: Option<Arc<SearchMatch>>,
 }
 
+/// The work every fresh query of one corpus shares: each session's lowercase name, and each active session's chat
+/// file.
+///
+/// A fresh query tests the needle against every session name and checks the chat file of every active session, and
+/// both sets depend only on the corpus. The store keeps a corpus until a metadata write or the sweep interval rebuilds
+/// it, so the entry serves the queries between two rebuilds. `corpus` is the key and holds the rows it names alive, so
+/// a pointer match names the same sessions; `sessions_dir` is the directory the paths resolve below.
+struct CorpusWork {
+  corpus: Arc<Vec<Arc<SessionMetadata>>>,
+  sessions_dir: PathBuf,
+  /// Each corpus row's name, lowercased once.
+  lowered_names: Vec<String>,
+  /// Every active session's chat file, in corpus order. The signature batch shares it across its workers.
+  candidates: Arc<Vec<WatchedFile>>,
+  /// The corpus row of each candidate, so a verdict maps back to its session.
+  candidate_rows: Vec<usize>,
+}
+
 struct SearchMemos {
+  corpus_work: Option<Arc<CorpusWork>>,
   files: LruCache<PathBuf, SearchFileRoots>,
   trigrams: LruCache<PathBuf, TrigramEntry>,
   matches: LruCache<String, Arc<SearchMatch>>,
@@ -186,6 +205,7 @@ impl Default for SearchMemos {
       LruCache::new(NonZeroUsize::new(SEARCH_TRIGRAM_MEMO_LIMIT).expect("the trigram memo limit is nonzero"));
     let matches = LruCache::new(NonZeroUsize::new(SEARCH_MATCH_MEMO_LIMIT).expect("the match memo limit is nonzero"));
     Self {
+      corpus_work: None,
       files,
       trigrams,
       matches,
@@ -200,6 +220,41 @@ impl Default for SearchMemos {
 type RootList = Vec<(String, FileSignature)>;
 
 impl SearchMemos {
+  /// The corpus work for `all`: the cached entry while the corpus and its sessions directory still hold, and a fresh
+  /// one otherwise.
+  fn corpus_work(
+    &mut self,
+    all: &Arc<Vec<Arc<SessionMetadata>>>,
+    sessions_dir: &Path,
+    store: &Store,
+  ) -> Arc<CorpusWork> {
+    if let Some(work) = self.corpus_work.as_ref()
+      && Arc::ptr_eq(&work.corpus, all)
+      && work.sessions_dir == sessions_dir
+    {
+      return Arc::clone(work);
+    }
+    let mut lowered_names = Vec::with_capacity(all.len());
+    let mut candidates = Vec::new();
+    let mut candidate_rows = Vec::new();
+    for (row, meta) in all.iter().enumerate() {
+      lowered_names.push(meta.name.to_lowercase());
+      if meta.status == SessionStatus::Active {
+        candidates.push(watched_file(sessions_dir, store.chat_events_path(&meta.id)));
+        candidate_rows.push(row);
+      }
+    }
+    let work = Arc::new(CorpusWork {
+      corpus: Arc::clone(all),
+      sessions_dir: sessions_dir.to_path_buf(),
+      lowered_names,
+      candidates: Arc::new(candidates),
+      candidate_rows,
+    });
+    self.corpus_work = Some(Arc::clone(&work));
+    work
+  }
+
   /// The miss and hit roots of one file. Their order is irrelevant: the verdict helpers only scan them.
   fn roots(&mut self, path: &Path) -> (RootList, RootList) {
     let Some(entry) = self.files.get_mut(path) else { return (Vec::new(), Vec::new()) };
@@ -272,41 +327,42 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
     }
   }
 
+  let work = memos.lock().expect("session search memo mutex is not poisoned").corpus_work(&all, &sessions_dir, store);
   let mut names = Vec::new();
-  let mut content_metas = Vec::new();
-  let mut candidate_paths = Vec::new();
-  for meta in all.iter() {
-    if meta.name.to_lowercase().contains(&needle) {
+  let mut name_hits = vec![false; all.len()];
+  for (row, meta) in all.iter().enumerate() {
+    if work.lowered_names[row].contains(&needle) {
+      name_hits[row] = true;
       names.push(meta);
-    } else if meta.status == SessionStatus::Active {
-      content_metas.push(meta);
-      candidate_paths.push(watched_file(&sessions_dir, store.chat_events_path(&meta.id)));
     }
   }
   names.sort_by_key(|left| Reverse(left.updated_at));
   names.truncate(SEARCH_RESULT_LIMIT);
-  let candidate_paths = Arc::new(candidate_paths);
-  let signatures: Vec<Option<FileSignature>> = file_signatures(&candidate_paths, sessions_handle.as_ref())
+  let signatures: Vec<Option<FileSignature>> = file_signatures(&work.candidates, sessions_handle.as_ref())
     .into_iter()
-    .zip(&content_metas)
-    .map(|(result, meta)| match result {
+    .zip(&work.candidate_rows)
+    .map(|(result, row)| match result {
       Ok(signature) => Some(signature),
       Err(error) => {
-        log_search_read_failed_once(memos, &meta.id, &error);
+        log_search_read_failed_once(memos, &all[*row].id, &error);
         None
       }
     })
     .collect();
 
   // The per-file verdicts are read here, on the request's thread, and the files that need a scan are collected
-  // so one batch can read them across threads. A candidate's place in `content_hits` stays its place in the
-  // corpus, because the result's order breaks ties on insertion order.
+  // so one batch can read them across threads. A candidate's place in `content_hits` follows the corpus order,
+  // because the result's order breaks ties on insertion order.
   let trigrams = needle_trigrams(&needle);
-  let mut content_hits = vec![false; content_metas.len()];
+  let mut content_hits = vec![false; work.candidates.len()];
   let mut scans: Vec<(usize, u64)> = Vec::new();
   let mut unindexed: Vec<usize> = Vec::new();
-  for (index, (_, signature)) in content_metas.iter().zip(&signatures).enumerate() {
-    let path = &candidate_paths[index].path;
+  for (index, signature) in signatures.iter().enumerate() {
+    // A session whose name matched already answers the query, so its chat file is not read.
+    if name_hits[work.candidate_rows[index]] {
+      continue;
+    }
+    let path = &work.candidates[index].path;
     let Some(signature) = signature else { continue };
     // The content index settles most fresh queries before the per-file roots are read, and reading those roots
     // copies every needle they hold.
@@ -344,13 +400,13 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
   // whose index rules the needle out leaves the scan batch here, while a file the index cannot rule out is searched
   // by the pass itself and leaves it too.
   if !unindexed.is_empty() {
-    let answers = index_and_search_files(&candidate_paths, &unindexed, &signatures, &needle);
+    let answers = index_and_search_files(&work.candidates, &unindexed, &signatures, &needle);
     let mut indexed = HashSet::new();
     for (index, answer) in answers {
       let signature = signatures[index].expect("an indexed candidate holds its signature");
       match answer {
         Ok((bits, found)) => {
-          let path = &candidate_paths[index].path;
+          let path = &work.candidates[index].path;
           memos.lock().expect("session search memo mutex is not poisoned").remember_trigrams(path, signature, bits);
           memos
             .lock()
@@ -359,7 +415,7 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
           content_hits[index] = found;
           indexed.insert(index);
         }
-        Err(error) => log_search_read_failed_once(memos, &content_metas[index].id, &error),
+        Err(error) => log_search_read_failed_once(memos, &all[work.candidate_rows[index]].id, &error),
       }
     }
     if !indexed.is_empty() {
@@ -367,8 +423,8 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
     }
   }
   let mut scan_failures = 0;
-  for ((index, _), answer) in scans.iter().zip(scan_contents(&candidate_paths, &scans, &needle)) {
-    let path = &candidate_paths[*index].path;
+  for ((index, _), answer) in scans.iter().zip(scan_contents(&work.candidates, &scans, &needle)) {
+    let path = &work.candidates[*index].path;
     let signature = signatures[*index].expect("a scanned candidate holds its signature");
     match answer {
       Ok(true) => {
@@ -380,12 +436,12 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
       }
       Err(error) => {
         scan_failures += 1;
-        log_search_read_failed_once(memos, &content_metas[*index].id, &error);
+        log_search_read_failed_once(memos, &all[work.candidate_rows[*index]].id, &error);
       }
     }
   }
 
-  names.extend(content_metas.iter().zip(&content_hits).filter(|(_, hit)| **hit).map(|(meta, _)| *meta));
+  names.extend(work.candidate_rows.iter().zip(&content_hits).filter(|(_, hit)| **hit).map(|(row, _)| &all[*row]));
   names.sort_by_key(|left| Reverse(left.updated_at));
   names.truncate(SEARCH_RESULT_LIMIT);
   if scan_failures == 0 {
@@ -395,9 +451,12 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
     let cutoff = names.get(SEARCH_RESULT_LIMIT - 1).map(|meta| meta.updated_at);
     let mut watched = Vec::new();
     let mut watched_signatures = Vec::new();
-    for (index, (meta, signature)) in content_metas.iter().zip(signatures).enumerate() {
-      if cutoff.is_none_or(|cutoff| meta.updated_at >= cutoff) {
-        watched.push(candidate_paths[index].clone());
+    for (index, (row, signature)) in work.candidate_rows.iter().zip(signatures).enumerate() {
+      if name_hits[*row] {
+        continue;
+      }
+      if cutoff.is_none_or(|cutoff| all[*row].updated_at >= cutoff) {
+        watched.push(work.candidates[index].clone());
         watched_signatures.push(signature);
       }
     }

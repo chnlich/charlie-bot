@@ -3,6 +3,7 @@
 mod api;
 mod boundary;
 pub mod config;
+mod firing;
 mod host_gate;
 mod loader;
 mod scheduler;

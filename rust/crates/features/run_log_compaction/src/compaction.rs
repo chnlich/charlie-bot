@@ -1,7 +1,7 @@
 //! The compaction of a finished run's log files to zstd.
 //!
-//! A run whose record holds an end at least [`PLAIN_RETENTION`] old has each of its log files stored as `<name>.zst`:
-//! the handler writes the compressed file, decompresses it and compares it byte for byte with the plain file, and only
+//! A run whose record holds an end at least [`PLAIN_RETENTION`] old has each of its log files stored as `<name>.zst`.
+//! The handler writes the compressed file, decompresses it and compares it byte for byte with the plain file, and only
 //! then removes the plain file. A run without a recorded end is left alone, and a second pass finds nothing to do.
 
 use std::fs::{self, File};

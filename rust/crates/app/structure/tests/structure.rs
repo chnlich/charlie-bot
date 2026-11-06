@@ -950,6 +950,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/store",
     hint: "Use `charliebot_store::layout::chat_events_path`.",
   },
+  OwnerRow {
+    name: "scripts/v1_session_conversion.py",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::v1_session_conversion::CONVERSION_SCRIPT`.",
+  },
   OwnerRow { name: "schedule_task", owner: "runtime/store", hint: "Use `charliebot_store::metadata::SCHEDULE_TASK`." },
   OwnerRow { name: "schedule_cron", owner: "runtime/store", hint: "Use `charliebot_store::metadata::SCHEDULE_CRON`." },
   OwnerRow {

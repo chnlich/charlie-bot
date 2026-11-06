@@ -8,7 +8,6 @@ use anyhow::Context as _;
 use charliebot_core::json_loads;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot};
 use charliebot_core::text_repr::{self, JsonStyle};
-use charliebot_core::v1_sessions::V1_SESSION_CONVERSION_GUIDANCE;
 use serde::de::{MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -16,6 +15,7 @@ use serde_json::{Map, Value};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use crate::v1_session_conversion::V1_SESSION_CONVERSION_GUIDANCE;
 use crate::{StoreError, StoreResult};
 
 const MODEL_JSON: JsonStyle =

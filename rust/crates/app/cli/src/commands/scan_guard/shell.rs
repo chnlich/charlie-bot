@@ -17,7 +17,7 @@ type CdSpan = (usize, usize, Option<String>);
 /// is script or prose rather than shell. A double-quoted string keeps its text with its separators neutralized, unless
 /// it spans lines or holds a command substitution or backtick.
 pub fn shell_text(command: &str) -> String {
-  let without_heredocs = heredoc_pattern().replace_all(command, "<<HEREDOC");
+  let without_heredocs = mask_heredocs(command);
   let unwrapped = bash_c_pattern().replace_all(&without_heredocs, |captures: &Captures<'_>| {
     captures.get(1).or_else(|| captures.get(2)).map_or_else(String::new, |text| text.as_str().to_string())
   });
@@ -172,9 +172,47 @@ fn cd_pattern() -> &'static Regex {
   })
 }
 
-fn heredoc_pattern() -> &'static Regex {
+/// A `<<EOF` heredoc opener, capturing the delimiter word its closing line starts with.
+fn heredoc_opener_pattern() -> &'static Regex {
   static PATTERN: OnceLock<Regex> = OnceLock::new();
-  PATTERN.get_or_init(|| Regex::new(r#"(?s)<<-?\s*['"]?(\w+)['"]?.*?\n(.*?)\n\1\b"#).expect("heredoc pattern is valid"))
+  PATTERN.get_or_init(|| Regex::new(r#"<<-?\s*['"]?(\w+)['"]?"#).expect("heredoc opener pattern is valid"))
+}
+
+/// The command with each heredoc body dropped: the `<<EOF` opener stays, and the text from the following line
+/// through the line that opens with the delimiter goes. An opener with no closing line keeps its text.
+fn mask_heredocs(command: &str) -> String {
+  let mut out = String::with_capacity(command.len());
+  let mut last = 0;
+  for captures in heredoc_opener_pattern().captures_iter(command) {
+    let captures = captures.expect("the opener pattern delegates to the regex engine, which cannot fail to match");
+    let opener = captures.get(0).expect("group 0 is the whole match");
+    if opener.start() < last {
+      continue;
+    }
+    let delimiter = captures.get(1).expect("the opener pattern carries the delimiter group").as_str();
+    let Some(line_end) = command[opener.end()..].find('\n').map(|at| opener.end() + at) else {
+      break;
+    };
+    let Some(close_end) = heredoc_close(command, line_end + 1, delimiter) else { continue };
+    out.push_str(&command[last..opener.start()]);
+    out.push_str("<<HEREDOC");
+    last = close_end;
+  }
+  out.push_str(&command[last..]);
+  out
+}
+
+/// The end of the first line after `from` that opens with `delimiter` alone, or `None` when none does.
+fn heredoc_close(command: &str, from: usize, delimiter: &str) -> Option<usize> {
+  let closing = format!("\n{delimiter}");
+  let mut search_from = from;
+  while let Some(end) = command[search_from..].find(&closing).map(|at| search_from + at + closing.len()) {
+    if command[end..].chars().next().is_none_or(|next| !next.is_alphanumeric() && next != '_') {
+      return Some(end);
+    }
+    search_from = end;
+  }
+  None
 }
 
 fn bash_c_pattern() -> &'static Regex {

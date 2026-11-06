@@ -4,12 +4,15 @@
 <style>
   {% include 'partials/standalone_base_styles.html' %}
   .sub { color:var(--mut); margin:0 0 16px; font-size:13.5px; max-width:82ch }
-  .login { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:14px 18px; margin:0 0 16px }
+  .login { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:14px 18px; margin:0 0 16px;
+    display:grid; grid-template-columns:minmax(0,1fr); column-gap:10px; align-items:center }
   .login h2 { margin:0 0 10px; padding-bottom:0; border-bottom:0 }
+  .login form { margin:0 }
   /* The label takes --panel, the surface ink: the dark theme's accent is a light blue, where white
      text renders 2.49:1, and --panel reads 7.0:1 on it. */
   .btn { font:inherit; font-size:13px; background:var(--acc); color:var(--panel); border:0; border-radius:8px;
     padding:8px 15px; cursor:pointer }
+  .foot { color:var(--mut2); font-size:12px; margin:10px 0 0 }
   .state { font-size:13px; margin:0 0 14px }
   .status { display:flex; align-items:baseline; gap:10px }
   .badge { flex:0 0 auto; font-family:var(--mono); font-size:11px; color:var(--mut); border:1px solid var(--bd);
@@ -19,6 +22,12 @@
   pre { font-family:var(--mono); font-size:11.5px; color:var(--mut); white-space:pre-wrap; word-break:break-all;
     margin:6px 0 0 }
   .status pre { margin:0; min-width:0 }
+  @media (max-width:480px) {
+    .login { grid-template-columns:minmax(0,1fr) auto; padding:14px }
+    .login h2 { grid-column:1; grid-row:1 }
+    .login form { grid-column:2; grid-row:1 }
+    .login .state, .login .foot { grid-column:1 / -1 }
+  }
 </style>
 </head>
 <body>
@@ -29,7 +38,7 @@
 <div class="wrap">
   <h1>Browser logins</h1>
   <p class="sub">Each button starts one login and opens its approval page in a new tab, so the device code is created
-  when it can be approved. The page shows the attempt in progress, or the last attempt that ended.</p>
+  when it can be approved.</p>
 
   {% if not logins %}
   <p class="sub">No browser logins are configured. Add entries under <code>host_auth.browser_logins</code> in
@@ -69,6 +78,7 @@
     <form method="post" action="/api/host-auth/logins/{{ login.name }}/start" target="_blank">
       <button class="btn" type="submit">Start login</button>
     </form>
+    <p class="foot">The page shows the attempt in progress, or the last attempt that ended.</p>
   </section>
   {% endfor %}
 </div>

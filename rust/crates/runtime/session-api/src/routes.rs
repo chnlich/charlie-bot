@@ -320,7 +320,11 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
   if let Some(raw_ids) = raw_ids {
     ids.extend(parse_session_ids(raw_ids));
   }
-  let ids = unique_session_ids(ids);
+  let mut ids = unique_session_ids(ids);
+  // The body's bytes follow its key order, so the order the caller named the ids in must not reach it: `filter=all`
+  // follows the listing, whose rows move as they update, and a moved row would otherwise change the body with no row's
+  // state changed. The poll would then answer 200, never 304.
+  ids.sort();
   if filter.is_none() && ids.is_empty() {
     return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({"detail": "ids must name at least one session"}));
   }
@@ -730,6 +734,28 @@ mod tests {
     assert!(by_filter.get(&first.id).is_some() && by_filter.get(&second.id).is_some());
     let (code, _) = status("/api/sessions/status?filter=starred".to_string()).await;
     assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+  }
+
+  /// The status body's bytes do not follow the order the caller named the ids in: a row that moved in the listing
+  /// must not change the body, or the poll answers 200 with no row's state changed.
+  #[tokio::test]
+  async fn the_status_body_ignores_the_order_the_caller_named_the_ids_in() {
+    let (_home, features) = crate::test_support::feature_context();
+    let first = crate::test_support::create_node(&features.store, "order-first", None, TaskProfile::Manager).await;
+    let second = crate::test_support::create_node(&features.store, "order-second", None, TaskProfile::Manager).await;
+    let body = |uri: String| {
+      let features = Arc::clone(&features);
+      async move {
+        let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        let response = session_status(State(features), request).await;
+        to_bytes(response.into_body(), usize::MAX).await.unwrap()
+      }
+    };
+
+    let forward = body(format!("/api/sessions/status?ids={},{}", first.id, second.id)).await;
+    let reverse = body(format!("/api/sessions/status?ids={},{}", second.id, first.id)).await;
+
+    assert_eq!(forward, reverse);
   }
 
   #[tokio::test]

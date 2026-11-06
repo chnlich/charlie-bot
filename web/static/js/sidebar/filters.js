@@ -161,7 +161,9 @@ function drainRowRefresh() {
     .catch(err => console.error('Row refresh failed:', err))
     .finally(() => {
       rowRefreshInFlight = false;
-      drainRowRefresh();
+      // Ids that arrived during the fetch form the next one. A tab that went hidden meanwhile holds it until it is
+      // visible, like any other work that hides.
+      deferWhileHidden('row-refresh', drainRowRefresh);
     });
 }
 

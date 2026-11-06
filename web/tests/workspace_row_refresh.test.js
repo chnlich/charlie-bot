@@ -171,6 +171,25 @@ test('a hidden tab requests no row or cron list until it is visible, then reques
   assert.equal(page.cronLoads, 1, 'the cron task list loads once for the two frames');
 });
 
+test('a row fetch that answers after the tab hid starts no further request until it is visible', async () => {
+  const page = buildPage();
+  page.connect();
+  page.socket().emitOpen();
+
+  page.frame({type: 'task_tree_changed', session_id: 'session-x'});
+  page.frame({type: 'task_tree_changed', session_id: 'session-y'});
+  page.hide();
+  answerRows(page);
+  await flush();
+  assert.equal(page.urlsStarting('/api/sessions/').length, 1, 'the hidden tab starts no follow-up request');
+
+  page.show();
+  assert.deepEqual(page.rowUrls(), [
+    '/api/sessions/?compact=1&ids=session-x',
+    '/api/sessions/?compact=1&ids=session-y',
+  ]);
+});
+
 test('a reconnect after a network loss reloads the list once; a page-driven reconnect does not', async () => {
   const page = buildPage();
   page.connect();

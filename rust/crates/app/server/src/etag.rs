@@ -36,7 +36,7 @@ pub async fn layer(request: Request, next: Next) -> Response {
   parts.headers.insert(header::ETAG, tag_value.clone());
   parts.headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
   if names(&if_none_match, &tag) {
-    return not_modified(tag_value);
+    return not_modified(tag_value, &parts.headers);
   }
   Response::from_parts(parts, Body::from(bytes))
 }
@@ -45,12 +45,17 @@ fn is_json(headers: &HeaderMap) -> bool {
   header_text(headers, &header::CONTENT_TYPE).starts_with("application/json")
 }
 
-/// The `304` answer to a request whose `If-None-Match` names the body the server holds: the validators, no body.
-fn not_modified(tag: HeaderValue) -> Response {
+/// The `304` answer to a request whose `If-None-Match` names the body the server holds: the validators, no body. The
+/// stored response keeps its `Vary`, so the tag's representation list stays with it.
+fn not_modified(tag: HeaderValue, headers: &HeaderMap) -> Response {
   let mut response = Response::new(Body::empty());
   *response.status_mut() = StatusCode::NOT_MODIFIED;
-  response.headers_mut().insert(header::ETAG, tag);
-  response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+  let out = response.headers_mut();
+  out.insert(header::ETAG, tag);
+  out.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+  if let Some(vary) = headers.get(header::VARY) {
+    out.insert(header::VARY, vary.clone());
+  }
   response
 }
 
@@ -85,6 +90,7 @@ mod tests {
     Response::builder()
       .status(StatusCode::OK)
       .header(header::CONTENT_TYPE, "application/json")
+      .header(header::VARY, "Accept-Encoding")
       .body(Body::from(body))
       .expect("a JSON response builds")
   }
@@ -140,6 +146,7 @@ mod tests {
     assert_eq!(status, StatusCode::NOT_MODIFIED);
     assert!(body.is_empty());
     assert_eq!(headers[header::ETAG], tag.as_str());
+    assert_eq!(headers[header::VARY], "Accept-Encoding", "the 304 keeps the stored response's representation list");
   }
 
   #[tokio::test]

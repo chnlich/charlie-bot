@@ -6,6 +6,10 @@ use std::path::{Path, PathBuf};
 
 pub const REPO_ROOT_ENV: &str = "CHARLIEBOT_REPO_ROOT";
 
+/// The checkout's `configs/` directory: the starter `config.yaml` and `credentials.yaml` that home provisioning
+/// seeds, and the per-feature defaults that their seeders read.
+pub const CONFIGS_DIR_NAME: &str = "configs";
+
 /// The charlie-bot checkout whose `web/`, page packages and `configs/` the server serves.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RepoRoot(PathBuf);

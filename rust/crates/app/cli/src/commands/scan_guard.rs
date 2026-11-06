@@ -717,14 +717,8 @@ mod tests {
       ScanForm::PerFileProcess,
       ScanForm::PerFileProcess,
       ScanForm::PerFileProcess,
-      ScanForm::RunLogSearch,
-      ScanForm::RunLogSearch,
-      ScanForm::PerFileProcess,
-      ScanForm::RunLogSearch,
-      ScanForm::PerFileProcess,
-      ScanForm::RunLogSearch,
     ];
-    let commands: [&str; 12] = [
+    let commands: [&str; 6] = [
       // The replay's first real command: a metadata loop after a `cd` into the store.
       r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json; print(json.load(open('$f')))"; done"#,
       "find / -path /proc -prune -o -type d -name dataviz -print 2>/dev/null | head -3",
@@ -733,6 +727,24 @@ mod tests {
       "cd ~/.charliebot/sessions && for m in */data/runs/*/metadata.json; do python3 - \"$m\" <<'EOF2'\nimport json\nd = json.load(open(\"$m\"))\nprint(d)\nEOF2\ndone",
       r#"for d in $(ls ~/.charliebot/sessions); do python3 -I -c 'print(1)' $d/metadata.json; done"#,
       "find ~/.charliebot/sessions -name metadata.json | xargs -n1 python3 -I x.py",
+    ];
+    for (command, expected) in commands.iter().zip(denied) {
+      let forms = scan_forms(command, &home()).unwrap();
+      assert_eq!(forms.first(), Some(&expected), "{command}");
+    }
+  }
+
+  #[test]
+  fn the_rest_of_the_replay_table_matches_its_scan_forms() {
+    let denied = [
+      ScanForm::RunLogSearch,
+      ScanForm::RunLogSearch,
+      ScanForm::PerFileProcess,
+      ScanForm::RunLogSearch,
+      ScanForm::PerFileProcess,
+      ScanForm::RunLogSearch,
+    ];
+    let commands: [&str; 6] = [
       r"rg -l X ~/.charliebot/sessions -g '*.jsonl'",
       r"rg -l X ~/.charliebot/sessions -g 'agent.raw.ndjson'",
       r"grep -l 520ad103 ~/.charliebot/sessions/*/metadata.json | while read f; do stat $f; done",
@@ -870,6 +882,11 @@ mod tests {
     for command in passed {
       assert!(scan_forms(&command, &home).unwrap().is_empty(), "{command}");
     }
+  }
+
+  #[test]
+  fn per_session_processes_and_walks_are_refused() {
+    let home = home();
     let denied = [
       // The same builtin body on a `for ... in */` list is the one-process-per-session shape.
       format!("cd {home}/.charliebot/sessions && for id in */; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"),

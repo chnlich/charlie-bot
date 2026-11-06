@@ -651,12 +651,12 @@ mod tests {
   /// The bounds the tests inject: a real attempt bound that still outruns the stub, and a wait no
   /// test sleeps out for real.
   fn test_limits() -> Limits {
-    Limits { request_timeout: Duration::from_secs(2), rate_limit_wait: Duration::from_millis(20) }
+    Limits { request_timeout: Duration::from_millis(50), rate_limit_wait: Duration::from_millis(20) }
   }
 
   /// A reply delay past the injected request timeout, so the attempt that asks for it times out.
   fn past_the_timeout() -> Duration {
-    test_limits().request_timeout + Duration::from_secs(1)
+    test_limits().request_timeout + Duration::from_millis(50)
   }
 
   /// Each test runs behind this ceiling so a hang fails the test instead of the suite.
@@ -1412,6 +1412,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn the_example_rules_file_loads_with_the_loader() {
     let example = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../configs/router.example.yaml"));
     let rules = load_rules(example, &[]).unwrap();

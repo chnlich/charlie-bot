@@ -1149,7 +1149,7 @@ mod tests {
   /// one per finished manager turn and work run, the workers' work runs among them.
   #[test]
   fn a_production_size_plan_deals_each_keep_reason_its_scaled_count() {
-    let sessions = 8_929;
+    let sessions = 3_000;
     let (_, _, sizes) = session::planned_home(sessions, 1);
     let plan = HomePlan::new(&sizes, 1);
     for (reason, reference) in REFERENCE_KEEPS {

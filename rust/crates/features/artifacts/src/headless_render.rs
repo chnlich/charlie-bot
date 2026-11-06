@@ -21,7 +21,9 @@ use tungstenite::protocol::WebSocket;
 use tungstenite::{Message, client};
 
 const HEADLESS_RENDER_TIMEOUT: Duration = Duration::from_secs(60);
-const HEADLESS_LAUNCH_TIMEOUT: Duration = Duration::from_secs(15);
+/// The launch window for a headless Chrome: its DevTools port file and its first commands. On the CI runner the port
+/// file was not written within 15 s (Integration runs 42225622263 and 42272328385), so the window is 60 s.
+const HEADLESS_LAUNCH_TIMEOUT: Duration = Duration::from_secs(60);
 const HEADLESS_TEARDOWN_WAIT: Duration = Duration::from_secs(5);
 /// The user-data directory prefix of every renderer browser, here and in the startup orphan sweep.
 const RENDERER_TEMP_PREFIX: &str = "headless-render-";

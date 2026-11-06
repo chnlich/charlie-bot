@@ -8,7 +8,7 @@
 # --side before  measures origin/main (--before-rev, default origin/main, in --before-clone, a git clone that holds it);
 # --side after   measures this tree;
 # --side both    runs before, then after, back to back in one invocation. If the before side's calibration does not
-#                reproduce the switch hold, it stops after before, prints its numbers, and exits 3.
+#                reproduce the switch-during-refresh hold, it stops after before, prints its numbers, and exits 3.
 # --detach       starts the run as a transient systemd user unit and returns at once; the log is <out-dir>/pn-<id>.log.
 # --lock FILE    holds an advisory lock on FILE around each side's trial (not the builds), waiting up to 2 h for it, so
 #                bench runs that take the same lock never measure side by side.
@@ -206,7 +206,7 @@ if [[ $side == before || $side == both ]]; then
   calibrated=$(node -e 'const s = require(process.argv[1]); process.stdout.write(s.calibration ? String(s.calibration.reproduced) : "none")' "$run_dir/before.json")
   if [[ $side == both && $calibrated != true ]]; then
     node "$BENCH_DIR/report.mjs" "$run_dir/before.json"
-    die 3 "the baseline did not reproduce the switch hold; the proxy does not model the link. The after side did not run."
+    die 3 "the baseline did not reproduce the switch-during-refresh hold; the proxy does not model the link. The after side did not run."
   fi
 fi
 

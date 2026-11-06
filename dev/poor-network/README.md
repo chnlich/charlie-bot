@@ -91,14 +91,22 @@ server, so the floor still follows the bytes the step needs.
 ## Scenarios 4 to 6 have no background
 
 Scenarios 1 to 3 share one repetition: the background load runs, the proxy counts its bytes, and the switch and the
-send happen inside that background. The targets of scenarios 4 to 6 do not mention a background load, so those
+send happen inside that background. The calibration's during-refresh switch (see Calibration) is a second switch in the
+same repetition, after the send. The targets of scenarios 4 to 6 do not mention a background load, so those
 repetitions run without one.
 
 ## Calibration
 
-The baseline must reproduce the switch hold: on origin/main, a switch during the background must take at least
-`CALIBRATION_HOLD_MS` (10 s) to render. If it does not, the proxy does not model the link, and `--side both` stops before
-the after side. The table prints the calibration line.
+The calibration's condition is the plan's: on the before side, a session switch clicked while a background list refresh
+is in flight must take at least `CALIBRATION_HOLD_MS` (10 s) to render. Each background repetition makes a second
+switch, whose click the bench times to land while the list refresh that a `task_tree_changed` frame has just triggered
+is in flight; the bench reads the frame and the refresh from its own request records, and checks afterwards that the
+refresh was still in flight when the switch's bootstrap request started. If the median of the five raw holds stays
+under 10 s, the proxy does not model the link, and `--side both` stops before the after side with exit 3.
+
+Both sides print the raw holds in the calibration line. The gate reads the before side only, so the after side's holds
+show whether the wait a person felt is gone after the fixes. The scored switch scenario keeps its clicks at random
+points of the refresh cycle, so its numbers stay comparable with the baseline.
 
 A second check sets the background scenario's received rate beside the live readback in `LIVE_READBACK`: about 206 KB a
 minute, from one visible tab on a live release. The table prints the gap. The check does not gate the run: a gap is a
@@ -173,8 +181,9 @@ The relay tests are integration tests because they start the relay as a child pr
 them when a change touches this directory. To reproduce them through the remote runner:
 
 ```sh
-dev/remote-run/run.sh node --test dev/poor-network/proxy.integration.test.mjs
+dev/remote-run/run.sh node --test dev/poor-network/proxy.integration.test.mjs dev/poor-network/report.test.mjs
 ```
 
 They check the relay's tunnel transfer time at the link, its stop on SIGTERM, and its refusal of a target without a
-port.
+port. The report's tests check the calibration gate: it reads the during-refresh holds, not the scored scenario's
+random-phase holds, and only the before side's line carries a verdict.

@@ -39,7 +39,8 @@ export const TASK_TREE_LOAD = Object.freeze({
 // Repetitions of each scenario. The report takes the median and the 90th percentile of the repetitions.
 export const REPETITIONS = 5;
 
-// The calibration: the origin/main baseline's switch during the background must take at least this long to render.
+// The calibration: on the baseline, a switch clicked while a background list refresh is in flight must take at least
+// this long to render.
 export const CALIBRATION_HOLD_MS = 10000;
 
 // The shape of the view the bench measures, taken from a live release's default "all" view: 124 rows, a raw median row

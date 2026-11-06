@@ -100,13 +100,19 @@ export function summarize(reps, metric) {
   };
 }
 
-// The calibration: on the baseline, a switch during the background must wait for at least CALIBRATION_HOLD_MS.
+// The calibration: on the before side, a switch clicked while a background list refresh is in flight must wait for at
+// least CALIBRATION_HOLD_MS to render. The holds are the background repetitions' switchDuringRefreshMs, whose clicks
+// the bench lands inside a refresh; the gate reads their median. The after side reports the same holds without the
+// gate, so they show whether the wait is gone after the fixes.
 export function calibrate(background) {
-  const holdMs = percentile(background.map((rep) => rep.switchMs), 0.5);
+  const holdsMs = background.map((rep) => rep.switchDuringRefreshMs);
+  const medianMs = percentile(holdsMs, 0.5);
   return {
-    switchHoldMedianMs: holdMs,
+    holdsMs,
+    medianMs,
     requiredMs: CALIBRATION_HOLD_MS,
-    reproduced: holdMs >= CALIBRATION_HOLD_MS,
+    cappedCount: background.filter((rep) => rep.switchDuringRefreshCapped).length,
+    reproduced: medianMs >= CALIBRATION_HOLD_MS,
   };
 }
 
@@ -141,9 +147,12 @@ export function formatSide(side) {
     );
   }
   if (side.calibration) {
-    const verdict = side.calibration.reproduced ? 'reproduced' : 'NOT reproduced';
+    const calibration = side.calibration;
+    const verdict =
+      side.side === 'before' ? (calibration.reproduced ? 'reproduced' : 'NOT reproduced') : 'the gate reads the before side only';
+    const capNote = calibration.cappedCount > 0 ? `, ${calibration.cappedCount} at cap` : '';
     lines.push(
-      `calibration: switch hold median ${formatMs(side.calibration.switchHoldMedianMs)} (needs >= ${formatMs(side.calibration.requiredMs)}): ${verdict}`,
+      `calibration: switch clicked during a list refresh, holds ${calibration.holdsMs.map(formatMs).join(', ')}${capNote}, median ${formatMs(calibration.medianMs)} (needs >= ${formatMs(calibration.requiredMs)}): ${verdict}`,
     );
   }
   if (side.view) {

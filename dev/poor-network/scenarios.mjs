@@ -26,6 +26,10 @@ const SHOW_TIMEOUT_MS = 180000;
 // idle-callback loads (usage, explain status) fire within ~1.5 s of it, and the status poll it
 // triggers starts with it.
 const SWITCH_SETTLE_MS = 5000;
+// The wait for the next task_tree_changed frame and for the list refresh it starts; a frame comes every
+// windowMs / changesPerWindow while the background runs.
+const REFRESH_WAIT_TIMEOUT_MS = 60000;
+const BOOTSTRAP_START_TIMEOUT_MS = 10000;
 
 export function floorMs(bytes) {
   return ROUND_TRIP_MS + bytes / BYTES_PER_MS;
@@ -221,6 +225,44 @@ function statusPollCounts(tab, from, to, minutes) {
   return counts;
 }
 
+// The calibration's switch: clicked while the list refresh that a task_tree_changed frame has just triggered is in
+// flight, the condition the plan's gate names. The bench reads the frame and the refresh from its own records, clicks
+// at once, and then proves the condition: a refresh of that frame's batch was still in flight when the switch's
+// bootstrap request started. A click that misses the refresh is an error, not a hold to score.
+async function clickDuringListRefresh(tab, sessionId) {
+  const framesSeen = tab.frames.filter((frame) => frame.type === 'task_tree_changed').length;
+  const frame = await waitFor(
+    () => tab.frames.filter((candidate) => candidate.type === 'task_tree_changed')[framesSeen] ?? null,
+    REFRESH_WAIT_TIMEOUT_MS,
+    'a task_tree_changed frame to trigger a list refresh',
+  );
+  const refresh = await waitFor(
+    () =>
+      [...tab.requests.values()].find(
+        (request) =>
+          (ENDPOINTS.fullList.test(request.url) || ENDPOINTS.rows.test(request.url)) && request.startAt > frame.at,
+      ) ?? null,
+    REFRESH_WAIT_TIMEOUT_MS,
+    'the list refresh the frame started',
+  );
+  const clickedAt = await tab.clickSession(sessionId);
+  const bootstrap = await waitFor(
+    () =>
+      [...tab.requests.values()].find(
+        (request) => request.url.includes(`/api/sessions/${sessionId}/bootstrap`) && request.startAt >= clickedAt,
+      ) ?? null,
+    BOOTSTRAP_START_TIMEOUT_MS,
+    "the switch's bootstrap request",
+  );
+  const stillInFlight = refresh.failed === null && (refresh.finishAt === null || refresh.finishAt >= bootstrap.startAt);
+  if (!stillInFlight) {
+    throw new Error(
+      `the click at ${clickedAt} landed after the frame's list refresh had finished, so the hold is not a during-refresh hold`,
+    );
+  }
+  return clickedAt;
+}
+
 // The background load: one visible and two hidden tabs on the open session, the background session running a held turn,
 // and the task-tree driver renaming `renamed` at the live rate. The visible tab shows the sidebar view `filter` (null:
 // the Workspace); the hidden tabs show the Workspace. `body` runs inside the load, which ends on every path.
@@ -309,6 +351,22 @@ export async function backgroundRep(ctx, repetition) {
     const echoed = echoAt === null ? { at: sentAt + SHOW_TIMEOUT_MS, capped: true } : { at: echoAt, capped: false };
     const sendState = echoed.capped ? await tab.diagnose(sentAt) : null;
 
+    // The calibration's switch: a second switch in the same background, whose click the bench times to land while the
+    // list refresh a task_tree_changed frame has just triggered is in flight. The scored switch above keeps its random
+    // phase, so its numbers stay comparable with the baseline. The target is a held session, which the page has not
+    // loaded and whose bootstrap has the live view's wire size.
+    const duringTarget = sessions.held[0];
+    await tab.watchChat('switch-during-refresh', duringTarget.marker);
+    const duringClickedAt = await clickDuringListRefresh(tab, duringTarget.id);
+    const duringShown = await tab.shownBy('switch-during-refresh', duringClickedAt, SHOW_TIMEOUT_MS);
+    const duringPageBytes = tab.bytesOf(
+      new RegExp(`/api/sessions/${duringTarget.id}/bootstrap$`),
+      duringClickedAt,
+      Infinity,
+    );
+    const duringBootstrapBytes = duringPageBytes > 0 ? duringPageBytes : await api.bootstrapWireBytes(duringTarget.id);
+    const duringState = duringShown.capped ? await tab.diagnose(duringClickedAt) : null;
+
     return {
       ...window,
       switchMs: shown.at - clickedAt,
@@ -319,6 +377,10 @@ export async function backgroundRep(ctx, repetition) {
       switchRequests,
       switchRequestTotal: Object.values(switchRequests).reduce((total, count) => total + count, 0),
       switchState,
+      switchDuringRefreshMs: duringShown.at - duringClickedAt,
+      switchDuringRefreshCapped: duringShown.capped,
+      switchDuringRefreshBootstrapBytes: duringBootstrapBytes,
+      switchDuringRefreshState: duringState,
       sendMs: echoed.at - sentAt,
       sendCapped: echoed.capped,
       sendFloorMs: ROUND_TRIP_MS + processing,

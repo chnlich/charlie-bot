@@ -64,6 +64,7 @@ function buildSwitchHarness() {
   const failBootstrap = new Set();
   const failBootstrapOnce = new Set();
   const refuseBootstrap = new Set();
+  const abortBodies = new Set();  // sessions whose bootstrap body read a newer click aborts
   const signals = [];          // every fetch's {url, signal}, in fetch order
   const retryWaits = [];       // the bootstrap retry backoffs, fired by runWaits
   const knobs = {failTelemetry: false, failChatOnce: false};
@@ -171,7 +172,10 @@ function buildSwitchHarness() {
     return entry.done.then(() => ({
       ok: true,
       status: 200,
-      json: async () => payloads[entry.sessionId],
+      json: async () => {
+        if (abortBodies.has(entry.sessionId)) throw Object.assign(new Error('aborted'), {name: 'AbortError'});
+        return payloads[entry.sessionId];
+      },
     }));
   };
   let locationHref = '';
@@ -221,6 +225,7 @@ function buildSwitchHarness() {
     failBootstrap,
     failBootstrapOnce,
     refuseBootstrap,
+    abortBodies,
     signals,
     retryWaits,
     resourceEntries,
@@ -441,6 +446,28 @@ test('a refused bootstrap logs failed and fails the switch in place, with no rel
   assert.equal(placeholder.id, 'switch-placeholder');
   assert.match(placeholder.textContent, /Could not open/, 'the placeholder names the failure');
   assert.match(placeholder.textContent, /click the row to retry/, 'the placeholder names the way back');
+});
+
+test('a superseded switch whose body read the newer click aborted ends superseded and leaves the newer placeholder',
+    async () => {
+  const h = buildSwitchHarness();
+  const clickB = h.context.switchSession('session-b');
+  const clickC = h.context.switchSession('session-c');
+  h.abortBodies.add('session-b');
+  h.pendingSwitches[0].resolve();  // b's body read fails with the abort its superseding click sent
+
+  await clickB;
+
+  const ended = h.telemetryPosts.filter((t) => t.phase !== 'started').map((t) => [t.phase, t.to_session]);
+  assert.deepEqual(ended, [['superseded', 'session-b']], 'the superseded switch reports superseded, not failed');
+  assert.equal(h.context.switching, true, 'the newer switch still owns the switching flag');
+  const placeholder = h.messages.children[0];
+  assert.equal(placeholder.id, 'switch-placeholder');
+  assert.doesNotMatch(placeholder.textContent, /Could not open/, 'the newer placeholder is not overwritten');
+
+  h.resolveLastSwitch();
+  await clickC;
+  assert.equal(h.context.switching, false);
 });
 
 test('a retryable bootstrap failure retries the same request on the send backoff, with no reload', async () => {

@@ -601,6 +601,10 @@ async function switchSession(sessionId) {
   const gen = ++switchGeneration;
   const fromSessionId = SESSION_ID;
   const switchStartedAt = Date.now();
+  const reportSuperseded = () => reportSwitchEvent('superseded', fromSessionId, sessionId, gen, {
+    winner_generation: switchGeneration,
+    elapsed_ms: Date.now() - switchStartedAt,
+  });
 
   saveDraftNow();
 
@@ -651,6 +655,12 @@ async function switchSession(sessionId) {
     try {
       data = await fetchBootstrapWithRetry(sessionId, gen);
     } catch (err) {
+      // A newer click owns the view and its held actions. A superseded switch ends as superseded
+      // even when the click's abort is what failed it: a body read cut short throws here.
+      if (gen !== switchGeneration) {
+        reportSuperseded();
+        return;
+      }
       console.error('switchSession bootstrap fetch failed:', err);
       reportSwitchEvent('failed', fromSessionId, sessionId, gen, {
         error: String(err?.message || err),
@@ -663,19 +673,18 @@ async function switchSession(sessionId) {
       failSwitchPlaceholder(sessionId);
       return;
     }
-    // A newer click owns the view and its held actions: a failure of a
-    // superseded switch navigates nowhere.
-    if (data === null) return;
+    // A bootstrap retry the newer click cut short resolves null.
+    if (data === null) {
+      reportSuperseded();
+      return;
+    }
   }
 
   // Discard stale response from rapid clicks
   if (gen !== switchGeneration) {
     // Keep the fetched bootstrap so an immediate re-click skips the fetch.
     cacheBootstrap(sessionId, data);
-    reportSwitchEvent('superseded', fromSessionId, sessionId, gen, {
-      winner_generation: switchGeneration,
-      elapsed_ms: Date.now() - switchStartedAt,
-    });
+    reportSuperseded();
     return;  // newer switch owns the flag
   }
 

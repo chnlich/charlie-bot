@@ -1246,7 +1246,6 @@ name = "charliebot-run-log-compaction"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
  "futures-util",

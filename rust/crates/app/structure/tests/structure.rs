@@ -894,6 +894,24 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_core::pacific::ZONE`, the house time zone.",
   },
   OwnerRow {
+    name: "boot_recovery.json",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::home::BOOT_RECOVERY_FILE_NAME`, or `charliebot_core::home::boot_recovery_marker_path` \
+           for the path under a home.",
+  },
+  OwnerRow {
+    name: "boot_skip_proof.json",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::home::BOOT_SKIP_PROOF_FILE_NAME`, or `charliebot_core::home::boot_skip_proof_path` for \
+           the path under a home.",
+  },
+  OwnerRow {
+    name: "boot_trigger_index.json",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::home::BOOT_TRIGGER_INDEX_FILE_NAME`, or \
+           `charliebot_core::home::boot_trigger_index_path` for the path under a home.",
+  },
+  OwnerRow {
     name: "metadata.json",
     owner: "infra/core",
     hint: "Use `charliebot_core::metadata_slot::METADATA_FILE_NAME`, or `charliebot_store::layout::metadata_path` for a \

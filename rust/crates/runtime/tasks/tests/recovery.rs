@@ -3071,7 +3071,7 @@ async fn boot_node_out_of_space_hands_node_to_retry() -> anyhow::Result<()> {
 }
 
 fn boot_marker_path(stack: &Stack) -> PathBuf {
-  stack.cfg.charliebot_home.join("state").join("boot_recovery.json")
+  charliebot_core::home::boot_recovery_marker_path(&stack.cfg.charliebot_home)
 }
 
 fn write_boot_marker(stack: &Stack, pass_started_at: &str) -> anyhow::Result<()> {

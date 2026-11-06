@@ -182,7 +182,7 @@ impl CodexTranslator {
         if *stringify_output {
           vec![make_tool_result_event(tool, &value_str(&output))]
         } else {
-          vec![json!({"type": event_types::TOOL_RESULT, "tool_name": tool, "content": output})]
+          vec![json!({"type": event_types::TOOL_RESULT, event_types::TOOL_NAME: tool, "content": output})]
         }
       }
       _ => Vec::new(),

@@ -23,3 +23,6 @@ Thumbs.db
 
 # Rust build output
 rust/target/
+
+# Node test reports
+web/target/

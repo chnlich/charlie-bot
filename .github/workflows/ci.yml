@@ -39,26 +39,38 @@ jobs:
       - name: Install integration selector dependencies
         run: npm ci --prefix dev/integration-selection --ignore-scripts --no-audit --no-fund
 
-      - name: Test integration selector
-        run: node --test dev/integration-selection/select.test.mjs
-
       # The suites that parse JavaScript (sucrase) or build Tailwind resolve devDependencies from node_modules;
       # installing up front keeps the installs the suites run themselves at no-op speed.
       - name: Install frontend dependencies
         working-directory: web
         run: npm install --no-audit --no-fund
 
-      # One suite per web/tests/*.test.{js,mjs} file on disk: the glob is the single source, so a suite file that
-      # lands runs here without a registration edit. The bound turns a hung runner into a step failure instead
-      # of a CI hang.
+      # One suite per web/tests/*.test.{js,mjs} file on disk, minus the integration suites, which the Integration
+      # workflow runs. The glob is the single source, so a suite file that lands runs here without a registration
+      # edit. The dev/ unit suites run in the same process set, so their tests report their times too. The JUnit
+      # report feeds the 0.1 s check; the spec output is the log. The bound turns a hung runner into a step failure
+      # instead of a CI hang.
       - name: Test
         working-directory: web
         run: |
-          suites=$(find tests -maxdepth 1 \( -name '*.test.js' -o -name '*.test.mjs' \) | sort)
+          suites=$(find tests -maxdepth 1 \( -name '*.test.js' -o -name '*.test.mjs' \) ! -name '*.integration.test.*' | sort)
           count=$(printf '%s\n' "$suites" | grep -c .)
           echo "Running $count node suite files"
           [ "$count" -gt 0 ]
-          timeout 780 node --test $suites
+          mkdir -p target/node-test
+          timeout 780 node --test \
+            --test-reporter=junit --test-reporter-destination=target/node-test/junit.xml \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            $suites ../dev/integration-selection/select.test.mjs ../dev/week-review/test/review.test.mjs
+
+      # The same 0.1 s check as rust-test. It reruns each over-limit test alone on workflow_dispatch only, and
+      # stays report-only until stage 5 drops --fail-over-limit 0.
+      - name: Unit tests over 0.1 s
+        if: always()
+        run: >
+          dev/check-unit-test-time.mjs --runner node --junit web/target/node-test/junit.xml
+          --fail-over-limit 0
+          --rerun-over-limit ${{ github.event_name == 'workflow_dispatch' }}
 
   # The image is pinned by name. The live host runs Ubuntu 24.04 with glibc 2.39, and a binary built against a
   # newer glibc does not start there.
@@ -168,7 +180,7 @@ jobs:
       - name: Unit tests over 0.1 s
         if: always()
         run: >
-          dev/check-unit-test-time.mjs --junit rust/target/nextest/ci/junit.xml
+          dev/check-unit-test-time.mjs --runner rust --junit rust/target/nextest/ci/junit.xml
           --fail-over-limit 0
           --rerun-over-limit ${{ github.event_name == 'workflow_dispatch' }}
 

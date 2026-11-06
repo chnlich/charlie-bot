@@ -74,10 +74,13 @@ const VOICE_OVERLAY_CLASS = 'absolute left-0 right-0 bottom-full mb-2 rounded-lg
 const VOICE_PARTIAL_CLASS = 'voice-partial-text text-sm text-slate-400 whitespace-pre-wrap break-words';
 // The caret's dropdown, anchored above the mic group the template renders.
 const VOICE_MENU_CLASS = 'absolute bottom-full right-0 mb-2 w-64 rounded-lg border border-slate-600 bg-slate-800 py-1 shadow-lg z-50';
-const VOICE_MENU_TITLE_CLASS = 'px-3 py-1.5 text-xs text-slate-500';
+// The menu sits on slate-800, where slate-500 holds 3.07:1: under the 4.5:1 floor for the title's 12 px and the
+// unavailable rows' 14 px. slate-400 holds 5.7:1 and still reads dimmer than enabled rows' slate-200.
+const VOICE_MENU_TITLE_CLASS = 'px-3 py-1.5 text-xs text-slate-400';
 const VOICE_MENU_ITEM_CLASS = 'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm';
 const VOICE_MENU_ITEM_ENABLED_CLASS = ' text-slate-200 hover:bg-slate-700';
-const VOICE_MENU_ITEM_DISABLED_CLASS = ' text-slate-500 cursor-not-allowed';
+// An unavailable backend stays readable: its label names the config key the host must provide.
+const VOICE_MENU_ITEM_DISABLED_CLASS = ' text-slate-400 cursor-not-allowed';
 const VOICE_MENU_CHECK_CLASS = 'w-4 shrink-0 text-green-400';
 // On phones the caret is hidden and the composer's ⋯ menu carries this entry
 // instead; it opens the same menu the caret does.

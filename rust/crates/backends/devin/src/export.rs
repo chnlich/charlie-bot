@@ -1,8 +1,9 @@
 //! The devin export: the trajectory JSON that `devin --export` writes after each turn, read into the runtime's events.
 //!
 //! This module is the one place that names the export's fields. The names come from the CLI binary's strings
-//! (`ATIF-v1.x`), not from a Devin document: `session_id`, `steps[]` with `source`, `message`, `tool_calls[]`,
-//! `observation.results[]` and each agent step's `metrics`. A live export that disagrees with them is fixed here.
+//! (`ATIF-v1.x`), not from a Devin document. The names are `session_id`, `steps[]` with `source`, `message`,
+//! `tool_calls[]`, `observation.results[]` and each agent step's `metrics`. A live export that disagrees with them is
+//! fixed here.
 
 use std::collections::HashMap;
 
@@ -117,7 +118,7 @@ pub fn turn_events(export_text: &str, answer: &str) -> anyhow::Result<Vec<Value>
   events.push(make_text_event(answer));
   // ATIF's `prompt_tokens` is the whole input, with `cached_tokens` as a subset of it (Harbor's
   // rfcs/0001-trajectory-format.md, MetricsSchema). The result keeps that OpenAI-style convention, as codex's
-  // translator does: `input_tokens` is the prompt sum with the cached part, and `cache_read_input_tokens` carries the
+  // translator does: `input_tokens` is the prompt sum with the cached part. `cache_read_input_tokens` carries the
   // cached count beside it. Devin's usage source is run-logs-only, whose ledger record reads `input_tokens` as the
   // whole input, so each input token is counted once.
   events.push(make_result_event(

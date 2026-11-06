@@ -30,6 +30,7 @@ import {
 import { REPLY_PIECES, REPLY_SOURCES } from './reply.mjs';
 import { backgroundRep, heldBlackoutRep, longStreamRep, resetBlackoutRep, viewBackgroundRep } from './scenarios.mjs';
 import { METRICS, calibrate, formatSide, percentile, summarize } from './report.mjs';
+import { TrialWatch } from './trials.mjs';
 
 // `starred` and `threads` measure scenario 1's background with the visible tab on that sidebar view. They run only when
 // named, after the six scenarios' own.
@@ -286,7 +287,9 @@ async function main() {
   let status = 'measured';
   let error = null;
   let front = null;
+  const trials = new TrialWatch();
   try {
+    trials.start();
     const check = spawnSync(args.mockHomeBin, ['check', args.mockHome, api.base], { stdio: 'inherit' });
     if (check.status !== 0) {
       throw new Error(`mock-home check exited ${check.status}: the served home is not the mock home`);
@@ -305,13 +308,18 @@ async function main() {
     for (const name of args.scenarios) {
       for (let repetition = 1; repetition <= args.repetitions; repetition++) {
         process.stderr.write(`[${args.side}] ${name} repetition ${repetition}/${args.repetitions}\n`);
-        results[name].push(await SCENARIOS[name](ctx, repetition));
+        const from = trials.mark();
+        const rep = await SCENARIOS[name](ctx, repetition);
+        const otherTrials = trials.since(from);
+        const startedAt = new Date(from).toISOString();
+        results[name].push({ ...rep, startedAt, finishedAt: new Date().toISOString(), otherTrials });
       }
     }
   } catch (caught) {
     status = 'failed';
     error = caught.stack ?? String(caught);
   } finally {
+    trials.stop();
     if (front) {
       await front.close();
     }

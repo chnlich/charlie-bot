@@ -24,6 +24,7 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--scenarios LIST` | Any of `background,held,reset,stream,starred,threads` (default the first four). |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
 | `--detach` | Start a transient systemd user unit and return; the log is `DIR/pn-<id>.log`. |
+| `--lock FILE` | Hold an advisory lock on `FILE` around each side's trial (not the builds), waiting up to 2 h. |
 
 Exit codes: 0 both sides measured; 1 a measurement or build failed (the side's JSON still names the error); 2 a
 precondition failed and nothing started; 3 the baseline calibration did not reproduce.
@@ -55,6 +56,11 @@ The link is in `LINK` and the targets are in `TARGETS` of `profile.mjs`. No othe
 | 6 long stream | socket bytes of one reply, per reply text byte | <= 1.20 |
 
 Each scenario's median and 90th percentile go in the table, with the raw median next to them for the time metrics.
+
+Runs that measure side by side share the host: overlapping trials put a mode of about 3 s into the switch and send
+timings, while byte counts stay the same. Bench runs that pass the same `--lock` file never overlap. Every repetition
+also records its start, its end and the other serve trials on the host during it (`trials.mjs`, a sample every 30 s),
+and the summary prints them.
 
 Below the table, scenario 1's received bytes are split by endpoint. The visible tab's status polls are counted by the
 server's answer, the wire status: Chrome hands a revalidated answer to the page as its cached 200, and only the wire

@@ -10,6 +10,8 @@
 # --side both    runs before, then after, back to back in one invocation. If the before side's calibration does not
 #                reproduce the switch hold, it stops after before, prints its numbers, and exits 3.
 # --detach       starts the run as a transient systemd user unit and returns at once; the log is <out-dir>/pn-<id>.log.
+# --lock FILE    holds an advisory lock on FILE around each side's trial (not the builds), waiting up to 2 h for it, so
+#                bench runs that take the same lock never measure side by side.
 #
 # Each side runs as the command of `scripts/release/trial.sh --serve`, so the trial starts, checks and stops the server
 # the bench measures, and proves that no process of the trial remains. The bench's own children (Chrome, the proxy, the
@@ -21,6 +23,9 @@ set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly BENCH_DIR="$SCRIPT_DIR"
+readonly LOCK_WAIT_SECONDS=7200
+# flock's exit code when the wait runs out: one no trial or bench exit code uses.
+readonly LOCK_TIMEOUT_EXIT=75
 
 side=both
 out_dir=
@@ -30,9 +35,10 @@ repetitions=5
 scenarios=background,held,reset,stream
 assets_dir=
 detach=0
+lock_file=
 
 usage() {
-  sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 die() {
@@ -52,6 +58,7 @@ while (($#)); do
     --scenarios) scenarios=${2:?--scenarios needs a value}; shift 2 ;;
     --assets-dir) assets_dir=${2:?--assets-dir needs a value}; shift 2 ;;
     --detach) detach=1; shift ;;
+    --lock) lock_file=${2:?--lock needs a value}; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die 2 "unknown argument: $1" ;;
   esac
@@ -81,6 +88,7 @@ if ((detach)); then
   forwarded=(--side "$side" --out-dir "$out_dir" --before-rev "$before_rev" --repetitions "$repetitions" --scenarios "$scenarios")
   [[ -n $before_clone ]] && forwarded+=(--before-clone "$before_clone")
   [[ -n $assets_dir ]] && forwarded+=(--assets-dir "$assets_dir")
+  [[ -n $lock_file ]] && forwarded+=(--lock "$lock_file")
   systemd-run --user --unit="pn-$run_id" --collect --working-directory="$tree" \
     --setenv=PATH="$PATH" --setenv=HOME="$HOME" \
     ${POOR_NETWORK_CHROME:+--setenv=POOR_NETWORK_CHROME="$POOR_NETWORK_CHROME"} \
@@ -170,8 +178,14 @@ run_side() {
   export CHARLIEBOT_HOME=$live_home
   export CHARLIEBOT_RELEASE_RUN_DIR="$run_dir/evidence-$name"
   export POOR_NETWORK_REPLY_DIR="$run_dir/replies"
+  # flock -o keeps the lock in flock's own process, so no process of the trial holds it past the trial's end.
+  local lock=()
+  if [[ -n $lock_file ]]; then
+    lock=(flock -o -w "$LOCK_WAIT_SECONDS" -E "$LOCK_TIMEOUT_EXIT" "$lock_file")
+    echo "poor-network: $name side waits for $lock_file"
+  fi
   set +e
-  systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0 --unit="pn-$run_id-$name" \
+  "${lock[@]}" systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0 --unit="pn-$run_id-$name" \
     "$trial_script" --serve --in-caller-scope --tree-root "$trial_root" --seed-home "$mock_home" \
     "$commit" "$server_bin" -- \
     node "$BENCH_DIR/bench.mjs" --side "$name" --out "$run_dir/$name.json" \
@@ -180,6 +194,7 @@ run_side() {
       --repetitions "$repetitions" --scenarios "$scenarios"
   trial_status=$?
   set -e
+  ((trial_status != LOCK_TIMEOUT_EXIT)) || die 1 "the $name side did not get $lock_file within $LOCK_WAIT_SECONDS s"
   echo "poor-network: $name side exit $trial_status"
   [[ -f "$run_dir/$name.json" ]] || die 1 "the $name side wrote no JSON"
   return "$trial_status"

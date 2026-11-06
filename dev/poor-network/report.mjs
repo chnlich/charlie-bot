@@ -171,6 +171,12 @@ export function formatSide(side) {
     );
     lines.push(...formatBackground(`${name} view`, reps));
   }
+  for (const [name, reps] of Object.entries(side.reps ?? {})) {
+    reps.forEach((rep, index) => {
+      const others = rep.otherTrials.length > 0 ? rep.otherTrials.join(', ') : 'none';
+      lines.push(`${name} repetition ${index + 1} (${rep.startedAt} to ${rep.finishedAt}), other trials: ${others}`);
+    });
+  }
   const background = side.metrics['background.received'];
   if (background) {
     const gap = background.median - LIVE_READBACK.receivedKbPerMin;

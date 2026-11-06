@@ -1097,24 +1097,12 @@ enum LineStream {
 }
 
 fn parse_ndjson_line(line: &[u8], stream: LineStream) -> Option<Value> {
-  if line.is_empty() || line.iter().all(u8::is_ascii_whitespace) {
-    return None;
-  }
-  match serde_json::from_slice(line) {
+  match charliebot_core::ndjson::parse_line(line)? {
     Ok(event) => Some(event),
-    Err(error) => match std::str::from_utf8(line) {
-      Ok(_) => {
-        log_not_json(stream, &error);
-        None
-      }
-      Err(_) => match serde_json::from_str(&String::from_utf8_lossy(line)) {
-        Ok(event) => Some(event),
-        Err(repaired_error) => {
-          log_not_json(stream, &repaired_error);
-          None
-        }
-      },
-    },
+    Err(error) => {
+      log_not_json(stream, &error);
+      None
+    }
   }
 }
 

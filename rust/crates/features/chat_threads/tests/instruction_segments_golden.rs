@@ -86,7 +86,7 @@ fn assert_package_matches_recorded_cases(package_index: usize) {
   }
 }
 
-fn rust_answer(case: &Value, repo_path: &Path, package: &str, register: RegisterFn) -> Value {
+fn rust_answer(case: &Value, repo_path: &Path, package: &'static str, register: RegisterFn) -> Value {
   let session = &case["session"];
   let profile = match session["profile"].as_str().unwrap() {
     "manager" => TaskProfile::Manager,

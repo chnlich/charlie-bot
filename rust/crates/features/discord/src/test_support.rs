@@ -246,18 +246,30 @@ pub struct Home {
   pub discord: Arc<Mutex<FakeDiscord>>,
 }
 
+#[derive(Clone, Copy)]
+enum ListenerRuntime {
+  Full,
+  TriggerManagerOnly,
+  None,
+}
+
 impl Home {
   /// A home whose config allows `ALLOWED_USER` and whose credentials hold `TEST_TOKEN` when `token`.
   pub async fn new(token: bool) -> Self {
-    Self::create_home(token, true).await
+    Self::create_home(token, ListenerRuntime::Full).await
   }
 
   /// A home for listener cases with no followed sessions or task dispatch.
   pub async fn new_without_thread_runtime(token: bool) -> Self {
-    Self::create_home(token, false).await
+    Self::create_home(token, ListenerRuntime::None).await
   }
 
-  async fn create_home(token: bool, install_thread_runtime: bool) -> Self {
+  /// A home for listener backfill cases that need triggers but do not dispatch tasks.
+  pub async fn new_with_trigger_manager(token: bool) -> Self {
+    Self::create_home(token, ListenerRuntime::TriggerManagerOnly).await
+  }
+
+  async fn create_home(token: bool, runtime: ListenerRuntime) -> Self {
     let dir = tempfile::tempdir().expect("temporary directory exists");
     fs::write(
       dir.path().join(CONFIG_FILENAME),
@@ -301,8 +313,10 @@ impl Home {
     startup.insert(RunningTurnInputs::new(|_| Vec::new())).expect("the running-turn stub inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
     features.registry.bind_feature_context(&features).expect("the registry binds its feature context once");
-    if install_thread_runtime {
+    if matches!(runtime, ListenerRuntime::Full) {
       charliebot_chat_threads::test_support::install_test_dispatcher(&features);
+    }
+    if !matches!(runtime, ListenerRuntime::None) {
       features
         .startup
         .insert(Arc::new(charliebot_triggers::triggers::TriggerManager::new(Arc::clone(&features))))

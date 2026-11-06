@@ -211,6 +211,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_post_answers_202_with_the_pending_entry_and_200_with_the_live_one() {
     let home = Home::new(vec![Start::Script(delayed_answer_script(1, "Explained."))]);
     home.create_session("s1");
@@ -286,6 +287,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_get_answers_the_entry_with_its_answer_and_error_once_generated() {
     let home = Home::new(vec![Start::Script(answer_script("Explained."))]);
     home.create_session("s1");

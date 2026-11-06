@@ -237,31 +237,37 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn wav_decodes_like_pyav() {
     assert_decodes_like_pyav(&WAV);
   }
 
   #[test]
+  #[ignore = "integration"]
   fn mp4_aac_decodes_like_pyav() {
     assert_decodes_like_pyav(&MP4_AAC);
   }
 
   #[test]
+  #[ignore = "integration"]
   fn mp3_decodes_like_pyav() {
     assert_decodes_like_pyav(&MP3);
   }
 
   #[test]
+  #[ignore = "integration"]
   fn ogg_vorbis_decodes_like_pyav() {
     assert_decodes_like_pyav(&OGG_VORBIS);
   }
 
   #[test]
+  #[ignore = "integration"]
   fn webm_opus_decodes_like_pyav() {
     assert_decodes_like_pyav(&WEBM_OPUS);
   }
 
   #[test]
+  #[ignore = "integration"]
   fn ogg_opus_decodes_like_pyav() {
     assert_decodes_like_pyav(&OGG_OPUS);
   }

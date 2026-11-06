@@ -657,6 +657,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn an_attempt_runs_the_login_the_link_and_the_readback_to_its_outcome() {
     let _serial = SERIAL.lock().await;
     let approved = LoginStub::new("approved", PRINT_LINK, "exit 0\n");
@@ -687,6 +688,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_failed_login_a_replaced_attempt_and_a_stop_end_their_attempts() {
     let _serial = SERIAL.lock().await;
     // A login command that gives no link: the click gets the exit code and the output tail.
@@ -713,6 +715,7 @@ mod tests {
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+  #[ignore = "integration"]
   async fn concurrent_clicks_on_one_login_start_one_process() {
     let _serial = SERIAL.lock().await;
     // The link prints after a delay, so every click arrives while the start is still pending. Each run appends a

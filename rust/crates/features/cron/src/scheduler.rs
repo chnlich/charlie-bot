@@ -1109,6 +1109,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn auto_bind_migration_registers_the_due_fire_leaf_under_its_node() {
     // The launch below spawns real git, so no worktree test may install its fake git meanwhile.
     let _git_lock = GIT_PROGRAM_LOCK.lock().await;
@@ -1281,6 +1282,7 @@ mod tests {
   /// it. The leaf's harness then must not promise one: it carries the type-less contract instead of the implement
   /// STOP line (`spawner_prompt::reviewer_run_follows` is the one decision both sides read).
   #[tokio::test]
+  #[ignore = "integration"]
   async fn fired_leaf_without_mode_handler_or_steps_harness_states_no_reviewer_contract() {
     // The launch spawns real git, so no worktree test may install its fake git meanwhile.
     let _git_lock = GIT_PROGRAM_LOCK.lock().await;
@@ -1742,16 +1744,19 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_scheduled_fire_without_steps_prepares_a_worktree_for_its_run() {
     assert_repo_fire_prepares_a_worktree(true).await;
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_run_now_without_steps_prepares_a_worktree_for_its_run() {
     assert_repo_fire_prepares_a_worktree(false).await;
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_steps_task_launches_its_first_step_prompt_in_either_launch_path() {
     let (_home, features) = feature_context();
     install_execution(&features).await;
@@ -1788,6 +1793,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_task_without_a_repo_runs_without_a_worktree() {
     let (_home, features) = feature_context();
     install_execution(&features).await;
@@ -1924,6 +1930,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_due_tick_skips_while_the_previous_round_is_in_flight_and_consumes_the_delayed_occurrences() {
     let (_home, features) = feature_context();
     install_execution(&features).await;
@@ -1962,6 +1969,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_round_in_flight_in_persisted_state_skips_a_due_tick_on_a_fresh_scheduler() {
     let (_home, features) = feature_context();
     install_execution(&features).await;
@@ -1980,6 +1988,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_scheduled_round_refuses_a_manual_fire_and_starts_no_run() {
     let (_home, features) = feature_context();
     install_execution(&features).await;
@@ -2000,6 +2009,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_manual_round_keeps_the_due_tick_from_starting_a_second_one() {
     let (_home, features) = feature_context();
     install_execution(&features).await;
@@ -2021,6 +2031,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_steps_round_stays_in_flight_until_its_chain_settles() {
     let (_home, features) = feature_context();
     install_execution(&features).await;
@@ -2143,6 +2154,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_host_awaiting_approval_holds_each_due_fire_as_one_skip_and_the_first_fire_after_approval_runs() {
     let (_home, features) = gated_context();
     install_execution(&features).await;
@@ -2186,6 +2198,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn an_unreachable_host_runs_the_fire_so_its_failure_reports_as_before() {
     let (_home, features) = gated_context();
     install_execution(&features).await;
@@ -2230,6 +2243,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_task_whose_backend_names_no_host_and_a_handler_task_probe_no_host() {
     let (_home, features) = gated_context();
     install_execution(&features).await;

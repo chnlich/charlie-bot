@@ -506,7 +506,7 @@ mod tests {
     assert_eq!(platform.calls().len(), 1);
   }
 
-  #[tokio::test]
+  #[tokio::test(start_paused = true)]
   async fn two_concurrent_sends_make_one_platform_request_and_one_409() {
     let platform = SyntheticPlatform::scripted(vec![Reply::delayed(150)]);
     let (_home, features) = test_support::home(Arc::clone(&platform));

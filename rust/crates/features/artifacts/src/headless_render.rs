@@ -649,6 +649,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_render_height_launches_once_and_serves_warm() {
     let directory = tempfile::tempdir().expect("a temporary directory exists");
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("the DevTools port binds");
@@ -665,6 +666,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn crashed_renderer_relaunches_the_chrome_stub() {
     let directory = tempfile::tempdir().expect("a temporary directory exists");
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("the DevTools port binds");
@@ -683,6 +685,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn chrome_launch_failure_reports_the_message_and_stderr_tail() {
     let directory = tempfile::tempdir().expect("a temporary directory exists");
     let chrome = chrome_program(directory.path(), json!([{"stderr": "synthetic renderer failure\n"}, {"exit": 1}]));
@@ -739,6 +742,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn renderer_close_kills_the_whole_process_group() {
     let mut browser = Command::new("sh")
       .args(["-c", "sleep 300 & echo $!; wait"])
@@ -762,6 +766,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn renderer_close_drops_the_child_and_profile() {
     let directory = tempfile::tempdir().expect("a temporary directory exists");
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("the DevTools port binds");

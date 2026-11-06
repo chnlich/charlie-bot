@@ -340,6 +340,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_failing_token_command_is_a_rejection_before_any_request() {
     let dir = tempfile::tempdir().unwrap();
     let stub = Stub::start(201, json!({"html_url": "u", "user": {"login": "operator"}}));

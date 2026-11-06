@@ -83,3 +83,39 @@ node = ["dev/poor-network/*.integration.test.*"]
 [[entry]]
 paths = [".gitignore", "dev/check-unit-test-time.mjs"]
 none = true
+
+[[entry]]
+paths = ["prompts/**"]
+rust = "package(charliebot-artifacts)"
+
+[[entry]]
+paths = ["web/templates/**", "web/static/**", "web/features/artifacts/**"]
+rust = "package(charliebot-artifacts)"
+
+[[entry]]
+paths = ["web/templates/**", "web/static/**", "web/features/approval/**"]
+rust = "package(charliebot-approval)"
+
+[[entry]]
+paths = ["web/templates/**", "web/static/**", "web/features/host_auth/**"]
+rust = "package(charliebot-host-auth)"
+
+[[entry]]
+paths = ["web/templates/**", "web/static/**", "web/features/usage/**"]
+rust = "package(charliebot-usage-page)"
+
+[[entry]]
+paths = ["rust/crates/features/artifacts/tests/data/waiting_page.html"]
+rust = "package(charliebot-artifacts)"
+
+[[entry]]
+paths = ["configs/cron.default.yaml"]
+rust = "package(charliebot-cron)"
+
+[[entry]]
+paths = ["rust/crates/features/voice/tests/fixtures/audio/**"]
+rust = "package(charliebot-voice)"
+
+[[entry]]
+paths = ["web/features/voice/**"]
+rust = "package(charliebot-voice)"

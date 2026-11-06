@@ -343,9 +343,10 @@ mod tests {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let base = format!("http://{}/api/", listener.local_addr().unwrap());
     let holder = thread::spawn(move || {
-      let (stream, _) = listener.accept().unwrap();
-      thread::sleep(Duration::from_millis(500));
-      drop(stream);
+      let (mut stream, _) = listener.accept().unwrap();
+      assert!(read_request(&mut stream).is_some(), "the timed-out request reaches the stub");
+      let mut buffer = [0_u8; 1024];
+      while stream.read(&mut buffer).expect("the client closes its timed-out request") != 0 {}
     });
     charliebot_cli_common::http::ensure_crypto_provider();
     let sender = SlackDraftSender::with_client(

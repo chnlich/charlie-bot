@@ -197,6 +197,7 @@ fn the_terminal_shell_environment_resolves_the_operators_gh() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn failed_tmux_session_reports_stderr_from_the_temporary_file() {
   let root = tempfile::tempdir().unwrap();
   let fake_bin = root.path().join("fake-bin");
@@ -220,6 +221,7 @@ exit 1
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn tmux_session_and_pty_attachment_match_terminal_behavior() {
   let root = tempfile::tempdir().unwrap();
   let home_dir = root.path().join("operator-home");

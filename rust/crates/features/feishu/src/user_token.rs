@@ -394,39 +394,46 @@ mod tests {
     assert_no_token(&error_text(&error));
   }
 
+  fn refreshes_writes_both_tokens_and_retries(code: i64) {
+    let home = credentials_home(TABLE);
+    let stub = Stub::start(vec![
+      json_response(json!({"code": code})),
+      json_response(json!({"code": 0, "app_access_token": APP_TOKEN})),
+      json_response(json!({"code": 0, "data": {"access_token": NEW_ACCESS, "refresh_token": NEW_REFRESH}})),
+      json_response(json!({"code": 0, "data": {"ok": true}})),
+    ]);
+
+    let body = execute_request(home.path(), &request_args(&format!("{}/api", stub.base)), &stub.endpoints()).unwrap();
+    let first = stub.next();
+    let app_request = stub.next();
+    let refresh_request = stub.next();
+    let retried = stub.next();
+
+    assert!(first.to_ascii_lowercase().contains(&format!("authorization: bearer {ACCESS}")));
+    assert!(app_request.starts_with("POST /app-token HTTP/1.1"));
+    assert!(app_request.ends_with(r#"{"app_id":"synthetic-app-id","app_secret":"synthetic-app-secret"}"#));
+    assert!(refresh_request.to_ascii_lowercase().contains(&format!("authorization: bearer {APP_TOKEN}")));
+    assert!(refresh_request.ends_with(&format!(r#"{{"grant_type":"refresh_token","refresh_token":"{REFRESH}"}}"#)));
+    assert!(retried.to_ascii_lowercase().contains(&format!("authorization: bearer {NEW_ACCESS}")));
+    assert_eq!(body, br#"{"code":0,"data":{"ok":true}}"#.to_vec());
+
+    let saved = std::fs::read_to_string(home.path().join(config::CREDENTIALS_FILENAME)).unwrap();
+    assert_eq!(saved, TABLE.replace(ACCESS, NEW_ACCESS).replace(REFRESH, NEW_REFRESH));
+    assert_eq!(
+      std::fs::metadata(home.path().join(config::CREDENTIALS_FILENAME)).unwrap().permissions().mode() & 0o7777,
+      0o600
+    );
+    assert_no_token(&String::from_utf8_lossy(&body));
+  }
+
   #[test]
   fn an_expired_token_refreshes_writes_both_tokens_and_retries() {
-    for code in [TOKEN_EXPIRED_CODE, INVALID_ACCESS_TOKEN_CODE] {
-      let home = credentials_home(TABLE);
-      let stub = Stub::start(vec![
-        json_response(json!({"code": code})),
-        json_response(json!({"code": 0, "app_access_token": APP_TOKEN})),
-        json_response(json!({"code": 0, "data": {"access_token": NEW_ACCESS, "refresh_token": NEW_REFRESH}})),
-        json_response(json!({"code": 0, "data": {"ok": true}})),
-      ]);
+    refreshes_writes_both_tokens_and_retries(TOKEN_EXPIRED_CODE);
+  }
 
-      let body = execute_request(home.path(), &request_args(&format!("{}/api", stub.base)), &stub.endpoints()).unwrap();
-      let first = stub.next();
-      let app_request = stub.next();
-      let refresh_request = stub.next();
-      let retried = stub.next();
-
-      assert!(first.to_ascii_lowercase().contains(&format!("authorization: bearer {ACCESS}")));
-      assert!(app_request.starts_with("POST /app-token HTTP/1.1"));
-      assert!(app_request.ends_with(r#"{"app_id":"synthetic-app-id","app_secret":"synthetic-app-secret"}"#));
-      assert!(refresh_request.to_ascii_lowercase().contains(&format!("authorization: bearer {APP_TOKEN}")));
-      assert!(refresh_request.ends_with(&format!(r#"{{"grant_type":"refresh_token","refresh_token":"{REFRESH}"}}"#)));
-      assert!(retried.to_ascii_lowercase().contains(&format!("authorization: bearer {NEW_ACCESS}")));
-      assert_eq!(body, br#"{"code":0,"data":{"ok":true}}"#.to_vec());
-
-      let saved = std::fs::read_to_string(home.path().join(config::CREDENTIALS_FILENAME)).unwrap();
-      assert_eq!(saved, TABLE.replace(ACCESS, NEW_ACCESS).replace(REFRESH, NEW_REFRESH));
-      assert_eq!(
-        std::fs::metadata(home.path().join(config::CREDENTIALS_FILENAME)).unwrap().permissions().mode() & 0o7777,
-        0o600
-      );
-      assert_no_token(&String::from_utf8_lossy(&body));
-    }
+  #[test]
+  fn an_invalid_access_token_refreshes_writes_both_tokens_and_retries() {
+    refreshes_writes_both_tokens_and_retries(INVALID_ACCESS_TOKEN_CODE);
   }
 
   #[test]

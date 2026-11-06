@@ -187,6 +187,7 @@ esac
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_held_host_is_killed_after_the_timeout_and_the_output_it_printed_is_kept() {
     let (returncode, output) =
       run_probe(&probe_argv("held"), Duration::from_millis(300)).await.expect("the probe runs");
@@ -199,6 +200,7 @@ esac
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_host_that_exits_255_with_a_connect_error_is_unreachable_with_that_error() {
     let (returncode, output) = run_probe(&probe_argv("refused"), PROBE_TIMEOUT).await.expect("the probe runs");
     assert_eq!(returncode, 255);
@@ -210,6 +212,7 @@ esac
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_host_with_no_output_is_named_by_its_return_code() {
     let (returncode, output) = run_probe(&probe_argv("silent"), PROBE_TIMEOUT).await.expect("the probe runs");
     assert!(output.is_empty());
@@ -218,6 +221,7 @@ esac
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn output_with_invalid_utf8_decodes_with_replacement_characters() {
     let (returncode, output) = run_probe(&probe_argv("invalid-utf8"), PROBE_TIMEOUT).await.expect("the probe runs");
     assert_eq!(classify(returncode, &output), STATUS_NEEDS_OKTA);

@@ -1714,6 +1714,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn recorded_cases_match_every_plan_assertion_and_control_difference() {
     let mut decoder =
       flate2::read::GzDecoder::new(include_bytes!("../tests/data/artifact_check_golden.json.gz").as_slice());
@@ -1812,6 +1813,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_shipped_template_passes_its_own_genre_plan() {
     let directory = tempfile::tempdir().unwrap();
     let chrome = stub_chrome(directory.path(), 800);
@@ -1822,6 +1824,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_style_verbatim_fails_on_tampered_style() {
     let directory = tempfile::tempdir().unwrap();
     let chrome = stub_chrome(directory.path(), 800);
@@ -1839,6 +1842,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_page_height_over_the_target_passes_and_names_the_overage() {
     let directory = tempfile::tempdir().unwrap();
     let page = write_page(directory.path(), "plan.html", &plan_page("Ship the fix."));
@@ -1849,6 +1853,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_page_height_at_or_under_the_target_reports_the_target() {
     let directory = tempfile::tempdir().unwrap();
     let page = write_page(directory.path(), "plan.html", &plan_page("Ship the fix."));
@@ -1859,6 +1864,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_page_height_without_a_renderer_fails() {
     let directory = tempfile::tempdir().unwrap();
     let page = write_page(directory.path(), "plan.html", &plan_page("Ship the fix."));
@@ -1871,6 +1877,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_page_height_with_missing_configured_path_uses_the_detail() {
     let directory = tempfile::tempdir().unwrap();
     let page = write_page(directory.path(), "plan.html", &plan_page("Ship the fix."));
@@ -1902,6 +1909,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_plan_present_and_artifact_check_reject_the_same_assertions_on_one_fixture() {
     let directory = tempfile::tempdir().unwrap();
     let chrome = stub_chrome(directory.path(), 800);
@@ -1916,6 +1924,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_plan_present_accepts_a_page_over_the_height_target() {
     let directory = tempfile::tempdir().unwrap();
     let chrome = stub_chrome(directory.path(), 2600);
@@ -1925,6 +1934,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn plan_page_height_probe_is_removed_after_a_renderer_launch_failure() {
     let directory = tempfile::tempdir().unwrap();
     let page = write_page(directory.path(), "plan.html", &plan_page("Ship the fix."));
@@ -1935,6 +1945,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn plan_section_numbers_accept_unicode_decimal_digits() {
     let directory = tempfile::tempdir().unwrap();
     let chrome = stub_chrome(directory.path(), 800);
@@ -1944,6 +1955,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn plan_section_number_span_must_hold_digits() {
     let directory = tempfile::tempdir().unwrap();
     let chrome = stub_chrome(directory.path(), 800);
@@ -1953,6 +1965,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn ordinal_label_after_a_list_marker_takes_the_colon_gloss() {
     let directory = tempfile::tempdir().unwrap();
     let chrome = stub_chrome(directory.path(), 800);
@@ -1962,6 +1975,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_byte_integrity_fails_on_non_lf_control_byte() {
     let directory = tempfile::tempdir().unwrap();
     let chrome = stub_chrome(directory.path(), 800);
@@ -1977,6 +1991,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn weighted_goal_counts_code_points_and_str_whitespace() {
     let directory = tempfile::tempdir().unwrap();
     let chrome = stub_chrome(directory.path(), 800);
@@ -2021,6 +2036,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn two_named_option_lines_with_a_matching_recommendation_pass() {
     let page = fork_page(
       "Ship the fix.",
@@ -2033,6 +2049,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn one_visible_option_line_fails() {
     let page = fork_page(
       "Ship the fix.",
@@ -2045,6 +2062,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn option_lines_inside_a_fold_do_not_count() {
     let page = fork_page(
       "Ship the fix.",
@@ -2062,6 +2080,7 @@ mod tests {
      <p class=\"rec\">Recommendation: 「keep」.</p>";
 
   #[test]
+  #[ignore = "integration"]
   fn a_plain_closed_details_hides_its_option_from_the_check() {
     let page = fork_page("Ship the fix.", ONE_VISIBLE_OPTION_AND_ONE_IN_A_PLAIN_DETAILS);
     let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
@@ -2070,6 +2089,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn an_open_details_shows_its_option_to_the_check() {
     let body = ONE_VISIBLE_OPTION_AND_ONE_IN_A_PLAIN_DETAILS.replacen("<details>", "<details open>", 1);
     let page = fork_page("Ship the fix.", &body);
@@ -2087,6 +2107,7 @@ mod tests {
      <li>「delete」: delete the file.</li></ul><p class=\"rec\">Recommendation: 「keep」.</p>";
 
   #[test]
+  #[ignore = "integration"]
   fn an_open_fork_inside_a_closed_details_fails_with_one_line() {
     let page = fork_page_in_details("<details>", TWO_OPTIONS_AND_RECOMMENDATION);
     let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
@@ -2097,6 +2118,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn the_same_fork_inside_an_open_details_passes() {
     let page = fork_page_in_details("<details open>", TWO_OPTIONS_AND_RECOMMENDATION);
     let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
@@ -2104,6 +2126,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_resolved_fork_inside_a_closed_details_is_skipped() {
     let page = fork_page_in_details("<details>", "<p class=\"resolved\">Resolved: keep the file.</p>");
     let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
@@ -2111,6 +2134,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn an_option_line_that_does_not_open_with_its_name_fails() {
     let page = fork_page(
       "Ship the fix.",
@@ -2123,6 +2147,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_recommendation_that_quotes_no_option_name_fails() {
     let page = fork_page(
       "Ship the fix.",
@@ -2135,6 +2160,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn yes_or_no_options_pass() {
     let page = fork_page(
       "Ship the fix.",
@@ -2146,6 +2172,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn prose_names_that_look_like_codes_do_not_break_the_name_match() {
     let page = fork_page(
       "Support 3D, 4K and 7B inputs.",
@@ -2157,6 +2184,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_resolved_fork_is_skipped() {
     let page = fork_page("Ship the fix.", "<p class=\"resolved\">Resolved: keep the file.</p>");
     let outcomes = run_only("plan", &page, &[FORK_OPTIONS]);
@@ -2170,6 +2198,7 @@ mod tests {
      <p class=\"rec\">Recommendation: 「keep」.</p>";
 
   #[test]
+  #[ignore = "integration"]
   fn an_option_with_a_demo_and_one_with_a_reason_pass() {
     let page = fork_page("Ship the fix.", DEMO_AND_REASON_OPTIONS);
     let outcomes = run_only("plan", &page, &[FORK_DEMOS]);
@@ -2179,6 +2208,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn an_option_without_a_demo_or_a_reason_fails_and_names_the_option() {
     let body = DEMO_AND_REASON_OPTIONS.replace(
       "<p class=\"no-demo\">The difference shows in the next page load, which a still picture cannot draw.</p>",
@@ -2196,6 +2226,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn an_empty_no_demo_fails() {
     let body = DEMO_AND_REASON_OPTIONS
       .replace("The difference shows in the next page load, which a still picture cannot draw.", " ");
@@ -2207,6 +2238,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_demo_inside_a_closed_fold_fails() {
     let body = DEMO_AND_REASON_OPTIONS.replace(
       "<div class=\"demo\"><p>the file stays on the page</p></div>",
@@ -2220,6 +2252,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn an_svg_only_demo_passes() {
     let body = DEMO_AND_REASON_OPTIONS.replace(
       "<div class=\"demo\"><p>the file stays on the page</p></div>",
@@ -2232,6 +2265,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_fork_without_any_marker_on_an_option_line_is_not_checked() {
     let page = fork_page("Ship the fix.", TWO_OPTIONS_AND_RECOMMENDATION);
     let outcomes = run_only("plan", &page, &[FORK_DEMOS]);
@@ -2240,6 +2274,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_demo_in_the_explainer_fold_does_not_start_the_check() {
     let body = format!(
       "{TWO_OPTIONS_AND_RECOMMENDATION}\
@@ -2252,6 +2287,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn an_li_inside_a_demo_is_not_an_option_line() {
     let page = fork_page(
       "Ship the fix.",
@@ -2274,6 +2310,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn the_fork_assertion_entry_returns_a_verdict_without_the_user_text_input() {
     let directory = tempfile::tempdir().unwrap();
     let body = "<ul><li>「keep」: keep the file.</li><li>「delete」: delete the file.</li></ul>\
@@ -2297,6 +2334,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn the_waiting_sample_passes_every_waiting_assertion_in_order() {
     let outcomes = run_assertions_sync("waiting", &waiting_sample(), "", &repo_root()).unwrap();
     let names = outcomes.iter().map(|outcome| outcome.name.as_str()).collect::<Vec<_>>();
@@ -2327,6 +2365,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn each_user_text_hit_fails_with_its_snippet_block_and_fix() {
     let home = tempfile::tempdir().unwrap();
     fs::create_dir(home.path().join("sessions")).unwrap();
@@ -2369,6 +2408,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn the_waiting_sample_fails_the_understanding_set_on_sections_and_foot() {
     let directory = tempfile::tempdir().unwrap();
     let chrome = stub_chrome(directory.path(), 800);
@@ -2425,6 +2465,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_req_chips_passes_when_the_chip_is_glossed_in_its_sentence() {
     let directory = tempfile::tempdir().unwrap();
     let outcomes = run_sitrep(directory.path(), &sitrep_ok_doc());
@@ -2434,6 +2475,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_req_chips_fails_when_the_sentence_ends_after_the_chip() {
     let directory = tempfile::tempdir().unwrap();
     let doc = sitrep_ok_doc().replace(
@@ -2449,6 +2491,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_req_chips_accepts_a_gloss_in_another_unicode_script() {
     let directory = tempfile::tempdir().unwrap();
     let doc = sitrep_ok_doc().replace(
@@ -2462,6 +2505,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_run_stated_passes_when_a_table_or_dl_states_both_roles() {
     let directory = tempfile::tempdir().unwrap();
     let variable_blocks = [
@@ -2488,6 +2532,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_run_stated_fails_when_the_numeric_table_has_no_variable_block() {
     let directory = tempfile::tempdir().unwrap();
     let outcomes = run_sitrep(directory.path(), &sitrep_run_doc(""));
@@ -2499,6 +2544,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_run_stated_requires_a_block_separate_from_the_numeric_table() {
     let directory = tempfile::tempdir().unwrap();
     let table_with_inline_factors = NUMERIC_TABLE.replace(
@@ -2521,6 +2567,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_run_stated_requires_both_role_rows_in_one_block() {
     let directory = tempfile::tempdir().unwrap();
     let variable_blocks = concat!(
@@ -2539,6 +2586,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_run_stated_names_the_one_missing_role_row() {
     let directory = tempfile::tempdir().unwrap();
     let block = "<table><tr><td>Changed</td><td>3,506 columns dropped</td></tr></table>";
@@ -2551,6 +2599,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_run_stated_is_inert_without_a_decimal_table_cell() {
     let directory = tempfile::tempdir().unwrap();
     let doc = sitrep_ok_doc().replace(
@@ -2636,6 +2685,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_shipped_explain_template_passes_its_explain_set() {
     let template = repo_root().join("prompts/explain_template.html");
     let outcomes = run_assertions_sync("explain", &template, "", &repo_root()).unwrap();
@@ -2644,6 +2694,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_explain_page_with_figured_steps_and_both_examples_passes_every_assertion() {
     let mechanism = format!("{OPENING}{}{}", step(FIGURE), step(FIGURE));
     let outcomes = run_explain(&explain_body(&mechanism, &format!("{E2E}{CONTRAST}")));
@@ -2651,6 +2702,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_explain_figures_fails_a_page_with_no_step() {
     let outcomes = run_explain(&explain_body(OPENING, &format!("{E2E}{CONTRAST}")));
     let failures = failed(&outcomes, EXPLAIN_FIGURES);
@@ -2659,6 +2711,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_explain_figures_fails_a_step_with_only_a_flow_strip() {
     let flow_only = concat!(
       r#"<div class="step"><h3>Flow only</h3>"#,
@@ -2673,6 +2726,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_explain_figures_fails_an_svg_with_fewer_than_three_elements() {
     let flow = r#"<div class="flow"><span class="b">a</span><span class="b">b</span><span class="b">c</span></div>"#;
     let sparse_svgs = [
@@ -2693,6 +2747,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_explain_figures_fails_an_img_without_src() {
     for img in [r#"<img alt="frame"/>"#, r#"<img src="" alt="frame"/>"#] {
       let mechanism = format!("{OPENING}{}", step(img));
@@ -2704,6 +2759,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_explain_figures_fails_a_paragraph_after_the_steps() {
     let mechanism = format!("{OPENING}{}<p>A stray paragraph.</p>", step(FIGURE));
     let outcomes = run_explain(&explain_body(&mechanism, &format!("{E2E}{CONTRAST}")));
@@ -2713,6 +2769,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_explain_figures_fails_a_second_paragraph_before_the_first_step() {
     let mechanism = format!("{OPENING}<p>A second opening.</p>{}", step(FIGURE));
     let outcomes = run_explain(&explain_body(&mechanism, &format!("{E2E}{CONTRAST}")));
@@ -2722,6 +2779,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_explain_examples_fails_a_page_with_no_e2e_example() {
     let mechanism = format!("{OPENING}{}", step(FIGURE));
     let outcomes = run_explain(&explain_body(&mechanism, CONTRAST));
@@ -2731,6 +2789,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_explain_examples_fails_a_page_with_no_contrast_example() {
     let mechanism = format!("{OPENING}{}", step(FIGURE));
     let outcomes = run_explain(&explain_body(&mechanism, E2E));
@@ -2740,6 +2799,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_explain_examples_fails_an_example_without_a_source() {
     let unsourced = r#"<div class="example e2e"><h3>Frame 41 to 42</h3><p>Frame 42 recompiles.</p></div>"#;
     let mechanism = format!("{OPENING}{}", step(FIGURE));

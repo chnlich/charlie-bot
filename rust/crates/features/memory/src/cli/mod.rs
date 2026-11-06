@@ -374,6 +374,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_cli_add_creates_one_staging_file() {
     run_with_timeout(|| {
       let temp = tempfile::tempdir().unwrap();
@@ -396,6 +397,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_cli_add_on_a_fresh_home_creates_the_scaffold_and_the_capture() {
     run_with_timeout(|| {
       let temp = tempfile::tempdir().unwrap();

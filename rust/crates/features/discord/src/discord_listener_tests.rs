@@ -304,7 +304,7 @@ async fn test_acked_heartbeats_keep_beating_one_interval_apart() {
   assert!(received[0].iter().all(|payload| payload["op"] != 8));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_server_op1_is_answered_at_once() {
   let home = Home::new(true).await;
   let mut script = GatewayScript::new(vec![ready(7), json!({"op": 1})]);
@@ -318,7 +318,7 @@ async fn test_server_op1_is_answered_at_once() {
   assert!(received[0].iter().any(|payload| payload == &json!({"op": 1, "d": 7})));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_missing_ack_closes_and_reconnects() {
   let home = Home::new(true).await;
   let mut missed = GatewayScript::new(vec![ready(2)]);
@@ -340,7 +340,7 @@ async fn test_missing_ack_closes_and_reconnects() {
   assert!(received.iter().all(|connection| connection[0]["op"] == 2));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_op7_and_op9_end_the_connection_and_reconnect() {
   for op in [7, 9] {
     let home = Home::new(true).await;
@@ -628,7 +628,7 @@ async fn test_concurrent_duplicate_discord_message_create_accepts_one_thread_sum
   assert!(fake.started_threads.is_empty());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_discord_accepted_post_timeout_retries_with_one_nonce_keyed_post() {
   let home = Home::new(true).await;
   let sid = discord_session(&home).await;

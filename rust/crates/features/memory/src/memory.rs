@@ -605,6 +605,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn the_store_load_rejects_each_placement_with_the_violation_it_names() {
     let cases = [
       ("entries/nonexistent/x.md", entry_text("nonexistent", "master, worker"), "not in topics vocabulary"),
@@ -636,6 +637,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn selecting_on_a_missing_dir_creates_the_scaffold_and_selects_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let memory_dir = dir.path().join("nope");
@@ -652,6 +654,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn ensure_store_twice_keeps_a_curated_vocabulary() {
     let dir = tempfile::tempdir().unwrap();
     let memory_dir = dir.path().join("store");
@@ -664,6 +667,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn concurrent_first_use_leaves_one_whole_scaffold() {
     let dir = tempfile::tempdir().unwrap();
     let memory_dir = Arc::new(dir.path().join("store"));
@@ -685,6 +689,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_staged_capture_never_enters_a_selection() {
     let dir = tempfile::tempdir().unwrap();
     write_files(
@@ -698,6 +703,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_worker_selection_without_entries_is_the_usage_line_alone() {
     let dir = tempfile::tempdir().unwrap();
     write_files(dir.path(), &[("topics", "profile resident\n")]);
@@ -709,6 +715,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn residents_take_full_text_and_the_rest_of_the_master_audience_takes_index_lines() {
     let dir = tempfile::tempdir().unwrap();
     write_files(dir.path(), &[("topics", "profile resident\nbeta\n")]);
@@ -731,6 +738,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_worker_selection_puts_its_repo_topic_in_full_and_the_rest_in_the_index() {
     let dir = tempfile::tempdir().unwrap();
     write_files(dir.path(), &[("topics", "profile resident\ngamma-service\n")]);

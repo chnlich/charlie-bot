@@ -122,6 +122,7 @@ async fn a_bind_addr_without_a_port_answers_500_with_the_config_error() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_stub_that_listens_on_the_configured_port_answers_200_with_the_port_and_the_folder() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let port = free_port();
@@ -138,6 +139,7 @@ async fn a_stub_that_listens_on_the_configured_port_answers_200_with_the_port_an
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_stub_that_exits_before_listening_answers_503() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let port = free_port();

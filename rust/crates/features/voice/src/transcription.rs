@@ -1177,7 +1177,7 @@ mod tests {
     fake.abort();
   }
 
-  #[tokio::test]
+  #[tokio::test(start_paused = true)]
   async fn both_backend_cancellations_wait_for_the_one_second_close_timeout() {
     for backend_kind in [BackendKind::Gemini, BackendKind::Muse] {
       let (listener, endpoint) = fake_listener().await;

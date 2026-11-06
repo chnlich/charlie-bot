@@ -606,7 +606,7 @@ mod tests {
     assert!(!state_path.exists(), "an unknown alias writes no state");
   }
 
-  #[tokio::test]
+  #[tokio::test(start_paused = true)]
   async fn a_gate_write_waits_for_the_round_that_holds_the_slot() {
     let dir = tempfile::tempdir().expect("a temporary home");
     let config = dir.path().join("ssh_config");

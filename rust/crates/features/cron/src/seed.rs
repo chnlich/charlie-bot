@@ -154,6 +154,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_real_run_writes_one_host_file_per_default_entry_and_the_rerun_reports_exists() {
     let repo = repo_with_defaults();
     let home = tempfile::tempdir().expect("a temp home");
@@ -185,6 +186,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_dry_run_validates_and_writes_nothing() {
     let repo = repo_with_defaults();
     let home = tempfile::tempdir().expect("a temp home");
@@ -199,6 +201,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn an_unreadable_prompt_file_fails_the_dry_run_and_the_real_run_alike() {
     let repo = repo_with_defaults();
     fs::remove_file(repo.path().join("prompts/cron/memory_curator/memory_selector.md"))

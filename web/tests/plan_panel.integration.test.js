@@ -228,4 +228,3 @@ test('plan_template.html contract: open forks extracted, no question starts with
   assert.ok(ns.includes('1'), 'open fork #1 (scope question) is present');
   assert.equal(ns.includes('2'), false, 'resolved fork #2 is excluded');
 });
-

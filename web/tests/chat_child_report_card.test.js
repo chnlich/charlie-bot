@@ -119,4 +119,3 @@ test('a click expands a folded card, and a second click folds it again', () => {
   assert.equal(card.dataset.folded, 'true');
   assert.equal(button.attrs['aria-expanded'], 'false');
 });
-

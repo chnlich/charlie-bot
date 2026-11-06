@@ -286,7 +286,6 @@ test('mobile CSS selectors for the strip match the attributes the renderer emits
     }
   }
 });
-
 // ---------------------------------------------------------------------------
 // Scoped (per-model) weekly windows: one more 7d bar per row, labelled by the
 // model. The scope_label rides in the window so both weekly bars coexist, and

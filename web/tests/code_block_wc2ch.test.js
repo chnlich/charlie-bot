@@ -117,4 +117,3 @@ test('tool output pre and raw backend block wrap through rendering.js', () => {
   assert.match(rawHtml, /<span class="wc2ch">\u4e2d<\/span>/);
   assert.match(rawHtml, /literal text/);
 });
-

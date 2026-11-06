@@ -5,6 +5,7 @@
 //! fence identity record, and the static-file ETag. Each one follows the pinned algorithm it names rather than
 //! serde_json's own formatting.
 
+use crate::json_loads::{INFINITY, NAN, NEGATIVE_INFINITY};
 use crate::printable_table::NON_PRINTABLE;
 use serde::Serialize;
 use serde_json::ser::Formatter as JsonFormatter;
@@ -340,16 +341,16 @@ fn write_json(out: &mut String, value: &Value, style: &JsonStyle, floats: FloatF
     Value::Number(number) => {
       if number.is_f64() {
         let float = number.as_f64().expect("an f64 number reads as f64");
-        out.push_str(&if float.is_nan() {
-          "NaN".to_string()
+        if float.is_nan() {
+          out.push_str(NAN);
         } else if float.is_infinite() {
-          if float > 0.0 { "Infinity" } else { "-Infinity" }.to_string()
+          out.push_str(if float > 0.0 { INFINITY } else { NEGATIVE_INFINITY });
         } else {
-          match floats {
+          out.push_str(&match floats {
             FloatForm::Python => float_repr(float),
             FloatForm::Pydantic => pydantic_float_repr(float),
-          }
-        });
+          });
+        }
       } else {
         out.push_str(&number.to_string());
       }

@@ -893,6 +893,9 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "infra/core",
     hint: "Use `charliebot_core::pacific::ZONE`, the house time zone.",
   },
+  OwnerRow { name: "NaN", owner: "infra/core", hint: "Use `charliebot_core::json_loads::NAN`." },
+  OwnerRow { name: "Infinity", owner: "infra/core", hint: "Use `charliebot_core::json_loads::INFINITY`." },
+  OwnerRow { name: "-Infinity", owner: "infra/core", hint: "Use `charliebot_core::json_loads::NEGATIVE_INFINITY`." },
   OwnerRow {
     name: "boot_recovery.json",
     owner: "infra/core",

@@ -94,7 +94,7 @@ impl Target {
   }
 }
 
-/// Validate one GitHub target and return it in canonical form: `{repo, title, head, base}` for a draft pull request,
+/// One GitHub target in canonical form: `{repo, title, head, base}` for a draft pull request,
 /// `{repo, number}` for a comment.
 pub fn validate_target(target: &Value) -> Result<Value, String> {
   Target::parse(target).map(|target| target.to_value())

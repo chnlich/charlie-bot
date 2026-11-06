@@ -28,6 +28,10 @@ use charliebot_core::json_loads::{self, LoadFailure};
 
 use crate::{responses, validation};
 
+/// The browser's own clock stamp on an event it reported. The diag telemetry body and the voice startup body both
+/// declare it, so the two routes take the field name from here.
+pub const CLIENT_TS: &str = "client_ts";
+
 /// The result of the body read: no bytes, parsed JSON, or untouched bytes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RequestBody {

@@ -176,7 +176,7 @@ const STARTUP_FIELDS: &[BodyField] = &[
   BodyField::required("track_muted", FieldType::NullableBoolean),
   BodyField::required("devices", FieldType::NullableModel { class_name: "VoiceDevices", model: &STARTUP_DEVICES }),
   BodyField::required("user_agent", FieldType::String),
-  BodyField::required("client_ts", FieldType::String),
+  BodyField::required(request_body::CLIENT_TS, FieldType::String),
 ];
 
 const STARTUP_BODY: BodyModel = BodyModel::required(STARTUP_FIELDS).forbid_extra();
@@ -247,7 +247,7 @@ impl<'a> VoiceStartup<'a> {
       track_muted: flag_field(values, "track_muted"),
       devices: values.get("devices").filter(|value| !value.is_null()),
       user_agent: text_field_ref(values, "user_agent"),
-      client_ts: text_field_ref(values, "client_ts"),
+      client_ts: text_field_ref(values, request_body::CLIENT_TS),
     }
   }
 }

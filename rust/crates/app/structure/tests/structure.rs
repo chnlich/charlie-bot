@@ -1089,6 +1089,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_compat::mimetypes_table::TEXT_PLAIN`; the table's text rows, the static-file fallback \
            and the websocket refusal read it.",
   },
+  OwnerRow {
+    name: "client_ts",
+    owner: "infra/compat",
+    hint: "Use `charliebot_compat::request_body::CLIENT_TS`; the diag telemetry body and the voice startup body both \
+           declare the browser's clock stamp.",
+  },
 ];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one

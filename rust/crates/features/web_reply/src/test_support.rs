@@ -149,9 +149,9 @@ impl Home {
         .expect("the user text checks package registers");
     }
     registry.register_package("features.web_reply", crate::register).expect("the web reply package registers");
+    registry.register_package("tests.plans", register_plans).expect("the plan registry reader registers");
     if matches!(packages, PackageSet::Full) {
       registry.register_package("tests.origins", register_origins).expect("the origin slots register");
-      registry.register_package("tests.plans", register_plans).expect("the plan registry reader registers");
       registry
         .register_package("tests.derived_waiting", register_derived_waiting)
         .expect("the derived Waiting on you reader registers");

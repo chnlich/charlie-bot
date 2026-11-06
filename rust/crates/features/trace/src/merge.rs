@@ -895,16 +895,15 @@ mod differential_tests {
     mode: &'a str,
   }
 
-  /// The fixture's borrowed form: `serde_json::from_slice::<Value>` materializes every hex string in
-  /// the corpus and references, a DOM cost each slice pays before a case runs. `RawValue` and `&str`
-  /// borrows scan the same bytes without allocating them, so a slice parses only the cases it runs.
+  /// The fixture's borrowed form: `RawValue` and `&str` references leave the corpus bytes in the fixture,
+  /// so a case parses only its own paths and references.
   #[derive(Deserialize)]
   struct GoldenFixture<'a> {
     source: Value,
     #[serde(borrow)]
     corpus: HashMap<String, &'a RawValue>,
     #[serde(borrow)]
-    cases: Vec<&'a RawValue>,
+    case: &'a RawValue,
   }
 
   #[derive(Deserialize)]
@@ -931,42 +930,42 @@ mod differential_tests {
   }
 
   macro_rules! recorded_trace_case {
-    ($name:ident, $index:expr) => {
+    ($name:ident, $fixture:literal) => {
       #[test]
       fn $name() {
-        compare_recorded_trace_builders($index, $index + 1, &["merge", "multi", "direct"]);
+        compare_recorded_trace_builders(include_str!($fixture), &["merge", "multi", "direct"]);
       }
     };
   }
 
-  recorded_trace_case!(recorded_trace_bare_array, 0);
-  recorded_trace_case!(recorded_trace_metadata_siblings_and_numbers, 1);
-  recorded_trace_case!(recorded_trace_missing_and_string_tids, 2);
-  recorded_trace_case!(recorded_trace_flow_id_phases, 3);
-  recorded_trace_case!(recorded_trace_process_labels_and_slim, 4);
-  recorded_trace_case!(recorded_trace_multi_member_skip, 5);
-  recorded_trace_case!(recorded_trace_empty_file, 6);
-  recorded_trace_case!(recorded_trace_all_members_non_trace, 7);
-  recorded_trace_case!(recorded_trace_non_object_event, 8);
-  recorded_trace_case!(recorded_trace_truthy_non_object_label_args, 9);
-  recorded_trace_case!(recorded_trace_truthy_non_string_metadata_name, 10);
-  recorded_trace_case!(recorded_trace_unexpected_end, 11);
-  recorded_trace_case!(recorded_trace_trailing_content, 12);
-  recorded_trace_case!(recorded_trace_missing_colon, 13);
-  recorded_trace_case!(recorded_trace_missing_comma, 14);
-  recorded_trace_case!(recorded_trace_invalid_value, 15);
-  recorded_trace_case!(recorded_trace_invalid_escape, 16);
-  recorded_trace_case!(recorded_trace_unterminated_string, 17);
-  recorded_trace_case!(recorded_trace_leading_zero, 18);
-  recorded_trace_case!(recorded_trace_invalid_object_key, 19);
-  recorded_trace_case!(recorded_trace_missing_array_comma, 20);
-  recorded_trace_case!(recorded_trace_missing_object_value, 21);
-  recorded_trace_case!(recorded_trace_nan_literal, 22);
-  recorded_trace_case!(recorded_trace_infinity_literal, 23);
-  recorded_trace_case!(recorded_trace_negative_infinity_literal, 24);
-  recorded_trace_case!(recorded_trace_control_character, 25);
-  recorded_trace_case!(recorded_trace_overflow_float, 26);
-  recorded_trace_case!(recorded_trace_invalid_unicode_escape, 27);
+  recorded_trace_case!(recorded_trace_bare_array, "../tests/fixtures/trace_cases/case-00.json");
+  recorded_trace_case!(recorded_trace_metadata_siblings_and_numbers, "../tests/fixtures/trace_cases/case-01.json");
+  recorded_trace_case!(recorded_trace_missing_and_string_tids, "../tests/fixtures/trace_cases/case-02.json");
+  recorded_trace_case!(recorded_trace_flow_id_phases, "../tests/fixtures/trace_cases/case-03.json");
+  recorded_trace_case!(recorded_trace_process_labels_and_slim, "../tests/fixtures/trace_cases/case-04.json");
+  recorded_trace_case!(recorded_trace_multi_member_skip, "../tests/fixtures/trace_cases/case-05.json");
+  recorded_trace_case!(recorded_trace_empty_file, "../tests/fixtures/trace_cases/case-06.json");
+  recorded_trace_case!(recorded_trace_all_members_non_trace, "../tests/fixtures/trace_cases/case-07.json");
+  recorded_trace_case!(recorded_trace_non_object_event, "../tests/fixtures/trace_cases/case-08.json");
+  recorded_trace_case!(recorded_trace_truthy_non_object_label_args, "../tests/fixtures/trace_cases/case-09.json");
+  recorded_trace_case!(recorded_trace_truthy_non_string_metadata_name, "../tests/fixtures/trace_cases/case-10.json");
+  recorded_trace_case!(recorded_trace_unexpected_end, "../tests/fixtures/trace_cases/case-11.json");
+  recorded_trace_case!(recorded_trace_trailing_content, "../tests/fixtures/trace_cases/case-12.json");
+  recorded_trace_case!(recorded_trace_missing_colon, "../tests/fixtures/trace_cases/case-13.json");
+  recorded_trace_case!(recorded_trace_missing_comma, "../tests/fixtures/trace_cases/case-14.json");
+  recorded_trace_case!(recorded_trace_invalid_value, "../tests/fixtures/trace_cases/case-15.json");
+  recorded_trace_case!(recorded_trace_invalid_escape, "../tests/fixtures/trace_cases/case-16.json");
+  recorded_trace_case!(recorded_trace_unterminated_string, "../tests/fixtures/trace_cases/case-17.json");
+  recorded_trace_case!(recorded_trace_leading_zero, "../tests/fixtures/trace_cases/case-18.json");
+  recorded_trace_case!(recorded_trace_invalid_object_key, "../tests/fixtures/trace_cases/case-19.json");
+  recorded_trace_case!(recorded_trace_missing_array_comma, "../tests/fixtures/trace_cases/case-20.json");
+  recorded_trace_case!(recorded_trace_missing_object_value, "../tests/fixtures/trace_cases/case-21.json");
+  recorded_trace_case!(recorded_trace_nan_literal, "../tests/fixtures/trace_cases/case-22.json");
+  recorded_trace_case!(recorded_trace_infinity_literal, "../tests/fixtures/trace_cases/case-23.json");
+  recorded_trace_case!(recorded_trace_negative_infinity_literal, "../tests/fixtures/trace_cases/case-24.json");
+  recorded_trace_case!(recorded_trace_control_character, "../tests/fixtures/trace_cases/case-25.json");
+  recorded_trace_case!(recorded_trace_overflow_float, "../tests/fixtures/trace_cases/case-26.json");
+  recorded_trace_case!(recorded_trace_invalid_unicode_escape, "../tests/fixtures/trace_cases/case-27.json");
 
   #[test]
   fn merge_batches_keep_the_event_after_a_full_batch() {
@@ -977,16 +976,7 @@ mod differential_tests {
     let mut batcher = EventBatcher::new(&mut output);
     let mut tid_seq = IdSequencer::new(1);
     let mut flow_seq = IdSequencer::new(1);
-    merge_one_trace(
-      &document,
-      Path::new("rank513.json"),
-      0,
-      &mut batcher,
-      &mut tid_seq,
-      &mut flow_seq,
-      false,
-    )
-    .unwrap();
+    merge_one_trace(&document, Path::new("rank513.json"), 0, &mut batcher, &mut tid_seq, &mut flow_seq, false).unwrap();
 
     let fragment = String::from_utf8(output).unwrap();
     let events: Vec<Value> = serde_json::from_str(&format!("[{fragment}]")).unwrap();
@@ -996,32 +986,24 @@ mod differential_tests {
 
   #[test]
   fn recorded_trace_merge_builder_matches_seeded_corpus_last_slice() {
-    compare_recorded_trace_builders(28, 29, &["merge"]);
+    compare_recorded_trace_builders(include_str!("../tests/fixtures/trace_cases/case-28.json"), &["merge"]);
   }
 
   #[test]
   fn recorded_trace_multi_builder_matches_seeded_corpus_last_slice() {
-    compare_recorded_trace_builders(28, 29, &["multi"]);
+    compare_recorded_trace_builders(include_str!("../tests/fixtures/trace_cases/case-28.json"), &["multi"]);
   }
 
   #[test]
   fn recorded_trace_direct_builder_matches_seeded_corpus_last_slice() {
-    compare_recorded_trace_builders(28, 29, &["direct"]);
+    compare_recorded_trace_builders(include_str!("../tests/fixtures/trace_cases/case-28.json"), &["direct"]);
   }
 
-  fn compare_recorded_trace_builders(start: usize, end: usize, builders: &[&str]) {
-    let bytes = include_bytes!("../tests/fixtures/trace_golden.json.gz");
-    let mut decoder = GzDecoder::new(bytes.as_slice());
-    let mut contents = Vec::new();
-    decoder.read_to_end(&mut contents).unwrap();
-    let fixture: GoldenFixture = serde_json::from_slice(&contents).unwrap();
+  fn compare_recorded_trace_builders(contents: &str, builders: &[&str]) {
+    let fixture: GoldenFixture = serde_json::from_str(contents).unwrap();
     assert_eq!(fixture.source["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
     assert_eq!(fixture.source["mtime_ns"], "$FIXED_MTIME_NS");
-
-    assert_eq!(fixture.cases.len(), 29);
-    let selected = &fixture.cases[start..end];
-    assert_eq!(selected.len(), end - start);
-    let cases: Vec<GoldenCase> = selected.iter().map(|raw| serde_json::from_str(raw.get()).unwrap()).collect();
+    let cases = [serde_json::from_str::<GoldenCase>(fixture.case.get()).unwrap()];
 
     let root = tempdir().unwrap();
     for case in &cases {
@@ -1077,7 +1059,7 @@ mod differential_tests {
         }
       }
     }
-    println!("matched {comparisons} builder results and {} cache keys", (end - start) * 2);
+    println!("matched {comparisons} builder results and {} cache keys", cases.len() * 2);
     assert!(differences.is_empty(), "{} differential mismatches:\n{}", differences.len(), differences.join("\n"));
   }
 

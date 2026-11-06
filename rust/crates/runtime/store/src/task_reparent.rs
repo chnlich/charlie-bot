@@ -322,10 +322,8 @@ mod tests {
     let new_parent = create_node(&store, "b", Some(&caller.id), TaskProfile::Manager).await;
     let rule = set_subtree_rule(&store, &old_parent, "rule of a\n").await;
 
-    let moved = store
-      .patch_task(&moved_task.id, move_under(Some(&new_parent)), agent(&caller), &NoGuards)
-      .await
-      .unwrap();
+    let moved =
+      store.patch_task(&moved_task.id, move_under(Some(&new_parent)), agent(&caller), &NoGuards).await.unwrap();
 
     assert_eq!(moved.task_parent_id.as_deref(), Some(new_parent.id.as_str()));
     assert_eq!(moved.subtree_prompt_ref.as_deref(), Some(rule.as_str()));

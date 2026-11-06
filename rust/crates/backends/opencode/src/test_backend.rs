@@ -1615,7 +1615,12 @@ async fn concurrent_turns_share_one_server_process() {
 
 #[tokio::test]
 async fn cancel_signals_only_its_turn_and_the_other_turn_completes() {
-  let harness = Harness::new(held_script(&["held", "quick"]));
+  // The held turn's text event marks its relay as streaming: the relay forwards events only from its main loop, and
+  // a signal that lands before that is recorded as a failure instead of an interrupt.
+  let harness = Harness::new(json!({"prompts": {
+    "held": {"events": [text_event("held running")], "hold": true},
+    "quick": {"events": [], "hold": true}
+  }}));
   let (_, cancelled_events, cancelled_task) =
     harness.start_run("held", LaunchArgs::default(), None, vec![], Env::new());
   let (_, other_events, other_task) = harness.start_run("quick", LaunchArgs::default(), None, vec![], Env::new());
@@ -1629,6 +1634,11 @@ async fn cancel_signals_only_its_turn_and_the_other_turn_completes() {
         })
         .count()
         == 2
+    })
+    .await;
+  harness
+    .wait_for_events(&cancelled_events, |events| {
+      events.iter().any(|event| event["type"] == event_types::ASSISTANT)
     })
     .await;
   let cancelled_pid = harness

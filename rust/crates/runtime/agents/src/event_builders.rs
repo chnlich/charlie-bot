@@ -55,7 +55,7 @@ pub fn make_tool_use_event(name: &str, input: Value) -> Value {
 }
 
 pub fn make_tool_result_event(tool_name: &str, content: &str) -> Value {
-  json!({"type": event_types::TOOL_RESULT, "tool_name": tool_name, "content": content})
+  json!({"type": event_types::TOOL_RESULT, event_types::TOOL_NAME: tool_name, "content": content})
 }
 
 /// A system line that carries one notice text, such as a backend's non-fatal report.

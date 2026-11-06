@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 
 use charliebot_claude_code::claude_launch;
 use charliebot_cli_common::exit::CliExit;
+use charliebot_core::event_types;
 use fancy_regex::{Captures, Regex};
 use serde_json::{Value, json};
 
@@ -30,7 +31,7 @@ fn run<R: Read, W: Write>(mut input: R, output: &mut W) -> Result<(), CliExit> {
     .map_err(|error| CliExit::error(format!("could not read hook input: {error}")))?;
   let event: Value =
     serde_json::from_str(&input_text).map_err(|error| CliExit::error(format!("invalid hook JSON: {error}")))?;
-  if event.get("tool_name").and_then(Value::as_str) != Some("Bash") {
+  if event.get(event_types::TOOL_NAME).and_then(Value::as_str) != Some("Bash") {
     return Ok(());
   }
   let command = event

@@ -10,6 +10,8 @@ pub const TOOL_USE: &str = "tool_use";
 pub const TOOL_RESULT: &str = "tool_result";
 /// The id that pairs a `tool_result` block with the `tool_use` block it answers.
 pub const TOOL_USE_ID: &str = "tool_use_id";
+/// The field a top-level `tool_result` event names its tool in; a `tool_use` block names it in `name`.
+pub const TOOL_NAME: &str = "tool_name";
 /// The tool_use id whose subagent transcript line an event belongs to; an event without it belongs to the turn.
 pub const PARENT_TOOL_USE_ID: &str = "parent_tool_use_id";
 /// The `input` key of a file tool call: the path a `Read`, `Edit` or `Write` tool names.

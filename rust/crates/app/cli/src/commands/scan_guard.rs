@@ -20,6 +20,7 @@ use std::sync::OnceLock;
 use charliebot_claude_code::claude_launch;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config::SESSIONS_DIR_NAME;
+use charliebot_core::event_types;
 use charliebot_core::home::{CHARLIEBOT_HOME_ENV, DEFAULT_HOME_DIR_NAME};
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_store::layout::DATA_DIR_NAME;
@@ -141,7 +142,7 @@ fn run<R: Read, W: Write>(mut input: R, output: &mut W) -> Result<(), CliExit> {
     .map_err(|error| CliExit::error(format!("could not read hook input: {error}")))?;
   let event: Value =
     serde_json::from_str(&input_text).map_err(|error| CliExit::error(format!("invalid hook JSON: {error}")))?;
-  if event.get("tool_name").and_then(Value::as_str) != Some("Bash") {
+  if event.get(event_types::TOOL_NAME).and_then(Value::as_str) != Some("Bash") {
     return Ok(());
   }
   let command = event

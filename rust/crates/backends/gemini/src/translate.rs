@@ -37,7 +37,7 @@ impl GeminiTranslator {
       Some("tool_use") => {
         let mut events = self.flush();
         let input = event.get("parameters").cloned().unwrap_or_else(|| json!({}));
-        events.push(make_tool_use_event(str_field(event, "tool_name", "")?, input));
+        events.push(make_tool_use_event(str_field(event, event_types::TOOL_NAME, "")?, input));
         Ok(events)
       }
       Some("tool_result") => {

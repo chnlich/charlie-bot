@@ -271,7 +271,7 @@ fn first_command(events: &[Value]) -> (String, String) {
         }
       }
       Some(event_types::TOOL_RESULT) => {
-        let name = event.get("tool_name").and_then(Value::as_str).unwrap_or_default();
+        let name = event.get(event_types::TOOL_NAME).and_then(Value::as_str).unwrap_or_default();
         record_first_result(&mut kind, name, is_error(event));
       }
       _ => {}

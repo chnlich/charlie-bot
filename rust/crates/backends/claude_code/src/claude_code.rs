@@ -44,9 +44,9 @@ const SYNTHETIC_MODEL: &str = "<synthetic>";
 const AGENT_TOOL: &str = "Agent";
 const ONE_SHOT_DISALLOWED_TOOLS: &str = "Bash,Read,Write,Edit,Glob,Grep,Agent";
 
-/// The run kinds that receive Claude Code's `Agent` tool when subagents are enabled: the manager turn, work runs
-/// (implement, quick-edit, script-run, verify, cold read and unstepped cron tasks) and improve iterations. Review,
-/// scheduled steps, one-shot runs and compaction never receive it.
+/// The run kinds that receive Claude Code's `Agent` tool when subagents are enabled are the manager turn, work runs
+/// and improve iterations. Work runs are implement, quick-edit, script-run, verify, cold read and unstepped cron
+/// tasks. Review, scheduled steps, one-shot runs and compaction never receive it.
 fn receives_agent_tool(run_kind: RunKind) -> bool {
   matches!(run_kind, RunKind::ManagerTurn | RunKind::Work | RunKind::Iteration)
 }
@@ -1222,8 +1222,8 @@ mod tests {
     );
   }
 
-  /// The switch's rule name by name: one-shot, compaction, review and scheduled-step lists always disallow `Agent`;
-  /// the manager turn, work runs and improve iterations disallow it only with the switch off.
+  /// The switch's rule, name by name: one-shot, compaction, review and scheduled-step lists always disallow `Agent`.
+  /// The manager turn, work runs and improve iterations disallow it only with the switch off.
   #[test]
   fn only_the_manager_work_and_iteration_lists_lose_agent_with_the_switch_on() {
     let one_shot = one_shot_argv(&[], "system");

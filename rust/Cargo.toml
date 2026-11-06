@@ -213,3 +213,8 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+# Dependencies build at opt-level 1 in dev and test builds; workspace crates stay at opt-level 0. The unit-test time
+# gate runs each test in its own process, so a library's setup is paid by every test that uses it: a regex compiles
+# its patterns on first use, zlib inflates a fixture, the platform verifier parses the CA bundle on each HTTP client,
+# and serde_json parses golden fixtures. Unoptimized, those costs alone reach tens of milliseconds per test.
+opt-level = 1

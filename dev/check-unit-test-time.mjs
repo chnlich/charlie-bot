@@ -1,26 +1,31 @@
 #!/usr/bin/env node
-// The 0.1 s unit-test check, one entry for CI and local runs. It reads a nextest JUnit report,
-// reruns every test over the limit in one isolated nextest run (exact filterset, one test thread,
-// profile check), and judges by the isolated times in that run's own JUnit report. Parallel-run
-// queuing makes a fast test look slow; the alone rerun has no queue. A suspect missing from the
-// rerun's report means the filter matched nothing, which fails the check and names the test.
+// The 0.1 s unit-test check, one entry for the Rust and node suites, in CI and local runs. It reads the
+// JUnit report of a parallel run and reruns every test over the limit alone, then judges by the isolated
+// times. Parallel-run queuing makes a fast test look slow; the alone rerun has no queue. A suspect the
+// rerun does not report means its filter matched nothing, which fails the check and names the test.
 //
-//   dev/check-unit-test-time.mjs --junit <path> [--workspace-dir <dir>] [--rerun-over-limit 0|1] [--fail-over-limit 0|1]
+//   dev/check-unit-test-time.mjs --runner rust|node --junit <path> [--workspace-dir <dir>]
+//                                [--rerun-over-limit 0|1] [--fail-over-limit 0|1]
 //
+//   --runner            the suite the report came from: rust (nextest) or node (node --test) (required)
 //   --junit             the JUnit report of the parallel run (required)
-//   --workspace-dir     the cargo workspace directory the reruns run in (default: rust)
+//   --workspace-dir     the directory the reruns run in (default: rust for rust, web for node)
 //   --rerun-over-limit  rerun each over-limit test in isolation and judge by that time (default: 1)
 //   --fail-over-limit   exit nonzero when a test is still over the limit alone (default: 1); requires
 //                       --rerun-over-limit, since the isolated time is what the check judges by
 //
+// A rust rerun is one nextest run, one test thread. A node rerun is one `node --test` per suspect, on the
+// suspect's own file, with `--test-name-pattern` set to its name, escaped and anchored at both ends.
 // Lines go to stdout, and to $GITHUB_STEP_SUMMARY when the environment sets it.
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
 const LIMIT_S = 0.1;
 const RERUN_TIMEOUT_MS = 55 * 60_000;
+const RUNNER_DIRECTORY = { rust: 'rust', node: 'web' };
 
 main();
 
@@ -30,7 +35,7 @@ function main() {
   const options = parseArgs(process.argv.slice(2));
   let testcases;
   try {
-    testcases = readTestcases(options.junit);
+    testcases = readTestcases(options.junit, options.runner);
   } catch (error) {
     console.error(`check-unit-test-time: cannot read JUnit report ${options.junit}: ${error.message}`);
     process.exit(2);
@@ -51,7 +56,7 @@ function main() {
     }
   }
   if (suspects.length > 0 && options.rerunOverLimit) {
-    const rerun = isolateWithRust(suspects, options);
+    const rerun = options.runner === 'rust' ? isolateWithRust(suspects, options) : isolateWithNode(suspects, options);
     if (rerun.error !== undefined) {
       checkFailed = true;
       lines.push(`unit test rerun failed: ${rerun.error}`);
@@ -91,7 +96,7 @@ function main() {
 }
 
 function parseArgs(argv) {
-  const options = { junit: null, workspaceDir: 'rust', rerunOverLimit: true, failOverLimit: true };
+  const options = { runner: null, junit: null, workspaceDir: null, rerunOverLimit: true, failOverLimit: true };
   let failOverLimitSet = false;
   const take = (i) => {
     if (i + 1 >= argv.length) usage(`missing value for ${argv[i]}`);
@@ -99,7 +104,9 @@ function parseArgs(argv) {
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === '--junit') {
+    if (arg === '--runner') {
+      options.runner = take(i);
+    } else if (arg === '--junit') {
       options.junit = take(i);
     } else if (arg === '--workspace-dir') {
       options.workspaceDir = take(i);
@@ -114,7 +121,10 @@ function parseArgs(argv) {
     }
     i += 1;
   }
+  if (options.runner === null) usage('--runner is required');
+  if (!Object.hasOwn(RUNNER_DIRECTORY, options.runner)) usage(`--runner takes rust or node, got ${options.runner}`);
   if (options.junit === null) usage('--junit is required');
+  options.workspaceDir ??= RUNNER_DIRECTORY[options.runner];
   // --rerun-over-limit 0 alone is a report-only run; asking it to also fail on the isolated time it
   // never measures is a contradiction, not a stronger check.
   if (failOverLimitSet && options.failOverLimit && !options.rerunOverLimit) {
@@ -130,7 +140,8 @@ function parseSwitch(arg, value) {
 
 function usage(message) {
   console.error(
-    'usage: check-unit-test-time.mjs --junit <path> [--workspace-dir <dir>] [--rerun-over-limit 0|1] [--fail-over-limit 0|1]'
+    'usage: check-unit-test-time.mjs --runner rust|node --junit <path> [--workspace-dir <dir>]' +
+      ' [--rerun-over-limit 0|1] [--fail-over-limit 0|1]'
   );
   console.error(`check-unit-test-time: ${message}`);
   process.exit(2);
@@ -150,19 +161,24 @@ function formatTime(seconds) {
 
 // ---------- JUnit report parsing ----------
 
-function readTestcases(file) {
+// nextest puts the binary id in `classname`. node --test names each file's suite by the path it was given,
+// and every testcase of that file sits under that suite, so the nearest file-named suite is the binary id.
+function readTestcases(file, runner) {
   const xml = readFileSync(file, 'utf8');
   const testcases = [];
-  const re = /<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase\s*>)/g;
+  const re = /<testsuite\b([^>]*?)\/?>|<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase\s*>)/g;
+  let suiteFile = '';
   let match;
   while ((match = re.exec(xml)) !== null) {
-    const attrs = {};
-    for (const pair of match[1].matchAll(/([\w:.-]+)="([^"]*)"/g)) {
-      attrs[pair[1]] = unescapeXml(pair[2]);
+    if (match[1] !== undefined) {
+      const name = attributes(match[1]).name ?? '';
+      if (/\.m?js$/.test(name)) suiteFile = name;
+      continue;
     }
-    const body = match[3] ?? '';
+    const attrs = attributes(match[2]);
+    const body = match[4] ?? '';
     testcases.push({
-      binaryId: attrs.classname ?? '',
+      binaryId: runner === 'node' ? suiteFile : (attrs.classname ?? ''),
       name: attrs.name ?? '',
       time: Number.parseFloat(attrs.time ?? 'NaN'),
       skipped: /<skipped[\s/>]/.test(body),
@@ -170,6 +186,14 @@ function readTestcases(file) {
     });
   }
   return testcases;
+}
+
+function attributes(text) {
+  const attrs = {};
+  for (const pair of text.matchAll(/([\w:.-]+)="([^"]*)"/g)) {
+    attrs[pair[1]] = unescapeXml(pair[2]);
+  }
+  return attrs;
 }
 
 function unescapeXml(text) {
@@ -210,7 +234,7 @@ function isolateWithRust(suspects, options) {
   // no target); every suspect then reports "matched nothing" and `error` surfaces the cause.
   try {
     if (existsSync(junit)) {
-      for (const testcase of readTestcases(junit)) {
+      for (const testcase of readTestcases(junit, 'rust')) {
         byId.set(`${testcase.binaryId} ${testcase.name}`, { time: testcase.time, failed: testcase.failed });
       }
     }
@@ -229,4 +253,50 @@ function isolateWithRust(suspects, options) {
 function filterLiteral(value) {
   const escapes = { '\n': 'n', '\r': 'r', '\t': 't' };
   return value.replace(/[\\),\n\r\t]/g, (char) => `\\${escapes[char] ?? char}`);
+}
+
+// ---------- the node runner: one `node --test` per suspect, on its own file ----------
+
+// Each suspect runs alone in its file, so the file's other tests do not queue behind it. The name pattern
+// is the test name escaped for a regular expression and anchored at both ends, so it matches that test only.
+// A suspect whose run writes no testcase for it matched nothing.
+function isolateWithNode(suspects, options) {
+  const byId = new Map();
+  const scratch = mkdtempSync(path.join(os.tmpdir(), 'unit-test-time-'));
+  try {
+    for (const [index, suspect] of suspects.entries()) {
+      const junit = path.join(scratch, `${index}.xml`);
+      const pattern = `^${escapeRegExp(suspect.name)}$`;
+      const run = spawnSync(
+        'node',
+        [
+          '--test',
+          '--test-reporter=junit',
+          `--test-reporter-destination=${junit}`,
+          `--test-name-pattern=${pattern}`,
+          suspect.binaryId,
+        ],
+        { cwd: options.workspaceDir, encoding: 'utf8', timeout: RERUN_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 }
+      );
+      if (run.error || run.signal) {
+        return { byId, error: run.error ? run.error.message : `killed by ${run.signal}` };
+      }
+      // A failing test exits nonzero and still writes its report, so only a missing report is an error here.
+      if (!existsSync(junit)) {
+        return { byId, error: `node --test exited ${run.status} and wrote no report for ${suspect.name}` };
+      }
+      for (const testcase of readTestcases(junit, 'node')) {
+        byId.set(`${testcase.binaryId} ${testcase.name}`, { time: testcase.time, failed: testcase.failed });
+      }
+    }
+  } catch (readError) {
+    return { byId, error: `cannot read rerun JUnit report: ${readError.message}` };
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+  return { byId, error: undefined };
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

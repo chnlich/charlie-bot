@@ -62,8 +62,12 @@ const SCAN_BATCH_MIN_JOBS: usize = 32;
 /// The candidates the first scan batch reads before the route checks whether the answer's slots are full.
 ///
 /// The scan runs newest-first, so the first window holds the newest matches a full answer can carry. A window larger
-/// than the slots need would read files the answer cannot hold; a smaller one needs more batches to fill it.
+/// than the slots need would read files the answer cannot hold; a smaller one needs more batches to fill it. Tests
+/// shrink it, so a stopped scan needs a corpus small enough to write inside the unit-test time bound.
+#[cfg(not(test))]
 const SCAN_WINDOW_CANDIDATES: usize = 512;
+#[cfg(test)]
+const SCAN_WINDOW_CANDIDATES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FileSignature {
@@ -1172,37 +1176,51 @@ mod tests {
   }
 
   /// A full result stops scanning once every unscanned session is older than the answer's oldest row, and it still
-  /// holds exactly the newest matches. The corpus spans more than one scan window, and the trigram index admits every
-  /// file, so the stop is the only reason the older matches stay unread.
+  /// holds exactly the newest matches.
+  ///
+  /// The 200 name hits fill the cap on their own. The eight newest content hits are newer than every one of them, so
+  /// they enter the answer and push the cutoff to the 192nd name hit; the eight older content hits are past the
+  /// cutoff and stay unread. Rank 0 is the newest session.
   #[test]
   fn a_full_result_stops_the_scan_at_the_newest_matches() {
     let home = tempfile::tempdir().unwrap();
     let store = test_store(home.path());
-    // Rank 0 is the newest session. The newest 300 mention "walrus" without the needle, so their files reach the
-    // scan and answer absent; the oldest 340 carry the needle.
-    for rank in 0..640 {
-      let minutes = 640 - rank;
+    let stamp = |rank: usize| {
+      let minutes = 700 - rank;
+      format!("2026-08-01T{:02}:{:02}:00Z", 12 + minutes / 60, minutes % 60)
+    };
+    let content = |id: &str, rank: usize| {
+      write_session(&store, id, id, SessionStatus::Active, &stamp(rank));
+      let path = store.chat_events_path(id);
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      fs::write(&path, "needle in the events\n").unwrap();
+    };
+    for index in 0..200 {
       write_session(
         &store,
-        &format!("rank-{rank:03}"),
-        &format!("session {rank:03}"),
+        &format!("name-{index:03}"),
+        &format!("needle name {index:03}"),
         SessionStatus::Active,
-        &format!("2026-08-01T{:02}:{:02}:00Z", 12 + minutes / 60, minutes % 60),
+        &stamp(100 + index),
       );
-      let path = store.chat_events_path(&format!("rank-{rank:03}"));
-      fs::create_dir_all(path.parent().unwrap()).unwrap();
-      let body = if rank < 300 { "walrus without the digit\n" } else { "walrus1 in the events\n" };
-      fs::write(&path, body).unwrap();
+    }
+    for index in 0..8 {
+      content(&format!("new-{index}"), index);
+    }
+    for index in 0..8 {
+      content(&format!("old-{index}"), 400 + index);
     }
     let memos = Mutex::new(super::SearchMemos::default());
-    // The first query indexes every file; the second reads them through the content index and the scan windows.
+    // The first query indexes every chat file; the second reaches the scan window through that index.
     assert!(super::search_sessions_with_memos(&store, "zzzq", &memos).unwrap().rows.is_empty());
 
-    let rows = super::search_sessions_with_memos(&store, "walrus1", &memos).unwrap().rows;
+    let rows = super::search_sessions_with_memos(&store, "needle", &memos).unwrap().rows;
     let ids: Vec<&str> = rows.iter().map(|meta| meta.id.as_str()).collect();
     assert_eq!(ids.len(), 200);
-    assert_eq!(ids.first().copied(), Some("rank-300"), "the newest match is the first row");
-    assert_eq!(ids.last().copied(), Some("rank-499"), "the answer holds the newest 200 matches");
+    assert_eq!(ids.first().copied(), Some("new-0"), "the newest content hit leads the answer");
+    assert_eq!(ids[8], "name-000", "the name hits follow the content hits");
+    assert_eq!(ids.last().copied(), Some("name-191"), "the answer stops at the 200th newest match");
+    assert!(!ids.iter().any(|id| id.starts_with("old-")), "the rows past the cutoff stay out");
   }
 
   #[test]

@@ -1248,8 +1248,8 @@ mod tests {
 
   /// Posts through the route, which builds a store for each marker. CI run 42251721683 measured this test at 0.443 s
   /// alone, over the unit limit, so the check runs in the Integration workflow.
-  #[tokio::test]
   #[ignore = "integration"]
+  #[tokio::test]
   async fn a_nonword_alphanumeric_stops_a_path_run() {
     for marker in ["ⓐ", "\u{0345}"] {
       let home = Home::new();

@@ -623,6 +623,7 @@ fn headless_config_denies_the_three_tools_and_pins_bash() {
   assert_eq!(config["permission"]["opencode_session_move"], "deny");
 }
 
+#[ignore = "integration"]
 #[test]
 fn server_env_drops_the_run_identity_and_points_xdg_at_the_store() {
   let harness = Harness::new(json!({}));
@@ -2119,6 +2120,7 @@ async fn context_limit_reaches_the_one_shot_and_the_shared_server_configs() {
   assert_eq!(last_one_shot_config(&harness), ONE_SHOT_LIMITED);
 }
 
+#[ignore = "integration"]
 #[test]
 fn conflicting_context_limits_fail_the_shared_server_start_naming_both_options() {
   let harness = Harness::new(json!({}));
@@ -2133,6 +2135,7 @@ fn conflicting_context_limits_fail_the_shared_server_start_naming_both_options()
   assert!(error.contains("oc-first") && error.contains("oc-second"), "{error}");
 }
 
+#[ignore = "integration"]
 #[test]
 fn headless_providers_merge_equal_limits_and_keep_distinct_models() {
   let harness = Harness::new(json!({}));
@@ -2260,8 +2263,8 @@ async fn unclaimed_execution_is_interrupted() {
   harness.stop().await.unwrap();
 }
 
-#[tokio::test]
 #[ignore = "integration"]
+#[tokio::test]
 async fn earlier_interrupt_wait_times_out_with_the_session_id() {
   let timeouts = ServerTimeouts {
     start: opencode_limits::OPENCODE_SERVER_START_TIMEOUT,
@@ -2281,8 +2284,8 @@ async fn earlier_interrupt_wait_times_out_with_the_session_id() {
   assert!(error.to_string().contains("did not settle"));
 }
 
-#[tokio::test]
 #[ignore = "integration"]
+#[tokio::test]
 async fn dispatch_routes_to_the_claimed_turn_and_settles_pending_interrupts() {
   let harness = Harness::new(json!({}));
   let turn = harness.server.register("ses_1", "/synthetic/work", 999_999).unwrap();

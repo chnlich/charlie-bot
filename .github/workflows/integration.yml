@@ -114,3 +114,11 @@ jobs:
         run: |
           read -r -a files <<< "$NODE_INTEGRATION_FILES"
           timeout 780 node --test "${files[@]}"
+
+      - name: Measure proxy unit tests in isolation
+        run: |
+          node --test --test-reporter=spec --test-name-pattern='^a transfer of N bytes takes N / 12,500 s of link time, plus one round trip$' dev/poor-network/proxy.test.mjs
+          node --test --test-reporter=spec --test-name-pattern='^two concurrent transfers share one budget per direction$' dev/poor-network/proxy.test.mjs
+          node --test --test-reporter=spec --test-name-pattern='^a held blackout delays the bytes and keeps the tunnel open$' dev/poor-network/proxy.test.mjs
+          node --test --test-reporter=spec --test-name-pattern='^a reset blackout resets the open tunnels, and the link carries new tunnels after it$' dev/poor-network/proxy.test.mjs
+          node --test --test-reporter=spec --test-name-pattern='^the byte counters match the bytes that crossed the link$' dev/poor-network/proxy.test.mjs

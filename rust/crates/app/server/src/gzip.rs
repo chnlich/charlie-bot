@@ -369,7 +369,9 @@ mod tests {
     let body = "a".repeat(MEMO_MAX_INPUT_BYTES + 1);
     let (_, compressed) =
       run_at("/static/past-the-cap.js", Some("\"v1\""), Responder::Gzip, "text/plain", Body::from(body.clone())).await;
-    assert_eq!(compressed, charliebot_compat::compression::gzip_level_one(body.as_bytes()));
+    // The gzip header's XFL byte records 4 for a fastest-level deflate and 0 for the memo's level-6 form.
+    assert_eq!(compressed[8], 4);
+    assert_eq!(inflated(&compressed), body);
   }
 
   /// Drive one response whose body arrives in several messages and whose length it declares.

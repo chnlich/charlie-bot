@@ -731,21 +731,36 @@ mod tests {
 
   #[test]
   fn scan_form_cases_match_the_replay_table() {
-    let denied = [
-      ScanForm::PerFileProcess,
-      ScanForm::RootedSearch,
-      ScanForm::RunLogSearch,
-      ScanForm::PerFileProcess,
-      ScanForm::PerFileProcess,
-      ScanForm::PerFileProcess,
-    ];
-    let commands: [&str; 6] = [
+    let denied = [ScanForm::PerFileProcess, ScanForm::RootedSearch];
+    let commands: [&str; 2] = [
       // The replay's first real command: a metadata loop after a `cd` into the store.
       r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json; print(json.load(open('$f')))"; done"#,
       "find / -path /proc -prune -o -type d -name dataviz -print 2>/dev/null | head -3",
+    ];
+    for (command, expected) in commands.iter().zip(denied) {
+      let forms = scan_forms(command, &home()).unwrap();
+      assert_eq!(forms.first(), Some(&expected), "{command}");
+    }
+  }
+
+  #[test]
+  fn store_search_and_heredoc_loop_cases_match_the_replay_table() {
+    let denied = [ScanForm::RunLogSearch, ScanForm::PerFileProcess];
+    let commands: [&str; 2] = [
       r#"rg -o 'ur-[A-Za-z0-9._-]+' "$CHARLIEBOT_HOME/sessions" ~/.charlie-code/sessions 2>/dev/null | sort -u"#,
       // A run-record loop whose python body is a heredoc, not shell.
       "cd ~/.charliebot/sessions && for m in */data/runs/*/metadata.json; do python3 - \"$m\" <<'EOF2'\nimport json\nd = json.load(open(\"$m\"))\nprint(d)\nEOF2\ndone",
+    ];
+    for (command, expected) in commands.iter().zip(denied) {
+      let forms = scan_forms(command, &home()).unwrap();
+      assert_eq!(forms.first(), Some(&expected), "{command}");
+    }
+  }
+
+  #[test]
+  fn per_session_process_cases_match_the_replay_table() {
+    let denied = [ScanForm::PerFileProcess, ScanForm::PerFileProcess];
+    let commands: [&str; 2] = [
       r#"for d in $(ls ~/.charliebot/sessions); do python3 -I -c 'print(1)' $d/metadata.json; done"#,
       "find ~/.charliebot/sessions -name metadata.json | xargs -n1 python3 -I x.py",
     ];
@@ -757,20 +772,33 @@ mod tests {
 
   #[test]
   fn the_rest_of_the_replay_table_matches_its_scan_forms() {
-    let denied = [
-      ScanForm::RunLogSearch,
-      ScanForm::RunLogSearch,
-      ScanForm::PerFileProcess,
-      ScanForm::RunLogSearch,
-      ScanForm::PerFileProcess,
-      ScanForm::RunLogSearch,
-    ];
-    let commands: [&str; 6] = [
-      r"rg -l X ~/.charliebot/sessions -g '*.jsonl'",
-      r"rg -l X ~/.charliebot/sessions -g 'agent.raw.ndjson'",
+    let denied = [ScanForm::RunLogSearch, ScanForm::RunLogSearch];
+    let commands: [&str; 2] =
+      [r"rg -l X ~/.charliebot/sessions -g '*.jsonl'", r"rg -l X ~/.charliebot/sessions -g 'agent.raw.ndjson'"];
+    for (command, expected) in commands.iter().zip(denied) {
+      let forms = scan_forms(command, &home()).unwrap();
+      assert_eq!(forms.first(), Some(&expected), "{command}");
+    }
+  }
+
+  #[test]
+  fn grep_loop_and_home_search_cases_match_the_replay_table() {
+    let denied = [ScanForm::PerFileProcess, ScanForm::RunLogSearch];
+    let commands: [&str; 2] = [
       r"grep -l 520ad103 ~/.charliebot/sessions/*/metadata.json | while read f; do stat $f; done",
       // The absolute home form, spelled through the test home.
       &format!("grep -rl '39828874' {}/.charliebot/ 2>/dev/null", home()),
+    ];
+    for (command, expected) in commands.iter().zip(denied) {
+      let forms = scan_forms(command, &home()).unwrap();
+      assert_eq!(forms.first(), Some(&expected), "{command}");
+    }
+  }
+
+  #[test]
+  fn loop_and_rotated_log_cases_match_the_replay_table() {
+    let denied = [ScanForm::PerFileProcess, ScanForm::RunLogSearch];
+    let commands: [&str; 2] = [
       // The same loop shape with a different body still refuses.
       r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json,sys; print(json.load(open('$f')).get('title'))"; done"#,
       // A rotated raw log, which the run-record crate's raw-log name and the rotation's suffix form.
@@ -784,12 +812,21 @@ mod tests {
 
   #[test]
   fn bounded_lookup_cases_hold_no_scan_form() {
-    let commands: [&str; 10] = [
+    let commands: [&str; 5] = [
       "charliebot session tree --root 28f1df1f --include-archived --limit 500",
       r"rg -l -F X ~/.charliebot/sessions -g 'chat_events*.jsonl'",
       r"rg -l -F X ~/.charliebot/sessions -g '*.md'",
       "find / -maxdepth 4 -name X",
       &format!(r"find / \( -path /proc -o -path {}/.charliebot/sessions \) -prune -o -name X -print", home()),
+    ];
+    for command in commands {
+      assert!(scan_forms(command, &home()).unwrap().is_empty(), "{command}");
+    }
+  }
+
+  #[test]
+  fn bounded_glob_and_loop_lookups_hold_no_scan_form() {
+    let commands: [&str; 5] = [
       r"ls -d ~/.charliebot/sessions/92b2*",
       "rg -n X ~/workspace/charlie-bot/rust",
       r"for p in 92b28639 c8eb085f; do ls -d ~/.charliebot/sessions/${p}*/; done",
@@ -805,14 +842,21 @@ mod tests {
   }
 
   #[test]
-  fn recursive_grep_and_unpruned_home_search_are_refused() {
+  fn recursive_grep_over_the_store_is_refused() {
     let denied = [
       "grep -n -r X ~/.charliebot/sessions",
       "grep -R X ~/.charliebot/sessions",
       "grep --recursive X ~/.charliebot/sessions",
-      r#"find ~ -path "*/sessions/*" -name metadata.json"#,
-      "rg -l X / ~/.charliebot/sessions -g metadata.json",
     ];
+    for command in denied {
+      assert!(!scan_forms(command, &home()).unwrap().is_empty(), "{command}");
+    }
+  }
+
+  #[test]
+  fn unpruned_home_and_multi_root_searches_are_refused() {
+    let denied =
+      [r#"find ~ -path "*/sessions/*" -name metadata.json"#, "rg -l X / ~/.charliebot/sessions -g metadata.json"];
     for command in denied {
       assert!(!scan_forms(command, &home()).unwrap().is_empty(), "{command}");
     }
@@ -889,13 +933,19 @@ mod tests {
   }
 
   #[test]
-  fn bounded_metadata_loops_and_session_id_prefix_globs_pass() {
+  fn a_bounded_metadata_loop_passes() {
+    let home = home();
+    // A top-level listing whose body only tests one session's metadata.json with shell builtins.
+    let command = format!(
+      "cd {home}/.charliebot/sessions && ls -d */ | sed 's#/##' | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done > /tmp/ids.txt"
+    );
+    assert!(scan_forms(&command, &home).unwrap().is_empty(), "{command}");
+  }
+
+  #[test]
+  fn session_id_prefix_globs_pass() {
     let home = home();
     let passed = [
-      // A top-level listing whose body only tests one session's metadata.json with shell builtins.
-      format!(
-        "cd {home}/.charliebot/sessions && ls -d */ | sed 's#/##' | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done > /tmp/ids.txt"
-      ),
       // A glob under one session id prefix names one session, not every session.
       format!("grep -l X {home}/.charliebot/sessions/dfb20fec*/specs/*"),
       format!("grep -l X {home}/.charliebot/sessions/d7645e8f-*/data/runs/*/events.jsonl"),
@@ -906,7 +956,7 @@ mod tests {
   }
 
   #[test]
-  fn per_session_processes_and_walks_are_refused() {
+  fn per_session_processes_are_refused() {
     let home = home();
     let denied = [
       // The same builtin body on a `for ... in */` list is the one-process-per-session shape.
@@ -919,6 +969,16 @@ mod tests {
       format!(
         "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do [ -f \"$id/metadata.json\" ] && echo done; jq -r .name \"$id/metadata.json\"; done"
       ),
+    ];
+    for command in denied {
+      assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
+    }
+  }
+
+  #[test]
+  fn process_and_redirect_bodies_are_refused() {
+    let home = home();
+    let denied = [
       // A command outside the builtins, such as perl, starts a process per session.
       format!(
         "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do [ -f \"$id/metadata.json\" ] && perl -ne 1 \"$id/metadata.json\"; done"
@@ -931,6 +991,16 @@ mod tests {
       format!(
         "cat {home}/.charliebot/sessions/*/metadata.json | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
       ),
+    ];
+    for command in denied {
+      assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
+    }
+  }
+
+  #[test]
+  fn piped_and_walking_session_lists_are_refused() {
+    let home = home();
+    let denied = [
       format!(
         "cd {home}/.charliebot/sessions && sed -n 1p */metadata.json | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
       ),
@@ -938,6 +1008,16 @@ mod tests {
       format!(
         "cd {home}/.charliebot/sessions && ls -R */ | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
       ),
+    ];
+    for command in denied {
+      assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
+    }
+  }
+
+  #[test]
+  fn multi_session_prefix_globs_are_refused() {
+    let home = home();
+    let denied = [
       // A short prefix, or one that is not a session id, can match many sessions.
       format!("grep -l X {home}/.charliebot/sessions/1680*/specs/*"),
       format!("grep -l X {home}/.charliebot/sessions/session-*/specs/*"),

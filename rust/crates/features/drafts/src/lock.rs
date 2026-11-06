@@ -1,7 +1,7 @@
 //! The per-draft send lock.
 //!
-//! One lock per `(session, draft)` wraps the sendability check and the platform send, so a double click sends one
-//! message and its second request reads the logged `draft_sent` as a conflict. A lock lives only while a request
+//! One lock per `(session, draft)` wraps the sendability check and the platform send. A double click then sends one
+//! message, and its second request reads the logged `draft_sent` as a conflict. A lock lives only while a request
 //! holds it: the map keeps a weak reference, and an entry whose request has ended is dropped.
 
 use std::collections::HashMap;

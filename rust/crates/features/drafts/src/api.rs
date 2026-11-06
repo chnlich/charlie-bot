@@ -1,8 +1,8 @@
 //! The two draft routes: the internal one the CLI registers a draft through, and the operator-only one that sends it.
 //!
-//! Registration validates the platform target and appends `draft_registered`. A send is admitted only to the operator,
-//! derives sendability from the log under the draft's lock, appends `draft_sent` or `draft_failed`, and wakes the
-//! session with the sent fact. Nothing is retried.
+//! Registration validates the platform target and appends `draft_registered`. A send is admitted only to the operator
+//! and derives sendability from the log under the draft's lock. It appends `draft_sent` or `draft_failed` and wakes
+//! the session with the sent fact. Nothing is retried.
 
 use std::sync::Arc;
 

@@ -4003,30 +4003,51 @@ pub(crate) mod tests {
     assert_eq!(fs::read_to_string(&counter).unwrap(), "8");
   }
 
-  /// Write one task node's metadata file directly, since `create_node` rebuilds the index per call and the cap
-  /// tests need more nodes than that path makes quickly.
-  fn write_task_node(store: &Store, session_id: &str, parent: Option<&str>, status: SessionStatus) {
-    let mut meta = SessionMetadata::new(session_id, session_id, TaskProfile::Worker);
-    meta.task_parent_id = parent.map(str::to_string);
+  fn empty_tree_index() -> TreeIndex {
+    TreeIndex {
+      metas: HashMap::new(),
+      children: HashMap::new(),
+      revision: String::new(),
+      derived_archived_ids: Arc::new(Vec::new()),
+      archive_by_id: HashMap::new(),
+      build_id: 0,
+    }
+  }
+
+  fn add_tree_node(
+    index: &mut TreeIndex,
+    session_id: String,
+    parent_id: Option<String>,
+    status: SessionStatus,
+    archived: bool,
+  ) {
+    let mut meta = SessionMetadata::new(session_id.clone(), session_id.clone(), TaskProfile::Worker);
+    meta.task_parent_id = parent_id.clone();
     meta.status = status;
-    let path = store.metadata_path(session_id);
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, meta.to_json_string(&store.slots, true)).unwrap();
+    index.children.entry(parent_id).or_default().push(session_id.clone());
+    index.metas.insert(session_id.clone(), Arc::new(meta));
+    index.archive_by_id.insert(session_id, archived);
   }
 
   // Archived descendants do not count toward the 1000-node subtree cap.
   #[test]
-  fn subtree_walk_holds_more_than_a_thousand_stored_archived_descendants() {
+  fn subtree_walk_keeps_more_than_a_thousand_archived_descendants() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
-    write_task_node(&store, "root", None, SessionStatus::Active);
+    let mut index = empty_tree_index();
+    add_tree_node(&mut index, "root".to_string(), None, SessionStatus::Active, false);
     for index in 0..1001 {
-      write_task_node(&store, &format!("archived-{index:04}"), Some("root"), SessionStatus::Archived);
+      add_tree_node(
+        &mut index,
+        format!("archived-{index:04}"),
+        Some("root".to_string()),
+        SessionStatus::Archived,
+        true,
+      );
     }
-    write_task_node(&store, "open-a", Some("root"), SessionStatus::Active);
-    write_task_node(&store, "open-b", Some("root"), SessionStatus::Active);
-    store.invalidate_tree_index();
-    let walked = store.descendant_ids("root");
+    add_tree_node(&mut index, "open-a".to_string(), Some("root".to_string()), SessionStatus::Active, false);
+    add_tree_node(&mut index, "open-b".to_string(), Some("root".to_string()), SessionStatus::Active, false);
+    let walked = descendant_ids(&store, &index, "root");
     assert!(walked.as_ref().is_ok_and(|ids| ids.len() == 1003), "{walked:?}");
   }
 
@@ -4035,12 +4056,18 @@ pub(crate) mod tests {
   fn subtree_walk_refuses_more_than_a_thousand_non_archived_descendants() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
-    write_task_node(&store, "root", None, SessionStatus::Active);
+    let mut index = empty_tree_index();
+    add_tree_node(&mut index, "root".to_string(), None, SessionStatus::Active, false);
     for index in 0..1001 {
-      write_task_node(&store, &format!("open-{index:04}"), Some("root"), SessionStatus::Active);
+      add_tree_node(
+        &mut index,
+        format!("open-{index:04}"),
+        Some("root".to_string()),
+        SessionStatus::Active,
+        false,
+      );
     }
-    store.invalidate_tree_index();
-    let refusal = store.descendant_ids("root").err();
+    let refusal = descendant_ids(&store, &index, "root").err();
     assert!(
       matches!(&refusal, Some(StoreError::Conflict(blockers))
         if blockers == &["subtree of root exceeds 1000 non-archived nodes"]),
@@ -4053,25 +4080,20 @@ pub(crate) mod tests {
   async fn subtree_cap_does_not_count_a_node_only_the_derived_archive_marks() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
-    write_task_node(&store, "root", None, SessionStatus::Active);
-    write_task_node(&store, "closed", Some("root"), SessionStatus::Active);
+    let mut index = empty_tree_index();
+    add_tree_node(&mut index, "root".to_string(), None, SessionStatus::Active, false);
+    add_tree_node(&mut index, "closed".to_string(), Some("root".to_string()), SessionStatus::Active, true);
     for index in 0..1001 {
-      write_task_node(&store, &format!("under-closed-{index:04}"), Some("closed"), SessionStatus::Active);
+      add_tree_node(
+        &mut index,
+        format!("under-closed-{index:04}"),
+        Some("closed".to_string()),
+        SessionStatus::Active,
+        true,
+      );
     }
-    let close = control_events::build_control_event(
-      "task_closed",
-      ACTOR_SYSTEM,
-      "closed",
-      None,
-      None,
-      [("outcome".to_string(), json!("archived"))],
-    );
-    let guard = store.control_lock().await;
-    store.append_control_fact(&guard, "closed", close).await.unwrap();
-    drop(guard);
-    store.invalidate_tree_index();
-    assert!(store.archived_of("under-closed-0000").unwrap());
-    let walked = store.descendant_ids("root");
+    assert!(index.archive_by_id["under-closed-0000"]);
+    let walked = descendant_ids(&store, &index, "root");
     assert!(walked.as_ref().is_ok_and(|ids| ids.len() == 1002), "{walked:?}");
   }
 

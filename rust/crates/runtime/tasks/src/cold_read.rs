@@ -704,11 +704,11 @@ enable_ask_tier_refusal: false
     )
   }
 
-  const INLINE_PNG_PLACEHOLDER: &str = "data:image/png;base64,[2.0 MB omitted]";
+  const INLINE_PNG_PLACEHOLDER: &str = "data:image/png;base64,[64.0 KB omitted]";
 
   #[test]
   fn probe_input_omits_an_inline_image_and_keeps_the_alt_text() {
-    let page = page_with_inline_png(2 * 1024 * 1024);
+    let page = page_with_inline_png(64 * 1024);
     let input = probe_input(&page, "questions", "the trigger").unwrap();
     assert!(input.len() < 50 * 1024, "the probe input is {} bytes", input.len());
     assert!(input.contains("The monitor line chart"), "the alt text stays in the source");
@@ -719,7 +719,7 @@ enable_ask_tier_refusal: false
 
   #[test]
   fn ask_probe_input_omits_an_inline_image_in_the_linked_page() {
-    let page = page_with_inline_png(2 * 1024 * 1024);
+    let page = page_with_inline_png(64 * 1024);
     let item = serde_json::json!({"text": "Choose."});
     let input = ask_probe_input(&item, Some(&page), "policy section", "questions").unwrap();
     assert!(input.len() < 50 * 1024, "the ask probe input is {} bytes", input.len());

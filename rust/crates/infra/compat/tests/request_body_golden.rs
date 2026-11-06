@@ -96,36 +96,66 @@ struct Case {
 }
 
 #[tokio::test]
-async fn request_body_matches_recorded_for_item_requests() {
+async fn request_body_matches_recorded_for_first_half_of_item_requests() {
   let cases = corpus();
-  compare_route("/items", &cases, 0).await;
+  compare_route("/items", &cases, 0, 0, 20).await;
 }
 
 #[tokio::test]
-async fn request_body_matches_recorded_for_bounded_requests() {
+async fn request_body_matches_recorded_for_second_half_of_item_requests() {
+  let cases = corpus();
+  compare_route("/items", &cases, 0, 20, 40).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_first_half_of_bounded_requests() {
   let cases = bounded_corpus();
-  compare_route("/bounds", &cases, 40).await;
+  compare_route("/bounds", &cases, 40, 0, 14).await;
 }
 
 #[tokio::test]
-async fn request_body_matches_recorded_for_message_requests() {
+async fn request_body_matches_recorded_for_second_half_of_bounded_requests() {
+  let cases = bounded_corpus();
+  compare_route("/bounds", &cases, 40, 14, 28).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_first_half_of_message_requests() {
   let cases = message_corpus();
-  compare_route("/messages", &cases, 68).await;
+  compare_route("/messages", &cases, 68, 0, 9).await;
 }
 
 #[tokio::test]
-async fn request_body_matches_recorded_for_attachment_requests() {
+async fn request_body_matches_recorded_for_second_half_of_message_requests() {
+  let cases = message_corpus();
+  compare_route("/messages", &cases, 68, 9, 17).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_first_half_of_attachment_requests() {
   let cases = attachment_corpus();
-  compare_route("/attachments", &cases, 85).await;
+  compare_route("/attachments", &cases, 85, 0, 10).await;
 }
 
 #[tokio::test]
-async fn request_body_matches_recorded_for_trigger_requests() {
-  let cases = trigger_corpus();
-  compare_route("/triggers", &cases, 105).await;
+async fn request_body_matches_recorded_for_second_half_of_attachment_requests() {
+  let cases = attachment_corpus();
+  compare_route("/attachments", &cases, 85, 10, 20).await;
 }
 
-async fn compare_route(route: &str, cases: &[Case], fixture_start: usize) {
+#[tokio::test]
+async fn request_body_matches_recorded_for_first_half_of_trigger_requests() {
+  let cases = trigger_corpus();
+  compare_route("/triggers", &cases, 105, 0, 16).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_second_half_of_trigger_requests() {
+  let cases = trigger_corpus();
+  compare_route("/triggers", &cases, 105, 16, 32).await;
+}
+
+async fn compare_route(route: &str, cases: &[Case], fixture_start: usize, case_start: usize, case_end: usize) {
   rustls::crypto::ring::default_provider().install_default().expect("the test installs its rustls crypto provider");
   let rust_listener = TcpListener::bind("127.0.0.1:0").await.expect("a loopback port is available");
   let rust_address = rust_listener.local_addr().expect("the Rust address is readable");
@@ -144,9 +174,10 @@ async fn compare_route(route: &str, cases: &[Case], fixture_start: usize) {
   assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");
   let fixture_cases = fixture["cases"].as_array().unwrap();
   assert_eq!(fixture_cases.len(), 137);
-  let fixture_end = fixture_start + cases.len();
-  let route_cases = &fixture_cases[fixture_start..fixture_end];
-  compare_corpus(&client, rust_address, route, cases, route_cases).await;
+  let fixture_start = fixture_start + case_start;
+  let fixture_end = fixture_start + case_end - case_start;
+  compare_corpus(&client, rust_address, route, &cases[case_start..case_end], &fixture_cases[fixture_start..fixture_end])
+    .await;
 
   rust_server.abort();
   match rust_server.await {

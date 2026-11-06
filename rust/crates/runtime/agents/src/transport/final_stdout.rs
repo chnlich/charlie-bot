@@ -13,12 +13,11 @@ use anyhow::{Context, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{AgentBackend, FinalStdoutOutcome, LaunchArgs};
-use charliebot_store::run_records::{RAW_LOG_NAME, STDERR_LOG_NAME};
+use charliebot_store::run_records::{RAW_LOG_NAME, STDERR_LOG_NAME, STDOUT_LOG_NAME};
 
 use super::{kill, spawn};
 
 pub const SUPERVISOR_ARG: &str = "--supervise-final-stdout";
-pub const STDOUT_LOG_NAME: &str = "stdout.log";
 const CONTEXT_NAME: &str = "final_stdout.context.json";
 const EXIT_NAME: &str = "final_stdout.exit.json";
 const OUTCOME_NAME: &str = "final_stdout.outcome.json";

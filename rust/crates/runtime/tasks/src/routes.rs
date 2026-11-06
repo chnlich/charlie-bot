@@ -19,7 +19,9 @@ use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events;
-use charliebot_store::metadata::{ColdReadSpec, KEEP_WORKTREE_FIELD, SessionMetadata, TaskProfile, TaskSpec, TaskType};
+use charliebot_store::metadata::{
+  ColdReadSpec, KEEP_WORKTREE_FIELD, PARENT_SESSION_ID, SessionMetadata, TaskProfile, TaskSpec, TaskType,
+};
 use charliebot_store::run_records::RunOutcomeKind;
 use charliebot_store::{CreateTask, StoreError, TaskCaller};
 use serde_json::{Value, json};
@@ -520,7 +522,7 @@ async fn delegate_task_tree(
       tracing::info!(target: "charliebot_tasks", parent = %request.session_id, child = %child.id, "delegate_child_closed");
       return Ok(json!({
         "session_id": child.id,
-        "parent_session_id": request.session_id,
+        PARENT_SESSION_ID: request.session_id,
         "run_id": null,
         "thread_id": null,
         "description": request.description,
@@ -574,7 +576,7 @@ async fn delegate_task_tree(
   tracing::info!(target: "charliebot_tasks", session = %request.session_id, child = %child.id, run_id, "task_delegated_task_tree");
   Ok(json!({
     "session_id": child.id,
-    "parent_session_id": request.session_id,
+    PARENT_SESSION_ID: request.session_id,
     "run_id": run_id,
     "thread_id": run_id,
     "description": request.description,

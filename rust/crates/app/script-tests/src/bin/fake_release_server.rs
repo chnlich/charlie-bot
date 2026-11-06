@@ -27,7 +27,7 @@ use charliebot_core::repo_root::REPO_ROOT_ENV;
 use charliebot_core::timefmt;
 use charliebot_session_api::api as session_routes;
 use charliebot_store::layout;
-use charliebot_store::metadata::MetadataReadError;
+use charliebot_store::metadata::{MetadataReadError, PARENT_SESSION_ID};
 use charliebot_store::run_records::{
   OBSERVATION_BRANCH_NAME, OBSERVATION_WORKTREE_PATH, RUN_EVENTS_NAME, event_line, read_run_metadata,
 };
@@ -416,7 +416,7 @@ impl Server {
         200,
         json!({
           "session_id": CHILD_SESSION,
-          "parent_session_id": request["session_id"],
+          PARENT_SESSION_ID: request["session_id"],
           "run_id": TASK_RUN,
           "thread_id": TASK_RUN,
           "description": request["description"],

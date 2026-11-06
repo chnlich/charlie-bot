@@ -47,8 +47,8 @@ pub fn as_utilization(value: Option<&Value>) -> Option<f64> {
   }
 }
 
-/// Whether one stored panel window is expired at `now` (`usage_sources.panel_window_expired`): its reset passed while
-/// the reading's sample time predates it, or the sample is older than the window is long.
+/// Whether one stored panel window is expired at `now` (`usage_sources.panel_window_expired`). It is expired when its
+/// reset passed while the reading's sample time predates it, or when the sample is older than the window is long.
 pub fn panel_window_expired(window: &Value, sampled: UtcDateTime, now: UtcDateTime) -> bool {
   let resets_at = window.get(PANEL_RESETS_AT).and_then(Value::as_str).and_then(|value| UtcDateTime::parse(value).ok());
   if resets_at.is_some_and(|reset| reset <= now && sampled < reset) {

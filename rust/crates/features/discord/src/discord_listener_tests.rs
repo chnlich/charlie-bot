@@ -392,13 +392,7 @@ async fn test_stop_close_code_stops_without_reconnecting() {
   configure_gateway(&home, &gateway, 1 << 18);
   tokio::time::timeout(
     Duration::from_secs(2),
-    run_listener_loop(
-      Arc::clone(&home.features),
-      discord_client(&home),
-      TEST_TOKEN.to_string(),
-      options(),
-      settings(),
-    ),
+    run_listener_loop(Arc::clone(&home.features), discord_client(&home), TEST_TOKEN.to_string(), options(), settings()),
   )
   .await
   .unwrap()

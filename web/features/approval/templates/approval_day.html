@@ -7,7 +7,10 @@
   .mtag { font-size:11.5px; font-family:var(--mono); background:var(--panel2);
     border:1px solid var(--bd); border-radius:6px; padding:3px 9px; color:var(--tx) }
   .nav { display:flex; gap:10px; align-items:center; margin:0 0 6px }
-  .nav a { color:var(--acc); text-decoration:none; font-size:13px }
+  /* The three day links keep a 24 px target and read as one row. They sit 10 px apart, and a target
+     shorter than that floor invites a mis-tap onto the neighbouring day. */
+  .nav a { color:var(--acc); text-decoration:none; font-size:13px; display:inline-flex;
+    align-items:center; min-height:24px }
   .nav a:hover { text-decoration:underline }
   h2 { font-size:15px; margin:26px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--bd) }
   h2 .n { display:inline-flex; width:22px; height:22px; border-radius:6px; background:var(--acc); color:var(--panel);

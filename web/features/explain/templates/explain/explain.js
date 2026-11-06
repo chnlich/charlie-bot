@@ -158,7 +158,8 @@ async function loadExplainPanel(sessionId, eventIndex, panel) {
   const body = panel.querySelector('.explain-body');
   let entry;
   try {
-    const res = await fetch('/api/sessions/' + sessionId + '/explain?upto=' + eventIndex);
+    const res = await fetch('/api/sessions/' + sessionId + '/explain?upto=' + eventIndex,
+        {signal: viewRequestSignal()});
     if (!res.ok) throw new Error('HTTP ' + res.status);
     entry = await res.json();
   } catch (err) {
@@ -245,7 +246,7 @@ function explainSession(sessionId, eventIndex) {
 // may install the map (detail.isCurrent).
 async function loadExplainStatuses({sessionId, isCurrent}) {
   try {
-    const res = await fetch('/api/sessions/' + sessionId + '/explain/status');
+    const res = await fetch('/api/sessions/' + sessionId + '/explain/status', {signal: viewRequestSignal()});
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const statuses = await res.json();
     if (!isCurrent()) return;

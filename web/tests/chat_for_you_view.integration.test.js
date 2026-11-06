@@ -83,6 +83,8 @@ function loadRoundActionModules(context, wsHandlers) {
   context.location = {};
   context.alert = () => {};
   vm.runInContext(readStatic('sidebar/modals.js'), context, {filename: 'sidebar/modals.js'});
+  context.AbortController = AbortController;
+  vm.runInContext(readStatic('view-requests.js'), context, {filename: 'view-requests.js'});
   vm.runInContext(readPackageStatic('features', 'explain', 'explain.js'), context, {filename: 'explain.js'});
 }
 

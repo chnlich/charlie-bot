@@ -113,24 +113,12 @@ pub fn decode_event_line(line: &str) -> Result<Value, serde_json::Error> {
 /// line whose bytes are not UTF-8 is repaired with U+FFFD before the parse. A final partial line decodes like any
 /// other line.
 pub fn parse_event_line(raw: &[u8]) -> Option<Value> {
-  if raw.is_empty() || raw.iter().all(u8::is_ascii_whitespace) {
-    return None;
-  }
-  match serde_json::from_slice(raw) {
+  match charliebot_core::ndjson::parse_line(raw)? {
     Ok(value) => Some(value),
-    Err(error) => match std::str::from_utf8(raw) {
-      Ok(_) => {
-        tracing::debug!(target: "charliebot_store", error = %error, "run_event_line_not_json");
-        None
-      }
-      Err(_) => match serde_json::from_str(&String::from_utf8_lossy(raw)) {
-        Ok(value) => Some(value),
-        Err(repaired_error) => {
-          tracing::debug!(target: "charliebot_store", error = %repaired_error, "run_event_line_not_json");
-          None
-        }
-      },
-    },
+    Err(error) => {
+      tracing::debug!(target: "charliebot_store", error = %error, "run_event_line_not_json");
+      None
+    }
   }
 }
 

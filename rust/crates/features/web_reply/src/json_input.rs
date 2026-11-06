@@ -1,6 +1,8 @@
 //! Keep the JSON number shapes the routes' body reader distinguishes when the shared JSON reader cannot represent
 //! their values.
 
+use charliebot_core::json_loads::{INFINITY, NAN, NEGATIVE_INFINITY};
+
 /// Replace each JSON number, `NaN` or infinity token with zero, preserving the input's JSON shape.
 ///
 /// Callers use this only after `charliebot_core::json_loads` has validated the entire document and reported a value
@@ -36,7 +38,7 @@ pub fn replace_unrepresentable_numbers(text: &str) -> String {
 
     let rest = &text[index..];
     let special_len =
-      ["-Infinity", "Infinity", "NaN"].iter().find_map(|token| rest.starts_with(token).then_some(token.len()));
+      [NEGATIVE_INFINITY, INFINITY, NAN].iter().find_map(|token| rest.starts_with(token).then_some(token.len()));
     if let Some(token_len) = special_len {
       result.push('0');
       index += token_len;

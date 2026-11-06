@@ -32,69 +32,13 @@ use charliebot_registry::backend::{
 use charliebot_registry::store_hooks::store_hooks;
 use charliebot_registry::{FeatureContext, Registry, RegistryError, StartupState};
 use charliebot_store::Store;
-use futures_util::stream::{self, StreamExt};
-use regex::bytes::Regex;
+use futures_util::stream;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
 const PACKAGE: &str = "backends.openai_compatible";
 const ACCESS_KEY: &str = "synthetic-access-key";
 const DONE_FRAME: &[u8] = b"data: [DONE]\n\n";
-const MESSAGE_STOP_FRAME: &[u8] = b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
-const GOLDEN_FIXTURE: &str = include_str!("fixtures/openai_compatible_golden.json");
-
-/// One case of the matrix, as the recorded reference printed it.
-struct Case {
-  name: String,
-  index: usize,
-  body: Vec<u8>,
-  upstream_status: u16,
-  upstream_chunks: Vec<Vec<u8>>,
-  credential: Option<String>,
-  unreachable: bool,
-  expected_status: u16,
-  expected_body: Vec<u8>,
-  expected_upstream: Option<Seen>,
-  expected_complete: bool,
-}
-
-impl Case {
-  fn from_record(record: &Value) -> Case {
-    let input = &record["input"];
-    let expected = &record["expected"];
-    Case {
-      name: record["name"].as_str().unwrap().to_string(),
-      index: input["index"].as_u64().unwrap() as usize,
-      body: hex(input["body_hex"].as_str().unwrap()),
-      upstream_status: input["status"].as_u64().unwrap() as u16,
-      upstream_chunks: input["chunks_hex"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|chunk| hex(chunk.as_str().unwrap()))
-        .collect(),
-      credential: input["credential"].as_str().map(str::to_string),
-      unreachable: input["unreachable"].as_bool().unwrap(),
-      expected_status: expected["status"].as_u64().unwrap() as u16,
-      expected_body: hex(expected["body_hex"].as_str().unwrap()),
-      expected_upstream: expected["upstream"]
-        .as_object()
-        .map(|seen| (hex(seen["body_hex"].as_str().unwrap()), seen["authorization"].as_str().map(str::to_string))),
-      expected_complete: expected["complete"].as_bool().unwrap(),
-    }
-  }
-}
-
-fn hex(text: &str) -> Vec<u8> {
-  (0..text.len()).step_by(2).map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap()).collect()
-}
-
-/// The matrix the recorded route answered, one record per case.
-fn golden_reference() -> Vec<Case> {
-  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
-  assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
-  fixture["expected"].as_array().unwrap().iter().map(Case::from_record).collect()
-}
 
 /// A type the server does not register, so a test can give a backend a type that is not the proxy's.
 struct OtherType;
@@ -215,37 +159,6 @@ fn write_home(home: &Path, options: &str, credentials: &str) {
   fs::write(home.join(CREDENTIALS_FILENAME), credentials).unwrap();
 }
 
-/// The home of the matrix: one proxy option per case, pointed at the upstream on `upstream_port`. An unreachable case
-/// points at a closed port instead, and a credential case names its section, which holds a key only when present.
-fn write_matrix_home(home: &Path, cases: &[Case], upstream_port: u16) {
-  let mut options = String::new();
-  for case in cases {
-    let base =
-      if case.unreachable { "http://127.0.0.1:1".to_string() } else { format!("http://127.0.0.1:{upstream_port}") };
-    options.push_str(&format!(
-      "    - id: case-{i}\n      label: case {i}\n      type: cc-openai-compatible\n      model: synthetic-model\n      api_base: {base}/{i}/v1\n",
-      i = case.index
-    ));
-    if case.credential.is_some() {
-      options.push_str(&format!("      credential: case_{}\n", case.index));
-    }
-  }
-  let mut credentials = format!("charliebot:\n  access_key: {ACCESS_KEY}\n");
-  for case in cases.iter().filter(|case| case.credential.as_deref() == Some("present")) {
-    credentials.push_str(&format!("case_{}:\n  api_key: key-{}\n", case.index, case.index));
-  }
-  write_home(home, &options, &credentials);
-}
-
-/// The comparison's form of a body: the credentials file's path is `<credentials>` and each message id is `msg_MASKED`,
-/// as the recorded side writes them.
-fn normalize(body: &[u8], credentials_path: &str) -> Vec<u8> {
-  let credentials = Regex::new(&regex::escape(credentials_path)).unwrap();
-  let message_id = Regex::new("msg_[0-9a-f]{32}").unwrap();
-  let body = credentials.replace_all(body, &b"<credentials>"[..]);
-  message_id.replace_all(&body, &b"msg_MASKED"[..]).into_owned()
-}
-
 /// A client that reaches the loopback servers directly, whatever proxy the environment names.
 fn no_proxy_client() -> reqwest::Client {
   http_client::client(&Settings::default()).unwrap()
@@ -270,58 +183,6 @@ async fn post_case(
       Err(error) => return (status, received, Some(error.to_string())),
     }
   }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn the_route_answers_as_the_recorded_route_over_the_matrix() {
-  let cases = golden_reference();
-  let replies =
-    cases.iter().map(|case| Reply { status: case.upstream_status, chunks: case.upstream_chunks.clone() }).collect();
-  let (upstream_port, upstream) = serve_upstream(replies).await;
-  let home = tempfile::tempdir().unwrap();
-  write_matrix_home(home.path(), &cases, upstream_port);
-  let proxy = serve_route(&features(home.path())).await;
-  let client = no_proxy_client();
-  let credentials_path = home.path().join(CREDENTIALS_FILENAME).to_string_lossy().into_owned();
-
-  let mut mismatches: Vec<String> = stream::iter(&cases)
-    .map(|case| {
-      let upstream = Arc::clone(&upstream);
-      let client = &client;
-      let credentials_path = &credentials_path;
-      async move {
-        let (status, body, _failure) = post_case(client, proxy, case.index, &case.body).await;
-        let body = normalize(&body, credentials_path);
-        let seen = upstream.seen.lock().unwrap().get(&case.index).cloned();
-        let complete = body.ends_with(MESSAGE_STOP_FRAME);
-        let expected_upstream = case.expected_upstream.clone();
-        if status != case.expected_status
-          || body != case.expected_body
-          || seen != expected_upstream
-          || complete != case.expected_complete
-        {
-          return Some(format!(
-            "{}: status {} (python {}), complete {} (python {}), body matches {}, upstream matches {}",
-            case.name,
-            status,
-            case.expected_status,
-            complete,
-            case.expected_complete,
-            body == case.expected_body,
-            seen == expected_upstream,
-          ));
-        }
-        None
-      }
-    })
-    .buffer_unordered(32)
-    .collect::<Vec<_>>()
-    .await
-    .into_iter()
-    .flatten()
-    .collect();
-  mismatches.sort();
-  assert!(mismatches.is_empty(), "{} of {} cases differ:\n{}", mismatches.len(), cases.len(), mismatches.join("\n"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

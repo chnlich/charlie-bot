@@ -46,7 +46,8 @@ pub(crate) fn handler(features: Arc<FeatureContext>, request: WebSocketRequest) 
       let (writer, reader) = socket.split();
       let writer = Arc::new(Mutex::new(writer));
       if let Some(message) = refusal {
-        refuse_preview(&writer, &message).await;
+        send_error_frame(&writer, &message, &session_id, &backend_id).await;
+        close_socket(&writer).await;
         return;
       }
       let backend = backend.expect("a backend without a refusal is built");
@@ -54,7 +55,7 @@ pub(crate) fn handler(features: Arc<FeatureContext>, request: WebSocketRequest) 
         Ok(config) => config,
         Err(error) => {
           let message = error.to_string();
-          let _ = send_frame(&writer, json!({ "type": "error", "message": message })).await;
+          send_error_frame(&writer, &message, &session_id, &backend_id).await;
           close_socket(&writer).await;
           return;
         }
@@ -131,7 +132,7 @@ async fn relay_preview_with_queue(
     ReceiveOutcome::Error(message) => {
       cancel.send_replace(true);
       await_streamer(streamer.take()).await;
-      let _ = send_frame(&writer, json!({ "type": "error", "message": message })).await;
+      send_error_frame(&writer, &message, &session_id, &backend_id).await;
       drain_socket(&mut reader).await;
       close_socket(&writer).await;
     }
@@ -195,13 +196,10 @@ async fn stream_preview(context: StreamContext) {
             if !queue.ended().await {
               let reason = "backend produced its final before the recording's end frame";
               tracing::warn!(target: "charliebot_voice", session_id, backend = %backend_id, reason, "voice_preview_failed");
-              let sent = send_frame(&writer, json!({ "type": "error", "message": reason })).await;
+              send_error_frame(&writer, reason, &session_id, &backend_id).await;
               let _ = event.acknowledged.send(());
               cancel.send_replace(true);
               await_backend_worker(worker.take().expect("backend worker is present"), &session_id, &backend_id).await;
-              if let Err(error) = sent {
-                log_socket_lost(&session_id, &backend_id, &error);
-              }
               return;
             }
             archive_final(&writer, &queue, &config, &session_id, &backend_id, &event).await
@@ -237,18 +235,14 @@ async fn stream_preview(context: StreamContext) {
       if !*cancellation.borrow() {
         let reason = error.to_string();
         tracing::warn!(target: "charliebot_voice", session_id, backend = %backend_id, reason = %reason, "voice_preview_failed");
-        if let Err(error) = send_frame(&writer, json!({ "type": "error", "message": reason })).await {
-          log_socket_lost(&session_id, &backend_id, &error);
-        }
+        send_error_frame(&writer, &reason, &session_id, &backend_id).await;
       }
     }
     Err(error) if error.is_cancelled() && *cancellation.borrow() => {}
     Err(error) => {
       let reason = error.to_string();
       tracing::warn!(target: "charliebot_voice", session_id, backend = %backend_id, reason = %reason, "voice_preview_failed");
-      if let Err(error) = send_frame(&writer, json!({ "type": "error", "message": reason })).await {
-        log_socket_lost(&session_id, &backend_id, &error);
-      }
+      send_error_frame(&writer, &reason, &session_id, &backend_id).await;
     }
   }
 }
@@ -274,12 +268,12 @@ async fn archive_final(
     Ok(Ok(audio_path)) => audio_path,
     Ok(Err(_error)) => {
       tracing::error!(target: "charliebot_voice", session_id, backend = %backend_id, "voice_preview_archive_failed");
-      let _ = send_frame(writer, json!({ "type": "error", "message": "recording archive failed" })).await;
+      send_error_frame(writer, "recording archive failed", &session_id, backend_id).await;
       return Ok(());
     }
     Err(_error) => {
       tracing::error!(target: "charliebot_voice", session_id, backend = %backend_id, "voice_preview_archive_failed");
-      let _ = send_frame(writer, json!({ "type": "error", "message": "recording archive failed" })).await;
+      send_error_frame(writer, "recording archive failed", &session_id, backend_id).await;
       return Ok(());
     }
   };
@@ -332,10 +326,7 @@ async fn settle_sealed_socket(
           Some(Ok(Message::Binary(_) | Message::Text(_))) => {
             cancel.send_replace(true);
             await_streamer(streamer.take()).await;
-            let _ = send_frame(writer, json!({
-              "type": "error",
-              "message": "unexpected frame after the recording's end"
-            })).await;
+            send_error_frame(writer, "unexpected frame after the recording's end", session_id, &backend_id).await;
             drain_socket(reader).await;
             return;
           }
@@ -391,11 +382,11 @@ async fn send_frame(writer: &SocketWriter, payload: Value) -> Result<(), String>
   writer.send(Message::Text(text.into())).await.map_err(|error| error.to_string())
 }
 
-async fn refuse_preview(writer: &SocketWriter, message: &str) {
+/// The relay's one error-frame path: a socket that no longer takes the frame is reported, not dropped.
+async fn send_error_frame(writer: &SocketWriter, message: &str, session_id: &str, backend_id: &str) {
   if let Err(error) = send_frame(writer, json!({ "type": "error", "message": message })).await {
-    tracing::debug!(target: "charliebot_voice", error = %error, "voice_preview_refusal_send_failed");
+    log_socket_lost(session_id, backend_id, &error);
   }
-  close_socket(writer).await;
 }
 
 async fn close_socket(writer: &SocketWriter) {

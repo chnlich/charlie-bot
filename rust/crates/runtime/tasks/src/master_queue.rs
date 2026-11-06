@@ -10,7 +10,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_registry::backend::{BackendLifecycle, EmitFn, IdleArmContext, IdleStartGate, SessionContextStateFn};
 use charliebot_registry::context::FeatureContext;
-use charliebot_store::metadata::{NATIVE_BACKEND, SessionMetadata, UtcDateTime};
+use charliebot_store::metadata::{HAS_RUNNING_TASKS, NATIVE_BACKEND, SessionMetadata, UtcDateTime};
 use charliebot_usage::SessionUsage;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
@@ -785,7 +785,7 @@ async fn broadcast_running_changed(
   auto_trigger: bool,
 ) -> anyhow::Result<()> {
   let mut fields = Map::new();
-  fields.insert("has_running_tasks".to_string(), json!(has_running_tasks));
+  fields.insert(HAS_RUNNING_TASKS.to_string(), json!(has_running_tasks));
   fields.insert(
     "thinking_since".to_string(),
     thinking_since.map(|value| json!(value.to_isoformat_text())).unwrap_or(Value::Null),

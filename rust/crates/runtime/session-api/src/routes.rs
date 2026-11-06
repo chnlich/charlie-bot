@@ -14,7 +14,8 @@ use charliebot_compat::{responses, validation};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::metadata::{
-  HAS_PENDING_TRIGGER, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SessionMetadata, UtcDateTime, WORK_STATE,
+  HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SessionMetadata,
+  UtcDateTime, WORK_STATE,
 };
 use charliebot_store::sidebar_state;
 use http::header::HeaderValue;
@@ -364,8 +365,8 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
     let mut payload = Map::new();
     payload.insert(HAS_UNREAD.to_string(), Value::Bool(meta.has_unread));
     payload.insert(
-      "has_running_tasks".to_string(),
-      entry.and_then(|row| row.get("has_running_tasks")).cloned().unwrap_or(Value::Bool(false)),
+      HAS_RUNNING_TASKS.to_string(),
+      entry.and_then(|row| row.get(HAS_RUNNING_TASKS)).cloned().unwrap_or(Value::Bool(false)),
     );
     payload.insert(
       "thinking_since".to_string(),
@@ -515,8 +516,8 @@ fn apply_derived_fields(
   let object = value.as_object_mut().expect("session metadata serializes to an object");
   if include_running {
     object.insert(
-      "has_running_tasks".to_string(),
-      derived.and_then(|row| row.get("has_running_tasks")).cloned().unwrap_or(Value::Bool(false)),
+      HAS_RUNNING_TASKS.to_string(),
+      derived.and_then(|row| row.get(HAS_RUNNING_TASKS)).cloned().unwrap_or(Value::Bool(false)),
     );
     if let Some(work_state) = derived.and_then(|row| row.get(WORK_STATE)) {
       object.insert(WORK_STATE.to_string(), work_state.clone());

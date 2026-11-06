@@ -399,7 +399,11 @@ fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<Page
 ///
 /// `all` is the Workspace's page; `starred` is every starred session, archived ones included; any other name is a
 /// sidebar view the registry knows, answered with the active rows that belong to it.
-pub fn status_filter_ids(store: &Arc<Store>, registry: &Arc<Registry>, filter: &str) -> StoreResult<Option<Vec<String>>> {
+pub fn status_filter_ids(
+  store: &Arc<Store>,
+  registry: &Arc<Registry>,
+  filter: &str,
+) -> StoreResult<Option<Vec<String>>> {
   let ids = match filter {
     "all" => active_page_rows(store, registry)?.rows().iter().map(|row| row.id.clone()).collect(),
     "starred" => store.list_sessions(None, Some(true), None)?.rows.iter().map(|row| row.id.clone()).collect(),

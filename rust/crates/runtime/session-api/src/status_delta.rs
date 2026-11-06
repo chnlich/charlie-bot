@@ -49,27 +49,14 @@ pub struct Snapshot {
 impl Snapshot {
   fn new() -> Snapshot {
     let epoch = SystemTime::now().duration_since(UNIX_EPOCH).map_or(1, |elapsed| elapsed.as_nanos() as u64);
-    Snapshot {
-      epoch,
-      sequence: 0,
-      horizon: 0,
-      rows: HashMap::new(),
-      filters: HashMap::new(),
-      departed: HashMap::new(),
-    }
+    Snapshot { epoch, sequence: 0, horizon: 0, rows: HashMap::new(), filters: HashMap::new(), departed: HashMap::new() }
   }
 
   /// Publish this request's row payloads, record the filter's set, and answer the rows that moved after `since`.
   ///
   /// `ids` is the request's sorted row set. `payloads` holds one payload per id in `ids`, in the same order. A `since`
   /// that names no state this process published, or one older than the retained horizon, asks for every row.
-  pub fn answer(
-    &mut self,
-    filter: Option<&str>,
-    ids: &[String],
-    payloads: Vec<Value>,
-    since: Option<u64>,
-  ) -> Answer {
+  pub fn answer(&mut self, filter: Option<&str>, ids: &[String], payloads: Vec<Value>, since: Option<u64>) -> Answer {
     let full = since.is_none_or(|since| since > self.sequence || since < self.horizon);
     for (id, payload) in ids.iter().zip(payloads) {
       match self.rows.get(id) {
@@ -105,7 +92,7 @@ impl Snapshot {
           .filter(|((name, _), version)| name == filter && **version > since)
           .map(|((_, id), version)| (id, *version))
           .collect();
-        departed.sort_by(|left, right| left.1.cmp(&right.1));
+        departed.sort_by_key(|left| left.1);
         gone.extend(departed.into_iter().map(|(id, _)| id.clone()));
       }
     }

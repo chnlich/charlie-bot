@@ -4036,10 +4036,10 @@ pub(crate) mod tests {
     let store = make_store(home.path());
     let mut index = empty_tree_index();
     add_tree_node(&mut index, "root".to_string(), None, SessionStatus::Active, false);
-    for index in 0..1001 {
+    for sequence in 0..1001 {
       add_tree_node(
         &mut index,
-        format!("archived-{index:04}"),
+        format!("archived-{sequence:04}"),
         Some("root".to_string()),
         SessionStatus::Archived,
         true,
@@ -4058,10 +4058,10 @@ pub(crate) mod tests {
     let store = make_store(home.path());
     let mut index = empty_tree_index();
     add_tree_node(&mut index, "root".to_string(), None, SessionStatus::Active, false);
-    for index in 0..1001 {
+    for sequence in 0..1001 {
       add_tree_node(
         &mut index,
-        format!("open-{index:04}"),
+        format!("open-{sequence:04}"),
         Some("root".to_string()),
         SessionStatus::Active,
         false,
@@ -4083,10 +4083,10 @@ pub(crate) mod tests {
     let mut index = empty_tree_index();
     add_tree_node(&mut index, "root".to_string(), None, SessionStatus::Active, false);
     add_tree_node(&mut index, "closed".to_string(), Some("root".to_string()), SessionStatus::Active, true);
-    for index in 0..1001 {
+    for sequence in 0..1001 {
       add_tree_node(
         &mut index,
-        format!("under-closed-{index:04}"),
+        format!("under-closed-{sequence:04}"),
         Some("closed".to_string()),
         SessionStatus::Active,
         true,

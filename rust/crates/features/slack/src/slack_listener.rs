@@ -943,7 +943,6 @@ mod tests {
       ws_client::Settings::default(),
     ));
     api.wait_for_sockets(1).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
 
     let started = Instant::now();
     task.abort();

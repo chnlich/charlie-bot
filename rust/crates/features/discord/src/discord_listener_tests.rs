@@ -290,9 +290,9 @@ async fn test_heartbeat_carries_the_last_seq() {
 
 #[tokio::test]
 async fn test_acked_heartbeats_keep_beating_one_interval_apart() {
-  let home = Home::new(true).await;
-  let mut script = GatewayScript::new(vec![ready(2)]);
-  script.interval_ms = 15;
+  let home = Home::new_without_thread_runtime(true).await;
+  let mut script = GatewayScript::new(Vec::new());
+  script.interval_ms = 3;
   script.acknowledge_heartbeats = true;
   script.close_after_heartbeats = Some((3, 4004));
   let gateway = Gateway::start(vec![script]).await;
@@ -349,8 +349,8 @@ async fn assert_gateway_op_ends_connection_and_reconnects(op: u64) {
   );
   assert_eq!(reconnect_backoff_after_drop(Duration::from_secs(32), false, initial_backoff), Duration::from_secs(32));
 
-  let home = Home::new(true).await;
-  let first = GatewayScript::new(vec![ready(2), json!({"op": op})]);
+  let home = Home::new_without_thread_runtime(true).await;
+  let first = GatewayScript::new(vec![json!({"op": op})]);
   let second = GatewayScript { close_after_identify: Some(4004), ..GatewayScript::new(Vec::new()) };
   let gateway = Gateway::start(vec![first, second]).await;
   configure_gateway(&home, &gateway, 1 << 18);
@@ -436,7 +436,7 @@ async fn test_ready_runs_the_backfill_per_connection() {
 
 #[tokio::test]
 async fn test_message_create_reaches_the_handler_and_survives_its_errors() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   let failed = json!({
     "id": "900000000000000060", "guild_id": GUILD, "channel_id": "900000000000000061",
     "author": {"id": ALLOWED_USER}, "type": 0, "content": "<@600000000000000001> ignored",

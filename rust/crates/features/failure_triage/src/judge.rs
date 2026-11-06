@@ -605,7 +605,7 @@ mod tests {
       &env(),
       "prompt",
       "system",
-      Duration::from_millis(50),
+      Duration::from_millis(5),
     )
     .await
     .unwrap_err();

@@ -464,7 +464,7 @@ mod tests {
   use axum::{Router, extract::ws::WebSocketUpgrade};
   use futures_util::{SinkExt, StreamExt};
   use tokio::net::TcpListener;
-  use tokio::sync::oneshot;
+  use tokio::sync::{oneshot, watch};
   use tokio_tungstenite::tungstenite::Message as ClientMessage;
   use tokio_tungstenite::tungstenite::Message as ServerMessage;
   use tokio_tungstenite::{WebSocketStream, accept_async, connect_async};
@@ -475,6 +475,7 @@ mod tests {
     config: Arc<CharlieBotConfig>,
     endpoint_url: String,
     max_recording_samples: usize,
+    relay_finished: watch::Sender<bool>,
   }
 
   struct RelayTestServer {
@@ -484,6 +485,7 @@ mod tests {
     server: JoinHandle<()>,
     fake_backend: JoinHandle<()>,
     provider_connected: oneshot::Receiver<()>,
+    relay_finished: watch::Receiver<bool>,
   }
 
   #[derive(Clone, Copy)]
@@ -509,6 +511,7 @@ mod tests {
         AudioQueue::new_with_recording_budget_for_test(state.max_recording_samples * 2),
       )
       .await;
+      state.relay_finished.send_replace(true);
     })
   }
 
@@ -571,14 +574,28 @@ mod tests {
     let mut registry = charliebot_registry::Registry::new();
     registry.register_package("features.voice", crate::register).expect("register the voice config section");
     let config = Arc::new(registry.load_config(home.path()).expect("load synthetic voice config"));
-    let state = Arc::new(RelayTestState { config: Arc::clone(&config), endpoint_url, max_recording_samples });
+    let (relay_finished, relay_finished_receiver) = watch::channel(false);
+    let state = Arc::new(RelayTestState {
+      config: Arc::clone(&config),
+      endpoint_url,
+      max_recording_samples,
+      relay_finished,
+    });
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind the relay test server");
     let address = listener.local_addr().expect("read relay server address");
     let app = Router::new().route("/ws", get(relay_test_handler)).with_state(state);
     let server = tokio::spawn(async move {
       axum::serve(listener, app).await.expect("serve the relay test app");
     });
-    RelayTestServer { address, config, _home: home, server, fake_backend, provider_connected }
+    RelayTestServer {
+      address,
+      config,
+      _home: home,
+      server,
+      fake_backend,
+      provider_connected,
+      relay_finished: relay_finished_receiver,
+    }
   }
 
   async fn receive_json_frame<S>(socket: &mut WebSocketStream<S>) -> Value
@@ -744,16 +761,20 @@ mod tests {
     browser.send(ClientMessage::Binary(vec![1, 2].into())).await.expect("send audio");
     browser.send(ClientMessage::Text(r#"{"type":"end"}"#.into())).await.expect("seal the recording");
     browser.close(None).await.expect("disconnect before backend final");
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    tokio::time::timeout(Duration::from_secs(1), server.relay_finished.changed())
+      .await
+      .expect("relay observes the browser disconnect")
+      .expect("relay completion signal remains available");
+    assert!(*server.relay_finished.borrow(), "the relay completes after disconnect");
     assert!(!voice_dir(&server.config).exists(), "an abandoned recording has no archive");
     stop_relay_test(server).await;
   }
 
   #[tokio::test]
   async fn test_frames_past_the_cap_are_cut_sample_exactly() {
-    let server = start_relay_test(FakeMode::FinalAfterEnd, 3072).await;
+    let server = start_relay_test(FakeMode::FinalAfterEnd, 3).await;
     let mut browser = browser_socket(server.address).await;
-    let frame = vec![0x2a_u8; 2048 * 2];
+    let frame = vec![0x2a_u8; 4];
     for _ in 0..3 {
       browser.send(ClientMessage::Binary(frame.clone().into())).await.expect("send one live audio frame");
     }
@@ -767,7 +788,7 @@ mod tests {
       .find(|path| path.extension().is_some_and(|extension| extension == "wav"))
       .expect("the fake live backend archived one WAV");
     let wav_bytes = std::fs::read(wav).expect("read the archived WAV");
-    assert_eq!(&wav_bytes[44..], [frame.as_slice(), &frame[..2048]].concat());
+    assert_eq!(&wav_bytes[44..], [frame.as_slice(), &frame[..2]].concat());
     browser.close(None).await.expect("close browser WebSocket");
     stop_relay_test(server).await;
   }

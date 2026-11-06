@@ -1050,7 +1050,7 @@ mod tests {
       (close_code(&close), String::from_utf8(close.payload[2..].to_vec()).expect("close reason is UTF-8"))
     });
     let options =
-      options(Some(1024), Duration::from_secs(1), Some(Duration::from_millis(20)), Some(Duration::from_millis(60)));
+      options(Some(1024), Duration::from_secs(1), Some(Duration::from_millis(3)), Some(Duration::from_millis(5)));
     let url = format!("ws://{address}/socket");
     let (_sender, mut receiver) = connect(&url, &options, &Settings::default()).await.expect("connect to peer");
     let error = receiver.recv().await.expect("receive keepalive error").expect_err("missing pong fails the connection");
@@ -1071,12 +1071,12 @@ mod tests {
       while reader.read(&mut byte).await.unwrap_or(0) != 0 {}
       close_code(&close)
     });
-    let options = options(Some(1024), Duration::from_millis(60), None, None);
+    let options = options(Some(1024), Duration::from_millis(4), None, None);
     let url = format!("ws://{address}/socket");
     let (sender, _receiver) = connect(&url, &options, &Settings::default()).await.expect("connect to peer");
     let start = Instant::now();
     sender.close().await.expect("close returns when its deadline expires");
-    assert!(start.elapsed() >= Duration::from_millis(50));
+    assert!(start.elapsed() >= Duration::from_millis(3));
     assert!(start.elapsed() < Duration::from_millis(200));
     assert_eq!(server.await.expect("raw peer finishes"), 1000);
   }

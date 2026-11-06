@@ -31,6 +31,16 @@ function onPageResume(fn) {
   pageResumeHandlers.push(fn);
 }
 
+// Work a hidden tab holds back: a request, or a reload. A visible tab runs fn at once. A hidden tab keeps fn under its
+// key, and the next hidden -> visible transition runs each kept fn once, before the resume handlers. A later call under
+// the same key replaces the kept fn.
+const hiddenDeferred = new Map();
+
+function deferWhileHidden(key, fn) {
+  if (document.hidden) hiddenDeferred.set(key, fn);
+  else fn();
+}
+
 function suspendPageTimers() {
   Array.from(pageTimers.values()).forEach(timer => {
     if (timer.id === null) return;
@@ -40,6 +50,9 @@ function suspendPageTimers() {
 }
 
 function resumePageTimers() {
+  const deferred = Array.from(hiddenDeferred.values());
+  hiddenDeferred.clear();
+  deferred.forEach(fn => fn());
   pageResumeHandlers.forEach(fn => fn());
   Array.from(pageTimers.values()).forEach(timer => {
     if (timer.id === null) timer.id = setInterval(timer.fn, timer.ms);

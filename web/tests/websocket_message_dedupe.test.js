@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
+const {loadPageTimersOnce} = require('./websocket_context_stub');
 
 const {createElement, createEscapingElement} = require('./dom_element_stub');
 const {createFakeWebSocketClass} = require('./fake_websocket');
@@ -26,6 +27,7 @@ function buildPage(initialMessages = [], sessionId = 'session-a', {renderMessage
       createTreeWalker: () => ({}),
       getElementById: (id) => id === 'messages' ? messages : null,
       dispatchEvent: () => true,
+      addEventListener() {},
     },
     CustomEvent,
     TextEncoder,
@@ -60,6 +62,7 @@ function buildPage(initialMessages = [], sessionId = 'session-a', {renderMessage
   };
   context.globalThis = context;
   vm.createContext(context);
+  loadPageTimersOnce(context);
   vm.runInContext(readStatic('websocket.js'), context, {filename: 'websocket.js'});
   vm.runInContext(readStatic('chat/namespace.js'), context, {filename: 'chat/namespace.js'});
   vm.runInContext(readStatic('chat/shared.js'), context, {filename: 'chat/shared.js'});

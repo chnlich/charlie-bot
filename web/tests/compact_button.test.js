@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
+const {loadPageTimersOnce} = require('./websocket_context_stub');
 
 const { readStatic } = require('./read_static');
 
@@ -76,6 +77,7 @@ function loadChatContext(elements) {
   // (blockIfUploadsInFlight) is what compactContext and sendMessage share.
   vm.runInContext(FILE_UPLOAD_JS, context, { filename: 'file-upload.js' });
   loadChatRenderingModules(context);
+  loadPageTimersOnce(context);
   vm.runInContext(readStatic('websocket.js'), context, { filename: 'websocket.js' });
   vm.runInContext(DISPLAYED_SESSION_JS, context, { filename: 'chat/displayed-session.js' });
   vm.runInContext(readStatic('websocket-handlers.js'), context, { filename: 'websocket-handlers.js' });

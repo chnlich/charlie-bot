@@ -53,13 +53,26 @@ function refetchSessionList() {
   else if (currentFilter === 'archived') refreshArchivedView();
   else switchSidebarFilter(currentFilter);
 }
-registerWsMessageHandler('session_group_changed', refetchSessionList, {advancesCursor: false});
+registerWsMessageHandler('session_group_changed', () => deferWhileHidden('session-list', refetchSessionList),
+    {advancesCursor: false});
 // A worker run's finish reaches the page as a task_tree_changed frame, and the concurrency badge counts that run, so
-// the badge refetches with the list. Its 5 s poll covers a worker run's start, which broadcasts nothing.
-registerWsMessageHandler('task_tree_changed', () => {
-  refetchSessionList();
+// the badge refetches with the rows. Its 5 s poll covers a worker run's start, which broadcasts nothing. The frame
+// names the session whose row changed: the Workspace fetches that row alone, and the views that keep their own list
+// refetch it. A hidden tab holds each request until it is visible.
+registerWsMessageHandler('task_tree_changed', (ev) => {
+  if (workspaceRowsShown()) queueRowRefresh(ev.session_id);
+  else deferWhileHidden('session-list', refetchSessionList);
+  deferWhileHidden('workspace-badges', refreshWorkspaceBadges);
   globalThis.ConcurrencyBadge?.refreshSoon();
 }, {advancesCursor: false});
+
+// The socket does not replay task_tree_changed frames, so a socket that reopens after a network loss reloads the list,
+// which recovers the rows the outage hid. A page-driven reconnect (a switch) leaves the flag clear.
+registerWsConnectHandler(() => {
+  if (!networkLossPending) return;
+  networkLossPending = false;
+  deferWhileHidden('session-list', refetchSessionList);
+});
 
 // A descendant session set its status: the status panel re-reads its child rows.
 registerWsMessageHandler('web_status_subtree', () => refreshSessionStatusPanel(), {advancesCursor: false});

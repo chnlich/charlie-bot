@@ -14,6 +14,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const vm = require('node:vm');
+const {loadPageTimersOnce} = require('./websocket_context_stub');
 
 const { createElement, createEscapingElement } = require('./dom_element_stub');
 const { readStatic } = require('./read_static');
@@ -557,6 +558,9 @@ function liveArchivedContext(dataset, {search = []} = {}) {
   context.document.createElement = (tag) => recordedElement(tag, writes);
   const handlers = {};
   context.registerWsMessageHandler = (type, handler) => { handlers[type] = handler; };
+  // This harness drives no socket, so the reconnect registration only needs to exist.
+  context.registerWsConnectHandler = () => {};
+  loadPageTimersOnce(context);
   vm.runInContext(readStatic('websocket-handlers.js'), context, {filename: 'websocket-handlers.js'});
   const broadcast = () => handlers.task_tree_changed({type: 'task_tree_changed'});
   return {context, nav, elements, fetchCalls, writes, broadcast};

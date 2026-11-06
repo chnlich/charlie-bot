@@ -807,6 +807,20 @@ function removeSessionFromRenderedList(sessionId) {
   return true;
 }
 
+// The Workspace's row refresh: each refreshed row replaces its older copy or joins the list, and each gone id leaves
+// it. The list repaints in last-update order. The sort is stable, so rows that did not move keep the order of the last
+// full list. Returns false when no grouped list is painted.
+function mergeRowsIntoRenderedList(rows, goneIds) {
+  if (!lastGroupedRenderArgs) return false;
+  const merged = new Map(lastGroupedRenderArgs.sessions.map(s => [s.id, s]));
+  rows.forEach(row => merged.set(row.id, row));
+  goneIds.forEach(id => merged.delete(id));
+  const sessions = Array.from(merged.values()).sort((a, b) => sessionUpdatedMs(b) - sessionUpdatedMs(a));
+  renderGroupedSessionList(sessions, lastGroupedRenderArgs.filter,
+      {workspaceBadges: lastGroupedRenderArgs.workspaceBadges});
+  return true;
+}
+
 
 
 const GLOBALS = {
@@ -823,6 +837,7 @@ const GLOBALS = {
   toggleSessionGroup,
   renderSessionItem,
   renderSessionList,
+  mergeRowsIntoRenderedList,
   toggleTreeNode,
 };
 const SIDEBAR_ONLY = {

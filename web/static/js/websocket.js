@@ -19,6 +19,9 @@ let reconnectTimer = null;
 // close: the client-socket telemetry's reconnect_count, so an episode reports
 // how many attempts its reconnect took.
 let reconnectAttempts = 0;
+// Set when the socket closed for a reason the page did not start. The next open takes it, because the frames sent
+// during the outage are not replayed.
+let networkLossPending = false;
 // Request ids identify the local optimistic sends whose server echoes are due.
 const pendingUserRequestIds = new Set();
 let wsGeneration = 0;
@@ -149,6 +152,7 @@ function connectWS() {
       return;
     }
     console.log('WS closed, reconnecting in', reconnectDelay, 'ms');
+    networkLossPending = true;
     reconnectTimer = setTimeout(connectWS, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 30000);
   };
@@ -166,7 +170,12 @@ function connectWS() {
 const STALE_PAGE_RELOAD_KEY = 'charliebot-stale-page-reload-at';
 const STALE_PAGE_RELOAD_GUARD_MS = 60000;
 
+// A hidden tab reloads once it is visible.
 function handleStalePageClose() {
+  deferWhileHidden('stale-page-reload', reloadStalePage);
+}
+
+function reloadStalePage() {
   const now = Date.now();
   const lastReload = Number(sessionStorage.getItem(STALE_PAGE_RELOAD_KEY));
   if (lastReload && now - lastReload < STALE_PAGE_RELOAD_GUARD_MS) {

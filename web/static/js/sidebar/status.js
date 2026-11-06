@@ -86,8 +86,11 @@ function sidebarSessionIds() {
   return ids;
 }
 
-function statusRequestUrls(path, ids) {
-  const urlFor = (batch) => path + '?ids=' + batch.map(encodeURIComponent).join(',');
+// The status URLs that name these sessions by ids, each under the URL budget. A `query` (such as `filter=all`) rides in
+// every URL ahead of the ids.
+function statusRequestUrls(path, ids, query = '') {
+  const head = query ? query + '&' : '';
+  const urlFor = (batch) => path + '?' + head + 'ids=' + batch.map(encodeURIComponent).join(',');
   const urls = [];
   let batch = [];
   const flush = () => {
@@ -102,9 +105,18 @@ function statusRequestUrls(path, ids) {
   return urls;
 }
 
-async function fetchScopedStatus(path, ids) {
-  if (!ids.length) return {};
-  const responses = await Promise.all(statusRequestUrls(path, ids).map(url => fetch(url)));
+// The sidebar's status URLs. The Workspace names its rows by filter, so the server lists them and the URL stays short.
+// The sessions the list does not paint (the open chat, a delegate card's child) travel as ids.
+function sidebarStatusUrls(path, ids) {
+  if (!workspaceRowsShown()) return statusRequestUrls(path, ids);
+  const painted = new Set(Array.from(document.querySelectorAll('a[id^="session-"]'),
+      el => el.id.slice('session-'.length)));
+  const unpainted = ids.filter(sid => !painted.has(sid));
+  return unpainted.length ? statusRequestUrls(path, unpainted, 'filter=all') : [path + '?filter=all'];
+}
+
+async function fetchStatusUrls(urls) {
+  const responses = await Promise.all(urls.map(url => fetch(url)));
   const merged = {};
   for (const r of responses) {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -491,7 +503,7 @@ function pollSessionStatus() {
   if (statusPollInflight) return statusPollPromise;
   statusPollInflight = true;
   const requestSeq = unreadSeqAtRequest();
-  statusPollPromise = fetchScopedStatus('/api/sessions/status', sidebarSessionIds())
+  statusPollPromise = fetchStatusUrls(sidebarStatusUrls('/api/sessions/status', sidebarSessionIds()))
     .then(data => {
       if (!data) return false;
       let anyRunning = false;

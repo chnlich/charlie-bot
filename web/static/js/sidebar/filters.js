@@ -122,6 +122,56 @@ function listingRows(payload) {
   return Array.isArray(payload) ? payload : expandSessionColumns(payload);
 }
 
+// ---------------------------------------------------------------------------
+// Workspace row refresh
+// ---------------------------------------------------------------------------
+// A task-tree change names the session whose row changed. The Workspace fetches those rows alone and merges them into
+// the list it painted. Ids that arrive while a fetch is in flight go into the next fetch, and a hidden tab fetches once
+// it is visible.
+const ROW_REFRESH_BATCH = 50;
+const pendingRowIds = new Set();
+let rowRefreshInFlight = false;
+
+function queueRowRefresh(sessionId) {
+  pendingRowIds.add(sessionId);
+  deferWhileHidden('row-refresh', drainRowRefresh);
+}
+
+function drainRowRefresh() {
+  if (rowRefreshInFlight) return;
+  if (!workspaceRowsShown()) {
+    pendingRowIds.clear();
+    return;
+  }
+  if (pendingRowIds.size === 0) return;
+  const batch = Array.from(pendingRowIds).slice(0, ROW_REFRESH_BATCH);
+  batch.forEach(id => pendingRowIds.delete(id));
+  rowRefreshInFlight = true;
+  fetch('/api/sessions/?compact=1&ids=' + batch.map(encodeURIComponent).join(','))
+    .then(res => {
+      if (!res.ok) throw new Error(`Row refresh failed: ${res.status}`);
+      return res.json();
+    })
+    .then(payload => {
+      // A view the reader left while the fetch was in flight takes no rows: its own load paints it.
+      if (workspaceRowsShown()) {
+        mergeRowsIntoRenderedList(expandSessionColumns(payload.sessions), payload.gone);
+      }
+    })
+    .catch(err => console.error('Row refresh failed:', err))
+    .finally(() => {
+      rowRefreshInFlight = false;
+      drainRowRefresh();
+    });
+}
+
+// The Workspace's badges (the broken cron tasks) load and repaint in place. The Workspace view owns them, so any other
+// view takes no request.
+function refreshWorkspaceBadges() {
+  if (currentFilter !== 'all') return;
+  loadWorkspaceBadges().then(paintWorkspaceBadges);
+}
+
 // Pill-click entry point: only entering a different filter collapses group
 // expansions; re-clicking the active pill and every in-place refresh keep them.
 function enterSidebarFilter(filter) {
@@ -236,8 +286,9 @@ function restoreSidebarFromUrl() {
     } else {
       renderSessionList(initialSessions, 'all');
       // The Workspace badges load on their own so the first paint never waits
-      // for them; the repaint discards itself when the view has moved on.
-      loadWorkspaceBadges().then(paintWorkspaceBadges);
+      // for them; the repaint discards itself when the view has moved on. A
+      // hidden tab loads them once it is visible.
+      deferWhileHidden('workspace-badges', refreshWorkspaceBadges);
     }
   }
 }
@@ -340,6 +391,8 @@ const GLOBALS = {
   expandSessionColumns,
   handleSidebarSearch,
   toggleSessionStar,
+  queueRowRefresh,
+  refreshWorkspaceBadges,
 };
 Sidebar.wire(GLOBALS);
 

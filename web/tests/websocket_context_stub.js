@@ -5,7 +5,7 @@
 // no-key wsUrlWithToken page-load order. Every hook websocket.js calls into the
 // chat/sidebar modules is a no-op. The harness's own globals spread over that
 // base (SESSION_ID, document, setTimeout, the recorders). Then comes one load
-// sequence: createContext, websocket.js, websocket-handlers.js. The load order
+// sequence: createContext, page-timers.js, websocket.js, websocket-handlers.js. The load order
 // both suites depend on lives in one place. A harness with a context of its own
 // (the sidebar indicator harness loading the real status.js) takes the same load
 // sequence through loadWebsocketModules.
@@ -15,6 +15,7 @@ const vm = require('node:vm');
 const { createFakeWebSocketClass } = require('./fake_websocket');
 const { readStatic } = require('./read_static');
 
+const PAGE_TIMERS_JS = readStatic('page-timers.js');
 const WEBSOCKET_JS = readStatic('websocket.js');
 const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
 
@@ -69,12 +70,14 @@ function loadWebsocketContext(extraContext) {
   return {context, FakeWebSocket: context.WebSocket};
 }
 
-// The two-file load sequence on its own, for a harness whose vm context
-// already exists: websocket.js's transport, then the core handlers whose
-// registrations it accepts. The caller's context supplies the page globals
-// the files read (SESSION_ID, WebSocket, wsUrlWithToken, the sidebar hooks).
+// The three-file load sequence on its own, for a harness whose vm context
+// already exists: the page-timers registry (which websocket.js defers its
+// hidden-tab work through), websocket.js's transport, then the core handlers
+// whose registrations it accepts. The caller's context supplies the page
+// globals the files read (SESSION_ID, WebSocket, wsUrlWithToken, the sidebar hooks).
 function loadWebsocketModules(context) {
   prepareWebsocketGlobals(context);
+  loadPageTimersOnce(context);
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
   vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
 }
@@ -89,4 +92,14 @@ function prepareWebsocketGlobals(context) {
   if (!context.TextEncoder) context.TextEncoder = TextEncoder;
 }
 
-module.exports = { loadWebsocketContext, loadWebsocketModules, prepareWebsocketGlobals };
+// The page-timers registry websocket.js and the list refresh defer their hidden-tab work through. A context whose
+// chat and sidebar modules already loaded it keeps that copy, since a second load would redeclare its bindings.
+// page-timers.js listens for the tab's visibility at load, so a document without addEventListener gets a no-op one.
+function loadPageTimersOnce(context) {
+  if (context.document && !context.document.addEventListener) context.document.addEventListener = () => {};
+  if (typeof context.deferWhileHidden !== 'function') {
+    vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
+  }
+}
+
+module.exports = { loadWebsocketContext, loadWebsocketModules, prepareWebsocketGlobals, loadPageTimersOnce };

@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
+const {loadPageTimersOnce} = require('./websocket_context_stub');
 
 const { readStatic } = require('./read_static');
 const { createElement } = require('./dom_element_stub');
@@ -204,6 +205,7 @@ test('a result WebSocket event forces a poll without writing the header directly
     ['usage-cost', createElement({textContent: 'before'})],
   ]);
   const {context} = buildContext({elements});
+  loadPageTimersOnce(context);
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
   vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
 
@@ -294,7 +296,7 @@ test('sidebarSessionIds includes the active session even when the sidebar has no
   assert.deepEqual(Array.from(context.Sidebar.sidebarSessionIds()), ['session-a']);
 });
 
-test('pollSessionStatus asks only for the sessions the sidebar renders', async () => {
+test('pollSessionStatus names the Workspace rows by filter when every session it holds is painted', async () => {
   const requested = [];
   const {context} = buildContext({
     querySelectorAll: (selector) =>
@@ -307,7 +309,7 @@ test('pollSessionStatus asks only for the sessions the sidebar renders', async (
 
   await context.pollSessionStatus();
 
-  assert.deepEqual(requested, ['/api/sessions/status?ids=session-a,session-b']);
+  assert.deepEqual(requested, ['/api/sessions/status?filter=all']);
 });
 
 test('a session id list too long for one request is split and the results are merged', async () => {
@@ -317,6 +319,8 @@ test('a session id list too long for one request is split and the results are me
   const {context} = buildContext({
     querySelectorAll: (selector) => (selector === 'a[id^="session-"]' ? sessionAnchors(ids) : []),
   });
+  // The Workspace names its rows by filter; a view that names its rows by ids is the one that splits them.
+  context.currentFilter = 'starred';
   const seen = [];
   context.fetch = async (url) => {
     requested.push(url);
@@ -343,7 +347,7 @@ test('pollSessionStatus updates pending trigger indicators from the status endpo
   const pendingUpdates = [];
 
   context.fetch = async (url) => {
-    assert.equal(url, '/api/sessions/status?ids=session-a');
+    assert.equal(url, '/api/sessions/status?filter=all&ids=session-a');
     return {
       ok: true,
       async json() {
@@ -595,6 +599,7 @@ test('in-place refresh paths preserve group expansion', async () => {
     {
       name: 'websocket session_group_changed event',
       setup(context) {
+        loadPageTimersOnce(context);
         vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
         vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
       },

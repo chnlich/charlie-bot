@@ -58,7 +58,14 @@
     return handler(...args);
   }
 
+  // Whether the sidebar shows the Workspace list: the all filter with no search text. The list refresh and the status
+  // poll both read it, so it lives in the first sidebar file they load after.
+  function workspaceRowsShown() {
+    const searchInput = global.document.getElementById('sidebar-search');
+    return global.currentFilter === 'all' && !(searchInput && searchInput.value.trim());
+  }
+
   Sidebar.wire = wire;
-  wire({registerSidebarControl, sidebarControl});
+  wire({registerSidebarControl, sidebarControl, workspaceRowsShown});
   global.Sidebar = Sidebar;
 })(globalThis);

@@ -13,6 +13,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
+const {loadPageTimersOnce} = require('./websocket_context_stub');
 
 const {readStatic, readPackageStatic} = require('./read_static');
 const {createElement, createClassList} = require('./dom_element_stub');
@@ -121,6 +122,7 @@ function buildLockHarness() {
   // transcription windows report into it. Every cross-file read here happens at
   // call time, so the load order only mirrors the page's dependency.
   vm.runInContext(FILE_UPLOAD_JS, context, {filename: 'file-upload.js'});
+  loadPageTimersOnce(context);
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
   vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
   vm.runInContext(VOICE_INPUT_JS, context, {filename: 'voice-input.js'});

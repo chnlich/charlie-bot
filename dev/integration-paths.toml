@@ -129,3 +129,12 @@ rust = "rdeps(=charliebot-tasks)"
 [[entry]]
 paths = ["skills/**"]
 rust = "rdeps(=charliebot-tasks)"
+
+# The devin and antigravity integration tests run these fixture scripts through symlinks they create.
+[[entry]]
+paths = ["rust/crates/backends/devin/tests/fixtures/fake_devin.sh"]
+rust = "package(charliebot-devin)"
+
+[[entry]]
+paths = ["rust/crates/backends/antigravity/tests/fixtures/final_stdout_agy.sh"]
+rust = "package(charliebot-antigravity)"

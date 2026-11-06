@@ -23,7 +23,7 @@ use charliebot_store::{CreateTask, SIDEBAR_CHANNEL, Store, StoreResult, Subscrip
 use charliebot_tasks::completion::TaskCompletion;
 use charliebot_tasks::dispatch::{DispatchExecutor, Dispatcher};
 use charliebot_triggers::triggers::TriggerManager;
-use futures_util::{FutureExt, future::BoxFuture};
+use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 
@@ -116,7 +116,7 @@ async fn thread_replies_and_assistant_errors_do_not_notify_task_tree_changes() {
     .await
     .expect("the thread reply posts");
 
-  let reply_frames = Home::sidebar_frames(&mut reply_sidebar);
+  let reply_frames = home.sidebar_frames(&mut reply_sidebar).await;
   assert!(reply_frames.iter().all(|frame| frame["type"] != "task_tree_changed"), "{reply_frames:?}");
   let replies: Vec<_> =
     home.events("reply-session").into_iter().filter(|event| event["type"] == FAKECHAT.reply_event_type).collect();
@@ -149,7 +149,7 @@ async fn thread_replies_and_assistant_errors_do_not_notify_task_tree_changes() {
     .await
     .expect("the no-reply audit posts its assistant error");
 
-  let error_frames = Home::sidebar_frames(&mut error_sidebar);
+  let error_frames = home.sidebar_frames(&mut error_sidebar).await;
   assert!(error_frames.iter().all(|frame| frame["type"] != "task_tree_changed"), "{error_frames:?}");
   let errors: Vec<_> =
     home.events("error-session").into_iter().filter(|event| event["type"] == event_types::ASSISTANT_ERROR).collect();
@@ -321,13 +321,20 @@ impl Home {
     self.executor.launches.lock().expect("the launch log is never poisoned").clone()
   }
 
-  /// The sidebar frames already queued after a state change.
-  fn sidebar_frames(subscription: &mut Subscription) -> Vec<Value> {
+  /// The sidebar frames sent before this call. The helper sends its own sentinel frame on the sidebar channel and reads
+  /// up to it: an empty result then means no frame was sent, and a dead subscription fails the read.
+  async fn sidebar_frames(&self, subscription: &mut Subscription) -> Vec<Value> {
+    const SENTINEL: &str = "test_sentinel";
+    self.features.store.broadcast(SIDEBAR_CHANNEL, json!({"type": SENTINEL})).await.expect("the sentinel broadcasts");
     let mut frames = Vec::new();
-    while let Some(Some(frame)) = subscription.recv().now_or_never() {
-      frames.push(serde_json::from_str(&frame).expect("a sidebar frame is JSON"));
+    loop {
+      let frame = subscription.recv().await.expect("the sidebar subscription stays open until its sentinel");
+      let frame: Value = serde_json::from_str(&frame).expect("a sidebar frame is JSON");
+      if frame["type"] == SENTINEL {
+        return frames;
+      }
+      frames.push(frame);
     }
-    frames
   }
 }
 
@@ -950,7 +957,7 @@ async fn follow_message_revives_an_archived_session_and_arms_after_the_unarchive
 
   assert_eq!(armed.as_deref(), Some("s1"));
   assert_eq!(home.meta("s1").await.status, SessionStatus::Active);
-  let frames = Home::sidebar_frames(&mut sidebar);
+  let frames = home.sidebar_frames(&mut sidebar).await;
   assert!(frames.iter().any(is_unarchive_frame), "{frames:?}");
   // The unarchive lands before the arm: create_trigger rejects an archived session, so the arm's record proves the order.
   assert_eq!(home.triggers("s1").await.len(), 1);
@@ -977,7 +984,7 @@ async fn accept_summon_unarchive_broadcasts_the_task_tree_change() {
   assert_eq!(sid, "s1");
   assert_eq!(home.meta("s1").await.status, SessionStatus::Active);
   // The mention path's unarchive notifies the sidebar the same way the follow path's does.
-  let frames = Home::sidebar_frames(&mut sidebar);
+  let frames = home.sidebar_frames(&mut sidebar).await;
   assert!(frames.iter().any(is_unarchive_frame), "{frames:?}");
   settle(|| home.launches().len() == 1 && adapter.acks.lock().unwrap().len() == 1).await;
 }
@@ -995,7 +1002,7 @@ async fn backfill_revives_an_archived_session_with_unread_messages() {
 
   assert_eq!(armed_count, 1);
   assert_eq!(home.meta("s1").await.status, SessionStatus::Active);
-  let frames = Home::sidebar_frames(&mut sidebar);
+  let frames = home.sidebar_frames(&mut sidebar).await;
   assert!(frames.iter().any(is_unarchive_frame), "{frames:?}");
   let labels: Vec<String> = home.triggers("s1").await.into_iter().map(|record| record.message).collect();
   assert_eq!(labels, ["fakechat-thread-follow floor=105"]);
@@ -1011,7 +1018,7 @@ async fn backfill_arms_an_active_session_without_a_revival() {
   let armed_count = backfill_followed_threads(&adapter, &home.features).await.unwrap();
 
   assert_eq!(armed_count, 1);
-  assert!(Home::sidebar_frames(&mut sidebar).iter().all(|frame| !is_unarchive_frame(frame)));
+  assert!(home.sidebar_frames(&mut sidebar).await.iter().all(|frame| !is_unarchive_frame(frame)));
   assert_eq!(home.triggers("s1").await.len(), 1);
 }
 

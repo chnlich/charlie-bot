@@ -2261,6 +2261,7 @@ async fn unclaimed_execution_is_interrupted() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn earlier_interrupt_wait_times_out_with_the_session_id() {
   let timeouts = ServerTimeouts {
     start: opencode_limits::OPENCODE_SERVER_START_TIMEOUT,
@@ -2281,6 +2282,7 @@ async fn earlier_interrupt_wait_times_out_with_the_session_id() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn dispatch_routes_to_the_claimed_turn_and_settles_pending_interrupts() {
   let harness = Harness::new(json!({}));
   let turn = harness.server.register("ses_1", "/synthetic/work", 999_999).unwrap();

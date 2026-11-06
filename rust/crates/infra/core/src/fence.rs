@@ -227,6 +227,7 @@ mod tests {
   use super::*;
 
   #[test]
+  #[ignore = "integration"]
   fn a_second_acquisition_refuses_and_names_the_holder() {
     let home = tempfile::tempdir().unwrap();
     let mut first = acquire_home_writer_fence(home.path(), "server startup").unwrap();

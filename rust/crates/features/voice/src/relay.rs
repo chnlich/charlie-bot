@@ -619,11 +619,7 @@ mod tests {
   }
 
   async fn start_relay_test(mode: FakeMode, max_recording_samples: usize) -> RelayTestServer {
-    start_relay_test_with_limits(
-      mode,
-      PREVIEW_QUEUE_SECONDS * crate::audio::SAMPLE_RATE * 2,
-      max_recording_samples,
-    )
+    start_relay_test_with_limits(mode, PREVIEW_QUEUE_SECONDS * crate::audio::SAMPLE_RATE * 2, max_recording_samples)
     .await
   }
 
@@ -676,14 +672,13 @@ mod tests {
     registry.register_package("features.voice", crate::register).expect("register the voice config section");
     let config = Arc::new(registry.load_config(home.path()).expect("load synthetic voice config"));
     let (relay_finished, relay_finished_receiver) = watch::channel(false);
-    let state =
-      Arc::new(RelayTestState {
-        config: Arc::clone(&config),
-        endpoint_url,
-        max_recording_samples,
-        max_preview_queue_bytes,
-        relay_finished,
-      });
+    let state = Arc::new(RelayTestState {
+      config: Arc::clone(&config),
+      endpoint_url,
+      max_recording_samples,
+      max_preview_queue_bytes,
+      relay_finished,
+    });
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind the relay test server");
     let address = listener.local_addr().expect("read relay server address");
     let app = Router::new().route("/ws", get(relay_test_handler)).with_state(state);
@@ -917,5 +912,4 @@ mod tests {
     assert_eq!(parts["audio"], json!({"path": "relay", "backend": "gemini", "devices": null}));
     stop_relay_test(server).await;
   }
-
 }

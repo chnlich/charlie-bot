@@ -12,7 +12,8 @@ use charliebot_core::timefmt;
 use charliebot_registry::Registry;
 use charliebot_store::layout;
 use charliebot_store::metadata::{
-  HAS_PENDING_TRIGGER, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SessionMetadata, SessionStatus, WORK_STATE,
+  HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, SessionMetadata, SessionStatus,
+  WORK_STATE,
 };
 use charliebot_store::run_records::RUN_METADATA_NAME;
 use charliebot_store::{Store, StoreError, StoreResult};
@@ -72,7 +73,7 @@ pub(crate) fn resolve_sidebar_state(
     if meta.status == SessionStatus::Archived {
       let mut entry = Map::new();
       if include_running {
-        entry.insert("has_running_tasks".to_string(), Value::Bool(false));
+        entry.insert(HAS_RUNNING_TASKS.to_string(), Value::Bool(false));
       }
       if include_trigger {
         entry.insert(HAS_PENDING_TRIGGER.to_string(), Value::Bool(false));
@@ -135,7 +136,7 @@ pub(crate) fn resolve_sidebar_state(
     let activity = snapshot.get(TASK_TREE_ACTIVITY).and_then(Value::as_array);
     if include_running {
       entry.insert(
-        "has_running_tasks".to_string(),
+        HAS_RUNNING_TASKS.to_string(),
         activity.and_then(|value| value.first()).cloned().unwrap_or(Value::Bool(false)),
       );
     }
@@ -379,7 +380,7 @@ mod tests {
       ..SessionMetadata::new("unused", "unused", charliebot_store::metadata::TaskProfile::Manager)
     };
     let mut entry = Map::new();
-    entry.insert("has_running_tasks".to_string(), Value::Bool(false));
+    entry.insert(HAS_RUNNING_TASKS.to_string(), Value::Bool(false));
     entry.insert("has_pending_trigger".to_string(), Value::Bool(false));
     entry.insert("pending_trigger_count".to_string(), Value::from(0));
     entry.insert("next_trigger_at".to_string(), Value::Null);

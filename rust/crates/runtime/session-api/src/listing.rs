@@ -11,8 +11,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use charliebot_registry::Registry;
 use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
-  HAS_PENDING_TRIGGER, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, ROUND_RATINGS, SCHEDULE_ENABLED,
-  SCHEDULE_FIELDS, SCHEDULE_TASK, SessionMetadata, SessionStatus, TaskProfile, UtcDateTime, WORK_STATE,
+  HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, ROUND_RATINGS,
+  SCHEDULE_ENABLED, SCHEDULE_FIELDS, SCHEDULE_TASK, SessionMetadata, SessionStatus, TaskProfile, UtcDateTime,
+  WORK_STATE,
 };
 use charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
@@ -1110,8 +1111,8 @@ fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarP
   let derived = row.derived.as_ref();
   if projection.include_running {
     object.insert(
-      "has_running_tasks".to_string(),
-      derived.and_then(|entry| entry.get("has_running_tasks")).cloned().unwrap_or(Value::Bool(false)),
+      HAS_RUNNING_TASKS.to_string(),
+      derived.and_then(|entry| entry.get(HAS_RUNNING_TASKS)).cloned().unwrap_or(Value::Bool(false)),
     );
     if let Some(work_state) = derived.and_then(|entry| entry.get(WORK_STATE)) {
       object.insert(WORK_STATE.to_string(), work_state.clone());
@@ -1189,7 +1190,10 @@ mod tests {
     let mut derived = Arc::new(DerivedSidebarMap::new());
     Arc::make_mut(&mut derived).insert(
       node.id.clone(),
-      Arc::new(json!({"has_running_tasks": false, "work_state": "idle"}).as_object().unwrap().clone()),
+      Arc::new(Map::from_iter([
+        (HAS_RUNNING_TASKS.to_string(), Value::Bool(false)),
+        (WORK_STATE.to_string(), json!("idle")),
+      ])),
     );
     let sequence_fields = HashMap::new();
 
@@ -1203,7 +1207,10 @@ mod tests {
     let mut moved = (*derived).clone();
     moved.insert(
       node.id.clone(),
-      Arc::new(json!({"has_running_tasks": false, "work_state": "waiting"}).as_object().unwrap().clone()),
+      Arc::new(Map::from_iter([
+        (HAS_RUNNING_TASKS.to_string(), Value::Bool(false)),
+        (WORK_STATE.to_string(), json!("waiting")),
+      ])),
     );
     derived = Arc::new(moved);
     assert_eq!(list_body(&features, &rows, &derived, &sequence_fields, &memos).await[0]["work_state"], "waiting");

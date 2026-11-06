@@ -20,7 +20,7 @@ use axum::response::Response;
 use charliebot_compat::responses;
 use charliebot_compat::routing::get_only;
 use charliebot_registry::{FeatureContext, Registry};
-use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
+use charliebot_store::metadata::{HAS_RUNNING_TASKS, SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunRecord};
 use charliebot_store::{SharedSubtreeRoots, Store, StoreError, StoreResult};
 use serde_json::{Value, json};
@@ -123,7 +123,7 @@ pub(crate) fn live_count(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreR
   let mut count = LiveCount::default();
   for row in &listed {
     let has_running_tasks =
-      derived.get(&row.id).and_then(|entry| entry.get("has_running_tasks")).and_then(Value::as_bool).unwrap_or(false);
+      derived.get(&row.id).and_then(|entry| entry.get(HAS_RUNNING_TASKS)).and_then(Value::as_bool).unwrap_or(false);
     if !has_running_tasks && store.busy_since(&row.id).is_none() {
       continue;
     }

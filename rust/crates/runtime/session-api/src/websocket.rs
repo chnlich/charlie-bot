@@ -394,7 +394,7 @@ mod tests {
   use charliebot_core::hot_reload::HotReload;
   use charliebot_registry::store_hooks;
   use charliebot_registry::{FeatureContext, Registry, StartupState, WebSocketRequest};
-  use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+  use charliebot_store::metadata::{HAS_RUNNING_TASKS, SessionMetadata, TaskProfile};
   use charliebot_store::run_records::RunRecord;
   use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
   use tokio::net::{TcpListener, TcpStream};
@@ -812,7 +812,7 @@ mod tests {
       .broadcast_sidebar(
         "synthetic",
         "running_changed",
-        serde_json::Map::from_iter([("has_running_tasks".to_string(), json!(true))]),
+        serde_json::Map::from_iter([(HAS_RUNNING_TASKS.to_string(), json!(true))]),
       )
       .await
       .unwrap();

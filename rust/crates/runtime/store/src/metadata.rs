@@ -62,6 +62,9 @@ pub const NATIVE_BACKEND: &str = "native_backend";
 pub const WORK_STATE: &str = "work_state";
 /// The session-metadata field saying whether the session has output the user has not read.
 pub const HAS_UNREAD: &str = "has_unread";
+/// The session-metadata field saying whether the session has a run in flight. The session routes, the sidebar state
+/// and the running-changed broadcast carry the same name, so it is spelled once, here.
+pub const HAS_RUNNING_TASKS: &str = "has_running_tasks";
 /// The session-metadata field saying whether a trigger waits for the session.
 pub const HAS_PENDING_TRIGGER: &str = "has_pending_trigger";
 /// The session-metadata field holding the number of triggers waiting for the session.
@@ -669,7 +672,7 @@ impl SessionMetadata {
     push(&mut declared, "status", &self.status);
     push(&mut declared, HAS_UNREAD, &self.has_unread);
     if !exclude_transient {
-      push(&mut declared, "has_running_tasks", &self.has_running_tasks);
+      push(&mut declared, HAS_RUNNING_TASKS, &self.has_running_tasks);
       push(&mut declared, WORK_STATE, &self.work_state);
       push(&mut declared, HAS_PENDING_TRIGGER, &self.has_pending_trigger);
       push(&mut declared, PENDING_TRIGGER_COUNT, &self.pending_trigger_count);

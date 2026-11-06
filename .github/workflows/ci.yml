@@ -156,6 +156,28 @@ jobs:
         if: always()
         run: dev/check-unit-test-time.mjs --junit rust/target/nextest/ci/junit.xml --fail-over-limit 0
 
+      # Doc-tests carry no per-test time, so a doc-test that runs dodges the 0.1 s rule: the step fails
+      # when `cargo test --doc` runs any, and names each. Today zero doc-tests run.
+      - name: No doc-tests run
+        working-directory: rust
+        run: |
+          set +e
+          cargo test --doc --locked > /tmp/doc-tests.txt 2>&1
+          rc=$?
+          set -e
+          cat /tmp/doc-tests.txt
+          if [ "$rc" -ne 0 ]; then
+            echo "cargo test --doc failed" >&2
+            exit 1
+          fi
+          ran=$(grep -E '^test .* \.\.\. (ok|FAILED|bench)' /tmp/doc-tests.txt || true)
+          if [ -n "$ran" ]; then
+            echo "doc-tests carry no per-test time, so none may run; these ran:" >&2
+            echo "$ran" >&2
+            exit 1
+          fi
+          echo "0 doc-tests ran"
+
       # A script test that leaves a stand-in behind reparents it to pid 1. Run after a failed test too, which is
       # exactly when a leak appears.
       - name: Check for leaked script-test processes

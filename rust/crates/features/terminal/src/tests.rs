@@ -212,7 +212,9 @@ exit 1
 
   let _env = ScopedEnv::new(&["PATH"]);
   _env.set("PATH", Some(fake_bin.as_os_str()));
-  let error = pty::start_tmux_session("synthetic-session", root.path(), &[], &["/bin/true"]).await.unwrap_err();
+  let error = pty::start_tmux_session("synthetic-session", root.path(), &[], &["/bin/true"], pty::Grid::default())
+    .await
+    .unwrap_err();
 
   assert_eq!(error, "tmux new-session failed for synthetic-session: synthetic tmux stderr line");
 }
@@ -235,8 +237,8 @@ async fn tmux_session_and_pty_attachment_match_terminal_behavior() {
   let mut cleanup = TmuxCleanup::new(binary, socket_dir.clone());
   let session_id = terminal::terminal_session_id().unwrap();
   let session_name = terminal::terminal_tmux_name(&session_id);
-  terminal::ensure_terminal_session().await.unwrap();
-  terminal::ensure_terminal_session().await.unwrap();
+  terminal::ensure_terminal_session(pty::Grid::default()).await.unwrap();
+  terminal::ensure_terminal_session(pty::Grid::default()).await.unwrap();
 
   let (code, sessions) =
     pty::run_tmux(&["list-sessions".into(), "-F".into(), "#{session_name}".into()], true).await.unwrap();
@@ -282,7 +284,8 @@ async fn tmux_session_and_pty_attachment_match_terminal_behavior() {
   });
   let _server = AbortOnDrop(server);
   let stream = TcpStream::connect(address).await.unwrap();
-  let (mut socket, _) = tokio_tungstenite::client_async(format!("ws://{address}/ws"), stream).await.unwrap();
+  let (mut socket, _) =
+    tokio_tungstenite::client_async(format!("ws://{address}/ws?cols=100&rows=30"), stream).await.unwrap();
   send_command(&mut socket, "printf 'terminal-echo-%s\\n' \"$((6*7))\"\n").await;
   let output = receive_until(&mut socket, "terminal-echo-42").await;
   assert!(output.contains("terminal-echo-42"));
@@ -291,11 +294,17 @@ async fn tmux_session_and_pty_attachment_match_terminal_behavior() {
   let output = receive_until(&mut socket, "terminal-status-off-ready").await;
   assert!(output.contains("terminal-status-off-ready"));
 
-  send_frame(&mut socket, json!({"type": "pty_resize", "cols": 100, "rows": 30})).await;
+  // The connection's grid sets the pty's initial width: no pty_resize has been sent yet. The row count also
+  // depends on whether tmux has reclaimed the status line at this point, so the width is the marker.
+  send_command(&mut socket, "stty size | cut -d' ' -f2\n").await;
+  let output = receive_until(&mut socket, "100").await;
+  assert!(output.contains("100"));
+
+  send_frame(&mut socket, json!({"type": "pty_resize", "cols": 120, "rows": 40})).await;
   tokio::time::sleep(Duration::from_millis(300)).await;
   send_command(&mut socket, "stty size\n").await;
-  let output = receive_until(&mut socket, "30 100").await;
-  assert!(output.contains("30 100"));
+  let output = receive_until(&mut socket, "40 120").await;
+  assert!(output.contains("40 120"));
 
   let (code, _) = pty::run_tmux(&["kill-server".into()], false).await.unwrap();
   assert_eq!(code, 0);
@@ -321,8 +330,9 @@ impl Drop for AbortOnDrop {
   }
 }
 
-async fn test_socket(upgrade: WebSocketUpgrade) -> axum::response::Response {
-  upgrade.on_upgrade(serve_attachment)
+async fn test_socket(upgrade: WebSocketUpgrade, uri: axum::http::Uri) -> axum::response::Response {
+  let grid = pty::Grid::from_query(uri.query().unwrap_or_default()).expect("the test query names a valid grid");
+  upgrade.on_upgrade(move |socket| serve_attachment(socket, grid))
 }
 
 async fn send_frame(socket: &mut WebSocketStream<TcpStream>, value: Value) {

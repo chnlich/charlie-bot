@@ -234,6 +234,20 @@ test('makeTerminalFitBridge applies the surface guard before touching the refs',
   assert.deepEqual(sent, [[120, 30]]);
 });
 
+test('makeTerminalFitBridge reports each fit the guard admitted to onFitted', () => {
+  const {context} = loadHelpers();
+  let open = true;
+  let fitted = 0;
+  const term = {cols: 120, rows: 30};
+  const fitAddon = {fit() {}};
+  const bridge = context.makeTerminalFitBridge(() => {}, () => term, () => fitAddon, () => open, () => { fitted += 1; });
+  bridge.fitAndSendResize();
+  assert.equal(fitted, 1);
+  open = false;
+  bridge.fitAndSendResize();
+  assert.equal(fitted, 1);
+});
+
 test('wireTerminalRelayout refits after paint, font load, and container resize', () => {
   const {context} = loadHelpers();
   const frames = [];

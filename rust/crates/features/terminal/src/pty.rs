@@ -16,6 +16,7 @@ use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::pty::{ForkptyResult, Winsize, forkpty};
 use nix::sys::signal::{Signal, kill};
+use nix::sys::termios::Termios;
 use nix::sys::wait::waitpid;
 use nix::unistd::{Pid, close};
 use serde_json::{Value, json};
@@ -33,6 +34,48 @@ const PTY_RESIZE: &str = "pty_resize";
 const TMUX_SOCKET: &str = "charliebot";
 const INITIAL_COLS: i128 = 80;
 const INITIAL_ROWS: i128 = 24;
+
+/// The terminal grid, in cells, that a connection starts its pty at.
+///
+/// The client names it in the websocket query (`cols`, `rows`). The pty and its tmux session are created at
+/// this size, so the shell's first output wraps at the width the client shows; a resize that arrives after
+/// the pty started makes tmux redraw what it already laid out, and a narrow client then sees the first line
+/// from its middle. A connection that names neither value takes the defaults.
+#[derive(Clone, Copy)]
+pub(super) struct Grid {
+  pub cols: i128,
+  pub rows: i128,
+}
+
+impl Default for Grid {
+  fn default() -> Self {
+    Grid { cols: INITIAL_COLS, rows: INITIAL_ROWS }
+  }
+}
+
+impl Grid {
+  /// The grid the websocket query names. An absent value takes the default; a value outside `1..=65535`
+  /// refuses the connection, because the client's own contract is broken.
+  pub(super) fn from_query(query: &str) -> Result<Grid, String> {
+    Ok(Grid {
+      cols: query_cells(query, "cols")?.unwrap_or(INITIAL_COLS),
+      rows: query_cells(query, "rows")?.unwrap_or(INITIAL_ROWS),
+    })
+  }
+}
+
+fn query_cells(query: &str, name: &str) -> Result<Option<i128>, String> {
+  let value =
+    query.split('&').filter_map(|pair| pair.split_once('=')).rfind(|(key, _)| *key == name).map(|(_, value)| value);
+  let Some(value) = value else { return Ok(None) };
+  let cells =
+    value.parse::<u16>().map_err(|_| format!("terminal {name} must be an integer in 1..=65535, got {value:?}"))?;
+  if cells == 0 {
+    return Err(format!("terminal {name} must be positive, got 0"));
+  }
+  Ok(Some(i128::from(cells)))
+}
+
 const HISTORY_LIMIT: &str = "50000";
 const PTY_READ_CHUNK: usize = 4096;
 const PTY_CLIENT_TERM: &str = "xterm-256color";
@@ -147,6 +190,7 @@ pub(super) async fn start_tmux_session(
   cwd: &Path,
   env_args: &[String],
   command_argv: &[&str],
+  grid: Grid,
 ) -> Result<(), String> {
   let mut args = vec![
     "new-session".to_string(),
@@ -154,9 +198,9 @@ pub(super) async fn start_tmux_session(
     "-s".to_string(),
     name.to_string(),
     "-x".to_string(),
-    INITIAL_COLS.to_string(),
+    grid.cols.to_string(),
     "-y".to_string(),
-    INITIAL_ROWS.to_string(),
+    grid.rows.to_string(),
     "-c".to_string(),
     cwd.display().to_string(),
   ];
@@ -188,7 +232,7 @@ pub(super) struct PtyAttachment {
 }
 
 impl PtyAttachment {
-  pub(super) fn spawn(session_id: &str) -> Result<PtyAttachment, String> {
+  pub(super) fn spawn(session_id: &str, grid: Grid) -> Result<PtyAttachment, String> {
     let binary = tmux_binary()?;
     let name = tmux_session_name(session_id);
     let path = CString::new(binary.as_os_str().as_bytes()).map_err(|error| error.to_string())?;
@@ -212,8 +256,14 @@ impl PtyAttachment {
     let argv_ptrs = argv.iter().map(|arg| arg.as_ptr()).chain(std::iter::once(std::ptr::null())).collect::<Vec<_>>();
     let env_ptrs = env.iter().map(|item| item.as_ptr()).chain(std::iter::once(std::ptr::null())).collect::<Vec<_>>();
 
+    let winsize = Winsize {
+      ws_row: u16::try_from(grid.rows).map_err(|_| "terminal rows exceed 65535".to_string())?,
+      ws_col: u16::try_from(grid.cols).map_err(|_| "terminal cols exceed 65535".to_string())?,
+      ws_xpixel: 0,
+      ws_ypixel: 0,
+    };
     let mut attachment = PtyAttachment { session_id: session_id.to_string(), pid: None, fd: -1, closed: false };
-    match unsafe { forkpty(None, None) }.map_err(|error| os_error(&io::Error::from(error), None))? {
+    match unsafe { forkpty(&winsize, None::<&Termios>) }.map_err(|error| os_error(&io::Error::from(error), None))? {
       ForkptyResult::Child => unsafe {
         libc::execve(path.as_ptr(), argv_ptrs.as_ptr(), env_ptrs.as_ptr());
         let error_number = *libc::__errno_location();
@@ -227,7 +277,7 @@ impl PtyAttachment {
         attachment.fd = master.into_raw_fd();
       }
     }
-    attachment.set_winsize(INITIAL_ROWS, INITIAL_COLS).map_err(resize_failure_text)?;
+    attachment.set_winsize(grid.rows, grid.cols).map_err(resize_failure_text)?;
     let fd = unsafe { BorrowedFd::borrow_raw(attachment.fd) };
     let flags = fcntl(fd, FcntlArg::F_GETFL).map_err(|error| os_error(&io::Error::from(error), None))?;
     let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;

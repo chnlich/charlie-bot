@@ -1,8 +1,8 @@
 //! The GitHub draft target: a draft pull request, or a pull-request or issue comment.
 //!
 //! The CLI validates the flags with this module before it registers, and the server validates the same target again
-//! when it writes the event, so both sides share one rule. `Target::parse` is that rule: it reads the object once and
-//! names the kind, and the label and the HTTP request work from the named kind.
+//! when it writes the event. Both sides share one rule: `Target::parse` reads the object once and names the kind, so
+//! the label and the HTTP request work from the named kind.
 
 use serde_json::{Value, json};
 

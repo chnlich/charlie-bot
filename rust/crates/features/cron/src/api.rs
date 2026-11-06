@@ -344,6 +344,7 @@ mod tests {
   use axum::http::{Request, StatusCode, header};
   use charliebot_core::event_types;
   use charliebot_registry::route_claims::RouteClaims;
+  use charliebot_store::metadata::{LAST_RUN_STATUS, LAST_SCHEDULED_RUN, SCHEDULED_TASK};
   use serde_json::{Value, json};
   use tower::ServiceExt;
 
@@ -518,9 +519,9 @@ mod tests {
     let session_id = bound.get("session_id").and_then(serde_yaml::Value::as_str).unwrap();
     let meta = features.store.get_session(session_id).await.unwrap().unwrap();
     assert_eq!(meta.profile, charliebot_store::metadata::TaskProfile::Manager);
-    assert_eq!(meta.extra.get("scheduled_task"), Some(&Value::Null));
-    assert!(meta.extra.get("last_scheduled_run").and_then(Value::as_str).is_some());
-    assert_eq!(meta.extra.get("last_run_status").and_then(Value::as_str), Some("success"));
+    assert_eq!(meta.extra.get(SCHEDULED_TASK), Some(&Value::Null));
+    assert!(meta.extra.get(LAST_SCHEDULED_RUN).and_then(Value::as_str).is_some());
+    assert_eq!(meta.extra.get(LAST_RUN_STATUS).and_then(Value::as_str), Some("success"));
     let events = features.store.load_chat_events_sync(session_id).unwrap();
     assert!(events.iter().any(|event| event["type"].as_str() == Some(charliebot_core::event_types::HANDLER_RESULT)));
     let projection = features.store.get_message_projection(session_id).unwrap();

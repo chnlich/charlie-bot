@@ -41,6 +41,17 @@ pub const SCHEDULE_TASK: &str = "schedule_task";
 /// row fields read these names from here.
 pub const SCHEDULE_FIELDS: [&str; 6] =
   [SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_TIMEZONE, SCHEDULE_PROJECT, SCHEDULE_ALLOW_FAILURE];
+/// The cron slot's field naming the task bound to the session's schedule.
+pub const SCHEDULED_TASK: &str = "scheduled_task";
+/// The cron slot's field holding the fire time of the bound task's last scheduled run.
+pub const LAST_SCHEDULED_RUN: &str = "last_scheduled_run";
+/// The cron slot's field holding the cron expression that produced the last scheduled run.
+pub const LAST_SCHEDULED_CRON: &str = "last_scheduled_cron";
+/// The cron slot's field holding the outcome of the bound task's last run.
+pub const LAST_RUN_STATUS: &str = "last_run_status";
+/// The cron slot's fields, in registration order. The cron feature registers them, and the store reads them when it
+/// rebinds a scheduled binding.
+pub const CRON_SLOT_FIELDS: [&str; 4] = [SCHEDULED_TASK, LAST_SCHEDULED_RUN, LAST_RUN_STATUS, LAST_SCHEDULED_CRON];
 /// The session-metadata field holding the instant the session's native Claude Code conversation started.
 pub const CC_SESSION_STARTED_AT: &str = "cc_session_started_at";
 /// The session-metadata field holding the backend that ran the session's native conversation. The turn's finish

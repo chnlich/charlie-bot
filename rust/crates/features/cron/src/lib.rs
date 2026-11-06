@@ -20,6 +20,9 @@ use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_core::text_repr;
 use charliebot_registry::turn::{EventRenderer, TurnContribution};
 use charliebot_registry::{Registry, RegistryError};
+use charliebot_store::metadata::{
+  CRON_SLOT_FIELDS, LAST_RUN_STATUS, LAST_SCHEDULED_CRON, LAST_SCHEDULED_RUN, SCHEDULED_TASK,
+};
 use serde_json::{Map, Value, json};
 
 struct CronTurnContribution;
@@ -48,10 +51,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
       owner: "cron",
       on: MetadataFile::Session,
       after: Some("backend"),
-      fields: ["scheduled_task", "last_scheduled_run", "last_run_status", "last_scheduled_cron"]
-        .into_iter()
-        .map(|name| SlotField { name, default: Value::Null })
-        .collect(),
+      fields: CRON_SLOT_FIELDS.into_iter().map(|name| SlotField { name, default: Value::Null }).collect(),
     },
     validate_cron_fields,
   )?;
@@ -64,12 +64,12 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 }
 
 fn validate_cron_fields(values: &mut Map<String, Value>) -> Option<String> {
-  for name in ["scheduled_task", "last_scheduled_run", "last_scheduled_cron"] {
+  for name in [SCHEDULED_TASK, LAST_SCHEDULED_RUN, LAST_SCHEDULED_CRON] {
     if values.get(name).is_some_and(|value| !value.is_null() && !value.is_string()) {
       return Some(format!("{name} must be a string or null"));
     }
   }
-  if values.get("last_run_status").is_some_and(|value| {
+  if values.get(LAST_RUN_STATUS).is_some_and(|value| {
     !value.is_null() && !matches!(value.as_str(), Some("running" | "success" | "failed" | "skipped"))
   }) {
     return Some("last_run_status must be a LastRunStatus or null".to_string());

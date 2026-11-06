@@ -639,7 +639,7 @@ mod tests {
 
   use axum::http::Request;
   use charliebot_core::proc_identity;
-  use charliebot_store::metadata::SessionMetadata;
+  use charliebot_store::metadata::{SCHEDULED_TASK, SessionMetadata};
 
   use super::*;
   use crate::test_support;
@@ -864,7 +864,7 @@ mod tests {
     thread.extra.insert("slack_origin".to_string(), json!({"channel": "C0SYNTHETIC"}));
     write_session(&features.store, &thread);
     let mut scheduled = SessionMetadata::new("sequence-owned-scheduled", "Scheduled", TaskProfile::Manager);
-    scheduled.extra.insert("scheduled_task".to_string(), json!("code-health"));
+    scheduled.extra.insert(SCHEDULED_TASK.to_string(), json!("code-health"));
     write_session(&features.store, &scheduled);
 
     features.store.mark_busy(&busy.id, UtcDateTime::now()).unwrap();

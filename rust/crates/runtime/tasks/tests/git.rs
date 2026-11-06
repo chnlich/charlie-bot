@@ -273,6 +273,8 @@ fn worktree_head(wt_path: &Path) -> String {
 #[tokio::test]
 async fn local_equals_origin_uses_origin_tip() {
   let _guard = GIT_TEST_LOCK.lock().await;
+  // The 300 ms hook value times out an add on a loaded host; this test's add must finish.
+  let _write_timeout = charliebot_tasks::git::override_git_write_timeout(Duration::from_secs(10));
   let repo = RepoFixture::create();
   let expected = git_out(&repo.main_checkout, &["rev-parse", "feature"]);
 
@@ -295,6 +297,8 @@ async fn local_equals_origin_uses_origin_tip() {
 #[tokio::test]
 async fn local_behind_origin_starts_from_origin_tip() {
   let _guard = GIT_TEST_LOCK.lock().await;
+  // The 300 ms hook value times out an add on a loaded host; this test's add must finish.
+  let _write_timeout = charliebot_tasks::git::override_git_write_timeout(Duration::from_secs(10));
   let repo = RepoFixture::create();
   let origin_tip = commit(&repo.seed, "advance.txt", "advance\n", "advance origin");
   git(&repo.seed, &["push", "origin", "feature"]);
@@ -349,6 +353,8 @@ async fn merge_base_unexpected_exit_code_raises() {
 #[tokio::test]
 async fn worktree_add_retries_a_transient_config_lock() {
   let _guard = GIT_TEST_LOCK.lock().await;
+  // The 300 ms hook value times out an add on a loaded host; this test's adds must finish.
+  let _write_timeout = charliebot_tasks::git::override_git_write_timeout(Duration::from_secs(10));
   let repo = RepoFixture::create();
   let expected = git_out(&repo.main_checkout, &["rev-parse", "feature"]);
   let fake = FakeGit::new(&FakeGitOptions {
@@ -406,6 +412,8 @@ async fn concurrent_worktree_adds_in_one_repo_never_overlap() {
 #[tokio::test]
 async fn worktree_add_persistent_lock_error_raises_after_three_retries() {
   let _guard = GIT_TEST_LOCK.lock().await;
+  // The 300 ms hook value times out an add on a loaded host; this test's adds must finish.
+  let _write_timeout = charliebot_tasks::git::override_git_write_timeout(Duration::from_secs(10));
   let repo = RepoFixture::create();
   let fake = FakeGit::new(&FakeGitOptions {
     verb: "worktree add",
@@ -429,6 +437,8 @@ async fn worktree_add_persistent_lock_error_raises_after_three_retries() {
 #[tokio::test]
 async fn worktree_add_non_lock_failure_raises_immediately() {
   let _guard = GIT_TEST_LOCK.lock().await;
+  // The 300 ms hook value times out an add on a loaded host; this test's add must finish.
+  let _write_timeout = charliebot_tasks::git::override_git_write_timeout(Duration::from_secs(10));
   let repo = RepoFixture::create();
   let fake = FakeGit::new(&FakeGitOptions {
     verb: "worktree add",
@@ -456,6 +466,8 @@ async fn worktree_add_non_lock_failure_raises_immediately() {
 #[tokio::test]
 async fn baseless_launch_starts_at_remote_default_tip() {
   let _guard = GIT_TEST_LOCK.lock().await;
+  // The 300 ms hook value times out an add on a loaded host; this test's add must finish.
+  let _write_timeout = charliebot_tasks::git::override_git_write_timeout(Duration::from_secs(10));
   let repo = RemoteDefaultRepo::create();
   let origin_tip = commit(&repo.seed, "advance.txt", "advance\n", "advance origin main");
   git(&repo.seed, &["push", "origin", "main"]);

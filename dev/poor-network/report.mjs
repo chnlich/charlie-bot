@@ -159,6 +159,14 @@ export function formatSide(side) {
     });
     lines.push(`background received by endpoint, KB/min (median): ${parts.join(', ')}`);
   }
+  const pollReps = backgroundReps.filter((rep) => rep.statusPoll);
+  if (pollReps.length > 0) {
+    const median = (name) => percentile(pollReps.map((rep) => rep.statusPoll[name]), 0.5);
+    lines.push(
+      `status poll, visible tab (median): ${median('perMinute').toFixed(1)} per min, ` +
+        `${median('answered200').toFixed(1)} answered 200 (body changed), ${median('answered304').toFixed(1)} answered 304`,
+    );
+  }
   const background = side.metrics['background.received'];
   if (background) {
     const gap = background.median - LIVE_READBACK.receivedKbPerMin;

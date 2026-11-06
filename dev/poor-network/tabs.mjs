@@ -40,7 +40,7 @@ export async function waitFor(check, timeoutMs, label) {
 export class Tab {
   name;
   page;
-  // requestId -> {url, startAt, finishAt, bytes, failed}, in the order the browser sent them.
+  // requestId -> {url, startAt, finishAt, bytes, status, failed}, in the order the browser sent them.
   requests = new Map();
   // Every WebSocket frame the page received: {at, bytes, type, text, requestId}.
   frames = [];
@@ -174,6 +174,13 @@ export class Tab {
     });
   }
 
+  // HTTP statuses of every request whose URL matches `pattern` and that finished in [from, to], in send order.
+  statusesOf(pattern, from, to) {
+    return [...this.requests.values()]
+      .filter((request) => pattern.test(request.url) && request.finishAt !== null && request.finishAt >= from && request.finishAt <= to)
+      .map((request) => request.status);
+  }
+
   // Bytes of every request whose URL matches `pattern` and that finished in [from, to].
   bytesOf(pattern, from, to) {
     let bytes = 0;
@@ -191,7 +198,12 @@ export class Tab {
     switch (message.method) {
       case 'Network.requestWillBeSent': {
         const { requestId, request } = message.params;
-        this.requests.set(requestId, { url: request.url, startAt: at, finishAt: null, bytes: 0, failed: null });
+        this.requests.set(requestId, { url: request.url, startAt: at, finishAt: null, bytes: 0, status: null, failed: null });
+        return;
+      }
+      case 'Network.responseReceived': {
+        const request = this.requests.get(message.params.requestId);
+        if (request) request.status = message.params.response.status;
         return;
       }
       case 'Network.loadingFinished': {

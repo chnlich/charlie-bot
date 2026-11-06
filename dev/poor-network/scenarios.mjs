@@ -85,20 +85,23 @@ async function serverProcessingMs(ctx, probes) {
   return times[Math.floor(times.length / 2)];
 }
 
-// The endpoints of the page's background traffic, by URL. The status poll and the full list repeat while the sidebar
-// is open; the bootstrap is the switch's own request.
+// The endpoints of the page's background traffic, by URL. The status poll, the full list and the row refresh repeat
+// while the sidebar is open; the bootstrap is the switch's own request. The row refresh names its rows by `ids`, and the
+// full list names none.
 const ENDPOINTS = Object.freeze({
   status: /\/api\/sessions\/status\?/,
-  fullList: /\/api\/sessions\/(\?|$)/,
+  rows: /\/api\/sessions\/\?[^#]*\bids=/,
+  fullList: /\/api\/sessions\/(\?(?![^#]*\bids=)|$)/,
   bootstrap: /\/api\/sessions\/[^/]+\/bootstrap$/,
 });
 
 // The window's received bytes of each endpoint, summed over the pages and given in KB per minute. The socket is the
 // frames of the pages' websockets. The proxy's own count of the window minus these is `other`.
 function receivedByEndpoint(pages, from, to, minutes) {
-  const sums = { status: 0, fullList: 0, bootstrap: 0, socket: 0 };
+  const sums = { status: 0, rows: 0, fullList: 0, bootstrap: 0, socket: 0 };
   for (const page of pages) {
     sums.status += page.bytesOf(ENDPOINTS.status, from, to);
+    sums.rows += page.bytesOf(ENDPOINTS.rows, from, to);
     sums.fullList += page.bytesOf(ENDPOINTS.fullList, from, to);
     sums.bootstrap += page.bytesOf(ENDPOINTS.bootstrap, from, to);
     sums.socket += page.framesBetween(from, to).reduce((total, frame) => total + frame.bytes, 0);
@@ -139,6 +142,15 @@ export async function backgroundRep(ctx, repetition) {
       const sent = ((afterWindow.sent - beforeWindow.sent) / 1000) / minutes;
       const byEndpoint = receivedByEndpoint([tab, ...hidden], windowStart, windowEnd, minutes);
       byEndpoint.other = received - Object.values(byEndpoint).reduce((total, kb) => total + kb, 0);
+      // The visible tab's status polls in the window: how many, and how many answered 200 (the body changed since the
+      // tab's last poll) rather than 304.
+      const pollStatuses = tab.statusesOf(ENDPOINTS.status, windowStart, windowEnd);
+      const statusPoll = {
+        perMinute: pollStatuses.length / minutes,
+        answered200: pollStatuses.filter((status) => status === 200).length,
+        answered304: pollStatuses.filter((status) => status === 304).length,
+        otherStatuses: pollStatuses.filter((status) => status !== 200 && status !== 304).length,
+      };
 
       // Scenario 2: click to rendered, for a session that this page has not loaded.
       const target = sessions.switchTarget;
@@ -165,6 +177,7 @@ export async function backgroundRep(ctx, repetition) {
       return {
         receivedKbPerMin: received,
         receivedByEndpoint: byEndpoint,
+        statusPoll,
         sentKbPerMin: sent,
         switchMs: shown.at - clickedAt,
         switchCapped: shown.capped,

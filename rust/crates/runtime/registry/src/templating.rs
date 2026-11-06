@@ -260,13 +260,25 @@ impl Templating {
     substitutions: &[(&str, &str)],
   ) -> Result<Response, RenderError> {
     let html = self.render_page_html(features, name, context, request, substitutions)?;
+    Ok(self.page_response(name, html, request))
+  }
+
+  /// The response of a page body the caller already holds, with the headers and the compressed form
+  /// [`Self::render_page`] serves for it.
+  pub fn page_response(&self, name: &str, html: String, request: &Parts) -> Response {
     let deflate = accepts_gzip(request) && html.len() >= MINIMUM_DEFLATE_BYTES;
     // `no-store` sends every back navigation and tab restore to the server, so the page never runs
     // JavaScript from a cached copy that references an older static asset version.
     let mut response =
       if deflate { compressed_html(self.page_gzip(name, html.as_bytes())) } else { responses::html(html) };
     response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    Ok(response)
+    response
+  }
+
+  /// The revision of the template and static trees. A render built at one revision is stale at the next, so a caller
+  /// that keeps a rendered page names the revision it built at.
+  pub fn revision(&self) -> u64 {
+    self.watch.revision()
   }
 
   /// The gzip form of one page body: the bytes kept for this body, or a fresh deflate that is kept for the next

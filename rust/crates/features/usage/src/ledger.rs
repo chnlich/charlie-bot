@@ -239,6 +239,12 @@ impl UsageLedger {
     self.conn.close().map_err(|(_, error)| error.into())
   }
 
+  /// The version of the ledger this connection reads: SQLite's `data_version`, which moves whenever another
+  /// connection commits a capture. This connection only reads, so the value names every write the ledger takes.
+  pub fn data_version(&self) -> anyhow::Result<i64> {
+    Ok(self.conn.query_row("PRAGMA data_version", [], |row| row.get(0))?)
+  }
+
   pub fn captured_sigs(&self, host: &str) -> anyhow::Result<BTreeMap<String, String>> {
     let mut statement = self.conn.prepare("SELECT path, sig FROM captured_files WHERE host = ?")?;
     let rows = statement.query_map([host], |row| Ok((row.get(0)?, row.get(1)?)))?;

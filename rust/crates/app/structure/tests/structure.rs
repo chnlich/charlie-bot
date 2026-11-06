@@ -955,6 +955,26 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::metadata::SCHEDULE_ALLOW_FAILURE`.",
   },
   OwnerRow {
+    name: "scheduled_task",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::SCHEDULED_TASK`.",
+  },
+  OwnerRow {
+    name: "last_scheduled_run",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::LAST_SCHEDULED_RUN`.",
+  },
+  OwnerRow {
+    name: "last_scheduled_cron",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::LAST_SCHEDULED_CRON`.",
+  },
+  OwnerRow {
+    name: "last_run_status",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::LAST_RUN_STATUS`.",
+  },
+  OwnerRow {
     name: "cc_session_started_at",
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::CC_SESSION_STARTED_AT`.",

@@ -11,7 +11,10 @@ use charliebot_registry::sequence::SequenceExecutor;
 use charliebot_registry::wiring::{Phase, Service, ServiceContext};
 use charliebot_store::CompactValue;
 use charliebot_store::control_events::ACTOR_SYSTEM;
-use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskApprover, TaskProfile, TaskSpec, UtcDateTime};
+use charliebot_store::metadata::{
+  LAST_RUN_STATUS, LAST_SCHEDULED_CRON, LAST_SCHEDULED_RUN, SCHEDULED_TASK, SessionMetadata, SessionStatus,
+  TaskApprover, TaskProfile, TaskSpec, UtcDateTime,
+};
 use charliebot_store::run_records::{HostBoot, RunDisplayState, RunKind, RunRecord, SequenceRef};
 use charliebot_store::{CreateTask, TaskCaller};
 use chrono::{Datelike, LocalResult, Offset};
@@ -60,7 +63,7 @@ impl CronScheduler {
     let old_sessions = self.features.store.list_sessions(Some(SessionStatus::Active), None, Some(true))?.rows;
     let mut old_by_task: HashMap<String, Vec<Arc<SessionMetadata>>> = HashMap::new();
     for session in old_sessions {
-      if let Some(name) = session.extra.get("scheduled_task").and_then(Value::as_str) {
+      if let Some(name) = session.extra.get(SCHEDULED_TASK).and_then(Value::as_str) {
         old_by_task.entry(name.to_string()).or_default().push(session);
       }
     }
@@ -151,7 +154,7 @@ impl CronScheduler {
           &node.id,
           old,
           "cron",
-          Some(&["last_scheduled_run", "last_scheduled_cron", "last_run_status"]),
+          Some(&[LAST_SCHEDULED_RUN, LAST_SCHEDULED_CRON, LAST_RUN_STATUS]),
         )
         .await?;
     }
@@ -203,18 +206,18 @@ impl CronScheduler {
     let session = self.fireable_binding(task).await?;
     let timezone = task.timezone.parse::<chrono_tz::Tz>()?;
     let now = now.with_timezone(&timezone);
-    let last_cron = metadata_string(&session, "last_scheduled_cron");
+    let last_cron = metadata_string(&session, LAST_SCHEDULED_CRON);
     if last_cron.as_deref().is_some_and(|previous| previous != task.cron) {
       update_cron_slots(
         &self.features,
         &session.id,
-        json!({"last_scheduled_run": isoformat_text(&now)?, "last_scheduled_cron": task.cron}),
+        json!({LAST_SCHEDULED_RUN: isoformat_text(&now)?, LAST_SCHEDULED_CRON: task.cron}),
       )
       .await?;
       tracing::info!(task = %task.name, old = ?last_cron, new = %task.cron, "scheduler_cron_changed");
       return Ok(());
     }
-    let base = match metadata_string(&session, "last_scheduled_run") {
+    let base = match metadata_string(&session, LAST_SCHEDULED_RUN) {
       Some(value) => match chrono::DateTime::parse_from_rfc3339(&value) {
         Ok(value) => value.with_timezone(&timezone),
         Err(error) => {
@@ -252,12 +255,8 @@ impl CronScheduler {
     skipped_at: String,
     reason: String,
   ) -> anyhow::Result<()> {
-    update_cron_slots(
-      &self.features,
-      session_id,
-      json!({"last_scheduled_run": skipped_at, "last_run_status": "skipped"}),
-    )
-    .await?;
+    update_cron_slots(&self.features, session_id, json!({LAST_SCHEDULED_RUN: skipped_at, LAST_RUN_STATUS: "skipped"}))
+      .await?;
     self
       .features
       .store
@@ -286,7 +285,7 @@ impl CronScheduler {
       let sessions = self.features.store.list_sessions(Some(SessionStatus::Active), None, Some(true))?.rows;
       let mut old_by_task: HashMap<String, Vec<Arc<SessionMetadata>>> = HashMap::new();
       for session in sessions {
-        if let Some(name) = session.extra.get("scheduled_task").and_then(Value::as_str) {
+        if let Some(name) = session.extra.get(SCHEDULED_TASK).and_then(Value::as_str) {
           old_by_task.entry(name.to_string()).or_default().push(session);
         }
       }
@@ -519,17 +518,13 @@ impl CronScheduler {
   ) -> anyhow::Result<()> {
     let timezone = task.timezone.parse::<chrono_tz::Tz>()?;
     let now = isoformat_text(&now.with_timezone(&timezone))?;
-    update_cron_slots(
-      &self.features,
-      &session.id,
-      json!({"last_scheduled_run": now, "last_scheduled_cron": task.cron}),
-    )
-    .await?;
+    update_cron_slots(&self.features, &session.id, json!({LAST_SCHEDULED_RUN: now, LAST_SCHEDULED_CRON: task.cron}))
+      .await?;
     Ok(())
   }
 
   async fn update_status(&self, session_id: &str, status: &str) -> anyhow::Result<()> {
-    update_cron_slots(&self.features, session_id, json!({"last_run_status": status})).await
+    update_cron_slots(&self.features, session_id, json!({LAST_RUN_STATUS: status})).await
   }
 
   /// The worker session of a round this scheduler started for `task`, while that round is still in flight.
@@ -910,7 +905,10 @@ fn parse_cron_value(value: &str, names: &[(&str, u32)]) -> anyhow::Result<u32> {
 mod tests {
   use charliebot_registry::context::FeatureContext;
   use charliebot_store::compact::CompactValue;
-  use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
+  use charliebot_store::metadata::{
+    LAST_RUN_STATUS, LAST_SCHEDULED_CRON, LAST_SCHEDULED_RUN, SCHEDULED_TASK, SessionMetadata, SessionStatus,
+    TaskProfile, UtcDateTime,
+  };
   use charliebot_store::run_records::{HostBoot, RunDisplayState, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
   use charliebot_store::{CreateTask, TaskCaller};
   use charliebot_tasks::git::git_worktree_dir_name;
@@ -980,7 +978,7 @@ mod tests {
     let first: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let first_id = first["session_id"].as_str().unwrap().to_string();
     let first_node = features.store.get_session(&first_id).await.unwrap().unwrap();
-    assert_eq!(first_node.extra.get("scheduled_task"), Some(&Value::Null));
+    assert_eq!(first_node.extra.get(SCHEDULED_TASK), Some(&Value::Null));
     assert_eq!(first_node.group, None);
     assert_eq!(features.store.task_state(&first_id).unwrap(), "open");
     let enabled: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&enabled_path).unwrap()).unwrap();
@@ -1039,7 +1037,7 @@ mod tests {
         &guard,
         session_id,
         "cron",
-        Map::from_iter([("last_scheduled_run".to_string(), json!("2026-01-01T03:00:00+00:00"))]),
+        Map::from_iter([(LAST_SCHEDULED_RUN.to_string(), json!("2026-01-01T03:00:00+00:00"))]),
       )
       .await
       .unwrap();
@@ -1048,8 +1046,8 @@ mod tests {
     scheduler.tick_at(clock).await.unwrap();
 
     let meta = features.store.get_session(session_id).await.unwrap().unwrap();
-    assert_eq!(meta.extra.get("last_run_status").and_then(Value::as_str), Some("success"));
-    assert!(meta.extra.get("last_scheduled_run").and_then(Value::as_str).is_some());
+    assert_eq!(meta.extra.get(LAST_RUN_STATUS).and_then(Value::as_str), Some("success"));
+    assert!(meta.extra.get(LAST_SCHEDULED_RUN).and_then(Value::as_str).is_some());
     let events = features.store.load_chat_events_sync(session_id).unwrap();
     assert!(events.iter().any(|event| event["type"].as_str() == Some(charliebot_core::event_types::HANDLER_RESULT)));
     let projection = features.store.get_message_projection(session_id).unwrap().unwrap();
@@ -1061,8 +1059,8 @@ mod tests {
   async fn tick_archives_the_old_active_cron_session_when_it_binds_a_new_node() {
     let (home, features) = feature_context();
     let mut legacy_extra = Map::new();
-    legacy_extra.insert("scheduled_task".to_string(), json!("legacy-task"));
-    legacy_extra.insert("last_scheduled_run".to_string(), json!("2026-10-01T08:00:00-07:00"));
+    legacy_extra.insert(SCHEDULED_TASK.to_string(), json!("legacy-task"));
+    legacy_extra.insert(LAST_SCHEDULED_RUN.to_string(), json!("2026-10-01T08:00:00-07:00"));
     let legacy = features
       .store
       .create_task(
@@ -1082,7 +1080,7 @@ mod tests {
       .await
       .unwrap();
     assert_eq!(legacy.status, SessionStatus::Active);
-    assert_eq!(legacy.extra.get("scheduled_task").and_then(Value::as_str), Some("legacy-task"));
+    assert_eq!(legacy.extra.get(SCHEDULED_TASK).and_then(Value::as_str), Some("legacy-task"));
     assert!(
       features
         .store
@@ -1106,8 +1104,8 @@ mod tests {
     let archived_legacy = features.store.get_session(&legacy.id).await.unwrap().unwrap();
     assert_eq!(archived_legacy.status, SessionStatus::Archived);
     let bound = features.store.get_session(bound_id).await.unwrap().unwrap();
-    assert_eq!(bound.extra.get("scheduled_task"), Some(&Value::Null));
-    assert_eq!(bound.extra.get("last_scheduled_run"), Some(&json!("2026-10-01T08:00:00-07:00")));
+    assert_eq!(bound.extra.get(SCHEDULED_TASK), Some(&Value::Null));
+    assert_eq!(bound.extra.get(LAST_SCHEDULED_RUN), Some(&json!("2026-10-01T08:00:00-07:00")));
   }
 
   #[tokio::test]
@@ -1119,9 +1117,9 @@ mod tests {
     let repo = crate::test_support::init_repo_with_origin(repo_home.path()).unwrap();
     let task_name = "synthetic-migrated-task";
     let mut legacy_extra = Map::new();
-    legacy_extra.insert("scheduled_task".to_string(), json!(task_name));
-    legacy_extra.insert("last_scheduled_run".to_string(), json!("2026-06-07T03:00:00-07:00"));
-    legacy_extra.insert("last_scheduled_cron".to_string(), json!("0 3 * * *"));
+    legacy_extra.insert(SCHEDULED_TASK.to_string(), json!(task_name));
+    legacy_extra.insert(LAST_SCHEDULED_RUN.to_string(), json!("2026-06-07T03:00:00-07:00"));
+    legacy_extra.insert(LAST_SCHEDULED_CRON.to_string(), json!("0 3 * * *"));
     let legacy = features
       .store
       .create_task(
@@ -1384,8 +1382,8 @@ mod tests {
       let (home, features) = feature_context();
       let task_name = format!("synthetic-replay-{fail_after}");
       let mut extra = Map::new();
-      extra.insert("scheduled_task".to_string(), json!(task_name));
-      extra.insert("last_scheduled_run".to_string(), json!("2026-10-19T09:00:00+00:00"));
+      extra.insert(SCHEDULED_TASK.to_string(), json!(task_name));
+      extra.insert(LAST_SCHEDULED_RUN.to_string(), json!("2026-10-19T09:00:00+00:00"));
       let legacy = features
         .store
         .create_task(
@@ -1433,7 +1431,7 @@ mod tests {
             &node.id,
             &legacy,
             "cron",
-            Some(&["last_scheduled_run", "last_scheduled_cron", "last_run_status"]),
+            Some(&[LAST_SCHEDULED_RUN, LAST_SCHEDULED_CRON, LAST_RUN_STATUS]),
           )
           .await
           .unwrap();
@@ -1449,7 +1447,7 @@ mod tests {
       let replayed: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
       assert_eq!(replayed["session_id"].as_str(), Some(node.id.as_str()), "after {fail_after}");
       let stored_node = features.store.get_session(&node.id).await.unwrap().unwrap();
-      assert_eq!(stored_node.extra.get("last_scheduled_run"), Some(&json!("2026-10-19T09:00:00+00:00")));
+      assert_eq!(stored_node.extra.get(LAST_SCHEDULED_RUN), Some(&json!("2026-10-19T09:00:00+00:00")));
       assert_eq!(features.store.get_session(&legacy.id).await.unwrap().unwrap().status, SessionStatus::Archived);
       let active = features.store.list_sessions(Some(SessionStatus::Active), None, None).unwrap();
       assert_eq!(active.rows.iter().filter(|session| session.name == task_name).count(), 1, "after {fail_after}");
@@ -1462,7 +1460,7 @@ mod tests {
     let task_name = "synthetic-sweep-task";
     let node = crate::test_support::manager(&features, "synthetic-sweep-node").await.unwrap();
     let mut extra = Map::new();
-    extra.insert("scheduled_task".to_string(), json!(task_name));
+    extra.insert(SCHEDULED_TASK.to_string(), json!(task_name));
     let legacy = features
       .store
       .create_task(
@@ -1547,8 +1545,8 @@ mod tests {
         &node.id,
         "cron",
         Map::from_iter([
-          ("last_scheduled_run".to_string(), json!(last_run)),
-          ("last_scheduled_cron".to_string(), json!("0 0 1 1 *")),
+          (LAST_SCHEDULED_RUN.to_string(), json!(last_run)),
+          (LAST_SCHEDULED_CRON.to_string(), json!("0 0 1 1 *")),
         ]),
       )
       .await
@@ -1563,8 +1561,8 @@ mod tests {
     CronScheduler::new(Arc::clone(&features)).tick().await.unwrap();
 
     let fresh = features.store.get_session(&node.id).await.unwrap().unwrap();
-    assert_eq!(fresh.extra.get("last_scheduled_run").and_then(Value::as_str), Some(last_run.as_str()));
-    assert_eq!(fresh.extra.get("last_run_status"), Some(&Value::Null));
+    assert_eq!(fresh.extra.get(LAST_SCHEDULED_RUN).and_then(Value::as_str), Some(last_run.as_str()));
+    assert_eq!(fresh.extra.get(LAST_RUN_STATUS), Some(&Value::Null));
     assert!(
       !features
         .store
@@ -1945,8 +1943,8 @@ mod tests {
     assert!(reason.starts_with("previous round still running"), "{reason}");
     assert_eq!(round_count(&features, &node.id), 1, "the running round was never joined by a second one");
     let meta = features.store.get_session(&node.id).await.unwrap().unwrap();
-    assert_eq!(meta.extra.get("last_run_status").and_then(Value::as_str), Some("skipped"));
-    assert_eq!(meta.extra.get("last_scheduled_run").and_then(Value::as_str), Some("2026-06-01T00:04:00+00:00"));
+    assert_eq!(meta.extra.get(LAST_RUN_STATUS).and_then(Value::as_str), Some("skipped"));
+    assert_eq!(meta.extra.get(LAST_SCHEDULED_RUN).and_then(Value::as_str), Some("2026-06-01T00:04:00+00:00"));
 
     // The running round ends; a mid-minute tick is not on the cron grid, so nothing fires there and the anchor stays
     // where the skip left it. The next fire lands on 00:05, the next occurrence from the anchor.
@@ -1954,11 +1952,11 @@ mod tests {
     scheduler.tick_at(utc_at(2, 30)).await.unwrap();
     assert_eq!(round_count(&features, &node.id), 1, "no fire at the completion moment");
     let meta = features.store.get_session(&node.id).await.unwrap().unwrap();
-    assert_eq!(meta.extra.get("last_scheduled_run").and_then(Value::as_str), Some("2026-06-01T00:04:00+00:00"));
+    assert_eq!(meta.extra.get(LAST_SCHEDULED_RUN).and_then(Value::as_str), Some("2026-06-01T00:04:00+00:00"));
     scheduler.tick_at(utc_at(5, 0)).await.unwrap();
     assert_eq!(round_count(&features, &node.id), 2);
     let meta = features.store.get_session(&node.id).await.unwrap().unwrap();
-    assert_eq!(meta.extra.get("last_scheduled_run").and_then(Value::as_str), Some("2026-06-01T00:05:00+00:00"));
+    assert_eq!(meta.extra.get(LAST_SCHEDULED_RUN).and_then(Value::as_str), Some("2026-06-01T00:05:00+00:00"));
     let (second_round, second_run) = wait_for_running_round(&features, &processes, &node.id).await;
     end_round(&features, &second_round, &second_run).await;
   }
@@ -2105,8 +2103,8 @@ mod tests {
         &node.id,
         "cron",
         Map::from_iter([
-          ("last_scheduled_run".to_string(), json!("2026-06-01T00:00:00+00:00")),
-          ("last_run_status".to_string(), json!("running")),
+          (LAST_SCHEDULED_RUN.to_string(), json!("2026-06-01T00:00:00+00:00")),
+          (LAST_RUN_STATUS.to_string(), json!("running")),
         ]),
       )
       .await

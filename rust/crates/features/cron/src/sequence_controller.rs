@@ -15,7 +15,7 @@ use charliebot_registry::wiring::{Phase, Service, ServiceContext};
 use charliebot_store::StoreResult;
 use charliebot_store::metadata::{
   SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON, SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_TASK, SCHEDULE_TIMEZONE,
-  SessionMetadata, UtcDateTime,
+  SCHEDULED_TASK, SessionMetadata, UtcDateTime,
 };
 use charliebot_store::run_records::{self, RunKind, RunRecord, SequenceRef};
 use chrono::{Datelike, TimeZone, Utc};
@@ -358,7 +358,7 @@ impl SequenceController for CronSequenceController {
   }
 
   fn owns_session(&self, meta: &SessionMetadata) -> bool {
-    meta.extra.get("scheduled_task").is_some_and(|value| !value.is_null())
+    meta.extra.get(SCHEDULED_TASK).is_some_and(|value| !value.is_null())
   }
 
   fn listing_fields(&self, session_ids: &[String], now: UtcDateTime) -> HashMap<String, Map<String, Value>> {

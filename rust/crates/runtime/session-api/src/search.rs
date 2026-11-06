@@ -24,6 +24,19 @@ const SEARCH_FILE_MEMO_LIMIT: usize = 4096;
 const SEARCH_ROOTS_PER_FILE: usize = 8;
 const SEARCH_MATCH_MEMO_LIMIT: usize = 8;
 const SEARCH_CHUNK_SIZE: usize = 1 << 18;
+/// The number of lowercase ASCII letters a trigram position may take.
+const TRIGRAM_LETTERS: u8 = 26;
+/// The code of a byte that is not a lowercase ASCII letter: the index cannot hold its trigrams.
+const TRIGRAM_NONE: u8 = TRIGRAM_LETTERS;
+/// Every three-letter sequence's bit in one file's content index.
+const TRIGRAM_BITS: usize = 26 * 26 * 26;
+/// The bytes one file's content index takes.
+const TRIGRAM_BYTES: usize = TRIGRAM_BITS.div_ceil(8);
+/// The files whose content indexes the memo keeps.
+///
+/// One index is 2,197 bytes and the 7,160-session mock home takes about 16 MB. The cap exceeds that count, so a
+/// fresh query does not evict the indexes its next query would reuse.
+const SEARCH_TRIGRAM_MEMO_LIMIT: usize = 16_384;
 /// The threads one signature batch may split across.
 ///
 /// The batch is one `stat` per watched file and the route waits on its slowest chunk. On the 7,160-session home,
@@ -63,6 +76,40 @@ struct FileSignature {
 struct WatchedFile {
   path: PathBuf,
   below_sessions: Option<CString>,
+}
+
+/// The content index's code per byte: 0 to 25 for `a` to `z`, and [`TRIGRAM_NONE`] for every other byte.
+static TRIGRAM_CODES: LazyLock<[u8; 256]> = LazyLock::new(|| {
+  let mut codes = [TRIGRAM_NONE; 256];
+  for (value, code) in codes.iter_mut().enumerate() {
+    let byte = value as u8;
+    if byte.is_ascii_lowercase() {
+      *code = byte - b'a';
+    }
+  }
+  codes
+});
+
+/// One file's content index: a bit per three-letter sequence its lowercase ASCII text holds.
+///
+/// `signature` is the file's identity when the index was built. A file whose identity moved needs its index rebuilt,
+/// because text that grew or changed can hold trigrams the old index lacks.
+struct TrigramEntry {
+  signature: FileSignature,
+  bits: Box<[u8]>,
+}
+
+/// One file's content index and whether the needle occurs in it, or the read that failed.
+type ContentIndexAnswer = io::Result<(Box<[u8]>, bool)>;
+
+/// What a file's content index says about a query.
+enum TrigramVerdict {
+  /// No index holds this file at its current signature.
+  Missing,
+  /// The index cannot rule the file out, so the file is scanned.
+  Possible,
+  /// A trigram of the needle is absent from the file, so the needle is absent from the file too.
+  Absent,
 }
 
 /// One file's needle roots, newest needles kept: the same bounded per-needle list the per-file memo holds.
@@ -125,6 +172,7 @@ pub(crate) struct SearchAnswer {
 
 struct SearchMemos {
   files: LruCache<PathBuf, SearchFileRoots>,
+  trigrams: LruCache<PathBuf, TrigramEntry>,
   matches: LruCache<String, Arc<SearchMatch>>,
   read_failures: HashSet<(String, String)>,
   #[cfg(test)]
@@ -134,9 +182,12 @@ struct SearchMemos {
 impl Default for SearchMemos {
   fn default() -> Self {
     let files = LruCache::new(NonZeroUsize::new(SEARCH_FILE_MEMO_LIMIT).expect("the file memo limit is nonzero"));
+    let trigrams =
+      LruCache::new(NonZeroUsize::new(SEARCH_TRIGRAM_MEMO_LIMIT).expect("the trigram memo limit is nonzero"));
     let matches = LruCache::new(NonZeroUsize::new(SEARCH_MATCH_MEMO_LIMIT).expect("the match memo limit is nonzero"));
     Self {
       files,
+      trigrams,
       matches,
       read_failures: HashSet::new(),
       #[cfg(test)]
@@ -166,6 +217,20 @@ impl SearchMemos {
     };
     let roots = if hit { &mut entry.hits } else { &mut entry.misses };
     roots.put(needle.to_string(), signature);
+  }
+
+  /// What this file's content index says about a needle, given the needle's trigrams.
+  fn trigram_verdict(&mut self, path: &Path, signature: FileSignature, trigrams: &[usize]) -> TrigramVerdict {
+    let Some(entry) = self.trigrams.get(path) else { return TrigramVerdict::Missing };
+    if entry.signature != signature {
+      return TrigramVerdict::Missing;
+    }
+    let present = trigrams.iter().all(|index| entry.bits[index >> 3] & (1u8 << (index & 7)) != 0);
+    if present { TrigramVerdict::Possible } else { TrigramVerdict::Absent }
+  }
+
+  fn remember_trigrams(&mut self, path: &Path, signature: FileSignature, bits: Box<[u8]>) {
+    self.trigrams.put(path.to_path_buf(), TrigramEntry { signature, bits });
   }
 
   fn cached_match(&mut self, query: &str) -> Option<Arc<SearchMatch>> {
@@ -236,11 +301,28 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
   // The per-file verdicts are read here, on the request's thread, and the files that need a scan are collected
   // so one batch can read them across threads. A candidate's place in `content_hits` stays its place in the
   // corpus, because the result's order breaks ties on insertion order.
+  let trigrams = needle_trigrams(&needle);
   let mut content_hits = vec![false; content_metas.len()];
   let mut scans: Vec<(usize, u64)> = Vec::new();
+  let mut unindexed: Vec<usize> = Vec::new();
   for (index, (_, signature)) in content_metas.iter().zip(&signatures).enumerate() {
     let path = &candidate_paths[index].path;
     let Some(signature) = signature else { continue };
+    // The content index settles most fresh queries before the per-file roots are read, and reading those roots
+    // copies every needle they hold.
+    let needs_index = if trigrams.is_empty() {
+      false
+    } else {
+      match memos
+        .lock()
+        .expect("session search memo mutex is not poisoned")
+        .trigram_verdict(path, *signature, &trigrams)
+      {
+        TrigramVerdict::Absent => continue,
+        TrigramVerdict::Possible => false,
+        TrigramVerdict::Missing => true,
+      }
+    };
     let (miss_roots, hit_roots) = memos.lock().expect("session search memo mutex is not poisoned").roots(path);
     if hit_root_covers(&hit_roots, *signature, &needle) {
       content_hits[index] = true;
@@ -249,11 +331,40 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
     let Some(start) = absence_rescan_start(&miss_roots, *signature, &needle) else {
       continue;
     };
+    if needs_index {
+      unindexed.push(index);
+    }
     #[cfg(test)]
     {
       memos.lock().expect("session search memo mutex is not poisoned").scan_calls += 1;
     }
     scans.push((index, start));
+  }
+  // A file with no fresh content index gets one, and the same pass searches it, so the query reads it once. A file
+  // whose index rules the needle out leaves the scan batch here, while a file the index cannot rule out is searched
+  // by the pass itself and leaves it too.
+  if !unindexed.is_empty() {
+    let answers = index_and_search_files(&candidate_paths, &unindexed, &signatures, &needle);
+    let mut indexed = HashSet::new();
+    for (index, answer) in answers {
+      let signature = signatures[index].expect("an indexed candidate holds its signature");
+      match answer {
+        Ok((bits, found)) => {
+          let path = &candidate_paths[index].path;
+          memos.lock().expect("session search memo mutex is not poisoned").remember_trigrams(path, signature, bits);
+          memos
+            .lock()
+            .expect("session search memo mutex is not poisoned")
+            .remember_root(path, &needle, signature, found);
+          content_hits[index] = found;
+          indexed.insert(index);
+        }
+        Err(error) => log_search_read_failed_once(memos, &content_metas[index].id, &error),
+      }
+    }
+    if !indexed.is_empty() {
+      scans.retain(|(index, _)| !indexed.contains(index));
+    }
   }
   let mut scan_failures = 0;
   for ((index, _), answer) in scans.iter().zip(scan_contents(&candidate_paths, &scans, &needle)) {
@@ -489,6 +600,120 @@ fn absence_rescan_start(roots: &[(String, FileSignature)], signature: FileSignat
     .map(|(_, root_signature)| root_signature.size)
     .max();
   Some(best_size.map_or(0, |size| size.saturating_sub((4 * needle.chars().count() + 8) as u64)))
+}
+
+/// The trigrams a lowercase ASCII needle holds; a window with any other byte contributes none.
+///
+/// Every window of the needle's own bytes is a window of any text that holds the needle, so an index that lacks one
+/// of these trigrams proves the needle absent. A window the index cannot encode proves nothing and is dropped.
+fn needle_trigrams(needle: &str) -> Vec<usize> {
+  if !needle.is_ascii() {
+    return Vec::new();
+  }
+  let codes = &*TRIGRAM_CODES;
+  let bytes = needle.as_bytes();
+  bytes
+    .windows(3)
+    .filter_map(|window| {
+      trigram_number(codes[window[0] as usize], codes[window[1] as usize], codes[window[2] as usize])
+    })
+    .collect()
+}
+
+/// The bit position of three letter codes, or None when one code is not a lowercase letter.
+///
+/// Each code is checked: a [`TRIGRAM_NONE`] in the second or third position would still sum below
+/// [`TRIGRAM_BITS`] and alias the bit of a letter sequence the text does not hold.
+fn trigram_number(first: u8, second: u8, third: u8) -> Option<usize> {
+  if first >= TRIGRAM_NONE || second >= TRIGRAM_NONE || third >= TRIGRAM_NONE {
+    return None;
+  }
+  Some(first as usize * 676 + second as usize * 26 + third as usize)
+}
+
+/// One file's content index and whether the needle occurs in it, from one pass over its bytes.
+///
+/// The needle search matches the scan's rule: both read the text with ASCII case folding, so a needle the index
+/// cleared the file for can still match here. `window` carries the last bytes of each chunk, which keeps a trigram
+/// and a needle that span the boundary.
+fn index_and_search_file(path: &Path, needle: &str) -> ContentIndexAnswer {
+  let mut file = File::open(path)?;
+  let mut bits = vec![0u8; TRIGRAM_BYTES];
+  let finder = memchr::memmem::Finder::new(needle.as_bytes());
+  let codes = &*TRIGRAM_CODES;
+  let overlap = needle.len().saturating_sub(1).max(2);
+  let mut carry: Vec<u8> = Vec::with_capacity(overlap);
+  let mut chunk = vec![0u8; SEARCH_CHUNK_SIZE];
+  let mut window: Vec<u8> = Vec::with_capacity(overlap + SEARCH_CHUNK_SIZE);
+  let mut matched = false;
+  loop {
+    let count = file.read(&mut chunk)?;
+    if count == 0 {
+      return Ok((bits.into_boxed_slice(), matched));
+    }
+    window.clear();
+    window.extend_from_slice(&carry);
+    window.extend_from_slice(&chunk[..count]);
+    window.make_ascii_lowercase();
+    for position in 0..window.len().saturating_sub(2) {
+      let index = trigram_number(
+        codes[window[position] as usize],
+        codes[window[position + 1] as usize],
+        codes[window[position + 2] as usize],
+      );
+      if let Some(index) = index {
+        bits[index >> 3] |= 1u8 << (index & 7);
+      }
+    }
+    if !matched && finder.find(&window).is_some() {
+      matched = true;
+    }
+    let keep = window.len().min(overlap);
+    carry.clear();
+    carry.extend_from_slice(&window[window.len() - keep..]);
+  }
+}
+
+/// A content index and a needle search for each named candidate, each answer carrying its candidate's index.
+///
+/// The batch splits by file size and not by file count, because the candidates range over four orders of magnitude
+/// and the route waits on its slowest worker. The split is why the answers come in no fixed order; the caller pairs
+/// each answer with the index it carries.
+fn index_and_search_files(
+  paths: &[WatchedFile],
+  jobs: &[usize],
+  signatures: &[Option<FileSignature>],
+  needle: &str,
+) -> Vec<(usize, ContentIndexAnswer)> {
+  let workers = std::thread::available_parallelism().map_or(1, |count| count.get()).min(SCAN_BATCH_WORKERS);
+  if jobs.len() < SCAN_BATCH_MIN_JOBS || workers < 2 {
+    return jobs.iter().map(|index| (*index, index_and_search_file(&paths[*index].path, needle))).collect();
+  }
+  let mut order = jobs.to_vec();
+  order.sort_by_key(|index| Reverse(signatures[*index].map_or(0, |signature| signature.size)));
+  let mut bins: Vec<Vec<usize>> = (0..workers).map(|_| Vec::new()).collect();
+  let mut loads = vec![0u64; workers];
+  for index in order {
+    let lightest = (0..workers).min_by_key(|worker| loads[*worker]).expect("a worker exists");
+    loads[lightest] += signatures[index].map_or(0, |signature| signature.size);
+    bins[lightest].push(index);
+  }
+  let mut answers = Vec::with_capacity(jobs.len());
+  std::thread::scope(|scope| {
+    let handles: Vec<_> = bins
+      .into_iter()
+      .filter(|bin| !bin.is_empty())
+      .map(|bin| {
+        scope.spawn(move || {
+          bin.into_iter().map(|index| (index, index_and_search_file(&paths[index].path, needle))).collect::<Vec<_>>()
+        })
+      })
+      .collect();
+    for handle in handles {
+      answers.extend(handle.join().expect("an index worker finishes without panic"));
+    }
+  });
+  answers
 }
 
 fn scan_content(path: &Path, needle: &str, start: u64) -> io::Result<bool> {
@@ -874,6 +1099,81 @@ mod tests {
     assert!(source.body(8).is_none(), "a moved derived-state generation drops the body");
     assert_eq!(super::search_sessions_with_memos(&store, "eed", &memos).unwrap().rows.len(), 1);
     assert_eq!(memos.lock().unwrap().scan_calls, 2, "the changed file rescans once and its hit covers substrings");
+  }
+
+  /// A fresh query answers from the content index of a file whose identity it already holds: a trigram the index
+  /// lacks proves the needle absent, while a needle the index cannot rule out still reaches the file.
+  #[test]
+  fn a_fresh_query_skips_a_file_whose_content_index_lacks_one_of_its_trigrams() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_session(&store, "content", "content session", SessionStatus::Active, "2026-08-01T12:00:00Z");
+    let path = store.chat_events_path("content");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "the quick brown fox\n").unwrap();
+    let memos = Mutex::new(super::SearchMemos::default());
+
+    assert!(super::search_sessions_with_memos(&store, "walrus", &memos).unwrap().rows.is_empty());
+    assert_eq!(memos.lock().unwrap().scan_calls, 1, "the first query reads the file and keeps its index");
+
+    // "wal" is absent from the file, so this fresh query answers without reading it.
+    assert!(super::search_sessions_with_memos(&store, "walq1rus", &memos).unwrap().rows.is_empty());
+    assert_eq!(memos.lock().unwrap().scan_calls, 1, "the content index ruled the needle out");
+
+    // Every trigram of this needle occurs in the file, and the query's case does not matter.
+    let rows = super::search_sessions_with_memos(&store, "BROWN", &memos).unwrap().rows;
+    assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
+    assert_eq!(memos.lock().unwrap().scan_calls, 2, "the index lets through a needle the file holds");
+  }
+
+  /// A file that gains matching text must rebuild its index: an index read at the old signature would hide the match.
+  #[test]
+  fn a_changed_file_rebuilds_its_content_index() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_session(&store, "content", "content session", SessionStatus::Active, "2026-08-01T12:00:00Z");
+    let path = store.chat_events_path("content");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "no match here\n").unwrap();
+    let memos = Mutex::new(super::SearchMemos::default());
+
+    assert!(super::search_sessions_with_memos(&store, "walrus", &memos).unwrap().rows.is_empty());
+    fs::write(&path, "no match here; walrus appears\n").unwrap();
+    let rows = super::search_sessions_with_memos(&store, "walrus", &memos).unwrap().rows;
+    assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
+  }
+
+  /// A non-letter in any position must name no trigram: the combined sum alone would alias another sequence's bit.
+  #[test]
+  fn a_window_with_a_non_letter_names_no_trigram() {
+    let codes = &*super::TRIGRAM_CODES;
+    let code = |byte: u8| codes[byte as usize];
+    assert_eq!(super::trigram_number(code(b'a'), code(b'{'), code(b'a')), None);
+    assert_eq!(super::trigram_number(code(b'a'), code(b'b'), code(b'{')), None);
+    assert_eq!(super::trigram_number(code(b'{'), code(b'b'), code(b'c')), None);
+    assert_eq!(super::trigram_number(code(b'a'), code(b'b'), code(b'c')), Some(28));
+  }
+
+  #[test]
+  fn the_content_index_holds_trigrams_across_chunk_boundaries() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("chat.jsonl");
+    let mut body = vec![b'x'; super::SEARCH_CHUNK_SIZE - 1];
+    body.extend_from_slice(b"BoundaryNeedle");
+    fs::write(&path, &body).unwrap();
+
+    let (bits, found) = super::index_and_search_file(&path, "boundaryneedle").unwrap();
+    assert!(found, "the needle search reads the text with ASCII case folding");
+    for trigram in super::needle_trigrams("boundaryneedle") {
+      assert_ne!(bits[trigram >> 3] & (1u8 << (trigram & 7)), 0, "trigram {trigram} is indexed");
+    }
+
+    let (bits, found) = super::index_and_search_file(&path, "walq1rus").unwrap();
+    assert!(!found);
+    assert!(
+      super::needle_trigrams("walq1rus").iter().any(|trigram| bits[trigram >> 3] & (1u8 << (trigram & 7)) == 0),
+      "the index lacks a trigram of the absent needle"
+    );
   }
 
   /// A full result re-checks only the candidates at or above its last row: a new match in an older session cannot

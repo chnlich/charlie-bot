@@ -75,3 +75,11 @@ rust = "package(charliebot-opencode)"
 [[entry]]
 paths = ["web/**"]
 node = ["web/tests/*.integration.test.*"]
+
+[[entry]]
+paths = ["dev/poor-network/**"]
+node = ["dev/poor-network/*.integration.test.*"]
+
+[[entry]]
+paths = [".gitignore", "dev/check-unit-test-time.mjs"]
+none = true

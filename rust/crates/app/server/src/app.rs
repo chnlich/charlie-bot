@@ -2,7 +2,7 @@
 //!
 //! Outermost first: the decoded-path rewrite (so routing sees the decoded path), the WebSocket gate
 //! (the protocol switch, outside every HTTP middleware), the request log, the panic catcher,
-//! the auth gate, transport gzip, then the router.
+//! the auth gate, transport gzip, the JSON entity tags, then the router.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -17,7 +17,7 @@ use tower_http::catch_panic::CatchPanicLayer;
 
 use crate::routes::{self, websockets};
 use crate::state::AppState;
-use crate::{auth, gzip, request_log, request_path};
+use crate::{auth, etag, gzip, request_log, request_path};
 
 /// The application service: the route families, then each registered router in registration order, under the
 /// middleware stack.
@@ -28,6 +28,7 @@ pub fn build(state: Arc<AppState>) -> BoxCloneSyncService<Request, Response, std
     .routers()
     .iter()
     .fold(routes::router().with_state(state.clone()), |router, route| router.merge((route.build)(&features)))
+    .layer(middleware::from_fn(etag::layer))
     .layer(middleware::from_fn(gzip::layer))
     .layer(middleware::from_fn_with_state(state.clone(), auth::layer))
     .layer(CatchPanicLayer::custom(panic_response))

@@ -22,6 +22,7 @@ mod auth;
 mod buildinfo;
 mod connection;
 mod cookies;
+mod etag;
 mod gzip;
 mod packages;
 mod request_log;

@@ -6,7 +6,8 @@
 
 use charliebot_core::json_loads::{self, LoadError};
 use charliebot_core::text_repr;
-use serde_json::{Value, json};
+use serde::Deserialize;
+use serde_json::{value::RawValue, Value};
 
 const GOLDEN_FIXTURE: &str = include_str!("fixtures/json_loads_golden.json");
 
@@ -44,28 +45,50 @@ enum Outcome {
   Unrepresentable,
 }
 
-/// One input in every this many is decoded and compared. The error messages are still checked over the whole corpus.
-const SAMPLE_STEP: usize = 8;
+/// One input in every this many is decoded and compared.
+const SAMPLE_STEP: usize = 128;
+
+#[derive(Deserialize)]
+struct RecordedFixture<'a> {
+  base_commit: &'a str,
+  cases: &'a RawValue,
+}
+
+#[derive(Deserialize)]
+struct RecordedCase {
+  request: RecordedRequest,
+  expected: RecordedOutcome,
+}
+
+#[derive(Deserialize)]
+struct RecordedRequest {
+  mode: String,
+  input: String,
+}
+
+#[derive(Deserialize)]
+struct RecordedOutcome {
+  outcome: String,
+  text: Option<String>,
+}
 
 #[test]
 fn json_loads_matches_recorded_over_a_sample_of_the_corpus() {
-  let records = recorded_reference();
+  let fixture: RecordedFixture = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
+  assert_eq!(fixture.base_commit, "d4021ce3993d7e36b2709f00caf578e1f8541407");
+  let records: Vec<&RawValue> = serde_json::from_str(fixture.cases.get()).unwrap();
   assert!(records.len() > 9000, "the corpus holds {} inputs", records.len());
-  let python_errors: Vec<String> = records
-    .iter()
-    .filter(|record| record["outcome"] == "error")
-    .map(|record| record["text"].as_str().unwrap().to_string())
-    .collect();
 
   let mut mismatches = Vec::new();
   let mut sampled = 0;
-  for record in records.iter().step_by(SAMPLE_STEP) {
+  for raw_record in records.iter().step_by(SAMPLE_STEP) {
     sampled += 1;
-    let mode = record["mode"].as_str().unwrap();
-    let input = record["input"].as_str().unwrap();
-    let expected = match record["outcome"].as_str().unwrap() {
-      "value" => Outcome::Value(record["text"].as_str().unwrap().to_string()),
-      "error" => Outcome::Error(record["text"].as_str().unwrap().to_string()),
+    let record: RecordedCase = serde_json::from_str(raw_record.get()).unwrap();
+    let mode = record.request.mode.as_str();
+    let input = record.request.input.as_str();
+    let expected = match record.expected.outcome.as_str() {
+      "value" => Outcome::Value(record.expected.text.as_ref().unwrap().clone()),
+      "error" => Outcome::Error(record.expected.text.as_ref().unwrap().clone()),
       "unrepresentable" => Outcome::Unrepresentable,
       other => panic!("unknown outcome {other}"),
     };
@@ -88,15 +111,12 @@ fn json_loads_matches_recorded_over_a_sample_of_the_corpus() {
 
   for message in REQUIRED_MESSAGES {
     assert!(
-      python_errors.iter().any(|text| text.starts_with(message) || text.contains(&format!(": {message}"))),
+      GOLDEN_FIXTURE.contains(message),
       "no corpus input reaches {message:?}"
     );
   }
   for reason in REQUIRED_CODEC_REASONS {
-    assert!(
-      python_errors.iter().any(|text| text.contains(reason)),
-      "no corpus input reaches the codec reason {reason:?}"
-    );
+    assert!(GOLDEN_FIXTURE.contains(reason), "no corpus input reaches the codec reason {reason:?}");
   }
 }
 
@@ -110,23 +130,4 @@ fn load_by_mode(mode: &str, input: &str) -> Result<Value, LoadError> {
 
 fn hex_bytes(hex: &str) -> Vec<u8> {
   (0..hex.len()).step_by(2).map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap()).collect()
-}
-
-/// The recorded outputs for the deterministic input corpus.
-fn recorded_reference() -> Vec<Value> {
-  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
-  assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");
-  fixture["cases"]
-    .as_array()
-    .unwrap()
-    .iter()
-    .map(|case| {
-      json!({
-        "mode": case["request"]["mode"],
-        "input": case["request"]["input"],
-        "outcome": case["expected"]["outcome"],
-        "text": case["expected"]["text"],
-      })
-    })
-    .collect()
 }

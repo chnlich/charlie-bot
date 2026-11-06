@@ -406,8 +406,6 @@ pub struct Store {
   #[cfg(test)]
   pub(crate) event_read_hook: StdMutex<Option<Arc<dyn Fn() + Send + Sync>>>,
   #[cfg(test)]
-  pub(crate) event_append_hook: StdMutex<Option<Arc<dyn Fn() + Send + Sync>>>,
-  #[cfg(test)]
   pub(crate) identity_hook: StdMutex<Option<IdentityHook>>,
   #[cfg(test)]
   pub(crate) tree_rows_hook: StdMutex<Option<Arc<dyn Fn() + Send + Sync>>>,
@@ -506,8 +504,6 @@ impl Store {
       metadata_stat_hook: StdMutex::new(None),
       #[cfg(test)]
       event_read_hook: StdMutex::new(None),
-      #[cfg(test)]
-      event_append_hook: StdMutex::new(None),
       #[cfg(test)]
       identity_hook: StdMutex::new(None),
       #[cfg(test)]

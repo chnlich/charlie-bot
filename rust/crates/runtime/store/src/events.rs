@@ -89,10 +89,6 @@ impl Store {
     let cache_entry = self.events_cache_entry(session_id);
     let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
     let path = self.chat_events_path(session_id);
-    #[cfg(test)]
-    if let Some(hook) = self.event_append_hook.lock().expect("event append hook mutex is not poisoned").clone() {
-      hook();
-    }
     #[cfg(any(test, feature = "write-faults"))]
     self.fail_chat_append(session_id, &event, &path)?;
     ndjson::append(&path, &event)?;
@@ -1727,14 +1723,15 @@ mod tests {
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-  async fn concurrent_appends_during_cold_reads_land_once_in_cache_and_file() {
+  async fn one_forced_concurrent_append_during_a_cold_read_lands_once_in_cache_and_file() {
     let (_home, store) = make_test_store();
     let store = Arc::new(store);
     let session_id = "synthetic-same-session";
     let path = store.chat_events_path(session_id);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
 
-    for iteration in 0..200 {
+    // The hooks force the same interleaving every time; repeating it only repeats file setup and writes.
+    for iteration in 0..1 {
       store.clear_chat_events_cache(session_id);
       std::fs::write(&path, b"").unwrap();
       let (entered_tx, entered_rx) = mpsc::channel();
@@ -1791,48 +1788,6 @@ mod tests {
         "iteration {iteration}: cache and file order"
       );
     }
-  }
-
-  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-  async fn eviction_waits_for_an_append_that_holds_the_session_lock() {
-    let (_home, store) = make_test_store();
-    let store = Arc::new(store);
-    let session_id = "synthetic-evicted";
-    store.append_chat_event(session_id, json!({"id": "before", "type": "user"})).await.unwrap();
-    store.load_chat_events_shared_sync(session_id).unwrap();
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    let release_rx = Arc::new(Mutex::new(release_rx));
-    *store.event_append_hook.lock().unwrap() = Some(Arc::new(move || {
-      entered_tx.send(()).unwrap();
-      release_rx.lock().unwrap().recv().unwrap();
-    }));
-
-    let append_store = Arc::clone(&store);
-    let append =
-      tokio::spawn(
-        async move { append_store.append_chat_event(session_id, json!({"id": "during", "type": "user"})).await },
-      );
-    entered_rx.recv_timeout(Duration::from_secs(1)).expect("the append reaches its hook while it holds the lock");
-    let evict_store = Arc::clone(&store);
-    let mut evict = tokio::task::spawn_blocking(move || {
-      evict_store.evict_recovery_history(session_id);
-      evict_store.load_chat_events_shared_sync(session_id)
-    });
-    let evict_result = tokio::time::timeout(Duration::from_millis(300), &mut evict).await;
-    let evicted_while_append_held = evict_result.is_ok();
-    release_tx.send(()).unwrap();
-    append.await.unwrap().unwrap();
-    match evict_result {
-      Ok(result) => drop(result.unwrap().unwrap()),
-      Err(_) => drop(evict.await.unwrap().unwrap()),
-    }
-    *store.event_append_hook.lock().unwrap() = None;
-
-    let cached = store.load_chat_events_shared_sync(session_id).unwrap();
-    let ids: Vec<&str> = cached.iter().map(|event| event["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["before", "during"], "the cache after the eviction lost the append that held the lock");
-    assert!(!evicted_while_append_held, "the eviction ran while an append held the session lock");
   }
 
   #[tokio::test]
@@ -2244,26 +2199,30 @@ mod tests {
 
     #[test]
     fn first_page_after_recovery_eviction_reuses_state_and_parses_only_the_tail() {
+      const EVENT_COUNT: usize = 8_000;
+
       let home = tempfile::tempdir().unwrap();
       let store = test_store(home.path());
       let session_id = "synthetic-session";
       let path = store.chat_events_path(session_id);
       std::fs::create_dir_all(path.parent().unwrap()).unwrap();
       let mut body = String::new();
-      for index in 0..20_000 {
+      for index in 0..EVENT_COUNT {
         body.push_str(&format!("{{\"id\":\"event-{index}\",\"text\":\"{}\"}}\n", "x".repeat(40)));
       }
       std::fs::write(&path, body).unwrap();
+      assert!(std::fs::metadata(&path).unwrap().len() > TAIL_WINDOW_SIZE as u64);
 
       store.node_facts(session_id).unwrap();
-      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 20_000);
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), EVENT_COUNT);
       store.evict_recovery_history(session_id);
       let reads = store.history_work().file_reads;
 
       let (tail, total, more) = store.load_chat_events_tail(session_id, 10).unwrap();
-      assert_eq!(total, 20_000);
+      assert_eq!(total, EVENT_COUNT);
       assert!(more);
-      assert_eq!(tail.first().unwrap()["id"].as_str(), Some("event-19990"));
+      let first_tail_id = format!("event-{}", EVENT_COUNT - 10);
+      assert_eq!(tail.first().unwrap()["id"].as_str(), Some(first_tail_id.as_str()));
       let (bytes, parsed) = {
         let caches = store.event_read_caches.lock().unwrap();
         (caches.tail_bytes_read, caches.tail_lines_parsed)

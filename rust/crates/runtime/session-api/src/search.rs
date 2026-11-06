@@ -221,7 +221,7 @@ impl SearchMemos {
 
   /// What this file's content index says about a needle, given the needle's trigrams.
   fn trigram_verdict(&mut self, path: &Path, signature: FileSignature, trigrams: &[usize]) -> TrigramVerdict {
-    let Some(entry) = self.trigrams.peek(path) else { return TrigramVerdict::Missing };
+    let Some(entry) = self.trigrams.get(path) else { return TrigramVerdict::Missing };
     if entry.signature != signature {
       return TrigramVerdict::Missing;
     }
@@ -622,10 +622,13 @@ fn needle_trigrams(needle: &str) -> Vec<usize> {
 
 /// The bit position of three letter codes, or None when one code is not a lowercase letter.
 ///
-/// [`TRIGRAM_NONE`] is one past the last letter, so a sum that reaches [`TRIGRAM_BITS`] names no sequence.
+/// Each code is checked: a [`TRIGRAM_NONE`] in the second or third position would still sum below
+/// [`TRIGRAM_BITS`] and alias the bit of a letter sequence the text does not hold.
 fn trigram_number(first: u8, second: u8, third: u8) -> Option<usize> {
-  let index = first as usize * 676 + second as usize * 26 + third as usize;
-  (index < TRIGRAM_BITS).then_some(index)
+  if first >= TRIGRAM_NONE || second >= TRIGRAM_NONE || third >= TRIGRAM_NONE {
+    return None;
+  }
+  Some(first as usize * 676 + second as usize * 26 + third as usize)
 }
 
 /// One file's content index and whether the needle occurs in it, from one pass over its bytes.
@@ -671,10 +674,11 @@ fn index_and_search_file(path: &Path, needle: &str) -> ContentIndexAnswer {
   }
 }
 
-/// A content index and a needle search for each named candidate, in argument order.
+/// A content index and a needle search for each named candidate, each answer carrying its candidate's index.
 ///
 /// The batch splits by file size and not by file count, because the candidates range over four orders of magnitude
-/// and the route waits on its slowest worker.
+/// and the route waits on its slowest worker. The split is why the answers come in no fixed order; the caller pairs
+/// each answer with the index it carries.
 fn index_and_search_files(
   paths: &[WatchedFile],
   jobs: &[usize],
@@ -1137,6 +1141,17 @@ mod tests {
     fs::write(&path, "no match here; walrus appears\n").unwrap();
     let rows = super::search_sessions_with_memos(&store, "walrus", &memos).unwrap().rows;
     assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
+  }
+
+  /// A non-letter in any position must name no trigram: the combined sum alone would alias another sequence's bit.
+  #[test]
+  fn a_window_with_a_non_letter_names_no_trigram() {
+    let codes = &*super::TRIGRAM_CODES;
+    let code = |byte: u8| codes[byte as usize];
+    assert_eq!(super::trigram_number(code(b'a'), code(b'{'), code(b'a')), None);
+    assert_eq!(super::trigram_number(code(b'a'), code(b'b'), code(b'{')), None);
+    assert_eq!(super::trigram_number(code(b'{'), code(b'b'), code(b'c')), None);
+    assert_eq!(super::trigram_number(code(b'a'), code(b'b'), code(b'c')), Some(28));
   }
 
   #[test]

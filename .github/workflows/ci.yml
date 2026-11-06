@@ -63,14 +63,10 @@ jobs:
             --test-reporter=spec --test-reporter-destination=stdout \
             $suites ../dev/integration-selection/select.test.mjs ../dev/week-review/test/review.test.mjs
 
-      # The same 0.1 s check as rust-test. It reruns each over-limit test alone on workflow_dispatch only, and
-      # stays report-only until stage 5 drops --fail-over-limit 0.
+      # The same 0.1 s check as rust-test: rerun each over-limit test alone and fail on one still over.
       - name: Unit tests over 0.1 s
         if: always()
-        run: >
-          dev/check-unit-test-time.mjs --runner node --junit web/target/node-test/junit.xml
-          --fail-over-limit 0
-          --rerun-over-limit ${{ github.event_name == 'workflow_dispatch' }}
+        run: dev/check-unit-test-time.mjs --runner node --junit web/target/node-test/junit.xml
 
   # The image is pinned by name. The live host runs Ubuntu 24.04 with glibc 2.39, and a binary built against a
   # newer glibc does not start there.
@@ -127,8 +123,8 @@ jobs:
 
   rust-test:
     runs-on: ubuntu-24.04
-    # A workflow_dispatch run adds the isolated rerun of the over-0.1 s suspects (tens of minutes
-    # today); push and pull_request runs stay near the pre-nextest bound.
+    # The 0.1 s check reruns every parallel over-limit test alone; a run against a tree that still
+    # holds slow unit tests pays for that rerun inside this bound.
     timeout-minutes: 45
     permissions:
       contents: read
@@ -173,16 +169,11 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # This stage only reports offenders. The isolated rerun runs on workflow_dispatch alone: it
-      # adds tens of minutes, and a main-push run delays every release (scripts/release.sh waits on
-      # this job). Stage 5 removes the event condition and drops --fail-over-limit 0, so the check
-      # gates every event on its defaults.
+      # Each over-limit test in the parallel run reruns alone; a test still over 0.1 s alone fails the
+      # job with its name and isolated time.
       - name: Unit tests over 0.1 s
         if: always()
-        run: >
-          dev/check-unit-test-time.mjs --runner rust --junit rust/target/nextest/ci/junit.xml
-          --fail-over-limit 0
-          --rerun-over-limit ${{ github.event_name == 'workflow_dispatch' }}
+        run: dev/check-unit-test-time.mjs --runner rust --junit rust/target/nextest/ci/junit.xml
 
       # Doc-tests carry no per-test time, so a doc-test that runs dodges the 0.1 s rule: the step fails
       # when `cargo test --doc` runs any, and names each. Today zero doc-tests run.

@@ -340,8 +340,7 @@ async fn test_missing_ack_closes_and_reconnects() {
   assert!(received.iter().all(|connection| connection[0]["op"] == 2));
 }
 
-#[tokio::test]
-async fn test_op7_and_op9_end_the_connection_and_reconnect() {
+async fn assert_gateway_op_ends_connection_and_reconnects(op: u64) {
   let initial_backoff = Duration::from_secs(1);
   assert_eq!(
     reconnect_backoff_after_drop(Duration::from_secs(32), true, initial_backoff),
@@ -350,30 +349,38 @@ async fn test_op7_and_op9_end_the_connection_and_reconnect() {
   );
   assert_eq!(reconnect_backoff_after_drop(Duration::from_secs(32), false, initial_backoff), Duration::from_secs(32));
 
-  for op in [7, 9] {
-    let home = Home::new(true).await;
-    let first = GatewayScript::new(vec![ready(2), json!({"op": op})]);
-    let second = GatewayScript { close_after_identify: Some(4004), ..GatewayScript::new(Vec::new()) };
-    let gateway = Gateway::start(vec![first, second]).await;
-    configure_gateway(&home, &gateway, 1 << 18);
-    tokio::time::timeout(
-      Duration::from_secs(4),
-      run_listener_loop_with_initial_backoff(
-        Arc::clone(&home.features),
-        discord_client(&home),
-        TEST_TOKEN.to_string(),
-        options(),
-        settings(),
-        Duration::ZERO,
-      ),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let received = gateway.received();
-    assert_eq!(received.len(), 2, "gateway op {op} reconnects");
-    assert!(received.iter().all(|connection| connection[0]["op"] == 2));
-  }
+  let home = Home::new(true).await;
+  let first = GatewayScript::new(vec![ready(2), json!({"op": op})]);
+  let second = GatewayScript { close_after_identify: Some(4004), ..GatewayScript::new(Vec::new()) };
+  let gateway = Gateway::start(vec![first, second]).await;
+  configure_gateway(&home, &gateway, 1 << 18);
+  tokio::time::timeout(
+    Duration::from_secs(4),
+    run_listener_loop_with_initial_backoff(
+      Arc::clone(&home.features),
+      discord_client(&home),
+      TEST_TOKEN.to_string(),
+      options(),
+      settings(),
+      Duration::ZERO,
+    ),
+  )
+  .await
+  .unwrap()
+  .unwrap();
+  let received = gateway.received();
+  assert_eq!(received.len(), 2, "gateway op {op} reconnects");
+  assert!(received.iter().all(|connection| connection[0]["op"] == 2));
+}
+
+#[tokio::test]
+async fn test_op7_ends_the_connection_and_reconnects() {
+  assert_gateway_op_ends_connection_and_reconnects(7).await;
+}
+
+#[tokio::test]
+async fn test_op9_ends_the_connection_and_reconnects() {
+  assert_gateway_op_ends_connection_and_reconnects(9).await;
 }
 
 #[tokio::test]

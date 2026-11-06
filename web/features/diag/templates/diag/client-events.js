@@ -5,11 +5,13 @@
 (function() {
   const CLIENT_EVENTS_URL = '/api/diag/client-events';
 
+  // keepalive: a post made at page hide must reach the server after the page unloads.
   function postClientEvent(kind, fields) {
     fetch(CLIENT_EVENTS_URL, {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(Object.assign({kind, client_ts: new Date().toISOString()}, fields)),
+      keepalive: true,
     }).catch(() => {});
   }
 
@@ -56,7 +58,8 @@
   document.addEventListener('charliebot:client-send-click', (event) => {
     const now = Date.now();
     for (const [requestId, timing] of sendTimings) {
-      if (now - timing.click > SEND_TIMING_TTL_MS) sendTimings.delete(requestId);
+      // A send whose POST returned is owned by its cutoff timer, however late it returned.
+      if (!timing.cutoff && now - timing.click > SEND_TIMING_TTL_MS) sendTimings.delete(requestId);
     }
     sendTimings.set(event.detail.request_id, {click: now, retries: 0});
   });

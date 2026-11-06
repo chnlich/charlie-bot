@@ -22,6 +22,7 @@ const CLIENT_EVENTS_URL = '/api/diag/client-events';
 // page-timers.js so the traffic flush is the timer callback the page runs.
 function buildClientEventsHarness() {
   const posts = [];            // every client-event POST body
+  const postOptions = [];      // every client-event POST's fetch options
   const listeners = new Map();
   const sessionStorageData = new Map();
   const resourceEntries = [];  // entries the traffic observer callback is fed
@@ -62,6 +63,7 @@ function buildClientEventsHarness() {
     fetch: async (url, opts = {}) => {
       if (url === CLIENT_EVENTS_URL) {
         posts.push(JSON.parse(opts.body));
+        postOptions.push(opts);
         return {ok: true, status: 200, json: async () => ({ok: true})};
       }
       throw new Error('unexpected fetch: ' + url);
@@ -103,6 +105,7 @@ function buildClientEventsHarness() {
   return {
     context,
     posts,
+    postOptions,
     resourceEntries,
     sessionStorageData,
     timers,
@@ -236,9 +239,25 @@ test('a page hide posts the pending no-echo sends', () => {
   assert.equal(h.posts[0].request_id, 'r1');
   assert.equal(h.posts[0].click_to_response_ms, 400);
   assert.equal(h.posts[0].click_to_echo_ms, null);
+  assert.equal(h.postOptions[0].keepalive, true, 'the hide post must outlive the unload');
 
   h.fireTimers();
   assert.equal(h.posts.length, 1, 'the posted send is gone: the cutoff posts no second event');
+});
+
+test('a responded send keeps its cutoff when a later click arrives past the TTL', () => {
+  const h = buildClientEventsHarness();
+  h.dispatch('charliebot:client-send-click', {request_id: 'r1'});
+  h.advance(60000);
+  h.dispatch('charliebot:client-send-response', {request_id: 'r1', ok: true});
+  h.advance(70000);
+  h.dispatch('charliebot:client-send-click', {request_id: 'r2'});
+
+  h.fireTimers();
+  assert.equal(h.posts.length, 1, 'the cutoff still reports r1, 130 s after its click');
+  assert.equal(h.posts[0].request_id, 'r1');
+  assert.equal(h.posts[0].click_to_response_ms, 60000);
+  assert.equal(h.posts[0].click_to_echo_ms, null);
 });
 
 test('a click whose POST never returns still ages out silently', () => {

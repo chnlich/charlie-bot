@@ -98,7 +98,8 @@ pub fn prepare(
   wrapped.args = vec![SUPERVISOR_ARG.into(), directory.as_os_str().to_owned()];
   #[cfg(test)]
   if supervisor.is_none() {
-    wrapped.args = vec!["--exact".into(), "transport::final_stdout::tests::supervisor_subprocess_entry".into(), "--ignored".into()];
+    wrapped.args =
+      vec!["--exact".into(), "transport::final_stdout::tests::supervisor_subprocess_entry".into(), "--ignored".into()];
     wrapped.env.insert("CHARLIEBOT_TEST_CAPTURE_DIR".into(), directory.as_os_str().to_owned());
   }
   Ok(wrapped)

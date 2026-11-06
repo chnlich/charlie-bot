@@ -162,8 +162,8 @@ mod tests {
 
   use super::*;
 
-  /// A fixture clip and the reference the decoder must match: the reference's sample count and SHA-256, as
-  /// recorded when the reference was made (`tests/fixtures/audio/README.md`).
+  /// A fixture clip and the reference the decoder must match. The fields hold the reference's sample count and
+  /// SHA-256, recorded when the reference was made (`tests/fixtures/audio/README.md`).
   struct Clip {
     file: &'static str,
     samples: usize,

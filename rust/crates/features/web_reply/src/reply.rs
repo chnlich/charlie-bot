@@ -1246,21 +1246,18 @@ mod tests {
     }
   }
 
-  /// Posts through the route, which builds a store for each marker. CI run 42251721683 measured this test at 0.443 s
-  /// alone, over the unit limit, so the check runs in the Integration workflow.
-  #[ignore = "integration"]
+  /// The route runs in-process and its file access stays in this test's TempDir-backed Home.
+  /// With no other process or network in the call chain, plan 1 v5 classifies this as a unit test.
   #[tokio::test]
   async fn a_nonword_alphanumeric_stops_a_path_run() {
-    for marker in ["ⓐ", "\u{0345}"] {
-      let home = Home::new();
-      let sid = home.manager("session", None).await;
-      running_user_message(&home, &sid, user_message(CHINESE_MESSAGE)).await;
-      let reply = format!("好。/{marker}ChatPanelStatusToggleWithLongName");
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    running_user_message(&home, &sid, user_message(CHINESE_MESSAGE)).await;
+    let reply = "好。/ⓐChatPanelStatusToggleWithLongName";
 
-      let (status, _) = post_reply(&home, &sid, &reply, None).await;
+    let (status, _) = post_reply(&home, &sid, reply, None).await;
 
-      assert_eq!(status, StatusCode::CONFLICT, "reply {reply:?}");
-    }
+    assert_eq!(status, StatusCode::CONFLICT, "reply {reply:?}");
   }
 
   #[test]

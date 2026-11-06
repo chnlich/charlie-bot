@@ -25,6 +25,7 @@ use tokio::sync::watch;
 
 use crate::boundary::BoundaryState;
 use crate::config::{ScheduledTaskConfig, StepConfig};
+use crate::firing::{firing_ref, parse_firing_ref};
 use crate::steps::{distinct_backend_conflict, resolved_backend};
 use crate::{loader, scheduler};
 
@@ -707,19 +708,6 @@ fn step_prompt(
 fn run_result_text(tree: &dyn SequenceTree, session_id: &str, run_id: &str) -> anyhow::Result<String> {
   let path = tree.run_dir(session_id, run_id).join(run_records::RUN_EVENTS_NAME);
   Ok(charliebot_tasks::review::read_worker_summary_file(&path)?.unwrap_or_default())
-}
-
-fn parse_firing_ref(owner_ref: &str) -> Option<(String, String)> {
-  let rest = owner_ref.strip_prefix("cron:")?;
-  let (name, firing) = rest.split_once(':')?;
-  if name.is_empty() || firing.is_empty() {
-    return None;
-  }
-  Some((name.to_string(), firing.to_string()))
-}
-
-fn firing_ref(task: &ScheduledTaskConfig, firing: &str) -> String {
-  format!("cron:{}:{firing}", task.name)
 }
 
 fn load_bound_task(name: &str, cfg: &CharlieBotConfig) -> anyhow::Result<Option<ScheduledTaskConfig>> {

@@ -20,6 +20,7 @@ use serde_json::{Map, Value, json};
 use tokio::task::JoinHandle;
 
 use crate::config::{ScheduledTaskConfig, TaskMode, effective_backend};
+use crate::firing::{firing_ref, round_request_id, round_request_task};
 use crate::{host_gate, loader, steps};
 
 const TICK_SECONDS: u64 = 60;
@@ -678,22 +679,6 @@ async fn update_cron_slots(features: &FeatureContext, session_id: &str, values: 
   let values = values.as_object().cloned().ok_or_else(|| anyhow::anyhow!("cron slot updates must be an object"))?;
   features.store.update_slot_fields(session_id, "cron", values).await?;
   Ok(())
-}
-
-fn firing_ref(task: &ScheduledTaskConfig, firing: &str) -> String {
-  format!("cron:{}:{firing}", task.name)
-}
-
-/// The request id of the worker session a round creates. The creation fact stores it, so `round_task_of` reads it back.
-fn round_request_id(task: &ScheduledTaskConfig, firing: &str) -> String {
-  format!("{}:leaf", firing_ref(task, firing))
-}
-
-/// The task name in a round's request id, or `None` for any other request id. A task name has no colon, so the name
-/// ends at the first colon after the `cron:` prefix.
-fn round_request_task(request_id: &str) -> Option<&str> {
-  let firing = request_id.strip_prefix("cron:")?.strip_suffix(":leaf")?;
-  firing.split_once(':').map(|(name, _)| name)
 }
 
 async fn wait_for_steps_boundary(mut boundary: tokio::sync::watch::Receiver<crate::boundary::BoundaryNotice>) {

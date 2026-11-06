@@ -5,9 +5,10 @@ use std::path::Path;
 use clap::Command;
 use clap::error::ErrorKind;
 
-/// Reject a `--repo` value that is not an absolute path or does not exist as a directory.
+/// The `--repo` validator: it rejects a value that is not an absolute path or does not exist as a
+/// directory.
 ///
-/// Raises the parser's usage error (exit 2) before any network call, so a bad repo path never
+/// It raises the parser's usage error (exit 2) before any network call, so a bad repo path never
 /// reaches the internal API.
 pub fn validate_repo_path(command: &mut Command, repo: &str) {
   if !repo.starts_with('/') {
@@ -31,7 +32,7 @@ pub fn validate_repo_path(command: &mut Command, repo: &str) {
   }
 }
 
-/// Enable `infer_long_args` on the command and every nested subcommand.
+/// The command with `infer_long_args` enabled on it and on every nested subcommand.
 ///
 /// A unique prefix of a long option names it (`--task-spec` names `--task-spec-file`), and agents
 /// may pass one. The `clap` parser needs the setting on each command that owns long options.

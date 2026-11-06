@@ -49,8 +49,8 @@ pub fn post_reply(
   Ok(())
 }
 
-/// Read one thread: refuse a page size outside the bounds, then post the resolved `session_id`, the `limit`, and
-/// `extra`'s keys, and print the readback.
+/// The read of one thread: refuse a page size outside the bounds, then post the resolved `session_id`, the `limit`,
+/// and `extra`'s keys, and print the readback.
 pub fn post_read(
   endpoint: &str,
   session: Option<&str>,
@@ -72,7 +72,7 @@ pub fn post_read(
   Ok(())
 }
 
-/// Check one bot's setup: post an empty body, print the readback, and exit 1 when `ok` is false.
+/// The check of one bot's setup: post an empty body, print the readback, and exit 1 when `ok` is false.
 pub fn post_check(endpoint: &str) -> Result<(), CliExit> {
   let result = client::post(endpoint, json!({}), None, &[])?;
   print!("{}", json_out::render(&result, None));

@@ -17,7 +17,7 @@ pub const TARGET: &str = "target";
 pub const BODY: &str = "body";
 pub const REPLACES: &str = "replaces";
 
-/// Register one draft for the current session and print the readback (`draft_id` and `card`).
+/// The registration of one draft for the current session, with the readback (`draft_id` and `card`) printed.
 ///
 /// The caller validates the target and reads the body first: a failed validation never reaches this call, so an
 /// unparseable target registers nothing.

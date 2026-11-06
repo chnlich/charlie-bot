@@ -38,7 +38,6 @@ const CHROME_FLAGS = [
   '--disable-features=Translate,OptimizationHints,MediaRouter,AutofillServerCommunication,CertificateTransparencyComponentUpdater',
   // The loopback bypass would send the bench's own host past the proxy, so it is cleared.
   '--proxy-bypass-list=<-loopback>',
-  '--ignore-certificate-errors',
   '--window-size=1440,900',
 ];
 
@@ -185,12 +184,18 @@ export class Browser {
 }
 
 // Starts Chrome with its proxy setting and returns once its DevTools pipe answers.
-export async function launchBrowser({ binary, proxyPort, userDataDir, logPath }) {
+//
+// `trustedSpki` is the base64 SHA-256 of the TLS front's public key. Chrome trusts that key as a person's browser
+// trusts the Serve certificate: the certificate verifies with no error, so the HTTP cache stores the JSON answers and
+// the page revalidates them with If-None-Match. Chrome stores no response that came over a certificate error, so
+// --ignore-certificate-errors would leave every revalidating request a full 200. The allowlist needs --user-data-dir.
+export async function launchBrowser({ binary, proxyPort, userDataDir, logPath, trustedSpki }) {
   fs.mkdirSync(userDataDir, { recursive: true });
   const log = fs.openSync(logPath, 'a');
   const args = [
     ...CHROME_FLAGS,
     `--user-data-dir=${userDataDir}`,
+    `--ignore-certificate-errors-spki-list=${trustedSpki}`,
     `--proxy-server=http://127.0.0.1:${proxyPort}`,
     '--remote-debugging-pipe',
     'about:blank',

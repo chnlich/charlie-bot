@@ -51,6 +51,14 @@ export const VIEW = Object.freeze({
   bootstrapWireBytes: 26592,
 });
 
+// The other sidebar views the background is measured on, at the sizes of a live release's views: the starred view held
+// 18 rows (8 active, 10 archived) and the Threads view 63 active thread sessions. The bench's rows of these views are
+// all active.
+export const OTHER_VIEWS = Object.freeze({
+  starred: { rows: 18 },
+  threads: { rows: 63 },
+});
+
 // The sessions the bench creates on the trial's backend: one open, one running in the background, three for the
 // probes, one switch target and five for the held blackout. They are task-tree nodes, so the server takes a message.
 export const BENCH_SESSIONS = 11;

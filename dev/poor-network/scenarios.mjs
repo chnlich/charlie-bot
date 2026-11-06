@@ -11,7 +11,8 @@ import fs from 'node:fs';
 import { launchBrowser, chromeBinary } from './chrome.mjs';
 import { startTaskTreeDriver } from './api.mjs';
 import { ShapingProxy } from './proxy.mjs';
-import { LINK, TASK_TREE_LOAD } from './profile.mjs';
+import { LINK, OTHER_VIEWS, TASK_TREE_LOAD } from './profile.mjs';
+import { percentile } from './report.mjs';
 import { Tabs, pollFor, sleep, waitFor } from './tabs.mjs';
 
 // Bytes per millisecond of the link: 12.5 KB/s.
@@ -58,6 +59,7 @@ async function withLink(ctx, label, tabNames, body) {
     proxyPort,
     userDataDir: profile,
     logPath: `${ctx.runDir}/chrome.log`,
+    trustedSpki: ctx.trustedSpki,
   });
   ctx.chromeVersion = browser.version;
   try {
@@ -86,12 +88,13 @@ async function serverProcessingMs(ctx, probes) {
 }
 
 // The endpoints of the page's background traffic, by URL. The status poll, the full list and the row refresh repeat
-// while the sidebar is open; the bootstrap is the switch's own request. The row refresh names its rows by `ids`, and the
-// full list names none.
+// while the sidebar is open; the bootstrap is the switch's own request. The row refresh names its rows by `ids`. The
+// full list is the shown view's whole list: the Workspace's names no `ids`, and the starred and Threads views have
+// their own.
 const ENDPOINTS = Object.freeze({
   status: /\/api\/sessions\/status\?/,
   rows: /\/api\/sessions\/\?[^#]*\bids=/,
-  fullList: /\/api\/sessions\/(\?(?![^#]*\bids=)|$)/,
+  fullList: /\/api\/sessions\/((starred|chat-threads)(\?|$)|\?(?![^#]*\bids=)|$)/,
   bootstrap: /\/api\/sessions\/[^/]+\/bootstrap$/,
 });
 
@@ -109,13 +112,101 @@ function receivedByEndpoint(pages, from, to, minutes) {
   return Object.fromEntries(Object.entries(sums).map(([name, bytes]) => [name, bytes / 1000 / minutes]));
 }
 
-// Scenarios 1 to 3: one visible and two hidden tabs, a session running in the background.
-export async function backgroundRep(ctx, repetition) {
+// The fields that differ between two status bodies, each `{session id: {field: value}}`. A row only one body holds
+// counts as `row added` or `row removed`; equal rows in another key order count as `key order`.
+function changedStatusFields(beforeText, afterText) {
+  const before = JSON.parse(beforeText);
+  const after = JSON.parse(afterText);
+  const fields = new Set();
+  for (const id of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    if (!(id in before)) {
+      fields.add('row added');
+    } else if (!(id in after)) {
+      fields.add('row removed');
+    } else {
+      for (const field of new Set([...Object.keys(before[id]), ...Object.keys(after[id])])) {
+        if (JSON.stringify(before[id][field]) !== JSON.stringify(after[id][field])) {
+          fields.add(field);
+        }
+      }
+    }
+  }
+  if (fields.size === 0 && beforeText !== afterText) {
+    fields.add('key order');
+  }
+  return fields;
+}
+
+// The tab's status polls that finished in [from, to]: how many, and what the server answered, by wire status. A 304
+// carried no body: the page read the cached one. A 200 is compared with the body the tab last held for the same URL,
+// before the window included: `changedBodies` differ from it, `unchangedBodies` repeat it (a browser that does not
+// revalidate), and `changedFields` counts, per field, the polls in which it changed for any row. `newUrlBodies`
+// answered a URL the tab had not polled before, such as an `ids` list in a new order. `noWireStatus` counts polls whose
+// wire status Chrome did not report.
+function statusPollCounts(tab, from, to, minutes) {
+  const counts = {
+    perMinute: 0,
+    answered200: 0,
+    answered304: 0,
+    otherStatuses: 0,
+    noWireStatus: 0,
+    changedBodies: 0,
+    unchangedBodies: 0,
+    newUrlBodies: 0,
+    changedFields: {},
+  };
+  const lastBody = new Map();
+  for (const request of tab.requests.values()) {
+    if (!ENDPOINTS.status.test(request.url) || request.finishAt === null) {
+      continue;
+    }
+    const inWindow = request.finishAt >= from && request.finishAt <= to;
+    if (inWindow) {
+      counts.perMinute += 1 / minutes;
+      if (request.wireStatus === 200) counts.answered200 += 1;
+      else if (request.wireStatus === 304) counts.answered304 += 1;
+      else if (request.wireStatus === null) counts.noWireStatus += 1;
+      else counts.otherStatuses += 1;
+    }
+    // The page's body of the poll: the server's for a 200, the cached one for a 304. A poll that finished before the
+    // tab kept bodies carries none, and the comparison starts after it.
+    if (request.status !== 200 || request.body === undefined) {
+      continue;
+    }
+    if (request.body === null) {
+      throw new Error(`no body read for status poll ${request.url}: ${request.bodyError ?? 'the read never finished'}`);
+    }
+    const previous = lastBody.get(request.url);
+    lastBody.set(request.url, request.body);
+    if (!inWindow || request.wireStatus !== 200) {
+      continue;
+    }
+    if (previous === undefined) {
+      counts.newUrlBodies += 1;
+      continue;
+    }
+    const fields = changedStatusFields(previous, request.body);
+    if (fields.size === 0) {
+      counts.unchangedBodies += 1;
+      continue;
+    }
+    counts.changedBodies += 1;
+    for (const field of fields) {
+      counts.changedFields[field] = (counts.changedFields[field] ?? 0) + 1;
+    }
+  }
+  return counts;
+}
+
+// The background load: one visible and two hidden tabs on the open session, the background session running a held turn,
+// and the task-tree driver renaming `renamed` at the live rate. The visible tab shows the sidebar view `filter` (null:
+// the Workspace); the hidden tabs show the Workspace. `body` runs inside the load, which ends on every path.
+async function withBackground(ctx, { label, filter, renamed }, body) {
   const { api, sessions } = ctx;
-  const processing = await serverProcessingMs(ctx, sessions.probes);
-  return withLink(ctx, 'background', ['visible', 'hidden-1', 'hidden-2'], async ({ proxy, tabs, tab, hidden }) => {
+  return withLink(ctx, label, ['visible', 'hidden-1', 'hidden-2'], async ({ proxy, tabs, tab, hidden }) => {
     const open = sessions.open;
-    await tabs.navigate(tab, `/?session=${open.id}`);
+    tab.keepBodies(ENDPOINTS.status);
+    await tabs.navigate(tab, `/?session=${open.id}${filter ? `&filter=${filter}` : ''}`);
     for (const other of hidden) {
       await tabs.navigate(other, `/?session=${open.id}`);
     }
@@ -127,74 +218,142 @@ export async function backgroundRep(ctx, repetition) {
 
     const running = sessions.background.id;
     await api.sendMessage(running, `bench-hold background ${randomTag()}`);
-    const driver = startTaskTreeDriver(api, running);
+    const driver = startTaskTreeDriver(api, renamed ?? running);
     return withCleanup(async () => {
       await sleep(WARM_UP_MS);
-
-      // Scenario 1: bytes per minute at the proxy, each direction, over one task-tree window.
-      const beforeWindow = proxy.counters();
-      const windowStart = Date.now();
-      await sleep(TASK_TREE_LOAD.windowMs);
-      const afterWindow = proxy.counters();
-      const windowEnd = Date.now();
-      const minutes = (windowEnd - windowStart) / 60000;
-      const received = ((afterWindow.received - beforeWindow.received) / 1000) / minutes;
-      const sent = ((afterWindow.sent - beforeWindow.sent) / 1000) / minutes;
-      const byEndpoint = receivedByEndpoint([tab, ...hidden], windowStart, windowEnd, minutes);
-      byEndpoint.other = received - Object.values(byEndpoint).reduce((total, kb) => total + kb, 0);
-      // The visible tab's status polls in the window: how many, and how many answered 200 (the body changed since the
-      // tab's last poll) rather than 304.
-      const pollStatuses = tab.statusesOf(ENDPOINTS.status, windowStart, windowEnd);
-      const statusPoll = {
-        perMinute: pollStatuses.length / minutes,
-        answered200: pollStatuses.filter((status) => status === 200).length,
-        answered304: pollStatuses.filter((status) => status === 304).length,
-        otherStatuses: pollStatuses.filter((status) => status !== 200 && status !== 304).length,
-      };
-
-      // Scenario 2: click to rendered, for a session that this page has not loaded.
-      const target = sessions.switchTarget;
-      await tab.watchChat('switch', target.marker);
-      const clickedAt = await tab.clickSession(target.id);
-      const shown = await tab.shownBy('switch', clickedAt, SHOW_TIMEOUT_MS);
-      // The page's own bootstrap bytes when its request finished; otherwise the size the same body has on the wire.
-      const pageBytes = tab.bytesOf(new RegExp(`/api/sessions/${target.id}/bootstrap$`), clickedAt, Infinity);
-      const bootstrapBytes = pageBytes > 0 ? pageBytes : await api.bootstrapWireBytes(target.id);
-      const switchState = shown.capped ? await tab.diagnose(clickedAt) : null;
-
-      // Scenario 3: click to echo, in the session the page now shows. The echo is the server's push of the message,
-      // which arrives as a socket frame carrying its text: the page shows the user's message locally before the server
-      // answers, so the chat's text cannot time this step.
-      const echo = `pn-echo ${repetition} ${randomTag()}`;
-      const sentAt = await tab.sendText(echo);
-      const echoAt = await pollFor(
-        () => tab.frames.find((frame) => frame.at >= sentAt && frame.text.includes(echo))?.at ?? null,
-        SHOW_TIMEOUT_MS,
-      );
-      const echoed = echoAt === null ? { at: sentAt + SHOW_TIMEOUT_MS, capped: true } : { at: echoAt, capped: false };
-      const sendState = echoed.capped ? await tab.diagnose(sentAt) : null;
-
-      return {
-        receivedKbPerMin: received,
-        receivedByEndpoint: byEndpoint,
-        statusPoll,
-        sentKbPerMin: sent,
-        switchMs: shown.at - clickedAt,
-        switchCapped: shown.capped,
-        switchFloorMs: floorMs(bootstrapBytes),
-        switchBootstrapBytes: bootstrapBytes,
-        switchState,
-        sendMs: echoed.at - sentAt,
-        sendCapped: echoed.capped,
-        sendFloorMs: ROUND_TRIP_MS + processing,
-        sendState,
-        serverProcessingMs: processing,
-      };
+      return body({ proxy, tab, hidden });
     }, async () => {
       await driver.stop();
       await api.cancelRuns(running);
     });
   });
+}
+
+// Scenario 1: bytes per minute at the proxy, each direction, over one task-tree window, with the received bytes split
+// by endpoint and the visible tab's status polls.
+async function measureWindow(proxy, tab, hidden) {
+  const beforeWindow = proxy.counters();
+  const windowStart = Date.now();
+  await sleep(TASK_TREE_LOAD.windowMs);
+  const afterWindow = proxy.counters();
+  const windowEnd = Date.now();
+  const minutes = (windowEnd - windowStart) / 60000;
+  const received = ((afterWindow.received - beforeWindow.received) / 1000) / minutes;
+  const sent = ((afterWindow.sent - beforeWindow.sent) / 1000) / minutes;
+  const byEndpoint = receivedByEndpoint([tab, ...hidden], windowStart, windowEnd, minutes);
+  byEndpoint.other = received - Object.values(byEndpoint).reduce((total, kb) => total + kb, 0);
+  await tab.bodiesRead();
+  return {
+    receivedKbPerMin: received,
+    receivedByEndpoint: byEndpoint,
+    statusPoll: statusPollCounts(tab, windowStart, windowEnd, minutes),
+    sentKbPerMin: sent,
+  };
+}
+
+// Scenarios 1 to 3: one visible and two hidden tabs, a session running in the background.
+export async function backgroundRep(ctx, repetition) {
+  const { api, sessions } = ctx;
+  const processing = await serverProcessingMs(ctx, sessions.probes);
+  return withBackground(ctx, { label: 'background', filter: null, renamed: null }, async ({ proxy, tab, hidden }) => {
+    const window = await measureWindow(proxy, tab, hidden);
+
+    // Scenario 2: click to rendered, for a session that this page has not loaded.
+    const target = sessions.switchTarget;
+    await tab.watchChat('switch', target.marker);
+    const clickedAt = await tab.clickSession(target.id);
+    const shown = await tab.shownBy('switch', clickedAt, SHOW_TIMEOUT_MS);
+    // The page's own bootstrap bytes when its request finished; otherwise the size the same body has on the wire.
+    const pageBytes = tab.bytesOf(new RegExp(`/api/sessions/${target.id}/bootstrap$`), clickedAt, Infinity);
+    const bootstrapBytes = pageBytes > 0 ? pageBytes : await api.bootstrapWireBytes(target.id);
+    const switchState = shown.capped ? await tab.diagnose(clickedAt) : null;
+
+    // Scenario 3: click to echo, in the session the page now shows. The echo is the server's push of the message,
+    // which arrives as a socket frame carrying its text: the page shows the user's message locally before the server
+    // answers, so the chat's text cannot time this step.
+    const echo = `pn-echo ${repetition} ${randomTag()}`;
+    const sentAt = await tab.sendText(echo);
+    const echoAt = await pollFor(
+      () => tab.frames.find((frame) => frame.at >= sentAt && frame.text.includes(echo))?.at ?? null,
+      SHOW_TIMEOUT_MS,
+    );
+    const echoed = echoAt === null ? { at: sentAt + SHOW_TIMEOUT_MS, capped: true } : { at: echoAt, capped: false };
+    const sendState = echoed.capped ? await tab.diagnose(sentAt) : null;
+
+    return {
+      ...window,
+      switchMs: shown.at - clickedAt,
+      switchCapped: shown.capped,
+      switchFloorMs: floorMs(bootstrapBytes),
+      switchBootstrapBytes: bootstrapBytes,
+      switchState,
+      sendMs: echoed.at - sentAt,
+      sendCapped: echoed.capped,
+      sendFloorMs: ROUND_TRIP_MS + processing,
+      sendState,
+      serverProcessingMs: processing,
+    };
+  });
+}
+
+// The list route of each other sidebar view, and the Slack origin that makes a created session a Threads-view root.
+const VIEW_ROUTES = Object.freeze({ starred: '/api/sessions/starred', threads: '/api/sessions/chat-threads' });
+
+function slackOrigin(index) {
+  return { team_id: 'TBENCH', channel_id: 'CBENCH', thread_ts: `1700000000.${String(index).padStart(6, '0')}` };
+}
+
+// Fills a sidebar view to its live size (OTHER_VIEWS) and names the row the driver renames. The starred view holds the
+// background session and the first mock rows of the Workspace, starred. The Threads view holds sessions the bench
+// creates with a Slack origin, which makes each one a thread root. Returns the view's rows as its route lists them, and
+// the median raw row.
+async function populateView(ctx, filter) {
+  const { api, sessions } = ctx;
+  const rows = OTHER_VIEWS[filter].rows;
+  let renamed;
+  if (filter === 'starred') {
+    const benchIds = new Set(Object.values(sessions).flat().map((session) => session.id));
+    const workspace = await api.json('GET', '/api/sessions/');
+    const others = workspace.map((row) => row.id).filter((id) => !benchIds.has(id)).slice(0, rows - 1);
+    for (const id of [sessions.background.id, ...others]) {
+      await api.json('POST', `/api/sessions/${id}/star`);
+    }
+    renamed = sessions.background.id;
+  } else {
+    const tag = randomTag();
+    const created = [];
+    for (let index = 1; index <= rows; index++) {
+      const slots = { slack_origin: slackOrigin(index) };
+      created.push(await api.createSession(`pn-thread-${tag}-${index}`, ctx.backendId, slots));
+    }
+    renamed = created[0];
+  }
+  const listed = await api.json('GET', VIEW_ROUTES[filter]);
+  if (!Array.isArray(listed) || listed.length !== rows || !listed.some((row) => row.id === renamed)) {
+    const count = Array.isArray(listed) ? listed.length : 'no';
+    throw new Error(`${VIEW_ROUTES[filter]} lists ${count} rows, not the ${rows} the bench gave the view`);
+  }
+  const sizes = listed.map((row) => Buffer.byteLength(JSON.stringify(row)));
+  return { renamed, rows: listed.length, rawRowMedianBytes: percentile(sizes, 0.5) };
+}
+
+// The background of scenario 1 with the visible tab on another sidebar view, which refetches its whole list on every
+// task-tree frame. The view holds the rows populateView gave it, and the driver renames one of them, so the view's
+// rows change at the rate the Workspace's do in scenario 1. Returns scenario 1's window numbers and the rows the tab
+// painted.
+export function viewBackgroundRep(filter) {
+  return async (ctx) => {
+    ctx.otherViews[filter] ??= await populateView(ctx, filter);
+    const view = ctx.otherViews[filter];
+    return withBackground(ctx, { label: filter, filter, renamed: view.renamed }, async ({ proxy, tab, hidden }) => {
+      const rows = `document.querySelectorAll('#session-list a[id^="session-"]').length`;
+      const painted = await tab.evaluate(`currentFilter === ${JSON.stringify(filter)} ? ${rows} : -1`);
+      if (painted < 0) {
+        throw new Error(`the visible tab does not show the ${filter} view`);
+      }
+      return { ...(await measureWindow(proxy, tab, hidden)), viewRowsPainted: painted };
+    });
+  };
 }
 
 // Scenario 4: a 30 s held blackout with five switch clicks inside it.

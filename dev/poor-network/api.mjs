@@ -79,9 +79,10 @@ export class ServerApi {
     });
   }
 
-  // Creates a manager root on `backend`, a task-tree node that accepts messages. Returns its id.
-  async createSession(name, backend) {
-    const meta = await this.json('POST', '/api/sessions/', { name, backend });
+  // Creates a manager root on `backend`, a task-tree node that accepts messages. `slots` are registered metadata slot
+  // values, such as a Slack origin. Returns its id.
+  async createSession(name, backend, slots = {}) {
+    const meta = await this.json('POST', '/api/sessions/', { name, backend, ...slots });
     return meta.id;
   }
 

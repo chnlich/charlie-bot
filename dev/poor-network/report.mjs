@@ -152,20 +152,24 @@ export function formatSide(side) {
     );
   }
   const backgroundReps = side.reps?.background ?? [];
-  if (backgroundReps.length > 0 && backgroundReps[0].receivedByEndpoint) {
-    const parts = Object.keys(backgroundReps[0].receivedByEndpoint).map((name) => {
-      const median = percentile(backgroundReps.map((rep) => rep.receivedByEndpoint[name]), 0.5);
-      return `${name} ${median.toFixed(1)}`;
-    });
-    lines.push(`background received by endpoint, KB/min (median): ${parts.join(', ')}`);
+  if (backgroundReps.length > 0) {
+    lines.push(...formatBackground('background', backgroundReps));
   }
-  const pollReps = backgroundReps.filter((rep) => rep.statusPoll);
-  if (pollReps.length > 0) {
-    const median = (name) => percentile(pollReps.map((rep) => rep.statusPoll[name]), 0.5);
+  for (const name of ['starred', 'threads']) {
+    const reps = side.reps?.[name] ?? [];
+    if (reps.length === 0) {
+      continue;
+    }
+    const view = side.otherViews[name];
+    const received = reps.map((rep) => rep.receivedKbPerMin);
+    const sent = reps.map((rep) => rep.sentKbPerMin);
     lines.push(
-      `status poll, visible tab (median): ${median('perMinute').toFixed(1)} per min, ` +
-        `${median('answered200').toFixed(1)} answered 200 (body changed), ${median('answered304').toFixed(1)} answered 304`,
+      `background on the ${name} view (${view.rows} rows, raw median row ${view.rawRowMedianBytes} B, ` +
+        `${percentile(reps.map((rep) => rep.viewRowsPainted), 0.5)} painted): received median ` +
+        `${percentile(received, 0.5).toFixed(1)}, p90 ${percentile(received, 0.9).toFixed(1)} KB/min; sent median ` +
+        `${percentile(sent, 0.5).toFixed(1)}, p90 ${percentile(sent, 0.9).toFixed(1)} KB/min`,
     );
+    lines.push(...formatBackground(`${name} view`, reps));
   }
   const background = side.metrics['background.received'];
   if (background) {
@@ -175,6 +179,28 @@ export function formatSide(side) {
     );
   }
   return lines.join('\n');
+}
+
+// The background repetitions' received bytes by endpoint and the visible tab's status polls, as medians over the
+// repetitions. A status poll's fields are counted in the polls whose body they changed.
+function formatBackground(label, reps) {
+  const median = (values) => percentile(values, 0.5);
+  const endpoints = Object.keys(reps[0].receivedByEndpoint).map(
+    (name) => `${name} ${median(reps.map((rep) => rep.receivedByEndpoint[name])).toFixed(1)}`,
+  );
+  const poll = (name) => median(reps.map((rep) => rep.statusPoll[name]));
+  const fieldNames = [...new Set(reps.flatMap((rep) => Object.keys(rep.statusPoll.changedFields)))].sort();
+  const fields = fieldNames.map(
+    (name) => `${name} ${median(reps.map((rep) => rep.statusPoll.changedFields[name] ?? 0))}`,
+  );
+  return [
+    `${label} received by endpoint, KB/min (median): ${endpoints.join(', ')}`,
+    `${label} status poll, visible tab (median): ${poll('perMinute').toFixed(1)} per min, ${poll('answered200')} ` +
+      `answered 200, ${poll('answered304')} answered 304, ${poll('noWireStatus')} with no wire status; of the 200s, ` +
+      `${poll('changedBodies')} changed the body, ${poll('unchangedBodies')} repeated it and ` +
+      `${poll('newUrlBodies')} answered a new URL; polls per changed field: ` +
+      `${fields.length > 0 ? fields.join(', ') : 'none'}`,
+  ];
 }
 
 function main(paths) {

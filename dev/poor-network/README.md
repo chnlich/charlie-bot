@@ -21,7 +21,7 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--side both` | Measure the before side, then the after side. If the before side's calibration does not reproduce, stop with exit 3 and do not run the after side. |
 | `--out-dir DIR` | Where the run's files go, outside the tree. |
 | `--repetitions N` | Repetitions per scenario (default 5). |
-| `--scenarios LIST` | Any of `background,held,reset,stream` (default all). |
+| `--scenarios LIST` | Any of `background,held,reset,stream,starred,threads` (default the first four). |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
 | `--detach` | Start a transient systemd user unit and return; the log is `DIR/pn-<id>.log`. |
 
@@ -55,6 +55,24 @@ The link is in `LINK` and the targets are in `TARGETS` of `profile.mjs`. No othe
 | 6 long stream | socket bytes of one reply, per reply text byte | <= 1.20 |
 
 Each scenario's median and 90th percentile go in the table, with the raw median next to them for the time metrics.
+
+Below the table, scenario 1's received bytes are split by endpoint. The visible tab's status polls are counted by the
+server's answer, the wire status: Chrome hands a revalidated answer to the page as its cached 200, and only the wire
+status says 304. Each 200 on the wire is compared with the body the tab last held for the same URL, so the report names
+the fields that changed. A 200 that repeats the previous body means the browser did not revalidate.
+
+## Other sidebar views
+
+`starred` and `threads` measure scenario 1's background with the visible tab on the starred view or the Threads view.
+Those views refetch their whole list on every task-tree frame. At its first repetition, the bench fills the view to the
+live size in `OTHER_VIEWS`:
+
+- the starred view: the background session and the first mock rows of the Workspace, starred;
+- the Threads view: sessions created with a Slack origin, which makes each one a thread root.
+
+The task-tree driver renames a row of the view, so the view's rows change at the rate the Workspace's rows change in
+scenario 1. These scenarios have no target. The report prints their received and sent bytes, the endpoint split and the
+status polls.
 
 ## Capped steps
 
@@ -106,6 +124,10 @@ the bench cancels it.
 The web client reads its access key from `localStorage` and sends it as the `Authorization` header and as the `token`
 of each WebSocket URL. The bench writes the same `localStorage` entry before each page loads, so the page behaves as
 after a login.
+
+The TLS front serves a self-signed certificate. Chrome trusts its key by hash (`--ignore-certificate-errors-spki-list`),
+so the certificate verifies as Serve's does in a person's browser. Under `--ignore-certificate-errors` Chrome would
+store no response in its HTTP cache. It would then never revalidate, and every JSON read would answer 200.
 
 ## CDN assets
 

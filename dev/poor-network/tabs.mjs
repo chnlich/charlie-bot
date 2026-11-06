@@ -40,7 +40,9 @@ export async function waitFor(check, timeoutMs, label) {
 export class Tab {
   name;
   page;
-  // requestId -> {url, startAt, finishAt, bytes, status, failed}, in the order the browser sent them.
+  // requestId -> {url, startAt, finishAt, bytes, status, wireStatus, failed}, in the order the browser sent them.
+  // `status` is the answer the page got. `wireStatus` is the one the server sent: a revalidated answer reaches the page
+  // as the cached 200, while its wire status is 304.
   requests = new Map();
   // Every WebSocket frame the page received: {at, bytes, type, text, requestId}.
   frames = [];
@@ -48,10 +50,24 @@ export class Tab {
   sockets = [];
   // Every WebSocket handshake answer: {at, status, requestId}.
   handshakes = [];
+  // The URLs whose 200 bodies the tab keeps, as `request.body` text: a request's body reads after it finishes. A
+  // request that finished before keepBodies has no `body`.
+  #bodyPattern = null;
+  #bodyReads = new Set();
 
   constructor(name, page) {
     this.name = name;
     this.page = page;
+  }
+
+  // Keeps the body of every later 200 answer whose URL matches `pattern`.
+  keepBodies(pattern) {
+    this.#bodyPattern = pattern;
+  }
+
+  // Waits until every kept body that a finished request owes has been read.
+  async bodiesRead() {
+    await Promise.all([...this.#bodyReads]);
   }
 
   // The DOM. Each call runs in the page.
@@ -174,13 +190,6 @@ export class Tab {
     });
   }
 
-  // HTTP statuses of every request whose URL matches `pattern` and that finished in [from, to], in send order.
-  statusesOf(pattern, from, to) {
-    return [...this.requests.values()]
-      .filter((request) => pattern.test(request.url) && request.finishAt !== null && request.finishAt >= from && request.finishAt <= to)
-      .map((request) => request.status);
-  }
-
   // Bytes of every request whose URL matches `pattern` and that finished in [from, to].
   bytesOf(pattern, from, to) {
     let bytes = 0;
@@ -198,7 +207,15 @@ export class Tab {
     switch (message.method) {
       case 'Network.requestWillBeSent': {
         const { requestId, request } = message.params;
-        this.requests.set(requestId, { url: request.url, startAt: at, finishAt: null, bytes: 0, status: null, failed: null });
+        this.requests.set(requestId, {
+          url: request.url,
+          startAt: at,
+          finishAt: null,
+          bytes: 0,
+          status: null,
+          wireStatus: null,
+          failed: null,
+        });
         return;
       }
       case 'Network.responseReceived': {
@@ -206,11 +223,19 @@ export class Tab {
         if (request) request.status = message.params.response.status;
         return;
       }
+      case 'Network.responseReceivedExtraInfo': {
+        const request = this.requests.get(message.params.requestId);
+        if (request) request.wireStatus = message.params.statusCode;
+        return;
+      }
       case 'Network.loadingFinished': {
         const request = this.requests.get(message.params.requestId);
         if (request) {
           request.finishAt = at;
           request.bytes = message.params.encodedDataLength;
+          if (request.status === 200 && this.#bodyPattern?.test(request.url)) {
+            this.#readBody(message.params.requestId, request);
+          }
         }
         return;
       }
@@ -243,6 +268,22 @@ export class Tab {
         return;
       default:
     }
+  }
+
+  // Reads a finished request's body into `request.body`, which is null until the read ends. A read that fails leaves
+  // the body null and its error in `request.bodyError`.
+  #readBody(requestId, request) {
+    request.body = null;
+    const read = this.page
+      .send('Network.getResponseBody', { requestId })
+      .then(({ body, base64Encoded }) => {
+        request.body = base64Encoded ? Buffer.from(body, 'base64').toString('utf8') : body;
+      })
+      .catch((caught) => {
+        request.bodyError = caught.message;
+      })
+      .finally(() => this.#bodyReads.delete(read));
+    this.#bodyReads.add(read);
   }
 
   // Serves a CDN request from the local assets, or fails it, so an unknown host never reaches the link.

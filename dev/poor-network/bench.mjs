@@ -4,7 +4,8 @@
 // served home against the mock home, runs the chosen scenarios and writes one JSON file for the side.
 //
 //   node bench.mjs --side before|after --out <file.json> --mock-home <dir> --mock-home-bin <path> \
-//     --reply-dir <dir> --assets <dir> --commit <text> [--repetitions N] [--scenarios background,held,reset,stream]
+//     --reply-dir <dir> --assets <dir> --commit <text> [--repetitions N] \
+//     [--scenarios background,held,reset,stream,starred,threads]
 //
 // Exit: 0 when the scenarios were measured (the verdicts are in the JSON and the table); 1 when a measurement failed.
 
@@ -27,15 +28,20 @@ import {
   VIEW,
 } from './profile.mjs';
 import { REPLY_PIECES, REPLY_SOURCES } from './reply.mjs';
-import { backgroundRep, heldBlackoutRep, longStreamRep, resetBlackoutRep } from './scenarios.mjs';
+import { backgroundRep, heldBlackoutRep, longStreamRep, resetBlackoutRep, viewBackgroundRep } from './scenarios.mjs';
 import { METRICS, calibrate, formatSide, percentile, summarize } from './report.mjs';
 
+// `starred` and `threads` measure scenario 1's background with the visible tab on that sidebar view. They run only when
+// named, after the six scenarios' own.
 const SCENARIOS = Object.freeze({
   background: backgroundRep,
   held: heldBlackoutRep,
   reset: resetBlackoutRep,
   stream: longStreamRep,
+  starred: viewBackgroundRep('starred'),
+  threads: viewBackgroundRep('threads'),
 });
+const DEFAULT_SCENARIOS = Object.freeze(['background', 'held', 'reset', 'stream']);
 
 // The sessions the bench needs are created on the trial's backend option, which scripts/release/trial.sh writes as
 // charlie-code-release-trial; the charlie-code binary behind it is the stub that run.sh puts on PATH. Index 1 is the
@@ -47,7 +53,7 @@ const FIRST_SIZED_INDEX = 6;
 const MAX_SIZING_TURNS = 30;
 
 function parseArgs(argv) {
-  const args = { repetitions: REPETITIONS, scenarios: Object.keys(SCENARIOS) };
+  const args = { repetitions: REPETITIONS, scenarios: DEFAULT_SCENARIOS.join(',') };
   const flags = {
     '--side': 'side',
     '--out': 'out',
@@ -75,12 +81,14 @@ function parseArgs(argv) {
     throw new Error(`--side must be before or after, got ${args.side}`);
   }
   args.repetitions = Number(args.repetitions);
-  args.scenarios = args.scenarios.split(',');
-  for (const name of args.scenarios) {
+  const named = args.scenarios.split(',');
+  for (const name of named) {
     if (!(name in SCENARIOS)) {
       throw new Error(`unknown scenario ${name}`);
     }
   }
+  // The scenarios run in SCENARIOS' order, so a view scenario's starred rows never reach the six scenarios' own.
+  args.scenarios = Object.keys(SCENARIOS).filter((name) => named.includes(name));
   return args;
 }
 
@@ -180,8 +188,8 @@ function replyTextBytes(dir) {
   return bytes;
 }
 
-// A self-signed certificate for the TLS front. The browser accepts it under --ignore-certificate-errors, as it accepts
-// the trial's certificate on Tailscale Serve's test stand-in.
+// A self-signed certificate for the TLS front, and the base64 SHA-256 of its public key, which Chrome trusts by name
+// (launchBrowser in chrome.mjs).
 function makeCertificate(dir) {
   fs.mkdirSync(dir, { recursive: true });
   const key = path.join(dir, 'key.pem');
@@ -195,11 +203,17 @@ function makeCertificate(dir) {
     ],
     { stdio: 'ignore' },
   );
-  return { key: fs.readFileSync(key), cert: fs.readFileSync(cert) };
+  const certPem = fs.readFileSync(cert);
+  const spkiDer = new crypto.X509Certificate(certPem).publicKey.export({ type: 'spki', format: 'der' });
+  return {
+    key: fs.readFileSync(key),
+    cert: certPem,
+    spki: crypto.createHash('sha256').update(spkiDer).digest('base64'),
+  };
 }
 
 function buildSide({
-  args, startedAt, finishedAt, status, error, results, assets, sessions, view, replyBytes, chromeVersion,
+  args, startedAt, finishedAt, status, error, results, assets, sessions, view, otherViews, replyBytes, chromeVersion,
 }) {
   const side = {
     side: args.side,
@@ -216,6 +230,7 @@ function buildSide({
     reply: { sources: REPLY_SOURCES, pieces: REPLY_PIECES, textBytes: replyBytes },
     assets: Object.fromEntries([...assets].map(([url, asset]) => [url, asset.sha256])),
     view: view && { ...view, live: VIEW },
+    otherViews,
     liveReadback: LIVE_READBACK,
     sessions: sessions && {
       open: sessions.open.id,
@@ -260,11 +275,14 @@ async function main() {
     assets: new Map(),
     replyBytes: 0,
     frontPort: null,
+    trustedSpki: null,
     origin: null,
     runDir: path.dirname(args.out),
     chromeVersion: null,
+    backendId: STUB_BACKEND_ID,
+    otherViews: {},
   };
-  const results = { background: [], held: [], reset: [], stream: [] };
+  const results = Object.fromEntries(Object.keys(SCENARIOS).map((name) => [name, []]));
   let status = 'measured';
   let error = null;
   let front = null;
@@ -279,8 +297,10 @@ async function main() {
     ctx.view = await measureView(api);
     const serve = new URL(api.base);
     const tls = makeCertificate(path.join(ctx.runDir, `tls-${args.side}`));
-    front = await startFront({ ...tls, target: { host: serve.hostname, port: Number(serve.port) } });
+    const target = { host: serve.hostname, port: Number(serve.port) };
+    front = await startFront({ key: tls.key, cert: tls.cert, target });
     ctx.frontPort = front.port;
+    ctx.trustedSpki = tls.spki;
     ctx.origin = `https://localhost:${front.port}`;
     for (const name of args.scenarios) {
       for (let repetition = 1; repetition <= args.repetitions; repetition++) {
@@ -307,6 +327,7 @@ async function main() {
     assets: ctx.assets,
     sessions: ctx.sessions,
     view: ctx.view,
+    otherViews: ctx.otherViews,
     replyBytes: ctx.replyBytes,
     chromeVersion: ctx.chromeVersion,
   });

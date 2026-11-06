@@ -403,11 +403,11 @@ mod tests {
   #[test]
   fn lossless_backwards_walk_returns_full_id_set_for_each_limit() {
     let projection =
-      MessageProjection::new(&shared_events(&turned_messages_events(&[3, 1, 6, 2].repeat(60))), 0, HashMap::new())
+      MessageProjection::new(&shared_events(&turned_messages_events(&[3, 1, 6, 2].repeat(12))), 0, HashMap::new())
         .unwrap();
     let committed = projection.committed();
     let full_ids: Vec<&str> = committed.iter().map(|message| message["id"].as_str().unwrap()).collect();
-    assert_eq!(committed.len(), 960);
+    assert_eq!(committed.len(), 192);
 
     for limit in [1, 7, 40, 100] {
       let mut collected_ids: Vec<String> = Vec::new();

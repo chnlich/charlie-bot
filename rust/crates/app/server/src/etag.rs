@@ -77,9 +77,9 @@ fn entity_tag(body: &[u8]) -> String {
 /// body of a few hundred kilobytes costs more than the rest of the request. A handler that builds its body again per
 /// request allocates a new one, so its body hashes again. An entry holds the body it hashed, so the address it keys on
 /// stays that body's alone: the allocator cannot hand the same range to another body while the entry lives.
-#[derive(Default)]
 struct TagMemo {
   entries: VecDeque<TagEntry>,
+  max_body_bytes: usize,
 }
 
 struct TagEntry {
@@ -92,14 +92,24 @@ const MEMO_ENTRIES: usize = 4;
 const MEMO_TOTAL_BYTES: usize = 4 * 1024 * 1024;
 const MEMO_MAX_BODY_BYTES: usize = 1024 * 1024;
 
+impl Default for TagMemo {
+  fn default() -> Self {
+    TagMemo::with_max_body_bytes(MEMO_MAX_BODY_BYTES)
+  }
+}
+
 impl TagMemo {
+  fn with_max_body_bytes(max_body_bytes: usize) -> TagMemo {
+    TagMemo { entries: VecDeque::new(), max_body_bytes }
+  }
+
   /// The tag of `body`: the one this memo hashed for the same body, or a fresh hash kept for the next request.
   fn tag(&mut self, body: &Bytes) -> HeaderValue {
     if let Some(entry) = self.entries.iter().find(|entry| same_body(&entry.body, body)) {
       return entry.tag.clone();
     }
     let tag = HeaderValue::from_str(&entity_tag(body)).expect("a quoted hex entity tag is a valid header value");
-    if body.len() <= MEMO_MAX_BODY_BYTES {
+    if body.len() <= self.max_body_bytes {
       self.entries.push_back(TagEntry { body: body.clone(), tag: tag.clone() });
       while self.entries.len() > MEMO_ENTRIES || self.held_bytes() > MEMO_TOTAL_BYTES {
         self.entries.pop_front();
@@ -245,8 +255,8 @@ mod tests {
 
   #[test]
   fn a_body_past_the_memo_cap_keeps_no_entry() {
-    let mut memo = TagMemo::default();
-    let big = Bytes::from(vec![0u8; MEMO_MAX_BODY_BYTES + 1]);
+    let mut memo = TagMemo::with_max_body_bytes(64);
+    let big = Bytes::from(vec![0u8; 65]);
     let first = memo.tag(&big);
     assert_eq!(memo.tag(&big), first, "equal bytes answer an equal tag");
     assert!(memo.entries.is_empty(), "a body past the cap is hashed on every request");

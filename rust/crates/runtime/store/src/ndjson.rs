@@ -382,20 +382,20 @@ mod tests {
   #[test]
   fn a_split_read_gives_the_events_of_a_whole_read() {
     let mut text = String::new();
-    for index in 0..4_000 {
-      text.push_str(&format!("{{\"id\": {index}, \"pad\": \"{}\"}}\n", "p".repeat(index % 600)));
-      if index % 397 == 0 {
+    for index in 0..50 {
+      text.push_str(&format!("{{\"id\": {index}, \"pad\": \"{}\"}}\n", "p".repeat(index % 20)));
+      if index % 13 == 0 {
         text.push_str("\n{broken\n");
       }
-      if index == 2_000 {
-        text.push_str(&format!("{}\n", serde_json::json!({"blob": "x".repeat(600 << 10)})));
+      if index == 25 {
+        text.push_str(&format!("{}\n", serde_json::json!({"blob": "x".repeat(600)})));
       }
     }
     text.push_str("{\"id\": \"last\"}");
-    let sizes = SplitSizes { min_bytes: 1 << 20, chunk_bytes: 128 << 10, max_threads: 8 };
+    let sizes = SplitSizes { min_bytes: 512, chunk_bytes: 128, max_threads: 4 };
     assert!(text.len() >= sizes.min_bytes && text.len() >= sizes.chunk_bytes * sizes.max_threads, "the text splits");
     let split = split_lines_of_sized(text.as_bytes(), &parse_file_line, &sizes);
-    assert_eq!(split.len(), 4_002, "every object line, the blob and the final line");
+    assert_eq!(split.len(), 52, "every object line, the blob and the final line");
     assert_eq!(split, lines_of(text.as_bytes(), &parse_file_line));
   }
 

@@ -212,6 +212,15 @@ static BODY_MEMO: LazyLock<Mutex<BodyMemo<BodyKey>>> =
 /// A longer body, which the memo's cap would reject, keeps the level-1 deflate it pays once per response; a response
 /// with no ETag to key on takes the same per-response form.
 fn compressed_body(uri: &Uri, parts: &http::response::Parts, body: &[u8]) -> Bytes {
+  compressed_body_with_input_limit(uri, parts, body, MEMO_MAX_INPUT_BYTES)
+}
+
+fn compressed_body_with_input_limit(
+  uri: &Uri,
+  parts: &http::response::Parts,
+  body: &[u8],
+  memo_max_input_bytes: usize,
+) -> Bytes {
   let key = body_key(uri, parts);
   if let Some(key) = &key
     && let Some(cached) = BODY_MEMO.lock().expect("the gzip body memo mutex is not poisoned").get(key)
@@ -219,7 +228,7 @@ fn compressed_body(uri: &Uri, parts: &http::response::Parts, body: &[u8]) -> Byt
     return cached;
   }
   let compressed = Bytes::from(match key {
-    Some(_) if body.len() <= MEMO_MAX_INPUT_BYTES => charliebot_compat::compression::gzip_memoized_body(body),
+    Some(_) if body.len() <= memo_max_input_bytes => charliebot_compat::compression::gzip_memoized_body(body),
     _ => gzip_whole(body),
   });
   if let Some(key) = key {
@@ -362,13 +371,14 @@ mod tests {
     assert_eq!(inflated(&other), "b".repeat(MINIMUM_SIZE * 2), "another path is another resource");
   }
 
-  #[tokio::test]
-  async fn a_body_past_the_memo_input_bound_keeps_its_level_one_deflate() {
-    // A body this long may deflate past the memo's cap, and a deflate the memo rejects is paid again on every
-    // response. It keeps the level-1 form rather than taking the level-6 form a kept version's repeats pay once.
-    let body = "a".repeat(MEMO_MAX_INPUT_BYTES + 1);
-    let (_, compressed) =
-      run_at("/static/past-the-cap.js", Some("\"v1\""), Responder::Gzip, "text/plain", Body::from(body.clone())).await;
+  #[test]
+  fn a_body_past_the_memo_input_bound_keeps_its_level_one_deflate() {
+    // A body above the memo input bound uses level 1 instead of level 6, which a kept version's repeats pay once.
+    let body = "a".repeat(64);
+    let response = Response::builder().header(header::ETAG, "\"v1\"").body(Body::empty()).unwrap();
+    let (parts, _) = response.into_parts();
+    let uri = "/static/past-the-cap.js".parse().unwrap();
+    let compressed = compressed_body_with_input_limit(&uri, &parts, body.as_bytes(), body.len() - 1);
     // The gzip header's XFL byte records 4 for a fastest-level deflate and 0 for the memo's level-6 form.
     assert_eq!(compressed[8], 4);
     assert_eq!(inflated(&compressed), body);

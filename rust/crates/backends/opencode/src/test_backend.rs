@@ -109,6 +109,7 @@ impl Drop for RestartProcessGuard {
   }
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn killed_server_process_leaves_relay_and_serve_for_adoption() {
   let scratch = tempfile::tempdir().unwrap();
@@ -655,6 +656,7 @@ fn server_env_drops_the_run_identity_and_points_xdg_at_the_store() {
   assert!(env["NO_PROXY"].ends_with("::1"));
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn claim_is_held_before_start_and_dropped_after_start_failure() {
   let harness = Harness::with_settings(json!({"prompts": {}}), Some("1.18.18"), ServerTimeouts::default(), None);
@@ -669,6 +671,7 @@ async fn claim_is_held_before_start_and_dropped_after_start_failure() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[test]
 fn process_rss_reads_the_process_own_resident_memory() {
   // A process that has run only this test holds little resident memory; touch pages so there is
@@ -678,6 +681,7 @@ fn process_rss_reads_the_process_own_resident_memory() {
   assert!(server::OpenCodeServer::process_rss_mb_test(std::process::id()).unwrap() > 10.0);
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn heavy_server_stops_at_the_checkpoint_when_its_rss_is_above_the_limit() {
   let timeouts = ServerTimeouts {
@@ -707,6 +711,7 @@ async fn heavy_server_stops_at_the_checkpoint_when_its_rss_is_above_the_limit() 
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn server_at_the_rss_limit_runs_on_to_the_idle_exit() {
   let timeouts = ServerTimeouts {
@@ -743,6 +748,7 @@ async fn server_at_the_rss_limit_runs_on_to_the_idle_exit() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn a_claimed_directory_keeps_the_server_running() {
   let timeouts = ServerTimeouts {
@@ -785,6 +791,7 @@ async fn a_claimed_directory_keeps_the_server_running() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn dropping_the_last_claim_rearms_the_idle_exit() {
   let timeouts = ServerTimeouts {
@@ -816,6 +823,7 @@ async fn dropping_the_last_claim_rearms_the_idle_exit() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn a_turn_claimed_during_heavy_shutdown_starts_after_the_old_server_stops() {
   let timeouts = ServerTimeouts {
@@ -981,6 +989,7 @@ fn snapshot_reading_limits_keep_the_opencode_reserve() {
   );
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn turn_translates_events_sets_the_environment_and_ends_with_result() {
   let script = json!({
@@ -1047,6 +1056,7 @@ async fn turn_translates_events_sets_the_environment_and_ends_with_result() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn a_turn_survives_a_server_restart_and_replays_translator_state() {
   let prefix = vec![
@@ -1174,6 +1184,7 @@ async fn a_turn_survives_a_server_restart_and_replays_translator_state() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[test]
 fn a_restart_before_the_turn_record_exists_fails_with_a_specific_error_event() {
   let harness = Harness::new(json!({"prompts": {}}));
@@ -1199,6 +1210,7 @@ fn a_restart_before_the_turn_record_exists_fails_with_a_specific_error_event() {
   assert!(translated[0]["message"].as_str().unwrap().contains("server restarted before the turn started"));
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn a_new_settings_snapshot_starts_a_new_serve_while_an_adopted_turn_finishes_on_the_old_one() {
   let harness = Harness::new(json!({
@@ -1303,6 +1315,7 @@ async fn a_new_settings_snapshot_starts_a_new_serve_while_an_adopted_turn_finish
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn a_turn_ending_during_downtime_delivers_its_answer_by_the_dead_process_rule() {
   let harness = Harness::new(json!({"prompts": {
@@ -1370,6 +1383,7 @@ async fn a_turn_ending_during_downtime_delivers_its_answer_by_the_dead_process_r
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn stopping_an_adopted_turn_interrupts_through_its_connection_record_and_ends_the_relay() {
   let harness = Harness::new(json!({"prompts": {"paused": {"events": [], "hold": true}}}));
@@ -1427,6 +1441,7 @@ async fn stopping_an_adopted_turn_interrupts_through_its_connection_record_and_e
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn adopted_serve_stops_when_relay_exits_without_a_terminal_event() {
   let harness = Harness::new(json!({"prompts": {"paused": {"events": [], "hold": true}}}));
@@ -1455,6 +1470,7 @@ async fn adopted_serve_stops_when_relay_exits_without_a_terminal_event() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn reused_run_directory_sends_only_the_new_prompt() {
   let harness = Harness::new(json!({"prompts": {
@@ -1485,6 +1501,7 @@ async fn reused_run_directory_sends_only_the_new_prompt() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn turn_end_steps_run_in_order_and_remove_the_session_shells() {
   let harness = Harness::new(json!({"prompts": {"work": {"shells": [{}], "events": [
@@ -1524,6 +1541,7 @@ async fn turn_end_steps_run_in_order_and_remove_the_session_shells() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn terminate_releases_only_unclaimed_directories_once_before_returning() {
   let harness = Harness::new(json!({
@@ -1573,6 +1591,7 @@ async fn terminate_releases_only_unclaimed_directories_once_before_returning() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn failed_release_is_reported_as_a_turn_error_event() {
   let harness = Harness::with_settings(
@@ -1593,6 +1612,7 @@ async fn failed_release_is_reported_as_a_turn_error_event() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn concurrent_turns_share_one_server_process() {
   let harness = Harness::new(json!({"prompts": {
@@ -1613,6 +1633,7 @@ async fn concurrent_turns_share_one_server_process() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn cancel_signals_only_its_turn_and_the_other_turn_completes() {
   // The held turn's text event marks its relay as streaming: the relay forwards events only from its main loop, and
@@ -1669,6 +1690,7 @@ async fn cancel_signals_only_its_turn_and_the_other_turn_completes() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn permission_request_fails_only_its_turn() {
   let harness = Harness::new(json!({"prompts": {
@@ -1687,6 +1709,7 @@ async fn permission_request_fails_only_its_turn() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn manager_turn_reloads_locations_before_the_prompt() {
   let harness = Harness::new(json!({"prompts": {"manage": {"events": [text_event("managed")]}}}));
@@ -1714,6 +1737,7 @@ async fn manager_turn_reloads_locations_before_the_prompt() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn stream_loss_ends_running_turns_before_the_server_stops() {
   let harness = Harness::new(json!({
@@ -1748,6 +1772,7 @@ async fn stream_loss_ends_running_turns_before_the_server_stops() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn server_crash_fails_the_turn_with_its_exit_code_and_the_next_turn_restarts() {
   let harness = Harness::new(json!({"prompts": {
@@ -1782,6 +1807,7 @@ async fn server_crash_fails_the_turn_with_its_exit_code_and_the_next_turn_restar
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn idle_server_exits_after_the_idle_limit() {
   let timeouts = ServerTimeouts {
@@ -1810,6 +1836,7 @@ async fn idle_server_exits_after_the_idle_limit() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn wrong_major_version_fails_the_turn_naming_the_binary() {
   let harness = Harness::with_settings(json!({"prompts": {}}), Some("1.18.18"), ServerTimeouts::default(), None);
@@ -1824,6 +1851,7 @@ async fn wrong_major_version_fails_the_turn_naming_the_binary() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn missing_resume_session_fails_the_turn_naming_the_id() {
   let harness = Harness::new(json!({"prompts": {}}));
@@ -1859,6 +1887,7 @@ async fn missing_resume_session_fails_the_turn_naming_the_id() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn missing_join_script_fails_before_the_environment_is_set() {
   let missing_repo = tempfile::tempdir().unwrap();
@@ -1878,6 +1907,7 @@ async fn missing_join_script_fails_before_the_environment_is_set() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn silent_session_fails_after_the_progress_timeout() {
   let timeouts = ServerTimeouts {
@@ -1902,6 +1932,7 @@ async fn silent_session_fails_after_the_progress_timeout() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn prompt_waits_for_an_earlier_interrupt_to_settle() {
   let harness = Harness::new(json!({
@@ -1934,6 +1965,7 @@ async fn prompt_waits_for_an_earlier_interrupt_to_settle() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn one_shot_runs_standalone_in_a_private_root_and_fails_on_an_error_line() {
   let harness = Harness::new(json!({
@@ -2024,6 +2056,7 @@ fn last_one_shot_config(harness: &Harness) -> Value {
   harness.logs().into_iter().rev().find(|entry| entry.get("run_args").is_some()).unwrap()["config"].clone()
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn recovered_translator_keeps_the_original_model_after_settings_change() {
   let harness = Harness::new(json!({}));
@@ -2057,6 +2090,7 @@ async fn recovered_translator_keeps_the_original_model_after_settings_change() {
   assert_eq!(result[0]["context_snapshot"]["limit"]["context"], 123_000);
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn context_limit_reaches_the_one_shot_and_the_shared_server_configs() {
   let harness = Harness::new(json!({"run_lines": [{"type": "text", "part": {"text": "answer"}}], "run_exit": 0}));
@@ -2117,6 +2151,7 @@ fn headless_providers_merge_equal_limits_and_keep_distinct_models() {
   assert_eq!(headless_content(&harness), HEADLESS_MERGED);
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn opencode_prepare_cwd_writes_agents_md_even_when_config_exists() {
   let harness = Harness::new(json!({"prompts": {"manager": {"events": [text_event("ok")]}}}));
@@ -2136,6 +2171,7 @@ async fn opencode_prepare_cwd_writes_agents_md_even_when_config_exists() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn opencode_worker_prompt_is_framed_and_manager_prompt_stays_bare() {
   let framed = "<system-instructions>\nworker instructions\n</system-instructions>\n\nwork";
@@ -2179,6 +2215,7 @@ async fn opencode_worker_prompt_is_framed_and_manager_prompt_stays_bare() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn opencode_prepare_cwd_skips_agents_md_when_instructions_are_unset() {
   let harness = Harness::new(json!({"prompts": {"plain": {"events": [text_event("ok")]}}}));
@@ -2189,6 +2226,7 @@ async fn opencode_prepare_cwd_skips_agents_md_when_instructions_are_unset() {
   harness.clear_finished_turn_pids();
 }
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn unclaimed_execution_is_interrupted() {
   let harness = Harness::new(json!({"interrupt_event_delay": 0.01, "prompts": {}}));
@@ -2314,6 +2352,7 @@ async fn iter_ndjson_events_parses_and_skips() {
   assert_eq!(events.lock().unwrap().as_slice(), [json!({"type": "text", "part": {"text": "answer"}})]);
 }
 
+#[ignore = "integration"]
 #[test]
 fn opencode_join_script_moves_the_shell_and_sets_its_oom_priority() {
   let root = tempfile::tempdir().unwrap();

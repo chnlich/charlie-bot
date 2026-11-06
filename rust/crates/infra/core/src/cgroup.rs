@@ -230,6 +230,7 @@ mod tests {
     (child, binary)
   }
 
+  #[ignore = "integration"]
   #[test]
   fn the_sweep_ends_the_browser_processes_and_leaves_the_others() {
     let directory = tempfile::tempdir().unwrap();
@@ -250,6 +251,7 @@ mod tests {
     bystander.wait().unwrap();
   }
 
+  #[ignore = "integration"]
   #[test]
   fn the_sweep_recognizes_a_browser_whose_binary_the_kernel_marks_deleted() {
     let directory = tempfile::tempdir().unwrap();

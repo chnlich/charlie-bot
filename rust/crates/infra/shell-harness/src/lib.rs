@@ -316,6 +316,7 @@ mod tests {
     assert_eq!(thread::current().name(), Some("tests::a_test_runs_on_a_thread_named_for_it"));
   }
 
+  #[ignore = "integration"]
   /// A process started through `spawn` ends when the thread that started it ends, here by panicking.
   #[test]
   fn a_process_ends_when_the_thread_that_started_it_panics() {

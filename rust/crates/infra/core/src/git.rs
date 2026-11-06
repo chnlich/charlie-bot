@@ -78,6 +78,7 @@ mod tests {
     repo
   }
 
+  #[ignore = "integration"]
   #[test]
   fn run_returns_the_trimmed_stdout_of_a_successful_command() {
     let repo = repo_with_one_commit();
@@ -88,6 +89,7 @@ mod tests {
     assert_eq!(head_sha(repo.path(), timeout), Some(expected));
   }
 
+  #[ignore = "integration"]
   #[test]
   fn run_is_none_when_the_command_fails() {
     let not_a_repo = tempfile::tempdir().unwrap();

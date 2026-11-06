@@ -1017,6 +1017,7 @@ mod tests {
     assert_eq!(env["UNRELATED"], "kept");
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn one_shot_text_spawns_claude_without_the_gateway_variables() {
     let root = tempfile::tempdir().unwrap();

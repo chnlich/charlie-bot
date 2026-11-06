@@ -68,6 +68,10 @@ jobs:
         if: always()
         run: dev/check-unit-test-time.mjs --runner node --junit web/target/node-test/junit.xml
 
+      - name: Measure node unit tests over 0.05 s alone
+        if: always() && github.event_name == 'workflow_dispatch'
+        run: dev/check-unit-test-time.mjs --runner node --junit web/target/node-test/junit.xml --parallel-limit 0.05
+
   # The image is pinned by name. The live host runs Ubuntu 24.04 with glibc 2.39, and a binary built against a
   # newer glibc does not start there.
   release-build:
@@ -174,6 +178,10 @@ jobs:
       - name: Unit tests over 0.1 s
         if: always()
         run: dev/check-unit-test-time.mjs --runner rust --junit rust/target/nextest/ci/junit.xml
+
+      - name: Measure Rust unit tests over 0.05 s alone
+        if: always() && github.event_name == 'workflow_dispatch'
+        run: dev/check-unit-test-time.mjs --runner rust --junit rust/target/nextest/ci/junit.xml --parallel-limit 0.05
 
       # Doc-tests carry no per-test time, so a doc-test that runs dodges the 0.1 s rule: the step fails
       # when `cargo test --doc` runs any, and names each. Today zero doc-tests run.

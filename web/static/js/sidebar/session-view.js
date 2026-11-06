@@ -213,7 +213,8 @@ async function pollTranscript(opts) {
       after: String(transcriptMessageCount),
       revision: transcriptRevision,
     });
-    const res = await fetch('/api/sessions/' + target.sessionId + '/transcript?' + params.toString());
+    const res = await fetch('/api/sessions/' + target.sessionId + '/transcript?' + params.toString(),
+        {signal: viewRequestSignal()});
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
     if (SESSION_ID !== target.sessionId) return;
@@ -345,7 +346,7 @@ async function pollActiveSessionView(opts) {
   const pollSessionId = SESSION_ID;
   activeSessionViewPollInflight = true;
   try {
-    const res = await fetch('/api/sessions/' + pollSessionId + '/usage');
+    const res = await fetch('/api/sessions/' + pollSessionId + '/usage', {signal: viewRequestSignal()});
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
     if (pollSessionId !== SESSION_ID) return;
@@ -521,6 +522,49 @@ function switchTargetName(sessionId) {
   return (nameEl && nameEl.textContent) || sessionId;
 }
 
+// The switch's one awaited request: the target's bootstrap. A network failure or a 5xx retries
+// the same request on the send path's backoff (chat/input.js): 1 s doubling to a 30 s cap,
+// unbounded attempts. A failure no longer navigates the page to a full load, which on the
+// measured link costs 415 KB. A 4xx fails the switch: the server refused the bootstrap.
+const BOOTSTRAP_RETRY_BASE_MS = 1000;
+const BOOTSTRAP_RETRY_MAX_MS = 30000;
+
+function waitForBootstrapRetry(delayMs) {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+// Resolves the bootstrap payload, or null when a newer click superseded this switch. Throws on
+// the failures no retry can fix.
+async function fetchBootstrapWithRetry(sessionId, gen) {
+  let retryDelay = BOOTSTRAP_RETRY_BASE_MS;
+  for (;;) {
+    let response;
+    try {
+      response = await fetch('/api/sessions/' + sessionId + '/bootstrap', {signal: viewRequestSignal()});
+    } catch (err) {
+      if (gen !== switchGeneration) return null;
+      await waitForBootstrapRetry(retryDelay);
+      if (gen !== switchGeneration) return null;
+      retryDelay = Math.min(retryDelay * 2, BOOTSTRAP_RETRY_MAX_MS);
+      continue;
+    }
+    if (response.ok) return response.json();
+    if (response.status < 500) throw new Error(String(response.status));
+    if (gen !== switchGeneration) return null;
+    await waitForBootstrapRetry(retryDelay);
+    if (gen !== switchGeneration) return null;
+    retryDelay = Math.min(retryDelay * 2, BOOTSTRAP_RETRY_MAX_MS);
+  }
+}
+
+// The failed switch leaves its placeholder standing: the row names the failure and the way
+// back, another click on the session's sidebar row.
+function failSwitchPlaceholder(sessionId) {
+  const row = document.getElementById('switch-placeholder');
+  if (!row) return;
+  row.textContent = 'Could not open ' + switchTargetName(sessionId) + ' — click the row to retry';
+}
+
 // Click-time immediate feedback: the placeholder row (thinking pulse-dot
 // style) replaces the stale session DOM before any network wait. The
 // displayed-session module paints the header at the click, and
@@ -579,6 +623,13 @@ async function switchSession(sessionId) {
   teardownActiveSessionView();
   document.getElementById('text-modal-overlay')?.setAttribute('style', 'display:none');
 
+  // The wipe below must not page the session it leaves: the pagination state stands down until
+  // the target's render re-arms it. The leaving session's in-flight requests and every
+  // superseded bootstrap abort here.
+  sessionHasMore = false;
+  sessionLoadingMore = false;
+  abortViewRequests();
+
   // Close WebSocket (suppress auto-reconnect)
   disconnectWS();
   cancelReconnect();
@@ -598,28 +649,23 @@ async function switchSession(sessionId) {
   let data = freshCachedBootstrap(sessionId);
   if (!data) {
     try {
-      const res = await fetch('/api/sessions/' + sessionId + '/bootstrap');
-      if (!res.ok) throw new Error(res.status);
-      data = await res.json();
+      data = await fetchBootstrapWithRetry(sessionId, gen);
     } catch (err) {
       console.error('switchSession bootstrap fetch failed:', err);
       reportSwitchEvent('failed', fromSessionId, sessionId, gen, {
         error: String(err?.message || err),
         elapsed_ms: Date.now() - switchStartedAt,
       });
-      // A newer click owns the view and its held actions: a failure of a
-      // superseded switch navigates nowhere.
-      if (gen !== switchGeneration) return;
-      // The page navigates to a full load of the target. A composer action
-      // held by this switch resolves first: a held message posts to the
-      // session it bound before the navigation drops the page.
+      // A composer action held by this switch can never land: a held message
+      // posts to the session it bound before the failure drops the switch.
       abandonHeldComposerActions(sessionId);
       switching = false;
-      // The page-load telemetry names this navigation's cause on the other side.
-      document.dispatchEvent(new CustomEvent('charliebot:page-load-cause', {detail: {cause: 'bootstrap_failure'}}));
-      location.href = '/?session=' + sessionId;
+      failSwitchPlaceholder(sessionId);
       return;
     }
+    // A newer click owns the view and its held actions: a failure of a
+    // superseded switch navigates nowhere.
+    if (data === null) return;
   }
 
   // Discard stale response from rapid clicks
@@ -894,7 +940,8 @@ async function loadOlderIfNeeded(container, isContinuation) {
   let pageLanded = false;
   const stale = () => flight.generation !== switchGeneration || flight.sessionId !== SESSION_ID;
   try {
-    const res = await fetch(url, {signal: abortCtrl.signal});
+    // The page's own timeout and the switch's view abort both cancel the flight.
+    const res = await fetch(url, {signal: AbortSignal.any([abortCtrl.signal, viewRequestSignal()])});
     clearTimeout(timeout);
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
@@ -1165,6 +1212,7 @@ async function createTaskNode(taskParentId, group) {
     if (draftInput) { draftInput.value = ''; autoResize(draftInput); }
     if (masterThinking) stopThinking();
     teardownActiveSessionView();
+    abortViewRequests();
     disconnectWS();
     cancelReconnect();
     hideStreaming();
@@ -1198,6 +1246,7 @@ function renderNoActiveSessionView() {
   if (masterThinking) stopThinking({preserveSessionIndicator: true});
   teardownActiveSessionView();
   hideStreaming();
+  abortViewRequests();
   disconnectWS();
   cancelReconnect();
 

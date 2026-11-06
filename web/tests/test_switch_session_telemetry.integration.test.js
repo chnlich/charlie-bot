@@ -62,6 +62,10 @@ function buildSwitchHarness() {
   const renamePosts = [];
   const sequence = [];
   const failBootstrap = new Set();
+  const failBootstrapOnce = new Set();
+  const refuseBootstrap = new Set();
+  const signals = [];          // every fetch's {url, signal}, in fetch order
+  const retryWaits = [];       // the bootstrap retry backoffs, fired by runWaits
   const knobs = {failTelemetry: false, failChatOnce: false};
   const payloads = {
     'session-a': bootstrapPayload('session-a', 0, false),
@@ -153,8 +157,12 @@ function buildSwitchHarness() {
     }
     const match = url.match(/\/api\/sessions\/([^/]+)\/bootstrap/);
     bootstrapFetches.push(url);
+    signals.push({url, signal: opts.signal || null});
     sequence.push('fetch:' + (match ? match[1] : url));
-    if (!match || failBootstrap.has(match[1])) {
+    if (!match || refuseBootstrap.has(match[1])) {
+      return {ok: false, status: 403, json: async () => ({})};
+    }
+    if (failBootstrap.has(match[1]) || failBootstrapOnce.delete(match[1])) {
       return {ok: false, status: 500, json: async () => ({})};
     }
     const entry = {sessionId: match[1]};
@@ -175,6 +183,9 @@ function buildSwitchHarness() {
     search: '',
   };
   stubPageTimers(context);
+  // The bootstrap retry backoff records instead of idling: the runWaits helper
+  // fires the waits a test has reached, so a retry's second fetch is observable.
+  context.setTimeout = (fn, ms) => { retryWaits.push({fn, ms}); return retryWaits.length; };
 
   createChatSidebarContext(context);
   // config.js and file-upload.js ride the page ahead of the module list's
@@ -208,10 +219,23 @@ function buildSwitchHarness() {
     appendedMessages,
     sequence,
     failBootstrap,
+    failBootstrapOnce,
+    refuseBootstrap,
+    signals,
+    retryWaits,
     resourceEntries,
     knobs,
     payloadFor: (sid) => payloads[sid],
     resolveLastSwitch: () => pendingSwitches[pendingSwitches.length - 1].resolve(),
+    async runWaits() {
+      const pending = retryWaits.splice(0);
+      for (const wait of pending) wait.fn();
+      await flush();
+    },
+    signalOf: (urlPart) => {
+      const found = signals.filter((entry) => entry.url.includes(urlPart));
+      return found.length ? found[found.length - 1].signal : null;
+    },
   };
 }
 
@@ -396,24 +420,94 @@ test('cache hit happens only within the 60s window', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Acceptance: failed bootstrap logs failed before the reload fallback
+// Acceptance: a refused bootstrap fails the switch in place, a retryable one
+// retries on the send path's backoff — the page reloads for neither
 // ---------------------------------------------------------------------------
 
-test('failed bootstrap logs failed telemetry before the full-load fallback', async () => {
+test('a refused bootstrap logs failed and fails the switch in place, with no reload', async () => {
   const h = buildSwitchHarness();
-  h.failBootstrap.add('session-b');
+  h.refuseBootstrap.add('session-b');
 
   await h.context.switchSession('session-b');
 
-  assert.deepEqual(h.sequence, [
-    'telemetry:started', 'fetch:session-b', 'telemetry:failed', 'reload',
-  ]);
+  assert.deepEqual(h.sequence, ['telemetry:started', 'fetch:session-b', 'telemetry:failed']);
   const failed = h.telemetryPosts.find((t) => t.phase === 'failed');
   assert.equal(failed.to_session, 'session-b');
-  assert.equal(failed.error, '500');
+  assert.equal(failed.error, '403');
   assert.equal(typeof failed.elapsed_ms, 'number');
-  assert.match(h.context.location.href, /^\/\?session=session-b$/);
+  assert.equal(h.context.location.href, '', 'the page must not navigate to a full load');
   assert.equal(h.context.switching, false, 'the failed path must release the switching flag');
+  const placeholder = h.messages.children[0];
+  assert.equal(placeholder.id, 'switch-placeholder');
+  assert.match(placeholder.textContent, /Could not open/, 'the placeholder names the failure');
+  assert.match(placeholder.textContent, /click the row to retry/, 'the placeholder names the way back');
+});
+
+test('a retryable bootstrap failure retries the same request on the send backoff, with no reload', async () => {
+  const h = buildSwitchHarness();
+  h.failBootstrapOnce.add('session-b');
+
+  const click = h.context.switchSession('session-b');
+  await flush();
+  assert.equal(h.bootstrapFetches.length, 1, 'the first attempt went out');
+  assert.deepEqual(h.retryWaits.map((wait) => wait.ms), [1000], 'the first retry waits one second');
+  assert.deepEqual(h.telemetryPosts.map((t) => t.phase), ['started'], 'a retry is not a failure');
+
+  await h.runWaits();
+  assert.equal(h.bootstrapFetches.length, 2, 'the retry repeats the same request');
+  assert.equal(h.bootstrapFetches[1].endsWith('/api/sessions/session-b/bootstrap'), true);
+
+  h.resolveLastSwitch();
+  await click;
+  assert.match(h.messages.innerHTML, /hello from session-b/, 'the retry landed the switch');
+  assert.deepEqual(h.telemetryPosts.map((t) => t.phase), ['started', 'completed']);
+  assert.equal(h.sequence.includes('reload'), false, 'no full page reload on the retry path');
+  assert.equal(h.context.switching, false);
+});
+
+// ---------------------------------------------------------------------------
+// Acceptance: a switch aborts the leaving session's requests and every
+// superseded bootstrap
+// ---------------------------------------------------------------------------
+
+test('a switch aborts the leaving session’s in-flight pagination and every superseded bootstrap', async () => {
+  const h = buildSwitchHarness();
+  h.payloadFor('session-a').has_more = true;
+  h.context.renderSessionView(h.payloadFor('session-a'));
+  h.messages.scrollTop = 0;  // the render parked the stub container at its scrollHeight
+  h.context.Sidebar.loadOlderIfNeeded(h.messages);
+  assert.equal(h.bootstrapFetches.filter((url) => url.includes('/events')).length, 1,
+      'a pagination flight for the displayed session must be in flight');
+  const pageSignal = h.signalOf('/events');
+  assert.ok(pageSignal, 'the pagination fetch carries an abort signal');
+
+  const clickB = h.context.switchSession('session-b');
+  assert.equal(pageSignal.aborted, true, 'the leaving session’s request aborts at the click');
+
+  const bootstrapSignal = h.signalOf('session-b/bootstrap');
+  assert.equal(bootstrapSignal.aborted, false, 'the new target’s own bootstrap is not aborted');
+
+  const clickC = h.context.switchSession('session-c');
+  assert.equal(bootstrapSignal.aborted, true, 'b’s superseded bootstrap aborts at the newer click');
+  h.resolveLastSwitch();
+  await clickC;
+  h.pendingSwitches[0].resolve();  // b's superseded bootstrap still lands, into the cache
+  await clickB;
+});
+
+test('clearing the message area triggers no pagination fetch for the session it leaves', async () => {
+  const h = buildSwitchHarness();
+  h.payloadFor('session-a').has_more = true;
+  h.context.renderSessionView(h.payloadFor('session-a'));
+
+  const click = h.context.switchSession('session-b');
+  h.context.Sidebar.loadOlderIfNeeded(h.messages);  // what the debounced scroll would call
+  assert.deepEqual(h.bootstrapFetches.filter((url) => url.includes('/events')), [],
+      'no /events request may go out for the leaving session during the switch window');
+  h.resolveLastSwitch();
+  await click;
+  await flush();
+  assert.match(h.messages.innerHTML, /hello from session-b/);
 });
 
 // ---------------------------------------------------------------------------
@@ -636,10 +730,10 @@ test('a new session and the archive back to the welcome page keep the display an
       'the welcome page restores the original title');
 });
 
-test('a send pressed in a failing switch’s window posts to the bound session before the page navigates', async () => {
+test('a send pressed in a failing switch’s window posts to the bound session before the failure lands', async () => {
   const h = buildSwitchHarness();
   h.context.renderSessionView(h.payloadFor('session-a'));
-  h.failBootstrap.add('session-b');
+  h.refuseBootstrap.add('session-b');
 
   const click = h.context.switchSession('session-b');
   const input = h.elements.get('msg-input');
@@ -651,8 +745,9 @@ test('a send pressed in a failing switch’s window posts to the bound session b
   assert.deepEqual(h.chatPosts.map((post) => post.sessionId), ['session-b'],
       'the held message posts to the session it bound');
   assert.equal(h.chatPosts[0].content, 'last words');
-  assert.ok(h.sequence.indexOf('chat:session-b') < h.sequence.indexOf('reload'),
-      'the POST goes out before the full-load navigation: ' + h.sequence.join(' -> '));
+  assert.ok(h.sequence.indexOf('chat:session-b') > h.sequence.indexOf('telemetry:failed'),
+      'the failure releases the held send, which posts to the session it bound: ' + h.sequence.join(' -> '));
+  assert.equal(h.sequence.includes('reload'), false, 'the failed switch no longer navigates');
 });
 
 test('clicking back to the loaded session inside a pending switch lands on one session everywhere', async () => {

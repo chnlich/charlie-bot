@@ -200,7 +200,8 @@
   async function fetchAndRenderTray(sessionId) {
     const gen = ++trayFetchGen;
     try {
-      const res = await fetch('/api/sessions/' + sessionId + '/pending-triggers');
+      const res = await fetch('/api/sessions/' + sessionId + '/pending-triggers',
+          {signal: viewRequestSignal()});
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const records = await res.json();
       if (gen !== trayFetchGen || sessionId !== SESSION_ID) return;

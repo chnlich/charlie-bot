@@ -26,6 +26,7 @@ function buildClientEventsHarness() {
   const sessionStorageData = new Map();
   const resourceEntries = [];  // entries the traffic observer callback is fed
   const flushFns = [];         // the page-timers intervals, flushTraffic first
+  const timers = [];           // the recorded setTimeout callbacks, cutoffs included
   let navigationEntries = [];
   let resourceBufferClears = 0;
   let clock = 1_000_000;       // the harness clock, in ms
@@ -69,7 +70,13 @@ function buildClientEventsHarness() {
       static now() { return clock; }
       constructor(...args) { super(...(args.length ? args : [clock])); }
     },
-    setTimeout: (fn) => { fn(); return 1; },
+    // The cutoffs record instead of firing inline: a no-echo send's post is the
+    // timer callback under test.
+    setTimeout: (fn, ms) => {
+      timers.push({fn, ms});
+      return timers.length;
+    },
+    clearTimeout: (id) => { delete timers[id - 1]; },
     setInterval: (fn) => {
       flushFns.push(fn);
       return flushFns.length;
@@ -98,10 +105,15 @@ function buildClientEventsHarness() {
     posts,
     resourceEntries,
     sessionStorageData,
+    timers,
     flush() { flushFns.forEach((fn) => fn()); },
     observeResources(entries) { context.__trafficObserver({getEntries: () => entries}); },
     dispatch(type, detail) {
       context.document.dispatchEvent(new CustomEvent(type, {detail}));
+    },
+    fireTimers() {
+      const pending = timers.splice(0).filter(Boolean);
+      for (const timer of pending) timer.fn();
     },
     setVisibility(value) { context.document.visibilityState = value; },
     setNavigation(entry) { navigationEntries = entry ? [entry] : []; },
@@ -183,14 +195,61 @@ test('a retry after a failed response waits for its echo before posting', () => 
       [1000, 3000, 1]);
 });
 
-test('a send whose echo never comes posts nothing once its entry ages out', () => {
+test('a send whose echo never comes posts at the cutoff with a null echo', () => {
+  const h = buildClientEventsHarness();
+  h.dispatch('charliebot:client-send-click', {request_id: 'r1'});
+  h.advance(300);
+  h.dispatch('charliebot:client-send-response', {request_id: 'r1', ok: true});
+  assert.equal(h.posts.length, 0, 'the send still waits for its echo');
+
+  h.advance(120000);
+  assert.equal(h.timers.length, 1);
+  assert.equal(h.timers[0].ms, 120000, 'the cutoff is one send-timing TTL after the POST returned');
+  h.fireTimers();
+
+  assert.equal(h.posts.length, 1);
+  assert.equal(h.posts[0].click_to_response_ms, 300);
+  assert.equal(h.posts[0].click_to_echo_ms, null, 'the echo never arrived');
+  assert.equal(h.posts[0].retries, 0);
+});
+
+test('an echo before the cutoff cancels the cutoff post', () => {
   const h = buildClientEventsHarness();
   h.dispatch('charliebot:client-send-click', {request_id: 'r1'});
   h.dispatch('charliebot:client-send-response', {request_id: 'r1', ok: true});
+  h.dispatch('charliebot:client-send-echo', {request_id: 'r1'});
+  assert.equal(h.posts.length, 1);
+
+  h.fireTimers();
+  assert.equal(h.posts.length, 1, 'the cutoff timer was cleared with the entry');
+});
+
+test('a page hide posts the pending no-echo sends', () => {
+  const h = buildClientEventsHarness();
+  h.dispatch('charliebot:client-send-click', {request_id: 'r1'});
+  h.advance(400);
+  h.dispatch('charliebot:client-send-response', {request_id: 'r1', ok: true});
+
+  h.dispatch('pagehide', {});
+
+  assert.equal(h.posts.length, 1, 'the hide posts the send the echo never reached');
+  assert.equal(h.posts[0].request_id, 'r1');
+  assert.equal(h.posts[0].click_to_response_ms, 400);
+  assert.equal(h.posts[0].click_to_echo_ms, null);
+
+  h.fireTimers();
+  assert.equal(h.posts.length, 1, 'the posted send is gone: the cutoff posts no second event');
+});
+
+test('a click whose POST never returns still ages out silently', () => {
+  const h = buildClientEventsHarness();
+  h.dispatch('charliebot:client-send-click', {request_id: 'r1'});
   h.advance(120000 + 1);
   h.dispatch('charliebot:client-send-click', {request_id: 'r2'});
-  h.dispatch('charliebot:client-send-echo', {request_id: 'r1'});
-  assert.equal(h.posts.length, 0, 'the aged-out send reports nothing rather than a wrong wait');
+  h.dispatch('charliebot:client-send-response', {request_id: 'r1', ok: true});
+  assert.equal(h.posts.length, 0, 'the aged-out click reports nothing rather than a wrong wait');
+  h.fireTimers();
+  assert.equal(h.posts.length, 0);
 });
 
 // ---------------------------------------------------------------------------
@@ -335,19 +394,20 @@ test('the flush clears its window, so the next flush reports only its own minute
 
 test('a navigating path announces its cause and the report consumes it once', () => {
   const h = buildClientEventsHarness();
-  h.dispatch('charliebot:page-load-cause', {cause: 'bootstrap_failure'});
-  assert.match(h.sessionStorageData.get('charliebot-page-load-cause'), /bootstrap_failure/,
+  h.dispatch('charliebot:page-load-cause', {cause: 'stale_asset'});
+  assert.match(h.sessionStorageData.get('charliebot-page-load-cause'), /stale_asset/,
       'the announcement lands where the next page reads it');
 
   h.setNavigation({responseEnd: 33000.4, domContentLoadedEventEnd: 34500.6, transferSize: 415115});
   h.dispatch('load');
+  h.fireTimers();  // the load handler schedules its report on a setTimeout
 
   assert.equal(h.posts.length, 1);
   const post = h.posts[0];
   assert.equal(post.kind, 'page_load');
   assert.deepEqual([post.response_end_ms, post.dom_content_loaded_ms, post.transfer_size],
       [33000, 34501, 415115]);
-  assert.equal(post.cause, 'bootstrap_failure');
+  assert.equal(post.cause, 'stale_asset');
   assert.equal(h.sessionStorageData.has('charliebot-page-load-cause'), false,
       'the report consumes the marker, so a later report names a fresh open');
 });
@@ -355,9 +415,10 @@ test('a navigating path announces its cause and the report consumes it once', ()
 test('a cause marker past its minute reports as a fresh open', () => {
   const h = buildClientEventsHarness();
   h.sessionStorageData.set('charliebot-page-load-cause',
-      JSON.stringify({cause: 'bootstrap_failure', at: h.clock() - 61000}));
+      JSON.stringify({cause: 'stale_asset', at: h.clock() - 61000}));
   h.setNavigation({responseEnd: 100, domContentLoadedEventEnd: 200, transferSize: 0});
   h.dispatch('load');
+  h.fireTimers();  // the load handler schedules its report on a setTimeout
   assert.equal(h.posts[0].cause, 'open');
 });
 

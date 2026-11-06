@@ -89,6 +89,30 @@ function cancelReconnect() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 }
 
+// A successful request of any kind proves the link returned. A socket waiting
+// out its reconnect backoff reconnects now instead, and its backoff resets:
+// after a blackout the page's first answered request restores the socket
+// without waiting the delay out. A switch window holds no timer — its teardown
+// paths cancel the reconnect — so the poke never fires into the session a
+// switch is replacing.
+function noteRequestSuccess() {
+  if (!reconnectTimer) return;
+  cancelReconnect();
+  reconnectDelay = 1000;
+  connectWS();
+}
+
+// Every fetch the page makes reports its success here, whatever endpoint issued
+// it. The page always defines fetch; the capability check keeps the vm harness
+// contexts that run this file without one loadable.
+const pageFetch = globalThis.fetch;
+if (typeof pageFetch === 'function') {
+  globalThis.fetch = (...args) => pageFetch(...args).then((response) => {
+    if (response.ok) noteRequestSuccess();
+    return response;
+  });
+}
+
 function connectWS() {
   if (!SESSION_ID) return;
   cancelReconnect();

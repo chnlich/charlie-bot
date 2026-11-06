@@ -4,7 +4,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 const { escapeHtml } = require('./escape_html_stub');
 
-const { readPackageStatic } = require('./read_static');
+const { readPackageStatic, readStatic } = require('./read_static');
 
 const { SESSIONS_ROOT } = require('./sessions_root_stub');
 
@@ -189,6 +189,8 @@ function loadPlanPanelScript(opts = {}) {
   const context = {
     SESSION_ID: opts.sessionId || 'test-session',
     SESSIONS_ROOT: opts.sessionsRoot || SESSIONS_ROOT,
+    AbortController,
+    AbortSignal,
     console: {error: noop, log: noop, warn: noop},
     document,
     window: {SESSIONS_ROOT: opts.sessionsRoot || SESSIONS_ROOT},
@@ -204,6 +206,9 @@ function loadPlanPanelScript(opts = {}) {
     registerWsMessageHandler: noop,
   };
   vm.createContext(context);
+  // The connection layer's request-abort registry: the page runs it before every chat and
+  // sidebar module, and the panel's fetches take their signal from it.
+  vm.runInContext(readStatic('view-requests.js'), context, {filename: 'view-requests.js'});
   vm.runInContext(PLAN_PANEL_JS, context, {filename: 'plan-panel.js'});
   const planPanel = vm.runInContext('planPanel', context);
   return {context, planPanel};

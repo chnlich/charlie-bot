@@ -24,7 +24,7 @@
 //
 //     base        platform.js to chat/shared.js: the helpers, config.js and the Chat and Sidebar namespaces,
 //                 then chat/displayed-session.js (the displayed session and the composer action queue)
-//     connection  websocket.js and tabs.js
+//     connection  view-requests.js (the session view's abortable request signals), websocket.js and tabs.js
 //     chat view   chat/ratings.js to file-upload.js
 //     sidebar     sidebar/row-menu.js to sidebar/session-menus.js
 //     control     chat/input.js, websocket-handlers.js and app.js

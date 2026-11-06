@@ -75,11 +75,11 @@ const LOG_LINES = [
     '{"endpoint":"/api/concurrency/now","transfer_size":47,"count":12}]\' visibility_state=hidden ' +
     'client_ts=2026-02-13T09:11:00Z forwarded_for=100.64.0.8'),
 
-  // Page loads: one fresh open, one bootstrap failure.
+  // Page loads: one fresh open, one stale-asset reload.
   line('2026-02-13 09:12:00.100Z', 'kind=page_load response_end_ms=33000 dom_content_loaded_ms=34500 ' +
     'transfer_size=415115 cause=open client_ts=2026-02-13T09:12:00Z forwarded_for=100.64.0.8'),
   line('2026-02-13 09:13:00.100Z', 'kind=page_load response_end_ms=32000 dom_content_loaded_ms=33500 ' +
-    'transfer_size=415115 cause=bootstrap_failure client_ts=2026-02-13T09:13:00Z forwarded_for=100.64.0.8'),
+    'transfer_size=415115 cause=stale_asset client_ts=2026-02-13T09:13:00Z forwarded_for=100.64.0.8'),
 
   // A second device with one event, outside neither window nor kind coverage.
   line('2026-02-13 09:14:00.100Z', 'kind=page_load response_end_ms=1000 dom_content_loaded_ms=2000 ' +
@@ -115,7 +115,7 @@ test('the readback prints every section per device on the fixture log', () => {
     assert.match(output, /traffic received bytes per tab-hour \(tab-time 0\.03 h\):/);
     assert.match(output, /\/api\/sessions\/ 3600000/);
     assert.match(output, /\/api\/concurrency\/now 3600/);
-    assert.match(output, /page loads open=1 bootstrap_failure=1/);
+    assert.match(output, /page loads open=1 stale_asset=1/);
     assert.match(output, /== 100\.64\.0\.9: 1 event/);
     assert.doesNotMatch(output, /superseded|cause=switch/,
         'the socket numbers count only network causes and the switch numbers only completed phases');

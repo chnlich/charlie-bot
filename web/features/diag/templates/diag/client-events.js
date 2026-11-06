@@ -44,7 +44,12 @@
   // The composer announces the click, every retry, the POST's outcome and the
   // socket echo of the same request id. One send posts when the echo lands on
   // a response that returned. A refused POST gets no echo, so its send posts
-  // at once with the echo time null.
+  // at once with the echo time null. A send whose POST succeeded but whose
+  // echo never arrives posts nothing today, which reads the live echo p90 low:
+  // its send posts at the cutoff, one TTL after the POST returned, with the
+  // echo time null. A page that hides first posts its pending sends at the
+  // hide — visibilitychange hidden is not a cutoff, because a hidden tab's
+  // socket still delivers echoes.
   const SEND_TIMING_TTL_MS = 120000;
   const sendTimings = new Map();
 
@@ -66,6 +71,9 @@
     if (!timing) return;
     timing.response = Date.now();
     if (event.detail.ok) {
+      timing.cutoff = setTimeout(() => {
+        if (sendTimings.get(event.detail.request_id) === timing) finishSend(event.detail.request_id, timing);
+      }, SEND_TIMING_TTL_MS);
       if (timing.echo) finishSend(event.detail.request_id, timing);
     } else {
       finishSend(event.detail.request_id, timing);
@@ -80,6 +88,7 @@
   });
 
   function finishSend(requestId, timing) {
+    if (timing.cutoff) clearTimeout(timing.cutoff);
     postClientEvent('send', {
       request_id: requestId,
       click_to_response_ms: timing.response - timing.click,
@@ -88,6 +97,12 @@
     });
     sendTimings.delete(requestId);
   }
+
+  window.addEventListener('pagehide', () => {
+    for (const [requestId, timing] of sendTimings) {
+      if (timing.response) finishSend(requestId, timing);
+    }
+  });
 
   // --- socket disconnect episodes ---------------------------------------------
   // websocket.js announces the close (with its cause), the successful reopen

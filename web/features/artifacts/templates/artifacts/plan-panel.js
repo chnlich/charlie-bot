@@ -352,7 +352,7 @@ const planPanel = (() => {
     }
     var resp;
     try {
-      resp = await fetch(url);
+      resp = await fetch(url, {signal: viewRequestSignal()});
     } catch (e) {
       console.error('plan-panel: action bar fetch failed', e);
       return;
@@ -479,7 +479,8 @@ const planPanel = (() => {
   }
 
   async function _fetchRegistry(sid) {
-    var resp = await fetch('/api/sessions/' + encodeURIComponent(sid) + '/plans');
+    var resp = await fetch('/api/sessions/' + encodeURIComponent(sid) + '/plans',
+        {signal: viewRequestSignal()});
     if (!resp.ok) {
       throw new Error('plan registry fetch failed: HTTP ' + resp.status);
     }

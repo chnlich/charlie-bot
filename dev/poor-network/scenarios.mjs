@@ -381,15 +381,19 @@ export async function heldBlackoutRep(ctx) {
     if (lastBytes === 0) {
       throw new Error(`no bootstrap bytes recorded for the last switch to ${last.id}`);
     }
-    const superseded = clicks.slice(0, -1).reduce(
-      (sum, target) => sum + tab.bytesOf(new RegExp(`/api/sessions/${target.id}/bootstrap$`), restoreAt, Infinity),
-      0,
-    );
+    // An abort reaches the server only when the link returns, so each superseded bootstrap's
+    // response was written in full during the blackout: its size on the wire, read from the
+    // server. The browser never counts those bytes — an aborted request fails instead of
+    // finishing — so the proxy's counters cannot attribute them either.
+    let supersededServerBytes = 0;
+    for (const target of clicks.slice(0, -1)) {
+      supersededServerBytes += await api.bootstrapWireBytes(target.id);
+    }
     return {
       restoreToRenderedMs: Math.max(shownAt, catchupAt) - restoreAt,
       lastFloorMs: floorMs(lastBytes),
       lastBootstrapBytes: lastBytes,
-      supersededDownBytes: superseded,
+      supersededServerBytes,
       blackoutProxyBytes: proxy.counters(),
     };
   });

@@ -18,6 +18,7 @@ use anyhow::{Context, anyhow, bail};
 use charliebot_agents::runs::run_alive_probe;
 use charliebot_agents::transport::{identity, recovery as transport_recovery};
 use charliebot_core::config::BackendOption;
+use charliebot_core::home::boot_recovery_marker_path;
 use charliebot_core::parallel_walk;
 use charliebot_registry::context::{FeatureContext, StartupStop};
 use charliebot_registry::sequence::{
@@ -47,15 +48,10 @@ use crate::spawner_prompt;
 
 pub use crate::execution::{RUN_END_LANDING_RETRY_INTERVAL, closed_task_stop_request_id};
 const DRIVEN_RUN_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(10);
-const BOOT_RECOVERY_MARKER_PATH: &str = "state/boot_recovery.json";
 /// A durable file whose mtime is no earlier than the marker minus this slack keeps its node.
 /// The kernel stamps `st_mtime` from its coarse clock,
 /// which can lag the fine-clock pass start by about two ticks (~2 ms at 500 Hz), so the slack must exceed that lag.
 const MARKER_MTIME_SLACK_SECONDS: f64 = 1.0;
-
-fn boot_recovery_marker_path(home: &std::path::Path) -> PathBuf {
-  home.join(BOOT_RECOVERY_MARKER_PATH)
-}
 
 /// The boot marker: the start of the last pass that wrote it and the nodes whose pass failed in that pass. Every node
 /// outside `failed_sessions` was clean at or after `pass_started_at`, so the next boot may serve its skip verdict from
@@ -2549,7 +2545,7 @@ mod tests {
 
     let steps = charliebot_core::fsutil::synced_write_steps();
     assert_eq!(steps, ["sync", "rename"], "the temporary file syncs once, then the rename replaces the marker");
-    let marker_path = home.path().join("state").join("boot_recovery.json");
+    let marker_path = boot_recovery_marker_path(home.path());
     let marker: Value =
       serde_json::from_slice(&std::fs::read(&marker_path).expect("the marker exists")).expect("the marker is JSON");
     assert_eq!(marker, json!({"pass_started_at": pass_started_at.to_isoformat_text()}));
@@ -2684,13 +2680,13 @@ mod tests {
     assert!(own_tails > 0 && own_runs > 0, "the reference check read the node's files: {own_tails} {own_runs}");
 
     // A missing or torn proof serves nothing, so each node reads its own files.
-    std::fs::remove_file(home.path().join(crate::skip_proof::SKIP_PROOF_PATH)).expect("the proof is removed");
+    std::fs::remove_file(charliebot_core::home::boot_skip_proof_path(home.path())).expect("the proof is removed");
     let missing = SkipProof::read(home.path());
     match examine_session_dir(&features, &session_dir, Some(&marker), &missing).expect("the session is examined") {
       WalkEntry::Skipped { .. } => {}
       _ => panic!("a node without a proof keeps the walk's own verdict"),
     }
-    std::fs::write(home.path().join(crate::skip_proof::SKIP_PROOF_PATH), b"{\"version\": 1}\nnode\t1\t2")
+    std::fs::write(charliebot_core::home::boot_skip_proof_path(home.path()), b"{\"version\": 1}\nnode\t1\t2")
       .expect("the torn proof writes");
     let torn = SkipProof::read(home.path());
     assert!(torn.served(&session_id, &source).is_none(), "a torn row serves nothing");

@@ -11,6 +11,9 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
+use charliebot_core::home::{
+  BOOT_RECOVERY_FILE_NAME, BOOT_SKIP_PROOF_FILE_NAME, BOOT_TRIGGER_INDEX_FILE_NAME, state_rel_path,
+};
 use charliebot_store::layout;
 use regex::{Captures, NoExpand, Regex};
 use serde_json::Value;
@@ -42,7 +45,7 @@ const DROP_EVENTS: [&str; 3] = ["startup_segment", "task_tree_recovery_phases", 
 /// and the fact checkpoint (a header line, a facts line, a binary table and one line per kept event). The JSON arms
 /// below cannot read these.
 const LINE_ORIENTED_STARTUP_FILES: [&str; 3] =
-  ["boot_skip_proof.json", "boot_trigger_index.json", layout::FACT_CHECKPOINT_FILE_NAME];
+  [BOOT_SKIP_PROOF_FILE_NAME, BOOT_TRIGGER_INDEX_FILE_NAME, layout::FACT_CHECKPOINT_FILE_NAME];
 
 /// The lab's paths that differ between two trials, with their stand-ins, most specific first.
 fn lab_paths(lab: &Path) -> Vec<(Regex, &'static str)> {
@@ -142,9 +145,9 @@ fn body_lines(rel: &str, data: &[u8], names: &mut Names) -> Result<Vec<String>> 
 fn seed_path(seed: &Path, rel: &str) -> Option<std::path::PathBuf> {
   match rel.split_once('/') {
     Some(("sessions", rest)) => Some(seed.join(rest)),
-    _ if rel == "state/boot_recovery.json" => Some(seed.join("boot_recovery.json")),
-    _ if rel == "state/boot_skip_proof.json" => Some(seed.join("boot_skip_proof.json")),
-    _ if rel == "state/boot_trigger_index.json" => Some(seed.join("boot_trigger_index.json")),
+    _ if rel == state_rel_path(BOOT_RECOVERY_FILE_NAME) => Some(seed.join(BOOT_RECOVERY_FILE_NAME)),
+    _ if rel == state_rel_path(BOOT_SKIP_PROOF_FILE_NAME) => Some(seed.join(BOOT_SKIP_PROOF_FILE_NAME)),
+    _ if rel == state_rel_path(BOOT_TRIGGER_INDEX_FILE_NAME) => Some(seed.join(BOOT_TRIGGER_INDEX_FILE_NAME)),
     _ => None,
   }
 }

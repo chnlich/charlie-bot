@@ -8,7 +8,7 @@ use futures_util::future::BoxFuture;
 use crate::config::FeishuConfig;
 use crate::listener::FeishuListener;
 
-/// Starts the Feishu long connection and boot backfill when the app's credentials and an owner are configured.
+/// The Feishu long connection and boot backfill, started when the app's credentials and an owner are configured.
 pub(crate) struct FeishuService {
   entrypoint: ChannelService<FeishuListener>,
 }

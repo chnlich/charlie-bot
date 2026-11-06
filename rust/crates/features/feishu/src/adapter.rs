@@ -262,9 +262,9 @@ impl ThreadAdapter for FeishuThreadAdapter {
     })
   }
 
-  /// Delete the reactions this app added to the summon. Feishu deletes a reaction by its `reaction_id`, which the list
-  /// call returns. So the bot finds its own `OnIt` among the message's reactions (operator type `app`, operator id the
-  /// app id) and deletes each one.
+  /// The deletion of the reactions this app added to the summon. Feishu deletes a reaction by its `reaction_id`, which
+  /// the list call returns. So the bot finds its own `OnIt` among the message's reactions (operator type `app`,
+  /// operator id the app id) and deletes each one.
   fn remove_ack<'a>(&'a self, block: &'a Value) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async move {
       let message_id = message_id_of(str_field(block, FEISHU.mention_key)?)?;
@@ -332,7 +332,8 @@ fn adapter(bot: &Bot) -> Arc<dyn ThreadAdapter> {
   Arc::new(FeishuThreadAdapter::new(bot.clone()))
 }
 
-/// Post `text` into the session's Feishu thread and return the readback the CLI prints (`post_reply`).
+/// The `post_reply` entry point: it posts `text` into the session's Feishu thread and returns the readback the CLI
+/// prints.
 pub async fn post_reply_with_caller_context(
   bot: &Bot,
   session_id: &str,
@@ -353,8 +354,8 @@ pub async fn post_reply_with_caller_context(
   Ok(readback)
 }
 
-/// Store the thread id on the session's origin once the thread exists. The first reply creates the thread, and the
-/// origin carries no thread id until then. A session that already holds one is left as it is.
+/// The recording of the thread id on the session's origin once the thread exists. The first reply creates the thread,
+/// and the origin carries no thread id until then. A session that already holds one is left as it is.
 async fn record_thread_id(bot: &Bot, session_id: &str) -> Result<(), thread_entry::ThreadReplyError> {
   let session = thread_entry::require_thread_session(&FEISHU, &bot.features, session_id).await?;
   let origin = origin_of(&session.origin)?;
@@ -398,20 +399,20 @@ pub async fn deliver_done(features: &Arc<FeatureContext>, session_id: &str, done
   Ok(thread_entry::deliver_done(&adapter(&bot), features, session_id, done).await?)
 }
 
-/// Report queued Feishu summons lost across a restart (`backfill_lost_summons`).
+/// The report of queued Feishu summons lost across a restart (`backfill_lost_summons`).
 pub async fn backfill_lost_summons(features: &Arc<FeatureContext>) -> anyhow::Result<usize> {
   let bot = Bot::new(Arc::clone(features), BASE_URL);
   Ok(thread_entry::backfill_lost_summons(&adapter(&bot), features).await?)
 }
 
-/// Re-run the shared thread follow backfill over the adapter `client` serves (`backfill_followed_threads`).
+/// The shared thread follow backfill (`backfill_followed_threads`), re-run over the adapter `client` serves.
 pub async fn backfill_followed_threads(features: &Arc<FeatureContext>, client: FeishuClient) -> anyhow::Result<usize> {
   let adapter: Arc<dyn ThreadAdapter> =
     Arc::new(FeishuThreadAdapter::with_client(Bot::new(Arc::clone(features), BASE_URL), client));
   Ok(thread_entry::backfill_followed_threads(&adapter, features).await?)
 }
 
-/// Build the summon's arguments from a parsed message and dispatch it to the shared core (`accept_summon`).
+/// The summon's arguments, built from a parsed message and dispatched to the shared core (`accept_summon`).
 pub async fn accept_summon(
   adapter: &Arc<dyn ThreadAdapter>,
   features: &Arc<FeatureContext>,
@@ -447,8 +448,8 @@ pub async fn accept_summon(
   Ok(Some(accepted))
 }
 
-/// Route one parsed event to the shared core: a summon opens or reattaches the session, a follow arms the thread's
-/// follow trigger. Returns the session the event reached, or None when no session took it.
+/// The routing of one parsed event to the shared core: a summon opens or reattaches the session, a follow arms the
+/// thread's follow trigger. Returns the session the event reached, or None when no session took it.
 pub async fn route_inbound(
   adapter: &Arc<dyn ThreadAdapter>,
   features: &Arc<FeatureContext>,

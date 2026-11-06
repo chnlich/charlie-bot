@@ -25,19 +25,19 @@ struct FeishuCli {
 
 #[derive(Subcommand)]
 enum FeishuCommand {
-  /// Post a reply to this session's Feishu thread
+  /// A reply on this session's Feishu thread
   Reply(ReplyArgs),
-  /// Read this session's topic, the group's main chat, or another topic
+  /// This session's topic, the group's main chat, or another topic
   Read(ReadArgs),
-  /// Download one image or file from this session's group into the session directory
+  /// One image or file from this session's group, downloaded into the session directory
   Download(DownloadArgs),
-  /// Verify the Feishu app setup; exits 1 when ok is false
+  /// The Feishu app setup check; exits 1 when ok is false
   Check,
-  /// Send one authenticated Feishu Open API request as the user
+  /// One authenticated Feishu Open API request, sent as the user
   Request(RequestCommand),
-  /// Print the browser URL that starts a re-authorization
+  /// The browser URL that starts a re-authorization
   ConsentUrl(ConsentUrlArgs),
-  /// Exchange an authorization code for tokens and store them
+  /// An authorization code, exchanged for tokens and stored
   ExchangeCode(ExchangeCodeArgs),
 }
 
@@ -46,13 +46,13 @@ struct ReadArgs {
   /// Messages per page, 1..100 (default 50)
   #[arg(long, default_value_t = READ_LIMIT_DEFAULT, value_name = "N")]
   limit: i64,
-  /// Read the main chat of this session's group, newest first
+  /// The main chat of this session's group, newest first
   #[arg(long, conflicts_with = "topic")]
   chat: bool,
-  /// Read one topic of this session's group, oldest first
+  /// One topic of this session's group, oldest first
   #[arg(long, value_name = "THREAD_ID", conflicts_with = "chat")]
   topic: Option<String>,
-  /// Continue a main-chat or topic page
+  /// The next page of a main-chat or topic listing
   #[arg(long, value_name = "TOKEN")]
   page: Option<String>,
   /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
@@ -96,8 +96,8 @@ struct ExchangeCodeArgs {
   code: String,
 }
 
-/// Parse the Feishu arguments and run one verb. Parser errors print and exit on their own (argparse-compatible: help
-/// 0, usage error 2).
+/// The Feishu argument parse, then the run of one verb. Parser errors print and exit on their own
+/// (argparse-compatible: help 0, usage error 2).
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let command = with_infer_long_args(FeishuCli::command());
   let argv = std::iter::once(OsString::from("charliebot feishu")).chain(args.iter().cloned());

@@ -28,7 +28,7 @@ use serde_json::{Map, Value};
 use service::FeishuService;
 use turn_contribution::FeishuTurnContribution;
 
-/// Register the service, the routes and the package's other registrations, in server order.
+/// The service, the routes and the package's other registrations, all registered in server order.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.service(Arc::new(FeishuService::default()))?;
   registry.router(api::routes, api::matches)?;

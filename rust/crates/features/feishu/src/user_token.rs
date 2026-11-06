@@ -74,7 +74,7 @@ fn required(credentials: &Credentials, key: &str, home: &Path) -> Result<String,
     .and_then(|value| if value.trim().is_empty() { Err(failure()) } else { Ok(value) })
 }
 
-/// Send one request with the stored token, refreshing and retrying once when it expired.
+/// The send of one request with the stored token, refreshing and retrying once when it expired.
 pub(crate) fn execute_request(home: &Path, args: &RequestArgs, endpoints: &Endpoints) -> Result<Vec<u8>, CliExit> {
   let request = args.prepare()?;
   let credentials = load(home)?;
@@ -175,7 +175,7 @@ fn data_string(payload: &Value, field: &str, operation: &str) -> Result<String, 
   string_field(data, field, operation)
 }
 
-/// Write the new `user_access_token` and `refresh_token`, keeping every other byte of the file.
+/// The write of the new `user_access_token` and `refresh_token`, keeping every other byte of the file.
 fn store_tokens(home: &Path, access: &str, refresh: &str) -> Result<(), CliExit> {
   let path = credentials_path(home);
   let original =

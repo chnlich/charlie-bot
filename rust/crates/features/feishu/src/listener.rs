@@ -51,8 +51,8 @@ struct Connection {
   service_id: i32,
 }
 
-/// Run the long-connection listener until the process stops it (`run_listener`). The bot's identity is read once for
-/// the service start; a missing bot capability stops the listener before it opens the long connection.
+/// The long-connection listener, which runs until the process stops it (`run_listener`). The bot's identity is read
+/// once for the service start; a missing bot capability stops the listener before it opens the long connection.
 async fn run_listener(features: Arc<FeatureContext>) -> anyhow::Result<()> {
   let bot = Bot::new(Arc::clone(&features), BASE_URL);
   let client = bot.client()?;
@@ -137,7 +137,8 @@ async fn run_listener_loop(
   }
 }
 
-/// Serve one connection until it fails: the follow backfill runs first, then pings and frames are handled as they come.
+/// One connection, served until it fails: the follow backfill runs first, then pings and frames are handled as they
+/// come.
 async fn run_connection(
   sender: &Sender,
   mut receiver: Receiver,
@@ -165,7 +166,8 @@ async fn run_connection(
   }
 }
 
-/// Handle one binary frame: pongs and other control frames need nothing; an event is acknowledged, then handled.
+/// The handling of one binary frame: pongs and other control frames need nothing; an event is acknowledged, then
+/// handled.
 async fn handle_frame(
   bytes: &[u8],
   sender: &Sender,
@@ -187,8 +189,8 @@ async fn handle_frame(
   Ok(())
 }
 
-/// Parse one event payload, drop what the rules drop, and route the rest to the shared core. The payload is not logged:
-/// it carries the event's verification token.
+/// The parse of one event payload, dropping what the rules drop and routing the rest to the shared core. The payload
+/// is not logged: it carries the event's verification token.
 async fn handle_event(payload: &[u8], connection: &Connection) -> anyhow::Result<()> {
   let event: Value = serde_json::from_slice(payload).context("the event payload is not JSON")?;
   let config = connection.features.config.get()?;
@@ -205,8 +207,9 @@ async fn handle_event(payload: &[u8], connection: &Connection) -> anyhow::Result
   Ok(())
 }
 
-/// Admit a classified summon or follow only when its group has a listed person among its members. The member list is
-/// read fresh, so a failed read is an error and the event is not handled. Other verdicts pass through unchanged.
+/// The admission of a classified summon or follow only when its group has a listed person among its members. The
+/// member list is read fresh, so a failed read is an error and the event is not handled. Other verdicts pass through
+/// unchanged.
 async fn admit(inbound: Inbound, client: &FeishuClient, allowed: &BTreeMap<String, String>) -> anyhow::Result<Inbound> {
   let (Inbound::Summon(message) | Inbound::Follow(message)) = &inbound else {
     return Ok(inbound);

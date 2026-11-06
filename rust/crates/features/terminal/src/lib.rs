@@ -20,7 +20,8 @@ fn terminal_websocket(_features: Arc<FeatureContext>, request: WebSocketRequest)
   let grid = match pty::Grid::from_query(&request.query) {
     Ok(grid) => grid,
     Err(error) => {
-      tracing::warn!(query = %request.query, error = %error, "terminal_ws_bad_grid");
+      // The query carries the access token, so the log names only the refusal.
+      tracing::warn!(error = %error, "terminal_ws_bad_grid");
       return Box::pin(async move { (StatusCode::BAD_REQUEST, error).into_response() });
     }
   };

@@ -206,7 +206,10 @@ const PATTERNS: [CausePattern; 18] = [
   CausePattern { expression: r"(?m)^error(\[E\d+\])?:.*", shape: MatchShape::WholeText },
   CausePattern { expression: r"(?i)(worktree|already exists|not a git repository)", shape: MatchShape::WholeText },
   CausePattern { expression: r"(?i)(assertion failed|AssertionError|assert_eq)", shape: MatchShape::WholeText },
-  CausePattern { expression: r"(?i)(Permission denied|EACCES|landlock|read-only file system)", shape: MatchShape::WholeText },
+  CausePattern {
+    expression: r"(?i)(Permission denied|EACCES|landlock|read-only file system)",
+    shape: MatchShape::WholeText,
+  },
   CausePattern { expression: r"(?i)(fatal: |CONFLICT \(|rejected|non-fast-forward)", shape: MatchShape::WholeText },
   CausePattern { expression: r"(?i)(API Error|api_error|invalid_request_error)", shape: MatchShape::WholeText },
   CausePattern { expression: r"(?i)(^|\W)(error|failed|failure|exception)(\W|$)", shape: MatchShape::WholeLine },
@@ -259,11 +262,7 @@ pub enum ExtractedCause {
 /// The text without ANSI escapes, blank lines and the noise lines that carry no cause.
 pub fn clean(text: &str) -> String {
   let plain = ANSI.replace_all(text, "");
-  plain
-    .lines()
-    .filter(|line| !line.trim().is_empty() && !NOISE.is_match(line))
-    .collect::<Vec<_>>()
-    .join("\n")
+  plain.lines().filter(|line| !line.trim().is_empty() && !NOISE.is_match(line)).collect::<Vec<_>>().join("\n")
 }
 
 /// The text with credentials and long identifiers removed, before it reaches a row or a model.

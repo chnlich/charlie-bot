@@ -11,9 +11,9 @@ use charliebot_compat::http_client::{self, Settings};
 use charliebot_registry::draft::{DraftContext, DraftPlatform, DraftPlatformFactory, DraftSendFailure, DraftSent};
 use futures_util::future::BoxFuture;
 use http::header;
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use crate::target;
+use crate::target::{self, Target};
 
 const API_BASE: &str = "https://api.github.com/";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
@@ -41,8 +41,9 @@ impl GithubDraftPlatform {
 
   /// Send `body` as the target describes: a draft pull request, or a comment.
   pub async fn send(&self, target: &Value, body: &str) -> Result<DraftSent, DraftSendFailure> {
+    let target = Target::parse(target).map_err(DraftSendFailure::rejected)?;
     let token = self.operator_token().await?;
-    let (path, payload) = request_for(target, body)?;
+    let (path, payload) = target.request(body);
     let response = self
       .http
       .post(format!("{}{path}", self.api_base))
@@ -108,21 +109,6 @@ impl GithubDraftPlatform {
   }
 }
 
-fn request_for(target: &Value, body: &str) -> Result<(String, Value), DraftSendFailure> {
-  let repo = target
-    .get("repo")
-    .and_then(Value::as_str)
-    .filter(|repo| !repo.is_empty())
-    .ok_or_else(|| DraftSendFailure::rejected("the GitHub target names no repository"))?;
-  if let Some(number) = target.get("number").and_then(Value::as_u64) {
-    return Ok((format!("repos/{repo}/issues/{number}/comments"), json!({"body": body})));
-  }
-  let title = target.get("title").and_then(Value::as_str).unwrap_or_default();
-  let head = target.get("head").and_then(Value::as_str).unwrap_or_default();
-  let base = target.get("base").and_then(Value::as_str).unwrap_or_default();
-  Ok((format!("repos/{repo}/pulls"), json!({"title": title, "head": head, "base": base, "body": body, "draft": true})))
-}
-
 impl DraftPlatform for GithubDraftPlatform {
   fn name(&self) -> &'static str {
     "github"
@@ -158,6 +144,7 @@ mod tests {
   use std::thread;
 
   use charliebot_registry::draft::DraftFailureOutcome;
+  use serde_json::json;
 
   use super::*;
 

@@ -458,7 +458,7 @@ mod tests {
     let path = [venv_bin.display().to_string(), "/usr/bin".to_string(), "/bin".to_string()].join(":");
 
     let status = Command::new(env::current_exe().unwrap())
-      .args(["--exact", STARTUP_TEST])
+      .args(["--exact", STARTUP_TEST, "--ignored"])
       .env_clear()
       .env("PATH", &path)
       .env("VIRTUAL_ENV", root.path().join("venv"))

@@ -176,8 +176,14 @@ async fn compare_route(route: &str, cases: &[Case], fixture_start: usize, case_s
   assert_eq!(fixture_cases.len(), 137);
   let fixture_start = fixture_start + case_start;
   let fixture_end = fixture_start + case_end - case_start;
-  compare_corpus(&client, rust_address, route, &cases[case_start..case_end], &fixture_cases[fixture_start..fixture_end])
-    .await;
+  compare_corpus(
+    &client,
+    rust_address,
+    route,
+    &cases[case_start..case_end],
+    &fixture_cases[fixture_start..fixture_end],
+  )
+  .await;
 
   rust_server.abort();
   match rust_server.await {

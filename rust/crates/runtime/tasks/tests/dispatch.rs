@@ -997,10 +997,7 @@ async fn assert_input_admitted_after_active_run(session_kind: &str, later_type: 
         .update_slot_fields(
           &manager.id,
           "feishu",
-          Map::from_iter([(
-            "feishu_origin".to_string(),
-            json!({"tenant_key":"T","chat_id":"oc_1","root_id":"om_1"}),
-          )]),
+          Map::from_iter([("feishu_origin".to_string(), json!({"tenant_key":"T","chat_id":"oc_1","root_id":"om_1"}))]),
         )
         .await
         .unwrap();

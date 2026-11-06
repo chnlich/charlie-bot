@@ -177,6 +177,11 @@ function readTestcases(file, runner) {
     }
     const attrs = attributes(match[2]);
     const body = match[4] ?? '';
+    // A node testcase without a file-named suite above it has no file to rerun. Fail here, with the head of
+    // the report, rather than rerun it with an empty path.
+    if (runner === 'node' && suiteFile === '') {
+      throw new Error(`no file-named testsuite above testcase "${attrs.name ?? ''}"; report starts: ${xml.slice(0, 800)}`);
+    }
     testcases.push({
       binaryId: runner === 'node' ? suiteFile : (attrs.classname ?? ''),
       name: attrs.name ?? '',

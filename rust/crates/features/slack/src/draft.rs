@@ -363,6 +363,7 @@ mod tests {
 
   #[test]
   fn the_registered_platform_validates_and_labels_the_same_target() {
+    charliebot_cli_common::http::ensure_crypto_provider();
     let sender = SlackDraftSender::with_client(
       reqwest::Client::new(),
       API_BASE.to_string(),

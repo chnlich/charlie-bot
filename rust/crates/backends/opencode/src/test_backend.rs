@@ -671,6 +671,10 @@ async fn claim_is_held_before_start_and_dropped_after_start_failure() {
 
 #[test]
 fn process_rss_reads_the_process_own_resident_memory() {
+  // A process that has run only this test holds little resident memory; touch pages so there is
+  // something to read.
+  let heap = vec![1_u8; 16 * 1024 * 1024];
+  std::hint::black_box(&heap);
   assert!(server::OpenCodeServer::process_rss_mb_test(std::process::id()).unwrap() > 10.0);
 }
 

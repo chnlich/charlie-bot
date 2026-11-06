@@ -24,6 +24,7 @@ import {
   LINK,
   LIVE_READBACK,
   REPETITIONS,
+  STATUS_CHURN,
   TARGETS,
   TASK_TREE_LOAD,
   VIEW,
@@ -53,7 +54,8 @@ const OPEN_SCENARIO = 'open';
 // The sessions the bench needs are created on the trial's backend option, which scripts/release/trial.sh writes as
 // charlie-code-release-trial; the charlie-code binary behind it is the stub that run.sh puts on PATH. Index 1 is the
 // open session, 2 the background one, 3 to 5 the probes, and from FIRST_SIZED_INDEX on the switch target and the held
-// targets, which take turns until their bootstrap reaches the live view's size.
+// targets, which take turns until their bootstrap reaches the live view's size. The last index is the row whose status
+// churns, which the background load keeps idle in size.
 const STUB_BACKEND_ID = 'charlie-code-release-trial';
 const SEED_TIMEOUT_MS = 120000;
 const FIRST_SIZED_INDEX = 6;
@@ -156,15 +158,16 @@ async function createSessions(api) {
   const tag = crypto.randomBytes(4).toString('hex');
   const made = [];
   for (let index = 1; index <= BENCH_SESSIONS; index++) {
-    const targetBytes = index >= FIRST_SIZED_INDEX ? VIEW.bootstrapUntrimmedWireBytes : null;
-    made.push(await seedSession(api, tag, index, targetBytes));
+    const sized = index >= FIRST_SIZED_INDEX && index < BENCH_SESSIONS;
+    made.push(await seedSession(api, tag, index, sized ? VIEW.bootstrapUntrimmedWireBytes : null));
   }
   return {
     open: made[0],
     background: made[1],
     probes: made.slice(2, 5),
     switchTarget: made[FIRST_SIZED_INDEX - 1],
-    held: made.slice(FIRST_SIZED_INDEX),
+    held: made.slice(FIRST_SIZED_INDEX, BENCH_SESSIONS - 1),
+    churn: made[BENCH_SESSIONS - 1],
   };
 }
 
@@ -236,6 +239,7 @@ function buildSide({
     link: LINK,
     targets: TARGETS,
     taskTreeLoad: TASK_TREE_LOAD,
+    statusChurn: STATUS_CHURN,
     repetitions: args.repetitions,
     reply: { sources: REPLY_SOURCES, pieces: REPLY_PIECES, textBytes: replyBytes },
     assets: Object.fromEntries([...assets].map(([url, asset]) => [url, asset.sha256])),
@@ -248,6 +252,7 @@ function buildSide({
       probes: sessions.probes.map((session) => session.id),
       switchTarget: sessions.switchTarget.id,
       held: sessions.held.map((session) => session.id),
+      churn: sessions.churn.id,
       sizedTargets: [sessions.switchTarget, ...sessions.held].map(({ id, turns, bootstrapWireBytes }) => ({
         id,
         turns,

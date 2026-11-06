@@ -36,6 +36,16 @@ export const TASK_TREE_LOAD = Object.freeze({
   windowMs: 75000,
 });
 
+// The status churn of the same load: one row's own activity facts, the churn the live device's status body carries. The
+// live readback answered 200 to 72% of about 20 polls a minute, so about 14 answers a minute carried a body that
+// differed from the one before. A row that starts a held turn and cancels it moves `thinking_since`,
+// `has_running_tasks` and `work_state` together, and the derived work verdict can land as a second answer, so one flip
+// per 5.4 s models a changed answer per poll interval: 14 flips per 75 s window.
+export const STATUS_CHURN = Object.freeze({
+  flipsPerWindow: 14,
+  windowMs: 75000,
+});
+
 // Repetitions of each scenario. The report takes the median and the 90th percentile of the repetitions.
 export const REPETITIONS = 5;
 
@@ -67,8 +77,9 @@ export const OTHER_VIEWS = Object.freeze({
 });
 
 // The sessions the bench creates on the trial's backend: one open, one running in the background, three for the
-// probes, one switch target and five for the held blackout. They are task-tree nodes, so the server takes a message.
-export const BENCH_SESSIONS = 11;
+// probes, one switch target, five for the held blackout and one whose status churns. They are task-tree nodes, so the
+// server takes a message.
+export const BENCH_SESSIONS = 12;
 
 // The live readback of a release's default view, from one visible tab for 4.02 h: status polls about 20 per minute at
 // 5,767 bytes received each, and full-list fetches, 174 at 113,791 bytes each. Together they receive about 206 KB a
@@ -76,6 +87,7 @@ export const BENCH_SESSIONS = 11;
 export const LIVE_READBACK = Object.freeze({
   receivedKbPerMin: 206,
   statusPollBytes: 5767,
+  status200Share: 0.72,
   fullListBytes: 113791,
 });
 

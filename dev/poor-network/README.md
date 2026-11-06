@@ -68,21 +68,36 @@ and the summary prints them.
 
 Below the table, scenario 1's received bytes are split by endpoint. The visible tab's status polls are counted by the
 server's answer, the wire status: Chrome hands a revalidated answer to the page as its cached 200, and only the wire
-status says 304. Each 200 on the wire is compared with the body the tab last held for the same URL, so the report names
-the fields that changed. A 200 that repeats the previous body means the browser did not revalidate.
+status says 304. Each 200 is applied to the row state the tab held for its row set — the poll's URL without its `since`
+token — so the report names the fields that changed; the change's server answers only the rows that moved
+(`{"token", "rows", "gone"}`), and the baseline's answers the whole map. A 200 that repeats the state the tab held moved
+nothing: its body was resent with no row changed. The report also prints the share of 200 answers beside the live
+device's `LIVE_READBACK.status200Share`, and the bytes the tab received per 200 and per 304.
+
+## Status churn
+
+The status body of a live tab changes on its own: the live device answered 200 to 72% of about 20 polls a minute, each
+answer about 5.8 KB, so roughly 14 answers a minute differed from the one before. One row's own activity facts are what
+move: `thinking_since`, `has_running_tasks` and `work_state` flip together when a row starts and ends a turn. The bench
+models that with one row that alternates between a held turn and idle at `STATUS_CHURN`'s rate (14 flips per 75 s
+window, 11.2 flips a minute), which is one changed answer per poll interval of about 5 s. The background scenarios start
+the churn with the task-tree driver and stop it with the load: the Workspace's churn row is the bench's twelfth session,
+the starred view stars that session, and the Threads view churns one of its thread roots. The model's inputs are the
+live readback's numbers, and it runs on both sides, so the before side shows the churn the after side also meets.
 
 ## Other sidebar views
 
 `starred` and `threads` measure scenario 1's background with the visible tab on the starred view or the Threads view.
-Those views refetch their whole list on every task-tree frame. At its first repetition, the bench fills the view to the
-live size in `OTHER_VIEWS`:
+At its first repetition, the bench fills the view to the live size in `OTHER_VIEWS`:
 
-- the starred view: the background session and the first mock rows of the Workspace, starred;
+- the starred view: the background session, the churn session and the first mock rows of the Workspace, starred;
 - the Threads view: sessions created with a Slack origin, which makes each one a thread root.
 
-The task-tree driver renames a row of the view, so the view's rows change at the rate the Workspace's rows change in
-scenario 1. These scenarios have no target. The report prints their received and sent bytes, the endpoint split and the
-status polls.
+The task-tree driver renames a row of the view, and the status churn flips another, so the view's rows change at the
+rate the Workspace's rows change in scenario 1. A task-tree frame fetches the named row alone on both of the change's
+paths — the row refresh and the status delta — so the whole list is fetched only on the page's open, a view change and
+a reconnect after a network loss. These scenarios have no target. The report prints their received and sent bytes, the
+endpoint split, the status polls and the rows the tab painted.
 
 ## Capped steps
 
@@ -124,7 +139,7 @@ finding to state with the numbers.
 ## Sessions and the server
 
 The trial server runs on the mock home, which holds the view's rows that the bench's own sessions do not: `VIEW.rows`
-less `BENCH_SESSIONS` (113 sessions with the current profile), generated with `--shape view`. Each carries a task spec of
+less `BENCH_SESSIONS` (112 sessions with the current profile), generated with `--shape view`. Each carries a task spec of
 synthetic acceptance criteria and context references, sized so the rows' median matches the live view's; the default
 shape writes no task spec. The mock's sessions carry no task boundary, so the server refuses a message to them. The bench therefore creates its sessions through `POST /api/sessions/`, on the trial's backend
 option. Those sessions are rows of the default view too, so the view holds `VIEW.rows` rows.
@@ -144,7 +159,7 @@ The pieces differ, so the gzip of a session's history does not fold its replies 
 about three or four text events of 2.2 KB, and the server keeps each event as one chat message; a bootstrap carries the
 last 40 messages, of which the event size and the turns' own messages set how much reply text a switch target carries. The stub calls no model
 and reads no credential. A prompt carrying the marker `bench-hold` keeps its turn open for the background load, until
-the bench cancels it.
+the bench cancels it; the status churn sends such a prompt and cancels it, so one row's activity facts move.
 
 The web client reads its access key from `localStorage` and sends it as the `Authorization` header and as the `token`
 of each WebSocket URL. The bench writes the same `localStorage` entry before each page loads, so the page behaves as

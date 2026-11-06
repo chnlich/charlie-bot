@@ -166,6 +166,12 @@ export function formatSide(side) {
       `view: ${side.view.rows} rows, raw median row ${side.view.rawRowMedianBytes} B (live view: ${VIEW.rows} rows, ${VIEW.rawRowMedianBytes} B)`,
     );
   }
+  if (side.statusChurn) {
+    lines.push(
+      `status churn: one row flips between a held turn and idle ${side.statusChurn.flipsPerWindow} times per ` +
+        `${side.statusChurn.windowMs / 1000} s window (${((side.statusChurn.flipsPerWindow * 60000) / side.statusChurn.windowMs).toFixed(1)} flips a minute)`,
+    );
+  }
   const backgroundReps = side.reps?.background ?? [];
   if (backgroundReps.length > 0) {
     lines.push(...formatBackground('background', backgroundReps));
@@ -257,13 +263,22 @@ export function formatSide(side) {
 }
 
 // The background repetitions' received bytes by endpoint and the visible tab's status polls, as medians over the
-// repetitions. A status poll's fields are counted in the polls whose body they changed.
+// repetitions. A status poll's fields are counted in the polls whose body they changed. The share of 200 answers is
+// compared with the live device's, which the churn model reproduces.
 function formatBackground(label, reps) {
   const median = (values) => percentile(values, 0.5);
   const endpoints = Object.keys(reps[0].receivedByEndpoint).map(
     (name) => `${name} ${median(reps.map((rep) => rep.receivedByEndpoint[name])).toFixed(1)}`,
   );
   const poll = (name) => median(reps.map((rep) => rep.statusPoll[name]));
+  const share = (reps) => {
+    const polls = reps.map((rep) => rep.statusPoll.answered200 + rep.statusPoll.answered304);
+    return median(reps.map((rep, index) => (polls[index] === 0 ? 0 : rep.statusPoll.answered200 / polls[index])));
+  };
+  const bytes = (name) => {
+    const values = reps.map((rep) => rep.statusPoll[name]).filter((value) => value !== null);
+    return values.length > 0 ? `${median(values).toFixed(0)} B` : '-';
+  };
   const fieldNames = [...new Set(reps.flatMap((rep) => Object.keys(rep.statusPoll.changedFields)))].sort();
   const fields = fieldNames.map(
     (name) => `${name} ${median(reps.map((rep) => rep.statusPoll.changedFields[name] ?? 0))}`,
@@ -271,9 +286,11 @@ function formatBackground(label, reps) {
   return [
     `${label} received by endpoint, KB/min (median): ${endpoints.join(', ')}`,
     `${label} status poll, visible tab (median): ${poll('perMinute').toFixed(1)} per min, ${poll('answered200')} ` +
-      `answered 200, ${poll('answered304')} answered 304, ${poll('noWireStatus')} with no wire status; of the 200s, ` +
-      `${poll('changedBodies')} changed the body, ${poll('unchangedBodies')} repeated it and ` +
-      `${poll('newUrlBodies')} answered a new URL; polls per changed field: ` +
+      `answered 200 (share ${share(reps).toFixed(2)}, live ${LIVE_READBACK.status200Share.toFixed(2)}), ` +
+      `${poll('answered304')} answered 304, ${poll('noWireStatus')} with no wire status; received per answer ` +
+      `${bytes('bytes200')} on a 200 and ${bytes('bytes304')} on a 304; of the 200s, ` +
+      `${poll('changedBodies')} moved a row, ${poll('unchangedBodies')} repeated the state and ` +
+      `${poll('firstBodies')} answered a row set the tab held no state for; polls per changed field: ` +
       `${fields.length > 0 ? fields.join(', ') : 'none'}`,
   ];
 }

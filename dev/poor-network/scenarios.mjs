@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 import { launchBrowser, chromeBinary } from './chrome.mjs';
-import { startTaskTreeDriver } from './api.mjs';
+import { startStatusChurn, startTaskTreeDriver } from './api.mjs';
 import { ShapingProxy } from './proxy.mjs';
 import { LINK, OTHER_VIEWS, TASK_TREE_LOAD } from './profile.mjs';
 import { percentile } from './report.mjs';
@@ -146,33 +146,53 @@ function overlappingListRefreshes(tab, from, to) {
 function changedStatusFields(beforeText, afterText) {
   const before = JSON.parse(beforeText);
   const after = JSON.parse(afterText);
+// The fields that differ between two row states, each the field's name; a row only one state holds counts as `row
+// added` or `row removed`.
+function changedStatusFields(before, after) {
   const fields = new Set();
-  for (const id of new Set([...Object.keys(before), ...Object.keys(after)])) {
-    if (!(id in before)) {
+  for (const id of new Set([...before.keys(), ...after.keys()])) {
+    if (!before.has(id)) {
       fields.add('row added');
-    } else if (!(id in after)) {
+    } else if (!after.has(id)) {
       fields.add('row removed');
     } else {
-      for (const field of new Set([...Object.keys(before[id]), ...Object.keys(after[id])])) {
-        if (JSON.stringify(before[id][field]) !== JSON.stringify(after[id][field])) {
+      const left = before.get(id);
+      const right = after.get(id);
+      for (const field of new Set([...Object.keys(left), ...Object.keys(right)])) {
+        if (JSON.stringify(left[field]) !== JSON.stringify(right[field])) {
           fields.add(field);
         }
       }
     }
   }
-  if (fields.size === 0 && beforeText !== afterText) {
-    fields.add('key order');
-  }
   return fields;
 }
 
-// The tab's status polls that finished in [from, to]: how many, and what the server answered, by wire status. A 304
-// carried no body: the page read the cached one. A 200 is compared with the body the tab last held for the same URL,
-// before the window included: `changedBodies` differ from it, `unchangedBodies` repeat it (a browser that does not
-// revalidate), and `changedFields` counts, per field, the polls in which it changed for any row. `newUrlBodies`
-// answered a URL the tab had not polled before, such as an `ids` list in a new order. `noWireStatus` counts polls whose
-// wire status Chrome did not report.
-function statusPollCounts(tab, from, to, minutes) {
+// The row state an answer leaves the page with. The change's server answers `{token, rows, gone}`: the rows that moved
+// since the token the page sent, and the ids that left the filter's set. The baseline server answers the whole map. An
+// answer with `rows` extends the state the page held; a whole map replaces it, its own rows included.
+function statusStateAfter(state, text) {
+  const body = JSON.parse(text);
+  if (body && typeof body === 'object' && body.rows && typeof body.rows === 'object') {
+    const next = new Map(state);
+    for (const [id, row] of Object.entries(body.rows)) {
+      next.set(id, row);
+    }
+    for (const id of body.gone ?? []) {
+      next.delete(id);
+    }
+    return next;
+  }
+  return new Map(Object.entries(body));
+}
+
+// The tab's status polls that finished in [from, to]: how many, what the server answered by wire status, and what each
+// 200 moved. A 304 carried no body: the page read the cached one. A 200 is applied to the state the tab held for its
+// row set — the URL without its `since` token — and compared with it: `changedBodies` moved a row or the set,
+// `unchangedBodies` repeated it, and `firstBodies` answered a row set the tab held no state for. `changedFields`
+// counts, per field, the polls in which it changed for any row. `bytesPer200` and `bytesPer304` are the median bytes
+// the tab received per answer of that status, headers included.
+export function statusPollCounts(tab, from, to, minutes) {
   const counts = {
     perMinute: 0,
     answered200: 0,
@@ -181,10 +201,12 @@ function statusPollCounts(tab, from, to, minutes) {
     noWireStatus: 0,
     changedBodies: 0,
     unchangedBodies: 0,
-    newUrlBodies: 0,
+    firstBodies: 0,
     changedFields: {},
+    bytes200: [],
+    bytes304: [],
   };
-  const lastBody = new Map();
+  const stateByRowSet = new Map();
   for (const request of tab.requests.values()) {
     if (!ENDPOINTS.status.test(request.url) || request.finishAt === null) {
       continue;
@@ -192,10 +214,17 @@ function statusPollCounts(tab, from, to, minutes) {
     const inWindow = request.finishAt >= from && request.finishAt <= to;
     if (inWindow) {
       counts.perMinute += 1 / minutes;
-      if (request.wireStatus === 200) counts.answered200 += 1;
-      else if (request.wireStatus === 304) counts.answered304 += 1;
-      else if (request.wireStatus === null) counts.noWireStatus += 1;
-      else counts.otherStatuses += 1;
+      if (request.wireStatus === 200) {
+        counts.answered200 += 1;
+        counts.bytes200.push(request.bytes);
+      } else if (request.wireStatus === 304) {
+        counts.answered304 += 1;
+        counts.bytes304.push(request.bytes);
+      } else if (request.wireStatus === null) {
+        counts.noWireStatus += 1;
+      } else {
+        counts.otherStatuses += 1;
+      }
     }
     // The page's body of the poll: the server's for a 200, the cached one for a 304. A poll that finished before the
     // tab kept bodies carries none, and the comparison starts after it.
@@ -205,16 +234,18 @@ function statusPollCounts(tab, from, to, minutes) {
     if (request.body === null) {
       throw new Error(`no body read for status poll ${request.url}: ${request.bodyError ?? 'the read never finished'}`);
     }
-    const previous = lastBody.get(request.url);
-    lastBody.set(request.url, request.body);
+    const rowSet = request.url.replace(/([?&])since=[^&]*&?/, '$1').replace(/[?&]$/, '');
+    const previous = stateByRowSet.get(rowSet);
+    const next = statusStateAfter(previous ?? new Map(), request.body);
+    stateByRowSet.set(rowSet, next);
     if (!inWindow || request.wireStatus !== 200) {
       continue;
     }
     if (previous === undefined) {
-      counts.newUrlBodies += 1;
+      counts.firstBodies += 1;
       continue;
     }
-    const fields = changedStatusFields(previous, request.body);
+    const fields = changedStatusFields(previous, next);
     if (fields.size === 0) {
       counts.unchangedBodies += 1;
       continue;
@@ -224,6 +255,8 @@ function statusPollCounts(tab, from, to, minutes) {
       counts.changedFields[field] = (counts.changedFields[field] ?? 0) + 1;
     }
   }
+  counts.bytes200 = counts.bytes200.length > 0 ? percentile(counts.bytes200, 0.5) : null;
+  counts.bytes304 = counts.bytes304.length > 0 ? percentile(counts.bytes304, 0.5) : null;
   return counts;
 }
 
@@ -266,9 +299,10 @@ async function clickDuringListRefresh(tab, sessionId) {
 }
 
 // The background load: one visible and two hidden tabs on the open session, the background session running a held turn,
-// and the task-tree driver renaming `renamed` at the live rate. The visible tab shows the sidebar view `filter` (null:
-// the Workspace); the hidden tabs show the Workspace. `body` runs inside the load, which ends on every path.
-async function withBackground(ctx, { label, filter, renamed }, body) {
+// the task-tree driver renaming `renamed` at the live rate, and `churn` flipping between a held turn and idle at the
+// live status churn's rate. The visible tab shows the sidebar view `filter` (null: the Workspace); the hidden tabs show
+// the Workspace. `body` runs inside the load, which ends on every path.
+async function withBackground(ctx, { label, filter, renamed, churn }, body) {
   const { api, sessions } = ctx;
   return withLink(ctx, label, ['visible', 'hidden-1', 'hidden-2'], async ({ proxy, tabs, tab, hidden }) => {
     const open = sessions.open;
@@ -286,10 +320,12 @@ async function withBackground(ctx, { label, filter, renamed }, body) {
     const running = sessions.background.id;
     await api.sendMessage(running, `bench-hold background ${randomTag()}`);
     const driver = startTaskTreeDriver(api, renamed ?? running);
+    const churnDriver = startStatusChurn(api, churn ?? sessions.churn.id);
     return withCleanup(async () => {
       await sleep(WARM_UP_MS);
       return body({ proxy, tab, hidden });
     }, async () => {
+      await churnDriver.stop();
       await driver.stop();
       await api.cancelRuns(running);
     });
@@ -400,22 +436,24 @@ function slackOrigin(index) {
   return { team_id: 'TBENCH', channel_id: 'CBENCH', thread_ts: `1700000000.${String(index).padStart(6, '0')}` };
 }
 
-// Fills a sidebar view to its live size (OTHER_VIEWS) and names the row the driver renames. The starred view holds the
-// background session and the first mock rows of the Workspace, starred. The Threads view holds sessions the bench
-// creates with a Slack origin, which makes each one a thread root. Returns the view's rows as its route lists them, and
-// the median raw row.
+// Fills a sidebar view to its live size (OTHER_VIEWS) and names the row the driver renames and the row whose status
+// churns. The starred view holds the background session, the churn session and the first mock rows of the Workspace,
+// starred. The Threads view holds sessions the bench creates with a Slack origin, which makes each one a thread root.
+// Returns the view's rows as its route lists them, and the median raw row.
 async function populateView(ctx, filter) {
   const { api, sessions } = ctx;
   const rows = OTHER_VIEWS[filter].rows;
   let renamed;
+  let churn;
   if (filter === 'starred') {
     const benchIds = new Set(Object.values(sessions).flat().map((session) => session.id));
     const workspace = await api.json('GET', '/api/sessions/');
-    const others = workspace.map((row) => row.id).filter((id) => !benchIds.has(id)).slice(0, rows - 1);
-    for (const id of [sessions.background.id, ...others]) {
+    const others = workspace.map((row) => row.id).filter((id) => !benchIds.has(id)).slice(0, rows - 2);
+    for (const id of [sessions.background.id, sessions.churn.id, ...others]) {
       await api.json('POST', `/api/sessions/${id}/star`);
     }
     renamed = sessions.background.id;
+    churn = sessions.churn.id;
   } else {
     const tag = randomTag();
     const created = [];
@@ -424,32 +462,35 @@ async function populateView(ctx, filter) {
       created.push(await api.createSession(`pn-thread-${tag}-${index}`, ctx.backendId, slots));
     }
     renamed = created[0];
+    churn = created[1];
   }
   const listed = await api.json('GET', VIEW_ROUTES[filter]);
-  if (!Array.isArray(listed) || listed.length !== rows || !listed.some((row) => row.id === renamed)) {
+  const named = [renamed, churn];
+  if (!Array.isArray(listed) || listed.length !== rows || !named.every((id) => listed.some((row) => row.id === id))) {
     const count = Array.isArray(listed) ? listed.length : 'no';
     throw new Error(`${VIEW_ROUTES[filter]} lists ${count} rows, not the ${rows} the bench gave the view`);
   }
   const sizes = listed.map((row) => Buffer.byteLength(JSON.stringify(row)));
-  return { renamed, rows: listed.length, rawRowMedianBytes: percentile(sizes, 0.5) };
+  return { renamed, churn, rows: listed.length, rawRowMedianBytes: percentile(sizes, 0.5) };
 }
 
 // The background of scenario 1 with the visible tab on another sidebar view, which refetches its whole list on every
-// task-tree frame. The view holds the rows populateView gave it, and the driver renames one of them, so the view's
-// rows change at the rate the Workspace's do in scenario 1. Returns scenario 1's window numbers and the rows the tab
-// painted.
+// task-tree frame. The view holds the rows populateView gave it, the driver renames one of them and another one's
+// status churns, so the view's rows change at the rate the Workspace's do in scenario 1. Returns scenario 1's window
+// numbers and the rows the tab painted.
 export function viewBackgroundRep(filter) {
   return async (ctx) => {
     ctx.otherViews[filter] ??= await populateView(ctx, filter);
     const view = ctx.otherViews[filter];
-    return withBackground(ctx, { label: filter, filter, renamed: view.renamed }, async ({ proxy, tab, hidden }) => {
-      const rows = `document.querySelectorAll('#session-list a[id^="session-"]').length`;
-      const painted = await tab.evaluate(`currentFilter === ${JSON.stringify(filter)} ? ${rows} : -1`);
-      if (painted < 0) {
-        throw new Error(`the visible tab does not show the ${filter} view`);
-      }
-      return { ...(await measureWindow(proxy, tab, hidden)), viewRowsPainted: painted };
-    });
+    return withBackground(ctx, { label: filter, filter, renamed: view.renamed, churn: view.churn },
+      async ({ proxy, tab, hidden }) => {
+        const rows = `document.querySelectorAll('#session-list a[id^="session-"]').length`;
+        const painted = await tab.evaluate(`currentFilter === ${JSON.stringify(filter)} ? ${rows} : -1`);
+        if (painted < 0) {
+          throw new Error(`the visible tab does not show the ${filter} view`);
+        }
+        return { ...(await measureWindow(proxy, tab, hidden)), viewRowsPainted: painted };
+      });
   };
 }
 

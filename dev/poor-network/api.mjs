@@ -5,7 +5,7 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 
-import { TASK_TREE_LOAD } from './profile.mjs';
+import { STATUS_CHURN, TASK_TREE_LOAD } from './profile.mjs';
 
 const IDLE_QUIET_MS = 3000;
 
@@ -177,6 +177,49 @@ export function startTaskTreeDriver(api, sessionId) {
       clearTimeout(timer);
       await inFlight;
       return count;
+    },
+  };
+}
+
+// The status churn of a live turn: one row's own activity facts flip at the live device's rate. A held turn starts, and
+// the next step cancels it, so `thinking_since`, `has_running_tasks` and `work_state` move once per step. A step that
+// fails fails the repetition: a churn that stopped early would report a share the load did not produce.
+//
+// Returns {stop, flips}; stop cancels a held turn and waits for the last step.
+export function startStatusChurn(api, sessionId) {
+  const intervalMs = STATUS_CHURN.windowMs / STATUS_CHURN.flipsPerWindow;
+  let running = false;
+  let stopped = false;
+  let flips = 0;
+  let failure = null;
+  let step = Promise.resolve();
+  const loop = async () => {
+    while (!stopped) {
+      const startedAt = performance.now();
+      if (running) {
+        await api.cancelRuns(sessionId);
+      } else {
+        await api.sendMessage(sessionId, `bench-hold churn ${flips} ${crypto.randomUUID()}`);
+      }
+      running = !running;
+      flips += 1;
+      await pause(Math.max(50, intervalMs - (performance.now() - startedAt)));
+    }
+  };
+  step = loop().catch((error) => {
+    failure = error;
+  });
+  return {
+    async stop() {
+      stopped = true;
+      await step;
+      if (failure) {
+        throw new Error(`the status churn stopped after ${flips} flips: ${failure.message}`);
+      }
+      if (running) {
+        await api.cancelRuns(sessionId);
+      }
+      return flips;
     },
   };
 }

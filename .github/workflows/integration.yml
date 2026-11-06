@@ -1,0 +1,76 @@
+name: Integration
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  rust-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: dev/integration-selection/package-lock.json
+
+      - name: Install selector dependencies
+        run: npm ci --prefix dev/integration-selection --ignore-scripts --no-audit --no-fund
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.99.0
+
+      - name: Select integration tests
+        id: selection
+        run: node dev/integration-selection/run-selection.mjs
+
+      - name: Install system tools
+        if: steps.selection.outputs.rust_filter != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends jq ripgrep tmux
+
+      - name: Cache cargo
+        if: steps.selection.outputs.rust_filter != ''
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: rust-integration
+
+      - name: Install cargo-nextest
+        if: steps.selection.outputs.rust_filter != ''
+        run: |
+          curl -LsSf https://get.nexte.st/0.9.150/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+          cargo nextest --version
+
+      - name: Find Google Chrome
+        if: steps.selection.outputs.rust_filter != ''
+        id: chrome
+        run: |
+          chrome=$(command -v google-chrome)
+          echo "path=$chrome" >> "$GITHUB_OUTPUT"
+
+      - name: Run selected Rust integration tests
+        if: steps.selection.outputs.rust_filter != ''
+        working-directory: rust
+        env:
+          RUST_INTEGRATION_FILTER: ${{ steps.selection.outputs.rust_filter }}
+          CHARLIEBOT_TEST_CHROME_BIN: ${{ steps.chrome.outputs.path }}
+        run: node ../dev/integration-selection/run-rust.mjs
+
+      - name: Check for leaked script-test processes
+        if: always()
+        run: dev/check-leaked-script-test-processes.sh

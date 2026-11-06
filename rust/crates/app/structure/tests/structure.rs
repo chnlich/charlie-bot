@@ -1045,6 +1045,16 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::run_records::OBSERVATION_RESULT_REF`.",
   },
   OwnerRow {
+    name: "branch_name",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::run_records::OBSERVATION_BRANCH_NAME`.",
+  },
+  OwnerRow {
+    name: "worktree_path",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::run_records::OBSERVATION_WORKTREE_PATH`.",
+  },
+  OwnerRow {
     name: "local_pid",
     owner: "runtime/store",
     hint: "Use `charliebot_store::trigger_files::LOCAL_PID_KIND`.",

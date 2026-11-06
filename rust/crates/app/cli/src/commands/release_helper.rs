@@ -232,7 +232,9 @@ fn run_summary_fields(value: &Value) -> Result<Vec<String>, String> {
   let items = value.get("items").and_then(Value::as_array).ok_or("run response has no items list")?;
   let item = items.last().cloned().unwrap_or_else(|| json!({}));
   let mut fields = vec![items.len().to_string()];
-  for key in ["id", "state", "pid", "repo_path", "worktree_path", "branch_name"] {
+  for key in
+    ["id", "state", "pid", "repo_path", run_records::OBSERVATION_WORKTREE_PATH, run_records::OBSERVATION_BRANCH_NAME]
+  {
     fields.push(or_default(item.get(key)));
   }
   fields.push(items.iter().map(run_state).collect::<Vec<_>>().join(","));
@@ -1219,8 +1221,10 @@ fn self_test(args: &[String]) -> Result<i32, String> {
     return Err("self-test: wrong number of arguments".to_string());
   }
   let summary = json!({"items": [
-    {"id": "run-a", "state": "success", "pid": 101, "repo_path": "/repo", "worktree_path": "/work", "branch_name": "trial"},
-    {"id": "run-b", "state": "", "pid": null, "repo_path": "", "worktree_path": "", "branch_name": ""},
+    {"id": "run-a", "state": "success", "pid": 101, "repo_path": "/repo",
+     (run_records::OBSERVATION_WORKTREE_PATH): "/work", (run_records::OBSERVATION_BRANCH_NAME): "trial"},
+    {"id": "run-b", "state": "", "pid": null, "repo_path": "",
+     (run_records::OBSERVATION_WORKTREE_PATH): "", (run_records::OBSERVATION_BRANCH_NAME): ""},
   ]});
   let fields = run_summary_fields(&summary)?;
   let expected = ["2", "run-b", "", "", "", "", "", "success,"];

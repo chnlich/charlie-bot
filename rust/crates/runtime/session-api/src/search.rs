@@ -686,7 +686,8 @@ mod tests {
     let mut paths = Vec::new();
     for index in 0..super::SCAN_BATCH_MIN_JOBS + 13 {
       let path = home.path().join(format!("chat-{index:03}.jsonl"));
-      let body = if index % 7 == 0 { format!("event {index} carries the needle\n") } else { format!("event {index}\n") };
+      let body =
+        if index % 7 == 0 { format!("event {index} carries the needle\n") } else { format!("event {index}\n") };
       fs::write(&path, body).unwrap();
       paths.push(super::watched_file(home.path(), path));
     }

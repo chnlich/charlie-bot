@@ -119,3 +119,13 @@ rust = "package(charliebot-voice)"
 [[entry]]
 paths = ["web/features/voice/**"]
 rust = "package(charliebot-voice)"
+
+# The tasks tests read the manager and worker prompts from the checkout, and skill_pointers.rs resolves every
+# skills/<name>/ reference in them.
+[[entry]]
+paths = ["prompts/**"]
+rust = "rdeps(=charliebot-tasks)"
+
+[[entry]]
+paths = ["skills/**"]
+rust = "rdeps(=charliebot-tasks)"

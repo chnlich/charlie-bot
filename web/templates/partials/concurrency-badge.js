@@ -123,11 +123,29 @@
     if (tip) tip.textContent = breakdown;
   }
 
+  // At most one request is in flight. A call during it queues one more, which runs when the first answers. A hidden
+  // tab makes no request: the visibilitychange listener refreshes it once it is visible.
+  let refreshInFlight = false;
+  let refreshQueued = false;
+
   function refresh() {
-    return fetch(NOW_URL, {headers: {'Accept': 'application/json'}})
+    if (document.hidden) return;
+    if (refreshInFlight) {
+      refreshQueued = true;
+      return;
+    }
+    refreshInFlight = true;
+    fetch(NOW_URL, {headers: {'Accept': 'application/json'}})
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
       .then(renderLive)
-      .catch((error) => console.error('concurrency badge refresh failed:', error));
+      .catch((error) => console.error('concurrency badge refresh failed:', error))
+      .finally(() => {
+        refreshInFlight = false;
+        if (refreshQueued) {
+          refreshQueued = false;
+          refresh();
+        }
+      });
   }
 
   // The WebSocket's frames arrive in bursts — one manager turn moves several rows — so a refetch waits out the burst.

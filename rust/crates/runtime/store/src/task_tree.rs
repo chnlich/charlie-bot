@@ -4059,13 +4059,7 @@ pub(crate) mod tests {
     let mut index = empty_tree_index();
     add_tree_node(&mut index, "root".to_string(), None, SessionStatus::Active, false);
     for sequence in 0..1001 {
-      add_tree_node(
-        &mut index,
-        format!("open-{sequence:04}"),
-        Some("root".to_string()),
-        SessionStatus::Active,
-        false,
-      );
+      add_tree_node(&mut index, format!("open-{sequence:04}"), Some("root".to_string()), SessionStatus::Active, false);
     }
     let refusal = descendant_ids(&store, &index, "root").err();
     assert!(

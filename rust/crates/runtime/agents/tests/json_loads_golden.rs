@@ -7,7 +7,7 @@
 use charliebot_core::json_loads::{self, LoadError};
 use charliebot_core::text_repr;
 use serde::Deserialize;
-use serde_json::{value::RawValue, Value};
+use serde_json::{Value, value::RawValue};
 
 const GOLDEN_FIXTURE: &str = include_str!("fixtures/json_loads_golden.json");
 
@@ -110,14 +110,16 @@ fn json_loads_matches_recorded_over_a_sample_of_the_corpus() {
   );
 
   for message in REQUIRED_MESSAGES {
-    assert!(
-      GOLDEN_FIXTURE.contains(message),
-      "no corpus input reaches {message:?}"
-    );
+    assert!(corpus_contains_text(message), "no corpus input reaches {message:?}");
   }
   for reason in REQUIRED_CODEC_REASONS {
-    assert!(GOLDEN_FIXTURE.contains(reason), "no corpus input reaches the codec reason {reason:?}");
+    assert!(corpus_contains_text(reason), "no corpus input reaches the codec reason {reason:?}");
   }
+}
+
+fn corpus_contains_text(text: &str) -> bool {
+  let encoded = serde_json::to_string(text).unwrap();
+  GOLDEN_FIXTURE.contains(&encoded[1..encoded.len() - 1])
 }
 
 fn load_by_mode(mode: &str, input: &str) -> Result<Value, LoadError> {

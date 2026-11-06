@@ -39,6 +39,13 @@ const SIGNATURE_BATCH_CHUNK_FLOOR: usize = 50;
 ///
 /// A dispatched chunk costs a message round trip, so only a batch long enough to pay it takes the pool.
 const SIGNATURE_BATCH_MIN_PATHS: usize = 32;
+/// The threads one content-scan batch may split across.
+///
+/// A first query scans every active session's chat file: 5.5 GB on the 7,160-session mock home, which one
+/// thread spends about 0.6 s on. The scans read different files and do not depend on each other.
+const SCAN_BATCH_WORKERS: usize = 16;
+/// The fewest scans a batch runs on its own threads: starting them costs more than a short batch saves.
+const SCAN_BATCH_MIN_JOBS: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FileSignature {
@@ -226,14 +233,17 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
     })
     .collect();
 
-  let mut content_hits = Vec::new();
-  let mut scan_failures = 0;
-  for (index, (meta, signature)) in content_metas.iter().zip(&signatures).enumerate() {
+  // The per-file verdicts are read here, on the request's thread, and the files that need a scan are collected
+  // so one batch can read them across threads. A candidate's place in `content_hits` stays its place in the
+  // corpus, because the result's order breaks ties on insertion order.
+  let mut content_hits = vec![false; content_metas.len()];
+  let mut scans: Vec<(usize, u64)> = Vec::new();
+  for (index, (_, signature)) in content_metas.iter().zip(&signatures).enumerate() {
     let path = &candidate_paths[index].path;
     let Some(signature) = signature else { continue };
     let (miss_roots, hit_roots) = memos.lock().expect("session search memo mutex is not poisoned").roots(path);
     if hit_root_covers(&hit_roots, *signature, &needle) {
-      content_hits.push(*meta);
+      content_hits[index] = true;
       continue;
     }
     let Some(start) = absence_rescan_start(&miss_roots, *signature, &needle) else {
@@ -243,22 +253,28 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
     {
       memos.lock().expect("session search memo mutex is not poisoned").scan_calls += 1;
     }
-    match scan_content(path, &needle, start) {
+    scans.push((index, start));
+  }
+  let mut scan_failures = 0;
+  for ((index, _), answer) in scans.iter().zip(scan_contents(&candidate_paths, &scans, &needle)) {
+    let path = &candidate_paths[*index].path;
+    let signature = signatures[*index].expect("a scanned candidate holds its signature");
+    match answer {
       Ok(true) => {
-        memos.lock().expect("session search memo mutex is not poisoned").remember_root(path, &needle, *signature, true);
-        content_hits.push(*meta);
+        memos.lock().expect("session search memo mutex is not poisoned").remember_root(path, &needle, signature, true);
+        content_hits[*index] = true;
       }
       Ok(false) => {
-        memos.lock().expect("session search memo mutex is not poisoned").remember_root(path, &needle, *signature, false)
+        memos.lock().expect("session search memo mutex is not poisoned").remember_root(path, &needle, signature, false)
       }
       Err(error) => {
         scan_failures += 1;
-        log_search_read_failed_once(memos, &meta.id, &error);
+        log_search_read_failed_once(memos, &content_metas[*index].id, &error);
       }
     }
   }
 
-  names.extend(content_hits);
+  names.extend(content_metas.iter().zip(&content_hits).filter(|(_, hit)| **hit).map(|(meta, _)| *meta));
   names.sort_by_key(|left| Reverse(left.updated_at));
   names.truncate(SEARCH_RESULT_LIMIT);
   if scan_failures == 0 {
@@ -562,6 +578,33 @@ fn scan_unicode(file: &mut File, needle: &str, replace_invalid: bool) -> io::Res
   }
 }
 
+/// The scan answer of every job, in the jobs' order.
+///
+/// A scan reads its file from the start offset to the end. The jobs touch different files, so a batch long
+/// enough to pay for them runs the jobs on their own threads.
+fn scan_contents(paths: &[WatchedFile], scans: &[(usize, u64)], needle: &str) -> Vec<io::Result<bool>> {
+  let workers = std::thread::available_parallelism().map_or(1, |count| count.get()).min(SCAN_BATCH_WORKERS);
+  if scans.len() < SCAN_BATCH_MIN_JOBS || workers < 2 {
+    return scans.iter().map(|(index, start)| scan_content(&paths[*index].path, needle, *start)).collect();
+  }
+  let chunk = scans.len().div_ceil(workers);
+  let mut answers = Vec::with_capacity(scans.len());
+  std::thread::scope(|scope| {
+    let handles: Vec<_> = scans
+      .chunks(chunk)
+      .map(|chunk| {
+        scope.spawn(move || {
+          chunk.iter().map(|(index, start)| scan_content(&paths[*index].path, needle, *start)).collect::<Vec<_>>()
+        })
+      })
+      .collect();
+    for handle in handles {
+      answers.extend(handle.join().expect("a scan worker finishes without panic"));
+    }
+  });
+  answers
+}
+
 #[cfg(test)]
 mod tests {
   use std::collections::HashMap;
@@ -633,6 +676,26 @@ mod tests {
       let signature = answer.as_ref().expect("a written path reads");
       assert_eq!(signature.size, (format!("event {index}\n").len() as u64), "path {index} answers for itself");
       assert_eq!(*signature, super::file_signature_unlogged(&file.path).unwrap(), "path {index} matches a direct read");
+    }
+  }
+
+  /// A scan batch pairs every answer with its own file: a needle found in one candidate must not mark another.
+  #[test]
+  fn scan_batch_answers_in_argument_order() {
+    let home = tempfile::tempdir().unwrap();
+    let mut paths = Vec::new();
+    for index in 0..super::SCAN_BATCH_MIN_JOBS + 13 {
+      let path = home.path().join(format!("chat-{index:03}.jsonl"));
+      let body =
+        if index % 7 == 0 { format!("event {index} carries the needle\n") } else { format!("event {index}\n") };
+      fs::write(&path, body).unwrap();
+      paths.push(super::watched_file(home.path(), path));
+    }
+    let scans: Vec<(usize, u64)> = (0..paths.len()).map(|index| (index, 0)).collect();
+    let answers = super::scan_contents(&paths, &scans, "needle");
+    assert_eq!(answers.len(), paths.len());
+    for (index, answer) in answers.iter().enumerate() {
+      assert_eq!(answer.as_ref().unwrap(), &(index % 7 == 0), "candidate {index} answers for itself");
     }
   }
 

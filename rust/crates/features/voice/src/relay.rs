@@ -756,7 +756,7 @@ mod tests {
 
   #[tokio::test]
   async fn disconnect_after_end_abandons_without_archiving() {
-    let server = start_relay_test(FakeMode::NeverFinal, MAX_RECORDING_SAMPLES).await;
+    let mut server = start_relay_test(FakeMode::NeverFinal, MAX_RECORDING_SAMPLES).await;
     let mut browser = browser_socket(server.address).await;
     browser.send(ClientMessage::Binary(vec![1, 2].into())).await.expect("send audio");
     browser.send(ClientMessage::Text(r#"{"type":"end"}"#.into())).await.expect("seal the recording");

@@ -115,23 +115,30 @@ async fn request_body_matches_recorded_for_the_request_corpus() {
   assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");
   let fixture_cases = fixture["cases"].as_array().unwrap();
   assert_eq!(fixture_cases.len(), 137);
-  let mut fixture_index = 0;
   let items = corpus();
   assert_eq!(items.len(), 40);
-  compare_corpus(&client, rust_address, "/items", &items, fixture_cases, &mut fixture_index).await;
   let bounded = bounded_corpus();
   assert_eq!(bounded.len(), 28);
-  compare_corpus(&client, rust_address, "/bounds", &bounded, fixture_cases, &mut fixture_index).await;
   let messages = message_corpus();
   assert_eq!(messages.len(), 17);
-  compare_corpus(&client, rust_address, "/messages", &messages, fixture_cases, &mut fixture_index).await;
   let attachments = attachment_corpus();
   assert_eq!(attachments.len(), 20);
-  compare_corpus(&client, rust_address, "/attachments", &attachments, fixture_cases, &mut fixture_index).await;
   let triggers = trigger_corpus();
   assert_eq!(triggers.len(), 32);
-  compare_corpus(&client, rust_address, "/triggers", &triggers, fixture_cases, &mut fixture_index).await;
-  assert_eq!(fixture_index, fixture_cases.len());
+  let (items_cases, rest) = fixture_cases.split_at(items.len());
+  let (bounded_cases, rest) = rest.split_at(bounded.len());
+  let (messages_cases, rest) = rest.split_at(messages.len());
+  let (attachments_cases, triggers_cases) = rest.split_at(attachments.len());
+  assert_eq!(triggers_cases.len(), triggers.len());
+  // Each route's loop sends sequential requests against its own fixture slice; the five routes run
+  // concurrently, since 137 sequential request round trips pass the unit-test budget.
+  tokio::join!(
+    compare_corpus(&client, rust_address, "/items", &items, items_cases),
+    compare_corpus(&client, rust_address, "/bounds", &bounded, bounded_cases),
+    compare_corpus(&client, rust_address, "/messages", &messages, messages_cases),
+    compare_corpus(&client, rust_address, "/attachments", &attachments, attachments_cases),
+    compare_corpus(&client, rust_address, "/triggers", &triggers, triggers_cases),
+  );
 
   rust_server.abort();
   match rust_server.await {
@@ -185,10 +192,8 @@ async fn compare_corpus(
   route: &str,
   cases: &[Case],
   fixture_cases: &[Value],
-  fixture_index: &mut usize,
 ) {
-  for case in cases {
-    let recorded = &fixture_cases[*fixture_index];
+  for (case, recorded) in cases.iter().zip(fixture_cases) {
     let request = json!({
       "path": format!("{route}/{}", case.item_id),
       "name": case.name,
@@ -208,7 +213,6 @@ async fn compare_corpus(
     } else if recorded_status == StatusCode::UNPROCESSABLE_ENTITY {
       assert_eq!(error_shape(&rust_body), error_shape(recorded_body), "validation shape for {}", case.name);
     }
-    *fixture_index += 1;
   }
 }
 

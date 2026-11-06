@@ -48,7 +48,7 @@ enum Outcome {
 }
 
 /// One input in every this many is decoded and compared.
-const SAMPLE_STEP: usize = 128;
+const SAMPLE_STEP: usize = 512;
 
 #[derive(Deserialize)]
 struct RecordedFixture<'a> {

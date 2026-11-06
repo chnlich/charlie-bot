@@ -31,8 +31,8 @@ impl AudioQueue {
   }
 
   #[cfg(test)]
-  pub(crate) fn new_with_recording_budget_for_test(recording_budget_bytes: usize) -> Arc<Self> {
-    Self::with_limits(PREVIEW_QUEUE_SECONDS * SAMPLE_RATE * 2, recording_budget_bytes)
+  pub(crate) fn new_with_limits_for_test(max_bytes: usize, recording_budget_bytes: usize) -> Arc<Self> {
+    Self::with_limits(max_bytes, recording_budget_bytes)
   }
 
   pub(crate) fn new_recording(max_bytes: usize) -> Arc<Self> {
@@ -120,5 +120,23 @@ impl AudioQueue {
       .expect("the recording is sealed before end-frame timing is read")
       .elapsed()
       .as_secs_f64()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[tokio::test]
+  async fn recording_cap_keeps_the_exact_audio_prefix() {
+    let frame = vec![0x2a_u8; 4];
+    let queue = AudioQueue::new_with_limits_for_test(frame.len() * 3, 6);
+    for _ in 0..3 {
+      assert!(queue.put(frame.clone()).await);
+    }
+    let recorded = [&frame[..], &frame[..2]].concat();
+    assert_eq!(queue.recording_pcm().await, recorded);
+    assert!(!queue.put(vec![0x2a; 1]).await, "the preview queue rejects bytes above its capacity");
+    assert_eq!(queue.recording_pcm().await, recorded);
   }
 }

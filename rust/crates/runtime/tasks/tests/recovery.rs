@@ -58,7 +58,7 @@ fn script_run_spec() -> TaskSpec {
 
 #[test]
 #[ignore = "subprocess entry point for durable capture recovery"]
-fn final_stdout_supervisor() {
+fn final_stdout_supervisor_subprocess_entry() {
   charliebot_agents::transport::final_stdout::supervise(&[std::env::var_os("TEST_CAPTURE_DIR").unwrap()]).unwrap();
 }
 
@@ -99,7 +99,7 @@ async fn captured_run(
   );
   final_stdout::prepare(&spec, &directory, &LaunchArgs::default(), None)?;
   let child = Command::new(std::env::current_exe()?)
-    .args(["--exact", "final_stdout_supervisor", "--ignored"])
+    .args(["--exact", "final_stdout_supervisor_subprocess_entry", "--ignored"])
     .env("TEST_CAPTURE_DIR", &directory)
     .current_dir(&directory)
     .process_group(0)

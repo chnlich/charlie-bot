@@ -71,7 +71,7 @@ fn adoption_option_with_context_limit(context_limit: u64) -> BackendOption {
 
 #[test]
 #[ignore = "launched as the OpenCode run identity process by the relay tests"]
-fn relay_subprocess() {
+fn relay_subprocess_entry() {
   let args =
     ["CHARLIEBOT_OPENCODE_RELAY_DIRECTORY", "CHARLIEBOT_OPENCODE_PARENT_PID", "CHARLIEBOT_OPENCODE_PARENT_START"]
       .map(|key| std::env::var_os(key).expect("relay process environment contains its identity"));
@@ -80,7 +80,7 @@ fn relay_subprocess() {
 
 #[tokio::test]
 #[ignore = "server-side process for the OpenCode restart test"]
-async fn restart_owner_subprocess() {
+async fn restart_owner_subprocess_entry() {
   let harness = Harness::new(json!({"prompts": {"paused": {"events": [usage_event(5, 2)], "hold": true}}}));
   let (_, _, _task) = harness.start_run("paused", LaunchArgs::default(), None, vec![], Env::new());
   harness
@@ -114,7 +114,7 @@ async fn killed_server_process_leaves_relay_and_serve_for_adoption() {
   let scratch = tempfile::tempdir().unwrap();
   let ready = scratch.path().join("ready");
   let owner = Command::new(std::env::current_exe().unwrap())
-    .args(["--exact", "test_backend::restart_owner_subprocess", "--ignored"])
+    .args(["--exact", "test_backend::restart_owner_subprocess_entry", "--ignored"])
     .env("TMPDIR", scratch.path())
     .env("TEST_OWNER_READY", &ready)
     .spawn()
@@ -1179,7 +1179,7 @@ fn a_restart_before_the_turn_record_exists_fails_with_a_specific_error_event() {
   fs::write(&raw_path, []).unwrap();
   let executable = std::env::current_exe().unwrap();
   let status = Command::new(executable)
-    .args(["--exact", "test_backend::relay_subprocess", "--ignored"])
+    .args(["--exact", "test_backend::relay_subprocess_entry", "--ignored"])
     .env("CHARLIEBOT_OPENCODE_RELAY_DIRECTORY", &run_directory)
     .env("CHARLIEBOT_OPENCODE_PARENT_PID", "2147483647")
     .env("CHARLIEBOT_OPENCODE_PARENT_START", "no-such-process")

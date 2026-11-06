@@ -363,7 +363,7 @@ mod tests {
 
   #[test]
   #[ignore = "subprocess server for restart tests"]
-  fn capturing_server() {
+  fn capturing_server_subprocess_entry() {
     let root = std::env::var_os("CHARLIEBOT_TEST_AGY_ROOT").unwrap();
     tokio::runtime::Runtime::new().unwrap().block_on(capture_run(Path::new(&root))).unwrap();
   }
@@ -398,7 +398,7 @@ mod tests {
 
   async fn cut_server(root: &Path) -> u32 {
     let mut server = Command::new(std::env::current_exe().unwrap())
-      .args(["--exact", "antigravity_cli::tests::capturing_server", "--ignored"])
+      .args(["--exact", "antigravity_cli::tests::capturing_server_subprocess_entry", "--ignored"])
       .env("CHARLIEBOT_TEST_AGY_ROOT", root)
       .stdout(Stdio::null())
       .stderr(Stdio::inherit())

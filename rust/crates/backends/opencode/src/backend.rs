@@ -329,7 +329,7 @@ impl ServeTurn for OpenCodeTurn {
       ("CHARLIEBOT_OPENCODE_PARENT_START".to_string(), parent_start.clone()),
     ]);
     #[cfg(test)]
-    let args = vec!["--exact".into(), "test_backend::relay_subprocess".into(), "--ignored".into()];
+    let args = vec!["--exact".into(), "test_backend::relay_subprocess_entry".into(), "--ignored".into()];
     #[cfg(not(test))]
     let args = vec![
       relay::RELAY_ARG.into(),

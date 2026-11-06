@@ -10,6 +10,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use charliebot_core::credentials::REDACTED;
 use clap::Args;
 use serde_json::json;
 
@@ -189,7 +190,7 @@ pub fn transport_failure(cause: &str, redactions: &[&str]) -> CliExit {
 pub fn redact(text: &str, redactions: &[&str]) -> String {
   let mut text = text.to_string();
   for secret in redactions.iter().filter(|secret| !secret.is_empty()) {
-    text = text.replace(secret, "[redacted]");
+    text = text.replace(secret, REDACTED);
   }
   text
 }
@@ -203,7 +204,7 @@ pub fn redact_bytes(body: &[u8], redactions: &[&str]) -> Vec<u8> {
     let mut position = 0;
     while position < body.len() {
       if body[position..].starts_with(secret) {
-        redacted.extend_from_slice(b"[redacted]");
+        redacted.extend_from_slice(REDACTED.as_bytes());
         position += secret.len();
       } else {
         redacted.push(body[position]);

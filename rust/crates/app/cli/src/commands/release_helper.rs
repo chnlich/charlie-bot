@@ -1071,13 +1071,13 @@ fn write_message(args: &[String]) -> Result<i32, String> {
   Ok(0)
 }
 
-/// Replaces every occurrence of `value`, and of its quoted form, with `[redacted]`. An empty value is not a pattern:
-/// a deployment whose endpoint needs no key has none to redact.
+/// Replaces every occurrence of `value`, and of its quoted form, with the redaction marker. An empty value is not a
+/// pattern: a deployment whose endpoint needs no key has none to redact.
 fn redact_value(text: &mut String, value: &str) {
   if value.is_empty() {
     return;
   }
-  *text = text.replace(value, "[redacted]");
+  *text = text.replace(value, credentials::REDACTED);
   let characters: Vec<char> = value.chars().collect();
   if characters.len() >= 2
     && characters[0] == characters[characters.len() - 1]
@@ -1085,7 +1085,7 @@ fn redact_value(text: &mut String, value: &str) {
   {
     let inner: String = characters[1..characters.len() - 1].iter().collect();
     if !inner.is_empty() {
-      *text = text.replace(&inner, "[redacted]");
+      *text = text.replace(&inner, credentials::REDACTED);
     }
   }
 }
@@ -1139,7 +1139,7 @@ fn replay(
   // The replay cursor rides the handshake query; cursor 0 replays every event.
   let path = route::fill(api::SESSION_WEBSOCKET_PATH, &[session]);
   let url = format!("{base_url}{path}?token={}&cursor=0", quote_component(&token));
-  let outcome = replay_frames(&url).map_err(|error| error.replace(&token, "[redacted]"))?;
+  let outcome = replay_frames(&url).map_err(|error| error.replace(&token, credentials::REDACTED))?;
   let frames = outcome.ok_or("ValueError: replay returned no catchup frames")?;
   let mut signatures = Vec::new();
   for frame in &frames {

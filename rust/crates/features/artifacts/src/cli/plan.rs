@@ -168,8 +168,8 @@ pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
   };
   let session_id = resolve::resolve_from_env(session.as_deref())?;
   match verb {
-    Verb::List => print_result(&client::get(&format!("/api/sessions/{session_id}/plans"), None)?),
-    Verb::Diff(args) => print_result(&build_diff(&session_id, &args, host)?),
+    Verb::List => json_out::print_result(&client::get(&format!("/api/sessions/{session_id}/plans"), None)?),
+    Verb::Diff(args) => json_out::print_result(&build_diff(&session_id, &args, host)?),
     Verb::Present(args) => {
       let (title, file) = (args.title.clone(), args.file.clone());
       register(&session_id, "present", present_payload(&session_id, &args), move |plans| {
@@ -205,10 +205,6 @@ enum Verb {
   Close(CloseArgs),
   Diff(DiffArgs),
   List,
-}
-
-fn print_result(value: &Value) {
-  print!("{}", json_out::render(value, Some(2)));
 }
 
 fn present_payload(session_id: &str, args: &PresentArgs) -> Value {
@@ -266,7 +262,7 @@ fn register(
   {
     members.insert("reminder".to_string(), json!(reminder));
   }
-  print_result(&result);
+  json_out::print_result(&result);
   Ok(())
 }
 

@@ -266,7 +266,7 @@ fn register_watch(sessions_dir: &Path, session_id: &str, args: &Args) -> Result<
   }
   let key = TriggerKey { session_id: session_id.to_string(), message: args.message.clone(), watch_targets };
   let result = post_registration(Value::Object(payload), &key, sessions_dir)?;
-  print!("{}", json_out::render(&result, Some(2)));
+  json_out::print_result(&result);
   Ok(())
 }
 
@@ -344,7 +344,7 @@ fn start_and_register(sessions_dir: &Path, session_id: &str, args: &Args, cmd: &
   for (key, value) in record {
     output.insert(key, value);
   }
-  print!("{}", json_out::render(&Value::Object(output), Some(2)));
+  json_out::print_result(&Value::Object(output));
   Ok(())
 }
 

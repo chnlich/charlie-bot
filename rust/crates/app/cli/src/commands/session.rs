@@ -263,10 +263,6 @@ fn send_source_group(command: clap::Command) -> clap::Command {
   command
 }
 
-fn print_result(value: &Value) {
-  print!("{}", json_out::render(value, Some(2)));
-}
-
 fn home_dir() -> Result<std::path::PathBuf, CliExit> {
   charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))
 }
@@ -310,7 +306,7 @@ fn create(args: &CreateArgs) -> Result<(), CliExit> {
     result =
       client::post(&route::fill(session_routes::SESSION_GROUP_PATH, &[id]), json!({ "group": group }), None, &[])?;
   }
-  print_result(&result);
+  json_out::print_result(&result);
   Ok(())
 }
 
@@ -326,7 +322,7 @@ fn tree(args: &TreeArgs) -> Result<(), CliExit> {
     params.push((session_routes::SESSION_TREE_CURSOR_QUERY.to_string(), cursor.clone()));
   }
   let result = client::get(session_routes::SESSION_TREE_PATH, Some(params))?;
-  print_result(&result);
+  json_out::print_result(&result);
   Ok(())
 }
 
@@ -337,7 +333,7 @@ fn retry(args: &RetryArgs) -> Result<(), CliExit> {
   });
   let result =
     client::post(&route::fill(task_routes::SESSION_RETRY_PATH, &[args.session_id.as_str()]), payload, None, &[])?;
-  print_result(&result);
+  json_out::print_result(&result);
   Ok(())
 }
 
@@ -373,7 +369,7 @@ fn archive(args: &ArchiveArgs) -> Result<(), CliExit> {
     Some(Box::new(readback)),
     &[],
   )?;
-  print_result(&result);
+  json_out::print_result(&result);
   Ok(())
 }
 
@@ -394,7 +390,7 @@ fn acknowledge(args: &AcknowledgeArgs) -> Result<(), CliExit> {
     None,
     &[],
   )?;
-  print_result(&result);
+  json_out::print_result(&result);
   Ok(())
 }
 
@@ -411,7 +407,7 @@ fn cancel(args: &CancelArgs) -> Result<(), CliExit> {
     Some(Box::new(readback)),
     &[],
   )?;
-  print_result(&result);
+  json_out::print_result(&result);
 
   let stopped_runs = result.get(STOPPED_RUNS_FIELD).and_then(Value::as_array).cloned().unwrap_or_default();
   let unresolved: Vec<&Value> =
@@ -459,7 +455,7 @@ fn set_approver(args: &SetApproverArgs) -> Result<(), CliExit> {
     None,
     &[],
   )?;
-  print_result(&result);
+  json_out::print_result(&result);
   Ok(())
 }
 
@@ -477,7 +473,7 @@ fn reparent(args: &ReparentArgs) -> Result<(), CliExit> {
     Some(Box::new(readback)),
     &[],
   )?;
-  print_result(&result);
+  json_out::print_result(&result);
   Ok(())
 }
 
@@ -501,7 +497,7 @@ fn send(args: &SendArgs) -> Result<(), CliExit> {
     None,
     &[(422, EXIT_SEND_REFUSED)],
   )?;
-  print_result(&result);
+  json_out::print_result(&result);
   Ok(())
 }
 

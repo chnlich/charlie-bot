@@ -11,7 +11,7 @@ use axum::http::{HeaderValue, StatusCode, Uri, header, request::Parts};
 use axum::response::Response;
 use bytes::Bytes;
 use charliebot_cli_common::route;
-use charliebot_compat::compression::{gzip_level_one, gzip_memoized_body};
+use charliebot_compat::compression::gzip_memoized_body;
 use charliebot_compat::responses::{self, Failure};
 use charliebot_compat::routing::get_only;
 use charliebot_core::config::{CharlieBotConfig, HomeService};
@@ -75,60 +75,84 @@ static PAGE_ROWS_MEMO: LazyLock<listing::PageRowsMemo> = LazyLock::new(listing::
 /// The session bootstrap one page request built last, reused while every payload input is unchanged.
 static PAGE_BOOTSTRAP_MEMO: LazyLock<detail::PageBootstrapMemo> = LazyLock::new(detail::PageBootstrapMemo::default);
 
-/// The finished chat page body one request built last, kept while the template output and both substituted texts
+/// The finished bodies of the pages, one entry per page, each kept while its rendered template and its own texts
 /// still hold their value.
 ///
-/// The page carries the sidebar text and, when a session is open, that session's bootstrap: a build copies about
-/// nine megabytes and, for the largest session, about another hundred and seventy. A repeat request would copy and
-/// compare those bytes again, so the memo serves the body it already built. The rendered template is part of the
-/// key: a template, page part or template directory edited on disk renders different bytes and never matches. The
-/// two texts compare by identity, and the entry keeps their `Arc`s alive, so an address the entry holds is never
-/// handed to a different text.
+/// A page's body is its rendered template with the sidebar text and, on the chat page, the session bootstrap
+/// substituted in. The chat page's sidebar text runs to about nine megabytes for a full home, and the events viewer's
+/// document carries its stylesheet, so a body is far larger than the template it came from. Rendering and deflating
+/// it again on every request costs the copy, the substitution and the deflate each time, so the memo serves the body
+/// it already built.
+///
+/// The rendered template is part of the key: a template, page part or template directory edited on disk renders
+/// different bytes and never matches. The chat page's two large texts compare by identity, and the entry keeps their
+/// `Arc`s alive, so an address the entry holds is never handed to a different text.
 #[derive(Default)]
 struct PageBodyMemo {
-  entry: Option<PageBodyEntry>,
+  entries: Vec<PageBodyEntry>,
 }
 
 struct PageBodyEntry {
+  name: &'static str,
   template_html: String,
-  sidebar_text: Arc<String>,
+  sidebar_text: Option<Arc<String>>,
   bootstrap_text: Option<Arc<String>>,
   body: Bytes,
   gzip: Option<Bytes>,
+}
+
+/// Whether an optional substituted text still holds its value: both absent, or the same `Arc`.
+fn same_text(held: Option<&Arc<String>>, current: Option<&Arc<String>>) -> bool {
+  match (held, current) {
+    (Some(held), Some(current)) => Arc::ptr_eq(held, current),
+    (None, None) => true,
+    _ => false,
+  }
 }
 
 impl PageBodyMemo {
   /// The finished page body, from the memo when every input still holds its value.
   fn body(
     &mut self,
-    name: &str,
+    name: &'static str,
     template_html: &str,
     substitutions: &[(&str, &str)],
-    sidebar_text: &Arc<String>,
+    sidebar_text: Option<&Arc<String>>,
     bootstrap_text: Option<&Arc<String>>,
     accepts_gzip: bool,
   ) -> Result<(Bytes, Option<Bytes>), Failure> {
-    let matches = self.entry.as_ref().is_some_and(|entry| {
-      entry.template_html == template_html
-        && Arc::ptr_eq(&entry.sidebar_text, sidebar_text)
-        && match (entry.bootstrap_text.as_ref(), bootstrap_text) {
-          (Some(entry), Some(current)) => Arc::ptr_eq(entry, current),
-          (None, None) => true,
-          _ => false,
-        }
+    let held = self.entries.iter().position(|entry| {
+      entry.name == name
+        && entry.template_html == template_html
+        && same_text(entry.sidebar_text.as_ref(), sidebar_text)
+        && same_text(entry.bootstrap_text.as_ref(), bootstrap_text)
     });
-    if !matches {
-      let html = templating::substitute_placeholders(name, template_html.to_string(), substitutions)
-        .map_err(|error| failure(error.kind(), error))?;
-      self.entry = Some(PageBodyEntry {
-        template_html: template_html.to_string(),
-        sidebar_text: Arc::clone(sidebar_text),
-        bootstrap_text: bootstrap_text.cloned(),
-        body: Bytes::from(html),
-        gzip: None,
-      });
-    }
-    let entry = self.entry.as_mut().expect("the page body entry matched or was built");
+    let index = match held {
+      Some(index) => index,
+      None => {
+        let html = templating::substitute_placeholders(name, template_html.to_string(), substitutions)
+          .map_err(|error| failure(error.kind(), error))?;
+        let entry = PageBodyEntry {
+          name,
+          template_html: template_html.to_string(),
+          sidebar_text: sidebar_text.cloned(),
+          bootstrap_text: bootstrap_text.cloned(),
+          body: Bytes::from(html),
+          gzip: None,
+        };
+        match self.entries.iter().position(|entry| entry.name == name) {
+          Some(index) => {
+            self.entries[index] = entry;
+            index
+          }
+          None => {
+            self.entries.push(entry);
+            self.entries.len() - 1
+          }
+        }
+      }
+    };
+    let entry = self.entries.get_mut(index).expect("the page body entry matched or was built");
     let body = entry.body.clone();
     let gzip = if accepts_gzip && body.len() >= gzip::MINIMUM_SIZE {
       Some(match &entry.gzip {
@@ -413,29 +437,24 @@ fn render_page_blocking(
 }
 
 /// The finished body of a page, with its compressed form when a gzip client asked for it.
-///
-/// The chat page keeps its finished body between requests. The home page and the events viewer rebuild their body
-/// from the template on every request; the events viewer's document carries its stylesheet, so its body is larger
-/// than its template alone.
 fn page_body(
-  name: &str,
+  name: &'static str,
   template_html: &str,
   runtime: &PageRuntime,
   accepts_gzip: bool,
 ) -> Result<(Bytes, Option<Bytes>), Failure> {
-  match runtime {
-    PageRuntime::Index { sidebar_text, bootstrap_text, .. } => PAGE_BODY_MEMO
-      .lock()
-      .expect("the page body memo mutex is not poisoned")
-      .body(name, template_html, &runtime.substitutions(), sidebar_text, bootstrap_text.as_ref(), accepts_gzip),
-    PageRuntime::Home | PageRuntime::Events => {
-      let html = templating::substitute_placeholders(name, template_html.to_string(), &runtime.substitutions())
-        .map_err(|error| failure(error.kind(), error))?;
-      let body = Bytes::from(html);
-      let gzip = (accepts_gzip && body.len() >= gzip::MINIMUM_SIZE).then(|| Bytes::from(gzip_level_one(&body)));
-      Ok((body, gzip))
-    }
-  }
+  let (sidebar_text, bootstrap_text) = match runtime {
+    PageRuntime::Index { sidebar_text, bootstrap_text, .. } => (Some(sidebar_text), bootstrap_text.as_ref()),
+    PageRuntime::Home | PageRuntime::Events => (None, None),
+  };
+  PAGE_BODY_MEMO.lock().expect("the page body memo mutex is not poisoned").body(
+    name,
+    template_html,
+    &runtime.substitutions(),
+    sidebar_text,
+    bootstrap_text,
+    accepts_gzip,
+  )
 }
 
 /// Wrap a finished page body in the response, with its compressed form when one is given.
@@ -528,6 +547,7 @@ fn compact_facts(cfg: &CharlieBotConfig, registry: &Registry) -> Result<Map<Stri
 #[cfg(test)]
 mod tests {
   use super::*;
+  use charliebot_compat::compression::gzip_level_one;
   use flate2::read::GzDecoder;
   use http_body_util::BodyExt;
   use std::io::Read;
@@ -565,7 +585,7 @@ mod tests {
         "index.html",
         &template,
         &substitutions(sidebar.as_str(), bootstrap.as_str()),
-        &sidebar,
+        Some(&sidebar),
         Some(&bootstrap),
         true,
       )
@@ -577,7 +597,7 @@ mod tests {
         "index.html",
         &template,
         &substitutions(sidebar.as_str(), bootstrap.as_str()),
-        &sidebar,
+        Some(&sidebar),
         Some(&bootstrap),
         true,
       )
@@ -591,7 +611,7 @@ mod tests {
         "index.html",
         &template,
         &substitutions(sidebar.as_str(), new_bootstrap.as_str()),
-        &sidebar,
+        Some(&sidebar),
         Some(&new_bootstrap),
         false,
       )
@@ -606,11 +626,26 @@ mod tests {
     let bootstrap = Arc::new("null".to_string());
     let substitutions = substitutions(sidebar.as_str(), bootstrap.as_str());
     let (first, _) =
-      memo.body("index.html", &index_template(), &substitutions, &sidebar, Some(&bootstrap), false).unwrap();
+      memo.body("index.html", &index_template(), &substitutions, Some(&sidebar), Some(&bootstrap), false).unwrap();
     let edited = format!("{} // edited on disk", index_template());
-    let (second, _) = memo.body("index.html", &edited, &substitutions, &sidebar, Some(&bootstrap), false).unwrap();
+    let (second, _) =
+      memo.body("index.html", &edited, &substitutions, Some(&sidebar), Some(&bootstrap), false).unwrap();
     assert_ne!(first, second, "a template edited on disk never matches the memo");
     assert!(second.ends_with(b"// edited on disk"));
+  }
+
+  #[test]
+  fn each_page_keeps_its_own_body() {
+    // A page's body is keyed by its name as well as its rendered template: rendering the home page between two
+    // events viewer requests leaves the viewer's body in the memo, and a returning request serves it again.
+    let mut memo = PageBodyMemo::default();
+    let (home, _) = memo.body("home.html", "<p>home</p>", &[], None, None, false).unwrap();
+    let (events, _) = memo.body("events_viewer.html", "<p>events</p>", &[], None, None, false).unwrap();
+    let (home_again, _) = memo.body("home.html", "<p>home</p>", &[], None, None, false).unwrap();
+    assert_eq!(home_again.as_ptr(), home.as_ptr(), "the home page keeps its body beside another page's");
+    assert_eq!(events, "<p>events</p>");
+    let (events_changed, _) = memo.body("events_viewer.html", "<p>other session</p>", &[], None, None, false).unwrap();
+    assert_eq!(events_changed, "<p>other session</p>", "a changed context rebuilds that page's body");
   }
 
   #[tokio::test]

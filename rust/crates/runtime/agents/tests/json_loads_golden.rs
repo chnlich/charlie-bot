@@ -65,6 +65,7 @@ struct RecordedCase<'a> {
 
 #[derive(Deserialize)]
 struct RecordedExpected<'a> {
+  #[serde(borrow)]
   expected: RecordedOutcome<'a>,
 }
 

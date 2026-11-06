@@ -12,6 +12,26 @@ use serde_json::{Map, Value};
 /// The emitter's best width.
 const BEST_WIDTH: usize = 80;
 
+/// Which side of a mapping entry a scalar is written on. A key never folds at `BEST_WIDTH`, because a simple key
+/// stays on one line.
+#[derive(Clone, Copy)]
+enum ScalarRole {
+  Key,
+  Value,
+}
+
+impl ScalarRole {
+  /// Whether the writer may fold this scalar once its line passes `BEST_WIDTH`.
+  fn folds(self) -> bool {
+    matches!(self, Self::Value)
+  }
+
+  /// Whether the scalar is a mapping key.
+  fn is_key(self) -> bool {
+    matches!(self, Self::Key)
+  }
+}
+
 /// The YAML text of a mapping or a sequence, the shapes that cron files hold.
 pub fn dump(value: &Value) -> Result<String, serde_yaml::Error> {
   let mut output = String::new();
@@ -55,7 +75,7 @@ fn write_sequence(output: &mut String, items: &[Value], indent: usize) {
 /// sequence under a key stays at `indent`, because the emitter leaves it unindented. A scalar's folded lines
 /// continue at `indent + 2`.
 fn write_pair(output: &mut String, key: &str, value: &Value, indent: usize) {
-  write_string(output, key, true, indent);
+  write_string(output, key, ScalarRole::Key, indent);
   output.push(':');
   match value {
     Value::Object(map) if map.is_empty() => output.push_str(" {}\n"),
@@ -85,7 +105,7 @@ fn write_scalar(output: &mut String, value: &Value, indent: usize) {
       write_float(output, value.as_f64().expect("a serde_json floating-point number has an f64 value"));
     }
     Value::Number(value) => output.push_str(&value.to_string()),
-    Value::String(value) => write_string(output, value, false, indent),
+    Value::String(value) => write_string(output, value, ScalarRole::Value, indent),
     Value::Array(_) | Value::Object(_) => unreachable!("write_item and write_pair write containers"),
   }
 }
@@ -111,19 +131,19 @@ fn write_float(output: &mut String, value: f64) {
 
 /// The text of a string in the style the emitter picks: plain when the text reads back as a string, single-quoted
 /// when it allows it. Otherwise it is double-quoted, with the escape table and folding.
-fn write_string(output: &mut String, value: &str, key: bool, indent: usize) {
+fn write_string(output: &mut String, value: &str, role: ScalarRole, indent: usize) {
   let analysis = analyze_scalar(value);
   if analysis.allow_block_plain && implicit_tag(value).is_none() {
-    write_plain(output, value, indent, !key);
-  } else if analysis.allow_single_quoted && !(key && analysis.multiline) {
-    write_single_quoted(output, value, indent, !key);
+    write_plain(output, value, indent, role);
+  } else if analysis.allow_single_quoted && !(role.is_key() && analysis.multiline) {
+    write_single_quoted(output, value, indent, role);
   } else {
-    write_double_quoted(output, value, indent, !key);
+    write_double_quoted(output, value, indent, role);
   }
 }
 
 /// The text of a double-quoted scalar, using the escape table and column-80 folding rules.
-fn write_double_quoted(output: &mut String, text: &str, indent: usize, split: bool) {
+fn write_double_quoted(output: &mut String, text: &str, indent: usize, role: ScalarRole) {
   let chars: Vec<char> = text.chars().collect();
   let mut line = Line::new(output, indent);
   line.push_str("\"");
@@ -142,7 +162,7 @@ fn write_double_quoted(output: &mut String, text: &str, indent: usize, split: bo
       }
     }
     let column_at_end = line.column as isize + end as isize - start as isize;
-    if split
+    if role.folds()
       && ch == Some(' ')
       && end > 0
       && chars[end - 1] != ' '
@@ -194,8 +214,8 @@ fn double_quoted_escape(ch: char) -> String {
 }
 
 /// The plain-scalar writer. Plain text holds no line break, so a fold happens only at a single space, and only once the
-/// line is past `BEST_WIDTH`. A key passes `split` as false, because a simple key never folds.
-fn write_plain(output: &mut String, text: &str, indent: usize, split: bool) {
+/// line is past `BEST_WIDTH`. A key never folds, because a simple key stays on one line.
+fn write_plain(output: &mut String, text: &str, indent: usize, role: ScalarRole) {
   let chars: Vec<char> = text.chars().collect();
   let mut line = Line::new(output, indent);
   let mut word_start = 0;
@@ -203,7 +223,7 @@ fn write_plain(output: &mut String, text: &str, indent: usize, split: bool) {
     let word_end = word_start + chars[word_start..].iter().take_while(|&&ch| ch != ' ').count();
     let space_end = word_end + chars[word_end..].iter().take_while(|&&ch| ch == ' ').count();
     line.push(&chars[word_start..word_end]);
-    if split && space_end - word_end == 1 && line.column > BEST_WIDTH {
+    if role.folds() && space_end - word_end == 1 && line.column > BEST_WIDTH {
       line.fold();
     } else {
       line.push(&chars[word_end..space_end]);
@@ -214,7 +234,7 @@ fn write_plain(output: &mut String, text: &str, indent: usize, split: bool) {
 
 /// The single-quoted writer. A single space folds once the line is past `BEST_WIDTH`, except at either end of the
 /// text. Each line break in the text becomes an empty line, and each quote is doubled.
-fn write_single_quoted(output: &mut String, text: &str, indent: usize, split: bool) {
+fn write_single_quoted(output: &mut String, text: &str, indent: usize, role: ScalarRole) {
   let chars: Vec<char> = text.chars().collect();
   let mut line = Line::new(output, indent);
   line.push(&['\'']);
@@ -225,7 +245,7 @@ fn write_single_quoted(output: &mut String, text: &str, indent: usize, split: bo
     let ch = chars.get(end).copied();
     if spaces {
       if ch != Some(' ') {
-        if start + 1 == end && line.column > BEST_WIDTH && split && start != 0 && end != chars.len() {
+        if start + 1 == end && line.column > BEST_WIDTH && role.folds() && start != 0 && end != chars.len() {
           line.fold();
         } else {
           line.push(&chars[start..end]);

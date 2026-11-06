@@ -22,7 +22,7 @@ struct GithubCli {
 
 #[derive(Subcommand)]
 enum GithubCommand {
-  /// Register a pull request or comment in the operator's name for approval on a session card
+  /// A pull request or comment, registered in the operator's name for approval on a session card
   Draft(DraftArgs),
 }
 
@@ -51,7 +51,7 @@ struct DraftArgs {
   replaces: Option<String>,
 }
 
-/// Parse the GitHub arguments and run one verb. Parser errors print and exit on their own (help 0, usage error 2).
+/// The GitHub arguments, parsed and run as one verb. Parser errors print and exit on their own (help 0, usage error 2).
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let command = with_infer_long_args(GithubCli::command());
   let argv = std::iter::once(OsString::from("charliebot github")).chain(args.iter().cloned());

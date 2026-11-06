@@ -26,7 +26,7 @@ pub struct GithubDraftPlatform {
 }
 
 impl GithubDraftPlatform {
-  /// Build the platform from the live host config with a fresh HTTP client.
+  /// The platform built from the live host config, with a fresh HTTP client.
   pub fn from_context(context: &DraftContext) -> anyhow::Result<Self> {
     let config = context.config.get()?;
     let token_command = config.github.user_token_command.clone();
@@ -34,12 +34,12 @@ impl GithubDraftPlatform {
     Ok(Self::with_client(http, API_BASE.to_string(), token_command))
   }
 
-  /// Build the platform over an injected client and base URL.
+  /// The platform built over an injected client and base URL.
   pub fn with_client(http: reqwest::Client, api_base: String, token_command: Option<String>) -> Self {
     Self { http, api_base, token_command }
   }
 
-  /// Send `body` as the target describes: a draft pull request, or a comment.
+  /// The send of `body` in the form the target describes: a draft pull request, or a comment.
   pub async fn send(&self, target: &Value, body: &str) -> Result<DraftSent, DraftSendFailure> {
     let target = Target::parse(target).map_err(DraftSendFailure::rejected)?;
     let token = self.operator_token().await?;
@@ -83,7 +83,7 @@ impl GithubDraftPlatform {
     Ok(DraftSent { sender, url })
   }
 
-  /// Run the host's token command and return the token it prints.
+  /// The token the host's token command prints, from one run of that command.
   async fn operator_token(&self) -> Result<String, DraftSendFailure> {
     let Some(command) = self.token_command.as_deref().filter(|command| !command.trim().is_empty()) else {
       return Err(DraftSendFailure::rejected(

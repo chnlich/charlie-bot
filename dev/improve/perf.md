@@ -52,9 +52,9 @@ Both sides then see the same host load, so the change is the only difference.
 Measure latency this way: send 5 warm-up requests, then 50 requests, and keep the median of the 50.
 The warm-up keeps first-request cost out of the sample, and the median keeps one slow request out.
 
-Measure slow-network page loading this way: send every load of this measure through a local relay that forwards to the trial server and holds the round's fixed network profile, a 100 ms round-trip time and 1 MiB per second of bandwidth.
-The relay waits one round-trip time before it forwards a connection's first request, and it limits each direction of a connection to the profile's bandwidth.
-The relay's host tools are socat and pv; when the host lacks one of them, name the defect instead of fitting another tool in.
+Measure slow-network page loading this way: send every load of this measure through the bench's shaping proxy, which holds the bench's link profile, so the loads and the poor-network bench measure one link model.
+The link's values live only in `LINK` of `dev/poor-network/profile.mjs`; this measure names none of them and takes them from that file.
+The proxy's entry is `dev/poor-network/relay.mjs`, which carries the trial server's tunnels; the round stops it before its trial ends, and when the host cannot run that entry, name the defect instead of fitting another relay in.
 
 A load fetches the page's document and then the static files the served document references, in document order, accepting gzip as the latency measure does.
 A cold load opens one connection per fetch, and a warm load fetches the whole page on one connection.

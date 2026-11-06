@@ -205,6 +205,9 @@ struct SearchMemos {
   read_failures: HashSet<(String, String)>,
   #[cfg(test)]
   scan_calls: usize,
+  /// The candidates the scan windows read, so a test can tell a stopped scan from a complete one.
+  #[cfg(test)]
+  scanned_candidates: usize,
 }
 
 impl Default for SearchMemos {
@@ -221,6 +224,8 @@ impl Default for SearchMemos {
       read_failures: HashSet::new(),
       #[cfg(test)]
       scan_calls: 0,
+      #[cfg(test)]
+      scanned_candidates: 0,
     }
   }
 }
@@ -436,15 +441,37 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
   // however its chat file reads. A common word matches most of the corpus, so this is the difference between reading
   // the corpus and reading the rows the answer can hold.
   scans.sort_by_key(|(index, _)| Reverse(all[work.candidate_rows[*index]].updated_at));
-  let mut matched: Vec<UtcDateTime> =
-    name_hits.iter().enumerate().filter(|(_, hit)| **hit).map(|(row, _)| all[row].updated_at).collect();
+  // Every match already known counts toward the cap: name hits, and the content hits of files the pass above had to
+  // read anyway, whether it searched them while indexing or found them in an earlier query.
+  let mut matched: Vec<UtcDateTime> = name_hits
+    .iter()
+    .enumerate()
+    .filter(|(_, hit)| **hit)
+    .map(|(row, _)| all[row].updated_at)
+    .chain(
+      content_hits
+        .iter()
+        .enumerate()
+        .filter(|(_, hit)| **hit)
+        .map(|(index, _)| all[work.candidate_rows[index]].updated_at),
+    )
+    .collect();
   let mut scan_failures = 0;
   let mut scanned = 0;
   while scanned < scans.len() {
+    if let Some(cutoff) = result_cutoff(&mut matched)
+      && all[work.candidate_rows[scans[scanned].0]].updated_at < cutoff
+    {
+      break;
+    }
     // Only the first window is short: a needle whose matches are sparse enough to leave it short needs the whole
     // scan to reach the cap, so the remaining candidates go in one batch and pay no further thread start.
     let end = if scanned == 0 { SCAN_WINDOW_CANDIDATES.min(scans.len()) } else { scans.len() };
     let window = &scans[scanned..end];
+    #[cfg(test)]
+    {
+      memos.lock().expect("session search memo mutex is not poisoned").scanned_candidates += window.len();
+    }
     for ((index, _), answer) in window.iter().zip(scan_contents(&work.candidates, window, &signatures, &needle)) {
       let path = &work.candidates[*index].path;
       let signature = signatures[*index].expect("a scanned candidate holds its signature");
@@ -468,13 +495,6 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
       }
     }
     scanned = end;
-    if scanned == scans.len() {
-      break;
-    }
-    let Some(cutoff) = result_cutoff(&mut matched) else { continue };
-    if all[work.candidate_rows[scans[scanned].0]].updated_at < cutoff {
-      break;
-    }
   }
 
   names.extend(work.candidate_rows.iter().zip(&content_hits).filter(|(_, hit)| **hit).map(|(row, _)| &all[*row]));
@@ -1221,6 +1241,11 @@ mod tests {
     assert_eq!(ids[8], "name-000", "the name hits follow the content hits");
     assert_eq!(ids.last().copied(), Some("name-191"), "the answer stops at the 200th newest match");
     assert!(!ids.iter().any(|id| id.starts_with("old-")), "the rows past the cutoff stay out");
+    assert_eq!(
+      memos.lock().unwrap().scanned_candidates,
+      super::SCAN_WINDOW_CANDIDATES,
+      "the scan stopped after its first window and left the older files unread"
+    );
   }
 
   #[test]

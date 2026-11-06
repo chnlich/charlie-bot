@@ -154,9 +154,9 @@
         <button class="hamburger-btn p-2 -ml-2 mr-1 rounded-lg hover:bg-slate-700 transition-colors" onclick="toggleMobileSidebar()" title="Menu">
           <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
         </button>
-        <div class="flex-1 min-w-0 py-3">
-          <h2 class="text-sm font-semibold truncate cursor-pointer hover:text-blue-300 transition-colors"
-              onclick="startRename(event, SESSION_ID)" title="Click to rename"
+        <div class="flex-1 min-w-0 py-3 cursor-pointer hover:text-blue-300 transition-colors"
+             onclick="startRename(event, SESSION_ID)" title="Click to rename">
+          <h2 class="text-sm font-semibold truncate"
               id="header-session-name">{{ active_session.name }}</h2>
         </div>
         <!-- Backend badge -->

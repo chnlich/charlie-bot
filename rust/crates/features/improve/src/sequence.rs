@@ -25,6 +25,7 @@ use charliebot_core::str_methods::take_chars;
 use charliebot_registry::sequence::SequenceTree;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec, TaskType};
+use charliebot_store::run_logs;
 use charliebot_store::run_records::{RUN_EVENTS_NAME, RunKind, RunRecord, SequenceRef};
 use charliebot_store::{CreateTask, SharedChatEvent, Store, StoreError, StoreResult, TaskCaller, control_events};
 use charliebot_tasks::completion::RUN_REF_PREFIX;
@@ -248,7 +249,7 @@ fn iteration_blocker(
   outcome: &str,
 ) -> anyhow::Result<(Option<String>, String)> {
   let events_path = tree.run_dir(child_id, run_id).join(RUN_EVENTS_NAME);
-  if !events_path.is_file() {
+  if run_logs::existing_path(&events_path).is_none() {
     return Ok((None, format!("Iteration {iteration} {outcome} (no events log).")));
   }
   crate::judgment::failed_iteration_judgments_from_events(
@@ -625,7 +626,7 @@ async fn judge_iteration(
   if !report_path.exists() {
     let mut fallback = format!("Iteration {iteration} finished without a report file.");
     let events_path = tree.run_dir(spec.child_id, run_id).join(RUN_EVENTS_NAME);
-    if events_path.is_file() {
+    if run_logs::existing_path(&events_path).is_some() {
       fallback = crate::judgment::extract_iteration_summary_from_events(
         crate::judgment::newest_first_event_iter(&events_path)?,
         iteration,

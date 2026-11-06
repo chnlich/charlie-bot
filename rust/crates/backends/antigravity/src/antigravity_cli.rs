@@ -336,8 +336,8 @@ mod tests {
       Arc::new(charliebot_registry::Registry::new()),
     );
     let pid_file = root.join("pid");
-    // The supervisor runs as another process, so it is the helper binary rather than this test binary: an agent crate's
-    // test binary handles no `--supervise-final-stdout` entry point of its own.
+    // The supervisor runs as another process, so it is the helper binary rather than this test binary.
+    // An agent crate's test binary handles no `--supervise-final-stdout` entry point of its own.
     request.final_stdout_supervisor = Some(fake_program_bin());
     request.gate_child_until_on_spawn();
     request.on_spawn = Some(Arc::new(move |identity| {

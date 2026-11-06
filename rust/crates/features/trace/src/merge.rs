@@ -930,22 +930,70 @@ mod differential_tests {
     error: Option<&'a str>,
   }
 
-  #[test]
-  fn recorded_trace_builders_match_seeded_corpus_first_slice() {
-    compare_recorded_trace_builders(0, 10, &["merge", "multi", "direct"]);
+  macro_rules! recorded_trace_case {
+    ($name:ident, $index:expr) => {
+      #[test]
+      fn $name() {
+        compare_recorded_trace_builders($index, $index + 1, &["merge", "multi", "direct"]);
+      }
+    };
   }
 
-  #[test]
-  fn recorded_trace_builders_match_seeded_corpus_middle_slice() {
-    compare_recorded_trace_builders(10, 20, &["merge", "multi", "direct"]);
-  }
+  recorded_trace_case!(recorded_trace_bare_array, 0);
+  recorded_trace_case!(recorded_trace_metadata_siblings_and_numbers, 1);
+  recorded_trace_case!(recorded_trace_missing_and_string_tids, 2);
+  recorded_trace_case!(recorded_trace_flow_id_phases, 3);
+  recorded_trace_case!(recorded_trace_process_labels_and_slim, 4);
+  recorded_trace_case!(recorded_trace_multi_member_skip, 5);
+  recorded_trace_case!(recorded_trace_empty_file, 6);
+  recorded_trace_case!(recorded_trace_all_members_non_trace, 7);
+  recorded_trace_case!(recorded_trace_non_object_event, 8);
+  recorded_trace_case!(recorded_trace_truthy_non_object_label_args, 9);
+  recorded_trace_case!(recorded_trace_truthy_non_string_metadata_name, 10);
+  recorded_trace_case!(recorded_trace_unexpected_end, 11);
+  recorded_trace_case!(recorded_trace_trailing_content, 12);
+  recorded_trace_case!(recorded_trace_missing_colon, 13);
+  recorded_trace_case!(recorded_trace_missing_comma, 14);
+  recorded_trace_case!(recorded_trace_invalid_value, 15);
+  recorded_trace_case!(recorded_trace_invalid_escape, 16);
+  recorded_trace_case!(recorded_trace_unterminated_string, 17);
+  recorded_trace_case!(recorded_trace_leading_zero, 18);
+  recorded_trace_case!(recorded_trace_invalid_object_key, 19);
+  recorded_trace_case!(recorded_trace_missing_array_comma, 20);
+  recorded_trace_case!(recorded_trace_missing_object_value, 21);
+  recorded_trace_case!(recorded_trace_nan_literal, 22);
+  recorded_trace_case!(recorded_trace_infinity_literal, 23);
+  recorded_trace_case!(recorded_trace_negative_infinity_literal, 24);
+  recorded_trace_case!(recorded_trace_control_character, 25);
+  recorded_trace_case!(recorded_trace_overflow_float, 26);
+  recorded_trace_case!(recorded_trace_invalid_unicode_escape, 27);
 
   #[test]
-  fn recorded_trace_builders_match_seeded_corpus_error_slice() {
-    compare_recorded_trace_builders(20, 28, &["merge", "multi", "direct"]);
+  fn merge_batches_keep_the_event_after_a_full_batch() {
+    let document = serde_json::json!({
+      "traceEvents": (0..=MERGE_BATCH_EVENTS).map(|_| serde_json::json!({"ph": "X"})).collect::<Vec<_>>(),
+    });
+    let mut output = Vec::new();
+    let mut batcher = EventBatcher::new(&mut output);
+    let mut tid_seq = IdSequencer::new(1);
+    let mut flow_seq = IdSequencer::new(1);
+    merge_one_trace(
+      &document,
+      Path::new("rank513.json"),
+      0,
+      &mut batcher,
+      &mut tid_seq,
+      &mut flow_seq,
+      false,
+    )
+    .unwrap();
+
+    let fragment = String::from_utf8(output).unwrap();
+    let events: Vec<Value> = serde_json::from_str(&format!("[{fragment}]")).unwrap();
+    assert_eq!(events.len(), MERGE_BATCH_EVENTS + 1);
+    assert_eq!(events[MERGE_BATCH_EVENTS]["pid"], "rank513");
   }
 
-  // The batch-boundary case runs three real merges on the corpus's largest trace; each test checks one builder.
   #[test]
   fn recorded_trace_merge_builder_matches_seeded_corpus_last_slice() {
     compare_recorded_trace_builders(28, 29, &["merge"]);

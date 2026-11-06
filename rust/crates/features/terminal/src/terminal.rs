@@ -23,7 +23,7 @@ pub(super) fn terminal_tmux_name(session_id: &str) -> String {
   pty::tmux_session_name(session_id)
 }
 
-pub(super) async fn ensure_terminal_session() -> Result<(), String> {
+pub(super) async fn ensure_terminal_session(grid: pty::Grid) -> Result<(), String> {
   let _guard = ENSURE_LOCK.lock().await;
   let session_id = terminal_session_id()?;
   if pty::tmux_session_exists(&session_id).await? {
@@ -41,15 +41,15 @@ pub(super) async fn ensure_terminal_session() -> Result<(), String> {
     env_args.push("-e".to_string());
     env_args.push(format!("{}={}", home::CHARLIEBOT_HOME_ENV, profile_home.display()));
   }
-  pty::start_tmux_session(&name, cwd, &env_args, &["bash", "-l"]).await?;
+  pty::start_tmux_session(&name, cwd, &env_args, &["bash", "-l"], grid).await?;
   tracing::info!(name = %name, cwd = %cwd.display(), "terminal_tmux_session_created");
   Ok(())
 }
 
 /// Attaches the socket to the profile's terminal. An `Err` is an exception that escaped the handler after accept;
 /// the caller logs it and drops the socket.
-pub(super) async fn run_terminal_attachment(mut socket: WebSocket) -> Result<(), String> {
-  if let Err(error) = ensure_terminal_session().await {
+pub(super) async fn run_terminal_attachment(mut socket: WebSocket, grid: pty::Grid) -> Result<(), String> {
+  if let Err(error) = ensure_terminal_session(grid).await {
     tracing::error!(error = %error, "terminal_ensure_session_failed");
     if let Err(send_error) = pty::send_json(&mut socket, &json!({"type": pty::PTY_EXIT, "error": error})).await {
       tracing::debug!(error = %send_error, "terminal_ensure_error_send_failed");
@@ -58,7 +58,7 @@ pub(super) async fn run_terminal_attachment(mut socket: WebSocket) -> Result<(),
   }
 
   let session_id = terminal_session_id()?;
-  let attachment = match PtyAttachment::spawn(&session_id) {
+  let attachment = match PtyAttachment::spawn(&session_id, grid) {
     Ok(attachment) => attachment,
     Err(error) => {
       tracing::error!(error = %error, "terminal_pty_spawn_failed");

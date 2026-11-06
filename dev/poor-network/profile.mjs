@@ -36,13 +36,23 @@ export const TASK_TREE_LOAD = Object.freeze({
   windowMs: 75000,
 });
 
-// The status churn of the same load: one row's own activity facts, the churn the live device's status body carries. The
-// live readback answered 200 to 72% of about 20 polls a minute, so about 14 answers a minute carried a body that
-// differed from the one before. A row that starts a held turn and cancels it moves `thinking_since`,
-// `has_running_tasks` and `work_state` together, and the derived work verdict can land as a second answer, so one flip
-// per 5.4 s models a changed answer per poll interval: 14 flips per 75 s window.
+// The status churn of the same load: the row-state changes the live device's status body carried. The live readback
+// answered 200 to 72% of its 20 polls a minute, so about 14 answers a minute carried a body that differed from the one
+// before. Two kinds of change make up that churn:
+//
+// - a held turn starts and is cancelled, which moves `thinking_since`, `has_running_tasks` and `work_state`; the server
+//   broadcasts it, so the page polls at once and the change costs an extra poll;
+// - a delayed trigger appears on a row and is cancelled, which moves `has_pending_trigger`, `pending_trigger_count` and
+//   `next_trigger_at`; nothing broadcasts it, so the page meets it on its next poll.
+//
+// Both are one row's own state, and the rates are per 75 s window. The live readback's share of changed answers is what
+// the pair is tuned to reproduce on the background tab's own poll rate; `report.mjs` prints the measured share beside
+// `LIVE_READBACK.status200Share`.
 export const STATUS_CHURN = Object.freeze({
-  flipsPerWindow: 14,
+  turnFlipsPerWindow: 14,
+  triggerFlipsPerWindow: 18,
+  // Long past any window the bench measures, so a held trigger never fires into the load.
+  triggerDelaySeconds: 600,
   windowMs: 75000,
 });
 

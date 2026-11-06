@@ -8,6 +8,10 @@ import http from 'node:http';
 import { STATUS_CHURN, TASK_TREE_LOAD } from './profile.mjs';
 
 const IDLE_QUIET_MS = 3000;
+// The bench's own calls answer promptly: a message is queued, a rename and a cancel are single writes, and the widest
+// answer is a session's run records. A call that runs past this is a server that stopped answering, and the repetition
+// fails with its name rather than holding the trial open.
+const REQUEST_TIMEOUT_MS = 60000;
 
 export class ServerApi {
   #base;
@@ -41,6 +45,7 @@ export class ServerApi {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     const text = await response.text();
     return { status: response.status, body: text };
@@ -144,6 +149,22 @@ export class ServerApi {
     const page = await this.json('GET', `/api/sessions/${sessionId}/runs?order=asc&limit=500`);
     return page.items;
   }
+
+  // Registers one delayed trigger on the session, as a worker's wake-up does, and returns its id. It fires only after
+  // `delaySeconds`, so a window the bench measures ends long before it could.
+  async scheduleTrigger(sessionId, delaySeconds, message) {
+    const reply = await this.json('POST', '/api/internal/schedule-trigger', {
+      session_id: sessionId,
+      delay_seconds: delaySeconds,
+      message,
+    });
+    return reply.trigger_id;
+  }
+
+  // Removes a delayed trigger the bench scheduled, before it fires.
+  async cancelTrigger(sessionId, triggerId) {
+    await this.json('POST', `/api/internal/triggers/${sessionId}/${triggerId}/cancel`);
+  }
 }
 
 function pause(ms) {
@@ -181,13 +202,57 @@ export function startTaskTreeDriver(api, sessionId) {
   };
 }
 
-// The status churn of a live turn: one row's own activity facts flip at the live device's rate. A held turn starts, and
-// the next step cancels it, so `thinking_since`, `has_running_tasks` and `work_state` move once per step. A step that
-// fails fails the repetition: a churn that stopped early would report a share the load did not produce.
+// The status churn a live tab meets with no event to tell it: a delayed trigger appears on a painted row and is
+// cancelled, so `has_pending_trigger`, `pending_trigger_count` and `next_trigger_at` move and nothing broadcasts the
+// move. The page learns of it on its next poll — the poll that still costs a whole body — which is the churn the delta
+// exists for. A step that fails fails the repetition: a churn that stopped early would report a share the load did not
+// produce.
+//
+// Returns {stop, flips}; stop cancels the trigger it holds and waits for the last step.
+export function startTriggerChurn(api, sessionId) {
+  const intervalMs = STATUS_CHURN.windowMs / STATUS_CHURN.triggerFlipsPerWindow;
+  let held = null;
+  let stopped = false;
+  let flips = 0;
+  let failure = null;
+  let step = Promise.resolve();
+  const loop = async () => {
+    while (!stopped) {
+      const startedAt = performance.now();
+      if (held) {
+        await api.cancelTrigger(sessionId, held);
+        held = null;
+      } else {
+        held = await api.scheduleTrigger(sessionId, STATUS_CHURN.triggerDelaySeconds, `bench-churn ${flips}`);
+      }
+      flips += 1;
+      await pause(Math.max(50, intervalMs - (performance.now() - startedAt)));
+    }
+  };
+  step = loop().catch((error) => {
+    failure = error;
+  });
+  return {
+    async stop() {
+      stopped = true;
+      await step;
+      if (failure) {
+        throw new Error(`the trigger churn stopped after ${flips} flips: ${failure.message}`);
+      }
+      if (held) {
+        await api.cancelTrigger(sessionId, held);
+      }
+      return flips;
+    },
+  };
+}
+
+// The status churn a live turn broadcasts: a held turn starts, and the next step cancels it, so `thinking_since`,
+// `has_running_tasks` and `work_state` move and the page is told at once. A step that fails fails the repetition.
 //
 // Returns {stop, flips}; stop cancels a held turn and waits for the last step.
-export function startStatusChurn(api, sessionId) {
-  const intervalMs = STATUS_CHURN.windowMs / STATUS_CHURN.flipsPerWindow;
+export function startTurnChurn(api, sessionId) {
+  const intervalMs = STATUS_CHURN.windowMs / STATUS_CHURN.turnFlipsPerWindow;
   let running = false;
   let stopped = false;
   let flips = 0;
@@ -214,7 +279,7 @@ export function startStatusChurn(api, sessionId) {
       stopped = true;
       await step;
       if (failure) {
-        throw new Error(`the status churn stopped after ${flips} flips: ${failure.message}`);
+        throw new Error(`the turn churn stopped after ${flips} flips: ${failure.message}`);
       }
       if (running) {
         await api.cancelRuns(sessionId);

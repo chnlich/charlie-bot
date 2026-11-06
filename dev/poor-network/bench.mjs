@@ -378,16 +378,19 @@ async function main() {
   process.stderr.write(`wrote ${args.out}\n`);
   if (status !== 'measured') {
     process.stderr.write(`${error}\n`);
-    process.exitCode = 1;
-    return;
+    process.exit(1);
   }
-  process.stdout.write(`${formatSide(side)}\n`);
+  // The side's JSON and its table are its whole product, and the trial waits for this process before it stops the
+  // server. A socket or a Chrome handle left behind must not hold the trial open, so the process ends once the
+  // table and the open scenario's line are out the door.
+  await new Promise((resolve) => process.stdout.write(`${formatSide(side)}\n`, resolve));
   if (openResult.cpu !== null) {
-    process.stdout.write(`${formatOpen(openResult)}\n`);
+    await new Promise((resolve) => process.stdout.write(`${formatOpen(openResult)}\n`, resolve));
   }
+  process.exit(0);
 }
 
 main().catch((caught) => {
   process.stderr.write(`${caught.stack ?? caught}\n`);
-  process.exitCode = 1;
+  process.exit(1);
 });

@@ -167,9 +167,13 @@ export function formatSide(side) {
     );
   }
   if (side.statusChurn) {
+    const churn = side.statusChurn;
+    const perMinute = (flips) => ((flips * 60000) / churn.windowMs).toFixed(1);
     lines.push(
-      `status churn: one row flips between a held turn and idle ${side.statusChurn.flipsPerWindow} times per ` +
-        `${side.statusChurn.windowMs / 1000} s window (${((side.statusChurn.flipsPerWindow * 60000) / side.statusChurn.windowMs).toFixed(1)} flips a minute)`,
+      `status churn per ${churn.windowMs / 1000} s window: a held turn starts and is cancelled ` +
+        `${churn.turnFlipsPerWindow} times (${perMinute(churn.turnFlipsPerWindow)} a minute, broadcast), and a delayed ` +
+        `trigger appears and is cancelled ${churn.triggerFlipsPerWindow} times ` +
+        `(${perMinute(churn.triggerFlipsPerWindow)} a minute, silent)`,
     );
   }
   const backgroundReps = side.reps?.background ?? [];
@@ -283,6 +287,10 @@ function formatBackground(label, reps) {
   const fields = fieldNames.map(
     (name) => `${name} ${median(reps.map((rep) => rep.statusPoll.changedFields[name] ?? 0))}`,
   );
+  const roleNames = [...new Set(reps.flatMap((rep) => Object.keys(rep.statusPoll.changedRows ?? {})))].sort();
+  const roles = roleNames.map(
+    (name) => `${name} ${median(reps.map((rep) => rep.statusPoll.changedRows?.[name] ?? 0))}`,
+  );
   return [
     `${label} received by endpoint, KB/min (median): ${endpoints.join(', ')}`,
     `${label} status poll, visible tab (median): ${poll('perMinute').toFixed(1)} per min, ${poll('answered200')} ` +
@@ -291,7 +299,8 @@ function formatBackground(label, reps) {
       `${bytes('bytes200')} on a 200 and ${bytes('bytes304')} on a 304; of the 200s, ` +
       `${poll('changedBodies')} moved a row, ${poll('unchangedBodies')} repeated the state and ` +
       `${poll('firstBodies')} answered a row set the tab held no state for; polls per changed field: ` +
-      `${fields.length > 0 ? fields.join(', ') : 'none'}`,
+      `${fields.length > 0 ? fields.join(', ') : 'none'}; per changed row: ` +
+      `${roles.length > 0 ? roles.join(', ') : 'none'}`,
   ];
 }
 

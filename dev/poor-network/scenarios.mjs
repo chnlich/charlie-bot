@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 import { launchBrowser, chromeBinary } from './chrome.mjs';
-import { startStatusChurn, startTaskTreeDriver } from './api.mjs';
+import { startTaskTreeDriver, startTriggerChurn, startTurnChurn } from './api.mjs';
 import { ShapingProxy } from './proxy.mjs';
 import { LINK, OTHER_VIEWS, TASK_TREE_LOAD } from './profile.mjs';
 import { percentile } from './report.mjs';
@@ -141,31 +141,30 @@ function overlappingListRefreshes(tab, from, to) {
   return overlapping;
 }
 
-// The fields that differ between two status bodies, each `{session id: {field: value}}`. A row only one body holds
-// counts as `row added` or `row removed`; equal rows in another key order count as `key order`.
-function changedStatusFields(beforeText, afterText) {
-  const before = JSON.parse(beforeText);
-  const after = JSON.parse(afterText);
-// The fields that differ between two row states, each the field's name; a row only one state holds counts as `row
-// added` or `row removed`.
+// The fields that differ between two row states, the field's name for each, and the ids of the rows that differ. A row
+// only one state holds counts as `row added` or `row removed`.
 function changedStatusFields(before, after) {
   const fields = new Set();
+  const ids = new Set();
   for (const id of new Set([...before.keys(), ...after.keys()])) {
     if (!before.has(id)) {
       fields.add('row added');
+      ids.add(id);
     } else if (!after.has(id)) {
       fields.add('row removed');
+      ids.add(id);
     } else {
       const left = before.get(id);
       const right = after.get(id);
       for (const field of new Set([...Object.keys(left), ...Object.keys(right)])) {
         if (JSON.stringify(left[field]) !== JSON.stringify(right[field])) {
           fields.add(field);
+          ids.add(id);
         }
       }
     }
   }
-  return fields;
+  return { fields, ids };
 }
 
 // The row state an answer leaves the page with. The change's server answers `{token, rows, gone}`: the rows that moved
@@ -190,9 +189,10 @@ function statusStateAfter(state, text) {
 // 200 moved. A 304 carried no body: the page read the cached one. A 200 is applied to the state the tab held for its
 // row set — the URL without its `since` token — and compared with it: `changedBodies` moved a row or the set,
 // `unchangedBodies` repeated it, and `firstBodies` answered a row set the tab held no state for. `changedFields`
-// counts, per field, the polls in which it changed for any row. `bytesPer200` and `bytesPer304` are the median bytes
-// the tab received per answer of that status, headers included.
-export function statusPollCounts(tab, from, to, minutes) {
+// counts, per field, the polls in which it changed for any row, and `changedRows` does the same by the role `roles`
+// gives an id. `bytes200` and `bytes304` are the median bytes the tab received per answer of that status, headers
+// included.
+export function statusPollCounts(tab, from, to, minutes, roles = new Map()) {
   const counts = {
     perMinute: 0,
     answered200: 0,
@@ -203,6 +203,7 @@ export function statusPollCounts(tab, from, to, minutes) {
     unchangedBodies: 0,
     firstBodies: 0,
     changedFields: {},
+    changedRows: {},
     bytes200: [],
     bytes304: [],
   };
@@ -245,7 +246,7 @@ export function statusPollCounts(tab, from, to, minutes) {
       counts.firstBodies += 1;
       continue;
     }
-    const fields = changedStatusFields(previous, next);
+    const { fields, ids } = changedStatusFields(previous, next);
     if (fields.size === 0) {
       counts.unchangedBodies += 1;
       continue;
@@ -253,6 +254,10 @@ export function statusPollCounts(tab, from, to, minutes) {
     counts.changedBodies += 1;
     for (const field of fields) {
       counts.changedFields[field] = (counts.changedFields[field] ?? 0) + 1;
+    }
+    for (const id of ids) {
+      const role = roles.get(id) ?? 'other';
+      counts.changedRows[role] = (counts.changedRows[role] ?? 0) + 1;
     }
   }
   counts.bytes200 = counts.bytes200.length > 0 ? percentile(counts.bytes200, 0.5) : null;
@@ -299,9 +304,9 @@ async function clickDuringListRefresh(tab, sessionId) {
 }
 
 // The background load: one visible and two hidden tabs on the open session, the background session running a held turn,
-// the task-tree driver renaming `renamed` at the live rate, and `churn` flipping between a held turn and idle at the
-// live status churn's rate. The visible tab shows the sidebar view `filter` (null: the Workspace); the hidden tabs show
-// the Workspace. `body` runs inside the load, which ends on every path.
+// the task-tree driver renaming `renamed` at the live rate, and `churn` carrying the status churn — the turn churn it
+// broadcasts and the trigger churn it does not. The visible tab shows the sidebar view `filter` (null: the Workspace);
+// the hidden tabs show the Workspace. `body` runs inside the load, which ends on every path.
 async function withBackground(ctx, { label, filter, renamed, churn }, body) {
   const { api, sessions } = ctx;
   return withLink(ctx, label, ['visible', 'hidden-1', 'hidden-2'], async ({ proxy, tabs, tab, hidden }) => {
@@ -318,23 +323,36 @@ async function withBackground(ctx, { label, filter, renamed, churn }, body) {
     await tabs.waitIdle(SETTLE_TIMEOUT_MS);
 
     const running = sessions.background.id;
+    const churnId = churn ?? sessions.churn.id;
     await api.sendMessage(running, `bench-hold background ${randomTag()}`);
     const driver = startTaskTreeDriver(api, renamed ?? running);
-    const churnDriver = startStatusChurn(api, churn ?? sessions.churn.id);
+    const turnChurn = startTurnChurn(api, churnId);
+    const triggerChurn = startTriggerChurn(api, churnId);
     return withCleanup(async () => {
       await sleep(WARM_UP_MS);
       return body({ proxy, tab, hidden });
     }, async () => {
-      await churnDriver.stop();
+      await triggerChurn.stop();
+      await turnChurn.stop();
       await driver.stop();
       await api.cancelRuns(running);
     });
   });
 }
 
+// The roles the report names a changed row by: the churned row, the session the held turn runs in, and the open chat.
+function churnRoles(sessions, churnId) {
+  return new Map([
+    [churnId, 'churn'],
+    [sessions.churn.id, 'churn'],
+    [sessions.background.id, 'background'],
+    [sessions.open.id, 'open'],
+  ]);
+}
+
 // Scenario 1: bytes per minute at the proxy, each direction, over one task-tree window, with the received bytes split
 // by endpoint and the visible tab's status polls.
-async function measureWindow(proxy, tab, hidden) {
+async function measureWindow(proxy, tab, hidden, roles) {
   const beforeWindow = proxy.counters();
   const windowStart = Date.now();
   await sleep(TASK_TREE_LOAD.windowMs);
@@ -349,7 +367,7 @@ async function measureWindow(proxy, tab, hidden) {
   return {
     receivedKbPerMin: received,
     receivedByEndpoint: byEndpoint,
-    statusPoll: statusPollCounts(tab, windowStart, windowEnd, minutes),
+    statusPoll: statusPollCounts(tab, windowStart, windowEnd, minutes, roles),
     sentKbPerMin: sent,
   };
 }
@@ -359,7 +377,7 @@ export async function backgroundRep(ctx, repetition) {
   const { api, sessions } = ctx;
   const processing = await serverProcessingMs(ctx, sessions.probes);
   return withBackground(ctx, { label: 'background', filter: null, renamed: null }, async ({ proxy, tab, hidden }) => {
-    const window = await measureWindow(proxy, tab, hidden);
+    const window = await measureWindow(proxy, tab, hidden, churnRoles(sessions, sessions.churn.id));
 
     // Scenario 2: click to rendered, for a session that this page has not loaded.
     const target = sessions.switchTarget;
@@ -489,7 +507,10 @@ export function viewBackgroundRep(filter) {
         if (painted < 0) {
           throw new Error(`the visible tab does not show the ${filter} view`);
         }
-        return { ...(await measureWindow(proxy, tab, hidden)), viewRowsPainted: painted };
+        return {
+          ...(await measureWindow(proxy, tab, hidden, churnRoles(ctx.sessions, view.churn))),
+          viewRowsPainted: painted,
+        };
       });
   };
 }

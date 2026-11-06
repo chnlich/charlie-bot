@@ -506,10 +506,7 @@ fn bounded_metadata_loops(shell: &str) -> Result<bool, String> {
     let list_end = captures.name("list").map_or(whole.end(), |list| list.end());
     let segment_start = shell[..whole.start()].rfind([';', '&', '\n']).map_or(0, |at| at + 1);
     let list = &shell[segment_start..list_end];
-    if !body.contains(METADATA_FILE_NAME)
-      || !loop_body_is_builtin(body)
-      || list_reads_below_pattern()?.is_match(list)
-    {
+    if !body.contains(METADATA_FILE_NAME) || !loop_body_is_builtin(body) || list_reads_below_pattern()?.is_match(list) {
       continue;
     }
     spans.push((whole.start(), whole.end()));

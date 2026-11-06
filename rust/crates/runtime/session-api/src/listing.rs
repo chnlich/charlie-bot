@@ -991,6 +991,33 @@ impl CompactListingMemo {
   }
 }
 
+/// The row refresh body: the compact column text of the rows of `page` that `ids` name, and the ids the page no longer
+/// holds, as `{"sessions": <column text>, "gone": [...]}`.
+///
+/// The rows take the full listing's compact form, so the sidebar merges them into its painted list with the same
+/// decoding and the same epoch-minute times. The row memo is local to this call: a refresh names a few rows, and the
+/// whole-listing memo keys on the full page.
+pub fn row_refresh_text(store: &Store, page: &PageRows, ids: &[String]) -> StoreResult<String> {
+  let wanted: HashSet<&str> = ids.iter().map(String::as_str).collect();
+  let rows: Vec<Arc<SessionMetadata>> =
+    page.rows.iter().filter(|row| wanted.contains(row.id.as_str())).cloned().collect();
+  let present: HashSet<String> = rows.iter().map(|row| row.id.clone()).collect();
+  let gone: Vec<&str> = ids.iter().map(String::as_str).filter(|id| !present.contains(*id)).collect();
+  let subset = PageRows {
+    rows: Arc::new(rows),
+    derived: Arc::clone(&page.derived),
+    sequence_fields: page
+      .sequence_fields
+      .iter()
+      .filter(|(id, _)| present.contains(id.as_str()))
+      .map(|(id, fields)| (id.clone(), fields.clone()))
+      .collect(),
+  };
+  let columns = page_json_text(store, &subset, None, &PageRowsMemo::default(), LISTING_PROJECTION, RowSchema::Listing)?;
+  let gone = serde_json::to_string(&gone).expect("a list of session ids serializes");
+  Ok(format!(r#"{{"sessions":{columns},"gone":{gone}}}"#))
+}
+
 /// The response key of the chat-thread flag: true for a session whose metadata names a chat thread.
 pub const THREAD_SESSION: &str = "thread_session";
 

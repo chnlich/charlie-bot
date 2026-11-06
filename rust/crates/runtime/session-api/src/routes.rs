@@ -104,9 +104,27 @@ pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
 }
 
 async fn list_active(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  // `ids` asks for a row refresh: the named rows that the Workspace lists, and the ids it no longer lists.
+  let query = Query::new(&request);
+  if let Some(raw_ids) = query.get("ids") {
+    let ids = parse_session_ids(raw_ids);
+    if ids.is_empty() {
+      return responses::json(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        &json!({"detail": "ids must name at least one session"}),
+      );
+    }
+    let response = blocking_store(move || {
+      let page = listing::active_page_rows(&features.store, &features.registry)?;
+      let text = listing::row_refresh_text(&features.store, &page, &ids)?;
+      Ok(responses::fast_json_rendered(StatusCode::OK, text.into_bytes()))
+    })
+    .await;
+    return response.unwrap_or_else(store_error);
+  }
   // `compact=1` asks for the page's column form of the same rows, which the sidebar decodes with the page's own
   // expander. Any other value keeps the row array the route has always sent.
-  let compact = Query::new(&request).get("compact") == Some("1");
+  let compact = query.get("compact") == Some("1");
   let response = blocking_store(move || {
     // The sidebar corpus is already filtered to the rows the Workspace lists, and it is kept until the corpus, the
     // subtree roots or the overlays move.
@@ -281,11 +299,29 @@ async fn session_status(State(features): State<Arc<FeatureContext>>, request: Re
 
 fn session_status_response(features: &FeatureContext, request: &Request<Body>) -> Response {
   let query = Query::new(request);
-  let Some(raw_ids) = query.get("ids") else {
+  let filter = query.get("filter");
+  let raw_ids = query.get("ids");
+  if filter.is_none() && raw_ids.is_none() {
     return validation::response(&[validation::missing(validation::Source::Query, "ids")]);
-  };
-  let ids = parse_session_ids(raw_ids);
-  if ids.is_empty() {
+  }
+  // `filter=all` names the Workspace's rows, which the server knows; `ids` names any further sessions the client
+  // paints or holds open, such as the open chat and a delegate card's child.
+  let mut ids = Vec::new();
+  match filter {
+    None => {}
+    Some("all") => match listing::active_page_rows(&features.store, &features.registry) {
+      Ok(page) => ids.extend(page.rows().iter().map(|row| row.id.clone())),
+      Err(error) => return store_error(error),
+    },
+    Some(name) => {
+      return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({"detail": format!("unknown filter: {name}")}));
+    }
+  }
+  if let Some(raw_ids) = raw_ids {
+    ids.extend(parse_session_ids(raw_ids));
+  }
+  let ids = unique_session_ids(ids);
+  if filter.is_none() && ids.is_empty() {
     return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({"detail": "ids must name at least one session"}));
   }
   let force = match query.parse_bool("force", false) {
@@ -522,14 +558,13 @@ fn fresh_sessions(
 }
 
 fn parse_session_ids(ids: &str) -> Vec<String> {
+  unique_session_ids(ids.split(',').map(str::trim).filter(|id| !id.is_empty()).map(str::to_string))
+}
+
+/// The ids in their first-seen order, each once.
+fn unique_session_ids(ids: impl IntoIterator<Item = String>) -> Vec<String> {
   let mut seen = std::collections::HashSet::new();
-  ids
-    .split(',')
-    .map(str::trim)
-    .filter(|id| !id.is_empty())
-    .filter(|id| seen.insert((*id).to_string()))
-    .map(str::to_string)
-    .collect()
+  ids.into_iter().filter(|id| seen.insert(id.clone())).collect()
 }
 
 fn get_status_body(key: &StatusKey) -> Option<Vec<u8>> {
@@ -652,6 +687,49 @@ mod tests {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert!(payload.is_array(), "a request without compact keeps the row array");
+  }
+
+  /// A row refresh answers the named rows in the compact form, and names each id the Workspace no longer lists.
+  #[tokio::test]
+  async fn a_row_refresh_answers_the_named_rows_and_the_ids_the_list_no_longer_holds() {
+    let (_home, features) = crate::test_support::feature_context();
+    let kept = crate::test_support::create_node(&features.store, "refresh-kept", None, TaskProfile::Manager).await;
+    crate::test_support::create_node(&features.store, "refresh-other", None, TaskProfile::Manager).await;
+    let request = Request::builder()
+      .uri(format!("/api/sessions/?compact=1&ids={},missing-session", kept.id))
+      .body(Body::empty())
+      .unwrap();
+
+    let (status, payload) = crate::test_support::answer(list_active(State(features), request).await).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(payload["gone"], json!(["missing-session"]));
+    assert_eq!(payload["sessions"]["name"], json!(["refresh-kept"]), "only the named row answers");
+  }
+
+  /// `filter=all` names the Workspace's rows, and answers the same body as those rows named by `ids`. An unknown
+  /// filter is refused.
+  #[tokio::test]
+  async fn a_status_filter_names_the_workspace_rows_and_answers_as_their_ids_do() {
+    let (_home, features) = crate::test_support::feature_context();
+    let first = crate::test_support::create_node(&features.store, "status-first", None, TaskProfile::Manager).await;
+    let second = crate::test_support::create_node(&features.store, "status-second", None, TaskProfile::Manager).await;
+    let status = |uri: String| {
+      let features = Arc::clone(&features);
+      async move {
+        let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        crate::test_support::answer(session_status(State(features), request).await).await
+      }
+    };
+
+    let (code, by_filter) = status("/api/sessions/status?filter=all".to_string()).await;
+    let (_, by_ids) = status(format!("/api/sessions/status?ids={},{}", first.id, second.id)).await;
+
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(by_filter, by_ids);
+    assert!(by_filter.get(&first.id).is_some() && by_filter.get(&second.id).is_some());
+    let (code, _) = status("/api/sessions/status?filter=starred".to_string()).await;
+    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
   }
 
   #[tokio::test]

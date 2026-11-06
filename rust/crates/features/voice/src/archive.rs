@@ -82,8 +82,9 @@ pub(crate) fn write_transcript(audio_path: &Path, text: &str) -> io::Result<()> 
   fs::write(audio_path.with_extension("txt"), text.as_bytes())
 }
 
-/// The timestamp prefix of a recording stem: `datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H%M%S.%f")[:-3] + "Z"`,
-/// UTC to the millisecond, then `Z`; `voice_stem` appends `_` and eight UUID hex characters.
+/// The timestamp prefix of a recording stem. It is UTC to the millisecond, then `Z`, in the format
+/// `datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H%M%S.%f")[:-3] + "Z"`.
+/// `voice_stem` appends `_` and eight UUID hex characters.
 fn voice_stem_format() -> Vec<time::format_description::FormatItem<'static>> {
   time::macros::format_description!("[year]-[month]-[day]T[hour][minute][second].[subsecond digits:3]Z").to_vec()
 }

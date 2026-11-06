@@ -32,8 +32,8 @@ use crate::config::VoiceSettings;
 use crate::recording::{self, RecordingBackendFactory};
 use crate::wav;
 
-/// The recording's device facts, which the browser sends as the upload form's `devices` field and the relay's end
-/// frame, and which `voice_transcribed` logs under these names.
+/// The recording's device facts. The browser sends them as the upload form's `devices` field and as the relay's
+/// end frame; `voice_transcribed` logs them under these names.
 pub(crate) const DEVICE_FIELDS: &[&str] =
   &["input_device", "capture_settings", "output_device", "communications_output_device", "device_error"];
 
@@ -127,8 +127,9 @@ async fn upload_voice_recording(State(features): State<Arc<FeatureContext>>, req
 }
 
 // --- Startup report ---------------------------------------------------------
-// One recording run reports its startup record once: the last of the three startup steps it reached, how the
-// recording ended, and the browser's audio and microphone state at that moment. The route keeps no state.
+// One recording run reports its startup record once. The record holds the last of the three startup steps the
+// run reached, how the recording ended, and the browser's audio and microphone state at that moment. The route
+// keeps no state.
 
 /// The step names of the startup report's `reached` field, in their progression order.
 const STARTUP_STEPS: &[&str] = &["mic_opening", "no_frames", "silent", "ready"];
@@ -252,8 +253,8 @@ impl<'a> VoiceStartup<'a> {
   }
 }
 
-/// The one `voice_startup` line: the body's fields in declaration order, with the device object written as
-/// `voice_transcribed` writes its five device fields and an absent optional as null.
+/// The one `voice_startup` line: the body's fields in declaration order. The device object is written as
+/// `voice_transcribed` writes its five device fields, and an absent optional as null.
 fn log_voice_startup(session_id: &str, startup: &VoiceStartup<'_>) {
   let device = |field: &str| device_text(startup.devices.and_then(|devices| devices.get(field)));
   tracing::info!(

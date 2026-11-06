@@ -42,8 +42,9 @@ const CHROME_FLAGS = [
 ];
 
 // The DevTools protocol over the pipe: one JSON message per NUL-terminated frame in each direction.
-class CdpConnection {
+export class CdpConnection {
   #writable;
+  #readable;
   #nextId = 1;
   #pending = new Map();
   #listeners = new Set();
@@ -51,6 +52,7 @@ class CdpConnection {
 
   constructor(writable, readable) {
     this.#writable = writable;
+    this.#readable = readable;
     readable.setEncoding('utf8');
     readable.on('data', (chunk) => this.#onData(chunk));
   }
@@ -92,6 +94,18 @@ class CdpConnection {
   onMessage(listener) {
     this.#listeners.add(listener);
   }
+
+  // Destroys both pipe streams and fails every pending call. After the group kill a Chrome descendant that escaped it
+  // (a crashpad handler) can hold the pipe's far end, so the streams never see EOF and the bench's process would never
+  // drain; destroying them drops the handles.
+  close() {
+    for (const waiter of this.#pending.values()) {
+      waiter.reject(new Error(`${waiter.method}: the browser's DevTools pipe was closed`));
+    }
+    this.#pending.clear();
+    this.#writable.destroy();
+    this.#readable.destroy();
+  }
 }
 
 // A page target: its session id and the DevTools calls the bench makes on it.
@@ -119,11 +133,13 @@ export class Browser {
   #child;
   #cdp;
   #exited;
+  #logFd;
 
-  constructor(child, cdp, exited) {
+  constructor(child, cdp, exited, logFd) {
     this.#child = child;
     this.#cdp = cdp;
     this.#exited = exited;
+    this.#logFd = logFd;
   }
 
   // Opens a page target. Its network and page events go to the listener that the page's owner registers.
@@ -180,6 +196,9 @@ export class Browser {
         throw error;
       }
     }
+    // The dead browser can still answer nothing, so the pipe's pending calls fail and its handles go.
+    this.#cdp.close();
+    fs.closeSync(this.#logFd);
   }
 }
 
@@ -204,7 +223,11 @@ export async function launchBrowser({ binary, proxyPort, userDataDir, logPath, t
     detached: true,
     stdio: ['ignore', log, log, 'pipe', 'pipe'],
   });
-  const exited = new Promise((resolve) => child.once('exit', resolve));
+  // A spawn failure emits 'error' without 'exit', and close() waits on this promise on every path.
+  const exited = new Promise((resolve) => {
+    child.once('exit', resolve);
+    child.once('error', resolve);
+  });
   const failed = new Promise((_, reject) => {
     child.once('error', reject);
     child.once('exit', (code, signal) => reject(new Error(`Chrome exited (${code ?? signal}) before its DevTools pipe answered`)));
@@ -212,8 +235,15 @@ export async function launchBrowser({ binary, proxyPort, userDataDir, logPath, t
   // The race below handles a launch failure; an exit after launch is handled by Browser.close, not by this promise.
   failed.catch(() => {});
   const cdp = new CdpConnection(child.stdio[3], child.stdio[4]);
-  const browser = new Browser(child, cdp, exited);
-  const { product } = await Promise.race([browser.send('Browser.getVersion'), failed]);
+  const browser = new Browser(child, cdp, exited, log);
+  let product;
+  try {
+    ({ product } = await Promise.race([browser.send('Browser.getVersion'), failed]));
+  } catch (caught) {
+    // A failed launch must not leave the detached child, its pipe or its log fd behind.
+    await browser.close();
+    throw caught;
+  }
   browser.version = product;
   return browser;
 }

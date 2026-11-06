@@ -181,9 +181,11 @@ The relay tests are integration tests because they start the relay as a child pr
 them when a change touches this directory. To reproduce them through the remote runner:
 
 ```sh
-dev/remote-run/run.sh node --test dev/poor-network/proxy.integration.test.mjs dev/poor-network/report.test.mjs
+dev/remote-run/run.sh node --test dev/poor-network/proxy.integration.test.mjs dev/poor-network/report.test.mjs \
+  dev/poor-network/chrome.test.mjs
 ```
 
 They check the relay's tunnel transfer time at the link, its stop on SIGTERM, and its refusal of a target without a
 port. The report's tests check the calibration gate: it reads the during-refresh holds, not the scored scenario's
-random-phase holds, and only the before side's line carries a verdict.
+random-phase holds, and only the before side's line carries a verdict. The chrome tests check the browser teardown: a
+closed browser fails its unanswered DevTools calls and drops its pipe handles.

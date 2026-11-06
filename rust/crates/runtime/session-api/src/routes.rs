@@ -829,28 +829,32 @@ mod tests {
     assert_eq!(forward, reverse);
   }
 
-  /// A repeat `filter=all` poll answers the listing as it stands now, not the rows of the body it memoized.
+  /// A repeat `filter=all` poll that carries the token of its last answer answers the listing as it stands now: the
+  /// row whose fact moved and the row that appeared, and not the rows that stand.
   #[tokio::test]
   async fn a_repeat_status_filter_answers_the_listing_as_it_stands_now() {
     let (_home, features) = crate::test_support::feature_context();
-    let status = || {
+    let status = |uri: String| {
       let features = Arc::clone(&features);
       async move {
-        let request = Request::builder().uri("/api/sessions/status?filter=all").body(Body::empty()).unwrap();
+        let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
         crate::test_support::answer(session_status(State(features), request).await).await
       }
     };
 
     let listed = crate::test_support::create_node(&features.store, "status-listed", None, TaskProfile::Manager).await;
-    let (_, first) = status().await;
+    let (_, first) = status("/api/sessions/status?filter=all".to_string()).await;
+    let token = first["token"].as_str().expect("a full answer names the state it answers").to_string();
+    assert_eq!(first["rows"][&listed.id][HAS_UNREAD], json!(false));
+
     features.store.mark_unread(&listed.id).await.expect("the row is marked unread");
     let later = crate::test_support::create_node(&features.store, "status-later", None, TaskProfile::Manager).await;
-    let (_, repeat) = status().await;
+    let (_, repeat) = status(format!("/api/sessions/status?filter=all&since={token}")).await;
 
-    assert_eq!(first[&listed.id][HAS_UNREAD], json!(false));
-    assert!(first.get(&later.id).is_none(), "the first poll answers the rows it listed");
-    assert_eq!(repeat[&listed.id][HAS_UNREAD], json!(true), "the repeat poll answers the row's new state");
-    assert!(repeat.get(&later.id).is_some(), "the repeat poll answers the row that appeared");
+    assert_eq!(repeat["rows"][&listed.id][HAS_UNREAD], json!(true), "the repeat poll answers the row's new state");
+    assert!(repeat["rows"].get(&later.id).is_some(), "the repeat poll answers the row that appeared");
+    let answered = repeat["rows"].as_object().expect("rows are an object");
+    assert_eq!(answered.len(), 2, "the repeat poll answers only the rows that moved");
   }
 
   #[tokio::test]

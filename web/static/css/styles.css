@@ -329,11 +329,12 @@ main > header > a[title="View JSONL events"] {
 .session-row > button { position: absolute; right: 12px; pointer-events: none; }
 /* Pointer floor: a row action draws a 14px glyph in p-1's 8px, a 22px box, and a named group
    header's two actions draw a 12px glyph in p-0.5's 4px, a 16px box. Both sit under the 24px
-   minimum. The row's boxes are out of flow, so a 24px minimum grows each into the gap without
-   moving the row; the header's boxes are in flow, so 6px of padding with the 4px margin around it
-   grows the box 4px each way while the header keeps its 28px row and the glyphs keep their places.
-   Neither rule adds a row, strip or label: the controls take the space their own boxes already
-   hold. */
+   minimum. The row's hover boxes are out of flow, so a 24px minimum grows each into the gap without
+   moving the row; the starred star stays in flow, so it takes a -1px margin, which keeps its 22px
+   layout slot while its box grows. The header's boxes are in flow, so 6px of padding with the -4px
+   margin around it grows the box 4px each way while the header keeps its 28px row and the glyphs
+   keep their places. Neither rule adds a row, strip or label: the controls take the space their own
+   boxes already hold. */
 .session-row > button {
   display: inline-flex;
   align-items: center;
@@ -367,8 +368,11 @@ main > header > a[title="View JSONL events"] {
 .session-row > .star-btn.\!opacity-100 ~ button:nth-last-of-type(2) { right: 72px; }
 .session-row > .star-btn.\!opacity-100 ~ button:nth-last-of-type(3) { right: 102px; }
 /* The starred star stays visible and clickable at rest, and its flow slot is
-   what the hover neighbours above clear. */
-.session-row > button.\!opacity-100 { position: static; pointer-events: auto; }
+   what the hover neighbours above clear. It is the one in-flow button of the
+   pointer-floor rule above, so its -1px margin takes the layout footprint back
+   to the 22px slot the text block was laid out against: the name and the second
+   line keep their width while the box keeps its 24px. */
+.session-row > button.\!opacity-100 { position: static; pointer-events: auto; margin: -1px; }
 /* Scope the reveal to the hovered row: the buttons' Tailwind group-hover
    class rides every ancestor carrying the `group` class. Each group
    section wrapper (groups.js's <div class="session-group group">) carries
@@ -382,8 +386,9 @@ main > header > a[title="View JSONL events"] {
 /* Hover: the revealed buttons cover the text end with the hovered row's own
    composite. That composite is the sidebar panel (slate-850) under the row's
    hover tint, given as a color layer plus image. So the browser blends it
-   exactly like the row behind. Each button's shadow fills the 8px flex gap
-   to its right, keeping the strip continuous. The boxes span the row's full
+   exactly like the row behind. The 30px stack pitch leaves 6px between the
+   24px boxes, and each button's 8px shadow spans that gap and 2px of its
+   neighbour, keeping the strip continuous. The boxes span the row's full
    height, so the cover runs from the row's top edge to its bottom edge. No
    text sliver shows above or below it. The transitions ride the row's
    transition-colors beat (they replace the buttons' transition-opacity,
@@ -415,7 +420,7 @@ main > header > a[title="View JSONL events"] {
    row without a gear keeps its one action: a worker row's Archive, an
    archived-tree context row's Star. Worker-thread rows and the (No group)
    header render no buttons and stay bare. The 44px touch boxes ride negative
-   margins -- outer size back at the button's desktop box -- so the row and
+   margins -- outer width 22px, the desktop star's slot -- so the row and
    header heights stay put. The desktop hover cover background is explicitly
    off, because a tap's sticky hover must not paint it. */
 @media (hover: none) {

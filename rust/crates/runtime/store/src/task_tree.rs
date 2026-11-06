@@ -5120,7 +5120,7 @@ pub(crate) mod tests {
 fn staging_dir_name_carries_task_id_process_id_and_uuid() {
   let name = staging_dir_name("synthetic-task-id");
   // The tree walkers skip staging dirs on the `.task-` prefix and `.tmp` suffix alone
-  // (task_tree.rs build_tree_index, charliebot-core v1_sessions count), so both ends must hold.
+  // (task_tree.rs build_tree_index, the store's v1_sessions count), so both ends must hold.
   assert!(name.starts_with(".task-synthetic-task-id-"), "unexpected staging name prefix: {name}");
   assert!(name.ends_with(".tmp"), "unexpected staging name suffix: {name}");
   let body = name.trim_start_matches(".task-").trim_end_matches(".tmp");

@@ -739,17 +739,16 @@ fn default_ledger_path_derives_from_the_config_home() {
 }
 
 #[test]
-fn ledger_without_index_gains_it_on_reopen() {
-  let dir = tempfile::tempdir().unwrap();
-  let path = dir.path().join("ledger.sqlite3");
-  let before = {
-    let mut ledger = UsageLedger::open(&path).unwrap();
+fn an_existing_ledger_restores_its_cover_index() {
+  let (before, conn) = {
+    let connection = Connection::open_in_memory().unwrap();
+    let mut ledger = UsageLedger::from_connection(PathBuf::from(":memory:"), connection).unwrap();
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", &[record("rec-1", RecordKind::Native, &["sess-a"])]).unwrap();
     let rows = ledger.model_rows().unwrap();
     ledger.conn.execute_batch("DROP INDEX usage_group_cover").unwrap();
-    rows
+    (rows, ledger.conn)
   };
-  let mut ledger = UsageLedger::open(&path).unwrap();
+  let mut ledger = UsageLedger::from_connection(PathBuf::from(":memory:"), conn).unwrap();
   let indexes = column_text(&ledger.conn, "SELECT name FROM sqlite_master WHERE type = 'index'");
   assert!(indexes.iter().any(|name| name == "usage_group_cover"));
   assert_eq!(ledger.model_rows().unwrap(), before);

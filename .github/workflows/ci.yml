@@ -150,6 +150,12 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+      # This stage only reports offenders. The stage that enforces the 0.1 s rule, once the over-limit
+      # unit tests are handled, drops --fail-over-limit 0 so the check gates on its default.
+      - name: Unit tests over 0.1 s
+        if: always()
+        run: dev/check-unit-test-time.mjs --junit rust/target/nextest/ci/junit.xml --fail-over-limit 0
+
       # A script test that leaves a stand-in behind reparents it to pid 1. Run after a failed test too, which is
       # exactly when a leak appears.
       - name: Check for leaked script-test processes

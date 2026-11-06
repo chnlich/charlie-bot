@@ -366,18 +366,38 @@ mod tests {
 
   const JINJA2_FIXTURE: &str = include_str!("../tests/fixtures/jinja2_format_reference.json");
 
-  fn jinja2_renders(cases: &[(String, serde_json::Value)]) -> Vec<String> {
+  fn jinja2_renders(start: usize, cases: Vec<(String, serde_json::Value)>) {
     let fixture: JsonValue = serde_json::from_str(JINJA2_FIXTURE).unwrap();
     assert_eq!(fixture["source"], "rust/crates/infra/compat/src/jinja.rs::JINJA2_RENDER");
     assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
-    let recorded_cases: Vec<(String, serde_json::Value)> = serde_json::from_value(fixture["cases"].clone()).unwrap();
+    let end = start + cases.len();
+    let fixture_cases = fixture["cases"].as_array().unwrap();
+    let recorded_cases: Vec<(String, serde_json::Value)> =
+      serde_json::from_value(fixture_cases[start..end].to_vec().into()).unwrap();
     assert_eq!(recorded_cases, cases);
-    serde_json::from_value(fixture["expected"].clone()).unwrap()
+    let fixture_expected = fixture["expected"].as_array().unwrap();
+    let expected: Vec<String> = serde_json::from_value(fixture_expected[start..end].to_vec().into()).unwrap();
+    let environment = environment(|_| Ok(None));
+    let mismatches: Vec<String> = cases
+      .iter()
+      .zip(&expected)
+      .filter_map(|((template, context), jinja2)| {
+        let ours = environment
+          .render_str(template, Value::from_serialize(context))
+          .unwrap_or_else(|error| panic!("{template} with {context}: {error}"));
+        (ours != *jinja2).then(|| format!("{template} with {context}: Jinja2 {jinja2:?}, ours {ours:?}"))
+      })
+      .collect();
+    assert!(
+      mismatches.is_empty(),
+      "{} renders differ, first {:?}",
+      mismatches.len(),
+      &mismatches[..mismatches.len().min(8)]
+    );
   }
 
-  #[test]
-  fn format_filter_matches_jinja2_for_the_page_and_the_edge_values() {
-    let mut cases: Vec<(String, serde_json::Value)> = vec![
+  fn page_cases() -> Vec<(String, serde_json::Value)> {
+    vec![
       // The uses in token_usage.html: `"%.1f"|format(cache_share)` at lines 85, 106 and 121.
       (r#"{{ "%.1f"|format(cache_share) }}%"#.into(), json!({"cache_share": 37.45})),
       (r#"{{ "%.2f"|format(ctx.out_share*100) }}% of the total"#.into(), json!({"ctx": {"out_share": 0.0625}})),
@@ -391,56 +411,53 @@ mod tests {
       (r#"{{ "%d"|format(x) }} {{ "%s"|format(x) }}"#.into(), json!({"x": 7})),
       (r#"{{ "%s"|format(x) }}"#.into(), json!({"x": null})),
       (r#"{{ "%s"|format(x) }}"#.into(), json!({"x": "text"})),
-    ];
-    // Exact ties at two decimals (k/8), values at one and two decimals (k/1000), and halves at none (k/2).
-    for k in 0..1000 {
+    ]
+  }
+
+  fn thousandth_cases(start: usize, end: usize) -> Vec<(String, serde_json::Value)> {
+    let mut cases = Vec::with_capacity((end - start) * 3);
+    for k in start..end {
+      let k = i32::try_from(k).unwrap();
       let eighth = f64::from(k) / 8.0;
       let thousandth = f64::from(k) / 1000.0;
       cases.push((r#"{{ "%.2f"|format(x) }}"#.into(), json!({"x": eighth})));
       cases.push((r#"{{ "%.2f"|format(x) }}"#.into(), json!({"x": thousandth})));
       cases.push((r#"{{ "%.1f"|format(x) }}"#.into(), json!({"x": thousandth})));
     }
-    for k in 0..200 {
-      cases.push((r#"{{ "%.0f"|format(x) }}"#.into(), json!({"x": f64::from(k) / 2.0})));
-    }
-    let expected = jinja2_renders(&cases);
-    assert_eq!(expected.len(), cases.len());
-    // The renders are independent, so they compare in chunks concurrently: three thousand
-    // sequential renders pass the unit-test budget.
-    let mismatches: Vec<String> = std::thread::scope(|scope| {
-      let chunk_len = cases.len().div_ceil(4);
-      cases
-        .chunks(chunk_len)
-        .zip(expected.chunks(chunk_len))
-        .map(|(case_chunk, expected_chunk)| {
-          scope.spawn(move || {
-            let environment = environment(|_| Ok(None));
-            case_chunk
-              .iter()
-              .zip(expected_chunk)
-              .filter_map(|((template, context), jinja2)| {
-                let ours = environment
-                  .render_str(template, Value::from_serialize(context))
-                  .unwrap_or_else(|error| panic!("{template} with {context}: {error}"));
-                (ours != *jinja2).then(|| format!("{template} with {context}: Jinja2 {jinja2:?}, ours {ours:?}"))
-              })
-              .collect::<Vec<String>>()
-          })
-        })
-        .collect::<Vec<_>>()
-        .into_iter()
-        .flat_map(|handle| match handle.join() {
-          Ok(mismatches) => mismatches,
-          Err(payload) => std::panic::resume_unwind(payload),
-        })
-        .collect()
-    });
-    assert!(
-      mismatches.is_empty(),
-      "{} renders differ, first {:?}",
-      mismatches.len(),
-      &mismatches[..mismatches.len().min(8)]
-    );
+    cases
+  }
+
+  #[test]
+  fn format_filter_matches_jinja2_for_the_page() {
+    jinja2_renders(0, page_cases());
+  }
+
+  #[test]
+  fn format_filter_matches_jinja2_for_the_first_thousandth_range() {
+    jinja2_renders(12, thousandth_cases(0, 250));
+  }
+
+  #[test]
+  fn format_filter_matches_jinja2_for_the_second_thousandth_range() {
+    jinja2_renders(762, thousandth_cases(250, 500));
+  }
+
+  #[test]
+  fn format_filter_matches_jinja2_for_the_third_thousandth_range() {
+    jinja2_renders(1512, thousandth_cases(500, 750));
+  }
+
+  #[test]
+  fn format_filter_matches_jinja2_for_the_fourth_thousandth_range() {
+    jinja2_renders(2262, thousandth_cases(750, 1000));
+  }
+
+  #[test]
+  fn format_filter_matches_jinja2_for_half_values() {
+    let cases = (0..200)
+      .map(|k| (r#"{{ "%.0f"|format(x) }}"#.into(), json!({"x": f64::from(k) / 2.0})))
+      .collect();
+    jinja2_renders(3012, cases);
   }
 
   #[test]

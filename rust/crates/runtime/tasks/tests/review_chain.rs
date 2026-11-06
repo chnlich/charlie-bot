@@ -502,7 +502,13 @@ async fn repo_review_context_carries_the_delegated_spec() -> anyhow::Result<()> 
   let worker = stack.node("worker", None, TaskProfile::Worker, Some(spec)).await?;
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-work", "rename the config key").await?;
-  assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
+  let outcome = wait_for_run(&stack, &guard, &worker.id, "run-work").await?;
+  assert_eq!(
+    outcome,
+    RunOutcomeKind::Success,
+    "run-work ended {outcome:?}: {:?}",
+    stack.store().read_run_sync(&worker.id, "run-work")?
+  );
   let review_run = wait_for_review(&stack, &worker.id, "run-work").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &review_run.id).await?, RunOutcomeKind::Success);
   let prompt = fs::read_to_string(stack.store().run_dir(&worker.id, &review_run.id).join("launch_prompt.md"))?;

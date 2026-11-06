@@ -3623,6 +3623,7 @@
           ],
           "provider": "codex",
           "token_count_observed_at": "$NOW_MINUS_2H",
+          "plan_type": "plus",
           "credits": {
             "unlimited": false,
             "balance": 12.5
@@ -3648,6 +3649,7 @@
           ],
           "provider": "codex",
           "token_count_observed_at": "$NOW_MINUS_2H",
+          "plan_type": "plus",
           "credits": {
             "unlimited": false,
             "balance": 12.5

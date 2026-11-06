@@ -295,6 +295,72 @@ test('renderExtUsage shows the credits balance in place of no-cap for a metered 
   assert.equal(_field(summarySeg, 'summary-pct').textContent, 'cr 29,779');
 });
 
+// The plan type rides beside the credits reading: the row shows the string the
+// event named, and the folded summary names it too. No plan name is
+// special-cased, so a second plan string must render the same way.
+test('renderExtUsage shows the plan type beside the credits and in the summary', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'codex:main': _codexPayload({
+        windows: [],
+        credits: { unlimited: false, balance: 786.2718309164047 },
+        plan_type: 'ent26',
+      }),
+    },
+  });
+
+  const row = _rowByKey(strip, 'codex:main');
+  assert.equal(_field(row, 'plan-value').textContent, 'ent26');
+  const creditsIndex = row.children.findIndex((c) => c.getAttribute('data-field') === 'credits');
+  const planIndex = row.children.findIndex((c) => c.getAttribute('data-field') === 'plan');
+  assert.ok(creditsIndex >= 0 && planIndex >= 0, 'credits and plan segments rendered');
+  assert.equal(planIndex, creditsIndex + 1, 'the plan segment sits beside the credits group');
+
+  const summarySeg = _walk(strip.children[0], _byAttr('data-summary-account', 'codex:main'));
+  assert.equal(_field(summarySeg, 'summary-pct').textContent, 'cr 786 · ent26');
+
+  // A row with windows reports each plan string the same way.
+  context.renderExtUsage({
+    providers: { 'codex:main': _codexPayload({ plan_type: 'business' }) },
+  });
+
+  const windowedSummary = _walk(strip.children[0], _byAttr('data-summary-account', 'codex:main'));
+  assert.equal(_field(windowedSummary, 'summary-pct').textContent, '96% · business');
+  assert.equal(_field(_rowByKey(strip, 'codex:main'), 'plan-value').textContent, 'business');
+
+  // A row with neither windows nor credits names its plan in the no-cap marker,
+  // which already says "plan", instead of repeating the word in a second segment.
+  context.renderExtUsage({
+    providers: { 'codex:main': _codexPayload({ windows: [], plan_type: 'business' }) },
+  });
+
+  const noCapRow = _rowByKey(strip, 'codex:main');
+  assert.equal(_field(noCapRow, 'no-cap').textContent, 'plan business · no cap');
+  assert.equal(_field(noCapRow, 'plan'), null, 'the marker carries the only plan text');
+  const noCapSummary = _walk(strip.children[0], _byAttr('data-summary-account', 'codex:main'));
+  assert.equal(_field(noCapSummary, 'summary-pct').textContent, 'no cap · business');
+});
+
+test('renderExtUsage renders a row without a plan type unchanged', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'codex:main': _codexPayload({
+        windows: [],
+        credits: { unlimited: false, balance: 786.2718309164047 },
+      }),
+    },
+  });
+
+  const row = _rowByKey(strip, 'codex:main');
+  assert.equal(_field(row, 'plan'), null, 'a planless row renders no plan segment');
+  const summarySeg = _walk(strip.children[0], _byAttr('data-summary-account', 'codex:main'));
+  assert.equal(_field(summarySeg, 'summary-pct').textContent, 'cr 786');
+});
+
 test('renderExtUsage shows a dash for metered credits without a balance', () => {
   const { context, strip } = loadExtUsageScript();
 

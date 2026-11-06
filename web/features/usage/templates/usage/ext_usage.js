@@ -243,10 +243,17 @@ function _buildBucket(row, win, providerData) {
   return refs;
 }
 
-function _buildNoCapMarker(row) {
+// The words a row uses for its plan: "plan <name>" when the provider named one,
+// and the bare word when it did not. The no-cap marker and the plan segment
+// share this text, so no plan name is special-cased.
+function _planLabel(plan) {
+  return plan ? 'plan ' + plan : 'plan';
+}
+
+function _buildNoCapMarker(row, plan) {
   const marker = _el('span', 'text-slate-500');
   marker.setAttribute('data-field', 'no-cap');
-  marker.textContent = 'plan · no cap';
+  marker.textContent = _planLabel(plan) + ' · no cap';
   row.appendChild(marker);
 }
 
@@ -267,6 +274,22 @@ function _buildCreditsGroup(row, credits) {
   const value = _el('span', '');
   value.setAttribute('data-field', 'credits-value');
   value.textContent = _formatCreditsBalance(credits.balance);
+  group.appendChild(value);
+  row.appendChild(group);
+}
+
+// The plan segment: label + the plan string the provider named. It follows the
+// credits group and the window buckets; the no-cap marker names the plan itself
+// when it takes that place.
+function _buildPlanGroup(row, plan) {
+  const group = _el('div', 'flex items-center gap-1.5 text-slate-400');
+  group.setAttribute('data-field', 'plan');
+  const label = _el('span', '');
+  label.textContent = 'plan';
+  group.appendChild(label);
+  const value = _el('span', '');
+  value.setAttribute('data-field', 'plan-value');
+  value.textContent = plan;
   group.appendChild(value);
   row.appendChild(group);
 }
@@ -318,8 +341,9 @@ function _buildRow(key, providerData) {
   const windows = Array.isArray(providerData.windows) ? providerData.windows : [];
   const creditsMetered = !!providerData.credits && providerData.credits.unlimited === false;
   const buckets = [];
+  const noCap = windows.length === 0 && !creditsMetered;
   if (windows.length === 0) {
-    if (!creditsMetered) _buildNoCapMarker(row);
+    if (noCap) _buildNoCapMarker(row, providerData.plan_type);
   } else {
     for (const win of windows) {
       buckets.push({win: win, refs: _buildBucket(row, win, providerData)});
@@ -327,6 +351,11 @@ function _buildRow(key, providerData) {
   }
   if (creditsMetered) {
     _buildCreditsGroup(row, providerData.credits);
+  }
+  // The no-cap marker already names the plan when it shows; every other row
+  // carries the plan in its own segment.
+  if (providerData.plan_type && !noCap) {
+    _buildPlanGroup(row, providerData.plan_type);
   }
 
   // The state badge, the reading age and the spend each show when the payload
@@ -378,16 +407,19 @@ function _buildRow(key, providerData) {
 // across every window the provider reported — scoped windows included — with
 // expired and unknown readings excluded. An account whose readings all lose to
 // those filters shows "—"; the account-level states mirror _buildRow's
-// short-circuits: pending → loading, error → error, no windows → no cap.
+// short-circuits: pending → loading, error → error, no windows → no cap. A
+// reported plan type follows the reading, so a plan change is visible in the
+// folded strip.
 function _summaryReading(providerData) {
   if (providerData.pending) return { text: 'loading', pct: null };
   if (providerData.error) return { text: 'error', pct: null };
+  const plan = providerData.plan_type ? ' · ' + providerData.plan_type : '';
   const windows = Array.isArray(providerData.windows) ? providerData.windows : [];
   if (windows.length === 0) {
     if (providerData.credits && providerData.credits.unlimited === false) {
-      return { text: 'cr ' + _formatCreditsBalance(providerData.credits.balance), pct: null };
+      return { text: 'cr ' + _formatCreditsBalance(providerData.credits.balance) + plan, pct: null };
     }
-    return { text: 'no cap', pct: null };
+    return { text: 'no cap' + plan, pct: null };
   }
   let worst = null;
   for (const win of windows) {
@@ -395,9 +427,9 @@ function _summaryReading(providerData) {
     if (typeof win.utilization !== 'number' || !Number.isFinite(win.utilization)) continue;
     if (worst === null || win.utilization > worst) worst = win.utilization;
   }
-  if (worst === null) return { text: '—', pct: null };
+  if (worst === null) return { text: '—' + plan, pct: null };
   const pct = Math.round(worst);
-  return { text: pct + '%', pct: pct };
+  return { text: pct + '%' + plan, pct: pct };
 }
 
 // Summary row: the strip's first child on every render with providers, shown

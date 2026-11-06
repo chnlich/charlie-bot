@@ -18,6 +18,8 @@ pub const PANEL_WINDOWS: &str = "windows";
 pub const PANEL_FETCHED_AT: &str = "fetched_at";
 pub const PANEL_PROVIDER: &str = "provider";
 pub const PANEL_PROVIDER_LABEL: &str = "provider_label";
+/// The plan an account is on, as the provider's event names it. A row shows this string verbatim.
+pub const PANEL_PLAN_TYPE: &str = "plan_type";
 pub const PANEL_WINDOW_MINUTES: &str = "window_minutes";
 pub const PANEL_UTILIZATION: &str = "utilization";
 pub const PANEL_RESETS_AT: &str = "resets_at";

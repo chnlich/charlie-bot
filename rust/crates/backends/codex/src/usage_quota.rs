@@ -1,7 +1,7 @@
 //! Codex's quota account for the quota panel. The payload is read from the
-//! rollouts under `<codex home>/sessions`. The newest plan-pool `token_count` event gives the rate-limit windows and
-//! credits. The 24-hour and 7-day spend is priced from every recent rollout's per-request token counts. Nothing is
-//! written, and no network call is made.
+//! rollouts under `<codex home>/sessions`. The newest plan-pool `token_count` event gives the rate-limit windows,
+//! credits and plan type. The 24-hour and 7-day spend is priced from every recent rollout's per-request token counts.
+//! Nothing is written, and no network call is made.
 
 use std::collections::HashSet;
 use std::fs::{self, File, Metadata};
@@ -15,8 +15,8 @@ use anyhow::{Context, bail};
 use charliebot_core::str_methods;
 use charliebot_core::timefmt::{self, utc_now_iso};
 use charliebot_registry::usage::{
-  DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION, PANEL_WINDOW_MINUTES,
-  PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT, as_utilization, mark_expired_windows,
+  DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PLAN_TYPE, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION,
+  PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT, as_utilization, mark_expired_windows,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -431,7 +431,8 @@ fn float_value(value: Option<&Value>) -> Option<f64> {
   }
 }
 
-/// The usage entry of one token-count event: windows, credits, the observation time, and the business label.
+/// The usage entry of one token-count event: windows, credits, the plan type, the observation time, and the legacy
+/// no-cap label.
 fn transform_response(
   event: &Map<String, Value>,
   fetched_at: &str,
@@ -439,20 +440,25 @@ fn transform_response(
 ) -> anyhow::Result<Map<String, Value>> {
   let payload = object_or_empty(event, "payload")?;
   let rate_limits = object_or_empty(payload, "rate_limits")?;
+  let plan_type = rate_limits.get(PANEL_PLAN_TYPE).and_then(Value::as_str);
   let credits = rate_limits.get("credits").and_then(|raw| codex_credits(raw, account));
   let mut usage = Map::new();
   usage.insert(PANEL_WINDOWS.to_string(), Value::Array(codex_windows(rate_limits, account)?));
   usage.insert(PANEL_FETCHED_AT.to_string(), json!(fetched_at));
   usage.insert(PANEL_PROVIDER.to_string(), json!(PROVIDER));
   usage.insert("token_count_observed_at".to_string(), event.get("timestamp").cloned().unwrap_or_else(|| json!("")));
+  if let Some(plan) = plan_type {
+    usage.insert(PANEL_PLAN_TYPE.to_string(), json!(plan));
+  }
   let unlimited = credits.as_ref().is_some_and(|reading| reading.get("unlimited") == Some(&Value::Bool(true)));
   if let Some(reading) = credits {
     usage.insert("credits".to_string(), Value::Object(reading));
   }
   let both_slots_null =
     rate_limits.get("primary") == Some(&Value::Null) && rate_limits.get("secondary") == Some(&Value::Null);
-  let business_plan = !rate_limits.contains_key("credits") && rate_limits.get("plan_type") == Some(&json!("business"));
-  if both_slots_null && (unlimited || business_plan) {
+  // An event that names a plan shows the plan segment, which replaces the business plan's special case. An event that
+  // names none keeps the no-cap label exactly as before.
+  if both_slots_null && plan_type.is_none() && unlimited {
     usage.insert("state_label".to_string(), json!("business / unlimited"));
   }
   Ok(usage)
@@ -684,6 +690,91 @@ mod tests {
     let model_pool = json!({"payload": {"rate_limits": {"limit_id": "o3", "limit_name": "o3"}}});
     assert!(is_plan_pool_event(plan.as_object().unwrap()).unwrap());
     assert!(!is_plan_pool_event(model_pool.as_object().unwrap()).unwrap());
+  }
+
+  #[test]
+  fn a_plan_pool_event_carries_its_plan_type_and_metered_credits() {
+    // A rollout line of 2026-11-06, after the account moved from business to ent26.
+    let event = json!({
+      "timestamp": "2026-11-06T09:12:31.442Z",
+      "type": "event_msg",
+      "payload": {
+        "type": "token_count",
+        "rate_limits": {
+          "limit_id": "codex",
+          "limit_name": null,
+          "primary": null,
+          "secondary": null,
+          "credits": {"has_credits": true, "unlimited": false, "balance": "786.2718309164047"},
+          "individual_limit": null,
+          "spend_control_reached": null,
+          "plan_type": "ent26",
+          "rate_limit_reached_type": null
+        }
+      }
+    });
+
+    let usage = transform_response(event.as_object().unwrap(), "2026-11-06T09:15:00Z", DEFAULT_ACCOUNT_LABEL).unwrap();
+
+    assert_eq!(usage.get(PANEL_PLAN_TYPE), Some(&json!("ent26")));
+    let credits = usage.get("credits").and_then(Value::as_object).expect("the event carries a credits reading");
+    assert_eq!(credits.get("unlimited"), Some(&Value::Bool(false)));
+    let balance = credits.get("balance").and_then(Value::as_f64).expect("the balance is a number");
+    assert!((balance - 786.2718309164047).abs() < 1e-9, "balance {balance}");
+    assert_eq!(usage.get("state_label"), None, "a planful row reports the plan instead of the legacy label");
+  }
+
+  #[test]
+  fn a_plan_pool_event_without_a_plan_type_carries_no_plan_field() {
+    let event = json!({
+      "timestamp": "2026-11-06T09:12:31.442Z",
+      "payload": {"rate_limits": {"limit_id": "codex", "credits": {"unlimited": false, "balance": "12.5"}}}
+    });
+
+    let usage = transform_response(event.as_object().unwrap(), "2026-11-06T09:15:00Z", DEFAULT_ACCOUNT_LABEL).unwrap();
+
+    assert_eq!(usage.get(PANEL_PLAN_TYPE), None);
+  }
+
+  #[test]
+  fn a_planless_unlimited_event_keeps_the_legacy_no_cap_label() {
+    let event = json!({
+      "timestamp": "2026-11-06T09:12:31.442Z",
+      "payload": {
+        "rate_limits": {
+          "limit_id": "codex",
+          "primary": null,
+          "secondary": null,
+          "credits": {"unlimited": true}
+        }
+      }
+    });
+
+    let usage = transform_response(event.as_object().unwrap(), "2026-11-06T09:15:00Z", DEFAULT_ACCOUNT_LABEL).unwrap();
+
+    assert_eq!(usage.get("state_label"), Some(&json!("business / unlimited")));
+    assert_eq!(usage.get(PANEL_PLAN_TYPE), None);
+  }
+
+  #[test]
+  fn a_planful_unlimited_event_reports_the_plan_instead_of_the_legacy_label() {
+    let event = json!({
+      "timestamp": "2026-11-06T09:12:31.442Z",
+      "payload": {
+        "rate_limits": {
+          "limit_id": "codex",
+          "primary": null,
+          "secondary": null,
+          "credits": {"unlimited": true},
+          "plan_type": "business"
+        }
+      }
+    });
+
+    let usage = transform_response(event.as_object().unwrap(), "2026-11-06T09:15:00Z", DEFAULT_ACCOUNT_LABEL).unwrap();
+
+    assert_eq!(usage.get(PANEL_PLAN_TYPE), Some(&json!("business")));
+    assert_eq!(usage.get("state_label"), None);
   }
 
   #[test]

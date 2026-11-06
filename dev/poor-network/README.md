@@ -29,7 +29,9 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 Exit codes: 0 both sides measured; 1 a measurement or build failed (the side's JSON still names the error); 2 a
 precondition failed and nothing started; 3 the baseline calibration did not reproduce; 75 a side's wait for the lock
 ran out. One lock hold covers one side attempt: a caller that retries a timed-out side runs the command again, which
-takes the lock again at the back of the queue.
+takes the lock again at the back of the queue. The side JSON is the bench's last artifact; when it is 120 s old and the
+bench still runs, the runner ends the trial tree itself, so a bench that hangs after its work never holds the lock, and
+the summary is reprinted from the JSON.
 
 Chrome comes from `POOR_NETWORK_CHROME`, or else the newest `~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome`.
 The trial replaces `HOME`, so the discovery happens in `run.sh`.

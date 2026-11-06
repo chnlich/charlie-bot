@@ -11,7 +11,8 @@
 #                reproduce the switch-during-refresh hold, it stops after before, prints its numbers, and exits 3.
 # --detach       starts the run as a transient systemd user unit and returns at once; the log is <out-dir>/pn-<id>.log.
 # --lock FILE    holds an advisory lock on FILE around each side's trial (not the builds), waiting up to 2 h for it, so
-#                bench runs that take the same lock never measure side by side.
+#                bench runs that take the same lock never measure side by side. One hold covers one side attempt; a
+#                side also ends once its JSON is 120 s old even if its bench hangs, and a retry re-queues.
 #
 # Each side runs as the command of `scripts/release/trial.sh --serve`, so the trial starts, checks and stops the server
 # the bench measures, and proves that no process of the trial remains. The bench's own children (Chrome, the proxy, the
@@ -26,6 +27,8 @@ readonly BENCH_DIR="$SCRIPT_DIR"
 readonly LOCK_WAIT_SECONDS=7200
 # flock's exit code when the wait runs out: one no trial or bench exit code uses.
 readonly LOCK_TIMEOUT_EXIT=75
+# How long a side's written JSON may sit beside a bench that does not exit, before the runner ends the trial tree.
+readonly SIDE_EXIT_GRACE_SECONDS=120
 
 side=both
 out_dir=
@@ -191,8 +194,32 @@ run_side() {
     node "$BENCH_DIR/bench.mjs" --side "$name" --out "$run_dir/$name.json" \
       --mock-home "$mock_home" --mock-home-bin "$mock_bin" --reply-dir "$run_dir/replies" \
       --assets "$POOR_NETWORK_ASSETS" --commit "$label" \
-      --repetitions "$repetitions" --scenarios "$scenarios"
+      --repetitions "$repetitions" --scenarios "$scenarios" &
+  trial_pid=$!
+  # The side JSON is the bench's last artifact, and a bench that has written it can still sit alive and hold the trial,
+  # and so the lock (this line's known defect). Once the JSON is SIDE_EXIT_GRACE_SECONDS old and the trial still runs,
+  # the runner ends the trial tree itself: the lock is released at that point, and the summary is reprinted from the
+  # JSON afterwards, so the kill loses nothing but the hang.
+  local json_seen_at="" ended_tree=0
+  while :; do
+    kill -0 "$trial_pid" 2>/dev/null || break
+    if [[ -f "$run_dir/$name.json" ]]; then
+      [[ -n $json_seen_at ]] || json_seen_at=$(date +%s)
+      if (( $(date +%s) - json_seen_at >= SIDE_EXIT_GRACE_SECONDS )) \
+        && systemctl --user is-active --quiet "pn-$run_id-$name.scope"; then
+        echo "poor-network: the $name side's JSON is ${SIDE_EXIT_GRACE_SECONDS}s old and its bench is still running; ending the trial tree"
+        systemctl --user stop "pn-$run_id-$name.scope"
+        ended_tree=1
+      fi
+    fi
+    sleep 5
+  done
+  wait "$trial_pid"
   trial_status=$?
+  # A tree the runner ended on purpose leaves the side's own verdict in its JSON; the kill is not a failure.
+  if ((ended_tree)); then
+    trial_status=0
+  fi
   set -e
   # The timeout keeps flock's own exit code, so a caller that retries can tell it from a failed measurement and take
   # its place at the back of the queue again. One lock hold covers one side attempt; run.sh never retries inside it.

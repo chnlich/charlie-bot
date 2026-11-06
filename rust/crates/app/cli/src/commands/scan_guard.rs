@@ -25,7 +25,7 @@ use charliebot_core::home::{CHARLIEBOT_HOME_ENV, DEFAULT_HOME_DIR_NAME};
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_store::layout::DATA_DIR_NAME;
 use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME, STDERR_LOG_NAME};
-use fancy_regex::{Captures, Regex};
+use regex::{Captures, Regex};
 use serde_json::{Value, json};
 use shell::{parse_error, resolve_paths, shell_text, strip_quotes};
 
@@ -183,7 +183,7 @@ fn deny_decision(reason: &str) -> Value {
 /// its relative paths resolved against the hook's cwd, so `cd .. && find .` is the same search as its absolute form.
 fn scan_forms(command: &str, cwd: &str) -> Result<Vec<ScanForm>, String> {
   let shell = shell_text(command);
-  let resolved = resolve_paths(&shell, cwd, store_root_pattern()?)?;
+  let resolved = resolve_paths(&shell, cwd, store_root_pattern()?);
   let mut forms = search_forms(&shell)?;
   if resolved != shell {
     for form in search_forms(&resolved)? {
@@ -197,11 +197,10 @@ fn scan_forms(command: &str, cwd: &str) -> Result<Vec<ScanForm>, String> {
 
 fn search_forms(shell: &str) -> Result<Vec<ScanForm>, String> {
   let mut forms = Vec::new();
-  if per_file_process_pattern()?.is_match(shell).map_err(parse_error)? && !bounded_metadata_loops(shell)? {
+  if per_file_process_pattern()?.is_match(shell) && !bounded_metadata_loops(shell)? {
     forms.push(ScanForm::PerFileProcess);
   }
   for captures in rooted_search_pattern()?.captures_iter(shell) {
-    let captures = captures.map_err(parse_error)?;
     if non_recursive_grep(&captures)? {
       continue;
     }
@@ -214,11 +213,10 @@ fn search_forms(shell: &str) -> Result<Vec<ScanForm>, String> {
     }
   }
   for captures in run_log_search_pattern()?.captures_iter(shell) {
-    let captures = captures.map_err(parse_error)?;
     if non_recursive_grep(&captures)? {
       continue;
     }
-    let globs = glob_names(&groups_text(&captures))?;
+    let globs = glob_names(&groups_text(&captures));
     if globs.is_empty() || globs.iter().any(|glob| is_run_log_glob(glob)) {
       forms.push(ScanForm::RunLogSearch);
       break;
@@ -226,10 +224,10 @@ fn search_forms(shell: &str) -> Result<Vec<ScanForm>, String> {
   }
   let mut walks_store = false;
   let mut runs_per_file = false;
-  for segment in find_segments(shell)? {
+  for segment in find_segments(shell) {
     if walks_store_root(&segment)? {
       walks_store = true;
-      runs_per_file |= per_file_command_pattern().is_match(&segment.region).map_err(parse_error)?;
+      runs_per_file |= per_file_command_pattern().is_match(&segment.region);
     }
   }
   if runs_per_file {
@@ -248,12 +246,10 @@ fn groups_text(captures: &Captures<'_>) -> String {
   [1, 2].into_iter().filter_map(|index| captures.get(index)).map(|group| group.as_str()).collect()
 }
 
-fn glob_names(text: &str) -> Result<Vec<String>, String> {
+fn glob_names(text: &str) -> Vec<String> {
   glob_pattern()
     .captures_iter(text)
-    .map(|captures| {
-      Ok(captures.map_err(parse_error)?.get(1).expect("glob pattern has a name group").as_str().to_string())
-    })
+    .map(|captures| captures.get(1).expect("glob pattern has a name group").as_str().to_string())
     .collect()
 }
 
@@ -311,13 +307,12 @@ struct FindSegment {
   region: String,
 }
 
-fn find_segments(shell: &str) -> Result<Vec<FindSegment>, String> {
+fn find_segments(shell: &str) -> Vec<FindSegment> {
   let text = without_prose(shell);
   let mut segments = Vec::new();
   for word in find_word_pattern().find_iter(&text) {
-    let word = word.map_err(parse_error)?;
     let rest = &text[word.end()..];
-    let region = find_region_pattern().find(rest).map_err(parse_error)?.map_or("", |region| region.as_str());
+    let region = find_region_pattern().find(rest).map_or("", |region| region.as_str());
     let args = region.split(['|', '&']).next().unwrap_or("");
     let mut roots = Vec::new();
     for argument in args.split_whitespace() {
@@ -328,14 +323,14 @@ fn find_segments(shell: &str) -> Result<Vec<FindSegment>, String> {
     }
     segments.push(FindSegment { roots, args: args.to_string(), region: region.to_string() });
   }
-  Ok(segments)
+  segments
 }
 
 /// A find that walks the session store or a parent of it: a store root, with no `-maxdepth` and no prune of `sessions`.
 fn walks_store_root(segment: &FindSegment) -> Result<bool, String> {
   let mut names_store = false;
   for root in &segment.roots {
-    if store_root_pattern()?.is_match(root.trim_end_matches('/')).map_err(parse_error)? {
+    if store_root_pattern()?.is_match(root.trim_end_matches('/')) {
       names_store = true;
       break;
     }
@@ -348,7 +343,6 @@ fn walks_store_root(segment: &FindSegment) -> Result<bool, String> {
 fn reads_run_logs_by_glob(shell: &str) -> Result<bool, String> {
   let text = without_prose(shell);
   for segment in command_segment_pattern().find_iter(&text) {
-    let segment = segment.map_err(parse_error)?;
     if !is_reader_segment(segment.as_str()) {
       continue;
     }
@@ -429,7 +423,7 @@ fn reaches_run_logs(token: &str) -> Result<bool, String> {
 /// The part of a token under the session store: what follows `sessions/`, or `None` when the token is not in the
 /// store at all.
 fn store_remainder(token: &str) -> Result<Option<&str>, String> {
-  let Some(prefix) = store_prefix_pattern()?.find(token).map_err(parse_error)? else {
+  let Some(prefix) = store_prefix_pattern()?.find(token) else {
     return Ok(None);
   };
   Ok(Some(token[prefix.end()..].trim_start_matches('/')))
@@ -507,7 +501,6 @@ fn enumeration_token(store: &str) -> String {
 fn bounded_metadata_loops(shell: &str) -> Result<bool, String> {
   let mut spans = Vec::new();
   for captures in metadata_loop_pattern()?.captures_iter(shell) {
-    let captures = captures.map_err(parse_error)?;
     let whole = captures.get(0).expect("the metadata loop pattern has a whole match");
     let body = captures.name("body").map_or("", |body| body.as_str());
     let list_end = captures.name("list").map_or(whole.end(), |list| list.end());
@@ -515,7 +508,7 @@ fn bounded_metadata_loops(shell: &str) -> Result<bool, String> {
     let list = &shell[segment_start..list_end];
     if !body.contains(METADATA_FILE_NAME)
       || !loop_body_is_builtin(body)
-      || list_reads_below_pattern()?.is_match(list).map_err(parse_error)?
+      || list_reads_below_pattern()?.is_match(list)
     {
       continue;
     }
@@ -532,7 +525,7 @@ fn bounded_metadata_loops(shell: &str) -> Result<bool, String> {
     last = end;
   }
   masked.push_str(&shell[last..]);
-  Ok(!per_file_process_pattern()?.is_match(&masked).map_err(parse_error)?)
+  Ok(!per_file_process_pattern()?.is_match(&masked))
 }
 
 /// (a) One process per session directory at the shell level. The forms are a `for` loop over an enumeration, an
@@ -614,7 +607,7 @@ fn non_recursive_grep(captures: &Captures<'_>) -> Result<bool, String> {
   if !whole.starts_with("grep") {
     return Ok(false);
   }
-  Ok(!recursive_flag_pattern()?.is_match(whole).map_err(parse_error)?)
+  Ok(!recursive_flag_pattern()?.is_match(whole))
 }
 
 /// A recursive `grep` inside one command segment: `grep` with `-r`, `-R` or `--recursive` later in the segment.
@@ -629,7 +622,7 @@ fn depth_limited(search_text: &str) -> Result<bool, String> {
   if search_text.contains("-maxdepth") {
     return Ok(true);
   }
-  depth_flag_pattern()?.is_match(search_text).map_err(parse_error)
+  Ok(depth_flag_pattern()?.is_match(search_text))
 }
 
 fn depth_flag_pattern() -> Result<&'static Regex, String> {

@@ -4,7 +4,7 @@
 
 use std::sync::OnceLock;
 
-use fancy_regex::{Captures, Regex};
+use regex::{Captures, Regex};
 
 /// Replaces a `|`, `;` or `&` inside double quotes, so the quoted character is not a shell separator.
 const QUOTED_SEPARATOR: char = '\u{1}';
@@ -44,13 +44,13 @@ fn neutralize_double_quoted(span: &str) -> String {
 /// cwd, or against the latest `cd` before it. A bare word (no slash) resolves only when `store_root` matches it in
 /// full, which is the session store or a parent of it. Options, assignments, URLs and wildcards other than `*/...` stay
 /// as written.
-pub fn resolve_paths(shell: &str, cwd: &str, store_root: &Regex) -> Result<String, String> {
-  let cds = cd_spans(shell)?;
+pub fn resolve_paths(shell: &str, cwd: &str, store_root: &Regex) -> String {
+  let cds = cd_spans(shell);
   let mut out = String::new();
   let mut last = 0;
   let mut current = cwd.to_string();
   let mut next_cd = 0;
-  for (start, end) in word_spans(shell)? {
+  for (start, end) in word_spans(shell) {
     while let Some((cd_start, cd_end, target)) = cds.get(next_cd) {
       if *cd_start >= start || start < *cd_end {
         break;
@@ -65,7 +65,7 @@ pub fn resolve_paths(shell: &str, cwd: &str, store_root: &Regex) -> Result<Strin
       continue;
     }
     let word = &shell[start..end];
-    let Some(resolved) = resolve_word(&strip_quotes(word), &current, store_root)? else {
+    let Some(resolved) = resolve_word(&strip_quotes(word), &current, store_root) else {
       continue;
     };
     if resolved == word {
@@ -76,26 +76,25 @@ pub fn resolve_paths(shell: &str, cwd: &str, store_root: &Regex) -> Result<Strin
     last = end;
   }
   out.push_str(&shell[last..]);
-  Ok(out)
+  out
 }
 
 /// A word without its quotes, resolved against the current directory, or `None` when the word names no path.
-fn resolve_word(bare: &str, current: &str, store_root: &Regex) -> Result<Option<String>, String> {
+fn resolve_word(bare: &str, current: &str, store_root: &Regex) -> Option<String> {
   if bare.starts_with(['-', '?', '[', '!']) || bare.contains('=') || bare.contains("://") {
-    return Ok(None);
+    return None;
   }
   if bare.starts_with('*') && !bare.starts_with("*/") {
-    return Ok(None);
+    return None;
   }
   if bare.starts_with(['~', '/']) || (bare.starts_with('$') && bare.contains('/')) {
-    return Ok(Some(bare.to_string()));
+    return Some(bare.to_string());
   }
   let joined = join_path(current, bare);
   if bare.contains('/') || bare == "." || bare == ".." {
-    return Ok(Some(joined));
+    return Some(joined);
   }
-  let names_store = store_root.is_match(&joined).map_err(parse_error)?;
-  Ok(names_store.then_some(joined))
+  store_root.is_match(&joined).then_some(joined)
 }
 
 /// Joins a relative path onto a base. An absolute path, a `~` path or a `$VAR` path stands on its own.
@@ -138,23 +137,22 @@ pub fn strip_quotes(word: &str) -> String {
 }
 
 /// The shell words of a text, as byte spans.
-pub fn word_spans(shell: &str) -> Result<Vec<(usize, usize)>, String> {
-  word_pattern().find_iter(shell).map(|word| word.map(|word| (word.start(), word.end())).map_err(parse_error)).collect()
+pub fn word_spans(shell: &str) -> Vec<(usize, usize)> {
+  word_pattern().find_iter(shell).map(|word| (word.start(), word.end())).collect()
 }
 
-fn cd_spans(shell: &str) -> Result<Vec<CdSpan>, String> {
+fn cd_spans(shell: &str) -> Vec<CdSpan> {
   cd_pattern()
     .captures_iter(shell)
-    .map(|captures| -> Result<CdSpan, String> {
-      let captures = captures.map_err(parse_error)?;
+    .map(|captures| {
       let whole = captures.get(0).expect("group 0 is the whole match");
       let target = captures.get(1).map(|path| strip_quotes(path.as_str()));
-      Ok((whole.start(), whole.end(), target))
+      (whole.start(), whole.end(), target)
     })
     .collect()
 }
 
-pub fn parse_error(error: fancy_regex::Error) -> String {
+pub fn parse_error(error: regex::Error) -> String {
   format!("scan command parsing failed: {error}")
 }
 
@@ -184,7 +182,6 @@ fn mask_heredocs(command: &str) -> String {
   let mut out = String::with_capacity(command.len());
   let mut last = 0;
   for captures in heredoc_opener_pattern().captures_iter(command) {
-    let captures = captures.expect("the opener pattern delegates to the regex engine, which cannot fail to match");
     let opener = captures.get(0).expect("group 0 is the whole match");
     if opener.start() < last {
       continue;
@@ -249,17 +246,16 @@ mod tests {
   #[test]
   fn relative_paths_resolve_against_the_cwd_and_the_latest_cd() {
     let store_root = Regex::new(r"^/home/a/\.charliebot/sessions$").expect("test pattern is valid");
-    let resolved = resolve_paths("cd .. && find . -name X", "/home/a/.charliebot/sessions/abc", &store_root).unwrap();
+    let resolved = resolve_paths("cd .. && find . -name X", "/home/a/.charliebot/sessions/abc", &store_root);
     assert_eq!(resolved, "cd .. && find /home/a/.charliebot/sessions -name X");
-    let resolved = resolve_paths("find ../../../ -name X", "/home/a/b/c", &store_root).unwrap();
+    let resolved = resolve_paths("find ../../../ -name X", "/home/a/b/c", &store_root);
     assert_eq!(resolved, "find /home -name X");
   }
 
   #[test]
   fn a_variable_word_keeps_the_quotes_around_it() {
     let store_root = Regex::new(r"^/home/a/\.charliebot/sessions$").expect("test pattern is valid");
-    let resolved =
-      resolve_paths(r#"echo "== $f"; find . -name X"#, "/home/a/.charliebot/sessions", &store_root).unwrap();
+    let resolved = resolve_paths(r#"echo "== $f"; find . -name X"#, "/home/a/.charliebot/sessions", &store_root);
     assert_eq!(resolved, r#"echo "== $f"; find /home/a/.charliebot/sessions -name X"#);
   }
 }

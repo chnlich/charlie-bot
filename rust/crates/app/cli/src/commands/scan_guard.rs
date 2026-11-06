@@ -33,7 +33,12 @@ use shell::{parse_error, resolve_paths, shell_text, strip_quotes};
 const RECURSIVE_GREP: &str = r"grep\b(?=[^|;&\n]*\s(?:--recursive|-[a-zA-Z]*[rR][a-zA-Z]*)(?=\s|$))";
 
 /// The file names a run directory holds that a glob can reach as run logs, and examples of them for name matching.
-const RUN_LOG_EXAMPLES: [&str; 4] = [RUN_EVENTS_NAME, RAW_LOG_NAME, "agent.raw.ndjson.1", STDERR_LOG_NAME];
+///
+/// The transport rotation numbers a stale raw log with a suffix, so the rotated example derives from the raw log name
+/// that `charliebot_store::run_records` owns.
+fn run_log_examples() -> [String; 4] {
+  [RUN_EVENTS_NAME.to_string(), RAW_LOG_NAME.to_string(), format!("{RAW_LOG_NAME}.1"), STDERR_LOG_NAME.to_string()]
+}
 
 /// The commands that read a file's text, for the glob rule: a glob given to one of them reads every file it names.
 const READERS: &[&str] = &[
@@ -245,11 +250,23 @@ fn glob_names(text: &str) -> Result<Vec<String>, String> {
 /// Whether a file-name filter reaches run logs: one of the run-log names, or a pattern that matches one of their
 /// examples.
 fn is_run_log_glob(name: &str) -> bool {
-  run_log_globs().contains(&name) || RUN_LOG_EXAMPLES.iter().any(|example| wildcard_matches(name, example))
+  run_log_globs().iter().any(|glob| glob == name)
+    || run_log_examples().iter().any(|example| wildcard_matches(name, example))
 }
 
-fn run_log_globs() -> [&'static str; 9] {
-  ["*", "**", "*.jsonl", "*.ndjson", "*.json", RUN_EVENTS_NAME, RAW_LOG_NAME, "agent.raw*", "*.log"]
+/// The file-name filters that reach run logs whole, including the raw log's name with any suffix.
+fn run_log_globs() -> [String; 9] {
+  [
+    "*".to_string(),
+    "**".to_string(),
+    "*.jsonl".to_string(),
+    "*.ndjson".to_string(),
+    "*.json".to_string(),
+    RUN_EVENTS_NAME.to_string(),
+    RAW_LOG_NAME.to_string(),
+    format!("{RAW_LOG_NAME}*"),
+    "*.log".to_string(),
+  ]
 }
 
 /// Whether a shell wildcard pattern matches a whole name: `*` matches any run of characters and `?` one character.
@@ -705,8 +722,9 @@ mod tests {
       ScanForm::PerFileProcess,
       ScanForm::RunLogSearch,
       ScanForm::PerFileProcess,
+      ScanForm::RunLogSearch,
     ];
-    let commands: [&str; 11] = [
+    let commands: [&str; 12] = [
       // The replay's first real command: a metadata loop after a `cd` into the store.
       r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json; print(json.load(open('$f')))"; done"#,
       "find / -path /proc -prune -o -type d -name dataviz -print 2>/dev/null | head -3",
@@ -722,6 +740,8 @@ mod tests {
       &format!("grep -rl '39828874' {}/.charliebot/ 2>/dev/null", home()),
       // The same loop shape with a different body still refuses.
       r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json,sys; print(json.load(open('$f')).get('title'))"; done"#,
+      // A rotated raw log, which the run-record crate's raw-log name and the rotation's suffix form.
+      r"rg -l X ~/.charliebot/sessions -g 'agent.raw.ndjson.1'",
     ];
     for (command, expected) in commands.iter().zip(denied) {
       let forms = scan_forms(command, &home()).unwrap();

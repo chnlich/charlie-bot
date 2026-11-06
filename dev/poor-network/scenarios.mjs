@@ -89,7 +89,7 @@ async function serverProcessingMs(ctx, probes) {
 // is open; the bootstrap is the switch's own request.
 const ENDPOINTS = Object.freeze({
   status: /\/api\/sessions\/status\?/,
-  fullList: /\/api\/sessions\/$/,
+  fullList: /\/api\/sessions\/(\?|$)/,
   bootstrap: /\/api\/sessions\/[^/]+\/bootstrap$/,
 });
 

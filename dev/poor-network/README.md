@@ -58,7 +58,7 @@ Each scenario's median and 90th percentile go in the table, with the raw median 
 
 ## Capped steps
 
-A switch or a send in scenarios 2 and 3 that has not rendered within 180 s is recorded at 180 s, and the report counts it
+A switch or a send in scenarios 2 and 3 that has not finished within 180 s is recorded at 180 s, and the report counts it
 in the `at cap` column. Its time is then a lower bound: the step took at least that long. The record keeps the page's
 state at the cap (the sockets, the frames seen, and whether the target's bootstrap finished), so the reader can see why.
 When the target's bootstrap never finished, the step's bytes are the size of the same body on the wire, read from the

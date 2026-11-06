@@ -12,7 +12,7 @@ import { launchBrowser, chromeBinary } from './chrome.mjs';
 import { startTaskTreeDriver } from './api.mjs';
 import { ShapingProxy } from './proxy.mjs';
 import { LINK, TASK_TREE_LOAD } from './profile.mjs';
-import { Tabs, sleep, waitFor } from './tabs.mjs';
+import { Tabs, pollFor, sleep, waitFor } from './tabs.mjs';
 
 // Bytes per millisecond of the link: 12.5 KB/s.
 const BYTES_PER_MS = LINK.bytesPerSecond / 1000;
@@ -150,11 +150,16 @@ export async function backgroundRep(ctx, repetition) {
       const bootstrapBytes = pageBytes > 0 ? pageBytes : await api.bootstrapWireBytes(target.id);
       const switchState = shown.capped ? await tab.diagnose(clickedAt) : null;
 
-      // Scenario 3: click to echo, in the session the page now shows.
+      // Scenario 3: click to echo, in the session the page now shows. The echo is the server's push of the message,
+      // which arrives as a socket frame carrying its text: the page shows the user's message locally before the server
+      // answers, so the chat's text cannot time this step.
       const echo = `pn-echo ${repetition} ${randomTag()}`;
-      await tab.watchChat('echo', echo);
       const sentAt = await tab.sendText(echo);
-      const echoed = await tab.shownBy('echo', sentAt, SHOW_TIMEOUT_MS);
+      const echoAt = await pollFor(
+        () => tab.frames.find((frame) => frame.at >= sentAt && frame.text.includes(echo))?.at ?? null,
+        SHOW_TIMEOUT_MS,
+      );
+      const echoed = echoAt === null ? { at: sentAt + SHOW_TIMEOUT_MS, capped: true } : { at: echoAt, capped: false };
       const sendState = echoed.capped ? await tab.diagnose(sentAt) : null;
 
       return {

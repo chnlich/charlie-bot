@@ -42,7 +42,7 @@ export class Tab {
   page;
   // requestId -> {url, startAt, finishAt, bytes, failed}, in the order the browser sent them.
   requests = new Map();
-  // Every WebSocket frame the page received: {at, bytes, type, requestId}.
+  // Every WebSocket frame the page received: {at, bytes, type, text, requestId}.
   frames = [];
   // Every WebSocket the page opened: {at, url, requestId}.
   sockets = [];
@@ -223,7 +223,7 @@ export class Tab {
         } catch {
           type = null;
         }
-        this.frames.push({ at, bytes: Buffer.byteLength(text), type, requestId: message.params.requestId });
+        this.frames.push({ at, bytes: Buffer.byteLength(text), type, text, requestId: message.params.requestId });
         return;
       }
       case 'Fetch.requestPaused':

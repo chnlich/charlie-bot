@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// Reads the parallel JUnit report and reruns each over-limit test alone. If its first alone time is over
-// the limit, the check runs it alone twice more and judges by the shortest time. A missing JUnit row fails.
+// Reads the parallel JUnit report and reruns each test above the parallel limit alone. If its first alone time is over
+// 0.1 s, the check runs it alone twice more and judges by the shortest time. A missing JUnit row fails.
 //
-//   dev/check-unit-test-time.mjs --runner rust|node --junit <path> [--workspace-dir <dir>]
+//   dev/check-unit-test-time.mjs --runner rust|node --junit <path> [--parallel-limit <seconds>] [--workspace-dir <dir>]
 //
 //   --runner            the suite the report came from: rust (nextest) or node (node --test) (required)
 //   --junit             the JUnit report of the parallel run (required)
+//   --parallel-limit    rerun tests above this parallel time alone (default: 0.1)
 //   --workspace-dir     the directory the reruns run in (default: rust for rust, web for node)
 //
 // A rust rerun is one nextest run, one test thread. A node rerun is one `node --test` per suspect, on the
@@ -35,7 +36,7 @@ function main() {
     process.exit(2);
   }
   // A test that already failed in the parallel run is judged by the run itself, not by this check.
-  const suspects = testcases.filter((test) => !test.skipped && !test.failed && test.time > LIMIT_S);
+  const suspects = testcases.filter((test) => !test.skipped && !test.failed && test.time > options.parallelLimit);
   suspects.sort((a, b) => b.time - a.time);
 
   const lines = [];
@@ -78,10 +79,12 @@ function main() {
     }
   }
   if (suspects.length === 0) {
-    lines.push(`unit-test time check: all ${testcases.length} tests ran within ${LIMIT_S} s in the parallel run`);
+    lines.push(
+      `unit-test time check: all ${testcases.length} tests ran within ${options.parallelLimit} s in the parallel run`
+    );
   } else {
     lines.push(
-      `${suspects.length} tests over ${LIMIT_S} s in the parallel run; ${stillOverAlone} still over alone;` +
+      `${suspects.length} tests over ${options.parallelLimit} s in the parallel run; ${stillOverAlone} still over alone;` +
         ` ${failedAlone} failed alone`
     );
   }
@@ -115,7 +118,7 @@ function rerunAlone(suspects, options) {
 }
 
 function parseArgs(argv) {
-  const options = { runner: null, junit: null, workspaceDir: null };
+  const options = { runner: null, junit: null, parallelLimit: LIMIT_S, workspaceDir: null };
   const take = (i) => {
     if (i + 1 >= argv.length) usage(`missing value for ${argv[i]}`);
     return argv[i + 1];
@@ -126,6 +129,11 @@ function parseArgs(argv) {
       options.runner = take(i);
     } else if (arg === '--junit') {
       options.junit = take(i);
+    } else if (arg === '--parallel-limit') {
+      options.parallelLimit = Number(take(i));
+      if (!Number.isFinite(options.parallelLimit) || options.parallelLimit < 0) {
+        usage('--parallel-limit must be a non-negative number');
+      }
     } else if (arg === '--workspace-dir') {
       options.workspaceDir = take(i);
     } else {
@@ -142,7 +150,10 @@ function parseArgs(argv) {
 }
 
 function usage(message) {
-  console.error('usage: check-unit-test-time.mjs --runner rust|node --junit <path> [--workspace-dir <dir>]');
+  console.error(
+    'usage: check-unit-test-time.mjs --runner rust|node --junit <path> ' +
+      '[--parallel-limit <seconds>] [--workspace-dir <dir>]'
+  );
   console.error(`check-unit-test-time: ${message}`);
   process.exit(2);
 }

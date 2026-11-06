@@ -3,7 +3,7 @@
 //! sources whose usage lives only in CharlieBot's own run logs.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, ensure};
@@ -26,6 +26,7 @@ use crate::capture::{CHARLIE_BOT_SOURCE, host_name};
 use crate::count::Count;
 use crate::ledger::{LedgerRow, UsageLedger, default_ledger_path};
 use crate::pacific::{self, Week};
+use crate::page_memo::{PageInputs, PageMemo};
 use crate::page_rows::{self, PageRow, canonical_model, compact, group_thousands};
 
 const TEMPLATE: &str = "token_usage.html";
@@ -47,18 +48,76 @@ pub fn matches(path: &str) -> bool {
   path == "/token-usage"
 }
 
-/// The page from the ledger's rows. The read and the render run off the async runtime: `read_ledger` runs in a
-/// blocking thread.
+/// The page's last finished body, kept while the ledger's version and the page's inputs hold their value.
+static PAGE_MEMO: LazyLock<Mutex<PageMemo>> = LazyLock::new(|| Mutex::new(PageMemo::default()));
+
+/// The page from the ledger's rows. The read and the render run off the async runtime, in a blocking thread, and a
+/// repeat view of the same ledger version answers with the body the memo holds.
 async fn token_usage_viewer(State(features): State<Arc<FeatureContext>>, request: Parts) -> Response {
-  let rendered = tokio::task::spawn_blocking(move || -> Result<Response, (String, String)> {
-    let read = read_ledger(&features).map_err(|error| ("Exception".to_string(), format!("{error:#}")))?;
-    render(&features, &read, &request)
-  })
-  .await
-  .expect("rendering the token usage page does not panic");
+  let rendered = tokio::task::spawn_blocking(move || view(&features, &request))
+    .await
+    .expect("rendering the token usage page does not panic");
   match rendered {
     Ok(response) => response,
-    Err((kind, detail)) => responses::internal_error(&kind, detail),
+    Err(failure) => responses::internal_error(failure.kind(), failure.detail()),
+  }
+}
+
+/// One page response: the body the memo holds for this ledger version and these inputs, or a body this view renders
+/// and the memo keeps for the next one.
+fn view(features: &FeatureContext, request: &Parts) -> Result<Response, PageFailure> {
+  let now = Timestamp::now();
+  let week = Week::last_before(now)?;
+  let templating =
+    features.startup.require::<Templating>().map_err(|error| PageFailure::new("RuntimeError", error.to_string()))?;
+  // The concurrency badge's script is the page's only static asset, so it carries the version that busts its cache.
+  let asset_version =
+    templating.static_asset_version().map_err(|error| PageFailure::new("OSError", error.to_string()))?;
+  let config = features.config.get().map_err(|error| PageFailure::from(anyhow::Error::new(error)))?;
+  let ledger_path = default_ledger_path(&config.charliebot_home);
+  let inputs = PageInputs {
+    host: host_name()?,
+    week: week.label()?,
+    config: Arc::clone(&config),
+    template_revision: templating.revision(),
+    asset_version: asset_version.clone(),
+    query: request.uri.query().unwrap_or("").to_string(),
+  };
+  let body = {
+    let mut memo = PAGE_MEMO.lock().expect("the page memo mutex is not poisoned");
+    memo
+      .body(&ledger_path, inputs, |ledger| {
+        let read = read_in_ledger(ledger, now, week, &config)?;
+        render_html(features, &read, request, &asset_version)
+      })?
+      .to_string()
+  };
+  Ok(templating.page_response(TEMPLATE, body, request))
+}
+
+/// A page failure in the error JSON's own terms: the kind it names and the detail it carries.
+pub(crate) struct PageFailure {
+  kind: String,
+  detail: String,
+}
+
+impl PageFailure {
+  fn new(kind: &str, detail: String) -> PageFailure {
+    PageFailure { kind: kind.to_string(), detail }
+  }
+
+  pub(crate) fn kind(&self) -> &str {
+    &self.kind
+  }
+
+  pub(crate) fn detail(&self) -> String {
+    self.detail.clone()
+  }
+}
+
+impl From<anyhow::Error> for PageFailure {
+  fn from(error: anyhow::Error) -> PageFailure {
+    PageFailure::new("Exception", format!("{error:#}"))
   }
 }
 
@@ -79,18 +138,32 @@ pub(crate) struct LedgerRead {
 
 /// The rows and the last capture from the ledger alone, so the numbers survive the deletion of the logs
 /// they were parsed from. A read error fails the request instead of rendering rows it could not read.
+#[cfg(test)]
 fn read_ledger(features: &FeatureContext) -> anyhow::Result<LedgerRead> {
   read_ledger_at(features, Timestamp::now())
 }
 
 /// `read_ledger` as of `now`: the weeks the page names are the Pacific weeks of that instant.
+#[cfg(test)]
 fn read_ledger_at(features: &FeatureContext, now: Timestamp) -> anyhow::Result<LedgerRead> {
-  let started = Instant::now();
   let config = features.config.get()?;
   let week = Week::last_before(now)?;
   let mut ledger = UsageLedger::open(default_ledger_path(&config.charliebot_home))?;
-  let snapshot = ledger.read_page(week, &host_name()?)?;
+  let read = read_in_ledger(&mut ledger, now, week, &config)?;
   ledger.close()?;
+  Ok(read)
+}
+
+/// The page's read through a ledger connection the caller holds open: the all-time rows, the last Pacific week and the
+/// week before it, each source's native start, and the last capture of this host.
+fn read_in_ledger(
+  ledger: &mut UsageLedger,
+  now: Timestamp,
+  week: Week,
+  config: &Arc<CharlieBotConfig>,
+) -> anyhow::Result<LedgerRead> {
+  let started = Instant::now();
+  let snapshot = ledger.read_page(week, &host_name()?)?;
   Ok(LedgerRead {
     now,
     week,
@@ -100,24 +173,37 @@ fn read_ledger_at(features: &FeatureContext, now: Timestamp) -> anyhow::Result<L
     native_starts: snapshot.native_starts,
     last_capture: snapshot.last_capture,
     elapsed: started.elapsed(),
-    config,
+    config: Arc::clone(config),
   })
 }
 
 /// Render the page from one ledger read through the shared template engine.
-fn render(features: &FeatureContext, read: &LedgerRead, request: &Parts) -> Result<Response, (String, String)> {
-  let mut context =
-    token_usage_context(read, &features.registry).map_err(|error| ("Exception".to_string(), format!("{error:#}")))?;
+#[cfg(test)]
+fn render(features: &FeatureContext, read: &LedgerRead, request: &Parts) -> Result<Response, PageFailure> {
   let templating =
-    features.startup.require::<Templating>().map_err(|error| ("RuntimeError".to_string(), error.to_string()))?;
-  // The concurrency badge's script is the page's only static asset, so it carries the version that busts its cache.
-  let asset_version = templating.static_asset_version().map_err(|error| ("OSError".to_string(), error.to_string()))?;
+    features.startup.require::<Templating>().map_err(|error| PageFailure::new("RuntimeError", error.to_string()))?;
+  let asset_version =
+    templating.static_asset_version().map_err(|error| PageFailure::new("OSError", error.to_string()))?;
+  let html = render_html(features, read, request, &asset_version)?;
+  Ok(templating.page_response(TEMPLATE, html, request))
+}
+
+/// The page's document from one ledger read, without its compressed form or its response headers.
+fn render_html(
+  features: &FeatureContext,
+  read: &LedgerRead,
+  request: &Parts,
+  asset_version: &str,
+) -> Result<String, PageFailure> {
+  let mut context = token_usage_context(read, &features.registry)?;
   if let Some(object) = context.as_object_mut() {
-    object.insert("static_asset_version".to_string(), Value::String(asset_version));
+    object.insert("static_asset_version".to_string(), Value::String(asset_version.to_string()));
   }
+  let templating =
+    features.startup.require::<Templating>().map_err(|error| PageFailure::new("RuntimeError", error.to_string()))?;
   templating
-    .render_page(features, TEMPLATE, &context, request)
-    .map_err(|error| (error.kind().to_string(), error.to_string()))
+    .render_page_html(features, TEMPLATE, &context, request, &[])
+    .map_err(|error| PageFailure::new(error.kind(), error.to_string()))
 }
 
 /// The registered sources in registration order, then the sources whose usage lives only in CharlieBot's run

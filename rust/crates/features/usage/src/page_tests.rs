@@ -109,8 +109,8 @@ fn read_page_ledger(features: &FeatureContext) -> LedgerRead {
 }
 
 async fn page_body(features: &FeatureContext, read: &LedgerRead) -> String {
-  let response =
-    render(features, read, &parts("/token-usage")).unwrap_or_else(|(kind, detail)| panic!("{kind}: {detail}"));
+  let response = render(features, read, &parts("/token-usage"))
+    .unwrap_or_else(|failure| panic!("{}: {}", failure.kind(), failure.detail()));
   assert_eq!(response.status(), StatusCode::OK);
   let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("the body reads");
   String::from_utf8(bytes.to_vec()).expect("the page is UTF-8")
@@ -650,4 +650,39 @@ async fn the_route_answers_get_and_refuses_other_methods() {
       .unwrap();
     assert_eq!(response.status(), status, "{method}");
   }
+}
+
+/// The page's body as the route serves it, uncompressed: these requests name no `Accept-Encoding`.
+async fn served_body(features: &Arc<FeatureContext>) -> String {
+  let response = routes(features)
+    .oneshot(
+      Request::builder().method(Method::GET).uri("/token-usage").body(Body::empty()).expect("the request builds"),
+    )
+    .await
+    .expect("the route answers");
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("the body reads");
+  String::from_utf8(bytes.to_vec()).expect("the page is UTF-8")
+}
+
+/// The route serves the body the memo holds, and a capture that commits after a view reaches the next one.
+#[tokio::test]
+async fn a_capture_after_a_view_reaches_the_next_one() {
+  let home = tempfile::tempdir().expect("a temporary home");
+  let features = page_features(home.path(), registry());
+  seed_ledger(home.path(), false);
+
+  let first = served_body(&features).await;
+  let repeat = served_body(&features).await;
+  assert_eq!(data_rows(&first), data_rows(&repeat), "a repeat view serves the rows of the version it holds");
+
+  add_records(
+    home.path(),
+    "/logs/opus.jsonl",
+    "sig-opus",
+    &[record("op-1", CC, "claude-opus-4", CC_TS, 900, "acct-a")],
+  );
+  let captured = served_body(&features).await;
+  assert_ne!(data_rows(&captured), data_rows(&repeat), "a capture's commit reaches the next view");
+  assert!(captured.contains("claude-opus-4"), "the captured row reaches the page");
 }

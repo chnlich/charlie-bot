@@ -11,6 +11,7 @@ pub mod ledger;
 mod ndjson;
 mod pacific;
 mod page;
+mod page_memo;
 mod page_rows;
 mod poller;
 mod sql;

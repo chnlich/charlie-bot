@@ -54,9 +54,19 @@ impl Snapshot {
 
   /// Publish this request's row payloads, record the filter's set, and answer the rows that moved after `since`.
   ///
-  /// `ids` is the request's sorted row set. `payloads` holds one payload per id in `ids`, in the same order. A `since`
-  /// that names no state this process published, or one older than the retained horizon, asks for every row.
-  pub fn answer(&mut self, filter: Option<&str>, ids: &[String], payloads: Vec<Value>, since: Option<u64>) -> Answer {
+  /// `members` is the filter's own sorted row set, and `ids` the request's, which adds the sessions the page names
+  /// beyond the filter. Membership follows `members` alone: two pages on the same filter name different extra sessions
+  /// (each one's open chat), and a set that took the extras in would make those rows enter and leave on every
+  /// alternating poll. `payloads` holds one payload per id in `ids`, in the same order. A `since` that names no state
+  /// this process published, or one older than the retained horizon, asks for every row.
+  pub fn answer(
+    &mut self,
+    filter: Option<&str>,
+    members: &[String],
+    ids: &[String],
+    payloads: Vec<Value>,
+    since: Option<u64>,
+  ) -> Answer {
     let full = since.is_none_or(|since| since > self.sequence || since < self.horizon);
     for (id, payload) in ids.iter().zip(payloads) {
       match self.rows.get(id) {
@@ -69,7 +79,7 @@ impl Snapshot {
     }
     let mut gone = Vec::new();
     if let Some(filter) = filter {
-      let current: HashSet<String> = ids.iter().cloned().collect();
+      let current: HashSet<String> = members.iter().cloned().collect();
       if let Some(previous) = self.filters.insert(filter.to_string(), current.clone()) {
         for id in previous.difference(&current) {
           self.sequence += 1;
@@ -117,12 +127,18 @@ impl Snapshot {
   }
 }
 
-/// Answer one status poll against the shared snapshot: `filter` names the set whose membership is tracked, `ids` the
-/// request's sorted row set, and `payloads` one serialized row state per id.
-pub fn record(filter: Option<&str>, ids: &[String], payloads: Vec<Value>, token: Option<&str>) -> Answer {
+/// Answer one status poll against the shared snapshot: `filter` names the set whose membership is tracked, `members`
+/// that set, `ids` the request's sorted row set, and `payloads` one serialized row state per id.
+pub fn record(
+  filter: Option<&str>,
+  members: &[String],
+  ids: &[String],
+  payloads: Vec<Value>,
+  token: Option<&str>,
+) -> Answer {
   let mut state = STATE.lock().expect("status delta mutex is not poisoned");
   let since = token.and_then(|token| parse_token(token, state.epoch));
-  state.answer(filter, ids, payloads, since)
+  state.answer(filter, members, ids, payloads, since)
 }
 
 /// The sequence a token names, when the token was published by the epoch `epoch`.
@@ -150,37 +166,43 @@ mod tests {
   #[test]
   fn a_first_poll_answers_every_row_and_a_repeat_answers_none() {
     let mut state = snapshot();
-    let full = state.answer(Some("all"), &ids(&["a", "b"]), vec![json!({"n": 1}), json!({"n": 2})], None);
+    let full =
+      state.answer(Some("all"), &ids(&["a", "b"]), &ids(&["a", "b"]), vec![json!({"n": 1}), json!({"n": 2})], None);
     assert_eq!(full.rows.len(), 2);
     assert!(full.gone.is_empty());
 
     let since = parse_token(&full.token, state.epoch);
-    let repeat = state.answer(Some("all"), &ids(&["a", "b"]), vec![json!({"n": 1}), json!({"n": 2})], since);
+    let repeat =
+      state.answer(Some("all"), &ids(&["a", "b"]), &ids(&["a", "b"]), vec![json!({"n": 1}), json!({"n": 2})], since);
     assert!(repeat.rows.is_empty(), "no row moved, so the delta carries none");
   }
 
   #[test]
   fn a_delta_answers_only_the_row_whose_payload_moved() {
     let mut state = snapshot();
-    let full = state.answer(Some("all"), &ids(&["a", "b"]), vec![json!({"n": 1}), json!({"n": 2})], None);
+    let full =
+      state.answer(Some("all"), &ids(&["a", "b"]), &ids(&["a", "b"]), vec![json!({"n": 1}), json!({"n": 2})], None);
     let since = parse_token(&full.token, state.epoch);
 
-    let delta = state.answer(Some("all"), &ids(&["a", "b"]), vec![json!({"n": 9}), json!({"n": 2})], since);
+    let delta =
+      state.answer(Some("all"), &ids(&["a", "b"]), &ids(&["a", "b"]), vec![json!({"n": 9}), json!({"n": 2})], since);
     assert_eq!(delta.rows.keys().collect::<Vec<_>>(), vec!["a"]);
   }
 
   #[test]
   fn a_row_that_leaves_the_filter_is_named_and_a_row_that_enters_is_published() {
     let mut state = snapshot();
-    let full = state.answer(Some("all"), &ids(&["a", "b"]), vec![json!({"n": 1}), json!({"n": 2})], None);
+    let full =
+      state.answer(Some("all"), &ids(&["a", "b"]), &ids(&["a", "b"]), vec![json!({"n": 1}), json!({"n": 2})], None);
     let since = parse_token(&full.token, state.epoch);
 
-    let leaving = state.answer(Some("all"), &ids(&["a"]), vec![json!({"n": 1})], since);
+    let leaving = state.answer(Some("all"), &ids(&["a"]), &ids(&["a"]), vec![json!({"n": 1})], since);
     assert_eq!(leaving.gone, vec!["b".to_string()]);
 
     let since = parse_token(&leaving.token, state.epoch);
     // `b` re-enters with the payload it held before, so its version would not move: the entry publishes it again.
-    let entering = state.answer(Some("all"), &ids(&["a", "b"]), vec![json!({"n": 1}), json!({"n": 2})], since);
+    let entering =
+      state.answer(Some("all"), &ids(&["a", "b"]), &ids(&["a", "b"]), vec![json!({"n": 1}), json!({"n": 2})], since);
     assert!(entering.rows.contains_key("b"), "an entering row answers its page again");
     assert!(!entering.rows.contains_key("a"), "an unchanged row that stayed in the set does not");
   }
@@ -190,16 +212,51 @@ mod tests {
     let mut state = snapshot();
     let other = format!("{}-1", state.epoch.wrapping_add(1));
     assert_eq!(parse_token(&other, state.epoch), None);
-    let answer = state.answer(Some("all"), &ids(&["a"]), vec![json!({"n": 1})], parse_token(&other, state.epoch));
+    let answer =
+      state.answer(Some("all"), &ids(&["a"]), &ids(&["a"]), vec![json!({"n": 1})], parse_token(&other, state.epoch));
     assert_eq!(answer.rows.len(), 1);
   }
 
   #[test]
   fn a_named_row_set_without_a_filter_answers_every_named_row() {
     let mut state = snapshot();
-    let full = state.answer(None, &ids(&["a"]), vec![json!({"n": 1})], None);
+    let full = state.answer(None, &[], &ids(&["a"]), vec![json!({"n": 1})], None);
     let since = parse_token(&full.token, state.epoch);
-    let repeat = state.answer(None, &ids(&["a"]), vec![json!({"n": 1})], since);
+    let repeat = state.answer(None, &[], &ids(&["a"]), vec![json!({"n": 1})], since);
     assert!(repeat.rows.is_empty());
+  }
+
+  /// Two pages on one filter name different extra sessions, each its own open chat. Membership follows the filter's own
+  /// set, so the alternating extras do not enter and leave on every poll.
+  #[test]
+  fn a_filters_membership_ignores_the_extra_ids_a_page_names() {
+    let mut state = snapshot();
+    let members = ids(&["a", "b"]);
+    let first = state.answer(
+      Some("all"),
+      &members,
+      &ids(&["a", "b", "open-1"]),
+      vec![json!({"n": 1}), json!({"n": 2}), json!({"n": 3})],
+      None,
+    );
+    let since = parse_token(&first.token, state.epoch);
+    let other = state.answer(
+      Some("all"),
+      &members,
+      &ids(&["a", "b", "open-2"]),
+      vec![json!({"n": 1}), json!({"n": 2}), json!({"n": 4})],
+      since,
+    );
+    assert!(other.gone.is_empty(), "no row of the filter's own set left");
+
+    let since = parse_token(&other.token, state.epoch);
+    let again = state.answer(
+      Some("all"),
+      &members,
+      &ids(&["a", "b", "open-1"]),
+      vec![json!({"n": 1}), json!({"n": 2}), json!({"n": 3})],
+      since,
+    );
+    assert!(again.rows.is_empty(), "the first page's open chat did not change, so it is not answered again");
   }
 }

@@ -33,7 +33,8 @@ enum Action {
     /// The seed. One seed gives the same bytes on every run.
     #[arg(long, default_value_t = DEFAULT_SEED)]
     seed: u64,
-    /// The kind of home. `task-tree` adds the production startup's task tree for startup measurements.
+    /// The kind of home. `task-tree` adds the production startup's task tree for startup measurements; `view` gives each
+    /// session a task spec sized to a live view's rows.
     #[arg(long, value_enum, default_value_t = Shape::Default)]
     shape: Shape,
   },

@@ -40,7 +40,7 @@ pub fn generate(output: &Path, sessions: usize, seed: u64, shape: Shape) -> Resu
   fs::create_dir(&staging).with_context(|| format!("cannot create the staging directory {}", staging.display()))?;
 
   let written = match shape {
-    Shape::Default => write_home(&staging, sessions, seed),
+    Shape::Default | Shape::View => write_home(&staging, sessions, seed, shape),
     Shape::TaskTree => {
       let home = fs::canonicalize(parent)
         .with_context(|| format!("cannot resolve {}", parent.display()))
@@ -81,6 +81,10 @@ fn finished_by_another_run(output: &Path, sessions: usize, seed: u64, shape: Sha
     .is_ok_and(|manifest| manifest.seed == seed && manifest.session_count == sessions && manifest.shape == shape)
 }
 
+/// The count of acceptance criteria and of context references of a view session, each drawn from these bounds.
+const VIEW_ITEMS_MIN: u64 = 8;
+const VIEW_ITEMS_MAX: u64 = 28;
+
 /// One user message whose line takes exactly `room` bytes, or `None` when `room` cannot hold an empty one.
 fn filler_event(room: u64, timestamp: &str) -> Option<Value> {
   let empty = run_records::event_line(&json!({"type": "user", "content": "", "timestamp": timestamp})).len() as u64;
@@ -120,8 +124,21 @@ fn write_event_log(
   log.finish()
 }
 
-/// Writes the sessions and the manifest into `home`, and returns the total event-log bytes.
-fn write_home(home: &Path, sessions: usize, seed: u64) -> Result<u64> {
+/// The acceptance criteria and context references of a view session: counts drawn from the stream, each item a sentence
+/// or a path of the synthetic pool. The spread of the counts gives the rows a spread of sizes; their median sets the
+/// view's median row.
+fn view_task(rng: &mut Rng) -> Value {
+  let acceptance: Vec<&str> = (0..rng.range(VIEW_ITEMS_MIN, VIEW_ITEMS_MAX)).map(|_| text::phrase(rng)).collect();
+  let context_refs: Vec<String> = (0..rng.range(VIEW_ITEMS_MIN, VIEW_ITEMS_MAX))
+    .map(|_| format!("workspace/synthetic/{:04x}/{:08x}.md", rng.below(65_536), rng.next_u64() as u32))
+    .collect();
+  json!({"acceptance": acceptance, "context_refs": context_refs, "repo_path": "workspace/synthetic", "base_branch": "main"})
+}
+
+/// Writes the sessions and the manifest into `home`, and returns the total event-log bytes. The view shape adds a task
+/// spec to each session; the other shapes write the same bytes.
+fn write_home(home: &Path, sessions: usize, seed: u64, shape: Shape) -> Result<u64> {
+  let view = shape == Shape::View;
   let (mut rng, text, sizes) = planned_home(sessions, seed);
   let mut manifest_sessions = Vec::with_capacity(sessions);
   let mut total = 0;
@@ -146,18 +163,13 @@ fn write_home(home: &Path, sessions: usize, seed: u64) -> Result<u64> {
       schema_version: 2,
       has_unread: false,
       starred: false,
+      task: view.then(|| view_task(&mut rng)),
     };
     write_json(&layout::metadata_path(&session_dir), &metadata, b"  ")?;
     manifest_sessions.push(ManifestSession { id, event_log_bytes: log_bytes, last_message: final_text });
     total += log_bytes;
   }
-  let manifest = Manifest {
-    seed,
-    session_count: sessions,
-    event_log_bytes: total,
-    sessions: manifest_sessions,
-    shape: Shape::Default,
-  };
+  let manifest = Manifest { seed, session_count: sessions, event_log_bytes: total, sessions: manifest_sessions, shape };
   write_json(&home.join(MANIFEST_NAME), &manifest, b" ")?;
   Ok(total)
 }

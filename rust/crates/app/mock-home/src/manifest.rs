@@ -5,6 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::Shape;
 
@@ -23,6 +24,9 @@ pub struct SessionMetadata {
   pub schema_version: u32,
   pub has_unread: bool,
   pub starred: bool,
+  /// The task spec of a view session; the other shapes write none.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub task: Option<Value>,
 }
 
 /// The home's `manifest.json`: the seed, count and shape that produced it, and each session's log size and newest

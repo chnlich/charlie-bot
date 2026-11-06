@@ -38,6 +38,9 @@ pub enum Shape {
   Default,
   /// Sessions of the default size curve, written as the task nodes of a production startup (`task_tree`).
   TaskTree,
+  /// Sessions of the default size curve, each with a synthetic task spec sized so that its session row matches a live
+  /// view's rows. The default shape writes no task spec, so its bytes do not change.
+  View,
 }
 
 impl Shape {

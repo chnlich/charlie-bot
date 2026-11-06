@@ -16,6 +16,12 @@ fail-fast = false
 [profile.ci.junit]
 path = "junit.xml"
 
+[profile.integration]
+inherits = "ci"
+
+[profile.integration.junit]
+path = "junit.xml"
+
 # The profile the 0.1 s check reruns suspects with. One test thread so each suspect runs alone; no
 # fail-fast so a failing suspect still leaves every other suspect's JUnit row on record.
 [profile.check]

@@ -375,7 +375,7 @@ A self-hosted VS Code instance running as a web service for browsing code in the
 
 ## Backup
 
-Compressed archive backups (not git) stored at `${CHARLIEBOT_HOME}_backup`, tiered retention. Manual backup trigger must be independent and must not affect the auto-backup schedule.
+Backups are restic snapshots of the profile home in the `backup.repository` S3 repository, client-side encrypted, with retention of 3 daily and 15 days of weekly snapshots. The repository password file and the failure-notice Slack user live in the `backup:` config; the daily cron sends one Slack DM on a failed run and stays silent on success. Restore with `charliebot backup restore --snapshot <id|latest> --target <empty dir>`. Manual backup trigger must be independent and must not affect the auto-backup schedule.
 
 ---
 

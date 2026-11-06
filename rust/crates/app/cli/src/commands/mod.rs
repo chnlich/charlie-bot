@@ -1,5 +1,6 @@
 //! The runtime-owned subcommands, one module file each.
 
+pub mod backup;
 pub mod compaction_context;
 pub mod config;
 pub mod delegate;

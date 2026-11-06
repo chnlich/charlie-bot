@@ -67,6 +67,22 @@ impl SlackClient {
     checked_payload(response, "chat.postMessage").await
   }
 
+  /// Opens the bot's direct message channel with `user_id` and posts `text` there. A feature that
+  /// notifies one person sends through this path.
+  pub async fn post_dm(&self, user_id: &str, text: &str) -> Result<()> {
+    let opened = self.json_request("conversations.open", &self.bot_token, json!({"users": user_id}))?.send().await?;
+    let payload = checked_payload(opened, "conversations.open").await?;
+    let channel = payload
+      .pointer("/channel/id")
+      .and_then(Value::as_str)
+      .filter(|channel| !channel.is_empty())
+      .with_context(|| format!("conversations.open with {user_id} returned no channel id"))?;
+    let posted =
+      self.json_request("chat.postMessage", &self.bot_token, json!({"channel": channel, "text": text}))?.send().await?;
+    checked_payload(posted, "chat.postMessage").await?;
+    Ok(())
+  }
+
   /// Read the authenticated bot identity used to recognize its metadata-keyed posts.
   pub(crate) async fn auth_test(&self) -> Result<Value> {
     let response = self.request(Method::POST, "auth.test", &self.bot_token).send().await?;
@@ -207,4 +223,30 @@ async fn response_json(response: Response) -> Result<Value> {
   let response = response.error_for_status()?;
   let bytes = response.bytes().await?;
   serde_json::from_slice(&bytes).context("Slack Web API response is not JSON")
+}
+
+#[cfg(test)]
+mod tests {
+  use serde_json::json;
+
+  use crate::test_support::FakeApi;
+
+  #[tokio::test]
+  async fn a_direct_message_opens_the_dm_channel_and_posts_as_the_bot() {
+    let api = FakeApi::start(&[]).await;
+
+    api.client.post_dm("U_ALLOWED", "backup failed").await.unwrap();
+
+    assert_eq!(
+      api.calls(),
+      vec![
+        ("POST".to_string(), "/api/conversations.open".to_string(), json!({"users": "U_ALLOWED"})),
+        (
+          "POST".to_string(),
+          "/api/chat.postMessage".to_string(),
+          json!({"channel": "D0SYNTHETIC", "text": "backup failed"})
+        ),
+      ]
+    );
+  }
 }

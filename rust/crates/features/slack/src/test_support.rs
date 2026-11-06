@@ -187,6 +187,7 @@ impl FakeApi {
       .route("/api/apps.connections.open", post(open_connection))
       .route("/api/auth.test", post(auth_test))
       .route("/api/chat.postMessage", post(post_message))
+      .route("/api/conversations.open", post(open_dm))
       .route("/api/reactions.add", post(reaction))
       .route("/api/reactions.remove", post(reaction))
       .route("/api/conversations.replies", get(thread_replies))
@@ -283,6 +284,11 @@ async fn open_connection(State(state): State<Arc<FakeState>>) -> Response {
 async fn auth_test(State(state): State<Arc<FakeState>>) -> Json<Value> {
   state.record("POST", "/api/auth.test", Value::Null);
   Json(json!({"ok": true, "user_id": "U_BOT", "bot_id": "B_BOT"}))
+}
+
+async fn open_dm(State(state): State<Arc<FakeState>>, Json(body): Json<Value>) -> Response {
+  state.record("POST", "/api/conversations.open", body.clone());
+  Json(json!({"ok": true, "channel": {"id": "D0SYNTHETIC"}})).into_response()
 }
 
 async fn post_message(State(state): State<Arc<FakeState>>, Json(body): Json<Value>) -> Response {

@@ -1,22 +1,45 @@
-//! The behavior cases of the backup, retention cases pinned to calendar dates at each age
-//! boundary, and the member fields the archive records.
+//! The backup, restore and retention cases against a local-directory restic repository, and the
+//! handler's failure-notice wiring.
 
-use std::ffi::OsStr;
 use std::fs;
-use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::{Arc, Mutex};
 
-use charliebot_core::home::CHARLIEBOT_HOME_ENV;
-use chrono::{Duration as ChronoDuration, NaiveDate};
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, Local, NaiveDate, NaiveDateTime, TimeZone};
 use tempfile::{TempDir, tempdir};
 
 use crate::backup::*;
-use crate::tar_writer::{Member, write_member};
+use crate::config::BackupConfig;
+use crate::{StepFailure, failure_message, run_with_notice};
 
-/// A home inside a fresh temporary root. Its `_backup` sibling is created inside the same root, so dropping
-/// the root removes every archive a test writes.
+/// A local-directory restic repository with its password file, both inside a fresh temporary root, so
+/// dropping the root removes the repository.
+struct Repo {
+  _root: TempDir,
+  repository: String,
+  password_file: PathBuf,
+}
+
+fn restic(repository: &str, password_file: &Path) -> Command {
+  let mut command = Command::new("restic");
+  command.arg("-r").arg(repository).arg("--password-file").arg(password_file);
+  command
+}
+
+fn new_repo() -> Repo {
+  let root = tempdir().unwrap();
+  let password_file = root.path().join("password");
+  fs::write(&password_file, "synthetic-password\n").unwrap();
+  let repository = root.path().join("repo");
+  let status = restic(repository.to_str().unwrap(), &password_file).arg("init").status().unwrap();
+  assert!(status.success(), "restic init runs against the local repository");
+  Repo { _root: root, repository: repository.to_str().unwrap().to_string(), password_file }
+}
+
+/// A home inside a fresh temporary root.
 fn temp_home() -> (TempDir, PathBuf) {
   let root = tempdir().unwrap();
   let home = root.path().join("profile");
@@ -24,303 +47,322 @@ fn temp_home() -> (TempDir, PathBuf) {
   (root, home)
 }
 
-/// Reads one member's content out of a `.tar.gz` archive, by name.
-fn member_content(archive: &Path, name: &str) -> Option<Vec<u8>> {
-  let file = fs::File::open(archive).unwrap();
-  let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
-  for entry in archive.entries().unwrap() {
-    let mut entry = entry.unwrap();
-    if entry.path().unwrap().to_string_lossy() == name {
-      let mut bytes = Vec::new();
-      entry.read_to_end(&mut bytes).unwrap();
-      return Some(bytes);
+/// Writes one fixture file, creating its parent directories.
+fn write(home: &Path, relative: impl AsRef<Path>, content: &[u8]) {
+  let path = home.join(relative);
+  if let Some(parent) = path.parent() {
+    fs::create_dir_all(parent).unwrap();
+  }
+  fs::write(path, content).unwrap();
+}
+
+/// Builds a home with the shapes the exclusion list judges: nested directories, an empty directory, a
+/// credentials file, `.git` and `.claude` directories, bytecode at two depths, the opencode store at
+/// the top level and one level deeper, a session thread store beside a session file, names that are
+/// not UTF-8 at two depths, a non-ASCII UTF-8 name, a name over 100 bytes, and symlinks.
+fn build_fixture_home(home: &Path) {
+  write(home, "config.yaml", b"server: {}\n");
+  write(home, "nested/a/b/deep.txt", b"deep content\n");
+  write(home, std::ffi::OsStr::from_bytes(b"raw-\xff\xfe.txt"), b"a top-level name that is not UTF-8\n");
+  write(home, std::ffi::OsStr::from_bytes(b"nested/a/bad-\xc3(.txt"), b"a nested name with a truncated sequence\n");
+  write(home, "nested/a/café-日本.txt", b"a non-ASCII UTF-8 name\n");
+  write(home, format!("{}.txt", "n".repeat(110)), b"a name over 100 bytes\n");
+  fs::create_dir_all(home.join("empty_dir")).unwrap();
+  symlink("nested", home.join("link")).unwrap();
+  symlink("target-".repeat(15), home.join("long-link")).unwrap();
+  write(home, "credentials.yaml", b"credentials:\n  access_key: secret\n");
+  write(home, ".git/HEAD", b"ref: refs/heads/main\n");
+  write(home, ".claude/settings.json", b"{}\n");
+  write(home, "__pycache__/x.pyc", b"bytecode\n");
+  write(home, "cache/y.pyc", b"more bytecode\n");
+  write(home, "opencode/data/opencode/opencode.db", b"db\n");
+  write(home, "sessions/s1/opencode/note.json", b"{}\n");
+  write(home, "sessions/s1/threads/t1/metadata.json", b"{}\n");
+}
+
+/// One line per tree entry: the kind, the path and, for files and symlinks, the content or target.
+fn tree_entries(root: &Path) -> Vec<String> {
+  fn walk(dir: &Path, relative: &str, out: &mut Vec<String>) {
+    for entry in fs::read_dir(dir).unwrap() {
+      let entry = entry.unwrap();
+      let name = entry.file_name().to_string_lossy().into_owned();
+      let relative = if relative.is_empty() { name } else { format!("{relative}/{name}") };
+      let file_type = entry.file_type().unwrap();
+      if file_type.is_symlink() {
+        out.push(format!("l {} -> {}", relative, fs::read_link(entry.path()).unwrap().to_string_lossy()));
+      } else if file_type.is_dir() {
+        walk(&entry.path(), &relative, out);
+        out.push(format!("d {relative}"));
+      } else {
+        out.push(format!("f {relative} {}", String::from_utf8_lossy(&fs::read(entry.path()).unwrap())));
+      }
     }
   }
-  None
+  let mut out = Vec::new();
+  walk(root, "", &mut out);
+  out.sort();
+  out
 }
 
-/// The member names of a `.tar.gz` archive, in archive order.
-fn member_names(archive: &Path) -> Vec<String> {
-  let file = fs::File::open(archive).unwrap();
-  let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
-  let names: Vec<String> =
-    archive.entries().unwrap().map(|entry| entry.unwrap().path().unwrap().to_string_lossy().into_owned()).collect();
-  names
-}
-
-/// The member names of a `.tar.gz` archive as raw bytes, in archive order.
-fn member_name_bytes(archive: &Path) -> Vec<Vec<u8>> {
-  let file = fs::File::open(archive).unwrap();
-  let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
-  archive.entries().unwrap().map(|entry| entry.unwrap().path_bytes().into_owned()).collect()
+fn backup_config(repository: &str, password_file: &Path) -> BackupConfig {
+  BackupConfig {
+    repository: Some(repository.to_string()),
+    password_file: Some(password_file.to_string_lossy().into_owned()),
+    notify_user_id: Some("U0SYNTHETIC".to_string()),
+  }
 }
 
 #[test]
-fn exclusions_cover_the_secrets_file_and_noise() {
-  assert!(should_exclude(b"credentials.yaml"));
-  assert!(should_exclude(b".git/HEAD"));
-  assert!(should_exclude(b"__pycache__/x.pyc"));
-  assert!(should_exclude(b"cache/x.pyc"));
-  assert!(should_exclude(b"sessions/s1/threads/t1/metadata.json"));
-  assert!(should_exclude(b"raw-\xff.pyc"));
-  assert!(!should_exclude(b"config.yaml"));
-  assert!(!should_exclude(b"sessions/s1/triggers/t1.json"));
-  assert!(!should_exclude(b"raw-\xff.txt"));
+fn the_exclusion_list_builds_on_the_canonical_directory_names() {
+  let patterns = exclude_patterns(Path::new("/home/u/.charliebot"));
+  assert!(patterns.contains(&"/home/u/.charliebot/opencode".to_string()));
+  assert!(patterns.contains(&"sessions/*/threads".to_string()));
+  assert!(patterns.contains(&"credentials.yaml".to_string()));
 }
 
 #[test]
-fn create_backup_omits_the_secrets_file() {
+fn a_backup_summary_line_yields_the_snapshot_id() {
+  let output = concat!(
+    "{\"message_type\":\"status\",\"percent_done\":0}\n",
+    "{\"message_type\":\"summary\",\"snapshot_id\":\"37f88337\"}\n",
+  );
+  assert_eq!(snapshot_id(output).unwrap(), "37f88337");
+  assert!(snapshot_id("{\"message_type\":\"status\"}\n").is_err());
+}
+
+#[test]
+fn a_failure_message_names_the_step_and_the_cause() {
+  let failure = StepFailure { step: "backup", error: anyhow::anyhow!("restic exited 1") };
+  let message = failure_message(&failure);
+  assert!(message.contains("backup"), "{message}");
+  assert!(message.contains("restic exited 1"), "{message}");
+}
+
+/// The exclusion policy of the backup, written out for the test: the source entries the restore is
+/// expected to reproduce. A top-level `opencode` goes, the named entries go at any depth, and every
+/// session's thread store goes.
+fn excluded(relative: &str) -> bool {
+  let parts: Vec<&str> = relative.split('/').collect();
+  if parts.first() == Some(&"opencode") {
+    return true;
+  }
+  if parts
+    .iter()
+    .any(|part| matches!(*part, ".git" | ".claude" | "credentials.yaml" | "__pycache__") || part.ends_with(".pyc"))
+  {
+    return true;
+  }
+  parts.len() >= 3 && parts[0] == "sessions" && parts[2] == "threads"
+}
+
+/// The source entries a restore should hold: [`tree_entries`] minus the excluded paths.
+fn kept_source_entries(home: &Path) -> Vec<String> {
+  tree_entries(home)
+    .into_iter()
+    .filter(|entry| {
+      let relative = entry.split(' ').nth(1).unwrap();
+      !excluded(relative)
+    })
+    .collect()
+}
+
+#[test]
+fn backup_then_restore_reproduces_the_home_minus_the_excluded_paths() {
+  let repo = new_repo();
   let (_root, home) = temp_home();
-  fs::write(home.join("credentials.yaml"), "credentials:\n  access_key: secret\n").unwrap();
-  fs::write(home.join("config.yaml"), "server: {}\n").unwrap();
+  build_fixture_home(&home);
 
-  let archive = create_backup_in(&home).unwrap();
-  let names = member_names(&archive);
+  let snapshot = create_snapshot(&home, &repo.repository, &repo.password_file).unwrap();
+  assert_eq!(snapshot.len(), 64, "the snapshot id is a full restic id");
 
-  assert!(names.iter().any(|name| name == "config.yaml"));
-  assert!(names.iter().all(|name| !name.contains("credentials.yaml")));
-}
+  let target = repo._root.path().join("restored");
+  fs::create_dir(&target).unwrap();
+  restore(&repo.repository, &repo.password_file, &snapshot, &target).unwrap();
 
-#[test]
-fn create_backup_archive_round_trips_bytes() {
-  let (_root, home) = temp_home();
-  let payload = "key: value\nlist:\n  - a\n  - b\n";
-  fs::write(home.join("config.yaml"), payload).unwrap();
-
-  let archive = create_backup_in(&home).unwrap();
-  assert_eq!(member_content(&archive, "config.yaml").unwrap(), payload.as_bytes());
-}
-
-#[test]
-fn create_backup_archives_names_that_are_not_utf8_as_their_bytes() {
-  let (_root, home) = temp_home();
-  fs::write(home.join(OsStr::from_bytes(b"raw-\xff.txt")), "top\n").unwrap();
-  fs::create_dir(home.join("nested")).unwrap();
-  fs::write(home.join("nested").join(OsStr::from_bytes(b"bad-\xc3(.txt")), "nested\n").unwrap();
-
-  // Every entry is present, in code-point order: a read that skips or fails on a name would drop one of them.
-  let archive = create_backup_in(&home).unwrap();
-  assert_eq!(
-    member_name_bytes(&archive),
-    [b"nested/".to_vec(), b"nested/bad-\xc3(.txt".to_vec(), b"raw-\xff.txt".to_vec()]
+  let entries = tree_entries(&target);
+  assert_eq!(entries, kept_source_entries(&home));
+  // Spot checks over the shapes the exclusion list judges: kept, and gone.
+  assert!(entries.iter().any(|entry| entry.starts_with("f sessions/s1/opencode/note.json ")), "{entries:?}");
+  assert!(entries.iter().any(|entry| entry.starts_with("f raw-")), "{entries:?}");
+  assert!(
+    entries.iter().all(|entry| !entry.contains("credentials.yaml")
+      && !entry.contains("sessions/s1/threads")
+      && !entry.ends_with(".pyc")
+      && !entry.contains(".git")
+      && !entry.contains(".claude")
+      && !entry.starts_with("d opencode")
+      && !entry.starts_with("f opencode/")),
+    "{entries:?}"
   );
 }
 
 #[test]
-fn create_backup_leaves_out_only_the_top_level_opencode_store() {
-  let profile_root = tempdir().unwrap();
-  let profile = profile_root.path().join("profile");
-  let deep = profile.join("opencode/data/opencode");
-  fs::create_dir_all(&deep).unwrap();
-  fs::write(deep.join("opencode.db"), b"db").unwrap();
-  let session = profile.join("sessions/s1/opencode");
-  fs::create_dir_all(&session).unwrap();
-  fs::write(session.join("note.json"), "{}").unwrap();
-
-  let archive = create_backup_in(&profile).unwrap();
-  let names = member_names(&archive);
-
-  assert!(names.iter().all(|name| name != "opencode" && !name.starts_with("opencode/")));
-  assert!(names.iter().any(|name| name == "sessions/s1/opencode/note.json"));
-}
-
-#[test]
-fn create_backup_reads_the_profile_home_from_the_environment() {
-  let profile_root = tempdir().unwrap();
-  let profile = profile_root.path().join("profile");
-  fs::create_dir_all(&profile).unwrap();
-  fs::write(profile.join("config.yaml"), "server: {}\n").unwrap();
-  // One env-var writer per process: the test body is the only code that reads the variable.
-  unsafe { std::env::set_var(CHARLIEBOT_HOME_ENV, &profile) };
-  let archive = create_backup().unwrap();
-  unsafe { std::env::remove_var(CHARLIEBOT_HOME_ENV) };
-  assert!(member_names(&archive).iter().any(|name| name == "config.yaml"));
-  assert_eq!(archive.parent().unwrap(), profile_root.path().join("profile_backup"));
-}
-
-#[test]
-fn create_backup_names_the_archive_by_local_time() {
+fn a_restore_refuses_a_non_empty_target() {
+  let repo = new_repo();
   let (_root, home) = temp_home();
-  fs::write(home.join("config.yaml"), "server: {}\n").unwrap();
-  let archive = create_backup_in(&home).unwrap();
-  let name = archive.file_name().unwrap().to_str().unwrap();
-  assert!(name.starts_with("charliebot-") && name.ends_with(".tar.gz"));
-  assert_eq!(name.len(), "charliebot-YYYYMMDD-HHMMSS.tar.gz".len());
-  assert!(parse_backup_date(name).is_some());
+  write(&home, "config.yaml", b"server: {}\n");
+  let snapshot = create_snapshot(&home, &repo.repository, &repo.password_file).unwrap();
+
+  let target = repo._root.path().join("restored");
+  fs::create_dir(&target).unwrap();
+  fs::write(target.join("occupied.txt"), b"occupied\n").unwrap();
+
+  let error = restore(&repo.repository, &repo.password_file, &snapshot, &target).unwrap_err();
+  assert!(error.to_string().contains("not empty"), "{error:#}");
 }
 
 #[test]
-fn backup_name_and_date_parser_match_timestamp_bytes() {
-  let moment = NaiveDate::from_ymd_opt(2026, 10, 26).unwrap().and_hms_opt(9, 7, 5).unwrap();
-  let name = archive_name(moment);
-  assert_eq!(name, "charliebot-20261026-090705.tar.gz");
-  assert_eq!(parse_backup_date(&name), Some(moment));
-  assert_eq!(parse_backup_date("charliebot-00000101-000000.tar.gz"), None);
-}
-
-#[test]
-fn create_backup_records_the_permission_bits_and_directory_slashes() {
-  let (_root, home) = temp_home();
-  let config = home.join("config.yaml");
-  fs::write(&config, "server: {}\n").unwrap();
-  fs::set_permissions(&config, fs::Permissions::from_mode(0o640)).unwrap();
-  fs::create_dir(home.join("sub")).unwrap();
-
-  let archive = create_backup_in(&home).unwrap();
-  let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(&archive).unwrap()));
-  let mut members = Vec::new();
-  for entry in tar.entries().unwrap() {
-    let entry = entry.unwrap();
-    members.push((entry.path_bytes().into_owned(), entry.header().mode().unwrap()));
-  }
-
-  // The stored mode holds the permission bits only, and a directory's name ends with a slash.
-  assert!(members.contains(&(b"config.yaml".to_vec(), 0o640)));
-  assert!(members.iter().any(|(name, _)| name.as_slice() == b"sub/"));
-}
-
-#[test]
-fn write_member_moves_a_uid_past_the_ustar_field_to_a_pax_record() {
-  let member = Member {
-    name: b"owned.txt",
-    mode: 0o100644,
-    uid: 2_097_152,
-    gid: 0,
-    size: 0,
-    mtime_sec: 1_700_000_000,
-    mtime_nsec: 0,
-    typeflag: b'0',
-    linkname: b"",
-    uname: b"",
-    gname: b"",
-    devmajor: 0,
-    devminor: 0,
-  };
-  let mut out = Vec::new();
-  write_member(&mut out, &member, None).unwrap();
-
-  // The member's own header ends the output: its uid field holds 0, and the PAX entry before it carries the uid.
-  let header = &out[out.len() - 512..];
-  assert_eq!(&header[108..116], b"0000000\0");
-  assert!(String::from_utf8_lossy(&out).contains("uid=2097152\n"));
-}
-
-/// Writes the archives named `names` into a fresh backup directory, runs one retention pass at `now`, and
-/// returns the names that survive, sorted.
-fn surviving_after_retention(now: i64, names: &[&str]) -> Vec<String> {
+fn a_restore_names_the_unreachable_repository() {
   let root = tempdir().unwrap();
-  let home = root.path().join("profile");
-  let backups = backup_dir(&home).unwrap();
-  fs::create_dir_all(&backups).unwrap();
-  for name in names {
-    write_archive(&backups, name);
+  let password_file = root.path().join("password");
+  fs::write(&password_file, "synthetic-password\n").unwrap();
+  let repository = root.path().join("never-initialized");
+
+  let target = root.path().join("restored");
+  fs::create_dir(&target).unwrap();
+  let error = restore(repository.to_str().unwrap(), &password_file, "latest", &target).unwrap_err();
+  let cause = format!("{error:#}");
+  assert!(cause.contains("unreachable"), "{cause}");
+}
+
+/// The policy `apply_retention` implements: the last snapshot of each of the last three calendar
+/// days, and the last snapshot of each ISO week holding a snapshot at most fifteen days old.
+fn policy_keeps(times: &[DateTime<Local>], now: DateTime<Local>) -> Vec<NaiveDate> {
+  let mut keep: Vec<NaiveDate> = Vec::new();
+  for day_offset in 0..3 {
+    let date = now.date_naive() - ChronoDuration::days(day_offset);
+    if let Some(latest) = times.iter().filter(|time| time.date_naive() == date).map(|time| time.date_naive()).max() {
+      keep.push(latest);
+    }
+  }
+  let cutoff = now - ChronoDuration::days(15);
+  let mut weeks: Vec<(NaiveDate, DateTime<Local>)> = Vec::new();
+  for time in times.iter().filter(|time| **time >= cutoff) {
+    let week_start = time.date_naive() - ChronoDuration::days(time.weekday().num_days_from_monday() as i64);
+    match weeks.iter_mut().find(|(start, _)| *start == week_start) {
+      Some((_, latest)) if *latest < *time => *latest = *time,
+      Some(_) => {}
+      None => weeks.push((week_start, *time)),
+    }
+  }
+  keep.extend(weeks.into_iter().map(|(_, latest)| latest.date_naive()));
+  keep.sort();
+  keep.dedup();
+  keep
+}
+
+/// The snapshot dates `--time` stamps carry, read back with `restic snapshots --json`.
+fn snapshot_dates(repository: &str, password_file: &Path) -> Vec<NaiveDate> {
+  let output = restic(repository, password_file).args(["snapshots", "--json"]).output().unwrap();
+  assert!(output.status.success(), "restic snapshots runs");
+  let snapshots: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+  let mut dates: Vec<NaiveDate> = snapshots
+    .iter()
+    .map(|snapshot| {
+      let time = snapshot["time"].as_str().unwrap();
+      DateTime::parse_from_rfc3339(time).unwrap().with_timezone(&Local).date_naive()
+    })
+    .collect();
+  dates.sort();
+  dates.dedup();
+  dates
+}
+
+#[test]
+fn forget_keeps_three_daily_and_each_iso_weeks_last_snapshot() {
+  let repo = new_repo();
+  let (_root, home) = temp_home();
+  write(&home, "config.yaml", b"server: {}\n");
+  // The reviewed date set is 10-25, 11-01..11-06 with the forget run on 11-06; the offsets below are
+  // that structure relative to the run's day, so the test holds on any day.
+  let offsets = [12, 5, 4, 3, 2, 1, 0];
+  let now = Local::now();
+  let mut times: Vec<DateTime<Local>> = Vec::new();
+  for offset in offsets {
+    let date = now.date_naive() - ChronoDuration::days(offset);
+    let stamp: NaiveDateTime = date.and_hms_opt(4, 45, 0).unwrap();
+    let status = restic(&repo.repository, &repo.password_file)
+      .args(["backup", &home.to_string_lossy(), "--quiet"])
+      .arg("--time")
+      .arg(stamp.format("%Y-%m-%d %H:%M:%S").to_string())
+      .status()
+      .unwrap();
+    assert!(status.success(), "the timed backup for -{offset} runs");
+    times.push(Local.from_local_datetime(&stamp).unwrap());
   }
 
-  apply_retention_in_with_now(&home, now);
+  apply_retention(&repo.repository, &repo.password_file).unwrap();
 
-  let mut kept: Vec<String> =
-    fs::read_dir(&backups).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect();
-  kept.sort();
-  kept
+  assert_eq!(snapshot_dates(&repo.repository, &repo.password_file), policy_keeps(&times, now));
 }
 
-fn write_archive(dir: &Path, name: &str) {
-  fs::write(dir.join(name), b"archive").unwrap();
+/// Records the notices a `run_with_notice` test sends.
+type Notices = Arc<Mutex<Vec<String>>>;
+
+fn record_notice(notices: &Notices) -> impl Fn(String) -> std::future::Ready<()> + '_ {
+  |message: String| {
+    notices.lock().unwrap().push(message);
+    std::future::ready(())
+  }
 }
 
-/// Noon of a local calendar date, in the naive-local seconds the retention pass compares against.
-fn noon(year: i64, month: i64, day: i64) -> i64 {
-  naive_epoch(year as i32, month as u32, day as u32, 12, 0, 0)
+#[tokio::test]
+async fn a_missing_password_file_fails_the_preflight_and_notifies_once() {
+  let root = tempdir().unwrap();
+  let repository = root.path().join("repo");
+  let config = BackupConfig {
+    repository: Some(repository.to_string_lossy().into_owned()),
+    password_file: Some(root.path().join("no-such-key").to_string_lossy().into_owned()),
+    notify_user_id: Some("U0SYNTHETIC".to_string()),
+  };
+  let notices: Notices = Arc::new(Mutex::new(Vec::new()));
+  let notice = record_notice(&notices);
+
+  let result = run_with_notice(root.path().join("profile"), config, notice).await;
+
+  assert!(result.is_err());
+  let sent = notices.lock().unwrap();
+  assert_eq!(sent.len(), 1, "exactly one notice: {sent:?}");
+  assert!(sent[0].contains("preflight"), "{sent:?}");
+  assert!(sent[0].contains("password file is missing"), "{sent:?}");
+  drop(sent);
+  assert!(!repository.exists(), "a failed run writes no repository or archive anywhere");
 }
 
-fn naive_epoch(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> i64 {
-  NaiveDate::from_ymd_opt(year, month, day).unwrap().and_hms_opt(hour, minute, second).unwrap().and_utc().timestamp()
+#[tokio::test]
+async fn an_unreachable_repository_fails_the_backup_step_and_notifies_once() {
+  let root = tempdir().unwrap();
+  let repository = root.path().join("never-initialized");
+  let password_file = root.path().join("password");
+  fs::write(&password_file, "synthetic-password\n").unwrap();
+  let home = root.path().join("profile");
+  fs::create_dir(&home).unwrap();
+  let config = backup_config(repository.to_str().unwrap(), &password_file);
+  let notices: Notices = Arc::new(Mutex::new(Vec::new()));
+  let notice = record_notice(&notices);
+
+  let result = run_with_notice(home, config, notice).await;
+
+  assert!(result.is_err());
+  let sent = notices.lock().unwrap();
+  assert_eq!(sent.len(), 1, "exactly one notice: {sent:?}");
+  assert!(sent[0].contains("backup"), "{sent:?}");
+  drop(sent);
+  assert!(!repository.exists(), "a failed run writes no repository or archive anywhere");
 }
 
-#[test]
-fn retention_keeps_every_archive_younger_than_three_days() {
-  // Sunday 2026-10-18 at noon: the archives of 10-16 (age 2) and 10-18 (age 0) stay. The 10-15 archive (age 3, a
-  // Thursday) goes, and so does 10-14 (age 4).
-  let now = noon(2026, 10, 18);
-  let names = [
-    "charliebot-20261014-000000.tar.gz",
-    "charliebot-20261015-000000.tar.gz",
-    "charliebot-20261016-000000.tar.gz",
-    "charliebot-20261018-000000.tar.gz",
-  ];
-  let kept = ["charliebot-20261016-000000.tar.gz", "charliebot-20261018-000000.tar.gz"];
-  assert_eq!(surviving_after_retention(now, &names), kept);
-}
+#[tokio::test]
+async fn a_successful_run_notifies_never() {
+  let repo = new_repo();
+  let (_root, home) = temp_home();
+  write(&home, "config.yaml", b"server: {}\n");
+  let config = backup_config(&repo.repository, &repo.password_file);
+  let notices: Notices = Arc::new(Mutex::new(Vec::new()));
+  let notice = record_notice(&notices);
 
-#[test]
-fn retention_keeps_only_sundays_from_three_to_fifteen_days() {
-  // Sunday 2026-10-18 at noon. Ages: 1 (Sat 10-17, kept as younger than three days), 3 (Thu 10-15), 7 (Sun 10-11),
-  // 14 (Sun 10-04), 15 (Sat 10-03), 21 (Sun 09-27).
-  let now = noon(2026, 10, 18);
-  let names = [
-    "charliebot-20260927-000000.tar.gz",
-    "charliebot-20261003-000000.tar.gz",
-    "charliebot-20261004-000000.tar.gz",
-    "charliebot-20261011-000000.tar.gz",
-    "charliebot-20261015-000000.tar.gz",
-    "charliebot-20261017-000000.tar.gz",
-  ];
-  let kept =
-    ["charliebot-20261004-000000.tar.gz", "charliebot-20261011-000000.tar.gz", "charliebot-20261017-000000.tar.gz"];
-  assert_eq!(surviving_after_retention(now, &names), kept);
-}
+  let result = run_with_notice(home, config, notice).await;
 
-#[test]
-fn retention_deletes_first_of_month_archives_older_than_fifteen_days() {
-  // Sunday 2026-10-18 at noon. The 1st of September (age 47) and of August (age 78) go, since no monthly tier
-  // keeps them. The 10-16 archive (age 2) stays.
-  let now = noon(2026, 10, 18);
-  let names =
-    ["charliebot-20260801-000000.tar.gz", "charliebot-20260901-000000.tar.gz", "charliebot-20261016-000000.tar.gz"];
-  let kept = ["charliebot-20261016-000000.tar.gz"];
-  assert_eq!(surviving_after_retention(now, &names), kept);
-}
-
-#[test]
-fn retention_keeps_the_last_three_days_and_recent_sundays() {
-  // The scheduled run stamps each day's archive at 04:45 and applies retention at 04:50 on Wednesday 2026-11-04.
-  // Of forty daily archives, the three days before the run stay, and so do the Sundays 11-01 (age 3) and 10-25
-  // (age 10). The rest go.
-  let now = naive_epoch(2026, 11, 4, 4, 50, 0);
-  let names: Vec<String> = (0..40).map(scheduled_archive).collect();
-  let names: Vec<&str> = names.iter().map(String::as_str).collect();
-  let kept = [
-    "charliebot-20261025-044500.tar.gz",
-    "charliebot-20261101-044500.tar.gz",
-    "charliebot-20261102-044500.tar.gz",
-    "charliebot-20261103-044500.tar.gz",
-    "charliebot-20261104-044500.tar.gz",
-  ];
-  assert_eq!(surviving_after_retention(now, &names), kept);
-}
-
-/// The archive the scheduled run writes at 04:45 on the civil day `days_ago` before 2026-11-04.
-fn scheduled_archive(days_ago: i64) -> String {
-  let date = NaiveDate::from_ymd_opt(2026, 11, 4).unwrap() - ChronoDuration::days(days_ago);
-  format!("charliebot-{}-044500.tar.gz", date.format("%Y%m%d"))
-}
-
-#[test]
-fn retention_skips_unparseable_names() {
-  // Kept, with no delete attempt: a year 0 that `datetime` rejects, a date `strptime` rejects, and a
-  // name with no timestamp.
-  let now = noon(2026, 10, 18);
-  let names = [
-    "charliebot-00000101-000000.tar.gz",
-    "charliebot-20260230-120000.tar.gz",
-    "charliebot-not-a-date.tar.gz",
-    "other-file.tar.gz",
-  ];
-  assert_eq!(surviving_after_retention(now, &names), names);
-}
-
-#[test]
-fn retention_without_a_backup_directory_is_a_no_op() {
-  let home = tempdir().unwrap();
-  apply_retention_in_with_now(home.path(), noon(2026, 10, 18));
+  let summary = result.unwrap();
+  assert!(summary.starts_with("snapshot "), "{summary}");
+  assert!(notices.lock().unwrap().is_empty(), "a successful run sends no notice");
 }

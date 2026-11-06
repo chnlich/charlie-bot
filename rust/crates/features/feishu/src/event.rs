@@ -66,7 +66,7 @@ pub enum Drop {
   NoOwnerInChat,
 }
 
-/// Classify one event against the bot's open_id (`classify`). A malformed event fails.
+/// The classification of one event against the bot's open_id (`classify`). A malformed event fails.
 pub fn classify(event: &Value, bot_open_id: &str) -> anyhow::Result<Inbound> {
   if text_at(event, &["header", "event_type"])? != RECEIVE_EVENT {
     return Ok(Inbound::Drop(Drop::OtherEvent));

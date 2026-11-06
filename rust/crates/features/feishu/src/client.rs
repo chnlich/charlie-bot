@@ -193,8 +193,8 @@ impl FeishuClient {
     Ok(open_id.to_string())
   }
 
-  /// Reply to `root_id` inside its thread (`POST .../messages/:id/reply` with `reply_in_thread`). Feishu keeps `uuid`
-  /// for an hour, so a retried post with the same uuid does not repeat the message.
+  /// The reply to `root_id` inside its thread (`POST .../messages/:id/reply` with `reply_in_thread`). Feishu keeps
+  /// `uuid` for an hour, so a retried post with the same uuid does not repeat the message.
   pub async fn reply_in_thread(&self, root_id: &str, text: &str, uuid: &str) -> anyhow::Result<Value> {
     let body = json!({
       "msg_type": "text",
@@ -265,7 +265,8 @@ impl FeishuClient {
     items.first().cloned().context("the message answer holds no message")
   }
 
-  /// Add an emoji reaction to a message (`POST .../messages/:id/reactions`). The answer carries the `reaction_id`.
+  /// The addition of an emoji reaction to a message (`POST .../messages/:id/reactions`). The answer carries the
+  /// `reaction_id`.
   pub async fn add_reaction(&self, message_id: &str, emoji_type: &str) -> anyhow::Result<Value> {
     let body = json!({"reaction_type": {"emoji_type": emoji_type}});
     self.call(Method::POST, &format!("{MESSAGES_PATH}/{}/reactions", path_segment(message_id)?), &[], Some(body)).await
@@ -282,7 +283,7 @@ impl FeishuClient {
     page_of(&data)
   }
 
-  /// Delete one reaction of a message (`DELETE .../messages/:id/reactions/:reaction_id`).
+  /// The deletion of one reaction of a message (`DELETE .../messages/:id/reactions/:reaction_id`).
   pub async fn delete_reaction(&self, message_id: &str, reaction_id: &str) -> anyhow::Result<()> {
     let path = format!("{MESSAGES_PATH}/{}/reactions/{}", path_segment(message_id)?, path_segment(reaction_id)?);
     self.call(Method::DELETE, &path, &[], None).await?;

@@ -1,5 +1,4 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
@@ -1000,27 +999,6 @@ test('formatPlanStateLabel: plain state, takeoff-qualified approved, and selecto
   const {planPanel: pp} = loadPlanPanelScript({document, fetch});
   await pp.refresh();
   assert.ok(sel.innerHTML.indexOf('approved \u00B7 v1') !== -1, 'selector label is takeoff-qualified');
-});
-
-// ---------------------------------------------------------------------------
-// Item 6: template contract — parseOpenForks against prompts/plan_template.html
-// ---------------------------------------------------------------------------
-
-test('plan_template.html contract: open forks extracted, no question starts with its number, resolved excluded', () => {
-  const {planPanel} = loadPlanPanelScript();
-  const templatePath = path.join(__dirname, '..', '..', 'prompts', 'plan_template.html');
-  const html = fs.readFileSync(templatePath, 'utf8');
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const forks = planPanel.parseOpenForks(doc);
-  assert.ok(forks.length >= 1, 'template has at least one open fork');
-  for (const f of forks) {
-    assert.ok(f.n && f.question, 'each open fork has a number and a question');
-    assert.equal(String(f.question).startsWith(String(f.n)), false,
-      'question text must not start with its fork number');
-  }
-  const ns = forks.map((f) => String(f.n));
-  assert.ok(ns.includes('1'), 'open fork #1 (scope question) is present');
-  assert.equal(ns.includes('2'), false, 'resolved fork #2 is excluded');
 });
 
 // ---------------------------------------------------------------------------

@@ -168,6 +168,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* The chat page's field placeholders read in the slate-400 tone. Their placeholder-slate-500 class draws
    3.07:1 on the slate-800 field, under the 4.5:1 floor for text this size; slate-400 renders 5.71:1. */
 #auth-key-input::placeholder, #sidebar-search::placeholder, #msg-input::placeholder { color: #94a3b8; }
+/* The Set Group dialog's field sits on a slate-700 fill. slate-500 renders 2.18:1 there and slate-400
+   4.04:1, both under the 4.5:1 floor for the 14 px hint; slate-300 renders 6.97:1. */
+#new-group-input::placeholder { color: #cbd5e1; }
 /* A file link the server found nothing at. Sits next to the link it belongs to, and reads as a
    warning without hiding the link, which stays clickable. */
 .file-link-missing {

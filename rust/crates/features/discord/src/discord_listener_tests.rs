@@ -288,7 +288,7 @@ async fn test_heartbeat_carries_the_last_seq() {
   assert_eq!(heartbeat, &json!({"op": 1, "d": 7}));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_acked_heartbeats_keep_beating_one_interval_apart() {
   let home = Home::new(true).await;
   let mut script = GatewayScript::new(vec![ready(2)]);

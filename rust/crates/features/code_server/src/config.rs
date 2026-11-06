@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use charliebot_core::config::{ConfigSection, SectionValue};
 use charliebot_core::paths;
+use charliebot_core::repo_root::CONFIGS_DIR_NAME;
 use charliebot_core::text_repr;
 use nix::errno::Errno;
 use serde::{Deserialize, Serialize};
@@ -28,7 +29,7 @@ pub struct CodeServerConfig {
 }
 
 fn default_config() -> String {
-  "configs/code-server.yaml".to_string()
+  format!("{CONFIGS_DIR_NAME}/code-server.yaml")
 }
 
 pub(crate) fn section() -> ConfigSection {

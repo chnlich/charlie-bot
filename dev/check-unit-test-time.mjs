@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // The 0.1 s unit-test check, one entry for CI and local runs. It reads a nextest JUnit report,
-// reruns each test over the limit alone (exact filterset, one test thread), and judges by the
-// isolated time. Parallel-run queuing makes a fast test look slow; the alone rerun has no queue.
-// A rerun that matches no test fails the check and names the test.
+// reruns every test over the limit in one isolated nextest run (exact filterset, one test thread,
+// profile check), and judges by the isolated times in that run's own JUnit report. Parallel-run
+// queuing makes a fast test look slow; the alone rerun has no queue. A suspect missing from the
+// rerun's report means the filter matched nothing, which fails the check and names the test.
 //
 //   dev/check-unit-test-time.mjs --junit <path> [--workspace-dir <dir>] [--fail-over-limit 0|1]
 //
@@ -12,11 +13,12 @@
 //
 // Lines go to stdout, and to $GITHUB_STEP_SUMMARY when the environment sets it.
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import process from 'node:process';
 
 const LIMIT_S = 0.1;
-const RERUN_TIMEOUT_MS = 120_000;
+const RERUN_TIMEOUT_MS = 55 * 60_000;
 
 main();
 
@@ -24,34 +26,45 @@ main();
 
 function main() {
   const options = parseArgs(process.argv.slice(2));
-  const testcases = readTestcases(options.junit);
-  const suspects = testcases.filter((test) => !test.skipped && test.time > LIMIT_S);
+  let testcases;
+  try {
+    testcases = readTestcases(options.junit);
+  } catch (error) {
+    console.error(`check-unit-test-time: cannot read JUnit report ${options.junit}: ${error.message}`);
+    process.exit(2);
+  }
+  // A test that already failed in the parallel run is judged by the run itself, not by this check.
+  const suspects = testcases.filter((test) => !test.skipped && !test.failed && test.time > LIMIT_S);
   suspects.sort((a, b) => b.time - a.time);
 
   const lines = [];
   let confirmed = 0;
   let checkFailed = false;
-  for (const suspect of suspects) {
-    const rerun = isolateWithRust(suspect, options);
-    if (rerun === null) {
-      checkFailed = true;
-      lines.push(`unit test rerun matched nothing: ${suspect.binaryId} ${suspect.name}`);
-      continue;
-    }
+  if (suspects.length > 0) {
+    const rerun = isolateWithRust(suspects, options);
     if (rerun.error !== undefined) {
       checkFailed = true;
-      lines.push(`unit test rerun failed: ${suspect.binaryId} ${suspect.name} (${rerun.error})`);
-      continue;
+      lines.push(`unit test rerun failed: ${rerun.error}`);
     }
-    const suffix = rerun.status === 'PASS' ? '' : `, isolated run ${rerun.status}`;
-    if (rerun.time > LIMIT_S) {
-      confirmed += 1;
-      lines.push(`unit test over ${LIMIT_S} s: ${suspect.binaryId} ${suspect.name} ${formatTime(rerun.time)} s (alone${suffix})`);
-    } else {
-      lines.push(
-        `unit test within ${LIMIT_S} s alone: ${suspect.binaryId} ${suspect.name}` +
-          ` ${formatTime(suspect.time)} s parallel, ${formatTime(rerun.time)} s alone${suffix}`
-      );
+    for (const suspect of suspects) {
+      const row = rerun.byId.get(`${suspect.binaryId} ${suspect.name}`);
+      if (row === undefined) {
+        checkFailed = true;
+        lines.push(`unit test rerun matched nothing: ${suspect.binaryId} ${suspect.name}`);
+        continue;
+      }
+      const suffix = row.failed ? ', isolated run FAILED' : '';
+      if (row.failed || row.time > LIMIT_S) {
+        confirmed += 1;
+        lines.push(
+          `unit test over ${LIMIT_S} s: ${suspect.binaryId} ${suspect.name} ${formatTime(row.time)} s (alone${suffix})`
+        );
+      } else {
+        lines.push(
+          `unit test within ${LIMIT_S} s alone: ${suspect.binaryId} ${suspect.name}` +
+            ` ${formatTime(suspect.time)} s parallel, ${formatTime(row.time)} s alone${suffix}`
+        );
+      }
     }
   }
   if (suspects.length === 0) {
@@ -111,14 +124,8 @@ function formatTime(seconds) {
 
 // ---------- JUnit report parsing ----------
 
-function readTestcases(path) {
-  let xml;
-  try {
-    xml = readFileSync(path, 'utf8');
-  } catch (error) {
-    console.error(`check-unit-test-time: cannot read JUnit report ${path}: ${error.message}`);
-    process.exit(2);
-  }
+function readTestcases(file) {
+  const xml = readFileSync(file, 'utf8');
   const testcases = [];
   const re = /<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase\s*>)/g;
   let match;
@@ -127,11 +134,13 @@ function readTestcases(path) {
     for (const pair of match[1].matchAll(/([\w:.-]+)="([^"]*)"/g)) {
       attrs[pair[1]] = unescapeXml(pair[2]);
     }
+    const body = match[3] ?? '';
     testcases.push({
       binaryId: attrs.classname ?? '',
       name: attrs.name ?? '',
       time: Number.parseFloat(attrs.time ?? 'NaN'),
-      skipped: /<skipped[\s/>]/.test(match[3] ?? ''),
+      skipped: /<skipped[\s/>]/.test(body),
+      failed: /<(?:failure|error)[\s>]/.test(body),
     });
   }
   return testcases;
@@ -153,30 +162,45 @@ function unescapeXml(text) {
   });
 }
 
-// ---------- the rust runner: one test, alone, through nextest ----------
+// ---------- the rust runner: one isolated run for every suspect ----------
 
-function isolateWithRust(suspect, options) {
-  const filter = `test(=${filterLiteral(suspect.name)}) and binary_id(=${filterLiteral(suspect.binaryId)})`;
+// One `cargo nextest run` under profile check: the filterset names the suspects exactly, and the
+// profile's one test thread runs them one at a time, each in its own process. The profile's own
+// JUnit report (target/nextest/check/junit.xml) carries every rerun's time; a suspect absent from
+// it matched nothing.
+function isolateWithRust(suspects, options) {
+  const filter = suspects
+    .map((suspect) => `(test(=${filterLiteral(suspect.name)}) and binary_id(=${filterLiteral(suspect.binaryId)}))`)
+    .join(' or ');
+  const junit = path.join(options.workspaceDir, 'target/nextest/check/junit.xml');
   const run = spawnSync(
     'cargo',
-    ['nextest', 'run', '--locked', '--color', 'never', '--test-threads=1', '-E', filter],
+    ['nextest', 'run', '--locked', '--color', 'never', '--profile', 'check', '-E', filter],
     { cwd: options.workspaceDir, encoding: 'utf8', timeout: RERUN_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 }
   );
-  const wanted = `${suspect.binaryId} ${suspect.name}`;
-  for (const line of `${run.stdout ?? ''}\n${run.stderr ?? ''}`.split('\n')) {
-    const match = line.match(/^\s*(PASS|FAIL)\s+\[\s*([0-9.]+)s\]\s+(.*?)\s*$/);
-    if (match && match[3] === wanted) {
-      return { status: match[1], time: Number.parseFloat(match[2]) };
+  const byId = new Map();
+  let error;
+  // A missing rerun report means nextest never wrote one (spawn failure or a filter that matched
+  // no target); every suspect then reports "matched nothing" and `error` surfaces the cause.
+  try {
+    if (existsSync(junit)) {
+      for (const testcase of readTestcases(junit)) {
+        byId.set(`${testcase.binaryId} ${testcase.name}`, { time: testcase.time, failed: testcase.failed });
+      }
     }
+  } catch (readError) {
+    error = `cannot read rerun JUnit report ${junit}: ${readError.message}`;
   }
   if (run.error || run.signal) {
-    return { error: run.error ? run.error.message : `killed by ${run.signal}` };
+    error = run.error ? run.error.message : `killed by ${run.signal}`;
+  } else if (error === undefined && run.status !== 0 && byId.size === 0) {
+    error = `cargo nextest run exited ${run.status}: ${(run.stderr ?? '').trim().split('\n').pop()}`;
   }
-  return null;
+  return { byId, error };
 }
 
-// A filterset equality matcher escapes `\`, `)`, `,`, `/`, and the control characters.
+// A filterset `=` matcher escapes `\`, `,`, `)`, and the control characters.
 function filterLiteral(value) {
   const escapes = { '\n': 'n', '\r': 'r', '\t': 't' };
-  return value.replace(/[\\),\n\r\t/]/g, (char) => `\\${escapes[char] ?? char}`);
+  return value.replace(/[\\),\n\r\t]/g, (char) => `\\${escapes[char] ?? char}`);
 }

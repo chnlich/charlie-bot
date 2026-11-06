@@ -106,7 +106,8 @@ jobs:
 
   rust-test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # The serial rerun of today's over-limit tests adds tens of minutes; classification shrinks it.
+    timeout-minutes: 90
     permissions:
       contents: read
     steps:
@@ -159,6 +160,7 @@ jobs:
       # Doc-tests carry no per-test time, so a doc-test that runs dodges the 0.1 s rule: the step fails
       # when `cargo test --doc` runs any, and names each. Today zero doc-tests run.
       - name: No doc-tests run
+        if: always()
         working-directory: rust
         run: |
           set +e

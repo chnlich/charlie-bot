@@ -61,11 +61,11 @@ globalThis.makePtySenders = function(sendJson) {
 
 // The fit glue both surfaces share: fit the surface's terminal, then push the
 // fitted grid over its socket. The surfaces keep their own terminal refs, so
-// the bridge reads them through the getters instead of holding copies;
-// mayFit carries the surface's extra guard — the panel only fits while its
-// tab is open. onFitted runs after each fit the guard admitted, so a surface
-// can act on the measured grid — the panel opens its socket only once the
-// grid is known, so the pty starts at the size the user sees.
+// the bridge reads them through the getters instead of holding copies.
+// mayFit carries the surface's extra guard: the panel only fits while its tab
+// is open. onFitted runs after each fit the guard admitted, so a surface can
+// act on the measured grid. The panel opens its socket only once the grid is
+// known, so the pty starts at the size the user sees.
 globalThis.makeTerminalFitBridge = function(sendResize, getTerm, getFitAddon, mayFit, onFitted) {
   function fitAndSendResize() {
     if (mayFit && !mayFit()) return;

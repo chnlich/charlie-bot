@@ -47,6 +47,7 @@ function recordRenderedSessionStatus(session) {
   renderedSessionStatuses[session.id] = (session && session.status) || 'active';
   // The row's own activity as painted; the indicator aggregation reads it.
   ownIndicatorState[session.id] = getSessionIndicatorState(session);
+  stampFactSeq('indicator', session.id);
   if (session && session.profile === 'worker') renderedWorkerRows.add(session.id);
   else renderedWorkerRows.delete(session.id);
   recordPausedWorkerFact(session.id,
@@ -169,31 +170,38 @@ function getSessionIndicatorState(status) {
 }
 
 // ---------------------------------------------------------------------------
-// Unread facts — one application seam with response-ordering protection
+// Applied facts and reply currency — one gate over the fact domains
 // ---------------------------------------------------------------------------
-// sessionUnread holds the client's unread truth per session. Server facts land
-// through three channels: unread_changed broadcasts, the scoped status poll,
-// and the task tree's row fetches. A reply can carry a snapshot older than a
-// fact this client already applied. Examples are a poll issued before the
-// flip and a tree page read from a pre-flip projection. Every applied fact is
-// stamped with a per-session sequence. A reply captured before the newest
-// stamp is refused, so a stale reply can neither erase a newer unread nor
-// resurrect a cleared one. Broadcasts are ordered by the socket and always
-// apply.
-let unreadFactSeq = 0;
-const unreadFactSeqBySession = {};
+// sessionUnread and ownIndicatorState hold the client's applied facts per
+// session. The facts land through four channels: the unread_changed and
+// running_changed broadcasts, the list paints (the task tree's row fetches
+// included), and the scoped status poll. A reply can carry a snapshot older
+// than a fact this client already applied — a poll issued before the flip, a
+// reply the link delayed past a newer frame. Every applied fact is stamped
+// with a per-session sequence in its domain, the unread mark or the activity
+// indicator. A reply captured before the domain's newest stamp is refused in
+// that domain, so a late reply can neither erase a newer unread fact nor
+// revert a newer indicator state, a running_changed frame included.
+// Broadcasts and paints are ordered by their channels and always apply;
+// applying one stamps it, so any reply captured earlier is refused.
+let factSeq = 0;
+const factSeqByDomain = {unread: {}, indicator: {}};
+
+function stampFactSeq(domain, sessionId) {
+  factSeqByDomain[domain][sessionId] = ++factSeq;
+}
+
+function replyIsCurrent(domain, sessionId, requestSeq) {
+  return requestSeq >= (factSeqByDomain[domain][sessionId] || 0);
+}
 
 function recordUnreadFact(sessionId, hasUnread) {
   sessionUnread[sessionId] = !!hasUnread;
-  unreadFactSeqBySession[sessionId] = ++unreadFactSeq;
+  stampFactSeq('unread', sessionId);
 }
 
-function unreadSeqAtRequest() {
-  return unreadFactSeq;
-}
-
-function unreadReplyIsCurrent(sessionId, requestSeq) {
-  return requestSeq >= (unreadFactSeqBySession[sessionId] || 0);
+function factSeqAtRequest() {
+  return factSeq;
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +222,17 @@ const GEAR_CENTER_PATH =
   '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>';
 const SPINNER_TITLE = 'Task is running';
 const GEAR_TITLE = 'Delegated work running or waiting in subtasks';
+// The spin phase every spinner shares: the wall clock's milliseconds within
+// one turn of the animation. The paint bakes the current phase into the
+// element as a negative animation-delay, so a spinner a repaint recreates
+// starts where the spinner it replaces was — a running row's rotation keeps
+// its phase through every list update instead of jumping back to 0°.
+const SPINNER_PERIOD_MS = 1000;
+
+function spinnerPhaseDelay() {
+  const phaseMs = Date.now() % SPINNER_PERIOD_MS;
+  return ` style="animation-delay:-${(phaseMs / SPINNER_PERIOD_MS).toFixed(3)}s"`;
+}
 // The waiting clock completes the visual language: one activity icon per row,
 // chosen by the priority table in paintSessionIndicator. The activity family
 // sits beside the unread marks, which ride independently. The order is own
@@ -246,7 +265,7 @@ const SUBTREE_UNREAD_TITLE = 'Unread reply in subtasks';
 function renderSessionIndicators(session) {
   const ownState = getSessionIndicatorState(session);
   const indicatorState = displayIndicatorState(session.id, ownState);
-  return `<svg id="spinner-${session.id}" title="${escapeHtmlAttr(SPINNER_TITLE)}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24">${SPINNER_SVG_INNER}</svg>
+  return `<svg id="spinner-${session.id}" title="${escapeHtmlAttr(SPINNER_TITLE)}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}"${spinnerPhaseDelay()} fill="none" viewBox="0 0 24 24">${SPINNER_SVG_INNER}</svg>
     <svg id="worker-indicator-${session.id}" title="${escapeHtmlAttr(GEAR_TITLE)}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">${gearSvgContent()}</svg>
     <svg id="waiting-indicator-${session.id}" title="${escapeHtmlAttr(CLOCK_TITLE)}" class="w-3.5 h-3.5 text-slate-500 flex-shrink-0 ${indicatorState === 'waiting' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">${CLOCK_SVG_PATH}</svg>
     <span id="unread-${session.id}" data-has-unread="${session.has_unread ? 1 : 0}" title="${escapeHtmlAttr(UNREAD_TITLE)}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${session.has_unread ? '' : 'hidden'}"></span>
@@ -395,6 +414,7 @@ function refreshSessionIndicator(sid) {
 
 function setSessionIndicator(sid, state) {
   ownIndicatorState[sid] = state;
+  stampFactSeq('indicator', sid);
   refreshSessionIndicator(sid);
 }
 
@@ -445,14 +465,17 @@ let statusPollPromise = Promise.resolve(false);
 let statusPollQueued = false;
 
 function applySessionStatus(sid, status, requestSeq) {
-  // A reply captured before a newer applied fact may not overwrite it: the
-  // poll's snapshot can predate an unread_changed broadcast already rendered.
-  if (unreadReplyIsCurrent(sid, requestSeq)) recordUnreadFact(sid, status.has_unread);
+  // Each domain refuses a reply captured before its newest applied fact: the
+  // poll's snapshot can predate an unread_changed broadcast or a
+  // running_changed frame the page already rendered.
+  if (replyIsCurrent('unread', sid, requestSeq)) recordUnreadFact(sid, status.has_unread);
   // The paused-worker fact lands before the repaint below reads it; the poll
   // reply carries no profile, so the worker identity comes from the list
   // paint's renderedWorkerRows.
   recordPausedWorkerFact(sid, renderedWorkerRows.has(sid), !!(status && status.has_pending_trigger));
-  globalThis.setSessionIndicator(sid, getSessionIndicatorState(status));
+  if (replyIsCurrent('indicator', sid, requestSeq)) {
+    globalThis.setSessionIndicator(sid, getSessionIndicatorState(status));
+  }
   globalThis.setSessionPendingTriggerIndicator(sid, status);
   globalThis.setSessionPendingTriggerTrayStatus(sid, status);
   globalThis.setSessionPendingPlanApprovalIndicator(sid, status);
@@ -523,7 +546,7 @@ function resetSessionStatusPoll() {
 function pollSessionStatus() {
   if (statusPollInflight) return statusPollPromise;
   statusPollInflight = true;
-  const requestSeq = unreadSeqAtRequest();
+  const requestSeq = factSeqAtRequest();
   const ids = sidebarSessionIds();
   // A poll scoped by filter answers a delta; a row the page has never held would not be in it, so a new id asks for
   // the whole set once. The views that name their rows by id answer them in full anyway.
@@ -558,8 +581,8 @@ const API = {
   getSessionIndicatorState,
   renderSessionIndicators,
   recordUnreadFact,
-  unreadSeqAtRequest,
-  unreadReplyIsCurrent,
+  factSeqAtRequest,
+  replyIsCurrent,
   renderPendingTriggerIndicator,
   renderPendingPlanApprovalIndicator,
   updateSidebarHighlight,

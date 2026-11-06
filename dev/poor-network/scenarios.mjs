@@ -353,6 +353,9 @@ function churnRoles(sessions, churnId) {
 // Scenario 1: bytes per minute at the proxy, each direction, over one task-tree window, with the received bytes split
 // by endpoint and the visible tab's status polls.
 async function measureWindow(proxy, tab, hidden, roles) {
+  // The sidebar spinner counters run over the same window as the byte counts: the visible tab's full sidebar
+  // repaints and spinner restarts while the turn runs.
+  await tab.installSidebarProbe();
   const beforeWindow = proxy.counters();
   const windowStart = Date.now();
   await sleep(TASK_TREE_LOAD.windowMs);
@@ -364,10 +367,17 @@ async function measureWindow(proxy, tab, hidden, roles) {
   const byEndpoint = receivedByEndpoint([tab, ...hidden], windowStart, windowEnd, minutes);
   byEndpoint.other = received - Object.values(byEndpoint).reduce((total, kb) => total + kb, 0);
   await tab.bodiesRead();
+  const probe = await tab.sidebarProbeCounts();
   return {
     receivedKbPerMin: received,
     receivedByEndpoint: byEndpoint,
     statusPoll: statusPollCounts(tab, windowStart, windowEnd, minutes, roles),
+    sidebarSpin: probe && {
+      repaints: probe.repaints,
+      restarts: probe.restarts,
+      repaintsPerMin: probe.repaints / minutes,
+      restartsPerMin: probe.restarts / minutes,
+    },
     sentKbPerMin: sent,
   };
 }

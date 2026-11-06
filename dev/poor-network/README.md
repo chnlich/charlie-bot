@@ -93,6 +93,11 @@ at 3 s, answers a changed body at the live device's share; consecutive trigger f
 polls, so about half the flips are caught — 33 a window measured a 0.56 share, 44 a 0.63, and 51 the live one. The
 report prints the measured share beside the readback's.
 
+The window also reports two counters of the visible tab's sidebar: the full sidebar repaints (the paints that replace
+the session list's rows wholesale) and the spinner restarts (a visible running spinner's rotation jumping against its
+steady turn), both per minute. They are findings, not targets: the summary prints them, and a fix that keeps a running
+row's spinner through an update reads as restarts near zero.
+
 ## Other sidebar views
 
 `starred` and `threads` measure scenario 1's background with the visible tab on the starred view or the Threads view.

@@ -256,6 +256,14 @@ export function formatSide(side) {
         `${total} requests per switch (${parts.join(', ')})`,
     );
   }
+  const spinReps = backgroundReps.filter((rep) => rep.sidebarSpin);
+  if (spinReps.length > 0) {
+    const median = (name) => percentile(spinReps.map((rep) => rep.sidebarSpin[name]), 0.5);
+    lines.push(
+      `sidebar spinner, visible tab (median): ${median('restartsPerMin').toFixed(1)} spinner restarts/min, ` +
+        `${median('repaintsPerMin').toFixed(1)} full sidebar repaints/min`,
+    );
+  }
   const background = side.metrics['background.received'];
   if (background) {
     const gap = background.median - LIVE_READBACK.receivedKbPerMin;

@@ -415,6 +415,93 @@ test('a manager row’s not-running running_changed repaints at once', async () 
   await context.Sidebar.pollSessionStatus();  // drains the poll the handler started
 });
 
+// ---------------------------------------------------------------------------
+// Reply currency. A status reply captured before a newer applied fact — a
+// running_changed frame, a list paint — may not overwrite that fact: the
+// indicator domain refuses the reply, so a late poll reply over a stalled
+// link cannot hide a spinner the page already painted.
+// ---------------------------------------------------------------------------
+
+test('a status reply that a newer running_changed frame precedes leaves the indicator unchanged', async () => {
+  const {context, shown, FakeWebSocket} = buildRunningChangedContext(['g']);
+  context.renderSessionList([row('g', null)], 'all');
+  context.document.querySelectorAll = (selector) => (
+    selector === 'a[id^="session-"]' ? [{id: 'session-g'}] : []
+  );
+  // A poll whose reply the link holds back until after the frame below.
+  const pending = [];
+  context.fetch = (url) => new Promise((resolve) => pending.push(resolve));
+  const socket = openSidebarSocket(context, FakeWebSocket);
+
+  const poll = context.Sidebar.pollSessionStatus();
+  socket.emitMessage({type: 'running_changed', session_id: 'g',
+    thinking_since: '2026-04-02T10:00:00Z', has_running_tasks: true});
+  assert.deepEqual(shown('g'), {...IDLE_ICONS, spinner: true}, 'the frame paints the spinner');
+
+  pending.shift()({ok: true, json: async () => (
+    {g: {has_running_tasks: false, thinking_since: null, has_unread: false}})});
+  await poll;
+  assert.deepEqual(shown('g'), {...IDLE_ICONS, spinner: true},
+      'the reply older than the frame leaves the spinner up');
+});
+
+test('a status reply that a row merge precedes leaves the merged indicator unchanged', async () => {
+  const {context, shown} = buildSidebarIndicatorContext(['r']);
+  context.renderSessionList([row('r', null, {thinking_since: at(10)})], 'all');
+  context.refreshSessionIndicator('r');
+  assert.deepEqual(shown('r'), {...IDLE_ICONS, spinner: true});
+  const pending = [];
+  context.fetch = (url) => new Promise((resolve) => pending.push(resolve));
+
+  const poll = context.Sidebar.pollSessionStatus();
+  // The row merge paints a newer list while the poll is on the link.
+  context.mergeRowsIntoRenderedList([row('r', null, {thinking_since: at(10), updated_at: at(11)})], []);
+  context.refreshSessionIndicator('r');
+  assert.deepEqual(shown('r'), {...IDLE_ICONS, spinner: true});
+
+  pending.shift()({ok: true, json: async () => (
+    {r: {has_running_tasks: false, thinking_since: null, has_unread: false}})});
+  await poll;
+  assert.deepEqual(shown('r'), {...IDLE_ICONS, spinner: true},
+      'the reply older than the merge leaves the spinner up');
+});
+
+// ---------------------------------------------------------------------------
+// The spin phase. Every paint bakes the wall clock's phase into the spinner's
+// negative animation-delay, so a spinner a repaint recreates continues the
+// rotation it replaces instead of restarting at 0°.
+// ---------------------------------------------------------------------------
+
+function dateFixedAt(nowMs) {
+  class FixedDate extends Date {}
+  FixedDate.now = () => nowMs;
+  return FixedDate;
+}
+
+test('a repaint keeps a running row’s spinner phase', () => {
+  const {context, nav, shown} = buildSidebarIndicatorContext(['r']);
+  let now = 0;
+  context.Date = dateFixedAt(now);
+  context.renderSessionList([row('r', null, {thinking_since: at(10)})], 'all');
+  context.refreshSessionIndicator('r');
+  assert.deepEqual(shown('r'), {...IDLE_ICONS, spinner: true});
+  const phaseOf = () => (nav.innerHTML.match(/id="spinner-r"[^>]*animation-delay:-([0-9.]+)s/) || [])[1] ?? null;
+
+  now = 530;
+  context.Date = dateFixedAt(now);
+  // The merge repaints the row; its running state did not change.
+  context.mergeRowsIntoRenderedList([row('r', null, {thinking_since: at(10), updated_at: at(11)})], []);
+  context.refreshSessionIndicator('r');
+  assert.deepEqual(shown('r'), {...IDLE_ICONS, spinner: true}, 'the merge keeps the spinner');
+  assert.equal(phaseOf(), '0.530', 'the recreated spinner continues the spin phase');
+
+  now = 710;
+  context.Date = dateFixedAt(now);
+  context.renderSessionList([row('r', null, {thinking_since: at(10)})], 'all');
+  context.refreshSessionIndicator('r');
+  assert.equal(phaseOf(), '0.710', 'a full list paint continues the phase too');
+});
+
 test('a childless legacy row keeps main’s behavior: its own state and unread flag only', () => {
   const {context, nav, shown} = buildSidebarIndicatorContext(['solo']);
   // profile null: a legacy session. Its own running state (running worker

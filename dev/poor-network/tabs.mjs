@@ -9,6 +9,62 @@ const POLL_MS = 25;
 // The localStorage key the web client reads its access key from (web/static/js/config.js).
 const ACCESS_KEY_NAME = 'charliebot_access_key';
 
+// The sidebar spinner probe the page runs while the bench measures a turn: it
+// counts the full sidebar repaints — the paints that replace the session
+// list's rows wholesale — and the spinner restarts, a visible running
+// spinner's rotation jumping against its steady turn, which is the stutter a
+// repaint gives every recreated spinner. The restart check samples every
+// running spinner's rotation angle on each frame and flags a move that leaves
+// the angle the steady turn predicts by more than 45 degrees (a frame's
+// sampling lag stays under 10 degrees). The counts ride in
+// window.__pnSidebarProbe for sidebarProbeCounts().
+const SIDEBAR_PROBE_SOURCE = `(() => {
+  if (window.__pnSidebarProbe) return;
+  const probe = { repaints: 0, restarts: 0 };
+  window.__pnSidebarProbe = probe;
+  const hasRow = (nodes) => [...nodes].some((node) =>
+    node.nodeType === 1 && (node.matches('a.session-row') || node.querySelector('a.session-row')));
+  const list = document.getElementById('session-list');
+  if (list) {
+    new MutationObserver((records) => {
+      for (const record of records) {
+        if (hasRow(record.removedNodes) && hasRow(record.addedNodes)) probe.repaints += 1;
+      }
+    }).observe(list, { childList: true, subtree: true });
+  }
+  const phase = new Map();
+  const angleOf = (el) => {
+    const matrix = getComputedStyle(el).transform.match(/matrix\\(([^)]+)\\)/);
+    if (!matrix) return null;
+    const parts = matrix[1].split(',').map(Number);
+    const angle = (Math.atan2(parts[1], parts[0]) * 180) / Math.PI;
+    return angle < 0 ? angle + 360 : angle;
+  };
+  const sample = () => {
+    if (!window.__pnSidebarProbe) return;
+    const now = Date.now();
+    const seen = new Set();
+    document.querySelectorAll('svg[id^="spinner-"]').forEach((el) => {
+      if (el.classList.contains('hidden')) return;
+      seen.add(el.id);
+      const angle = angleOf(el);
+      if (angle === null) return;
+      const prev = phase.get(el.id);
+      if (prev) {
+        const expected = (prev.angle + (now - prev.at) * 0.36) % 360;
+        const drift = Math.abs(((angle - expected) % 360 + 540) % 360 - 180);
+        if (drift > 45) probe.restarts += 1;
+      }
+      phase.set(el.id, { at: now, angle });
+    });
+    for (const id of [...phase.keys()]) {
+      if (!seen.has(id)) phase.delete(id);
+    }
+    requestAnimationFrame(sample);
+  };
+  requestAnimationFrame(sample);
+})()`;
+
 export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -93,6 +149,18 @@ export class Tab {
       240000,
       `${this.name} to load the chat`,
     );
+  }
+
+  // Installs the sidebar spinner probe (SIDEBAR_PROBE_SOURCE above) on this tab. Call on the visible tab before the
+  // window whose counts the scenario reports.
+  async installSidebarProbe() {
+    await this.evaluate(SIDEBAR_PROBE_SOURCE);
+  }
+
+  // The probe's counts since its install: {repaints, restarts}, or null when the probe is not installed.
+  async sidebarProbeCounts() {
+    return this.evaluate(
+      'window.__pnSidebarProbe ? {repaints: window.__pnSidebarProbe.repaints, restarts: window.__pnSidebarProbe.restarts} : null');
   }
 
   // The session row's anchor. Clicking it runs the page's own switch, as a person's click does.

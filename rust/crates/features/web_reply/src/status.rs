@@ -1245,7 +1245,7 @@ mod tests {
 
   #[tokio::test]
   async fn a_child_status_set_notifies_its_parent_and_grandparent_pages() {
-    let home = Home::new();
+    let home = Home::status_only();
     let root = home.manager("root", None).await;
     let child = home.child(&root, "child").await;
     let grandchild = home.child(&child, "grandchild").await;

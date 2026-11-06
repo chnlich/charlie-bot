@@ -1246,8 +1246,25 @@ mod tests {
     }
   }
 
+  /// Posts through the route, which builds a store for each marker. CI run 42251721683 measured this test at 0.443 s
+  /// alone, over the unit limit, so the check runs in the Integration workflow.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_nonword_alphanumeric_stops_a_path_run() {
+    for marker in ["ⓐ", "\u{0345}"] {
+      let home = Home::new();
+      let sid = home.manager("session", None).await;
+      running_user_message(&home, &sid, user_message(CHINESE_MESSAGE)).await;
+      let reply = format!("好。/{marker}ChatPanelStatusToggleWithLongName");
+
+      let (status, _) = post_reply(&home, &sid, &reply, None).await;
+
+      assert_eq!(status, StatusCode::CONFLICT, "reply {reply:?}");
+    }
+  }
+
   #[test]
-  fn a_nonword_alphanumeric_stops_a_path_run() {
+  fn a_nonword_alphanumeric_stops_a_path_run_in_the_language_check() {
     for marker in ["ⓐ", "\u{0345}"] {
       let reply = format!("好。/{marker}ChatPanelStatusToggleWithLongName");
 

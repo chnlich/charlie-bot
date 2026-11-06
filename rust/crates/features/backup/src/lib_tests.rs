@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -365,4 +365,25 @@ async fn a_successful_run_notifies_never() {
   let summary = result.unwrap();
   assert!(summary.starts_with("snapshot "), "{summary}");
   assert!(notices.lock().unwrap().is_empty(), "a successful run sends no notice");
+}
+
+/// Restic exits 3 when a source file cannot be read; the snapshot of the rest is kept and no notice is
+/// sent. Run as root the file still reads and restic exits 0, and the assertions hold either way.
+#[tokio::test]
+async fn an_unreadable_source_file_keeps_the_snapshot_and_sends_no_notice() {
+  let repo = new_repo();
+  let (_root, home) = temp_home();
+  write(&home, "config.yaml", b"server: {}\n");
+  write(&home, "locked.txt", b"unreadable to restic\n");
+  fs::set_permissions(home.join("locked.txt"), fs::Permissions::from_mode(0o000)).unwrap();
+  let config = backup_config(&repo.repository, &repo.password_file);
+  let notices: Notices = Arc::new(Mutex::new(Vec::new()));
+  let notice = record_notice(&notices);
+
+  let result = run_with_notice(home, config, notice).await;
+
+  let summary = result.unwrap();
+  assert!(summary.starts_with("snapshot "), "{summary}");
+  assert_eq!(snapshot_dates(&repo.repository, &repo.password_file).len(), 1, "the partial snapshot is kept");
+  assert!(notices.lock().unwrap().is_empty(), "a partial read is not a failed backup");
 }

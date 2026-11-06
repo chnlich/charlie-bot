@@ -2,7 +2,7 @@
 //! retention policy, and the restore entry point.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 use anyhow::{Context, bail};
 use charliebot_core::config::{CREDENTIALS_FILENAME, SESSIONS_DIR_NAME};
@@ -12,6 +12,10 @@ use serde_json::Value;
 
 /// The restic executable the preflight resolves on `PATH`.
 const RESTIC: &str = "restic";
+
+/// The exit code of `restic backup` when the snapshot was written but some source file could not be
+/// read ("at least one source file could not be read").
+const RESTIC_PARTIAL_BACKUP: i32 = 3;
 
 /// The state directory being backed up: this profile's home (`charliebot_core::home::charliebot_home_dir`).
 pub fn charliebot_dir() -> anyhow::Result<PathBuf> {
@@ -45,14 +49,21 @@ fn restic(repository: &str, password_file: &Path) -> Command {
 /// Runs one restic command and returns its stdout. A failure carries the command and stderr's tail,
 /// which is where restic writes its causes.
 fn run(command: &mut Command) -> anyhow::Result<String> {
+  let output = run_accepting(command, &[0])?;
+  Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Runs one restic command and returns its output when its exit code is one of `accepted`; any other
+/// exit is a failure, reported as in [`run`].
+fn run_accepting(command: &mut Command, accepted: &[i32]) -> anyhow::Result<Output> {
   let output = command.output().with_context(|| format!("running {}", command.get_program().to_string_lossy()))?;
-  if !output.status.success() {
+  if !output.status.code().is_some_and(|code| accepted.contains(&code)) {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let lines: Vec<&str> = stderr.lines().collect();
     let tail = lines[lines.len().saturating_sub(8)..].join("; ");
     bail!("restic {} failed ({}): {}", command_args(command), output.status, tail);
   }
-  Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+  Ok(output)
 }
 
 /// The command's words after the executable, for error messages.
@@ -84,7 +95,9 @@ fn find_restic() -> anyhow::Result<PathBuf> {
 
 /// Runs `restic backup` of `home` into the repository and returns the new snapshot's id. The source
 /// is `.` so the snapshot's root is the home itself, and the anchored exclusion pattern rides the
-/// home's canonical path, the path restic resolves the source to.
+/// home's canonical path, the path restic resolves the source to. A source file restic cannot read
+/// (restic's exit 3) leaves the snapshot of the rest in place: the unreadable files are logged, and
+/// the run goes on as the tar writer's skipped entries did.
 pub fn create_snapshot(home: &Path, repository: &str, password_file: &Path) -> anyhow::Result<String> {
   let anchor = std::fs::canonicalize(home).with_context(|| format!("resolving the home {}", home.display()))?;
   let mut command = restic(repository, password_file);
@@ -92,7 +105,17 @@ pub fn create_snapshot(home: &Path, repository: &str, password_file: &Path) -> a
   for pattern in exclude_patterns(&anchor) {
     command.arg("--exclude").arg(pattern);
   }
-  let stdout = run(&mut command)?;
+  let output = run_accepting(&mut command, &[0, RESTIC_PARTIAL_BACKUP])?;
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  if output.status.code() == Some(RESTIC_PARTIAL_BACKUP) {
+    let unreadable: Vec<String> = stdout
+      .lines()
+      .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+      .filter(|value| value.get("message_type").and_then(Value::as_str) == Some("error"))
+      .map(|value| value.to_string())
+      .collect();
+    tracing::warn!(count = unreadable.len(), details = %unreadable.join(" "), "backup_source_partially_read");
+  }
   snapshot_id(&stdout)
 }
 

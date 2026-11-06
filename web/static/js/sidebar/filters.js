@@ -83,6 +83,8 @@ function loadWorkspaceBadges() {
 }
 
 function switchSidebarFilter(filter) {
+  // The rows the page polls move with the view, so the next status poll asks for the whole set.
+  resetSessionStatusPoll();
   setSidebarFilterPill(filter);
   if (filter === 'archived') {
     // The archived view owns its fetch: keyset pagination with a group filter
@@ -123,11 +125,11 @@ function listingRows(payload) {
 }
 
 // ---------------------------------------------------------------------------
-// Workspace row refresh
+// Sidebar row refresh
 // ---------------------------------------------------------------------------
-// A task-tree change names the session whose row changed. The Workspace fetches those rows alone and merges them into
-// the list it painted. Ids that arrive while a fetch is in flight go into the next fetch, and a hidden tab fetches once
-// it is visible.
+// A task-tree change names the session whose row changed. Every list the server can scope by filter fetches that row
+// alone and merges it into the list it painted: the Workspace, the starred view and each registered view. Ids that
+// arrive while a fetch is in flight go into the next fetch, and a hidden tab fetches once it is visible.
 const ROW_REFRESH_BATCH = 50;
 const pendingRowIds = new Set();
 let rowRefreshInFlight = false;
@@ -137,24 +139,34 @@ function queueRowRefresh(sessionId) {
   deferWhileHidden('row-refresh', drainRowRefresh);
 }
 
+// The row refresh URL of one view: the view's own list route with the changed rows named by `ids`. The view whose
+// list is painted answers those rows in the compact column form the full list uses.
+function rowRefreshUrl(filter, ids) {
+  const registered = getSidebarFilter(filter);
+  if (!registered) throw new Error('Unknown sidebar filter: ' + filter);
+  const separator = registered.url.includes('?') ? '&' : '?';
+  return registered.url + separator + 'ids=' + ids.map(encodeURIComponent).join(',');
+}
+
 function drainRowRefresh() {
   if (rowRefreshInFlight) return;
-  if (!workspaceRowsShown()) {
+  if (!sidebarRowsRefreshable()) {
     pendingRowIds.clear();
     return;
   }
   if (pendingRowIds.size === 0) return;
+  const filter = currentFilter;
   const batch = Array.from(pendingRowIds).slice(0, ROW_REFRESH_BATCH);
   batch.forEach(id => pendingRowIds.delete(id));
   rowRefreshInFlight = true;
-  fetch('/api/sessions/?compact=1&ids=' + batch.map(encodeURIComponent).join(','))
+  fetch(rowRefreshUrl(filter, batch))
     .then(res => {
       if (!res.ok) throw new Error(`Row refresh failed: ${res.status}`);
       return res.json();
     })
     .then(payload => {
       // A view the reader left while the fetch was in flight takes no rows: its own load paints it.
-      if (workspaceRowsShown()) {
+      if (sidebarRowsRefreshable() && currentFilter === filter) {
         mergeRowsIntoRenderedList(Sidebar.expandSessionColumns(payload.sessions), payload.gone);
       }
     })

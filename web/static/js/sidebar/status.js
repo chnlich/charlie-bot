@@ -86,18 +86,24 @@ function sidebarSessionIds() {
   return ids;
 }
 
-// The status URLs that name these sessions by ids, each under the URL budget. A `query` (such as `filter=all`) rides in
-// every URL ahead of the ids.
-function statusRequestUrls(path, ids, query = '') {
-  const head = query ? query + '&' : '';
-  const urlFor = (batch) => path + '?' + head + 'ids=' + batch.map(encodeURIComponent).join(',');
+// The status URLs that name these sessions by ids, each under the URL budget. A `query` (such as `filter=all`) and the
+// `since` token ride in every URL ahead of the ids.
+//
+// The ids are sorted: the URL names a set, so a repaint that reorders the rows must not change it. A changed URL is a
+// URL the browser has no cached answer for, and the poll then costs a whole body where the ETag would have answered
+// 304.
+function statusRequestUrls(path, ids, query = '', since = '') {
+  const canonical = Array.from(new Set(ids)).sort();
+  const head = [query, since ? 'since=' + encodeURIComponent(since) : ''].filter(Boolean);
+  if (canonical.length === 0) return head.length ? [path + '?' + head.join('&')] : [];
+  const urlFor = (batch) => path + '?' + head.concat(['ids=' + batch.map(encodeURIComponent).join(',')]).join('&');
   const urls = [];
   let batch = [];
   const flush = () => {
     if (batch.length) urls.push(urlFor(batch));
     batch = [];
   };
-  ids.forEach(sid => {
+  canonical.forEach(sid => {
     if (batch.length && urlFor(batch.concat([sid])).length > STATUS_QUERY_MAX_BYTES) flush();
     batch.push(sid);
   });
@@ -105,24 +111,26 @@ function statusRequestUrls(path, ids, query = '') {
   return urls;
 }
 
-// The sidebar's status URLs. The Workspace names its rows by filter, so the server lists them and the URL stays short.
-// The sessions the list does not paint (the open chat, a delegate card's child) travel as ids.
-function sidebarStatusUrls(path, ids) {
-  if (!workspaceRowsShown()) return statusRequestUrls(path, ids);
+// The status poll's URLs. A list the server can scope by filter names the filter, and the sessions the list does not
+// paint (the open chat, a delegate card's child) travel as ids. The archive view and a search answer their own row
+// sets, so they name every session by id.
+function sidebarStatusUrls(path, ids, since) {
+  if (!sidebarRowsRefreshable()) return statusRequestUrls(path, ids);
   const painted = new Set(Array.from(document.querySelectorAll('a[id^="session-"]'),
       el => el.id.slice('session-'.length)));
   const unpainted = ids.filter(sid => !painted.has(sid));
-  return unpainted.length ? statusRequestUrls(path, unpainted, 'filter=all') : [path + '?filter=all'];
+  return statusRequestUrls(path, unpainted, 'filter=' + encodeURIComponent(currentFilter), since);
 }
 
+// The status answers: the token to send back, the rows that moved, and the ids that left the filter's set.
 async function fetchStatusUrls(urls) {
   const responses = await Promise.all(urls.map(url => fetch(url)));
-  const merged = {};
+  const answers = [];
   for (const r of responses) {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    Object.assign(merged, await r.json());
+    answers.push(await r.json());
   }
-  return merged;
+  return answers;
 }
 
 // The compact button's facts come from the server, by backend type (BACKEND_COMPACT).
@@ -499,19 +507,39 @@ function refreshSessionStatusNow(opts) {
   });
 }
 
+// The row states this page holds, keyed by session id, and the token naming the state they came from. A poll sends the
+// token back, so the server answers only the rows that moved since. This map is the one owner of row state: a reply
+// lands here, and the page paints from it.
+const appliedSessionStatus = {};
+let statusPollToken = '';
+
+// Forget the applied row states, so the next poll asks for the whole set. A view change or a reconnect moves the row
+// set the page polls, and rows it has not held must arrive in full.
+function resetSessionStatusPoll() {
+  for (const sid of Object.keys(appliedSessionStatus)) delete appliedSessionStatus[sid];
+  statusPollToken = '';
+}
+
 function pollSessionStatus() {
   if (statusPollInflight) return statusPollPromise;
   statusPollInflight = true;
   const requestSeq = unreadSeqAtRequest();
-  statusPollPromise = fetchStatusUrls(sidebarStatusUrls('/api/sessions/status', sidebarSessionIds()))
-    .then(data => {
-      if (!data) return false;
-      let anyRunning = false;
-      for (const [sid, st] of Object.entries(data)) {
-        applySessionStatus(sid, st, requestSeq);
-        if (st.has_running_tasks) anyRunning = true;
+  const ids = sidebarSessionIds();
+  // A poll scoped by filter answers a delta; a row the page has never held would not be in it, so a new id asks for
+  // the whole set once. The views that name their rows by id answer them in full anyway.
+  const scoped = sidebarRowsRefreshable();
+  const since = scoped && ids.every(sid => sid in appliedSessionStatus) ? statusPollToken : '';
+  statusPollPromise = fetchStatusUrls(sidebarStatusUrls('/api/sessions/status', ids, since))
+    .then(answers => {
+      for (const answer of answers) {
+        for (const [sid, st] of Object.entries(answer.rows || {})) {
+          appliedSessionStatus[sid] = st;
+          applySessionStatus(sid, st, requestSeq);
+        }
+        for (const sid of answer.gone || []) delete appliedSessionStatus[sid];
+        if (scoped && answer.token) statusPollToken = answer.token;
       }
-      return anyRunning;
+      return Object.values(appliedSessionStatus).some(st => st && st.has_running_tasks);
     })
     .catch(err => {
       console.error('pollSessionStatus failed:', err);
@@ -547,6 +575,7 @@ const API = {
   paintDelegateCardState,
   refreshSessionStatusNow,
   pollSessionStatus,
+  resetSessionStatusPoll,
   applyRunningChanged,
 };
 Sidebar.wire(API, {

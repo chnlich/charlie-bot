@@ -63,10 +63,10 @@ registerWsMessageHandler('session_group_changed', () => deferWhileHidden('sessio
     {advancesCursor: false});
 // A worker run's finish reaches the page as a task_tree_changed frame, and the concurrency badge counts that run, so
 // the badge refetches with the rows. Its 5 s poll covers a worker run's start, which broadcasts nothing. The frame
-// names the session whose row changed: the Workspace fetches that row alone, and the views that keep their own list
-// refetch it. A hidden tab holds each request until it is visible.
+// names the session whose row changed: a list scoped by filter fetches that row alone, and the views that keep their
+// own list refetch it. A hidden tab holds each request until it is visible.
 registerWsMessageHandler('task_tree_changed', (ev) => {
-  if (workspaceRowsShown()) queueRowRefresh(ev.session_id);
+  if (sidebarRowsRefreshable()) queueRowRefresh(ev.session_id);
   else deferWhileHidden('session-list', refetchSessionList);
   deferWhileHidden('workspace-badges', refreshWorkspaceBadges);
   globalThis.ConcurrencyBadge?.refreshSoon();

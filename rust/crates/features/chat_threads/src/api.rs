@@ -5,12 +5,13 @@ use std::sync::{Arc, LazyLock};
 use axum::Router;
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::Request;
+use axum::http::{Request, StatusCode};
 use axum::response::Response;
 use charliebot_compat::responses;
 use charliebot_compat::routing::get_only;
 use charliebot_registry::FeatureContext;
 use charliebot_session_api::listing::{self, SessionsListMemos};
+use serde_json::json;
 
 use crate::sidebar::THREADS_VIEW;
 
@@ -30,6 +31,9 @@ pub(crate) fn matches(path: &str) -> bool {
 
 /// The active corpus's rows that the `threads` view holds, newest first. The Workspace list is the complement over the
 /// same corpus.
+///
+/// With `ids`, the route answers those named rows alone, as the sidebar's row refresh: the ids the view no longer holds
+/// come back in `gone`, and the rest in the compact column form the full list's rows take.
 async fn list_chat_threads(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let listing::ListingCorpus { mut rows, derived, sequence_fields } =
     match listing::active_listing_corpus(&features.store, &features.registry) {
@@ -42,6 +46,27 @@ async fn list_chat_threads(State(features): State<Arc<FeatureContext>>, request:
   };
   let threads = views.get(THREADS_VIEW);
   rows.retain(|row| threads.is_some_and(|members| members.contains_key(&row.id)));
+  let query_ids = listing::row_refresh_ids(&request);
+  if let Some(ids) = query_ids {
+    if ids.is_empty() {
+      return responses::json(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        &json!({"detail": "ids must name at least one session"}),
+      );
+    }
+    let text = match listing::row_refresh_text_for(
+      &features.store,
+      &rows,
+      &derived,
+      &sequence_fields,
+      &ids,
+      listing::LISTING_PROJECTION,
+    ) {
+      Ok(text) => text,
+      Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+    };
+    return responses::fast_json_rendered(StatusCode::OK, text.into_bytes());
+  }
   // The view filters the corpus into a list of its own, so the source keeps the row-by-row comparison.
   listing::sessions_list_response(
     &request,

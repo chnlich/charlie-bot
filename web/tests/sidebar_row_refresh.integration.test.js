@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// The Workspace list refreshes the rows a task-tree frame names, not the whole
+// A sidebar list refreshes the rows a task-tree frame names, not the whole
 // list. These tests run the real page-timers, chat and sidebar modules and
 // websocket.js with websocket-handlers.js, in index.html order, and drive them
 // through a fake socket, a fake document and a recording fetch.
@@ -20,7 +20,7 @@ const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 // One open page on the Workspace view. `painted` names the sessions the sidebar paints as rows.
-function buildPage({painted = []} = {}) {
+function buildPage({painted = [], filter = 'all'} = {}) {
   const listeners = new Map();
   const nav = createElement();
   nav.scrollTop = 0;
@@ -105,6 +105,7 @@ function buildPage({painted = []} = {}) {
     page.cronLoads += 1;
     return Promise.resolve('');
   });
+  context.currentFilter = filter;
 
   const sockets = context.WebSocket.instances;
   page.context = context;
@@ -132,7 +133,7 @@ function buildPage({painted = []} = {}) {
 // Answers every row request still in flight with the empty row set: the merge then has no painted list to repaint.
 function answerRows(page) {
   page.requests
-      .filter((request) => request.url.includes('&ids='))
+      .filter((request) => request.url.includes('ids='))
       .forEach((request) => request.respond({sessions: {}, gone: []}));
 }
 
@@ -294,17 +295,75 @@ test('a stale-page close reloads a hidden tab once it is visible', () => {
   assert.equal(page.reloads, 1, 'the reload runs once the tab is visible');
 });
 
+test('a starred-view row change fetches that row alone from the starred view', async () => {
+  const page = buildPage({filter: 'starred'});
+  page.connect();
+  page.socket().emitOpen();
+
+  page.frame({type: 'task_tree_changed', session_id: 'session-x'});
+
+  assert.deepEqual(page.urlsStarting('/api/sessions/starred'), ['/api/sessions/starred?ids=session-x'],
+      'the starred view answers the named row alone');
+  assert.equal(page.fullListCount(), 0, 'a task-tree frame never refetches the whole list');
+  assert.equal(page.urlsStarting('/api/sessions/starred').length, 1);
+});
+
+test('a threads-view row change fetches that row alone from the threads view', async () => {
+  const page = buildPage({filter: 'threads'});
+  page.context.registerSidebarFilter(
+      {name: 'threads', label: 'Threads', url: '/api/sessions/chat-threads', before: 'starred'});
+  page.context.currentFilter = 'threads';
+  page.connect();
+  page.socket().emitOpen();
+
+  page.frame({type: 'task_tree_changed', session_id: 'session-x'});
+
+  assert.deepEqual(page.urlsStarting('/api/sessions/chat-threads'), ['/api/sessions/chat-threads?ids=session-x'],
+      'the Threads view answers the named row alone');
+  assert.equal(page.fullListCount(), 0, 'a task-tree frame never refetches the whole list');
+});
+
+test('a view change and a reconnect after a network loss still load the whole list', async () => {
+  const page = buildPage({filter: 'starred'});
+  page.connect();
+  page.socket().emitOpen();
+  page.socket().emitClose({code: 1006});
+  page.runTimers();
+  page.socket().emitOpen();
+
+  assert.equal(page.urlsStarting('/api/sessions/starred').filter((url) => !url.includes('ids=')).length, 1,
+      'the reopened socket reloads the starred list');
+});
+
 test('the status poll names the Workspace rows by filter and sends only the sessions the list does not paint', async () => {
   const page = buildPage({painted: ['session-b']});
 
   vm.runInContext('pollSessionStatus()', page.context);
   assert.deepEqual(page.urlsStarting('/api/sessions/status'), ['/api/sessions/status?filter=all&ids=session-a'],
       'the open chat is not painted, so it rides in ids; the Workspace rows come by filter');
-  page.requests.forEach((request) => request.respond({}));
+  page.requests.forEach((request) => request.respond({token: 'test-1', rows: {}, gone: []}));
   await flush();
 
   page.elements.set('sidebar-search', {value: 'needle'});
   vm.runInContext('pollSessionStatus()', page.context);
   assert.deepEqual(page.urlsStarting('/api/sessions/status').slice(1), ['/api/sessions/status?ids=session-a,session-b'],
       'a search names its rows by ids, since its rows are not the Workspace list');
+});
+
+test('the status poll sends a stable URL for the same row set and the token of the answer before it', async () => {
+  const page = buildPage({painted: ['session-b', 'session-c']});
+  const urls = () => page.urlsStarting('/api/sessions/status');
+  const rows = {'session-a': {}, 'session-b': {has_running_tasks: true}, 'session-c': {}};
+
+  vm.runInContext('pollSessionStatus()', page.context);
+  assert.deepEqual(urls(), ['/api/sessions/status?filter=all&ids=session-a']);
+  page.requests.forEach((request) => request.respond({token: 'test-1', rows, gone: []}));
+  await flush();
+
+  // Two paints of the same rows in another order ask the same URL: the URL names a set, not a sequence.
+  page.document.querySelectorAll = (selector) => selector === 'a[id^="session-"]'
+    ? ['session-c', 'session-b'].map((sid) => ({id: 'session-' + sid})) : [];
+  vm.runInContext('pollSessionStatus()', page.context);
+  assert.deepEqual(urls().slice(1), ['/api/sessions/status?filter=all&since=test-1&ids=session-a'],
+      'the same row set revalidates the answer the page holds, with the token it names');
 });

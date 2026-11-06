@@ -23,13 +23,14 @@ use serde_json::{Map, Value, json};
 use crate::sidebar;
 pub use crate::sidebar::DerivedSidebarMap;
 
+/// The fields one sidebar row renders: which derived facts it carries and whether it names the run's backend.
 #[derive(Clone, Copy)]
-pub(crate) struct SidebarProjection {
-  pub(crate) include_running: bool,
-  pub(crate) include_trigger: bool,
-  pub(crate) include_plan: bool,
-  pub(crate) display_backend: bool,
-  pub(crate) include_run_backend: bool,
+pub struct SidebarProjection {
+  pub include_running: bool,
+  pub include_trigger: bool,
+  pub include_plan: bool,
+  pub display_backend: bool,
+  pub include_run_backend: bool,
 }
 
 #[derive(Default)]
@@ -394,6 +395,28 @@ fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<Page
   Ok(PageCorpus { rows, index, derived })
 }
 
+/// The row ids a status poll names by filter, or `None` when the sidebar has no filter of that name.
+///
+/// `all` is the Workspace's page; `starred` is every starred session, archived ones included; any other name is a
+/// sidebar view the registry knows, answered with the active rows that belong to it.
+pub fn status_filter_ids(store: &Arc<Store>, registry: &Arc<Registry>, filter: &str) -> StoreResult<Option<Vec<String>>> {
+  let ids = match filter {
+    "all" => active_page_rows(store, registry)?.rows().iter().map(|row| row.id.clone()).collect(),
+    "starred" => store.list_sessions(None, Some(true), None)?.rows.iter().map(|row| row.id.clone()).collect(),
+    view => {
+      let views = store.view_subtree_roots()?;
+      let Some(members) = views.get(view) else { return Ok(None) };
+      active_listing_corpus(store, registry)?
+        .rows
+        .iter()
+        .filter(|row| members.contains_key(&row.id))
+        .map(|row| row.id.clone())
+        .collect()
+    }
+  };
+  Ok(Some(ids))
+}
+
 /// The id of the row that a page opened without a session redirects to.
 ///
 /// The redirect reads only the row order, so it skips the derived overlays and the controller row fields that the
@@ -419,12 +442,21 @@ const PAGE_PROJECTION: SidebarProjection = SidebarProjection {
 };
 
 /// A sidebar listing's row projection: running, trigger and plan state, and no run backend.
-const LISTING_PROJECTION: SidebarProjection = SidebarProjection {
+pub const LISTING_PROJECTION: SidebarProjection = SidebarProjection {
   include_running: true,
   include_trigger: true,
   include_plan: true,
   display_backend: true,
   include_run_backend: false,
+};
+
+/// The starred view's row projection: its route renders the run backend and no plan badge.
+pub const STARRED_PROJECTION: SidebarProjection = SidebarProjection {
+  include_running: true,
+  include_trigger: true,
+  include_plan: false,
+  display_backend: false,
+  include_run_backend: true,
 };
 
 /// The session value a sidebar row starts from.
@@ -1196,6 +1228,11 @@ impl CompactListingMemo {
   }
 }
 
+/// The ids a row-refresh request names, or `None` for a full-list request.
+pub fn row_refresh_ids(request: &Request<Body>) -> Option<Vec<String>> {
+  crate::route_support::Query::new(request).get("ids").map(crate::api::parse_session_ids)
+}
+
 /// The row refresh body: the compact column text of the rows of `page` that `ids` name, and the ids the page no longer
 /// holds, as `{"sessions": <column text>, "gone": [...]}`.
 ///
@@ -1203,15 +1240,34 @@ impl CompactListingMemo {
 /// decoding and the same epoch-minute times. The row memo is local to this call: a refresh names a few rows, and the
 /// whole-listing memo keys on the full page.
 pub fn row_refresh_text(store: &Store, page: &PageRows, ids: &[String]) -> StoreResult<String> {
-  let rows: Arc<Vec<Arc<SessionMetadata>>> = Arc::new(page.rows_named(ids));
+  // The named rows come from the page's id index, so a refresh of a full Workspace does not walk the corpus; the ids
+  // the page no longer holds come back in `gone`.
+  let named = page.rows_named(ids);
+  row_refresh_text_for(store, &named, &page.derived(), &page.sequence_fields, ids, LISTING_PROJECTION)
+}
+
+/// The row refresh body of one sidebar view: the named rows the view lists, in the compact column form, plus the ids it
+/// no longer lists.
+///
+/// Each view passes the projection its full list renders, so a refreshed row replaces a painted one field for field.
+/// The row memo is local to this call: a refresh names a few rows, and the whole-listing memo keys on the full page.
+pub fn row_refresh_text_for(
+  store: &Store,
+  rows: &[Arc<SessionMetadata>],
+  derived: &Arc<DerivedSidebarMap>,
+  sequence_fields: &HashMap<String, Map<String, Value>>,
+  ids: &[String],
+  projection: SidebarProjection,
+) -> StoreResult<String> {
+  let wanted: HashSet<&str> = ids.iter().map(String::as_str).collect();
+  let rows: Vec<Arc<SessionMetadata>> = rows.iter().filter(|row| wanted.contains(row.id.as_str())).cloned().collect();
   let present: HashSet<String> = rows.iter().map(|row| row.id.clone()).collect();
   let gone: Vec<&str> = ids.iter().map(String::as_str).filter(|id| !present.contains(*id)).collect();
   let subset = PageRows {
     index: page_row_index(&rows),
-    rows,
-    derived: Arc::clone(&page.derived),
-    sequence_fields: page
-      .sequence_fields
+    rows: Arc::new(rows),
+    derived: Arc::clone(derived),
+    sequence_fields: sequence_fields
       .iter()
       .filter(|(id, _)| present.contains(id.as_str()))
       .map(|(id, fields)| (id.clone(), fields.clone()))
@@ -1223,7 +1279,7 @@ pub fn row_refresh_text(store: &Store, page: &PageRows, ids: &[String]) -> Store
     None,
     PageRowsScope::EveryRow,
     &PageRowsMemo::default(),
-    LISTING_PROJECTION,
+    projection,
     RowSchema::Listing,
   )?;
   let gone = serde_json::to_string(&gone).expect("a list of session ids serializes");

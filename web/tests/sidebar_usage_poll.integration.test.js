@@ -282,6 +282,11 @@ function sessionAnchors(ids) {
   return ids.map((id) => ({id: 'session-' + id, tagName: 'A'}));
 }
 
+// The status endpoint's answer: the token to send back, the rows it carries, and the ids that left the filter's set.
+function statusAnswer(rows, token = 'test-1') {
+  return {token, rows, gone: []};
+}
+
 test('sidebarSessionIds sends the rendered session anchors plus the active session, deduplicated', () => {
   const {context} = buildContext({
     querySelectorAll: (selector) =>
@@ -320,15 +325,16 @@ test('a session id list too long for one request is split and the results are me
   const {context} = buildContext({
     querySelectorAll: (selector) => (selector === 'a[id^="session-"]' ? sessionAnchors(ids) : []),
   });
-  // The Workspace names its rows by filter; a view that names its rows by ids is the one that splits them.
-  context.currentFilter = 'starred';
+  // The archive view names its rows by ids, so it is the one that splits them; a filter-scoped view names its filter.
+  context.currentFilter = 'archived';
   const seen = [];
   context.fetch = async (url) => {
     requested.push(url);
     const batch = url.slice(url.indexOf('?ids=') + 5).split(',').map(decodeURIComponent);
     return {
       ok: true,
-      json: async () => Object.fromEntries(batch.map((sid) => [sid, {has_unread: false, has_running_tasks: false}])),
+      json: async () =>
+        statusAnswer(Object.fromEntries(batch.map((sid) => [sid, {has_unread: false, has_running_tasks: false}]))),
     };
   };
   context.setSessionIndicator = (sid) => { seen.push(sid); };
@@ -352,7 +358,7 @@ test('pollSessionStatus updates pending trigger indicators from the status endpo
     return {
       ok: true,
       async json() {
-        return {
+        return statusAnswer({
           'session-a': {
             has_unread: false,
             has_running_tasks: false,
@@ -367,7 +373,7 @@ test('pollSessionStatus updates pending trigger indicators from the status endpo
             pending_trigger_count: 0,
             next_trigger_at: null,
           },
-        };
+        });
       },
     };
   };

@@ -26,6 +26,11 @@ function row(id, parent, overrides = {}) {
 
 const IDLE_ICONS = {spinner: false, gear: false, clock: false, dot: false, subtreeMark: false};
 
+// The status endpoint's answer: the rows it carries in its delta, and the token to send back with the next poll.
+function statusAnswer(rows) {
+  return {token: 'indicator-test', rows, gone: []};
+}
+
 test('a parent shows the gear for a running descendant; without unread facts no mark shows', () => {
   const {context, shown} = buildSidebarIndicatorContext(['p', 'c', 'g']);
   context.renderSessionList([
@@ -195,7 +200,7 @@ test('a status-poll reply for a leaf repaints its ancestors', async () => {
     selector === 'a[id^="session-"]' ? [{id: 'session-p'}, {id: 'session-c'}, {id: 'session-g'}] : []
   );
   let reply = {g: {has_running_tasks: true, has_unread: false}};
-  context.fetch = async () => ({ok: true, json: async () => reply});
+  context.fetch = async () => ({ok: true, json: async () => statusAnswer(reply)});
 
   await context.Sidebar.pollSessionStatus();
   assert.deepEqual(shown('p'), {...IDLE_ICONS, gear: true});
@@ -258,7 +263,7 @@ test('a status-poll reply turns the ancestors’ gear off and on with the worker
     selector === 'a[id^="session-"]' ? [{id: 'session-p'}, {id: 'session-c'}, {id: 'session-g'}] : []
   );
   let reply = {g: {has_running_tasks: false, has_unread: false, has_pending_trigger: false}};
-  context.fetch = async () => ({ok: true, json: async () => reply});
+  context.fetch = async () => ({ok: true, json: async () => statusAnswer(reply)});
 
   await context.Sidebar.pollSessionStatus();
   assert.deepEqual(shown('p'), IDLE_ICONS, 'the trigger fired: the gear turns off');
@@ -285,7 +290,7 @@ test('a poll reply that ends the worker’s Run keeps the gear while the trigger
     selector === 'a[id^="session-"]' ? [{id: 'session-p'}, {id: 'session-c'}, {id: 'session-g'}] : []
   );
   const reply = {g: {has_running_tasks: false, has_unread: false, has_pending_trigger: true}};
-  context.fetch = async () => ({ok: true, json: async () => reply});
+  context.fetch = async () => ({ok: true, json: async () => statusAnswer(reply)});
 
   await context.Sidebar.pollSessionStatus();
   assert.deepEqual(shown('g'), IDLE_ICONS, 'the worker’s own spinner turns off');
@@ -351,7 +356,7 @@ test('a worker row’s run end defers to the poll the handler starts; a busy sta
   );
   let reply = {g: {has_running_tasks: true, thinking_since: '2026-04-02T10:00:00Z',
     has_unread: false, has_pending_trigger: false}};
-  context.fetch = async () => ({ok: true, json: async () => reply});
+  context.fetch = async () => ({ok: true, json: async () => statusAnswer(reply)});
   const socket = openSidebarSocket(context, FakeWebSocket);
 
   // A busy start repaints at once.
@@ -393,7 +398,7 @@ test('a manager row’s not-running running_changed repaints at once', async () 
   );
   let reply = {c: {has_running_tasks: true, thinking_since: '2026-04-02T10:00:00Z',
     has_unread: false, has_pending_trigger: false}};
-  context.fetch = async () => ({ok: true, json: async () => reply});
+  context.fetch = async () => ({ok: true, json: async () => statusAnswer(reply)});
   const socket = openSidebarSocket(context, FakeWebSocket);
 
   socket.emitMessage({type: 'running_changed', session_id: 'c',

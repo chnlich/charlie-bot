@@ -1,4 +1,4 @@
-//! Runs the repository's shell scripts for real, against stub commands, for the Rust integration tests.
+//! A harness that runs the repository's shell scripts for real, against stub commands, for the Rust integration tests.
 //!
 //! A test makes a `Sandbox`: a temporary root whose `bin/` holds its stubs and comes first on PATH. The test adds
 //! stubs with `Sandbox::stub`, builds a command with `command` and runs it with `run`; `spawn` starts a background
@@ -128,14 +128,14 @@ impl Sandbox {
     &self.bin
   }
 
-  /// Creates `relative` under the root, with its parents, and returns its path.
+  /// The path of `relative` under the root; the directory and its parents are created.
   pub fn dir(&self, relative: &str) -> PathBuf {
     let path = self.root().join(relative);
     fs::create_dir_all(&path).unwrap_or_else(|error| panic!("create {}: {error}", path.display()));
     path
   }
 
-  /// Writes a stub command: an executable bash script with `body`, in the stub directory.
+  /// A stub command: an executable bash script with `body`, in the stub directory.
   pub fn stub(&self, name: &str, body: &str) {
     write_executable(&self.bin.join(name), format!("#!/usr/bin/env bash\n{body}"));
   }
@@ -148,7 +148,7 @@ impl Sandbox {
     env
   }
 
-  /// Installs the `systemctl` and `systemd-run` stubs the launcher calls. The agents' slice reports the limits and
+  /// The `systemctl` and `systemd-run` stubs the launcher calls. The agents' slice reports the limits and
   /// the weights its committed unit file declares, and the systemd-run stub records each scope it starts (see
   /// `scope_records`).
   pub fn install_systemd_stubs(&self) {
@@ -196,14 +196,15 @@ pub fn command(program: impl AsRef<OsStr>, env: &Env) -> Command {
   command
 }
 
-/// Runs `command` to its end, with an empty standard input and stdout and stderr captured. A command that outlives
-/// `RUN_TIMEOUT` is killed, and the test fails.
+/// The result of running `command` to its end, with an empty standard input and stdout and stderr captured. A
+/// command that outlives `RUN_TIMEOUT` is killed, and the test fails.
 pub fn run(command: &mut Command) -> Run {
   run_with_stdin(command, Stdio::null())
 }
 
-/// Runs `command` like [`run`], with `stdin` as its standard input. A file passed as `stdin` shares its offset with
-/// every child that inherits it, so a child that reads the input first leaves nothing for the next one.
+/// The result of running `command` like [`run`], with `stdin` as its standard input. A file passed as `stdin`
+/// shares its offset with every child that inherits it, so a child that reads the input first leaves nothing for
+/// the next one.
 pub fn run_with_stdin(command: &mut Command, stdin: Stdio) -> Run {
   command.stdin(stdin).stdout(Stdio::piped()).stderr(Stdio::piped());
   let mut child = spawn(command);
@@ -224,8 +225,8 @@ pub fn run_with_stdin(command: &mut Command, stdin: Stdio) -> Run {
   }
 }
 
-/// Starts `command` and returns the child. An executable from [`write_executable`] or [`copy_file`] starts at once,
-/// so a start that fails panics without a retry.
+/// The child that `command` started. An executable from [`write_executable`] or [`copy_file`] starts at once, so a
+/// start that fails panics without a retry.
 ///
 /// The child dies with the thread that starts it: `PR_SET_PDEATHSIG` makes the kernel send it SIGKILL when that
 /// thread exits. A test thread that panics or is cancelled while its process still runs therefore leaves nothing
@@ -249,7 +250,7 @@ pub fn spawn(command: &mut Command) -> Child {
   command.spawn().unwrap_or_else(|error| panic!("cannot start {:?}: {error}", command.get_program()))
 }
 
-/// Copies a file to `to`, keeping its mode: a built program stays executable.
+/// A file copied to `to` with its mode kept: a built program stays executable.
 ///
 /// The copy runs in a `cp` child, so this process never holds a write descriptor on `to`. A fork of this process
 /// inherits every descriptor it holds, and the inherited copy stays open until that fork execs. An inherited write
@@ -265,7 +266,7 @@ pub fn copy_file(from: &Path, to: &Path) {
   assert!(status.success(), "copy {} to {}: cp exited with {status}", from.display(), to.display());
 }
 
-/// Writes `contents` to `to` as an executable file, mode 0755. The bytes are staged beside `to` and then copied with
+/// An executable file at `to` holding `contents`, mode 0755. The bytes are staged beside `to` and then copied with
 /// [`copy_file`], so this process never holds a write descriptor on `to` (see there).
 pub fn write_executable(to: &Path, contents: impl AsRef<[u8]>) {
   let directory = to.parent().unwrap_or_else(|| panic!("{} has no directory", to.display()));

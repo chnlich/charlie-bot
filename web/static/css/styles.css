@@ -314,10 +314,10 @@ main > header > a[title="View JSONL events"] {
    that keeps its place at rest: it shows the row's state rather than an
    action on it. The star toggle and the highlight move both flip classes on
    the existing row, so neither needs a list repaint.
-   Geometry: a button's icon slot is 22px (p-1 around its 14px glyph), the
-   row's flex gap is 8px and its horizontal padding 12px. One stack pitch is
-   30px. A hover-revealed box stretches over the row's full height, and its
-   flex centering keeps that slot vertically centered in it. The offsets run
+   Geometry: a button's box is 24px (p-1 around its 14px glyph, widened to the
+   pointer floor), the row's flex gap is 8px and its horizontal padding 12px.
+   One stack pitch is 30px. A hover-revealed box stretches over the row's full
+   height, and its flex centering keeps that slot vertically centered in it. The offsets run
    from the row's padding edge right-to-left in reverse DOM order;
    nth-last-of-type keeps non-button trailing spans (the archived tree's
    active tag) out of the count. */
@@ -327,6 +327,24 @@ main > header > a[title="View JSONL events"] {
    row menu's z-index to paint above the drawer instead of behind it. */
 #rename-input { z-index: 150; }
 .session-row > button { position: absolute; right: 12px; pointer-events: none; }
+/* Pointer floor: a row action draws a 14px glyph in p-1's 8px, a 22px box, and a named group
+   header's two actions draw a 12px glyph in p-0.5's 4px, a 16px box. Both sit under the 24px
+   minimum. The row's boxes are out of flow, so a 24px minimum grows each into the gap without
+   moving the row; the header's boxes are in flow, so 6px of padding with the 4px margin around it
+   grows the box 4px each way while the header keeps its 28px row and the glyphs keep their places.
+   Neither rule adds a row, strip or label: the controls take the space their own boxes already
+   hold. */
+.session-row > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+}
+.session-group > [data-sgroup-toggle-key] > button {
+  padding: 6px;
+  margin: -4px;
+}
 /* Each out-of-flow button stretches over the row's full height (top to
    bottom of the row box), and its own flex keeps the icon slot vertically
    centered. So the hovered cover is one continuous block from the row's top

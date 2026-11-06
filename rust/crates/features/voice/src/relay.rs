@@ -336,7 +336,7 @@ async fn stream_preview(context: StreamContext) {
 }
 
 async fn archive_final(writer: &SocketWriter, run: &RelayRun<'_>, event: &TranscriptEvent) -> Result<(), String> {
-  match archive_final_with(run, event, |_, text| async {
+  match archive_final_with(run, event, |_, text| async move {
     send_frame(writer, json!({ "type": "final", "text": text })).await
   })
   .await

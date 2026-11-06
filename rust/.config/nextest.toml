@@ -1,0 +1,7 @@
+# The profile CI runs nextest with (`cargo nextest run --profile ci`). A failure cancels nothing so the
+# JUnit report covers every test; the report carries each test's wall-clock time for the 0.1 s check.
+[profile.ci]
+fail-fast = false
+
+[profile.ci.junit]
+path = "junit.xml"

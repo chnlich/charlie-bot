@@ -129,9 +129,26 @@ jobs:
           workspaces: rust
           key: rust-test
 
+      # nextest runs each test in its own process and writes a JUnit report with a per-test `time`
+      # attribute; `cargo test` cannot report per-test times on stable Rust. Pinned to one version,
+      # installed from the prebuilt binary so the install takes seconds and stays reproducible.
+      - name: Install cargo-nextest
+        run: |
+          curl -LsSf https://get.nexte.st/0.9.150/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+          cargo nextest --version
+
       - name: Test
         working-directory: rust
-        run: cargo test --locked
+        run: cargo nextest run --locked --profile ci
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-test-junit
+          path: rust/target/nextest/ci/junit.xml
+          retention-days: 30
+          if-no-files-found: error
 
       # A script test that leaves a stand-in behind reparents it to pid 1. Run after a failed test too, which is
       # exactly when a leak appears.

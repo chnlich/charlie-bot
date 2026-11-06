@@ -125,15 +125,15 @@ fn json_loads_matches_recorded_over_a_sample_of_the_corpus() {
   let mut found_codec_reasons = [false; REQUIRED_CODEC_REASONS.len()];
   for raw_record in &records {
     let record: RecordedExpected = serde_json::from_str(raw_record.get()).unwrap();
-    if record.expected.outcome == "error" {
-      if let Some(text) = record.expected.text.as_deref() {
-        for (index, message) in REQUIRED_MESSAGES.iter().enumerate() {
-          found_messages[index] |= text.starts_with(message)
-            || text.match_indices(": ").any(|(offset, _)| text[offset + 2..].starts_with(message));
-        }
-        for (index, reason) in REQUIRED_CODEC_REASONS.iter().enumerate() {
-          found_codec_reasons[index] |= text.contains(reason);
-        }
+    if record.expected.outcome == "error"
+      && let Some(text) = record.expected.text.as_deref()
+    {
+      for (index, message) in REQUIRED_MESSAGES.iter().enumerate() {
+        found_messages[index] |= text.starts_with(message)
+          || text.match_indices(": ").any(|(offset, _)| text[offset + 2..].starts_with(message));
+      }
+      for (index, reason) in REQUIRED_CODEC_REASONS.iter().enumerate() {
+        found_codec_reasons[index] |= text.contains(reason);
       }
     }
   }

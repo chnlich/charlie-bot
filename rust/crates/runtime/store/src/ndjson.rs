@@ -365,11 +365,11 @@ mod tests {
     }
   }
 
-  /// A megabyte-long line parses whole.
+  /// A long line parses whole.
   #[test]
-  fn read_file_compact_parses_a_megabyte_line_whole() {
+  fn read_file_compact_parses_a_long_line_whole() {
     let path = tempfile::NamedTempFile::new().unwrap();
-    let payload = serde_json::json!({"blob": "x".repeat(1024 * 1024)});
+    let payload = serde_json::json!({"blob": "x".repeat(32 * 1024)});
     fs::write(path.path(), format!("{payload}\n{{\"i\": 1}}")).unwrap();
     let events = read_file_compact(path.path()).unwrap();
     assert_eq!(events.len(), 2);

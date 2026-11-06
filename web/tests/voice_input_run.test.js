@@ -170,14 +170,17 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     // values so the level math sees them.
     emitPcm(samples) {
       const copy = new Int16Array(samples); // a private buffer, like the worklet's transfer
-      if (this.port.onmessage) {
-        this.port.onmessage({data: {type: 'pcm', buffer: copy.buffer}});
-      }
+      this.emitPcmBuffer(copy.buffer);
     }
     emitPcmCount(count, amplitude = 8000) {
       const samples = new Int16Array(count);
-      for (let i = 0; i < count; i++) samples[i] = amplitude;
-      this.emitPcm(samples);
+      samples.fill(amplitude);
+      this.emitPcmBuffer(samples.buffer);
+    }
+    emitPcmBuffer(buffer) {
+      if (this.port.onmessage) {
+        this.port.onmessage({data: {type: 'pcm', buffer}});
+      }
     }
     replyFlushed(id) {
       if (this.port.onmessage) this.port.onmessage({data: {type: 'flushed', id}});

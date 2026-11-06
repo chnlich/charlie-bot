@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use base64::Engine;
 use charliebot_compat::ws_client::{self, Message, Options, Sender, WEBSOCKETS_16_DEFAULTS};
-use charliebot_core::credentials::Credentials;
+use charliebot_core::credentials::{Credentials, REDACTED};
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::{self, DEFAULT_JSON};
 use futures_util::future::BoxFuture;
@@ -203,7 +203,7 @@ impl Backend {
           _ = wait_cancelled(&mut cancelled) => return Ok(()),
         };
         let (sender, receiver) =
-          connected.map_err(|error| TranscriptionError::Failure(error.to_string().replace(token, "[redacted]")))?;
+          connected.map_err(|error| TranscriptionError::Failure(error.to_string().replace(token, REDACTED)))?;
         run_gemini(sender, receiver, audio, &mut cancelled, events, vocabulary, languages).await
       }
       BackendKind::Muse => {

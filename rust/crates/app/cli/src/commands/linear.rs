@@ -147,7 +147,7 @@ fn response_failure(
 }
 
 fn redact_key(text: &str, api_key: &str) -> String {
-  if api_key.is_empty() { text.to_string() } else { text.replace(api_key, "[redacted]") }
+  if api_key.is_empty() { text.to_string() } else { text.replace(api_key, credentials::REDACTED) }
 }
 
 #[cfg(test)]

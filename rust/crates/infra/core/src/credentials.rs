@@ -12,6 +12,10 @@ use serde_yaml::Value;
 use crate::config::{self, CREDENTIALS_FILENAME, ConfigError};
 use crate::paths;
 
+/// The text a redacted secret becomes. Every crate that replaces a secret before it reaches a log, a transcript or an
+/// error message writes this marker.
+pub const REDACTED: &str = "[redacted]";
+
 /// One credential value: text, an integer, or a flag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CredentialValue {

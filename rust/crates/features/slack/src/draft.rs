@@ -342,9 +342,11 @@ mod tests {
   async fn a_timeout_is_unknown() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let base = format!("http://{}/api/", listener.local_addr().unwrap());
+    let (request_seen, wait_for_request) = tokio::sync::oneshot::channel();
     let holder = thread::spawn(move || {
       let (mut stream, _) = listener.accept().unwrap();
       assert!(read_request(&mut stream).is_some(), "the timed-out request reaches the stub");
+      request_seen.send(()).unwrap();
       let mut buffer = [0_u8; 1024];
       while stream.read(&mut buffer).expect("the client closes its timed-out request") != 0 {}
     });
@@ -353,10 +355,15 @@ mod tests {
       reqwest::Client::new(),
       base,
       "synthetic-user-token".to_string(),
-      Duration::from_millis(50),
+      Duration::from_secs(2),
     );
+    let request = tokio::spawn(async move {
+      sender.send(&json!({"channel": "C0SYNTHETIC", "thread": null}), "body").await
+    });
+    wait_for_request.await.unwrap();
+    tokio::time::pause();
 
-    let failure = sender.send(&json!({"channel": "C0SYNTHETIC", "thread": null}), "body").await.unwrap_err();
+    let failure = request.await.unwrap().unwrap_err();
 
     assert_eq!(failure.outcome, DraftFailureOutcome::Unknown);
     holder.join().unwrap();

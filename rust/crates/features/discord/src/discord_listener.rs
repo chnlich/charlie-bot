@@ -466,10 +466,21 @@ async fn run_listener_loop(
   options: Options,
   settings: ws_client::Settings,
 ) -> anyhow::Result<()> {
+  run_listener_loop_with_initial_backoff(features, client, token, options, settings, Duration::from_secs(1)).await
+}
+
+async fn run_listener_loop_with_initial_backoff(
+  features: Arc<FeatureContext>,
+  client: Arc<DiscordClient>,
+  token: String,
+  options: Options,
+  settings: ws_client::Settings,
+  initial_backoff: Duration,
+) -> anyhow::Result<()> {
   if !preflight(&client).await? {
     return Ok(());
   }
-  let mut backoff = Duration::from_secs(1);
+  let mut backoff = initial_backoff;
   loop {
     let url = match client.get_gateway_url().await {
       Ok(url) => url,
@@ -510,9 +521,7 @@ async fn run_listener_loop(
       }
       Ok(ConnectionExit::Dropped { error, saw_ready }) => {
         tracing::warn!(event = "discord_listener_connection_dropped", error);
-        if saw_ready {
-          backoff = Duration::from_secs(1);
-        }
+        backoff = reconnect_backoff_after_drop(backoff, saw_ready, initial_backoff);
       }
       Err(error) => tracing::warn!(event = "discord_listener_connection_dropped", error = %error),
     }
@@ -687,6 +696,10 @@ fn heartbeat_delay(interval: Duration) -> anyhow::Result<Duration> {
 
 fn next_backoff(backoff: Duration) -> Duration {
   backoff.saturating_mul(2).min(MAX_BACKOFF)
+}
+
+fn reconnect_backoff_after_drop(backoff: Duration, saw_ready: bool, initial_backoff: Duration) -> Duration {
+  if saw_ready { initial_backoff } else { backoff }
 }
 
 /// Re-run the shared thread follow backfill after each gateway READY.

@@ -588,9 +588,8 @@ mod tests {
     let (_dir, path) = output_path();
     let (url, address, receiver, server) = no_call_stub();
 
-    let error =
-      run_download_at(home.path(), &download_args(&format!("{url}/files-pri/T-F/image.png"), &path, "user"))
-        .unwrap_err();
+    let error = run_download_at(home.path(), &download_args(&format!("{url}/files-pri/T-F/image.png"), &path, "user"))
+      .unwrap_err();
     let text = error_text(&error);
 
     assert_eq!(error.code, 1);

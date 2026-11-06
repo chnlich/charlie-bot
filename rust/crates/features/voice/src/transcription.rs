@@ -1177,9 +1177,10 @@ mod tests {
     fake.abort();
   }
 
-  #[tokio::test(start_paused = true)]
+  #[tokio::test]
   async fn both_backend_cancellations_wait_for_the_one_second_close_timeout() {
     for backend_kind in [BackendKind::Gemini, BackendKind::Muse] {
+      tokio::time::resume();
       let (listener, endpoint) = fake_listener().await;
       let (ready, wait_until_open) = tokio::sync::oneshot::channel();
       let fake = tokio::spawn(async move {
@@ -1210,6 +1211,7 @@ mod tests {
         .await
         .expect("backend connection opens")
         .expect("fake server reports open");
+      tokio::time::pause();
       let started = tokio::time::Instant::now();
       cancel.send_replace(true);
       tokio::time::timeout(Duration::from_secs(3), task)

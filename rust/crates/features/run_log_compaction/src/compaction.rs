@@ -67,8 +67,8 @@ impl Report {
   }
 }
 
-/// Compress the log files of every run whose record ends at least [`PLAIN_RETENTION`] before `now`, and return the
-/// handler's line.
+/// The handler's line from compacting the log files of every run whose record ends at least [`PLAIN_RETENTION`]
+/// before `now`.
 pub fn compact_finished_runs(sessions_dir: &Path, now: OffsetDateTime) -> anyhow::Result<String> {
   Ok(compact(sessions_dir, now)?.summary())
 }
@@ -141,9 +141,9 @@ fn holds_compressed_log(run_dir: &Path) -> anyhow::Result<bool> {
   )
 }
 
-/// Compress one plain log file: write `<name>.zst`, verify it against the plain file byte for byte, then remove the
-/// plain file. `Ok(false)` for a file that is already stored compressed or no longer exists. On any failure the plain
-/// file stays and the partial `.zst` is removed.
+/// The compression of one plain log file: write `<name>.zst`, verify it against the plain file byte for byte, then
+/// remove the plain file. `Ok(false)` for a file that is already stored compressed or no longer exists. On any
+/// failure the plain file stays and the partial `.zst` is removed.
 fn compress_file(plain: &Path) -> anyhow::Result<bool> {
   let Some(log) = run_logs::resolve(plain) else { return Ok(false) };
   if log.is_compressed() {
@@ -159,7 +159,7 @@ fn compress_file(plain: &Path) -> anyhow::Result<bool> {
   Ok(true)
 }
 
-/// Check `compressed` against `plain`; a mismatch removes the compressed file and fails, leaving the plain file.
+/// The check of `compressed` against `plain`. A mismatch removes the compressed file and fails, leaving the plain file.
 fn verify_or_remove(plain: &Path, compressed: &Path) -> anyhow::Result<()> {
   match verify_equal(plain, compressed) {
     Ok(()) => Ok(()),
@@ -170,7 +170,7 @@ fn verify_or_remove(plain: &Path, compressed: &Path) -> anyhow::Result<()> {
   }
 }
 
-/// Write `plain` compressed to `compressed` and sync it to disk.
+/// The compressed write of `plain` into `compressed`, synced to disk.
 fn write_compressed(plain: &Path, compressed: &Path) -> anyhow::Result<()> {
   let input = File::open(plain).with_context(|| format!("opening {}", plain.display()))?;
   let mut input = BufReader::new(input);
@@ -208,7 +208,7 @@ fn verify_equal(plain: &Path, compressed: &Path) -> anyhow::Result<()> {
   }
 }
 
-/// Read until `buffer` is full or the reader ends, and return the bytes read.
+/// The count of bytes read from `reader` until `buffer` is full or the reader ends.
 fn fill(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
   let mut filled = 0;
   while filled < buffer.len() {
@@ -220,7 +220,7 @@ fn fill(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
   Ok(filled)
 }
 
-/// Remove a partial compressed file, leaving the plain log in place.
+/// The removal of a partial compressed file, leaving the plain log in place.
 fn remove_partial(path: &Path) {
   match fs::remove_file(path) {
     Ok(()) => {}

@@ -8,7 +8,7 @@ use charliebot_registry::FeatureContext;
 use charliebot_registry::{Registry, RegistryError};
 use futures_util::FutureExt;
 
-/// Register the `run_log_compaction` cron handler.
+/// The registration of the `run_log_compaction` cron handler.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.scheduled_handler("run_log_compaction", run_handler)
 }

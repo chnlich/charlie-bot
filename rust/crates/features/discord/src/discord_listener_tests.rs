@@ -271,9 +271,9 @@ async fn test_identify_carries_token_and_intents() {
   assert_eq!(identify["d"]["properties"]["device"], "charlie-bot");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_heartbeat_carries_the_last_seq() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   let mut script = GatewayScript::new(vec![ready(7)]);
   script.interval_ms = 15;
   script.acknowledge_heartbeats = true;
@@ -288,11 +288,11 @@ async fn test_heartbeat_carries_the_last_seq() {
   assert_eq!(heartbeat, &json!({"op": 1, "d": 7}));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_acked_heartbeats_keep_beating_one_interval_apart() {
   let home = Home::new_without_thread_runtime(true).await;
   let mut script = GatewayScript::new(Vec::new());
-  script.interval_ms = 3;
+  script.interval_ms = 15;
   script.acknowledge_heartbeats = true;
   script.close_after_heartbeats = Some((3, 4004));
   let gateway = Gateway::start(vec![script]).await;
@@ -410,7 +410,7 @@ fn test_stop_close_codes_are_recognized() {
 
 #[tokio::test]
 async fn test_ready_runs_the_backfill_per_connection() {
-  let home = Home::new(true).await;
+  let home = Home::new_with_trigger_manager(true).await;
   let mut script = GatewayScript::new(vec![ready(2)]);
   script.close_after_identify = Some(4004);
   let gateway = Gateway::start(vec![script]).await;

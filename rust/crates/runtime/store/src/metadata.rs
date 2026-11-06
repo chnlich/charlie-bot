@@ -195,6 +195,19 @@ pub enum TaskType {
   ColdRead,
 }
 
+impl TaskType {
+  /// The wire spelling persisted in `TaskSpec` and sent by a delegate request.
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Implement => "implement",
+      Self::QuickEdit => "quick-edit",
+      Self::ScriptRun => "script-run",
+      Self::Verify => "verify",
+      Self::ColdRead => "cold-read",
+    }
+  }
+}
+
 /// Who approves a task and takes over its delivery, persisted in `TaskSpec`. `User` holds a manager's self-archive
 /// until the user has opened the session; `Parent` closes it when its run ends.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

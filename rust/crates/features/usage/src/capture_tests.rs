@@ -2133,9 +2133,7 @@ fn a_run_array_started_at_fails_capture() {
 
 #[test]
 fn a_run_map_started_at_fails_capture() {
-  assert_run_started_at_fails(
-    r#"{"backend": "claude-main", "model": "vendor/claude-run-ts", "started_at": {"a": 1}}"#,
-  );
+  assert_run_started_at_fails(r#"{"backend": "claude-main", "model": "vendor/claude-run-ts", "started_at": {"a": 1}}"#);
 }
 
 const MASTER_RESULT: &str =

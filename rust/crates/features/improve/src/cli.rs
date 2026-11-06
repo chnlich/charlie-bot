@@ -139,7 +139,7 @@ fn start_loop(args: &StartArgs) -> Result<(), CliExit> {
     move || Ok(readback_launch(&home, &readback_session, &readback_goal, readback_plan.as_deref(), iterations));
   let result = client::post("/api/internal/improve", Value::Object(payload), Some(Box::new(readback)), &[])?;
 
-  print!("{}", json_out::render(&result, Some(2)));
+  json_out::print_result(&result);
   Ok(())
 }
 

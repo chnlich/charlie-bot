@@ -209,7 +209,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let mut output = Map::new();
   output.insert("session_id".to_string(), session_id.clone());
   output.insert("run_id".to_string(), run_id.clone());
-  print!("{}", json_out::render(&Value::Object(output), Some(2)));
+  json_out::print_result(&Value::Object(output));
   Ok(())
 }
 

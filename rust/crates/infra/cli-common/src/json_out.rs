@@ -19,6 +19,11 @@ pub fn render(value: &Value, indent: Option<usize>) -> String {
   format!("{}\n", text_repr::json_dumps(value, &style))
 }
 
+/// Print `value` as a command's result: the two-space-indented JSON block that `render` writes.
+pub fn print_result(value: &Value) {
+  print!("{}", render(value, Some(2)));
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;

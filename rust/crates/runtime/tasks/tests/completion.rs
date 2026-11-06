@@ -446,6 +446,7 @@ async fn preexisting_close_request_closes_as_archived_and_reports_to_parent() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn implement_completion_requires_review_and_landing_evidence() {
   let h = CompletionHarness::new();
   let temp = tempfile::tempdir().unwrap();
@@ -503,6 +504,7 @@ async fn implement_completion_requires_review_and_landing_evidence() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn worker_automatic_close_with_forged_landing_ref_stays_open() {
   let h = CompletionHarness::new();
   let temp = tempfile::tempdir().unwrap();
@@ -640,6 +642,7 @@ async fn saved_request_blocked_after_its_run_wakes_the_requester_once() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn agent_cancels_only_its_own_direct_child() {
   let h = CompletionHarness::new();
   let parent = h.base.create_task("parent", None, TaskProfile::Manager, "Parent").await;
@@ -657,6 +660,7 @@ async fn agent_cancels_only_its_own_direct_child() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn worker_cancel_stops_queued_runs_and_keeps_manager_and_sequence_blockers() {
   let h = CompletionHarness::new();
   let caller = CallerIdentity::Operator { session_id: None };
@@ -691,6 +695,7 @@ async fn worker_cancel_stops_queued_runs_and_keeps_manager_and_sequence_blockers
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn cancel_by_the_manager_parent_records_close_and_child_report() {
   let h = CompletionHarness::new();
   let parent = h.base.create_task("parent", None, TaskProfile::Manager, "Parent").await;
@@ -1718,6 +1723,7 @@ async fn user_message_route_restores_the_chain_and_refuses_archived_agent_input(
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn archive_cancel_reopen_routes_and_scope() {
   let h = CompletionHarness::new();
   fs::write(h.base._home.path().join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))
@@ -1915,6 +1921,7 @@ async fn agent_cancel_route_checks_direct_child_scope_and_unarchive_is_operator_
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn agent_cancel_route_stops_a_live_worker_and_returns_its_outcome() {
   let h = CompletionHarness::new();
   fs::write(h.base._home.path().join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))
@@ -1981,6 +1988,7 @@ fn sleep_stub(directory: &Path, name: &str) -> (std::process::Child, std::path::
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn closing_a_task_starts_the_session_browser_sweep() {
   let h = CompletionHarness::new();
   let caller = CallerIdentity::Operator { session_id: None };
@@ -2081,6 +2089,7 @@ async fn archive_from_run(h: &CompletionHarness, session_id: &str, run_id: &str,
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn user_approved_archive_waits_for_the_view_and_closes_when_the_view_clears_has_unread() {
   // The turn's web reply set has_unread, so the archive holds: the run end neither closes it nor sends a blocked
   // notice, and the view that clears the flag completes it and reports to the parent.
@@ -2120,6 +2129,7 @@ async fn a_view_before_the_run_ends_closes_the_archive_at_the_run_end() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_later_run_voids_a_pending_close_whatever_wakes_it() {
   // A user message, a server-generated status reminder (an agent message that the audit posts) and a scheduled trigger
   // each start a run that the close request does not own. The view that follows then leaves the session open, and the
@@ -2168,6 +2178,7 @@ async fn a_newer_run_that_finishes_first_voids_the_pending_close_at_the_owner_ru
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_child_report_before_the_view_keeps_the_session_open() {
   // The child's report wakes the manager, which starts a run. The manager's close then waits for a view that found a
   // newer turn: the request stays voided after the user opens the session.
@@ -2240,6 +2251,7 @@ async fn parent_approved_and_thread_sessions_close_at_run_end_without_a_view() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_read_after_an_operator_close_leaves_the_task_archived() {
   let h = CompletionHarness::new();
   let manager = h.base.create_task("manager", None, TaskProfile::Manager, "Manager").await;

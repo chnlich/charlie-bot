@@ -648,6 +648,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn an_edited_table_reaches_the_next_ask_probe_without_a_prompt_file_change() {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_path_buf();
     let home = tempfile::tempdir().unwrap();

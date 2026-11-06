@@ -34,6 +34,7 @@ mod tests {
   use super::*;
 
   #[test]
+  #[ignore = "integration"]
   fn pinned_identity_uses_the_current_process_stat() {
     let pinned = pin_process_identity(std::process::id());
     assert_eq!(pinned.pid, std::process::id());
@@ -41,12 +42,14 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_partial_identity_is_never_alive() {
     let boot = read_host_boot_time().unwrap();
     assert!(!is_run_alive(None, Some("1"), Some(boot), boot));
   }
 
   #[test]
+  #[ignore = "integration"]
   fn liveness_requires_the_current_start_tick_and_boot_interval() {
     let pid = std::process::id();
     let stat = read_pid_stat(pid).unwrap();

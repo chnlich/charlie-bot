@@ -380,6 +380,7 @@ async fn review_context_prefers_the_newest_assistant_summary() -> anyhow::Result
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn review_context_skips_malformed_tail_lines() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let path = dir.path().join("events.jsonl");
@@ -392,6 +393,7 @@ async fn review_context_skips_malformed_tail_lines() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn reviewer_avoids_every_member_the_worker_node_used() -> anyhow::Result<()> {
   let stack = Stack::start_with(
     vec![script_option("fake", "exit 0"), script_option("fake2", "exit 0"), script_option("fake3", "exit 0")],
@@ -407,6 +409,7 @@ async fn reviewer_avoids_every_member_the_worker_node_used() -> anyhow::Result<(
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn reviewer_never_falls_back_to_a_member_the_worker_node_used() -> anyhow::Result<()> {
   let stack = Stack::start_with(
     vec![script_option("fake", "exit 0"), script_option("fake2", "exit 0")],
@@ -435,6 +438,7 @@ async fn reviewer_never_falls_back_to_a_member_the_worker_node_used() -> anyhow:
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn check_without_used_members_keeps_the_session_backend_fallback() -> anyhow::Result<()> {
   let stack = Stack::start_with(
     vec![script_option("fake", "exit 0"), script_option("fake2", "exit 0")],
@@ -453,6 +457,7 @@ async fn check_without_used_members_keeps_the_session_backend_fallback() -> anyh
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn empty_pool_reuses_the_worker_backend_on_every_attempt() -> anyhow::Result<()> {
   let stack = Stack::start_with(vec![script_option("fake", "exit 0")], Vec::new()).await?;
   let pool = BackendPool::default();
@@ -476,6 +481,7 @@ async fn empty_pool_reuses_the_worker_backend_on_every_attempt() -> anyhow::Resu
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn repo_review_context_carries_the_delegated_spec() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
@@ -506,6 +512,7 @@ async fn repo_review_context_carries_the_delegated_spec() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn repo_review_context_refuses_a_task_with_an_empty_goal() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
@@ -536,6 +543,7 @@ async fn repo_review_context_refuses_a_task_with_an_empty_goal() -> anyhow::Resu
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn review_context_without_claimed_inputs_goes_from_spec_to_summary() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
@@ -559,6 +567,7 @@ async fn review_context_without_claimed_inputs_goes_from_spec_to_summary() -> an
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn review_context_lists_the_message_claimed_by_the_second_work_run() -> anyhow::Result<()> {
   let prompt = claim_context_prompt(&[None, Some("Second run's delegated instruction.")]).await?;
   assert!(
@@ -570,6 +579,7 @@ async fn review_context_lists_the_message_claimed_by_the_second_work_run() -> an
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn review_context_lists_claimed_messages_in_work_run_order() -> anyhow::Result<()> {
   let prompt = claim_context_prompt(&[Some("First claimed instruction."), Some("Second claimed instruction.")]).await?;
   let first =
@@ -582,6 +592,7 @@ async fn review_context_lists_claimed_messages_in_work_run_order() -> anyhow::Re
 
 // The review launch delivers snapshot bytes and task context.
 #[tokio::test]
+#[ignore = "integration"]
 async fn review_launch_builds_its_task_context_and_managed_snapshot() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
@@ -621,6 +632,7 @@ async fn review_launch_builds_its_task_context_and_managed_snapshot() -> anyhow:
 
 /// The reviewer follows the worker's route and skips the backend that ran the work.
 #[tokio::test]
+#[ignore = "integration"]
 async fn reviewer_reuses_the_worker_route_and_avoids_its_backend() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
@@ -665,6 +677,7 @@ async fn reviewer_reuses_the_worker_route_and_avoids_its_backend() -> anyhow::Re
 
 /// A route whose only member is the worker's backend leaves the reviewer to today's pool selection.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_fully_avoided_route_falls_back_to_todays_reviewer_selection() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
@@ -698,6 +711,7 @@ async fn a_fully_avoided_route_falls_back_to_todays_reviewer_selection() -> anyh
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn implement_delivery_requires_review_and_real_landing() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
@@ -736,6 +750,7 @@ async fn implement_delivery_requires_review_and_real_landing() -> anyhow::Result
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn repo_less_implement_delivers_after_review_passes() -> anyhow::Result<()> {
   let stack = Stack::start_with(
     vec![script_option("fake", &result_script("implemented")), script_option("fake2", &result_script("review ok"))],
@@ -777,6 +792,7 @@ async fn repo_less_implement_delivers_after_review_passes() -> anyhow::Result<()
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn repo_less_implement_review_failure_takes_the_failure_report() -> anyhow::Result<()> {
   let stack = Stack::start_with(
     vec![script_option("fake", &result_script("implemented")), script_option("fake2", "exit 1")],
@@ -801,6 +817,7 @@ async fn repo_less_implement_review_failure_takes_the_failure_report() -> anyhow
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn successful_worker_with_no_available_reviewer_reports_blocked() -> anyhow::Result<()> {
   let stack =
     Stack::start_with(vec![script_option("fake", &result_script("implemented"))], vec!["fake".to_string()]).await?;
@@ -821,6 +838,7 @@ async fn successful_worker_with_no_available_reviewer_reports_blocked() -> anyho
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn failed_review_with_a_queued_retry_reports_nothing_and_stays_open() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let control = tempfile::tempdir()?;
@@ -870,6 +888,7 @@ async fn failed_review_with_a_queued_retry_reports_nothing_and_stays_open() -> a
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn input_during_review_pauses_landing_and_continues_review() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let control = tempfile::tempdir()?;
@@ -969,6 +988,7 @@ async fn input_during_review_pauses_landing_and_continues_review() -> anyhow::Re
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn input_during_work_pauses_and_continues_the_node_backend_conversation() -> anyhow::Result<()> {
   let control = tempfile::tempdir()?;
   let stack = Stack::start_with(
@@ -1029,6 +1049,7 @@ async fn input_during_work_pauses_and_continues_the_node_backend_conversation() 
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn changed_prompt_hash_at_work_continuation_starts_a_fresh_context() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let control = tempfile::tempdir()?;
@@ -1104,6 +1125,7 @@ async fn changed_prompt_hash_at_work_continuation_starts_a_fresh_context() -> an
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn work_continuation_without_native_id_starts_a_fresh_context() -> anyhow::Result<()> {
   let control = tempfile::tempdir()?;
   let stack = Stack::start_with(
@@ -1158,6 +1180,7 @@ async fn work_continuation_without_native_id_starts_a_fresh_context() -> anyhow:
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn implement_work_with_pending_trigger_pauses_then_continues_and_delivers() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let control = tempfile::tempdir()?;
@@ -1235,6 +1258,7 @@ async fn implement_work_with_pending_trigger_pauses_then_continues_and_delivers(
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn failed_work_with_pending_trigger_still_reports_and_keeps_the_task_open() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 1").await?;
@@ -1261,6 +1285,7 @@ async fn failed_work_with_pending_trigger_still_reports_and_keeps_the_task_open(
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn quick_edit_with_pending_trigger_defers_completion_until_continuation() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let control = tempfile::tempdir()?;
@@ -1328,6 +1353,7 @@ async fn quick_edit_with_pending_trigger_defers_completion_until_continuation() 
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn worker_and_review_runs_put_the_gh_wrapper_first_on_path() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let temp = tempfile::tempdir()?;
@@ -1371,6 +1397,7 @@ async fn worker_and_review_runs_put_the_gh_wrapper_first_on_path() -> anyhow::Re
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn commit_published_only_on_origin_base_closes_the_reviewed_task() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
@@ -1424,6 +1451,7 @@ async fn commit_published_only_on_origin_base_closes_the_reviewed_task() -> anyh
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn commit_on_neither_base_ref_reports_blocked_with_the_git_reason() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
@@ -1471,6 +1499,7 @@ async fn commit_on_neither_base_ref_reports_blocked_with_the_git_reason() -> any
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn review_without_closing_words_reports_its_verdict_unknown() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
@@ -1518,6 +1547,7 @@ async fn review_without_closing_words_reports_its_verdict_unknown() -> anyhow::R
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn blocked_child_report_carries_landing_summary_to_parent_history() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
@@ -1565,6 +1595,7 @@ async fn blocked_child_report_carries_landing_summary_to_parent_history() -> any
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn review_with_pending_trigger_pauses_merge_and_continues_the_review() -> anyhow::Result<()> {
   let control = tempfile::tempdir()?;
   let stack = Stack::start_with(
@@ -1646,6 +1677,7 @@ async fn review_with_pending_trigger_pauses_merge_and_continues_the_review() -> 
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn failed_review_continuation_reports_failure_to_parent() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let control = tempfile::tempdir()?;
@@ -1716,6 +1748,7 @@ async fn failed_review_continuation_reports_failure_to_parent() -> anyhow::Resul
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn review_continuation_fails_when_its_backend_is_removed() -> anyhow::Result<()> {
   let control = tempfile::tempdir()?;
   let stack = Stack::start_with(

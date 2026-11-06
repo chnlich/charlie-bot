@@ -59,11 +59,13 @@ fn assert_pdeath_child_survives_blocking_keep_alive() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn pdeath_child_survives_blocking_thread_keep_alive() {
   assert_pdeath_child_survives_blocking_keep_alive();
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn child_survival_matches_parent_death_policy() {
   let root = tempfile::tempdir().unwrap();
   let base = root.path().join("user@1001.service");
@@ -73,7 +75,7 @@ async fn child_survival_matches_parent_death_policy() {
     let stderr_path = root.path().join(format!("{mode}.stderr"));
     let identity_path = root.path().join(format!("{mode}.identity"));
     let output = Command::new(std::env::current_exe().unwrap())
-      .args(["--exact", "spawn_and_exit_helper", "--nocapture"])
+      .args(["--exact", "spawn_and_exit_subprocess_entry", "--ignored", "--nocapture"])
       .env("CHARLIEBOT_SPAWN_HELPER_MODE", mode)
       .env("CHARLIEBOT_SPAWN_HELPER_BASE", &base)
       .env("CHARLIEBOT_SPAWN_HELPER_RAW", &raw_path)
@@ -114,7 +116,8 @@ async fn child_survival_matches_parent_death_policy() {
 }
 
 #[tokio::test]
-async fn spawn_and_exit_helper() {
+#[ignore = "subprocess entry point for the spawn lifecycle test"]
+async fn spawn_and_exit_subprocess_entry() {
   let Ok(mode) = std::env::var("CHARLIEBOT_SPAWN_HELPER_MODE") else {
     return;
   };

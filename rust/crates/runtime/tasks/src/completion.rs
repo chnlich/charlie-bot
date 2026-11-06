@@ -2551,6 +2551,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn self_archive_excludes_the_midturn_input_the_live_run_delivered() {
     let home = tempfile::tempdir().unwrap();
     let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
@@ -2580,6 +2581,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn self_archive_waits_when_the_run_ends_without_claiming_its_midturn_input() {
     let home = tempfile::tempdir().unwrap();
     let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
@@ -2614,6 +2616,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn self_archive_still_blocks_on_an_input_queued_for_the_next_turn() {
     let home = tempfile::tempdir().unwrap();
     let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));

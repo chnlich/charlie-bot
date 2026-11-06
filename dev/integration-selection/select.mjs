@@ -318,17 +318,25 @@ export function selectIntegrationTests(changedFiles, mapping) {
       continue;
     }
 
+    const entries = mapping.entries.filter((entry) => entry.matchers.some((matcher) => matcher.match(file)));
+
+    // A file under a crate selects its reverse dependencies and every mapping entry that also covers it: tests
+    // that read sources across crates (the structure checks) reach their binary through the mapping alone.
     const crate = mapping.cratePackages
       .filter((candidate) => file.startsWith(`${candidate.path}/`))
       .sort((left, right) => right.path.length - left.path.length)[0];
     if (crate !== undefined) {
       const filter = `rdeps(=${crate.name})`;
       rustFilters.push(filter);
-      decisions.push({ file, kind: 'crate', filter });
+      for (const entry of entries) {
+        if (entry.none) noneFiles.push({ file, entry: entry.label });
+        if (entry.rust !== undefined) rustFilters.push(entry.rust);
+        if (entry.node !== undefined) nodePatterns.push(...entry.node);
+      }
+      decisions.push({ file, kind: 'crate', filter, entries: entries.map((entry) => entry.label) });
       continue;
     }
 
-    const entries = mapping.entries.filter((entry) => entry.matchers.some((matcher) => matcher.match(file)));
     if (entries.length > 0) {
       for (const entry of entries) {
         if (entry.none) noneFiles.push({ file, entry: entry.label });
@@ -408,7 +416,7 @@ export function renderSelectionSummary(selection) {
     lines.push('', '- Changed-file classification:');
     for (const decision of selection.decisions) {
       if (decision.kind === 'all') continue;
-      const detail = decision.kind === 'crate' ? decision.filter : decision.entries.join('; ');
+      const detail = [decision.filter, ...(decision.entries ?? [])].filter(Boolean).join('; ');
       lines.push(`  - \`${decision.file}\`: ${detail}.`);
     }
   }

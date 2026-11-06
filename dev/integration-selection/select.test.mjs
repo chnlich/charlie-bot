@@ -31,6 +31,20 @@ test('crate files select reverse dependencies of the Cargo package', () => {
   assert.equal(selection.decisions[0].kind, 'crate');
 });
 
+test('a crate file also selects the mapping entries that match it', () => {
+  const parsed = mapping(
+    '[[entry]]\npaths = ["rust/crates/**/*.rs"]\nrust = "binary_id(charliebot-structure::structure)"\n',
+    [{ path: 'rust/crates/features/artifacts', name: 'charliebot-artifacts' }],
+  );
+  const selection = selectIntegrationTests(['rust/crates/features/artifacts/src/artifact_check.rs'], parsed);
+
+  assert.equal(
+    selection.rustFilter,
+    'rdeps(=charliebot-artifacts) + binary_id(charliebot-structure::structure)',
+  );
+  assert.equal(selection.decisions[0].kind, 'crate');
+});
+
 test('mapped files select their Rust and Node entries', () => {
   const parsed = mapping(
     [

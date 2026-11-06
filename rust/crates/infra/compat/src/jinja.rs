@@ -405,17 +405,36 @@ mod tests {
     }
     let expected = jinja2_renders(&cases);
     assert_eq!(expected.len(), cases.len());
-    let environment = environment(|_| Ok(None));
-    let mismatches: Vec<String> = cases
-      .iter()
-      .zip(&expected)
-      .filter_map(|((template, context), jinja2)| {
-        let ours = environment
-          .render_str(template, Value::from_serialize(context))
-          .unwrap_or_else(|error| panic!("{template} with {context}: {error}"));
-        (ours != *jinja2).then(|| format!("{template} with {context}: Jinja2 {jinja2:?}, ours {ours:?}"))
-      })
-      .collect();
+    // The renders are independent, so they compare in chunks concurrently: three thousand
+    // sequential renders pass the unit-test budget.
+    let mismatches: Vec<String> = std::thread::scope(|scope| {
+      let chunk_len = cases.len().div_ceil(4);
+      cases
+        .chunks(chunk_len)
+        .zip(expected.chunks(chunk_len))
+        .map(|(case_chunk, expected_chunk)| {
+          scope.spawn(move || {
+            let environment = environment(|_| Ok(None));
+            case_chunk
+              .iter()
+              .zip(expected_chunk)
+              .filter_map(|((template, context), jinja2)| {
+                let ours = environment
+                  .render_str(template, Value::from_serialize(context))
+                  .unwrap_or_else(|error| panic!("{template} with {context}: {error}"));
+                (ours != *jinja2).then(|| format!("{template} with {context}: Jinja2 {jinja2:?}, ours {ours:?}"))
+              })
+              .collect::<Vec<String>>()
+          })
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .flat_map(|handle| match handle.join() {
+          Ok(mismatches) => mismatches,
+          Err(payload) => std::panic::resume_unwind(payload),
+        })
+        .collect()
+    });
     assert!(
       mismatches.is_empty(),
       "{} renders differ, first {:?}",

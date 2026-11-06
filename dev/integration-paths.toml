@@ -71,3 +71,7 @@ rust = "binary_id(charliebot-server::bin/charliebot-server)"
 [[entry]]
 paths = ["web/backends/opencode/cgroup_join.sh"]
 rust = "package(charliebot-opencode)"
+
+[[entry]]
+paths = ["web/**"]
+node = ["web/tests/*.integration.test.*"]

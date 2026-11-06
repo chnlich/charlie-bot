@@ -25,6 +25,9 @@ const WORKSPACE_FILES = new Set([
   'dev/integration-paths.toml',
 ]);
 const SELECTOR_DIRECTORY = 'dev/integration-selection/';
+// A node integration test file is named by its suffix. Every tracked file with that suffix is one, and a node glob in
+// the mapping may select only those files.
+const NODE_INTEGRATION_FILE = /\.integration\.test\.m?js$/;
 
 export function parseIntegrationPaths(source) {
   let document;
@@ -360,12 +363,14 @@ export function selectIntegrationTests(changedFiles, mapping) {
     decisions,
     rustFilters: selectsAll ? ['all()'] : uniqueRustFilters,
     rustFilter: selectsAll ? 'all()' : uniqueRustFilters.length === 0 ? null : uniqueRustFilters.join(' + '),
-    nodePatterns: selectsAll ? [] : uniqueNodePatterns,
+    nodeFiles: selectsAll
+      ? nodeIntegrationFiles(mapping.trackedFiles)
+      : resolveNodePatterns(uniqueNodePatterns, mapping.trackedFiles),
     noneFiles,
   };
 }
 
-export function selectAllIntegrationTests(reason) {
+export function selectAllIntegrationTests(reason, trackedFiles) {
   return {
     all: true,
     allReason: reason,
@@ -373,9 +378,31 @@ export function selectAllIntegrationTests(reason) {
     decisions: [],
     rustFilters: ['all()'],
     rustFilter: 'all()',
-    nodePatterns: [],
+    nodeFiles: nodeIntegrationFiles(trackedFiles),
     noneFiles: [],
   };
+}
+
+// The node integration files among the tracked files, in path order: what a whole-suite run selects.
+export function nodeIntegrationFiles(trackedFiles) {
+  return trackedFiles.filter((file) => NODE_INTEGRATION_FILE.test(file)).sort();
+}
+
+// The integration files that the mapping's node globs select. A glob that selects a file which is not an
+// integration test fails the selection: that file would run in the default suite or be skipped by its name.
+function resolveNodePatterns(patterns, trackedFiles) {
+  const selected = new Set();
+  for (const pattern of patterns) {
+    const matcher = new Minimatch(pattern, { dot: true, nocomment: true, nonegate: true });
+    for (const file of trackedFiles) {
+      if (!matcher.match(file)) continue;
+      if (!NODE_INTEGRATION_FILE.test(file)) {
+        throw new Error(`node pattern ${JSON.stringify(pattern)} selects ${file}, which is not an integration test file`);
+      }
+      selected.add(file);
+    }
+  }
+  return [...selected].sort();
 }
 
 export function workspaceFileReason(file) {
@@ -388,20 +415,19 @@ export function workspaceFileReason(file) {
 export function renderSelectionSummary(selection) {
   const lines = ['## Integration selection', ''];
   if (selection.allReason !== undefined) {
-    lines.push(`- Selection: all Rust integration tests (${selection.allReason}).`);
-  } else if (selection.rustFilter === null && selection.nodePatterns.length === 0) {
-    lines.push(
-      '- Selection: empty.',
-      '- This change touches no integration tests; rust-integration passes without compiling.',
-    );
+    lines.push(`- Rust selection: all Rust integration tests (${selection.allReason}).`);
   } else if (selection.rustFilter === null) {
     lines.push('- Rust selection: empty; rust-integration passes without compiling.');
-    lines.push(`- Node selection: ${selection.nodePatterns.map((pattern) => `\`${pattern}\``).join(', ')}.`);
   } else {
     lines.push(`- Rust selection: \`${selection.rustFilter}\`.`);
-    if (selection.nodePatterns.length > 0) {
-      lines.push(`- Node selection: ${selection.nodePatterns.map((pattern) => `\`${pattern}\``).join(', ')}.`);
-    }
+  }
+  if (selection.nodeFiles.length > 0) {
+    lines.push(`- Node selection (${selection.nodeFiles.length}): ${selection.nodeFiles.map((file) => `\`${file}\``).join(', ')}.`);
+  } else {
+    lines.push('- Node selection: empty; node-integration passes without running node.');
+  }
+  if (selection.rustFilter === null && selection.nodeFiles.length === 0) {
+    lines.push('- This change touches no integration tests.');
   }
 
   if (selection.allFiles.length > 0) {

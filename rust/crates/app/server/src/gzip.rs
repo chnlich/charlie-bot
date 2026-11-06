@@ -410,9 +410,11 @@ mod tests {
 
   #[tokio::test]
   async fn a_body_past_the_memo_cap_keeps_streaming() {
-    let length = MEMO_MAX_BODY_BYTES + 1;
-    let text = "a".repeat(length);
-    let (headers, body) = run_stream("/static/huge.js", "\"v1\"", length, split_body(text.clone())).await;
+    // The memo's collect decision reads the declared Content-Length alone, so a declared length one
+    // byte past the cap keeps a small body on the streamed path a real 256 KiB body takes.
+    let text = "a".repeat(MINIMUM_SIZE + 1);
+    let (headers, body) =
+      run_stream("/static/huge.js", "\"v1\"", MEMO_MAX_BODY_BYTES + 1, split_body(text.clone())).await;
     assert_eq!(headers.get(header::CONTENT_ENCODING).unwrap(), "gzip");
     assert!(headers.get(header::CONTENT_LENGTH).is_none(), "a streamed body carries no length");
     assert_eq!(inflated(&body), text);

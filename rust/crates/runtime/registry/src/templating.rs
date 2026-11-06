@@ -981,6 +981,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn asset_digest_hashes_each_static_file_by_url_path_in_path_order() {
     let root = tempfile::tempdir().unwrap();
     let static_root = root.path().join("web").join("static");

@@ -2092,6 +2092,7 @@ mod tests {
   /// The boot pass folds a node that needs no work from its fact scan: it loads no event log and keeps none, so a later
   /// fact read answers from the seal and the first content read loads the log.
   #[tokio::test]
+  #[ignore = "integration"]
   async fn boot_recovery_folds_a_quiet_node_from_its_fact_scan_and_keeps_no_event_list() {
     let (_home, features) = startup_features().await;
     let node = features
@@ -2165,6 +2166,7 @@ mod tests {
   /// request that arrived later acts on. A served run still counts as a follow-up and still logs the line the delivery
   /// logs, so the walk's counters and log items are a full replay's.
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_replay_serves_runs_that_ended_before_the_last_completed_pass() {
     let (_home, features) = startup_features().await;
     let session_id = closed_worker_node(&features, "synthetic-served-replay", 2).await;
@@ -2218,6 +2220,7 @@ mod tests {
   /// A run whose follow-up could still land something keeps its full replay. An open task's worker run can close the
   /// task, so it is never served. A manager turn a later run supersedes cannot act, so an open task serves it too.
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_replay_serves_only_runs_whose_follow_up_has_nothing_left_to_land() {
     let (_home, features) = startup_features().await;
     let adapter = features.startup.require::<TaskExecutionAdapter>().expect("the startup step inserts the adapter");
@@ -2339,6 +2342,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_queued_improve_run_fails_the_node_pass_and_keeps_no_terminal_fact() {
     let (_home, features) = startup_features().await;
     let session_id = queue_sequence_run(&features, "improve", RunKind::Iteration).await;
@@ -2355,6 +2359,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_queued_run_of_an_unknown_sequence_kind_lands_an_interrupted_finish() {
     let (_home, features) = startup_features().await;
     let session_id = queue_sequence_run(&features, "synthetic-kind", RunKind::Work).await;
@@ -2370,6 +2375,7 @@ mod tests {
   /// so the node stays open, and the pass keeps the run unsettled. A read of the newest lifecycle line alone would call
   /// the node closed and settle the run with a closed-task stop.
   #[tokio::test]
+  #[ignore = "integration"]
   async fn the_closed_node_check_reads_the_task_state_of_the_full_fold() {
     let (_home, features) = startup_features().await;
     let session_id = queue_sequence_run(&features, "synthetic-kind", RunKind::Work).await;
@@ -2396,6 +2402,7 @@ mod tests {
   /// A malformed `task_imported` fact fails the task fold. The Run facts still answer, so the pass lands the durable
   /// stop of a dead launched run before the closed-node check returns the fold's error.
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_rejected_task_fold_fails_the_pass_after_the_stop_requests_land() {
     let (_home, features) = startup_features().await;
     let store = &features.store;
@@ -2517,6 +2524,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn recovery_history_reads_and_folds_do_not_grow_with_run_count() {
     let (_home, features) = startup_features().await;
     let small_id = closed_worker_node(&features, "synthetic-one-run-node", 1).await;

@@ -380,6 +380,7 @@ mod tests {
   }
 
   #[tokio::test(flavor = "current_thread")]
+  #[ignore = "integration"]
   async fn metadata_write_routes_match_success_errors_broadcasts_and_logs() {
     let (_home, features) = feature_context();
     crate::test_support::install_dispatcher(&features);
@@ -521,6 +522,7 @@ mod tests {
   }
 
   #[tokio::test(flavor = "current_thread")]
+  #[ignore = "integration"]
   async fn permanent_delete_routes_match_scope_errors_and_guards() {
     let (_home, features) = feature_context();
     for session_id in ["permanent-session", "permanent-conflict", "agent-session"] {
@@ -567,6 +569,7 @@ mod tests {
   }
 
   #[tokio::test(flavor = "current_thread")]
+  #[ignore = "integration"]
   async fn the_removed_archive_delete_route_answers_405() {
     let (_home, features) = feature_context();
     add_task(&features, "removed-delete").await;

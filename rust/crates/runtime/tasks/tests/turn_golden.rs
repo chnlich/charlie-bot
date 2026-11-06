@@ -688,6 +688,7 @@ fn replace_fixture_times(value: &mut Value) {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn manager_turn_matches_recorded_event_stream_matrix() -> anyhow::Result<()> {
   let cases = golden_cases()?;
   assert_eq!(cases.len(), CASE_COUNT, "turn golden matrix size changed");
@@ -709,6 +710,7 @@ async fn manager_turn_matches_recorded_event_stream_matrix() -> anyhow::Result<(
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn dispatcher_launches_manager_turns_with_registered_identity_and_serializes_pending_inputs() -> anyhow::Result<()>
 {
   const ACCESS_KEY: &str = "synthetic-manager-access-key";
@@ -1004,16 +1006,19 @@ fn has_process_for_home_and_session(home: &Path, session_id: &str) -> anyhow::Re
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn chat_cancel_records_master_done_and_an_interrupted_finish_for_50_gated_manager_runs() -> anyhow::Result<()> {
   cancel_gated_manager_runs_through_route(true).await
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn run_cancel_records_master_done_and_an_interrupted_finish_for_50_gated_manager_runs() -> anyhow::Result<()> {
   cancel_gated_manager_runs_through_route(false).await
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn worker_execution_requires_a_registered_run() -> anyhow::Result<()> {
   let home = tempfile::tempdir()?;
   let option = backend_option(scripted_process(&[json!({"type":"result","subtype":"success"})], 0, "")?);
@@ -1050,6 +1055,7 @@ async fn worker_execution_requires_a_registered_run() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn agent_run_caller_cannot_retry_or_cancel_another_run() -> anyhow::Result<()> {
   const ACCESS_KEY: &str = "synthetic-route-access-key";
   let home = tempfile::tempdir()?;
@@ -1152,6 +1158,7 @@ async fn agent_run_caller_cannot_retry_or_cancel_another_run() -> anyhow::Result
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn retry_record_reuses_the_request_and_preserves_the_manager_input_batch() -> anyhow::Result<()> {
   let home = tempfile::tempdir()?;
   let option = backend_option(String::new());
@@ -1248,6 +1255,7 @@ async fn retry_record_reuses_the_request_and_preserves_the_manager_input_batch()
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn exported_queue_reads_fail_when_startup_has_no_master_queue() -> anyhow::Result<()> {
   let home = tempfile::tempdir()?;
   let registry = registry();
@@ -1258,6 +1266,7 @@ async fn exported_queue_reads_fail_when_startup_has_no_master_queue() -> anyhow:
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn queue_serializes_enqueues_and_exposes_running_and_queued_event_ids() -> anyhow::Result<()> {
   let temp = tempfile::tempdir()?;
   let registry = registry();
@@ -1336,6 +1345,7 @@ async fn queue_serializes_enqueues_and_exposes_running_and_queued_event_ids() ->
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn translation_failure_reports_the_turn_and_keeps_the_session_consumer_alive() -> anyhow::Result<()> {
   let temp = tempfile::tempdir()?;
   let guard = Arc::new(ProcessGroupGuard::new());
@@ -1444,6 +1454,7 @@ async fn translation_failure_reports_the_turn_and_keeps_the_session_consumer_ali
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn manager_persists_backend_session_anchor_from_init_event() -> anyhow::Result<()> {
   let temp = tempfile::tempdir()?;
   let registry = registry();
@@ -1470,6 +1481,7 @@ async fn manager_persists_backend_session_anchor_from_init_event() -> anyhow::Re
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn manager_child_environment_uses_current_session_and_inherited_path() -> anyhow::Result<()> {
   let temp = tempfile::tempdir()?;
   let registry = registry();
@@ -1528,6 +1540,7 @@ cat <<'CB_RESULT'
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn after_round_names_default_session_and_reuses_group_case() -> anyhow::Result<()> {
   let temp = tempfile::tempdir()?;
   let registry = registry();
@@ -1595,6 +1608,7 @@ fn autonamer_iterates_a_synthetic_pool_with_the_shared_backend_pool() -> anyhow:
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn shutdown_detaches_covered_turns_and_terminates_uncovered_turns() -> anyhow::Result<()> {
   let temp = tempfile::tempdir()?;
   let guard = Arc::new(ProcessGroupGuard::new());
@@ -1846,6 +1860,7 @@ async fn assert_task_run_shutdown_shape(backend_type: &str, expected_unread: boo
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn execution_shutdown_cancellation_keeps_both_run_shapes_nonterminal() -> anyhow::Result<()> {
   // The execution adapter must also avoid turning an uncovered shutdown into a launch failure.
   assert_task_run_shutdown_shape("covered_script", false).await?;

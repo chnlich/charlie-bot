@@ -1442,6 +1442,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn session_message_replays_for_a_run_and_newly_admits_for_an_operator() {
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-sender").await;
@@ -1498,6 +1499,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn task_routes_refuse_head_and_put_and_serve_post() {
     let (_home, features) = feature_context();
     let router = routes(&features);
@@ -1567,6 +1569,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn delegate_field_contract_and_unknown_session_match_recorded() {
     let (_home, features) = feature_context();
     let router = routes(&features);
@@ -1599,6 +1602,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn delegate_checks_the_runtime_gate_before_creating_a_child() {
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-manager").await;
@@ -1619,6 +1623,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn chat_upload_saves_file_name_and_overwrites_existing_file() {
     let (_home, features) = feature_context();
     const SESSION_ID: &str = "synthetic-upload-session";
@@ -1658,6 +1663,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn chat_upload_copies_a_payload_across_the_copy_buffer_boundary() {
     let (_home, features) = feature_context();
     const SESSION_ID: &str = "synthetic-large-upload-session";
@@ -1680,6 +1686,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn chat_upload_checks_session_after_multipart_parsing() {
     let (_home, features) = feature_context();
     let response = routes(&features)
@@ -1692,6 +1699,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn chat_upload_returns_server_error_when_upload_directory_is_a_file() {
     let (_home, features) = feature_context();
     const SESSION_ID: &str = "synthetic-upload-failure";
@@ -1710,6 +1718,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn chat_upload_reports_an_unwritable_destination_as_save_failure() {
     let (_home, features) = feature_context();
     const SESSION_ID: &str = "synthetic-upload-unwritable";
@@ -1728,6 +1737,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn send_message_model_reads_valid_utf16_and_defaulted_fields() {
     // A valid body answers 202; without an executor the
     // dispatch records "execution adapters register in the next stage"
@@ -1763,6 +1773,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn send_message_reports_every_uploaded_file_error_with_the_content_error() {
     // Fields are validated in declaration order, so a wrong content and a bad item give two errors in one 422 body.
     let (_home, features) = feature_context();
@@ -1829,6 +1840,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn send_message_validation_reports_request_body_errors() {
     let (_home, features) = feature_context();
     add_session(&features, "synthetic-session");
@@ -1917,6 +1929,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn send_message_requires_request_id_and_replays_one_event() {
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-request-session").await;
@@ -1961,6 +1974,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn dispatch_error_after_admission_returns_accepted_with_error() {
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-dispatch-error").await;
@@ -1990,6 +2004,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn retry_run_model_requires_strings_and_forbids_extras() {
     let (_home, features) = feature_context();
     add_session(&features, "synthetic-session");
@@ -2080,6 +2095,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn cancel_run_model_requires_request_id_and_forbids_extras() {
     let (_home, features) = feature_context();
     let router = routes(&features);

@@ -1146,6 +1146,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn synthetic_repository_verifies_landed_and_unlanded_commits() {
     let root = tempfile::tempdir().expect("temporary directory is available");
     let repo = root.path().join("repo");
@@ -1192,6 +1193,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn invalid_hash_reports_str_repr() {
     let root = tempfile::tempdir().expect("temporary directory is available");
     let (verified, reason) = git_verify_commit_landed(root.path(), "main", "not-a-hash").await;

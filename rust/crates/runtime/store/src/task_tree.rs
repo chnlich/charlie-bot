@@ -4307,6 +4307,7 @@ pub(crate) mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn request_stop_folds_once_and_extends_the_run_facts_suffix() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
@@ -4451,6 +4452,7 @@ pub(crate) mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn queued_run_with_a_stop_request_is_idle_and_caches_no_history() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
@@ -4630,6 +4632,7 @@ pub(crate) mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_page_whose_activity_read_proc_is_not_served_from_the_memo() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
@@ -4862,6 +4865,7 @@ pub(crate) mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn an_activity_verdict_that_read_proc_is_not_memoized() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());

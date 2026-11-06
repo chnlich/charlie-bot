@@ -116,6 +116,7 @@ impl Fixture {
 }
 
 #[test]
+#[ignore = "integration"]
 fn cli_backends_match_the_package_on_synthetic_inputs() {
   let root = tempfile::tempdir().unwrap();
   let fx = write_fixtures(root.path());

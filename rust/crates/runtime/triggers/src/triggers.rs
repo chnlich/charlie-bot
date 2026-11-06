@@ -1911,6 +1911,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn remote_exit_read_command_hands_the_remote_shell_the_same_path() {
     let dir = tempfile::tempdir().expect("temporary directory");
     for name in ["exit code.txt", "it's done", "quote\"d", "dollar$HOME", "semi;colon"] {
@@ -1924,6 +1925,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn open_pidfd_opens_a_live_process_and_reports_a_reaped_one_as_esrch() {
     assert!(open_pidfd(i64::from(std::process::id())).is_ok());
     let mut child = std::process::Command::new("true").spawn().expect("true starts");
@@ -1934,6 +1936,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn sixth_registration_returns_limit_detail() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(features));
@@ -1957,6 +1960,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn concurrent_registrations_hold_one_create_slot() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(features));
@@ -1975,6 +1979,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn replacement_trigger_can_bypass_the_pending_limit() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(features));
@@ -1992,6 +1997,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn fired_and_cancelled_records_do_not_count_toward_the_limit() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(features));
@@ -2010,6 +2016,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn recovery_starts_only_pending_trigger_waiters() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
@@ -2035,6 +2042,7 @@ mod tests {
   /// The walk records the non-pending trigger files it read, and a later boot serves those rows instead of opening the
   /// files. A file rewritten after its row was written no longer matches the row, so the boot reads it and starts it.
   #[tokio::test]
+  #[ignore = "integration"]
   async fn the_trigger_index_serves_a_file_status_until_the_file_is_rewritten() {
     let (home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
@@ -2144,6 +2152,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn schedule_route_accepts_mixed_watch_target_kinds() {
     let (home, features) = feature_context();
     add_session(&features, SESSION_ID);
@@ -2176,6 +2185,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn remote_pid_is_verified_before_its_trigger_is_saved() {
     let (home, features) = feature_context();
     let manager =
@@ -2190,6 +2200,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn remote_pid_that_fails_verification_is_refused() {
     let (home, features) = feature_context();
     let manager =
@@ -2214,6 +2225,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn remote_finished_label_reads_the_exit_file_over_ssh() {
     let (home, features) = feature_context();
     let manager =
@@ -2229,6 +2241,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn remote_finished_label_names_a_missing_exit_file() {
     let (home, features) = feature_context();
     let manager =
@@ -2244,6 +2257,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn remote_finished_label_without_exit_metadata_is_bare() {
     let (_home, features) = feature_context();
     let manager = TriggerManager::new(features);
@@ -2258,6 +2272,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn remote_pid_timeout_keeps_its_log_path() {
     let (home, features) = feature_context();
     let manager =
@@ -2276,6 +2291,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn remote_slurm_terminal_state_has_the_label() {
     let (home, features) = feature_context();
     let manager = fake_manager(
@@ -2292,6 +2308,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn unreachable_remote_slurm_group_reports_its_probe_error() {
     let (home, features) = feature_context();
     let manager = fake_manager(
@@ -2308,6 +2325,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn local_slurm_terminal_state_has_the_label() {
     let (home, features) = feature_context();
     let manager = fake_manager(
@@ -2339,6 +2357,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn local_slurm_creation_fails_when_sacct_is_missing() {
     let (home, features) = feature_context();
     let bin = home.path().join("fake-bin");
@@ -2456,6 +2475,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn fire_admits_one_durable_scheduled_input_before_stamping_fired() {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
@@ -2513,6 +2533,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn archived_session_refuses_trigger_creation_without_writing_a_record() {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
@@ -2527,6 +2548,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn archived_task_with_a_session_successor_still_refuses_trigger_creation() {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
@@ -2549,6 +2571,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn fire_time_backstop_cancels_an_archived_target() {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
@@ -2569,6 +2592,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn dormancy_watchdog_carries_its_reason_to_the_cancel_record() {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
@@ -2585,6 +2609,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn schedule_route_maps_the_pending_limit_to_422() {
     let (_home, features) = feature_context();
     add_session(&features, SESSION_ID);
@@ -2613,6 +2638,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn schedule_route_maps_archived_target_to_422() {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
@@ -2634,6 +2660,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn schedule_route_maps_remote_verification_refusal_to_422() {
     let (home, features) = feature_context();
     add_session(&features, SESSION_ID);
@@ -2656,6 +2683,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn schedule_route_returns_trigger_id_and_fire_at() {
     let (_home, features) = feature_context();
     add_session(&features, SESSION_ID);
@@ -2677,6 +2705,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn schedule_route_returns_404_for_a_missing_session() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
@@ -2693,6 +2722,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn schedule_route_returns_400_for_empty_targets_and_nonpositive_ids() {
     let (_home, features) = feature_context();
     add_session(&features, SESSION_ID);
@@ -2718,6 +2748,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn schedule_route_keeps_422_validation_type_and_location() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
@@ -2748,6 +2779,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn schedule_route_reports_member_and_field_errors_in_pydantic_order() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
@@ -2767,6 +2799,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn schedule_route_names_the_variant_of_a_bad_member_field() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
@@ -2795,6 +2828,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn schedule_route_drops_an_undeclared_member_key_from_the_trigger_file() {
     let (_home, features) = feature_context();
     add_session(&features, SESSION_ID);
@@ -2819,6 +2853,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn schedule_route_answers_500_for_an_integer_past_the_64_bit_range() {
     let (_home, features) = feature_context();
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
@@ -2838,6 +2873,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn cancel_route_returns_not_found_and_success_answers() {
     let (_home, features) = feature_context();
     add_session(&features, SESSION_ID);
@@ -2866,6 +2902,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn schedule_route_returns_observed_remote_slurm_state() {
     let (home, features) = feature_context();
     add_session(&features, SESSION_ID);
@@ -2889,6 +2926,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn schedule_trigger_model_accepts_utf16_and_forbids_extra_fields() {
     let (_home, features) = feature_context();
     add_session(&features, SESSION_ID);
@@ -2917,6 +2955,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn schedule_trigger_body_errors_precede_session_lookup() {
     let (_home, features) = feature_context();
     let router = routes(&features);

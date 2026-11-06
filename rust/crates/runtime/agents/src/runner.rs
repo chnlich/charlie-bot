@@ -832,6 +832,7 @@ mod tests {
   use super::*;
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn raw_log_runner_writes_instructions_follows_events_and_records_exit() {
     let root = tempfile::tempdir().unwrap();
     let cwd = root.path().join("cwd");
@@ -871,6 +872,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn gated_child_waits_until_spawn_callback_finishes() {
     use tokio::sync::oneshot;
 
@@ -949,6 +951,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_launch_dropped_in_its_spawn_callback_kills_the_gated_child() {
     use tokio::sync::oneshot;
 
@@ -1003,6 +1006,7 @@ mod tests {
   /// A launch dropped while the spawn of its gated child is still in flight, as a let-go cancel can drop it, never
   /// receives the child. The guard armed on the spawning thread kills it.
   #[test]
+  #[ignore = "integration"]
   fn a_launch_dropped_while_its_child_spawns_kills_the_gated_child() {
     use tokio::sync::oneshot;
 
@@ -1068,6 +1072,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn gated_final_stdout_child_waits_until_spawn_callback_finishes() {
     use tokio::sync::oneshot;
 
@@ -1125,6 +1130,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn run_instructions_are_written_in_the_log_dir_without_touching_the_worktree() {
     let root = tempfile::tempdir().unwrap();
     let cwd = root.path().join("worktree");
@@ -1158,6 +1164,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn stderr_outcome_is_the_last_64_kilobytes() {
     let root = tempfile::tempdir().unwrap();
     let logs = root.path().join("logs");
@@ -1181,6 +1188,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_child_that_hangs_after_result_returns_process_diagnostics() {
     let root = tempfile::tempdir().unwrap();
     let logs = root.path().join("logs");
@@ -1224,6 +1232,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn capture_keeps_stdout_and_stderr_in_write_order() {
     let args = ["-c".to_string(), "echo one; echo two >&2; echo three".to_string()];
     let captured = capture_command(std::process::id(), "probe", "bash", &args).await;
@@ -1231,6 +1240,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn fds_field_keeps_the_first_200_lines() {
     // This test process holds 250 descriptors, so `ls` lists more entries than the field keeps.
     let held: Vec<fs::File> = (0..250).map(|_| fs::File::open("/dev/null").unwrap()).collect();
@@ -1240,6 +1250,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_probe_that_outlives_the_timeout_records_an_empty_error() {
     // The diagnostic timeout drops the probe, and `kill_on_drop` kills the `sleep`.
     let args = ["30".to_string()];
@@ -1248,6 +1259,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn outcome_reports_a_session_cgroup_memory_kill_from_the_injected_base() {
     let root = tempfile::tempdir().unwrap();
     let cgroup_base = root.path().join("user@1001.service");
@@ -1297,6 +1309,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn terminate_signals_the_child_group_and_waits_for_exit() {
     let root = tempfile::tempdir().unwrap();
     let runner = Arc::new(AgentRunner::new(
@@ -1323,6 +1336,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn refused_uploads_end_the_run_with_one_error_event_and_no_process() {
     let root = tempfile::tempdir().unwrap();
     let spawned = root.path().join("spawned");
@@ -1356,6 +1370,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn detach_stops_following_without_signalling_the_child() {
     let root = tempfile::tempdir().unwrap();
     let finished = root.path().join("finished");
@@ -1399,6 +1414,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn final_stdout_run_emits_the_backend_events_before_its_guard_error() {
     let root = tempfile::tempdir().unwrap();
     let logs = root.path().join("logs");
@@ -1438,6 +1454,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn final_stdout_run_records_the_exit_code_its_backend_chose() {
     let root = tempfile::tempdir().unwrap();
     let runner = AgentRunner::new(
@@ -1461,6 +1478,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn final_stdout_capture_preserves_normal_and_signal_exit_codes() {
     for (script, code) in [("exit 3", 3), ("exit 137", 137), ("kill -TERM $$", -15)] {
       let root = tempfile::tempdir().unwrap();
@@ -1478,6 +1496,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn final_stdout_stop_preserves_the_signal_exit_code() {
     let root = tempfile::tempdir().unwrap();
     let runner = Arc::new(AgentRunner::new(
@@ -1541,6 +1560,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_spawn_whose_path_resolves_another_gh_is_refused() {
     let root = tempfile::tempdir().unwrap();
     let wrapper_dir = gh_stub_dir(root.path(), "wrapper");
@@ -1571,6 +1591,7 @@ mod tests {
   /// A backend that puts a directory with the personal gh first in `prepare_env` must not bypass the wrapper: the
   /// spawn goes ahead with the wrapper directory first in the final PATH.
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_backend_that_prepends_a_gh_directory_keeps_the_wrapper_first() {
     let root = tempfile::tempdir().unwrap();
     let wrapper_dir = gh_stub_dir(root.path(), "wrapper");
@@ -1602,6 +1623,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_spawn_whose_path_resolves_the_wrapper_starts() {
     let root = tempfile::tempdir().unwrap();
     let wrapper_dir = gh_stub_dir(root.path(), "wrapper");

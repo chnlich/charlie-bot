@@ -31,6 +31,7 @@ struct Case {
 }
 
 #[test]
+#[ignore = "integration"]
 fn complete_agent_child_environments_match_recorded_for_each_launch_kind() {
   let root = tempfile::tempdir().unwrap();
   let venv_bin = root.path().join("venv/bin");

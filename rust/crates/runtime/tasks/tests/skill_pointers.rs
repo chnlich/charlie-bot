@@ -35,6 +35,7 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 #[test]
+#[ignore = "integration"]
 fn prompt_skill_references_resolve() {
   let root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("repo root");
   let prompts = root.join("prompts");

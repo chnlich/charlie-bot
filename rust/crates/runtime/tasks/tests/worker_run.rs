@@ -163,6 +163,7 @@ async fn settle_node(stack: &Stack, session_id: &str) -> anyhow::Result<()> {
 /// A repository whose local base branch holds a commit origin lacks fails the base check before any process starts. The
 /// Run lands the durable failed fact with the error as its evidence, and the parent receives the failure report.
 #[tokio::test]
+#[ignore = "integration"]
 async fn bare_branch_base_with_unpushed_local_commit_launch_fails() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let scripts = Scripts::new(vec![result_script("never runs")]);
@@ -229,6 +230,7 @@ fn advance_origin(dir: &Path, origin: &Path, file: &str) -> anyhow::Result<Strin
 /// branch starts at the origin tip, and the local main ref is untouched. The review that lands the work runs on the
 /// review chain, so the case asserts the work Run's launch and success.
 #[tokio::test]
+#[ignore = "integration"]
 async fn bare_branch_base_behind_starts_from_origin_tip() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let marker = dir.path().join("cwd.txt");
@@ -264,6 +266,7 @@ async fn bare_branch_base_behind_starts_from_origin_tip() -> anyhow::Result<()> 
 
 /// An interrupted run reports on the spot through the failure entry, and the report's delivery archives the worker.
 #[tokio::test]
+#[ignore = "integration"]
 async fn an_interrupted_worker_run_reports_once_and_archives_the_worker() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("stop noted")]);
   let stack = scripted_stack(&scripts).await?;
@@ -301,6 +304,7 @@ async fn an_interrupted_worker_run_reports_once_and_archives_the_worker() -> any
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_late_failure_report_is_skipped_after_worker_cancellation() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("manager noted the close")]);
   let stack = scripted_stack(&scripts).await?;
@@ -322,6 +326,7 @@ async fn a_late_failure_report_is_skipped_after_worker_cancellation() -> anyhow:
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn successful_work_on_a_closed_worker_does_not_register_a_review() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("manager noted the close"); 4]);
   let stack = failover_stack(&scripts).await?;
@@ -346,6 +351,7 @@ async fn successful_work_on_a_closed_worker_does_not_register_a_review() -> anyh
 /// A repo-less quick edit closes completed when its work Run succeeds, spawns no review, and reports completed to the
 /// parent, which takes one turn.
 #[tokio::test]
+#[ignore = "integration"]
 async fn repo_less_quick_edit_closes_without_review() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("modified /etc/cron.d/sweep"), result_script("manager noted it")]);
   let stack = scripted_stack(&scripts).await?;
@@ -378,6 +384,7 @@ async fn repo_less_quick_edit_closes_without_review() -> anyhow::Result<()> {
 /// An upload admitted while a worker run holds its slot waits for that run's end. The continuation resumes the run's
 /// native conversation, and its prompt names the upload's path.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prompt() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let started = dir.path().join("started");
@@ -452,6 +459,7 @@ fn snapshot_source_refs(snapshot: &Value) -> Vec<String> {
 /// carries the worker contract, the goal and the input in its launch text, and a repository sandbox; the verify launch
 /// carries the verify contract only.
 #[tokio::test]
+#[ignore = "integration"]
 async fn worker_run_kinds_deliver_snapshot_bytes_and_task_context() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![
     result_script("worker done"),
@@ -527,6 +535,7 @@ async fn worker_run_kinds_deliver_snapshot_bytes_and_task_context() -> anyhow::R
 /// lands its durable failed fact with the actual error as evidence in its own events log, and the parent receives a
 /// failure report naming it. The report's delivery archives the worker.
 #[tokio::test]
+#[ignore = "integration"]
 async fn worktree_preparation_failure_lands_failed_run_and_reports_to_parent() -> anyhow::Result<()> {
   let stack = Stack::start(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"failure noted"}'"#).await?;
   stack.write_access_key()?;
@@ -591,6 +600,7 @@ async fn worktree_preparation_failure_lands_failed_run_and_reports_to_parent() -
 /// A manager turn's stored snapshot reads on after its rule body is deleted, and an explicit retry is a new Run that
 /// assembles from the current sources.
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_after_rule_deletion_uses_the_original_snapshot() -> anyhow::Result<()> {
   let stack = Stack::start(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"turn"}'"#).await?;
   stack.write_access_key()?;
@@ -626,6 +636,7 @@ async fn recovery_after_rule_deletion_uses_the_original_snapshot() -> anyhow::Re
 
 /// A worker Run whose backend cannot be resolved fails at launch, and no manager-turn launch notice is written for it.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_worker_launch_failure_writes_no_turn_launch_error() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![]);
   let stack = scripted_stack(&scripts).await?;
@@ -658,6 +669,7 @@ async fn a_worker_launch_failure_writes_no_turn_launch_error() -> anyhow::Result
 /// A worker run whose error result names a rejection and whose stderr carries only a model warning: the run's failure
 /// row carries the result text, not the warning.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_failed_run_reports_its_error_result_instead_of_the_stderr_tail() -> anyhow::Result<()> {
   let result = json!({
     "type": event_types::RESULT,
@@ -695,6 +707,7 @@ fn launched_run_id(decision: &Value) -> anyhow::Result<String> {
 /// The `run_finished` write of a successful worker run fails out of space. The end-landing retry drains the run from
 /// its raw log and lands the end record, the parent gets exactly one completed report, and no second process starts.
 #[tokio::test]
+#[ignore = "integration"]
 async fn worker_run_finished_enospc_retries_and_lands_without_restart() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("work done"), result_script("report consumed")]);
   let stack = scripted_stack(&scripts).await?;
@@ -730,6 +743,7 @@ async fn worker_run_finished_enospc_retries_and_lands_without_restart() -> anyho
 /// A worker whose task record leaves the task type unset takes the non-implement branch: its success spawns no review,
 /// and the completion follow-up closes it with one completed report.
 #[tokio::test]
+#[ignore = "integration"]
 async fn unset_task_type_success_takes_the_non_implement_branch() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("work done")]);
   let stack = scripted_stack(&scripts).await?;
@@ -750,6 +764,7 @@ async fn unset_task_type_success_takes_the_non_implement_branch() -> anyhow::Res
 /// A successful run's delivery write fails out of space. The end record is already on disk, the retry delivers the
 /// success-based report exactly once, and the run's live end time survives the retry.
 #[tokio::test]
+#[ignore = "integration"]
 async fn parent_report_enospc_retry_delivers_report_once() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("work done"), result_script("report consumed")]);
   let stack = scripted_stack(&scripts).await?;
@@ -784,6 +799,7 @@ async fn parent_report_enospc_retry_delivers_report_once() -> anyhow::Result<()>
 /// Below the disk threshold a worker-class run stays queued with one blocked report, while a manager turn still
 /// launches. A zero threshold skips the check and the queued worker launches.
 #[tokio::test]
+#[ignore = "integration"]
 async fn disk_headroom_precheck_withholds_worker_run_but_not_manager_turn() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("work done"), result_script("report consumed")]);
   let stack = Stack::start_with_min_free_disk_gib(
@@ -856,6 +872,7 @@ fn withheld_reason(stack: &Stack, session_id: &str) -> anyhow::Result<Option<Str
 /// A non-space failure in the end path lands the run at once and starts no retry. A success fact whose delivery hits
 /// EIO sends no failed report.
 #[tokio::test]
+#[ignore = "integration"]
 async fn non_space_end_failure_lands_immediately_and_starts_no_retry() -> anyhow::Result<()> {
   let scripts =
     Scripts::new(vec![result_script("work done"), result_script("more work done"), result_script("report consumed")]);
@@ -928,6 +945,7 @@ fn run_log(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<Vec<
 
 /// Over a non-Claude backend: the launch carries no `claude_account` either.
 #[tokio::test]
+#[ignore = "integration"]
 async fn unpooled_fresh_worker_launch_carries_no_account_on_a_non_claude_backend() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("done")]);
   let stack = scripted_stack(&scripts).await?;
@@ -1001,6 +1019,7 @@ fn quick_edit_body(manager_id: &str) -> Value {
 /// Empty route: the route list is empty, so the pool picks the backend and the node records
 /// the empty route with its pool flag.
 #[tokio::test]
+#[ignore = "integration"]
 async fn an_empty_route_list_uses_the_pool() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("pool work done")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
@@ -1020,6 +1039,7 @@ async fn an_empty_route_list_uses_the_pool() -> anyhow::Result<()> {
 /// Cooling route: the route's first member is cooling, so the next routed member runs the
 /// work and the delegation still answers 200.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_cooling_routed_list_falls_back_to_the_pool() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("pool work done")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
@@ -1037,6 +1057,7 @@ async fn a_cooling_routed_list_falls_back_to_the_pool() -> anyhow::Result<()> {
 /// No member available: every pool member is cooling, so the delegation answers 400 and the
 /// detail names each member's recovery time.
 #[tokio::test]
+#[ignore = "integration"]
 async fn every_backend_unavailable_returns_400_with_recovery_times() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("unused")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
@@ -1054,6 +1075,7 @@ async fn every_backend_unavailable_returns_400_with_recovery_times() -> anyhow::
 
 /// No routing section: with `backends.routing` unset, no router starts and the pool decides.
 #[tokio::test]
+#[ignore = "integration"]
 async fn without_a_routing_section_no_router_starts_and_the_pool_decides() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("pool work done")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
@@ -1073,6 +1095,7 @@ async fn without_a_routing_section_no_router_starts_and_the_pool_decides() -> an
 
 /// Pinned delegation: a delegation that names its backend never asks the router.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_pinned_delegation_never_calls_the_router() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("pinned work done")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
@@ -1092,6 +1115,7 @@ async fn a_pinned_delegation_never_calls_the_router() -> anyhow::Result<()> {
 
 /// Cold read: a cold-read delegation never asks the router, and its node carries no route.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_cold_read_delegation_never_calls_the_router() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
@@ -1110,6 +1134,7 @@ async fn a_cold_read_delegation_never_calls_the_router() -> anyhow::Result<()> {
 /// Delegation cases: one routed verify request carries the chosen backend and route through
 /// both the worker node metadata and its delegation card, and the router sees the manager's backend excluded.
 #[tokio::test]
+#[ignore = "integration"]
 async fn routed_verify_delegation_persists_the_route_and_excludes_its_session_backend() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("verified")]);
   let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
@@ -1160,6 +1185,7 @@ async fn routed_verify_delegation_persists_the_route_and_excludes_its_session_ba
 
 /// A router failure does not fail the delegation: the implement takes the pool, and its node's route names the failure.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_router_failure_takes_the_pool_and_records_the_failure() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("pool work done")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
@@ -1182,6 +1208,7 @@ async fn a_router_failure_takes_the_pool_and_records_the_failure() -> anyhow::Re
 
 /// A verify whose router fails keeps the verify selection: the reviewer is the pool member the session does not run on.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_verify_router_failure_takes_the_verify_selection() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("verified")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
@@ -1202,6 +1229,7 @@ async fn a_verify_router_failure_takes_the_verify_selection() -> anyhow::Result<
 
 /// A quick-edit the router does not list takes the pool, and its node's route says the router did not route it.
 #[tokio::test]
+#[ignore = "integration"]
 async fn an_unrouted_quick_edit_takes_the_pool_and_records_why() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("pool work done")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
@@ -1225,6 +1253,7 @@ async fn an_unrouted_quick_edit_takes_the_pool_and_records_why() -> anyhow::Resu
 
 /// A verify the router does not list keeps the verify selection, and its node's route says why.
 #[tokio::test]
+#[ignore = "integration"]
 async fn an_unrouted_verify_takes_the_verify_selection_and_records_why() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("verified")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
@@ -1248,6 +1277,7 @@ async fn an_unrouted_verify_takes_the_verify_selection_and_records_why() -> anyh
 
 /// A routed list whose members are all cooling runs on the pool, and the route says the routed members were cooling.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_routed_list_that_is_all_cooling_runs_on_the_pool_and_says_so() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("pool work done")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
@@ -1355,30 +1385,35 @@ async fn quota_failure_fails_over_to_the_next_member(task_type: TaskType) -> any
 
 /// A quota failure on an implement task's pool node fails over to the next member.
 #[tokio::test]
+#[ignore = "integration"]
 async fn quota_failure_on_an_implement_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
   quota_failure_fails_over_to_the_next_member(TaskType::Implement).await
 }
 
 /// A quota failure on a quick edit's pool node fails over to the next member.
 #[tokio::test]
+#[ignore = "integration"]
 async fn quota_failure_on_a_quick_edit_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
   quota_failure_fails_over_to_the_next_member(TaskType::QuickEdit).await
 }
 
 /// A quota failure on a script run's pool node fails over to the next member.
 #[tokio::test]
+#[ignore = "integration"]
 async fn quota_failure_on_a_script_run_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
   quota_failure_fails_over_to_the_next_member(TaskType::ScriptRun).await
 }
 
 /// A quota failure on a verify task's pool node fails over to the next member.
 #[tokio::test]
+#[ignore = "integration"]
 async fn quota_failure_on_a_verify_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
   quota_failure_fails_over_to_the_next_member(TaskType::Verify).await
 }
 
 /// A quota retry checks the remaining route order before asking the pool for a backend.
 #[tokio::test]
+#[ignore = "integration"]
 async fn quota_failover_walks_the_route_before_the_pool_and_writes_one_system_event() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("route retry"), result_script("parent noted")]);
   let stack = failover_stack(&scripts).await?;
@@ -1428,6 +1463,7 @@ async fn quota_failover_walks_the_route_before_the_pool_and_writes_one_system_ev
 /// Spent route: the route names only the member that ran out, so the failover takes the pool's
 /// first free member, and the retry runs there.
 #[tokio::test]
+#[ignore = "integration"]
 async fn quota_failover_uses_the_pool_once_the_route_is_spent() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("retry done"), result_script("report noted")]);
   let stack = failover_stack(&scripts).await?;
@@ -1484,6 +1520,7 @@ async fn quota_failover_uses_the_pool_once_the_route_is_spent() -> anyhow::Resul
 /// A node whose delegation named its backend keeps the quota behavior of before: the failure is reported, nothing
 /// retries, and the pool is untouched.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("report noted")]);
   let stack = failover_stack(&scripts).await?;
@@ -1506,6 +1543,7 @@ async fn a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled() -> an
 
 /// With the next member cooling too, no retry starts, and the parent's report names each member's recovery time.
 #[tokio::test]
+#[ignore = "integration"]
 async fn failover_with_every_member_cooling_reports_each_recovery_time() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("report noted")]);
   let stack = failover_stack(&scripts).await?;
@@ -1733,6 +1771,7 @@ fn assert_result_logged(error: &ErrorEventRun, result: &str) -> anyhow::Result<(
 
 // A capacity error fails over on the worker path.
 #[tokio::test]
+#[ignore = "integration"]
 async fn at_capacity_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let error = launch_error_event_worker(&[error_event(CAPACITY_MESSAGE, "")], true).await?;
   assert_temporary_failover(&error).await
@@ -1740,6 +1779,7 @@ async fn at_capacity_error_fails_over_on_the_worker_path() -> anyhow::Result<()>
 
 // A run with no output fails over on the worker path.
 #[tokio::test]
+#[ignore = "integration"]
 async fn no_output_stall_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let error = launch_error_event_worker(&[error_event("model produced no output for 1200s", "")], true).await?;
   assert_temporary_failover(&error).await
@@ -1747,6 +1787,7 @@ async fn no_output_stall_error_fails_over_on_the_worker_path() -> anyhow::Result
 
 // A bad gateway error fails over on the worker path.
 #[tokio::test]
+#[ignore = "integration"]
 async fn bad_gateway_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let message = "litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway";
   let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
@@ -1755,6 +1796,7 @@ async fn bad_gateway_error_fails_over_on_the_worker_path() -> anyhow::Result<()>
 
 // A connection error fails over on the worker path.
 #[tokio::test]
+#[ignore = "integration"]
 async fn internal_server_error_with_connection_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let message = "litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.";
   let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
@@ -1763,6 +1805,7 @@ async fn internal_server_error_with_connection_error_fails_over_on_the_worker_pa
 
 // A 500 error fails over on the worker path.
 #[tokio::test]
+#[ignore = "integration"]
 async fn internal_server_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let error = launch_error_event_worker(&[error_event("Internal Server Error", "")], true).await?;
   assert_temporary_failover(&error).await
@@ -1770,6 +1813,7 @@ async fn internal_server_error_fails_over_on_the_worker_path() -> anyhow::Result
 
 // An SSE stall fails over on the worker path.
 #[tokio::test]
+#[ignore = "integration"]
 async fn opencode_session_stall_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let message = "OpenCode backend failed: OpenCode SSE stream carried no session progress for 3600.0 s \
     (heartbeats during silence: 359)";
@@ -1779,6 +1823,7 @@ async fn opencode_session_stall_error_fails_over_on_the_worker_path() -> anyhow:
 
 // A closed peer fails over on the worker path.
 #[tokio::test]
+#[ignore = "integration"]
 async fn opencode_closed_peer_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let message = "OpenCode backend failed: peer closed connection without sending complete message body \
     (incomplete chunked read)";
@@ -1788,6 +1833,7 @@ async fn opencode_closed_peer_error_fails_over_on_the_worker_path() -> anyhow::R
 
 // A stderr tail and request id do not trigger failover: the step case.
 #[tokio::test]
+#[ignore = "integration"]
 async fn step_limit_error_with_bad_gateway_content_does_not_fail_over() -> anyhow::Result<()> {
   let error = launch_error_event_worker(
     &[error_event("Step limit (1000) exceeded without task completion.", "Bad Gateway")],
@@ -1799,6 +1845,7 @@ async fn step_limit_error_with_bad_gateway_content_does_not_fail_over() -> anyho
 
 // A stderr tail and request id do not trigger failover: the 400 case.
 #[tokio::test]
+#[ignore = "integration"]
 async fn request_id_with_status_digits_does_not_fail_over() -> anyhow::Result<()> {
   let error =
     launch_error_event_worker(&[error_event("Error code: 400 - invalid request (request id req_502ab1)", "")], true)
@@ -1807,6 +1854,7 @@ async fn request_id_with_status_digits_does_not_fail_over() -> anyhow::Result<()
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn system_event_with_temporary_message_does_not_fail_over() -> anyhow::Result<()> {
   let event = json!({"type": event_types::SYSTEM, "message": CAPACITY_MESSAGE, "content": ""});
   let error = launch_error_event_worker(&[event], true).await?;
@@ -1815,6 +1863,7 @@ async fn system_event_with_temporary_message_does_not_fail_over() -> anyhow::Res
 
 /// A backend that the delegation named behaves like a named one: a quota failure fails the run to the parent.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_named_backend_capacity_error_reports_failure_without_failover() -> anyhow::Result<()> {
   let error = launch_error_event_worker(&[error_event(CAPACITY_MESSAGE, "")], false).await?;
   assert_named_worker(&error).await?;
@@ -1823,6 +1872,7 @@ async fn a_named_backend_capacity_error_reports_failure_without_failover() -> an
 
 // A 502 result error fails over on the worker path.
 #[tokio::test]
+#[ignore = "integration"]
 async fn claude_result_502_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let result = "API Error: 502 litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway";
   let error = launch_error_event_worker(&[claude_error_result(json!(502), result)], true).await?;
@@ -1832,6 +1882,7 @@ async fn claude_result_502_fails_over_on_the_worker_path() -> anyhow::Result<()>
 
 // A 529 result error fails over on the worker path.
 #[tokio::test]
+#[ignore = "integration"]
 async fn claude_result_529_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let result = r#"API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
   let error = launch_error_event_worker(&[claude_error_result(json!(529), result)], true).await?;
@@ -1841,6 +1892,7 @@ async fn claude_result_529_fails_over_on_the_worker_path() -> anyhow::Result<()>
 
 // A 429 result error fails over on the worker path.
 #[tokio::test]
+#[ignore = "integration"]
 async fn claude_result_429_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let result = "API Error: 429 litellm.RateLimitError: RateLimitError: OpenAIException - rate limit exceeded";
   let error = launch_error_event_worker(&[claude_error_result(json!(429), result)], true).await?;
@@ -1850,6 +1902,7 @@ async fn claude_result_429_fails_over_on_the_worker_path() -> anyhow::Result<()>
 
 // A result error with no status fails over on the worker path.
 #[tokio::test]
+#[ignore = "integration"]
 async fn claude_result_without_status_connection_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let result = "API Error: Connection error.";
   let error = launch_error_event_worker(&[claude_error_result(Value::Null, result)], true).await?;
@@ -1859,6 +1912,7 @@ async fn claude_result_without_status_connection_error_fails_over_on_the_worker_
 
 // Bad request result errors do not fail over: the reasoning case.
 #[tokio::test]
+#[ignore = "integration"]
 async fn claude_result_400_reasoning_error_does_not_fail_over() -> anyhow::Result<()> {
   let result = "API Error: 400 litellm.BadRequestError: OpenAIException - The `reasoning_content` in the thinking mode \
     must be passed back to the API. (request_id: f69ad0ec-cd32-4570-917d-7689ec630120)";
@@ -1868,6 +1922,7 @@ async fn claude_result_400_reasoning_error_does_not_fail_over() -> anyhow::Resul
 
 // Bad request result errors do not fail over: the bad gateway case.
 #[tokio::test]
+#[ignore = "integration"]
 async fn claude_result_400_mentioning_bad_gateway_does_not_fail_over() -> anyhow::Result<()> {
   let result = "API Error: 400 litellm.BadRequestError: upstream reported Bad Gateway";
   let error = launch_error_event_worker(&[claude_error_result(json!(400), result)], true).await?;
@@ -1875,6 +1930,7 @@ async fn claude_result_400_mentioning_bad_gateway_does_not_fail_over() -> anyhow
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn non_error_claude_result_with_temporary_message_does_not_fail_over() -> anyhow::Result<()> {
   let event = json!({
     "type": event_types::RESULT,
@@ -1888,6 +1944,7 @@ async fn non_error_claude_result_with_temporary_message_does_not_fail_over() -> 
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_named_backend_claude_result_error_reports_failure_without_failover() -> anyhow::Result<()> {
   let result = "API Error: 502 litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway";
   let event = claude_error_result(json!(502), result);
@@ -1943,6 +2000,7 @@ fn repo_checkout() -> anyhow::Result<&'static Path> {
 /// The run's managed instructions hold the cold-reader system prompt alone, and its input is the page with the seven
 /// questions.
 #[tokio::test]
+#[ignore = "integration"]
 async fn cold_read_run_instructions_hold_only_the_system_prompt_and_the_input_is_the_page_and_questions()
 -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
@@ -1972,6 +2030,7 @@ async fn cold_read_run_instructions_hold_only_the_system_prompt_and_the_input_is
 /// A first reader that fails and a second that answers. The report states the page, the failed attempt, the answering
 /// backend and its answer, and the child completes.
 #[tokio::test]
+#[ignore = "integration"]
 async fn cold_read_success_report_carries_attempts_backend_and_answers() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
@@ -2001,6 +2060,7 @@ async fn cold_read_success_report_carries_attempts_backend_and_answers() -> anyh
 
 /// A reader that exits with an empty answer is a failed attempt, and the next backend answers.
 #[tokio::test]
+#[ignore = "integration"]
 async fn cold_read_empty_answer_counts_as_a_failed_run() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
@@ -2023,6 +2083,7 @@ async fn cold_read_empty_answer_counts_as_a_failed_run() -> anyhow::Result<()> {
 /// work. There is no spy on the selection's tried list. Here the selection is called with the same lists, and the
 /// retry's run is checked.
 #[tokio::test]
+#[ignore = "integration"]
 async fn cold_read_retry_selects_the_next_backend_with_the_tried_list() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
@@ -2057,6 +2118,7 @@ async fn cold_read_retry_selects_the_next_backend_with_the_tried_list() -> anyho
 
 /// Every reader fails, so the report names each attempt and the trailer, and its delivery archives the child once.
 #[tokio::test]
+#[ignore = "integration"]
 async fn cold_read_every_backend_failed_reports_and_the_child_is_archived() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;

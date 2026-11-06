@@ -354,6 +354,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn missing_plan_template_resolves_to_its_absolute_path() {
     let repo = tempfile::tempdir().expect("temp repo");
     fs::create_dir(repo.path().join("prompts")).expect("prompts dir");

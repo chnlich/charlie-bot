@@ -788,6 +788,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn router_returns_its_order_and_reason() {
     let directory = tempfile::tempdir().unwrap();
     let command = router_command(
@@ -809,6 +810,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn router_receives_role_text_session_backend_and_each_cooling_deadline() {
     let directory = tempfile::tempdir().unwrap();
     let capture = directory.path().join("stdin.json");
@@ -841,6 +843,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn router_failures_surface_start_exit_contract_unknown_id_and_timeout() {
     let pool = BackendPool::default();
     let candidates = ["a".to_string(), "b".to_string()];

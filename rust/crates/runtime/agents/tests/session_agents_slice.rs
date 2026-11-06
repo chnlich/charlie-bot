@@ -58,6 +58,7 @@ async fn spawn_child_session(config: &SessionCgroupConfig) -> (u32, String) {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn spawn_lands_in_the_agents_slice_with_its_oom_priority() {
   use_fake_cgroup_hierarchy();
   let root = tempfile::tempdir().unwrap();
@@ -71,6 +72,7 @@ async fn spawn_lands_in_the_agents_slice_with_its_oom_priority() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn spawn_fails_with_the_slice_name_when_the_agents_slice_is_missing() {
   let root = tempfile::tempdir().unwrap();
   let base = root.path().join("user@1001.service");

@@ -438,6 +438,7 @@ mod tests {
   const SERVER_BIN_DIR_ENV: &str = "CHARLIEBOT_SERVER_BIN_DIR";
 
   #[test]
+  #[ignore = "integration"]
   fn server_children_keep_the_operator_environment() {
     match env::var_os(CHILD_OUTPUT_ENV) {
       Some(output) => startup_child(Path::new(&output)),

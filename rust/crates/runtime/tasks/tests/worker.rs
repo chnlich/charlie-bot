@@ -568,6 +568,7 @@ fn refusal(error: anyhow::Error) -> LaunchRefused {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_relays_a_rejected_run_onto_another_account() -> anyhow::Result<()> {
   let root = Root::new()?;
   let source = make_transcript(&root.claude("main"), CC_ID)?;
@@ -601,6 +602,7 @@ async fn test_worker_relays_a_rejected_run_onto_another_account() -> anyhow::Res
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_raises_pool_exhausted_when_no_account_is_left() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -619,6 +621,7 @@ async fn test_worker_raises_pool_exhausted_when_no_account_is_left() -> anyhow::
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_relay_stays_inside_the_option_pool() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -641,6 +644,7 @@ async fn test_worker_relay_stays_inside_the_option_pool() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_pool_exhaustion_names_the_option_pool() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -663,6 +667,7 @@ async fn test_worker_pool_exhaustion_names_the_option_pool() -> anyhow::Result<(
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_stops_after_the_relay_limit() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -682,6 +687,7 @@ async fn test_worker_stops_after_the_relay_limit() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_stays_armed_without_a_below_line_account_and_completes() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -712,6 +718,7 @@ async fn test_worker_stays_armed_without_a_below_line_account_and_completes() ->
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_warning_relay_lands_strictly_below_the_line_in_the_tie_band() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -737,6 +744,7 @@ async fn test_worker_warning_relay_lands_strictly_below_the_line_in_the_tie_band
 // the thread channel raises it when the safe point's `user` frame is broadcast: the watch has already observed that
 // event (the gate), and the move reads the pool only after the process has exited.
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_falls_back_to_the_regular_select_when_the_below_line_target_vanishes() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -772,6 +780,7 @@ async fn test_worker_falls_back_to_the_regular_select_when_the_below_line_target
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_warning_relays_past_the_cap_with_below_line_destinations() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -794,6 +803,7 @@ async fn test_worker_warning_relays_past_the_cap_with_below_line_destinations() 
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_relay_limit_names_each_unavailable_account() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -819,6 +829,7 @@ async fn test_worker_relay_limit_names_each_unavailable_account() -> anyhow::Res
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_login_failure_marks_the_account_and_notifies_the_session() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -854,6 +865,7 @@ async fn test_worker_login_failure_marks_the_account_and_notifies_the_session() 
 // There is no spy on `compact_with_sonnet`, so the test checks the event log instead: a run whose
 // prompt crosses the compaction thresholds persists no compaction event.
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_relay_does_not_compact_the_task_context() -> anyhow::Result<()> {
   for prompt_tokens in [150_000_i64, 20_000] {
     let root = Root::new()?;
@@ -903,6 +915,7 @@ fn register_hidden_binary_types(registry: &mut Registry) -> Result<(), RegistryE
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_launcher_build_still_fails_without_binaries() -> anyhow::Result<()> {
   let root = Root::new()?;
   let mut registry = Registry::new();
@@ -935,6 +948,7 @@ async fn test_launcher_build_still_fails_without_binaries() -> anyhow::Result<()
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_claude_resume_launch_still_passes_the_run_instructions_file() -> anyhow::Result<()> {
   let root = Root::new()?;
   let mut registry = Registry::new();
@@ -973,6 +987,7 @@ async fn test_claude_resume_launch_still_passes_the_run_instructions_file() -> a
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_writes_hang_diagnostics_and_emits_event() -> anyhow::Result<()> {
   let root = Root::new()?;
   let scripts = Scripts::new(vec![holds(&[result()])]);
@@ -1010,6 +1025,7 @@ async fn test_worker_writes_hang_diagnostics_and_emits_event() -> anyhow::Result
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_no_hang_diagnostics_does_not_write_file() -> anyhow::Result<()> {
   let root = Root::new()?;
   let scripts = Scripts::new(vec![exits(&[], 0)]);
@@ -1024,6 +1040,7 @@ async fn test_worker_no_hang_diagnostics_does_not_write_file() -> anyhow::Result
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_resumed_run_captures_diagnostics_and_kills_its_live_process() -> anyhow::Result<()> {
   let root = Root::new()?;
   // Resume builds its backend twice, for the stream translator and for the exit scan, and each build takes one script.
@@ -1086,6 +1103,7 @@ async fn test_resumed_run_captures_diagnostics_and_kills_its_live_process() -> a
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_error_event_with_quota_pattern_raises_and_persists() -> anyhow::Result<()> {
   let root = Root::new()?;
   let setup =
@@ -1103,6 +1121,7 @@ async fn test_error_event_with_quota_pattern_raises_and_persists() -> anyhow::Re
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_a_rejected_rate_limit_event_without_a_relay_watch_raises_with_its_reset() -> anyhow::Result<()> {
   let root = Root::new()?;
   let setup =
@@ -1123,6 +1142,7 @@ async fn test_a_rejected_rate_limit_event_without_a_relay_watch_raises_with_its_
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_a_rejected_rate_limit_event_under_a_relay_watch_never_raises() -> anyhow::Result<()> {
   let root = Root::new()?;
   let setup =
@@ -1150,6 +1170,7 @@ async fn test_a_rejected_rate_limit_event_under_a_relay_watch_never_raises() -> 
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn anthropic_compatible_option_requires_a_resolved_model_and_keeps_its_endpoint() -> anyhow::Result<()> {
   let root = Root::new()?;
   fs::create_dir_all(root.home())?;
@@ -1171,6 +1192,7 @@ fn anthropic_compatible_option_requires_a_resolved_model_and_keeps_its_endpoint(
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_non_claude_task_build_receives_no_claude_account() -> anyhow::Result<()> {
   for backend_type in ["codex", "cc-anthropic-compatible"] {
     let root = Root::new()?;

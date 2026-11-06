@@ -15,11 +15,16 @@ use charliebot_registry::{Registry, RegistryError, registration_step};
 
 use charliebot_agents::cli_base::CliHost;
 
+pub use charlie_code_cli::BINARY_NAME;
+
 /// The ledger's source value and the usage page's card title for Charlie Code's usage.
 pub const USAGE_SOURCE: &str = "CLC";
 
 /// The package label the composition list registers this backend's package under.
 pub const PACKAGE: &str = "backends.charlie_code";
+
+/// The backend type this package registers: the `type` a `backends.options` entry names.
+pub const TYPE_NAME: &str = "charlie-code";
 
 /// Registers the `charlie-code` type and the CLC usage source, which attributes the type's usage.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
@@ -29,7 +34,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 /// [`register`] over an explicit host.
 pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), RegistryError> {
   registry.backend_type(BackendTypeRegistration {
-    type_name: "charlie-code",
+    type_name: TYPE_NAME,
     traits: BackendTraits {
       resume: ResumeStyle::NativeId,
       restart_reattach: true,
@@ -43,12 +48,12 @@ pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), 
     lifecycle: None,
     translate_fallback: false,
   })?;
-  registry.option_schema("charlie-code", options::SCHEMA)?;
+  registry.option_schema(TYPE_NAME, options::SCHEMA)?;
   registry.usage_source(UsageSource {
     name: USAGE_SOURCE,
     id_prefixes: &["charlie-code-", "clc-"],
     run_logs_only: true,
     implementation: None,
   })?;
-  registry.attribute_backend_type("charlie-code", USAGE_SOURCE)
+  registry.attribute_backend_type(TYPE_NAME, USAGE_SOURCE)
 }

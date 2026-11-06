@@ -23,6 +23,9 @@ pub const API_KEY_ENV: &str = "CHARLIE_CODE_API_KEY";
 /// The file in the transport directory that carries the prompt; the `--task-file` option names it.
 pub const TASK_FILE_NAME: &str = "task.md";
 
+/// The executable this backend launches. It carries the backend type's name.
+pub const BINARY_NAME: &str = "charlie-code";
+
 /// The `charlie-code --json` backend of one launch.
 pub struct CharlieCodeBackend {
   bin: String,
@@ -58,7 +61,7 @@ impl CharlieCodeBackend {
       .filter(|base| !base.is_empty())
       .context("charlie-code backend requires api_base (set api_base on its backends.options entry in config.yaml)")?;
     let bin = host
-      .resolve_binary("charlie-code")?
+      .resolve_binary(BINARY_NAME)?
       .into_os_string()
       .into_string()
       .map_err(|path| anyhow::anyhow!("the charlie-code binary path is not valid Unicode: {path:?}"))?;

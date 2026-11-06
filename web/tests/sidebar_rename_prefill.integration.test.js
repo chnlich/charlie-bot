@@ -15,4 +15,3 @@ test('header handler in the template reads the live global, no server-side inter
   assert.equal(attr[1], 'startRename(event, SESSION_ID)',
     'header handler must be the static global-reading form with no interpolated session state');
 });
-

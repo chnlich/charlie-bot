@@ -151,4 +151,3 @@ test('the thinking display is recomputed from thinkingStart across a hide/show c
   context.updateThinkingTime();
   assert.equal(timeEl.textContent, '10s', 'elapsed time comes from thinkingStart, not from tick count');
 });
-

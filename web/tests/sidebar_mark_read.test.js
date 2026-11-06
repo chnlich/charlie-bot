@@ -37,4 +37,3 @@ test('markSessionRead swallows a fetch failure with a console log only', async (
 
   assert.equal(errors.length, 1, 'the failure must be logged, not propagated');
 });
-

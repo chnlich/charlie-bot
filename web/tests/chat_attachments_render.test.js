@@ -113,7 +113,3 @@ test('a file status outside the known three throws instead of rendering a succes
   assert.throws(() => context.renderFileChipRemoveButton(unknown), /Unknown file status/);
   assert.throws(() => context.renderFileChipStatusLabel(unknown), /Unknown file status/);
 });
-
-
-
-

@@ -167,10 +167,8 @@ fn word_pattern() -> &'static Regex {
 fn cd_pattern() -> &'static Regex {
   static PATTERN: OnceLock<Regex> = OnceLock::new();
   PATTERN.get_or_init(|| {
-    Regex::new(
-      r#"(?:(?<=[;&|(\n`])|^)[ \t]*cd(?=[ \t]|[;&|()\n`]|$)(?:[ \t]+((?:"[^"\n]*"|'[^'\n]*'|[^\s;&|()<>`'"])+))?"#,
-    )
-    .expect("cd pattern is valid")
+    Regex::new(r#"(?:[;&|(\n`]|^)[ \t]*cd(?:[ \t]+((?:"[^"\n]*"|'[^'\n]*'|[^\s;&|()<>`'"])+)|[ \t]*(?:[;&|()\n`]|$))"#)
+      .expect("cd pattern is valid")
   })
 }
 

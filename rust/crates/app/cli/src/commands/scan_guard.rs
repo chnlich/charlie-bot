@@ -29,8 +29,10 @@ use fancy_regex::{Captures, Regex};
 use serde_json::{Value, json};
 use shell::{parse_error, resolve_paths, shell_text, strip_quotes};
 
-/// A recursive `grep`: `-r`, `-R` or `--recursive` among its options, alone or grouped with other flags.
-const RECURSIVE_GREP: &str = r"grep\b(?=[^|;&\n]*\s(?:--recursive|-[a-zA-Z]*[rR][a-zA-Z]*)(?=\s|$))";
+/// A recursive `grep`: `-r`, `-R` or `--recursive` among its options, alone or grouped with other flags. The
+/// command-word patterns match every `grep` and this checks the flag after the match, so the search patterns stay
+/// inside the fast regular-expression engine's syntax.
+const RECURSIVE_GREP: &str = r"grep\b[^|;&\n]*?\s(?:--recursive|-[a-zA-Z]*[rR][a-zA-Z]*)(?:[\s]|$)";
 
 /// The file names a run directory holds that a glob can reach as run logs, and examples of them for name matching.
 ///
@@ -183,9 +185,11 @@ fn scan_forms(command: &str, cwd: &str) -> Result<Vec<ScanForm>, String> {
   let shell = shell_text(command);
   let resolved = resolve_paths(&shell, cwd, store_root_pattern()?)?;
   let mut forms = search_forms(&shell)?;
-  for form in search_forms(&resolved)? {
-    if !forms.contains(&form) {
-      forms.push(form);
+  if resolved != shell {
+    for form in search_forms(&resolved)? {
+      if !forms.contains(&form) {
+        forms.push(form);
+      }
     }
   }
   Ok(forms)
@@ -198,6 +202,9 @@ fn search_forms(shell: &str) -> Result<Vec<ScanForm>, String> {
   }
   for captures in rooted_search_pattern()?.captures_iter(shell) {
     let captures = captures.map_err(parse_error)?;
+    if non_recursive_grep(&captures)? {
+      continue;
+    }
     let around = groups_text(&captures);
     let prunes_store = around.contains("-prune") && around.contains(SESSIONS_DIR_NAME);
     let bounded_depth = depth_limited(&around)?;
@@ -208,6 +215,9 @@ fn search_forms(shell: &str) -> Result<Vec<ScanForm>, String> {
   }
   for captures in run_log_search_pattern()?.captures_iter(shell) {
     let captures = captures.map_err(parse_error)?;
+    if non_recursive_grep(&captures)? {
+      continue;
+    }
     let globs = glob_names(&groups_text(&captures))?;
     if globs.is_empty() || globs.iter().any(|glob| is_run_log_glob(glob)) {
       forms.push(ScanForm::RunLogSearch);
@@ -481,7 +491,7 @@ fn store_or_parent_token() -> Result<String, String> {
 /// store, or `$(ls|find ... <store>)`.
 fn enumeration_token(store: &str) -> String {
   format!(
-    concat!(r"(?:", r"{store}/\*", r"|(?<![\w/])\*/(?:{metadata}|{data}/)", r"|\$\((?:ls|find)\s[^)]*{store}", r")"),
+    concat!(r"(?:", r"{store}/\*", r"|(?:^|[^\w/])\*/(?:{metadata}|{data}/)", r"|\$\((?:ls|find)\s[^)]*{store}", r")"),
     store = store,
     metadata = regex::escape(METADATA_FILE_NAME),
     data = regex::escape(DATA_DIR_NAME),
@@ -588,17 +598,29 @@ fn rooted_search_pattern() -> Result<&'static Regex, String> {
   PATTERN
     .get_or_init(|| {
       Regex::new(&format!(
-        concat!(
-          r"\b(?:find|rg|{recursive_grep}|fd)\b([^|;&\n]*?)",
-          r"\s(?:/home/?|/|~|~/|\$HOME|{home}/?)(?=\s|$|\))([^|;&\n]*)"
-        ),
-        recursive_grep = RECURSIVE_GREP,
+        concat!(r"\b(?:find|rg|grep|fd)\b([^|;&\n]*?)", r"\s(?:/home/?|/|~|~/|\$HOME|{home}/?)(?:[\s)]|$)([^|;&\n]*)"),
         home = home_token()?
       ))
       .map_err(parse_error)
     })
     .as_ref()
     .map_err(Clone::clone)
+}
+
+/// Whether the match's command word is a `grep` that holds no recursive flag: the arm matches every grep, and a
+/// non-recursive grep is no refused form. `whole` is the match, which starts at the command word.
+fn non_recursive_grep(captures: &Captures<'_>) -> Result<bool, String> {
+  let whole = captures.get(0).expect("group 0 is the whole match").as_str();
+  if !whole.starts_with("grep") {
+    return Ok(false);
+  }
+  Ok(!recursive_flag_pattern()?.is_match(whole).map_err(parse_error)?)
+}
+
+/// A recursive `grep` inside one command segment: `grep` with `-r`, `-R` or `--recursive` later in the segment.
+fn recursive_flag_pattern() -> Result<&'static Regex, String> {
+  static PATTERN: OnceLock<Result<Regex, String>> = OnceLock::new();
+  PATTERN.get_or_init(|| Regex::new(RECURSIVE_GREP).map_err(parse_error)).as_ref().map_err(Clone::clone)
 }
 
 /// Whether the search bounds its depth: find's `-maxdepth`, or rg's and fd's `--max-depth` (spaced or with `=`) and
@@ -613,7 +635,7 @@ fn depth_limited(search_text: &str) -> Result<bool, String> {
 fn depth_flag_pattern() -> Result<&'static Regex, String> {
   static PATTERN: OnceLock<Result<Regex, String>> = OnceLock::new();
   PATTERN
-    .get_or_init(|| Regex::new(concat!(r"(?<![\w-])-d\s*\d", r"|--max-depth(?:\s+|=)\d")).map_err(parse_error))
+    .get_or_init(|| Regex::new(concat!(r"(?:^|[^\w-])-d\s*\d", r"|--max-depth(?:\s+|=)\d")).map_err(parse_error))
     .as_ref()
     .map_err(Clone::clone)
 }
@@ -624,8 +646,7 @@ fn run_log_search_pattern() -> Result<&'static Regex, String> {
   PATTERN
     .get_or_init(|| {
       Regex::new(&format!(
-        concat!(r"\b(?:rg|{recursive_grep})\b([^|;&\n]*?)", r#"\s\"?(?:{store_or_parent})/?\"?(?=\s|$|\))([^|;&\n]*)"#),
-        recursive_grep = RECURSIVE_GREP,
+        concat!(r"\b(?:rg|grep)\b([^|;&\n]*?)", r#"\s\"?(?:{store_or_parent})/?\"?(?:[\s)]|$)([^|;&\n]*)"#),
         store_or_parent = store_or_parent_token()?
       ))
       .map_err(parse_error)
@@ -685,7 +706,7 @@ fn command_segment_pattern() -> &'static Regex {
 fn glob_pattern() -> &'static Regex {
   static PATTERN: OnceLock<Regex> = OnceLock::new();
   PATTERN
-    .get_or_init(|| Regex::new(r#"(?:-g|--glob|--include)[ =]['"]?(?!!)([^'" ]+)"#).expect("glob pattern is valid"))
+    .get_or_init(|| Regex::new(r#"(?:-g|--glob|--include)[ =]['"]?([^'" !][^'" ]*)"#).expect("glob pattern is valid"))
 }
 
 #[cfg(test)]

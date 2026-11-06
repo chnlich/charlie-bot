@@ -166,7 +166,7 @@ function formatTime(seconds) {
 function readTestcases(file, runner) {
   const xml = readFileSync(file, 'utf8');
   const testcases = [];
-  const re = /<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase\s*>)/g;
+  const re = /<testcase\b((?:"[^"]*"|'[^']*'|[^>])*)(\/>|>([\s\S]*?)<\/testcase\s*>)/g;
   let match;
   while ((match = re.exec(xml)) !== null) {
     const attrs = attributes(match[1]);

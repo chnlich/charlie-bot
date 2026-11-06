@@ -15,7 +15,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use charliebot_core::timefmt;
-use charliebot_store::metadata::{SessionMetadata, SessionStatus};
+use charliebot_store::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
 use charliebot_store::{Store, StoreResult};
 use lru::LruCache;
 
@@ -59,6 +59,11 @@ const SIGNATURE_BATCH_MIN_PATHS: usize = 32;
 const SCAN_BATCH_WORKERS: usize = 16;
 /// The fewest scans a batch runs on its own threads: starting them costs more than a short batch saves.
 const SCAN_BATCH_MIN_JOBS: usize = 32;
+/// The candidates the first scan batch reads before the route checks whether the answer's slots are full.
+///
+/// The scan runs newest-first, so the first window holds the newest matches a full answer can carry. A window larger
+/// than the slots need would read files the answer cannot hold; a smaller one needs more batches to fill it.
+const SCAN_WINDOW_CANDIDATES: usize = 512;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FileSignature {
@@ -422,22 +427,49 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
       scans.retain(|(index, _)| !indexed.contains(index));
     }
   }
+  // The result keeps the newest `SEARCH_RESULT_LIMIT` matches, so the scans run newest-first and stop once every
+  // unscanned candidate is older than the result's oldest slot: such a candidate cannot enter the capped result,
+  // however its chat file reads. A common word matches most of the corpus, so this is the difference between reading
+  // the corpus and reading the rows the answer can hold.
+  scans.sort_by_key(|(index, _)| Reverse(all[work.candidate_rows[*index]].updated_at));
+  let mut matched: Vec<UtcDateTime> =
+    name_hits.iter().enumerate().filter(|(_, hit)| **hit).map(|(row, _)| all[row].updated_at).collect();
   let mut scan_failures = 0;
-  for ((index, _), answer) in scans.iter().zip(scan_contents(&work.candidates, &scans, &needle)) {
-    let path = &work.candidates[*index].path;
-    let signature = signatures[*index].expect("a scanned candidate holds its signature");
-    match answer {
-      Ok(true) => {
-        memos.lock().expect("session search memo mutex is not poisoned").remember_root(path, &needle, signature, true);
-        content_hits[*index] = true;
+  let mut scanned = 0;
+  while scanned < scans.len() {
+    // Only the first window is short: a needle whose matches are sparse enough to leave it short needs the whole
+    // scan to reach the cap, so the remaining candidates go in one batch and pay no further thread start.
+    let end = if scanned == 0 { SCAN_WINDOW_CANDIDATES.min(scans.len()) } else { scans.len() };
+    let window = &scans[scanned..end];
+    for ((index, _), answer) in window.iter().zip(scan_contents(&work.candidates, window, &signatures, &needle)) {
+      let path = &work.candidates[*index].path;
+      let signature = signatures[*index].expect("a scanned candidate holds its signature");
+      match answer {
+        Ok(true) => {
+          memos
+            .lock()
+            .expect("session search memo mutex is not poisoned")
+            .remember_root(path, &needle, signature, true);
+          content_hits[*index] = true;
+          matched.push(all[work.candidate_rows[*index]].updated_at);
+        }
+        Ok(false) => memos
+          .lock()
+          .expect("session search memo mutex is not poisoned")
+          .remember_root(path, &needle, signature, false),
+        Err(error) => {
+          scan_failures += 1;
+          log_search_read_failed_once(memos, &all[work.candidate_rows[*index]].id, &error);
+        }
       }
-      Ok(false) => {
-        memos.lock().expect("session search memo mutex is not poisoned").remember_root(path, &needle, signature, false)
-      }
-      Err(error) => {
-        scan_failures += 1;
-        log_search_read_failed_once(memos, &all[work.candidate_rows[*index]].id, &error);
-      }
+    }
+    scanned = end;
+    if scanned == scans.len() {
+      break;
+    }
+    let Some(cutoff) = result_cutoff(&mut matched) else { continue };
+    if all[work.candidate_rows[scans[scanned].0]].updated_at < cutoff {
+      break;
     }
   }
 
@@ -661,6 +693,18 @@ fn absence_rescan_start(roots: &[(String, FileSignature)], signature: FileSignat
   Some(best_size.map_or(0, |size| size.saturating_sub((4 * needle.chars().count() + 8) as u64)))
 }
 
+/// The `updated_at` of the oldest row a full result holds, or `None` while the matches are fewer than the cap.
+///
+/// A candidate older than this value cannot enter the answer however its chat file reads, because the cap already
+/// holds `SEARCH_RESULT_LIMIT` matches at or above it.
+fn result_cutoff(matched: &mut [UtcDateTime]) -> Option<UtcDateTime> {
+  if matched.len() < SEARCH_RESULT_LIMIT {
+    return None;
+  }
+  let (_, cutoff, _) = matched.select_nth_unstable_by(SEARCH_RESULT_LIMIT - 1, |left, right| right.cmp(left));
+  Some(*cutoff)
+}
+
 /// The trigrams a lowercase ASCII needle holds; a window with any other byte contributes none.
 ///
 /// Every window of the needle's own bytes is a window of any text that holds the needle, so an index that lacks one
@@ -735,9 +779,7 @@ fn index_and_search_file(path: &Path, needle: &str) -> ContentIndexAnswer {
 
 /// A content index and a needle search for each named candidate, each answer carrying its candidate's index.
 ///
-/// The batch splits by file size and not by file count, because the candidates range over four orders of magnitude
-/// and the route waits on its slowest worker. The split is why the answers come in no fixed order; the caller pairs
-/// each answer with the index it carries.
+/// The split is why the answers come in no fixed order; the caller pairs each answer with the index it carries.
 fn index_and_search_files(
   paths: &[WatchedFile],
   jobs: &[usize],
@@ -748,15 +790,8 @@ fn index_and_search_files(
   if jobs.len() < SCAN_BATCH_MIN_JOBS || workers < 2 {
     return jobs.iter().map(|index| (*index, index_and_search_file(&paths[*index].path, needle))).collect();
   }
-  let mut order = jobs.to_vec();
-  order.sort_by_key(|index| Reverse(signatures[*index].map_or(0, |signature| signature.size)));
-  let mut bins: Vec<Vec<usize>> = (0..workers).map(|_| Vec::new()).collect();
-  let mut loads = vec![0u64; workers];
-  for index in order {
-    let lightest = (0..workers).min_by_key(|worker| loads[*worker]).expect("a worker exists");
-    loads[lightest] += signatures[index].map_or(0, |signature| signature.size);
-    bins[lightest].push(index);
-  }
+  let bins =
+    size_balanced_bins(jobs.len(), |slot| signatures[jobs[slot]].map_or(0, |signature| signature.size), workers);
   let mut answers = Vec::with_capacity(jobs.len());
   std::thread::scope(|scope| {
     let handles: Vec<_> = bins
@@ -764,7 +799,10 @@ fn index_and_search_files(
       .filter(|bin| !bin.is_empty())
       .map(|bin| {
         scope.spawn(move || {
-          bin.into_iter().map(|index| (index, index_and_search_file(&paths[index].path, needle))).collect::<Vec<_>>()
+          bin
+            .into_iter()
+            .map(|slot| (jobs[slot], index_and_search_file(&paths[jobs[slot]].path, needle)))
+            .collect::<Vec<_>>()
         })
       })
       .collect();
@@ -775,37 +813,48 @@ fn index_and_search_files(
   answers
 }
 
-fn scan_content(path: &Path, needle: &str, start: u64) -> io::Result<bool> {
+fn scan_content(path: &Path, needle: &str, start: u64, buffer: &mut ScanBuffer) -> io::Result<bool> {
   let mut file = File::open(path)?;
   file.seek(SeekFrom::Start(start))?;
   if needle.is_ascii() {
-    return scan_ascii(&mut file, needle.as_bytes());
+    return scan_ascii(&mut file, needle.as_bytes(), buffer);
   }
   scan_unicode(&mut file, needle, start > 0)
 }
 
-fn scan_ascii(file: &mut File, needle: &[u8]) -> io::Result<bool> {
+/// The read buffer one scan worker reuses across the files it scans.
+///
+/// A query scans thousands of files, so a fresh zeroed buffer per file would cost more than the reads it holds. The
+/// buffer keeps each read's last bytes in front of the next read, so a needle that spans a chunk boundary is still
+/// one contiguous window.
+struct ScanBuffer {
+  bytes: Vec<u8>,
+}
+
+impl ScanBuffer {
+  fn new(overlap: usize) -> Self {
+    Self { bytes: vec![0_u8; overlap + SEARCH_CHUNK_SIZE] }
+  }
+}
+
+fn scan_ascii(file: &mut File, needle: &[u8], buffer: &mut ScanBuffer) -> io::Result<bool> {
   let overlap = needle.len().saturating_sub(1);
-  // memchr's memmem is the two-way search behind the substring test,
-  // built once per scan over the folded windows.
+  // memchr's memmem is the two-way search behind the substring test, built once per scan over the folded windows.
   let finder = memchr::memmem::Finder::new(needle);
-  let mut tail = Vec::with_capacity(overlap);
-  let mut chunk = vec![0_u8; SEARCH_CHUNK_SIZE];
-  let mut window = Vec::with_capacity(SEARCH_CHUNK_SIZE + overlap);
+  let mut carry = 0;
   loop {
-    let count = file.read(&mut chunk)?;
+    let count = file.read(&mut buffer.bytes[carry..])?;
     if count == 0 {
       return Ok(false);
     }
-    chunk[..count].make_ascii_lowercase();
-    window.clear();
-    window.extend_from_slice(&tail);
-    window.extend_from_slice(&chunk[..count]);
-    if finder.find(&window).is_some() {
+    let filled = carry + count;
+    let window = &mut buffer.bytes[..filled];
+    window.make_ascii_lowercase();
+    if finder.find(window).is_some() {
       return Ok(true);
     }
-    tail.clear();
-    tail.extend_from_slice(&window[window.len().saturating_sub(overlap)..]);
+    carry = filled.min(overlap);
+    buffer.bytes.copy_within(filled - carry..filled, 0);
   }
 }
 
@@ -862,31 +911,65 @@ fn scan_unicode(file: &mut File, needle: &str, replace_invalid: bool) -> io::Res
   }
 }
 
+/// Split `jobs` across `workers` bins so the heaviest bin holds the least bytes it can.
+///
+/// The batches' files range over four orders of magnitude, and a batch waits on its heaviest worker. A file count per
+/// worker would hand one worker a 144 MB file beside its share of the small ones.
+fn size_balanced_bins(jobs: usize, size: impl Fn(usize) -> u64, workers: usize) -> Vec<Vec<usize>> {
+  let mut order: Vec<usize> = (0..jobs).collect();
+  order.sort_by_key(|job| Reverse(size(*job)));
+  let mut bins: Vec<Vec<usize>> = (0..workers).map(|_| Vec::new()).collect();
+  let mut loads = vec![0u64; workers];
+  for job in order {
+    let lightest = (0..workers).min_by_key(|worker| loads[*worker]).expect("a worker exists");
+    loads[lightest] += size(job);
+    bins[lightest].push(job);
+  }
+  bins
+}
+
 /// The scan answer of every job, in the jobs' order.
 ///
 /// A scan reads its file from the start offset to the end. The jobs touch different files, so a batch long
-/// enough to pay for them runs the jobs on their own threads.
-fn scan_contents(paths: &[WatchedFile], scans: &[(usize, u64)], needle: &str) -> Vec<io::Result<bool>> {
+/// enough to pay for them runs the jobs on their own threads, each holding one read buffer for every file it scans.
+fn scan_contents(
+  paths: &[WatchedFile],
+  scans: &[(usize, u64)],
+  signatures: &[Option<FileSignature>],
+  needle: &str,
+) -> Vec<io::Result<bool>> {
   let workers = std::thread::available_parallelism().map_or(1, |count| count.get()).min(SCAN_BATCH_WORKERS);
   if scans.len() < SCAN_BATCH_MIN_JOBS || workers < 2 {
-    return scans.iter().map(|(index, start)| scan_content(&paths[*index].path, needle, *start)).collect();
+    let mut buffer = ScanBuffer::new(needle.len().saturating_sub(1));
+    return scans.iter().map(|(index, start)| scan_content(&paths[*index].path, needle, *start, &mut buffer)).collect();
   }
-  let chunk = scans.len().div_ceil(workers);
-  let mut answers = Vec::with_capacity(scans.len());
+  let bins =
+    size_balanced_bins(scans.len(), |slot| signatures[scans[slot].0].map_or(0, |signature| signature.size), workers);
+  let mut answers: Vec<Option<io::Result<bool>>> = scans.iter().map(|_| None).collect();
   std::thread::scope(|scope| {
-    let handles: Vec<_> = scans
-      .chunks(chunk)
-      .map(|chunk| {
+    let handles: Vec<_> = bins
+      .into_iter()
+      .filter(|bin| !bin.is_empty())
+      .map(|bin| {
         scope.spawn(move || {
-          chunk.iter().map(|(index, start)| scan_content(&paths[*index].path, needle, *start)).collect::<Vec<_>>()
+          let mut buffer = ScanBuffer::new(needle.len().saturating_sub(1));
+          bin
+            .into_iter()
+            .map(|slot| {
+              let (index, start) = scans[slot];
+              (slot, scan_content(&paths[index].path, needle, start, &mut buffer))
+            })
+            .collect::<Vec<_>>()
         })
       })
       .collect();
     for handle in handles {
-      answers.extend(handle.join().expect("a scan worker finishes without panic"));
+      for (slot, answer) in handle.join().expect("a scan worker finishes without panic") {
+        answers[slot] = Some(answer);
+      }
     }
   });
-  answers
+  answers.into_iter().map(|answer| answer.expect("every scan job answers")).collect()
 }
 
 #[cfg(test)]
@@ -915,7 +998,7 @@ mod tests {
     file.write_all(&body).unwrap();
     file.seek(SeekFrom::Start(0)).unwrap();
 
-    assert!(super::scan_ascii(&mut file, b"boundary-needle").unwrap());
+    assert!(super::scan_ascii(&mut file, b"boundary-needle", &mut super::ScanBuffer::new(14)).unwrap());
   }
 
   #[test]
@@ -923,9 +1006,9 @@ mod tests {
     let mut file = tempfile::tempfile().unwrap();
     file.write_all(b"needle at the start, then synthetic filler").unwrap();
     file.seek(SeekFrom::Start(0)).unwrap();
-    assert!(super::scan_ascii(&mut file, b"needle at").unwrap());
+    assert!(super::scan_ascii(&mut file, b"needle at", &mut super::ScanBuffer::new(8)).unwrap());
     file.seek(SeekFrom::Start(0)).unwrap();
-    assert!(!super::scan_ascii(&mut file, b"absent-needle").unwrap());
+    assert!(!super::scan_ascii(&mut file, b"absent-needle", &mut super::ScanBuffer::new(12)).unwrap());
   }
 
   /// A batch keeps the argument order across its threads: a signature that moved to another file's
@@ -970,13 +1053,17 @@ mod tests {
     let mut paths = Vec::new();
     for index in 0..super::SCAN_BATCH_MIN_JOBS + 13 {
       let path = home.path().join(format!("chat-{index:03}.jsonl"));
-      let body =
+      let mut body =
         if index % 7 == 0 { format!("event {index} carries the needle\n") } else { format!("event {index}\n") };
+      // Files of different sizes take different shares of a size-balanced batch.
+      body.push_str(&".".repeat(index * 37));
       fs::write(&path, body).unwrap();
       paths.push(super::watched_file(home.path(), path));
     }
     let scans: Vec<(usize, u64)> = (0..paths.len()).map(|index| (index, 0)).collect();
-    let answers = super::scan_contents(&paths, &scans, "needle");
+    let signatures: Vec<Option<super::FileSignature>> =
+      paths.iter().map(|file| super::file_signature_unlogged(&file.path).ok()).collect();
+    let answers = super::scan_contents(&paths, &scans, &signatures, "needle");
     assert_eq!(answers.len(), paths.len());
     for (index, answer) in answers.iter().enumerate() {
       assert_eq!(answer.as_ref().unwrap(), &(index % 7 == 0), "candidate {index} answers for itself");
@@ -1082,6 +1169,40 @@ mod tests {
 
     let rows = search_sessions(&store, "  \t").unwrap().rows;
     assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["new", "old"]);
+  }
+
+  /// A full result stops scanning once every unscanned session is older than the answer's oldest row, and it still
+  /// holds exactly the newest matches. The corpus spans more than one scan window, and the trigram index admits every
+  /// file, so the stop is the only reason the older matches stay unread.
+  #[test]
+  fn a_full_result_stops_the_scan_at_the_newest_matches() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    // Rank 0 is the newest session. The newest 300 mention "walrus" without the needle, so their files reach the
+    // scan and answer absent; the oldest 340 carry the needle.
+    for rank in 0..640 {
+      let minutes = 640 - rank;
+      write_session(
+        &store,
+        &format!("rank-{rank:03}"),
+        &format!("session {rank:03}"),
+        SessionStatus::Active,
+        &format!("2026-08-01T{:02}:{:02}:00Z", 12 + minutes / 60, minutes % 60),
+      );
+      let path = store.chat_events_path(&format!("rank-{rank:03}"));
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      let body = if rank < 300 { "walrus without the digit\n" } else { "walrus1 in the events\n" };
+      fs::write(&path, body).unwrap();
+    }
+    let memos = Mutex::new(super::SearchMemos::default());
+    // The first query indexes every file; the second reads them through the content index and the scan windows.
+    assert!(super::search_sessions_with_memos(&store, "zzzq", &memos).unwrap().rows.is_empty());
+
+    let rows = super::search_sessions_with_memos(&store, "walrus1", &memos).unwrap().rows;
+    let ids: Vec<&str> = rows.iter().map(|meta| meta.id.as_str()).collect();
+    assert_eq!(ids.len(), 200);
+    assert_eq!(ids.first().copied(), Some("rank-300"), "the newest match is the first row");
+    assert_eq!(ids.last().copied(), Some("rank-499"), "the answer holds the newest 200 matches");
   }
 
   #[test]

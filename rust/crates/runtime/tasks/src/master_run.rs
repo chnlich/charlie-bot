@@ -31,6 +31,10 @@ use crate::run_support::{
 const NOTICE: &str = "[模型未输出正文，以下为其思考内容]";
 const POST_RESULT_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// The log event a recovered manager turn logs when it resumes a session's recorded Claude Code run. The
+/// release-switch script tests' fake server emits the same line, so both read the name here.
+pub const MASTER_CC_RESUMING_EVENT: &str = "master_cc_resuming";
+
 /// The per-round result consumed by the session queue.
 pub(crate) struct MasterRunOutcome {
   pub cc_session_id: Option<String>,
@@ -886,7 +890,7 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   let cursor_path = log_dir.join(CURSOR_NAME);
   let stderr_path = log_dir.join(STDERR_LOG_NAME);
   let option = resolve_resume_option(item);
-  tracing::info!(target: "charliebot_tasks", session = %metadata.id, pid = record.pid, raw_log = %raw_path.display(), "master_cc_resuming");
+  tracing::info!(target: "charliebot_tasks", session = %metadata.id, pid = record.pid, raw_log = %raw_path.display(), "{}", MASTER_CC_RESUMING_EVENT);
   let backend_type = option.as_ref().map(|option| option.backend_type.as_str()).unwrap_or("unknown");
   let model = option.as_ref().map(|option| option.model.as_str());
   let tracker = Arc::new(Mutex::new(RunTimingTracker::new(&metadata.id, backend_type, model)));

@@ -831,6 +831,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_tasks::spawner_prompt::WORKER_PROMPT_PATH`.",
   },
   OwnerRow {
+    name: "master_cc_resuming",
+    owner: "runtime/tasks",
+    hint: "Use `charliebot_tasks::master_run::MASTER_CC_RESUMING_EVENT`.",
+  },
+  OwnerRow {
     name: "stdout.log",
     owner: "runtime/agents",
     hint: "Use `charliebot_agents::transport::final_stdout::STDOUT_LOG_NAME`.",

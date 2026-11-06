@@ -29,6 +29,7 @@ use charliebot_session_api::api as session_routes;
 use charliebot_store::layout;
 use charliebot_store::metadata::MetadataReadError;
 use charliebot_store::run_records::{RUN_EVENTS_NAME, event_line, read_run_metadata};
+use charliebot_tasks::master_run::MASTER_CC_RESUMING_EVENT;
 use charliebot_tasks::routes as task_routes;
 use regex::Regex;
 use serde::Deserialize;
@@ -203,7 +204,7 @@ fn recovery_logs(home: &Path, adopt: bool) -> io::Result<()> {
       if adopt {
         log("task_recovery_resume", json!({"session_id": meta["session_id"], "run_id": meta["id"]}));
       }
-      log("master_cc_resuming", json!({"session_id": meta["session_id"], "run_id": meta["id"]}));
+      log(MASTER_CC_RESUMING_EVENT, json!({"session_id": meta["session_id"], "run_id": meta["id"]}));
     }
   }
   Ok(())

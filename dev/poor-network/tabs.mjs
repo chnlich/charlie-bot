@@ -65,9 +65,12 @@ export class Tab {
     this.#bodyPattern = pattern;
   }
 
-  // Waits until every kept body that a finished request owes has been read.
+  // Waits until every kept body that a finished request owes has been read, also the ones whose requests finish while
+  // this waits: a read that starts after the loop took its snapshot is awaited on the next pass.
   async bodiesRead() {
-    await Promise.all([...this.#bodyReads]);
+    while (this.#bodyReads.size > 0) {
+      await Promise.all([...this.#bodyReads]);
+    }
   }
 
   // The DOM. Each call runs in the page.

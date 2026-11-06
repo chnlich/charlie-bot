@@ -1,8 +1,8 @@
 //! The thread-origin fields: the session metadata fields that name the chat thread a session answers.
 //!
 //! A chat platform package registers its origin field once, beside its metadata slot
-//! (`Registry::thread_origin_field`). The thread-session test reads this one list, so the Threads view, the
-//! web-session gates, the close wait and the web client's default view all agree on which sessions are chat threads.
+//! (`Registry::thread_origin_field`). The thread-session test reads this one list. The Threads view, the web-session
+//! gates, the close wait and the web client's default view all agree on which sessions are chat threads.
 
 use std::sync::Mutex;
 

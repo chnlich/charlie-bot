@@ -14,7 +14,7 @@
 //! registry's template globals and `page_parts` added. The search path is `web/templates`, then each page package's
 //! `templates/`, in registration order, then `web/static` and each package's `static/`. The static trees come
 //! last, so a template name always resolves to a template, and a page includes the core script or style the static
-//! route would otherwise serve. A stylesheet the page links from the static tree is carried inline the same way: the
+//! route would otherwise serve. A stylesheet the page links from the static tree is carried inline the same way. The
 //! document holds the file at the link's place, so the first paint never waits for a second request.
 
 use std::collections::HashMap;
@@ -439,11 +439,11 @@ impl Templating {
 /// The page's local stylesheet links, carried inline where the link stands.
 ///
 /// A stylesheet under `/static/` names a file the engine's loader already holds, and a page response is
-/// `no-store`: a separate request for that file buys no caching, it only holds the first paint until the file
+/// `no-store`. A separate request for that file buys no caching; it only holds the first paint until the file
 /// arrives. The element becomes a `<style>` at the link's place, so the cascade keeps the order the page states.
-/// A tag that states any attribute beside `rel` and `href` (a media query, a disabled flag), a URL outside the
-/// static tree and a file the loader cannot hold all stay links, because inlining them would change what the page
-/// means.
+/// A tag that states any attribute beside `rel` and `href`, such as a media query or a disabled flag, stays a
+/// link. A URL outside the static tree also stays a link, and so does a file the loader cannot hold. Inlining any
+/// of them would change what the page means.
 fn inline_local_stylesheets(environment: &Environment<'_>, html: String) -> Result<String, RenderError> {
   const LINK: &str = "<link";
   if !html.contains(LINK) {
@@ -909,8 +909,8 @@ mod tests {
     assert_eq!(render(&templating, &features, &parts).await, "synthetic-label two, longer");
   }
 
-  /// A page body at or above the transport's minimum travels compressed when the client asked for gzip, and the
-  /// next request of that body reuses the compressed bytes instead of deflating it again.
+  /// A page body at or above the transport's minimum travels compressed when the client asked for gzip. The next
+  /// request of that body reuses the compressed bytes instead of deflating it again.
   #[tokio::test]
   async fn a_gzip_page_request_reuses_the_compressed_body_it_kept() {
     let root = tempfile::tempdir().unwrap();

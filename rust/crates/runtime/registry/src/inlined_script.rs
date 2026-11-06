@@ -1,7 +1,7 @@
 //! The form a script takes when a page carries it inline.
 //!
 //! A page inlines its scripts so the first paint waits for no second request. The same source files carry the
-//! comments that explain them to an editor, and a browser runs no comment: on the mock home's chat page the comments
+//! comments that explain them to an editor, and a browser runs no comment. On the mock home's chat page the comments
 //! are 225 KB of the 730 KB of script text and 82 KB of the document's 410 KB gzip form. The strip is textual and
 //! keeps every other byte, including a `//` or `/*` that a string, a template literal or a regular expression holds.
 
@@ -9,7 +9,7 @@
 ///
 /// A line comment loses its text and keeps the newline that ends it. A block comment becomes one newline when it
 /// spans lines and one space otherwise, so a comment between two tokens still separates them. The scanner follows
-/// the literals that can hold comment text: a quoted string ends at its quote or its line's end, a template literal
+/// the literals that can hold comment text. A quoted string ends at its quote or its line's end, a template literal
 /// at its backtick, and a regex literal at its closing slash.
 pub fn without_comments(source: &str) -> String {
   let bytes = source.as_bytes();

@@ -5,11 +5,13 @@
 // queuing makes a fast test look slow; the alone rerun has no queue. A suspect missing from the
 // rerun's report means the filter matched nothing, which fails the check and names the test.
 //
-//   dev/check-unit-test-time.mjs --junit <path> [--workspace-dir <dir>] [--fail-over-limit 0|1]
+//   dev/check-unit-test-time.mjs --junit <path> [--workspace-dir <dir>] [--rerun-over-limit 0|1] [--fail-over-limit 0|1]
 //
-//   --junit            the JUnit report of the parallel run (required)
-//   --workspace-dir    the cargo workspace directory the reruns run in (default: rust)
-//   --fail-over-limit  exit nonzero when a test is still over the limit alone (default: 1)
+//   --junit             the JUnit report of the parallel run (required)
+//   --workspace-dir     the cargo workspace directory the reruns run in (default: rust)
+//   --rerun-over-limit  rerun each over-limit test in isolation and judge by that time (default: 1)
+//   --fail-over-limit   exit nonzero when a test is still over the limit alone (default: 1); requires
+//                       --rerun-over-limit, since the isolated time is what the check judges by
 //
 // Lines go to stdout, and to $GITHUB_STEP_SUMMARY when the environment sets it.
 import { spawnSync } from 'node:child_process';
@@ -40,7 +42,15 @@ function main() {
   const lines = [];
   let confirmed = 0;
   let checkFailed = false;
-  if (suspects.length > 0) {
+  if (suspects.length > 0 && !options.rerunOverLimit) {
+    for (const suspect of suspects) {
+      lines.push(
+        `unit test over ${LIMIT_S} s in the parallel run: ${suspect.binaryId} ${suspect.name}` +
+          ` ${formatTime(suspect.time)} s`
+      );
+    }
+  }
+  if (suspects.length > 0 && options.rerunOverLimit) {
     const rerun = isolateWithRust(suspects, options);
     if (rerun.error !== undefined) {
       checkFailed = true;
@@ -69,6 +79,8 @@ function main() {
   }
   if (suspects.length === 0) {
     lines.push(`unit-test time check: all ${testcases.length} tests ran within ${LIMIT_S} s in the parallel run`);
+  } else if (!options.rerunOverLimit) {
+    lines.push(`${suspects.length} tests over ${LIMIT_S} s in the parallel run; isolated rerun off`);
   } else {
     lines.push(`${suspects.length} tests over ${LIMIT_S} s in the parallel run; ${confirmed} still over alone`);
   }
@@ -79,7 +91,8 @@ function main() {
 }
 
 function parseArgs(argv) {
-  const options = { junit: null, workspaceDir: 'rust', failOverLimit: true };
+  const options = { junit: null, workspaceDir: 'rust', rerunOverLimit: true, failOverLimit: true };
+  let failOverLimitSet = false;
   const take = (i) => {
     if (i + 1 >= argv.length) usage(`missing value for ${argv[i]}`);
     return argv[i + 1];
@@ -90,10 +103,11 @@ function parseArgs(argv) {
       options.junit = take(i);
     } else if (arg === '--workspace-dir') {
       options.workspaceDir = take(i);
+    } else if (arg === '--rerun-over-limit') {
+      options.rerunOverLimit = parseSwitch(arg, take(i));
     } else if (arg === '--fail-over-limit') {
-      const value = take(i);
-      if (!['0', '1', 'false', 'true'].includes(value)) usage(`--fail-over-limit takes 0 or 1, got ${value}`);
-      options.failOverLimit = value === '1' || value === 'true';
+      options.failOverLimit = parseSwitch(arg, take(i));
+      failOverLimitSet = true;
     } else {
       usage(`unknown argument ${arg}`);
       continue;
@@ -101,11 +115,23 @@ function parseArgs(argv) {
     i += 1;
   }
   if (options.junit === null) usage('--junit is required');
+  // --rerun-over-limit 0 alone is a report-only run; asking it to also fail on the isolated time it
+  // never measures is a contradiction, not a stronger check.
+  if (failOverLimitSet && options.failOverLimit && !options.rerunOverLimit) {
+    usage('--fail-over-limit 1 contradicts --rerun-over-limit 0');
+  }
   return options;
 }
 
+function parseSwitch(arg, value) {
+  if (!['0', '1', 'false', 'true'].includes(value)) usage(`${arg} takes 0 or 1, got ${value}`);
+  return value === '1' || value === 'true';
+}
+
 function usage(message) {
-  console.error('usage: check-unit-test-time.mjs --junit <path> [--workspace-dir <dir>] [--fail-over-limit 0|1]');
+  console.error(
+    'usage: check-unit-test-time.mjs --junit <path> [--workspace-dir <dir>] [--rerun-over-limit 0|1] [--fail-over-limit 0|1]'
+  );
   console.error(`check-unit-test-time: ${message}`);
   process.exit(2);
 }

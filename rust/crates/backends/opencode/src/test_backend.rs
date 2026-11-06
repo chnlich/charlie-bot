@@ -1637,9 +1637,7 @@ async fn cancel_signals_only_its_turn_and_the_other_turn_completes() {
     })
     .await;
   harness
-    .wait_for_events(&cancelled_events, |events| {
-      events.iter().any(|event| event["type"] == event_types::ASSISTANT)
-    })
+    .wait_for_events(&cancelled_events, |events| events.iter().any(|event| event["type"] == event_types::ASSISTANT))
     .await;
   let cancelled_pid = harness
     .turn_processes

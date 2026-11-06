@@ -106,8 +106,9 @@ jobs:
 
   rust-test:
     runs-on: ubuntu-24.04
-    # The serial rerun of today's over-limit tests adds tens of minutes; classification shrinks it.
-    timeout-minutes: 90
+    # A workflow_dispatch run adds the isolated rerun of the over-0.1 s suspects (tens of minutes
+    # today); push and pull_request runs stay near the pre-nextest bound.
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -151,11 +152,16 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # This stage only reports offenders. The stage that enforces the 0.1 s rule, once the over-limit
-      # unit tests are handled, drops --fail-over-limit 0 so the check gates on its default.
+      # This stage only reports offenders. The isolated rerun runs on workflow_dispatch alone: it
+      # adds tens of minutes, and a main-push run delays every release (scripts/release.sh waits on
+      # this job). Stage 5 removes the event condition and drops --fail-over-limit 0, so the check
+      # gates every event on its defaults.
       - name: Unit tests over 0.1 s
         if: always()
-        run: dev/check-unit-test-time.mjs --junit rust/target/nextest/ci/junit.xml --fail-over-limit 0
+        run: >
+          dev/check-unit-test-time.mjs --junit rust/target/nextest/ci/junit.xml
+          --fail-over-limit 0
+          --rerun-over-limit ${{ github.event_name == 'workflow_dispatch' }}
 
       # Doc-tests carry no per-test time, so a doc-test that runs dodges the 0.1 s rule: the step fails
       # when `cargo test --doc` runs any, and names each. Today zero doc-tests run.

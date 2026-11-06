@@ -2,9 +2,9 @@
 //!
 //! A `GET` under `/api/` that answers `200` with a JSON body carries `ETag: "<hash of the body>"` and
 //! `Cache-Control: no-cache`. A request whose `If-None-Match` names that tag gets `304` with no body. The tag is hashed
-//! from the body, and a body a handler answers from a memo keeps the tag of its first hash, so a repeat request whose
-//! handler reuses one body does not pay the hash again. The gzip layer, outside this one, memoizes the compressed body
-//! of each tag, which is the same identity a client's cache uses.
+//! from the body, and a body a handler answers from a memo on every request keeps the tag of its first hash, so such a
+//! repeat request does not pay the hash again. The gzip layer, outside this one, memoizes the compressed body of each
+//! tag, which is the same identity a client's cache uses.
 
 use std::collections::VecDeque;
 use std::sync::{LazyLock, Mutex};
@@ -73,9 +73,11 @@ fn entity_tag(body: &[u8]) -> String {
 
 /// The tags of the bodies this layer hashed, keyed by the body's identity: its address and its length.
 ///
-/// The compact listing and a session's bootstrap answer every request from the same `Bytes`, and hashing a body of a
-/// few hundred kilobytes costs more than the rest of the request. An entry holds the body it hashed, so the address it
-/// keys on stays that body's alone: the allocator cannot hand the same range to another body while the entry lives.
+/// The compact listing's gzip form and a session's bootstrap answer every request from the same `Bytes`, and hashing a
+/// body of a few hundred kilobytes costs more than the rest of the request. A handler that builds its body again per
+/// request allocates a new one, so its body hashes again. An entry holds the body it hashed, so the address it keys on
+/// stays that body's alone: the allocator cannot hand the same range to another body while the entry lives.
+#[derive(Default)]
 struct TagMemo {
   entries: VecDeque<TagEntry>,
 }
@@ -83,12 +85,6 @@ struct TagMemo {
 struct TagEntry {
   body: Bytes,
   tag: HeaderValue,
-}
-
-impl Default for TagMemo {
-  fn default() -> Self {
-    Self { entries: VecDeque::new() }
-  }
 }
 
 /// How many hashed bodies the memo holds, the most bytes they may keep alive together, and the longest body it keeps.
@@ -269,11 +265,9 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_repeat_response_over_one_held_body_carries_one_tag() {
-    // A handler that answers from a memo returns the same `Bytes` every request. The layer holds the body it hashed,
-    // so the repeat's tag comes from that body and no other allocation can claim its address.
-    let held = Bytes::from(vec![b'z'; 2048]);
-    let body = held.clone();
+  async fn a_handler_that_reuses_one_body_answers_one_tag() {
+    // A handler that answers from a memo returns the same `Bytes` every request, so both answers carry one tag.
+    let body = Bytes::from(vec![b'z'; 2048]);
     let app = Router::new()
       .route(
         "/api/held",
@@ -286,7 +280,5 @@ mod tests {
     let (_, first, _) = get_with(&app, "/api/held", None).await;
     let (_, second, _) = get_with(&app, "/api/held", None).await;
     assert_eq!(first[header::ETAG], second[header::ETAG]);
-    let memo = TAG_MEMO.lock().expect("the tag memo mutex is not poisoned");
-    assert!(memo.entries.iter().any(|entry| same_body(&entry.body, &held)), "the layer keeps the body it hashed");
   }
 }

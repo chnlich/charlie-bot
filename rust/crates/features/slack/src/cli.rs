@@ -360,16 +360,31 @@ mod tests {
   #[test]
   fn every_read_method_reaches_the_send_step_with_the_user_token() {
     let home = credentials_home(TABLE);
-    for method in token::USER_READ_METHODS {
-      let (url, receiver) = stub(200, br#"{"ok":true}"#);
-      let command = arguments(&format!("{url}/{method}"), "user");
+    let home_dir = home.path();
+    // Each method's stub server and request are independent, so they run concurrently: six
+    // sequential request setups pass the unit-test budget.
+    std::thread::scope(|scope| {
+      let handles: Vec<_> = token::USER_READ_METHODS
+        .iter()
+        .map(|&method| {
+          scope.spawn(move || {
+            let (url, receiver) = stub(200, br#"{"ok":true}"#);
+            let command = arguments(&format!("{url}/{method}"), "user");
 
-      run_request_at(home.path(), &command).unwrap();
-      let request = String::from_utf8(receiver.recv_timeout(TIMEOUT).unwrap()).unwrap();
+            run_request_at(home_dir, &command).unwrap();
+            let request = String::from_utf8(receiver.recv_timeout(TIMEOUT).unwrap()).unwrap();
 
-      assert!(request.starts_with(&format!("GET /api/{method} HTTP/1.1")), "{request}");
-      assert!(request.to_ascii_lowercase().contains(&format!("authorization: bearer {USER_TOKEN}")));
-    }
+            assert!(request.starts_with(&format!("GET /api/{method} HTTP/1.1")), "{request}");
+            assert!(request.to_ascii_lowercase().contains(&format!("authorization: bearer {USER_TOKEN}")));
+          })
+        })
+        .collect();
+      for handle in handles {
+        if let Err(payload) = handle.join() {
+          std::panic::resume_unwind(payload);
+        }
+      }
+    });
   }
 
   #[test]

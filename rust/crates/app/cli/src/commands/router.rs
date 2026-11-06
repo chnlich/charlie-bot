@@ -656,7 +656,7 @@ mod tests {
 
   /// A reply delay past the injected request timeout, so the attempt that asks for it times out.
   fn past_the_timeout() -> Duration {
-    test_limits().request_timeout + Duration::from_millis(50)
+    timeout_limits().request_timeout + Duration::from_millis(5)
   }
 
   /// Each test runs behind this ceiling so a hang fails the test instead of the suite.
@@ -891,7 +891,7 @@ mod tests {
   /// The bound a timeout test pays per timed-out attempt: two timed-out attempts still fit the unit-test
   /// budget, while the delayed reply stays far past it.
   fn timeout_limits() -> Limits {
-    Limits { request_timeout: Duration::from_millis(10), rate_limit_wait: test_limits().rate_limit_wait }
+    Limits { request_timeout: Duration::from_millis(5), rate_limit_wait: test_limits().rate_limit_wait }
   }
 
   fn run(home: &TestHome, payload: &str, jev: &FakeJev, replies: Vec<(u16, Value)>) -> Result<Value, String> {
@@ -1126,7 +1126,7 @@ mod tests {
         &default_classes(),
         "roles:\n  implement: [routine, context]\n  thread: [routine, context]\n",
       );
-      let long_text = format!("{}THREAD-END", "x".repeat(25_000));
+      let long_text = format!("{}THREAD-END", "x".repeat(TEXT_LIMIT + 16));
       let label = "Task type: implement\n\n";
 
       let delegation = request("implement", &long_text, &STRONG, None);
@@ -1139,7 +1139,7 @@ mod tests {
       assert_eq!(delegation_state.chars().count(), TEXT_LIMIT);
       assert_eq!(delegation_state, format!("{label}{}", "x".repeat(TEXT_LIMIT - label.len())));
       let thread_state = requests[1]["state"].as_str().unwrap();
-      let expected_tail: String = long_text.chars().skip(25_010 - TEXT_LIMIT).collect();
+      let expected_tail: String = long_text.chars().skip(long_text.chars().count() - TEXT_LIMIT).collect();
       assert_eq!(thread_state, expected_tail);
       assert_eq!(thread_state.chars().count(), TEXT_LIMIT);
     });

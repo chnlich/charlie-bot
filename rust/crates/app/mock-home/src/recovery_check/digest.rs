@@ -323,8 +323,10 @@ mod tests {
     fs::write(seed.join(session).join("data").join("chat_events.jsonl"), format!("{log_line}\n")).expect("seed log");
     fs::write(seed.join(session).join("metadata.json"), r#"{"status":"active","pid":7,"name":"n"}"#).expect("meta");
     let stamp = lab.path().join("stamp");
-    fs::write(&stamp, "").expect("stamp");
-    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::File::create(&stamp)
+      .expect("stamp")
+      .set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH))
+      .expect("set stamp before trial files");
 
     let digest_of = |fresh: &str, pid: u32| {
       let home = lab.path().join(format!("home-{pid}"));

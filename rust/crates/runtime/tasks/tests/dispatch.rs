@@ -955,109 +955,137 @@ async fn manager_finish_claims_only_echoed_pending_user_ids() {
 // The case covers the session kind and the later input's type; a thread session keeps queueing,
 // and a web session with no live stream-json process queues the same way.
 #[tokio::test]
-async fn input_admitted_during_an_active_run_dispatches_after_its_finish_for_every_session_kind() {
-  for (session_kind, later_type, later_actor) in [
-    ("web", event_types::USER, "user"),
-    ("web", event_types::AGENT_MESSAGE, "agent"),
-    ("slack", event_types::USER, "user"),
-    ("slack", event_types::AGENT_MESSAGE, "agent"),
-    ("discord", event_types::USER, "user"),
-    ("discord", event_types::AGENT_MESSAGE, "agent"),
-    ("feishu", event_types::USER, "user"),
-    ("feishu", event_types::AGENT_MESSAGE, "agent"),
-  ] {
-    let harness = Harness::new();
-    let manager = harness.create_task("manager", None, TaskProfile::Manager, "Manager").await;
-    match session_kind {
-      "feishu" => {
-        harness
-          .store
-          .update_slot_fields(
-            &manager.id,
-            "feishu",
-            Map::from_iter([(
-              "feishu_origin".to_string(),
-              json!({"tenant_key":"T","chat_id":"oc_1","root_id":"om_1"}),
-            )]),
-          )
-          .await
-          .unwrap();
-      }
-      "slack" => {
-        harness
-          .store
-          .update_slot_fields(
-            &manager.id,
-            "slack",
-            Map::from_iter([("slack_origin".to_string(), json!({"team_id":"T","channel_id":"C","thread_ts":"1.0"}))]),
-          )
-          .await
-          .unwrap();
-      }
-      "discord" => {
-        harness
-          .store
-          .update_slot_fields(
-            &manager.id,
-            "discord",
-            Map::from_iter([(
-              "discord_origin".to_string(),
-              json!({"guild_id":"G","parent_channel_id":"C","thread_id":"1"}),
-            )]),
-          )
-          .await
-          .unwrap();
-      }
-      _ => {}
-    }
-    harness
-      .dispatcher
-      .admit_input(&manager.id, event_types::USER, "Take off. First.", "user", json!({"input_id":"first"}))
-      .await
-      .unwrap();
-    let run1 = "42400211-2222-3333-4444-555555555555";
-    {
-      let guard = harness.store.control_lock().await;
+async fn input_admitted_during_an_active_web_run_waits_for_its_finish() {
+  assert_input_admitted_after_active_run("web", event_types::USER, "user").await;
+}
+
+#[tokio::test]
+async fn agent_message_admitted_during_an_active_web_run_waits_for_its_finish() {
+  assert_input_admitted_after_active_run("web", event_types::AGENT_MESSAGE, "agent").await;
+}
+
+#[tokio::test]
+async fn input_admitted_during_an_active_slack_run_waits_for_its_finish() {
+  assert_input_admitted_after_active_run("slack", event_types::USER, "user").await;
+}
+
+#[tokio::test]
+async fn agent_message_admitted_during_an_active_slack_run_waits_for_its_finish() {
+  assert_input_admitted_after_active_run("slack", event_types::AGENT_MESSAGE, "agent").await;
+}
+
+#[tokio::test]
+async fn input_admitted_during_an_active_discord_run_waits_for_its_finish() {
+  assert_input_admitted_after_active_run("discord", event_types::USER, "user").await;
+}
+
+#[tokio::test]
+async fn agent_message_admitted_during_an_active_discord_run_waits_for_its_finish() {
+  assert_input_admitted_after_active_run("discord", event_types::AGENT_MESSAGE, "agent").await;
+}
+
+#[tokio::test]
+async fn input_admitted_during_an_active_feishu_run_waits_for_its_finish() {
+  assert_input_admitted_after_active_run("feishu", event_types::USER, "user").await;
+}
+
+#[tokio::test]
+async fn agent_message_admitted_during_an_active_feishu_run_waits_for_its_finish() {
+  assert_input_admitted_after_active_run("feishu", event_types::AGENT_MESSAGE, "agent").await;
+}
+
+async fn assert_input_admitted_after_active_run(session_kind: &str, later_type: &str, later_actor: &str) {
+  let harness = Harness::new();
+  let manager = harness.create_task("manager", None, TaskProfile::Manager, "Manager").await;
+  match session_kind {
+    "feishu" => {
       harness
         .store
-        .register_run_locked(
-          &guard,
+        .update_slot_fields(
           &manager.id,
-          RunRecord { kind: RunKind::ManagerTurn, ..dispatch_support::new_run(&manager.id, run1) },
-          None,
+          "feishu",
+          Map::from_iter([(
+            "feishu_origin".to_string(),
+            json!({"tenant_key":"T","chat_id":"oc_1","root_id":"om_1"}),
+          )]),
         )
         .await
         .unwrap();
-      harness.dispatcher.claim_input_batch_locked(&guard, &manager.id, run1, None).unwrap();
-      drop(guard);
     }
-    harness.store.record_launch(&manager.id, run1, 424_002, "1-424002").await.unwrap();
-
-    let admitted_later = harness
-      .dispatcher
-      .admit_input(
+    "slack" => {
+      harness
+        .store
+        .update_slot_fields(
+          &manager.id,
+          "slack",
+          Map::from_iter([("slack_origin".to_string(), json!({"team_id":"T","channel_id":"C","thread_ts":"1.0"}))]),
+        )
+        .await
+        .unwrap();
+    }
+    "discord" => {
+      harness
+        .store
+        .update_slot_fields(
+          &manager.id,
+          "discord",
+          Map::from_iter([(
+            "discord_origin".to_string(),
+            json!({"guild_id":"G","parent_channel_id":"C","thread_id":"1"}),
+          )]),
+        )
+        .await
+        .unwrap();
+    }
+    _ => {}
+  }
+  harness
+    .dispatcher
+    .admit_input(&manager.id, event_types::USER, "Take off. First.", "user", json!({"input_id":"first"}))
+    .await
+    .unwrap();
+  let run1 = "42400211-2222-3333-4444-555555555555";
+  {
+    let guard = harness.store.control_lock().await;
+    harness
+      .store
+      .register_run_locked(
+        &guard,
         &manager.id,
-        later_type,
-        "Second message.",
-        later_actor,
-        if later_type == event_types::AGENT_MESSAGE { json!({"from_session":"agent-session"}) } else { json!({}) },
+        RunRecord { kind: RunKind::ManagerTurn, ..dispatch_support::new_run(&manager.id, run1) },
+        None,
       )
       .await
       .unwrap();
-    let later_id = admitted_later["id"].as_str().unwrap().to_string();
-    let decision_later = harness.dispatcher.dispatch_pending(&manager.id).await.unwrap();
-    assert_eq!(decision_later["launch"], json!(false), "{session_kind} {later_type}: the active run consumes");
-
-    // The turn's own finish dispatches the waiting input: a scripted executor lands it as the next run.
-    harness.install_executor(vec![RunOutcomeKind::Success]);
-    let mut outcome = RunOutcome::new(RunOutcomeKind::Success);
-    outcome.exit_code = Some(0);
-    harness.dispatcher.finish_run(&manager.id, run1, outcome).await.unwrap();
-    let decision_next = harness.dispatcher.dispatch_pending(&manager.id).await.unwrap();
-    assert_eq!(decision_next["launch"], json!(true), "{session_kind} {later_type}: the next turn launches");
-    let run2 = decision_next["run_id"].as_str().unwrap().to_string();
-    let second_run = harness.store.read_run_sync(&manager.id, &run2).unwrap().expect("the second run is registered");
-    assert_eq!(second_run.input_event_ids, [later_id.as_str()], "{session_kind} {later_type}");
-    assert!(harness.dispatcher.pending_inputs(&manager.id).unwrap().is_empty(), "{session_kind} {later_type}");
+    harness.dispatcher.claim_input_batch_locked(&guard, &manager.id, run1, None).unwrap();
+    drop(guard);
   }
+  harness.store.record_launch(&manager.id, run1, 424_002, "1-424002").await.unwrap();
+
+  let admitted_later = harness
+    .dispatcher
+    .admit_input(
+      &manager.id,
+      later_type,
+      "Second message.",
+      later_actor,
+      if later_type == event_types::AGENT_MESSAGE { json!({"from_session":"agent-session"}) } else { json!({}) },
+    )
+    .await
+    .unwrap();
+  let later_id = admitted_later["id"].as_str().unwrap().to_string();
+  let decision_later = harness.dispatcher.dispatch_pending(&manager.id).await.unwrap();
+  assert_eq!(decision_later["launch"], json!(false), "{session_kind} {later_type}: the active run consumes");
+
+  // The turn's own finish dispatches the waiting input: a scripted executor lands it as the next run.
+  harness.install_executor(vec![RunOutcomeKind::Success]);
+  let mut outcome = RunOutcome::new(RunOutcomeKind::Success);
+  outcome.exit_code = Some(0);
+  harness.dispatcher.finish_run(&manager.id, run1, outcome).await.unwrap();
+  let decision_next = harness.dispatcher.dispatch_pending(&manager.id).await.unwrap();
+  assert_eq!(decision_next["launch"], json!(true), "{session_kind} {later_type}: the next turn launches");
+  let run2 = decision_next["run_id"].as_str().unwrap().to_string();
+  let second_run = harness.store.read_run_sync(&manager.id, &run2).unwrap().expect("the second run is registered");
+  assert_eq!(second_run.input_event_ids, [later_id.as_str()], "{session_kind} {later_type}");
+  assert!(harness.dispatcher.pending_inputs(&manager.id).unwrap().is_empty(), "{session_kind} {later_type}");
 }

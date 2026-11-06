@@ -1244,7 +1244,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_child_status_set_notifies_its_parent_and_grandparent_pages_and_a_root_set_notifies_none() {
+  async fn a_child_status_set_notifies_its_parent_and_grandparent_pages() {
     let home = Home::new();
     let root = home.manager("root", None).await;
     let child = home.child(&root, "child").await;
@@ -1253,7 +1253,6 @@ mod tests {
     let mut child_page = home.subscribe(&child);
 
     set_status(&home.features, &grandchild, VALID_SET).await.expect("the grandchild sets");
-    set_status(&home.features, &root, VALID_SET).await.expect("the root sets");
 
     // Each page also receives its own status message; the ancestor notices are the frames this test compares.
     let notice = json!({"type": SUBTREE_NOTICE_TYPE, "source_session_id": grandchild});
@@ -1265,27 +1264,36 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn a_root_status_set_notifies_no_ancestor_page() {
+    let home = Home::new();
+    let root = home.manager("root", None).await;
+    let mut root_page = home.subscribe(&root);
+
+    set_status(&home.features, &root, VALID_SET).await.expect("the root sets");
+
+    let notices: Vec<Value> = drain(&mut root_page)
+      .await
+      .into_iter()
+      .filter(|frame| frame["type"] == SUBTREE_NOTICE_TYPE)
+      .collect();
+    assert!(notices.is_empty(), "the root has no ancestor page to notify");
+  }
+
+  #[tokio::test]
   async fn the_status_read_lists_open_waiting_descendants_newest_first() {
     let home = Home::new();
     let root = home.manager("root", None).await;
     let old = home.child(&root, "old").await;
     let new = home.child(&root, "new").await;
     let deep = home.child(&old, "deep").await;
-    let empty = home.child(&root, "empty").await;
-    let closed = home.child(&root, "closed").await;
-    let archived = home.child(&root, "archived").await;
-    for child in [&old, &new, &deep] {
-      check_waiting_item(&home, child, "decision").await;
-      set_status(&home.features, child, &waiting_set("decision")).await.expect("the child sets");
-      tokio::time::sleep(Duration::from_millis(2)).await;
-    }
-    set_status(&home.features, &empty, r#"{"waiting": []}"#).await.expect("the empty child sets");
-    check_waiting_item(&home, &closed, "closed decision").await;
-    set_status(&home.features, &closed, &waiting_set("closed decision")).await.expect("the closed child sets");
-    check_waiting_item(&home, &archived, "archived decision").await;
-    set_status(&home.features, &archived, &waiting_set("archived decision")).await.expect("the archived child sets");
-    archive_task(&home.features, &closed).await;
-    home.features.store.archive_session(&archived).await.expect("the session archives");
+    check_waiting_item(&home, &old, "decision").await;
+    set_status(&home.features, &old, &waiting_set("decision")).await.expect("the old child sets");
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    check_waiting_item(&home, &new, "decision").await;
+    set_status(&home.features, &new, &waiting_set("decision")).await.expect("the new child sets");
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    check_waiting_item(&home, &deep, "decision").await;
+    set_status(&home.features, &deep, &waiting_set("decision")).await.expect("the grandchild sets");
 
     let body = read_status(&home.features, &root).await.expect("the read answers");
 
@@ -1306,24 +1314,36 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn the_status_read_omits_empty_waiting_closed_and_archived_descendants() {
+    let home = Home::new();
+    let root = home.manager("root", None).await;
+    let empty = home.child(&root, "empty").await;
+    let closed = home.child(&root, "closed").await;
+    let archived = home.child(&root, "archived").await;
+    set_status(&home.features, &empty, r#"{"waiting": []}"#).await.expect("the empty child sets");
+    check_waiting_item(&home, &closed, "closed decision").await;
+    set_status(&home.features, &closed, &waiting_set("closed decision")).await.expect("the closed child sets");
+    check_waiting_item(&home, &archived, "archived decision").await;
+    set_status(&home.features, &archived, &waiting_set("archived decision")).await.expect("the archived child sets");
+    archive_task(&home.features, &closed).await;
+    home.features.store.archive_session(&archived).await.expect("the session archives");
+
+    let body = read_status(&home.features, &root).await.expect("the read answers");
+
+    assert!(body["descendants"].as_array().unwrap().is_empty());
+  }
+
+  #[tokio::test]
   async fn the_status_read_lists_open_direct_children_with_a_now_newest_first() {
     let home = Home::new();
     let root = home.manager("root", None).await;
     let old = home.child(&root, "old").await;
     let new = home.child(&root, "new").await;
     let deep = home.child(&old, "deep").await;
-    let empty = home.child(&root, "empty").await;
-    let closed = home.child(&root, "closed").await;
-    let archived = home.child(&root, "archived").await;
     set_status(&home.features, &old, r#"{"now": "Old step"}"#).await.expect("the old child sets");
     tokio::time::sleep(Duration::from_millis(2)).await;
     set_status(&home.features, &new, r#"{"now": "New step"}"#).await.expect("the new child sets");
     set_status(&home.features, &deep, r#"{"now": "Deep step"}"#).await.expect("the deep child sets");
-    set_status(&home.features, &empty, r#"{"goal": "No Now"}"#).await.expect("the empty child sets");
-    set_status(&home.features, &closed, r#"{"now": "Closed step"}"#).await.expect("the closed child sets");
-    set_status(&home.features, &archived, r#"{"now": "Archived step"}"#).await.expect("the archived child sets");
-    archive_task(&home.features, &closed).await;
-    home.features.store.archive_session(&archived).await.expect("the session archives");
 
     let body = read_status(&home.features, &root).await.expect("the read answers");
 
@@ -1336,6 +1356,24 @@ mod tests {
       body["children"].as_array().unwrap().iter().map(|row| row["now"].as_str().unwrap()).collect::<Vec<_>>(),
       ["New step", "Old step"]
     );
+  }
+
+  #[tokio::test]
+  async fn the_status_read_omits_direct_children_without_an_open_now() {
+    let home = Home::new();
+    let root = home.manager("root", None).await;
+    let empty = home.child(&root, "empty").await;
+    let closed = home.child(&root, "closed").await;
+    let archived = home.child(&root, "archived").await;
+    set_status(&home.features, &empty, r#"{"goal": "No Now"}"#).await.expect("the empty child sets");
+    set_status(&home.features, &closed, r#"{"now": "Closed step"}"#).await.expect("the closed child sets");
+    set_status(&home.features, &archived, r#"{"now": "Archived step"}"#).await.expect("the archived child sets");
+    archive_task(&home.features, &closed).await;
+    home.features.store.archive_session(&archived).await.expect("the session archives");
+
+    let body = read_status(&home.features, &root).await.expect("the read answers");
+
+    assert!(body["children"].as_array().unwrap().is_empty());
   }
 
   #[test]

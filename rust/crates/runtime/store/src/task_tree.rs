@@ -4598,19 +4598,25 @@ pub(crate) mod tests {
     *store.tree_rows_hook.lock().unwrap() = Some(Arc::new(move || {
       let now = active_in_hook.fetch_add(1, Ordering::SeqCst) + 1;
       peak_in_hook.fetch_max(now, Ordering::SeqCst);
-      std::thread::sleep(Duration::from_millis(50));
+      std::thread::yield_now();
       active_in_hook.fetch_sub(1, Ordering::SeqCst);
     }));
 
     let snapshot = store.task_tree_snapshot().unwrap();
+    let start = Arc::new(std::sync::Barrier::new(3));
     let computations: Vec<_> = (0..2)
       .map(|_| {
         let store = Arc::clone(&store);
         let snapshot = snapshot.clone();
         let root_id = root.id.clone();
-        tokio::task::spawn_blocking(move || store.task_tree_page(&snapshot, Some(&root_id), true, None, 100))
+        let start = Arc::clone(&start);
+        tokio::task::spawn_blocking(move || {
+          start.wait();
+          store.task_tree_page(&snapshot, Some(&root_id), true, None, 100)
+        })
       })
       .collect();
+    start.wait();
     for computation in computations {
       computation.await.unwrap().unwrap();
     }

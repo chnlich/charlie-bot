@@ -211,7 +211,7 @@ async function showGroupSelector(sessionId, currentGroup) {
       </div>
       <div class="flex gap-2">
         <input id="new-group-input" type="text" placeholder="New group name..."
-               class="flex-1 bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-purple-500">
+               class="flex-1 bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-purple-500">
         <button id="new-group-btn" class="px-3 py-1.5 text-sm rounded-lg bg-purple-600 hover:bg-purple-500 text-white transition-colors">Add</button>
       </div>
     </div>`;

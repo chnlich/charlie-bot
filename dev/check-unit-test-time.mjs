@@ -161,29 +161,23 @@ function formatTime(seconds) {
 
 // ---------- JUnit report parsing ----------
 
-// nextest puts the binary id in `classname`. node --test names each file's suite by the path it was given,
-// and every testcase of that file sits under that suite, so the nearest file-named suite is the binary id.
+// nextest puts the binary id in `classname`. Node 24's JUnit report has no suite elements: each testcase
+// carries the absolute path of its test file in `file`, and that path is the binary id.
 function readTestcases(file, runner) {
   const xml = readFileSync(file, 'utf8');
   const testcases = [];
-  const re = /<testsuite\b([^>]*?)\/?>|<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase\s*>)/g;
-  let suiteFile = '';
+  const re = /<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase\s*>)/g;
   let match;
   while ((match = re.exec(xml)) !== null) {
-    if (match[1] !== undefined) {
-      const name = attributes(match[1]).name ?? '';
-      if (/\.m?js$/.test(name)) suiteFile = name;
-      continue;
-    }
-    const attrs = attributes(match[2]);
-    const body = match[4] ?? '';
-    // A node testcase without a file-named suite above it has no file to rerun. Fail here, with the head of
-    // the report, rather than rerun it with an empty path.
-    if (runner === 'node' && suiteFile === '') {
-      throw new Error(`no file-named testsuite above testcase "${attrs.name ?? ''}"; report starts: ${xml.slice(0, 800)}`);
+    const attrs = attributes(match[1]);
+    const body = match[3] ?? '';
+    // A node testcase without a file has no file to rerun. Fail here, with the head of the report, rather
+    // than rerun it with an empty path.
+    if (runner === 'node' && !attrs.file) {
+      throw new Error(`node testcase "${attrs.name ?? ''}" has no file attribute; report starts: ${xml.slice(0, 800)}`);
     }
     testcases.push({
-      binaryId: runner === 'node' ? suiteFile : (attrs.classname ?? ''),
+      binaryId: runner === 'node' ? attrs.file : (attrs.classname ?? ''),
       name: attrs.name ?? '',
       time: Number.parseFloat(attrs.time ?? 'NaN'),
       skipped: /<skipped[\s/>]/.test(body),

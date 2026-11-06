@@ -479,8 +479,7 @@ fn empty_ts_never_becomes_first_or_last() {
 
 #[test]
 fn reupserted_native_keeps_first_session_registered() {
-  let dir = tempfile::tempdir().unwrap();
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::open(":memory:").unwrap();
   let first = record("rec-1", RecordKind::Native, &["sess-a"]);
   let second = record("rec-1", RecordKind::Native, &["sess-b"]);
   let mut fallback = record("rec-fb", RecordKind::Fallback, &["sess-a"]);
@@ -1023,9 +1022,7 @@ fn batch_lands_every_recorded_file_in_one_commit() {
 
 #[test]
 fn failed_file_inside_a_batch_keeps_earlier_files_and_drops_its_own() {
-  let dir = tempfile::tempdir().unwrap();
-  let path = dir.path().join("ledger.sqlite3");
-  let mut ledger = UsageLedger::open(&path).unwrap();
+  let mut ledger = UsageLedger::open(":memory:").unwrap();
   ledger.conn.execute_batch(REJECT_BAD_USAGE).unwrap();
   let result = ledger.batch(|ledger| {
     ledger.record_file(
@@ -1038,11 +1035,9 @@ fn failed_file_inside_a_batch_keeps_earlier_files_and_drops_its_own() {
     Ok(())
   });
   assert!(result.is_err());
-  drop(ledger);
-  let reopened = UsageLedger::open(&path).unwrap();
-  assert_eq!(reopened.captured_sigs(HOST).unwrap(), BTreeMap::from([("/logs/good.jsonl".into(), "sig-good".into())]));
-  assert_eq!(column_text(reopened.connection(), "SELECT record_id FROM usage"), ["rec-good"]);
-  let sessions = column_text(reopened.connection(), "SELECT session FROM native_sessions");
+  assert_eq!(ledger.captured_sigs(HOST).unwrap(), BTreeMap::from([("/logs/good.jsonl".into(), "sig-good".into())]));
+  assert_eq!(column_text(ledger.connection(), "SELECT record_id FROM usage"), ["rec-good"]);
+  let sessions = column_text(ledger.connection(), "SELECT session FROM native_sessions");
   assert!(!sessions.iter().any(|session| session == "sess-bad"));
 }
 

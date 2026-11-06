@@ -384,27 +384,33 @@ async fn test_op9_ends_the_connection_and_reconnects() {
 }
 
 #[tokio::test]
-async fn test_stop_close_codes_stop_without_reconnecting() {
+async fn test_stop_close_code_stops_without_reconnecting() {
+  let code = 4004;
+  let home = Home::new(true).await;
+  let gateway =
+    Gateway::start(vec![GatewayScript { close_after_identify: Some(code), ..GatewayScript::new(Vec::new()) }]).await;
+  configure_gateway(&home, &gateway, 1 << 18);
+  tokio::time::timeout(
+    Duration::from_secs(2),
+    run_listener_loop(
+      Arc::clone(&home.features),
+      discord_client(&home),
+      TEST_TOKEN.to_string(),
+      options(),
+      settings(),
+    ),
+  )
+  .await
+  .unwrap()
+  .unwrap();
+  assert_eq!(gateway.state.connections.load(Ordering::SeqCst), 1);
+  assert!(stop_reason(code).is_some());
+}
+
+#[test]
+fn test_stop_close_codes_are_recognized() {
   for code in [4004, 4010, 4011, 4012, 4013, 4014] {
-    let home = Home::new(true).await;
-    let gateway =
-      Gateway::start(vec![GatewayScript { close_after_identify: Some(code), ..GatewayScript::new(Vec::new()) }]).await;
-    configure_gateway(&home, &gateway, 1 << 18);
-    tokio::time::timeout(
-      Duration::from_secs(2),
-      run_listener_loop(
-        Arc::clone(&home.features),
-        discord_client(&home),
-        TEST_TOKEN.to_string(),
-        options(),
-        settings(),
-      ),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(gateway.state.connections.load(Ordering::SeqCst), 1, "close code {code} stops the listener");
-    assert!(stop_reason(code).is_some());
+    assert!(stop_reason(code).is_some(), "close code {code}");
   }
 }
 

@@ -895,7 +895,21 @@ mod differential_tests {
   }
 
   #[test]
-  fn recorded_trace_builders_match_seeded_corpus() {
+  fn recorded_trace_builders_match_seeded_corpus_first_slice() {
+    compare_recorded_trace_builders(0, 10);
+  }
+
+  #[test]
+  fn recorded_trace_builders_match_seeded_corpus_middle_slice() {
+    compare_recorded_trace_builders(10, 20);
+  }
+
+  #[test]
+  fn recorded_trace_builders_match_seeded_corpus_last_slice() {
+    compare_recorded_trace_builders(20, 29);
+  }
+
+  fn compare_recorded_trace_builders(start: usize, end: usize) {
     let bytes = include_bytes!("../tests/fixtures/trace_golden.json.gz");
     let mut decoder = GzDecoder::new(bytes.as_slice());
     let mut contents = Vec::new();
@@ -921,16 +935,18 @@ mod differential_tests {
 
     let cases = fixture["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 29);
+    let selected_cases = cases.iter().skip(start).take(end - start).collect::<Vec<_>>();
+    assert_eq!(selected_cases.len(), end - start);
     let mut comparisons = 0;
     let mut differences = Vec::new();
-    for case in cases {
+    for case in selected_cases {
       let name = case["name"].as_str().unwrap();
       let paths: Vec<PathBuf> =
         case["paths"].as_array().unwrap().iter().map(|path| root.path().join(path.as_str().unwrap())).collect();
       let slim = case["slim"].as_bool().unwrap();
+      let output = tempdir().unwrap();
       for builder in ["merge", "multi", "direct"] {
         let reference = &case["references"][builder];
-        let output = tempdir().unwrap();
         let artifact = output.path().join(format!("{builder}.json.gz"));
         let actual = actual_artifact(builder, &paths, slim, &artifact);
         if let Some(expected_error) = reference.get("error") {
@@ -971,7 +987,7 @@ mod differential_tests {
         }
       }
     }
-    println!("matched {comparisons} builder results and {} cache keys", cases.len() * 2);
+    println!("matched {comparisons} builder results and {} cache keys", (end - start) * 2);
     assert!(differences.is_empty(), "{} differential mismatches:\n{}", differences.len(), differences.join("\n"));
   }
 

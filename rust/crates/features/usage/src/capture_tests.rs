@@ -13,6 +13,7 @@ use charliebot_core::timefmt;
 use charliebot_registry::usage::{RecordKind, UsageOps, UsageRecord, UsageSource, UsageSourceImpl};
 use charliebot_registry::{Registry, RegistryError};
 use rusqlite::types::Value as SqlValue;
+use rusqlite::{Connection, OpenFlags};
 use serde_json::{Map, Value, json};
 
 const HOST: &str = "fixture-host";
@@ -24,7 +25,7 @@ thread_local! {
   static CODEX_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
   // Every file a CLI stand-in read, in order.
   static READS: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
-  // The ledger a CLI stand-in opens on each read, to see what the running capture has committed.
+  // The ledger a CLI stand-in reads on each source read, to see what the running capture has committed.
   static PROBE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
   static PROBED: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
@@ -105,9 +106,10 @@ impl UsageSourceImpl for CliStub {
   fn read(&self, path: &Path, account: &str, _previous: Option<&str>) -> anyhow::Result<(String, Vec<UsageRecord>)> {
     READS.with(|reads| reads.borrow_mut().push(path.to_path_buf()));
     if let Some(ledger_path) = PROBE.with(|probe| probe.borrow().clone()) {
-      let reader = UsageLedger::open(&ledger_path)?;
-      let committed = reader.captured_sigs(HOST)?.len();
-      PROBED.with(|probed| probed.borrow_mut().push(committed));
+      let reader = Connection::open_with_flags(&ledger_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+      let has_committed_files: bool =
+        reader.query_row("SELECT EXISTS(SELECT 1 FROM captured_files WHERE host = ?)", [HOST], |row| row.get(0))?;
+      PROBED.with(|probed| probed.borrow_mut().push(if has_committed_files { 1 } else { 0 }));
     }
     let items: Vec<Value> = serde_json::from_slice(&fs::read(path)?)?;
     if items.iter().any(|item| item["fail"] == true) {

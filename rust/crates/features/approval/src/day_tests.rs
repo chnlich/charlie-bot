@@ -1,5 +1,5 @@
-//! The day view's tests: two sessions seeded with items of each tier and rule, digest entries through the core store,
-//! and a `policy_table_changed` record the table edit appends.
+//! The day view's tests. Two sessions are seeded with items of each tier and rule, and digest entries come
+//! through the core store. A `policy_table_changed` record is the one the table edit appends.
 
 use std::fs;
 

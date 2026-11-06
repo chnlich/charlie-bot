@@ -107,8 +107,8 @@ const DAY: i64 = 24 * HOUR;
 const MONTH: i64 = 30 * DAY;
 const YEAR: i64 = 365 * DAY;
 
-/// How long ago an item started, in a form a reader takes in at a glance: `just now`, `12 min ago`, `5 h ago`,
-/// `3 d ago`, `2 mo ago`, `1 y ago`.
+/// How long ago an item started, in a form a reader takes in at a glance. The forms are `just now`,
+/// `12 min ago`, `5 h ago`, `3 d ago`, `2 mo ago`, `1 y ago`.
 fn age_text(since: UtcDateTime, now: Timestamp) -> String {
   let seconds = now.as_second() - since.into_inner().unix_timestamp();
   if seconds < MINUTE {

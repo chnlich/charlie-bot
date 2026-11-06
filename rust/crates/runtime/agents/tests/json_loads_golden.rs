@@ -4,6 +4,8 @@
 //! outcome class and, for an error, the same message text, and for a value the same JSON rendering. The corpus must
 //! reach every message the JSON decoder and scanner raise.
 
+use std::borrow::Cow;
+
 use charliebot_core::json_loads::{self, LoadError};
 use charliebot_core::text_repr;
 use serde::Deserialize;
@@ -55,9 +57,9 @@ struct RecordedFixture<'a> {
 }
 
 #[derive(Deserialize)]
-struct RecordedCase {
-  request: RecordedRequest,
-  expected: RecordedOutcome,
+struct RecordedCase<'a> {
+  request: &'a RawValue,
+  expected: RecordedOutcome<'a>,
 }
 
 #[derive(Deserialize)]
@@ -67,28 +69,30 @@ struct RecordedRequest {
 }
 
 #[derive(Deserialize)]
-struct RecordedOutcome {
-  outcome: String,
-  text: Option<String>,
+struct RecordedOutcome<'a> {
+  #[serde(borrow)]
+  outcome: Cow<'a, str>,
+  #[serde(borrow)]
+  text: Option<Cow<'a, str>>,
 }
 
 #[test]
 fn json_loads_matches_recorded_over_a_sample_of_the_corpus() {
   let fixture: RecordedFixture = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture.base_commit, "d4021ce3993d7e36b2709f00caf578e1f8541407");
-  let records: Vec<&RawValue> = serde_json::from_str(fixture.cases.get()).unwrap();
+  let records: Vec<RecordedCase> = serde_json::from_str(fixture.cases.get()).unwrap();
   assert!(records.len() > 9000, "the corpus holds {} inputs", records.len());
 
   let mut mismatches = Vec::new();
   let mut sampled = 0;
-  for raw_record in records.iter().step_by(SAMPLE_STEP) {
+  for record in records.iter().step_by(SAMPLE_STEP) {
     sampled += 1;
-    let record: RecordedCase = serde_json::from_str(raw_record.get()).unwrap();
-    let mode = record.request.mode.as_str();
-    let input = record.request.input.as_str();
-    let expected = match record.expected.outcome.as_str() {
-      "value" => Outcome::Value(record.expected.text.as_ref().unwrap().clone()),
-      "error" => Outcome::Error(record.expected.text.as_ref().unwrap().clone()),
+    let request: RecordedRequest = serde_json::from_str(record.request.get()).unwrap();
+    let mode = request.mode.as_str();
+    let input = request.input.as_str();
+    let expected = match record.expected.outcome.as_ref() {
+      "value" => Outcome::Value(record.expected.text.as_deref().unwrap().to_string()),
+      "error" => Outcome::Error(record.expected.text.as_deref().unwrap().to_string()),
       "unrepresentable" => Outcome::Unrepresentable,
       other => panic!("unknown outcome {other}"),
     };
@@ -109,17 +113,20 @@ fn json_loads_matches_recorded_over_a_sample_of_the_corpus() {
     mismatches[..mismatches.len().min(20)].join("\n")
   );
 
+  let python_errors: Vec<&str> = records
+    .iter()
+    .filter(|record| record.expected.outcome.as_ref() == "error")
+    .filter_map(|record| record.expected.text.as_deref())
+    .collect();
   for message in REQUIRED_MESSAGES {
-    assert!(corpus_contains_text(message), "no corpus input reaches {message:?}");
+    assert!(
+      python_errors.iter().any(|text| text.starts_with(message) || text.contains(&format!(": {message}"))),
+      "no corpus input reaches {message:?}"
+    );
   }
   for reason in REQUIRED_CODEC_REASONS {
-    assert!(corpus_contains_text(reason), "no corpus input reaches the codec reason {reason:?}");
+    assert!(python_errors.iter().any(|text| text.contains(reason)), "no corpus input reaches the codec reason {reason:?}");
   }
-}
-
-fn corpus_contains_text(text: &str) -> bool {
-  let encoded = serde_json::to_string(text).unwrap();
-  GOLDEN_FIXTURE.contains(&encoded[1..encoded.len() - 1])
 }
 
 fn load_by_mode(mode: &str, input: &str) -> Result<Value, LoadError> {

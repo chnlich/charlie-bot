@@ -17,8 +17,8 @@ use charliebot_store::control_events;
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::projection::MessageProjection;
 use charliebot_store::run_records::{
-  HostBoot, OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF, OBSERVATION_RESULT_REF, RUN_EVENTS_NAME,
-  RUN_METADATA_NAME, RunKind, RunRecord,
+  HostBoot, OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF,
+  OBSERVATION_REPO_PATH, OBSERVATION_RESULT_REF, RUN_EVENTS_NAME, RUN_METADATA_NAME, RunKind, RunRecord,
 };
 use charliebot_store::{SharedChatEvent, Store, StoreError, StoreResult};
 use charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME;
@@ -328,9 +328,9 @@ fn delivery_event(
     (OBSERVATION_RAW_LOG_REF): delivered.raw_log_ref.as_deref().unwrap_or(""),
     (OBSERVATION_EVENTS_REF): delivered.events_ref.as_deref().unwrap_or(""),
     (OBSERVATION_RESULT_REF): delivered.result_ref.as_deref().unwrap_or(""),
-    "repo_path": delivered.repo_path.as_deref().unwrap_or(""),
-    "base_branch": delivered.base_branch.as_deref().unwrap_or(""),
-    "branch_name": delivered.branch_name.as_deref().unwrap_or(""),
+    (OBSERVATION_REPO_PATH): delivered.repo_path.as_deref().unwrap_or(""),
+    (OBSERVATION_BASE_BRANCH): delivered.base_branch.as_deref().unwrap_or(""),
+    (OBSERVATION_BRANCH_NAME): delivered.branch_name.as_deref().unwrap_or(""),
     "run_id": delivered.id,
     "timestamp": close_at,
   })))
@@ -458,9 +458,9 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
         (OBSERVATION_RAW_LOG_REF): delivered.raw_log_ref.as_deref().unwrap_or(""),
         (OBSERVATION_EVENTS_REF): delivered.events_ref.as_deref().unwrap_or(""),
         (OBSERVATION_RESULT_REF): delivered.result_ref.as_deref().unwrap_or(""),
-        "repo_path": delivered.repo_path.as_deref().unwrap_or(""),
-        "base_branch": delivered.base_branch.as_deref().unwrap_or(""),
-        "branch_name": delivered.branch_name.as_deref().unwrap_or(""),
+        (OBSERVATION_REPO_PATH): delivered.repo_path.as_deref().unwrap_or(""),
+        (OBSERVATION_BASE_BRANCH): delivered.base_branch.as_deref().unwrap_or(""),
+        (OBSERVATION_BRANCH_NAME): delivered.branch_name.as_deref().unwrap_or(""),
       })
     })
   } else {

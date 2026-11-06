@@ -28,7 +28,7 @@ use charliebot_core::run_token::SESSION_ID_ENV;
 use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_session_api::api as session_routes;
 use charliebot_store::chat_events::{self, LineRule};
-use charliebot_store::metadata::{UtcDateTime, read_session_metadata};
+use charliebot_store::metadata::{ARCHIVE_OFFSET, UtcDateTime, read_session_metadata};
 use charliebot_store::{CALLER_SESSION_ID_FIELD, control_events, layout};
 use charliebot_tasks::completion::{CLOSED_EVENT_ID_FIELD, STOPPED_RUNS_FIELD, pending_archive_answer};
 use charliebot_tasks::routes as task_routes;
@@ -701,7 +701,7 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
 /// `_earlier_unit`: the bootstrap session's `archive_offset` says which cursor space the pages
 /// use; without it the unit is a guess, so the command stops instead of printing one.
 fn earlier_unit(boot: &Value) -> Result<&'static str, CliExit> {
-  let offset = boot.get("session").and_then(|session| session.get("archive_offset")).and_then(Value::as_i64);
+  let offset = boot.get("session").and_then(|session| session.get(ARCHIVE_OFFSET)).and_then(Value::as_i64);
   match offset {
     Some(offset) => Ok(if offset > 0 { "events" } else { "messages" }),
     None => Err(CliExit::error(

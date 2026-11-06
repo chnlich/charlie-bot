@@ -71,6 +71,9 @@ pub const HAS_PENDING_TRIGGER: &str = "has_pending_trigger";
 pub const PENDING_TRIGGER_COUNT: &str = "pending_trigger_count";
 /// The session-metadata field holding the next instant a waiting trigger fires.
 pub const NEXT_TRIGGER_AT: &str = "next_trigger_at";
+/// The session-metadata field holding the offset between the session's message index and its event index. The
+/// dialog reader reads it to tell whether `--turns` counts messages or events.
+pub const ARCHIVE_OFFSET: &str = "archive_offset";
 /// The session-metadata field holding each rated round's feedback, keyed by the rated event's id.
 pub const ROUND_RATINGS: &str = "round_ratings";
 /// The task-spec field saying whether the run keeps its worktree after it ends. The delegate request and the stored
@@ -712,7 +715,7 @@ impl SessionMetadata {
     push(&mut declared, "native_model", &self.native_model);
     push(&mut declared, ROUND_RATINGS, &self.round_ratings);
     push(&mut declared, "group", &self.group);
-    push(&mut declared, "archive_offset", &self.archive_offset);
+    push(&mut declared, ARCHIVE_OFFSET, &self.archive_offset);
     finish_metadata(declared, &self.extra, slots, MetadataFile::Session)
   }
 

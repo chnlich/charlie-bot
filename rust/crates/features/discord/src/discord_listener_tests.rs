@@ -348,10 +348,7 @@ async fn test_op7_and_op9_end_the_connection_and_reconnect() {
     initial_backoff,
     "READY resets the reconnect backoff"
   );
-  assert_eq!(
-    reconnect_backoff_after_drop(Duration::from_secs(32), false, initial_backoff),
-    Duration::from_secs(32)
-  );
+  assert_eq!(reconnect_backoff_after_drop(Duration::from_secs(32), false, initial_backoff), Duration::from_secs(32));
 
   for op in [7, 9] {
     let home = Home::new(true).await;

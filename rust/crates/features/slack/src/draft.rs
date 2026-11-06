@@ -357,9 +357,8 @@ mod tests {
       "synthetic-user-token".to_string(),
       Duration::from_secs(2),
     );
-    let request = tokio::spawn(async move {
-      sender.send(&json!({"channel": "C0SYNTHETIC", "thread": null}), "body").await
-    });
+    let request =
+      tokio::spawn(async move { sender.send(&json!({"channel": "C0SYNTHETIC", "thread": null}), "body").await });
     wait_for_request.await.unwrap();
     tokio::time::pause();
 

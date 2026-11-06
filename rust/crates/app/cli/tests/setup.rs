@@ -40,6 +40,7 @@ fn home_statuses<'a>(lines: &[&'a str]) -> Vec<&'a str> {
 /// `test_the_packages_register_the_cron_and_claude_code_steps_in_that_order`: the cron seed runs before the
 /// Claude Code check, in registration order.
 #[test]
+#[ignore = "integration"]
 fn the_packages_register_the_cron_and_claude_code_steps_in_that_order() {
   let sandbox = Sandbox::new();
   let home = sandbox.dir("home");
@@ -54,6 +55,7 @@ fn the_packages_register_the_cron_and_claude_code_steps_in_that_order() {
 /// `test_the_runner_calls_each_step_in_registration_order_with_the_dry_run_flag` (`--dry-run`): both steps run
 /// in order, the config home is the scratch one, and nothing is written.
 #[test]
+#[ignore = "integration"]
 fn the_runner_calls_each_step_in_registration_order_with_the_dry_run_flag() {
   let sandbox = Sandbox::new();
   let home = sandbox.dir("home");
@@ -77,6 +79,7 @@ fn the_runner_calls_each_step_in_registration_order_with_the_dry_run_flag() {
 /// `test_the_runner_calls_each_step_in_registration_order_with_the_dry_run_flag` (no flag): the same order, and
 /// every call writes into the scratch home the command was given.
 #[test]
+#[ignore = "integration"]
 fn the_runner_calls_each_step_in_registration_order_and_writes_the_scratch_home_in_a_real_run() {
   let sandbox = Sandbox::new();
   let home = sandbox.dir("home");
@@ -109,6 +112,7 @@ fn the_runner_calls_each_step_in_registration_order_and_writes_the_scratch_home_
 /// A repo whose default cron entry points at a missing prompt file fails the run before anything is written,
 /// in the dry run and the real run alike (`seed_default_cron_tasks` validates every entry before writing).
 #[test]
+#[ignore = "integration"]
 fn an_unreadable_default_prompt_fails_the_setup_before_any_write() {
   let sandbox = Sandbox::new();
   let repo = sandbox.dir("repo");
@@ -134,6 +138,7 @@ fn an_unreadable_default_prompt_fails_the_setup_before_any_write() {
 
 /// The committed defaults seed host files byte-identical to the recorded output.
 #[test]
+#[ignore = "integration"]
 fn the_seeded_host_files_match_the_recorded_bytes() {
   let sandbox = Sandbox::new();
   let home = sandbox.dir("home");

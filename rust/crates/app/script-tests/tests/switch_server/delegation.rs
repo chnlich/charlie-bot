@@ -41,6 +41,7 @@ fn release_calls(world: &World, sha: &str) -> Vec<String> {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_delegation_passes_when_the_run_succeeds_and_its_worktree_exists() {
   let world = World::new();
 
@@ -56,6 +57,7 @@ fn test_delegation_passes_when_the_run_succeeds_and_its_worktree_exists() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_delegation_fails_with_the_run_error_and_leaves_nothing_behind() {
   let world = World::new();
   let error = "RuntimeError: git worktree add timed out after 0.3s for charliebot/task-switch-check";
@@ -74,6 +76,7 @@ fn test_delegation_fails_with_the_run_error_and_leaves_nothing_behind() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_delegation_refused_by_the_server_names_the_server_answer() {
   let world = World::new();
 
@@ -87,6 +90,7 @@ fn test_delegation_refused_by_the_server_names_the_server_answer() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_delegation_times_out_then_stops_the_run_and_removes_its_worktree() {
   let world = World::new();
 
@@ -104,6 +108,7 @@ fn test_delegation_times_out_then_stops_the_run_and_removes_its_worktree() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_switch_restores_and_exits_2_when_the_delegation_check_fails() {
   // A failed delegation check takes the path of a failed probe turn, so the switch restores the previous release.
   let mut world = World::new();
@@ -118,6 +123,7 @@ fn test_switch_restores_and_exits_2_when_the_delegation_check_fails() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_switch_passes_the_delegation_on_the_first_command_while_the_run_still_runs() {
   // The worker's first command succeeds in its worktree, then the run sends nothing more and does not end. The check
   // passes on that command and stops the run it passed on.
@@ -136,6 +142,7 @@ fn test_switch_passes_the_delegation_on_the_first_command_while_the_run_still_ru
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_switch_restores_when_the_first_tool_result_is_a_failed_command() {
   // A command that errored is not a pass, even though the run goes on; the check fails at its wait's end.
   let mut world = World::new();
@@ -154,6 +161,7 @@ fn test_switch_restores_when_the_first_tool_result_is_a_failed_command() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_switch_restores_when_the_first_tool_result_is_not_a_command() {
   // A first tool result from another tool is not a command, so the check does not pass on it either.
   let mut world = World::new();
@@ -172,6 +180,7 @@ fn test_switch_restores_when_the_first_tool_result_is_not_a_command() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_switch_restores_when_the_run_makes_no_tool_call_and_names_its_backend() {
   // A worker that never calls a tool leaves its log without a result, so the check names the backend whose log that is.
   let mut world = World::new();
@@ -190,6 +199,7 @@ fn test_switch_restores_when_the_run_makes_no_tool_call_and_names_its_backend() 
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_switch_reads_with_the_current_release_when_the_target_lacks_a_read() {
   // A release built between the switch-helper group and run-first-command still works as a switch's target: its
   // binary carries the group but not that read, so the switch reads with the binary of the release current names.

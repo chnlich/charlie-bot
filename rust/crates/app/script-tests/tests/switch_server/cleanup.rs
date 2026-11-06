@@ -23,6 +23,7 @@ const HOLD_WAIT: Duration = Duration::from_secs(60);
 
 /// The version wait panics inside the `FakeServer` guard's life, so the stand-in stops on unwind.
 #[test]
+#[ignore = "integration"]
 fn a_panicking_version_wait_stops_the_stand_in_server() {
   let world = World::new();
   let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -40,6 +41,7 @@ fn a_panicking_version_wait_stops_the_stand_in_server() {
 
 /// A stand-in server ends with its test process, which is killed here with SIGKILL.
 #[test]
+#[ignore = "integration"]
 fn the_stand_in_server_ends_with_a_killed_test_process() {
   let mut held_test = hold::HeldTest::start("cleanup::hold_a_stand_in_server_for_the_kill_check");
   let held = Held::read(&held_test.recorded());
@@ -58,6 +60,7 @@ fn the_stand_in_server_ends_with_a_killed_test_process() {
 
 /// The pane shell and the server under it end with the test process, which is killed here with SIGKILL.
 #[test]
+#[ignore = "integration"]
 fn the_pane_server_ends_with_a_killed_test_process() {
   let mut held_test = hold::HeldTest::start("cleanup::hold_a_pane_for_the_kill_check");
   let held = Held::read(&held_test.recorded());
@@ -77,6 +80,7 @@ fn the_pane_server_ends_with_a_killed_test_process() {
 /// Started by `the_stand_in_server_ends_with_a_killed_test_process` in a second copy of this binary. Without
 /// `LEAK_CHECK_HOLD` it does nothing, so an ordinary run of this file passes it.
 #[test]
+#[ignore = "integration"]
 fn hold_a_stand_in_server_for_the_kill_check() {
   let Some(marker) = hold::marker() else { return };
   let world = World::new();
@@ -88,6 +92,7 @@ fn hold_a_stand_in_server_for_the_kill_check() {
 /// Started by `the_pane_server_ends_with_a_killed_test_process` in a second copy of this binary. Without
 /// `LEAK_CHECK_HOLD` it does nothing, so an ordinary run of this file passes it.
 #[test]
+#[ignore = "integration"]
 fn hold_a_pane_for_the_kill_check() {
   let Some(marker) = hold::marker() else { return };
   let sandbox = Sandbox::new();

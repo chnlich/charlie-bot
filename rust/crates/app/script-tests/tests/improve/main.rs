@@ -40,6 +40,7 @@ fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_generate_one_seed_gives_byte_identical_output_twice() {
   let sandbox = Sandbox::new();
   let first = sandbox.dir("first");
@@ -56,6 +57,7 @@ fn test_generate_one_seed_gives_byte_identical_output_twice() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_generate_mid_size_event_logs_follow_the_production_shape() {
   let sandbox = Sandbox::new();
   let output = sandbox.dir("mid-size");
@@ -93,6 +95,7 @@ fn is_plain_user(event: &serde_json::Value) -> bool {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_generate_separates_every_finished_turn_with_a_master_done() {
   let sandbox = Sandbox::new();
   let output = sandbox.dir("turns");

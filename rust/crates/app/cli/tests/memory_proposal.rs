@@ -267,6 +267,7 @@ fn first_chars(text: &str, count: usize) -> String {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_proposal_verb_on_a_fresh_home_creates_the_scaffold() {
   let sandbox = Sandbox::new();
   let result = sandbox.run_cli(&["proposal", "status"]);
@@ -277,6 +278,7 @@ fn test_proposal_verb_on_a_fresh_home_creates_the_scaffold() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_first_open_creates_branch_and_worktree() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -297,6 +299,7 @@ fn test_first_open_creates_branch_and_worktree() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_open_with_commits_ahead_and_unchanged_base_keeps_them() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -316,6 +319,7 @@ fn test_open_with_commits_ahead_and_unchanged_base_keeps_them() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_open_rebases_onto_moved_base() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -343,6 +347,7 @@ fn test_open_rebases_onto_moved_base() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_open_conflicting_base_keeps_branch_at_old_sha() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -365,6 +370,7 @@ fn test_open_conflicting_base_keeps_branch_at_old_sha() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_open_refuses_uncommitted_live_change_and_touches_nothing() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -378,6 +384,7 @@ fn test_open_refuses_uncommitted_live_change_and_touches_nothing() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_open_refuses_detached_live_checkout() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -390,6 +397,7 @@ fn test_open_refuses_detached_live_checkout() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_open_foreign_worktree_refuses_and_creates_no_branch() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -409,6 +417,7 @@ fn test_open_foreign_worktree_refuses_and_creates_no_branch() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_land_middle_commit_moves_live_head_and_keeps_the_rest() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -435,6 +444,7 @@ fn test_land_middle_commit_moves_live_head_and_keeps_the_rest() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_land_refuses_sha_not_on_proposal() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -453,6 +463,7 @@ fn test_land_refuses_sha_not_on_proposal() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_land_refuses_dirty_live_checkout() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -467,6 +478,7 @@ fn test_land_refuses_dirty_live_checkout() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_land_refuses_tree_failing_lint() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -482,6 +494,7 @@ fn test_land_refuses_tree_failing_lint() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_status_prints_every_field() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -513,6 +526,7 @@ fn test_status_prints_every_field() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_status_and_land_build_diff_path_through_one_function() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -530,6 +544,7 @@ fn test_status_and_land_build_diff_path_through_one_function() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_status_tracks_worktree_dirty_state() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -544,6 +559,7 @@ fn test_status_tracks_worktree_dirty_state() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_status_dirty_dash_when_worktree_absent() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -564,6 +580,7 @@ fn test_status_dirty_dash_when_worktree_absent() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_accepts_new_entry_file() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -581,6 +598,7 @@ fn test_commit_accepts_new_entry_file() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_accepts_existing_pr_entry_with_lines_appended() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -596,6 +614,7 @@ fn test_commit_accepts_existing_pr_entry_with_lines_appended() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_resolves_a_relative_message_file_against_the_caller_cwd() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -612,6 +631,7 @@ fn test_commit_resolves_a_relative_message_file_against_the_caller_cwd() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_refuses_reworded_pr_line_and_lists_it() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -628,6 +648,7 @@ fn test_commit_refuses_reworded_pr_line_and_lists_it() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_refuses_line_reworded_to_the_base_wording() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -646,6 +667,7 @@ fn test_commit_refuses_line_reworded_to_the_base_wording() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_counts_line_occurrences_as_a_multiset() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -661,6 +683,7 @@ fn test_commit_counts_line_occurrences_as_a_multiset() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_refuses_deleted_pr_created_entry() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -676,6 +699,7 @@ fn test_commit_refuses_deleted_pr_created_entry() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_refuses_a_new_sentence_over_25_words() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -692,6 +716,7 @@ fn test_commit_refuses_a_new_sentence_over_25_words() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_ignores_an_unchanged_long_sentence_in_an_old_entry() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -708,6 +733,7 @@ fn test_commit_ignores_an_unchanged_long_sentence_in_an_old_entry() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_refuses_a_new_sentence_with_a_semicolon() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -723,6 +749,7 @@ fn test_commit_refuses_a_new_sentence_with_a_semicolon() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_allows_a_semicolon_inside_backticks() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -736,6 +763,7 @@ fn test_commit_allows_a_semicolon_inside_backticks() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_refuses_a_long_sentence_in_the_lead() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -754,6 +782,7 @@ fn test_commit_refuses_a_long_sentence_in_the_lead() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_refuses_a_semicolon_in_the_lead() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -772,6 +801,7 @@ fn test_commit_refuses_a_semicolon_in_the_lead() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_refuses_a_long_sentence_in_an_entry_without_bullets() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -788,6 +818,7 @@ fn test_commit_refuses_a_long_sentence_in_an_entry_without_bullets() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_ignores_an_unchanged_long_sentence_in_an_old_lead() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -804,6 +835,7 @@ fn test_commit_ignores_an_unchanged_long_sentence_in_an_old_lead() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_keeps_the_lead_apart_from_the_first_bullet() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -822,6 +854,7 @@ fn test_commit_keeps_the_lead_apart_from_the_first_bullet() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_refuses_a_body_grown_past_12_lines() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -839,6 +872,7 @@ fn test_commit_refuses_a_body_grown_past_12_lines() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_refuses_a_15_line_body_that_stays_at_15_lines() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -860,6 +894,7 @@ fn test_commit_refuses_a_15_line_body_that_stays_at_15_lines() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_refuses_a_body_line_over_120_columns() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -880,6 +915,7 @@ fn test_commit_refuses_a_body_line_over_120_columns() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_allows_a_body_line_of_exactly_120_columns() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -893,6 +929,7 @@ fn test_commit_allows_a_body_line_of_exactly_120_columns() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_counts_a_cjk_character_as_two_columns() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -913,6 +950,7 @@ fn test_commit_counts_a_cjk_character_as_two_columns() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_refuses_a_base_verbatim_line_over_120_columns() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -934,6 +972,7 @@ fn test_commit_refuses_a_base_verbatim_line_over_120_columns() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_allows_a_wide_line_folded_into_continuation_lines() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -950,6 +989,7 @@ fn test_commit_allows_a_wide_line_folded_into_continuation_lines() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_allows_a_pure_deletion_from_a_50_line_body() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -966,6 +1006,7 @@ fn test_commit_allows_a_pure_deletion_from_a_50_line_body() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_refuses_a_deletion_that_also_adds_a_line() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -983,6 +1024,7 @@ fn test_commit_refuses_a_deletion_that_also_adds_a_line() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_allows_trimming_a_13_line_body_to_12() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -999,6 +1041,7 @@ fn test_commit_allows_trimming_a_13_line_body_to_12() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_replace_pr_lines_commits_and_lists_the_replaced_lines() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -1016,6 +1059,7 @@ fn test_commit_replace_pr_lines_commits_and_lists_the_replaced_lines() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_refuses_a_prose_violation_even_with_replace_pr_lines() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -1034,6 +1078,7 @@ fn test_commit_refuses_a_prose_violation_even_with_replace_pr_lines() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_warns_on_a_new_sentence_with_a_negation_word() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -1054,6 +1099,7 @@ fn test_commit_warns_on_a_new_sentence_with_a_negation_word() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_warns_on_a_changed_title_with_a_negation_word() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -1072,6 +1118,7 @@ fn test_commit_warns_on_a_changed_title_with_a_negation_word() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_ignores_a_negation_word_inside_backticks() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -1086,6 +1133,7 @@ fn test_commit_ignores_a_negation_word_inside_backticks() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_ignores_a_base_verbatim_sentence_with_a_negation_word() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();
@@ -1101,6 +1149,7 @@ fn test_commit_ignores_a_base_verbatim_sentence_with_a_negation_word() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_commit_warns_on_a_rewritten_pr_line_and_lists_both_trailer_sections() {
   let sandbox = Sandbox::new();
   let store = sandbox.build_store();

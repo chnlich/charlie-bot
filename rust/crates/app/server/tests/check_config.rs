@@ -85,6 +85,7 @@ fn snapshot_tree(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
 }
 
 #[test]
+#[ignore = "integration"]
 fn check_config_is_read_only_and_does_not_take_the_home_writer_fence() {
   let temporary = tempfile::tempdir().unwrap();
   let home = temporary.path().join("home");
@@ -153,6 +154,7 @@ fn check_config_is_read_only_and_does_not_take_the_home_writer_fence() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_local_work_guard_starts_on_a_home_without_a_runner_section() {
   let temporary = tempfile::tempdir().unwrap();
   let home = temporary.path().join("home");

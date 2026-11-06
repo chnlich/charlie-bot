@@ -69,6 +69,7 @@ fn serve_models(body: &serde_json::Value) -> String {
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_unknown_option_id_names_the_config_file() {
   let sandbox = Sandbox::new();
   let home = config_home(&sandbox, "http://127.0.0.1:9/v1");
@@ -87,6 +88,7 @@ fn an_unknown_option_id_names_the_config_file() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_non_charlie_code_option_is_refused_with_its_type() {
   let sandbox = Sandbox::new();
   let home = sandbox.dir("home");
@@ -110,6 +112,7 @@ fn a_non_charlie_code_option_is_refused_with_its_type() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_option_without_an_endpoint_is_refused_before_the_binary_resolves() {
   let sandbox = Sandbox::new();
   let home = sandbox.dir("home");
@@ -130,6 +133,7 @@ fn an_option_without_an_endpoint_is_refused_before_the_binary_resolves() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_missing_binary_names_the_install_guidance() {
   let sandbox = Sandbox::new();
   let home = config_home(&sandbox, "http://127.0.0.1:9/v1");
@@ -146,6 +150,7 @@ fn a_missing_binary_names_the_install_guidance() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_failing_help_run_reports_its_first_stderr_line() {
   let sandbox = Sandbox::new();
   stub_charlie_code(&sandbox, "echo 'boom' >&2\nexit 3\n");
@@ -157,6 +162,7 @@ fn a_failing_help_run_reports_its_first_stderr_line() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_help_output_missing_a_contract_flag_is_refused() {
   let sandbox = Sandbox::new();
   stub_charlie_code(
@@ -174,6 +180,7 @@ fn a_help_output_missing_a_contract_flag_is_refused() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_unreachable_endpoint_is_reported() {
   let sandbox = Sandbox::new();
   stub_charlie_code(&sandbox, &healthy_help_stub());
@@ -186,6 +193,7 @@ fn an_unreachable_endpoint_is_reported() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_endpoint_without_the_model_is_reported() {
   let sandbox = Sandbox::new();
   stub_charlie_code(&sandbox, &healthy_help_stub());
@@ -204,6 +212,7 @@ fn an_endpoint_without_the_model_is_reported() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_healthy_option_prints_the_ok_line() {
   let sandbox = Sandbox::new();
   let stub = stub_charlie_code(&sandbox, &healthy_help_stub());
@@ -218,6 +227,7 @@ fn a_healthy_option_prints_the_ok_line() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_trailing_slash_on_the_endpoint_prints_the_rstripped_base() {
   let sandbox = Sandbox::new();
   stub_charlie_code(&sandbox, &healthy_help_stub());

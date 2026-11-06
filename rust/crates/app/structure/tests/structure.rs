@@ -1897,48 +1897,56 @@ fn real_workspace() -> &'static Workspace {
 }
 
 #[test]
+#[ignore = "integration"]
 fn every_crate_is_in_a_group() {
   let failures = group_failures(real_workspace());
   assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn dependencies_follow_the_group_directions() {
   let failures = direction_failures(real_workspace());
   assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn no_runtime_crate_depends_on_a_higher_layer() {
   let failures = layer_break_failures(real_workspace());
   assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn every_runtime_crate_has_a_layer() {
   let failures = unplaced_runtime_failures(real_workspace());
   assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn every_layer_names_a_runtime_crate() {
   let failures = stale_layer_failures(real_workspace());
   assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn no_crate_has_a_module_cycle() {
   let failures = cycle_failures(real_workspace());
   assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn no_production_path_attribute_reaches_outside_its_crate() {
   let failures = &real_workspace().path_failures;
   assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn no_name_is_spelled_outside_its_owner() {
   let workspace = real_workspace();
   let rows: Vec<OwnerRow> = OWNER_TABLE.iter().copied().chain(event_name_rows(workspace)).collect();
@@ -1947,12 +1955,14 @@ fn no_name_is_spelled_outside_its_owner() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn every_file_kind_is_read_and_written_by_its_owner() {
   let failures = format_failures(real_workspace(), FORMAT_TABLE);
   assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn no_global_state_outside_its_owner() {
   let failures = global_state_failures(real_workspace());
   assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -2002,6 +2012,7 @@ fn cycle_of<'a>(cycles: &'a [Cycle], package: &str) -> Option<&'a Cycle> {
 /// One test builds small synthetic workspaces and checks one failure per case. A check that skips a form of break
 /// would let that break into the workspace unseen.
 #[test]
+#[ignore = "integration"]
 fn the_checks_find_each_break() {
   let groups_dir = tempfile::tempdir().expect("create a temporary directory");
   let groups_root = groups_dir.path();
@@ -2213,6 +2224,7 @@ fn the_checks_find_each_break() {
 /// A route path that holds a layout name and a test target also pass. Each line number below is the line of the
 /// fixture text.
 #[test]
+#[ignore = "integration"]
 fn the_owner_rule_finds_each_break() {
   let owner_dir = tempfile::tempdir().expect("create a temporary directory");
   let owner_root = owner_dir.path();
@@ -2359,6 +2371,7 @@ mod tests {
 /// spellings that differ only in a parameter's name count as one path, and a `strip_prefix` or `starts_with` argument
 /// names no path, so the reader crate passes.
 #[test]
+#[ignore = "integration"]
 fn the_route_rule_finds_each_break() {
   let dir = tempfile::tempdir().expect("create a temporary directory");
   let root = dir.path();
@@ -2405,6 +2418,7 @@ fn the_route_rule_finds_each_break() {
 /// that references that const passes. A composition crate that spells the label itself fails with each site and the
 /// hint, so the label cannot drift between the two crates.
 #[test]
+#[ignore = "integration"]
 fn the_backend_package_rule_finds_each_break() {
   let dir = tempfile::tempdir().expect("create a temporary directory");
   let root = dir.path();
@@ -2444,6 +2458,7 @@ pub const SPELLED: &str = "backends.thing";
 /// `_`, but not the names the backend output formats also use, nor any single word. A writer crate spelling the
 /// protected name fails with its `file:line` and hint; its spellings of the unprotected ones pass.
 #[test]
+#[ignore = "integration"]
 fn the_event_names_of_event_types_are_protected() {
   let dir = tempfile::tempdir().expect("create a temporary directory");
   let root = dir.path();
@@ -2493,6 +2508,7 @@ fn the_event_names_of_event_types_are_protected() {
 /// A name holding an uppercase letter on a synthetic workspace. The writer crate fails on a literal equal to the name,
 /// and passes on a longer literal that only holds its letters.
 #[test]
+#[ignore = "integration"]
 fn a_camel_case_owner_name_matches_an_exact_literal_only() {
   let dir = tempfile::tempdir().expect("create a temporary directory");
   let root = dir.path();
@@ -2530,6 +2546,7 @@ fn a_camel_case_owner_name_matches_an_exact_literal_only() {
 /// that only passes the path on passes, and so does a test-only function. Each failure gives its `file:line`, the kind
 /// and the hint.
 #[test]
+#[ignore = "integration"]
 fn the_format_rule_finds_each_break() {
   let dir = tempfile::tempdir().expect("create a temporary directory");
   let root = dir.path();
@@ -2609,6 +2626,7 @@ fn fixture_count(home: &Path) -> usize {
 /// `thread_local!` fails too. The production calls to `set_var` and `setenv` fail, and so does the aliased `use`.
 /// A private static and a `#[cfg(test)]` function pass. Each line number below is the line of the fixture text.
 #[test]
+#[ignore = "integration"]
 fn the_global_state_rule_finds_each_break() {
   let dir = tempfile::tempdir().expect("create a temporary directory");
   let root = dir.path();

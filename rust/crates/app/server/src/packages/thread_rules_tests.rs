@@ -125,16 +125,19 @@ fn assert_thread_rules(platform: &str, meta: &SessionMetadata) {
 }
 
 #[test]
+#[ignore = "integration"]
 fn slack_thread_session_carries_the_thread_rule_sentences() {
   assert_thread_rules("Slack", &slack_thread_session());
 }
 
 #[test]
+#[ignore = "integration"]
 fn discord_thread_session_carries_the_thread_rule_sentences() {
   assert_thread_rules("Discord", &discord_thread_session());
 }
 
 #[test]
+#[ignore = "integration"]
 fn feishu_thread_session_carries_the_thread_rule_sentences() {
   assert_thread_rules("Feishu", &feishu_thread_session());
 }

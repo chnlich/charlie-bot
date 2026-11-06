@@ -61,6 +61,7 @@ const COMMITTED_SLICE: &str = "[Slice]\nCPUWeight=100\n";
 const CHECKOUT_SLICE: &str = "[Slice]\nCPUWeight=1\n";
 
 #[test]
+#[ignore = "integration"]
 fn install_slice_units_installs_the_commits_units_and_reloads_the_user_manager() {
   let sandbox = Sandbox::new();
   let repo = sandbox.dir("repo");
@@ -108,6 +109,7 @@ fn install_slice_units_installs_the_commits_units_and_reloads_the_user_manager()
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_rewritten_shell_entry_points_parse() {
   for script in [
     "scripts/setup.sh",
@@ -126,6 +128,7 @@ fn the_rewritten_shell_entry_points_parse() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_script_without_a_current_release_exits_1_and_names_the_path() {
   for (script, args) in [
     ("scripts/setup.sh", vec![]),
@@ -144,6 +147,7 @@ fn a_script_without_a_current_release_exits_1_and_names_the_path() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn setup_sh_runs_the_release_cli_dry_run() {
   let sandbox = Sandbox::new();
   let record = sandbox.root().join("charliebot.record");
@@ -163,6 +167,7 @@ fn setup_sh_runs_the_release_cli_dry_run() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn setup_sh_propagates_a_failing_setup_call() {
   let sandbox = Sandbox::new();
   let record = sandbox.root().join("charliebot.record");
@@ -179,6 +184,7 @@ fn setup_sh_propagates_a_failing_setup_call() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn preflight_charlie_code_sh_execs_the_release_cli_with_the_option_id() {
   let sandbox = Sandbox::new();
   let record = sandbox.root().join("charliebot.record");
@@ -192,6 +198,7 @@ fn preflight_charlie_code_sh_execs_the_release_cli_with_the_option_id() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn preflight_charlie_code_sh_keeps_its_usage_exit_code() {
   let sandbox = Sandbox::new();
   let releases = sandbox.dir("releases");
@@ -204,6 +211,7 @@ fn preflight_charlie_code_sh_keeps_its_usage_exit_code() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn sync_skills_sh_reads_both_homes_through_the_release_cli() {
   let sandbox = Sandbox::new();
   let record = sandbox.root().join("charliebot.record");

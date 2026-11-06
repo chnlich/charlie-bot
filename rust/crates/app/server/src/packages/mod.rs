@@ -41,6 +41,7 @@ mod tests {
   ];
 
   #[test]
+  #[ignore = "integration"]
   fn frontend_page_packages_resolve_to_directories_with_files() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
     for package in PAGE_PACKAGES_WITH_FRONTEND_FILES {
@@ -85,6 +86,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn registration_inventory_matches_the_committed_file() {
     let registry = registry().expect("the listed packages register");
     let rendered = format!("{}\n", registry.inventory().join("\n"));

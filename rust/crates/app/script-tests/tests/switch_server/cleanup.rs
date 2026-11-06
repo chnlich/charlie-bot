@@ -78,7 +78,7 @@ fn the_pane_server_ends_with_a_killed_test_process() {
 }
 
 /// Started by `the_stand_in_server_ends_with_a_killed_test_process` in a second copy of this binary. Without
-/// `LEAK_CHECK_HOLD` it does nothing; the `#[ignore]` keeps an ordinary run from holding.
+/// `LEAK_CHECK_HOLD` it does nothing; the ignore attribute keeps an ordinary run from holding.
 #[test]
 #[ignore = "held by a kill check in a second copy of this binary"]
 fn hold_a_stand_in_server_subprocess_entry() {
@@ -90,7 +90,7 @@ fn hold_a_stand_in_server_subprocess_entry() {
 }
 
 /// Started by `the_pane_server_ends_with_a_killed_test_process` in a second copy of this binary. Without
-/// `LEAK_CHECK_HOLD` it does nothing; the `#[ignore]` keeps an ordinary run from holding.
+/// `LEAK_CHECK_HOLD` it does nothing; the ignore attribute keeps an ordinary run from holding.
 #[test]
 #[ignore = "held by a kill check in a second copy of this binary"]
 fn hold_a_pane_subprocess_entry() {

@@ -132,7 +132,7 @@ fn the_launcher_group_ends_with_a_killed_test_process() {
 }
 
 /// Started by `the_launcher_group_ends_with_a_killed_test_process` in a second copy of this binary. Without
-/// `LEAK_CHECK_HOLD` it does nothing; the `#[ignore]` keeps an ordinary run from holding.
+/// `LEAK_CHECK_HOLD` it does nothing; the ignore attribute keeps an ordinary run from holding.
 #[test]
 #[ignore = "held by a kill check in a second copy of this binary"]
 fn hold_the_launcher_group_subprocess_entry() {

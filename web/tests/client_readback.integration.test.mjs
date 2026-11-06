@@ -143,3 +143,46 @@ test('the device flag keeps one device and an empty window says so', () => {
     fs.rmSync(scratch, {recursive: true, force: true});
   }
 });
+
+// The page-load sections: the newest message and the catch-up by open case, and the render-blocking
+// files from another origin with the link time of the same bytes. The link time is computed by hand:
+// the document is 12500 bytes over 1000 ms after a 300 ms round trip (12.5 bytes per ms), so a
+// 2500-byte file takes 300 + 2500 / 12.5 = 500 ms on the link.
+const CDN_FILE = 'https://cdn.example/marked.min.js';
+const SAME_ORIGIN_DOCUMENT = {
+  url: 'https://page.example/', request_start_ms: 0, response_start_ms: 300, response_end_ms: 1300,
+  encoded_body_size: 12500,
+};
+
+function pageLoadLine(stamp, {newest, current, openCase, source, files}) {
+  return line(stamp, 'kind=page_load response_end_ms=1300 dom_content_loaded_ms=1400 transfer_size=12600 ' +
+    `cause=open newest_message_ms=${newest} current_ms=${current} open_case=${openCase} ` +
+    `content_source=${source} offline_shell=false render_blocking='${JSON.stringify(files)}' ` +
+    `same_origin='${JSON.stringify([SAME_ORIGIN_DOCUMENT])}' client_ts=${stamp.replace(' ', 'T')} ` +
+    'forwarded_for=100.64.0.8');
+}
+
+test('the page loads report the newest message by case, and each file beside its link time', () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'client-readback-test-'));
+  try {
+    const log = path.join(scratch, 'server.log');
+    fs.writeFileSync(log, [
+      pageLoadLine('2026-02-13 11:00:00.100Z', {newest: 1200, current: 1900, openCase: 'A', source: 'network',
+        files: [{url: CDN_FILE, start_ms: 400, response_end_ms: 900, transfer_size: 2500, encoded_body_size: 2500}]}),
+      pageLoadLine('2026-02-13 11:05:00.100Z', {newest: 1400, current: 2000, openCase: 'A', source: 'network',
+        files: [{url: CDN_FILE, start_ms: 400, response_end_ms: 402, transfer_size: 0, encoded_body_size: 2500}]}),
+      pageLoadLine('2026-02-13 11:10:00.100Z', {newest: null, current: null, openCase: 'C', source: 'network',
+        files: []}),
+    ].join('\n') + '\n');
+
+    const output = execFileSync(process.execPath, [READBACK,
+      '--from', '2026-02-13T09:00:00Z', '--to', '2026-02-13T12:00:00Z', log], {encoding: 'utf8'});
+    assert.match(output, /open_case=A content_source=network n=2 not-reached=0 newest_message_ms p50=1200ms/);
+    assert.match(output, /open_case=C content_source=network n=1 not-reached=1 newest_message_ms p50=-/);
+    // The network load is 500 ms long; the cache hit is 2 ms long; both are 2500 bytes and 500 ms on the link.
+    assert.match(output, new RegExp(`${CDN_FILE.replace(/[./]/g, (char) => `\\${char}`)} network n=1 p50=500ms ` +
+      'p90=500ms \\| cache n=1 p50=2ms \\| bytes=2500 link=500ms \\(loads with link 2, unknown 0\\)'));
+  } finally {
+    fs.rmSync(scratch, {recursive: true, force: true});
+  }
+});

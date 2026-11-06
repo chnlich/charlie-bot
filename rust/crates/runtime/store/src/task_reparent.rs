@@ -313,21 +313,32 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_move_that_drops_one_rule_carries_it_onto_the_moved_task() {
+  async fn a_minimal_move_that_drops_one_rule_carries_it_onto_the_moved_task() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
-    let tree = tree(&store).await;
-    let rule = set_subtree_rule(&store, &tree.a, "rule of a\n").await;
+    let caller = create_node(&store, "caller", None, TaskProfile::Manager).await;
+    let old_parent = create_node(&store, "a", Some(&caller.id), TaskProfile::Manager).await;
+    let moved_task = create_node(&store, "g", Some(&old_parent.id), TaskProfile::Manager).await;
+    let new_parent = create_node(&store, "b", Some(&caller.id), TaskProfile::Manager).await;
+    let rule = set_subtree_rule(&store, &old_parent, "rule of a\n").await;
 
-    let moved = store.patch_task(&tree.g.id, move_under(Some(&tree.b)), agent(&tree.caller), &NoGuards).await.unwrap();
+    let moved = store
+      .patch_task(&moved_task.id, move_under(Some(&new_parent)), agent(&caller), &NoGuards)
+      .await
+      .unwrap();
 
-    assert_eq!(moved.task_parent_id.as_deref(), Some(tree.b.id.as_str()));
+    assert_eq!(moved.task_parent_id.as_deref(), Some(new_parent.id.as_str()));
     assert_eq!(moved.subtree_prompt_ref.as_deref(), Some(rule.as_str()));
-    let prompt_fact = facts(&store, &tree.g.id, event_types::PROMPT_CHANGED).pop().unwrap();
+    let prompt_fact = facts(&store, &moved_task.id, event_types::PROMPT_CHANGED).pop().unwrap();
     assert_eq!((&prompt_fact["scope"], &prompt_fact["previous_ref"]), (&json!("subtree"), &Value::Null));
-    assert_eq!(prompt_fact["new_ref"], json!(rule));
-    let fact = facts(&store, &tree.g.id, event_types::TASK_REPARENTED).pop().unwrap();
-    assert_eq!(fact["carried_subtree_prompt"], json!({"ref": rule, "from_session_id": tree.a.id}));
+    assert_eq!(prompt_fact["new_ref"], json!(rule.as_str()));
+    let fact = facts(&store, &moved_task.id, event_types::TASK_REPARENTED).pop().unwrap();
+    assert_eq!(fact["previous_parent_id"], json!(old_parent.id));
+    assert_eq!(fact["task_parent_id"], json!(new_parent.id));
+    assert_eq!(
+      fact["carried_subtree_prompt"],
+      json!({"ref": rule.as_str(), "from_session_id": old_parent.id.as_str()})
+    );
   }
 
   #[tokio::test]

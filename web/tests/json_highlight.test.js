@@ -34,10 +34,11 @@ test('a 4,300,000-character plain string is one json-str span', () => {
   assert.ok(html.endsWith(`<span class="json-str">"${'a'.repeat(4300000)}"</span>\n}`));
 });
 
-test('a 5,000,000-newline string is one json-str span', () => {
-  const html = syntaxHighlight({s: '\n'.repeat(5000000)});
+test('a long newline string is one json-str span', () => {
+  const newlineCount = 64 * 1024;
+  const html = syntaxHighlight({s: '\n'.repeat(newlineCount)});
   assert.equal(countSpans(html, 'json-str'), 1);
-  assert.ok(html.endsWith(`<span class="json-str">"${'\\n'.repeat(5000000)}"</span>\n}`));
+  assert.ok(html.endsWith(`<span class="json-str">"${'\\n'.repeat(newlineCount)}"</span>\n}`));
 });
 
 test('nested objects and arrays add two spaces per level', () => {

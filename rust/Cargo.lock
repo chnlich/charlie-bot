@@ -1030,7 +1030,6 @@ version = "0.1.0"
 dependencies = [
  "charliebot-core",
  "fancy-regex",
- "flate2",
  "html-escape",
  "serde",
  "serde_json",

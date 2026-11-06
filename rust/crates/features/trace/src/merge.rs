@@ -857,8 +857,9 @@ mod differential_tests {
   use std::time::{Duration, SystemTime};
 
   use flate2::read::GzDecoder;
-  use serde::Serialize;
+  use serde::{Deserialize, Serialize};
   use serde_json::Value;
+  use serde_json::value::RawValue;
   use tempfile::tempdir;
 
   use super::*;
@@ -894,6 +895,41 @@ mod differential_tests {
     mode: &'a str,
   }
 
+  /// The fixture's borrowed form: `serde_json::from_slice::<Value>` materializes every hex string in
+  /// the corpus and references, a DOM cost each slice pays before a case runs. `RawValue` and `&str`
+  /// borrows scan the same bytes without allocating them, so a slice parses only the cases it runs.
+  #[derive(Deserialize)]
+  struct GoldenFixture<'a> {
+    source: Value,
+    #[serde(borrow)]
+    corpus: HashMap<String, &'a RawValue>,
+    #[serde(borrow)]
+    cases: Vec<&'a RawValue>,
+  }
+
+  #[derive(Deserialize)]
+  struct GoldenCase<'a> {
+    #[serde(borrow)]
+    name: &'a str,
+    #[serde(borrow)]
+    paths: Vec<&'a str>,
+    slim: bool,
+    #[serde(borrow)]
+    references: HashMap<String, GoldenReference<'a>>,
+    #[serde(borrow)]
+    cache_keys: HashMap<String, &'a RawValue>,
+  }
+
+  #[derive(Deserialize)]
+  struct GoldenReference<'a> {
+    #[serde(borrow)]
+    gzip_hex: Option<&'a str>,
+    #[serde(borrow)]
+    json_hex: Option<&'a str>,
+    #[serde(borrow)]
+    error: Option<&'a str>,
+  }
+
   #[test]
   fn recorded_trace_builders_match_seeded_corpus_first_slice() {
     compare_recorded_trace_builders(0, 10);
@@ -905,8 +941,15 @@ mod differential_tests {
   }
 
   #[test]
+  fn recorded_trace_builders_match_seeded_corpus_error_slice() {
+    compare_recorded_trace_builders(20, 28);
+  }
+
+  // The batch-boundary case runs three real merges on the corpus's largest trace, so it sits in its
+  // own slice and its builders run concurrently.
+  #[test]
   fn recorded_trace_builders_match_seeded_corpus_last_slice() {
-    compare_recorded_trace_builders(20, 29);
+    compare_recorded_trace_builders(28, 29);
   }
 
   fn compare_recorded_trace_builders(start: usize, end: usize) {
@@ -914,73 +957,63 @@ mod differential_tests {
     let mut decoder = GzDecoder::new(bytes.as_slice());
     let mut contents = Vec::new();
     decoder.read_to_end(&mut contents).unwrap();
-    let fixture: Value = serde_json::from_slice(&contents).unwrap();
-    assert_eq!(fixture["source"]["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
-    assert_eq!(fixture["source"]["mtime_ns"], "$FIXED_MTIME_NS");
+    let fixture: GoldenFixture = serde_json::from_slice(&contents).unwrap();
+    assert_eq!(fixture.source["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+    assert_eq!(fixture.source["mtime_ns"], "$FIXED_MTIME_NS");
+
+    assert_eq!(fixture.cases.len(), 29);
+    let selected = &fixture.cases[start..end];
+    assert_eq!(selected.len(), end - start);
+    let cases: Vec<GoldenCase> = selected.iter().map(|raw| serde_json::from_str(raw.get()).unwrap()).collect();
 
     let root = tempdir().unwrap();
-    for (relative, encoded) in fixture["corpus"].as_object().unwrap() {
-      let path = root.path().join(relative);
-      fs::create_dir_all(path.parent().unwrap()).unwrap();
-      fs::write(&path, decode_hex(encoded.as_str().unwrap())).unwrap();
-      let modified =
-        SystemTime::UNIX_EPOCH + Duration::new(FIXED_MTIME_NS / 1_000_000_000, (FIXED_MTIME_NS % 1_000_000_000) as u32);
-      File::options()
-        .write(true)
-        .open(path)
-        .unwrap()
-        .set_times(std::fs::FileTimes::new().set_modified(modified))
-        .unwrap();
+    for case in &cases {
+      for &relative in &case.paths {
+        let encoded: &str = serde_json::from_str(fixture.corpus[relative].get()).unwrap();
+        let path = root.path().join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, decode_hex(encoded)).unwrap();
+        let modified = SystemTime::UNIX_EPOCH
+          + Duration::new(FIXED_MTIME_NS / 1_000_000_000, (FIXED_MTIME_NS % 1_000_000_000) as u32);
+        File::options()
+          .write(true)
+          .open(path)
+          .unwrap()
+          .set_times(std::fs::FileTimes::new().set_modified(modified))
+          .unwrap();
+      }
     }
 
-    let cases = fixture["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 29);
-    let selected_cases = cases.iter().skip(start).take(end - start).collect::<Vec<_>>();
-    assert_eq!(selected_cases.len(), end - start);
     let mut comparisons = 0;
     let mut differences = Vec::new();
-    for case in selected_cases {
-      let name = case["name"].as_str().unwrap();
-      let paths: Vec<PathBuf> =
-        case["paths"].as_array().unwrap().iter().map(|path| root.path().join(path.as_str().unwrap())).collect();
-      let slim = case["slim"].as_bool().unwrap();
+    for case in &cases {
+      let name = case.name;
+      let paths: Vec<PathBuf> = case.paths.iter().map(|relative| root.path().join(relative)).collect();
       let output = tempdir().unwrap();
-      for builder in ["merge", "multi", "direct"] {
-        let reference = &case["references"][builder];
-        let artifact = output.path().join(format!("{builder}.json.gz"));
-        let actual = actual_artifact(builder, &paths, slim, &artifact);
-        if let Some(expected_error) = reference.get("error") {
-          match actual {
-            Err(actual_error) if normalize_root(&actual_error, root.path()) == expected_error.as_str().unwrap() => {}
-            Err(actual_error) => differences.push(format!(
-              "error text differs for {name}/{builder}: {:?} != {:?}",
-              normalize_root(&actual_error, root.path()),
-              expected_error.as_str().unwrap()
-            )),
-            Ok(_) => differences.push(format!("Rust succeeded for failing Python case {name}/{builder}")),
-          }
-        } else {
-          let recorded = decode_hex(reference["gzip_hex"].as_str().unwrap());
-          let expected_json = decode_hex(reference["json_hex"].as_str().unwrap());
-          if decompress(&recorded) != expected_json {
-            differences.push(format!("recorded reference gzip does not decompress to its JSON for {name}/{builder}"));
-          }
-          match actual {
-            Ok(actual) => {
-              if decompress(&actual) != expected_json {
-                differences.push(format!("JSON bytes differ for {name}/{builder}"));
-              }
-            }
-            Err(error) => differences.push(format!("unexpected Rust error for {name}/{builder}: {error}")),
-          }
-        }
-        comparisons += 1;
-      }
+      let case_paths = paths.as_slice();
+      let output_dir = output.path();
+      let corpus_root = root.path();
+      let builder_checks = std::thread::scope(|scope| {
+        ["merge", "multi", "direct"]
+          .iter()
+          .map(|&builder| {
+            scope.spawn(move || check_builder(builder, case, case_paths, case.slim, output_dir, corpus_root))
+          })
+          .collect::<Vec<_>>()
+          .into_iter()
+          .map(|handle| match handle.join() {
+            Ok(differences) => differences,
+            Err(payload) => std::panic::resume_unwind(payload),
+          })
+          .collect::<Vec<_>>()
+      });
+      comparisons += builder_checks.len();
+      differences.extend(builder_checks.into_iter().flatten());
       for mode in ["gzip", "merge"] {
-        let key = &case["cache_keys"][mode];
+        let key: Value = serde_json::from_str(case.cache_keys[mode].get()).unwrap();
         assert_eq!(key["recorded_python_key"], "$SHA256(paths, slim, mode)");
-        let expected = cache_key(key, root.path(), slim, mode);
-        match merge_cache_key(&paths, slim, mode) {
+        let expected = cache_key(&key, root.path(), case.slim, mode);
+        match merge_cache_key(&paths, case.slim, mode) {
           Ok(actual) if actual == expected => {}
           Ok(actual) => differences.push(format!("cache key differs for {name}/{mode}: {actual} != {expected}")),
           Err(error) => differences.push(format!("cache key failed for {name}/{mode}: {}", error.message())),
@@ -989,6 +1022,47 @@ mod differential_tests {
     }
     println!("matched {comparisons} builder results and {} cache keys", (end - start) * 2);
     assert!(differences.is_empty(), "{} differential mismatches:\n{}", differences.len(), differences.join("\n"));
+  }
+
+  fn check_builder(
+    builder: &str,
+    case: &GoldenCase<'_>,
+    paths: &[PathBuf],
+    slim: bool,
+    output: &Path,
+    root: &Path,
+  ) -> Vec<String> {
+    let name = case.name;
+    let reference = &case.references[builder];
+    let artifact = output.join(format!("{builder}.json.gz"));
+    let actual = actual_artifact(builder, paths, slim, &artifact);
+    let mut differences = Vec::new();
+    if let Some(expected_error) = reference.error {
+      match actual {
+        Err(actual_error) if normalize_root(&actual_error, root) == expected_error => {}
+        Err(actual_error) => differences.push(format!(
+          "error text differs for {name}/{builder}: {:?} != {:?}",
+          normalize_root(&actual_error, root),
+          expected_error
+        )),
+        Ok(_) => differences.push(format!("Rust succeeded for failing Python case {name}/{builder}")),
+      }
+    } else {
+      let recorded = decode_hex(reference.gzip_hex.unwrap());
+      let expected_json = decode_hex(reference.json_hex.unwrap());
+      if decompress(&recorded) != expected_json {
+        differences.push(format!("recorded reference gzip does not decompress to its JSON for {name}/{builder}"));
+      }
+      match actual {
+        Ok(actual) => {
+          if decompress(&actual) != expected_json {
+            differences.push(format!("JSON bytes differ for {name}/{builder}"));
+          }
+        }
+        Err(error) => differences.push(format!("unexpected Rust error for {name}/{builder}: {error}")),
+      }
+    }
+    differences
   }
 
   fn cache_key(reference: &Value, root: &Path, slim: bool, mode: &str) -> String {

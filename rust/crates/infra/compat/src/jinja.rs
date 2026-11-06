@@ -454,9 +454,7 @@ mod tests {
 
   #[test]
   fn format_filter_matches_jinja2_for_half_values() {
-    let cases = (0..200)
-      .map(|k| (r#"{{ "%.0f"|format(x) }}"#.into(), json!({"x": f64::from(k) / 2.0})))
-      .collect();
+    let cases = (0..200).map(|k| (r#"{{ "%.0f"|format(x) }}"#.into(), json!({"x": f64::from(k) / 2.0}))).collect();
     jinja2_renders(3012, cases);
   }
 

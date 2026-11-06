@@ -58,6 +58,7 @@ struct RecordedFixture<'a> {
 
 #[derive(Deserialize)]
 struct RecordedCase<'a> {
+  #[serde(borrow)]
   request: &'a RawValue,
   expected: RecordedOutcome<'a>,
 }

@@ -1,9 +1,7 @@
 //! Codex rollout records and the readers they share. Codex writes one JSON line per record into
 //! `<codex home>/sessions/**/rollout-*.jsonl`.
 
-use std::fs::Metadata;
 use std::io;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
@@ -169,11 +167,6 @@ pub fn walk_files(root: &Path, keep: impl Fn(&str) -> bool) -> io::Result<Vec<Pa
 fn walk_error(error: walkdir::Error) -> io::Error {
   let message = error.to_string();
   error.into_io_error().unwrap_or_else(|| io::Error::other(message))
-}
-
-/// The file's modification time in seconds with its fraction (`st_mtime`).
-pub fn mtime_secs(metadata: &Metadata) -> f64 {
-  metadata.mtime() as f64 + metadata.mtime_nsec() as f64 / 1e9
 }
 
 pub fn text_of<'a>(map: &'a Map<String, Value>, key: &str) -> Option<&'a str> {

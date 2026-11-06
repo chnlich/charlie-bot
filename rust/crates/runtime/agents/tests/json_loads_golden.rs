@@ -126,7 +126,10 @@ fn json_loads_matches_recorded_over_a_sample_of_the_corpus() {
     );
   }
   for reason in REQUIRED_CODEC_REASONS {
-    assert!(python_errors.iter().any(|text| text.contains(reason)), "no corpus input reaches the codec reason {reason:?}");
+    assert!(
+      python_errors.iter().any(|text| text.contains(reason)),
+      "no corpus input reaches the codec reason {reason:?}"
+    );
   }
 }
 

@@ -171,11 +171,8 @@ impl HttpClient {
       let response =
         pending.send().await.map_err(|error| transport_failure(&exit::source_chain(&error), redactions))?;
       let status = response.status().as_u16();
-      let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
+      let content_type =
+        response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|value| value.to_str().ok()).map(str::to_owned);
       let body = response.bytes().await.map_err(|error| transport_failure(&exit::source_chain(&error), redactions))?;
       Ok(Response { status, body: body.to_vec(), content_type })
     })

@@ -932,27 +932,36 @@ mod differential_tests {
 
   #[test]
   fn recorded_trace_builders_match_seeded_corpus_first_slice() {
-    compare_recorded_trace_builders(0, 10);
+    compare_recorded_trace_builders(0, 10, &["merge", "multi", "direct"]);
   }
 
   #[test]
   fn recorded_trace_builders_match_seeded_corpus_middle_slice() {
-    compare_recorded_trace_builders(10, 20);
+    compare_recorded_trace_builders(10, 20, &["merge", "multi", "direct"]);
   }
 
   #[test]
   fn recorded_trace_builders_match_seeded_corpus_error_slice() {
-    compare_recorded_trace_builders(20, 28);
+    compare_recorded_trace_builders(20, 28, &["merge", "multi", "direct"]);
   }
 
-  // The batch-boundary case runs three real merges on the corpus's largest trace, so it sits in its
-  // own slice and its builders run concurrently.
+  // The batch-boundary case runs three real merges on the corpus's largest trace; each test checks one builder.
   #[test]
-  fn recorded_trace_builders_match_seeded_corpus_last_slice() {
-    compare_recorded_trace_builders(28, 29);
+  fn recorded_trace_merge_builder_matches_seeded_corpus_last_slice() {
+    compare_recorded_trace_builders(28, 29, &["merge"]);
   }
 
-  fn compare_recorded_trace_builders(start: usize, end: usize) {
+  #[test]
+  fn recorded_trace_multi_builder_matches_seeded_corpus_last_slice() {
+    compare_recorded_trace_builders(28, 29, &["multi"]);
+  }
+
+  #[test]
+  fn recorded_trace_direct_builder_matches_seeded_corpus_last_slice() {
+    compare_recorded_trace_builders(28, 29, &["direct"]);
+  }
+
+  fn compare_recorded_trace_builders(start: usize, end: usize, builders: &[&str]) {
     let bytes = include_bytes!("../tests/fixtures/trace_golden.json.gz");
     let mut decoder = GzDecoder::new(bytes.as_slice());
     let mut contents = Vec::new();
@@ -994,7 +1003,7 @@ mod differential_tests {
       let output_dir = output.path();
       let corpus_root = root.path();
       let builder_checks = std::thread::scope(|scope| {
-        ["merge", "multi", "direct"]
+        builders
           .iter()
           .map(|&builder| {
             scope.spawn(move || check_builder(builder, case, case_paths, case.slim, output_dir, corpus_root))

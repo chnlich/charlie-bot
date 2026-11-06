@@ -256,7 +256,7 @@ async fn archive_final(
   backend_id: &str,
   event: &TranscriptEvent,
 ) -> Result<(), String> {
-  match archive_final_with(queue, config, session_id, backend_id, event, |_, text| async {
+  match archive_final_with(queue, config, session_id, backend_id, event, |_, text| async move {
     send_frame(writer, json!({ "type": "final", "text": text })).await
   })
   .await

@@ -22,6 +22,10 @@ const ROUND_TRIP_MS = LINK.roundTripMs;
 const SETTLE_TIMEOUT_MS = 300000;
 const WARM_UP_MS = 10000;
 const SHOW_TIMEOUT_MS = 180000;
+// The window after the first screen renders in which the switch's own requests still start: the
+// idle-callback loads (usage, explain status) fire within ~1.5 s of it, and the status poll it
+// triggers starts with it.
+const SWITCH_SETTLE_MS = 5000;
 
 export function floorMs(bytes) {
   return ROUND_TRIP_MS + bytes / BYTES_PER_MS;
@@ -279,12 +283,18 @@ export async function backgroundRep(ctx, repetition) {
 
     // Scenario 2: click to rendered, for a session that this page has not loaded.
     const target = sessions.switchTarget;
-    await tab.watchChat('switch', target.marker);
+    await tab.watchSwitchPhase('switch', target.id);
     const clickedAt = await tab.clickSession(target.id);
     const shown = await tab.shownBy('switch', clickedAt, SHOW_TIMEOUT_MS);
     // The page's own bootstrap bytes when its request finished; otherwise the size the same body has on the wire.
     const pageBytes = tab.bytesOf(new RegExp(`/api/sessions/${target.id}/bootstrap$`), clickedAt, Infinity);
-    const bootstrapBytes = pageBytes > 0 ? pageBytes : await api.bootstrapWireBytes(target.id);
+    const bootstrapBytes = pageBytes > 0 ? pageBytes : (await api.bootstrapWireBytes(target.id)).wireBytes;
+    // The switch's own requests, from the click until 5 s after the first screen rendered: the
+    // request paths naming the target session, with how often each went out. A path seen twice
+    // within one switch is a repeated download.
+    await sleep(SWITCH_SETTLE_MS);
+    const switchRequests = tab.requestPathCounts(
+      new RegExp(`/api/sessions/${target.id}/|session_id=${target.id}`), clickedAt, shown.at + SWITCH_SETTLE_MS);
     const switchState = shown.capped ? await tab.diagnose(clickedAt) : null;
 
     // Scenario 3: click to echo, in the session the page now shows. The echo is the server's push of the message,
@@ -306,6 +316,8 @@ export async function backgroundRep(ctx, repetition) {
       switchFloorMs: floorMs(bootstrapBytes),
       switchBootstrapBytes: bootstrapBytes,
       switchListRefreshes: overlappingListRefreshes(tab, clickedAt, shown.at),
+      switchRequests,
+      switchRequestTotal: Object.values(switchRequests).reduce((total, count) => total + count, 0),
       switchState,
       sendMs: echoed.at - sentAt,
       sendCapped: echoed.capped,
@@ -389,7 +401,7 @@ export async function heldBlackoutRep(ctx) {
     const restoreAt = Date.now() + LINK.blackoutSeconds * 1000;
     proxy.blackout({ seconds: LINK.blackoutSeconds, mode: 'hold' });
     for (const [index, target] of clicks.entries()) {
-      await tab.watchChat(`held-${index}`, target.marker);
+      await tab.watchSwitchPhase(`held-${index}`, target.id);
       await sleep(index === 0 ? 2000 : 3000);
       await tab.clickSession(target.id);
     }

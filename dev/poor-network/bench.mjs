@@ -105,11 +105,12 @@ function requireEnv(names) {
   return values;
 }
 
-// Creates one bench session and seeds it. A session with `targetBytes` takes turns until its bootstrap reaches that
-// many bytes on the wire, and reports the turns it took; any other takes one turn. The mock home's own sessions hold no
-// task boundary, so the server refuses a message to them; the bench's sessions are task-tree nodes. Each session's
-// marker is its last turn's text, unique to it, so the page shows a switch only when that session's own message is
-// rendered.
+// Creates one bench session and seeds it. A session with `targetBytes` takes turns until its bootstrap content
+// reaches that many bytes on the wire untrimmed — the served body may be smaller, because the first screen's trim
+// keeps it near its budget — and reports the turns it took; any other takes one turn. The mock home's own sessions
+// hold no task boundary, so the server refuses a message to them; the bench's sessions are task-tree nodes. Each
+// session's marker is its last turn's text, unique to it, so the page shows a switch only when that session's own
+// message is rendered.
 async function seedSession(api, tag, index, targetBytes) {
   const id = await api.createSession(`pn-${tag}-${index}`, STUB_BACKEND_ID);
   for (let turn = 1; ; turn++) {
@@ -119,13 +120,13 @@ async function seedSession(api, tag, index, targetBytes) {
     if (targetBytes === null) {
       return { id, marker, turns: 1, bootstrapWireBytes: null };
     }
-    const bootstrapWireBytes = await api.bootstrapWireBytes(id);
-    if (bootstrapWireBytes >= targetBytes) {
-      return { id, marker, turns: turn, bootstrapWireBytes };
+    const { untrimmedBytes } = await api.bootstrapWireBytes(id);
+    if (untrimmedBytes >= targetBytes) {
+      return { id, marker, turns: turn, bootstrapWireBytes: untrimmedBytes };
     }
     if (turn === MAX_SIZING_TURNS) {
       throw new Error(
-        `session ${id} reached ${bootstrapWireBytes} bootstrap bytes in ${turn} turns, short of ${targetBytes}; ` +
+        `session ${id} reached ${untrimmedBytes} untrimmed bootstrap bytes in ${turn} turns, short of ${targetBytes}; ` +
           await describeBootstrap(api, id),
       );
     }
@@ -148,7 +149,7 @@ async function createSessions(api) {
   const tag = crypto.randomBytes(4).toString('hex');
   const made = [];
   for (let index = 1; index <= BENCH_SESSIONS; index++) {
-    const targetBytes = index >= FIRST_SIZED_INDEX ? VIEW.bootstrapWireBytes : null;
+    const targetBytes = index >= FIRST_SIZED_INDEX ? VIEW.bootstrapUntrimmedWireBytes : null;
     made.push(await seedSession(api, tag, index, targetBytes));
   }
   return {

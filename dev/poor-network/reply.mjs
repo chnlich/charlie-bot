@@ -18,8 +18,8 @@ export const REPLY_PIECES = 16;
 export const REPLY_BYTES = 8192;
 // The text of each streamed event. The server keeps each event as one message of the chat, and a bootstrap carries the
 // last 40 messages, of which the turns' separators, notices and system rows take a share. Fewer, larger events put more
-// reply text into those 40 messages, so this size sets the bootstrap's bytes near the live view's median, 26,592 bytes
-// on the wire. A reply of 8 KB makes about three or four stream updates.
+// reply text into those 40 messages, so this size sets the bootstrap content's bytes near the live view's median,
+// 26,592 bytes on the wire untrimmed. A reply of 8 KB makes about three or four stream updates.
 const EVENT_BYTES = 2200;
 
 // The pieces of the reply text, each REPLY_BYTES long. Every non-ASCII character becomes a space, so a character is one

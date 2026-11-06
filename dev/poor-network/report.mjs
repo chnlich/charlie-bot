@@ -214,6 +214,23 @@ export function formatSide(side) {
       lines.push(`${name} repetition ${index + 1} (${rep.startedAt} to ${rep.finishedAt}), other trials: ${others}`);
     });
   }
+  // The switch's own transfer and request count: the bytes its bootstrap moved before the first
+  // screen rendered, and how often each of the switch's request paths went out within one switch.
+  // A path whose median count is above one is a repeated download.
+  const switchReps = backgroundReps.filter((rep) => rep.switchRequests);
+  if (switchReps.length > 0) {
+    const bytes = percentile(switchReps.map((rep) => rep.switchBootstrapBytes), 0.5);
+    const total = percentile(switchReps.map((rep) => rep.switchRequestTotal), 0.5);
+    const paths = [...new Set(switchReps.flatMap((rep) => Object.keys(rep.switchRequests)))].sort();
+    const parts = paths.map((path) => {
+      const counts = switchReps.map((rep) => rep.switchRequests[path] ?? 0);
+      return `${path.replace('/api/sessions/', '')} ${percentile(counts, 0.5)}`;
+    });
+    lines.push(
+      `switch (median): bootstrap ${bytes.toFixed(0)} B on the wire before the first screen, ` +
+        `${total} requests per switch (${parts.join(', ')})`,
+    );
+  }
   const background = side.metrics['background.received'];
   if (background) {
     const gap = background.median - LIVE_READBACK.receivedKbPerMin;

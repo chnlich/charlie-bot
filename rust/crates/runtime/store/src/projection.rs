@@ -173,6 +173,13 @@ impl MessageProjection {
     let preceding = self.separator_ordinals.partition_point(|ordinal| *ordinal < desired);
     preceding.checked_sub(1).map_or(0, |index| self.separator_ordinals[index] + 1)
   }
+
+  /// The first turn start strictly after `slot`, or `None` when the turn holding `slot` runs to the
+  /// list's end. A trim that keeps the tail from a turn start on keeps every kept turn whole.
+  pub fn next_turn_start_after(&self, slot: usize) -> Option<usize> {
+    let index = self.separator_ordinals.partition_point(|ordinal| *ordinal <= slot);
+    self.separator_ordinals.get(index).map(|ordinal| ordinal + 1)
+  }
 }
 
 /// Convert an event list into committed messages, including a final draft flush.

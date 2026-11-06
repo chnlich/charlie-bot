@@ -167,7 +167,9 @@ function connectWS() {
     quickRetriesLeft = RECONNECT_QUICK_RETRY_LIMIT;
     document.dispatchEvent(new CustomEvent('charliebot:client-socket-open', {detail: {attempts: reconnectAttempts}}));
     reconnectAttempts = 0;
-    wsConnectHandlers.forEach((handler) => handler());
+    // A snapshot: the connect handlers read the same value whether this one or
+    // websocket-handlers.js's runs first, and only that one clears the flag.
+    wsConnectHandlers.forEach((handler) => handler({afterNetworkLoss: networkLossPending}));
   };
 
   socket.onmessage = (e) => {

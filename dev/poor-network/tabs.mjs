@@ -137,6 +137,24 @@ export class Tab {
     })()`);
   }
 
+  // Starts watching the page's own switch telemetry for `sessionId`: the switch's completed phase,
+  // which the page dispatches when the first screen has rendered. The detection reads the phase
+  // and not the chat's text, because the first screen renders the session's newest turn, and a
+  // turn a reminder woke can sit between the switch's click and the text a watcher might seek.
+  async watchSwitchPhase(name, sessionId) {
+    await this.evaluate(`(() => {
+      window.__pnWatch = window.__pnWatch || {};
+      const entry = { at: null };
+      window.__pnWatch[${JSON.stringify(name)}] = entry;
+      document.addEventListener('charliebot:session-switch-phase', (ev) => {
+        if (entry.at === null && ev.detail && ev.detail.phase === 'completed'
+            && ev.detail.to_session === ${JSON.stringify(sessionId)}) {
+          entry.at = Date.now();
+        }
+      });
+    })()`);
+  }
+
   // When the watched marker showed after `from`, and whether it did so only at the cap. A marker that has not shown
   // within `capMs` is recorded at `from + capMs`, so the time it reports is a lower bound.
   async shownBy(name, from, capMs) {
@@ -207,6 +225,20 @@ export class Tab {
       }
     }
     return bytes;
+  }
+
+  // How often each request path went out in [from, to], for the requests whose URL matches
+  // `pattern`. The path is the URL without its query, so a repeated download of one endpoint
+  // shows as a count above one.
+  requestPathCounts(pattern, from, to) {
+    const counts = {};
+    for (const request of this.requests.values()) {
+      if (pattern.test(request.url) && request.startAt >= from && request.startAt <= to) {
+        const path = new URL(request.url).pathname;
+        counts[path] = (counts[path] ?? 0) + 1;
+      }
+    }
+    return counts;
   }
 
   // Routes one CDP event of this tab.

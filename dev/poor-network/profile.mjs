@@ -43,12 +43,13 @@ export const REPETITIONS = 5;
 export const CALIBRATION_HOLD_MS = 10000;
 
 // The shape of the view the bench measures, taken from a live release's default "all" view: 124 rows, a raw median row
-// of 3,260 bytes, and a switch target whose bootstrap takes a median 26,592 bytes on the wire. The bench's own sessions
-// are rows of that view, and the mock home holds the rest.
+// of 3,260 bytes, and a switch target whose bootstrap content takes a median 26,592 bytes on the wire untrimmed. The
+// bench's own sessions are rows of that view, and the mock home holds the rest. The first screen's trim serves that
+// content within its budget; the sizing measures the content, not the served bytes, so both sides size alike.
 export const VIEW = Object.freeze({
   rows: 124,
   rawRowMedianBytes: 3260,
-  bootstrapWireBytes: 26592,
+  bootstrapUntrimmedWireBytes: 26592,
 });
 
 // The other sidebar views the background is measured on, at the sizes of a live release's views: the starred view held

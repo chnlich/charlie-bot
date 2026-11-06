@@ -790,7 +790,7 @@ mod tests {
       &features.store.get_session(&session_id).await.unwrap().unwrap(),
     )
     .unwrap();
-    assert_eq!(bootstrap["worker_summary"], summary.clone());
+    assert_eq!(bootstrap.value["worker_summary"], summary.clone());
   }
 
   /// The rebuild parses each run log once for its whole byte count: the counter moves by the log

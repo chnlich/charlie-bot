@@ -113,11 +113,13 @@ shape writes no task spec. The mock's sessions carry no task boundary, so the se
 option. Those sessions are rows of the default view too, so the view holds `VIEW.rows` rows.
 
 The view's shape comes from a live release's default "all" view: 124 rows, a raw median row of 3,260 bytes, and a switch
-target whose bootstrap takes a median 26,592 bytes on the wire. The bench checks the row count before any scenario runs
-and records the median raw row in the JSON. The switch target and the held targets take turns until their bootstrap
-reaches 26,592 bytes on the wire, and the JSON records each one's turns and bytes. The other bench sessions take one
-turn. Each session's last turn carries a seed text unique to it, and the page shows a switch once that text renders. The
-switch floor adjusts for the bootstrap bytes.
+target whose bootstrap content takes a median 26,592 bytes on the wire. The bench checks the row count before any
+scenario runs and records the median raw row in the JSON. The switch target and the held targets take turns until their
+bootstrap content reaches 26,592 bytes on the wire untrimmed — the size the server names in
+`x-bootstrap-untrimmed-bytes`, since the first screen's trim keeps the served body near its 10 KB budget — and the JSON
+records each one's turns and bytes. The other bench sessions take one turn. Each session's last turn carries a seed text
+unique to it, and the page shows a switch once that text renders. The switch floor adjusts for the bytes the page's
+bootstrap actually moved.
 
 The trial's backend is `charlie-code`, which `run.sh` puts on `PATH` as `stub/charlie-code`. Each turn the stub prints the
 next of 16 reply pieces, 8 KB each, cut from repository docs (`reply.mjs`), in the charlie-code NDJSON the backend reads.

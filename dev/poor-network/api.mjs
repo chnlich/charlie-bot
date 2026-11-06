@@ -54,8 +54,11 @@ export class ServerApi {
     return text.length > 0 ? JSON.parse(text) : null;
   }
 
-  // The body bytes a session's bootstrap takes on the wire, counted before any decoding. The page asks for a compressed
-  // body too; this is the size its request moves when the page's own request cannot finish within the bench's cap.
+  // The bytes a session's bootstrap moves on the wire, counted before any decoding: the body's own
+  // size, plus the untrimmed size the server names in `x-bootstrap-untrimmed-bytes`. The first
+  // screen's trim keeps the served body near 10 KB; the untrimmed size is the session's content
+  // size, and the measure the switch targets are sized against. A server without the header (the
+  // baseline) serves the untrimmed body, so the body's size is both.
   bootstrapWireBytes(sessionId) {
     const url = new URL(`${this.#base}/api/sessions/${sessionId}/bootstrap`);
     const headers = { ...this.#headers, 'accept-encoding': 'gzip, deflate, br, zstd' };
@@ -69,7 +72,8 @@ export class ServerApi {
           if (response.statusCode !== 200) {
             reject(new Error(`GET bootstrap of ${sessionId} answered ${response.statusCode}`));
           } else {
-            resolve(bytes);
+            const untrimmed = Number(response.headers['x-bootstrap-untrimmed-bytes']);
+            resolve({ wireBytes: bytes, untrimmedBytes: Number.isFinite(untrimmed) && untrimmed > 0 ? untrimmed : bytes });
           }
         });
         response.on('error', reject);

@@ -79,11 +79,12 @@ pub(crate) fn execute_request(home: &Path, args: &RequestArgs, endpoints: &Endpo
   let request = args.prepare()?;
   let credentials = load(home)?;
   let access = required(&credentials, "user_access_token", home)?;
-  let response = request::send(&request.clone().bearer(&access), &[access.as_str()])?;
+  let client = request::HttpClient::new()?;
+  let response = client.send(&request.clone().bearer(&access), &[access.as_str()])?;
   if token_expired(response.status, &response.body) {
-    let refreshed = refresh(home, &credentials, endpoints)?;
+    let refreshed = refresh(home, &credentials, endpoints, &client)?;
     let redactions = [refreshed.access.as_str(), refreshed.refresh.as_str(), access.as_str()];
-    let retried = request::send(&request.bearer(&refreshed.access), &redactions)?;
+    let retried = client.send(&request.bearer(&refreshed.access), &redactions)?;
     return finish(retried, &redactions);
   }
   finish(response, &[access.as_str()])
@@ -115,18 +116,23 @@ struct Refreshed {
 
 /// The skill's Token Refresh steps, inside this process: an app token mints a new user token, which
 /// is written before the request retries.
-fn refresh(home: &Path, credentials: &Credentials, endpoints: &Endpoints) -> Result<Refreshed, CliExit> {
+fn refresh(
+  home: &Path,
+  credentials: &Credentials,
+  endpoints: &Endpoints,
+  client: &request::HttpClient,
+) -> Result<Refreshed, CliExit> {
   let app_id = required(credentials, "app_id", home)?;
   let app_secret = required(credentials, "app_secret", home)?;
   let current_refresh = required(credentials, "refresh_token", home)?;
-  let app_token = app_access_token(&app_id, &app_secret, endpoints, &[app_secret.as_str()])?;
+  let app_token = app_access_token(&app_id, &app_secret, endpoints, &[app_secret.as_str()], client)?;
   let redactions = [app_secret.as_str(), current_refresh.as_str(), app_token.as_str()];
   let body = json!({"grant_type": "refresh_token", "refresh_token": current_refresh}).to_string();
   let request = Request::new(reqwest::Method::POST, &endpoints.refresh_url)
     .header("Content-Type", "application/json")
     .bearer(&app_token)
     .body(body.into_bytes());
-  let payload = open_json(&request, "Feishu token refresh", &redactions)?;
+  let payload = open_json(&request, "Feishu token refresh", &redactions, client)?;
   let access = data_string(&payload, "access_token", "Feishu token refresh")?;
   let refresh = data_string(&payload, "refresh_token", "Feishu token refresh")?;
   store_tokens(home, &access, &refresh)?;
@@ -138,18 +144,24 @@ fn app_access_token(
   app_secret: &str,
   endpoints: &Endpoints,
   redactions: &[&str],
+  client: &request::HttpClient,
 ) -> Result<String, CliExit> {
   let body = json!({"app_id": app_id, "app_secret": app_secret}).to_string();
   let request = Request::new(reqwest::Method::POST, &endpoints.app_token_url)
     .header("Content-Type", "application/json")
     .body(body.into_bytes());
-  let payload = open_json(&request, "Feishu app token", redactions)?;
+  let payload = open_json(&request, "Feishu app token", redactions, client)?;
   string_field(&payload, "app_access_token", "Feishu app token")
 }
 
 /// One token endpoint's JSON answer; a non-2xx status or a nonzero `code` is an exit-1 failure.
-fn open_json(request: &Request, operation: &str, redactions: &[&str]) -> Result<Value, CliExit> {
-  let response = request::send(request, redactions)?;
+fn open_json(
+  request: &Request,
+  operation: &str,
+  redactions: &[&str],
+  client: &request::HttpClient,
+) -> Result<Value, CliExit> {
+  let response = client.send(request, redactions)?;
   if !(200..300).contains(&response.status) {
     return Err(request::http_failure(response.status, &response.body, redactions));
   }
@@ -206,14 +218,15 @@ pub(crate) fn exchange_code(home: &Path, code: &str, endpoints: &Endpoints) -> R
   let credentials = load(home)?;
   let app_id = required(&credentials, "app_id", home)?;
   let app_secret = required(&credentials, "app_secret", home)?;
-  let app_token = app_access_token(&app_id, &app_secret, endpoints, &[app_secret.as_str()])?;
+  let client = request::HttpClient::new()?;
+  let app_token = app_access_token(&app_id, &app_secret, endpoints, &[app_secret.as_str()], &client)?;
   let redactions = [app_secret.as_str(), app_token.as_str(), code];
   let body = json!({"grant_type": "authorization_code", "code": code}).to_string();
   let request = Request::new(reqwest::Method::POST, &endpoints.exchange_url)
     .header("Content-Type", "application/json")
     .bearer(&app_token)
     .body(body.into_bytes());
-  let payload = open_json(&request, "Feishu code exchange", &redactions)?;
+  let payload = open_json(&request, "Feishu code exchange", &redactions, &client)?;
   let access = data_string(&payload, "access_token", "Feishu code exchange")?;
   let refresh = data_string(&payload, "refresh_token", "Feishu code exchange")?;
   store_tokens(home, &access, &refresh)

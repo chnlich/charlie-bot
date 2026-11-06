@@ -32,7 +32,7 @@ use charliebot_registry::backend::{
 use charliebot_registry::store_hooks::store_hooks;
 use charliebot_registry::{FeatureContext, Registry, RegistryError, StartupState};
 use charliebot_store::Store;
-use futures_util::stream;
+use futures_util::stream::{self, StreamExt};
 use regex::bytes::Regex;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -284,31 +284,43 @@ async fn the_route_answers_as_the_recorded_route_over_the_matrix() {
   let client = no_proxy_client();
   let credentials_path = home.path().join(CREDENTIALS_FILENAME).to_string_lossy().into_owned();
 
-  let mut mismatches = Vec::new();
-  for case in &cases {
-    upstream.seen.lock().unwrap().remove(&case.index);
-    let (status, body, _failure) = post_case(&client, proxy, case.index, &case.body).await;
-    let body = normalize(&body, &credentials_path);
-    let seen = upstream.seen.lock().unwrap().get(&case.index).cloned();
-    let complete = body.ends_with(MESSAGE_STOP_FRAME);
-    let expected_upstream = case.expected_upstream.clone();
-    if status != case.expected_status
-      || body != case.expected_body
-      || seen != expected_upstream
-      || complete != case.expected_complete
-    {
-      mismatches.push(format!(
-        "{}: status {} (python {}), complete {} (python {}), body matches {}, upstream matches {}",
-        case.name,
-        status,
-        case.expected_status,
-        complete,
-        case.expected_complete,
-        body == case.expected_body,
-        seen == expected_upstream,
-      ));
-    }
-  }
+  let mut mismatches: Vec<String> = stream::iter(&cases)
+    .map(|case| {
+      let upstream = Arc::clone(&upstream);
+      let client = &client;
+      let credentials_path = &credentials_path;
+      async move {
+        let (status, body, _failure) = post_case(client, proxy, case.index, &case.body).await;
+        let body = normalize(&body, credentials_path);
+        let seen = upstream.seen.lock().unwrap().get(&case.index).cloned();
+        let complete = body.ends_with(MESSAGE_STOP_FRAME);
+        let expected_upstream = case.expected_upstream.clone();
+        if status != case.expected_status
+          || body != case.expected_body
+          || seen != expected_upstream
+          || complete != case.expected_complete
+        {
+          return Some(format!(
+            "{}: status {} (python {}), complete {} (python {}), body matches {}, upstream matches {}",
+            case.name,
+            status,
+            case.expected_status,
+            complete,
+            case.expected_complete,
+            body == case.expected_body,
+            seen == expected_upstream,
+          ));
+        }
+        None
+      }
+    })
+    .buffer_unordered(32)
+    .collect::<Vec<_>>()
+    .await
+    .into_iter()
+    .flatten()
+    .collect();
+  mismatches.sort();
   assert!(mismatches.is_empty(), "{} of {} cases differ:\n{}", mismatches.len(), cases.len(), mismatches.join("\n"));
 }
 

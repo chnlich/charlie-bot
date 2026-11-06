@@ -1,17 +1,12 @@
 use std::io::Read;
-use std::net::SocketAddr;
 
-use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
-use axum::routing::post;
 use charliebot_compat::form_body::{self, Field, FormModel};
 use charliebot_compat::responses;
 use flate2::read::GzDecoder;
-use reqwest::Client;
 use serde_json::{Value, json};
-use tokio::net::TcpListener;
 
 const BOUNDARY: &str = "synthetic-form-boundary";
 const GOLDEN_FIXTURE: &[u8] = include_bytes!("fixtures/form_body_golden.json.gz");
@@ -30,16 +25,6 @@ struct Case {
 
 #[tokio::test]
 async fn form_body_matches_recorded_for_the_multipart_corpus() {
-  rustls::crypto::ring::default_provider().install_default().expect("the test installs its rustls crypto provider");
-  let rust_listener = TcpListener::bind("127.0.0.1:0").await.expect("a second loopback port is available");
-  let rust_address = rust_listener.local_addr().expect("the Rust address is readable");
-  let rust_server = tokio::spawn(async move {
-    axum::serve(rust_listener, Router::new().route("/items/{item_id}", post(read_item)))
-      .await
-      .expect("the axum test app serves requests");
-  });
-
-  let client = Client::new();
   let cases = corpus();
   assert_eq!(cases.len(), 32);
   let mut decoder = GzDecoder::new(GOLDEN_FIXTURE);
@@ -61,7 +46,7 @@ async fn form_body_matches_recorded_for_the_multipart_corpus() {
     let status = u16::try_from(recorded["expected"]["status"].as_u64().unwrap()).unwrap();
     let recorded_status = StatusCode::from_u16(status).unwrap();
     let recorded_body = recorded["expected"]["body_text"].as_str().unwrap().as_bytes();
-    let (rust_status, rust_body) = send(&client, rust_address, case).await;
+    let (rust_status, rust_body) = invoke(case).await;
 
     assert_eq!(recorded_status, case.expected_status, "FastAPI status for {}", case.name);
     assert_eq!(rust_status, recorded_status, "status for {}", case.name);
@@ -70,13 +55,6 @@ async fn form_body_matches_recorded_for_the_multipart_corpus() {
     } else if recorded_status == StatusCode::UNPROCESSABLE_ENTITY {
       assert_eq!(error_shape(&rust_body), error_shape(recorded_body), "validation shape for {}", case.name);
     }
-  }
-
-  rust_server.abort();
-  match rust_server.await {
-    Err(error) if error.is_cancelled() => {}
-    Err(error) => panic!("axum test app stopped with {error}"),
-    Ok(()) => panic!("axum test app ended before cancellation"),
   }
 }
 
@@ -98,18 +76,17 @@ async fn read_item(request: Request<Body>) -> Response {
   responses::json(StatusCode::OK, &json!({"filename": file.filename(), "size": file.size(), "note": note}))
 }
 
-async fn send(client: &Client, address: SocketAddr, case: &Case) -> (StatusCode, Vec<u8>) {
-  let mut request = client
-    .post(format!("http://{address}/items/{}", case.item_id))
-    .header(header::CONTENT_TYPE, &case.content_type)
-    .body(case.body.clone());
+async fn invoke(case: &Case) -> (StatusCode, Vec<u8>) {
+  let mut builder =
+    Request::post(format!("/items/{}", case.item_id)).header(header::CONTENT_TYPE, case.content_type.as_str());
   if let Some(cookie) = &case.cookie {
-    request = request.header(header::COOKIE, cookie);
+    builder = builder.header(header::COOKIE, cookie.as_str());
   }
-  let response = request.send().await.expect("the server accepts the request");
+  let request = builder.body(Body::from(case.body.clone())).expect("build the request");
+  let response = read_item(request).await;
   let status = response.status();
-  let body = response.bytes().await.expect("the response body is readable").to_vec();
-  (status, body)
+  let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("the response body is readable");
+  (status, body.to_vec())
 }
 
 fn error_shape(body: &[u8]) -> Vec<(Value, Value)> {

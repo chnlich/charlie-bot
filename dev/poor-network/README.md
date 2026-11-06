@@ -167,12 +167,12 @@ address.
 
 ## Tests
 
-The proxy's tests run through the remote runner:
+The relay tests are integration tests because they start the relay as a child process. The Integration workflow runs
+them when a change touches this directory. To reproduce them through the remote runner:
 
 ```sh
-dev/remote-run/run.sh node --test dev/poor-network/proxy.test.mjs
+dev/remote-run/run.sh node --test dev/poor-network/proxy.integration.test.mjs
 ```
 
-They check the transfer times within tolerance, two concurrent tunnels sharing one budget, the held and reset
-blackouts, the byte counters, and the relay entry: its tunnel's transfer time at the link, its stop on SIGTERM, and its
-refusal of a target without a port.
+They check the relay's tunnel transfer time at the link, its stop on SIGTERM, and its refusal of a target without a
+port.

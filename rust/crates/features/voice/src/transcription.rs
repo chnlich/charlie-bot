@@ -1044,9 +1044,7 @@ mod tests {
         Message::Text(setup) => serde_json::from_str::<Value>(&setup).expect("Gemini setup is JSON"),
         message => panic!("expected Gemini setup, got {message:?}"),
       };
-      fake_incoming
-        .send(Ok(Message::Text(r#"{"setupComplete":{}}"#.into())))
-        .expect("send the Gemini setup reply");
+      fake_incoming.send(Ok(Message::Text(r#"{"setupComplete":{}}"#.into()))).expect("send the Gemini setup reply");
 
       let mut frames = Vec::new();
       for _ in 0..3 {
@@ -1057,9 +1055,7 @@ mod tests {
         frames.push(frame);
       }
       fake_incoming
-        .send(Ok(Message::Text(
-          r#"{"serverContent":{"interimInputTranscription":{"text":"请 查 一 下"}}}"#.into(),
-        )))
+        .send(Ok(Message::Text(r#"{"serverContent":{"interimInputTranscription":{"text":"请 查 一 下"}}}"#.into())))
         .expect("send the Gemini partial");
       fake_incoming
         .send(Ok(Message::Text(r#"{"serverContent":{"inputTranscription":{"text":"任务完成"}}}"#.into())))

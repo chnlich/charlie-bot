@@ -126,7 +126,8 @@ async fn settle(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<RunRecord
       return Ok(runs);
     }
     anyhow::ensure!(Instant::now() < deadline, "the session's runs did not settle");
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    // A run settles in tens of milliseconds, and the 0.1 s unit-test budget counts this sleep's full length.
+    tokio::time::sleep(Duration::from_millis(2)).await;
   }
 }
 
@@ -210,8 +211,9 @@ async fn a_failed_summary_keeps_the_paths_and_reports_the_reason() -> anyhow::Re
   let gate = tempfile::tempdir()?;
   let release_path = gate.path().join("release");
   let lines = quota_events().iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+  // The hold's poll step bounds how late the script sees the release file, and the 0.1 s unit-test budget counts it.
   let failing = format!(
-    "cat <<'CB_EVENTS'\n{lines}\nCB_EVENTS\nwhile [ ! -e '{}' ]; do /bin/sleep 0.01; done\n\
+    "cat <<'CB_EVENTS'\n{lines}\nCB_EVENTS\nwhile [ ! -e '{}' ]; do /bin/sleep 0.002; done\n\
      printf '%s\\n' '{}'\nexit 1\n",
     release_path.display(),
     quota_error_result()
@@ -405,6 +407,7 @@ async fn wait_for_run(stack: &Stack, session_id: &str) -> anyhow::Result<RunReco
       return Ok(run);
     }
     anyhow::ensure!(Instant::now() < deadline, "the session's first run did not register");
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    // A run registers in tens of milliseconds, and the 0.1 s unit-test budget counts this sleep's full length.
+    tokio::time::sleep(Duration::from_millis(2)).await;
   }
 }

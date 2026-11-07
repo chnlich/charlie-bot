@@ -38,7 +38,7 @@ use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::{
-  BackendOption, BackendsConfig, CONFIG_D_DIR_NAME, CharlieBotConfig, PathsConfig, Sections, ServerConfig,
+  AutoConfig, BackendOption, BackendsConfig, CONFIG_D_DIR_NAME, CharlieBotConfig, PathsConfig, Sections, ServerConfig,
   TelegramConfig, UiConfig,
 };
 use charliebot_core::credentials::load_credentials;
@@ -73,6 +73,10 @@ use tower::ServiceExt;
 
 /// The backend type every synthetic option of these tests uses.
 pub const BACKEND_TYPE: &str = "recovery_script";
+
+/// The package that registers the `auto_member` session slot, as the server's runtime registration does.
+const AUTO_PACKAGE: (&str, RegisterFn) = ("features.auto_backend", charliebot_agents::auto_backend::register);
+
 /// The option the synthetic nodes are created with.
 pub const BACKEND_ID: &str = "fake";
 
@@ -577,6 +581,30 @@ impl Stack {
   ) -> anyhow::Result<Stack> {
     let cfg = config(home.path(), options, pool, 0);
     Stack::assemble(home, cfg, registry(None)?).await
+  }
+
+  /// A stack whose backend options carry an Auto set.
+  pub async fn start_with_auto(
+    options: Vec<BackendOption>,
+    pool: Vec<String>,
+    auto: AutoConfig,
+  ) -> anyhow::Result<Stack> {
+    let home = tempfile::tempdir()?;
+    let mut cfg = config(home.path(), options, pool, 0);
+    cfg.backends.auto = Some(auto);
+    Stack::assemble(Arc::new(home), cfg, registry(Some(AUTO_PACKAGE))?).await
+  }
+
+  /// The stack of the next boot on an earlier home, whose backend options carry an Auto set.
+  pub async fn start_on_home_with_auto(
+    home: Arc<TempDir>,
+    options: Vec<BackendOption>,
+    pool: Vec<String>,
+    auto: AutoConfig,
+  ) -> anyhow::Result<Stack> {
+    let mut cfg = config(home.path(), options, pool, 0);
+    cfg.backends.auto = Some(auto);
+    Stack::assemble(home, cfg, registry(Some(AUTO_PACKAGE))?).await
   }
 
   /// An agent environment whose PATH starts with the checkout's `gh` wrapper, as the server builds.

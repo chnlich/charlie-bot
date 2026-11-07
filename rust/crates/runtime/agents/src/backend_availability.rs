@@ -95,13 +95,19 @@ impl BackendAvailability {
     Ok(out_until)
   }
 
+  /// Return the stored row for a backend, whether or not it has passed, from the file's current state.
+  pub fn row(&self, backend_id: &str) -> Option<AvailabilityRow> {
+    Self::read_rows(&self.path)
+      .unwrap_or_else(|error| {
+        tracing::error!(target: "charliebot_agents", error = %error, "backend_availability_read_failed");
+        HashMap::new()
+      })
+      .remove(backend_id)
+  }
+
   /// Return the stored "out until" instant, whether or not it has passed, from the file's current state.
   pub fn out_until(&self, backend_id: &str) -> Option<OffsetDateTime> {
-    let rows = Self::read_rows(&self.path).unwrap_or_else(|error| {
-      tracing::error!(target: "charliebot_agents", error = %error, "backend_availability_read_failed");
-      HashMap::new()
-    });
-    rows.get(backend_id).map(|row| row.out_until.into_inner())
+    self.row(backend_id).map(|row| row.out_until.into_inner())
   }
 
   /// Return the stored "out until" instant in the minute-resolution event format.

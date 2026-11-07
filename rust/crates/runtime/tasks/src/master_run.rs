@@ -33,11 +33,11 @@ const NOTICE: &str = "[模型未输出正文，以下为其思考内容]";
 const POST_RESULT_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// The finish-extras key saying an Auto session's manager turn ended on a quota error.
-pub(crate) const FINISH_QUOTA_EXHAUSTED: &str = event_types::QUOTA_EXHAUSTED;
+pub const FINISH_QUOTA_EXHAUSTED: &str = event_types::QUOTA_EXHAUSTED;
 /// The finish-extras key carrying the manager turn's error text for an Auto session.
-pub(crate) const FINISH_ERROR_MESSAGE: &str = "error_message";
+pub const FINISH_ERROR_MESSAGE: &str = "error_message";
 /// The finish-extras key carrying the reset a retryable quota error stated, for an Auto session.
-pub(crate) const FINISH_QUOTA_RESETS_AT: &str = "quota_resets_at";
+pub const FINISH_QUOTA_RESETS_AT: &str = "quota_resets_at";
 
 /// The log event a recovered manager turn logs when it resumes a session's recorded Claude Code run. The
 /// release-switch script tests' fake server emits the same line, so both read the name here.
@@ -912,7 +912,10 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
     finish_extras.insert("account_relays".to_string(), json!(relays));
   }
   add_auto_quota_extras(&metadata, error_msg.as_deref(), quota_exhausted, process.quota_resets_at, &mut finish_extras);
-  report_turn_error_and_salvage(&tracker, process.item, error_msg.as_deref(), quota_exhausted).await?;
+  // An Auto session's quota end is continued on its next member, so this turn posts no "Agent error" of its own.
+  if !is_auto_quota_end(&metadata, &finish_extras) {
+    report_turn_error_and_salvage(&tracker, process.item, error_msg.as_deref(), quota_exhausted).await?;
+  }
   let was_cancelled = cancelled.lock().expect("cancel state mutex is not poisoned").is_some();
   let covered = cancelled.lock().expect("cancel state mutex is not poisoned").unwrap_or(false);
   if !was_cancelled || !covered {
@@ -931,7 +934,7 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
 }
 
 /// Record an Auto session's quota failure in the finish extras, from which the finish recorder writes the member's
-/// "out until" row. A turn that ends for any other reason records nothing.
+/// "out until" row and switches the turn to its next member. A turn that ends for any other reason records nothing.
 fn add_auto_quota_extras(
   metadata: &SessionMetadata,
   error_msg: Option<&str>,
@@ -943,7 +946,8 @@ fn add_auto_quota_extras(
     return;
   }
   let Some(message) = error_msg else { return };
-  if quota_exhausted != Some(true) && !charliebot_agents::backend_pool::is_quota_error(message) {
+  // One decision rule serves this suppression and the finish recorder's switch.
+  if !crate::backend_retry::is_quota_end(message, quota_exhausted) {
     return;
   }
   extras.insert(FINISH_QUOTA_EXHAUSTED.to_string(), json!(true));
@@ -951,6 +955,12 @@ fn add_auto_quota_extras(
   if let Some(reset) = resets_at {
     extras.insert(FINISH_QUOTA_RESETS_AT.to_string(), json!(UtcDateTime::from(reset).to_str()));
   }
+}
+
+/// Whether the finish extras of this turn describe an Auto session's quota end.
+fn is_auto_quota_end(metadata: &SessionMetadata, extras: &Map<String, Value>) -> bool {
+  metadata.backend == charliebot_core::config::AUTO_BACKEND_ID
+    && extras.get(FINISH_QUOTA_EXHAUSTED).and_then(Value::as_bool) == Some(true)
 }
 
 fn resolve_resume_option(item: &WorkItem) -> Option<BackendOption> {
@@ -1178,7 +1188,10 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   let mut finish_extras = tracker.lock().expect("run timing mutex is not poisoned").finish_extras();
   add_auto_quota_extras(&metadata, error_msg.as_deref(), None, None, &mut finish_extras);
   item.user_event_ids = std::mem::take(&mut *ack_ids.lock().expect("resume acknowledgement mutex is not poisoned"));
-  report_turn_error_and_salvage(&tracker, item, error_msg.as_deref(), None).await?;
+  // The drain takes the same path as a live turn: an Auto quota end continues on the next member silently.
+  if !is_auto_quota_end(&metadata, &finish_extras) {
+    report_turn_error_and_salvage(&tracker, item, error_msg.as_deref(), None).await?;
+  }
   if !let_go {
     mark_turn_end_unread(item, error_msg.as_deref(), exit_code, &finish_extras).await?;
   }

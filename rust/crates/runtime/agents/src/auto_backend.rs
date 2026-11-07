@@ -33,20 +33,42 @@ pub struct MemberChange {
   pub reason: &'static str,
   /// The moment the member left recovers, in the minute-resolution event format.
   pub recovers_at: Option<String>,
+  /// The handoff summary state of a change made mid-turn; a turn-start change carries none.
+  pub summary: Option<String>,
 }
 
 impl MemberChange {
+  /// A turn-start change, which builds no retry and so carries no handoff summary.
+  fn at_turn_start(from: String, to: String, reason: &'static str, recovers_at: Option<String>) -> Self {
+    Self { from, to, reason, recovers_at, summary: None }
+  }
+
   /// The `quota_failover` chat event recording this change.
   pub fn event(&self) -> Value {
-    Value::Object(Map::from_iter([
+    let mut event = Map::from_iter([
       ("type".to_string(), json!(event_types::QUOTA_FAILOVER)),
       ("from".to_string(), json!(self.from)),
       ("to".to_string(), json!(self.to)),
       (event_types::QUOTA_FAILOVER_REASON.to_string(), json!(self.reason)),
       (event_types::QUOTA_FAILOVER_SET.to_string(), json!(event_types::QUOTA_SET_AUTO)),
       ("recovers_at".to_string(), json!(self.recovers_at.clone().unwrap_or_default())),
-    ]))
+    ]);
+    if let Some(summary) = &self.summary {
+      event.insert(event_types::QUOTA_FAILOVER_SUMMARY.to_string(), json!(summary));
+    }
+    Value::Object(event)
   }
+}
+
+/// What a turn start decided for a session about to dispatch.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TurnStart {
+  /// The session keeps its member and dispatches no change event.
+  Kept,
+  /// The session switched members; the caller appends the change event.
+  Changed(MemberChange),
+  /// No member is selectable: the turn ends with this error listing every member.
+  Exhausted(String),
 }
 
 /// Register the `auto_member` session slot.
@@ -162,14 +184,15 @@ pub fn select_member(
 /// A session that is not on `auto` is left alone. A session with no recorded member, or whose member is out, gets a
 /// fresh selection; the first assignment records the member without a change event. Otherwise the session keeps its
 /// member unless it is on pay-as-you-go and a subscription is selectable (a subscription reset), or it is near
-/// exhaustion and an under-line subscription is selectable.
+/// exhaustion and an under-line subscription is selectable. When no member is selectable the turn ends with the
+/// error that lists every member.
 pub async fn start_turn(
   features: &FeatureContext,
   cfg: &CharlieBotConfig,
   meta: &mut SessionMetadata,
-) -> anyhow::Result<Option<MemberChange>> {
+) -> anyhow::Result<TurnStart> {
   if meta.backend != AUTO_BACKEND_ID {
-    return Ok(None);
+    return Ok(TurnStart::Kept);
   }
   let auto = require_auto(cfg)?;
   let availability = backend_availability::backend_availability(features)?;
@@ -187,21 +210,21 @@ pub async fn start_turn(
   }
 
   let selected = select_member(cfg, &features.registry, &availability, &[], now)?;
-  let Some(selected) = selected else { return Ok(None) };
+  let Some(selected) = selected else { return Ok(TurnStart::Exhausted(all_exhausted_message(features, cfg)?)) };
   if current.as_deref() == Some(selected.backend.as_str()) {
-    return Ok(None);
+    return Ok(TurnStart::Kept);
   }
   record_member(features, meta, &selected.backend).await?;
   let Some(from) = current else {
     // The first assignment is not a change between members, so it leaves no failover event.
-    return Ok(None);
+    return Ok(TurnStart::Kept);
   };
-  Ok(Some(MemberChange {
-    recovers_at: availability.out_until_minutes(&from),
-    from,
-    to: selected.backend,
-    reason: event_types::QUOTA_REASON_QUOTA_ERROR,
-  }))
+  Ok(TurnStart::Changed(MemberChange::at_turn_start(
+    from.clone(),
+    selected.backend,
+    event_types::QUOTA_REASON_QUOTA_ERROR,
+    availability.out_until_minutes(&from),
+  )))
 }
 
 /// Apply the turn-start rules 2 and 3 to a session whose current member is selectable.
@@ -213,10 +236,13 @@ async fn keep_or_switch(
   availability: &BackendAvailability,
   current: &str,
   now: UtcDateTime,
-) -> anyhow::Result<Option<MemberChange>> {
-  let Some(selected) = select_member(cfg, &features.registry, availability, &[], now)? else { return Ok(None) };
+) -> anyhow::Result<TurnStart> {
+  let Some(selected) = select_member(cfg, &features.registry, availability, &[], now)? else {
+    // The member is selectable by its out record but spent by its reading, and no other member is left.
+    return Ok(TurnStart::Exhausted(all_exhausted_message(features, cfg)?));
+  };
   if selected.backend == current {
-    return Ok(None);
+    return Ok(TurnStart::Kept);
   }
   let current_member = auto.member(current).expect("the current member is in the configured set");
   let current_reading = member_reading(cfg, &features.registry, current_member, now)?;
@@ -224,6 +250,10 @@ async fn keep_or_switch(
   let (reason, recovers_at) =
     if current_member.billing == AutoBilling::Payg && selected.billing == AutoBilling::Subscription {
       (event_types::QUOTA_REASON_SUBSCRIPTION_RESET, None)
+    } else if current_reading.as_ref().is_some_and(|reading| reading.exhausted) {
+      // The reading says the member has no capacity left; the turn start leaves it, as an out record would.
+      let reset = current_reading.as_ref().and_then(MemberReading::earliest_reset).map(format_minutes);
+      (event_types::QUOTA_REASON_QUOTA_ERROR, reset)
     } else if near_exhaustion(current_reading.as_ref())
       && selected.billing == AutoBilling::Subscription
       && !near_exhaustion(selected_reading.as_ref())
@@ -231,21 +261,62 @@ async fn keep_or_switch(
       let reset = current_reading.as_ref().and_then(MemberReading::earliest_reset).map(format_minutes);
       (event_types::QUOTA_REASON_NEAR_EXHAUSTION, reset)
     } else {
-      return Ok(None);
+      return Ok(TurnStart::Kept);
     };
   record_member(features, meta, &selected.backend).await?;
-  Ok(Some(MemberChange { from: current.to_string(), to: selected.backend, reason, recovers_at }))
+  Ok(TurnStart::Changed(MemberChange::at_turn_start(current.to_string(), selected.backend, reason, recovers_at)))
+}
+
+/// The error that ends a turn when no member of the Auto set is selectable: one line per member, in config order. A
+/// member's line names its billing, the reason it is out and when it recovers.
+pub fn all_exhausted_message(features: &FeatureContext, cfg: &CharlieBotConfig) -> anyhow::Result<String> {
+  let auto = require_auto(cfg)?;
+  let availability = backend_availability::backend_availability(features)?;
+  let now = UtcDateTime::now();
+  let mut lines = Vec::new();
+  for member in &auto.members {
+    let state = match availability.row(&member.backend).filter(|row| row.out_until.into_inner() > now.into_inner()) {
+      Some(row) => {
+        let detail = row.detail.lines().next().unwrap_or_default().trim();
+        let recovery = format!("{}, recovers at {}", row.reason, format_minutes(row.out_until));
+        if detail.is_empty() { recovery } else { format!("{recovery} ({detail})") }
+      }
+      None => match member_reading(cfg, &features.registry, member, now)? {
+        Some(reading) if reading.exhausted => reading.earliest_reset().map_or_else(
+          || "quota exhausted".to_string(),
+          |reset| format!("quota exhausted, resets at {}", format_minutes(reset)),
+        ),
+        _ => "not selectable".to_string(),
+      },
+    };
+    lines.push(format!("- {} ({}): {state}", member.backend, billing_label(member.billing)));
+  }
+  Ok(format!("Auto set exhausted; no member is selectable:\n{}", lines.join("\n")))
+}
+
+fn billing_label(billing: AutoBilling) -> &'static str {
+  match billing {
+    AutoBilling::Subscription => "subscription",
+    AutoBilling::Payg => "pay-as-you-go",
+  }
 }
 
 /// Persist `member` as the session's current member and mirror it into the in-memory metadata the resolver reads.
 async fn record_member(features: &FeatureContext, meta: &mut SessionMetadata, member: &str) -> anyhow::Result<()> {
-  let values = Map::from_iter([(AUTO_MEMBER_FIELD.to_string(), json!(member))]);
-  let updated = features.store.update_slot_fields(&meta.id, OWNER, values).await?;
-  if updated.is_none() {
-    return Err(anyhow!("session '{}' disappeared while recording {AUTO_MEMBER_FIELD}", meta.id));
-  }
+  set_current_member(features, &meta.id, member).await?;
   meta.set_extra(AUTO_MEMBER_FIELD, json!(member));
-  tracing::info!(target: "charliebot_agents", session_id = %meta.id, member, "auto_member_recorded");
+  Ok(())
+}
+
+/// Persist `member` as the session's current member for a caller that holds no mutable metadata, as a mid-turn
+/// switch does.
+pub async fn set_current_member(features: &FeatureContext, session_id: &str, member: &str) -> anyhow::Result<()> {
+  let values = Map::from_iter([(AUTO_MEMBER_FIELD.to_string(), json!(member))]);
+  let updated = features.store.update_slot_fields(session_id, OWNER, values).await?;
+  if updated.is_none() {
+    return Err(anyhow!("session '{session_id}' disappeared while recording {AUTO_MEMBER_FIELD}"));
+  }
+  tracing::info!(target: "charliebot_agents", session_id, member, "auto_member_recorded");
   Ok(())
 }
 
@@ -322,6 +393,8 @@ mod tests {
       "claude-sub" => Some(weekly(0.49, 2_880)),
       // Near exhaustion: 95% used with a reset beyond the 45-minute horizon.
       "near" => Some(MemberReading { near_exhaustion: true, ..weekly(0.95, 180) }),
+      // No capacity left, while the out record has not been written.
+      "spent" => Some(MemberReading { exhausted: true, ..weekly(1.0, 60) }),
       // No reading: counts as under the line until its first quota error.
       _ => None,
     }
@@ -353,6 +426,7 @@ backends:
     - {id: chatgpt, label: ChatGPT, type: synthetic, model: model-gpt}
     - {id: claude-sub, label: Claude, type: synthetic, model: model-claude}
     - {id: near, label: Near, type: synthetic, model: model-near}
+    - {id: spent, label: Spent, type: synthetic, model: model-spent}
     - {id: devin, label: Devin, type: synthetic, model: model-devin}
     - {id: payg-a, label: Payg A, type: synthetic, model: model-payg}
   auto:
@@ -361,6 +435,7 @@ backends:
       - {backend: chatgpt, billing: subscription}
       - {backend: claude-sub, billing: subscription}
       - {backend: near, billing: subscription}
+      - {backend: spent, billing: subscription}
       - {backend: devin, billing: subscription}
       - {backend: payg-a, billing: payg}
 ";
@@ -426,6 +501,13 @@ backends:
     backend_availability::backend_availability(features).unwrap()
   }
 
+  fn changed(start: TurnStart) -> MemberChange {
+    match start {
+      TurnStart::Changed(change) => change,
+      other => panic!("expected a member change, got {other:?}"),
+    }
+  }
+
   #[tokio::test]
   async fn selection_orders_by_weekly_reset_then_config_order_then_pay_as_you_go() {
     let (_home, features) = fixture();
@@ -465,7 +547,7 @@ backends:
     let mut meta = auto_session(&features, "auto-first-turn").await;
 
     let change = start_turn(&features, &cfg, &mut meta).await.unwrap();
-    assert_eq!(change, None, "the first assignment is not a change between members");
+    assert_eq!(change, TurnStart::Kept, "the first assignment is not a change between members");
     assert_eq!(meta.extra(AUTO_MEMBER_FIELD), Some(&json!("chatgpt")));
     let stored = features.store.read_metadata_fresh(&meta.id).unwrap().unwrap();
     assert_eq!(stored.extra(AUTO_MEMBER_FIELD), Some(&json!("chatgpt")));
@@ -473,7 +555,7 @@ backends:
 
     // A member below the 90% line is kept at the next turn start.
     let change = start_turn(&features, &cfg, &mut meta).await.unwrap();
-    assert_eq!(change, None);
+    assert_eq!(change, TurnStart::Kept);
     assert_eq!(meta.extra(AUTO_MEMBER_FIELD), Some(&json!("chatgpt")));
   }
 
@@ -485,7 +567,7 @@ backends:
     start_turn(&features, &cfg, &mut meta).await.unwrap();
     availability(&features).record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
 
-    let change = start_turn(&features, &cfg, &mut meta).await.unwrap().expect("the out member is left");
+    let change = changed(start_turn(&features, &cfg, &mut meta).await.unwrap());
     assert_eq!((change.from.as_str(), change.to.as_str()), ("chatgpt", "claude-sub"));
     assert_eq!(change.reason, event_types::QUOTA_REASON_QUOTA_ERROR);
     assert!(change.recovers_at.is_some());
@@ -515,7 +597,7 @@ backends:
     for member in ["chatgpt", "claude-sub", "near", "devin"] {
       availability.record(member, Some(expired), backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
     }
-    let change = start_turn(&features, &cfg, &mut meta).await.unwrap().expect("the pay-as-you-go turn returns");
+    let change = changed(start_turn(&features, &cfg, &mut meta).await.unwrap());
     assert_eq!((change.from.as_str(), change.to.as_str()), ("payg-a", "chatgpt"));
     assert_eq!(change.reason, event_types::QUOTA_REASON_SUBSCRIPTION_RESET);
     assert_eq!(change.event()["reason"], "subscription_reset");
@@ -534,11 +616,57 @@ backends:
       .unwrap();
     meta.set_extra(AUTO_MEMBER_FIELD, json!("near"));
 
-    let change = start_turn(&features, &cfg, &mut meta).await.unwrap().expect("the near member is left");
+    let change = changed(start_turn(&features, &cfg, &mut meta).await.unwrap());
     assert_eq!((change.from.as_str(), change.to.as_str()), ("near", "chatgpt"));
     assert_eq!(change.reason, event_types::QUOTA_REASON_NEAR_EXHAUSTION);
     assert!(change.recovers_at.is_some());
     assert_eq!(change.event()["reason"], "near_exhaustion");
+  }
+
+  #[tokio::test]
+  async fn turn_start_leaves_a_member_whose_reading_says_it_is_spent() {
+    let (_home, features) = fixture();
+    let cfg = loaded_cfg(&features);
+    let mut meta = auto_session(&features, "auto-spent-reading").await;
+    features
+      .store
+      .update_slot_fields(&meta.id, OWNER, Map::from_iter([(AUTO_MEMBER_FIELD.to_string(), json!("spent"))]))
+      .await
+      .unwrap();
+    meta.set_extra(AUTO_MEMBER_FIELD, json!("spent"));
+
+    let change = changed(start_turn(&features, &cfg, &mut meta).await.unwrap());
+    assert_eq!((change.from.as_str(), change.to.as_str()), ("spent", "chatgpt"));
+    assert_eq!(change.reason, event_types::QUOTA_REASON_QUOTA_ERROR);
+    assert_eq!(meta.extra(AUTO_MEMBER_FIELD), Some(&json!("chatgpt")));
+  }
+
+  #[tokio::test]
+  async fn an_exhausted_set_ends_the_turn_with_one_line_per_member() {
+    let (_home, features) = fixture();
+    let cfg = loaded_cfg(&features);
+    let availability = availability(&features);
+    let mut meta = auto_session(&features, "auto-exhausted").await;
+    let reset = UtcDateTime::parse("2999-01-02T03:04:05Z").unwrap();
+    for member in ["chatgpt", "claude-sub", "near", "devin", "payg-a"] {
+      availability.record(member, Some(reset), backend_availability::REASON_QUOTA_ERROR, "API Error: 402").unwrap();
+    }
+
+    let start = start_turn(&features, &cfg, &mut meta).await.unwrap();
+    let TurnStart::Exhausted(message) = start else { panic!("expected the exhausted turn, got {start:?}") };
+    for (member, billing) in [
+      ("chatgpt", "subscription"),
+      ("claude-sub", "subscription"),
+      ("near", "subscription"),
+      ("devin", "subscription"),
+      ("payg-a", "pay-as-you-go"),
+    ] {
+      assert!(
+        message.contains(&format!("- {member} ({billing}): quota_error, recovers at 2999-01-02T03:04+00:00")),
+        "{message}"
+      );
+    }
+    assert_eq!(meta.extra(AUTO_MEMBER_FIELD), Some(&Value::Null), "an exhausted turn records no member");
   }
 
   #[tokio::test]

@@ -635,7 +635,12 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
         }
         Some(reason) => format!("Quota change on {from_backend}: switched to {to_backend} ({reason})"),
       };
-      json!({"role": "system", "content": format!("{head}{recovery}")})
+      let handoff = event
+        .field(event_types::QUOTA_FAILOVER_SUMMARY)
+        .and_then(EventFields::as_str_field)
+        .filter(|summary| !summary.is_empty() && *summary != event_types::QUOTA_SUMMARY_OK)
+        .map_or_else(String::new, |summary| format!("; handoff summary {summary}"));
+      json!({"role": "system", "content": format!("{head}{recovery}{handoff}")})
     }
     event_types::BACKEND_OVERLAY_INACTIVE | event_types::BACKEND_OVERLAY_UNDECLARED => {
       let backend = string_default(event, "backend", "");
@@ -1668,6 +1673,27 @@ mod tests {
         "id": "legacy:0",
         "timestamp": null,
       })
+    );
+  }
+
+  #[test]
+  fn quota_failover_states_an_unavailable_handoff_summary() {
+    let mut aggregator = MessageAggregator::new(0, true);
+    let deltas = aggregator
+      .feed(&json!({
+        "type": "quota_failover",
+        "from": "fake",
+        "to": "strong",
+        "recovers_at": "2030-01-02T03:04+00:00",
+        "reason": "quota_error",
+        "set": "auto",
+        "summary": "unavailable: the run's events log is missing",
+      }))
+      .unwrap();
+    assert_eq!(
+      deltas[0]["message"]["content"],
+      "Quota exhausted on fake: switched to strong; fake recovers at 2030-01-02T03:04+00:00; handoff summary \
+       unavailable: the run's events log is missing"
     );
   }
 

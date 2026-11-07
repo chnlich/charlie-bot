@@ -113,6 +113,12 @@ pub const QUOTA_FAILOVER: &str = "quota_failover";
 pub const QUOTA_FAILOVER_REASON: &str = "reason";
 /// The `quota_failover` field naming which selector made the change: [`QUOTA_SET_AUTO`] or [`QUOTA_SET_POOL`].
 pub const QUOTA_FAILOVER_SET: &str = "set";
+/// The `quota_failover` field carrying the handoff summary state of the retry the change started.
+pub const QUOTA_FAILOVER_SUMMARY: &str = "summary";
+/// The [`QUOTA_FAILOVER_SUMMARY`] value of a retry whose handoff summary was assembled.
+pub const QUOTA_SUMMARY_OK: &str = "ok";
+/// The [`QUOTA_FAILOVER_SUMMARY`] value that opens an unassembled summary; the reason follows a colon and a space.
+pub const QUOTA_SUMMARY_UNAVAILABLE: &str = "unavailable";
 /// The reason of a change forced by a spent quota.
 pub const QUOTA_REASON_QUOTA_ERROR: &str = "quota_error";
 /// The reason of a turn-start change away from a member near exhaustion.

@@ -106,7 +106,8 @@ pub fn model_overrides_config(options: &[BackendOption]) -> anyhow::Result<Map<S
   Ok(config)
 }
 
-/// Record the first option's value for one field of one model; a later, different value fails naming both options.
+/// The record of the first option's value for one field of one model; a later, different value fails naming
+/// both options.
 fn declare(
   declared: &mut HashMap<(String, String, String), (String, JsonValue)>,
   option_id: &str,

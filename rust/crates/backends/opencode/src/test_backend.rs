@@ -431,7 +431,7 @@ impl Harness {
     .expect("the raw cursor reaches the end of the delivered prefix");
   }
 
-  /// Wait until the run delivered an event that `matches` accepts.
+  /// The wait until the run delivered an event that `matches` accepts.
   ///
   /// `wait_for_raw_cursor` waits for the cursor to catch up with the raw log. The relay can write that log one
   /// untranslated line at a time. The wait can therefore return after the first line (for example

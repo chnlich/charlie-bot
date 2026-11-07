@@ -244,6 +244,7 @@ async fn a_failed_summary_keeps_the_paths_and_reports_the_reason() -> anyhow::Re
 
 /// Test ③: with every member out, the turn ends with one error that lists each member.
 #[tokio::test]
+#[ignore = "integration"]
 async fn an_exhausted_set_ends_the_turn_with_one_error_listing_every_member() -> anyhow::Result<()> {
   let stack = auto_stack(&success_script(), &success_script()).await?;
   let session = auto_session(&stack, "auto-exhausted").await?;

@@ -753,6 +753,8 @@ test('a new session and the archive back to the welcome page keep the display an
   h2.context.document.querySelector = (sel) => (sel === 'main' ? main : null);
   await h2.context.archiveSession('session-a');
   assert.equal(h2.context.SESSION_ID, null);
+  assert.equal(h2.context.closedSockets, 1,
+      'the welcome view closes the socket, so the archived session’s live frames stop arriving');
   assert.equal(h2.context.document.title, 'CharlieBot@localhost:8000',
       'the welcome page restores the original title');
 });
@@ -784,6 +786,8 @@ test('clicking back to the loaded session inside a pending switch lands on one s
   const clickB = h.context.switchSession('session-b');
   await h.context.switchSession('session-a');  // the early return: a is still the loaded session
   assert.equal(h.headerName.textContent, 'Beta', 'the pending switch still owns the display');
+  assert.deepEqual(h.context.subscribeRequests, [],
+      'a click on the displayed session during the switch requests no subscription, so its live frames stay off the placeholder');
 
   h.resolveLastSwitch();
   await clickB;

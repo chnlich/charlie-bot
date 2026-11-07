@@ -71,9 +71,28 @@ function baseSessionContext(overrides = {}) {
     },
     // session-view.js announces the end of a session switch as a page event.
     CustomEvent,
-    disconnectWS: () => {},
-    connectWS: () => {},
-    cancelReconnect: () => {},
+    // websocket.js's switch seam, recorded so a harness asserts the frames hold
+    // and the subscription requests a switch makes. The subscription request
+    // answers success by default; a harness overrides to refuse it.
+    holdSessionFrames: (sessionId) => {
+      context.heldSwitchTargets.push(sessionId);
+      context.switchPending = true;
+    },
+    requestSessionSubscription: (sessionId, cursor, report) => {
+      context.subscribeRequests.push({session_id: sessionId, cursor, report});
+      context.switchPending = false;
+    },
+    resumeViewSubscription: () => {
+      context.resumedSubscriptions++;
+      context.switchPending = false;
+    },
+    canRetrySessionSubscription: () => !context.switchPending,
+    closeSessionSocket: () => { context.closedSockets++; },
+    closedSockets: 0,
+    heldSwitchTargets: [],
+    subscribeRequests: [],
+    resumedSubscriptions: 0,
+    switchPending: false,
     renderFileChips: () => {},
     hideStreaming: () => {},
     showStreaming: () => {},

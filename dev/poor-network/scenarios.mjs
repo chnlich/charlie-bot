@@ -628,7 +628,7 @@ export async function heldBlackoutRep(ctx) {
     // finishing — so the proxy's counters cannot attribute them either.
     let supersededServerBytes = 0;
     for (const target of clicks.slice(0, -1)) {
-      supersededServerBytes += await api.bootstrapWireBytes(target.id);
+      supersededServerBytes += (await api.bootstrapWireBytes(target.id)).wireBytes;
     }
     return {
       restoreToRenderedMs: Math.max(shownAt, catchupAt) - restoreAt,
@@ -681,6 +681,9 @@ export async function resetBlackoutRep(ctx) {
         .map((request) => request.startAt - restoreAt),
       restoreToCatchupMs: catchupAt - restoreAt,
       catchupBytes,
+      // What the catch-up bytes are made of: the frames the reconnect socket received between its handshake and
+      // its `catchup_complete`, counted and sized by type.
+      catchupFrames: tab.frameBreakdown(handshake.at, catchupAt),
     };
   });
 }

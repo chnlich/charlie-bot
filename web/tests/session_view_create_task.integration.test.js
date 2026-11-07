@@ -53,8 +53,9 @@ function buildHarness(overrides = {}) {
   stubPageTimers(context);
   createChatSidebarContext(context);
   // Page modules outside the chat/ and sidebar/ sets that the create flow
-  // reaches at call time (websocket.js, utils.js, app.js wiring).
-  for (const name of ['connectWS', 'disconnectWS', 'cancelReconnect', 'hideStreaming', 'autoResize',
+  // reaches at call time (websocket.js, utils.js, app.js wiring). The switch
+  // seam already carries recorders from the base context.
+  for (const name of ['hideStreaming', 'autoResize',
     'scheduleLazySessionDataLoad', 'saveDraftNow', 'setSidebarFilterPill', 'switchSidebarFilter']) {
     if (typeof context[name] !== 'function') context[name] = () => {};
   }

@@ -950,7 +950,7 @@ mod tests {
     let home = home();
     // A top-level listing whose body only tests one session's metadata.json with shell builtins.
     let command = format!(
-      "cd {home}/.charliebot/sessions && ls -d */ | sed 's#/##' | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done > /tmp/ids.txt"
+      "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
     );
     assert!(scan_forms(&command, &home).unwrap().is_empty(), "{command}");
   }
@@ -1011,20 +1011,22 @@ mod tests {
   }
 
   #[test]
-  fn piped_and_walking_session_lists_are_refused() {
+  fn a_piped_session_list_is_refused() {
     let home = home();
-    let denied = [
-      format!(
-        "cd {home}/.charliebot/sessions && sed -n 1p */metadata.json | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
-      ),
-      // A recursive listing walks below every session directory.
-      format!(
-        "cd {home}/.charliebot/sessions && ls -R */ | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
-      ),
-    ];
-    for command in denied {
-      assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
-    }
+    let command = format!(
+      "cd {home}/.charliebot/sessions && sed -n 1p */metadata.json | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
+    );
+    assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
+  }
+
+  #[test]
+  fn a_recursive_session_list_is_refused() {
+    let home = home();
+    // A recursive listing walks below every session directory.
+    let command = format!(
+      "cd {home}/.charliebot/sessions && ls -R */ | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
+    );
+    assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
   }
 
   #[test]

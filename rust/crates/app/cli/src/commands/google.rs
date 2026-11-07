@@ -2222,21 +2222,17 @@ appointments and the tax paperwork of the household";
   }
 
   #[test]
-  fn add_owner_writes_into_new_and_existing_sections() {
+  fn add_owner_writes_into_a_new_section() {
     let home = credentials_home(concat!(
       "google:\n",
       "  client_id: default-client\n",
       "  client_secret: default-secret\n",
       "  refresh_token: default-refresh\n",
       "  owner: avery\n",
-      "google_account_existing:\n",
-      "  description: existing\n",
     ));
     let stub = Stub::start(vec![
       exchange_response("new-access", "new-refresh"),
       profile_response("new@example.invalid"),
-      exchange_response("existing-access", "existing-refresh"),
-      profile_response("existing@example.invalid"),
     ]);
 
     add(
@@ -2249,6 +2245,26 @@ appointments and the tax paperwork of the household";
       &stub.endpoints(),
     )
     .unwrap();
+
+    let parsed: Yaml = serde_yaml::from_str(&std::fs::read_to_string(credentials_path(&home)).unwrap()).unwrap();
+    assert_eq!(parsed["google_account_fresh"]["owner"], "blake");
+  }
+
+  #[test]
+  fn add_owner_writes_into_an_existing_section() {
+    let home = credentials_home(concat!(
+      "google:\n",
+      "  client_id: default-client\n",
+      "  client_secret: default-secret\n",
+      "  refresh_token: default-refresh\n",
+      "  owner: avery\n",
+      "google_account_existing:\n",
+      "  description: existing\n",
+    ));
+    let stub = Stub::start(vec![
+      exchange_response("existing-access", "existing-refresh"),
+      profile_response("existing@example.invalid"),
+    ]);
     add(
       &home,
       "existing",
@@ -2261,7 +2277,6 @@ appointments and the tax paperwork of the household";
     .unwrap();
 
     let parsed: Yaml = serde_yaml::from_str(&std::fs::read_to_string(credentials_path(&home)).unwrap()).unwrap();
-    assert_eq!(parsed["google_account_fresh"]["owner"], "blake");
     assert_eq!(parsed["google_account_existing"]["owner"], "carol");
     assert_eq!(parsed["google_account_existing"]["description"], "existing");
   }

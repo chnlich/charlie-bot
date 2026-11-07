@@ -27,6 +27,7 @@ fn contributions_match_the_recorded_cases() {
   let fixture: Value = serde_json::from_str(&fixture_text).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   assert_eq!(fixture["cases"].as_array().unwrap().len(), 147);
+  let registries = registered_packages();
 
   let root = tempfile::tempdir().unwrap();
   let mut segment_answers = [0usize; 3];
@@ -44,7 +45,7 @@ fn contributions_match_the_recorded_cases() {
   for case in fixture["cases"].as_array().unwrap() {
     let checkout = case["checkout"].as_str().unwrap();
     let repo_path = root.path().join(checkout);
-    let actual = rust_answer(case, &repo_path);
+    let actual = rust_answer(case, &repo_path, &registries);
     let expected = materialize_paths(case["expected"].clone(), root.path());
     for (index, (key, _, _)) in PACKAGES.iter().enumerate() {
       let python = &expected[*key];
@@ -73,7 +74,18 @@ fn contributions_match_the_recorded_cases() {
   assert_eq!(missing_web_failures, 3);
 }
 
-fn rust_answer(case: &Value, repo_path: &Path) -> Value {
+fn registered_packages() -> Vec<Registry> {
+  PACKAGES
+    .iter()
+    .map(|(_, package, register)| {
+      let mut registry = Registry::new();
+      registry.register_package(package, *register).unwrap();
+      registry
+    })
+    .collect()
+}
+
+fn rust_answer(case: &Value, repo_path: &Path, registries: &[Registry]) -> Value {
   let session = &case["session"];
   let profile = match session["profile"].as_str().unwrap() {
     "manager" => TaskProfile::Manager,
@@ -88,14 +100,12 @@ fn rust_answer(case: &Value, repo_path: &Path) -> Value {
   let kind = case["kind"].as_str().unwrap();
   let config = config(id);
   let mut answer = serde_json::Map::new();
-  for (key, package, register) in PACKAGES {
-    let mut registry = Registry::new();
-    registry.register_package(package, register).unwrap();
+  for ((key, _, _), registry) in PACKAGES.iter().zip(registries) {
     let result = match registry.instruction_segments(&meta, kind, &config, &repo) {
       Ok(segments) => json!({"segments": segments.iter().map(segment_json).collect::<Vec<_>>()}),
       Err(error) => json!({"error": format!("{error}")}),
     };
-    answer.insert(key.to_string(), result);
+    answer.insert((*key).to_string(), result);
   }
   Value::Object(answer)
 }

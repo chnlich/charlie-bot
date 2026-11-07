@@ -1010,12 +1010,8 @@ fn is_unarchive_frame(frame: &Value) -> bool {
 #[tokio::test]
 async fn accept_summon_unarchive_broadcasts_the_task_tree_change() {
   let home = Home::new();
-  let mut archived = SessionMetadata::new("s1", "session s1", TaskProfile::Manager);
-  archived.status = SessionStatus::Archived;
-  archived.set_extra("fakechat_origin", origin());
-  let path = home.features.store.metadata_path("s1");
-  fs::create_dir_all(path.parent().unwrap()).unwrap();
-  fs::write(&path, archived.to_json_string(&home.features.registry.metadata_slots(), true)).unwrap();
+  home.thread_session("s1", origin()).await;
+  home.features.store.archive_session("s1").await.unwrap();
   let mut sidebar = home.features.store.subscribe(SIDEBAR_CHANNEL);
   let adapter = FakeAdapter::with_thread(&[]);
   let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();

@@ -89,31 +89,30 @@ async fn read_marks_only_returned_unread_and_reports_more_unread() {
     &home,
     &[
       Msg::new(1, "hello"),
-      Msg::new(2, "second"),
+      Msg::new(2, "first follow up").attachment("https://cdn.discordapp.com/attachments/shot.png"),
       Msg::new(3, "bot noise").by(BOT).bot(),
-      Msg::new(4, "first follow up"),
-      Msg::new(5, "attached").attachment("https://cdn.discordapp.com/attachments/shot.png"),
-      Msg::new(6, "bot again").by(BOT).bot(),
-      Msg::new(7, "third follow up"),
-      Msg::new(8, "fourth follow up"),
+      Msg::new(4, "third follow up"),
+      Msg::new(5, "fourth follow up"),
     ],
   );
-  let session_id = make_session(&home, Some(snowflake(2))).await;
+  let session_id = make_session(&home, Some(snowflake(1))).await;
 
-  let result = read_thread(&bot(&home), &session_id, None, 4).await.unwrap();
+  let (status, result) =
+    send(home.router(), "/api/internal/discord/read", json!({"session_id": session_id, "limit": 3})).await;
 
-  assert_eq!(ids(&result), [4, 5, 6, 7].map(snowflake));
-  assert_eq!(fields(&result, "unread"), [true, true, false, true].map(Value::Bool));
-  assert_eq!(messages(&result)[1]["attachments"], json!(["https://cdn.discordapp.com/attachments/shot.png"]));
-  assert_eq!(result["watermark_id"], snowflake(7));
+  assert_eq!(status, StatusCode::OK);
+  assert_eq!(ids(&result), [2, 3, 4].map(snowflake));
+  assert_eq!(fields(&result, "unread"), [true, false, true].map(Value::Bool));
+  assert_eq!(messages(&result)[0]["attachments"], json!(["https://cdn.discordapp.com/attachments/shot.png"]));
+  assert_eq!(result["watermark_id"], snowflake(4));
   assert_eq!(result["more_unread"], 1);
   let meta = home.meta(&session_id).await;
-  assert_eq!(meta.extra("discord_watermark_id"), Some(&json!(snowflake(7))));
+  assert_eq!(meta.extra("discord_watermark_id"), Some(&json!(snowflake(4))));
   let acked = acks(&home, &session_id);
   assert_eq!(acked.len(), 1);
   assert_eq!(
     acked[0]["discord_ack"],
-    json!({"message_ids": [snowflake(4), snowflake(5), snowflake(7)], "watermark_id": snowflake(7)})
+    json!({"message_ids": [snowflake(2), snowflake(4)], "watermark_id": snowflake(4)})
   );
 }
 
@@ -446,9 +445,9 @@ async fn reply_refuses_412_while_unread_then_posts_after_a_read() {
   );
   assert!(home.fake().posts.is_empty());
 
-  let (read_status, read) = send(router.clone(), "/api/internal/discord/read", json!({"session_id": session_id})).await;
-  assert_eq!(read_status, StatusCode::OK);
-  assert_eq!(read["more_unread"], 0);
+  let adapter: Arc<dyn ThreadAdapter> = Arc::new(DiscordThreadAdapter::new(bot(&home)));
+  let ack = thread_entry::ack_messages(&adapter, &home.features, &session_id, &[snowflake(1)]).await.unwrap();
+  assert_eq!(ack["watermark_id"], snowflake(1));
 
   let (posted_status, posted) =
     send(router, "/api/internal/discord/reply", json!({"session_id": session_id, "text": "the answer"})).await;

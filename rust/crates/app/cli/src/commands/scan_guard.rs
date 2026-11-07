@@ -757,8 +757,7 @@ mod tests {
   #[test]
   fn per_file_process_replay_case_matches_its_scan_form() {
     // The replay's first real command: a metadata loop after a `cd` into the store.
-    let command =
-      r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json; print(json.load(open('$f')))"; done"#;
+    let command = r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json; print(json.load(open('$f')))"; done"#;
     let forms = scan_forms(command, &home()).unwrap();
     assert_eq!(forms.first(), Some(&ScanForm::PerFileProcess), "{command}");
   }
@@ -772,7 +771,8 @@ mod tests {
 
   #[test]
   fn store_search_cases_match_the_replay_table() {
-    let command = r#"rg -o 'ur-[A-Za-z0-9._-]+' "$CHARLIEBOT_HOME/sessions" ~/.charlie-code/sessions 2>/dev/null | sort -u"#;
+    let command =
+      r#"rg -o 'ur-[A-Za-z0-9._-]+' "$CHARLIEBOT_HOME/sessions" ~/.charlie-code/sessions 2>/dev/null | sort -u"#;
     let forms = scan_forms(command, &home()).unwrap();
     assert_eq!(forms.first(), Some(&ScanForm::RunLogSearch), "{command}");
   }
@@ -780,8 +780,7 @@ mod tests {
   #[test]
   fn heredoc_loop_cases_match_the_replay_table() {
     // A run-record loop whose Python body is a heredoc, not shell.
-    let command =
-      "cd ~/.charliebot/sessions && for m in */data/runs/*/metadata.json; do python3 - \"$m\" <<'EOF2'\nimport json\nd = json.load(open(\"$m\"))\nprint(d)\nEOF2\ndone";
+    let command = "cd ~/.charliebot/sessions && for m in */data/runs/*/metadata.json; do python3 - \"$m\" <<'EOF2'\nimport json\nd = json.load(open(\"$m\"))\nprint(d)\nEOF2\ndone";
     let forms = scan_forms(command, &home()).unwrap();
     assert_eq!(forms.first(), Some(&ScanForm::PerFileProcess), "{command}");
   }

@@ -946,6 +946,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "infra/core",
     hint: "Use `charliebot_core::event_types::MESSAGE_CONTENT_POINTER`.",
   },
+  OwnerRow { name: "WebSearch", owner: "infra/core", hint: "Use `charliebot_core::web_search::TOOL_NAME`." },
   OwnerRow { name: "data", owner: "runtime/store", hint: "Use `charliebot_store::layout::data_dir`." },
   OwnerRow { name: "runs", owner: "runtime/store", hint: "Use `charliebot_store::layout::runs_dir`." },
   OwnerRow { name: "triggers", owner: "runtime/store", hint: "Use `charliebot_store::layout::triggers_dir`." },

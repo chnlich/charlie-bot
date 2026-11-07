@@ -23,7 +23,7 @@ use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spa
 use charliebot_core::event_types;
 use charliebot_core::run_token;
 use charliebot_core::text_repr::is_truthy;
-use charliebot_core::web_search::{MCP_PATH, MCP_SERVER_NAME};
+use charliebot_core::web_search::{MCP_PATH, MCP_SERVER_NAME, TOOL_NAME};
 
 use super::claude_launch;
 use super::login_dirs;
@@ -35,9 +35,6 @@ pub const HEADLESS_DISALLOWED_TOOLS: &str = concat!(
 );
 pub const DISALLOWED_TOOLS_FLAG: &str = "--disallowed-tools";
 pub const MCP_CONFIG_FLAG: &str = "--mcp-config";
-/// Claude Code's built-in web search tool. It asks the API endpoint to search, which the endpoint backends either
-/// refuse or answer without a search, so those backends disallow it and mount the server's tool instead.
-pub const BUILT_IN_WEB_SEARCH_TOOL: &str = "WebSearch";
 pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "claude_code_wrote_claude_md";
 pub const EXCLUDE_DYNAMIC_SECTIONS_FLAG: &str = "--exclude-dynamic-system-prompt-sections";
 const SYNTHETIC_MODEL: &str = "<synthetic>";
@@ -653,7 +650,7 @@ impl AnthropicEndpointBackend {
 
   fn one_shot_command(&self, system: &str) -> Vec<String> {
     let mut command = one_shot_argv(&self.one_shot_model_args(), system);
-    disallow_tool(&mut command, BUILT_IN_WEB_SEARCH_TOOL);
+    disallow_tool(&mut command, TOOL_NAME);
     command
   }
 }
@@ -669,7 +666,7 @@ impl AgentBackend for AnthropicEndpointBackend {
 
   fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
     let mut command = self.backend.build_command(prompt)?;
-    disallow_tool(&mut command, BUILT_IN_WEB_SEARCH_TOOL);
+    disallow_tool(&mut command, TOOL_NAME);
     command.extend([MCP_CONFIG_FLAG.to_string(), web_search_mcp_config(self.server_port)]);
     Ok(command)
   }
@@ -1267,13 +1264,10 @@ mod tests {
     let session = backend.build_command("prompt").unwrap();
     assert_eq!(
       disallowed_tools_value(&session),
-      format!("{},{}", headless_disallowed_tools(RunKind::Work, false), BUILT_IN_WEB_SEARCH_TOOL)
+      format!("{},{}", headless_disallowed_tools(RunKind::Work, false), TOOL_NAME)
     );
     let one_shot = backend.one_shot_command("system");
-    assert_eq!(
-      disallowed_tools_value(&one_shot),
-      format!("{},{}", ONE_SHOT_DISALLOWED_TOOLS, BUILT_IN_WEB_SEARCH_TOOL)
-    );
+    assert_eq!(disallowed_tools_value(&one_shot), format!("{},{}", ONE_SHOT_DISALLOWED_TOOLS, TOOL_NAME));
   }
 
   #[test]

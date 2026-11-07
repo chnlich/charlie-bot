@@ -13,16 +13,17 @@ const { loadWebsocketContext } = require('./websocket_context_stub');
 
 function buildClient() {
   const bubbles = [];
-  const preview = {visible: false, content: ''};
+  const preview = {visible: false, content: '', tools: null};
 
   const {context, FakeWebSocket} = loadWebsocketContext({
     SESSION_ID: 's1',
     setTimeout: () => 0,
     document: {getElementById: () => null, querySelector: () => null},
-    hideStreaming: () => { preview.visible = false; preview.content = ''; },
+    hideStreaming: () => { preview.visible = false; preview.content = ''; preview.tools = null; },
     showStreaming: (draft) => {
       preview.visible = true;
       preview.content = (draft && draft.content) || '';
+      preview.tools = (draft && draft.tools) || null;
     },
     appendMessageObject: (msg) => bubbles.push({role: msg.role, content: msg.content || ''}),
   });
@@ -193,4 +194,14 @@ test('a reply that opens like the reply before it keeps its own text', () => {
     'user:q2',
     'assistant:Let me check the schedule.',
   ]);
+});
+
+test('a frame that changes only the tool rows repaints the preview', () => {
+  const client = buildClient();
+  const socket = connect(client);
+  deliver(socket, [{type: 'stream', append: 'Running.', length: 8, event_index: 1}]);
+  const tools = [{id: 't1', name: 'Bash', output: ''}];
+  deliver(socket, [{type: 'stream', tools, event_index: 2}]);
+  // The page's arrays come from the vm context, so compare their JSON, not their prototypes.
+  assert.deepEqual(JSON.parse(JSON.stringify(client.preview.tools)), tools);
 });

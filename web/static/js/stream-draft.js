@@ -37,18 +37,23 @@ function seedStreamDraft(draft) {
   };
 }
 
-// Apply a stream frame; returns the draft and whether the frame changed it.
+// Apply a stream frame; returns the draft and whether the frame changed it. Tool rows count as a change: a frame
+// that adds only tool rows still repaints the preview.
 function applyStreamFrame(ev) {
-  const before = streamDraft.content + '\u0000' + streamDraft.thinking;
+  const before = streamDraftFingerprint();
   if (ev.reset) resetStreamDraft();
   streamDraft.content = extendedStreamText(streamDraft.content, ev.append, ev.length);
   streamDraft.thinking = extendedStreamText(streamDraft.thinking, ev.thinking_append, ev.thinking_length);
   if (Array.isArray(ev.tools)) streamDraft.tools = ev.tools;
-  return {draft: streamDraft, changed: before !== streamDraft.content + '\u0000' + streamDraft.thinking};
+  return {draft: streamDraft, changed: before !== streamDraftFingerprint()};
 }
 
-// The draft the page streamed, handed to the committed message that follows it. The accumulation stays, so a
-// repeated frame of the same draft is still recognized as text the page holds.
+function streamDraftFingerprint() {
+  return streamDraft.content + '\u0000' + streamDraft.thinking + '\u0000' + JSON.stringify(streamDraft.tools);
+}
+
+// The draft the page streamed, handed to the committed message that closes it. The caller resets the
+// accumulation once that message lands.
 function takeStreamedDraft() {
   return {content: streamDraft.content, thinking: streamDraft.thinking, tools: streamDraft.tools};
 }

@@ -1,17 +1,19 @@
 //! The persisted owner of backend usage availability: one "out until" row per backend option id.
 //!
 //! Every quota cooling record, the backend pool's included, lands here and survives a restart: the state lives in
-//! `$CHARLIEBOT_HOME/state/backend_availability.json`, written atomically, and a startup reads it back.
+//! `$CHARLIEBOT_HOME/state/backend_availability.json`, written atomically, and a startup reads it back. Every process
+//! (the server and each CLI host) reads the file at each call and merges its writes under a file lock, so a record one
+//! process writes is visible to the next read of every other process and no write drops another process's row.
 
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use charliebot_core::home;
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
+use nix::fcntl::{Flock, FlockArg};
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime, UtcOffset};
 
@@ -19,19 +21,23 @@ use time::{Duration, OffsetDateTime, UtcOffset};
 pub const DEFAULT_COOLDOWN: Duration = Duration::minutes(30);
 
 /// The reason of a record whose backend reported a spent quota.
-pub const REASON_QUOTA_ERROR: &str = "quota_error";
+pub const REASON_QUOTA_ERROR: &str = charliebot_core::event_types::QUOTA_REASON_QUOTA_ERROR;
 
 /// The reason of a record that holds a backend out after a call it could not finish in time.
 pub const REASON_TIMEOUT: &str = "timeout";
 
+/// The reason of a record that holds a pool member out after an iteration failed for a reason other than its quota.
+pub const REASON_ITERATION_FAILURE: &str = "iteration_failure";
+
 const STAGING_SUFFIX: &str = ".staging";
+const LOCK_SUFFIX: &str = ".lock";
 
 /// One backend option's "out until" row.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct AvailabilityRow {
   /// The instant the option becomes selectable again.
   pub out_until: UtcDateTime,
-  /// Why the option is out: [`REASON_QUOTA_ERROR`], [`REASON_TIMEOUT`].
+  /// Why the option is out: [`REASON_QUOTA_ERROR`], [`REASON_TIMEOUT`], [`REASON_ITERATION_FAILURE`].
   pub reason: String,
   /// The error text the record came from.
   pub detail: String,
@@ -39,12 +45,10 @@ pub struct AvailabilityRow {
   pub recorded_at: UtcDateTime,
 }
 
-/// The in-memory mirror of `$CHARLIEBOT_HOME/state/backend_availability.json`, the one owner of "out until" per
-/// backend option id.
+/// The file-backed owner of "out until" per backend option id.
 #[derive(Debug)]
 pub struct BackendAvailability {
   path: PathBuf,
-  rows: Mutex<HashMap<String, AvailabilityRow>>,
 }
 
 impl BackendAvailability {
@@ -52,16 +56,15 @@ impl BackendAvailability {
   /// parsed is an error that names the file, and the caller stops.
   pub fn load(home: &Path) -> anyhow::Result<Self> {
     let path = home::backend_availability_path(home);
-    let rows = match fs::read_to_string(&path) {
-      Ok(contents) => serde_json::from_str::<HashMap<String, AvailabilityRow>>(&contents).with_context(read_error)?,
-      Err(error) if error.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
-      Err(error) => return Err(error).with_context(read_error),
-    };
-    Ok(Self { path, rows: Mutex::new(rows) })
+    Self::read_rows(&path)?;
+    Ok(Self { path })
   }
 
   /// Record that `backend_id` is out until its reset, or for [`DEFAULT_COOLDOWN`] when the error states no reset, and
   /// persist the state. Return the instant the option becomes selectable again.
+  ///
+  /// The write is a read-merge-write under an exclusive file lock, so a row another process recorded since this one
+  /// last read the file survives.
   pub fn record(
     &self,
     backend_id: &str,
@@ -77,10 +80,11 @@ impl BackendAvailability {
       detail: detail.to_string(),
       recorded_at: UtcDateTime::now(),
     };
-    let mut rows = self.rows.lock().expect("backend availability state is not poisoned");
+    let _lock = self.lock()?;
+    let mut rows = Self::read_rows(&self.path)?;
     rows.insert(backend_id.to_string(), row);
     self.persist(&rows)?;
-    drop(rows);
+    drop(_lock);
     tracing::warn!(
       target: "charliebot_agents",
       member = backend_id,
@@ -92,19 +96,44 @@ impl BackendAvailability {
     Ok(out_until)
   }
 
-  /// Return the stored "out until" instant, whether or not it has passed.
+  /// Return the stored "out until" instant, whether or not it has passed, from the file's current state.
   pub fn out_until(&self, backend_id: &str) -> Option<OffsetDateTime> {
-    self
-      .rows
-      .lock()
-      .expect("backend availability state is not poisoned")
-      .get(backend_id)
-      .map(|row| row.out_until.into_inner())
+    let rows = Self::read_rows(&self.path).unwrap_or_else(|error| {
+      tracing::error!(target: "charliebot_agents", error = %error, "backend_availability_read_failed");
+      HashMap::new()
+    });
+    rows.get(backend_id).map(|row| row.out_until.into_inner())
   }
 
   /// Return the stored "out until" instant in the minute-resolution event format.
   pub fn out_until_minutes(&self, backend_id: &str) -> Option<String> {
     self.out_until(backend_id).map(format_minutes)
+  }
+
+  /// Take the exclusive lock that serializes every process's read-merge-write of the state file.
+  fn lock(&self) -> anyhow::Result<Flock<fs::File>> {
+    let file_name =
+      self.path.file_name().expect("the availability path has a file name").to_string_lossy().into_owned();
+    let lock_path = self.path.with_file_name(format!("{file_name}{LOCK_SUFFIX}"));
+    fs::create_dir_all(self.path.parent().expect("the availability path has a parent"))?;
+    let file = OpenOptions::new()
+      .create(true)
+      .read(true)
+      .write(true)
+      .truncate(false)
+      .open(&lock_path)
+      .with_context(|| format!("could not lock {}", display_state_path()))?;
+    Flock::lock(file, FlockArg::LockExclusive)
+      .map_err(|(_, error)| anyhow!("could not lock {}: {error}", display_state_path()))
+  }
+
+  /// Read the file's current rows. A missing file is empty; anything else unreadable names the file.
+  fn read_rows(path: &Path) -> anyhow::Result<HashMap<String, AvailabilityRow>> {
+    match fs::read_to_string(path) {
+      Ok(contents) => serde_json::from_str::<HashMap<String, AvailabilityRow>>(&contents).with_context(read_error),
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+      Err(error) => Err(error).with_context(read_error),
+    }
   }
 
   /// Write the state through a staging file and an atomic rename, so a reader never sees a partial file.
@@ -154,6 +183,22 @@ mod tests {
     let home = tempfile::tempdir().unwrap();
     let availability = BackendAvailability::load(home.path()).unwrap();
     assert_eq!(availability.out_until("any"), None);
+  }
+
+  #[test]
+  fn a_second_owner_from_the_same_home_shares_rows_without_dropping_them() {
+    let home = tempfile::tempdir().unwrap();
+    let first = BackendAvailability::load(home.path()).unwrap();
+    let second = BackendAvailability::load(home.path()).unwrap();
+    first.record("a", None, REASON_QUOTA_ERROR, "a is spent").unwrap();
+    second.record("b", None, REASON_QUOTA_ERROR, "b is spent").unwrap();
+
+    assert!(first.out_until("b").is_some(), "the first owner sees the second owner's row");
+    assert!(second.out_until("a").is_some(), "the second owner sees the first owner's row");
+    let rows = BackendAvailability::read_rows(&home::backend_availability_path(home.path())).unwrap();
+    let mut keys = rows.keys().map(String::as_str).collect::<Vec<_>>();
+    keys.sort_unstable();
+    assert_eq!(keys, ["a", "b"]);
   }
 
   #[test]

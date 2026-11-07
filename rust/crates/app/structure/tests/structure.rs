@@ -246,7 +246,7 @@ struct Builder<'a> {
 }
 
 impl Builder<'_> {
-  /// Walk one module's own items. Inline `mod` blocks become child modules and their items stay out of this module.
+  /// The walk over one module's own items: inline `mod` blocks become child modules, and their items stay out.
   fn process_scope(
     &mut self,
     path: Vec<String>,
@@ -555,7 +555,7 @@ impl Crate {
     }
   }
 
-  /// Follow `segs` from `base` through child modules, re-exports and globs to the module that defines the item.
+  /// The resolution of `segs` from `base` through child modules, re-exports and globs to the module that defines it.
   fn lookup(&self, target: usize, base: &[String], segs: &[String], depth: usize) -> Option<Vec<String>> {
     if depth > MAX_RESOLVE_DEPTH {
       return None;
@@ -1511,7 +1511,7 @@ enum Codec {
 }
 
 impl FunctionRecord {
-  /// Record a call by its callee path when the call decodes or encodes.
+  /// The callee path of a call, recorded when the call decodes or encodes.
   fn note_call(&mut self, path: &[String]) {
     let joined = path.join("::");
     match codec_of_call(path) {
@@ -1525,7 +1525,7 @@ impl FunctionRecord {
     }
   }
 
-  /// Record a call by its callee path when the path ends in a process-environment writer.
+  /// The callee path of a call, recorded when the path ends in a process-environment writer.
   fn note_environment_write(&mut self, path: &[String], line: usize) {
     if let Some(writer) = path.last().filter(|writer| ENVIRONMENT_WRITERS.contains(&writer.as_str())) {
       self.environment_writes.push(EnvironmentWrite { writer: writer.clone(), line });
@@ -1550,7 +1550,7 @@ fn codec_of_call(path: &[String]) -> Option<Codec> {
   }
 }
 
-/// Collects the production functions of one module: each item and impl item that is not `#[cfg(test)]`, with the
+/// The collector of one module's production functions: each item and impl item that is not `#[cfg(test)]`, with the
 /// names its body uses and the codec calls in it. An inline module is its own scope and stays out.
 #[derive(Default)]
 struct FunctionCollector {
@@ -1669,8 +1669,8 @@ impl<'ast> Visit<'ast> for FunctionCollector {
   }
 }
 
-/// Record the identifiers of a macro call's tokens and the calls among them. Syn does not parse a macro's tokens, so a
-/// path that a parenthesized group follows counts as a call.
+/// The identifiers and calls of a macro call's tokens, recorded from the token stream. Syn does not parse a macro's
+/// tokens, so a path that a parenthesized group follows counts as a call.
 fn scan_macro_tokens(tokens: TokenStream, record: &mut FunctionRecord) {
   let trees: Vec<TokenTree> = tokens.into_iter().collect();
   for (index, tree) in trees.iter().enumerate() {
@@ -1837,7 +1837,7 @@ fn global_state_failures(workspace: &Workspace) -> Vec<String> {
   failures.into_iter().map(|(_, _, message)| message).collect()
 }
 
-/// Collects a module's production statics and the production `use` items that import a process-environment writer.
+/// The collector of a module's production statics and production `use` items importing a process-environment writer.
 #[derive(Default)]
 struct GlobalStateCollector {
   statics: Vec<StaticRecord>,
@@ -2904,7 +2904,7 @@ fn path_segments(path: &syn::Path) -> Vec<String> {
   path.segments.iter().map(|segment| segment.ident.to_string()).collect()
 }
 
-/// Collect every `crate::`, `super::` and `self::` sequence in a macro call's tokens; syn expands no macro.
+/// The scan for every `crate::`, `super::` and `self::` sequence in a macro call's tokens. Syn expands no macro.
 fn scan_tokens(tokens: &TokenStream, line: usize, paths: &mut Vec<PathRecord>, idents: &mut BTreeSet<String>) {
   let trees: Vec<TokenTree> = tokens.clone().into_iter().collect();
   let mut index = 0;

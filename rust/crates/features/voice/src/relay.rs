@@ -903,7 +903,7 @@ mod tests {
 
   #[tokio::test]
   async fn backend_final_before_end_records_the_failure_and_the_partial_audio() {
-    let server = start_relay_test_with_limits(FakeMode::FinalBeforeEnd, 2, 1).await;
+    let mut server = start_relay_test_with_limits(FakeMode::FinalBeforeEnd, 2, 1).await;
     let mut browser = browser_socket(server.address).await;
     browser.send(ClientMessage::Binary(vec![1, 2].into())).await.expect("send audio");
     assert_eq!(
@@ -914,7 +914,11 @@ mod tests {
       .send(ClientMessage::Text(r#"{"type":"end"}"#.into()))
       .await
       .expect("finish the browser upload after the early final");
-    let _ = tokio::time::timeout(Duration::from_secs(3), browser.next()).await;
+    tokio::time::timeout(Duration::from_secs(1), server.relay_finished.changed())
+      .await
+      .expect("relay completes after the browser ends its upload")
+      .expect("relay completion signal remains available");
+    assert!(*server.relay_finished.borrow(), "the relay finishes after the early final");
     let files: Vec<std::path::PathBuf> = std::fs::read_dir(voice_dir(&server.config))
       .expect("read the failed run's voice directory")
       .map(|entry| entry.expect("read archive entry").path())

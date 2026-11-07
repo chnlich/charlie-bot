@@ -13,6 +13,7 @@ use std::str::Utf8Error;
 
 use anyhow::anyhow;
 use charliebot_core::json_loads;
+pub(crate) use charliebot_core::text_repr::type_name;
 use charliebot_core::text_repr::{self, JsonStyle};
 use serde_json::{Map, Value, json};
 
@@ -319,19 +320,6 @@ fn utf8_error_text(error: &Utf8Error, bytes: &[u8]) -> String {
     format!("'utf-8' codec can't decode byte 0x{:02x} in position {start}: {reason}", bytes[start])
   } else {
     format!("'utf-8' codec can't decode bytes in position {start}-{}: {reason}", end - 1)
-  }
-}
-
-/// The type name of a JSON value, as the error messages spell it.
-pub(crate) fn type_name(value: &Value) -> &'static str {
-  match value {
-    Value::Null => "NoneType",
-    Value::Bool(_) => "bool",
-    Value::Number(number) if number.is_f64() => "float",
-    Value::Number(_) => "int",
-    Value::String(_) => "str",
-    Value::Array(_) => "list",
-    Value::Object(_) => "dict",
   }
 }
 

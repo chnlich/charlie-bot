@@ -3,7 +3,7 @@
 //! that `charliebot_core::json_loads` produced, and each error carries the text the route reports.
 
 use charliebot_core::json_loads::{self, LoadError};
-use charliebot_core::text_repr::{JsonStyle, is_truthy};
+use charliebot_core::text_repr::{JsonStyle, is_truthy, type_name};
 use serde_json::{Map, Value};
 
 /// Compact JSON with ASCII output: `,` and `:` separators, and every character outside the range from space to `~`
@@ -27,19 +27,6 @@ pub fn value_error<T>(message: impl Into<String>) -> ValueResult<T> {
 
 pub fn raised<T>(kind: &'static str, message: impl Into<String>) -> ValueResult<T> {
   Err(Fault::Raised { kind, message: message.into() })
-}
-
-/// The class name of a value in error messages: `NoneType`, `bool`, `float`, `int`, `str`, `list` or `dict`.
-pub fn type_name(value: &Value) -> &'static str {
-  match value {
-    Value::Null => "NoneType",
-    Value::Bool(_) => "bool",
-    Value::Number(number) if number.is_f64() => "float",
-    Value::Number(_) => "int",
-    Value::String(_) => "str",
-    Value::Array(_) => "list",
-    Value::Object(_) => "dict",
-  }
 }
 
 /// The member `key` of an object: `None` for a missing key, and a present `null` is `Some(Null)`. Any other value

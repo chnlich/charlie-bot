@@ -29,7 +29,7 @@ pub struct ReplyArgs {
   pub session: Option<String>,
 }
 
-/// Post one reply: the body is the resolved `session_id` and the `text`, then `extra`'s keys when given.
+/// The reply POST: the body is the resolved `session_id` and the `text`, then `extra`'s keys when given.
 pub fn post_reply(
   endpoint: &str,
   session: Option<&str>,

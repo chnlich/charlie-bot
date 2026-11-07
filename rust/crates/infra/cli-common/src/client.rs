@@ -19,7 +19,7 @@ use crate::wire::{Method, TransportError, WireRequest, WireResponse};
 pub trait Clock {
   /// Seconds on a monotonic scale.
   fn now(&self) -> f64;
-  /// Pause for `seconds`, as the retry loop's delay.
+  /// The retry loop's delay: a pause of `seconds`.
   fn sleep(&mut self, seconds: f64);
 }
 
@@ -70,7 +70,7 @@ pub struct ApiCall<'a> {
   pub rejection_exit_codes: &'a [(u16, i32)],
 }
 
-/// Issue one internal-API call and return its parsed JSON response.
+/// The parsed JSON response of one internal-API call.
 pub fn call_api(
   mut call: ApiCall<'_>,
   ctx: &CallContext,

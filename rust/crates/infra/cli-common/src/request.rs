@@ -138,7 +138,7 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
-  /// Build the transport for one high-level command operation.
+  /// The transport for one high-level command operation.
   pub fn new() -> Result<HttpClient, CliExit> {
     crate::http::ensure_crypto_provider();
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -158,7 +158,7 @@ impl HttpClient {
     Ok(HttpClient { client, runtime })
   }
 
-  /// Send one request through the operation's client and runtime.
+  /// One request sent through the operation's client and runtime.
   pub fn send(&self, request: &Request, redactions: &[&str]) -> Result<Response, CliExit> {
     self.runtime.block_on(async {
       let mut pending = self.client.request(request.method.clone(), &request.url);

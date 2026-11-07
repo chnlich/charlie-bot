@@ -356,6 +356,36 @@ pub fn headroom(state: &ClaudeAccountState, label: &str, model: Option<&str>, no
   (1.0 - reading.utilization).max(0.0)
 }
 
+/// The candidates tiering lets contend for selection: the healthy, unexcluded accounts of the pool whose headroom
+/// exceeds `min_headroom`, those below the 90% line first and the accounts at or above the line as the last resort.
+/// Login selection and the later member selection tier through this one function.
+#[allow(clippy::too_many_arguments)]
+pub fn tiered_candidates(
+  state: &ClaudeAccountState,
+  cfg: &CharlieBotConfig,
+  model: Option<&str>,
+  exclude: &HashSet<String>,
+  now: Option<UtcDateTime>,
+  account_pool: Option<&str>,
+  min_headroom: f64,
+) -> anyhow::Result<Vec<(claude_config::ClaudeAccount, f64)>> {
+  let moment = now_or(now);
+  let available = pool_accounts(cfg, account_pool)?
+    .into_iter()
+    .filter(|account| !exclude.contains(&account.label) && healthy(state, account, Some(moment)))
+    .filter_map(|account| {
+      let remaining = headroom(state, &account.label, model, Some(moment));
+      (remaining > min_headroom).then_some((account, remaining))
+    })
+    .collect::<Vec<_>>();
+  if available.is_empty() {
+    return Ok(available);
+  }
+  let under_line =
+    available.iter().filter(|(_, remaining)| *remaining > 1.0 - WARNING_UTILIZATION).cloned().collect::<Vec<_>>();
+  Ok(if under_line.is_empty() { available } else { under_line })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn select(
   state: &ClaudeAccountState,
@@ -368,21 +398,10 @@ pub fn select(
   min_headroom: f64,
 ) -> anyhow::Result<Option<claude_config::ClaudeAccount>> {
   let moment = now_or(now);
-  let accounts = pool_accounts(cfg, account_pool)?;
-  let available = accounts
-    .into_iter()
-    .filter(|account| !exclude.contains(&account.label) && healthy(state, account, Some(moment)))
-    .filter_map(|account| {
-      let remaining = headroom(state, &account.label, model, Some(moment));
-      (remaining > min_headroom).then_some((account, remaining))
-    })
-    .collect::<Vec<_>>();
-  if available.is_empty() {
+  let tier = tiered_candidates(state, cfg, model, exclude, Some(moment), account_pool, min_headroom)?;
+  if tier.is_empty() {
     return Ok(None);
   }
-  let under_line =
-    available.iter().filter(|(_, remaining)| *remaining > 1.0 - WARNING_UTILIZATION).cloned().collect::<Vec<_>>();
-  let tier = if under_line.is_empty() { available } else { under_line };
   let idle = tier
     .iter()
     .filter(|(account, _)| busy_accounts.is_none_or(|busy| !busy.contains(&account.label)))

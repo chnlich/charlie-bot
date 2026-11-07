@@ -49,19 +49,22 @@ const UPLOAD_FORM: FormModel = FormModel::new(UPLOAD_FIELDS);
 /// The Recent recordings page's template, in the voice package's template directory.
 const RECORDINGS_PAGE_TEMPLATE: &str = "voice/recordings.html";
 
+/// The Recent recordings page's path (`RECORDINGS_PAGE_PATH`): the page route and the home card's link.
+pub(crate) const RECORDINGS_PAGE_PATH: &str = "/voice-recordings";
+
 /// The routes of the voice feature, with the feature context as their state.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route("/api/voice/{session_id}", post_only(upload_voice_recording))
     .route("/api/voice/{session_id}/startup", post_only(post_voice_startup))
     .route("/api/voice/recordings", get_only(list_voice_recordings))
-    .route("/voice-recordings", get_only(recordings_page))
+    .route(RECORDINGS_PAGE_PATH, get_only(recordings_page))
     .with_state(Arc::clone(features))
 }
 
 /// Whether a request path falls under the voice routes, for the trailing-slash redirect the server answers.
 pub(crate) fn matches(path: &str) -> bool {
-  if path == "/voice-recordings" {
+  if path == RECORDINGS_PAGE_PATH {
     return true;
   }
   let Some(rest) = path.strip_prefix("/api/voice/") else {

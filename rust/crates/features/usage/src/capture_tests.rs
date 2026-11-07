@@ -2075,7 +2075,7 @@ fn a_compressed_run_log_keeps_the_same_usage_totals() {
     &events(&[&session_line("claude-run"), &result_line(TS_A, 13, 3, 2, 6)]),
   );
   let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
-  capture_round(&mut ledger, &config, &registry);
+  capture_runs(&mut ledger, HOST, &config.sessions_dir(), &config, &registry, &BTreeMap::new()).unwrap();
   let before = page_rows(&mut ledger);
   assert!(!before.is_empty(), "the run log recorded usage");
 
@@ -2084,6 +2084,7 @@ fn a_compressed_run_log_keeps_the_same_usage_totals() {
   fs::remove_file(&raw).unwrap();
   assert!(compressed.is_file() && !raw.exists(), "the run log is stored compressed");
 
-  capture_round(&mut ledger, &config, &registry);
+  let captured = ledger.captured_sigs(HOST).unwrap();
+  capture_runs(&mut ledger, HOST, &config.sessions_dir(), &config, &registry, &captured).unwrap();
   assert_eq!(page_rows(&mut ledger), before, "the compressed log yields the same totals, none counted twice");
 }

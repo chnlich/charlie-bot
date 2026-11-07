@@ -210,9 +210,9 @@ struct RelayRun<'a> {
   recorded: &'a AtomicBool,
 }
 
-/// Records one relay failure under the run's stem: the reason and the audio received so far, once per relay.
-/// The first writer of the run's outcome wins, so a run whose final already archived records no failure. A write
-/// that fails is an error log, never a skip; the frames the browser receives are unchanged.
+/// The failure record of one relay, under the run's stem: the reason and the audio received so far, once per
+/// relay. The first writer of the run's outcome wins, so a run whose final already archived records no failure. A
+/// write that fails is an error log, never a skip; the frames the browser receives are unchanged.
 async fn record_relay_failure(run: &RelayRun<'_>, reason: &str) {
   if run.recorded.swap(true, Ordering::SeqCst) {
     return;

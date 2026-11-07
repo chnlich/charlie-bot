@@ -18,7 +18,7 @@ use charliebot_registry::backend::{
   AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, LaunchArgs, ResumeStyle,
 };
 use charliebot_registry::sequence::{
-  RestoreOutcome, SequenceBinding, SequenceCompletion, SequenceController, SequenceTree,
+  QuotaFailure, RestoreOutcome, SequenceBinding, SequenceCompletion, SequenceController, SequenceTree,
 };
 use charliebot_registry::store_hooks;
 use charliebot_registry::{FeatureContext, Registry, StartupState};
@@ -83,6 +83,7 @@ impl SequenceController for TestSequenceController {
     &'a self,
     _session_id: &'a str,
     _run: &'a RunRecord,
+    _quota: Option<&'a QuotaFailure>,
     _tree: &'a dyn SequenceTree,
   ) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async { Ok(()) })

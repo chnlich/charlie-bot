@@ -13,6 +13,7 @@ use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, Request
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 
+use charliebot_core::config::AUTO_BACKEND_ID;
 use charliebot_core::event_types;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
@@ -31,6 +32,7 @@ use crate::completion::{self, CompletionEvidence};
 use crate::dispatch;
 use crate::execution::TaskExecutionAdapter;
 use crate::prompts::MAX_AGENT_MESSAGE_WEIGHTED_CHARS;
+use crate::spawner_backends::BackendSource;
 use crate::task_sessions;
 use crate::text_length;
 
@@ -393,7 +395,16 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     match decided.target {
       RouteTarget::Backend(option) => {
         match crate::spawner_backends::resolve_backend_option(&cfg, &option.id, Some(&option.model)) {
-          Ok(option) => Some((option.id, Some(option.model), false)),
+          Ok(option) => {
+            // The router's context class returns the delegating session's backend: on an Auto session that is its
+            // current member, which the child inherits.
+            let source = if session_meta.backend == AUTO_BACKEND_ID && option.id == session_backend {
+              BackendSource::AutoMember
+            } else {
+              BackendSource::Direct
+            };
+            Some((option.id, Some(option.model), source))
+          }
           Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
         }
       }
@@ -416,8 +427,12 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     .await
     .map(|resolved| {
       resolved.map(|(backend, model, _tried_backends)| {
-        let backend_from_pool = cfg.backends.pool.iter().any(|member| member == &backend);
-        (backend, model, backend_from_pool)
+        let source = if cfg.backends.pool.iter().any(|member| member == &backend) {
+          BackendSource::Pool
+        } else {
+          BackendSource::Direct
+        };
+        (backend, model, source)
       })
     })
   } else {
@@ -432,13 +447,12 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     .await
     .map(Some)
   };
-  let (resolved_backend, resolved_model, backend_from_pool) = match resolved {
+  let (resolved_backend, resolved_model, source) = match resolved {
     Ok(Some(resolved)) => resolved,
     Ok(None) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": "no backend is available" })),
     Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
   };
-  let delegated_backend =
-    DelegateBackend { id: resolved_backend, model: resolved_model, from_pool: backend_from_pool, route };
+  let delegated_backend = DelegateBackend { id: resolved_backend, model: resolved_model, source, route };
   match delegate_task_tree(&features, &request, &caller_identity, &task_spec, &delegated_backend).await {
     Ok(response) => responses::json(StatusCode::OK, &response),
     Err(DelegateError::Task(error)) => task_http_error(error),
@@ -458,7 +472,7 @@ enum DelegateError {
 struct DelegateBackend {
   id: String,
   model: Option<String>,
-  from_pool: bool,
+  source: BackendSource,
   route: Option<charliebot_agents::backend_pool::BackendRoute>,
 }
 
@@ -501,11 +515,17 @@ async fn delegate_task_tree(
   };
   features.store.runtime_gate(&create_request, &caller)?;
   let child = features.store.create_task(create_request, caller, Default::default()).await?;
-  if backend.from_pool || backend.route.is_some() {
-    let mut slot_fields = serde_json::Map::from_iter([(
-      charliebot_agents::backend_pool::BACKEND_FROM_POOL_FIELD.to_string(),
-      json!(backend.from_pool),
-    )]);
+  if backend.source != BackendSource::Direct || backend.route.is_some() {
+    let mut slot_fields = serde_json::Map::from_iter([
+      (
+        charliebot_agents::backend_pool::BACKEND_FROM_POOL_FIELD.to_string(),
+        json!(backend.source == BackendSource::Pool),
+      ),
+      (
+        charliebot_agents::backend_pool::BACKEND_FROM_AUTO_FIELD.to_string(),
+        json!(backend.source == BackendSource::AutoMember),
+      ),
+    ]);
     if let Some(route) = backend.route.as_ref() {
       slot_fields.insert("route".to_string(), json!(route));
     }

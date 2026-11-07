@@ -20,6 +20,13 @@ use charliebot_store::compact::CompactValue;
 
 use crate::startup_stop::StartupStop;
 
+/// One run's spent quota: the reset the backend stated, if any, and the error text the availability owner records.
+#[derive(Clone, Debug)]
+pub struct QuotaFailure {
+  pub resets_at: Option<UtcDateTime>,
+  pub message: String,
+}
+
 /// A node's binding to a sequence (`sequence_controllers.SequenceBinding`). A scheduled task's binding is the loaded
 /// task whose session id names the node.
 pub trait SequenceBinding: Send + Sync {
@@ -54,11 +61,12 @@ pub trait SequenceController: Send + Sync {
     launch_text: &'a str,
   ) -> BoxFuture<'a, anyhow::Result<Option<String>>>;
 
-  /// Apply the owning sequence's durable finish duty.
+  /// Apply the owning sequence's durable finish duty. `quota` is the spent quota the run ended on, when the run did.
   fn after_run<'a>(
     &'a self,
     session_id: &'a str,
     run: &'a RunRecord,
+    _quota: Option<&'a QuotaFailure>,
     tree: &'a dyn SequenceTree,
   ) -> BoxFuture<'a, anyhow::Result<()>>;
 
@@ -676,6 +684,7 @@ mod tests {
       &'a self,
       session_id: &'a str,
       _run: &'a RunRecord,
+      _quota: Option<&'a QuotaFailure>,
       tree: &'a dyn SequenceTree,
     ) -> BoxFuture<'a, anyhow::Result<()>> {
       Box::pin(async move {
@@ -850,7 +859,7 @@ mod tests {
     assert_eq!(tree_store.history_work().file_reads, reads_after_first_facts);
     controller.redrive(session_id, &tree).await.unwrap();
     assert_eq!(controller.launch_context(&meta, &run, "launch").await.unwrap().as_deref(), Some("sequence-run:launch"));
-    controller.after_run(session_id, &run, &tree).await.unwrap();
+    controller.after_run(session_id, &run, None, &tree).await.unwrap();
     assert!(controller.recover_run(session_id, &run, Some("success"), &tree).await.unwrap());
     controller.reconcile_interrupted(&tree).await.unwrap();
 

@@ -17,7 +17,7 @@ use charliebot_store::StoreResult;
 use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcomeKind, SequenceRef};
 use charliebot_tasks::dispatch::DispatchExecutor;
-use charliebot_tasks::spawner_backends::{self, SubagentRole};
+use charliebot_tasks::spawner_backends::{self, BackendSource, SubagentRole};
 use charliebot_tasks::test_support::process_guard;
 use charliebot_tasks::test_support::recovery_support::{self, Scripts, Stack, SyntheticRepo};
 use futures_util::future::BoxFuture;
@@ -681,7 +681,7 @@ async fn improve_controller_keeps_base_registry_lookups_and_skips_run_replay() -
 #[ignore = "integration"]
 async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Result<()> {
   let explicit = LoopHarness::new(&["fake"], &["other"], Vec::new()).await?;
-  let (backend, model, from_pool) = spawner_backends::resolve_requested_subagent_backend_model(
+  let (backend, model, source) = spawner_backends::resolve_requested_subagent_backend_model(
     &explicit.stack.cfg,
     explicit.stack.store(),
     &explicit.manager.id,
@@ -692,7 +692,7 @@ async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Res
   .await?;
   assert_eq!(backend, "other");
   assert_eq!(model.as_deref(), Some("other-model"));
-  assert!(!from_pool);
+  assert_eq!(source, BackendSource::Direct);
   let explicit_child = sequence::create_improve_child(
     explicit.stack.store(),
     &explicit.manager.id,
@@ -707,7 +707,7 @@ async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Res
   drop(explicit);
 
   let inherited = LoopHarness::new(&[], &[], Vec::new()).await?;
-  let (backend, model, from_pool) = spawner_backends::resolve_requested_subagent_backend_model(
+  let (backend, model, source) = spawner_backends::resolve_requested_subagent_backend_model(
     &inherited.stack.cfg,
     inherited.stack.store(),
     &inherited.manager.id,
@@ -718,7 +718,7 @@ async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Res
   .await?;
   assert_eq!(backend, "fake");
   assert_eq!(model.as_deref(), Some("fake-model"));
-  assert!(!from_pool);
+  assert_eq!(source, BackendSource::Direct);
   let inherited_child = sequence::create_improve_child(
     inherited.stack.store(),
     &inherited.manager.id,

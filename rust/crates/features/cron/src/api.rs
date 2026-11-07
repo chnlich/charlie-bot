@@ -94,9 +94,12 @@ async fn create_task(
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
   if let Some(backend) = values.get("backend").and_then(Value::as_str).filter(|value| !value.is_empty())
-    && cfg.get_backend_option(backend).is_none()
+    && !crate::config::backend_resolves(&cfg, backend)
   {
-    return detail(StatusCode::BAD_REQUEST, format!("backend '{backend}' is not in backends.options"));
+    return detail(
+      StatusCode::BAD_REQUEST,
+      format!("backend '{backend}' {}", crate::config::unresolved_backend_reason(backend)),
+    );
   }
   let requested_session = values.get("session_id").and_then(Value::as_str).filter(|value| !value.is_empty());
   if let CallerIdentity::Agent { claims } = &caller
@@ -183,9 +186,12 @@ async fn update_task(
   if let Some(backend) = values.get("backend")
     && !backend.is_null()
     && let Some(backend) = backend.as_str().filter(|value| !value.is_empty())
-    && cfg.get_backend_option(backend).is_none()
+    && !crate::config::backend_resolves(&cfg, backend)
   {
-    return detail(StatusCode::BAD_REQUEST, format!("backend '{backend}' is not in backends.options"));
+    return detail(
+      StatusCode::BAD_REQUEST,
+      format!("backend '{backend}' {}", crate::config::unresolved_backend_reason(backend)),
+    );
   }
   let repo = match features.startup.require::<RepoRoot>() {
     Ok(repo) => repo,

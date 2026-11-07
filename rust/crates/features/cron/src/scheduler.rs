@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{AUTO_BACKEND_ID, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::SequenceExecutor;
@@ -337,15 +337,28 @@ impl CronScheduler {
       self.features.store.persist_and_broadcast(&session.id, event).await?;
       return Ok(TaskRunResult { session_id: session.id, thread_id: None });
     }
-    let executor: Arc<dyn SequenceExecutor> =
-      self.features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>()?;
-    let backend = effective_backend(&task, &cfg)?;
+    let adapter = self.features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>()?;
+    let executor: Arc<dyn SequenceExecutor> = adapter.clone();
+    let configured_backend = effective_backend(&task, &cfg)?;
+    let (backend, backend_from_auto) = if configured_backend == AUTO_BACKEND_ID {
+      // An Auto fire runs on the member the bound session's turn start chose. A set with no selectable member ends the
+      // fire here, with the error posted to the bound session.
+      match adapter.auto_fire_member(&session.id).await? {
+        Some(member) => (member, true),
+        None => {
+          self.record_bound_fire(&session, &task, now).await?;
+          return Ok(TaskRunResult { session_id: session.id, thread_id: None });
+        }
+      }
+    } else {
+      (configured_backend, false)
+    };
     let option = cfg
       .get_backend_option(&backend)
       .ok_or_else(|| anyhow::anyhow!("scheduled task backend '{backend}' is not configured"))?;
     let model = (!option.model.is_empty()).then(|| option.model.clone());
     let (leaf, run, prompt, steps) =
-      self.register_fire_work(&task, &session, &firing, &backend, model.as_deref(), &cfg).await?;
+      self.register_fire_work(&task, &session, &firing, &backend, model.as_deref(), backend_from_auto, &cfg).await?;
     self.record_bound_fire(&session, &task, now).await?;
     // A run without steps takes the work context, whose task text is the leaf goal (the cron prompt) and which
     // prepares a worktree from the leaf's repo. A launch text would route it to the step context instead, which
@@ -379,6 +392,7 @@ impl CronScheduler {
     Ok(TaskRunResult { session_id: session.id, thread_id: None })
   }
 
+  #[allow(clippy::too_many_arguments)]
   async fn register_fire_work(
     &self,
     task: &ScheduledTaskConfig,
@@ -386,6 +400,7 @@ impl CronScheduler {
     firing: &str,
     backend: &str,
     model: Option<&str>,
+    backend_from_auto: bool,
     _cfg: &CharlieBotConfig,
   ) -> anyhow::Result<(SessionMetadata, RunRecord, String, bool)> {
     if parent.profile != TaskProfile::Manager {
@@ -441,6 +456,19 @@ impl CronScheduler {
         Map::new(),
       )
       .await?;
+    if backend_from_auto {
+      let guard = self.features.store.control_lock().await;
+      self
+        .features
+        .store
+        .update_task_slot_fields_locked(
+          &guard,
+          &leaf.id,
+          charliebot_agents::backend_pool::METADATA_OWNER,
+          Map::from_iter([(charliebot_agents::backend_pool::BACKEND_FROM_AUTO_FIELD.to_string(), json!(true))]),
+        )
+        .await?;
+    }
     let run_request =
       if steps { format!("{}:step:0", firing_ref(task, firing)) } else { format!("{}:work", firing_ref(task, firing)) };
     let run_id = charliebot_store::control_events::stable_run_id(&leaf.id, &run_request);
@@ -903,6 +931,8 @@ fn parse_cron_value(value: &str, names: &[(&str, u32)]) -> anyhow::Result<u32> {
 
 #[cfg(test)]
 mod tests {
+  use charliebot_core::config::AUTO_BACKEND_ID;
+  use charliebot_core::event_types;
   use charliebot_registry::context::FeatureContext;
   use charliebot_store::compact::CompactValue;
   use charliebot_store::metadata::{
@@ -921,8 +951,8 @@ mod tests {
   use super::{CronExpression, CronScheduler, isoformat_text};
   use crate::config::{ScheduledTaskConfig, StepConfig, TaskMode};
   use crate::test_support::{
-    FakeGit, GIT_PROGRAM_LOCK, child_manager, feature_context, feature_context_with_host_backends, host_probe_count,
-    manager, set_host_login, write_prompted_task, write_task,
+    FakeGit, GIT_PROGRAM_LOCK, auto_manager, child_manager, feature_context, feature_context_with_auto,
+    feature_context_with_host_backends, host_probe_count, manager, set_host_login, write_prompted_task, write_task,
   };
   use charliebot_registry::registry::HostLogin;
   use charliebot_tasks::test_support::process_guard::ProcessGroupGuard;
@@ -1173,6 +1203,7 @@ mod tests {
         "2026-06-08T03:00:00-07:00",
         "synthetic",
         Some("synthetic-model"),
+        false,
         &features.config.get().unwrap(),
       )
       .await
@@ -1267,8 +1298,10 @@ mod tests {
     };
     let scheduler = CronScheduler::new(Arc::clone(&features));
     let cfg = features.config.get().unwrap();
-    let (leaf, run, prompt, _) =
-      scheduler.register_fire_work(&task, &parent, "2026-10-21T03:00:00-07:00", "synthetic", None, &cfg).await.unwrap();
+    let (leaf, run, prompt, _) = scheduler
+      .register_fire_work(&task, &parent, "2026-10-21T03:00:00-07:00", "synthetic", None, false, &cfg)
+      .await
+      .unwrap();
 
     assert_eq!(run.kind, RunKind::ScheduledStep);
     assert_eq!(prompt, "Select candidates.");
@@ -1309,7 +1342,15 @@ mod tests {
     let scheduler = CronScheduler::new(Arc::clone(&features));
     let cfg = features.config.get().unwrap();
     let (leaf, run, _prompt, _) = scheduler
-      .register_fire_work(&task, &parent, "2026-10-21T03:00:00-07:00", "synthetic", Some("synthetic-model"), &cfg)
+      .register_fire_work(
+        &task,
+        &parent,
+        "2026-10-21T03:00:00-07:00",
+        "synthetic",
+        Some("synthetic-model"),
+        false,
+        &cfg,
+      )
       .await
       .unwrap();
     assert_eq!(run.kind, RunKind::Work);
@@ -1743,6 +1784,131 @@ mod tests {
     assert!(cleanup_calls.starts_with(&calls[launch_calls.len()..]), "{calls:?}");
   }
 
+  /// Test ①: an Auto fire runs on the bound session's current member, and the child records that Auto chose it.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn an_auto_fire_runs_on_the_bound_sessions_current_member() {
+    let (_home, features) = feature_context_with_auto(&["member-a", "member-b"]);
+    install_execution(&features).await;
+    let node = auto_manager(&features, "synthetic-auto-fire-node", "member-b").await.unwrap();
+    let task = ScheduledTaskConfig {
+      name: "synthetic-auto-fire".to_string(),
+      cron: "0 3 * * *".to_string(),
+      prompt_file: None,
+      repo: None,
+      backend: Some(AUTO_BACKEND_ID.to_string()),
+      timezone: "America/Los_Angeles".to_string(),
+      enabled: true,
+      project: None,
+      allow_failure: false,
+      session_id: Some(node.id.clone()),
+      mode: Some(TaskMode::Worker),
+      prompt: Some("Summarize the queue.".to_string()),
+      handler: None,
+      steps: None,
+    };
+
+    let (leaf_id, run) = fire_and_launch(&features, task, false).await;
+
+    assert_eq!(run.backend.as_deref(), Some("member-b"), "the fire runs on the session's current member");
+    let leaf = features.store.get_session(&leaf_id).await.unwrap().unwrap();
+    assert_eq!(leaf.extra(charliebot_agents::backend_pool::BACKEND_FROM_AUTO_FIELD), Some(&json!(true)));
+    assert_eq!(leaf.extra(charliebot_agents::backend_pool::BACKEND_FROM_POOL_FIELD), Some(&json!(false)));
+  }
+
+  /// Test ②: a cron child on an Auto member that runs out of quota retries on the next member as one retry run. The
+  /// switch record sits in the bound session's chat, and the retry's input names the failed run's directory as an
+  /// absolute path, with the summary from the run's events log.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_cron_child_quota_end_retries_on_the_next_auto_member() {
+    let (_home, features) = feature_context_with_auto(&["member-a", "member-b"]);
+    install_execution(&features).await;
+    let node = auto_manager(&features, "synthetic-auto-child-quota-node", "member-a").await.unwrap();
+    let task = ScheduledTaskConfig {
+      name: "synthetic-auto-child-quota".to_string(),
+      cron: "0 3 * * *".to_string(),
+      prompt_file: None,
+      repo: None,
+      backend: Some(AUTO_BACKEND_ID.to_string()),
+      timezone: "America/Los_Angeles".to_string(),
+      enabled: true,
+      project: None,
+      allow_failure: false,
+      session_id: Some(node.id.clone()),
+      mode: Some(TaskMode::Worker),
+      prompt: Some("Summarize the queue.".to_string()),
+      handler: None,
+      steps: None,
+    };
+    let cfg = (*features.config.get().unwrap()).clone();
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+    let (leaf, run, _, _) = scheduler
+      .register_fire_work(&task, &node, "2026-10-21T03:00:00-07:00", "member-a", Some("member-a-model"), true, &cfg)
+      .await
+      .unwrap();
+    // The child's run read a file before its quota error, so its events log holds the four summary parts.
+    let events = [
+      json!({"type":"assistant","message":{"content":[
+        {"type":"text","text":"I read the entry point."},
+        {"type":"tool_use","id":"tool-1","name":"Read","input":{"file_path":"/synthetic/src/main.rs"}}
+      ]}}),
+      json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool-1","content":"fn main() {}"}]}}),
+      json!({"type":"assistant","message":{"content":[
+        {"type":"tool_use","id":"tool-2","name":"Bash","input":{"command":"cargo test -p cron"}}
+      ]}}),
+    ];
+    let failed_dir = features.store.run_dir(&leaf.id, &run.id);
+    std::fs::create_dir_all(&failed_dir).unwrap();
+    let lines = events.iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+    std::fs::write(failed_dir.join(charliebot_store::run_records::RUN_EVENTS_NAME), format!("{lines}\n")).unwrap();
+    let failed = RunOutcome { exit_code: Some(1), ..RunOutcome::new(RunOutcomeKind::Failed) };
+    charliebot_tasks::dispatch::dispatcher(&features).unwrap().finish_run(&leaf.id, &run.id, failed).await.unwrap();
+    let adapter = features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>().unwrap();
+    adapter.record_quota_failure_for_test(&leaf.id, &run.id, None);
+    adapter.after_worker_run_for_test(&leaf.id, &run.id, "failed").await.unwrap();
+
+    let runs = features.store.list_run_records_sync(&leaf.id).unwrap();
+    let retries =
+      runs.iter().filter(|candidate| candidate.retry_of_run_id.as_deref() == Some(run.id.as_str())).collect::<Vec<_>>();
+    assert_eq!(retries.len(), 1, "one retry run: {runs:?}");
+    let retry = retries[0];
+    assert_eq!(retry.backend.as_deref(), Some("member-b"), "the next Auto member runs the retry");
+    let retry_id = retry.id.clone();
+
+    let switches = features
+      .store
+      .load_chat_events_sync(&node.id)
+      .unwrap()
+      .iter()
+      .map(|event| event.to_value())
+      .filter(|event| event["type"] == event_types::QUOTA_FAILOVER)
+      .collect::<Vec<_>>();
+    assert_eq!(switches.len(), 1, "one switch record in the bound session's chat: {switches:?}");
+    assert_eq!(switches[0]["from"], "member-a");
+    assert_eq!(switches[0]["to"], "member-b");
+    assert_eq!(switches[0]["set"], event_types::QUOTA_SET_AUTO);
+    assert_eq!(switches[0]["summary"], charliebot_tasks::handoff::SUMMARY_OK);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+      let facts = features.store.load_all_facts(&leaf.id).unwrap();
+      if charliebot_store::run_records::terminal_outcome(&facts, &retry_id).unwrap().is_some() {
+        break;
+      }
+      assert!(std::time::Instant::now() < deadline, "the retry run settles");
+      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let prompt = std::fs::read_to_string(
+      features.store.run_dir(&leaf.id, &retry_id).join(charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME),
+    )
+    .unwrap();
+    assert!(prompt.contains(&failed_dir.display().to_string()), "{prompt}");
+    assert!(prompt.contains("Handoff summary:"), "{prompt}");
+    assert!(prompt.contains("in progress: $ Bash cargo test -p cron (no result yet)"), "{prompt}");
+    assert!(prompt.contains("files: /synthetic/src/main.rs"), "{prompt}");
+  }
+
   #[tokio::test]
   #[ignore = "integration"]
   async fn a_scheduled_fire_without_steps_prepares_a_worktree_for_its_run() {
@@ -2063,7 +2229,7 @@ mod tests {
     let node = manager(&features, "synthetic-steps-passed-node").await.unwrap();
     let task = steps_task(&node.id);
     let (leaf, step0, _, _) =
-      scheduler.register_fire_work(&task, &node, firing, "synthetic", None, &cfg).await.unwrap();
+      scheduler.register_fire_work(&task, &node, firing, "synthetic", None, false, &cfg).await.unwrap();
     assert_eq!(scheduler.round_in_flight(&task, &cfg).unwrap(), Some(leaf.id.clone()));
 
     // Step 0 passed with exit 0 and step 1 is not registered yet: the chain awaits its next step. The round is
@@ -2078,7 +2244,7 @@ mod tests {
     let failed_node = manager(&features, "synthetic-steps-failed-node").await.unwrap();
     let failed_task = steps_task(&failed_node.id);
     let (failed_leaf, failed_step0, _, _) =
-      scheduler.register_fire_work(&failed_task, &failed_node, firing, "synthetic", None, &cfg).await.unwrap();
+      scheduler.register_fire_work(&failed_task, &failed_node, firing, "synthetic", None, false, &cfg).await.unwrap();
     let guard = features.store.control_lock().await;
     let failed = RunOutcome { exit_code: Some(1), ..RunOutcome::new(RunOutcomeKind::Failed) };
     features.store.record_finish_locked(&guard, &failed_leaf.id, &failed_step0.id, failed).await.unwrap();

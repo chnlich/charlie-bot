@@ -961,13 +961,15 @@ fn active_backend_payload(
     .map_err(|error| StoreError::new(error.to_string()))?
     .is_some_and(|binding| binding.dedicated_backend());
   let switchable = if active_backend == charliebot_core::config::AUTO_BACKEND_ID && cfg.backends.auto.is_some() {
-    cfg
-      .backends
-      .options
-      .iter()
-      .map(|option| Value::String(option.id.clone()))
-      .chain(std::iter::once(Value::String(charliebot_core::config::AUTO_BACKEND_ID.to_string())))
-      .collect()
+    // The switch route refuses an option from Auto under a dedicated lock: `same_continuation_domain` has no domain for
+    // `auto`. The list follows the same rule; the Auto backend itself stays listed, since the route takes it as a no-op.
+    let mut switchable: Vec<Value> = if dedicated {
+      Vec::new()
+    } else {
+      cfg.backends.options.iter().map(|option| Value::String(option.id.clone())).collect()
+    };
+    switchable.push(Value::String(charliebot_core::config::AUTO_BACKEND_ID.to_string()));
+    switchable
   } else if let Some(active_option) = active_option {
     if dedicated {
       let active_lifecycle =
@@ -1229,6 +1231,36 @@ backends:
 
     let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
     assert_eq!(backend["switchable_backends"], json!(["synthetic-a"]));
+  }
+
+  #[tokio::test]
+  async fn a_dedicated_auto_session_lists_only_auto_as_switchable() {
+    let (_home, features) = feature_context_with_auto(AUTO_CONFIG);
+    let request = CreateTask {
+      request_id: "locked-auto-node".to_string(),
+      task_parent_id: None,
+      profile: TaskProfile::Manager,
+      task: None,
+      name: Some("Locked Auto".to_string()),
+      backend: Some("auto".to_string()),
+      group: None,
+      session_id: Some("sequence-locked-node".to_string()),
+    };
+    let meta = features.store.create_task(request, TaskCaller::System, Map::new()).await.expect("the locked node");
+    features
+      .store
+      .update_slot_fields(
+        &meta.id,
+        charliebot_agents::auto_backend::OWNER,
+        Map::from_iter([("auto_member".to_string(), json!("synthetic-a"))]),
+      )
+      .await
+      .expect("the member is recorded");
+    let cfg = features.config.get().expect("the test config loads");
+
+    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
+    assert_eq!(backend["active_backend"], "auto");
+    assert_eq!(backend["switchable_backends"], json!(["auto"]));
   }
 
   #[tokio::test]

@@ -79,6 +79,10 @@ pub const METADATA_OWNER: &str = "backend_pool";
 /// The session metadata field that records whether the pool chose the backend, held in the `backend_pool` slot.
 pub const BACKEND_FROM_POOL_FIELD: &str = "backend_from_pool";
 
+/// The session metadata field that records whether an Auto session's current member chose the backend, so a quota end
+/// on it moves to the next Auto member and not to the pool.
+pub const BACKEND_FROM_AUTO_FIELD: &str = "backend_from_auto";
+
 /// The route a request keeps on its session: the backend ids the router named, and the router's explanation.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct BackendRoute {
@@ -420,6 +424,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
       after: None,
       fields: vec![
         SlotField { name: BACKEND_FROM_POOL_FIELD, default: serde_json::json!(false) },
+        SlotField { name: BACKEND_FROM_AUTO_FIELD, default: serde_json::json!(false) },
         SlotField { name: "route", default: Value::Null },
       ],
     },
@@ -428,7 +433,23 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 }
 
 fn validate_backend_pool_fields(values: &mut Map<String, Value>) -> Option<String> {
-  let value = values.get_mut(BACKEND_FROM_POOL_FIELD)?;
+  for field in [BACKEND_FROM_POOL_FIELD, BACKEND_FROM_AUTO_FIELD] {
+    if let Some(error) = coerce_boolean_field(values, field) {
+      return Some(error);
+    }
+  }
+  if let Some(route) = values.get("route")
+    && !route.is_null()
+    && serde_json::from_value::<BackendRoute>(route.clone()).is_err()
+  {
+    return Some("route must be null or contain backends: list[str] and reason: str".to_string());
+  }
+  None
+}
+
+/// Store a present boolean field as a JSON boolean, or name the field when its value is not one.
+fn coerce_boolean_field(values: &mut Map<String, Value>, field: &str) -> Option<String> {
+  let value = values.get_mut(field)?;
   let boolean = match value {
     Value::Bool(value) => *value,
     Value::Number(value) if value.as_i64() == Some(0) || value.as_f64() == Some(0.0) => false,
@@ -436,17 +457,11 @@ fn validate_backend_pool_fields(values: &mut Map<String, Value>) -> Option<Strin
     Value::String(value) => match value.to_ascii_lowercase().as_str() {
       "1" | "true" | "t" | "yes" | "y" | "on" => true,
       "0" | "false" | "f" | "no" | "n" | "off" => false,
-      _ => return Some(format!("{BACKEND_FROM_POOL_FIELD} must be a boolean")),
+      _ => return Some(format!("{field} must be a boolean")),
     },
-    _ => return Some(format!("{BACKEND_FROM_POOL_FIELD} must be a boolean")),
+    _ => return Some(format!("{field} must be a boolean")),
   };
   *value = Value::Bool(boolean);
-  if let Some(route) = values.get("route")
-    && !route.is_null()
-    && serde_json::from_value::<BackendRoute>(route.clone()).is_err()
-  {
-    return Some("route must be null or contain backends: list[str] and reason: str".to_string());
-  }
   None
 }
 

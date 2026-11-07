@@ -140,7 +140,7 @@ async fn start_improve_sequence(features: &Arc<FeatureContext>, req: ImproveRequ
   } else {
     // The resolver's role picks only among pool members, and this call never reaches the pool. A pool with a requested
     // backend returns that backend first, and a pool-less config skips the pool branch.
-    let (backend, model, _from_pool) = spawner_backends::resolve_requested_subagent_backend_model(
+    let (backend, model, _source) = spawner_backends::resolve_requested_subagent_backend_model(
       &cfg,
       store,
       &req.session_id,

@@ -120,7 +120,19 @@ pub fn session_backend_id(cfg: &CharlieBotConfig, session_meta: &SessionMetadata
   resolve_session_default_backend_model(cfg, session_meta).map(|(backend_id, _)| backend_id)
 }
 
-/// Resolve a delegation's backend and whether `backends.pool` selected it (`spawner_backends.resolve_requested_subagent_backend_model`).
+/// Which rule chose a subagent's backend. A pool pick and an Auto member pick fail over through different owners, so
+/// the caller records which one ran the child.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackendSource {
+  /// The request named the backend, or the session's own backend runs it.
+  Direct,
+  /// `backends.pool` chose the backend.
+  Pool,
+  /// The session is on `auto` and its current member runs it.
+  AutoMember,
+}
+
+/// Resolve a delegation's backend and the rule that chose it (`spawner_backends.resolve_requested_subagent_backend_model`).
 pub async fn resolve_requested_subagent_backend_model(
   cfg: &CharlieBotConfig,
   store: &Store,
@@ -128,7 +140,7 @@ pub async fn resolve_requested_subagent_backend_model(
   requested_backend: Option<&str>,
   role: SubagentRole,
   pool: &BackendPool,
-) -> anyhow::Result<(String, Option<String>, bool)> {
+) -> anyhow::Result<(String, Option<String>, BackendSource)> {
   let meta = store.require_session(session_id).await.map_err(|error| match error {
     StoreError::NotFound(_) => value_error(format!("session '{session_id}' not found")),
     error => anyhow::Error::new(error),
@@ -141,17 +153,18 @@ pub async fn resolve_requested_subagent_backend_model(
       .get_backend_option(backend_id)
       .ok_or_else(|| value_error(format!("requested backend '{backend_id}' is not in backends.options")))?;
     let model = option.required_model("requested backend").map_err(value_error)?;
-    return Ok((option.id.clone(), Some(model), false));
+    return Ok((option.id.clone(), Some(model), BackendSource::Direct));
   }
   if !cfg.backends.pool.is_empty()
     && let Some(caller) = role.pool_caller()
   {
     let option = pool.select(cfg, caller, &[])?.ok_or_else(|| value_error(pool.no_member_message(cfg)))?;
     let model = option.required_model("pool member").map_err(value_error)?;
-    return Ok((option.id.clone(), Some(model), true));
+    return Ok((option.id.clone(), Some(model), BackendSource::Pool));
   }
   let (backend_id, model) = resolve_session_default_backend_model(cfg, &meta)?;
-  Ok((backend_id, model, false))
+  let source = if meta.backend == AUTO_BACKEND_ID { BackendSource::AutoMember } else { BackendSource::Direct };
+  Ok((backend_id, model, source))
 }
 
 /// Resolve a verify or cold-read checker, excluding the requesting task's backend (`spawner_backends.select_verify_backend`).

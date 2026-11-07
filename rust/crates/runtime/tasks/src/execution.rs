@@ -25,7 +25,7 @@ use charliebot_core::run_token::{RUN_TOKEN_ENV, RunTokenClaims, sign_run_token};
 use charliebot_core::text_repr;
 use charliebot_registry::backend::{Env, LaunchArgs, LaunchRefused};
 use charliebot_registry::context::FeatureContext;
-use charliebot_registry::sequence::{SequenceCompletion, SequenceExecutor, SequenceLaunchSettlement};
+use charliebot_registry::sequence::{QuotaFailure, SequenceCompletion, SequenceExecutor, SequenceLaunchSettlement};
 use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events::{self, ACTOR_SYSTEM};
@@ -45,10 +45,12 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+use crate::auto_switch::{self, AutoSwitch};
 use crate::backend_retry;
 use crate::cold_read::{self, ColdReadOutcome};
 use crate::dispatch::{DispatchExecutor, Dispatcher, RunFinishedCompletion};
 use crate::git;
+use crate::handoff::HandoffSource;
 use crate::master_queue::{MasterQueue, PersistAndBroadcastFn, SessionCallbacks, TaskTreeActivityFn};
 use crate::master_run;
 use crate::master_state::{MasterTurnRequest, TaskFinishCallback, TaskRunBinding, TaskSpawnCallback};
@@ -139,14 +141,6 @@ pub struct TaskExecutionAdapter {
   pub(crate) launches: Arc<Mutex<LaunchState>>,
   pub(crate) recovery: Arc<RecoveryState>,
   quota_failures: Arc<Mutex<HashMap<LaunchKey, QuotaFailure>>>,
-}
-
-/// One run's recorded quota failure: the reset the backend stated, if any, and the error text the availability owner
-/// records as the detail.
-#[derive(Clone, Debug)]
-pub struct QuotaFailure {
-  pub resets_at: Option<UtcDateTime>,
-  pub message: String,
 }
 
 struct RunContinuation {
@@ -1572,13 +1566,17 @@ impl TaskExecutionAdapter {
         return Ok(());
       };
       let tree = self.sequence_tree()?;
-      controller.after_run(session_id, run, &tree).await?;
+      // The failure stays recorded: the owner that settles the run's launch takes it from here.
+      let quota_failure = self.quota_failure_of(session_id, &run.id);
+      controller.after_run(session_id, run, quota_failure.as_ref(), &tree).await?;
       return Ok(());
     }
 
     let quota_failure = self.take_quota_failure(session_id, &run.id);
-    let quota_failed = quota_failure.is_some();
-    if let (Some(failure), Some(backend)) = (quota_failure, run.backend.as_deref())
+    // A worker that inherited an Auto member records its quota end with the Auto switch, not with the pool.
+    let from_auto = backend_from_auto(meta);
+    if let (Some(failure), Some(backend)) = (quota_failure.as_ref(), run.backend.as_deref())
+      && !from_auto
       && self.pool_chose_backend(meta, run)
     {
       let availability = backend_availability::backend_availability(&self.features)?;
@@ -1621,21 +1619,77 @@ impl TaskExecutionAdapter {
     }
     if matches!(durable_outcome, "failed" | "interrupted") {
       let mut summary = None;
-      if quota_failed && durable_outcome == "failed" && self.fails_over(meta, run) {
-        if self.fail_over_quota(meta, run).await? {
-          return Ok(());
+      if let Some(failure) = quota_failure.as_ref().filter(|_| durable_outcome == "failed") {
+        if from_auto {
+          match self.fail_over_auto(meta, run, failure).await? {
+            AutoSwitch::Moved { .. } => return Ok(()),
+            AutoSwitch::Exhausted(message) => summary = Some(message),
+          }
+        } else if self.fails_over(meta, run) {
+          if self.fail_over_quota(meta, run).await? {
+            return Ok(());
+          }
+          let recovery = backend_pool::backend_pool(&self.features)?;
+          let cfg = self.features.config.get()?;
+          summary = Some(format!(
+            "{}\n\n{}",
+            self.worker_failure_summary(session_id, run).await?,
+            recovery.no_member_message(cfg.as_ref())
+          ));
         }
-        let recovery = backend_pool::backend_pool(&self.features)?;
-        let cfg = self.features.config.get()?;
-        summary = Some(format!(
-          "{}\n\n{}",
-          self.worker_failure_summary(session_id, run).await?,
-          recovery.no_member_message(cfg.as_ref())
-        ));
       }
       self.report_failure_to_parent(session_id, run, durable_outcome, summary.as_deref()).await?;
     }
     Ok(())
+  }
+
+  /// Continue a worker run on the next Auto member after its member's quota ended. The worker inherited its member from
+  /// its Auto parent, so the switch and its record belong to that session, and the pool is not consulted.
+  async fn fail_over_auto(
+    &self,
+    meta: &SessionMetadata,
+    run: &RunRecord,
+    failure: &QuotaFailure,
+  ) -> anyhow::Result<AutoSwitch> {
+    let parent_id = meta
+      .task_parent_id
+      .as_deref()
+      .ok_or_else(|| anyhow!("run {} inherited an Auto member but its task names no parent session", run.id))?;
+    let auto_session = self.features.store.load_task_meta(parent_id).await?;
+    let from = run
+      .backend
+      .as_deref()
+      .filter(|backend| !backend.is_empty())
+      .ok_or_else(|| anyhow!("run {} records no backend; refusing to substitute one", run.id))?;
+    let switch =
+      auto_switch::switch_member(&self.features, &auto_session, meta, HandoffSource::WorkerRun { run }, from, failure)
+        .await?;
+    let AutoSwitch::Moved { member } = &switch else { return Ok(switch) };
+    let cfg = self.features.config.get()?;
+    let guard = self.features.store.control_lock().await;
+    self.features.store.set_node_backend_locked(&guard, &meta.id, member).await?;
+    drop(guard);
+    let retry = crate::task_sessions::create_retry(
+      &self.features.store,
+      &cfg,
+      &meta.id,
+      &auto_failover_retry_id(&meta.id, &run.id),
+      &run.id,
+      Some(member),
+      Some(run.input_event_ids.clone()),
+    )
+    .await?;
+    tracing::warn!(
+      target: "charliebot_tasks",
+      session_id = %meta.id,
+      run_id = %run.id,
+      retry_run_id = %retry.id,
+      from_backend = from,
+      to_backend = %member,
+      "worker_auto_quota_failover"
+    );
+    self.launch(&meta.id, &retry.id)?;
+    Ok(switch)
   }
 
   /// The cold-read delivery chain: report the answer, retry the next backend, or report that every model failed
@@ -2022,6 +2076,16 @@ impl TaskExecutionAdapter {
     (Some((target, commit, repo_path.to_string())), String::new())
   }
 
+  /// The quota failure recorded for one run, left recorded for the owner that takes it.
+  fn quota_failure_of(&self, session_id: &str, run_id: &str) -> Option<QuotaFailure> {
+    self
+      .quota_failures
+      .lock()
+      .expect("worker quota failure map is not poisoned")
+      .get(&(session_id.to_string(), run_id.to_string()))
+      .cloned()
+  }
+
   /// Remove and return the quota failure recorded for one run, distinguishing no failure from an unknown reset.
   pub fn take_quota_failure(&self, session_id: &str, run_id: &str) -> Option<QuotaFailure> {
     self
@@ -2382,7 +2446,7 @@ impl TaskExecutionAdapter {
 
           dispatch.finish_run(&session_id, &run_id, outcome).await?;
           // The failed run's terminal fact is durable, so the retry this switch registers points at a finished run.
-          adapter.auto_quota_failover(&meta, &run_id, &extras).await?;
+          adapter.auto_quota_failover(&meta, &run_id, &option, &extras).await?;
           Ok(true)
         }
         .await;
@@ -2398,14 +2462,14 @@ impl TaskExecutionAdapter {
 
   /// Continue an Auto session's manager turn on its next member when this run ended on a member's spent quota.
   ///
-  /// The failed member is recorded out (its stated reset, else the fixed cooldown), the next member is selected
-  /// excluding the members already out, and a retry run on that member reuses the failed turn's input. The switch
-  /// leaves one `quota_failover` record carrying the handoff summary state, records the new member, and launches the
-  /// retry. When no member is selectable the turn ends with one error that lists every member.
+  /// The switch records the launched member out and selects the next one (`auto_switch::switch_member`). The retry run
+  /// on that member reuses the failed turn's input and launches. When no member is selectable the turn ends with one
+  /// error that lists every member.
   async fn auto_quota_failover(
     &self,
     meta: &SessionMetadata,
     run_id: &str,
+    option: &BackendOption,
     extras: &Map<String, Value>,
   ) -> anyhow::Result<()> {
     if meta.backend != charliebot_core::config::AUTO_BACKEND_ID {
@@ -2417,74 +2481,93 @@ impl TaskExecutionAdapter {
       .store
       .read_run_sync(&meta.id, run_id)?
       .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, &meta.id)))?;
-    let Some(from) = run.backend.clone() else {
-      tracing::error!(target: "charliebot_tasks", session_id = %meta.id, run_id, "auto_quota_finish_without_backend");
-      return Ok(());
-    };
-    let cfg = self.features.config.get()?;
-    let availability = backend_availability::backend_availability(&self.features)?;
-    availability.record(&from, failure.resets_at, backend_availability::REASON_QUOTA_ERROR, &failure.message)?;
-    let now = UtcDateTime::now();
-    let Some(member) = auto_backend::select_member(&cfg, &self.features.registry, &availability, &[], now)? else {
-      let message = auto_backend::all_exhausted_message(&self.features, &cfg)?;
-      self
-        .features
-        .store
-        .persist_and_broadcast(
-          &meta.id,
-          json!({
-            "type": event_types::ASSISTANT_ERROR,
-            "content": message,
-            event_types::QUOTA_EXHAUSTED: true,
-          }),
-        )
-        .await?;
-      tracing::warn!(target: "charliebot_tasks", session_id = %meta.id, run_id, "auto_set_exhausted_mid_turn");
-      return Ok(());
-    };
-    let retry = crate::task_sessions::create_retry(
-      &self.features.store,
-      &cfg,
-      &meta.id,
-      &auto_failover_retry_id(&meta.id, run_id),
-      run_id,
-      Some(&member.backend),
-      Some(run.input_event_ids.clone()),
-    )
-    .await?;
-    let goal = meta.task.as_ref().map_or(meta.name.as_str(), |task| task.goal.as_str());
-    let handoff = crate::handoff::handoff(
+    // The run launched on `option`, the member it spent: a turn with no recorded member cannot reach this point.
+    let switch = auto_switch::switch_member(
       &self.features,
       meta,
-      crate::handoff::HandoffSource::ManagerRun { run: &run },
-      &format!(
-        "auto switched from {from} to {}: the member's quota is spent, resets at {}",
-        member.backend,
-        availability.out_until_minutes(&from).unwrap_or_default()
-      ),
-      goal,
-    );
-    let change = auto_backend::MemberChange {
-      from: from.clone(),
-      to: member.backend.clone(),
-      reason: event_types::QUOTA_REASON_QUOTA_ERROR,
-      recovers_at: availability.out_until_minutes(&from),
-      summary: Some(handoff.summary.clone()),
+      meta,
+      HandoffSource::ManagerRun { run: &run },
+      &option.id,
+      &failure,
+    )
+    .await?;
+    match switch {
+      AutoSwitch::Exhausted(message) => {
+        self
+          .features
+          .store
+          .persist_and_broadcast(
+            &meta.id,
+            json!({
+              "type": event_types::ASSISTANT_ERROR,
+              "content": message,
+              event_types::QUOTA_EXHAUSTED: true,
+            }),
+          )
+          .await?;
+        tracing::warn!(target: "charliebot_tasks", session_id = %meta.id, run_id, "auto_set_exhausted_mid_turn");
+        Ok(())
+      }
+      AutoSwitch::Moved { member } => {
+        let cfg = self.features.config.get()?;
+        let retry = crate::task_sessions::create_retry(
+          &self.features.store,
+          &cfg,
+          &meta.id,
+          &auto_failover_retry_id(&meta.id, run_id),
+          run_id,
+          Some(&member),
+          Some(run.input_event_ids.clone()),
+        )
+        .await?;
+        tracing::warn!(
+          target: "charliebot_tasks",
+          session_id = %meta.id,
+          run_id,
+          retry_run_id = %retry.id,
+          from_backend = %option.id,
+          to_backend = %member,
+          "manager_auto_quota_failover"
+        );
+        self.launch(&meta.id, &retry.id)?;
+        Ok(())
+      }
+    }
+  }
+
+  /// Apply the turn-start rule to a scheduled fire's bound Auto session and return the member the fire's child runs on.
+  /// A set with no selectable member ends the fire with the error that lists every member, posted to the session, and
+  /// returns None.
+  pub async fn auto_fire_member(&self, session_id: &str) -> anyhow::Result<Option<String>> {
+    let cfg = self.features.config.get()?;
+    let (start, meta) = {
+      let _guard = self.features.store.control_lock().await;
+      let mut meta = self.features.store.load_task_meta(session_id).await?;
+      let start = auto_backend::start_turn(&self.features, &cfg, &mut meta).await?;
+      (start, meta)
     };
-    self.features.store.persist_and_broadcast(&meta.id, change.event()).await?;
-    auto_backend::set_current_member(&self.features, &meta.id, &member.backend).await?;
-    tracing::warn!(
-      target: "charliebot_tasks",
-      session_id = %meta.id,
-      run_id,
-      retry_run_id = %retry.id,
-      from_backend = %from,
-      to_backend = %member.backend,
-      summary = %handoff.summary,
-      "manager_auto_quota_failover"
-    );
-    self.launch(&meta.id, &retry.id)?;
-    Ok(())
+    match start {
+      auto_backend::TurnStart::Kept => {}
+      auto_backend::TurnStart::Changed(change) => {
+        self.features.store.persist_and_broadcast(session_id, change.event()).await?;
+      }
+      auto_backend::TurnStart::Exhausted(message) => {
+        self
+          .features
+          .store
+          .persist_and_broadcast(
+            session_id,
+            json!({
+              "type": event_types::ASSISTANT_ERROR,
+              "content": message,
+              event_types::QUOTA_EXHAUSTED: true,
+            }),
+          )
+          .await?;
+        return Ok(None);
+      }
+    }
+    Ok(Some(auto_backend::current_member_id(&cfg, &meta)?))
   }
 
   /// Whether this process already drives `run_id`: its launch is in flight, or a resume follow holds it.
@@ -3050,8 +3133,8 @@ fn worker_binding(run_id: &str, session_id: &str, run: &RunRecord) -> ThreadMeta
   }
 }
 
-/// The failed run a quota-failover retry continues, with its backend, when this run is the retry the pool's failover
-/// registered.
+/// The failed run a quota-failover retry continues, with its backend, when this run is the retry a quota failover
+/// registered. An inherited Auto worker's switch is recorded in its Auto parent; a pool worker's in its own chat.
 fn worker_failover_source(
   features: &FeatureContext,
   meta: &SessionMetadata,
@@ -3064,15 +3147,29 @@ fn worker_failover_source(
   if from == option.id || from.is_empty() {
     return Ok(None);
   }
-  let switched = features.store.load_chat_events_sync(&meta.id)?.iter().rev().any(|event| {
+  let (record_session, set) = if backend_from_auto(meta) {
+    let parent = meta
+      .task_parent_id
+      .as_deref()
+      .ok_or_else(|| anyhow!("run {} inherited an Auto member but its task names no parent session", run.id))?;
+    (parent.to_string(), event_types::QUOTA_SET_AUTO)
+  } else {
+    (meta.id.clone(), event_types::QUOTA_SET_POOL)
+  };
+  let switched = features.store.load_chat_events_sync(&record_session)?.iter().rev().any(|event| {
     event.get("type").and_then(CompactValue::as_str) == Some(event_types::QUOTA_FAILOVER)
-      && event.get(event_types::QUOTA_FAILOVER_SET).and_then(CompactValue::as_str) == Some(event_types::QUOTA_SET_POOL)
+      && event.get(event_types::QUOTA_FAILOVER_SET).and_then(CompactValue::as_str) == Some(set)
       && event.get(event_types::QUOTA_FAILOVER_REASON).and_then(CompactValue::as_str)
         == Some(event_types::QUOTA_REASON_QUOTA_ERROR)
       && event.get("from").and_then(CompactValue::as_str) == Some(from.as_str())
       && event.get("to").and_then(CompactValue::as_str) == Some(option.id.as_str())
   });
   Ok(switched.then_some((previous, from)))
+}
+
+/// Whether a worker's backend came from its Auto session's current member, which its quota end fails over within Auto.
+fn backend_from_auto(meta: &SessionMetadata) -> bool {
+  meta.extra(backend_pool::BACKEND_FROM_AUTO_FIELD).and_then(Value::as_bool).unwrap_or(false)
 }
 
 fn parse_outcome(outcome: &str) -> RunOutcomeKind {

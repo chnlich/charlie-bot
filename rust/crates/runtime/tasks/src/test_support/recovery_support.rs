@@ -55,7 +55,9 @@ use charliebot_registry::backend::{
   Translate, TransportKind,
 };
 use charliebot_registry::context::{FeatureContext, StartupState};
-use charliebot_registry::sequence::{SequenceBinding, SequenceCompletion, SequenceController, SequenceTree};
+use charliebot_registry::sequence::{
+  QuotaFailure, SequenceBinding, SequenceCompletion, SequenceController, SequenceTree,
+};
 use charliebot_store::ChatEvent;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, UtcDateTime};
 use charliebot_store::run_records;
@@ -1086,6 +1088,7 @@ impl SequenceController for SyntheticLoop {
     &'a self,
     session_id: &'a str,
     _run: &'a RunRecord,
+    _quota: Option<&'a QuotaFailure>,
     tree: &'a dyn SequenceTree,
   ) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async move { SyntheticLoop::close_if_due(session_id, tree).await.map(|_| ()) })
@@ -1184,6 +1187,7 @@ impl SequenceController for SyntheticProbe {
     &'a self,
     session_id: &'a str,
     run: &'a RunRecord,
+    _quota: Option<&'a QuotaFailure>,
     tree: &'a dyn SequenceTree,
   ) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async move { SyntheticProbe::record(tree.config(), session_id, &format!("after_run {}", run.id)) })
@@ -1266,6 +1270,7 @@ impl SequenceController for CronRecoveryProbe {
     &'a self,
     _session_id: &'a str,
     _run: &'a RunRecord,
+    _quota: Option<&'a QuotaFailure>,
     _tree: &'a dyn SequenceTree,
   ) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async { Ok(()) })

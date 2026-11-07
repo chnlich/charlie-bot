@@ -366,6 +366,17 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
       };
     });
 
+    // The open session's row is never hidden by the limit. A row past the
+    // preview would otherwise render after the toggle, so the control that
+    // reveals the rest would stand above the row the reader is on. The open
+    // row joins the preview rows instead, and the toggle follows it, still
+    // leading the rows it hides.
+    const firstHidden = groupRows.findIndex((row) => row.options.extraClass);
+    const openRow = groupRows.findIndex((row) => row.session.id === activeRootId);
+    if (firstHidden !== -1 && openRow > firstHidden) {
+      groupRows.splice(firstHidden, 0, groupRows.splice(openRow, 1)[0]);
+    }
+
     // The Threads view hides the New-session-in-group button: a session
     // created there has no platform origin and would fall back to Workspace.
     // The gate derives from the filter, not the call options, so the in-place

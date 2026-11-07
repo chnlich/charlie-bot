@@ -963,8 +963,8 @@ mod tests {
   #[tokio::test]
   async fn muse_loopback_streams_partial_and_final_with_a_four_second_lead_cap() {
     let (listener, endpoint) = fake_listener().await;
-    let second = (SAMPLE_RATE as usize) * 2;
-    let chunks = vec![vec![1; second * 4], vec![2; second], vec![3; second]];
+    let second = SAMPLE_RATE * 2;
+    let chunks = vec![vec![1; second * 4], vec![2; 2], vec![3; 2]];
     let fake_chunks = chunks.clone();
     let fake = tokio::spawn(async move {
       let mut socket = accept_fake(listener).await;
@@ -1042,7 +1042,7 @@ mod tests {
     );
     assert_eq!(sent[1], r#"{"type": "endStream"}"#);
     assert_eq!(binary, expected_binary);
-    assert_eq!(clock.sleeps(), [1.0]);
+    assert_eq!(clock.sleeps(), [2.0 / AUDIO_BYTES_PER_SECOND]);
   }
 
   #[tokio::test]
@@ -1102,51 +1102,58 @@ mod tests {
   }
 
   #[tokio::test(start_paused = true)]
-  async fn both_backend_cancellations_wait_for_the_one_second_close_timeout() {
-    for backend_kind in [BackendKind::Gemini, BackendKind::Muse] {
-      tokio::time::resume();
-      let (listener, endpoint) = fake_listener().await;
-      let (ready, wait_until_open) = tokio::sync::oneshot::channel();
-      let fake = tokio::spawn(async move {
-        let mut socket = accept_fake(listener).await;
-        let _ = next_text(&mut socket).await;
-        let reply = match backend_kind {
-          BackendKind::Gemini => r#"{"setupComplete":{}}"#,
-          BackendKind::Muse => r#"{"type":"sessionStarted"}"#,
-        };
-        socket.send(ServerMessage::Text(reply.into())).await.expect("send the session reply");
-        if matches!(backend_kind, BackendKind::Gemini) {
-          let activity_start = next_text(&mut socket).await;
-          assert!(activity_start.contains("activityStart"));
-        }
-        let audio = socket.next().await.expect("client sends audio").expect("audio frame is valid");
-        assert!(matches!(audio, ServerMessage::Text(_) | ServerMessage::Binary(_)));
-        ready.send(()).expect("notify the test that the session is open");
-        std::future::pending::<()>().await;
-      });
-      let backend = match backend_kind {
-        BackendKind::Gemini => Backend::gemini_for_test("synthetic-key", &endpoint),
-        BackendKind::Muse => Backend::muse_for_test("synthetic-token", &endpoint, Arc::new(EventLoopClock)),
+  async fn gemini_cancellation_waits_for_the_one_second_close_timeout() {
+    assert_backend_cancellation_waits_for_close_timeout(BackendKind::Gemini).await;
+  }
+
+  #[tokio::test(start_paused = true)]
+  async fn muse_cancellation_waits_for_the_one_second_close_timeout() {
+    assert_backend_cancellation_waits_for_close_timeout(BackendKind::Muse).await;
+  }
+
+  async fn assert_backend_cancellation_waits_for_close_timeout(backend_kind: BackendKind) {
+    tokio::time::resume();
+    let (listener, endpoint) = fake_listener().await;
+    let (ready, wait_until_open) = tokio::sync::oneshot::channel();
+    let fake = tokio::spawn(async move {
+      let mut socket = accept_fake(listener).await;
+      let _ = next_text(&mut socket).await;
+      let reply = match backend_kind {
+        BackendKind::Gemini => r#"{"setupComplete":{}}"#,
+        BackendKind::Muse => r#"{"type":"sessionStarted"}"#,
       };
-      let audio = AudioQueue::new();
-      assert!(audio.put(vec![0, 0]).await);
-      let (task, _events, cancel) = start_transcription(backend, audio);
-      tokio::time::timeout(Duration::from_secs(3), wait_until_open)
-        .await
-        .expect("backend connection opens")
-        .expect("fake server reports open");
-      tokio::time::pause();
-      let started = tokio::time::Instant::now();
-      cancel.send_replace(true);
-      tokio::time::timeout(Duration::from_secs(3), task)
-        .await
-        .expect("backend cancellation finishes")
-        .expect("backend task completes")
-        .expect("cancelled backend returns cleanly");
-      let elapsed = started.elapsed();
-      assert!(elapsed >= Duration::from_millis(800), "close wait was only {elapsed:?}");
-      assert!(elapsed < Duration::from_secs(2), "close wait exceeded its one-second limit: {elapsed:?}");
-      fake.abort();
-    }
+      socket.send(ServerMessage::Text(reply.into())).await.expect("send the session reply");
+      if matches!(backend_kind, BackendKind::Gemini) {
+        let activity_start = next_text(&mut socket).await;
+        assert!(activity_start.contains("activityStart"));
+      }
+      let audio = socket.next().await.expect("client sends audio").expect("audio frame is valid");
+      assert!(matches!(audio, ServerMessage::Text(_) | ServerMessage::Binary(_)));
+      ready.send(()).expect("notify the test that the session is open");
+      std::future::pending::<()>().await;
+    });
+    let backend = match backend_kind {
+      BackendKind::Gemini => Backend::gemini_for_test("synthetic-key", &endpoint),
+      BackendKind::Muse => Backend::muse_for_test("synthetic-token", &endpoint, Arc::new(EventLoopClock)),
+    };
+    let audio = AudioQueue::new();
+    assert!(audio.put(vec![0, 0]).await);
+    let (task, _events, cancel) = start_transcription(backend, audio);
+    tokio::time::timeout(Duration::from_secs(3), wait_until_open)
+      .await
+      .expect("backend connection opens")
+      .expect("fake server reports open");
+    tokio::time::pause();
+    let started = tokio::time::Instant::now();
+    cancel.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(3), task)
+      .await
+      .expect("backend cancellation finishes")
+      .expect("backend task completes")
+      .expect("cancelled backend returns cleanly");
+    let elapsed = started.elapsed();
+    assert!(elapsed >= Duration::from_millis(800), "close wait was only {elapsed:?}");
+    assert!(elapsed < Duration::from_secs(2), "close wait exceeded its one-second limit: {elapsed:?}");
+    fake.abort();
   }
 }

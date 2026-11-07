@@ -755,17 +755,19 @@ mod tests {
   }
 
   #[test]
-  fn scan_form_cases_match_the_replay_table() {
-    let denied = [ScanForm::PerFileProcess, ScanForm::RootedSearch];
-    let commands: [&str; 2] = [
-      // The replay's first real command: a metadata loop after a `cd` into the store.
-      r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json; print(json.load(open('$f')))"; done"#,
-      "find / -path /proc -prune -o -type d -name dataviz -print 2>/dev/null | head -3",
-    ];
-    for (command, expected) in commands.iter().zip(denied) {
-      let forms = scan_forms(command, &home()).unwrap();
-      assert_eq!(forms.first(), Some(&expected), "{command}");
-    }
+  fn per_file_process_replay_case_matches_its_scan_form() {
+    // The replay's first real command: a metadata loop after a `cd` into the store.
+    let command =
+      r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json; print(json.load(open('$f')))"; done"#;
+    let forms = scan_forms(command, &home()).unwrap();
+    assert_eq!(forms.first(), Some(&ScanForm::PerFileProcess), "{command}");
+  }
+
+  #[test]
+  fn rooted_search_replay_case_matches_its_scan_form() {
+    let command = "find / -path /proc -prune -o -type d -name dataviz -print 2>/dev/null | head -3";
+    let forms = scan_forms(command, &home()).unwrap();
+    assert_eq!(forms.first(), Some(&ScanForm::RootedSearch), "{command}");
   }
 
   #[test]

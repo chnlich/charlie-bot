@@ -2199,16 +2199,19 @@ mod tests {
 
     #[test]
     fn first_page_after_recovery_eviction_reuses_state_and_parses_only_the_tail() {
-      const EVENT_COUNT: usize = 8_000;
+      const EVENT_COUNT: usize = 3_000;
+      const TEXT_PADDING: usize = 180;
 
       let home = tempfile::tempdir().unwrap();
       let store = test_store(home.path());
       let session_id = "synthetic-session";
       let path = store.chat_events_path(session_id);
       std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-      let mut body = String::new();
+      let padding = "x".repeat(TEXT_PADDING);
+      let mut body = String::with_capacity(EVENT_COUNT * (TEXT_PADDING + 32));
+      use std::fmt::Write as _;
       for index in 0..EVENT_COUNT {
-        body.push_str(&format!("{{\"id\":\"event-{index}\",\"text\":\"{}\"}}\n", "x".repeat(40)));
+        writeln!(body, "{{\"id\":\"event-{index}\",\"text\":\"{padding}\"}}").unwrap();
       }
       std::fs::write(&path, body).unwrap();
       assert!(std::fs::metadata(&path).unwrap().len() > TAIL_WINDOW_SIZE as u64);

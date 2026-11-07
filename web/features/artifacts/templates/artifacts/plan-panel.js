@@ -26,7 +26,7 @@ const planPanel = (() => {
   let _loadPromise = null;
   let _loadPromiseSessionId = null;
   // The session whose panel markup render() last painted. The chat's artifact cards load the
-  // registry at page load, before the Plans tab is ever shown, so the first show can find a
+  // registry at page load, before the Plans tab is ever shown. The first show can then find a
   // committed load and a panel that still carries the template's default markup.
   let _renderedSessionId = null;
 
@@ -335,7 +335,7 @@ const planPanel = (() => {
 
   // The fork chips read the viewer's document, not a second fetch of the plan page: the iframe
   // carries the page already, so an opened plan costs its one request. The viewer's load event
-  // fills the cache and paints the bar; the renders between reloads paint from the cache, so the
+  // fills the cache and paints the bar. The renders between reloads paint from the cache, so the
   // chips always agree with the page the viewer shows.
   var _forksByViewerKey = {};
 
@@ -801,9 +801,9 @@ registerTab({
 
 // The panel re-fetches on a plan_updated event and drops its selection when
 // the active session changes. On a socket connect, only a network loss stales
-// the registry: a page-driven reconnect (a switch) closed its own socket after
-// the switch's registry fetch started, so that fetch's data is current, and
-// marking stale here would refetch it within the same switch.
+// the registry. A page-driven reconnect (a switch) closed its own socket after
+// the switch's registry fetch started, so that fetch's data is current.
+// Marking stale here would refetch it within the same switch.
 registerWsConnectHandler((connect) => {
   if (connect.afterNetworkLoss) planPanel.invalidate();
 });

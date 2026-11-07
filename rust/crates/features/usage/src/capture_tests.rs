@@ -730,7 +730,7 @@ fn charliebot_thread_row_takes_the_recorded_model_first() {
     Some(("charlie-code-kimi-k3", None)),
     result_line("2026-09-13T20:00:00+00:00", 300, 0, 0, 5).as_bytes(),
   );
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 3);
   let rows = page_rows(&mut ledger);
   let recorded = row(&rows, "charlie-bot", "GLM-5.3-Flash");

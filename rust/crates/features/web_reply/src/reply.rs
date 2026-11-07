@@ -1105,11 +1105,14 @@ mod tests {
   );
   const ENGLISH_REPLY: &str = "I will hold the merge until the review is done.";
 
-  /// A Chinese reply whose fenced block holds twenty code names, which the language check does not count.
-  fn code_heavy_reply() -> String {
-    let names = vec!["ChatPanelStatusToggle"; 20].join(" ");
-    format!("改好了，入口在下面：\n\n```\n{names}\n```\n测试全部通过。")
-  }
+  const CODE_HEAVY_REPLY: &str = concat!(
+    "改好了，入口在下面：\n\n```\n",
+    "ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ",
+    "ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle\n",
+    "ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ",
+    "ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle\n",
+    "```\n测试全部通过。"
+  );
 
   #[tokio::test]
   async fn an_english_reply_after_a_chinese_message_is_held_and_records_nothing() {
@@ -1183,16 +1186,9 @@ mod tests {
     assert_eq!(readback["posted"], json!(true));
   }
 
-  #[tokio::test]
-  async fn a_chinese_reply_with_many_code_names_posts() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    running_user_message(&home, &sid, user_message(CHINESE_MESSAGE)).await;
-
-    let (status, readback) = post_reply(&home, &sid, &code_heavy_reply(), None).await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(readback["posted"], json!(true));
+  #[test]
+  fn fenced_code_with_many_names_does_not_trigger_the_language_hold() {
+    assert!(!language_check_holds(Some(CHINESE_MESSAGE), CODE_HEAVY_REPLY).unwrap());
   }
 
   #[tokio::test]

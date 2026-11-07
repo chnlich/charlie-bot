@@ -508,11 +508,13 @@ mod tests {
   fn an_io_switch_off_with_the_cpu_on_enables_only_cpu() {
     let root = fake_slices();
     fake_leaf(root.path(), AGENTS_SLICE);
-    let path = ensure_session_cgroup(&cgroup_config_with(root.path(), 64, true, false), SESSION_ID).unwrap();
+    let config = SessionCgroupConfig { tasks_max: 50, ..cgroup_config_with(root.path(), 64, true, false) };
+    let path = ensure_session_cgroup(&config, SESSION_ID).unwrap();
     assert_eq!(
       fs::read_to_string(leaf_slice(root.path(), AGENTS_SLICE).join("cgroup.subtree_control")).unwrap(),
       "+memory +pids +cpu\n"
     );
+    assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "50\n");
     assert_eq!(fs::read_to_string(path.join("cpu.weight")).unwrap(), format!("{}\n", SESSION_WEIGHT));
     assert_eq!(fs::read_to_string(path.join("io.weight")).unwrap(), "");
   }
@@ -576,21 +578,12 @@ mod tests {
   }
 
   #[test]
-  fn ensure_session_cgroup_rewrites_task_cap_and_zero_lifts_it() {
+  fn ensure_session_cgroup_zero_lifts_a_preexisting_task_cap() {
     let root = fake_slices();
-    fake_leaf(root.path(), AGENTS_SLICE);
-    let path =
-      ensure_session_cgroup(&SessionCgroupConfig { tasks_max: 50, ..cgroup_config(root.path(), 64) }, SESSION_ID)
-        .unwrap();
-    assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "50\n");
-    assert_eq!(
-      ensure_session_cgroup(
-        &SessionCgroupConfig { tasks_max: 0, enable_io_weight: false, ..cgroup_config(root.path(), 64) },
-        SESSION_ID
-      )
-      .unwrap(),
-      path
-    );
+    let path = fake_leaf(root.path(), AGENTS_SLICE);
+    fs::write(path.join("pids.max"), "50").unwrap();
+    let config = SessionCgroupConfig { tasks_max: 0, enable_io_weight: false, ..cgroup_config(root.path(), 64) };
+    assert_eq!(ensure_session_cgroup(&config, SESSION_ID).unwrap(), path);
     assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "max\n");
   }
 

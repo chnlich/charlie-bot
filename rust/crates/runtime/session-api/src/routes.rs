@@ -165,7 +165,7 @@ async fn list_active(State(features): State<Arc<FeatureContext>>, request: Reque
       );
     }
     let response = blocking_store(move || {
-      let page = listing::active_page_rows(&features.store, &features.registry)?;
+      let page = listing::active_page_rows_for(&features.store, &features.registry, &ids)?;
       let text = listing::row_refresh_text(&features.store, &page, &ids)?;
       Ok(responses::fast_json_rendered(StatusCode::OK, text.into_bytes()))
     })

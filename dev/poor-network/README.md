@@ -82,7 +82,7 @@ and both are one row's own state at `STATUS_CHURN`'s rates, per 75 s window:
 
 - a held turn starts and is cancelled (14 flips), moving `thinking_since`, `has_running_tasks` and `work_state`. The
   server broadcasts each change, so the page polls at once and the change also costs an extra poll;
-- a delayed trigger appears on the row and is cancelled (44 flips), moving `has_pending_trigger`,
+- a delayed trigger appears on the row and is cancelled (51 flips), moving `has_pending_trigger`,
   `pending_trigger_count` and `next_trigger_at`. Nothing broadcasts it, so the page meets it on its next poll — the poll
   whose body a delta now keeps small.
 
@@ -90,8 +90,8 @@ The background scenarios start both with the task-tree driver and stop them with
 the bench's twelfth session, the starred view stars that session, and the Threads view churns one of its thread roots.
 The pair is tuned so that the background tab, which polls about 27 times a minute while the held turn keeps its cadence
 at 3 s, answers a changed body at the live device's share; consecutive trigger flips cancel one another between two
-polls, so about half the flips are caught — 33 a window measured a 0.56 share, and 44 met the live one. The report
-prints the measured share beside the readback's.
+polls, so about half the flips are caught — 33 a window measured a 0.56 share, 44 a 0.63, and 51 the live one. The
+report prints the measured share beside the readback's.
 
 ## Other sidebar views
 

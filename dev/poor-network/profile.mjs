@@ -48,11 +48,12 @@ export const TASK_TREE_LOAD = Object.freeze({
 // Both are one row's own state, and the rates are per 75 s window. The background tab polls about 27 times a minute,
 // against the live readback's 20, so reproducing its 72% share takes about 19 changed answers a minute. Consecutive
 // trigger flips cancel one another between two polls, so a flip is caught by a poll about half the time: 33 flips a
-// window measured a 0.56 share at 27 polls a minute, and 44, a silent step every 1.7 s, met the live share in the
-// calibration. `report.mjs` prints the measured share beside `LIVE_READBACK.status200Share`.
+// window measured a 0.56 share at 27 polls a minute, 44 a 0.63, and 51, a silent step every 1.5 s, carried the
+// calibration and the acceptance's before side past the live share. `report.mjs` prints the measured share beside
+// `LIVE_READBACK.status200Share`.
 export const STATUS_CHURN = Object.freeze({
   turnFlipsPerWindow: 14,
-  triggerFlipsPerWindow: 44,
+  triggerFlipsPerWindow: 51,
   // Long past any window the bench measures, so a held trigger never fires into the load.
   triggerDelaySeconds: 600,
   windowMs: 75000,

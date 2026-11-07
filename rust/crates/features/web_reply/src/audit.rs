@@ -376,7 +376,7 @@ mod tests {
 
   #[tokio::test]
   async fn a_nudge_turn_without_a_reply_posts_one_notice_and_marks_the_session_unread() {
-    let home = Home::new();
+    let home = Home::status_only();
     let sid = home.manager("session", None).await;
     let user = home.append(&sid, user_event("the question")).await;
     audit_reply(&home.features, &sid, &master_done(&[id_of(&user)], 0)).await.expect("the audit runs");

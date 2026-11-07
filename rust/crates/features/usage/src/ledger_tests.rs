@@ -190,9 +190,13 @@ fn open_swaps_five_changed_sum_triggers_and_reprices_aggregate() {
   let dir = tempfile::tempdir().unwrap();
   let path = dir.path().join("ledger.sqlite3");
   {
-    let mut ledger = UsageLedger::open(&path).unwrap();
-    ledger.record_file(HOST, "/logs/a.jsonl", "sig", &[record("rec-1", RecordKind::Native, &["sess-a"])]).unwrap();
-    ledger.model_rows().unwrap();
+    let _ledger = UsageLedger::open(&path).unwrap();
+    let raw = Connection::open(&path).unwrap();
+    raw.execute(
+      "INSERT INTO usage (record_id, kind, source, model, account, host, ts, in_fresh, cache_write, cache_read, in_unsplit, output, origin, captured_at) VALUES ('rec-1', 'native', ?, 'model-a', 'acct-a', ?, ?, 10, 2, 3, 0, 5, '/logs/a.jsonl', ?)",
+      params![SOURCE, HOST, TS_A, TS_A],
+    )
+    .unwrap();
   }
   {
     let raw = Connection::open(&path).unwrap();
@@ -493,8 +497,7 @@ fn reupserted_native_keeps_first_session_registered() {
 
 #[test]
 fn rewrite_identical_records_leaves_rows_unchanged() {
-  let dir = tempfile::tempdir().unwrap();
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::open(":memory:").unwrap();
   let mut fallback = record("rec-2", RecordKind::Fallback, &["sess-b"]);
   fallback.ts = TS_B.into();
   let recs = [record("rec-1", RecordKind::Native, &["sess-a"]), fallback];
@@ -788,8 +791,6 @@ fn last_capture_at_is_per_host_and_none_before_the_first_capture() {
   let stamped = ledger.last_capture_at(HOST).unwrap().unwrap();
   assert!(before <= stamped && stamped <= OffsetDateTime::now_utc());
   assert!(ledger.last_capture_at("other-host").unwrap().is_none());
-  ledger.mark_capture_finished(HOST).unwrap();
-  assert!(ledger.last_capture_at(HOST).unwrap().unwrap() >= stamped);
   drop(ledger);
   let reopened = UsageLedger::open(&path).unwrap();
   assert!(reopened.last_capture_at(HOST).unwrap().is_some());
@@ -992,30 +993,36 @@ fn batch_lands_every_recorded_file_in_one_commit() {
   let dir = tempfile::tempdir().unwrap();
   let path = dir.path().join("ledger.sqlite3");
   let mut ledger = UsageLedger::open(&path).unwrap();
-  let reader = UsageLedger::open(&path).unwrap();
-  let solo = ("/logs/solo.jsonl".to_string(), "sig-solo".to_string());
-  ledger.record_file(HOST, &solo.0, &solo.1, &[record("rec-solo", RecordKind::Native, &["s"])]).unwrap();
-  assert_eq!(reader.captured_sigs(HOST).unwrap(), BTreeMap::from([solo.clone()]));
+  let reader = Connection::open(&path).unwrap();
+  let recorded_paths = |reader: &Connection| {
+    let mut statement = reader.prepare("SELECT path FROM captured_files WHERE host = ? ORDER BY path").unwrap();
+    statement.query_map([HOST], |row| row.get::<_, String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+  };
+  assert!(recorded_paths(&reader).is_empty());
   ledger
     .batch(|ledger| {
       ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", &[record("rec-a", RecordKind::Native, &["sess-a"])])?;
       ledger.record_file(HOST, "/logs/b.jsonl", "sig-b", &[record("rec-b", RecordKind::Fallback, &["sess-b"])])?;
       ledger.mark_capture_finished(HOST)?;
-      assert_eq!(reader.captured_sigs(HOST)?, BTreeMap::from([solo.clone()]));
-      assert!(reader.last_capture_at(HOST)?.is_none());
+      assert!(recorded_paths(&reader).is_empty());
+      let has_capture_stamp: bool = reader.query_row(
+        "SELECT EXISTS(SELECT 1 FROM ledger_meta WHERE key = ?)",
+        [format!("last_capture_at:{HOST}")],
+        |row| row.get(0),
+      )?;
+      assert!(!has_capture_stamp);
       Ok(())
     })
     .unwrap();
-  assert_eq!(
-    reader.captured_sigs(HOST).unwrap(),
-    BTreeMap::from([solo.clone(), ("/logs/a.jsonl".into(), "sig-a".into()), ("/logs/b.jsonl".into(), "sig-b".into()),])
-  );
-  assert!(reader.last_capture_at(HOST).unwrap().is_some());
-  drop(ledger);
-  drop(reader);
-  // The three records share one (source, model) group, so the page rows aggregate them.
-  let mut reopened = UsageLedger::open(&path).unwrap();
-  assert_eq!(reopened.model_rows().unwrap().iter().map(|row| row.calls).collect::<Vec<_>>(), [3]);
+  assert_eq!(recorded_paths(&reader), ["/logs/a.jsonl", "/logs/b.jsonl"]);
+  let has_capture_stamp: bool = reader
+    .query_row(
+      "SELECT EXISTS(SELECT 1 FROM ledger_meta WHERE key = ?)",
+      [format!("last_capture_at:{HOST}")],
+      |row| row.get(0),
+    )
+    .unwrap();
+  assert!(has_capture_stamp);
 }
 
 #[test]

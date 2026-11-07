@@ -22,6 +22,17 @@ let reconnectAttempts = 0;
 // Set when the socket closed for a reason the page did not start. The next open takes it, because the frames sent
 // during the outage are not replayed.
 let networkLossPending = false;
+// The quick retry: a visible page retries a closed socket at a short fixed delay instead of waiting out
+// a backoff it cannot observe the link through. A reset blackout surfaces a socket's close only when the
+// link returns, and an idle page has no poll to prove the link returned, so this retry starts the
+// recovery; from there the browser's connection setup decides when the handshake leaves. A hidden page
+// keeps the exponential backoff — becoming visible reconnects it at once.
+const RECONNECT_QUICK_RETRY_MS = 250;
+// A server that is down refuses each attempt at once, so the quick retry is capped: after these attempts
+// the exponential backoff owns the reconnect until a socket opens again.
+const RECONNECT_QUICK_RETRY_LIMIT = 5;
+let quickRetryTimer = null;
+let quickRetriesLeft = RECONNECT_QUICK_RETRY_LIMIT;
 // Request ids identify the local optimistic sends whose server echoes are due.
 const pendingUserRequestIds = new Set();
 let wsGeneration = 0;
@@ -87,6 +98,7 @@ function disconnectWS() {
 // timer cannot fire connectWS into the session that was replaced.
 function cancelReconnect() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  if (quickRetryTimer) { clearTimeout(quickRetryTimer); quickRetryTimer = null; }
 }
 
 // A successful request of any kind proves the link returned. A socket waiting
@@ -100,6 +112,18 @@ function noteRequestSuccess() {
   cancelReconnect();
   reconnectDelay = 1000;
   connectWS();
+}
+
+// A closed socket follows this retry, not the backoff. The exponential timer stays scheduled as the
+// hidden page's path and as the backstop should the quick retry never run; whichever fires first
+// cancels the other through connectWS.
+function scheduleQuickRetry() {
+  if (quickRetryTimer || quickRetriesLeft <= 0 || document.visibilityState === 'hidden') return;
+  quickRetriesLeft--;
+  quickRetryTimer = setTimeout(() => {
+    quickRetryTimer = null;
+    connectWS();
+  }, RECONNECT_QUICK_RETRY_MS);
 }
 
 // Every fetch the page makes reports its success here, whatever endpoint issued
@@ -140,6 +164,7 @@ function connectWS() {
     console.log('WS connected');
     wsOpen = true;
     reconnectDelay = 1000;
+    quickRetriesLeft = RECONNECT_QUICK_RETRY_LIMIT;
     document.dispatchEvent(new CustomEvent('charliebot:client-socket-open', {detail: {attempts: reconnectAttempts}}));
     reconnectAttempts = 0;
     wsConnectHandlers.forEach((handler) => handler());
@@ -179,6 +204,7 @@ function connectWS() {
     networkLossPending = true;
     reconnectTimer = setTimeout(connectWS, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+    scheduleQuickRetry();
   };
 
   socket.onerror = () => { if (!isStaleSocket(socket, targetSession, generation)) socket.close(); };

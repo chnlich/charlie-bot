@@ -22,13 +22,11 @@ function _commitMessage(msg) {
   }
   if (engine && engine.hasMessage(msg)) return;
   // A committed draft the page streamed arrives without its text, thinking or tool rows: they are what the
-  // page already holds. A replay's committed draft arrives whole, and becomes the held draft, so a repeated
-  // append of the same draft is still recognized as text the page has.
-  if (msg.content_streamed) {
-    msg = withStreamedDraft(msg);
-  } else if (msg.role === 'assistant') {
-    seedStreamDraft(msg);
-  }
+  // page already holds. An assistant or plan message closes the draft, and the server starts the next draft's
+  // positions at zero, so the page drops the text it held: a next draft that opens like the closed one would
+  // otherwise match that text and lose its own.
+  if (msg.content_streamed) msg = withStreamedDraft(msg);
+  if (msg.role === 'assistant' || msg.role === 'plan') resetStreamDraft();
   // A committed bubble supersedes the streaming preview: the draft it carries is
   // the same text the preview holds. The local tab did not produce the message;
   // it arrived over the wire, so it never forces the follow. A reader pinned at

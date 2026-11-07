@@ -172,3 +172,25 @@ test('a commit without its appends still commits what the page streamed', () => 
   deliver(socket, [liveFrames()[2]]);
   assert.deepEqual(screen(client.bubbles, client.preview), ['user:q1', 'assistant:' + PIECES[0]]);
 });
+
+test('a reply that opens like the reply before it keeps its own text', () => {
+  const client = buildClient();
+  const socket = connect(client);
+  deliver(socket, [
+    {type: 'message', message: {role: 'user', content: 'q1', event_index: 0}},
+    {type: 'stream', append: 'Let me check the logs first.', length: 28, event_index: 1},
+    {type: 'message', message: {role: 'assistant', content_streamed: true, event_index: 1, id: 'a1', timestamp: 't1'}},
+    {type: 'message', message: {role: 'user', content: 'q2', event_index: 2}},
+    {type: 'stream', append: 'Let me', length: 6, event_index: 3},
+    {type: 'stream', append: ' check', length: 12, event_index: 4},
+    {type: 'stream', append: ' the schedule.', length: 26, event_index: 5},
+    {type: 'message', message: {role: 'assistant', content_streamed: true, event_index: 5, id: 'a2', timestamp: 't2'}},
+  ]);
+  socket.emitMessage({type: 'catchup_complete'});
+  assert.deepEqual(screen(client.bubbles, client.preview), [
+    'user:q1',
+    'assistant:Let me check the logs first.',
+    'user:q2',
+    'assistant:Let me check the schedule.',
+  ]);
+});

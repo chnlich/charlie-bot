@@ -167,6 +167,15 @@ fn install_crypto_provider() {
 }
 
 async fn compare_route(route: &str, cases: &[Case], fixture_start: usize, case_start: usize, case_end: usize) {
+  let expected_len = match route {
+    "/items" => 40,
+    "/bounds" => 28,
+    "/messages" => 17,
+    "/attachments" => 20,
+    "/triggers" => 32,
+    _ => panic!("unexpected request corpus route: {route}"),
+  };
+  assert_eq!(cases.len(), expected_len);
   install_crypto_provider();
   let rust_listener = TcpListener::bind("127.0.0.1:0").await.expect("a loopback port is available");
   let rust_address = rust_listener.local_addr().expect("the Rust address is readable");

@@ -209,7 +209,7 @@ mod tests {
   use tempfile::TempDir;
 
   use super::*;
-  use crate::test_store::{Message, create_store, touch, write_message};
+  use crate::test_store::{Message, clear_messages, create_store, touch, write_message};
 
   /// A created time: 2026-10-14T17:46:40 UTC.
   const CREATED_MS: i64 = 1_792_000_000_000;
@@ -306,6 +306,20 @@ mod tests {
     assert_eq!(ids(&records), ["opencode:m1"]);
     assert_eq!((records[0].in_fresh, records[0].output), (222, 22));
     assert_ne!(second, first);
+  }
+
+  #[test]
+  fn capture_after_source_row_deletion_returns_no_records() {
+    let root = TempDir::new().unwrap();
+    let db = root.path().join("opencode.db");
+    create_store(&db, &[assistant("m1", 100, &blob("model-a", "provider-a", 100, 10))]);
+    let (signature, records) = read(&db, ACCOUNT, None).unwrap();
+    assert_eq!(ids(&records), ["opencode:m1"]);
+
+    clear_messages(&db);
+    touch_path(&db, 1);
+    let (_, records) = read(&db, ACCOUNT, Some(&signature)).unwrap();
+    assert!(records.is_empty());
   }
 
   #[test]

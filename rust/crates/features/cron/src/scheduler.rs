@@ -2388,6 +2388,27 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn a_probe_that_errors_records_no_skip_and_starts_no_worker() {
+    let (_home, features) = gated_context();
+    install_execution(&features).await;
+    let home = features.config.get().unwrap().charliebot_home.clone();
+    let node = manager(&features, "gate-error-node").await.unwrap();
+    write_prompted_task(
+      &home,
+      "probe-error",
+      &json!({
+        "cron": "* * * * *", "mode": "worker", "enabled": true,
+        "timezone": "UTC", "session_id": node.id, "backend": GATED_BACKEND,
+      }),
+    );
+    // No verdict is set, so the stub's probe errors, as the real probe does for an alias the ssh config lacks.
+    CronScheduler::new(Arc::clone(&features)).tick_at(utc_at(0, 30)).await.unwrap();
+    assert_eq!(host_probe_count(&home, GATED_ALIAS), 1);
+    assert!(skipped_events(&features, &node.id).is_empty(), "an errored probe records no skip");
+    assert_eq!(round_count(&features, &node.id), 0, "an errored probe starts no worker");
+  }
+
+  #[tokio::test]
   #[ignore = "integration"]
   async fn a_task_whose_backend_names_no_host_and_a_handler_task_probe_no_host() {
     let (_home, features) = gated_context();

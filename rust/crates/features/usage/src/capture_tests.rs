@@ -749,6 +749,47 @@ fn charliebot_thread_row_takes_the_recorded_model_first() {
 }
 
 #[test]
+fn opencode_deleted_source_row_keeps_ledger_record() {
+  let dir = tempfile::tempdir().unwrap();
+  let path = dir.path().join("opencode.db");
+  let source = Connection::open(&path).unwrap();
+  source.pragma_update(None, "journal_mode", "OFF").unwrap();
+  source.pragma_update(None, "synchronous", "OFF").unwrap();
+  source
+    .execute_batch("CREATE TABLE session_message (id TEXT, session_id TEXT, type TEXT, time_updated INTEGER, data TEXT)")
+    .unwrap();
+  source
+    .execute(
+      "INSERT INTO session_message VALUES (?, ?, ?, ?, ?)",
+      rusqlite::params![
+        "m1",
+        "sess-a",
+        "assistant",
+        100,
+        json!({
+          "time": {"created": 1792000000000_i64},
+          "model": {"id": "model-a", "providerID": "provider-a"},
+          "tokens": {"input": 100, "output": 10},
+        })
+        .to_string(),
+      ],
+    )
+    .unwrap();
+  let (signature, records) = charliebot_opencode::usage_logs::read(&path, "fixture", None).unwrap();
+  assert_eq!(records.len(), 1);
+  let mut ledger = UsageLedger::in_memory().unwrap();
+  ledger.record_file(HOST, path.to_str().unwrap(), &signature, &records).unwrap();
+  let before = page_rows(&mut ledger);
+  assert!(!before.is_empty());
+
+  source.execute("DELETE FROM session_message", []).unwrap();
+  let (signature, records) = charliebot_opencode::usage_logs::read(&path, "fixture", Some(&signature)).unwrap();
+  assert!(records.is_empty());
+  ledger.record_file(HOST, path.to_str().unwrap(), &signature, &records).unwrap();
+  assert_eq!(page_rows(&mut ledger), before);
+}
+
+#[test]
 fn captured_rows_survive_deleting_the_source_files() {
   // The ledger contains no delete, so its rows outlive the logs they were parsed from.
   let dir = tempfile::tempdir().unwrap();

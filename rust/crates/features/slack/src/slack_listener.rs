@@ -505,6 +505,7 @@ mod tests {
   use std::time::Instant;
 
   use charliebot_chat_threads::thread_entry::{ThreadAdapter, ThreadDetail};
+  use charliebot_store::metadata::SessionStatus;
   use http::StatusCode;
   use serde_json::json;
 
@@ -601,6 +602,35 @@ mod tests {
       0,
       "the summon does not read thread content",
     );
+  }
+
+  #[tokio::test]
+  async fn duplicate_mention_reuses_one_summon_and_ack() {
+    let home = Home::new();
+    let api = FakeApi::start(&[]).await;
+    let event = mention();
+    let first = handle_app_mention(&event, &home.features, Arc::clone(&api.client)).await.unwrap().unwrap();
+    wait_until(|| home.launches().len() == 1 && api.calls().iter().any(|call| call.1 == "/api/reactions.add")).await;
+    let second = handle_app_mention(&event, &home.features, Arc::clone(&api.client)).await.unwrap().unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(home.features.store.list_sessions_readonly(SessionStatus::Active).unwrap().len(), 1,);
+    assert_eq!(
+      home
+        .features
+        .store
+        .load_chat_events_sync(&first)
+        .unwrap()
+        .iter()
+        .filter(
+          |event| event.get("type").and_then(charliebot_store::compact::CompactValue::as_str) == Some("agent_message")
+        )
+        .count(),
+      1,
+    );
+    assert_eq!(home.launches().len(), 1);
+    assert_eq!(api.calls().iter().filter(|call| call.1 == "/api/reactions.add").count(), 1);
+    assert_eq!(api.calls().iter().filter(|call| call.1 == "/api/conversations.info").count(), 1);
   }
 
   #[tokio::test]

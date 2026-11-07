@@ -408,6 +408,62 @@ fn test_stop_close_codes_are_recognized() {
 }
 
 #[tokio::test]
+async fn test_ready_runs_the_backfill_per_connection() {
+  let home = Home::new(true).await;
+  let mut script = GatewayScript::new(vec![ready(2)]);
+  script.close_after_identify = Some(4004);
+  let gateway = Gateway::start(vec![script]).await;
+  configure_gateway(&home, &gateway, 1 << 18);
+  let sid = summon_session_id(GUILD, THREAD);
+  home.thread_session(&sid, origin(THREAD), Some("500000000000000000")).await;
+  home
+    .fake()
+    .channels
+    .insert(THREAD.to_string(), vec![thread_message("500000000000000001", ALLOWED_USER, false, "synthetic follow")]);
+  tokio::time::timeout(
+    Duration::from_secs(2),
+    run_listener_loop(Arc::clone(&home.features), discord_client(&home), TEST_TOKEN.to_string(), options(), settings()),
+  )
+  .await
+  .unwrap()
+  .unwrap();
+  let manager = home.features.startup.require::<Arc<TriggerManager>>().unwrap();
+  assert!(manager.list_triggers(&sid).await.unwrap().iter().any(|trigger| {
+    trigger.status == TriggerStatus::Pending && trigger.message == "discord-thread-follow floor=500000000000000001"
+  }));
+}
+
+#[tokio::test]
+async fn test_message_create_reaches_the_handler_and_survives_its_errors() {
+  let home = Home::new_without_thread_runtime(true).await;
+  let failed = json!({
+    "id": "900000000000000060", "guild_id": GUILD, "channel_id": "900000000000000061",
+    "author": {"id": ALLOWED_USER}, "type": 0, "content": "<@600000000000000001> ignored",
+    "mentions": [{"id": BOT_USER}],
+  });
+  let dm = json!({
+    "id": "900000000000000062", "channel_id": DM_CHANNEL, "author": {"id": ALLOWED_USER}, "type": 0,
+    "content": "<@600000000000000001> hello", "mentions": [{"id": BOT_USER}],
+  });
+  let mut script = GatewayScript::new(vec![
+    ready(2),
+    json!({"op": 0, "s": 3, "t": "MESSAGE_CREATE", "d": failed}),
+    json!({"op": 0, "s": 4, "t": "MESSAGE_CREATE", "d": dm}),
+  ]);
+  script.close_after_identify = Some(4004);
+  let gateway = Gateway::start(vec![script]).await;
+  configure_gateway(&home, &gateway, 1 << 18);
+  tokio::time::timeout(
+    Duration::from_secs(2),
+    run_listener_loop(Arc::clone(&home.features), discord_client(&home), TEST_TOKEN.to_string(), options(), settings()),
+  )
+  .await
+  .unwrap()
+  .unwrap();
+  assert!(home.fake().posts.iter().any(|(channel, content)| channel == DM_CHANNEL && content == DM_NOTICE));
+}
+
+#[tokio::test]
 async fn test_preflight_intent_off_returns_before_connecting() {
   let home = Home::new(true).await;
   let gateway = Gateway::start(vec![GatewayScript::new(Vec::new())]).await;

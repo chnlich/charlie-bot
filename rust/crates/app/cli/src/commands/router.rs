@@ -637,7 +637,7 @@ mod tests {
   use std::io::Write;
   use std::net::{TcpListener, TcpStream};
   use std::sync::atomic::{AtomicBool, Ordering};
-  use std::sync::{Arc, Mutex};
+  use std::sync::{Arc, Condvar, Mutex};
 
   use super::*;
 
@@ -682,7 +682,7 @@ mod tests {
   struct FakeJev {
     url: String,
     port: u16,
-    requests: Arc<Mutex<Vec<Value>>>,
+    requests: Arc<(Mutex<Vec<Value>>, Condvar)>,
     authorizations: Arc<Mutex<Vec<String>>>,
     replies: Arc<Mutex<VecDeque<(u16, Value)>>>,
     delays: Arc<Mutex<VecDeque<Duration>>>,
@@ -692,7 +692,7 @@ mod tests {
 
   #[derive(Clone)]
   struct Shared {
-    requests: Arc<Mutex<Vec<Value>>>,
+    requests: Arc<(Mutex<Vec<Value>>, Condvar)>,
     authorizations: Arc<Mutex<Vec<String>>>,
     replies: Arc<Mutex<VecDeque<(u16, Value)>>>,
     delays: Arc<Mutex<VecDeque<Duration>>>,
@@ -703,7 +703,7 @@ mod tests {
       let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
       let port = listener.local_addr().unwrap().port();
       let shared = Shared {
-        requests: Arc::new(Mutex::new(Vec::new())),
+        requests: Arc::new((Mutex::new(Vec::new()), Condvar::new())),
         authorizations: Arc::new(Mutex::new(Vec::new())),
         replies: Arc::new(Mutex::new(replies.into())),
         delays: Arc::new(Mutex::new(VecDeque::new())),
@@ -736,7 +736,14 @@ mod tests {
     }
 
     fn requests(&self) -> Vec<Value> {
-      self.requests.lock().unwrap().clone()
+      self.requests.0.lock().unwrap().clone()
+    }
+
+    fn wait_for_requests(&self, count: usize) -> Vec<Value> {
+      let requests = self.requests.0.lock().unwrap();
+      let (requests, _) =
+        self.requests.1.wait_timeout_while(requests, Duration::from_secs(1), |r| r.len() < count).unwrap();
+      requests.clone()
     }
 
     fn authorizations(&self) -> Vec<String> {
@@ -796,7 +803,8 @@ mod tests {
       body.extend_from_slice(&chunk[..read]);
     }
     let request: Value = serde_json::from_slice(&body).expect("the router sends one JSON object");
-    shared.requests.lock().unwrap().push(request);
+    shared.requests.0.lock().unwrap().push(request);
+    shared.requests.1.notify_all();
     let authorization = head
       .lines()
       .find_map(|line| {
@@ -895,7 +903,7 @@ mod tests {
   /// The bound a timeout test pays per timed-out attempt: two timed-out attempts still fit the unit-test
   /// budget, while the delayed reply stays far past it.
   fn timeout_limits() -> Limits {
-    Limits { request_timeout: Duration::from_millis(3), rate_limit_wait: test_limits().rate_limit_wait }
+    Limits { request_timeout: Duration::from_millis(8), rate_limit_wait: test_limits().rate_limit_wait }
   }
 
   fn run(home: &TestHome, payload: &str, jev: &FakeJev, replies: Vec<(u16, Value)>) -> Result<Value, String> {
@@ -1329,7 +1337,7 @@ mod tests {
 
     assert!(error.contains("timed out"), "{error}");
     assert!(error.contains("retry"), "{error}");
-    assert_eq!(jev.requests().len(), 2, "the router makes no third attempt");
+    assert_eq!(jev.wait_for_requests(2).len(), 2, "the router makes no third attempt");
   }
 
   #[test]

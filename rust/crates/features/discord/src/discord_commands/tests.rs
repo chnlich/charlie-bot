@@ -84,7 +84,7 @@ async fn send(router: Router, path: &str, body: Value) -> (StatusCode, Value) {
 /// The window starts at the oldest unread; the ack covers exactly its unread ids.
 #[tokio::test]
 async fn read_marks_only_returned_unread_and_reports_more_unread() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   thread_messages(
     &home,
     &[
@@ -164,7 +164,7 @@ async fn read_succeeds_when_a_message_lands_after_the_full_read() {
 /// question; the readback starts at the pending summon's mention instead and flags it `summon: true`.
 #[tokio::test]
 async fn read_flags_the_pending_summon_and_starts_the_window_at_it() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   thread_messages(&home, &[Msg::new(1, "the question"), Msg::new(2, "a later follow up")]);
   // The summon step consumed its own mention.
   let session_id = make_session(&home, Some(snowflake(1))).await;
@@ -345,7 +345,7 @@ async fn read_skips_a_404_starter() {
 /// `person` is the account's configured name; an author outside the map reads as None everywhere.
 #[tokio::test]
 async fn read_names_the_author_person_for_listed_and_unlisted_authors() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   thread_messages(&home, &[Msg::new(1, "mine"), Msg::new(2, "unlisted").by(UNLISTED)]);
   home.fake().channels.insert(OTHER_CHANNEL.to_string(), vec![Msg::new(3, "linked").by(UNLISTED).value()]);
   let session_id = make_session(&home, None).await;
@@ -386,7 +386,7 @@ async fn read_with_url_reads_the_linked_channel_and_marks_nothing() {
 /// A 403 from Discord answers 404 "cannot see"; a non-discord.com link answers 422.
 #[tokio::test]
 async fn read_with_url_refuses_hidden_channel_and_bad_link() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   home.fake().hidden.push(OTHER_CHANNEL.to_string());
   let session_id = make_session(&home, None).await;
   let router = home.router();

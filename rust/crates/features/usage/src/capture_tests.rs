@@ -224,6 +224,22 @@ fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
   Ok(())
 }
 
+fn register_claude_source(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.usage_source(UsageSource {
+    name: "Claude Code",
+    id_prefixes: &["claude-"],
+    run_logs_only: false,
+    implementation: Some(Arc::new(CliStub {
+      name: "Claude Code",
+      dir: "claude",
+      account: "claude-main",
+      codex: false,
+    })),
+  })?;
+  registry.attribute_backend_type("cc-claude", "Claude Code")?;
+  Ok(())
+}
+
 const BASE_OPTIONS: &str = r#"backends:
   options:
     - id: charlie-code-native
@@ -257,6 +273,20 @@ fn fixture_with(home: &Path, options: &str) -> (CharlieBotConfig, Registry) {
   PROBED.with(|probed| probed.borrow_mut().clear());
   let mut registry = Registry::new();
   registry.register_package("usage-fixture", register_sources).unwrap();
+  (config, registry)
+}
+
+fn claude_fixture(home: &Path) -> (CharlieBotConfig, Registry) {
+  fs::create_dir_all(home).unwrap();
+  fs::write(home.join("config.yaml"), format!("backends:\n  options:\n{}", option("claude-main", "cc-claude", "vendor/claude-model"))).unwrap();
+  let schema = ConfigSchema { backend_types: vec!["cc-claude"], ..ConfigSchema::default() };
+  let config = config::load_config(home, &schema).unwrap();
+  CODEX_ROOT.with(|root| *root.borrow_mut() = Some(home.join("cli/codex")));
+  READS.with(|reads| reads.borrow_mut().clear());
+  PROBE.with(|probe| *probe.borrow_mut() = None);
+  PROBED.with(|probed| probed.borrow_mut().clear());
+  let mut registry = Registry::new();
+  registry.register_package("usage-claude-fixture", register_claude_source).unwrap();
   (config, registry)
 }
 
@@ -757,9 +787,9 @@ fn appends_are_visible() {
 fn replays_are_not_double_counted() {
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
-  let (config, registry) = fixture(&home);
+  let (config, registry) = claude_fixture(&home);
   cli_file(&home, "claude", "sess1", &[call("m1", NAME, "2024-01-01T00:00:00Z", [100, 0, 0, 10], &["sess1"])]);
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::open(":memory:").unwrap();
   capture_round(&mut ledger, &config, &registry);
   let before = row(&page_rows(&mut ledger), "Claude Code", NAME).clone();
 

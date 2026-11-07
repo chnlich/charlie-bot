@@ -1292,19 +1292,44 @@ mod tests {
 
   #[tokio::test]
   async fn the_status_read_lists_open_waiting_descendants_newest_first() {
-    let home = Home::new();
+    let home = Home::status_only();
     let root = home.manager("root", None).await;
     let old = home.child(&root, "old").await;
     let new = home.child(&root, "new").await;
     let deep = home.child(&old, "deep").await;
-    check_waiting_item(&home, &old, "decision").await;
-    set_status(&home.features, &old, &waiting_set("decision")).await.expect("the old child sets");
-    tokio::time::sleep(Duration::from_millis(2)).await;
-    check_waiting_item(&home, &new, "decision").await;
-    set_status(&home.features, &new, &waiting_set("decision")).await.expect("the new child sets");
-    tokio::time::sleep(Duration::from_millis(2)).await;
-    check_waiting_item(&home, &deep, "decision").await;
-    set_status(&home.features, &deep, &waiting_set("decision")).await.expect("the grandchild sets");
+    for (session_id, updated_at) in [
+      (&old.id, "2026-11-07T00:00:01Z"),
+      (&new.id, "2026-11-07T00:00:02Z"),
+      (&deep.id, "2026-11-07T00:00:03Z"),
+    ] {
+      let updated_at = UtcDateTime::parse(updated_at).unwrap();
+      let status = WebStatus {
+        goal: None,
+        now: None,
+        waiting: vec![WaitingItem {
+          text: "decision".to_string(),
+          context: Some("The decision is active now. Options are continue or stop; continue is recommended.".to_string()),
+          link: None,
+          since: None,
+          since_exact: None,
+          tier: Some("t0".to_string()),
+          rule: Some("irreversible".to_string()),
+        }],
+        updated_at,
+      };
+      home
+        .features
+        .store
+        .update_slot_fields_at(
+          session_id,
+          OWNER,
+          Map::from_iter([(STATUS_FIELD.to_string(), payload_of(&status))]),
+          updated_at,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    }
 
     let body = read_status(&home.features, &root).await.expect("the read answers");
 

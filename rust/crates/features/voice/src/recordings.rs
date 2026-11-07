@@ -366,6 +366,12 @@ pub(crate) fn list_recordings(cfg: &CharlieBotConfig, limit: usize) -> io::Resul
   };
   for session in sessions {
     let session = session?;
+    // The store reads its sessions as the directory entries of the sessions directory (`list_all_run_records_sync`
+    // in run_records.rs), so the files at its root, such as `.counter`, are store metadata. Like that scan, this
+    // reads `DirEntry::file_type`, which does not follow a symlink.
+    if !session.file_type()?.is_dir() {
+      continue;
+    }
     let session_id = session.file_name().into_string().map_err(|name| {
       io::Error::other(format!("sessions directory holds a non-UTF-8 name {}", name.to_string_lossy()))
     })?;
@@ -792,6 +798,38 @@ mod tests {
     let rows = list_recordings(&config, DEFAULT_LIST_LIMIT).expect("a store without sessions lists no recordings");
 
     assert!(rows.is_empty());
+  }
+
+  #[test]
+  fn the_list_skips_the_store_root_files_beside_the_sessions() {
+    let home = tempfile::tempdir().expect("make an isolated home");
+    let config = synthetic_config(home.path());
+    let sessions = config.sessions_dir();
+    fs::create_dir_all(&sessions).expect("create the sessions directory");
+    fs::write(sessions.join(".counter"), "2").expect("write the store's session counter");
+    fs::write(sessions.join("session_aliases.json"), "{}").expect("write the store's alias map");
+    let voice = voice_dir(&config, "synthetic-session");
+    fs::create_dir_all(&voice).expect("create the voice directory");
+    archive::write_wav(&voice.join("2026-11-01T100000.000Z_000000aa.wav"), &[1, 2]).expect("write a synthetic wav");
+
+    let rows = list_recordings(&config, DEFAULT_LIST_LIMIT).expect("the store's root files are not sessions");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["session_id"], "synthetic-session");
+    assert_eq!(rows[0]["stem"], "2026-11-01T100000.000Z_000000aa");
+  }
+
+  #[test]
+  fn a_voice_entry_that_is_not_a_directory_fails_the_list() {
+    let home = tempfile::tempdir().expect("make an isolated home");
+    let config = synthetic_config(home.path());
+    let session = config.sessions_dir().join("synthetic-session");
+    fs::create_dir_all(&session).expect("create the session directory");
+    fs::write(session.join("voice"), b"synthetic").expect("write a voice file");
+
+    let error = list_recordings(&config, DEFAULT_LIST_LIMIT).expect_err("a voice file is a read failure");
+
+    assert_eq!(error.kind(), io::ErrorKind::NotADirectory, "{error}");
   }
 
   #[test]

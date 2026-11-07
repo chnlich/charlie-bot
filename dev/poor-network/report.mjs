@@ -154,6 +154,43 @@ export function formatSide(side) {
   const backgroundReps = side.reps?.background ?? [];
   if (backgroundReps.length > 0) {
     lines.push(...formatBackground('background', backgroundReps));
+    // The switch's raw hold, split by whether a sidebar list refresh was in flight when the click
+    // landed. A switch inside a refresh burst waits behind the refresh's bytes, so the two groups
+    // are not comparable and the target is read from the split that applies.
+    const groups = [
+      ['overlapping a sidebar list refresh', backgroundReps.filter((rep) => (rep.switchListRefreshes ?? []).length > 0)],
+      ['between sidebar list refreshes', backgroundReps.filter((rep) => (rep.switchListRefreshes ?? []).length === 0)],
+    ];
+    for (const [label, reps] of groups) {
+      if (reps.length === 0) continue;
+      lines.push(
+        `background switch raw, ${label}: ${reps.map((rep) => formatMs(rep.switchMs)).join(', ')}`,
+      );
+    }
+  }
+  const heldReps = side.reps?.held ?? [];
+  if (heldReps.length > 0 && (heldReps[0].shownMs ?? null) !== null) {
+    // The held recovery's parts, medians from the restore: the last switch's render, the socket's own return, and the
+    // catch-up the metric reads. The clicks were made during the blackout, so the render can precede the restore.
+    const medianOf = (values) => percentile(values, 0.5);
+    lines.push(
+      `held recovery, ms from the restore (median): last switch shown ${formatMs(medianOf(heldReps.map((rep) => rep.shownMs)))}, ` +
+        `socket ${formatMs(medianOf(heldReps.map((rep) => rep.socketMs)))}, ` +
+        `caught up ${formatMs(medianOf(heldReps.map((rep) => rep.restoreToRenderedMs)))}`,
+    );
+  }
+  const resetReps = side.reps?.reset ?? [];
+  if (resetReps.length > 0 && resetReps.every((rep) => (rep.handshakeSendsMs ?? []).length > 0)) {
+    // The recovery's phases, medians from the restore: the page's socket creation, the browser's first handshake byte,
+    // the open and the catch-up. The page owns the first; the browser's connection setup owns the second, and it can
+    // hold a socket the page created early.
+    const medianOf = (values) => percentile(values, 0.5);
+    lines.push(
+      `reset recovery, ms from the restore (median): socket created ${formatMs(medianOf(resetReps.map((rep) => rep.socketMs)))}, ` +
+        `handshake sent ${formatMs(medianOf(resetReps.map((rep) => rep.handshakeSendsMs[0])))}, ` +
+        `opened ${formatMs(medianOf(resetReps.map((rep) => rep.reconnectMs)))}, ` +
+        `caught up ${formatMs(medianOf(resetReps.map((rep) => rep.restoreToCatchupMs)))}`,
+    );
   }
   for (const name of ['starred', 'threads']) {
     const reps = side.reps?.[name] ?? [];

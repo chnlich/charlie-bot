@@ -50,6 +50,11 @@ export class Tab {
   sockets = [];
   // Every WebSocket handshake answer: {at, status, requestId}.
   handshakes = [];
+  // Every WebSocket handshake the browser started sending: {at, requestId}. Creation precedes it when the request
+  // waits in the browser's connection pool.
+  handshakeSends = [];
+  // Every WebSocket close the browser saw: {at, requestId, error}.
+  socketCloses = [];
   // The URLs whose 200 bodies the tab keeps, as `request.body` text: a request's body reads after it finishes. A
   // request that finished before keepBodies has no `body`.
   #bodyPattern = null;
@@ -252,8 +257,17 @@ export class Tab {
       case 'Network.webSocketCreated':
         this.sockets.push({ at, url: message.params.url, requestId: message.params.requestId });
         return;
+      case 'Network.webSocketWillSendHandshakeRequest':
+        this.handshakeSends.push({ at, requestId: message.params.requestId });
+        return;
       case 'Network.webSocketHandshakeResponseReceived':
         this.handshakes.push({ at, status: message.params.response.status, requestId: message.params.requestId });
+        return;
+      case 'Network.webSocketClosed':
+        this.socketCloses.push({ at, requestId: message.params.requestId, error: null });
+        return;
+      case 'Network.webSocketFrameError':
+        this.socketCloses.push({ at, requestId: message.params.requestId, error: message.params.errorMessage });
         return;
       case 'Network.webSocketFrameReceived': {
         const text = message.params.response.payloadData;

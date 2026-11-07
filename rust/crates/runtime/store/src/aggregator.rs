@@ -618,13 +618,24 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
     }),
     event_types::QUOTA_FAILOVER => {
       let from_backend = string_default(event, "from", "");
+      let to_backend = string_default(event, "to", "");
       let recovers_at = event.field("recovers_at").filter(|value| is_truthy(*value));
       let recovery =
         recovers_at.map_or_else(String::new, |value| format!("; {from_backend} recovers at {}", event_str(value)));
-      json!({
-        "role": "system",
-        "content": format!("Quota exhausted on {from_backend}: switched to {}{recovery}", string_default(event, "to", "")),
-      })
+      let reason = event.field(event_types::QUOTA_FAILOVER_REASON).and_then(EventFields::as_str_field);
+      let head = match reason {
+        Some(event_types::QUOTA_REASON_NEAR_EXHAUSTION) => {
+          format!("Near quota exhaustion on {from_backend}: switched to {to_backend}")
+        }
+        Some(event_types::QUOTA_REASON_SUBSCRIPTION_RESET) => {
+          format!("Subscription quota reset: switched {from_backend} → {to_backend}")
+        }
+        Some(event_types::QUOTA_REASON_QUOTA_ERROR) | None => {
+          format!("Quota exhausted on {from_backend}: switched to {to_backend}")
+        }
+        Some(reason) => format!("Quota change on {from_backend}: switched to {to_backend} ({reason})"),
+      };
+      json!({"role": "system", "content": format!("{head}{recovery}")})
     }
     event_types::BACKEND_OVERLAY_INACTIVE | event_types::BACKEND_OVERLAY_UNDECLARED => {
       let backend = string_default(event, "backend", "");

@@ -32,6 +32,13 @@ use crate::run_support::{
 const NOTICE: &str = "[模型未输出正文，以下为其思考内容]";
 const POST_RESULT_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// The finish-extras key saying an Auto session's manager turn ended on a quota error.
+pub(crate) const FINISH_QUOTA_EXHAUSTED: &str = "quota_exhausted";
+/// The finish-extras key carrying the manager turn's error text for an Auto session.
+pub(crate) const FINISH_ERROR_MESSAGE: &str = "error_message";
+/// The finish-extras key carrying the reset a retryable quota error stated, for an Auto session.
+pub(crate) const FINISH_QUOTA_RESETS_AT: &str = "quota_resets_at";
+
 /// The log event a recovered manager turn logs when it resumes a session's recorded Claude Code run. The
 /// release-switch script tests' fake server emits the same line, so both read the name here.
 pub const MASTER_CC_RESUMING_EVENT: &str = "master_cc_resuming";
@@ -450,6 +457,8 @@ struct TurnProcess<'a> {
   relay_count: Arc<std::sync::atomic::AtomicUsize>,
   was_built: bool,
   automatic_retries: usize,
+  /// The reset a retryable backend error stated, read off the turn's last retry candidate.
+  quota_resets_at: Option<time::OffsetDateTime>,
 }
 
 impl RunProcess for TurnProcess<'_> {
@@ -606,6 +615,9 @@ impl RunProcess for TurnProcess<'_> {
                 )?;
                 match (failure_message, retry_after) {
                   (Some(message), Some(delay)) => {
+                    self.quota_resets_at = time::Duration::try_from(delay)
+                      .ok()
+                      .and_then(|delay| time::OffsetDateTime::now_utc().checked_add(delay));
                     retry_candidate = Some((stream_event.event.clone(), message, delay));
                   }
                   (failure_message, _) => {
@@ -849,6 +861,7 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
     relay_count: Arc::clone(&relay_count),
     was_built: false,
     automatic_retries: 0,
+    quota_resets_at: None,
   };
   let _on_relay = {
     let relay_count = Arc::clone(&relay_count);
@@ -898,6 +911,7 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
   if relays > 0 {
     finish_extras.insert("account_relays".to_string(), json!(relays));
   }
+  add_auto_quota_extras(&metadata, error_msg.as_deref(), quota_exhausted, process.quota_resets_at, &mut finish_extras);
   report_turn_error_and_salvage(&tracker, process.item, error_msg.as_deref(), quota_exhausted).await?;
   let was_cancelled = cancelled.lock().expect("cancel state mutex is not poisoned").is_some();
   let covered = cancelled.lock().expect("cancel state mutex is not poisoned").unwrap_or(false);
@@ -914,6 +928,29 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
     cancelled: was_cancelled,
     let_go: was_cancelled && covered,
   })
+}
+
+/// Record an Auto session's quota failure in the finish extras, from which the finish recorder writes the member's
+/// "out until" row. A turn that ends for any other reason records nothing.
+fn add_auto_quota_extras(
+  metadata: &SessionMetadata,
+  error_msg: Option<&str>,
+  quota_exhausted: Option<bool>,
+  resets_at: Option<time::OffsetDateTime>,
+  extras: &mut Map<String, Value>,
+) {
+  if metadata.backend != charliebot_core::config::AUTO_BACKEND_ID {
+    return;
+  }
+  let Some(message) = error_msg else { return };
+  if quota_exhausted != Some(true) && !charliebot_agents::backend_pool::is_quota_error(message) {
+    return;
+  }
+  extras.insert(FINISH_QUOTA_EXHAUSTED.to_string(), json!(true));
+  extras.insert(FINISH_ERROR_MESSAGE.to_string(), json!(message));
+  if let Some(reset) = resets_at {
+    extras.insert(FINISH_QUOTA_RESETS_AT.to_string(), json!(UtcDateTime::from(reset).to_str()));
+  }
 }
 
 fn resolve_resume_option(item: &WorkItem) -> Option<BackendOption> {
@@ -1138,7 +1175,8 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
       }
     }
   }
-  let finish_extras = tracker.lock().expect("run timing mutex is not poisoned").finish_extras();
+  let mut finish_extras = tracker.lock().expect("run timing mutex is not poisoned").finish_extras();
+  add_auto_quota_extras(&metadata, error_msg.as_deref(), None, None, &mut finish_extras);
   item.user_event_ids = std::mem::take(&mut *ack_ids.lock().expect("resume acknowledgement mutex is not poisoned"));
   report_turn_error_and_salvage(&tracker, item, error_msg.as_deref(), None).await?;
   if !let_go {

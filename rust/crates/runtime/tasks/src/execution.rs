@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
+use charliebot_agents::auto_backend;
 use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool;
 use charliebot_agents::backend_types;
@@ -183,10 +184,14 @@ impl TaskExecutionAdapter {
     launch_run_id: Option<&str>,
   ) -> StoreResult<Option<String>> {
     let mut scheduled = None;
+    let mut member_event: Option<ChatEvent> = None;
+    // A turn start that changes an Auto session's member appends its event under the control lock; the epoch primes
+    // the live aggregator the announce after the lock feeds.
+    let member_epoch = self.features.store.prime_aggregator(session_id).await?;
     let run_id;
     {
       let guard = self.features.store.control_lock().await;
-      let meta = self.features.store.load_task_meta(session_id).await?;
+      let mut meta = self.features.store.load_task_meta(session_id).await?;
       let state = self.features.store.node_state(session_id)?;
       if state.task_state()? != "open" {
         return Ok(None);
@@ -217,6 +222,10 @@ impl TaskExecutionAdapter {
           return Ok(None);
         }
         let cfg = self.features.config.get().map_err(|error| StoreError::new(error.to_string()))?;
+        // Turn start runs before the run is built, so the run records the member this turn runs on.
+        let change = auto_backend::start_turn(&self.features, &cfg, &mut meta)
+          .await
+          .map_err(|error| StoreError::invalid(error.to_string()))?;
         let (backend, model) = spawner_backends::resolve_session_default_backend_model(&cfg, &meta)
           .map_err(|error| StoreError::invalid(error.to_string()))?;
         let mut input_ids = pending_now
@@ -250,6 +259,9 @@ impl TaskExecutionAdapter {
           }
           Err(error) => return Err(error),
         }
+        if let Some(change) = change {
+          member_event = Some(self.features.store.append_control_fact(&guard, session_id, change.event()).await?);
+        }
       }
       let key = (session_id.to_string(), run_id.clone());
       let mut state = self.launches.lock().expect("task execution launch state is not poisoned");
@@ -259,6 +271,9 @@ impl TaskExecutionAdapter {
         state.settlements.insert(key.clone(), sender);
         scheduled = Some(key);
       }
+    }
+    if let Some(event) = member_event {
+      self.features.store.announce_appended_event(session_id, &event, member_epoch).await?;
     }
     if let Some(key) = scheduled {
       self.schedule_launch(key.0.clone(), key.1.clone(), None);
@@ -2025,6 +2040,8 @@ impl TaskExecutionAdapter {
           "from": from_backend,
           "to": member.id,
           "recovers_at": recovers_at,
+          event_types::QUOTA_FAILOVER_REASON: event_types::QUOTA_REASON_QUOTA_ERROR,
+          event_types::QUOTA_FAILOVER_SET: event_types::QUOTA_SET_POOL,
         }),
       )
       .await?;
@@ -2238,6 +2255,9 @@ impl TaskExecutionAdapter {
       let raw_log = raw_log.clone();
       Box::pin(async move {
         let finished: anyhow::Result<bool> = async {
+          // An Auto session's quota failure marks its member out before the turn's end facts land, so the next turn
+          // start already sees it. This changes no part of the turn's own error.
+          record_auto_quota_failure(&features, &meta, &extras)?;
           // The finish recorder claims only the echoed pending ids, so a queued message the live Run never took
           // stays pending for the next turn.
           crate::midturn_delivery::claim_finish_inputs(
@@ -2569,6 +2589,33 @@ impl TaskExecutionAdapter {
       }
     });
   }
+}
+
+/// An Auto session's manager turn that ended on a quota error records its member out until the reset the error stated,
+/// or the default cooldown. The record is what later member selection reads; the turn keeps its own error.
+fn record_auto_quota_failure(
+  features: &FeatureContext,
+  meta: &SessionMetadata,
+  extras: &Map<String, Value>,
+) -> anyhow::Result<()> {
+  if meta.backend != charliebot_core::config::AUTO_BACKEND_ID
+    || extras.get(master_run::FINISH_QUOTA_EXHAUSTED).and_then(Value::as_bool) != Some(true)
+  {
+    return Ok(());
+  }
+  let Some(member) = meta.extra(auto_backend::AUTO_MEMBER_FIELD).and_then(Value::as_str) else { return Ok(()) };
+  let resets_at = extras
+    .get(master_run::FINISH_QUOTA_RESETS_AT)
+    .and_then(Value::as_str)
+    .and_then(|text| UtcDateTime::parse(text).ok());
+  let message = extras.get(master_run::FINISH_ERROR_MESSAGE).and_then(Value::as_str).unwrap_or_default();
+  backend_availability::backend_availability(features)?.record(
+    member,
+    resets_at,
+    backend_availability::REASON_QUOTA_ERROR,
+    message,
+  )?;
+  Ok(())
 }
 
 impl DispatchExecutor for TaskExecutionAdapter {
@@ -3019,6 +3066,71 @@ mod tests {
       "snapshot-hash",
       &option,
     ));
+  }
+
+  #[tokio::test]
+  async fn an_auto_sessions_quota_finish_records_the_member_out_until_its_reset() {
+    use std::sync::Arc;
+
+    use charliebot_agents::backend_availability::{self, BackendAvailability};
+    use charliebot_core::credentials::load_credentials;
+    use charliebot_core::hot_reload::HotReload;
+    use charliebot_registry::store_hooks::store_hooks;
+    use charliebot_registry::{FeatureContext, Registry, StartupState};
+    use charliebot_store::Store;
+    use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
+    use serde_json::{Map, json};
+
+    use super::record_auto_quota_failure;
+
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join("config.yaml"), "backends: {}\n").unwrap();
+    std::fs::write(home.path().join("credentials.yaml"), "charliebot: {}\n").unwrap();
+    let registry = Arc::new(Registry::new());
+    let cfg = registry.load_config(home.path()).unwrap();
+    let store =
+      Arc::new(Store::new(cfg.clone(), registry.metadata_slots(), store_hooks(Arc::clone(&registry))).unwrap());
+    let config = Arc::new(HotReload::new(
+      cfg.config_file(),
+      "execution_test_config_reload_failed",
+      Box::new({
+        let cfg = cfg.clone();
+        move || Ok(cfg.clone())
+      }),
+    ));
+    let credential_home = home.path().to_path_buf();
+    let credentials = Arc::new(HotReload::new(
+      home.path().join("credentials.yaml"),
+      "execution_test_credentials_reload_failed",
+      Box::new(move || load_credentials(&credential_home)),
+    ));
+    let startup = Arc::new(StartupState::default());
+    startup.insert(BackendAvailability::load(home.path()).unwrap()).unwrap();
+    let features = FeatureContext { config, credentials, store, registry, startup };
+
+    let mut meta = SessionMetadata::new("auto-session", "Auto session", TaskProfile::Manager);
+    meta.backend = charliebot_core::config::AUTO_BACKEND_ID.to_string();
+    meta.set_extra("auto_member", json!("member-a"));
+    let extras = Map::from_iter([
+      (crate::master_run::FINISH_QUOTA_EXHAUSTED.to_string(), json!(true)),
+      (crate::master_run::FINISH_QUOTA_RESETS_AT.to_string(), json!("2999-01-01T00:00:00Z")),
+      (crate::master_run::FINISH_ERROR_MESSAGE.to_string(), json!("spent")),
+    ]);
+
+    record_auto_quota_failure(&features, &meta, &extras).unwrap();
+
+    let availability = backend_availability::backend_availability(&features).unwrap();
+    assert_eq!(
+      availability.out_until("member-a"),
+      Some(UtcDateTime::parse("2999-01-01T00:00:00Z").unwrap().into_inner())
+    );
+
+    // A turn that ends without a quota error leaves the member selectable.
+    let mut quiet = SessionMetadata::new("auto-session-quiet", "Auto session", TaskProfile::Manager);
+    quiet.backend = charliebot_core::config::AUTO_BACKEND_ID.to_string();
+    quiet.set_extra("auto_member", json!("member-b"));
+    record_auto_quota_failure(&features, &quiet, &Map::new()).unwrap();
+    assert_eq!(availability.out_until("member-b"), None);
   }
 
   #[tokio::test]

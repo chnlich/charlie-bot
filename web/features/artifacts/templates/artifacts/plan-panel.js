@@ -400,9 +400,25 @@ const planPanel = (() => {
     }
   }
 
+  // The offline label takes the empty state's and the viewer's place while the page is offline; the registry is read
+  // once it is back (the online listener below).
+  function _paintOfflinePlanPanel() {
+    var toolbar = _getEl('plan-toolbar');
+    if (toolbar) toolbar.classList.toggle('hidden', true);
+    _getEl('plan-empty-state').style.display = 'none';
+    _getEl('plan-viewer').style.display = 'none';
+    var label = _getEl('plan-offline-label');
+    label.textContent = OFFLINE_PANEL_LABEL;
+    label.style.display = '';
+  }
+
   function render() {
     var panel = _getEl('tab-plans');
     if (!panel) return;
+    if (pageIsOffline()) {
+      _paintOfflinePlanPanel();
+      return;
+    }
     _renderedSessionId = _currentSessionId();
     var empty = _getEl('plan-empty-state');
     var viewer = _getEl('plan-viewer');
@@ -489,6 +505,7 @@ const planPanel = (() => {
   // failed or the commit was superseded (see the _commitRegistry guard), and
   // the caller must bail without touching the selection or the DOM.
   async function _refetchRegistry(sid, failLabel) {
+    if (pageIsOffline()) return false;
     var generation = ++_fetchGeneration;
     try {
       var data = await _fetchRegistry(sid);
@@ -630,6 +647,12 @@ const planPanel = (() => {
   function invalidate() {
     _stale = true;
   }
+
+  // Back online, the label leaves and the panel reads its registry the way a shown tab does.
+  window.addEventListener('online', () => {
+    _getEl('plan-offline-label').style.display = 'none';
+    onTabShown();
+  });
 
   async function onTabShown() {
     // Fallback for the paths the hook cannot fix: its load failed, or

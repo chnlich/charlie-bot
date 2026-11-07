@@ -25,6 +25,9 @@
           <span>No plans registered for this session.</span>
           <button onclick="planPanel.refresh()" class="{{ plan_secondary }}">Refresh</button>
         </div>
+        <!-- The offline label takes the viewer's place while the page is offline (plan-panel.js). -->
+        <div id="plan-offline-label" class="flex-1 flex items-center justify-center text-sm text-gray-400"
+             style="display:none"></div>
         <iframe id="plan-viewer" class="flex-1 min-h-0 w-full bg-white" src="" style="border:none;"></iframe>
         <div id="plan-action-bar" class="border-t border-gray-700 px-3 py-2 flex flex-wrap gap-2"></div>
       </div>

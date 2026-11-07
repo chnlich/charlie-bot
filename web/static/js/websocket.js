@@ -195,12 +195,17 @@ function connectWS() {
     if (isStaleSocket(socket, targetSession, generation)) return;
     let data;
     try { data = JSON.parse(e.data); } catch { return; }
+    // The replay's frames and their end reach last-state.js, which decides what the page holds as current.
     if (!catchupDone) {
       if (data && data.type === 'catchup_complete') {
         catchupDone = true;
-        document.dispatchEvent(new CustomEvent('charliebot:client-socket-catchup', {detail: {bytes: catchupBytes}}));
+        document.dispatchEvent(new CustomEvent('charliebot:client-socket-catchup', {
+          detail: {bytes: catchupBytes, eventTotal: data.event_total},
+        }));
       } else {
-        catchupBytes += replayBytes.encode(e.data).length;
+        const frameBytes = replayBytes.encode(e.data).length;
+        catchupBytes += frameBytes;
+        document.dispatchEvent(new CustomEvent('charliebot:client-socket-replay', {detail: {bytes: frameBytes}}));
       }
     }
     handleWSEvent(data, targetSession, generation);

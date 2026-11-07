@@ -173,6 +173,11 @@
   function renderTray() {
     const tray = trayElement();
     if (!tray) return;
+    if (pageIsOffline()) {
+      tray.classList.remove('hidden');
+      tray.textContent = OFFLINE_PANEL_LABEL;
+      return;
+    }
     if (!trayTriggers.length) {
       tray.classList.add('hidden');
       tray.innerHTML = '';
@@ -198,6 +203,7 @@
   }
 
   async function fetchAndRenderTray(sessionId) {
+    if (pageIsOffline()) return;
     const gen = ++trayFetchGen;
     try {
       const res = await fetch('/api/sessions/' + sessionId + '/pending-triggers',
@@ -318,6 +324,10 @@
     if (sessionId !== SESSION_ID) return;
     fetchAndRenderTray(sessionId);
   }
+
+  // The tray shows the offline label while the page is offline and loads once it is back.
+  window.addEventListener('offline', renderTray);
+  window.addEventListener('online', () => renderPendingTriggersTray(SESSION_ID));
 
   Chat.wire({
     renderPendingTriggersTray,

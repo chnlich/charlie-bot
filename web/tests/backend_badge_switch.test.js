@@ -57,8 +57,11 @@ function loadSessionContext({elements, BACKEND_OPTIONS, AUTO_BACKEND, ACTIVE_AUT
     // usage.js nor the chat modules.
     Chat: { setStreamDraftModeSupplier() {}, registerProjectionCheck() {} },
   };
+  context.window = { addEventListener() {} };
+  context.document.addEventListener = () => {};
   vm.createContext(context);
   vm.runInContext(readStatic('sidebar/namespace.js'), context, { filename: 'sidebar/namespace.js' });
+  vm.runInContext(readStatic('sidebar/last-state.js'), context, { filename: 'sidebar/last-state.js' });
   vm.runInContext(readStatic('sidebar/session-view.js'), context, { filename: 'sidebar/session-view.js' });
   return context;
 }

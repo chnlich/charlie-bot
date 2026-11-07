@@ -355,7 +355,8 @@ function ensureActiveSessionViewPolling() {
 
 async function pollActiveSessionView(opts) {
   const force = opts && opts.force;
-  if (activeSessionViewPollInflight || !SESSION_ID || (!force && !masterThinking && !THINKING_SINCE)) return;
+  const idle = !force && !masterThinking && !THINKING_SINCE;
+  if (pageIsOffline() || activeSessionViewPollInflight || !SESSION_ID || idle) return;
 
   const pollSessionId = SESSION_ID;
   activeSessionViewPollInflight = true;
@@ -497,7 +498,8 @@ const BOOTSTRAP_CACHE_TTL_MS = 60000;
 const BOOTSTRAP_CACHE_MAX_ENTRIES = 20;
 const bootstrapCache = new Map();
 
-function cacheBootstrap(sessionId, data) {
+// A cached entry is a screen: {data, stored}, so a re-click paints a copy with its mark as the first paint did.
+function cacheBootstrap(sessionId, screen) {
   const now = Date.now();
   for (const [key, entry] of bootstrapCache) {
     if (now - entry.timestamp > BOOTSTRAP_CACHE_TTL_MS) bootstrapCache.delete(key);
@@ -505,13 +507,13 @@ function cacheBootstrap(sessionId, data) {
   while (bootstrapCache.size >= BOOTSTRAP_CACHE_MAX_ENTRIES) {
     bootstrapCache.delete(bootstrapCache.keys().next().value);
   }
-  bootstrapCache.set(sessionId, {data, timestamp: now});
+  bootstrapCache.set(sessionId, {screen, timestamp: now});
 }
 
 function freshCachedBootstrap(sessionId) {
   const entry = bootstrapCache.get(sessionId);
   if (!entry || Date.now() - entry.timestamp > BOOTSTRAP_CACHE_TTL_MS) return null;
-  return entry.data;
+  return entry.screen;
 }
 
 // Each phase record goes out as a page event, so a diagnostics package may
@@ -537,10 +539,10 @@ function switchTargetName(sessionId) {
   return (nameEl && nameEl.textContent) || sessionId;
 }
 
-// The switch's one awaited request: the target's bootstrap. A network failure or a 5xx retries
+// The open's one awaited request: the session's first screen. A network failure or a 5xx retries
 // the same request on the send path's backoff (chat/input.js): 1 s doubling to a 30 s cap,
 // unbounded attempts. A failure no longer navigates the page to a full load, which on the
-// measured link costs 415 KB. A 4xx fails the switch: the server refused the bootstrap.
+// measured link costs 415 KB. A 4xx fails the open: the server refused the bootstrap.
 const BOOTSTRAP_RETRY_BASE_MS = 1000;
 const BOOTSTRAP_RETRY_MAX_MS = 30000;
 
@@ -548,22 +550,25 @@ function waitForBootstrapRetry(delayMs) {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
-// Resolves the bootstrap payload, or null when a newer click superseded this switch. Throws on
-// the failures no retry can fix.
-async function fetchBootstrapWithRetry(sessionId, gen) {
+// Resolves {data, stored}: the parsed first screen and whether a stored copy answered it. Resolves null when a
+// newer click superseded this open. Throws on the failures no retry can fix. `headers` carries the
+// network-only header of a request that must reach the server (last-state.js). A rejected request while the page
+// is offline means no copy exists, so the placeholder names that until the request lands.
+async function fetchBootstrapWithRetry(sessionId, gen, headers) {
   let retryDelay = BOOTSTRAP_RETRY_BASE_MS;
   for (;;) {
     let response;
     try {
-      response = await fetch('/api/sessions/' + sessionId + '/bootstrap', {signal: viewRequestSignal()});
+      response = await fetch('/api/sessions/' + sessionId + '/bootstrap', {headers, signal: viewRequestSignal()});
     } catch (err) {
       if (gen !== switchGeneration) return null;
+      if (pageIsOffline()) showNoLocalCopy();
       await waitForBootstrapRetry(retryDelay);
       if (gen !== switchGeneration) return null;
       retryDelay = Math.min(retryDelay * 2, BOOTSTRAP_RETRY_MAX_MS);
       continue;
     }
-    if (response.ok) return response.json();
+    if (response.ok) return {data: await response.json(), stored: isStoredResponse(response)};
     if (response.status < 500) throw new Error(String(response.status));
     if (gen !== switchGeneration) return null;
     await waitForBootstrapRetry(retryDelay);
@@ -611,10 +616,15 @@ async function switchSession(sessionId) {
   if (sessionId === SESSION_ID) {
     return;
   }
+  await openSession(sessionId, SESSION_ID);
+}
 
+// The open path: a switch passes the session it leaves; a boot without an embedded first screen passes null
+// (app.js), so the first-screen request leaves at once and the page paints nothing before it. The open
+// paints the first screen, then catches up (last-state.js) and posts the session's read only once current.
+async function openSession(sessionId, fromSessionId) {
   switching = true;
   const gen = ++switchGeneration;
-  const fromSessionId = SESSION_ID;
   const switchStartedAt = Date.now();
   const reportSuperseded = () => reportSwitchEvent('superseded', fromSessionId, sessionId, gen, {
     winner_generation: switchGeneration,
@@ -665,10 +675,10 @@ async function switchSession(sessionId) {
 
   // A fresh cache hit skips the round-trip; staleness self-heals because
   // event_count below seeds the WebSocket replay cursor.
-  let data = freshCachedBootstrap(sessionId);
-  if (!data) {
+  let screen = freshCachedBootstrap(sessionId);
+  if (!screen) {
     try {
-      data = await fetchBootstrapWithRetry(sessionId, gen);
+      screen = await fetchBootstrapWithRetry(sessionId, gen, {});
     } catch (err) {
       // A newer click owns the view and its held actions. A superseded switch ends as superseded
       // even when the click's abort is what failed it: a body read cut short throws here.
@@ -689,7 +699,7 @@ async function switchSession(sessionId) {
       return;
     }
     // A bootstrap retry the newer click cut short resolves null.
-    if (data === null) {
+    if (screen === null) {
       reportSuperseded();
       return;
     }
@@ -697,8 +707,8 @@ async function switchSession(sessionId) {
 
   // Discard stale response from rapid clicks
   if (gen !== switchGeneration) {
-    // Keep the fetched bootstrap so an immediate re-click skips the fetch.
-    cacheBootstrap(sessionId, data);
+    // Keep the fetched first screen so an immediate re-click skips the fetch.
+    cacheBootstrap(sessionId, screen);
     reportSuperseded();
     return;  // newer switch owns the flag
   }
@@ -706,15 +716,15 @@ async function switchSession(sessionId) {
   // Update globals
   SESSION_ID = sessionId;
   document.dispatchEvent(new CustomEvent('charliebot:active-session-changed'));
-  THINKING_SINCE = data.session.thinking_since || null;
-  eventCursor = data.event_count;
+  THINKING_SINCE = screen.data.session.thinking_since || null;
+  eventCursor = screen.data.event_count;
 
-  // Update URL
-  history.pushState({session: sessionId}, '', '/?session=' + sessionId);
+  // Update URL. A boot's URL already names the session.
+  if (fromSessionId) history.pushState({session: sessionId}, '', '/?session=' + sessionId);
 
   // Render content
   try {
-    globalThis.renderSessionView(data);
+    globalThis.renderSessionView(screen.data);
   } catch (err) {
     reportSwitchEvent('render_error', fromSessionId, sessionId, gen, {
       error: String(err?.message || err),
@@ -723,14 +733,17 @@ async function switchSession(sessionId) {
     throw err;
   }
 
-  // Mark switched-to session as read (WS was closed so broadcast is lost);
-  // stamped through the shared seam so any in-flight older reply is refused.
-  // The server-side flag clears only now, on the winning generation's landed
-  // render — superseded generations and render errors returned above.
+  // The local unread clear and the row dot repaint at the landed render. The server's read POST waits for the catch-up
+  // (last-state.js), so a superseded or failed open posts none.
   recordUnreadFact(sessionId, false);
-  // The same paint clears the opened row's dot and every ancestor's subtree mark.
   refreshSessionIndicator(sessionId);
-  markSessionRead(sessionId);
+  beginCatchUp({
+    sessionId,
+    storedPosition: screen.data.event_count,
+    copyBytes: screen.stored ? jsonBytes(screen.data) : null,
+    listPending: screen.stored,
+    readPending: true,
+  });
 
   // Reconnect WebSocket
   reconnectDelay = 1000;
@@ -752,6 +765,37 @@ async function switchSession(sessionId) {
   // A package that loads its data once per session listens for this event.
   document.dispatchEvent(new CustomEvent('charliebot:session-switched'));
   scheduleLazySessionDataLoad();
+}
+
+// The owner sets a copy aside (last-state.js): its socket replay carries more bytes than the copy's first screen,
+// or its position lies past the session's end. The page fetches the first screen from the network, paints it, and
+// resumes the socket from its position. The sidebar list refresh the copy started keeps running, so the list state
+// carries over, and the mark stays until that refresh lands.
+document.addEventListener('charliebot:first-screen-refetch', (event) => refetchFirstScreen(event.detail.open));
+
+async function refetchFirstScreen(open) {
+  const gen = switchGeneration;
+  disconnectWS();
+  let screen;
+  try {
+    screen = await fetchBootstrapWithRetry(open.sessionId, gen, networkOnlyHeaders());
+  } catch (err) {
+    // The copy stays on screen with its mark: a page that cannot reach the server shows what it stored.
+    console.error('first-screen refetch failed:', err);
+    return;
+  }
+  if (screen === null || gen !== switchGeneration || catchUp !== open) return;
+  if (screen.stored) throw new Error('a network-only first screen was answered from a copy');
+  globalThis.renderSessionView(screen.data);
+  eventCursor = screen.data.event_count;
+  beginCatchUp({
+    sessionId: open.sessionId,
+    storedPosition: screen.data.event_count,
+    copyBytes: null,
+    listPending: open.listPending,
+    readPending: open.readPending,
+  });
+  connectWS();
 }
 
 // The open paths' mount choice in one function: first load, session switch
@@ -1092,7 +1136,21 @@ async function loadOlderIfNeeded(container, isContinuation) {
   }
 }
 
+// The usage cell while the page is offline: the reading is not loaded, so the cell says so.
+function paintUsageOffline() {
+  document.getElementById('usage-indicator').classList.remove('hidden');
+  document.getElementById('usage-bar').parentElement.classList.add('hidden');
+  document.getElementById('usage-cost').classList.add('hidden');
+  const text = document.getElementById('usage-text');
+  text.classList.remove('hidden');
+  text.textContent = OFFLINE_PANEL_LABEL;
+}
+
 function renderUsageFromData(usage) {
+  if (pageIsOffline()) {
+    paintUsageOffline();
+    return;
+  }
   const indicator = document.getElementById('usage-indicator');
   if (!usage) { if (indicator) indicator.classList.add('hidden'); return; }
 
@@ -1304,6 +1362,10 @@ registerSidebarControl('switchSession', switchSession);
 registerSidebarControl('createChildSession', createChildSession);
 registerSidebarControl('createSessionInGroup', createSessionInGroup);
 
+// The usage cell paints its offline label when the page goes offline and reads again once it is back.
+window.addEventListener('offline', paintUsageOffline);
+window.addEventListener('online', () => pollActiveSessionView({force: true}));
+
 const API = {
   getDefaultBackendId,
   getActiveBackendId,
@@ -1312,6 +1374,7 @@ const API = {
   updateActiveBackendBadges,
   scheduleLazySessionDataLoad,
   switchSession,
+  openSession,
   renderSessionView,
   openMountOptions,
   setWorkerTranscriptMode,

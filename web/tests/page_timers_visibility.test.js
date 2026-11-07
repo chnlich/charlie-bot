@@ -162,6 +162,7 @@ function buildAppContext() {
     initAuth: noop('initAuth'),
     initSidebarResize: noop('initSidebarResize'),
     restoreSidebarFromUrl: noop('restoreSidebarFromUrl'),
+    openSession: () => Promise.resolve(),
     updateRelativeTimes: noop('updateRelativeTimes'),
     postProcessRenderedMessages: noop('postProcessRenderedMessages'),
     initScrollPagination: noop('initScrollPagination'),

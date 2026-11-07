@@ -134,8 +134,10 @@
     socketEpisode.reconnect_count = event.detail.attempts;
   });
 
+  // The page is current once its catch-up ends and any stored copy's mark has cleared (sidebar/last-state.js).
+  document.addEventListener('charliebot:page-current', () => markCatchup());
+
   document.addEventListener('charliebot:client-socket-catchup', (event) => {
-    markCatchup();
     if (!socketEpisode || socketEpisode.reconnect_at === null) return;
     socketEpisode.catchup_at = new Date().toISOString();
     socketEpisode.catchup_bytes = event.detail.bytes;

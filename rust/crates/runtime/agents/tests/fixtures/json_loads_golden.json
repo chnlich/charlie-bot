@@ -15,11 +15,71 @@
     {
       "request": {
         "mode": "bytes",
+        "input": "7b22"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Unterminated string starting at: line 1 column 2 (char 1)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e756c6c2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting ',' delimiter: line 1 column 57 (char 56)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b226122313a5b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting ':' delimiter: line 1 column 5 (char 4)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
         "input": "7b2261223a5b312c322e5c352c2d302c22785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
       },
       "expected": {
         "outcome": "error",
         "text": "Expecting ',' delimiter: line 1 column 10 (char 9)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c2022785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "{\"a\":[1,2.5,0,\"xé😀\",true,false,null],\"b\":{\"c\":\"d\\n\"},\"e\":[]}"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c7530307d65395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Invalid \\uXXXX escape: line 1 column 19 (char 18)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c7564ff3833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "'utf-8' codec can't decode byte 0xff in position 26: invalid start byte"
       }
     },
     {
@@ -35,11 +95,71 @@
     {
       "request": {
         "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c74747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting value: line 1 column 38 (char 37)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c747275652c6630616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting value: line 1 column 43 (char 42)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e22756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting value: line 1 column 49 (char 48)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
         "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2e2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
       },
       "expected": {
         "outcome": "error",
         "text": "Expecting property name enclosed in double quotes: line 1 column 55 (char 54)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b223a63223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "{\"a\":[1,2.5,0,\"xé😀\",true,false,null],\"b\":{\":c\":\"d\\n\"},\"e\":[]}"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a2264015c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Invalid control character at: line 1 column 66 (char 65)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c227b65223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "{\"a\":[1,2.5,0,\"xé😀\",true,false,null],\"b\":{\"c\":\"d\\n\"},\"{e\":[]}"
       }
     },
     {
@@ -55,11 +175,71 @@
     {
       "request": {
         "mode": "bytes",
+        "input": "7b226122785b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting ':' delimiter: line 1 column 5 (char 4)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c32c3352c2d302c22785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "'utf-8' codec can't decode byte 0xc3 in position 9: invalid continuation byte"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c65785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting value: line 1 column 16 (char 15)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
         "input": "7b2261223a5b312c322e352c2d302c22785c7530302c395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
       },
       "expected": {
         "outcome": "error",
         "text": "Invalid \\uXXXX escape: line 1 column 19 (char 18)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75640a33645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Invalid \\uXXXX escape: line 1 column 25 (char 24)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75643833645c75645d3030222c747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Invalid \\uXXXX escape: line 1 column 31 (char 30)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c7f7275652c66616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting value: line 1 column 38 (char 37)"
       }
     },
     {
@@ -75,6 +255,36 @@
     {
       "request": {
         "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c747275652c66616c73652c2d756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting value: line 1 column 49 (char 48)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c3162223a7b2263223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting property name enclosed in double quotes: line 1 column 55 (char 54)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b225c223a22645c6e227d2c2265223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting ':' delimiter: line 1 column 65 (char 64)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
         "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a2264206e227d2c2265223a5b5d7d"
       },
       "expected": {
@@ -85,11 +295,71 @@
     {
       "request": {
         "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c227d223a5b5d7d"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "{\"a\":[1,2.5,0,\"xé😀\",true,false,null],\"b\":{\"c\":\"d\\n\"},\"}\":[]}"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "7b2261223a5b312c322e352c2d302c22785c75303065395c75643833645c7564653030222c747275652c66616c73652c6e756c6c5d2c2262223a7b2263223a22645c6e227d2c2265223a5b5dff"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "'utf-8' codec can't decode byte 0xff in position 76: invalid start byte"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "5b7b5d226b223a2276227d2c5b3165352c31452d325d2c225c2f5c625c665c725c74225d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting property name enclosed in double quotes: line 1 column 3 (char 2)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
         "input": "5b7b226b223a227f76227d2c5b3165352c31452d325d2c225c2f5c625c665c725c74225d"
       },
       "expected": {
         "outcome": "value",
-        "text": "[{\"k\":\"v\"},[100000.0,0.01],\"/\\b\\f\\r\\t\"]"
+        "text": "[{\"k\":\"\u007fv\"},[100000.0,0.01],\"/\\b\\f\\r\\t\"]"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "5b7b226b223a2276227d2c5b317565352c31452d325d2c225c2f5c625c665c725c74225d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting ',' delimiter: line 1 column 14 (char 13)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "5b7b226b223a2276227d2c5b3165352c31452d2d325d2c225c2f5c625c665c725c74225d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting ',' delimiter: line 1 column 18 (char 17)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "5b7b226b223a2276227d2c5b3165352c31452d325d2c225c312f5c625c665c725c74225d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Invalid \\escape: line 1 column 24 (char 23)"
       }
     },
     {
@@ -105,11 +375,71 @@
     {
       "request": {
         "mode": "bytes",
+        "input": "5b7b226b223a2276227d2c5b3165352c31452d325d2c225c2f5c625c665c725c74225d20"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "[{\"k\":\"v\"},[100000.0,0.01],\"/\\b\\f\\r\\t\"]"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "5b7b226b227d2276227d2c5b3165352c31452d325d2c225c2f5c625c665c725c74225d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting ':' delimiter: line 1 column 6 (char 5)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "5b7b226b223a2276227dff5b3165352c31452d325d2c225c2f5c625c665c725c74225d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "'utf-8' codec can't decode byte 0xff in position 10: invalid start byte"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
         "input": "5b7b226b223a2276227d2c5b3165352c5b452d325d2c225c2f5c625c665c725c74225d"
       },
       "expected": {
         "outcome": "error",
         "text": "Expecting value: line 1 column 18 (char 17)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "5b7b226b223a2276227d2c5b3165352c31452d325d74225c2f5c625c665c725c74225d"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting ',' delimiter: line 1 column 22 (char 21)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "5b7b226b223a2276227d2c5b3165352c31452d325d2c225c2f5c6230665c725c74225d"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "[{\"k\":\"v\"},[100000.0,0.01],\"/\\b0f\\r\\t\"]"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "5b7b226b223a2276227d2c5b3165352c31452d325d2c225c2f5c625c665c725c74225d"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "[{\"k\":\"v\"},[100000.0,0.01],\"/\\b\\f\\r\\t\"]"
       }
     },
     {
@@ -125,11 +455,71 @@
     {
       "request": {
         "mode": "bytes",
+        "input": "20207b30226d65737361676573223a5b7b22726f6c65223a2275736572222c22636f6e74656e74223a226869227d5d2c226d61785f746f6b656e73223a31367d2020"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting property name enclosed in double quotes: line 1 column 4 (char 3)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "20207b226d6573736122676573223a5b7b22726f6c65223a2275736572222c22636f6e74656e74223a226869227d5d2c226d61785f746f6b656e73223a31367d2020"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting ':' delimiter: line 1 column 11 (char 10)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "20207b226d65737361676573223a2e5b7b22726f6c65223a2275736572222c22636f6e74656e74223a226869227d5d2c226d61785f746f6b656e73223a31367d2020"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting value: line 1 column 15 (char 14)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
         "input": "20207b226d65737361676573223a5b7b22726f6c3a65223a2275736572222c22636f6e74656e74223a226869227d5d2c226d61785f746f6b656e73223a31367d2020"
       },
       "expected": {
         "outcome": "value",
         "text": "{\"messages\":[{\"rol:e\":\"user\",\"content\":\"hi\"}],\"max_tokens\":16}"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "20207b226d65737361676573223a5b7b22726f6c65223a227501736572222c22636f6e74656e74223a226869227d5d2c226d61785f746f6b656e73223a31367d2020"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Invalid control character at: line 1 column 26 (char 25)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "20207b226d65737361676573223a5b7b22726f6c65223a2275736572222c227b636f6e74656e74223a226869227d5d2c226d61785f746f6b656e73223a31367d2020"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "{\"messages\":[{\"role\":\"user\",\"{content\":\"hi\"}],\"max_tokens\":16}"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "20207b226d65737361676573223a5b7b22726f6c65223a2275736572222c22636f6e74654e6e74223a226869227d5d2c226d61785f746f6b656e73223a31367d2020"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "{\"messages\":[{\"role\":\"user\",\"conteNnt\":\"hi\"}],\"max_tokens\":16}"
       }
     },
     {
@@ -145,11 +535,71 @@
     {
       "request": {
         "mode": "bytes",
+        "input": "20207b226d65737361676573223a5b7b22726f6c65223a2275736572222c22636f6e74656e74223a226869227d5d2cc3226d61785f746f6b656e73223a31367d2020"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "'utf-8' codec can't decode byte 0xc3 in position 47: invalid continuation byte"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "20207b226d65737361676573223a5b7b22726f6c65223a2275736572222c22636f6e74656e74223a226869227d5d2c226d61785f74656f6b656e73223a31367d2020"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_teokens\":16}"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "20207b226d65737361676573223a5b7b22726f6c65223a2275736572222c22636f6e74656e74223a226869227d5d2c226d61785f746f6b656e73222c3a31367d2020"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting ':' delimiter: line 1 column 60 (char 59)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
         "input": "20207b226d65737361676573223a5b7b22726f6c65223a2275736572222c22636f6e74656e74223a226869227d5d2c226d61785f746f6b656e73223a31367d200a20"
       },
       "expected": {
         "outcome": "value",
         "text": "{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":16}"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "20207b225d65737361676573223a5b7b22726f6c65223a2275736572222c22636f6e74656e74223a226869227d5d2c226d61785f746f6b656e73223a31367d2020"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "{\"]essages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":16}"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "20207b226d657373617f6573223a5b7b22726f6c65223a2275736572222c22636f6e74656e74223a226869227d5d2c226d61785f746f6b656e73223a31367d2020"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "{\"messa\u007fes\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":16}"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "20207b226d65737361676573223a5b7522726f6c65223a2275736572222c22636f6e74656e74223a226869227d5d2c226d61785f746f6b656e73223a31367d2020"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting value: line 1 column 16 (char 15)"
       }
     },
     {
@@ -165,11 +615,71 @@
     {
       "request": {
         "mode": "bytes",
+        "input": "20207b226d65737361676573223a5b7b22726f6c65223a2275733172222c22636f6e74656e74223a226869227d5d2c226d61785f746f6b656e73223a31367d2020"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "{\"messages\":[{\"role\":\"us1r\",\"content\":\"hi\"}],\"max_tokens\":16}"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "20207b226d65737361676573223a5b7b22726f6c65223a2275736572222c22635c6e74656e74223a226869227d5d2c226d61785f746f6b656e73223a31367d2020"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "{\"messages\":[{\"role\":\"user\",\"c\\ntent\":\"hi\"}],\"max_tokens\":16}"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "20207b226d65737361676573223a5b7b22726f6c65223a2275736572222c22636f6e74656e20223a226869227d5d2c226d61785f746f6b656e73223a31367d2020"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "{\"messages\":[{\"role\":\"user\",\"conten \":\"hi\"}],\"max_tokens\":16}"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
         "input": "20207b226d65737361676573223a5b7b22726f6c65223a2275736572222c22636f6e74656e74223a2268697d7d5d2c226d61785f746f6b656e73223a31367d2020"
       },
       "expected": {
         "outcome": "error",
         "text": "Expecting ',' delimiter: line 1 column 49 (char 48)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "20207b226d65737361676573223a5b7b22726f6c65223a2275736572222c22636f6e74656e74223a226869227d5d2c22ff61785f746f6b656e73223a31367d2020"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "'utf-8' codec can't decode byte 0xff in position 48: invalid start byte"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "20207b226d65737361676573223a5b7b22726f6c65223a2275736572222c22636f6e74656e74223a226869227d5d2c226d61785f746f5b656e73223a31367d2020"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_to[ens\":16}"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "20207b226d65737361676573223a5b7b22726f6c65223a2275736572222c22636f6e74656e74223a226869227d5d2c226d61785f746f6b656e73227431367d2020"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting ':' delimiter: line 1 column 60 (char 59)"
       }
     },
     {
@@ -185,11 +695,71 @@
     {
       "request": {
         "mode": "bytes",
+        "input": "225c7564ff3833645c756465303022"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "'utf-8' codec can't decode byte 0xff in position 4: invalid start byte"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "225c75643833645c75645b65303022"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Invalid \\uXXXX escape: line 1 column 9 (char 8)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "745c75643833645c756465303022"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Expecting value: line 1 column 1 (char 0)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
         "input": "225c75643833305c756465303022"
       },
       "expected": {
         "outcome": "value",
         "text": "\"𜈀\""
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "225c75643833645c756465302222"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Invalid \\uXXXX escape: line 1 column 9 (char 8)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "2d302d2e35652b33"
+      },
+      "expected": {
+        "outcome": "error",
+        "text": "Extra data: line 1 column 3 (char 2)"
+      }
+    },
+    {
+      "request": {
+        "mode": "bytes",
+        "input": "31302e35652b33"
+      },
+      "expected": {
+        "outcome": "value",
+        "text": "10500.0"
       }
     },
     {

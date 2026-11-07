@@ -48,7 +48,8 @@ enum Outcome {
 }
 
 /// One input in every this many is decoded and compared.
-const SAMPLE_STEP: usize = 512;
+const SAMPLE_STEP: usize = 128;
+const SAMPLE_SHARDS: usize = 4;
 
 #[derive(Deserialize)]
 struct RecordedFixture<'a> {
@@ -82,8 +83,21 @@ struct RecordedOutcome<'a> {
   text: Option<Cow<'a, str>>,
 }
 
-#[test]
-fn json_loads_matches_recorded_over_a_sample_of_the_corpus() {
+macro_rules! sample_shard {
+  ($name:ident, $index:expr) => {
+    #[test]
+    fn $name() {
+      compare_sample_shard($index);
+    }
+  };
+}
+
+sample_shard!(json_loads_matches_recorded_sample_shard_0, 0);
+sample_shard!(json_loads_matches_recorded_sample_shard_1, 1);
+sample_shard!(json_loads_matches_recorded_sample_shard_2, 2);
+sample_shard!(json_loads_matches_recorded_sample_shard_3, 3);
+
+fn compare_sample_shard(shard: usize) {
   let fixture: RecordedFixture = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
   assert_eq!(fixture.base_commit, "d4021ce3993d7e36b2709f00caf578e1f8541407");
   assert!(fixture.source_case_count > 9000, "the corpus holds {} inputs", fixture.source_case_count);
@@ -91,7 +105,9 @@ fn json_loads_matches_recorded_over_a_sample_of_the_corpus() {
 
   let mut mismatches = Vec::new();
   let mut sampled = 0;
-  for record in fixture.samples.iter().chain(&fixture.required_error_cases) {
+  let samples = fixture.samples.iter().enumerate().filter(|(index, _)| index % SAMPLE_SHARDS == shard).map(|(_, r)| r);
+  let required = fixture.required_error_cases.iter().filter(|_| shard == 0);
+  for record in samples.chain(required) {
     sampled += 1;
     let request: RecordedRequest = serde_json::from_str(record.request.get()).unwrap();
     let mode = request.mode.as_str();

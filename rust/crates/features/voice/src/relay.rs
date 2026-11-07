@@ -542,7 +542,7 @@ mod tests {
 
   async fn start_relay_test(mode: FakeMode, max_recording_samples: usize) -> RelayTestServer {
     start_relay_test_with_limits(mode, PREVIEW_QUEUE_SECONDS * crate::audio::SAMPLE_RATE * 2, max_recording_samples)
-    .await
+      .await
   }
 
   async fn start_relay_test_with_limits(

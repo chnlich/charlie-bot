@@ -1326,16 +1326,30 @@ mod tests {
 
   #[tokio::test]
   async fn the_status_read_omits_empty_waiting_closed_and_archived_descendants() {
-    let home = Home::new();
+    let home = Home::status_only();
     let root = home.manager("root", None).await;
     let empty = home.child(&root, "empty").await;
     let closed = home.child(&root, "closed").await;
     let archived = home.child(&root, "archived").await;
-    set_status(&home.features, &empty, r#"{"waiting": []}"#).await.expect("the empty child sets");
-    check_waiting_item(&home, &closed, "closed decision").await;
-    set_status(&home.features, &closed, &waiting_set("closed decision")).await.expect("the closed child sets");
-    check_waiting_item(&home, &archived, "archived decision").await;
-    set_status(&home.features, &archived, &waiting_set("archived decision")).await.expect("the archived child sets");
+    let empty_status = json!({
+      "goal": null,
+      "now": null,
+      "waiting": [],
+      "updated_at": UtcDateTime::now().to_str(),
+    });
+    let waiting_status = json!({
+      "goal": null,
+      "now": null,
+      "waiting": [{
+        "text": "hidden decision",
+        "context": "The decision is active now. Options are continue or stop; continue is recommended.",
+        "link": null,
+      }],
+      "updated_at": UtcDateTime::now().to_str(),
+    });
+    write_stored_status(&home, &empty, empty_status).await;
+    write_stored_status(&home, &closed, waiting_status.clone()).await;
+    write_stored_status(&home, &archived, waiting_status).await;
     archive_task(&home.features, &closed).await;
     home.features.store.archive_session(&archived).await.expect("the session archives");
 

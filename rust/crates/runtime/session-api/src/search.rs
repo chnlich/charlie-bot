@@ -899,11 +899,11 @@ fn needle_bigrams(needle: &str) -> Vec<usize> {
 /// Every multibyte character's UTF-8 bytes lie at or above 0x80, so a needle that holds one carries at least one of
 /// these pairs, and the trigram and bigram indexes cannot encode it.
 ///
-/// The index folds ASCII only, while a cased non-ASCII needle is scanned with Unicode lowercase folding. Such a
-/// needle's high bytes can move between the text and the index, so it gets no high-byte bigrams and stays with the
-/// scan.
+/// Only a needle the raw-byte scan handles gets them. The index folds ASCII only, while any other needle is scanned
+/// with Unicode lowercase folding, and that fold can produce bytes the index never saw: U+0130 lowers to `i` and
+/// U+0307, whose bytes an index built from a file that holds U+0130 lacks.
 fn needle_high_bigrams(needle: &str) -> Vec<usize> {
-  if needle.chars().any(|c| !c.is_ascii() && (c.is_lowercase() || c.is_uppercase())) {
+  if needle.is_ascii() || !uncased_alphanumeric(needle) {
     return Vec::new();
   }
   needle.as_bytes().windows(2).filter_map(|window| high_bigram_number(window[0], window[1])).collect()
@@ -1837,6 +1837,23 @@ mod tests {
 
     fs::write(&path, "the quick brown fox 量子\n").unwrap();
     let rows = super::search_sessions_with_memos(&store, "量子", &memos).unwrap().rows;
+    assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
+  }
+
+  /// A needle Unicode lowering composes out of a cased character keeps the scan: U+0130 lowers to "i" and a
+  /// combining dot, bytes an index built from the file's own U+0130 never saw.
+  #[test]
+  fn a_needle_folded_out_of_a_cased_character_reaches_the_file() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_session(&store, "content", "content session", SessionStatus::Active, "2026-08-01T12:00:00Z");
+    let path = store.chat_events_path("content");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "İstanbul\n").unwrap();
+    let memos = Mutex::new(super::SearchMemos::default());
+
+    assert!(super::search_sessions_with_memos(&store, "缓存", &memos).unwrap().rows.is_empty());
+    let rows = super::search_sessions_with_memos(&store, "i\u{307}stanbul", &memos).unwrap().rows;
     assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
   }
 

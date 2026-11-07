@@ -607,6 +607,7 @@ mod tests {
         pool: pool.iter().map(|member| (*member).to_string()).collect(),
         routing: None,
         options,
+        auto: None,
       },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },

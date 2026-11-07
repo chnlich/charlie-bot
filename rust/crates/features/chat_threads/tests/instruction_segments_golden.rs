@@ -134,7 +134,7 @@ fn config(session_id: &str) -> CharlieBotConfig {
       worktree_dir: "/synthetic/worktrees".to_string(),
       scratch_dir: "/synthetic/scripts".to_string(),
     },
-    backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
+    backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new(), auto: None },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
     remote_run: charliebot_core::config::RemoteRunConfig::default(),

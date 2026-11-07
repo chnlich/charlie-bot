@@ -266,7 +266,19 @@ fn backends_json(cfg: &CharlieBotConfig, registry: &Registry) -> Result<Value, S
     Some(routing) => json!({ "command": routing.command }),
   };
   let options = backends.options.iter().map(|option| option_json(option, registry)).collect::<Result<Vec<_>, _>>()?;
-  Ok(json!({ "pool": backends.pool, "routing": routing, "options": options }))
+  let mut value = json!({ "pool": backends.pool, "routing": routing, "options": options });
+  if let Some(auto) = &backends.auto {
+    value["auto"] = json!({
+      "label": auto.label,
+      "members": auto.members.iter()
+        .map(|member| json!({"backend": member.backend, "billing": match member.billing {
+          charliebot_core::config::AutoBilling::Subscription => "subscription",
+          charliebot_core::config::AutoBilling::Payg => "payg",
+        }}))
+        .collect::<Vec<_>>(),
+    });
+  }
+  Ok(value)
 }
 
 fn option_json(option: &BackendOption, registry: &Registry) -> Result<Value, String> {

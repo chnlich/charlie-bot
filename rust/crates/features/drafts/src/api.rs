@@ -19,6 +19,7 @@ use charliebot_core::event_types;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::draft::{DraftContext, DraftPlatform, DraftSendFailure, DraftSent};
+use charliebot_store::SESSION_NOT_FOUND_DETAIL;
 use charliebot_store::control_events::sha256_hex;
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Value, json};
@@ -81,7 +82,7 @@ async fn register(State(features): State<Arc<FeatureContext>>, request: Request<
   let requested_target = fields.get(log::TARGET).cloned().expect("a validated target is an object");
   match features.store.get_session(&session_id).await {
     Ok(Some(_)) => {}
-    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({"detail": "Session not found"})),
+    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({"detail": SESSION_NOT_FOUND_DETAIL})),
     Err(error) => return internal(error.to_string()),
   }
   let platform = match platform(&features, &platform_name) {
@@ -129,7 +130,7 @@ async fn send(
   let (parts, _stream) = request.into_parts();
   match features.store.get_session(&session_id).await {
     Ok(Some(_)) => {}
-    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({"detail": "Session not found"})),
+    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({"detail": SESSION_NOT_FOUND_DETAIL})),
     Err(error) => return internal(error.to_string()),
   }
   // Only the operator's own click reaches this route. An agent run credential gets 403 before anything is read.

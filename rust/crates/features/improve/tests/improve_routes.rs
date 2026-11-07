@@ -13,8 +13,8 @@ use charliebot_improve::command::{self, Reservation};
 use charliebot_registry::backend::{BackendTraits, ResumeStyle};
 use charliebot_registry::context::StartupState;
 use charliebot_registry::{FeatureContext, Registry, RegistryError, store_hooks};
-use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+use charliebot_store::{SESSION_NOT_FOUND_DETAIL, Store};
 use charliebot_tasks::test_support::recovery_support;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -141,7 +141,7 @@ async fn start_for_a_missing_session_is_not_found() {
   let (status, body) = post(&features, START, start_body("missing-session", None)).await;
 
   assert_eq!(status, StatusCode::NOT_FOUND);
-  assert_eq!(body["detail"], "Session not found");
+  assert_eq!(body["detail"], SESSION_NOT_FOUND_DETAIL);
 }
 
 #[tokio::test]
@@ -215,7 +215,7 @@ async fn stop_for_a_missing_session_is_not_found() {
   let (status, body) = post(&features, STOP, json!({"session_id": "missing-session"})).await;
 
   assert_eq!(status, StatusCode::NOT_FOUND);
-  assert_eq!(body["detail"], "Session not found");
+  assert_eq!(body["detail"], SESSION_NOT_FOUND_DETAIL);
 }
 
 #[tokio::test]

@@ -18,6 +18,7 @@ use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::SequenceTree;
 use charliebot_registry::task_errors::task_http_error;
+use charliebot_store::SESSION_NOT_FOUND_DETAIL;
 use charliebot_tasks::execution::TaskExecutionAdapter;
 use charliebot_tasks::{recovery, spawner_backends};
 use serde::Deserialize;
@@ -114,7 +115,7 @@ async fn start_improve_loop(
   let req: ImproveRequest = serde_json::from_value(values).expect("the body model validated the request");
   match features.store.get_session(&req.session_id).await {
     Ok(Some(_)) => {}
-    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": "Session not found" })),
+    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": SESSION_NOT_FOUND_DETAIL })),
     Err(error) => return task_http_error(error),
   }
   match start_improve_sequence(&features, req).await {
@@ -277,7 +278,7 @@ async fn stop_improve(State(features): State<Arc<FeatureContext>>, request: axum
   let req: ImproveStopRequest = serde_json::from_value(values).expect("the body model validated the request");
   match features.store.get_session(&req.session_id).await {
     Ok(Some(_)) => {}
-    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": "Session not found" })),
+    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": SESSION_NOT_FOUND_DETAIL })),
     Err(error) => return task_http_error(error),
   }
   let cfg = match features.config.get() {

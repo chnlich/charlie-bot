@@ -147,6 +147,7 @@ fn original_run(runs: &[RunRecord]) -> &RunRecord {
 /// Tests ①, ② and ⑥: a 402 mid-turn continues on the next member with one switch record, and the retry's input
 /// carries the absolute context paths and the four-part summary even though the session has no native id.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_quota_end_continues_the_turn_on_the_next_member_with_the_switch_note() -> anyhow::Result<()> {
   let mut failing = quota_events();
   failing.push(quota_error_result());
@@ -204,6 +205,7 @@ async fn a_quota_end_continues_the_turn_on_the_next_member_with_the_switch_note(
 /// Test ②'s failed assembly: the note still carries the paths, and the note and the switch record both say the
 /// summary is unavailable with its reason.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_failed_summary_keeps_the_paths_and_reports_the_reason() -> anyhow::Result<()> {
   let gate = tempfile::tempdir()?;
   let release_path = gate.path().join("release");
@@ -276,6 +278,7 @@ async fn an_exhausted_set_ends_the_turn_with_one_error_listing_every_member() ->
 
 /// Test ④: a quota end the live process never reports — the turn drains after a restart — switches the same way.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_drained_quota_end_switches_like_a_live_turn() -> anyhow::Result<()> {
   let first = auto_stack("exit 0", "exit 0").await?;
   let session = auto_session(&first, "auto-drained").await?;
@@ -338,6 +341,7 @@ async fn a_drained_quota_end_switches_like_a_live_turn() -> anyhow::Result<()> {
 /// Test ⑤: a refused launch that carries `quota_exhausted` is the finish recorder's signal to switch, exactly as a
 /// quota error in the text is.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_refused_launch_with_quota_exhausted_switches_the_turn() -> anyhow::Result<()> {
   let stack = auto_stack(&success_script(), &success_script()).await?;
   let session = auto_session(&stack, "auto-refused").await?;

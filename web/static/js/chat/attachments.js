@@ -80,13 +80,13 @@ function registerInputMode(mode, badgeHtml) {
 }
 
 // A user text folds by its rendered height: the clamp (styles.css, .user-msg-clamp) shows its first ten lines, and the
-// 展开全文 control shows only while the clamp hides some of the text. Every text starts clamped and undecided, and the
-// observer below decides it once it is laid out.
+// Show full text control shows only while the clamp hides some of the text. Every text starts clamped and undecided,
+// and the observer below decides it once it is laid out.
 function renderUserTextHtml(text) {
   return '<div class="user-msg-fold" data-folded="true" data-overflows="false">'
     + `<div class="user-msg-clamp whitespace-pre-wrap">${escapeHtml(text)}</div>`
     + `<button type="button" class="user-msg-more"`
-      + ` onclick="this.closest('.user-msg-fold').dataset.folded='false'">展开全文</button>`
+      + ` onclick="this.closest('.user-msg-fold').dataset.folded='false'">Show full text</button>`
     + '</div>';
 }
 

@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::OnceLock;
 
 use axum::Router;
 use axum::body::Body;
@@ -13,6 +14,8 @@ use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
 const GOLDEN_FIXTURE: &str = include_str!("fixtures/request_body_golden.json");
+
+static CRYPTO_PROVIDER: OnceLock<()> = OnceLock::new();
 
 const FIELDS: &[Field] = &[
   Field::required("name", FieldType::String),
@@ -155,8 +158,16 @@ async fn request_body_matches_recorded_for_second_half_of_trigger_requests() {
   compare_route("/triggers", &cases, 105, 16, 32).await;
 }
 
+/// The process's rustls crypto provider, installed once: the split golden tests run in one process and race on
+/// `install_default`, which panics for every caller after the first.
+fn install_crypto_provider() {
+  CRYPTO_PROVIDER.get_or_init(|| {
+    rustls::crypto::ring::default_provider().install_default().expect("the test installs its rustls crypto provider")
+  });
+}
+
 async fn compare_route(route: &str, cases: &[Case], fixture_start: usize, case_start: usize, case_end: usize) {
-  rustls::crypto::ring::default_provider().install_default().expect("the test installs its rustls crypto provider");
+  install_crypto_provider();
   let rust_listener = TcpListener::bind("127.0.0.1:0").await.expect("a loopback port is available");
   let rust_address = rust_listener.local_addr().expect("the Rust address is readable");
   let rust_server = tokio::spawn(async move {

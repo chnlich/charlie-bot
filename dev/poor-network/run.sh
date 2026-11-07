@@ -15,6 +15,8 @@
 # Every side holds the bench lock of lock.sh around its trial, not the builds, waiting up to 2 h for it, so two bench
 # runs on a host never measure side by side; no option chooses another lock or skips it. One hold covers one side
 # attempt; a side also ends once its JSON is 120 s old even if its bench hangs, and a retry re-queues.
+# --open-conditions LIST  the open scenario's cells: any of link,held,reset,flaps,offline,release (default all). The
+#                reference cell always runs, since the CPU rate is derived from it.
 #
 # Each side runs as the command of `scripts/release/trial.sh --serve`, so the trial starts, checks and stops the server
 # the bench measures, and proves that no process of the trial remains. The bench's own children (Chrome, the proxy, the
@@ -40,6 +42,7 @@ before_clone=
 before_rev=origin/main
 repetitions=5
 scenarios=background,held,reset,stream
+open_conditions=link,held,reset,flaps,offline,release
 assets_dir=
 detach=0
 
@@ -63,6 +66,7 @@ while (($#)); do
     --before-rev) before_rev=${2:?--before-rev needs a value}; shift 2 ;;
     --repetitions) repetitions=${2:?--repetitions needs a value}; shift 2 ;;
     --scenarios) scenarios=${2:?--scenarios needs a value}; shift 2 ;;
+    --open-conditions) open_conditions=${2:?--open-conditions needs a value}; shift 2 ;;
     --assets-dir) assets_dir=${2:?--assets-dir needs a value}; shift 2 ;;
     --detach) detach=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -91,7 +95,8 @@ run_id=$(date -u +%Y%m%dT%H%M%SZ)
 
 if ((detach)); then
   log="$out_dir/pn-$run_id.log"
-  forwarded=(--side "$side" --out-dir "$out_dir" --before-rev "$before_rev" --repetitions "$repetitions" --scenarios "$scenarios")
+  forwarded=(--side "$side" --out-dir "$out_dir" --before-rev "$before_rev" --repetitions "$repetitions"
+    --scenarios "$scenarios" --open-conditions "$open_conditions")
   [[ -n $before_clone ]] && forwarded+=(--before-clone "$before_clone")
   [[ -n $assets_dir ]] && forwarded+=(--assets-dir "$assets_dir")
   systemd-run --user --unit="pn-$run_id" --collect --working-directory="$tree" \
@@ -195,7 +200,7 @@ run_side() {
     node "$BENCH_DIR/bench.mjs" --side "$name" --out "$run_dir/$name.json" \
       --mock-home "$mock_home" --mock-home-bin "$mock_bin" --reply-dir "$run_dir/replies" \
       --assets "$POOR_NETWORK_ASSETS" --commit "$label" \
-      --repetitions "$repetitions" --scenarios "$scenarios" &
+      --repetitions "$repetitions" --scenarios "$scenarios" --open-conditions "$open_conditions" &
   trial_pid=$!
   # The side JSON is the bench's last artifact, and a bench that has written it can still sit alive and hold the trial,
   # and so the lock (this line's known defect). Once the JSON is SIDE_EXIT_GRACE_SECONDS old and the trial still runs,

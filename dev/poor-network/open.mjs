@@ -19,6 +19,8 @@ import { Tabs, sleep } from './tabs.mjs';
 
 const CONDITIONS = ['link', 'held', 'reset', 'flaps', 'offline'];
 const CASES = ['A', 'B', 'C'];
+// The conditions a run selects with --open-conditions: the link conditions, then the release cells.
+export const OPEN_CONDITIONS = Object.freeze([...CONDITIONS, 'release']);
 const REFERENCE = Object.freeze({ id: 'reference A link rate 1', case: 'A', condition: 'link', rate: 1 });
 const SETTLE_MS = 300000;
 // The request a browser makes before a repetition to open a connection that stays idle in its pool. A and B have
@@ -346,7 +348,8 @@ async function runCell(ctx, cell, repetitions) {
 
 // The open scenario. Fills `result`, the object the JSON keeps, cell by cell: a failure part-way leaves the cells
 // measured so far in the side's JSON, as the per-repetition scenarios leave their repetitions. Returns `result`.
-export async function openScenario(ctx, repetitions, result) {
+// The reference cell always runs: the CPU rate is derived from it. `conditions` selects the other cells.
+export async function openScenario(ctx, repetitions, result, conditions = OPEN_CONDITIONS) {
   ctx.releases = 0;
   result.releases = 0;
   result.cells = [];
@@ -364,14 +367,14 @@ export async function openScenario(ctx, repetitions, result) {
   };
   result.reference = reference;
 
-  for (const condition of CONDITIONS) {
+  for (const condition of CONDITIONS.filter((name) => conditions.includes(name))) {
     for (const caseName of CASES) {
       result.cells.push(await runCell(ctx, {
         id: `${caseName} ${condition}`, case: caseName, condition, rate: cpuRate, warmDir: warm[caseName],
       }, repetitions));
     }
   }
-  for (const caseName of CASES) {
+  for (const caseName of conditions.includes('release') ? CASES : []) {
     const warmDir = await buildWarm(ctx, caseName);
     result.cells.push(await runCell(ctx, {
       id: `${caseName} release`, case: caseName, condition: 'release', rate: cpuRate, warmDir,

@@ -22,6 +22,7 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--out-dir DIR` | Where the run's files go, outside the tree. |
 | `--repetitions N` | Repetitions per scenario (default 5). |
 | `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,open` (default the first four). `open` runs its own cells, see below. |
+| `--open-conditions LIST` | Open cells: any of `link,held,reset,flaps,offline,release`; default all. |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
 | `--detach` | Start a transient systemd user unit and return; the log is `DIR/pn-<id>.log`. |
 

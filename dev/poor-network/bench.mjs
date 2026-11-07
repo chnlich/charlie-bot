@@ -38,7 +38,7 @@ import {
   toolStreamRep,
   viewBackgroundRep,
 } from './scenarios.mjs';
-import { formatOpen, openScenario } from './open.mjs';
+import { OPEN_CONDITIONS, formatOpen, openScenario } from './open.mjs';
 import { METRICS, calibrate, formatSide, percentile, summarize } from './report.mjs';
 import { TrialWatch } from './trials.mjs';
 
@@ -70,7 +70,11 @@ const FIRST_SIZED_INDEX = 6;
 const MAX_SIZING_TURNS = 30;
 
 function parseArgs(argv) {
-  const args = { repetitions: REPETITIONS, scenarios: DEFAULT_SCENARIOS.join(',') };
+  const args = {
+    repetitions: REPETITIONS,
+    scenarios: DEFAULT_SCENARIOS.join(','),
+    openConditions: OPEN_CONDITIONS.join(','),
+  };
   const flags = {
     '--side': 'side',
     '--out': 'out',
@@ -81,6 +85,7 @@ function parseArgs(argv) {
     '--commit': 'commit',
     '--repetitions': 'repetitions',
     '--scenarios': 'scenarios',
+    '--open-conditions': 'openConditions',
   };
   for (let index = 0; index < argv.length; index += 2) {
     const key = flags[argv[index]];
@@ -102,6 +107,12 @@ function parseArgs(argv) {
   for (const name of named) {
     if (!(name in SCENARIOS) && name !== OPEN_SCENARIO) {
       throw new Error(`unknown scenario ${name}`);
+    }
+  }
+  args.openConditions = args.openConditions.split(',');
+  for (const name of args.openConditions) {
+    if (!OPEN_CONDITIONS.includes(name)) {
+      throw new Error(`unknown open condition ${name}`);
     }
   }
   // The scenarios run in SCENARIOS' order, so a view scenario's starred rows never reach the six scenarios' own. The
@@ -347,7 +358,7 @@ async function main() {
     }
     for (const name of args.scenarios) {
       if (name === OPEN_SCENARIO) {
-        await openScenario(ctx, args.repetitions, openResult);
+        await openScenario(ctx, args.repetitions, openResult, args.openConditions);
         continue;
       }
       for (let repetition = 1; repetition <= args.repetitions; repetition++) {

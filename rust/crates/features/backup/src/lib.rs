@@ -27,13 +27,17 @@ pub(crate) struct StepFailure {
 }
 
 /// The steps of the scheduled backup, in order: the preflight (restic on `PATH`, the password file
-/// present), `restic backup` of the profile home, and `restic forget` with the retention policy.
-/// The first failing step stops the run.
+/// present), `restic unlock` against the repository (a server stop can kill a running backup's
+/// restic process, and its leftover lock makes `forget` refuse the repository), `restic backup` of
+/// the profile home, and `restic forget` with the retention policy. The first failing step stops
+/// the run.
 pub(crate) fn run_steps_in(home: &Path, config: &BackupConfig) -> Result<String, StepFailure> {
   let step = "preflight";
   let repository = config.repository().map_err(|error| StepFailure { step, error })?;
   let password_file = config.password_file().map_err(|error| StepFailure { step, error })?;
   backup::preflight(&password_file).map_err(|error| StepFailure { step, error })?;
+  let step = "unlock";
+  backup::remove_stale_locks(&repository, &password_file).map_err(|error| StepFailure { step, error })?;
   let step = "backup";
   let snapshot =
     backup::create_snapshot(home, &repository, &password_file).map_err(|error| StepFailure { step, error })?;

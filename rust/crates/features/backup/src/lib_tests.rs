@@ -329,8 +329,24 @@ async fn a_missing_password_file_fails_the_preflight_and_notifies_once() {
   assert!(!repository.exists(), "a failed run writes no repository or archive anywhere");
 }
 
+/// `remove_stale_locks` runs `restic unlock` against the configured repository — a clean repository
+/// stays usable for a backup after it — and a failing unlock names the command.
+#[test]
+fn unlock_leaves_a_clean_repository_usable_and_a_failed_one_names_the_command() {
+  let repo = new_repo();
+  remove_stale_locks(&repo.repository, &repo.password_file).unwrap();
+  let (_root, home) = temp_home();
+  write(&home, "config.yaml", b"server: {}\n");
+  create_snapshot(&home, &repo.repository, &repo.password_file).unwrap();
+
+  let error = remove_stale_locks("/no/such/repository", &repo.password_file).unwrap_err();
+  assert!(error.to_string().contains("unlock"), "{error:#}");
+}
+
+/// The unlock runs after the preflight and before the backup: a repository the preflight accepts but
+/// restic cannot open fails the run at the unlock step, before `restic backup` writes anything.
 #[tokio::test]
-async fn an_unreachable_repository_fails_the_backup_step_and_notifies_once() {
+async fn a_failing_unlock_stops_the_run_before_the_backup_and_notifies_once() {
   let root = tempdir().unwrap();
   let repository = root.path().join("never-initialized");
   let password_file = root.path().join("password");
@@ -346,7 +362,7 @@ async fn an_unreachable_repository_fails_the_backup_step_and_notifies_once() {
   assert!(result.is_err());
   let sent = notices.lock().unwrap();
   assert_eq!(sent.len(), 1, "exactly one notice: {sent:?}");
-  assert!(sent[0].contains("backup"), "{sent:?}");
+  assert!(sent[0].contains("unlock"), "{sent:?}");
   drop(sent);
   assert!(!repository.exists(), "a failed run writes no repository or archive anywhere");
 }

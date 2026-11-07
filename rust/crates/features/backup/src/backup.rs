@@ -93,6 +93,17 @@ fn find_restic() -> anyhow::Result<PathBuf> {
   bail!("restic was not found on PATH")
 }
 
+/// Removes the repository's stale locks: `restic unlock`, never with `--remove-all`, so a lock a
+/// killed run left behind goes while a live run keeps its own. A server stop can kill the backup
+/// handler's restic process, and its leftover lock makes the next `restic forget` refuse the
+/// repository.
+pub fn remove_stale_locks(repository: &str, password_file: &Path) -> anyhow::Result<()> {
+  let mut command = restic(repository, password_file);
+  command.arg("unlock");
+  run(&mut command)?;
+  Ok(())
+}
+
 /// Runs `restic backup` of `home` into the repository and returns the new snapshot's id. The source
 /// is `.` so the snapshot's root is the home itself, and the anchored exclusion pattern rides the
 /// home's canonical path, the path restic resolves the source to. A source file restic cannot read

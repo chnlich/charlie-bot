@@ -786,14 +786,13 @@ mod tests {
 
   #[tokio::test]
   async fn the_budget_flags_an_over_budget_reply_and_the_reply_still_posts() {
-    for (chars, over_budget) in [(500, false), (501, true)] {
-      let home = Home::new();
-      let sid = home.manager("session", None).await;
-
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    for (index, (chars, over_budget)) in [(500, false), (501, true)].into_iter().enumerate() {
       let readback = post_web_reply(&home.features, &sid, &"x".repeat(chars), None).await.expect("the reply posts");
 
       assert_eq!(readback, json!({"posted": true, "chars": chars, "over_budget": over_budget, "answers": []}));
-      assert_eq!(replies(&home, &sid).len(), 1);
+      assert_eq!(replies(&home, &sid).len(), index + 1);
     }
   }
 

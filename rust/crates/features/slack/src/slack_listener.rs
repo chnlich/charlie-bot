@@ -783,8 +783,14 @@ mod tests {
   #[tokio::test]
   async fn eligible_thread_message_arms_the_follow_trigger() {
     let home = Home::new();
+    let http = charliebot_compat::http_client::client(&charliebot_compat::http_client::Settings {
+      https_proxy: None,
+      no_proxy: Some("127.0.0.1,localhost".to_string()),
+      cert_file: None,
+    })
+    .expect("the Slack test HTTP client builds");
     let client = Arc::new(SlackClient::with_client(
-      reqwest::Client::new(),
+      http,
       "synthetic-bot".to_string(),
       "synthetic-app".to_string(),
       "http://127.0.0.1:1/api/".to_string(),

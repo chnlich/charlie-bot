@@ -466,9 +466,7 @@ fn merge_one_trace(
       }
       event.insert("tid".to_string(), Value::Number(Number::from(synthetic_tid)));
     }
-    if remap_flow_id
-      && let Some(original_id) = event.get("id")
-    {
+    if remap_flow_id && let Some(original_id) = event.get("id") {
       let (synthetic_id, _) = flow_seq.admit(original_id);
       event.insert("id".to_string(), Value::Number(Number::from(synthetic_id)));
     }

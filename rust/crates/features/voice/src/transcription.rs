@@ -1042,7 +1042,9 @@ mod tests {
     );
     assert_eq!(sent[1], r#"{"type": "endStream"}"#);
     assert_eq!(binary, expected_binary);
-    assert_eq!(clock.sleeps(), [2.0 / AUDIO_BYTES_PER_SECOND]);
+    let sleeps = clock.sleeps();
+    assert_eq!(sleeps.len(), 1);
+    assert!((sleeps[0] - 1.0 / SAMPLE_RATE as f64).abs() < 1e-12);
   }
 
   #[tokio::test]

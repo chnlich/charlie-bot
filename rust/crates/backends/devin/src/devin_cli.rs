@@ -400,7 +400,10 @@ mod tests {
     let logs = root.path().join("logs");
     let run = run_turn(root.path(), launch(Some(&logs), None), SessionCgroupConfig::disabled()).await;
     let error = run.result.unwrap_err().to_string();
-    assert!(error.contains("devin export has no user step"), "the error names the missing step: {error}");
+    assert!(
+      error.contains("devin export has no user step and no compaction summary"),
+      "the error names the cause: {error}"
+    );
     let export_path = logs.join(EXPORT_FILE_NAME);
     assert!(error.contains(&export_path.display().to_string()), "the error names the export path: {error}");
   }

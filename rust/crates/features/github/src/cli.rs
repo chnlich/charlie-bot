@@ -9,7 +9,7 @@ use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::{draft as draft_register, files};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::target;
 
@@ -76,14 +76,14 @@ fn prepare_draft(args: &DraftArgs) -> Result<(Value, String), CliExit> {
     if args.title.is_some() || args.head.is_some() || args.base.is_some() {
       return Err(CliExit::usage("--number names a comment; --title, --head and --base belong to a pull request"));
     }
-    json!({"repo": args.repo, "number": number})
+    target::Target::comment(&args.repo, number)
   } else {
     let (Some(title), Some(head), Some(base)) = (&args.title, &args.head, &args.base) else {
       return Err(CliExit::usage("a pull request needs --title, --head and --base, or use --number for a comment"));
     };
-    json!({"repo": args.repo, "title": title, "head": head, "base": base})
+    target::Target::draft_pull_request(&args.repo, title, head, base)
   };
-  let target = target::validate_target(&target).map_err(CliExit::usage)?;
+  let target = target.map(|target| target.to_value()).map_err(CliExit::usage)?;
   let body = files::read_exact_text(&args.file)?;
   Ok((target, body))
 }
@@ -91,6 +91,7 @@ fn prepare_draft(args: &DraftArgs) -> Result<(Value, String), CliExit> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use serde_json::json;
 
   fn draft_args() -> DraftArgs {
     DraftArgs {

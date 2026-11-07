@@ -1,8 +1,8 @@
 //! The GitHub draft target: a draft pull request, or a pull-request or issue comment.
 //!
-//! The CLI validates the flags with this module before it registers, and the server validates the same target again
-//! when it writes the event. Both sides share one rule: `Target::parse` reads the object once and names the kind, so
-//! the label and the HTTP request work from the named kind.
+//! The CLI builds and validates the target with this module before it registers, and the server validates the same
+//! target again when it writes the event. Both sides share one rule: `Target::parse` reads the object once and names
+//! the kind, so the label and the HTTP request work from the named kind.
 
 use serde_json::{Value, json};
 
@@ -60,6 +60,16 @@ impl Target {
       .ok_or_else(|| "target.base must be a pull-request branch".to_string())?
       .to_string();
     Ok(Target::DraftPullRequest { repo, title, head, base })
+  }
+
+  /// The comment target for `repo` and `number`, validated as an object that carries `number` alone.
+  pub fn comment(repo: &str, number: u64) -> Result<Target, String> {
+    Self::parse(&json!({"repo": repo, "number": number}))
+  }
+
+  /// The draft pull-request target for these parts, validated as an object that carries `title`, `head` and `base`.
+  pub fn draft_pull_request(repo: &str, title: &str, head: &str, base: &str) -> Result<Target, String> {
+    Self::parse(&json!({"repo": repo, "title": title, "head": head, "base": base}))
   }
 
   /// The canonical `Value` the event carries.

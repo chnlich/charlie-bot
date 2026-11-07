@@ -92,7 +92,10 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str) {
     assert!(error_answers.into_iter().all(|count| count > 0));
   }
 
-  let cases_for_checkout = cases.iter().filter(|case| case["checkout"].as_str() == Some(checkout_name)).collect::<Vec<_>>();
+  let cases_for_checkout = cases
+    .iter()
+    .filter(|case| case["checkout"].as_str() == Some(checkout_name))
+    .collect::<Vec<_>>();
   assert_eq!(cases_for_checkout.len(), 21);
   let root_text = root.path().to_string_lossy();
   for case in cases_for_checkout {

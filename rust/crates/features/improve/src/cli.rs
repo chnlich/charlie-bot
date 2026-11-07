@@ -20,6 +20,7 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Map, Value, json};
 
 use crate::sequence;
+use crate::wire;
 
 const SESSION_HELP: &str =
   "Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)";
@@ -118,16 +119,16 @@ fn start_loop(args: &StartArgs) -> Result<(), CliExit> {
   };
 
   let mut payload = Map::new();
-  payload.insert("session_id".to_string(), json!(session_id));
-  payload.insert("repo_path".to_string(), json!(args.repo));
-  payload.insert("base_branch".to_string(), json!(args.base_branch));
-  payload.insert("backend".to_string(), optional_string(&args.backend));
-  payload.insert("iterations".to_string(), json!(args.iterations));
-  payload.insert("goal".to_string(), json!(goal));
-  payload.insert("work_branch".to_string(), optional_string(&args.work_branch));
-  payload.insert("merge_back".to_string(), json!(args.merge_back));
+  payload.insert(wire::SESSION_ID.to_string(), json!(session_id));
+  payload.insert(wire::REPO_PATH.to_string(), json!(args.repo));
+  payload.insert(wire::BASE_BRANCH.to_string(), json!(args.base_branch));
+  payload.insert(wire::BACKEND.to_string(), optional_string(&args.backend));
+  payload.insert(wire::ITERATIONS.to_string(), json!(args.iterations));
+  payload.insert(wire::GOAL.to_string(), json!(goal));
+  payload.insert(wire::WORK_BRANCH.to_string(), optional_string(&args.work_branch));
+  payload.insert(wire::MERGE_BACK.to_string(), json!(args.merge_back));
   if let Some(plan_text) = &plan {
-    payload.insert("plan".to_string(), json!(plan_text));
+    payload.insert(wire::PLAN.to_string(), json!(plan_text));
   }
 
   let home = charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
@@ -137,7 +138,7 @@ fn start_loop(args: &StartArgs) -> Result<(), CliExit> {
   let iterations = args.iterations;
   let readback =
     move || Ok(readback_launch(&home, &readback_session, &readback_goal, readback_plan.as_deref(), iterations));
-  let result = client::post("/api/internal/improve", Value::Object(payload), Some(Box::new(readback)), &[])?;
+  let result = client::post(wire::START_PATH, Value::Object(payload), Some(Box::new(readback)), &[])?;
 
   json_out::print_result(&result);
   Ok(())
@@ -146,7 +147,7 @@ fn start_loop(args: &StartArgs) -> Result<(), CliExit> {
 /// `improve stop`: stop the session's running loop and report the server's ack.
 fn stop_loop(args: &StopArgs) -> Result<(), CliExit> {
   let session_id = resolve::resolve_from_env(args.session.as_deref())?;
-  client::post("/api/internal/improve/stop", json!({ "session_id": session_id }), None, &[])?;
+  client::post(wire::STOP_PATH, json!({ (wire::SESSION_ID): session_id }), None, &[])?;
   println!("stopped");
   Ok(())
 }
@@ -182,13 +183,13 @@ fn readback_launch(home: &Path, session_id: &str, goal: &str, plan: Option<&str>
 
   let loop_dir = loops_dir.join(loop_id.to_string());
   let mut response = Map::new();
-  response.insert("status".to_string(), json!("started"));
-  response.insert("session_id".to_string(), json!(session_id));
-  response.insert("iterations".to_string(), json!(iterations));
-  response.insert("loop_id".to_string(), json!(loop_id));
-  response.insert("goal_path".to_string(), json!(loop_dir.join("goal.md").to_string_lossy().into_owned()));
+  response.insert(wire::STATUS.to_string(), json!("started"));
+  response.insert(wire::SESSION_ID.to_string(), json!(session_id));
+  response.insert(wire::ITERATIONS.to_string(), json!(iterations));
+  response.insert(wire::LOOP_ID.to_string(), json!(loop_id));
+  response.insert(wire::GOAL_PATH.to_string(), json!(loop_dir.join("goal.md").to_string_lossy().into_owned()));
   if plan.is_some() {
-    response.insert("plan_path".to_string(), json!(loop_dir.join("plan.md").to_string_lossy().into_owned()));
+    response.insert(wire::PLAN_PATH.to_string(), json!(loop_dir.join("plan.md").to_string_lossy().into_owned()));
   }
   // The v2 sequence's one worker child binds by its stable request id; its presence (and only the
   // matching parent's) proves the v2 admission.
@@ -199,7 +200,7 @@ fn readback_launch(home: &Path, session_id: &str, goal: &str, plan: Option<&str>
     None,
     Some(&sequence::improve_child_request_id(loop_id)),
   )?;
-  response.insert("child_session_id".to_string(), child.get("session_id")?.clone());
+  response.insert(wire::CHILD_SESSION_ID.to_string(), child.get("session_id")?.clone());
   Some(Value::Object(response))
 }
 

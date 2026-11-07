@@ -18,7 +18,7 @@ use charliebot_registry::backend::{MemberReading, MemberWindow};
 use charliebot_registry::usage::{
   DEFAULT_ACCOUNT_LABEL, NEAR_EXHAUSTION_RESET_HORIZON, PANEL_FETCHED_AT, PANEL_PLAN_TYPE, PANEL_PROVIDER,
   PANEL_RESETS_AT, PANEL_UTILIZATION, PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT,
-  WARNING_UTILIZATION, as_utilization, mark_expired_windows,
+  WARNING_UTILIZATION, WEEKLY_WINDOW_MINUTES, as_utilization, mark_expired_windows,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -45,8 +45,6 @@ const SCAN_WINDOW_HOURS: i64 = 6;
 /// Cap for the per-account spend memo. It must stay above the 7-day window's file count, or each round re-parses the
 /// corpus.
 const SPEND_CACHE_LIMIT: usize = 8192;
-/// The length of the weekly quota window, as a `token_count` event states it.
-const WEEKLY_WINDOW_MINUTES: i64 = 10_080;
 
 /// Codex's one account on the quota panel, kept by its usage source between rounds.
 pub struct CodexQuotaAccount {

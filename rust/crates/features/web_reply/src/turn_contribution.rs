@@ -14,17 +14,14 @@ use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_REPLY, WEB_REPLY_NOTICE, W
 use charliebot_core::run_kind::RunKind;
 use charliebot_core::str_methods;
 use charliebot_registry::FeatureContext;
-use charliebot_registry::turn::{EventRenderer, PromptSource, RuleSegment, TurnContribution};
+use charliebot_registry::turn::{
+  DELIVERY_FULL, EventRenderer, PromptSource, RuleSegment, SCOPE_BASE, TurnContribution,
+};
 use charliebot_store::metadata::SessionMetadata;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 
 use crate::{audit, reply};
-
-/// The scope of a rule segment's sources.
-const SCOPE_BASE: &str = "base";
-/// The delivery of a full text segment.
-const DELIVERY_FULL: &str = "full";
 
 /// The web-reply turn contribution.
 pub struct WebReplyTurnContribution;

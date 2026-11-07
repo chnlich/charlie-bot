@@ -45,7 +45,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_core::paths;
 use charliebot_core::str_methods;
-use charliebot_registry::turn::{PromptSource, RuleSegment};
+use charliebot_registry::turn::{DELIVERY_FULL, PromptSource, RuleSegment, SCOPE_BASE};
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
 use charliebot_store::ChatEvent;
 use charliebot_store::message_utils::{SESSION_NOT_FOUND_DETAIL, master_done_input_event_ids};
@@ -61,10 +61,6 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 use tokio::task::JoinHandle;
 
-/// The scope of a rule segment's sources.
-const SCOPE_BASE: &str = "base";
-/// The delivery of a full text segment.
-const DELIVERY_FULL: &str = "full";
 /// The page-delivery sentence every platform's contract line carries: the reply path posts the text as written and
 /// refuses a file-server link (`LINKED_PAGES_LINE`).
 pub const LINKED_PAGES_LINE: &str = concat!(

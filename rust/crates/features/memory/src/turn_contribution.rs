@@ -6,14 +6,11 @@ use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths;
 use charliebot_core::run_kind::RunKind;
-use charliebot_registry::turn::{PromptSource, RuleSegment, TurnContribution};
+use charliebot_registry::turn::{PromptSource, RuleSegment, SCOPE_MEMORY, TurnContribution};
 use charliebot_store::metadata::SessionMetadata;
 
 use crate::memory::{self, MemorySelection};
 use crate::store_root;
-
-/// The scope of a memory source.
-const SCOPE_MEMORY: &str = "memory";
 
 /// The memory package's turn contribution.
 pub struct MemoryTurn;

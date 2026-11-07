@@ -241,7 +241,7 @@ fn equals_count(value: &Value, measured: usize) -> bool {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::prompts::{DELIVERY_FULL, SCOPE_BASE, SCOPE_SUBTREE};
+  use charliebot_registry::turn::{DELIVERY_FULL, SCOPE_BASE, SCOPE_SUBTREE};
 
   fn source(scope: &str, source_ref: &str, owner: Option<&str>) -> PromptSource {
     PromptSource {

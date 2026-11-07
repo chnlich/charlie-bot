@@ -7,12 +7,13 @@ use std::path::{Path, PathBuf};
 
 use charliebot_core::run_kind::RunKind;
 use charliebot_core::text_repr::str_repr;
+use charliebot_registry::turn::{DELIVERY_FULL, SCOPE_BASE, SCOPE_NODE, SCOPE_SUBTREE};
 use charliebot_store::control_events::sha256_hex;
 use charliebot_store::metadata::{SessionMetadata, TaskSpec, TaskType, requester_words_heading_line};
 
 use super::{
-  DELIVERY_FULL, HOST_SUPPLEMENT_FILENAME, MANAGER_KINDS, MAX_AGENT_MESSAGE_WEIGHTED_CHARS, PROMPT_BODIES_DIR,
-  PromptEnv, PromptSource, RuleSegment, SCOPE_BASE, SCOPE_NODE, SCOPE_SUBTREE, TaskPromptError, WORKER_KINDS,
+  HOST_SUPPLEMENT_FILENAME, MANAGER_KINDS, MAX_AGENT_MESSAGE_WEIGHTED_CHARS, PROMPT_BODIES_DIR, PromptEnv,
+  PromptSource, RuleSegment, TaskPromptError, WORKER_KINDS,
 };
 use crate::spawner_prompt::{self, TextReadError};
 use crate::{cold_read, review_text};

@@ -74,7 +74,7 @@ pub(crate) fn handler(features: Arc<FeatureContext>, request: WebSocketRequest) 
 }
 
 /// Why the relay refuses a socket before any recording work: the run id is not the eight lowercase hex
-/// characters the browser makes at the click, so no path may be built from it.
+/// characters the browser makes at the click. A run id outside that form never becomes a path.
 fn run_id_refusal(run_id: &str) -> Option<String> {
   (!recordings::valid_run_id(run_id))
     .then(|| format!("voice relay requires an eight lowercase hex run_id, got {}", text_repr::str_repr(run_id)))
@@ -209,8 +209,8 @@ struct RelayRun<'a> {
   recorded: &'a AtomicBool,
 }
 
-/// Records one relay failure under the run's stem: the reason and the audio received so far, once per relay —
-/// the first writer of the run's outcome wins, so a run whose final already archived records no failure. A write
+/// Records one relay failure under the run's stem: the reason and the audio received so far, once per relay.
+/// The first writer of the run's outcome wins, so a run whose final already archived records no failure. A write
 /// that fails is an error log, never a skip; the frames the browser receives are unchanged.
 async fn record_relay_failure(run: &RelayRun<'_>, reason: &str) {
   if run.recorded.swap(true, Ordering::SeqCst) {

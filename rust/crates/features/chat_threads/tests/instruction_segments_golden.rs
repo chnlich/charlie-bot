@@ -19,7 +19,6 @@ const PACKAGES: [(&str, &str, RegisterFn); 3] = [
   ("discord", "features.discord", charliebot_discord::register),
 ];
 
-// Each checkout's 21 recorded cases are checked in groups of seven.
 macro_rules! checkout_case_group {
   ($name:ident, $checkout_name:literal, $group:literal) => {
     #[test]
@@ -32,24 +31,52 @@ macro_rules! checkout_case_group {
 checkout_case_group!(real_checkout_group_1, "real", 0);
 checkout_case_group!(real_checkout_group_2, "real", 1);
 checkout_case_group!(real_checkout_group_3, "real", 2);
+checkout_case_group!(real_checkout_group_4, "real", 3);
+checkout_case_group!(real_checkout_group_5, "real", 4);
+checkout_case_group!(real_checkout_group_6, "real", 5);
+checkout_case_group!(real_checkout_group_7, "real", 6);
 checkout_case_group!(padded_checkout_group_1, "padded", 0);
 checkout_case_group!(padded_checkout_group_2, "padded", 1);
 checkout_case_group!(padded_checkout_group_3, "padded", 2);
+checkout_case_group!(padded_checkout_group_4, "padded", 3);
+checkout_case_group!(padded_checkout_group_5, "padded", 4);
+checkout_case_group!(padded_checkout_group_6, "padded", 5);
+checkout_case_group!(padded_checkout_group_7, "padded", 6);
 checkout_case_group!(missing_web_reply_checkout_group_1, "without-web_reply.md", 0);
 checkout_case_group!(missing_web_reply_checkout_group_2, "without-web_reply.md", 1);
 checkout_case_group!(missing_web_reply_checkout_group_3, "without-web_reply.md", 2);
+checkout_case_group!(missing_web_reply_checkout_group_4, "without-web_reply.md", 3);
+checkout_case_group!(missing_web_reply_checkout_group_5, "without-web_reply.md", 4);
+checkout_case_group!(missing_web_reply_checkout_group_6, "without-web_reply.md", 5);
+checkout_case_group!(missing_web_reply_checkout_group_7, "without-web_reply.md", 6);
 checkout_case_group!(missing_slack_scope_checkout_group_1, "without-slack_reply_scope.md", 0);
 checkout_case_group!(missing_slack_scope_checkout_group_2, "without-slack_reply_scope.md", 1);
 checkout_case_group!(missing_slack_scope_checkout_group_3, "without-slack_reply_scope.md", 2);
+checkout_case_group!(missing_slack_scope_checkout_group_4, "without-slack_reply_scope.md", 3);
+checkout_case_group!(missing_slack_scope_checkout_group_5, "without-slack_reply_scope.md", 4);
+checkout_case_group!(missing_slack_scope_checkout_group_6, "without-slack_reply_scope.md", 5);
+checkout_case_group!(missing_slack_scope_checkout_group_7, "without-slack_reply_scope.md", 6);
 checkout_case_group!(missing_discord_scope_checkout_group_1, "without-discord_reply_scope.md", 0);
 checkout_case_group!(missing_discord_scope_checkout_group_2, "without-discord_reply_scope.md", 1);
 checkout_case_group!(missing_discord_scope_checkout_group_3, "without-discord_reply_scope.md", 2);
+checkout_case_group!(missing_discord_scope_checkout_group_4, "without-discord_reply_scope.md", 3);
+checkout_case_group!(missing_discord_scope_checkout_group_5, "without-discord_reply_scope.md", 4);
+checkout_case_group!(missing_discord_scope_checkout_group_6, "without-discord_reply_scope.md", 5);
+checkout_case_group!(missing_discord_scope_checkout_group_7, "without-discord_reply_scope.md", 6);
 checkout_case_group!(missing_thread_redline_checkout_group_1, "without-thread_reply_redline.md", 0);
 checkout_case_group!(missing_thread_redline_checkout_group_2, "without-thread_reply_redline.md", 1);
 checkout_case_group!(missing_thread_redline_checkout_group_3, "without-thread_reply_redline.md", 2);
+checkout_case_group!(missing_thread_redline_checkout_group_4, "without-thread_reply_redline.md", 3);
+checkout_case_group!(missing_thread_redline_checkout_group_5, "without-thread_reply_redline.md", 4);
+checkout_case_group!(missing_thread_redline_checkout_group_6, "without-thread_reply_redline.md", 5);
+checkout_case_group!(missing_thread_redline_checkout_group_7, "without-thread_reply_redline.md", 6);
 checkout_case_group!(missing_thread_format_checkout_group_1, "without-thread_reply_format.md", 0);
 checkout_case_group!(missing_thread_format_checkout_group_2, "without-thread_reply_format.md", 1);
 checkout_case_group!(missing_thread_format_checkout_group_3, "without-thread_reply_format.md", 2);
+checkout_case_group!(missing_thread_format_checkout_group_4, "without-thread_reply_format.md", 3);
+checkout_case_group!(missing_thread_format_checkout_group_5, "without-thread_reply_format.md", 4);
+checkout_case_group!(missing_thread_format_checkout_group_6, "without-thread_reply_format.md", 5);
+checkout_case_group!(missing_thread_format_checkout_group_7, "without-thread_reply_format.md", 6);
 
 fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str, group: usize) {
   let mut decoder = GzDecoder::new(include_bytes!("fixtures/instruction_segments_golden.json.gz").as_slice());
@@ -91,8 +118,8 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str, group
   let cases_for_checkout =
     cases.iter().filter(|case| case["checkout"].as_str() == Some(checkout_name)).collect::<Vec<_>>();
   assert_eq!(cases_for_checkout.len(), 21);
-  let group_start = group * 7;
-  let group_end = group_start + 7;
+  let group_start = group * 3;
+  let group_end = group_start + 3;
   let root_text = root.path().to_string_lossy();
   if checkout_name == "without-web_reply.md" && group == 0 {
     let expected_failures = cases

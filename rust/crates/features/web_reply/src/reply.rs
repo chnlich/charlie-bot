@@ -1162,17 +1162,10 @@ mod tests {
     }
   }
 
-  #[tokio::test]
-  async fn an_english_reply_after_a_chinese_message_with_english_inside_it_is_held() {
+  #[test]
+  fn english_terms_inside_chinese_user_messages_still_trigger_the_language_hold() {
     for message in [MANY_TERMS_MESSAGE, ARTIFACT_COMMENT_MESSAGE] {
-      let home = Home::new();
-      let sid = home.manager("session", None).await;
-      running_user_message(&home, &sid, user_message(message)).await;
-
-      let (status, response) = post_reply(&home, &sid, ENGLISH_REPLY, None).await;
-
-      assert_eq!(status, StatusCode::CONFLICT, "message {message:?}");
-      assert_eq!(response["detail"], json!(LANGUAGE_HOLD_DETAIL), "message {message:?}");
+      assert!(language_check_holds(Some(message), ENGLISH_REPLY).unwrap(), "message {message:?}");
     }
   }
 

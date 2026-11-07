@@ -449,7 +449,7 @@ async fn reply_refuses_412_while_unread_then_posts_after_a_read() {
   let ack = thread_entry::ack_messages(&adapter, &home.features, &session_id, &[snowflake(1)]).await.unwrap();
   assert_eq!(ack["watermark_id"], snowflake(1));
 
-  let posted = discord_listener::post_reply(&bot(&home), &session_id, "the answer").await.unwrap();
+  let posted = crate::discord_listener::post_reply(&bot(&home), &session_id, "the answer").await.unwrap();
   assert_eq!(posted["posted"], true);
   assert_eq!(home.fake().posts, [(THREAD.to_string(), "the answer".to_string())]);
 }

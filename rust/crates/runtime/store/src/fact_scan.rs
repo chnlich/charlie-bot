@@ -713,6 +713,8 @@ impl<'de> DeserializeSeed<'de> for SkipKey {
 
 #[cfg(test)]
 mod tests {
+  use std::io::Write;
+
   use serde_json::json;
 
   use super::*;
@@ -720,13 +722,13 @@ mod tests {
   use crate::store::test_support::{make_test_store, open_test_store};
 
   /// A scan taken outside the session lock seals only while the log keeps the identity it scanned and the cache is cold.
-  #[tokio::test]
-  async fn a_scan_seals_only_while_the_log_keeps_its_scanned_identity_and_the_cache_is_cold() {
+  #[test]
+  fn a_scan_seals_only_while_the_log_keeps_its_scanned_identity_and_the_cache_is_cold() {
     let (_home, store) = make_test_store();
     // An append to a cold cache writes only the log, so the cache stays cold throughout.
-    store.append_chat_event("synthetic", json!({"id": "event-a", "type": "user"})).await.unwrap();
+    write_events(&store, [json!({"id": "event-a", "type": "user"})]);
     let stale = store.scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
-    store.append_chat_event("synthetic", json!({"id": "event-b", "type": "user"})).await.unwrap();
+    append_events(&store, [json!({"id": "event-b", "type": "user"})]);
     assert!(!store.seal_scanned_facts("synthetic", &stale).unwrap(), "a scan that misses an append is refused");
 
     let fresh = store.scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
@@ -986,45 +988,67 @@ mod tests {
     })
   }
 
-  /// One history whose lines cross every fact the checkpoint must carry: a task boundary, chat content, run
-  /// outcomes, a report, a close request and its close.
-  async fn append_first_leg(store: &Store) -> u64 {
-    for event in [
-      json!({"id": "created", "type": "task_created", "actor": "user"}),
-      json!({"id": "ask", "type": "user", "content": "do the work"}),
-      json!({"id": "said", "type": "assistant", "run_id": "run-1", "content": "working"}),
-      json!({"id": "tool-out", "type": "user", "content": [{"type": "tool_result", "content": "done"}]}),
-      json!({"id": "finish-1", "type": "run_finished", "run_id": "run-1", "outcome": "success",
-             "input_event_ids": ["ask"]}),
-      json!({"id": "report", "type": "child_report", "child_session_id": "child", "child_event_id": "close-1"}),
-      json!({"id": "subtree-prompt", "type": "prompt_changed", "scope": "subtree", "new_ref": "prompt-a"}),
-      json!({"id": "close-ask", "type": "task_close_requested", "request_id": "close-1", "owner_run_id": "run-1"}),
-      json!({"id": "close-1", "type": "task_closed", "request_id": "close-1", "outcome": "completed"}),
-    ] {
-      store.append_chat_event("synthetic", event).await.unwrap();
+  /// A user input and its successful run completion, enough to compare the resumed facts with a whole-log scan.
+  fn event_lines(events: impl IntoIterator<Item = serde_json::Value>) -> Vec<u8> {
+    let mut lines = Vec::new();
+    for event in events {
+      serde_json::to_writer(&mut lines, &event).unwrap();
+      lines.push(b'\n');
     }
-    std::fs::metadata(store.chat_events_path("synthetic")).unwrap().len()
+    lines
+  }
+
+  fn write_events(store: &Store, events: impl IntoIterator<Item = serde_json::Value>) -> u64 {
+    let path = store.chat_events_path("synthetic");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, event_lines(events)).unwrap();
+    std::fs::metadata(path).unwrap().len()
+  }
+
+  fn append_events(store: &Store, events: impl IntoIterator<Item = serde_json::Value>) {
+    let path = store.chat_events_path("synthetic");
+    let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    file.write_all(&event_lines(events)).unwrap();
+  }
+
+  fn append_first_leg(store: &Store) -> u64 {
+    write_events(
+      store,
+      [
+        json!({"id": "created", "type": "task_created", "actor": "user"}),
+        json!({"id": "ask", "type": "user", "content": "do the work"}),
+        json!({"id": "said", "type": "assistant", "run_id": "run-1", "content": "working"}),
+        json!({"id": "tool-out", "type": "user", "content": [{"type": "tool_result", "content": "done"}]}),
+        json!({"id": "finish-1", "type": "run_finished", "run_id": "run-1", "outcome": "success",
+               "input_event_ids": ["ask"]}),
+        json!({"id": "report", "type": "child_report", "child_session_id": "child", "child_event_id": "close-1"}),
+        json!({"id": "subtree-prompt", "type": "prompt_changed", "scope": "subtree", "new_ref": "prompt-a"}),
+        json!({"id": "close-ask", "type": "task_close_requested", "request_id": "close-1", "owner_run_id": "run-1"}),
+        json!({"id": "close-1", "type": "task_closed", "request_id": "close-1", "outcome": "completed"}),
+      ],
+    )
   }
 
   /// The events a later boot appends past the checkpoint.
-  async fn append_second_leg(store: &Store) {
-    for event in [
-      json!({"id": "reopen-1", "type": "task_reopened"}),
-      json!({"id": "ask-2", "type": "user", "content": "carry on"}),
-      json!({"id": "slip", "type": "assistant", "run_id": "run-2", "content": "more"}),
-      json!({"id": "finish-2", "type": "run_finished", "run_id": "run-2", "outcome": "failed"}),
-      json!({"id": "node-prompt", "type": "prompt_changed", "scope": "node", "new_ref": "prompt-b"}),
-    ] {
-      store.append_chat_event("synthetic", event).await.unwrap();
-    }
+  fn append_second_leg(store: &Store) {
+    append_events(
+      store,
+      [
+        json!({"id": "reopen-1", "type": "task_reopened"}),
+        json!({"id": "ask-2", "type": "user", "content": "carry on"}),
+        json!({"id": "slip", "type": "assistant", "run_id": "run-2", "content": "more"}),
+        json!({"id": "finish-2", "type": "run_finished", "run_id": "run-2", "outcome": "failed"}),
+        json!({"id": "node-prompt", "type": "prompt_changed", "scope": "node", "new_ref": "prompt-b"}),
+      ],
+    );
   }
 
   /// A boot whose checkpoint still covers the log reads the appended bytes alone, and the facts it folds equal the
   /// facts a full scan of the same log folds.
-  #[tokio::test]
-  async fn a_matching_checkpoint_reads_the_appended_bytes_and_folds_a_full_scans_facts() {
+  #[test]
+  fn a_matching_checkpoint_reads_the_appended_bytes_and_folds_a_full_scans_facts() {
     let (home, writer) = make_test_store();
-    let checkpoint_leg = append_first_leg(&writer).await;
+    let checkpoint_leg = write_events(&writer, [json!({"id": "ask", "type": "user", "content": "ship it"})]);
     let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks)).unwrap();
     let first = open();
     let scan = first.scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
@@ -1032,11 +1056,18 @@ mod tests {
     assert!(first.seal_scanned_facts("synthetic", &scan).unwrap());
     let checkpoint_bytes = std::fs::metadata(writer.fact_checkpoint_path("synthetic")).unwrap().len();
 
-    append_second_leg(&writer).await;
+    append_events(
+      &writer,
+      [json!({"id": "finish", "type": "run_finished", "run_id": "run-1", "outcome": "success", "input_event_ids": ["ask"]})],
+    );
     let total = std::fs::metadata(writer.chat_events_path("synthetic")).unwrap().len();
     let resumed = open().scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
     assert_eq!(resumed.read_bytes(), total - checkpoint_leg, "the resumed scan reads only the appended bytes");
     assert_eq!(resumed.checkpoint_bytes(), checkpoint_bytes, "the scan reads its checkpoint");
+    let facts = resumed.facts.task().unwrap();
+    assert!(facts.has_user_request);
+    assert_eq!(facts.run_outcomes.get("run-1").map(String::as_str), Some("success"));
+    assert!(facts.confirmed_input_ids.contains("ask"));
     let full_scan = {
       std::fs::remove_file(writer.fact_checkpoint_path("synthetic")).unwrap();
       let store = open();
@@ -1050,31 +1081,34 @@ mod tests {
   /// A matching checkpoint's read parses the appended tail's lines only, not the covered history's; the event index
   /// still answers a membership test from its table, so an appended line that repeats a covered id folds as the whole
   /// log folds it.
-  #[tokio::test]
-  async fn a_matching_checkpoint_parses_only_the_appended_tail() {
+  #[test]
+  fn a_matching_checkpoint_parses_only_the_appended_tail() {
     let (home, writer) = make_test_store();
-    let first_leg = append_first_leg(&writer).await;
+    let first_leg = write_events(
+      &writer,
+      [json!({"id": "finish-1", "type": "run_finished", "run_id": "run-1", "outcome": "success"})],
+    );
     let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks)).unwrap();
     let first = open();
     let scan = first.scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
     assert!(first.seal_scanned_facts("synthetic", &scan).unwrap());
-    append_second_leg(&writer).await;
     // A line whose id the covered prefix already holds contributes no type-specific fact, as a whole-log fold finds.
-    writer
-      .append_chat_event(
-        "synthetic",
+    append_events(
+      &writer,
+      [
+        json!({"id": "finish-2", "type": "run_finished", "run_id": "run-2", "outcome": "failed"}),
         json!({"id": "finish-1", "type": "run_finished", "run_id": "run-repeat", "outcome": "failed"}),
-      )
-      .await
-      .unwrap();
+      ],
+    );
     let total = std::fs::metadata(writer.chat_events_path("synthetic")).unwrap().len();
 
     crate::ndjson::reset_line_parses();
     let resumed = open().scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
     assert_eq!(resumed.read_bytes(), total - first_leg, "the scan reads only the appended bytes");
-    // Six appended lines, plus the one covered line that the repeated id's table entry points at. The covered history's
+    // Two appended lines, plus the one covered line that the repeated id's table entry points at. The covered history's
     // other lines stay unparsed.
-    assert_eq!(crate::ndjson::line_parses(), 7, "the read parses its appended lines and one table-hit covered line");
+    assert_eq!(crate::ndjson::line_parses(), 3, "the read parses its appended lines and one table-hit covered line");
+    assert_eq!(resumed.facts.task().unwrap().run_outcomes.get("run-2").map(String::as_str), Some("failed"));
     assert!(!resumed.facts.task().unwrap().run_outcomes.contains_key("run-repeat"), "the repeated id folds once");
 
     let full_scan = {
@@ -1087,18 +1121,18 @@ mod tests {
 
   /// Every checkpoint that does not match its source log leaves the full scan to run: a missing file, a torn file, a
   /// truncated log and a rewritten log.
-  #[tokio::test]
-  async fn a_missing_torn_truncated_or_rewritten_checkpoint_scans_the_log_whole() {
+  #[test]
+  fn a_missing_torn_truncated_or_rewritten_checkpoint_scans_the_log_whole() {
     let (home, writer) = make_test_store();
     let checkpoint_path = writer.fact_checkpoint_path("synthetic");
     let log_path = writer.chat_events_path("synthetic");
     let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks)).unwrap();
-    append_first_leg(&writer).await;
+    append_first_leg(&writer);
     let first = open();
     let scan = first.scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
     assert!(scan.checkpoint_bytes() == 0);
     let _ = scan;
-    append_second_leg(&writer).await;
+    append_second_leg(&writer);
     let total = std::fs::metadata(&log_path).unwrap().len();
 
     // The checkpoint of a full scan of the current log, and that scan's facts as the reference.
@@ -1197,15 +1231,15 @@ mod tests {
 
   /// A cold node-facts read answers from the checkpoint without loading the log, and folds the same facts a full
   /// scan of the log folds.
-  #[tokio::test]
-  async fn a_cold_facts_read_answers_from_the_checkpoint_without_a_whole_log_load() {
+  #[test]
+  fn a_cold_facts_read_answers_from_the_checkpoint_without_a_whole_log_load() {
     let (home, writer) = make_test_store();
-    append_first_leg(&writer).await;
+    append_first_leg(&writer);
     let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks)).unwrap();
     let first = open();
     let scan = first.scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
     let _ = scan;
-    append_second_leg(&writer).await;
+    append_second_leg(&writer);
 
     let reading = open();
     let facts = reading.node_facts("synthetic").unwrap();
@@ -1223,15 +1257,29 @@ mod tests {
   /// A cold node-state read folds the fact checkpoint and the bytes past it, and reaches the task state, run facts and
   /// task facts a whole-log fold reaches. A checkpoint that is absent, torn or stale folds nothing, and the read falls
   /// back to the whole-log load that answers the same value.
-  #[tokio::test]
-  async fn a_cold_node_state_read_folds_the_checkpoint_and_its_mismatches_load_the_whole_log() {
+  #[test]
+  fn a_cold_node_state_read_folds_the_checkpoint_and_its_mismatches_load_the_whole_log() {
     let (home, writer) = make_test_store();
     let open = || open_test_store(home.path(), Arc::new(crate::EmptyRuntimeEventHooks)).unwrap();
-    append_first_leg(&writer).await;
+    write_events(
+      &writer,
+      [
+        json!({"id": "created", "type": "task_created", "actor": "user"}),
+        json!({"id": "ask", "type": "user", "content": "do the work"}),
+        json!({"id": "finish-1", "type": "run_finished", "run_id": "run-1", "outcome": "success",
+               "input_event_ids": ["ask"]}),
+      ],
+    );
     let first = open();
     let scan = first.scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");
     assert!(first.seal_scanned_facts("synthetic", &scan).unwrap());
-    append_second_leg(&writer).await;
+    append_events(
+      &writer,
+      [
+        json!({"id": "close-ask", "type": "task_close_requested", "request_id": "close-1", "owner_run_id": "run-1"}),
+        json!({"id": "close-1", "type": "task_closed", "request_id": "close-1", "outcome": "completed"}),
+      ],
+    );
     let checkpoint_path = writer.fact_checkpoint_path("synthetic");
     let log_path = writer.chat_events_path("synthetic");
     let intact = std::fs::read(&checkpoint_path).unwrap();

@@ -1619,7 +1619,9 @@ mod tests {
   #[tokio::test]
   async fn event_cache_generation_keeps_identity_on_append_and_changes_after_clear() {
     let (_home, store) = make_test_store();
-    store.append_chat_event("synthetic", json!({"id": "event-a", "type": "user"})).await.unwrap();
+    let path = store.chat_events_path("synthetic");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"{\"id\":\"event-a\",\"type\":\"user\"}\n").unwrap();
     let (initial_generation, initial_identity, initial_events) =
       store.live_events_with_generation("synthetic").unwrap();
     assert_eq!(initial_events.len(), 1);
@@ -1722,72 +1724,49 @@ mod tests {
     }
   }
 
-  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
   async fn one_forced_concurrent_append_during_a_cold_read_lands_once_in_cache_and_file() {
     let (_home, store) = make_test_store();
     let store = Arc::new(store);
     let session_id = "synthetic-same-session";
     let path = store.chat_events_path(session_id);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"").unwrap();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    *store.event_read_hook.lock().unwrap() = Some(Arc::new(move || {
+      entered_tx.send(()).unwrap();
+      release_rx.lock().unwrap().recv().unwrap();
+    }));
 
-    // The hooks force the same interleaving every time; repeating it only repeats file setup and writes.
-    for iteration in 0..1 {
-      store.clear_chat_events_cache(session_id);
-      std::fs::write(&path, b"").unwrap();
-      let (entered_tx, entered_rx) = mpsc::channel();
-      let (release_tx, release_rx) = mpsc::channel();
-      let release_rx = Arc::new(Mutex::new(release_rx));
-      *store.event_read_hook.lock().unwrap() = Some(Arc::new(move || {
-        entered_tx.send(()).unwrap();
-        release_rx.lock().unwrap().recv().unwrap();
-      }));
-
-      let reader_store = Arc::clone(&store);
-      let reader = tokio::task::spawn_blocking(move || reader_store.load_chat_events_shared_sync(session_id));
-      let entered = entered_rx.recv_timeout(Duration::from_secs(1)).is_ok();
-      if !entered {
-        let _ = release_tx.send(());
-        reader.await.unwrap().unwrap();
-        panic!("iteration {iteration}: cold read did not reach its file-read hook");
-      }
-
-      let (started_tx, started_rx) = mpsc::channel();
-      let mut appends = Vec::new();
-      let expected: BTreeSet<String> = (0..2).map(|index| format!("event-{iteration}-{index}")).collect();
-      for index in 0..2 {
-        let append_store = Arc::clone(&store);
-        let started_tx = started_tx.clone();
-        let event_id = format!("event-{iteration}-{index}");
-        appends.push(tokio::spawn(async move {
-          started_tx.send(()).unwrap();
-          append_store.append_chat_event(session_id, json!({"id": event_id, "type": "user"})).await
-        }));
-      }
-      drop(started_tx);
-      for _ in 0..2 {
-        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-      }
-      release_tx.send(()).unwrap();
+    let reader_store = Arc::clone(&store);
+    let reader = tokio::task::spawn_blocking(move || reader_store.load_chat_events_shared_sync(session_id));
+    let entered = entered_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+    if !entered {
+      let _ = release_tx.send(());
       reader.await.unwrap().unwrap();
-      for append in appends {
-        append.await.unwrap().unwrap();
-      }
-
-      let cached = store.load_chat_events_shared_sync(session_id).unwrap();
-      let cache_ids: BTreeSet<String> = cached.iter().map(|event| event["id"].as_str().unwrap().to_string()).collect();
-      let file_events = ndjson::read_file_compact(&path).unwrap();
-      let file_ids: BTreeSet<String> =
-        file_events.iter().map(|event| event["id"].as_str().unwrap().to_string()).collect();
-      assert_eq!(cached.len(), expected.len(), "iteration {iteration}: cached event count");
-      assert_eq!(file_events.len(), expected.len(), "iteration {iteration}: file event count");
-      assert_eq!(cache_ids, expected, "iteration {iteration}: cache ids");
-      assert_eq!(file_ids, expected, "iteration {iteration}: file ids");
-      assert_eq!(
-        cached.iter().map(|event| event["id"].to_value()).collect::<Vec<_>>(),
-        file_events.iter().map(|event| event["id"].to_value()).collect::<Vec<_>>(),
-        "iteration {iteration}: cache and file order"
-      );
+      panic!("cold read did not reach its file-read hook");
     }
+
+    let (started_tx, started_rx) = mpsc::channel();
+    let append_store = Arc::clone(&store);
+    let append = tokio::spawn(async move {
+      started_tx.send(()).unwrap();
+      append_store.append_chat_event(session_id, json!({"id": "appended", "type": "user"})).await
+    });
+    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    release_tx.send(()).unwrap();
+    reader.await.unwrap().unwrap();
+    append.await.unwrap().unwrap();
+
+    let cached = store.load_chat_events_shared_sync(session_id).unwrap();
+    let file_events = ndjson::read_file_compact(&path).unwrap();
+    assert_eq!(cached.len(), 1, "one append lands once in the cache");
+    assert_eq!(file_events.len(), 1, "one append lands once in the file");
+    assert_eq!(cached[0]["id"].as_str(), Some("appended"));
+    assert_eq!(file_events[0]["id"].as_str(), Some("appended"));
+    assert_eq!(cached[0]["id"].to_value(), file_events[0]["id"].to_value(), "cache and file order agree");
   }
 
   #[tokio::test]

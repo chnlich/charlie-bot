@@ -503,7 +503,7 @@ test('the transport announces a socket-driven close as a network close with the 
 
   const close = h.announced.filter((event) => event.type === 'charliebot:client-socket-close').pop();
   assert.deepEqual({...close.detail}, {cause: 'network', code: 1006});
-  assert.equal(h.timers.length, 1, 'the close still schedules its reconnect');
+  assert.deepEqual(h.timers.map((timer) => timer.ms), [1000, 250], 'the close schedules its reconnect and quick retry');
 });
 
 test('the transport announces the stale-asset close once and marks the reload cause', () => {
@@ -527,7 +527,7 @@ test('the transport announces the reopen with the reconnect attempt count', () =
   socket.emitClose({code: 1006});           // first attempt dies before opening
   assert.equal(h.announced.filter((event) => event.type === 'charliebot:client-socket-close').length, 0,
       'a reconnect attempt that never opened is part of the disconnect no close was announced for');
-  h.timers.pop().fn();                      // the backoff fires the second attempt
+  h.timers.pop().fn();                      // the quick retry fires the second attempt
   socket = h.FakeWebSocket.instances[h.FakeWebSocket.instances.length - 1];
   socket.emitOpen();
 

@@ -112,6 +112,25 @@ function receivedByEndpoint(pages, from, to, minutes) {
   return Object.fromEntries(Object.entries(sums).map(([name, bytes]) => [name, bytes / 1000 / minutes]));
 }
 
+// The sidebar list refreshes in flight in [from, to]: a refresh the window overlaps is requested at
+// or before `to` and finishes at or after `from`. With fix A the Workspace refreshes changed rows by
+// id and still refetch the whole list for the starred and Threads views, so both count as a list
+// refresh. A switch's hold inside a refresh burst is what the calibration names, so the report tells
+// those switches apart.
+function overlappingListRefreshes(tab, from, to) {
+  const overlapping = [];
+  for (const request of tab.requests.values()) {
+    if (!ENDPOINTS.fullList.test(request.url) && !ENDPOINTS.rows.test(request.url)) {
+      continue;
+    }
+    const endsAt = request.finishAt === null ? Infinity : request.finishAt;
+    if (request.startAt <= to && endsAt >= from) {
+      overlapping.push({ startAt: request.startAt, finishAt: request.finishAt, bytes: request.bytes });
+    }
+  }
+  return overlapping;
+}
+
 // The fields that differ between two status bodies, each `{session id: {field: value}}`. A row only one body holds
 // counts as `row added` or `row removed`; equal rows in another key order count as `key order`.
 function changedStatusFields(beforeText, afterText) {
@@ -286,6 +305,7 @@ export async function backgroundRep(ctx, repetition) {
       switchCapped: shown.capped,
       switchFloorMs: floorMs(bootstrapBytes),
       switchBootstrapBytes: bootstrapBytes,
+      switchListRefreshes: overlappingListRefreshes(tab, clickedAt, shown.at),
       switchState,
       sendMs: echoed.at - sentAt,
       sendCapped: echoed.capped,
@@ -391,6 +411,10 @@ export async function heldBlackoutRep(ctx) {
     }
     return {
       restoreToRenderedMs: Math.max(shownAt, catchupAt) - restoreAt,
+      // The two parts of the restore: the last switch's render, and the socket's catch-up.
+      shownMs: shownAt - restoreAt,
+      catchupMs: catchupAt - restoreAt,
+      socketMs: socket.at - restoreAt,
       lastFloorMs: floorMs(lastBytes),
       lastBootstrapBytes: lastBytes,
       supersededServerBytes,
@@ -416,12 +440,24 @@ export async function resetBlackoutRep(ctx) {
       'the socket to reconnect',
     );
     const catchupAt = await catchupAfter(tab, { requestId: handshake.requestId, at: handshake.at }, restoreAt);
+    const socket = tab.sockets.filter((entry) => entry.requestId === handshake.requestId).pop() ?? null;
     const catchupBytes = tab
       .framesBetween(handshake.at, catchupAt)
       .filter((frame) => frame.requestId === handshake.requestId)
       .reduce((sum, frame) => sum + frame.bytes, 0);
     return {
       reconnectMs: handshake.at - restoreAt,
+      // The page's socket creation and the browser's first byte of its opening handshake, both after the restore. The
+      // page owns the first; the browser's connection setup owns the second.
+      socketMs: socket === null ? null : socket.at - restoreAt,
+      // Every socket the page created, every handshake the browser started sending, every close it saw, and every
+      // status poll the page sent, relative to the restore: which attempt won, and what was in flight beside it.
+      socketAttemptsMs: tab.sockets.map((entry) => entry.at - restoreAt),
+      handshakeSendsMs: tab.handshakeSends.map((entry) => entry.at - restoreAt),
+      socketClosesMs: tab.socketCloses.map((entry) => ({ ms: entry.at - restoreAt, error: entry.error })),
+      statusPollStartsMs: [...tab.requests.values()]
+        .filter((request) => ENDPOINTS.status.test(request.url))
+        .map((request) => request.startAt - restoreAt),
       restoreToCatchupMs: catchupAt - restoreAt,
       catchupBytes,
     };

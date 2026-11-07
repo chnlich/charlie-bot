@@ -103,7 +103,7 @@ impl AgentBackend for DevinBackend {
     Ok(())
   }
 
-  /// Writes the framed prompt into the run's log directory, then returns the command that reads it. The prompt file is
+  /// The command that reads the framed prompt file written into the run's log directory. The prompt file is
   /// the only carrier of the instructions: the type writes no instructions file in the working directory.
   fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
     let run_dir = self.run_dir()?;

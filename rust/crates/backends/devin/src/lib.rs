@@ -20,7 +20,7 @@ pub const USAGE_SOURCE: &str = "Devin";
 /// The package label the composition list registers this backend's package under.
 pub const PACKAGE: &str = "backends.devin";
 
-/// Registers the `devin` type and the Devin usage source, which attributes the type's usage.
+/// The registration of the `devin` type and the Devin usage source, which attributes the type's usage.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   register_with_host(registry, registration_step(PACKAGE, CliHost::from_process())?)
 }

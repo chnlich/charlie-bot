@@ -279,7 +279,20 @@ Keep one copy of each changed host file, in its final state. A review of out-of-
 Bind experiment conditions to the run host's `sacct` and result records. Fill missing comparison legs from those records.
 
 Keep repo content free of PII and secrets.
-Before you publish host content to any public repo, scan it for these items:
+Content in a repository with other users serves those users.
+The agent machinery for such a repository is everything that equips an agent to work on it:
+- procedures and scripts, such as improve kits, round scripts and landing rules;
+- the hosts where agents build and test, and the notices about those hosts' resources;
+- CharlieBot configuration keys and profile paths.
+That machinery lives in the profile home (`$CHARLIEBOT_HOME`), not in the repository.
+Host files point into the repository instead.
+A repository whose only user is the user keeps its agent machinery in the repository, as the Repo-to-Host Content Split
+section of `skills/charliebot/SKILL.md` describes.
+Before you place agent machinery in a repository, read the host rules: the Action approval boundaries entry in
+`$CHARLIEBOT_HOME/memory/entries/workflow/`.
+The host rules name the repositories whose only user is the user.
+A repository the host rules do not name has other users.
+Before you publish host content to a repository with other users, scan it for these items:
 - personal absolute paths and usernames;
 - internal infrastructure names;
 - session-derived material that identifies a real person.

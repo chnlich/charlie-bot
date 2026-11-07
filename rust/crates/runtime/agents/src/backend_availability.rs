@@ -10,7 +10,7 @@ use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow};
-use charliebot_core::home;
+use charliebot_core::{fsutil, home};
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::metadata::UtcDateTime;
 use nix::fcntl::{Flock, FlockArg};
@@ -29,7 +29,6 @@ pub const REASON_TIMEOUT: &str = "timeout";
 /// The reason of a record that holds a pool member out after an iteration failed for a reason other than its quota.
 pub const REASON_ITERATION_FAILURE: &str = "iteration_failure";
 
-const STAGING_SUFFIX: &str = ".staging";
 const LOCK_SUFFIX: &str = ".lock";
 
 /// One backend option's "out until" row.
@@ -136,15 +135,11 @@ impl BackendAvailability {
     }
   }
 
-  /// Write the state through a staging file and an atomic rename, so a reader never sees a partial file.
+  /// Write the state through an atomic publication, so a reader never sees a partial file.
   fn persist(&self, rows: &HashMap<String, AvailabilityRow>) -> anyhow::Result<()> {
-    let file_name =
-      self.path.file_name().expect("the availability path has a file name").to_string_lossy().into_owned();
-    let staging = self.path.with_file_name(format!("{file_name}{STAGING_SUFFIX}"));
-    let contents = serde_json::to_vec_pretty(rows).context("serializing the backend availability state")?;
+    let contents = serde_json::to_string_pretty(rows).context("serializing the backend availability state")?;
     fs::create_dir_all(self.path.parent().expect("the availability path has a parent"))?;
-    fs::write(&staging, contents).with_context(write_error)?;
-    fs::rename(&staging, &self.path).with_context(write_error)?;
+    fsutil::atomic_write_text(&self.path, &contents).with_context(write_error)?;
     Ok(())
   }
 }
@@ -233,7 +228,12 @@ mod tests {
       .unwrap();
 
     let path = home::backend_availability_path(home.path());
-    assert!(!path.with_file_name(format!("{}{STAGING_SUFFIX}", home::BACKEND_AVAILABILITY_FILE_NAME)).exists());
+    let leftovers: Vec<String> = fs::read_dir(path.parent().unwrap())
+      .unwrap()
+      .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+      .filter(|name| name.ends_with(".tmp") || name.ends_with(".staging"))
+      .collect();
+    assert!(leftovers.is_empty(), "the publication left sibling files: {leftovers:?}");
     let contents = fs::read_to_string(&path).unwrap();
     let rows = serde_json::from_str::<HashMap<String, AvailabilityRow>>(&contents).unwrap();
     let row = rows.get("member").expect("the recorded member is in the file");

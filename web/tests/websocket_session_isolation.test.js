@@ -44,22 +44,21 @@ function buildContext(sessionId) {
   return {context, FakeWebSocket, messages, timers, sidebarActions};
 }
 
-test('ignores stale socket events after rapid session switch', () => {
+test('ignores stale socket events after a newer connect attempt', () => {
   const {context, FakeWebSocket, messages} = buildContext('session-a');
 
   context.connectWS();
   const staleSocket = FakeWebSocket.instances[0];
   staleSocket.emitOpen();
 
-  context.SESSION_ID = 'session-b';
   context.connectWS();
   const activeSocket = FakeWebSocket.instances[1];
   activeSocket.emitOpen();
 
-  staleSocket.emitMessage({type: 'message', message: {role: 'user', content: 'old session text'}});
-  activeSocket.emitMessage({type: 'message', message: {role: 'user', content: 'active session text'}});
+  staleSocket.emitMessage({type: 'message', message: {role: 'user', content: 'old socket text'}});
+  activeSocket.emitMessage({type: 'message', message: {role: 'user', content: 'active socket text'}});
 
-  assert.deepEqual(messages.map((m) => m.content), ['active session text']);
+  assert.deepEqual(messages.map((m) => m.content), ['active socket text']);
 });
 
 test('only active socket schedules reconnect on close', () => {
@@ -68,7 +67,6 @@ test('only active socket schedules reconnect on close', () => {
   context.connectWS();
   const staleSocket = FakeWebSocket.instances[0];
 
-  context.SESSION_ID = 'session-b';
   context.connectWS();
   const activeSocket = FakeWebSocket.instances[1];
 
@@ -77,23 +75,6 @@ test('only active socket schedules reconnect on close', () => {
 
   activeSocket.emitClose();
   assert.deepEqual(timers.map((timer) => timer.ms), [1000, 250], 'only the active socket reconnects');
-});
-
-test('disconnectWS detaches handlers and delayed stale callbacks are ignored', () => {
-  const {context, FakeWebSocket, messages} = buildContext('session-a');
-
-  context.connectWS();
-  const socket = FakeWebSocket.instances[0];
-  const delayedMessage = socket.onmessage;
-
-  context.disconnectWS();
-
-  assert.equal(socket.onmessage, null);
-  assert.equal(socket.onclose, null);
-  assert.equal(socket.closed, true);
-
-  delayedMessage({data: JSON.stringify({type: 'message', message: {role: 'user', content: 'should be ignored'}})});
-  assert.equal(messages.length, 0);
 });
 
 test('session_group_changed refreshes the active sidebar filter', () => {

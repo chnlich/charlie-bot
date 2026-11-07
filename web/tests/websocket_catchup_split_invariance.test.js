@@ -92,7 +92,7 @@ function renderUnsplit(frames) {
   const client = buildClient();
   const socket = connect(client);
   deliver(socket, frames);
-  socket.emitMessage({type: 'catchup_complete'});
+  socket.emitMessage({type: 'catchup_complete', session_id: 's1', subscription: 0, event_total: 3});
   return screen(client.bubbles, client.preview);
 }
 
@@ -109,7 +109,7 @@ function pendingDraftAt(frames, k) {
 function renderSplitAt(frames, k) {
   const client = buildClient();
   const first = connect(client);
-  first.emitMessage({type: 'catchup_complete'});
+  first.emitMessage({type: 'catchup_complete', session_id: 's1', subscription: 0, event_total: 3});
   deliver(first, frames.slice(0, k));
   // The socket drops; the reconnect's catch-up resends the whole draft still open, then the rest.
   first.emitClose();
@@ -117,7 +117,7 @@ function renderSplitAt(frames, k) {
   const second = connect(client);
   if (draftText) deliver(second, catchupFrames(draftText));
   deliver(second, frames.slice(k));
-  second.emitMessage({type: 'catchup_complete'});
+  second.emitMessage({type: 'catchup_complete', session_id: 's1', subscription: 0, event_total: 3});
   return screen(client.bubbles, client.preview);
 }
 

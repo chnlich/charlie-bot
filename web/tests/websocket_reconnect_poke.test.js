@@ -158,7 +158,7 @@ test('a poke cancels the pending quick retry', () => {
   });
 });
 
-test('a switch teardown clears the quick retry', () => {
+test('cancelReconnect clears the quick retry', () => {
   const h = buildContext();
   connectedThenClosed(h);
   const quickTimerId = quickRetryIndex(h.timers) + 1;

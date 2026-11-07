@@ -573,11 +573,31 @@ async function fetchBootstrapWithRetry(sessionId, gen) {
 }
 
 // The failed switch leaves its placeholder standing: the row names the failure and the way
-// back, another click on the session's sidebar row.
+// back, another click on the session's sidebar row. A subscribe that failed after the render
+// landed finds no placeholder row and gets one over the rendered view.
 function failSwitchPlaceholder(sessionId) {
-  const row = document.getElementById('switch-placeholder');
-  if (!row) return;
+  const container = document.getElementById('messages');
+  if (!container) return;
+  let row = document.getElementById('switch-placeholder');
+  if (!row) {
+    row = document.createElement('div');
+    row.id = 'switch-placeholder';
+    row.className = 'px-4 py-2 flex items-center gap-2 text-sm text-slate-400';
+    container.appendChild(row);
+  }
   row.textContent = 'Could not open ' + switchTargetName(sessionId) + ' — click the row to retry';
+}
+
+// The target session refused the live subscription: the switch's wait ends with the same failure
+// notice a bootstrap failure leaves, and the view keeps dropping session frames until a retry or
+// a reconnect binds a subscription again.
+function sessionSubscribeFailed(request) {
+  if (request.from_session) {
+    reportSwitchEvent('failed', request.from_session, request.session_id, request.generation, {
+      error: 'subscribe_refused',
+    });
+  }
+  failSwitchPlaceholder(request.session_id);
 }
 
 // Click-time immediate feedback: the placeholder row (thinking pulse-dot
@@ -609,6 +629,10 @@ async function switchSession(sessionId) {
   if (!SESSION_ID) { location.href = '/?session=' + sessionId; return; }
   // Already on this session
   if (sessionId === SESSION_ID) {
+    // The failure notice's "click the row to retry": a subscribe the target refused left the view
+    // without a live subscription, and the re-click re-requests it from the cursor the view holds.
+    // A switch in flight owns the wait, so this asks the transport rather than guessing.
+    if (canRetrySessionSubscription()) requestSessionSubscription(sessionId, eventCursor, null);
     return;
   }
 
@@ -649,9 +673,9 @@ async function switchSession(sessionId) {
   sessionLoadingMore = false;
   abortViewRequests();
 
-  // Close WebSocket (suppress auto-reconnect)
-  disconnectWS();
-  cancelReconnect();
+  // The socket stays up across the switch: the frames of the session it leaves drop from here
+  // until the target's subscription binds.
+  holdSessionFrames(sessionId);
 
   // Reset streaming state; request ids stay pending until their echoes arrive.
   hideStreaming();
@@ -686,6 +710,8 @@ async function switchSession(sessionId) {
       abandonHeldComposerActions(sessionId);
       switching = false;
       failSwitchPlaceholder(sessionId);
+      // The view is back on the session it started from: its standing subscription serves it again.
+      resumeViewSubscription();
       return;
     }
     // A bootstrap retry the newer click cut short resolves null.
@@ -732,9 +758,12 @@ async function switchSession(sessionId) {
   refreshSessionIndicator(sessionId);
   markSessionRead(sessionId);
 
-  // Reconnect WebSocket
-  reconnectDelay = 1000;
-  connectWS();
+  // The open socket takes the target's subscription from the bootstrap's event position: the
+  // server answers `subscribed`, replays from the cursor and closes with `catchup_complete`.
+  requestSessionSubscription(sessionId, data.event_count, {
+    from_session: fromSessionId,
+    generation: gen,
+  });
   switching = false;
   reportSwitchEvent('completed', fromSessionId, sessionId, gen, {
     elapsed_ms: Date.now() - switchStartedAt,
@@ -1243,8 +1272,8 @@ async function createTaskNode(taskParentId, group) {
     if (masterThinking) stopThinking();
     teardownActiveSessionView();
     abortViewRequests();
-    disconnectWS();
-    cancelReconnect();
+    // The socket stays up: the new session's subscription rides it, like every switch's.
+    holdSessionFrames(data.id);
     hideStreaming();
 
     const bootstrap = buildEmptySessionBootstrap(data);
@@ -1254,8 +1283,7 @@ async function createTaskNode(taskParentId, group) {
     eventCursor = bootstrap.event_count;
     history.pushState({session: data.id}, '', '/?session=' + data.id);
     globalThis.renderSessionView(bootstrap);
-    reconnectDelay = 1000;
-    connectWS();
+    requestSessionSubscription(data.id, bootstrap.event_count, null);
     switching = false;
 
     const input = document.getElementById('msg-input');
@@ -1277,10 +1305,12 @@ function renderNoActiveSessionView() {
   teardownActiveSessionView();
   hideStreaming();
   abortViewRequests();
-  disconnectWS();
-  cancelReconnect();
+  // With no session displayed the page receives no session's frames: the socket closes, so an
+  // archived session's live output does not spend the link on a view with nothing to show. The
+  // welcome view's sidebar rows come from the page load that opens the next session.
 
   SESSION_ID = null;
+  closeSessionSocket();
   globalThis.renderPendingTriggersTray(null);
   globalThis.clearSessionStatusPanel();
   document.dispatchEvent(new CustomEvent('charliebot:active-session-changed'));

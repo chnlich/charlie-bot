@@ -151,12 +151,28 @@ export class Tab {
     return this.page.evaluate(expression);
   }
 
+  // Waits for the page's load event and the app's mount of the chat area. A load that hangs is the harness's, not the
+  // page's: a CDN request the harness paused and then failed to answer stops the load event, and nothing in the page
+  // retries it. One reload starts the load again instead of losing the rep to it. Every scenario times its windows
+  // from after this call, so the retry moves no figure. A second stall fails the rep with the tab's state at the stall.
   async ready() {
-    await waitFor(
-      () => this.evaluate("document.readyState === 'complete' && !!document.getElementById('msg-input')").catch(() => false),
-      240000,
-      `${this.name} to load the chat`,
-    );
+    try {
+      await waitFor(() => this.#loaded(), 240000, `${this.name} to load the chat`);
+    } catch {
+      const state = await this.diagnose(0).catch((error) => `the tab did not answer: ${error.message}`);
+      await this.page.send('Page.reload', { ignoreCache: true }).catch(() => {});
+      await waitFor(
+        () => this.#loaded(),
+        240000,
+        `${this.name} to load the chat after one stalled load; at the stall: ${state.slice(0, 500)}`,
+      );
+    }
+  }
+
+  // The page has run its load event and mounted the chat area.
+  #loaded() {
+    return this.evaluate("document.readyState === 'complete' && !!document.getElementById('msg-input')")
+      .catch(() => false);
   }
 
   // Installs the sidebar spinner probe (SIDEBAR_PROBE_SOURCE above) on this tab. Call on the visible tab before the
@@ -460,9 +476,13 @@ export class Tab {
     this.#bodyReads.add(read);
   }
 
-  // Serves a CDN request from the local assets, or fails it, so an unknown host never reaches the link.
+  // Serves a CDN request from the local assets, or fails it, so an unknown host never reaches the link. A fulfill the
+  // browser refuses is answered with a failure instead: a request left paused blocks the page's load event for good.
   answerAsset(params, assets) {
     const asset = assets.get(params.request.url);
+    const fail = () =>
+      this.page.send('Fetch.failRequest', { requestId: params.requestId, errorReason: 'AddressUnreachable' })
+        .catch(() => {});
     if (asset) {
       this.page.send('Fetch.fulfillRequest', {
         requestId: params.requestId,
@@ -473,9 +493,9 @@ export class Tab {
           { name: 'Cache-Control', value: 'max-age=31536000' },
         ],
         body: asset.body.toString('base64'),
-      }).catch(() => {});
+      }).catch(fail);
     } else {
-      this.page.send('Fetch.failRequest', { requestId: params.requestId, errorReason: 'AddressUnreachable' }).catch(() => {});
+      fail();
     }
   }
 }

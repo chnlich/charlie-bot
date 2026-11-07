@@ -146,6 +146,22 @@ impl Store {
     self.streaming_manager.close_all().await;
   }
 
+  /// Subscribe to one session's channel and run `load` under the session's event lock, so the read
+  /// and every append-broadcast pair of the same session are ordered: an event is either wholly
+  /// before the subscription (the catch-up replay carries it) or wholly after it (the subscription
+  /// does), never both. `persist_and_broadcast` holds the same lock across its append and its
+  /// broadcast, so a reader that runs under the lock cannot see an event twice.
+  pub async fn subscribe_session_before_load<T, F, Fut>(&self, session_id: &str, load: F) -> (Subscription, T)
+  where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = T>,
+  {
+    let _event_guard = self.event_lock(session_id).await;
+    let subscription = self.subscribe(&streaming::session_channel(session_id));
+    let loaded = load().await;
+    (subscription, loaded)
+  }
+
   /// Build a message aggregator with the event renderers registered for this store.
   pub fn new_message_aggregator(&self, event_index_offset: usize, emit_stream_deltas: bool) -> MessageAggregator {
     MessageAggregator::with_renderers(event_index_offset, emit_stream_deltas, self.event_renderers.clone())

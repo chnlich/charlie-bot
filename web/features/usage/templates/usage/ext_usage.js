@@ -526,7 +526,7 @@ function renderExtUsage(data) {
   _syncExtUsageChrome(strip);
 }
 
-registerWsMessageHandler('ext_usage', renderExtUsage, {advancesCursor: true});
+registerWsMessageHandler('ext_usage', renderExtUsage, {advancesCursor: true, sidebar: true});
 
 // The 60s repaint recomputes each countdown and reading age from the clock; an
 // expiry change arrives with the server's next emit.

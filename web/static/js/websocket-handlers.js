@@ -47,7 +47,7 @@ registerWsMessageHandler('session_renamed', (ev) => {
     if (link) link.querySelector('.session-name').textContent = ev.name;
   }
   refreshDisplayedSessionName(sid, ev.name);
-}, {advancesCursor: false});
+}, {advancesCursor: false, sidebar: true});
 
 // A changed task node re-fetches the list the same way a group change does.
 // The archived view refreshes its loaded rows in place instead, so the
@@ -60,7 +60,7 @@ function refetchSessionList() {
   else switchSidebarFilter(currentFilter);
 }
 registerWsMessageHandler('session_group_changed', () => deferWhileHidden('session-list', refetchSessionList),
-    {advancesCursor: false});
+    {advancesCursor: false, sidebar: true});
 // A worker run's finish reaches the page as a task_tree_changed frame, and the concurrency badge counts that run, so
 // the badge refetches with the rows. Its 5 s poll covers a worker run's start, which broadcasts nothing. The frame
 // names the session whose row changed: a list scoped by filter fetches that row alone, and the views that keep their
@@ -70,12 +70,12 @@ registerWsMessageHandler('task_tree_changed', (ev) => {
   else deferWhileHidden('session-list', refetchSessionList);
   deferWhileHidden('workspace-badges', refreshWorkspaceBadges);
   globalThis.ConcurrencyBadge?.refreshSoon();
-}, {advancesCursor: false});
+}, {advancesCursor: false, sidebar: true});
 
-// The socket does not replay task_tree_changed frames, so an open that follows a close reloads the list, which
-// recovers the rows the gap hid. A switch closes and reopens the page's socket, and a welcome view has no socket at
-// all, so those opens sync the list too. A page load's own first socket needs no reload: the page carries the
-// server's snapshot in its rows.
+// The socket does not replay task_tree_changed frames, so an open that follows a network close reloads the list,
+// which recovers the rows the gap hid. A switch keeps the socket and rides a subscribe frame, and the no-session view
+// closes it, so a network close is the only close whose rows are missing; a page load's own first socket needs no
+// reload because the page carries the server's snapshot in its rows.
 registerWsConnectHandler(() => {
   // The network-loss flag feeds the connect handlers that repair their own state (the plan panel); the list resync
   // below covers every open that could have missed a frame.
@@ -98,7 +98,7 @@ registerWsMessageHandler('unread_changed', (ev) => {
   if (ev.session_id === SESSION_ID) return;
   // The row and its collapsed ancestors repaint from the shared facts.
   refreshSessionIndicator(ev.session_id);
-}, {advancesCursor: false});
+}, {advancesCursor: false, sidebar: true});
 
 // Sidebar activity update. The status poll and the list paint apply the same
 // state mapping. A task-tree row's work_state verdict rides the event when
@@ -118,7 +118,7 @@ registerWsMessageHandler('running_changed', (ev) => {
   refreshSessionStatusNow();
   // A manager turn starts or ends: the concurrency badge's number moved with it.
   globalThis.ConcurrencyBadge?.refreshSoon();
-}, {advancesCursor: false});
+}, {advancesCursor: false, sidebar: true});
 
 // A backend switch on the active session: the header badge/dropdown must
 // reflect the new value immediately. The initiating tab already did this
@@ -134,7 +134,7 @@ registerWsMessageHandler('backend_switched', (ev) => {
     setActiveBackendId(newBackend);
     updateActiveBackendBadges();
   }
-}, {advancesCursor: false});
+}, {advancesCursor: false, sidebar: true});
 
 // A subagent event that arrives after its draft committed sends that message again, under its id. The engine
 // replaces the message where it stands. An id the list does not hold throws, so the error reaches the console.

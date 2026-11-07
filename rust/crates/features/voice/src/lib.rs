@@ -39,7 +39,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.config_check("check_default_backend", config::check_default_backend)?;
   registry.home_card(HomeCard {
     name: "Recent recordings",
-    url: "/voice-recordings",
+    url: api::RECORDINGS_PAGE_PATH,
     description: "Recent voice recordings across every session, playable, with each run's startup report and failure.",
   })
 }

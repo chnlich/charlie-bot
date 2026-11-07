@@ -593,11 +593,12 @@ fn path_error(path: &Path, error: std::io::Error) -> StoreError {
 mod tests {
   use std::fs;
 
+  use charliebot_registry::FeatureContext;
   use charliebot_store::metadata::TaskProfile;
   use charliebot_store::run_records::{RunOutcome, RunOutcomeKind};
 
   use super::*;
-  use crate::test_support::{create_node, feature_context};
+  use crate::test_support::{GatedHome, create_node, feature_context};
 
   async fn worker_context(
     label: &str,
@@ -978,14 +979,20 @@ mod tests {
     deliveries[0]["timestamp"].as_str().unwrap().to_string()
   }
 
-  #[tokio::test]
-  async fn delivery_card_timestamp_is_the_task_close_time() {
-    let (_home, features, session_id) = worker_context(&format!("close-time-{}", uuid::Uuid::new_v4())).await;
+  async fn closed_delivery_context() -> (GatedHome, Arc<FeatureContext>, String) {
+    let (home, features, session_id) = worker_context(&format!("close-time-{}", uuid::Uuid::new_v4())).await;
     let store = features.store.as_ref();
     register_run(store, run_record("run-work", &session_id, RunKind::Work, None)).await;
     let work_ended = UtcDateTime::parse("2026-10-17T09:00:10Z").unwrap();
     finish_run(store, &session_id, "run-work", RunOutcomeKind::Success, work_ended).await;
     append_task_closed(store, &session_id, "2026-10-17T09:00:14Z").await;
+    (home, features, session_id)
+  }
+
+  #[tokio::test]
+  async fn delivery_card_timestamp_is_the_task_close_time() {
+    let (_home, features, session_id) = closed_delivery_context().await;
+    let store = features.store.as_ref();
 
     let entry = load_worker_transcript(store, &session_id).unwrap();
     assert_eq!(delivery_timestamp(&entry), "2026-10-17T09:00:14Z");
@@ -995,6 +1002,14 @@ mod tests {
     let signature = worker_signature(store, &session_id).unwrap();
     let rebuilt = build_worker_transcript(store, &session_id, signature).unwrap();
     assert_eq!(delivery_timestamp(&rebuilt), "2026-10-17T09:00:14Z");
+  }
+
+  #[tokio::test]
+  async fn delivery_card_timestamp_updates_after_reopening_and_closing() {
+    let (_home, features, session_id) = closed_delivery_context().await;
+    let store = features.store.as_ref();
+    let entry = load_worker_transcript(store, &session_id).unwrap();
+    assert_eq!(delivery_timestamp(&entry), "2026-10-17T09:00:14Z");
 
     store
       .append_chat_event(

@@ -189,6 +189,7 @@ fn open_swaps_five_changed_sum_triggers_and_reprices_aggregate() {
   let dir = tempfile::tempdir().unwrap();
   let path = dir.path().join("ledger.sqlite3");
   let mut ledger = UsageLedger::open(&path).unwrap();
+  ledger.conn.execute_batch("BEGIN").unwrap();
   ledger
     .conn
     .execute(
@@ -204,6 +205,7 @@ fn open_swaps_five_changed_sum_triggers_and_reprices_aggregate() {
       .unwrap();
   }
   ledger.conn.execute_batch("DELETE FROM usage_agg; INSERT INTO usage_agg VALUES ('wrong', 'wrong', 'wrong', 'native', '2020-01-01', 99, 99, 0, 0, 0, 99);").unwrap();
+  ledger.conn.execute_batch("COMMIT").unwrap();
   drop(ledger);
   let ledger = UsageLedger::open(&path).unwrap();
   let mut expected = sql::agg_trigger_statements()

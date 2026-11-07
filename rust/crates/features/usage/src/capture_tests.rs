@@ -756,7 +756,9 @@ fn opencode_deleted_source_row_keeps_ledger_record() {
   source.pragma_update(None, "journal_mode", "OFF").unwrap();
   source.pragma_update(None, "synchronous", "OFF").unwrap();
   source
-    .execute_batch("CREATE TABLE session_message (id TEXT, session_id TEXT, type TEXT, time_updated INTEGER, data TEXT)")
+    .execute_batch(
+      "CREATE TABLE session_message (id TEXT, session_id TEXT, type TEXT, time_updated INTEGER, data TEXT)",
+    )
     .unwrap();
   source
     .execute(

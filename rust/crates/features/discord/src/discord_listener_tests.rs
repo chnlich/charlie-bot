@@ -10,6 +10,7 @@ use axum::extract::State;
 use axum::extract::ws::{CloseFrame as AxumCloseFrame, Message as AxumMessage, WebSocket, WebSocketUpgrade};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use axum::serve::ListenerExt;
 use charliebot_compat::http_client::{self, Settings};
 use charliebot_compat::ws_client::{self, Options};
 use charliebot_core::event_types;
@@ -80,6 +81,7 @@ impl Gateway {
       .with_state(Arc::clone(&state));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    let listener = listener.tap_io(|stream| stream.set_nodelay(true).unwrap());
     let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     Self { url: format!("ws://{address}/gateway"), state, task }
   }

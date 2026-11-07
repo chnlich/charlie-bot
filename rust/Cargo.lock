@@ -347,6 +347,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cgfs",
+ "charliebot-agents",
  "charliebot-anthropic-compatible",
  "charliebot-antigravity",
  "charliebot-charlie-code",

@@ -294,6 +294,7 @@ mod tests {
       thread::spawn(move || {
         for (status, body) in responses {
           let (mut stream, _) = listener.accept().unwrap();
+          stream.set_nodelay(true).unwrap();
           sender.send(read_http_request(&mut stream)).unwrap();
           let response = format!(
             "HTTP/1.1 {status} Status\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",

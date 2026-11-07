@@ -190,29 +190,44 @@ mod tests {
     (result, output)
   }
 
-  #[test]
-  fn declared_wait_cases_match_the_replay_table() {
-    let cases = [
-      ("for i in $(seq 1 84); do curl x; sleep 10; done", true),
-      ("(nohup x &); sleep 420; tail log", true),
-      ("timeout 880 tail --pid=96106 -f /dev/null", true),
-      ("for i in 1 2 3 4 5 6; do out=$(timeout 40 charliebot web status show); sleep 10; done", false),
-      ("for i in 1 2 3 4 5 6 7; do x; sleep 10; done", true),
-      ("end=$(( $(date +%s) + 840 )); while [ $(date +%s) -lt $end ]; do timeout 10 x && break; sleep 30; done", true),
-      (r#"timeout 60 bash -c "until curl ok; do sleep 2; done""#, false),
-      ("sleep 20; grep -l x f | while read f; do python3 -c 1; done", false),
-      ("for i in 1 2 3; do git fetch && break; sleep 5; done", false),
-      ("charliebot session trigger --cmd 'while ! ok; do sleep 30; done' --max-wait 900 --message m", false),
-      ("for s in a b c; do echo $s; done; sleep 30", false),
-      ("for i in range(85): time.sleep(10)", true),
-      ("for i in range(1, 85): time.sleep(10)", true),
-      ("sleep 45; for s in a b; do python3 x; done", false),
-      ("timeout 60 tail --pid=123 -f /dev/null", false),
-    ];
+  const WAIT_CASES: [(&str, bool); 15] = [
+    ("for i in $(seq 1 84); do curl x; sleep 10; done", true),
+    ("(nohup x &); sleep 420; tail log", true),
+    ("timeout 880 tail --pid=96106 -f /dev/null", true),
+    ("for i in 1 2 3 4 5 6; do out=$(timeout 40 charliebot web status show); sleep 10; done", false),
+    ("for i in 1 2 3 4 5 6 7; do x; sleep 10; done", true),
+    ("end=$(( $(date +%s) + 840 )); while [ $(date +%s) -lt $end ]; do timeout 10 x && break; sleep 30; done", true),
+    (r#"timeout 60 bash -c "until curl ok; do sleep 2; done""#, false),
+    ("sleep 20; grep -l x f | while read f; do python3 -c 1; done", false),
+    ("for i in 1 2 3; do git fetch && break; sleep 5; done", false),
+    ("charliebot session trigger --cmd 'while ! ok; do sleep 30; done' --max-wait 900 --message m", false),
+    ("for s in a b c; do echo $s; done; sleep 30", false),
+    ("for i in range(85): time.sleep(10)", true),
+    ("for i in range(1, 85): time.sleep(10)", true),
+    ("sleep 45; for s in a b; do python3 x; done", false),
+    ("timeout 60 tail --pid=123 -f /dev/null", false),
+  ];
+
+  fn assert_wait_cases(cases: &[(&str, bool)]) {
     for (command, refuse) in cases {
       let wait = declared_wait_seconds(command).unwrap();
-      assert_eq!(wait > WAIT_LIMIT_SECONDS, refuse, "{command}");
+      assert_eq!(wait > WAIT_LIMIT_SECONDS, *refuse, "{command}");
     }
+  }
+
+  #[test]
+  fn sequence_and_timeout_wait_cases_match_the_replay_table() {
+    assert_wait_cases(&WAIT_CASES[..5]);
+  }
+
+  #[test]
+  fn nested_loop_wait_cases_match_the_replay_table() {
+    assert_wait_cases(&WAIT_CASES[5..10]);
+  }
+
+  #[test]
+  fn shell_and_python_wait_cases_match_the_replay_table() {
+    assert_wait_cases(&WAIT_CASES[10..]);
   }
 
   #[test]

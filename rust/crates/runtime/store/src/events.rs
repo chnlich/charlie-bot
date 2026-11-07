@@ -2267,13 +2267,18 @@ mod tests {
       std::fs::write(&metadata_path, meta.to_json_string(&store.slots, true)).unwrap();
       let path = store.chat_events_path(session_id);
       std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-      let mut body = String::new();
-      for index in 0..30_000 {
+      const EVENT_COUNT: usize = 30_000;
+      let filler = format!("{{\"id\": \"earlier\", \"content\": \"{}\"}}\n", "x".repeat(48));
+      let mut body = String::with_capacity(filler.len() * EVENT_COUNT);
+      for _ in 0..EVENT_COUNT - 10 {
+        body.push_str(&filler);
+      }
+      for index in EVENT_COUNT - 10..EVENT_COUNT {
         body.push_str(&format!("{{\"id\": \"live-{index}\", \"content\": \"{}\"}}\n", "x".repeat(48)));
       }
       std::fs::write(&path, body).unwrap();
 
-      let (page, _) = store.load_chat_events_range(session_id, 1 + 29_990, 1 + 30_000).unwrap();
+      let (page, _) = store.load_chat_events_range(session_id, 1 + EVENT_COUNT - 10, 1 + EVENT_COUNT).unwrap();
       assert_eq!(ids(&page).first().unwrap(), "live-29990");
       assert_eq!(page.len(), 10);
       let (bytes, parsed) = {

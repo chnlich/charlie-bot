@@ -1685,10 +1685,7 @@ pub async fn backfill_followed_threads(
   let platform = adapter.platform();
   let config = features.config.get().map_err(ThreadReplyError::failure)?;
   let (active, archived) = blocking(features, |store| {
-    Ok((
-      store.list_sessions_readonly(SessionStatus::Active)?,
-      store.list_sessions_readonly(SessionStatus::Archived)?,
-    ))
+    Ok((store.list_sessions_readonly(SessionStatus::Active)?, store.list_sessions_readonly(SessionStatus::Archived)?))
   })
   .await?;
   let mut armed = 0;

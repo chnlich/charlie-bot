@@ -2004,20 +2004,26 @@ fn malformed_count_shapes_capture_the_recorded_rows() {
     (claude.calls, claude.in_fresh, claude.cache_write, claude.cache_read, claude.output, claude.total),
     (2, Count::Real(2.5), Count::Int(3), Count::Int(6), Count::Real(5.5), Count::Real(17.0))
   );
-  // A list or map under a key the verdict stores or subtracts fails the bind or the arithmetic, so the capture raises.
-  let raising = [
-    r#"{"type": "result", "usage": {"input_tokens": 1, "output_tokens": [1]}}"#,
-    r#"{"type": "result", "usage": {"input_tokens": {"a": 1}}}"#,
-  ];
-  for line in raising {
-    let dir = tempfile::tempdir().unwrap();
-    let home = dir.path().join("home");
-    let (config, registry) = fixture(&home);
-    let session = r#"{"session_id": "raise-kept"}"#;
-    write_thread(&home, "s-raise", "t", Some(("claude-main", Some("vendor/claude-model"))), &events(&[line, session]));
-    let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
-    assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
-  }
+}
+
+#[test]
+fn an_array_output_count_refuses_capture() {
+  malformed_count_shape_refuses_capture(r#"{"type": "result", "usage": {"input_tokens": 1, "output_tokens": [1]}}"#);
+}
+
+#[test]
+fn an_object_input_count_refuses_capture() {
+  malformed_count_shape_refuses_capture(r#"{"type": "result", "usage": {"input_tokens": {"a": 1}}}"#);
+}
+
+fn malformed_count_shape_refuses_capture(line: &str) {
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let (config, registry) = fixture(&home);
+  let session = r#"{"session_id": "raise-kept"}"#;
+  write_thread(&home, "s-raise", "t", Some(("claude-main", Some("vendor/claude-model"))), &events(&[line, session]));
+  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
 }
 
 /// The stored timestamp of one row, as the TEXT column holds it.

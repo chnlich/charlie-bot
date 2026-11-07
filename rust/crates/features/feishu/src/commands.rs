@@ -670,7 +670,6 @@ mod tests {
     })
     .await;
     let bot = Bot::new(Arc::clone(&home.features), stub.base_url.clone());
-    let before = home.meta(&session_id).await.extra(crate::metadata::FEISHU_WATERMARK_ID).cloned();
 
     let readback = read_topic(&bot, &session_id, TOPIC_ID, 2, None).await.unwrap();
     assert_eq!(
@@ -715,7 +714,10 @@ mod tests {
     let feishu_error = read_topic(&bot, &session_id, "omt_refused", 10, None).await.unwrap_err();
     assert_eq!(feishu_error.status, StatusCode::BAD_GATEWAY);
     assert!(error_text(&feishu_error).contains("permission denied"));
-    assert_eq!(home.meta(&session_id).await.extra(crate::metadata::FEISHU_WATERMARK_ID).cloned(), before);
+    assert_eq!(
+      home.meta(&session_id).await.extra(crate::metadata::FEISHU_WATERMARK_ID).cloned(),
+      Some(json!(watermark))
+    );
   }
 
   #[tokio::test]

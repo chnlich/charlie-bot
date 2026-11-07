@@ -923,19 +923,24 @@ mod tests {
     for (range, bucket) in BUCKETS {
       let request =
         Request::builder().uri(format!("/api/concurrency/history?range={range}")).body(Body::empty()).unwrap();
-      let response = history(State(Arc::clone(&features)), request).await;
-      assert_eq!(response.status(), StatusCode::OK);
-      let body = crate::test_support::answer(response).await.1;
-      assert_eq!(body["range"], range);
-      assert_eq!(body["bucket_seconds"], bucket);
-      assert_eq!(body["first_record_at"], Value::Null, "an empty home holds no run record");
-      assert_eq!(body["peak"], Value::Null);
-      assert!(body["points"].as_array().expect("points is a list").iter().all(|point| point["running"] == 0));
+      assert_eq!(requested_range(&request).unwrap(), range);
+      assert_eq!(bucket_seconds(range), bucket);
+      let series = history_series(&features.store, range, UtcDateTime::now()).unwrap();
+      assert_eq!(series.range, range);
+      assert_eq!(series.bucket_seconds, bucket);
+      assert_eq!(series.first_record_at, None, "an empty home holds no run record");
+      assert_eq!(series.peak, None);
+      assert!(series.points.iter().all(|point| point.running == 0));
     }
 
     let default = Request::builder().uri(HISTORY_PATH).body(Body::empty()).unwrap();
+    assert_eq!(requested_range(&default).unwrap(), "7d");
     let body = crate::test_support::answer(history(State(Arc::clone(&features)), default).await).await.1;
     assert_eq!(body["range"], "7d", "a request that names no range reads the last seven days");
+    assert_eq!(body["bucket_seconds"], 300);
+    assert_eq!(body["first_record_at"], Value::Null, "an empty home holds no run record");
+    assert_eq!(body["peak"], Value::Null);
+    assert!(body["points"].as_array().expect("points is a list").iter().all(|point| point["running"] == 0));
 
     let invalid = Request::builder().uri("/api/concurrency/history?range=1h").body(Body::empty()).unwrap();
     let response = history(State(Arc::clone(&features)), invalid).await;

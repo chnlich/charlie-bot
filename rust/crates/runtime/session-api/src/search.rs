@@ -32,6 +32,12 @@ const TRIGRAM_BITS: usize = 26 * 26 * 26;
 const TRIGRAM_BYTES: usize = TRIGRAM_BITS.div_ceil(8);
 /// The bytes one file's bigram bitmap takes: one bit per pair of [`BIGRAM_SYMBOLS`].
 const BIGRAM_BYTES: usize = BIGRAM_SYMBOLS.len() * BIGRAM_SYMBOLS.len() / 8;
+/// The bytes one file's high-byte bigram bitmap takes: one bit per pair of bytes at or above 0x80.
+///
+/// A multibyte character's UTF-8 bytes all lie at or above 0x80, so every pair inside such a needle is a high-byte
+/// pair this bitmap can test. Unknown or rare multibyte text carries few of the pairs a common needle holds, so the
+/// test rules out the files a trigram cannot encode.
+const HIGH_BIGRAM_BYTES: usize = 128 * 128 / 8;
 /// The code of a byte that is neither a lowercase ASCII letter nor a [`BIGRAM_SYMBOLS`] entry.
 const CONTENT_NONE: u8 = u8::MAX;
 /// The symbols a content index's bigrams distinguish: the lowercase ASCII letters, the digits, and the punctuation
@@ -43,7 +49,7 @@ const CONTENT_NONE: u8 = u8::MAX;
 const BIGRAM_SYMBOLS: &[u8; 64] = b"abcdefghijklmnopqrstuvwxyz0123456789 ._-/:,;()[]{}<>=\"'`|&#*@+%!";
 /// The files whose content indexes the memo keeps.
 ///
-/// One index's bitmaps are 2,709 bytes and the 7,160-session mock home takes about 19 MB. The cap exceeds that
+/// One index's bitmaps are 4,757 bytes and the 7,160-session mock home takes about 34 MB. The cap exceeds that
 /// count, so a fresh query does not evict the indexes its next query would reuse.
 const SEARCH_CONTENT_INDEX_MEMO_LIMIT: usize = 16_384;
 /// The threads one signature batch may split across.
@@ -126,7 +132,8 @@ static CONTENT_CODES: LazyLock<[u8; 256]> = LazyLock::new(|| {
   codes
 });
 
-/// One file's content index: a bit per three-letter sequence and a bit per two-symbol sequence its text holds.
+/// One file's content index: a bit per three-letter sequence, a bit per two-symbol sequence, and a bit per pair of
+/// high bytes its text holds.
 ///
 /// `signature` is the file's identity when the index was built. A file whose identity moved needs its index rebuilt,
 /// because text that grew or changed can hold sequences the old index lacks.
@@ -136,10 +143,11 @@ struct ContentIndexEntry {
   signature: FileSignature,
   trigrams: Box<[u8]>,
   bigrams: Box<[u8]>,
+  high_bigrams: Box<[u8]>,
 }
 
 /// One file's content index and whether the needle occurs in it, or the read that failed.
-type ContentIndexAnswer = io::Result<(Box<[u8]>, Box<[u8]>, bool)>;
+type ContentIndexAnswer = io::Result<(Box<[u8]>, Box<[u8]>, Box<[u8]>, bool)>;
 
 /// What a file's content index says about a query.
 enum ContentVerdict {
@@ -147,7 +155,8 @@ enum ContentVerdict {
   Missing,
   /// The index cannot rule the file out, so the file is scanned.
   Possible,
-  /// A trigram or a bigram of the needle is absent from the file, so the needle is absent from the file too.
+  /// A trigram, a bigram or a high-byte bigram of the needle is absent from the file, so the needle is absent from
+  /// the file too.
   Absent,
 }
 
@@ -322,20 +331,23 @@ impl SearchMemos {
     roots.put(needle.to_string(), signature);
   }
 
-  /// What this file's content index says about a needle, given the needle's trigrams and bigrams.
+  /// What this file's content index says about a needle, given the needle's trigrams, bigrams and high-byte bigrams.
   fn content_verdict(
     &mut self,
     file: &WatchedFile,
     signature: FileSignature,
     trigrams: &[usize],
     bigrams: &[usize],
+    high_bigrams: &[usize],
   ) -> ContentVerdict {
     let Some(entry) = self.content.get(&file.key) else { return ContentVerdict::Missing };
     if entry.path != file.path || entry.signature != signature {
       return ContentVerdict::Missing;
     }
     let holds = |bits: &[u8], bit: usize| bits[bit >> 3] & (1u8 << (bit & 7)) != 0;
-    if trigrams.iter().all(|bit| holds(&entry.trigrams, *bit)) && bigrams.iter().all(|bit| holds(&entry.bigrams, *bit))
+    if trigrams.iter().all(|bit| holds(&entry.trigrams, *bit))
+      && bigrams.iter().all(|bit| holds(&entry.bigrams, *bit))
+      && high_bigrams.iter().all(|bit| holds(&entry.high_bigrams, *bit))
     {
       ContentVerdict::Possible
     } else {
@@ -349,8 +361,11 @@ impl SearchMemos {
     signature: FileSignature,
     trigrams: Box<[u8]>,
     bigrams: Box<[u8]>,
+    high_bigrams: Box<[u8]>,
   ) {
-    self.content.put(file.key, ContentIndexEntry { path: file.path.clone(), signature, trigrams, bigrams });
+    self
+      .content
+      .put(file.key, ContentIndexEntry { path: file.path.clone(), signature, trigrams, bigrams, high_bigrams });
   }
 
   fn cached_match(&mut self, query: &str) -> Option<Arc<SearchMatch>> {
@@ -416,7 +431,8 @@ fn search_sessions_with_limit(
 
   let trigrams = needle_trigrams(&needle);
   let bigrams = needle_bigrams(&needle);
-  let content_index_settles = !(trigrams.is_empty() && bigrams.is_empty());
+  let high_bigrams = needle_high_bigrams(&needle);
+  let content_index_settles = !(trigrams.is_empty() && bigrams.is_empty() && high_bigrams.is_empty());
   // A candidate's place in `content_hits` follows the corpus order, because the result's order breaks ties on
   // insertion order.
   let mut content_hits = vec![false; work.candidates.len()];
@@ -491,7 +507,7 @@ fn search_sessions_with_limit(
         let path = &work.candidates[index].path;
         // The content index settles most fresh queries before the per-file roots are read.
         let needs_index = if content_index_settles {
-          match guard.content_verdict(&work.candidates[index], signature, &trigrams, &bigrams) {
+          match guard.content_verdict(&work.candidates[index], signature, &trigrams, &bigrams, &high_bigrams) {
             ContentVerdict::Absent => continue,
             ContentVerdict::Possible => false,
             ContentVerdict::Missing => true,
@@ -532,13 +548,14 @@ fn search_sessions_with_limit(
       for (index, answer) in answers {
         let signature = signatures[index].expect("an indexed candidate holds its signature");
         match answer {
-          Ok((trigrams, bigrams, found)) => {
+          Ok((trigrams, bigrams, high_bigrams, found)) => {
             let path = &work.candidates[index].path;
             memos.lock().expect("session search memo mutex is not poisoned").remember_content_index(
               &work.candidates[index],
               signature,
               trigrams,
               bigrams,
+              high_bigrams,
             );
             memos
               .lock()
@@ -877,6 +894,21 @@ fn needle_bigrams(needle: &str) -> Vec<usize> {
   bytes.windows(2).filter_map(|window| bigram_number(codes[window[0] as usize], codes[window[1] as usize])).collect()
 }
 
+/// The high-byte bigrams a needle holds: one for each adjacent pair of bytes at or above 0x80.
+///
+/// Every multibyte character's UTF-8 bytes lie at or above 0x80, so a needle that holds one carries at least one of
+/// these pairs, and the trigram and bigram indexes cannot encode it.
+///
+/// The index folds ASCII only, while a cased non-ASCII needle is scanned with Unicode lowercase folding. Such a
+/// needle's high bytes can move between the text and the index, so it gets no high-byte bigrams and stays with the
+/// scan.
+fn needle_high_bigrams(needle: &str) -> Vec<usize> {
+  if needle.chars().any(|c| !c.is_ascii() && (c.is_lowercase() || c.is_uppercase())) {
+    return Vec::new();
+  }
+  needle.as_bytes().windows(2).filter_map(|window| high_bigram_number(window[0], window[1])).collect()
+}
+
 /// The bit position of three letter codes, or None when one code is not a lowercase letter.
 ///
 /// Each code is checked: a later code that is not a letter would still sum below [`TRIGRAM_BITS`] and alias the bit of
@@ -886,6 +918,14 @@ fn trigram_number(first: u8, second: u8, third: u8) -> Option<usize> {
     return None;
   }
   Some(first as usize * 676 + second as usize * 26 + third as usize)
+}
+
+/// The bit position of a pair of bytes at or above 0x80, or None when either byte lies below that.
+fn high_bigram_number(first: u8, second: u8) -> Option<usize> {
+  if first < 0x80 || second < 0x80 {
+    return None;
+  }
+  Some((first as usize - 0x80) * 128 + (second as usize - 0x80))
 }
 
 /// The bit position of two symbol codes, or None when a code is not a [`BIGRAM_SYMBOLS`] entry or both codes are
@@ -910,6 +950,7 @@ fn index_and_search_file(path: &Path, needle: &str) -> ContentIndexAnswer {
   let mut file = File::open(path)?;
   let mut trigrams = vec![0u8; TRIGRAM_BYTES];
   let mut bigrams = vec![0u8; BIGRAM_BYTES];
+  let mut high_bigrams = vec![0u8; HIGH_BIGRAM_BYTES];
   let finder = memchr::memmem::Finder::new(needle.as_bytes());
   let codes = &*CONTENT_CODES;
   let overlap = needle.len().saturating_sub(1).max(2);
@@ -920,14 +961,15 @@ fn index_and_search_file(path: &Path, needle: &str) -> ContentIndexAnswer {
   loop {
     let count = file.read(&mut chunk)?;
     if count == 0 {
-      return Ok((trigrams.into_boxed_slice(), bigrams.into_boxed_slice(), matched));
+      return Ok((trigrams.into_boxed_slice(), bigrams.into_boxed_slice(), high_bigrams.into_boxed_slice(), matched));
     }
     window.clear();
     window.extend_from_slice(&carry);
     window.extend_from_slice(&chunk[..count]);
     window.make_ascii_lowercase();
-    // One pass sets both bitmaps: a second pass over the window would stream the whole file through memory again.
-    // The loop ends two bytes short of the window, so the last pair's bigram follows it.
+    // One pass sets all three bitmaps: a second pass over the window would stream the whole file through memory again.
+    // The loop ends two bytes short of the window, so the last pair's bigram follows it. ASCII folding leaves the high
+    // bytes unchanged, so the high-byte pairs are the text's own.
     let last_pair = window.len().saturating_sub(2);
     for position in 0..last_pair {
       let first = codes[window[position] as usize];
@@ -939,12 +981,18 @@ fn index_and_search_file(path: &Path, needle: &str) -> ContentIndexAnswer {
       if let Some(index) = trigram_number(first, second, third) {
         trigrams[index >> 3] |= 1u8 << (index & 7);
       }
+      if let Some(index) = high_bigram_number(window[position], window[position + 1]) {
+        high_bigrams[index >> 3] |= 1u8 << (index & 7);
+      }
     }
     if window.len() >= 2 {
       let first = codes[window[window.len() - 2] as usize];
       let second = codes[window[window.len() - 1] as usize];
       if let Some(index) = bigram_number(first, second) {
         bigrams[index >> 3] |= 1u8 << (index & 7);
+      }
+      if let Some(index) = high_bigram_number(window[window.len() - 2], window[window.len() - 1]) {
+        high_bigrams[index >> 3] |= 1u8 << (index & 7);
       }
     }
     if !matched && finder.find(&window).is_some() {
@@ -1694,14 +1742,15 @@ mod tests {
       signature,
       vec![u8::MAX; super::TRIGRAM_BYTES].into_boxed_slice(),
       vec![u8::MAX; super::BIGRAM_BYTES].into_boxed_slice(),
+      vec![u8::MAX; super::HIGH_BIGRAM_BYTES].into_boxed_slice(),
     );
 
     assert!(
-      matches!(memos.content_verdict(&first, signature, &[0], &[0]), super::ContentVerdict::Possible),
+      matches!(memos.content_verdict(&first, signature, &[0], &[0], &[0]), super::ContentVerdict::Possible),
       "the file the index was built for reads its own index"
     );
     assert!(
-      matches!(memos.content_verdict(&second, signature, &[0], &[0]), super::ContentVerdict::Missing),
+      matches!(memos.content_verdict(&second, signature, &[0], &[0], &[0]), super::ContentVerdict::Missing),
       "a colliding key answers as no index, so the file is read again"
     );
   }
@@ -1729,7 +1778,7 @@ mod tests {
     body.extend_from_slice(b"Boundary-Needle");
     fs::write(&path, &body).unwrap();
 
-    let (trigrams, bigrams, found) = super::index_and_search_file(&path, "boundary-needle").unwrap();
+    let (trigrams, bigrams, _, found) = super::index_and_search_file(&path, "boundary-needle").unwrap();
     assert!(found, "the needle search reads the text with ASCII case folding");
     for trigram in super::needle_trigrams("boundary-needle") {
       assert_ne!(trigrams[trigram >> 3] & (1u8 << (trigram & 7)), 0, "trigram {trigram} is indexed");
@@ -1740,13 +1789,23 @@ mod tests {
     let mut body = vec![b'x'; super::SEARCH_CHUNK_SIZE - 1];
     body.extend_from_slice(b"9-needle");
     fs::write(&path, &body).unwrap();
-    let (_, bigrams, found) = super::index_and_search_file(&path, "9-needle").unwrap();
+    let (_, bigrams, _, found) = super::index_and_search_file(&path, "9-needle").unwrap();
     assert!(found, "the needle search reads the text with ASCII case folding");
     for bigram in super::needle_bigrams("9-needle") {
       assert_ne!(bigrams[bigram >> 3] & (1u8 << (bigram & 7)), 0, "bigram {bigram} spans the boundary");
     }
 
-    let (trigrams, bigrams, found) = super::index_and_search_file(&path, "walq1rus").unwrap();
+    // A chunk boundary inside "缓存" leaves its high-byte pairs to the window's carry.
+    let mut body = vec![b'x'; super::SEARCH_CHUNK_SIZE - 2];
+    body.extend_from_slice("缓存".as_bytes());
+    fs::write(&path, &body).unwrap();
+    let (_, _, high_bigrams, found) = super::index_and_search_file(&path, "缓存").unwrap();
+    assert!(found, "a multibyte needle is found in the text's bytes");
+    for bigram in super::needle_high_bigrams("缓存") {
+      assert_ne!(high_bigrams[bigram >> 3] & (1u8 << (bigram & 7)), 0, "high-byte bigram {bigram} spans the boundary");
+    }
+
+    let (trigrams, bigrams, _, found) = super::index_and_search_file(&path, "walq1rus").unwrap();
     assert!(!found);
     assert!(
       super::needle_trigrams("walq1rus").iter().any(|trigram| trigrams[trigram >> 3] & (1u8 << (trigram & 7)) == 0),
@@ -1756,6 +1815,29 @@ mod tests {
       super::needle_bigrams("walq1rus").iter().any(|bigram| bigrams[bigram >> 3] & (1u8 << (bigram & 7)) == 0),
       "the index lacks a bigram of the absent needle"
     );
+  }
+
+  /// A multibyte needle never reaches a file whose high-byte pairs the index lacks: the trigram and bigram indexes
+  /// cannot encode it, and the high-byte index answers it.
+  #[test]
+  fn a_fresh_query_skips_a_file_whose_content_index_lacks_one_of_its_high_byte_bigrams() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_session(&store, "content", "content session", SessionStatus::Active, "2026-08-01T12:00:00Z");
+    let path = store.chat_events_path("content");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "the quick brown fox\n").unwrap();
+    let memos = Mutex::new(super::SearchMemos::default());
+
+    assert!(super::search_sessions_with_memos(&store, "缓存", &memos).unwrap().rows.is_empty());
+    assert_eq!(memos.lock().unwrap().scan_calls, 1, "the first query reads the file and keeps its index");
+
+    assert!(super::search_sessions_with_memos(&store, "量子", &memos).unwrap().rows.is_empty());
+    assert_eq!(memos.lock().unwrap().scan_calls, 1, "the high-byte index ruled the needle out");
+
+    fs::write(&path, "the quick brown fox 量子\n").unwrap();
+    let rows = super::search_sessions_with_memos(&store, "量子", &memos).unwrap().rows;
+    assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
   }
 
   /// A needle whose only absent sequence is a bigram never reaches the file: the trigram index shares no evidence

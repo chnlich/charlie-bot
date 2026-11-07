@@ -1,5 +1,6 @@
 //! Scheduled tasks in `config.d/cron.d`: routes, file loading, scheduling and sequence recovery.
 
+mod agent_binding;
 mod api;
 mod boundary;
 pub mod config;

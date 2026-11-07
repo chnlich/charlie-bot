@@ -85,7 +85,7 @@
 .turn-row-title { color: #cbd5e1; }
 /* The fold row's secondary tone: the conclusion arrow and the steps/time meta
    read beside the title. #64748b rendered 3.75:1 on the row's #0f172a
-   background, under the 4.5:1 floor for text this small; #94a3b8 renders
+   background, under the 4.5:1 floor for text this small. #94a3b8 renders
    6.96:1, the tone the row's own label already uses. */
 .turn-row-conclusion:not(:empty)::before { content: "\2192\00a0"; color: #94a3b8; }
 .turn-row-meta { font-family: 'Fira Code', ui-monospace, monospace; font-size: 0.65rem; color: #94a3b8; }
@@ -101,8 +101,8 @@
 /* Window placeholder: an unready turn entering the window during active
    scroll — estimated height, replaced by the READY fragment when pre-render
    completes. The box is a UI region, so its dashed outline takes the 3:1
-   component floor: slate-400 at 60% draws 3.31:1 on the slate-900 list, where
-   the old slate-500 at 28% drew 1.37:1 and the region read as a page gap. */
+   component floor. slate-400 at 60% draws 3.31:1 on the slate-900 list. The
+   old slate-500 at 28% drew 1.37:1, and the region read as a page gap. */
 .turn-placeholder {
   display: flex; align-items: center; justify-content: center;
   border: 1px dashed rgba(148, 163, 184, 0.6); border-radius: 0.5rem;
@@ -110,13 +110,13 @@
   box-sizing: border-box;
 }
 /* The placeholder's one mark. A placeholder standing for a long flat stretch
-   can be taller than the window, and a centred mark would then sit outside
-   the visible slice, leaving the reader a blank dashed region. Both sticky
-   insets are set because each one only moves the mark one way: `top` pulls it
-   down when the box enters from above, and `bottom` pulls it up when the box
-   enters from below. Together they hold the mark in the band between 40vh
-   from either edge wherever the box meets the window; slate-400 draws 6.96:1
-   on the list, above the 4.5:1 floor for 12px text. */
+   can be taller than the window. A centred mark would then sit outside the
+   visible slice, leaving the reader a blank dashed region. Both sticky insets
+   are set because each one only moves the mark one way. `top` pulls it down
+   when the box enters from above, and `bottom` pulls it up when the box enters
+   from below. Together they hold the mark in the band between 40vh from either
+   edge wherever the box meets the window. slate-400 draws 6.96:1 on the list,
+   above the 4.5:1 floor for 12px text. */
 .turn-placeholder-label { position: sticky; top: 40vh; bottom: 40vh; }
 .turn-spacer { pointer-events: none; }
 /* The height model's spacer heights are the exact layout extent of the rows
@@ -312,8 +312,8 @@ main > header > a[title="View JSONL events"] {
   display: flex; gap: 0.5rem; justify-content: flex-end;
   padding: 0.75rem 1rem; border-top: 1px solid #475569;
 }
-/* The scheduled-task Save button fills green-700, where its slate-200 label renders 4.07:1, under
-   the 4.5:1 floor for 14 px text; its green-600 hover renders 2.67:1. A white label on the
+/* The scheduled-task Save button fills green-700, where its slate-200 label renders 4.07:1. That is
+   under the 4.5:1 floor for 14 px text, and its green-600 hover renders 2.67:1. A white label on the
    green-800 fill renders 7.13:1, and the green-700 hover keeps 5.02:1. */
 #cron-save-btn { background-color: #166534; color: #ffffff; }
 #cron-save-btn:hover { background-color: #15803d; }
@@ -471,8 +471,8 @@ body { overscroll-behavior: none; }
 .child-report[data-folded="false"] .child-report-more { display: none; }
 .child-report-toggle { display: block; margin-top: 0.25rem; font-size: 0.75rem; color: rgba(110, 231, 183, 0.75); }
 .child-report-toggle:hover { color: #a7f3d0; text-decoration: underline; }
-/* A user text folds by its rendered height (chat/attachments.js, fitUserMessageClamp): the clamp shows ten lines, and
-   the control appears only while the clamp hides some of the text. */
+/* A user text folds by its rendered height (chat/attachments.js, fitUserMessageClamp). The clamp shows ten
+   lines, and the control appears only while the clamp hides some of the text. */
 .user-msg-fold[data-folded="true"] .user-msg-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 10; line-clamp: 10; overflow: hidden; }
 .user-msg-more { display: none; margin-top: 0.4rem; padding: 0.2rem 0.7rem; font-size: 0.72rem; font-weight: 600; color: #eff6ff; background: rgba(15, 23, 42, 0.28); border: 1px solid rgba(191, 219, 254, 0.45); border-radius: 9999px; cursor: pointer; }
 .user-msg-fold[data-folded="true"][data-overflows="true"] .user-msg-more { display: block; }

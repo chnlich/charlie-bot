@@ -109,7 +109,7 @@ static LEVEL_FIELD: LazyLock<Regex> = LazyLock::new(|| {
 
 /// The level of one log line, or `None` when the line carries none.
 fn line_level(line: &str) -> Option<LogLevel> {
-  if line.to_ascii_lowercase().contains("level=")
+  if (!line.is_ascii() || line.to_ascii_lowercase().contains("level="))
     && let Some(captures) = LEVEL_FIELD.captures(line)
   {
     let level = captures.get(1).expect("the level is captured").as_str();
@@ -259,7 +259,7 @@ pub fn clean(text: &str) -> String {
 
 fn is_noise(line: &str) -> bool {
   let folded = line.to_ascii_lowercase();
-  if !(line.starts_with("Provider List:")
+  if line.is_ascii() && !(line.starts_with("Provider List:")
     || line.starts_with("Give Feedback / Get Help:")
     || line.starts_with("LiteLLM.Info:")
     || folded.ends_with("docs/providers")
@@ -275,16 +275,16 @@ fn is_noise(line: &str) -> bool {
 pub fn redact(text: &str) -> String {
   let mut text = text.to_string();
   let folded = text.to_ascii_lowercase();
-  if folded.contains("api_key") {
+  if !text.is_ascii() || folded.contains("api_key") {
     text = API_KEY_REDACTION.replace_all(&text, "$1<redacted>").into_owned();
   }
-  if folded.contains("bearer") {
+  if !text.is_ascii() || folded.contains("bearer") {
     text = BEARER_REDACTION.replace_all(&text, "$1<redacted>").into_owned();
   }
   if text.contains("sk-") {
     text = SK_REDACTION.replace_all(&text, "<redacted>").into_owned();
   }
-  if folded.contains("token") {
+  if !text.is_ascii() || folded.contains("token") {
     text = TOKEN_REDACTION.replace_all(&text, "$1<redacted>").into_owned();
   }
   if contains_ascii_hex_run(&text, 32) {
@@ -308,7 +308,7 @@ pub fn normalize(text: &str) -> String {
     text = ANSI.replace_all(&text, "").into_owned();
   }
   let folded = text.to_ascii_lowercase();
-  if folded.contains("session_id=") || folded.contains("session=") || text.contains("ses_") {
+  if !text.is_ascii() || folded.contains("session_id=") || folded.contains("session=") || text.contains("ses_") {
     for (expression, replacement) in SESSION_FIELD.iter() {
       text = expression.replace_all(&text, *replacement).into_owned();
     }
@@ -414,7 +414,7 @@ fn banner_only(text: &str) -> bool {
       continue;
     }
     let folded = line.to_ascii_lowercase();
-    if !(line.starts_with("Provider List:")
+    if line.is_ascii() && !(line.starts_with("Provider List:")
       || line.starts_with("Give Feedback / Get Help:")
       || line.starts_with("LiteLLM.Info:")
       || folded.ends_with("docs/providers")
@@ -482,6 +482,9 @@ fn match_cause(text: &str) -> Option<String> {
 
 /// Whether a pattern's literal fragments occur before its full expression is compiled and checked.
 fn pattern_may_match(index: usize, text: &str, folded: &str) -> bool {
+  if !text.is_ascii() {
+    return true;
+  }
   let contains_any = |needles: &[&str]| needles.iter().any(|needle| folded.contains(needle));
   match index {
     0 => text.contains("the previous round still runs: unit ") && text.contains(" exists"),
@@ -613,6 +616,14 @@ pub fn log_signature(event: &str, message: &str) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn unicode_case_folding_keeps_redaction_and_cause_matching() {
+    assert_eq!(redact("api_Key=abcdefgh toKen=abcdefgh"), "api_Key=<redacted> toKen=<redacted>");
+    assert_eq!(normalize("ſession_id=private"), "session_id=<session>");
+    assert_eq!(match_cause("trace\nKILLED by signal"), Some("KILLED by signal".to_string()));
+    assert_eq!(clean("docſ/providers"), "");
+  }
 
   fn cause(line: &str) -> ExtractedCause {
     ExtractedCause::Cause { line: line.to_string(), anchor: line.to_string() }

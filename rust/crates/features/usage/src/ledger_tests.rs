@@ -189,7 +189,6 @@ fn open_swaps_five_changed_sum_triggers_and_reprices_aggregate() {
   let dir = tempfile::tempdir().unwrap();
   let path = dir.path().join("ledger.sqlite3");
   let mut ledger = UsageLedger::open(&path).unwrap();
-  ledger.conn.execute_batch("BEGIN").unwrap();
   ledger
     .conn
     .execute(
@@ -198,6 +197,7 @@ fn open_swaps_five_changed_sum_triggers_and_reprices_aggregate() {
     )
     .unwrap();
   assert!(!ledger.agg_ready().unwrap());
+  ledger.conn.execute_batch("BEGIN").unwrap();
   for name in sql::AGG_SUM_TRIGGER_NAMES {
     ledger
       .conn

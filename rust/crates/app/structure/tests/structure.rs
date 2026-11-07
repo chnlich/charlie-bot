@@ -1172,6 +1172,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_compat::request_body::CLIENT_TS`; the diag telemetry body and the voice startup body both \
            declare the browser's clock stamp.",
   },
+  OwnerRow {
+    name: "/static/",
+    owner: "runtime/registry",
+    hint: "Use `charliebot_registry::pages::STATIC_URL_PREFIX`; the router mounts it, the access-key gate leaves it \
+           public, and the template engine inlines a stylesheet from it.",
+  },
 ];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one

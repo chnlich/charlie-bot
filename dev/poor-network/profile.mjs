@@ -45,14 +45,14 @@ export const TASK_TREE_LOAD = Object.freeze({
 // - a delayed trigger appears on a row and is cancelled, which moves `has_pending_trigger`, `pending_trigger_count` and
 //   `next_trigger_at`; nothing broadcasts it, so the page meets it on its next poll.
 //
-// Both are one row's own state, and the rates are per 75 s window. The background tab polls about 26 times a minute,
-// against the live readback's 20, so reproducing its 72% share takes about 19 changed answers a minute: a silent step
-// every 2.3 s and a broadcast one every 5.4 s. A background repetition measured 12 answered 200s against the 26 polls a
-// minute from `{turnFlipsPerWindow: 14, triggerFlipsPerWindow: 18}`; `report.mjs` prints the measured share beside
-// `LIVE_READBACK.status200Share`.
+// Both are one row's own state, and the rates are per 75 s window. The background tab polls about 27 times a minute,
+// against the live readback's 20, so reproducing its 72% share takes about 19 changed answers a minute. Consecutive
+// trigger flips cancel one another between two polls, so a flip is caught by a poll about half the time: 33 flips a
+// window measured a 0.56 share at 27 polls a minute, and 44, a silent step every 1.7 s, met the live share in the
+// calibration. `report.mjs` prints the measured share beside `LIVE_READBACK.status200Share`.
 export const STATUS_CHURN = Object.freeze({
   turnFlipsPerWindow: 14,
-  triggerFlipsPerWindow: 33,
+  triggerFlipsPerWindow: 44,
   // Long past any window the bench measures, so a held trigger never fires into the load.
   triggerDelaySeconds: 600,
   windowMs: 75000,

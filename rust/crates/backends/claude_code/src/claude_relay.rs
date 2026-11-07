@@ -201,10 +201,10 @@ pub fn relay_limit_message(
   ))
 }
 
-/// The refusal the relay cap produces, or `None` when the cap does not stop this relay: a warning decision whose pool
-/// still holds a login below the 90% line relays past the cap. Every other decision at the cap refuses the launch. A
-/// quota decision with no login below the line marks the pool's quota exhausted, with the earliest reset its
-/// rejections stated, so the caller records the member out; with a login below the line the refusal is not a
+/// The refusal the relay cap produces, or `None` when the cap does not stop this relay. A warning decision whose
+/// pool still holds a login below the 90% line relays past the cap. Every other decision at the cap refuses the
+/// launch. A quota decision with no login below the line marks the pool's quota exhausted, with the earliest reset
+/// its rejections stated, so the caller records the member out. With a login below the line the refusal is not a
 /// quota fact. An authentication failure is not a quota fact and refuses without the mark.
 pub fn relay_cap_refusal(
   state: &ClaudeAccountStateRef,

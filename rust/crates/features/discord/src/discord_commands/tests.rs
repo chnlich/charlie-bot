@@ -96,8 +96,6 @@ async fn read_marks_only_returned_unread_and_reports_more_unread() {
       Msg::new(6, "bot again").by(BOT).bot(),
       Msg::new(7, "third follow up"),
       Msg::new(8, "fourth follow up"),
-      Msg::new(9, "fifth follow up"),
-      Msg::new(10, "sixth follow up"),
     ],
   );
   let session_id = make_session(&home, Some(snowflake(2))).await;
@@ -108,7 +106,7 @@ async fn read_marks_only_returned_unread_and_reports_more_unread() {
   assert_eq!(fields(&result, "unread"), [true, true, false, true].map(Value::Bool));
   assert_eq!(messages(&result)[1]["attachments"], json!(["https://cdn.discordapp.com/attachments/shot.png"]));
   assert_eq!(result["watermark_id"], snowflake(7));
-  assert_eq!(result["more_unread"], 3);
+  assert_eq!(result["more_unread"], 1);
   let meta = home.meta(&session_id).await;
   assert_eq!(meta.extra("discord_watermark_id"), Some(&json!(snowflake(7))));
   let acked = acks(&home, &session_id);
@@ -118,18 +116,27 @@ async fn read_marks_only_returned_unread_and_reports_more_unread() {
     json!({"message_ids": [snowflake(4), snowflake(5), snowflake(7)], "watermark_id": snowflake(7)})
   );
 
-  // A second read picks up the run the first window cut: the rest of the unread.
-  let again = read_thread(&bot(&home), &session_id, None, 4).await.unwrap();
-  assert_eq!(ids(&again), [8, 9, 10].map(snowflake));
-  assert_eq!(fields(&again, "unread"), [true, true, true].map(Value::Bool));
-  assert_eq!(again["watermark_id"], snowflake(10));
-  assert_eq!(again["more_unread"], 0);
+}
+
+/// A read after an earlier window resumes after that window's watermark.
+#[tokio::test]
+async fn read_continues_after_the_previous_window() {
+  let home = Home::new_without_thread_runtime(true).await;
+  thread_messages(&home, &[Msg::new(8, "fourth follow up"), Msg::new(9, "fifth follow up"), Msg::new(10, "sixth follow up")]);
+  let session_id = make_session(&home, Some(snowflake(7))).await;
+
+  let result = read_thread(&bot(&home), &session_id, None, 4).await.unwrap();
+
+  assert_eq!(ids(&result), [8, 9, 10].map(snowflake));
+  assert_eq!(fields(&result, "unread"), [true, true, true].map(Value::Bool));
+  assert_eq!(result["watermark_id"], snowflake(10));
+  assert_eq!(result["more_unread"], 0);
 }
 
 /// Nothing unread: the window is the newest `limit` messages and nothing is marked.
 #[tokio::test]
 async fn read_without_unread_returns_the_newest_limit() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   thread_messages(&home, &(1..=8).map(|i| Msg::new(i, &format!("m{i}"))).collect::<Vec<_>>());
   let session_id = make_session(&home, Some(snowflake(8))).await;
 
@@ -145,7 +152,7 @@ async fn read_without_unread_returns_the_newest_limit() {
 /// A message arriving after the thread read stays out of the readback and breaks nothing.
 #[tokio::test]
 async fn read_succeeds_when_a_message_lands_after_the_full_read() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   thread_messages(&home, &[Msg::new(1, "first"), Msg::new(2, "second")]);
   let session_id = make_session(&home, Some(snowflake(2))).await;
   // The new message lands right after the first full read, so the readback already taken does not hold it.
@@ -188,7 +195,7 @@ async fn read_flags_the_pending_summon_and_starts_the_window_at_it() {
 /// window start stays with the unread.
 #[tokio::test]
 async fn read_does_not_flag_a_summon_a_master_done_names() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   thread_messages(&home, &[Msg::new(1, "the question"), Msg::new(2, "a later follow up")]);
   let session_id = make_session(&home, Some(snowflake(1))).await;
   let summon = home.append(&session_id, summon_event(&snowflake(1))).await;
@@ -227,7 +234,7 @@ async fn read_does_not_flag_a_summon_a_master_done_names() {
 /// the window start stays with the unread instead of dragging back to the dead mention on every later read.
 #[tokio::test]
 async fn read_does_not_flag_a_summon_a_backfill_marker_names() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   thread_messages(&home, &[Msg::new(1, "the question"), Msg::new(2, "a later follow up")]);
   let session_id = make_session(&home, Some(snowflake(1))).await;
   let summon = home.append(&session_id, summon_event(&snowflake(1))).await;
@@ -254,7 +261,7 @@ async fn read_does_not_flag_a_summon_a_backfill_marker_names() {
 /// A mention that started the thread names the starter: the prepended starter view carries the summon flag.
 #[tokio::test]
 async fn read_flags_a_starter_message_mention() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   home.fake().channels.insert(PARENT.to_string(), vec![Msg::new(0, "the question").id(THREAD).value()]);
   thread_messages(&home, &[Msg::new(1, "a follow up")]);
   // The summon step consumed the starter mention.
@@ -271,7 +278,7 @@ async fn read_flags_a_starter_message_mention() {
 /// A nudge carries the summon block with `nudge_of`: it never flags a message.
 #[tokio::test]
 async fn read_flags_a_nudge_neither() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   thread_messages(&home, &[Msg::new(1, "hello")]);
   let session_id = make_session(&home, Some(snowflake(1))).await;
   let mut nudge = summon_event(&snowflake(1));
@@ -286,7 +293,7 @@ async fn read_flags_a_nudge_neither() {
 /// A thread started from a parent message reads its starter first, not counted in `limit`.
 #[tokio::test]
 async fn read_prepends_the_parent_starter_outside_the_limit() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   home.fake().channels.insert(
     PARENT.to_string(),
     vec![Msg::new(0, "please plan the release").id(THREAD).global_name("Display Name").value()],
@@ -332,7 +339,7 @@ async fn read_prepends_the_parent_starter_outside_the_limit() {
 /// A forum post or a thread not started from a message has no starter: the read goes on without one.
 #[tokio::test]
 async fn read_skips_a_404_starter() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   thread_messages(&home, &[Msg::new(1, "first follow up"), Msg::new(2, "second follow up")]);
   let session_id = make_session(&home, None).await;
 
@@ -347,26 +354,29 @@ async fn read_skips_a_404_starter() {
 async fn read_names_the_author_person_for_listed_and_unlisted_authors() {
   let home = Home::new_without_thread_runtime(true).await;
   thread_messages(&home, &[Msg::new(1, "mine"), Msg::new(2, "unlisted").by(UNLISTED)]);
-  home.fake().channels.insert(OTHER_CHANNEL.to_string(), vec![Msg::new(3, "linked").by(UNLISTED).value()]);
   let session_id = make_session(&home, None).await;
-  let url = format!("https://discord.com/channels/{GUILD}/{OTHER_CHANNEL}");
 
   let own = read_thread(&bot(&home), &session_id, None, 5).await.unwrap();
-  let linked = read_thread(&bot(&home), &session_id, Some(url.as_str()), 5).await.unwrap();
 
   assert_eq!(fields(&own, "person"), [json!(ALLOWED_PERSON), Value::Null]);
-  // The linked readback carries person the same way.
-  assert_eq!(messages(&linked)[0]["person"], Value::Null);
 }
 
 /// The newest `limit` of the linked channel, all unread false, nothing acked.
 #[tokio::test]
 async fn read_with_url_reads_the_linked_channel_and_marks_nothing() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   home
     .fake()
     .channels
-    .insert(OTHER_CHANNEL.to_string(), (1..=5).map(|i| Msg::new(i, &format!("m{i}")).value()).collect());
+    .insert(
+      OTHER_CHANNEL.to_string(),
+      (1..=5)
+        .map(|i| {
+          let message = Msg::new(i, &format!("m{i}"));
+          if i == 3 { message.by(UNLISTED).value() } else { message.value() }
+        })
+        .collect(),
+    );
   let session_id = make_session(&home, None).await;
   let url = format!("https://discord.com/channels/{GUILD}/{OTHER_CHANNEL}");
 
@@ -374,6 +384,7 @@ async fn read_with_url_reads_the_linked_channel_and_marks_nothing() {
 
   assert_eq!(ids(&result), [3, 4, 5].map(snowflake));
   assert_eq!(fields(&result, "unread"), [false, false, false].map(Value::Bool));
+  assert_eq!(messages(&result)[0]["person"], Value::Null);
   assert_eq!(result["watermark_id"], Value::Null);
   assert_eq!(result["more_unread"], 0);
   // Nothing was marked: the session's watermark is untouched and no ack landed.
@@ -406,7 +417,7 @@ async fn read_with_url_refuses_hidden_channel_and_bad_link() {
 /// A session without a Discord thread refuses with 409 before any Discord call.
 #[tokio::test]
 async fn read_on_a_non_discord_session_answers_409() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   let session_id = home.plain_session("plain").await;
 
   let (status, body) = send(home.router(), "/api/internal/discord/read", json!({"session_id": session_id})).await;
@@ -455,7 +466,7 @@ async fn reply_refuses_412_while_unread_then_posts_after_a_read() {
 async fn check_reports_missing_permissions_and_intent_off() {
   let every_permission_but_reactions: u64 =
     REQUIRED_PERMISSIONS.iter().filter(|(name, _)| *name != "ADD_REACTIONS").map(|(_, bit)| bit).sum();
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   {
     let mut fake = home.fake();
     fake.user = json!({"id": BOT, "username": "charlie-bot"});
@@ -488,7 +499,7 @@ async fn check_reports_missing_permissions_and_intent_off() {
 /// No bot token set: 409 naming the key, before any Discord call.
 #[tokio::test]
 async fn check_without_a_token_answers_409() {
-  let home = Home::new(false).await;
+  let home = Home::new_without_thread_runtime(false).await;
 
   let (status, body) = send(home.router(), "/api/internal/discord/check", json!({})).await;
 

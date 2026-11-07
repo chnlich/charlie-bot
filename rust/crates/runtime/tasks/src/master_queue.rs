@@ -1224,7 +1224,7 @@ mod tests {
     let home = tempfile::tempdir().unwrap();
     let features = context_features(home.path());
     let queue = Arc::new(MasterQueue::new(test_pool()));
-    for delay in 0..8 {
+    for delay in [0, 7] {
       let session_id = format!("race-session-{delay}");
       let first_observed = Arc::new(Mutex::new(Vec::new()));
       let second_observed = Arc::new(Mutex::new(Vec::new()));

@@ -1298,9 +1298,9 @@ mod tests {
     let new = home.child(&root, "new").await;
     let deep = home.child(&old, "deep").await;
     for (session_id, updated_at) in [
-      (&old.id, "2026-11-07T00:00:01Z"),
-      (&new.id, "2026-11-07T00:00:02Z"),
-      (&deep.id, "2026-11-07T00:00:03Z"),
+      (&old, "2026-11-07T00:00:01Z"),
+      (&new, "2026-11-07T00:00:02Z"),
+      (&deep, "2026-11-07T00:00:03Z"),
     ] {
       let updated_at = UtcDateTime::parse(updated_at).unwrap();
       let status = WebStatus {

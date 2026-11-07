@@ -58,16 +58,18 @@ fn deny_decision() -> Value {
 }
 
 fn declared_wait_seconds(command: &str) -> Result<f64, String> {
-  if trigger_command_pattern().is_match(command).map_err(regex_error)? {
+  if command.contains("charliebot") && trigger_command_pattern().is_match(command).map_err(regex_error)? {
     return Ok(0.0);
   }
   let mut wait = 0.0f64;
-  for timeout in tail_pid_pattern().captures_iter(command) {
-    let timeout = timeout.map_err(regex_error)?;
-    wait = wait.max(match timeout.get(1) {
-      Some(seconds) => seconds.as_str().parse::<f64>().expect("timeout pattern contains an integer"),
-      None => f64::INFINITY,
-    });
+  if command.contains("tail") {
+    for timeout in tail_pid_pattern().captures_iter(command) {
+      let timeout = timeout.map_err(regex_error)?;
+      wait = wait.max(match timeout.get(1) {
+        Some(seconds) => seconds.as_str().parse::<f64>().expect("timeout pattern contains an integer"),
+        None => f64::INFINITY,
+      });
+    }
   }
   let sleeps = sleep_values(command)?;
   for seconds in &sleeps {

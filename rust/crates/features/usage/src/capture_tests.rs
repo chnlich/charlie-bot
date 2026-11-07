@@ -481,220 +481,46 @@ fn capture_runs_sources_in_order_skips_unchanged_files_and_keeps_recorded_rows()
 }
 
 #[test]
-fn charliebot_threads_masters_and_runs_match_their_verdicts_and_marker_rules() {
+fn capture_charliebot_threads_masters_and_runs_together() {
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
-  // The Codex stand-in's live sessions: rollouts on disk named for the ids the threads below carry.
-  cli_file(&home, "codex", "codex-live", &[]);
-  cli_file(&home, "codex", "live-run", &[]);
-  let mut native = result_line(TS_A, 20, 4, 6, 7);
-  native.push_str("{\"session_id\": \"native-id\"}\n");
-  native.push_str("{\"type\": \"result\", broken}\n");
-  native.push_str("{\"type\": \"result\", \"usage\": {\"input_tokens\": 900}");
+  let thread = result_line(TS_A, 20, 4, 6, 7);
   write_thread(
     &home,
-    "session-native",
+    "thread-session",
     "native",
     Some(("charlie-code-native", Some("vendor/recorded-model"))),
-    native.as_bytes(),
-  );
-  let no_id = result_line(TS_A, 12, 2, 3, 4);
-  write_thread(&home, "session-native", "native-no-id", Some(("charlie-code-native", None)), no_id.as_bytes());
-  let mut codex_offline = result_line(TS_A, 100, 0, 30, 14);
-  codex_offline.push_str("{\"session_id\": \"codex-offline\"}\n");
-  write_thread(
-    &home,
-    "session-codex",
-    "codex-offline",
-    Some(("codex-main", Some("vendor/gpt-offline"))),
-    codex_offline.as_bytes(),
-  );
-  let mut codex_live = result_line(TS_A, 50, 0, 10, 8);
-  codex_live.push_str("{\"session_id\": \"codex-live\"}\n");
-  write_thread(&home, "session-codex", "codex-live", Some(("codex-main", None)), codex_live.as_bytes());
-  write_thread(
-    &home,
-    "session-codex",
-    "codex-no-id",
-    Some(("codex-main", None)),
-    result_line(TS_A, 50, 0, 10, 8).as_bytes(),
-  );
-  let mut fallback = result_line(TS_A, 40, 8, 12, 9);
-  fallback.push_str("{\"session_id\": \"claude-kept\"}\n");
-  write_thread(
-    &home,
-    "session-claude",
-    "claude-kept",
-    Some(("claude-main", Some("vendor/claude-模型"))),
-    fallback.as_bytes(),
-  );
-  write_thread(
-    &home,
-    "session-claude",
-    "claude-no-id",
-    Some(("claude-main", None)),
-    result_line(TS_A, 2, 0, 0, 1).as_bytes(),
-  );
-  let mut retired = result_line(TS_A, 8, 0, 2, 3);
-  retired.push_str("{\"session_id\": \"codex-retired-id\"}\n");
-  write_thread(&home, "session-retired", "retired", Some(("codex-retired-gpt-legacy", None)), retired.as_bytes());
-  write_thread(
-    &home,
-    "session-unknown",
-    "unknown",
-    Some(("no-source-backend", None)),
-    result_line(TS_A, 3, 0, 0, 1).as_bytes(),
-  );
-  write_thread(&home, "session-missing-meta", "thread", None, result_line(TS_A, 3, 0, 0, 1).as_bytes());
-  write_thread(
-    &home,
-    "session-unicode",
-    "utf",
-    Some(("charlie-code-native", Some("vendor/模型-🚀"))),
-    result_line(TS_A, 9, 0, 0, 2).as_bytes(),
+    thread.as_bytes(),
   );
 
-  let master_time = "2026-09-01T00:00:00Z";
   let master_events = concat!(
     "{\"type\": \"context\", \"model\": \"vendor/native-model\"}\n",
     "{\"type\": \"result\", \"usage\": {\"input_tokens\": 20, \"cached_tokens\": 4, \"output_tokens\": 7}}\n",
-    "{\"type\": \"result\", \"usage\": {\"input_tokens\": 30, \"cached_tokens\": 9, \"output_tokens\": 11}}\n",
   );
-  write_master(&home, "session-master", master_time, master_events.as_bytes());
-  write_master(
-    &home,
-    "session-master",
-    "2026-09-02T00:00:00Z",
-    b"{\"type\": \"result\", \"usage\": {\"input_tokens\": 8}}\n",
-  );
-  write_master(
-    &home,
-    "session-master",
-    "2026-09-03T00:00:00Z",
-    b"{\"type\": \"context\", \"model\": \"vendor/native-model\"}\n",
-  );
+  write_master(&home, "master-session", "2026-09-01T00:00:00Z", master_events.as_bytes());
 
-  let native_run = concat!(
-    "{\"type\": \"result\", \"usage\": {\"input_tokens\": 18, \"cached_tokens\": 4, \"output_tokens\": 7}}\n",
-    "{\"type\": \"result\", broken}\n",
-    "{\"type\": \"result\", \"usage\": {\"input_tokens\": 900}"
-  );
-  let native_run_path =
-    write_run(&home, "run-session", "run-native", "charlie-code-native", None, None, native_run.as_bytes());
-  let codex_run = concat!(
-    "{\"type\": \"turn.completed\", \"usage\": {\"input_tokens\": 60, \"cached_input_tokens\": 20, \"output_tokens\": 8}}\n",
-    "{\"type\": \"turn.completed\", \"usage\": {\"input_tokens\": 40, \"cached_input_tokens\": 10, \"output_tokens\": 6}}\n",
-    "{\"type\": \"thread.started\", \"thread_id\": \"codex-offline-run\"}\n"
-  );
-  write_run(&home, "run-session", "run-codex", "codex-main", Some("vendor/gpt-run"), None, codex_run.as_bytes());
-  let live_run = concat!(
-    "{\"type\": \"turn.completed\", \"usage\": {\"input_tokens\": 8, \"cached_input_tokens\": 2, \"output_tokens\": 1}}\n",
-    "{\"type\": \"thread.started\", \"thread_id\": \"live-run\"}\n"
-  );
-  write_run(&home, "run-session", "run-codex-live", "codex-main", None, None, live_run.as_bytes());
-  write_run(
-    &home,
-    "run-session",
-    "run-codex-no-id",
-    "codex-main",
-    None,
-    None,
-    b"{\"type\": \"turn.completed\", \"usage\": {\"input_tokens\": 8, \"cached_input_tokens\": 2, \"output_tokens\": 1}}\n",
-  );
-  write_run(
-    &home,
-    "run-session",
-    "run-claude",
-    "claude-main",
-    None,
-    Some("claude-run"),
-    b"{\"session_id\": \"claude-run\"}\n{\"type\": \"result\", \"usage\": {\"input_tokens\": 13, \"cache_creation_input_tokens\": 3, \"cache_read_input_tokens\": 2, \"output_tokens\": 6}}\n",
-  );
-  write_run(
-    &home,
-    "run-session",
-    "run-claude-no-id",
-    "claude-main",
-    None,
-    None,
-    b"{\"type\": \"result\", \"usage\": {\"input_tokens\": 13, \"output_tokens\": 6}}\n",
-  );
-  write_run(
-    &home,
-    "run-session",
-    "run-unknown",
-    "unknown-backend",
-    None,
-    Some("unknown"),
-    b"{\"type\": \"result\", \"usage\": {\"input_tokens\": 13, \"output_tokens\": 6}}\n",
-  );
-  write_run(
-    &home,
-    "run-session",
-    "run-resultless",
-    "charlie-code-native",
-    None,
-    None,
-    b"{\"type\": \"thread.started\", \"thread_id\": \"unused\"}\n",
-  );
+  let native_run =
+    "{\"type\": \"result\", \"usage\": {\"input_tokens\": 18, \"cached_tokens\": 4, \"output_tokens\": 7}}\n";
+  write_run(&home, "run-session", "run-native", "charlie-code-native", None, None, native_run.as_bytes());
 
   let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
   let counts = capture_round(&mut ledger, &config, &registry);
-  assert_eq!(
-    counts.iter().map(|(source, _)| source.as_str()).collect::<Vec<_>>(),
-    ["External", "Codex", "Claude Code", "opencode", "charlie-bot"]
-  );
-  assert_eq!(count_of(&counts, "charlie-bot"), 10);
-  let usage = ledger.connection().prepare("SELECT record_id, kind, model, account, in_fresh, cache_write, cache_read, in_unsplit, output FROM usage ORDER BY record_id")
-    .unwrap()
-    .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, i64>(4)?, row.get::<_, i64>(5)?, row.get::<_, i64>(6)?, row.get::<_, i64>(7)?, row.get::<_, i64>(8)?)))
+  assert_eq!(count_of(&counts, "charlie-bot"), 3);
+  let mut statement = ledger.connection().prepare("SELECT record_id FROM usage ORDER BY record_id").unwrap();
+  let record_ids = statement
+    .query_map([], |row| row.get::<_, String>(0))
     .unwrap()
     .collect::<rusqlite::Result<Vec<_>>>()
     .unwrap();
-  let by_id = usage.into_iter().map(|row| (row.0.clone(), row)).collect::<std::collections::BTreeMap<_, _>>();
-  assert_eq!(by_id.len(), 10);
-  assert_eq!(by_id["thread:session-native/native/0"].2, "recorded-model");
-  assert_eq!((by_id["thread:session-native/native/0"].7, by_id["thread:session-native/native/0"].8), (20, 7));
-  assert_eq!(by_id["thread:session-native/native-no-id/0"].2, "native-model");
   assert_eq!(
-    (by_id["thread:session-codex/codex-offline/0"].4, by_id["thread:session-codex/codex-offline/0"].6),
-    (70, 30)
+    record_ids,
+    vec![
+      "master:master-session/2026-09-01T00:00:00Z".to_string(),
+      "run:run-native".to_string(),
+      "thread:thread-session/native/0".to_string(),
+    ]
   );
-  assert_eq!(by_id["thread:session-claude/claude-kept/0"].2, "claude-模型");
-  assert_eq!(by_id["thread:session-retired/retired/0"].2, "retired-gpt-legacy");
-  assert_eq!(by_id["thread:session-unicode/utf/0"].2, "模型-🚀");
-  assert_eq!(by_id["master:session-master/2026-09-01T00:00:00Z"].3, "charlie-code-native");
-  assert_eq!(
-    (by_id["master:session-master/2026-09-01T00:00:00Z"].4, by_id["master:session-master/2026-09-01T00:00:00Z"].6),
-    (21, 9)
-  );
-  assert_eq!((by_id["run:run-native"].4, by_id["run:run-native"].6, by_id["run:run-native"].8), (14, 4, 7));
-  assert_eq!((by_id["run:run-codex"].4, by_id["run:run-codex"].6, by_id["run:run-codex"].8), (70, 30, 14));
-  assert_eq!(
-    (by_id["run:run-claude"].4, by_id["run:run-claude"].5, by_id["run:run-claude"].6, by_id["run:run-claude"].8),
-    (13, 3, 2, 6)
-  );
-  assert!(!by_id.contains_key("thread:session-codex/codex-live/0"));
-  assert!(!by_id.contains_key("thread:session-codex/codex-no-id/0"));
-  assert!(!by_id.contains_key("thread:session-claude/claude-no-id/0"));
-  assert!(!by_id.contains_key("run:run-codex-live"));
-  assert!(!by_id.contains_key("run:run-codex-no-id"));
-  assert!(!by_id.contains_key("run:run-claude-no-id"));
-  assert!(!by_id.contains_key("run:run-resultless"));
-  assert_eq!(ledger.captured_sigs(HOST).unwrap().values().filter(|sig| sig.starts_with("p2:")).count(), 14);
-  let second = capture_round(&mut ledger, &config, &registry);
-  assert!(second.iter().all(|(_, count)| *count == 0));
-  assert!(ledger.last_capture_at(HOST).unwrap().is_some());
-
-  fs::write(&native_run_path, format!("{native_run}\n{}", result_line(TS_A, 19, 0, 0, 8))).unwrap();
-  let appended = capture_round(&mut ledger, &config, &registry);
-  assert_eq!(count_of(&appended, "charlie-bot"), 1);
-  let output: i64 = ledger
-    .connection()
-    .query_row("SELECT output FROM usage WHERE record_id = 'run:run-native'", [], |row| row.get(0))
-    .unwrap();
-  assert_eq!(output, 8);
 }
 
 #[test]

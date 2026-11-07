@@ -217,12 +217,14 @@ async fn record_relay_failure(run: &RelayRun<'_>, reason: &str) {
     return;
   }
   let pcm_bytes = run.queue.recording_pcm().await;
+  let devices = run.queue.devices().await;
   let config = Arc::clone(run.config);
   let session_id = run.session_id.to_string();
   let run_id = run.run_id.to_string();
+  let backend = run.backend_id.to_string();
   let reason = reason.to_string();
   let written = tokio::task::spawn_blocking(move || {
-    recordings::store_relay_failure(&config, &session_id, &run_id, &pcm_bytes, &reason)
+    recordings::store_relay_failure(&config, &session_id, &run_id, &pcm_bytes, &backend, devices.as_ref(), &reason)
   })
   .await;
   match written {
@@ -843,7 +845,7 @@ mod tests {
       parts["failure"],
       json!({"stage": "relay", "error": "backend produced its final before the recording's end frame"})
     );
-    assert_eq!(parts["audio"], Value::Null);
+    assert_eq!(parts["audio"], json!({"path": "relay", "backend": "gemini", "devices": null}));
     stop_relay_test(server).await;
   }
 
@@ -865,6 +867,7 @@ mod tests {
       serde_json::from_str(&std::fs::read_to_string(parts.expect("the run json exists")).expect("read parts"))
         .expect("the run json parses");
     assert_eq!(parts["failure"], json!({"stage": "relay", "error": "connection lost"}));
+    assert_eq!(parts["audio"], json!({"path": "relay", "backend": "gemini", "devices": null}));
     stop_relay_test(server).await;
   }
 

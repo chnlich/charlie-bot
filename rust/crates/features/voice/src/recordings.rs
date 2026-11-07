@@ -257,12 +257,14 @@ pub(crate) fn archive_relay_final(
 }
 
 /// Records one relay failure: the run's `failure` part, and the audio received so far as the run's WAV when there
-/// is any.
+/// is any, with its `audio` part naming the relay, the backend and the devices.
 pub(crate) fn store_relay_failure(
   cfg: &CharlieBotConfig,
   session_id: &str,
   run_id: &str,
   pcm_bytes: &[u8],
+  backend: &str,
+  devices: Option<&Value>,
   error: &str,
 ) -> io::Result<()> {
   with_run_stem(cfg, session_id, run_id, |stem| {
@@ -270,6 +272,9 @@ pub(crate) fn store_relay_failure(
       write_run_wav(stem, pcm_bytes)?;
     }
     update_parts(stem, |parts| {
+      if !pcm_bytes.is_empty() {
+        parts.insert("audio".to_string(), audio_part("relay", Some(backend), devices));
+      }
       parts.insert("failure".to_string(), json!({ "stage": "relay", "error": error }));
     })?;
     Ok(())
@@ -353,7 +358,13 @@ fn stem_shape(stem: &str) -> Option<(&str, &str)> {
 pub(crate) fn list_recordings(cfg: &CharlieBotConfig, limit: usize) -> io::Result<Vec<Value>> {
   let sessions_dir = cfg.sessions_dir();
   let mut stems: Vec<(String, String, String)> = Vec::new();
-  for session in fs::read_dir(&sessions_dir)? {
+  // The store owns the "no sessions directory is an empty store" convention, and so does this list.
+  let sessions = match fs::read_dir(&sessions_dir) {
+    Ok(sessions) => sessions,
+    Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+    Err(error) => return Err(error),
+  };
+  for session in sessions {
     let session = session?;
     let session_id = session.file_name().into_string().map_err(|name| {
       io::Error::other(format!("sessions directory holds a non-UTF-8 name {}", name.to_string_lossy()))
@@ -403,8 +414,9 @@ fn recording_row(sessions_dir: &Path, session_id: &str, stem: &str) -> io::Resul
     Ok(_) => {
       let bytes = fs::read(with_kind(&stem_path, "wav"))?;
       let (duration_s, digital_silence, peak_dbfs, rms_dbfs) = wav_levels(&bytes)?;
+      // The encoded path keeps its leading `/`, which the file route's mount supplies.
       let url = utf8_percent_encode(&with_kind(&stem_path, "wav").to_string_lossy(), path_encoding()).to_string();
-      (Some(format!("/absolute_filepath/{url}")), Some(duration_s), Some(digital_silence), peak_dbfs, rms_dbfs)
+      (Some(format!("/absolute_filepath{url}")), Some(duration_s), Some(digital_silence), peak_dbfs, rms_dbfs)
     }
     Err(error) if error.kind() == io::ErrorKind::NotFound => (None, None, None, None, None),
     Err(error) => return Err(error),
@@ -669,7 +681,14 @@ mod tests {
     let home = tempfile::tempdir().expect("make an isolated home");
     let config = synthetic_config(home.path());
     let id = run_id(4);
-    store_relay_failure(&config, "synthetic-session", &id, &[1, 2, 3], "connection lost")
+    let devices = json!({
+      "input_device": "Synthetic mic",
+      "capture_settings": {"echoCancellation": true},
+      "output_device": null,
+      "communications_output_device": null,
+      "device_error": null
+    });
+    store_relay_failure(&config, "synthetic-session", &id, &[1, 2, 3], "gemini", Some(&devices), "connection lost")
       .expect("the failure archives");
     let files: Vec<String> = fs::read_dir(voice_dir(&config, "synthetic-session"))
       .expect("read the voice directory")
@@ -686,7 +705,7 @@ mod tests {
       serde_json::from_str(&fs::read_to_string(voice_dir(&config, "synthetic-session").join(json)).expect("read"))
         .expect("parse");
     assert_eq!(parts["failure"], json!({"stage": "relay", "error": "connection lost"}));
-    assert_eq!(parts["audio"], Value::Null, "the failure path stores no audio part");
+    assert_eq!(parts["audio"], json!({"path": "relay", "backend": "gemini", "devices": devices}));
   }
 
   #[test]
@@ -694,7 +713,8 @@ mod tests {
     let home = tempfile::tempdir().expect("make an isolated home");
     let config = synthetic_config(home.path());
     let id = run_id(5);
-    store_relay_failure(&config, "synthetic-session", &id, &[], "connection lost").expect("the failure records");
+    store_relay_failure(&config, "synthetic-session", &id, &[], "gemini", None, "connection lost")
+      .expect("the failure records");
     let files: Vec<String> = fs::read_dir(voice_dir(&config, "synthetic-session"))
       .expect("read the voice directory")
       .map(|entry| entry.expect("read a voice entry").file_name().to_string_lossy().into_owned())
@@ -762,6 +782,16 @@ mod tests {
     let rows = list_recordings(&config, DEFAULT_LIST_LIMIT).expect("the list answers");
     assert_eq!(rows.len(), 3);
     assert_eq!(rows[2]["stem"], older_stem);
+  }
+
+  #[test]
+  fn the_list_answers_empty_when_no_sessions_directory_exists() {
+    let home = tempfile::tempdir().expect("make an isolated home");
+    let config = synthetic_config(home.path());
+
+    let rows = list_recordings(&config, DEFAULT_LIST_LIMIT).expect("a store without sessions lists no recordings");
+
+    assert!(rows.is_empty());
   }
 
   #[test]

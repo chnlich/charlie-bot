@@ -50,7 +50,7 @@
       <tr>
         <td data-l="Recorded" class="when">{{ row.recorded_at }}</td>
         <td data-l="Session" class="sess">
-          {% if row.session_name %}<a href="/sessions/{{ row.session_id }}">{{ row.session_name }}</a>
+          {% if row.session_name %}<a href="/?session={{ row.session_id }}">{{ row.session_name }}</a>
           {% else %}<span class="none">unnamed</span>{% endif %}
           <span class="id">{{ row.session_id }}</span>
         </td>

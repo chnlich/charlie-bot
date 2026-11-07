@@ -1006,7 +1006,12 @@ fn charliebot_codex_thread_is_skipped_while_a_rollout_of_it_exists() {
   let home = dir.path().join("home");
   let (config, registry) = fixture_with(&home, &option("codex-gpt", "codex", "openai/gpt-5"));
   let sid = "rolloutsid1";
-  cli_file(&home, "codex", sid, &[call(sid, "codex-gpt5", "2026-09-10T00:00:00Z", [40, 0, 20, 7], &[sid])]);
+  let rollout = cli_file(
+    &home,
+    "codex",
+    sid,
+    &[call(sid, "codex-gpt5", "2026-09-10T00:00:00Z", [40, 0, 20, 7], &[sid])],
+  );
   for (thread, ids) in [("t1", vec![sid]), ("t2", vec![sid, "pruned-sid"]), ("t3", vec!["orphan-sid"])] {
     let mut events_text = result_line("2026-09-11T20:00:00+00:00", 100, 0, 0, 5);
     for id in ids {
@@ -1014,9 +1019,16 @@ fn charliebot_codex_thread_is_skipped_while_a_rollout_of_it_exists() {
     }
     write_thread(&home, "s1", thread, Some(("codex-gpt", None)), events_text.as_bytes());
   }
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
-  let written = capture_round(&mut ledger, &config, &registry);
-  assert_eq!((count_of(&written, "Codex"), count_of(&written, "charlie-bot")), (1, 1)); // only t3's thread is stored
+  let mut ledger = UsageLedger::in_memory().unwrap();
+  let native = stub_record(
+    &call(sid, "codex-gpt5", "2026-09-10T00:00:00Z", [40, 0, 20, 7], &[sid]),
+    "Codex",
+    "codex-main",
+  )
+  .unwrap();
+  ledger.record_file(HOST, rollout.to_str().unwrap(), "synthetic", &[native]).unwrap();
+  let captured = ledger.captured_sigs(HOST).unwrap();
+  assert_eq!(capture_charliebot(&mut ledger, HOST, &config.sessions_dir(), &config, &registry, &captured).unwrap(), 1);
   let rows = page_rows(&mut ledger);
   assert_eq!(row(&rows, "Codex", "codex-gpt5").calls, 1);
   let fallback = row(&rows, "charlie-bot", "gpt-5");
@@ -1024,7 +1036,8 @@ fn charliebot_codex_thread_is_skipped_while_a_rollout_of_it_exists() {
   assert_eq!(ledger.captured_sigs(HOST).unwrap().len(), 4); // the skipped threads are recorded too: never read again
 
   fs::remove_dir_all(home.join("cli/codex")).unwrap();
-  assert!(capture_round(&mut ledger, &config, &registry).iter().all(|(_, count)| *count == 0));
+  let captured = ledger.captured_sigs(HOST).unwrap();
+  assert_eq!(capture_charliebot(&mut ledger, HOST, &config.sessions_dir(), &config, &registry, &captured).unwrap(), 0);
   assert_eq!(page_rows(&mut ledger), rows); // the native rows survive the deletion
 }
 

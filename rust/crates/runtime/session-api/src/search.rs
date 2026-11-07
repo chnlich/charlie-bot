@@ -63,20 +63,20 @@ const SIGNATURE_BATCH_CHUNK_FLOOR: usize = 50;
 const SIGNATURE_BATCH_MIN_PATHS: usize = 32;
 /// The threads one content-scan batch may split across.
 ///
-/// A first query scans every active session's chat file: 5.5 GB on the 7,160-session mock home, which one
-/// thread spends about 0.6 s on. The scans read different files and do not depend on each other.
+/// A sparse needle's first query scans nearly every active session's chat file: 5.5 GB on the 7,160-session mock home,
+/// which one thread spends about 0.6 s on. The scans read different files and do not depend on each other.
 const SCAN_BATCH_WORKERS: usize = 16;
 /// The fewest scans a batch runs on its own threads: starting them costs more than a short batch saves.
 const SCAN_BATCH_MIN_JOBS: usize = 32;
-/// The candidates the first scan batch reads before the route checks whether the answer's slots are full.
+/// The candidates the first sweep window reads before the route checks whether the answer's slots are full.
 ///
-/// The scan runs newest-first, so the first window holds the newest matches a full answer can carry. A window larger
-/// than the slots need would read files the answer cannot hold; a smaller one needs more batches to fill it. Tests
-/// shrink it, so a stopped scan needs a corpus small enough to write inside the unit-test time bound.
+/// The sweep runs newest-first, so the first window holds the newest candidates a full answer can carry. A window
+/// larger than the slots need would read files the answer cannot hold; a smaller one needs more batches to fill it.
+/// Tests shrink it, so a stopped sweep needs a corpus small enough to write inside the unit-test time bound.
 #[cfg(not(test))]
-const SCAN_WINDOW_CANDIDATES: usize = 512;
+const SWEEP_WINDOW_CANDIDATES: usize = 256;
 #[cfg(test)]
-const SCAN_WINDOW_CANDIDATES: usize = 8;
+const SWEEP_WINDOW_CANDIDATES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FileSignature {
@@ -194,10 +194,11 @@ pub(crate) struct SearchAnswer {
 /// The work every fresh query of one corpus shares: each session's lowercase name, and each active session's chat
 /// file.
 ///
-/// A fresh query tests the needle against every session name and checks the chat file of every active session, and
-/// both sets depend only on the corpus. The store keeps a corpus until a metadata write or the sweep interval rebuilds
-/// it, so the entry serves the queries between two rebuilds. `corpus` is the key and holds the rows it names alive, so
-/// a pointer match names the same sessions; `sessions_dir` is the directory the paths resolve below.
+/// A fresh query tests the needle against every session name and checks the chat files of the active sessions that the
+/// capped answer can still take, and both sets depend only on the corpus. The store keeps a corpus until a metadata
+/// write or the sweep interval rebuilds it, so the entry serves the queries between two rebuilds. `corpus` is the key
+/// and holds the rows it names alive, so a pointer match names the same sessions; `sessions_dir` is the directory the
+/// paths resolve below.
 struct CorpusWork {
   corpus: Arc<Vec<Arc<SessionMetadata>>>,
   sessions_dir: PathBuf,
@@ -207,6 +208,10 @@ struct CorpusWork {
   candidates: Arc<Vec<WatchedFile>>,
   /// The corpus row of each candidate, so a verdict maps back to its session.
   candidate_rows: Vec<usize>,
+  /// The candidates, newest first, so a window of the sweep holds the newest candidates a full answer can carry.
+  ///
+  /// The order breaks ties on corpus order, as the answer does, so a scan's insertion order does not move.
+  newest_first: Vec<usize>,
 }
 
 struct SearchMemos {
@@ -220,6 +225,9 @@ struct SearchMemos {
   /// The candidates the scan windows read, so a test can tell a stopped scan from a complete one.
   #[cfg(test)]
   scanned_candidates: usize,
+  /// The candidates whose signatures the sweep read, so a test can tell a stopped sweep from a complete one.
+  #[cfg(test)]
+  swept_candidates: usize,
 }
 
 impl Default for SearchMemos {
@@ -239,12 +247,11 @@ impl Default for SearchMemos {
       scan_calls: 0,
       #[cfg(test)]
       scanned_candidates: 0,
+      #[cfg(test)]
+      swept_candidates: 0,
     }
   }
 }
-
-/// One verdict helper's root list: needle-and-signature pairs whose order the helpers do not care about.
-type RootList = Vec<(String, FileSignature)>;
 
 impl SearchMemos {
   /// The corpus work for `all`: the cached entry while the corpus and its sessions directory still hold, and a fresh
@@ -271,22 +278,18 @@ impl SearchMemos {
         candidate_rows.push(row);
       }
     }
+    let mut newest_first: Vec<usize> = (0..candidates.len()).collect();
+    newest_first.sort_by_key(|index| Reverse(all[candidate_rows[*index]].updated_at));
     let work = Arc::new(CorpusWork {
       corpus: Arc::clone(all),
       sessions_dir: sessions_dir.to_path_buf(),
       lowered_names,
       candidates: Arc::new(candidates),
       candidate_rows,
+      newest_first,
     });
     self.corpus_work = Some(Arc::clone(&work));
     work
-  }
-
-  /// The miss and hit roots of one file. Their order is irrelevant: the verdict helpers only scan them.
-  fn roots(&mut self, path: &Path) -> (RootList, RootList) {
-    let Some(entry) = self.files.get_mut(path) else { return (Vec::new(), Vec::new()) };
-    let collect = |roots: &RootMemo| roots.iter().map(|(needle, signature)| (needle.clone(), *signature)).collect();
-    (collect(&entry.misses), collect(&entry.hits))
   }
 
   fn remember_root(&mut self, path: &Path, needle: &str, signature: FileSignature, hit: bool) {
@@ -358,8 +361,9 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
   if let Some(cached) = memos.lock().expect("session search memo mutex is not poisoned").cached_match(&needle)
     && Arc::ptr_eq(&cached.corpus, &all)
   {
+    let watched: Vec<usize> = (0..cached.watched.len()).collect();
     let signatures: Vec<Option<FileSignature>> =
-      file_signatures(&cached.watched, sessions_handle.as_ref()).into_iter().map(Result::ok).collect();
+      file_signatures(&cached.watched, &watched, sessions_handle.as_ref()).into_iter().map(Result::ok).collect();
     if cached.signatures == signatures {
       return Ok(SearchAnswer { rows: cached.rows.clone(), source: Some(cached) });
     }
@@ -376,153 +380,187 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
   }
   names.sort_by_key(|left| Reverse(left.updated_at));
   names.truncate(SEARCH_RESULT_LIMIT);
-  let signatures: Vec<Option<FileSignature>> = file_signatures(&work.candidates, sessions_handle.as_ref())
-    .into_iter()
-    .zip(&work.candidate_rows)
-    .map(|(result, row)| match result {
-      Ok(signature) => Some(signature),
-      Err(error) => {
-        log_search_read_failed_once(memos, &all[*row].id, &error);
-        None
-      }
-    })
-    .collect();
 
-  // The per-file verdicts are read here, on the request's thread, and the files that need a scan are collected
-  // so one batch can read them across threads. A candidate's place in `content_hits` follows the corpus order,
-  // because the result's order breaks ties on insertion order.
   let trigrams = needle_trigrams(&needle);
   let bigrams = needle_bigrams(&needle);
+  let content_index_settles = !(trigrams.is_empty() && bigrams.is_empty());
+  // A candidate's place in `content_hits` follows the corpus order, because the result's order breaks ties on
+  // insertion order.
   let mut content_hits = vec![false; work.candidates.len()];
-  let mut scans: Vec<(usize, u64)> = Vec::new();
-  let mut unindexed: Vec<usize> = Vec::new();
-  for (index, signature) in signatures.iter().enumerate() {
-    // A session whose name matched already answers the query, so its chat file is not read.
-    if name_hits[work.candidate_rows[index]] {
-      continue;
-    }
-    let path = &work.candidates[index].path;
-    let Some(signature) = signature else { continue };
-    // The content index settles most fresh queries before the per-file roots are read, and reading those roots
-    // copies every needle they hold.
-    let needs_index = if trigrams.is_empty() && bigrams.is_empty() {
-      false
-    } else {
-      match memos
-        .lock()
-        .expect("session search memo mutex is not poisoned")
-        .content_verdict(path, *signature, &trigrams, &bigrams)
-      {
-        ContentVerdict::Absent => continue,
-        ContentVerdict::Possible => false,
-        ContentVerdict::Missing => true,
-      }
-    };
-    let (miss_roots, hit_roots) = memos.lock().expect("session search memo mutex is not poisoned").roots(path);
-    if hit_root_covers(&hit_roots, *signature, &needle) {
-      content_hits[index] = true;
-      continue;
-    }
-    let Some(start) = absence_rescan_start(&miss_roots, *signature, &needle) else {
-      continue;
-    };
-    if needs_index {
-      unindexed.push(index);
-    }
-    #[cfg(test)]
-    {
-      memos.lock().expect("session search memo mutex is not poisoned").scan_calls += 1;
-    }
-    scans.push((index, start));
-  }
-  // A file with no fresh content index gets one, and the same pass searches it, so the query reads it once. A file
-  // whose index rules the needle out leaves the scan batch here, while a file the index cannot rule out is searched
-  // by the pass itself and leaves it too.
-  if !unindexed.is_empty() {
-    let answers = index_and_search_files(&work.candidates, &unindexed, &signatures, &needle);
-    let mut indexed = HashSet::new();
-    for (index, answer) in answers {
-      let signature = signatures[index].expect("an indexed candidate holds its signature");
-      match answer {
-        Ok((trigrams, bigrams, found)) => {
-          let path = &work.candidates[index].path;
-          memos
-            .lock()
-            .expect("session search memo mutex is not poisoned")
-            .remember_content_index(path, signature, trigrams, bigrams);
-          memos
-            .lock()
-            .expect("session search memo mutex is not poisoned")
-            .remember_root(path, &needle, signature, found);
-          content_hits[index] = found;
-          indexed.insert(index);
-        }
-        Err(error) => log_search_read_failed_once(memos, &all[work.candidate_rows[index]].id, &error),
-      }
-    }
-    if !indexed.is_empty() {
-      scans.retain(|(index, _)| !indexed.contains(index));
-    }
-  }
-  // The result keeps the newest `SEARCH_RESULT_LIMIT` matches, so the scans run newest-first and stop once every
-  // unscanned candidate is older than the result's oldest slot: such a candidate cannot enter the capped result,
-  // however its chat file reads. A common word matches most of the corpus, so this is the difference between reading
-  // the corpus and reading the rows the answer can hold.
-  scans.sort_by_key(|(index, _)| Reverse(all[work.candidate_rows[*index]].updated_at));
-  // Every match already known counts toward the cap: name hits, and the content hits of files the pass above had to
-  // read anyway, whether it searched them while indexing or found them in an earlier query.
-  let mut matched: Vec<UtcDateTime> = name_hits
-    .iter()
-    .enumerate()
-    .filter(|(_, hit)| **hit)
-    .map(|(row, _)| all[row].updated_at)
-    .chain(
-      content_hits
-        .iter()
-        .enumerate()
-        .filter(|(_, hit)| **hit)
-        .map(|(index, _)| all[work.candidate_rows[index]].updated_at),
-    )
-    .collect();
+  // The signature of every candidate the sweep has read. A candidate the sweep stops before is never read, so its
+  // slot stays None.
+  let mut signatures: Vec<Option<FileSignature>> = vec![None; work.candidates.len()];
+  // Every match already known counts toward the cap: a name hit answers the query without reading a chat file.
+  let mut matched: Vec<UtcDateTime> =
+    name_hits.iter().enumerate().filter(|(_, hit)| **hit).map(|(row, _)| all[row].updated_at).collect();
   let mut scan_failures = 0;
-  let mut scanned = 0;
-  while scanned < scans.len() {
-    if let Some(cutoff) = result_cutoff(&mut matched)
-      && all[work.candidate_rows[scans[scanned].0]].updated_at < cutoff
-    {
+
+  // The result keeps the newest `SEARCH_RESULT_LIMIT` matches, so the sweep reads candidates newest-first and stops
+  // once every unread candidate is older than the result's slot at rank `SEARCH_RESULT_LIMIT`: such a candidate cannot
+  // enter the capped result, however its chat file reads. A common word matches most of the corpus, so this is the
+  // difference between reading the corpus and reading the rows the answer can hold.
+  //
+  // While the answer is short, the next window is sized to the candidates the matches so far say it still needs: a
+  // window that matches nothing means the answer sits far below it, so the rest of the corpus goes in one batch and
+  // pays no further signature round trip.
+  let mut processed = 0;
+  let mut window = SWEEP_WINDOW_CANDIDATES;
+  loop {
+    if processed == work.newest_first.len() {
       break;
     }
-    // Only the first window is short: a needle whose matches are sparse enough to leave it short needs the whole
-    // scan to reach the cap, so the remaining candidates go in one batch and pay no further thread start.
-    let end = if scanned == 0 { SCAN_WINDOW_CANDIDATES.min(scans.len()) } else { scans.len() };
-    let window = &scans[scanned..end];
+    let cutoff = result_cutoff(&mut matched);
+    let end = match cutoff {
+      // Every candidate at or above the cutoff can still change the answer, and every candidate below it cannot. A
+      // full answer still checks those candidates a window at a time, because each match raises the cutoff and leaves
+      // the candidates below the new one unread.
+      Some(cutoff) => {
+        let above =
+          work.newest_first[processed..].partition_point(|index| all[work.candidate_rows[*index]].updated_at >= cutoff);
+        if above == 0 {
+          break;
+        }
+        (processed + SWEEP_WINDOW_CANDIDATES).min(processed + above)
+      }
+      None => (processed + window).min(work.newest_first.len()),
+    };
+    let matched_before = matched.len();
+    let positions = &work.newest_first[processed..end];
+    // A session whose name matched already answers the query, so its chat file is not read.
+    let selection: Vec<usize> =
+      positions.iter().copied().filter(|index| !name_hits[work.candidate_rows[*index]]).collect();
     #[cfg(test)]
     {
-      memos.lock().expect("session search memo mutex is not poisoned").scanned_candidates += window.len();
+      memos.lock().expect("session search memo mutex is not poisoned").swept_candidates += selection.len();
     }
-    for ((index, _), answer) in window.iter().zip(scan_contents(&work.candidates, window, &signatures, &needle)) {
-      let path = &work.candidates[*index].path;
-      let signature = signatures[*index].expect("a scanned candidate holds its signature");
-      match answer {
-        Ok(true) => {
-          memos
+    for (index, answer) in selection.iter().zip(file_signatures(&work.candidates, &selection, sessions_handle.as_ref()))
+    {
+      signatures[*index] = match answer {
+        Ok(signature) => Some(signature),
+        Err(error) => {
+          log_search_read_failed_once(memos, &all[work.candidate_rows[*index]].id, &error);
+          None
+        }
+      };
+    }
+
+    // The per-file verdicts are read here, on the request's thread, and the files that need a scan are collected so
+    // one batch can read them across threads.
+    let mut scans: Vec<(usize, u64)> = Vec::new();
+    let mut unindexed: Vec<usize> = Vec::new();
+    {
+      let mut guard = memos.lock().expect("session search memo mutex is not poisoned");
+      for index in positions.iter().copied() {
+        if name_hits[work.candidate_rows[index]] {
+          continue;
+        }
+        let Some(signature) = signatures[index] else { continue };
+        let path = &work.candidates[index].path;
+        // The content index settles most fresh queries before the per-file roots are read.
+        let needs_index = if content_index_settles {
+          match guard.content_verdict(path, signature, &trigrams, &bigrams) {
+            ContentVerdict::Absent => continue,
+            ContentVerdict::Possible => false,
+            ContentVerdict::Missing => true,
+          }
+        } else {
+          false
+        };
+        let (covered, start) = match guard.files.get_mut(path) {
+          Some(entry) => (
+            hit_root_covers(entry.hits.iter(), signature, &needle),
+            absence_rescan_start(&entry.misses, signature, &needle),
+          ),
+          // A file with no memo entry has no recorded root: none covers it, and its scan starts at the first byte.
+          None => (false, Some(0)),
+        };
+        if covered {
+          content_hits[index] = true;
+          matched.push(all[work.candidate_rows[index]].updated_at);
+          continue;
+        }
+        let Some(start) = start else { continue };
+        if needs_index {
+          unindexed.push(index);
+        }
+        #[cfg(test)]
+        {
+          guard.scan_calls += 1;
+        }
+        scans.push((index, start));
+      }
+    }
+    // A file with no fresh content index gets one, and the same pass searches it, so the query reads it once. A file
+    // whose index rules the needle out leaves the scan batch here, while a file the index cannot rule out is searched
+    // by the pass itself and leaves it too.
+    if !unindexed.is_empty() {
+      let answers = index_and_search_files(&work.candidates, &unindexed, &signatures, &needle);
+      let mut indexed = HashSet::new();
+      for (index, answer) in answers {
+        let signature = signatures[index].expect("an indexed candidate holds its signature");
+        match answer {
+          Ok((trigrams, bigrams, found)) => {
+            let path = &work.candidates[index].path;
+            memos
+              .lock()
+              .expect("session search memo mutex is not poisoned")
+              .remember_content_index(path, signature, trigrams, bigrams);
+            memos
+              .lock()
+              .expect("session search memo mutex is not poisoned")
+              .remember_root(path, &needle, signature, found);
+            content_hits[index] = found;
+            if found {
+              matched.push(all[work.candidate_rows[index]].updated_at);
+            }
+            indexed.insert(index);
+          }
+          Err(error) => log_search_read_failed_once(memos, &all[work.candidate_rows[index]].id, &error),
+        }
+      }
+      if !indexed.is_empty() {
+        scans.retain(|(index, _)| !indexed.contains(index));
+      }
+    }
+    if !scans.is_empty() {
+      #[cfg(test)]
+      {
+        memos.lock().expect("session search memo mutex is not poisoned").scanned_candidates += scans.len();
+      }
+      for ((index, _), answer) in scans.iter().zip(scan_contents(&work.candidates, &scans, &signatures, &needle)) {
+        let path = &work.candidates[*index].path;
+        let signature = signatures[*index].expect("a scanned candidate holds its signature");
+        match answer {
+          Ok(true) => {
+            memos
+              .lock()
+              .expect("session search memo mutex is not poisoned")
+              .remember_root(path, &needle, signature, true);
+            content_hits[*index] = true;
+            matched.push(all[work.candidate_rows[*index]].updated_at);
+          }
+          Ok(false) => memos
             .lock()
             .expect("session search memo mutex is not poisoned")
-            .remember_root(path, &needle, signature, true);
-          content_hits[*index] = true;
-          matched.push(all[work.candidate_rows[*index]].updated_at);
-        }
-        Ok(false) => memos
-          .lock()
-          .expect("session search memo mutex is not poisoned")
-          .remember_root(path, &needle, signature, false),
-        Err(error) => {
-          scan_failures += 1;
-          log_search_read_failed_once(memos, &all[work.candidate_rows[*index]].id, &error);
+            .remember_root(path, &needle, signature, false),
+          Err(error) => {
+            scan_failures += 1;
+            log_search_read_failed_once(memos, &all[work.candidate_rows[*index]].id, &error);
+          }
         }
       }
     }
-    scanned = end;
+    processed = end;
+    if cutoff.is_none() {
+      let found = matched.len() - matched_before;
+      let need = SEARCH_RESULT_LIMIT.saturating_sub(matched.len());
+      // The candidates the window's match rate says the answer still needs. A window that matched nothing leaves no
+      // rate, and the answer then sits far below the rest of the corpus.
+      window = need
+        .checked_mul(positions.len())
+        .and_then(|scaled| scaled.checked_div(found))
+        .map_or(work.newest_first.len(), |next| next.max(SWEEP_WINDOW_CANDIDATES));
+    }
   }
 
   names.extend(work.candidate_rows.iter().zip(&content_hits).filter(|(_, hit)| **hit).map(|(row, _)| &all[*row]));
@@ -561,7 +599,7 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
   Ok(SearchAnswer { rows: names.into_iter().map(Arc::clone).collect(), source: None })
 }
 
-/// The signature of every path, in the argument order.
+/// The signatures of the selected paths, in the selection's order.
 ///
 /// Each read is one `stat` and the answers do not depend on each other, so a batch reads on the signature pool's
 /// threads. The pool lives for the process: a repeat query re-checks one `stat` per watched file, 200 on the mock
@@ -569,19 +607,25 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
 ///
 /// When `sessions_dir` is open, a read resolves the file below it instead of walking the home's whole path to the
 /// session's `data` directory, which is most of the route's kernel time on a repeat query.
-fn file_signatures(paths: &Arc<Vec<WatchedFile>>, sessions_dir: Option<&Arc<File>>) -> Vec<io::Result<FileSignature>> {
+fn file_signatures(
+  paths: &Arc<Vec<WatchedFile>>,
+  selection: &[usize],
+  sessions_dir: Option<&Arc<File>>,
+) -> Vec<io::Result<FileSignature>> {
   let pool = &*SIGNATURE_POOL;
-  if paths.len() < SIGNATURE_BATCH_MIN_PATHS || pool.senders.len() < 2 {
-    return paths.iter().map(|file| file_signature(file, sessions_dir.map(Arc::as_ref))).collect();
+  if selection.len() < SIGNATURE_BATCH_MIN_PATHS || pool.senders.len() < 2 {
+    return selection.iter().map(|index| file_signature(&paths[*index], sessions_dir.map(Arc::as_ref))).collect();
   }
-  let chunk = paths.len().div_ceil(pool.senders.len()).max(SIGNATURE_BATCH_CHUNK_FLOOR);
-  let mut chunks: Vec<Option<Vec<io::Result<FileSignature>>>> = paths.chunks(chunk).map(|_| None).collect();
+  let selection = Arc::new(selection.to_vec());
+  let chunk = selection.len().div_ceil(pool.senders.len()).max(SIGNATURE_BATCH_CHUNK_FLOOR);
+  let mut chunks: Vec<Option<Vec<io::Result<FileSignature>>>> = selection.chunks(chunk).map(|_| None).collect();
   let (reply, answers) = mpsc::channel();
   for (index, _) in chunks.iter().enumerate() {
     let start = index * chunk;
-    let end = (start + chunk).min(paths.len());
+    let end = (start + chunk).min(selection.len());
     pool.dispatch(SignatureJob {
       paths: Arc::clone(paths),
+      selection: Arc::clone(&selection),
       sessions_dir: sessions_dir.cloned(),
       start,
       end,
@@ -593,7 +637,7 @@ fn file_signatures(paths: &Arc<Vec<WatchedFile>>, sessions_dir: Option<&Arc<File
     let (chunk_start, signatures) = answers.recv().expect("a signature worker answers every dispatched chunk");
     chunks[chunk_start / chunk] = Some(signatures);
   }
-  let mut out = Vec::with_capacity(paths.len());
+  let mut out = Vec::with_capacity(selection.len());
   for chunk in chunks {
     out.extend(chunk.expect("every dispatched signature chunk answers"));
   }
@@ -608,10 +652,11 @@ fn file_signature(file: &WatchedFile, sessions_dir: Option<&File>) -> io::Result
   }
 }
 
-/// One chunk of one signature batch: the shared paths, the sessions directory handle, the chunk's half-open range,
-/// and its reply channel.
+/// One chunk of one signature batch: the shared paths, the candidate indices it reads, the sessions directory handle,
+/// the chunk's half-open range into the indices, and its reply channel.
 struct SignatureJob {
   paths: Arc<Vec<WatchedFile>>,
+  selection: Arc<Vec<usize>>,
   sessions_dir: Option<Arc<File>>,
   start: usize,
   end: usize,
@@ -651,7 +696,8 @@ impl SignaturePool {
 fn signature_worker(jobs: Receiver<SignatureJob>) {
   for job in jobs {
     let sessions_dir = job.sessions_dir.as_deref();
-    let signatures = job.paths[job.start..job.end].iter().map(|file| file_signature(file, sessions_dir)).collect();
+    let signatures =
+      job.selection[job.start..job.end].iter().map(|index| file_signature(&job.paths[*index], sessions_dir)).collect();
     // A batch that stopped waiting has no reader for this chunk.
     let _ = job.reply.send((job.start, signatures));
   }
@@ -722,15 +768,19 @@ fn log_search_read_failed_once(memos: &Mutex<SearchMemos>, session_id: &str, err
   }
 }
 
-fn hit_root_covers(roots: &[(String, FileSignature)], signature: FileSignature, needle: &str) -> bool {
-  roots.iter().any(|(root, root_signature)| {
+fn hit_root_covers<'a>(
+  roots: impl Iterator<Item = (&'a String, &'a FileSignature)>,
+  signature: FileSignature,
+  needle: &str,
+) -> bool {
+  roots.into_iter().any(|(root, root_signature)| {
     root.contains(needle) && root_signature.inode == signature.inode && signature.size >= root_signature.size
   })
 }
 
 /// `None` means a stored absence already proves this query; otherwise return the byte offset to re-scan.
-fn absence_rescan_start(roots: &[(String, FileSignature)], signature: FileSignature, needle: &str) -> Option<u64> {
-  for (root, root_signature) in roots {
+fn absence_rescan_start(roots: &RootMemo, signature: FileSignature, needle: &str) -> Option<u64> {
+  for (root, root_signature) in roots.iter() {
     if needle.starts_with(root) && *root_signature == signature {
       return None;
     }
@@ -738,7 +788,9 @@ fn absence_rescan_start(roots: &[(String, FileSignature)], signature: FileSignat
   let best_size = roots
     .iter()
     .filter(|(root, root_signature)| {
-      needle.starts_with(root) && root_signature.inode == signature.inode && signature.size > root_signature.size
+      needle.starts_with(root.as_str())
+        && root_signature.inode == signature.inode
+        && signature.size > root_signature.size
     })
     .map(|(_, root_signature)| root_signature.size)
     .max();
@@ -1124,7 +1176,8 @@ mod tests {
     }
     let paths = Arc::new(paths);
     let handle = Arc::new(fs::File::open(&sessions_dir).unwrap());
-    let batch = super::file_signatures(&paths, Some(&handle));
+    let selection: Vec<usize> = (0..paths.len()).collect();
+    let batch = super::file_signatures(&paths, &selection, Some(&handle));
     assert_eq!(batch.len(), paths.len());
     for (index, (answer, file)) in batch.iter().zip(paths.iter()).enumerate() {
       if index % 97 == 0 {
@@ -1262,8 +1315,8 @@ mod tests {
     assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["new", "old"]);
   }
 
-  /// A full result stops scanning once every unscanned session is older than the answer's oldest row, and it still
-  /// holds exactly the newest matches.
+  /// A full result stops the sweep once every unread session is older than the answer's last row, and it still holds
+  /// exactly the newest matches.
   ///
   /// The 200 name hits fill the cap on their own. The eight newest content hits are newer than every one of them, so
   /// they enter the answer and push the cutoff to the 192nd name hit; the eight older content hits are past the
@@ -1298,7 +1351,7 @@ mod tests {
       content(&format!("old-{index}"), 400 + index);
     }
     let memos = Mutex::new(super::SearchMemos::default());
-    // The first query indexes every chat file; the second reaches the scan window through that index.
+    // The first query indexes every chat file; the second reaches the first sweep window through that index.
     assert!(super::search_sessions_with_memos(&store, "zzzq", &memos).unwrap().rows.is_empty());
 
     let rows = super::search_sessions_with_memos(&store, "needle", &memos).unwrap().rows;
@@ -1310,9 +1363,63 @@ mod tests {
     assert!(!ids.iter().any(|id| id.starts_with("old-")), "the rows past the cutoff stay out");
     assert_eq!(
       memos.lock().unwrap().scanned_candidates,
-      super::SCAN_WINDOW_CANDIDATES,
-      "the scan stopped after its first window and left the older files unread"
+      super::SWEEP_WINDOW_CANDIDATES,
+      "the sweep stopped after its first window and left the older files unread"
     );
+  }
+
+  /// A query whose matching names fill the cap reads no chat file: the name hits already hold every slot of the
+  /// answer, and the sweep stops before it reads a candidate older than the answer's last row.
+  #[test]
+  fn name_hits_that_fill_the_cap_read_no_chat_file() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    for index in 0..200 {
+      let id = format!("name-{index:03}");
+      let minutes = 200 - index;
+      write_session(
+        &store,
+        &id,
+        &format!("needle name {index:03}"),
+        SessionStatus::Active,
+        &format!("2026-08-01T{:02}:{:02}:00Z", 12 + minutes / 60, minutes % 60),
+      );
+      // The chat file holds the needle too, so a sweep that ran would read it and report a scan.
+      let path = store.chat_events_path(&id);
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      fs::write(&path, "needle in the events\n").unwrap();
+    }
+    let memos = Mutex::new(super::SearchMemos::default());
+
+    let rows = super::search_sessions_with_memos(&store, "needle", &memos).unwrap().rows;
+    let ids: Vec<&str> = rows.iter().map(|meta| meta.id.as_str()).collect();
+    assert_eq!(ids.len(), 200);
+    assert_eq!(ids.first().copied(), Some("name-000"), "the newest name hit leads the answer");
+    let counters = memos.lock().unwrap();
+    assert_eq!(counters.swept_candidates, 0, "the name hits filled the cap, so no chat file's signature was read");
+    assert_eq!(counters.scan_calls, 0, "no chat file was opened");
+  }
+
+  /// Rows tied at the answer's last timestamp keep corpus order, so the cap drops the corpus-last of them: the cutoff
+  /// selection reorders `matched`'s timestamps, and only their values reach the stop test.
+  #[test]
+  fn rows_tied_at_the_answers_last_row_keep_corpus_order() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    // One more match than the cap, all written at the same instant and all holding the needle in their chat file.
+    for index in 0..super::SEARCH_RESULT_LIMIT + 1 {
+      let id = format!("tied-{index:03}");
+      write_session(&store, &id, &id, SessionStatus::Active, "2026-08-01T12:00:00Z");
+      let path = store.chat_events_path(&id);
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      fs::write(&path, "needle in the events\n").unwrap();
+    }
+    let (all, _) = store.load_session_metas_snapshot_versioned(None).unwrap();
+    let expected: Vec<&str> = all.iter().take(super::SEARCH_RESULT_LIMIT).map(|meta| meta.id.as_str()).collect();
+
+    let rows = search_sessions(&store, "needle").unwrap().rows;
+    let ids: Vec<&str> = rows.iter().map(|meta| meta.id.as_str()).collect();
+    assert_eq!(ids, expected, "the tied rows answer in corpus order and the cap drops the corpus-last one");
   }
 
   #[test]

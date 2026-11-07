@@ -202,9 +202,10 @@ pub fn relay_limit_message(
 }
 
 /// The refusal the relay cap produces, or `None` when the cap does not stop this relay: a warning decision whose pool
-/// still holds a login below the 90% line relays past the cap. Every other decision at the cap refuses the launch; a
-/// quota-driven one marks the pool's quota exhausted, with the earliest reset its rejections stated, so the caller
-/// records the member out. An authentication failure is not a quota fact and refuses without the mark.
+/// still holds a login below the 90% line relays past the cap. Every other decision at the cap refuses the launch. A
+/// quota decision with no login below the line marks the pool's quota exhausted, with the earliest reset its
+/// rejections stated, so the caller records the member out; with a login below the line the refusal is not a
+/// quota fact. An authentication failure is not a quota fact and refuses without the mark.
 pub fn relay_cap_refusal(
   state: &ClaudeAccountStateRef,
   cfg: &CharlieBotConfig,
@@ -216,22 +217,15 @@ pub fn relay_cap_refusal(
   if relays < MAX_RELAYS_PER_TURN {
     return Ok(None);
   }
-  let has_cool_destination =
-    decision == RELAY_WARNING && claude_accounts::cool_destination(state, cfg, model, account_pool, None)?.is_some();
-  if has_cool_destination {
+  let has_cool_destination = claude_accounts::cool_destination(state, cfg, model, account_pool, None)?.is_some();
+  if decision == RELAY_WARNING && has_cool_destination {
     return Ok(None);
   }
-  if decision == LOGIN_FAILED {
-    return Ok(Some(LaunchRefused {
-      message: relay_limit_message(state, cfg, account_pool)?,
-      quota_exhausted: false,
-      resets_at: None,
-    }));
-  }
+  let exhausted = decision != LOGIN_FAILED && !has_cool_destination;
   Ok(Some(LaunchRefused {
     message: relay_limit_message(state, cfg, account_pool)?,
-    quota_exhausted: true,
-    resets_at: claude_accounts::earliest_reset(state, cfg, None, account_pool)?,
+    quota_exhausted: exhausted,
+    resets_at: if exhausted { claude_accounts::earliest_reset(state, cfg, None, account_pool)? } else { None },
   }))
 }
 
@@ -400,6 +394,14 @@ mod tests {
         .unwrap()
         .is_none()
     );
+
+    // A rejected relay at the cap still refuses, but a login below the line is in the pool, so it is no quota fact.
+    let refused_below_line =
+      relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), MAX_RELAYS_PER_TURN, RELAY_REJECTED, None)
+        .unwrap()
+        .expect("the cap refuses a rejected relay");
+    assert!(!refused_below_line.quota_exhausted);
+    assert_eq!(refused_below_line.resets_at, None);
 
     // With every login at or above the line, a quota decision refuses with the mark and the stated reset.
     claude_accounts::observe_rate_limit(&state, "fresh", &rejected, Some(now));

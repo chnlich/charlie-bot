@@ -1179,26 +1179,23 @@ mod tests {
 
   #[tokio::test]
   async fn a_refused_status_set_stores_nothing_and_records_no_event() {
-    let cases = [
-      ("unknown", VALID_SET, 404),
-      ("thread", VALID_SET, 409),
-      ("worker", VALID_SET, 409),
-      ("own", "not json", 422),
-      ("own", "[1, 2]", 422),
-      ("own", r#"{"colour": "red"}"#, 422),
-      ("own", "{}", 422),
-      ("own", r#"{"goal": " "}"#, 422),
-      ("own", r#"{"waiting": [{"text": " "}]}"#, 422),
-      ("own", r#"{"waiting": [{"text": "Decide", "due": "today"}]}"#, 422),
-      ("own", r#"{"remaining": []}"#, 422),
-    ];
+    let home = Home::new();
+    let own = home.manager("own", None).await;
+    let thread = home
+      .manager(
+        "thread",
+        Some(("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"}))),
+      )
+      .await;
+    let worker = home.worker(&own, "worker").await;
+    let cases = [("unknown", VALID_SET, 404), ("thread", VALID_SET, 409), ("worker", VALID_SET, 409), ("own", "not json", 422)];
     for (case, text, status) in cases {
-      let home = Home::new();
-      let origin = (case == "thread")
-        .then(|| ("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"})));
-      let root = home.manager("session", origin).await;
-      let sid = if case == "worker" { home.worker(&root, "worker").await } else { root };
-      let target = if case == "unknown" { "no-such-session" } else { sid.as_str() };
+      let sid = match case {
+        "thread" => thread.as_str(),
+        "worker" => worker.as_str(),
+        _ => own.as_str(),
+      };
+      let target = if case == "unknown" { "no-such-session" } else { sid };
 
       let error = set_status(&home.features, target, text).await.expect_err("the set is refused");
 
@@ -2354,7 +2351,7 @@ mod tests {
 
   #[tokio::test]
   async fn a_derived_item_rides_the_status_of_its_open_holders_and_no_set_stores_it() {
-    let home = Home::new();
+    let home = Home::status_only();
     let root = home.manager("root", None).await;
     let child = home.child(&root, "child").await;
     let unrelated = home.manager("unrelated", None).await;

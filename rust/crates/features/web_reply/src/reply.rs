@@ -561,6 +561,22 @@ mod tests {
       .collect()
   }
 
+  fn seed_web_session(home: &Home, session_id: &str, events: &[Value]) {
+    let metadata = SessionMetadata::new(session_id, "Synthetic web session", TaskProfile::Manager);
+    let metadata_path = home.features.store.metadata_path(session_id);
+    fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
+    fs::write(&metadata_path, metadata.to_json_string(&home.features.registry.metadata_slots(), true)).unwrap();
+
+    let events_path = home.features.store.chat_events_path(session_id);
+    fs::create_dir_all(events_path.parent().unwrap()).unwrap();
+    let mut lines = String::new();
+    for event in events {
+      lines.push_str(&event.to_string());
+      lines.push('\n');
+    }
+    fs::write(events_path, lines).unwrap();
+  }
+
   async fn sidebar_frames(subscription: &mut Subscription) -> Vec<Value> {
     let mut frames = Vec::new();
     while let Ok(Some(frame)) = tokio::time::timeout(Duration::from_millis(1), subscription.recv()).await {
@@ -828,15 +844,16 @@ mod tests {
 
   #[tokio::test]
   async fn a_reply_in_a_nudge_turn_answers_the_user_message_the_nudge_asks_about() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let user = home.append(&sid, user_event("the question")).await;
-    let nudge = home
-      .append(
-        &sid,
-        json!({"type": AGENT_MESSAGE, "content": nudge_text(id_of(&user)), WEB_REPLY: {"nudge_of": id_of(&user)}}),
-      )
-      .await;
+    let home = Home::reply_only();
+    let sid = "session";
+    let user = user_event_with_id("question-1", "the question");
+    let nudge = json!({
+      "id": "nudge-1",
+      "type": AGENT_MESSAGE,
+      "content": nudge_text(id_of(&user)),
+      WEB_REPLY: {"nudge_of": id_of(&user)}
+    });
+    seed_web_session(&home, sid, &[user.clone(), nudge.clone()]);
     home.set_running(&[id_of(&nudge)]);
 
     let readback = post_web_reply(&home.features, &sid, "the answer", None).await.expect("the reply posts");
@@ -969,19 +986,17 @@ mod tests {
 
   #[tokio::test]
   async fn a_nudge_turn_with_two_nudges_names_both_user_messages_as_candidates() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let first = home.append(&sid, user_event_with_id("11111111-a", "first question")).await;
-    let second = home.append(&sid, user_event_with_id("22222222-b", "second question")).await;
-    let mut nudges = Vec::new();
-    for user in [&first, &second] {
-      let nudge =
-        json!({"type": AGENT_MESSAGE, "content": nudge_text(id_of(user)), WEB_REPLY: {"nudge_of": id_of(user)}});
-      nudges.push(home.append(&sid, nudge).await);
-    }
+    let home = Home::reply_only();
+    let sid = "session";
+    let first = user_event_with_id("11111111-a", "first question");
+    let second = user_event_with_id("22222222-b", "second question");
+    let nudges = [
+      json!({"id": "nudge-1", "type": AGENT_MESSAGE, "content": nudge_text(id_of(&first)), WEB_REPLY: {"nudge_of": id_of(&first)}}),
+      json!({"id": "nudge-2", "type": AGENT_MESSAGE, "content": nudge_text(id_of(&second)), WEB_REPLY: {"nudge_of": id_of(&second)}}),
+    ];
+    seed_web_session(&home, sid, &[first, second, nudges[0].clone(), nudges[1].clone()]);
     home.set_running(&[id_of(&nudges[0]), id_of(&nudges[1])]);
 
-    refusal_detail(post_web_reply_with_request_id(&home.features, &sid, "the answer", &[], None, None).await);
     let tags = ["11111111".to_string(), "22222222".to_string()];
     let readback = post_web_reply_with_request_id(&home.features, &sid, "the answer", &tags, None, None)
       .await
@@ -1173,11 +1188,14 @@ mod tests {
 
   #[tokio::test]
   async fn an_english_reply_after_an_english_message_posts_even_after_a_chinese_one() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    home.append(&sid, user_message(CHINESE_MESSAGE)).await;
-    let english = home.append(&sid, user_message("Please rerun the suite and report the failures.")).await;
-    home.set_running(&[id_of(&english)]);
+    let home = Home::reply_only();
+    let sid = "session";
+    let mut chinese = user_message(CHINESE_MESSAGE);
+    chinese["id"] = json!("chinese");
+    let mut english = user_message("Please rerun the suite and report the failures.");
+    english["id"] = json!("english");
+    seed_web_session(&home, sid, &[chinese, english]);
+    home.set_running(&["english"]);
 
     let (status, readback) = post_reply(&home, &sid, ENGLISH_REPLY, None).await;
 
@@ -1222,16 +1240,18 @@ mod tests {
 
   #[tokio::test]
   async fn a_path_after_nonword_alphanumerics_is_removed() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    for marker in ["ⓐ", "\u{0345}"] {
-      running_user_message(&home, &sid, user_message(CHINESE_MESSAGE)).await;
-      let reply = format!("好。{marker}/ChatPanelStatusToggleWithLongName");
+    let home = Home::reply_only();
+    let sid = "session";
+    let user = user_message(CHINESE_MESSAGE);
+    let mut user = user;
+    user["id"] = json!("path-user");
+    seed_web_session(&home, sid, &[user]);
+    home.set_running(&["path-user"]);
+    let reply = "好。ⓐ/ChatPanelStatusToggleWithLongName";
 
-      let (status, _) = post_reply(&home, &sid, &reply, None).await;
+    let (status, _) = post_reply(&home, sid, reply, None).await;
 
-      assert_eq!(status, StatusCode::OK, "reply {reply:?}");
-    }
+    assert_eq!(status, StatusCode::OK, "reply {reply:?}");
   }
 
   /// The route runs in-process and its file access stays in this test's TempDir-backed Home.

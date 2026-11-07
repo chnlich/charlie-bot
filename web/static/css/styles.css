@@ -110,11 +110,14 @@
   box-sizing: border-box;
 }
 /* The placeholder's one mark. A placeholder standing for a long flat stretch
-   can be taller than the window, and a centred mark would then sit far above
-   the visible slice, leaving the reader a blank dashed region. Sticking the
-   mark to 40vh keeps it in view wherever the box meets the window; slate-400
-   draws 6.96:1 on the list, above the 4.5:1 floor for 12px text. */
-.turn-placeholder-label { position: sticky; top: 40vh; }
+   can be taller than the window, and a centred mark would then sit outside
+   the visible slice, leaving the reader a blank dashed region. Both sticky
+   insets are set because each one only moves the mark one way: `top` pulls it
+   down when the box enters from above, and `bottom` pulls it up when the box
+   enters from below. Together they hold the mark in the band between 40vh
+   from either edge wherever the box meets the window; slate-400 draws 6.96:1
+   on the list, above the 4.5:1 floor for 12px text. */
+.turn-placeholder-label { position: sticky; top: 40vh; bottom: 40vh; }
 .turn-spacer { pointer-events: none; }
 /* The height model's spacer heights are the exact layout extent of the rows
    the spacers stand for. A space-y-3 margin on the spacer itself would add

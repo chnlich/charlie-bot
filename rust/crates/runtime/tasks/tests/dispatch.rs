@@ -1032,8 +1032,11 @@ async fn assert_input_admitted_after_active_run(session_kind: &str, later_type: 
     _ => {}
   }
   harness
-    .dispatcher
-    .admit_input(&manager.id, event_types::USER, "Take off. First.", "user", json!({"input_id":"first"}))
+    .store
+    .append_chat_event(
+      &manager.id,
+      json!({"id":"first", "type":event_types::USER, "actor":"user", "content":"Take off. First."}),
+    )
     .await
     .unwrap();
   let run1 = "42400211-2222-3333-4444-555555555555";

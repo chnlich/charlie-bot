@@ -278,22 +278,11 @@ async fn the_day_s_digest_counts_each_use_of_one_policy() {
   seed(&home).await;
   seed_digest(&home);
   // Fill the capped policy's day with 15 more uses (16 land on DAY together with the seeded one).
-  let root = home.root();
-  for _index in 0..15 {
-    charliebot_core::approval_digest::add(
-      &root,
-      charliebot_core::approval_digest::DigestCall {
-        session: "seed-session",
-        policy: "shared-repo-landing",
-        step: "One more landing.",
-        undo: "Revert it.",
-        scope_check: Some("Only Chao uses this repo."),
-        link: None,
-        now: "2026-10-30T21:00:00+00:00",
-      },
-    )
-    .expect("the use records");
-  }
+  let path = charliebot_core::approval_digest::digest_path(&home.root());
+  let entries = fs::read_to_string(&path).unwrap();
+  let first_use = entries.lines().next().unwrap();
+  let repeated = format!("{first_use}\n").repeat(15);
+  fs::write(&path, format!("{entries}{repeated}")).unwrap();
 
   let (_, body) = home.send(Method::GET, &format!("/api/approval/day?date={DAY}")).await;
 

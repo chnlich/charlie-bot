@@ -917,7 +917,7 @@ fn charliebot_clc_thread_lands_whole_in_unsplit() {
     Some(("charlie-code-glm-flash", Some("openai/zai-org/GLM-5.3-Flash"))),
     events(&[r#"{"type": "result", "timestamp": "2026-09-11T20:00:00+00:00", "usage": {"input_tokens": 4677324, "output_tokens": 39171}}"#]).as_slice(),
   );
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1);
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "GLM-5.3-Flash");

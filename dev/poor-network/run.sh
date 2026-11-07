@@ -42,7 +42,8 @@ detach=0
 lock_file=
 
 usage() {
-  sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  # The header block runs from line 2 to the `set -euo pipefail` that ends it, so an added line never drops text.
+  sed -n '2,/^set -euo pipefail$/{/^set -euo pipefail$/d;p}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 die() {

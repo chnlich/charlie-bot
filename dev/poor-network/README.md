@@ -18,7 +18,7 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 |---|---|
 | `--side after` | Measure this tree. |
 | `--side before` | Measure `--before-rev` (default `origin/main`) of the clone at `--before-clone`. |
-| `--side both` | Measure the before side, then the after side. If the before side's calibration does not reproduce, stop with exit 3 and do not run the after side. |
+| `--side both` | Measure the before side, then the after side. If the before side is the reference commit (`CALIBRATION_REFERENCE`) and its calibration does not reproduce, stop with exit 3 and do not run the after side. |
 | `--out-dir DIR` | Where the run's files go, outside the tree. |
 | `--repetitions N` | Repetitions per scenario (default 5). |
 | `--scenarios LIST` | Any of `background,held,reset,stream,starred,threads` (default the first four). |
@@ -114,6 +114,9 @@ stays under 10 s. Every other before side runs ungated, and both sides print the
 the after side's holds show whether the wait a person felt is gone. The scored switch scenario keeps its clicks at
 random points of the refresh cycle, so its numbers stay comparable with the baseline.
 
+To exercise the gate, run the before side at that commit: `--side both --before-rev <CALIBRATION_REFERENCE>`, in a
+clone that holds the commit.
+
 A second check sets the background scenario's received rate beside the live readback in `LIVE_READBACK`: about 206 KB a
 minute, from one visible tab on a live release. The table prints the gap. The check does not gate the run: a gap is a
 finding to state with the numbers.
@@ -193,5 +196,5 @@ dev/remote-run/run.sh node --test dev/poor-network/proxy.integration.test.mjs de
 
 They check the relay's tunnel transfer time at the link, its stop on SIGTERM, and its refusal of a target without a
 port. The report's tests check the calibration gate: it reads the during-refresh holds, not the scored scenario's
-random-phase holds, and only the before side's line carries a verdict. The chrome tests check the browser teardown: a
-closed browser fails its unanswered DevTools calls and drops its pipe handles.
+random-phase holds, and only the reference before side's line carries a verdict. The chrome tests check the browser
+teardown: a closed browser fails its unanswered DevTools calls and drops its pipe handles.

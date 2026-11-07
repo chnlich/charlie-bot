@@ -364,7 +364,8 @@ export async function backgroundRep(ctx, repetition) {
       duringClickedAt,
       Infinity,
     );
-    const duringBootstrapBytes = duringPageBytes > 0 ? duringPageBytes : await api.bootstrapWireBytes(duringTarget.id);
+    const duringBootstrapBytes =
+      duringPageBytes > 0 ? duringPageBytes : (await api.bootstrapWireBytes(duringTarget.id)).wireBytes;
     const duringState = duringShown.capped ? await tab.diagnose(duringClickedAt) : null;
 
     return {

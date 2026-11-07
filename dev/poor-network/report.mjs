@@ -3,7 +3,7 @@
 
 import fs from 'node:fs';
 
-import { CALIBRATION_HOLD_MS, LINK, LIVE_READBACK, TARGETS, VIEW } from './profile.mjs';
+import { CALIBRATION_HOLD_MS, CALIBRATION_REFERENCE, LINK, LIVE_READBACK, TARGETS, VIEW } from './profile.mjs';
 
 const BYTES_PER_MS = LINK.bytesPerSecond / 1000;
 
@@ -148,8 +148,14 @@ export function formatSide(side) {
   }
   if (side.calibration) {
     const calibration = side.calibration;
-    const verdict =
-      side.side === 'before' ? (calibration.reproduced ? 'reproduced' : 'NOT reproduced') : 'the gate reads the before side only';
+    // Only the reference before side is gated (run.sh), so only that side's line carries a verdict; every other side,
+    // its own before side included, reports the raw holds beside the gate it does not face.
+    const gated = side.side === 'before' && side.commit === CALIBRATION_REFERENCE;
+    const verdict = gated
+      ? calibration.reproduced
+        ? 'reproduced'
+        : 'NOT reproduced'
+      : 'the gate reads the reference before side only';
     const capNote = calibration.cappedCount > 0 ? `, ${calibration.cappedCount} at cap` : '';
     lines.push(
       `calibration: switch clicked during a list refresh, holds ${calibration.holdsMs.map(formatMs).join(', ')}${capNote}, median ${formatMs(calibration.medianMs)} (needs >= ${formatMs(calibration.requiredMs)}): ${verdict}`,

@@ -597,6 +597,7 @@ mod tests {
 
   #[derive(Clone, Copy)]
   enum FakeMode {
+    FinalAfterEnd,
     FinalBeforeEnd,
     NeverFinal,
   }
@@ -683,6 +684,7 @@ mod tests {
             let text = text.to_string();
             let value: Value = serde_json::from_str(&text).expect("Gemini sends JSON");
             let is_audio = value.pointer("/realtimeInput/audio").is_some();
+            let is_end = value.pointer("/realtimeInput/activityEnd").is_some();
             if matches!(mode, FakeMode::FinalBeforeEnd) && is_audio {
               socket
                 .send(ServerMessage::Text(
@@ -692,6 +694,20 @@ mod tests {
                 .expect("send the early final");
               socket.close(None).await.expect("close the fake backend after its final");
               return;
+            }
+            if matches!(mode, FakeMode::FinalAfterEnd) && is_end {
+              socket
+                .send(ServerMessage::Text(
+                  r#"{"serverContent":{"interimInputTranscription":{"text":"synthetic partial"}}}"#.into(),
+                ))
+                .await
+                .expect("send the partial");
+              socket
+                .send(ServerMessage::Text(
+                  r#"{"serverContent":{"inputTranscription":{"text":"synthetic final"}}}"#.into(),
+                ))
+                .await
+                .expect("send the final");
             }
           }
           ServerMessage::Close(_) => {
@@ -868,6 +884,29 @@ mod tests {
     .await
     .unwrap();
     assert!(recorded.load(Ordering::SeqCst));
+  }
+
+  #[tokio::test]
+  async fn test_frames_past_the_cap_are_cut_sample_exactly() {
+    let server = start_relay_test(FakeMode::FinalAfterEnd, 3).await;
+    let mut browser = browser_socket(server.address).await;
+    let frame = vec![0x2a_u8; 4];
+    for _ in 0..3 {
+      browser.send(ClientMessage::Binary(frame.clone().into())).await.expect("send one live audio frame");
+    }
+    browser.send(ClientMessage::Text(r#"{"type":"end"}"#.into())).await.expect("seal the recording");
+    assert_eq!(receive_json_frame(&mut browser).await["type"], "partial");
+    assert_eq!(receive_json_frame(&mut browser).await, json!({ "type": "final", "text": "synthetic final" }));
+
+    let wav = std::fs::read_dir(voice_dir(&server.config))
+      .expect("read the archived voice directory")
+      .map(|entry| entry.expect("read archive entry").path())
+      .find(|path| path.extension().is_some_and(|extension| extension == "wav"))
+      .expect("the fake live backend archived one WAV");
+    let wav_bytes = std::fs::read(wav).expect("read the archived WAV");
+    assert_eq!(&wav_bytes[44..], [frame.as_slice(), &frame[..2]].concat());
+    browser.close(None).await.expect("close browser WebSocket");
+    stop_relay_test(server).await;
   }
 
   #[tokio::test]

@@ -425,6 +425,36 @@ async fn read_on_a_non_discord_session_answers_409() {
   assert!(home.fake().calls.is_empty());
 }
 
+#[tokio::test]
+async fn reply_refuses_412_while_unread_then_posts_after_a_read() {
+  let home = Home::new_without_thread_runtime(true).await;
+  thread_messages(&home, &[Msg::new(1, "first follow up"), Msg::new(2, "second follow up")]);
+  home.fake().channels.insert(PARENT.to_string(), Vec::new());
+  let session_id = make_session(&home, None).await;
+  let router = home.router();
+
+  let (refused_status, refused) =
+    send(router.clone(), "/api/internal/discord/reply", json!({"session_id": session_id, "text": "the answer"})).await;
+  assert_eq!(refused_status, StatusCode::PRECONDITION_FAILED);
+  assert_eq!(refused["detail"]["error"], "stale_thread");
+  let new_messages = refused["detail"]["new_messages"].as_array().unwrap();
+  assert_eq!(
+    new_messages.iter().map(|message| message["id"].clone()).collect::<Vec<_>>(),
+    [snowflake(1), snowflake(2)].map(Value::String)
+  );
+  assert!(home.fake().posts.is_empty());
+
+  let (read_status, read) = send(router.clone(), "/api/internal/discord/read", json!({"session_id": session_id})).await;
+  assert_eq!(read_status, StatusCode::OK);
+  assert_eq!(read["more_unread"], 0);
+
+  let (posted_status, posted) =
+    send(router, "/api/internal/discord/reply", json!({"session_id": session_id, "text": "the answer"})).await;
+  assert_eq!(posted_status, StatusCode::OK);
+  assert_eq!(posted["posted"], true);
+  assert_eq!(home.fake().posts, [(THREAD.to_string(), "the answer".to_string())]);
+}
+
 /// A stale reply returns the unread message and sends no post.
 #[tokio::test]
 async fn reply_refuses_412_while_unread() {

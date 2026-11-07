@@ -530,7 +530,7 @@ async fn run_turn_body(
   }
 }
 
-/// Reject interactive permission requests, including during raw-log recovery.
+/// The refusal of an interactive permission request, raised during raw-log recovery as well.
 pub fn reject_permission(event: &Value) -> anyhow::Result<()> {
   if event.get("type").and_then(Value::as_str) == Some("permission.asked") {
     let data = object_or_empty(event.get("data"))?;
@@ -813,7 +813,7 @@ impl OpenCodeTranslator {
     }
   }
 
-  /// Map one opencode session event to zero or more CharlieBot events.
+  /// The translation of one opencode session event into zero or more CharlieBot events.
   pub fn translate_event(&mut self, event: &Value) -> anyhow::Result<Vec<Value>> {
     let event_type = required_string(event, "type")?;
     let data = object_or_empty(event.get("data"))?;

@@ -63,7 +63,7 @@ pub struct OpenCodeHost {
 }
 
 impl OpenCodeHost {
-  /// Resolve the server binary and repository paths from the CharlieBot process environment.
+  /// The host resolved from the CharlieBot process environment: the server binary and repository paths.
   pub fn from_process() -> anyhow::Result<Self> {
     let home_dir = std::env::var_os("HOME").context("HOME must be set for the opencode backend")?;
     let root = PathBuf::from(home_dir);
@@ -80,7 +80,7 @@ impl OpenCodeHost {
     })
   }
 
-  /// Construct a host with an injected program, as the fake server tests do.
+  /// The host built around an injected program, as the fake server tests do.
   pub fn with_program(
     program: PathBuf,
     args: Vec<OsString>,
@@ -171,7 +171,7 @@ impl OpenCodeServerPool {
     })
   }
 
-  /// Record the backend options of the config that a launch was built from, for the next start of a shared server.
+  /// The store of the backend options from a launch's config, kept for the next start of a shared server.
   pub fn record_options(&self, options: &[BackendOption]) {
     *self.options.lock().expect("opencode options mutex is not poisoned") = options.to_vec();
   }
@@ -180,7 +180,7 @@ impl OpenCodeServerPool {
     self.options.lock().expect("opencode options mutex is not poisoned").clone()
   }
 
-  /// Return the server shared by every turn with this proxy URL.
+  /// The server shared by every turn with this proxy URL.
   pub fn server_for(self: &Arc<Self>, proxy_url: Option<String>) -> Arc<OpenCodeServer> {
     let mut servers = self.servers.lock().expect("opencode server pool mutex is not poisoned");
     Arc::clone(
@@ -188,7 +188,7 @@ impl OpenCodeServerPool {
     )
   }
 
-  /// Stop every server in this pool after its owner finishes the test or process.
+  /// The stop of every server in this pool, run after its owner finishes the test or process.
   pub async fn stop_all(&self) -> anyhow::Result<()> {
     let mut servers =
       self.servers.lock().expect("opencode server pool mutex is not poisoned").values().cloned().collect::<Vec<_>>();
@@ -223,7 +223,7 @@ impl OpenCodeServerPool {
     }
   }
 
-  /// Register every live relay on its original serve before opening that process's control event stream.
+  /// The registration of every live relay on its original serve, before that process's control event stream opens.
   pub fn adopt_existing(self: &Arc<Self>) -> anyhow::Result<()> {
     if self.adoption_complete.load(Ordering::Acquire) {
       return Ok(());
@@ -806,7 +806,7 @@ impl OpenCodeServer {
     }));
   }
 
-  /// Build the server environment from CharlieBot's environment and the profile store paths.
+  /// The server environment built from CharlieBot's environment and the profile store paths.
   pub fn server_env(&self, password: &str) -> anyhow::Result<Env> {
     self.server_env_from(std::env::vars().collect::<Env>(), password)
   }
@@ -940,7 +940,7 @@ impl OpenCodeServer {
     }
   }
 
-  /// Start the server unless it is already running.
+  /// The server start, skipped while the server is already running.
   pub async fn ensure_running(self: &Arc<Self>) -> anyhow::Result<()> {
     let _guard = self.start_lock.lock().await;
     if self.process_alive() {
@@ -960,20 +960,20 @@ impl OpenCodeServer {
     Ok(())
   }
 
-  /// Stop the server process. A later turn starts a new process.
+  /// The stop of the server process. A later turn starts a new process.
   pub async fn stop(&self) -> anyhow::Result<()> {
     let _guard = self.start_lock.lock().await;
     self.shutdown_locked(false).await
   }
 
-  /// Hold a directory until this turn finishes.
+  /// The claim on a directory, held until this turn finishes.
   pub async fn claim(&self, directory: &str) {
     let _guard = self.release_lock.lock().await;
     let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
     *state.claims.entry(directory.to_string()).or_default() += 1;
   }
 
-  /// Drop a directory claim and unload every loaded directory no turn claims.
+  /// The release of a directory claim, which also unloads every loaded directory no turn claims.
   pub async fn release_claim(self: &Arc<Self>, directory: &str) -> anyhow::Result<()> {
     let _guard = self.release_lock.lock().await;
     let (should_arm_idle, release_ready) = {
@@ -1022,7 +1022,7 @@ impl OpenCodeServer {
     Ok(())
   }
 
-  /// Register a run whose event ownership belongs to its raw-log relay.
+  /// The registration of a run whose event ownership belongs to its raw-log relay.
   pub(crate) fn register_relay_claimed(
     self: &Arc<Self>,
     session_id: &str,
@@ -1042,7 +1042,7 @@ impl OpenCodeServer {
     self.register_inner(session_id, directory, process_id, TurnOrigin::Adopted { process_start })
   }
 
-  /// Register a control-stream turn for dispatch tests.
+  /// The registration of a control-stream turn for dispatch tests.
   #[cfg(test)]
   pub fn register(self: &Arc<Self>, session_id: &str, directory: &str, process_id: u32) -> anyhow::Result<Arc<Turn>> {
     self.register_inner(session_id, directory, process_id, TurnOrigin::Control)
@@ -1139,7 +1139,7 @@ impl OpenCodeServer {
     Ok(interrupted)
   }
 
-  /// Wait for every earlier interrupt of this session to produce its event.
+  /// The wait for every earlier interrupt of this session to produce its event.
   pub async fn wait_interrupts_settled(&self, session_id: &str) -> anyhow::Result<()> {
     let notify = self.settled_notify(session_id);
     let wait = async {
@@ -1160,7 +1160,7 @@ impl OpenCodeServer {
     Ok(())
   }
 
-  /// Remove every shell for this session that belongs to this turn's directory.
+  /// The removal of every shell for this session that belongs to this turn's directory.
   pub async fn delete_shells(&self, session_id: &str, directory: &str) -> anyhow::Result<()> {
     let response =
       self.client_request(Method::GET, "/api/shell")?.query(&[("location[directory]", directory)]).send().await?;
@@ -1610,7 +1610,7 @@ impl OpenCodeServer {
   }
 }
 
-/// Finish the turn whose pinned process is *pid*, when it has registered its session.
+/// The finish of the turn whose pinned process is *pid*, when it has registered its session.
 pub(crate) async fn finish_active_turn(pid: u32) -> anyhow::Result<()> {
   let turn = ACTIVE_TURNS
     .get_or_init(|| Mutex::new(HashMap::new()))

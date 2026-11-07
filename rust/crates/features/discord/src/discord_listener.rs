@@ -610,7 +610,6 @@ async fn run_connection(
             saw_ready,
           });
         }
-        acked = false;
         if let Err(error) = sender.send(WsMessage::Text(json!({"op": 1, "d": last_sequence}).to_string())).await {
         return closed_exit(error, saw_ready);
         }

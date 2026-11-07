@@ -813,7 +813,15 @@ mod tests {
     let config = Arc::new(registry.load_config(home.path()).expect("load synthetic voice config"));
     let queue = AudioQueue::new_with_limits_for_test(4, 4);
     assert!(queue.put(vec![1, 2, 3, 4]).await);
-    queue.end(Some(json!({"input_device": "Synthetic mic", "capture_settings": {}, "output_device": "Synthetic speakers", "communications_output_device": null, "device_error": null}))).await;
+    queue
+      .end(Some(json!({
+        "input_device": "Synthetic mic",
+        "capture_settings": {},
+        "output_device": "Synthetic speakers",
+        "communications_output_device": null,
+        "device_error": null
+      })))
+      .await;
     let recorded = AtomicBool::new(false);
     let run = RelayRun {
       config: &config,
@@ -830,7 +838,8 @@ mod tests {
       assert_eq!(text, "synthetic final");
       let voice_dir = audio_path.parent().expect("the archive path has a directory");
       assert_eq!(std::fs::read_dir(voice_dir).expect("read the archive directory").count(), 3);
-      let parts: Value = serde_json::from_str(&std::fs::read_to_string(audio_path.with_extension("json")).unwrap()).unwrap();
+      let parts: Value =
+        serde_json::from_str(&std::fs::read_to_string(audio_path.with_extension("json")).unwrap()).unwrap();
       assert_eq!(parts["run_id"], "5e1f2a3b");
       assert_eq!(parts["startup"], Value::Null);
       assert_eq!(parts["failure"], Value::Null);

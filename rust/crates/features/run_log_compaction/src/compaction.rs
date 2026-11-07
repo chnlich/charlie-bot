@@ -91,8 +91,8 @@ pub fn compact(sessions_dir: &Path, now: OffsetDateTime) -> anyhow::Result<Repor
       }
       for plain in files {
         match compress_file(&plain) {
-          Ok(true) => report.compacted += 1,
-          Ok(false) => {}
+          Ok(Compaction::Compacted) => report.compacted += 1,
+          Ok(Compaction::Skipped) => {}
           Err(cause) => bail!("compacting {} failed: {cause}", plain.display()),
         }
       }
@@ -141,13 +141,21 @@ fn holds_compressed_log(run_dir: &Path) -> anyhow::Result<bool> {
   )
 }
 
+/// What compressing one plain log file did.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Compaction {
+  /// The plain file became its compressed form.
+  Compacted,
+  /// The file was already stored compressed, or no longer exists.
+  Skipped,
+}
+
 /// The compression of one plain log file: write `<name>.zst`, verify it against the plain file byte for byte, then
-/// remove the plain file. `Ok(false)` for a file that is already stored compressed or no longer exists. On any
-/// failure the plain file stays and the partial `.zst` is removed.
-fn compress_file(plain: &Path) -> anyhow::Result<bool> {
-  let Some(log) = run_logs::resolve(plain) else { return Ok(false) };
+/// remove the plain file. On any failure the plain file stays and the partial `.zst` is removed.
+fn compress_file(plain: &Path) -> anyhow::Result<Compaction> {
+  let Some(log) = run_logs::resolve(plain) else { return Ok(Compaction::Skipped) };
   if log.is_compressed() {
-    return Ok(false);
+    return Ok(Compaction::Skipped);
   }
   let compressed = run_logs::compressed_path(plain);
   if let Err(cause) = write_compressed(plain, &compressed) {
@@ -156,7 +164,7 @@ fn compress_file(plain: &Path) -> anyhow::Result<bool> {
   }
   verify_or_remove(plain, &compressed)?;
   fs::remove_file(plain).with_context(|| format!("removing the plain log {}", plain.display()))?;
-  Ok(true)
+  Ok(Compaction::Compacted)
 }
 
 /// The check of `compressed` against `plain`. A mismatch removes the compressed file and fails, leaving the plain file.

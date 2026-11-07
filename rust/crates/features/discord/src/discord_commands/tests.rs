@@ -445,9 +445,18 @@ async fn reply_refuses_412_while_unread_then_posts_after_a_read() {
   );
   assert!(home.fake().posts.is_empty());
 
-  let adapter: Arc<dyn ThreadAdapter> = Arc::new(DiscordThreadAdapter::new(bot(&home)));
-  let ack = thread_entry::ack_messages(&adapter, &home.features, &session_id, &[snowflake(1)]).await.unwrap();
-  assert_eq!(ack["watermark_id"], snowflake(1));
+  home
+    .features
+    .store
+    .update_slot_fields_at(
+      &session_id,
+      DISCORD.name,
+      serde_json::Map::from_iter([("discord_watermark_id".to_string(), json!(snowflake(1)))]),
+      charliebot_store::metadata::UtcDateTime::now(),
+    )
+    .await
+    .unwrap()
+    .expect("the session remains stored");
 
   let posted = crate::discord_listener::post_reply(&bot(&home), &session_id, "the answer").await.unwrap();
   assert_eq!(posted["posted"], true);

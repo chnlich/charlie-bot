@@ -231,7 +231,7 @@ run_side() {
 
 if [[ $side == before || $side == both ]]; then
   (cd "$before_clone" && run_side before "$before_clone/scripts/release/trial.sh" "$before_commit" "$before_bin") \
-    || die 1 "the before side failed; see $run_dir/before.json"
+    || die "$?" "the before side failed; see $run_dir/before.json"
   calibrated=$(node -e 'const s = require(process.argv[1]); process.stdout.write(s.calibration ? String(s.calibration.reproduced) : "none")' "$run_dir/before.json")
   if [[ $side == both && $calibrated != true ]]; then
     node "$BENCH_DIR/report.mjs" "$run_dir/before.json"
@@ -241,7 +241,7 @@ fi
 
 if [[ $side == after || $side == both ]]; then
   (cd "$tree" && run_side after "$tree/scripts/release/trial.sh" "$after_commit" "$after_bin") \
-    || die 1 "the after side failed; see $run_dir/after.json"
+    || die "$?" "the after side failed; see $run_dir/after.json"
 fi
 
 echo "poor-network: JSON in $run_dir"

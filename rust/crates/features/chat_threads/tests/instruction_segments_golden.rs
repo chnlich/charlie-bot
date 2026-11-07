@@ -19,42 +19,39 @@ const PACKAGES: [(&str, &str, RegisterFn); 3] = [
   ("discord", "features.discord", charliebot_discord::register),
 ];
 
-#[test]
-fn real_checkout_contributions_match_the_recorded_cases() {
-  assert_checkout_contributions_match_recorded_cases("real");
+// Each checkout's 21 recorded cases are checked in groups of seven.
+macro_rules! checkout_case_group {
+  ($name:ident, $checkout_name:literal, $group:literal) => {
+    #[test]
+    fn $name() {
+      assert_checkout_contributions_match_recorded_cases($checkout_name, $group);
+    }
+  };
 }
 
-#[test]
-fn padded_checkout_contributions_match_the_recorded_cases() {
-  assert_checkout_contributions_match_recorded_cases("padded");
-}
+checkout_case_group!(real_checkout_group_1, "real", 0);
+checkout_case_group!(real_checkout_group_2, "real", 1);
+checkout_case_group!(real_checkout_group_3, "real", 2);
+checkout_case_group!(padded_checkout_group_1, "padded", 0);
+checkout_case_group!(padded_checkout_group_2, "padded", 1);
+checkout_case_group!(padded_checkout_group_3, "padded", 2);
+checkout_case_group!(missing_web_reply_checkout_group_1, "without-web_reply.md", 0);
+checkout_case_group!(missing_web_reply_checkout_group_2, "without-web_reply.md", 1);
+checkout_case_group!(missing_web_reply_checkout_group_3, "without-web_reply.md", 2);
+checkout_case_group!(missing_slack_scope_checkout_group_1, "without-slack_reply_scope.md", 0);
+checkout_case_group!(missing_slack_scope_checkout_group_2, "without-slack_reply_scope.md", 1);
+checkout_case_group!(missing_slack_scope_checkout_group_3, "without-slack_reply_scope.md", 2);
+checkout_case_group!(missing_discord_scope_checkout_group_1, "without-discord_reply_scope.md", 0);
+checkout_case_group!(missing_discord_scope_checkout_group_2, "without-discord_reply_scope.md", 1);
+checkout_case_group!(missing_discord_scope_checkout_group_3, "without-discord_reply_scope.md", 2);
+checkout_case_group!(missing_thread_redline_checkout_group_1, "without-thread_reply_redline.md", 0);
+checkout_case_group!(missing_thread_redline_checkout_group_2, "without-thread_reply_redline.md", 1);
+checkout_case_group!(missing_thread_redline_checkout_group_3, "without-thread_reply_redline.md", 2);
+checkout_case_group!(missing_thread_format_checkout_group_1, "without-thread_reply_format.md", 0);
+checkout_case_group!(missing_thread_format_checkout_group_2, "without-thread_reply_format.md", 1);
+checkout_case_group!(missing_thread_format_checkout_group_3, "without-thread_reply_format.md", 2);
 
-#[test]
-fn missing_web_reply_checkout_contributions_match_the_recorded_cases() {
-  assert_checkout_contributions_match_recorded_cases("without-web_reply.md");
-}
-
-#[test]
-fn missing_slack_scope_checkout_contributions_match_the_recorded_cases() {
-  assert_checkout_contributions_match_recorded_cases("without-slack_reply_scope.md");
-}
-
-#[test]
-fn missing_discord_scope_checkout_contributions_match_the_recorded_cases() {
-  assert_checkout_contributions_match_recorded_cases("without-discord_reply_scope.md");
-}
-
-#[test]
-fn missing_thread_redline_checkout_contributions_match_the_recorded_cases() {
-  assert_checkout_contributions_match_recorded_cases("without-thread_reply_redline.md");
-}
-
-#[test]
-fn missing_thread_format_checkout_contributions_match_the_recorded_cases() {
-  assert_checkout_contributions_match_recorded_cases("without-thread_reply_format.md");
-}
-
-fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str) {
+fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str, group: usize) {
   let mut decoder = GzDecoder::new(include_bytes!("fixtures/instruction_segments_golden.json.gz").as_slice());
   let mut fixture_text = String::new();
   decoder.read_to_string(&mut fixture_text).unwrap();
@@ -65,7 +62,6 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str) {
   let registries = registered_packages();
 
   let root = tempfile::tempdir().unwrap();
-  let mut missing_web_failures = 0;
   let checkouts = fixture["checkouts"].as_object().unwrap();
   assert_eq!(checkouts.len(), 7);
   let documents = checkouts.get(checkout_name).expect("the checkout is recorded");
@@ -75,7 +71,7 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str) {
     fs::write(prompts.join(document), text.as_str().unwrap()).unwrap();
   }
 
-  if checkout_name == "real" {
+  if checkout_name == "real" && group == 0 {
     let mut segment_answers = [0usize; 3];
     let mut error_answers = [0usize; 3];
     for case in cases {
@@ -92,13 +88,22 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str) {
     assert!(error_answers.into_iter().all(|count| count > 0));
   }
 
-  let cases_for_checkout = cases
-    .iter()
-    .filter(|case| case["checkout"].as_str() == Some(checkout_name))
-    .collect::<Vec<_>>();
+  let cases_for_checkout =
+    cases.iter().filter(|case| case["checkout"].as_str() == Some(checkout_name)).collect::<Vec<_>>();
   assert_eq!(cases_for_checkout.len(), 21);
+  let group_start = group * 7;
+  let group_end = group_start + 7;
   let root_text = root.path().to_string_lossy();
-  for case in cases_for_checkout {
+  if checkout_name == "without-web_reply.md" && group == 0 {
+    let expected_failures = cases
+      .iter()
+      .filter(|case| {
+        case["checkout"].as_str() == Some(checkout_name) && case["expected"]["web_reply"].get("error").is_some()
+      })
+      .count();
+    assert_eq!(expected_failures, 3);
+  }
+  for case in cases_for_checkout[group_start..group_end].iter().copied() {
     let repo_path = root.path().join(checkout_name);
     let actual = rust_answer(case, &repo_path, &registries);
     let expected = &case["expected"];
@@ -110,7 +115,6 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str) {
           rust.get("error").is_some(),
           "expected the missing prompt to fail on both sides: case={case:?} python={python} rust={rust}"
         );
-        missing_web_failures += 1;
       } else if !matches_materialized_paths(python, rust, &root_text) {
         panic!(
           "recorded Python contribution differs: checkout={checkout_name} case={case:?} key={key} expected={python} actual={rust}"
@@ -119,7 +123,6 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str) {
     }
   }
 
-  assert_eq!(missing_web_failures, if checkout_name == "without-web_reply.md" { 3 } else { 0 });
 }
 
 fn registered_packages() -> Vec<Registry> {

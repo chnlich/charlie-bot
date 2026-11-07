@@ -428,20 +428,19 @@ fn fallback_excluded_once_any_session_is_native() {
 
 #[test]
 fn rows_equal_for_either_write_order() {
-  let dir = tempfile::tempdir().unwrap();
   let native = record("rec-native", RecordKind::Native, &["sess-a"]);
   let mut fallback = record("rec-fb", RecordKind::Fallback, &["sess-b"]);
   fallback.account = "acct-b".into();
   fallback.ts = TS_B.into();
   fallback.output = 7;
   let native_first = {
-    let mut ledger = UsageLedger::open(dir.path().join("native-first.sqlite3")).unwrap();
+    let mut ledger = UsageLedger::open(":memory:").unwrap();
     ledger.record_file(HOST, "/logs/native.jsonl", "sig-n", std::slice::from_ref(&native)).unwrap();
     ledger.record_file(HOST, "/logs/fb.jsonl", "sig-f", std::slice::from_ref(&fallback)).unwrap();
     ledger.model_rows().unwrap()
   };
   let fallback_first = {
-    let mut ledger = UsageLedger::open(dir.path().join("fallback-first.sqlite3")).unwrap();
+    let mut ledger = UsageLedger::open(":memory:").unwrap();
     ledger.record_file(HOST, "/logs/fb.jsonl", "sig-f", std::slice::from_ref(&fallback)).unwrap();
     ledger.record_file(HOST, "/logs/native.jsonl", "sig-n", std::slice::from_ref(&native)).unwrap();
     ledger.model_rows().unwrap()

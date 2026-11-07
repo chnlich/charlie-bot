@@ -2181,12 +2181,9 @@ fn malformed_master_model_shapes_capture_the_recorded_rows() {
     [r#"{"type": "context", "model": 7}"#, r#"{"type": "context", "model": ""}"#, MASTER_RESULT],
   ];
   for lines in raising {
-    let dir = tempfile::tempdir().unwrap();
-    let home = dir.path().join("home");
-    let (config, registry) = fixture(&home);
-    write_master(&home, "s-model", "2026-09-03T00:00:00Z", &events(&lines));
-    let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+    let path = write_master(&home, "s-invalid-model", "2026-09-03T00:00:00Z", &events(&lines));
     assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
+    fs::remove_file(path).unwrap();
   }
 }
 

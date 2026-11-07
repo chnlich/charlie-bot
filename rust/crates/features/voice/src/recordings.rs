@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_store::metadata;
+use charliebot_store::{layout, metadata};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde_json::{Map, Value, json};
 
@@ -452,7 +452,7 @@ fn recording_row(sessions_dir: &Path, session_id: &str, stem: &str) -> io::Resul
 
 /// A session's name from the metadata the store owns; a session without its metadata file names no row name.
 fn session_name(session_dir: &Path) -> io::Result<Option<String>> {
-  match metadata::read_metadata_object(&session_dir.join("metadata.json")) {
+  match metadata::read_metadata_object(&layout::metadata_path(session_dir)) {
     Ok(Some(object)) => Ok(object.get("name").and_then(Value::as_str).map(str::to_string)),
     Ok(None) => Ok(None),
     Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),

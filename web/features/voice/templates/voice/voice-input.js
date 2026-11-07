@@ -72,8 +72,8 @@ const VOICE_HINT_RETRY = 'Upload failed — click to retry';
 const VOICE_OVERLAY_CLASS = 'absolute left-0 right-0 bottom-full mb-2 rounded-lg border border-blue-500/40 bg-slate-800 px-3 py-2 text-sm text-slate-100 shadow-lg max-h-28 overflow-y-auto';
 // Not-yet-final words from the preview relay: grey, above the level bar.
 const VOICE_PARTIAL_CLASS = 'voice-partial-text text-sm text-slate-400 whitespace-pre-wrap break-words';
-// The caret's dropdown, anchored above the mic group the template renders.
-const VOICE_MENU_CLASS = 'absolute bottom-full right-0 mb-2 w-64 rounded-lg border border-slate-600 bg-slate-800 py-1 shadow-lg z-50';
+// The caret's dropdown, anchored above the mic group the template renders. voice.css sizes it to its longest row.
+const VOICE_MENU_CLASS = 'absolute bottom-full right-0 mb-2 rounded-lg border border-slate-600 bg-slate-800 py-1 shadow-lg z-50';
 // The menu sits on slate-800, where slate-500 holds 3.07:1: under the 4.5:1 floor for the title's 12 px and the
 // unavailable rows' 14 px. slate-400 holds 5.7:1 and still reads dimmer than enabled rows' slate-200.
 const VOICE_MENU_TITLE_CLASS = 'px-3 py-1.5 text-xs text-slate-400';
@@ -199,7 +199,7 @@ function ensureVoiceBackendMenu() {
     const check = document.createElement('span');
     check.className = VOICE_MENU_CHECK_CLASS;
     const labelSpan = document.createElement('span');
-    labelSpan.className = 'truncate';
+    labelSpan.className = 'voice-menu-label';
     // An unconfigured backend stays visible but unselectable, naming the key it
     // needs (never its value).
     labelSpan.textContent = unavailable ? entry.label + ' · ' + entry.unavailableReason : entry.label;

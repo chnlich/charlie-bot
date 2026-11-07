@@ -331,7 +331,7 @@ pub fn find_running_loop(cfg: &CharlieBotConfig, session_id: &str) -> anyhow::Re
   Ok(None)
 }
 
-/// Mark the session's running loop stopped. Returns `false` when no loop runs.
+/// The stopping of the session's running loop. Returns `false` when no loop runs.
 pub fn stop_improve_loop(cfg: &CharlieBotConfig, session_id: &str) -> anyhow::Result<bool> {
   let Some(mut state) = find_running_loop(cfg, session_id)? else {
     return Ok(false);

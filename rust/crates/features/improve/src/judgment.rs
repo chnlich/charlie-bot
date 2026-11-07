@@ -70,8 +70,8 @@ impl ReportValidity {
   }
 }
 
-/// Judge an iteration's report: valid when it exists, carries its `## Iter <n>` heading, and either added commits or
-/// states an explicit zero-progress verdict.
+/// The validity of an iteration's report: valid when it exists, carries its `## Iter <n>` heading, and either added
+/// commits or states an explicit zero-progress verdict.
 pub fn iter_report_validity(report_path: &Path, iteration: i64, commits_added: i64) -> anyhow::Result<ReportValidity> {
   if !report_path.exists() {
     return Ok(ReportValidity::Invalid("missing_report"));

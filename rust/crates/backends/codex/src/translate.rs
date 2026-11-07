@@ -7,6 +7,7 @@ use anyhow::{Context, bail};
 use charliebot_core::event_types;
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::{DEFAULT_JSON, json_dumps, value_str};
+use charliebot_core::web_search::TOOL_NAME;
 use charliebot_registry::backend::Translate;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -26,7 +27,7 @@ pub const FILE_WRITE: &str = "file_write";
 /// whether the completed output is turned into text)). The output is `aggregated_output` first (codex-cli 0.157.0
 /// writes a command's output there), and `output` when that key is absent or null.
 const TOOL_ITEM_SPECS: &[(&str, (&str, &str, bool))] =
-  &[("command_execution", ("Bash", "command", false)), ("web_search", ("WebSearch", "query", true))];
+  &[("command_execution", ("Bash", "command", false)), ("web_search", (TOOL_NAME, "query", true))];
 
 /// Translates one codex run's events. A fresh translator starts a run.
 pub struct CodexTranslator {

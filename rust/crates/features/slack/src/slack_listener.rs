@@ -782,11 +782,17 @@ mod tests {
 
   #[tokio::test]
   async fn eligible_thread_message_arms_the_follow_trigger() {
-    for watermark in [None, Some(TS)] {
-      let home = Home::new();
-      let api = FakeApi::start(&[]).await;
-      let session_id = summon_session_id("T_TEST", "C_TEST", TS);
-      home.thread_session(&session_id, TS).await;
+    let home = Home::new();
+    let client = Arc::new(SlackClient::with_client(
+      reqwest::Client::new(),
+      "synthetic-bot".to_string(),
+      "synthetic-app".to_string(),
+      "http://127.0.0.1:1/api/".to_string(),
+    ));
+    let cases = [(TS, None, "1700000000.000200"), ("1700000000.000150", Some(TS), "1700000000.000250")];
+    for (thread_ts, watermark, message_ts) in cases {
+      let session_id = summon_session_id("T_TEST", "C_TEST", thread_ts);
+      home.thread_session(&session_id, thread_ts).await;
       if let Some(watermark) = watermark {
         home
           .features
@@ -805,17 +811,17 @@ mod tests {
         "team": "T_TEST",
         "channel": "C_TEST",
         "user": "U_ALLOWED",
-        "thread_ts": TS,
-        "ts": "1700000000.000200",
+        "thread_ts": thread_ts,
+        "ts": message_ts,
       });
 
-      let armed = handle_thread_message(&event, &home.features, Arc::clone(&api.client)).await.unwrap();
+      let armed = handle_thread_message(&event, &home.features, Arc::clone(&client)).await.unwrap();
 
       assert_eq!(armed.as_deref(), Some(session_id.as_str()));
       let triggers = home.features.startup.require::<Arc<TriggerManager>>().unwrap();
       let records = triggers.list_triggers(&session_id).await.unwrap();
       assert_eq!(records.len(), 1);
-      assert_eq!(records[0].message, "slack-thread-follow floor=1700000000.000200");
+      assert_eq!(records[0].message, format!("slack-thread-follow floor={message_ts}"));
     }
   }
 

@@ -633,7 +633,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn topic_reads_page_and_refuse_other_groups_or_feishu_errors() {
+  async fn topic_reads_pages_without_changing_the_watermark() {
     let home = Home::new();
     let watermark = "1700000000000-om_seen";
     let session_id = home.thread_session(SESSION_ID, origin(), Some(watermark)).await;
@@ -643,21 +643,14 @@ mod tests {
       message("om_reply_two", "1700000001000", CHAT_ID, Some(TOPIC_ID), Some("om_topic_root"), "reply two");
     let reply_three =
       message("om_reply_three", "1700000002000", CHAT_ID, Some(TOPIC_ID), Some("om_topic_root"), "reply three");
-    let cross_group =
-      message("om_cross", "1700000000000", OTHER_CHAT_ID, Some("omt_cross"), Some("om_cross_root"), "private");
     let first = vec![reply_one.clone(), reply_two.clone()];
     let second = reply_two.clone();
     let third = reply_three.clone();
-    let other = cross_group.clone();
     let stub = serve(move |request: &Recorded| {
       if request.target.starts_with("/open-apis/im/v1/messages/om_topic_root") {
         response_items(vec![message("om_topic_root", "1699999999000", CHAT_ID, Some(TOPIC_ID), None, "topic root")])
       } else if request.target.starts_with("/open-apis/im/v1/messages/om_reply_two") {
         response_items(vec![second.clone()])
-      } else if request.target.contains("container_id=omt_cross") {
-        list(vec![other.clone()], false, None)
-      } else if request.target.contains("container_id=omt_refused") {
-        api_error(400, 230027, "permission denied")
       } else if request.target.contains("page_token=topic_two") {
         list(vec![third.clone()], false, None)
       } else {
@@ -703,6 +696,29 @@ mod tests {
       assert!(requests.iter().any(|request| request.target.contains("page_size=2")));
       assert!(requests.iter().any(|request| request.target.contains("page_token=topic_two")));
     }
+
+    assert_eq!(
+      home.meta(&session_id).await.extra(crate::metadata::FEISHU_WATERMARK_ID).cloned(),
+      Some(json!(watermark))
+    );
+  }
+
+  #[tokio::test]
+  async fn topic_reads_reject_other_groups_and_feishu_errors() {
+    let home = Home::new();
+    let watermark = "1700000000000-om_seen";
+    let session_id = home.thread_session(SESSION_ID, origin(), Some(watermark)).await;
+    let other =
+      message("om_cross", "1700000000000", OTHER_CHAT_ID, Some("omt_cross"), Some("om_cross_root"), "private");
+    let stub = serve(move |request: &Recorded| {
+      if request.target.contains("container_id=omt_cross") {
+        list(vec![other.clone()], false, None)
+      } else {
+        api_error(400, 230027, "permission denied")
+      }
+    })
+    .await;
+    let bot = Bot::new(Arc::clone(&home.features), stub.base_url.clone());
 
     let cross_error = read_topic(&bot, &session_id, "omt_cross", 10, None).await.unwrap_err();
     assert_eq!(cross_error.status, StatusCode::NOT_FOUND);

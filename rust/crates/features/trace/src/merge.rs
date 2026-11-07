@@ -1,6 +1,7 @@
 //! Trace decoding, event rewriting, gzip output and the per-profile cache.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fs::{self, File, FileTimes};
 use std::io::{Read, Write};
 use std::os::unix::fs::MetadataExt;
@@ -381,15 +382,17 @@ impl IdSequencer {
     self.seen.clear();
   }
 
-  fn admit(&mut self, original: &Value) -> u64 {
+  fn admit(&mut self, original: &Value) -> (u64, bool) {
     let key = value_text(original);
-    if let Some(id) = self.seen.get(&key) {
-      return *id;
+    match self.seen.entry(key) {
+      Entry::Occupied(entry) => (*entry.get(), false),
+      Entry::Vacant(entry) => {
+        let id = self.next_id;
+        entry.insert(id);
+        self.next_id += 1;
+        (id, true)
+      }
     }
-    let id = self.next_id;
-    self.seen.insert(key, id);
-    self.next_id += 1;
-    id
   }
 }
 
@@ -429,8 +432,8 @@ fn merge_one_trace(
     let Some(mut event) = original.as_object().cloned() else {
       return Err(attribute_failure(original, "get"));
     };
-    let phase = event.get("ph").cloned().unwrap_or(Value::Null);
-    if walk_drops(&event, &phase, slim)? {
+    let remap_flow_id = matches!(event.get("ph").and_then(Value::as_str), Some("s" | "t" | "f"));
+    if walk_drops(&event, event.get("ph").unwrap_or(&Value::Null), slim)? {
       continue;
     }
     if slim && let Some(Value::Object(args)) = event.get("args") {
@@ -446,30 +449,27 @@ fn merge_one_trace(
         }
       }
     }
-    let original_pid = event.get("pid").cloned().unwrap_or(Value::Null);
-    let pid_key = value_text(&original_pid);
+    let pid_key = value_text(event.get("pid").unwrap_or(&Value::Null));
     let synthetic_pid = pid_label_lookup
       .get(&pid_key)
       .map(|label| if label == "CPU" { rank_label.clone() } else { format!("{rank_label}/{label}") })
       .unwrap_or_else(|| rank_label.clone());
     event.insert("pid".to_string(), Value::String(synthetic_pid.clone()));
 
-    if let Some(original_tid) = event.get("tid").cloned() {
-      let tid_key = value_text(&original_tid);
-      let first_sight = !tid_seq.seen.contains_key(&tid_key);
-      let synthetic_tid = tid_seq.admit(&original_tid);
+    if let Some(original_tid) = event.get("tid") {
+      let (synthetic_tid, first_sight) = tid_seq.admit(original_tid);
       if first_sight {
-        pending.push(thread_name_event(&synthetic_pid, synthetic_tid, &original_tid, &rank_label));
+        pending.push(thread_name_event(&synthetic_pid, synthetic_tid, original_tid, &rank_label));
         if pending.len() >= MERGE_BATCH_EVENTS {
           batcher.flush(&mut pending);
         }
       }
       event.insert("tid".to_string(), Value::Number(Number::from(synthetic_tid)));
     }
-    if matches!(phase.as_str(), Some("s" | "t" | "f"))
-      && let Some(original_id) = event.get("id").cloned()
+    if remap_flow_id
+      && let Some(original_id) = event.get("id")
     {
-      let synthetic_id = flow_seq.admit(&original_id);
+      let (synthetic_id, _) = flow_seq.admit(original_id);
       event.insert("id".to_string(), Value::Number(Number::from(synthetic_id)));
     }
     pending.push(Value::Object(event));
@@ -478,7 +478,7 @@ fn merge_one_trace(
     }
   }
 
-  let meta_tid = tid_seq.admit(&Value::String("meta".to_string()));
+  let (meta_tid, _) = tid_seq.admit(&Value::String("meta".to_string()));
   for (synthetic_pid, (sort_index, label)) in synthetic_meta {
     for (name, args) in [
       ("process_name", serde_json::json!({"name": label})),

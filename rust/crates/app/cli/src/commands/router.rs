@@ -895,7 +895,7 @@ mod tests {
   /// The bound a timeout test pays per timed-out attempt: two timed-out attempts still fit the unit-test
   /// budget, while the delayed reply stays far past it.
   fn timeout_limits() -> Limits {
-    Limits { request_timeout: Duration::from_millis(5), rate_limit_wait: test_limits().rate_limit_wait }
+    Limits { request_timeout: Duration::from_millis(3), rate_limit_wait: test_limits().rate_limit_wait }
   }
 
   fn run(home: &TestHome, payload: &str, jev: &FakeJev, replies: Vec<(u16, Value)>) -> Result<Value, String> {

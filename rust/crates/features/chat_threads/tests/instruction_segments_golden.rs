@@ -97,11 +97,11 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str) {
     .filter(|case| case["checkout"].as_str() == Some(checkout_name))
     .collect::<Vec<_>>();
   assert_eq!(cases_for_checkout.len(), 21);
+  let root_text = root.path().to_string_lossy();
   for case in cases_for_checkout {
     let repo_path = root.path().join(checkout_name);
     let actual = rust_answer(case, &repo_path, &registries);
-    let mut expected = case["expected"].clone();
-    materialize_paths(&mut expected, root.path());
+    let expected = &case["expected"];
     for (key, _, _) in &PACKAGES {
       let python = &expected[*key];
       let rust = &actual[*key];
@@ -111,7 +111,7 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str) {
           "expected the missing prompt to fail on both sides: case={case:?} python={python} rust={rust}"
         );
         missing_web_failures += 1;
-      } else if python != rust {
+      } else if !matches_materialized_paths(python, rust, &root_text) {
         panic!(
           "recorded Python contribution differs: checkout={checkout_name} case={case:?} key={key} expected={python} actual={rust}"
         );
@@ -201,11 +201,27 @@ fn config(session_id: &str) -> CharlieBotConfig {
   }
 }
 
-fn materialize_paths(value: &mut Value, root: &Path) {
-  match value {
-    Value::String(text) => *text = text.replace("$TMPROOT", &root.to_string_lossy()),
-    Value::Array(values) => values.iter_mut().for_each(|value| materialize_paths(value, root)),
-    Value::Object(values) => values.values_mut().for_each(|value| materialize_paths(value, root)),
-    _ => (),
+fn matches_materialized_paths(expected: &Value, actual: &Value, root: &str) -> bool {
+  match (expected, actual) {
+    (Value::String(expected), Value::String(actual)) => {
+      if expected.contains("$TMPROOT") {
+        actual == &expected.replace("$TMPROOT", root)
+      } else {
+        actual == expected
+      }
+    }
+    (Value::Array(expected), Value::Array(actual)) => {
+      expected.len() == actual.len()
+        && expected.iter().zip(actual).all(|(expected, actual)| matches_materialized_paths(expected, actual, root))
+    }
+    (Value::Object(expected), Value::Object(actual)) => {
+      expected.len() == actual.len()
+        && expected
+          .iter()
+            .all(|(key, expected)| {
+              actual.get(key).is_some_and(|actual| matches_materialized_paths(expected, actual, root))
+            })
+    }
+    _ => expected == actual,
   }
 }

@@ -215,20 +215,30 @@ mod tests {
     }
   }
 
-  #[test]
-  fn sequence_and_timeout_wait_cases_match_the_replay_table() {
-    assert_wait_cases(&WAIT_CASES[..5]);
+  macro_rules! replay_case {
+    ($name:ident, $index:literal) => {
+      #[test]
+      fn $name() {
+        assert_wait_cases(&[WAIT_CASES[$index]]);
+      }
+    };
   }
 
-  #[test]
-  fn nested_loop_wait_cases_match_the_replay_table() {
-    assert_wait_cases(&WAIT_CASES[5..10]);
-  }
-
-  #[test]
-  fn shell_and_python_wait_cases_match_the_replay_table() {
-    assert_wait_cases(&WAIT_CASES[10..]);
-  }
+  replay_case!(sequence_wait_budget_refuses_more_than_the_limit, 0);
+  replay_case!(standalone_sleep_budget_refuses_more_than_the_limit, 1);
+  replay_case!(tail_pid_budget_refuses_more_than_the_limit, 2);
+  replay_case!(six_short_retries_stay_below_the_limit, 3);
+  replay_case!(seven_short_retries_exceed_the_limit, 4);
+  replay_case!(shell_poll_loop_uses_its_smallest_sleep, 5);
+  replay_case!(timed_shell_poll_loop_stays_within_its_wrapper, 6);
+  replay_case!(unbounded_sleep_before_read_loop_is_counted, 7);
+  replay_case!(breaking_shell_loop_does_not_repeat_its_wait, 8);
+  replay_case!(session_trigger_wait_is_not_counted, 9);
+  replay_case!(sleep_after_loop_is_not_multiplied, 10);
+  replay_case!(python_range_with_zero_start_counts_all_iterations, 11);
+  replay_case!(python_range_with_nonzero_start_counts_all_iterations, 12);
+  replay_case!(sleep_before_nonwaiting_loop_is_counted_once, 13);
+  replay_case!(bounded_tail_pid_wait_stays_within_the_limit, 14);
 
   #[test]
   fn non_bash_hook_event_prints_nothing() {

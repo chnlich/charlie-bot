@@ -214,7 +214,20 @@ impl Home {
     Self::build(Some(command))
   }
 
+  /// The same home with `backends.auto` listing the synthetic backends, for the unrouted-thread cases.
+  fn with_auto() -> Self {
+    Self::build_with(None, true)
+  }
+
+  fn with_router_and_auto(command: Vec<String>) -> Self {
+    Self::build_with(Some(command), true)
+  }
+
   fn build(command: Option<Vec<String>>) -> Self {
+    Self::build_with(command, false)
+  }
+
+  fn build_with(command: Option<Vec<String>>, auto: bool) -> Self {
     let dir = tempfile::tempdir().expect("temporary directory exists");
     let mut registry = Registry::new();
     registry.register_package("tests.fakechat", register_fakechat).expect("the fakechat slot registers");
@@ -242,6 +255,21 @@ impl Home {
       type_fields: Default::default(),
     });
     loaded.backends.routing = command.map(|command| charliebot_core::config::RoutingConfig { command });
+    if auto {
+      loaded.backends.auto = Some(charliebot_core::config::AutoConfig {
+        label: "Auto".to_string(),
+        members: vec![
+          charliebot_core::config::AutoMember {
+            backend: "synthetic-fakechat".to_string(),
+            billing: charliebot_core::config::AutoBilling::Subscription,
+          },
+          charliebot_core::config::AutoMember {
+            backend: "synthetic-strong".to_string(),
+            billing: charliebot_core::config::AutoBilling::Payg,
+          },
+        ],
+      });
+    }
     let reload_config = loaded.clone();
     let config = Arc::new(HotReload::new(
       loaded.config_file(),
@@ -1145,6 +1173,50 @@ async fn accept_summon_takes_the_default_backend_when_the_router_does_not_route_
   assert_eq!(meta.backend, "synthetic-fakechat", "the default backend");
   assert_eq!(meta.extra("route"), Some(&json!({"backends": [], "reason": "thread not routed"})));
   assert!(adapter.posts.lock().unwrap().is_empty(), "an unrouted thread posts nothing");
+  settle(|| home.launches().len() == 1 && adapter.acks.lock().unwrap().len() == 1).await;
+}
+
+#[tokio::test]
+async fn a_thread_session_without_routing_configured_defaults_to_auto() {
+  let home = Home::with_auto();
+  let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[]);
+
+  let (backend, route) = route_thread_session(&adapter, &home.features, "s1", &origin()).await.unwrap();
+
+  assert_eq!(backend.as_deref(), Some("auto"));
+  assert_eq!(route, None);
+}
+
+#[tokio::test]
+async fn a_thread_session_without_backends_auto_keeps_the_empty_default_backend() {
+  let home = Home::new();
+  let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[]);
+
+  let (backend, route) = route_thread_session(&adapter, &home.features, "s1", &origin()).await.unwrap();
+
+  assert_eq!(backend, None);
+  assert_eq!(route, None);
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn accept_summon_defaults_an_unrouted_thread_to_auto() {
+  let router_dir = tempfile::tempdir().unwrap();
+  let command = router_command(
+    &router_dir,
+    "cat >/dev/null\nprintf '%s' '{\"routed\":false,\"backends\":[],\"reason\":\"thread not routed\"}'",
+    &[],
+  );
+  let home = Home::with_router_and_auto(command);
+  let adapter = FakeAdapter::with_thread(&[]);
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+  let (origin_value, block) = (origin(), summon_block());
+
+  let sid = accept_summon(&dyn_adapter, &home.features, summon(&origin_value, &block)).await.unwrap();
+
+  let meta = home.meta(&sid).await;
+  assert_eq!(meta.backend, "auto");
+  assert_eq!(meta.extra("route"), Some(&json!({"backends": [], "reason": "thread not routed"})));
   settle(|| home.launches().len() == 1 && adapter.acks.lock().unwrap().len() == 1).await;
 }
 

@@ -1447,8 +1447,9 @@ pub struct Summon<'a> {
 }
 
 /// Route a new thread session: the router answers from the whole thread, and an answer that is not routed, or a router
-/// failure, leaves the session on the default backend. The route the session keeps says why (`thread not routed`,
-/// `router failed: …`).
+/// failure, leaves the session on the default backend. With `backends.auto` configured that default is `auto`; without
+/// it the session keeps the empty backend that resolves to `backends.options[0]`. The route the session keeps says why
+/// (`thread not routed`, `router failed: …`).
 async fn route_thread_session(
   adapter: &Arc<dyn ThreadAdapter>,
   features: &FeatureContext,
@@ -1456,8 +1457,9 @@ async fn route_thread_session(
   origin: &Value,
 ) -> Result<(Option<String>, Option<backend_pool::BackendRoute>), ThreadReplyError> {
   let cfg = features.config.get().map_err(ThreadReplyError::failure)?;
+  let unrouted_backend = || cfg.backends.auto.as_ref().map(|_| charliebot_core::config::AUTO_BACKEND_ID.to_string());
   if cfg.backends.routing.is_none() {
-    return Ok((None, None));
+    return Ok((unrouted_backend(), None));
   }
 
   let messages = adapter.read_eligible(origin, &cfg).await.map_err(ThreadReplyError::failure)?;
@@ -1479,7 +1481,7 @@ async fn route_thread_session(
     }
   };
   let backend = match decided.target {
-    backend_pool::RouteTarget::NotRouted => None,
+    backend_pool::RouteTarget::NotRouted => unrouted_backend(),
     backend_pool::RouteTarget::Backend(option) => Some(option.id),
     backend_pool::RouteTarget::Pool => {
       let Some(option) = pool.select(&cfg, "thread", &[]).map_err(ThreadReplyError::failure)? else {

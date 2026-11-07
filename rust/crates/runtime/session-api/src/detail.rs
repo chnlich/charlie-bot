@@ -1486,14 +1486,14 @@ backends:
 
   /// A tail that starts past the history's first slot trims in its own indexes: the kept slots are the tail's last
   /// whole turns, and the paging cursor is the absolute ordinal of the first kept slot. The turns take 3, 3, 2, 2
-  /// slots in turn, and the tail starts at slot 36, which is 6 modulo the 10-slot period: a trim that walked the
+  /// slots in turn, and the tail starts at slot 16, which is 6 modulo the 10-slot period: a trim that walked the
   /// history's turn starts as the tail's own indexes would then land between turns at every step.
   #[tokio::test]
   async fn a_first_screen_trim_past_the_history_start_keeps_whole_turns_at_absolute_ordinals() {
     let (_home, features) = feature_context();
     let meta =
       crate::test_support::create_node(&features.store, "trim-long-bootstrap", None, TaskProfile::Manager).await;
-    let turns = 30usize;
+    let turns = 22usize;
     let mut turn_starts = Vec::new();
     let mut total = 0usize;
     for turn in 1..=turns {

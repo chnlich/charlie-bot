@@ -428,8 +428,8 @@ fn search_sessions_with_limit(
     name_hits.iter().enumerate().filter(|(_, hit)| **hit).map(|(row, _)| all[row].updated_at).collect();
   let mut scan_failures = 0;
 
-  // The result keeps the newest `SEARCH_RESULT_LIMIT` matches, so the sweep reads candidates newest-first and stops
-  // once every unread candidate is older than the result's slot at rank `SEARCH_RESULT_LIMIT`: such a candidate cannot
+  // The result keeps the newest `result_limit` matches, so the sweep reads candidates newest-first and stops
+  // once every unread candidate is older than the result's slot at rank `result_limit`: such a candidate cannot
   // enter the capped result, however its chat file reads. A common word matches most of the corpus, so this is the
   // difference between reading the corpus and reading the rows the answer can hold.
   //
@@ -442,7 +442,7 @@ fn search_sessions_with_limit(
     if processed == work.newest_first.len() {
       break;
     }
-    let cutoff = result_cutoff(&mut matched);
+    let cutoff = result_cutoff(&mut matched, result_limit);
     let end = match cutoff {
       // Every candidate at or above the cutoff can still change the answer, and every candidate below it cannot. A
       // full answer still checks those candidates a window at a time, because each match raises the cutoff and leaves
@@ -588,7 +588,7 @@ fn search_sessions_with_limit(
     processed = end;
     if cutoff.is_none() {
       let found = matched.len() - matched_before;
-      let need = SEARCH_RESULT_LIMIT.saturating_sub(matched.len());
+      let need = result_limit.saturating_sub(matched.len());
       // The candidates the window's match rate says the answer still needs. A window that matched nothing leaves no
       // rate, and the answer then sits far below the rest of the corpus.
       window = need
@@ -836,12 +836,12 @@ fn absence_rescan_start(roots: &RootMemo, signature: FileSignature, needle: &str
 /// The `updated_at` of the oldest row a full result holds, or `None` while the matches are fewer than the cap.
 ///
 /// A candidate older than this value cannot enter the answer however its chat file reads, because the cap already
-/// holds `SEARCH_RESULT_LIMIT` matches at or above it.
-fn result_cutoff(matched: &mut [UtcDateTime]) -> Option<UtcDateTime> {
-  if matched.len() < SEARCH_RESULT_LIMIT {
+/// holds `limit` matches at or above it.
+fn result_cutoff(matched: &mut [UtcDateTime], limit: usize) -> Option<UtcDateTime> {
+  if matched.len() < limit {
     return None;
   }
-  let (_, cutoff, _) = matched.select_nth_unstable_by(SEARCH_RESULT_LIMIT - 1, |left, right| right.cmp(left));
+  let (_, cutoff, _) = matched.select_nth_unstable_by(limit - 1, |left, right| right.cmp(left));
   Some(*cutoff)
 }
 
@@ -1433,13 +1433,14 @@ mod tests {
   /// A full result stops the sweep once every unread session is older than the answer's last row, and it still holds
   /// exactly the newest matches.
   ///
-  /// The 200 name hits fill the cap on their own. The eight newest content hits are newer than every one of them, so
-  /// they enter the answer and push the cutoff to the 192nd name hit; the eight older content hits are past the
+  /// Eight name hits fill the cap on their own. Two newer content hits enter the answer and push the cutoff to the
+  /// sixth name hit; eight older content hits are past the
   /// cutoff and stay unread. Rank 0 is the newest session.
   #[test]
   fn a_full_result_stops_the_scan_at_the_newest_matches() {
     let home = tempfile::tempdir().unwrap();
     let store = test_store(home.path());
+    let limit = 8;
     let stamp = |rank: usize| {
       let minutes = 700 - rank;
       format!("2026-08-01T{:02}:{:02}:00Z", 12 + minutes / 60, minutes % 60)
@@ -1450,7 +1451,7 @@ mod tests {
       fs::create_dir_all(path.parent().unwrap()).unwrap();
       fs::write(&path, "needle in the events\n").unwrap();
     };
-    for index in 0..200 {
+    for index in 0..limit {
       write_session(
         &store,
         &format!("name-{index:03}"),
@@ -1459,7 +1460,7 @@ mod tests {
         &stamp(100 + index),
       );
     }
-    for index in 0..8 {
+    for index in 0..2 {
       content(&format!("new-{index}"), index);
     }
     for index in 0..8 {
@@ -1467,19 +1468,19 @@ mod tests {
     }
     let memos = Mutex::new(super::SearchMemos::default());
     // The first query indexes every chat file; the second reaches the first sweep window through that index.
-    assert!(super::search_sessions_with_memos(&store, "zzzq", &memos).unwrap().rows.is_empty());
+    assert!(super::search_sessions_with_limit(&store, "zzzq", &memos, limit).unwrap().rows.is_empty());
 
-    let rows = super::search_sessions_with_memos(&store, "needle", &memos).unwrap().rows;
+    let rows = super::search_sessions_with_limit(&store, "needle", &memos, limit).unwrap().rows;
     let ids: Vec<&str> = rows.iter().map(|meta| meta.id.as_str()).collect();
-    assert_eq!(ids.len(), 200);
+    assert_eq!(ids.len(), limit);
     assert_eq!(ids.first().copied(), Some("new-0"), "the newest content hit leads the answer");
-    assert_eq!(ids[8], "name-000", "the name hits follow the content hits");
-    assert_eq!(ids.last().copied(), Some("name-191"), "the answer stops at the 200th newest match");
+    assert_eq!(ids[2], "name-000", "the name hits follow the content hits");
+    assert_eq!(ids.last().copied(), Some("name-005"), "the answer stops at the newest matches");
     assert!(!ids.iter().any(|id| id.starts_with("old-")), "the rows past the cutoff stay out");
     assert_eq!(
       memos.lock().unwrap().scanned_candidates,
-      super::SWEEP_WINDOW_CANDIDATES,
-      "the sweep stopped after its first window and left the older files unread"
+      2,
+      "the sweep read only the newer candidates and left the older files unread"
     );
   }
 
@@ -1489,7 +1490,8 @@ mod tests {
   fn name_hits_that_fill_the_cap_read_no_chat_file() {
     let home = tempfile::tempdir().unwrap();
     let store = test_store(home.path());
-    for index in 0..200 {
+    let limit = 8;
+    for index in 0..limit {
       let id = format!("name-{index:03}");
       let minutes = 200 - index;
       write_session(
@@ -1506,9 +1508,9 @@ mod tests {
     }
     let memos = Mutex::new(super::SearchMemos::default());
 
-    let rows = super::search_sessions_with_memos(&store, "needle", &memos).unwrap().rows;
+    let rows = super::search_sessions_with_limit(&store, "needle", &memos, limit).unwrap().rows;
     let ids: Vec<&str> = rows.iter().map(|meta| meta.id.as_str()).collect();
-    assert_eq!(ids.len(), 200);
+    assert_eq!(ids.len(), limit);
     assert_eq!(ids.first().copied(), Some("name-000"), "the newest name hit leads the answer");
     let counters = memos.lock().unwrap();
     assert_eq!(counters.swept_candidates, 0, "the name hits filled the cap, so no chat file's signature was read");
@@ -1521,8 +1523,9 @@ mod tests {
   fn rows_tied_at_the_answers_last_row_keep_corpus_order() {
     let home = tempfile::tempdir().unwrap();
     let store = test_store(home.path());
+    let limit = 8;
     // One more match than the cap, all written at the same instant and all holding the needle in their chat file.
-    for index in 0..super::SEARCH_RESULT_LIMIT + 1 {
+    for index in 0..limit + 1 {
       let id = format!("tied-{index:03}");
       write_session(&store, &id, &id, SessionStatus::Active, "2026-08-01T12:00:00Z");
       let path = store.chat_events_path(&id);
@@ -1530,9 +1533,10 @@ mod tests {
       fs::write(&path, "needle in the events\n").unwrap();
     }
     let (all, _) = store.load_session_metas_snapshot_versioned(None).unwrap();
-    let expected: Vec<&str> = all.iter().take(super::SEARCH_RESULT_LIMIT).map(|meta| meta.id.as_str()).collect();
+    let expected: Vec<&str> = all.iter().take(limit).map(|meta| meta.id.as_str()).collect();
 
-    let rows = search_sessions(&store, "needle").unwrap().rows;
+    let memos = Mutex::new(super::SearchMemos::default());
+    let rows = super::search_sessions_with_limit(&store, "needle", &memos, limit).unwrap().rows;
     let ids: Vec<&str> = rows.iter().map(|meta| meta.id.as_str()).collect();
     assert_eq!(ids, expected, "the tied rows answer in corpus order and the cap drops the corpus-last one");
   }

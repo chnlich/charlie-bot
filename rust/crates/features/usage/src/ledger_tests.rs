@@ -567,8 +567,8 @@ fn native_start_survives_an_empty_ts_native_row() {
 
 #[test]
 fn agg_read_tracks_the_table_through_every_write_shape() {
-  let dir = tempfile::tempdir().unwrap();
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let conn = Connection::open_in_memory().unwrap();
+  let mut ledger = UsageLedger::from_connection(PathBuf::from(":memory:"), conn).unwrap();
   let moved = record("rec-moved", RecordKind::Native, &["sess-m"]);
   let mut fallback = record("rec-fb", RecordKind::Fallback, &["sess-x"]);
   fallback.model = "model-fb".into();

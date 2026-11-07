@@ -438,8 +438,8 @@ test('a status reply that a newer running_changed frame precedes leaves the indi
     thinking_since: '2026-04-02T10:00:00Z', has_running_tasks: true});
   assert.deepEqual(shown('g'), {...IDLE_ICONS, spinner: true}, 'the frame paints the spinner');
 
-  pending.shift()({ok: true, json: async () => (
-    {g: {has_running_tasks: false, thinking_since: null, has_unread: false}})});
+  pending.shift()({ok: true, json: async () => statusAnswer(
+      {g: {has_running_tasks: false, thinking_since: null, has_unread: false}})});
   await poll;
   assert.deepEqual(shown('g'), {...IDLE_ICONS, spinner: true},
       'the reply older than the frame leaves the spinner up');
@@ -459,8 +459,8 @@ test('a status reply that a row merge precedes leaves the merged indicator uncha
   context.refreshSessionIndicator('r');
   assert.deepEqual(shown('r'), {...IDLE_ICONS, spinner: true});
 
-  pending.shift()({ok: true, json: async () => (
-    {r: {has_running_tasks: false, thinking_since: null, has_unread: false}})});
+  pending.shift()({ok: true, json: async () => statusAnswer(
+      {r: {has_running_tasks: false, thinking_since: null, has_unread: false}})});
   await poll;
   assert.deepEqual(shown('r'), {...IDLE_ICONS, spinner: true},
       'the reply older than the merge leaves the spinner up');

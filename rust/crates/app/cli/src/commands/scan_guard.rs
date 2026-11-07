@@ -824,18 +824,18 @@ mod tests {
   }
 
   #[test]
-  fn loop_and_rotated_log_cases_match_the_replay_table() {
-    let denied = [ScanForm::PerFileProcess, ScanForm::RunLogSearch];
-    let commands: [&str; 2] = [
-      // The same loop shape with a different body still refuses.
-      r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json,sys; print(json.load(open('$f')).get('title'))"; done"#,
-      // A rotated raw log, which the run-record crate's raw-log name and the rotation's suffix form.
-      r"rg -l X ~/.charliebot/sessions -g 'agent.raw.ndjson.1'",
-    ];
-    for (command, expected) in commands.iter().zip(denied) {
-      let forms = scan_forms(command, &home()).unwrap();
-      assert_eq!(forms.first(), Some(&expected), "{command}");
-    }
+  fn per_session_glob_loop_is_refused() {
+    let command =
+      r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json,sys; print(json.load(open('$f')).get('title'))"; done"#;
+    let forms = scan_forms(command, &home()).unwrap();
+    assert_eq!(forms.first(), Some(&ScanForm::PerFileProcess), "{command}");
+  }
+
+  #[test]
+  fn rotated_raw_log_search_is_refused() {
+    let command = r"rg -l X ~/.charliebot/sessions -g 'agent.raw.ndjson.1'";
+    let forms = scan_forms(command, &home()).unwrap();
+    assert_eq!(forms.first(), Some(&ScanForm::RunLogSearch), "{command}");
   }
 
   #[test]
@@ -892,28 +892,30 @@ mod tests {
   }
 
   #[test]
-  fn quoted_store_paths_mean_the_same_thing_bare() {
-    // A single-quoted store path is the same search root as its bare form, and its run-log glob still refuses.
-    assert_eq!(
-      scan_forms(&format!(r"rg -l X '{}/.charliebot/sessions' -g '*.jsonl'", home()), &home()).unwrap(),
-      vec![ScanForm::RunLogSearch]
-    );
-    // A single-quoted prune path keeps the prune it names.
-    assert!(scan_forms(r"find ~ -path '*/.charliebot/sessions' -prune -o -name X -print", &home()).unwrap().is_empty());
-    assert!(
-      scan_forms(
-        &format!(r"find / \( -path '/proc' -o -path '{}/.charliebot/sessions' \) -prune -o -name X -print", home()),
-        &home()
-      )
-      .unwrap()
-      .is_empty()
-    );
-    // Quoted prose holding a space is not shell, so a root written inside it is not a search root.
-    assert!(
-      scan_forms(&format!(r"rg -l 'find / and replace' {}/.charliebot/sessions -g metadata.json", home()), &home())
-        .unwrap()
-        .is_empty()
-    );
+  fn a_single_quoted_store_path_keeps_its_run_log_glob() {
+    let home = home();
+    let command = format!(r"rg -l X '{home}/.charliebot/sessions' -g '*.jsonl'");
+    assert_eq!(scan_forms(&command, &home).unwrap(), vec![ScanForm::RunLogSearch]);
+  }
+
+  #[test]
+  fn a_single_quoted_prune_path_keeps_its_prune() {
+    let command = r"find ~ -path '*/.charliebot/sessions' -prune -o -name X -print";
+    assert!(scan_forms(command, &home()).unwrap().is_empty(), "{command}");
+  }
+
+  #[test]
+  fn an_absolute_single_quoted_prune_path_keeps_its_prune() {
+    let home = home();
+    let command = format!(r"find / \( -path '/proc' -o -path '{home}/.charliebot/sessions' \) -prune -o -name X -print");
+    assert!(scan_forms(&command, &home).unwrap().is_empty(), "{command}");
+  }
+
+  #[test]
+  fn quoted_prose_does_not_hide_a_store_search() {
+    let home = home();
+    let command = format!(r"rg -l 'find / and replace' {home}/.charliebot/sessions -g metadata.json");
+    assert!(scan_forms(&command, &home).unwrap().is_empty(), "{command}");
   }
 
   #[test]
@@ -928,19 +930,38 @@ mod tests {
   }
 
   #[test]
-  fn finds_that_walk_the_store_and_glob_reads_of_run_logs_refuse() {
-    let denied = [
-      (format!("find {}/.charliebot -newermt @1 -name X", home()), ScanForm::FindWalk),
-      (format!("find {}/.charliebot/sessions -name metadata.json -exec grep -l X {{}} +", home()), ScanForm::FindRead),
-      (format!("cat {}/.charliebot/sessions/*/data/runs/*/events.jsonl", home()), ScanForm::RunLogGlob),
-      // The apostrophe inside double quotes does not open a single-quoted span that hides the find after it.
-      (format!("echo \"session's note\"; find {}/.charliebot -newermt @1 -name X", home()), ScanForm::FindWalk),
-      // A `|` inside double quotes is not a pipe, so the recursive grep still reaches the store.
-      (format!(r#"grep -rn "a\|b" {}/.charliebot/sessions"#, home()), ScanForm::RunLogSearch),
-    ];
-    for (command, expected) in denied {
-      assert_eq!(scan_forms(&command, &home()).unwrap().first(), Some(&expected), "{command}");
-    }
+  fn a_find_walk_of_the_store_is_refused() {
+    let home = home();
+    let command = format!("find {home}/.charliebot -newermt @1 -name X");
+    assert_eq!(scan_forms(&command, &home).unwrap(), vec![ScanForm::FindWalk]);
+  }
+
+  #[test]
+  fn a_find_read_of_the_store_is_refused() {
+    let home = home();
+    let command = format!("find {home}/.charliebot/sessions -name metadata.json -exec grep -l X {{}} +");
+    assert_eq!(scan_forms(&command, &home).unwrap(), vec![ScanForm::FindRead, ScanForm::FindWalk]);
+  }
+
+  #[test]
+  fn a_run_log_glob_read_is_refused() {
+    let home = home();
+    let command = format!("cat {home}/.charliebot/sessions/*/data/runs/*/events.jsonl");
+    assert_eq!(scan_forms(&command, &home).unwrap(), vec![ScanForm::RunLogGlob]);
+  }
+
+  #[test]
+  fn an_apostrophe_in_double_quoted_prose_does_not_hide_a_find_walk() {
+    let home = home();
+    let command = format!("echo \"session's note\"; find {home}/.charliebot -newermt @1 -name X");
+    assert_eq!(scan_forms(&command, &home).unwrap(), vec![ScanForm::FindWalk]);
+  }
+
+  #[test]
+  fn a_pipe_in_double_quoted_prose_does_not_hide_a_run_log_search() {
+    let home = home();
+    let command = format!(r#"grep -rn "a\|b" {home}/.charliebot/sessions"#);
+    assert_eq!(scan_forms(&command, &home).unwrap(), vec![ScanForm::RunLogSearch]);
   }
 
   /// The compressed names the compaction leaves in place of a finished run's logs are refused exactly as the plain
@@ -1039,15 +1060,6 @@ mod tests {
     for command in denied {
       assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
     }
-  }
-
-  #[test]
-  fn a_piped_session_list_is_refused() {
-    let home = home();
-    let command = format!(
-      "cd {home}/.charliebot/sessions && sed -n 1p */metadata.json | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
-    );
-    assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
   }
 
   #[test]

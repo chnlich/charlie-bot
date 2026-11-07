@@ -62,7 +62,7 @@ fn declared_wait_seconds(command: &str) -> Result<f64, String> {
     return Ok(0.0);
   }
   let mut wait = 0.0f64;
-  if command.contains("tail") {
+  if command.contains("tail") && command.contains("--pid") {
     for timeout in tail_pid_pattern().captures_iter(command) {
       let timeout = timeout.map_err(regex_error)?;
       wait = wait.max(match timeout.get(1) {
@@ -71,38 +71,40 @@ fn declared_wait_seconds(command: &str) -> Result<f64, String> {
       });
     }
   }
-  let sleeps = sleep_values(command)?;
+  let sleeps = if command.contains("sleep") { sleep_values(command)? } else { Vec::new() };
   for seconds in &sleeps {
     wait = wait.max(*seconds);
   }
-  for header in loop_header_pattern().captures_iter(command) {
-    let header = header.map_err(regex_error)?;
-    let header_start = header.get(0).expect("loop pattern has a full match").start();
-    let body_start = header.get(0).expect("loop pattern has a full match").end();
-    let body_end = match loop_end_pattern().find(&command[body_start..]).map_err(regex_error)? {
-      Some(end) => body_start + end.start(),
-      None => command.len(),
-    };
-    let body_sleeps = sleep_values(&command[body_start..body_end])?;
-    if body_sleeps.is_empty() {
-      continue;
-    }
-    let smallest_sleep = body_sleeps.into_iter().fold(f64::INFINITY, f64::min);
-    if let Some(iterations) = loop_iterations(&header) {
-      wait = wait.max(iterations * smallest_sleep);
-    } else {
-      let mut wrapper_timeout = None::<f64>;
-      for timeout in timeout_pattern().captures_iter(&command[..header_start]) {
-        let timeout = timeout.map_err(regex_error)?;
-        let seconds = timeout
-          .get(1)
-          .expect("timeout pattern has a seconds group")
-          .as_str()
-          .parse::<f64>()
-          .expect("timeout pattern contains an integer");
-        wrapper_timeout = Some(wrapper_timeout.map_or(seconds, |current| current.max(seconds)));
+  if ["for", "while", "until"].iter().any(|keyword| command.contains(keyword)) {
+    for header in loop_header_pattern().captures_iter(command) {
+      let header = header.map_err(regex_error)?;
+      let header_start = header.get(0).expect("loop pattern has a full match").start();
+      let body_start = header.get(0).expect("loop pattern has a full match").end();
+      let body_end = match loop_end_pattern().find(&command[body_start..]).map_err(regex_error)? {
+        Some(end) => body_start + end.start(),
+        None => command.len(),
+      };
+      let body_sleeps = sleep_values(&command[body_start..body_end])?;
+      if body_sleeps.is_empty() {
+        continue;
       }
-      wait = wait.max(wrapper_timeout.unwrap_or(f64::INFINITY));
+      let smallest_sleep = body_sleeps.into_iter().fold(f64::INFINITY, f64::min);
+      if let Some(iterations) = loop_iterations(&header) {
+        wait = wait.max(iterations * smallest_sleep);
+      } else {
+        let mut wrapper_timeout = None::<f64>;
+        for timeout in timeout_pattern().captures_iter(&command[..header_start]) {
+          let timeout = timeout.map_err(regex_error)?;
+          let seconds = timeout
+            .get(1)
+            .expect("timeout pattern has a seconds group")
+            .as_str()
+            .parse::<f64>()
+            .expect("timeout pattern contains an integer");
+          wrapper_timeout = Some(wrapper_timeout.map_or(seconds, |current| current.max(seconds)));
+        }
+        wait = wait.max(wrapper_timeout.unwrap_or(f64::INFINITY));
+      }
     }
   }
   Ok(wait)
@@ -194,7 +196,7 @@ mod tests {
 
   const WAIT_CASES: [(&str, bool); 15] = [
     ("for i in $(seq 1 84); do curl x; sleep 10; done", true),
-    ("(nohup x &); sleep 420; tail log", true),
+    ("(nohup x &); sleep 420", true),
     ("timeout 880 tail --pid=96106 -f /dev/null", true),
     ("for i in 1 2 3 4 5 6; do out=$(timeout 40 charliebot web status show); sleep 10; done", false),
     ("for i in 1 2 3 4 5 6 7; do x; sleep 10; done", true),

@@ -1107,18 +1107,17 @@ mod tests {
     fake.abort();
   }
 
-  #[tokio::test(start_paused = true)]
+  #[tokio::test]
   async fn gemini_cancellation_waits_for_the_one_second_close_timeout() {
     assert_backend_cancellation_waits_for_close_timeout(BackendKind::Gemini).await;
   }
 
-  #[tokio::test(start_paused = true)]
+  #[tokio::test]
   async fn muse_cancellation_waits_for_the_one_second_close_timeout() {
     assert_backend_cancellation_waits_for_close_timeout(BackendKind::Muse).await;
   }
 
   async fn assert_backend_cancellation_waits_for_close_timeout(backend_kind: BackendKind) {
-    tokio::time::resume();
     let (listener, endpoint) = fake_listener().await;
     let (ready, wait_until_open) = tokio::sync::oneshot::channel();
     let fake = tokio::spawn(async move {

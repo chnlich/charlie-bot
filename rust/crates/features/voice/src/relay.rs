@@ -564,6 +564,9 @@ mod tests {
   use axum::extract::State;
   use axum::routing::get;
   use axum::{Router, extract::ws::WebSocketUpgrade};
+  use charliebot_core::config::{
+    BackendsConfig, GithubConfig, PathsConfig, RemoteRunConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
+  };
   use futures_util::{SinkExt, StreamExt};
   use tokio::net::TcpListener;
   use tokio::sync::{oneshot, watch};
@@ -595,6 +598,37 @@ mod tests {
   enum FakeMode {
     FinalBeforeEnd,
     NeverFinal,
+  }
+
+  fn relay_test_config(home: &std::path::Path) -> Arc<CharlieBotConfig> {
+    Arc::new(CharlieBotConfig {
+      charliebot_home: home.to_path_buf(),
+      headless_chrome_bin: "synthetic-chrome".to_string(),
+      server: ServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 18498,
+        subprocess_buffer_limit_mb: 1,
+        session_memory_max_mb: 0,
+        session_swap_max_mb: 0,
+        session_tasks_max: 0,
+        enable_session_cpu_weight: false,
+        enable_session_io_weight: false,
+        enable_local_work_guard: false,
+        min_free_disk_gib: 0,
+        public_url: None,
+      },
+      paths: PathsConfig {
+        workspace_dirs: Vec::new(),
+        worktree_dir: "/synthetic/worktrees".to_string(),
+        scratch_dir: "/synthetic/scripts".to_string(),
+      },
+      backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
+      ui: UiConfig { home_services: Vec::new() },
+      telegram: TelegramConfig { chat_id: None },
+      remote_run: RemoteRunConfig::default(),
+      github: GithubConfig::default(),
+      sections: Sections::default(),
+    })
   }
 
   async fn relay_test_handler(State(state): State<Arc<RelayTestState>>, upgrade: WebSocketUpgrade) -> Response {
@@ -668,9 +702,7 @@ mod tests {
     });
 
     let home = tempfile::tempdir().expect("make an isolated relay home");
-    let mut registry = charliebot_registry::Registry::new();
-    registry.register_package("features.voice", crate::register).expect("register the voice config section");
-    let config = Arc::new(registry.load_config(home.path()).expect("load synthetic voice config"));
+    let config = relay_test_config(home.path());
     let (relay_finished, relay_finished_receiver) = watch::channel(false);
     let state = Arc::new(RelayTestState {
       config: Arc::clone(&config),

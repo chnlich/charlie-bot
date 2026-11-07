@@ -36,7 +36,12 @@ pub fn fast_json_rendered(status: StatusCode, body: Vec<u8>) -> Response {
 
 /// The error-status rendering: `{"detail": <reason phrase>}`.
 pub fn http_exception(status: StatusCode) -> Response {
-  json(status, &json!({ "detail": status.canonical_reason().expect("every raised status has a reason phrase") }))
+  http_exception_with_detail(status, status.canonical_reason().expect("every raised status has a reason phrase"))
+}
+
+/// `HTTPException(status, detail=...)`: `{"detail": detail}` at `status`.
+pub fn http_exception_with_detail(status: StatusCode, detail: &str) -> Response {
+  json(status, &json!({ "detail": detail }))
 }
 
 /// The 405 for a route whose path matched and whose methods did not.

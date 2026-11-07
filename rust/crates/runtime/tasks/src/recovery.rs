@@ -1430,16 +1430,12 @@ async fn resume_run_checked(
   };
   let cfg = adapter.features.config.get().context("reading the configuration for a re-attach")?;
   let option = adapter.resolve_run_backend(&cfg, &run)?;
-  if meta.profile == TaskProfile::Worker && crate::prompts::WORKER_KINDS.contains(&run_kind_name(run.kind)) {
+  if meta.profile == TaskProfile::Worker && crate::prompts::WORKER_KINDS.contains(&run.kind.as_str()) {
     adapter.resume_worker_run(&meta, &run, &option, is_alive, ended_at).await?;
     return Ok(false);
   }
   if meta.profile != TaskProfile::Manager || run.kind != RunKind::ManagerTurn {
-    bail!(
-      "run {run_id} (profile={}, kind={}) has no resume adapter",
-      profile_name(meta.profile),
-      run_kind_name(run.kind)
-    );
+    bail!("run {run_id} (profile={}, kind={}) has no resume adapter", profile_name(meta.profile), run.kind.as_str());
   }
   let receiver = enqueue_manager_resume(adapter, &meta, &run, &option, is_alive, ended_at).await?;
   track_manager_follow(adapter, session_id, run_id, receiver);
@@ -1751,16 +1747,6 @@ fn outcome_name(outcome: RunOutcomeKind) -> &'static str {
     RunOutcomeKind::Success => "success",
     RunOutcomeKind::Failed => "failed",
     RunOutcomeKind::Interrupted => "interrupted",
-  }
-}
-
-fn run_kind_name(kind: RunKind) -> &'static str {
-  match kind {
-    RunKind::ManagerTurn => "manager_turn",
-    RunKind::Work => "work",
-    RunKind::Review => "review",
-    RunKind::Iteration => "iteration",
-    RunKind::ScheduledStep => "scheduled_step",
   }
 }
 

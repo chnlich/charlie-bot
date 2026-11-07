@@ -427,7 +427,10 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
       .unwrap_or(Value::Null);
     Ok(json!({"run_id": run.id, "text": text}))
   };
-  let closing = json!({"work": closing_for(RunKind::Work)?, "review": closing_for(RunKind::Review)?});
+  let closing = json!({
+    (RunKind::Work.as_str()): closing_for(RunKind::Work)?,
+    (RunKind::Review.as_str()): closing_for(RunKind::Review)?,
+  });
 
   let cause = run_records
     .iter()

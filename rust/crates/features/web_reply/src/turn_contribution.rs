@@ -11,6 +11,7 @@ use anyhow::Context;
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_REPLY, WEB_REPLY_NOTICE, WEB_STATUS};
+use charliebot_core::run_kind::RunKind;
 use charliebot_core::str_methods;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{EventRenderer, PromptSource, RuleSegment, TurnContribution};
@@ -20,8 +21,6 @@ use serde_json::{Value, json};
 
 use crate::{audit, reply};
 
-/// The run kind that takes the manager contract.
-const MANAGER_KIND: &str = "manager_turn";
 /// The scope of a rule segment's sources.
 const SCOPE_BASE: &str = "base";
 /// The delivery of a full text segment.
@@ -42,7 +41,7 @@ impl TurnContribution for WebReplyTurnContribution {
     _cfg: &CharlieBotConfig,
     repo: &RepoRoot,
   ) -> anyhow::Result<Vec<RuleSegment>> {
-    if kind != MANAGER_KIND || !reply::is_web_session(meta) {
+    if kind != RunKind::ManagerTurn.as_str() || !reply::is_web_session(meta) {
       return Ok(Vec::new());
     }
     let text = rules_text(&repo.path().join("prompts").join(reply::RULES_FILE))?;

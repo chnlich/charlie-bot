@@ -5,6 +5,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use charliebot_core::run_kind::RunKind;
 use charliebot_core::text_repr::str_repr;
 use charliebot_store::control_events::sha256_hex;
 use charliebot_store::metadata::{SessionMetadata, TaskSpec, TaskType, requester_words_heading_line};
@@ -187,7 +188,7 @@ fn worker_kind_rule_segments(
   let repo = env.checkout.path();
   let base = sections_text(repo, "task_base.md", &WORKER_BASE_SECTIONS)?;
   let mut segments = vec![segment(base, vec![base_source("prompts/task_base.md")])];
-  if kind == "review" {
+  if kind == RunKind::Review.as_str() {
     segments.push(segment(
       review_text::review_rules_text(),
       vec![base_source("rust/crates/runtime/tasks/src/review_text.rs:review_rules_text")],

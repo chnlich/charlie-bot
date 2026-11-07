@@ -302,7 +302,7 @@ impl TaskExecutionAdapter {
           StoreError::invalid(format!(
             "run {run_id} (profile={}, kind={}) has no executable adapter",
             profile_name(meta.profile),
-            kind_name(run.kind)
+            run.kind.as_str()
           ))
           .into(),
         );
@@ -377,7 +377,7 @@ impl TaskExecutionAdapter {
     let snapshot = match self.prepare_launch_snapshot(Arc::clone(&cfg), &meta, &run, &option).await {
       Ok(snapshot) => snapshot,
       Err(error) if error.downcast_ref::<TaskPromptError>().is_some() => {
-        tracing::error!(target: "charliebot_tasks", session_id, run_id, kind = kind_name(run.kind), error = %error, "task_prompt_preparation_failed");
+        tracing::error!(target: "charliebot_tasks", session_id, run_id, kind = run.kind.as_str(), error = %error, "task_prompt_preparation_failed");
         let reason = format!("prompt preparation failed: {error}");
         self.record_launch_withheld(&meta, &run, &reason).await?;
         return Ok(LaunchSettlement { outcome: None, withheld: Some(format!("withheld: {reason}")) });
@@ -519,7 +519,7 @@ impl TaskExecutionAdapter {
       Arc::clone(&self.features.registry),
       checkout,
       meta,
-      kind_name(run.kind),
+      run.kind.as_str(),
       option,
     )
     .await?;
@@ -2406,7 +2406,7 @@ impl TaskExecutionAdapter {
   ) {
     let session_id = meta.id.as_str();
     let run_id = initial_run.id.as_str();
-    tracing::error!(target: "charliebot_tasks", session_id, run_id, kind = kind_name(initial_run.kind), error = %error, "task_run_launch_failed");
+    tracing::error!(target: "charliebot_tasks", session_id, run_id, kind = initial_run.kind.as_str(), error = %error, "task_run_launch_failed");
     let run =
       self.features.store.read_run_sync(session_id, run_id).ok().flatten().unwrap_or_else(|| initial_run.clone());
     let error_text = format!("{error_kind}: {error}").chars().take(2000).collect::<String>();
@@ -2889,16 +2889,6 @@ fn profile_name(profile: TaskProfile) -> &'static str {
   match profile {
     TaskProfile::Manager => "manager",
     TaskProfile::Worker => "worker",
-  }
-}
-
-fn kind_name(kind: RunKind) -> &'static str {
-  match kind {
-    RunKind::ManagerTurn => "manager_turn",
-    RunKind::Work => "work",
-    RunKind::Review => "review",
-    RunKind::Iteration => "iteration",
-    RunKind::ScheduledStep => "scheduled_step",
   }
 }
 

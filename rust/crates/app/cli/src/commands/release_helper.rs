@@ -25,6 +25,7 @@ use charliebot_core::credentials;
 use charliebot_core::event_types;
 use charliebot_core::logline::{self, Row};
 use charliebot_core::proc_identity;
+use charliebot_core::run_kind::RunKind;
 use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_session_api::api;
 use charliebot_store::chat_events::{self, LineRule};
@@ -1047,7 +1048,7 @@ fn seed_run(args: &[String]) -> Result<i32, String> {
   let record = json!({
     "id": run_id,
     "session_id": session,
-    "kind": "manager_turn",
+    "kind": RunKind::ManagerTurn.as_str(),
     "backend": backend,
     "pid": pid,
     "pid_start": pid_start,

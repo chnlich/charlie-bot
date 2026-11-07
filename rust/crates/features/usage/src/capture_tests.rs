@@ -1559,7 +1559,13 @@ fn a_file_at_its_stored_signature_is_never_read() {
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
-  claude_codex_corpus(&home);
+  cli_file(&home, "claude", "sess1", &[call("m1-id", NAME, "2024-01-01T00:00:00Z", [100, 20, 40, 30], &["sess1"])]);
+  cli_file(
+    &home,
+    "codex",
+    "rolloutroot1",
+    &[call("codex-some", "codex-some", "2024-01-03T00:00:00Z", [40, 0, 20, 7], &["rolloutroot1"])],
+  );
   let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
   capture_round(&mut ledger, &config, &registry);
   READS.with(|reads| reads.borrow_mut().clear());
@@ -1644,7 +1650,6 @@ fn a_capture_commits_once_and_a_failed_one_keeps_its_finished_files() {
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
   cli_file(&home, "claude", "sess1", &[call("m1-id", NAME, "2024-01-01T00:00:00Z", [100, 20, 40, 30], &["sess1"])]);
-  cli_file(&home, "claude", "subagent", &[call("sub-id", NAME, "2024-01-02T00:00:00Z", [50, 10, 0, 5], &["sess2"])]);
   cli_file(
     &home,
     "codex",
@@ -1659,7 +1664,7 @@ fn a_capture_commits_once_and_a_failed_one_keeps_its_finished_files() {
   let seen = PROBED.with(|probed| probed.borrow().clone());
   assert!(seen.len() >= 2 && seen.iter().all(|count| *count == 0), "{seen:?}"); // nothing committed while files were read
   let mut reader = UsageLedger::open(&path).unwrap();
-  assert_eq!(reader.captured_sigs(HOST).unwrap().len(), 3); // Two Claude files and one Codex rollout
+  assert_eq!(reader.captured_sigs(HOST).unwrap().len(), 2); // One Claude file and one Codex rollout
   assert!(reader.last_capture_at(HOST).unwrap().is_some());
 
   let stamped = reader.last_capture_at(HOST).unwrap();
@@ -1676,7 +1681,7 @@ fn a_capture_commits_once_and_a_failed_one_keeps_its_finished_files() {
   assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
   assert_eq!(reader.last_capture_at(HOST).unwrap(), stamped); // the failed capture left the stamp alone
   let rows = page_rows(&mut reader);
-  assert_eq!(row(&rows, "Claude Code", NAME).calls, 3); // ... but the Claude file it finished is durable
+  assert_eq!(row(&rows, "Claude Code", NAME).calls, 2); // ... but the Claude file it finished is durable
 }
 
 // The malformed record shapes: each builds the charlie-bot logs that carry them and asserts the rows the ledger

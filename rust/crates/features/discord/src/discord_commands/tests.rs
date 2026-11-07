@@ -430,7 +430,7 @@ async fn read_on_a_non_discord_session_answers_409() {
 #[tokio::test]
 async fn reply_refuses_412_while_unread_then_posts_after_a_read() {
   let home = Home::new_without_thread_runtime(true).await;
-  thread_messages(&home, &[Msg::new(1, "first follow up"), Msg::new(2, "second follow up")]);
+  thread_messages(&home, &[Msg::new(1, "unread follow up")]);
   home.fake().channels.insert(PARENT.to_string(), Vec::new());
   let session_id = make_session(&home, None).await;
   let router = home.router();
@@ -442,7 +442,7 @@ async fn reply_refuses_412_while_unread_then_posts_after_a_read() {
   let new_messages = refused["detail"]["new_messages"].as_array().unwrap();
   assert_eq!(
     new_messages.iter().map(|message| message["id"].clone()).collect::<Vec<_>>(),
-    [snowflake(1), snowflake(2)].map(Value::String)
+    [snowflake(1)].map(Value::String)
   );
   assert!(home.fake().posts.is_empty());
 

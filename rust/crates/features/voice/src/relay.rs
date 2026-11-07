@@ -676,21 +676,21 @@ mod tests {
         panic!("Gemini sends its setup frame");
       };
       socket.send(ServerMessage::Text(r#"{"setupComplete":{}}"#.into())).await.expect("send the fake setup reply");
-      let mut early_final_sent = false;
       while let Some(message) = socket.next().await {
         match message.expect("read the Gemini client frame") {
           ServerMessage::Text(text) => {
             let text = text.to_string();
             let value: Value = serde_json::from_str(&text).expect("Gemini sends JSON");
             let is_audio = value.pointer("/realtimeInput/audio").is_some();
-            if matches!(mode, FakeMode::FinalBeforeEnd) && is_audio && !early_final_sent {
+            if matches!(mode, FakeMode::FinalBeforeEnd) && is_audio {
               socket
                 .send(ServerMessage::Text(
                   r#"{"serverContent":{"inputTranscription":{"text":"synthetic early final"}}}"#.into(),
                 ))
                 .await
                 .expect("send the early final");
-              early_final_sent = true;
+              socket.close(None).await.expect("close the fake backend after its final");
+              return;
             }
           }
           ServerMessage::Close(_) => {

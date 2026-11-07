@@ -63,16 +63,6 @@ pub fn run_args(args: &[OsString]) -> anyhow::Result<()> {
   runtime.block_on(run(&directory, parent_pid, &parent_start))
 }
 
-/// Install reqwest's rustls provider when this server process has not configured one yet.
-pub fn ensure_crypto_provider() -> anyhow::Result<()> {
-  if rustls::crypto::CryptoProvider::get_default().is_none() {
-    rustls::crypto::ring::default_provider()
-      .install_default()
-      .map_err(|error| anyhow::anyhow!("installing rustls ring crypto provider: {error:?}"))?;
-  }
-  Ok(())
-}
-
 /// Write a complete connection record with owner-only permissions before publishing its name.
 pub fn write_server_record(path: &Path, record: &ServerRecord) -> anyhow::Result<()> {
   write_atomic_json(path, record, 0o600)
@@ -199,7 +189,6 @@ async fn run(directory: &Path, parent_pid: u32, parent_start: &str) -> anyhow::R
 }
 
 async fn run_inner(directory: &Path, parent_pid: u32, parent_start: &str, raw_path: &Path) -> anyhow::Result<bool> {
-  ensure_crypto_provider()?;
   let mut terminate = signal(SignalKind::terminate())?;
   let turn = loop {
     tokio::select! {
@@ -228,7 +217,8 @@ async fn run_inner(directory: &Path, parent_pid: u32, parent_start: &str, raw_pa
   let record: ServerRecord = serde_json::from_slice(
     &fs::read(&record_path).with_context(|| format!("reading OpenCode server record {}", record_path.display()))?,
   )?;
-  let client = Client::builder().no_proxy().build()?;
+  let client = charliebot_compat::http_client::client(&charliebot_compat::http_client::Settings::from_env())
+    .context("building the OpenCode relay HTTP client")?;
   let event_url = format!("{}/api/event", record.base_url);
   let response = tokio::select! {
     response = client.get(event_url).basic_auth("opencode", Some(&record.password)).send() => {

@@ -695,8 +695,8 @@ impl OpenCodeServer {
     record_path: PathBuf,
     turns: Vec<(charliebot_store::run_records::RunRecord, PathBuf, TurnRecord)>,
   ) -> anyhow::Result<()> {
-    relay::ensure_crypto_provider()?;
-    let client = Client::builder().no_proxy().build()?;
+    let client = charliebot_compat::http_client::client(&charliebot_compat::http_client::Settings::from_env())
+      .context("building the OpenCode HTTP client")?;
     let (exit_tx, exit) = watch::channel(None);
     let process = Arc::new(ServerProcess {
       pid: record.pid,

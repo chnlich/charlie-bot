@@ -308,7 +308,8 @@ fn fault_failure(fault: Fault) -> (String, String) {
   }
 }
 
-/// The slice without the ASCII whitespace at both ends: space, tab, newline, carriage return, vertical tab and form feed.
+/// The slice without the ASCII whitespace at both ends: space, tab, newline, carriage return, vertical tab and
+/// form feed.
 fn trim_space(raw: &[u8]) -> &[u8] {
   raw.trim_with(|character| matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}'))
 }

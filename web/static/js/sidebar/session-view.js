@@ -69,9 +69,22 @@ function rollbackBackendSelect(badge) {
   if (select) select.value = getActiveBackendId();
 }
 
+// The label a backend id shows in the header and the switch menu. An Auto session shows
+// the member its current turn runs on: "Auto → <member>".
+function backendDisplayLabel(backendId) {
+  const base = backendId === 'auto'
+    ? ((typeof AUTO_BACKEND !== 'undefined' && AUTO_BACKEND && AUTO_BACKEND.label) || backendId)
+    : ((typeof BACKEND_OPTIONS !== 'undefined' && BACKEND_OPTIONS[backendId]) || backendId);
+  if (backendId !== 'auto') return base;
+  const member = globalThis.ACTIVE_AUTO_MEMBER;
+  if (!member) return base;
+  const memberLabel = (typeof BACKEND_OPTIONS !== 'undefined' && BACKEND_OPTIONS[member]) || member;
+  return base + ' → ' + memberLabel;
+}
+
 function updateActiveBackendBadges() {
   const activeBackendId = getActiveBackendId();
-  const activeBackendLabel = BACKEND_OPTIONS[activeBackendId] || activeBackendId;
+  const activeBackendLabel = backendDisplayLabel(activeBackendId);
 
   const backendBadge = document.getElementById('backend-badge');
   if (backendBadge) {
@@ -85,7 +98,7 @@ function updateActiveBackendBadges() {
 
 function renderSwitchableBackendBadge(badge, backendIds, activeId) {
   const options = backendIds.map((id) => {
-    const label = BACKEND_OPTIONS[id] || id;
+    const label = backendDisplayLabel(id);
     return '<option value="' + id + '"' + (id === activeId ? ' selected' : '') + '>' + label + '</option>';
   }).join('');
   badge.innerHTML = '<select data-backend-switch class="bg-slate-800 border border-slate-600 rounded text-slate-200 text-xs px-1.5 py-0.5">' + options + '</select>';
@@ -352,6 +365,7 @@ async function pollActiveSessionView(opts) {
     if (pollSessionId !== SESSION_ID) return;
 
     THINKING_SINCE = data.session.thinking_since || null;
+    globalThis.ACTIVE_AUTO_MEMBER = data.session.auto_member || null;
     setActiveBackendId(data.active_backend);
     setSwitchableBackends(data.switchable_backends);
     updateActiveBackendBadges();
@@ -760,6 +774,7 @@ function openMountOptions(session, data, messages) {
 function renderSessionView(data) {
   const session = data.session;
   const messages = data.messages || [];
+  globalThis.ACTIVE_AUTO_MEMBER = session.auto_member || null;
   setActiveBackendId(data.active_backend);
   setSwitchableBackends(data.switchable_backends);
   setActiveRoundRatings(session.round_ratings || {});

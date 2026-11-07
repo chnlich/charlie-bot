@@ -508,12 +508,19 @@ function expandSessionGroup(key) {
 
 // Model label for a session row: BACKEND_OPTIONS carries the config-authored
 // label ("CC · Opus 5"). The row shows it without the backend-family prefix
-// because the 320px sidebar leaves only ~67px next to the timestamp. Returns
-// null when the session carries no backend id.
+// because the 320px sidebar leaves only ~67px next to the timestamp. An Auto
+// session shows its current member ("Auto → CC · Opus 5"). Returns null when
+// the session carries no backend id.
 function sessionBackendLabel(session) {
   const backendId = (session && session.backend) || '';
   if (!backendId) return null;
   const options = typeof BACKEND_OPTIONS === 'undefined' ? null : BACKEND_OPTIONS;
+  if (backendId === 'auto') {
+    const base = (typeof AUTO_BACKEND !== 'undefined' && AUTO_BACKEND && AUTO_BACKEND.label) || backendId;
+    const member = session.auto_member;
+    const full = member ? base + ' → ' + ((options && options[member]) || member) : base;
+    return { full, display: full };
+  }
   const full = (options && options[backendId]) || backendId;
   const sep = full.indexOf(' · ');
   return { full, display: sep === -1 ? full : full.slice(sep + 3) };

@@ -39,12 +39,14 @@ function makeDocument(elements) {
   return { getElementById: (id) => elements.get(id) || null };
 }
 
-function loadSessionContext({elements, BACKEND_OPTIONS, SESSION_ID, fetchImpl}) {
+function loadSessionContext({elements, BACKEND_OPTIONS, AUTO_BACKEND, ACTIVE_AUTO_MEMBER, SESSION_ID, fetchImpl}) {
   const context = {
     document: makeDocument(elements),
     console: { error: () => {}, log: () => {} },
     showToast: () => {},
     BACKEND_OPTIONS: BACKEND_OPTIONS || {},
+    AUTO_BACKEND,
+    ACTIVE_AUTO_MEMBER,
     SESSION_ID: SESSION_ID || 'session-a',
     // config.js's shared literal pair; this harness skips config.js.
     JSON_HEADERS: {'Content-Type': 'application/json'},
@@ -155,4 +157,54 @@ test('switchBackend surfaces the server detail and reverts the active id on fail
   await context.Sidebar.switchBackend('claude-fable-5');
   assert.equal(context.getActiveBackendId(), 'claude-opus-5', 'active id reverts on failure');
   assert.ok(toasts.some((t) => t.msg.includes('clone/fork')), 'server detail is surfaced');
+});
+
+// ---------------------------------------------------------------------------
+// 5. An Auto session's header badge reads "Auto → <member>", listing Auto in
+//    the dropdown when it is switchable.
+// ---------------------------------------------------------------------------
+test('an Auto session badge shows the label and the current member', () => {
+  const elements = headerFixtures();
+  const context = loadSessionContext({
+    elements,
+    SESSION_ID: 'session-a',
+    BACKEND_OPTIONS: { 'claude-opus-5': 'Opus 5', 'claude-fable-5': 'Fable 5' },
+    AUTO_BACKEND: { id: 'auto', label: 'Auto' },
+    ACTIVE_AUTO_MEMBER: 'claude-opus-5',
+  });
+  context.setSwitchableBackends(['auto']);
+  context.setActiveBackendId('auto');
+  context.updateActiveBackendBadges();
+  assert.equal(elements.get('backend-badge').textContent, 'Auto → Opus 5');
+});
+
+test('an Auto session without a recorded member shows the Auto label alone', () => {
+  const elements = headerFixtures();
+  const context = loadSessionContext({
+    elements,
+    SESSION_ID: 'session-a',
+    BACKEND_OPTIONS: { 'claude-opus-5': 'Opus 5', 'claude-fable-5': 'Fable 5' },
+    AUTO_BACKEND: { id: 'auto', label: 'Auto' },
+  });
+  context.setSwitchableBackends(['auto']);
+  context.setActiveBackendId('auto');
+  context.updateActiveBackendBadges();
+  assert.equal(elements.get('backend-badge').textContent, 'Auto');
+});
+
+test('the switch dropdown offers Auto with its member label', () => {
+  const elements = headerFixtures();
+  const context = loadSessionContext({
+    elements,
+    SESSION_ID: 'session-a',
+    BACKEND_OPTIONS: { 'claude-opus-5': 'Opus 5', 'claude-fable-5': 'Fable 5' },
+    AUTO_BACKEND: { id: 'auto', label: 'Auto' },
+    ACTIVE_AUTO_MEMBER: 'claude-fable-5',
+  });
+  context.setSwitchableBackends(['claude-opus-5', 'auto']);
+  context.setActiveBackendId('claude-opus-5');
+  context.updateActiveBackendBadges();
+  const html = elements.get('backend-badge').innerHTML;
+  assert.ok(html.includes('value="auto"'), html);
+  assert.ok(html.includes('Auto → Fable 5'), html);
 });

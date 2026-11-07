@@ -271,13 +271,12 @@ fn chat_page(
   };
 
   let default_backend_id = cfg.backends.options.first().map_or("claude", |option| option.id.as_str());
-  let active_backend = active_session
-    .get("run_backend")
-    .and_then(Value::as_str)
-    .filter(|backend| !backend.is_empty())
-    .or_else(|| active_session.get("backend").and_then(Value::as_str).filter(|backend| !backend.is_empty()))
-    .unwrap_or(default_backend_id);
+  let active_backend = active_backend_id(&active_session, default_backend_id);
   let active_option = cfg.get_backend_option(active_backend);
+  let auto_backend =
+    cfg.backends.auto.as_ref().map(|auto| json!({"id": charliebot_core::config::AUTO_BACKEND_ID, "label": auto.label}));
+  let active_auto_member = active_session.get("auto_member").cloned().unwrap_or(Value::Null);
+  let active_backend_label = active_backend_label(&cfg, active_backend, &active_auto_member);
   let backend_compact = compact_facts(&cfg, &state.features.registry)?;
   let context = json!({
     "initial_sessions_json": INITIAL_SESSIONS_PLACEHOLDER,
@@ -289,10 +288,12 @@ fn chat_page(
       .iter()
       .map(|option| json!({"id": option.id, "label": option.label, "type": option.backend_type}))
       .collect::<Vec<_>>(),
+    "auto_backend": auto_backend,
+    "active_auto_member": active_auto_member,
     "backend_compact": Value::Object(backend_compact),
     "default_backend_id": default_backend_id,
     (detail::ACTIVE_BACKEND_FIELD): active_backend,
-    "active_backend_label": active_option.map_or(active_backend, |option| option.label.as_str()),
+    "active_backend_label": active_backend_label,
     (detail::ACTIVE_BACKEND_TYPE_FIELD): active_option.map_or("", |option| option.backend_type.as_str()),
     "load_errors": load_errors,
   });
@@ -537,6 +538,36 @@ fn failure(kind: &str, detail: impl ToString) -> Failure {
   Failure { kind: kind.to_string(), detail: detail.to_string() }
 }
 
+/// The backend the page shows as active. An Auto session stays on `auto` even while a run records the member it
+/// resolved to in `run_backend`; every other session shows the live run's backend when one exists.
+fn active_backend_id<'a>(session: &'a Value, default_backend: &'a str) -> &'a str {
+  let session_backend = session.get("backend").and_then(Value::as_str).filter(|backend| !backend.is_empty());
+  if session_backend == Some(charliebot_core::config::AUTO_BACKEND_ID) {
+    return charliebot_core::config::AUTO_BACKEND_ID;
+  }
+  session
+    .get("run_backend")
+    .and_then(Value::as_str)
+    .filter(|backend| !backend.is_empty())
+    .or(session_backend)
+    .unwrap_or(default_backend)
+}
+
+/// The header label of a session's backend: an Auto session names the member its current turn runs on.
+fn active_backend_label(cfg: &CharlieBotConfig, active_backend: &str, active_auto_member: &Value) -> String {
+  if active_backend == charliebot_core::config::AUTO_BACKEND_ID {
+    return match (&cfg.backends.auto, active_auto_member.as_str()) {
+      (Some(auto), Some(member)) => {
+        let member_label = cfg.get_backend_option(member).map_or(member, |option| option.label.as_str());
+        format!("{} → {member_label}", auto.label)
+      }
+      (Some(auto), None) => auto.label.clone(),
+      (None, _) => active_backend.to_string(),
+    };
+  }
+  cfg.get_backend_option(active_backend).map_or_else(|| active_backend.to_string(), |option| option.label.clone())
+}
+
 /// `_compact_facts`: per configured backend type, whether manual compaction runs and the hint.
 fn compact_facts(cfg: &CharlieBotConfig, registry: &Registry) -> Result<Map<String, Value>, Failure> {
   let mut facts = Map::new();
@@ -578,6 +609,81 @@ mod tests {
 
   fn substitutions<'a>(sidebar: &'a str, bootstrap: &'a str) -> Vec<(&'static str, &'a str)> {
     vec![(INITIAL_SESSIONS_PLACEHOLDER, sidebar), (SESSION_BOOTSTRAP_PLACEHOLDER, bootstrap)]
+  }
+
+  fn label_config() -> CharlieBotConfig {
+    use charliebot_core::config::{
+      AutoBilling, AutoConfig, AutoMember, BackendOption, BackendsConfig, PathsConfig, Sections, ServerConfig,
+      TelegramConfig, UiConfig,
+    };
+    CharlieBotConfig {
+      charliebot_home: std::path::PathBuf::from("/synthetic/home"),
+      headless_chrome_bin: "/synthetic/bin/chrome".to_string(),
+      server: ServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 18650,
+        subprocess_buffer_limit_mb: 1,
+        session_memory_max_mb: 0,
+        session_swap_max_mb: 0,
+        public_url: None,
+        session_tasks_max: 0,
+        min_free_disk_gib: 0,
+        enable_session_cpu_weight: true,
+        enable_session_io_weight: true,
+        enable_local_work_guard: false,
+      },
+      paths: PathsConfig {
+        workspace_dirs: Vec::new(),
+        worktree_dir: "/synthetic/worktrees".to_string(),
+        scratch_dir: "/synthetic/scripts".to_string(),
+      },
+      backends: BackendsConfig {
+        pool: Vec::new(),
+        routing: None,
+        options: vec![BackendOption {
+          id: "claude-opus-5".to_string(),
+          label: "CC · Opus 5".to_string(),
+          model: "claude-opus-5".to_string(),
+          prompt_overlay: None,
+          backend_type: "synthetic".to_string(),
+          type_fields: Default::default(),
+        }],
+        auto: Some(AutoConfig {
+          label: "Auto".to_string(),
+          members: vec![AutoMember { backend: "claude-opus-5".to_string(), billing: AutoBilling::Subscription }],
+        }),
+      },
+      ui: UiConfig { home_services: Vec::new() },
+      telegram: TelegramConfig { chat_id: None },
+      remote_run: charliebot_core::config::RemoteRunConfig::default(),
+      github: Default::default(),
+      sections: Sections::default(),
+    }
+  }
+
+  #[test]
+  fn the_header_label_names_the_member_an_auto_session_runs_on() {
+    let cfg = label_config();
+    assert_eq!(active_backend_label(&cfg, "auto", &json!("claude-opus-5")), "Auto → CC · Opus 5");
+    assert_eq!(active_backend_label(&cfg, "auto", &Value::Null), "Auto");
+    assert_eq!(active_backend_label(&cfg, "claude-opus-5", &Value::Null), "CC · Opus 5");
+  }
+
+  #[test]
+  fn an_auto_session_stays_active_while_a_run_records_its_member() {
+    let auto = json!({"backend": "auto", "run_backend": "claude-opus-5", "auto_member": "claude-opus-5"});
+    assert_eq!(active_backend_id(&auto, "claude-opus-5"), "auto");
+
+    let pinned = json!({"backend": "claude-opus-5", "run_backend": "claude-fable-5"});
+    assert_eq!(active_backend_id(&pinned, "claude-opus-5"), "claude-fable-5", "a live run's backend still wins");
+
+    assert_eq!(active_backend_id(&json!({}), "synthetic-default"), "synthetic-default");
+  }
+
+  #[test]
+  fn a_retired_auto_member_renders_its_raw_id() {
+    let cfg = label_config();
+    assert_eq!(active_backend_label(&cfg, "auto", &json!("retired")), "Auto → retired");
   }
 
   #[test]

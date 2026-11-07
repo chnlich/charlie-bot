@@ -963,7 +963,8 @@ mod tests {
   #[tokio::test]
   async fn muse_loopback_streams_partial_and_final_with_a_four_second_lead_cap() {
     let (listener, endpoint) = fake_listener().await;
-    let chunks = vec![vec![1; 96_000], vec![2; 96_000], vec![3; 96_000]];
+    let second = (SAMPLE_RATE as usize) * 2;
+    let chunks = vec![vec![1; second * 4], vec![2; second], vec![3; second]];
     let fake_chunks = chunks.clone();
     let fake = tokio::spawn(async move {
       let mut socket = accept_fake(listener).await;
@@ -1041,7 +1042,7 @@ mod tests {
     );
     assert_eq!(sent[1], r#"{"type": "endStream"}"#);
     assert_eq!(binary, expected_binary);
-    assert_eq!(clock.sleeps(), [2.0]);
+    assert_eq!(clock.sleeps(), [1.0]);
   }
 
   #[tokio::test]

@@ -1082,14 +1082,21 @@ mod tests {
   }
 
   fn write_archived_sessions(store: &Store, count: usize) {
+    let mut template = SessionMetadata::new("archived-000", "needle-000", TaskProfile::Manager);
+    template.status = SessionStatus::Archived;
+    template.updated_at = UtcDateTime::parse("2026-08-01T12:00:00Z").unwrap();
+    let template_timestamp = template.updated_at.to_str();
+    let template_json = template.to_json_string(&[], true);
     let sessions = (0..count)
       .map(|index| {
         let id = format!("archived-{index:03}");
-        let mut meta = SessionMetadata::new(&id, format!("needle-{index:03}"), TaskProfile::Manager);
-        meta.status = SessionStatus::Archived;
-        meta.updated_at =
-          UtcDateTime::parse(&format!("2026-08-01T{:02}:{:02}:00Z", 12 + index / 60, index % 60)).unwrap();
-        (store.metadata_path(&id), meta.to_json_string(&[], true))
+        let name = format!("needle-{index:03}");
+        let timestamp = format!("2026-08-01T{:02}:{:02}:00Z", 12 + index / 60, index % 60);
+        let contents = template_json
+          .replace("archived-000", &id)
+          .replace("needle-000", &name)
+          .replace(&template_timestamp, &timestamp);
+        (store.metadata_path(&id), contents)
       })
       .collect::<Vec<_>>();
     std::thread::scope(|scope| {

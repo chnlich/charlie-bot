@@ -409,11 +409,16 @@ enable_ask_tier_refusal: false
 
   /// The stdout of `key` against a profile home whose `config.yaml` is `yaml`.
   fn run_yaml(yaml: &str, key: &str) -> Result<String, Failure> {
+    let (_home, registry, cfg) = load_yaml(yaml);
+    get(key, &cfg, &registry)
+  }
+
+  fn load_yaml(yaml: &str) -> (tempfile::TempDir, Registry, CharlieBotConfig) {
     let home = tempfile::tempdir().expect("a temp dir");
     std::fs::write(home.path().join(config::CONFIG_FILENAME), yaml).expect("write the config");
     let registry = charliebot_packages::registry().expect("the packages register");
     let cfg = registry.load_config(home.path()).expect("the synthetic config loads");
-    get(key, &cfg, &registry)
+    (home, registry, cfg)
   }
 
   #[test]
@@ -434,14 +439,19 @@ enable_ask_tier_refusal: false
   #[test]
   fn the_guard_switch_prints_its_boolean_and_the_runner_keys_print_their_values() {
     let yaml = "server:\n  enable_local_work_guard: false\nremote_run:\n  host: build-host\n";
-    assert_eq!(run_yaml(yaml, "server.enable_local_work_guard").expect("the switch prints"), "false\n");
-    assert_eq!(run_yaml(yaml, "remote_run.host").expect("the host prints"), "build-host\n");
-    assert_eq!(run_yaml(yaml, "remote_run.remote_base").expect("the default base prints"), "scripts/remote-run\n");
+    let (_home, registry, cfg) = load_yaml(yaml);
+    assert_eq!(get("server.enable_local_work_guard", &cfg, &registry).expect("the switch prints"), "false\n");
+    assert_eq!(get("remote_run.host", &cfg, &registry).expect("the host prints"), "build-host\n");
+    assert_eq!(
+      get("remote_run.remote_base", &cfg, &registry).expect("the default base prints"),
+      "scripts/remote-run\n",
+    );
     let printed: Value =
-      serde_json::from_str(run_yaml(yaml, "remote_run").expect("the section prints").trim_end()).unwrap();
+      serde_json::from_str(get("remote_run", &cfg, &registry).expect("the section prints").trim_end()).unwrap();
     assert_eq!(printed, json!({ "host": "build-host", "remote_base": "scripts/remote-run" }));
     let unset = "server:\n  enable_local_work_guard: false\n";
-    let failure = run_yaml(unset, "remote_run.host").expect_err("an unset host is null");
+    let (_unset_home, unset_registry, unset_cfg) = load_yaml(unset);
+    let failure = get("remote_run.host", &unset_cfg, &unset_registry).expect_err("an unset host is null");
     assert_eq!(failure.code, 1);
     assert_eq!(failure.message, "error: config key remote_run.host is unset");
   }

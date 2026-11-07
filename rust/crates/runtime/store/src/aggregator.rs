@@ -60,6 +60,17 @@ pub struct MessageAggregator {
   last_event_id: Option<String>,
   tool_rows: ToolRows,
   emit_stream_deltas: bool,
+  omit_streamed_content: bool,
+  /// The global index of the event being fed, which a stream frame carries so a page can place it in the replay.
+  current_index: usize,
+  /// What earlier stream frames carried: the assistant text's byte length, and the thinking text itself, which
+  /// an assistant event may replace rather than extend. The UTF-16 lengths are the draft's lengths at that point.
+  streamed_text_bytes: usize,
+  streamed_text_utf16: usize,
+  streamed_thinking: String,
+  streamed_thinking_utf16: usize,
+  /// The draft tool rows of the previous stream frame, so a frame repeats them only when they changed.
+  streamed_tools: Option<Value>,
   event_renderers: HashMap<String, Arc<dyn EventRenderer>>,
 }
 
@@ -85,6 +96,13 @@ impl MessageAggregator {
       last_event_id: None,
       tool_rows: ToolRows::default(),
       emit_stream_deltas,
+      omit_streamed_content: false,
+      current_index: 0,
+      streamed_text_bytes: 0,
+      streamed_text_utf16: 0,
+      streamed_thinking: String::new(),
+      streamed_thinking_utf16: 0,
+      streamed_tools: None,
       event_renderers,
     }
   }
@@ -106,6 +124,14 @@ impl MessageAggregator {
     Ok(deltas)
   }
 
+  /// Process an event at the absolute event index the store stamped on it, which is its position in the
+  /// session's event log. The fed-event counter skips events that are appended without being fed (control
+  /// facts), so a frame that used it could carry an index below the event's place in the log.
+  pub fn feed_at_absolute<E: EventFields>(&mut self, event: &E, index: usize) -> StoreResult<Vec<Value>> {
+    self.processed += 1;
+    self.feed_at(event, index)
+  }
+
   /// Return an independent copy that continues at the same event index.
   pub fn clone_state(&self) -> Self {
     Self {
@@ -118,6 +144,13 @@ impl MessageAggregator {
       last_event_id: self.last_event_id.clone(),
       tool_rows: self.tool_rows.clone(),
       emit_stream_deltas: self.emit_stream_deltas,
+      omit_streamed_content: self.omit_streamed_content,
+      current_index: self.current_index,
+      streamed_text_bytes: self.streamed_text_bytes,
+      streamed_text_utf16: self.streamed_text_utf16,
+      streamed_thinking: self.streamed_thinking.clone(),
+      streamed_thinking_utf16: self.streamed_thinking_utf16,
+      streamed_tools: self.streamed_tools.clone(),
       event_renderers: self.event_renderers.clone(),
     }
   }
@@ -148,17 +181,24 @@ impl MessageAggregator {
     Some(message)
   }
 
-  /// Set whether future feeds emit stream snapshots.
+  /// Set whether future feeds emit stream frames.
   pub fn set_emit_stream_deltas(&mut self, emit: bool) {
     self.emit_stream_deltas = emit;
   }
 
-  /// Return whether stream snapshots are enabled.
+  /// Return whether stream frames are enabled.
   pub fn emits_stream_deltas(&self) -> bool {
     self.emit_stream_deltas
   }
 
+  /// Set whether a committed draft leaves out the text already sent in stream frames. The live feed sets this,
+  /// so a page that holds the draft is not sent it twice; a replay keeps the full text for a page that missed it.
+  pub fn set_omit_streamed_content(&mut self, omit: bool) {
+    self.omit_streamed_content = omit;
+  }
+
   fn feed_at<E: EventFields>(&mut self, event: &E, index: usize) -> StoreResult<Vec<Value>> {
+    self.current_index = index;
     if !event.is_object() {
       return Err(StoreError::new("chat event must be a JSON object"));
     }
@@ -266,6 +306,7 @@ impl MessageAggregator {
           self.assistant_buf.clear();
           self.last_assistant_timestamp = None;
           self.last_event_id = None;
+          self.reset_stream_positions();
           deltas.push(json!({"type": "message", "message": plan_message}));
         }
       }
@@ -377,13 +418,36 @@ impl MessageAggregator {
   }
 
   fn flush_to_message_delta(&mut self) -> Vec<Value> {
+    self.reset_stream_positions();
     let Some(message) = self.pending_draft_message() else { return Vec::new() };
     self.tool_rows.commit_draft(&message);
     self.assistant_buf.clear();
     self.thinking_buf.clear();
     self.last_assistant_timestamp = None;
     self.last_event_id = None;
-    vec![json!({"type": "message", "message": message})]
+    vec![json!({"type": "message", "message": self.committed(message)})]
+  }
+
+  /// The committed message as the live feed sends it: a page that received the stream frames holds the draft
+  /// text, thinking and tool rows, so the frame carries only what the page needs to commit them.
+  fn committed(&self, mut message: Value) -> Value {
+    if !self.omit_streamed_content || !self.emit_stream_deltas {
+      return message;
+    }
+    let Some(object) = message.as_object_mut() else { return message };
+    for streamed in ["content", "thinking", "tools"] {
+      object.remove(streamed);
+    }
+    object.insert("content_streamed".to_string(), json!(true));
+    message
+  }
+
+  fn reset_stream_positions(&mut self) {
+    self.streamed_text_bytes = 0;
+    self.streamed_text_utf16 = 0;
+    self.streamed_thinking.clear();
+    self.streamed_thinking_utf16 = 0;
+    self.streamed_tools = None;
   }
 
   /// Whether a tool result has a row to attach to: the row that its tool_use id names, when that row has a
@@ -475,12 +539,54 @@ impl MessageAggregator {
     Ok(deltas)
   }
 
-  fn stream_delta(&self) -> Vec<Value> {
+  /// The current draft as a stream frame: only the text, thinking and tool rows the page does not hold yet.
+  /// `length` and `thinking_length` are the draft's lengths after this frame, in UTF-16 code units, so the page
+  /// can tell a replayed append from new text.
+  fn stream_delta(&mut self) -> Vec<Value> {
     if !self.emit_stream_deltas {
       return Vec::new();
     }
-    let Some(message) = self.pending_draft_message() else { return Vec::new() };
-    vec![json!({"type": "stream", "message": message})]
+    if self.assistant_buf.is_empty() && self.tool_rows.is_draft_empty() && self.thinking_buf.is_empty() {
+      self.reset_stream_positions();
+      return Vec::new();
+    }
+    let append = self.assistant_buf[self.streamed_text_bytes..].to_string();
+    // An assistant event may replace the thinking instead of extending it; a replacement resends it whole.
+    let thinking_extends = self.thinking_buf.starts_with(self.streamed_thinking.as_str());
+    let thinking_append = if thinking_extends {
+      self.thinking_buf[self.streamed_thinking.len()..].to_string()
+    } else {
+      self.thinking_buf.clone()
+    };
+    let tools = self.tool_rows.draft_json();
+    let tools_changed = tools != self.streamed_tools;
+    if append.is_empty() && thinking_append.is_empty() && !tools_changed {
+      return Vec::new();
+    }
+    let mut frame = json!({"type": "stream", "event_index": self.current_index});
+    if !append.is_empty() {
+      self.streamed_text_bytes = self.assistant_buf.len();
+      self.streamed_text_utf16 += append.encode_utf16().count();
+      frame["append"] = json!(append);
+      frame["length"] = json!(self.streamed_text_utf16);
+    }
+    if !thinking_append.is_empty() {
+      self.streamed_thinking_utf16 = if thinking_extends {
+        self.streamed_thinking_utf16 + thinking_append.encode_utf16().count()
+      } else {
+        self.thinking_buf.encode_utf16().count()
+      };
+      self.streamed_thinking.clone_from(&self.thinking_buf);
+      frame["thinking_append"] = json!(thinking_append);
+      frame["thinking_length"] = json!(self.streamed_thinking_utf16);
+    }
+    if tools_changed {
+      self.streamed_tools = tools.clone();
+      if let Some(tools) = tools {
+        frame["tools"] = tools;
+      }
+    }
+    vec![frame]
   }
 }
 
@@ -1212,22 +1318,86 @@ mod tests {
     ])
   }
 
+  /// The fixture's stream frames are whole-draft snapshots, which is the wire form of the Python aggregator
+  /// they were recorded from. The live feed carries only new text, so the appends are accumulated here and the
+  /// draft at each frame must equal that frame's snapshot; every other frame must match exactly.
   fn assert_parity_frames(actual: Vec<Value>, expected: &[Value], case: &str) {
-    if actual == expected {
-      return;
+    let expected = without_repeated_snapshots(expected);
+    let mut actual = actual.into_iter();
+    let mut content = String::new();
+    let mut thinking = String::new();
+    let mut tools = Value::Null;
+    for (index, expected_frame) in expected.iter().enumerate() {
+      let Some(frame) = actual.next() else {
+        panic!("{case}: the feed ended before frame {index}; expected {expected_frame:?}");
+      };
+      if expected_frame["type"] != "stream" {
+        assert_eq!(&frame, expected_frame, "{case}: frame {index} differs from the fixture");
+        content.clear();
+        thinking.clear();
+        tools = Value::Null;
+        continue;
+      }
+      assert_eq!(frame["type"], "stream", "{case}: frame {index} is not a stream frame: {frame:?}");
+      if let Some(append) = frame["append"].as_str() {
+        content = extend_streamed(&content, append, frame["length"].as_u64());
+      }
+      if let Some(append) = frame["thinking_append"].as_str() {
+        thinking = extend_streamed(&thinking, append, frame["thinking_length"].as_u64());
+      }
+      if let Some(frame_tools) = frame.get("tools") {
+        tools = frame_tools.clone();
+      }
+      let snapshot = &expected_frame["message"];
+      assert_eq!(content, snapshot["content"].as_str().unwrap_or(""), "{case}: draft text at frame {index}");
+      assert_eq!(
+        thinking,
+        snapshot.get("thinking").and_then(Value::as_str).unwrap_or(""),
+        "{case}: draft thinking at frame {index}"
+      );
+      if let Some(snapshot_tools) = snapshot.get("tools") {
+        assert_eq!(&tools, snapshot_tools, "{case}: draft tools at frame {index}");
+      }
     }
-    let first_difference = actual
-      .iter()
-      .zip(expected)
-      .position(|(actual, expected)| actual != expected)
-      .unwrap_or(actual.len().min(expected.len()));
-    panic!(
-      "Python aggregator frames differ for {case} at frame {first_difference}; actual: {:?}; expected: {:?}; lengths: {}/{}",
-      actual.get(first_difference),
-      expected.get(first_difference),
-      actual.len(),
-      expected.len()
-    );
+    assert!(actual.next().is_none(), "{case}: the feed sent frames the fixture does not have");
+  }
+
+  /// Drop the snapshots that repeat their predecessor: the append feed sends nothing when a draft is unchanged.
+  fn without_repeated_snapshots(frames: &[Value]) -> Vec<Value> {
+    let mut kept = Vec::new();
+    let mut previous: Option<Value> = None;
+    for frame in frames {
+      if frame["type"] != "stream" {
+        previous = None;
+        kept.push(frame.clone());
+        continue;
+      }
+      let snapshot = &frame["message"];
+      let state = json!([snapshot["content"], snapshot.get("thinking"), snapshot.get("tools"),]);
+      if previous.as_ref() == Some(&state) {
+        continue;
+      }
+      previous = Some(state);
+      kept.push(frame.clone());
+    }
+    kept
+  }
+
+  /// The draft text after one append frame, the way the page accumulates it. The fixture's texts are ASCII, so
+  /// a UTF-16 length is its byte length.
+  fn extend_streamed(held: &str, append: &str, end: Option<u64>) -> String {
+    let Some(end) = end.map(|end| end as usize) else { return format!("{held}{append}") };
+    let start = end.saturating_sub(append.len());
+    if end <= held.len() {
+      return if &held[start..end] == append { held.to_string() } else { append.to_string() };
+    }
+    if start >= held.len() {
+      return format!("{held}{append}");
+    }
+    if held[start..] != append[..held.len() - start] {
+      return append.to_string();
+    }
+    format!("{held}{}", &append[held.len() - start..])
   }
 
   #[test]
@@ -1449,7 +1619,8 @@ mod tests {
       }))
       .unwrap();
     assert_eq!(stream[0]["type"], "stream");
-    assert_eq!(stream[0]["message"]["id"], "legacy:1");
+    assert_eq!(stream[0]["append"], "answer");
+    assert_eq!(stream[0]["length"], 6);
   }
 
   #[test]
@@ -1500,7 +1671,8 @@ mod tests {
       .unwrap();
     assert_eq!(deltas.len(), 1);
     assert_eq!(deltas[0]["type"], "stream");
-    assert_eq!(deltas[0]["message"]["tools"][0]["output"], "read");
+    assert_eq!(deltas[0]["tools"][0]["output"], "read");
+    assert!(deltas[0].get("append").is_none(), "the draft text did not change");
   }
 
   #[test]

@@ -124,6 +124,7 @@ function buildLockHarness() {
   vm.runInContext(FILE_UPLOAD_JS, context, {filename: 'file-upload.js'});
   loadPageTimersOnce(context);
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
+  vm.runInContext(readStatic('stream-draft.js'), context, {filename: 'stream-draft.js'});
   vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
   vm.runInContext(VOICE_INPUT_JS, context, {filename: 'voice-input.js'});
   // The voice slot and the echo count are the modules' top-level lets: their

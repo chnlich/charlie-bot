@@ -1,13 +1,10 @@
-// The client is a pure function of the frame sequence it receives.
+// The streamed draft is a pure function of the frame sequence the page receives.
 //
-// Once the cursor a client reports is the snapshot its first paint was built
-// from, every frame the server replays is one the client does not already have.
-// So there is no "catchup phase" to render differently. Delivering a frame
-// sequence in one connection must leave the same screen as delivering the same
-// sequence split across a reconnect at ANY point.
-//
-// This is the mechanism-level statement of "the last reply must not show twice":
-// split delivery must equal unsplit delivery.
+// A live `stream` frame carries only the text added since the previous one, so the page accumulates the
+// draft. A page that joins or reconnects mid-reply gets one catch-up frame holding the whole draft, and it
+// must end up with the same draft and the same committed message as a page that saw every live frame. The
+// mechanism-level statement is that splitting the delivery at a reconnect and resending the whole draft
+// there leaves the same screen.
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -51,16 +48,44 @@ function deliver(socket, frames) {
 }
 
 const REPLY = 'Here is the answer.';
+const PIECES = ['Here is ', 'the answer.'];
 
-// One turn: a user message, a streamed reply, the commit, the separator.
-const FRAMES = [
-  {type: 'message', message: {role: 'user', content: 'q1', event_index: 0}},
-  {type: 'stream', message: {role: 'assistant', content: 'Here is', event_index: 1}},
-  {type: 'stream', message: {role: 'assistant', content: REPLY, event_index: 1}},
-  {type: 'message', message: {role: 'assistant', content: REPLY, event_index: 1}},
-  {type: 'message', message: {role: 'separator', event_index: 2}},
-  {type: 'master_done', still_thinking: false, event_index: 2},
-];
+// The live frames of one turn: the user message, then each streamed piece and its commit, then the
+// separator. A commit carries no text: the page holds that piece from its append.
+function liveFrames() {
+  const frames = [{type: 'message', message: {role: 'user', content: 'q1', event_index: 0}}];
+  PIECES.forEach((piece, index) => {
+    const eventIndex = index + 1;
+    frames.push({type: 'stream', append: piece, length: piece.length, event_index: eventIndex});
+    frames.push({
+      type: 'message',
+      message: {
+        role: 'assistant',
+        content_streamed: true,
+        event_index: eventIndex,
+        id: `draft-${eventIndex}`,
+        timestamp: `t${eventIndex}`,
+      },
+    });
+  });
+  frames.push({type: 'message', message: {role: 'separator', event_index: PIECES.length + 1}});
+  frames.push({type: 'master_done', still_thinking: false, event_index: PIECES.length + 1});
+  return frames;
+}
+
+const RENDERED = ['user:q1', 'assistant:' + PIECES[0], 'assistant:' + PIECES[1], 'separator:'];
+
+// The catch-up a page receives when it joins or reconnects mid-reply: the committed messages, then one
+// frame holding the whole draft so far.
+function catchupFrames(draftText) {
+  return [{
+    type: 'stream',
+    reset: true,
+    append: draftText,
+    length: draftText.length,
+    event_index: 1,
+  }];
+}
 
 function renderUnsplit(frames) {
   const client = buildClient();
@@ -70,51 +95,80 @@ function renderUnsplit(frames) {
   return screen(client.bubbles, client.preview);
 }
 
+// The draft the page holds at `k`: the appends since the last committed message.
+function pendingDraftAt(frames, k) {
+  let text = '';
+  for (const frame of frames.slice(0, k)) {
+    if (frame.type === 'message' && frame.message.role !== 'user') text = '';
+    else if (frame.type === 'stream') text += frame.append;
+  }
+  return text;
+}
+
 function renderSplitAt(frames, k) {
   const client = buildClient();
   const first = connect(client);
   first.emitMessage({type: 'catchup_complete'});
   deliver(first, frames.slice(0, k));
-  // The socket drops; the reconnect replays the rest as catchup.
+  // The socket drops; the reconnect's catch-up resends the whole draft still open, then the rest.
   first.emitClose();
+  const draftText = pendingDraftAt(frames, k);
   const second = connect(client);
+  if (draftText) deliver(second, catchupFrames(draftText));
   deliver(second, frames.slice(k));
   second.emitMessage({type: 'catchup_complete'});
   return screen(client.bubbles, client.preview);
 }
 
 test('a completed turn renders the reply exactly once', () => {
-  const rendered = renderUnsplit(FRAMES);
-  assert.deepEqual(rendered, ['user:q1', 'assistant:' + REPLY, 'separator:']);
-  assert.equal(rendered.filter(x => x === 'assistant:' + REPLY).length, 1);
+  assert.deepEqual(renderUnsplit(liveFrames()), RENDERED);
 });
 
-test('splitting the frame sequence at any point renders the same screen', () => {
-  const want = renderUnsplit(FRAMES);
-  for (let k = 0; k <= FRAMES.length; k++) {
-    assert.deepEqual(renderSplitAt(FRAMES, k), want, 'divergence when split at frame ' + k);
+test('a page that joined mid-reply renders the same draft and message', () => {
+  const client = buildClient();
+  const socket = connect(client);
+  // The catch-up replays the turn's committed frames, then the whole draft so far.
+  deliver(socket, [liveFrames()[0]]);
+  deliver(socket, catchupFrames(PIECES[0]));
+  deliver(socket, liveFrames().slice(2));
+  socket.emitMessage({type: 'catchup_complete'});
+  assert.deepEqual(screen(client.bubbles, client.preview), RENDERED);
+});
+
+test('a replayed append the page already holds is not concatenated twice', () => {
+  const client = buildClient();
+  const socket = connect(client);
+  deliver(socket, catchupFrames(REPLY));
+  // A frame queued during the catch-up repeats an append the catch-up already covered.
+  deliver(socket, [liveFrames()[1]]);
+  assert.equal(client.preview.content, REPLY);
+});
+
+test('splitting the frame sequence at a reconnect renders the same screen', () => {
+  const frames = liveFrames();
+  const want = renderUnsplit(frames);
+  for (let k = 0; k <= frames.length; k++) {
+    assert.deepEqual(renderSplitAt(frames, k), want, 'divergence when split at frame ' + k);
   }
 });
 
-test('a reconnect mid-stream does not leave the reply on screen twice', () => {
-  // Split mid-reply: the preview holds the whole
-  // reply and the commit arrives on the next connection.
-  const rendered = renderSplitAt(FRAMES, 3);
-  assert.equal(rendered.filter(x => x === 'assistant:' + REPLY).length, 1);
-});
-
-test('separators delivered after a reconnect are still rendered', () => {
-  const rendered = renderSplitAt(FRAMES, 4);
-  assert.ok(rendered.includes('separator:'), 'separator was dropped');
-});
-
-test('a catchup that never completes still renders and still clears the preview', () => {
-  // `catchup_complete` is only sent after a successful catchup; when the server
-  // swallows a catchup error the frame never arrives. Rendering must not depend
-  // on it.
+test('a page that joins after the reply ended shows the full text', () => {
   const client = buildClient();
   const socket = connect(client);
-  deliver(socket, FRAMES);
-  const rendered = screen(client.bubbles, client.preview);
-  assert.deepEqual(rendered, ['user:q1', 'assistant:' + REPLY, 'separator:']);
+  // The catch-up replay of a finished turn: the committed messages carry their text.
+  deliver(socket, [{
+    type: 'message',
+    message: {role: 'assistant', content: REPLY, event_index: 1, id: 'draft-1', timestamp: 't1'},
+  }]);
+  socket.emitMessage({type: 'catchup_complete'});
+  assert.deepEqual(screen(client.bubbles, client.preview), ['assistant:' + REPLY]);
+});
+
+test('a commit without its appends still commits what the page streamed', () => {
+  const frames = liveFrames().slice(0, 2);
+  const client = buildClient();
+  const socket = connect(client);
+  deliver(socket, frames);
+  deliver(socket, [liveFrames()[2]]);
+  assert.deepEqual(screen(client.bubbles, client.preview), ['user:q1', 'assistant:' + PIECES[0]]);
 });

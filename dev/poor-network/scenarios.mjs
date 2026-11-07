@@ -547,6 +547,7 @@ export async function longStreamRep(ctx) {
     await tab.ready();
     await tabs.show(tab);
     await tabs.waitIdle(SETTLE_TIMEOUT_MS);
+    await caughtUpSocket(tab, sessions.open.id);
 
     const sentAt = await tab.sendText(`pn-long ${randomTag()} answer with the reply`);
     const finished = await waitFor(
@@ -559,6 +560,21 @@ export async function longStreamRep(ctx) {
     const socketBytes = tab.framesBetween(sentAt, finished.at).reduce((sum, frame) => sum + frame.bytes, 0);
     return { socketBytes, replyTextBytes: ctx.replyBytes, frameBreakdown: tab.frameBreakdown(sentAt, finished.at) };
   });
+}
+
+// The page's socket for `sessionId`, open and past its catch-up. A reply sent before that arrives inside the replay
+// instead of as stream frames, so the scenario would measure a catch-up rather than a stream.
+async function caughtUpSocket(tab, sessionId) {
+  const socket = await waitFor(
+    () => tab.sockets.filter((entry) => entry.url.includes(`/ws/sessions/${sessionId}`)).pop() ?? null,
+    SHOW_TIMEOUT_MS,
+    `the page's socket for ${sessionId} to open`,
+  );
+  await waitFor(
+    () => tab.frames.find((frame) => frame.type === 'catchup_complete' && frame.requestId === socket.requestId) ?? null,
+    SHOW_TIMEOUT_MS,
+    `the page's socket for ${sessionId} to finish its catch-up`,
+  );
 }
 
 // The socket the page opened for `sessionId` after `after`: the last socket created whose URL names that session.

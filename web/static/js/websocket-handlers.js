@@ -21,6 +21,14 @@ function _commitMessage(msg) {
     return;
   }
   if (engine && engine.hasMessage(msg)) return;
+  // A committed draft the page streamed arrives without its text, thinking or tool rows: they are what the
+  // page already holds. A replay's committed draft arrives whole, and becomes the held draft, so a repeated
+  // append of the same draft is still recognized as text the page has.
+  if (msg.content_streamed) {
+    msg = withStreamedDraft(msg);
+  } else if (msg.role === 'assistant') {
+    seedStreamDraft(msg);
+  }
   // A committed bubble supersedes the streaming preview: the draft it carries is
   // the same text the preview holds. The local tab did not produce the message;
   // it arrived over the wire, so it never forces the follow. A reader pinned at
@@ -140,9 +148,23 @@ function _replaceCommittedMessage(msg) {
 }
 registerWsMessageHandler('message', (ev) => _commitMessage(ev.message || {}), {advancesCursor: true});
 registerWsMessageHandler('message_update', (ev) => _replaceCommittedMessage(ev.message), {advancesCursor: false});
+
+// A stream frame carries only the text added since the previous frame; stream-draft.js accumulates it. The
+// catch-up sends one `reset` frame holding the whole draft, so a page that joins or reconnects mid-reply
+// renders the same draft as one that saw every frame.
+function withStreamedDraft(msg) {
+  const draft = takeStreamedDraft();
+  const committed = Object.assign({}, msg, {content: draft.content, thinking: draft.thinking});
+  if (draft.tools) committed.tools = draft.tools;
+  return committed;
+}
+
 registerWsMessageHandler('stream', (ev) => {
-  const draft = ev.message || {};
-  if (draft.content || draft.thinking) showStreaming(draft);
+  const applied = applyStreamFrame(ev);
+  const draft = applied.draft;
+  if (applied.changed && (draft.content || draft.thinking)) {
+    showStreaming({content: draft.content, thinking: draft.thinking, tools: draft.tools});
+  }
 }, {advancesCursor: true});
 registerWsMessageHandler('master_done', (ev) => {
   if (!ev.still_thinking) {

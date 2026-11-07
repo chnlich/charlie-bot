@@ -290,6 +290,7 @@ function applyTranscriptUpdate(data) {
   transcriptActiveRunId = data.active_run_id || null;
   if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking
       || (data.pending_draft.tools || []).length)) {
+    if (typeof seedStreamDraft === 'function') seedStreamDraft(data.pending_draft);
     showStreaming(data.pending_draft);
   } else {
     hideStreaming();
@@ -844,6 +845,7 @@ function renderSessionView(data) {
   // without text — the paint renders those rows.
   if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking
       || (isWorker && (data.pending_draft.tools || []).length))) {
+    if (typeof seedStreamDraft === 'function') seedStreamDraft(data.pending_draft);
     showStreaming(data.pending_draft);
   } else {
     hideStreaming();

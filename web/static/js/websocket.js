@@ -85,6 +85,9 @@ function disconnectWS() {
   wsGeneration++;
   const socket = ws;
   ws = null;
+  // Each session numbers its drafts from zero, so the accumulated draft belongs to the page only until it
+  // leaves this session. A reconnect through the backoff keeps it; the catch-up resends the whole draft.
+  if (typeof resetStreamDraft === 'function') resetStreamDraft();
   // The page closed its own open socket (a switch, a session open or the welcome
   // view): the client-socket telemetry separates these closes from network
   // ones, and the readback counts only the network episodes.

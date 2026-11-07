@@ -561,6 +561,7 @@ function liveArchivedContext(dataset, {search = []} = {}) {
   // This harness drives no socket, so the reconnect registration only needs to exist.
   context.registerWsConnectHandler = () => {};
   loadPageTimersOnce(context);
+  vm.runInContext(readStatic('stream-draft.js'), context, {filename: 'stream-draft.js'});
   vm.runInContext(readStatic('websocket-handlers.js'), context, {filename: 'websocket-handlers.js'});
   const broadcast = () => handlers.task_tree_changed({type: 'task_tree_changed'});
   return {context, nav, elements, fetchCalls, writes, broadcast};

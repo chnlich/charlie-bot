@@ -207,6 +207,7 @@ test('a result WebSocket event forces a poll without writing the header directly
   const {context} = buildContext({elements});
   loadPageTimersOnce(context);
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
+  vm.runInContext(readStatic('stream-draft.js'), context, {filename: 'stream-draft.js'});
   vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
 
   let pollCall = null;
@@ -601,6 +602,7 @@ test('in-place refresh paths preserve group expansion', async () => {
       setup(context) {
         loadPageTimersOnce(context);
         vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
+        vm.runInContext(readStatic('stream-draft.js'), context, {filename: 'stream-draft.js'});
         vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
       },
       drive(context) {

@@ -2589,7 +2589,85 @@ fn message_aggregator_accepts_every_recorded_shape() {
   for event in events.as_array().unwrap() {
     rust_frames.extend(aggregator.feed(event).unwrap());
   }
-  assert_eq!(Value::Array(rust_frames), run_golden_message_aggregator(&events));
+  assert_recorded_drafts(rust_frames, run_golden_message_aggregator(&events));
+}
+
+/// Compare a live frame feed with a recording whose stream frames are whole-draft snapshots. The live feed
+/// sends only the new text, so its appends are accumulated and each frame's draft is compared with that
+/// frame's recorded snapshot; every other frame must match exactly.
+fn assert_recorded_drafts(actual: Vec<Value>, recorded: Value) {
+  let recorded = without_repeated_snapshots(recorded.as_array().unwrap());
+  let mut actual = actual.into_iter();
+  let (mut content, mut thinking, mut tools) = (String::new(), String::new(), Value::Null);
+  for (index, frame) in recorded.iter().enumerate() {
+    let live = actual.next().unwrap_or_else(|| panic!("the feed ended before frame {index}"));
+    if frame["type"] != "stream" {
+      assert_eq!(live, *frame, "frame {index} differs from the recording");
+      content.clear();
+      thinking.clear();
+      tools = Value::Null;
+      continue;
+    }
+    assert_eq!(live["type"], "stream", "frame {index} is not a stream frame: {live:?}");
+    if let Some(append) = live["append"].as_str() {
+      content = extend_streamed(&content, append, live["length"].as_u64());
+    }
+    if let Some(append) = live["thinking_append"].as_str() {
+      thinking = extend_streamed(&thinking, append, live["thinking_length"].as_u64());
+    }
+    if let Some(frame_tools) = live.get("tools") {
+      tools = frame_tools.clone();
+    }
+    let snapshot = &frame["message"];
+    assert_eq!(content, snapshot["content"].as_str().unwrap_or(""), "draft text at frame {index}");
+    assert_eq!(
+      thinking,
+      snapshot.get("thinking").and_then(Value::as_str).unwrap_or(""),
+      "draft thinking at frame {index}"
+    );
+    if let Some(snapshot_tools) = snapshot.get("tools") {
+      assert_eq!(tools, *snapshot_tools, "draft tools at frame {index}");
+    }
+  }
+  assert!(actual.next().is_none(), "the feed sent frames the recording does not have");
+}
+
+/// Drop the snapshots that repeat their predecessor: an unchanged draft sends no frame.
+fn without_repeated_snapshots(frames: &[Value]) -> Vec<Value> {
+  let mut kept = Vec::new();
+  let mut previous: Option<Value> = None;
+  for frame in frames {
+    if frame["type"] != "stream" {
+      previous = None;
+      kept.push(frame.clone());
+      continue;
+    }
+    let snapshot = &frame["message"];
+    let state = json!([snapshot["content"], snapshot.get("thinking"), snapshot.get("tools")]);
+    if previous.as_ref() == Some(&state) {
+      continue;
+    }
+    previous = Some(state);
+    kept.push(frame.clone());
+  }
+  kept
+}
+
+/// The draft text after one append frame, the way the page accumulates it. The recordings' texts are ASCII, so
+/// a UTF-16 length is its byte length.
+fn extend_streamed(held: &str, append: &str, end: Option<u64>) -> String {
+  let Some(end) = end.map(|end| end as usize) else { return format!("{held}{append}") };
+  let start = end.saturating_sub(append.len());
+  if end <= held.len() {
+    return if &held[start..end] == append { held.to_string() } else { append.to_string() };
+  }
+  if start >= held.len() {
+    return format!("{held}{append}");
+  }
+  if held[start..] != append[..held.len() - start] {
+    return append.to_string();
+  }
+  format!("{held}{}", &append[held.len() - start..])
 }
 
 /// Plain tool rows keep the frames that main produced before subagent cards existed.
@@ -2607,7 +2685,7 @@ fn message_aggregator_keeps_plain_tool_row_frames() {
     frames.extend(aggregator.feed(event).unwrap());
   }
   frames.extend(aggregator.flush_pending());
-  assert_eq!(Value::Array(frames), fixture["expected"]);
+  assert_recorded_drafts(frames, fixture["expected"].clone());
 }
 
 /// A running copy of the system sleep binary named `name`, whose `/proc/<pid>/exe` file name is `name`.

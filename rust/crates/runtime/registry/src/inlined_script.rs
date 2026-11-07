@@ -24,10 +24,7 @@ pub fn without_comments(source: &str) -> String {
     if matches!(stack.last(), Some(Place::Template)) {
       match bytes[i] {
         b'\\' => {
-          let mut end = (i + 1).min(bytes.len());
-          if end < bytes.len() {
-            end += source[end..].chars().next().map_or(1, char::len_utf8);
-          }
+          let end = escape_end(source, i);
           i = copy(&mut out, source, i, end);
         }
         b'`' => {
@@ -57,7 +54,7 @@ pub fn without_comments(source: &str) -> String {
       continue;
     }
     if bytes[i] == b'/' && expect_expression {
-      match regex_end(bytes, i) {
+      match regex_end(source, i) {
         Some(end) => {
           clear_control(&mut stack);
           copy(&mut out, source, i, end);
@@ -73,7 +70,7 @@ pub fn without_comments(source: &str) -> String {
     }
     match bytes[i] {
       b'\'' | b'"' => {
-        let end = string_end(bytes, i);
+        let end = string_end(source, i);
         clear_control(&mut stack);
         copy(&mut out, source, i, end);
         expect_expression = false;
@@ -274,13 +271,15 @@ fn expects_expression(word: &str) -> bool {
 }
 
 /// The index after the quoted string that starts at `start`: its closing quote, or the line's end when the line
-/// ends first. A JavaScript string cannot span lines, so the line's end bounds the scan.
-fn string_end(bytes: &[u8], start: usize) -> usize {
+/// ends first. A JavaScript string cannot span lines except through a backslash that ends one, so the line's end
+/// bounds the scan.
+fn string_end(source: &str, start: usize) -> usize {
+  let bytes = source.as_bytes();
   let quote = bytes[start];
   let mut i = start + 1;
   while i < bytes.len() {
     match bytes[i] {
-      b'\\' => i += 2,
+      b'\\' => i = escape_end(source, i),
       b'\n' | b'\r' => return i,
       byte if byte == quote => return i + 1,
       _ => i += 1,
@@ -289,14 +288,32 @@ fn string_end(bytes: &[u8], start: usize) -> usize {
   bytes.len()
 }
 
+/// The index after the character that the escape at `start` consumes: the line terminator after its backslash, the
+/// escaped character, or the backslash alone at the source's end.
+fn escape_end(source: &str, start: usize) -> usize {
+  let bytes = source.as_bytes();
+  let i = start + 1;
+  match bytes.get(i) {
+    None => i,
+    Some(b'\r') if bytes.get(i + 1) == Some(&b'\n') => i + 2,
+    Some(_) => i + source[i..].chars().next().map_or(1, char::len_utf8),
+  }
+}
+
 /// The index after the regex literal that starts at `start`, when the line holds its closing slash and flag
 /// letters. A slash that opens no regex on its line is division.
-fn regex_end(bytes: &[u8], start: usize) -> Option<usize> {
+fn regex_end(source: &str, start: usize) -> Option<usize> {
+  let bytes = source.as_bytes();
   let mut i = start + 1;
   let mut in_class = false;
   while i < bytes.len() {
     match bytes[i] {
-      b'\\' => i += 2,
+      b'\\' => {
+        if matches!(bytes.get(i + 1), Some(&b'\n') | Some(&b'\r')) {
+          return None;
+        }
+        i = escape_end(source, i);
+      }
       b'\n' | b'\r' => return None,
       b'[' => {
         in_class = true;
@@ -388,6 +405,13 @@ mod tests {
   #[test]
   fn a_template_escape_of_a_multibyte_character_is_kept() {
     assert_eq!(without_comments("let s = `\\é // text`; // gone"), "let s = `\\é // text`; ");
+  }
+
+  #[test]
+  fn a_string_continued_over_a_line_keeps_its_text() {
+    assert_eq!(without_comments("let s = \"one\\\r\n  // two\"; // gone"), "let s = \"one\\\r\n  // two\"; ");
+    assert_eq!(without_comments("let s = 'one\\\n  // two'; // gone"), "let s = 'one\\\n  // two'; ");
+    assert_eq!(without_comments("let s = '\\é /* kept */'; // gone"), "let s = '\\é /* kept */'; ");
   }
 
   #[test]

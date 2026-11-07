@@ -885,7 +885,7 @@ mod tests {
 
     let response = templating.render_page(&features, "scripted.html", &json!({}), &parts).unwrap();
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    assert_eq!(body, "<script>\nlet url = 'https://example.com'; </script><style> \n.chat{display:flex}</style>");
+    assert_eq!(body, "<script>\nlet url = 'https://example.com'; </script><style>\n.chat{display:flex}</style>");
   }
 
   /// A repeat render answers from the compiled environment, and a template edited on disk moves the source list so

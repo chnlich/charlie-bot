@@ -1400,6 +1400,28 @@ mod tests {
     assert_eq!(counters.scan_calls, 0, "no chat file was opened");
   }
 
+  /// Rows tied at the answer's last timestamp keep corpus order, so the cap drops the corpus-last of them: the cutoff
+  /// selection reorders `matched`'s timestamps, and only their values reach the stop test.
+  #[test]
+  fn rows_tied_at_the_answers_last_row_keep_corpus_order() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    // One more match than the cap, all written at the same instant and all holding the needle in their chat file.
+    for index in 0..super::SEARCH_RESULT_LIMIT + 1 {
+      let id = format!("tied-{index:03}");
+      write_session(&store, &id, &id, SessionStatus::Active, "2026-08-01T12:00:00Z");
+      let path = store.chat_events_path(&id);
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      fs::write(&path, "needle in the events\n").unwrap();
+    }
+    let (all, _) = store.load_session_metas_snapshot_versioned(None).unwrap();
+    let expected: Vec<&str> = all.iter().take(super::SEARCH_RESULT_LIMIT).map(|meta| meta.id.as_str()).collect();
+
+    let rows = search_sessions(&store, "needle").unwrap().rows;
+    let ids: Vec<&str> = rows.iter().map(|meta| meta.id.as_str()).collect();
+    assert_eq!(ids, expected, "the tied rows answer in corpus order and the cap drops the corpus-last one");
+  }
+
   #[test]
   fn content_hits_compete_with_name_hits_at_the_two_hundred_row_cap() {
     let home = tempfile::tempdir().unwrap();

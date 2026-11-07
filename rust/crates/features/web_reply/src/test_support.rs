@@ -276,11 +276,8 @@ impl Home {
     metadata.task_parent_id = parent.map(str::to_string);
     let path = self.features.store.metadata_path(id);
     fs::create_dir_all(path.parent().expect("metadata path has a session directory")).expect("session directory");
-    fs::write(
-      path,
-      metadata.to_json_string(&self.features.registry.metadata_slots(), true),
-    )
-    .expect("manager metadata writes");
+    fs::write(path, metadata.to_json_string(&self.features.registry.metadata_slots(), true))
+      .expect("manager metadata writes");
   }
 
   async fn create(&self, request: CreateTask, slots: Map<String, Value>) -> String {

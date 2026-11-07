@@ -367,10 +367,9 @@ END;"#;
 /// A connection with the pre-fix trigger bodies: `served` is backfilled, then `late` is written under the bodies
 /// whose add arm drops an existing served group-day.
 fn pre_fix_ledger(raw: &Connection, served: &[UsageRecord], late: &[UsageRecord]) {
-  raw.execute_batch(
-    "DROP TRIGGER IF EXISTS usage_agg_after_insert; DROP TRIGGER IF EXISTS usage_agg_after_update;",
-  )
-  .unwrap();
+  raw
+    .execute_batch("DROP TRIGGER IF EXISTS usage_agg_after_insert; DROP TRIGGER IF EXISTS usage_agg_after_update;")
+    .unwrap();
   raw.execute_batch(&format!("{PRE_FIX_INSERT_TRIGGER}{PRE_FIX_UPDATE_TRIGGER}")).unwrap();
   for rec in served.iter().chain(late) {
     write_raw_usage(raw, rec);

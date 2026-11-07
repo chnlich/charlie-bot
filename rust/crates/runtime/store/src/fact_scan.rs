@@ -1058,7 +1058,9 @@ mod tests {
 
     append_events(
       &writer,
-      [json!({"id": "finish", "type": "run_finished", "run_id": "run-1", "outcome": "success", "input_event_ids": ["ask"]})],
+      [
+        json!({"id": "finish", "type": "run_finished", "run_id": "run-1", "outcome": "success", "input_event_ids": ["ask"]}),
+      ],
     );
     let total = std::fs::metadata(writer.chat_events_path("synthetic")).unwrap().len();
     let resumed = open().scan_live_facts("synthetic").unwrap().expect("nothing writes during the scan");

@@ -1188,7 +1188,8 @@ mod tests {
       )
       .await;
     let worker = home.worker(&own, "worker").await;
-    let cases = [("unknown", VALID_SET, 404), ("thread", VALID_SET, 409), ("worker", VALID_SET, 409), ("own", "not json", 422)];
+    let cases =
+      [("unknown", VALID_SET, 404), ("thread", VALID_SET, 409), ("worker", VALID_SET, 409), ("own", "not json", 422)];
     for (case, text, status) in cases {
       let sid = match case {
         "thread" => thread.as_str(),
@@ -1291,7 +1292,9 @@ mod tests {
     home.seed_manager(old, Some(root));
     home.seed_manager(new, Some(root));
     home.seed_manager(deep, Some(old));
-    for (session_id, updated_at) in [(old, "2026-11-07T00:00:01Z"), (new, "2026-11-07T00:00:02Z"), (deep, "2026-11-07T00:00:03Z")] {
+    for (session_id, updated_at) in
+      [(old, "2026-11-07T00:00:01Z"), (new, "2026-11-07T00:00:02Z"), (deep, "2026-11-07T00:00:03Z")]
+    {
       let updated_at = UtcDateTime::parse(updated_at).unwrap();
       let status = WebStatus {
         goal: None,
@@ -2372,10 +2375,7 @@ mod tests {
       [root.to_string(), child.to_string()],
       "the holder and its open descendants, not the other session"
     );
-    assert_eq!(
-      held(&read_status(&home.features, child).await.expect("the child reads")),
-      [child.to_string()]
-    );
+    assert_eq!(held(&read_status(&home.features, child).await.expect("the child reads")), [child.to_string()]);
 
     // A set stores its own items and leaves the derived ones where the reader gives them.
     set_status(&home.features, root, VALID_SET).await.expect("the set stores");

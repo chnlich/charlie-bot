@@ -1006,12 +1006,8 @@ fn charliebot_codex_thread_is_skipped_while_a_rollout_of_it_exists() {
   let home = dir.path().join("home");
   let (config, registry) = fixture_with(&home, &option("codex-gpt", "codex", "openai/gpt-5"));
   let sid = "rolloutsid1";
-  let rollout = cli_file(
-    &home,
-    "codex",
-    sid,
-    &[call(sid, "codex-gpt5", "2026-09-10T00:00:00Z", [40, 0, 20, 7], &[sid])],
-  );
+  let rollout =
+    cli_file(&home, "codex", sid, &[call(sid, "codex-gpt5", "2026-09-10T00:00:00Z", [40, 0, 20, 7], &[sid])]);
   for (thread, ids) in [("t1", vec![sid]), ("t2", vec![sid, "pruned-sid"]), ("t3", vec!["orphan-sid"])] {
     let mut events_text = result_line("2026-09-11T20:00:00+00:00", 100, 0, 0, 5);
     for id in ids {
@@ -1020,12 +1016,9 @@ fn charliebot_codex_thread_is_skipped_while_a_rollout_of_it_exists() {
     write_thread(&home, "s1", thread, Some(("codex-gpt", None)), events_text.as_bytes());
   }
   let mut ledger = UsageLedger::in_memory().unwrap();
-  let native = stub_record(
-    &call(sid, "codex-gpt5", "2026-09-10T00:00:00Z", [40, 0, 20, 7], &[sid]),
-    "Codex",
-    "codex-main",
-  )
-  .unwrap();
+  let native =
+    stub_record(&call(sid, "codex-gpt5", "2026-09-10T00:00:00Z", [40, 0, 20, 7], &[sid]), "Codex", "codex-main")
+      .unwrap();
   ledger.record_file(HOST, rollout.to_str().unwrap(), "synthetic", &[native]).unwrap();
   let captured = ledger.captured_sigs(HOST).unwrap();
   assert_eq!(capture_charliebot(&mut ledger, HOST, &config.sessions_dir(), &config, &registry, &captured).unwrap(), 1);
@@ -1338,7 +1331,9 @@ fn capture_runs_second_capture_skips_by_stat_and_recaptures_an_append() {
 
   let mut appended = fs::OpenOptions::new().append(true).open(&log).unwrap();
   appended
-    .write_all(b"{\"type\": \"result\", \"usage\": {\"input_tokens\": 200, \"cached_tokens\": 10, \"output_tokens\": 9}}\n")
+    .write_all(
+      b"{\"type\": \"result\", \"usage\": {\"input_tokens\": 200, \"cached_tokens\": 10, \"output_tokens\": 9}}\n",
+    )
     .unwrap();
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1); // the append moved the stat: re-parsed
   let rows = page_rows(&mut ledger);

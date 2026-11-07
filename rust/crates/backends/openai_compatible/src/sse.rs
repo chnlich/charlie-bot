@@ -7,8 +7,8 @@ use serde_json::{Map, Value};
 
 use super::value_ops::COMPACT_ASCII_JSON;
 
-/// Splits a byte stream into lines. CRLF, LF and CR each end a line. A CR at a chunk's end waits for the next byte,
-/// so a CRLF split across chunks is still one terminator.
+/// The split of a byte stream into lines. CRLF, LF and CR each end a line. A CR at a chunk's end waits for the next
+/// byte, so a CRLF split across chunks is still one terminator.
 #[derive(Default)]
 pub struct LineFramer {
   line: Vec<u8>,

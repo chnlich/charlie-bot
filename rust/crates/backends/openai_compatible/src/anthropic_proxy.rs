@@ -252,7 +252,8 @@ impl Relay {
     }
   }
 
-  /// Reads the upstream's next chunk and handles its complete lines, or finishes the message once the reading ended.
+  /// One read step of the relay: the upstream's next chunk with its complete lines handled, or the message finished
+  /// once the reading ended.
   async fn step(&mut self) -> Result<(), (String, String)> {
     if self.state != RelayState::Reading {
       let events = self.translator.finish_events().map_err(fault_failure)?;
@@ -307,7 +308,8 @@ fn fault_failure(fault: Fault) -> (String, String) {
   }
 }
 
-/// Strips the ASCII whitespace at both ends: space, tab, newline, carriage return, vertical tab and form feed.
+/// The slice without the ASCII whitespace at both ends: space, tab, newline, carriage return, vertical tab and
+/// form feed.
 fn trim_space(raw: &[u8]) -> &[u8] {
   raw.trim_with(|character| matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}'))
 }

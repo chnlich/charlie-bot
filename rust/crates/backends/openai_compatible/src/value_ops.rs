@@ -99,12 +99,12 @@ pub fn require_dict<'a>(value: &'a Value, label: &str) -> ValueResult<&'a Map<St
   }
 }
 
-/// Parses JSON text, with the fault a load failure raises.
+/// The value parsed from JSON text, with the fault a load failure raises.
 pub fn loads_text(text: &str) -> ValueResult<Value> {
   json_loads::loads_text(text).map_err(fault_of_load)
 }
 
-/// Parses JSON bytes, with the fault a load failure raises.
+/// The value parsed from JSON bytes, with the fault a load failure raises.
 pub fn loads_bytes(body: &[u8]) -> ValueResult<Value> {
   json_loads::loads(body).map_err(fault_of_load)
 }

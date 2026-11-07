@@ -178,58 +178,41 @@ enum MatchShape {
   WholeLine,
 }
 
-/// One ordered cause pattern: its inventory class name, its expression, and the part of the cause material a hit
-/// names.
+/// One ordered cause pattern: its expression and the part of the cause material a hit names.
 struct CausePattern {
-  /// The Python inventory's class name. The signature keeps the normalized cause line, not this name.
-  #[allow(dead_code)]
-  name: &'static str,
   expression: Regex,
   shape: MatchShape,
 }
 
 impl CausePattern {
-  fn new(name: &'static str, pattern: &str, shape: MatchShape) -> CausePattern {
-    CausePattern { name, expression: Regex::new(pattern).expect("every cause expression is valid"), shape }
+  fn new(pattern: &str, shape: MatchShape) -> CausePattern {
+    CausePattern { expression: Regex::new(pattern).expect("every cause expression is valid"), shape }
   }
 }
 
 static PATTERNS: LazyLock<Vec<CausePattern>> = LazyLock::new(|| {
   vec![
-    CausePattern::new("scope-exists", r"the previous round still runs: unit \S+sc?ope exists", MatchShape::Fragment),
-    CausePattern::new("no-cron-task-file", r"no cron task file under .* names session_id", MatchShape::Fragment),
-    CausePattern::new("missing-python-module", r"No module named '([^']+)'", MatchShape::Fragment),
-    CausePattern::new("skill-yaml", r"failed to load skill \S+: missing YAML frontmatter", MatchShape::Fragment),
-    CausePattern::new("mem-cap", "内存上限触发", MatchShape::Fragment),
-    CausePattern::new("ratelimit", r"RateLimitError:.*", MatchShape::WholeText),
+    CausePattern::new(r"the previous round still runs: unit \S+sc?ope exists", MatchShape::Fragment),
+    CausePattern::new(r"no cron task file under .* names session_id", MatchShape::Fragment),
+    CausePattern::new(r"No module named '([^']+)'", MatchShape::Fragment),
+    CausePattern::new(r"failed to load skill \S+: missing YAML frontmatter", MatchShape::Fragment),
+    CausePattern::new("内存上限触发", MatchShape::Fragment),
+    CausePattern::new(r"RateLimitError:.*", MatchShape::WholeText),
+    CausePattern::new(r"(?i)(service may be temporarily overloaded|overloaded_error|502|503)", MatchShape::WholeText),
     CausePattern::new(
-      "overloaded",
-      r"(?i)(service may be temporarily overloaded|overloaded_error|502|503)",
-      MatchShape::WholeText,
-    ),
-    CausePattern::new(
-      "auth",
       r"(?i)(Failed to authenticate|oauth_org_not_allowed|invalid x-api-key|401|Unauthorized|authentication_error)",
       MatchShape::WholeLine,
     ),
-    CausePattern::new(
-      "timeout",
-      r"(?i)(timed out|timeout after|TimeoutError|ETIMEDOUT|deadline exceeded)",
-      MatchShape::WholeLine,
-    ),
-    CausePattern::new(r"oom-kill", r"(?i)(out of memory|\bOOM\b|\bkilled\b|SIGKILL)", MatchShape::WholeLine),
-    CausePattern::new("traceback", r"Traceback \(most recent call last\)", MatchShape::WholeText),
-    CausePattern::new("compile-error", r"(?m)^error(\[E\d+\])?:.*", MatchShape::WholeText),
-    CausePattern::new("worktree", r"(?i)(worktree|already exists|not a git repository)", MatchShape::WholeText),
-    CausePattern::new("assertion", r"(?i)(assertion failed|AssertionError|assert_eq)", MatchShape::WholeText),
-    CausePattern::new(
-      "permission",
-      r"(?i)(Permission denied|EACCES|landlock|read-only file system)",
-      MatchShape::WholeText,
-    ),
-    CausePattern::new("git", r"(?i)(fatal: |CONFLICT \(|rejected|non-fast-forward)", MatchShape::WholeText),
-    CausePattern::new("api-error", r"(?i)(API Error|api_error|invalid_request_error)", MatchShape::WholeText),
-    CausePattern::new("failed-word", r"(?i)(^|\W)(error|failed|failure|exception)(\W|$)", MatchShape::WholeLine),
+    CausePattern::new(r"(?i)(timed out|timeout after|TimeoutError|ETIMEDOUT|deadline exceeded)", MatchShape::WholeLine),
+    CausePattern::new(r"(?i)(out of memory|\bOOM\b|\bkilled\b|SIGKILL)", MatchShape::WholeLine),
+    CausePattern::new(r"Traceback \(most recent call last\)", MatchShape::WholeText),
+    CausePattern::new(r"(?m)^error(\[E\d+\])?:.*", MatchShape::WholeText),
+    CausePattern::new(r"(?i)(worktree|already exists|not a git repository)", MatchShape::WholeText),
+    CausePattern::new(r"(?i)(assertion failed|AssertionError|assert_eq)", MatchShape::WholeText),
+    CausePattern::new(r"(?i)(Permission denied|EACCES|landlock|read-only file system)", MatchShape::WholeText),
+    CausePattern::new(r"(?i)(fatal: |CONFLICT \(|rejected|non-fast-forward)", MatchShape::WholeText),
+    CausePattern::new(r"(?i)(API Error|api_error|invalid_request_error)", MatchShape::WholeText),
+    CausePattern::new(r"(?i)(^|\W)(error|failed|failure|exception)(\W|$)", MatchShape::WholeLine),
   ]
 });
 

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::response::Response;
@@ -13,9 +14,10 @@ use tokio::sync::{Mutex, mpsc, watch};
 use tokio::task::JoinHandle;
 
 use crate::api::{DEVICE_FIELDS, Transcribed, log_voice_transcribed};
-use crate::archive;
 use crate::audio::{AudioQueue, PREVIEW_QUEUE_SECONDS};
 use crate::config::VoiceSettings;
+use crate::recordings;
+use crate::recordings::query_value;
 use crate::transcription::{self, Backend, TranscriptEvent, TranscriptKind};
 
 type SocketWriter = Arc<Mutex<SplitSink<WebSocket, Message>>>;
@@ -25,12 +27,14 @@ struct RelaySettings {
   vocabulary: Vec<String>,
   languages: Vec<String>,
   session_id: String,
+  run_id: String,
 }
 
 pub(crate) fn handler(features: Arc<FeatureContext>, request: WebSocketRequest) -> BoxFuture<'static, Response> {
   Box::pin(async move {
     let session_id = request.segments.first().expect("the route captures its session id").clone();
     let backend_id = query_value(&request.query, "backend").unwrap_or_default();
+    let run_id = query_value(&request.query, "run_id").unwrap_or_default();
     let backend = match features.credentials.get() {
       Ok(credentials) => Backend::build(&backend_id, &credentials),
       Err(error) => Err(error.to_string()),
@@ -41,6 +45,7 @@ pub(crate) fn handler(features: Arc<FeatureContext>, request: WebSocketRequest) 
         .unavailable_reason()
         .map(|reason| format!("voice backend {} is unavailable: {reason}", text_repr::str_repr(backend.id()))),
     };
+    let refusal = refusal.or_else(|| run_id_refusal(&run_id));
     let config = features.config.get();
     request.upgrade.max_message_size(16_777_216).max_frame_size(16_777_216).on_upgrade(move |socket| async move {
       let (writer, reader) = socket.split();
@@ -63,9 +68,16 @@ pub(crate) fn handler(features: Arc<FeatureContext>, request: WebSocketRequest) 
       let settings = config.section::<VoiceSettings>("voice");
       let vocabulary = settings.vocabulary.clone();
       let languages = settings.languages.clone();
-      relay_preview(writer, reader, RelaySettings { config, vocabulary, languages, session_id }, backend).await;
+      relay_preview(writer, reader, RelaySettings { config, vocabulary, languages, session_id, run_id }, backend).await;
     })
   })
+}
+
+/// Why the relay refuses a socket before any recording work: the run id is not the eight lowercase hex
+/// characters the browser makes at the click, so no path may be built from it.
+fn run_id_refusal(run_id: &str) -> Option<String> {
+  (!recordings::valid_run_id(run_id))
+    .then(|| format!("voice relay requires an eight lowercase hex run_id, got {}", text_repr::str_repr(run_id)))
 }
 
 async fn relay_preview(
@@ -84,22 +96,27 @@ async fn relay_preview_with_queue(
   backend: Backend,
   queue: Arc<AudioQueue>,
 ) {
-  let RelaySettings { config, vocabulary, languages, session_id } = settings;
+  let RelaySettings { config, vocabulary, languages, session_id, run_id } = settings;
   let (cancel, _) = watch::channel(false);
   let (events, event_receiver) = mpsc::unbounded_channel::<TranscriptEvent>();
   let backend_id = backend.id().to_string();
+  // Whether this relay already persisted the run's outcome — an archived final or a recorded failure. The
+  // disconnect paths check it, so a recording that completed never gains a "connection lost" failure.
+  let recorded = Arc::new(AtomicBool::new(false));
   let mut streamer = Some(tokio::spawn(stream_preview(StreamContext {
     writer: Arc::clone(&writer),
     queue: Arc::clone(&queue),
     config: Arc::clone(&config),
     session_id: session_id.clone(),
     backend_id: backend_id.clone(),
+    run_id: run_id.clone(),
     backend,
     cancel: cancel.clone(),
     events,
     event_receiver,
     vocabulary,
     languages,
+    recorded: Arc::clone(&recorded),
   })));
 
   let outcome = loop {
@@ -128,6 +145,15 @@ async fn relay_preview_with_queue(
     ReceiveOutcome::Disconnect => {
       cancel.send_replace(true);
       await_streamer(streamer.take()).await;
+      let run = RelayRun {
+        config: &config,
+        session_id: &session_id,
+        run_id: &run_id,
+        backend_id: &backend_id,
+        queue: &queue,
+        recorded: &recorded,
+      };
+      record_relay_failure(&run, "connection lost").await;
     }
     ReceiveOutcome::Error(message) => {
       cancel.send_replace(true);
@@ -137,7 +163,15 @@ async fn relay_preview_with_queue(
       close_socket(&writer).await;
     }
     ReceiveOutcome::Ended => {
-      settle_sealed_socket(&writer, &mut reader, &queue, &cancel, &mut streamer, &session_id, backend_id).await;
+      let run = RelayRun {
+        config: &config,
+        session_id: &session_id,
+        run_id: &run_id,
+        backend_id: &backend_id,
+        queue: &queue,
+        recorded: &recorded,
+      };
+      settle_sealed_socket(&writer, &mut reader, &cancel, &mut streamer, &run).await;
       close_socket(&writer).await;
     }
   }
@@ -155,12 +189,49 @@ struct StreamContext {
   config: Arc<CharlieBotConfig>,
   session_id: String,
   backend_id: String,
+  run_id: String,
   backend: Backend,
   cancel: watch::Sender<bool>,
   events: mpsc::UnboundedSender<TranscriptEvent>,
   event_receiver: mpsc::UnboundedReceiver<TranscriptEvent>,
   vocabulary: Vec<String>,
   languages: Vec<String>,
+  recorded: Arc<AtomicBool>,
+}
+
+/// The run facts the relay's archive and failure recording share.
+struct RelayRun<'a> {
+  config: &'a Arc<CharlieBotConfig>,
+  session_id: &'a str,
+  run_id: &'a str,
+  backend_id: &'a str,
+  queue: &'a AudioQueue,
+  recorded: &'a AtomicBool,
+}
+
+/// Records one relay failure under the run's stem: the reason and the audio received so far, once per relay —
+/// the first writer of the run's outcome wins, so a run whose final already archived records no failure. A write
+/// that fails is an error log, never a skip; the frames the browser receives are unchanged.
+async fn record_relay_failure(run: &RelayRun<'_>, reason: &str) {
+  if run.recorded.swap(true, Ordering::SeqCst) {
+    return;
+  }
+  let pcm_bytes = run.queue.recording_pcm().await;
+  let config = Arc::clone(run.config);
+  let session_id = run.session_id.to_string();
+  let run_id = run.run_id.to_string();
+  let reason = reason.to_string();
+  let written = tokio::task::spawn_blocking(move || {
+    recordings::store_relay_failure(&config, &session_id, &run_id, &pcm_bytes, &reason)
+  })
+  .await;
+  match written {
+    Ok(Ok(())) => {}
+    Ok(Err(error)) => {
+      tracing::error!(target: "charliebot_voice", error = %error, "voice_preview_failure_record_failed")
+    }
+    Err(error) => tracing::error!(target: "charliebot_voice", error = %error, "voice_preview_failure_record_failed"),
+  }
 }
 
 async fn stream_preview(context: StreamContext) {
@@ -170,13 +241,23 @@ async fn stream_preview(context: StreamContext) {
     config,
     session_id,
     backend_id,
+    run_id,
     backend,
     cancel,
     events,
     mut event_receiver,
     vocabulary,
     languages,
+    recorded,
   } = context;
+  let run = RelayRun {
+    config: &config,
+    session_id: &session_id,
+    run_id: &run_id,
+    backend_id: &backend_id,
+    queue: &queue,
+    recorded: &recorded,
+  };
   let mut cancellation = cancel.subscribe();
   let worker_queue = Arc::clone(&queue);
   let worker_cancellation = cancellation.clone();
@@ -196,18 +277,20 @@ async fn stream_preview(context: StreamContext) {
             if !queue.ended().await {
               let reason = "backend produced its final before the recording's end frame";
               tracing::warn!(target: "charliebot_voice", session_id, backend = %backend_id, reason, "voice_preview_failed");
+              record_relay_failure(&run, reason).await;
               send_error_frame(&writer, reason, &session_id, &backend_id).await;
               let _ = event.acknowledged.send(());
               cancel.send_replace(true);
               await_backend_worker(worker.take().expect("backend worker is present"), &session_id, &backend_id).await;
               return;
             }
-            archive_final(&writer, &queue, &config, &session_id, &backend_id, &event).await
+            archive_final(&writer, &run, &event).await
           }
         };
           let _ = event.acknowledged.send(());
         if let Err(error) = sent {
           log_socket_lost(&session_id, &backend_id, &error);
+          record_relay_failure(&run, &error).await;
           cancel.send_replace(true);
           await_backend_worker(worker.take().expect("backend worker is present"), &session_id, &backend_id).await;
           return;
@@ -235,6 +318,7 @@ async fn stream_preview(context: StreamContext) {
       if !*cancellation.borrow() {
         let reason = error.to_string();
         tracing::warn!(target: "charliebot_voice", session_id, backend = %backend_id, reason = %reason, "voice_preview_failed");
+        record_relay_failure(&run, &reason).await;
         send_error_frame(&writer, &reason, &session_id, &backend_id).await;
       }
     }
@@ -242,50 +326,60 @@ async fn stream_preview(context: StreamContext) {
     Err(error) => {
       let reason = error.to_string();
       tracing::warn!(target: "charliebot_voice", session_id, backend = %backend_id, reason = %reason, "voice_preview_failed");
+      record_relay_failure(&run, &reason).await;
       send_error_frame(&writer, &reason, &session_id, &backend_id).await;
     }
   }
 }
 
-async fn archive_final(
-  writer: &SocketWriter,
-  queue: &AudioQueue,
-  config: &Arc<CharlieBotConfig>,
-  session_id: &str,
-  backend_id: &str,
-  event: &TranscriptEvent,
-) -> Result<(), String> {
-  let pcm_bytes = queue.recording_pcm().await;
+async fn archive_final(writer: &SocketWriter, run: &RelayRun<'_>, event: &TranscriptEvent) -> Result<(), String> {
+  let pcm_bytes = run.queue.recording_pcm().await;
   let audio_bytes_size = pcm_bytes.len();
   let text = event.text.clone();
-  let cfg = Arc::clone(config);
-  let session_id = session_id.to_string();
-  let archive_session_id = session_id.clone();
-  let archive =
-    tokio::task::spawn_blocking(move || archive::archive_voice_pair(&cfg, &archive_session_id, &pcm_bytes, &text))
-      .await;
+  let devices = run.queue.devices().await;
+  let cfg = Arc::clone(run.config);
+  let archive_session_id = run.session_id.to_string();
+  let archive_run_id = run.run_id.to_string();
+  let archive_backend_id = run.backend_id.to_string();
+  let archive_devices = devices.clone();
+  let archive = tokio::task::spawn_blocking(move || {
+    recordings::archive_relay_final(
+      &cfg,
+      &archive_session_id,
+      &archive_run_id,
+      &pcm_bytes,
+      &text,
+      &archive_backend_id,
+      archive_devices.as_ref(),
+    )
+  })
+  .await;
   let audio_path = match archive {
-    Ok(Ok(audio_path)) => audio_path,
-    Ok(Err(_error)) => {
-      tracing::error!(target: "charliebot_voice", session_id, backend = %backend_id, "voice_preview_archive_failed");
-      send_error_frame(writer, "recording archive failed", &session_id, backend_id).await;
+    Ok(Ok(audio_path)) => {
+      run.recorded.store(true, Ordering::SeqCst);
+      audio_path
+    }
+    Ok(Err(error)) => {
+      tracing::error!(target: "charliebot_voice", session_id = run.session_id, backend = %run.backend_id, "voice_preview_archive_failed");
+      record_relay_failure(run, &error.to_string()).await;
+      send_error_frame(writer, "recording archive failed", run.session_id, run.backend_id).await;
       return Ok(());
     }
-    Err(_error) => {
-      tracing::error!(target: "charliebot_voice", session_id, backend = %backend_id, "voice_preview_archive_failed");
-      send_error_frame(writer, "recording archive failed", &session_id, backend_id).await;
+    Err(error) => {
+      tracing::error!(target: "charliebot_voice", session_id = run.session_id, backend = %run.backend_id, "voice_preview_archive_failed");
+      record_relay_failure(run, &error.to_string()).await;
+      send_error_frame(writer, "recording archive failed", run.session_id, run.backend_id).await;
       return Ok(());
     }
   };
-  let end_to_final_s = queue.seconds_since_end().await;
-  let devices = queue.devices().await;
+  let end_to_final_s = run.queue.seconds_since_end().await;
   log_voice_transcribed(&Transcribed {
-    session_id: &session_id,
+    session_id: run.session_id,
     audio_path: &audio_path,
     audio_bytes_size,
     text: &event.text,
-    produced_by: backend_id,
-    selected_backend: Some(backend_id),
+    produced_by: run.backend_id,
+    selected_backend: Some(run.backend_id),
     devices: devices.as_ref(),
     end_to_final_s: Some(end_to_final_s),
   });
@@ -295,11 +389,9 @@ async fn archive_final(
 async fn settle_sealed_socket(
   writer: &SocketWriter,
   reader: &mut SplitStream<WebSocket>,
-  queue: &AudioQueue,
   cancel: &watch::Sender<bool>,
   streamer: &mut Option<JoinHandle<()>>,
-  session_id: &str,
-  backend_id: String,
+  run: &RelayRun<'_>,
 ) {
   loop {
     let Some(streamer_task) = streamer.as_mut() else {
@@ -319,14 +411,15 @@ async fn settle_sealed_socket(
           Some(Ok(Message::Close(_))) | None | Some(Err(_)) => {
             cancel.send_replace(true);
             await_streamer(streamer.take()).await;
-            log_abandoned(queue, session_id, &backend_id).await;
+            log_abandoned(run.queue, run.session_id, run.backend_id).await;
+            record_relay_failure(run, "connection lost").await;
             return;
           }
           Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
           Some(Ok(Message::Binary(_) | Message::Text(_))) => {
             cancel.send_replace(true);
             await_streamer(streamer.take()).await;
-            send_error_frame(writer, "unexpected frame after the recording's end", session_id, &backend_id).await;
+            send_error_frame(writer, "unexpected frame after the recording's end", run.session_id, run.backend_id).await;
             drain_socket(reader).await;
             return;
           }
@@ -435,21 +528,6 @@ fn preview_end_devices(text: &str) -> Result<Option<Value>, String> {
   Ok(Some(Value::Object(devices.clone())))
 }
 
-fn query_value(query: &str, target: &str) -> Option<String> {
-  query
-    .split('&')
-    .filter_map(|pair| {
-      let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-      let key = key.replace('+', " ");
-      let key = percent_encoding::percent_decode_str(&key).decode_utf8_lossy();
-      (key == target).then(|| {
-        let value = value.replace('+', " ");
-        percent_encoding::percent_decode_str(&value).decode_utf8_lossy().into_owned()
-      })
-    })
-    .next_back()
-}
-
 fn log_socket_lost(session_id: &str, backend_id: &str, reason: &str) {
   tracing::warn!(target: "charliebot_voice", session_id, backend = %backend_id, reason, "voice_preview_socket_lost");
 }
@@ -504,6 +582,7 @@ mod tests {
           vocabulary: Vec::new(),
           languages: Vec::new(),
           session_id: "synthetic-session".to_string(),
+          run_id: "5e1f2a3b".to_string(),
         },
         Backend::gemini_for_test("synthetic-key", &state.endpoint_url),
         AudioQueue::new_with_recording_budget_for_test(state.max_recording_samples * 2),
@@ -632,6 +711,13 @@ mod tests {
   }
 
   #[test]
+  fn a_socket_whose_run_id_is_not_eight_lowercase_hex_is_refused_before_any_path_is_built() {
+    assert_eq!(run_id_refusal("5e1f2a3b"), None);
+    assert!(run_id_refusal("").is_some(), "a missing run_id is a refusal");
+    assert!(run_id_refusal("5E1F2A3B").is_some(), "uppercase is not the browser's form");
+  }
+
+  #[test]
   fn control_frames_keep_error_text_and_device_order() {
     assert_eq!(preview_end_devices("{bad"), Err("malformed preview control frame '{bad'".to_string()));
     assert_eq!(
@@ -647,7 +733,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn relay_archives_audio_and_transcript_before_the_final_frame() {
+  async fn relay_archives_the_run_before_the_final_frame() {
     let server = start_relay_test(FakeMode::FinalAfterEnd, MAX_RECORDING_SAMPLES).await;
     let mut browser = browser_socket(server.address).await;
     browser.send(ClientMessage::Binary(vec![1, 2, 3, 4].into())).await.expect("send one audio frame");
@@ -668,7 +754,18 @@ mod tests {
       .collect::<Vec<_>>();
     let wav = files.iter().find(|path| path.extension().is_some_and(|extension| extension == "wav"));
     let transcript = files.iter().find(|path| path.extension().is_some_and(|extension| extension == "txt"));
-    assert_eq!(files.len(), 2, "the archive pair is complete before final delivery");
+    let parts = files.iter().find(|path| path.extension().is_some_and(|extension| extension == "json"));
+    assert_eq!(files.len(), 3, "the run's wav, txt and json are complete before final delivery");
+    let parts: Value = serde_json::from_str(
+      &std::fs::read_to_string(parts.expect("archive contains the run json")).expect("read parts"),
+    )
+    .expect("the run json parses");
+    assert_eq!(parts["run_id"], "5e1f2a3b");
+    assert_eq!(parts["startup"], Value::Null);
+    assert_eq!(parts["failure"], Value::Null);
+    assert_eq!(parts["audio"]["path"], "relay");
+    assert_eq!(parts["audio"]["backend"], "gemini");
+    assert_eq!(parts["audio"]["devices"]["input_device"], "Synthetic mic");
     let wav_bytes = std::fs::read(wav.expect("archive contains WAV")).expect("read archived WAV");
     assert_eq!(&wav_bytes[..4], b"RIFF");
     assert_eq!(&wav_bytes[4..8], &40_u32.to_le_bytes());
@@ -720,7 +817,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn backend_final_before_end_is_reported_and_never_archived() {
+  async fn backend_final_before_end_records_the_failure_and_the_partial_audio() {
     let server = start_relay_test(FakeMode::FinalBeforeEnd, MAX_RECORDING_SAMPLES).await;
     let mut browser = browser_socket(server.address).await;
     browser.send(ClientMessage::Binary(vec![1, 2].into())).await.expect("send audio");
@@ -733,19 +830,41 @@ mod tests {
       .await
       .expect("finish the browser upload after the early final");
     let _ = tokio::time::timeout(Duration::from_secs(3), browser.next()).await;
-    assert!(!voice_dir(&server.config).exists(), "an early final never archives incomplete audio");
+    let files: Vec<std::path::PathBuf> = std::fs::read_dir(voice_dir(&server.config))
+      .expect("read the failed run's voice directory")
+      .map(|entry| entry.expect("read archive entry").path())
+      .collect();
+    assert_eq!(files.len(), 2, "the failure archives the partial wav and the run json: {files:?}");
+    let parts = files.iter().find(|path| path.extension().is_some_and(|extension| extension == "json"));
+    let parts: Value =
+      serde_json::from_str(&std::fs::read_to_string(parts.expect("the run json exists")).expect("read parts"))
+        .expect("the run json parses");
+    assert_eq!(
+      parts["failure"],
+      json!({"stage": "relay", "error": "backend produced its final before the recording's end frame"})
+    );
+    assert_eq!(parts["audio"], Value::Null);
     stop_relay_test(server).await;
   }
 
   #[tokio::test]
-  async fn disconnect_after_end_abandons_without_archiving() {
+  async fn disconnect_after_end_records_the_failure_and_the_partial_audio() {
     let server = start_relay_test(FakeMode::NeverFinal, MAX_RECORDING_SAMPLES).await;
     let mut browser = browser_socket(server.address).await;
     browser.send(ClientMessage::Binary(vec![1, 2].into())).await.expect("send audio");
     browser.send(ClientMessage::Text(r#"{"type":"end"}"#.into())).await.expect("seal the recording");
     browser.close(None).await.expect("disconnect before backend final");
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(!voice_dir(&server.config).exists(), "an abandoned recording has no archive");
+    let files: Vec<std::path::PathBuf> = std::fs::read_dir(voice_dir(&server.config))
+      .expect("read the failed run's voice directory")
+      .map(|entry| entry.expect("read archive entry").path())
+      .collect();
+    assert_eq!(files.len(), 2, "the disconnect archives the partial wav and the run json: {files:?}");
+    let parts = files.iter().find(|path| path.extension().is_some_and(|extension| extension == "json"));
+    let parts: Value =
+      serde_json::from_str(&std::fs::read_to_string(parts.expect("the run json exists")).expect("read parts"))
+        .expect("the run json parses");
+    assert_eq!(parts["failure"], json!({"stage": "relay", "error": "connection lost"}));
     stop_relay_test(server).await;
   }
 

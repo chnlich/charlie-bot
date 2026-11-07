@@ -834,7 +834,7 @@ test('a live backend opens the relay at recording start and replays pre-open chu
   const {context, state} = buildHarness();
   const {worklet, socket} = await armLive(state);
 
-  assert.equal(socket.url, 'ws://test-host/ws/voice/session-a?backend=gemini&token=test-token');
+  assert.match(socket.url, /^ws:\/\/test-host\/ws\/voice\/session-a\?backend=gemini&run_id=[0-9a-f]{8}&token=test-token$/);
   assert.equal(socket.readyState, 0); // still connecting while arming
   worklet.emitPcmCount(RATE); // captured before the socket opens
   assert.deepEqual(socket.sentFrames, []); // nothing sent yet: it rides the open replay

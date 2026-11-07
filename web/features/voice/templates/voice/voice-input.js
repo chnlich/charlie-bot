@@ -86,6 +86,10 @@ const VOICE_MENU_CHECK_CLASS = 'w-4 shrink-0 text-green-400';
 // instead; it opens the same menu the caret does.
 const VOICE_OVERFLOW_MENU_ID = 'overflow-menu';
 const VOICE_OVERFLOW_ENTRY_ID = 'voice-backend-menu-entry';
+// The page that lists the recent voice recordings across every session; the
+// backend menu and the phone ⋯ menu both carry the entry that opens it.
+const VOICE_RECORDINGS_URL = '/voice-recordings';
+const VOICE_RECORDINGS_ENTRY_ID = 'voice-recordings-menu-entry';
 
 const VOICE_WORKLET_SOURCE = `
 class VoiceCaptureProcessor extends AudioWorkletProcessor {
@@ -215,6 +219,12 @@ function ensureVoiceBackendMenu() {
     return {entry, row, check};
   });
   caret.parentElement.appendChild(menu);
+  const recordings = document.createElement('button');
+  recordings.type = 'button';
+  recordings.className = VOICE_MENU_ITEM_CLASS + VOICE_MENU_ITEM_ENABLED_CLASS;
+  recordings.textContent = 'Recent recordings';
+  recordings.onclick = openVoiceRecordings;
+  menu.appendChild(recordings);
   voiceMenu = menu;
   renderVoiceBackendMenu();
   return menu;
@@ -248,9 +258,10 @@ function toggleVoiceBackendMenu() {
   else closeVoiceBackendMenu();
 }
 
-// The composer's ⋯ menu entry, created by this package so the core template
-// names nothing it defines. Opening from the entry closes the ⋯ menu first;
-// both entries drive the one backend menu.
+// The composer's ⋯ menu entries, created by this package so the core template
+// names nothing it defines. Opening the backend entry from the ⋯ menu closes
+// the ⋯ menu first; both entries drive the one backend menu. The recordings
+// entry opens the Recent recordings page directly.
 function ensureVoiceBackendEntry() {
   const overflow = document.getElementById(VOICE_OVERFLOW_MENU_ID);
   if (!overflow || document.getElementById(VOICE_OVERFLOW_ENTRY_ID)) return;
@@ -260,6 +271,18 @@ function ensureVoiceBackendEntry() {
   entry.textContent = 'Voice backend';
   entry.onclick = openVoiceBackendMenuFromOverflow;
   overflow.appendChild(entry);
+  const recordings = document.createElement('button');
+  recordings.type = 'button';
+  recordings.id = VOICE_RECORDINGS_ENTRY_ID;
+  recordings.textContent = 'Recent recordings';
+  recordings.onclick = openVoiceRecordings;
+  overflow.appendChild(recordings);
+}
+
+// Both menu entries land here: the page replaces this one, and a run caught
+// mid-recording goes through the generic page-leave guard.
+function openVoiceRecordings() {
+  window.location.href = VOICE_RECORDINGS_URL;
 }
 
 function openVoiceBackendMenuFromOverflow() {
@@ -332,6 +355,10 @@ async function toggleVoice() {
 function newVoiceRun(sessionId, backend) {
   return {
     sessionId,
+    // The run id the browser makes at the click. The startup report, the relay
+    // socket and the upload all carry it, so the server keeps every file of
+    // this recording under one stem (rust/crates/features/voice/src/recordings.rs).
+    runId: newVoiceRunId(),
     stream: null,
     audioContext: null,
     sourceNode: null,
@@ -359,6 +386,14 @@ function newVoiceRun(sessionId, backend) {
     relayWaitTimer: null,
     relayFailure: null,
   };
+}
+
+// The run id of one recording: eight lowercase hex characters, the suffix the
+// server keeps every file of the run under. One draw of Math.random is enough —
+// the id is not a secret and only has to stay unique among the recordings of
+// one session.
+function newVoiceRunId() {
+  return Math.floor(Math.random() * 2 ** 32).toString(16).padStart(8, '0');
 }
 
 async function startRecording() {
@@ -626,6 +661,7 @@ function voiceStartupBody(run) {
   const context = run.audioContext;
   const track = run.stream ? run.stream.getAudioTracks()[0] : null;
   return {
+    run_id: run.runId,
     backend: run.backend.id,
     reached: startup.reached,
     end: startup.end,
@@ -836,6 +872,7 @@ async function startUpload(run) {
   }, VOICE_UPLOAD_TIMEOUT_MS);
   const wav = assembleVoiceWav(run.pcmChunks, Math.min(run.totalSamples, VOICE_MAX_SAMPLES));
   postVoiceRecording(`/api/voice/${encodeURIComponent(run.sessionId)}`, wav, {
+    runId: run.runId,
     backendId: run.backend.id,
     devices,
     onXhr: (xhr) => { run.xhr = xhr; },
@@ -973,13 +1010,14 @@ function sendVoiceXhr(path, body, {onSent, onXhr}) {
   });
 }
 
-// The upload's transport: a multipart form with the audio plus the
-// backend the browser selected and the recording's device object as JSON. The
-// server persists the recording, transcribes it, and returns the text.
-// A null backendId or devices leaves that form field out.
-function postVoiceRecording(path, wavBuffer, {backendId, devices, ...opts}) {
+// The upload's transport: a multipart form with the audio plus the run id,
+// the backend the browser selected and the recording's device object as JSON.
+// The server keeps the recording under the run id's stem, transcribes it, and
+// returns the text. A null backendId or devices leaves that form field out.
+function postVoiceRecording(path, wavBuffer, {runId, backendId, devices, ...opts}) {
   const form = new FormData();
   form.append('audio', new Blob([wavBuffer]), 'recording.wav');
+  form.append('run_id', runId);
   if (backendId !== null) form.append('backend', backendId);
   if (devices !== null) form.append('devices', JSON.stringify(devices));
   return sendVoiceXhr(path, form, opts);
@@ -1003,7 +1041,8 @@ function clearVoiceUploadTimer(run) {
 
 function openVoiceRelay(run) {
   const socket = new WebSocket(wsUrlWithToken(
-      `/ws/voice/${encodeURIComponent(run.sessionId)}?backend=${encodeURIComponent(run.backend.id)}`));
+      `/ws/voice/${encodeURIComponent(run.sessionId)}?backend=${encodeURIComponent(run.backend.id)}` +
+      `&run_id=${encodeURIComponent(run.runId)}`));
   run.relaySocket = socket;
   socket.onopen = () => {
     if (activeVoiceRun !== run) return;

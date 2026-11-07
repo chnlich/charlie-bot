@@ -1,10 +1,13 @@
-//! The voice upload route: `POST /api/voice/{session_id}` and the startup report route
-//! `POST /api/voice/{session_id}/startup`.
+//! The voice HTTP routes: the upload `POST /api/voice/{session_id}`, the startup report
+//! `POST /api/voice/{session_id}/startup`, the recent recordings list `GET /api/voice/recordings`, and the
+//! Recent recordings page `GET /voice-recordings`.
 //!
 //! The upload persists the recording before it selects an online backend. Selection failures answer 400, and
-//! transcription failures answer 500; both leave the WAV on disk. The preview relay lives in relay.rs and shares the
-//! `voice_transcribed` line written here. The startup report validates one recording run's startup record and logs it
-//! as one `voice_startup` line; it keeps no state.
+//! transcription failures answer 500; both leave the WAV on disk, and a transcription failure is recorded in the
+//! run's `.json`. The preview relay lives in relay.rs and shares the `voice_transcribed` line written here. The
+//! startup report validates one recording run's startup record, logs it as one `voice_startup` line, and persists
+//! it as the run's `startup` part. Every route carries the run's id, validated as eight lowercase hex characters
+//! before it reaches a path.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -12,24 +15,26 @@ use std::sync::Arc;
 use axum::Router;
 use axum::extract::{FromRequestParts, Path as AxumPath, Request, State};
 use axum::http::StatusCode;
+use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use charliebot_compat::form_body::{self, Field, FormModel};
 use charliebot_compat::request_body::{
   self, BodyModel, Field as BodyField, FieldType, flag_field, integer_field, optional_text_field_ref, text_field_ref,
 };
 use charliebot_compat::responses;
-use charliebot_compat::routing::post_only;
+use charliebot_compat::routing::{get_only, post_only};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::credentials::Credentials;
 use charliebot_core::json_loads;
 use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
+use charliebot_registry::templating::Templating;
 use serde_json::{Value, json};
 
-use crate::archive;
 use crate::audio::{MAX_RECORDING_SAMPLES, SAMPLE_RATE};
 use crate::config::VoiceSettings;
 use crate::recording::{self, RecordingBackendFactory};
+use crate::recordings;
 use crate::wav;
 
 /// The recording's device facts. The browser sends them as the upload form's `devices` field and as the relay's
@@ -38,19 +43,27 @@ pub(crate) const DEVICE_FIELDS: &[&str] =
   &["input_device", "capture_settings", "output_device", "communications_output_device", "device_error"];
 
 const UPLOAD_FIELDS: &[Field] =
-  &[Field::file("audio"), Field::optional_form("backend"), Field::optional_form("devices")];
+  &[Field::file("audio"), Field::form("run_id"), Field::optional_form("backend"), Field::optional_form("devices")];
 const UPLOAD_FORM: FormModel = FormModel::new(UPLOAD_FIELDS);
 
-/// The routes of `/api/voice`, with the feature context as their state.
+/// The Recent recordings page's template, in the voice package's template directory.
+const RECORDINGS_PAGE_TEMPLATE: &str = "voice/recordings.html";
+
+/// The routes of the voice feature, with the feature context as their state.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route("/api/voice/{session_id}", post_only(upload_voice_recording))
     .route("/api/voice/{session_id}/startup", post_only(post_voice_startup))
+    .route("/api/voice/recordings", get_only(list_voice_recordings))
+    .route("/voice-recordings", get_only(recordings_page))
     .with_state(Arc::clone(features))
 }
 
 /// Whether a request path falls under the voice routes, for the trailing-slash redirect the server answers.
 pub(crate) fn matches(path: &str) -> bool {
+  if path == "/voice-recordings" {
+    return true;
+  }
   let Some(rest) = path.strip_prefix("/api/voice/") else {
     return false;
   };
@@ -60,7 +73,7 @@ pub(crate) fn matches(path: &str) -> bool {
   }
   match segments.next() {
     None => true,
-    Some("startup") => segments.next().is_none(),
+    Some("startup") | Some("recordings") => segments.next().is_none(),
     Some(_) => false,
   }
 }
@@ -82,14 +95,15 @@ impl VoiceRequestError {
   }
 }
 
-/// The form fields of one upload.
+/// The form fields of one upload. `run_id` is the recording run's id, which the browser makes at the click.
 pub(crate) struct UploadForm {
   pub(crate) audio: Vec<u8>,
+  pub(crate) run_id: String,
   pub(crate) backend: Option<String>,
   pub(crate) devices: Option<String>,
 }
 
-/// The recording upload route: multipart fields carry the WAV, selected backend and device object, at
+/// The recording upload route: multipart fields carry the WAV, the run id, selected backend and device object, at
 /// `POST /api/voice/{session_id}`.
 async fn upload_voice_recording(State(features): State<Arc<FeatureContext>>, request: Request) -> Response {
   let (mut parts, stream) = request.into_parts();
@@ -109,8 +123,10 @@ async fn upload_voice_recording(State(features): State<Arc<FeatureContext>>, req
     Ok(audio) => audio,
     Err(error) => return responses::internal_error("OSError", error.to_string()),
   };
+  let run_id = form.form("run_id").expect("the required run_id field validated").to_string();
   let upload = UploadForm {
     audio,
+    run_id,
     backend: form.form("backend").map(str::to_string),
     devices: form.form("devices").map(str::to_string),
   };
@@ -155,8 +171,9 @@ const STARTUP_DEVICE_FIELDS: &[BodyField] = &[
 const STARTUP_DEVICES: BodyModel = BodyModel::required(STARTUP_DEVICE_FIELDS);
 
 /// The startup body's fields in their declaration order, which is also the log line's field order; an unknown field
-/// is refused.
+/// is refused. `run_id` identifies the recording run and reaches no log line.
 const STARTUP_FIELDS: &[BodyField] = &[
+  BodyField::required("run_id", FieldType::String),
   BodyField::required("backend", FieldType::String),
   BodyField::required("reached", FieldType::Literal(STARTUP_STEPS)),
   BodyField::required("end", FieldType::Literal(STARTUP_ENDS)),
@@ -182,9 +199,14 @@ const STARTUP_FIELDS: &[BodyField] = &[
 
 const STARTUP_BODY: BodyModel = BodyModel::required(STARTUP_FIELDS).forbid_extra();
 
-/// The startup report route: validate one startup record, log one `voice_startup` line, answer `{"ok": true}`.
-/// A validation failure answers 422 and logs nothing. The route answers `POST /api/voice/{session_id}/startup`.
-async fn post_voice_startup(AxumPath(session_id): AxumPath<String>, request: Request) -> Response {
+/// The startup report route: validate one startup record, persist it as the run's `startup` part, log one
+/// `voice_startup` line, answer `{"ok": true}`. A validation failure answers 422 and logs nothing. The route
+/// answers `POST /api/voice/{session_id}/startup`.
+async fn post_voice_startup(
+  State(features): State<Arc<FeatureContext>>,
+  AxumPath(session_id): AxumPath<String>,
+  request: Request,
+) -> Response {
   let (parts, stream) = request.into_parts();
   let body = match request_body::read(&parts.headers, stream).await {
     Ok(body) => body,
@@ -195,6 +217,28 @@ async fn post_voice_startup(AxumPath(session_id): AxumPath<String>, request: Req
     Ok(_) => unreachable!("a required model validates a body to its fields"),
     Err(response) => return *response,
   };
+  let run_id = text_field_ref(&values, "run_id").to_string();
+  if !recordings::valid_run_id(&run_id) {
+    return error_response(VoiceRequestError::bad_request(format!(
+      "run_id must be eight lowercase hex characters, got {}",
+      text_repr::str_repr(&run_id)
+    )));
+  }
+  let cfg = match features.config.get() {
+    Ok(cfg) => cfg,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  };
+  let mut startup = values.clone();
+  startup.shift_remove("run_id");
+  let startup_session_id = session_id.clone();
+  let persisted = tokio::task::spawn_blocking(move || {
+    recordings::write_startup_part(&cfg, &startup_session_id, &run_id, Value::Object(startup))
+  })
+  .await
+  .expect("the startup persistence does not panic");
+  if let Err(error) = persisted {
+    return responses::internal_error("OSError", error.to_string());
+  }
   log_voice_startup(&session_id, &VoiceStartup::from_values(&values));
   responses::fast_json(StatusCode::OK, &json!({"ok": true}))
 }
@@ -309,7 +353,8 @@ impl<T: std::fmt::Display> std::fmt::Display for Nullable<T> {
   }
 }
 
-/// The upload of one validated recording: persisted before backend selection, its final transcript archived after.
+/// The upload of one validated recording: persisted under its run's stem before backend selection, its final
+/// transcript archived after, a transcription failure recorded in the run's `.json`.
 async fn upload_recording(
   cfg: Arc<CharlieBotConfig>,
   credentials: Arc<Credentials>,
@@ -317,6 +362,12 @@ async fn upload_recording(
   upload: UploadForm,
   factory: &dyn RecordingBackendFactory,
 ) -> Response {
+  if !recordings::valid_run_id(&upload.run_id) {
+    return error_response(VoiceRequestError::bad_request(format!(
+      "run_id must be eight lowercase hex characters, got {}",
+      text_repr::str_repr(&upload.run_id)
+    )));
+  }
   let devices = match devices_form_field(upload.devices.as_deref()) {
     Ok(devices) => devices,
     Err(error) => return error_response(error),
@@ -325,18 +376,31 @@ async fn upload_recording(
     Ok(pcm) => pcm,
     Err(error) => return error_response(error),
   };
+  let voice = cfg.section::<VoiceSettings>("voice");
+  // The backend the upload transcribes with: the browser's choice, or the configured default.
+  let backend = upload.backend.clone().unwrap_or_else(|| voice.default_backend.clone());
   let persist_cfg = Arc::clone(&cfg);
   let persist_session_id = session_id.clone();
+  let persist_run_id = upload.run_id.clone();
   let persist_pcm = pcm.clone();
-  let persisted =
-    tokio::task::spawn_blocking(move || archive::persist_recording(&persist_cfg, &persist_session_id, &persist_pcm))
-      .await
-      .expect("recording persistence does not panic");
+  let persist_backend = backend.clone();
+  let persist_devices = devices.clone();
+  let persisted = tokio::task::spawn_blocking(move || {
+    recordings::store_upload_audio(
+      &persist_cfg,
+      &persist_session_id,
+      &persist_run_id,
+      &persist_pcm,
+      Some(&persist_backend),
+      persist_devices.as_ref(),
+    )
+  })
+  .await
+  .expect("recording persistence does not panic");
   let audio_path = match persisted {
     Ok(path) => path,
     Err(error) => return responses::internal_error("OSError", error.to_string()),
   };
-  let voice = cfg.section::<VoiceSettings>("voice");
   let transcript = match recording::transcribe_recording(
     factory,
     &pcm,
@@ -354,14 +418,30 @@ async fn upload_recording(
     }
     Err(recording::RecordingError::TranscriptionFailed(message)) => {
       tracing::error!(session_id, selected_backend = ?upload.backend, error = %message, "voice_transcribe_failed");
+      let failure_cfg = Arc::clone(&cfg);
+      let failure_session_id = session_id.clone();
+      let failure_run_id = upload.run_id.clone();
+      let failure_message = message.clone();
+      let recorded = tokio::task::spawn_blocking(move || {
+        recordings::write_upload_failure(&failure_cfg, &failure_session_id, &failure_run_id, &failure_message)
+      })
+      .await
+      .expect("the failure recording does not panic");
+      if let Err(error) = recorded {
+        return responses::internal_error("OSError", error.to_string());
+      }
       return error_response(VoiceRequestError::new(StatusCode::INTERNAL_SERVER_ERROR, message));
     }
   };
-  let transcript_path = audio_path.clone();
+  let transcript_cfg = Arc::clone(&cfg);
+  let transcript_session_id = session_id.clone();
+  let transcript_run_id = upload.run_id.clone();
   let transcript_text = transcript.text.clone();
-  let written = tokio::task::spawn_blocking(move || archive::write_transcript(&transcript_path, &transcript_text))
-    .await
-    .expect("transcript persistence does not panic");
+  let written = tokio::task::spawn_blocking(move || {
+    recordings::write_upload_transcript(&transcript_cfg, &transcript_session_id, &transcript_run_id, &transcript_text)
+  })
+  .await
+  .expect("transcript persistence does not panic");
   if let Err(error) = written {
     return responses::internal_error("OSError", error.to_string());
   }
@@ -422,6 +502,51 @@ fn error_response(error: VoiceRequestError) -> Response {
   responses::fast_json(error.status, &json!({ "error": error.message }))
 }
 
+// --- Recent recordings -------------------------------------------------------
+// The list route answers the JSON the API consumers read; the page route renders the same rows as HTML. Both
+// scan the sessions' voice directories on the blocking pool.
+
+/// `GET /api/voice/recordings?limit=N`: the most recent recordings across every session directory, newest first.
+async fn list_voice_recordings(State(features): State<Arc<FeatureContext>>, request: Request) -> Response {
+  let (parts, _) = request.into_parts();
+  let limit = match recordings::parse_list_limit(parts.uri.query().unwrap_or("")) {
+    Ok(limit) => limit,
+    Err(message) => return responses::fast_json(StatusCode::BAD_REQUEST, &json!({ "error": message })),
+  };
+  let cfg = match features.config.get() {
+    Ok(cfg) => cfg,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  };
+  match tokio::task::spawn_blocking(move || recordings::list_recordings(&cfg, limit)).await {
+    Ok(Ok(rows)) => responses::fast_json(StatusCode::OK, &json!({ "recordings": rows })),
+    Ok(Err(error)) => responses::internal_error("OSError", error.to_string()),
+    Err(error) => responses::internal_error("RuntimeError", error.to_string()),
+  }
+}
+
+/// `GET /voice-recordings`: the Recent recordings page, the same rows as the list route renders as HTML.
+async fn recordings_page(State(features): State<Arc<FeatureContext>>, parts: Parts) -> Response {
+  let cfg = match features.config.get() {
+    Ok(cfg) => cfg,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  };
+  let rendered = tokio::task::spawn_blocking(move || {
+    let rows = recordings::list_recordings(&cfg, recordings::DEFAULT_LIST_LIMIT)
+      .map_err(|error| ("OSError".to_string(), error.to_string()))?;
+    let templating =
+      features.startup.require::<Templating>().map_err(|error| ("RuntimeError".to_string(), error.to_string()))?;
+    templating
+      .render_page(&features, RECORDINGS_PAGE_TEMPLATE, &json!({ "recordings": rows }), &parts)
+      .map_err(|error| (error.kind().to_string(), error.to_string()))
+  })
+  .await
+  .expect("rendering the recordings page does not panic");
+  match rendered {
+    Ok(response) => response,
+    Err((kind, detail)) => responses::internal_error(&kind, detail),
+  }
+}
+
 /// The fields of one `voice_transcribed` line. Both archive paths log it; the relay adds `end_to_final_s`.
 pub(crate) struct Transcribed<'a> {
   pub(crate) session_id: &'a str,
@@ -480,13 +605,18 @@ mod tests {
 
   use axum::body::to_bytes;
   use charliebot_core::credentials::Credentials;
+  use charliebot_core::hot_reload::HotReload;
   use charliebot_core::test_support::EventSink;
+  use charliebot_registry::context::StartupState;
+  use charliebot_registry::store_hooks;
+  use charliebot_store::Store;
   use futures_util::future::BoxFuture;
 
   use super::*;
 
   const SESSION_ID: &str = "session-a";
   const BACKEND_ID: &str = "gemini";
+  const RUN_ID: &str = "0a1b2c3d";
   const FINAL_TEXT: &str = "synthetic remote words";
   const DEVICES_JSON: &str = r#"{"input_device": "Test Microphone", "capture_settings": {"echoCancellation": true, "noiseSuppression": false, "autoGainControl": true, "sampleRate": 16000}, "output_device": "Test Speakers", "communications_output_device": "Test Comms Headset", "device_error": null}"#;
 
@@ -587,12 +717,47 @@ mod tests {
   fn wav_body(samples: usize) -> Vec<u8> {
     let directory = tempfile::tempdir().expect("make a scratch directory");
     let path = directory.path().join("recording.wav");
-    archive::write_wav(&path, &vec![0_u8; samples * 2]).expect("write a synthetic WAV");
+    crate::archive::write_wav(&path, &vec![0_u8; samples * 2]).expect("write a synthetic WAV");
     std::fs::read(path).expect("read the synthetic WAV")
   }
 
   fn upload(backend: Option<&str>, devices: Option<&str>, samples: usize) -> UploadForm {
-    UploadForm { audio: wav_body(samples), backend: backend.map(str::to_string), devices: devices.map(str::to_string) }
+    UploadForm {
+      audio: wav_body(samples),
+      run_id: RUN_ID.to_string(),
+      backend: backend.map(str::to_string),
+      devices: devices.map(str::to_string),
+    }
+  }
+
+  /// The feature context over an isolated home, the state the startup route and the list route read.
+  fn test_features() -> (tempfile::TempDir, Arc<FeatureContext>) {
+    let home = tempfile::tempdir().expect("a temporary home is available");
+    std::fs::write(home.path().join("config.yaml"), "").expect("write the synthetic config");
+    let mut registry = charliebot_registry::Registry::new();
+    registry.register_package("features.voice", crate::register).expect("register the voice config section");
+    let registry = Arc::new(registry);
+    let config_home = home.path().to_path_buf();
+    let config_registry = Arc::clone(&registry);
+    let config = Arc::new(HotReload::new(
+      home.path().join("config.yaml"),
+      "voice_test_config_reload_failed",
+      Box::new(move || config_registry.load_config(&config_home)),
+    ));
+    let credentials_home = home.path().to_path_buf();
+    let credentials = Arc::new(HotReload::new(
+      home.path().join(charliebot_core::config::CREDENTIALS_FILENAME),
+      "voice_test_credentials_reload_failed",
+      Box::new(move || charliebot_core::credentials::load_credentials(&credentials_home)),
+    ));
+    let cfg = registry.load_config(home.path()).expect("load the synthetic config");
+    let store = Arc::new(
+      Store::new(cfg, registry.metadata_slots(), store_hooks::store_hooks(Arc::clone(&registry)))
+        .expect("the store opens over the temporary home"),
+    );
+    let features =
+      Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(StartupState::default()) });
+    (home, features)
   }
 
   async fn post(
@@ -796,16 +961,20 @@ mod tests {
   }
 
   #[test]
-  fn test_the_matcher_recognizes_the_upload_and_startup_paths_only() {
+  fn test_the_matcher_recognizes_the_voice_paths_only() {
     assert!(matches("/api/voice/session-a"));
     assert!(matches("/api/voice/session-a/startup"));
+    assert!(matches("/api/voice/recordings"));
+    assert!(matches("/voice-recordings"));
     assert!(!matches("/api/voice/"));
     assert!(!matches("/api/voice/session-a/startup/extra"));
     assert!(!matches("/api/voice/session-a/confirm"));
+    assert!(!matches("/api/voice/recordings/extra"));
   }
 
   fn startup_body() -> Value {
     json!({
+      "run_id": RUN_ID,
       "backend": "gemini",
       "reached": "ready",
       "end": "stop",
@@ -844,9 +1013,10 @@ mod tests {
       .expect("build a synthetic startup request")
   }
 
-  async fn post_startup(body: Value) -> (Response, Vec<Event>) {
+  async fn post_startup(features: &Arc<FeatureContext>, body: Value) -> (Response, Vec<Event>) {
     let request = startup_request(&body);
-    capture_events_async(post_voice_startup(AxumPath(SESSION_ID.to_string()), request)).await
+    capture_events_async(post_voice_startup(State(Arc::clone(features)), AxumPath(SESSION_ID.to_string()), request))
+      .await
   }
 
   fn startup_lines(logs: &[Event]) -> Vec<&Event> {
@@ -855,7 +1025,8 @@ mod tests {
 
   #[tokio::test]
   async fn test_a_startup_report_answers_ok_and_logs_one_line_in_table_order() {
-    let (response, logs) = post_startup(startup_body()).await;
+    let (_home, features) = test_features();
+    let (response, logs) = post_startup(&features, startup_body()).await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(body_text(response).await, r#"{"ok":true}"#);
@@ -923,6 +1094,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_an_absent_optional_and_devices_log_as_null() {
+    let (_home, features) = test_features();
     let mut body = startup_body();
     body["reached"] = json!("mic_opening");
     body["end"] = json!("left");
@@ -938,7 +1110,7 @@ mod tests {
     body["track_muted"] = Value::Null;
     body["devices"] = Value::Null;
 
-    let (response, logs) = post_startup(body).await;
+    let (response, logs) = post_startup(&features, body).await;
 
     assert_eq!(response.status(), StatusCode::OK);
     let lines = startup_lines(&logs);
@@ -957,10 +1129,11 @@ mod tests {
 
   #[tokio::test]
   async fn test_an_extra_field_is_a_422_that_logs_nothing() {
+    let (_home, features) = test_features();
     let mut body = startup_body();
     body["stale"] = json!(true);
 
-    let (response, logs) = post_startup(body).await;
+    let (response, logs) = post_startup(&features, body).await;
 
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert!(startup_lines(&logs).is_empty());
@@ -968,10 +1141,11 @@ mod tests {
 
   #[tokio::test]
   async fn test_a_wrong_field_type_is_a_422_that_logs_nothing() {
+    let (_home, features) = test_features();
     let mut body = startup_body();
     body["backend"] = json!(5);
 
-    let (response, logs) = post_startup(body).await;
+    let (response, logs) = post_startup(&features, body).await;
 
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert!(body_text(response).await.contains("\"loc\":[\"body\",\"backend\"]"));
@@ -980,12 +1154,13 @@ mod tests {
 
   #[tokio::test]
   async fn test_a_long_string_field_is_cut_to_300_code_points() {
+    let (_home, features) = test_features();
     let mut body = startup_body();
     let long = "é".to_string() + &"𐍈".repeat(174) + &"x".repeat(175);
     assert_eq!(long.chars().count(), 350);
     body["user_agent"] = json!(long);
 
-    let (response, logs) = post_startup(body).await;
+    let (response, logs) = post_startup(&features, body).await;
 
     assert_eq!(response.status(), StatusCode::OK);
     let lines = startup_lines(&logs);
@@ -1062,5 +1237,107 @@ mod tests {
     assert!(body_text(response).await.contains("exactly"));
     assert!(transcribed(&logs).is_empty());
     assert!(files_under(&cfg.sessions_dir()).is_empty());
+  }
+
+  #[tokio::test]
+  async fn test_an_upload_transcription_failure_is_recorded_and_the_retry_keeps_one_row() {
+    let home = tempfile::tempdir().expect("make an isolated home");
+    let (cfg, credentials) = synthetic_config(&home);
+    let (_factory, state) = fake_factory(&cfg);
+    state.lock().expect("the fake lock is not poisoned").fail = true;
+
+    let (response, logs) = post(&cfg, &credentials, &state, Some(BACKEND_ID), None, 160).await;
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let rows = crate::recordings::list_recordings(&cfg, crate::recordings::DEFAULT_LIST_LIMIT)
+      .expect("the list answers over the failed upload");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["failure"]["stage"], "upload");
+    assert!(rows[0]["failure"]["error"].as_str().expect("the error text").contains("fake transcription failure"));
+    assert_eq!(rows[0]["transcript"], Value::Null);
+    assert_eq!(rows[0]["audio_path_kind"], "upload");
+    assert!(rows[0]["audio_url"].is_string(), "the failed upload keeps its WAV");
+    assert!(transcribed(&logs).is_empty());
+
+    state.lock().expect("the fake lock is not poisoned").fail = false;
+    let (response, logs) = post(&cfg, &credentials, &state, Some(BACKEND_ID), None, 160).await;
+
+    assert_eq!(body_text(response).await, r#"{"text":"synthetic remote words"}"#);
+    assert_eq!(transcribed(&logs).len(), 1);
+    let rows = crate::recordings::list_recordings(&cfg, crate::recordings::DEFAULT_LIST_LIMIT)
+      .expect("the list answers over the retried upload");
+    assert_eq!(rows.len(), 1, "one run, one row");
+    assert_eq!(rows[0]["transcript"], FINAL_TEXT);
+    assert_eq!(rows[0]["failure"], Value::Null);
+    let files = files_under(&voice_dir(&cfg));
+    assert_eq!(files.len(), 3, "one stem holds the wav, the txt and the json: {files:?}");
+  }
+
+  #[tokio::test]
+  async fn test_an_upload_with_an_invalid_run_id_is_a_400_that_persists_nothing() {
+    let home = tempfile::tempdir().expect("make an isolated home");
+    let (cfg, credentials) = synthetic_config(&home);
+    let (_factory, state) = fake_factory(&cfg);
+    let upload = UploadForm {
+      audio: wav_body(160),
+      run_id: "0A1B2C3D".to_string(),
+      backend: Some(BACKEND_ID.to_string()),
+      devices: None,
+    };
+
+    let (response, logs) = capture_events_async(upload_recording(
+      Arc::clone(&cfg),
+      Arc::clone(&credentials),
+      SESSION_ID.to_string(),
+      upload,
+      &FakeFactory { state, sessions_dir: cfg.sessions_dir() },
+    ))
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(body_text(response).await.contains("eight lowercase hex"));
+    assert!(transcribed(&logs).is_empty());
+    assert!(files_under(&cfg.sessions_dir()).is_empty(), "no path was built from the invalid run id");
+  }
+
+  #[tokio::test]
+  async fn test_a_startup_report_persists_the_runs_startup_part() {
+    let (_home, features) = test_features();
+    let mut body = startup_body();
+    body["reached"] = json!("no_frames");
+    body["end"] = json!("startup_error");
+    body["error"] = json!("mic: no frames arrived");
+    body["mic_permission"] = json!("denied");
+
+    let (response, logs) = post_startup(&features, body).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(startup_lines(&logs).len(), 1, "the voice_startup line stays as it is");
+    let cfg = features.config.get().expect("the config loads");
+    let rows = crate::recordings::list_recordings(&cfg, crate::recordings::DEFAULT_LIST_LIMIT)
+      .expect("the list answers over the startup report");
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row["reached"], "no_frames");
+    assert_eq!(row["end"], "startup_error");
+    assert_eq!(row["startup_error"], "mic: no frames arrived");
+    assert_eq!(row["mic_permission"], "denied");
+    for field in ["audio_url", "duration_s", "digital_silence", "peak_dbfs", "rms_dbfs", "transcript"] {
+      assert_eq!(row[field], Value::Null, "{field} of a run without audio");
+    }
+  }
+
+  #[tokio::test]
+  async fn test_a_startup_report_with_an_invalid_run_id_is_a_400_before_any_path_is_built() {
+    let (_home, features) = test_features();
+    let mut body = startup_body();
+    body["run_id"] = json!("zzzzzzzz");
+
+    let (response, logs) = post_startup(&features, body).await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(startup_lines(&logs).is_empty());
+    let cfg = features.config.get().expect("the config loads");
+    assert!(files_under(&cfg.sessions_dir()).is_empty(), "no path was built from the invalid run id");
   }
 }

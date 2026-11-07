@@ -10,6 +10,7 @@ mod file;
 mod matroska;
 mod opus;
 mod recording;
+mod recordings;
 mod relay;
 mod transcription;
 mod wav;

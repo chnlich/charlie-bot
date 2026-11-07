@@ -206,10 +206,6 @@ fn ready(sequence: u64) -> Value {
   json!({"op": 0, "s": sequence, "t": "READY", "d": {"user": {"id": BOT_USER}}})
 }
 
-fn gateway_dispatch(kind: &str, sequence: u64, data: Value) -> Value {
-  json!({"op": 0, "s": sequence, "t": kind, "d": data})
-}
-
 fn message(id: &str, channel: &str) -> Value {
   json!({
     "id": id,

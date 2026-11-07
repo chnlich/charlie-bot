@@ -2385,13 +2385,6 @@ mod tests {
       .await
       .unwrap();
     for session_id in [&parent.id, &child.id] {
-      for index in 0..2 {
-        features
-          .store
-          .append_chat_event(session_id, json!({"type":"user","content":format!("history-{index}")}))
-          .await
-          .unwrap();
-      }
       features
         .store
         .append_chat_event(

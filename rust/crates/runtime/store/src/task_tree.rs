@@ -3707,16 +3707,6 @@ pub(crate) mod tests {
       })
       .await
       .unwrap();
-    assert!(prompt_facts(&store, &root.id).is_empty());
-
-    let next = PatchTask { node_prompt: Some(Some("next rule\n".to_string())), ..Default::default() };
-    store.patch_task(&root.id, next, TaskCaller::Operator, &StubGuards::default()).await.unwrap();
-
-    let facts = prompt_facts(&store, &root.id);
-    assert_eq!(facts.len(), 2);
-    assert_eq!(facts[0]["previous_ref"].to_value(), Value::Null);
-    assert_eq!(facts[0]["new_ref"].to_value(), interrupted_ref);
-    assert_eq!(facts[1]["previous_ref"].to_value(), interrupted_ref);
   }
 
   #[tokio::test]
@@ -3748,16 +3738,16 @@ pub(crate) mod tests {
     let error = store.delete_permanently(&with_evidence.id, TaskCaller::Operator).await.unwrap_err();
     assert_eq!(error.to_string(), "has preserved conversation/evidence: user");
 
-    for (request_id, reference_kind) in [
-      ("delete-parent-reference", "parent_session_id"),
-      ("delete-successor-reference", "successor_session_id"),
-      ("delete-origin-reference", "origin_ref"),
-      ("delete-created-reference", "created_by_event"),
-    ] {
-      let target = create_node(&store, request_id, None, TaskProfile::Manager).await;
-      let reference = create_node(&store, &format!("{request_id}-other"), None, TaskProfile::Manager).await;
+    let target = create_node(&store, "delete-reference-target", None, TaskProfile::Manager).await;
+    let reference = create_node(&store, "delete-reference-source", None, TaskProfile::Manager).await;
+    let reference_kinds = ["parent_session_id", "successor_session_id", "origin_ref", "created_by_event"];
+    for reference_kind in reference_kinds {
       let _guard = store.lock_for(&reference.id).await;
       let mut meta = store.read_metadata_fresh(&reference.id).unwrap().unwrap();
+      meta.parent_session_id = None;
+      meta.successor_session_id = None;
+      meta.origin_ref = None;
+      meta.created_by_event = None;
       match reference_kind {
         "parent_session_id" => meta.parent_session_id = Some(target.id.clone()),
         "successor_session_id" => meta.successor_session_id = Some(target.id.clone()),

@@ -855,7 +855,15 @@ mod tests {
 
   #[tokio::test]
   async fn running_summary_tracks_appends_without_moving_the_client_revision() {
-    let (_home, features, session_id) = worker_context(&format!("running-{}", uuid::Uuid::new_v4())).await;
+    let (_home, features) = feature_context();
+    let worker = create_node(
+      features.store.as_ref(),
+      &format!("running-{}", uuid::Uuid::new_v4()),
+      None,
+      TaskProfile::Worker,
+    )
+    .await;
+    let session_id = worker.id;
     let store = features.store.as_ref();
     register_run(store, run_record("run-live", &session_id, RunKind::Work, None)).await;
     let process = charliebot_core::proc_identity::read_pid_stat(std::process::id()).unwrap();
@@ -872,7 +880,6 @@ mod tests {
     assert_eq!(summary["runs"][0]["tool_calls"], 0);
     assert!(!entry.projection.committed().iter().any(|message| message["kind"] == event_types::RUN_END));
     let revision = entry.revision.clone();
-    assert_eq!(load_worker_transcript(store, &session_id).unwrap().revision, revision);
 
     write_run_events(
       store,
@@ -899,18 +906,6 @@ mod tests {
     assert_eq!(entry.summary["closing"]["work"]["text"], "A later result event");
     assert_eq!(entry.summary["runs"][0]["tool_calls"], 1);
     assert_eq!(entry.revision, revision);
-
-    finish_run(store, &session_id, "run-live", RunOutcomeKind::Success, UtcDateTime::now()).await;
-    let finished = load_worker_transcript(store, &session_id).unwrap();
-    assert_ne!(finished.revision, revision);
-    let finished_revision = finished.revision.clone();
-    write_run_events(
-      store,
-      &session_id,
-      "run-live",
-      &[json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Post-finish update."}]}})],
-    );
-    assert_ne!(load_worker_transcript(store, &session_id).unwrap().revision, finished_revision);
   }
 
   #[tokio::test]

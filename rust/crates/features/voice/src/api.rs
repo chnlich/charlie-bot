@@ -509,7 +509,8 @@ fn error_response(error: VoiceRequestError) -> Response {
 // The list route answers the JSON the API consumers read; the page route renders the same rows as HTML. Both
 // scan the sessions' voice directories on the blocking pool.
 
-/// `GET /api/voice/recordings?limit=N`: the most recent recordings across every session directory, newest first.
+/// The recent recordings JSON at `GET /api/voice/recordings?limit=N`: the newest rows across every session
+/// directory, one per run.
 async fn list_voice_recordings(State(features): State<Arc<FeatureContext>>, request: Request) -> Response {
   let (parts, _) = request.into_parts();
   let limit = match recordings::parse_list_limit(parts.uri.query().unwrap_or("")) {
@@ -527,7 +528,7 @@ async fn list_voice_recordings(State(features): State<Arc<FeatureContext>>, requ
   }
 }
 
-/// `GET /voice-recordings`: the Recent recordings page, the same rows as the list route renders as HTML.
+/// The Recent recordings page at `GET /voice-recordings`: the same rows as the list route, rendered as HTML.
 async fn recordings_page(State(features): State<Arc<FeatureContext>>, parts: Parts) -> Response {
   let cfg = match features.config.get() {
     Ok(cfg) => cfg,

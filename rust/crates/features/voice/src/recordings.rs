@@ -80,8 +80,9 @@ fn run_stem_now(run_id: &str) -> String {
   archive::stamp_prefix() + &format!("_{run_id}")
 }
 
-/// Runs `write` for one run's stem. The run id is validated before any path is built, and the stem is resolved
-/// under the run's lock. The writes are then serialized against every other writer of the same run.
+/// The write path for one run's stem, which runs `write` after resolving the stem. The run id is validated before
+/// any path is built, and the stem is resolved under the run's lock. The writes are then serialized against every
+/// other writer of the same run.
 pub(crate) fn with_run_stem<T>(
   cfg: &CharlieBotConfig,
   session_id: &str,
@@ -150,7 +151,7 @@ fn write_parts(stem: &Path, parts: &Map<String, Value>) -> io::Result<()> {
   fs::rename(&temporary, &path)
 }
 
-/// Updates the run's `.json` through `update`, read and replaced under the caller's run lock.
+/// The run's `.json` update through `update`: read and replaced under the caller's run lock.
 fn update_parts(stem: &Path, update: impl FnOnce(&mut Map<String, Value>)) -> io::Result<()> {
   let mut parts = read_parts(stem)?;
   update(&mut parts);
@@ -162,7 +163,7 @@ fn audio_part(kind: &str, backend: Option<&str>, devices: Option<&Value>) -> Val
   json!({ "path": kind, "backend": backend, "devices": devices })
 }
 
-/// Writes the WAV of one run's stem atomically: the bytes land on the `.wav.partial`, then rename over the WAV.
+/// The atomic WAV write of one run's stem: the bytes land on the `.wav.partial`, then rename over the WAV.
 fn write_run_wav(stem: &Path, pcm_bytes: &[u8]) -> io::Result<()> {
   let wav = with_kind(stem, "wav");
   let partial = with_kind(stem, "wav.partial");
@@ -170,7 +171,7 @@ fn write_run_wav(stem: &Path, pcm_bytes: &[u8]) -> io::Result<()> {
   fs::rename(&partial, &wav)
 }
 
-/// Persists the startup report of one run as its `startup` part.
+/// The startup report of one run, persisted as its `startup` part.
 pub(crate) fn write_startup_part(
   cfg: &CharlieBotConfig,
   session_id: &str,
@@ -185,7 +186,7 @@ pub(crate) fn write_startup_part(
   })
 }
 
-/// Persists one upload's WAV and its `audio` part, and answers the WAV path.
+/// One upload's WAV and its `audio` part, persisted under the run's stem and answering the WAV path.
 pub(crate) fn store_upload_audio(
   cfg: &CharlieBotConfig,
   session_id: &str,
@@ -203,7 +204,7 @@ pub(crate) fn store_upload_audio(
   })
 }
 
-/// Records one upload transcription failure as the run's `failure` part. The WAV the upload persisted stays.
+/// One upload transcription failure, recorded as the run's `failure` part. The WAV the upload persisted stays.
 pub(crate) fn write_upload_failure(
   cfg: &CharlieBotConfig,
   session_id: &str,
@@ -218,8 +219,8 @@ pub(crate) fn write_upload_failure(
   })
 }
 
-/// Archives one successful upload: the transcript beside the WAV, and the failure part cleared — a successful
-/// retry of a failed upload owns the row again.
+/// The archive of one successful upload: the transcript beside the WAV, and the failure part cleared — a
+/// successful retry of a failed upload owns the row again.
 pub(crate) fn write_upload_transcript(
   cfg: &CharlieBotConfig,
   session_id: &str,
@@ -235,7 +236,7 @@ pub(crate) fn write_upload_transcript(
   })
 }
 
-/// Archives one successful relay final: the WAV, the transcript and the run's `audio` part, under one stem.
+/// The archive of one successful relay final: the WAV, the transcript and the run's `audio` part, under one stem.
 /// Answers the WAV path for the `voice_transcribed` line.
 pub(crate) fn archive_relay_final(
   cfg: &CharlieBotConfig,
@@ -256,8 +257,8 @@ pub(crate) fn archive_relay_final(
   })
 }
 
-/// Records one relay failure: the run's `failure` part. The audio received so far becomes the run's WAV when
-/// there is any, and its `audio` part names the relay, the backend and the devices.
+/// The failure record of one relay: the run's `failure` part. The audio received so far becomes the run's WAV
+/// when there is any, and its `audio` part names the relay, the backend and the devices.
 pub(crate) fn store_relay_failure(
   cfg: &CharlieBotConfig,
   session_id: &str,

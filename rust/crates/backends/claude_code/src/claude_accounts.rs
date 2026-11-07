@@ -357,8 +357,9 @@ pub fn headroom(state: &ClaudeAccountState, label: &str, model: Option<&str>, no
   (1.0 - reading.utilization).max(0.0)
 }
 
-/// The candidates tiering lets contend for selection: the healthy, unexcluded accounts of the pool whose headroom
-/// exceeds `min_headroom`, those below the 90% line first and the accounts at or above the line as the last resort.
+/// The candidates tiering lets contend for selection. The healthy, unexcluded accounts of the pool whose headroom
+/// exceeds `min_headroom` contend, those below the 90% line first and the accounts at or above it as the last
+/// resort.
 /// Login selection and the later member selection tier through this one function.
 #[allow(clippy::too_many_arguments)]
 pub fn tiered_candidates(
@@ -550,9 +551,9 @@ pub fn login_reading(
   })
 }
 
-/// The Auto set's reading of one Claude member: the best login's windows and weekly reset, the earliest reset among
-/// the healthy logins, whether every healthy login sits at or above the 90% line with a reset beyond 45 minutes, and
-/// whether no healthy login has headroom left.
+/// The Auto set's reading of one Claude member. It carries the best login's windows and weekly reset, and the
+/// earliest reset among the healthy logins. It also says whether every healthy login sits at or above the 90% line
+/// with a reset beyond 45 minutes, and whether no healthy login has headroom left.
 pub fn member_reading(
   state: &ClaudeAccountState,
   cfg: &CharlieBotConfig,

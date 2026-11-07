@@ -5,12 +5,15 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+use std::time::Duration;
 
 use anyhow::Context;
 use charliebot_agents::cli_base::framed_prompt;
 use charliebot_agents::event_builders::make_error_event;
 use charliebot_core::str_methods;
 use charliebot_registry::backend::{AgentBackend, Env, FinalStdoutOutcome, LaunchArgs, Translate, TransportKind};
+use regex::Regex;
 use serde_json::Value;
 
 use super::export;
@@ -19,6 +22,12 @@ use super::export;
 const PROMPT_FILE_NAME: &str = "devin_prompt.md";
 /// The export file the CLI writes after the turn, in the run's log directory.
 const EXPORT_FILE_NAME: &str = "devin_export.json";
+static RETRYABLE_ERROR_KEY: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r#""cognition\.ai/retryable"\s*:\s*true\b"#).expect("the Devin retryable-key pattern is valid")
+});
+static RESET_SECONDS: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r"(?i)\breset in\s+(\d+)\s+seconds\b").expect("the Devin reset-duration pattern is valid")
+});
 
 /// The `devin --print` backend of one launch.
 pub struct DevinBackend {
@@ -94,6 +103,10 @@ impl DevinBackend {
 }
 
 impl AgentBackend for DevinBackend {
+  fn retry_after(&self, error_text: &str) -> Option<Duration> {
+    retry_after_error(error_text)
+  }
+
   fn instructions_target(&self) -> Option<(&'static str, &'static str)> {
     None
   }
@@ -156,6 +169,14 @@ fn nonzero_exit_message(stderr: &str, exit_code: i32) -> String {
   }
 }
 
+fn retry_after_error(error_text: &str) -> Option<Duration> {
+  if !RETRYABLE_ERROR_KEY.is_match(error_text) {
+    return None;
+  }
+  let seconds = RESET_SECONDS.captures(error_text)?.get(1)?.as_str().parse().ok()?;
+  Some(Duration::from_secs(seconds))
+}
+
 #[cfg(test)]
 mod tests {
   use std::os::unix::fs::symlink;
@@ -207,6 +228,10 @@ mod tests {
   /// The argv the fake `devin` recorded, without its program name.
   fn recorded_argv(root: &Path) -> Vec<String> {
     fs::read_to_string(root.join("argv.txt")).unwrap().lines().map(str::to_string).collect()
+  }
+
+  fn recorded_call_argv(root: &Path, call: usize) -> Vec<String> {
+    fs::read_to_string(root.join(format!("call-{call}-argv.txt"))).unwrap().lines().map(str::to_string).collect()
   }
 
   /// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
@@ -310,6 +335,21 @@ mod tests {
         "--export=/synthetic/logs/devin_export.json",
         "--print",
       ]
+    );
+  }
+
+  #[test]
+  fn retry_after_reads_only_marked_devin_resets() {
+    let incident = r#"devin exited 1: Error: Agent error: Reached free model rate limit. Upgrade to Max for higher limits, or switch to a different model. Your limit will reset in 22 seconds (at 01:19 UTC).: {
+  "cognition.ai/errorKind": "unavailable",
+  "cognition.ai/retryable": true
+}"#;
+    assert_eq!(retry_after_error(incident), Some(Duration::from_secs(22)));
+    assert_eq!(retry_after_error(r#"Reached free model rate limit. reset in 22 seconds."#), None);
+    assert_eq!(retry_after_error(r#"{"cognition.ai/retryable": true} Reached free model rate limit."#), None);
+    assert_eq!(
+      retry_after_error(r#"{"cognition.ai/retryable": true} reset in 600 seconds."#),
+      Some(Duration::from_secs(600))
     );
   }
 
@@ -436,6 +476,33 @@ mod tests {
     assert_eq!(run.events.len(), 1);
     assert_eq!(run.events[0]["type"], "error");
     assert_eq!(run.events[0]["message"], "devin exited 1: Error: Usage limit reached. Try again later.");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn the_fake_devin_returns_staged_responses_and_records_each_argv() {
+    let root = tempfile::tempdir().unwrap();
+    let responses = root.path().join("responses");
+    let first = responses.join("1");
+    let second = responses.join("2");
+    fs::create_dir_all(&first).unwrap();
+    fs::create_dir_all(&second).unwrap();
+    fs::write(first.join("stderr.txt"), "rate limit\n").unwrap();
+    fs::write(first.join("exit_code"), "1").unwrap();
+    fs::write(second.join("export.json"), FIXTURE).unwrap();
+    fs::write(second.join("answer.txt"), ANSWER).unwrap();
+    stage_devin(root.path(), &[]);
+    let logs = root.path().join("logs");
+
+    let first_run = run_turn(root.path(), launch(Some(&logs), None), SessionCgroupConfig::disabled()).await;
+    assert_eq!(first_run.result.unwrap().exit_code, Some(1));
+    let second_run =
+      run_turn(root.path(), launch(Some(&logs), Some(SESSION_ID)), SessionCgroupConfig::disabled()).await;
+    assert_eq!(second_run.result.unwrap().exit_code, Some(0));
+
+    assert_eq!(recorded_call_argv(root.path(), 1).iter().filter(|arg| arg.starts_with("--resume=")).count(), 0);
+    assert!(recorded_call_argv(root.path(), 2).contains(&format!("--resume={SESSION_ID}")));
+    assert!(recorded_argv(root.path()).contains(&format!("--resume={SESSION_ID}")));
   }
 
   #[ignore = "integration"]

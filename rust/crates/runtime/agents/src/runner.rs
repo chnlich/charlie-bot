@@ -81,7 +81,7 @@ impl RunRequest {
       session_id: None,
       cgroup_config,
       on_spawn: None,
-      final_stdout_supervisor: None,
+      final_stdout_supervisor: test_final_stdout_supervisor(),
       child_waits_for_spawn_callback: false,
       on_event: Arc::new(|_| Box::pin(async { Ok(()) })),
       post_result_timeout: DEFAULT_POST_RESULT_TIMEOUT,
@@ -98,6 +98,19 @@ impl RunRequest {
   pub fn gate_child_until_on_spawn(&mut self) {
     self.child_waits_for_spawn_callback = true;
   }
+}
+
+/// The final-stdout supervisor a process-spawning test names through `CHARLIEBOT_TEST_FINAL_STDOUT_SUPERVISOR`: a
+/// test binary is no supervisor, so the test points at a helper that implements the supervisor entry point. Release
+/// builds keep `None`, which resolves to the server executable at spawn time.
+#[cfg(debug_assertions)]
+fn test_final_stdout_supervisor() -> Option<PathBuf> {
+  std::env::var_os("CHARLIEBOT_TEST_FINAL_STDOUT_SUPERVISOR").map(PathBuf::from)
+}
+
+#[cfg(not(debug_assertions))]
+fn test_final_stdout_supervisor() -> Option<PathBuf> {
+  None
 }
 
 /// Process status and artifacts recorded after the run finishes.
@@ -153,6 +166,11 @@ impl AgentRunner {
   /// final-stdout run records the code its backend chose, which can differ from the process's.
   pub fn exit_code(&self) -> Option<i32> {
     *self.exit_code.lock().expect("exit code lock poisoned")
+  }
+
+  /// Ask the backend whether an error text states a retry reset.
+  pub async fn retry_after(&self, error_text: &str) -> Option<Duration> {
+    self.backend.lock().await.retry_after(error_text)
   }
 
   /// Prepare, spawn and follow one registered raw-log backend.

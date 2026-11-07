@@ -9,14 +9,17 @@
 mod process_guard;
 mod recovery_support;
 
-use std::path::Path;
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::StatusCode;
 use charliebot_agents::backend_pool;
+use charliebot_agents::cli_base::CliHost;
 use charliebot_core::config::{BackendOption, RoutingConfig};
 use charliebot_core::event_types;
+use charliebot_registry::Registry;
 use charliebot_registry::caller::CallerIdentity;
 use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
@@ -30,6 +33,7 @@ use recovery_support::{
   result_script, settle_until, synthetic_git, synthetic_run, write_sitrep,
 };
 use serde_json::{Map, Value, json};
+use serde_yaml::Mapping;
 use time::{Duration as TimeDuration, OffsetDateTime};
 
 /// Tracks every run process in a test stack and kills its process group when the test scope ends.
@@ -2150,4 +2154,275 @@ async fn cold_read_every_backend_failed_reports_and_the_child_is_archived() -> a
   assert_eq!(closes[0]["outcome"], "archived");
   assert_eq!(closes[0]["actor"], "system");
   Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Devin rate-limit retries
+// ---------------------------------------------------------------------------
+
+/// The fake `devin` CLI and the export fixture its staged successful response reuses.
+const FAKE_DEVIN: &str = include_str!("../../../backends/devin/tests/fixtures/fake_devin.sh");
+const DEVIN_EXPORT: &str = include_str!("../../../backends/devin/tests/fixtures/export.json");
+/// The recorded incident: devin's `cognition.ai/retryable` rate-limit rejection with a 22-second reset.
+const DEVIN_INCIDENT: &str = r#"Error: Agent error: Reached free model rate limit. Upgrade to Max for higher limits, or switch to a different model. Your limit will reset in 22 seconds (at 01:19 UTC).: {
+  "cognition.ai/errorKind": "unavailable",
+  "cognition.ai/retryable": true
+}"#;
+
+thread_local! {
+  /// The fake Devin host of the next `test.devin` registration. The test sets it just before registering, on the
+  /// thread that registers.
+  static DEVIN_HOST: RefCell<Option<CliHost>> = const { RefCell::new(None) };
+}
+
+fn register_test_devin(registry: &mut Registry) -> Result<(), charliebot_registry::RegistryError> {
+  let host =
+    DEVIN_HOST.with(|cell| cell.borrow_mut().take()).expect("the test sets the fake Devin host before registering");
+  charliebot_devin::register_with_host(registry, host)
+}
+
+/// The fake `devin` binary in `dir`, with its staged-response contract.
+fn stage_fake_devin(dir: &Path) -> anyhow::Result<()> {
+  use std::os::unix::fs::PermissionsExt;
+  std::fs::create_dir_all(dir)?;
+  let binary = dir.join("devin");
+  std::fs::write(&binary, FAKE_DEVIN)?;
+  let mut permissions = std::fs::metadata(&binary)?.permissions();
+  permissions.set_mode(0o755);
+  std::fs::set_permissions(binary, permissions)?;
+  Ok(())
+}
+
+/// Stages `responses/<call>/` of the fake devin: its stderr, its exit code and, on `succeeded`, its export and answer.
+fn stage_devin_response(dir: &Path, call: usize, stderr: &str, exit_code: i32, succeeded: bool) -> anyhow::Result<()> {
+  let response = dir.join("responses").join(call.to_string());
+  std::fs::create_dir_all(&response)?;
+  std::fs::write(response.join("stderr.txt"), stderr)?;
+  std::fs::write(response.join("exit_code"), exit_code.to_string())?;
+  if succeeded {
+    std::fs::write(response.join("export.json"), DEVIN_EXPORT)?;
+    std::fs::write(response.join("answer.txt"), "The number is 41.\n")?;
+  }
+  Ok(())
+}
+
+/// The helper binary that supervises a final-stdout transport run in tests.
+fn fake_program_bin() -> PathBuf {
+  let exe = std::env::current_exe().expect("the test binary path");
+  exe
+    .ancestors()
+    .skip(1)
+    .map(|dir| dir.join("fake_program"))
+    .find(|candidate| candidate.is_file())
+    .expect("cargo builds the fake-program helper into the target directory that holds the test binary")
+}
+
+/// The `devin` backend option: its type names no fields.
+fn devin_option() -> BackendOption {
+  BackendOption {
+    id: "devin".to_string(),
+    label: "Devin".to_string(),
+    model: "fake-model".to_string(),
+    prompt_overlay: None,
+    backend_type: "devin".to_string(),
+    type_fields: Mapping::new(),
+  }
+}
+
+/// An implement worker's first run over the staged fake devin, as `launch_error_event_worker` builds it over the
+/// scripted type: a pool of `devin` and `fake2`, the manager node on `fake`, the staged calls the test lays down.
+struct DevinErrorRun {
+  stack: Stack,
+  manager_id: String,
+  worker_id: String,
+  fake_bin: PathBuf,
+  first: RunRecord,
+  outcome: RunOutcomeKind,
+  _root: tempfile::TempDir,
+}
+
+/// One staged devin call: the stderr it prints, its exit code and, on `succeeded`, its export and answer.
+#[derive(Clone, Copy)]
+struct StagedDevinCall<'a> {
+  stderr: &'a str,
+  exit_code: i32,
+  succeeded: bool,
+}
+
+/// A staged call that prints the recorded rate-limit incident and exits 1.
+const DEVIN_RATE_LIMIT: StagedDevinCall<'static> =
+  StagedDevinCall { stderr: DEVIN_INCIDENT, exit_code: 1, succeeded: false };
+/// A staged call that ends in the export and the answer.
+const DEVIN_SUCCESS: StagedDevinCall<'static> = StagedDevinCall { stderr: "", exit_code: 0, succeeded: true };
+
+/// Launch the devin-first pool's implement worker: `calls` stage the devin's responses in call order, and `scripts`
+/// feed the scripted backends that take over after the devin run, in build order.
+async fn launch_devin_error_worker(
+  pool_chosen: bool,
+  scripts: Vec<String>,
+  calls: &[StagedDevinCall<'_>],
+) -> anyhow::Result<DevinErrorRun> {
+  let root = tempfile::tempdir()?;
+  let fake_bin = root.path().join("fake-bin");
+  stage_fake_devin(&fake_bin)?;
+  for (index, call) in calls.iter().enumerate() {
+    stage_devin_response(&fake_bin, index + 1, call.stderr, call.exit_code, call.succeeded)?;
+  }
+  // SAFETY: this test binary races on nothing else that reads the variable.
+  unsafe { std::env::set_var("CHARLIEBOT_TEST_FINAL_STDOUT_SUPERVISOR", fake_program_bin()) };
+  DEVIN_HOST.with(|cell| {
+    *cell.borrow_mut() = Some(CliHost { path: fake_bin.display().to_string(), home: root.path().join("fake-home") })
+  });
+  let scripts = Scripts::new(scripts);
+  let options = vec![
+    BackendOption { model: "fake-model".to_string(), ..scripts.option(BACKEND_ID, BACKEND_TYPE) },
+    devin_option(),
+    BackendOption { model: "fake-model".to_string(), ..scripts.option("fake2", BACKEND_TYPE) },
+  ];
+  let stack = Stack::start_with_package(
+    options,
+    vec!["devin".to_string(), "fake2".to_string()],
+    ("test.devin", register_test_devin),
+  )
+  .await?;
+  stack.write_access_key()?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let first_backend = if pool_chosen {
+    let pool = backend_pool::backend_pool(&stack.features)?;
+    pool.select(&stack.cfg, "test", &[])?.expect("the pool selects a first member").id
+  } else {
+    "devin".to_string()
+  };
+
+  let (repo, worktree) = (root.path().join("repo"), root.path().join("worktree"));
+  std::fs::create_dir(&repo)?;
+  std::fs::create_dir(&worktree)?;
+  let task = TaskSpec {
+    goal: "implement the requested change".to_string(),
+    repo_path: Some(repo.display().to_string()),
+    base_branch: Some("main".to_string()),
+    task_type: Some(TaskType::Implement),
+    keep_worktree: true,
+    ..TaskSpec::default()
+  };
+  let worker = stack
+    .store()
+    .create_task(
+      CreateTask {
+        request_id: "worker".to_string(),
+        task_parent_id: Some(manager.id.clone()),
+        profile: TaskProfile::Worker,
+        task: Some(task),
+        name: None,
+        backend: Some(first_backend.clone()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  if pool_chosen {
+    let guard = stack.store().control_lock().await;
+    let flag = Map::from_iter([("backend_from_pool".to_string(), json!(true))]);
+    stack.store().update_task_slot_fields_locked(&guard, &worker.id, backend_pool::METADATA_OWNER, flag).await?;
+  }
+  let admitted =
+    stack.dispatch.admit_input(&worker.id, event_types::USER, "implement this input batch", "user", json!({})).await?;
+  let record = RunRecord {
+    backend: Some(first_backend),
+    model: Some("fake-model".to_string()),
+    repo_path: Some(repo.display().to_string()),
+    base_branch: Some("main".to_string()),
+    branch_name: Some("charliebot/task-test".to_string()),
+    worktree_path: Some(worktree.display().to_string()),
+    input_event_ids: vec![admitted["id"].as_str().expect("an admitted input has an id").to_string()],
+    ..synthetic_run(&worker.id, "run-initial", RunKind::Work)
+  };
+  register_run(&stack, record, "implement the requested change").await?;
+  stack.adapter.launch(&worker.id, "run-initial")?;
+  let outcome = stack.wait_terminal(&worker.id, "run-initial").await?;
+  let first =
+    stack.run_records(&worker.id)?.into_iter().find(|run| run.id == "run-initial").expect("the first run is recorded");
+  Ok(DevinErrorRun { stack, manager_id: manager.id, worker_id: worker.id, fake_bin, first, outcome, _root: root })
+}
+
+/// The fake devin's call count after the run, read from `call-count`.
+fn devin_call_count(fake_bin: &Path) -> anyhow::Result<String> {
+  Ok(std::fs::read_to_string(fake_bin.join("call-count"))?.trim().to_string())
+}
+
+/// A worker whose devin run hits the stated rate limit waits it out on devin, pinned or pool-chosen alike, and the
+/// retry's success opens the review; nothing cools and nothing fails over.
+#[tokio::test(start_paused = true)]
+#[ignore = "integration"]
+async fn a_devin_worker_retries_in_place_and_reaches_review() -> anyhow::Result<()> {
+  for pool_chosen in [false, true] {
+    // The review and the manager turn take the two scripts; the third staged call only covers a devin review pick.
+    let scripts = vec![result_script("settled"), result_script("manager noted")];
+    let run =
+      launch_devin_error_worker(pool_chosen, scripts, &[DEVIN_RATE_LIMIT, DEVIN_SUCCESS, DEVIN_SUCCESS]).await?;
+
+    assert_eq!(run.outcome, RunOutcomeKind::Success, "pool_chosen: {pool_chosen}");
+    assert_eq!(run.first.backend.as_deref(), Some("devin"));
+    assert!(run.fake_bin.join("call-2-argv.txt").is_file(), "devin took a second call");
+    let pool = backend_pool::backend_pool(&run.stack.features)?;
+    assert!(pool.cooling_until("devin").is_none(), "a retried reset does not cool the member");
+    assert!(quota_failover_events(&run.stack, &run.worker_id)?.is_empty(), "no failover event is written");
+    assert_eq!(run.stack.run_ids_of_kind(&run.worker_id, RunKind::Work)?.len(), 1, "no retry run starts");
+    settle_until(|| Ok(!run.stack.run_ids_of_kind(&run.worker_id, RunKind::Review)?.is_empty())).await?;
+    settle_node(&run.stack, &run.worker_id).await?;
+  }
+  Ok(())
+}
+
+/// A pool-chosen worker that exhausts its three retries cools devin at the reset the error stated, then fails the
+/// run over to the pool's next member.
+#[tokio::test(start_paused = true)]
+#[ignore = "integration"]
+async fn a_pool_chosen_devin_worker_exhausts_retries_cools_at_the_reset_and_fails_over() -> anyhow::Result<()> {
+  let retry_events =
+    [json!({"type": event_types::ASSISTANT, "message": {"content": [{"type": "text", "text": "retry stopped"}]}})];
+  let scripts = vec![events_script(&retry_events, 1), result_script("manager noted")];
+  let run = launch_devin_error_worker(true, scripts, &[DEVIN_RATE_LIMIT; 4]).await?;
+
+  assert_eq!(run.outcome, RunOutcomeKind::Failed);
+  let pool = backend_pool::backend_pool(&run.stack.features)?;
+  let remaining =
+    pool.cooling_until("devin").expect("devin cools at the reset its error stated") - OffsetDateTime::now_utc();
+  assert!(remaining > TimeDuration::seconds(10) && remaining < TimeDuration::minutes(5), "{remaining}");
+  assert!(pool.cooling_until("fake2").is_none(), "the next member stays selectable");
+
+  let retry = wait_for_retry(&run.stack, &run.worker_id, &run.first.id).await?;
+  let retry = retry.expect("the exhausted run fails over to the next member");
+  assert_eq!(retry.backend.as_deref(), Some("fake2"));
+  assert_eq!(run.stack.wait_terminal(&run.worker_id, &retry.id).await?, RunOutcomeKind::Failed);
+  settle_until(|| Ok(run.stack.child_reports(&run.manager_id)?.len() == 1)).await?;
+  let switches = quota_failover_events(&run.stack, &run.worker_id)?;
+  assert_eq!(switches.len(), 1, "{switches:?}");
+  assert_eq!(switches[0]["from"].as_str(), Some("devin"));
+  assert_eq!(switches[0]["to"], "fake2");
+  assert_eq!(switches[0]["recovers_at"].as_str(), pool.cooling_until_minutes("devin").as_deref());
+  settle_node(&run.stack, &run.worker_id).await
+}
+
+/// A worker pinned on devin does not fail over: the exhausted run reports the original error through the existing
+/// path and no member cools.
+#[tokio::test(start_paused = true)]
+#[ignore = "integration"]
+async fn a_pinned_devin_worker_exhausts_retries_and_reports_the_error() -> anyhow::Result<()> {
+  let scripts = vec![result_script("manager noted")];
+  let run = launch_devin_error_worker(false, scripts, &[DEVIN_RATE_LIMIT; 4]).await?;
+
+  assert_eq!(run.outcome, RunOutcomeKind::Failed);
+  assert_eq!(devin_call_count(&run.fake_bin)?, "4");
+  let pool = backend_pool::backend_pool(&run.stack.features)?;
+  assert!(run.stack.cfg.backends.pool.iter().all(|member| pool.cooling_until(member).is_none()), "no member cools");
+  assert!(quota_failover_events(&run.stack, &run.worker_id)?.is_empty(), "no failover event is written");
+  assert_eq!(run.stack.run_records(&run.worker_id)?.len(), 1, "no retry run starts");
+  settle_until(|| Ok(run.stack.child_reports(&run.manager_id)?.len() == 1)).await?;
+  let reports = run.stack.child_reports(&run.manager_id)?;
+  assert_eq!(reports[0]["outcome"], "failed");
+  assert_eq!(reports[0]["result_refs"], json!([format!("run:{}", run.first.id)]));
+  settle_node(&run.stack, &run.worker_id).await
 }

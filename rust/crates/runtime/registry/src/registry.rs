@@ -671,6 +671,11 @@ pub const CLAUDE_INSTRUCTIONS_FILE_NAME: &str = "CLAUDE.md";
 
 /// The per-process pieces of the backend template method. The runner in `charliebot-agents` drives them.
 pub trait AgentBackend: Send {
+  /// The reset duration stated by a retryable backend error, or `None` when it has no supported retry reset.
+  fn retry_after(&self, _error_text: &str) -> Option<Duration> {
+    None
+  }
+
   /// The instructions file name and the log event that reports writing it, or `None` when the backend takes none.
   fn instructions_target(&self) -> Option<(&'static str, &'static str)>;
   fn prepare_transport(&mut self, log_dir: &Path) -> anyhow::Result<()>;

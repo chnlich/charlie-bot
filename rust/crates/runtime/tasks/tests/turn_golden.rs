@@ -1,5 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -8,6 +9,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, header};
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::BackendPool;
+use charliebot_agents::cli_base::CliHost;
 use charliebot_core::config::CREDENTIALS_FILENAME;
 use charliebot_core::config::{
   BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
@@ -51,6 +53,12 @@ use tower::ServiceExt;
 
 const CASE_COUNT: usize = 12;
 const GOLDEN_FIXTURE: &str = include_str!("fixtures/turn_golden.json");
+const FAKE_DEVIN: &str = include_str!("../../../backends/devin/tests/fixtures/fake_devin.sh");
+const DEVIN_EXPORT: &str = include_str!("../../../backends/devin/tests/fixtures/export.json");
+const DEVIN_INCIDENT: &str = r#"Error: Agent error: Reached free model rate limit. Upgrade to Max for higher limits, or switch to a different model. Your limit will reset in 22 seconds (at 01:19 UTC).: {
+  "cognition.ai/errorKind": "unavailable",
+  "cognition.ai/retryable": true
+}"#;
 
 /// The approval policy table every golden home starts with; a manager turn's prompt assembly requires one.
 const APPROVAL_POLICY_TABLE: &str = "\
@@ -68,6 +76,10 @@ enable_ask_tier_refusal: false
 mod process_guard;
 use process_guard::ProcessGroupGuard;
 static CANCEL_ROUTE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+thread_local! {
+  static DEVIN_HOST: RefCell<Option<CliHost>> = const { RefCell::new(None) };
+}
 
 #[derive(Deserialize)]
 struct GoldenCase {
@@ -260,6 +272,105 @@ fn registry() -> Arc<Registry> {
   registry.register_package("charliebot_agents.claude_code", charliebot_claude_code::register).unwrap();
   registry.register_package("charliebot.web_reply", charliebot_web_reply::register).unwrap();
   Arc::new(registry)
+}
+
+fn register_test_devin(registry: &mut Registry) -> Result<(), charliebot_registry::RegistryError> {
+  let host = DEVIN_HOST.with(|cell| cell.borrow_mut().take().expect("the fake Devin host is set before registration"));
+  charliebot_devin::register_with_host(registry, host)
+}
+
+fn registry_with_devin(fake_bin: &Path, fake_home: &Path) -> Arc<Registry> {
+  DEVIN_HOST.with(|cell| {
+    *cell.borrow_mut() = Some(CliHost { path: fake_bin.to_string_lossy().into_owned(), home: fake_home.to_path_buf() })
+  });
+  let mut registry = Registry::new();
+  registry.register_package("test.scripted_backend", register_scripted_backend).unwrap();
+  registry.register_package("charliebot_agents.claude_code", charliebot_claude_code::register).unwrap();
+  registry.register_package("charliebot.web_reply", charliebot_web_reply::register).unwrap();
+  registry.register_package("test.devin", register_test_devin).unwrap();
+  Arc::new(registry)
+}
+
+fn devin_option() -> BackendOption {
+  BackendOption {
+    id: "devin".to_string(),
+    label: "Devin".to_string(),
+    model: "swe-2-test".to_string(),
+    prompt_overlay: None,
+    backend_type: "devin".to_string(),
+    type_fields: Mapping::new(),
+  }
+}
+
+fn stage_fake_devin(bin_dir: &Path) -> anyhow::Result<()> {
+  use std::os::unix::fs::PermissionsExt;
+
+  std::fs::create_dir_all(bin_dir)?;
+  let binary = bin_dir.join("devin");
+  std::fs::write(&binary, FAKE_DEVIN)?;
+  let mut permissions = std::fs::metadata(&binary)?.permissions();
+  permissions.set_mode(0o755);
+  std::fs::set_permissions(binary, permissions)?;
+  Ok(())
+}
+
+fn stage_devin_response(
+  bin_dir: &Path,
+  call: usize,
+  stderr: &str,
+  exit_code: i32,
+  include_export: bool,
+) -> anyhow::Result<()> {
+  let response = bin_dir.join("responses").join(call.to_string());
+  std::fs::create_dir_all(&response)?;
+  std::fs::write(response.join("stderr.txt"), stderr)?;
+  std::fs::write(response.join("exit_code"), exit_code.to_string())?;
+  if include_export {
+    std::fs::write(response.join("export.json"), DEVIN_EXPORT)?;
+    std::fs::write(response.join("answer.txt"), "The number is 41.\n")?;
+  }
+  Ok(())
+}
+
+/// The helper binary that supervises a final-stdout transport run in tests.
+fn fake_program_bin() -> PathBuf {
+  let exe = std::env::current_exe().expect("the test binary path");
+  exe
+    .ancestors()
+    .skip(1)
+    .map(|dir| dir.join("fake_program"))
+    .find(|candidate| candidate.is_file())
+    .expect("cargo builds the fake-program helper into the target directory that holds the test binary")
+}
+
+async fn run_fake_devin_manager_turn(
+  home: &Path,
+  fake_bin: &Path,
+  session_id: &str,
+  native_session_id: Option<&str>,
+) -> anyhow::Result<(Option<String>, Arc<FeatureContext>, Vec<charliebot_store::ChatEvent>)> {
+  // SAFETY: the tests that run this function race on nothing else that reads the variable.
+  unsafe { std::env::set_var("CHARLIEBOT_TEST_FINAL_STDOUT_SUPERVISOR", fake_program_bin()) };
+  let option = devin_option();
+  let registry = registry_with_devin(fake_bin, home);
+  let (cfg, features) = config_with_features(home, Some(option.clone()), registry.clone(), true)?;
+  let mut meta = SessionMetadata::new(session_id, "Devin retry", TaskProfile::Manager);
+  meta.backend = option.id.clone();
+  meta.cc_session_id = native_session_id.map(str::to_string);
+  save_session_metadata(&features, registry.as_ref(), &meta)?;
+  let queue = features.startup.require::<master_queue::MasterQueue>()?;
+  let result = run_turn(
+    Arc::clone(&queue),
+    cfg,
+    meta.clone(),
+    callbacks(Arc::clone(&features), Arc::new(Mutex::new(Vec::new()))),
+    format!("{session_id}-input"),
+    option,
+  )
+  .await?;
+  queue.shutdown().await?;
+  let events = features.store.load_chat_events_sync(session_id)?;
+  Ok((result, features, events))
 }
 
 fn config(home: &Path, option: Option<BackendOption>) -> CharlieBotConfig {
@@ -706,6 +817,87 @@ async fn manager_turn_matches_recorded_event_stream_matrix() -> anyhow::Result<(
     assert_eq!(actual, expected, "persisted events differ for {}", case.name);
     assert_eq!(unread, case.mark_unread, "unread calls differ for {}", case.name);
   }
+  Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+#[ignore = "integration"]
+async fn manager_retries_devin_rate_limit_and_resumes_the_stored_native_session() -> anyhow::Result<()> {
+  let temp = tempfile::tempdir()?;
+  let fake_bin = temp.path().join("fake-bin");
+  stage_fake_devin(&fake_bin)?;
+  stage_devin_response(&fake_bin, 1, DEVIN_INCIDENT, 1, false)?;
+  stage_devin_response(&fake_bin, 2, "", 0, true)?;
+  let native_session_id = "devin-native-original";
+
+  let (outcome, _features, events) = run_fake_devin_manager_turn(
+    &temp.path().join("manager-home"),
+    &fake_bin,
+    "manager-devin-retry",
+    Some(native_session_id),
+  )
+  .await?;
+
+  assert!(outcome.is_some(), "the manager turn returns its native session id");
+  let values = events.iter().map(|event| event.to_value()).collect::<Vec<_>>();
+  let notices = values
+    .iter()
+    .filter(|event| event["type"] == event_types::SYSTEM && event["subtype"] == event_types::COMMAND_PROGRESS)
+    .collect::<Vec<_>>();
+  assert_eq!(notices.len(), 1);
+  assert!(notices[0]["content"].as_str().unwrap().contains("devin 限流，22 秒后自动重试（第 1/3 次）"));
+  assert!(values.iter().any(|event| event["type"] == event_types::MASTER_DONE));
+  assert!(!values.iter().any(|event| event["type"] == event_types::ASSISTANT_ERROR));
+  for call in [1, 2] {
+    let argv = std::fs::read_to_string(fake_bin.join(format!("call-{call}-argv.txt")))?;
+    assert!(argv.lines().any(|argument| argument == format!("--resume={native_session_id}")));
+  }
+  Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+#[ignore = "integration"]
+async fn manager_stops_after_three_automatic_retries_and_shows_the_original_error() -> anyhow::Result<()> {
+  let temp = tempfile::tempdir()?;
+  let fake_bin = temp.path().join("fake-bin");
+  stage_fake_devin(&fake_bin)?;
+  for call in 1..=4 {
+    stage_devin_response(&fake_bin, call, DEVIN_INCIDENT, 1, false)?;
+  }
+
+  let (_outcome, _features, events) =
+    run_fake_devin_manager_turn(&temp.path().join("manager-home"), &fake_bin, "manager-devin-exhausted", None).await?;
+
+  let values = events.iter().map(|event| event.to_value()).collect::<Vec<_>>();
+  let notices = values
+    .iter()
+    .filter(|event| event["type"] == event_types::SYSTEM && event["subtype"] == event_types::COMMAND_PROGRESS)
+    .collect::<Vec<_>>();
+  assert_eq!(notices.len(), 3);
+  assert!(notices[2]["content"].as_str().unwrap().contains("第 3/3 次"));
+  let error = values
+    .iter()
+    .find(|event| event["type"] == event_types::ASSISTANT_ERROR)
+    .context("the exhausted manager turn reports its error")?;
+  assert!(error["content"].as_str().unwrap().contains("reset in 22 seconds"));
+  assert!(error["content"].as_str().unwrap().contains("已自动重试 3 次"));
+  assert_eq!(std::fs::read_to_string(fake_bin.join("call-count"))?.trim(), "4");
+  Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+#[ignore = "integration"]
+async fn manager_does_not_wait_for_a_reset_over_five_minutes() -> anyhow::Result<()> {
+  let temp = tempfile::tempdir()?;
+  let fake_bin = temp.path().join("fake-bin");
+  stage_fake_devin(&fake_bin)?;
+  let long_reset = DEVIN_INCIDENT.replace("22 seconds", "600 seconds");
+  stage_devin_response(&fake_bin, 1, &long_reset, 1, false)?;
+
+  let (_outcome, _features, _events) =
+    run_fake_devin_manager_turn(&temp.path().join("manager-home"), &fake_bin, "manager-devin-long-reset", None).await?;
+
+  assert_eq!(std::fs::read_to_string(fake_bin.join("call-count"))?.trim(), "1");
   Ok(())
 }
 

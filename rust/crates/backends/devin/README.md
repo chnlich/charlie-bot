@@ -33,9 +33,11 @@ When a conversation grows long, Devin compacts it: a system step tagged `extra.t
 after that summary. The export drops the compacted steps and their `metrics`, so that turn's usage leaves out the
 tokens spent before the compaction.
 
-A nonzero exit fails the turn with Devin's stderr. A missing export, one without `session_id`, one with neither a
-`user` step nor a compaction summary, or one whose current-turn agent step has no `metrics` fails the turn and names
-the export path.
+A nonzero exit fails the turn with Devin's stderr. When that stderr carries `"cognition.ai/retryable": true` and
+states `reset in N seconds`, `retry_after` returns N seconds, and the manager turn or worker run reruns the input on
+devin after the reset, within the limits of the `backend_retry` module in `charliebot-tasks`. A missing export,
+one without `session_id`, one with neither a `user` step nor a compaction summary, or one whose current-turn agent
+step has no `metrics` fails the turn and names the export path.
 
 ## Where the field names live
 

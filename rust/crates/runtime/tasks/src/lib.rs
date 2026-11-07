@@ -1,6 +1,7 @@
 //! Manager turns and task execution adapters.
 
 pub mod autonamer;
+mod backend_retry;
 pub mod cold_read;
 pub mod completion;
 pub mod dispatch;

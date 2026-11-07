@@ -13,6 +13,7 @@ charliebot-registry.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 charliebot-store.workspace = true

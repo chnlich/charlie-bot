@@ -158,13 +158,13 @@ fn tmux_environment_filters_session_identity_and_tmux_client_state() {
     (OsString::from("CHARLIEBOT_SESSION_ID"), OsString::from("stale-session")),
     (OsString::from("TERM"), OsString::from("screen-256color")),
   ];
-  let command_env = pty::filtered_env(source.clone(), true, false);
+  let command_env = pty::filtered_env(source.clone(), false);
   assert!(command_env.iter().all(|(key, _)| key != OsStr::new("TMUX")));
   assert!(command_env.iter().all(|(key, _)| key != OsStr::new("CHARLIEBOT_SESSION_ID")));
 
-  let attach_env = pty::filtered_env(source, false, true);
+  let attach_env = pty::filtered_env(source, true);
   assert!(attach_env.iter().all(|(key, _)| key != OsStr::new("CHARLIEBOT_SESSION_ID")));
-  assert!(attach_env.iter().any(|(key, value)| key == OsStr::new("TMUX") && value == "stale-tmux"));
+  assert!(attach_env.iter().all(|(key, _)| key != OsStr::new("TMUX")));
   assert!(attach_env.iter().any(|(key, value)| key == OsStr::new("TERM") && value == "xterm-256color"));
 }
 
@@ -183,7 +183,7 @@ fn the_terminal_shell_environment_resolves_the_operators_gh() {
     (OsString::from("GH_TOKEN"), OsString::from("operator-token")),
   ];
 
-  let shell_env = pty::filtered_env(source, true, false);
+  let shell_env = pty::filtered_env(source, false);
 
   let vars: std::collections::HashMap<&OsStr, &OsStr> =
     shell_env.iter().map(|(key, value)| (key.as_os_str(), value.as_os_str())).collect();

@@ -153,16 +153,17 @@ pub fn build_bootstrap_payload(
     payload.insert("has_more".to_string(), Value::Bool(start > 0));
     Ok(Value::Object(payload))
   };
-  // The next turn boundary a trim step may drop to, so a step never cuts the newest turn: the
-  // projection branches read the projection's separator ordinals, the archived branch falls back
-  // to the events behind the fold's turn separators (master_done, run_end).
-  let next_drop: Box<dyn Fn(usize) -> Option<usize>> = match &tail {
-    Tail::Slots { projection, .. } => {
-      let projection = Arc::clone(projection);
-      Box::new(move |drop: usize| projection.next_turn_start_after(drop))
-    }
-    Tail::Events { events, .. } => Box::new(move |drop: usize| {
-      events
+  // The next turn start a trim step may drop to, in the tail's own indexes (the `drop` a `build` step takes), so a
+  // step keeps every kept turn whole and never cuts the newest turn: the projection branches read the projection's
+  // separator ordinals, which are history ordinals, and the archived branch falls back to the events behind the
+  // fold's turn separators (master_done, run_end).
+  let next_drop = |drop: usize| -> Option<usize> {
+    match &tail {
+      Tail::Slots { start, projection, .. } => {
+        let start = *start;
+        projection.next_turn_start_after(start + drop).map(|next| next - start)
+      }
+      Tail::Events { events, .. } => events
         .iter()
         .enumerate()
         .skip(drop)
@@ -170,7 +171,8 @@ pub fn build_bootstrap_payload(
           matches!(event["type"].as_str(), Some(event_types::MASTER_DONE) | Some(event_types::RUN_END))
         })
         .map(|(index, _)| index + 1)
-    }),
+        .filter(|next| *next < events.len()),
+    }
   };
   let (value, untrimmed_wire_bytes) = fit_first_screen_payload(&mut build, &next_drop)?;
   Ok(BootstrapPayload { value, untrimmed_wire_bytes })
@@ -251,6 +253,10 @@ impl PartialEq for PageBootstrapKey {
   }
 }
 
+/// One body-memo entry: the payload key, the JSON body, its gzip when built, and the wire bytes the
+/// untrimmed payload takes.
+type BodyMemoEntry = (PageBootstrapKey, Bytes, Option<Bytes>, usize);
+
 /// The bootstrap route's JSON body one request built last, with its gzip when a request asked for
 /// one and the wire bytes the untrimmed payload takes.
 ///
@@ -258,10 +264,6 @@ impl PartialEq for PageBootstrapKey {
 /// serializing it takes about two hundred milliseconds. A repeat request whose payload inputs still hold their value
 /// serves the bytes already built. The key is the page bootstrap's, so a page and this route memoize the same payload
 /// under the same inputs; one entry holds one session, as the page's memo does.
-/// One body-memo entry: the payload key, the JSON body, its gzip when built, and the wire bytes the
-/// untrimmed payload takes.
-type BodyMemoEntry = (PageBootstrapKey, Bytes, Option<Bytes>, usize);
-
 #[derive(Default)]
 struct BootstrapBodyMemo {
   entry: Mutex<Option<BodyMemoEntry>>,
@@ -1254,8 +1256,6 @@ mod tests {
     assert_ne!(after.text.as_str(), first.text.as_str(), "a new event rebuilds the text");
   }
 
-  /// The fit keeps the largest tail the budget holds: the served wire fits, the kept messages are
-  /// the tail's last slots, and the untrimmed size is the full payload's wire.
   /// Deterministic incompressible-ish text: a fixed LCG over a 62-character alphabet, so the gzip
   /// of one slot is a real share of its raw size and the fixture's wire tracks its raw bytes.
   fn fixture_text(seed: u64, length: usize) -> String {
@@ -1354,6 +1354,82 @@ mod tests {
     assert_eq!(messages[0]["role"], "user", "a kept turn starts at its user message");
     let newest_marker = messages.iter().find(|message| message["content"] == json!(fixture_text(8, 1_600)));
     assert!(newest_marker.is_some(), "the newest turn's user message renders on the first screen");
+  }
+
+  /// Appends one turn of the fixture: a user message of `user_chars`, an assistant reply when `with_reply`, and the
+  /// turn's separator.
+  async fn append_fixture_turn(store: &Store, session_id: &str, turn: usize, user_chars: usize, with_reply: bool) {
+    store
+      .append_chat_event(session_id, json!({"type": "user", "content": fixture_text(turn as u64, user_chars)}))
+      .await
+      .unwrap();
+    if with_reply {
+      let reply = fixture_text(turn as u64 + 100, 1_600);
+      store
+        .append_chat_event(
+          session_id,
+          json!({"type": "assistant", "message": {"content": [{"type": "text", "text": reply}]}}),
+        )
+        .await
+        .unwrap();
+    }
+    store.append_chat_event(session_id, json!({"type": "master_done"})).await.unwrap();
+  }
+
+  /// A tail that starts past the history's first slot trims in its own indexes: the kept slots are the tail's last
+  /// whole turns, and the paging cursor is the absolute ordinal of the first kept slot. The turns take 3, 3, 2, 2
+  /// slots in turn, and the tail starts at slot 36, which is 6 modulo the 10-slot period: a trim that walked the
+  /// history's turn starts as the tail's own indexes would then land between turns at every step.
+  #[tokio::test]
+  async fn a_first_screen_trim_past_the_history_start_keeps_whole_turns_at_absolute_ordinals() {
+    let (_home, features) = feature_context();
+    let meta =
+      crate::test_support::create_node(&features.store, "trim-long-bootstrap", None, TaskProfile::Manager).await;
+    let turns = 30usize;
+    let mut turn_starts = Vec::new();
+    let mut total = 0usize;
+    for turn in 1..=turns {
+      turn_starts.push(total);
+      let with_reply = matches!(turn % 4, 1 | 2);
+      append_fixture_turn(&features.store, &meta.id, turn, 1_600, with_reply).await;
+      total += if with_reply { 3 } else { 2 };
+    }
+    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
+    let messages = payload.value["messages"].as_array().unwrap();
+    let start = payload.value["oldest_message_ordinal"].as_u64().unwrap() as usize;
+    assert!(start > 0, "the tail starts past the history's first slot");
+    let first_turn = turn_starts.iter().position(|turn_start| *turn_start == start);
+    let first_turn = first_turn.expect("the kept slots start at a turn boundary") + 1;
+    assert_eq!(start + messages.len(), total, "the kept slots run to the history's end");
+    assert_eq!(
+      messages[0]["content"],
+      json!(fixture_text(first_turn as u64, 1_600)),
+      "the first kept slot is its turn's user message"
+    );
+    let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload.value)).len();
+    assert!(served_wire <= FIRST_SCREEN_WIRE_BUDGET_BYTES, "served {served_wire} over the budget");
+    assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES);
+    assert_eq!(payload.value["has_more"], json!(true));
+    assert!(
+      messages.iter().any(|message| message["content"] == json!(fixture_text(turns as u64, 1_600))),
+      "the newest turn renders on the first screen"
+    );
+  }
+
+  /// A closed newest turn over the whole budget renders whole: the trim stops at its start, not past its end.
+  #[tokio::test]
+  async fn a_closed_newest_turn_over_the_budget_renders_whole() {
+    let (_home, features) = feature_context();
+    let meta =
+      crate::test_support::create_node(&features.store, "trim-oversized-turn", None, TaskProfile::Manager).await;
+    append_fixture_turn(&features.store, &meta.id, 1, 1_600, true).await;
+    append_fixture_turn(&features.store, &meta.id, 2, 20_000, true).await;
+    let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
+    let messages = payload.value["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3, "the newest turn's three slots render");
+    assert_eq!(messages[0]["content"], json!(fixture_text(2, 20_000)));
+    assert_eq!(payload.value["oldest_message_ordinal"], json!(3));
+    assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES);
   }
 
   /// The route's answer carries the untrimmed wire size in its header.

@@ -178,7 +178,7 @@ impl MessageProjection {
   /// list's end. A trim that keeps the tail from a turn start on keeps every kept turn whole.
   pub fn next_turn_start_after(&self, slot: usize) -> Option<usize> {
     let index = self.separator_ordinals.partition_point(|ordinal| *ordinal <= slot);
-    self.separator_ordinals.get(index).map(|ordinal| ordinal + 1)
+    self.separator_ordinals.get(index).map(|ordinal| ordinal + 1).filter(|start| *start < self.committed.len())
   }
 }
 

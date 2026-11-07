@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::Context;
+use charliebot_core::ndjson::trim_horizontal_space;
 use serde_json::Value;
 use serde_json::value::RawValue;
 use time::OffsetDateTime;
@@ -44,13 +45,6 @@ impl TypeLineFilter {
     };
     !self.keep_types.iter().any(|kind| kind == event_type)
   }
-}
-
-fn trim_horizontal_space(mut bytes: &[u8]) -> &[u8] {
-  while matches!(bytes.first(), Some(b' ' | b'\t')) {
-    bytes = &bytes[1..];
-  }
-  bytes
 }
 
 /// Parse raw NDJSON lines, skipping blank and malformed lines.

@@ -12,6 +12,7 @@ use anyhow::Context;
 use charliebot_core::event_types;
 use charliebot_core::fsutil;
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
+use charliebot_core::ndjson::trim_horizontal_space;
 use charliebot_core::proc_identity;
 use charliebot_core::run_token;
 use charliebot_core::text_repr::{self, JsonStyle};
@@ -280,13 +281,6 @@ fn first_header_string(mut rest: &[u8]) -> Option<(&[u8], &[u8])> {
   let quoted = rest.strip_prefix(b"\"")?;
   let end = quoted.iter().position(|byte| *byte == b'\"')?;
   Some((&quoted[..end], &quoted[end + 1..]))
-}
-
-fn trim_horizontal_space(mut bytes: &[u8]) -> &[u8] {
-  while matches!(bytes.first(), Some(b' ' | b'\t')) {
-    bytes = &bytes[1..];
-  }
-  bytes
 }
 
 /// The record fields a retry caller passes, in keyword order. `input_event_ids` is empty for a worker

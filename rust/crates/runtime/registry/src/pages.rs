@@ -28,6 +28,23 @@ pub fn package_directory(repo_root: &Path, package: &str) -> PathBuf {
   package.split('.').fold(root, |path, part| path.join(part))
 }
 
+/// The URL prefix of the static route: `web/static` and each page package's `static/` are served below it.
+///
+/// The router mounts it, the access-key gate leaves it public, and the template engine inlines a stylesheet whose
+/// link is below it.
+pub const STATIC_URL_PREFIX: &str = "/static/";
+
+/// [`STATIC_URL_PREFIX`] without its trailing slash, the form a mount's prefix stores.
+pub fn static_mount_prefix() -> &'static str {
+  STATIC_URL_PREFIX.trim_end_matches('/')
+}
+
+/// The URL prefix of one dotted page package's `static/` directory, mirroring [`package_directory`]: `features.<name>`
+/// maps to `/static/features/<name>`.
+pub fn package_static_prefix(package: &str) -> String {
+  format!("{STATIC_URL_PREFIX}{}", package.replace('.', "/"))
+}
+
 /// The slot's part templates that exist on disk now, as `<name>/page_<slot>.html`, in package order.
 ///
 /// `packages` is the registry's [`Registry::page_packages`]. An unknown slot fails.

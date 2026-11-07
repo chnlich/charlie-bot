@@ -41,7 +41,7 @@ use sha1::{Digest, Sha1};
 
 use crate::context::FeatureContext;
 use crate::inlined_script;
-use crate::pages::{self, package_directory};
+use crate::pages::{self, STATIC_URL_PREFIX, package_directory};
 use crate::watch::TreeWatch;
 
 /// A zero-argument template global: the name and the value the call returns.
@@ -490,7 +490,7 @@ fn linked_stylesheet(environment: &Environment<'_>, tag: &str) -> Result<Option<
   if rel != Some("stylesheet") {
     return Ok(None);
   }
-  let Some(path) = href.and_then(|url| url.strip_prefix("/static/")) else { return Ok(None) };
+  let Some(path) = href.and_then(|url| url.strip_prefix(STATIC_URL_PREFIX)) else { return Ok(None) };
   let path = path.split(['?', '#']).next().unwrap_or(path);
   match environment.get_template(path) {
     Ok(template) => Ok(Some(template.source().to_string())),

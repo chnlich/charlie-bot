@@ -17,6 +17,7 @@ use charliebot_compat::headers::header_text;
 use charliebot_compat::mimetypes_table::TEXT_HTML;
 use charliebot_compat::responses;
 use charliebot_core::run_token;
+use charliebot_registry::pages::STATIC_URL_PREFIX;
 use http::{HeaderMap, Method, StatusCode, header};
 use subtle::ConstantTimeEq;
 
@@ -29,7 +30,7 @@ pub const ACCESS_KEY_COOKIE: &str = "charliebot_access_key";
 pub const AUTH_STATUS_PATH: &str = "/api/auth/status";
 
 const PUBLIC_PATHS: &[&str] = &["/", AUTH_STATUS_PATH];
-const PUBLIC_PREFIXES: &[&str] = &["/static/"];
+const PUBLIC_PREFIXES: &[&str] = &[STATIC_URL_PREFIX];
 
 /// The self-contained page an unauthenticated browser navigation receives (`login_page.html`).
 const LOGIN_PAGE: &str = include_str!("login_page.html");

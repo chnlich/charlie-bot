@@ -437,6 +437,30 @@ test('an open non-cron root past rank 5 shows and draws no Show all when it is t
   assert.doesNotMatch(anchorOpenTag(html, 'work-5'), /session-group-limit-extra/);
 });
 
+test('an open root past rank 5 keeps its row above the Show all toggle', () => {
+  const {context, nav} = buildSidebarIndicatorContext([]);
+  context.SESSION_ID = 'work-8';
+  const rows = [];
+  for (let i = 1; i <= 8; i++) rows.push(manager(`work-${i}`, null, 20 - i));
+
+  context.renderSessionList(rows, 'all');
+
+  const html = nav.innerHTML;
+  // Five preview rows, then the open row, then the control that reveals the rest.
+  assert.ok(html.indexOf('id="session-work-5"') < html.indexOf('id="session-work-8"'));
+  assert.ok(html.indexOf('id="session-work-8"') < html.indexOf('>Show all</button>'));
+  assert.ok(html.indexOf('>Show all</button>') < html.indexOf('id="session-work-6"'));
+  assert.match(anchorOpenTag(html, 'work-8'), /bg-blue-600\/20 text-blue-300/);
+  assert.doesNotMatch(anchorOpenTag(html, 'work-8'), /session-group-limit-extra/);
+
+  context.toggleSessionGroupLimit('Work');
+  context.renderSessionList(rows, 'all');
+  const expanded = nav.innerHTML;
+  // The open row stays above the control; the rows it reveals stay below it.
+  assert.ok(expanded.indexOf('id="session-work-8"') < expanded.indexOf('>Show less</button>'));
+  assert.ok(expanded.indexOf('>Show less</button>') < expanded.indexOf('id="session-work-6"'));
+});
+
 test('an open child keeps its non-cron root visible past rank 5', () => {
   const {context, nav} = buildSidebarIndicatorContext([]);
   context.SESSION_ID = 'child-6';

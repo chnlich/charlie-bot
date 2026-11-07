@@ -1222,9 +1222,9 @@ mod tests {
 
   #[tokio::test]
   async fn a_path_after_nonword_alphanumerics_is_removed() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
     for marker in ["ⓐ", "\u{0345}"] {
-      let home = Home::new();
-      let sid = home.manager("session", None).await;
       running_user_message(&home, &sid, user_message(CHINESE_MESSAGE)).await;
       let reply = format!("好。{marker}/ChatPanelStatusToggleWithLongName");
 

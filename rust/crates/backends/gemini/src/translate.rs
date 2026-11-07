@@ -23,7 +23,7 @@ impl GeminiTranslator {
     Self { text_buffer: String::new() }
   }
 
-  /// Translates one stream-json event. A type this translator does not handle flushes the buffer.
+  /// One stream-json event translated. A type this translator does not handle flushes the buffer.
   pub fn translate_event(&mut self, event: &Value) -> anyhow::Result<Vec<Value>> {
     let Some(event) = event.as_object() else {
       bail!("gemini event is not a JSON object: {event}");

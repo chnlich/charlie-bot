@@ -576,6 +576,24 @@ async fn a_non_quota_failed_iteration_is_reported_and_the_loop_continues() -> an
 
 #[tokio::test]
 #[ignore = "integration"]
+async fn a_textual_quota_error_without_an_adapter_failure_records_the_iteration_reason() -> anyhow::Result<()> {
+  // The worker's transcript names the quota, but no launch refusal or worker quota error reached the adapter: the
+  // record must not claim a quota failure the run never reported.
+  let quota_text = json!({"type": "assistant_error", "content": "quota exceeded for this model"});
+  let harness = LoopHarness::new(&["fake"], &[], vec![event_script(&quota_text, 1)]).await?;
+
+  harness.finish_loop(harness.start_loop(3)).await;
+
+  let path = charliebot_core::home::backend_availability_path(&harness.stack.cfg.charliebot_home);
+  let state: Value = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+  assert_eq!(state["fake"]["reason"], "iteration_failure", "{state}");
+  let detail = state["fake"]["detail"].as_str().expect("the record carries the blocker detail");
+  assert!(detail.contains("quota exceeded"), "{detail}");
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
 async fn replaying_an_iteration_report_is_idempotent() -> anyhow::Result<()> {
   let harness = LoopHarness::new(&[], &[], vec![recovery_support::result_script("first words")]).await?;
 

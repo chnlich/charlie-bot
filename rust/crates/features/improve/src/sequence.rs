@@ -454,16 +454,11 @@ async fn run_loop(
       let quota_failure = adapter.take_quota_failure(spec.child_id, &run.id);
       if let Some(reason) = blocker_reason {
         if state.backend_from_pool {
-          let (resets_at, message) = match &quota_failure {
-            Some(failure) => (failure.resets_at, failure.message.clone()),
-            None => (None, String::new()),
+          let (resets_at, cooling_reason, message) = match &quota_failure {
+            Some(failure) => (failure.resets_at, backend_availability::REASON_QUOTA_ERROR, failure.message.clone()),
+            None => (None, backend_availability::REASON_ITERATION_FAILURE, reason.clone()),
           };
-          pool.availability().record(
-            &iteration_backend,
-            resets_at,
-            backend_availability::REASON_QUOTA_ERROR,
-            &message,
-          )?;
+          pool.availability().record(&iteration_backend, resets_at, cooling_reason, &message)?;
           if quota_failure.is_some() && run.pid.is_none() && iteration < spec.iterations {
             match pool.select(cfg, "improve", &[])? {
               Some(member) => next_pool_member = Some(member),

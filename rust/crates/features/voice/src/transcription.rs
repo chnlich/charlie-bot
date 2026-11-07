@@ -588,8 +588,9 @@ async fn muse_send_audio(
     if *cancelled.borrow() {
       return Ok(());
     }
-    sender.send(Message::Binary(chunk.clone())).await.map_err(|error| error.to_string())?;
-    sent_seconds += chunk.len() as f64 / AUDIO_BYTES_PER_SECOND;
+    let chunk_seconds = chunk.len() as f64 / AUDIO_BYTES_PER_SECOND;
+    sender.send(Message::Binary(chunk)).await.map_err(|error| error.to_string())?;
+    sent_seconds += chunk_seconds;
   }
   if !*cancelled.borrow() {
     send_json(&sender, json!({ "type": "endStream" })).await?;
@@ -964,11 +965,11 @@ mod tests {
   async fn muse_loopback_streams_partial_and_final_with_a_four_second_lead_cap() {
     let (listener, endpoint) = fake_listener().await;
     let second = SAMPLE_RATE * 2;
-    let chunks = vec![vec![1; second * 4], vec![2; 2], vec![3; 2]];
-    let queued_bytes = chunks.iter().map(Vec::len).sum();
+    let chunks = [(second * 4, 1), (2, 2), (2, 3)];
+    let queued_bytes = chunks.iter().map(|(size, _)| *size).sum();
     let audio = AudioQueue::new_with_limits_for_test(queued_bytes, 0);
-    for chunk in &chunks {
-      assert!(audio.put(chunk.clone()).await);
+    for (size, value) in chunks.iter().copied() {
+      assert!(audio.put(vec![value; size]).await);
     }
     audio.end(None).await;
 
@@ -987,8 +988,9 @@ mod tests {
         };
         match message.expect("read Muse frame") {
           ServerMessage::Binary(bytes) => {
-            let expected = expected_chunks.next().expect("Muse forwards every queued chunk once");
-            assert_eq!(bytes.as_ref(), expected.as_slice());
+            let (expected_size, expected_value) = expected_chunks.next().expect("Muse forwards every queued chunk once");
+            assert_eq!(bytes.len(), expected_size);
+            assert!(bytes.iter().all(|byte| *byte == expected_value));
           }
           ServerMessage::Text(text) => {
             let text = text.to_string();

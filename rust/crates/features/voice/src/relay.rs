@@ -882,7 +882,7 @@ mod tests {
       receive_json_frame(&mut browser).await,
       json!({ "type": "error", "message": "unexpected frame after the recording's end" })
     );
-    browser.close(None).await.expect("close browser after the protocol error");
+    drop(browser);
     assert!(!voice_dir(&server.config).exists(), "a protocol violation leaves the recording unarchived");
     stop_relay_test(server).await;
   }

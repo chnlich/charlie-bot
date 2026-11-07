@@ -121,17 +121,17 @@ function requireEnv(names) {
 // session's marker is its last turn's text, unique to it, so the page shows a switch only when that session's own
 // message is rendered.
 async function seedSession(api, tag, index, targetBytes) {
-  const id = await api.createSession(`pn-${tag}-${index}`, STUB_BACKEND_ID);
+  const { id, group } = await api.createSession(`pn-${tag}-${index}`, STUB_BACKEND_ID);
   for (let turn = 1; ; turn++) {
     const marker = `pn-seed ${tag} ${index} ${turn}`;
     await api.sendMessage(id, marker);
     await api.waitForIdle(id, SEED_TIMEOUT_MS);
     if (targetBytes === null) {
-      return { id, marker, turns: 1, bootstrapWireBytes: null };
+      return { id, group, marker, turns: 1, bootstrapWireBytes: null };
     }
     const { untrimmedBytes } = await api.bootstrapWireBytes(id);
     if (untrimmedBytes >= targetBytes) {
-      return { id, marker, turns: turn, bootstrapWireBytes: untrimmedBytes };
+      return { id, group, marker, turns: turn, bootstrapWireBytes: untrimmedBytes };
     }
     if (turn === MAX_SIZING_TURNS) {
       throw new Error(

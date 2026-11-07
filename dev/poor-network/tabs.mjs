@@ -8,6 +8,14 @@ import { INTERCEPT_PATTERNS } from './assets.mjs';
 const POLL_MS = 25;
 // The localStorage key the web client reads its access key from (web/static/js/config.js).
 const ACCESS_KEY_NAME = 'charliebot_access_key';
+// The wait for a row that a group's "Show all" fetches: the full listing crosses the link beside the background load.
+const ROW_PAINT_TIMEOUT_MS = 180000;
+
+// A page expression for the session's row anchor in the sidebar list, or undefined when the list has no such row.
+function sessionRowExpression(sessionId) {
+  return `Array.from(document.querySelectorAll('#session-list a.session-row'))
+    .find((link) => link.href.includes('session=${sessionId}&') || link.href.endsWith('session=${sessionId}'))`;
+}
 
 // The sidebar spinner probe the page runs while the bench measures a turn: it
 // counts the full sidebar repaints — the paints that replace the session
@@ -163,18 +171,51 @@ export class Tab {
       'window.__pnSidebarProbe ? {repaints: window.__pnSidebarProbe.repaints, restarts: window.__pnSidebarProbe.restarts} : null');
   }
 
-  // The session row's anchor. Clicking it runs the page's own switch, as a person's click does.
+  // Puts the session's sidebar row on screen, as a person does before clicking it. A group paints its first five roots
+  // and keeps the others behind its "Show all" toggle (web/static/js/sidebar/groups.js). A kept-back row is either
+  // hidden in the document, or absent when the page carries only the first screen's rows; in that case the toggle
+  // fetches the full listing and repaints the list. A painted row needs nothing. Otherwise the bench clicks the toggle
+  // of the session's group and waits for the row. When the row is not painted and the group shows no toggle to click,
+  // the call fails. The toggle's fetch shares the link, so call this before a timed click. Returns whether it clicked
+  // the toggle.
+  async showRow(session) {
+    const step = await this.evaluate(`(() => {
+      const row = ${sessionRowExpression(session.id)};
+      if (row && row.checkVisibility()) return 'painted';
+      const toggle = Array.from(document.querySelectorAll('.session-group-limit-toggle')).find((button) =>
+        button.dataset.sgroupLimitToggleKey === ${JSON.stringify(session.group)}
+          && button.getAttribute('aria-expanded') === 'false' && button.checkVisibility());
+      if (!toggle) return 'unreachable';
+      toggle.click();
+      return 'expanded';
+    })()`);
+    if (step === 'unreachable') {
+      throw new Error(`no sidebar row for session ${session.id} on ${this.name}, and its group ` +
+        `${JSON.stringify(session.group)} shows no Show all toggle`);
+    }
+    if (step === 'painted') {
+      return false;
+    }
+    await waitFor(
+      () => this.evaluate(`(() => { const row = ${sessionRowExpression(session.id)}; return !!row && row.checkVisibility(); })()`),
+      ROW_PAINT_TIMEOUT_MS,
+      `${this.name} to paint the row of session ${session.id} after its group's Show all`,
+    );
+    return true;
+  }
+
+  // Clicks the session's row, which runs the page's own switch as a person's click does. The row must be on screen:
+  // showRow puts a row that its group keeps back there.
   async clickSession(sessionId) {
     const clicked = await this.evaluate(`(() => {
-      const anchor = Array.from(document.querySelectorAll('#session-list a.session-row'))
-        .find((link) => link.href.includes('session=${sessionId}&') || link.href.endsWith('session=${sessionId}'));
-      if (!anchor) return null;
+      const anchor = ${sessionRowExpression(sessionId)};
+      if (!anchor || !anchor.checkVisibility()) return null;
       const at = Date.now();
       anchor.click();
       return at;
     })()`);
     if (clicked === null) {
-      throw new Error(`no sidebar row for session ${sessionId} on ${this.name}`);
+      throw new Error(`no painted sidebar row for session ${sessionId} on ${this.name}`);
     }
     return clicked;
   }

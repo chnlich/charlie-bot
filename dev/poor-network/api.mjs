@@ -89,10 +89,11 @@ export class ServerApi {
   }
 
   // Creates a manager root on `backend`, a task-tree node that accepts messages. `slots` are registered metadata slot
-  // values, such as a Slack origin. Returns its id.
+  // values, such as a Slack origin. Returns its id and the key of the sidebar group that lists it: the row's `group`,
+  // or '' for a row without one, as groupSessionsBySortedKeys in web/static/js/sidebar/groups.js keys it.
   async createSession(name, backend, slots = {}) {
     const meta = await this.json('POST', '/api/sessions/', { name, backend, ...slots });
-    return meta.id;
+    return { id: meta.id, group: meta.group || '' };
   }
 
   // Sends one user message, as the composer does. Returns the server's answer time in milliseconds.

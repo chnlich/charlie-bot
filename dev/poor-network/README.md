@@ -126,6 +126,15 @@ paths — the row refresh and the status delta — so the whole list is fetched 
 a reconnect after a network loss. These scenarios have no target. The report prints their received and sent bytes, the
 endpoint split, the status polls and the rows the tab painted.
 
+## Switch clicks
+
+A sidebar group paints its first five roots and keeps the others behind its Show all toggle. The chat page carries only
+the rows its first screen paints, so a kept-back row is absent from the document until the toggle fetches the full
+listing. Before a switch, the bench puts the target's row on screen as a person does: when the row is not painted, it
+clicks the Show all of the session's group and waits for the row. The switch's time starts at the row's click. The held
+blackout's five targets are put on screen before the blackout starts, because a Show all inside the blackout would wait
+for the link. The bench clicks only painted rows, so a target that no toggle reaches stops the run.
+
 ## Capped steps
 
 A switch or a send in scenarios 2 and 3 that has not finished within 180 s is recorded at 180 s, and the report counts it
@@ -311,7 +320,8 @@ them when a change touches this directory. To reproduce them through the remote 
 
 ```sh
 dev/remote-run/run.sh node --test dev/poor-network/proxy.integration.test.mjs dev/poor-network/report.test.mjs \
-  dev/poor-network/front.integration.test.mjs dev/poor-network/chrome.test.mjs
+  dev/poor-network/front.integration.test.mjs dev/poor-network/chrome.test.mjs \
+  dev/poor-network/scenarios.test.mjs dev/poor-network/tabs.test.mjs
 ```
 
 They check the relay's tunnel transfer time at the link, its stop on SIGTERM, and its refusal of a target without a
@@ -324,3 +334,6 @@ holds, and only the reference before side's line carries a verdict. The chrome t
 closed browser fails its unanswered DevTools calls and drops its pipe handles. The scenario tests check the status
 counting against synthetic poll records of both answer shapes: the baseline's whole row map and the change's
 `{token, rows, gone}`.
+The tab tests check the switch's row handling against a stub sidebar that keeps rows back: a row absent from the
+document or hidden in it is clicked only after its group's Show all paints it, and a row that no toggle reaches fails
+the step.

@@ -426,6 +426,9 @@ export async function backgroundRep(ctx, repetition) {
     await api.waitForIdle(target.id, MARKER_TURN_TIMEOUT_MS);
     const bootstrap = await api.json('GET', `/api/sessions/${target.id}/bootstrap`);
     const marker = await firstScreenMarker(tab, bootstrap.messages);
+    // A person first brings the target's row on screen through its group's Show all when the group keeps it back; the
+    // time starts at the row's click.
+    await tab.showRow(target);
     await tab.watchChat('switch', marker);
     await tab.watchSwitchPhase('switch', target.id);
     const clickedAt = await tab.clickSession(target.id);
@@ -472,6 +475,7 @@ export async function backgroundRep(ctx, repetition) {
     // phase, so its numbers stay comparable with the baseline. The target is a held session, which the page has not
     // loaded and whose bootstrap has the live view's wire size.
     const duringTarget = sessions.held[0];
+    await tab.showRow(duringTarget);
     await tab.watchChat('switch-during-refresh', duringTarget.marker);
     const duringClickedAt = await clickDuringListRefresh(tab, duringTarget.id);
     const duringShown = await tab.shownBy('switch-during-refresh', duringClickedAt, SHOW_TIMEOUT_MS);
@@ -541,7 +545,7 @@ async function populateView(ctx, filter) {
     const created = [];
     for (let index = 1; index <= rows; index++) {
       const slots = { slack_origin: slackOrigin(index) };
-      created.push(await api.createSession(`pn-thread-${tag}-${index}`, ctx.backendId, slots));
+      created.push((await api.createSession(`pn-thread-${tag}-${index}`, ctx.backendId, slots)).id);
     }
     renamed = created[0];
     churn = created[1];
@@ -588,7 +592,12 @@ export async function heldBlackoutRep(ctx) {
     await tabs.show(tab);
     await tabs.waitIdle(SETTLE_TIMEOUT_MS);
 
+    // The rows the blackout's clicks need are on screen before the link drops: a Show all inside the blackout would
+    // wait for the link.
     const clicks = sessions.held;
+    for (const target of clicks) {
+      await tab.showRow(target);
+    }
     const restoreAt = Date.now() + LINK.blackoutSeconds * 1000;
     proxy.blackout({ seconds: LINK.blackoutSeconds, mode: 'hold' });
     for (const [index, target] of clicks.entries()) {

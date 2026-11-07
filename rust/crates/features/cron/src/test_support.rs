@@ -15,7 +15,9 @@ use charliebot_registry::backend::{
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::registry::HostLogin;
 use charliebot_registry::{Registry, RegistryError};
-use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec};
+use charliebot_store::metadata::{
+  LAST_RUN_STATUS, SessionMetadata, SessionStatus, TaskApprover, TaskProfile, TaskSpec,
+};
 use charliebot_store::{CreateTask, Store, TaskCaller};
 use futures_util::future::BoxFuture;
 use serde_json::Map;
@@ -128,7 +130,51 @@ fn repo_root() -> PathBuf {
 }
 
 fn register_test_handler(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.scheduled_handler("synthetic_handler", |_features| Box::pin(async { Ok("synthetic result".to_string()) }))
+  registry
+    .scheduled_handler("synthetic_handler", |_features| Box::pin(async { Ok("synthetic result".to_string()) }))?;
+  registry.scheduled_handler("synthetic_probe_handler", probe_handler)?;
+  registry.scheduled_handler("synthetic_failing_probe_handler", failing_probe_handler)
+}
+
+/// One probe-handler call: its profile home, and every active session's `last_run_status` read inside the call.
+type ProbeCall = (PathBuf, Vec<(String, Value)>);
+
+static PROBE_HANDLER_CALLS: Mutex<Vec<ProbeCall>> = Mutex::new(Vec::new());
+
+/// The `last_run_status` of every active session read inside each probe-handler call in the home, in call order.
+pub fn probe_handler_calls(home: &Path) -> Vec<Vec<(String, Value)>> {
+  PROBE_HANDLER_CALLS
+    .lock()
+    .expect("the probe handler call log is not poisoned")
+    .iter()
+    .filter(|(owner, _)| owner == home)
+    .map(|(_, states)| states.clone())
+    .collect()
+}
+
+fn probe_handler(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<String>> {
+  Box::pin(async move {
+    record_probe_call(&features)?;
+    Ok("synthetic probe result".to_string())
+  })
+}
+
+fn failing_probe_handler(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<String>> {
+  Box::pin(async move {
+    record_probe_call(&features)?;
+    anyhow::bail!("synthetic probe failure")
+  })
+}
+
+fn record_probe_call(features: &FeatureContext) -> anyhow::Result<()> {
+  let home = features.config.get()?.charliebot_home.clone();
+  let rows = features.store.list_sessions(Some(SessionStatus::Active), None, None)?.rows;
+  let states = rows
+    .iter()
+    .map(|session| (session.id.clone(), session.extra.get(LAST_RUN_STATUS).cloned().unwrap_or(Value::Null)))
+    .collect();
+  PROBE_HANDLER_CALLS.lock().expect("the probe handler call log is not poisoned").push((home, states));
+  Ok(())
 }
 
 /// The goal of a task whose rounds stay running until the test ends them. The synthetic backend holds a launch that

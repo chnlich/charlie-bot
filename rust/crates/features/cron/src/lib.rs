@@ -25,6 +25,14 @@ use charliebot_store::metadata::{
 };
 use serde_json::{Map, Value, json};
 
+/// The `last_run_status` values a bound node holds. A handler fire leaves `running` from before its handler body
+/// until the handler returns, so a node still holding it when a later server start reads it belongs to a run the
+/// previous server process interrupted.
+pub(crate) const RUN_STATUS_RUNNING: &str = "running";
+pub(crate) const RUN_STATUS_SUCCESS: &str = "success";
+pub(crate) const RUN_STATUS_FAILED: &str = "failed";
+pub(crate) const RUN_STATUS_SKIPPED: &str = "skipped";
+
 struct CronTurnContribution;
 
 fn render_scheduled_run_skipped(event: &Value) -> Value {
@@ -70,7 +78,11 @@ fn validate_cron_fields(values: &mut Map<String, Value>) -> Option<String> {
     }
   }
   if values.get(LAST_RUN_STATUS).is_some_and(|value| {
-    !value.is_null() && !matches!(value.as_str(), Some("running" | "success" | "failed" | "skipped"))
+    !value.is_null()
+      && !matches!(
+        value.as_str(),
+        Some(RUN_STATUS_RUNNING | RUN_STATUS_SUCCESS | RUN_STATUS_FAILED | RUN_STATUS_SKIPPED)
+      )
   }) {
     return Some("last_run_status must be a LastRunStatus or null".to_string());
   }

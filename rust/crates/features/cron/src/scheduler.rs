@@ -24,6 +24,7 @@ use tokio::task::JoinHandle;
 
 use crate::config::{ScheduledTaskConfig, TaskMode, effective_backend};
 use crate::firing::{firing_ref, round_request_id, round_request_task};
+use crate::{RUN_STATUS_FAILED, RUN_STATUS_RUNNING, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCESS};
 use crate::{host_gate, loader, steps};
 
 const TICK_SECONDS: u64 = 60;
@@ -255,8 +256,12 @@ impl CronScheduler {
     skipped_at: String,
     reason: String,
   ) -> anyhow::Result<()> {
-    update_cron_slots(&self.features, session_id, json!({LAST_SCHEDULED_RUN: skipped_at, LAST_RUN_STATUS: "skipped"}))
-      .await?;
+    update_cron_slots(
+      &self.features,
+      session_id,
+      json!({LAST_SCHEDULED_RUN: skipped_at, LAST_RUN_STATUS: RUN_STATUS_SKIPPED}),
+    )
+    .await?;
     self
       .features
       .store
@@ -309,32 +314,11 @@ impl CronScheduler {
         )
         .await?;
       dispatcher.dispatch_pending(&session.id).await?;
-      self.record_bound_fire(&session, &task, now).await?;
+      self.record_bound_fire(&session, &task, now, None).await?;
       return Ok(TaskRunResult { session_id: session.id, thread_id: None });
     }
     if let Some(handler) = task.handler.as_deref() {
-      self.record_bound_fire(&session, &task, now).await?;
-      let handler = self
-        .features
-        .registry
-        .scheduled_handler_named(handler)
-        .ok_or_else(|| anyhow::anyhow!("Unknown handler: {handler:?}"))?;
-      let event = match handler(Arc::clone(&self.features)).await {
-        Ok(message) => {
-          json!({"type": event_types::HANDLER_RESULT, "task": task.name, "status": event_types::HANDLER_STATUS_OK, "message": message})
-        }
-        Err(error) => {
-          tracing::warn!(task = %task.name, error = %error, "handler_task_error");
-          json!({"type": event_types::HANDLER_RESULT, "task": task.name, "status": event_types::HANDLER_STATUS_ERROR, "message": error.to_string()})
-        }
-      };
-      let status = if event.get("status").and_then(Value::as_str) == Some(event_types::HANDLER_STATUS_OK) {
-        "success"
-      } else {
-        "failed"
-      };
-      self.update_status(&session.id, status).await?;
-      self.features.store.persist_and_broadcast(&session.id, event).await?;
+      self.fire_handler(&session, &task, handler, now).await?;
       return Ok(TaskRunResult { session_id: session.id, thread_id: None });
     }
     let executor: Arc<dyn SequenceExecutor> =
@@ -346,7 +330,7 @@ impl CronScheduler {
     let model = (!option.model.is_empty()).then(|| option.model.clone());
     let (leaf, run, prompt, steps) =
       self.register_fire_work(&task, &session, &firing, &backend, model.as_deref(), &cfg).await?;
-    self.record_bound_fire(&session, &task, now).await?;
+    self.record_bound_fire(&session, &task, now, None).await?;
     // A run without steps takes the work context, whose task text is the leaf goal (the cron prompt) and which
     // prepares a worktree from the leaf's repo. A launch text would route it to the step context instead, which
     // never prepares one.
@@ -377,6 +361,101 @@ impl CronScheduler {
       executor.launch(&leaf.id, &run.id, launch_text.as_deref()).await?;
     }
     Ok(TaskRunResult { session_id: session.id, thread_id: None })
+  }
+
+  /// One handler fire on its bound node. The node holds `running` from the fire until the handler returns, so a
+  /// server stop in between leaves the state a later start reads as an interrupted run.
+  async fn fire_handler(
+    &self,
+    session: &SessionMetadata,
+    task: &ScheduledTaskConfig,
+    handler_name: &str,
+    now: chrono::DateTime<chrono::Utc>,
+  ) -> anyhow::Result<()> {
+    self.record_bound_fire(session, task, now, Some(RUN_STATUS_RUNNING)).await?;
+    let Some(handler) = self.features.registry.scheduled_handler_named(handler_name) else {
+      // The fire is already consumed, so a missing handler must not leave the run looking interrupted.
+      self.update_status(&session.id, RUN_STATUS_FAILED).await?;
+      anyhow::bail!("Unknown handler: {handler_name:?}");
+    };
+    let event = match handler(Arc::clone(&self.features)).await {
+      Ok(message) => {
+        json!({"type": event_types::HANDLER_RESULT, "task": task.name, "status": event_types::HANDLER_STATUS_OK, "message": message})
+      }
+      Err(error) => {
+        tracing::warn!(task = %task.name, error = %error, "handler_task_error");
+        json!({"type": event_types::HANDLER_RESULT, "task": task.name, "status": event_types::HANDLER_STATUS_ERROR, "message": error.to_string()})
+      }
+    };
+    let status = if event.get("status").and_then(Value::as_str) == Some(event_types::HANDLER_STATUS_OK) {
+      RUN_STATUS_SUCCESS
+    } else {
+      RUN_STATUS_FAILED
+    };
+    self.update_status(&session.id, status).await?;
+    self.features.store.persist_and_broadcast(&session.id, event).await?;
+    Ok(())
+  }
+
+  /// Reports and re-runs every handler run that a previous server process interrupted.
+  ///
+  /// A handler runs inside the server process, so a stop kills it before its own failure path can record anything.
+  /// The fire leaves `running` on the bound node, so a node still holding it at this start belongs to such a run.
+  /// The interruption is recorded on the node; an enabled task then fires once through the normal handler path, so
+  /// the new run records its own result. The re-run reads `enabled` as this start loaded it.
+  async fn reconcile_interrupted_handlers(&self) -> anyhow::Result<()> {
+    let cfg = self.features.config.get()?;
+    let snapshot = loader::load_snapshot(&self.features, &cfg)?;
+    for task in &snapshot.tasks {
+      if task.handler.is_none() {
+        continue;
+      }
+      if let Err(error) = self.reconcile_interrupted_handler(task, &cfg).await {
+        tracing::error!(task = %task.name, error = %error, "scheduler_handler_reconcile_error");
+      }
+    }
+    Ok(())
+  }
+
+  async fn reconcile_interrupted_handler(
+    &self,
+    task: &ScheduledTaskConfig,
+    cfg: &CharlieBotConfig,
+  ) -> anyhow::Result<()> {
+    let Some(session_id) = task.session_id.as_deref() else { return Ok(()) };
+    let Some(node) = self.features.store.load_meta(session_id).await? else { return Ok(()) };
+    if metadata_string(&node, LAST_RUN_STATUS).as_deref() != Some(RUN_STATUS_RUNNING) {
+      return Ok(());
+    }
+    let fired_at = metadata_string(&node, LAST_SCHEDULED_RUN).unwrap_or_else(|| "an unrecorded time".to_string());
+    self
+      .features
+      .store
+      .persist_and_broadcast(
+        session_id,
+        json!({
+          "type": event_types::HANDLER_RESULT,
+          "task": task.name,
+          "status": event_types::HANDLER_STATUS_ERROR,
+          "message": format!("A server stop interrupted the run that fired at {fired_at}."),
+        }),
+      )
+      .await?;
+    self.update_status(session_id, RUN_STATUS_FAILED).await?;
+    tracing::warn!(task = %task.name, session = %session_id, fired_at = %fired_at, "scheduler_handler_run_interrupted");
+    if task.enabled {
+      // The re-run does not hold this start: the server binds its port only after the start returns, and a handler
+      // can take minutes.
+      let scheduler = self.clone();
+      let task = task.clone();
+      let cfg = cfg.clone();
+      tokio::spawn(async move {
+        if let Err(error) = scheduler.execute_task(task, None, true, cfg, chrono::Utc::now()).await {
+          tracing::error!(error = %error, "scheduler_handler_rerun_error");
+        }
+      });
+    }
+    Ok(())
   }
 
   async fn register_fire_work(
@@ -510,16 +589,25 @@ impl CronScheduler {
     Ok(meta)
   }
 
+  /// Records a fire on the bound node. A handler fire also writes `running`, so the node tells a later start
+  /// whether the handler returned.
   async fn record_bound_fire(
     &self,
     session: &SessionMetadata,
     task: &ScheduledTaskConfig,
     now: chrono::DateTime<chrono::Utc>,
+    status: Option<&str>,
   ) -> anyhow::Result<()> {
     let timezone = task.timezone.parse::<chrono_tz::Tz>()?;
     let now = isoformat_text(&now.with_timezone(&timezone))?;
-    update_cron_slots(&self.features, &session.id, json!({LAST_SCHEDULED_RUN: now, LAST_SCHEDULED_CRON: task.cron}))
-      .await?;
+    let mut fields = Map::from_iter([
+      (LAST_SCHEDULED_RUN.to_string(), json!(now)),
+      (LAST_SCHEDULED_CRON.to_string(), json!(task.cron)),
+    ]);
+    if let Some(status) = status {
+      fields.insert(LAST_RUN_STATUS.to_string(), json!(status));
+    }
+    update_cron_slots(&self.features, &session.id, Value::Object(fields)).await?;
     Ok(())
   }
 
@@ -636,6 +724,9 @@ impl Service for SchedulerService {
     Box::pin(async move {
       ctx.recovery_done.await;
       let scheduler = CronScheduler::new(Arc::clone(&ctx.features));
+      if let Err(error) = scheduler.reconcile_interrupted_handlers().await {
+        tracing::error!(error = %error, "scheduler_handler_reconcile_failed");
+      }
       ctx.features.startup.insert(scheduler.clone())?;
       let run_scheduler = scheduler.clone();
       let task = tokio::spawn(async move { run_scheduler.loop_forever().await });
@@ -922,8 +1013,9 @@ mod tests {
   use crate::config::{ScheduledTaskConfig, StepConfig, TaskMode};
   use crate::test_support::{
     FakeGit, GIT_PROGRAM_LOCK, child_manager, feature_context, feature_context_with_host_backends, host_probe_count,
-    manager, set_host_login, write_prompted_task, write_task,
+    manager, probe_handler_calls, set_host_login, write_prompted_task, write_task,
   };
+  use crate::{RUN_STATUS_FAILED, RUN_STATUS_RUNNING, RUN_STATUS_SUCCESS};
   use charliebot_registry::registry::HostLogin;
   use charliebot_tasks::test_support::process_guard::ProcessGroupGuard;
 
@@ -1921,6 +2013,170 @@ mod tests {
         event.get("type").and_then(CompactValue::as_str) == Some(charliebot_core::event_types::HANDLER_RESULT)
       })
       .count()
+  }
+
+  /// The error-status `handler_result` events on a bound node, the shape the interruption record takes.
+  fn interrupted_results(features: &FeatureContext, session_id: &str) -> Vec<CompactValue> {
+    features
+      .store
+      .load_chat_events_sync(session_id)
+      .unwrap()
+      .into_iter()
+      .filter(|event| {
+        event.get("type").and_then(CompactValue::as_str) == Some(charliebot_core::event_types::HANDLER_RESULT)
+          && event.get("status").and_then(CompactValue::as_str)
+            == Some(charliebot_core::event_types::HANDLER_STATUS_ERROR)
+      })
+      .collect()
+  }
+
+  /// A handler task bound to a fresh manager node, its yaml rewritten with the binding and the named handler.
+  async fn bound_probe_task(
+    features: &Arc<FeatureContext>,
+    name: &str,
+    handler: &str,
+    enabled: bool,
+  ) -> SessionMetadata {
+    let node = manager(features, &format!("{name}-node")).await.unwrap();
+    let home = features.config.get().unwrap().charliebot_home.clone();
+    write_task(
+      &home,
+      name,
+      &json!({"cron": "* * * * *", "handler": handler, "enabled": enabled, "timezone": "UTC", "session_id": node.id}),
+    );
+    node
+  }
+
+  /// The cron slot state a previous server process left on a bound node.
+  async fn set_cron_run_state(features: &FeatureContext, session_id: &str, fired_at: &str, status: &str) {
+    let guard = features.store.control_lock().await;
+    features
+      .store
+      .update_slot_fields_locked(
+        &guard,
+        session_id,
+        "cron",
+        Map::from_iter([
+          (LAST_SCHEDULED_RUN.to_string(), json!(fired_at)),
+          (LAST_RUN_STATUS.to_string(), json!(status)),
+        ]),
+      )
+      .await
+      .unwrap();
+    drop(guard);
+  }
+
+  async fn run_status(features: &FeatureContext, session_id: &str) -> Option<String> {
+    let meta = features.store.get_session(session_id).await.unwrap().unwrap();
+    meta.extra.get(LAST_RUN_STATUS).and_then(Value::as_str).map(str::to_string)
+  }
+
+  /// The probe-handler calls in the home once at least `count` of them happened.
+  async fn wait_for_probe_calls(home: &Path, count: usize) -> Vec<Vec<(String, Value)>> {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+      loop {
+        let calls = probe_handler_calls(home);
+        if calls.len() >= count {
+          return calls;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .expect("the reconciliation fires the handler")
+  }
+
+  /// The node's run status once the re-run records `expected`.
+  async fn wait_for_run_status(features: &FeatureContext, session_id: &str, expected: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+      loop {
+        if run_status(features, session_id).await.as_deref() == Some(expected) {
+          return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .expect("the node reaches the expected run status");
+  }
+
+  /// Every `last_run_status` a probe handler read on `node_id`, one per call that saw the node.
+  fn observed_statuses(calls: &[Vec<(String, Value)>], node_id: &str) -> Vec<Value> {
+    calls
+      .iter()
+      .filter_map(|states| states.iter().find(|(id, _)| id == node_id).map(|(_, status)| status.clone()))
+      .collect()
+  }
+
+  #[tokio::test]
+  async fn a_handler_fire_holds_running_until_the_handler_records_its_result() {
+    let (home, features) = feature_context();
+    let ok_node = bound_probe_task(&features, "probe-ok", "synthetic_probe_handler", true).await;
+    let failed_node = bound_probe_task(&features, "probe-failure", "synthetic_failing_probe_handler", true).await;
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+
+    scheduler.tick_at(utc_at(0, 30)).await.unwrap();
+
+    let calls = probe_handler_calls(home.path());
+    assert_eq!(calls.len(), 2, "each bound handler task fired once");
+    assert!(observed_statuses(&calls, &ok_node.id).contains(&json!(RUN_STATUS_RUNNING)));
+    assert!(observed_statuses(&calls, &failed_node.id).contains(&json!(RUN_STATUS_RUNNING)));
+    assert_eq!(run_status(&features, &ok_node.id).await.as_deref(), Some(RUN_STATUS_SUCCESS));
+    assert_eq!(run_status(&features, &failed_node.id).await.as_deref(), Some(RUN_STATUS_FAILED));
+
+    // A manual fire takes the same path and holds the same state during the handler body.
+    match scheduler.run_now("probe-ok").await {
+      Ok(_) => {}
+      Err(super::RunError::Failed(message)) => panic!("the manual fire failed: {message}"),
+      Err(_) => panic!("the manual fire was refused"),
+    }
+    let calls = probe_handler_calls(home.path());
+    assert_eq!(calls.len(), 3);
+    assert!(observed_statuses(&calls, &ok_node.id).contains(&json!(RUN_STATUS_RUNNING)));
+    assert_eq!(run_status(&features, &ok_node.id).await.as_deref(), Some(RUN_STATUS_SUCCESS));
+  }
+
+  #[tokio::test]
+  async fn a_start_records_an_interrupted_handler_run_and_fires_it_again() {
+    let (home, features) = feature_context();
+    let node = bound_probe_task(&features, "interrupted", "synthetic_probe_handler", true).await;
+    set_cron_run_state(&features, &node.id, "2026-11-07T04:45:28-08:00", RUN_STATUS_RUNNING).await;
+
+    CronScheduler::new(Arc::clone(&features)).reconcile_interrupted_handlers().await.unwrap();
+
+    wait_for_probe_calls(home.path(), 1).await;
+    let results = interrupted_results(&features, &node.id);
+    assert_eq!(results.len(), 1, "the interruption is recorded once");
+    let message = results[0].get("message").and_then(CompactValue::as_str).unwrap();
+    assert!(message.contains("2026-11-07T04:45:28-08:00"), "{message}");
+    wait_for_run_status(&features, &node.id, RUN_STATUS_SUCCESS).await;
+    assert_eq!(probe_handler_calls(home.path()).len(), 1, "the reconciliation fires the handler exactly once");
+  }
+
+  #[tokio::test]
+  async fn a_start_records_an_interrupted_handler_run_of_a_disabled_task_without_firing_it() {
+    let (home, features) = feature_context();
+    let node = bound_probe_task(&features, "interrupted-disabled", "synthetic_probe_handler", false).await;
+    set_cron_run_state(&features, &node.id, "2026-11-07T04:45:28-08:00", RUN_STATUS_RUNNING).await;
+
+    CronScheduler::new(Arc::clone(&features)).reconcile_interrupted_handlers().await.unwrap();
+
+    assert!(probe_handler_calls(home.path()).is_empty(), "a disabled task gets the record only");
+    assert_eq!(interrupted_results(&features, &node.id).len(), 1);
+    assert_eq!(run_status(&features, &node.id).await.as_deref(), Some(RUN_STATUS_FAILED));
+  }
+
+  #[tokio::test]
+  async fn a_start_leaves_a_completed_handler_run_alone() {
+    let (home, features) = feature_context();
+    let node = bound_probe_task(&features, "completed", "synthetic_probe_handler", true).await;
+    set_cron_run_state(&features, &node.id, "2026-11-07T04:45:28-08:00", RUN_STATUS_SUCCESS).await;
+
+    CronScheduler::new(Arc::clone(&features)).reconcile_interrupted_handlers().await.unwrap();
+
+    assert!(probe_handler_calls(home.path()).is_empty());
+    assert_eq!(handler_results(&features, &node.id), 0, "a completed run gets no new record");
+    assert_eq!(run_status(&features, &node.id).await.as_deref(), Some(RUN_STATUS_SUCCESS));
   }
 
   #[tokio::test]

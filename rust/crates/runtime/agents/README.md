@@ -36,7 +36,8 @@ This crate owns the process transport below the agent backends and the launch ma
 - `spawn::STDERR_TAIL_BYTES`
 - `AgentBaseEnvironment` and its `values` field
 - `agent_environment`, `from_process_environment`, and the root `build_backend` export
-- `backend_pool::{QUOTA_ERROR_PATTERNS, DEFAULT_COOLDOWN, is_quota_error, BackendPool}`
+- `backend_pool::{QUOTA_ERROR_PATTERNS, is_quota_error, BackendPool}`
+- `backend_availability::{BackendAvailability, AvailabilityRow, DEFAULT_COOLDOWN, REASON_QUOTA_ERROR, REASON_TIMEOUT, backend_availability}`
 - `backend_pool::{backend_pool, pre_recovery_step, register}`
 - `backend_pool::METADATA_OWNER`
 - `pre_recovery_step`, `run_session_cgroup_startup`, `session_cgroup_step`, `register_runtime`

@@ -1392,7 +1392,7 @@ mod tests {
     let sessions = (0..count)
       .map(|index| {
         let id = format!("archived-{index:03}");
-        let mut meta = SessionMetadata::new(&id, &format!("needle-{index:03}"), TaskProfile::Manager);
+        let mut meta = SessionMetadata::new(&id, format!("needle-{index:03}"), TaskProfile::Manager);
         meta.status = SessionStatus::Archived;
         meta.updated_at = UtcDateTime::parse(&format!("2026-08-01T{:02}:{:02}:00Z", 12 + index / 60, index % 60))
           .unwrap();

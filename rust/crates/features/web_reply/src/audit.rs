@@ -418,10 +418,12 @@ mod tests {
     let answered = home.append(&sid, user_event_with_id("22222222-b", "second question")).await;
     let last = home.append(&sid, user_event_with_id("33333333-c", "third question")).await;
     let turn = [id_of(&first), id_of(&answered), id_of(&last)];
-    let tags = ["22222222".to_string()];
-    reply::post_web_reply_with_request_id(&home.features, &sid, "the answer", &tags, None, None)
-      .await
-      .expect("the reply posts");
+    home
+      .append(
+        &sid,
+        json!({"type": WEB_REPLY, "content": "the answer", WEB_REPLY: {"answer_ids": [id_of(&answered)], "chars": 10}}),
+      )
+      .await;
     let done = master_done(&turn, 0);
 
     audit_reply(&home.features, &sid, &done).await.expect("the reply audit runs");

@@ -8,6 +8,7 @@ use std::path::Path;
 
 use crate::config::CharlieBotConfig;
 use crate::repo_root::CONFIGS_DIR_NAME;
+use crate::str_methods::universal_newlines;
 
 /// The default `config.yaml` for a checkout without the template.
 const DEFAULT_CONFIG_YAML: &str = "paths:\n  workspace_dirs:\n  - ~/workspace\n  worktree_dir: ~/worktrees\n";
@@ -34,9 +35,4 @@ pub fn init_charliebot_home(cfg: &CharlieBotConfig, repo_root: &Path) -> io::Res
     fs::set_permissions(&credentials_file, fs::Permissions::from_mode(0o600))?;
   }
   Ok(())
-}
-
-/// A text-mode read: `\r\n` and `\r` become `\n`.
-fn universal_newlines(text: &str) -> String {
-  text.replace("\r\n", "\n").replace('\r', "\n")
 }

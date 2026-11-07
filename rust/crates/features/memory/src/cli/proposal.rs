@@ -346,7 +346,7 @@ fn rev_text(memory_dir: &Path, rev: &str, path: &str) -> ProposalResult<Option<S
     return Ok(None);
   }
   let text = git(memory_dir, &["show", &format!("{rev}:{path}")])?;
-  Ok(Some(store::normalize_newlines(&text)))
+  Ok(Some(str_methods::universal_newlines(&text)))
 }
 
 fn rev_line_counts(memory_dir: &Path, rev: &str, path: &str) -> ProposalResult<LineCounts> {

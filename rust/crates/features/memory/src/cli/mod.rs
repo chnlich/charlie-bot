@@ -232,7 +232,7 @@ fn add(args: &AddArgs) -> Result<(), CliExit> {
     None => {
       let mut body = String::new();
       io::stdin().read_to_string(&mut body).map_err(|error| CliExit::error(error.to_string()))?;
-      store::normalize_newlines(&body)
+      str_methods::universal_newlines(&body)
     }
   };
   let first_line = body.split('\n').next().unwrap_or_default();

@@ -375,11 +375,7 @@ mod tests {
     let registry = Arc::new(charliebot_registry::Registry::new());
     let config_home = home.clone();
     let config_registry = Arc::clone(&registry);
-    let config = HotReload::new(
-      config_path,
-      "config_reload_failed",
-      Box::new(move || config_registry.load_config(&config_home)),
-    );
+    let config = HotReload::new(config_path, "config_reload_failed", Box::new(move || config_registry.load_config(&config_home)));
     let startup = StartupState::default();
     startup
       .insert(AgentBaseEnvironment { values: Env::default() })

@@ -2,6 +2,9 @@
 //!
 //! The route module (`api`) and the CLI (`cli`) each read one side of this contract. Both sides name
 //! these fields from here, so a renamed field cannot leave the client posting a key the route rejects.
+//! The session field is the same key in the drafts payload, so it comes from the shared field owner.
+
+pub use charliebot_cli_common::fields::SESSION_ID;
 
 /// `improve start`'s route.
 pub const START_PATH: &str = "/api/internal/improve";
@@ -9,7 +12,6 @@ pub const START_PATH: &str = "/api/internal/improve";
 /// `improve stop`'s route.
 pub const STOP_PATH: &str = "/api/internal/improve/stop";
 
-pub const SESSION_ID: &str = "session_id";
 pub const REPO_PATH: &str = "repo_path";
 pub const BASE_BRANCH: &str = "base_branch";
 pub const BACKEND: &str = "backend";

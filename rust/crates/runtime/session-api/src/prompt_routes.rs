@@ -10,6 +10,7 @@ use axum::response::Response;
 use charliebot_compat::responses;
 use charliebot_compat::routing::get_only;
 use charliebot_core::repo_root::RepoRoot;
+use charliebot_core::run_kind::RunKind;
 use charliebot_core::text_repr::str_repr;
 use charliebot_registry::FeatureContext;
 use charliebot_store::metadata::TaskProfile;
@@ -51,8 +52,8 @@ async fn effective_prompt(
     Err(error) => return store_error(error),
   };
   let default_kind = match meta.profile {
-    TaskProfile::Manager => "manager_turn",
-    TaskProfile::Worker => "work",
+    TaskProfile::Manager => RunKind::ManagerTurn.as_str(),
+    TaskProfile::Worker => RunKind::Work.as_str(),
   };
   // An empty `kind` selects the default.
   let kind = match params.get("kind").filter(|kind| !kind.is_empty()) {

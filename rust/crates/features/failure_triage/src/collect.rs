@@ -19,6 +19,7 @@ use charliebot_core::config::sessions_dir_in;
 use charliebot_core::event_types;
 use charliebot_core::logline;
 use charliebot_core::pacific;
+use charliebot_core::run_kind::RunKind;
 use charliebot_registry::backend::Env;
 use charliebot_store::CompactValue;
 use charliebot_store::chat_events::{self, LineRule};
@@ -200,7 +201,7 @@ fn run_fields(path: &Path) -> Result<RunFields> {
   };
   Ok(RunFields {
     id: id.to_string(),
-    kind: value.get("kind").and_then(serde_json::Value::as_str).unwrap_or("work").to_string(),
+    kind: value.get("kind").and_then(serde_json::Value::as_str).unwrap_or(RunKind::Work.as_str()).to_string(),
     exit_code: value.get("exit_code").and_then(serde_json::Value::as_i64).map(|code| code as i32),
     backend: value.get("backend").and_then(serde_json::Value::as_str).unwrap_or("unknown").to_string(),
     event_log: named_event_log(&value),

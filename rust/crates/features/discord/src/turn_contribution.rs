@@ -5,6 +5,7 @@ use std::sync::Arc;
 use charliebot_chat_threads::thread_entry::{thread_reply_contract, thread_reply_segment};
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::run_kind::RunKind;
 use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{EventRenderer, RuleSegment, TurnContribution};
@@ -16,9 +17,6 @@ use crate::discord_listener::{self, DISCORD};
 use crate::event_types::DISCORD_REPLY;
 use crate::metadata::discord_origin;
 use crate::thread_contract::thread_contract_part;
-
-/// The run kind that takes the manager contract.
-const MANAGER_KIND: &str = "manager_turn";
 
 /// The Discord turn contribution.
 pub struct DiscordTurnContribution;
@@ -35,7 +33,7 @@ impl TurnContribution for DiscordTurnContribution {
     cfg: &CharlieBotConfig,
     repo: &RepoRoot,
   ) -> anyhow::Result<Vec<RuleSegment>> {
-    if kind != MANAGER_KIND || discord_origin(meta)?.is_none() {
+    if kind != RunKind::ManagerTurn.as_str() || discord_origin(meta)?.is_none() {
       return Ok(Vec::new());
     }
     let contract = thread_reply_contract(repo, &cfg.charliebot_home, &DISCORD, &thread_contract_part())?;

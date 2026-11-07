@@ -1,16 +1,19 @@
 //! The form a script takes when a page carries it inline.
 //!
 //! A page inlines its scripts so the first paint waits for no second request. The same source files carry the
-//! comments that explain them to an editor, and a browser runs no comment. On the mock home's chat page the comments
-//! are 225 KB of the 730 KB of script text and 82 KB of the document's 410 KB gzip form. The strip is textual and
-//! keeps every other byte, including a `//` or `/*` that a string, a template literal or a regular expression holds.
+//! comments that explain them to an editor, which a browser runs as nothing, and the indentation that shows their
+//! nesting, which a browser reads as nothing. On the mock home's chat page, leaving both out of the inline copy of
+//! the scripts and the stylesheets saves 67 KB of the page's 700 KB and 13 KB of its 164 KB gzip form. The strip is
+//! textual and keeps every other byte, including a `//` or `/*` that a string, a template literal or a regular
+//! expression holds, and the indentation inside a template literal, which is part of the text it builds.
 
-/// The JavaScript `source` with its comments removed.
+/// The JavaScript `source` with its comments and its code indentation removed.
 ///
 /// A line comment loses its text and keeps the newline that ends it. A block comment becomes one newline when it
-/// spans lines and one space otherwise, so a comment between two tokens still separates them. The scanner follows
-/// the literals that can hold comment text. A quoted string ends at its quote or its line's end, a template literal
-/// at its backtick, and a regex literal at its closing slash.
+/// spans lines and one space otherwise, so a comment between two tokens still separates them. A line's leading
+/// spaces and tabs carry no meaning between tokens and the newline before them already ends the line, so the inline
+/// copy leaves them out. The scanner follows the literals that can hold comment text. A quoted string ends at its
+/// quote or its line's end, a template literal at its backtick, and a regex literal at its closing slash.
 pub fn without_comments(source: &str) -> String {
   let bytes = source.as_bytes();
   let mut out = String::with_capacity(source.len());
@@ -21,10 +24,7 @@ pub fn without_comments(source: &str) -> String {
     if matches!(stack.last(), Some(Place::Template)) {
       match bytes[i] {
         b'\\' => {
-          let mut end = (i + 1).min(bytes.len());
-          if end < bytes.len() {
-            end += source[end..].chars().next().map_or(1, char::len_utf8);
-          }
+          let end = escape_end(source, i);
           i = copy(&mut out, source, i, end);
         }
         b'`' => {
@@ -54,7 +54,7 @@ pub fn without_comments(source: &str) -> String {
       continue;
     }
     if bytes[i] == b'/' && expect_expression {
-      match regex_end(bytes, i) {
+      match regex_end(source, i) {
         Some(end) => {
           clear_control(&mut stack);
           copy(&mut out, source, i, end);
@@ -70,7 +70,7 @@ pub fn without_comments(source: &str) -> String {
     }
     match bytes[i] {
       b'\'' | b'"' => {
-        let end = string_end(bytes, i);
+        let end = string_end(source, i);
         clear_control(&mut stack);
         copy(&mut out, source, i, end);
         expect_expression = false;
@@ -154,6 +154,12 @@ pub fn without_comments(source: &str) -> String {
         i += 1;
       }
       byte if byte.is_ascii_whitespace() => {
+        // A line's leading spaces and tabs separate no tokens: the newline that precedes them already ends the
+        // line. Every other whitespace byte is kept, including the newline itself.
+        if matches!(byte, b' ' | b'\t') && out.as_bytes().last() == Some(&b'\n') {
+          i += 1;
+          continue;
+        }
         copy(&mut out, source, i, i + 1);
         i += 1;
       }
@@ -265,13 +271,15 @@ fn expects_expression(word: &str) -> bool {
 }
 
 /// The index after the quoted string that starts at `start`: its closing quote, or the line's end when the line
-/// ends first. A JavaScript string cannot span lines, so the line's end bounds the scan.
-fn string_end(bytes: &[u8], start: usize) -> usize {
+/// ends first. A JavaScript string cannot span lines except through a backslash that ends one, so the line's end
+/// bounds the scan.
+fn string_end(source: &str, start: usize) -> usize {
+  let bytes = source.as_bytes();
   let quote = bytes[start];
   let mut i = start + 1;
   while i < bytes.len() {
     match bytes[i] {
-      b'\\' => i += 2,
+      b'\\' => i = escape_end(source, i),
       b'\n' | b'\r' => return i,
       byte if byte == quote => return i + 1,
       _ => i += 1,
@@ -280,14 +288,32 @@ fn string_end(bytes: &[u8], start: usize) -> usize {
   bytes.len()
 }
 
+/// The index after the character that the escape at `start` consumes: the line terminator after its backslash, the
+/// escaped character, or the backslash alone at the source's end.
+fn escape_end(source: &str, start: usize) -> usize {
+  let bytes = source.as_bytes();
+  let i = start + 1;
+  match bytes.get(i) {
+    None => i,
+    Some(b'\r') if bytes.get(i + 1) == Some(&b'\n') => i + 2,
+    Some(_) => i + source[i..].chars().next().map_or(1, char::len_utf8),
+  }
+}
+
 /// The index after the regex literal that starts at `start`, when the line holds its closing slash and flag
 /// letters. A slash that opens no regex on its line is division.
-fn regex_end(bytes: &[u8], start: usize) -> Option<usize> {
+fn regex_end(source: &str, start: usize) -> Option<usize> {
+  let bytes = source.as_bytes();
   let mut i = start + 1;
   let mut in_class = false;
   while i < bytes.len() {
     match bytes[i] {
-      b'\\' => i += 2,
+      b'\\' => {
+        if matches!(bytes.get(i + 1), Some(&b'\n') | Some(&b'\r')) {
+          return None;
+        }
+        i = escape_end(source, i);
+      }
       b'\n' | b'\r' => return None,
       b'[' => {
         in_class = true;
@@ -313,6 +339,14 @@ fn regex_end(bytes: &[u8], start: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn code_indentation_is_dropped_and_template_text_keeps_its_own() {
+    assert_eq!(without_comments("let a = 1;\n    let b = 2;\n"), "let a = 1;\nlet b = 2;\n");
+    assert_eq!(without_comments("let s = `\n  indented text\n`;"), "let s = `\n  indented text\n`;");
+    assert_eq!(without_comments("let s = `${a}\n  ${b}`;"), "let s = `${a}\n  ${b}`;");
+    assert_eq!(without_comments("let s = `${a +\n    b}`;"), "let s = `${a +\nb}`;");
+  }
 
   #[test]
   fn line_comments_leave_the_code_and_keep_their_newline() {
@@ -371,6 +405,13 @@ mod tests {
   #[test]
   fn a_template_escape_of_a_multibyte_character_is_kept() {
     assert_eq!(without_comments("let s = `\\é // text`; // gone"), "let s = `\\é // text`; ");
+  }
+
+  #[test]
+  fn a_string_continued_over_a_line_keeps_its_text() {
+    assert_eq!(without_comments("let s = \"one\\\r\n  // two\"; // gone"), "let s = \"one\\\r\n  // two\"; ");
+    assert_eq!(without_comments("let s = 'one\\\n  // two'; // gone"), "let s = 'one\\\n  // two'; ");
+    assert_eq!(without_comments("let s = '\\é /* kept */'; // gone"), "let s = '\\é /* kept */'; ");
   }
 
   #[test]

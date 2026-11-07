@@ -1247,7 +1247,7 @@ pub fn row_refresh_text(store: &Store, page: &PageRows, ids: &[String]) -> Store
   // The named rows come from the page's id index, so a refresh of a full Workspace does not walk the corpus; the ids
   // the page no longer holds come back in `gone`.
   let named = page.rows_named(ids);
-  row_refresh_text_for(store, &named, &page.derived(), &page.sequence_fields, ids, LISTING_PROJECTION)
+  row_refresh_text_for(store, &named, page.derived(), &page.sequence_fields, ids, LISTING_PROJECTION)
 }
 
 /// The row refresh body of one sidebar view: the named rows the view lists, in the compact column form, plus the ids it

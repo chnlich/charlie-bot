@@ -1,9 +1,9 @@
 //! Recording runs: one stem per run, the run's `.json` parts, and the recent recordings list.
 //!
 //! The browser makes a run id (eight lowercase hex characters) at the click, and the startup report, the relay
-//! socket and the upload all carry it. Every file of the run lands under one stem — `<UTC stamp>_<run id>` —
-//! whichever request arrives first: the first write creates the stem, the later ones resolve it by the run id
-//! suffix. The `.json` beside the WAV holds the run's three parts, and each part is updated only by its writer
+//! socket and the upload all carry it. Every file of the run lands under one stem, `<UTC stamp>_<run id>`,
+//! whichever request arrives first. The first write creates the stem, and the later ones resolve it by the run id
+//! suffix. The `.json` beside the WAV holds the run's three parts. Each part is updated only by its writer
 //! through [`with_run_stem`], which serializes the writes per stem and replaces the file atomically.
 //!
 //! [`list_recordings`] scans every session's `voice/` directory for stems and answers the newest rows first, with
@@ -28,8 +28,8 @@ pub(crate) fn valid_run_id(run_id: &str) -> bool {
   run_id.len() == 8 && run_id.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-/// The lock that serializes one run's writes: keyed by the voice directory and the run id, held across the stem
-/// resolution and the writes, so two near-simultaneous writers resolve and fill the same stem.
+/// The lock that serializes one run's writes, keyed by the voice directory and the run id. It is held across the
+/// stem resolution and the writes, so two near-simultaneous writers resolve and fill the same stem.
 fn run_lock(voice_dir: &Path, run_id: &str) -> Arc<Mutex<()>> {
   static LOCKS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
   let mut locks = LOCKS.lock().expect("the run lock registry is not poisoned");
@@ -80,8 +80,8 @@ fn run_stem_now(run_id: &str) -> String {
   archive::stamp_prefix() + &format!("_{run_id}")
 }
 
-/// Runs `write` for one run's stem: the run id validated before any path is built, the stem resolved under the
-/// run's lock, and the writes serialized against every other writer of the same run.
+/// Runs `write` for one run's stem. The run id is validated before any path is built, and the stem is resolved
+/// under the run's lock. The writes are then serialized against every other writer of the same run.
 pub(crate) fn with_run_stem<T>(
   cfg: &CharlieBotConfig,
   session_id: &str,
@@ -256,8 +256,8 @@ pub(crate) fn archive_relay_final(
   })
 }
 
-/// Records one relay failure: the run's `failure` part, and the audio received so far as the run's WAV when there
-/// is any, with its `audio` part naming the relay, the backend and the devices.
+/// Records one relay failure: the run's `failure` part. The audio received so far becomes the run's WAV when
+/// there is any, and its `audio` part names the relay, the backend and the devices.
 pub(crate) fn store_relay_failure(
   cfg: &CharlieBotConfig,
   session_id: &str,
@@ -324,7 +324,7 @@ pub(crate) fn query_value(query: &str, target: &str) -> Option<String> {
     .next_back()
 }
 
-/// A stem file's name minus its row-creating extension: only the `.wav` and the `.json` of a run list it, so a
+/// A stem file's name minus its row-creating extension. Only the `.wav` and the `.json` of a run list it, so a
 /// lone `.txt`, a leftover `.wav.partial` or a `.json.tmp` names no row.
 fn stem_of_row_name(name: &str) -> Option<&str> {
   for suffix in [".wav", ".json"] {

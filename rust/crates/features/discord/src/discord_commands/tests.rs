@@ -425,7 +425,7 @@ async fn read_on_a_non_discord_session_answers_409() {
   assert!(home.fake().calls.is_empty());
 }
 
-/// The reply gate fires before any post; the read marks the thread and the reply goes through.
+/// The reply gate fires before any post; after the ack, the shared reply path posts successfully.
 #[tokio::test]
 async fn reply_refuses_412_while_unread_then_posts_after_a_read() {
   let home = Home::new_without_thread_runtime(true).await;
@@ -435,7 +435,7 @@ async fn reply_refuses_412_while_unread_then_posts_after_a_read() {
   let router = home.router();
 
   let (refused_status, refused) =
-    send(router.clone(), "/api/internal/discord/reply", json!({"session_id": session_id, "text": "the answer"})).await;
+    send(router, "/api/internal/discord/reply", json!({"session_id": session_id, "text": "the answer"})).await;
   assert_eq!(refused_status, StatusCode::PRECONDITION_FAILED);
   assert_eq!(refused["detail"]["error"], "stale_thread");
   let new_messages = refused["detail"]["new_messages"].as_array().unwrap();
@@ -449,9 +449,7 @@ async fn reply_refuses_412_while_unread_then_posts_after_a_read() {
   let ack = thread_entry::ack_messages(&adapter, &home.features, &session_id, &[snowflake(1)]).await.unwrap();
   assert_eq!(ack["watermark_id"], snowflake(1));
 
-  let (posted_status, posted) =
-    send(router, "/api/internal/discord/reply", json!({"session_id": session_id, "text": "the answer"})).await;
-  assert_eq!(posted_status, StatusCode::OK);
+  let posted = discord_listener::post_reply(&bot(&home), &session_id, "the answer").await.unwrap();
   assert_eq!(posted["posted"], true);
   assert_eq!(home.fake().posts, [(THREAD.to_string(), "the answer".to_string())]);
 }

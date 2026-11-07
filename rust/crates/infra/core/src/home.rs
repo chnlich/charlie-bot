@@ -31,6 +31,8 @@ pub fn display_dir(relative: &str) -> String {
 pub const OPENCODE_DIR_NAME: &str = "opencode";
 /// The `data` directory under the OpenCode store, which OpenCode itself lays out as its `XDG_DATA_HOME`.
 pub const OPENCODE_XDG_DATA_DIR_NAME: &str = "data";
+/// The `state` directory under the OpenCode store, which OpenCode itself lays out as its `XDG_STATE_HOME`.
+pub const OPENCODE_XDG_STATE_DIR_NAME: &str = "state";
 
 /// A `CHARLIEBOT_HOME` value that names no usable home.
 #[derive(Debug, Clone, PartialEq, Eq)]

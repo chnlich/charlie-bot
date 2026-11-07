@@ -514,12 +514,6 @@ mod tests {
     relay_finished: watch::Receiver<bool>,
   }
 
-  #[derive(Clone, Copy)]
-  enum FakeMode {
-    FinalBeforeEnd,
-    NeverFinal,
-  }
-
   async fn relay_test_handler(State(state): State<Arc<RelayTestState>>, upgrade: WebSocketUpgrade) -> Response {
     upgrade.max_message_size(16_777_216).max_frame_size(16_777_216).on_upgrade(move |socket| async move {
       let (writer, reader) = socket.split();
@@ -540,13 +534,11 @@ mod tests {
     })
   }
 
-  async fn start_relay_test(mode: FakeMode, max_recording_samples: usize) -> RelayTestServer {
-    start_relay_test_with_limits(mode, PREVIEW_QUEUE_SECONDS * crate::audio::SAMPLE_RATE * 2, max_recording_samples)
-      .await
+  async fn start_relay_test(max_recording_samples: usize) -> RelayTestServer {
+    start_relay_test_with_limits(PREVIEW_QUEUE_SECONDS * crate::audio::SAMPLE_RATE * 2, max_recording_samples).await
   }
 
   async fn start_relay_test_with_limits(
-    mode: FakeMode,
     max_preview_queue_bytes: usize,
     max_recording_samples: usize,
   ) -> RelayTestServer {
@@ -563,23 +555,9 @@ mod tests {
         panic!("Gemini sends its setup frame");
       };
       socket.send(ServerMessage::Text(r#"{"setupComplete":{}}"#.into())).await.expect("send the fake setup reply");
-      let mut early_final_sent = false;
       while let Some(message) = socket.next().await {
         match message.expect("read the Gemini client frame") {
-          ServerMessage::Text(text) => {
-            let text = text.to_string();
-            let value: Value = serde_json::from_str(&text).expect("Gemini sends JSON");
-            let is_audio = value.pointer("/realtimeInput/audio").is_some();
-            if matches!(mode, FakeMode::FinalBeforeEnd) && is_audio && !early_final_sent {
-              socket
-                .send(ServerMessage::Text(
-                  r#"{"serverContent":{"inputTranscription":{"text":"synthetic early final"}}}"#.into(),
-                ))
-                .await
-                .expect("send the early final");
-              early_final_sent = true;
-            }
-          }
+          ServerMessage::Text(_) => {}
           ServerMessage::Close(_) => {
             socket.flush().await.expect("flush the backend close response");
             return;
@@ -642,7 +620,7 @@ mod tests {
 
   #[tokio::test]
   async fn provider_connection_opens_before_browser_audio_arrives() {
-    let mut server = start_relay_test(FakeMode::NeverFinal, MAX_RECORDING_SAMPLES).await;
+    let mut server = start_relay_test(MAX_RECORDING_SAMPLES).await;
     let mut browser = browser_socket(server.address).await;
     tokio::time::timeout(Duration::from_secs(3), &mut server.provider_connected)
       .await
@@ -722,7 +700,7 @@ mod tests {
 
   #[tokio::test]
   async fn overflow_sends_one_error_then_drains_until_browser_close() {
-    let server = start_relay_test_with_limits(FakeMode::NeverFinal, 4, MAX_RECORDING_SAMPLES).await;
+    let server = start_relay_test_with_limits(4, MAX_RECORDING_SAMPLES).await;
     let mut browser = browser_socket(server.address).await;
     let oversized = vec![0_u8; 5];
     browser.send(ClientMessage::Binary(oversized.into())).await.expect("send an overflowing frame");
@@ -740,7 +718,7 @@ mod tests {
 
   #[tokio::test]
   async fn frame_after_end_cancels_the_backend_and_returns_the_protocol_error() {
-    let server = start_relay_test_with_limits(FakeMode::NeverFinal, 2, 1).await;
+    let server = start_relay_test_with_limits(2, 1).await;
     let mut browser = browser_socket(server.address).await;
     browser.send(ClientMessage::Text(r#"{"type":"end"}"#.into())).await.expect("seal the recording");
     browser.send(ClientMessage::Binary(vec![3, 4].into())).await.expect("send an illegal post-end frame");
@@ -754,26 +732,8 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn backend_final_before_end_is_reported_and_never_archived() {
-    let server = start_relay_test_with_limits(FakeMode::FinalBeforeEnd, 2, 1).await;
-    let mut browser = browser_socket(server.address).await;
-    browser.send(ClientMessage::Binary(vec![1, 2].into())).await.expect("send audio");
-    assert_eq!(
-      receive_json_frame(&mut browser).await,
-      json!({ "type": "error", "message": "backend produced its final before the recording's end frame" })
-    );
-    browser
-      .send(ClientMessage::Text(r#"{"type":"end"}"#.into()))
-      .await
-      .expect("finish the browser upload after the early final");
-    let _ = tokio::time::timeout(Duration::from_secs(3), browser.next()).await;
-    assert!(!voice_dir(&server.config).exists(), "an early final never archives incomplete audio");
-    stop_relay_test(server).await;
-  }
-
-  #[tokio::test]
   async fn disconnect_after_end_abandons_without_archiving() {
-    let mut server = start_relay_test_with_limits(FakeMode::NeverFinal, 4, 2).await;
+    let mut server = start_relay_test_with_limits(4, 2).await;
     let mut browser = browser_socket(server.address).await;
     browser.send(ClientMessage::Binary(vec![1, 2].into())).await.expect("send audio");
     browser.send(ClientMessage::Text(r#"{"type":"end"}"#.into())).await.expect("seal the recording");

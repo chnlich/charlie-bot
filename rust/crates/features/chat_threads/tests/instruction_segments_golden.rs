@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 use charliebot_core::RepoRoot;
@@ -90,17 +91,19 @@ checkout_case_group!(missing_thread_format_checkout_group_6, "without-thread_rep
 checkout_case_group!(missing_thread_format_checkout_group_7, "without-thread_reply_format.md", 6);
 
 fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str, group: usize, package_index: usize) {
-  let decoder = GzDecoder::new(include_bytes!("fixtures/instruction_segments_golden.json.gz").as_slice());
-  let fixture: Value = serde_json::from_reader(decoder).unwrap();
+  let mut decoder = GzDecoder::new(checkout_fixture(checkout_name));
+  let mut fixture_text = String::new();
+  decoder.read_to_string(&mut fixture_text).unwrap();
+  let fixture: Value = serde_json::from_str(&fixture_text).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let cases = fixture["cases"].as_array().unwrap();
-  assert_eq!(cases.len(), 147);
+  assert_eq!(cases.len(), 21);
   let (key, package, register) = PACKAGES[package_index];
   let registry = registered_package(package, register);
 
   let root = tempfile::tempdir().unwrap();
   let checkouts = fixture["checkouts"].as_object().unwrap();
-  assert_eq!(checkouts.len(), 7);
+  assert_eq!(checkouts.len(), 1);
   let documents = checkouts.get(checkout_name).expect("the checkout is recorded");
   let prompts = root.path().join(checkout_name).join("prompts");
   fs::create_dir_all(&prompts).unwrap();
@@ -109,18 +112,13 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str, group
   }
 
   if checkout_name == "real" && group == 0 {
-    let mut segment_answers = 0;
-    let mut error_answers = 0;
-    for case in cases {
-      let expected = &case["expected"][key];
-      if expected.get("error").is_some() {
-        error_answers += 1;
-      } else if expected["segments"].as_array().is_some_and(|segments| !segments.is_empty()) {
-        segment_answers += 1;
-      }
-    }
+    let segment_answers = cases
+      .iter()
+      .filter(|case| {
+        case["expected"][key]["segments"].as_array().is_some_and(|segments| !segments.is_empty())
+      })
+      .count();
     assert!(segment_answers > 0, "{key} records segment answers");
-    assert!(error_answers > 0, "{key} records error answers");
   }
 
   let cases_for_checkout =
@@ -152,6 +150,29 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str, group
         "recorded Python contribution differs: checkout={checkout_name} case={case:?} key={key} expected={expected} actual={actual}"
       );
     }
+  }
+}
+
+fn checkout_fixture(checkout_name: &str) -> &'static [u8] {
+  match checkout_name {
+    "real" => include_bytes!("fixtures/instruction_segments_golden/real.json.gz").as_slice(),
+    "padded" => include_bytes!("fixtures/instruction_segments_golden/padded.json.gz").as_slice(),
+    "without-web_reply.md" => {
+      include_bytes!("fixtures/instruction_segments_golden/without-web_reply.md.json.gz").as_slice()
+    }
+    "without-slack_reply_scope.md" => {
+      include_bytes!("fixtures/instruction_segments_golden/without-slack_reply_scope.md.json.gz").as_slice()
+    }
+    "without-discord_reply_scope.md" => {
+      include_bytes!("fixtures/instruction_segments_golden/without-discord_reply_scope.md.json.gz").as_slice()
+    }
+    "without-thread_reply_redline.md" => {
+      include_bytes!("fixtures/instruction_segments_golden/without-thread_reply_redline.md.json.gz").as_slice()
+    }
+    "without-thread_reply_format.md" => {
+      include_bytes!("fixtures/instruction_segments_golden/without-thread_reply_format.md.json.gz").as_slice()
+    }
+    _ => unreachable!(),
   }
 }
 

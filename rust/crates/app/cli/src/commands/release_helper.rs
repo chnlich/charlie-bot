@@ -582,7 +582,7 @@ enum ReplyForm {
 impl ReplyForm {
   fn name(self) -> &'static str {
     match self {
-      ReplyForm::WebReply => "web_reply",
+      ReplyForm::WebReply => event_types::WEB_REPLY,
       ReplyForm::AssistantText => "assistant_text",
       ReplyForm::NoMatch => "none",
     }

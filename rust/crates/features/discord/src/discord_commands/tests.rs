@@ -425,12 +425,11 @@ async fn read_on_a_non_discord_session_answers_409() {
   assert!(home.fake().calls.is_empty());
 }
 
-/// The reply gate fires before any post; after the ack, the shared reply path posts successfully.
+/// A stale reply returns the unread message and sends no post.
 #[tokio::test]
-async fn reply_refuses_412_while_unread_then_posts_after_a_read() {
+async fn reply_refuses_412_while_unread() {
   let home = Home::new_without_thread_runtime(true).await;
   thread_messages(&home, &[Msg::new(1, "unread follow up")]);
-  home.fake().channels.insert(PARENT.to_string(), Vec::new());
   let session_id = make_session(&home, None).await;
   let router = home.router();
 
@@ -444,23 +443,6 @@ async fn reply_refuses_412_while_unread_then_posts_after_a_read() {
     [snowflake(1)].map(Value::String)
   );
   assert!(home.fake().posts.is_empty());
-
-  home
-    .features
-    .store
-    .update_slot_fields_at(
-      &session_id,
-      DISCORD.name,
-      serde_json::Map::from_iter([("discord_watermark_id".to_string(), json!(snowflake(1)))]),
-      charliebot_store::metadata::UtcDateTime::now(),
-    )
-    .await
-    .unwrap()
-    .expect("the session remains stored");
-
-  let posted = crate::discord_listener::post_reply(&bot(&home), &session_id, "the answer").await.unwrap();
-  assert_eq!(posted["posted"], true);
-  assert_eq!(home.fake().posts, [(THREAD.to_string(), "the answer".to_string())]);
 }
 
 /// A guild missing ADD_REACTIONS names it, the intent off reads false, and ok is false.

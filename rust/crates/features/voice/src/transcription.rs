@@ -9,7 +9,7 @@ use charliebot_core::str_methods;
 use charliebot_core::text_repr::{self, DEFAULT_JSON};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch, Mutex as AsyncMutex};
 use tokio::task::JoinHandle;
 
 use crate::audio::{AudioQueue, SAMPLE_RATE};
@@ -166,12 +166,7 @@ impl Backend {
   }
 
   #[cfg(test)]
-  fn muse_for_test(
-    token: &str,
-    endpoint_url: &str,
-    clock: Arc<dyn Clock>,
-    audio_bytes_per_second: f64,
-  ) -> Self {
+  fn muse_for_test(token: &str, endpoint_url: &str, clock: Arc<dyn Clock>, audio_bytes_per_second: f64) -> Self {
     Self::for_test(BackendKind::Muse, token, endpoint_url, clock, audio_bytes_per_second)
   }
 
@@ -450,24 +445,44 @@ async fn run_muse(
   session: MuseSession,
 ) -> Result<(), TranscriptionError> {
   let sender = Arc::new(sender);
-  let result = run_muse_session(Arc::clone(&sender), receiver, cancelled, session).await;
+  let socket = Arc::new(WebSocketMuseSocket { sender: Arc::clone(&sender), receiver: AsyncMutex::new(receiver) });
+  let result = run_muse_session(socket, cancelled, session).await;
   close_sender(&sender, result).await
 }
 
-async fn run_muse_session(
+trait MuseSocket: Send + Sync {
+  fn send(&self, message: Message) -> BoxFuture<'_, Result<(), String>>;
+  fn recv(&self) -> BoxFuture<'_, Option<Result<Message, ws_client::Error>>>;
+}
+
+struct WebSocketMuseSocket {
   sender: Arc<Sender>,
-  mut receiver: ws_client::Receiver,
+  receiver: AsyncMutex<ws_client::Receiver>,
+}
+
+impl MuseSocket for WebSocketMuseSocket {
+  fn send(&self, message: Message) -> BoxFuture<'_, Result<(), String>> {
+    Box::pin(async move { self.sender.send(message).await.map_err(|error| error.to_string()) })
+  }
+
+  fn recv(&self) -> BoxFuture<'_, Option<Result<Message, ws_client::Error>>> {
+    Box::pin(async move { self.receiver.lock().await.recv().await })
+  }
+}
+
+async fn run_muse_session<S: MuseSocket + 'static>(
+  socket: Arc<S>,
   cancelled: &mut watch::Receiver<bool>,
   session: MuseSession,
 ) -> Result<(), TranscriptionError> {
   let handshake = muse_handshake(&session.token, &session.vocabulary, &session.languages);
   let handshake_send = tokio::select! {
-    result = sender.send(Message::Text(dumps_default(&handshake))) => result,
+    result = socket.send(Message::Text(dumps_default(&handshake))) => result,
     _ = wait_cancelled(cancelled) => return Ok(()),
   };
   handshake_send.map_err(|error| TranscriptionError::Failure(error.to_string()))?;
   let raw_handshake = tokio::select! {
-    result = receiver.recv() => result,
+    result = socket.recv() => result,
     _ = wait_cancelled(cancelled) => return Ok(()),
   };
   let handshake_message = receive_result(raw_handshake).map_err(|error| match error {
@@ -497,9 +512,9 @@ async fn run_muse_session(
   }
 
   let (inbound_tx, mut inbound_rx) = mpsc::unbounded_channel::<Result<Value, TranscriptionError>>();
-  let reader = tokio::spawn(muse_read_events(receiver, inbound_tx));
+  let reader = tokio::spawn(muse_read_events(Arc::clone(&socket), inbound_tx));
   let sender_task = tokio::spawn(muse_send_audio(
-    Arc::clone(&sender),
+    Arc::clone(&socket),
     session.audio,
     cancelled.clone(),
     session.clock,
@@ -565,11 +580,11 @@ async fn run_muse_session(
   result
 }
 
-async fn muse_read_events(
-  mut receiver: ws_client::Receiver,
+async fn muse_read_events<S: MuseSocket + 'static>(
+  socket: Arc<S>,
   events: mpsc::UnboundedSender<Result<Value, TranscriptionError>>,
 ) {
-  while let Some(message) = receiver.recv().await {
+  while let Some(message) = socket.recv().await {
     match message {
       Ok(Message::Text(raw)) => {
         let parsed = parse_json(&raw).map_err(TranscriptionError::Failure);
@@ -606,8 +621,8 @@ async fn muse_read_events(
   }
 }
 
-async fn muse_send_audio(
-  sender: Arc<Sender>,
+async fn muse_send_audio<S: MuseSocket + 'static>(
+  socket: Arc<S>,
   audio: Arc<AudioQueue>,
   mut cancelled: watch::Receiver<bool>,
   clock: Arc<dyn Clock>,
@@ -629,11 +644,11 @@ async fn muse_send_audio(
       return Ok(());
     }
     let chunk_seconds = chunk.len() as f64 / audio_bytes_per_second;
-    sender.send(Message::Binary(chunk)).await.map_err(|error| error.to_string())?;
+    socket.send(Message::Binary(chunk)).await?;
     sent_seconds += chunk_seconds;
   }
   if !*cancelled.borrow() {
-    send_json(&sender, json!({ "type": "endStream" })).await?;
+    send_muse_json(&socket, json!({ "type": "endStream" })).await?;
   }
   Ok(())
 }
@@ -660,6 +675,10 @@ fn muse_handshake(token: &str, vocabulary: &[String], languages: &[String]) -> V
 
 async fn send_json(sender: &Sender, value: Value) -> Result<(), String> {
   sender.send(Message::Text(dumps_default(&value))).await.map_err(|error| error.to_string())
+}
+
+async fn send_muse_json<S: MuseSocket>(socket: &S, value: Value) -> Result<(), String> {
+  socket.send(Message::Text(dumps_default(&value))).await
 }
 
 fn dumps_default(value: &Value) -> String {
@@ -881,6 +900,21 @@ mod tests {
     state: StdMutex<(f64, Vec<f64>)>,
   }
 
+  struct FakeMuseSocket {
+    outgoing: mpsc::UnboundedSender<Message>,
+    incoming: AsyncMutex<mpsc::UnboundedReceiver<Result<Message, ws_client::Error>>>,
+  }
+
+  impl MuseSocket for FakeMuseSocket {
+    fn send(&self, message: Message) -> BoxFuture<'_, Result<(), String>> {
+      Box::pin(async move { self.outgoing.send(message).map_err(|_| "the fake Muse peer is closed".to_string()) })
+    }
+
+    fn recv(&self) -> BoxFuture<'_, Option<Result<Message, ws_client::Error>>> {
+      Box::pin(async move { self.incoming.lock().await.recv().await })
+    }
+  }
+
   impl VirtualClock {
     fn new() -> Self {
       Self { state: StdMutex::new((0.0, Vec::new())) }
@@ -1002,10 +1036,9 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn muse_loopback_streams_partial_and_final_with_a_four_second_lead_cap() {
-    let (listener, endpoint) = fake_listener().await;
+  async fn muse_session_streams_partial_and_final_with_a_four_second_lead_cap() {
     let muse_audio_bytes_per_second = 2.0;
-    let chunks = [(8, 1), (2, 2), (2, 3)];
+    let chunks = [(10, 1), (2, 2)];
     let queued_bytes = chunks.iter().map(|(size, _)| *size).sum();
     let audio = AudioQueue::new_with_limits_for_test(queued_bytes, 0);
     for (size, value) in chunks.iter().copied() {
@@ -1013,58 +1046,66 @@ mod tests {
     }
     audio.end(None).await;
 
+    let (outgoing, mut fake_outgoing) = mpsc::unbounded_channel();
+    let (fake_incoming, incoming) = mpsc::unbounded_channel();
+    let socket = Arc::new(FakeMuseSocket { outgoing, incoming: AsyncMutex::new(incoming) });
     let fake = tokio::spawn(async move {
       let mut expected_chunks = chunks.into_iter();
-      let mut socket = accept_fake(listener).await;
-      let handshake = next_text(&mut socket).await;
-      socket
-        .send(ServerMessage::Text(r#"{"type":"sessionStarted"}"#.into()))
-        .await
+      let handshake = match fake_outgoing.recv().await.expect("Muse sends its handshake") {
+        Message::Text(handshake) => serde_json::from_str::<Value>(&handshake).expect("Muse handshake is JSON"),
+        message => panic!("expected a Muse handshake, got {message:?}"),
+      };
+      fake_incoming
+        .send(Ok(Message::Text(r#"{"type":"sessionStarted"}"#.into())))
         .expect("send the Muse session reply");
-      let mut sent = vec![handshake];
       loop {
-        let Some(message) = socket.next().await else {
-          break;
-        };
-        match message.expect("read Muse frame") {
-          ServerMessage::Binary(bytes) => {
+        match fake_outgoing.recv().await.expect("Muse sends the end of its audio stream") {
+          Message::Binary(bytes) => {
             let (expected_size, expected_value) =
               expected_chunks.next().expect("Muse forwards every queued chunk once");
             assert_eq!(bytes.len(), expected_size);
             assert!(bytes.iter().all(|byte| *byte == expected_value));
           }
-          ServerMessage::Text(text) => {
-            let text = text.to_string();
-            let is_end = text == r#"{"type": "endStream"}"#;
-            sent.push(text);
-            if is_end {
-              socket
-                .send(ServerMessage::Text(r#"{"type":"transcript","text":"synthetic partial"}"#.into()))
-                .await
-                .expect("send the Muse partial");
-              socket
-                .send(ServerMessage::Text(r#"{"type":"speechComplete","transcript":"synthetic final"}"#.into()))
-                .await
-                .expect("send the Muse final");
-            }
-          }
-          ServerMessage::Close(_) => {
-            socket.flush().await.expect("flush the Muse close reply");
+          Message::Text(text) if text == r#"{"type": "endStream"}"# => {
+            assert!(expected_chunks.next().is_none(), "Muse forwards every queued chunk");
+            fake_incoming
+              .send(Ok(Message::Text(r#"{"type":"transcript","text":"synthetic partial"}"#.into())))
+              .expect("send the Muse partial");
+            fake_incoming
+              .send(Ok(Message::Text(r#"{"type":"speechComplete","transcript":"synthetic final"}"#.into())))
+              .expect("send the Muse final");
             break;
           }
           message => panic!("unexpected Muse frame: {message:?}"),
         }
       }
-      assert!(expected_chunks.next().is_none(), "Muse forwards every queued chunk");
-      sent
+      handshake
     });
 
     let clock = Arc::new(VirtualClock::new());
-    let backend = Backend::muse_for_test("synthetic-token", &endpoint, clock.clone(), muse_audio_bytes_per_second);
-    let (task, mut events, _cancel) = start_transcription(backend, audio);
+    let session_clock = Arc::clone(&clock);
+    let (events, mut event_receiver) = mpsc::unbounded_channel();
+    let (_, cancelled) = watch::channel(false);
+    let task = tokio::spawn(async move {
+      let mut cancelled = cancelled;
+      run_muse_session(
+        socket,
+        &mut cancelled,
+        MuseSession {
+          token: "synthetic-token".to_string(),
+          audio,
+          events,
+          vocabulary: vec!["Ada".to_string()],
+          languages: vec!["zh".to_string(), "fr".to_string()],
+          clock: session_clock,
+          audio_bytes_per_second: muse_audio_bytes_per_second,
+        },
+      )
+      .await
+    });
     let mut transcript = Vec::new();
     for _ in 0..2 {
-      let event = next_event(&mut events).await;
+      let event = next_event(&mut event_receiver).await;
       transcript.push((event.kind, event.text.clone()));
       event.acknowledged.send(()).expect("relay acknowledges the event");
     }
@@ -1080,15 +1121,23 @@ mod tests {
       .expect("Muse session completes")
       .expect("Muse task succeeds")
       .expect("Muse transcription succeeds");
-    let sent = tokio::time::timeout(Duration::from_secs(3), fake)
+    let handshake = tokio::time::timeout(Duration::from_secs(3), fake)
       .await
       .expect("fake Muse server completes")
       .expect("fake Muse task succeeds");
     assert_eq!(
-      sent[0],
-      r#"{"mode": "PUSH_TO_TALK", "authorization": {"accessToken": "synthetic-token"}, "audioEncoding": "PCM_16KHZ", "model": "muse-voice-transcribe-1.0", "partialMode": "CUMULATIVE", "emitAudioProgress": false, "keywords": ["Ada"], "languageBias": ["Mandarin Chinese"]}"#
+      handshake,
+      json!({
+        "mode": "PUSH_TO_TALK",
+        "authorization": {"accessToken": "synthetic-token"},
+        "audioEncoding": "PCM_16KHZ",
+        "model": "muse-voice-transcribe-1.0",
+        "partialMode": "CUMULATIVE",
+        "emitAudioProgress": false,
+        "keywords": ["Ada"],
+        "languageBias": ["Mandarin Chinese"]
+      })
     );
-    assert_eq!(sent[1], r#"{"type": "endStream"}"#);
     let sleeps = clock.sleeps();
     assert_eq!(sleeps.len(), 1);
     assert!((sleeps[0] - 1.0).abs() < 1e-12);

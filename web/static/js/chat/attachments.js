@@ -79,7 +79,7 @@ function registerInputMode(mode, badgeHtml) {
   inputModeBadges.set(mode, badgeHtml);
 }
 
-// A user text folds by its rendered height: the clamp (styles.css, .user-msg-clamp) shows its first ten lines, and the
+// A user text folds by its rendered height. The clamp (styles.css, .user-msg-clamp) shows its first ten lines, and the
 // Show full text control shows only while the clamp hides some of the text. Every text starts clamped and undecided,
 // and the observer below decides it once it is laid out.
 function renderUserTextHtml(text) {
@@ -103,7 +103,7 @@ function fitUserMessageClamp(clamp, sizes) {
 }
 
 // Rows are built detached and mount into the message list later (turn-engine.js, buildNode), so the list is watched.
-// Each clamp that enters it is observed; the observer decides it at its first layout and again at every size change,
+// Each clamp that enters it is observed. The observer decides it at its first layout and again at every size change,
 // and a width change is the one that rewraps the text.
 document.addEventListener('DOMContentLoaded', () => {
   const sizes = new ResizeObserver((entries) => {

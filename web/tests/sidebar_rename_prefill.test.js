@@ -119,3 +119,16 @@ test('zero-width row rect (hidden row) falls back to the header instead of corne
   assert.equal(dom.input.value, 'header fallback name');
   assert.equal(dom.input.style.left, '50px');
 });
+
+test('a chat-header click opens the field on the header name line, not on the session row', () => {
+  const dom = makeDom({rowName: 'row text', headerName: 'header name'});
+  const context = loadModals(dom);
+  // The header's onclick handler sits on the div that holds the heading.
+  context.startRename({
+    preventDefault() {}, stopPropagation() {},
+    currentTarget: {contains: (el) => el === dom.headerEl},
+  }, 's1');
+  assert.equal(dom.input.value, 'header name');
+  assert.equal(dom.input.style.width, '400px', 'the field took the row width instead of the header name line');
+  assert.equal(dom.input.style.height, '28px');
+});

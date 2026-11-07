@@ -1304,7 +1304,7 @@ EOF
     fi
     sleep 0.5
   done
-  first_reply=0
+  first_reply=none
   if [[ -f $SESSIONS_DIR/$manager_id/data/chat_events.jsonl ]]; then
     first_reply=$("$TRIAL_CLI" release-helper assistant-reply "$SESSIONS_DIR/$manager_id/data/chat_events.jsonl" HELLO 2>/dev/null)
   fi
@@ -1316,11 +1316,11 @@ EOF
   fi
   printf 'CHECK 2 %s\n' "$manager_run_contract_output"
   print_web_reply_nudges
-  if [[ $create_manager_status == 200 && $message_status == 202 && $manager_first_outcome == success && $first_reply == 1 && $manager_first_cgroup != 'not observed' && $manager_run_contract_status == 0 ]]; then
+  if [[ $create_manager_status == 200 && $message_status == 202 && $manager_first_outcome == success && ( $first_reply == web_reply || $first_reply == assistant_text ) && $manager_first_cgroup != 'not observed' && $manager_run_contract_status == 0 ]]; then
     session_test_ok=1
-    report_pass 2 'Manager turn' "manager=$manager_id outcome=$manager_first_outcome assistant_reply=HELLO cgroup=[$manager_first_cgroup]"
+    report_pass 2 'Manager turn' "manager=$manager_id outcome=$manager_first_outcome hello_reply=$first_reply cgroup=[$manager_first_cgroup]"
   else
-    report_fail 2 'Manager turn' "create HTTP $create_manager_status; message HTTP ${message_status:-not sent}; input_event_id=${manager_first_input_id:-missing} outcome=${manager_first_outcome:-timeout} assistant_reply=$first_reply cgroup=[$manager_first_cgroup]" 'the manager run, one-word chat reply, or in-flight session cgroup evidence did not match the trial contract'
+    report_fail 2 'Manager turn' "create HTTP $create_manager_status; message HTTP ${message_status:-not sent}; input_event_id=${manager_first_input_id:-missing} outcome=${manager_first_outcome:-timeout} hello_reply=$first_reply cgroup=[$manager_first_cgroup]" 'the manager run, one-word chat reply, or in-flight session cgroup evidence did not match the trial contract'
   fi
 else
   report_fail 2 'Manager turn' "create HTTP $create_manager_status; session=${manager_id:-missing}" 'the manager session could not be created because the trial server was unavailable or rejected the request'
@@ -1421,8 +1421,8 @@ EOF
     fi
     sleep 1
   done
-  worker_reply=0
-  manager_started_reply=0
+  worker_reply=none
+  manager_started_reply=none
   manager_contract_status=1
   manager_contract_output='run contract was not checked'
   if [[ -f $HTTP_ROOT/manager-runs.json && -f $SESSIONS_DIR/$manager_id/data/chat_events.jsonl ]]; then
@@ -1452,7 +1452,7 @@ EOF
   if [[ -n $delegation_error ]]; then
     delegation_evidence+=" server_error=$delegation_error"
   fi
-  if [[ $delegate_message_status == 202 && -n $delegate_input_id && -n $delegate_worker_id && $delegate_task_type == quick-edit && $delegate_repo_path == "$SYNTH_REPO" && $worker_state == success && $worker_all_success == 1 && $worker_contract_status == 0 && $worker_worktree == "$WORKTREE_ROOT"/* && $worker_commit =~ ^[0-9a-f]{40}$ && $worker_changed == trial.txt && $worker_clean == 1 && $manager_final_count -ge 3 && $manager_report_count -ge 1 && $manager_contract_status == 0 && $worker_reply == 1 ]]; then
+  if [[ $delegate_message_status == 202 && -n $delegate_input_id && -n $delegate_worker_id && $delegate_task_type == quick-edit && $delegate_repo_path == "$SYNTH_REPO" && $worker_state == success && $worker_all_success == 1 && $worker_contract_status == 0 && $worker_worktree == "$WORKTREE_ROOT"/* && $worker_commit =~ ^[0-9a-f]{40}$ && $worker_changed == trial.txt && $worker_clean == 1 && $manager_final_count -ge 3 && $manager_report_count -ge 1 && $manager_contract_status == 0 && ( $worker_reply == web_reply || $worker_reply == assistant_text ) ]]; then
     delegation_test_ok=1
     report_pass 4 Delegation "$delegation_evidence"
   elif [[ -n $delegation_error ]]; then
@@ -1549,7 +1549,7 @@ EOF
     fi
     sleep 1
   done
-  takeover_reply=0
+  takeover_reply=none
   if [[ -f $SESSIONS_DIR/$takeover_id/data/chat_events.jsonl ]]; then
     takeover_reply=$("$TRIAL_CLI" release-helper assistant-reply "$SESSIONS_DIR/$takeover_id/data/chat_events.jsonl" TAKEOVER_OK 2>/dev/null)
   fi
@@ -1560,8 +1560,8 @@ EOF
     takeover_contract_status=$?
   fi
   printf 'CHECK 5 %s\n' "$takeover_contract_output"
-  takeover_evidence="session=$takeover_id message_HTTP=$takeover_message_status sleep_in_cgroup=$takeover_sleep_seen old_server_SIGTERM=$old_server_stopped old_server_stop=[$old_server_stop_summary] restart_ready=$new_server_ready restart_version_HTTP=$restart_version_status run_count=$takeover_run_count run_outcome=${takeover_state:-timeout} run_states=${takeover_states:-missing} assistant_reply=$takeover_reply"
-  if [[ $takeover_create_status == 200 && $takeover_message_status == 202 && $takeover_sleep_seen == 1 && $old_server_stopped == 1 && $new_server_ready == 1 && $restart_version_status == 200 && $takeover_contract_status == 0 && $takeover_state == success && $takeover_reply == 1 ]]; then
+  takeover_evidence="session=$takeover_id message_HTTP=$takeover_message_status sleep_in_cgroup=$takeover_sleep_seen old_server_SIGTERM=$old_server_stopped old_server_stop=[$old_server_stop_summary] restart_ready=$new_server_ready restart_version_HTTP=$restart_version_status run_count=$takeover_run_count run_outcome=${takeover_state:-timeout} run_states=${takeover_states:-missing} takeover_reply=$takeover_reply"
+  if [[ $takeover_create_status == 200 && $takeover_message_status == 202 && $takeover_sleep_seen == 1 && $old_server_stopped == 1 && $new_server_ready == 1 && $restart_version_status == 200 && $takeover_contract_status == 0 && $takeover_state == success && ( $takeover_reply == web_reply || $takeover_reply == assistant_text ) ]]; then
     takeover_test_ok=1
     report_pass 5 Takeover "$takeover_evidence"
   else

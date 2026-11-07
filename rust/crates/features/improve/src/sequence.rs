@@ -571,8 +571,9 @@ async fn create_worktree(
   Ok(resolution.canonical)
 }
 
-/// Settle a loop whose iteration launch was withheld: no terminal fact will arrive, so the state is blocked, the lock is
-/// released and the failed report names the reason. The close step then stops the queued Run and closes the child.
+/// The settlement of a loop whose iteration launch was withheld. No terminal fact will arrive, so the state is
+/// blocked, the lock is released and the failed report names the reason. The close step then stops the queued Run
+/// and closes the child.
 async fn settle_withheld_iteration(
   spec: &LoopSpec<'_>,
   cfg: &CharlieBotConfig,
@@ -959,8 +960,9 @@ async fn loop_close_verdict(
   Ok((outcome, evidence))
 }
 
-/// Mark every improve loop whose controller died with the old process, then close what ended. A loop whose state says
-/// `running` under this process's pid is left alone: its controller is live. Returns how many loops were marked.
+/// The reconciliation of every improve loop whose controller died with the old process, closing what ended. A loop
+/// whose state says `running` under this process's pid is left alone: its controller is live. Returns how many loops
+/// were marked.
 pub async fn reconcile_interrupted_sequences(
   cfg: &CharlieBotConfig,
   tree: &dyn SequenceTree,

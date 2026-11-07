@@ -1163,6 +1163,37 @@ test('a committed load unstales the registry; only invalidate() (a network loss)
   assert.ok(vsel.innerHTML.indexOf('value="1" selected') !== -1, 'selection survives the refetch');
 });
 
+test('a registry loaded before the first tab show hides the empty toolbar of a plan-less session', async () => {
+  const {elements, planPanel} = loadPanelWithViewer({fetch: makeSessionFetchWithFiles({A: {plans: []}})});
+  // The chat's artifact cards load the registry at page load; no show has painted the panel yet.
+  await planPanel.ready();
+  assert.equal(elements['plan-toolbar'].classList.contains('hidden'), false, 'template default keeps the toolbar');
+
+  await planPanel.onTabShown();
+  assert.equal(elements['plan-toolbar'].classList.contains('hidden'), true, 'the first show hides the empty toolbar');
+  assert.equal(elements['plan-empty-state'].style.display, '', 'the empty state stays');
+});
+
+test('a registry loaded before the first tab show paints the session plans on that show', async () => {
+  let calls = 0;
+  const fetch = async (url) => {
+    if (String(url).indexOf('/api/sessions/') !== -1) {
+      calls += 1;
+      return {ok: true, json: async () => ({plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')], {title: 'Plan A'})]})};
+    }
+    return {ok: true, text: async () => ''};
+  };
+  const {elements, planPanel} = loadPanelWithViewer({fetch});
+  await planPanel.ready();
+  const callsAfterLoad = calls;
+
+  await planPanel.onTabShown();
+  assert.equal(calls, callsAfterLoad, 'the first show paints the committed registry without a second fetch');
+  assert.equal(elements['plan-toolbar'].classList.contains('hidden'), false, 'the toolbar shows for a session with plans');
+  assert.equal(elements['plan-empty-state'].style.display, 'none', 'the empty-state note hides');
+  assert.ok(elements['plan-selector'].innerHTML.indexOf('Plan A') !== -1, 'the plan is in the selector');
+});
+
 test('onActiveSessionChanged renders the empty state and clears the iframe when the new session has no plans', async () => {
   const registries = {
     A: {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')])]},

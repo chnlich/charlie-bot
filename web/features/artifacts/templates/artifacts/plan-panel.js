@@ -25,6 +25,10 @@ const planPanel = (() => {
   let _fetchGeneration = 0;
   let _loadPromise = null;
   let _loadPromiseSessionId = null;
+  // The session whose panel markup render() last painted. The chat's artifact cards load the
+  // registry at page load, before the Plans tab is ever shown, so the first show can find a
+  // committed load and a panel that still carries the template's default markup.
+  let _renderedSessionId = null;
 
   // -- Pure helpers (exported for testing) --------------------------------
 
@@ -399,6 +403,7 @@ const planPanel = (() => {
   function render() {
     var panel = _getEl('tab-plans');
     if (!panel) return;
+    _renderedSessionId = _currentSessionId();
     var empty = _getEl('plan-empty-state');
     var viewer = _getEl('plan-viewer');
     var plans = _registry.plans || [];
@@ -634,7 +639,16 @@ const planPanel = (() => {
     var sid = _currentSessionId();
     var switched = (_loadedSessionId !== sid);
     if (switched) _resetForSessionChange();
-    if (!_stale && !switched) return;
+    if (!_stale && !switched) {
+      if (_renderedSessionId === sid) return;
+      // The registry is current but the markup is still the template's default. Paint it from the
+      // committed registry rather than refetching; render() reloads the viewer only when its key
+      // changes.
+      _ensureSelection();
+      render();
+      _renderActionBar();
+      return;
+    }
     if (switched && _loadPromise && _loadPromiseSessionId === sid) {
       await _loadPromise;
       if (_loadedSessionId !== sid) return;

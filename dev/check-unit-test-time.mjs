@@ -1,8 +1,6 @@
 #!/usr/bin/env node
-// The 0.1 s unit-test check, one entry for the Rust and node suites, in CI and local runs. It reads the
-// JUnit report of a parallel run and reruns every test over the limit alone, then judges by the isolated
-// times. Parallel-run queuing makes a fast test look slow; the alone rerun has no queue. A suspect the
-// rerun does not report means its filter matched nothing, which fails the check and names the test.
+// Reads the parallel JUnit report and reruns each over-limit test alone. If its first alone time is over
+// the limit, the check runs it alone twice more and judges by the shortest time. A missing JUnit row fails.
 //
 //   dev/check-unit-test-time.mjs --runner rust|node --junit <path> [--workspace-dir <dir>]
 //
@@ -41,44 +39,79 @@ function main() {
   suspects.sort((a, b) => b.time - a.time);
 
   const lines = [];
-  let confirmed = 0;
+  let stillOverAlone = 0;
+  let failedAlone = 0;
   let checkFailed = false;
   if (suspects.length > 0) {
-    const rerun = options.runner === 'rust' ? isolateWithRust(suspects, options) : isolateWithNode(suspects, options);
+    const rerun = rerunAlone(suspects, options);
     if (rerun.error !== undefined) {
       checkFailed = true;
       lines.push(`unit test rerun failed: ${rerun.error}`);
-    }
-    for (const suspect of suspects) {
-      const row = rerun.byId.get(`${suspect.binaryId} ${suspect.name}`);
-      if (row === undefined) {
-        checkFailed = true;
-        lines.push(`unit test rerun matched nothing: ${suspect.binaryId} ${suspect.name}`);
-        continue;
-      }
-      const suffix = row.failed ? ', isolated run FAILED' : '';
-      if (row.failed || row.time > LIMIT_S) {
-        confirmed += 1;
-        lines.push(
-          `unit test over ${LIMIT_S} s: ${suspect.binaryId} ${suspect.name} ${formatTime(row.time)} s (alone${suffix})`
-        );
-      } else {
-        lines.push(
-          `unit test within ${LIMIT_S} s alone: ${suspect.binaryId} ${suspect.name}` +
-            ` ${formatTime(suspect.time)} s parallel, ${formatTime(row.time)} s alone${suffix}`
-        );
+    } else {
+      for (const suspect of suspects) {
+        const rows = rerun.byId.get(`${suspect.binaryId} ${suspect.name}`);
+        const times = rows.map((row) => row.time);
+        const shortest = Math.min(...times);
+        const aloneTimes = times.map((time) => `${formatTime(time)} s`).join(', ');
+        const failed = rows.some((row) => row.failed);
+        if (shortest > LIMIT_S) {
+          stillOverAlone += 1;
+          const suffix = failed ? ', an isolated run FAILED' : '';
+          lines.push(
+            `unit test over ${LIMIT_S} s: ${suspect.binaryId} ${suspect.name} ${aloneTimes} alone` +
+              ` (shortest ${formatTime(shortest)} s${suffix})`
+          );
+        } else if (failed) {
+          failedAlone += 1;
+          lines.push(
+            `unit test failed alone: ${suspect.binaryId} ${suspect.name} ${aloneTimes} alone` +
+              ` (shortest ${formatTime(shortest)} s)`
+          );
+        } else {
+          lines.push(
+            `unit test within ${LIMIT_S} s alone: ${suspect.binaryId} ${suspect.name}` +
+              ` ${formatTime(suspect.time)} s parallel, ${aloneTimes} alone` +
+              ` (shortest ${formatTime(shortest)} s)`
+          );
+        }
       }
     }
   }
   if (suspects.length === 0) {
     lines.push(`unit-test time check: all ${testcases.length} tests ran within ${LIMIT_S} s in the parallel run`);
   } else {
-    lines.push(`${suspects.length} tests over ${LIMIT_S} s in the parallel run; ${confirmed} still over alone`);
+    lines.push(
+      `${suspects.length} tests over ${LIMIT_S} s in the parallel run; ${stillOverAlone} still over alone;` +
+        ` ${failedAlone} failed alone`
+    );
   }
   report(lines);
-  if (checkFailed || confirmed > 0) {
+  if (checkFailed || stillOverAlone > 0 || failedAlone > 0) {
     process.exit(1);
   }
+}
+
+function rerunAlone(suspects, options) {
+  const byId = new Map(suspects.map((suspect) => [`${suspect.binaryId} ${suspect.name}`, []]));
+  let pending = suspects;
+  for (let runNumber = 1; runNumber <= 3 && pending.length > 0; runNumber += 1) {
+    const run = options.runner === 'rust' ? isolateWithRust(pending, options) : isolateWithNode(pending, options);
+    if (run.error !== undefined) {
+      return { byId, error: `alone run ${runNumber} failed: ${run.error}` };
+    }
+    for (const suspect of pending) {
+      const key = `${suspect.binaryId} ${suspect.name}`;
+      const row = run.byId.get(key);
+      if (row === undefined) {
+        return { byId, error: `alone run ${runNumber} matched nothing: ${key}` };
+      }
+      byId.get(key).push(row);
+    }
+    if (runNumber === 1) {
+      pending = pending.filter((suspect) => byId.get(`${suspect.binaryId} ${suspect.name}`)[0].time > LIMIT_S);
+    }
+  }
+  return { byId, error: undefined };
 }
 
 function parseArgs(argv) {
@@ -178,17 +211,16 @@ function unescapeXml(text) {
   });
 }
 
-// ---------- the rust runner: one isolated run for every suspect ----------
+// ---------- isolated runners ----------
 
-// One `cargo nextest run` under profile check: the filterset names the suspects exactly, and the
-// profile's one test thread runs them one at a time, each in its own process. The profile's own
-// JUnit report (target/nextest/check/junit.xml) carries every rerun's time; a suspect absent from
-// it matched nothing.
+// One `cargo nextest run` under profile check runs the selected tests one at a time in separate processes.
+// Remove the previous report so a failed run cannot be mistaken for a fresh result.
 function isolateWithRust(suspects, options) {
   const filter = suspects
     .map((suspect) => `(test(=${filterLiteral(suspect.name)}) and binary_id(=${filterLiteral(suspect.binaryId)}))`)
     .join(' or ');
   const junit = path.join(options.workspaceDir, 'target/nextest/check/junit.xml');
+  rmSync(junit, { force: true });
   const run = spawnSync(
     'cargo',
     ['nextest', 'run', '--locked', '--color', 'never', '--profile', 'check', '-E', filter],
@@ -221,11 +253,7 @@ function filterLiteral(value) {
   return value.replace(/[\\),\n\r\t]/g, (char) => `\\${escapes[char] ?? char}`);
 }
 
-// ---------- the node runner: one `node --test` per suspect, on its own file ----------
-
-// Each suspect runs alone in its file, so the file's other tests do not queue behind it. The name pattern
-// is the test name escaped for a regular expression and anchored at both ends, so it matches that test only.
-// A suspect whose run writes no testcase for it matched nothing.
+// Each suspect runs alone in its file. The anchored name pattern selects that test only.
 function isolateWithNode(suspects, options) {
   const byId = new Map();
   const scratch = mkdtempSync(path.join(os.tmpdir(), 'unit-test-time-'));

@@ -63,7 +63,7 @@ jobs:
             --test-reporter=spec --test-reporter-destination=stdout \
             $suites ../dev/integration-selection/select.test.mjs ../dev/week-review/test/review.test.mjs
 
-      # The same 0.1 s check as rust-test: rerun each over-limit test alone and fail on one still over.
+      # If a parallel over-limit test's first alone run exceeds 0.1 s, two more alone runs decide by the shortest.
       - name: Unit tests over 0.1 s
         if: always()
         run: dev/check-unit-test-time.mjs --runner node --junit web/target/node-test/junit.xml
@@ -123,8 +123,7 @@ jobs:
 
   rust-test:
     runs-on: ubuntu-24.04
-    # The 0.1 s check reruns every parallel over-limit test alone; a run against a tree that still
-    # holds slow unit tests pays for that rerun inside this bound.
+    # The 0.1 s check runs parallel over-limit tests alone and gives a first alone run over 0.1 s two retries.
     timeout-minutes: 45
     permissions:
       contents: read
@@ -169,8 +168,8 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # Each over-limit test in the parallel run reruns alone; a test still over 0.1 s alone fails the
-      # job with its name and isolated time.
+      # Each parallel over-limit test runs alone; a first alone time over 0.1 s triggers two more runs.
+      # The shortest alone time decides, and a failure names the test and all of its alone times.
       - name: Unit tests over 0.1 s
         if: always()
         run: dev/check-unit-test-time.mjs --runner rust --junit rust/target/nextest/ci/junit.xml

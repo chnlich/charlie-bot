@@ -22,8 +22,8 @@ inherits = "ci"
 [profile.integration.junit]
 path = "junit.xml"
 
-# The profile the 0.1 s check reruns suspects with. One test thread so each suspect runs alone; no
-# fail-fast so a failing suspect still leaves every other suspect's JUnit row on record.
+# The profile the 0.1 s check uses for each isolated round. One test thread keeps selected tests serial;
+# fail-fast stays off so every selected test has a JUnit row even when a test fails.
 [profile.check]
 test-threads = 1
 fail-fast = false

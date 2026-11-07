@@ -130,8 +130,7 @@ fn route_in_home(
   limits: &Limits,
   sleep: &mut dyn FnMut(Duration),
 ) -> Result<Value, String> {
-  let backend_ids = live_backend_ids(home)?;
-  let rules = load_rules(rules_path, &backend_ids)?;
+  let rules = load_home_rules(home, rules_path)?;
   let request = read_request(raw)?;
   let answer = answer(home, &rules, &request, limits, sleep)?;
   Ok(json!({ "routed": answer.routed, "backends": answer.backends, "reason": answer.reason }))
@@ -147,6 +146,11 @@ fn live_backend_ids(home: &Path) -> Result<Vec<String>, String> {
   let registry = charliebot_packages::registry().map_err(|error| error.to_string())?;
   let cfg = registry.load_config(home).map_err(|error| error.to_string())?;
   Ok(cfg.backends.options.into_iter().map(|option| option.id).collect())
+}
+
+fn load_home_rules(home: &Path, rules_path: &Path) -> Result<RouterRules, String> {
+  let backend_ids = live_backend_ids(home)?;
+  load_rules(rules_path, &backend_ids)
 }
 
 /// One validated rules file: where Jev lives, the question it answers, the classes, and the classes each role lists.
@@ -1116,7 +1120,27 @@ mod tests {
   }
 
   #[test]
-  fn delegation_text_is_cut_to_its_first_characters_and_thread_text_to_its_last() {
+  fn delegation_text_is_cut_to_its_first_characters() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
+      let long_text = "x".repeat(TEXT_LIMIT + 1);
+      let label = "Task type: implement\n\n";
+
+      let delegation = request("implement", &long_text, &STRONG, None);
+      run(&home, &delegation, &jev, vec![jev_reply("routine", 0.9, 0.1)]).unwrap();
+
+      let requests = jev.requests();
+      let request = &requests[0];
+      let delegation_state = request["state"].as_str().unwrap();
+      assert_eq!(delegation_state.chars().count(), TEXT_LIMIT);
+      assert_eq!(delegation_state, format!("{label}{}", "x".repeat(TEXT_LIMIT - label.len())));
+    });
+  }
+
+  #[test]
+  fn thread_text_is_cut_to_its_last_characters() {
     with_timeout(|| {
       let home = TestHome::new();
       let jev = FakeJev::start(Vec::new());
@@ -1126,19 +1150,11 @@ mod tests {
         &default_classes(),
         "roles:\n  implement: [routine, context]\n  thread: [routine, context]\n",
       );
-      let long_text = format!("{}THREAD-END", "x".repeat(TEXT_LIMIT + 16));
-      let label = "Task type: implement\n\n";
-
-      let delegation = request("implement", &long_text, &STRONG, None);
-      run(&home, &delegation, &jev, vec![jev_reply("routine", 0.9, 0.1)]).unwrap();
+      let long_text = format!("{}THREAD-END", "x".repeat(TEXT_LIMIT + 1));
       let thread = request("thread", &long_text, &STRONG, None);
       run(&home, &thread, &jev, vec![jev_reply("routine", 0.9, 0.1)]).unwrap();
 
-      let requests = jev.requests();
-      let delegation_state = requests[0]["state"].as_str().unwrap();
-      assert_eq!(delegation_state.chars().count(), TEXT_LIMIT);
-      assert_eq!(delegation_state, format!("{label}{}", "x".repeat(TEXT_LIMIT - label.len())));
-      let thread_state = requests[1]["state"].as_str().unwrap();
+      let thread_state = jev.requests()[0]["state"].as_str().unwrap().to_string();
       let expected_tail: String = long_text.chars().skip(long_text.chars().count() - TEXT_LIMIT).collect();
       assert_eq!(thread_state, expected_tail);
       assert_eq!(thread_state.chars().count(), TEXT_LIMIT);
@@ -1146,7 +1162,7 @@ mod tests {
   }
 
   #[test]
-  fn the_server_and_the_replay_send_the_same_jev_input_for_one_spec() {
+  fn the_server_sends_the_expected_jev_input_for_one_spec() {
     with_timeout(|| {
       let home = TestHome::new();
       let jev = FakeJev::start(Vec::new());
@@ -1155,21 +1171,52 @@ mod tests {
 
       // The server sends the delegation's description with its role and the manager's backend.
       let server_request = request("implement", spec, &STRONG, Some(SESSION));
-      run(&home, &server_request, &jev, vec![jev_reply("context", 0.3, 0.7)]).unwrap();
+      let answer = run(&home, &server_request, &jev, vec![jev_reply("context", 0.3, 0.7)]).unwrap();
+
+      assert_eq!(answer, json!({ "routed": true, "backends": [SESSION], "reason": "context p=0.70" }));
+      let requests = jev.requests();
+      assert_eq!(requests.len(), 1);
+      assert_expected_spec_request(&requests[0], spec);
+    });
+  }
+
+  #[test]
+  fn the_replay_sends_the_expected_jev_input_for_one_spec() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
+      let spec = "Goal: explain the routing contract.\n\n## Requester Words\n- \"keep it simple\"";
+      let request = request("implement", spec, &STRONG, Some(SESSION));
 
       // A calibration replay reads the same spec and role from another rules file under --config.
       let replay_dir = tempfile::tempdir().unwrap();
       let replay_rules = replay_dir.path().join("router.yaml");
       std::fs::write(&replay_rules, rules_text(&jev.url, &default_classes(), DEFAULT_ROLES)).unwrap();
-      jev.replies.lock().unwrap().push_back(jev_reply("context", 0.3, 0.7));
-      let replay = route_in_home(&home.home, &replay_rules, &server_request, &test_limits(), &mut |_| {}).unwrap();
+      let answer = route_in_home(&home.home, &replay_rules, &request, &test_limits(), &mut |_| {}).unwrap();
 
+      assert_eq!(answer, json!({ "routed": true, "backends": [SESSION], "reason": "context p=0.70" }));
       let requests = jev.requests();
-      assert_eq!(requests.len(), 2);
-      assert_eq!(requests[0], requests[1], "one spec gives one Jev input");
-      assert_eq!(requests[0]["state"], format!("Task type: implement\n\n{spec}"));
-      assert_eq!(replay, json!({ "routed": true, "backends": [SESSION], "reason": "context p=0.70" }));
+      assert_eq!(requests.len(), 1);
+      assert_expected_spec_request(&requests[0], spec);
     });
+  }
+
+  fn assert_expected_spec_request(request: &Value, spec: &str) {
+    assert_eq!(
+      request,
+      &json!({
+        "model": "jev-test",
+        "state": format!("Task type: implement\n\n{spec}"),
+        "questions": {
+          "kind": {
+            "type": "choice",
+            "instructions": INSTRUCTIONS,
+            "criteria": {"context": CONTEXT_RULE, "routine": ROUTINE_RULE},
+          },
+        },
+      })
+    );
   }
 
   #[test]
@@ -1362,24 +1409,30 @@ mod tests {
   }
 
   #[test]
-  fn an_edit_to_the_rules_file_takes_effect_on_the_next_call() {
+  fn load_home_rules_reads_an_edit_on_the_next_call() {
     with_timeout(|| {
       let home = TestHome::new();
-      let jev = FakeJev::start(Vec::new());
+      let jev_url = "http://127.0.0.1:9/v1/systemone";
       let classes = |target: &str| {
         format!(
           "classes:\n  routine: {{when: \"{ROUTINE_RULE}\", run_on: pool}}\n  context: {{when: \"{CONTEXT_RULE}\", run_on: [{target}]}}\n"
         )
       };
-      write_rules(&home, &jev.url, &classes(STRONG[0]), DEFAULT_ROLES);
+      write_rules(&home, jev_url, &classes(STRONG[0]), DEFAULT_ROLES);
+      let first = load_home_rules(&home.home, &home.rules_path()).unwrap();
+      let first_targets = match &first.classes["context"].run_on {
+        RunOn::Backends(targets) => targets.iter().map(String::as_str).collect::<Vec<_>>(),
+        _ => panic!("expected an explicit backend list"),
+      };
+      assert_eq!(first_targets.as_slice(), &[STRONG[0]]);
 
-      let payload = request("implement", "Understand the caching layer.", &STRONG, Some(SESSION));
-      let first = run(&home, &payload, &jev, vec![jev_reply("context", 0.19, 0.81)]).unwrap();
-      assert_eq!(first["backends"], json!([STRONG[0]]));
-
-      write_rules(&home, &jev.url, &classes(STRONG[1]), DEFAULT_ROLES);
-      let second = run(&home, &payload, &jev, vec![jev_reply("context", 0.19, 0.81)]).unwrap();
-      assert_eq!(second["backends"], json!([STRONG[1]]));
+      write_rules(&home, jev_url, &classes(STRONG[1]), DEFAULT_ROLES);
+      let second = load_home_rules(&home.home, &home.rules_path()).unwrap();
+      let second_targets = match &second.classes["context"].run_on {
+        RunOn::Backends(targets) => targets.iter().map(String::as_str).collect::<Vec<_>>(),
+        _ => panic!("expected an explicit backend list"),
+      };
+      assert_eq!(second_targets.as_slice(), &[STRONG[1]]);
     });
   }
 

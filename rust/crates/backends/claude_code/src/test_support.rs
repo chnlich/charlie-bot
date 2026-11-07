@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use charliebot_compat::http_client::{self, Settings};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::backend::Env;
 use charliebot_registry::{Registry, RegistryError};
@@ -20,9 +19,12 @@ pub fn synthetic_host() -> ClaudeHost {
   ClaudeHost { home: PathBuf::from("/synthetic/home"), claude_config_dir: PathBuf::from("/synthetic/home/.claude") }
 }
 
-/// An HTTP client that reaches no host: the unit tests never send a request through it.
+/// A direct client for quota tests whose requests stay under test control.
 pub fn quota_http() -> QuotaHttp {
-  let client = http_client::client(&Settings::default()).expect("the default client builds");
+  let client = reqwest::Client::builder()
+    .no_proxy()
+    .build()
+    .expect("the no-proxy test client builds");
   QuotaHttp::with_endpoints(client, usage_quota::USAGE_URL, usage_quota::TOKEN_REFRESH_URL)
 }
 

@@ -139,9 +139,11 @@ impl Home {
     let running = Arc::new(Mutex::new(Vec::new()));
     let dir = tempfile::tempdir().expect("temporary directory exists");
     fs::write(dir.path().join("config.yaml"), config_yaml).expect("the synthetic config writes");
-    fs::write(dir.path().join(CREDENTIALS_FILENAME), "charliebot:\n  access_key: synthetic-access-key\n")
-      .expect("the synthetic access key writes");
-    write_approval_policy_table(dir.path(), APPROVAL_POLICY_TABLE);
+    if matches!(packages, PackageSet::Full) {
+      fs::write(dir.path().join(CREDENTIALS_FILENAME), "charliebot:\n  access_key: synthetic-access-key\n")
+        .expect("the synthetic access key writes");
+      write_approval_policy_table(dir.path(), APPROVAL_POLICY_TABLE);
+    }
     let mut registry = Registry::new();
     if matches!(packages, PackageSet::Full) {
       registry
@@ -183,9 +185,11 @@ impl Home {
       Box::new(move || load_credentials(&credential_home)),
     ));
     let startup = StartupState::default();
-    let reader = Arc::clone(&running);
-    let inputs = RunningTurnInputs::new(move |_| reader.lock().expect("the stub lock is never poisoned").clone());
-    startup.insert(inputs).expect("the stub inserts once");
+    if matches!(packages, PackageSet::Full) {
+      let reader = Arc::clone(&running);
+      let inputs = RunningTurnInputs::new(move |_| reader.lock().expect("the stub lock is never poisoned").clone());
+      startup.insert(inputs).expect("the stub inserts once");
+    }
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
     Self { _dir: dir, features, running }
   }

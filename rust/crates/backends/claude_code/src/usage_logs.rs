@@ -354,11 +354,7 @@ mod tests {
     let source = ClaudeLogs::new(
       host,
       Arc::new(ClaudeAccountState::new()),
-      Arc::new(QuotaHttp::with_endpoints(
-        charliebot_compat::http_client::client(&charliebot_compat::http_client::Settings::default()).unwrap(),
-        "http://127.0.0.1:9/usage",
-        "http://127.0.0.1:9/token",
-      )),
+      Arc::new(super::super::test_support::quota_http()),
     );
 
     assert!(!root.path().join(charliebot_core::config::CONFIG_FILENAME).exists());

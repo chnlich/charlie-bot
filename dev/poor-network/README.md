@@ -101,16 +101,18 @@ repetitions run without one.
 
 ## Calibration
 
-The calibration's condition is the plan's: on the before side, a session switch clicked while a background list refresh
-is in flight must take at least `CALIBRATION_HOLD_MS` (10 s) to render. Each background repetition makes a second
-switch, whose click the bench times to land while the list refresh that a `task_tree_changed` frame has just triggered
-is in flight; the bench reads the frame and the refresh from its own request records, and checks afterwards that the
-refresh was still in flight when the switch's bootstrap request started. If the median of the five raw holds stays
-under 10 s, the proxy does not model the link, and `--side both` stops before the after side with exit 3.
+The calibration's condition is the plan's: a session switch clicked while a background list refresh is in flight must
+take at least `CALIBRATION_HOLD_MS` (10 s) to render. Each background repetition makes a second switch, whose click the
+bench times to land while the list refresh that a `task_tree_changed` frame has just triggered is in flight; the bench
+reads the frame and the refresh from its own request records, and checks afterwards that the refresh was still in
+flight when the switch's bootstrap request started.
 
-Both sides print the raw holds in the calibration line. The gate reads the before side only, so the after side's holds
-show whether the wait a person felt is gone after the fixes. The scored switch scenario keeps its clicks at random
-points of the refresh cycle, so its numbers stay comparable with the baseline.
+The gate reads one before side: the pre-fix baseline named by `CALIBRATION_REFERENCE` in `profile.mjs`. The fixes
+remove the background bursts the hold lived on, so a fix's own before side no longer reproduces the condition; a
+`--side both` run stops with exit 3 only when its before side is the reference and the median of its five raw holds
+stays under 10 s. Every other before side runs ungated, and both sides print the raw holds in the calibration line, so
+the after side's holds show whether the wait a person felt is gone. The scored switch scenario keeps its clicks at
+random points of the refresh cycle, so its numbers stay comparable with the baseline.
 
 A second check sets the background scenario's received rate beside the live readback in `LIVE_READBACK`: about 206 KB a
 minute, from one visible tab on a live release. The table prints the gap. The check does not gate the run: a gap is a

@@ -7,8 +7,9 @@
 #
 # --side before  measures origin/main (--before-rev, default origin/main, in --before-clone, a git clone that holds it);
 # --side after   measures this tree;
-# --side both    runs before, then after, back to back in one invocation. If the before side's calibration does not
-#                reproduce the switch-during-refresh hold, it stops after before, prints its numbers, and exits 3.
+# --side both    runs before, then after, back to back in one invocation. If the before side measures the calibration
+#                reference (CALIBRATION_REFERENCE in profile.mjs) and does not reproduce the switch-during-refresh
+#                hold, it stops after before, prints its numbers, and exits 3. Any other before side runs ungated.
 # --detach       starts the run as a transient systemd user unit and returns at once; the log is <out-dir>/pn-<id>.log.
 # --lock FILE    holds an advisory lock on FILE around each side's trial (not the builds), waiting up to 2 h for it, so
 #                bench runs that take the same lock never measure side by side. One hold covers one side attempt; a
@@ -232,10 +233,16 @@ run_side() {
 if [[ $side == before || $side == both ]]; then
   (cd "$before_clone" && run_side before "$before_clone/scripts/release/trial.sh" "$before_commit" "$before_bin") \
     || die "$?" "the before side failed; see $run_dir/before.json"
-  calibrated=$(node -e 'const s = require(process.argv[1]); process.stdout.write(s.calibration ? String(s.calibration.reproduced) : "none")' "$run_dir/before.json")
-  if [[ $side == both && $calibrated != true ]]; then
-    node "$BENCH_DIR/report.mjs" "$run_dir/before.json"
-    die 3 "the baseline did not reproduce the switch-during-refresh hold; the proxy does not model the link. The after side did not run."
+  # The gate reads one before side: the reference commit the plan's condition is checked on. A fix's own before side no
+  # longer holds the condition (the earlier fixes removed the bursts it lived on), so only a run whose before side is
+  # the reference stops on it.
+  calibration_reference=$(node -e 'import(process.argv[1]).then((profile) => process.stdout.write(String(profile.CALIBRATION_REFERENCE)))' "file://$BENCH_DIR/profile.mjs")
+  if [[ $side == both && $before_commit == "$calibration_reference" ]]; then
+    calibrated=$(node -e 'const s = require(process.argv[1]); process.stdout.write(s.calibration ? String(s.calibration.reproduced) : "none")' "$run_dir/before.json")
+    if [[ $calibrated != true ]]; then
+      node "$BENCH_DIR/report.mjs" "$run_dir/before.json"
+      die 3 "the reference baseline $calibration_reference did not reproduce the switch-during-refresh hold; the proxy does not model the link. The after side did not run."
+    fi
   fi
 fi
 

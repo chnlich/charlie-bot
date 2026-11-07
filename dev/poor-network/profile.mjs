@@ -43,6 +43,11 @@ export const REPETITIONS = 5;
 // this long to render.
 export const CALIBRATION_HOLD_MS = 10000;
 
+// The one commit the calibration gate checks the condition on: the pre-fix baseline whose switch holds the spec cites.
+// The fixes remove the background bursts the hold lived on, so a fix's own before side no longer reproduces it; the
+// gate reads only a before side measured at this commit, and every other before side runs ungated.
+export const CALIBRATION_REFERENCE = '408aa851c401c595f8f47e49a233fffd48f64b8a';
+
 // The shape of the view the bench measures, taken from a live release's default "all" view: 124 rows, a raw median row
 // of 3,260 bytes, and a switch target whose bootstrap content takes a median 26,592 bytes on the wire untrimmed. The
 // bench's own sessions are rows of that view, and the mock home holds the rest. The first screen's trim serves that

@@ -3,13 +3,13 @@
 //! operation order, so a request raises the first failure it records.
 
 use charliebot_core::event_types;
-use charliebot_core::text_repr::{self, is_truthy};
+use charliebot_core::text_repr::{self, is_truthy, type_name};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use super::value_ops::{
   COMPACT_ASCII_JSON, ValueResult, first_item, get, get_or_empty, iterate, iterate_member, loads_text, raised,
-  require_dict, type_name, value_error,
+  require_dict, value_error,
 };
 
 /// One Anthropic stream event: its name, and the data object the SSE frame carries after `type`.

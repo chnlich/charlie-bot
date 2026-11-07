@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use charliebot_core::text_repr::{self, JsonStyle, json_dumps, str_repr};
+use charliebot_core::text_repr::{self, JsonStyle, json_dumps, str_repr, type_name};
 use charliebot_store::control_events::sha256_hex;
 use serde_json::{Map, Value, json};
 
@@ -220,19 +220,6 @@ fn string_field(value: &Value, key: &str) -> Result<String, String> {
 
 fn not_iterable(value: &Value) -> String {
   format!("'{}' object is not iterable", type_name(value))
-}
-
-/// The type name a stored JSON value reports in its error text.
-fn type_name(value: &Value) -> &'static str {
-  match value {
-    Value::Null => "NoneType",
-    Value::Bool(_) => "bool",
-    Value::Number(number) if number.is_f64() => "float",
-    Value::Number(_) => "int",
-    Value::String(_) => "str",
-    Value::Array(_) => "list",
-    Value::Object(_) => "dict",
-  }
 }
 
 /// The text a stored JSON value renders as, which the mismatch messages print for a recorded value. A missing key

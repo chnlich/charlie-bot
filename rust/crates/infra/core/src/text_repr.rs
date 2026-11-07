@@ -241,6 +241,20 @@ pub fn value_str(value: &Value) -> String {
   }
 }
 
+/// The class name a JSON value reports in Python's error text: `NoneType`, `bool`, `float`, `int`, `str`, `list`
+/// or `dict`.
+pub fn type_name(value: &Value) -> &'static str {
+  match value {
+    Value::Null => "NoneType",
+    Value::Bool(_) => "bool",
+    Value::Number(number) if number.is_f64() => "float",
+    Value::Number(_) => "int",
+    Value::String(_) => "str",
+    Value::Array(_) => "list",
+    Value::Object(_) => "dict",
+  }
+}
+
 /// The repr of a loaded JSON value: strings quoted by [`str_repr`], `None`, booleans as `True` and `False`,
 /// floats by [`float_repr`], and containers with `, ` and `: ` separators.
 pub fn value_repr(value: &Value) -> String {

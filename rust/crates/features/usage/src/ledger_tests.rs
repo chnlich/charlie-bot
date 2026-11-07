@@ -410,8 +410,7 @@ fn one_record_id_from_two_hosts_counts_once() {
 
 #[test]
 fn fallback_excluded_once_any_session_is_native() {
-  let dir = tempfile::tempdir().unwrap();
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::open(":memory:").unwrap();
   let mut fallback = record("rec-fb", RecordKind::Fallback, &["sess-a", "sess-b"]);
   fallback.model = "model-fb".into();
   fallback.ts = TS_B.into();
@@ -642,24 +641,20 @@ fn previous_release_write_order_never_counts_a_born_excluded_fallback() {
 
 #[test]
 fn backfill_prices_a_ledger_written_before_the_aggregate() {
-  let dir = tempfile::tempdir().unwrap();
-  let path = dir.path().join("ledger.sqlite3");
-  {
-    let mut ledger = UsageLedger::open(&path).unwrap();
-    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", &[record("rec-1", RecordKind::Native, &["sess-a"])]).unwrap();
-  }
-  // Strip the aggregate to the pre-trigger shape, then add a row a raw writer (no triggers) lands.
-  {
-    let raw = Connection::open(&path).unwrap();
-    raw.execute_batch("DROP TABLE usage_agg; DELETE FROM ledger_meta; DROP TRIGGER usage_agg_after_insert;").unwrap();
-    raw
-      .execute(
-        "INSERT INTO usage (record_id, kind, source, model, account, host, ts, in_fresh, cache_write, cache_read, output, origin, captured_at) VALUES ('rec-2', 'native', ?, 'model-b', 'acct-a', ?, ?, 4, 1, 1, 3, '/x', ?)",
-        params![SOURCE, HOST, TS_B, TS_B],
-      )
-      .unwrap();
-  }
-  let mut ledger = UsageLedger::open(&path).unwrap();
+  let raw = Connection::open_in_memory().unwrap();
+  raw.execute_batch(sql::SCHEMA).unwrap();
+  raw.execute_batch("DROP TABLE usage_agg;").unwrap();
+  write_raw_usage(&raw, &record("rec-1", RecordKind::Native, &["sess-a"]));
+  let mut late = record("rec-2", RecordKind::Native, &["sess-b"]);
+  late.ts = TS_B.into();
+  late.model = "model-b".into();
+  late.in_fresh = 4;
+  late.cache_write = 1;
+  late.cache_read = 1;
+  late.output = 3;
+  write_raw_usage(&raw, &late);
+
+  let mut ledger = UsageLedger::from_connection(PathBuf::from(":memory:"), raw).unwrap();
   let rows = ledger.model_rows().unwrap();
   assert_eq!(models(&rows), ["model-a", "model-b"]);
   assert_eq!((rows[0].calls, rows[1].calls), (1, 1));

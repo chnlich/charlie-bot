@@ -1311,27 +1311,25 @@ mod tests {
 
   #[test]
   fn two_timeouts_exit_non_zero_naming_the_timeout_and_the_retry() {
-    with_timeout(|| {
-      let home = TestHome::new();
-      let jev = FakeJev::start(Vec::new());
-      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
+    let home = TestHome::new();
+    let jev = FakeJev::start(Vec::new());
+    write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
 
-      let payload = request("implement", "Add a test for the parser.", &STRONG, None);
-      jev.delay_next(past_the_timeout());
-      jev.delay_next(past_the_timeout());
-      let error = run_with_limits(
-        &home,
-        &payload,
-        &jev,
-        vec![jev_reply("routine", 0.9, 0.1), jev_reply("routine", 0.9, 0.1)],
-        &timeout_limits(),
-      )
-      .unwrap_err();
+    let payload = request("implement", "Add a test for the parser.", &STRONG, None);
+    jev.delay_next(past_the_timeout());
+    jev.delay_next(past_the_timeout());
+    let error = run_with_limits(
+      &home,
+      &payload,
+      &jev,
+      vec![jev_reply("routine", 0.9, 0.1), jev_reply("routine", 0.9, 0.1)],
+      &timeout_limits(),
+    )
+    .unwrap_err();
 
-      assert!(error.contains("timed out"), "{error}");
-      assert!(error.contains("retry"), "{error}");
-      assert_eq!(jev.requests().len(), 2, "the router makes no third attempt");
-    });
+    assert!(error.contains("timed out"), "{error}");
+    assert!(error.contains("retry"), "{error}");
+    assert_eq!(jev.requests().len(), 2, "the router makes no third attempt");
   }
 
   #[test]

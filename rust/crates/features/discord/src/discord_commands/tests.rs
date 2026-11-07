@@ -419,7 +419,7 @@ async fn read_on_a_non_discord_session_answers_409() {
 /// The reply gate fires before any post; the read marks the thread and the reply goes through.
 #[tokio::test]
 async fn reply_refuses_412_while_unread_then_posts_after_a_read() {
-  let home = Home::new(true).await;
+  let home = Home::new_without_thread_runtime(true).await;
   thread_messages(&home, &[Msg::new(1, "first follow up"), Msg::new(2, "second follow up")]);
   home.fake().channels.insert(PARENT.to_string(), Vec::new());
   let session_id = make_session(&home, None).await;

@@ -1193,6 +1193,7 @@ mod tests {
       let replay_dir = tempfile::tempdir().unwrap();
       let replay_rules = replay_dir.path().join("router.yaml");
       std::fs::write(&replay_rules, rules_text(&jev.url, &default_classes(), DEFAULT_ROLES)).unwrap();
+      jev.replies.lock().unwrap().push_back(jev_reply("context", 0.3, 0.7));
       let answer = route_in_home(&home.home, &replay_rules, &request, &test_limits(), &mut |_| {}).unwrap();
 
       assert_eq!(answer, json!({ "routed": true, "backends": [SESSION], "reason": "context p=0.70" }));

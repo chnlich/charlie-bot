@@ -17,10 +17,19 @@ type CdSpan = (usize, usize, Option<String>);
 /// is script or prose rather than shell. A double-quoted string keeps its text with its separators neutralized, unless
 /// it spans lines or holds a command substitution or backtick.
 pub fn shell_text(command: &str) -> String {
-  let without_heredocs = mask_heredocs(command);
-  let unwrapped = bash_c_pattern().replace_all(&without_heredocs, |captures: &Captures<'_>| {
-    captures.get(1).or_else(|| captures.get(2)).map_or_else(String::new, |text| text.as_str().to_string())
-  });
+  let without_heredocs = if command.contains("<<") { mask_heredocs(command) } else { command.to_string() };
+  let unwrapped = if without_heredocs.contains("-c") {
+    bash_c_pattern()
+      .replace_all(&without_heredocs, |captures: &Captures<'_>| {
+        captures.get(1).or_else(|| captures.get(2)).map_or_else(String::new, |text| text.as_str().to_string())
+      })
+      .into_owned()
+  } else {
+    without_heredocs
+  };
+  if !unwrapped.contains('"') && !unwrapped.contains('\'') {
+    return unwrapped;
+  }
   quoted_span_pattern()
     .replace_all(&unwrapped, |captures: &Captures<'_>| {
       let span = captures.get(0).expect("group 0 is the whole match").as_str();
@@ -45,6 +54,9 @@ fn neutralize_double_quoted(span: &str) -> String {
 /// full, which is the session store or a parent of it. Options, assignments, URLs and wildcards other than `*/...` stay
 /// as written.
 pub fn resolve_paths(shell: &str, cwd: &str, store_root: &Regex) -> String {
+  if !needs_path_resolution(shell) {
+    return shell.to_string();
+  }
   let cds = cd_spans(shell);
   let mut out = String::new();
   let mut last = 0;
@@ -77,6 +89,27 @@ pub fn resolve_paths(shell: &str, cwd: &str, store_root: &Regex) -> String {
   }
   out.push_str(&shell[last..]);
   out
+}
+
+pub(super) fn needs_path_resolution(shell: &str) -> bool {
+  shell
+    .split(|character: char| character.is_whitespace() || ";&|()<>`".contains(character))
+    .any(|word| {
+      if word == "cd" {
+        return true;
+      }
+      let bare = word.trim_matches(['"', '\'']);
+      if bare.starts_with(['-', '?', '[', '!']) || bare.contains('=') || bare.contains("://") {
+        return false;
+      }
+      if bare.starts_with(['~', '/']) || (bare.starts_with('$') && bare.contains('/')) {
+        return false;
+      }
+      if bare.starts_with('*') && !bare.starts_with("*/") {
+        return false;
+      }
+      bare.contains('/') || matches!(bare, "." | ".." | ".charliebot" | "sessions")
+    })
 }
 
 /// A word without its quotes, resolved against the current directory, or `None` when the word names no path.

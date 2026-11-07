@@ -852,103 +852,114 @@ async fn agent_archive_of_a_subtree_with_an_unfinished_run_refuses_like_the_oper
 }
 
 #[tokio::test]
-async fn own_run_archive_closes_without_takeoff_and_reports_to_ancestor() {
-  // Its three cases: a task with no earlier run, one whose earlier run succeeded, and one whose earlier run failed.
-  for previous_outcome in [None, Some(RunOutcomeKind::Success), Some(RunOutcomeKind::Failed)] {
-    let h = CompletionHarness::new();
-    let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
-    let child = h.base.create_task("child", Some(&root.id), TaskProfile::Manager, "Child").await;
-    let blocked_manager = h.base.create_task("blocked-manager", Some(&root.id), TaskProfile::Manager, "Blocked").await;
-    h.register_record(live_run(&blocked_manager.id, "blocked-owner-run", RunKind::ManagerTurn)).await;
-    h.base.create_task("open-child", Some(&blocked_manager.id), TaskProfile::Worker, "Open child").await;
-    if let Some(outcome) = previous_outcome {
-      h.register_record(live_run(&child.id, "previous-turn", RunKind::ManagerTurn)).await;
-      h.finish(&child.id, "previous-turn", outcome).await;
-    }
-    h.register_record(live_run(&child.id, "child-owner-run", RunKind::ManagerTurn)).await;
+async fn own_run_archive_closes_without_takeoff_after_no_earlier_run() {
+  assert_own_run_archive(None).await;
+}
 
-    // An agent may not archive a task outside its subtree without the non-child confirmation.
-    let outside_subtree = h
-      .completion
-      .archive_task(
-        &root.id,
-        "wrong-task",
-        &evidence("coordination complete", &["report:feature-coordinated"], &[]),
-        &agent(&child.id, "child-owner-run"),
-        false,
-      )
-      .await;
-    assert!(matches!(outside_subtree, Err(StoreError::Forbidden(message)) if message.contains("--archive-non-child")));
+#[tokio::test]
+async fn own_run_archive_closes_without_takeoff_after_earlier_success() {
+  assert_own_run_archive(Some(RunOutcomeKind::Success)).await;
+}
 
-    // An open descendant refuses the request before it is saved.
-    let blocked = h
-      .completion
-      .archive_task(
-        &blocked_manager.id,
-        "blocked-by-child",
-        &evidence("manager report", &["report:manager-report"], &[]),
-        &agent(&blocked_manager.id, "blocked-owner-run"),
-        false,
-      )
-      .await;
-    assert!(
-      matches!(blocked, Err(StoreError::Conflict(blockers)) if blockers.iter().any(|b| b.contains("open descendant")))
-    );
-    assert_eq!(
-      h.base
-        .store
-        .load_all_facts(&blocked_manager.id)
-        .unwrap()
-        .iter()
-        .filter(|event| event["type"] == event_types::TASK_CLOSE_REQUESTED)
-        .count(),
-      0
-    );
+#[tokio::test]
+async fn own_run_archive_closes_without_takeoff_after_earlier_failure() {
+  assert_own_run_archive(Some(RunOutcomeKind::Failed)).await;
+}
 
-    // The owner's own active Run may archive its task with no run_ids evidence at all.
-    let pending = h
-      .completion
-      .archive_task(
-        &child.id,
-        "close-1",
-        &evidence("coordination complete", &["report:feature-coordinated"], &[]),
-        &agent(&child.id, "child-owner-run"),
-        false,
-      )
-      .await
-      .unwrap();
-    assert_eq!(pending.0, 202);
-    assert_eq!(pending.1["status"], "pending_run_finish");
-    assert_eq!(h.base.store.task_state(&child.id).unwrap(), "open");
-
-    // The owner Run finishes successfully: the archive lands and reports to the parent.
-    h.finish(&child.id, "child-owner-run", RunOutcomeKind::Success).await;
-    assert_eq!(h.base.store.task_state(&child.id).unwrap(), "archived");
-    let closes = h
-      .base
-      .store
-      .load_all_facts(&child.id)
-      .unwrap()
-      .into_iter()
-      .filter(|event| event["type"] == event_types::TASK_CLOSED)
-      .collect::<Vec<_>>();
-    assert_eq!(closes.len(), 1);
-    assert_eq!(closes[0]["outcome"], "archived");
-    assert_eq!(closes[0]["report_to"], root.id);
-    let reports = h
-      .base
-      .store
-      .load_all_facts(&root.id)
-      .unwrap()
-      .into_iter()
-      .filter(|event| event["type"] == event_types::CHILD_REPORT)
-      .collect::<Vec<_>>();
-    assert_eq!(reports.len(), 1);
-    assert_eq!(reports[0]["outcome"], "archived");
-
-    // The ancestor holds its own conditions: it stays open after the child archived.
-    assert_eq!(h.base.store.task_state(&root.id).unwrap(), "open");
+async fn assert_own_run_archive(previous_outcome: Option<RunOutcomeKind>) {
+  let h = CompletionHarness::new();
+  let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
+  let child = h.base.create_task("child", Some(&root.id), TaskProfile::Manager, "Child").await;
+  let blocked_manager = h.base.create_task("blocked-manager", Some(&root.id), TaskProfile::Manager, "Blocked").await;
+  h.register_record(live_run(&blocked_manager.id, "blocked-owner-run", RunKind::ManagerTurn)).await;
+  h.base.create_task("open-child", Some(&blocked_manager.id), TaskProfile::Worker, "Open child").await;
+  if let Some(outcome) = previous_outcome {
+    h.register_record(live_run(&child.id, "previous-turn", RunKind::ManagerTurn)).await;
+    h.finish(&child.id, "previous-turn", outcome).await;
   }
+  h.register_record(live_run(&child.id, "child-owner-run", RunKind::ManagerTurn)).await;
+
+  // An agent may not archive a task outside its subtree without the non-child confirmation.
+  let outside_subtree = h
+    .completion
+    .archive_task(
+      &root.id,
+      "wrong-task",
+      &evidence("coordination complete", &["report:feature-coordinated"], &[]),
+      &agent(&child.id, "child-owner-run"),
+      false,
+    )
+    .await;
+  assert!(matches!(outside_subtree, Err(StoreError::Forbidden(message)) if message.contains("--archive-non-child")));
+
+  // An open descendant refuses the request before it is saved.
+  let blocked = h
+    .completion
+    .archive_task(
+      &blocked_manager.id,
+      "blocked-by-child",
+      &evidence("manager report", &["report:manager-report"], &[]),
+      &agent(&blocked_manager.id, "blocked-owner-run"),
+      false,
+    )
+    .await;
+  assert!(
+    matches!(blocked, Err(StoreError::Conflict(blockers)) if blockers.iter().any(|b| b.contains("open descendant")))
+  );
+  assert_eq!(
+    h.base
+      .store
+      .load_all_facts(&blocked_manager.id)
+      .unwrap()
+      .iter()
+      .filter(|event| event["type"] == event_types::TASK_CLOSE_REQUESTED)
+      .count(),
+    0
+  );
+
+  // The owner's own active Run may archive its task with no run_ids evidence at all.
+  let pending = h
+    .completion
+    .archive_task(
+      &child.id,
+      "close-1",
+      &evidence("coordination complete", &["report:feature-coordinated"], &[]),
+      &agent(&child.id, "child-owner-run"),
+      false,
+    )
+    .await
+    .unwrap();
+  assert_eq!(pending.0, 202);
+  assert_eq!(pending.1["status"], "pending_run_finish");
+  assert_eq!(h.base.store.task_state(&child.id).unwrap(), "open");
+
+  // The owner Run finishes successfully: the archive lands and reports to the parent.
+  h.finish(&child.id, "child-owner-run", RunOutcomeKind::Success).await;
+  assert_eq!(h.base.store.task_state(&child.id).unwrap(), "archived");
+  let closes = h
+    .base
+    .store
+    .load_all_facts(&child.id)
+    .unwrap()
+    .into_iter()
+    .filter(|event| event["type"] == event_types::TASK_CLOSED)
+    .collect::<Vec<_>>();
+  assert_eq!(closes.len(), 1);
+  assert_eq!(closes[0]["outcome"], "archived");
+  assert_eq!(closes[0]["report_to"], root.id);
+  let reports = h
+    .base
+    .store
+    .load_all_facts(&root.id)
+    .unwrap()
+    .into_iter()
+    .filter(|event| event["type"] == event_types::CHILD_REPORT)
+    .collect::<Vec<_>>();
+  assert_eq!(reports.len(), 1);
+  assert_eq!(reports[0]["outcome"], "archived");
+
+  // The ancestor holds its own conditions: it stays open after the child archived.
+  assert_eq!(h.base.store.task_state(&root.id).unwrap(), "open");
 }
 
 #[tokio::test]

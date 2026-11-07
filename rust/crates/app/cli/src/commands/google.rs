@@ -2230,10 +2230,8 @@ appointments and the tax paperwork of the household";
       "  refresh_token: default-refresh\n",
       "  owner: avery\n",
     ));
-    let stub = Stub::start(vec![
-      exchange_response("new-access", "new-refresh"),
-      profile_response("new@example.invalid"),
-    ]);
+    let stub =
+      Stub::start(vec![exchange_response("new-access", "new-refresh"), profile_response("new@example.invalid")]);
 
     add(
       &home,

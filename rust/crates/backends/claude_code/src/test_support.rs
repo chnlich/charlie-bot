@@ -7,7 +7,9 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
+use charliebot_compat::http_client::{self, Settings};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::backend::Env;
 use charliebot_registry::{Registry, RegistryError};
@@ -19,12 +21,12 @@ pub fn synthetic_host() -> ClaudeHost {
   ClaudeHost { home: PathBuf::from("/synthetic/home"), claude_config_dir: PathBuf::from("/synthetic/home/.claude") }
 }
 
-/// A direct client for quota tests whose requests stay under test control.
+/// A cached HTTP client for quota tests that do not send requests through its production endpoints.
 pub fn quota_http() -> QuotaHttp {
-  let client = reqwest::Client::builder()
-    .no_proxy()
-    .build()
-    .expect("the no-proxy test client builds");
+  static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+  let client = CLIENT
+    .get_or_init(|| http_client::client(&Settings::default()).expect("the test HTTP client builds"))
+    .clone();
   QuotaHttp::with_endpoints(client, usage_quota::USAGE_URL, usage_quota::TOKEN_REFRESH_URL)
 }
 

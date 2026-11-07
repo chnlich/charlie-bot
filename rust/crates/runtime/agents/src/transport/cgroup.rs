@@ -5,6 +5,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cgfs::{Cgroup, EntryKind, Hierarchy, LeafSpec};
@@ -144,20 +145,22 @@ fn weight_switch(controller: &str) -> &'static str {
 
 /// Open `path` as a cgroup hierarchy root, which a delegated subtree is.
 fn open_hierarchy(path: &Path) -> io::Result<Hierarchy> {
+  #[cfg(any(test, feature = "test-support"))]
   if cfg!(test) || FAKE_HIERARCHY.load(Ordering::Relaxed) {
     // SAFETY: unit tests and the tests that call `use_fake_cgroup_hierarchy` pass a private temporary directory that
     // stands in for cgroupfs; the server never turns the flag on.
-    unsafe { Hierarchy::open_for_test(path) }
-  } else {
-    Hierarchy::open(path)
+    return unsafe { Hierarchy::open_for_test(path) };
   }
+  Hierarchy::open(path)
 }
 
 /// Whether the cgroup handles name a test tree. The tests' temporary directories hold the control files a cgroupfs
 /// would publish, but they are not cgroup2.
+#[cfg(any(test, feature = "test-support"))]
 static FAKE_HIERARCHY: AtomicBool = AtomicBool::new(false);
 
 /// Mark this process's cgroup bases as fake test trees. Integration tests call this before their first cgroup call.
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub fn use_fake_cgroup_hierarchy() {
   FAKE_HIERARCHY.store(true, Ordering::Relaxed);

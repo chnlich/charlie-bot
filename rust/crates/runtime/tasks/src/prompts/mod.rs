@@ -44,15 +44,6 @@ pub const SNAPSHOT_FILENAME: &str = "prompt_snapshot.json";
 /// The launch text file a run directory holds (`LAUNCH_TEXT_FILENAME`).
 pub const LAUNCH_TEXT_FILENAME: &str = "launch_prompt.md";
 
-/// Provenance scopes of a block source: the shared rules, the memory selection, a subtree rule, a node rule.
-pub const SCOPE_BASE: &str = "base";
-pub const SCOPE_MEMORY: &str = "memory";
-pub const SCOPE_SUBTREE: &str = "subtree";
-pub const SCOPE_NODE: &str = "node";
-
-/// The delivery of a full text block; the only delivery the assembly emits.
-pub const DELIVERY_FULL: &str = "full";
-
 /// The run kinds that take the manager contract (`MANAGER_KINDS`).
 pub const MANAGER_KINDS: [&str; 1] = [RunKind::ManagerTurn.as_str()];
 /// The run kinds that take the worker contract (`WORKER_KINDS`).

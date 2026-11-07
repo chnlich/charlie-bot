@@ -12,6 +12,7 @@ use std::sync::Mutex;
 use anyhow::{Context, bail};
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::str_repr;
+use charliebot_registry::turn::{DELIVERY_FULL, DELIVERY_INDEX};
 
 const TOPICS_FILENAME: &str = "topics";
 const ENTRIES_DIRNAME: &str = "entries";
@@ -491,12 +492,16 @@ fn selection_from_parts(
   if !full.is_empty() {
     let texts: Vec<String> = full.iter().map(|entry| full_text(entry)).collect();
     segments.push(MemorySegment {
-      delivery: "full",
+      delivery: DELIVERY_FULL,
       text: texts.join("\n\n"),
       sources: full
         .iter()
         .zip(texts)
-        .map(|(entry, text)| MemoryEntrySource { source_ref: format!("memory:{}", entry.id()), delivery: "full", text })
+        .map(|(entry, text)| MemoryEntrySource {
+          source_ref: format!("memory:{}", entry.id()),
+          delivery: DELIVERY_FULL,
+          text,
+        })
         .collect(),
     });
   }
@@ -504,13 +509,13 @@ fn selection_from_parts(
     let mut lines = vec![INDEX_HEADER.to_string()];
     lines.extend(index.iter().map(|entry| index_line(entry)));
     segments.push(MemorySegment {
-      delivery: "index",
+      delivery: DELIVERY_INDEX,
       text: lines.join("\n"),
       sources: index
         .iter()
         .map(|entry| MemoryEntrySource {
           source_ref: format!("memory:{}", entry.id()),
-          delivery: "index",
+          delivery: DELIVERY_INDEX,
           text: index_line(entry),
         })
         .collect(),
@@ -519,8 +524,8 @@ fn selection_from_parts(
   if let Some(usage) = usage_line {
     match segments.last_mut() {
       // The usage line rides the index segment; a selection with no index entries gets a usage-only one.
-      Some(last) if last.delivery == "index" => last.text = format!("{}\n\n{usage}", last.text),
-      _ => segments.push(MemorySegment { delivery: "index", text: usage.to_string(), sources: Vec::new() }),
+      Some(last) if last.delivery == DELIVERY_INDEX => last.text = format!("{}\n\n{usage}", last.text),
+      _ => segments.push(MemorySegment { delivery: DELIVERY_INDEX, text: usage.to_string(), sources: Vec::new() }),
     }
   }
   let text = (!segments.is_empty()).then(|| {

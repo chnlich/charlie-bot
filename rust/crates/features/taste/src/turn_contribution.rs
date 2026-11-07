@@ -7,13 +7,11 @@
 use anyhow::Result;
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_registry::turn::{PromptSource, RuleSegment, TurnContribution};
+use charliebot_registry::turn::{DELIVERY_INDEX, PromptSource, RuleSegment, SCOPE_TASTE, TurnContribution};
 use charliebot_store::metadata::SessionMetadata;
 
 use crate::store::{self, taste_dir};
 
-/// The scope a taste segment's source carries.
-const SCOPE_TASTE: &str = "taste";
 /// The source reference of the whole index segment.
 const INDEX_SOURCE_REF: &str = "taste:index";
 
@@ -44,7 +42,7 @@ impl TurnContribution for TasteTurn {
         source_ref: INDEX_SOURCE_REF.to_string(),
         source_session_id: None,
       }],
-      delivery: "index".to_string(),
+      delivery: DELIVERY_INDEX.to_string(),
     }])
   }
 }

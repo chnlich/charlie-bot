@@ -1595,6 +1595,22 @@ pub struct RuleSegment {
   pub delivery: String,
 }
 
+/// A [`PromptSource::scope`] value: the shared base rules.
+pub const SCOPE_BASE: &str = "base";
+/// A [`PromptSource::scope`] value: a memory selection.
+pub const SCOPE_MEMORY: &str = "memory";
+/// A [`PromptSource::scope`] value: a subtree rule.
+pub const SCOPE_SUBTREE: &str = "subtree";
+/// A [`PromptSource::scope`] value: a node rule.
+pub const SCOPE_NODE: &str = "node";
+/// A [`PromptSource::scope`] value: a taste index segment.
+pub const SCOPE_TASTE: &str = "taste";
+
+/// A [`RuleSegment::delivery`] value: the block's full text.
+pub const DELIVERY_FULL: &str = "full";
+/// A [`RuleSegment::delivery`] value: an index listing of the material.
+pub const DELIVERY_INDEX: &str = "index";
+
 /// Renders one persisted event type for the chat: the event in, the message out.
 pub type EventRenderer = fn(&Value) -> Value;
 

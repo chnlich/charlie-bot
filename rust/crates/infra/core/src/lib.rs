@@ -29,6 +29,7 @@ pub mod regex_classes;
 pub mod repo_root;
 pub mod run_kind;
 pub mod run_token;
+pub mod sequence_diff;
 pub mod ssh;
 pub mod str_methods;
 pub mod tempdir;

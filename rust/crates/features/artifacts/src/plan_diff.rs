@@ -3,8 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::LazyLock;
 
+use charliebot_core::sequence_diff::{Opcode, OpcodeTag, opcodes};
 use charliebot_core::str_methods;
-use charliebot_html::{EventKind, Opcode, OpcodeTag, StreamEvent, escape, opcodes, parse_with, unescape};
+use charliebot_html::{EventKind, StreamEvent, escape, parse_with, unescape};
 use regex::Regex;
 
 /// The parser's void-element set, which the artifact check reads through this module.

@@ -755,7 +755,7 @@ fn captured_rows_survive_deleting_the_source_files() {
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
   claude_codex_corpus(&home);
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   capture_round(&mut ledger, &config, &registry);
   let before = page_rows(&mut ledger);
   fs::remove_dir_all(home.join("cli")).unwrap();
@@ -1111,7 +1111,7 @@ fn charliebot_capture_reparses_a_file_the_bare_signature_recorded() {
     result_line("2026-09-11T20:00:00+00:00", 100, 0, 0, 5).as_bytes(),
   );
   let metadata = fs::metadata(&path).unwrap();
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   // What the older parser wrote: the whole input in in_fresh, under the bare stat pair.
   let stale = UsageRecord {
     record_id: "thread:s1/t1/0".into(),

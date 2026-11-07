@@ -86,7 +86,7 @@ fn assert_contributions_match_recorded_cases(package_key: &str) {
   assert_eq!(missing_web_failures, if package_key == "web_reply" { 3 } else { 0 });
 }
 
-fn registered_package(package: &str, register: RegisterFn) -> Registry {
+fn registered_package(package: &'static str, register: RegisterFn) -> Registry {
   let mut registry = Registry::new();
   registry.register_package(package, register).unwrap();
   registry

@@ -114,9 +114,7 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str, group
   if checkout_name == "real" && group == 0 {
     let segment_answers = cases
       .iter()
-      .filter(|case| {
-        case["expected"][key]["segments"].as_array().is_some_and(|segments| !segments.is_empty())
-      })
+      .filter(|case| case["expected"][key]["segments"].as_array().is_some_and(|segments| !segments.is_empty()))
       .count();
     assert!(segment_answers > 0, "{key} records segment answers");
   }
@@ -177,6 +175,9 @@ fn checkout_fixture(checkout_name: &str) -> &'static [u8] {
 }
 
 fn registered_package(package: &'static str, register: RegisterFn) -> Registry {
+  for field in ["slack_origin", "discord_origin", "feishu_origin"] {
+    charliebot_registry::thread_origin::register_origin_field(field);
+  }
   let mut registry = Registry::new();
   registry.register_package(package, register).unwrap();
   registry

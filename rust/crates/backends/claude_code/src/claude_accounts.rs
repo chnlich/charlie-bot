@@ -13,7 +13,7 @@ use anyhow::{Context, anyhow};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::text_repr::is_truthy;
 use charliebot_registry::backend::{MemberReading, MemberWindow};
-use charliebot_registry::usage;
+use charliebot_registry::usage::{self, WEEKLY_WINDOW_MINUTES};
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
@@ -27,9 +27,6 @@ pub const WARNING_UTILIZATION: f64 = usage::WARNING_UTILIZATION;
 pub const AUTH_FAILURE_COOLDOWN: Duration = Duration::minutes(15);
 pub const GUARD_REFUSAL_MARKER: &str = "refusing to overwrite newer transcript";
 pub const PROBE_TAIL_BYTES: u64 = 16 * 1024;
-
-/// The length of the weekly quota window, as the usage panel reports it.
-const WEEKLY_WINDOW_MINUTES: i64 = 10_080;
 
 const REJECTED_WITHOUT_RESET: Duration = Duration::hours(1);
 const RESET_BONUS_SCALE: f64 = 0.10;

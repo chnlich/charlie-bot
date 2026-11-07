@@ -36,6 +36,10 @@ pub const WARNING_UTILIZATION: f64 = 0.90;
 /// A near-exhausted member whose earliest reset lies inside this horizon is not worth switching away from.
 pub const NEAR_EXHAUSTION_RESET_HORIZON: time::Duration = time::Duration::minutes(45);
 
+/// The length of the weekly quota window, in minutes: the seven-day window each backend's quota panel states with
+/// `PANEL_WINDOW_MINUTES`.
+pub const WEEKLY_WINDOW_MINUTES: i64 = 10_080;
+
 /// The reading-limits kind a backend registers when a session's context follows Claude Code's event stream. The
 /// usage fold classifies such a session under this kind and looks its limits up.
 pub const CLAUDE_READING_KIND: &str = "claude";

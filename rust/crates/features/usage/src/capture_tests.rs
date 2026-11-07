@@ -508,11 +508,8 @@ fn capture_charliebot_threads_masters_and_runs_together() {
   let counts = capture_round(&mut ledger, &config, &registry);
   assert_eq!(count_of(&counts, "charlie-bot"), 3);
   let mut statement = ledger.connection().prepare("SELECT record_id FROM usage ORDER BY record_id").unwrap();
-  let record_ids = statement
-    .query_map([], |row| row.get::<_, String>(0))
-    .unwrap()
-    .collect::<rusqlite::Result<Vec<_>>>()
-    .unwrap();
+  let record_ids =
+    statement.query_map([], |row| row.get::<_, String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
   assert_eq!(
     record_ids,
     vec![

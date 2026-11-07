@@ -2012,22 +2012,23 @@ mod tests {
 
   #[tokio::test]
   async fn a_status_set_refuses_an_old_plan_link_before_the_cold_read() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let plan_sid = home.manager("plan-session", None).await;
+    let v9 = session_artifact(&home, &plan_sid, "plan_01_v9.html");
+    let v11 = session_artifact(&home, &plan_sid, "plan_01_v11.html");
+    write_plans(
+      &home,
+      &plan_sid,
+      json!([plan(
+        1,
+        json!([plan_version(9, "artifacts/plan_01_v9.html"), plan_version(11, "artifacts/plan_01_v11.html")]),
+        Value::Null,
+      )]),
+    );
+
     for (endpoint, uri) in [("set", "/api/internal/web/status"), ("unread", "/api/internal/web/status/unread")] {
       for field in ["text", "context", "link"] {
-        let home = Home::new();
-        let sid = home.manager("session", None).await;
-        let plan_sid = home.manager("plan-session", None).await;
-        let v9 = session_artifact(&home, &plan_sid, "plan_01_v9.html");
-        let v11 = session_artifact(&home, &plan_sid, "plan_01_v11.html");
-        write_plans(
-          &home,
-          &plan_sid,
-          json!([plan(
-            1,
-            json!([plan_version(9, "artifacts/plan_01_v9.html"), plan_version(11, "artifacts/plan_01_v11.html")]),
-            Value::Null,
-          )]),
-        );
         let mut item = json!({
           "text": "Decide plan 1",
           "context": "The plan waits. Options are approve or revise; approve is recommended.",

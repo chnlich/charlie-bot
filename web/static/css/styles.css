@@ -327,12 +327,12 @@ main > header > a[title="View JSONL events"] {
    row menu's z-index to paint above the drawer instead of behind it. */
 #rename-input { z-index: 150; }
 .session-row > button { position: absolute; right: 12px; pointer-events: none; }
-/* Pointer floor: a row action draws a 14px glyph in p-1's 8px, a 22px box, and a named group
+/* Pointer floor: a row action draws a 14px glyph in p-1's 8px, a 22px box. A named group
    header's two actions draw a 12px glyph in p-0.5's 4px, a 16px box. Both sit under the 24px
    minimum. The row's hover boxes are out of flow, so a 24px minimum grows each into the gap without
-   moving the row; the starred star stays in flow, so it takes a -1px margin, which keeps its 22px
+   moving the row. The starred star stays in flow, so it takes a -1px margin, which keeps its 22px
    layout slot while its box grows. The header's boxes are in flow, so 6px of padding with the -4px
-   margin around it grows the box 4px each way while the header keeps its 28px row and the glyphs
+   margin around it grows the box 4px each way. The header keeps its 28px row and the glyphs
    keep their places. Neither rule adds a row, strip or label: the controls take the space their own
    boxes already hold. */
 .session-row > button {
@@ -369,8 +369,8 @@ main > header > a[title="View JSONL events"] {
 .session-row > .star-btn.\!opacity-100 ~ button:nth-last-of-type(3) { right: 102px; }
 /* The starred star stays visible and clickable at rest, and its flow slot is
    what the hover neighbours above clear. It is the one in-flow button of the
-   pointer-floor rule above, so its -1px margin takes the layout footprint back
-   to the 22px slot the text block was laid out against: the name and the second
+   pointer-floor rule above. Its -1px margin takes the layout footprint back to
+   the 22px slot the text block was laid out against. The name and the second
    line keep their width while the box keeps its 24px. */
 .session-row > button.\!opacity-100 { position: static; pointer-events: auto; margin: -1px; }
 /* Scope the reveal to the hovered row: the buttons' Tailwind group-hover

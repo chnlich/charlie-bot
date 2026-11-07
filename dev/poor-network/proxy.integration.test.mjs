@@ -195,3 +195,86 @@ test('the relay entry refuses a target without an http port and prints no addres
   assert.notEqual(stderr, '');
   assert.equal(stdout, '');
 });
+
+// A proxy on the bench link, torn down on every path.
+async function withProxy(body) {
+  const target = await startTarget();
+  const proxy = new ShapingProxy({ target: { host: '127.0.0.1', port: target.port } });
+  const port = await proxy.start();
+  try {
+    return await body({ proxy, port, target });
+  } finally {
+    await proxy.stop();
+    await target.close();
+  }
+}
+
+// What a tunnel attempt did within `ms`: its answer, its refusal, or nothing at all.
+function attemptWithin(attempt, ms) {
+  return Promise.race([attempt, new Promise((resolve) => setTimeout(() => resolve('silent'), ms))]);
+}
+
+test('a blackout drops a connection attempt: it is never answered, not even at the restore', { timeout: 30000 }, async () => {
+  await withProxy(async ({ proxy, port, target }) => {
+    proxy.blackout({ seconds: 1, mode: 'hold' });
+    const attempt = tunnel(port, target.port, 'dropped').then(() => 'answered', () => 'refused');
+    assert.equal(await attemptWithin(attempt, 1600), 'silent');
+    // The restore does not answer the lost attempt: a person's retry starts a new one.
+    assert.equal(await attemptWithin(attempt, 400), 'silent');
+    const socket = await tunnel(port, target.port, 'after-restore');
+    socket.destroy();
+  });
+});
+
+test('a hold blackout keeps an established tunnel and delivers its bytes at the restore', { timeout: 30000 }, async () => {
+  await withProxy(async ({ proxy, port, target }) => {
+    const socket = await tunnel(port, target.port, 'held');
+    proxy.blackout({ seconds: 1, mode: 'hold' });
+    const started = performance.now();
+    socket.write(Buffer.alloc(4000, 0x61));
+    const doneAt = await untilReceived(target, 'held', 4000);
+    assert.ok(doneAt - started >= 1000, `delivered after ${(doneAt - started).toFixed(0)} ms, before the restore`);
+    socket.destroy();
+  });
+});
+
+test('the link reports the hold a step window would run into, and none for a clear window', { timeout: 30000 }, async () => {
+  const target = await startTarget();
+  // A short period keeps the check quick: the first spike starts half a period after the proxy starts.
+  const proxy = new ShapingProxy({
+    target: { host: '127.0.0.1', port: target.port },
+    link: { ...LINK, spikeEverySeconds: 4, spikeSeconds: 1 },
+  });
+  await proxy.start();
+  try {
+    const started = performance.now();
+    // A window that ends before the first spike is clear.
+    assert.equal(proxy.holdEndWithin(started, 500), 0);
+    // A window that reaches the first spike waits for the spike's end.
+    const end = proxy.holdEndWithin(started, 4000);
+    assert.ok(end > started + 2500, `the window over the first spike ends ${(end - started).toFixed(0)} ms out`);
+    // The window past that spike is clear again.
+    assert.equal(proxy.holdEndWithin(end + 100, 500), 0);
+    // A window that starts clear and reaches the next spike waits for that spike too: spikes start at 2 s and 6 s.
+    assert.equal(proxy.holdEndWithin(started + 3500, 500), 0);
+    const next = proxy.holdEndWithin(started + 3500, 3000);
+    assert.ok(next > started + 6500, `the window reaching the second spike ends ${(next - started).toFixed(0)} ms out`);
+    // A blackout is a hold like a spike.
+    proxy.blackout({ seconds: 1, mode: 'hold' });
+    assert.ok(proxy.holdEndWithin(performance.now(), 100) > 0, 'a blackout window reports no hold');
+  } finally {
+    await proxy.stop();
+    await target.close();
+  }
+});
+
+test('a reset blackout resets an established tunnel', { timeout: 30000 }, async () => {
+  await withProxy(async ({ proxy, port, target }) => {
+    const socket = await tunnel(port, target.port, 'reset');
+    socket.on('error', () => {});
+    // `events.once` rejects on an error, and a reset is the event under test: wait for the close itself.
+    const closed = new Promise((resolve) => socket.once('close', resolve));
+    proxy.blackout({ seconds: 1, mode: 'reset' });
+    await closed;
+  });
+});

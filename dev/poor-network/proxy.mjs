@@ -3,9 +3,14 @@
 // The link has one bandwidth budget per direction, shared by every tunnel. Tunnels take turns one quantum at a time, as
 // TCP flows share a bottleneck, so a background download and a switch split the link. Bytes within one tunnel keep their
 // order, as one TCP stream does, so a switch's response waits behind the bytes its own connection queued before it.
-// Each direction adds half the round trip to every byte. A delay spike or a blackout holds both directions: the link
-// starts no byte while a hold is on. A held blackout keeps the tunnels open; a reset blackout also resets every tunnel
-// when it starts.
+// Each direction adds half the round trip to every byte. A delay spike holds both directions: the link starts no byte
+// while a hold is on.
+//
+// A blackout drops packets. No byte crosses the link while it runs, and a connection attempt that starts inside it is
+// lost: its CONNECT is never answered, not even at the restore, so the browser retries on its own schedule rather than
+// waiting for a held answer. A `hold` blackout keeps the established tunnels: their bytes stop with the link and travel
+// again at the restore, as a real link's TCP retransmission does. A `reset` blackout also resets every tunnel when it
+// starts, so the browser sees its connections close.
 //
 // Bytes are counted per direction where they cross the link: `sent` is browser to server, `received` is server to
 // browser. The CONNECT answer counts as received, because it crosses the link too.
@@ -55,7 +60,8 @@ export class ShapingProxy {
   // The routes of the CONNECT authorities other than the target: `host:port` -> {host, port}. Each route shares the
   // link's budget, so a route's bytes cross the shaped link as the target's do.
   #routes;
-  // The scheduled holds, each {start, end} in performance.now() milliseconds.
+  // The scheduled holds (blackouts), each {start, end} in performance.now() milliseconds. A hold drops connection
+  // attempts and stops the link's bytes.
   #holds = [];
   // Every socket the proxy holds, including a client whose tunnel is not up yet.
   #sockets = new Set();
@@ -92,8 +98,9 @@ export class ShapingProxy {
     return { sent: this.#dirs.sent.bytes, received: this.#dirs.received.bytes };
   }
 
-  // Holds both directions for `seconds` from now. The `hold` mode keeps the tunnels open. The `reset` mode resets every
-  // tunnel at the start, so the browser sees its sockets close.
+  // Drops every packet for `seconds` from now. The `hold` mode keeps the established tunnels: their bytes stop and
+  // travel again at the restore. The `reset` mode also resets every tunnel at the start, so the browser sees its
+  // connections close. In both modes an attempt still waiting for its CONNECT answer is lost.
   blackout({ seconds = LINK.blackoutSeconds, mode }) {
     this.schedule([{ at: 0, seconds, mode }]);
   }
@@ -108,32 +115,63 @@ export class ShapingProxy {
       }
       const start = now + at;
       this.#holds.push({ start, end: start + seconds * 1000 });
-      if (mode === 'reset') {
-        this.#resetAt(start);
-      }
+      this.#holdStartsAt(start, mode);
     }
     for (const dir of Object.values(this.#dirs)) {
       this.#pump(dir);
     }
   }
 
-  // Resets every tunnel at `at` (performance.now() milliseconds), now when that time has come.
-  #resetAt(at) {
-    const reset = () => {
-      for (const conn of this.#conns) {
-        this.#reset(conn);
+  // Applies a window's start at `at` (performance.now() milliseconds), now when that time has come. A reset window
+  // resets every tunnel; a hold window drops every attempt still waiting for its CONNECT answer.
+  #holdStartsAt(at, mode) {
+    const begin = () => {
+      for (const conn of [...this.#conns]) {
+        if (mode === 'reset') {
+          this.#reset(conn);
+        } else if (!conn.established) {
+          this.#dropAttempt(conn);
+        }
       }
     };
     const delay = at - performance.now();
     if (delay <= 0) {
-      reset();
+      begin();
       return;
     }
     const timer = setTimeout(() => {
       this.#timers.delete(timer);
-      reset();
+      begin();
     }, delay);
     this.#timers.add(timer);
+  }
+
+  // The end of the delay spike or blackout that overlaps the window [at, at + windowMs), or 0 when the link is clear
+  // for that whole window. A step that starts at `at` and takes up to `windowMs` waits out a hold it would otherwise
+  // measure.
+  holdEndWithin(at, windowMs) {
+    let end = 0;
+    for (const hold of this.#holds) {
+      if (hold.start < at + windowMs && hold.end > at) {
+        end = Math.max(end, hold.end);
+      }
+    }
+    // Spikes are a period apart and a period outlasts any window, so the spike at or before `at` and the next one are
+    // the only candidates: the next one starts inside the window even when the window's first moment is clear.
+    const first = Math.max(0, Math.floor((at - this.#startedAt - this.#spikeOffsetMs) / this.#spikeEveryMs));
+    for (const index of [first, first + 1]) {
+      const start = this.#startedAt + this.#spikeOffsetMs + index * this.#spikeEveryMs;
+      if (start < at + windowMs && start + this.#spikeMs > at) {
+        end = Math.max(end, start + this.#spikeMs);
+      }
+    }
+    return end;
+  }
+
+  // Whether a scheduled blackout covers `at`. A delay spike is not a blackout: it holds bytes and leaves connection
+  // attempts alone.
+  #inBlackout(at) {
+    return this.#holds.some((hold) => at >= hold.start && at < hold.end);
   }
 
   // The time at or after `at` when the link may start a byte. Skips every hold that covers `at`.
@@ -191,6 +229,13 @@ export class ShapingProxy {
       client.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
       return;
     }
+    // A blackout drops packets, the SYN of a new connection included. The attempt never reaches the target and its
+    // CONNECT is never answered, not even at the restore, so the browser retries on its own schedule. The client socket
+    // stays open and silent until the browser gives up on it.
+    if (this.#inBlackout(performance.now())) {
+      client.resume();
+      return;
+    }
     const upstream = net.connect({ host: route.host, port: route.port, allowHalfOpen: true });
     upstream.setNoDelay(true);
     this.#sockets.add(upstream);
@@ -199,6 +244,9 @@ export class ShapingProxy {
       client,
       upstream,
       dead: false,
+      // Whether the CONNECT answer has reached the browser. Until it has, the tunnel's bytes are a connection attempt's
+      // packets, which a blackout drops; after it, they belong to an established connection, which a blackout only stops.
+      established: false,
       pending: { sent: 0, received: 0 },
       paused: { sent: false, received: false },
     };
@@ -210,7 +258,7 @@ export class ShapingProxy {
     client.on('close', () => this.#retire(conn));
     upstream.once('connect', () => {
       this.#conns.add(conn);
-      this.#enqueue('received', { conn, buf: CONNECT_RESPONSE });
+      this.#enqueue('received', { conn, buf: CONNECT_RESPONSE, connectAnswer: true });
       if (rest.length > 0) {
         this.#enqueue('sent', { conn, buf: rest });
       }
@@ -222,6 +270,9 @@ export class ShapingProxy {
 
   #enqueue(dirName, item) {
     const dir = this.#dirs[dirName];
+    if (item.conn.dead) {
+      return;
+    }
     if (!item.end) {
       const { conn, buf } = item;
       conn.pending[dirName] += buf.length;
@@ -229,7 +280,7 @@ export class ShapingProxy {
         this.#source(conn, dirName).pause();
         conn.paused[dirName] = true;
       }
-      item = { conn, buf, off: 0 };
+      item = { conn, buf, off: 0, connectAnswer: item.connectAnswer === true };
     }
     let queue = dir.queues.get(item.conn);
     if (!queue) {
@@ -265,12 +316,19 @@ export class ShapingProxy {
       }
       const now = performance.now();
       const freeAt = Math.max(now, dir.nextFreeAt);
+      const conn = dir.ring[0];
+      // A blackout drops a connection attempt's packets: a tunnel whose CONNECT answer has not reached the browser is
+      // lost, not held to the restore, so the browser's own retry decides the recovery. A byte whose half round trip
+      // lands inside the blackout is in flight when the packets drop, and is lost too.
+      if (!conn.established && (this.#inBlackout(freeAt) || this.#inBlackout(freeAt + this.#oneWayMs))) {
+        this.#dropAttempt(conn);
+        continue;
+      }
       const openAt = this.#openAt(freeAt);
       if (openAt > now) {
         this.#arm(dir, openAt - now);
         return;
       }
-      const conn = dir.ring[0];
       const queue = dir.queues.get(conn);
       const item = queue[0];
       if (item.end) {
@@ -281,13 +339,14 @@ export class ShapingProxy {
       }
       const size = Math.min(QUANTUM_BYTES, item.buf.length - item.off);
       const chunk = item.buf.subarray(item.off, item.off + size);
+      const connectAnswer = item.connectAnswer === true;
       item.off += size;
       if (item.off >= item.buf.length) {
         queue.shift();
       }
       dir.nextFreeAt = freeAt + (size * 1000) / this.#bytesPerSecond;
       dir.bytes += size;
-      this.#deliverAt(dir.nextFreeAt + this.#oneWayMs, { conn, dirName: dir.name, buf: chunk });
+      this.#deliverAt(dir.nextFreeAt + this.#oneWayMs, { conn, dirName: dir.name, buf: chunk, connectAnswer });
       this.#advance(dir, conn, queue);
       if (dir.ring.length > 0) {
         this.#arm(dir, dir.nextFreeAt - now);
@@ -321,9 +380,12 @@ export class ShapingProxy {
     this.#timers.add(timer);
   }
 
-  #deliver({ conn, dirName, buf, end }) {
+  #deliver({ conn, dirName, buf, end, connectAnswer }) {
     if (conn.dead) {
       return;
+    }
+    if (connectAnswer) {
+      conn.established = true;
     }
     const destination = this.#destination(conn, dirName);
     if (end) {
@@ -358,6 +420,20 @@ export class ShapingProxy {
     this.#forget(conn);
     resetSocket(conn.client);
     resetSocket(conn.upstream);
+  }
+
+  // Drops a connection attempt: the link loses its packets, so it never reaches the target and the browser gets no
+  // answer, not even at the restore. The client socket stays open and silent, its bytes discarded, until the browser's
+  // own connect timeout ends the attempt.
+  #dropAttempt(conn) {
+    if (conn.dead) {
+      return;
+    }
+    this.#forget(conn);
+    conn.client.pause();
+    if (!conn.upstream.destroyed) {
+      conn.upstream.destroy();
+    }
   }
 
   #retire(conn) {

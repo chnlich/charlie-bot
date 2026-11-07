@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { CALIBRATION_HOLD_MS, CALIBRATION_REFERENCE } from './profile.mjs';
-import { calibrate, formatSide } from './report.mjs';
+import { METRICS, calibrate, formatSide, summarize } from './report.mjs';
 
 // One background repetition's calibration fields. `random` is the scored scenario's hold, which the gate must not read.
 function rep(duringMs, randomMs) {
@@ -69,4 +69,18 @@ test("the after side's line prints the raw holds without a gate verdict", () => 
   assert.match(line, /holds 5\.00 s, 6\.00 s, median 5\.00 s/);
   assert.match(line, /the gate reads the reference before side only$/);
   assert.doesNotMatch(line, /reproduced/);
+});
+
+test('the switch-to-catchup number is reported with a median and p90, and has no target', () => {
+  const metric = METRICS.find((candidate) => candidate.id === 'switch-catchup');
+  const summary = summarize([{ switchCatchupMs: 1200 }, { switchCatchupMs: 1400 }], metric);
+  assert.equal(summary.target, null);
+  assert.equal(summary.pass, null);
+  assert.equal(summary.median, 1200);
+  assert.equal(summary.p90, 1400);
+  const aSide = { side: 'after', commit: 'test', chrome: { version: 'test' }, metrics: { 'switch-catchup': summary } };
+  const line = formatSide(aSide)
+    .split('\n')
+    .find((row) => row.startsWith('| switch-catchup'));
+  assert.match(line, /1\.20 s \| 1\.40 s \| 1\.20 s \| 0 of 2 \| - \| - \|$/);
 });

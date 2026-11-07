@@ -37,6 +37,18 @@ export const METRICS = Object.freeze([
     capped: (rep) => rep.switchCapped,
   },
   {
+    // Click to the target session's catchup_complete: the switch's own first screen plus the setup of the target's
+    // real-time connection. It has no target of its own; it is the number fix F must lower.
+    id: 'switch-catchup',
+    scenario: 2,
+    title: 'switch during background, click to catchup_complete',
+    unit: 'ms',
+    target: null,
+    value: (rep) => rep.switchCatchupMs,
+    raw: (rep) => rep.switchCatchupMs,
+    capped: (rep) => rep.switchCatchupCapped,
+  },
+  {
     id: 'send',
     scenario: 3,
     title: 'send during background, over floor',
@@ -96,7 +108,8 @@ export function summarize(reps, metric) {
     // A capped repetition hit the bench's cap before the step finished: its value is a lower bound.
     capped: metric.capped ? reps.filter(metric.capped).length : null,
     target: metric.target,
-    pass: median <= metric.target,
+    // A metric without a target is reported for reading, not scored.
+    pass: metric.target === null ? null : median <= metric.target,
   };
 }
 
@@ -141,9 +154,11 @@ export function formatSide(side) {
       continue;
     }
     const definition = METRICS.find((candidate) => candidate.id === metric.id);
-    const targetText = metric.unit === 'ms' ? `<= ${formatMs(row.target)}` : `<= ${formatValue(definition, row.target)}`;
+    const targetText =
+      row.target === null ? '-' : metric.unit === 'ms' ? `<= ${formatMs(row.target)}` : `<= ${formatValue(definition, row.target)}`;
+    const verdict = row.pass === null ? '-' : row.pass ? 'PASS' : 'FAIL';
     lines.push(
-      `| ${row.id} ${row.title} (${row.unit}) | ${formatValue(definition, row.median)} | ${formatValue(definition, row.p90)} | ${formatValue(definition, row.rawMedian)} | ${row.capped === null ? '-' : `${row.capped} of ${row.values.length}`} | ${targetText} | ${row.pass ? 'PASS' : 'FAIL'} |`,
+      `| ${row.id} ${row.title} (${row.unit}) | ${formatValue(definition, row.median)} | ${formatValue(definition, row.p90)} | ${formatValue(definition, row.rawMedian)} | ${row.capped === null ? '-' : `${row.capped} of ${row.values.length}`} | ${targetText} | ${verdict} |`,
     );
   }
   if (side.calibration) {
@@ -196,12 +211,21 @@ export function formatSide(side) {
   const heldReps = side.reps?.held ?? [];
   if (heldReps.length > 0 && (heldReps[0].shownMs ?? null) !== null) {
     // The held recovery's parts, medians from the restore: the last switch's render, the socket's own return, and the
-    // catch-up the metric reads. The clicks were made during the blackout, so the render can precede the restore.
-    const medianOf = (values) => percentile(values, 0.5);
+    // catch-up the metric reads. The clicks were made during the blackout, so the render can precede the restore. A
+    // page that keeps one socket (fix F) opens no socket for the target, so its socket part is absent.
+    const medianOf = (values) => {
+      const present = values.filter((value) => value !== null && value !== undefined);
+      return present.length === 0 ? null : percentile(present, 0.5);
+    };
     lines.push(
       `held recovery, ms from the restore (median): last switch shown ${formatMs(medianOf(heldReps.map((rep) => rep.shownMs)))}, ` +
         `socket ${formatMs(medianOf(heldReps.map((rep) => rep.socketMs)))}, ` +
         `caught up ${formatMs(medianOf(heldReps.map((rep) => rep.restoreToRenderedMs)))}`,
+    );
+    lines.push(
+      `held recoveries, ms from the restore (per repetition): ${heldReps
+        .map((rep, index) => `${index + 1} ${formatMs(rep.restoreToRenderedMs)} (shown ${formatMs(rep.shownMs)}, caught up ${formatMs(rep.catchupMs)})`)
+        .join(', ')}`,
     );
   }
   const resetReps = side.reps?.reset ?? [];
@@ -215,6 +239,11 @@ export function formatSide(side) {
         `handshake sent ${formatMs(medianOf(resetReps.map((rep) => rep.handshakeSendsMs[0])))}, ` +
         `opened ${formatMs(medianOf(resetReps.map((rep) => rep.reconnectMs)))}, ` +
         `caught up ${formatMs(medianOf(resetReps.map((rep) => rep.restoreToCatchupMs)))}`,
+    );
+    lines.push(
+      `reset recoveries, ms from the restore (per repetition): ${resetReps
+        .map((rep, index) => `${index + 1} ${formatMs(rep.restoreToCatchupMs)} (socket created ${formatMs(rep.socketMs)}, handshake sent ${formatMs(rep.handshakeSendsMs[0])}, opened ${formatMs(rep.reconnectMs)})`)
+        .join(', ')}`,
     );
   }
   for (const name of ['starred', 'threads']) {

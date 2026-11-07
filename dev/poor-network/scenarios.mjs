@@ -30,6 +30,11 @@ const SWITCH_SETTLE_MS = 5000;
 // windowMs / changesPerWindow while the background runs.
 const REFRESH_WAIT_TIMEOUT_MS = 60000;
 const BOOTSTRAP_START_TIMEOUT_MS = 10000;
+// The wait for the fresh marker turn a background repetition sends to its switch target.
+const MARKER_TURN_TIMEOUT_MS = 120000;
+// How long the click to echo can take on a clear link. A link hold inside that window would be measured in place of the
+// page's own time, so the click waits it out first.
+const SEND_LINK_WINDOW_MS = 1000;
 
 export function floorMs(bytes) {
   return ROUND_TRIP_MS + bytes / BYTES_PER_MS;
@@ -37,6 +42,29 @@ export function floorMs(bytes) {
 
 function randomTag() {
   return crypto.randomBytes(6).toString('hex');
+}
+
+// A run of the newest reply the trimmed bootstrap serves, for a switch to wait for. The trim is the switch's first
+// screen, so a run of the served text is inside that screen on every repetition however much the session has grown. The
+// stub prints a different reply piece each turn, so the run names this repetition's turn; a run already on the page
+// cannot time the switch, so the first run absent from the chat's text wins. The run holds plain characters only, which
+// markdown renders as they stand.
+async function firstScreenMarker(tab, messages) {
+  const onScreen = await tab.evaluate("document.getElementById('messages')?.textContent || ''");
+  for (const message of [...messages].reverse()) {
+    if (message.role !== 'assistant') {
+      continue;
+    }
+    for (const line of String(message.content ?? '').split('\n')) {
+      for (const match of line.matchAll(/[A-Za-z][A-Za-z0-9 ,.'()-]{59,}/g)) {
+        const run = match[0].slice(0, 80).trimEnd();
+        if (!onScreen.includes(run)) {
+          return run;
+        }
+      }
+    }
+  }
+  throw new Error(`the switch target's trimmed bootstrap (${messages.length} messages) carries no unseen reply text`);
 }
 
 // Runs `body`, then `cleanup`, on every path. When the body fails and the cleanup fails too, the body's error is the one
@@ -389,14 +417,28 @@ export async function backgroundRep(ctx, repetition) {
   return withBackground(ctx, { label: 'background', filter: null, renamed: null }, async ({ proxy, tab, hidden }) => {
     const window = await measureWindow(proxy, tab, hidden, churnRoles(sessions, sessions.churn.id));
 
-    // Scenario 2: click to rendered, for a session that this page has not loaded.
+    // Scenario 2: click to rendered, for a session that this page has not loaded. Every repetition's send adds messages
+    // to this session; this repetition's turn is the newest one, so its reply is the newest text the switch's first
+    // screen carries. The marker is a run of that reply as the trimmed bootstrap serves it, which puts the marker
+    // inside the first screen however the trim falls.
     const target = sessions.switchTarget;
+    await api.sendMessage(target.id, `pn-marker ${repetition} ${randomTag()}`);
+    await api.waitForIdle(target.id, MARKER_TURN_TIMEOUT_MS);
+    const bootstrap = await api.json('GET', `/api/sessions/${target.id}/bootstrap`);
+    const marker = await firstScreenMarker(tab, bootstrap.messages);
+    await tab.watchChat('switch', marker);
     await tab.watchSwitchPhase('switch', target.id);
     const clickedAt = await tab.clickSession(target.id);
     const shown = await tab.shownBy('switch', clickedAt, SHOW_TIMEOUT_MS);
     // The page's own bootstrap bytes when its request finished; otherwise the size the same body has on the wire.
     const pageBytes = tab.bytesOf(new RegExp(`/api/sessions/${target.id}/bootstrap$`), clickedAt, Infinity);
     const bootstrapBytes = pageBytes > 0 ? pageBytes : (await api.bootstrapWireBytes(target.id)).wireBytes;
+    // The target session's real-time connection is ready when its catchup_complete arrives: today's page opens a socket
+    // for the target and this frame ends that socket's replay; fix F keeps the page's socket and this frame names the
+    // target. The same wait reads both pages.
+    const catchup = await pollFor(() => catchupFrameFor(tab, target.id, clickedAt), SHOW_TIMEOUT_MS);
+    const switchCatchup =
+      catchup === null ? { at: clickedAt + SHOW_TIMEOUT_MS, capped: true } : { at: catchup.at, capped: false };
     // The switch's own requests, from the click until 5 s after the first screen rendered: the
     // request paths naming the target session, with how often each went out. A path seen twice
     // within one switch is a repeated download.
@@ -405,10 +447,18 @@ export async function backgroundRep(ctx, repetition) {
       new RegExp(`/api/sessions/${target.id}/|session_id=${target.id}`), clickedAt, shown.at + SWITCH_SETTLE_MS);
     const switchState = shown.capped ? await tab.diagnose(clickedAt) : null;
 
-    // Scenario 3: click to echo, in the session the page now shows. The echo is the server's push of the message,
-    // which arrives as a socket frame carrying its text: the page shows the user's message locally before the server
-    // answers, so the chat's text cannot time this step.
+    // Scenario 3: click to echo, in the session the page now shows. The send waits for the target's catchup_complete,
+    // as a person's typing does: the floor (one round trip plus server processing) assumes an open socket. The echo is
+    // the server's push of the message, which arrives as a socket frame carrying its text: the page shows the user's
+    // message locally before the server answers, so the chat's text cannot time this step.
+    //
+    // The catch-up fixes the send's phase in the repetition, and a link hold would then land on the same phase every
+    // repetition: a 1 s delay spike inside the step is the link's time, not the page's, so the click waits one out.
     const echo = `pn-echo ${repetition} ${randomTag()}`;
+    const holdEnd = proxy.holdEndWithin(performance.now(), SEND_LINK_WINDOW_MS);
+    if (holdEnd > 0) {
+      await sleep(holdEnd - performance.now());
+    }
     const sentAt = await tab.sendText(echo);
     const echoAt = await pollFor(
       () => tab.frames.find((frame) => frame.at >= sentAt && frame.text.includes(echo))?.at ?? null,
@@ -438,6 +488,10 @@ export async function backgroundRep(ctx, repetition) {
       ...window,
       switchMs: shown.at - clickedAt,
       switchCapped: shown.capped,
+      // Click to the target session's catchup_complete: the switch's first screen plus the setup of the target's
+      // real-time connection. It has no target of its own; it is the before value of fix F's one-socket-per-tab change.
+      switchCatchupMs: switchCatchup.at - clickedAt,
+      switchCatchupCapped: switchCatchup.capped,
       switchFloorMs: floorMs(bootstrapBytes),
       switchBootstrapBytes: bootstrapBytes,
       switchListRefreshes: overlappingListRefreshes(tab, clickedAt, shown.at),
@@ -544,8 +598,17 @@ export async function heldBlackoutRep(ctx) {
     }
     const last = clicks[clicks.length - 1];
     const shownAt = await tab.whenShown(`held-${clicks.length - 1}`, SHOW_TIMEOUT_MS);
-    const socket = await socketOpenedAfter(tab, last.id, restoreAt);
-    const catchupAt = await catchupAfter(tab, socket, restoreAt);
+    // The last switch's catch-up, on the socket today's page opens for the target or on the kept socket fix F
+    // subscribes; the frame names its session once the server keeps one socket per tab.
+    const catchup = await waitFor(
+      () => catchupFrameFor(tab, last.id, restoreAt),
+      SHOW_TIMEOUT_MS,
+      `catchup_complete for ${last.id}`,
+    );
+    const catchupAt = catchup.at;
+    // A socket the page opened for the target after the restore. Today's page opens one; fix F's kept socket names the
+    // session in its catch-up instead, so none is expected and the recovery is timed from the render.
+    const socket = tab.sockets.filter((entry) => entry.at >= restoreAt && entry.url.includes(last.id)).pop() ?? null;
     const lastBytes = tab.bytesOf(new RegExp(`/api/sessions/${last.id}/bootstrap$`), 0, Infinity);
     if (lastBytes === 0) {
       throw new Error(`no bootstrap bytes recorded for the last switch to ${last.id}`);
@@ -563,7 +626,7 @@ export async function heldBlackoutRep(ctx) {
       // The two parts of the restore: the last switch's render, and the socket's catch-up.
       shownMs: shownAt - restoreAt,
       catchupMs: catchupAt - restoreAt,
-      socketMs: socket.at - restoreAt,
+      socketMs: socket === null ? null : socket.at - restoreAt,
       lastFloorMs: floorMs(lastBytes),
       lastBootstrapBytes: lastBytes,
       supersededServerBytes,
@@ -651,14 +714,34 @@ async function caughtUpSocket(tab, sessionId) {
   );
 }
 
-// The socket the page opened for `sessionId` after `after`: the last socket created whose URL names that session.
-async function socketOpenedAfter(tab, sessionId, after) {
-  const socket = await waitFor(
-    () => tab.sockets.filter((entry) => entry.at >= after && entry.url.includes(sessionId)).pop() ?? null,
-    SHOW_TIMEOUT_MS,
-    `a socket for ${sessionId}`,
+// The session a socket frame belongs to. Fix F's catchup_complete names its session itself, on the page's one kept
+// socket; today's catchup_complete names none, so the frame belongs to the session in the URL of the socket it arrived
+// on. Reading both this way lets one number serve both pages.
+function frameSessionId(tab, frame) {
+  let payload = null;
+  try {
+    payload = JSON.parse(frame.text);
+  } catch {
+    payload = null;
+  }
+  if (payload && typeof payload.session_id === 'string') {
+    return payload.session_id;
+  }
+  const socket = tab.sockets.find((entry) => entry.requestId === frame.requestId && entry.at <= frame.at) ?? null;
+  if (socket === null) {
+    return null;
+  }
+  const match = /\/ws\/sessions\/([^/?]+)/.exec(socket.url);
+  return match === null ? null : decodeURIComponent(match[1]);
+}
+
+// The first catchup_complete frame for `sessionId` at or after `after`, or null before one arrives.
+function catchupFrameFor(tab, sessionId, after) {
+  return (
+    tab.frames.find(
+      (frame) => frame.type === 'catchup_complete' && frame.at >= after && frameSessionId(tab, frame) === sessionId,
+    ) ?? null
   );
-  return socket;
 }
 
 // The time of the catch-up frame on `socket`, the first one at or after `after`.

@@ -48,16 +48,30 @@ The link is in `LINK` and the targets are in `TARGETS` of `profile.mjs`. No othe
 - 100 kbit/s per direction (12,500 bytes/s), one budget per direction shared by every browser connection. Bytes move in
   1 KB quanta, round robin across the connections.
 - A 1 s delay spike once every 60 s, both directions.
-- A scripted 30 s blackout, in `hold` mode (bytes wait) or `reset` mode (every connection is reset when it starts).
+- A scripted 30 s blackout that drops every packet in both directions, a new connection's SYN included. No byte crosses
+  the link while it runs, and a connection attempt that starts inside it is never answered — not even at the restore —
+  so the browser retries it on its own schedule. In `hold` mode the established connections survive: their bytes stop
+  with the link and travel again at the restore. In `reset` mode every connection is reset when the blackout starts.
 
 | Scenario | Measures | Target |
 |---|---|---|
 | 1 background, received and sent | KB/min at the proxy over one task-tree window | <= 75 KB/min each direction |
 | 2 switch during background | click to rendered, over the floor (300 ms + bootstrap bytes / 12.5 KB/s) | <= 1000 ms over floor |
+| 2 switch to real-time connection | click to the target session's `catchup_complete` | reported, not scored |
 | 3 send during background | click to echo, over the floor (300 ms + server processing) | <= 500 ms over floor |
 | 4 held blackout | restore to the last switch rendered, over that switch's floor | <= 2000 ms over floor |
 | 5 reset blackout | restore to `catchup_complete`, over the catch-up bytes / 12.5 KB/s | <= 2000 ms over the byte time |
 | 6 long stream | socket bytes of one reply, per reply text byte | <= 1.20 |
+
+The switch to real-time connection number is the before value of the one-socket-per-tab fix: today's page opens a new
+socket for the target after the first screen renders, and the fix keeps the page's socket and subscribes the session on
+it. The bench reads both the same way — today's `catchup_complete` belongs to the socket the page opened for that
+session, and the fix's frame names its session. The send of scenario 3 waits for the same frame: a person types for
+longer than a socket's setup takes, and the send floor assumes an open socket.
+
+That wait fixes the send's phase in the repetition, so a link hold would land on it in every repetition. A 1 s delay
+spike is the link's time and not the page's, so the send's click waits out a hold that covers the next second
+(`holdEndWithin` in `proxy.mjs`).
 
 Each scenario's median and 90th percentile go in the table, with the raw median next to them for the time metrics.
 
@@ -163,8 +177,12 @@ scenario runs and records the median raw row in the JSON. The switch target and 
 bootstrap content reaches 26,592 bytes on the wire untrimmed — the size the server names in
 `x-bootstrap-untrimmed-bytes`, since the first screen's trim keeps the served body near its 10 KB budget — and the JSON
 records each one's turns and bytes. The other bench sessions take one turn. Each session's last turn carries a seed text
-unique to it, and the page shows a switch once that text renders. The switch floor adjusts for the bytes the page's
-bootstrap actually moved.
+unique to it, and the page shows a switch once that text renders. Every background repetition sends the switch target a
+fresh turn before its switch, and takes the switch's marker from a plain-text run of the reply the trimmed bootstrap
+serves: the trim is the switch's first screen, so the marker sits inside the 40 messages the switch loads first however
+far the session has grown, and the stub prints a different reply piece each turn, so the run names this repetition's
+turn. A run already on the page cannot time the switch, so the first unseen one wins. The switch floor adjusts for the
+bytes the page's bootstrap actually moved.
 
 The trial's backend is `charlie-code`, which `run.sh` puts on `PATH` as `stub/charlie-code`. Each turn the stub prints the
 next of 16 reply pieces, 8 KB each, cut from repository docs (`reply.mjs`), in the charlie-code NDJSON the backend reads.
@@ -181,6 +199,17 @@ after a login.
 The TLS front serves a self-signed certificate. Chrome trusts its key by hash (`--ignore-certificate-errors-spki-list`),
 so the certificate verifies as Serve's does in a person's browser. Under `--ignore-certificate-errors` Chrome would
 store no response in its HTTP cache. It would then never revalidate, and every JSON read would answer 200.
+
+## TLS records
+
+The live front is Tailscale Serve, which terminates TLS in Go. Go's `crypto/tls` picks a connection's record sizes
+(`maxPayloadSizeForWrite` in `crypto/tls/conn.go`): records grow in arithmetic progression from one TCP MSS estimate
+(1208 bytes less the record's overhead, 1186 payload bytes for a TLS 1.3 AEAD suite) up to 16 KB, and the connection
+uses 16 KB records once it has sent 128 KB. A Node TLS record carries whatever one write gives it, so the front writes
+each record on its own at the size Go would pick, on both the HTTP/2 responses and the upgraded socket. A body the
+server writes in one 11.7 KB piece therefore reaches the browser as records of 1.2 KB, 2.4 KB, 3.6 KB and so on, and
+the browser decrypts its first bytes after the first record. `front.integration.test.mjs` reads the record headers the
+front writes and checks those sizes.
 
 ## CDN assets
 
@@ -282,13 +311,16 @@ them when a change touches this directory. To reproduce them through the remote 
 
 ```sh
 dev/remote-run/run.sh node --test dev/poor-network/proxy.integration.test.mjs dev/poor-network/report.test.mjs \
-  dev/poor-network/chrome.test.mjs
+  dev/poor-network/front.integration.test.mjs dev/poor-network/chrome.test.mjs
 ```
 
 They check the relay's tunnel transfer time at the link, its stop on SIGTERM, and its refusal of a target without a
-port. Two tests drive the shaping proxy itself: a route reaches its own server over the same link while the proxy
-refuses every other authority, and a scheduled reset window resets the open tunnels when it starts. The report's tests
-check the calibration gate: it reads the during-refresh holds, not the scored scenario's random-phase holds, and only
-the reference before side's line carries a verdict. The chrome tests check the browser teardown: a closed browser
-fails its unanswered DevTools calls and drops its pipe handles. The scenario tests check the status counting against
-synthetic poll records of both answer shapes: the baseline's whole row map and the change's `{token, rows, gone}`.
+port; a blackout drops a connection attempt without answering it at the restore, keeps an established tunnel's bytes for
+the restore, and resets the tunnels in reset mode. Two tests drive the shaping proxy itself: a route reaches its own
+server over the same link while the proxy refuses every other authority, and a scheduled reset window resets the open
+tunnels when it starts. The front tests read the TLS record sizes the front writes and check them against Go's. The
+report's tests check the calibration gate: it reads the during-refresh holds, not the scored scenario's random-phase
+holds, and only the reference before side's line carries a verdict. The chrome tests check the browser teardown: a
+closed browser fails its unanswered DevTools calls and drops its pipe handles. The scenario tests check the status
+counting against synthetic poll records of both answer shapes: the baseline's whole row map and the change's
+`{token, rows, gone}`.

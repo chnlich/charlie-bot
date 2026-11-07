@@ -269,6 +269,20 @@ impl Home {
     self.create(request, Map::new()).await
   }
 
+  /// Seeds one manager row for tests whose behavior depends on a stored parent chain.
+  pub fn seed_manager(&self, id: &str, parent: Option<&str>) {
+    let mut metadata = SessionMetadata::new(id, id, TaskProfile::Manager);
+    metadata.backend = "synthetic-web".to_string();
+    metadata.task_parent_id = parent.map(str::to_string);
+    let path = self.features.store.metadata_path(id);
+    fs::create_dir_all(path.parent().expect("metadata path has a session directory")).expect("session directory");
+    fs::write(
+      path,
+      metadata.to_json_string(&self.features.registry.metadata_slots(), true),
+    )
+    .expect("manager metadata writes");
+  }
+
   async fn create(&self, request: CreateTask, slots: Map<String, Value>) -> String {
     let meta: SessionMetadata =
       self.features.store.create_task(request, TaskCaller::Operator, slots).await.expect("the task is created");

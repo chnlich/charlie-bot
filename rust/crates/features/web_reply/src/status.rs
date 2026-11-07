@@ -1203,8 +1203,8 @@ mod tests {
         WebReplyError::Refused { status: code, .. } => assert_eq!(code.as_u16(), status, "case {case} {text}"),
         other => panic!("case {case} {text}: expected a refusal, got {other:?}"),
       }
-      assert_eq!(stored(&home, &sid).await, Value::Null, "case {case} {text}");
-      assert!(status_events(&home, &sid).is_empty(), "case {case} {text}");
+      assert_eq!(stored(&home, sid).await, Value::Null, "case {case} {text}");
+      assert!(status_events(&home, sid).is_empty(), "case {case} {text}");
     }
   }
 
@@ -1252,13 +1252,14 @@ mod tests {
   #[tokio::test]
   async fn a_child_status_set_notifies_its_parent_and_grandparent_pages() {
     let home = Home::status_only();
-    let root = home.manager("root", None).await;
-    let child = home.child(&root, "child").await;
-    let grandchild = home.child(&child, "grandchild").await;
-    let mut root_page = home.subscribe(&root);
-    let mut child_page = home.subscribe(&child);
+    home.seed_manager("root", None);
+    home.seed_manager("child", Some("root"));
+    let grandchild = "grandchild";
+    home.seed_manager(grandchild, Some("child"));
+    let mut root_page = home.subscribe("root");
+    let mut child_page = home.subscribe("child");
 
-    set_status(&home.features, &grandchild, VALID_SET).await.expect("the grandchild sets");
+    set_status(&home.features, grandchild, VALID_SET).await.expect("the grandchild sets");
 
     // Each page also receives its own status message; the ancestor notices are the frames this test compares.
     let notice = json!({"type": SUBTREE_NOTICE_TYPE, "source_session_id": grandchild});
@@ -1285,13 +1286,12 @@ mod tests {
   #[tokio::test]
   async fn the_status_read_lists_open_waiting_descendants_newest_first() {
     let home = Home::status_only();
-    let root = home.manager("root", None).await;
-    let old = home.child(&root, "old").await;
-    let new = home.child(&root, "new").await;
-    let deep = home.child(&old, "deep").await;
-    for (session_id, updated_at) in
-      [(&old, "2026-11-07T00:00:01Z"), (&new, "2026-11-07T00:00:02Z"), (&deep, "2026-11-07T00:00:03Z")]
-    {
+    let (root, old, new, deep) = ("root", "old", "new", "deep");
+    home.seed_manager(root, None);
+    home.seed_manager(old, Some(root));
+    home.seed_manager(new, Some(root));
+    home.seed_manager(deep, Some(old));
+    for (session_id, updated_at) in [(old, "2026-11-07T00:00:01Z"), (new, "2026-11-07T00:00:02Z"), (deep, "2026-11-07T00:00:03Z")] {
       let updated_at = UtcDateTime::parse(updated_at).unwrap();
       let status = WebStatus {
         goal: None,
@@ -1323,12 +1323,12 @@ mod tests {
         .unwrap();
     }
 
-    let body = read_status(&home.features, &root).await.expect("the read answers");
+    let body = read_status(&home.features, root).await.expect("the read answers");
 
     assert_eq!(body["web_status"], Value::Null);
     let ids: Vec<&str> =
       body["descendants"].as_array().expect("a list").iter().map(|row| row["session_id"].as_str().unwrap()).collect();
-    assert_eq!(ids, vec![deep.as_str(), new.as_str(), old.as_str()]);
+    assert_eq!(ids, [deep, new, old]);
     assert_eq!(
       without_item_times(&body["descendants"][0]["waiting"]),
       json!([{
@@ -2352,12 +2352,13 @@ mod tests {
   #[tokio::test]
   async fn a_derived_item_rides_the_status_of_its_open_holders_and_no_set_stores_it() {
     let home = Home::status_only();
-    let root = home.manager("root", None).await;
-    let child = home.child(&root, "child").await;
-    let unrelated = home.manager("unrelated", None).await;
-    set_derived_waiting(&home.root(), vec![derived_row(&root), derived_row(&child), derived_row(&unrelated)]);
+    let (root, child, unrelated) = ("root", "child", "unrelated");
+    home.seed_manager(root, None);
+    home.seed_manager(child, Some(root));
+    home.seed_manager(unrelated, None);
+    set_derived_waiting(&home.root(), vec![derived_row(root), derived_row(child), derived_row(unrelated)]);
 
-    let read = read_status(&home.features, &root).await.expect("the status reads");
+    let read = read_status(&home.features, root).await.expect("the status reads");
     let held = |read: &Value| -> Vec<String> {
       read["derived_waiting"]
         .as_array()
@@ -2368,25 +2369,25 @@ mod tests {
     };
     assert_eq!(
       held(&read),
-      [root.clone(), child.clone()],
+      [root.to_string(), child.to_string()],
       "the holder and its open descendants, not the other session"
     );
     assert_eq!(
-      held(&read_status(&home.features, &child).await.expect("the child reads")),
-      std::slice::from_ref(&child)
+      held(&read_status(&home.features, child).await.expect("the child reads")),
+      [child.to_string()]
     );
 
     // A set stores its own items and leaves the derived ones where the reader gives them.
-    set_status(&home.features, &root, VALID_SET).await.expect("the set stores");
-    assert_eq!(stored(&home, &root).await["waiting"], json!([]));
-    let after = read_status(&home.features, &root).await.expect("the status reads after the set");
-    assert_eq!(held(&after), [root.clone(), child.clone()]);
+    set_status(&home.features, root, VALID_SET).await.expect("the set stores");
+    assert_eq!(stored(&home, root).await["waiting"], json!([]));
+    let after = read_status(&home.features, root).await.expect("the status reads after the set");
+    assert_eq!(held(&after), [root.to_string(), child.to_string()]);
     assert_eq!(after[WEB_STATUS]["waiting"], json!([]));
 
     // The approval view lists every open holder's derived item with the stored ones.
     let rows = open_waiting_items(&home.features).await.expect("the approval rows read");
     let listed: Vec<&str> = rows.iter().map(|row| row.session_id.as_str()).collect();
-    assert_eq!(listed, [root.as_str(), child.as_str(), unrelated.as_str()]);
+    assert_eq!(listed, [root, child, unrelated]);
     assert!(rows.iter().all(|row| row.tier.as_deref() == Some("user-act") && row.rule.is_none()));
   }
 

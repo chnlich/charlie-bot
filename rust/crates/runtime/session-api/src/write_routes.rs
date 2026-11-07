@@ -13,7 +13,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::{responses, validation};
-use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::config::{AUTO_BACKEND_ID, BackendOption, CharlieBotConfig};
 use charliebot_core::metadata_slot::MetadataFile;
 use charliebot_core::{event_types, text_repr};
 use charliebot_registry::caller::{self, CallerIdentity};
@@ -494,8 +494,13 @@ pub(crate) fn config(features: &FeatureContext) -> Result<Arc<CharlieBotConfig>,
   features.config.get().map_err(|error| responses::internal_error("RuntimeError", error.to_string()))
 }
 
+/// The backend ids a session may take: every `backends.options` id, plus `auto` when `backends.auto` is configured.
 fn valid_backend_ids(cfg: &CharlieBotConfig) -> Vec<&str> {
-  cfg.backends.options.iter().map(|option| option.id.as_str()).collect()
+  let mut ids = cfg.backends.options.iter().map(|option| option.id.as_str()).collect::<Vec<_>>();
+  if cfg.backends.auto.is_some() {
+    ids.push(AUTO_BACKEND_ID);
+  }
+  ids
 }
 
 /// `_default_backend_id`: the first configured option, else `claude`.
@@ -604,7 +609,9 @@ mod tests {
   use tracing::field::{Field, Visit};
 
   use super::*;
-  use crate::test_support::{answer, create_node, feature_context, install_dispatcher, json_request};
+  use crate::test_support::{
+    answer, create_node, feature_context, feature_context_with_auto, install_dispatcher, json_request,
+  };
 
   struct LogMessage(Arc<Mutex<Vec<String>>>);
 
@@ -1161,5 +1168,46 @@ mod tests {
 
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(detail, json!({"detail": AGENT_CREATE_SCOPE_REFUSAL}));
+  }
+
+  const AUTO_CONFIG: &str = "\
+backends:
+  options:
+    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a}
+    - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b}
+  auto:
+    label: Auto
+    members:
+      - {backend: synthetic-a, billing: subscription}
+      - {backend: synthetic-b, billing: payg}
+";
+
+  #[tokio::test]
+  async fn create_and_switch_accept_auto_only_when_the_config_lists_it() {
+    let (_home, features) = feature_context_with_auto(AUTO_CONFIG);
+    let (headers, body) = json_request(json!({"request_id": "auto-root", "profile": "manager", "backend": "auto"}));
+    let (status, created) = answer(create_session(State(features.clone()), headers, body).await).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["backend"], "auto");
+
+    let node = create_node(&features.store, "auto-switch-node", None, TaskProfile::Manager).await;
+    let (headers, body) = json_request(json!({"backend": "auto"}));
+    let (status, switched) =
+      answer(switch_backend(State(features.clone()), AxumPath(node.id.clone()), headers, body).await).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(switched["backend"], "auto");
+    assert_eq!(features.store.read_metadata_fresh(&node.id).unwrap().unwrap().backend, "auto");
+  }
+
+  #[tokio::test]
+  async fn without_backends_auto_the_backend_id_auto_is_refused() {
+    let (_home, features) = feature_context();
+    let (headers, body) = json_request(json!({"request_id": "auto-root", "backend": "auto"}));
+    let (status, detail) = answer(create_session(State(features), headers, body).await).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+      detail["detail"].as_str().expect("detail text").contains("valid ids: ['synthetic-a', 'synthetic-b']"),
+      "{detail}"
+    );
   }
 }

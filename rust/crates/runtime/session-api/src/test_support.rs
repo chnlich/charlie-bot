@@ -243,17 +243,34 @@ impl GatedHome {
 }
 
 pub(crate) fn feature_context() -> (GatedHome, Arc<FeatureContext>) {
+  feature_context_with_config(
+    "backends:\n  options:\n    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a}\n    - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b}\n",
+  )
+}
+
+/// A test home whose `config.yaml` is `config_body`, for the tests that need a section the shared fixture leaves out.
+pub(crate) fn feature_context_with_config(config_body: &str) -> (GatedHome, Arc<FeatureContext>) {
+  feature_context_with(config_body, false)
+}
+
+/// The Auto session fixture: `config_body` plus the production `auto_member` slot the Auto backend writes.
+pub(crate) fn feature_context_with_auto(config_body: &str) -> (GatedHome, Arc<FeatureContext>) {
+  feature_context_with(config_body, true)
+}
+
+fn feature_context_with(config_body: &str, auto_backend: bool) -> (GatedHome, Arc<FeatureContext>) {
   // This context's tests move the shared sidebar state, so they hold the gate for the context's lifetime.
   let permit = hold_sidebar_gate();
   let home = tempfile::tempdir().expect("temporary home");
   std::fs::write(home.path().join(CREDENTIALS_FILENAME), "charliebot: {}\n").expect("credentials file");
-  std::fs::write(
-    home.path().join("config.yaml"),
-    "backends:\n  options:\n    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a}\n    - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b}\n",
-  )
-  .expect("backend config file");
+  std::fs::write(home.path().join("config.yaml"), config_body).expect("backend config file");
   let mut registry = Registry::new();
   registry.register_package("session_api_test", register_test_backend).expect("register synthetic backend");
+  if auto_backend {
+    registry
+      .register_package("session_api_test.auto_backend", charliebot_agents::auto_backend::register)
+      .expect("register the auto_member slot");
+  }
   let registry = Arc::new(registry);
   let config_value = registry.load_config(home.path()).expect("test config");
   let store = Arc::new(

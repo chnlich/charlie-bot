@@ -960,7 +960,15 @@ fn active_backend_payload(
     .binding_for(&meta.id)
     .map_err(|error| StoreError::new(error.to_string()))?
     .is_some_and(|binding| binding.dedicated_backend());
-  let switchable = if let Some(active_option) = active_option {
+  let switchable = if active_backend == charliebot_core::config::AUTO_BACKEND_ID && cfg.backends.auto.is_some() {
+    cfg
+      .backends
+      .options
+      .iter()
+      .map(|option| Value::String(option.id.clone()))
+      .chain(std::iter::once(Value::String(charliebot_core::config::AUTO_BACKEND_ID.to_string())))
+      .collect()
+  } else if let Some(active_option) = active_option {
     if dedicated {
       let active_lifecycle =
         registry.lifecycle_for(&active_option.backend_type).map_err(|error| StoreError::new(error.to_string()))?;
@@ -1129,9 +1137,63 @@ fn path_error(path: &Path, error: std::io::Error) -> StoreError {
 mod tests {
   use charliebot_registry::{Registry, store_hooks};
   use charliebot_store::run_records::RunKind;
+  use charliebot_store::{CreateTask, TaskCaller};
 
   use super::*;
-  use crate::test_support::feature_context;
+  use crate::test_support::{feature_context, feature_context_with_auto};
+
+  const AUTO_CONFIG: &str = "\
+backends:
+  options:
+    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a}
+    - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b}
+  auto:
+    label: Auto
+    members:
+      - {backend: synthetic-a, billing: subscription}
+      - {backend: synthetic-b, billing: payg}
+";
+
+  #[tokio::test]
+  async fn the_session_detail_returns_the_auto_member_and_lists_auto_switchable() {
+    let (_home, features) = feature_context_with_auto(AUTO_CONFIG);
+    let meta = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "auto-detail".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some("Auto detail".to_string()),
+          backend: Some("auto".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await
+      .expect("the auto session is created");
+    features
+      .store
+      .update_slot_fields(
+        &meta.id,
+        charliebot_agents::auto_backend::OWNER,
+        Map::from_iter([("auto_member".to_string(), json!("synthetic-a"))]),
+      )
+      .await
+      .expect("the member is recorded");
+
+    let payload = features.store.session_detail(&meta.id).expect("the detail reads");
+    assert_eq!(payload["backend"], "auto");
+    assert_eq!(payload["auto_member"], "synthetic-a");
+
+    let cfg = features.config.get().expect("the test config loads");
+    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
+    assert_eq!(backend["active_backend"], "auto");
+    assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "synthetic-b", "auto"]));
+  }
 
   fn run(id: &str, inputs: &[&str], pid: Option<u32>) -> RunRecord {
     RunRecord {

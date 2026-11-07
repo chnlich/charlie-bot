@@ -10,7 +10,9 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Response;
 use charliebot_agents::backend_pool;
-use charliebot_compat::request_body::{self, BodyModel, Field, FieldType};
+use charliebot_compat::request_body::{
+  self, BodyModel, Field, FieldType, flag_field, integer_field, optional_text_field_ref, text_field,
+};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::config::CharlieBotConfig;
@@ -21,8 +23,7 @@ use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::SESSION_NOT_FOUND_DETAIL;
 use charliebot_tasks::execution::TaskExecutionAdapter;
 use charliebot_tasks::{recovery, spawner_backends};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::command::{self, ImproveLoopAlreadyRunningError, ImproveState, LoopStatus, Reservation};
 use crate::sequence::{self, LoopSpec, run_improve_sequence};
@@ -46,32 +47,37 @@ const IMPROVE_STOP_BODY: BodyModel = BodyModel::required(IMPROVE_STOP_FIELDS).fo
 
 /// The validated body of `POST /api/internal/improve`. An absent `iterations` reads as 3, an absent `merge_back` as
 /// false, and the other optional fields as `None`.
-#[derive(Deserialize)]
 struct ImproveRequest {
   session_id: String,
   repo_path: String,
   base_branch: String,
-  #[serde(default)]
   backend: Option<String>,
-  #[serde(default = "default_iterations")]
   iterations: i64,
   goal: String,
-  #[serde(default)]
   plan: Option<String>,
-  #[serde(default)]
   work_branch: Option<String>,
-  #[serde(default)]
   merge_back: bool,
 }
 
-fn default_iterations() -> i64 {
-  3
-}
+/// The iteration count a start request that names none runs.
+const DEFAULT_ITERATIONS: i64 = 3;
 
-/// The validated body of `POST /api/internal/improve/stop`.
-#[derive(Deserialize)]
-struct ImproveStopRequest {
-  session_id: String,
+/// The start body, read from the validated fields through the wire names.
+fn improve_request(fields: &Map<String, Value>) -> ImproveRequest {
+  ImproveRequest {
+    session_id: text_field(fields, wire::SESSION_ID),
+    repo_path: text_field(fields, wire::REPO_PATH),
+    base_branch: text_field(fields, wire::BASE_BRANCH),
+    backend: optional_text_field_ref(fields, wire::BACKEND).map(str::to_string),
+    iterations: match integer_field(fields, wire::ITERATIONS) {
+      Some(value) => i64::try_from(value).expect("a validated iterations fits i64"),
+      None => DEFAULT_ITERATIONS,
+    },
+    goal: text_field(fields, wire::GOAL),
+    plan: optional_text_field_ref(fields, wire::PLAN).map(str::to_string),
+    work_branch: optional_text_field_ref(fields, wire::WORK_BRANCH).map(str::to_string),
+    merge_back: flag_field(fields, wire::MERGE_BACK).unwrap_or(false),
+  }
 }
 
 /// The improve routes, mounted under the internal API paths.
@@ -108,12 +114,11 @@ async fn start_improve_loop(
     Ok(body) => body,
     Err(response) => return *response,
   };
-  let values = match body.validate(&IMPROVE_BODY) {
-    Ok(Some(values)) => values,
-    Ok(None) => unreachable!("a required request body validates to an object"),
+  let fields = match body.declared_fields(&IMPROVE_BODY) {
+    Ok(fields) => fields,
     Err(response) => return *response,
   };
-  let req: ImproveRequest = serde_json::from_value(values).expect("the body model validated the request");
+  let req = improve_request(&fields);
   match features.store.get_session(&req.session_id).await {
     Ok(Some(_)) => {}
     Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": SESSION_NOT_FOUND_DETAIL })),
@@ -271,13 +276,12 @@ async fn stop_improve(State(features): State<Arc<FeatureContext>>, request: axum
     Ok(body) => body,
     Err(response) => return *response,
   };
-  let values = match body.validate(&IMPROVE_STOP_BODY) {
-    Ok(Some(values)) => values,
-    Ok(None) => unreachable!("a required request body validates to an object"),
+  let fields = match body.declared_fields(&IMPROVE_STOP_BODY) {
+    Ok(fields) => fields,
     Err(response) => return *response,
   };
-  let req: ImproveStopRequest = serde_json::from_value(values).expect("the body model validated the request");
-  match features.store.get_session(&req.session_id).await {
+  let session_id = text_field(&fields, wire::SESSION_ID);
+  match features.store.get_session(&session_id).await {
     Ok(Some(_)) => {}
     Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": SESSION_NOT_FOUND_DETAIL })),
     Err(error) => return task_http_error(error),
@@ -286,10 +290,10 @@ async fn stop_improve(State(features): State<Arc<FeatureContext>>, request: axum
     Ok(cfg) => cfg,
     Err(error) => return runtime_error(error),
   };
-  match command::stop_improve_loop(&cfg, &req.session_id) {
+  match command::stop_improve_loop(&cfg, &session_id) {
     Ok(true) => {
-      tracing::info!(target: "charliebot_improve", session = req.session_id.as_str(), "improve_loop_stopped");
-      responses::json(StatusCode::OK, &json!({ (wire::STATUS): "stopped", (wire::SESSION_ID): req.session_id }))
+      tracing::info!(target: "charliebot_improve", session = session_id.as_str(), "improve_loop_stopped");
+      responses::json(StatusCode::OK, &json!({ (wire::STATUS): "stopped", (wire::SESSION_ID): session_id }))
     }
     Ok(false) => responses::json(StatusCode::CONFLICT, &json!({ "detail": "No active improve loop in this session" })),
     Err(error) => runtime_error(error),

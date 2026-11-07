@@ -470,7 +470,7 @@ fn steps_task_of(run: &RunRecord, tree: &dyn SequenceTree) -> anyhow::Result<Opt
   Ok(task.steps.as_ref().is_some_and(|steps| !steps.is_empty()).then_some(task))
 }
 
-/// Move a steps firing off a step run that ended on a spent quota, when that step runs on `auto`: the member is
+/// Move a steps firing off a step run that ended on a spent quota, when that step runs on `auto`. The member is
 /// recorded out, the next member is selected, and the step reruns on it as a retry run. Returns whether the chain has
 /// finished, or None when the step is not on Auto and the chain takes its normal path.
 async fn switch_failed_step(
@@ -1033,8 +1033,8 @@ mod tests {
     );
   }
 
-  /// Test ⑤: a two-step chain whose first step's run ends on a spent quota reruns that step on the next Auto member, as
-  /// one retry run, and records the switch once in the Auto parent's chat.
+  /// Test ⑤: a two-step chain whose first step's run ends on a spent quota reruns that step on the next Auto member as
+  /// one retry run. It records the switch once in the Auto parent's chat.
   #[tokio::test]
   #[ignore = "integration"]
   async fn a_quota_end_on_an_auto_step_reruns_that_step_on_the_next_member() {

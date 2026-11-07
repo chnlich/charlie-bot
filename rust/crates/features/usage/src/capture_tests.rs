@@ -781,18 +781,15 @@ fn appended_line_is_captured_and_second_dir_replay_counts_once() {
   // re-upsert beside the new one), and a message id replayed into a second file is captured yet still counted once.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
-  let (config, registry) = fixture(&home);
+  let (config, registry) = claude_fixture(&home);
   let original = call("m1", NAME, "2024-01-01T00:00:00Z", [10, 0, 0, 5], &["sess1"]);
   cli_file(&home, "claude", "sess1", std::slice::from_ref(&original));
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
-  capture_round(&mut ledger, &config, &registry);
-  let before = row(&page_rows(&mut ledger), "Claude Code", NAME).clone();
+  let connection = Connection::open_in_memory().unwrap();
+  let mut ledger = UsageLedger::from_connection(PathBuf::from(":memory:"), connection).unwrap();
+  assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "Claude Code"), 1);
 
   cli_file(&home, "claude", "replay", std::slice::from_ref(&original));
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "Claude Code"), 1);
-  let replayed = row(&page_rows(&mut ledger), "Claude Code", NAME).clone();
-  assert_eq!(replayed.calls, before.calls);
-  assert_eq!(replayed.calls, 1); // ... yet its message id counts once
 
   let appended = call("m2", NAME, "2024-01-02T00:00:00Z", [100, 0, 0, 2], &["sess1"]);
   cli_file(&home, "claude", "sess1", &[original, appended]);

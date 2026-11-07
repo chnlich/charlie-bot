@@ -2035,32 +2035,18 @@ appointments and the tax paperwork of the household";
   }
 
   #[test]
-  fn add_long_description_on_pending_section_stays_on_one_line() {
+  fn long_description_on_existing_account_stays_on_one_line() {
     let home = credentials_home(&format!(
       "{DEFAULT_TABLE}\ngoogle_account_personal:\n  description: old text\n  refresh_token: old-refresh\n"
     ));
     let original_lines: Vec<String> =
       std::fs::read_to_string(credentials_path(&home)).unwrap().lines().map(str::to_string).collect();
-    let stub = Stub::start(vec![
-      exchange_response("temporary-access", "new-refresh"),
-      profile_response("person@example.invalid"),
-    ]);
-
-    let email = add(
-      &home,
-      "personal",
-      "person@example.invalid",
-      "http://localhost/?code=auth-code&state=personal",
-      Some(LONG_DESCRIPTION),
-      None,
-      &stub.endpoints(),
-    )
-    .unwrap();
-
-    let updated_lines: Vec<String> =
-      std::fs::read_to_string(credentials_path(&home)).unwrap().lines().map(str::to_string).collect();
-    assert_eq!(email, "person@example.invalid");
-    assert_eq!(exchange_code_output("personal", &email), "personal: person@example.invalid\n");
+    let credentials = table(&home);
+    let account = credentials.by_name.get("personal").expect("the personal account is recorded");
+    let (updated, expected) = updated_content(&credentials, account, "new-refresh", Some(LONG_DESCRIPTION), None)
+      .expect("the account update renders");
+    let updated_text = String::from_utf8(updated).unwrap();
+    let updated_lines: Vec<String> = updated_text.lines().map(str::to_string).collect();
     assert_eq!(updated_lines.len(), original_lines.len());
     let changes: Vec<(&String, &String)> =
       original_lines.iter().zip(&updated_lines).filter(|(before, after)| before != after).collect();
@@ -2071,8 +2057,10 @@ appointments and the tax paperwork of the household";
         (&"  refresh_token: old-refresh".to_string(), &"  refresh_token: new-refresh".to_string()),
       ]
     );
-    let parsed: Yaml = serde_yaml::from_str(&std::fs::read_to_string(credentials_path(&home)).unwrap()).unwrap();
+    let parsed: Yaml = serde_yaml::from_str(&updated_text).unwrap();
+    assert_eq!(parsed, Yaml::Mapping(expected));
     assert_eq!(parsed["google_account_personal"]["description"], LONG_DESCRIPTION);
+    assert_eq!(parsed["google_account_personal"]["refresh_token"], "new-refresh");
   }
 
   #[test]

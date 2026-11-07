@@ -259,12 +259,13 @@ pub fn clean(text: &str) -> String {
 
 fn is_noise(line: &str) -> bool {
   let folded = line.to_ascii_lowercase();
-  if line.is_ascii() && !(line.starts_with("Provider List:")
-    || line.starts_with("Give Feedback / Get Help:")
-    || line.starts_with("LiteLLM.Info:")
-    || folded.ends_with("docs/providers")
-    || line.starts_with("Command logs retained at:")
-    || line.starts_with("loading path="))
+  if line.is_ascii()
+    && !(line.starts_with("Provider List:")
+      || line.starts_with("Give Feedback / Get Help:")
+      || line.starts_with("LiteLLM.Info:")
+      || folded.ends_with("docs/providers")
+      || line.starts_with("Command logs retained at:")
+      || line.starts_with("loading path="))
   {
     return false;
   }
@@ -414,11 +415,12 @@ fn banner_only(text: &str) -> bool {
       continue;
     }
     let folded = line.to_ascii_lowercase();
-    if line.is_ascii() && !(line.starts_with("Provider List:")
-      || line.starts_with("Give Feedback / Get Help:")
-      || line.starts_with("LiteLLM.Info:")
-      || folded.ends_with("docs/providers")
-      || line.contains("litellm._turn_on_debug"))
+    if line.is_ascii()
+      && !(line.starts_with("Provider List:")
+        || line.starts_with("Give Feedback / Get Help:")
+        || line.starts_with("LiteLLM.Info:")
+        || folded.ends_with("docs/providers")
+        || line.contains("litellm._turn_on_debug"))
     {
       return false;
     }

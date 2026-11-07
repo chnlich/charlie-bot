@@ -32,6 +32,7 @@ use serde_json::{Map, Value, json};
 
 use crate::api;
 use crate::route_support::{Query, blocking_store};
+use crate::write_routes::auto_switchable;
 use crate::{listing, worker_transcript};
 
 const BOOTSTRAP_MESSAGE_LIMIT: usize = 40;
@@ -983,7 +984,12 @@ fn active_backend_payload(
       }
       switchable
     } else {
-      cfg.backends.options.iter().map(|option| Value::String(option.id.clone())).collect()
+      let mut switchable: Vec<Value> =
+        cfg.backends.options.iter().map(|option| Value::String(option.id.clone())).collect();
+      if auto_switchable(cfg, dedicated) {
+        switchable.push(Value::String(charliebot_core::config::AUTO_BACKEND_ID.to_string()));
+      }
+      switchable
     }
   } else {
     Vec::new()
@@ -1140,7 +1146,7 @@ mod tests {
   use charliebot_store::{CreateTask, TaskCaller};
 
   use super::*;
-  use crate::test_support::{feature_context, feature_context_with_auto};
+  use crate::test_support::{create_node, feature_context, feature_context_with_auto};
 
   const AUTO_CONFIG: &str = "\
 backends:
@@ -1193,6 +1199,47 @@ backends:
     let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
     assert_eq!(backend["active_backend"], "auto");
     assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "synthetic-b", "auto"]));
+  }
+
+  #[tokio::test]
+  async fn a_session_on_a_plain_option_lists_auto_when_backends_auto_is_configured() {
+    let (_home, features) = feature_context_with_auto(AUTO_CONFIG);
+    let meta = create_node(&features.store, "plain-option-node", None, TaskProfile::Manager).await;
+    let cfg = features.config.get().expect("the test config loads");
+
+    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
+    assert_eq!(backend["active_backend"], "synthetic-a");
+    assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "synthetic-b", "auto"]));
+  }
+
+  #[tokio::test]
+  async fn a_dedicated_lock_keeps_auto_out_of_the_switch_list() {
+    let (_home, features) = feature_context_with_auto(AUTO_CONFIG);
+    let request = CreateTask {
+      request_id: "locked-plain-option-node".to_string(),
+      task_parent_id: None,
+      profile: TaskProfile::Manager,
+      task: None,
+      name: Some("Locked plain option".to_string()),
+      backend: Some("synthetic-a".to_string()),
+      group: None,
+      session_id: Some("sequence-locked-node".to_string()),
+    };
+    let meta = features.store.create_task(request, TaskCaller::System, Map::new()).await.expect("the locked node");
+    let cfg = features.config.get().expect("the test config loads");
+
+    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
+    assert_eq!(backend["switchable_backends"], json!(["synthetic-a"]));
+  }
+
+  #[tokio::test]
+  async fn without_backends_auto_no_switch_list_lists_auto() {
+    let (_home, features) = feature_context();
+    let meta = create_node(&features.store, "plain-no-auto-node", None, TaskProfile::Manager).await;
+    let cfg = features.config.get().expect("the test config loads");
+
+    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
+    assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "synthetic-b"]));
   }
 
   fn run(id: &str, inputs: &[&str], pid: Option<u32>) -> RunRecord {

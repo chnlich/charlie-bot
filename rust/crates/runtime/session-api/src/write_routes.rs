@@ -372,10 +372,14 @@ async fn switch(
     .registry
     .binding_for(session_id)
     .map_err(|error| responses::internal_error("RuntimeError", error.to_string()))?;
-  if let Some(binding) = binding
-    && binding.dedicated_backend()
-    && !same_continuation_domain(&effective, &target, &cfg, &features.registry).map_err(store_error)?
-  {
+  let dedicated = binding.as_ref().is_some_and(|binding| binding.dedicated_backend());
+  let lock_refuses = if target == AUTO_BACKEND_ID {
+    !auto_switchable(&cfg, dedicated)
+  } else {
+    dedicated && !same_continuation_domain(&effective, &target, &cfg, &features.registry).map_err(store_error)?
+  };
+  if lock_refuses {
+    let binding = binding.expect("a lock refusal requires the session's dedicated binding");
     return Err(store_error(StoreError::invalid(binding.backend_lock_detail(&target))));
   }
 
@@ -501,6 +505,13 @@ fn valid_backend_ids(cfg: &CharlieBotConfig) -> Vec<&str> {
     ids.push(AUTO_BACKEND_ID);
   }
   ids
+}
+
+/// The `auto` rule the header switch list and this route share: a session may take `auto` when
+/// `backends.auto` is configured and no dedicated binding locks its switches. An `auto` target
+/// belongs to no continuation domain, so a dedicated lock always refuses it.
+pub(crate) fn auto_switchable(cfg: &CharlieBotConfig, dedicated: bool) -> bool {
+  cfg.backends.auto.is_some() && !dedicated
 }
 
 /// `_default_backend_id`: the first configured option, else `claude`.
@@ -1209,5 +1220,29 @@ backends:
       detail["detail"].as_str().expect("detail text").contains("valid ids: ['synthetic-a', 'synthetic-b']"),
       "{detail}"
     );
+  }
+
+  #[tokio::test]
+  async fn a_dedicated_lock_refuses_auto_when_backends_auto_is_configured() {
+    let (_home, features) = feature_context_with_auto(AUTO_CONFIG);
+    let request = CreateTask {
+      request_id: "sequence-locked-auto-node".to_string(),
+      task_parent_id: None,
+      profile: TaskProfile::Manager,
+      task: None,
+      name: Some("Locked auto node".to_string()),
+      backend: Some("synthetic-a".to_string()),
+      group: None,
+      session_id: Some("sequence-locked-node".to_string()),
+    };
+    let node = features.store.create_task(request, TaskCaller::System, Map::new()).await.unwrap();
+    let (headers, body) = json_request(json!({"backend": "auto"}));
+
+    let (status, detail) =
+      answer(switch_backend(State(features.clone()), AxumPath(node.id.clone()), headers, body).await).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(detail, json!({"detail": "backend 'auto' is locked by the session API test sequence"}));
+    assert_eq!(features.store.read_metadata_fresh(&node.id).unwrap().unwrap().backend, "synthetic-a");
   }
 }

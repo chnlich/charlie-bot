@@ -124,7 +124,7 @@ impl CcAnthropicCompatibleOption {
   }
 }
 
-/// Validate the fields of a `cc-anthropic-compatible` config entry.
+/// The option model that validates the fields of a `cc-anthropic-compatible` config entry.
 pub fn option_model(fields: &Mapping) -> Result<(), String> {
   CcAnthropicCompatibleOption::from_fields(fields).map(|_| ())
 }

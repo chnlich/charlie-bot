@@ -364,14 +364,16 @@ BEGIN
     in_unsplit = in_unsplit + excluded.in_unsplit, output = output + excluded.output;
 END;"#;
 
-/// A ledger the pre-fix release left: the schema, the pre-fix trigger bodies, `served` written and the aggregate
-/// backfilled over them, then `late` written under the same bodies, whose adds a served group-day drops.
-fn pre_fix_ledger(path: &Path, served: &[UsageRecord], late: &[UsageRecord]) {
-  let raw = Connection::open(path).unwrap();
-  raw.execute_batch(sql::SCHEMA).unwrap();
+/// A connection with the pre-fix trigger bodies: `served` is backfilled, then `late` is written under the bodies
+/// whose add arm drops an existing served group-day.
+fn pre_fix_ledger(raw: &Connection, served: &[UsageRecord], late: &[UsageRecord]) {
+  raw.execute_batch(
+    "DROP TRIGGER IF EXISTS usage_agg_after_insert; DROP TRIGGER IF EXISTS usage_agg_after_update;",
+  )
+  .unwrap();
   raw.execute_batch(&format!("{PRE_FIX_INSERT_TRIGGER}{PRE_FIX_UPDATE_TRIGGER}")).unwrap();
   for rec in served.iter().chain(late) {
-    write_raw_usage(&raw, rec);
+    write_raw_usage(raw, rec);
   }
   let placeholders = vec!["?"; served.len()].join(",");
   raw
@@ -912,27 +914,24 @@ fn open_of_a_current_ledger_does_not_queue_behind_a_live_writer() {
 }
 
 #[test]
-fn open_swaps_pre_fix_trigger_bodies_and_reprices_the_aggregate() {
-  let dir = tempfile::tempdir().unwrap();
-  let path = dir.path().join("ledger.sqlite3");
+fn refresh_replaces_pre_fix_trigger_bodies_and_reprices_the_aggregate() {
+  let mut ledger = UsageLedger::in_memory().unwrap();
   let first = record("rec-1", RecordKind::Native, &["sess-a"]);
   let mut second = record("rec-2", RecordKind::Native, &["sess-b"]);
   second.output = 6;
-  pre_fix_ledger(&path, &[first], &[second]); // the backfill ran before second was written
-  {
-    let raw = Connection::open(&path).unwrap();
-    let calls = raw
-      .prepare("SELECT calls FROM usage_agg")
-      .unwrap()
-      .query_map([], |row| row.get::<_, i64>(0))
-      .unwrap()
-      .collect::<rusqlite::Result<Vec<_>>>()
-      .unwrap();
-    assert_eq!(calls, [1]); // second's add was dropped
-  }
+  pre_fix_ledger(ledger.connection(), &[first], &[second]); // the backfill ran before second was written
+  let calls = ledger
+    .connection()
+    .prepare("SELECT calls FROM usage_agg")
+    .unwrap()
+    .query_map([], |row| row.get::<_, i64>(0))
+    .unwrap()
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .unwrap();
+  assert_eq!(calls, [1]); // second's add was dropped
+  ledger.refresh_agg_triggers().unwrap();
   let mut third = record("rec-3", RecordKind::Native, &["sess-c"]);
   third.output = 7;
-  let mut ledger = UsageLedger::open(&path).unwrap();
   let served = agg_rows(&mut ledger);
   assert_eq!(served, table_rows(&ledger));
   assert_eq!(served.iter().map(|row| (row.calls, row.output.int())).collect::<Vec<_>>(), [(2, 11)]);
@@ -940,13 +939,12 @@ fn open_swaps_pre_fix_trigger_bodies_and_reprices_the_aggregate() {
   let served = agg_rows(&mut ledger);
   assert_eq!(served, table_rows(&ledger));
   assert_eq!(served.iter().map(|row| (row.calls, row.output.int())).collect::<Vec<_>>(), [(3, 18)]);
-  // A reopen whose trigger bodies now match runs nothing: the snapshot and the triggers stay the same.
+  // A refresh whose trigger bodies now match runs nothing: the snapshot and the triggers stay the same.
   ledger.model_rows().unwrap();
   let (before, triggers) = (snapshot(ledger.connection()), trigger_sqls(ledger.connection()));
-  drop(ledger);
-  let reopened = UsageLedger::open(&path).unwrap();
-  assert_eq!(snapshot(reopened.connection()), before);
-  assert_eq!(trigger_sqls(reopened.connection()), triggers);
+  ledger.refresh_agg_triggers().unwrap();
+  assert_eq!(snapshot(ledger.connection()), before);
+  assert_eq!(trigger_sqls(ledger.connection()), triggers);
 }
 
 #[test]

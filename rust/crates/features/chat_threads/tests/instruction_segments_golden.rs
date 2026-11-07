@@ -122,7 +122,6 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str, group
       }
     }
   }
-
 }
 
 fn registered_packages() -> Vec<Registry> {

@@ -1817,8 +1817,8 @@ mod tests {
   }
 
   /// Test ②: a cron child on an Auto member that runs out of quota retries on the next member as one retry run. The
-  /// switch record sits in the bound session's chat, and the retry's input names the failed run's directory as an
-  /// absolute path, with the summary from the run's events log.
+  /// switch record sits in the bound session's chat. The retry's input names the failed run's directory as an
+  /// absolute path, and carries the summary from the run's events log.
   #[tokio::test]
   #[ignore = "integration"]
   async fn a_cron_child_quota_end_retries_on_the_next_auto_member() {

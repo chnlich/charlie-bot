@@ -31,8 +31,7 @@ use lru::LruCache;
 use serde_json::{Map, Value, json};
 
 use crate::api;
-use crate::route_support::{Query, blocking_store};
-use crate::write_routes::auto_switchable;
+use crate::route_support::{Query, auto_switchable, blocking_store};
 use crate::{listing, worker_transcript};
 
 const BOOTSTRAP_MESSAGE_LIMIT: usize = 40;

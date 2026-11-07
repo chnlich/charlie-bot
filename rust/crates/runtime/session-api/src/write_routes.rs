@@ -33,7 +33,7 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
 use crate::detail::response_metadata;
-use crate::route_support::store_error;
+use crate::route_support::{auto_switchable, store_error};
 
 const LOG_TARGET: &str = "charliebot_session_api";
 const PROFILE_CHOICES: &[&str] = &["manager", "worker"];
@@ -505,13 +505,6 @@ fn valid_backend_ids(cfg: &CharlieBotConfig) -> Vec<&str> {
     ids.push(AUTO_BACKEND_ID);
   }
   ids
-}
-
-/// The `auto` rule the header switch list and this route share: a session may take `auto` when
-/// `backends.auto` is configured and no dedicated binding locks its switches. An `auto` target
-/// belongs to no continuation domain, so a dedicated lock always refuses it.
-pub(crate) fn auto_switchable(cfg: &CharlieBotConfig, dedicated: bool) -> bool {
-  cfg.backends.auto.is_some() && !dedicated
 }
 
 /// `_default_backend_id`: the first configured option, else `claude`.

@@ -242,6 +242,11 @@ pub fn active_listing_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> St
 /// The chat page renders these rows into its sidebar text, and the listing route answers them as JSON.
 pub struct PageRows {
   rows: Arc<Vec<Arc<SessionMetadata>>>,
+  /// Each listed id's position in `rows`, built with the rows.
+  ///
+  /// A row refresh names a few ids and merges those rows alone. Walking the corpus to find them hashed every listed
+  /// id, and hashing 7,160 ids cost more than rendering the rows it found.
+  index: Arc<HashMap<String, u32>>,
   derived: Arc<DerivedSidebarMap>,
   sequence_fields: HashMap<String, Map<String, Value>>,
 }
@@ -250,6 +255,14 @@ impl PageRows {
   /// The corpus rows, in listing order.
   pub fn rows(&self) -> &[Arc<SessionMetadata>] {
     &self.rows
+  }
+
+  /// The rows `ids` name, in page order.
+  fn rows_named(&self, ids: &[String]) -> Vec<Arc<SessionMetadata>> {
+    let mut found: Vec<u32> = ids.iter().filter_map(|id| self.index.get(id.as_str()).copied()).collect();
+    found.sort_unstable();
+    found.dedup();
+    found.into_iter().map(|index| Arc::clone(&self.rows[index as usize])).collect()
   }
 
   /// The derived sidebar overlay of each row.
@@ -284,6 +297,7 @@ struct PageCorpusEntry {
   view_roots: Arc<HashMap<String, HashMap<String, String>>>,
   sidebar_generation: u64,
   rows: Arc<Vec<Arc<SessionMetadata>>>,
+  index: Arc<HashMap<String, u32>>,
   derived: Arc<DerivedSidebarMap>,
 }
 
@@ -313,6 +327,33 @@ impl PageCorpusEntry {
 /// Read the sidebar corpus without rendering a row. A memo hit still polls the sidebar state, because the periodic
 /// self-heal sweep is what catches an edit from outside the server.
 pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageRows> {
+  let corpus = page_corpus(store, registry)?;
+  let sequence_fields = store.sequence_listing_fields(&corpus.rows)?;
+  Ok(PageRows { rows: corpus.rows, index: corpus.index, derived: corpus.derived, sequence_fields })
+}
+
+/// The sidebar corpus with the sequence controller fields of `ids` alone. A row refresh reads this: it merges the
+/// rows it names, so the corpus' other rows need no controller fields.
+pub fn active_page_rows_for(store: &Arc<Store>, registry: &Arc<Registry>, ids: &[String]) -> StoreResult<PageRows> {
+  let corpus = page_corpus(store, registry)?;
+  let sequence_fields = store.sequence_listing_fields_for(ids)?;
+  Ok(PageRows { rows: corpus.rows, index: corpus.index, derived: corpus.derived, sequence_fields })
+}
+
+/// The page corpus' rows, their id index, and the overlays.
+struct PageCorpus {
+  rows: Arc<Vec<Arc<SessionMetadata>>>,
+  index: Arc<HashMap<String, u32>>,
+  derived: Arc<DerivedSidebarMap>,
+}
+
+/// The id index of a page's rows.
+fn page_row_index(rows: &[Arc<SessionMetadata>]) -> Arc<HashMap<String, u32>> {
+  Arc::new(rows.iter().enumerate().map(|(index, row)| (row.id.clone(), index as u32)).collect())
+}
+
+/// The sidebar corpus, from the memo while every input that shapes it still holds.
+fn page_corpus(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageCorpus> {
   let (_, generation) = store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active))?;
   let archived = store.derived_archived_ids()?;
   let roots = store.subtree_roots_shared()?;
@@ -322,17 +363,17 @@ pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreRe
     memo
       .as_ref()
       .filter(|entry| entry.holds(store, registry, generation, &archived, &roots, sidebar_generation))
-      .map(|entry| (Arc::clone(&entry.rows), Arc::clone(&entry.derived)))
+      .map(|entry| (Arc::clone(&entry.rows), Arc::clone(&entry.index), Arc::clone(&entry.derived)))
   };
-  if let Some((rows, derived)) = cached {
+  if let Some((rows, index, derived)) = cached {
     // A memo hit still polls, because the periodic self-heal sweep is what catches an edit from outside the server.
     sidebar::count_memoized_read(store, registry, &rows)?;
-    let sequence_fields = store.sequence_listing_fields(&rows)?;
-    return Ok(PageRows { rows, derived, sequence_fields });
+    return Ok(PageCorpus { rows, index, derived });
   }
-  let ListingCorpus { mut rows, derived, sequence_fields } = active_listing_corpus(store, registry)?;
+  let ListingCorpus { mut rows, derived, .. } = active_listing_corpus(store, registry)?;
   rows.retain(|row| outside_owned_subtrees(row, &roots));
   let rows = Arc::new(rows);
+  let index = page_row_index(&rows);
   // Resolving the overlays probes the sessions that moved, and one probe bumps the sidebar generation, so the build
   // itself can move an input. A build that moved one stores nothing: its overlays were read under the older
   // generation, and the next request rebuilds them under the newer one and stores them.
@@ -346,10 +387,11 @@ pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreRe
       view_roots: roots.views,
       sidebar_generation,
       rows: Arc::clone(&rows),
+      index: Arc::clone(&index),
       derived: Arc::clone(&derived),
     });
   }
-  Ok(PageRows { rows, derived, sequence_fields })
+  Ok(PageCorpus { rows, index, derived })
 }
 
 /// The id of the row that a page opened without a session redirects to.
@@ -1161,13 +1203,12 @@ impl CompactListingMemo {
 /// decoding and the same epoch-minute times. The row memo is local to this call: a refresh names a few rows, and the
 /// whole-listing memo keys on the full page.
 pub fn row_refresh_text(store: &Store, page: &PageRows, ids: &[String]) -> StoreResult<String> {
-  let wanted: HashSet<&str> = ids.iter().map(String::as_str).collect();
-  let rows: Vec<Arc<SessionMetadata>> =
-    page.rows.iter().filter(|row| wanted.contains(row.id.as_str())).cloned().collect();
+  let rows: Arc<Vec<Arc<SessionMetadata>>> = Arc::new(page.rows_named(ids));
   let present: HashSet<String> = rows.iter().map(|row| row.id.clone()).collect();
   let gone: Vec<&str> = ids.iter().map(String::as_str).filter(|id| !present.contains(*id)).collect();
   let subset = PageRows {
-    rows: Arc::new(rows),
+    index: page_row_index(&rows),
+    rows,
     derived: Arc::clone(&page.derived),
     sequence_fields: page
       .sequence_fields
@@ -1416,13 +1457,37 @@ mod tests {
     assert_eq!(memo.render_calls(), rendered + 1);
   }
 
+  /// A row refresh answers the rows it names in listing order, once each, and names the ids the page lost.
+  #[tokio::test]
+  async fn a_row_refresh_answers_the_named_rows_in_listing_order() {
+    let (_home, features) = crate::test_support::feature_context();
+    for name in ["refresh-a", "refresh-b", "refresh-c"] {
+      crate::test_support::create_node(&features.store, name, None, TaskProfile::Manager).await;
+    }
+    let page = active_page_rows(&features.store, &features.registry).unwrap();
+    let listed: Vec<String> = page.rows().iter().map(|row| row.id.clone()).collect();
+    // The ids arrive in the order the sidebar queued them, which need not be the page's order.
+    let named = vec![listed[2].clone(), listed[0].clone(), listed[2].clone(), "no-such-session".to_string()];
+
+    let text = row_refresh_text(&features.store, &page, &named).unwrap();
+    let body: Value = serde_json::from_str(&text).expect("the refresh body is JSON");
+    let sessions = serde_json::to_string(&body["sessions"]).expect("the refresh's rows serialize");
+    let answered: Vec<String> = page_rows_of(&sessions)
+      .into_iter()
+      .map(|row| row["id"].as_str().expect("a row names its id").to_string())
+      .collect();
+    assert_eq!(answered, vec![listed[0].clone(), listed[2].clone()]);
+    assert_eq!(body["gone"], json!(["no-such-session"]));
+
+    // The route reads the controller fields of the rows it names alone.
+    let page = active_page_rows_for(&features.store, &features.registry, &named).unwrap();
+    assert!(page.sequence_fields().keys().all(|id| named.contains(id)));
+  }
+
   /// One synthetic page: the rows in listing order, with the controller row fields the selection reads.
   fn synthetic_page(rows: Vec<SessionMetadata>, sequence_fields: HashMap<String, Map<String, Value>>) -> PageRows {
-    PageRows {
-      rows: Arc::new(rows.into_iter().map(Arc::new).collect()),
-      derived: Arc::new(DerivedSidebarMap::new()),
-      sequence_fields,
-    }
+    let rows: Arc<Vec<Arc<SessionMetadata>>> = Arc::new(rows.into_iter().map(Arc::new).collect());
+    PageRows { index: page_row_index(&rows), rows, derived: Arc::new(DerivedSidebarMap::new()), sequence_fields }
   }
 
   /// One session's metadata, carrying the fields the page's tree and group selection read.
@@ -1596,7 +1661,8 @@ mod tests {
   /// The page corpus over given rows, with the controller fields that a listing supplies for each row.
   fn page_rows_over(rows: Vec<Arc<SessionMetadata>>) -> PageRows {
     let sequence_fields = rows.iter().map(|row| (row.id.clone(), Map::new())).collect();
-    PageRows { rows: Arc::new(rows), derived: Arc::new(DerivedSidebarMap::new()), sequence_fields }
+    let rows: Arc<Vec<Arc<SessionMetadata>>> = Arc::new(rows);
+    PageRows { index: page_row_index(&rows), rows, derived: Arc::new(DerivedSidebarMap::new()), sequence_fields }
   }
 
   /// A page row keeps its values and leaves out every field the client reads as falsy.
@@ -1605,8 +1671,10 @@ mod tests {
     let (_home, features) = crate::test_support::feature_context();
     let meta = crate::test_support::create_node(&features.store, "falsy-row", None, TaskProfile::Manager).await;
     let memo = PageRowsMemo::default();
+    let rows: Arc<Vec<Arc<SessionMetadata>>> = Arc::new(vec![Arc::new(meta.clone())]);
     let page = PageRows {
-      rows: Arc::new(vec![Arc::new(meta.clone())]),
+      index: page_row_index(&rows),
+      rows,
       derived: Arc::new(DerivedSidebarMap::new()),
       sequence_fields: HashMap::new(),
     };

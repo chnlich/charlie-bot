@@ -221,6 +221,18 @@ impl Store {
     self.sequence_listing.listing_fields(&ids, UtcDateTime::now())
   }
 
+  /// The sequence controllers' row fields of `ids` alone.
+  ///
+  /// A row refresh names the rows it merges, so it asks about those ids instead of building one id string per listed
+  /// session. A controller that answers nothing for these ids returns no entry, which the refresh reads as a row with
+  /// no controller fields.
+  pub fn sequence_listing_fields_for(
+    &self,
+    ids: &[String],
+  ) -> StoreResult<HashMap<String, serde_json::Map<String, Value>>> {
+    self.sequence_listing.listing_fields(ids, UtcDateTime::now())
+  }
+
   /// List the rows of one listing without asking the sequence controllers for their row fields.
   pub fn list_session_rows(
     &self,

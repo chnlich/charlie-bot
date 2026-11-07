@@ -1,3 +1,10 @@
+//! The opcodes that turn one sequence into another: the equal blocks of a longest-match walk and the
+//! replace, delete and insert spans between them.
+//!
+//! The walk takes the longest block it can match, then recurses into the two gaps beside it, so the
+//! blocks are not necessarily the longest common subsequence. Adjacent blocks collapse into one equal
+//! run.
+
 use std::collections::HashMap;
 use std::hash::Hash;
 

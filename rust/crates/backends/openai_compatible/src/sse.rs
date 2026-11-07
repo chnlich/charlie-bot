@@ -47,7 +47,7 @@ impl LineFramer {
   }
 }
 
-/// The event named `event`, with a compact JSON data field whose first member is `type`: the map inserts `type`
+/// The event named `event`, with a compact JSON data field whose first member is `type`. The map inserts `type`
 /// before the event's own members, and the workspace's `preserve_order` feature keeps that insertion order.
 pub fn sse_event(event: &str, data: &Value) -> Event {
   let mut members = Map::new();

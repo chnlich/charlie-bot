@@ -25,7 +25,7 @@ use tokio::process::{Child, Command};
 use crate::backend_availability::{self, BackendAvailability};
 use charliebot_store::metadata::UtcDateTime;
 
-/// Error substrings that mark a backend as out of quota.
+/// Error substrings that mark a backend as out of quota; the aigw gateway's `402 Insufficient Balance` text is one.
 pub const QUOTA_ERROR_PATTERNS: &[&str] = &[
   "quota exhausted",
   "quota exceeded",
@@ -46,6 +46,7 @@ pub const QUOTA_ERROR_PATTERNS: &[&str] = &[
   "out of token",
   "out-of-token",
   "insufficient tokens",
+  "insufficient balance",
   "tokens exhausted",
   "quota",
   "rate limit",
@@ -789,6 +790,7 @@ mod tests {
       "Disk quota exceeded",
       "rate limit reached for this key",
       "HTTP 429 Too Many Requests",
+      "API Error: 402 Insufficient Balance",
     ] {
       assert!(is_quota_error(text), "{text}");
     }

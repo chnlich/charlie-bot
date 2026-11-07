@@ -669,6 +669,7 @@ mod tests {
       let Ok(Ok((stream, _))) = tokio::time::timeout(Duration::from_secs(3), backend_listener.accept()).await else {
         return;
       };
+      stream.set_nodelay(true).expect("disable Nagle on the fake backend socket");
       let mut socket = accept_async(stream).await.expect("accept the fake backend connection");
       provider_connected_tx.send(()).expect("relay test waits for the provider connection");
       let Some(Ok(ServerMessage::Text(_setup))) = socket.next().await else {
@@ -746,7 +747,11 @@ mod tests {
   async fn browser_socket(
     address: std::net::SocketAddr,
   ) -> WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
-    let (socket, _) = connect_async(format!("ws://{address}/ws")).await.expect("connect browser to loopback relay");
+    let (mut socket, _) = connect_async(format!("ws://{address}/ws")).await.expect("connect browser to loopback relay");
+    let tokio_tungstenite::MaybeTlsStream::Plain(stream) = socket.get_mut() else {
+      panic!("the loopback browser socket uses plain TCP");
+    };
+    stream.set_nodelay(true).expect("disable Nagle on the browser socket");
     socket
   }
 

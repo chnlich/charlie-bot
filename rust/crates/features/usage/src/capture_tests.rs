@@ -1324,7 +1324,8 @@ fn capture_runs_second_capture_skips_by_stat_and_recaptures_an_append() {
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 0); // the stat pair alone decides the skip
 
   let mut appended = fs::OpenOptions::new().append(true).open(&log).unwrap();
-  writeln!(appended, r#"{"type": "result", "usage": {"input_tokens": 200, "cached_tokens": 10, "output_tokens": 9}}"#)
+  appended
+    .write_all(b"{\"type\": \"result\", \"usage\": {\"input_tokens\": 200, \"cached_tokens\": 10, \"output_tokens\": 9}}\n")
     .unwrap();
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1); // the append moved the stat: re-parsed
   let rows = page_rows(&mut ledger);

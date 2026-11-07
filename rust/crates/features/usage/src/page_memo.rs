@@ -122,7 +122,6 @@ mod tests {
   use super::*;
   use charliebot_core::config::{self, ConfigSchema};
   use crate::ledger::default_ledger_path;
-  use crate::test_support::registry;
 
   /// One page body per ledger version and input set: a repeat view builds nothing, and a capture's commit or a changed
   /// input builds the next body.

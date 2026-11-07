@@ -1486,7 +1486,6 @@ mod tests {
   use super::*;
   use crate::store::test_support::make_test_store;
   use serde_json::json;
-  use std::collections::BTreeSet;
   use std::sync::{Mutex, mpsc};
   use std::time::Duration;
 

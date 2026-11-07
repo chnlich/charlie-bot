@@ -154,10 +154,10 @@ impl Home {
     if matches!(packages, PackageSet::Full) {
       registry.register_package("tests.origins", register_origins).expect("the origin slots register");
       registry.register_package("tests.plans", register_plans).expect("the plan registry reader registers");
-      registry
-        .register_package("tests.derived_waiting", register_derived_waiting)
-        .expect("the derived Waiting on you reader registers");
     }
+    registry
+      .register_package("tests.derived_waiting", register_derived_waiting)
+      .expect("the derived Waiting on you reader registers");
     let registry = Arc::new(registry);
     let mut loaded = registry.load_config(dir.path()).expect("an empty home loads with the defaults");
     // Task creation takes the first configured backend when a create names none.

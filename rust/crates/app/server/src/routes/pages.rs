@@ -251,8 +251,14 @@ fn chat_page(
       return Ok(PageListing::Redirect(first));
     }
     let page = listing::active_page_rows(&state.features.store, &state.features.registry)?;
-    listing::active_page_json_text(&state.features.store, &page, clear_unread.as_deref(), &PAGE_ROWS_MEMO)
-      .map(PageListing::Text)
+    listing::active_page_json_text(
+      &state.features.store,
+      &page,
+      clear_unread.as_deref(),
+      session.as_deref(),
+      &PAGE_ROWS_MEMO,
+    )
+    .map(PageListing::Text)
   })();
   let initial_sessions_json = match listing_result {
     Ok(PageListing::Redirect(session_id)) => return Ok(responses::redirect(&format!("/?session={session_id}"))),

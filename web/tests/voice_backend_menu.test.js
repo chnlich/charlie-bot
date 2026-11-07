@@ -84,11 +84,11 @@ function buildHarness({stored = null, defaultBackend = 'batch', backends = BACKE
   vm.createContext(sandbox);
   vm.runInContext(readPackageStatic('features', 'voice', 'voice-input.js'), sandbox, {filename: 'voice-input.js'});
 
-  // Open the menu and hand back its backend entry rows (title row first, the
-  // Recent recordings row last).
+  // Open the menu and hand back its backend entry rows (title row first, then
+  // one row per backend).
   sandbox.toggleVoiceBackendMenu();
   const menu = micGroup.children[0];
-  const rows = menu.children.slice(1, -1);
+  const rows = menu.children.slice(1);
   return {sandbox, storage, voiceBtn, overflow, menu, rows};
 }
 
@@ -187,16 +187,14 @@ test('the backend menu moves right when right alignment would cross the left scr
   assert.ok(rect.right <= 312, `the menu's right edge ${rect.right} crosses the right screen edge`);
 });
 
-test('the menu and the ⋯ menu carry the Recent recordings entry that opens the page', () => {
-  const {sandbox, overflow, menu} = buildHarness();
-  const row = menu.children[menu.children.length - 1];
-  assert.equal(row.textContent, 'Recent recordings');
-
-  const entry = overflow.children.find((child) => child.id === 'voice-recordings-menu-entry');
-  assert.equal(entry.textContent, 'Recent recordings');
-
-  row.onclick();
-  assert.equal(sandbox.window.location.href, '/voice-recordings');
-  entry.onclick();
-  assert.equal(sandbox.window.location.href, '/voice-recordings');
+test('neither the backend menu nor the ⋯ menu carries a Recent recordings entry', () => {
+  const {overflow, menu} = buildHarness();
+  for (const child of menu.children) {
+    assert.notEqual(child.id, 'voice-recordings-menu-entry');
+    assert.notEqual(child.textContent, 'Recent recordings');
+  }
+  for (const child of overflow.children) {
+    assert.notEqual(child.id, 'voice-recordings-menu-entry');
+    assert.notEqual(child.textContent, 'Recent recordings');
+  }
 });

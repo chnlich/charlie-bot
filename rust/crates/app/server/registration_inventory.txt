@@ -116,6 +116,7 @@ template global	features.voice	voice_default_backend
 home_cards	-	Host login authorization
 home_cards	-	Diff viewer
 home_cards	-	Token usage by model
+home_cards	-	Recent recordings
 home_cards	-	File browser
 scheduled handler	features.backup	backup
 scheduled handler	features.disk_sweep	disk_sweep

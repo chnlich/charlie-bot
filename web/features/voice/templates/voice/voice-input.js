@@ -86,10 +86,6 @@ const VOICE_MENU_CHECK_CLASS = 'w-4 shrink-0 text-green-400';
 // instead; it opens the same menu the caret does.
 const VOICE_OVERFLOW_MENU_ID = 'overflow-menu';
 const VOICE_OVERFLOW_ENTRY_ID = 'voice-backend-menu-entry';
-// The page that lists the recent voice recordings across every session; the
-// backend menu and the phone ⋯ menu both carry the entry that opens it.
-const VOICE_RECORDINGS_URL = '/voice-recordings';
-const VOICE_RECORDINGS_ENTRY_ID = 'voice-recordings-menu-entry';
 
 const VOICE_WORKLET_SOURCE = `
 class VoiceCaptureProcessor extends AudioWorkletProcessor {
@@ -219,12 +215,6 @@ function ensureVoiceBackendMenu() {
     return {entry, row, check};
   });
   caret.parentElement.appendChild(menu);
-  const recordings = document.createElement('button');
-  recordings.type = 'button';
-  recordings.className = VOICE_MENU_ITEM_CLASS + VOICE_MENU_ITEM_ENABLED_CLASS;
-  recordings.textContent = 'Recent recordings';
-  recordings.onclick = openVoiceRecordings;
-  menu.appendChild(recordings);
   voiceMenu = menu;
   renderVoiceBackendMenu();
   return menu;
@@ -258,10 +248,9 @@ function toggleVoiceBackendMenu() {
   else closeVoiceBackendMenu();
 }
 
-// The composer's ⋯ menu entries, created by this package so the core template
-// names nothing it defines. Opening the backend entry from the ⋯ menu closes
-// the ⋯ menu first; both entries drive the one backend menu. The recordings
-// entry opens the Recent recordings page directly.
+// The composer's ⋯ menu entry, created by this package so the core template
+// names nothing it defines. Opening it from the ⋯ menu closes the ⋯ menu
+// first; it drives the one backend menu.
 function ensureVoiceBackendEntry() {
   const overflow = document.getElementById(VOICE_OVERFLOW_MENU_ID);
   if (!overflow || document.getElementById(VOICE_OVERFLOW_ENTRY_ID)) return;
@@ -271,18 +260,6 @@ function ensureVoiceBackendEntry() {
   entry.textContent = 'Voice backend';
   entry.onclick = openVoiceBackendMenuFromOverflow;
   overflow.appendChild(entry);
-  const recordings = document.createElement('button');
-  recordings.type = 'button';
-  recordings.id = VOICE_RECORDINGS_ENTRY_ID;
-  recordings.textContent = 'Recent recordings';
-  recordings.onclick = openVoiceRecordings;
-  overflow.appendChild(recordings);
-}
-
-// Both menu entries land here: the page replaces this one, and a run caught
-// mid-recording goes through the generic page-leave guard.
-function openVoiceRecordings() {
-  window.location.href = VOICE_RECORDINGS_URL;
 }
 
 function openVoiceBackendMenuFromOverflow() {

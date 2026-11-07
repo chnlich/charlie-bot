@@ -20,6 +20,7 @@ pub use file::transcribe_file;
 use std::sync::Arc;
 
 use charliebot_core::event_types;
+use charliebot_registry::pages::HomeCard;
 use charliebot_registry::turn::TurnContribution;
 use charliebot_registry::{Registry, RegistryError};
 use charliebot_store::metadata::SessionMetadata;
@@ -35,7 +36,12 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.template_global("voice_backends", config::voice_backends)?;
   registry.template_global("voice_default_backend", config::voice_default_backend)?;
   registry.config_section(config::section())?;
-  registry.config_check("check_default_backend", config::check_default_backend)
+  registry.config_check("check_default_backend", config::check_default_backend)?;
+  registry.home_card(HomeCard {
+    name: "Recent recordings",
+    url: "/voice-recordings",
+    description: "Recent voice recordings across every session, playable, with each run's startup report and failure.",
+  })
 }
 
 struct VoiceTurnContribution;
@@ -64,6 +70,18 @@ mod tests {
     for phase in [charliebot_registry::wiring::Phase::Early, charliebot_registry::wiring::Phase::Ready] {
       assert!(registry.services_in(phase).iter().all(|service| service.name() != "speech"));
     }
+  }
+
+  #[test]
+  fn register_lists_the_recent_recordings_home_card() {
+    let mut registry = Registry::new();
+
+    registry.register_package("features.voice", register).expect("register voice");
+
+    let cards = registry.home_cards();
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].name, "Recent recordings");
+    assert_eq!(cards[0].url, "/voice-recordings");
   }
 
   #[test]

@@ -237,4 +237,16 @@ jobs:
 
       - name: Format
         working-directory: rust
-        run: cargo fmt --check
+        run: cargo fmt --all
+
+      - name: Save rustfmt changes
+        if: always()
+        run: git diff --binary -- rust > rustfmt.patch
+
+      - name: Upload rustfmt changes
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rustfmt-changes
+          path: rustfmt.patch
+          if-no-files-found: error

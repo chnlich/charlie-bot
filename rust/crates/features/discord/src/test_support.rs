@@ -249,7 +249,6 @@ pub struct Home {
 #[derive(Clone, Copy)]
 enum ListenerRuntime {
   Full,
-  TriggerManagerOnly,
   None,
 }
 
@@ -262,11 +261,6 @@ impl Home {
   /// A home for listener cases with no followed sessions or task dispatch.
   pub async fn new_without_thread_runtime(token: bool) -> Self {
     Self::create_home(token, ListenerRuntime::None).await
-  }
-
-  /// A home for listener backfill cases that need triggers but do not dispatch tasks.
-  pub async fn new_with_trigger_manager(token: bool) -> Self {
-    Self::create_home(token, ListenerRuntime::TriggerManagerOnly).await
   }
 
   async fn create_home(token: bool, runtime: ListenerRuntime) -> Self {
@@ -316,7 +310,7 @@ impl Home {
     if matches!(runtime, ListenerRuntime::Full) {
       charliebot_chat_threads::test_support::install_test_dispatcher(&features);
     }
-    if !matches!(runtime, ListenerRuntime::None) {
+    if matches!(runtime, ListenerRuntime::Full) {
       features
         .startup
         .insert(Arc::new(charliebot_triggers::triggers::TriggerManager::new(Arc::clone(&features))))

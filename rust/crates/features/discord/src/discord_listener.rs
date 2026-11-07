@@ -536,6 +536,38 @@ enum ConnectionExit {
   Dropped { error: String, saw_ready: bool },
 }
 
+struct HeartbeatSchedule {
+  interval: Duration,
+  deadline: Instant,
+  acknowledged: bool,
+}
+
+impl HeartbeatSchedule {
+  fn new(interval: Duration, deadline: Instant) -> Self {
+    Self { interval, deadline, acknowledged: true }
+  }
+
+  fn deadline(&self) -> Instant {
+    self.deadline
+  }
+
+  fn begin(&mut self) -> bool {
+    if !self.acknowledged {
+      return false;
+    }
+    self.acknowledged = false;
+    true
+  }
+
+  fn sent_at(&mut self, now: Instant) {
+    self.deadline = now + self.interval;
+  }
+
+  fn acknowledge(&mut self) {
+    self.acknowledged = true;
+  }
+}
+
 async fn run_connection(
   sender: &Sender,
   mut receiver: Receiver,
@@ -556,9 +588,8 @@ async fn run_connection(
     .and_then(Value::as_u64)
     .context("Discord HELLO has no integer heartbeat_interval")?;
   let interval = Duration::from_millis(interval_ms);
-  let mut next_heartbeat = Instant::now() + heartbeat_delay(interval)?;
+  let mut heartbeat = HeartbeatSchedule::new(interval, Instant::now() + heartbeat_delay(interval)?);
   let mut last_sequence = Value::Null;
-  let mut acked = true;
   let mut saw_ready = false;
   let mut bot_user_id = String::new();
 
@@ -568,8 +599,8 @@ async fn run_connection(
 
   loop {
     tokio::select! {
-      _ = tokio::time::sleep_until(next_heartbeat) => {
-        if !acked {
+      _ = tokio::time::sleep_until(heartbeat.deadline()) => {
+        if !heartbeat.begin() {
           let close = WsMessage::Close(Some(CloseFrame { code: 4000, reason: String::new() }));
           if let Err(error) = sender.send(close).await {
             return closed_exit(error, saw_ready);
@@ -583,7 +614,7 @@ async fn run_connection(
         if let Err(error) = sender.send(WsMessage::Text(json!({"op": 1, "d": last_sequence}).to_string())).await {
         return closed_exit(error, saw_ready);
         }
-        next_heartbeat = Instant::now() + interval;
+        heartbeat.sent_at(Instant::now());
       }
       incoming = receive_json(&mut receiver, saw_ready) => {
         let payload = match incoming? {
@@ -599,7 +630,7 @@ async fn run_connection(
           return closed_exit(error, saw_ready);
             }
           }
-          Some(11) => acked = true,
+          Some(11) => heartbeat.acknowledge(),
           Some(7 | 9) => {
             let op = payload["op"].as_u64().expect("the reconnect op was matched");
             return Ok(ConnectionExit::Dropped { error: format!("gateway op {op}"), saw_ready });

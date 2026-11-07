@@ -85,7 +85,40 @@ function updateGroupLimitDom(key, expanded) {
 function toggleSessionGroupLimit(key) {
   const expanded = !isGroupLimitExpanded(SESSION_GROUP_LIMIT_STORAGE_KEY, key);
   setGroupLimitExpanded(SESSION_GROUP_LIMIT_STORAGE_KEY, key, expanded);
+  if (expanded && lastGroupedRenderArgs && lastGroupedRenderArgs.listing?.partial) {
+    loadFullListing(key);
+    return;
+  }
   updateGroupLimitDom(key, expanded);
+}
+
+// The page carries only the rows the first screen paints, so a group's hidden rows arrive with the full listing. The
+// reader's "Show all" fetches it and repaints the list with the group expanded.
+function loadFullListing(key) {
+  const button = Array.from(document.querySelectorAll('.session-group-limit-toggle'))
+    .find(btn => btn.dataset.sgroupLimitToggleKey === key);
+  if (button) {
+    button.textContent = 'Loading…';
+    button.disabled = true;
+  }
+  fetch('/api/sessions/?compact=1')
+    .then(res => {
+      if (!res.ok) throw new Error(`Listing fetch failed: ${res.status}`);
+      return res.json();
+    })
+    .then(payload => {
+      // A view the reader left while the fetch was in flight takes no rows: its own load paints it.
+      if (currentFilter !== 'all' || searchListPainted) return;
+      renderSessionList(Sidebar.expandSessionColumns(payload), 'all',
+        {workspaceBadges: lastGroupedRenderArgs ? lastGroupedRenderArgs.workspaceBadges : ''});
+    })
+    .catch(err => {
+      console.error('Listing fetch failed:', err);
+      if (button && button.isConnected) {
+        button.textContent = 'Show all';
+        button.disabled = false;
+      }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -314,7 +347,8 @@ let lastGroupedRenderArgs = null;
 function paintWorkspaceBadges(workspaceBadges) {
   if (currentFilter !== 'all' || searchListPainted) return;
   if (!lastGroupedRenderArgs || lastGroupedRenderArgs.filter !== 'all') return;
-  renderGroupedSessionList(lastGroupedRenderArgs.sessions, 'all', {workspaceBadges});
+  renderGroupedSessionList(lastGroupedRenderArgs.sessions, 'all',
+    {workspaceBadges, listing: lastGroupedRenderArgs.listing});
 }
 // Whether the last renderSessionList call painted the search overlay. The
 // search flow never assigns currentFilter, so this marker — not the filter
@@ -326,7 +360,8 @@ let searchListPainted = false;
 // ---------------------------------------------------------------------------
 function renderGroupedSessionList(sessions, filter, options = {}) {
   const nav = options.container || document.getElementById('session-list');
-  lastGroupedRenderArgs = {sessions, filter, workspaceBadges: options.workspaceBadges || ''};
+  const listing = options.listing || null;
+  lastGroupedRenderArgs = {sessions, filter, workspaceBadges: options.workspaceBadges || '', listing};
   if (!sessions.length) {
     nav.innerHTML = (options.workspaceBadges || '') + renderEmptyNote('No sessions yet');
     return;
@@ -411,6 +446,13 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
         childrenOf
       );
     }).join('');
+    // A partial listing carries only the rows the preview paints, so the group's hidden rows have no markup to
+    // reveal. The toggle stands after the rows it fetches, and the click loads the full listing.
+    const groupRowCount = countTreeRows(groupSessions, childrenOf);
+    const groupCount = listing && listing.counts && Object.prototype.hasOwnProperty.call(listing.counts, key)
+      ? listing.counts[key]
+      : groupRowCount;
+    const fetchesMore = groupCount > groupRowCount;
 
     // The header row sits on slate-850. The count is 12 px text there, so it takes slate-400 (6.3:1);
     // slate-500 holds 3.4:1, under the 4.5:1 floor. The chevron and the hover actions are icons, which
@@ -424,10 +466,11 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
         </svg>
         <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">${escapeHtml(label)}</span>
         ${groupActions}
-        <span class="text-xs text-slate-400 ml-auto">${countTreeRows(groupSessions, childrenOf)}</span>
+        <span class="text-xs text-slate-400 ml-auto">${groupCount}</span>
       </div>
       <div class="session-group-items ${isCollapsed ? 'hidden' : ''}" data-sgroup-items="${safeKey}">
         ${groupItemsHtml}
+        ${listing && listing.partial && fetchesMore ? renderGroupLimitToggle(key, isLimitExpanded) : ''}
       </div>
     </div>`;
   }
@@ -747,6 +790,89 @@ function renderSessionItem(s, filter, options = {}) {
   });
 }
 
+// The base64url alphabet: a UUID session id travels as its 16 bytes in this alphabet.
+const UUID_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+// The bytes a base64url text carries.
+function decodeBase64Url(text) {
+  let buffer = 0;
+  let bits = 0;
+  const bytes = [];
+  for (const character of text) {
+    const index = UUID_ALPHABET.indexOf(character);
+    if (index < 0) throw new Error('Encoded session id character ' + character);
+    buffer = (buffer << 6) | index;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((buffer >> bits) & 0xff);
+    }
+  }
+  return bytes;
+}
+
+// The session id 16 bytes spell in the canonical UUID form the store and the routes name it by.
+function sessionIdOf(bytes) {
+  if (bytes.length !== 16) throw new Error('Encoded session id of ' + bytes.length + ' bytes');
+  const hex = bytes.map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' +
+    hex.slice(16, 20) + '-' + hex.slice(20);
+}
+
+// The session id one `uuid-b64` cell carries: 22 base64url characters that encode its 16 bytes, or a `~` id as
+// its text.
+function expandSessionId(cell) {
+  if (cell[0] === '~') return cell.slice(1);
+  if (cell.length !== 22) throw new Error('Encoded session id of ' + cell.length + ' characters');
+  return sessionIdOf(decodeBase64Url(cell));
+}
+
+// The session ids one `uuid-b64` column carries. A string holds every id's 16 bytes in row order. An array holds one
+// cell per row, which is how a home whose ids are not all canonical UUIDs travels.
+function expandSessionIds(values, count) {
+  if (Array.isArray(values)) return values.map(value => (value == null ? null : expandSessionId(value)));
+  const bytes = decodeBase64Url(values);
+  if (bytes.length !== count * 16) throw new Error('Encoded session id blob of ' + bytes.length + ' bytes');
+  return Array.from({length: count}, (_, index) => sessionIdOf(bytes.slice(index * 16, (index + 1) * 16)));
+}
+
+// The page carries the sidebar rows as columns: one array per field, in row order, with null where a row leaves the
+// field out. The page declares under `$encoded` the columns whose cells are not their field's value. A `uuid-b64`
+// column holds the session ids' 16 bytes in base64url. A `delta` column holds the first value as it stands and every
+// later value as its difference from the row before. Expanding the columns once here gives every sidebar view
+// the row objects it reads.
+function expandSessionColumns(columns) {
+  const encoding = columns.$encoded || {};
+  // Keys under `$` describe the listing rather than its rows: `$encoded` names the column encodings, and `$screen`
+  // names the part of the sidebar the page carries.
+  const fields = Object.keys(columns).filter(field => !field.startsWith('$'));
+  const first = fields.length ? columns[fields[0]] : [];
+  // The `id` column's string form carries 16 bytes per row, and base64url carries 3 bytes in 4 characters.
+  const count = Array.isArray(first) ? first.length : Math.floor(first.length * 3 / 4 / 16);
+  const rows = Array.from({length: count}, () => ({}));
+  fields.forEach(field => {
+    const values = columns[field];
+    const kind = encoding[field];
+    if (kind === 'uuid-b64') {
+      expandSessionIds(values, count).forEach((id, index) => {
+        if (id != null) rows[index][field] = id;
+      });
+      return;
+    }
+    let running = 0;
+    for (let i = 0; i < count; i++) {
+      let value = values[i];
+      if (value == null) continue;
+      if (kind === 'delta') {
+        running += value;
+        value = running;
+      }
+      rows[i][field] = value;
+    }
+  });
+  return rows;
+}
+
 function renderSessionList(sessions, filter, options = {}) {
   searchListPainted = (filter === 'search');
   // The grouped paints (Workspace and Later) nest rows and record their tree
@@ -814,7 +940,7 @@ function removeSessionFromRenderedList(sessionId) {
   renderGroupedSessionList(
       lastGroupedRenderArgs.sessions.filter(s => !doomed.has(s.id)),
       lastGroupedRenderArgs.filter,
-      {workspaceBadges: lastGroupedRenderArgs.workspaceBadges});
+      {workspaceBadges: lastGroupedRenderArgs.workspaceBadges, listing: lastGroupedRenderArgs.listing});
   return true;
 }
 
@@ -828,7 +954,7 @@ function mergeRowsIntoRenderedList(rows, goneIds) {
   goneIds.forEach(id => merged.delete(id));
   const sessions = Array.from(merged.values()).sort((a, b) => sessionUpdatedMs(b) - sessionUpdatedMs(a));
   renderGroupedSessionList(sessions, lastGroupedRenderArgs.filter,
-      {workspaceBadges: lastGroupedRenderArgs.workspaceBadges});
+      {workspaceBadges: lastGroupedRenderArgs.workspaceBadges, listing: lastGroupedRenderArgs.listing});
   return true;
 }
 
@@ -864,6 +990,7 @@ const SIDEBAR_ONLY = {
   expandTreeNode,
   expandSessionGroup,
   renderGroupedSessionList,
+  expandSessionColumns,
 };
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
 

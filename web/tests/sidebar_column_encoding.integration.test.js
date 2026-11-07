@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// The page's sidebar column encodings (filters.js): the page carries the
+// The page's sidebar column encodings (groups.js): the page carries the
 // sidebar rows as one array per field and declares, under `$encoded`, the two
 // columns whose cells are not their field's value. A `uuid-b64` column holds
 // the session ids' 16 bytes in base64url — as one string in row order, or as one
@@ -36,6 +36,17 @@ test('the declared encodings expand to the row values the sidebar reads', () => 
     {backend: 'mock-backend', id: UUID, name: 'first', profile: 'manager', updated_at: 29566074},
     {backend: 'mock-backend', id: 'imported-chat', name: 'second', updated_at: 29566075},
   ]);
+});
+
+test('a listing key the page declares about itself adds no row field', () => {
+  const {context} = buildSidebarIndicatorContext(['x']);
+  const rows = context.Sidebar.expandSessionColumns({
+    $screen: {partial: true, counts: {'': 7}},
+    id: ['plain-id'],
+    updated_at: [1],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(rows)), [{id: 'plain-id', updated_at: 1}]);
 });
 
 test('a column the page declares no encoding for expands as its value', () => {

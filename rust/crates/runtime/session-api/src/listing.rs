@@ -410,6 +410,8 @@ struct WholePageText {
   source: PageTextSource,
   inputs: Vec<RowInputs>,
   clear_unread: Option<String>,
+  /// The session the text's first screen kept visible, which picks the rows the text carries.
+  active: Option<String>,
   text: Arc<String>,
 }
 
@@ -485,13 +487,44 @@ impl PageRowsMemo {
 ///
 /// `clear_unread` names the active session. Its row renders with `has_unread` false and is left out of the memo, so
 /// a later request that names another active session does not serve the marked row.
+///
+/// `active` names the session the page shows; the text carries the rows the sidebar paints before the reader expands
+/// a group ([`PageFirstScreen`]), and `active`'s row and subtree are always among them.
 pub fn active_page_json_text(
   store: &Store,
   page: &PageRows,
   clear_unread: Option<&str>,
+  active: Option<&str>,
   memo: &PageRowsMemo,
 ) -> StoreResult<Arc<String>> {
-  page_json_text(store, page, clear_unread, memo, PAGE_PROJECTION, RowSchema::Page)
+  page_json_text(
+    store,
+    page,
+    clear_unread,
+    PageRowsScope::FirstScreen { active },
+    memo,
+    PAGE_PROJECTION,
+    RowSchema::Page,
+  )
+}
+
+/// Which rows a page's column text carries.
+#[derive(Clone, Copy)]
+pub(crate) enum PageRowsScope<'a> {
+  /// Every row of the corpus, as the listing routes answer.
+  EveryRow,
+  /// The rows the chat page's sidebar paints before the reader expands a group ([`PageFirstScreen`]).
+  FirstScreen { active: Option<&'a str> },
+}
+
+impl<'a> PageRowsScope<'a> {
+  /// The open session whose row the first screen keeps visible.
+  fn active(&self) -> Option<&'a str> {
+    match self {
+      Self::EveryRow => None,
+      Self::FirstScreen { active } => *active,
+    }
+  }
 }
 
 /// Render one row projection of the sidebar corpus as its column text.
@@ -502,25 +535,36 @@ pub(crate) fn page_json_text(
   store: &Store,
   page: &PageRows,
   clear_unread: Option<&str>,
+  scope: PageRowsScope<'_>,
   memo: &PageRowsMemo,
   projection: SidebarProjection,
   schema: RowSchema,
 ) -> StoreResult<Arc<String>> {
   // The corpus check answers the common request before it walks every row's inputs. It proves every input the text
   // reads still holds, so the text it returns is the text a rebuild would render.
+  let active = scope.active();
   {
     let mut state = memo.state.lock().expect("the page row memo mutex is not poisoned");
     if let Some(whole) = &mut state.whole
       && whole.clear_unread.as_deref() == clear_unread
+      && whole.active.as_deref() == active
       && whole.source.holds(page)
     {
       return Ok(Arc::clone(&whole.text));
     }
   }
-  let inputs = row_inputs(store, page.rows.as_slice(), &page.derived, &page.sequence_fields, projection)?;
+  let screen = match scope {
+    PageRowsScope::EveryRow => None,
+    PageRowsScope::FirstScreen { active } => Some(PageFirstScreen::of(page, active)),
+  };
+  let kept_rows: Option<Vec<Arc<SessionMetadata>>> =
+    screen.as_ref().map(|screen| screen.kept.iter().map(|&index| Arc::clone(&page.rows[index])).collect());
+  let selected_rows = kept_rows.as_deref().unwrap_or(page.rows.as_slice());
+  let inputs = row_inputs(store, selected_rows, &page.derived, &page.sequence_fields, projection)?;
   let mut state = memo.state.lock().expect("the page row memo mutex is not poisoned");
   if let Some(whole) = &state.whole
     && whole.clear_unread.as_deref() == clear_unread
+    && whole.active.as_deref() == active
     && whole.inputs == inputs
   {
     return Ok(Arc::clone(&whole.text));
@@ -556,11 +600,12 @@ pub(crate) fn page_json_text(
     }
     rows.push(row_text);
   }
-  let text = Arc::new(page_columns_text(&rows));
+  let text = Arc::new(page_columns_text(&rows, screen.as_ref()));
   state.whole = Some(WholePageText {
     source: PageTextSource::of(page),
     inputs,
     clear_unread: clear_unread.map(str::to_string),
+    active: active.map(str::to_string),
     text: Arc::clone(&text),
   });
   Ok(text)
@@ -608,6 +653,103 @@ const DELTA_ENCODING: &str = "delta";
 /// The page's `id` field, whose UUIDs travel in [`UUID_ENCODING`].
 const ID_FIELD: &str = "id";
 
+/// The key under which the page declares which rows its listing covers.
+const FIRST_SCREEN_KEY: &str = "$screen";
+
+/// The roots the sidebar shows per group before the reader asks for the rest.
+///
+/// The sidebar that renders these rows holds the same limit as `GROUP_SESSION_PREVIEW_LIMIT` in
+/// `web/static/js/sidebar/groups.js`. The server picks the rows the page carries, so both sides hold the number: the
+/// sidebar hides the roots past it, and the page carries no others. A drift costs a row of preview, never a row.
+const SIDEBAR_PREVIEW_LIMIT: usize = 5;
+
+/// The rows the chat page's sidebar paints before the reader expands a group, and the rows each group holds.
+///
+/// The sidebar groups its rows by the session's `group` and paints the first [`SIDEBAR_PREVIEW_LIMIT`] roots of
+/// each group with their descendants. A root with a bound schedule task always shows, and the open session's root
+/// and subtree always show. Every other row is hidden behind the group's "Show all" toggle, so the page does not
+/// carry it: the reader's expansion fetches the full listing.
+///
+/// A row's group is its root's `group`, so a group's count is the sum of its roots' subtree sizes.
+pub(crate) struct PageFirstScreen {
+  /// Indices into the page's rows of the rows the first screen paints, in listing order.
+  kept: Vec<usize>,
+  /// The row count of each group's trees, keyed by the group key (the empty string for the keyless bucket).
+  counts: std::collections::BTreeMap<String, usize>,
+  /// Whether the page leaves rows out, which the sidebar reads as "Show all fetches the rest".
+  partial: bool,
+}
+
+impl PageFirstScreen {
+  fn of(page: &PageRows, active: Option<&str>) -> Self {
+    let rows = page.rows();
+    let index_of: HashMap<&str, usize> = rows.iter().enumerate().map(|(index, row)| (row.id.as_str(), index)).collect();
+    // A row nests under its `task_parent_id` when the page lists that parent, as the sidebar's tree does.
+    let parent: Vec<Option<usize>> =
+      rows.iter().map(|row| row.task_parent_id.as_deref().and_then(|id| index_of.get(id).copied())).collect();
+    let group: Vec<&str> = rows.iter().map(|row| row.group.as_deref().unwrap_or("")).collect();
+    let has_task: Vec<bool> = rows
+      .iter()
+      .map(|row| {
+        page
+          .sequence_fields()
+          .get(row.id.as_str())
+          .and_then(|fields| fields.get(SCHEDULE_TASK))
+          .is_some_and(|value| !is_falsy(value))
+      })
+      .collect();
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); rows.len()];
+    for (index, parent) in parent.iter().enumerate() {
+      if let Some(parent) = parent {
+        children[*parent].push(index);
+      }
+    }
+    let roots: Vec<usize> = (0..rows.len()).filter(|&index| parent[index].is_none()).collect();
+    // Each row belongs to the root its parent chain reaches. A row no root reaches stays unowned, and the sidebar
+    // does not paint it either: its renderer walks out from the roots.
+    let mut root_of: Vec<Option<usize>> = vec![None; rows.len()];
+    let mut root_sizes: HashMap<usize, usize> = HashMap::new();
+    for &root in &roots {
+      let mut size = 0;
+      let mut stack = vec![root];
+      while let Some(node) = stack.pop() {
+        if root_of[node].is_some() {
+          continue;
+        }
+        root_of[node] = Some(root);
+        size += 1;
+        stack.extend(children[node].iter().copied());
+      }
+      root_sizes.insert(root, size);
+    }
+    let active_root = active.and_then(|id| index_of.get(id).copied()).and_then(|node| root_of[node]);
+    let mut group_roots: std::collections::BTreeMap<String, Vec<usize>> = std::collections::BTreeMap::new();
+    for &root in &roots {
+      group_roots.entry(group[root].to_string()).or_default().push(root);
+    }
+    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut kept_roots: Vec<bool> = vec![false; rows.len()];
+    for (key, roots) in &group_roots {
+      let mut rank = 0;
+      let mut total = 0;
+      for &root in roots {
+        total += root_sizes.get(&root).copied().unwrap_or(0);
+        let in_preview = !has_task[root] && rank < SIDEBAR_PREVIEW_LIMIT;
+        if !has_task[root] {
+          rank += 1;
+        }
+        if in_preview || has_task[root] || Some(root) == active_root {
+          kept_roots[root] = true;
+        }
+      }
+      counts.insert(key.clone(), total);
+    }
+    let kept: Vec<usize> =
+      (0..rows.len()).filter(|&index| root_of[index].is_some_and(|root| kept_roots[root])).collect();
+    Self { partial: kept.len() < rows.len(), kept, counts }
+  }
+}
+
 /// The page's row text: one array per field, in row order, holding `null` where a row leaves the field out.
 ///
 /// The page's rows repeat the same field names and value shapes on every row. A gzip deflator finds the repetition
@@ -624,7 +766,7 @@ const ID_FIELD: &str = "id";
 ///
 /// A page row never carries a null value: the falsy fields it keeps are a name and a schedule flag, and
 /// [`drop_falsy_fields`] leaves every other falsy field out before this text is built.
-fn page_columns_text(rows: &[Arc<PageRowText>]) -> String {
+fn page_columns_text(rows: &[Arc<PageRowText>], screen: Option<&PageFirstScreen>) -> String {
   let mut fields: Vec<&str> = Vec::new();
   let mut seen: HashSet<&str> = HashSet::new();
   for row in rows {
@@ -643,6 +785,18 @@ fn page_columns_text(rows: &[Arc<PageRowText>]) -> String {
     (ID_FIELD.to_string(), Value::String(UUID_ENCODING.to_string())),
     (UPDATED_AT.to_string(), Value::String(DELTA_ENCODING.to_string())),
   ]))));
+  if let Some(screen) = screen {
+    text.push(',');
+    text.push_str(&charliebot_compat::jinja::tojson_text(&Value::String(FIRST_SCREEN_KEY.to_string())));
+    text.push(':');
+    text.push_str(&charliebot_compat::jinja::tojson_text(&Value::Object(Map::from_iter([
+      ("partial".to_string(), Value::Bool(screen.partial)),
+      (
+        "counts".to_string(),
+        Value::Object(screen.counts.iter().map(|(key, count)| (key.clone(), Value::from(*count))).collect()),
+      ),
+    ]))));
+  }
   for field in fields {
     text.push(',');
     text.push_str(&charliebot_compat::jinja::tojson_text(&Value::String(field.to_string())));
@@ -968,7 +1122,15 @@ struct CompactListingBody {
 impl CompactListingMemo {
   /// The compact listing for this corpus, gzipped when the request accepts gzip.
   pub fn response(&self, request: &Request<Body>, store: &Store, page: &PageRows) -> Response {
-    let text = match page_json_text(store, page, None, &self.rows, LISTING_PROJECTION, RowSchema::Listing) {
+    let text = match page_json_text(
+      store,
+      page,
+      None,
+      PageRowsScope::EveryRow,
+      &self.rows,
+      LISTING_PROJECTION,
+      RowSchema::Listing,
+    ) {
       Ok(text) => text,
       Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
     };
@@ -1014,7 +1176,15 @@ pub fn row_refresh_text(store: &Store, page: &PageRows, ids: &[String]) -> Store
       .map(|(id, fields)| (id.clone(), fields.clone()))
       .collect(),
   };
-  let columns = page_json_text(store, &subset, None, &PageRowsMemo::default(), LISTING_PROJECTION, RowSchema::Listing)?;
+  let columns = page_json_text(
+    store,
+    &subset,
+    None,
+    PageRowsScope::EveryRow,
+    &PageRowsMemo::default(),
+    LISTING_PROJECTION,
+    RowSchema::Listing,
+  )?;
   let gone = serde_json::to_string(&gone).expect("a list of session ids serializes");
   Ok(format!(r#"{{"sessions":{columns},"gone":{gone}}}"#))
 }
@@ -1231,19 +1401,103 @@ mod tests {
     let memo = PageRowsMemo::default();
 
     let page = active_page_rows(&features.store, &features.registry).unwrap();
-    let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
+    let text = active_page_json_text(&features.store, &page, None, None, &memo).unwrap();
     assert_eq!(page_rows_of(text.as_str()), page_row_values(&features.store, &page, None));
     let rendered = memo.render_calls();
     assert_eq!(rendered, page.rows.len());
 
     let page = active_page_rows(&features.store, &features.registry).unwrap();
-    assert_eq!(active_page_json_text(&features.store, &page, None, &memo).unwrap().as_str(), text.as_str());
+    assert_eq!(active_page_json_text(&features.store, &page, None, None, &memo).unwrap().as_str(), text.as_str());
     assert_eq!(memo.render_calls(), rendered);
 
     let page = active_page_rows(&features.store, &features.registry).unwrap();
-    let active = active_page_json_text(&features.store, &page, Some(&first.id), &memo).unwrap();
+    let active = active_page_json_text(&features.store, &page, Some(&first.id), Some(&first.id), &memo).unwrap();
     assert_eq!(page_rows_of(active.as_str()), page_row_values(&features.store, &page, Some(&first.id)));
     assert_eq!(memo.render_calls(), rendered + 1);
+  }
+
+  /// One synthetic page: the rows in listing order, with the controller row fields the selection reads.
+  fn synthetic_page(rows: Vec<SessionMetadata>, sequence_fields: HashMap<String, Map<String, Value>>) -> PageRows {
+    PageRows {
+      rows: Arc::new(rows.into_iter().map(Arc::new).collect()),
+      derived: Arc::new(DerivedSidebarMap::new()),
+      sequence_fields,
+    }
+  }
+
+  /// One session's metadata, carrying the fields the page's tree and group selection read.
+  fn synthetic_session(id: &str, group: Option<&str>, parent: Option<&str>) -> SessionMetadata {
+    serde_json::from_value(json!({
+      "id": id,
+      "name": id,
+      "profile": "manager",
+      "group": group,
+      "task_parent_id": parent,
+    }))
+    .expect("synthetic session metadata")
+  }
+
+  fn kept_ids<'a>(screen: &PageFirstScreen, page: &'a PageRows) -> Vec<&'a str> {
+    screen.kept.iter().map(|&index| page.rows[index].id.as_str()).collect()
+  }
+
+  /// The page carries the five roots each group paints with their descendants, and each group's whole row count.
+  #[test]
+  fn the_page_carries_the_roots_each_group_paints_and_each_groups_count() {
+    let mut rows: Vec<SessionMetadata> =
+      (1..=6).map(|n| synthetic_session(&format!("grouped-{n}"), Some("g1"), None)).collect();
+    rows.push(synthetic_session("grouped-1-child", Some("g1"), Some("grouped-1")));
+    rows.push(synthetic_session("keyless-1", None, None));
+    let page = synthetic_page(rows, HashMap::new());
+
+    let screen = PageFirstScreen::of(&page, None);
+
+    assert_eq!(
+      kept_ids(&screen, &page),
+      vec!["grouped-1", "grouped-2", "grouped-3", "grouped-4", "grouped-5", "grouped-1-child", "keyless-1"]
+    );
+    assert_eq!(screen.counts.get("g1"), Some(&7));
+    assert_eq!(screen.counts.get(""), Some(&1));
+    assert!(screen.partial);
+  }
+
+  /// A root with a bound schedule task always shows, and so do the open session's root and subtree.
+  #[test]
+  fn a_scheduled_root_and_the_open_sessions_tree_stay_past_the_preview() {
+    let mut rows: Vec<SessionMetadata> =
+      (1..=8).map(|n| synthetic_session(&format!("plain-{n}"), None, None)).collect();
+    rows.push(synthetic_session("plain-8-child", None, Some("plain-8")));
+    let mut scheduled = Map::new();
+    scheduled.insert(SCHEDULE_TASK.to_string(), json!("nightly"));
+    let sequence_fields = HashMap::from([("plain-7".to_string(), scheduled)]);
+    let page = synthetic_page(rows, sequence_fields);
+
+    let screen = PageFirstScreen::of(&page, Some("plain-8"));
+
+    assert_eq!(
+      kept_ids(&screen, &page),
+      vec!["plain-1", "plain-2", "plain-3", "plain-4", "plain-5", "plain-7", "plain-8", "plain-8-child"]
+    );
+    assert_eq!(screen.counts.get(""), Some(&9));
+    assert!(screen.partial);
+  }
+
+  /// A sidebar with nothing hidden carries every row, and its text says the listing is complete.
+  #[test]
+  fn a_sidebar_with_nothing_hidden_carries_every_row_and_says_so() {
+    let rows: Vec<SessionMetadata> = (1..=3).map(|n| synthetic_session(&format!("small-{n}"), None, None)).collect();
+    let page = synthetic_page(rows, HashMap::new());
+
+    let screen = PageFirstScreen::of(&page, None);
+    assert_eq!(kept_ids(&screen, &page), vec!["small-1", "small-2", "small-3"]);
+    assert_eq!(screen.counts.get(""), Some(&3));
+    assert!(!screen.partial);
+
+    let row = Arc::new(PageRowText::of(json!({"id": "small-1", "name": "small-1", "updated_at": 1})));
+    let text = page_columns_text(&[row], Some(&screen));
+    let columns: Value = serde_json::from_str(&text).expect("the page text is JSON");
+    assert_eq!(columns[FIRST_SCREEN_KEY]["partial"], false);
+    assert_eq!(columns[FIRST_SCREEN_KEY]["counts"][""], 3);
   }
 
   /// The compact listing carries the listing projection's columns, so the sidebar's expander restores the rows the
@@ -1357,7 +1611,7 @@ mod tests {
       sequence_fields: HashMap::new(),
     };
 
-    let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
+    let text = active_page_json_text(&features.store, &page, None, None, &memo).unwrap();
     let rows = page_rows_of(text.as_str());
     let row = rows[0].as_object().expect("a page row is an object");
     // The row writer fills these with null, false or zero, so the client would read them as falsy either way.
@@ -1406,7 +1660,7 @@ mod tests {
     let page = page_rows_over(vec![Arc::new(SessionMetadata { round_ratings, ..meta })]);
     let memo = PageRowsMemo::default();
 
-    let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
+    let text = active_page_json_text(&features.store, &page, None, None, &memo).unwrap();
     let rows = page_rows_of(text.as_str());
     assert_eq!(rows[0][ROUND_RATINGS], json!({"round-a": "thumbs_up"}));
   }
@@ -1436,16 +1690,16 @@ mod tests {
     let memo = PageRowsMemo::default();
 
     let page = page_rows_over(vec![Arc::new(meta.clone())]);
-    active_page_json_text(&features.store, &page, None, &memo).unwrap();
+    active_page_json_text(&features.store, &page, None, None, &memo).unwrap();
 
     let renamed = SessionMetadata { name: "renamed while active".to_string(), has_unread: true, ..meta.clone() };
     let changed = page_rows_over(vec![Arc::new(renamed)]);
-    let active_text = active_page_json_text(&features.store, &changed, Some(&meta.id), &memo).unwrap();
+    let active_text = active_page_json_text(&features.store, &changed, Some(&meta.id), Some(&meta.id), &memo).unwrap();
     let active = page_rows_of(active_text.as_str());
     assert_eq!(active[0]["name"], "renamed while active");
     assert!(active[0].get("has_unread").is_none(), "the active row renders without its unread mark");
 
-    let ordinary_text = active_page_json_text(&features.store, &changed, None, &memo).unwrap();
+    let ordinary_text = active_page_json_text(&features.store, &changed, None, None, &memo).unwrap();
     let ordinary = page_rows_of(ordinary_text.as_str());
     assert_eq!(ordinary[0]["name"], "renamed while active");
     assert_eq!(ordinary[0]["has_unread"], true);
@@ -1460,7 +1714,7 @@ mod tests {
     let memo = PageRowsMemo::default();
 
     let page = active_page_rows(&features.store, &features.registry).unwrap();
-    let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
+    let text = active_page_json_text(&features.store, &page, None, None, &memo).unwrap();
     let row_of = |text: &str| -> Value {
       page_rows_of(text).into_iter().find(|row| row["id"] == json!(meta.id)).expect("the created row is in the page")
     };
@@ -1469,7 +1723,7 @@ mod tests {
     features.store.note_run_backend(&meta.id, "synthetic-backend");
 
     let page = active_page_rows(&features.store, &features.registry).unwrap();
-    let text = active_page_json_text(&features.store, &page, None, &memo).unwrap();
+    let text = active_page_json_text(&features.store, &page, None, None, &memo).unwrap();
     assert_eq!(row_of(text.as_str())["run_backend"], "synthetic-backend");
   }
 
@@ -1511,7 +1765,7 @@ mod tests {
     let encodings = columns.get(COLUMN_ENCODING_KEY).and_then(Value::as_object).cloned().unwrap_or_default();
     let count = columns
       .iter()
-      .filter(|(field, _)| field.as_str() != COLUMN_ENCODING_KEY)
+      .filter(|(field, _)| !field.starts_with('$'))
       .map(|(_, cells)| match cells {
         Value::Array(cells) => cells.len(),
         // The `id` column's string form carries one 16-byte id per row.
@@ -1522,7 +1776,7 @@ mod tests {
       .unwrap_or(0);
     let mut rows = vec![Map::new(); count];
     for (field, cells) in columns {
-      if field == COLUMN_ENCODING_KEY {
+      if field.starts_with('$') {
         continue;
       }
       let encoding = encodings.get(&field).and_then(Value::as_str);
@@ -1576,7 +1830,7 @@ mod tests {
       .map(|(index, id)| Arc::new(PageRowText::of(json!({"id": id, "updated_at": 29_566_074 + index as i64}))))
       .collect();
 
-    let text = page_columns_text(&rows);
+    let text = page_columns_text(&rows, None);
     let bytes: Vec<u8> = ids.iter().flat_map(|id| *uuid::Uuid::parse_str(id).unwrap().as_bytes()).collect();
     assert_eq!(
       text,
@@ -1602,7 +1856,7 @@ mod tests {
       .map(|(index, id)| Arc::new(PageRowText::of(json!({"id": id, "updated_at": 29_566_074 + index as i64}))))
       .collect();
 
-    let text = page_columns_text(&rows);
+    let text = page_columns_text(&rows, None);
     assert_eq!(
       text,
       format!(

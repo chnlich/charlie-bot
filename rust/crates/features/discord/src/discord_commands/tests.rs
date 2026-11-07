@@ -445,6 +445,25 @@ async fn reply_refuses_412_while_unread() {
   assert!(home.fake().posts.is_empty());
 }
 
+#[tokio::test]
+async fn reply_posts_after_reading_the_unread_thread() {
+  let home = Home::new_without_thread_runtime(true).await;
+  thread_messages(&home, &[Msg::new(1, "unread follow up")]);
+  home.fake().channels.insert(PARENT.to_string(), Vec::new());
+  let session_id = make_session(&home, None).await;
+  let router = home.router();
+
+  let (read_status, read) = send(router.clone(), "/api/internal/discord/read", json!({"session_id": session_id})).await;
+  assert_eq!(read_status, StatusCode::OK);
+  assert_eq!(read["more_unread"], 0);
+
+  let (status, posted) =
+    send(router, "/api/internal/discord/reply", json!({"session_id": session_id, "text": "the answer"})).await;
+  assert_eq!(status, StatusCode::OK);
+  assert_eq!(posted["posted"], true);
+  assert_eq!(home.fake().posts, [(THREAD.to_string(), "the answer".to_string())]);
+}
+
 /// A guild missing ADD_REACTIONS names it, the intent off reads false, and ok is false.
 ///
 /// The pinned answer for this case names the missing permission and the intent state, so a change in either

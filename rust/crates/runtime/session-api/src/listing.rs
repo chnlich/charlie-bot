@@ -333,6 +333,21 @@ pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreRe
   Ok(PageRows { rows: corpus.rows, index: corpus.index, derived: corpus.derived, sequence_fields })
 }
 
+/// The Workspace page's row corpus and the derived overlay that names it, without the sequence controllers' row fields.
+///
+/// The status poll reads only the row ids and the overlay, and the overlay is the corpus' identity: a rebuild
+/// replaces it whenever a row, an overlay or the order moves. Asking for the rendered page's controller fields here
+/// would sort and clone every id on each poll, so this route reads the corpus alone.
+pub struct PageCorpusRows {
+  pub rows: Arc<Vec<Arc<SessionMetadata>>>,
+  pub derived: Arc<DerivedSidebarMap>,
+}
+
+pub fn page_corpus_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageCorpusRows> {
+  let corpus = page_corpus(store, registry)?;
+  Ok(PageCorpusRows { rows: corpus.rows, derived: corpus.derived })
+}
+
 /// The sidebar corpus with the sequence controller fields of `ids` alone. A row refresh reads this: it merges the
 /// rows it names, so the corpus' other rows need no controller fields.
 pub fn active_page_rows_for(store: &Arc<Store>, registry: &Arc<Registry>, ids: &[String]) -> StoreResult<PageRows> {

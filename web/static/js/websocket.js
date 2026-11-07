@@ -169,7 +169,8 @@ function connectWS() {
     reconnectAttempts = 0;
     // A snapshot: the connect handlers read the same value whether this one or
     // websocket-handlers.js's runs first, and only that one clears the flag.
-    wsConnectHandlers.forEach((handler) => handler({afterNetworkLoss: networkLossPending}));
+    const afterNetworkLoss = networkLossPending;
+    wsConnectHandlers.forEach((handler) => handler({afterNetworkLoss}));
   };
 
   socket.onmessage = (e) => {

@@ -9,8 +9,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use charliebot_core::config::ServerConfig;
+use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::backend::Env;
-use charliebot_registry::context::{FeatureContext, StartupStop};
+use charliebot_registry::context::{FeatureContext, StartupState, StartupStop};
 use futures_util::future::BoxFuture;
 
 use crate::gh_wrapper;
@@ -89,8 +90,15 @@ pub fn agent_base_environment(server_bin_dir: &Path, gh_wrapper_dir: &Path) -> a
 /// the next agent process without a server restart. A config the spawn cannot read fails the spawn, the way the other
 /// spawn-time config reads do.
 pub fn spawn_base_environment(features: &FeatureContext) -> anyhow::Result<AgentBaseEnvironment> {
-  let mut base = features.startup.require::<AgentBaseEnvironment>()?.as_ref().clone();
-  let cfg = features.config.get()?;
+  spawn_base_environment_from(&features.startup, &features.config)
+}
+
+fn spawn_base_environment_from(
+  startup: &StartupState,
+  config: &HotReload<charliebot_core::config::CharlieBotConfig>,
+) -> anyhow::Result<AgentBaseEnvironment> {
+  let mut base = startup.require::<AgentBaseEnvironment>()?.as_ref().clone();
+  let cfg = config.get()?;
   gh_wrapper::apply_token_command(&mut base.values, cfg.github.app_token_command.as_deref());
   Ok(base)
 }
@@ -355,45 +363,6 @@ mod tests {
     );
   }
 
-  /// The feature context of the spawn tests: the real hot-reloaded `config.yaml` of `home` (each `get` re-reads the
-  /// file, as `state::config_cache` builds it for the server), and the startup agent environment the server builds.
-  fn spawn_features(home: &Path, server_bin_dir: &Path, gh_wrapper_dir: &Path) -> Arc<FeatureContext> {
-    use charliebot_core::hot_reload::HotReload;
-    use charliebot_registry::context::StartupState;
-    use charliebot_store::Store;
-
-    let registry = Arc::new(charliebot_registry::Registry::new());
-    let config = {
-      let home = home.to_path_buf();
-      let registry = Arc::clone(&registry);
-      Arc::new(HotReload::new(
-        home.join(charliebot_core::config::CONFIG_FILENAME),
-        "config_reload_failed",
-        Box::new(move || registry.load_config(&home)),
-      ))
-    };
-    let credential_home = home.to_path_buf();
-    let credentials = Arc::new(HotReload::new(
-      home.join(charliebot_core::config::CREDENTIALS_FILENAME),
-      "credentials_reload_failed",
-      Box::new(move || charliebot_core::credentials::load_credentials(&credential_home)),
-    ));
-    let cfg = config.get().expect("the synthetic config loads");
-    let store = Arc::new(
-      Store::new(
-        (*cfg).clone(),
-        registry.metadata_slots(),
-        charliebot_registry::store_hooks::store_hooks(Arc::clone(&registry)),
-      )
-      .expect("the store opens"),
-    );
-    let startup = Arc::new(StartupState::default());
-    startup
-      .insert(agent_base_environment(server_bin_dir, gh_wrapper_dir).expect("the startup agent environment builds"))
-      .expect("the agent base environment inserts");
-    Arc::new(FeatureContext { config, credentials, store, registry, startup })
-  }
-
   /// One hot-reloaded config file read at three spawns: key absent, then added, then changed — no server restart
   /// between them. The startup environment carries no token command; each spawn reads the live config.
   #[test]
@@ -401,12 +370,22 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
     fs::create_dir(&home).unwrap();
-    fs::write(home.join(charliebot_core::config::CONFIG_FILENAME), "").unwrap();
-    let server_bin_dir = server_bin_dir_under(root.path());
-    let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
-    let features = spawn_features(&home, &server_bin_dir, &gh_wrapper_dir);
+    let config_path = home.join(charliebot_core::config::CONFIG_FILENAME);
+    fs::write(&config_path, "").unwrap();
+    let registry = Arc::new(charliebot_registry::Registry::new());
+    let config_home = home.clone();
+    let config_registry = Arc::clone(&registry);
+    let config = HotReload::new(
+      config_path,
+      "config_reload_failed",
+      Box::new(move || config_registry.load_config(&config_home)),
+    );
+    let startup = StartupState::default();
+    startup
+      .insert(AgentBaseEnvironment { values: Env::default() })
+      .expect("the agent base environment inserts");
 
-    let absent = spawn_base_environment(&features).unwrap();
+    let absent = spawn_base_environment_from(&startup, &config).unwrap();
     assert!(!absent.values.contains_key(gh_wrapper::TOKEN_COMMAND_VAR));
 
     fs::write(
@@ -414,7 +393,7 @@ mod tests {
       "github:\n  app_token_command: ~/synthetic/app-token-command\n",
     )
     .unwrap();
-    let added = spawn_base_environment(&features).unwrap();
+    let added = spawn_base_environment_from(&startup, &config).unwrap();
     assert_eq!(
       added.values[gh_wrapper::TOKEN_COMMAND_VAR],
       charliebot_core::paths::expanduser("~/synthetic/app-token-command")
@@ -425,7 +404,7 @@ mod tests {
       "github:\n  app_token_command: ~/synthetic/other-token-command\n",
     )
     .unwrap();
-    let changed = spawn_base_environment(&features).unwrap();
+    let changed = spawn_base_environment_from(&startup, &config).unwrap();
     assert_eq!(
       changed.values[gh_wrapper::TOKEN_COMMAND_VAR],
       charliebot_core::paths::expanduser("~/synthetic/other-token-command")

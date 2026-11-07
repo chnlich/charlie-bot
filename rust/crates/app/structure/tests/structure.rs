@@ -837,8 +837,8 @@ const OWNER_TABLE: &[OwnerRow] = &[
   },
   OwnerRow {
     name: "stdout.log",
-    owner: "runtime/agents",
-    hint: "Use `charliebot_agents::transport::final_stdout::STDOUT_LOG_NAME`.",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::run_records::STDOUT_LOG_NAME`.",
   },
   OwnerRow {
     name: "backend_from_pool",

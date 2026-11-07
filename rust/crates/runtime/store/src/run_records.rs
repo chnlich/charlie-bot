@@ -44,6 +44,7 @@ pub const RUN_METADATA_NAME: &str = METADATA_FILE_NAME;
 // The log-file names live in `run_logs`, which resolves each name to its plain or compressed file; the readers that
 // name a log file import them here.
 pub use crate::run_logs::{RAW_LOG_NAME, RUN_EVENTS_NAME};
+pub const STDOUT_LOG_NAME: &str = "stdout.log";
 pub const STDERR_LOG_NAME: &str = "agent.stderr.log";
 pub const CURSOR_NAME: &str = "agent.raw.cursor";
 pub const RUN_TASK_SPEC_NAME: &str = "task_spec.md";

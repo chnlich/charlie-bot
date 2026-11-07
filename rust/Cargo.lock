@@ -1583,7 +1583,6 @@ dependencies = [
  "anyhow",
  "axum",
  "caseless",
- "charliebot-agents",
  "charliebot-claude-code",
  "charliebot-codex",
  "charliebot-compat",

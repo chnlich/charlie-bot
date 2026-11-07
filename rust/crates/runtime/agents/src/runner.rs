@@ -32,7 +32,7 @@ use crate::transport::spawn::{self, AgentChild, RawStdin, SpawnSetup, SpawnSpec,
 pub const DEFAULT_POST_RESULT_TIMEOUT: Duration = Duration::from_secs(90);
 pub const DEFAULT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(test)]
-const FINAL_STDOUT_LOG_NAME: &str = final_stdout::STDOUT_LOG_NAME;
+const FINAL_STDOUT_LOG_NAME: &str = charliebot_store::run_records::STDOUT_LOG_NAME;
 const DIAGNOSTIC_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Callback invoked after the child identity is pinned and before tail-follow begins.

@@ -466,7 +466,7 @@ mod tests {
   fn a_recovered_capture_finishes_from_the_directory_it_was_launched_with() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join(EXPORT_FILE_NAME), FIXTURE).unwrap();
-    fs::write(root.path().join(final_stdout::STDOUT_LOG_NAME), ANSWER).unwrap();
+    fs::write(root.path().join(charliebot_store::run_records::STDOUT_LOG_NAME), ANSWER).unwrap();
     fs::write(root.path().join(charliebot_store::run_records::STDERR_LOG_NAME), "").unwrap();
     let mut recovered = backend(launch(Some(root.path()), None));
     let outcome = final_stdout::materialize(&mut recovered, root.path(), Some(0)).unwrap();

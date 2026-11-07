@@ -244,7 +244,7 @@ async fn a_failed_summary_keeps_the_paths_and_reports_the_reason() -> anyhow::Re
   let original = wait_for_run(&stack, &session.id).await?;
   handoff::force_summary_failure_for_test(&original.id, "synthetic assembly failure");
   std::fs::write(&release_path, "release")?;
-  let runs = settle(&stack, &session.id).await?;
+  let runs = wait_for_retry_launch(&stack, &session.id).await?;
   handoff::clear_summary_failure_for_test(&original.id);
 
   let retry = retry_of(&runs, &original);

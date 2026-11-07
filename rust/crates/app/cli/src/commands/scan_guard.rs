@@ -28,7 +28,7 @@ use charliebot_store::run_logs::COMPRESSED_SUFFIX;
 use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME, STDERR_LOG_NAME};
 use regex::{Captures, Regex};
 use serde_json::{Value, json};
-use shell::{parse_error, resolve_paths, shell_text, strip_quotes};
+use shell::{needs_path_resolution, parse_error, resolve_paths, shell_text, strip_quotes};
 
 /// A recursive `grep`: `-r`, `-R` or `--recursive` among its options, alone or grouped with other flags. The
 /// command-word patterns match every `grep` and this checks the flag after the match, so the search patterns stay
@@ -187,7 +187,11 @@ fn deny_decision(reason: &str) -> Value {
 /// its relative paths resolved against the hook's cwd, so `cd .. && find .` is the same search as its absolute form.
 fn scan_forms(command: &str, cwd: &str) -> Result<Vec<ScanForm>, String> {
   let shell = shell_text(command);
-  let resolved = resolve_paths(&shell, cwd, store_root_pattern()?);
+  let resolved = if needs_path_resolution(&shell) {
+    resolve_paths(&shell, cwd, store_root_pattern()?)
+  } else {
+    shell.clone()
+  };
   let mut forms = search_forms(&shell)?;
   if resolved != shell {
     for form in search_forms(&resolved)? {
@@ -201,37 +205,50 @@ fn scan_forms(command: &str, cwd: &str) -> Result<Vec<ScanForm>, String> {
 
 fn search_forms(shell: &str) -> Result<Vec<ScanForm>, String> {
   let mut forms = Vec::new();
-  if per_file_process_pattern()?.is_match(shell) && !bounded_metadata_loops(shell)? {
+  if ["for", "while", "xargs", "find"].iter().any(|word| shell.contains(word))
+    && per_file_process_pattern()?.is_match(shell)
+    && !bounded_metadata_loops(shell)?
+  {
     forms.push(ScanForm::PerFileProcess);
   }
-  for captures in rooted_search_pattern()?.captures_iter(shell) {
-    if non_recursive_grep(&captures)? {
-      continue;
-    }
-    let around = groups_text(&captures);
-    let prunes_store = around.contains("-prune") && around.contains(SESSIONS_DIR_NAME);
-    let bounded_depth = depth_limited(&around)?;
-    if !bounded_depth && !prunes_store {
-      forms.push(ScanForm::RootedSearch);
-      break;
+  if (shell.contains('/') || shell.contains('~') || shell.contains("$HOME"))
+    && ["find", "rg", "grep", "fd"].iter().any(|word| shell.contains(word))
+  {
+    for captures in rooted_search_pattern()?.captures_iter(shell) {
+      if non_recursive_grep(&captures)? {
+        continue;
+      }
+      let around = groups_text(&captures);
+      let prunes_store = around.contains("-prune") && around.contains(SESSIONS_DIR_NAME);
+      let bounded_depth = depth_limited(&around)?;
+      if !bounded_depth && !prunes_store {
+        forms.push(ScanForm::RootedSearch);
+        break;
+      }
     }
   }
-  for captures in run_log_search_pattern()?.captures_iter(shell) {
-    if non_recursive_grep(&captures)? {
-      continue;
-    }
-    let globs = glob_names(&groups_text(&captures));
-    if globs.is_empty() || globs.iter().any(|glob| is_run_log_glob(glob)) {
-      forms.push(ScanForm::RunLogSearch);
-      break;
+  if ["rg", "grep"].iter().any(|word| shell.contains(word))
+    && (shell.contains(DEFAULT_HOME_DIR_NAME) || shell.contains(CHARLIEBOT_HOME_ENV))
+  {
+    for captures in run_log_search_pattern()?.captures_iter(shell) {
+      if non_recursive_grep(&captures)? {
+        continue;
+      }
+      let globs = glob_names(&groups_text(&captures));
+      if globs.is_empty() || globs.iter().any(|glob| is_run_log_glob(glob)) {
+        forms.push(ScanForm::RunLogSearch);
+        break;
+      }
     }
   }
   let mut walks_store = false;
   let mut runs_per_file = false;
-  for segment in find_segments(shell) {
-    if walks_store_root(&segment)? {
-      walks_store = true;
-      runs_per_file |= per_file_command_pattern().is_match(&segment.region);
+  if shell.contains("find") {
+    for segment in find_segments(shell) {
+      if walks_store_root(&segment)? {
+        walks_store = true;
+        runs_per_file |= per_file_command_pattern().is_match(&segment.region);
+      }
     }
   }
   if runs_per_file {
@@ -240,7 +257,10 @@ fn search_forms(shell: &str) -> Result<Vec<ScanForm>, String> {
   if walks_store {
     forms.push(ScanForm::FindWalk);
   }
-  if reads_run_logs_by_glob(shell)? {
+  if shell.contains(['*', '?', '['])
+    && (shell.contains(DEFAULT_HOME_DIR_NAME) || shell.contains(CHARLIEBOT_HOME_ENV))
+    && reads_run_logs_by_glob(shell)?
+  {
     forms.push(ScanForm::RunLogGlob);
   }
   Ok(forms)
@@ -348,8 +368,16 @@ fn walks_store_root(segment: &FindSegment) -> Result<bool, String> {
 
 /// Whether a reader command's glob names run logs: one process that reads the run logs of every session.
 fn reads_run_logs_by_glob(shell: &str) -> Result<bool, String> {
+  if !shell.contains('"') {
+    let text = shell;
+    return read_run_log_glob_segments(text);
+  }
   let text = without_prose(shell);
-  for segment in command_segment_pattern().find_iter(&text) {
+  read_run_log_glob_segments(&text)
+}
+
+fn read_run_log_glob_segments(text: &str) -> Result<bool, String> {
+  for segment in command_segment_pattern().find_iter(text) {
     if !is_reader_segment(segment.as_str()) {
       continue;
     }
@@ -370,6 +398,9 @@ fn reads_run_logs_by_glob(shell: &str) -> Result<bool, String> {
 /// separator is not one shell argument. A string holding a command substitution or backtick stays, because that is
 /// shell.
 fn without_prose(shell: &str) -> String {
+  if !shell.contains('"') {
+    return shell.to_string();
+  }
   prose_pattern()
     .replace_all(shell, |captures: &Captures<'_>| {
       let whole = captures.get(0).expect("group 0 is the whole match").as_str();

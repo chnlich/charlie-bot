@@ -1388,6 +1388,29 @@ mod tests {
     fs::write(path, meta.to_json_string(&[], true)).unwrap();
   }
 
+  fn write_archived_sessions(store: &Store, count: usize) {
+    let sessions = (0..count)
+      .map(|index| {
+        let id = format!("archived-{index:03}");
+        let mut meta = SessionMetadata::new(&id, &format!("needle-{index:03}"), TaskProfile::Manager);
+        meta.status = SessionStatus::Archived;
+        meta.updated_at = UtcDateTime::parse(&format!("2026-08-01T{:02}:{:02}:00Z", 12 + index / 60, index % 60))
+          .unwrap();
+        (store.metadata_path(&id), meta.to_json_string(&[], true))
+      })
+      .collect::<Vec<_>>();
+    std::thread::scope(|scope| {
+      for chunk in sessions.chunks(25) {
+        scope.spawn(move || {
+          for (path, contents) in chunk {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+          }
+        });
+      }
+    });
+  }
+
   #[test]
   fn blank_search_returns_active_sessions_newest_first() {
     let home = tempfile::tempdir().unwrap();
@@ -1511,15 +1534,7 @@ mod tests {
   fn content_hits_compete_with_name_hits_at_the_two_hundred_row_cap() {
     let home = tempfile::tempdir().unwrap();
     let store = test_store(home.path());
-    for index in 0..200 {
-      write_session(
-        &store,
-        &format!("archived-{index:03}"),
-        &format!("needle-{index:03}"),
-        SessionStatus::Archived,
-        &format!("2026-08-01T{:02}:{:02}:00Z", 12 + index / 60, index % 60),
-      );
-    }
+    write_archived_sessions(&store, 200);
     write_session(&store, "above", "unrelated above", SessionStatus::Active, "2026-08-02T04:40:00Z");
     write_session(&store, "below", "unrelated below", SessionStatus::Active, "2026-08-01T11:59:00Z");
     for id in ["above", "below"] {

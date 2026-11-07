@@ -82,12 +82,10 @@ static NUMBER_WITH_UNIT: LazyLock<Regex> = LazyLock::new(|| {
 });
 static NUMBER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b\d+\b").expect("the number expression is valid"));
 
-static API_KEY_REDACTION: LazyLock<Regex> = LazyLock::new(|| {
-  Regex::new(r"(?i)(api_key[=:]\s*)[A-Za-z0-9_\-]{8,}").expect("the API-key expression is valid")
-});
-static BEARER_REDACTION: LazyLock<Regex> = LazyLock::new(|| {
-  Regex::new(r"(?i)(bearer\s+)[A-Za-z0-9._\-]{8,}").expect("the bearer expression is valid")
-});
+static API_KEY_REDACTION: LazyLock<Regex> =
+  LazyLock::new(|| Regex::new(r"(?i)(api_key[=:]\s*)[A-Za-z0-9_\-]{8,}").expect("the API-key expression is valid"));
+static BEARER_REDACTION: LazyLock<Regex> =
+  LazyLock::new(|| Regex::new(r"(?i)(bearer\s+)[A-Za-z0-9._\-]{8,}").expect("the bearer expression is valid"));
 static SK_REDACTION: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(r"\bsk-[A-Za-z0-9_\-]{8,}").expect("the sk-key expression is valid"));
 static TOKEN_REDACTION: LazyLock<Regex> =
@@ -117,7 +115,9 @@ fn line_level(line: &str) -> Option<LogLevel> {
     let level = captures.get(1).expect("the level is captured").as_str();
     return Some(if level.eq_ignore_ascii_case("error") { LogLevel::Error } else { LogLevel::Other });
   }
-  let level = line.split_whitespace().find(|level| matches!(*level, "TRACE" | "DEBUG" | "INFO" | "WARN" | "WARNING" | "ERROR"))?;
+  let level = line
+    .split_whitespace()
+    .find(|level| matches!(*level, "TRACE" | "DEBUG" | "INFO" | "WARN" | "WARNING" | "ERROR"))?;
   Some(if level == "ERROR" { LogLevel::Error } else { LogLevel::Other })
 }
 
@@ -352,9 +352,7 @@ fn contains_uuid_candidate(text: &str) -> bool {
       && candidate[13] == b'-'
       && candidate[18] == b'-'
       && candidate[23] == b'-'
-      && candidate.iter().enumerate().all(|(index, byte)| {
-        matches!(index, 8 | 13 | 18 | 23) || byte.is_ascii_hexdigit()
-      })
+      && candidate.iter().enumerate().all(|(index, byte)| matches!(index, 8 | 13 | 18 | 23) || byte.is_ascii_hexdigit())
   })
 }
 

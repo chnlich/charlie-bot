@@ -351,11 +351,8 @@ mod tests {
     }
     let host = ClaudeHost { home: root.path().to_path_buf(), claude_config_dir: default_dir.clone() };
     let initial_cfg = super::super::test_support::load_config(&profile, &[("ext-1", &first_dir)], &worktrees);
-    let source = ClaudeLogs::new(
-      host,
-      Arc::new(ClaudeAccountState::new()),
-      Arc::new(super::super::test_support::quota_http()),
-    );
+    let source =
+      ClaudeLogs::new(host, Arc::new(ClaudeAccountState::new()), Arc::new(super::super::test_support::quota_http()));
 
     assert!(!root.path().join(charliebot_core::config::CONFIG_FILENAME).exists());
     let initial = source.logs(&initial_cfg).unwrap();

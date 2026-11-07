@@ -4,14 +4,14 @@
 use serde_json::{Value, json};
 
 use crate::exit::CliExit;
+use crate::fields::SESSION_ID;
 use crate::{client, json_out, resolve};
 
 /// The internal route that registers a draft.
 pub const REGISTER_PATH: &str = "/api/internal/drafts";
 
-/// The registration payload's field names, which this module owns because it builds the payload. The
-/// `charliebot-drafts` package's register route declares the same names, and its draft events carry them.
-pub const SESSION_ID: &str = "session_id";
+/// The registration payload's field names that belong to the draft alone; the session field comes from `crate::fields`.
+/// The `charliebot-drafts` package's register route declares the same names, and its draft events carry them.
 pub const PLATFORM: &str = "platform";
 pub const TARGET: &str = "target";
 pub const BODY: &str = "body";

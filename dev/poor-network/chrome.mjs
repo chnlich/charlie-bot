@@ -228,8 +228,16 @@ export async function launchBrowser({ binary, proxyPort, userDataDir, logPath, t
     '--remote-debugging-pipe',
     'about:blank',
   ];
+  // Chrome's process-singleton socket lives under TMPDIR, and a sockaddr_un path is short. The trial points TMPDIR
+  // into its tree, whose path grows with the caller's scratch; the caller's own TMPDIR is short and writable, so
+  // run.sh passes it back here and Chrome keeps that socket under the limit.
+  const env = { ...process.env };
+  if (process.env.POOR_NETWORK_CHROME_TMPDIR) {
+    env.TMPDIR = process.env.POOR_NETWORK_CHROME_TMPDIR;
+  }
   const child = spawn(binary, args, {
     detached: true,
+    env,
     stdio: ['ignore', log, log, 'pipe', 'pipe'],
   });
   // A spawn failure emits 'error' without 'exit', and close() waits on this promise on every path.

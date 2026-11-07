@@ -19,8 +19,12 @@
 # the bench measures, and proves that no process of the trial remains. The bench's own children (Chrome, the proxy, the
 # TLS front) end with the bench. The server's charlie-code backend is the scripted stub in dev/poor-network/stub.
 #
+# Each side's trial tree goes under TMPDIR when the caller sets it, and under /tmp otherwise, so a caller inside a
+# writable sandbox keeps the trees in its scratch.
+#
 # Exit: 0 both sides measured; 1 a measurement or build failed; 2 a precondition failed, nothing started; 3 the baseline
-# calibration did not reproduce, so the after side did not run; 75 a side's wait for the lock ran out.
+# calibration did not reproduce, so the after side did not run; 4 a scenario that passed on the before side fails on the
+# after side; 75 a side's wait for the lock ran out.
 set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -176,13 +180,16 @@ YAML
 # Runs one side as the command of a serve trial. $1 side, $2 trial script, $3 commit, $4 server binary.
 run_side() {
   local name=$1 trial_script=$2 commit=$3 server_bin=$4 trial_root trial_status
-  trial_root="/tmp/pn-$run_id-$name"
+  trial_root="${TMPDIR:-/tmp}/pn-$run_id-$name"
   mkdir -p "$trial_root"
   local label=$commit
   [[ $name == after ]] && label=$after_label
   export CHARLIEBOT_HOME=$live_home
   export CHARLIEBOT_RELEASE_RUN_DIR="$run_dir/evidence-$name"
   export POOR_NETWORK_REPLY_DIR="$run_dir/replies"
+  # Chrome's process-singleton socket lives under TMPDIR, and the trial points TMPDIR into its tree. The caller's own
+  # TMPDIR is short and writable, so Chrome gets it back beside the trial's long one.
+  export POOR_NETWORK_CHROME_TMPDIR=${TMPDIR:-/tmp}
   # flock -o keeps the lock in flock's own process, so no process of the trial holds it past the trial's end.
   local lock=()
   if [[ -n $lock_file ]]; then

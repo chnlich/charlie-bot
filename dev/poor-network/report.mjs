@@ -1,5 +1,6 @@
 // The report of one side: each metric's repetitions become a median, a 90th percentile and a verdict against its target.
-// Run as `node report.mjs <side.json>...` it prints the summary table of the given sides.
+// Run as `node report.mjs <side.json>...` it prints the summary table of the given sides, and with a before and an after
+// side it also prints the cross-side verdict and exits 4 when a scenario that passed before fails after.
 
 import fs from 'node:fs';
 
@@ -111,6 +112,23 @@ export function summarize(reps, metric) {
     // A metric without a target is reported for reading, not scored.
     pass: metric.target === null ? null : median <= metric.target,
   };
+}
+
+// The cross-side verdict: a metric the bench passed on the before side and fails on the after side is a regression. A
+// metric absent from either side, or one without a target, is not compared.
+export function regressions(before, after) {
+  const found = [];
+  for (const metric of METRICS) {
+    const beforeRow = before.metrics?.[metric.id];
+    const afterRow = after.metrics?.[metric.id];
+    if (!beforeRow || !afterRow || beforeRow.pass === null || afterRow.pass === null) {
+      continue;
+    }
+    if (beforeRow.pass && !afterRow.pass) {
+      found.push(metric);
+    }
+  }
+  return found;
 }
 
 // The calibration: on the before side, a switch clicked while a background list refresh is in flight must wait for at
@@ -342,10 +360,26 @@ function formatBackground(label, reps) {
 }
 
 function main(paths) {
-  for (const path of paths) {
-    console.log(formatSide(JSON.parse(fs.readFileSync(path, 'utf8'))));
+  const sides = paths.map((path) => JSON.parse(fs.readFileSync(path, 'utf8')));
+  for (const side of sides) {
+    console.log(formatSide(side));
     console.log('');
   }
+  const before = sides.find((side) => side.side === 'before');
+  const after = sides.find((side) => side.side === 'after');
+  if (!before || !after) {
+    return;
+  }
+  const failed = regressions(before, after);
+  if (failed.length === 0) {
+    console.log('regressions: none; every scenario the bench passed on the before side passes on the after side');
+    return;
+  }
+  for (const metric of failed) {
+    console.log(`regression: ${metric.id} ${metric.title} passed on the before side and fails on the after side`);
+  }
+  // run.sh keeps this code, so a caller reads the regression from the exit status as well as the line.
+  process.exitCode = 4;
 }
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {

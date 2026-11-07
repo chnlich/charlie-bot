@@ -2,10 +2,14 @@
 // scored scenario's random-phase holds, and only the reference before side's summary line carries a verdict.
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 
 import { CALIBRATION_HOLD_MS, CALIBRATION_REFERENCE } from './profile.mjs';
-import { METRICS, calibrate, formatSide, summarize } from './report.mjs';
+import { METRICS, calibrate, formatSide, regressions, summarize } from './report.mjs';
 
 // One background repetition's calibration fields. `random` is the scored scenario's hold, which the gate must not read.
 function rep(duringMs, randomMs) {
@@ -69,6 +73,50 @@ test("the after side's line prints the raw holds without a gate verdict", () => 
   assert.match(line, /holds 5\.00 s, 6\.00 s, median 5\.00 s/);
   assert.match(line, /the gate reads the reference before side only$/);
   assert.doesNotMatch(line, /reproduced/);
+});
+
+// One side of a cross-side comparison, with the switch metric's summary. `switchMs - switchFloorMs` is the value the
+// bench holds against `TARGETS.switchExtraMs`.
+function switchSide(name, switchMs, switchFloorMs) {
+  const metric = METRICS.find((candidate) => candidate.id === 'switch');
+  return {
+    side: name,
+    commit: 'test',
+    chrome: { version: 'test' },
+    metrics: { switch: summarize([{ switchMs, switchFloorMs }], metric) },
+  };
+}
+
+test('a metric that passed before and fails after is a regression', () => {
+  const found = regressions(switchSide('before', 500, 400), switchSide('after', 2000, 400));
+  assert.deepEqual(found.map((metric) => metric.id), ['switch']);
+});
+
+test('a metric that failed before and passes after is not a regression, and neither is one absent from a side', () => {
+  assert.deepEqual(regressions(switchSide('before', 2000, 400), switchSide('after', 500, 400)), []);
+  assert.deepEqual(regressions(switchSide('before', 500, 400), { side: 'after', metrics: {} }), []);
+});
+
+test('the cross-side CLI exits 4 on a regression and 0 without one', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pn-report-'));
+  const report = new URL('./report.mjs', import.meta.url).pathname;
+  const run = (before, after) => {
+    const beforePath = path.join(dir, 'before.json');
+    const afterPath = path.join(dir, 'after.json');
+    fs.writeFileSync(beforePath, JSON.stringify(before));
+    fs.writeFileSync(afterPath, JSON.stringify(after));
+    return spawnSync(process.execPath, [report, beforePath, afterPath], { encoding: 'utf8' });
+  };
+  try {
+    const regressed = run(switchSide('before', 500, 400), switchSide('after', 2000, 400));
+    assert.equal(regressed.status, 4);
+    assert.match(regressed.stdout, /regression: switch/);
+    const clean = run(switchSide('before', 2000, 400), switchSide('after', 500, 400));
+    assert.equal(clean.status, 0);
+    assert.match(clean.stdout, /regressions: none/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('the switch-to-catchup number is reported with a median and p90, and has no target', () => {

@@ -18,6 +18,15 @@ The slowest route is the one a user waits on, so cutting it is the change a user
 The slow-network load is the wait a user on a slow link feels, where the page's bytes and fetch count set most of the time.
 The mock home has the production number of sessions, so the numbers show the load that a user meets.
 
+## Poor-network scenarios
+
+A round whose change can move a scenario of the poor-network bench takes that scenario as its topic.
+It runs the scenario before and after its change, on host3, with the bench lock held.
+The bench's entry is `dev/poor-network/run.sh`: it runs a named scenario set on both sides and prints the bench's verdict for each scenario.
+The target of a scenario is in `TARGETS` of `dev/poor-network/profile.mjs`, and the bench's verdict decides; this prompt copies no target value.
+Run only the scenarios the change can move, with the background scenario at 3 repetitions, so the check stays inside the round's time.
+A round that turns a scenario the bench passed on the before side into a failing one on the after side does not land.
+
 ## Mock home
 
 The mock home directory is `~/improve/mock-home/<version>/`, where `<version>` is the output of `mock-home version`.

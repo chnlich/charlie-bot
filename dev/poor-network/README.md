@@ -27,14 +27,17 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--lock FILE` | Hold an advisory lock on `FILE` around each side's trial (not the builds), waiting up to 2 h. |
 
 Exit codes: 0 both sides measured; 1 a measurement or build failed (the side's JSON still names the error); 2 a
-precondition failed and nothing started; 3 the baseline calibration did not reproduce; 75 a side's wait for the lock
-ran out. One lock hold covers one side attempt: a caller that retries a timed-out side runs the command again, which
-takes the lock again at the back of the queue. The side JSON is the bench's last artifact; when it is 120 s old and the
+precondition failed and nothing started; 3 the baseline calibration did not reproduce; 4 a scenario the bench passed
+on the before side fails on the after side; 75 a side's wait for the lock ran out. One lock hold covers one side
+attempt: a caller that retries a timed-out side runs the command again, which takes the lock again at the back of the
+queue. The side JSON is the bench's last artifact; when it is 120 s old and the
 bench still runs, the runner ends the trial tree itself, so a bench that hangs after its work never holds the lock, and
 the summary is reprinted from the JSON.
 
 Chrome comes from `POOR_NETWORK_CHROME`, or else the newest `~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome`.
 The trial replaces `HOME`, so the discovery happens in `run.sh`.
+The trial points `TMPDIR` into its tree, and Chrome's process-singleton socket path is short, so `run.sh` passes the
+caller's own `TMPDIR` to Chrome as `POOR_NETWORK_CHROME_TMPDIR`.
 
 Output: `DIR/<run id>/before.json` and `after.json`, one per side, with the link, the targets, the Chrome version, the
 asset hashes, the session ids, the view as measured against the live view, and every repetition's raw numbers. The
@@ -312,6 +315,14 @@ It prints its own address, `http://127.0.0.1:<port>`, as its first stdout line, 
 which stops it and every tunnel it holds. Its tunnels reach the target's port only, and they share the link's budget per
 direction, as the bench's connections do. A target without an `http` port or with a path exits non-zero and prints no
 address.
+
+## Perf loop
+
+The perf direction runs a named scenario set on both sides when the round's change can move it. `--side both` prints
+each side's verdict and the cross-side regression line, and exits 4 when a scenario that passed on the before side
+fails on the after side. The caller passes the bench lock it shares with the other bench runs, a scenario set and a
+repetition count. Each side's trial tree goes under `$TMPDIR` when the caller sets it, so a round inside a writable
+sandbox keeps the trees in its scratch; Chrome keeps its own temp files there too.
 
 ## Tests
 

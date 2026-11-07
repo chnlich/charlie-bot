@@ -1,16 +1,19 @@
 //! The form a script takes when a page carries it inline.
 //!
 //! A page inlines its scripts so the first paint waits for no second request. The same source files carry the
-//! comments that explain them to an editor, and a browser runs no comment. On the mock home's chat page the comments
-//! are 225 KB of the 730 KB of script text and 82 KB of the document's 410 KB gzip form. The strip is textual and
-//! keeps every other byte, including a `//` or `/*` that a string, a template literal or a regular expression holds.
+//! comments that explain them to an editor, which a browser runs as nothing, and the indentation that shows their
+//! nesting, which a browser reads as nothing. On the mock home's chat page, leaving both out of the inline copy of
+//! the scripts and the stylesheets saves 67 KB of the page's 700 KB and 13 KB of its 164 KB gzip form. The strip is
+//! textual and keeps every other byte, including a `//` or `/*` that a string, a template literal or a regular
+//! expression holds, and the indentation inside a template literal, which is part of the text it builds.
 
-/// The JavaScript `source` with its comments removed.
+/// The JavaScript `source` with its comments and its code indentation removed.
 ///
 /// A line comment loses its text and keeps the newline that ends it. A block comment becomes one newline when it
-/// spans lines and one space otherwise, so a comment between two tokens still separates them. The scanner follows
-/// the literals that can hold comment text. A quoted string ends at its quote or its line's end, a template literal
-/// at its backtick, and a regex literal at its closing slash.
+/// spans lines and one space otherwise, so a comment between two tokens still separates them. A line's leading
+/// spaces and tabs carry no meaning between tokens and the newline before them already ends the line, so the inline
+/// copy leaves them out. The scanner follows the literals that can hold comment text. A quoted string ends at its
+/// quote or its line's end, a template literal at its backtick, and a regex literal at its closing slash.
 pub fn without_comments(source: &str) -> String {
   let bytes = source.as_bytes();
   let mut out = String::with_capacity(source.len());
@@ -154,6 +157,12 @@ pub fn without_comments(source: &str) -> String {
         i += 1;
       }
       byte if byte.is_ascii_whitespace() => {
+        // A line's leading spaces and tabs separate no tokens: the newline that precedes them already ends the
+        // line. Every other whitespace byte is kept, including the newline itself.
+        if matches!(byte, b' ' | b'\t') && out.as_bytes().last() == Some(&b'\n') {
+          i += 1;
+          continue;
+        }
         copy(&mut out, source, i, i + 1);
         i += 1;
       }
@@ -313,6 +322,14 @@ fn regex_end(bytes: &[u8], start: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn code_indentation_is_dropped_and_template_text_keeps_its_own() {
+    assert_eq!(without_comments("let a = 1;\n    let b = 2;\n"), "let a = 1;\nlet b = 2;\n");
+    assert_eq!(without_comments("let s = `\n  indented text\n`;"), "let s = `\n  indented text\n`;");
+    assert_eq!(without_comments("let s = `${a}\n  ${b}`;"), "let s = `${a}\n  ${b}`;");
+    assert_eq!(without_comments("let s = `${a +\n    b}`;"), "let s = `${a +\nb}`;");
+  }
 
   #[test]
   fn line_comments_leave_the_code_and_keep_their_newline() {

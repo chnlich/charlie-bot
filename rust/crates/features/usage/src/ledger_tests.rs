@@ -96,8 +96,7 @@ fn model_rows_sort_accounts_and_spans_while_native_starts_ignore_fallbacks_and_e
 
 #[test]
 fn ts_conflicts_keep_the_earlier_nonempty_value_and_unsplit_counts_on_all_reads() {
-  let dir = tempfile::tempdir().unwrap();
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   let mut first = record("rec-1", RecordKind::Native, &["sess-a"]);
   first.in_unsplit = 7;
   ledger.record_file(HOST, "/logs/a.jsonl", "s1", &[first.clone()]).unwrap();
@@ -197,7 +196,7 @@ fn open_swaps_five_changed_sum_triggers_and_reprices_aggregate() {
       params![SOURCE, HOST, TS_A, TS_A],
     )
     .unwrap();
-  ledger.model_rows().unwrap();
+  assert!(!ledger.agg_ready().unwrap());
   for name in sql::AGG_SUM_TRIGGER_NAMES {
     ledger
       .conn
@@ -708,8 +707,7 @@ fn backfilled_aggregate_counts_later_same_group_day_writes() {
 
 #[test]
 fn rewrite_within_a_shared_group_day_keeps_the_aggregate_on_the_table() {
-  let dir = tempfile::tempdir().unwrap();
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   let records = [
     record("rec-1", RecordKind::Native, &["sess-a"]),
     record("rec-2", RecordKind::Native, &["sess-b"]),
@@ -828,8 +826,7 @@ fn rows_read_reflects_this_instances_own_write() {
 
 #[test]
 fn ts_conflict_keeps_the_earlier_non_empty_value() {
-  let dir = tempfile::tempdir().unwrap();
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   let first = record("rec-1", RecordKind::Native, &["sess-a"]);
   let mut later = first.clone();
   later.ts = TS_B.into();

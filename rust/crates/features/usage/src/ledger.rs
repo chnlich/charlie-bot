@@ -226,6 +226,11 @@ impl UsageLedger {
     Self::from_connection(path, conn)
   }
 
+  #[cfg(test)]
+  pub(crate) fn in_memory() -> anyhow::Result<Self> {
+    Self::from_connection(PathBuf::from(":memory:"), Connection::open_in_memory()?)
+  }
+
   fn from_connection(path: PathBuf, conn: Connection) -> anyhow::Result<Self> {
     // The lock wait the ledger gives its writers, set on the connection.
     conn.busy_timeout(Duration::from_secs(LOCK_WAIT_SECONDS))?;

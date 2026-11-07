@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -452,7 +452,7 @@ fn capture_runs_sources_in_order_skips_unchanged_files_and_keeps_recorded_rows()
   fs::create_dir_all(external.parent().unwrap()).unwrap();
   fs::write(&external, "source log\n").unwrap();
   EXTERNAL_READS.store(0, Ordering::SeqCst);
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   let first = capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).unwrap();
   assert_eq!(
     first,
@@ -1319,14 +1319,13 @@ fn capture_runs_second_capture_skips_by_stat_and_recaptures_an_append() {
     None,
     b"{\"type\": \"result\", \"usage\": {\"input_tokens\": 100, \"cached_tokens\": 40, \"output_tokens\": 5}}\n",
   );
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1);
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 0); // the stat pair alone decides the skip
 
-  let mut text = fs::read_to_string(&log).unwrap();
-  text.push_str(r#"{"type": "result", "usage": {"input_tokens": 200, "cached_tokens": 10, "output_tokens": 9}}"#);
-  text.push('\n');
-  fs::write(&log, text).unwrap();
+  let mut appended = fs::OpenOptions::new().append(true).open(&log).unwrap();
+  writeln!(appended, r#"{"type": "result", "usage": {"input_tokens": 200, "cached_tokens": 10, "output_tokens": 9}}"#)
+    .unwrap();
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1); // the append moved the stat: re-parsed
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "GLM-5.3-Flash");
@@ -1357,7 +1356,7 @@ fn capture_usage_covers_every_source_and_zeroes_on_the_second_round() {
     Some(("charlie-code-glm-flash", Some("openai/zai-org/GLM-5.3-Flash"))),
     result_line("2026-09-11T20:00:00+00:00", 200, 0, 0, 6).as_bytes(),
   );
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   let first = capture_round(&mut ledger, &config, &registry);
   assert_eq!(
     (
@@ -2030,8 +2029,11 @@ fn malformed_master_model_shapes_capture_the_recorded_rows() {
     ]),
   );
   write_master(&home, "s-model", "2026-09-02T00:00:00Z", &events(&[r#"{"type": "context", "model": 7}"#]));
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
-  assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1);
+  let mut ledger = UsageLedger::in_memory().unwrap();
+  assert_eq!(
+    capture_charliebot(&mut ledger, HOST, &config.sessions_dir(), &config, &registry, &BTreeMap::new()).unwrap(),
+    1
+  );
   let rows = charlie_rows(&mut ledger);
   let native = row(&rows, "charlie-bot", "native-model");
   assert_eq!(
@@ -2047,7 +2049,8 @@ fn malformed_master_model_shapes_capture_the_recorded_rows() {
   ];
   for lines in raising {
     let path = write_master(&home, "s-invalid-model", "2026-09-03T00:00:00Z", &events(&lines));
-    assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
+    let captured = ledger.captured_sigs(HOST).unwrap();
+    assert!(capture_charliebot(&mut ledger, HOST, &config.sessions_dir(), &config, &registry, &captured).is_err());
     fs::remove_file(path).unwrap();
   }
 }

@@ -115,14 +115,16 @@ async fn read_marks_only_returned_unread_and_reports_more_unread() {
     acked[0]["discord_ack"],
     json!({"message_ids": [snowflake(4), snowflake(5), snowflake(7)], "watermark_id": snowflake(7)})
   );
-
 }
 
 /// A read after an earlier window resumes after that window's watermark.
 #[tokio::test]
 async fn read_continues_after_the_previous_window() {
   let home = Home::new_without_thread_runtime(true).await;
-  thread_messages(&home, &[Msg::new(8, "fourth follow up"), Msg::new(9, "fifth follow up"), Msg::new(10, "sixth follow up")]);
+  thread_messages(
+    &home,
+    &[Msg::new(8, "fourth follow up"), Msg::new(9, "fifth follow up"), Msg::new(10, "sixth follow up")],
+  );
   let session_id = make_session(&home, Some(snowflake(7))).await;
 
   let result = read_thread(&bot(&home), &session_id, None, 4).await.unwrap();
@@ -365,18 +367,15 @@ async fn read_names_the_author_person_for_listed_and_unlisted_authors() {
 #[tokio::test]
 async fn read_with_url_reads_the_linked_channel_and_marks_nothing() {
   let home = Home::new_without_thread_runtime(true).await;
-  home
-    .fake()
-    .channels
-    .insert(
-      OTHER_CHANNEL.to_string(),
-      (1..=5)
-        .map(|i| {
-          let message = Msg::new(i, &format!("m{i}"));
-          if i == 3 { message.by(UNLISTED).value() } else { message.value() }
-        })
-        .collect(),
-    );
+  home.fake().channels.insert(
+    OTHER_CHANNEL.to_string(),
+    (1..=5)
+      .map(|i| {
+        let message = Msg::new(i, &format!("m{i}"));
+        if i == 3 { message.by(UNLISTED).value() } else { message.value() }
+      })
+      .collect(),
+  );
   let session_id = make_session(&home, None).await;
   let url = format!("https://discord.com/channels/{GUILD}/{OTHER_CHANNEL}");
 

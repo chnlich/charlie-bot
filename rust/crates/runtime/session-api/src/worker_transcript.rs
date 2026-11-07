@@ -856,13 +856,9 @@ mod tests {
   #[tokio::test]
   async fn running_summary_tracks_appends_without_moving_the_client_revision() {
     let (_home, features) = feature_context();
-    let worker = create_node(
-      features.store.as_ref(),
-      &format!("running-{}", uuid::Uuid::new_v4()),
-      None,
-      TaskProfile::Worker,
-    )
-    .await;
+    let worker =
+      create_node(features.store.as_ref(), &format!("running-{}", uuid::Uuid::new_v4()), None, TaskProfile::Worker)
+        .await;
     let session_id = worker.id;
     let store = features.store.as_ref();
     register_run(store, run_record("run-live", &session_id, RunKind::Work, None)).await;

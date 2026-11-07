@@ -189,27 +189,23 @@ fn unknown_stored_kind_fails_the_grouped_read() {
 fn open_swaps_five_changed_sum_triggers_and_reprices_aggregate() {
   let dir = tempfile::tempdir().unwrap();
   let path = dir.path().join("ledger.sqlite3");
-  {
-    let _ledger = UsageLedger::open(&path).unwrap();
-    let raw = Connection::open(&path).unwrap();
-    raw.execute(
+  let mut ledger = UsageLedger::open(&path).unwrap();
+  ledger
+    .conn
+    .execute(
       "INSERT INTO usage (record_id, kind, source, model, account, host, ts, in_fresh, cache_write, cache_read, in_unsplit, output, origin, captured_at) VALUES ('rec-1', 'native', ?, 'model-a', 'acct-a', ?, ?, 10, 2, 3, 0, 5, '/logs/a.jsonl', ?)",
       params![SOURCE, HOST, TS_A, TS_A],
     )
     .unwrap();
-  }
-  {
-    let raw = Connection::open(&path).unwrap();
-    for name in sql::AGG_SUM_TRIGGER_NAMES {
-      raw
-        .execute_batch(&format!(
-          "DROP TRIGGER {name}; CREATE TRIGGER {name} AFTER INSERT ON usage BEGIN SELECT 1; END;"
-        ))
-        .unwrap();
-    }
-    raw.execute_batch("DELETE FROM usage_agg; INSERT INTO usage_agg VALUES ('wrong', 'wrong', 'wrong', 'native', '2020-01-01', 99, 99, 0, 0, 0, 99);")
+  ledger.model_rows().unwrap();
+  for name in sql::AGG_SUM_TRIGGER_NAMES {
+    ledger
+      .conn
+      .execute_batch(&format!("DROP TRIGGER {name}; CREATE TRIGGER {name} AFTER INSERT ON usage BEGIN SELECT 1; END;"))
       .unwrap();
   }
+  ledger.conn.execute_batch("DELETE FROM usage_agg; INSERT INTO usage_agg VALUES ('wrong', 'wrong', 'wrong', 'native', '2020-01-01', 99, 99, 0, 0, 0, 99);").unwrap();
+  drop(ledger);
   let ledger = UsageLedger::open(&path).unwrap();
   let mut expected = sql::agg_trigger_statements()
     .iter()
@@ -1016,11 +1012,9 @@ fn batch_lands_every_recorded_file_in_one_commit() {
     .unwrap();
   assert_eq!(recorded_paths(&reader), ["/logs/a.jsonl", "/logs/b.jsonl"]);
   let has_capture_stamp: bool = reader
-    .query_row(
-      "SELECT EXISTS(SELECT 1 FROM ledger_meta WHERE key = ?)",
-      [format!("last_capture_at:{HOST}")],
-      |row| row.get(0),
-    )
+    .query_row("SELECT EXISTS(SELECT 1 FROM ledger_meta WHERE key = ?)", [format!("last_capture_at:{HOST}")], |row| {
+      row.get(0)
+    })
     .unwrap();
   assert!(has_capture_stamp);
 }

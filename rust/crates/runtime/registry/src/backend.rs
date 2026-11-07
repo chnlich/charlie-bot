@@ -7,10 +7,10 @@ pub use crate::registry::{
   AGENTS_INSTRUCTIONS_FILE_NAME, AgentBackend, BackendFactory, BackendLifecycle, BackendReadingLimitsFn, BackendTraits,
   BackendTypeRegistration, CLAUDE_INSTRUCTIONS_FILE_NAME, ChildEnvFn, CompactionOutcome, CompactionRun,
   CompactionRunFn, ContextLimits, ContextStateFn, EmitFn, Env, ExitedProbe, FinalStdoutOutcome, IdleArmContext,
-  IdleStartGate, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchRefused, LaunchWatch, OptionModel,
-  ReadingLimitsFn, RecordAccountFn, RecoverySilence, Registry, ResumeStyle, RunningTurnsFn, ServeProcessSpec,
-  ServeTransport, ServeTurn, ServeTurnArgs, ServeTurnResult, SessionContextStateFn, Translate, TransportKind,
-  UsageResolver, UsageResolverConstructor, UsageResolverHost,
+  IdleStartGate, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchRefused, LaunchWatch, MemberReading,
+  MemberReadingFn, MemberWindow, OptionModel, ReadingLimitsFn, RecordAccountFn, RecoverySilence, Registry, ResumeStyle,
+  RunningTurnsFn, ServeProcessSpec, ServeTransport, ServeTurn, ServeTurnArgs, ServeTurnResult, SessionContextStateFn,
+  Translate, TransportKind, UsageResolver, UsageResolverConstructor, UsageResolverHost,
 };
 
 /// The lifecycle of a backend type that registered none.
@@ -54,6 +54,7 @@ impl Registry {
       reading_limits: crate::registry::Ledger::new("reading limits"),
       backend_reading_limits: Vec::new(),
       usage_resolvers: crate::registry::Ledger::new("usage resolver"),
+      member_readings: crate::registry::Ledger::new("member reading"),
       sequence_controllers: crate::registry::Ledger::new("sequence controller"),
       draft_platforms: crate::registry::Ledger::new("draft platform"),
       plan_registry: crate::registry::Ledger::new("plan registry"),

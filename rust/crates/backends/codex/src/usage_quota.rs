@@ -14,9 +14,11 @@ use std::sync::{Arc, LazyLock, Mutex};
 use anyhow::{Context, bail};
 use charliebot_core::str_methods;
 use charliebot_core::timefmt::{self, utc_now_iso};
+use charliebot_registry::backend::{MemberReading, MemberWindow};
 use charliebot_registry::usage::{
-  DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PLAN_TYPE, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION,
-  PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT, as_utilization, mark_expired_windows,
+  DEFAULT_ACCOUNT_LABEL, NEAR_EXHAUSTION_RESET_HORIZON, PANEL_FETCHED_AT, PANEL_PLAN_TYPE, PANEL_PROVIDER,
+  PANEL_RESETS_AT, PANEL_UTILIZATION, PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT,
+  WARNING_UTILIZATION, as_utilization, mark_expired_windows,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -43,6 +45,8 @@ const SCAN_WINDOW_HOURS: i64 = 6;
 /// Cap for the per-account spend memo. It must stay above the 7-day window's file count, or each round re-parses the
 /// corpus.
 const SPEND_CACHE_LIMIT: usize = 8192;
+/// The length of the weekly quota window, as a `token_count` event states it.
+const WEEKLY_WINDOW_MINUTES: i64 = 10_080;
 
 /// Codex's one account on the quota panel, kept by its usage source between rounds.
 pub struct CodexQuotaAccount {
@@ -170,54 +174,17 @@ impl Inner {
   /// mtime is inside the window, or the single newest file when none is. A scan set without a plan-pool event is a
   /// no-reading state, with `last_error` set.
   fn fetch_usage(&self, paths: &[PathBuf], now: OffsetDateTime) -> anyhow::Result<Option<Map<String, Value>>> {
-    let mut stats: Vec<(&PathBuf, Metadata)> = Vec::new();
-    for path in paths {
-      match fs::metadata(path) {
-        Ok(metadata) => stats.push((path, metadata)),
-        Err(error) => tracing::warn!(
-          target: "charliebot_agents",
-          path = %path.display(),
-          error = %error,
-          "ext_usage_codex_rollout_stat_failed"
-        ),
+    let event = match newest_plan_event(paths, now)? {
+      NewestPlanEvent::Event(event) => event,
+      NewestPlanEvent::NoSessions => {
+        self.set_last_error("no sessions found");
+        return Ok(None);
       }
-    }
-    if stats.is_empty() {
-      self.set_last_error("no sessions found");
-      return Ok(None);
-    }
-    let min_mtime = unix_seconds(now) - (SCAN_WINDOW_HOURS * 3600) as f64;
-    let mut scan: Vec<&(&PathBuf, Metadata)> = stats
-      .iter()
-      .filter(|(_, metadata)| timefmt::float_seconds(metadata.mtime(), metadata.mtime_nsec()) >= min_mtime)
-      .collect();
-    let newest = stats.iter().reduce(|best, candidate| {
-      let candidate_mtime = timefmt::float_seconds(candidate.1.mtime(), candidate.1.mtime_nsec());
-      let best_mtime = timefmt::float_seconds(best.1.mtime(), best.1.mtime_nsec());
-      if candidate_mtime > best_mtime { candidate } else { best }
-    });
-    if scan.is_empty() {
-      scan = newest.into_iter().collect();
-    }
-
-    let mut events = Vec::new();
-    for (path, metadata) in scan {
-      if let Some(event) = read_latest_token_count(path, metadata.len(), is_plan_pool_event)? {
-        events.push(event);
+      NewestPlanEvent::NoReading => {
+        self.set_last_error(&format!("no plan-quota reading in {SCAN_WINDOW_HOURS}h"));
+        return Ok(None);
       }
-    }
-    if events.is_empty() {
-      self.set_last_error(&format!("no plan-quota reading in {SCAN_WINDOW_HOURS}h"));
-      return Ok(None);
-    }
-    let mut chosen: Option<(OffsetDateTime, Map<String, Value>)> = None;
-    for event in events {
-      let observed = parse_codex_timestamp(event.get("timestamp"))?;
-      if chosen.as_ref().is_none_or(|(best, _)| observed > *best) {
-        chosen = Some((observed, event));
-      }
-    }
-    let (_, event) = chosen.expect("the event list is not empty");
+    };
     Ok(Some(transform_response(&event, &utc_now_iso(), DEFAULT_ACCOUNT_LABEL)?))
   }
 
@@ -263,6 +230,105 @@ impl Inner {
 
 fn text_of<'a>(map: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
   map.get(key).and_then(Value::as_str)
+}
+
+/// Why the newest plan-pool event is absent.
+enum NewestPlanEvent {
+  Event(Map<String, Value>),
+  NoSessions,
+  NoReading,
+}
+
+/// The newest plan-pool `token_count` event across the recently written rollouts. The scan set is every rollout whose
+/// mtime is inside the window, or the single newest file when none is.
+fn newest_plan_event(paths: &[PathBuf], now: OffsetDateTime) -> anyhow::Result<NewestPlanEvent> {
+  let mut stats: Vec<(&PathBuf, Metadata)> = Vec::new();
+  for path in paths {
+    match fs::metadata(path) {
+      Ok(metadata) => stats.push((path, metadata)),
+      Err(error) => tracing::warn!(
+        target: "charliebot_agents",
+        path = %path.display(),
+        error = %error,
+        "ext_usage_codex_rollout_stat_failed"
+      ),
+    }
+  }
+  if stats.is_empty() {
+    return Ok(NewestPlanEvent::NoSessions);
+  }
+  let min_mtime = unix_seconds(now) - (SCAN_WINDOW_HOURS * 3600) as f64;
+  let mut scan: Vec<&(&PathBuf, Metadata)> = stats
+    .iter()
+    .filter(|(_, metadata)| timefmt::float_seconds(metadata.mtime(), metadata.mtime_nsec()) >= min_mtime)
+    .collect();
+  let newest = stats.iter().reduce(|best, candidate| {
+    let candidate_mtime = timefmt::float_seconds(candidate.1.mtime(), candidate.1.mtime_nsec());
+    let best_mtime = timefmt::float_seconds(best.1.mtime(), best.1.mtime_nsec());
+    if candidate_mtime > best_mtime { candidate } else { best }
+  });
+  if scan.is_empty() {
+    scan = newest.into_iter().collect();
+  }
+
+  let mut events = Vec::new();
+  for (path, metadata) in scan {
+    if let Some(event) = read_latest_token_count(path, metadata.len(), is_plan_pool_event)? {
+      events.push(event);
+    }
+  }
+  if events.is_empty() {
+    return Ok(NewestPlanEvent::NoReading);
+  }
+  let mut chosen: Option<(OffsetDateTime, Map<String, Value>)> = None;
+  for event in events {
+    let observed = parse_codex_timestamp(event.get("timestamp"))?;
+    if chosen.as_ref().is_none_or(|(best, _)| observed > *best) {
+      chosen = Some((observed, event));
+    }
+  }
+  let (_, event) = chosen.expect("the event list is not empty");
+  Ok(NewestPlanEvent::Event(event))
+}
+
+/// The Auto set's reading of a Codex member: the newest plan-pool `token_count` event's primary and secondary
+/// windows, its weekly window's reset, and the near-exhaustion and exhaustion decisions those windows state.
+pub fn member_reading(sessions_dir: &Path, now: UtcDateTime) -> anyhow::Result<Option<MemberReading>> {
+  let paths = list_rollout_files(sessions_dir)?;
+  let NewestPlanEvent::Event(event) = newest_plan_event(&paths, now.into_inner())? else { return Ok(None) };
+  let payload = object_or_empty(&event, "payload")?;
+  let rate_limits = object_or_empty(payload, "rate_limits")?;
+  let windows = codex_windows(rate_limits, DEFAULT_ACCOUNT_LABEL)?
+    .into_iter()
+    .filter_map(|window| {
+      let utilization = window.get(PANEL_UTILIZATION).and_then(Value::as_f64)? / 100.0;
+      let window_minutes = window.get(PANEL_WINDOW_MINUTES).and_then(Value::as_i64);
+      let resets_at = window
+        .get(PANEL_RESETS_AT)
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .and_then(parse_iso_utc)
+        .map(UtcDateTime::from);
+      Some(MemberWindow { utilization, window_minutes, resets_at })
+    })
+    .collect::<Vec<_>>();
+  if windows.is_empty() {
+    return Ok(None);
+  }
+  let max_utilization = windows.iter().map(|window| window.utilization).reduce(f64::max).unwrap_or_default();
+  let earliest_reset = windows.iter().filter_map(|window| window.resets_at).min();
+  let weekly_resets_at = windows
+    .iter()
+    .filter(|window| window.window_minutes == Some(WEEKLY_WINDOW_MINUTES) && window.resets_at.is_some())
+    .max_by(|left, right| left.utilization.total_cmp(&right.utilization))
+    .and_then(|window| window.resets_at);
+  Ok(Some(MemberReading {
+    near_exhaustion: max_utilization >= WARNING_UTILIZATION
+      && earliest_reset.is_some_and(|reset| reset.into_inner() > now.into_inner() + NEAR_EXHAUSTION_RESET_HORIZON),
+    exhausted: max_utilization >= 1.0,
+    weekly_resets_at,
+    windows,
+  }))
 }
 
 fn unix_seconds(instant: OffsetDateTime) -> f64 {
@@ -676,7 +742,84 @@ impl SpendMemo {
 
 #[cfg(test)]
 mod tests {
+  use crate::rollout::CODEX_SESSIONS_DIR_NAME;
+
   use super::*;
+
+  fn plan_event(primary: (f64, i64, f64), secondary: (f64, i64, f64)) -> Value {
+    json!({
+      "timestamp": "2026-10-18T11:59:00Z",
+      "type": "event_msg",
+      "payload": {
+        "type": "token_count",
+        "rate_limits": {
+          "limit_id": "codex",
+          "primary": {"used_percent": primary.0, "window_minutes": primary.1, "resets_at": primary.2},
+          "secondary": {"used_percent": secondary.0, "window_minutes": secondary.1, "resets_at": secondary.2}
+        }
+      }
+    })
+  }
+
+  fn write_rollout(sessions: &Path, event: &Value) {
+    let directory = sessions.join("2026/10/18");
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("rollout-2026-10-18T11-59-00-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+    std::fs::write(path, format!("{event}\n")).unwrap();
+  }
+
+  fn epoch(iso: &str) -> f64 {
+    UtcDateTime::parse(iso).unwrap().into_inner().unix_timestamp() as f64
+  }
+
+  #[test]
+  fn the_member_reading_reports_the_newest_plan_windows() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join(CODEX_SESSIONS_DIR_NAME);
+    let now = UtcDateTime::parse("2026-10-18T12:00:00Z").unwrap();
+    write_rollout(
+      &sessions,
+      &plan_event(
+        (20.0, 300, epoch("2026-10-18T17:00:00Z")),
+        (52.0, WEEKLY_WINDOW_MINUTES, epoch("2026-10-25T12:00:00Z")),
+      ),
+    );
+
+    let reading = member_reading(&sessions, now).unwrap().expect("the rollout carries a plan reading");
+
+    assert_eq!(reading.windows.len(), 2);
+    assert!((reading.windows[0].utilization - 0.20).abs() < 1e-12);
+    assert_eq!(reading.windows[0].window_minutes, Some(300));
+    assert!((reading.windows[1].utilization - 0.52).abs() < 1e-12);
+    assert_eq!(reading.weekly_resets_at, Some(UtcDateTime::parse("2026-10-25T12:00:00Z").unwrap()));
+    assert!(!reading.near_exhaustion, "windows below the line leave the member selectable");
+    assert!(!reading.exhausted);
+  }
+
+  #[test]
+  fn the_member_reading_marks_near_exhaustion_and_exhaustion() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join(CODEX_SESSIONS_DIR_NAME);
+    let now = UtcDateTime::parse("2026-10-18T12:00:00Z").unwrap();
+    let weekly = (WEEKLY_WINDOW_MINUTES, epoch("2026-10-25T12:00:00Z"));
+    write_rollout(&sessions, &plan_event((96.0, 300, epoch("2026-10-18T17:00:00Z")), (95.0, weekly.0, weekly.1)));
+    let reading = member_reading(&sessions, now).unwrap().expect("the rollout carries a plan reading");
+    assert!(reading.near_exhaustion, "every window at the line with its reset ahead is near exhaustion");
+    assert!(!reading.exhausted);
+
+    write_rollout(&sessions, &plan_event((100.0, 300, epoch("2026-10-18T17:00:00Z")), (95.0, weekly.0, weekly.1)));
+    let reading = member_reading(&sessions, now).unwrap().expect("the rollout carries a plan reading");
+    assert!(reading.exhausted, "a window at 100% has no headroom left");
+  }
+
+  #[test]
+  fn a_sessions_directory_without_rollouts_reads_none() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join(CODEX_SESSIONS_DIR_NAME);
+    std::fs::create_dir_all(&sessions).unwrap();
+
+    assert_eq!(member_reading(&sessions, UtcDateTime::parse("2026-10-18T12:00:00Z").unwrap()).unwrap(), None);
+  }
 
   #[test]
   fn naive_iso_timestamps_are_read_as_utc() {

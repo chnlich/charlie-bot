@@ -80,6 +80,12 @@ pub fn register_with_host(registry: &mut Registry, host: ClaudeHost, http: Quota
     translate_fallback: true,
   })?;
   registry.option_schema("cc-claude", options::SCHEMA)?;
+  // The Auto set reads this member through the same shared observations the pool selects logins from.
+  let reading_state = Arc::clone(&state);
+  registry.member_reading(
+    "cc-claude",
+    Arc::new(move |cfg, option, now| claude_accounts::member_reading(&reading_state, cfg, option, now)),
+  )?;
   registry.config_section(charliebot_core::config::ConfigSection {
     key: "accounts",
     legacy_keys: &[("claude_accounts", "accounts.claude"), ("claude_compaction", "accounts.claude_compaction")],

@@ -1235,6 +1235,7 @@ dependencies = [
  "serde_yaml",
  "sha1",
  "tempfile",
+ "time",
  "tokio",
  "tracing",
 ]
@@ -1322,6 +1323,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
+ "charliebot-agents",
  "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",

@@ -14,7 +14,7 @@ use time::Duration;
 use super::{claude_accounts, claude_config, event_types};
 
 pub const MAX_RELAYS_PER_TURN: usize = 3;
-pub const RELAY_MIN_RESET_AHEAD: Duration = Duration::minutes(45);
+pub const RELAY_MIN_RESET_AHEAD: Duration = charliebot_registry::usage::NEAR_EXHAUSTION_RESET_HORIZON;
 pub const CONTINUATION_PROMPT: &str = "The previous process was interrupted right after a tool call completed. Continue from where it stopped; do not redo the steps that are already done.";
 pub const AUTH_FAILURE_MARKER: &str = "Failed to authenticate";
 pub const RELAY_REJECTED: &str = "rejected";

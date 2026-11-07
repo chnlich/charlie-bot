@@ -1025,7 +1025,7 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
   let mut env = base_env;
   env.extend(host.extra_env.clone());
   env.insert("XDG_DATA_HOME".to_string(), root.path().join(home::OPENCODE_XDG_DATA_DIR_NAME).display().to_string());
-  env.insert("XDG_STATE_HOME".to_string(), root.path().join("state").display().to_string());
+  env.insert("XDG_STATE_HOME".to_string(), root.path().join(home::OPENCODE_XDG_STATE_DIR_NAME).display().to_string());
   env.insert("XDG_CACHE_HOME".to_string(), root.path().join("cache").display().to_string());
   let mut config = json!({"permission": {"*": "deny"}});
   config.as_object_mut().expect("the one-shot config is a JSON object").extend(one_shot_context);

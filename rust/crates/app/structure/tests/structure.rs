@@ -890,6 +890,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
   OwnerRow { name: "configs", owner: "infra/core", hint: "Use `charliebot_core::repo_root::CONFIGS_DIR_NAME`." },
   OwnerRow { name: "sessions", owner: "infra/core", hint: "Use `charliebot_core::config::sessions_dir_in`." },
   OwnerRow {
+    name: "state",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::home::state_dir` for a path in the home's state directory, and \
+           `charliebot_core::home::OPENCODE_XDG_STATE_DIR_NAME` for the OpenCode store's state directory.",
+  },
+  OwnerRow {
     name: "America/Los_Angeles",
     owner: "infra/core",
     hint: "Use `charliebot_core::pacific::ZONE`, the house time zone.",

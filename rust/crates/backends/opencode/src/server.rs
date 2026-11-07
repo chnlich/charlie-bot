@@ -106,7 +106,7 @@ impl OpenCodeHost {
   }
 
   pub fn state_dir(&self) -> PathBuf {
-    self.store_dir().join("state")
+    self.store_dir().join(home::OPENCODE_XDG_STATE_DIR_NAME)
   }
 
   pub fn cache_dir(&self) -> PathBuf {

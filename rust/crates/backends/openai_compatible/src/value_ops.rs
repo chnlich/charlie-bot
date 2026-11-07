@@ -1,6 +1,6 @@
 //! The value operations the proxy's translations use: truthiness, key lookup, iteration, subscripts, and the error
-//! each misuse raises. A translation runs over whatever JSON the client sent, so each operation answers on a value
-//! that `charliebot_core::json_loads` produced, and each error carries the text the route reports.
+//! each misuse raises. A translation runs over whatever JSON the client sent. Each operation answers on a value that
+//! `charliebot_core::json_loads` produced, and each error carries the text the route reports.
 
 use charliebot_core::json_loads::{self, LoadError};
 use charliebot_core::text_repr::{JsonStyle, is_truthy, type_name};

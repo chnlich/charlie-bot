@@ -143,6 +143,8 @@ pub(crate) struct Backend {
   token: Option<String>,
   endpoint: String,
   clock: Arc<dyn Clock>,
+  #[cfg(test)]
+  muse_audio_bytes_per_second: f64,
 }
 
 impl Backend {
@@ -153,22 +155,41 @@ impl Backend {
       token: credential_token(credentials, spec),
       endpoint: spec.endpoint.to_string(),
       clock: Arc::new(EventLoopClock),
+      #[cfg(test)]
+      muse_audio_bytes_per_second: AUDIO_BYTES_PER_SECOND,
     })
   }
 
   #[cfg(test)]
   pub(crate) fn gemini_for_test(token: &str, endpoint_url: &str) -> Self {
-    Self::for_test(BackendKind::Gemini, token, endpoint_url, Arc::new(EventLoopClock))
+    Self::for_test(BackendKind::Gemini, token, endpoint_url, Arc::new(EventLoopClock), AUDIO_BYTES_PER_SECOND)
   }
 
   #[cfg(test)]
-  fn muse_for_test(token: &str, endpoint_url: &str, clock: Arc<dyn Clock>) -> Self {
-    Self::for_test(BackendKind::Muse, token, endpoint_url, clock)
+  fn muse_for_test(
+    token: &str,
+    endpoint_url: &str,
+    clock: Arc<dyn Clock>,
+    audio_bytes_per_second: f64,
+  ) -> Self {
+    Self::for_test(BackendKind::Muse, token, endpoint_url, clock, audio_bytes_per_second)
   }
 
   #[cfg(test)]
-  fn for_test(kind: BackendKind, token: &str, endpoint_url: &str, clock: Arc<dyn Clock>) -> Self {
-    Self { spec: spec_of(kind), token: Some(token.to_string()), endpoint: endpoint_url.to_string(), clock }
+  fn for_test(
+    kind: BackendKind,
+    token: &str,
+    endpoint_url: &str,
+    clock: Arc<dyn Clock>,
+    muse_audio_bytes_per_second: f64,
+  ) -> Self {
+    Self {
+      spec: spec_of(kind),
+      token: Some(token.to_string()),
+      endpoint: endpoint_url.to_string(),
+      clock,
+      muse_audio_bytes_per_second,
+    }
   }
 
   pub(crate) fn id(&self) -> &'static str {
@@ -179,42 +200,23 @@ impl Backend {
     self.token.is_none().then(|| needed_credential(self.spec))
   }
 
-  pub(crate) async fn transcribe(
-    &self,
-    audio: Arc<AudioQueue>,
-    cancelled: watch::Receiver<bool>,
-    events: mpsc::UnboundedSender<TranscriptEvent>,
-    vocabulary: Vec<String>,
-    languages: Vec<String>,
-  ) -> Result<(), TranscriptionError> {
-    self
-      .transcribe_inner(audio, cancelled, events, vocabulary, languages, AUDIO_BYTES_PER_SECOND)
-      .await
-  }
-
   #[cfg(test)]
-  async fn transcribe_for_test(
-    &self,
-    audio: Arc<AudioQueue>,
-    cancelled: watch::Receiver<bool>,
-    events: mpsc::UnboundedSender<TranscriptEvent>,
-    vocabulary: Vec<String>,
-    languages: Vec<String>,
-    muse_audio_bytes_per_second: f64,
-  ) -> Result<(), TranscriptionError> {
-    self
-      .transcribe_inner(audio, cancelled, events, vocabulary, languages, muse_audio_bytes_per_second)
-      .await
+  fn muse_audio_bytes_per_second(&self) -> f64 {
+    self.muse_audio_bytes_per_second
   }
 
-  async fn transcribe_inner(
+  #[cfg(not(test))]
+  fn muse_audio_bytes_per_second(&self) -> f64 {
+    AUDIO_BYTES_PER_SECOND
+  }
+
+  pub(crate) async fn transcribe(
     &self,
     audio: Arc<AudioQueue>,
     mut cancelled: watch::Receiver<bool>,
     events: mpsc::UnboundedSender<TranscriptEvent>,
     vocabulary: Vec<String>,
     languages: Vec<String>,
-    muse_audio_bytes_per_second: f64,
   ) -> Result<(), TranscriptionError> {
     match self.spec.kind {
       BackendKind::Gemini => {
@@ -255,7 +257,7 @@ impl Backend {
             vocabulary,
             languages,
             clock: Arc::clone(&self.clock),
-            audio_bytes_per_second: muse_audio_bytes_per_second,
+            audio_bytes_per_second: self.muse_audio_bytes_per_second(),
           },
         )
         .await
@@ -924,20 +926,12 @@ mod tests {
   fn start_transcription(
     backend: Backend,
     audio: Arc<AudioQueue>,
-    muse_audio_bytes_per_second: f64,
   ) -> (JoinHandle<Result<(), String>>, mpsc::UnboundedReceiver<TranscriptEvent>, watch::Sender<bool>) {
     let (cancel, cancelled) = watch::channel(false);
     let (events, receiver) = mpsc::unbounded_channel();
     let task = tokio::spawn(async move {
       backend
-        .transcribe_for_test(
-          audio,
-          cancelled,
-          events,
-          vec!["Ada".to_string()],
-          vec!["zh".to_string(), "fr".to_string()],
-          muse_audio_bytes_per_second,
-        )
+        .transcribe(audio, cancelled, events, vec!["Ada".to_string()], vec!["zh".to_string(), "fr".to_string()])
         .await
         .map_err(|error| error.to_string())
     });
@@ -1066,8 +1060,8 @@ mod tests {
     });
 
     let clock = Arc::new(VirtualClock::new());
-    let backend = Backend::muse_for_test("synthetic-token", &endpoint, clock.clone());
-    let (task, mut events, _cancel) = start_transcription(backend, audio, muse_audio_bytes_per_second);
+    let backend = Backend::muse_for_test("synthetic-token", &endpoint, clock.clone(), muse_audio_bytes_per_second);
+    let (task, mut events, _cancel) = start_transcription(backend, audio);
     let mut transcript = Vec::new();
     for _ in 0..2 {
       let event = next_event(&mut events).await;
@@ -1118,8 +1112,13 @@ mod tests {
         .await
         .expect("send the abnormal close");
     });
-    let backend = Backend::muse_for_test("synthetic-token", &endpoint, Arc::new(EventLoopClock));
-    let (task, _events, _cancel) = start_transcription(backend, AudioQueue::new(), AUDIO_BYTES_PER_SECOND);
+    let backend = Backend::muse_for_test(
+      "synthetic-token",
+      &endpoint,
+      Arc::new(EventLoopClock),
+      AUDIO_BYTES_PER_SECOND,
+    );
+    let (task, _events, _cancel) = start_transcription(backend, AudioQueue::new());
     assert_eq!(
       tokio::time::timeout(Duration::from_secs(3), task)
         .await
@@ -1144,7 +1143,7 @@ mod tests {
         .expect("send the clean close");
     });
     let backend = Backend::gemini_for_test("synthetic-key", &endpoint);
-    let (task, _events, _cancel) = start_transcription(backend, AudioQueue::new(), AUDIO_BYTES_PER_SECOND);
+    let (task, _events, _cancel) = start_transcription(backend, AudioQueue::new());
     assert_eq!(
       tokio::time::timeout(Duration::from_secs(3), task)
         .await
@@ -1188,11 +1187,13 @@ mod tests {
     });
     let backend = match backend_kind {
       BackendKind::Gemini => Backend::gemini_for_test("synthetic-key", &endpoint),
-      BackendKind::Muse => Backend::muse_for_test("synthetic-token", &endpoint, Arc::new(EventLoopClock)),
+      BackendKind::Muse => {
+        Backend::muse_for_test("synthetic-token", &endpoint, Arc::new(EventLoopClock), AUDIO_BYTES_PER_SECOND)
+      }
     };
     let audio = AudioQueue::new();
     assert!(audio.put(vec![0, 0]).await);
-    let (task, _events, cancel) = start_transcription(backend, audio, AUDIO_BYTES_PER_SECOND);
+    let (task, _events, cancel) = start_transcription(backend, audio);
     tokio::time::timeout(Duration::from_secs(3), wait_until_open)
       .await
       .expect("backend connection opens")

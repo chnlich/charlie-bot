@@ -213,13 +213,13 @@ test('at sm and wider the collapsed row stays one line', async () => {
 test('a long watch label keeps its full text in title while the span can shrink', async () => {
   const {context, tray} = buildTrayContext();
   context.setTriggers([
-    trigger('t1', at(1, 0), 'training epoch boundary', [{kind: 'slurm_job', host: 'host3', job_id: 1234567}]),
+    trigger('t1', at(1, 0), 'training epoch boundary', [{kind: 'slurm_job', host: 'gpu-box-1', job_id: 1234567}]),
   ]);
   await context.renderPendingTriggersTray('session-a');
   await tick();
 
   assert.match(tray.innerHTML,
-    /title="host3:slurm:1234567">host3:slurm:1234567<\/span>/);
+    /title="gpu-box-1:slurm:1234567">gpu-box-1:slurm:1234567<\/span>/);
   assert.match(tray.innerHTML, /min-w-0 truncate/);
 });
 

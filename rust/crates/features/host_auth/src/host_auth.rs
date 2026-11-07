@@ -553,7 +553,7 @@ mod tests {
     assert!(host_entries(&published).expect("the hosts read").is_empty());
   }
 
-  const LOGIN_CONFIG: &str = "Host host3\n  HostName host3.example.internal\n\n\
+  const LOGIN_CONFIG: &str = "Host gpu-box-2\n  HostName gpu-box-2.example.internal\n\n\
                               Host gpu-box-1\n  HostName gpu-box-1.example.internal\n";
   const CHECK_OUTPUT: &str =
     "# Tailscale SSH requires an additional check.\nTo authenticate, visit: https://login.example.net/a\n";
@@ -566,19 +566,19 @@ mod tests {
     let state_path = dir.path().join("state.json");
     let check = |_alias: String| async { Ok::<_, io::Error>((1, CHECK_OUTPUT.to_string())) };
 
-    let login = probe_alias_with(&state_path, &config, "host3", check).await.expect("the probe answers");
+    let login = probe_alias_with(&state_path, &config, "gpu-box-2", check).await.expect("the probe answers");
     assert_eq!(login.status, STATUS_NEEDS_INTERACTIVE_AUTH);
     assert!(login.awaits_approval);
     assert_eq!(login.detail, build_detail(1, CHECK_OUTPUT));
-    // The state holds the verdict. gpu-box-1 has no record until a probe answers it, so the read lists host3 alone.
+    // The state holds the verdict. gpu-box-1 has no record until a probe answers it, so the read lists gpu-box-2 alone.
     let state = read_state(&state_path).expect("the state reads");
     assert_eq!(host_logins(&state).expect("the records read"), std::slice::from_ref(&login));
 
     // The same verdict again keeps the time it first changed.
-    let again = probe_alias_with(&state_path, &config, "host3", check).await.expect("the probe answers");
+    let again = probe_alias_with(&state_path, &config, "gpu-box-2", check).await.expect("the probe answers");
     assert_eq!(again.last_change_at, login.last_change_at);
 
-    let cleared = probe_alias_with(&state_path, &config, "host3", |_alias: String| async {
+    let cleared = probe_alias_with(&state_path, &config, "gpu-box-2", |_alias: String| async {
       Ok::<_, io::Error>((0, String::new()))
     })
     .await
@@ -634,7 +634,7 @@ mod tests {
     fs::write(&config, LOGIN_CONFIG).expect("the config writes");
     let state_path = dir.path().join("state.json");
     fs::write(&state_path, "{not json").expect("the corrupt state writes");
-    let error = probe_alias_with(&state_path, &config, "host3", |_alias: String| async {
+    let error = probe_alias_with(&state_path, &config, "gpu-box-2", |_alias: String| async {
       Ok::<_, io::Error>((0, String::new()))
     })
     .await

@@ -761,7 +761,7 @@ mod tests {
     let run_dir = home.join("sessions").join("session").join("data").join("runs").join("run-raw");
     let raw_path = run_dir.join(RAW_LOG_NAME);
     let metadata = format!(
-      r#"{{"id":"run-raw","kind":"work","exit_code":1,"backend":"claude-code-improve-host3","result_ref":"{}"}}"#,
+      r#"{{"id":"run-raw","kind":"work","exit_code":1,"backend":"claude-code-improve-gpu-box-1","result_ref":"{}"}}"#,
       raw_path.display()
     );
     let notice = r#"[claude-code:unrecognized_model] {"model":"synthetic-model","query_source":"sdk"}"#;

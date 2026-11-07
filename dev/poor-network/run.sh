@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The poor-network bench's entry command. It runs on the build host (host3) inside a synced tree, through
+# The poor-network bench's entry command. It runs on the build host inside a synced tree, through
 # dev/remote-run/run.sh, and drives the six scenarios of README.md against a trial server on the mock home.
 #
 #   dev/remote-run/run.sh dev/poor-network/run.sh --side both --out-dir <dir> --before-clone <clone>

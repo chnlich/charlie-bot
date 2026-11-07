@@ -184,10 +184,10 @@ mod tests {
   fn node_command(test_name: &str) -> std::io::Result<Option<Vec<OsString>>> {
     let node = executable("node")?;
     let Some(node) = node else {
-      println!("skipping {test_name}: node is not installed on host3");
+      println!("skipping {test_name}: node is not installed on the build host");
       return Ok(None);
     };
-    let timeout = executable("timeout")?.expect("host3 provides timeout for each Node-dependent test");
+    let timeout = executable("timeout")?.expect("the build host provides timeout for each Node-dependent test");
     Ok(Some(vec![timeout.into_os_string(), OsString::from("20s"), node.into_os_string()]))
   }
 

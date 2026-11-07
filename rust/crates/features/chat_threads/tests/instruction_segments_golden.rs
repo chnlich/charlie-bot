@@ -1,6 +1,5 @@
 use std::ffi::OsString;
 use std::fs;
-use std::io::Read;
 use std::path::Path;
 
 use charliebot_core::RepoRoot;
@@ -21,9 +20,21 @@ const PACKAGES: [(&str, &str, RegisterFn); 3] = [
 
 macro_rules! checkout_case_group {
   ($name:ident, $checkout_name:literal, $group:literal) => {
-    #[test]
-    fn $name() {
-      assert_checkout_contributions_match_recorded_cases($checkout_name, $group);
+    mod $name {
+      #[test]
+      fn web_reply() {
+        super::assert_checkout_contributions_match_recorded_cases($checkout_name, $group, 0);
+      }
+
+      #[test]
+      fn slack() {
+        super::assert_checkout_contributions_match_recorded_cases($checkout_name, $group, 1);
+      }
+
+      #[test]
+      fn discord() {
+        super::assert_checkout_contributions_match_recorded_cases($checkout_name, $group, 2);
+      }
     }
   };
 }
@@ -78,15 +89,14 @@ checkout_case_group!(missing_thread_format_checkout_group_5, "without-thread_rep
 checkout_case_group!(missing_thread_format_checkout_group_6, "without-thread_reply_format.md", 5);
 checkout_case_group!(missing_thread_format_checkout_group_7, "without-thread_reply_format.md", 6);
 
-fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str, group: usize) {
-  let mut decoder = GzDecoder::new(include_bytes!("fixtures/instruction_segments_golden.json.gz").as_slice());
-  let mut fixture_text = String::new();
-  decoder.read_to_string(&mut fixture_text).unwrap();
-  let fixture: Value = serde_json::from_str(&fixture_text).unwrap();
+fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str, group: usize, package_index: usize) {
+  let decoder = GzDecoder::new(include_bytes!("fixtures/instruction_segments_golden.json.gz").as_slice());
+  let fixture: Value = serde_json::from_reader(decoder).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let cases = fixture["cases"].as_array().unwrap();
   assert_eq!(cases.len(), 147);
-  let registries = registered_packages();
+  let (key, package, register) = PACKAGES[package_index];
+  let registry = registered_package(package, register);
 
   let root = tempfile::tempdir().unwrap();
   let checkouts = fixture["checkouts"].as_object().unwrap();
@@ -99,20 +109,18 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str, group
   }
 
   if checkout_name == "real" && group == 0 {
-    let mut segment_answers = [0usize; 3];
-    let mut error_answers = [0usize; 3];
+    let mut segment_answers = 0;
+    let mut error_answers = 0;
     for case in cases {
-      for (index, (key, _, _)) in PACKAGES.iter().enumerate() {
-        let expected = &case["expected"][*key];
-        if expected.get("error").is_some() {
-          error_answers[index] += 1;
-        } else if expected["segments"].as_array().is_some_and(|segments| !segments.is_empty()) {
-          segment_answers[index] += 1;
-        }
+      let expected = &case["expected"][key];
+      if expected.get("error").is_some() {
+        error_answers += 1;
+      } else if expected["segments"].as_array().is_some_and(|segments| !segments.is_empty()) {
+        segment_answers += 1;
       }
     }
-    assert!(segment_answers.into_iter().all(|count| count > 0));
-    assert!(error_answers.into_iter().all(|count| count > 0));
+    assert!(segment_answers > 0, "{key} records segment answers");
+    assert!(error_answers > 0, "{key} records error answers");
   }
 
   let cases_for_checkout =
@@ -121,7 +129,7 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str, group
   let group_start = group * 3;
   let group_end = group_start + 3;
   let root_text = root.path().to_string_lossy();
-  if checkout_name == "without-web_reply.md" && group == 0 {
+  if checkout_name == "without-web_reply.md" && key == "web_reply" && group == 0 {
     let expected_failures = cases
       .iter()
       .filter(|case| {
@@ -132,37 +140,28 @@ fn assert_checkout_contributions_match_recorded_cases(checkout_name: &str, group
   }
   for case in cases_for_checkout[group_start..group_end].iter().copied() {
     let repo_path = root.path().join(checkout_name);
-    let actual = rust_answer(case, &repo_path, &registries);
-    let expected = &case["expected"];
-    for (key, _, _) in &PACKAGES {
-      let python = &expected[*key];
-      let rust = &actual[*key];
-      if checkout_name == "without-web_reply.md" && *key == "web_reply" && python.get("error").is_some() {
-        assert!(
-          rust.get("error").is_some(),
-          "expected the missing prompt to fail on both sides: case={case:?} python={python} rust={rust}"
-        );
-      } else if !matches_materialized_paths(python, rust, &root_text) {
-        panic!(
-          "recorded Python contribution differs: checkout={checkout_name} case={case:?} key={key} expected={python} actual={rust}"
-        );
-      }
+    let actual = rust_answer(case, &repo_path, &registry);
+    let expected = &case["expected"][key];
+    if checkout_name == "without-web_reply.md" && key == "web_reply" && expected.get("error").is_some() {
+      assert!(
+        actual.get("error").is_some(),
+        "expected the missing prompt to fail on both sides: case={case:?} python={expected} rust={actual}"
+      );
+    } else if !matches_materialized_paths(expected, &actual, &root_text) {
+      panic!(
+        "recorded Python contribution differs: checkout={checkout_name} case={case:?} key={key} expected={expected} actual={actual}"
+      );
     }
   }
 }
 
-fn registered_packages() -> Vec<Registry> {
-  PACKAGES
-    .iter()
-    .map(|(_, package, register)| {
-      let mut registry = Registry::new();
-      registry.register_package(package, *register).unwrap();
-      registry
-    })
-    .collect()
+fn registered_package(package: &'static str, register: RegisterFn) -> Registry {
+  let mut registry = Registry::new();
+  registry.register_package(package, register).unwrap();
+  registry
 }
 
-fn rust_answer(case: &Value, repo_path: &Path, registries: &[Registry]) -> Value {
+fn rust_answer(case: &Value, repo_path: &Path, registry: &Registry) -> Value {
   let session = &case["session"];
   let profile = match session["profile"].as_str().unwrap() {
     "manager" => TaskProfile::Manager,
@@ -176,15 +175,10 @@ fn rust_answer(case: &Value, repo_path: &Path, registries: &[Registry]) -> Value
   let repo = RepoRoot::new(Some(OsString::from(repo_path))).unwrap();
   let kind = case["kind"].as_str().unwrap();
   let config = config(id);
-  let mut answer = serde_json::Map::new();
-  for ((key, _, _), registry) in PACKAGES.iter().zip(registries) {
-    let result = match registry.instruction_segments(&meta, kind, &config, &repo) {
-      Ok(segments) => json!({"segments": segments.iter().map(segment_json).collect::<Vec<_>>()}),
-      Err(error) => json!({"error": format!("{error}")}),
-    };
-    answer.insert((*key).to_string(), result);
+  match registry.instruction_segments(&meta, kind, &config, &repo) {
+    Ok(segments) => json!({"segments": segments.iter().map(segment_json).collect::<Vec<_>>()}),
+    Err(error) => json!({"error": format!("{error}")}),
   }
-  Value::Object(answer)
 }
 
 fn segment_json(segment: &RuleSegment) -> Value {

@@ -680,7 +680,8 @@ async fn test_worker_stops_after_the_relay_limit() -> anyhow::Result<()> {
   let error = refusal(task_worker.run().await.expect_err("the run is refused"));
 
   assert!(error.message.contains("relay limit"), "{}", error.message);
-  assert!(!error.quota_exhausted);
+  assert!(error.quota_exhausted, "every login is rejected, so the pool is exhausted at the cap");
+  assert!(error.resets_at.is_some(), "the exhausted pool names the earliest reset its rejections stated");
   assert_eq!(scripts.builds().len(), 1 + claude_relay::MAX_RELAYS_PER_TURN);
   assert_eq!(task_worker.account_relays(), claude_relay::MAX_RELAYS_PER_TURN);
   Ok(())

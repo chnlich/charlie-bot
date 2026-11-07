@@ -579,42 +579,52 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
     stored.clone().unwrap_or(WebStatus { goal: None, now: None, waiting: Vec::new(), updated_at: UtcDateTime::now() });
   let stored_waiting = effective_waiting(&base);
   let prospective = patch.waiting.clone().unwrap_or_else(|| stored_waiting.clone());
-  let mut links = require_current_plan_links(features, &prospective, &scan_context)?;
-  let approval = load_approval_policy(features)?;
+  let mut links = if prospective.is_empty() {
+    None
+  } else {
+    Some(require_current_plan_links(features, &prospective, &scan_context)?)
+  };
   let mut ask_tiers = HashMap::new();
   if let Some(items) = patch.waiting.as_deref() {
-    ask_tiers = read_ask_tiers(features, session_id).await?;
-    let read_digests: HashSet<String> = ask_tiers.keys().cloned().collect();
-    let unread = unread_items(items, &read_digests)?;
-    if !unread.is_empty() {
-      let names = unread.iter().map(|item| item.text.as_str()).collect::<Vec<_>>().join("; ");
-      return Err(WebReplyError::refused(
-        StatusCode::CONFLICT,
-        format!("Waiting on you items need a cold read: {names}"),
-      ));
-    }
-    if approval.table.enable_ask_tier_refusal {
-      for item in items {
-        let digest = item_sha256(item)?;
-        if let Some((tier, rule)) = ask_tiers.get(&digest)
-          && matches!(tier.as_str(), "t1" | "t2")
-        {
-          return Err(WebReplyError::refused(
-            StatusCode::CONFLICT,
-            format!(
-              "Waiting on you item {:?} is tiered {tier} (rule: {}): carry out the step and record it with \
-               charliebot digest add instead of waiting for approval",
-              item.text,
-              rule.as_deref().unwrap_or("none")
-            ),
-          ));
+    if !items.is_empty() {
+      let approval = load_approval_policy(features)?;
+      ask_tiers = read_ask_tiers(features, session_id).await?;
+      let read_digests: HashSet<String> = ask_tiers.keys().cloned().collect();
+      let unread = unread_items(items, &read_digests)?;
+      if !unread.is_empty() {
+        let names = unread.iter().map(|item| item.text.as_str()).collect::<Vec<_>>().join("; ");
+        return Err(WebReplyError::refused(
+          StatusCode::CONFLICT,
+          format!("Waiting on you items need a cold read: {names}"),
+        ));
+      }
+      if approval.table.enable_ask_tier_refusal {
+        for item in items {
+          let digest = item_sha256(item)?;
+          if let Some((tier, rule)) = ask_tiers.get(&digest)
+            && matches!(tier.as_str(), "t1" | "t2")
+          {
+            return Err(WebReplyError::refused(
+              StatusCode::CONFLICT,
+              format!(
+                "Waiting on you item {:?} is tiered {tier} (rule: {}): carry out the step and record it with \
+                 charliebot digest add instead of waiting for approval",
+                item.text,
+                rule.as_deref().unwrap_or("none")
+              ),
+            ));
+          }
         }
       }
     }
   }
   let now = UtcDateTime::now();
   let waiting = match patch.waiting.as_deref() {
-    Some(items) => assign_tiers(assign_since(items, &stored_waiting, &mut links, now)?, &ask_tiers)?,
+    Some([]) => Vec::new(),
+    Some(items) => {
+      let links = links.as_mut().expect("nonempty waiting items have plan-link validation");
+      assign_tiers(assign_since(items, &stored_waiting, links, now)?, &ask_tiers)?
+    }
     None => stored_waiting,
   };
   let mut status = base;

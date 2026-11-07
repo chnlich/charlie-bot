@@ -33,12 +33,13 @@ fn compose_with(home: &Path, repo_root: &Path, server_bin_dir: &Path) -> anyhow:
   let cfg = registry.load_config(home)?;
   let mut base_env = agent_environment::agent_base_environment(server_bin_dir, &gh_wrapper::dir_under(repo_root))?;
   gh_wrapper::apply_token_command(&mut base_env.values, cfg.github.app_token_command.as_deref());
+  let availability = Arc::new(charliebot_agents::backend_availability::BackendAvailability::load(home)?);
   Ok(CliHost {
     cfg,
     registry: Arc::new(registry),
     repo_root: repo_root.to_path_buf(),
     base_env,
-    pool: Arc::new(BackendPool::default()),
+    pool: Arc::new(BackendPool::new(availability)),
   })
 }
 

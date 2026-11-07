@@ -115,7 +115,19 @@ fn feature_context_with_entries(entries: &[(&str, Mapping)]) -> (tempfile::TempD
   startup
     .insert(AgentBaseEnvironment { values: gh_wrapper_env(home.path(), "/usr/bin") })
     .expect("agent base environment inserts");
-  startup.insert(BackendPool::default()).expect("backend pool inserts");
+  startup
+    .insert(
+      charliebot_agents::backend_availability::BackendAvailability::load(home.path())
+        .expect("the availability owner loads"),
+    )
+    .expect("the owner inserts");
+  startup
+    .insert(BackendPool::new(
+      startup
+        .require::<charliebot_agents::backend_availability::BackendAvailability>()
+        .expect("the owner is in the startup state"),
+    ))
+    .expect("backend pool inserts");
   startup
     .insert(RepoRoot::new(Some(repo_root().into_os_string())).expect("repo root value"))
     .expect("repo root inserts");

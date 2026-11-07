@@ -132,6 +132,9 @@ pub const BOOT_SKIP_PROOF_FILE_NAME: &str = "boot_skip_proof.json";
 /// The boot's trigger index: one row per trigger file a boot proved not pending.
 pub const BOOT_TRIGGER_INDEX_FILE_NAME: &str = "boot_trigger_index.json";
 
+/// The backends' persisted usage availability: one row per backend option id that is out until a time.
+pub const BACKEND_AVAILABILITY_FILE_NAME: &str = "backend_availability.json";
+
 /// The home's `state` directory.
 pub fn state_dir(home: &Path) -> PathBuf {
   home.join(STATE_DIR_NAME)
@@ -157,6 +160,11 @@ pub fn boot_trigger_index_path(home: &Path) -> PathBuf {
   state_dir(home).join(BOOT_TRIGGER_INDEX_FILE_NAME)
 }
 
+/// The backends' persisted usage availability.
+pub fn backend_availability_path(home: &Path) -> PathBuf {
+  state_dir(home).join(BACKEND_AVAILABILITY_FILE_NAME)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -177,6 +185,7 @@ mod tests {
     assert_eq!(boot_skip_proof_path(home), PathBuf::from("/synthetic/profile/state/boot_skip_proof.json"));
     assert_eq!(boot_trigger_index_path(home), PathBuf::from("/synthetic/profile/state/boot_trigger_index.json"));
     assert_eq!(state_rel_path(BOOT_SKIP_PROOF_FILE_NAME), format!("{STATE_DIR_NAME}/{BOOT_SKIP_PROOF_FILE_NAME}"));
+    assert_eq!(backend_availability_path(home), PathBuf::from("/synthetic/profile/state/backend_availability.json"));
   }
 
   #[test]

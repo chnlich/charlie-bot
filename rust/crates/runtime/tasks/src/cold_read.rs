@@ -9,6 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::bail;
+use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool::is_quota_error;
 use charliebot_agents::cli_host::CliHost;
 use charliebot_agents::{backend_types, one_shot_text};
@@ -400,7 +401,8 @@ pub async fn run_light_probe(host: &CliHost, prompt: &str, system_prompt: &str) 
       Err(error) => {
         let message = format!("{error:#}");
         if is_quota_error(&message) {
-          host.pool.cool(&option.id, None);
+          let availability = host.pool.availability();
+          availability.record(&option.id, None, backend_availability::REASON_QUOTA_ERROR, &message)?;
         }
         attempts.push((option.id, format!("{error_type}: {message}")));
       }
@@ -783,6 +785,7 @@ BBBB
     // The probe records both failures as `RuntimeError`, the first with an empty message.
     let mut registry = Registry::new();
     registry.register_package("tests.cold_read", register_failing).unwrap();
+    let home = tempfile::tempdir().unwrap();
     let host = CliHost {
       cfg: probe_cfg(["alpha", "beta"]),
       registry: Arc::new(registry),
@@ -793,7 +796,9 @@ BBBB
           (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), "/synthetic/gh-wrapper/gh".to_string()),
         ]),
       },
-      pool: std::sync::Arc::new(charliebot_agents::backend_pool::BackendPool::default()),
+      pool: std::sync::Arc::new(charliebot_agents::backend_pool::BackendPool::new(std::sync::Arc::new(
+        charliebot_agents::backend_availability::BackendAvailability::load(home.path()).unwrap(),
+      ))),
     };
 
     let probe = run_light_probe(&host, "prompt", "system").await.unwrap();

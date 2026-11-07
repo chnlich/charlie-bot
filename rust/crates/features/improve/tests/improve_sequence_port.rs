@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
+use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::{self, BackendPool};
 use charliebot_core::event_types;
 use charliebot_core::repo_root::RepoRoot;
@@ -20,6 +21,12 @@ use charliebot_tasks::spawner_backends::{self, SubagentRole};
 use charliebot_tasks::test_support::process_guard;
 use charliebot_tasks::test_support::recovery_support::{self, Scripts, Stack, SyntheticRepo};
 use futures_util::future::BoxFuture;
+
+/// A pool whose availability owner reads the empty state of a fresh home; these sites never record.
+fn test_pool() -> BackendPool {
+  let home = tempfile::tempdir().unwrap();
+  BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap()))
+}
 use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use tokio::task::{AbortHandle, JoinHandle};
@@ -662,7 +669,7 @@ async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Res
     &explicit.manager.id,
     Some("other"),
     SubagentRole::Improve,
-    &BackendPool::default(),
+    &test_pool(),
   )
   .await?;
   assert_eq!(backend, "other");
@@ -688,7 +695,7 @@ async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Res
     &inherited.manager.id,
     None,
     SubagentRole::Improve,
-    &BackendPool::default(),
+    &test_pool(),
   )
   .await?;
   assert_eq!(backend, "fake");

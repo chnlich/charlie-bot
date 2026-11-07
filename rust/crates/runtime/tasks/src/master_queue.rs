@@ -800,6 +800,7 @@ mod tests {
   use std::path::{Path, PathBuf};
   use std::time::Duration;
 
+  use charliebot_agents::backend_availability::BackendAvailability;
   use charliebot_claude_code::EXCLUDE_DYNAMIC_SECTIONS_FLAG;
   use charliebot_claude_code::claude_compaction;
   use charliebot_claude_code::claude_idle_compaction;
@@ -837,6 +838,12 @@ mod tests {
 
   fn register_synthetic_usage(registry: &mut Registry) -> Result<(), RegistryError> {
     registry.usage_resolver("synthetic_usage", Arc::new(|_host| Arc::new(SyntheticUsageResolver)))
+  }
+
+  /// A pool on a fresh home; these tests never record a member out, so the home needs no state file.
+  fn test_pool() -> Arc<BackendPool> {
+    let home = tempfile::tempdir().unwrap();
+    Arc::new(BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap())))
   }
 
   fn context_features(home: &Path) -> Arc<FeatureContext> {
@@ -887,7 +894,7 @@ mod tests {
 
   #[test]
   fn running_turn_snapshot_reads_the_shared_metadata_object() {
-    let queue = MasterQueue::new(Arc::new(BackendPool::default()));
+    let queue = MasterQueue::new(test_pool());
     let mut running = SessionMetadata::new("running", "Running", TaskProfile::Manager);
     running.native_backend = Some("fable".to_string());
     let running = Arc::new(Mutex::new(running));
@@ -937,7 +944,7 @@ mod tests {
   async fn context_state_callback_uses_the_resolver_and_event_fold() {
     let home = tempfile::tempdir().unwrap();
     let features = context_features(home.path());
-    let queue = Arc::new(MasterQueue::new(Arc::new(BackendPool::default())));
+    let queue = Arc::new(MasterQueue::new(test_pool()));
     let callbacks = queue.session_callbacks(Arc::clone(&features), Arc::new(|_| Ok((false, String::new()))));
     let context_state = callbacks.context_state.as_ref().unwrap();
 
@@ -1045,7 +1052,7 @@ mod tests {
   async fn queue_mark_unread_emits_one_sidebar_frame_for_a_flag_flip() {
     let home = tempfile::tempdir().unwrap();
     let features = context_features(home.path());
-    let queue = Arc::new(MasterQueue::new(Arc::new(BackendPool::default())));
+    let queue = Arc::new(MasterQueue::new(test_pool()));
     let callbacks = queue.session_callbacks(Arc::clone(&features), Arc::new(|_| Ok((false, String::new()))));
     let session_id = "queue-unread";
     features
@@ -1178,7 +1185,7 @@ mod tests {
   async fn retirement_runs_task_tree_activity_without_the_queue_mutex() {
     let home = tempfile::tempdir().unwrap();
     let features = context_features(home.path());
-    let queue = Arc::new(MasterQueue::new(Arc::new(BackendPool::default())));
+    let queue = Arc::new(MasterQueue::new(test_pool()));
     let queue_ref = Arc::downgrade(&queue);
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let activity_calls = Arc::clone(&calls);
@@ -1202,7 +1209,7 @@ mod tests {
   async fn a_drained_manager_turn_clears_the_busy_state_it_opened() {
     let home = tempfile::tempdir().unwrap();
     let features = context_features(home.path());
-    let queue = Arc::new(MasterQueue::new(Arc::new(BackendPool::default())));
+    let queue = Arc::new(MasterQueue::new(test_pool()));
     let observed = Arc::new(Mutex::new(Vec::new()));
     let on_finish = busy_at_finish(&features, "drained-session", Arc::clone(&observed));
 
@@ -1216,7 +1223,7 @@ mod tests {
   async fn an_enqueue_racing_the_consumer_teardown_runs_once_and_marks_busy() {
     let home = tempfile::tempdir().unwrap();
     let features = context_features(home.path());
-    let queue = Arc::new(MasterQueue::new(Arc::new(BackendPool::default())));
+    let queue = Arc::new(MasterQueue::new(test_pool()));
     for delay in 0..8 {
       let session_id = format!("race-session-{delay}");
       let first_observed = Arc::new(Mutex::new(Vec::new()));
@@ -1345,10 +1352,7 @@ mod tests {
     let request = UtcDateTime::now().to_str();
     test_fixtures::append_reading_and_request(&features, &meta.id, 120_000, &request).await;
     let runs = Arc::new(Mutex::new(Vec::new()));
-    let queue = Arc::new(MasterQueue::with_compaction_runner(
-      Arc::new(BackendPool::default()),
-      recording_runner(Arc::clone(&runs)),
-    ));
+    let queue = Arc::new(MasterQueue::with_compaction_runner(test_pool(), recording_runner(Arc::clone(&runs))));
     arm_round(&queue, &features, &meta.id, "fable").await;
     let queued = test_fixtures::work_item(&queue, &features, meta.clone());
     queue.state.lock().unwrap().session_queues.entry(meta.id.clone()).or_default().push_back(queued);
@@ -1380,10 +1384,7 @@ mod tests {
     let request = UtcDateTime::now().to_str();
     test_fixtures::append_reading_and_request(&features, &meta.id, 120_000, &request).await;
     let runs = Arc::new(Mutex::new(Vec::new()));
-    let queue = Arc::new(MasterQueue::with_compaction_runner(
-      Arc::new(BackendPool::default()),
-      recording_runner(Arc::clone(&runs)),
-    ));
+    let queue = Arc::new(MasterQueue::with_compaction_runner(test_pool(), recording_runner(Arc::clone(&runs))));
     arm_round(&queue, &features, &meta.id, "fable").await;
 
     let started = claude_idle_compaction::IdleCompaction::shared()
@@ -1426,10 +1427,7 @@ mod tests {
     let request = UtcDateTime::now().to_str();
     test_fixtures::append_reading_and_request(&features, &meta.id, 120_000, &request).await;
     let runs = Arc::new(Mutex::new(Vec::new()));
-    let queue = Arc::new(MasterQueue::with_compaction_runner(
-      Arc::new(BackendPool::default()),
-      recording_runner(Arc::clone(&runs)),
-    ));
+    let queue = Arc::new(MasterQueue::with_compaction_runner(test_pool(), recording_runner(Arc::clone(&runs))));
     arm_round(&queue, &features, &meta.id, "fable").await;
 
     let started = claude_idle_compaction::IdleCompaction::shared()
@@ -1470,7 +1468,7 @@ mod tests {
     .await;
     let request = UtcDateTime::now().to_str();
     test_fixtures::append_reading_and_request(&features, &meta.id, 120_000, &request).await;
-    let queue = Arc::new(MasterQueue::with_compaction_runner(Arc::new(BackendPool::default()), runner(panicking_run)));
+    let queue = Arc::new(MasterQueue::with_compaction_runner(test_pool(), runner(panicking_run)));
     arm_round(&queue, &features, &meta.id, "fable").await;
 
     let started = claude_idle_compaction::IdleCompaction::shared()

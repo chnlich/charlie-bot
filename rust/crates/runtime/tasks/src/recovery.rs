@@ -1768,6 +1768,7 @@ fn to_utc(value: OffsetDateTime) -> anyhow::Result<UtcDateTime> {
 mod tests {
   use super::*;
   use crate::execution::pre_recovery_step;
+  use charliebot_agents::backend_availability::BackendAvailability;
   use charliebot_agents::backend_pool::BackendPool;
   use charliebot_core::credentials::load_credentials;
   use charliebot_core::hot_reload::HotReload;
@@ -1969,7 +1970,12 @@ mod tests {
       Box::new(move || load_credentials(&credential_home)),
     ));
     let startup = Arc::new(StartupState::default());
-    startup.insert(BackendPool::default()).expect("the pool inserts once");
+    startup
+      .insert(BackendAvailability::load(home.path()).expect("the availability owner loads"))
+      .expect("the owner inserts once");
+    startup
+      .insert(BackendPool::new(startup.require::<BackendAvailability>().expect("the owner is in the startup state")))
+      .expect("the pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });
     pre_recovery_step(Arc::clone(&features)).await.expect("the startup step runs");
     (home, features)

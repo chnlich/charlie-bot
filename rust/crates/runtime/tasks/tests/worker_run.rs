@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::StatusCode;
+use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool;
 use charliebot_agents::cli_base::CliHost;
 use charliebot_core::config::{BackendOption, RoutingConfig};
@@ -35,6 +36,12 @@ use recovery_support::{
 use serde_json::{Map, Value, json};
 use serde_yaml::Mapping;
 use time::{Duration as TimeDuration, OffsetDateTime};
+
+fn backend_availability(
+  features: &Arc<charliebot_registry::context::FeatureContext>,
+) -> anyhow::Result<Arc<backend_availability::BackendAvailability>> {
+  backend_availability::backend_availability(features)
+}
 
 /// Tracks every run process in a test stack and kills its process group when the test scope ends.
 struct StackProcessGuard<'a> {
@@ -1049,7 +1056,12 @@ async fn a_cooling_routed_list_falls_back_to_the_pool() -> anyhow::Result<()> {
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
   let router_dir = tempfile::tempdir()?;
   install_router(&stack, router_dir.path(), &router_order_body(&["fake2", "fake"]), &[])?;
-  backend_pool::backend_pool(&stack.features)?.cool("fake2", None);
+  backend_availability(&stack.features)?.record(
+    "fake2",
+    None,
+    backend_availability::REASON_QUOTA_ERROR,
+    "synthetic quota error",
+  )?;
 
   let (status, delegated) = post_delegate(&routes::routes(&stack.features), quick_edit_body(&manager)).await?;
   assert_eq!(status, StatusCode::OK, "{delegated}");
@@ -1067,9 +1079,18 @@ async fn every_backend_unavailable_returns_400_with_recovery_times() -> anyhow::
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
   let router_dir = tempfile::tempdir()?;
   install_router(&stack, router_dir.path(), &router_order_body(&[]), &[])?;
-  let pool = backend_pool::backend_pool(&stack.features)?;
-  pool.cool("fake", None);
-  pool.cool("fake2", None);
+  backend_availability(&stack.features)?.record(
+    "fake",
+    None,
+    backend_availability::REASON_QUOTA_ERROR,
+    "synthetic quota error",
+  )?;
+  backend_availability(&stack.features)?.record(
+    "fake2",
+    None,
+    backend_availability::REASON_QUOTA_ERROR,
+    "synthetic quota error",
+  )?;
 
   let (status, response) = post_delegate(&routes::routes(&stack.features), quick_edit_body(&manager)).await?;
   assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
@@ -1287,7 +1308,12 @@ async fn a_routed_list_that_is_all_cooling_runs_on_the_pool_and_says_so() -> any
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
   let router_dir = tempfile::tempdir()?;
   install_router(&stack, router_dir.path(), &router_order_body(&["fake2"]), &[])?;
-  backend_pool::backend_pool(&stack.features)?.cool("fake2", None);
+  backend_availability(&stack.features)?.record(
+    "fake2",
+    None,
+    backend_availability::REASON_QUOTA_ERROR,
+    "synthetic quota error",
+  )?;
 
   let (status, delegated) = post_delegate(&routes::routes(&stack.features), quick_edit_body(&manager)).await?;
   assert_eq!(status, StatusCode::OK, "{delegated}");
@@ -1554,7 +1580,12 @@ async fn failover_with_every_member_cooling_reports_each_recovery_time() -> anyh
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
   let (worker, run) = interrupted_worker_run(&stack, &manager.id, TaskType::Implement, true).await?;
   let fake3_reset = UtcDateTime::parse("2030-01-02T03:04:00+00:00").expect("a fixed instant parses");
-  backend_pool::backend_pool(&stack.features)?.cool("fake3", Some(fake3_reset));
+  backend_availability(&stack.features)?.record(
+    "fake3",
+    Some(fake3_reset),
+    backend_availability::REASON_QUOTA_ERROR,
+    "synthetic quota error",
+  )?;
   let fake2_reset = UtcDateTime::parse("2030-01-02T02:00:00+00:00").expect("a fixed instant parses");
   stack.adapter.record_quota_failure_for_test(&worker, &run, Some(fake2_reset));
   stack.adapter.after_worker_run_for_test(&worker, &run, "failed").await?;
@@ -1719,10 +1750,13 @@ async fn assert_temporary_failover(error: &ErrorEventRun) -> anyhow::Result<()> 
   settle_until(|| Ok(stack.child_reports(&error.manager_id)?.len() == 1)).await?;
 
   let first = error.first_backend.as_str();
-  assert!(pool.cooling_until(first).is_some(), "the failed member cools");
-  assert!(pool.cooling_until("fake2").is_none(), "the next member stays selectable");
-  let remaining = pool.cooling_until(first).expect("checked above") - OffsetDateTime::now_utc();
-  assert!(remaining > TimeDuration::minutes(29) && remaining <= backend_pool::DEFAULT_COOLDOWN, "{remaining:?}");
+  assert!(pool.availability().out_until(first).is_some(), "the failed member cools");
+  assert!(pool.availability().out_until("fake2").is_none(), "the next member stays selectable");
+  let remaining = pool.availability().out_until(first).expect("checked above") - OffsetDateTime::now_utc();
+  assert!(
+    remaining > TimeDuration::minutes(29) && remaining <= backend_availability::DEFAULT_COOLDOWN,
+    "{remaining:?}"
+  );
   assert_eq!(retry.backend.as_deref(), Some("fake2"));
   assert_eq!(retry.input_event_ids, error.failed.input_event_ids);
   assert_eq!(retry.worktree_path, error.failed.worktree_path);
@@ -1730,7 +1764,7 @@ async fn assert_temporary_failover(error: &ErrorEventRun) -> anyhow::Result<()> 
   assert_eq!(switches.len(), 1, "{switches:?}");
   assert_eq!(switches[0]["from"].as_str(), Some(first));
   assert_eq!(switches[0]["to"], "fake2");
-  assert_eq!(switches[0]["recovers_at"].as_str(), pool.cooling_until_minutes(first).as_deref());
+  assert_eq!(switches[0]["recovers_at"].as_str(), pool.availability().out_until_minutes(first).as_deref());
   let reports = stack.child_reports(&error.manager_id)?;
   assert_eq!(reports.len(), 1, "{reports:?}");
   assert_eq!(reports[0]["outcome"], "failed");
@@ -1746,7 +1780,10 @@ async fn assert_no_failover(error: &ErrorEventRun) -> anyhow::Result<()> {
   assert_eq!(error.outcome, RunOutcomeKind::Failed);
   settle_until(|| Ok(stack.child_reports(&error.manager_id)?.len() == 1)).await?;
   let pool = backend_pool::backend_pool(&stack.features)?;
-  assert!(stack.cfg.backends.pool.iter().all(|member| pool.cooling_until(member).is_none()), "no member cools");
+  assert!(
+    stack.cfg.backends.pool.iter().all(|member| pool.availability().out_until(member).is_none()),
+    "no member cools"
+  );
   assert_eq!(stack.run_records(&error.worker_id)?.len(), 1, "no retry run starts");
   assert!(quota_failover_events(stack, &error.worker_id)?.is_empty(), "no failover event is written");
   let reports = stack.child_reports(&error.manager_id)?;
@@ -2367,7 +2404,7 @@ async fn a_devin_worker_retries_in_place_and_reaches_review() -> anyhow::Result<
     assert_eq!(run.first.backend.as_deref(), Some("devin"));
     assert!(run.fake_bin.join("call-2-argv.txt").is_file(), "devin took a second call");
     let pool = backend_pool::backend_pool(&run.stack.features)?;
-    assert!(pool.cooling_until("devin").is_none(), "a retried reset does not cool the member");
+    assert!(pool.availability().out_until("devin").is_none(), "a retried reset does not cool the member");
     assert!(quota_failover_events(&run.stack, &run.worker_id)?.is_empty(), "no failover event is written");
     assert_eq!(run.stack.run_ids_of_kind(&run.worker_id, RunKind::Work)?.len(), 1, "no retry run starts");
     settle_until(|| Ok(!run.stack.run_ids_of_kind(&run.worker_id, RunKind::Review)?.is_empty())).await?;
@@ -2388,10 +2425,10 @@ async fn a_pool_chosen_devin_worker_exhausts_retries_cools_at_the_reset_and_fail
 
   assert_eq!(run.outcome, RunOutcomeKind::Failed);
   let pool = backend_pool::backend_pool(&run.stack.features)?;
-  let remaining =
-    pool.cooling_until("devin").expect("devin cools at the reset its error stated") - OffsetDateTime::now_utc();
+  let remaining = pool.availability().out_until("devin").expect("devin cools at the reset its error stated")
+    - OffsetDateTime::now_utc();
   assert!(remaining > TimeDuration::seconds(10) && remaining < TimeDuration::minutes(5), "{remaining}");
-  assert!(pool.cooling_until("fake2").is_none(), "the next member stays selectable");
+  assert!(pool.availability().out_until("fake2").is_none(), "the next member stays selectable");
 
   let retry = wait_for_retry(&run.stack, &run.worker_id, &run.first.id).await?;
   let retry = retry.expect("the exhausted run fails over to the next member");
@@ -2402,7 +2439,7 @@ async fn a_pool_chosen_devin_worker_exhausts_retries_cools_at_the_reset_and_fail
   assert_eq!(switches.len(), 1, "{switches:?}");
   assert_eq!(switches[0]["from"].as_str(), Some("devin"));
   assert_eq!(switches[0]["to"], "fake2");
-  assert_eq!(switches[0]["recovers_at"].as_str(), pool.cooling_until_minutes("devin").as_deref());
+  assert_eq!(switches[0]["recovers_at"].as_str(), pool.availability().out_until_minutes("devin").as_deref());
   settle_node(&run.stack, &run.worker_id).await
 }
 
@@ -2417,7 +2454,10 @@ async fn a_pinned_devin_worker_exhausts_retries_and_reports_the_error() -> anyho
   assert_eq!(run.outcome, RunOutcomeKind::Failed);
   assert_eq!(devin_call_count(&run.fake_bin)?, "4");
   let pool = backend_pool::backend_pool(&run.stack.features)?;
-  assert!(run.stack.cfg.backends.pool.iter().all(|member| pool.cooling_until(member).is_none()), "no member cools");
+  assert!(
+    run.stack.cfg.backends.pool.iter().all(|member| pool.availability().out_until(member).is_none()),
+    "no member cools"
+  );
   assert!(quota_failover_events(&run.stack, &run.worker_id)?.is_empty(), "no failover event is written");
   assert_eq!(run.stack.run_records(&run.worker_id)?.len(), 1, "no retry run starts");
   settle_until(|| Ok(run.stack.child_reports(&run.manager_id)?.len() == 1)).await?;

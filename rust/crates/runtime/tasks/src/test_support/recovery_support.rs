@@ -35,6 +35,7 @@ use crate::recovery::{self, PassCounters};
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
+use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::{
   BackendOption, BackendsConfig, CONFIG_D_DIR_NAME, CharlieBotConfig, PathsConfig, Sections, ServerConfig,
@@ -611,7 +612,8 @@ impl Stack {
       .context("tasks crate manifest has no repository root ancestor")?;
     let startup = Arc::new(StartupState::default());
     startup.insert(AgentBaseEnvironment { values: Stack::gh_wrapper_env(checkout, "/usr/bin") })?;
-    startup.insert(BackendPool::default())?;
+    startup.insert(BackendAvailability::load(&cfg.charliebot_home)?)?;
+    startup.insert(BackendPool::new(startup.require::<BackendAvailability>()?))?;
     startup.insert(RepoRoot::new(Some(checkout.as_os_str().to_os_string()))?)?;
     let served = Arc::new(Mutex::new((*cfg).clone()));
     let config_source = Arc::clone(&served);

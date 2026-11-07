@@ -3,7 +3,14 @@ mod dispatch_support;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::BackendPool;
+
+/// A pool on a fresh home; these tests never record a member out, so the home needs no state file.
+fn test_pool() -> Arc<BackendPool> {
+  let home = tempfile::tempdir().unwrap();
+  Arc::new(BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap())))
+}
 use charliebot_agents::event_builders::make_master_done_event;
 use charliebot_core::config::BackendOption;
 use charliebot_core::event_types;
@@ -788,7 +795,7 @@ async fn a_finished_manager_turn_persists_its_observation_before_master_done_and
   let harness = Harness::new();
   let task = harness.create_task("manager", None, TaskProfile::Manager, "Manager").await;
   register_run(&harness, &task.id, "run-turn").await;
-  let queue = Arc::new(MasterQueue::new(Arc::new(BackendPool::default())));
+  let queue = Arc::new(MasterQueue::new(test_pool()));
   let adapter = TaskExecutionAdapter::new(Arc::clone(&harness.features), queue, Arc::clone(&harness.dispatcher));
   let option = BackendOption {
     id: "synthetic-backend".to_string(),

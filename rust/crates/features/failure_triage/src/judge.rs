@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_agents::backend_types::{self, BuiltBackend};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
@@ -209,7 +210,12 @@ pub async fn judge_signature(backends: &JudgeBackends<'_>, input: &JudgeInput) -
       Err(error) => {
         if matches!(error, JudgeError::Timeout(_)) {
           let until = UtcDateTime::now().into_inner() + JUDGE_COOLDOWN;
-          backends.pool.cool(&option.id, Some(UtcDateTime::from(until)));
+          let detail = error.to_string();
+          backends
+            .pool
+            .availability()
+            .record(&option.id, Some(UtcDateTime::from(until)), backend_availability::REASON_TIMEOUT, &detail)
+            .map_err(|error| JudgeError::Call(format!("{error:#}")))?;
         }
         last_error = Some(error);
       }
@@ -423,6 +429,11 @@ mod tests {
     assert_eq!(judgement.lessons_ref.as_deref(), Some("2026-11-01 — scope guard"));
   }
 
+  /// A pool whose availability owner reads the empty state of `home` and persists to it.
+  fn test_pool(home: &std::path::Path) -> Arc<BackendPool> {
+    Arc::new(BackendPool::new(Arc::new(backend_availability::BackendAvailability::load(home).unwrap())))
+  }
+
   fn config_with_pool(ids: &[&str]) -> CharlieBotConfig {
     use charliebot_core::config::{BackendsConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig};
 
@@ -480,7 +491,8 @@ mod tests {
   async fn a_judge_call_tries_the_shared_pool_rotation_order() {
     let config = config_with_pool(&["alpha", "beta"]);
     let env = env();
-    let pool = Arc::new(BackendPool::default());
+    let home = tempfile::tempdir().unwrap();
+    let pool = test_pool(home.path());
     let backends = JudgeBackends {
       cfg: &config,
       registry: Arc::new(Registry::new()),
@@ -500,8 +512,12 @@ mod tests {
   fn a_member_cooling_in_the_shared_pool_is_skipped() {
     let config = config_with_pool(&["alpha", "beta"]);
     let env = env();
-    let pool = Arc::new(BackendPool::default());
-    pool.cool("alpha", None);
+    let home = tempfile::tempdir().unwrap();
+    let pool = test_pool(home.path());
+    pool
+      .availability()
+      .record("alpha", None, backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
+      .unwrap();
     let backends = JudgeBackends {
       cfg: &config,
       registry: Arc::new(Registry::new()),

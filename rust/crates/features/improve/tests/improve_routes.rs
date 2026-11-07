@@ -74,7 +74,19 @@ fn feature_context_with_config(config_yaml: Option<&str>) -> (tempfile::TempDir,
     Box::new(move || load_credentials(&credential_home)),
   ));
   let startup = StartupState::default();
-  startup.insert(BackendPool::default()).expect("the pool inserts once");
+  startup
+    .insert(
+      charliebot_agents::backend_availability::BackendAvailability::load(home.path())
+        .expect("the availability owner loads"),
+    )
+    .expect("the owner inserts once");
+  startup
+    .insert(BackendPool::new(
+      startup
+        .require::<charliebot_agents::backend_availability::BackendAvailability>()
+        .expect("the owner is in the startup state"),
+    ))
+    .expect("the pool inserts once");
   let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
   (home, features)
 }

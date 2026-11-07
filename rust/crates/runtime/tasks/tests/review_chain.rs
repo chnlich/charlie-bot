@@ -11,6 +11,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
+use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::{BackendPool, BackendRoute};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
@@ -24,6 +25,12 @@ use recovery_support::{Stack, SyntheticRepo, script_option, synthetic_run};
 use serde_json::{Value, json};
 
 const ACCESS_KEY: &str = "synthetic-access-key";
+
+/// A pool whose availability owner reads the empty state of a fresh home and persists to it.
+fn test_pool() -> BackendPool {
+  let home = tempfile::tempdir().unwrap();
+  BackendPool::new(std::sync::Arc::new(BackendAvailability::load(home.path()).unwrap()))
+}
 
 fn result_script(summary: &str) -> String {
   let event = json!({"type": "result", "subtype": "success", "result": summary});
@@ -400,7 +407,7 @@ async fn reviewer_avoids_every_member_the_worker_node_used() -> anyhow::Result<(
     vec!["fake2".to_string(), "fake3".to_string()],
   )
   .await?;
-  let pool = BackendPool::default();
+  let pool = test_pool();
   let used = HashSet::from(["fake2".to_string()]);
   let selection =
     review::select_reviewer_backend(&stack.cfg, &pool, "reviewer", "fake", Some("fake-model"), &[], &used)?;
@@ -416,8 +423,11 @@ async fn reviewer_never_falls_back_to_a_member_the_worker_node_used() -> anyhow:
     vec!["fake2".to_string()],
   )
   .await?;
-  let pool = BackendPool::default();
-  pool.cool("fake2", None);
+  let pool = test_pool();
+  pool
+    .availability()
+    .record("fake2", None, charliebot_agents::backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
+    .unwrap();
   let used = HashSet::from(["fake".to_string()]);
   assert!(
     review::select_reviewer_backend(&stack.cfg, &pool, "reviewer", "fake", Some("fake-model"), &[], &used)?.is_none()
@@ -445,7 +455,7 @@ async fn check_without_used_members_keeps_the_session_backend_fallback() -> anyh
     vec!["fake2".to_string()],
   )
   .await?;
-  let pool = BackendPool::default();
+  let pool = test_pool();
   let tried = vec!["fake2".to_string()];
   let selection =
     review::select_reviewer_backend(&stack.cfg, &pool, "verify", "fake", Some("fake-model"), &tried, &HashSet::new())?;
@@ -460,7 +470,7 @@ async fn check_without_used_members_keeps_the_session_backend_fallback() -> anyh
 #[ignore = "integration"]
 async fn empty_pool_reuses_the_worker_backend_on_every_attempt() -> anyhow::Result<()> {
   let stack = Stack::start_with(vec![script_option("fake", "exit 0")], Vec::new()).await?;
-  let pool = BackendPool::default();
+  let pool = test_pool();
   let first =
     review::select_reviewer_backend(&stack.cfg, &pool, "reviewer", "fake", Some("fake-model"), &[], &HashSet::new())?
       .expect("an empty pool falls back to the worker backend");

@@ -1,6 +1,7 @@
 //! Agent process transport, backend implementations, launch planning, and environment setup.
 
 pub mod agent_environment;
+pub mod backend_availability;
 pub mod backend_pool;
 pub mod backend_types;
 pub mod cli_base;

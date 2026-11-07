@@ -1209,8 +1209,10 @@ mod tests {
       &root.path().join("home"),
       &test_fixtures::claude_config(Some(account_dir.as_path())),
     );
+    let availability =
+      Arc::new(charliebot_agents::backend_availability::BackendAvailability::load(&root.path().join("home")).unwrap());
     let queue = Arc::new(crate::master_queue::MasterQueue::new(Arc::new(
-      charliebot_agents::backend_pool::BackendPool::default(),
+      charliebot_agents::backend_pool::BackendPool::new(availability),
     )));
     let meta = test_fixtures::manager_session(
       &features,

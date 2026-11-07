@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use charliebot_agents::agent_environment;
+use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool::{self, BackendPool};
 use charliebot_agents::backend_types;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
@@ -162,7 +163,8 @@ where
       Err(error) => {
         tracing::warn!(target: "charliebot_tasks", session_id, error = %error, "autonamer_failed");
         if backend_pool::is_quota_error(&error.to_string()) {
-          pool.cool(&backend_id, None);
+          let detail = error.to_string();
+          pool.availability().record(&backend_id, None, backend_availability::REASON_QUOTA_ERROR, &detail)?;
         }
       }
     }
@@ -320,12 +322,18 @@ fn json_type_name(value: &Value) -> &'static str {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use charliebot_agents::backend_availability::BackendAvailability;
   use charliebot_core::config::{
     BackendsConfig, PathsConfig, RoutingConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
   };
   use serde_yaml::Mapping;
   use std::path::PathBuf;
   use std::sync::Mutex;
+
+  /// A pool whose availability owner reads the empty state of `home` and persists to it.
+  fn test_pool(home: &std::path::Path) -> Arc<BackendPool> {
+    Arc::new(BackendPool::new(Arc::new(BackendAvailability::load(home).unwrap())))
+  }
 
   /// A configuration whose two options `ids` are also the pool, with the routing section `routing`.
   fn light_cfg(ids: [&str; 2], routing: Option<RoutingConfig>) -> CharlieBotConfig {
@@ -393,7 +401,8 @@ mod tests {
   #[tokio::test]
   async fn quota_from_a_light_backend_cools_the_shared_pool_before_the_next_attempt() {
     let cfg = light_cfg(["light-a", "light-b"], None);
-    let pool = Arc::new(BackendPool::default());
+    let home = tempfile::tempdir().unwrap();
+    let pool = test_pool(home.path());
     let calls = Arc::new(Mutex::new(Vec::new()));
     let generated = generate_from_light_backends(&cfg, "session-a", Arc::clone(&pool), |option| {
       let calls = Arc::clone(&calls);
@@ -426,7 +435,7 @@ mod tests {
       marker.display().to_string(),
     ];
     let cfg = light_cfg(["fake", "fake2"], Some(RoutingConfig { command }));
-    let names = iter_light_backends(&cfg, Arc::new(BackendPool::default()))
+    let names = iter_light_backends(&cfg, test_pool(dir.path()))
       .map(|option| option.map(|option| option.id))
       .collect::<anyhow::Result<Vec<_>>>()
       .unwrap();

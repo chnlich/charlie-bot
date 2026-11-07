@@ -16,6 +16,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
+use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{RUN_FINISHED, TASK_CLOSED};
@@ -453,7 +454,16 @@ async fn run_loop(
       let quota_failure = adapter.take_quota_failure(spec.child_id, &run.id);
       if let Some(reason) = blocker_reason {
         if state.backend_from_pool {
-          pool.cool(&iteration_backend, quota_failure.flatten());
+          let (resets_at, message) = match &quota_failure {
+            Some(failure) => (failure.resets_at, failure.message.clone()),
+            None => (None, String::new()),
+          };
+          pool.availability().record(
+            &iteration_backend,
+            resets_at,
+            backend_availability::REASON_QUOTA_ERROR,
+            &message,
+          )?;
           if quota_failure.is_some() && run.pid.is_none() && iteration < spec.iterations {
             match pool.select(cfg, "improve", &[])? {
               Some(member) => next_pool_member = Some(member),

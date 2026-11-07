@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
+use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool;
 use charliebot_agents::backend_types;
 use charliebot_agents::launch_loop;
@@ -136,7 +137,15 @@ pub struct TaskExecutionAdapter {
   pub(crate) dispatch: Arc<Dispatcher>,
   pub(crate) launches: Arc<Mutex<LaunchState>>,
   pub(crate) recovery: Arc<RecoveryState>,
-  quota_failures: Arc<Mutex<HashMap<LaunchKey, Option<UtcDateTime>>>>,
+  quota_failures: Arc<Mutex<HashMap<LaunchKey, QuotaFailure>>>,
+}
+
+/// One run's recorded quota failure: the reset the backend stated, if any, and the error text the availability owner
+/// records as the detail.
+#[derive(Clone, Debug)]
+pub struct QuotaFailure {
+  pub resets_at: Option<UtcDateTime>,
+  pub message: String,
 }
 
 struct RunContinuation {
@@ -885,11 +894,12 @@ impl TaskExecutionAdapter {
     if let Some(refusal) = error.downcast_ref::<LaunchRefused>() {
       tracing::warn!(target: "charliebot_tasks", session_id, run_id, error = %refusal.message, quota_exhausted = refusal.quota_exhausted, "task_run_launch_refused");
       if refusal.quota_exhausted {
+        let failure = QuotaFailure { resets_at: refusal.resets_at, message: refusal.message.clone() };
         self
           .quota_failures
           .lock()
           .expect("worker quota failure map is not poisoned")
-          .insert((session_id.to_string(), run_id.to_string()), refusal.resets_at);
+          .insert((session_id.to_string(), run_id.to_string()), failure);
       }
       self.record_launch_error_event(session_id, run_id, &refusal.message, Some(refusal.quota_exhausted)).await?;
     } else if let Some(quota) = error.downcast_ref::<worker::QuotaExhaustedError>() {
@@ -900,11 +910,12 @@ impl TaskExecutionAdapter {
         .transpose()?
         .map(|value| UtcDateTime::parse(&value))
         .transpose()?;
+      let failure = QuotaFailure { resets_at, message: quota.to_string() };
       self
         .quota_failures
         .lock()
         .expect("worker quota failure map is not poisoned")
-        .insert((session_id.to_string(), run_id.to_string()), resets_at);
+        .insert((session_id.to_string(), run_id.to_string()), failure);
     } else {
       tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %error, "task_run_failed");
     }
@@ -1453,11 +1464,12 @@ impl TaskExecutionAdapter {
 
   #[cfg(feature = "test-hooks")]
   pub fn record_quota_failure_for_test(&self, session_id: &str, run_id: &str, resets_at: Option<UtcDateTime>) {
+    let failure = QuotaFailure { resets_at, message: "synthetic quota error".to_string() };
     self
       .quota_failures
       .lock()
       .expect("worker quota failure map is not poisoned")
-      .insert((session_id.to_string(), run_id.to_string()), resets_at);
+      .insert((session_id.to_string(), run_id.to_string()), failure);
   }
 
   async fn after_worker_run_inner(
@@ -1486,12 +1498,13 @@ impl TaskExecutionAdapter {
     }
 
     let quota_failure = self.take_quota_failure(session_id, &run.id);
-    if let (Some(resets_at), Some(backend)) = (quota_failure, run.backend.as_deref())
+    let quota_failed = quota_failure.is_some();
+    if let (Some(failure), Some(backend)) = (quota_failure, run.backend.as_deref())
       && self.pool_chose_backend(meta, run)
     {
-      backend_pool::backend_pool(&self.features)?.cool(backend, resets_at);
+      let availability = backend_availability::backend_availability(&self.features)?;
+      availability.record(backend, failure.resets_at, backend_availability::REASON_QUOTA_ERROR, &failure.message)?;
     }
-    let quota_failed = quota_failure.is_some();
 
     if run.kind == RunKind::Review {
       return self.after_review_run(meta, run, durable_outcome).await;
@@ -1930,8 +1943,8 @@ impl TaskExecutionAdapter {
     (Some((target, commit, repo_path.to_string())), String::new())
   }
 
-  /// Remove and return the quota reset recorded for one run, distinguishing no failure from an unknown reset.
-  pub fn take_quota_failure(&self, session_id: &str, run_id: &str) -> Option<Option<UtcDateTime>> {
+  /// Remove and return the quota failure recorded for one run, distinguishing no failure from an unknown reset.
+  pub fn take_quota_failure(&self, session_id: &str, run_id: &str) -> Option<QuotaFailure> {
     self
       .quota_failures
       .lock()
@@ -2000,7 +2013,8 @@ impl TaskExecutionAdapter {
     )
     .await?;
     let from_backend = run.backend.as_deref().unwrap_or_default();
-    let recovers_at = pool.cooling_until_minutes(from_backend).unwrap_or_default();
+    let recovers_at =
+      backend_availability::backend_availability(&self.features)?.out_until_minutes(from_backend).unwrap_or_default();
     self
       .features
       .store
@@ -3037,7 +3051,19 @@ mod tests {
       Box::new(move || load_credentials(&credential_home)),
     ));
     let startup = Arc::new(StartupState::default());
-    startup.insert(BackendPool::default()).expect("the pool inserts once");
+    startup
+      .insert(
+        charliebot_agents::backend_availability::BackendAvailability::load(home.path())
+          .expect("the availability owner loads"),
+      )
+      .expect("the owner inserts once");
+    startup
+      .insert(BackendPool::new(
+        startup
+          .require::<charliebot_agents::backend_availability::BackendAvailability>()
+          .expect("the owner is in the startup state"),
+      ))
+      .expect("the pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });
 
     pre_recovery_step(Arc::clone(&features)).await.expect("the startup step runs");
@@ -3084,7 +3110,19 @@ mod tests {
       Box::new(move || load_credentials(&credential_home)),
     ));
     let startup = Arc::new(StartupState::default());
-    startup.insert(BackendPool::default()).expect("the pool inserts once");
+    startup
+      .insert(
+        charliebot_agents::backend_availability::BackendAvailability::load(home.path())
+          .expect("the availability owner loads"),
+      )
+      .expect("the owner inserts once");
+    startup
+      .insert(BackendPool::new(
+        startup
+          .require::<charliebot_agents::backend_availability::BackendAvailability>()
+          .expect("the owner is in the startup state"),
+      ))
+      .expect("the pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });
 
     pre_recovery_step(Arc::clone(&features)).await.expect("the startup step runs");
@@ -3176,7 +3214,16 @@ mod tests {
 
     let home = tempfile::tempdir().unwrap();
     let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
-    features.startup.insert(BackendPool::default()).unwrap();
+    features
+      .startup
+      .insert(charliebot_agents::backend_availability::BackendAvailability::load(&home.path().join("home")).unwrap())
+      .unwrap();
+    features
+      .startup
+      .insert(BackendPool::new(
+        features.startup.require::<charliebot_agents::backend_availability::BackendAvailability>().unwrap(),
+      ))
+      .unwrap();
     pre_recovery_step(Arc::clone(&features)).await.unwrap();
     let meta = test_fixtures::manager_session(&features, "await-terminal-count", "fable", None, "claude-await").await;
     features.store.append_chat_event(&meta.id, json!({"type":"user","content":"synthetic input"})).await.unwrap();
@@ -3212,7 +3259,16 @@ mod tests {
 
     let home = tempfile::tempdir().unwrap();
     let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
-    features.startup.insert(BackendPool::default()).unwrap();
+    features
+      .startup
+      .insert(charliebot_agents::backend_availability::BackendAvailability::load(&home.path().join("home")).unwrap())
+      .unwrap();
+    features
+      .startup
+      .insert(BackendPool::new(
+        features.startup.require::<charliebot_agents::backend_availability::BackendAvailability>().unwrap(),
+      ))
+      .unwrap();
     pre_recovery_step(Arc::clone(&features)).await.unwrap();
     let meta = test_fixtures::manager_session(&features, "launch-history-count", "fable", None, "claude-launch").await;
     for (id, content) in [("input-a", "first input"), ("input-b", "second input")] {

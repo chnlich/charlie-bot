@@ -389,7 +389,9 @@ mod tests {
       registry: Arc::new(registry),
       repo_root: repo_root.to_path_buf(),
       base_env: agent_base(home, repo_root),
-      pool: Arc::new(BackendPool::default()),
+      pool: Arc::new(BackendPool::new(Arc::new(
+        charliebot_agents::backend_availability::BackendAvailability::load(home).unwrap(),
+      ))),
     }
   }
 

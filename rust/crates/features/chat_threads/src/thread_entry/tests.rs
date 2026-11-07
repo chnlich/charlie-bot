@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::http::StatusCode;
+use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_core::RepoRoot;
 use charliebot_core::config::BackendOption;
 use charliebot_core::credentials::load_credentials;
@@ -258,7 +259,14 @@ impl Home {
     ));
     let startup = StartupState::default();
     startup.insert(RunningTurnInputs::new(|_| Vec::new())).expect("the stub inserts once");
-    startup.insert(backend_pool::BackendPool::default()).expect("the backend pool inserts once");
+    startup
+      .insert(BackendAvailability::load(dir.path()).expect("the availability owner loads"))
+      .expect("the owner inserts once");
+    startup
+      .insert(backend_pool::BackendPool::new(
+        startup.require::<BackendAvailability>().expect("the owner is in the startup state"),
+      ))
+      .expect("the backend pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
 
     features.startup.insert(TaskCompletion::new(Arc::clone(&features))).expect("the completion inserts once");

@@ -158,7 +158,8 @@ async fn killed_server_process_leaves_relay_and_serve_for_adoption() {
   let follow = tokio::spawn(async move {
     follow_from_cursor(&follow_dir, cursor, translator, move || super::relay::same_process(pid, &start), output).await
   });
-  let client = reqwest::Client::builder().no_proxy().build().unwrap();
+  let client = charliebot_compat::http_client::client(&charliebot_compat::http_client::Settings::default())
+    .expect("the default client builds");
   for mut event in
     [text_event("answer after restart"), usage_event(3, 1), json!({"type": "session.execution.succeeded", "data": {}})]
   {

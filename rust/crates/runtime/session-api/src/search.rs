@@ -43,8 +43,8 @@ const CONTENT_NONE: u8 = u8::MAX;
 const BIGRAM_SYMBOLS: &[u8; 64] = b"abcdefghijklmnopqrstuvwxyz0123456789 ._-/:,;()[]{}<>=\"'`|&#*@+%!";
 /// The files whose content indexes the memo keeps.
 ///
-/// One index is 2,709 bytes and the 7,160-session mock home takes about 19 MB. The cap exceeds that count, so a
-/// fresh query does not evict the indexes its next query would reuse.
+/// One index's bitmaps are 2,709 bytes and the 7,160-session mock home takes about 19 MB. The cap exceeds that
+/// count, so a fresh query does not evict the indexes its next query would reuse.
 const SEARCH_CONTENT_INDEX_MEMO_LIMIT: usize = 16_384;
 /// The threads one signature batch may split across.
 ///
@@ -93,7 +93,23 @@ struct FileSignature {
 #[derive(Clone)]
 struct WatchedFile {
   path: PathBuf,
+  /// The path's [`path_key`], which the content index memo is keyed by.
+  key: u64,
   below_sessions: Option<CString>,
+}
+
+/// The key a chat file's content index is stored under.
+///
+/// The sweep looks every candidate's index up, so the key is the path's FNV-1a hash: an eight-byte key costs one
+/// hashbrown probe, where the path itself cost a hash of its bytes and a compare on every candidate. A hash is not
+/// unique, so an entry keeps the path it was built for, and a mismatched path answers as a missing index.
+fn path_key(path: &Path) -> u64 {
+  let mut key: u64 = 0xcbf2_9ce4_8422_2325;
+  for byte in path.as_os_str().as_bytes() {
+    key ^= u64::from(*byte);
+    key = key.wrapping_mul(0x0000_0100_0000_01b3);
+  }
+  key
 }
 
 /// The content index's code per byte: the byte's position in [`BIGRAM_SYMBOLS`], its letter's position for an
@@ -115,6 +131,8 @@ static CONTENT_CODES: LazyLock<[u8; 256]> = LazyLock::new(|| {
 /// `signature` is the file's identity when the index was built. A file whose identity moved needs its index rebuilt,
 /// because text that grew or changed can hold sequences the old index lacks.
 struct ContentIndexEntry {
+  /// The file the index was built for, so a [`path_key`] collision answers as a missing index.
+  path: PathBuf,
   signature: FileSignature,
   trigrams: Box<[u8]>,
   bigrams: Box<[u8]>,
@@ -217,7 +235,7 @@ struct CorpusWork {
 struct SearchMemos {
   corpus_work: Option<Arc<CorpusWork>>,
   files: LruCache<PathBuf, SearchFileRoots>,
-  content: LruCache<PathBuf, ContentIndexEntry>,
+  content: LruCache<u64, ContentIndexEntry>,
   matches: LruCache<String, Arc<SearchMatch>>,
   read_failures: HashSet<(String, String)>,
   #[cfg(test)]
@@ -307,13 +325,13 @@ impl SearchMemos {
   /// What this file's content index says about a needle, given the needle's trigrams and bigrams.
   fn content_verdict(
     &mut self,
-    path: &Path,
+    file: &WatchedFile,
     signature: FileSignature,
     trigrams: &[usize],
     bigrams: &[usize],
   ) -> ContentVerdict {
-    let Some(entry) = self.content.get(path) else { return ContentVerdict::Missing };
-    if entry.signature != signature {
+    let Some(entry) = self.content.get(&file.key) else { return ContentVerdict::Missing };
+    if entry.path != file.path || entry.signature != signature {
       return ContentVerdict::Missing;
     }
     let holds = |bits: &[u8], bit: usize| bits[bit >> 3] & (1u8 << (bit & 7)) != 0;
@@ -325,8 +343,14 @@ impl SearchMemos {
     }
   }
 
-  fn remember_content_index(&mut self, path: &Path, signature: FileSignature, trigrams: Box<[u8]>, bigrams: Box<[u8]>) {
-    self.content.put(path.to_path_buf(), ContentIndexEntry { signature, trigrams, bigrams });
+  fn remember_content_index(
+    &mut self,
+    file: &WatchedFile,
+    signature: FileSignature,
+    trigrams: Box<[u8]>,
+    bigrams: Box<[u8]>,
+  ) {
+    self.content.put(file.key, ContentIndexEntry { path: file.path.clone(), signature, trigrams, bigrams });
   }
 
   fn cached_match(&mut self, query: &str) -> Option<Arc<SearchMatch>> {
@@ -458,7 +482,7 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
         let path = &work.candidates[index].path;
         // The content index settles most fresh queries before the per-file roots are read.
         let needs_index = if content_index_settles {
-          match guard.content_verdict(path, signature, &trigrams, &bigrams) {
+          match guard.content_verdict(&work.candidates[index], signature, &trigrams, &bigrams) {
             ContentVerdict::Absent => continue,
             ContentVerdict::Possible => false,
             ContentVerdict::Missing => true,
@@ -501,10 +525,12 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
         match answer {
           Ok((trigrams, bigrams, found)) => {
             let path = &work.candidates[index].path;
-            memos
-              .lock()
-              .expect("session search memo mutex is not poisoned")
-              .remember_content_index(path, signature, trigrams, bigrams);
+            memos.lock().expect("session search memo mutex is not poisoned").remember_content_index(
+              &work.candidates[index],
+              signature,
+              trigrams,
+              bigrams,
+            );
             memos
               .lock()
               .expect("session search memo mutex is not poisoned")
@@ -731,7 +757,8 @@ fn sessions_dir_handle(dir: &Path) -> Option<Arc<File>> {
 fn watched_file(sessions_dir: &Path, path: PathBuf) -> WatchedFile {
   let below_sessions =
     path.strip_prefix(sessions_dir).ok().and_then(|relative| CString::new(relative.as_os_str().as_bytes()).ok());
-  WatchedFile { path, below_sessions }
+  let key = path_key(&path);
+  WatchedFile { path, key, below_sessions }
 }
 
 fn file_signature_unlogged(path: &Path) -> io::Result<FileSignature> {
@@ -1538,6 +1565,31 @@ mod tests {
     fs::write(&path, "no match here; walrus appears\n").unwrap();
     let rows = super::search_sessions_with_memos(&store, "walrus", &memos).unwrap().rows;
     assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
+  }
+
+  /// Two paths whose keys collide must not answer with each other's index: the entry names the file it was built for.
+  #[test]
+  fn a_content_index_key_collision_answers_as_a_missing_index() {
+    let mut memos = super::SearchMemos::default();
+    let file = |path: &str| super::WatchedFile { path: std::path::PathBuf::from(path), key: 7, below_sessions: None };
+    let first = file("/home/sessions/first/data/chat_events.jsonl");
+    let second = file("/home/sessions/second/data/chat_events.jsonl");
+    let signature = super::FileSignature { mtime_ns: 1, size: 2, inode: 3 };
+    memos.remember_content_index(
+      &first,
+      signature,
+      vec![u8::MAX; super::TRIGRAM_BYTES].into_boxed_slice(),
+      vec![u8::MAX; super::BIGRAM_BYTES].into_boxed_slice(),
+    );
+
+    assert!(
+      matches!(memos.content_verdict(&first, signature, &[0], &[0]), super::ContentVerdict::Possible),
+      "the file the index was built for reads its own index"
+    );
+    assert!(
+      matches!(memos.content_verdict(&second, signature, &[0], &[0]), super::ContentVerdict::Missing),
+      "a colliding key answers as no index, so the file is read again"
+    );
   }
 
   /// A non-letter in any position must name no trigram: the combined sum alone would alias another sequence's bit.

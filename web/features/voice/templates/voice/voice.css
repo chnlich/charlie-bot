@@ -6,11 +6,10 @@
 .voice-timer { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.75rem; color: #94a3b8; }
 .voice-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* The ⋯ menu's voice entries: on phones the caret beside the mic is hidden and
-   these entries, added by voice-input.js, open the backend menu and the
-   recordings page. On wider screens the caret and its menu carry both, and the
-   entries take no space. */
-#voice-backend-menu-entry, #voice-recordings-menu-entry {
+/* The ⋯ menu's voice backend entry: on phones the caret beside the mic is hidden
+   and this entry, added by voice-input.js, opens the backend menu. On wider
+   screens the caret and its menu carry it, and the entry takes no space. */
+#voice-backend-menu-entry {
   display: none;
   align-items: center;
   padding: 0.625rem 0.75rem;
@@ -21,8 +20,8 @@
   font-size: 0.875rem;
   white-space: nowrap;
 }
-#voice-backend-menu-entry:hover, #voice-recordings-menu-entry:hover { border-color: #64748b; }
+#voice-backend-menu-entry:hover { border-color: #64748b; }
 @media (max-width: 768px) {
   #voice-backend-btn { display: none; }
-  #voice-backend-menu-entry, #voice-recordings-menu-entry { display: inline-flex; }
+  #voice-backend-menu-entry { display: inline-flex; }
 }

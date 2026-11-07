@@ -190,11 +190,9 @@ test('the backend menu moves right when right alignment would cross the left scr
 test('neither the backend menu nor the ⋯ menu carries a Recent recordings entry', () => {
   const {overflow, menu} = buildHarness();
   for (const child of menu.children) {
-    assert.notEqual(child.id, 'voice-recordings-menu-entry');
     assert.notEqual(child.textContent, 'Recent recordings');
   }
   for (const child of overflow.children) {
-    assert.notEqual(child.id, 'voice-recordings-menu-entry');
     assert.notEqual(child.textContent, 'Recent recordings');
   }
 });

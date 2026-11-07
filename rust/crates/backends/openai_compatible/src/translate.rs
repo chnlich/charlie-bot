@@ -533,7 +533,7 @@ impl OpenAiChatStream {
     events.push(("content_block_stop", json!({"index": call.block_index})));
   }
 
-  /// Applies one streaming tool-call delta: the first delta registers the call. The call's block opens at once
+  /// One streaming tool-call delta applied: the first delta registers the call. The call's block opens at once
   /// unless Gemini stream rules defer the opening until `extra_content` arrives; earlier arguments stay buffered.
   fn tool_delta(&mut self, tool_call: &Value, events: &mut Vec<Event>) -> ValueResult<()> {
     let call_index = match get(tool_call, "index")? {

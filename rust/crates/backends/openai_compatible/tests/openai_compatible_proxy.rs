@@ -144,7 +144,7 @@ async fn chat(
   Response::builder().status(reply.status).body(Body::from_stream(stream::iter(chunks))).unwrap()
 }
 
-/// Serves `replies` at `/<index>/v1/chat/completions` on a loopback port.
+/// The loopback upstream that serves `replies` at `/<index>/v1/chat/completions`.
 async fn serve_upstream(replies: Vec<Reply>) -> (u16, Arc<Upstream>) {
   let upstream = Arc::new(Upstream { replies, seen: Mutex::new(HashMap::new()) });
   let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -164,7 +164,7 @@ fn no_proxy_client() -> reqwest::Client {
   http_client::client(&Settings::default()).unwrap()
 }
 
-/// Posts `body` to a case's route and reads the answer until it ends or breaks. It returns the status, the bytes
+/// The answer to `body` posted at a case's route, read until it ends or breaks. It carries the status, the bytes
 /// received, and the transport failure that cut the body short, if any.
 async fn post_case(
   client: &reqwest::Client,

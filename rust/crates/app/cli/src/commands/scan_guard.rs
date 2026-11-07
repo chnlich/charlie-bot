@@ -825,8 +825,7 @@ mod tests {
 
   #[test]
   fn per_session_glob_loop_is_refused() {
-    let command =
-      r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json,sys; print(json.load(open('$f')).get('title'))"; done"#;
+    let command = r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json,sys; print(json.load(open('$f')).get('title'))"; done"#;
     let forms = scan_forms(command, &home()).unwrap();
     assert_eq!(forms.first(), Some(&ScanForm::PerFileProcess), "{command}");
   }
@@ -907,7 +906,8 @@ mod tests {
   #[test]
   fn an_absolute_single_quoted_prune_path_keeps_its_prune() {
     let home = home();
-    let command = format!(r"find / \( -path '/proc' -o -path '{home}/.charliebot/sessions' \) -prune -o -name X -print");
+    let command =
+      format!(r"find / \( -path '/proc' -o -path '{home}/.charliebot/sessions' \) -prune -o -name X -print");
     assert!(scan_forms(&command, &home).unwrap().is_empty(), "{command}");
   }
 

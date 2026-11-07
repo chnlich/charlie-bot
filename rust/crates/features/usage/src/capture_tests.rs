@@ -278,7 +278,11 @@ fn fixture_with(home: &Path, options: &str) -> (CharlieBotConfig, Registry) {
 
 fn claude_fixture(home: &Path) -> (CharlieBotConfig, Registry) {
   fs::create_dir_all(home).unwrap();
-  fs::write(home.join("config.yaml"), format!("backends:\n  options:\n{}", option("claude-main", "cc-claude", "vendor/claude-model"))).unwrap();
+  fs::write(
+    home.join("config.yaml"),
+    format!("backends:\n  options:\n{}", option("claude-main", "cc-claude", "vendor/claude-model")),
+  )
+  .unwrap();
   let schema = ConfigSchema { backend_types: vec!["cc-claude"], ..ConfigSchema::default() };
   let config = config::load_config(home, &schema).unwrap();
   CODEX_ROOT.with(|root| *root.borrow_mut() = Some(home.join("cli/codex")));
@@ -1640,12 +1644,7 @@ fn a_capture_commits_once_and_a_failed_one_keeps_its_finished_files() {
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
   cli_file(&home, "claude", "sess1", &[call("m1-id", NAME, "2024-01-01T00:00:00Z", [100, 20, 40, 30], &["sess1"])]);
-  cli_file(
-    &home,
-    "claude",
-    "subagent",
-    &[call("sub-id", NAME, "2024-01-02T00:00:00Z", [50, 10, 0, 5], &["sess2"])],
-  );
+  cli_file(&home, "claude", "subagent", &[call("sub-id", NAME, "2024-01-02T00:00:00Z", [50, 10, 0, 5], &["sess2"])]);
   cli_file(
     &home,
     "codex",

@@ -1292,18 +1292,18 @@ mod tests {
     let old = home.child(&root, "old").await;
     let new = home.child(&root, "new").await;
     let deep = home.child(&old, "deep").await;
-    for (session_id, updated_at) in [
-      (&old, "2026-11-07T00:00:01Z"),
-      (&new, "2026-11-07T00:00:02Z"),
-      (&deep, "2026-11-07T00:00:03Z"),
-    ] {
+    for (session_id, updated_at) in
+      [(&old, "2026-11-07T00:00:01Z"), (&new, "2026-11-07T00:00:02Z"), (&deep, "2026-11-07T00:00:03Z")]
+    {
       let updated_at = UtcDateTime::parse(updated_at).unwrap();
       let status = WebStatus {
         goal: None,
         now: None,
         waiting: vec![WaitingItem {
           text: "decision".to_string(),
-          context: Some("The decision is active now. Options are continue or stop; continue is recommended.".to_string()),
+          context: Some(
+            "The decision is active now. Options are continue or stop; continue is recommended.".to_string(),
+          ),
           link: None,
           since: None,
           since_exact: None,

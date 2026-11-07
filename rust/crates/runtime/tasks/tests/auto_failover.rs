@@ -131,6 +131,25 @@ async fn settle(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<RunRecord
   }
 }
 
+/// Wait until the turn's retry run has launched: both runs are registered and the retry's launch text is on disk.
+///
+/// The launch text is the last fact the caller asserts, so this wait ends when the retry starts rather than when
+/// it finishes.
+async fn wait_for_retry_launch(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<RunRecord>> {
+  let deadline = Instant::now() + Duration::from_secs(30);
+  loop {
+    let runs = stack.run_records(session_id)?;
+    if let Some(retry) = runs.iter().find(|run| run.retry_of_run_id.is_some()) {
+      let launch_text = stack.store().run_dir(session_id, &retry.id).join(LAUNCH_TEXT_FILENAME);
+      if launch_text.is_file() {
+        return Ok(runs);
+      }
+    }
+    anyhow::ensure!(Instant::now() < deadline, "the turn's retry run did not launch");
+    tokio::time::sleep(Duration::from_millis(2)).await;
+  }
+}
+
 async fn dispatch_turn(stack: &Stack, session_id: &str) -> anyhow::Result<()> {
   stack.dispatch.admit_input(session_id, event_types::USER, "fix the failing test", "user", json!({})).await?;
   stack.dispatch.dispatch_pending(session_id).await?;
@@ -155,7 +174,7 @@ async fn a_quota_end_continues_the_turn_on_the_next_member_with_the_switch_note(
   let stack = auto_stack(&scripted_process(&failing, 1), &success_script()).await?;
   let session = auto_session(&stack, "auto-failover").await?;
   dispatch_turn(&stack, &session.id).await?;
-  let runs = settle(&stack, &session.id).await?;
+  let runs = wait_for_retry_launch(&stack, &session.id).await?;
 
   assert_eq!(runs.len(), 2, "the turn continued as one retry run: {runs:?}");
   let original = original_run(&runs);

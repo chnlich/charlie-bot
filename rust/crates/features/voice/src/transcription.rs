@@ -9,7 +9,7 @@ use charliebot_core::str_methods;
 use charliebot_core::text_repr::{self, DEFAULT_JSON};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use tokio::sync::{mpsc, oneshot, watch, Mutex as AsyncMutex};
+use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::audio::{AudioQueue, SAMPLE_RATE};
@@ -1068,7 +1068,7 @@ mod tests {
     });
 
     let (events, mut event_receiver) = mpsc::unbounded_channel();
-    let (_cancel, cancelled) = watch::channel(false);
+    let (cancel, cancelled) = watch::channel(false);
     let task = tokio::spawn(async move {
       let mut cancelled = cancelled;
       run_gemini_session(
@@ -1096,6 +1096,7 @@ mod tests {
       .expect("Gemini session completes")
       .expect("Gemini task succeeds")
       .expect("Gemini transcription succeeds");
+    assert!(!*cancel.borrow());
     let (setup, frames) = tokio::time::timeout(Duration::from_secs(3), fake)
       .await
       .expect("fake Gemini server completes")
@@ -1175,7 +1176,7 @@ mod tests {
     let clock = Arc::new(VirtualClock::new());
     let session_clock = Arc::clone(&clock);
     let (events, mut event_receiver) = mpsc::unbounded_channel();
-    let (_cancel, cancelled) = watch::channel(false);
+    let (cancel, cancelled) = watch::channel(false);
     let task = tokio::spawn(async move {
       let mut cancelled = cancelled;
       run_muse_session(
@@ -1211,6 +1212,7 @@ mod tests {
       .expect("Muse session completes")
       .expect("Muse task succeeds")
       .expect("Muse transcription succeeds");
+    assert!(!*cancel.borrow());
     let handshake = tokio::time::timeout(Duration::from_secs(3), fake)
       .await
       .expect("fake Muse server completes")
@@ -1251,12 +1253,8 @@ mod tests {
         .await
         .expect("send the abnormal close");
     });
-    let backend = Backend::muse_for_test(
-      "synthetic-token",
-      &endpoint,
-      Arc::new(EventLoopClock),
-      AUDIO_BYTES_PER_SECOND,
-    );
+    let backend =
+      Backend::muse_for_test("synthetic-token", &endpoint, Arc::new(EventLoopClock), AUDIO_BYTES_PER_SECOND);
     let (task, _events, _cancel) = start_transcription(backend, AudioQueue::new());
     assert_eq!(
       tokio::time::timeout(Duration::from_secs(3), task)

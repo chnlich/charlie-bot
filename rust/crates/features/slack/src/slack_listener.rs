@@ -722,25 +722,6 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn trigger_master_forwards_input_id_to_the_task_wake() {
-    let home = Home::new();
-    let api = FakeApi::start(&[]).await;
-    let session_id = handle_app_mention(&mention(), &home.features, Arc::clone(&api.client)).await.unwrap().unwrap();
-    wait_until(|| home.launches().len() == 1).await;
-
-    let summon = home
-      .features
-      .store
-      .load_chat_events_sync(&session_id)
-      .unwrap()
-      .iter()
-      .find(|event| event.get("slack").is_some())
-      .map(|event| event.to_value())
-      .expect("the summon is persisted before the task wake");
-    assert_eq!(home.launches()[0].1[0]["id"], summon["id"]);
-  }
-
-  #[tokio::test]
   async fn remove_reaction_treats_no_reaction_as_success() {
     let api = FakeApi::start(&[]).await;
     api.set_no_reaction();

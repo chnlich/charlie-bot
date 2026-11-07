@@ -12,7 +12,6 @@ use charliebot_registry::templating::Templating;
 use charliebot_registry::wiring::FileView;
 use charliebot_registry::{FeatureContext, StateError};
 use http::{HeaderValue, StatusCode, header};
-use serde_json::json;
 
 use crate::plan_diff;
 
@@ -184,7 +183,7 @@ fn internal_error(error_type: &str, detail: String) -> ViewError {
 }
 
 fn http_error(status: StatusCode, detail: String) -> ViewError {
-  Box::new(responses::json(status, &json!({"detail": detail})))
+  Box::new(responses::http_exception_with_detail(status, &detail))
 }
 
 fn html_response(body: String) -> Response {

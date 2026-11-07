@@ -81,19 +81,17 @@ static NUMBER_WITH_UNIT: LazyLock<Regex> = LazyLock::new(|| {
   Regex::new(r"\b\d+(\.\d+)?\s?(ms|s|MB|GB|KiB|MiB|B)\b").expect("the number-with-unit expression is valid")
 });
 static NUMBER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b\d+\b").expect("the number expression is valid"));
-static WHITESPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").expect("the whitespace expression is valid"));
 
-static REDACTIONS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
-  [
-    (r"(?i)(api_key[=:]\s*)[A-Za-z0-9_\-]{8,}", "$1<redacted>"),
-    (r"(?i)(bearer\s+)[A-Za-z0-9._\-]{8,}", "$1<redacted>"),
-    (r"\bsk-[A-Za-z0-9_\-]{8,}", "<redacted>"),
-    (r"(?i)(token[=:]\s*)\S{8,}", "$1<redacted>"),
-  ]
-  .into_iter()
-  .map(|(pattern, replacement)| (Regex::new(pattern).expect("every redaction expression is valid"), replacement))
-  .collect()
+static API_KEY_REDACTION: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r"(?i)(api_key[=:]\s*)[A-Za-z0-9_\-]{8,}").expect("the API-key expression is valid")
 });
+static BEARER_REDACTION: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r"(?i)(bearer\s+)[A-Za-z0-9._\-]{8,}").expect("the bearer expression is valid")
+});
+static SK_REDACTION: LazyLock<Regex> =
+  LazyLock::new(|| Regex::new(r"\bsk-[A-Za-z0-9_\-]{8,}").expect("the sk-key expression is valid"));
+static TOKEN_REDACTION: LazyLock<Regex> =
+  LazyLock::new(|| Regex::new(r"(?i)(token[=:]\s*)\S{8,}").expect("the token expression is valid"));
 static SECRET_HEX: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(r"\b[0-9a-f]{32,}\b").expect("the secret-hex expression is valid"));
 
@@ -110,24 +108,23 @@ enum LogLevel {
 static LEVEL_FIELD: LazyLock<Regex> = LazyLock::new(|| {
   Regex::new(r"(?i)\blevel=(trace|debug|info|warn|warning|error)\b").expect("the log-level field expression is valid")
 });
-static LEVEL_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
-  Regex::new(r"(^|\s)(TRACE|DEBUG|INFO|WARN|WARNING|ERROR)(\s|$)").expect("the log-level token expression is valid")
-});
 
 /// The level of one log line, or `None` when the line carries none.
 fn line_level(line: &str) -> Option<LogLevel> {
-  if let Some(captures) = LEVEL_FIELD.captures(line) {
+  if line.to_ascii_lowercase().contains("level=")
+    && let Some(captures) = LEVEL_FIELD.captures(line)
+  {
     let level = captures.get(1).expect("the level is captured").as_str();
     return Some(if level.eq_ignore_ascii_case("error") { LogLevel::Error } else { LogLevel::Other });
   }
-  let captures = LEVEL_TOKEN.captures(line)?;
-  let level = captures.get(2).expect("the level is captured").as_str();
+  let level = line.split_whitespace().find(|level| matches!(*level, "TRACE" | "DEBUG" | "INFO" | "WARN" | "WARNING" | "ERROR"))?;
   Some(if level == "ERROR" { LogLevel::Error } else { LogLevel::Other })
 }
 
 /// Whether a line is a backend notice.
 fn is_backend_notice(line: &str) -> bool {
-  BACKEND_NOTICE.is_match(line.trim())
+  let line = line.trim();
+  line.starts_with('[') && BACKEND_NOTICE.is_match(line)
 }
 
 /// The cause material of one error text: its lines without backend notices, and of those the ERROR-level lines when any
@@ -214,10 +211,6 @@ const PATTERNS: [CausePattern; 18] = [
   CausePattern { expression: r"(?i)(^|\W)(error|failed|failure|exception)(\W|$)", shape: MatchShape::WholeLine },
 ];
 
-static PATTERN_SET: LazyLock<RegexSet> = LazyLock::new(|| {
-  RegexSet::new(PATTERNS.iter().map(|pattern| pattern.expression)).expect("every cause expression is valid")
-});
-
 static PATTERN_REGEXES: LazyLock<Vec<OnceLock<Regex>>> =
   LazyLock::new(|| (0..PATTERNS.len()).map(|_| OnceLock::new()).collect());
 
@@ -260,36 +253,152 @@ pub enum ExtractedCause {
 
 /// The text without ANSI escapes, blank lines and the noise lines that carry no cause.
 pub fn clean(text: &str) -> String {
-  let plain = ANSI.replace_all(text, "");
-  plain.lines().filter(|line| !line.trim().is_empty() && !NOISE.is_match(line)).collect::<Vec<_>>().join("\n")
+  let plain = if text.contains('\u{1b}') { ANSI.replace_all(text, "").into_owned() } else { text.to_string() };
+  plain.lines().filter(|line| !line.trim().is_empty() && !is_noise(line)).collect::<Vec<_>>().join("\n")
+}
+
+fn is_noise(line: &str) -> bool {
+  let folded = line.to_ascii_lowercase();
+  if !(line.starts_with("Provider List:")
+    || line.starts_with("Give Feedback / Get Help:")
+    || line.starts_with("LiteLLM.Info:")
+    || folded.ends_with("docs/providers")
+    || line.starts_with("Command logs retained at:")
+    || line.starts_with("loading path="))
+  {
+    return false;
+  }
+  NOISE.is_match(line)
 }
 
 /// The text with credentials and long identifiers removed, before it reaches a row or a model.
 pub fn redact(text: &str) -> String {
   let mut text = text.to_string();
-  for (expression, replacement) in REDACTIONS.iter() {
-    text = expression.replace_all(&text, *replacement).into_owned();
+  let folded = text.to_ascii_lowercase();
+  if folded.contains("api_key") {
+    text = API_KEY_REDACTION.replace_all(&text, "$1<redacted>").into_owned();
   }
-  SECRET_HEX.replace_all(&text, "<redacted>").into_owned()
+  if folded.contains("bearer") {
+    text = BEARER_REDACTION.replace_all(&text, "$1<redacted>").into_owned();
+  }
+  if text.contains("sk-") {
+    text = SK_REDACTION.replace_all(&text, "<redacted>").into_owned();
+  }
+  if folded.contains("token") {
+    text = TOKEN_REDACTION.replace_all(&text, "$1<redacted>").into_owned();
+  }
+  if contains_ascii_hex_run(&text, 32) {
+    text = SECRET_HEX.replace_all(&text, "<redacted>").into_owned();
+  }
+  text
 }
 
 /// The stable signature text of a cause line: identifiers, numbers, timestamps and per-session path segments
 /// replaced, whitespace collapsed, and the first [`MAX_CAUSE_CHARS`] characters kept.
 pub fn normalize(text: &str) -> String {
-  let mut text = UUID.replace_all(text, "<uuid>").into_owned();
-  text = SESSION_PATH.replace_all(&text, "<session>").into_owned();
-  text = redact(&text);
-  text = ANSI.replace_all(&text, "").into_owned();
-  for (expression, replacement) in SESSION_FIELD.iter() {
-    text = expression.replace_all(&text, *replacement).into_owned();
+  let mut text = text.to_string();
+  if contains_uuid_candidate(&text) {
+    text = UUID.replace_all(&text, "<uuid>").into_owned();
   }
-  text = HEX.replace_all(&text, "<hex>").into_owned();
-  text = PATH.replace_all(&text, "<path>").into_owned();
-  text = TIMESTAMP.replace_all(&text, "<ts>").into_owned();
-  text = NUMBER_WITH_UNIT.replace_all(&text, "<n>$2").into_owned();
-  text = NUMBER.replace_all(&text, "<n>").into_owned();
-  let text = WHITESPACE.replace_all(&text, " ");
-  text.trim().chars().take(MAX_CAUSE_CHARS).collect()
+  if text.contains(charliebot_core::config::SESSIONS_DIR_NAME) && text.contains("<uuid>") {
+    text = SESSION_PATH.replace_all(&text, "<session>").into_owned();
+  }
+  text = redact(&text);
+  if text.contains('\u{1b}') {
+    text = ANSI.replace_all(&text, "").into_owned();
+  }
+  let folded = text.to_ascii_lowercase();
+  if folded.contains("session_id=") || folded.contains("session=") || text.contains("ses_") {
+    for (expression, replacement) in SESSION_FIELD.iter() {
+      text = expression.replace_all(&text, *replacement).into_owned();
+    }
+  }
+  if contains_ascii_hex_run(&text, 7) {
+    text = HEX.replace_all(&text, "<hex>").into_owned();
+  }
+  if text.contains("/home/") || text.contains("/tmp/") || text.contains("/Users/") {
+    text = PATH.replace_all(&text, "<path>").into_owned();
+  }
+  if text.contains('T') && text.contains('-') && text.chars().any(char::is_numeric) {
+    text = TIMESTAMP.replace_all(&text, "<ts>").into_owned();
+  }
+  if has_number_with_unit(&text) {
+    text = NUMBER_WITH_UNIT.replace_all(&text, "<n>$2").into_owned();
+  }
+  if text.chars().any(char::is_numeric) {
+    text = NUMBER.replace_all(&text, "<n>").into_owned();
+  }
+  text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_CAUSE_CHARS).collect()
+}
+
+fn contains_ascii_hex_run(text: &str, minimum: usize) -> bool {
+  let mut run = 0;
+  for byte in text.bytes() {
+    if byte.is_ascii_hexdigit() {
+      run += 1;
+      if run >= minimum {
+        return true;
+      }
+    } else {
+      run = 0;
+    }
+  }
+  false
+}
+
+fn contains_uuid_candidate(text: &str) -> bool {
+  text.as_bytes().windows(36).any(|candidate| {
+    candidate[8] == b'-'
+      && candidate[13] == b'-'
+      && candidate[18] == b'-'
+      && candidate[23] == b'-'
+      && candidate.iter().enumerate().all(|(index, byte)| {
+        matches!(index, 8 | 13 | 18 | 23) || byte.is_ascii_hexdigit()
+      })
+  })
+}
+
+fn has_number_with_unit(text: &str) -> bool {
+  if !text.is_ascii() {
+    return text.chars().any(char::is_numeric);
+  }
+  let bytes = text.as_bytes();
+  let units: [&[u8]; 7] = [b"ms", b"s", b"MB", b"GB", b"KiB", b"MiB", b"B"];
+  let mut start = 0;
+  while start < bytes.len() {
+    if !bytes[start].is_ascii_digit() {
+      start += 1;
+      continue;
+    }
+    let mut end = start;
+    while end < bytes.len() && bytes[end].is_ascii_digit() {
+      end += 1;
+    }
+    if end < bytes.len() && bytes[end] == b'.' {
+      let fraction_start = end + 1;
+      end = fraction_start;
+      while end < bytes.len() && bytes[end].is_ascii_digit() {
+        end += 1;
+      }
+      if end == fraction_start {
+        start += 1;
+        continue;
+      }
+    }
+    if end < bytes.len() && bytes[end].is_ascii_whitespace() {
+      end += 1;
+    }
+    for unit in units {
+      let unit_end = end + unit.len();
+      if bytes.get(end..unit_end) == Some(unit)
+        && bytes.get(unit_end).is_none_or(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_')
+      {
+        return true;
+      }
+    }
+    start = end.max(start + 1);
+  }
+  false
 }
 
 /// The redacted example text a row keeps for a cause or a no-cause shape.
@@ -300,11 +409,20 @@ fn anchor(text: &str) -> String {
 /// Whether the text holds only banner lines. The banner reaches a log or an event colored, so the escapes come off
 /// before the lines are read.
 fn banner_only(text: &str) -> bool {
-  let plain = ANSI.replace_all(text, "");
+  let plain = if text.contains('\u{1b}') { ANSI.replace_all(text, "").into_owned() } else { text.to_string() };
   let mut saw_banner = false;
   for line in plain.lines() {
     if line.trim().is_empty() {
       continue;
+    }
+    let folded = line.to_ascii_lowercase();
+    if !(line.starts_with("Provider List:")
+      || line.starts_with("Give Feedback / Get Help:")
+      || line.starts_with("LiteLLM.Info:")
+      || folded.ends_with("docs/providers")
+      || line.contains("litellm._turn_on_debug"))
+    {
+      return false;
     }
     if BANNER.is_match(line) {
       saw_banner = true;
@@ -317,35 +435,86 @@ fn banner_only(text: &str) -> bool {
 
 /// Whether an HTTP status appears in the text.
 fn has_http_status(text: &str) -> bool {
-  HTTP_STATUS.is_match(text)
+  (text.contains('4') || text.contains('5')) && HTTP_STATUS.is_match(text)
 }
 
 /// The first cause the ordered pattern list finds in `text`. Request ids are masked first: a hex id can hold the digits
 /// of a status pattern, and a per-request value names no cause.
 fn match_cause(text: &str) -> Option<String> {
-  let masked = UUID.replace_all(text, "<uuid>");
-  let text = masked.as_ref();
-  let index = PATTERN_SET.matches(text).iter().next()?;
+  let masked;
+  let text = if contains_uuid_candidate(text) {
+    masked = UUID.replace_all(text, "<uuid>").into_owned();
+    masked.as_str()
+  } else {
+    text
+  };
+  let folded = text.to_ascii_lowercase();
+  let mut matched = None;
+  for (index, pattern) in PATTERNS.iter().enumerate() {
+    if !pattern_may_match(index, text, &folded) {
+      continue;
+    }
+    let expression = PATTERN_REGEXES[index]
+      .get_or_init(|| Regex::new(pattern.expression).expect("the matching cause expression is valid"));
+    if let Some(found) = expression.find(text) {
+      matched = Some((index, found.start(), found.end()));
+      break;
+    }
+  }
+  let (index, start, end) = matched?;
   let pattern = PATTERNS[index];
   match pattern.shape {
     MatchShape::WholeText => Some(text.to_string()),
     shape => {
-      let expression = PATTERN_REGEXES[index]
-        .get_or_init(|| Regex::new(pattern.expression).expect("the matching cause expression is valid"));
-      let found = expression.find(text).expect("the matching expression was found by the set");
       let cause = match shape {
-        MatchShape::Fragment => found.as_str(),
+        MatchShape::Fragment => &text[start..end],
         MatchShape::WholeLine => {
           // The class's own `^|\W` guard is part of the match, so the line is read from the word it found.
-          let matched = &text[found.start()..found.end()];
-          let start = found.start() + matched.len() - matched.trim_start().len();
-          let end = start + matched.trim().len();
-          containing_line(text, start, end)
+          let matched = &text[start..end];
+          let line_start = start + matched.len() - matched.trim_start().len();
+          let line_end = line_start + matched.trim().len();
+          containing_line(text, line_start, line_end)
         }
         MatchShape::WholeText => unreachable!(),
       };
       Some(cause.to_string())
     }
+  }
+}
+
+/// Whether a pattern's literal fragments occur before its full expression is compiled and checked.
+fn pattern_may_match(index: usize, text: &str, folded: &str) -> bool {
+  let contains_any = |needles: &[&str]| needles.iter().any(|needle| folded.contains(needle));
+  match index {
+    0 => text.contains("the previous round still runs: unit ") && text.contains(" exists"),
+    1 => text.contains("no cron task file under ") && text.contains(" names session_id"),
+    2 => text.contains("No module named '"),
+    3 => text.contains("failed to load skill ") && text.contains(": missing YAML frontmatter"),
+    4 => text.contains("内存上限触发"),
+    5 => text.contains("RateLimitError:"),
+    6 => contains_any(&["service may be temporarily overloaded", "overloaded_error", "502", "503"]),
+    7 => contains_any(&[
+      "failed to authenticate",
+      "oauth_org_not_allowed",
+      "invalid x-api-key",
+      "401",
+      "unauthorized",
+      "authentication_error",
+    ]),
+    8 => contains_any(&["timed out", "timeout after", "timeouterror", "etimedout", "deadline exceeded"]),
+    9 => contains_any(&["out of memory", "oom", "killed", "sigkill"]),
+    10 => text.contains("Traceback (most recent call last)"),
+    11 => text.lines().any(|line| {
+      line.starts_with("error:")
+        || (line.starts_with("error[E") && line[7..].chars().take_while(char::is_ascii_digit).count() > 0)
+    }),
+    12 => contains_any(&["worktree", "already exists", "not a git repository"]),
+    13 => contains_any(&["assertion failed", "assertionerror", "assert_eq"]),
+    14 => contains_any(&["permission denied", "eacces", "landlock", "read-only file system"]),
+    15 => contains_any(&["fatal: ", "conflict (", "rejected", "non-fast-forward"]),
+    16 => contains_any(&["api error", "api_error", "invalid_request_error"]),
+    17 => contains_any(&["error", "failed", "failure", "exception"]),
+    _ => unreachable!("every cause pattern has a prefilter"),
   }
 }
 

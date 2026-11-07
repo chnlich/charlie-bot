@@ -33,7 +33,7 @@ const NOTICE: &str = "[模型未输出正文，以下为其思考内容]";
 const POST_RESULT_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// The finish-extras key saying an Auto session's manager turn ended on a quota error.
-pub(crate) const FINISH_QUOTA_EXHAUSTED: &str = "quota_exhausted";
+pub(crate) const FINISH_QUOTA_EXHAUSTED: &str = event_types::QUOTA_EXHAUSTED;
 /// The finish-extras key carrying the manager turn's error text for an Auto session.
 pub(crate) const FINISH_ERROR_MESSAGE: &str = "error_message";
 /// The finish-extras key carrying the reset a retryable quota error stated, for an Auto session.

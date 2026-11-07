@@ -568,7 +568,7 @@ fn capture_usage_rows_are_absolutely_correct() {
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
   claude_codex_corpus(&home);
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   let counts = capture_round(&mut ledger, &config, &registry);
   // Every parsed file's records, replays included: the replay and the subagent response land too.
   assert_eq!((count_of(&counts, "Claude Code"), count_of(&counts, "Codex")), (3, 1));
@@ -1296,7 +1296,7 @@ fn capture_runs_writes_no_record_for_a_resultless_run_and_recaptures_nothing() {
     events(&[r#"{"type": "result", "usage": {"input_tokens": 30, "cached_tokens": 10, "output_tokens": 2}}"#])
       .as_slice(),
   );
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1); // only the result-bearing run records
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "GLM-5.3-Flash");

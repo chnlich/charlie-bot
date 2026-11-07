@@ -302,6 +302,8 @@ fn acknowledged_heartbeats_keep_beating_one_interval_apart() {
     deadline += interval;
   }
   assert_eq!(heartbeat.deadline(), deadline);
+  assert!(heartbeat.begin());
+  heartbeat.sent_at(deadline);
   assert!(!heartbeat.begin());
 }
 

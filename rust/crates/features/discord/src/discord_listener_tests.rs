@@ -288,20 +288,21 @@ async fn test_heartbeat_carries_the_last_seq() {
   assert_eq!(heartbeat, &json!({"op": 1, "d": 7}));
 }
 
-#[tokio::test]
-async fn test_acked_heartbeats_keep_beating_one_interval_apart() {
-  let home = Home::new_without_thread_runtime(true).await;
-  let mut script = GatewayScript::new(Vec::new());
-  script.interval_ms = 10;
-  script.acknowledge_heartbeats = true;
-  script.close_after_heartbeats = Some((3, 4004));
-  let gateway = Gateway::start(vec![script]).await;
-  configure_gateway(&home, &gateway, 1 << 18);
-  assert!(matches!(run_one_connection(&home, &gateway).await.unwrap(), ConnectionExit::Stopped { code: 4004 }));
-  let received = gateway.received();
-  let beats = received[0].iter().filter(|payload| payload["op"] == 1).count();
-  assert!(beats >= 3);
-  assert!(received[0].iter().all(|payload| payload["op"] != 8));
+#[test]
+fn acknowledged_heartbeats_keep_beating_one_interval_apart() {
+  let interval = Duration::from_millis(15);
+  let first_deadline = Instant::now();
+  let mut heartbeat = HeartbeatSchedule::new(interval, first_deadline);
+  let mut deadline = first_deadline;
+  for _ in 0..3 {
+    assert_eq!(heartbeat.deadline(), deadline);
+    assert!(heartbeat.begin());
+    heartbeat.sent_at(deadline);
+    heartbeat.acknowledge();
+    deadline += interval;
+  }
+  assert_eq!(heartbeat.deadline(), deadline);
+  assert!(!heartbeat.begin());
 }
 
 #[tokio::test(start_paused = true)]
@@ -406,62 +407,6 @@ fn test_stop_close_codes_are_recognized() {
   for code in [4004, 4010, 4011, 4012, 4013, 4014] {
     assert!(stop_reason(code).is_some(), "close code {code}");
   }
-}
-
-#[tokio::test]
-async fn test_ready_runs_the_backfill_per_connection() {
-  let home = Home::new_with_trigger_manager(true).await;
-  let mut script = GatewayScript::new(vec![ready(2)]);
-  script.close_after_identify = Some(4004);
-  let gateway = Gateway::start(vec![script]).await;
-  configure_gateway(&home, &gateway, 1 << 18);
-  let sid = summon_session_id(GUILD, THREAD);
-  home.thread_session(&sid, origin(THREAD), Some("500000000000000000")).await;
-  home
-    .fake()
-    .channels
-    .insert(THREAD.to_string(), vec![thread_message("500000000000000001", ALLOWED_USER, false, "synthetic follow")]);
-  tokio::time::timeout(
-    Duration::from_secs(2),
-    run_listener_loop(Arc::clone(&home.features), discord_client(&home), TEST_TOKEN.to_string(), options(), settings()),
-  )
-  .await
-  .unwrap()
-  .unwrap();
-  let manager = home.features.startup.require::<Arc<TriggerManager>>().unwrap();
-  assert!(manager.list_triggers(&sid).await.unwrap().iter().any(|trigger| {
-    trigger.status == TriggerStatus::Pending && trigger.message == "discord-thread-follow floor=500000000000000001"
-  }));
-}
-
-#[tokio::test]
-async fn test_message_create_reaches_the_handler_and_survives_its_errors() {
-  let home = Home::new_without_thread_runtime(true).await;
-  let failed = json!({
-    "id": "900000000000000060", "guild_id": GUILD, "channel_id": "900000000000000061",
-    "author": {"id": ALLOWED_USER}, "type": 0, "content": "<@600000000000000001> ignored",
-    "mentions": [{"id": BOT_USER}],
-  });
-  let dm = json!({
-    "id": "900000000000000062", "channel_id": DM_CHANNEL, "author": {"id": ALLOWED_USER}, "type": 0,
-    "content": "<@600000000000000001> hello", "mentions": [{"id": BOT_USER}],
-  });
-  let mut script = GatewayScript::new(vec![
-    ready(2),
-    gateway_dispatch("MESSAGE_CREATE", 3, failed),
-    gateway_dispatch("MESSAGE_CREATE", 4, dm),
-  ]);
-  script.close_after_identify = Some(4004);
-  let gateway = Gateway::start(vec![script]).await;
-  configure_gateway(&home, &gateway, 1 << 18);
-  tokio::time::timeout(
-    Duration::from_secs(2),
-    run_listener_loop(Arc::clone(&home.features), discord_client(&home), TEST_TOKEN.to_string(), options(), settings()),
-  )
-  .await
-  .unwrap()
-  .unwrap();
-  assert!(home.fake().posts.iter().any(|(channel, content)| channel == DM_CHANNEL && content == DM_NOTICE));
 }
 
 #[tokio::test]

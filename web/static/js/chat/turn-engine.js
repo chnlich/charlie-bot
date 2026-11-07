@@ -537,7 +537,13 @@
       // gap the placeholder's own margin-top adds back.
       el.style.height = Math.round(this.heightOf(seg) - this.rowGap()) + 'px';
       if (seg.kind === 'turn') el.dataset.turnKey = seg.key;
-      el.textContent = '…';
+      // The mark is its own span, not the box's text: a placeholder standing
+      // for more than one window of height draws its text at the box's centre,
+      // which is off-screen, so the span sticks to the window's middle instead.
+      const label = document.createElement('span');
+      label.className = 'turn-placeholder-label';
+      label.textContent = '…';
+      el.appendChild(label);
       return el;
     }
 

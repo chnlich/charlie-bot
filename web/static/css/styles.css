@@ -100,13 +100,21 @@
 }
 /* Window placeholder: an unready turn entering the window during active
    scroll — estimated height, replaced by the READY fragment when pre-render
-   completes. */
+   completes. The box is a UI region, so its dashed outline takes the 3:1
+   component floor: slate-400 at 60% draws 3.31:1 on the slate-900 list, where
+   the old slate-500 at 28% drew 1.37:1 and the region read as a page gap. */
 .turn-placeholder {
   display: flex; align-items: center; justify-content: center;
-  border: 1px dashed rgba(100, 116, 139, 0.28); border-radius: 0.5rem;
-  background: rgba(15, 23, 42, 0.25); color: #475569; font-size: 0.75rem;
-  box-sizing: border-box; overflow: hidden;
+  border: 1px dashed rgba(148, 163, 184, 0.6); border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.25); color: #94a3b8; font-size: 0.75rem;
+  box-sizing: border-box;
 }
+/* The placeholder's one mark. A placeholder standing for a long flat stretch
+   can be taller than the window, and a centred mark would then sit far above
+   the visible slice, leaving the reader a blank dashed region. Sticking the
+   mark to 40vh keeps it in view wherever the box meets the window; slate-400
+   draws 6.96:1 on the list, above the 4.5:1 floor for 12px text. */
+.turn-placeholder-label { position: sticky; top: 40vh; }
 .turn-spacer { pointer-events: none; }
 /* The height model's spacer heights are the exact layout extent of the rows
    the spacers stand for. A space-y-3 margin on the spacer itself would add

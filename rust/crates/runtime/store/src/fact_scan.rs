@@ -740,16 +740,16 @@ mod tests {
 
   /// A sealed scan answers every fact a cold read folds, over chat-content lines that carry fact-like fields, a
   /// stand-in whose id a later fact repeats, and the lines a full read drops, and it reads no log to answer them.
-  #[tokio::test]
-  async fn a_sealed_scan_answers_the_facts_a_cold_read_folds() {
+  #[test]
+  fn a_sealed_scan_answers_the_facts_a_cold_read_folds() {
     let (home, writer) = make_test_store();
-    for event in [
+    let events = [
       json!({"id": "created", "type": "task_created", "actor": "user"}),
       json!({"id": "ask", "type": "user", "content": "do the work"}),
       json!({"id": "tool-out", "type": "user", "content": [{"type": "tool_result", "content": "done"}]}),
       json!({"id": "said", "type": "assistant", "run_id": "run-1", "outcome": "failed", "content": "x"}),
       json!({"id": "said", "type": "run_finished", "run_id": "run-0", "outcome": "success"}),
-      json!({"type": "system", "subtype": "init", "input_event_ids": ["ask"]}),
+      json!({"id": "init", "type": "system", "subtype": "init", "input_event_ids": ["ask"]}),
       json!({"id": "subtree-prompt", "type": "prompt_changed", "scope": "subtree", "new_ref": "prompt-a"}),
       json!({"id": "stop-1", "type": "run_stop_requested", "run_id": "run-1", "request_id": "stop-1"}),
       json!({"id": "finish-1", "type": "run_finished", "run_id": "run-1", "outcome": "success", "input_event_ids": ["ask"]}),
@@ -757,11 +757,15 @@ mod tests {
       json!({"id": "close-ask", "type": "task_close_requested", "request_id": "close-1", "owner_run_id": "run-1"}),
       json!({"id": "summon", "type": "agent_message", "content": "hello", "slack": {"channel": "c"}}),
       json!({"id": "result", "type": "result", "is_error": false}),
-    ] {
-      writer.append_chat_event("synthetic", event).await.unwrap();
-    }
+    ];
     let path = writer.chat_events_path("synthetic");
-    let mut log = std::fs::read(&path).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut log = Vec::new();
+    for mut event in events {
+      event["timestamp"] = json!("2026-01-01T00:00:00Z");
+      serde_json::to_writer(&mut log, &event).unwrap();
+      log.push(b'\n');
+    }
     log.extend_from_slice(b"{\"type\": \"assistant\", \"n\": 1e400}\n{broken\n\n[1, 2]\n");
     std::fs::write(&path, log).unwrap();
 

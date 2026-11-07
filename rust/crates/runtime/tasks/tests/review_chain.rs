@@ -1125,7 +1125,7 @@ async fn changed_prompt_hash_at_work_continuation_starts_a_fresh_context() -> an
   assert!(prompt.contains("add marker"), "{prompt}");
   assert!(prompt.contains("keep going"), "{prompt}");
   assert!(prompt.contains("managed instructions or sources changed"), "{prompt}");
-  assert!(prompt.contains(&events_file(&stack, &worker.id, "run-work").display().to_string()), "{prompt}");
+  assert!(prompt.contains(&stack.store().run_dir(&worker.id, "run-work").display().to_string()), "{prompt}");
   let first_snapshot: Value =
     serde_json::from_slice(&fs::read(stack.store().run_dir(&worker.id, "run-work").join("prompt_snapshot.json"))?)?;
   let continuation_snapshot: Value = serde_json::from_slice(&fs::read(

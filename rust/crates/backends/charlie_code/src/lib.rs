@@ -26,7 +26,7 @@ pub const PACKAGE: &str = "backends.charlie_code";
 /// The backend type this package registers: the `type` a `backends.options` entry names.
 pub const TYPE_NAME: &str = "charlie-code";
 
-/// Registers the `charlie-code` type and the CLC usage source, which attributes the type's usage.
+/// The registration of the `charlie-code` type and the CLC usage source, which attributes the type's usage.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   register_with_host(registry, registration_step(PACKAGE, CliHost::from_process())?)
 }

@@ -378,9 +378,7 @@ mod tests {
     let config =
       HotReload::new(config_path, "config_reload_failed", Box::new(move || config_registry.load_config(&config_home)));
     let startup = StartupState::default();
-    startup
-      .insert(AgentBaseEnvironment { values: Env::default() })
-      .expect("the agent base environment inserts");
+    startup.insert(AgentBaseEnvironment { values: Env::default() }).expect("the agent base environment inserts");
 
     let absent = spawn_base_environment_from(&startup, &config).unwrap();
     assert!(!absent.values.contains_key(gh_wrapper::TOKEN_COMMAND_VAR));

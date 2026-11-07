@@ -989,7 +989,23 @@ fn scan_content(path: &Path, needle: &str, start: u64, buffer: &mut ScanBuffer) 
   if needle.is_ascii() {
     return scan_ascii(&mut file, needle.as_bytes(), buffer);
   }
+  // Folding the text is the scan's expensive half. On the 7,160-session mock home, a Chinese needle spends four
+  // fifths of its user CPU in Unicode lowercase conversion and UTF-8 validation, against under 1% in the needle
+  // search. A needle folding cannot change reads the file's bytes directly instead.
+  if uncased_alphanumeric(needle) {
+    return scan_bytes(&mut file, needle.as_bytes(), false, buffer);
+  }
   scan_unicode(&mut file, needle, start > 0)
+}
+
+/// Whether Unicode case folding leaves every occurrence of `needle` exactly where the raw bytes hold it.
+///
+/// Folding rewrites only cased characters, and the characters it produces are cased or combining marks: Unicode's
+/// only unconditional lowercase expansion, U+0130, yields `i` and a combining dot. A needle of uncased
+/// alphanumerics — Han characters, digits, uncased letters — is therefore present in the folded text exactly when
+/// the file's own bytes carry it. The scan then searches the bytes and skips decoding and lowering every chunk.
+fn uncased_alphanumeric(needle: &str) -> bool {
+  needle.chars().all(|c| c.is_alphanumeric() && !c.is_lowercase() && !c.is_uppercase())
 }
 
 /// The read buffer one scan worker reuses across the files it scans.
@@ -1008,8 +1024,13 @@ impl ScanBuffer {
 }
 
 fn scan_ascii(file: &mut File, needle: &[u8], buffer: &mut ScanBuffer) -> io::Result<bool> {
+  scan_bytes(file, needle, true, buffer)
+}
+
+/// The needle searched for in each window of the file's bytes, with each window ASCII-folded when `fold_ascii`.
+fn scan_bytes(file: &mut File, needle: &[u8], fold_ascii: bool, buffer: &mut ScanBuffer) -> io::Result<bool> {
   let overlap = needle.len().saturating_sub(1);
-  // memchr's memmem is the two-way search behind the substring test, built once per scan over the folded windows.
+  // memchr's memmem is the two-way search behind the substring test, built once per scan over the windows.
   let finder = memchr::memmem::Finder::new(needle);
   let mut carry = 0;
   loop {
@@ -1019,7 +1040,9 @@ fn scan_ascii(file: &mut File, needle: &[u8], buffer: &mut ScanBuffer) -> io::Re
     }
     let filled = carry + count;
     let window = &mut buffer.bytes[..filled];
-    window.make_ascii_lowercase();
+    if fold_ascii {
+      window.make_ascii_lowercase();
+    }
     if finder.find(window).is_some() {
       return Ok(true);
     }
@@ -1179,6 +1202,32 @@ mod tests {
     assert!(super::scan_ascii(&mut file, b"needle at", &mut super::ScanBuffer::new(8)).unwrap());
     file.seek(SeekFrom::Start(0)).unwrap();
     assert!(!super::scan_ascii(&mut file, b"absent-needle", &mut super::ScanBuffer::new(12)).unwrap());
+  }
+
+  /// The raw scan reads the needle's own bytes. A Han needle is six or more bytes for two characters, so a chunk
+  /// boundary can fall inside it; the buffer's overlap must keep the whole needle.
+  #[test]
+  fn raw_scan_finds_a_multibyte_needle_across_a_chunk_boundary() {
+    let mut file = tempfile::tempfile().unwrap();
+    let mut body = vec![b'x'; super::SEARCH_CHUNK_SIZE - 2];
+    body.extend_from_slice("缓存层".as_bytes());
+    file.write_all(&body).unwrap();
+    file.seek(SeekFrom::Start(0)).unwrap();
+    assert!(super::scan_bytes(&mut file, "缓存".as_bytes(), false, &mut super::ScanBuffer::new(5)).unwrap());
+    file.seek(SeekFrom::Start(0)).unwrap();
+    assert!(!super::scan_bytes(&mut file, "调度".as_bytes(), false, &mut super::ScanBuffer::new(5)).unwrap());
+  }
+
+  /// The raw scan serves needles that folding cannot move: Han characters, digits and other uncased characters.
+  /// A cased or combining character keeps the folded scan, because folding can rewrite or create it.
+  #[test]
+  fn only_an_uncased_alphanumeric_needle_takes_the_raw_scan() {
+    for needle in ["缓存", "2026", "٣٤"] {
+      assert!(super::uncased_alphanumeric(needle), "{needle}");
+    }
+    for needle in ["Cache", "café", "ä", "\u{307}", "two words", "a-b"] {
+      assert!(!super::uncased_alphanumeric(needle), "{needle}");
+    }
   }
 
   /// A batch keeps the argument order across its threads: a signature that moved to another file's
@@ -1495,6 +1544,36 @@ mod tests {
     write_session(&store, "named", "needle name", SessionStatus::Archived, "2026-08-01T12:02:00Z");
     let all_hits = search_sessions(&store, "needle").unwrap().rows;
     assert_eq!(all_hits.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["named", "carrier"]);
+  }
+
+  /// A Han needle holds no case, so its content scan reads the file's bytes. The scan must still find the needle
+  /// in chat content and report an absent needle as absent.
+  #[test]
+  fn a_han_needle_matches_chat_content_and_reports_absence() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_session(&store, "carrier", "carrier", SessionStatus::Active, "2026-08-01T12:00:00Z");
+    let events = store.chat_events_path("carrier");
+    fs::create_dir_all(events.parent().unwrap()).unwrap();
+    fs::write(&events, "{\"content\":\"这个缓存的失效规则目前只看时间\"}\n").unwrap();
+
+    let rows = search_sessions(&store, "缓存").unwrap().rows;
+    assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["carrier"]);
+    assert!(search_sessions(&store, "缓存好").unwrap().rows.is_empty(), "an absent Han needle matches nothing");
+  }
+
+  /// A cased non-ASCII needle keeps the folded scan: the file's upper-case text holds the needle's lower-case form.
+  #[test]
+  fn a_cased_non_ascii_needle_still_matches_folded_text() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_session(&store, "carrier", "carrier", SessionStatus::Active, "2026-08-01T12:00:00Z");
+    let events = store.chat_events_path("carrier");
+    fs::create_dir_all(events.parent().unwrap()).unwrap();
+    fs::write(&events, "{\"content\":\"ÄPFEL und Birnen\"}\n").unwrap();
+
+    let rows = search_sessions(&store, "äpfel").unwrap().rows;
+    assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["carrier"]);
   }
 
   #[test]

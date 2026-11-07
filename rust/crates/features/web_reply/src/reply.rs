@@ -590,7 +590,7 @@ mod tests {
     let home = Home::new();
     let sid = home.manager("session", None).await;
 
-    let readback = post_web_reply(&home.features, &sid, "the answer", None).await.expect("the reply posts");
+    let readback = post_web_reply(&home.features, sid, "the answer", None).await.expect("the reply posts");
 
     assert_eq!(readback, json!({"posted": true, "chars": 10, "over_budget": false, "answers": []}));
     assert_eq!(replies(&home, &sid), vec![(json!("the answer"), json!({"answer_ids": [], "chars": 10}))]);
@@ -916,7 +916,7 @@ mod tests {
     home.set_running(&[id_of(&only)]);
 
     let tags = ["11111111".to_string()];
-    let readback = post_web_reply_with_request_id(&home.features, &sid, "the answer", &tags, None, None)
+    let readback = post_web_reply_with_request_id(&home.features, sid, "the answer", &tags, None, None)
       .await
       .expect("the reply posts");
 
@@ -1197,7 +1197,7 @@ mod tests {
     seed_web_session(&home, sid, &[chinese, english]);
     home.set_running(&["english"]);
 
-    let (status, readback) = post_reply(&home, &sid, ENGLISH_REPLY, None).await;
+    let (status, readback) = post_reply(&home, sid, ENGLISH_REPLY, None).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(readback["posted"], json!(true));

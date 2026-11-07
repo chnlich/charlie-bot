@@ -662,24 +662,19 @@ async fn user_admission_lifts_only_the_target_node() {
 
   // Archiving the middle node archives the leaf beneath it. A message to the leaf reopens the archived ancestor
   // and the leaf, and lifts only the leaf.
-  let archived_root = harness.create_task("archived-root", None, TaskProfile::Manager, "Archived root").await;
-  let archived_middle =
-    harness.create_task("archived-middle", Some(&archived_root.id), TaskProfile::Manager, "Archived middle").await;
-  let archived_child =
-    harness.create_task("archived-child", Some(&archived_middle.id), TaskProfile::Manager, "Archived child").await;
   let archived = TaskCompletion::new(Arc::clone(&harness.features))
-    .archive_subtree(&archived_middle.id, Some("archive-amid"), "archived", &[], &[], &ArchiveAuthority::Operator)
+    .archive_subtree(&middle.id, Some("archive-amid"), "archived", &[], &[], &ArchiveAuthority::Operator)
     .await
     .unwrap();
-  assert_eq!(archived, [archived_middle.id.clone(), archived_child.id.clone()]);
-  assert_eq!(harness.store.task_state(&archived_child.id).unwrap(), "archived");
-  let archived_middle_at = updated_at_of(&harness, &archived_middle.id).await;
-  let archived_root_at = updated_at_of(&harness, &archived_root.id).await;
+  assert_eq!(archived, [middle.id.clone(), child.id.clone()]);
+  assert_eq!(harness.store.task_state(&child.id).unwrap(), "archived");
+  let archived_middle_at = updated_at_of(&harness, &middle.id).await;
+  let archived_root_at = updated_at_of(&harness, &root.id).await;
   let later = ts("2031-01-01T03:00:00Z");
   harness
     .dispatcher
     .admit_input(
-      &archived_child.id,
+      &child.id,
       event_types::USER,
       "to the archived branch",
       "user",
@@ -687,10 +682,10 @@ async fn user_admission_lifts_only_the_target_node() {
     )
     .await
     .unwrap();
-  assert_eq!(harness.store.task_state(&archived_child.id).unwrap(), "open");
-  assert_eq!(updated_at_of(&harness, &archived_child.id).await, later);
-  assert_eq!(updated_at_of(&harness, &archived_middle.id).await, archived_middle_at);
-  assert_eq!(updated_at_of(&harness, &archived_root.id).await, archived_root_at);
+  assert_eq!(harness.store.task_state(&child.id).unwrap(), "open");
+  assert_eq!(updated_at_of(&harness, &child.id).await, later);
+  assert_eq!(updated_at_of(&harness, &middle.id).await, archived_middle_at);
+  assert_eq!(updated_at_of(&harness, &root.id).await, archived_root_at);
 }
 
 /// The append broadcasts `task_tree_changed`, so the lift must be durable by the time that append runs. The harness's

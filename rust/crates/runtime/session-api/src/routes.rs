@@ -906,10 +906,8 @@ mod tests {
   #[tokio::test]
   async fn a_tree_page_answers_gzip_with_the_bytes_the_transport_would_send() {
     let (_home, features) = crate::test_support::feature_context();
-    for index in 0..20 {
-      crate::test_support::create_node(&features.store, &format!("tree-gzip-{index}"), None, TaskProfile::Manager)
-        .await;
-    }
+    let long_tree_name = format!("tree-gzip-{}", "g".repeat(1200));
+    crate::test_support::create_node(&features.store, &long_tree_name, None, TaskProfile::Manager).await;
     let page = |accept_encoding: &str| {
       Request::builder()
         .uri(api::SESSION_TREE_PATH)

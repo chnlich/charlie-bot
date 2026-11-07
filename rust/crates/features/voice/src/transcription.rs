@@ -942,6 +942,7 @@ mod tests {
 
   async fn accept_fake(listener: TcpListener) -> FakeSocket {
     let (stream, _) = listener.accept().await.expect("accept the backend connection");
+    stream.set_nodelay(true).expect("disable Nagle on the fake backend socket");
     accept_async(stream).await.expect("complete the fake WebSocket handshake")
   }
 

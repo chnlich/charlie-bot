@@ -1041,25 +1041,30 @@ mod tests {
   }
 
   #[test]
-  fn process_and_redirect_bodies_are_refused() {
+  fn a_process_per_session_is_refused() {
     let home = home();
-    let denied = [
-      // A command outside the builtins, such as perl, starts a process per session.
-      format!(
-        "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do [ -f \"$id/metadata.json\" ] && perl -ne 1 \"$id/metadata.json\"; done"
-      ),
-      // A builtin redirect reads each session's file inside the shell.
-      format!(
-        "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do read -r line < \"$id/metadata.json\"; echo \"$line\"; done"
-      ),
-      // A producer ahead of the session enumeration reads every session's metadata.json.
-      format!(
-        "cat {home}/.charliebot/sessions/*/metadata.json | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
-      ),
-    ];
-    for command in denied {
-      assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
-    }
+    let command = format!(
+      "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do [ -f \"$id/metadata.json\" ] && perl -ne 1 \"$id/metadata.json\"; done"
+    );
+    assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
+  }
+
+  #[test]
+  fn a_builtin_redirect_per_session_is_refused() {
+    let home = home();
+    let command = format!(
+      "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do read -r line < \"$id/metadata.json\"; echo \"$line\"; done"
+    );
+    assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
+  }
+
+  #[test]
+  fn a_producer_reading_session_metadata_is_refused() {
+    let home = home();
+    let command = format!(
+      "cat {home}/.charliebot/sessions/*/metadata.json | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
+    );
+    assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
   }
 
   #[test]

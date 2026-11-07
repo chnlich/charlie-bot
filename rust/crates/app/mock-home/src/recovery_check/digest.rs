@@ -348,7 +348,15 @@ mod tests {
     assert!(first.contains(r#"status: "active" -> "paused""#), "{first}");
     assert!(first.contains(r#"updated_at: "<absent>" -> "<ts>""#), "{first}");
     assert!(first.contains(r#"pid: "<volatile>" -> "<volatile>""#), "{first}");
+  }
 
+  #[test]
+  fn server_log_digest_hides_trial_paths_and_new_run_ids() {
+    let lab = tempfile::tempdir().expect("lab");
+    let seed = lab.path().join("seed");
+    let session = "11111111-1111-4111-8111-111111111111";
+    let run = "22222222-2222-4222-8222-222222222222";
+    fs::create_dir_all(seed.join(session).join("data").join("runs").join(run)).expect("seed dirs");
     let tree = lab.path().join("trials").join("trial-0123456789ab");
     let log = lab.path().join("server-1.log");
     fs::write(

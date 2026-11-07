@@ -520,7 +520,7 @@ mod tests {
   async fn wait_until(mut predicate: impl FnMut() -> bool) {
     tokio::time::timeout(Duration::from_secs(5), async {
       while !predicate() {
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::task::yield_now().await;
       }
     })
     .await

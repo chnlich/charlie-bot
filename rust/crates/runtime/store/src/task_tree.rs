@@ -4350,8 +4350,8 @@ pub(crate) mod tests {
       let events_path = store.chat_events_path(session_id);
       fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
       fs::create_dir_all(events_path.parent().unwrap()).unwrap();
-      let meta = SessionMetadata::new(session_id, session_id, TaskProfile::Manager);
-      fs::write(&metadata_path, meta.to_json_string(&store.slots, true)).unwrap();
+      fs::write(&metadata_path, format!(r#"{{"id":"{session_id}","name":"{session_id}","profile":"manager"}}"#))
+        .unwrap();
       fs::write(&events_path, format!("{{\"id\": \"{session_id}-event\", \"type\": \"task_created\"}}\n")).unwrap();
     }
 

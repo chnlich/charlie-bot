@@ -63,8 +63,8 @@ const SIGNATURE_BATCH_CHUNK_FLOOR: usize = 50;
 const SIGNATURE_BATCH_MIN_PATHS: usize = 32;
 /// The threads one content-scan batch may split across.
 ///
-/// A first query scans every active session's chat file: 5.5 GB on the 7,160-session mock home, which one
-/// thread spends about 0.6 s on. The scans read different files and do not depend on each other.
+/// A sparse needle's first query scans nearly every active session's chat file: 5.5 GB on the 7,160-session mock home,
+/// which one thread spends about 0.6 s on. The scans read different files and do not depend on each other.
 const SCAN_BATCH_WORKERS: usize = 16;
 /// The fewest scans a batch runs on its own threads: starting them costs more than a short batch saves.
 const SCAN_BATCH_MIN_JOBS: usize = 32;
@@ -194,10 +194,11 @@ pub(crate) struct SearchAnswer {
 /// The work every fresh query of one corpus shares: each session's lowercase name, and each active session's chat
 /// file.
 ///
-/// A fresh query tests the needle against every session name and checks the chat file of every active session, and
-/// both sets depend only on the corpus. The store keeps a corpus until a metadata write or the sweep interval rebuilds
-/// it, so the entry serves the queries between two rebuilds. `corpus` is the key and holds the rows it names alive, so
-/// a pointer match names the same sessions; `sessions_dir` is the directory the paths resolve below.
+/// A fresh query tests the needle against every session name and checks the chat files of the active sessions that the
+/// capped answer can still take, and both sets depend only on the corpus. The store keeps a corpus until a metadata
+/// write or the sweep interval rebuilds it, so the entry serves the queries between two rebuilds. `corpus` is the key
+/// and holds the rows it names alive, so a pointer match names the same sessions; `sessions_dir` is the directory the
+/// paths resolve below.
 struct CorpusWork {
   corpus: Arc<Vec<Arc<SessionMetadata>>>,
   sessions_dir: PathBuf,

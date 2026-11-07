@@ -1063,8 +1063,13 @@ async fn backfill_arms_an_active_session_without_a_revival() {
 #[tokio::test]
 async fn backfill_leaves_an_archived_session_without_unread_archived() {
   let home = Home::new();
-  home.thread_session("s1", origin()).await;
-  home.features.store.archive_session("s1").await.unwrap();
+  let mut archived = SessionMetadata::new("s1", "session s1", TaskProfile::Manager);
+  archived.status = SessionStatus::Archived;
+  archived.set_extra("fakechat_origin", origin());
+  let path = home.features.store.metadata_path("s1");
+  fs::create_dir_all(path.parent().unwrap()).unwrap();
+  let slots = home.features.registry.metadata_slots();
+  fs::write(&path, archived.to_json_string(&slots, true)).unwrap();
   let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[]);
 
   let armed_count = backfill_followed_threads(&adapter, &home.features).await.unwrap();

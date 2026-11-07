@@ -20,18 +20,33 @@ const PACKAGES: [(&str, &str, RegisterFn); 3] = [
 ];
 
 #[test]
-fn contributions_match_the_recorded_cases() {
+fn web_reply_contributions_match_the_recorded_cases() {
+  assert_contributions_match_recorded_cases("web_reply");
+}
+
+#[test]
+fn slack_contributions_match_the_recorded_cases() {
+  assert_contributions_match_recorded_cases("slack");
+}
+
+#[test]
+fn discord_contributions_match_the_recorded_cases() {
+  assert_contributions_match_recorded_cases("discord");
+}
+
+fn assert_contributions_match_recorded_cases(package_key: &str) {
   let mut decoder = GzDecoder::new(include_bytes!("fixtures/instruction_segments_golden.json.gz").as_slice());
   let mut fixture_text = String::new();
   decoder.read_to_string(&mut fixture_text).unwrap();
   let fixture: Value = serde_json::from_str(&fixture_text).unwrap();
   assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   assert_eq!(fixture["cases"].as_array().unwrap().len(), 147);
-  let registries = registered_packages();
+  let (_, package, register) = PACKAGES.iter().find(|(key, _, _)| *key == package_key).unwrap();
+  let registry = registered_package(package, *register);
 
   let root = tempfile::tempdir().unwrap();
-  let mut segment_answers = [0usize; 3];
-  let mut error_answers = [0usize; 3];
+  let mut segment_answers = 0;
+  let mut error_answers = 0;
   let mut missing_web_failures = 0;
   let checkouts = fixture["checkouts"].as_object().unwrap();
   for (name, documents) in checkouts {
@@ -45,47 +60,39 @@ fn contributions_match_the_recorded_cases() {
   for case in fixture["cases"].as_array().unwrap() {
     let checkout = case["checkout"].as_str().unwrap();
     let repo_path = root.path().join(checkout);
-    let actual = rust_answer(case, &repo_path, &registries);
-    let expected = materialize_paths(case["expected"].clone(), root.path());
-    for (index, (key, _, _)) in PACKAGES.iter().enumerate() {
-      let python = &expected[*key];
-      let rust = &actual[*key];
-      if python.get("error").is_some() {
-        error_answers[index] += 1;
-      } else if python["segments"].as_array().is_some_and(|segments| !segments.is_empty()) {
-        segment_answers[index] += 1;
-      }
-      if checkout == "without-web_reply.md" && *key == "web_reply" && python.get("error").is_some() {
-        assert!(
-          rust.get("error").is_some(),
-          "expected the missing prompt to fail on both sides: case={case:?} python={python} rust={rust}"
-        );
-        missing_web_failures += 1;
-      } else if python != rust {
-        panic!(
-          "recorded Python contribution differs: checkout={checkout} case={case:?} key={key} expected={python} actual={rust}"
-        );
-      }
+    let actual = rust_answer(case, &repo_path, &registry);
+    let mut expected = case["expected"][package_key].clone();
+    materialize_paths(&mut expected, root.path());
+    if expected.get("error").is_some() {
+      error_answers += 1;
+    } else if expected["segments"].as_array().is_some_and(|segments| !segments.is_empty()) {
+      segment_answers += 1;
+    }
+    if checkout == "without-web_reply.md" && package_key == "web_reply" && expected.get("error").is_some() {
+      assert!(
+        actual.get("error").is_some(),
+        "expected the missing prompt to fail on both sides: case={case:?} python={expected} rust={actual}"
+      );
+      missing_web_failures += 1;
+    } else if expected != actual {
+      panic!(
+        "recorded Python contribution differs: checkout={checkout} case={case:?} key={package_key} expected={expected} actual={actual}"
+      );
     }
   }
 
-  assert!(segment_answers.into_iter().all(|count| count > 0));
-  assert!(error_answers.into_iter().all(|count| count > 0));
-  assert_eq!(missing_web_failures, 3);
+  assert!(segment_answers > 0);
+  assert!(error_answers > 0);
+  assert_eq!(missing_web_failures, if package_key == "web_reply" { 3 } else { 0 });
 }
 
-fn registered_packages() -> Vec<Registry> {
-  PACKAGES
-    .iter()
-    .map(|(_, package, register)| {
-      let mut registry = Registry::new();
-      registry.register_package(package, *register).unwrap();
-      registry
-    })
-    .collect()
+fn registered_package(package: &str, register: RegisterFn) -> Registry {
+  let mut registry = Registry::new();
+  registry.register_package(package, register).unwrap();
+  registry
 }
 
-fn rust_answer(case: &Value, repo_path: &Path, registries: &[Registry]) -> Value {
+fn rust_answer(case: &Value, repo_path: &Path, registry: &Registry) -> Value {
   let session = &case["session"];
   let profile = match session["profile"].as_str().unwrap() {
     "manager" => TaskProfile::Manager,
@@ -99,15 +106,10 @@ fn rust_answer(case: &Value, repo_path: &Path, registries: &[Registry]) -> Value
   let repo = RepoRoot::new(Some(OsString::from(repo_path))).unwrap();
   let kind = case["kind"].as_str().unwrap();
   let config = config(id);
-  let mut answer = serde_json::Map::new();
-  for ((key, _, _), registry) in PACKAGES.iter().zip(registries) {
-    let result = match registry.instruction_segments(&meta, kind, &config, &repo) {
-      Ok(segments) => json!({"segments": segments.iter().map(segment_json).collect::<Vec<_>>()}),
-      Err(error) => json!({"error": format!("{error}")}),
-    };
-    answer.insert((*key).to_string(), result);
+  match registry.instruction_segments(&meta, kind, &config, &repo) {
+    Ok(segments) => json!({"segments": segments.iter().map(segment_json).collect::<Vec<_>>()}),
+    Err(error) => json!({"error": format!("{error}")}),
   }
-  Value::Object(answer)
 }
 
 fn segment_json(segment: &RuleSegment) -> Value {
@@ -153,12 +155,11 @@ fn config(session_id: &str) -> CharlieBotConfig {
   }
 }
 
-fn materialize_paths(mut value: Value, root: &Path) -> Value {
-  match &mut value {
+fn materialize_paths(value: &mut Value, root: &Path) {
+  match value {
     Value::String(text) => *text = text.replace("$TMPROOT", &root.to_string_lossy()),
-    Value::Array(values) => values.iter_mut().for_each(|value| *value = materialize_paths(value.clone(), root)),
-    Value::Object(values) => values.values_mut().for_each(|value| *value = materialize_paths(value.clone(), root)),
-    _ => {}
+    Value::Array(values) => values.iter_mut().for_each(|value| materialize_paths(value, root)),
+    Value::Object(values) => values.values_mut().for_each(|value| materialize_paths(value, root)),
+    _ => (),
   }
-  value
 }

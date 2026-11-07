@@ -187,11 +187,8 @@ fn deny_decision(reason: &str) -> Value {
 /// its relative paths resolved against the hook's cwd, so `cd .. && find .` is the same search as its absolute form.
 fn scan_forms(command: &str, cwd: &str) -> Result<Vec<ScanForm>, String> {
   let shell = shell_text(command);
-  let resolved = if needs_path_resolution(&shell) {
-    resolve_paths(&shell, cwd, store_root_pattern()?)
-  } else {
-    shell.clone()
-  };
+  let resolved =
+    if needs_path_resolution(&shell) { resolve_paths(&shell, cwd, store_root_pattern()?) } else { shell.clone() };
   let mut forms = search_forms(&shell)?;
   if resolved != shell {
     for form in search_forms(&resolved)? {

@@ -1085,8 +1085,12 @@ mod tests {
 
   /// The frames a page has received, read until the page goes quiet.
   async fn drain(page: &mut Subscription) -> Vec<Value> {
+    drain_with_timeout(page, Duration::from_millis(20)).await
+  }
+
+  async fn drain_with_timeout(page: &mut Subscription, quiet_period: Duration) -> Vec<Value> {
     let mut frames = Vec::new();
-    while let Ok(Some(text)) = tokio::time::timeout(Duration::from_millis(20), page.recv()).await {
+    while let Ok(Some(text)) = tokio::time::timeout(quiet_period, page.recv()).await {
       frames.push(serde_json::from_str::<Value>(&text).expect("a frame is JSON"));
     }
     frames
@@ -1269,8 +1273,8 @@ mod tests {
     let notices = |frames: Vec<Value>| -> Vec<Value> {
       frames.into_iter().filter(|frame| frame["type"] == SUBTREE_NOTICE_TYPE).collect()
     };
-    assert_eq!(notices(drain(&mut child_page).await), vec![notice.clone()]);
-    assert_eq!(notices(drain(&mut root_page).await), vec![notice]);
+    assert_eq!(notices(drain_with_timeout(&mut child_page, Duration::from_millis(1)).await), vec![notice.clone()]);
+    assert_eq!(notices(drain_with_timeout(&mut root_page, Duration::from_millis(1)).await), vec![notice]);
   }
 
   #[tokio::test]

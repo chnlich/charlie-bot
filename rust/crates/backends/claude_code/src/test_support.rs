@@ -24,9 +24,8 @@ pub fn synthetic_host() -> ClaudeHost {
 /// A cached HTTP client for quota tests that do not send requests through its production endpoints.
 pub fn quota_http() -> QuotaHttp {
   static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-  let client = CLIENT
-    .get_or_init(|| http_client::client(&Settings::default()).expect("the test HTTP client builds"))
-    .clone();
+  let client =
+    CLIENT.get_or_init(|| http_client::client(&Settings::default()).expect("the test HTTP client builds")).clone();
   QuotaHttp::with_endpoints(client, usage_quota::USAGE_URL, usage_quota::TOKEN_REFRESH_URL)
 }
 

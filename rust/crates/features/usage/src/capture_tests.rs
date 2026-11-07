@@ -784,8 +784,7 @@ fn appended_line_is_captured_and_second_dir_replay_counts_once() {
   let (config, registry) = claude_fixture(&home);
   let original = call("m1", NAME, "2024-01-01T00:00:00Z", [10, 0, 0, 5], &["sess1"]);
   cli_file(&home, "claude", "sess1", std::slice::from_ref(&original));
-  let connection = Connection::open_in_memory().unwrap();
-  let mut ledger = UsageLedger::from_connection(PathBuf::from(":memory:"), connection).unwrap();
+  let mut ledger = UsageLedger::open(":memory:").unwrap();
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "Claude Code"), 1);
 
   cli_file(&home, "claude", "replay", std::slice::from_ref(&original));

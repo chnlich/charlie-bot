@@ -1042,17 +1042,12 @@ mod tests {
     }
   }
 
-  /// A waiting item whose text is `text`, as a status file names it.
-  fn waiting_set(text: &str) -> String {
-    json!({"waiting": [waiting_item(text)]}).to_string()
-  }
-
   /// A waiting item whose current state can pass the status set's cold-read gate.
   fn waiting_item(text: &str) -> Value {
     json!({"text": text, "context": "The decision is active now. Options are continue or stop; continue is recommended."})
   }
 
-  /// Records a cold read for the waiting item used by `waiting_set`.
+  /// Records a cold read for the waiting item used by a status set.
   async fn check_waiting_item(home: &Home, session_id: &str, text: &str) {
     record_ask_check(
       &home.features,

@@ -1771,7 +1771,7 @@ mod tests {
   }
 
   #[test]
-  fn the_content_index_holds_trigrams_and_bigrams_across_chunk_boundaries() {
+  fn the_content_index_holds_trigrams_across_chunk_boundaries() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("chat.jsonl");
     let mut body = vec![b'x'; super::SEARCH_CHUNK_SIZE - 1];
@@ -1784,7 +1784,12 @@ mod tests {
       assert_ne!(trigrams[trigram >> 3] & (1u8 << (trigram & 7)), 0, "trigram {trigram} is indexed");
     }
     assert!(bigrams.iter().any(|byte| *byte != 0), "a pair with a symbol is indexed too");
+  }
 
+  #[test]
+  fn the_content_index_holds_symbol_bigrams_across_chunk_boundaries() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("chat.jsonl");
     // A chunk boundary between the '9' and the '-' leaves the "9-" bigram to the window's carry.
     let mut body = vec![b'x'; super::SEARCH_CHUNK_SIZE - 1];
     body.extend_from_slice(b"9-needle");
@@ -1794,7 +1799,12 @@ mod tests {
     for bigram in super::needle_bigrams("9-needle") {
       assert_ne!(bigrams[bigram >> 3] & (1u8 << (bigram & 7)), 0, "bigram {bigram} spans the boundary");
     }
+  }
 
+  #[test]
+  fn the_content_index_holds_high_byte_bigrams_across_chunk_boundaries() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("chat.jsonl");
     // A chunk boundary inside "缓存" leaves its high-byte pairs to the window's carry.
     let mut body = vec![b'x'; super::SEARCH_CHUNK_SIZE - 2];
     body.extend_from_slice("缓存".as_bytes());
@@ -1804,7 +1814,15 @@ mod tests {
     for bigram in super::needle_high_bigrams("缓存") {
       assert_ne!(high_bigrams[bigram >> 3] & (1u8 << (bigram & 7)), 0, "high-byte bigram {bigram} spans the boundary");
     }
+  }
 
+  #[test]
+  fn the_content_index_lacks_pairs_for_an_absent_needle() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("chat.jsonl");
+    let mut body = vec![b'x'; super::SEARCH_CHUNK_SIZE - 2];
+    body.extend_from_slice("缓存".as_bytes());
+    fs::write(&path, &body).unwrap();
     let (trigrams, bigrams, _, found) = super::index_and_search_file(&path, "walq1rus").unwrap();
     assert!(!found);
     assert!(

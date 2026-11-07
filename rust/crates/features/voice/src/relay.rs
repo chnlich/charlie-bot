@@ -563,6 +563,7 @@ mod tests {
 
   use axum::extract::State;
   use axum::routing::get;
+  use axum::serve::ListenerExt;
   use axum::{Router, extract::ws::WebSocketUpgrade};
   use charliebot_core::config::{
     BackendsConfig, GithubConfig, PathsConfig, RemoteRunConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
@@ -716,6 +717,7 @@ mod tests {
     let address = listener.local_addr().expect("read relay server address");
     let app = Router::new().route("/ws", get(relay_test_handler)).with_state(state);
     let server = tokio::spawn(async move {
+      let listener = listener.tap_io(|stream| stream.set_nodelay(true).expect("disable Nagle on the relay socket"));
       axum::serve(listener, app).await.expect("serve the relay test app");
     });
     RelayTestServer {

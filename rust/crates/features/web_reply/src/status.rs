@@ -585,35 +585,35 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
     Some(require_current_plan_links(features, &prospective, &scan_context)?)
   };
   let mut ask_tiers = HashMap::new();
-  if let Some(items) = patch.waiting.as_deref() {
-    if !items.is_empty() {
-      let approval = load_approval_policy(features)?;
-      ask_tiers = read_ask_tiers(features, session_id).await?;
-      let read_digests: HashSet<String> = ask_tiers.keys().cloned().collect();
-      let unread = unread_items(items, &read_digests)?;
-      if !unread.is_empty() {
-        let names = unread.iter().map(|item| item.text.as_str()).collect::<Vec<_>>().join("; ");
-        return Err(WebReplyError::refused(
-          StatusCode::CONFLICT,
-          format!("Waiting on you items need a cold read: {names}"),
-        ));
-      }
-      if approval.table.enable_ask_tier_refusal {
-        for item in items {
-          let digest = item_sha256(item)?;
-          if let Some((tier, rule)) = ask_tiers.get(&digest)
-            && matches!(tier.as_str(), "t1" | "t2")
-          {
-            return Err(WebReplyError::refused(
-              StatusCode::CONFLICT,
-              format!(
-                "Waiting on you item {:?} is tiered {tier} (rule: {}): carry out the step and record it with \
-                 charliebot digest add instead of waiting for approval",
-                item.text,
-                rule.as_deref().unwrap_or("none")
-              ),
-            ));
-          }
+  if let Some(items) = patch.waiting.as_deref()
+    && !items.is_empty()
+  {
+    let approval = load_approval_policy(features)?;
+    ask_tiers = read_ask_tiers(features, session_id).await?;
+    let read_digests: HashSet<String> = ask_tiers.keys().cloned().collect();
+    let unread = unread_items(items, &read_digests)?;
+    if !unread.is_empty() {
+      let names = unread.iter().map(|item| item.text.as_str()).collect::<Vec<_>>().join("; ");
+      return Err(WebReplyError::refused(
+        StatusCode::CONFLICT,
+        format!("Waiting on you items need a cold read: {names}"),
+      ));
+    }
+    if approval.table.enable_ask_tier_refusal {
+      for item in items {
+        let digest = item_sha256(item)?;
+        if let Some((tier, rule)) = ask_tiers.get(&digest)
+          && matches!(tier.as_str(), "t1" | "t2")
+        {
+          return Err(WebReplyError::refused(
+            StatusCode::CONFLICT,
+            format!(
+              "Waiting on you item {:?} is tiered {tier} (rule: {}): carry out the step and record it with \
+               charliebot digest add instead of waiting for approval",
+              item.text,
+              rule.as_deref().unwrap_or("none")
+            ),
+          ));
         }
       }
     }

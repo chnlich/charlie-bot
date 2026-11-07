@@ -677,7 +677,7 @@ mod tests {
 
   #[tokio::test]
   async fn retry_of_a_partial_slack_reply_posts_only_the_missing_segment() {
-    let home = Home::new();
+    let home = Home::for_thread_reply();
     let api = FakeApi::start(&[]).await;
     let session = home.thread_session("slack-partial", TS).await;
     let adapter: Arc<dyn ThreadAdapter> =

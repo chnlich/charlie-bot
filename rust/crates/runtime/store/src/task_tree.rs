@@ -33,7 +33,9 @@ pub(crate) use crate::task_tree_state::{
   CachedTreePage, EventIdIndex, NodeFactsKey, NodeStateKey, TreeIndex,
 };
 pub use crate::task_tree_state::{NodeFacts, TaskFacts, TaskState, TaskTreeActivity, TaskTreeRow};
-use crate::task_tree_state::{TASK_ANCESTOR_HOP_LIMIT, ancestor_ids, index_meta, task_below_caller};
+use crate::task_tree_state::{
+  TASK_ANCESTOR_HOP_LIMIT, ancestor_ids, index_meta, task_below_caller, within_caller_subtree,
+};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 const TREE_INDEX_TTL: Duration = Duration::from_secs(2);
@@ -985,6 +987,12 @@ impl Store {
   pub fn task_below_caller(&self, caller_task: &str, session_id: &str) -> StoreResult<bool> {
     let index = self.tree_index()?;
     task_below_caller(&index, caller_task, session_id)
+  }
+
+  /// Whether `session_id` is `caller_task` or sits below it: the subtree test reparent scope and cron binding share.
+  pub fn within_caller_subtree(&self, caller_task: &str, session_id: &str) -> StoreResult<bool> {
+    let index = self.tree_index()?;
+    within_caller_subtree(&index, caller_task, session_id)
   }
 
   /// Return one node’s direct task children in creation order.

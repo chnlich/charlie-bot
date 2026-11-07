@@ -28,6 +28,10 @@ export const TARGETS = Object.freeze({
   resetBlackoutBaseMs: 2000,
   // Scenario 6: the socket bytes of one reply are at most this multiple of the reply's text bytes.
   longStreamRatio: 1.2,
+  // Scenario 7: the tool-row bytes the stream frames move are at most this multiple of the final rows' bytes.
+  toolStreamRatio: 2.0,
+  // Scenario 7's turn is background traffic while it runs, so its socket bytes per minute read the scenario 1
+  // target (`backgroundKbPerMinute`), not a target of their own.
 });
 
 // The background load of scenarios 1 to 3: the task-tree changes a live turn produces, one burst per window.

@@ -708,6 +708,62 @@ export async function longStreamRep(ctx) {
   });
 }
 
+// Scenario 7: one tool-heavy turn. Twenty Bash call and result pairs, one call every 5 s, stream the draft's tool
+// rows as suffix frames; a short reply closes the turn. The scenario reports the tool-row bytes the stream frames
+// moved, per the final rows' bytes, and the turn's socket bytes per minute.
+export async function toolStreamRep(ctx) {
+  const { sessions } = ctx;
+  return withLink(ctx, 'tools', ['visible'], async ({ tabs, tab }) => {
+    await tabs.navigate(tab, `/?session=${sessions.open.id}`);
+    await tab.ready();
+    await tabs.show(tab);
+    await tabs.waitIdle(SETTLE_TIMEOUT_MS);
+    await caughtUpSocket(tab, sessions.open.id);
+
+    const sentAt = await tab.sendText(`pn-tools ${randomTag()} bench-tools turn of twenty tool calls`);
+    const finished = await waitFor(
+      () => tab.frames.find((frame) => frame.at >= sentAt && frame.type === 'master_done') ?? null,
+      SHOW_TIMEOUT_MS,
+      'the tool-heavy turn to finish',
+    ).catch(async (caught) => {
+      throw new Error(`${caught.message}; seen since the send: ${await tab.diagnose(sentAt)}`);
+    });
+    // The rows the page held after each frame: suffix frames build the same list whole-list frames did. A reset
+    // frame carries no tools_from and replaces the list from row 0.
+    let held = [];
+    let toolRowBytes = 0;
+    for (const frame of tab.framesBetween(sentAt, finished.at)) {
+      if (frame.type !== 'stream') continue;
+      let payload;
+      try {
+        payload = JSON.parse(frame.text);
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(payload.tools)) continue;
+      const from = typeof payload.tools_from === 'number' ? payload.tools_from : 0;
+      if (from > held.length) {
+        throw new Error(`stream frame tools_from ${from} is past the ${held.length} held tool rows`);
+      }
+      held = held.slice(0, from).concat(payload.tools);
+      toolRowBytes += Buffer.byteLength(JSON.stringify(payload.tools));
+    }
+    if (held.length === 0) {
+      throw new Error('no stream frame carried tool rows; seen since the send: ' + await tab.diagnose(sentAt));
+    }
+    const socketBytes = tab.framesBetween(sentAt, finished.at).reduce((sum, frame) => sum + frame.bytes, 0);
+    const turnMs = finished.at - sentAt;
+    return {
+      toolRowBytes,
+      finalRowBytes: Buffer.byteLength(JSON.stringify(held)),
+      finalRows: held.length,
+      socketBytes,
+      turnMs,
+      frameBreakdown: tab.frameBreakdown(sentAt, finished.at),
+    };
+  });
+}
+
 // The page's socket for `sessionId`, open and past its catch-up. A reply sent before that arrives inside the replay
 // instead of as stream frames, so the scenario would measure a catch-up rather than a stream.
 async function caughtUpSocket(tab, sessionId) {

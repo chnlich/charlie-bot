@@ -840,13 +840,17 @@ function renderSessionView(data) {
   setInputAreaVisible(!isWorker);
 
   // Initialize streaming preview from pending draft (in-progress assistant
-  // response carried over from a tail-loaded session). A worker transcript
-  // streams tool activity only, so a draft carrying buffered tools shows even
-  // without text — the paint renders those rows.
+  // response carried over from a tail-loaded session). The draft's tool rows
+  // seed the accumulation in every mode: they are the base the socket's
+  // suffix frames build on, and the catch-up of a page whose cursor is at the
+  // log end sends nothing to complete them. A worker transcript streams tool
+  // activity only, so a draft carrying buffered tools shows even without
+  // text — the paint renders those rows. A manager's preview paints no rows,
+  // so it stays hidden until the draft has text.
   if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking
-      || (isWorker && (data.pending_draft.tools || []).length))) {
+      || (data.pending_draft.tools || []).length)) {
     if (typeof seedStreamDraft === 'function') seedStreamDraft(data.pending_draft);
-    showStreaming(data.pending_draft);
+    if (data.pending_draft.content || data.pending_draft.thinking || isWorker) showStreaming(data.pending_draft);
   } else {
     hideStreaming();
   }

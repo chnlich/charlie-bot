@@ -2616,7 +2616,16 @@ fn assert_recorded_drafts(actual: Vec<Value>, recorded: Value) {
       thinking = extend_streamed(&thinking, append, live["thinking_length"].as_u64());
     }
     if let Some(frame_tools) = live.get("tools") {
-      tools = frame_tools.clone();
+      // A live frame carries the rows from `tools_from` on; the page keeps the rows before it.
+      tools = match live["tools_from"].as_u64() {
+        Some(from) => {
+          let mut held = tools.as_array().cloned().unwrap_or_default();
+          held.truncate(from as usize);
+          held.extend(frame_tools.as_array().cloned().unwrap_or_default());
+          Value::Array(held)
+        }
+        None => frame_tools.clone(),
+      };
     }
     let snapshot = &frame["message"];
     assert_eq!(content, snapshot["content"].as_str().unwrap_or(""), "draft text at frame {index}");

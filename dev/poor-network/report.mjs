@@ -85,6 +85,22 @@ export const METRICS = Object.freeze([
     target: TARGETS.longStreamRatio,
     value: (rep) => rep.socketBytes / rep.replyTextBytes,
   },
+  {
+    id: 'tool-stream.rows',
+    scenario: 7,
+    title: 'tool stream, row bytes per final row byte',
+    unit: 'ratio',
+    target: TARGETS.toolStreamRatio,
+    value: (rep) => rep.toolRowBytes / rep.finalRowBytes,
+  },
+  {
+    id: 'tool-stream.socket',
+    scenario: 7,
+    title: 'tool stream, socket bytes per minute',
+    unit: 'KB/min',
+    target: TARGETS.backgroundKbPerMinute,
+    value: (rep) => rep.socketBytes / 1000 / (rep.turnMs / 60000),
+  },
 ]);
 
 // The nearest-rank percentile of `values`.

@@ -402,6 +402,11 @@ impl MessageAggregator {
     // A run that ends leaves no subagent running: its cards show stopped, committed drafts included.
     let ends_run = matches!(event_type, event_types::MASTER_DONE | event_types::RUN_END | event_types::RUN_ERROR);
     let mut deltas = if ends_run { self.tool_rows.end_run() } else { Vec::new() };
+    if ends_run {
+      // The stop lands in the open draft's rows right before the commit closes it, and the live commit leaves out
+      // the rows a page holds, so the suffix frame is what tells that page its rows stopped.
+      deltas.extend(self.stream_delta());
+    }
     deltas.extend(self.flush_to_message_delta());
     if ends_run {
       self.tool_rows.forget_committed();
@@ -539,7 +544,8 @@ impl MessageAggregator {
     Ok(deltas)
   }
 
-  /// The current draft as a stream frame: only the text, thinking and tool rows the page does not hold yet.
+  /// The current draft as a stream frame: only the text, thinking and tool rows the page does not hold yet. The
+  /// tool rows go out as a suffix: `tools_from` is the index of the frame's first row in the draft's rows, from 0.
   /// `length` and `thinking_length` are the draft's lengths after this frame, in UTF-16 code units, so the page
   /// can tell a replayed append from new text.
   fn stream_delta(&mut self) -> Vec<Value> {
@@ -559,8 +565,10 @@ impl MessageAggregator {
       self.thinking_buf.clone()
     };
     let tools = self.tool_rows.draft_json();
-    let tools_changed = tools != self.streamed_tools;
-    if append.is_empty() && thinking_append.is_empty() && !tools_changed {
+    // The frame carries the rows from the first one that differs from the rows the earlier frames streamed, so a
+    // draft's row bytes grow with its row count instead of with its row count squared.
+    let tools_from = first_changed_row(self.streamed_tools.as_ref(), tools.as_ref());
+    if append.is_empty() && thinking_append.is_empty() && tools_from.is_none() {
       return Vec::new();
     }
     let mut frame = json!({"type": "stream", "event_index": self.current_index});
@@ -580,13 +588,29 @@ impl MessageAggregator {
       frame["thinking_append"] = json!(thinking_append);
       frame["thinking_length"] = json!(self.streamed_thinking_utf16);
     }
-    if tools_changed {
+    if let Some(from) = tools_from {
       self.streamed_tools = tools.clone();
       if let Some(tools) = tools {
-        frame["tools"] = tools;
+        let rows = tools.as_array().expect("draft_json renders an array");
+        frame["tools_from"] = json!(from);
+        frame["tools"] = json!(rows[from..]);
       }
     }
     vec![frame]
+  }
+}
+
+/// The index of the first row of `current` that the rows streamed so far do not hold, when the rows changed. Rows
+/// never streamed start the suffix at 0; a draft whose rows equal the streamed ones changed none; rows only ever
+/// grow or change in place between commits, so a suffix that would shrink has no case.
+fn first_changed_row(streamed: Option<&Value>, current: Option<&Value>) -> Option<usize> {
+  let Some(current_rows) = current.and_then(Value::as_array) else { return streamed.is_some().then_some(0) };
+  let Some(streamed_rows) = streamed.and_then(Value::as_array) else { return Some(0) };
+  let shared = streamed_rows.len().min(current_rows.len());
+  match (0..shared).find(|&index| streamed_rows[index] != current_rows[index]) {
+    Some(index) => Some(index),
+    None if current_rows.len() > streamed_rows.len() => Some(streamed_rows.len()),
+    None => None,
   }
 }
 
@@ -1346,7 +1370,16 @@ mod tests {
         thinking = extend_streamed(&thinking, append, frame["thinking_length"].as_u64());
       }
       if let Some(frame_tools) = frame.get("tools") {
-        tools = frame_tools.clone();
+        // A live frame carries the rows from `tools_from` on; the page keeps the rows before it.
+        tools = match frame["tools_from"].as_u64() {
+          Some(from) => {
+            let mut held = tools.as_array().cloned().unwrap_or_default();
+            held.truncate(from as usize);
+            held.extend(frame_tools.as_array().cloned().unwrap_or_default());
+            Value::Array(held)
+          }
+          None => frame_tools.clone(),
+        };
       }
       let snapshot = &expected_frame["message"];
       assert_eq!(content, snapshot["content"].as_str().unwrap_or(""), "{case}: draft text at frame {index}");
@@ -1671,8 +1704,96 @@ mod tests {
       .unwrap();
     assert_eq!(deltas.len(), 1);
     assert_eq!(deltas[0]["type"], "stream");
+    assert_eq!(deltas[0]["tools_from"], 0);
     assert_eq!(deltas[0]["tools"][0]["output"], "read");
     assert!(deltas[0].get("append").is_none(), "the draft text did not change");
+  }
+
+  /// The stream frames of these events, as the live feed sends them.
+  fn live_stream_frames(events: &[Value]) -> Vec<Value> {
+    let mut aggregator = MessageAggregator::new(0, true);
+    let mut frames = Vec::new();
+    for event in events {
+      frames.extend(aggregator.feed(event).unwrap());
+    }
+    frames.into_iter().filter(|frame| frame["type"] == "stream").collect()
+  }
+
+  fn tool_use_event(id: &str, command: &str) -> Value {
+    json!({"type": "tool_use", "tool_use_id": id, "name": "Bash", "input": {"command": command}, "timestamp": "t"})
+  }
+
+  #[test]
+  fn tool_row_frames_carry_the_suffix_from_the_first_changed_row() {
+    let mut events = vec![tool_use_event("r1", "one"), tool_use_event("r2", "two"), tool_use_event("r3", "three")];
+    let frames = live_stream_frames(&events);
+    let starts: Vec<u64> = frames.iter().map(|frame| frame["tools_from"].as_u64().unwrap()).collect();
+    let widths: Vec<usize> = frames.iter().map(|frame| frame["tools"].as_array().unwrap().len()).collect();
+    // Each new row appends one row: the suffix starts at the new row and holds it alone.
+    assert_eq!(starts, [0, 1, 2]);
+    assert_eq!(widths, [1, 1, 1]);
+    assert_eq!(frames[0]["tools"][0]["input"]["command"], "one");
+    assert_eq!(frames[2]["tools"][0]["input"]["command"], "three");
+
+    // A result on the last row resends that row only, with its output.
+    events.push(json!({"type": "tool_result", "tool_use_id": "r3", "content": "done", "timestamp": "t"}));
+    // A change to an earlier row starts the suffix there: the subagent hangs under the second row.
+    events.push(json!({
+      "type": "system", "subtype": "task_started", "tool_use_id": "r2",
+      "subagent_type": "general-purpose", "description": "Check", "prompt": "look",
+    }));
+    let frames = live_stream_frames(&events);
+    let result_frame = &frames[3];
+    assert_eq!(result_frame["tools_from"], 2);
+    assert_eq!(result_frame["tools"].as_array().unwrap().len(), 1);
+    assert_eq!(result_frame["tools"][0]["output"], "done");
+    let subagent_frame = &frames[4];
+    assert_eq!(subagent_frame["tools_from"], 1);
+    let suffix = subagent_frame["tools"].as_array().unwrap();
+    assert_eq!(suffix.len(), 2, "the suffix reaches the end of the draft's rows");
+    assert_eq!(suffix[0]["id"], "r2");
+    assert_eq!(suffix[0]["subagent"]["status"], "running");
+    assert_eq!(suffix[1]["input"]["command"], "three");
+  }
+
+  #[test]
+  fn the_first_tool_frame_after_a_commit_starts_the_suffix_at_zero() {
+    let mut events = vec![tool_use_event("r1", "one")];
+    let frames = live_stream_frames(&events);
+    assert_eq!(frames[0]["tools_from"], 0);
+    assert_eq!(frames[0]["tools"].as_array().unwrap().len(), 1);
+
+    // The commit closes the draft, so the next draft's rows stream from zero again.
+    events.push(json!({"type": "master_done", "timestamp": "t"}));
+    events.push(tool_use_event("r2", "two"));
+    let frames = live_stream_frames(&events);
+    assert_eq!(frames.last().unwrap()["tools_from"], 0);
+    assert_eq!(frames.last().unwrap()["tools"].as_array().unwrap().len(), 1);
+  }
+
+  #[test]
+  fn a_run_end_that_stops_a_row_streams_the_suffix_from_that_row() {
+    let events = vec![
+      tool_use_event("r1", "one"),
+      json!({
+        "type": "system", "subtype": "task_started", "tool_use_id": "r1",
+        "subagent_type": "general-purpose", "description": "Check", "prompt": "look",
+      }),
+      json!({"type": "master_done", "timestamp": "t"}),
+    ];
+    let mut aggregator = MessageAggregator::new(0, true);
+    let mut deltas = Vec::new();
+    for event in &events {
+      deltas.extend(aggregator.feed(event).unwrap());
+    }
+    // The stop streams before the commit closes the draft.
+    let stop = deltas
+      .iter()
+      .position(|frame| frame["type"] == "stream" && frame["tools"][0]["subagent"]["status"] == "stopped")
+      .expect("the run end streams the stopped row");
+    let commit = deltas.iter().position(|frame| frame["type"] == "message").unwrap();
+    assert!(stop < commit, "the suffix frame precedes the commit");
+    assert_eq!(deltas[stop]["tools_from"], 0);
   }
 
   #[test]

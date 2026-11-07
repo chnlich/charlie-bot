@@ -29,8 +29,15 @@ import {
   TASK_TREE_LOAD,
   VIEW,
 } from './profile.mjs';
-import { REPLY_PIECES, REPLY_SOURCES } from './reply.mjs';
-import { backgroundRep, heldBlackoutRep, longStreamRep, resetBlackoutRep, viewBackgroundRep } from './scenarios.mjs';
+import { REPLY_PIECES, REPLY_SOURCES, TOOL_CALL_SPAN_SECONDS, TOOL_PAIRS, toolRowBytes } from './reply.mjs';
+import {
+  backgroundRep,
+  heldBlackoutRep,
+  longStreamRep,
+  resetBlackoutRep,
+  toolStreamRep,
+  viewBackgroundRep,
+} from './scenarios.mjs';
 import { formatOpen, openScenario } from './open.mjs';
 import { METRICS, calibrate, formatSide, percentile, summarize } from './report.mjs';
 import { TrialWatch } from './trials.mjs';
@@ -42,6 +49,7 @@ const SCENARIOS = Object.freeze({
   held: heldBlackoutRep,
   reset: resetBlackoutRep,
   stream: longStreamRep,
+  tools: toolStreamRep,
   starred: viewBackgroundRep('starred'),
   threads: viewBackgroundRep('threads'),
 });
@@ -241,7 +249,12 @@ function buildSide({
     taskTreeLoad: TASK_TREE_LOAD,
     statusChurn: STATUS_CHURN,
     repetitions: args.repetitions,
-    reply: { sources: REPLY_SOURCES, pieces: REPLY_PIECES, textBytes: replyBytes },
+    reply: {
+      sources: REPLY_SOURCES,
+      pieces: REPLY_PIECES,
+      textBytes: replyBytes,
+      toolPiece: { pairs: TOOL_PAIRS, callSpanSeconds: TOOL_CALL_SPAN_SECONDS, rowBytes: toolRowBytes() },
+    },
     assets: Object.fromEntries([...assets].map(([url, asset]) => [url, asset.sha256])),
     view: view && { ...view, live: VIEW },
     otherViews,
@@ -268,7 +281,7 @@ function buildSide({
     side.calibration = calibrate(results.background);
   }
   for (const metric of METRICS) {
-    const repsOf = { 1: 'background', 2: 'background', 3: 'background', 4: 'held', 5: 'reset', 6: 'stream' }[metric.scenario];
+    const repsOf = { 1: 'background', 2: 'background', 3: 'background', 4: 'held', 5: 'reset', 6: 'stream', 7: 'tools' }[metric.scenario];
     if (results[repsOf].length > 0 && status === 'measured') {
       side.metrics[metric.id] = summarize(results[repsOf], metric);
     }

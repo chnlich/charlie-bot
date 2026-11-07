@@ -53,8 +53,48 @@ function replyNdjson(text) {
   return events.map((piece) => `${JSON.stringify({ type: 'thought', text: piece })}\n`).join('');
 }
 
-// `node reply.mjs <repo root> <out dir>` writes the pieces as reply-<n>.ndjson, and `next`, the index of the piece the
-// next turn prints. The stub advances `next` on each turn.
+// The tool-heavy piece: TOOL_PAIRS Bash call and result pairs, one call every TOOL_CALL_SPAN_SECONDS, then a short
+// closing reply. A turn whose prompt carries the marker `bench-tools` prints it (the stub greps for the marker).
+// Each line states its replay delay in `bench_delay_s`, the field the stub sleeps for; the reply pieces state none
+// and keep the stub's default. The pair's shapes put one rendered tool row at ROW_BYTES: the command is the row's
+// read field, so it and the output preview survive at their full lengths.
+export const TOOL_PAIRS = 20;
+export const TOOL_CALL_SPAN_SECONDS = 5;
+export const TOOL_MARKER = 'bench-tools';
+const TOOL_ROW_BYTES = 770;
+// The fixed JSON around a row's command and output:
+// {"name":"Bash","input":{"command":""},"output":"","is_error":false}
+const TOOL_ROW_FIXED_BYTES = 67;
+const TOOL_COMMAND_CHARS = 228;
+const TOOL_OUTPUT_CHARS = TOOL_ROW_BYTES - TOOL_ROW_FIXED_BYTES - TOOL_COMMAND_CHARS;
+
+function toolNdjson() {
+  const lines = [];
+  for (let index = 1; index <= TOOL_PAIRS; index++) {
+    const command = `bench-tools call ${index} ${'x'.repeat(TOOL_COMMAND_CHARS)}`.slice(0, TOOL_COMMAND_CHARS);
+    const output = `ok ${index} ${'y'.repeat(TOOL_OUTPUT_CHARS)}`.slice(0, TOOL_OUTPUT_CHARS);
+    lines.push(`${JSON.stringify({
+      type: 'command', step: index, id: `bench-tools-${index}`, command, bench_delay_s: TOOL_CALL_SPAN_SECONDS,
+    })}\n`);
+    lines.push(`${JSON.stringify({
+      type: 'observation', step: index, id: `bench-tools-${index}`, returncode: 0, output, bench_delay_s: 0.05,
+    })}\n`);
+  }
+  lines.push(`${JSON.stringify({
+    type: 'thought', text: `All ${TOOL_PAIRS} tool calls finished.\n`, bench_delay_s: 1,
+  })}\n`);
+  return lines.join('');
+}
+
+// One final tool row as the server renders it, for the JSON to record and a seed to check against.
+export function toolRowBytes() {
+  const command = 'x'.repeat(TOOL_COMMAND_CHARS);
+  const output = 'y'.repeat(TOOL_OUTPUT_CHARS);
+  return Buffer.byteLength(JSON.stringify({name: 'Bash', input: {command}, output, is_error: false}));
+}
+
+// `node reply.mjs <repo root> <out dir>` writes the pieces as reply-<n>.ndjson, the tool piece as tools-0.ndjson,
+// and `next`, the index of the piece the next turn prints. The stub advances `next` on each turn.
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
   const [repoRoot, outDir] = process.argv.slice(2);
   if (!repoRoot || !outDir) {
@@ -64,5 +104,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(im
   loadReplyPieces(repoRoot).forEach((piece, index) => {
     fs.writeFileSync(path.join(outDir, `reply-${index}.ndjson`), replyNdjson(piece));
   });
+  fs.writeFileSync(path.join(outDir, 'tools-0.ndjson'), toolNdjson());
   fs.writeFileSync(path.join(outDir, 'next'), '0\n');
 }

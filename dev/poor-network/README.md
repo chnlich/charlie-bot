@@ -2,7 +2,7 @@
 
 One command drives the web client in headless Chrome through a shaping proxy at the link profile in `profile.mjs`.
 The browser's connections all share that proxy's bandwidth budget. The client talks to a trial server on the mock home.
-The bench reports six scenarios, five repetitions each, as JSON and as a summary table with a pass or fail against each
+The bench reports seven scenarios, five repetitions each, as JSON and as a summary table with a pass or fail against each
 target.
 
 ## Run
@@ -21,7 +21,7 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--side both` | Measure the before side, then the after side. If the before side is the reference commit (`CALIBRATION_REFERENCE`) and its calibration does not reproduce, stop with exit 3 and do not run the after side. |
 | `--out-dir DIR` | Where the run's files go, outside the tree. |
 | `--repetitions N` | Repetitions per scenario (default 5). |
-| `--scenarios LIST` | Any of `background,held,reset,stream,starred,threads,open` (default the first four). `open` runs its own cells, see below. |
+| `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,open` (default the first four). `open` runs its own cells, see below. |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
 | `--detach` | Start a transient systemd user unit and return; the log is `DIR/pn-<id>.log`. |
 | `--lock FILE` | Hold an advisory lock on `FILE` around each side's trial (not the builds), waiting up to 2 h. |
@@ -65,6 +65,7 @@ The link is in `LINK` and the targets are in `TARGETS` of `profile.mjs`. No othe
 | 4 held blackout | restore to the last switch rendered, over that switch's floor | <= 2000 ms over floor |
 | 5 reset blackout | restore to `catchup_complete`, over the catch-up bytes / 12.5 KB/s | <= 2000 ms over the byte time |
 | 6 long stream | socket bytes of one reply, per reply text byte | <= 1.20 |
+| 7 tool stream | stream frames' tool-row bytes, per final row byte; the turn's socket bytes per minute | <= 2.0; <= 75 KB/min |
 
 The switch to real-time connection number is the before value of the one-socket-per-tab fix: today's page opens a new
 socket for the target after the first screen renders, and the fix keeps the page's socket and subscribes the session on
@@ -146,11 +147,11 @@ state at the cap (the sockets, the frames seen, and whether the target's bootstr
 When the target's bootstrap never finished, the step's bytes are the size of the same body on the wire, read from the
 server, so the floor still follows the bytes the step needs.
 
-## Scenarios 4 to 6 have no background
+## Scenarios 4 to 7 have no background
 
 Scenarios 1 to 3 share one repetition: the background load runs, the proxy counts its bytes, and the switch and the
 send happen inside that background. The calibration's during-refresh switch (see Calibration) is a second switch in the
-same repetition, after the send. The targets of scenarios 4 to 6 do not mention a background load, so those
+same repetition, after the send. The targets of scenarios 4 to 7 do not mention a background load, so those
 repetitions run without one.
 
 ## Calibration
@@ -202,7 +203,10 @@ The pieces differ, so the gzip of a session's history does not fold its replies 
 about three or four text events of 2.2 KB, and the server keeps each event as one chat message; a bootstrap carries the
 last 40 messages, of which the event size and the turns' own messages set how much reply text a switch target carries. The stub calls no model
 and reads no credential. A prompt carrying the marker `bench-hold` keeps its turn open for the background load, until
-the bench cancels it; the status churn sends such a prompt and cancels it, so one row's activity facts move.
+the bench cancels it; the status churn sends such a prompt and cancels it, so one row's activity facts move. A prompt
+carrying the marker `bench-tools` prints the tool piece instead: 20 Bash call and result pairs whose final rows are
+770 bytes each, one call every 5 s, then a short reply. Each NDJSON line states its replay delay in `bench_delay_s`,
+which the stub sleeps for; a line that states none keeps 0.05 s. Scenario 7 sends that prompt.
 
 The web client reads its access key from `localStorage` and sends it as the `Authorization` header and as the `token`
 of each WebSocket URL. The bench writes the same `localStorage` entry before each page loads, so the page behaves as

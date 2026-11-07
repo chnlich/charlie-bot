@@ -620,7 +620,10 @@ mod tests {
     let (_home, features) = test_context();
     let events: Vec<SharedChatEvent> = vec![json!({
       "type": "assistant",
-      "message": {"content": [{"type": "text", "text": "draft"}]},
+      "message": {"content": [
+        {"type": "text", "text": "draft"},
+        {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}},
+      ]},
     })]
     .into_iter()
     .map(|event| SharedChatEvent::new(charliebot_store::ChatEvent::from_value(&event)))
@@ -631,6 +634,11 @@ mod tests {
     assert_eq!(frames[0]["reset"], true);
     assert_eq!(frames[0]["append"], "draft");
     assert_eq!(frames[0]["length"], 5);
+    // The reset frame carries the whole list and no tools_from: the page replaces its rows with it.
+    let tools = frames[0]["tools"].as_array().expect("the draft's tool rows ride the reset frame");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["name"], "Bash");
+    assert!(frames[0].get("tools_from").is_none());
   }
 
   /// What a page would render from these frames: the committed assistant messages, and the draft it holds.

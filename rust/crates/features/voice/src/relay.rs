@@ -740,7 +740,7 @@ mod tests {
 
   #[tokio::test]
   async fn frame_after_end_cancels_the_backend_and_returns_the_protocol_error() {
-    let server = start_relay_test(FakeMode::NeverFinal, MAX_RECORDING_SAMPLES).await;
+    let server = start_relay_test_with_limits(FakeMode::NeverFinal, 4, 2).await;
     let mut browser = browser_socket(server.address).await;
     browser.send(ClientMessage::Binary(vec![1, 2].into())).await.expect("send audio");
     browser.send(ClientMessage::Text(r#"{"type":"end"}"#.into())).await.expect("seal the recording");
@@ -756,7 +756,7 @@ mod tests {
 
   #[tokio::test]
   async fn backend_final_before_end_is_reported_and_never_archived() {
-    let server = start_relay_test(FakeMode::FinalBeforeEnd, MAX_RECORDING_SAMPLES).await;
+    let server = start_relay_test_with_limits(FakeMode::FinalBeforeEnd, 4, 2).await;
     let mut browser = browser_socket(server.address).await;
     browser.send(ClientMessage::Binary(vec![1, 2].into())).await.expect("send audio");
     assert_eq!(
@@ -774,7 +774,7 @@ mod tests {
 
   #[tokio::test]
   async fn disconnect_after_end_abandons_without_archiving() {
-    let mut server = start_relay_test(FakeMode::NeverFinal, MAX_RECORDING_SAMPLES).await;
+    let mut server = start_relay_test_with_limits(FakeMode::NeverFinal, 4, 2).await;
     let mut browser = browser_socket(server.address).await;
     browser.send(ClientMessage::Binary(vec![1, 2].into())).await.expect("send audio");
     browser.send(ClientMessage::Text(r#"{"type":"end"}"#.into())).await.expect("seal the recording");

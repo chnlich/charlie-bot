@@ -965,22 +965,31 @@ mod tests {
     let (listener, endpoint) = fake_listener().await;
     let second = SAMPLE_RATE * 2;
     let chunks = vec![vec![1; second * 4], vec![2; 2], vec![3; 2]];
-    let fake_chunks = chunks.clone();
+    let queued_bytes = chunks.iter().map(Vec::len).sum();
+    let audio = AudioQueue::new_with_limits_for_test(queued_bytes, 0);
+    for chunk in &chunks {
+      assert!(audio.put(chunk.clone()).await);
+    }
+    audio.end(None).await;
+
     let fake = tokio::spawn(async move {
+      let mut expected_chunks = chunks.into_iter();
       let mut socket = accept_fake(listener).await;
       let handshake = next_text(&mut socket).await;
       socket
         .send(ServerMessage::Text(r#"{"type":"sessionStarted"}"#.into()))
         .await
         .expect("send the Muse session reply");
-      let mut binary = Vec::new();
       let mut sent = vec![handshake];
       loop {
         let Some(message) = socket.next().await else {
           break;
         };
         match message.expect("read Muse frame") {
-          ServerMessage::Binary(bytes) => binary.push(bytes.to_vec()),
+          ServerMessage::Binary(bytes) => {
+            let expected = expected_chunks.next().expect("Muse forwards every queued chunk once");
+            assert_eq!(bytes.as_ref(), expected.as_slice());
+          }
           ServerMessage::Text(text) => {
             let text = text.to_string();
             let is_end = text == r#"{"type": "endStream"}"#;
@@ -1003,15 +1012,11 @@ mod tests {
           message => panic!("unexpected Muse frame: {message:?}"),
         }
       }
-      (sent, binary, fake_chunks)
+      assert!(expected_chunks.next().is_none(), "Muse forwards every queued chunk");
+      sent
     });
 
     let clock = Arc::new(VirtualClock::new());
-    let audio = AudioQueue::new();
-    for chunk in &chunks {
-      assert!(audio.put(chunk.clone()).await);
-    }
-    audio.end(None).await;
     let backend = Backend::muse_for_test("synthetic-token", &endpoint, clock.clone());
     let (task, mut events, _cancel) = start_transcription(backend, audio);
     let mut transcript = Vec::new();
@@ -1032,7 +1037,7 @@ mod tests {
       .expect("Muse session completes")
       .expect("Muse task succeeds")
       .expect("Muse transcription succeeds");
-    let (sent, binary, expected_binary) = tokio::time::timeout(Duration::from_secs(3), fake)
+    let sent = tokio::time::timeout(Duration::from_secs(3), fake)
       .await
       .expect("fake Muse server completes")
       .expect("fake Muse task succeeds");
@@ -1041,7 +1046,6 @@ mod tests {
       r#"{"mode": "PUSH_TO_TALK", "authorization": {"accessToken": "synthetic-token"}, "audioEncoding": "PCM_16KHZ", "model": "muse-voice-transcribe-1.0", "partialMode": "CUMULATIVE", "emitAudioProgress": false, "keywords": ["Ada"], "languageBias": ["Mandarin Chinese"]}"#
     );
     assert_eq!(sent[1], r#"{"type": "endStream"}"#);
-    assert_eq!(binary, expected_binary);
     let sleeps = clock.sleeps();
     assert_eq!(sleeps.len(), 1);
     assert!((sleeps[0] - 1.0 / SAMPLE_RATE as f64).abs() < 1e-12);

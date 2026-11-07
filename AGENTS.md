@@ -3,7 +3,9 @@
 ## Coding Standards
 - Google Code Style
 - 2-space indentation, 120-column limit
-- `rustfmt` and `clippy` gate the Rust code: `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` from `rust/`. Run the clippy gate through `dev/remote-run/cargo-slot.sh`.
+- `rustfmt` and `clippy` gate the Rust code: `cargo fmt --check` and
+  `cargo clippy --workspace --all-targets -- -D warnings` from `rust/`. Run the clippy gate through
+  `dev/remote-run/cargo-slot.sh` when `remote_run.host` is set.
 - `scripts/` holds the scripts a CharlieBot operator runs on their own host (install, server launch, skill sync, backend preflight); repo maintenance tools (leak checks, git hooks, browser and live harnesses, builds, eval runners) and the improve cron prompts (the landing protocol, the five direction prompts and `inflight-files.sh`) live in `dev/`.
 
 ### Web UI
@@ -19,10 +21,13 @@ The screen space then goes to content and controls.
 
 ## Test and Verification
 
-- Run every compile and test through `dev/remote-run/`: `run.sh` for any command, `cargo-slot.sh` for Cargo.
+- Route compiles and tests by `remote_run.host`: when `charliebot config get remote_run.host` prints a host, run them
+  through `dev/remote-run/`, using `run.sh` for any command and `cargo-slot.sh` for Cargo; when it reports the key
+  unset, run them directly from the worktree with the toolchain on `PATH`.
 - The Rust suite is `cargo test --workspace --locked` from `rust/`.
 - The frontend JavaScript tests are `node --test` from `web/`, as CI does.
-- The agent environment on the agent host refuses the toolchains that `dev/remote-run/README.md` lists.
+- When `server.enable_local_work_guard` is true, the local-work guard refuses the toolchains listed in
+  `dev/remote-run/README.md`.
 - When the runner exits 86 or 87, end the run and report the blocker with the link it prints.
 - Reproduce a load-sensitive failure by forcing interleaving.
 - Gate a format check on a single-file exit code or empty diff output.

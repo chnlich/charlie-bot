@@ -590,7 +590,7 @@ mod tests {
     let home = Home::new();
     let sid = home.manager("session", None).await;
 
-    let readback = post_web_reply(&home.features, sid, "the answer", None).await.expect("the reply posts");
+    let readback = post_web_reply(&home.features, &sid, "the answer", None).await.expect("the reply posts");
 
     assert_eq!(readback, json!({"posted": true, "chars": 10, "over_budget": false, "answers": []}));
     assert_eq!(replies(&home, &sid), vec![(json!("the answer"), json!({"answer_ids": [], "chars": 10}))]);
@@ -856,7 +856,7 @@ mod tests {
     seed_web_session(&home, sid, &[user.clone(), nudge.clone()]);
     home.set_running(&[id_of(&nudge)]);
 
-    let readback = post_web_reply(&home.features, &sid, "the answer", None).await.expect("the reply posts");
+    let readback = post_web_reply(&home.features, sid, "the answer", None).await.expect("the reply posts");
 
     assert_eq!(readback["answers"], json!([id_of(&user)]));
   }
@@ -916,7 +916,7 @@ mod tests {
     home.set_running(&[id_of(&only)]);
 
     let tags = ["11111111".to_string()];
-    let readback = post_web_reply_with_request_id(&home.features, sid, "the answer", &tags, None, None)
+    let readback = post_web_reply_with_request_id(&home.features, &sid, "the answer", &tags, None, None)
       .await
       .expect("the reply posts");
 
@@ -998,7 +998,7 @@ mod tests {
     home.set_running(&[id_of(&nudges[0]), id_of(&nudges[1])]);
 
     let tags = ["11111111".to_string(), "22222222".to_string()];
-    let readback = post_web_reply_with_request_id(&home.features, &sid, "the answer", &tags, None, None)
+    let readback = post_web_reply_with_request_id(&home.features, sid, "the answer", &tags, None, None)
       .await
       .expect("the reply posts");
 

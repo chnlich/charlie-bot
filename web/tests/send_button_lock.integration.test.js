@@ -8,7 +8,7 @@
 // sidebar, websocket, file-upload and voice-input modules on the
 // session_context_stub harness. It follows the style of
 // chat_attachments_render.test.js (send button as an attribute-map fake) and
-// voice_input_run.test.js (fake XHR).
+// voice_input_run.integration.test.js (fake XHR).
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');

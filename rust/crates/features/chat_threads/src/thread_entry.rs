@@ -1686,8 +1686,13 @@ pub async fn backfill_followed_threads(
 ) -> Result<usize, ThreadReplyError> {
   let platform = adapter.platform();
   let config = features.config.get().map_err(ThreadReplyError::failure)?;
-  let active = blocking(features, |store| store.list_sessions_readonly(SessionStatus::Active)).await?;
-  let archived = blocking(features, |store| store.list_sessions_readonly(SessionStatus::Archived)).await?;
+  let (active, archived) = blocking(features, |store| {
+    Ok((
+      store.list_sessions_readonly(SessionStatus::Active)?,
+      store.list_sessions_readonly(SessionStatus::Archived)?,
+    ))
+  })
+  .await?;
   let mut armed = 0;
   for meta in active.iter().chain(archived.iter()) {
     let Some(origin) = origin_of(meta, platform) else {

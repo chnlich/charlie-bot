@@ -92,24 +92,22 @@ pub fn resolve_paths(shell: &str, cwd: &str, store_root: &Regex) -> String {
 }
 
 pub(super) fn needs_path_resolution(shell: &str) -> bool {
-  shell
-    .split(|character: char| character.is_whitespace() || ";&|()<>`".contains(character))
-    .any(|word| {
-      if word == "cd" {
-        return true;
-      }
-      let bare = word.trim_matches(['"', '\'']);
-      if bare.starts_with(['-', '?', '[', '!']) || bare.contains('=') || bare.contains("://") {
-        return false;
-      }
-      if bare.starts_with(['~', '/']) || (bare.starts_with('$') && bare.contains('/')) {
-        return false;
-      }
-      if bare.starts_with('*') && !bare.starts_with("*/") {
-        return false;
-      }
-      bare.contains('/') || matches!(bare, "." | ".." | ".charliebot" | "sessions")
-    })
+  shell.split(|character: char| character.is_whitespace() || ";&|()<>`".contains(character)).any(|word| {
+    if word == "cd" {
+      return true;
+    }
+    let bare = word.trim_matches(['"', '\'']);
+    if bare.starts_with(['-', '?', '[', '!']) || bare.contains('=') || bare.contains("://") {
+      return false;
+    }
+    if bare.starts_with(['~', '/']) || (bare.starts_with('$') && bare.contains('/')) {
+      return false;
+    }
+    if bare.starts_with('*') && !bare.starts_with("*/") {
+      return false;
+    }
+    bare.contains('/') || matches!(bare, "." | ".." | ".charliebot" | "sessions")
+  })
 }
 
 /// A word without its quotes, resolved against the current directory, or `None` when the word names no path.

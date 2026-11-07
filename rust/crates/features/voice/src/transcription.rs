@@ -648,7 +648,7 @@ async fn muse_send_audio<S: MuseSocket + 'static>(
     sent_seconds += chunk_seconds;
   }
   if !*cancelled.borrow() {
-    send_muse_json(&socket, json!({ "type": "endStream" })).await?;
+    send_muse_json(socket.as_ref(), json!({ "type": "endStream" })).await?;
   }
   Ok(())
 }

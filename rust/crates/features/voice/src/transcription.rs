@@ -988,7 +988,8 @@ mod tests {
         };
         match message.expect("read Muse frame") {
           ServerMessage::Binary(bytes) => {
-            let (expected_size, expected_value) = expected_chunks.next().expect("Muse forwards every queued chunk once");
+            let (expected_size, expected_value) =
+              expected_chunks.next().expect("Muse forwards every queued chunk once");
             assert_eq!(bytes.len(), expected_size);
             assert!(bytes.iter().all(|byte| *byte == expected_value));
           }

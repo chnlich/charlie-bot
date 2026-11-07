@@ -1504,7 +1504,7 @@ backends:
       .await
       .unwrap();
     if with_reply {
-      let reply = fixture_text(turn as u64 + 100, 1_100);
+      let reply = fixture_text(turn as u64 + 100, 700);
       store
         .append_chat_event(
           session_id,
@@ -1531,7 +1531,7 @@ backends:
     for turn in 1..=turns {
       turn_starts.push(total);
       let with_reply = matches!(turn % 4, 1 | 2);
-      append_fixture_turn(&features.store, &meta.id, turn, 1_100, with_reply).await;
+      append_fixture_turn(&features.store, &meta.id, turn, 700, with_reply).await;
       total += if with_reply { 3 } else { 2 };
     }
     let payload = build_bootstrap_payload(&features.store, &features.registry, &cfg_of(&features), &meta).unwrap();
@@ -1543,7 +1543,7 @@ backends:
     assert_eq!(start + messages.len(), total, "the kept slots run to the history's end");
     assert_eq!(
       messages[0]["content"],
-      json!(fixture_text(first_turn as u64, 1_100)),
+      json!(fixture_text(first_turn as u64, 700)),
       "the first kept slot is its turn's user message"
     );
     let served_wire = gzip_level_one(&charliebot_compat::json::fast_json_bytes(&payload.value)).len();
@@ -1551,7 +1551,7 @@ backends:
     assert!(payload.untrimmed_wire_bytes > FIRST_SCREEN_WIRE_BUDGET_BYTES);
     assert_eq!(payload.value["has_more"], json!(true));
     assert!(
-      messages.iter().any(|message| message["content"] == json!(fixture_text(turns as u64, 1_100))),
+      messages.iter().any(|message| message["content"] == json!(fixture_text(turns as u64, 700))),
       "the newest turn renders on the first screen"
     );
   }

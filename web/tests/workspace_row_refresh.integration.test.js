@@ -11,6 +11,7 @@ const vm = require('node:vm');
 const {readStatic, chatModules, sidebarModules, runStaticModules} = require('./read_static');
 const {createFakeWebSocketClass} = require('./fake_websocket');
 const {standInForUsageJs} = require('./session_context_stub');
+const {createElement} = require('./dom_element_stub');
 
 const PAGE_TIMERS_JS = readStatic('page-timers.js');
 const WEBSOCKET_JS = readStatic('websocket.js');
@@ -21,10 +22,12 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 // One open page on the Workspace view. `painted` names the sessions the sidebar paints as rows.
 function buildPage({painted = []} = {}) {
   const listeners = new Map();
-  const elements = new Map([['session-list', {innerHTML: ''}]]);
+  const nav = createElement();
+  nav.scrollTop = 0;
+  const elements = new Map([['session-list', nav]]);
   for (const sid of painted) elements.set('session-' + sid, {id: 'session-' + sid});
   const timers = [];
-  const page = {elements, requests: [], cronLoads: 0, reloads: 0, storage: new Map()};
+  const page = {elements, nav, requests: [], cronLoads: 0, reloads: 0, storage: new Map()};
   const document = {
     hidden: false,
     visibilityState: 'visible',
@@ -43,7 +46,7 @@ function buildPage({painted = []} = {}) {
       if (selector === 'a[id^="session-"]') return painted.map((sid) => ({id: 'session-' + sid}));
       return [];
     },
-    createElement: () => ({style: {}, classList: {add() {}, remove() {}, toggle() {}}, setAttribute() {}}),
+    createElement,
     body: {appendChild() {}, style: {}},
   };
   const context = {
@@ -133,6 +136,79 @@ function answerRows(page) {
       .forEach((request) => request.respond({sessions: {}, gone: []}));
 }
 
+// One session row as the sidebar's listing carries it.
+function row(id, overrides = {}) {
+  return {
+    id,
+    name: 'Session ' + id,
+    group: 'Work',
+    updated_at: '2026-04-02T04:00:00Z',
+    has_unread: false,
+    has_running_tasks: false,
+    has_pending_trigger: false,
+    pending_trigger_count: 0,
+    next_trigger_at: null,
+    starred: false,
+    backend: 'claude-opus-4.6',
+    ...overrides,
+  };
+}
+
+// A worker whose task closed is archived by the server, and the page learns it from the task_tree_changed frame
+// broadcast for it. A session switch closes the page's socket for the target's bootstrap, so the broadcast in that
+// window reaches no page, and the socket replays none on reopen: the painted row stayed until the next full load.
+test('a row archived while a switch has the socket closed leaves the list when it reopens', async () => {
+  const page = buildPage();
+  const manager = row('b', {profile: 'manager', updated_at: '2026-04-02T10:00:00Z'});
+  const worker = row('w', {profile: 'worker', task_parent_id: 'b', updated_at: '2026-04-02T09:00:00Z'});
+  page.context.renderSessionList([manager, worker], 'all');
+  assert.match(page.nav.innerHTML, /id="session-w"/);
+
+  page.connect();
+  page.socket().emitOpen();
+  assert.equal(page.fullListCount(), 0, "a page load's first socket reloads nothing");
+
+  // The switch: its teardown closes the socket, and its reconnect lands after the bootstrap.
+  vm.runInContext('disconnectWS()', page.context);
+  vm.runInContext('connectWS()', page.context);
+  page.socket().emitOpen();
+  assert.equal(page.fullListCount(), 1, 'the reopen reloads the list the gap could have changed');
+
+  page.requests
+      .filter((request) => request.url === '/api/sessions/?compact=1')
+      .forEach((request) => request.respond([manager]));
+  await flush();
+  assert.doesNotMatch(page.nav.innerHTML, /id="session-w"/, 'the archived row left the list');
+});
+
+test('a row id dropped from the queue on another view still leaves on the return to the Workspace', async () => {
+  const page = buildPage();
+  const manager = row('b', {profile: 'manager', updated_at: '2026-04-02T10:00:00Z'});
+  const worker = row('w', {profile: 'worker', task_parent_id: 'b', updated_at: '2026-04-02T09:00:00Z'});
+  page.context.renderSessionList([manager, worker], 'all');
+  page.connect();
+  page.socket().emitOpen();
+
+  // One row fetch is in flight, and the worker's id queues behind it. The reader then searches, so the Workspace's
+  // rows are no longer the list on screen when the in-flight fetch drains the queue.
+  page.frame({type: 'task_tree_changed', session_id: 'b'});
+  page.frame({type: 'task_tree_changed', session_id: 'w'});
+  page.elements.set('sidebar-search', {value: 'needle'});
+  page.requests.filter((request) => request.url.includes('&ids='))
+      .forEach((request) => request.respond({sessions: {}, gone: []}));
+  await flush();
+  assert.equal(page.rowUrls().length, 1, 'the queued id is dropped, not fetched');
+
+  // Clearing the search returns to the Workspace, whose own load paints the server's rows, the worker absent.
+  page.elements.get('sidebar-search').value = '';
+  page.context.handleSidebarSearch('');
+  page.requests
+      .filter((request) => request.url === '/api/sessions/?compact=1')
+      .forEach((request) => request.respond([manager]));
+  await flush();
+  assert.doesNotMatch(page.nav.innerHTML, /id="session-w"/, 'the return to the Workspace leaves no stale row');
+});
+
 test('a task-tree frame fetches its row, and frames that arrive in flight form the next request', async () => {
   const page = buildPage();
   page.connect();
@@ -190,7 +266,7 @@ test('a row fetch that answers after the tab hid starts no further request until
   ]);
 });
 
-test('a reconnect after a network loss reloads the list once; a page-driven reconnect does not', async () => {
+test('every reopen that follows a close reloads the list once', async () => {
   const page = buildPage();
   page.connect();
   page.socket().emitOpen();
@@ -202,7 +278,7 @@ test('a reconnect after a network loss reloads the list once; a page-driven reco
   vm.runInContext('disconnectWS()', page.context);
   page.connect();
   page.socket().emitOpen();
-  assert.equal(page.fullListCount(), 1, 'a switch-driven reconnect does not reload the list');
+  assert.equal(page.fullListCount(), 2, 'the switch-driven reopen reloads the list the closed socket missed');
 });
 
 test('a stale-page close reloads a hidden tab once it is visible', () => {

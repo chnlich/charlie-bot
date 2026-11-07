@@ -66,11 +66,16 @@ registerWsMessageHandler('task_tree_changed', (ev) => {
   globalThis.ConcurrencyBadge?.refreshSoon();
 }, {advancesCursor: false});
 
-// The socket does not replay task_tree_changed frames, so a socket that reopens after a network loss reloads the list,
-// which recovers the rows the outage hid. A page-driven reconnect (a switch) leaves the flag clear.
+// The socket does not replay task_tree_changed frames, so an open that follows a close reloads the list, which
+// recovers the rows the gap hid. A switch closes and reopens the page's socket, and a welcome view has no socket at
+// all, so those opens sync the list too. A page load's own first socket needs no reload: the page carries the
+// server's snapshot in its rows.
 registerWsConnectHandler(() => {
-  if (!networkLossPending) return;
+  // The network-loss flag feeds the connect handlers that repair their own state (the plan panel); the list resync
+  // below covers every open that could have missed a frame.
   networkLossPending = false;
+  if (!sessionListResyncPending) return;
+  sessionListResyncPending = false;
   deferWhileHidden('session-list', refetchSessionList);
 });
 

@@ -22,6 +22,10 @@ let reconnectAttempts = 0;
 // Set when the socket closed for a reason the page did not start. The next open takes it, because the frames sent
 // during the outage are not replayed.
 let networkLossPending = false;
+// Set when the page may have missed a sidebar frame: a socket that had opened closed (a switch closes and reopens the
+// socket too), or the page had no session socket. The socket replays no task_tree_changed frame, so the next open
+// resyncs the session list (websocket-handlers.js).
+let sessionListResyncPending = false;
 // The quick retry: a visible page retries a closed socket at a short fixed delay instead of waiting out
 // a backoff it cannot observe the link through. A reset blackout surfaces a socket's close only when the
 // link returns, and an idle page has no poll to prove the link returned, so this retry starts the
@@ -86,6 +90,9 @@ function disconnectWS() {
   // ones, and the readback counts only the network episodes.
   if (wsOpen) {
     reconnectAttempts = 0;
+    // A socket that was receiving frames may have received a sidebar frame since its last event, and none is
+    // replayed: the list reloads at the next open.
+    sessionListResyncPending = true;
     document.dispatchEvent(new CustomEvent('charliebot:client-socket-close', {detail: {cause: 'switch', code: null}}));
   }
   wsOpen = false;
@@ -138,8 +145,16 @@ if (typeof pageFetch === 'function') {
 }
 
 function connectWS() {
-  if (!SESSION_ID) return;
+  if (!SESSION_ID) {
+    // Without a session there is no socket, so no sidebar frame reaches the page: the list the welcome view shows
+    // misses every row change until the first session opens, and that open resyncs it.
+    sessionListResyncPending = true;
+    return;
+  }
   cancelReconnect();
+  // A socket that had opened can die without a close event (a phone backgrounding does this), and it took the frames
+  // it received with it: the socket this call opens resyncs the list too.
+  if (wsOpen) sessionListResyncPending = true;
   reconnectAttempts++;
   const targetSession = SESSION_ID;
   const generation = ++wsGeneration;
@@ -205,6 +220,7 @@ function connectWS() {
     }
     console.log('WS closed, reconnecting in', reconnectDelay, 'ms');
     networkLossPending = true;
+    sessionListResyncPending = true;
     reconnectTimer = setTimeout(connectWS, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 30000);
     scheduleQuickRetry();

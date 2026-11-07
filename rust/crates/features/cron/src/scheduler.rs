@@ -427,7 +427,9 @@ impl CronScheduler {
     if metadata_string(&node, LAST_RUN_STATUS).as_deref() != Some(RUN_STATUS_RUNNING) {
       return Ok(());
     }
-    let fired_at = metadata_string(&node, LAST_SCHEDULED_RUN).unwrap_or_else(|| "an unrecorded time".to_string());
+    let fired_at = metadata_string(&node, LAST_SCHEDULED_RUN).ok_or_else(|| {
+      anyhow::anyhow!("scheduled task '{}' bound node {session_id} holds running without a fire time", task.name)
+    })?;
     self
       .features
       .store

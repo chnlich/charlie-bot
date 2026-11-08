@@ -1,0 +1,14 @@
+# Key login only. The bench installs an authorized key per user after the container starts.
+HostKey /etc/ssh/ssh_host_ed25519_key
+PidFile /run/sshd.pid
+Port 22
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+PubkeyAuthentication yes
+UsePAM no
+# The bench runs more concurrent waits than the stock 10 unauthenticated start limit allows.
+MaxStartups 200
+MaxSessions 10
+# The bench counts the "Accepted publickey" lines of this log: one per authenticated ssh connection.
+LogLevel VERBOSE

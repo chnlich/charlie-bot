@@ -61,7 +61,8 @@ jobs:
           timeout 780 node --test \
             --test-reporter=junit --test-reporter-destination=target/node-test/junit.xml \
             --test-reporter=spec --test-reporter-destination=stdout \
-            $suites ../dev/integration-selection/select.test.mjs ../dev/week-review/test/review.test.mjs
+            $suites ../dev/integration-selection/select.test.mjs ../dev/week-review/test/review.test.mjs \
+            ../dev/remote-wake/plan.test.mjs
 
       # If a parallel over-limit test's first alone run exceeds 0.1 s, two more alone runs decide by the shortest.
       - name: Unit tests over 0.1 s

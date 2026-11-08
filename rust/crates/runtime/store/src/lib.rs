@@ -6,6 +6,7 @@ pub mod chat_events;
 pub mod compact;
 mod control;
 pub mod control_events;
+mod cron_binding;
 mod event_state;
 mod event_types;
 mod events;

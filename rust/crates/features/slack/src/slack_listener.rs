@@ -203,7 +203,16 @@ async fn run_listener_loop(
   client: Arc<SlackClient>,
   ws_settings: ws_client::Settings,
 ) -> Result<()> {
-  let mut backoff = Duration::from_secs(1);
+  run_listener_loop_with_initial_backoff(features, client, ws_settings, Duration::from_secs(1)).await
+}
+
+async fn run_listener_loop_with_initial_backoff(
+  features: Arc<FeatureContext>,
+  client: Arc<SlackClient>,
+  ws_settings: ws_client::Settings,
+  initial_backoff: Duration,
+) -> Result<()> {
+  let mut backoff = initial_backoff;
   let options = Options { max_size: None, close_timeout: Some(CLOSE_TIMEOUT), ..WEBSOCKETS_16_DEFAULTS };
   loop {
     let url = match client.open_connection().await {
@@ -215,7 +224,7 @@ async fn run_listener_loop(
         continue;
       }
     };
-    backoff = Duration::from_secs(1);
+    backoff = initial_backoff;
 
     match ws_client::connect(&url, &options, &ws_settings).await {
       Ok((sender, receiver)) => {
@@ -943,14 +952,15 @@ mod tests {
     assert!(started.elapsed() < CLOSE_TIMEOUT, "cancel took {:?}", started.elapsed());
   }
 
-  #[tokio::test(start_paused = true)]
+  #[tokio::test]
   async fn listener_reconnects_within_three_seconds_after_disconnect() {
     let home = Home::new();
     let api = FakeApi::start(&[SocketPlan::Disconnect, SocketPlan::Hold]).await;
-    let task = tokio::spawn(run_listener_loop(
+    let task = tokio::spawn(run_listener_loop_with_initial_backoff(
       Arc::clone(&home.features),
       Arc::clone(&api.client),
       ws_client::Settings::default(),
+      Duration::ZERO,
     ));
     api.wait_for_sockets(2).await;
     let times = api.socket_times();
@@ -961,14 +971,15 @@ mod tests {
     assert!(task.await.unwrap_err().is_cancelled());
   }
 
-  #[tokio::test(start_paused = true)]
+  #[tokio::test]
   async fn listener_reconnects_after_a_dropped_connection() {
     let home = Home::new();
     let api = FakeApi::start(&[SocketPlan::Drop, SocketPlan::Hold]).await;
-    let task = tokio::spawn(run_listener_loop(
+    let task = tokio::spawn(run_listener_loop_with_initial_backoff(
       Arc::clone(&home.features),
       Arc::clone(&api.client),
       ws_client::Settings::default(),
+      Duration::ZERO,
     ));
     api.wait_for_sockets(2).await;
     assert_eq!(api.open_calls(), 2);
@@ -976,16 +987,17 @@ mod tests {
     assert!(task.await.unwrap_err().is_cancelled());
   }
 
-  #[tokio::test(start_paused = true)]
+  #[tokio::test]
   async fn listener_retries_a_failed_apps_connections_open() {
     let home = Home::new();
     let api = FakeApi::start(&[SocketPlan::Hold]).await;
     api.set_open_failures(1);
     let started = Instant::now();
-    let task = tokio::spawn(run_listener_loop(
+    let task = tokio::spawn(run_listener_loop_with_initial_backoff(
       Arc::clone(&home.features),
       Arc::clone(&api.client),
       ws_client::Settings::default(),
+      Duration::ZERO,
     ));
     api.wait_for_sockets(1).await;
 

@@ -1,9 +1,11 @@
 //! Live user-message delivery for web manager turns.
 //!
 //! One module owns the serialized stdin writes, the replay acknowledgements and the stdin close of one Run. The
-//! backend writes the Run prompt as the first stream-json user line and keeps stdin open. The dispatcher offers each
-//! pending web user message while the turn runs. The backend's replay of a delivered line becomes a non-rendered
-//! `input_delivered` event, and the first result closes stdin.
+//! backend writes the Run prompt as the first stream-json user line and keeps stdin open. Each bound process's
+//! first line carries the uuid `initial_line_uuid` derives and `bind_process` registers, so a relayed process never
+//! resends a uuid the transcript it resumes already holds. The dispatcher offers each pending web user message
+//! while the turn runs. The backend's replay of a delivered line becomes a non-rendered `input_delivered` event,
+//! and the first result closes stdin.
 //!
 //! The module is the delivery state both sides share: the agent runtime writes into it, and the task queue reads it.
 //! The stream-json launch arguments that turn the path on are the backend's, behind its lifecycle
@@ -32,6 +34,10 @@ pub const IS_REPLAY_FIELD: &str = "isReplay";
 /// this name instead of spelling it.
 pub const BACKEND_KWARG: &str = "midturn_delivery";
 
+/// The uuid v5 namespace of a relayed process's first-line uuid. Namespaced derivation keeps every relay's uuid out
+/// of the random-uuid space that the copied transcript and the pending web inputs draw from.
+const FIRST_LINE_NAMESPACE: uuid::Uuid = uuid::Uuid::from_u128(0x5eed_1f0b_4a7d_5c6e_9a2b_3c1d_0e4f_2674);
+
 /// Whether the spawned child has exited, read by the mid-turn delivery path before it writes.
 pub type ExitedProbe = Arc<dyn Fn() -> bool + Send + Sync>;
 
@@ -56,6 +62,9 @@ struct DeliveryState {
   initial_written: (watch::Sender<bool>, watch::Receiver<bool>),
   evidence: Mutex<Evidence>,
   released: AtomicBool,
+  /// The registered first-line uuid of every bound process in bind order; the last one names the first line the
+  /// current process receives, and its echo is recognized as this Run's own initial line.
+  first_lines: Mutex<Vec<String>>,
 }
 
 impl DeliveryState {
@@ -65,6 +74,7 @@ impl DeliveryState {
       initial_written: watch::channel(false),
       evidence: Mutex::new(Evidence::default()),
       released: AtomicBool::new(false),
+      first_lines: Mutex::new(Vec::new()),
     })
   }
 
@@ -118,7 +128,9 @@ pub fn launch_kwargs(
 
 /// Bind a gated process while preserving this Run's replay evidence.
 ///
-/// `backend_run_id` is `backend.midturn_run_id()`: `None` leaves the plain-text stdin path unbound.
+/// `backend_run_id` is `backend.midturn_run_id()`: `None` leaves the plain-text stdin path unbound. Each bind
+/// registers the process's first-line uuid, so a relay writes its continuation prompt under a uuid the transcript
+/// it resumes does not hold.
 pub async fn bind_process(run_id: &str, backend_run_id: Option<String>) -> anyhow::Result<()> {
   let Some(backend_run_id) = backend_run_id else {
     return Ok(());
@@ -137,8 +149,34 @@ pub async fn bind_process(run_id: &str, backend_run_id: Option<String>) -> anyho
   writer.exited = None;
   writer.closed = false;
   writer.write_error = None;
+  let mut first_lines = state.first_lines.lock().expect("first-line mutex is not poisoned");
+  let process = first_lines.len();
+  first_lines.push(initial_line_uuid(run_id, process));
+  drop(first_lines);
   state.initial_written.0.send_replace(false);
   Ok(())
+}
+
+/// The stream-json uuid of the first line one gated process of the Run receives. The first process writes the Run
+/// id, and every relay derives one from the Run id and its process number: Claude Code 2.1.312 and later skip a
+/// stdin line whose uuid the transcript they resume already holds, so a relayed process must never resend the Run
+/// id. This function is the one owner of that derivation.
+pub fn initial_line_uuid(run_id: &str, process: usize) -> String {
+  match process {
+    0 => run_id.to_string(),
+    _ => uuid::Uuid::new_v5(&FIRST_LINE_NAMESPACE, format!("{run_id}:{process}").as_bytes()).to_string(),
+  }
+}
+
+/// Whether a replayed uuid names a first line this Run's delivery wrote, rather than a mid-turn web input: the Run
+/// id itself, or the uuid one of the Run's bound processes registered at `bind_process`.
+pub fn is_first_line(run_id: &str, uuid: &str) -> bool {
+  if uuid == run_id {
+    return true;
+  }
+  state_of(run_id).is_some_and(|state| {
+    state.first_lines.lock().expect("first-line mutex is not poisoned").iter().any(|line| line == uuid)
+  })
 }
 
 /// Encode one stream-json user input line.
@@ -155,6 +193,9 @@ fn user_line(uuid: &str, content: &str) -> Vec<u8> {
 }
 
 /// Write the Run prompt as the first JSON message and keep stdin open.
+///
+/// The line's uuid is the one `bind_process` registered for this process: the Run id for the first process, and a
+/// fresh derived uuid for a relay, whose copied transcript already holds the earlier first lines.
 pub async fn write_initial_prompt(
   run_id: Option<String>,
   stdin: Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
@@ -168,9 +209,13 @@ pub async fn write_initial_prompt(
   if *state.initial_written.1.borrow() {
     bail!("Run {run_id} already wrote its initial stream-json prompt");
   }
+  let first_line = {
+    let first_lines = state.first_lines.lock().expect("first-line mutex is not poisoned");
+    first_lines.last().expect("the bound process registered its first-line uuid").clone()
+  };
   writer.exited = Some(exited);
   writer.stdin = Some(stdin);
-  let result = write_line(writer.stdin.as_mut().expect("the writer was just stored"), &run_id, &prompt).await;
+  let result = write_line(writer.stdin.as_mut().expect("the writer was just stored"), &first_line, &prompt).await;
   if let Err(error) = result {
     writer.write_error = Some(error.to_string());
     state.initial_written.0.send_replace(true);
@@ -237,7 +282,7 @@ pub fn translate_replay(run_id: Option<&str>, event: &Value) -> anyhow::Result<V
     Some(Value::String(input_id)) if !input_id.is_empty() => input_id.clone(),
     _ => bail!("a replayed Claude user message has no uuid"),
   };
-  if input_id == run_id {
+  if is_first_line(run_id, &input_id) {
     return Ok(Vec::new());
   }
   if let Some(state) = state_of(run_id)
@@ -282,4 +327,117 @@ pub fn release_run(run_id: &str) {
   };
   state.released.store(true, Ordering::Release);
   state.initial_written.0.send_replace(true);
+}
+
+#[cfg(test)]
+mod tests {
+  use serde_json::json;
+
+  use super::*;
+
+  fn run_id(suffix: &str) -> String {
+    format!("11111111-2222-3333-4444-5555555555{suffix}")
+  }
+
+  #[test]
+  fn a_relay_uuid_differs_from_every_uuid_the_transcript_holds() {
+    let id = run_id("60");
+    assert_eq!(initial_line_uuid(&id, 0), id, "the first process keeps the Run id");
+    let first_relay = initial_line_uuid(&id, 1);
+    let second_relay = initial_line_uuid(&id, 2);
+    assert_ne!(first_relay, id);
+    assert_ne!(first_relay, second_relay, "every relay of one run derives its own uuid");
+    assert!(uuid::Uuid::parse_str(&first_relay).is_ok(), "the derived uuid stays a uuid: {first_relay}");
+    let other_run = run_id("61");
+    assert_ne!(first_relay, initial_line_uuid(&other_run, 1), "the derivation names the run");
+  }
+
+  #[tokio::test]
+  async fn the_relay_echo_is_recognized_and_an_unexpected_uuid_stays_an_error() {
+    let id = run_id("62");
+    let message_id = "22222222-2222-3333-4444-555555555562";
+    let relay_uuid = {
+      bind_process(&id, Some(id.clone())).await.unwrap();
+      bind_process(&id, Some(id.clone())).await.unwrap();
+      initial_line_uuid(&id, 1)
+    };
+
+    assert!(is_first_line(&id, &id));
+    assert!(is_first_line(&id, &relay_uuid));
+    assert_eq!(
+      translate_replay(Some(&id), &json!({"type": "user", "uuid": relay_uuid, "isReplay": true})).unwrap(),
+      Vec::<Value>::new()
+    );
+    assert!(
+      translate_replay(Some(&id), &json!({"type": "user", "uuid": message_id, "isReplay": true})).is_err(),
+      "an echo of an unregistered uuid without a matching write stays an error"
+    );
+
+    let state = state_of(&id).expect("the bound run has delivery state");
+    state.evidence.lock().expect("mid-turn evidence mutex is not poisoned").written.insert(message_id.to_string());
+    assert_eq!(
+      translate_replay(Some(&id), &json!({"type": "user", "uuid": message_id, "isReplay": true})).unwrap().len(),
+      1,
+      "the echo of a written web input still becomes one acknowledgement"
+    );
+    release_run(&id);
+  }
+
+  #[tokio::test]
+  async fn each_bound_process_writes_its_prompt_under_the_registered_uuid() {
+    let id = run_id("63");
+    bind_process(&id, Some(id.clone())).await.unwrap();
+    let first = written_first_uuid(&id).await;
+    assert_eq!(first, id, "the first process writes the Run id");
+
+    bind_process(&id, Some(id.clone())).await.unwrap();
+    let relay = written_first_uuid(&id).await;
+    assert_eq!(relay, initial_line_uuid(&id, 1));
+    assert_ne!(relay, first, "the relayed process resends no uuid the transcript already holds");
+    release_run(&id);
+  }
+
+  async fn written_first_uuid(run_id: &str) -> String {
+    let recorded = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    write_initial_prompt(
+      Some(run_id.to_string()),
+      Box::new(RecordingStdin(std::sync::Arc::clone(&recorded))),
+      Arc::new(|| false),
+      "prompt".to_string(),
+    )
+    .await
+    .unwrap();
+    let line = String::from_utf8(recorded.lock().expect("recording stdin mutex is not poisoned").clone()).unwrap();
+    serde_json::from_str::<Value>(line.trim_end()).expect("the written line is stream-json")["uuid"]
+      .as_str()
+      .expect("the line carries a uuid")
+      .to_string()
+  }
+
+  struct RecordingStdin(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+  impl tokio::io::AsyncWrite for RecordingStdin {
+    fn poll_write(
+      self: std::pin::Pin<&mut Self>,
+      _cx: &mut std::task::Context<'_>,
+      buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+      self.0.lock().expect("recording stdin mutex is not poisoned").extend_from_slice(buf);
+      std::task::Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(
+      self: std::pin::Pin<&mut Self>,
+      _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+      std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+      self: std::pin::Pin<&mut Self>,
+      _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+      std::task::Poll::Ready(Ok(()))
+    }
+  }
 }

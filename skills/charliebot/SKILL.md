@@ -172,7 +172,8 @@ A manager reshapes its own subtree with `charliebot session reparent <task id> -
 The command sends `PATCH /api/sessions/{task id}` with the one field `task_parent_id`.
 
 - A run-token caller reparents a task from below its own task to its own task or a manager below it.
-  The server answers other targets with 403, so an agent rearranges only its own subtree.
+  A root session that the current cron configuration binds may also move under the caller's task or a manager below it.
+  The server answers every other target with 403.
 - A run-token PATCH that changes more than `task_parent_id` gets the operator-credentials refusal.
   Profiles, task records and rules stay with the operator.
 - The structural refusals of an operator reparent apply to an agent reparent unchanged (409).

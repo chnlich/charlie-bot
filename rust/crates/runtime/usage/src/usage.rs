@@ -33,6 +33,21 @@ enum ReadingKind {
   Resolved,
 }
 
+/// What the fold's result events have reported as the run's cost.
+///
+/// A null report makes the cost unknown, and it stays unknown through a later number: one unknown report means no
+/// sum is shown.
+#[derive(Clone, Copy, Default)]
+enum CostTotal {
+  /// No result event has reported a cost yet.
+  #[default]
+  Unreported,
+  /// A result event reported a null cost.
+  Unknown,
+  /// The reports so far add up to this sum.
+  Known(f64),
+}
+
 #[derive(Clone, Default)]
 struct UsageFold {
   chosen_prompt_tokens: i64,
@@ -42,8 +57,7 @@ struct UsageFold {
   snapshot: Option<Value>,
   reading_kind: ReadingKind,
   reading: Option<Value>,
-  total_cost: f64,
-  unknown_cost: bool,
+  cost_total: CostTotal,
   last_request_at: Option<UtcDateTime>,
 }
 
@@ -136,19 +150,27 @@ impl UsageFold {
       self.reading_kind = ReadingKind::Snapshot;
     }
     match event.field(event_types::RESULT_TOTAL_COST_USD) {
-      Some(value) if value.is_null() => self.unknown_cost = true,
-      Some(value) => self.total_cost += number_value(&value.to_owned_value(), "result.total_cost_usd")?,
+      Some(value) if value.is_null() => self.cost_total = CostTotal::Unknown,
+      Some(value) => {
+        let reported = number_value(&value.to_owned_value(), "result.total_cost_usd")?;
+        self.cost_total = match self.cost_total {
+          CostTotal::Unreported => CostTotal::Known(reported),
+          CostTotal::Known(total) => CostTotal::Known(total + reported),
+          CostTotal::Unknown => CostTotal::Unknown,
+        };
+      }
       None => {}
     }
     Ok(())
   }
 
   fn cost(&self) -> Option<f64> {
-    if self.unknown_cost || self.total_cost <= 0.0 {
-      None
-    } else {
-      // Rounding to four places rounds the exact binary value, as {:.4} does and scaling by 10_000 does not.
-      Some(format!("{:.4}", self.total_cost).parse().expect("a formatted float parses back"))
+    match self.cost_total {
+      CostTotal::Known(total) if total > 0.0 => {
+        // Rounding to four places rounds the exact binary value, as {:.4} does and scaling by 10_000 does not.
+        Some(format!("{:.4}", total).parse().expect("a formatted float parses back"))
+      }
+      _ => None,
     }
   }
 
@@ -735,6 +757,15 @@ mod tests {
   fn total_cost_is_unknown_when_all_result_reports_are_zero() {
     let events =
       vec![json!({"type": "result", "total_cost_usd": 0.0}), json!({"type": "result", "total_cost_usd": 0.0})];
+    assert!(
+      fold_usage(&event_refs(&events), RunKind::Work, &registry(), None).unwrap().unwrap()["total_cost_usd"].is_null()
+    );
+  }
+
+  #[test]
+  fn an_unknown_cost_stays_unknown_through_a_later_report() {
+    let events =
+      vec![json!({"type": "result", "total_cost_usd": null}), json!({"type": "result", "total_cost_usd": 0.2})];
     assert!(
       fold_usage(&event_refs(&events), RunKind::Work, &registry(), None).unwrap().unwrap()["total_cost_usd"].is_null()
     );

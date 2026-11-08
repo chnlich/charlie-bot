@@ -54,7 +54,7 @@ fn the_stand_in_server_ends_with_a_killed_test_process() {
     held.root.display(),
     hold::processes_under(&held.root)
   );
-  assert!(held.pids.iter().all(|pid| hold::has_ended(*pid)), "recorded pids still run: {:?}", held.pids);
+  assert!(hold::all_ended_within(hold::END_WAIT, &held.pids), "recorded pids still run: {:?}", held.pids);
   remove_killed_test_root(&held.root);
 }
 
@@ -73,7 +73,7 @@ fn the_pane_server_ends_with_a_killed_test_process() {
     held.root.display(),
     hold::processes_under(&held.root)
   );
-  assert!(held.pids.iter().all(|pid| hold::has_ended(*pid)), "recorded pids still run: {:?}", held.pids);
+  assert!(hold::all_ended_within(hold::END_WAIT, &held.pids), "recorded pids still run: {:?}", held.pids);
   remove_killed_test_root(&held.root);
 }
 

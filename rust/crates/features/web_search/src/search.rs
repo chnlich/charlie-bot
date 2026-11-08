@@ -53,7 +53,7 @@ impl Search {
   }
 }
 
-/// Search the web for `query` and resolve every source's redirect URL.
+/// One web search for `query`, with every source's redirect URL resolved.
 ///
 /// Every failure is the tool result text: a missing `gemini.api_key`, a non-200 answer, a body without a candidate,
 /// or a request that did not complete.
@@ -120,7 +120,8 @@ fn chunk(value: &Value) -> Option<Chunk> {
   Some(Chunk { uri: uri.to_string(), title })
 }
 
-/// Resolve every chunk's redirect URL in parallel, keeping a failed chunk's redirect URL on its line.
+/// One source per chunk, with every redirect URL resolved in parallel; a failed chunk keeps its redirect URL and
+/// carries the error.
 async fn resolve_sources(client: &reqwest::Client, chunks: Vec<Chunk>) -> Vec<Source> {
   join_all(chunks.into_iter().map(|chunk| resolve_source(client, chunk))).await
 }

@@ -212,7 +212,7 @@ mod tests {
     "  exit 0\n",
     "fi\n",
     "printf '%s\\n' \"$uuid\" >> \"$TRANSCRIPT\"\n",
-    "printf '%s\\n' \"$uuid\" > \"$RAN_MARKER\"\n",
+    "printf '%s\\n' \"$line\" > \"$RAN_MARKER\"\n",
     "printf '{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"%s\",\"message\":{\"role\":\"user\"}}\\n' \"$uuid\"\n",
     "printf '%s\\n' '{\"type\":\"result\",\"result\":\"ran\",\"usage\":{}}'\n",
   );
@@ -287,18 +287,26 @@ mod tests {
       ])
     };
 
+    // The stub records the stream-json line it received, so each leg is checked on its uuid and its prompt.
+    let received = || {
+      serde_json::from_str::<Value>(std::fs::read_to_string(&ran).unwrap().trim())
+        .expect("the CLI received one stream-json line")
+    };
+
     let first = run_one_leg(root.path(), &stub, run_id, "Initial prompt", overlay()).await;
     assert_eq!(first.exit_code, Some(0));
-    assert_eq!(std::fs::read_to_string(&ran).unwrap().trim(), run_id, "the first process ran the Run id line");
+    assert_eq!(received()["uuid"], run_id, "the first process received the Run id line");
+    assert_eq!(received()["message"]["content"], "Initial prompt");
 
     // The relay binds the same Run again and hands the new process the continuation prompt, as the master loop does.
     let second = run_one_leg(root.path(), &stub, run_id, crate::claude_relay::CONTINUATION_PROMPT, overlay()).await;
     assert_eq!(second.exit_code, Some(0), "the relayed process produced a result and the run finished");
     assert_eq!(
-      std::fs::read_to_string(&ran).unwrap().trim(),
+      received()["uuid"],
       initial_line_uuid(run_id, 1),
       "the relay's first line carries a uuid the transcript does not hold"
     );
+    assert_eq!(received()["message"]["content"], crate::claude_relay::CONTINUATION_PROMPT);
     assert!(!skipped.exists(), "the CLI ran the continuation prompt instead of skipping it as a duplicate");
     release_run(run_id);
   }

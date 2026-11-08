@@ -334,12 +334,11 @@ reset_flow_checkout() {
     # the mark lines, so nothing else about the switch changes; any other difference fails the run.
     SWITCH_SCRIPT="$FLOW/scripts/switch-lab.sh"
     cp "$REPO_TREE/scripts/switch-server.sh" "$SWITCH_SCRIPT" || fail "the lab switch copy installs into $FLOW"
-    if diff "$FLOW/scripts/switch-server.sh" "$REPO_TREE/scripts/switch-server.sh" \
-        | awk '/^[<>]/ && $0 !~ /lab_mark|LAB_MARK/ && NF > 1 && $2 !~ /^[{}]$/ { bad = 1 } END { exit bad }'; then
-      :
-    else
-      fail "the lab switch copy differs from $FLOW_REF's switch by more than its mark lines; see $SWITCH_SCRIPT"
-    fi
+    local unexpected
+    unexpected=$(diff "$FLOW/scripts/switch-server.sh" "$SWITCH_SCRIPT" \
+      | awk '/^[<>]/ && $0 !~ /lab_mark|LAB_MARK/ && NF > 1 && $2 !~ /^[{}]$/') || true
+    [ -z "$unexpected" ] \
+      || fail "the lab switch copy differs from $FLOW_REF's switch by more than its mark lines: $unexpected"
   fi
 }
 

@@ -179,9 +179,20 @@ impl WaitSet {
       HeldEnd::Slurm { job_id, .. } => self.jobs.contains(job_id),
     }
   }
+
+  fn remove(&mut self, end: &HeldEnd) {
+    match end {
+      HeldEnd::Pid { pid, .. } => {
+        self.pids.remove(pid);
+      }
+      HeldEnd::Slurm { job_id, .. } => {
+        self.jobs.remove(job_id);
+      }
+    }
+  }
 }
 
-/// One wait's targets on one host, and the channel its ends go to.
+/// One wait's targets on one host that no session has reported yet, and the channel its ends go to.
 struct Watcher {
   id: u64,
   trigger_id: String,
@@ -456,11 +467,21 @@ fn dispatch_line(shared: &StdMutex<State>, host: &str, line: &str) -> Result<(),
 }
 
 fn dispatch(shared: &StdMutex<State>, host: &str, end: HeldEnd) {
-  let state = shared.lock().expect("held session state is not poisoned");
-  let Some(entry) = state.hosts.get(host) else {
+  let mut state = shared.lock().expect("held session state is not poisoned");
+  let Some(entry) = state.hosts.get_mut(host) else {
     return;
   };
-  for watcher in entry.watchers.iter().filter(|watcher| watcher.set.wants(&end)) {
+  // The script drops a target once it reports the end, and a waiter that received the end no longer needs it. Both
+  // sets drop the target, so the session stays reusable only while it still watches every target its waits need. A
+  // watch that arrives after the end therefore reopens the session, and the new script's first pass reports the end.
+  if let Some(session) = entry.session.as_mut() {
+    session.keys.remove(&end);
+  }
+  for watcher in &mut entry.watchers {
+    if !watcher.set.wants(&end) {
+      continue;
+    }
+    watcher.set.remove(&end);
     if watcher.tx.send(end.clone()).is_err() {
       tracing::debug!(target: "charliebot_triggers", trigger_id = %watcher.trigger_id, "held_watch_closed");
     }

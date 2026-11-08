@@ -49,8 +49,8 @@ pub const PROXY_URL_KEY: &str = "proxy_url";
 /// every request it sends. The option schemas import this name instead of each spelling it.
 pub const EXTRA_BODY_KEY: &str = "extra_body";
 
-/// Retired keys under `backends:`, replaced by `backends.pools`.
-const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default"];
+/// Retired keys under `backends:`, replaced by `backends.pools` and `backends.calls`.
+const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default", "auto", "pool"];
 
 /// The top-level names `CharlieBotConfig` declares as fields.
 const FIELD_NAMES: &[&str] =
@@ -661,8 +661,8 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
       .collect();
     if !retired.is_empty() {
       return Err(ConfigError(format!(
-        "{config_path_text} still uses retired keys ({}); list the rotation members as a rotate pool under \
-         backends.pools instead, in rotation order (each id must name a backends.options entry)",
+        "{config_path_text} still uses retired keys ({}); declare each set as a backends.pools entry (id, label, \
+         rule, members) and name each call class in backends.calls",
         retired.join(", ")
       )));
     }
@@ -848,12 +848,6 @@ fn parse_backends(
     }
   };
   for key in mapping.keys() {
-    if matches!(key.as_str(), Some("pool" | "auto")) {
-      return Err(ConfigError(format!(
-        "{config_path}: backends.auto and backends.pool are retired; declare each set as a backends.pools entry (id, \
-         label, rule, members) and name each call class in backends.calls"
-      )));
-    }
     if !matches!(key.as_str(), Some("routing" | "options" | "pools" | "calls")) {
       let shown = key.as_str().map_or_else(|| yaml_key_repr(key), str::to_string);
       return Err(ConfigError(format!("{config_path}: invalid config key backends.{shown}: unknown field")));

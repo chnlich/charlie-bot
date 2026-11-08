@@ -214,7 +214,8 @@ impl Home {
     Self::build(Some(command))
   }
 
-  /// The same home with `backends.auto` listing the synthetic backends, for the unrouted-thread cases.
+  /// The same home with the priority pool `auto` over the synthetic backends and `calls.thread` naming it, for the
+  /// unrouted-thread cases.
   fn with_auto() -> Self {
     Self::build_with(None, true)
   }

@@ -134,6 +134,21 @@ fn check_config_is_read_only_and_does_not_take_the_home_writer_fence() {
   assert!(String::from_utf8_lossy(&output.stderr).contains("unknown_check_key"));
   assert_eq!(snapshot_tree(&home), before);
 
+  // A retired backends key refuses the load, and the error names the form that replaces it.
+  for retired in ["  pool: [claude-synthetic]\n", "  auto:\n    label: Auto\n    members: [claude-synthetic]\n"] {
+    fs::write(
+      home.join("config.yaml"),
+      format!("backends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n{retired}"),
+    )
+    .unwrap();
+    let before = snapshot_tree(&home);
+    let output = run_server(&home, &["--check-config"], true, &server_bin_dir);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("retired") && stderr.contains("backends.pools"), "{stderr}");
+    assert_eq!(snapshot_tree(&home), before);
+  }
+
   fs::write(
     home.join("config.yaml"),
     "backends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n",

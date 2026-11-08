@@ -35,7 +35,7 @@ const HANG: &str = "sleep 30";
 const OPTIONS: [&str; 3] = ["opus", "codex-o3", "kimi-k2.5"];
 
 /// A stack whose backend options are `ids`, each serving `scripts` in launch order, with the operator's access key on
-/// disk and `pool` as the backends.pool rotation.
+/// disk and a rotate pool named `pool` whose members are `pool`.
 async fn stack_with(scripts: &Scripts, ids: &[&str], pool: &[&str]) -> anyhow::Result<Stack> {
   let options = ids.iter().map(|id| scripts.option(id, BACKEND_TYPE)).collect();
   let stack = Stack::start_with(options, pool.iter().map(|id| id.to_string()).collect()).await?;

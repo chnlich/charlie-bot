@@ -14,7 +14,7 @@
     "HOME": "{root}/user"
   },
   "files": {
-    "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pool: [alpha]\n  options:\n    - id: alpha\n      label: alpha\n      type: codex\n      model: synthetic-model\n",
+    "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pools:\n    - {id: pool, label: Pool, rule: rotate, members: [alpha]}\n  calls:\n    worker: pool\n    improve: pool\n    verify: pool\n    review: pool\n    cold_read: pool\n    probe: pool\n    autoname: pool\n    triage: pool\n  options:\n    - id: alpha\n      label: alpha\n      type: codex\n      model: synthetic-model\n",
     "page.html": "{file:prompts/sitrep_template.html}",
     "repo/prompts/sitrep_template.html": "{file:prompts/sitrep_template.html}",
     "repo/prompts/cold_read.md": "{file:prompts/cold_read.md}",

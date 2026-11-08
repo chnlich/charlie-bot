@@ -3479,7 +3479,7 @@
         },
         {
           "path": "parity-fixture/home/config.yaml",
-          "content": "server:\n  host: 127.0.0.1\n  port: 18642\n  session_memory_max_mb: 0\n  session_tasks_max: 0\n  min_free_disk_gib: 0\npaths:\n  workspace_dirs:\n  - $TMPROOT/parity-fixture/workspace\n  worktree_dir: $TMPROOT/parity-fixture/worktrees\nbackends:\n  pool: []\n  options:\n  - id: claude-sonnet\n    label: \"CC \\xB7 Sonnet 5\"\n    type: cc-claude\n    model: claude-sonnet-5\n"
+          "content": "server:\n  host: 127.0.0.1\n  port: 18642\n  session_memory_max_mb: 0\n  session_tasks_max: 0\n  min_free_disk_gib: 0\npaths:\n  workspace_dirs:\n  - $TMPROOT/parity-fixture/workspace\n  worktree_dir: $TMPROOT/parity-fixture/worktrees\nbackends:\n  options:\n  - id: claude-sonnet\n    label: \"CC \\xB7 Sonnet 5\"\n    type: cc-claude\n    model: claude-sonnet-5\n"
         },
         {
           "path": "parity-fixture/home/credentials.yaml",

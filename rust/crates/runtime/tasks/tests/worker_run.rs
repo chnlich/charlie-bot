@@ -1108,7 +1108,8 @@ const HOME_SERVER_SECTION: &str = concat!(
 );
 
 /// The config a home loads when its `backends` section is `backends` (YAML under the key, indented two spaces) over the
-/// scripted `options`. It goes through the config loader, so a `backends.pool` key derives its pool as a host home does.
+/// scripted `options`. It goes through the config loader, so a `backends.pools` entry declares its pool as a host home
+/// does.
 fn home_config(stack: &Stack, options: &[BackendOption], backends: &str) -> anyhow::Result<CharlieBotConfig> {
   let home = stack.home.path();
   let yaml = format!(
@@ -1153,30 +1154,14 @@ async fn assert_child_keeps_pool_and_member(
   Ok(())
 }
 
-/// The `backends` of a home whose new form names the rotate pool `light` over `fake` and `fake2`, with its `calls`.
+/// The `backends` of a home that names the rotate pool `light` over `fake` and `fake2`, with its `calls`.
 const LIGHT_POOL_BACKENDS: &str = "  pools:\n    - {id: light, label: Light, rule: rotate, members: [fake, fake2]}\n  calls:\n    worker: light\n    review: light\n    verify: light\n";
 
-/// The old form: `backends.pool` over `fake` and `fake2`, and a router whose `run_on: pool` answers the derived pool
-/// id. The routine delegation's work run launches on one member of the pool.
+/// A router whose `run_on: light` answers the pool `light`: the routine delegation's work run launches on one member
+/// of `light`.
 #[tokio::test]
 #[ignore = "integration"]
-async fn an_old_form_routine_delegation_launches_on_a_pool_member() -> anyhow::Result<()> {
-  let scripts = Scripts::new(vec![result_script("pool work done")]);
-  let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
-  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
-  let cfg = home_config(&stack, &options, "  pool: [fake, fake2]\n")?;
-  let router_dir = tempfile::tempdir()?;
-  install_router_on(&stack, cfg, router_dir.path(), &router_order_body(&[ROTATION_POOL_ID]), &[])?;
-
-  let (child_id, _) = delegate_and_run(&stack, quick_edit_body(&manager), &["fake", "fake2"]).await?;
-  assert_child_keeps_pool_and_member(&stack, &child_id, ROTATION_POOL_ID, &["fake", "fake2"]).await
-}
-
-/// The new form: `backends.pools` names `light`, and a router whose `run_on: light` answers it. The routine delegation's
-/// work run launches on one member of `light`.
-#[tokio::test]
-#[ignore = "integration"]
-async fn a_new_form_routine_delegation_launches_on_a_light_member() -> anyhow::Result<()> {
+async fn a_routine_delegation_launches_on_a_light_member() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("light work done")]);
   let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
@@ -1188,8 +1173,7 @@ async fn a_new_form_routine_delegation_launches_on_a_light_member() -> anyhow::R
   assert_child_keeps_pool_and_member(&stack, &child_id, "light", &["fake", "fake2"]).await
 }
 
-/// The new form with routing unset: the `calls.worker` pool target selects the member at delegation, and the work run
-/// launches on it.
+/// With routing unset: the `calls.worker` pool target selects the member at delegation, and the work run launches on it.
 #[tokio::test]
 #[ignore = "integration"]
 async fn a_calls_pool_worker_delegation_without_routing_launches_on_a_member() -> anyhow::Result<()> {
@@ -1218,7 +1202,7 @@ async fn a_named_pool_backend_launches_on_a_member_and_keeps_the_pool_id() -> an
   assert_child_keeps_pool_and_member(&stack, &child_id, "light", &["fake", "fake2"]).await
 }
 
-/// A routed verify, new form: the router names `light` for the verify, and its run launches on one member of `light`.
+/// A routed verify: the router names `light` for the verify, and its run launches on one member of `light`.
 #[tokio::test]
 #[ignore = "integration"]
 async fn a_routed_verify_delegation_launches_on_a_light_member() -> anyhow::Result<()> {
@@ -1243,9 +1227,9 @@ async fn a_routed_pool_work_run_reviews_on_another_member() -> anyhow::Result<()
   let scripts = Scripts::new(vec![result_script("implemented"), result_script("review ok")]);
   let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
-  let cfg = home_config(&stack, &options, "  pool: [fake, fake2]\n")?;
+  let cfg = home_config(&stack, &options, LIGHT_POOL_BACKENDS)?;
   let router_dir = tempfile::tempdir()?;
-  install_router_on(&stack, cfg, router_dir.path(), &router_order_body(&[ROTATION_POOL_ID]), &[])?;
+  install_router_on(&stack, cfg, router_dir.path(), &router_order_body(&["light"]), &[])?;
   let (repo, _origin) = init_repo_with_origin(dir.path())?;
   let body = json!({
     "session_id": manager,

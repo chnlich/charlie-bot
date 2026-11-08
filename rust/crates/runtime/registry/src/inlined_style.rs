@@ -1,17 +1,17 @@
 //! The form a stylesheet takes when a page carries it inline.
 //!
 //! A page inlines its stylesheets so the first paint waits for no second request. The same source files carry the
-//! comments that explain them to an editor, and a browser reads no comment: on the mock home's chat page they are
-//! 20 KB of the 91 KB of stylesheet text and 8 KB of the document's 164 KB gzip form. The strip is textual and keeps
-//! every other byte, including a `/*` that a string or an unquoted `url()` holds.
+//! comments that explain them to an editor, and a browser reads none of them. On the mock home's chat page those
+//! comments are 20 KB of the 91 KB of stylesheet text and 8 KB of the document's 164 KB gzip form. The strip is
+//! textual and keeps every other byte, including a `/*` that a string or an unquoted `url()` holds.
 
 /// The CSS `source` with its comments removed.
 ///
 /// A comment's bytes leave the text, and no byte stands in for them where the tokens on either side stay apart
-/// without one: `.a/**/.b` is the compound selector `.a.b`, and `}/* note */b` is a rule followed by a rule. Where the
-/// bytes on either side would run together instead, a bare `/**/` keeps them two tokens: `1px/**/2px` is two values,
-/// and `1px 2px` would read as one. A quoted string keeps its text, and so does an unquoted `url()`, which the
-/// browser takes whole. CSS has no line comment.
+/// without one. So `.a/**/.b` is the compound selector `.a.b`, and `}/* note */b` is a rule followed by a rule.
+/// Where the bytes on either side would run together instead, a bare `/**/` keeps them two tokens: `1px/**/2px` is
+/// two values, and `1px 2px` would read as one. A quoted string keeps its text, and so does an unquoted `url()`,
+/// which the browser takes whole. CSS has no line comment.
 pub fn without_comments(source: &str) -> String {
   let bytes = source.as_bytes();
   let mut out = String::with_capacity(source.len());
@@ -44,8 +44,8 @@ fn comment_end(source: &str, start: usize) -> usize {
 /// Whether a comment between the byte `prev` and the byte `next` needs a `/**/` to keep the two tokens apart.
 ///
 /// A name, a number, a hash or an at-keyword takes the character after it as part of itself, so the copy keeps the
-/// boundary; a `/` before a `*` would open a comment of its own, and a `<` before a `!` a CDO token. Every other pair
-/// ends its token outright, so the comment leaves nothing behind.
+/// boundary. A `/` before a `*` would open a comment of its own, and a `<` before a `!` a CDO token. Every other
+/// pair ends its token outright, so the comment leaves nothing behind.
 fn needs_boundary(prev: Option<u8>, next: Option<u8>) -> bool {
   let (Some(prev), Some(next)) = (prev, next) else {
     return false;

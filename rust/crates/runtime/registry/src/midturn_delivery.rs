@@ -62,7 +62,7 @@ struct DeliveryState {
   initial_written: (watch::Sender<bool>, watch::Receiver<bool>),
   evidence: Mutex<Evidence>,
   released: AtomicBool,
-  /// The registered first-line uuid of every bound process in bind order; the last one names the first line the
+  /// The registered first-line uuid of every bound process, in bind order. The last one names the first line the
   /// current process receives, and its echo is recognized as this Run's own initial line.
   first_lines: Mutex<Vec<String>>,
 }
@@ -158,7 +158,7 @@ pub async fn bind_process(run_id: &str, backend_run_id: Option<String>) -> anyho
 }
 
 /// The stream-json uuid of the first line one gated process of the Run receives. The first process writes the Run
-/// id, and every relay derives one from the Run id and its process number: Claude Code 2.1.312 and later skip a
+/// id, and every relay derives one from the Run id and its process number. Claude Code 2.1.312 and later skip a
 /// stdin line whose uuid the transcript they resume already holds, so a relayed process must never resend the Run
 /// id. This function is the one owner of that derivation.
 pub fn initial_line_uuid(run_id: &str, process: usize) -> String {
@@ -168,8 +168,8 @@ pub fn initial_line_uuid(run_id: &str, process: usize) -> String {
   }
 }
 
-/// Whether a replayed uuid names a first line this Run's delivery wrote, rather than a mid-turn web input: the Run
-/// id itself, or the uuid one of the Run's bound processes registered at `bind_process`.
+/// Whether a replayed uuid names a first line this Run's delivery wrote, rather than a mid-turn web input. Such a
+/// uuid is the Run id itself, or the uuid one of the Run's bound processes registered at `bind_process`.
 pub fn is_first_line(run_id: &str, uuid: &str) -> bool {
   if uuid == run_id {
     return true;
@@ -194,8 +194,8 @@ fn user_line(uuid: &str, content: &str) -> Vec<u8> {
 
 /// Write the Run prompt as the first JSON message and keep stdin open.
 ///
-/// The line's uuid is the one `bind_process` registered for this process: the Run id for the first process, and a
-/// fresh derived uuid for a relay, whose copied transcript already holds the earlier first lines.
+/// The line's uuid is the one `bind_process` registered for this process. It is the Run id for the first process,
+/// and a fresh derived uuid for a relay, whose copied transcript already holds the earlier first lines.
 pub async fn write_initial_prompt(
   run_id: Option<String>,
   stdin: Box<dyn tokio::io::AsyncWrite + Send + Unpin>,

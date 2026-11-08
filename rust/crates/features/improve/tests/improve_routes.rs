@@ -193,7 +193,6 @@ async fn starting_a_second_loop_returns_conflict_with_the_running_loop_id() {
     merge_back: false,
     resolved_backend: "claude-fable",
     resolved_model: "claude-fable-model",
-    backend_from_pool: false,
   };
   let first = command::reserve_loop_state(&cfg, SESSION, &reservation).expect("the first loop reserves");
 
@@ -245,7 +244,6 @@ async fn stop_marks_the_running_loop_stopped() {
     merge_back: false,
     resolved_backend: "",
     resolved_model: "",
-    backend_from_pool: false,
   };
   let state = command::reserve_loop_state(&cfg, SESSION, &reservation).expect("the loop reserves");
 

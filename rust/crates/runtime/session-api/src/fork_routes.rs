@@ -397,4 +397,42 @@ mod tests {
   async fn elone_refuses_an_inherited_unresolvable_backend_and_persists_nothing() {
     assert_unresolvable_backend_persists_nothing("elone", "missing-backend", json!({"event_index": 1})).await;
   }
+
+  /// Acceptance ①: `fork` with a pool id keeps the pool id on the successor and launches its bootstrap run on the
+  /// member the pool selects; the run records the member.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn fork_naming_a_pool_keeps_the_pool_and_launches_on_its_member() -> anyhow::Result<()> {
+    use charliebot_tasks::test_support::recovery_support::{BACKEND_TYPE, Scripts, Stack, result_script};
+
+    let scripts = Scripts::new(vec![result_script("oriented")]);
+    let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
+    let stack = Stack::start_with(options, vec!["fake".to_string(), "fake2".to_string()]).await?;
+    stack.write_access_key()?;
+    let parent = seed_parent(stack.store(), "fake").await;
+
+    let (headers, body) = json_request(json!({"backend": "pool"}));
+    let response = fork_session(State(Arc::clone(&stack.features)), AxumPath(parent.id.clone()), headers, body).await;
+    let (status, meta) = answer(response).await;
+    assert_eq!(status, StatusCode::OK, "{meta}");
+    let child_id = meta["id"].as_str().expect("the successor has an id").to_string();
+    assert_eq!(meta["backend"], "pool", "the successor keeps the pool id the request named");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let run = loop {
+      if let Some(run) = stack.run_records(&child_id)?.first() {
+        let launch = stack.store().run_dir(&child_id, &run.id).join(charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME);
+        if launch.is_file() {
+          break run.clone();
+        }
+      }
+      anyhow::ensure!(std::time::Instant::now() < deadline, "the bootstrap run launches");
+      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    };
+    assert_eq!(run.backend.as_deref(), Some("fake"), "the run records the member the pool selected");
+    let successor = stack.store().require_session(&child_id).await?;
+    assert_eq!(successor.backend, "pool", "the successor session keeps the pool id");
+    assert_eq!(successor.extra(charliebot_agents::model_pool::POOL_MEMBER_FIELD), Some(&json!("fake")));
+    Ok(())
+  }
 }

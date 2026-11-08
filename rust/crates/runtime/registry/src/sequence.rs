@@ -302,6 +302,16 @@ pub trait SequenceTree: Send + Sync {
     task_spec: Option<&'a str>,
   ) -> BoxFuture<'a, StoreResult<RunRecord>>;
 
+  /// Change one session slot's fields under the tree control lock, for a controller that records a member with the run
+  /// it registers.
+  fn set_slot_fields_locked<'a>(
+    &'a self,
+    guard: &'a ControlGuard,
+    session_id: &'a str,
+    owner: &'a str,
+    values: serde_json::Map<String, Value>,
+  ) -> BoxFuture<'a, StoreResult<()>>;
+
   fn request_stop<'a>(
     &'a self,
     session_id: &'a str,
@@ -417,6 +427,18 @@ impl SequenceTree for StoreSequenceTree {
     task_spec: Option<&'a str>,
   ) -> BoxFuture<'a, StoreResult<RunRecord>> {
     Box::pin(async move { self.store.register_run_locked(guard, session_id, run, task_spec).await })
+  }
+
+  fn set_slot_fields_locked<'a>(
+    &'a self,
+    guard: &'a ControlGuard,
+    session_id: &'a str,
+    owner: &'a str,
+    values: serde_json::Map<String, Value>,
+  ) -> BoxFuture<'a, StoreResult<()>> {
+    Box::pin(
+      async move { self.store.update_task_slot_fields_locked(guard, session_id, owner, values).await.map(|_| ()) },
+    )
   }
 
   fn request_stop<'a>(

@@ -841,11 +841,6 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::run_records::STDOUT_LOG_NAME`.",
   },
   OwnerRow {
-    name: "backend_from_pool",
-    owner: "runtime/agents",
-    hint: "Use `charliebot_agents::backend_pool::BACKEND_FROM_POOL_FIELD`.",
-  },
-  OwnerRow {
     name: "AGENTS.md",
     owner: "runtime/registry",
     hint: "Use `charliebot_registry::backend::AGENTS_INSTRUCTIONS_FILE_NAME`.",

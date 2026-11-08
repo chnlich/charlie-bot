@@ -12,14 +12,15 @@
 //! memory, one per pool id.
 
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use anyhow::anyhow;
-use charliebot_core::config::{CharlieBotConfig, PoolBilling, PoolConfig, PoolMember, PoolRule};
+use charliebot_core::config::{BackendOption, CharlieBotConfig, PoolBilling, PoolConfig, PoolMember, PoolRule};
 use charliebot_core::{event_types, metadata_slot};
 use charliebot_registry::backend::MemberReading;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::{Registry, RegistryError};
+use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use serde_json::{Map, Value, json};
 
@@ -79,6 +80,104 @@ impl<'a> Selection<'a> {
 
 /// The load counts of a selection that reads none.
 static NO_LOADS: LazyLock<HashMap<String, usize>> = LazyLock::new(HashMap::new);
+
+/// The one selection every caller makes: the process-wide owners a member pick reads, plus the store whose active
+/// sessions order a priority pool when the caller has one.
+///
+/// A caller with a [`FeatureContext`] builds one with [`Selector::from_features`], so a priority pool orders its
+/// subscription tier by the active sessions each member holds. A caller that holds only the process-wide owners (a CLI
+/// one-shot call) builds one with [`Selector::new`], and reads the pool's configured order.
+pub struct Selector<'a> {
+  cfg: &'a CharlieBotConfig,
+  registry: &'a Registry,
+  availability: Arc<BackendAvailability>,
+  positions: Arc<RotationPositions>,
+  store: Option<&'a Store>,
+}
+
+impl<'a> Selector<'a> {
+  /// A selection over the given owners that reads no session load counts.
+  pub fn new(
+    cfg: &'a CharlieBotConfig,
+    registry: &'a Registry,
+    availability: Arc<BackendAvailability>,
+    positions: Arc<RotationPositions>,
+  ) -> Self {
+    Self { cfg, registry, availability, positions, store: None }
+  }
+
+  /// The same selection, ordering a priority pool by the active sessions `store` records for each member.
+  pub fn with_store(mut self, store: &'a Store) -> Self {
+    self.store = Some(store);
+    self
+  }
+
+  /// The selection over the owners a server process holds in its startup state.
+  pub fn from_features(features: &'a FeatureContext, cfg: &'a CharlieBotConfig) -> anyhow::Result<Self> {
+    Ok(Self {
+      cfg,
+      registry: &features.registry,
+      availability: backend_availability::backend_availability(features)?,
+      positions: features.startup.require::<RotationPositions>()?,
+      store: Some(&features.store),
+    })
+  }
+
+  /// The option a call on `pool_id` runs on, or `None` when no member is selectable. A rotate pool's position moves
+  /// past the selected member.
+  pub fn select(&self, pool_id: &str, excluded: &[String]) -> anyhow::Result<Option<BackendOption>> {
+    let pool = pool_by_id(self.cfg, pool_id)?;
+    let loads = self.loads(&pool)?;
+    let selection = Selection::new(self.cfg, self.registry, &self.availability, &pool, excluded, UtcDateTime::now())
+      .with_loads(&loads);
+    Ok(self.option(self.positions.select(&selection)?))
+  }
+
+  /// The option the next call on `pool_id` would run on, without moving a rotate pool's position.
+  pub fn peek(&self, pool_id: &str, excluded: &[String]) -> anyhow::Result<Option<BackendOption>> {
+    let pool = pool_by_id(self.cfg, pool_id)?;
+    let loads = self.loads(&pool)?;
+    let selection = Selection::new(self.cfg, self.registry, &self.availability, &pool, excluded, UtcDateTime::now())
+      .with_loads(&loads);
+    Ok(self.option(self.positions.peek(&selection)?))
+  }
+
+  /// The first selectable option in the router's ordered `backends`, without moving any rotation position. A retired
+  /// ordered route keeps resolving through this call; a new router answer names one id.
+  pub fn ordered(&self, backends: &[String], excluded: &[String]) -> anyhow::Result<Option<BackendOption>> {
+    let pool = ordered_pool(backends);
+    let mut position = 0;
+    let selection = Selection::new(self.cfg, self.registry, &self.availability, &pool, excluded, UtcDateTime::now());
+    Ok(self.option(select(&selection, Some(&mut position))?))
+  }
+
+  /// The error that ends a call when no member of `pool_id` is selectable: one line per member.
+  pub fn exhausted_message(&self, pool_id: &str) -> anyhow::Result<String> {
+    let pool = pool_by_id(self.cfg, pool_id)?;
+    all_exhausted_message(self.cfg, self.registry, &self.availability, &pool)
+  }
+
+  /// Whether the `backends.options` id `backend_id` can run now.
+  pub fn option_available(&self, backend_id: &str, excluded: &[String]) -> anyhow::Result<bool> {
+    let member = PoolMember { backend: backend_id.to_string(), billing: None };
+    Ok(candidate(self.cfg, self.registry, &self.availability, &member, excluded, UtcDateTime::now())?.is_some())
+  }
+
+  /// The option a selected member names. Every member is checked against `backends.options` at selection.
+  fn option(&self, member: Option<PoolMember>) -> Option<BackendOption> {
+    member.map(|member| {
+      self.cfg.get_backend_option(&member.backend).expect("a pool selection returns a backends.options id").clone()
+    })
+  }
+
+  /// The counts a priority pool orders by, or none for a rotate pool and for a selector without a store.
+  fn loads(&self, pool: &ModelPool) -> anyhow::Result<HashMap<String, usize>> {
+    match (pool.rule, self.store) {
+      (PoolRule::Priority, Some(store)) => member_loads_in(store, pool),
+      _ => Ok(HashMap::new()),
+    }
+  }
+}
 
 impl ModelPool {
   /// The pool a `backends.pools` entry configures.
@@ -631,8 +730,13 @@ fn format_minutes(datetime: UtcDateTime) -> String {
 /// The active sessions each member of `pool` holds: the counts a priority pool's subscription tier is ordered by. A
 /// rotate pool keeps its configured order, so it reads no count.
 pub fn member_loads(features: &FeatureContext, pool: &ModelPool) -> anyhow::Result<HashMap<String, usize>> {
+  member_loads_in(&features.store, pool)
+}
+
+/// The same counts, read from `store` alone, for a caller that holds no [`FeatureContext`].
+pub fn member_loads_in(store: &Store, pool: &ModelPool) -> anyhow::Result<HashMap<String, usize>> {
   match pool.rule {
-    PoolRule::Priority => Ok(features.store.active_session_string_metadata_counts(&pool.id, POOL_MEMBER_FIELD)?),
+    PoolRule::Priority => Ok(store.active_session_string_metadata_counts(&pool.id, POOL_MEMBER_FIELD)?),
     PoolRule::Rotate => Ok(HashMap::new()),
   }
 }

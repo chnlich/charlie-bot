@@ -34,7 +34,7 @@ use crate::completion::{self, CompletionEvidence};
 use crate::dispatch;
 use crate::execution::TaskExecutionAdapter;
 use crate::prompts::MAX_AGENT_MESSAGE_WEIGHTED_CHARS;
-use crate::spawner_backends::{BackendSource, SubagentBackend};
+use crate::spawner_backends::SubagentBackend;
 use crate::task_sessions;
 use crate::text_length;
 
@@ -346,11 +346,13 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     && matches!(request.task_type, TaskType::Implement | TaskType::QuickEdit | TaskType::ScriptRun | TaskType::Verify)
     && cfg.backends.routing.is_some()
   {
-    let session_backend = match crate::spawner_backends::session_backend_id(&cfg, &session_meta) {
-      Ok(backend_id) => backend_id,
-      Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
-    };
-    let avoided = (request.task_type == TaskType::Verify).then_some(session_backend.as_str());
+    // The router reads the delegating session's backend id itself, pool id included: a session answer hands that id to
+    // the child, and a pool-id child picks its own member.
+    let session_backend = session_meta.backend.clone();
+    // A verify leaves out the model the session runs on now. A pool-id session leaves out no candidate: its pool is a
+    // valid verify target, and the member the session runs on is left out when the member is selected.
+    let avoided = (request.task_type == TaskType::Verify && cfg.backends.pool(&session_backend).is_none())
+      .then_some(session_backend.as_str());
     let candidates = cfg
       .backends
       .options
@@ -382,19 +384,30 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
       // The router named a pool: the child keeps the pool id, and the work run launches on the member the pool selects
       // for it. A pool with no selectable member refuses the delegation here, as the pool's default path does.
       RouteTarget::Backend(backend_id) if cfg.backends.pool(&backend_id).is_some() => {
-        let member = match pool.select(&cfg, role, &backend_id, &[]) {
+        let selector = pool.selector(&cfg).with_store(&features.store);
+        let excluded = if request.task_type == TaskType::Verify {
+          match crate::spawner_backends::session_current_member(&cfg, &session_meta) {
+            Ok(member) => vec![member],
+            Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
+          }
+        } else {
+          Vec::new()
+        };
+        let member = match selector.select(&backend_id, &excluded) {
           Ok(member) => member,
           Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
         };
         let Some(member) = member else {
-          let detail = match pool.exhausted_message(&cfg, &backend_id) {
+          let detail = match selector.exhausted_message(&backend_id) {
             Ok(detail) => detail,
             Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
           };
           return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": detail }));
         };
-        match crate::spawner_backends::pool_chosen_backend(&backend_id, &member) {
-          Ok(subagent) => Some(subagent),
+        match member.required_model("pool member") {
+          Ok(model) => {
+            Some(SubagentBackend { session_backend: backend_id, run_backend: member.id, model: Some(model) })
+          }
           Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
         }
       }
@@ -403,18 +416,10 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
           let detail = format!("routed backend '{backend_id}' is not in backends.options");
           return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": detail }));
         };
-        // The router's context class returns the delegating session's backend: on a pool session that is its current
-        // member, which the child inherits.
-        let source = if cfg.backends.pool(&session_meta.backend).is_some() && backend_id == session_backend {
-          BackendSource::PoolMember
-        } else {
-          BackendSource::Direct
-        };
         Some(SubagentBackend {
           session_backend: backend_id.clone(),
           run_backend: backend_id,
           model: Some(option.model.clone()),
-          source,
         })
       }
       RouteTarget::NotRouted => None,
@@ -507,20 +512,8 @@ async fn delegate_task_tree(
   };
   features.store.runtime_gate(&create_request, &caller)?;
   let child = features.store.create_task(create_request, caller, Default::default()).await?;
-  if subagent.source != BackendSource::Direct || route.is_some() {
-    let mut slot_fields = serde_json::Map::from_iter([
-      (
-        charliebot_agents::backend_pool::BACKEND_FROM_POOL_FIELD.to_string(),
-        json!(subagent.source == BackendSource::Pool),
-      ),
-      (
-        charliebot_agents::backend_pool::BACKEND_FROM_AUTO_FIELD.to_string(),
-        json!(subagent.source == BackendSource::PoolMember),
-      ),
-    ]);
-    if let Some(route) = route {
-      slot_fields.insert("route".to_string(), json!(route));
-    }
+  if let Some(route) = route {
+    let slot_fields = serde_json::Map::from_iter([("route".to_string(), json!(route))]);
     let guard = features.store.control_lock().await;
     features
       .store

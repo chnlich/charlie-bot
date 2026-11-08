@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode, header};
 use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::{self, BackendPool};
 use charliebot_core::event_types;
@@ -17,10 +19,11 @@ use charliebot_store::StoreResult;
 use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcomeKind, SequenceRef};
 use charliebot_tasks::dispatch::DispatchExecutor;
-use charliebot_tasks::spawner_backends::{self, BackendSource, SubagentRole};
+use charliebot_tasks::spawner_backends::{self, SubagentRole};
 use charliebot_tasks::test_support::process_guard;
 use charliebot_tasks::test_support::recovery_support::{self, Scripts, Stack, SyntheticRepo};
 use futures_util::future::BoxFuture;
+use tower::ServiceExt;
 
 /// A pool whose availability owner reads the empty state of a fresh home; these sites never record.
 fn test_pool() -> BackendPool {
@@ -168,7 +171,7 @@ impl LoopHarness {
       .append_chat_event(&manager.id, json!({"type": "user", "content": "Take off the improve loop."}))
       .await?;
     let pool_loop = !pool_ids.is_empty();
-    let resolved_backend = if pool_loop { "" } else { "fake" };
+    let resolved_backend = if pool_loop { "pool" } else { "fake" };
     let resolved_model = if pool_loop { "" } else { "fake-model" };
     let state = command::reserve_loop_state(
       &stack.cfg,
@@ -182,7 +185,6 @@ impl LoopHarness {
         merge_back: false,
         resolved_backend,
         resolved_model,
-        backend_from_pool: pool_loop,
       },
     )?;
     let child = sequence::create_improve_child(
@@ -695,7 +697,6 @@ async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Res
   .await?;
   assert_eq!(subagent.session_backend, "other");
   assert_eq!(subagent.model.as_deref(), Some("other-model"));
-  assert_eq!(subagent.source, BackendSource::Direct);
   let backend = subagent.session_backend;
   let explicit_child = sequence::create_improve_child(
     explicit.stack.store(),
@@ -722,7 +723,6 @@ async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Res
   .await?;
   assert_eq!(subagent.session_backend, "fake");
   assert_eq!(subagent.model.as_deref(), Some("fake-model"));
-  assert_eq!(subagent.source, BackendSource::Direct);
   let backend = subagent.session_backend;
   let inherited_child = sequence::create_improve_child(
     inherited.stack.store(),
@@ -851,4 +851,94 @@ async fn a_best_effort_branch_push_failure_is_reported_without_merge_back() {
 
   assert_eq!(landing.end_error.as_deref(), Some("Pushing the work branch to origin failed (auth expired)."));
   assert!(landing.merge_result.is_none());
+}
+
+/// Acceptance ①: `improve` with an explicit pool id keeps the pool id on the loop's child and launches its iteration
+/// run on the member the pool selects.
+#[tokio::test]
+#[ignore = "integration"]
+async fn an_improve_request_naming_a_pool_launches_on_its_member() -> anyhow::Result<()> {
+  let _git_override = GIT_OVERRIDE_LOCK.lock().await;
+  let scripts = Scripts::new(vec![recovery_support::result_script("iteration done")]);
+  let options = ["member-a", "member-b"].iter().map(|id| scripts.option(id, TEST_BACKEND_TYPE)).collect();
+  let stack = Stack::start_with_package(
+    options,
+    vec!["member-a".to_string(), "member-b".to_string()],
+    ("test.improve_port", register_improve_port),
+  )
+  .await?;
+  stack.write_access_key()?;
+  let repo = SyntheticRepo::create()?;
+  let manager = stack
+    .node(
+      SESSION_REQUEST,
+      None,
+      TaskProfile::Manager,
+      Some(TaskSpec {
+        goal: "synthetic manager".to_string(),
+        acceptance: Vec::new(),
+        context_refs: Vec::new(),
+        repo_path: None,
+        base_branch: None,
+        task_type: None,
+        keep_worktree: false,
+        cold_read: None,
+        approver: TaskApprover::User,
+      }),
+    )
+    .await?;
+  stack
+    .store()
+    .append_chat_event(&manager.id, json!({"type": "user", "content": "Take off the improve loop."}))
+    .await?;
+  stack.dispatch.set_executor(Some(Arc::new(ParentWakes(Arc::new(Mutex::new(Vec::new()))))));
+
+  let body = json!({
+    "session_id": manager.id,
+    "repo_path": repo.repo.to_str().expect("synthetic repo path is UTF-8"),
+    "base_branch": "main",
+    "goal": "optimize",
+    "iterations": 1,
+    "backend": recovery_support::ROTATION_POOL_ID,
+  });
+  let request = Request::builder()
+    .method(Method::POST)
+    .uri("/api/internal/improve")
+    .header(header::CONTENT_TYPE, "application/json")
+    .body(Body::from(body.to_string()))?;
+  let response = charliebot_improve::api::routes(&stack.features).oneshot(request).await?;
+  assert_eq!(response.status(), StatusCode::OK, "the improve route accepts a pool id");
+  let started: Value = serde_json::from_slice(&axum::body::to_bytes(response.into_body(), usize::MAX).await?)?;
+  let child_id = started["child_session_id"].as_str().expect("the route returns its child").to_string();
+  let child = stack.store().require_session(&child_id).await?;
+  assert_eq!(child.backend, recovery_support::ROTATION_POOL_ID, "the child keeps the pool id the request named");
+
+  let guard = process_guard::ProcessGroupGuard::new();
+  let deadline = std::time::Instant::now() + Duration::from_secs(30);
+  let launched = loop {
+    let runs = stack.run_records(&child_id)?;
+    if let Some(run) = runs.first() {
+      if let Some(pid) = run.pid {
+        guard.track(pid);
+      }
+      let launch = stack.store().run_dir(&child_id, &run.id).join(charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME);
+      if launch.is_file() {
+        break run.clone();
+      }
+    }
+    anyhow::ensure!(std::time::Instant::now() < deadline, "the iteration run launches");
+    tokio::time::sleep(Duration::from_millis(10)).await;
+  };
+  assert_eq!(
+    launched.backend.as_deref(),
+    Some("member-a"),
+    "the pool selects the iteration's member, and the run records it"
+  );
+  assert_eq!(launched.model.as_deref(), Some("member-a-model"));
+
+  while command::find_running_loop(&stack.cfg, &manager.id)?.is_some() {
+    anyhow::ensure!(std::time::Instant::now() < deadline, "the loop settles within thirty seconds");
+    tokio::time::sleep(Duration::from_millis(10)).await;
+  }
+  Ok(())
 }

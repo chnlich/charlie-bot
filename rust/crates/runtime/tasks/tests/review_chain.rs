@@ -415,8 +415,15 @@ async fn reviewer_avoids_every_member_the_worker_node_used() -> anyhow::Result<(
   .await?;
   let pool = test_pool();
   let used = HashSet::from(["fake2".to_string()]);
-  let selection =
-    review::select_reviewer_backend(&stack.cfg, &pool, CallClass::Review, "fake", Some("fake-model"), &[], &used)?;
+  let selection = review::select_reviewer_backend(
+    &stack.cfg,
+    &pool.selector(&stack.cfg),
+    CallClass::Review,
+    "fake",
+    Some("fake-model"),
+    &[],
+    &used,
+  )?;
   assert_eq!(selection, Some(("fake3".to_string(), Some("fake3-model".to_string()), vec!["fake3".to_string()])));
   Ok(())
 }
@@ -436,13 +443,21 @@ async fn reviewer_never_falls_back_to_a_member_the_worker_node_used() -> anyhow:
     .unwrap();
   let used = HashSet::from(["fake".to_string()]);
   assert!(
-    review::select_reviewer_backend(&stack.cfg, &pool, CallClass::Review, "fake", Some("fake-model"), &[], &used)?
-      .is_none()
+    review::select_reviewer_backend(
+      &stack.cfg,
+      &pool.selector(&stack.cfg),
+      CallClass::Review,
+      "fake",
+      Some("fake-model"),
+      &[],
+      &used
+    )?
+    .is_none()
   );
   assert!(
     review::select_reviewer_backend(
       &stack.cfg,
-      &pool,
+      &pool.selector(&stack.cfg),
       CallClass::Review,
       "fake",
       Some("fake-model"),
@@ -464,9 +479,10 @@ async fn check_without_used_members_keeps_the_session_backend_fallback() -> anyh
   .await?;
   let pool = test_pool();
   let tried = vec!["fake2".to_string()];
+  let selector = pool.selector(&stack.cfg);
   let selection = review::select_reviewer_backend(
     &stack.cfg,
-    &pool,
+    &selector,
     CallClass::Verify,
     "fake",
     Some("fake-model"),
@@ -485,9 +501,10 @@ async fn check_without_used_members_keeps_the_session_backend_fallback() -> anyh
 async fn empty_pool_reuses_the_worker_backend_on_every_attempt() -> anyhow::Result<()> {
   let stack = Stack::start_with(vec![script_option("fake", "exit 0")], Vec::new()).await?;
   let pool = test_pool();
+  let selector = pool.selector(&stack.cfg);
   let first = review::select_reviewer_backend(
     &stack.cfg,
-    &pool,
+    &selector,
     CallClass::Review,
     "fake",
     Some("fake-model"),
@@ -497,7 +514,7 @@ async fn empty_pool_reuses_the_worker_backend_on_every_attempt() -> anyhow::Resu
   .expect("an empty pool falls back to the worker backend");
   let second = review::select_reviewer_backend(
     &stack.cfg,
-    &pool,
+    &selector,
     CallClass::Review,
     "fake",
     Some("fake-model"),

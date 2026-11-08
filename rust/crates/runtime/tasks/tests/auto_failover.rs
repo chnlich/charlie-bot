@@ -303,6 +303,42 @@ async fn an_exhausted_set_ends_the_turn_with_one_error_listing_every_member() ->
   Ok(())
 }
 
+/// Acceptance ③'s manager half: a transient error (5xx) ends the manager turn on its member with the error; the turn
+/// switches no member, records none out, and starts no retry.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_transient_error_ends_the_turn_without_switching_members() -> anyhow::Result<()> {
+  let failure = scripted_process(
+    &[
+      json!({"type":"assistant","message":{"content":[{"type":"text","text":"I tried."}]}}),
+      json!({"type":"result","subtype":"error","is_error":true,"result":"API Error: 500 Internal Server Error"}),
+    ],
+    1,
+  );
+  let stack = auto_stack(&failure, &success_script()).await?;
+  let session = auto_session(&stack, "auto-transient").await?;
+  dispatch_turn(&stack, &session.id).await?;
+  let runs = settle(&stack, &session.id).await?;
+
+  assert_eq!(runs.len(), 1, "a transient error starts no retry: {runs:?}");
+  assert_eq!(runs[0].backend.as_deref(), Some(MEMBER_A), "the turn stays on its member");
+  assert!(quota_failovers(&stack, &session.id)?.is_empty(), "a transient error switches no member");
+  let errors = stack
+    .run_events(&session.id)?
+    .iter()
+    .map(|event| event.to_value())
+    .filter(|event| event["type"] == event_types::ASSISTANT_ERROR)
+    .collect::<Vec<_>>();
+  assert_eq!(errors.len(), 1, "the turn ends with one error: {errors:?}");
+  let content = errors[0]["content"].as_str().expect("the error carries text");
+  assert!(content.contains("500"), "the error is the run's own: {content}");
+  let availability = backend_availability::backend_availability(&stack.features)?;
+  assert!(availability.out_until(MEMBER_A).is_none(), "a transient error records no member out");
+  let stored = stack.store().read_metadata_fresh(&session.id)?.expect("the session is recorded");
+  assert_eq!(stored.extra(charliebot_agents::model_pool::POOL_MEMBER_FIELD), Some(&json!(MEMBER_A)));
+  Ok(())
+}
+
 /// Test ④: a quota end the live process never reports — the turn drains after a restart — switches the same way.
 #[tokio::test]
 #[ignore = "integration"]

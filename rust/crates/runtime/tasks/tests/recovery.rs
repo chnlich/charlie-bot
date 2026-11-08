@@ -19,9 +19,9 @@ use std::time::{Duration, Instant, SystemTime};
 use anyhow::Context;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
-use charliebot_agents::backend_pool;
+use charliebot_agents::model_pool;
 use charliebot_agents::transport::identity;
-use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::config::{BackendOption, CharlieBotConfig, PoolBilling, PoolConfig, PoolMember, PoolRule};
 use charliebot_core::event_types;
 use charliebot_registry::backend::{
   AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle, Translate,
@@ -1016,18 +1016,35 @@ fn events_script(events: &[Value], code: i32) -> String {
   lines.join("\n")
 }
 
+/// The priority pool a pool-chosen ending case runs its worker on.
+const AUTO_POOL_ID: &str = "auto";
+
 /// The node an ending case runs on: a script-run worker under a manager, pool-chosen or named.
 async fn ending_worker(pool_chosen: bool, scripts: Vec<String>) -> anyhow::Result<(Stack, String, String)> {
   let scripts = Scripts::new(scripts);
   let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
-  let stack = Stack::start_with(options, vec!["fake".to_string(), "fake2".to_string()]).await?;
+  let route = vec!["fake".to_string(), "fake2".to_string()];
+  let stack = if pool_chosen {
+    let auto = PoolConfig {
+      id: AUTO_POOL_ID.to_string(),
+      label: "Auto".to_string(),
+      rule: PoolRule::Priority,
+      members: ["fake", "fake2"]
+        .map(|backend| PoolMember { backend: backend.to_string(), billing: Some(PoolBilling::Subscription) })
+        .to_vec(),
+    };
+    Stack::start_with_auto(options, route, auto).await?
+  } else {
+    Stack::start_with(options, route).await?
+  };
   stack.write_access_key()?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
   let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(script_run_spec())).await?;
   if pool_chosen {
+    stack.store().switch_backend(&worker.id, AUTO_POOL_ID).await?;
     let guard = stack.store().control_lock().await;
-    let flag = Map::from_iter([("backend_from_pool".to_string(), json!(true))]);
-    stack.store().update_task_slot_fields_locked(&guard, &worker.id, backend_pool::METADATA_OWNER, flag).await?;
+    let member = Map::from_iter([(model_pool::POOL_MEMBER_FIELD.to_string(), json!("fake"))]);
+    stack.store().update_task_slot_fields_locked(&guard, &worker.id, model_pool::OWNER, member).await?;
   }
   Ok((stack, manager.id, worker.id))
 }

@@ -911,14 +911,7 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
   if relays > 0 {
     finish_extras.insert("account_relays".to_string(), json!(relays));
   }
-  add_auto_quota_extras(
-    &process.item.cfg,
-    &metadata,
-    error_msg.as_deref(),
-    quota_exhausted,
-    process.quota_resets_at,
-    &mut finish_extras,
-  );
+  add_auto_quota_extras(error_msg.as_deref(), quota_exhausted, process.quota_resets_at, &mut finish_extras);
   // An Auto session's quota end is continued on its next member, so this turn posts no "Agent error" of its own.
   if !is_pool_quota_end(&process.item.cfg, &metadata, &finish_extras) {
     report_turn_error_and_salvage(&tracker, process.item, error_msg.as_deref(), quota_exhausted).await?;
@@ -940,19 +933,15 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
   })
 }
 
-/// Record an Auto session's quota failure in the finish extras, from which the finish recorder writes the member's
-/// "out until" row and switches the turn to its next member. A turn that ends for any other reason records nothing.
+/// Record a run's quota failure in the finish extras, from which the finish recorder writes the member's "out until"
+/// row and, for a pool session, switches the turn to its next member. A turn that ends for any other reason records
+/// nothing. A concrete session's extras reach no switch, and its turn still posts the error.
 fn add_auto_quota_extras(
-  cfg: &CharlieBotConfig,
-  metadata: &SessionMetadata,
   error_msg: Option<&str>,
   quota_exhausted: Option<bool>,
   resets_at: Option<time::OffsetDateTime>,
   extras: &mut Map<String, Value>,
 ) {
-  if cfg.backends.pool(&metadata.backend).is_none() {
-    return;
-  }
   let Some(message) = error_msg else { return };
   // One decision rule serves this suppression and the finish recorder's switch.
   if !crate::backend_retry::is_quota_end(message, quota_exhausted) {
@@ -1194,7 +1183,7 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
     }
   }
   let mut finish_extras = tracker.lock().expect("run timing mutex is not poisoned").finish_extras();
-  add_auto_quota_extras(&item.cfg, &metadata, error_msg.as_deref(), None, None, &mut finish_extras);
+  add_auto_quota_extras(error_msg.as_deref(), None, None, &mut finish_extras);
   item.user_event_ids = std::mem::take(&mut *ack_ids.lock().expect("resume acknowledgement mutex is not poisoned"));
   // The drain takes the same path as a live turn: an Auto quota end continues on the next member silently.
   if !is_pool_quota_end(&item.cfg, &metadata, &finish_extras) {

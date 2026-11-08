@@ -36,7 +36,7 @@ test('chat tool-activity summary and output use the toggle past their limits', (
     '<span class="text-xs text-slate-400 flex-1 min-w-0">'
     + 'q'.repeat(80) + toggleHtml('ts-i', 'q'.repeat(10)) + '</span>'));
   assert.ok(html.includes(
-    '<pre class="mt-1 text-xs text-slate-400 whitespace-pre-wrap break-all">'
+    '<pre class="mt-1 text-xs text-slate-400 whitespace-pre-wrap break-words">'
     + 'z'.repeat(500) + toggleHtml('to-i', 'z'.repeat(100)) + '</pre>'));
 });
 

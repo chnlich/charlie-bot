@@ -269,7 +269,7 @@ async fn test_identify_carries_token_and_intents() {
   assert_eq!(identify["d"]["properties"]["device"], "charlie-bot");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_heartbeat_carries_the_last_seq() {
   let home = Home::new_without_thread_runtime(true).await;
   let mut script = GatewayScript::new(vec![ready(7)]);
@@ -305,7 +305,7 @@ fn acknowledged_heartbeats_keep_beating_one_interval_apart() {
   assert!(!heartbeat.begin());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_server_op1_is_answered_at_once() {
   let home = Home::new(true).await;
   let mut script = GatewayScript::new(vec![ready(7), json!({"op": 1})]);
@@ -319,7 +319,7 @@ async fn test_server_op1_is_answered_at_once() {
   assert!(received[0].iter().any(|payload| payload == &json!({"op": 1, "d": 7})));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_missing_ack_closes_and_reconnects() {
   let home = Home::new(true).await;
   let mut missed = GatewayScript::new(vec![ready(2)]);
@@ -643,7 +643,7 @@ async fn test_concurrent_duplicate_discord_message_create_accepts_one_thread_sum
   assert!(fake.started_threads.is_empty());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_discord_accepted_post_timeout_retries_with_one_nonce_keyed_post() {
   let home = Home::new(true).await;
   let sid = discord_session(&home).await;

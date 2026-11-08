@@ -294,9 +294,13 @@ function renderPendingPlanApprovalIndicator(session) {
 }
 
 
+// Only the session rows carry the row tints. The list's own id
+// (`session-list`) also starts with the row-id prefix, so a bare prefix
+// selector would stamp the row classes on the nav. The whole panel would then
+// paint the row's hover fill, and the current row's second line would read
+// 4.34:1 there instead of 5.23:1.
 function updateSidebarHighlight(newSessionId) {
-  document.querySelectorAll('[id^="session-"]').forEach(el => {
-    if (!el.id.startsWith('session-')) return;
+  document.querySelectorAll('#session-list .session-row').forEach(el => {
     el.classList.remove('bg-blue-600/20', 'text-blue-300');
     el.classList.add('hover:bg-slate-700/50', 'text-slate-300');
   });

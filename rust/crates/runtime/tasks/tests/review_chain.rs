@@ -8,12 +8,13 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::{BackendPool, BackendRoute};
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{CallClass, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::Registry;
 use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType, UtcDateTime};
@@ -33,6 +34,7 @@ fn test_pool() -> BackendPool {
   BackendPool::new(
     std::sync::Arc::new(BackendAvailability::load(home.path()).unwrap()),
     std::sync::Arc::new(Registry::new()),
+    Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
   )
 }
 
@@ -414,7 +416,7 @@ async fn reviewer_avoids_every_member_the_worker_node_used() -> anyhow::Result<(
   let pool = test_pool();
   let used = HashSet::from(["fake2".to_string()]);
   let selection =
-    review::select_reviewer_backend(&stack.cfg, &pool, "reviewer", "fake", Some("fake-model"), &[], &used)?;
+    review::select_reviewer_backend(&stack.cfg, &pool, CallClass::Review, "fake", Some("fake-model"), &[], &used)?;
   assert_eq!(selection, Some(("fake3".to_string(), Some("fake3-model".to_string()), vec!["fake3".to_string()])));
   Ok(())
 }
@@ -434,13 +436,14 @@ async fn reviewer_never_falls_back_to_a_member_the_worker_node_used() -> anyhow:
     .unwrap();
   let used = HashSet::from(["fake".to_string()]);
   assert!(
-    review::select_reviewer_backend(&stack.cfg, &pool, "reviewer", "fake", Some("fake-model"), &[], &used)?.is_none()
+    review::select_reviewer_backend(&stack.cfg, &pool, CallClass::Review, "fake", Some("fake-model"), &[], &used)?
+      .is_none()
   );
   assert!(
     review::select_reviewer_backend(
       &stack.cfg,
       &pool,
-      "reviewer",
+      CallClass::Review,
       "fake",
       Some("fake-model"),
       &[],
@@ -461,8 +464,15 @@ async fn check_without_used_members_keeps_the_session_backend_fallback() -> anyh
   .await?;
   let pool = test_pool();
   let tried = vec!["fake2".to_string()];
-  let selection =
-    review::select_reviewer_backend(&stack.cfg, &pool, "verify", "fake", Some("fake-model"), &tried, &HashSet::new())?;
+  let selection = review::select_reviewer_backend(
+    &stack.cfg,
+    &pool,
+    CallClass::Verify,
+    "fake",
+    Some("fake-model"),
+    &tried,
+    &HashSet::new(),
+  )?;
   assert_eq!(
     selection,
     Some(("fake".to_string(), Some("fake-model".to_string()), vec!["fake2".to_string(), "fake".to_string()]))
@@ -475,13 +485,20 @@ async fn check_without_used_members_keeps_the_session_backend_fallback() -> anyh
 async fn empty_pool_reuses_the_worker_backend_on_every_attempt() -> anyhow::Result<()> {
   let stack = Stack::start_with(vec![script_option("fake", "exit 0")], Vec::new()).await?;
   let pool = test_pool();
-  let first =
-    review::select_reviewer_backend(&stack.cfg, &pool, "reviewer", "fake", Some("fake-model"), &[], &HashSet::new())?
-      .expect("an empty pool falls back to the worker backend");
+  let first = review::select_reviewer_backend(
+    &stack.cfg,
+    &pool,
+    CallClass::Review,
+    "fake",
+    Some("fake-model"),
+    &[],
+    &HashSet::new(),
+  )?
+  .expect("an empty pool falls back to the worker backend");
   let second = review::select_reviewer_backend(
     &stack.cfg,
     &pool,
-    "reviewer",
+    CallClass::Review,
     "fake",
     Some("fake-model"),
     &first.2,

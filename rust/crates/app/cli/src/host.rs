@@ -11,6 +11,7 @@ use charliebot_agents::agent_environment;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_agents::cli_host::CliHost;
 use charliebot_agents::gh_wrapper;
+use charliebot_agents::model_pool::RotationPositions;
 use charliebot_core::home;
 use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
 
@@ -40,7 +41,7 @@ fn compose_with(home: &Path, repo_root: &Path, server_bin_dir: &Path) -> anyhow:
     registry: Arc::clone(&registry),
     repo_root: repo_root.to_path_buf(),
     base_env,
-    pool: Arc::new(BackendPool::new(availability, registry)),
+    pool: Arc::new(BackendPool::new(availability, registry, Arc::new(RotationPositions::default()))),
   })
 }
 

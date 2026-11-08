@@ -17,7 +17,7 @@ use charliebot_agents::backend_pool;
 use charliebot_agents::backend_types;
 use charliebot_agents::launch_loop;
 use charliebot_agents::model_pool;
-use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::config::{BackendOption, CallClass, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_core::fsutil;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
@@ -244,7 +244,7 @@ impl TaskExecutionAdapter {
             let mut run = manager_run_record(session_id, &run_id, &backend, model.as_deref());
             if exhausted.is_some() {
               // The turn never names a member: it ends with the exhausted error.
-              run.backend = meta.extra(model_pool::AUTO_MEMBER_FIELD).and_then(Value::as_str).map(str::to_string);
+              run.backend = meta.extra(model_pool::POOL_MEMBER_FIELD).and_then(Value::as_str).map(str::to_string);
             }
             run
           } else {
@@ -1573,7 +1573,8 @@ impl TaskExecutionAdapter {
     }
 
     let quota_failure = self.take_quota_failure(session_id, &run.id);
-    // A worker that inherited an Auto member records its quota end with the Auto switch, not with the pool.
+    // A worker that inherited an Auto member records its quota end with the Auto switch, not here. A pinned run's member
+    // is not recorded out: only a member a pool chose is held out.
     let from_auto = backend_from_auto(meta);
     if let (Some(failure), Some(backend)) = (quota_failure.as_ref(), run.backend.as_deref())
       && !from_auto
@@ -1599,16 +1600,14 @@ impl TaskExecutionAdapter {
         }
         if self.maybe_spawn_review(session_id, run).await?.is_none() {
           let cfg = self.features.config.get()?;
-          let recovery = backend_pool::backend_pool(&self.features)?.recovery_report(cfg.as_ref());
+          let reason =
+            self.no_member_reason(cfg.as_ref(), spawner_backends::class_pool_id(cfg.as_ref(), CallClass::Review))?;
           self
             .report_failure_to_parent(
               session_id,
               run,
               "blocked",
-              Some(&format!(
-                "review of work run {} found no available reviewer backend; backends.pool: {recovery}",
-                run.id
-              )),
+              Some(&format!("review of work run {} found no available reviewer backend; {reason}", run.id)),
             )
             .await?;
         }
@@ -1629,13 +1628,9 @@ impl TaskExecutionAdapter {
           if self.fail_over_quota(meta, run).await? {
             return Ok(());
           }
-          let recovery = backend_pool::backend_pool(&self.features)?;
           let cfg = self.features.config.get()?;
-          summary = Some(format!(
-            "{}\n\n{}",
-            self.worker_failure_summary(session_id, run).await?,
-            recovery.no_member_message(cfg.as_ref())
-          ));
+          let reason = self.no_member_reason(cfg.as_ref(), spawner_backends::worker_pool_id(cfg.as_ref(), meta))?;
+          summary = Some(format!("{}\n\n{reason}", self.worker_failure_summary(session_id, run).await?));
         }
       }
       self.report_failure_to_parent(session_id, run, durable_outcome, summary.as_deref()).await?;
@@ -1661,9 +1656,16 @@ impl TaskExecutionAdapter {
       .as_deref()
       .filter(|backend| !backend.is_empty())
       .ok_or_else(|| anyhow!("run {} records no backend; refusing to substitute one", run.id))?;
-    let switch =
-      auto_switch::switch_member(&self.features, &auto_session, meta, HandoffSource::WorkerRun { run }, from, failure)
-        .await?;
+    let switch = auto_switch::switch_member(
+      &self.features,
+      &auto_session.backend,
+      &auto_session,
+      meta,
+      HandoffSource::WorkerRun { run },
+      from,
+      failure,
+    )
+    .await?;
     let AutoSwitch::Moved { member } = &switch else { return Ok(switch) };
     let cfg = self.features.config.get()?;
     let guard = self.features.store.control_lock().await;
@@ -1723,7 +1725,8 @@ impl TaskExecutionAdapter {
     let cfg = self.features.config.get()?;
     let pool = backend_pool::backend_pool(&self.features)?;
     let parent_id = meta.task_parent_id.as_deref().unwrap_or_default();
-    let selection = spawner_backends::select_verify_backend(&cfg, store, parent_id, "cold_read", &tried, &pool).await?;
+    let selection =
+      spawner_backends::select_verify_backend(&cfg, store, parent_id, CallClass::ColdRead, &tried, &pool).await?;
     if let Some((backend, model, _tried)) = selection {
       let run_id = control_events::stable_run_id(session_id, &format!("cold-read:work:{}", work_runs.len()));
       {
@@ -1889,7 +1892,7 @@ impl TaskExecutionAdapter {
       None => review::select_reviewer_backend(
         &cfg,
         &pool,
-        "reviewer",
+        CallClass::Review,
         work_run.backend.as_deref().unwrap_or_default(),
         work_run.model.as_deref(),
         &tried_backends,
@@ -1935,16 +1938,14 @@ impl TaskExecutionAdapter {
       let retried = self.maybe_spawn_review(session_id, &work_run).await?;
       if retried.is_none() {
         let cfg = self.features.config.get()?;
-        let recovery = backend_pool::backend_pool(&self.features)?.recovery_report(cfg.as_ref());
+        let reason =
+          self.no_member_reason(cfg.as_ref(), spawner_backends::class_pool_id(cfg.as_ref(), CallClass::Review))?;
         self
           .report_failure_to_parent_with_decider(
             session_id,
             &work_run,
             "blocked",
-            Some(&format!(
-              "review of work run {} failed on every configured reviewer backend; backends.pool: {recovery}",
-              work_run.id
-            )),
+            Some(&format!("review of work run {} failed on every configured reviewer backend; {reason}", work_run.id)),
             Some(run),
           )
           .await?;
@@ -2095,6 +2096,14 @@ impl TaskExecutionAdapter {
       .remove(&(session_id.to_string(), run_id.to_string()))
   }
 
+  /// The reason a pool-selected call found no member: the pool's members and when each one recovers.
+  pub(crate) fn no_member_reason(&self, cfg: &CharlieBotConfig, pool_id: Option<&str>) -> anyhow::Result<String> {
+    match pool_id {
+      Some(pool_id) => backend_pool::backend_pool(&self.features)?.exhausted_message(cfg, pool_id),
+      None => Ok("no backends.pools entry serves this call".to_string()),
+    }
+  }
+
   fn pool_chose_backend(&self, meta: &SessionMetadata, run: &RunRecord) -> bool {
     if run.kind == RunKind::Review {
       return true;
@@ -2132,14 +2141,22 @@ impl TaskExecutionAdapter {
       .filter(|value| !value.is_null())
       .map(|value| serde_json::from_value::<backend_pool::BackendRoute>(value.clone()))
       .transpose()?;
-    let routed_member = route
-      .filter(|route| !route.backends.is_empty())
-      .map(|route| pool.pick_ordered(&cfg, "failover", &route.backends, &exclude))
-      .transpose()?
-      .flatten();
+    let routed = route.filter(|route| !route.backends.is_empty());
+    let routed_member = match routed.as_ref() {
+      // A route that names a pool id leaves the member to that pool; a route of options ids is ordered here.
+      Some(route) => match route.backends.iter().find(|backend| cfg.backends.pool(backend).is_some()) {
+        Some(pool_id) => pool.select(&cfg, "failover", pool_id, &exclude)?,
+        None => pool.pick_ordered(&cfg, "failover", &route.backends, &exclude)?,
+      },
+      None => None,
+    };
+    // A spent route falls back to the worker's own pool.
     let member = match routed_member {
       Some(member) => Some(member),
-      None => pool.select(&cfg, "failover", &exclude)?,
+      None => match spawner_backends::worker_pool_id(&cfg, meta) {
+        Some(pool_id) => pool.select(&cfg, "failover", pool_id, &exclude)?,
+        None => None,
+      },
     };
     let Some(member) = member else { return Ok(false) };
     let guard = self.features.store.control_lock().await;
@@ -2472,7 +2489,7 @@ impl TaskExecutionAdapter {
     option: &BackendOption,
     extras: &Map<String, Value>,
   ) -> anyhow::Result<()> {
-    if meta.backend != charliebot_core::config::AUTO_BACKEND_ID {
+    if self.features.config.get()?.backends.pool(&meta.backend).is_none() {
       return Ok(());
     }
     let Some(failure) = auto_quota_failure(extras) else { return Ok(()) };
@@ -2484,6 +2501,7 @@ impl TaskExecutionAdapter {
     // The run launched on `option`, the member it spent: a turn with no recorded member cannot reach this point.
     let switch = auto_switch::switch_member(
       &self.features,
+      &meta.backend,
       meta,
       meta,
       HandoffSource::ManagerRun { run: &run },
@@ -2533,41 +2551,6 @@ impl TaskExecutionAdapter {
         Ok(())
       }
     }
-  }
-
-  /// Apply the turn-start rule to a scheduled fire's bound Auto session and return the member the fire's child runs on.
-  /// A set with no selectable member ends the fire with the error that lists every member, posted to the session, and
-  /// returns None.
-  pub async fn auto_fire_member(&self, session_id: &str) -> anyhow::Result<Option<String>> {
-    let cfg = self.features.config.get()?;
-    let (start, meta) = {
-      let _guard = self.features.store.control_lock().await;
-      let mut meta = self.features.store.load_task_meta(session_id).await?;
-      let start = model_pool::start_turn(&self.features, &cfg, &mut meta).await?;
-      (start, meta)
-    };
-    match start {
-      model_pool::TurnStart::Kept => {}
-      model_pool::TurnStart::Changed(change) => {
-        self.features.store.persist_and_broadcast(session_id, change.event()).await?;
-      }
-      model_pool::TurnStart::Exhausted(message) => {
-        self
-          .features
-          .store
-          .persist_and_broadcast(
-            session_id,
-            json!({
-              "type": event_types::ASSISTANT_ERROR,
-              "content": message,
-              event_types::QUOTA_EXHAUSTED: true,
-            }),
-          )
-          .await?;
-        return Ok(None);
-      }
-    }
-    Ok(Some(model_pool::current_member_id(&cfg, &meta)?))
   }
 
   /// Whether this process already drives `run_id`: its launch is in flight, or a resume follow holds it.
@@ -2866,7 +2849,7 @@ fn auto_switch_source(
   run: &RunRecord,
   option: &BackendOption,
 ) -> anyhow::Result<Option<(RunRecord, String)>> {
-  if meta.backend != charliebot_core::config::AUTO_BACKEND_ID {
+  if features.config.get()?.backends.pool(&meta.backend).is_none() {
     return Ok(None);
   }
   let Some(previous_id) = run.retry_of_run_id.as_deref() else { return Ok(None) };
@@ -2877,7 +2860,7 @@ fn auto_switch_source(
   }
   let switched = features.store.load_chat_events_sync(&meta.id)?.iter().rev().any(|event| {
     event.get("type").and_then(CompactValue::as_str) == Some(event_types::QUOTA_FAILOVER)
-      && event.get(event_types::QUOTA_FAILOVER_SET).and_then(CompactValue::as_str) == Some(event_types::QUOTA_SET_AUTO)
+      && event.get(event_types::QUOTA_FAILOVER_SET).and_then(CompactValue::as_str) == Some(event_types::QUOTA_SET_POOL)
       && event.get(event_types::QUOTA_FAILOVER_REASON).and_then(CompactValue::as_str)
         == Some(event_types::QUOTA_REASON_QUOTA_ERROR)
       && event.get("from").and_then(CompactValue::as_str) == Some(from.as_str())
@@ -2889,7 +2872,10 @@ fn auto_switch_source(
   let recovers_at = backend_availability::backend_availability(features)?.out_until_minutes(&from).unwrap_or_default();
   Ok(Some((
     previous,
-    format!("auto switched from {from} to {}: the member's quota is spent, resets at {recovers_at}", option.id),
+    format!(
+      "pool '{}' switched from {from} to {}: the member's quota is spent, resets at {recovers_at}",
+      meta.backend, option.id
+    ),
   )))
 }
 
@@ -3147,18 +3133,18 @@ fn worker_failover_source(
   if from == option.id || from.is_empty() {
     return Ok(None);
   }
-  let (record_session, set) = if backend_from_auto(meta) {
+  let record_session = if backend_from_auto(meta) {
     let parent = meta
       .task_parent_id
       .as_deref()
       .ok_or_else(|| anyhow!("run {} inherited an Auto member but its task names no parent session", run.id))?;
-    (parent.to_string(), event_types::QUOTA_SET_AUTO)
+    parent.to_string()
   } else {
-    (meta.id.clone(), event_types::QUOTA_SET_POOL)
+    meta.id.clone()
   };
   let switched = features.store.load_chat_events_sync(&record_session)?.iter().rev().any(|event| {
     event.get("type").and_then(CompactValue::as_str) == Some(event_types::QUOTA_FAILOVER)
-      && event.get(event_types::QUOTA_FAILOVER_SET).and_then(CompactValue::as_str) == Some(set)
+      && event.get(event_types::QUOTA_FAILOVER_SET).and_then(CompactValue::as_str) == Some(event_types::QUOTA_SET_POOL)
       && event.get(event_types::QUOTA_FAILOVER_REASON).and_then(CompactValue::as_str)
         == Some(event_types::QUOTA_REASON_QUOTA_ERROR)
       && event.get("from").and_then(CompactValue::as_str) == Some(from.as_str())
@@ -3417,6 +3403,7 @@ mod tests {
           .require::<charliebot_agents::backend_availability::BackendAvailability>()
           .expect("the owner is in the startup state"),
         Arc::clone(&registry),
+        Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
       ))
       .expect("the pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });
@@ -3477,6 +3464,7 @@ mod tests {
           .require::<charliebot_agents::backend_availability::BackendAvailability>()
           .expect("the owner is in the startup state"),
         Arc::clone(&registry),
+        Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
       ))
       .expect("the pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });
@@ -3579,6 +3567,7 @@ mod tests {
       .insert(BackendPool::new(
         features.startup.require::<charliebot_agents::backend_availability::BackendAvailability>().unwrap(),
         Arc::clone(&features.registry),
+        Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
       ))
       .unwrap();
     pre_recovery_step(Arc::clone(&features)).await.unwrap();
@@ -3625,6 +3614,7 @@ mod tests {
       .insert(BackendPool::new(
         features.startup.require::<charliebot_agents::backend_availability::BackendAvailability>().unwrap(),
         Arc::clone(&features.registry),
+        Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
       ))
       .unwrap();
     pre_recovery_step(Arc::clone(&features)).await.unwrap();

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::BackendPool;
-use charliebot_core::config::{AUTO_BACKEND_ID, AutoBilling, AutoConfig, AutoMember, BackendOption};
+use charliebot_core::config::{BackendOption, PoolBilling, PoolConfig, PoolMember, PoolRule};
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::repo_root::RepoRoot;
@@ -17,10 +17,27 @@ use charliebot_registry::registry::HostLogin;
 use charliebot_registry::{Registry, RegistryError};
 use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec};
 use charliebot_store::{CreateTask, Store, TaskCaller};
+use charliebot_tasks::test_support::recovery_support::rotation_pools;
 use futures_util::future::BoxFuture;
 use serde_json::Map;
 use serde_json::Value;
 use serde_yaml::Mapping;
+
+/// The id of the priority pool that the Auto-style tests of this crate name.
+pub const AUTO_POOL_ID: &str = "auto";
+
+/// The priority pool `auto` over `members`, each billed as a subscription, in config order.
+fn auto_pool(members: &[&str]) -> PoolConfig {
+  PoolConfig {
+    id: AUTO_POOL_ID.to_string(),
+    label: "Auto".to_string(),
+    rule: PoolRule::Priority,
+    members: members
+      .iter()
+      .map(|id| PoolMember { backend: id.to_string(), billing: Some(PoolBilling::Subscription) })
+      .collect(),
+  }
+}
 
 /// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
 fn gh_wrapper_env(base: &Path, path: &str) -> Env {
@@ -48,17 +65,11 @@ pub fn feature_context_with_extra_backends(extra_backend_ids: &[&str]) -> (tempf
   feature_context_with_entries(&entries, None)
 }
 
-/// A feature context whose `backends.auto` set holds `members`, each a synthetic backend option in config order.
+/// A feature context whose `backends.pools` holds the priority pool `auto` over `members`, each a synthetic backend
+/// option in config order.
 pub fn feature_context_with_auto(members: &[&str]) -> (tempfile::TempDir, Arc<FeatureContext>) {
   let entries: Vec<(&str, Mapping)> = members.iter().map(|id| (*id, Mapping::new())).collect();
-  let auto = AutoConfig {
-    label: "Auto".to_string(),
-    members: members
-      .iter()
-      .map(|id| AutoMember { backend: id.to_string(), billing: AutoBilling::Subscription })
-      .collect(),
-  };
-  feature_context_with_entries(&entries, Some(auto))
+  feature_context_with_entries(&entries, Some(auto_pool(members)))
 }
 
 /// A manager session on `auto` that records no member yet, the shape of a bound session before its first turn start.
@@ -72,7 +83,7 @@ pub async fn auto_session(features: &FeatureContext, request_id: &str) -> anyhow
         profile: TaskProfile::Manager,
         task: None,
         name: Some("Synthetic Auto manager".to_string()),
-        backend: Some(AUTO_BACKEND_ID.to_string()),
+        backend: Some(AUTO_POOL_ID.to_string()),
         group: None,
         session_id: None,
       },
@@ -96,7 +107,7 @@ pub async fn auto_manager(
       &session.id,
       charliebot_agents::model_pool::OWNER,
       Map::from_iter([(
-        charliebot_agents::model_pool::AUTO_MEMBER_FIELD.to_string(),
+        charliebot_agents::model_pool::POOL_MEMBER_FIELD.to_string(),
         Value::String(member.to_string()),
       )]),
     )
@@ -110,20 +121,13 @@ pub fn feature_context_with_host_backends(hosts: &[(&str, &str)]) -> (tempfile::
   feature_context_with_entries(&host_entries(hosts), None)
 }
 
-/// A feature context with the same host-naming entries as [`feature_context_with_host_backends`] and a `backends.auto`
-/// set holding `members`, each a configured option.
+/// A feature context with the same host-naming entries as [`feature_context_with_host_backends`] and the priority pool
+/// `auto` over `members`, each a configured option.
 pub fn feature_context_with_auto_host_backends(
   hosts: &[(&str, &str)],
   members: &[&str],
 ) -> (tempfile::TempDir, Arc<FeatureContext>) {
-  let auto = AutoConfig {
-    label: "Auto".to_string(),
-    members: members
-      .iter()
-      .map(|id| AutoMember { backend: id.to_string(), billing: AutoBilling::Subscription })
-      .collect(),
-  };
-  feature_context_with_entries(&host_entries(hosts), Some(auto))
+  feature_context_with_entries(&host_entries(hosts), Some(auto_pool(members)))
 }
 
 fn host_entries<'a>(hosts: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, Mapping)> {
@@ -136,11 +140,11 @@ fn host_entries<'a>(hosts: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, Mapping)> 
   entries
 }
 
-/// A feature context with one backend option per entry, each `(id, type fields)` of the synthetic type, and the
-/// `backends.auto` set when one is given.
+/// A feature context with one backend option per entry, each `(id, type fields)` of the synthetic type. The rotation
+/// pool `pool` holds every entry, and the call classes read it as the old form derived them. `auto` adds one more pool.
 fn feature_context_with_entries(
   entries: &[(&str, Mapping)],
-  auto: Option<AutoConfig>,
+  auto: Option<PoolConfig>,
 ) -> (tempfile::TempDir, Arc<FeatureContext>) {
   let home = tempfile::tempdir().expect("temporary cron home");
   std::fs::create_dir_all(home.path().join("sessions")).expect("session directory provisions");
@@ -160,7 +164,8 @@ fn feature_context_with_entries(
   let registry = Arc::new(registry);
   let mut cfg = registry.load_config(home.path()).expect("default config loads");
   cfg.paths.worktree_dir = home.path().join("worktrees").display().to_string();
-  // The synthetic sessions have no metadata; a zero cap starts no session cgroup, so no spawn walks the task-parent chain.
+  // The synthetic sessions have no metadata; a zero cap starts no session cgroup, so no spawn walks the task-parent
+  // chain.
   cfg.server.session_memory_max_mb = 0;
   // A worker launch is withheld below `server.min_free_disk_gib`. The production default of 10 GiB can exceed a CI
   // runner's free disk, so this fixture pins the check off; the tasks crate tests the withhold itself.
@@ -174,9 +179,11 @@ fn feature_context_with_entries(
       backend_type: "synthetic".to_string(),
       type_fields: type_fields.clone(),
     });
-    cfg.backends.pool.push(id.to_string());
   }
-  cfg.backends.auto = auto;
+  let (rotation, calls) = rotation_pools(entries.iter().map(|(id, _)| id.to_string()).collect());
+  cfg.backends.pools = rotation;
+  cfg.backends.calls = calls;
+  cfg.backends.pools.extend(auto);
   let store = Arc::new(
     Store::new(
       cfg.clone(),
@@ -208,12 +215,14 @@ fn feature_context_with_entries(
         .expect("the availability owner loads"),
     )
     .expect("the owner inserts");
+  startup.insert(charliebot_agents::model_pool::RotationPositions::default()).expect("the rotation positions insert");
   startup
     .insert(BackendPool::new(
       startup
         .require::<charliebot_agents::backend_availability::BackendAvailability>()
         .expect("the owner is in the startup state"),
       Arc::clone(&registry),
+      startup.require::<charliebot_agents::model_pool::RotationPositions>().expect("the positions are in startup"),
     ))
     .expect("backend pool inserts");
   startup
@@ -319,8 +328,8 @@ fn synthetic_host_alias(fields: &Mapping) -> Result<Option<String>, String> {
   Ok(fields.get("host_auth_alias").and_then(serde_yaml::Value::as_str).map(str::to_string))
 }
 
-/// The host verdicts the stub host readers serve, each with the profile home it belongs to, and each probe the stub ran.
-/// Tests set a verdict per home and alias, so parallel tests never share one.
+/// The host verdicts the stub host readers serve, each with the profile home it belongs to, and each probe the stub
+/// ran. Tests set a verdict per home and alias, so parallel tests never share one.
 static HOST_VERDICTS: Mutex<Vec<(PathBuf, HostLogin)>> = Mutex::new(Vec::new());
 static HOST_PROBES: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
 

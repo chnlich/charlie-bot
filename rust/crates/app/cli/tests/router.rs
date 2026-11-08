@@ -146,22 +146,20 @@ fn rules_text(url: &str) -> String {
     "jev:\n  url: {url}\n  model: jev-test\n  credential: jev\n\
      instructions: \"Which class of work is this?\"\n\
      classes:\n\
-     \x20 routine: {{when: \"Routine work: fixes, tests and short actions.\", run_on: pool}}\n\
+     \x20 routine: {{when: \"Routine work: fixes, tests and short actions.\", run_on: {POOL}}}\n\
      \x20 context: {{when: \"Context class: a first read or a design.\", run_on: session}}\n\
      roles:\n\
      \x20 implement: [routine, context]\n"
   )
 }
 
-/// The live `config.yaml`: the backend ids the rules may name.
+/// The live `config.yaml`: the backend options the rules may name, and the rotate pool `POOL` over them.
 fn write_config(home: &Path) {
-  let options: String = STRONG
-    .iter()
-    .copied()
-    .chain([POOL])
-    .map(|id| format!("    - {{id: {id}, label: {id}, type: codex, model: synthetic-model}}\n"))
-    .collect();
-  std::fs::write(home.join("config.yaml"), format!("backends:\n  options:\n{options}")).unwrap();
+  let options: String =
+    STRONG.iter().map(|id| format!("    - {{id: {id}, label: {id}, type: codex, model: synthetic-model}}\n")).collect();
+  let members = STRONG.join(", ");
+  let pools = format!("  pools:\n    - {{id: {POOL}, label: {POOL}, rule: rotate, members: [{members}]}}\n");
+  std::fs::write(home.join("config.yaml"), format!("backends:\n  options:\n{options}{pools}")).unwrap();
 }
 
 /// Run the built binary once with `router` and `arguments` as argv; returns `(exit code, stdout, stderr)`.

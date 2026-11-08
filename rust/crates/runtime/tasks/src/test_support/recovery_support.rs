@@ -37,9 +37,10 @@ use axum::http::{Request, StatusCode, header};
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::BackendPool;
+use charliebot_agents::model_pool::RotationPositions;
 use charliebot_core::config::{
-  AutoConfig, BackendOption, BackendsConfig, CONFIG_D_DIR_NAME, CharlieBotConfig, PathsConfig, Sections, ServerConfig,
-  TelegramConfig, UiConfig,
+  BackendOption, BackendsConfig, CONFIG_D_DIR_NAME, CallClass, CallTarget, CallsConfig, CharlieBotConfig, PathsConfig,
+  PoolConfig, PoolMember, PoolRule, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::event_types;
@@ -76,7 +77,7 @@ use tower::ServiceExt;
 /// The backend type every synthetic option of these tests uses.
 pub const BACKEND_TYPE: &str = "recovery_script";
 
-/// The package that registers the `auto_member` session slot, as the server's runtime registration does.
+/// The package that registers the `pool_member` session slot, as the server's runtime registration does.
 const AUTO_PACKAGE: (&str, RegisterFn) = ("features.model_pool", charliebot_agents::model_pool::register);
 
 /// The option the synthetic nodes are created with.
@@ -384,7 +385,39 @@ pub fn script_option(id: &str, script: &str) -> BackendOption {
   }
 }
 
+/// The id of the rotate pool that a fixture's `pool` list names. The call classes a rotation pool serves read it.
+pub const ROTATION_POOL_ID: &str = "pool";
+
+/// The rotate pool that `members` name, and the call classes that read it. Without members the fixture has no pool, and
+/// no call class reads one.
+pub fn rotation_pools(members: Vec<String>) -> (Vec<PoolConfig>, CallsConfig) {
+  if members.is_empty() {
+    return (Vec::new(), CallsConfig::default());
+  }
+  let pools = vec![PoolConfig {
+    id: ROTATION_POOL_ID.to_string(),
+    label: "Pool".to_string(),
+    rule: PoolRule::Rotate,
+    members: members.into_iter().map(|backend| PoolMember { backend, billing: None }).collect(),
+  }];
+  let calls = [
+    CallClass::Worker,
+    CallClass::Improve,
+    CallClass::Verify,
+    CallClass::Review,
+    CallClass::ColdRead,
+    CallClass::Probe,
+    CallClass::Autoname,
+    CallClass::Triage,
+  ]
+  .map(|class| (class, CallTarget::Backend(ROTATION_POOL_ID.to_string())))
+  .into_iter()
+  .collect();
+  (pools, calls)
+}
+
 fn config(home: &Path, options: Vec<BackendOption>, pool: Vec<String>, min_free_disk_gib: i64) -> CharlieBotConfig {
+  let (pools, calls) = rotation_pools(pool);
   CharlieBotConfig {
     charliebot_home: home.to_path_buf(),
     headless_chrome_bin: "/bin/false".to_string(),
@@ -406,7 +439,7 @@ fn config(home: &Path, options: Vec<BackendOption>, pool: Vec<String>, min_free_
       worktree_dir: home.join("worktrees").display().to_string(),
       scratch_dir: home.join("scripts").display().to_string(),
     },
-    backends: BackendsConfig { pool, routing: None, options, auto: None },
+    backends: BackendsConfig { routing: None, options, pools, calls },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
     remote_run: charliebot_core::config::RemoteRunConfig::default(),
@@ -585,27 +618,27 @@ impl Stack {
     Stack::assemble(home, cfg, registry(None)?).await
   }
 
-  /// A stack whose backend options carry an Auto set.
+  /// A stack whose backends carry the priority pool `auto`.
   pub async fn start_with_auto(
     options: Vec<BackendOption>,
     pool: Vec<String>,
-    auto: AutoConfig,
+    auto: PoolConfig,
   ) -> anyhow::Result<Stack> {
     let home = tempfile::tempdir()?;
     let mut cfg = config(home.path(), options, pool, 0);
-    cfg.backends.auto = Some(auto);
+    cfg.backends.pools.push(auto);
     Stack::assemble(Arc::new(home), cfg, registry(Some(AUTO_PACKAGE))?).await
   }
 
-  /// The stack of the next boot on an earlier home, whose backend options carry an Auto set.
+  /// The stack of the next boot on an earlier home, whose backends carry the priority pool `auto`.
   pub async fn start_on_home_with_auto(
     home: Arc<TempDir>,
     options: Vec<BackendOption>,
     pool: Vec<String>,
-    auto: AutoConfig,
+    auto: PoolConfig,
   ) -> anyhow::Result<Stack> {
     let mut cfg = config(home.path(), options, pool, 0);
-    cfg.backends.auto = Some(auto);
+    cfg.backends.pools.push(auto);
     Stack::assemble(home, cfg, registry(Some(AUTO_PACKAGE))?).await
   }
 
@@ -643,7 +676,12 @@ impl Stack {
     let startup = Arc::new(StartupState::default());
     startup.insert(AgentBaseEnvironment { values: Stack::gh_wrapper_env(checkout, "/usr/bin") })?;
     startup.insert(BackendAvailability::load(&cfg.charliebot_home)?)?;
-    startup.insert(BackendPool::new(startup.require::<BackendAvailability>()?, Arc::clone(&registry)))?;
+    startup.insert(RotationPositions::default())?;
+    startup.insert(BackendPool::new(
+      startup.require::<BackendAvailability>()?,
+      Arc::clone(&registry),
+      startup.require::<RotationPositions>()?,
+    ))?;
     startup.insert(RepoRoot::new(Some(checkout.as_os_str().to_os_string()))?)?;
     let served = Arc::new(Mutex::new((*cfg).clone()));
     let config_source = Arc::clone(&served);

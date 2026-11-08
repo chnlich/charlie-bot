@@ -13,9 +13,9 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use charliebot_agents::backend_availability;
-use charliebot_agents::backend_pool::BackendPool;
+use charliebot_agents::backend_pool::{self, BackendPool};
 use charliebot_agents::backend_types::{self, BuiltBackend};
-use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::config::{BackendOption, CallClass, CallTarget, CharlieBotConfig};
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{Env, LaunchArgs};
 use charliebot_store::metadata::UtcDateTime;
@@ -187,23 +187,19 @@ impl<'a> JudgeBackends<'a> {
   }
 }
 
-/// One signature judged over the light backends of the pool: a call failure rotates to the next member, and a
-/// contract failure ends this signature at once. A timed-out member goes into the pool's shared cooldown for
-/// [`JUDGE_COOLDOWN`], so a hung member costs one signature instead of every signature.
+/// One signature judged on the `backends.calls.triage` target: a call failure moves to the next member the target
+/// selects, and a contract failure ends this signature at once. A timed-out member goes into the pool's shared cooldown
+/// for [`JUDGE_COOLDOWN`], so a hung member costs one signature instead of every signature.
 ///
-/// The candidates come from the pool's own `select`, in the rotation order the autonamer advances: the pool holds the
-/// position and the cooldown table, so the judge keeps neither.
+/// The members come from `backend_pool::one_shot_members`, so the pool holds the position and the cooldown table, and
+/// the judge keeps neither.
 pub async fn judge_signature(backends: &JudgeBackends<'_>, input: &JudgeInput) -> Result<Judgement, JudgeError> {
   let system = system_prompt();
   let prompt = user_prompt(input);
+  let target = backends.cfg.backends.calls.get(CallClass::Triage);
   let mut last_error = None;
-  let mut tried: Vec<String> = Vec::new();
-  while let Some(option) = backends
-    .pool
-    .select(backends.cfg, "light_oneshot", &tried)
-    .map_err(|error| JudgeError::Call(format!("{error:#}")))?
-  {
-    tried.push(option.id.clone());
+  for option in backend_pool::one_shot_members(backends.cfg, Arc::clone(&backends.pool), "triage", target) {
+    let option = option.map_err(|error| JudgeError::Call(format!("{error:#}")))?;
     match attempt(backends, &option, &prompt, system, input).await {
       Ok(judgement) => return Ok(judgement),
       Err(JudgeError::Assertion(message)) => return Err(JudgeError::Assertion(message)),
@@ -221,7 +217,17 @@ pub async fn judge_signature(backends: &JudgeBackends<'_>, input: &JudgeInput) -
       }
     }
   }
-  Err(last_error.unwrap_or_else(|| JudgeError::Call(backends.pool.no_member_message(backends.cfg))))
+  if let Some(error) = last_error {
+    return Err(error);
+  }
+  let reason = match target {
+    None => "backends.calls.triage is unset; name a model or a pool to judge failures".to_string(),
+    Some(CallTarget::Backend(pool_id)) if backends.cfg.backends.pool(pool_id).is_some() => {
+      backends.pool.exhausted_message(backends.cfg, pool_id).map_err(|error| JudgeError::Call(format!("{error:#}")))?
+    }
+    Some(_) => "backends.calls.triage names no selectable member".to_string(),
+  };
+  Err(JudgeError::Call(reason))
 }
 
 /// One backend's attempt: build it, run its native one-shot, and read the answer.
@@ -434,11 +440,14 @@ mod tests {
     Arc::new(BackendPool::new(
       Arc::new(backend_availability::BackendAvailability::load(home).unwrap()),
       Arc::new(Registry::new()),
+      Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
     ))
   }
 
   fn config_with_pool(ids: &[&str]) -> CharlieBotConfig {
-    use charliebot_core::config::{BackendsConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig};
+    use charliebot_core::config::{
+      BackendsConfig, PathsConfig, PoolConfig, PoolMember, PoolRule, Sections, ServerConfig, TelegramConfig, UiConfig,
+    };
 
     let options = ids
       .iter()
@@ -473,10 +482,15 @@ mod tests {
         scratch_dir: "/synthetic".to_string(),
       },
       backends: BackendsConfig {
-        pool: ids.iter().map(|id| (*id).to_string()).collect(),
+        pools: vec![PoolConfig {
+          id: "light".to_string(),
+          label: "Light".to_string(),
+          rule: PoolRule::Rotate,
+          members: ids.iter().map(|id| PoolMember { backend: (*id).to_string(), billing: None }).collect(),
+        }],
         routing: None,
         options,
-        auto: None,
+        calls: [(CallClass::Triage, CallTarget::Backend("light".to_string()))].into_iter().collect(),
       },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
@@ -511,7 +525,7 @@ mod tests {
     // Another shared caller takes the first slot, so the judge must try beta before alpha. No "synthetic" type is
     // registered, so each build fails and the last error names the last member tried. That member is alpha under the
     // shared rotation order, and beta under the pool's own declaration order.
-    assert_eq!(pool.select(&config, "light_oneshot", &[]).unwrap().unwrap().id, "alpha");
+    assert_eq!(pool.select(&config, "triage", "light", &[]).unwrap().unwrap().id, "alpha");
     let error = judge_signature(&backends, &judge_input()).await.unwrap_err().to_string();
     assert!(error.contains("backend alpha"), "{error}");
   }
@@ -535,7 +549,7 @@ mod tests {
     };
     let mut tried = Vec::new();
     let mut offered = Vec::new();
-    while let Some(option) = backends.pool.select(backends.cfg, "light_oneshot", &tried).unwrap() {
+    while let Some(option) = backends.pool.select(backends.cfg, "triage", "light", &tried).unwrap() {
       offered.push(option.id.clone());
       tried.push(option.id);
     }

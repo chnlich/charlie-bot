@@ -1,7 +1,8 @@
 //! The host gate of a scheduled task, and the Waiting on you items that the gate's hosts derive.
 //!
 //! A worker fire of a task whose backend names a host (`host_auth_alias`) probes that host before it creates a worker.
-//! A task on `auto` is judged on the member its bound session's turn start selects, the backend the fire runs on.
+//! A task on a `backends.pools` id is judged on the member the pool selects for the fire, read without moving the
+//! pool's rotation, so the gate and the fire agree on the member.
 //! A host that awaits the user's approval holds the fire: the fire records one skip and starts nothing, and no session
 //! wakes. Nothing is stored for the hold. The Waiting on you read derives one user-act item per holder session and host
 //! from the host state and the enabled tasks. The item shows while the host awaits approval and is gone once it does
@@ -10,9 +11,9 @@
 use std::collections::HashSet;
 
 use anyhow::Context;
-use charliebot_agents::model_pool;
+use charliebot_agents::backend_pool;
 use charliebot_core::approval_policy::TIER_USER_ACT;
-use charliebot_core::config::{AUTO_BACKEND_ID, BackendOption, CharlieBotConfig};
+use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::registry::{HostLogin, OpenWaitingRow};
 use charliebot_store::metadata::UtcDateTime;
@@ -72,45 +73,21 @@ fn option_host(features: &FeatureContext, option: &BackendOption) -> Result<Opti
   read_alias(&option.type_fields)
 }
 
-/// The backend a fire of `task` runs on: the task's configured one, or for `auto` the member that the turn start of its
-/// bound session selects, which is the member the fire then runs on. The selection is read without recording it. `None`
-/// when no member of the set names a host, and while an `auto` task has no bound session or no member to run on.
+/// The backend a fire of `task` runs on: the task's configured option, or for a pool the member the pool selects for
+/// the fire. The pool's selection is read without moving its rotation, so the fire's own selection picks the same
+/// member. `None` when the pool has no selectable member, since the fire then ends with the exhausted error and runs
+/// nothing.
 async fn fire_backend_id(
   features: &FeatureContext,
   task: &ScheduledTaskConfig,
   cfg: &CharlieBotConfig,
 ) -> anyhow::Result<Option<String>> {
   let configured = effective_backend(task, cfg)?;
-  if configured != AUTO_BACKEND_ID {
+  if cfg.backends.pool(&configured).is_none() {
     return Ok(Some(configured));
   }
-  if !auto_members_name_host(features, cfg)? {
-    return Ok(None);
-  }
-  let Some(bound) = task.session_id.as_deref() else {
-    return Ok(None);
-  };
-  let meta = features
-    .store
-    .load_meta(bound)
-    .await?
-    .with_context(|| format!("scheduled task '{}' bound session {bound} does not exist", task.name))?;
-  model_pool::turn_member(features, cfg, &meta)
-    .map_err(|error| anyhow::anyhow!("scheduled task '{}': {error}", task.name))
-}
-
-/// Whether a member of the Auto set names a host. A set with none holds no fire, so an `auto` task then reads no
-/// member's quota.
-fn auto_members_name_host(features: &FeatureContext, cfg: &CharlieBotConfig) -> anyhow::Result<bool> {
-  for member in &model_pool::require_auto(cfg)?.members {
-    let option = model_pool::member_option(cfg, member)?;
-    let host = option_host(features, option)
-      .map_err(|error| anyhow::anyhow!("backends.auto member '{}': {error}", member.backend))?;
-    if host.is_some() {
-      return Ok(true);
-    }
-  }
-  Ok(false)
+  let pool = backend_pool::backend_pool(features)?;
+  Ok(pool.peek(cfg, &configured, &[])?.map(|option| option.id))
 }
 
 /// One user-act item per holder session and host that awaits approval, for each enabled task on that host whose bound
@@ -187,7 +164,7 @@ mod tests {
 
   use super::derived_waiting_rows;
   use crate::test_support::{
-    archive_task, auto_manager, auto_session, child_manager, feature_context_with_auto_host_backends,
+    archive_task, auto_session, child_manager, feature_context_with_auto_host_backends,
     feature_context_with_host_backends, manager, set_host_login, write_prompted_task,
   };
 
@@ -270,35 +247,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn an_auto_task_is_gated_on_the_host_of_the_member_its_session_records() {
-    let (_home, features) = feature_context_with_auto_host_backends(
-      &[("synthetic-host", "synthetic-login-host")],
-      &["synthetic-host", "synthetic"],
-    );
-    let home = features.config.get().unwrap().charliebot_home.clone();
-    let hosted = auto_manager(&features, "auto-hosted-member", "synthetic-host").await.unwrap();
-    let plain = auto_manager(&features, "auto-plain-member", "synthetic").await.unwrap();
-    write_prompted_task(&home, "auto-hosted", &task(&hosted.id, "auto", true));
-    set_host_login(&home, verdict("synthetic-login-host", "needs-interactive-auth", SINCE));
-
-    let rows = derived_waiting_rows(&features).await.unwrap();
-    assert_eq!(
-      rows.iter().map(|row| row.session_id.as_str()).collect::<Vec<_>>(),
-      [hosted.id.as_str()],
-      "the recorded member names the host that awaits approval: {rows:?}"
-    );
-
-    write_prompted_task(&home, "auto-plain", &task(&plain.id, "auto", true));
-    let rows = derived_waiting_rows(&features).await.unwrap();
-    assert_eq!(
-      rows.iter().map(|row| row.session_id.as_str()).collect::<Vec<_>>(),
-      [hosted.id.as_str()],
-      "a member whose backend type names no host holds no item: {rows:?}"
-    );
-  }
-
-  #[tokio::test]
-  async fn an_auto_task_with_no_recorded_member_is_gated_on_the_member_its_first_turn_selects() {
+  async fn a_pool_task_is_gated_on_the_member_the_pool_selects_for_its_fire() {
     let (_home, features) = feature_context_with_auto_host_backends(
       &[("synthetic-host", "synthetic-login-host")],
       &["synthetic-host", "synthetic"],
@@ -312,23 +261,8 @@ mod tests {
     assert_eq!(
       rows.iter().map(|row| row.session_id.as_str()).collect::<Vec<_>>(),
       [node.id.as_str()],
-      "the first turn start selects the first member, which names the host: {rows:?}"
+      "the pool selects its first member, which names the host that awaits approval: {rows:?}"
     );
-  }
-
-  #[tokio::test]
-  async fn an_auto_task_is_gated_on_the_member_its_turn_start_switches_to() {
-    let (_home, features) = feature_context_with_auto_host_backends(
-      &[("synthetic-host", "synthetic-login-host")],
-      &["synthetic-host", "synthetic"],
-    );
-    let home = features.config.get().unwrap().charliebot_home.clone();
-    let node = auto_manager(&features, "auto-out-member", "synthetic-host").await.unwrap();
-    write_prompted_task(&home, "auto-out", &task(&node.id, "auto", true));
-    set_host_login(&home, verdict("synthetic-login-host", "needs-interactive-auth", SINCE));
-
-    let rows = derived_waiting_rows(&features).await.unwrap();
-    assert_eq!(rows.len(), 1, "the recorded member runs the fire while it is selectable: {rows:?}");
 
     backend_availability::backend_availability(&features)
       .unwrap()
@@ -337,8 +271,40 @@ mod tests {
     let rows = derived_waiting_rows(&features).await.unwrap();
     assert!(
       rows.is_empty(),
-      "the recorded member is out, so the turn start switches the fire to 'synthetic', which names no host: {rows:?}"
+      "the pool selects 'synthetic' once the first member is out, and it names no host: {rows:?}"
     );
+  }
+
+  #[tokio::test]
+  async fn a_pool_task_whose_selected_member_names_no_host_holds_no_item() {
+    let (_home, features) = feature_context_with_auto_host_backends(
+      &[("synthetic-host", "synthetic-login-host")],
+      &["synthetic", "synthetic-host"],
+    );
+    let home = features.config.get().unwrap().charliebot_home.clone();
+    let node = auto_session(&features, "auto-plain-first").await.unwrap();
+    write_prompted_task(&home, "auto-plain-first", &task(&node.id, "auto", true));
+    set_host_login(&home, verdict("synthetic-login-host", "needs-interactive-auth", SINCE));
+
+    let rows = derived_waiting_rows(&features).await.unwrap();
+    assert!(
+      rows.is_empty(),
+      "the pool selects 'synthetic', which names no host, so the host's wait holds no item: {rows:?}"
+    );
+  }
+
+  #[tokio::test]
+  async fn a_rotate_pool_task_reads_its_member_without_moving_the_rotation() {
+    let (_home, features) = feature_context_with_host_backends(&[("synthetic-host", "synthetic-login-host")]);
+    let home = features.config.get().unwrap().charliebot_home.clone();
+    let node = manager(&features, "rotate-gate-node").await.unwrap();
+    write_prompted_task(&home, "rotate-gate", &task(&node.id, "pool", true));
+    set_host_login(&home, verdict("synthetic-login-host", "needs-interactive-auth", SINCE));
+
+    // The rotation's first member is `synthetic`, which names no host. A read that moved the rotation would name
+    // `synthetic-login-host` on the second read and hold the task.
+    assert!(derived_waiting_rows(&features).await.unwrap().is_empty());
+    assert!(derived_waiting_rows(&features).await.unwrap().is_empty(), "a read leaves the rotation in place");
   }
 
   #[tokio::test]

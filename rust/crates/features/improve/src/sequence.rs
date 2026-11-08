@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, bail};
 use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool::BackendPool;
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{CallClass, CallTarget, CharlieBotConfig};
 use charliebot_core::event_types::{RUN_FINISHED, TASK_CLOSED};
 use charliebot_core::parallel_walk;
 use charliebot_core::repo_root::RepoRoot;
@@ -345,6 +345,15 @@ async fn settle_failure(
 }
 
 /// The controller's main path. Each early return has settled the loop before it returns.
+/// The pool that `backends.calls.improve` names: a loop with no backend of its own picks each iteration's member from
+/// it.
+fn improve_pool_id(cfg: &CharlieBotConfig) -> anyhow::Result<&str> {
+  match cfg.backends.calls.get(CallClass::Improve) {
+    Some(CallTarget::Backend(pool_id)) if cfg.backends.pool(pool_id).is_some() => Ok(pool_id.as_str()),
+    _ => anyhow::bail!("backends.calls.improve no longer names a pool, so the loop has no member to pick"),
+  }
+}
+
 async fn run_loop(
   spec: &LoopSpec<'_>,
   cfg: &CharlieBotConfig,
@@ -399,9 +408,10 @@ async fn run_loop(
     let tip_before = git::git_rev_parse(&wt_path, "HEAD").await.unwrap_or_default();
 
     let (iteration_backend, iteration_model) = if state.backend_from_pool {
+      let pool_id = improve_pool_id(cfg)?;
       let member = match next_pool_member.take() {
         Some(member) => Some(member),
-        None => pool.select(cfg, "improve", &[])?,
+        None => pool.select(cfg, "improve", pool_id, &[])?,
       };
       match member {
         Some(member) => {
@@ -409,7 +419,7 @@ async fn run_loop(
           (member.id.clone(), Some(model))
         }
         None => {
-          progress.blocked = Some((iteration, pool.no_member_message(cfg), String::new()));
+          progress.blocked = Some((iteration, pool.exhausted_message(cfg, pool_id)?, String::new()));
           break;
         }
       }
@@ -454,13 +464,14 @@ async fn run_loop(
       let quota_failure = adapter.take_quota_failure(spec.child_id, &run.id);
       if let Some(reason) = blocker_reason {
         if state.backend_from_pool {
+          let pool_id = improve_pool_id(cfg)?;
           let (resets_at, cooling_reason, message) = match &quota_failure {
             Some(failure) => (failure.resets_at, backend_availability::REASON_QUOTA_ERROR, failure.message.clone()),
             None => (None, backend_availability::REASON_ITERATION_FAILURE, reason.clone()),
           };
           pool.availability().record(&iteration_backend, resets_at, cooling_reason, &message)?;
           if quota_failure.is_some() && run.pid.is_none() && iteration < spec.iterations {
-            match pool.select(cfg, "improve", &[])? {
+            match pool.select(cfg, "improve", pool_id, &[])? {
               Some(member) => next_pool_member = Some(member),
               None => {
                 progress.blocked = Some((iteration, reason, failed_summary));

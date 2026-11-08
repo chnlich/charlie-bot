@@ -10,9 +10,10 @@ use std::sync::Arc;
 
 use anyhow::bail;
 use charliebot_agents::backend_availability;
-use charliebot_agents::backend_pool::is_quota_error;
+use charliebot_agents::backend_pool::{self, is_quota_error};
 use charliebot_agents::cli_host::CliHost;
 use charliebot_agents::{backend_types, one_shot_text};
+use charliebot_core::config::CallClass;
 use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_html::{EventKind, folds_at_open, parse_with};
 use charliebot_registry::backend::LaunchArgs;
@@ -379,16 +380,16 @@ pub struct LightProbe {
   pub answer: Option<String>,
 }
 
-/// `run_light_probe`: sends `prompt` to each light backend in pool rotation with no timeout. A backend that fails is
-/// recorded and the next member tried; a quota failure cools that member. Fails when `backends.pool` is empty.
-pub async fn run_light_probe(host: &CliHost, prompt: &str, system_prompt: &str) -> anyhow::Result<LightProbe> {
-  if host.cfg.backends.pool.is_empty() {
-    bail!("no light backends resolvable: backends.pool is empty");
+/// `run_probe`: sends `prompt` to each member of the `backends.calls.probe` target in turn, with no timeout. A backend
+/// that fails is recorded and the next member tried; a quota failure cools that member. Fails when the key is unset.
+pub async fn run_probe(host: &CliHost, prompt: &str, system_prompt: &str) -> anyhow::Result<LightProbe> {
+  let target = host.cfg.backends.calls.get(CallClass::Probe);
+  if target.is_none() {
+    bail!("no probe backend resolvable: backends.calls.probe is unset");
   }
   let mut attempts = Vec::new();
-  let mut tried: Vec<String> = Vec::new();
-  while let Some(option) = host.pool.select(&host.cfg, "light_oneshot", &tried)? {
-    tried.push(option.id.clone());
+  for option in backend_pool::one_shot_members(&host.cfg, Arc::clone(&host.pool), "probe", target) {
+    let option = option?;
     let (error_type, outcome) =
       match backend_types::build_backend(Arc::clone(&host.registry), &option, &host.cfg, LaunchArgs::default()) {
         Ok(built) => ("RuntimeError", one_shot_text(built, &host.base_env.values, prompt, system_prompt, None).await),
@@ -576,7 +577,12 @@ mod tests {
         worktree_dir: "/synthetic/worktrees".to_string(),
         scratch_dir: "/synthetic/scripts".to_string(),
       },
-      backends: BackendsConfig { pool: ids.map(str::to_string).to_vec(), routing: None, options, auto: None },
+      backends: BackendsConfig {
+        routing: None,
+        options,
+        pools: crate::test_support::recovery_support::rotation_pools(ids.map(str::to_string).to_vec()).0,
+        calls: crate::test_support::recovery_support::rotation_pools(ids.map(str::to_string).to_vec()).1,
+      },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       remote_run: charliebot_core::config::RemoteRunConfig::default(),
@@ -800,10 +806,11 @@ BBBB
       pool: std::sync::Arc::new(charliebot_agents::backend_pool::BackendPool::new(
         std::sync::Arc::new(charliebot_agents::backend_availability::BackendAvailability::load(home.path()).unwrap()),
         Arc::clone(&registry),
+        Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
       )),
     };
 
-    let probe = run_light_probe(&host, "prompt", "system").await.unwrap();
+    let probe = run_probe(&host, "prompt", "system").await.unwrap();
 
     assert_eq!(
       probe.attempts,

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, anyhow, bail};
 use charliebot_agents::runs::run_alive_probe;
 use charliebot_agents::transport::{identity, recovery as transport_recovery};
-use charliebot_core::config::BackendOption;
+use charliebot_core::config::{BackendOption, CallClass};
 use charliebot_core::home::boot_recovery_marker_path;
 use charliebot_core::parallel_walk;
 use charliebot_registry::context::{FeatureContext, StartupStop};
@@ -1253,12 +1253,9 @@ async fn replay_followups_with_records(
             && adapter.maybe_spawn_review(session_id, run).await?.is_none()
           {
             let cfg = features.config.get()?;
-            let pool = charliebot_agents::backend_pool::backend_pool(features)?;
-            let summary = format!(
-              "review of work run {} found no available reviewer backend; backends.pool: {}",
-              run.id,
-              pool.recovery_report(&cfg)
-            );
+            let reason =
+              adapter.no_member_reason(&cfg, crate::spawner_backends::class_pool_id(&cfg, CallClass::Review))?;
+            let summary = format!("review of work run {} found no available reviewer backend; {reason}", run.id);
             adapter.report_failure_to_parent(session_id, run, "blocked", Some(&summary)).await?;
           }
         }
@@ -1977,6 +1974,7 @@ mod tests {
       .insert(BackendPool::new(
         startup.require::<BackendAvailability>().expect("the owner is in the startup state"),
         Arc::clone(&registry),
+        Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
       ))
       .expect("the pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });

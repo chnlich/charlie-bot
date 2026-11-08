@@ -41,7 +41,7 @@ use axum::http::StatusCode;
 use charliebot_agents::backend_pool;
 use charliebot_compat::file_urls;
 use charliebot_core::RepoRoot;
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{CallClass, CallTarget, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_core::paths;
 use charliebot_core::str_methods;
@@ -1472,8 +1472,7 @@ pub struct Summon<'a> {
 }
 
 /// Route a new thread session: the router answers from the whole thread, and an answer that is not routed, or a router
-/// failure, leaves the session on the default backend. With `backends.auto` configured that default is `auto`; without
-/// it the session keeps the empty backend that resolves to `backends.options[0]`. The route the session keeps says why
+/// failure, leaves the session on the unrouted backend (`unrouted_backend`). The route the session keeps says why
 /// (`thread not routed`, `router failed: …`).
 async fn route_thread_session(
   adapter: &Arc<dyn ThreadAdapter>,
@@ -1482,9 +1481,8 @@ async fn route_thread_session(
   origin: &Value,
 ) -> Result<(Option<String>, Option<backend_pool::BackendRoute>), ThreadReplyError> {
   let cfg = features.config.get().map_err(ThreadReplyError::failure)?;
-  let unrouted_backend = || cfg.backends.auto.as_ref().map(|_| charliebot_core::config::AUTO_BACKEND_ID.to_string());
   if cfg.backends.routing.is_none() {
-    return Ok((unrouted_backend(), None));
+    return Ok((unrouted_backend(&cfg), None));
   }
 
   let messages = adapter.read_eligible(origin, &cfg).await.map_err(ThreadReplyError::failure)?;
@@ -1496,7 +1494,13 @@ async fn route_thread_session(
     })
     .collect::<Vec<_>>()
     .join("\n");
-  let candidates = cfg.backends.options.iter().map(|option| option.id.clone()).collect::<Vec<_>>();
+  let candidates = cfg
+    .backends
+    .options
+    .iter()
+    .map(|option| option.id.clone())
+    .chain(cfg.backends.pools.iter().map(|pool| pool.id.clone()))
+    .collect::<Vec<_>>();
   let pool = backend_pool::backend_pool(features).map_err(ThreadReplyError::failure)?;
   let decided = match pool.route(&cfg, "thread", &text, &candidates, None).await {
     Ok(answer) => pool.decide(&cfg, "thread", answer).map_err(ThreadReplyError::failure)?,
@@ -1506,25 +1510,22 @@ async fn route_thread_session(
     }
   };
   let backend = match decided.target {
-    backend_pool::RouteTarget::NotRouted => unrouted_backend(),
-    backend_pool::RouteTarget::Backend(option) => Some(option.id),
-    backend_pool::RouteTarget::Pool => {
-      let Some(option) = pool.select(&cfg, "thread", &[]).map_err(ThreadReplyError::failure)? else {
-        let message = format!("no backend is available for the thread session: {}", pool.recovery_report(&cfg));
-        let address = adapter.address_of(origin);
-        adapter
-          .post(
-            &address,
-            &message,
-            &format!("{}-routerror:{}#1", adapter.platform().name, charliebot_store::control_events::new_request_id()),
-          )
-          .await?;
-        return Err(ThreadReplyError::failure(message));
-      };
-      Some(option.id)
-    }
+    backend_pool::RouteTarget::NotRouted => unrouted_backend(&cfg),
+    backend_pool::RouteTarget::Backend(backend_id) => Some(backend_id),
   };
   Ok((backend, Some(decided.route)))
+}
+
+/// The backend a thread session takes when the router does not route it: the `backends.calls.thread` target, else the
+/// `backends.calls.new_session` target, else `None`, which resolves to the first option when the session runs.
+fn unrouted_backend(cfg: &CharlieBotConfig) -> Option<String> {
+  match cfg.backends.calls.get(CallClass::Thread).or_else(|| cfg.backends.calls.get(CallClass::NewSession)) {
+    None => None,
+    Some(CallTarget::Backend(backend_id)) => Some(backend_id.clone()),
+    Some(CallTarget::Session) => {
+      unreachable!("the config loader refuses session on backends.calls.thread and new_session")
+    }
+  }
 }
 
 /// Accept one summon: resolve the session, persist the summon, fire the round, and light the ack (`accept_summon`).

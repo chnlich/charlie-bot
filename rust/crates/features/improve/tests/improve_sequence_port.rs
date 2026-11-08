@@ -25,7 +25,11 @@ use futures_util::future::BoxFuture;
 /// A pool whose availability owner reads the empty state of a fresh home; these sites never record.
 fn test_pool() -> BackendPool {
   let home = tempfile::tempdir().unwrap();
-  BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap()), Arc::new(Registry::new()))
+  BackendPool::new(
+    Arc::new(BackendAvailability::load(home.path()).unwrap()),
+    Arc::new(Registry::new()),
+    Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
+  )
 }
 use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
@@ -434,8 +438,8 @@ async fn a_launch_quota_failure_cools_the_only_member_with_its_reset() -> anyhow
   assert_eq!(harness.final_reports().len(), 1);
   assert_eq!(harness.wake_count(), 1);
   assert!(harness.final_reports()[0]["summary"].as_str().unwrap().contains("launch refused with quota exhausted:"));
-  let pool = backend_pool::backend_pool(&harness.stack.features)?;
-  assert!(pool.recovery_report(&harness.stack.cfg).contains("quota cooling until"));
+  let availability = charliebot_agents::backend_availability::backend_availability(&harness.stack.features)?;
+  assert!(availability.out_until("quota").is_some(), "the spent member is recorded out");
   Ok(())
 }
 
@@ -461,10 +465,9 @@ async fn a_cooling_pool_member_is_followed_by_the_next_member() -> anyhow::Resul
     harness.iteration_reports().iter().map(|event| event["outcome"].as_str()).collect::<Vec<_>>(),
     [Some("failed"), Some("success")]
   );
-  let pool = backend_pool::backend_pool(&harness.stack.features)?;
-  let recovery = pool.recovery_report(&harness.stack.cfg);
-  assert!(recovery.contains("quota cooling until"));
-  assert!(recovery.contains("next not cooling"));
+  let availability = charliebot_agents::backend_availability::backend_availability(&harness.stack.features)?;
+  assert!(availability.out_until("quota").is_some(), "the spent member is recorded out");
+  assert!(availability.out_until("next").is_none(), "the member that answered is not recorded out");
   assert_eq!(
     command::require_loop_state(&harness.stack.cfg, &harness.manager.id, harness.state.loop_id)?.status,
     command::LoopStatus::Blocked
@@ -486,8 +489,8 @@ async fn a_textual_quota_error_blocks_when_the_next_selection_finds_no_member() 
   assert_eq!(state.status, command::LoopStatus::Failed);
   let final_report = harness.final_reports().remove(0);
   let summary = final_report["summary"].as_str().expect("final report summary is text");
-  assert!(summary.contains("no backends.pool member is available"), "final report summary: {summary}");
-  assert!(summary.contains("fake cooling until"), "final report summary: {summary}");
+  assert!(summary.contains("pool 'pool' has no selectable member:"), "final report summary: {summary}");
+  assert!(summary.contains("- fake: quota_error, recovers at"), "final report summary: {summary}");
   Ok(())
 }
 

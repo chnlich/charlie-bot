@@ -123,7 +123,7 @@ scheduled handler	features.disk_sweep	disk_sweep
 scheduled handler	features.run_log_compaction	run_log_compaction
 scheduled handler	features.usage	usage_ledger
 scheduled handler	features.usage	cool_storage
-metadata_slots	-	auto_backend:Session
+metadata_slots	-	model_pool:Session
 metadata_slots	-	backend_pool:Session
 metadata_slots	-	cron:Session
 metadata_slots	-	slack:Session
@@ -132,7 +132,7 @@ metadata_slots	-	feishu:Session
 metadata_slots	-	web_reply:Session
 metadata_slots	-	claude_code:Session
 metadata_slots	-	claude_code:Thread
-metadata_slot_validators	-	auto_backend:Session
+metadata_slot_validators	-	model_pool:Session
 metadata_slot_validators	-	backend_pool:Session
 metadata_slot_validators	-	cron:Session
 metadata_slot_validators	-	slack:Session

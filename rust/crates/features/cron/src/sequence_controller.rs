@@ -28,7 +28,9 @@ use tokio::sync::watch;
 use crate::boundary::BoundaryState;
 use crate::config::{ScheduledTaskConfig, StepConfig};
 use crate::firing::{firing_ref, parse_firing_ref};
-use crate::steps::{distinct_backend_conflict, resolved_backend, step_runs_on_auto};
+use crate::steps::{
+  StepMember, distinct_backend_conflict, distinct_exclusion, option_model, select_step_member, step_backend_id,
+};
 use crate::{loader, scheduler};
 
 /// A set of task configs bound to the same manager node.
@@ -299,7 +301,10 @@ impl SequenceController for CronSequenceController {
   }
 
   fn redrive<'a>(&'a self, session_id: &'a str, tree: &'a dyn SequenceTree) -> BoxFuture<'a, anyhow::Result<()>> {
-    Box::pin(async move { redrive_firing(session_id, tree).await.map(|_| ()) })
+    Box::pin(async move {
+      let features = feature_context(&self.registry).await?;
+      redrive_firing(&features, session_id, tree).await.map(|_| ())
+    })
   }
 
   fn launch_context<'a>(
@@ -324,9 +329,9 @@ impl SequenceController for CronSequenceController {
         .as_ref()
         .filter(|sequence| sequence.kind == "cron_steps")
         .map(|sequence| sequence.owner_ref.clone());
+      let features = feature_context(&self.registry).await?;
       let result = match quota {
         Some(quota) => {
-          let features = feature_context(&self.registry).await?;
           let switched = match steps_task_of(run, tree) {
             Ok(Some(task)) => switch_failed_step(&features, session_id, run, quota, tree, &task).await,
             Ok(None) => Ok(None),
@@ -334,11 +339,11 @@ impl SequenceController for CronSequenceController {
           };
           match switched {
             Ok(Some(finished)) => Ok(finished),
-            Ok(None) => redrive_firing(session_id, tree).await,
+            Ok(None) => redrive_firing(&features, session_id, tree).await,
             Err(error) => Err(error),
           }
         }
-        None => redrive_firing(session_id, tree).await,
+        None => redrive_firing(&features, session_id, tree).await,
       };
       if let Some(owner_ref) = owner_ref {
         let state = match &result {
@@ -363,7 +368,8 @@ impl SequenceController for CronSequenceController {
       if outcome.is_none() && run.pid.is_some() {
         return Ok(false);
       }
-      redrive_firing(session_id, tree).await?;
+      let features = feature_context(&self.registry).await?;
+      redrive_firing(&features, session_id, tree).await?;
       Ok(true)
     })
   }
@@ -470,9 +476,10 @@ fn steps_task_of(run: &RunRecord, tree: &dyn SequenceTree) -> anyhow::Result<Opt
   Ok(task.steps.as_ref().is_some_and(|steps| !steps.is_empty()).then_some(task))
 }
 
-/// The switch of a failed step to the next member, when its run ended on a spent quota and the step runs on `auto`. The
-/// member is recorded out, the next member is selected, and the step reruns on it as a retry run. Returns whether the
-/// chain has finished, or None when the step is not on Auto and the chain takes its normal path.
+/// The switch of a failed step to the next member of its pool, when its run ended on a spent quota and the step runs on
+/// a `backends.pools` id. The member is recorded out, the next member is selected, and the step reruns on it as a retry
+/// run. Returns whether the chain has finished, or None when the step is not on a pool and the chain takes its normal
+/// path.
 async fn switch_failed_step(
   features: &FeatureContext,
   leaf_id: &str,
@@ -485,7 +492,8 @@ async fn switch_failed_step(
   let Some((_, firing)) = parse_firing_ref(&sequence.owner_ref) else { return Ok(None) };
   let Some(steps) = task.steps.as_ref().filter(|steps| !steps.is_empty()) else { return Ok(None) };
   let position = sequence.position as usize;
-  if !step_runs_on_auto(task, &steps[position]) {
+  let pool_id = step_backend_id(task, tree.config(), steps[position].backend.as_deref())?;
+  if tree.config().backends.pool(&pool_id).is_none() {
     return Ok(None);
   }
   let leaf = tree
@@ -494,7 +502,7 @@ async fn switch_failed_step(
     .ok_or_else(|| anyhow::anyhow!("cron step leaf {leaf_id} vanished during its quota switch"))?;
   let parent_id =
     leaf.task_parent_id.as_deref().ok_or_else(|| anyhow::anyhow!("cron step leaf {leaf_id} names no bound session"))?;
-  let auto_session = tree
+  let bound = tree
     .load_meta(parent_id)
     .await?
     .ok_or_else(|| anyhow::anyhow!("cron step leaf {leaf_id}'s bound session {parent_id} vanished"))?;
@@ -503,7 +511,7 @@ async fn switch_failed_step(
     .as_deref()
     .filter(|backend| !backend.is_empty())
     .ok_or_else(|| anyhow::anyhow!("step run {} records no backend; refusing to substitute one", run.id))?;
-  match auto_switch::switch_member(features, &auto_session, &leaf, HandoffSource::WorkerRun { run }, from, quota)
+  match auto_switch::switch_member(features, &pool_id, &bound, &leaf, HandoffSource::WorkerRun { run }, from, quota)
     .await?
   {
     AutoSwitch::Exhausted(message) => {
@@ -511,9 +519,21 @@ async fn switch_failed_step(
       Ok(Some(true))
     }
     AutoSwitch::Moved { member } => {
-      let (backend, model) = resolved_backend(task, tree.config(), Some(&member), None)?;
-      let retry =
-        register_step_run(tree, leaf_id, task, &firing, position, &backend, model.as_deref(), Some(run)).await?;
+      let option = tree
+        .config()
+        .get_backend_option(&member)
+        .ok_or_else(|| anyhow::anyhow!("pool member '{member}' is not a backends.options id"))?;
+      let retry = register_step_run(
+        tree,
+        leaf_id,
+        task,
+        &firing,
+        position,
+        &option.id,
+        option_model(option).as_deref(),
+        Some(run),
+      )
+      .await?;
       let by_position = current_step_runs(tree, leaf_id, task, &firing)?;
       let prompt = step_prompt(steps, position, &by_position, tree)?;
       schedule_settle(tree.executor(), leaf_id.to_string(), retry.id, prompt);
@@ -522,7 +542,7 @@ async fn switch_failed_step(
   }
 }
 
-async fn redrive_firing(leaf_id: &str, tree: &dyn SequenceTree) -> anyhow::Result<bool> {
+async fn redrive_firing(features: &FeatureContext, leaf_id: &str, tree: &dyn SequenceTree) -> anyhow::Result<bool> {
   let records = tree.list_run_records_sync(leaf_id)?;
   let Some(sequence) =
     records.iter().filter_map(|run| run.sequence_ref.as_ref()).find(|sequence| sequence.kind == "cron_steps")
@@ -540,10 +560,11 @@ async fn redrive_firing(leaf_id: &str, tree: &dyn SequenceTree) -> anyhow::Resul
   let Some(leaf_meta) = tree.load_meta(leaf_id).await? else { return Ok(true) };
   let Some(parent_id) = leaf_meta.task_parent_id.as_deref() else { return Ok(true) };
   let Some(parent) = tree.load_meta(parent_id).await? else { return Ok(true) };
-  reconcile_bound_firing(&task, &parent, tree, &firing, leaf_id).await
+  reconcile_bound_firing(features, &task, &parent, tree, &firing, leaf_id).await
 }
 
 async fn reconcile_bound_firing(
+  features: &FeatureContext,
   task: &ScheduledTaskConfig,
   parent: &SessionMetadata,
   tree: &dyn SequenceTree,
@@ -601,8 +622,21 @@ async fn reconcile_bound_firing(
         .map(|()| true);
     }
     let position = last_position + 1;
-    let (backend, model) = resolved_backend(task, tree.config(), steps[position].backend.as_deref(), Some(parent))?;
-    let next = register_step_run(tree, leaf_id, task, firing, position, &backend, model.as_deref(), None).await?;
+    let backend = step_backend_id(task, tree.config(), steps[position].backend.as_deref())?;
+    let exclude = distinct_exclusion(steps, position, &by_position);
+    let option = match select_step_member(features, tree.config(), &backend, &exclude)? {
+      StepMember::Selected(option) => option,
+      StepMember::Exhausted(message) => {
+        let summary =
+          format!("Scheduled task '{}' stopped before launching step '{}': {message}", task.name, steps[position].name);
+        return deliver_boundary_report(tree, leaf_id, parent.id.as_str(), task, firing, "failed", &summary)
+          .await
+          .map(|()| true);
+      }
+    };
+    let next =
+      register_step_run(tree, leaf_id, task, firing, position, &option.id, option_model(&option).as_deref(), None)
+        .await?;
     let prompt = step_prompt(steps, position, &by_position, tree)?;
     schedule_settle(tree.executor(), leaf_id.to_string(), next.id, prompt);
     return Ok(false);
@@ -860,7 +894,6 @@ fn write_task_key(home: &Path, name: &str, key: &str, value: Value) -> anyhow::R
 mod tests {
   use std::sync::Arc;
 
-  use charliebot_core::config::AUTO_BACKEND_ID;
   use charliebot_core::event_types;
   use charliebot_registry::sequence::{QuotaFailure, SequenceBinding};
   use charliebot_store::metadata::{SCHEDULE_TASK, TaskApprover, TaskProfile, TaskSpec, UtcDateTime};
@@ -872,7 +905,7 @@ mod tests {
   use super::{CronBinding, last_saturday_1am_utc, register_step_run, row_schedule_fields, switch_failed_step};
   use crate::boundary::BoundaryState;
   use crate::config::{ScheduledTaskConfig, StepConfig, TaskMode};
-  use crate::test_support::{auto_manager, feature_context, feature_context_with_auto, manager};
+  use crate::test_support::{AUTO_POOL_ID, auto_manager, feature_context, feature_context_with_auto, manager};
 
   #[tokio::test]
   async fn boundary_receiver_wakes_for_progress_and_terminal_notice() {
@@ -1080,7 +1113,7 @@ mod tests {
       cron: "0 3 * * *".to_string(),
       prompt_file: None,
       repo: None,
-      backend: Some(AUTO_BACKEND_ID.to_string()),
+      backend: Some(AUTO_POOL_ID.to_string()),
       timezone: "America/Los_Angeles".to_string(),
       enabled: true,
       project: None,
@@ -1122,15 +1155,18 @@ mod tests {
     assert_eq!(switches.len(), 1, "one switch record in the Auto parent's chat: {switches:?}");
     assert_eq!(switches[0]["from"], "member-a");
     assert_eq!(switches[0]["to"], "member-b");
-    assert_eq!(switches[0]["set"], event_types::QUOTA_SET_AUTO);
+    assert_eq!(switches[0]["set"], event_types::QUOTA_SET_POOL);
     let availability = charliebot_agents::backend_availability::backend_availability(&features).unwrap();
     assert!(availability.out_until("member-a").is_some(), "the spent member is recorded out");
     let parent_meta = features.store.get_session(&parent.id).await.unwrap().unwrap();
-    assert_eq!(parent_meta.extra(charliebot_agents::model_pool::AUTO_MEMBER_FIELD), Some(&json!("member-b")));
-    // A later step of the chain resolves to the member the switch selected.
+    assert_eq!(parent_meta.extra(charliebot_agents::model_pool::POOL_MEMBER_FIELD), Some(&json!("member-b")));
+    // A later step of the chain selects from its pool, which the switch left on the next member.
     let cfg = features.config.get().unwrap();
-    let (later_step_backend, _) = crate::steps::resolved_backend(&task, &cfg, None, Some(&parent_meta)).unwrap();
-    assert_eq!(later_step_backend, "member-b", "a later step runs on the parent's current member");
+    let later_step = match crate::steps::select_step_member(&features, &cfg, AUTO_POOL_ID, &[]).unwrap() {
+      crate::steps::StepMember::Selected(option) => option.id,
+      crate::steps::StepMember::Exhausted(message) => panic!("{message}"),
+    };
+    assert_eq!(later_step, "member-b", "a later step's pool selects the member the switch left");
 
     // The retry launches in the background; wait for its terminal fact so the run does not outlive the test.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);

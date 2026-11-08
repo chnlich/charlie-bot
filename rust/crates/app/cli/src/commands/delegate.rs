@@ -61,12 +61,11 @@ Backend selection (--backend):
 
   Pass --backend only when the user or the line's goal names a backend. Omitted, the router that
   backends.routing configures chooses the backend of implement, quick-edit, script-run, and verify;
-  when routing is unset or the router gives no answer, implement, quick-edit, and script-run take
-  the next backends.pool member that is not cooling, or inherit the session backend when the pool
-  is empty, and verify takes the next member that differs from the session backend. A worker out of
-  quota continues on the next member in the same worktree. An explicit --backend replaces that
-  routing for every task type, verify included, and is never failed over. The resolved backend runs
-  every work Run of the worker session.
+  when routing is unset or the router gives no answer, each task type runs on its backends.calls key.
+  An unset key runs on the session backend; a pool key takes the next member that is not cooling, and
+  verify skips the session backend. A worker out of quota continues on the next member in the same
+  worktree. An explicit --backend replaces that routing for every task type, verify included, and is
+  never failed over. The resolved backend runs every work Run of the worker session.
 "#;
 
 const LONG_OPTIONS: [&str; 8] =

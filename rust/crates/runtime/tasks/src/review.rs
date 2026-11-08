@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use charliebot_agents::backend_pool::BackendPool;
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{CallClass, CallTarget, CharlieBotConfig};
 use charliebot_core::event_types::MESSAGE_CONTENT_POINTER;
 use charliebot_store::run_records::visit_events_from_end;
 use serde_json::Value;
@@ -89,29 +89,53 @@ pub fn worker_error_from_events_log(events: &[Value]) -> Option<String> {
   })
 }
 
-/// Select a reviewer, verify checker, or cold reader from the shared backend pool.
+/// Select the reviewer, verify checker, or cold reader that the call class `class` runs on. `backends.calls` names its
+/// target: a pool selects a member the worker's backend and the used or tried backends do not hold; a model runs as
+/// written; `session`, or no key, runs on the worker's own backend. A pool with no selectable member falls back to the
+/// worker's backend unless that backend was already tried, which ends the selection with `None`.
 pub fn select_reviewer_backend(
   cfg: &CharlieBotConfig,
   pool: &BackendPool,
-  caller: &str,
+  class: CallClass,
   worker_backend: &str,
   worker_model: Option<&str>,
   tried_backends: &[String],
   used_backends: &HashSet<String>,
 ) -> anyhow::Result<Option<ReviewerBackendSelection>> {
+  let caller = class.key();
+  let worker_fallback = || {
+    let mut tried = tried_backends.to_vec();
+    tried.push(worker_backend.to_string());
+    Some((worker_backend.to_string(), worker_model.map(str::to_string), tried))
+  };
   let mut excluded = vec![worker_backend.to_string()];
   excluded.extend(used_backends.iter().cloned());
   excluded.extend(tried_backends.iter().cloned());
-  if let Some(option) = pool.select(cfg, caller, &excluded)? {
-    let model = option.required_model("backends.pool entry").map_err(anyhow::Error::msg)?;
-    let mut tried = tried_backends.to_vec();
-    tried.push(option.id.clone());
-    return Ok(Some((option.id, Some(model), tried)));
-  }
-  if cfg.backends.pool.is_empty() {
-    let mut tried = tried_backends.to_vec();
-    tried.push(worker_backend.to_string());
-    return Ok(Some((worker_backend.to_string(), worker_model.map(str::to_string), tried)));
+  match cfg.backends.calls.get(class) {
+    None | Some(CallTarget::Session) => return Ok(worker_fallback()),
+    Some(CallTarget::Backend(target)) if cfg.backends.pool(target).is_some() => {
+      if let Some(option) = pool.select(cfg, caller, target, &excluded)? {
+        let model = option.required_model("pool member").map_err(anyhow::Error::msg)?;
+        let mut tried = tried_backends.to_vec();
+        tried.push(option.id.clone());
+        return Ok(Some((option.id, Some(model), tried)));
+      }
+    }
+    Some(CallTarget::Backend(target)) => {
+      if class == CallClass::Verify && target == worker_backend {
+        anyhow::bail!(
+          "backends.calls.verify names '{target}', the backend of the session that starts the verify; name another \
+           model or a pool"
+        );
+      }
+      let option = cfg.get_backend_option(target).ok_or_else(|| {
+        anyhow::anyhow!("backends.calls.{caller} names '{target}', which is not a backends.options id")
+      })?;
+      let model = option.required_model("calls target").map_err(anyhow::Error::msg)?;
+      let mut tried = tried_backends.to_vec();
+      tried.push(option.id.clone());
+      return Ok(Some((option.id.clone(), Some(model), tried)));
+    }
   }
   if tried_backends.iter().any(|backend| backend == worker_backend) || used_backends.contains(worker_backend) {
     tracing::warn!(target: "charliebot_tasks", caller, tried = ?tried_backends, "reviewer_all_backends_exhausted");
@@ -124,9 +148,7 @@ pub fn select_reviewer_backend(
     tried = ?tried_backends,
     "reviewer_fallback_to_worker_backend"
   );
-  let mut tried = tried_backends.to_vec();
-  tried.push(worker_backend.to_string());
-  Ok(Some((worker_backend.to_string(), worker_model.map(str::to_string), tried)))
+  Ok(worker_fallback())
 }
 
 /// Return the newest worker summary directly from the run's events log, parsing only result and assistant events.

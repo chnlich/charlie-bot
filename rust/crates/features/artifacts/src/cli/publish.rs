@@ -290,6 +290,7 @@ mod tests {
       pool: Arc::new(BackendPool::new(
         Arc::new(charliebot_agents::backend_availability::BackendAvailability::load(home).unwrap()),
         Arc::clone(&registry),
+        Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
       )),
     }
   }

@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use charliebot_core::config::{AUTO_BACKEND_ID, CharlieBotConfig};
+use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::SequenceExecutor;
@@ -340,25 +340,21 @@ impl CronScheduler {
     let adapter = self.features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>()?;
     let executor: Arc<dyn SequenceExecutor> = adapter.clone();
     let configured_backend = effective_backend(&task, &cfg)?;
-    let (backend, backend_from_auto) = if configured_backend == AUTO_BACKEND_ID {
-      // An Auto fire runs on the member the bound session's turn start chose. A set with no selectable member ends the
-      // fire here, with the error posted to the bound session.
-      match adapter.auto_fire_member(&session.id).await? {
-        Some(member) => (member, true),
-        None => {
-          self.record_bound_fire(&session, &task, now).await?;
-          return Ok(TaskRunResult { session_id: session.id, thread_id: None });
-        }
+    // A pool fire selects its member now, and the fire's child runs on that member. A pool with no selectable member
+    // ends the fire here, with the error posted to the bound session.
+    let backend_from_pool = cfg.backends.pool(&configured_backend).is_some();
+    let option = match steps::select_step_member(&self.features, &cfg, &configured_backend, &[])? {
+      steps::StepMember::Selected(option) => option,
+      steps::StepMember::Exhausted(message) => {
+        self.post_fire_error(&session, &message).await?;
+        self.record_bound_fire(&session, &task, now).await?;
+        return Ok(TaskRunResult { session_id: session.id, thread_id: None });
       }
-    } else {
-      (configured_backend, false)
     };
-    let option = cfg
-      .get_backend_option(&backend)
-      .ok_or_else(|| anyhow::anyhow!("scheduled task backend '{backend}' is not configured"))?;
-    let model = (!option.model.is_empty()).then(|| option.model.clone());
+    let backend = option.id.clone();
+    let model = steps::option_model(&option);
     let (leaf, run, prompt, steps) =
-      self.register_fire_work(&task, &session, &firing, &backend, model.as_deref(), backend_from_auto, &cfg).await?;
+      self.register_fire_work(&task, &session, &firing, &backend, model.as_deref(), backend_from_pool, &cfg).await?;
     self.record_bound_fire(&session, &task, now).await?;
     // A run without steps takes the work context, whose task text is the leaf goal (the cron prompt) and which
     // prepares a worktree from the leaf's repo. A launch text would route it to the step context instead, which
@@ -392,6 +388,23 @@ impl CronScheduler {
     Ok(TaskRunResult { session_id: session.id, thread_id: None })
   }
 
+  /// Post a fire's refusal to the bound session as an error that names the quota, so the user reads why nothing ran.
+  async fn post_fire_error(&self, session: &SessionMetadata, message: &str) -> anyhow::Result<()> {
+    self
+      .features
+      .store
+      .persist_and_broadcast(
+        &session.id,
+        json!({
+          "type": event_types::ASSISTANT_ERROR,
+          "content": message,
+          event_types::QUOTA_EXHAUSTED: true,
+        }),
+      )
+      .await?;
+    Ok(())
+  }
+
   #[allow(clippy::too_many_arguments)]
   async fn register_fire_work(
     &self,
@@ -400,7 +413,7 @@ impl CronScheduler {
     firing: &str,
     backend: &str,
     model: Option<&str>,
-    backend_from_auto: bool,
+    backend_from_pool: bool,
     _cfg: &CharlieBotConfig,
   ) -> anyhow::Result<(SessionMetadata, RunRecord, String, bool)> {
     if parent.profile != TaskProfile::Manager {
@@ -456,7 +469,7 @@ impl CronScheduler {
         Map::new(),
       )
       .await?;
-    if backend_from_auto {
+    if backend_from_pool {
       let guard = self.features.store.control_lock().await;
       self
         .features
@@ -933,7 +946,6 @@ fn parse_cron_value(value: &str, names: &[(&str, u32)]) -> anyhow::Result<u32> {
 
 #[cfg(test)]
 mod tests {
-  use charliebot_core::config::AUTO_BACKEND_ID;
   use charliebot_core::event_types;
   use charliebot_registry::context::FeatureContext;
   use charliebot_store::compact::CompactValue;
@@ -953,7 +965,7 @@ mod tests {
   use super::{CronExpression, CronScheduler, isoformat_text};
   use crate::config::{ScheduledTaskConfig, StepConfig, TaskMode};
   use crate::test_support::{
-    FakeGit, GIT_PROGRAM_LOCK, auto_manager, child_manager, feature_context, feature_context_with_auto,
+    AUTO_POOL_ID, FakeGit, GIT_PROGRAM_LOCK, auto_manager, child_manager, feature_context, feature_context_with_auto,
     feature_context_with_host_backends, host_probe_count, manager, set_host_login, write_prompted_task, write_task,
   };
   use charliebot_registry::registry::HostLogin;
@@ -1806,10 +1818,11 @@ mod tests {
     assert!(cleanup_calls.starts_with(&calls[launch_calls.len()..]), "{calls:?}");
   }
 
-  /// Test ①: an Auto fire runs on the bound session's current member, and the child records that Auto chose it.
+  /// Test ①: a fire on a pool runs on the member the pool selects for the child, not the member the bound session
+  /// recorded, and the child records that it came from a pool.
   #[tokio::test]
   #[ignore = "integration"]
-  async fn an_auto_fire_runs_on_the_bound_sessions_current_member() {
+  async fn a_pool_fire_runs_on_the_member_the_pool_selects() {
     let (_home, features) = feature_context_with_auto(&["member-a", "member-b"]);
     install_execution(&features).await;
     let node = auto_manager(&features, "synthetic-auto-fire-node", "member-b").await.unwrap();
@@ -1818,7 +1831,7 @@ mod tests {
       cron: "0 3 * * *".to_string(),
       prompt_file: None,
       repo: None,
-      backend: Some(AUTO_BACKEND_ID.to_string()),
+      backend: Some(AUTO_POOL_ID.to_string()),
       timezone: "America/Los_Angeles".to_string(),
       enabled: true,
       project: None,
@@ -1832,10 +1845,9 @@ mod tests {
 
     let (leaf_id, run) = fire_and_launch(&features, task, false).await;
 
-    assert_eq!(run.backend.as_deref(), Some("member-b"), "the fire runs on the session's current member");
+    assert_eq!(run.backend.as_deref(), Some("member-a"), "the priority pool picks its first selectable member");
     let leaf = features.store.get_session(&leaf_id).await.unwrap().unwrap();
     assert_eq!(leaf.extra(charliebot_agents::backend_pool::BACKEND_FROM_AUTO_FIELD), Some(&json!(true)));
-    assert_eq!(leaf.extra(charliebot_agents::backend_pool::BACKEND_FROM_POOL_FIELD), Some(&json!(false)));
   }
 
   /// Test ②: a cron child on an Auto member that runs out of quota retries on the next member as one retry run. The
@@ -1852,7 +1864,7 @@ mod tests {
       cron: "0 3 * * *".to_string(),
       prompt_file: None,
       repo: None,
-      backend: Some(AUTO_BACKEND_ID.to_string()),
+      backend: Some(AUTO_POOL_ID.to_string()),
       timezone: "America/Los_Angeles".to_string(),
       enabled: true,
       project: None,
@@ -1909,7 +1921,7 @@ mod tests {
     assert_eq!(switches.len(), 1, "one switch record in the bound session's chat: {switches:?}");
     assert_eq!(switches[0]["from"], "member-a");
     assert_eq!(switches[0]["to"], "member-b");
-    assert_eq!(switches[0]["set"], event_types::QUOTA_SET_AUTO);
+    assert_eq!(switches[0]["set"], event_types::QUOTA_SET_POOL);
     assert_eq!(switches[0]["summary"], charliebot_tasks::handoff::SUMMARY_OK);
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);

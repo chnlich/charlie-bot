@@ -1979,7 +1979,7 @@ mod tests {
         "to": "strong",
         "recovers_at": "2030-01-02T03:04+00:00",
         "reason": "quota_error",
-        "set": "auto",
+        "set": "pool",
         "summary": "unavailable: the run's events log is missing",
       }))
       .unwrap();

@@ -13,7 +13,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::{responses, validation};
-use charliebot_core::config::{AUTO_BACKEND_ID, BackendOption, CharlieBotConfig};
+use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::metadata_slot::MetadataFile;
 use charliebot_core::{event_types, text_repr};
 use charliebot_registry::caller::{self, CallerIdentity};
@@ -33,7 +33,7 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
 use crate::detail::response_metadata;
-use crate::route_support::{auto_switchable, store_error};
+use crate::route_support::store_error;
 
 const LOG_TARGET: &str = "charliebot_session_api";
 const PROFILE_CHOICES: &[&str] = &["manager", "worker"];
@@ -373,8 +373,9 @@ async fn switch(
     .binding_for(session_id)
     .map_err(|error| responses::internal_error("RuntimeError", error.to_string()))?;
   let dedicated = binding.as_ref().is_some_and(|binding| binding.dedicated_backend());
-  let lock_refuses = if target == AUTO_BACKEND_ID {
-    !auto_switchable(&cfg, dedicated)
+  // A pool has no continuation domain, so a dedicated lock refuses it as it refuses any other domain-less target.
+  let lock_refuses = if cfg.backends.pool(&target).is_some() {
+    dedicated
   } else {
     dedicated && !same_continuation_domain(&effective, &target, &cfg, &features.registry).map_err(store_error)?
   };
@@ -498,18 +499,20 @@ pub(crate) fn config(features: &FeatureContext) -> Result<Arc<CharlieBotConfig>,
   features.config.get().map_err(|error| responses::internal_error("RuntimeError", error.to_string()))
 }
 
-/// The backend ids a session may take: every `backends.options` id, plus `auto` when `backends.auto` is configured.
+/// The backend ids a session may take: every `backends.options` id and every `backends.pools` id.
 fn valid_backend_ids(cfg: &CharlieBotConfig) -> Vec<&str> {
-  let mut ids = cfg.backends.options.iter().map(|option| option.id.as_str()).collect::<Vec<_>>();
-  if cfg.backends.auto.is_some() {
-    ids.push(AUTO_BACKEND_ID);
-  }
-  ids
+  cfg
+    .backends
+    .options
+    .iter()
+    .map(|option| option.id.as_str())
+    .chain(cfg.backends.pools.iter().map(|pool| pool.id.as_str()))
+    .collect()
 }
 
-/// `_default_backend_id`: the first configured option, else `claude`.
+/// The backend a session takes when its request names none (`BackendsConfig::new_session_backend`), else `claude`.
 pub(crate) fn default_backend_id(cfg: &CharlieBotConfig) -> String {
-  cfg.backends.options.first().map_or_else(|| "claude".to_string(), |option| option.id.clone())
+  cfg.backends.new_session_backend().unwrap_or_else(|| "claude".to_string())
 }
 
 /// `_resolve_requested_backend`: a configured id, a family-prefix alias (the first option of that type), or, when no

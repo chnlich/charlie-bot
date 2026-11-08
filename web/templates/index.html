@@ -42,9 +42,9 @@
       {% endfor %}
     };
     const BACKEND_COMPACT = {{ backend_compact|tojson }};
-    // The Auto set's label, and the member the active Auto session runs on; null without backends.auto.
-    const AUTO_BACKEND = {{ auto_backend|tojson }};
-    globalThis.ACTIVE_AUTO_MEMBER = {{ active_auto_member|tojson }};
+    // The backends.pools entries as {id, label}, and the member the active pool session runs on.
+    const BACKEND_POOLS = {{ backend_pools|tojson }};
+    globalThis.ACTIVE_POOL_MEMBER = {{ active_pool_member|tojson }};
     const DEFAULT_BACKEND_ID = {{ default_backend_id|tojson }};
     globalThis.ACTIVE_BACKEND_ID = {{ active_backend|tojson }};
     const AUTH_ENABLED = {{ auth_enabled|tojson }};
@@ -94,9 +94,10 @@
             {% for opt in backend_options %}
             <option value="{{ opt.id }}" {% if opt.id == active_backend %}selected{% endif %}>{{ opt.label }}</option>
             {% endfor %}
-            {% if auto_backend %}
-            <option value="{{ auto_backend.id }}" {% if auto_backend.id == active_backend %}selected{% endif %}>{{ auto_backend.label }}</option>
-            {% endif %}
+            {% for pool in backend_pools %}
+            <option value="{{ pool.id }}"
+              {% if pool.id == active_backend %}selected{% endif %}>{{ pool.label }}</option>
+            {% endfor %}
           </select>
           {% endif %}
         </div>

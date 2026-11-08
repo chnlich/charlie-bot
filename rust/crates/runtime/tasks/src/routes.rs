@@ -13,7 +13,7 @@ use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, Request
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 
-use charliebot_core::config::AUTO_BACKEND_ID;
+use charliebot_core::config::CallClass;
 use charliebot_core::event_types;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
@@ -372,8 +372,10 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
       .backends
       .options
       .iter()
-      .filter(|option| avoided != Some(option.id.as_str()))
-      .map(|option| option.id.clone())
+      .map(|option| option.id.as_str())
+      .chain(cfg.backends.pools.iter().map(|pool| pool.id.as_str()))
+      .filter(|id| avoided != Some(*id))
+      .map(str::to_string)
       .collect::<Vec<_>>();
     let role = task_type_name(request.task_type);
     let decided = match pool.route(&cfg, role, &request.description, &candidates, Some(&session_backend)).await {
@@ -394,22 +396,36 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     };
     route = Some(decided.route);
     match decided.target {
-      RouteTarget::Backend(option) => {
-        match crate::spawner_backends::resolve_backend_option(&cfg, &option.id, Some(&option.model)) {
-          Ok(option) => {
-            // The router's context class returns the delegating session's backend: on an Auto session that is its
-            // current member, which the child inherits.
-            let source = if session_meta.backend == AUTO_BACKEND_ID && option.id == session_backend {
-              BackendSource::AutoMember
-            } else {
-              BackendSource::Direct
+      // The router named a pool: the child keeps the pool id and runs on the member its first turn selects. A pool with
+      // no selectable member refuses the delegation here, as the pool's default path does.
+      RouteTarget::Backend(backend_id) if cfg.backends.pool(&backend_id).is_some() => {
+        match pool.peek(&cfg, &backend_id, &[]) {
+          Ok(Some(_)) => Some((backend_id, None, BackendSource::Pool)),
+          Ok(None) => {
+            let detail = match pool.exhausted_message(&cfg, &backend_id) {
+              Ok(detail) => detail,
+              Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
             };
-            Some((option.id, Some(option.model), source))
+            return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": detail }));
           }
-          Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
+          Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
         }
       }
-      RouteTarget::NotRouted | RouteTarget::Pool => None,
+      RouteTarget::Backend(backend_id) => {
+        let Some(option) = cfg.get_backend_option(&backend_id) else {
+          let detail = format!("routed backend '{backend_id}' is not in backends.options");
+          return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": detail }));
+        };
+        // The router's context class returns the delegating session's backend: on a pool session that is its current
+        // member, which the child inherits.
+        let source = if cfg.backends.pool(&session_meta.backend).is_some() && backend_id == session_backend {
+          BackendSource::PoolMember
+        } else {
+          BackendSource::Direct
+        };
+        Some((backend_id, Some(option.model.clone()), source))
+      }
+      RouteTarget::NotRouted => None,
     }
   } else {
     None
@@ -417,25 +433,16 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
   let resolved = if let Some(routed) = routed {
     Ok(Some(routed))
   } else if matches!(request.task_type, TaskType::Verify | TaskType::ColdRead) && named_backend.is_none() {
-    crate::spawner_backends::select_verify_backend(
-      &cfg,
-      &features.store,
-      &request.session_id,
-      task_type_name(request.task_type),
-      &[],
-      &pool,
-    )
-    .await
-    .map(|resolved| {
-      resolved.map(|(backend, model, _tried_backends)| {
-        let source = if cfg.backends.pool.iter().any(|member| member == &backend) {
-          BackendSource::Pool
-        } else {
-          BackendSource::Direct
-        };
-        (backend, model, source)
+    let class = if request.task_type == TaskType::Verify { CallClass::Verify } else { CallClass::ColdRead };
+    let pooled = crate::spawner_backends::class_pool_id(&cfg, class).is_some();
+    crate::spawner_backends::select_verify_backend(&cfg, &features.store, &request.session_id, class, &[], &pool)
+      .await
+      .map(|resolved| {
+        resolved.map(|(backend, model, _tried_backends)| {
+          let source = if pooled { BackendSource::Pool } else { BackendSource::Direct };
+          (backend, model, source)
+        })
       })
-    })
   } else {
     crate::spawner_backends::resolve_requested_subagent_backend_model(
       &cfg,
@@ -524,7 +531,7 @@ async fn delegate_task_tree(
       ),
       (
         charliebot_agents::backend_pool::BACKEND_FROM_AUTO_FIELD.to_string(),
-        json!(backend.source == BackendSource::AutoMember),
+        json!(backend.source == BackendSource::PoolMember),
       ),
     ]);
     if let Some(route) = backend.route.as_ref() {

@@ -9,7 +9,7 @@
 //! and their messages follow `load_config`.
 
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -49,7 +49,7 @@ pub const PROXY_URL_KEY: &str = "proxy_url";
 /// every request it sends. The option schemas import this name instead of each spelling it.
 pub const EXTRA_BODY_KEY: &str = "extra_body";
 
-/// Retired keys under `backends:`, replaced by `backends.pool`.
+/// Retired keys under `backends:`, replaced by `backends.pools`.
 const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default"];
 
 /// The top-level names `CharlieBotConfig` declares as fields.
@@ -65,7 +65,7 @@ const CORE_LEGACY_KEYS: &[(&str, &str)] = &[
   ("project_dirs", "paths.workspace_dirs"),
   ("worktree_dir", "paths.worktree_dir"),
   ("backend_options", "backends.options"),
-  ("model_preference", "backends.pool"),
+  ("model_preference", "backends.pools"),
   ("home_services", "ui.home_services"),
   ("telegram_chat_id", "telegram.chat_id"),
   ("credentials: telegram_bot_token", "telegram.bot_token"),
@@ -344,50 +344,155 @@ pub struct RoutingConfig {
   pub command: Vec<String>,
 }
 
-/// The session backend id that runs each turn on one member of the configured `backends.auto` set.
-pub const AUTO_BACKEND_ID: &str = "auto";
+/// The word a `backends.calls` key takes to mean the session that starts the call. It shares the id namespace with
+/// `backends.options` and `backends.pools`, so neither may use it as an id.
+pub const SESSION_CALL_TARGET: &str = "session";
 
-/// How one member of the `backends.auto` set is paid for.
+/// How a pool picks the member a call runs on: `rule: priority | rotate` in `backends.pools[]`.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum AutoBilling {
+pub enum PoolRule {
+  /// The best selectable member: subscriptions below the 90% line, then all subscriptions as a last resort; the
+  /// active sessions each member holds order each subscription tier, with configured order breaking ties.
+  /// Pay-as-you-go follows only when no subscription is selectable.
+  Priority,
+  /// The first selectable member after the pool's rotation position, which then moves past the chosen member.
+  Rotate,
+}
+
+/// How a priority pool's member is paid for: `billing: subscription | payg`.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PoolBilling {
   /// A subscription seat with quota windows.
   Subscription,
   /// Pay-as-you-go credit.
   Payg,
 }
 
-/// One `backends.auto.members[]` entry: the backend option id and how it is paid for.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct AutoMember {
+/// One member of a pool: a `backends.options` id, and for a priority pool how it is paid for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PoolMember {
   pub backend: String,
-  pub billing: AutoBilling,
+  /// `Some` on a priority pool's member; `None` on a rotate pool's member, whose order alone decides.
+  pub billing: Option<PoolBilling>,
 }
 
-/// `backends.auto:` section: the Auto set the `auto` session backend selects from, in config order.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct AutoConfig {
+/// One `backends.pools[]` entry: a named set of members and the rule that picks one of them for a call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PoolConfig {
+  pub id: String,
   pub label: String,
-  pub members: Vec<AutoMember>,
+  pub rule: PoolRule,
+  /// The members in config order. A rotate pool may name one option twice; the repeat takes a larger share of calls.
+  pub members: Vec<PoolMember>,
 }
 
-impl AutoConfig {
-  /// The member naming `backend_id`, or `None` when the set holds none.
-  pub fn member(&self, backend_id: &str) -> Option<&AutoMember> {
-    self.members.iter().find(|member| member.backend == backend_id)
+/// One internal call class that `backends.calls` configures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CallClass {
+  Worker,
+  Improve,
+  Verify,
+  Review,
+  ColdRead,
+  Probe,
+  Autoname,
+  Triage,
+  Thread,
+  NewSession,
+}
+
+impl CallClass {
+  /// Every call class, in the order the `backends.calls` table lists them.
+  pub const ALL: [CallClass; 10] = [
+    CallClass::Worker,
+    CallClass::Improve,
+    CallClass::Verify,
+    CallClass::Review,
+    CallClass::ColdRead,
+    CallClass::Probe,
+    CallClass::Autoname,
+    CallClass::Triage,
+    CallClass::Thread,
+    CallClass::NewSession,
+  ];
+
+  /// The `backends.calls` key that configures this class.
+  pub const fn key(self) -> &'static str {
+    match self {
+      CallClass::Worker => "worker",
+      CallClass::Improve => "improve",
+      CallClass::Verify => "verify",
+      CallClass::Review => "review",
+      CallClass::ColdRead => "cold_read",
+      CallClass::Probe => "probe",
+      CallClass::Autoname => "autoname",
+      CallClass::Triage => "triage",
+      CallClass::Thread => "thread",
+      CallClass::NewSession => "new_session",
+    }
+  }
+
+  /// Whether the key accepts `session`: the five classes a session starts and that therefore have one to name.
+  pub const fn allows_session(self) -> bool {
+    matches!(self, CallClass::Worker | CallClass::Improve | CallClass::Verify | CallClass::Review | CallClass::ColdRead)
   }
 }
 
-/// `backends:` section: the rotation pool, optional router command, model-switch options, and the Auto set.
+/// What one `backends.calls` key names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CallTarget {
+  /// `session`: the session that starts the call runs it on that session's own backend.
+  Session,
+  /// A `backends.options` id or a `backends.pools` id.
+  Backend(String),
+}
+
+/// `backends.calls:` table: the model or pool each internal call class runs on. A class without a key keeps the
+/// behavior that config without a pool for that class gives.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CallsConfig {
+  targets: HashMap<CallClass, CallTarget>,
+}
+
+impl CallsConfig {
+  /// The target the config names for `class`, or `None` when the key is unset.
+  pub fn get(&self, class: CallClass) -> Option<&CallTarget> {
+    self.targets.get(&class)
+  }
+}
+
+impl FromIterator<(CallClass, CallTarget)> for CallsConfig {
+  fn from_iter<I: IntoIterator<Item = (CallClass, CallTarget)>>(targets: I) -> Self {
+    Self { targets: targets.into_iter().collect() }
+  }
+}
+
+/// `backends:` section: the router command, the model options, the named pools, and the call targets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackendsConfig {
-  pub pool: Vec<String>,
   pub routing: Option<RoutingConfig>,
   pub options: Vec<BackendOption>,
-  /// The Auto set; `None` means no `auto` session backend is offered.
-  pub auto: Option<AutoConfig>,
+  pub pools: Vec<PoolConfig>,
+  pub calls: CallsConfig,
+}
+
+impl BackendsConfig {
+  /// The pool named `id`, or `None` when no `backends.pools` entry has that id.
+  pub fn pool(&self, id: &str) -> Option<&PoolConfig> {
+    self.pools.iter().find(|pool| pool.id == id)
+  }
+
+  /// The backend a session or scheduled task takes when its request names none: the `backends.calls.new_session`
+  /// target, else the first `backends.options` id, else `None` when neither is configured.
+  pub fn new_session_backend(&self) -> Option<String> {
+    match self.calls.get(CallClass::NewSession) {
+      Some(CallTarget::Backend(backend_id)) => Some(backend_id.clone()),
+      Some(CallTarget::Session) => unreachable!("the config loader refuses session on backends.calls.new_session"),
+      None => self.options.first().map(|option| option.id.clone()),
+    }
+  }
 }
 
 /// One `/home` page service card.
@@ -556,8 +661,8 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
       .collect();
     if !retired.is_empty() {
       return Err(ConfigError(format!(
-        "{config_path_text} still uses retired keys ({}); list the rotation members under backends.pool in rotation \
-         order instead (each id must name a backends.options entry)",
+        "{config_path_text} still uses retired keys ({}); list the rotation members as a rotate pool under \
+         backends.pools instead, in rotation order (each id must name a backends.options entry)",
         retired.join(", ")
       )));
     }
@@ -631,8 +736,8 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
   })
 }
 
-/// Refuse a config whose backend catalog is broken: no options, an id listed twice, or a pool entry
-/// naming no option. One error lists every violation (`require_backends`).
+/// Refuse a config with no `backends.options` entry: the server runs no backend without one. The id and reference
+/// rules (`check_pools`, `parse_calls`) run at load, so a config that loads names only options, pools and `session`.
 pub fn require_backends(cfg: &CharlieBotConfig) -> Result<(), ConfigError> {
   if cfg.backends.options.is_empty() {
     return Err(ConfigError(
@@ -640,26 +745,7 @@ pub fn require_backends(cfg: &CharlieBotConfig) -> Result<(), ConfigError> {
         .to_string(),
     ));
   }
-  let config_file = paths::display(&cfg.config_file());
-  let mut problems = Vec::new();
-  let mut ids = std::collections::HashSet::new();
-  for (index, option) in cfg.backends.options.iter().enumerate() {
-    if !ids.insert(option.id.as_str()) {
-      problems.push(format!("{config_file}: backends.options[{index}] repeats id '{}'", option.id));
-    }
-  }
-  for (index, backend_id) in cfg.backends.pool.iter().enumerate() {
-    if !ids.contains(backend_id.as_str()) {
-      problems.push(format!("{config_file}: backends.pool[{index}] names unknown backend '{backend_id}'"));
-    }
-  }
-  if problems.is_empty() {
-    return Ok(());
-  }
-  Err(ConfigError(format!(
-    "backend references must name a backends.options id (id rule: charliebot_core::config::BackendsConfig):\n{}",
-    problems.iter().map(|problem| format!("  {problem}")).collect::<Vec<_>>().join("\n")
-  )))
+  Ok(())
 }
 
 /// The YAML document at `path`; a missing or empty file reads as `Null`.
@@ -718,16 +804,25 @@ fn typed_section<T: serde::de::DeserializeOwned>(
 ) -> Result<T, ConfigError> {
   match value {
     None => Ok(absent()),
-    Some(value) => serde_path_to_error::deserialize(value).map_err(|error| {
-      let location = error.path().to_string();
-      let key = match location.as_str() {
-        "." => name.to_string(),
-        indexed if indexed.starts_with('[') => format!("{name}{indexed}"),
-        nested => format!("{name}.{nested}"),
-      };
-      ConfigError(format!("{config_path}: invalid config key {key}: {}", error.into_inner()))
-    }),
+    Some(value) => deserialize_at(config_path, name, value),
   }
+}
+
+/// Deserialize `value` as the config key `name`; a failure names the key and the path inside it.
+fn deserialize_at<T: serde::de::DeserializeOwned>(
+  config_path: &str,
+  name: &str,
+  value: Value,
+) -> Result<T, ConfigError> {
+  serde_path_to_error::deserialize(value).map_err(|error| {
+    let location = error.path().to_string();
+    let key = match location.as_str() {
+      "." => name.to_string(),
+      indexed if indexed.starts_with('[') => format!("{name}{indexed}"),
+      nested => format!("{name}.{nested}"),
+    };
+    ConfigError(format!("{config_path}: invalid config key {key}: {}", error.into_inner()))
+  })
 }
 
 fn parse_backends(
@@ -737,7 +832,12 @@ fn parse_backends(
 ) -> Result<BackendsConfig, ConfigError> {
   let mapping = match value {
     None => {
-      return Ok(BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new(), auto: None });
+      return Ok(BackendsConfig {
+        routing: None,
+        options: Vec::new(),
+        pools: Vec::new(),
+        calls: CallsConfig::default(),
+      });
     }
     Some(Value::Mapping(mapping)) => mapping,
     Some(other) => {
@@ -748,14 +848,13 @@ fn parse_backends(
     }
   };
   for key in mapping.keys() {
-    if !matches!(key.as_str(), Some("pool" | "options" | "routing" | "auto")) {
+    if !matches!(key.as_str(), Some("routing" | "options" | "pools" | "calls" | "pool" | "auto")) {
       let shown = key.as_str().map_or_else(|| yaml_key_repr(key), str::to_string);
       return Err(ConfigError(format!("{config_path}: invalid config key backends.{shown}: unknown field")));
     }
   }
   let routing: Option<RoutingConfig> =
     typed_section(config_path, "backends.routing", mapping.get("routing").cloned(), || None)?;
-  let pool: Vec<String> = typed_section(config_path, "backends.pool", mapping.get("pool").cloned(), Vec::new)?;
   let options = match mapping.get("options") {
     None => Vec::new(),
     Some(Value::Sequence(entries)) => entries
@@ -770,37 +869,265 @@ fn parse_backends(
       )));
     }
   };
-  let auto: Option<AutoConfig> = typed_section(config_path, "backends.auto", mapping.get("auto").cloned(), || None)?;
-  if let Some(auto) = &auto {
-    check_auto(config_path, auto, &options)?;
+  let named_form = mapping.contains_key("pools") || mapping.contains_key("calls");
+  let retired_form = mapping.contains_key("pool") || mapping.contains_key("auto");
+  if named_form && retired_form {
+    return Err(ConfigError(format!(
+      "{config_path}: backends.pools and backends.calls cannot be combined with the retired backends.auto and \
+       backends.pool keys; move the Auto set and the rotation list into backends.pools, and name each call class in \
+       backends.calls"
+    )));
   }
-  for (index, option) in options.iter().enumerate() {
-    if option.id == AUTO_BACKEND_ID {
-      return Err(ConfigError(format!(
-        "{config_path}: backends.options[{index}] uses the reserved id '{AUTO_BACKEND_ID}'; '{AUTO_BACKEND_ID}' names \
-         the backends.auto set, not a backend option"
-      )));
-    }
-  }
-  Ok(BackendsConfig { pool, routing, options, auto })
+  let (pools, calls) = if retired_form {
+    retired_pools_and_calls(config_path, &mapping, &options)?
+  } else {
+    let pools = parse_pools(config_path, mapping.get("pools"))?;
+    check_pools(config_path, &pools, &options)?;
+    let calls = parse_calls(config_path, mapping.get("calls"), &pools, &options)?;
+    (pools, calls)
+  };
+  Ok(BackendsConfig { routing, options, pools, calls })
 }
 
-/// Refuse an Auto set whose members are empty, repeated, or name no `backends.options` id. The error names the entry.
-fn check_auto(config_path: &str, auto: &AutoConfig, options: &[BackendOption]) -> Result<(), ConfigError> {
-  if auto.members.is_empty() {
-    return Err(ConfigError(format!("{config_path}: backends.auto.members lists no member")));
+/// The `backends.pools` list, each entry's shape read by its `rule`: a rotate member is an option id; a priority
+/// member is a `{backend, billing}` mapping.
+fn parse_pools(config_path: &str, value: Option<&Value>) -> Result<Vec<PoolConfig>, ConfigError> {
+  let Some(value) = value else {
+    return Ok(Vec::new());
+  };
+  let Value::Sequence(entries) = value else {
+    return Err(ConfigError(format!(
+      "{config_path}: invalid config key backends.pools: expected a list, got {}",
+      yaml_value_kind(value)
+    )));
+  };
+  entries.iter().enumerate().map(|(index, entry)| parse_pool(config_path, index, entry)).collect()
+}
+
+/// One `backends.pools[]` entry. The rule decides how its members parse, so the entry parses in two steps.
+fn parse_pool(config_path: &str, index: usize, entry: &Value) -> Result<PoolConfig, ConfigError> {
+  #[derive(Deserialize)]
+  #[serde(deny_unknown_fields)]
+  struct PoolEntry {
+    id: String,
+    label: String,
+    rule: PoolRule,
+    members: Vec<Value>,
   }
-  let mut seen = std::collections::HashSet::new();
-  for (index, member) in auto.members.iter().enumerate() {
-    let location = format!("{config_path}: backends.auto.members[{index}]");
-    if !options.iter().any(|option| option.id == member.backend) {
-      return Err(ConfigError(format!("{location}: backend '{}' is not a backends.options id", member.backend)));
+  #[derive(Deserialize)]
+  #[serde(deny_unknown_fields)]
+  struct PriorityMember {
+    backend: String,
+    billing: PoolBilling,
+  }
+
+  let location = format!("backends.pools[{index}]");
+  let PoolEntry { id, label, rule, members } = deserialize_at(config_path, &location, entry.clone())?;
+  let members = members
+    .iter()
+    .enumerate()
+    .map(|(member_index, member)| {
+      let member_location = format!("{location}.members[{member_index}]");
+      match rule {
+        PoolRule::Rotate => match member.as_str() {
+          Some(backend) => Ok(PoolMember { backend: backend.to_string(), billing: None }),
+          None => Err(ConfigError(format!(
+            "{config_path}: invalid config key {member_location}: a rotate pool's member is a backends.options id, \
+             got {}",
+            yaml_value_kind(member)
+          ))),
+        },
+        PoolRule::Priority => {
+          let PriorityMember { backend, billing } = deserialize_at(config_path, &member_location, member.clone())?;
+          Ok(PoolMember { backend, billing: Some(billing) })
+        }
+      }
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+  Ok(PoolConfig { id, label, rule, members })
+}
+
+/// Refuse pools that break the id rules or name a member that is not a `backends.options` id. Options ids, pool ids
+/// and the word `session` share one namespace, so each id is unique across them. The error names the entry.
+fn check_pools(config_path: &str, pools: &[PoolConfig], options: &[BackendOption]) -> Result<(), ConfigError> {
+  let mut names = HashSet::new();
+  for (index, option) in options.iter().enumerate() {
+    if option.id == SESSION_CALL_TARGET {
+      return Err(ConfigError(format!(
+        "{config_path}: backends.options[{index}] uses the reserved id '{SESSION_CALL_TARGET}'; it names the session \
+         that starts a call, not a backend"
+      )));
     }
-    if !seen.insert(member.backend.as_str()) {
-      return Err(ConfigError(format!("{location}: backend '{}' appears twice", member.backend)));
+    if !names.insert(option.id.as_str()) {
+      return Err(ConfigError(format!("{config_path}: backends.options[{index}] repeats id '{}'", option.id)));
+    }
+  }
+  for (index, pool) in pools.iter().enumerate() {
+    let location = format!("{config_path}: backends.pools[{index}]");
+    if pool.id == SESSION_CALL_TARGET {
+      return Err(ConfigError(format!(
+        "{location}: id '{SESSION_CALL_TARGET}' is reserved for the session that starts a call"
+      )));
+    }
+    if !names.insert(pool.id.as_str()) {
+      let kind =
+        if options.iter().any(|option| option.id == pool.id) { "a backends.options id" } else { "another pool id" };
+      return Err(ConfigError(format!("{location}: id '{}' is already {kind}", pool.id)));
+    }
+    if pool.members.is_empty() {
+      return Err(ConfigError(format!("{location}.members lists no member")));
+    }
+    let mut seen = HashSet::new();
+    for (member_index, member) in pool.members.iter().enumerate() {
+      let member_location = format!("{location}.members[{member_index}]");
+      if pools.iter().any(|other| other.id == member.backend) {
+        return Err(ConfigError(format!(
+          "{member_location}: '{}' is a pool; a pool member must be a backends.options id",
+          member.backend
+        )));
+      }
+      if !options.iter().any(|option| option.id == member.backend) {
+        return Err(ConfigError(format!(
+          "{member_location}: backend '{}' is not a backends.options id",
+          member.backend
+        )));
+      }
+      if pool.rule == PoolRule::Priority && !seen.insert(member.backend.as_str()) {
+        return Err(ConfigError(format!("{member_location}: backend '{}' appears twice", member.backend)));
+      }
     }
   }
   Ok(())
+}
+
+/// The `backends.calls` table: each key names a call class, and each value names a model or pool, or `session` on a
+/// class that a session starts. An unknown key, an unknown value, or `session` on another class refuses the file.
+fn parse_calls(
+  config_path: &str,
+  value: Option<&Value>,
+  pools: &[PoolConfig],
+  options: &[BackendOption],
+) -> Result<CallsConfig, ConfigError> {
+  let Some(value) = value else {
+    return Ok(CallsConfig::default());
+  };
+  let Value::Mapping(mapping) = value else {
+    return Err(ConfigError(format!(
+      "{config_path}: invalid config key backends.calls: expected a mapping, got {}",
+      yaml_value_kind(value)
+    )));
+  };
+  let mut targets = HashMap::new();
+  for (key, entry) in mapping {
+    let name = key.as_str().map_or_else(|| yaml_key_repr(key), str::to_string);
+    let class = CallClass::ALL.into_iter().find(|class| class.key() == name).ok_or_else(|| {
+      let keys = CallClass::ALL.map(CallClass::key).join(", ");
+      ConfigError(format!(
+        "{config_path}: invalid config key backends.calls.{name}: unknown call class; the keys are {keys}"
+      ))
+    })?;
+    let text = entry.as_str().ok_or_else(|| {
+      ConfigError(format!(
+        "{config_path}: invalid config key backends.calls.{name}: expected a model or pool id, got {}",
+        yaml_value_kind(entry)
+      ))
+    })?;
+    let target = if text == SESSION_CALL_TARGET {
+      if !class.allows_session() {
+        return Err(ConfigError(format!(
+          "{config_path}: invalid config key backends.calls.{name}: '{SESSION_CALL_TARGET}' is allowed only on \
+           worker, improve, verify, review and cold_read; name a model or pool id"
+        )));
+      }
+      CallTarget::Session
+    } else if pools.iter().any(|pool| pool.id == text) || options.iter().any(|option| option.id == text) {
+      CallTarget::Backend(text.to_string())
+    } else {
+      return Err(ConfigError(format!(
+        "{config_path}: invalid config key backends.calls.{name}: '{text}' is not a backends.options or backends.pools \
+         id"
+      )));
+    };
+    targets.insert(class, target);
+  }
+  Ok(targets.into_iter().collect())
+}
+
+/// The id of the priority pool that a retired `backends.auto` set becomes.
+const RETIRED_AUTO_POOL_ID: &str = "auto";
+/// The id of the rotate pool that a retired `backends.pool` list becomes.
+const RETIRED_ROTATION_POOL_ID: &str = "pool";
+/// The label of the rotate pool that a retired `backends.pool` list becomes; the retired keys carry no label.
+const RETIRED_ROTATION_LABEL: &str = "Pool";
+
+/// The `backends.auto` set of the retired form.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RetiredAutoConfig {
+  label: String,
+  members: Vec<RetiredAutoMember>,
+}
+
+/// One `backends.auto.members[]` entry of the retired form.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RetiredAutoMember {
+  backend: String,
+  billing: PoolBilling,
+}
+
+/// Read the retired `backends.auto` and `backends.pool` keys as the pools and call targets they stand for. The Auto
+/// set becomes the priority pool `auto`, the rotation list the rotate pool `pool`, and each call class that drew on
+/// the rotation list names `pool`. The thread class names `auto` when the Auto set is configured. A class with no
+/// rotation list stays unset, which keeps the behavior of a config with no pool for it. Every derived pool passes
+/// the same checks as a `backends.pools` entry.
+///
+/// This is the only reader of the retired keys; the form's removal deletes it with its two structs.
+fn retired_pools_and_calls(
+  config_path: &str,
+  mapping: &Mapping,
+  options: &[BackendOption],
+) -> Result<(Vec<PoolConfig>, CallsConfig), ConfigError> {
+  let auto: Option<RetiredAutoConfig> =
+    typed_section(config_path, "backends.auto", mapping.get("auto").cloned(), || None)?;
+  let rotation: Vec<String> = typed_section(config_path, "backends.pool", mapping.get("pool").cloned(), Vec::new)?;
+  let mut pools = Vec::new();
+  let mut targets = HashMap::new();
+  if let Some(auto) = auto {
+    pools.push(PoolConfig {
+      id: RETIRED_AUTO_POOL_ID.to_string(),
+      label: auto.label,
+      rule: PoolRule::Priority,
+      members: auto
+        .members
+        .into_iter()
+        .map(|member| PoolMember { backend: member.backend, billing: Some(member.billing) })
+        .collect(),
+    });
+    targets.insert(CallClass::Thread, CallTarget::Backend(RETIRED_AUTO_POOL_ID.to_string()));
+  }
+  if !rotation.is_empty() {
+    pools.push(PoolConfig {
+      id: RETIRED_ROTATION_POOL_ID.to_string(),
+      label: RETIRED_ROTATION_LABEL.to_string(),
+      rule: PoolRule::Rotate,
+      members: rotation.into_iter().map(|backend| PoolMember { backend, billing: None }).collect(),
+    });
+    for class in [
+      CallClass::Worker,
+      CallClass::Improve,
+      CallClass::Verify,
+      CallClass::Review,
+      CallClass::ColdRead,
+      CallClass::Probe,
+      CallClass::Autoname,
+      CallClass::Triage,
+    ] {
+      targets.insert(class, CallTarget::Backend(RETIRED_ROTATION_POOL_ID.to_string()));
+    }
+  }
+  check_pools(config_path, &pools, options)?;
+  Ok((pools, targets.into_iter().collect()))
 }
 
 /// One backend entry, validated as the option model its `type` names would (`parse_option`).
@@ -952,7 +1279,7 @@ mod tests {
     assert!(!cfg.server.enable_session_io_weight);
     assert!(cfg.server.enable_local_work_guard);
     assert_eq!(cfg.remote_run, RemoteRunConfig { host: None, remote_base: "scripts/remote-run".to_string() });
-    assert_eq!(cfg.backends.pool, vec!["claude-fable".to_string()]);
+    assert_eq!(member_ids(cfg.backends.pool("pool").unwrap()), ["claude-fable"]);
     let option = cfg.get_backend_option("claude-fable").unwrap();
     assert_eq!(
       (option.label.as_str(), option.backend_type.as_str(), option.model.as_str()),
@@ -1116,70 +1443,193 @@ mod tests {
     assert!(error.contains("invalid config key backends.strong") && error.contains("unknown field"), "{error}");
   }
 
+  fn member_ids(pool: &PoolConfig) -> Vec<&str> {
+    pool.members.iter().map(|member| member.backend.as_str()).collect()
+  }
+
+  const TWO_OPTIONS: &str = concat!(
+    "backends:\n  options:\n",
+    "    - {id: a, label: A, type: codex, model: m}\n",
+    "    - {id: b, label: B, type: codex, model: m}\n",
+  );
+
   #[test]
-  fn backends_auto_parses_its_label_and_ordered_members() {
+  fn the_retired_keys_load_as_the_auto_and_pool_pools_with_their_calls() {
     let home = home_with(concat!(
       "backends:\n",
-      "  options:\n",
-      "    - {id: a, label: A, type: codex, model: m}\n",
-      "    - {id: b, label: B, type: codex, model: m}\n",
+      "  pool: [b, a, b]\n",
       "  auto:\n",
       "    label: Auto\n",
       "    members:\n",
       "      - {backend: b, billing: payg}\n",
       "      - {backend: a, billing: subscription}\n",
+      "  options:\n",
+      "    - {id: a, label: A, type: codex, model: m}\n",
+      "    - {id: b, label: B, type: codex, model: m}\n",
     ));
     let cfg = load(&home).unwrap();
-    let auto = cfg.backends.auto.expect("backends.auto parses");
+    let auto = cfg.backends.pool("auto").expect("the Auto set loads as the auto pool");
     assert_eq!(auto.label, "Auto");
+    assert_eq!(auto.rule, PoolRule::Priority);
     assert_eq!(
       auto.members,
       vec![
-        AutoMember { backend: "b".to_string(), billing: AutoBilling::Payg },
-        AutoMember { backend: "a".to_string(), billing: AutoBilling::Subscription },
+        PoolMember { backend: "b".to_string(), billing: Some(PoolBilling::Payg) },
+        PoolMember { backend: "a".to_string(), billing: Some(PoolBilling::Subscription) },
       ]
     );
-  }
-
-  #[test]
-  fn backends_auto_refuses_each_malformed_entry_by_name() {
-    let options = "backends:\n  options:\n    - {id: a, label: A, type: codex, model: m}\n";
-    for (fragment, expected) in [
-      (
-        "  auto:\n    label: Auto\n    members:\n      - {backend: ghost, billing: subscription}\n",
-        "backends.auto.members[0]: backend 'ghost' is not a backends.options id",
-      ),
-      (
-        "  auto:\n    label: Auto\n    members:\n      - {backend: a, billing: subscription}\n      - {backend: a, billing: payg}\n",
-        "backends.auto.members[1]: backend 'a' appears twice",
-      ),
-      ("  auto:\n    label: Auto\n    members: []\n", "backends.auto.members lists no member"),
-      (
-        "  auto:\n    label: Auto\n    members:\n      - {backend: a, billing: weekly}\n",
-        "backends.auto.members[0].billing",
-      ),
+    let rotation = cfg.backends.pool("pool").expect("the pool list loads as the pool pool");
+    assert_eq!(rotation.rule, PoolRule::Rotate);
+    assert_eq!(member_ids(rotation), ["b", "a", "b"], "a rotate pool keeps a repeated member");
+    // The derived calls match the migration that names `pool` for each rotation class and `auto` for threads.
+    for class in [
+      CallClass::Worker,
+      CallClass::Improve,
+      CallClass::Verify,
+      CallClass::Review,
+      CallClass::ColdRead,
+      CallClass::Probe,
+      CallClass::Autoname,
+      CallClass::Triage,
     ] {
-      let error = load(&home_with(&format!("{options}{fragment}"))).unwrap_err().to_string();
-      assert!(error.contains(expected), "{error}");
+      assert_eq!(cfg.backends.calls.get(class), Some(&CallTarget::Backend("pool".to_string())), "{class:?}");
     }
-    let error = load(&home_with("backends:\n  options:\n    - {id: auto, label: A, type: codex, model: m}\n"))
-      .unwrap_err()
-      .to_string();
-    assert!(error.contains("backends.options[0] uses the reserved id 'auto'"), "{error}");
+    assert_eq!(cfg.backends.calls.get(CallClass::Thread), Some(&CallTarget::Backend("auto".to_string())));
+    assert_eq!(cfg.backends.calls.get(CallClass::NewSession), None, "new_session stays unset: the first option");
   }
 
   #[test]
-  fn require_backends_lists_every_broken_reference() {
+  fn the_retired_keys_without_a_rotation_list_leave_its_calls_unset() {
+    let home = home_with(&format!(
+      "{TWO_OPTIONS}  auto:\n    label: Auto\n    members:\n      - {{backend: a, billing: subscription}}\n"
+    ));
+    let cfg = load(&home).unwrap();
+    assert!(cfg.backends.pool("pool").is_none());
+    assert_eq!(cfg.backends.calls.get(CallClass::Worker), None);
+    assert_eq!(cfg.backends.calls.get(CallClass::Thread), Some(&CallTarget::Backend("auto".to_string())));
+  }
+
+  #[test]
+  fn the_named_form_parses_pools_rules_and_call_targets() {
     let home = home_with(
-      "backends:\n  pool: [ghost]\n  options:\n    - {id: a, label: A, type: codex, model: m}\n    - {id: a, label: A, type: codex, model: m}\n",
+      &[
+        TWO_OPTIONS,
+        concat!(
+          "  pools:\n",
+          "    - {id: auto, label: Auto, rule: priority, members: [{backend: a, billing: subscription}, \
+           {backend: b, billing: payg}]}\n",
+          "    - {id: light, label: Light, rule: rotate, members: [b, a, b]}\n",
+          "  calls:\n",
+          "    worker: session\n",
+          "    verify: light\n",
+          "    thread: auto\n",
+          "    new_session: a\n",
+        ),
+      ]
+      .concat(),
     );
     let cfg = load(&home).unwrap();
-    let error = require_backends(&cfg).unwrap_err().to_string();
+    assert_eq!(cfg.backends.pools.iter().map(|pool| pool.id.as_str()).collect::<Vec<_>>(), ["auto", "light"]);
+    assert_eq!(member_ids(cfg.backends.pool("light").unwrap()), ["b", "a", "b"]);
+    assert_eq!(cfg.backends.calls.get(CallClass::Worker), Some(&CallTarget::Session));
+    assert_eq!(cfg.backends.calls.get(CallClass::Verify), Some(&CallTarget::Backend("light".to_string())));
+    assert_eq!(cfg.backends.calls.get(CallClass::NewSession), Some(&CallTarget::Backend("a".to_string())));
+    assert_eq!(cfg.backends.calls.get(CallClass::Probe), None, "an unset key stays unset");
+  }
+
+  #[test]
+  fn a_config_with_both_forms_fails_naming_both() {
+    let home = home_with(&format!(
+      "{TWO_OPTIONS}  pool: [a]\n  pools:\n    - {{id: light, label: Light, rule: rotate, members: [a]}}\n"
+    ));
+    let error = load(&home).unwrap_err().to_string();
     assert!(
-      error.contains("backends.options[1] repeats id 'a'")
-        && error.contains("backends.pool[0] names unknown backend 'ghost'"),
+      error.contains("backends.pools") && error.contains("backends.auto") && error.contains("backends.pool"),
       "{error}"
     );
+    let calls_only = home_with(&format!("{TWO_OPTIONS}  pool: [a]\n  calls:\n    worker: a\n"));
+    let error = load(&calls_only).unwrap_err().to_string();
+    assert!(error.contains("backends.calls") && error.contains("backends.pool"), "{error}");
+  }
+
+  #[test]
+  fn a_pool_member_that_is_a_pool_id_fails_loading() {
+    let home = home_with(
+      &[
+        TWO_OPTIONS,
+        concat!(
+          "  pools:\n",
+          "    - {id: auto, label: Auto, rule: priority, members: [{backend: a, billing: payg}]}\n",
+          "    - {id: light, label: Light, rule: rotate, members: [auto]}\n",
+        ),
+      ]
+      .concat(),
+    );
+    let error = load(&home).unwrap_err().to_string();
+    assert!(
+      error.contains("backends.pools[1].members[0]: 'auto' is a pool; a pool member must be a backends.options id"),
+      "{error}"
+    );
+  }
+
+  #[test]
+  fn each_call_key_refuses_an_unknown_value_an_unknown_key_and_a_session_it_does_not_allow() {
+    for (fragment, expected) in [
+      (
+        "  calls:\n    worker: ghost\n",
+        "backends.calls.worker: 'ghost' is not a backends.options or backends.pools id",
+      ),
+      ("  calls:\n    speculate: a\n", "backends.calls.speculate: unknown call class"),
+      ("  calls:\n    probe: session\n", "backends.calls.probe: 'session' is allowed only on"),
+      ("  calls:\n    new_session: session\n", "backends.calls.new_session: 'session' is allowed only on"),
+      ("  calls:\n    worker:\n", "backends.calls.worker: expected a model or pool id, got null"),
+    ] {
+      let error = load(&home_with(&format!("{TWO_OPTIONS}{fragment}"))).unwrap_err().to_string();
+      assert!(error.contains(expected), "{expected}: {error}");
+    }
+  }
+
+  #[test]
+  fn each_malformed_pool_entry_refuses_by_name() {
+    for (fragment, expected) in [
+      ("  pools:\n    - {id: p, label: P, rule: weekly, members: [a]}\n", "backends.pools[0].rule: unknown variant"),
+      (
+        "  pools:\n    - {id: p, label: P, rule: priority, members: [{backend: a}]}\n",
+        "backends.pools[0].members[0]: missing field `billing`",
+      ),
+      (
+        "  pools:\n    - {id: p, label: P, rule: priority, members: [a]}\n",
+        "backends.pools[0].members[0]: invalid type",
+      ),
+      (
+        "  pools:\n    - {id: p, label: P, rule: rotate, members: [{backend: a, billing: payg}]}\n",
+        "backends.pools[0].members[0]: a rotate pool's member is a backends.options id",
+      ),
+      ("  pools:\n    - {id: p, label: P, rule: rotate, members: []}\n", "backends.pools[0].members lists no member"),
+      (
+        "  pools:\n    - {id: p, label: P, rule: priority, members: [{backend: a, billing: payg}, \
+         {backend: a, billing: subscription}]}\n",
+        "backends.pools[0].members[1]: backend 'a' appears twice",
+      ),
+      (
+        "  pools:\n    - {id: p, label: P, rule: rotate, members: [ghost]}\n",
+        "backends.pools[0].members[0]: backend 'ghost' is not a backends.options id",
+      ),
+      ("  pools:\n    - {id: a, label: P, rule: rotate, members: [a]}\n", "id 'a' is already a backends.options id"),
+      ("  pools:\n    - {id: session, label: P, rule: rotate, members: [a]}\n", "id 'session' is reserved"),
+      (
+        "  pools:\n    - {id: p, label: P, rule: rotate, members: [a]}\n    - {id: p, label: P, \
+         rule: rotate, members: [a]}\n",
+        "backends.pools[1]: id 'p' is already another pool id",
+      ),
+    ] {
+      let error = load(&home_with(&format!("{TWO_OPTIONS}{fragment}"))).unwrap_err().to_string();
+      assert!(error.contains(expected), "{expected}: {error}");
+    }
+  }
+
+  #[test]
+  fn require_backends_refuses_a_config_with_no_option() {
     let empty = load(&home_with("")).unwrap();
     assert!(
       require_backends(&empty).unwrap_err().to_string().starts_with("config.yaml: backends.options lists no backend")

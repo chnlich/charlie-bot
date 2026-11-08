@@ -9,7 +9,7 @@ use charliebot_agents::agent_environment;
 use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool::{self, BackendPool};
 use charliebot_agents::backend_types;
-use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::config::{BackendOption, CallClass, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_core::str_methods::take_chars;
 use charliebot_registry::backend::LaunchArgs;
@@ -19,30 +19,6 @@ use charliebot_store::metadata::SessionMetadata;
 use serde_json::Value;
 
 const LIGHT_ONESHOT_TIMEOUT: Duration = Duration::from_secs(30);
-
-pub fn iter_light_backends<'a>(
-  cfg: &'a CharlieBotConfig,
-  pool: Arc<BackendPool>,
-) -> impl Iterator<Item = anyhow::Result<BackendOption>> + 'a {
-  let mut tried = Vec::new();
-  let mut failed = false;
-  std::iter::from_fn(move || {
-    if failed {
-      return None;
-    }
-    match pool.select(cfg, "light_oneshot", &tried) {
-      Ok(Some(option)) => {
-        tried.push(option.id.clone());
-        Some(Ok(option))
-      }
-      Ok(None) => None,
-      Err(error) => {
-        failed = true;
-        Some(Err(error))
-      }
-    }
-  })
-}
 
 pub async fn name_after_round(
   features: &FeatureContext,
@@ -118,8 +94,13 @@ pub async fn maybe_auto_name(
     take_chars(user_message, 500),
     take_chars(assistant_response, 300)
   );
-  if cfg.backends.pool.is_empty() {
-    tracing::warn!(target: "charliebot_tasks", reason = "empty_backends_pool", session_id = %session_meta.id, "autonamer_skipped");
+  if cfg.backends.calls.get(CallClass::Autoname).is_none() {
+    tracing::warn!(
+      target: "charliebot_tasks",
+      reason = "calls_autoname_unset",
+      session_id = %session_meta.id,
+      "autonamer_skipped"
+    );
     return Ok(());
   }
 
@@ -148,7 +129,9 @@ where
   F: FnMut(BackendOption) -> Fut,
   Fut: Future<Output = anyhow::Result<String>>,
 {
-  for option in iter_light_backends(cfg, Arc::clone(&pool)) {
+  for option in
+    backend_pool::one_shot_members(cfg, Arc::clone(&pool), "autoname", cfg.backends.calls.get(CallClass::Autoname))
+  {
     let option = option?;
     let backend_id = option.id.clone();
     match generate(option).await {
@@ -331,9 +314,15 @@ mod tests {
   use std::path::PathBuf;
   use std::sync::Mutex;
 
+  use crate::test_support::recovery_support::ROTATION_POOL_ID;
+
   /// A pool whose availability owner reads the empty state of `home` and persists to it.
   fn test_pool(home: &std::path::Path) -> Arc<BackendPool> {
-    Arc::new(BackendPool::new(Arc::new(BackendAvailability::load(home).unwrap()), Arc::new(Registry::new())))
+    Arc::new(BackendPool::new(
+      Arc::new(BackendAvailability::load(home).unwrap()),
+      Arc::new(Registry::new()),
+      Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
+    ))
   }
 
   /// A configuration whose two options `ids` are also the pool, with the routing section `routing`.
@@ -370,7 +359,12 @@ mod tests {
         worktree_dir: "/synthetic/worktrees".to_string(),
         scratch_dir: "/synthetic/scripts".to_string(),
       },
-      backends: BackendsConfig { pool: ids.map(str::to_string).to_vec(), routing, options, auto: None },
+      backends: BackendsConfig {
+        routing,
+        options,
+        pools: crate::test_support::recovery_support::rotation_pools(ids.map(str::to_string).to_vec()).0,
+        calls: crate::test_support::recovery_support::rotation_pools(ids.map(str::to_string).to_vec()).1,
+      },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       remote_run: charliebot_core::config::RemoteRunConfig::default(),
@@ -421,7 +415,7 @@ mod tests {
 
     assert_eq!(*calls.lock().unwrap(), ["light-a".to_string(), "light-b".to_string()]);
     assert_eq!(generated, Some(("Synthetic title".to_string(), Some("Research".to_string()))));
-    assert_eq!(pool.select(&cfg, "light_oneshot", &[]).unwrap().unwrap().id, "light-b");
+    assert_eq!(pool.select(&cfg, "light_oneshot", ROTATION_POOL_ID, &[]).unwrap().unwrap().id, "light-b");
   }
 
   #[test]
@@ -436,10 +430,15 @@ mod tests {
       marker.display().to_string(),
     ];
     let cfg = light_cfg(["fake", "fake2"], Some(RoutingConfig { command }));
-    let names = iter_light_backends(&cfg, test_pool(dir.path()))
-      .map(|option| option.map(|option| option.id))
-      .collect::<anyhow::Result<Vec<_>>>()
-      .unwrap();
+    let names = backend_pool::one_shot_members(
+      &cfg,
+      test_pool(dir.path()),
+      "autoname",
+      cfg.backends.calls.get(CallClass::Autoname),
+    )
+    .map(|option| option.map(|option| option.id))
+    .collect::<anyhow::Result<Vec<_>>>()
+    .unwrap();
 
     assert_eq!(names, ["fake", "fake2"]);
     assert!(!marker.exists(), "session naming started the router");

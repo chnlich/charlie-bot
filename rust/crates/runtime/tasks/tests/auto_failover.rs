@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use charliebot_agents::backend_availability;
-use charliebot_core::config::{AutoBilling, AutoConfig, AutoMember};
+use charliebot_core::config::{PoolBilling, PoolConfig, PoolMember, PoolRule};
 use charliebot_core::event_types;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind};
@@ -22,12 +22,17 @@ const MEMBER_B: &str = "member-b";
 /// The error text aigw returns when the key's budget is spent.
 const QUOTA_ERROR: &str = "API Error: 402 Insufficient Balance";
 
-fn auto_set() -> AutoConfig {
-  AutoConfig {
+/// The id of the priority pool that the Auto sessions of these tests run on.
+const AUTO_POOL_ID: &str = "auto";
+
+fn auto_set() -> PoolConfig {
+  PoolConfig {
+    id: AUTO_POOL_ID.to_string(),
     label: "Auto".to_string(),
+    rule: PoolRule::Priority,
     members: vec![
-      AutoMember { backend: MEMBER_A.to_string(), billing: AutoBilling::Subscription },
-      AutoMember { backend: MEMBER_B.to_string(), billing: AutoBilling::Subscription },
+      PoolMember { backend: MEMBER_A.to_string(), billing: Some(PoolBilling::Subscription) },
+      PoolMember { backend: MEMBER_B.to_string(), billing: Some(PoolBilling::Subscription) },
     ],
   }
 }
@@ -88,7 +93,7 @@ async fn auto_session(stack: &Stack, request_id: &str) -> anyhow::Result<Session
           profile: TaskProfile::Manager,
           task: None,
           name: Some("Auto session".to_string()),
-          backend: Some(charliebot_core::config::AUTO_BACKEND_ID.to_string()),
+          backend: Some(AUTO_POOL_ID.to_string()),
           group: None,
           session_id: None,
         },
@@ -190,7 +195,7 @@ async fn a_quota_end_continues_the_turn_on_the_next_member_with_the_switch_note(
   assert_eq!(switches[0]["from"], MEMBER_A);
   assert_eq!(switches[0]["to"], MEMBER_B);
   assert_eq!(switches[0]["reason"], event_types::QUOTA_REASON_QUOTA_ERROR);
-  assert_eq!(switches[0]["set"], event_types::QUOTA_SET_AUTO);
+  assert_eq!(switches[0]["set"], event_types::QUOTA_SET_POOL);
   assert_eq!(switches[0]["summary"], handoff::SUMMARY_OK);
 
   let availability = backend_availability::backend_availability(&stack.features)?;
@@ -199,7 +204,7 @@ async fn a_quota_end_continues_the_turn_on_the_next_member_with_the_switch_note(
   assert!(remaining > time::Duration::minutes(29) && remaining <= backend_availability::DEFAULT_COOLDOWN);
 
   let stored = stack.store().read_metadata_fresh(&session.id)?.expect("the session is recorded");
-  assert_eq!(stored.extra(charliebot_agents::model_pool::AUTO_MEMBER_FIELD), Some(&json!(MEMBER_B)));
+  assert_eq!(stored.extra(charliebot_agents::model_pool::POOL_MEMBER_FIELD), Some(&json!(MEMBER_B)));
 
   // The retry's input names the session chat log, the archives and the failed run's directory as absolute paths, and
   // the four summary parts. The session has no native id, so the switch note is the only context it carries.
@@ -212,7 +217,7 @@ async fn a_quota_end_continues_the_turn_on_the_next_member_with_the_switch_note(
   assert!(prompt.contains(&chat_log.display().to_string()), "{prompt}");
   assert!(prompt.contains(&archives.display().to_string()), "{prompt}");
   assert!(prompt.contains(&failed_run_dir.display().to_string()), "{prompt}");
-  assert!(prompt.contains("auto switched from member-a to member-b"), "{prompt}");
+  assert!(prompt.contains("pool 'auto' switched from member-a to member-b"), "{prompt}");
   assert!(prompt.contains("Handoff summary:"), "{prompt}");
   assert!(prompt.contains("goal: Auto session"), "{prompt}");
   assert!(prompt.contains("done (1):"), "{prompt}");
@@ -309,7 +314,7 @@ async fn a_drained_quota_end_switches_like_a_live_turn() -> anyhow::Result<()> {
     .update_slot_fields(
       &session.id,
       charliebot_agents::model_pool::OWNER,
-      Map::from_iter([(charliebot_agents::model_pool::AUTO_MEMBER_FIELD.to_string(), json!(MEMBER_A))]),
+      Map::from_iter([(charliebot_agents::model_pool::POOL_MEMBER_FIELD.to_string(), json!(MEMBER_A))]),
     )
     .await?;
   first.dispatch.admit_input(&session.id, event_types::USER, "fix the failing test", "user", json!({})).await?;
@@ -356,7 +361,7 @@ async fn a_drained_quota_end_switches_like_a_live_turn() -> anyhow::Result<()> {
   assert_eq!(switches.len(), 1, "{switches:?}");
   assert_eq!(switches[0]["from"], MEMBER_A);
   assert_eq!(switches[0]["reason"], event_types::QUOTA_REASON_QUOTA_ERROR);
-  assert_eq!(switches[0]["set"], event_types::QUOTA_SET_AUTO);
+  assert_eq!(switches[0]["set"], event_types::QUOTA_SET_POOL);
   Ok(())
 }
 
@@ -372,7 +377,7 @@ async fn a_refused_launch_with_quota_exhausted_switches_the_turn() -> anyhow::Re
     .update_slot_fields(
       &session.id,
       charliebot_agents::model_pool::OWNER,
-      Map::from_iter([(charliebot_agents::model_pool::AUTO_MEMBER_FIELD.to_string(), json!(MEMBER_A))]),
+      Map::from_iter([(charliebot_agents::model_pool::POOL_MEMBER_FIELD.to_string(), json!(MEMBER_A))]),
     )
     .await?;
   stack.dispatch.admit_input(&session.id, event_types::USER, "fix the failing test", "user", json!({})).await?;

@@ -19,7 +19,7 @@ use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool;
 use charliebot_agents::cli_base::CliHost;
 use charliebot_agents::model_pool;
-use charliebot_core::config::{AUTO_BACKEND_ID, AutoBilling, AutoConfig, AutoMember, BackendOption, RoutingConfig};
+use charliebot_core::config::{BackendOption, CallClass, PoolBilling, PoolConfig, PoolMember, PoolRule, RoutingConfig};
 use charliebot_core::event_types;
 use charliebot_registry::Registry;
 use charliebot_registry::caller::CallerIdentity;
@@ -32,12 +32,27 @@ use charliebot_tasks::spawner_backends::BackendSource;
 use charliebot_tasks::{cold_read, handoff, routes, spawner_backends, task_sessions};
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
-  BACKEND_ID, BACKEND_TYPE, Scripts, Stack, cold_read_body, init_repo_with_origin, last_child_report, post_delegate,
-  result_script, settle_until, synthetic_git, synthetic_run, write_sitrep,
+  BACKEND_ID, BACKEND_TYPE, ROTATION_POOL_ID, Scripts, Stack, cold_read_body, init_repo_with_origin, last_child_report,
+  post_delegate, result_script, settle_until, synthetic_git, synthetic_run, write_sitrep,
 };
 use serde_json::{Map, Value, json};
 use serde_yaml::Mapping;
 use time::{Duration as TimeDuration, OffsetDateTime};
+
+/// The id of the priority pool that the Auto sessions of the failover tests run on.
+const AUTO_POOL_ID: &str = "auto";
+
+/// The members of the rotation pool, in config order.
+fn member_ids(cfg: &charliebot_core::config::CharlieBotConfig) -> Vec<&str> {
+  cfg
+    .backends
+    .pool(ROTATION_POOL_ID)
+    .expect("the rotation pool")
+    .members
+    .iter()
+    .map(|member| member.backend.as_str())
+    .collect()
+}
 
 fn backend_availability(
   features: &Arc<charliebot_registry::context::FeatureContext>,
@@ -1029,35 +1044,34 @@ fn quick_edit_body(manager_id: &str) -> Value {
   json!({"session_id": manager_id, "description": "run the quick edit", "task_type": "quick-edit"})
 }
 
-/// Empty route: the route list is empty, so the pool picks the backend and the node records
-/// the empty route with its pool flag.
+/// A route that names the pool: the child keeps the pool id, and the node records the route with its pool flag.
 #[tokio::test]
 #[ignore = "integration"]
-async fn an_empty_route_list_uses_the_pool() -> anyhow::Result<()> {
+async fn a_route_naming_the_pool_keeps_the_pool_id_on_the_child() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("pool work done")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
   let router_dir = tempfile::tempdir()?;
-  install_router(&stack, router_dir.path(), &router_order_body(&[]), &[])?;
+  install_router(&stack, router_dir.path(), &router_order_body(&[ROTATION_POOL_ID]), &[])?;
 
   let (status, delegated) = post_delegate(&routes::routes(&stack.features), quick_edit_body(&manager)).await?;
   assert_eq!(status, StatusCode::OK, "{delegated}");
   let child_id = text(&delegated, "session_id")?;
   let meta = stack.store().load_task_meta(&child_id).await?;
-  assert_eq!(meta.backend, "fake", "the pool's first member");
-  assert_eq!(meta.extra("route").and_then(|route| route.get("backends")), Some(&json!([])));
+  assert_eq!(meta.backend, ROTATION_POOL_ID, "the child keeps the pool id and its first turn selects the member");
+  assert_eq!(meta.extra("route").and_then(|route| route.get("backends")), Some(&json!([ROTATION_POOL_ID])));
   assert_eq!(meta.extra("backend_from_pool"), Some(&json!(true)));
   Ok(())
 }
 
-/// Cooling route: the route's first member is cooling, so the next routed member runs the
-/// work and the delegation still answers 200.
+/// Cooling route: the routed option is cooling, so the default path runs the work on the pool and the delegation still
+/// answers 200.
 #[tokio::test]
 #[ignore = "integration"]
-async fn a_cooling_routed_list_falls_back_to_the_pool() -> anyhow::Result<()> {
+async fn a_cooling_routed_option_falls_back_to_the_pool() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("pool work done")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
   let router_dir = tempfile::tempdir()?;
-  install_router(&stack, router_dir.path(), &router_order_body(&["fake2", "fake"]), &[])?;
+  install_router(&stack, router_dir.path(), &router_order_body(&["fake2"]), &[])?;
   backend_availability(&stack.features)?.record(
     "fake2",
     None,
@@ -1080,7 +1094,7 @@ async fn every_backend_unavailable_returns_400_with_recovery_times() -> anyhow::
   let scripts = Scripts::new(vec![result_script("unused")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
   let router_dir = tempfile::tempdir()?;
-  install_router(&stack, router_dir.path(), &router_order_body(&[]), &[])?;
+  install_router(&stack, router_dir.path(), &router_order_body(&[ROTATION_POOL_ID]), &[])?;
   backend_availability(&stack.features)?.record(
     "fake",
     None,
@@ -1096,7 +1110,8 @@ async fn every_backend_unavailable_returns_400_with_recovery_times() -> anyhow::
 
   let (status, response) = post_delegate(&routes::routes(&stack.features), quick_edit_body(&manager)).await?;
   assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
-  assert!(response["detail"].as_str().unwrap_or_default().contains("cooling until"), "{response}");
+  let detail = response["detail"].as_str().unwrap_or_default();
+  assert!(detail.contains("pool 'pool' has no selectable member") && detail.contains("recovers at"), "{response}");
   Ok(())
 }
 
@@ -1204,7 +1219,10 @@ async fn routed_verify_delegation_persists_the_route_and_excludes_its_session_ba
   assert_eq!(request["role"], "verify");
   assert_eq!(request["text"], "confirm the change");
   assert_eq!(request["session_backend"], "fake", "the manager's backend, which the router sees");
-  assert_eq!(request["candidates"], json!([{"id": "fake2", "cooling_until": null}]));
+  assert_eq!(
+    request["candidates"],
+    json!([{"id": "fake2", "cooling_until": null}, {"id": ROTATION_POOL_ID, "cooling_until": null}])
+  );
   assert_eq!(std::fs::read_to_string(calls)?, "started\n");
   assert_eq!(stack.wait_terminal(child_id, run_id).await?, RunOutcomeKind::Success);
   Ok(())
@@ -1302,10 +1320,10 @@ async fn an_unrouted_verify_takes_the_verify_selection_and_records_why() -> anyh
   Ok(())
 }
 
-/// A routed list whose members are all cooling runs on the pool, and the route says the routed members were cooling.
+/// A routed option that is cooling runs on the default path, which is the pool, and the route says it was cooling.
 #[tokio::test]
 #[ignore = "integration"]
-async fn a_routed_list_that_is_all_cooling_runs_on_the_pool_and_says_so() -> anyhow::Result<()> {
+async fn a_cooling_routed_option_runs_on_the_default_path_and_says_so() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("pool work done")]);
   let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
   let router_dir = tempfile::tempdir()?;
@@ -1325,7 +1343,7 @@ async fn a_routed_list_that_is_all_cooling_runs_on_the_pool_and_says_so() -> any
   assert_eq!(meta.extra("backend_from_pool"), Some(&json!(true)));
   assert_eq!(
     meta.extra("route"),
-    Some(&json!({"backends": ["fake2"], "reason": "design p=0.9; fake2 cooling; ran on pool"}))
+    Some(&json!({"backends": ["fake2"], "reason": "design p=0.9; fake2 cooling; ran on the default path"}))
   );
   Ok(())
 }
@@ -1359,7 +1377,7 @@ async fn interrupted_worker_run(
   let chosen_slot = match source {
     BackendSource::Direct => None,
     BackendSource::Pool => Some(backend_pool::BACKEND_FROM_POOL_FIELD),
-    BackendSource::AutoMember => Some(backend_pool::BACKEND_FROM_AUTO_FIELD),
+    BackendSource::PoolMember => Some(backend_pool::BACKEND_FROM_AUTO_FIELD),
   };
   if let Some(field) = chosen_slot {
     let guard = stack.store().control_lock().await;
@@ -1419,8 +1437,7 @@ async fn quota_failure_fails_over_to_the_next_member(task_type: TaskType) -> any
   assert!(failures.is_empty(), "a failover sends no failure report: {failures:?}");
   settle_until(|| Ok(stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?.len() == 1)).await?;
   settle_node(&stack, &manager.id).await?;
-  let report = backend_pool::backend_pool(&stack.features)?.recovery_report(&stack.cfg);
-  assert!(report.contains("fake2 cooling until"), "the failed member cooled: {report}");
+  assert!(backend_availability(&stack.features)?.out_until("fake2").is_some(), "the failed member cooled");
   // The retry's success wakes the parent in the background; wait for the turn it launches before the stack drops.
   settle_until(|| Ok(!stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?.is_empty())).await?;
   settle_node(&stack, &worker).await?;
@@ -1594,9 +1611,9 @@ async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Res
     .map(|id| BackendOption { model: "fake-model".to_string(), ..scripts.option(id, BACKEND_TYPE) })
     .to_vec();
   let members = ["fake", "fake2"]
-    .map(|backend| AutoMember { backend: backend.to_string(), billing: AutoBilling::Subscription })
+    .map(|backend| PoolMember { backend: backend.to_string(), billing: Some(PoolBilling::Subscription) })
     .to_vec();
-  let auto = AutoConfig { label: "Auto".to_string(), members };
+  let auto = PoolConfig { id: AUTO_POOL_ID.to_string(), label: "Auto".to_string(), rule: PoolRule::Priority, members };
   let stack = Stack::start_with_auto(options, Vec::new(), auto).await?;
   stack.write_access_key()?;
   let parent = stack
@@ -1608,7 +1625,7 @@ async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Res
         profile: TaskProfile::Manager,
         task: None,
         name: Some("Auto parent".to_string()),
-        backend: Some(AUTO_BACKEND_ID.to_string()),
+        backend: Some(AUTO_POOL_ID.to_string()),
         group: None,
         session_id: None,
       },
@@ -1621,7 +1638,7 @@ async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Res
     .update_slot_fields(
       &parent.id,
       model_pool::OWNER,
-      Map::from_iter([(model_pool::AUTO_MEMBER_FIELD.to_string(), json!("fake"))]),
+      Map::from_iter([(model_pool::POOL_MEMBER_FIELD.to_string(), json!("fake"))]),
     )
     .await?;
   stack.dispatch.set_executor(None);
@@ -1656,14 +1673,14 @@ async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Res
   settle_node(&stack, &worker).await?;
   assert_eq!(stack.store().load_task_meta(&worker).await?.backend, "fake2", "the node moved");
   let parent_meta = stack.store().load_task_meta(&parent.id).await?;
-  assert_eq!(parent_meta.extra(model_pool::AUTO_MEMBER_FIELD), Some(&json!("fake2")));
+  assert_eq!(parent_meta.extra(model_pool::POOL_MEMBER_FIELD), Some(&json!("fake2")));
   assert!(backend_availability(&stack.features)?.out_until("fake").is_some(), "the spent member is recorded out");
 
   let switches: Vec<Value> = quota_failover_events(&stack, &parent.id)?.iter().map(|event| event.to_value()).collect();
   assert_eq!(switches.len(), 1, "one switch record in the Auto parent's chat: {switches:?}");
   assert_eq!(switches[0]["from"], "fake");
   assert_eq!(switches[0]["to"], "fake2");
-  assert_eq!(switches[0]["set"], event_types::QUOTA_SET_AUTO);
+  assert_eq!(switches[0]["set"], event_types::QUOTA_SET_POOL);
   assert_eq!(switches[0]["summary"], handoff::SUMMARY_OK);
 
   let launches = scripts.builds();
@@ -1691,7 +1708,7 @@ async fn a_delegation_that_names_the_auto_backend_is_refused() -> anyhow::Result
     "session_id": manager,
     "description": "run the quick edit",
     "task_type": "quick-edit",
-    "backend": AUTO_BACKEND_ID,
+    "backend": AUTO_POOL_ID,
   });
   let (status, response) = post_delegate(&routes::routes(&stack.features), body).await?;
   assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
@@ -1715,8 +1732,7 @@ async fn a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled() -> an
   let reports = stack.child_reports(&manager.id)?;
   assert_eq!(reports.len(), 1, "the failure is reported once: {reports:?}");
   assert_eq!(reports[0]["outcome"], "failed");
-  let report = backend_pool::backend_pool(&stack.features)?.recovery_report(&stack.cfg);
-  assert!(report.contains("fake2 not cooling"), "the pinned member is not cooled: {report}");
+  assert!(backend_availability(&stack.features)?.out_until("fake2").is_none(), "the pinned member is not cooled");
   settle_until(|| Ok(stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?.len() == 1)).await?;
   settle_node(&stack, &manager.id).await?;
   assert_eq!(stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?.len(), 1);
@@ -1746,13 +1762,12 @@ async fn failover_with_every_member_cooling_reports_each_recovery_time() -> anyh
   let reports = stack.child_reports(&manager.id)?;
   assert_eq!(reports.len(), 1, "the failure is reported once: {reports:?}");
   let summary = reports[0]["summary"].as_str().expect("the report names the recovery times");
-  assert!(summary.contains("fake2 cooling until 2030-01-02T02:00"), "{summary}");
-  assert!(summary.contains("fake3 cooling until 2030-01-02T03:04"), "{summary}");
   assert!(
     summary.contains(
-      "\n\nno backends.pool member is available: \
-       fake2 cooling until 2030-01-02T02:00+00:00; fake3 cooling until 2030-01-02T03:04+00:00"
-    ),
+      "\n\npool 'pool' has no selectable member:\n- fake2: \
+       "
+    ) && summary.contains("recovers at 2030-01-02T02:00")
+      && summary.contains("recovers at 2030-01-02T03:04"),
     "{summary}"
   );
   settle_until(|| Ok(stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?.len() == 1)).await?;
@@ -1814,7 +1829,7 @@ async fn launch_error_event_worker(first_events: &[Value], pool_chosen: bool) ->
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
   let first_backend = if pool_chosen {
     let pool = backend_pool::backend_pool(&stack.features)?;
-    pool.select(&stack.cfg, "test", &[])?.expect("the pool selects a first member").id
+    pool.select(&stack.cfg, "test", ROTATION_POOL_ID, &[])?.expect("the pool selects a first member").id
   } else {
     "fake".to_string()
   };
@@ -1921,7 +1936,7 @@ async fn assert_temporary_failover(error: &ErrorEventRun) -> anyhow::Result<()> 
   assert_eq!(reports.len(), 1, "{reports:?}");
   assert_eq!(reports[0]["outcome"], "failed");
   assert_eq!(reports[0]["result_refs"], json!([format!("run:{}", retry.id)]));
-  assert_eq!(stack.cfg.backends.pool, ["fake", "fake2"]);
+  assert_eq!(member_ids(&stack.cfg), ["fake", "fake2"]);
   settle_node(stack, &error.worker_id).await?;
   settle_node(stack, &error.manager_id).await
 }
@@ -1933,7 +1948,14 @@ async fn assert_no_failover(error: &ErrorEventRun) -> anyhow::Result<()> {
   settle_until(|| Ok(stack.child_reports(&error.manager_id)?.len() == 1)).await?;
   let pool = backend_pool::backend_pool(&stack.features)?;
   assert!(
-    stack.cfg.backends.pool.iter().all(|member| pool.availability().out_until(member).is_none()),
+    stack
+      .cfg
+      .backends
+      .pool(ROTATION_POOL_ID)
+      .expect("the rotation pool")
+      .members
+      .iter()
+      .all(|member| pool.availability().out_until(&member.backend).is_none()),
     "no member cools"
   );
   assert_eq!(stack.run_records(&error.worker_id)?.len(), 1, "no retry run starts");
@@ -2291,13 +2313,13 @@ async fn cold_read_retry_selects_the_next_backend_with_the_tried_list() -> anyho
   let cfg = stack.features.config.get()?;
   let pool = backend_pool::backend_pool(&stack.features)?;
   let first =
-    spawner_backends::select_verify_backend(&cfg, stack.store(), &manager.id, "cold_read", &[], &pool).await?;
+    spawner_backends::select_verify_backend(&cfg, stack.store(), &manager.id, CallClass::ColdRead, &[], &pool).await?;
   assert_eq!(first.map(|(backend, _, tried)| (backend, tried)), Some(("alpha".to_string(), vec!["alpha".to_string()])));
   let retry = spawner_backends::select_verify_backend(
     &cfg,
     stack.store(),
     &manager.id,
-    "cold_read",
+    CallClass::ColdRead,
     &["alpha".to_string()],
     &pool,
   )
@@ -2478,7 +2500,7 @@ async fn launch_devin_error_worker(
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
   let first_backend = if pool_chosen {
     let pool = backend_pool::backend_pool(&stack.features)?;
-    pool.select(&stack.cfg, "test", &[])?.expect("the pool selects a first member").id
+    pool.select(&stack.cfg, "test", ROTATION_POOL_ID, &[])?.expect("the pool selects a first member").id
   } else {
     "devin".to_string()
   };
@@ -2607,7 +2629,15 @@ async fn a_pinned_devin_worker_exhausts_retries_and_reports_the_error() -> anyho
   assert_eq!(devin_call_count(&run.fake_bin)?, "4");
   let pool = backend_pool::backend_pool(&run.stack.features)?;
   assert!(
-    run.stack.cfg.backends.pool.iter().all(|member| pool.availability().out_until(member).is_none()),
+    run
+      .stack
+      .cfg
+      .backends
+      .pool(ROTATION_POOL_ID)
+      .expect("the rotation pool")
+      .members
+      .iter()
+      .all(|member| pool.availability().out_until(&member.backend).is_none()),
     "no member cools"
   );
   assert!(quota_failover_events(&run.stack, &run.worker_id)?.is_empty(), "no failover event is written");

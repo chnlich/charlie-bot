@@ -164,7 +164,7 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
     };
     let probe_prompt =
       cold_read::ask_probe_input(item, linked_page.as_deref(), &policy_section, &questions).map_err(anyhow_exit)?;
-    let probe = block_on(cold_read::run_light_probe(host, &probe_prompt, &system_prompt))?.map_err(anyhow_exit)?;
+    let probe = block_on(cold_read::run_probe(host, &probe_prompt, &system_prompt))?.map_err(anyhow_exit)?;
     let Some(backend) = probe.backend_id else {
       for (backend, error) in &probe.attempts {
         eprintln!("attempt {backend} failed: {error}");

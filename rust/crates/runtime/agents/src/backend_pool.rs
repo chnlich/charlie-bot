@@ -1,12 +1,13 @@
 //! Process-local backend rotation for unpinned work, reading "out until" from the shared availability owner.
 
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::io::ErrorKind;
 use std::process::{ExitStatus, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
-use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::config::{BackendOption, CallTarget, CharlieBotConfig, PoolConfig};
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_core::text_repr;
 use charliebot_core::timeouts::ROUTER_TIMEOUT_SECONDS;
@@ -21,8 +22,8 @@ use time::{OffsetDateTime, UtcOffset};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 
-use crate::backend_availability::{self, BackendAvailability};
-use crate::model_pool;
+use crate::backend_availability::BackendAvailability;
+use crate::model_pool::{self, RotationPositions};
 use charliebot_store::metadata::UtcDateTime;
 
 /// Error substrings that mark a backend as out of quota; the aigw gateway's `402 Insufficient Balance` text is one.
@@ -101,12 +102,12 @@ pub struct RouterAnswer {
 /// Where one routed request runs.
 #[derive(Debug)]
 pub enum RouteTarget {
-  /// The router did not route the request, or the router failed: the caller's default path runs it.
+  /// The router did not route the request, the router failed, or the one backend it named is out: the caller's default
+  /// path runs it.
   NotRouted,
-  /// The router sent the request to the pool, or every backend it named is cooling.
-  Pool,
-  /// The first backend the router named that is not cooling.
-  Backend(BackendOption),
+  /// The `backends.options` id or the `backends.pools` id the router named. A pool id runs on the member its rule
+  /// picks.
+  Backend(String),
 }
 
 /// One routed request: the route its session keeps, and where it runs.
@@ -138,23 +139,23 @@ impl Display for RouterError {
 
 impl std::error::Error for RouterError {}
 
-#[derive(Default)]
-struct PoolState {
-  position: usize,
-}
-
-/// The shared rotation position for every unpinned backend caller; "out until" lives on the availability owner.
+/// The state every unpinned backend caller shares: the availability owner, the registry whose member readings the
+/// selection reads, and the rotation positions of the rotate pools.
 pub struct BackendPool {
   availability: Arc<BackendAvailability>,
   registry: Arc<Registry>,
-  state: Mutex<PoolState>,
+  positions: Arc<RotationPositions>,
 }
 
 impl BackendPool {
-  /// Build the pool on top of the availability owner every caller reads "out until" from, and the registry whose
-  /// member readings the rotate rule consults.
-  pub fn new(availability: Arc<BackendAvailability>, registry: Arc<Registry>) -> Self {
-    Self { availability, registry, state: Mutex::new(PoolState::default()) }
+  /// Build the pool on top of the availability owner every caller reads "out until" from, the registry whose member
+  /// readings the rotate rule consults, and the rotation positions every caller of a pool shares.
+  pub fn new(
+    availability: Arc<BackendAvailability>,
+    registry: Arc<Registry>,
+    positions: Arc<RotationPositions>,
+  ) -> Self {
+    Self { availability, registry, positions }
   }
 
   /// The availability owner this pool reads "out until" from, for callers that record a member out.
@@ -166,36 +167,78 @@ impl BackendPool {
     self.availability.out_until(member)
   }
 
-  /// Select the next configured pool member that is neither out, excluded, nor exhausted by its usage reading.
+  /// Select the member a call on the `backends.pools` entry `pool_id` runs on, or `None` when no member is selectable.
+  /// The pool's rule picks the member; a rotate pool moves its position past it.
   pub fn select(
     &self,
     cfg: &CharlieBotConfig,
     caller: &str,
+    pool_id: &str,
     exclude: &[String],
   ) -> anyhow::Result<Option<BackendOption>> {
-    let pool = model_pool::rotation_pool(cfg);
-    let mut state = self.state.lock().expect("backend pool mutex is not poisoned");
-    let selected = model_pool::select(
+    let pool = model_pool::pool_by_id(cfg, pool_id)?;
+    let selected = self.positions.select(
       cfg,
       &self.registry,
       &self.availability,
       &pool,
-      Some(&mut state.position),
       exclude,
       UtcDateTime::now(),
+      &HashMap::new(),
     )?;
     let Some(member) = selected else {
       let mut excluded = exclude.to_vec();
       excluded.sort();
-      tracing::warn!(target: "charliebot_agents", caller, members = ?cfg.backends.pool, excluded = ?excluded, "backend_pool_exhausted");
+      tracing::warn!(
+        target: "charliebot_agents",
+        caller,
+        pool = pool_id,
+        excluded = ?excluded,
+        "backend_pool_exhausted"
+      );
       return Ok(None);
     };
-    tracing::info!(target: "charliebot_agents", caller, member = %member.backend, next_position = state.position, "backend_pool_selected");
+    tracing::info!(
+      target: "charliebot_agents",
+      caller,
+      pool = pool_id,
+      member = %member.backend,
+      "backend_pool_selected"
+    );
     let option = cfg.get_backend_option(&member.backend).expect("the selected pool member is a backends.options id");
     Ok(Some(option.clone()))
   }
 
-  /// Select the first available member in a fixed router order without moving pool rotation.
+  /// The member `select` would pick on `pool_id` now, without moving the rotation position. The cron host gate reads it
+  /// before a fire, so the gate judges the member the fire then selects.
+  pub fn peek(
+    &self,
+    cfg: &CharlieBotConfig,
+    pool_id: &str,
+    exclude: &[String],
+  ) -> anyhow::Result<Option<BackendOption>> {
+    let pool = model_pool::pool_by_id(cfg, pool_id)?;
+    let peeked = self.positions.peek(
+      cfg,
+      &self.registry,
+      &self.availability,
+      &pool,
+      exclude,
+      UtcDateTime::now(),
+      &HashMap::new(),
+    )?;
+    Ok(peeked.map(|member| {
+      cfg.get_backend_option(&member.backend).expect("the selected pool member is a backends.options id").clone()
+    }))
+  }
+
+  /// The line a caller reports when `select` found no member of the pool `pool_id`: one line per member.
+  pub fn exhausted_message(&self, cfg: &CharlieBotConfig, pool_id: &str) -> anyhow::Result<String> {
+    let pool = model_pool::pool_by_id(cfg, pool_id)?;
+    model_pool::all_exhausted_message(cfg, &self.registry, &self.availability, &pool)
+  }
+
+  /// Select the first available member in a fixed router order without moving any rotation position.
   pub fn pick_ordered(
     &self,
     cfg: &CharlieBotConfig,
@@ -213,6 +256,7 @@ impl BackendPool {
       Some(&mut position),
       exclude,
       UtcDateTime::now(),
+      &HashMap::new(),
     )?;
     let Some(member) = selected else {
       tracing::warn!(target: "charliebot_agents", caller, backends = ?backends, excluded = ?exclude, "backend_pool_route_exhausted");
@@ -235,56 +279,43 @@ impl BackendPool {
   ) -> Result<RouterAnswer, RouterError> {
     let routing =
       cfg.backends.routing.as_ref().ok_or_else(|| RouterError("backends.routing is not configured".to_string()))?;
-    self
-      .route_command(
-        &routing.command,
-        role,
-        text,
-        candidates,
-        session_backend,
-        StdDuration::from_secs(ROUTER_TIMEOUT_SECONDS),
-      )
-      .await
+    let payload = json!({
+      "role": role,
+      "text": text,
+      "candidates": self.route_candidates(cfg, candidates),
+      "session_backend": session_backend,
+    });
+    self.route_command(&routing.command, payload, candidates, StdDuration::from_secs(ROUTER_TIMEOUT_SECONDS)).await
   }
 
-  /// Turn one router answer into the route the request keeps and the place it runs. The first named backend that is not
-  /// cooling runs the request; when every named backend is cooling, the route says the request ran on the pool.
+  /// Turn one router answer into the route the request keeps and the place it runs. A routed answer names exactly one
+  /// id. A pool id runs the request on the member its rule picks at the run's start; an options id runs it unless the
+  /// member is out, in which case the caller's default path runs it.
   pub fn decide(&self, cfg: &CharlieBotConfig, caller: &str, answer: RouterAnswer) -> anyhow::Result<RoutedRequest> {
     let RouterAnswer { routed, backends, reason } = answer;
     if !routed {
       return Ok(RoutedRequest { route: BackendRoute { backends, reason }, target: RouteTarget::NotRouted });
     }
-    if backends.is_empty() {
-      return Ok(RoutedRequest { route: BackendRoute { backends, reason }, target: RouteTarget::Pool });
+    let [backend] = backends.as_slice() else {
+      anyhow::bail!("{caller}: a routed answer names exactly one backend id, got {}", backends.len());
+    };
+    let backend = backend.clone();
+    if cfg.backends.pool(&backend).is_some() || self.pick_ordered(cfg, caller, &backends, &[])?.is_some() {
+      return Ok(RoutedRequest { route: BackendRoute { backends, reason }, target: RouteTarget::Backend(backend) });
     }
-    match self.pick_ordered(cfg, caller, &backends, &[])? {
-      Some(option) => {
-        Ok(RoutedRequest { route: BackendRoute { backends, reason }, target: RouteTarget::Backend(option) })
-      }
-      None => {
-        let reason = format!("{reason}; {} cooling; ran on pool", backends.join(", "));
-        Ok(RoutedRequest { route: BackendRoute { backends, reason }, target: RouteTarget::Pool })
-      }
-    }
+    let reason = format!("{reason}; {backend} cooling; ran on the default path");
+    Ok(RoutedRequest { route: BackendRoute { backends, reason }, target: RouteTarget::NotRouted })
   }
 
+  /// Run the router command on `payload` and parse its answer against the candidate ids it was offered.
   async fn route_command(
     &self,
     command: &[String],
-    role: &str,
-    text: &str,
+    payload: Value,
     candidates: &[String],
-    session_backend: Option<&str>,
     timeout: StdDuration,
   ) -> Result<RouterAnswer, RouterError> {
     let program = command.first().ok_or_else(|| RouterError("backends.routing.command is empty".to_string()))?;
-    let candidate_entries = self.route_candidates(candidates);
-    let payload = json!({
-      "role": role,
-      "text": text,
-      "candidates": candidate_entries,
-      "session_backend": session_backend,
-    });
     let input =
       serde_json::to_vec(&payload).map_err(|error| RouterError(format!("could not encode router input: {error}")))?;
     let mut process = Command::new(program);
@@ -319,45 +350,77 @@ impl BackendPool {
     parse_router_output(program, output, candidates)
   }
 
-  fn route_candidates(&self, candidates: &[String]) -> Vec<Value> {
+  /// The candidate entries the router reads. A pool id reports the moment its last selectable member recovers, and no
+  /// moment while any member is selectable.
+  fn route_candidates(&self, cfg: &CharlieBotConfig, candidates: &[String]) -> Vec<Value> {
     let now = UtcDateTime::now().into_inner();
     candidates
       .iter()
       .map(|candidate| {
-        let cooling_until = self.out_until(candidate).filter(|until| *until > now).map(format_isoformat);
+        let cooling_until = match cfg.backends.pool(candidate) {
+          Some(pool) => self.pool_cooling_until(pool, now),
+          None => self.out_until(candidate).filter(|until| *until > now).map(format_isoformat),
+        };
         json!({"id": candidate, "cooling_until": cooling_until})
       })
       .collect()
   }
 
-  /// Describe every configured member and whether its cooling has ended.
-  pub fn recovery_report(&self, cfg: &CharlieBotConfig) -> String {
-    let now = UtcDateTime::now();
-    let parts = cfg
-      .backends
-      .pool
+  /// The moment a pool becomes selectable again: `None` while one member has no out record, else the earliest recovery.
+  fn pool_cooling_until(&self, pool: &PoolConfig, now: OffsetDateTime) -> Option<String> {
+    let recoveries = pool
+      .members
       .iter()
-      .map(|member| match self.out_until(member) {
-        Some(until) if until > now.into_inner() => {
-          format!("{member} cooling until {}", backend_availability::format_minutes(until))
-        }
-        _ => match model_pool::member_reading(cfg, &self.registry, member, now) {
-          Ok(Some(reading)) if reading.exhausted => format!("{member} exhausted by its usage reading"),
-          Ok(_) => format!("{member} not cooling"),
-          Err(error) => format!("{member} usage reading failed: {error:#}"),
-        },
-      })
-      .collect::<Vec<_>>();
-    if parts.is_empty() { "backends.pool is empty".to_string() } else { parts.join("; ") }
+      .map(|member| self.out_until(&member.backend).filter(|until| *until > now))
+      .collect::<Option<Vec<_>>>()?;
+    recoveries.into_iter().min().map(format_isoformat)
   }
+}
 
-  /// The line a caller reports when `select` found no member.
-  ///
-  /// Subagent resolution, the improve loop's per-iteration pick and the quota failover all report it, and an
-  /// operator reads the same wording whichever one refused.
-  pub fn no_member_message(&self, cfg: &CharlieBotConfig) -> String {
-    format!("no backends.pool member is available: {}", self.recovery_report(cfg))
-  }
+/// The members one call of a `backends.calls` class tries, in order. A pool target selects its next member, excluding
+/// the members already tried, so a caller that records a failed member out moves on to the next one. A model target
+/// yields that model once. An unset class yields nothing; the caller decides what an unset class means.
+pub fn one_shot_members<'a>(
+  cfg: &'a CharlieBotConfig,
+  pool: Arc<BackendPool>,
+  caller: &'a str,
+  target: Option<&'a CallTarget>,
+) -> impl Iterator<Item = anyhow::Result<BackendOption>> + 'a {
+  let mut tried: Vec<String> = Vec::new();
+  let mut done = false;
+  std::iter::from_fn(move || {
+    if done {
+      return None;
+    }
+    let next = match target {
+      None => return None,
+      Some(CallTarget::Session) => Err(anyhow::anyhow!("backends.calls.{caller} cannot name the session")),
+      Some(CallTarget::Backend(id)) if cfg.backends.pool(id).is_some() => pool.select(cfg, caller, id, &tried),
+      Some(CallTarget::Backend(id)) => cfg
+        .get_backend_option(id)
+        .cloned()
+        .map(Some)
+        .ok_or_else(|| anyhow::anyhow!("backends.calls.{caller} names '{id}', which is not a backends.options id")),
+    };
+    let is_pool = matches!(target, Some(CallTarget::Backend(id)) if cfg.backends.pool(id).is_some());
+    if !is_pool {
+      done = true;
+    }
+    match next {
+      Ok(Some(option)) => {
+        tried.push(option.id.clone());
+        Some(Ok(option))
+      }
+      Ok(None) => {
+        done = true;
+        None
+      }
+      Err(error) => {
+        done = true;
+        Some(Err(error))
+      }
+    }
+  })
 }
 
 /// Return whether an error string contains a known quota error substring.
@@ -396,7 +459,9 @@ pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, an
     let cfg = features.config.get()?;
     features.startup.insert(BackendAvailability::load(&cfg.charliebot_home)?)?;
     let availability = features.startup.require::<BackendAvailability>()?;
-    features.startup.insert(BackendPool::new(availability, Arc::clone(&features.registry)))?;
+    features.startup.insert(RotationPositions::default())?;
+    let positions = features.startup.require::<RotationPositions>()?;
+    features.startup.insert(BackendPool::new(availability, Arc::clone(&features.registry), positions))?;
     Ok(())
   })
 }
@@ -564,7 +629,11 @@ impl Drop for RouterProcessGroupGuard {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use charliebot_core::config::{BackendsConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig};
+  use crate::backend_availability;
+  use charliebot_core::config::{
+    BackendsConfig, CallsConfig, PathsConfig, PoolConfig, PoolMember, PoolRule, Sections, ServerConfig, TelegramConfig,
+    UiConfig,
+  };
   use charliebot_registry::backend::MemberReading;
   use serde_yaml::Mapping;
   use std::fs;
@@ -572,7 +641,11 @@ mod tests {
   use std::time::Duration as StdDuration;
   use time::Duration;
 
-  fn config(pool: &[&str]) -> CharlieBotConfig {
+  /// The rotate pool that every selection test names.
+  const POOL: &str = "light";
+
+  /// Options `a`, `b` and `c`, and the rotate pool [`POOL`] over `members` in order.
+  fn config(members: &[&str]) -> CharlieBotConfig {
     let options = ["a", "b", "c"]
       .into_iter()
       .map(|id| BackendOption {
@@ -584,6 +657,12 @@ mod tests {
         type_fields: Mapping::new(),
       })
       .collect();
+    let pools = vec![PoolConfig {
+      id: POOL.to_string(),
+      label: "Light".to_string(),
+      rule: PoolRule::Rotate,
+      members: members.iter().map(|member| PoolMember { backend: (*member).to_string(), billing: None }).collect(),
+    }];
     CharlieBotConfig {
       charliebot_home: PathBuf::from("/synthetic/home"),
       headless_chrome_bin: "/synthetic/bin/chrome".to_string(),
@@ -605,12 +684,7 @@ mod tests {
         worktree_dir: "/synthetic/worktrees".to_string(),
         scratch_dir: "/synthetic/scripts".to_string(),
       },
-      backends: BackendsConfig {
-        pool: pool.iter().map(|member| (*member).to_string()).collect(),
-        routing: None,
-        options,
-        auto: None,
-      },
+      backends: BackendsConfig { routing: None, options, pools, calls: CallsConfig::default() },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       remote_run: charliebot_core::config::RemoteRunConfig::default(),
@@ -621,7 +695,7 @@ mod tests {
 
   fn select_id(pool: &BackendPool, cfg: &CharlieBotConfig, caller: &str, exclude: &[&str]) -> Option<String> {
     let excluded = exclude.iter().map(|member| (*member).to_string()).collect::<Vec<_>>();
-    pool.select(cfg, caller, &excluded).unwrap().map(|option| option.id)
+    pool.select(cfg, caller, POOL, &excluded).unwrap().map(|option| option.id)
   }
 
   /// A pool whose owner holds no record and never persists one: the selection tests never record.
@@ -632,7 +706,15 @@ mod tests {
 
   /// A pool on a live home, for the tests that record a member out through the owner.
   fn pool_at(home: &Path) -> BackendPool {
-    BackendPool::new(Arc::new(BackendAvailability::load(home).unwrap()), Arc::new(Registry::new()))
+    pool_with(home, Arc::new(Registry::new()))
+  }
+
+  fn pool_with(home: &Path, registry: Arc<Registry>) -> BackendPool {
+    BackendPool::new(
+      Arc::new(BackendAvailability::load(home).unwrap()),
+      registry,
+      Arc::new(RotationPositions::default()),
+    )
   }
 
   /// A registry whose `codex` reading says member `b` is exhausted and says nothing about the other members.
@@ -662,6 +744,11 @@ mod tests {
       .unwrap();
   }
 
+  /// The payload of a task-role routing request, as `route` builds it for a task.
+  fn router_payload() -> Value {
+    json!({"role": "task", "text": "implement", "candidates": [], "session_backend": null})
+  }
+
   fn router_command(directory: &tempfile::TempDir, body: &str, arguments: &[&str]) -> Vec<String> {
     let path = directory.path().join("fake-router.sh");
     fs::write(&path, format!("set -eu\n{body}\n")).unwrap();
@@ -685,7 +772,7 @@ mod tests {
   fn selection_skips_a_member_whose_reading_says_it_is_exhausted() {
     let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a", "b", "c"]);
-    let pool = BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap()), exhausted_b_registry());
+    let pool = pool_with(home.path(), exhausted_b_registry());
     assert_eq!(select_id(&pool, &cfg, "test", &[]), Some("a".to_string()));
     assert_eq!(select_id(&pool, &cfg, "test", &[]), Some("c".to_string()), "b's reading says it is exhausted");
   }
@@ -739,42 +826,16 @@ mod tests {
   }
 
   #[test]
-  fn recovery_report_names_cooldowns_in_pool_order() {
+  fn exhausted_message_lists_each_member_and_why_it_is_out() {
     let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a", "b"]);
     let pool = pool_at(home.path());
-    let reset = UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap();
-    record(&pool, "a", Some(reset));
-    record(&pool, "b", Some(UtcDateTime::parse("2030-01-02T04:04:00Z").unwrap()));
-    assert_eq!(
-      pool.recovery_report(&cfg),
-      "a cooling until 2030-01-02T03:04+00:00; b cooling until 2030-01-02T04:04+00:00"
-    );
-  }
-
-  #[test]
-  fn empty_pool_recovery_report_names_the_empty_pool() {
-    assert_eq!(pool().recovery_report(&config(&[])), "backends.pool is empty");
-  }
-
-  #[test]
-  fn recovery_report_names_a_member_its_usage_reading_exhausted() {
-    let home = tempfile::tempdir().unwrap();
-    let cfg = config(&["a", "b", "c"]);
-    let pool = BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap()), exhausted_b_registry());
-    assert_eq!(pool.recovery_report(&cfg), "a not cooling; b exhausted by its usage reading; c not cooling");
-  }
-
-  #[test]
-  fn no_member_message_joins_the_refusal_and_the_recovery_report() {
-    let home = tempfile::tempdir().unwrap();
-    let cfg = config(&["a"]);
-    let pool = pool_at(home.path());
     record(&pool, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
-    assert_eq!(
-      pool.no_member_message(&cfg),
-      "no backends.pool member is available: a cooling until 2030-01-02T03:04+00:00"
-    );
+    let message = pool.exhausted_message(&cfg, POOL).unwrap();
+    assert!(message.starts_with("pool 'light' has no selectable member:\n"), "{message}");
+    assert!(message.contains("\n- a: ") && message.contains("recovers at 2030-01-02T03:04"), "{message}");
+    assert!(message.contains("(synthetic quota error)"), "{message}");
+    assert!(message.ends_with("\n- b: not selectable"), "{message}");
   }
 
   #[test]
@@ -787,6 +848,16 @@ mod tests {
     record(&pool, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
     assert_eq!(select_id(&pool, &cfg, "caller-b", &[]), Some("c".to_string()));
     assert_eq!(select_id(&pool, &cfg, "caller-a", &[]), Some("b".to_string()));
+  }
+
+  #[test]
+  fn peek_names_the_member_select_would_pick_without_moving_the_rotation() {
+    let cfg = config(&["a", "b", "c"]);
+    let pool = pool();
+    assert_eq!(pool.peek(&cfg, POOL, &[]).unwrap().map(|option| option.id), Some("a".to_string()));
+    assert_eq!(pool.peek(&cfg, POOL, &[]).unwrap().map(|option| option.id), Some("a".to_string()));
+    assert_eq!(select_id(&pool, &cfg, "test", &[]), Some("a".to_string()));
+    assert_eq!(pool.peek(&cfg, POOL, &[]).unwrap().map(|option| option.id), Some("b".to_string()));
   }
 
   #[test]
@@ -840,10 +911,65 @@ mod tests {
   }
 
   #[test]
-  fn pool_entries_without_options_fail_selection() {
-    let mut cfg = config(&["missing"]);
-    cfg.backends.options.clear();
-    assert!(pool().select(&cfg, "test", &[]).is_err());
+  fn selecting_an_unknown_pool_id_fails() {
+    let cfg = config(&["a"]);
+    assert!(pool().select(&cfg, "test", "missing", &[]).is_err());
+  }
+
+  #[test]
+  fn a_routed_answer_names_exactly_one_id() {
+    let cfg = config(&["a", "b"]);
+    let answer =
+      RouterAnswer { routed: true, backends: vec!["a".to_string(), "b".to_string()], reason: "two ids".to_string() };
+    let error = pool().decide(&cfg, "implement", answer).unwrap_err();
+    assert!(error.to_string().contains("exactly one backend id, got 2"), "{error}");
+  }
+
+  #[test]
+  fn a_routed_pool_id_runs_through_the_pool_and_a_cooling_option_takes_the_default_path() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg = config(&["a", "b"]);
+    let pool = pool_at(home.path());
+    let routed = pool
+      .decide(
+        &cfg,
+        "implement",
+        RouterAnswer { routed: true, backends: vec![POOL.to_string()], reason: "pool".to_string() },
+      )
+      .unwrap();
+    assert!(matches!(routed.target, RouteTarget::Backend(ref id) if id == POOL), "{:?}", routed.target);
+
+    record(&pool, "b", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
+    let cooling = pool
+      .decide(
+        &cfg,
+        "implement",
+        RouterAnswer { routed: true, backends: vec!["b".to_string()], reason: "option".to_string() },
+      )
+      .unwrap();
+    assert!(matches!(cooling.target, RouteTarget::NotRouted), "{:?}", cooling.target);
+    assert!(cooling.route.reason.ends_with("b cooling; ran on the default path"), "{}", cooling.route.reason);
+  }
+
+  #[test]
+  fn three_workers_routed_to_a_rotate_pool_take_its_three_members_in_turn() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg = config(&["a", "b", "c"]);
+    let pool = pool_at(home.path());
+    let picked = (0..3)
+      .map(|_| {
+        let routed = pool
+          .decide(
+            &cfg,
+            "implement",
+            RouterAnswer { routed: true, backends: vec![POOL.to_string()], reason: "routine".to_string() },
+          )
+          .unwrap();
+        assert!(matches!(routed.target, RouteTarget::Backend(ref id) if id == POOL), "{:?}", routed.target);
+        select_id(&pool, &cfg, "worker", &[]).unwrap()
+      })
+      .collect::<Vec<_>>();
+    assert_eq!(picked, ["a", "b", "c"]);
   }
 
   #[tokio::test]
@@ -909,10 +1035,8 @@ mod tests {
     let missing = pool
       .route_command(
         &["/synthetic/missing-router".to_string()],
-        "implement",
-        "task",
+        router_payload(),
         &candidates,
-        None,
         StdDuration::from_secs(1),
       )
       .await
@@ -921,26 +1045,20 @@ mod tests {
 
     let directory = tempfile::tempdir().unwrap();
     let command = router_command(&directory, "cat >/dev/null\nprintf '%s' 'router boom' >&2\nexit 3", &[]);
-    let exited = pool
-      .route_command(&command, "implement", "task", &candidates, None, StdDuration::from_secs(1))
-      .await
-      .unwrap_err();
+    let exited =
+      pool.route_command(&command, router_payload(), &candidates, StdDuration::from_secs(1)).await.unwrap_err();
     assert!(exited.to_string().contains("exited 3") && exited.to_string().contains("router boom"));
 
     let command = router_command(&directory, "cat >/dev/null\nprintf '%s' 'not json'", &[]);
-    let malformed = pool
-      .route_command(&command, "implement", "task", &candidates, None, StdDuration::from_secs(1))
-      .await
-      .unwrap_err();
+    let malformed =
+      pool.route_command(&command, router_payload(), &candidates, StdDuration::from_secs(1)).await.unwrap_err();
     assert!(malformed.to_string().contains("stdout outside the router contract"));
 
     // An answer without the routed flag is the old form, and the contract names the flag.
     let command =
       router_command(&directory, "cat >/dev/null\nprintf '%s' '{\"backends\":[\"a\"],\"reason\":\"old form\"}'", &[]);
-    let without_routed = pool
-      .route_command(&command, "implement", "task", &candidates, None, StdDuration::from_secs(1))
-      .await
-      .unwrap_err();
+    let without_routed =
+      pool.route_command(&command, router_payload(), &candidates, StdDuration::from_secs(1)).await.unwrap_err();
     assert!(without_routed.to_string().contains("routed: bool"));
 
     let command = router_command(
@@ -948,10 +1066,8 @@ mod tests {
       "cat >/dev/null\nprintf '%s' '{\"routed\":false,\"backends\":[\"a\"],\"reason\":\"contradiction\"}'",
       &[],
     );
-    let unrouted_with_backends = pool
-      .route_command(&command, "implement", "task", &candidates, None, StdDuration::from_secs(1))
-      .await
-      .unwrap_err();
+    let unrouted_with_backends =
+      pool.route_command(&command, router_payload(), &candidates, StdDuration::from_secs(1)).await.unwrap_err();
     assert!(unrouted_with_backends.to_string().contains("routed false"));
 
     let command = router_command(
@@ -959,17 +1075,13 @@ mod tests {
       "cat >/dev/null\nprintf '%s' '{\"routed\":true,\"backends\":[\"ghost\"],\"reason\":\"unknown\"}'",
       &[],
     );
-    let unknown = pool
-      .route_command(&command, "implement", "task", &candidates, None, StdDuration::from_secs(1))
-      .await
-      .unwrap_err();
+    let unknown =
+      pool.route_command(&command, router_payload(), &candidates, StdDuration::from_secs(1)).await.unwrap_err();
     assert!(unknown.to_string().contains("ghost"));
 
     let command = router_command(&directory, "cat >/dev/null\nsleep 5", &[]);
-    let timeout = pool
-      .route_command(&command, "implement", "task", &candidates, None, StdDuration::from_millis(100))
-      .await
-      .unwrap_err();
+    let timeout =
+      pool.route_command(&command, router_payload(), &candidates, StdDuration::from_millis(100)).await.unwrap_err();
     assert!(timeout.to_string().contains("timed out"));
   }
 

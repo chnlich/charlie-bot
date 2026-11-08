@@ -98,7 +98,7 @@ async fn create_task(
   {
     return detail(
       StatusCode::BAD_REQUEST,
-      format!("backend '{backend}' {}", crate::config::unresolved_backend_reason(backend)),
+      format!("backend '{backend}' {}", crate::config::UNRESOLVED_BACKEND_REASON),
     );
   }
   let requested_session = values.get("session_id").and_then(Value::as_str).filter(|value| !value.is_empty());
@@ -190,7 +190,7 @@ async fn update_task(
   {
     return detail(
       StatusCode::BAD_REQUEST,
-      format!("backend '{backend}' {}", crate::config::unresolved_backend_reason(backend)),
+      format!("backend '{backend}' {}", crate::config::UNRESOLVED_BACKEND_REASON),
     );
   }
   let repo = match features.startup.require::<RepoRoot>() {
@@ -547,7 +547,7 @@ mod tests {
     .await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(response["detail"], "backend 'missing-backend' is not in backends.options");
+    assert_eq!(response["detail"], "backend 'missing-backend' is not in backends.options or backends.pools");
     assert!(!path.exists());
   }
 

@@ -33,7 +33,6 @@ use charliebot_store::{
   SequenceArchiveHook, SequenceBindingMover, SequenceListingFields, Store, StoreHookFuture, StoreHooks, StoreResult,
   TaskCaller,
 };
-use charliebot_tasks::autonamer;
 use charliebot_tasks::dispatch;
 use charliebot_tasks::execution::{self, TaskExecutionAdapter};
 use charliebot_tasks::master_queue::{
@@ -375,7 +374,7 @@ async fn run_fake_devin_manager_turn(
 
 fn config(home: &Path, option: Option<BackendOption>) -> CharlieBotConfig {
   let options = option.into_iter().collect::<Vec<_>>();
-  let pool = options.iter().map(|backend| backend.id.clone()).collect();
+  let pool: Vec<String> = options.iter().map(|backend| backend.id.clone()).collect();
   CharlieBotConfig {
     charliebot_home: home.to_path_buf(),
     headless_chrome_bin: "/bin/false".to_string(),
@@ -397,7 +396,12 @@ fn config(home: &Path, option: Option<BackendOption>) -> CharlieBotConfig {
       worktree_dir: "/synthetic/worktrees".to_string(),
       scratch_dir: "/synthetic/scripts".to_string(),
     },
-    backends: BackendsConfig { pool, routing: None, options, auto: None },
+    backends: BackendsConfig {
+      routing: None,
+      options,
+      pools: charliebot_tasks::test_support::recovery_support::rotation_pools(pool.clone()).0,
+      calls: charliebot_tasks::test_support::recovery_support::rotation_pools(pool).1,
+    },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
     remote_run: charliebot_core::config::RemoteRunConfig::default(),
@@ -511,6 +515,7 @@ fn config_with_features_from_config_and_agent_path(
   startup.insert(BackendPool::new(
     startup.require::<charliebot_agents::backend_availability::BackendAvailability>()?,
     Arc::clone(&registry),
+    Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
   ))?;
   let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
     .ancestors()
@@ -1792,17 +1797,28 @@ fn autonamer_iterates_a_synthetic_pool_with_the_shared_backend_pool() -> anyhow:
   let second = backend_option_for("light-b", "codex", String::new(), None);
   let mut cfg = config(Path::new("/synthetic/home"), Some(first));
   cfg.backends.options.push(second);
-  cfg.backends.pool.push("light-b".to_string());
+  let (pools, calls) = charliebot_tasks::test_support::recovery_support::rotation_pools(vec![
+    "light-a".to_string(),
+    "light-b".to_string(),
+  ]);
+  cfg.backends.pools = pools;
+  cfg.backends.calls = calls;
   let home = tempfile::tempdir().unwrap();
   let pool = Arc::new(BackendPool::new(
     Arc::new(charliebot_agents::backend_availability::BackendAvailability::load(home.path()).unwrap()),
     Arc::new(Registry::new()),
+    Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
   ));
-  let selected = autonamer::iter_light_backends(&cfg, pool)
-    .collect::<anyhow::Result<Vec<_>>>()?
-    .into_iter()
-    .map(|option| option.id)
-    .collect::<Vec<_>>();
+  let selected = charliebot_agents::backend_pool::one_shot_members(
+    &cfg,
+    pool,
+    "autoname",
+    cfg.backends.calls.get(charliebot_core::config::CallClass::Autoname),
+  )
+  .collect::<anyhow::Result<Vec<_>>>()?
+  .into_iter()
+  .map(|option| option.id)
+  .collect::<Vec<_>>();
   assert_eq!(selected, ["light-a", "light-b"]);
   Ok(())
 }

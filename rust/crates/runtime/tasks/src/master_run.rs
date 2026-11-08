@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use charliebot_agents::agent_environment;
 use charliebot_agents::backend_types;
 use charliebot_agents::launch_loop::{self, ProcessResult, RunProcess};
@@ -911,9 +911,16 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
   if relays > 0 {
     finish_extras.insert("account_relays".to_string(), json!(relays));
   }
-  add_auto_quota_extras(&metadata, error_msg.as_deref(), quota_exhausted, process.quota_resets_at, &mut finish_extras);
+  add_auto_quota_extras(
+    &process.item.cfg,
+    &metadata,
+    error_msg.as_deref(),
+    quota_exhausted,
+    process.quota_resets_at,
+    &mut finish_extras,
+  );
   // An Auto session's quota end is continued on its next member, so this turn posts no "Agent error" of its own.
-  if !is_auto_quota_end(&metadata, &finish_extras) {
+  if !is_pool_quota_end(&process.item.cfg, &metadata, &finish_extras) {
     report_turn_error_and_salvage(&tracker, process.item, error_msg.as_deref(), quota_exhausted).await?;
   }
   let was_cancelled = cancelled.lock().expect("cancel state mutex is not poisoned").is_some();
@@ -936,13 +943,14 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
 /// Record an Auto session's quota failure in the finish extras, from which the finish recorder writes the member's
 /// "out until" row and switches the turn to its next member. A turn that ends for any other reason records nothing.
 fn add_auto_quota_extras(
+  cfg: &CharlieBotConfig,
   metadata: &SessionMetadata,
   error_msg: Option<&str>,
   quota_exhausted: Option<bool>,
   resets_at: Option<time::OffsetDateTime>,
   extras: &mut Map<String, Value>,
 ) {
-  if metadata.backend != charliebot_core::config::AUTO_BACKEND_ID {
+  if cfg.backends.pool(&metadata.backend).is_none() {
     return;
   }
   let Some(message) = error_msg else { return };
@@ -957,24 +965,27 @@ fn add_auto_quota_extras(
   }
 }
 
-/// Whether the finish extras of this turn describe an Auto session's quota end.
-fn is_auto_quota_end(metadata: &SessionMetadata, extras: &Map<String, Value>) -> bool {
-  metadata.backend == charliebot_core::config::AUTO_BACKEND_ID
+/// Whether the finish extras of this turn describe a pool session's quota end.
+fn is_pool_quota_end(cfg: &CharlieBotConfig, metadata: &SessionMetadata, extras: &Map<String, Value>) -> bool {
+  cfg.backends.pool(&metadata.backend).is_some()
     && extras.get(FINISH_QUOTA_EXHAUSTED).and_then(Value::as_bool) == Some(true)
 }
 
-fn resolve_resume_option(item: &WorkItem) -> Option<BackendOption> {
+/// The option a resumed turn runs on: the option the item names, else the session's backend, or for a pool session its
+/// recorded member. A backend that resolves to no option is a refusal, not a fall back to another option.
+fn resolve_resume_option(item: &WorkItem) -> anyhow::Result<BackendOption> {
   if let Some(option) = &item.backend_option {
-    return Some(option.clone());
+    return Ok(option.clone());
   }
   let metadata = item.session_metadata();
-  if !metadata.backend.is_empty() {
-    if let Some(option) = item.cfg.get_backend_option(&metadata.backend) {
-      return Some(option.clone());
-    }
-    tracing::warn!(target: "charliebot_tasks", session = %metadata.id, backend = %metadata.backend, "master_cc_resume_backend_unresolved");
-  }
-  item.cfg.backends.options.first().cloned()
+  let backend_id = if item.cfg.backends.pool(&metadata.backend).is_some() {
+    charliebot_agents::model_pool::current_member_id(&item.cfg, &metadata)?
+  } else {
+    metadata.backend.clone()
+  };
+  item.cfg.get_backend_option(&backend_id).cloned().ok_or_else(|| {
+    anyhow!("resumed session '{}' runs on backend '{backend_id}', which backends.options does not list", metadata.id)
+  })
 }
 
 pub(crate) fn build_fresh_translate(
@@ -996,10 +1007,10 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   let log_dir = raw_path.parent().context("resume raw log has no parent directory")?.to_path_buf();
   let cursor_path = log_dir.join(CURSOR_NAME);
   let stderr_path = log_dir.join(STDERR_LOG_NAME);
-  let option = resolve_resume_option(item);
+  let option = resolve_resume_option(item)?;
   tracing::info!(target: "charliebot_tasks", session = %metadata.id, pid = record.pid, raw_log = %raw_path.display(), "{}", MASTER_CC_RESUMING_EVENT);
-  let backend_type = option.as_ref().map(|option| option.backend_type.as_str()).unwrap_or("unknown");
-  let model = option.as_ref().map(|option| option.model.as_str());
+  let backend_type = option.backend_type.as_str();
+  let model = Some(option.model.as_str());
   let tracker = Arc::new(Mutex::new(RunTimingTracker::new(&metadata.id, backend_type, model)));
   let callback_cc_session_id = Arc::new(Mutex::new(metadata.cc_session_id.clone()));
   let mut exit_code = -1;
@@ -1014,7 +1025,7 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   let resume_run_id = item.task_run.run_id.clone();
   charliebot_agents::transport::final_stdout::recover(
     Arc::clone(&features.registry),
-    option.as_ref(),
+    Some(&option),
     &cfg,
     &log_dir,
     || is_alive(),
@@ -1024,7 +1035,7 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   .await?;
   let cursor_read = cursor::read_raw_cursor(&cursor_path);
   let mut translate_stream =
-    build_fresh_translate(&features, &cfg, option.as_ref(), &resume_meta, &resume_run_id, &log_dir)?;
+    build_fresh_translate(&features, &cfg, Some(&option), &resume_meta, &resume_run_id, &log_dir)?;
   let replay_path = raw_path.clone();
   let prefix = tokio::task::spawn_blocking(move || {
     charliebot_agents::transport::recovery::raw_events_before_cursor(&replay_path, cursor_read)
@@ -1046,7 +1057,7 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   let stream_events = Arc::new(Mutex::new(Vec::<Value>::new()));
   let persisted_events = Arc::clone(&stream_events);
   let stream_ack_ids = Arc::clone(&ack_ids);
-  let serve_transport = option.as_ref().and_then(|option| features.registry.serve_transport(&option.backend_type));
+  let serve_transport = features.registry.serve_transport(&option.backend_type);
   let (on_silence, silence_threshold) = match serve_transport.as_ref() {
     Some(transport) => match transport.recovery_silence(&log_dir)? {
       Some(silence) => {
@@ -1115,9 +1126,9 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
     error_msg = Some(error);
   }
   let cancelled = *item.cancel.borrow();
-  let restart_reattach = option
-    .as_ref()
-    .and_then(|option| features.registry.backend_type_of(&option.backend_type))
+  let restart_reattach = features
+    .registry
+    .backend_type_of(&option.backend_type)
     .is_some_and(|registration| registration.traits.restart_reattach);
   let has_process_identity = record.pid.is_some() && record.pid_start.is_some();
   let let_go = cancelled && restart_reattach && has_process_identity;
@@ -1148,8 +1159,7 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   } else {
     let mut events = stream_events.lock().expect("resume event mutex is not poisoned").clone();
     // Replay from the start of the stored stream to preserve completion and manual-compaction evidence.
-    let translate_scan =
-      build_fresh_translate(&features, &cfg, option.as_ref(), &resume_meta, &resume_run_id, &log_dir)?;
+    let translate_scan = build_fresh_translate(&features, &cfg, Some(&option), &resume_meta, &resume_run_id, &log_dir)?;
     let scanned = recovery::scan_result_exit(&raw_path, translate_scan);
     match scanned {
       Ok((projected, _, code)) => {
@@ -1168,9 +1178,7 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
     if exit_code != 0 && error_msg.is_none() {
       error_msg = charliebot_agents::runs::select_run_error(&events, &stderr);
     }
-    if let Some(option) = option.as_ref() {
-      emit_round_notices(item, option, &features, &events).await?;
-    }
+    emit_round_notices(item, &option, &features, &events).await?;
     if let Some(pid) = record.pid {
       let host_boot = identity::read_host_boot_time().context("reading host boot time for resumed run")?;
       let alive = charliebot_agents::runs::run_alive_probe(
@@ -1186,10 +1194,10 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
     }
   }
   let mut finish_extras = tracker.lock().expect("run timing mutex is not poisoned").finish_extras();
-  add_auto_quota_extras(&metadata, error_msg.as_deref(), None, None, &mut finish_extras);
+  add_auto_quota_extras(&item.cfg, &metadata, error_msg.as_deref(), None, None, &mut finish_extras);
   item.user_event_ids = std::mem::take(&mut *ack_ids.lock().expect("resume acknowledgement mutex is not poisoned"));
   // The drain takes the same path as a live turn: an Auto quota end continues on the next member silently.
-  if !is_auto_quota_end(&metadata, &finish_extras) {
+  if !is_pool_quota_end(&item.cfg, &metadata, &finish_extras) {
     report_turn_error_and_salvage(&tracker, item, error_msg.as_deref(), None).await?;
   }
   if !let_go {
@@ -1262,9 +1270,12 @@ mod tests {
     );
     let availability =
       Arc::new(charliebot_agents::backend_availability::BackendAvailability::load(&root.path().join("home")).unwrap());
-    let queue = Arc::new(crate::master_queue::MasterQueue::new(Arc::new(
-      charliebot_agents::backend_pool::BackendPool::new(availability, Arc::clone(&features.registry)),
-    )));
+    let queue =
+      Arc::new(crate::master_queue::MasterQueue::new(Arc::new(charliebot_agents::backend_pool::BackendPool::new(
+        availability,
+        Arc::clone(&features.registry),
+        Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
+      ))));
     let meta = test_fixtures::manager_session(
       &features,
       "idle_argv_matches_the_master_turn_except_for_wait_guard_and_json_mode",

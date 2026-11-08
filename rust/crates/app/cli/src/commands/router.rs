@@ -56,8 +56,8 @@ const TOP_LEVEL_FIELDS: &[&str] = &["jev", "instructions", "classes", "roles"];
 const JEV_FIELDS: &[&str] = &["url", "model", "credential"];
 const CLASS_FIELDS: &[&str] = &["when", "run_on"];
 
-/// The `run_on` keywords. Any other `run_on` value is a list of backend ids.
-const RUN_ON_POOL: &str = "pool";
+/// The `run_on` keyword that sends a class to the delegating session's backend. Any other `run_on` value is one
+/// `backends.pools` id.
 const RUN_ON_SESSION: &str = "session";
 
 /// The name of the one question each choice asks Jev.
@@ -141,16 +141,16 @@ fn config_path(home: &Path) -> PathBuf {
   home.join(ROUTER_FILENAME)
 }
 
-/// The `backends.options` ids of the home's `config.yaml`, loaded by the same loader the server uses.
-fn live_backend_ids(home: &Path) -> Result<Vec<String>, String> {
+/// The `backends.pools` ids of the home's `config.yaml`, loaded by the same loader the server uses.
+fn live_pool_ids(home: &Path) -> Result<Vec<String>, String> {
   let registry = charliebot_packages::registry().map_err(|error| error.to_string())?;
   let cfg = registry.load_config(home).map_err(|error| error.to_string())?;
-  Ok(cfg.backends.options.into_iter().map(|option| option.id).collect())
+  Ok(cfg.backends.pools.into_iter().map(|pool| pool.id).collect())
 }
 
 fn load_home_rules(home: &Path, rules_path: &Path) -> Result<RouterRules, String> {
-  let backend_ids = live_backend_ids(home)?;
-  load_rules(rules_path, &backend_ids)
+  let pool_ids = live_pool_ids(home)?;
+  load_rules(rules_path, &pool_ids)
 }
 
 /// One validated rules file: where Jev lives, the question it answers, the classes, and the classes each role lists.
@@ -170,9 +170,9 @@ struct ClassRule {
 }
 
 enum RunOn {
-  Pool,
+  /// One `backends.pools` id: the server selects the member the class runs on.
+  Pool(String),
   Session,
-  Backends(Vec<String>),
 }
 
 /// One decoded stdin object. `state` is the text Jev reads, already labelled and cut.
@@ -222,7 +222,7 @@ fn reject_unknown_fields(mapping: &Mapping, known: &[&str], path_text: &str, pre
 
 /// Read and validate one rules file. A missing file, an old-form file, an unknown field, an unknown class in a role and
 /// an unknown backend id each fail with a message that names the file and the field.
-fn load_rules(path: &Path, backend_ids: &[String]) -> Result<RouterRules, String> {
+fn load_rules(path: &Path, pool_ids: &[String]) -> Result<RouterRules, String> {
   let path_text = paths::display(path);
   let text = match std::fs::read_to_string(path) {
     Ok(text) => text,
@@ -250,16 +250,12 @@ fn load_rules(path: &Path, backend_ids: &[String]) -> Result<RouterRules, String
   let model = required_text(jev, "model", &path_text, "jev.")?;
   let credential = required_text(jev, "credential", &path_text, "jev.")?;
   let instructions = required_text(document, "instructions", &path_text, "")?;
-  let classes = classes_of(document, backend_ids, &path_text)?;
+  let classes = classes_of(document, pool_ids, &path_text)?;
   let roles = roles_of(document, &classes, &path_text)?;
   Ok(RouterRules { url, model, credential, instructions, classes, roles })
 }
 
-fn classes_of(
-  document: &Mapping,
-  backend_ids: &[String],
-  path_text: &str,
-) -> Result<BTreeMap<String, ClassRule>, String> {
+fn classes_of(document: &Mapping, pool_ids: &[String], path_text: &str) -> Result<BTreeMap<String, ClassRule>, String> {
   let expectation = "a non-empty mapping of class names to rules";
   let Some(YamlValue::Mapping(classes)) = document.get(yaml_key("classes")) else {
     return Err(field_error(path_text, "classes", expectation));
@@ -281,31 +277,24 @@ fn classes_of(
       name.to_string(),
       ClassRule {
         when: required_text(rule, "when", path_text, &prefix)?,
-        run_on: run_on_of(rule, name, backend_ids, path_text)?,
+        run_on: run_on_of(rule, name, pool_ids, path_text)?,
       },
     );
   }
   Ok(rules)
 }
 
-fn run_on_of(rule: &Mapping, class: &str, backend_ids: &[String], path_text: &str) -> Result<RunOn, String> {
+fn run_on_of(rule: &Mapping, class: &str, pool_ids: &[String], path_text: &str) -> Result<RunOn, String> {
   let field = format!("classes.{class}.run_on");
-  let expectation = "pool, session, or a non-empty list of backend ids";
+  let expectation = "session, or one backends.pools id";
   match rule.get(yaml_key("run_on")) {
-    Some(YamlValue::String(target)) if target == RUN_ON_POOL => Ok(RunOn::Pool),
     Some(YamlValue::String(target)) if target == RUN_ON_SESSION => Ok(RunOn::Session),
-    Some(YamlValue::Sequence(items)) if !items.is_empty() => {
-      let mut ids = Vec::new();
-      for (index, item) in items.iter().enumerate() {
-        let YamlValue::String(id) = item else {
-          return Err(field_error(path_text, &format!("{field}[{index}]"), "a backend id"));
-        };
-        if !backend_ids.contains(id) {
-          return Err(format!("{path_text}: {field}[{index}]: '{id}' is not in backends.options of config.yaml"));
-        }
-        ids.push(id.clone());
-      }
-      Ok(RunOn::Backends(ids))
+    Some(YamlValue::String(target)) if pool_ids.contains(target) => Ok(RunOn::Pool(target.clone())),
+    Some(YamlValue::String(target)) => Err(format!(
+      "{path_text}: {field}: '{target}' is not a backends.pools id; write session or one backends.pools id"
+    )),
+    Some(YamlValue::Sequence(_)) => {
+      Err(format!("{path_text}: {field}: a list of backend ids is retired; write session or one backends.pools id"))
     }
     _ => Err(field_error(path_text, &field, expectation)),
   }
@@ -420,23 +409,26 @@ fn answer(
   } else {
     choose_class(home, rules, classes, &request.state, limits, sleep)?
   };
-  let backends = match &rules.classes[chosen].run_on {
-    RunOn::Pool => Vec::new(),
+  let mut reason = format!("{chosen} p={}", text_repr::format_f(probability, 2));
+  if retried_timeout {
+    reason.push_str("; retried after a timeout");
+  }
+  let backend = match &rules.classes[chosen].run_on {
+    RunOn::Pool(pool_id) if request.candidate_ids.contains(pool_id) => pool_id.clone(),
+    RunOn::Pool(pool_id) => {
+      let reason = format!("{reason}; pool {pool_id} is not a candidate here; ran on the default path");
+      return Ok(Answer { routed: false, backends: Vec::new(), reason });
+    }
     RunOn::Session => match &request.session_backend {
-      Some(session_backend) => vec![session_backend.clone()],
+      Some(session_backend) => session_backend.clone(),
       None => {
         return Err(format!(
           "classes.{chosen}.run_on: session runs on the delegating session's backend, but the request names no session_backend"
         ));
       }
     },
-    RunOn::Backends(ids) => ids.iter().filter(|id| request.candidate_ids.contains(id)).cloned().collect(),
   };
-  let mut reason = format!("{chosen} p={}", text_repr::format_f(probability, 2));
-  if retried_timeout {
-    reason.push_str("; retried after a timeout");
-  }
-  Ok(Answer { routed: true, backends, reason })
+  Ok(Answer { routed: true, backends: vec![backend], reason })
 }
 
 /// Ask Jev, with at most one retry after a timeout or an HTTP 429, which of one role's classes fits `state`, and the
@@ -647,6 +639,7 @@ mod tests {
   const DESIGN_RULE: &str = "Design work: a new mechanism across modules.";
   const STRONG: [&str; 2] = ["strong-alpha", "strong-beta"];
   const POOL: &str = "pool-gamma";
+  const DELTA: &str = "pool-delta";
   const SESSION: &str = "strong-alpha";
   const API_KEY: &str = "test-key";
   const DEFAULT_ROLES: &str =
@@ -860,15 +853,16 @@ mod tests {
     std::fs::write(home.home.join("credentials.yaml"), format!("{section}:\n  api_key: {API_KEY}\n")).unwrap();
   }
 
-  /// The live `config.yaml`: the backend ids the rules may name, all codex options.
+  /// The live `config.yaml`: the codex options, and the rotate pools the rules may name over them.
   fn write_config(home: &TestHome) {
     let options: String = STRONG
       .iter()
-      .copied()
-      .chain([POOL])
       .map(|id| format!("    - {{id: {id}, label: {id}, type: codex, model: synthetic-model}}\n"))
       .collect();
-    std::fs::write(home.home.join("config.yaml"), format!("backends:\n  options:\n{options}")).unwrap();
+    let members = STRONG.join(", ");
+    let item = |id: &str| format!("    - {{id: {id}, label: {id}, rule: rotate, members: [{members}]}}\n");
+    let pools = format!("  pools:\n{}{}", item(POOL), item(DELTA));
+    std::fs::write(home.home.join("config.yaml"), format!("backends:\n  options:\n{options}{pools}")).unwrap();
   }
 
   fn rules_text(url: &str, classes: &str, roles: &str) -> String {
@@ -879,9 +873,8 @@ mod tests {
 
   /// The two-class rules of the example: routine runs on the pool, context on the session.
   fn default_classes() -> String {
-    format!(
-      "classes:\n  routine: {{when: \"{ROUTINE_RULE}\", run_on: pool}}\n  context: {{when: \"{CONTEXT_RULE}\", run_on: session}}\n"
-    )
+    let routine = format!("  routine: {{when: \"{ROUTINE_RULE}\", run_on: {POOL}}}\n");
+    format!("classes:\n{routine}  context: {{when: \"{CONTEXT_RULE}\", run_on: session}}\n")
   }
 
   fn write_rules(home: &TestHome, url: &str, classes: &str, roles: &str) {
@@ -900,10 +893,11 @@ mod tests {
     .unwrap()
   }
 
-  /// The bound a timeout test pays per timed-out attempt: two timed-out attempts still fit the unit-test
-  /// budget, while the delayed reply stays far past it.
+  /// The bound a timeout test pays per timed-out attempt. The delayed reply always lands past it, so that
+  /// attempt times out on any host. The retried attempt is a plain local round trip that must finish inside
+  /// the same bound, so the bound sits well above what a loaded host needs for one.
   fn timeout_limits() -> Limits {
-    Limits { request_timeout: Duration::from_millis(8), rate_limit_wait: test_limits().rate_limit_wait }
+    Limits { request_timeout: Duration::from_millis(200), rate_limit_wait: test_limits().rate_limit_wait }
   }
 
   fn run(home: &TestHome, payload: &str, jev: &FakeJev, replies: Vec<(u16, Value)>) -> Result<Value, String> {
@@ -954,7 +948,7 @@ mod tests {
   }
 
   #[test]
-  fn routine_work_answers_the_pool_as_an_empty_list() {
+  fn routine_work_answers_its_pool_id_as_the_one_backend() {
     with_timeout(|| {
       let home = TestHome::new();
       let jev = FakeJev::start(Vec::new());
@@ -963,29 +957,50 @@ mod tests {
       let payload = request("implement", "Add a test for the parser.", &[STRONG[0], POOL], Some(SESSION));
       let answer = run(&home, &payload, &jev, vec![jev_reply("routine", 0.88, 0.12)]).unwrap();
 
-      assert_eq!(answer, json!({ "routed": true, "backends": [], "reason": "routine p=0.88" }));
+      assert_eq!(answer, json!({ "routed": true, "backends": [POOL], "reason": "routine p=0.88" }));
     });
   }
 
   #[test]
-  fn a_list_target_answers_its_candidate_ids_in_the_order_the_class_lists_them() {
+  fn a_retired_config_still_routes_run_on_pool_to_its_derived_pool() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      // The retired form: `backends.pool` loads as the rotate pool `pool`, which `run_on: pool` still names.
+      let options: String = STRONG
+        .iter()
+        .map(|id| format!("    - {{id: {id}, label: {id}, type: codex, model: synthetic-model}}\n"))
+        .collect();
+      let rotation: String = STRONG.iter().map(|id| format!("    - {id}\n")).collect();
+      std::fs::write(home.home.join("config.yaml"), format!("backends:\n  options:\n{options}  pool:\n{rotation}"))
+        .unwrap();
+      let jev = FakeJev::start(Vec::new());
+      let classes = format!(
+        "classes:\n  routine: {{when: \"{ROUTINE_RULE}\", run_on: pool}}\n  context: {{when: \"{CONTEXT_RULE}\", run_on: session}}\n"
+      );
+      write_rules(&home, &jev.url, &classes, DEFAULT_ROLES);
+
+      let payload = request("implement", "Add a test for the parser.", &[STRONG[0], "pool"], Some(SESSION));
+      let answer = run(&home, &payload, &jev, vec![jev_reply("routine", 0.88, 0.12)]).unwrap();
+
+      assert_eq!(answer, json!({ "routed": true, "backends": ["pool"], "reason": "routine p=0.88" }));
+    });
+  }
+
+  #[test]
+  fn a_backend_id_list_in_run_on_exits_non_zero_naming_the_pools_form() {
     with_timeout(|| {
       let home = TestHome::new();
       let jev = FakeJev::start(Vec::new());
-      let classes = format!(
-        "classes:\n  routine: {{when: \"{ROUTINE_RULE}\", run_on: pool}}\n  design: {{when: \"{DESIGN_RULE}\", run_on: [{}, {}]}}\n",
-        STRONG[1], STRONG[0]
-      );
+      let routine = format!("  routine: {{when: \"{ROUTINE_RULE}\", run_on: {POOL}}}\n");
+      let classes =
+        format!("classes:\n{routine}  design: {{when: \"{DESIGN_RULE}\", run_on: [{}, {}]}}\n", STRONG[1], STRONG[0]);
       write_rules(&home, &jev.url, &classes, "roles:\n  implement: [routine, design]\n");
 
       let payload = request("implement", "Design a new caching layer.", &[STRONG[0], POOL, STRONG[1]], None);
-      let answer = run(&home, &payload, &jev, vec![(
-        200,
-        json!({ "answers": { "kind": { "choice": "design", "probabilities": { "routine": 0.14, "design": 0.86 } } } }),
-      )])
-      .unwrap();
+      let error = run(&home, &payload, &jev, Vec::new()).unwrap_err();
 
-      assert_eq!(answer, json!({ "routed": true, "backends": [STRONG[1], STRONG[0]], "reason": "design p=0.86" }));
+      assert!(error.contains("classes.design.run_on") && error.contains("a list of backend ids is retired"), "{error}");
+      assert!(error.contains("write session or one backends.pools id"), "{error}");
     });
   }
 
@@ -1032,7 +1047,7 @@ mod tests {
       let pool_answer = run(&home, &pool, &jev, Vec::new()).unwrap();
 
       assert_eq!(session_answer, json!({ "routed": true, "backends": [SESSION], "reason": "context p=1.00" }));
-      assert_eq!(pool_answer, json!({ "routed": true, "backends": [], "reason": "routine p=1.00" }));
+      assert_eq!(pool_answer, json!({ "routed": true, "backends": [POOL], "reason": "routine p=1.00" }));
       assert!(jev.requests().is_empty(), "a one-class role makes no call");
     });
   }
@@ -1091,20 +1106,19 @@ mod tests {
   }
 
   #[test]
-  fn an_unknown_backend_id_in_run_on_exits_non_zero_naming_the_field() {
+  fn an_unknown_name_in_run_on_exits_non_zero_naming_the_pools_form() {
     with_timeout(|| {
       let home = TestHome::new();
       let jev = FakeJev::start(Vec::new());
-      let classes = format!(
-        "classes:\n  routine: {{when: \"{ROUTINE_RULE}\", run_on: pool}}\n  context: {{when: \"{CONTEXT_RULE}\", run_on: [ghost-backend]}}\n"
-      );
+      let routine = format!("  routine: {{when: \"{ROUTINE_RULE}\", run_on: {POOL}}}\n");
+      let classes = format!("classes:\n{routine}  context: {{when: \"{CONTEXT_RULE}\", run_on: ghost-pool}}\n");
       write_rules(&home, &jev.url, &classes, DEFAULT_ROLES);
 
       let payload = request("implement", "Add a test for the parser.", &STRONG, None);
       let error = run(&home, &payload, &jev, Vec::new()).unwrap_err();
 
-      assert!(error.contains("classes.context.run_on[0]"), "{error}");
-      assert!(error.contains("ghost-backend"), "{error}");
+      assert!(error.contains("classes.context.run_on") && error.contains("ghost-pool"), "{error}");
+      assert!(error.contains("write session or one backends.pools id"), "{error}");
     });
   }
 
@@ -1420,26 +1434,16 @@ mod tests {
     with_timeout(|| {
       let home = TestHome::new();
       let jev_url = "http://127.0.0.1:9/v1/systemone";
-      let classes = |target: &str| {
-        format!(
-          "classes:\n  routine: {{when: \"{ROUTINE_RULE}\", run_on: pool}}\n  context: {{when: \"{CONTEXT_RULE}\", run_on: [{target}]}}\n"
-        )
-      };
-      write_rules(&home, jev_url, &classes(STRONG[0]), DEFAULT_ROLES);
+      let routine = format!("  routine: {{when: \"{ROUTINE_RULE}\", run_on: {POOL}}}\n");
+      let classes =
+        |target: &str| format!("classes:\n{routine}  context: {{when: \"{CONTEXT_RULE}\", run_on: {target}}}\n");
+      write_rules(&home, jev_url, &classes(POOL), DEFAULT_ROLES);
       let first = load_home_rules(&home.home, &home.rules_path()).unwrap();
-      let first_targets = match &first.classes["context"].run_on {
-        RunOn::Backends(targets) => targets.iter().map(String::as_str).collect::<Vec<_>>(),
-        _ => panic!("expected an explicit backend list"),
-      };
-      assert_eq!(first_targets.as_slice(), &[STRONG[0]]);
+      assert!(matches!(&first.classes["context"].run_on, RunOn::Pool(id) if id == POOL));
 
-      write_rules(&home, jev_url, &classes(STRONG[1]), DEFAULT_ROLES);
+      write_rules(&home, jev_url, &classes(DELTA), DEFAULT_ROLES);
       let second = load_home_rules(&home.home, &home.rules_path()).unwrap();
-      let second_targets = match &second.classes["context"].run_on {
-        RunOn::Backends(targets) => targets.iter().map(String::as_str).collect::<Vec<_>>(),
-        _ => panic!("expected an explicit backend list"),
-      };
-      assert_eq!(second_targets.as_slice(), &[STRONG[1]]);
+      assert!(matches!(&second.classes["context"].run_on, RunOn::Pool(id) if id == DELTA));
     });
   }
 
@@ -1507,7 +1511,7 @@ mod tests {
   #[ignore = "integration"]
   fn the_example_rules_file_loads_with_the_loader() {
     let example = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../configs/router.example.yaml"));
-    let rules = load_rules(example, &[]).unwrap();
+    let rules = load_rules(example, &["light".to_string()]).unwrap();
 
     assert_eq!(rules.roles["implement"], ["routine", "context"]);
     assert_eq!(rules.roles.len(), 3);

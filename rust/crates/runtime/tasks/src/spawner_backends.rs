@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 
 use charliebot_agents::backend_pool::BackendPool;
-use charliebot_core::config::{AUTO_BACKEND_ID, BackendOption, CharlieBotConfig};
+use charliebot_core::config::{BackendOption, CallClass, CallTarget, CharlieBotConfig};
 use charliebot_store::Store;
 use charliebot_store::StoreError;
 use charliebot_store::metadata::{SessionMetadata, TaskType};
@@ -39,13 +39,25 @@ impl From<TaskType> for SubagentRole {
 }
 
 impl SubagentRole {
-  fn pool_caller(self) -> Option<&'static str> {
+  /// The `backends.calls` class whose target picks this role's backend.
+  fn call_class(self) -> CallClass {
     match self {
-      Self::Task(TaskType::Implement) => Some("implement"),
-      Self::Task(TaskType::QuickEdit) => Some("quick-edit"),
-      Self::Task(TaskType::ScriptRun) => Some("script-run"),
-      Self::Task(TaskType::Verify | TaskType::ColdRead) => None,
-      Self::Improve => Some("improve"),
+      Self::Task(TaskType::Implement | TaskType::QuickEdit | TaskType::ScriptRun) => CallClass::Worker,
+      Self::Task(TaskType::Verify) => CallClass::Verify,
+      Self::Task(TaskType::ColdRead) => CallClass::ColdRead,
+      Self::Improve => CallClass::Improve,
+    }
+  }
+
+  /// The caller name a log line gives this role's pool selection.
+  fn caller(self) -> &'static str {
+    match self {
+      Self::Task(TaskType::Implement) => "implement",
+      Self::Task(TaskType::QuickEdit) => "quick-edit",
+      Self::Task(TaskType::ScriptRun) => "script-run",
+      Self::Task(TaskType::Verify) => "verify",
+      Self::Task(TaskType::ColdRead) => "cold_read",
+      Self::Improve => "improve",
     }
   }
 }
@@ -73,17 +85,36 @@ pub fn resolve_backend_option(
   Ok(option)
 }
 
-/// Resolve a session's pinned backend or its configured first backend. A session on the `auto` backend resolves to the
-/// member turn start recorded in `auto_member`; a missing `backends.auto` or member is a refusal that names it.
+/// The `backends.pools` id that `backends.calls` names for `class`, or `None` when the key is unset, names a session or
+/// a model.
+pub fn class_pool_id(cfg: &CharlieBotConfig, class: CallClass) -> Option<&str> {
+  match cfg.backends.calls.get(class) {
+    Some(CallTarget::Backend(target)) if cfg.backends.pool(target).is_some() => Some(target.as_str()),
+    _ => None,
+  }
+}
+
+/// The pool a worker run's member comes from: the session's own backend when it is a pool id, else the worker class's
+/// pool.
+pub fn worker_pool_id<'a>(cfg: &'a CharlieBotConfig, session_meta: &SessionMetadata) -> Option<&'a str> {
+  cfg
+    .backends
+    .pool(&session_meta.backend)
+    .map(|pool| pool.id.as_str())
+    .or_else(|| class_pool_id(cfg, CallClass::Worker))
+}
+
+/// Resolve a session's pinned backend or its configured first backend. A session whose backend is a pool id resolves to
+/// the member turn start recorded in `pool_member`; a missing pool or member is a refusal that names it.
 pub fn resolve_session_default_backend_model(
   cfg: &CharlieBotConfig,
   session_meta: &SessionMetadata,
 ) -> anyhow::Result<(String, Option<String>)> {
-  let option = if session_meta.backend == AUTO_BACKEND_ID {
+  let option = if cfg.backends.pool(&session_meta.backend).is_some() {
     let member = charliebot_agents::model_pool::current_member_id(cfg, session_meta)
       .map_err(|error| value_error(error.to_string()))?;
     cfg.get_backend_option(&member).ok_or_else(|| {
-      value_error(format!("'{member}' is not in config.yaml backends.options — the auto member cannot run"))
+      value_error(format!("'{member}' is not in config.yaml backends.options — the pool member cannot run"))
     })?
   } else if !session_meta.backend.is_empty() {
     let backend_id = session_meta.backend.as_str();
@@ -120,16 +151,16 @@ pub fn session_backend_id(cfg: &CharlieBotConfig, session_meta: &SessionMetadata
   resolve_session_default_backend_model(cfg, session_meta).map(|(backend_id, _)| backend_id)
 }
 
-/// Which rule chose a subagent's backend. A pool pick and an Auto member pick fail over through different owners, so
-/// the caller records which one ran the child.
+/// Which rule chose a subagent's backend. A pool pick and an inherited pool member fail over through different owners,
+/// so the caller records which one ran the child.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackendSource {
   /// The request named the backend, or the session's own backend runs it.
   Direct,
-  /// `backends.pool` chose the backend.
+  /// The `backends.calls` target of the role named a pool, and the pool chose the backend.
   Pool,
-  /// The session is on `auto` and its current member runs it.
-  AutoMember,
+  /// The session's backend is a pool and its current member runs the child.
+  PoolMember,
 }
 
 /// Resolve a delegation's backend and the rule that chose it (`spawner_backends.resolve_requested_subagent_backend_model`).
@@ -155,24 +186,35 @@ pub async fn resolve_requested_subagent_backend_model(
     let model = option.required_model("requested backend").map_err(value_error)?;
     return Ok((option.id.clone(), Some(model), BackendSource::Direct));
   }
-  if !cfg.backends.pool.is_empty()
-    && let Some(caller) = role.pool_caller()
-  {
-    let option = pool.select(cfg, caller, &[])?.ok_or_else(|| value_error(pool.no_member_message(cfg)))?;
-    let model = option.required_model("pool member").map_err(value_error)?;
-    return Ok((option.id.clone(), Some(model), BackendSource::Pool));
+  match cfg.backends.calls.get(role.call_class()) {
+    None | Some(CallTarget::Session) => {}
+    Some(CallTarget::Backend(target)) if cfg.backends.pool(target).is_some() => {
+      let Some(option) = pool.select(cfg, role.caller(), target, &[])? else {
+        return Err(value_error(pool.exhausted_message(cfg, target)?));
+      };
+      let model = option.required_model("pool member").map_err(value_error)?;
+      return Ok((option.id.clone(), Some(model), BackendSource::Pool));
+    }
+    Some(CallTarget::Backend(target)) => {
+      let option = cfg
+        .get_backend_option(target)
+        .ok_or_else(|| value_error(format!("calls target '{target}' is not a backends.options id")))?;
+      let model = option.required_model("calls target").map_err(value_error)?;
+      return Ok((option.id.clone(), Some(model), BackendSource::Direct));
+    }
   }
   let (backend_id, model) = resolve_session_default_backend_model(cfg, &meta)?;
-  let source = if meta.backend == AUTO_BACKEND_ID { BackendSource::AutoMember } else { BackendSource::Direct };
+  let source =
+    if cfg.backends.pool(&meta.backend).is_some() { BackendSource::PoolMember } else { BackendSource::Direct };
   Ok((backend_id, model, source))
 }
 
-/// Resolve a verify or cold-read checker, excluding the requesting task's backend (`spawner_backends.select_verify_backend`).
+/// Resolve a verify or cold-read checker for the call class `class`, excluding the session's current backend.
 pub async fn select_verify_backend(
   cfg: &CharlieBotConfig,
   store: &Store,
   session_id: &str,
-  caller: &str,
+  class: CallClass,
   tried_backends: &[String],
   pool: &BackendPool,
 ) -> anyhow::Result<Option<(String, Option<String>, Vec<String>)>> {
@@ -181,7 +223,7 @@ pub async fn select_verify_backend(
   crate::review::select_reviewer_backend(
     cfg,
     pool,
-    caller,
+    class,
     &session_backend,
     session_model.as_deref(),
     tried_backends,
@@ -212,10 +254,13 @@ mod tests {
     assert_eq!(resolve_backend_option(&cfg, "synthetic", None).unwrap_err().to_string(), "resolved model is required");
   }
 
+  /// The id of the priority pool that the pool-session tests name.
+  const POOL_ID: &str = "auto";
+
   #[test]
-  fn an_auto_session_resolves_to_the_recorded_member() {
-    let cfg = auto_config();
-    let meta = auto_session();
+  fn a_pool_session_resolves_to_the_recorded_member() {
+    let cfg = pool_config();
+    let meta = pool_session();
 
     assert_eq!(
       resolve_session_default_backend_model(&cfg, &meta).unwrap(),
@@ -225,22 +270,22 @@ mod tests {
   }
 
   #[test]
-  fn a_turn_without_backends_auto_fails_naming_it() {
-    let error = resolve_session_default_backend_model(&test_config(), &auto_session()).unwrap_err().to_string();
-    assert!(error.contains("backends.auto"), "{error}");
+  fn a_pool_session_on_a_config_without_its_pool_fails_naming_the_backend() {
+    let error = resolve_session_default_backend_model(&test_config(), &pool_session()).unwrap_err().to_string();
+    assert!(error.contains("'auto'"), "{error}");
   }
 
   #[test]
-  fn a_recorded_member_the_config_drops_fails_naming_backends_auto() {
-    let mut cfg = auto_config();
-    cfg.backends.auto.as_mut().expect("the auto set").members[0].backend = "retired".to_string();
+  fn a_recorded_member_the_pool_drops_fails_naming_backends_pools() {
+    let mut cfg = pool_config();
+    cfg.backends.pools[0].members[0].backend = "retired".to_string();
 
-    let error = resolve_session_default_backend_model(&cfg, &auto_session()).unwrap_err().to_string();
-    assert!(error.contains("backends.auto") && error.contains("no longer lists"), "{error}");
+    let error = resolve_session_default_backend_model(&cfg, &pool_session()).unwrap_err().to_string();
+    assert!(error.contains("backends.pools") && error.contains("no longer lists"), "{error}");
   }
 
   #[tokio::test]
-  async fn a_delegation_request_naming_auto_is_refused() {
+  async fn a_delegation_request_naming_a_pool_is_refused() {
     use std::sync::Arc;
 
     use charliebot_agents::backend_availability::BackendAvailability;
@@ -251,20 +296,24 @@ mod tests {
     use serde_json::Map;
 
     let home = tempfile::tempdir().unwrap();
-    let mut cfg = auto_config();
+    let mut cfg = pool_config();
     cfg.charliebot_home = home.path().to_path_buf();
     let registry = Arc::new(Registry::new());
     let store = Store::new(cfg.clone(), registry.metadata_slots(), store_hooks(Arc::clone(&registry))).unwrap();
-    let pool = BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap()), Arc::clone(&registry));
+    let pool = BackendPool::new(
+      Arc::new(BackendAvailability::load(home.path()).unwrap()),
+      Arc::clone(&registry),
+      Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
+    );
     let session = store
       .create_task(
         CreateTask {
-          request_id: "auto-delegation".to_string(),
+          request_id: "pool-delegation".to_string(),
           task_parent_id: None,
           profile: TaskProfile::Manager,
           task: None,
-          name: Some("Auto delegation".to_string()),
-          backend: Some(AUTO_BACKEND_ID.to_string()),
+          name: Some("Pool delegation".to_string()),
+          backend: Some(POOL_ID.to_string()),
           group: None,
           session_id: None,
         },
@@ -274,38 +323,34 @@ mod tests {
       .await
       .unwrap();
 
-    let error = resolve_requested_subagent_backend_model(
-      &cfg,
-      &store,
-      &session.id,
-      Some(AUTO_BACKEND_ID),
-      SubagentRole::Improve,
-      &pool,
-    )
-    .await
-    .unwrap_err()
-    .to_string();
+    let error =
+      resolve_requested_subagent_backend_model(&cfg, &store, &session.id, Some(POOL_ID), SubagentRole::Improve, &pool)
+        .await
+        .unwrap_err()
+        .to_string();
 
     assert!(error.contains("requested backend 'auto' is not in backends.options"), "{error}");
   }
 
-  fn auto_config() -> CharlieBotConfig {
+  fn pool_config() -> CharlieBotConfig {
     let mut cfg = test_config();
-    cfg.backends.auto = Some(charliebot_core::config::AutoConfig {
+    cfg.backends.pools.push(charliebot_core::config::PoolConfig {
+      id: POOL_ID.to_string(),
       label: "Auto".to_string(),
-      members: vec![charliebot_core::config::AutoMember {
+      rule: charliebot_core::config::PoolRule::Priority,
+      members: vec![charliebot_core::config::PoolMember {
         backend: "synthetic".to_string(),
-        billing: charliebot_core::config::AutoBilling::Subscription,
+        billing: Some(charliebot_core::config::PoolBilling::Subscription),
       }],
     });
     cfg
   }
 
-  fn auto_session() -> SessionMetadata {
+  fn pool_session() -> SessionMetadata {
     let mut meta =
-      SessionMetadata::new("auto-session", "Auto session", charliebot_store::metadata::TaskProfile::Manager);
-    meta.backend = AUTO_BACKEND_ID.to_string();
-    meta.set_extra(charliebot_agents::model_pool::AUTO_MEMBER_FIELD, serde_json::json!("synthetic"));
+      SessionMetadata::new("pool-session", "Pool session", charliebot_store::metadata::TaskProfile::Manager);
+    meta.backend = POOL_ID.to_string();
+    meta.set_extra(charliebot_agents::model_pool::POOL_MEMBER_FIELD, serde_json::json!("synthetic"));
     meta
   }
 
@@ -335,7 +380,8 @@ mod tests {
         scratch_dir: "/synthetic/scripts".to_string(),
       },
       backends: BackendsConfig {
-        pool: Vec::new(),
+        pools: Vec::new(),
+        calls: charliebot_core::config::CallsConfig::default(),
         routing: None,
         options: vec![BackendOption {
           id: "synthetic".to_string(),
@@ -345,7 +391,6 @@ mod tests {
           backend_type: "synthetic".to_string(),
           type_fields: Default::default(),
         }],
-        auto: None,
       },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },

@@ -570,12 +570,19 @@ pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Resul
         problems.push(format!("{}: {entry} names unknown backend '{backend}'", path.display()));
       }
     }
+    // Identical option ids are refused here, where the config tells an option from a pool: two steps on one pool
+    // take different members, so only options that resolve to the same type and model conflict.
+    match crate::steps::distinct_backend_conflict(&task, cfg) {
+      Ok(Some(conflict)) => problems.push(format!("{}: {conflict}", path.display())),
+      Ok(None) => {}
+      Err(error) => problems.push(format!("{}: {error:#}", path.display())),
+    }
   }
   if problems.is_empty() {
     return Ok(());
   }
   Err(format!(
-    "backend references must name a backends.options id, or 'auto' with backends.auto configured (id rule: \
+    "backend references must name a backends.options id or a backends.pools id (id rule: \
      charliebot_core::config::BackendsConfig):\n{}",
     problems.into_iter().map(|problem| format!("  {problem}")).collect::<Vec<_>>().join("\n")
   ))
@@ -745,6 +752,7 @@ mod tests {
     ]));
     assert!(validate_body("chained", unset, home.path()).is_ok());
 
+    // Identical backend ids load here: whether they conflict depends on the config, which backend_refs_check reads.
     for invalid in [
       task(json!([
         {"name":"selector","prompt_file":first},
@@ -758,14 +766,6 @@ mod tests {
         {"name":"selector","prompt_file":first,"distinct_backend_from":"selector"},
         {"name":"reviewer","prompt_file":second}
       ])),
-      task(json!([
-        {"name":"selector","prompt_file":first,"backend":"synthetic-a"},
-        {"name":"reviewer","prompt_file":second,"backend":"synthetic-a","distinct_backend_from":"selector"}
-      ])),
-      json!({"cron":"0 3 * * *","backend":"synthetic-a","steps":[
-        {"name":"selector","prompt_file":first},
-        {"name":"reviewer","prompt_file":second,"distinct_backend_from":"selector"}
-      ]}),
     ] {
       assert!(validate_body("chained", invalid, home.path()).is_err());
     }

@@ -245,7 +245,12 @@ impl Home {
       backend_type: "synthetic".to_string(),
       type_fields: Default::default(),
     });
-    loaded.backends.pool = vec!["synthetic-fakechat".to_string()];
+    loaded.backends.pools.push(charliebot_core::config::PoolConfig {
+      id: "pool".to_string(),
+      label: "Pool".to_string(),
+      rule: charliebot_core::config::PoolRule::Rotate,
+      members: vec![charliebot_core::config::PoolMember { backend: "synthetic-fakechat".to_string(), billing: None }],
+    });
     loaded.backends.options.push(BackendOption {
       id: "synthetic-strong".to_string(),
       label: "Synthetic strong".to_string(),
@@ -256,19 +261,27 @@ impl Home {
     });
     loaded.backends.routing = command.map(|command| charliebot_core::config::RoutingConfig { command });
     if auto {
-      loaded.backends.auto = Some(charliebot_core::config::AutoConfig {
+      loaded.backends.pools.push(charliebot_core::config::PoolConfig {
+        id: "auto".to_string(),
         label: "Auto".to_string(),
+        rule: charliebot_core::config::PoolRule::Priority,
         members: vec![
-          charliebot_core::config::AutoMember {
+          charliebot_core::config::PoolMember {
             backend: "synthetic-fakechat".to_string(),
-            billing: charliebot_core::config::AutoBilling::Subscription,
+            billing: Some(charliebot_core::config::PoolBilling::Subscription),
           },
-          charliebot_core::config::AutoMember {
+          charliebot_core::config::PoolMember {
             backend: "synthetic-strong".to_string(),
-            billing: charliebot_core::config::AutoBilling::Payg,
+            billing: Some(charliebot_core::config::PoolBilling::Payg),
           },
         ],
       });
+      loaded.backends.calls = [(
+        charliebot_core::config::CallClass::Thread,
+        charliebot_core::config::CallTarget::Backend("auto".to_string()),
+      )]
+      .into_iter()
+      .collect();
     }
     let reload_config = loaded.clone();
     let config = Arc::new(HotReload::new(
@@ -290,10 +303,12 @@ impl Home {
     startup
       .insert(BackendAvailability::load(dir.path()).expect("the availability owner loads"))
       .expect("the owner inserts once");
+    startup.insert(charliebot_agents::model_pool::RotationPositions::default()).expect("the positions insert once");
     startup
       .insert(backend_pool::BackendPool::new(
         startup.require::<BackendAvailability>().expect("the owner is in the startup state"),
         Arc::clone(&registry),
+        startup.require::<charliebot_agents::model_pool::RotationPositions>().expect("the positions are in startup"),
       ))
       .expect("the backend pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
@@ -1135,7 +1150,7 @@ async fn accept_summon_routes_the_full_thread_before_creating_the_session() {
   assert_eq!(input["role"], "thread");
   assert_eq!(input["text"], "u:  first \nu: second\nline");
   assert!(input["session_backend"].is_null(), "a thread has no session backend");
-  assert_eq!(input["candidates"].as_array().unwrap().len(), 2);
+  assert_eq!(input["candidates"].as_array().unwrap().len(), 3, "the two options and the rotation pool");
   settle(|| home.launches().len() == 1 && adapter.acks.lock().unwrap().len() == 1).await;
 }
 
@@ -1230,11 +1245,11 @@ async fn accept_summon_defaults_an_unrouted_thread_to_auto() {
 
 #[tokio::test]
 #[ignore = "integration"]
-async fn accept_summon_uses_the_pool_for_an_empty_router_order() {
+async fn accept_summon_runs_the_thread_on_the_pool_the_router_names() {
   let router_dir = tempfile::tempdir().unwrap();
   let command = router_command(
     &router_dir,
-    "cat >/dev/null\nprintf '%s' '{\"routed\":true,\"backends\":[],\"reason\":\"no preference\"}'",
+    "cat >/dev/null\nprintf '%s' '{\"routed\":true,\"backends\":[\"pool\"],\"reason\":\"no preference\"}'",
     &[],
   );
   let home = Home::with_router(command);
@@ -1245,7 +1260,7 @@ async fn accept_summon_uses_the_pool_for_an_empty_router_order() {
   let sid = accept_summon(&dyn_adapter, &home.features, summon(&origin_value, &block)).await.unwrap();
 
   let meta = home.meta(&sid).await;
-  assert_eq!(meta.backend, "synthetic-fakechat");
-  assert_eq!(meta.extra("route"), Some(&json!({"backends": [], "reason": "no preference"})));
+  assert_eq!(meta.backend, "pool");
+  assert_eq!(meta.extra("route"), Some(&json!({"backends": ["pool"], "reason": "no preference"})));
   settle(|| home.launches().len() == 1 && adapter.acks.lock().unwrap().len() == 1).await;
 }

@@ -15,7 +15,7 @@ use charliebot_compat::request_body::{
 };
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{CallClass, CharlieBotConfig};
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::SequenceTree;
@@ -139,8 +139,9 @@ async fn start_improve_sequence(features: &Arc<FeatureContext>, req: ImproveRequ
   let pool = backend_pool::backend_pool(features).map_err(refuse_runtime)?;
 
   // Backend and model resolve before the reservation, so an unknown backend never leaves a running loop behind. A loop
-  // that names no backend takes a backends.pool member for each iteration, so it reserves no backend here.
-  let backend_from_pool = req.backend.is_none() && !cfg.backends.pool.is_empty();
+  // that names no backend takes a member of the `backends.calls.improve` pool for each iteration, so it reserves no
+  // backend here.
+  let backend_from_pool = req.backend.is_none() && spawner_backends::class_pool_id(&cfg, CallClass::Improve).is_some();
   let (resolved_backend, resolved_model) = if backend_from_pool {
     (String::new(), String::new())
   } else {

@@ -24,7 +24,9 @@ use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_core::approval_policy;
-use charliebot_core::config::{self, BackendOption, CharlieBotConfig, OptionFieldKind};
+use charliebot_core::config::{
+  self, BackendOption, CallClass, CallTarget, CharlieBotConfig, OptionFieldKind, PoolBilling, PoolConfig, PoolRule,
+};
 use charliebot_core::home;
 use charliebot_core::paths;
 use charliebot_registry::Registry;
@@ -266,19 +268,36 @@ fn backends_json(cfg: &CharlieBotConfig, registry: &Registry) -> Result<Value, S
     Some(routing) => json!({ "command": routing.command }),
   };
   let options = backends.options.iter().map(|option| option_json(option, registry)).collect::<Result<Vec<_>, _>>()?;
-  let mut value = json!({ "pool": backends.pool, "routing": routing, "options": options });
-  if let Some(auto) = &backends.auto {
-    value["auto"] = json!({
-      "label": auto.label,
-      "members": auto.members.iter()
-        .map(|member| json!({"backend": member.backend, "billing": match member.billing {
-          charliebot_core::config::AutoBilling::Subscription => "subscription",
-          charliebot_core::config::AutoBilling::Payg => "payg",
-        }}))
-        .collect::<Vec<_>>(),
-    });
-  }
-  Ok(value)
+  let pools = backends.pools.iter().map(pool_json).collect::<Vec<_>>();
+  let calls = CallClass::ALL
+    .iter()
+    .map(|class| {
+      let target = match backends.calls.get(*class) {
+        None => Value::Null,
+        Some(CallTarget::Session) => json!(config::SESSION_CALL_TARGET),
+        Some(CallTarget::Backend(id)) => json!(id),
+      };
+      (class.key().to_string(), target)
+    })
+    .collect::<Map<_, _>>();
+  Ok(json!({ "routing": routing, "options": options, "pools": pools, "calls": calls }))
+}
+
+fn pool_json(pool: &PoolConfig) -> Value {
+  let rule = match pool.rule {
+    PoolRule::Priority => "priority",
+    PoolRule::Rotate => "rotate",
+  };
+  let members = pool
+    .members
+    .iter()
+    .map(|member| match member.billing {
+      None => json!({ "backend": member.backend }),
+      Some(PoolBilling::Subscription) => json!({ "backend": member.backend, "billing": "subscription" }),
+      Some(PoolBilling::Payg) => json!({ "backend": member.backend, "billing": "payg" }),
+    })
+    .collect::<Vec<_>>();
+  json!({ "id": pool.id, "label": pool.label, "rule": rule, "members": members })
 }
 
 fn option_json(option: &BackendOption, registry: &Registry) -> Result<Value, String> {
@@ -390,7 +409,7 @@ enable_ask_tier_refusal: false
     let expected_text = recorded(include_str!("../../tests/fixtures/config_get/backends_golden.txt"));
     let expected: Value = serde_json::from_str(expected_text.trim_end()).expect("the recorded Python line is JSON");
     assert_eq!(printed, expected);
-    for key in ["pool", "routing", "options"] {
+    for key in ["pools", "calls", "routing", "options"] {
       assert!(printed.get(key).is_some(), "backends output lacks {key}");
     }
   }

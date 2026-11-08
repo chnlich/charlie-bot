@@ -69,17 +69,17 @@ function rollbackBackendSelect(badge) {
   if (select) select.value = getActiveBackendId();
 }
 
-// The label a backend id shows in the header and the switch menu. An Auto session shows
-// the member its current turn runs on: "Auto → <member>".
+// The label a backend id shows in the header and the switch menu. The active pool shows the
+// member its current turn runs on: "<pool label> → <member>". Other pools show their label alone.
 function backendDisplayLabel(backendId) {
-  const base = backendId === 'auto'
-    ? ((typeof AUTO_BACKEND !== 'undefined' && AUTO_BACKEND && AUTO_BACKEND.label) || backendId)
-    : ((typeof BACKEND_OPTIONS !== 'undefined' && BACKEND_OPTIONS[backendId]) || backendId);
-  if (backendId !== 'auto') return base;
-  const member = globalThis.ACTIVE_AUTO_MEMBER;
-  if (!member) return base;
+  const pool = typeof BACKEND_POOLS !== 'undefined'
+    ? BACKEND_POOLS.find((candidate) => candidate.id === backendId)
+    : null;
+  if (!pool) return (typeof BACKEND_OPTIONS !== 'undefined' && BACKEND_OPTIONS[backendId]) || backendId;
+  const member = backendId === getActiveBackendId() ? globalThis.ACTIVE_POOL_MEMBER : null;
+  if (!member) return pool.label;
   const memberLabel = (typeof BACKEND_OPTIONS !== 'undefined' && BACKEND_OPTIONS[member]) || member;
-  return base + ' → ' + memberLabel;
+  return pool.label + ' → ' + memberLabel;
 }
 
 function updateActiveBackendBadges() {
@@ -367,7 +367,7 @@ async function pollActiveSessionView(opts) {
     if (pollSessionId !== SESSION_ID) return;
 
     THINKING_SINCE = data.session.thinking_since || null;
-    globalThis.ACTIVE_AUTO_MEMBER = data.session.auto_member || null;
+    globalThis.ACTIVE_POOL_MEMBER = data.session.pool_member || null;
     setActiveBackendId(data.active_backend);
     setSwitchableBackends(data.switchable_backends);
     updateActiveBackendBadges();
@@ -819,7 +819,7 @@ function openMountOptions(session, data, messages) {
 function renderSessionView(data) {
   const session = data.session;
   const messages = data.messages || [];
-  globalThis.ACTIVE_AUTO_MEMBER = session.auto_member || null;
+  globalThis.ACTIVE_POOL_MEMBER = session.pool_member || null;
   setActiveBackendId(data.active_backend);
   setSwitchableBackends(data.switchable_backends);
   setActiveRoundRatings(session.round_ratings || {});

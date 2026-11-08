@@ -534,7 +534,8 @@ pub fn config(home: &Path) -> CharlieBotConfig {
       scratch_dir: "/synthetic/scripts".to_string(),
     },
     backends: BackendsConfig {
-      pool: vec![BACKEND_ID.to_string()],
+      pools: charliebot_tasks::test_support::recovery_support::rotation_pools(vec![BACKEND_ID.to_string()]).0,
+      calls: charliebot_tasks::test_support::recovery_support::rotation_pools(vec![BACKEND_ID.to_string()]).1,
       routing: None,
       options: vec![BackendOption {
         id: BACKEND_ID.to_string(),
@@ -544,7 +545,6 @@ pub fn config(home: &Path) -> CharlieBotConfig {
         backend_type: "codex".to_string(),
         type_fields: Mapping::new(),
       }],
-      auto: None,
     },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },

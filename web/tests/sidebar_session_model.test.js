@@ -42,7 +42,7 @@ test('a backend id retired from config renders the raw id', () => {
 });
 
 test('an Auto session row shows the Auto label and its current member', () => {
-  const model = modelSpan(row({backend: 'auto', auto_member: 'claude-opus-5'}));
+  const model = modelSpan(row({backend: 'auto', pool_member: 'claude-opus-5'}));
   assert.equal(model[2], 'Auto → CC · Opus 5');
   assert.equal(model[3], 'Auto → CC · Opus 5');
 });

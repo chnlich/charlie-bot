@@ -345,7 +345,7 @@ fn run_probe(
   let prompt =
     cold_read::probe_input(&page_text, &questions, trigger).map_err(|error| CliExit::error(format!("{error:#}")))?;
   let probe = runtime
-    .block_on(cold_read::run_light_probe(host, &prompt, &system_prompt))
+    .block_on(cold_read::run_probe(host, &prompt, &system_prompt))
     .map_err(|error| CliExit::error(format!("{error:#}")))?;
   Ok(ProbeResult { attempts: probe.attempts, backend_id: probe.backend_id, answer: probe.answer, page_sha256 })
 }
@@ -393,6 +393,7 @@ mod tests {
       pool: Arc::new(BackendPool::new(
         Arc::new(charliebot_agents::backend_availability::BackendAvailability::load(home).unwrap()),
         Arc::clone(&registry),
+        Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
       )),
     }
   }

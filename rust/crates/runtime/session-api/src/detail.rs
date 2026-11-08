@@ -31,7 +31,7 @@ use lru::LruCache;
 use serde_json::{Map, Value, json};
 
 use crate::api;
-use crate::route_support::{Query, auto_switchable, blocking_store};
+use crate::route_support::{Query, blocking_store};
 use crate::{listing, worker_transcript};
 
 const BOOTSTRAP_MESSAGE_LIMIT: usize = 40;
@@ -960,15 +960,16 @@ fn active_backend_payload(
     .binding_for(&meta.id)
     .map_err(|error| StoreError::new(error.to_string()))?
     .is_some_and(|binding| binding.dedicated_backend());
-  let switchable = if active_backend == charliebot_core::config::AUTO_BACKEND_ID && cfg.backends.auto.is_some() {
-    // The switch route refuses an option from Auto under a dedicated lock: `same_continuation_domain` has no domain for
-    // `auto`. The list follows the same rule; the Auto backend itself stays listed, since the route takes it as a no-op.
+  let switchable = if cfg.backends.pool(&active_backend).is_some() {
+    // The switch route refuses an option from a pool session under a dedicated lock: `same_continuation_domain` has no
+    // domain for a pool. The list follows the same rule; each pool stays listed, since the route takes its own id as a
+    // no-op.
     let mut switchable: Vec<Value> = if dedicated {
       Vec::new()
     } else {
       cfg.backends.options.iter().map(|option| Value::String(option.id.clone())).collect()
     };
-    switchable.push(Value::String(charliebot_core::config::AUTO_BACKEND_ID.to_string()));
+    switchable.extend(cfg.backends.pools.iter().map(|pool| Value::String(pool.id.clone())));
     switchable
   } else if let Some(active_option) = active_option {
     if dedicated {
@@ -987,9 +988,7 @@ fn active_backend_payload(
     } else {
       let mut switchable: Vec<Value> =
         cfg.backends.options.iter().map(|option| Value::String(option.id.clone())).collect();
-      if auto_switchable(cfg, dedicated) {
-        switchable.push(Value::String(charliebot_core::config::AUTO_BACKEND_ID.to_string()));
-      }
+      switchable.extend(cfg.backends.pools.iter().map(|pool| Value::String(pool.id.clone())));
       switchable
     }
   } else {
@@ -1154,15 +1153,17 @@ backends:
   options:
     - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a}
     - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b}
-  auto:
-    label: Auto
-    members:
-      - {backend: synthetic-a, billing: subscription}
-      - {backend: synthetic-b, billing: payg}
+  pools:
+    - id: auto
+      label: Auto
+      rule: priority
+      members:
+        - {backend: synthetic-a, billing: subscription}
+        - {backend: synthetic-b, billing: payg}
 ";
 
   #[tokio::test]
-  async fn the_session_detail_returns_the_auto_member_and_lists_auto_switchable() {
+  async fn the_session_detail_returns_the_pool_member_and_lists_the_pools_switchable() {
     let (_home, features) = feature_context_with_auto(AUTO_CONFIG);
     let meta = features
       .store
@@ -1187,14 +1188,14 @@ backends:
       .update_slot_fields(
         &meta.id,
         charliebot_agents::model_pool::OWNER,
-        Map::from_iter([("auto_member".to_string(), json!("synthetic-a"))]),
+        Map::from_iter([("pool_member".to_string(), json!("synthetic-a"))]),
       )
       .await
       .expect("the member is recorded");
 
     let payload = features.store.session_detail(&meta.id).expect("the detail reads");
     assert_eq!(payload["backend"], "auto");
-    assert_eq!(payload["auto_member"], "synthetic-a");
+    assert_eq!(payload["pool_member"], "synthetic-a");
 
     let cfg = features.config.get().expect("the test config loads");
     let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
@@ -1203,7 +1204,7 @@ backends:
   }
 
   #[tokio::test]
-  async fn a_session_on_a_plain_option_lists_auto_when_backends_auto_is_configured() {
+  async fn a_session_on_a_plain_option_lists_the_pools_when_pools_are_configured() {
     let (_home, features) = feature_context_with_auto(AUTO_CONFIG);
     let meta = create_node(&features.store, "plain-option-node", None, TaskProfile::Manager).await;
     let cfg = features.config.get().expect("the test config loads");
@@ -1214,7 +1215,7 @@ backends:
   }
 
   #[tokio::test]
-  async fn a_dedicated_lock_keeps_auto_out_of_the_switch_list() {
+  async fn a_dedicated_lock_keeps_the_pools_out_of_the_switch_list() {
     let (_home, features) = feature_context_with_auto(AUTO_CONFIG);
     let request = CreateTask {
       request_id: "locked-plain-option-node".to_string(),
@@ -1234,7 +1235,7 @@ backends:
   }
 
   #[tokio::test]
-  async fn a_dedicated_auto_session_lists_only_auto_as_switchable() {
+  async fn a_dedicated_pool_session_lists_only_its_pools_as_switchable() {
     let (_home, features) = feature_context_with_auto(AUTO_CONFIG);
     let request = CreateTask {
       request_id: "locked-auto-node".to_string(),
@@ -1252,7 +1253,7 @@ backends:
       .update_slot_fields(
         &meta.id,
         charliebot_agents::model_pool::OWNER,
-        Map::from_iter([("auto_member".to_string(), json!("synthetic-a"))]),
+        Map::from_iter([("pool_member".to_string(), json!("synthetic-a"))]),
       )
       .await
       .expect("the member is recorded");
@@ -1264,9 +1265,9 @@ backends:
   }
 
   #[tokio::test]
-  async fn without_backends_auto_no_switch_list_lists_auto() {
+  async fn without_pools_the_switch_list_holds_the_options_only() {
     let (_home, features) = feature_context();
-    let meta = create_node(&features.store, "plain-no-auto-node", None, TaskProfile::Manager).await;
+    let meta = create_node(&features.store, "plain-no-pool-node", None, TaskProfile::Manager).await;
     let cfg = features.config.get().expect("the test config loads");
 
     let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");

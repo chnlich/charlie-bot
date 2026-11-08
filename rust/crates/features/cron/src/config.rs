@@ -1,7 +1,7 @@
 //! Scheduled-task request and file models.
 
 use charliebot_compat::request_body::{BodyModel, Field, FieldType};
-use charliebot_core::config::{AUTO_BACKEND_ID, CharlieBotConfig};
+use charliebot_core::config::CharlieBotConfig;
 use serde::{Deserialize, Serialize};
 
 /// The default time zone of a scheduled task and of a create request: `charliebot_core::pacific::ZONE`, the house zone.
@@ -122,51 +122,31 @@ pub fn validate_task(task: &ScheduledTaskConfig) -> Result<(), String> {
           step.name, source_name
         ));
       }
-      let own = step.backend.as_deref().or(task.backend.as_deref());
-      let prior = steps[source_position].backend.as_deref().or(task.backend.as_deref());
-      if own == Some(AUTO_BACKEND_ID) || prior == Some(AUTO_BACKEND_ID) {
-        return Err(format!(
-          "step '{}' declares distinct_backend_from, which cannot compare backend '{AUTO_BACKEND_ID}' members; name the backends",
-          step.name
-        ));
-      }
-      if own.is_some() && own == prior {
-        return Err(format!(
-          "step '{}' and its distinct_backend_from source '{}' both declare backend '{}'; the two steps must name different backends",
-          step.name,
-          steps[source_position].name,
-          own.unwrap_or_default()
-        ));
-      }
     }
   }
   Ok(())
 }
 
-/// Whether a cron task backend names a configured option, or `auto` when `backends.auto` is configured.
+/// Whether a cron task backend names a configured `backends.options` id or `backends.pools` id.
 pub(crate) fn backend_resolves(cfg: &CharlieBotConfig, backend: &str) -> bool {
-  if backend == AUTO_BACKEND_ID { cfg.backends.auto.is_some() } else { cfg.get_backend_option(backend).is_some() }
+  cfg.get_backend_option(backend).is_some() || cfg.backends.pool(backend).is_some()
 }
 
 /// Why a cron task backend does not resolve, worded after the backend name the caller prints.
-pub(crate) fn unresolved_backend_reason(backend: &str) -> &'static str {
-  if backend == AUTO_BACKEND_ID { "requires config.yaml backends.auto" } else { "is not in backends.options" }
-}
+pub(crate) const UNRESOLVED_BACKEND_REASON: &str = "is not in backends.options or backends.pools";
 
-/// The backend a scheduled task fires on: its own `backend`, else the first configured option. `auto` is returned as
-/// written: each fire resolves it to the bound session's current member.
+/// The backend a scheduled task fires on: its own `backend` (an options id or a pool id, returned as written), else the
+/// `backends.calls.new_session` target, else the first configured option.
 pub(crate) fn effective_backend(task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<String> {
   if let Some(backend) = task.backend.as_deref().filter(|backend| !backend.is_empty()) {
     if !backend_resolves(cfg, backend) {
-      anyhow::bail!("scheduled task backend '{backend}' {}", unresolved_backend_reason(backend));
+      anyhow::bail!("scheduled task backend '{backend}' {UNRESOLVED_BACKEND_REASON}");
     }
     return Ok(backend.to_string());
   }
   cfg
     .backends
-    .options
-    .first()
-    .map(|option| option.id.clone())
+    .new_session_backend()
     .ok_or_else(|| anyhow::anyhow!("scheduled task backend resolution requires a configured backends.options entry"))
 }
 

@@ -254,7 +254,7 @@ pub(crate) fn feature_context_with_config(config_body: &str) -> (GatedHome, Arc<
   feature_context_with(config_body, false)
 }
 
-/// The Auto session fixture: `config_body` plus the production `auto_member` slot the Auto backend writes.
+/// The pool session fixture: `config_body` plus the production `pool_member` slot that `model_pool` registers.
 pub(crate) fn feature_context_with_auto(config_body: &str) -> (GatedHome, Arc<FeatureContext>) {
   feature_context_with(config_body, true)
 }
@@ -270,7 +270,7 @@ fn feature_context_with(config_body: &str, auto_backend: bool) -> (GatedHome, Ar
   if auto_backend {
     registry
       .register_package("session_api_test.model_pool", charliebot_agents::model_pool::register)
-      .expect("register the auto_member slot");
+      .expect("register the pool_member slot");
   }
   let registry = Arc::new(registry);
   let config_value = registry.load_config(home.path()).expect("test config");

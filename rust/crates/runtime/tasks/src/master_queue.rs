@@ -843,7 +843,11 @@ mod tests {
   /// A pool on a fresh home; these tests never record a member out, so the home needs no state file.
   fn test_pool() -> Arc<BackendPool> {
     let home = tempfile::tempdir().unwrap();
-    Arc::new(BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap()), Arc::new(Registry::new())))
+    Arc::new(BackendPool::new(
+      Arc::new(BackendAvailability::load(home.path()).unwrap()),
+      Arc::new(Registry::new()),
+      Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
+    ))
   }
 
   fn context_features(home: &Path) -> Arc<FeatureContext> {

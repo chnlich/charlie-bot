@@ -1,49 +1,79 @@
 //! The backend resolution and the next-step judgment of a steps firing.
 //!
-//! The sequence controller starts each step with these functions, and the scheduler reads the next-step judgment to
-//! decide whether a round is still in flight. Neither caller is imported by this module.
+//! A step runs on a `backends.options` id, which runs as written, or on a `backends.pools` id, which selects its member
+//! when the step's run is registered. The sequence controller starts each step with these functions, and the scheduler
+//! reads the next-step judgment to decide whether a round is still in flight. Neither caller is imported by this
+//! module.
 
 use std::collections::{BTreeMap, HashMap};
 
-use charliebot_agents::model_pool;
-use charliebot_core::config::{AUTO_BACKEND_ID, CharlieBotConfig};
-use charliebot_store::metadata::SessionMetadata;
+use charliebot_agents::backend_pool;
+use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_registry::context::FeatureContext;
 use charliebot_store::run_records::{RunFacts, RunOutcomeKind, RunRecord};
 
-use crate::config::{ScheduledTaskConfig, StepConfig};
+use crate::config::{ScheduledTaskConfig, StepConfig, effective_backend};
 
-/// Whether a step's run is on `auto`: its own backend, or the task's when the step names none.
-pub(crate) fn step_runs_on_auto(task: &ScheduledTaskConfig, step: &StepConfig) -> bool {
-  step.backend.as_deref().or(task.backend.as_deref()) == Some(AUTO_BACKEND_ID)
+/// The member a step's run is registered on, or the reason no member is selectable.
+pub(crate) enum StepMember {
+  Selected(BackendOption),
+  /// The step's pool has no selectable member; the message lists every member and why it is out.
+  Exhausted(String),
 }
 
-/// The backend and model that a step resolves to. `auto` resolves to the bound session's current member, which the
-/// fire's turn start recorded; `parent` is that bound session and is required for `auto`.
-pub(crate) fn resolved_backend(
+/// The backend id a step runs on: its own, else the task's effective backend.
+pub(crate) fn step_backend_id(
   task: &ScheduledTaskConfig,
   cfg: &CharlieBotConfig,
   backend: Option<&str>,
-  parent: Option<&SessionMetadata>,
-) -> anyhow::Result<(String, Option<String>)> {
-  let backend = backend
-    .filter(|backend| !backend.is_empty())
-    .or(task.backend.as_deref().filter(|backend| !backend.is_empty()))
-    .or_else(|| cfg.backends.options.first().map(|option| option.id.as_str()))
-    .ok_or_else(|| anyhow::anyhow!("scheduled task backend resolution requires a configured backends.options entry"))?;
-  let backend = if backend == AUTO_BACKEND_ID {
-    let parent = parent.ok_or_else(|| {
-      anyhow::anyhow!("scheduled task '{}' runs on backend 'auto' outside its bound session", task.name)
-    })?;
-    model_pool::current_member_id(cfg, parent)?
-  } else {
-    backend.to_string()
-  };
-  let option = cfg
-    .get_backend_option(&backend)
-    .ok_or_else(|| anyhow::anyhow!("scheduled task '{}' backend '{}' is not configured", task.name, backend))?;
-  Ok((option.id.clone(), (!option.model.is_empty()).then(|| option.model.clone())))
+) -> anyhow::Result<String> {
+  match backend.filter(|backend| !backend.is_empty()) {
+    Some(backend) => Ok(backend.to_string()),
+    None => effective_backend(task, cfg),
+  }
 }
 
+/// The member a step's run is registered on. A `backends.options` id runs as written. A `backends.pools` id selects its
+/// member now, which moves the pool's rotation past it, and `exclude` names the members the selection leaves out.
+pub(crate) fn select_step_member(
+  features: &FeatureContext,
+  cfg: &CharlieBotConfig,
+  backend: &str,
+  exclude: &[String],
+) -> anyhow::Result<StepMember> {
+  if cfg.backends.pool(backend).is_none() {
+    return Ok(StepMember::Selected(option_of(cfg, backend)?.clone()));
+  }
+  let pool = backend_pool::backend_pool(features)?;
+  match pool.select(cfg, "cron", backend, exclude)? {
+    Some(option) => Ok(StepMember::Selected(option)),
+    None => Ok(StepMember::Exhausted(pool.exhausted_message(cfg, backend)?)),
+  }
+}
+
+/// The members a step's selection leaves out: the member its `distinct_backend_from` source step ran on. A step with no
+/// source, or whose source has no run yet, leaves out none.
+pub(crate) fn distinct_exclusion(
+  steps: &[StepConfig],
+  position: usize,
+  runs: &BTreeMap<usize, RunRecord>,
+) -> Vec<String> {
+  let Some(source) = steps[position].distinct_backend_from.as_deref() else { return Vec::new() };
+  let Some(source_position) = steps.iter().position(|step| step.name == source) else { return Vec::new() };
+  runs.get(&source_position).and_then(|run| run.backend.clone()).into_iter().collect()
+}
+
+/// The model a step's run records for `option`, when the option names one.
+pub(crate) fn option_model(option: &BackendOption) -> Option<String> {
+  (!option.model.is_empty()).then(|| option.model.clone())
+}
+
+fn option_of<'a>(cfg: &'a CharlieBotConfig, backend: &str) -> anyhow::Result<&'a BackendOption> {
+  cfg.get_backend_option(backend).ok_or_else(|| anyhow::anyhow!("scheduled task backend '{backend}' is not configured"))
+}
+
+/// The first step whose `distinct_backend_from` pair resolves to the same concrete backend and model, as a report.
+/// A pair with a pool step is not compared here: the pool step selects a member that leaves the source's member out.
 pub(crate) fn distinct_backend_conflict(
   task: &ScheduledTaskConfig,
   cfg: &CharlieBotConfig,
@@ -51,18 +81,21 @@ pub(crate) fn distinct_backend_conflict(
   let Some(steps) = task.steps.as_ref() else { return Ok(None) };
   // A duplicated step name resolves to its last position, from this one-pass index.
   let positions = steps.iter().enumerate().map(|(index, step)| (step.name.as_str(), index)).collect::<HashMap<_, _>>();
-  for (position, step) in steps.iter().enumerate() {
+  for step in steps {
     let Some(prior_name) = step.distinct_backend_from.as_deref() else { continue };
     let prior_position = positions
       .get(prior_name)
       .copied()
       .ok_or_else(|| anyhow::anyhow!("step '{}' names missing distinct backend source '{prior_name}'", step.name))?;
     let prior = &steps[prior_position];
-    let (backend, model) = resolved_backend(task, cfg, step.backend.as_deref(), None)?;
-    let (prior_backend, prior_model) = resolved_backend(task, cfg, prior.backend.as_deref(), None)?;
-    let own = cfg.get_backend_option(&backend).expect("resolved backend option exists");
-    let old = cfg.get_backend_option(&prior_backend).expect("resolved backend option exists");
-    if own.backend_type == old.backend_type && model == prior_model {
+    let backend = step_backend_id(task, cfg, step.backend.as_deref())?;
+    let prior_backend = step_backend_id(task, cfg, prior.backend.as_deref())?;
+    if cfg.backends.pool(&backend).is_some() || cfg.backends.pool(&prior_backend).is_some() {
+      continue;
+    }
+    let own = option_of(cfg, &backend)?;
+    let old = option_of(cfg, &prior_backend)?;
+    if own.backend_type == old.backend_type && option_model(own) == option_model(old) {
       let names = if backend == prior_backend {
         format!("backend '{backend}'")
       } else {
@@ -73,10 +106,9 @@ pub(crate) fn distinct_backend_conflict(
         prior.name,
         step.name,
         own.backend_type,
-        model.as_deref().unwrap_or("None")
+        option_model(own).as_deref().unwrap_or("None")
       )));
     }
-    let _ = position;
   }
   Ok(None)
 }

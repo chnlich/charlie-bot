@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{CallClass, CharlieBotConfig};
 use futures_util::stream::StreamExt;
 use serde::Serialize;
 
@@ -118,8 +118,8 @@ impl ScanRow {
 /// Preflight: the scan's mechanisms must be present before it reads anything. Each failure names what is missing.
 pub fn preflight(cfg: &CharlieBotConfig, log_dir: &Path) -> Result<()> {
   crate::ripgrep::ensure_available()?;
-  if cfg.backends.pool.is_empty() {
-    bail!("backends.pool is empty: failure triage needs a light backend to judge signatures with");
+  if cfg.backends.calls.get(CallClass::Triage).is_none() {
+    bail!("backends.calls.triage is unset: failure triage needs a model or pool to judge signatures with");
   }
   require_log_dir(log_dir)
 }
@@ -471,9 +471,10 @@ mod tests {
   #[ignore = "integration"]
   fn preflight_names_rg_the_pool_and_the_log_directory() {
     let fixture = Fixture::new();
-    let config = synthetic_config(Vec::new());
+    let mut config = synthetic_config(vec!["synthetic".to_string()]);
+    config.backends.calls = Default::default();
     let error = preflight(&config, &fixture.log_dir).unwrap_err();
-    assert!(error.to_string().contains("backends.pool"), "{error}");
+    assert!(error.to_string().contains("backends.calls.triage"), "{error}");
     let config = synthetic_config(vec!["synthetic".to_string()]);
     let missing = fixture.root().join("no-logs");
     let error = preflight(&config, &missing).unwrap_err();
@@ -481,8 +482,12 @@ mod tests {
     preflight(&config, &fixture.log_dir).unwrap();
   }
 
-  fn synthetic_config(pool: Vec<String>) -> CharlieBotConfig {
-    use charliebot_core::config::{BackendsConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig};
+  /// A config whose `light` rotate pool holds `members` and whose `backends.calls.triage` names it.
+  fn synthetic_config(members: Vec<String>) -> CharlieBotConfig {
+    use charliebot_core::config::{
+      BackendsConfig, CallTarget, PathsConfig, PoolConfig, PoolMember, PoolRule, Sections, ServerConfig,
+      TelegramConfig, UiConfig,
+    };
     CharlieBotConfig {
       charliebot_home: PathBuf::from("/synthetic/home"),
       headless_chrome_bin: "/synthetic/chrome".to_string(),
@@ -504,7 +509,17 @@ mod tests {
         worktree_dir: "/synthetic".to_string(),
         scratch_dir: "/synthetic".to_string(),
       },
-      backends: BackendsConfig { pool, routing: None, options: Vec::new(), auto: None },
+      backends: BackendsConfig {
+        pools: vec![PoolConfig {
+          id: "light".to_string(),
+          label: "Light".to_string(),
+          rule: PoolRule::Rotate,
+          members: members.into_iter().map(|backend| PoolMember { backend, billing: None }).collect(),
+        }],
+        routing: None,
+        options: Vec::new(),
+        calls: [(CallClass::Triage, CallTarget::Backend("light".to_string()))].into_iter().collect(),
+      },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       remote_run: charliebot_core::config::RemoteRunConfig::default(),

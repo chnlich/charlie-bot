@@ -39,14 +39,14 @@ function makeDocument(elements) {
   return { getElementById: (id) => elements.get(id) || null };
 }
 
-function loadSessionContext({elements, BACKEND_OPTIONS, AUTO_BACKEND, ACTIVE_AUTO_MEMBER, SESSION_ID, fetchImpl}) {
+function loadSessionContext({elements, BACKEND_OPTIONS, BACKEND_POOLS, ACTIVE_POOL_MEMBER, SESSION_ID, fetchImpl}) {
   const context = {
     document: makeDocument(elements),
     console: { error: () => {}, log: () => {} },
     showToast: () => {},
     BACKEND_OPTIONS: BACKEND_OPTIONS || {},
-    AUTO_BACKEND,
-    ACTIVE_AUTO_MEMBER,
+    BACKEND_POOLS,
+    ACTIVE_POOL_MEMBER,
     SESSION_ID: SESSION_ID || 'session-a',
     // config.js's shared literal pair; this harness skips config.js.
     JSON_HEADERS: {'Content-Type': 'application/json'},
@@ -172,8 +172,8 @@ test('an Auto session badge shows the label and the current member', () => {
     elements,
     SESSION_ID: 'session-a',
     BACKEND_OPTIONS: { 'claude-opus-5': 'Opus 5', 'claude-fable-5': 'Fable 5' },
-    AUTO_BACKEND: { id: 'auto', label: 'Auto' },
-    ACTIVE_AUTO_MEMBER: 'claude-opus-5',
+    BACKEND_POOLS: [{ id: 'auto', label: 'Auto' }],
+    ACTIVE_POOL_MEMBER: 'claude-opus-5',
   });
   context.setSwitchableBackends(['auto']);
   context.setActiveBackendId('auto');
@@ -187,7 +187,7 @@ test('an Auto session without a recorded member shows the Auto label alone', () 
     elements,
     SESSION_ID: 'session-a',
     BACKEND_OPTIONS: { 'claude-opus-5': 'Opus 5', 'claude-fable-5': 'Fable 5' },
-    AUTO_BACKEND: { id: 'auto', label: 'Auto' },
+    BACKEND_POOLS: [{ id: 'auto', label: 'Auto' }],
   });
   context.setSwitchableBackends(['auto']);
   context.setActiveBackendId('auto');
@@ -201,14 +201,14 @@ test('the switch dropdown offers Auto with its member label', () => {
     elements,
     SESSION_ID: 'session-a',
     BACKEND_OPTIONS: { 'claude-opus-5': 'Opus 5', 'claude-fable-5': 'Fable 5' },
-    AUTO_BACKEND: { id: 'auto', label: 'Auto' },
-    ACTIVE_AUTO_MEMBER: 'claude-fable-5',
+    BACKEND_POOLS: [{ id: 'auto', label: 'Auto' }],
+    ACTIVE_POOL_MEMBER: 'claude-fable-5',
   });
   context.setSwitchableBackends(['claude-opus-5', 'auto']);
-  context.setActiveBackendId('claude-opus-5');
+  context.setActiveBackendId('auto');
   context.updateActiveBackendBadges();
   const html = elements.get('backend-badge').innerHTML;
-  assert.ok(html.includes('value="auto"'), html);
+  assert.ok(html.includes('value="auto" selected'), html);
   assert.ok(html.includes('Auto → Fable 5'), html);
 });
 
@@ -222,7 +222,7 @@ test('a plain-option session renders the Auto entry from the server-computed lis
     elements,
     SESSION_ID: 'session-a',
     BACKEND_OPTIONS: { 'claude-opus-5': 'Opus 5', 'claude-fable-5': 'Fable 5' },
-    AUTO_BACKEND: { id: 'auto', label: 'Auto' },
+    BACKEND_POOLS: [{ id: 'auto', label: 'Auto' }],
   });
   context.setSwitchableBackends(['claude-opus-5', 'claude-fable-5', 'auto']);
   context.setActiveBackendId('claude-opus-5');
@@ -241,7 +241,7 @@ test('selecting Auto in the switch dropdown posts auto and lands the session on 
     elements,
     SESSION_ID: 'session-a',
     BACKEND_OPTIONS: { 'claude-opus-5': 'Opus 5', 'claude-fable-5': 'Fable 5' },
-    AUTO_BACKEND: { id: 'auto', label: 'Auto' },
+    BACKEND_POOLS: [{ id: 'auto', label: 'Auto' }],
     fetchImpl: (url, opts) => {
       calls.push({ url, opts });
       return Promise.resolve({ ok: true, async json() { return { id: 'session-a', backend: 'auto' }; } });

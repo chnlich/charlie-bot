@@ -3,9 +3,15 @@
 server:
   port: 18499
 backends:
-  pool:
-    - synthetic-claude
-    - synthetic-openai
+  pools:
+    - id: synthetic-pool
+      label: Synthetic Pool
+      rule: rotate
+      members:
+        - synthetic-claude
+        - synthetic-openai
+  calls:
+    worker: synthetic-pool
   routing:
     command: [synthetic-router, --policy, round-robin]
   options:

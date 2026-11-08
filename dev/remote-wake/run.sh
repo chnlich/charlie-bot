@@ -250,6 +250,12 @@ for side in before after; do
   done
 done
 
+# The bench lock covers the container and the measured runs, so no other bench measures beside this one. It is taken
+# after the builds, so a run does not hold it while compiling, and before the container exists.
+echo "remote-wake: waiting for the bench lock"
+remote_wake_lock || die "$REMOTE_WAKE_LOCK_TIMEOUT_EXIT" \
+  "the bench lock was not free within $REMOTE_WAKE_LOCK_WAIT_SECONDS s"
+
 # The container is the remote host. A published loopback port keeps it off the network; the bench reaches it only
 # through the trial servers' ssh and through docker exec.
 image=${image:-remote-wake-bench:$run_id}
@@ -363,10 +369,6 @@ const meta = {
 };
 require('node:fs').writeFileSync(file, `${JSON.stringify(meta, null, 2)}\n`);
 NODE
-
-# The bench lock covers the container and the measured runs, so no other bench measures beside this one.
-echo "remote-wake: waiting for the bench lock"
-remote_wake_lock || die "$REMOTE_WAKE_LOCK_TIMEOUT_EXIT" "the bench lock was not free within $REMOTE_WAKE_LOCK_WAIT_SECONDS s"
 
 # Both serve trials share this environment: the scripted backend, the ssh wrapper, and the reply pieces.
 export PATH="$run_dir/sshbin:$SCRIPT_DIR/../poor-network/stub:$PATH"

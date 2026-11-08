@@ -275,7 +275,9 @@ times faster than the modeled link (a 340 KB document at 2.5 s). The other devic
 (A, cache-warm, the link), gives the rate: `max(1, live tail / reference tail)`. The run prints both inputs.
 
 **Measured per repetition.** Times are ms from the page's time origin (navigation start): `newest_message_ms` is when the
-text of the session's newest message is in `#messages`, `catchup_ms` is the first `catchup_complete` frame of the page's
+first screen's last message is in the chat, named by its `data-message-id` — the page's own `newest_message_ms`
+definition (`web/features/diag/templates/diag/client-events.js`); a text marker goes stale, because the scenarios before
+the open scenario send turns to the same session. `catchup_ms` is the first `catchup_complete` frame of the page's
 socket, and `load_ms` is the load event. `bytes_to_newest` is the link's bytes (both directions) from the navigation to
 that moment, and `bytes_after_load` the bytes in the 30 s after the load event; the proxy's counters are sampled every
 25 ms. `dcl_ms`, `response_end_ms` and `tail_ms` come from the page's Navigation Timing, and `mark` is whether the

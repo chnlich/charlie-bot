@@ -59,11 +59,14 @@ export function flapWindows({ upSeconds, downSeconds, totalSeconds }) {
 }
 
 // The init script of a measured page. It runs before the page's own scripts. It records the navigation's time origin,
-// the localStorage record the page starts from, the first time the newest message's text is in the chat, the first
-// time the not-current mark is in the document, the DOMContentLoaded and load times, and the load time's clock.
-function measuredInitScript(marker) {
+// the localStorage record the page starts from, the first time the newest message is in the chat, the first time the
+// not-current mark is in the document, the DOMContentLoaded and load times, and the load time's clock. The newest
+// message is the first screen's last message, named by its `data-message-id`: the page's own `newest_message_ms`
+// definition (web/features/diag/templates/diag/client-events.js). A text marker goes stale: the scenarios that run
+// before the open scenario send turns to the same session, so the seed's text no longer sits in the first screen.
+function measuredInitScript(newestMessageId) {
   return `(() => {
-    const marker = ${JSON.stringify(marker)};
+    const selector = '[data-message-id="' + CSS.escape(${JSON.stringify(String(newestMessageId))}) + '"]';
     const state = {
       timeOrigin: performance.timeOrigin,
       recordAtStart: localStorage.getItem('charliebot_opened_pages'),
@@ -74,8 +77,7 @@ function measuredInitScript(marker) {
     };
     window.__pn = state;
     const scan = () => {
-      const messages = document.getElementById('messages');
-      if (state.newest === null && messages !== null && messages.textContent.includes(marker)) {
+      if (state.newest === null && document.querySelector(selector) !== null) {
         state.newest = Date.now();
       }
       if (state.mark === null && document.querySelector('[data-freshness="not-current"]') !== null) {
@@ -231,7 +233,14 @@ async function measureOnce(ctx, cell, repetition) {
       await sleep(OPEN.openAfterMs - OPEN.releaseAtMs);
     }
 
-    const tab = await tabs.open('open', measuredInitScript(session.marker));
+    // The newest message the measured open must show: the first screen's last message, fetched now, after the
+    // release condition has landed its turn. The request runs beside the link, so it costs the measurement no bytes.
+    const firstScreen = await ctx.api.json('GET', `/api/sessions/${session.id}/bootstrap`);
+    const newestMessage = firstScreen.messages[firstScreen.messages.length - 1];
+    if (newestMessage === undefined || newestMessage.id == null) {
+      throw new Error(`the open target's first screen (${firstScreen.messages.length} messages) names no last message id`);
+    }
+    const tab = await tabs.open('open', measuredInitScript(newestMessage.id));
     await tab.page.send('Emulation.setCPUThrottlingRate', { rate: cell.rate });
     await tabs.show(tab);
     if (cell.condition === 'offline') {

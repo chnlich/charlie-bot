@@ -25,6 +25,8 @@ pub const CREDENTIALS_FILENAME: &str = "credentials.yaml";
 pub const SESSIONS_DIR_NAME: &str = "sessions";
 /// The profile home's directory of configuration fragments, one YAML file per job or section.
 pub const CONFIG_D_DIR_NAME: &str = "config.d";
+/// The `config.d` subdirectory that holds the scheduled job files, one YAML file per job.
+pub const CRON_D_DIR_NAME: &str = "cron.d";
 
 /// A legacy-key value under this prefix names a `credentials.yaml` key path (`CREDENTIALS_PREFIX`).
 pub const CREDENTIALS_PREFIX: &str = "credentials: ";

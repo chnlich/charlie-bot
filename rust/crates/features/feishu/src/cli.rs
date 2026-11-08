@@ -14,6 +14,7 @@ use charliebot_cli_common::resolve;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Map, json};
 
+use crate::api::{CHECK_PATH, DOWNLOAD_PATH, READ_PATH, REPLY_PATH};
 use crate::user_token::{self, Endpoints};
 
 #[derive(Parser)]
@@ -128,12 +129,12 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
 }
 
 fn reply(args: &ReplyArgs) -> Result<(), CliExit> {
-  post_reply("/api/internal/feishu/reply", args.session.as_deref(), &args.file, None)
+  post_reply(REPLY_PATH, args.session.as_deref(), &args.file, None)
 }
 
 fn read(args: &ReadArgs) -> Result<(), CliExit> {
   let extra = read_mode_fields(args)?;
-  post_read("/api/internal/feishu/read", args.session.as_deref(), args.limit, extra)
+  post_read(READ_PATH, args.session.as_deref(), args.limit, extra)
 }
 
 fn read_mode_fields(args: &ReadArgs) -> Result<Option<Map<String, serde_json::Value>>, CliExit> {
@@ -166,7 +167,7 @@ fn download(args: &DownloadArgs) -> Result<(), CliExit> {
     .map_err(|error| CliExit::usage(format!("--output {} is not a usable path: {error}", args.output)))?;
   let output = output.to_str().ok_or_else(|| CliExit::usage(format!("--output {} is not UTF-8", args.output)))?;
   let result = client::post(
-    "/api/internal/feishu/download",
+    DOWNLOAD_PATH,
     json!({
       "session_id": session_id,
       "message_id": args.message_id,
@@ -182,7 +183,7 @@ fn download(args: &DownloadArgs) -> Result<(), CliExit> {
 }
 
 fn check() -> Result<(), CliExit> {
-  post_check("/api/internal/feishu/check")
+  post_check(CHECK_PATH)
 }
 
 #[cfg(test)]

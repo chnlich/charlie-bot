@@ -178,7 +178,7 @@ test('the terminal package registers its tab', () => {
 
 test('the artifacts package registers the Plans tab, its plan events and its session listener', () => {
   const connectHandlers = [];
-  const {context, tabs, handlers, listeners} = loadPackageScripts('artifacts', ['plan-panel.js'], {
+  const {context, tabs, handlers, listeners} = loadPackageScripts('artifacts', ['plan-events.js', 'plan-panel.js'], {
     registerWsConnectHandler: (handler) => connectHandlers.push(handler),
   });
   const panel = vm.runInContext('planPanel', context);

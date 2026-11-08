@@ -799,13 +799,12 @@ registerTab({
   onHide() { document.getElementById('tab-plans').classList.add('hidden'); },
 });
 
-// The panel re-fetches on a plan_updated event and drops its selection when
-// the active session changes. On a socket connect, only a network loss stales
-// the registry. A page-driven reconnect (a switch) closed its own socket after
-// the switch's registry fetch started, so that fetch's data is current.
-// Marking stale here would refetch it within the same switch.
+// The page's plan-events part subscribes to plan_updated and calls planPanel.onPlanUpdated, so an update raises the
+// tab's dot before this script loads. The panel drops its selection when the active session changes. On a socket
+// connect, only a network loss stales the registry. A page-driven reconnect (a switch) closed its own socket after
+// the switch's registry fetch started, so that fetch's data is current. Marking stale here would refetch it within
+// the same switch.
 registerWsConnectHandler((connect) => {
   if (connect.afterNetworkLoss) planPanel.invalidate();
 });
-registerWsMessageHandler('plan_updated', (ev) => planPanel.onPlanUpdated(ev.plan_id), {advancesCursor: true});
 document.addEventListener('charliebot:active-session-changed', () => planPanel.onActiveSessionChanged());

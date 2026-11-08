@@ -31,6 +31,16 @@
   .meta { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 22px }
   .mtag { font-size:11.5px; font-family:var(--mono); background:var(--panel2);
     border:1px solid var(--bd); border-radius:6px; padding:3px 9px; color:var(--tx) }
+  /* The sources and scope chips fold behind one "Details" chip under the subtitle: the subtitle already prints the
+     ledger time and the all-time card its call count, so only this pair needs a fold. The button keeps the chip's
+     shape; opened, its chips take the row under the chip row and the fold's chevron turns. */
+  .detBtn { line-height:inherit; cursor:pointer }
+  /* The keyboard ring uses the page's accent, as the approval page's folded rows do, so Enter and Space give the chip
+     the same visible focus the rest of the page shows. */
+  .detBtn:focus-visible { outline:2px solid var(--acc); outline-offset:2px }
+  .detBtn::after { content:" \25B8" }
+  .detBtn[aria-expanded="true"]::after { content:" \25BE" }
+  .detBody { display:inline-flex; flex-wrap:wrap; gap:8px; max-width:100% }
   p { margin:8px 0 }
   ul { margin:8px 0 0; padding-left:20px } li { margin:4px 0 }
   code { font-family:var(--mono); background:var(--panel2); border:1px solid var(--bd);
@@ -39,7 +49,6 @@
   .heroCard { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:14px 16px; min-width:0 }
   .heroCard .lab { font-size:12px; color:var(--mut); margin:0 0 2px }
   .heroCard .val { font-size:34px; line-height:1.1; font-weight:640; letter-spacing:-1px; font-variant-numeric:tabular-nums }
-  .heroCard .val.model { font-size:16px; line-height:1.35; letter-spacing:0; padding-top:9px; overflow-wrap:anywhere }
   /* Every secondary figure on this page reads in the body muted tone. --mut2 falls under the 4.5:1 floor for text
      this small: it renders 3.70:1 on the white card and 3.38:1 on the page background. --mut renders 5.77:1 and
      5.28:1, so it carries those figures. */
@@ -119,10 +128,11 @@
   ledger ({{ as_of }}).</p>
   <div class="meta">
     {% if ctx.rows %}<span class="mtag">window &middot; {{ window[0] }} &rarr; {{ window[1] }} {{ zone }}</span>{% endif %}
-    <span class="mtag">sources &middot; {{ ctx.usage_sources|join(' / ') }} local logs</span>
-    <span class="mtag">scope &middot; one model = one row (merged across sources and subscriptions)</span>
-    <span class="mtag">API calls &middot; {{ ctx.tot_calls }}</span>
-    <span class="mtag">ledger &middot; {{ as_of }}</span>
+    <button class="mtag detBtn" type="button" aria-expanded="false" aria-controls="usage-details">Details</button>
+    <span class="detBody" id="usage-details" hidden>
+      <span class="mtag">sources &middot; {{ ctx.usage_sources|join(' / ') }} local logs</span>
+      <span class="mtag">scope &middot; one model = one row (merged across sources and subscriptions)</span>
+    </span>
     <span class="mtag">generated &middot; {{ generated }}</span>
   </div>
 
@@ -136,6 +146,7 @@
       <p class="lab">Output &middot; last week</p>
       <div class="val">{{ ctx.week.output }}</div>
       <p class="foot">{% if ctx.week.models %}{{ ctx.week.output_exact }} tokens &middot; {{ ctx.week.calls }} API calls &middot; {{ ctx.week.models }} models{% else %}No records last week{% endif %}</p>
+      <p class="foot">Top &middot; {{ ctx.week.top_model or '—' }} &middot; {{ ctx.week.top_output }} output</p>
     </div>
     <div class="heroCard">
       <p class="lab">Output &middot; all time</p>
@@ -153,11 +164,6 @@
       <div class="val">{% if ctx.week.wow_total is none %}&mdash;{% else %}{{ "+" if ctx.week.wow_total >= 0 }}{{ "%.1f"|format(ctx.week.wow_total) }}%{% endif %}</div>
       <p class="foot">total, against {{ ctx.week.previous_total }}</p>
       <p class="foot">output {% if ctx.week.wow_output is none %}&mdash;{% else %}{{ "+" if ctx.week.wow_output >= 0 }}{{ "%.1f"|format(ctx.week.wow_output) }}%{% endif %}, against {{ ctx.week.previous_output }}</p>
-    </div>
-    <div class="heroCard">
-      <p class="lab">Top output &middot; last week</p>
-      <div class="val model">{{ ctx.week.top_model or '—' }}</div>
-      <p class="foot">{{ ctx.week.top_output }} output</p>
     </div>
   </div>
 
@@ -501,6 +507,10 @@ function allTimeTable() {
   sum.append(td('Model', 'Sum (' + DATA.rows.length + ' models)'), td('Output', fmt(output)), td('Total', fmt(total)), td('Window', '', 'win'));
   tbody.append(sum);
 }
+
+// The chip row's "Details" fold, opened by the same toggle the tables use.
+const detBtn = document.querySelector('.detBtn');
+if (detBtn) openable(detBtn, document.getElementById('usage-details'));
 
 if (DATA.week.length > 0) {
   bars('c_week', DATA.week);

@@ -188,8 +188,8 @@ pub fn int_field(fields: &Map<String, Value>, key: &str) -> anyhow::Result<i64> 
   }
 }
 
-/// A translator that passes each final-stdout value through unchanged. The Devin and Antigravity backends hand their
-/// CLI's JSON to the event builders as it arrives.
+/// A translator that passes each raw event through unchanged. Devin and Antigravity build their events from the
+/// captured stdout after the process exits, so the channel that replays the raw log needs no per-value rewrite.
 pub struct CapturedEvents;
 
 impl Translate for CapturedEvents {

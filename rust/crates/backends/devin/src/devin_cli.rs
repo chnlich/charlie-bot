@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::Context;
-use charliebot_agents::cli_base::framed_prompt;
+use charliebot_agents::cli_base::{CapturedEvents, finished, framed_prompt};
 use charliebot_agents::event_builders::make_error_event;
 use charliebot_core::str_methods;
 use charliebot_registry::backend::{AgentBackend, Env, FinalStdoutOutcome, LaunchArgs, Translate, TransportKind};
@@ -145,18 +145,6 @@ impl AgentBackend for DevinBackend {
   fn finish_final_stdout(&mut self, stdout: &str, stderr: &str, exit_code: i32) -> FinalStdoutOutcome {
     self.finish(stdout, stderr, exit_code)
   }
-}
-
-struct CapturedEvents;
-
-impl Translate for CapturedEvents {
-  fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
-    Ok(vec![raw])
-  }
-}
-
-fn finished(events: Vec<Value>, exit_code: i32, guard_error: Option<String>) -> FinalStdoutOutcome {
-  FinalStdoutOutcome { events, exit_code, guard_error }
 }
 
 /// The message of a nonzero exit: Devin's stderr text, so its quota message reaches the turn's error.

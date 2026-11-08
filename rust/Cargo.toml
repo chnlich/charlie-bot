@@ -127,7 +127,6 @@ shlex = "2"
 sha1 = "0.10"
 sha2 = "0.10"
 shellexpand = { version = "3", default-features = false, features = ["base-0"] }
-soft-canonicalize = "0.5"
 subtle = "2"
 symphonia = { version = "0.6", default-features = false, features = ["aac", "isomp4", "mkv", "mp3", "ogg", "pcm", "vorbis", "wav"] }
 syn = { version = "2", features = ["full", "visit"] }
@@ -161,7 +160,6 @@ charliebot-backup = { path = "crates/features/backup" }
 charliebot-chat-threads = { path = "crates/features/chat_threads" }
 charliebot-charlie-code = { path = "crates/backends/charlie_code" }
 charliebot-claude-code = { path = "crates/backends/claude_code" }
-charliebot-cli = { path = "crates/app/cli" }
 charliebot-cli-common = { path = "crates/infra/cli-common" }
 charliebot-code-server = { path = "crates/features/code_server" }
 charliebot-codex = { path = "crates/backends/codex" }

@@ -741,6 +741,8 @@ test('the page loader forwards each wired entry to the archived module on first 
   const forwarded = [];
   let settle;
   const context = vm.createContext({
+    currentFilter: 'archived',
+    console: {error() {}},
     Sidebar: {
       wire(globals) { Object.assign(this, globals); },
     },
@@ -768,4 +770,31 @@ test('the page loader forwards each wired entry to the archived module on first 
   await pending;
   assert.equal(forwarded.length, 1);
   assert.deepEqual(Array.from(forwarded[0]), ['session-a', 3]);
+});
+
+test('a filter chosen while the module downloads leaves the newer view alone', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const forwarded = [];
+  let settle;
+  const context = vm.createContext({
+    currentFilter: 'archived',
+    console: {error() {}},
+    Sidebar: {
+      wire(globals) { Object.assign(this, globals); },
+    },
+    loadPageScripts() {
+      return new Promise((resolve) => { settle = resolve; });
+    },
+  });
+  const loader = fs.readFileSync(path.join(__dirname, '..', 'templates', 'js', 'sidebar', 'archived.js'), 'utf8');
+  vm.runInContext(loader, context, {filename: 'templates/js/sidebar/archived.js'});
+
+  const pending = context.Sidebar.loadArchivedView('session-a');
+  // The reader leaves Archive before the module arrives.
+  context.currentFilter = 'all';
+  context.Sidebar.loadArchivedView = (...args) => { forwarded.push(args); };
+  settle();
+  await pending;
+  assert.equal(forwarded.length, 0);
 });

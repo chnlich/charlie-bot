@@ -12,6 +12,12 @@
 // call, which is the filter's selection. The module's own Sidebar.wire then
 // replaces these forwards, so a later call runs the module directly. A call that
 // arrives while the download runs waits for it, and the calls keep their order.
+//
+// A filter selected while the download runs leaves the queued loadArchivedView
+// stale: it must not clear the list the newer filter painted, so it does nothing
+// unless Archive is still the current filter when the module arrives. A failed
+// download is logged, as the composer's voice loader logs its own, and the next
+// selection tries again because loadPageScripts drops a failed entry.
 (function() {
   const Sidebar = globalThis.Sidebar;
   const SOURCE = '/static/js/sidebar/archived.js';
@@ -23,7 +29,13 @@
   function forward(name) {
     return function() {
       const args = arguments;
-      return load().then(() => Sidebar[name].apply(Sidebar, args));
+      return load().then(
+        () => {
+          if (name === 'loadArchivedView' && globalThis.currentFilter !== 'archived') return;
+          return Sidebar[name].apply(Sidebar, args);
+        },
+        (error) => console.error('the archived view did not load: ' + error.message),
+      );
     };
   }
 

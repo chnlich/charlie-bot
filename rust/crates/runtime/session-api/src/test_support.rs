@@ -269,7 +269,7 @@ fn feature_context_with(config_body: &str, auto_backend: bool) -> (GatedHome, Ar
   registry.register_package("session_api_test", register_test_backend).expect("register synthetic backend");
   if auto_backend {
     registry
-      .register_package("session_api_test.auto_backend", charliebot_agents::auto_backend::register)
+      .register_package("session_api_test.model_pool", charliebot_agents::model_pool::register)
       .expect("register the auto_member slot");
   }
   let registry = Arc::new(registry);

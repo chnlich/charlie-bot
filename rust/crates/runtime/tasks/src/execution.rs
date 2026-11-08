@@ -12,11 +12,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
-use charliebot_agents::auto_backend;
 use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool;
 use charliebot_agents::backend_types;
 use charliebot_agents::launch_loop;
+use charliebot_agents::model_pool;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_core::fsutil;
@@ -219,13 +219,13 @@ impl TaskExecutionAdapter {
         }
         let cfg = self.features.config.get().map_err(|error| StoreError::new(error.to_string()))?;
         // Turn start runs before the run is built, so the run records the member this turn runs on.
-        let (change, exhausted) = match auto_backend::start_turn(&self.features, &cfg, &mut meta)
+        let (change, exhausted) = match model_pool::start_turn(&self.features, &cfg, &mut meta)
           .await
           .map_err(|error| StoreError::invalid(error.to_string()))?
         {
-          auto_backend::TurnStart::Kept => (None, None),
-          auto_backend::TurnStart::Changed(change) => (Some(change), None),
-          auto_backend::TurnStart::Exhausted(message) => (None, Some(message)),
+          model_pool::TurnStart::Kept => (None, None),
+          model_pool::TurnStart::Changed(change) => (Some(change), None),
+          model_pool::TurnStart::Exhausted(message) => (None, Some(message)),
         };
         let (backend, model) = match &exhausted {
           Some(_) => (String::new(), None),
@@ -244,7 +244,7 @@ impl TaskExecutionAdapter {
             let mut run = manager_run_record(session_id, &run_id, &backend, model.as_deref());
             if exhausted.is_some() {
               // The turn never names a member: it ends with the exhausted error.
-              run.backend = meta.extra(auto_backend::AUTO_MEMBER_FIELD).and_then(Value::as_str).map(str::to_string);
+              run.backend = meta.extra(model_pool::AUTO_MEMBER_FIELD).and_then(Value::as_str).map(str::to_string);
             }
             run
           } else {
@@ -2543,15 +2543,15 @@ impl TaskExecutionAdapter {
     let (start, meta) = {
       let _guard = self.features.store.control_lock().await;
       let mut meta = self.features.store.load_task_meta(session_id).await?;
-      let start = auto_backend::start_turn(&self.features, &cfg, &mut meta).await?;
+      let start = model_pool::start_turn(&self.features, &cfg, &mut meta).await?;
       (start, meta)
     };
     match start {
-      auto_backend::TurnStart::Kept => {}
-      auto_backend::TurnStart::Changed(change) => {
+      model_pool::TurnStart::Kept => {}
+      model_pool::TurnStart::Changed(change) => {
         self.features.store.persist_and_broadcast(session_id, change.event()).await?;
       }
-      auto_backend::TurnStart::Exhausted(message) => {
+      model_pool::TurnStart::Exhausted(message) => {
         self
           .features
           .store
@@ -2567,7 +2567,7 @@ impl TaskExecutionAdapter {
         return Ok(None);
       }
     }
-    Ok(Some(auto_backend::current_member_id(&cfg, &meta)?))
+    Ok(Some(model_pool::current_member_id(&cfg, &meta)?))
   }
 
   /// Whether this process already drives `run_id`: its launch is in flight, or a resume follow holds it.
@@ -3416,6 +3416,7 @@ mod tests {
         startup
           .require::<charliebot_agents::backend_availability::BackendAvailability>()
           .expect("the owner is in the startup state"),
+        Arc::clone(&registry),
       ))
       .expect("the pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });
@@ -3475,6 +3476,7 @@ mod tests {
         startup
           .require::<charliebot_agents::backend_availability::BackendAvailability>()
           .expect("the owner is in the startup state"),
+        Arc::clone(&registry),
       ))
       .expect("the pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });
@@ -3576,6 +3578,7 @@ mod tests {
       .startup
       .insert(BackendPool::new(
         features.startup.require::<charliebot_agents::backend_availability::BackendAvailability>().unwrap(),
+        Arc::clone(&features.registry),
       ))
       .unwrap();
     pre_recovery_step(Arc::clone(&features)).await.unwrap();
@@ -3621,6 +3624,7 @@ mod tests {
       .startup
       .insert(BackendPool::new(
         features.startup.require::<charliebot_agents::backend_availability::BackendAvailability>().unwrap(),
+        Arc::clone(&features.registry),
       ))
       .unwrap();
     pre_recovery_step(Arc::clone(&features)).await.unwrap();

@@ -6,7 +6,6 @@ use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
-use anyhow::Context;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_core::text_repr;
@@ -23,6 +22,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 
 use crate::backend_availability::{self, BackendAvailability};
+use crate::model_pool;
 use charliebot_store::metadata::UtcDateTime;
 
 /// Error substrings that mark a backend as out of quota; the aigw gateway's `402 Insufficient Balance` text is one.
@@ -146,13 +146,15 @@ struct PoolState {
 /// The shared rotation position for every unpinned backend caller; "out until" lives on the availability owner.
 pub struct BackendPool {
   availability: Arc<BackendAvailability>,
+  registry: Arc<Registry>,
   state: Mutex<PoolState>,
 }
 
 impl BackendPool {
-  /// Build the pool on top of the availability owner every caller reads "out until" from.
-  pub fn new(availability: Arc<BackendAvailability>) -> Self {
-    Self { availability, state: Mutex::new(PoolState::default()) }
+  /// Build the pool on top of the availability owner every caller reads "out until" from, and the registry whose
+  /// member readings the rotate rule consults.
+  pub fn new(availability: Arc<BackendAvailability>, registry: Arc<Registry>) -> Self {
+    Self { availability, registry, state: Mutex::new(PoolState::default()) }
   }
 
   /// The availability owner this pool reads "out until" from, for callers that record a member out.
@@ -164,46 +166,33 @@ impl BackendPool {
     self.availability.out_until(member)
   }
 
-  /// Select the next configured pool member that is neither out nor excluded.
+  /// Select the next configured pool member that is neither out, excluded, nor exhausted by its usage reading.
   pub fn select(
     &self,
     cfg: &CharlieBotConfig,
     caller: &str,
     exclude: &[String],
   ) -> anyhow::Result<Option<BackendOption>> {
-    let now = UtcDateTime::now().into_inner();
-    let members = &cfg.backends.pool;
+    let pool = model_pool::rotation_pool(cfg);
     let mut state = self.state.lock().expect("backend pool mutex is not poisoned");
-    for offset in 0..members.len() {
-      let index = (state.position + offset) % members.len();
-      let member = &members[index];
-      if exclude.iter().any(|excluded| excluded == member) {
-        tracing::info!(target: "charliebot_agents", caller, member, reason = "excluded by caller", "backend_pool_skipped");
-        continue;
-      }
-      if let Some(until) = self.out_until(member)
-        && until > now
-      {
-        tracing::info!(
-          target: "charliebot_agents",
-          caller,
-          member,
-          reason = %format!("cooling until {}", backend_availability::format_minutes(until)),
-          "backend_pool_skipped"
-        );
-        continue;
-      }
-      state.position = (index + 1) % members.len();
-      tracing::info!(target: "charliebot_agents", caller, member, position = index, "backend_pool_selected");
-      let option = cfg
-        .get_backend_option(member)
-        .with_context(|| format!("backends.pool entry backend '{member}' is not in backends.options"))?;
-      return Ok(Some(option.clone()));
-    }
-    let mut excluded = exclude.to_vec();
-    excluded.sort();
-    tracing::warn!(target: "charliebot_agents", caller, members = ?members, excluded = ?excluded, "backend_pool_exhausted");
-    Ok(None)
+    let selected = model_pool::select(
+      cfg,
+      &self.registry,
+      &self.availability,
+      &pool,
+      Some(&mut state.position),
+      exclude,
+      UtcDateTime::now(),
+    )?;
+    let Some(member) = selected else {
+      let mut excluded = exclude.to_vec();
+      excluded.sort();
+      tracing::warn!(target: "charliebot_agents", caller, members = ?cfg.backends.pool, excluded = ?excluded, "backend_pool_exhausted");
+      return Ok(None);
+    };
+    tracing::info!(target: "charliebot_agents", caller, member = %member.backend, next_position = state.position, "backend_pool_selected");
+    let option = cfg.get_backend_option(&member.backend).expect("the selected pool member is a backends.options id");
+    Ok(Some(option.clone()))
   }
 
   /// Select the first available member in a fixed router order without moving pool rotation.
@@ -214,32 +203,24 @@ impl BackendPool {
     backends: &[String],
     exclude: &[String],
   ) -> anyhow::Result<Option<BackendOption>> {
-    let now = UtcDateTime::now().into_inner();
-    for member in backends {
-      if exclude.iter().any(|excluded| excluded == member) {
-        tracing::info!(target: "charliebot_agents", caller, member, reason = "excluded by caller", "backend_pool_skipped");
-        continue;
-      }
-      if let Some(until) = self.out_until(member)
-        && until > now
-      {
-        tracing::info!(
-          target: "charliebot_agents",
-          caller,
-          member,
-          reason = %format!("cooling until {}", backend_availability::format_minutes(until)),
-          "backend_pool_skipped"
-        );
-        continue;
-      }
-      tracing::info!(target: "charliebot_agents", caller, member, source = "route", "backend_pool_selected");
-      let option = cfg
-        .get_backend_option(member)
-        .with_context(|| format!("routed backend '{member}' is not in backends.options"))?;
-      return Ok(Some(option.clone()));
-    }
-    tracing::warn!(target: "charliebot_agents", caller, backends = ?backends, excluded = ?exclude, "backend_pool_route_exhausted");
-    Ok(None)
+    let pool = model_pool::ordered_pool(backends);
+    let mut position = 0;
+    let selected = model_pool::select(
+      cfg,
+      &self.registry,
+      &self.availability,
+      &pool,
+      Some(&mut position),
+      exclude,
+      UtcDateTime::now(),
+    )?;
+    let Some(member) = selected else {
+      tracing::warn!(target: "charliebot_agents", caller, backends = ?backends, excluded = ?exclude, "backend_pool_route_exhausted");
+      return Ok(None);
+    };
+    tracing::info!(target: "charliebot_agents", caller, member = %member.backend, source = "route", "backend_pool_selected");
+    let option = cfg.get_backend_option(&member.backend).expect("the selected route member is a backends.options id");
+    Ok(Some(option.clone()))
   }
 
   /// Ask `backends.routing.command` for one request's answer. `session_backend` is the delegating session's backend id,
@@ -410,7 +391,8 @@ pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, an
   Box::pin(async move {
     let cfg = features.config.get()?;
     features.startup.insert(BackendAvailability::load(&cfg.charliebot_home)?)?;
-    features.startup.insert(BackendPool::new(features.startup.require::<BackendAvailability>()?))?;
+    let availability = features.startup.require::<BackendAvailability>()?;
+    features.startup.insert(BackendPool::new(availability, Arc::clone(&features.registry)))?;
     Ok(())
   })
 }
@@ -579,6 +561,7 @@ impl Drop for RouterProcessGroupGuard {
 mod tests {
   use super::*;
   use charliebot_core::config::{BackendsConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig};
+  use charliebot_registry::backend::MemberReading;
   use serde_yaml::Mapping;
   use std::fs;
   use std::path::{Path, PathBuf};
@@ -645,7 +628,27 @@ mod tests {
 
   /// A pool on a live home, for the tests that record a member out through the owner.
   fn pool_at(home: &Path) -> BackendPool {
-    BackendPool::new(Arc::new(BackendAvailability::load(home).unwrap()))
+    BackendPool::new(Arc::new(BackendAvailability::load(home).unwrap()), Arc::new(Registry::new()))
+  }
+
+  /// A registry whose `codex` reading says member `b` is exhausted and says nothing about the other members.
+  fn exhausted_b_registry() -> Arc<Registry> {
+    fn register(registry: &mut Registry) -> Result<(), RegistryError> {
+      registry.member_reading(
+        "codex",
+        Arc::new(|_cfg, option, _now| {
+          Ok((option.id == "b").then(|| MemberReading {
+            windows: Vec::new(),
+            weekly_resets_at: None,
+            near_exhaustion: false,
+            exhausted: true,
+          }))
+        }),
+      )
+    }
+    let mut registry = Registry::new();
+    registry.register_package("test.backend_pool", register).unwrap();
+    Arc::new(registry)
   }
 
   fn record(pool: &BackendPool, member: &str, reset: Option<UtcDateTime>) {
@@ -672,6 +675,15 @@ mod tests {
     let cfg = config(&["a", "b", "c"]);
     let pool = pool();
     assert_eq!((0..4).map(|_| select_id(&pool, &cfg, "test", &[]).unwrap()).collect::<Vec<_>>(), ["a", "b", "c", "a"]);
+  }
+
+  #[test]
+  fn selection_skips_a_member_whose_reading_says_it_is_exhausted() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg = config(&["a", "b", "c"]);
+    let pool = BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap()), exhausted_b_registry());
+    assert_eq!(select_id(&pool, &cfg, "test", &[]), Some("a".to_string()));
+    assert_eq!(select_id(&pool, &cfg, "test", &[]), Some("c".to_string()), "b's reading says it is exhausted");
   }
 
   #[test]

@@ -15,10 +15,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::StatusCode;
-use charliebot_agents::auto_backend;
 use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool;
 use charliebot_agents::cli_base::CliHost;
+use charliebot_agents::model_pool;
 use charliebot_core::config::{AUTO_BACKEND_ID, AutoBilling, AutoConfig, AutoMember, BackendOption, RoutingConfig};
 use charliebot_core::event_types;
 use charliebot_registry::Registry;
@@ -1620,8 +1620,8 @@ async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Res
     .store()
     .update_slot_fields(
       &parent.id,
-      auto_backend::OWNER,
-      Map::from_iter([(auto_backend::AUTO_MEMBER_FIELD.to_string(), json!("fake"))]),
+      model_pool::OWNER,
+      Map::from_iter([(model_pool::AUTO_MEMBER_FIELD.to_string(), json!("fake"))]),
     )
     .await?;
   stack.dispatch.set_executor(None);
@@ -1656,7 +1656,7 @@ async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Res
   settle_node(&stack, &worker).await?;
   assert_eq!(stack.store().load_task_meta(&worker).await?.backend, "fake2", "the node moved");
   let parent_meta = stack.store().load_task_meta(&parent.id).await?;
-  assert_eq!(parent_meta.extra(auto_backend::AUTO_MEMBER_FIELD), Some(&json!("fake2")));
+  assert_eq!(parent_meta.extra(model_pool::AUTO_MEMBER_FIELD), Some(&json!("fake2")));
   assert!(backend_availability(&stack.features)?.out_until("fake").is_some(), "the spent member is recorded out");
 
   let switches: Vec<Value> = quota_failover_events(&stack, &parent.id)?.iter().map(|event| event.to_value()).collect();

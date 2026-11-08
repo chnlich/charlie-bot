@@ -384,14 +384,16 @@ mod tests {
     registry.register_package("features.user_text_checks", charliebot_user_text_checks::register).unwrap();
     registry.register_package("features.artifacts", crate::register).unwrap();
     let cfg = registry.load_config(home).unwrap();
+    let registry = Arc::new(registry);
     CliHost {
       cfg,
-      registry: Arc::new(registry),
+      registry: Arc::clone(&registry),
       repo_root: repo_root.to_path_buf(),
       base_env: agent_base(home, repo_root),
-      pool: Arc::new(BackendPool::new(Arc::new(
-        charliebot_agents::backend_availability::BackendAvailability::load(home).unwrap(),
-      ))),
+      pool: Arc::new(BackendPool::new(
+        Arc::new(charliebot_agents::backend_availability::BackendAvailability::load(home).unwrap()),
+        Arc::clone(&registry),
+      )),
     }
   }
 

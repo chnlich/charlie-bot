@@ -199,7 +199,7 @@ async fn a_quota_end_continues_the_turn_on_the_next_member_with_the_switch_note(
   assert!(remaining > time::Duration::minutes(29) && remaining <= backend_availability::DEFAULT_COOLDOWN);
 
   let stored = stack.store().read_metadata_fresh(&session.id)?.expect("the session is recorded");
-  assert_eq!(stored.extra(charliebot_agents::auto_backend::AUTO_MEMBER_FIELD), Some(&json!(MEMBER_B)));
+  assert_eq!(stored.extra(charliebot_agents::model_pool::AUTO_MEMBER_FIELD), Some(&json!(MEMBER_B)));
 
   // The retry's input names the session chat log, the archives and the failed run's directory as absolute paths, and
   // the four summary parts. The session has no native id, so the switch note is the only context it carries.
@@ -308,8 +308,8 @@ async fn a_drained_quota_end_switches_like_a_live_turn() -> anyhow::Result<()> {
     .store()
     .update_slot_fields(
       &session.id,
-      charliebot_agents::auto_backend::OWNER,
-      Map::from_iter([(charliebot_agents::auto_backend::AUTO_MEMBER_FIELD.to_string(), json!(MEMBER_A))]),
+      charliebot_agents::model_pool::OWNER,
+      Map::from_iter([(charliebot_agents::model_pool::AUTO_MEMBER_FIELD.to_string(), json!(MEMBER_A))]),
     )
     .await?;
   first.dispatch.admit_input(&session.id, event_types::USER, "fix the failing test", "user", json!({})).await?;
@@ -371,8 +371,8 @@ async fn a_refused_launch_with_quota_exhausted_switches_the_turn() -> anyhow::Re
     .store()
     .update_slot_fields(
       &session.id,
-      charliebot_agents::auto_backend::OWNER,
-      Map::from_iter([(charliebot_agents::auto_backend::AUTO_MEMBER_FIELD.to_string(), json!(MEMBER_A))]),
+      charliebot_agents::model_pool::OWNER,
+      Map::from_iter([(charliebot_agents::model_pool::AUTO_MEMBER_FIELD.to_string(), json!(MEMBER_A))]),
     )
     .await?;
   stack.dispatch.admit_input(&session.id, event_types::USER, "fix the failing test", "user", json!({})).await?;

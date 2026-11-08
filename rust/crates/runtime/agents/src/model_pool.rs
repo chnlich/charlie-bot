@@ -1,8 +1,10 @@
-//! The Auto session backend: the `auto_member` session slot and the per-turn member selection over `backends.auto`.
+//! The model pool: the one `select` that picks the member a call runs on, under either of two rules.
 //!
-//! A session whose backend is [`AUTO_BACKEND_ID`] runs each turn on one member of the configured set. Turn start
-//! chooses the member before dispatch builds the run, records it in `auto_member`, and leaves one `quota_failover` chat
-//! event per change. Everything that reads "the session's model" reads that member through the resolver.
+//! A pool is a list of `backends.options` ids and a rule. The Auto set (`backends.auto`) is a priority pool; the
+//! rotation list (`backends.pool`) is a rotate pool. Both rules skip a member that the caller excludes, that
+//! [`BackendAvailability`] holds out, or whose usage reading says it is exhausted, so the member one rule recorded
+//! out is skipped by the other. The module also owns the `auto_member` session slot and the turn-start decision of a
+//! session whose backend is `auto`.
 
 use anyhow::anyhow;
 use charliebot_core::config::{AUTO_BACKEND_ID, AutoBilling, AutoConfig, AutoMember, BackendOption, CharlieBotConfig};
@@ -20,6 +22,190 @@ pub const OWNER: &str = "auto_backend";
 
 /// The session metadata field holding the member the session's current turn runs on.
 pub const AUTO_MEMBER_FIELD: &str = "auto_member";
+
+/// How a pool picks the member a call runs on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PoolRule {
+  /// The highest-priority selectable member: subscriptions below the 90% line, ordered by their weekly reset;
+  /// subscriptions at or above the line as the last resort; pay-as-you-go in list order only when no subscription
+  /// is selectable.
+  Priority,
+  /// The first selectable member after the rotation position, which advances past the chosen member.
+  Rotate,
+}
+
+/// One member of a pool: the `backends.options` id and, for a priority pool, how it is paid for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PoolMember {
+  /// The `backends.options` id, which is also the id [`BackendAvailability`] files "out until" under.
+  pub backend: String,
+  /// How a priority pool's member is paid for; `None` on a rotate pool, whose order alone decides.
+  pub billing: Option<AutoBilling>,
+}
+
+/// One pool: the rule that picks its member and the members in their configured order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelPool {
+  pub rule: PoolRule,
+  pub members: Vec<PoolMember>,
+}
+
+/// The priority pool that `backends.auto` configures, or the refusal that names the missing section.
+pub fn auto_pool(cfg: &CharlieBotConfig) -> anyhow::Result<ModelPool> {
+  let auto = require_auto(cfg)?;
+  Ok(ModelPool {
+    rule: PoolRule::Priority,
+    members: auto
+      .members
+      .iter()
+      .map(|member| PoolMember { backend: member.backend.clone(), billing: Some(member.billing) })
+      .collect(),
+  })
+}
+
+/// The rotate pool that `backends.pool` configures.
+pub fn rotation_pool(cfg: &CharlieBotConfig) -> ModelPool {
+  ordered_pool(&cfg.backends.pool)
+}
+
+/// A rotate pool over `backends` in the caller's order, for a fixed route order that keeps no position of its own.
+pub(crate) fn ordered_pool(backends: &[String]) -> ModelPool {
+  ModelPool {
+    rule: PoolRule::Rotate,
+    members: backends.iter().map(|backend| PoolMember { backend: backend.clone(), billing: None }).collect(),
+  }
+}
+
+/// Select the member a call runs on, or `None` when the pool has no selectable member.
+///
+/// A selectable member is one `excluded` does not name, that is not out per [`BackendAvailability`], and whose
+/// usage reading does not say it is exhausted. A member whose backend type exposes no reading is selectable. A
+/// [`PoolRule::Priority`] pool orders its selectable members; a [`PoolRule::Rotate`] pool walks from `position` in
+/// member order and advances `position` past the member it selects, so `position` is required for a rotate pool.
+pub fn select(
+  cfg: &CharlieBotConfig,
+  registry: &Registry,
+  availability: &BackendAvailability,
+  pool: &ModelPool,
+  position: Option<&mut usize>,
+  excluded: &[String],
+  now: UtcDateTime,
+) -> anyhow::Result<Option<PoolMember>> {
+  match pool.rule {
+    PoolRule::Priority => select_priority(cfg, registry, availability, pool, excluded, now),
+    PoolRule::Rotate => {
+      let position = position.ok_or_else(|| anyhow!("a rotate pool needs the rotation position to advance"))?;
+      select_rotate(cfg, registry, availability, pool, position, excluded, now)
+    }
+  }
+}
+
+/// One selectable member with the reading that ordered it.
+struct Candidate {
+  member: PoolMember,
+  reading: Option<MemberReading>,
+}
+
+/// The member as a candidate, or `None` when it cannot run now.
+fn candidate(
+  cfg: &CharlieBotConfig,
+  registry: &Registry,
+  availability: &BackendAvailability,
+  member: &PoolMember,
+  excluded: &[String],
+  now: UtcDateTime,
+) -> anyhow::Result<Option<Candidate>> {
+  if excluded.iter().any(|backend_id| backend_id == &member.backend) {
+    tracing::info!(target: "charliebot_agents", member = %member.backend, reason = "excluded by caller", "model_pool_skipped");
+    return Ok(None);
+  }
+  if is_out(availability, &member.backend, now) {
+    tracing::info!(
+      target: "charliebot_agents",
+      member = %member.backend,
+      reason = %format!("cooling until {}", availability.out_until_minutes(&member.backend).unwrap_or_default()),
+      "model_pool_skipped"
+    );
+    return Ok(None);
+  }
+  let reading = member_reading(cfg, registry, &member.backend, now)?;
+  if reading.as_ref().is_some_and(|reading| reading.exhausted) {
+    tracing::info!(target: "charliebot_agents", member = %member.backend, reason = "usage reading exhausted", "model_pool_skipped");
+    return Ok(None);
+  }
+  Ok(Some(Candidate { member: member.clone(), reading }))
+}
+
+/// Pick from a priority pool: subscriptions before pay-as-you-go, under-line subscriptions first.
+fn select_priority(
+  cfg: &CharlieBotConfig,
+  registry: &Registry,
+  availability: &BackendAvailability,
+  pool: &ModelPool,
+  excluded: &[String],
+  now: UtcDateTime,
+) -> anyhow::Result<Option<PoolMember>> {
+  let mut candidates = Vec::new();
+  for member in &pool.members {
+    if let Some(candidate) = candidate(cfg, registry, availability, member, excluded, now)? {
+      candidates.push(candidate);
+    }
+  }
+
+  let subscriptions = candidates
+    .iter()
+    .filter(|candidate| candidate.member.billing == Some(AutoBilling::Subscription))
+    .collect::<Vec<_>>();
+  if !subscriptions.is_empty() {
+    let under_line = subscriptions
+      .iter()
+      .filter(|candidate| !near_exhaustion(candidate.reading.as_ref()))
+      .copied()
+      .collect::<Vec<_>>();
+    let tier = if under_line.is_empty() { subscriptions } else { under_line };
+    let mut with_reset = tier
+      .iter()
+      .filter_map(|candidate| candidate.reading.as_ref()?.weekly_resets_at.map(|reset| (reset, *candidate)))
+      .collect::<Vec<_>>();
+    with_reset.sort_by_key(|(reset, _)| *reset);
+    if let Some((_, candidate)) = with_reset.first() {
+      return Ok(Some(candidate.member.clone()));
+    }
+    return Ok(tier.first().map(|candidate| candidate.member.clone()));
+  }
+
+  Ok(
+    candidates
+      .iter()
+      .find(|candidate| candidate.member.billing == Some(AutoBilling::Payg))
+      .map(|candidate| candidate.member.clone()),
+  )
+}
+
+/// Pick from a rotate pool: the first selectable member after `position`, then advance `position` past it.
+fn select_rotate(
+  cfg: &CharlieBotConfig,
+  registry: &Registry,
+  availability: &BackendAvailability,
+  pool: &ModelPool,
+  position: &mut usize,
+  excluded: &[String],
+  now: UtcDateTime,
+) -> anyhow::Result<Option<PoolMember>> {
+  let count = pool.members.len();
+  if count == 0 {
+    return Ok(None);
+  }
+  for offset in 0..count {
+    let index = (*position + offset) % count;
+    let Some(candidate) = candidate(cfg, registry, availability, &pool.members[index], excluded, now)? else {
+      continue;
+    };
+    *position = (index + 1) % count;
+    return Ok(Some(candidate.member));
+  }
+  Ok(None)
+}
 
 /// One member change a turn start made.
 #[derive(Clone, Debug, PartialEq)]
@@ -105,14 +291,17 @@ pub fn member_option<'a>(cfg: &'a CharlieBotConfig, member: &AutoMember) -> anyh
     .ok_or_else(|| anyhow!("backends.auto names backend '{}', which is not a backends.options id", member.backend))
 }
 
-/// Read one member's quota reading through its backend type's registered reader, or `None` when the type exposes none.
-pub fn member_reading(
+/// Read one backend option's quota reading through its backend type's registered reader, or `None` when the type
+/// exposes none.
+fn member_reading(
   cfg: &CharlieBotConfig,
   registry: &Registry,
-  member: &AutoMember,
+  backend_id: &str,
   now: UtcDateTime,
 ) -> anyhow::Result<Option<MemberReading>> {
-  let option = member_option(cfg, member)?;
+  let option = cfg
+    .get_backend_option(backend_id)
+    .ok_or_else(|| anyhow!("pool member '{backend_id}' is not a backends.options id"))?;
   match registry.member_reading_for(&option.backend_type) {
     Some(read) => read(cfg, option, now),
     None => Ok(None),
@@ -128,60 +317,17 @@ fn is_out(availability: &BackendAvailability, backend_id: &str, now: UtcDateTime
   availability.out_until(backend_id).is_some_and(|until| until > now.into_inner())
 }
 
-/// One selectable member with the reading selection ordered it by.
-struct Candidate<'a> {
-  member: &'a AutoMember,
-  reading: Option<MemberReading>,
-}
-
-/// Select the member a turn runs on, or `None` when no member is selectable.
+/// Select the member a turn of a session on `auto` runs on, or `None` when no member is selectable.
 ///
-/// Candidates are the configured members that are neither out (per [`BackendAvailability`]) nor exhausted, and not in
-/// `excluded`. Subscriptions below the 90% line come first, ordered by their weekly window's reset (earliest first),
-/// with members that state no reset after them in config order. Subscriptions at or above the line are the last resort
-/// and follow the same order. Only when no subscription is selectable does the first pay-as-you-go member in config
-/// order run.
+/// The Auto set is the priority pool that `backends.auto` configures, with no exclusion and no rotation position.
 pub fn select_member(
   cfg: &CharlieBotConfig,
   registry: &Registry,
   availability: &BackendAvailability,
   excluded: &[String],
   now: UtcDateTime,
-) -> anyhow::Result<Option<AutoMember>> {
-  let auto = require_auto(cfg)?;
-  let mut candidates = Vec::new();
-  for member in &auto.members {
-    if excluded.iter().any(|backend_id| backend_id == &member.backend) || is_out(availability, &member.backend, now) {
-      continue;
-    }
-    let reading = member_reading(cfg, registry, member, now)?;
-    if reading.as_ref().is_some_and(|reading| reading.exhausted) {
-      continue;
-    }
-    candidates.push(Candidate { member, reading });
-  }
-
-  let subscriptions =
-    candidates.iter().filter(|candidate| candidate.member.billing == AutoBilling::Subscription).collect::<Vec<_>>();
-  if !subscriptions.is_empty() {
-    let under_line = subscriptions
-      .iter()
-      .filter(|candidate| !near_exhaustion(candidate.reading.as_ref()))
-      .copied()
-      .collect::<Vec<_>>();
-    let tier = if under_line.is_empty() { subscriptions } else { under_line };
-    let mut with_reset = tier
-      .iter()
-      .filter_map(|candidate| candidate.reading.as_ref()?.weekly_resets_at.map(|reset| (reset, *candidate)))
-      .collect::<Vec<_>>();
-    with_reset.sort_by_key(|(reset, _)| *reset);
-    if let Some((_, candidate)) = with_reset.first() {
-      return Ok(Some(candidate.member.clone()));
-    }
-    return Ok(tier.first().map(|candidate| candidate.member.clone()));
-  }
-
-  Ok(candidates.iter().find(|candidate| candidate.member.billing == AutoBilling::Payg).map(|c| c.member.clone()))
+) -> anyhow::Result<Option<PoolMember>> {
+  select(cfg, registry, availability, &auto_pool(cfg)?, None, excluded, now)
 }
 
 /// What a turn start decides for a session, before it records anything.
@@ -288,17 +434,17 @@ fn decide_keep_or_switch(
     return Ok(TurnDecision::Keep(selected.backend));
   }
   let current_member = auto.member(current).expect("the current member is in the configured set");
-  let current_reading = member_reading(cfg, &features.registry, current_member, now)?;
-  let selected_reading = member_reading(cfg, &features.registry, &selected, now)?;
+  let current_reading = member_reading(cfg, &features.registry, &current_member.backend, now)?;
+  let selected_reading = member_reading(cfg, &features.registry, &selected.backend, now)?;
   let (reason, recovers_at) =
-    if current_member.billing == AutoBilling::Payg && selected.billing == AutoBilling::Subscription {
+    if current_member.billing == AutoBilling::Payg && selected.billing == Some(AutoBilling::Subscription) {
       (event_types::QUOTA_REASON_SUBSCRIPTION_RESET, None)
     } else if current_reading.as_ref().is_some_and(|reading| reading.exhausted) {
       // The reading says the member has no capacity left; the turn start leaves it, as an out record would.
       let reset = current_reading.as_ref().and_then(MemberReading::earliest_reset).map(format_minutes);
       (event_types::QUOTA_REASON_QUOTA_ERROR, reset)
     } else if near_exhaustion(current_reading.as_ref())
-      && selected.billing == AutoBilling::Subscription
+      && selected.billing == Some(AutoBilling::Subscription)
       && !near_exhaustion(selected_reading.as_ref())
     {
       let reset = current_reading.as_ref().and_then(MemberReading::earliest_reset).map(format_minutes);
@@ -326,7 +472,7 @@ pub fn all_exhausted_message(features: &FeatureContext, cfg: &CharlieBotConfig) 
         let recovery = format!("{}, recovers at {}", row.reason, format_minutes(row.out_until));
         if detail.is_empty() { recovery } else { format!("{recovery} ({detail})") }
       }
-      None => match member_reading(cfg, &features.registry, member, now)? {
+      None => match member_reading(cfg, &features.registry, &member.backend, now)? {
         Some(reading) if reading.exhausted => reading.earliest_reset().map_or_else(
           || "quota exhausted".to_string(),
           |reset| format!("quota exhausted, resets at {}", format_minutes(reset)),
@@ -474,6 +620,7 @@ backends:
     - {id: spent, label: Spent, type: synthetic, model: model-spent}
     - {id: devin, label: Devin, type: synthetic, model: model-devin}
     - {id: payg-a, label: Payg A, type: synthetic, model: model-payg}
+  pool: [spent, payg-a, chatgpt]
   auto:
     label: Auto
     members:
@@ -494,22 +641,19 @@ backends:
     std::fs::write(home.path().join("config.yaml"), config_body).unwrap();
     std::fs::write(home.path().join("credentials.yaml"), "charliebot: {}\n").unwrap();
     let mut registry = Registry::new();
-    registry.register_package("test.auto_backend", register_test).unwrap();
+    registry.register_package("test.model_pool", register_test).unwrap();
     let registry = Arc::new(registry);
     let cfg = registry.load_config(home.path()).unwrap();
     let store = Arc::new(
       Store::new(cfg.clone(), registry.metadata_slots(), store_hooks::store_hooks(Arc::clone(&registry))).unwrap(),
     );
     let config_file = cfg.config_file();
-    let config = Arc::new(HotReload::new(
-      config_file,
-      "auto_backend_test_config_reload_failed",
-      Box::new(move || Ok(cfg.clone())),
-    ));
+    let config =
+      Arc::new(HotReload::new(config_file, "model_pool_test_config_reload_failed", Box::new(move || Ok(cfg.clone()))));
     let credential_home = home.path().to_path_buf();
     let credentials = Arc::new(HotReload::new(
       home.path().join("credentials.yaml"),
-      "auto_backend_test_credentials_reload_failed",
+      "model_pool_test_credentials_reload_failed",
       Box::new(move || load_credentials(&credential_home)),
     ));
     let startup = Arc::new(StartupState::default());
@@ -553,25 +697,40 @@ backends:
     }
   }
 
+  fn rotate_select(
+    cfg: &CharlieBotConfig,
+    features: &FeatureContext,
+    availability: &BackendAvailability,
+    position: &mut usize,
+    excluded: &[&str],
+    now: UtcDateTime,
+  ) -> Option<String> {
+    let excluded = excluded.iter().map(|backend_id| (*backend_id).to_string()).collect::<Vec<_>>();
+    select(cfg, &features.registry, availability, &rotation_pool(cfg), Some(position), &excluded, now)
+      .unwrap()
+      .map(|member| member.backend)
+  }
+
   #[tokio::test]
   async fn selection_orders_by_weekly_reset_then_config_order_then_pay_as_you_go() {
     let (_home, features) = fixture();
     let cfg = loaded_cfg(&features);
     let availability = availability(&features);
     let now = UtcDateTime::now();
-    let select = |excluded: &[&str]| {
+    let pool = auto_pool(&cfg).unwrap();
+    let pick = |excluded: &[&str]| {
       let excluded = excluded.iter().map(|id| (*id).to_string()).collect::<Vec<_>>();
-      select_member(&cfg, &features.registry, &availability, &excluded, now).unwrap().map(|member| member.backend)
+      select(&cfg, &features.registry, &availability, &pool, None, &excluded, now).unwrap().map(|member| member.backend)
     };
 
     // Trade-off 3's example: ChatGPT (20% left, 6h), Claude (51%, 2 days), Devin (no reading).
-    assert_eq!(select(&[]), Some("chatgpt".to_string()));
-    assert_eq!(select(&["chatgpt"]), Some("claude-sub".to_string()));
-    assert_eq!(select(&["chatgpt", "claude-sub"]), Some("devin".to_string()));
+    assert_eq!(pick(&[]), Some("chatgpt".to_string()));
+    assert_eq!(pick(&["chatgpt"]), Some("claude-sub".to_string()));
+    assert_eq!(pick(&["chatgpt", "claude-sub"]), Some("devin".to_string()));
     // A subscription at or above the line is the last resort, before the first pay-as-you-go member.
-    assert_eq!(select(&["chatgpt", "claude-sub", "devin"]), Some("near".to_string()));
-    assert_eq!(select(&["chatgpt", "claude-sub", "devin", "near"]), Some("payg-a".to_string()));
-    assert_eq!(select(&["chatgpt", "claude-sub", "devin", "near", "payg-a"]), None);
+    assert_eq!(pick(&["chatgpt", "claude-sub", "devin"]), Some("near".to_string()));
+    assert_eq!(pick(&["chatgpt", "claude-sub", "devin", "near"]), Some("payg-a".to_string()));
+    assert_eq!(pick(&["chatgpt", "claude-sub", "devin", "near", "payg-a"]), None);
   }
 
   #[tokio::test]
@@ -583,6 +742,57 @@ backends:
     availability.record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
     let selected = select_member(&cfg, &features.registry, &availability, &[], now).unwrap().unwrap();
     assert_eq!(selected.backend, "claude-sub");
+  }
+
+  #[tokio::test]
+  async fn rotate_skips_excluded_out_and_exhausted_members_and_keeps_one_without_a_reading() {
+    let (_home, features) = fixture();
+    let cfg = loaded_cfg(&features);
+    let availability = availability(&features);
+    let now = UtcDateTime::now();
+
+    // `spent`'s reading says it is exhausted; `payg-a` exposes no reading and is selectable.
+    let mut position = 0;
+    assert_eq!(rotate_select(&cfg, &features, &availability, &mut position, &[], now), Some("payg-a".to_string()));
+    assert_eq!(position, 2, "the position advances past the chosen member");
+
+    let mut position = 0;
+    assert_eq!(
+      rotate_select(&cfg, &features, &availability, &mut position, &["payg-a"], now),
+      Some("chatgpt".to_string()),
+      "a member the caller excludes is skipped"
+    );
+
+    availability.record("payg-a", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    let mut position = 0;
+    assert_eq!(
+      rotate_select(&cfg, &features, &availability, &mut position, &[], now),
+      Some("chatgpt".to_string()),
+      "a member the owner recorded out is skipped"
+    );
+
+    availability.record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    let mut position = 0;
+    assert_eq!(rotate_select(&cfg, &features, &availability, &mut position, &[], now), None);
+  }
+
+  #[tokio::test]
+  async fn a_member_both_pools_share_is_skipped_by_both_once_recorded_out() {
+    let (_home, features) = fixture();
+    let cfg = loaded_cfg(&features);
+    let availability = availability(&features);
+    let now = UtcDateTime::now();
+    // `chatgpt` is a member of the priority set and of the rotate pool; one out record covers both.
+    availability.record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+
+    let selected = select_member(&cfg, &features.registry, &availability, &[], now).unwrap().unwrap();
+    assert_eq!(selected.backend, "claude-sub");
+
+    let mut position = 2;
+    let selected = select(&cfg, &features.registry, &availability, &rotation_pool(&cfg), Some(&mut position), &[], now)
+      .unwrap()
+      .unwrap();
+    assert_eq!(selected.backend, "payg-a", "the rotate rule skips the member the priority rule recorded out");
   }
 
   #[tokio::test]

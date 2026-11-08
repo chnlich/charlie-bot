@@ -77,7 +77,7 @@ use tower::ServiceExt;
 pub const BACKEND_TYPE: &str = "recovery_script";
 
 /// The package that registers the `auto_member` session slot, as the server's runtime registration does.
-const AUTO_PACKAGE: (&str, RegisterFn) = ("features.auto_backend", charliebot_agents::auto_backend::register);
+const AUTO_PACKAGE: (&str, RegisterFn) = ("features.model_pool", charliebot_agents::model_pool::register);
 
 /// The option the synthetic nodes are created with.
 pub const BACKEND_ID: &str = "fake";
@@ -643,7 +643,7 @@ impl Stack {
     let startup = Arc::new(StartupState::default());
     startup.insert(AgentBaseEnvironment { values: Stack::gh_wrapper_env(checkout, "/usr/bin") })?;
     startup.insert(BackendAvailability::load(&cfg.charliebot_home)?)?;
-    startup.insert(BackendPool::new(startup.require::<BackendAvailability>()?))?;
+    startup.insert(BackendPool::new(startup.require::<BackendAvailability>()?, Arc::clone(&registry)))?;
     startup.insert(RepoRoot::new(Some(checkout.as_os_str().to_os_string()))?)?;
     let served = Arc::new(Mutex::new((*cfg).clone()));
     let config_source = Arc::clone(&served);

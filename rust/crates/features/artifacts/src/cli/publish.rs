@@ -284,12 +284,13 @@ mod tests {
     let cfg = registry.load_config(home).unwrap();
     CliHost {
       cfg,
-      registry,
+      registry: Arc::clone(&registry),
       repo_root: PathBuf::from("/synthetic/checkout"),
       base_env: agent_base(home),
-      pool: Arc::new(BackendPool::new(Arc::new(
-        charliebot_agents::backend_availability::BackendAvailability::load(home).unwrap(),
-      ))),
+      pool: Arc::new(BackendPool::new(
+        Arc::new(charliebot_agents::backend_availability::BackendAvailability::load(home).unwrap()),
+        Arc::clone(&registry),
+      )),
     }
   }
 

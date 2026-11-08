@@ -431,7 +431,10 @@ mod tests {
 
   /// A pool whose availability owner reads the empty state of `home` and persists to it.
   fn test_pool(home: &std::path::Path) -> Arc<BackendPool> {
-    Arc::new(BackendPool::new(Arc::new(backend_availability::BackendAvailability::load(home).unwrap())))
+    Arc::new(BackendPool::new(
+      Arc::new(backend_availability::BackendAvailability::load(home).unwrap()),
+      Arc::new(Registry::new()),
+    ))
   }
 
   fn config_with_pool(ids: &[&str]) -> CharlieBotConfig {

@@ -1263,7 +1263,7 @@ mod tests {
     let availability =
       Arc::new(charliebot_agents::backend_availability::BackendAvailability::load(&root.path().join("home")).unwrap());
     let queue = Arc::new(crate::master_queue::MasterQueue::new(Arc::new(
-      charliebot_agents::backend_pool::BackendPool::new(availability),
+      charliebot_agents::backend_pool::BackendPool::new(availability, Arc::clone(&features.registry)),
     )));
     let meta = test_fixtures::manager_session(
       &features,

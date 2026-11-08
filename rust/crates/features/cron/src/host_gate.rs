@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 
 use anyhow::Context;
-use charliebot_agents::auto_backend;
+use charliebot_agents::model_pool;
 use charliebot_core::approval_policy::TIER_USER_ACT;
 use charliebot_core::config::{AUTO_BACKEND_ID, BackendOption, CharlieBotConfig};
 use charliebot_registry::FeatureContext;
@@ -95,15 +95,15 @@ async fn fire_backend_id(
     .load_meta(bound)
     .await?
     .with_context(|| format!("scheduled task '{}' bound session {bound} does not exist", task.name))?;
-  auto_backend::turn_member(features, cfg, &meta)
+  model_pool::turn_member(features, cfg, &meta)
     .map_err(|error| anyhow::anyhow!("scheduled task '{}': {error}", task.name))
 }
 
 /// Whether a member of the Auto set names a host. A set with none holds no fire, so an `auto` task then reads no
 /// member's quota.
 fn auto_members_name_host(features: &FeatureContext, cfg: &CharlieBotConfig) -> anyhow::Result<bool> {
-  for member in &auto_backend::require_auto(cfg)?.members {
-    let option = auto_backend::member_option(cfg, member)?;
+  for member in &model_pool::require_auto(cfg)?.members {
+    let option = model_pool::member_option(cfg, member)?;
     let host = option_host(features, option)
       .map_err(|error| anyhow::anyhow!("backends.auto member '{}': {error}", member.backend))?;
     if host.is_some() {

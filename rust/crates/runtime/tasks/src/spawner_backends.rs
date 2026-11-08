@@ -80,7 +80,7 @@ pub fn resolve_session_default_backend_model(
   session_meta: &SessionMetadata,
 ) -> anyhow::Result<(String, Option<String>)> {
   let option = if session_meta.backend == AUTO_BACKEND_ID {
-    let member = charliebot_agents::auto_backend::current_member_id(cfg, session_meta)
+    let member = charliebot_agents::model_pool::current_member_id(cfg, session_meta)
       .map_err(|error| value_error(error.to_string()))?;
     cfg.get_backend_option(&member).ok_or_else(|| {
       value_error(format!("'{member}' is not in config.yaml backends.options — the auto member cannot run"))
@@ -255,7 +255,7 @@ mod tests {
     cfg.charliebot_home = home.path().to_path_buf();
     let registry = Arc::new(Registry::new());
     let store = Store::new(cfg.clone(), registry.metadata_slots(), store_hooks(Arc::clone(&registry))).unwrap();
-    let pool = BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap()));
+    let pool = BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap()), Arc::clone(&registry));
     let session = store
       .create_task(
         CreateTask {
@@ -305,7 +305,7 @@ mod tests {
     let mut meta =
       SessionMetadata::new("auto-session", "Auto session", charliebot_store::metadata::TaskProfile::Manager);
     meta.backend = AUTO_BACKEND_ID.to_string();
-    meta.set_extra(charliebot_agents::auto_backend::AUTO_MEMBER_FIELD, serde_json::json!("synthetic"));
+    meta.set_extra(charliebot_agents::model_pool::AUTO_MEMBER_FIELD, serde_json::json!("synthetic"));
     meta
   }
 

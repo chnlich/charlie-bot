@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use charliebot_agents::auto_backend;
+use charliebot_agents::model_pool;
 use charliebot_core::config::{AUTO_BACKEND_ID, CharlieBotConfig};
 use charliebot_store::metadata::SessionMetadata;
 use charliebot_store::run_records::{RunFacts, RunOutcomeKind, RunRecord};
@@ -34,7 +34,7 @@ pub(crate) fn resolved_backend(
     let parent = parent.ok_or_else(|| {
       anyhow::anyhow!("scheduled task '{}' runs on backend 'auto' outside its bound session", task.name)
     })?;
-    auto_backend::current_member_id(cfg, parent)?
+    model_pool::current_member_id(cfg, parent)?
   } else {
     backend.to_string()
   };

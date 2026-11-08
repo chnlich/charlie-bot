@@ -326,13 +326,14 @@ mod tests {
   use charliebot_core::config::{
     BackendsConfig, PathsConfig, RoutingConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
   };
+  use charliebot_registry::Registry;
   use serde_yaml::Mapping;
   use std::path::PathBuf;
   use std::sync::Mutex;
 
   /// A pool whose availability owner reads the empty state of `home` and persists to it.
   fn test_pool(home: &std::path::Path) -> Arc<BackendPool> {
-    Arc::new(BackendPool::new(Arc::new(BackendAvailability::load(home).unwrap())))
+    Arc::new(BackendPool::new(Arc::new(BackendAvailability::load(home).unwrap()), Arc::new(Registry::new())))
   }
 
   /// A configuration whose two options `ids` are also the pool, with the routing section `routing`.

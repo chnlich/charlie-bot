@@ -1974,7 +1974,10 @@ mod tests {
       .insert(BackendAvailability::load(home.path()).expect("the availability owner loads"))
       .expect("the owner inserts once");
     startup
-      .insert(BackendPool::new(startup.require::<BackendAvailability>().expect("the owner is in the startup state")))
+      .insert(BackendPool::new(
+        startup.require::<BackendAvailability>().expect("the owner is in the startup state"),
+        Arc::clone(&registry),
+      ))
       .expect("the pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });
     pre_recovery_step(Arc::clone(&features)).await.expect("the startup step runs");

@@ -5,11 +5,12 @@ use std::sync::{Arc, Mutex};
 
 use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::BackendPool;
+use charliebot_registry::Registry;
 
 /// A pool on a fresh home; these tests never record a member out, so the home needs no state file.
 fn test_pool() -> Arc<BackendPool> {
   let home = tempfile::tempdir().unwrap();
-  Arc::new(BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap())))
+  Arc::new(BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap()), Arc::new(Registry::new())))
 }
 use charliebot_agents::event_builders::make_master_done_event;
 use charliebot_core::config::BackendOption;

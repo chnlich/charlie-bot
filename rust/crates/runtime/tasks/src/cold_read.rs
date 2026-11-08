@@ -785,10 +785,11 @@ BBBB
     // The probe records both failures as `RuntimeError`, the first with an empty message.
     let mut registry = Registry::new();
     registry.register_package("tests.cold_read", register_failing).unwrap();
+    let registry = Arc::new(registry);
     let home = tempfile::tempdir().unwrap();
     let host = CliHost {
       cfg: probe_cfg(["alpha", "beta"]),
-      registry: Arc::new(registry),
+      registry: Arc::clone(&registry),
       repo_root: PathBuf::from("/synthetic/repo"),
       base_env: charliebot_agents::agent_environment::AgentBaseEnvironment {
         values: Env::from([
@@ -796,9 +797,10 @@ BBBB
           (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), "/synthetic/gh-wrapper/gh".to_string()),
         ]),
       },
-      pool: std::sync::Arc::new(charliebot_agents::backend_pool::BackendPool::new(std::sync::Arc::new(
-        charliebot_agents::backend_availability::BackendAvailability::load(home.path()).unwrap(),
-      ))),
+      pool: std::sync::Arc::new(charliebot_agents::backend_pool::BackendPool::new(
+        std::sync::Arc::new(charliebot_agents::backend_availability::BackendAvailability::load(home.path()).unwrap()),
+        Arc::clone(&registry),
+      )),
     };
 
     let probe = run_light_probe(&host, "prompt", "system").await.unwrap();

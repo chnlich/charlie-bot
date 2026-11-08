@@ -508,8 +508,10 @@ fn config_with_features_from_config_and_agent_path(
   agent_env.insert(charliebot_agents::launch_loop::SESSION_ID_ENV.to_string(), "stale-session".to_string());
   startup.insert(AgentBaseEnvironment { values: agent_env })?;
   startup.insert(charliebot_agents::backend_availability::BackendAvailability::load(&cfg.charliebot_home)?)?;
-  startup
-    .insert(BackendPool::new(startup.require::<charliebot_agents::backend_availability::BackendAvailability>()?))?;
+  startup.insert(BackendPool::new(
+    startup.require::<charliebot_agents::backend_availability::BackendAvailability>()?,
+    Arc::clone(&registry),
+  ))?;
   let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
     .ancestors()
     .nth(4)
@@ -1792,9 +1794,10 @@ fn autonamer_iterates_a_synthetic_pool_with_the_shared_backend_pool() -> anyhow:
   cfg.backends.options.push(second);
   cfg.backends.pool.push("light-b".to_string());
   let home = tempfile::tempdir().unwrap();
-  let pool = Arc::new(BackendPool::new(Arc::new(
-    charliebot_agents::backend_availability::BackendAvailability::load(home.path()).unwrap(),
-  )));
+  let pool = Arc::new(BackendPool::new(
+    Arc::new(charliebot_agents::backend_availability::BackendAvailability::load(home.path()).unwrap()),
+    Arc::new(Registry::new()),
+  ));
   let selected = autonamer::iter_light_backends(&cfg, pool)
     .collect::<anyhow::Result<Vec<_>>>()?
     .into_iter()

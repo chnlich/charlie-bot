@@ -15,6 +15,7 @@ use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::{BackendPool, BackendRoute};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
+use charliebot_registry::Registry;
 use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcomeKind, RunRecord};
 use charliebot_store::{PatchTask, TaskCaller, control_events};
@@ -29,7 +30,10 @@ const ACCESS_KEY: &str = "synthetic-access-key";
 /// A pool whose availability owner reads the empty state of a fresh home and persists to it.
 fn test_pool() -> BackendPool {
   let home = tempfile::tempdir().unwrap();
-  BackendPool::new(std::sync::Arc::new(BackendAvailability::load(home.path()).unwrap()))
+  BackendPool::new(
+    std::sync::Arc::new(BackendAvailability::load(home.path()).unwrap()),
+    std::sync::Arc::new(Registry::new()),
+  )
 }
 
 fn result_script(summary: &str) -> String {

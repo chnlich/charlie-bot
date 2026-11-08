@@ -1126,7 +1126,7 @@ mod tests {
     let availability = charliebot_agents::backend_availability::backend_availability(&features).unwrap();
     assert!(availability.out_until("member-a").is_some(), "the spent member is recorded out");
     let parent_meta = features.store.get_session(&parent.id).await.unwrap().unwrap();
-    assert_eq!(parent_meta.extra(charliebot_agents::auto_backend::AUTO_MEMBER_FIELD), Some(&json!("member-b")));
+    assert_eq!(parent_meta.extra(charliebot_agents::model_pool::AUTO_MEMBER_FIELD), Some(&json!("member-b")));
     // A later step of the chain resolves to the member the switch selected.
     let cfg = features.config.get().unwrap();
     let (later_step_backend, _) = crate::steps::resolved_backend(&task, &cfg, None, Some(&parent_meta)).unwrap();

@@ -25,7 +25,7 @@ use futures_util::future::BoxFuture;
 /// A pool whose availability owner reads the empty state of a fresh home; these sites never record.
 fn test_pool() -> BackendPool {
   let home = tempfile::tempdir().unwrap();
-  BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap()))
+  BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap()), Arc::new(Registry::new()))
 }
 use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};

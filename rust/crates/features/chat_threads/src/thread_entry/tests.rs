@@ -293,6 +293,7 @@ impl Home {
     startup
       .insert(backend_pool::BackendPool::new(
         startup.require::<BackendAvailability>().expect("the owner is in the startup state"),
+        Arc::clone(&registry),
       ))
       .expect("the backend pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });

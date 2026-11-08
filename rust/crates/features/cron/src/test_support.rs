@@ -94,9 +94,9 @@ pub async fn auto_manager(
     .store
     .update_slot_fields(
       &session.id,
-      charliebot_agents::auto_backend::OWNER,
+      charliebot_agents::model_pool::OWNER,
       Map::from_iter([(
-        charliebot_agents::auto_backend::AUTO_MEMBER_FIELD.to_string(),
+        charliebot_agents::model_pool::AUTO_MEMBER_FIELD.to_string(),
         Value::String(member.to_string()),
       )]),
     )
@@ -152,7 +152,7 @@ fn feature_context_with_entries(
   registry.register_package("test.cron_backend", register_test_backend).expect("backend registration");
   registry.register_package("test.host_auth", register_host_auth_stub).expect("host auth registration");
   registry
-    .register_package("features.auto_backend", charliebot_agents::auto_backend::register)
+    .register_package("features.model_pool", charliebot_agents::model_pool::register)
     .expect("auto backend registration");
   registry
     .register_package("features.backend_pool", charliebot_agents::backend_pool::register)
@@ -213,6 +213,7 @@ fn feature_context_with_entries(
       startup
         .require::<charliebot_agents::backend_availability::BackendAvailability>()
         .expect("the owner is in the startup state"),
+      Arc::clone(&registry),
     ))
     .expect("backend pool inserts");
   startup

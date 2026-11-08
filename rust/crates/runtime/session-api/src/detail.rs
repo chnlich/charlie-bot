@@ -1186,7 +1186,7 @@ backends:
       .store
       .update_slot_fields(
         &meta.id,
-        charliebot_agents::auto_backend::OWNER,
+        charliebot_agents::model_pool::OWNER,
         Map::from_iter([("auto_member".to_string(), json!("synthetic-a"))]),
       )
       .await
@@ -1251,7 +1251,7 @@ backends:
       .store
       .update_slot_fields(
         &meta.id,
-        charliebot_agents::auto_backend::OWNER,
+        charliebot_agents::model_pool::OWNER,
         Map::from_iter([("auto_member".to_string(), json!("synthetic-a"))]),
       )
       .await

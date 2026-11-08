@@ -1,7 +1,6 @@
 //! Agent process transport, backend implementations, launch planning, and environment setup.
 
 pub mod agent_environment;
-pub mod auto_backend;
 pub mod backend_availability;
 pub mod backend_pool;
 pub mod backend_types;
@@ -11,6 +10,7 @@ pub mod event_builders;
 pub mod gh_wrapper;
 pub mod launch_loop;
 pub mod local_work_guard;
+pub mod model_pool;
 pub mod one_shot;
 pub mod runner;
 pub mod runs;
@@ -28,5 +28,5 @@ pub fn register_runtime(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.pre_recovery_step("session_cgroups", agent_environment::session_cgroup_step)?;
   registry.pre_recovery_step("backend_pool", backend_pool::pre_recovery_step)?;
   registry.child_env("local_work_guard", local_work_guard::child_env)?;
-  auto_backend::register(registry)
+  model_pool::register(registry)
 }

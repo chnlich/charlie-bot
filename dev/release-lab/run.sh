@@ -596,7 +596,7 @@ run_one_flow() {
     standin_stop
     [ "$KEEP" = 1 ] || rm -rf "$STANDIN"
     LAST_VERDICT=start_failed
-    printf '{"kind":"flow","run":%s,"from":"%s","to":"%s","flow_ref":"%s","verdict":"start_failed","reattached":null,"load1":%s,"readers":%s}\n' \
+    printf '{"kind":"flow","run":%s,"from":"%s","to":"%s","flow_ref":"%s","download_s":null,"units_s":null,"trial_s":null,"rehearsal_s":null,"install_s":null,"preflight_s":null,"gate_s":null,"stop_s":null,"start_s":null,"ready_in_ms":null,"read_bytes":null,"release_to_live_s":null,"live_runs":null,"reattached":null,"verdict":"start_failed","switch_exit":null,"load1":%s,"readers":%s,"gate_wait_samples":null,"download_source":"lab"}\n' \
       "$run" "$FROM" "$TO" "$FLOW_REF" "$load1" "$READERS"
     return 1
   fi

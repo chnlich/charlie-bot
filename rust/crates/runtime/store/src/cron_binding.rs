@@ -10,13 +10,10 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use charliebot_core::config::CONFIG_D_DIR_NAME;
+use charliebot_core::config::{CONFIG_D_DIR_NAME, CRON_D_DIR_NAME};
 use serde_json::Value;
 
 use crate::{StoreError, StoreResult};
-
-/// The directory under `config.d` that holds the cron jobs, one YAML file per job.
-const CRON_D_DIR_NAME: &str = "cron.d";
 
 /// The sessions the cron task files under `home` bind: the `session_id` of each file that names one.
 pub(crate) fn bound_sessions(home: &Path) -> StoreResult<HashSet<String>> {

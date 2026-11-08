@@ -497,7 +497,9 @@ start_readers() {
   ((count > 0)) || return 0
   target=$(reader_target)
   [ -n "$target" ] && [ -f "$target" ] || fail "the reader file exists; run --prepare: $READER_FILE"
-  setsid "$SCRIPT_DIR/readers.sh" "$target" "$count" "$seconds" "$READER_SLEEP_MS" \
+  # The readers script is this shell's own child, so its pid names it until the script is reaped: a setsid wrapper can
+  # fork, and the pid it leaves behind may belong to another process by the time the readers stop.
+  "$SCRIPT_DIR/readers.sh" "$target" "$count" "$seconds" "$READER_SLEEP_MS" \
     > /dev/null 2>> "${RUN_DIR:-/dev/null}/readers.log" &
   READERS_PID=$!
 }
@@ -564,7 +566,7 @@ run_one_flow() {
   local run=$1 start_ms load1 rel_start sw_start sw_rc switch_log switch_pid run_dir
   local download_s units_s trial_s rehearsal_s install_s preflight_s gate_s stop_s start_s
   local ready_in_ms read_bytes release_to_live_s release_stamp_ms live_runs reattached verdict switch_exit
-  local gate_waits marks gate_start gate_end pre_preflight preflight_after_gate a b server_log_before
+  local gate_waits marks gate_start gate_end pre_preflight preflight_after_gate a b server_log_before readers_started
 
   start_ms=$(ms_now)
   load1=$(cut -d' ' -f1 /proc/loadavg)
@@ -624,11 +626,13 @@ run_one_flow() {
   switch_pid=$!
   switch_log=
   READERS_PID=
+  readers_started=0
   while kill -0 "$switch_pid" 2> /dev/null; do
     if [ -z "$switch_log" ]; then
       switch_log=$(sed -n 's/^switch log: //p' "$RUN_DIR/switch.out" | head -1)
     fi
-    if [ -z "$READERS_PID" ] && [ -n "$switch_log" ] && grep -q 'lab_mark=gate_start' "$switch_log" 2> /dev/null; then
+    if [ "$readers_started" = 0 ] && [ -n "$switch_log" ] && grep -q 'lab_mark=gate_start' "$switch_log" 2> /dev/null; then
+      readers_started=1
       start_readers "$READERS" "$READER_SECONDS"
       log "run $run: $READERS reader(s) start at the gate"
     fi
@@ -723,7 +727,7 @@ startup_lab_layout() {
 # server log and stop at server_ready, so every start has the same schedule around the boot. The startup lab runs from
 # the flow checkout, whose git history holds the commit its trial extracts.
 run_one_start() {
-  local readers=$1 run=$2 pid rc ready read_bytes void=false
+  local readers=$1 run=$2 pid rc ready read_bytes void=false started=0
   local trial_tree="$STARTUP/trials/trial-${TO:0:12}"
   local out
   load1=$(cut -d' ' -f1 /proc/loadavg)
@@ -738,7 +742,8 @@ run_one_start() {
   pid=$!
   READERS_PID=
   while kill -0 "$pid" 2> /dev/null; do
-    if [ -z "$READERS_PID" ] && [ -s "$trial_tree/server-1.log" ]; then
+    if [ "$started" = 0 ] && [ -s "$trial_tree/server-1.log" ]; then
+      started=1
       start_readers "$readers" 600
     fi
     if [ -n "$READERS_PID" ] && grep -qE '[[:space:]]server_ready[[:space:]]' "$trial_tree/server-1.log" 2> /dev/null; then

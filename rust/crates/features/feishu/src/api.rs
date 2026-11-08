@@ -10,6 +10,7 @@ use axum::extract::State;
 use axum::http::Request;
 use axum::response::Response;
 use charliebot_chat_threads::thread_entry::{ThreadDetail, ThreadReplyError};
+use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, text_field};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
@@ -31,12 +32,12 @@ const DOWNLOAD_KINDS: &[&str] = &["image", "file"];
 
 /// The reply request's fields: the calling session's id and the reply text.
 const REPLY_FIELDS: &[Field] =
-  &[Field::required("session_id", FieldType::String), Field::required("text", FieldType::String)];
+  &[Field::required(SESSION_ID, FieldType::String), Field::required("text", FieldType::String)];
 const REPLY_BODY: BodyModel = BodyModel::required(REPLY_FIELDS).forbid_extra();
 
 /// The read request's fields: the calling session, window size, and optional read mode parameters.
 const READ_FIELDS: &[Field] = &[
-  Field::required("session_id", FieldType::String),
+  Field::required(SESSION_ID, FieldType::String),
   Field::optional("limit", FieldType::Integer).ge(Bound::Int(1)).le(Bound::Int(100)),
   Field::optional("mode", FieldType::Literal(&["chat", "topic"])),
   Field::optional("topic_id", FieldType::String),
@@ -47,7 +48,7 @@ const READ_BODY: BodyModel = BodyModel::required(READ_FIELDS).forbid_extra();
 /// The download request's fields: the calling session's id, the message and resource keys, the kind, and the output
 /// path.
 const DOWNLOAD_FIELDS: &[Field] = &[
-  Field::required("session_id", FieldType::String),
+  Field::required(SESSION_ID, FieldType::String),
   Field::required("message_id", FieldType::String),
   Field::required("file_key", FieldType::String),
   Field::required("kind", FieldType::Literal(DOWNLOAD_KINDS)),
@@ -96,7 +97,7 @@ async fn post_reply(State(bot): State<Bot>, request: Request<Body>) -> Response 
     Ok(fields) => fields,
     Err(response) => return *response,
   };
-  let session_id = text_field(&fields, "session_id");
+  let session_id = text_field(&fields, SESSION_ID);
   let text = text_field(&fields, "text");
   let identity = match caller::resolve_caller(&parts.headers, &bot.features) {
     Ok(identity) => identity,
@@ -139,7 +140,7 @@ async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
     Ok(fields) => fields,
     Err(response) => return *response,
   };
-  let session_id = text_field(&fields, "session_id");
+  let session_id = text_field(&fields, SESSION_ID);
   let limit = fields.get("limit").and_then(Value::as_u64).unwrap_or(DEFAULT_READ_LIMIT) as usize;
   let mode = fields.get("mode").and_then(Value::as_str);
   let topic_id = fields.get("topic_id").and_then(Value::as_str);
@@ -171,7 +172,7 @@ async fn post_download(State(bot): State<Bot>, request: Request<Body>) -> Respon
   answer(
     commands::download(
       &bot,
-      &text_field(&fields, "session_id"),
+      &text_field(&fields, SESSION_ID),
       &text_field(&fields, "message_id"),
       &text_field(&fields, "file_key"),
       &text_field(&fields, "kind"),

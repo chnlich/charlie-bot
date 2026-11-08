@@ -8,6 +8,7 @@ use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::channel_verb::{READ_LIMIT_DEFAULT, ReplyArgs, post_check, post_read, post_reply};
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
+use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::request::{self, RequestArgs};
 use charliebot_cli_common::resolve;
@@ -169,7 +170,7 @@ fn download(args: &DownloadArgs) -> Result<(), CliExit> {
   let result = client::post(
     DOWNLOAD_PATH,
     json!({
-      "session_id": session_id,
+      (SESSION_ID): session_id,
       "message_id": args.message_id,
       "file_key": args.file_key,
       "kind": args.kind,

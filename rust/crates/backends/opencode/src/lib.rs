@@ -3,6 +3,7 @@
 pub(crate) mod backend;
 mod opencode_limits;
 mod options;
+mod protocol;
 pub mod relay;
 pub(crate) mod server;
 mod sqlite;

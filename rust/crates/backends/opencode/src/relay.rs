@@ -15,12 +15,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::signal::unix::{SignalKind, signal};
 
+use super::protocol;
 use charliebot_agents::transport::identity::{ProcessIdentity, pin_process_identity, read_pid_stat};
 
 pub const RELAY_ARG: &str = "--opencode-relay";
 pub const TURN_RECORD_NAME: &str = "opencode.turn.json";
 pub const SERVER_DIRECTORY_NAME: &str = "servers";
-const END_EVENT_TYPE: &str = "charliebot.opencode_relay.ended";
 const PARENT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const SERVER_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const INTERRUPT_WAIT: Duration = Duration::from_secs(10);
@@ -140,7 +140,7 @@ pub fn recovery_silence(directory: &Path) -> anyhow::Result<Option<(Duration, St
 
 /// The connection record directory under the CharlieBot profile home.
 pub fn server_directory() -> anyhow::Result<PathBuf> {
-  if let Some(directory) = std::env::var_os("CHARLIEBOT_OPENCODE_SERVER_DIRECTORY") {
+  if let Some(directory) = std::env::var_os(protocol::SERVER_DIRECTORY_VAR) {
     return Ok(PathBuf::from(directory));
   }
   Ok(home::charliebot_home_dir()?.join(home::OPENCODE_DIR_NAME).join(SERVER_DIRECTORY_NAME))
@@ -325,7 +325,7 @@ fn is_connected_event(line: &[u8]) -> anyhow::Result<bool> {
   let line = line.strip_suffix(b"\r").unwrap_or(line);
   let Some(data) = line.strip_prefix(b"data:") else { return Ok(false) };
   let event: Value = serde_json::from_slice(data)?;
-  Ok(event.get("type").and_then(Value::as_str) == Some("server.connected"))
+  Ok(event.get("type").and_then(Value::as_str) == Some(protocol::SERVER_CONNECTED))
 }
 
 fn record_turn_event(line: &[u8], turn: &TurnRecord, raw_path: &Path) -> anyhow::Result<bool> {
@@ -338,7 +338,7 @@ fn record_turn_event(line: &[u8], turn: &TurnRecord, raw_path: &Path) -> anyhow:
   append_raw_event(raw_path, data)?;
   Ok(matches!(
     event.get("type").and_then(Value::as_str),
-    Some("session.execution.succeeded" | "session.execution.failed" | "session.execution.interrupted")
+    Some(protocol::EXECUTION_SUCCEEDED | protocol::EXECUTION_FAILED | protocol::EXECUTION_INTERRUPTED)
   ))
 }
 
@@ -405,6 +405,6 @@ fn append_raw_event(path: &Path, raw: &[u8]) -> anyhow::Result<()> {
 }
 
 fn append_end_record(path: &Path, reason: &str) -> anyhow::Result<()> {
-  let event = json!({"type": END_EVENT_TYPE, "reason": reason});
+  let event = json!({"type": protocol::RELAY_ENDED, "reason": reason});
   append_raw_event(path, serde_json::to_string(&event)?.as_bytes())
 }

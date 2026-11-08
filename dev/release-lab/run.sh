@@ -331,14 +331,18 @@ reset_flow_checkout() {
   SWITCH_SCRIPT="$FLOW/scripts/switch-server.sh"
   if ! grep -q 'lab_mark gate_start' "$SWITCH_SCRIPT"; then
     # A flow-ref older than the lab's marks still needs its switch timed. The lab's copy must be that release's file plus
-    # the mark lines, so nothing else about the switch changes; any other difference fails the run.
-    SWITCH_SCRIPT="$FLOW/scripts/switch-lab.sh"
-    cp "$REPO_TREE/scripts/switch-server.sh" "$SWITCH_SCRIPT" || fail "the lab switch copy installs into $FLOW"
+    # the mark lines, so nothing else about the switch changes; any other difference fails the run. The switch re-executes
+    # itself as switch-server.sh beside its slice-unit install, so the copy keeps both names in a directory of its own.
     local unexpected
-    unexpected=$(diff "$FLOW/scripts/switch-server.sh" "$SWITCH_SCRIPT" \
+    unexpected=$(diff "$SWITCH_SCRIPT" "$REPO_TREE/scripts/switch-server.sh" \
       | awk '/^[<>]/ && $0 !~ /lab_mark|LAB_MARK/ && NF > 1 && $2 !~ /^[{}]$/') || true
     [ -z "$unexpected" ] \
       || fail "the lab switch copy differs from $FLOW_REF's switch by more than its mark lines: $unexpected"
+    mkdir -p "$FLOW/scripts/lab-switch" \
+      && cp "$REPO_TREE/scripts/switch-server.sh" "$FLOW/scripts/lab-switch/switch-server.sh" \
+      && cp "$FLOW/scripts/install-slice-units.sh" "$FLOW/scripts/lab-switch/install-slice-units.sh" \
+      || fail "the lab switch copy installs into $FLOW/scripts/lab-switch"
+    SWITCH_SCRIPT="$FLOW/scripts/lab-switch/switch-server.sh"
   fi
 }
 

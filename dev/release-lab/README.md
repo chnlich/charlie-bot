@@ -66,8 +66,9 @@ dev/release-lab/run.sh --teardown
 the flow's tracked files.
 
 The switch is timed from mark lines that `switch-server.sh` logs only when `CHARLIEBOT_SWITCH_LAB_MARKS` is 1. A
-`--flow-ref` whose own file carries them runs that file; an older one runs `switch-lab.sh`, the lab checkout's copy,
-which the run refuses unless it is that release's file plus the mark lines and nothing else.
+`--flow-ref` whose own file carries them runs that file; an older one runs the lab's copy in `scripts/lab-switch/`, with
+the flow's slice-unit install beside it because the switch re-executes itself by that name. The run refuses the copy
+unless it is that release's file plus the mark lines and nothing else.
 
 Each flow attempt prints one JSON line with the stages' seconds (`download_s`, `units_s`, `trial_s`, `rehearsal_s`,
 `install_s`, `preflight_s`, `gate_s`, `stop_s`, `start_s`), `ready_in_ms`, `read_bytes`, `release_to_live_s`,

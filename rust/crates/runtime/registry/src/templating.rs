@@ -409,7 +409,7 @@ impl Templating {
   fn environment(&self, globals: Vec<TemplateGlobal>) -> Environment<'static> {
     let loader = jinja::file_system_loader(self.loader.clone());
     // A page carries its scripts and its stylesheets inline, and a comment in either explains it to an editor rather
-    // than to the browser: the inline copy leaves the comments out, and a script's code indentation with them. A
+    // than to the browser. The inline copy leaves the comments out, and a script's code indentation with them. A
     // template keeps every byte.
     let loader = move |name: &str| {
       let source = loader(name)?;
@@ -858,8 +858,8 @@ mod tests {
     );
   }
 
-  /// A page that inlines a script or a stylesheet carries it without the comments that document the source file, and
-  /// a script without the code indentation that shows its nesting. The string literals either source holds keep
+  /// A page that inlines a script or a stylesheet carries it without the comments that document the source file.
+  /// A script also loses the code indentation that shows its nesting. The string literals either source holds keep
   /// their bytes.
   #[tokio::test]
   async fn an_inlined_script_or_stylesheet_travels_without_its_comments() {

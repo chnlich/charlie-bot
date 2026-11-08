@@ -1,11 +1,12 @@
 //! The form a script takes when a page carries it inline.
 //!
 //! A page inlines its scripts so the first paint waits for no second request. The same source files carry the
-//! comments that explain them to an editor, which a browser runs as nothing, and the indentation that shows their
-//! nesting, which a browser reads as nothing. On the mock home's chat page, leaving both out of the inline copy of
-//! the scripts and the stylesheets saves 67 KB of the page's 700 KB and 13 KB of its 164 KB gzip form. The strip is
-//! textual and keeps every other byte, including a `//` or `/*` that a string, a template literal or a regular
-//! expression holds, and the indentation inside a template literal, which is part of the text it builds.
+//! comments that explain them to an editor, and a browser runs those as nothing. They also carry the indentation
+//! that shows their nesting, and a browser reads that as nothing. On the mock home's chat page, both sit in the
+//! scripts and the stylesheets. Leaving both out of the inline copy saves 67 KB of the page's 700 KB and 13 KB
+//! of its 164 KB gzip form. The strip is textual and keeps every other byte. That includes a `//` or `/*` that a
+//! string, a template literal or a regular expression holds. It also keeps the indentation inside a template
+//! literal, which is part of the text it builds.
 
 /// The JavaScript `source` with its comments and its code indentation removed.
 ///

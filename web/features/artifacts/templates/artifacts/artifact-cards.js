@@ -467,7 +467,19 @@ function renderPlanCompactCard(link, ordinal, prose, reg) {
 function renderArtifactLink(link, ordinal, prose) {
   var ready = _planRegistryReady();
   if (!ready) {
-    renderPlanCompactCard(link, ordinal, prose, null);
+    // The page loads the plan panel's script on first use, and that script owns the registry this card reads. A card
+    // met before the load waits for it and then renders with the registered plan version. A harness without the
+    // page's loader renders the unregistered card.
+    if (typeof loadPlansPanel !== 'function') {
+      renderPlanCompactCard(link, ordinal, prose, null);
+      return;
+    }
+    loadPlansPanel().then(function() {
+      renderArtifactLink(link, ordinal, prose);
+    }).catch(function(e) {
+      console.warn('plan registry readiness failed; rendering the artifact card', e);
+      renderPlanCompactCard(link, ordinal, prose, null);
+    });
     return;
   }
   var isReadyFragment = isTurnEngineReadyFragment(prose);

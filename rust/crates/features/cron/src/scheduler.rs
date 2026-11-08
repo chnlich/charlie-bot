@@ -757,6 +757,9 @@ struct CronSearchWork {
   local_candidates: usize,
 }
 
+/// The next-fire search horizon in calendar days: eight years of 366 days.
+const NEXT_FIRE_HORIZON_DAYS: i64 = 8 * 366;
+
 struct CronExpression {
   minute: CronField,
   hour: CronField,
@@ -784,20 +787,20 @@ impl CronExpression {
     &self,
     base: chrono::DateTime<Tz>,
   ) -> anyhow::Result<chrono::DateTime<Tz>> {
-    // The next fire is the earliest matching local time on the UTC minute grid. The scan stops at the
-    // `8 * 366 * 24 * 60`-second horizon, about 49 days.
-    self.next_after_with_work(base).map(|(next, _)| next)
+    // The next fire is the earliest matching local time on the UTC minute grid. The scan stops at the eight-year
+    // horizon (`NEXT_FIRE_HORIZON_DAYS`); an expression with no fire inside it is an error.
+    self.next_after_with_work(base).0
   }
 
+  /// Searches for the next fire and reports the work done, on the error path too.
   fn next_after_with_work<Tz: chrono::TimeZone + Clone>(
     &self,
     base: chrono::DateTime<Tz>,
-  ) -> anyhow::Result<(chrono::DateTime<Tz>, CronSearchWork)> {
+  ) -> (anyhow::Result<chrono::DateTime<Tz>>, CronSearchWork) {
     let base_utc = base.with_timezone(&chrono::Utc);
     let timezone = base.timezone().clone();
     let start = base_utc.timestamp().div_euclid(60) * 60 + 60;
-    // Preserve the existing timestamp horizon: the old `8 * 366 * 24 * 60` value was seconds, not minutes.
-    let end = start + 8 * 366 * 24 * 60;
+    let end = start + NEXT_FIRE_HORIZON_DAYS * 24 * 60 * 60;
     let first_date = chrono::DateTime::from_timestamp(start, 0)
       .expect("a bounded Unix minute is representable")
       .with_timezone(&timezone)
@@ -808,7 +811,7 @@ impl CronExpression {
     let mut work = CronSearchWork::default();
     let mut best: Option<chrono::DateTime<Tz>> = None;
 
-    for day_offset in 0..=(8 * 366 + 3) {
+    for day_offset in 0..=(NEXT_FIRE_HORIZON_DAYS + 3) {
       let date = first_date + chrono::Duration::days(day_offset);
       work.calendar_days += 1;
       // IANA offsets stay within 24 hours, giving a conservative UTC floor for local candidates on this date.
@@ -820,18 +823,16 @@ impl CronExpression {
       if let Some(next) = best.as_ref()
         && date_floor > next.with_timezone(&chrono::Utc).timestamp()
       {
-        return Ok((next.clone(), work));
+        return (Ok(next.clone()), work);
       }
       if !self.date_matches(date) {
         continue;
       }
       if date == start_local.date_naive() && self.minute.values.len() == 60 && self.hour.values.len() == 24 {
-        return Ok((
-          chrono::DateTime::from_timestamp(start, 0)
-            .expect("a bounded Unix minute is representable")
-            .with_timezone(&timezone),
-          work,
-        ));
+        let first = chrono::DateTime::from_timestamp(start, 0)
+          .expect("a bounded Unix minute is representable")
+          .with_timezone(&timezone);
+        return (Ok(first), work);
       }
       for hour in &self.hour.ordered {
         for minute in &self.minute.ordered {
@@ -858,7 +859,8 @@ impl CronExpression {
         }
       }
     }
-    best.map(|next| (next, work)).ok_or_else(|| anyhow::anyhow!("cron expression has no fire within eight years"))
+    let next = best.ok_or_else(|| anyhow::anyhow!("cron expression has no fire within eight years"));
+    (next, work)
   }
 
   fn date_matches(&self, date: chrono::NaiveDate) -> bool {
@@ -965,18 +967,39 @@ mod tests {
   }
 
   #[test]
-  fn sparse_cron_checks_calendar_dates_within_the_existing_horizon() {
+  fn sparse_cron_checks_calendar_dates_within_the_eight_year_horizon() {
     let expression = CronExpression::parse("0 0 1 * *").unwrap();
     let base = Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap();
 
-    let (next, work) = expression.next_after_with_work(base).unwrap();
+    let (next, work) = expression.next_after_with_work(base);
+    let next = next.unwrap();
 
     assert_eq!(next.to_rfc3339(), "2026-02-01T00:00:00+00:00");
     assert!(work.calendar_days <= 33, "{work:?}");
     assert_eq!(work.local_candidates, 1);
 
+    // Jan 1 is 364 days out, inside the eight-year horizon.
     let yearly = CronExpression::parse("0 0 1 1 *").unwrap();
-    assert!(yearly.next_after(base).is_err());
+    assert_eq!(yearly.next_after(base).unwrap().to_rfc3339(), "2027-01-01T00:00:00+00:00");
+
+    // Feb 30 never occurs: the search stops at the horizon, within its calendar-day cap.
+    let never = CronExpression::parse("0 0 30 2 *").unwrap();
+    let (result, work) = never.next_after_with_work(base);
+    assert!(result.unwrap_err().to_string().contains("no fire within eight years"));
+    assert!(work.calendar_days <= 8 * 366 + 4, "{work:?}");
+  }
+
+  #[test]
+  fn next_fire_more_than_49_days_out_resolves_in_the_task_timezone() {
+    let timezone = "America/Los_Angeles".parse::<chrono_tz::Tz>().unwrap();
+
+    let expression = CronExpression::parse("0 3 1 1 *").unwrap();
+    let base = Utc.with_ymd_and_hms(2026, 11, 8, 3, 6, 0).unwrap().with_timezone(&timezone);
+    assert_eq!(expression.next_after(base).unwrap().to_rfc3339(), "2027-01-01T03:00:00-08:00");
+
+    let expression = CronExpression::parse("0 17 15 12 *").unwrap();
+    let base = Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap().with_timezone(&timezone);
+    assert_eq!(expression.next_after(base).unwrap().to_rfc3339(), "2026-12-15T17:00:00-08:00");
   }
 
   #[test]

@@ -269,8 +269,8 @@ impl BackendPool {
   }
 
   /// Turn one router answer into the route the request keeps and the place it runs. A routed answer names exactly one
-  /// id. A pool id runs the request on the member its rule picks at the run's start; an options id runs it unless the
-  /// member is out, in which case the caller's default path runs it.
+  /// id. A pool id is the place the request runs: its delegation selects the member the rule picks for the work run. An
+  /// options id runs it unless the member is out, in which case the caller's default path runs it.
   pub fn decide(&self, cfg: &CharlieBotConfig, caller: &str, answer: RouterAnswer) -> anyhow::Result<RoutedRequest> {
     let RouterAnswer { routed, backends, reason } = answer;
     if !routed {

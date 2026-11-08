@@ -19,7 +19,9 @@ use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool;
 use charliebot_agents::cli_base::CliHost;
 use charliebot_agents::model_pool;
-use charliebot_core::config::{BackendOption, CallClass, PoolBilling, PoolConfig, PoolMember, PoolRule, RoutingConfig};
+use charliebot_core::config::{
+  BackendOption, CallClass, CharlieBotConfig, PoolBilling, PoolConfig, PoolMember, PoolRule, RoutingConfig,
+};
 use charliebot_core::event_types;
 use charliebot_registry::Registry;
 use charliebot_registry::caller::CallerIdentity;
@@ -32,8 +34,8 @@ use charliebot_tasks::spawner_backends::BackendSource;
 use charliebot_tasks::{cold_read, handoff, routes, spawner_backends, task_sessions};
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
-  BACKEND_ID, BACKEND_TYPE, ROTATION_POOL_ID, Scripts, Stack, cold_read_body, init_repo_with_origin, last_child_report,
-  post_delegate, result_script, settle_until, synthetic_git, synthetic_run, write_sitrep,
+  BACKEND_ID, BACKEND_TYPE, ROTATION_POOL_ID, Scripts, Stack, TOKEN_FIELD, cold_read_body, init_repo_with_origin,
+  last_child_report, post_delegate, result_script, settle_until, synthetic_git, synthetic_run, write_sitrep,
 };
 use serde_json::{Map, Value, json};
 use serde_yaml::Mapping;
@@ -1005,11 +1007,21 @@ async fn failover_stack(scripts: &Scripts) -> anyhow::Result<Stack> {
 
 /// Install a synthetic shell router in the stack's hot-reloaded configuration.
 fn install_router(stack: &Stack, directory: &Path, body: &str, arguments: &[String]) -> anyhow::Result<()> {
+  install_router_on(stack, stack.cfg.as_ref().clone(), directory, body, arguments)
+}
+
+/// Install a synthetic shell router in `cfg`, and serve `cfg` as the stack's hot-reloaded configuration.
+fn install_router_on(
+  stack: &Stack,
+  mut cfg: CharlieBotConfig,
+  directory: &Path,
+  body: &str,
+  arguments: &[String],
+) -> anyhow::Result<()> {
   let path = directory.join("fake-router.sh");
   std::fs::write(&path, format!("set -eu\n{body}\n"))?;
   let mut command = vec!["/bin/sh".to_string(), path.display().to_string()];
   command.extend(arguments.iter().cloned());
-  let mut cfg = stack.cfg.as_ref().clone();
   cfg.backends.routing = Some(RoutingConfig { command });
   stack.replace_config(cfg)
 }
@@ -1063,6 +1075,197 @@ async fn a_route_naming_the_pool_keeps_the_pool_id_on_the_child() -> anyhow::Res
   Ok(())
 }
 
+/// The `backends.options` entries of the scripted `options`, each with the token its builds read.
+fn option_entries(options: &[BackendOption]) -> String {
+  options
+    .iter()
+    .map(|option| {
+      let token = option.type_fields.get(TOKEN_FIELD).and_then(|value| value.as_str()).expect("a scripted option has its token");
+      format!(
+        "    - id: {id}\n      label: {id}\n      type: {BACKEND_TYPE}\n      model: {model}\n      {TOKEN_FIELD}: {token}\n",
+        id = option.id,
+        model = option.model,
+      )
+    })
+    .collect()
+}
+
+/// The config a home loads when its `backends` section is `backends` (YAML under the key, indented two spaces) over the
+/// scripted `options`. It goes through the config loader, so a `backends.pool` key derives its pool as a host home does.
+fn home_config(stack: &Stack, options: &[BackendOption], backends: &str) -> anyhow::Result<CharlieBotConfig> {
+  let home = stack.home.path();
+  let yaml = format!(
+    "server:\n  host: 127.0.0.1\n  port: 18650\npaths:\n  workspace_dirs: []\n  worktree_dir: {}\n  scratch_dir: {}\nbackends:\n{backends}  options:\n{}",
+    home.join("worktrees").display(),
+    home.join("scripts").display(),
+    option_entries(options),
+  );
+  std::fs::write(home.join("config.yaml"), yaml)?;
+  Ok(stack.features.registry.load_config(home)?)
+}
+
+/// Delegate `body` through the served configuration and wait for the work run it registers. The run must name one of
+/// `members` as its backend, record that member's model, and end successfully: a run that cannot resolve its backend
+/// fails here, at the launch the live delegation failed at.
+async fn delegate_and_run(stack: &Stack, body: Value, members: &[&str]) -> anyhow::Result<(String, RunRecord)> {
+  let (status, delegated) = post_delegate(&routes::routes(&stack.features), body).await?;
+  assert_eq!(status, StatusCode::OK, "{delegated}");
+  let child_id = text(&delegated, "session_id")?;
+  let run_id = text(&delegated, "run_id")?;
+  let outcome = stack.wait_terminal(&child_id, &run_id).await?;
+  let error = error_text(stack, &child_id, &run_id)?;
+  assert_eq!(outcome, RunOutcomeKind::Success, "the work run ended {outcome:?}: {error}");
+  let run = stack.store().read_run_sync(&child_id, &run_id)?.expect("the delegation registers its work run");
+  let member = run.backend.clone().unwrap_or_default();
+  assert!(members.contains(&member.as_str()), "the work run names backend {member:?}, want a member of {members:?}");
+  assert_eq!(run.model.as_deref(), Some(format!("{member}-model").as_str()), "the run records its member's model");
+  Ok((child_id, run))
+}
+
+/// The child keeps the pool id, and its `pool_member` names one of the pool's `members`.
+async fn assert_child_keeps_pool_and_member(
+  stack: &Stack,
+  child_id: &str,
+  pool: &str,
+  members: &[&str],
+) -> anyhow::Result<()> {
+  let meta = stack.store().load_task_meta(child_id).await?;
+  assert_eq!(meta.backend, pool, "the child keeps the pool id");
+  let member = meta.extra(model_pool::POOL_MEMBER_FIELD).and_then(Value::as_str).unwrap_or_default();
+  assert!(members.contains(&member), "the child records pool_member {member:?}, want a member of {members:?}");
+  Ok(())
+}
+
+/// The `backends` of a home whose new form names the rotate pool `light` over `fake` and `fake2`, with its `calls`.
+const LIGHT_POOL_BACKENDS: &str = "  pools:\n    - {id: light, label: Light, rule: rotate, members: [fake, fake2]}\n  calls:\n    worker: light\n    review: light\n    verify: light\n";
+
+/// The old form: `backends.pool` over `fake` and `fake2`, and a router whose `run_on: pool` answers the derived pool
+/// id. The routine delegation's work run launches on one member of the pool.
+#[tokio::test]
+#[ignore = "integration"]
+async fn an_old_form_routine_delegation_launches_on_a_pool_member() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![result_script("pool work done")]);
+  let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  let cfg = home_config(&stack, &options, "  pool: [fake, fake2]\n")?;
+  let router_dir = tempfile::tempdir()?;
+  install_router_on(&stack, cfg, router_dir.path(), &router_order_body(&[ROTATION_POOL_ID]), &[])?;
+
+  let (child_id, _) = delegate_and_run(&stack, quick_edit_body(&manager), &["fake", "fake2"]).await?;
+  assert_child_keeps_pool_and_member(&stack, &child_id, ROTATION_POOL_ID, &["fake", "fake2"]).await
+}
+
+/// The new form: `backends.pools` names `light`, and a router whose `run_on: light` answers it. The routine delegation's
+/// work run launches on one member of `light`.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_new_form_routine_delegation_launches_on_a_light_member() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![result_script("light work done")]);
+  let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  let cfg = home_config(&stack, &options, LIGHT_POOL_BACKENDS)?;
+  let router_dir = tempfile::tempdir()?;
+  install_router_on(&stack, cfg, router_dir.path(), &router_order_body(&["light"]), &[])?;
+
+  let (child_id, _) = delegate_and_run(&stack, quick_edit_body(&manager), &["fake", "fake2"]).await?;
+  assert_child_keeps_pool_and_member(&stack, &child_id, "light", &["fake", "fake2"]).await
+}
+
+/// The new form with routing unset: the `calls.worker` pool target selects the member at delegation, and the work run
+/// launches on it.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_calls_pool_worker_delegation_without_routing_launches_on_a_member() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![result_script("calls work done")]);
+  let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  stack.replace_config(home_config(&stack, &options, LIGHT_POOL_BACKENDS)?)?;
+
+  let (child_id, _) = delegate_and_run(&stack, quick_edit_body(&manager), &["fake", "fake2"]).await?;
+  assert_child_keeps_pool_and_member(&stack, &child_id, "light", &["fake", "fake2"]).await?;
+  Ok(())
+}
+
+/// An explicit `--backend light` names the pool: the child keeps `light`, and the work run launches on one member of it.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_named_pool_backend_launches_on_a_member_and_keeps_the_pool_id() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![result_script("named work done")]);
+  let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  stack.replace_config(home_config(&stack, &options, LIGHT_POOL_BACKENDS)?)?;
+  let mut body = quick_edit_body(&manager);
+  body["backend"] = json!("light");
+
+  let (child_id, _) = delegate_and_run(&stack, body, &["fake", "fake2"]).await?;
+  assert_child_keeps_pool_and_member(&stack, &child_id, "light", &["fake", "fake2"]).await
+}
+
+/// A routed verify, new form: the router names `light` for the verify, and its run launches on one member of `light`.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_routed_verify_delegation_launches_on_a_light_member() -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![result_script("verified")]);
+  let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  let cfg = home_config(&stack, &options, LIGHT_POOL_BACKENDS)?;
+  let router_dir = tempfile::tempdir()?;
+  install_router_on(&stack, cfg, router_dir.path(), &router_order_body(&["light"]), &[])?;
+  let body = json!({"session_id": manager, "description": "confirm the change", "task_type": "verify"});
+
+  let (child_id, _) = delegate_and_run(&stack, body, &["fake", "fake2"]).await?;
+  assert_child_keeps_pool_and_member(&stack, &child_id, "light", &["fake", "fake2"]).await
+}
+
+/// The review of a routed work run: the route names the pool, so the review takes a member of it that the work run did
+/// not run on.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_routed_pool_work_run_reviews_on_another_member() -> anyhow::Result<()> {
+  let dir = tempfile::tempdir()?;
+  let scripts = Scripts::new(vec![result_script("implemented"), result_script("review ok")]);
+  let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  let cfg = home_config(&stack, &options, "  pool: [fake, fake2]\n")?;
+  let router_dir = tempfile::tempdir()?;
+  install_router_on(&stack, cfg, router_dir.path(), &router_order_body(&[ROTATION_POOL_ID]), &[])?;
+  let (repo, _origin) = init_repo_with_origin(dir.path())?;
+  let body = json!({
+    "session_id": manager,
+    "description": "add a marker file",
+    "task_type": "implement",
+    "repo_path": repo.display().to_string(),
+    "base_branch": "main",
+  });
+
+  let (child_id, work) = delegate_and_run(&stack, body, &["fake", "fake2"]).await?;
+  let review = wait_for_review_of(&stack, &child_id, &work.id).await?;
+  let work_member = work.backend.clone().unwrap_or_default();
+  let review_member = review.backend.clone().unwrap_or_default();
+  assert!(
+    ["fake", "fake2"].contains(&review_member.as_str()) && review_member != work_member,
+    "the review runs on {review_member:?}, want the pool member other than the work run's {work_member:?}"
+  );
+  assert_eq!(stack.wait_terminal(&child_id, &review.id).await?, RunOutcomeKind::Success);
+  Ok(())
+}
+
+/// The review run that work run `work_run_id` registers, once it registers.
+async fn wait_for_review_of(stack: &Stack, session_id: &str, work_run_id: &str) -> anyhow::Result<RunRecord> {
+  let deadline = std::time::Instant::now() + Duration::from_secs(10);
+  loop {
+    let review = stack
+      .run_records(session_id)?
+      .into_iter()
+      .find(|run| run.kind == RunKind::Review && run.review_of_run_id.as_deref() == Some(work_run_id));
+    if let Some(review) = review {
+      return Ok(review);
+    }
+    anyhow::ensure!(std::time::Instant::now() < deadline, "work run {work_run_id} did not register its review");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+  }
+}
+
 /// Cooling route: the routed option is cooling, so the default path runs the work on the pool and the delegation still
 /// answers 200.
 #[tokio::test]
@@ -1082,7 +1285,9 @@ async fn a_cooling_routed_option_falls_back_to_the_pool() -> anyhow::Result<()> 
   let (status, delegated) = post_delegate(&routes::routes(&stack.features), quick_edit_body(&manager)).await?;
   assert_eq!(status, StatusCode::OK, "{delegated}");
   let child_id = text(&delegated, "session_id")?;
-  assert_eq!(stack.store().load_task_meta(&child_id).await?.backend, "fake");
+  let meta = stack.store().load_task_meta(&child_id).await?;
+  assert_eq!(meta.backend, ROTATION_POOL_ID, "the child keeps the pool id");
+  assert_eq!(meta.extra(model_pool::POOL_MEMBER_FIELD), Some(&json!("fake")), "the pool's first member");
   Ok(())
 }
 
@@ -1242,7 +1447,8 @@ async fn a_router_failure_takes_the_pool_and_records_the_failure() -> anyhow::Re
   assert_eq!(status, StatusCode::OK, "{delegated}");
   let child_id = text(&delegated, "session_id")?;
   let meta = stack.store().load_task_meta(&child_id).await?;
-  assert_eq!(meta.backend, "fake", "the pool's first member");
+  assert_eq!(meta.backend, ROTATION_POOL_ID, "the child keeps the pool id");
+  assert_eq!(meta.extra(model_pool::POOL_MEMBER_FIELD), Some(&json!("fake")), "the pool's first member");
   assert_eq!(meta.extra("backend_from_pool"), Some(&json!(true)));
   let route = meta.extra("route").expect("the node records its route");
   assert_eq!(route["backends"], json!([]));
@@ -1265,7 +1471,12 @@ async fn a_verify_router_failure_takes_the_verify_selection() -> anyhow::Result<
   assert_eq!(status, StatusCode::OK, "{delegated}");
   let child_id = text(&delegated, "session_id")?;
   let meta = stack.store().load_task_meta(&child_id).await?;
-  assert_eq!(meta.backend, "fake2", "the pool member that is not the session's backend");
+  assert_eq!(meta.backend, ROTATION_POOL_ID, "the child keeps the pool id");
+  assert_eq!(
+    meta.extra(model_pool::POOL_MEMBER_FIELD),
+    Some(&json!("fake2")),
+    "the pool member that is not the session's backend"
+  );
   assert_eq!(meta.extra("backend_from_pool"), Some(&json!(true)));
   let reason = meta.extra("route").and_then(|route| route["reason"].as_str()).unwrap_or_default();
   assert!(reason.starts_with("router failed: "), "{reason}");
@@ -1290,7 +1501,8 @@ async fn an_unrouted_quick_edit_takes_the_pool_and_records_why() -> anyhow::Resu
   assert_eq!(status, StatusCode::OK, "{delegated}");
   let child_id = text(&delegated, "session_id")?;
   let meta = stack.store().load_task_meta(&child_id).await?;
-  assert_eq!(meta.backend, "fake", "the pool's first member");
+  assert_eq!(meta.backend, ROTATION_POOL_ID, "the child keeps the pool id");
+  assert_eq!(meta.extra(model_pool::POOL_MEMBER_FIELD), Some(&json!("fake")), "the pool's first member");
   assert_eq!(meta.extra("backend_from_pool"), Some(&json!(true)));
   assert_eq!(meta.extra("route"), Some(&json!({"backends": [], "reason": "quick-edit not routed"})));
   Ok(())
@@ -1315,7 +1527,12 @@ async fn an_unrouted_verify_takes_the_verify_selection_and_records_why() -> anyh
   assert_eq!(status, StatusCode::OK, "{delegated}");
   let child_id = text(&delegated, "session_id")?;
   let meta = stack.store().load_task_meta(&child_id).await?;
-  assert_eq!(meta.backend, "fake2", "the pool member that is not the session's backend");
+  assert_eq!(meta.backend, ROTATION_POOL_ID, "the child keeps the pool id");
+  assert_eq!(
+    meta.extra(model_pool::POOL_MEMBER_FIELD),
+    Some(&json!("fake2")),
+    "the pool member that is not the session's backend"
+  );
   assert_eq!(meta.extra("route"), Some(&json!({"backends": [], "reason": "verify not routed"})));
   Ok(())
 }
@@ -1339,7 +1556,8 @@ async fn a_cooling_routed_option_runs_on_the_default_path_and_says_so() -> anyho
   assert_eq!(status, StatusCode::OK, "{delegated}");
   let child_id = text(&delegated, "session_id")?;
   let meta = stack.store().load_task_meta(&child_id).await?;
-  assert_eq!(meta.backend, "fake", "the pool's first member");
+  assert_eq!(meta.backend, ROTATION_POOL_ID, "the child keeps the pool id");
+  assert_eq!(meta.extra(model_pool::POOL_MEMBER_FIELD), Some(&json!("fake")), "the pool's first member");
   assert_eq!(meta.extra("backend_from_pool"), Some(&json!(true)));
   assert_eq!(
     meta.extra("route"),

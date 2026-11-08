@@ -142,12 +142,17 @@ async fn start_improve_sequence(features: &Arc<FeatureContext>, req: ImproveRequ
   // that names no backend takes a member of the `backends.calls.improve` pool for each iteration, so it reserves no
   // backend here.
   let backend_from_pool = req.backend.is_none() && spawner_backends::class_pool_id(&cfg, CallClass::Improve).is_some();
+  // An improve loop's requested backend is an options id: its runs never take a pool id, and a pool serves the loop only
+  // through `backends.calls.improve`.
+  if let Some(backend) = req.backend.as_deref().filter(|backend| cfg.backends.pool(backend).is_some()) {
+    return Err(Box::new(bad_request(anyhow::anyhow!("requested backend '{backend}' is not in backends.options"))));
+  }
   let (resolved_backend, resolved_model) = if backend_from_pool {
     (String::new(), String::new())
   } else {
-    // The resolver's role picks only among pool members, and this call never reaches the pool. A pool with a requested
-    // backend returns that backend first, and a pool-less config skips the pool branch.
-    let (backend, model, _source) = spawner_backends::resolve_requested_subagent_backend_model(
+    // The requested backend is an options id (a pool was refused above), so the resolver answers with that option, or
+    // with the session's own backend when none is requested.
+    let subagent = spawner_backends::resolve_requested_subagent_backend_model(
       &cfg,
       store,
       &req.session_id,
@@ -163,7 +168,7 @@ async fn start_improve_sequence(features: &Arc<FeatureContext>, req: ImproveRequ
         refuse_runtime(error)
       }
     })?;
-    (backend, model.unwrap_or_default())
+    (subagent.run_backend, subagent.model.unwrap_or_default())
   };
 
   let work_branch = req.work_branch.clone().unwrap_or_else(|| format!("improve/{}", unix_seconds()));

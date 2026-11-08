@@ -165,6 +165,51 @@ pub enum BackendSource {
   PoolMember,
 }
 
+/// The backends of one delegation: the child session's backend and the backend its work run launches on. A pool keeps
+/// its id on the child session, and the work run names the member the pool selected, so the run never names a pool.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubagentBackend {
+  /// The backend the child session names: the pool id for a pool-chosen run, else the run's backend.
+  pub session_backend: String,
+  /// The backend the work run launches on: an options id.
+  pub run_backend: String,
+  /// The model the work run records.
+  pub model: Option<String>,
+  /// The rule that chose the backend.
+  pub source: BackendSource,
+}
+
+/// The backend of a run that the pool `pool_id` chose: the child keeps `pool_id`, and the run names `member`.
+pub fn pool_chosen_backend(pool_id: &str, member: &BackendOption) -> anyhow::Result<SubagentBackend> {
+  let model = member.required_model("pool member").map_err(value_error)?;
+  Ok(SubagentBackend {
+    session_backend: pool_id.to_string(),
+    run_backend: member.id.clone(),
+    model: Some(model),
+    source: BackendSource::Pool,
+  })
+}
+
+/// The backend of a verify or cold-read run that `backends.calls` selected: `backend` is the member the class's pool chose,
+/// or the worker's own backend when no member was selectable. A chosen member keeps its pool's id on the child.
+pub fn class_selected_backend(
+  cfg: &CharlieBotConfig,
+  class_pool: Option<&str>,
+  backend: String,
+  model: Option<String>,
+) -> SubagentBackend {
+  let pool_id = class_pool.filter(|pool_id| {
+    cfg.backends.pool(pool_id).is_some_and(|pool| pool.members.iter().any(|member| member.backend == backend))
+  });
+  let source = if class_pool.is_some() { BackendSource::Pool } else { BackendSource::Direct };
+  SubagentBackend {
+    session_backend: pool_id.map_or_else(|| backend.clone(), str::to_string),
+    run_backend: backend,
+    model,
+    source,
+  }
+}
+
 /// Resolve a delegation's backend and the rule that chose it (`spawner_backends.resolve_requested_subagent_backend_model`).
 pub async fn resolve_requested_subagent_backend_model(
   cfg: &CharlieBotConfig,
@@ -173,7 +218,7 @@ pub async fn resolve_requested_subagent_backend_model(
   requested_backend: Option<&str>,
   role: SubagentRole,
   pool: &BackendPool,
-) -> anyhow::Result<(String, Option<String>, BackendSource)> {
+) -> anyhow::Result<SubagentBackend> {
   let meta = store.require_session(session_id).await.map_err(|error| match error {
     StoreError::NotFound(_) => value_error(format!("session '{session_id}' not found")),
     error => anyhow::Error::new(error),
@@ -182,33 +227,48 @@ pub async fn resolve_requested_subagent_backend_model(
     if backend_id.is_empty() {
       return Err(value_error("requested backend is required"));
     }
+    if cfg.backends.pool(backend_id).is_some() {
+      let Some(member) = pool.select(cfg, role.caller(), backend_id, &[])? else {
+        return Err(value_error(pool.exhausted_message(cfg, backend_id)?));
+      };
+      return pool_chosen_backend(backend_id, &member);
+    }
     let option = cfg
       .get_backend_option(backend_id)
       .ok_or_else(|| value_error(format!("requested backend '{backend_id}' is not in backends.options")))?;
     let model = option.required_model("requested backend").map_err(value_error)?;
-    return Ok((option.id.clone(), Some(model), BackendSource::Direct));
+    return Ok(SubagentBackend {
+      session_backend: option.id.clone(),
+      run_backend: option.id.clone(),
+      model: Some(model),
+      source: BackendSource::Direct,
+    });
   }
   match cfg.backends.calls.get(role.call_class()) {
     None | Some(CallTarget::Session) => {}
     Some(CallTarget::Backend(target)) if cfg.backends.pool(target).is_some() => {
-      let Some(option) = pool.select(cfg, role.caller(), target, &[])? else {
+      let Some(member) = pool.select(cfg, role.caller(), target, &[])? else {
         return Err(value_error(pool.exhausted_message(cfg, target)?));
       };
-      let model = option.required_model("pool member").map_err(value_error)?;
-      return Ok((option.id.clone(), Some(model), BackendSource::Pool));
+      return pool_chosen_backend(target, &member);
     }
     Some(CallTarget::Backend(target)) => {
       let option = cfg
         .get_backend_option(target)
         .ok_or_else(|| value_error(format!("calls target '{target}' is not a backends.options id")))?;
       let model = option.required_model("calls target").map_err(value_error)?;
-      return Ok((option.id.clone(), Some(model), BackendSource::Direct));
+      return Ok(SubagentBackend {
+        session_backend: option.id.clone(),
+        run_backend: option.id.clone(),
+        model: Some(model),
+        source: BackendSource::Direct,
+      });
     }
   }
   let (backend_id, model) = resolve_session_default_backend_model(cfg, &meta)?;
   let source =
     if cfg.backends.pool(&meta.backend).is_some() { BackendSource::PoolMember } else { BackendSource::Direct };
-  Ok((backend_id, model, source))
+  Ok(SubagentBackend { session_backend: backend_id.clone(), run_backend: backend_id, model, source })
 }
 
 /// Resolve a verify or cold-read checker for the call class `class`, excluding the session's current backend.
@@ -287,7 +347,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_delegation_request_naming_a_pool_is_refused() {
+  async fn a_delegation_request_naming_a_pool_selects_a_member_and_keeps_the_pool_id() {
     use std::sync::Arc;
 
     use charliebot_agents::backend_availability::BackendAvailability;
@@ -325,13 +385,15 @@ mod tests {
       .await
       .unwrap();
 
-    let error =
+    let subagent =
       resolve_requested_subagent_backend_model(&cfg, &store, &session.id, Some(POOL_ID), SubagentRole::Improve, &pool)
         .await
-        .unwrap_err()
-        .to_string();
+        .unwrap();
 
-    assert!(error.contains("requested backend 'auto' is not in backends.options"), "{error}");
+    assert_eq!(subagent.session_backend, POOL_ID, "the child keeps the pool id");
+    assert_eq!(subagent.run_backend, "synthetic", "the run names the member the pool selected");
+    assert_eq!(subagent.model.as_deref(), Some("model-1"));
+    assert_eq!(subagent.source, BackendSource::Pool);
   }
 
   fn pool_config() -> CharlieBotConfig {

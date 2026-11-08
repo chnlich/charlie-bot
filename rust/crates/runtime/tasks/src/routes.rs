@@ -8,7 +8,8 @@ use axum::extract::{FromRequestParts, Path, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use charliebot_agents::backend_pool::{RouteTarget, RoutedRequest};
+use charliebot_agents::backend_pool::{BackendRoute, RouteTarget, RoutedRequest};
+use charliebot_agents::model_pool;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
@@ -33,7 +34,7 @@ use crate::completion::{self, CompletionEvidence};
 use crate::dispatch;
 use crate::execution::TaskExecutionAdapter;
 use crate::prompts::MAX_AGENT_MESSAGE_WEIGHTED_CHARS;
-use crate::spawner_backends::BackendSource;
+use crate::spawner_backends::{BackendSource, SubagentBackend};
 use crate::task_sessions;
 use crate::text_length;
 
@@ -396,19 +397,23 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     };
     route = Some(decided.route);
     match decided.target {
-      // The router named a pool: the child keeps the pool id and runs on the member its first turn selects. A pool with
-      // no selectable member refuses the delegation here, as the pool's default path does.
+      // The router named a pool: the child keeps the pool id, and the work run launches on the member the pool selects
+      // for it. A pool with no selectable member refuses the delegation here, as the pool's default path does.
       RouteTarget::Backend(backend_id) if cfg.backends.pool(&backend_id).is_some() => {
-        match pool.peek(&cfg, &backend_id, &[]) {
-          Ok(Some(_)) => Some((backend_id, None, BackendSource::Pool)),
-          Ok(None) => {
-            let detail = match pool.exhausted_message(&cfg, &backend_id) {
-              Ok(detail) => detail,
-              Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
-            };
-            return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": detail }));
-          }
+        let member = match pool.select(&cfg, role, &backend_id, &[]) {
+          Ok(member) => member,
           Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+        };
+        let Some(member) = member else {
+          let detail = match pool.exhausted_message(&cfg, &backend_id) {
+            Ok(detail) => detail,
+            Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+          };
+          return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": detail }));
+        };
+        match crate::spawner_backends::pool_chosen_backend(&backend_id, &member) {
+          Ok(subagent) => Some(subagent),
+          Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
         }
       }
       RouteTarget::Backend(backend_id) => {
@@ -423,7 +428,12 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
         } else {
           BackendSource::Direct
         };
-        Some((backend_id, Some(option.model.clone()), source))
+        Some(SubagentBackend {
+          session_backend: backend_id.clone(),
+          run_backend: backend_id,
+          model: Some(option.model.clone()),
+          source,
+        })
       }
       RouteTarget::NotRouted => None,
     }
@@ -434,13 +444,12 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     Ok(Some(routed))
   } else if matches!(request.task_type, TaskType::Verify | TaskType::ColdRead) && named_backend.is_none() {
     let class = if request.task_type == TaskType::Verify { CallClass::Verify } else { CallClass::ColdRead };
-    let pooled = crate::spawner_backends::class_pool_id(&cfg, class).is_some();
+    let class_pool = crate::spawner_backends::class_pool_id(&cfg, class).map(str::to_string);
     crate::spawner_backends::select_verify_backend(&cfg, &features.store, &request.session_id, class, &[], &pool)
       .await
       .map(|resolved| {
         resolved.map(|(backend, model, _tried_backends)| {
-          let source = if pooled { BackendSource::Pool } else { BackendSource::Direct };
-          (backend, model, source)
+          crate::spawner_backends::class_selected_backend(&cfg, class_pool.as_deref(), backend, model)
         })
       })
   } else {
@@ -455,13 +464,12 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     .await
     .map(Some)
   };
-  let (resolved_backend, resolved_model, source) = match resolved {
-    Ok(Some(resolved)) => resolved,
+  let subagent = match resolved {
+    Ok(Some(subagent)) => subagent,
     Ok(None) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": "no backend is available" })),
     Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
   };
-  let delegated_backend = DelegateBackend { id: resolved_backend, model: resolved_model, source, route };
-  match delegate_task_tree(&features, &request, &caller_identity, &task_spec, &delegated_backend).await {
+  match delegate_task_tree(&features, &request, &caller_identity, &task_spec, &subagent, route.as_ref()).await {
     Ok(response) => responses::json(StatusCode::OK, &response),
     Err(DelegateError::Task(error)) => task_http_error(error),
     Err(DelegateError::Internal(error)) => responses::internal_error("RuntimeError", error),
@@ -477,13 +485,6 @@ enum DelegateError {
   AdapterMissing,
 }
 
-struct DelegateBackend {
-  id: String,
-  model: Option<String>,
-  source: BackendSource,
-  route: Option<charliebot_agents::backend_pool::BackendRoute>,
-}
-
 impl From<charliebot_store::StoreError> for DelegateError {
   fn from(error: charliebot_store::StoreError) -> Self {
     Self::Task(error)
@@ -495,7 +496,8 @@ async fn delegate_task_tree(
   request: &DelegateRequest,
   caller_identity: &CallerIdentity,
   task_spec: &TaskSpec,
-  backend: &DelegateBackend,
+  subagent: &SubagentBackend,
+  route: Option<&BackendRoute>,
 ) -> Result<Value, DelegateError> {
   let caller = match caller_identity {
     CallerIdentity::Operator { .. } => TaskCaller::Operator,
@@ -517,24 +519,24 @@ async fn delegate_task_tree(
     profile: TaskProfile::Worker,
     task: Some(task_spec.clone()),
     name,
-    backend: Some(backend.id.clone()),
+    backend: Some(subagent.session_backend.clone()),
     group: None,
     session_id: None,
   };
   features.store.runtime_gate(&create_request, &caller)?;
   let child = features.store.create_task(create_request, caller, Default::default()).await?;
-  if backend.source != BackendSource::Direct || backend.route.is_some() {
+  if subagent.source != BackendSource::Direct || route.is_some() {
     let mut slot_fields = serde_json::Map::from_iter([
       (
         charliebot_agents::backend_pool::BACKEND_FROM_POOL_FIELD.to_string(),
-        json!(backend.source == BackendSource::Pool),
+        json!(subagent.source == BackendSource::Pool),
       ),
       (
         charliebot_agents::backend_pool::BACKEND_FROM_AUTO_FIELD.to_string(),
-        json!(backend.source == BackendSource::PoolMember),
+        json!(subagent.source == BackendSource::PoolMember),
       ),
     ]);
-    if let Some(route) = backend.route.as_ref() {
+    if let Some(route) = route {
       slot_fields.insert("route".to_string(), json!(route));
     }
     let guard = features.store.control_lock().await;
@@ -566,8 +568,8 @@ async fn delegate_task_tree(
       prompt_snapshot_ref: None,
       retry_of_run_id: None,
       review_of_run_id: None,
-      backend: Some(backend.id.clone()),
-      model: backend.model.clone(),
+      backend: Some(subagent.run_backend.clone()),
+      model: subagent.model.clone(),
       native_session_id: None,
       pid: None,
       pid_start: None,
@@ -586,6 +588,12 @@ async fn delegate_task_tree(
     let task_spec_text = crate::execution::canonical_task_spec_text(Some(task_spec))
       .map_err(|error| DelegateError::Internal(error.to_string()))?;
     let guard = features.store.control_lock().await;
+    // A child that keeps a pool id records the member its work run launches on, under the lock that registers that run.
+    if subagent.session_backend != subagent.run_backend {
+      let member =
+        serde_json::Map::from_iter([(model_pool::POOL_MEMBER_FIELD.to_string(), json!(subagent.run_backend))]);
+      features.store.update_task_slot_fields_locked(&guard, &child.id, model_pool::OWNER, member).await?;
+    }
     features.store.register_run_locked(&guard, &child.id, record, task_spec_text.as_deref()).await?;
   }
   let adapter = features.startup.require::<TaskExecutionAdapter>().map_err(|_| DelegateError::AdapterMissing)?;
@@ -594,10 +602,10 @@ async fn delegate_task_tree(
     "type": charliebot_core::event_types::TASK_DELEGATED,
     "thread_id": run_id,
     "description": request.description,
-    "backend": backend.id,
-    "model": backend.model.as_deref().unwrap_or_default(),
+    "backend": subagent.run_backend,
+    "model": subagent.model.as_deref().unwrap_or_default(),
     "child_session_id": child.id,
-    "route": backend.route.as_ref(),
+    "route": route,
     charliebot_core::event_types::DELEGATE_INVOCATION: delegate_invocation_event_payload(request),
   });
   features.store.persist_and_broadcast(&request.session_id, task_event).await?;

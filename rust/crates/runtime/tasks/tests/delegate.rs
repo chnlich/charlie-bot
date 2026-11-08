@@ -23,8 +23,8 @@ use charliebot_tasks::prompts::MAX_AGENT_MESSAGE_WEIGHTED_CHARS;
 use charliebot_tasks::routes;
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
-  BACKEND_ID, BACKEND_TYPE, Scripts, Stack, cold_read_body, init_repo_with_origin, post_delegate, post_delegate_as,
-  post_internal, result_script, settle_until, write_sitrep,
+  BACKEND_ID, BACKEND_TYPE, ROTATION_POOL_ID, Scripts, Stack, cold_read_body, init_repo_with_origin, post_delegate,
+  post_delegate_as, post_internal, result_script, settle_until, write_sitrep,
 };
 use serde_json::{Map, Value, json};
 
@@ -149,10 +149,31 @@ async fn assert_launched_on(
   response: &Value,
   backend: &str,
 ) -> anyhow::Result<()> {
+  assert_first_run(stack, guard, response, backend, backend).await
+}
+
+/// A launched run routed through the pool: the child keeps the pool id and the first run launched on `member`.
+async fn assert_launched_in_pool(
+  stack: &Stack,
+  guard: &ProcessGroupGuard,
+  response: &Value,
+  member: &str,
+) -> anyhow::Result<()> {
+  assert_first_run(stack, guard, response, ROTATION_POOL_ID, member).await
+}
+
+/// The launched process is tracked; the child record names `child_backend` and the first run `run_backend`.
+async fn assert_first_run(
+  stack: &Stack,
+  guard: &ProcessGroupGuard,
+  response: &Value,
+  child_backend: &str,
+  run_backend: &str,
+) -> anyhow::Result<()> {
   let (session_id, run_id) = (text(response, "session_id")?, text(response, "run_id")?);
   track_launch(stack, guard, &session_id, &run_id).await?;
-  assert_eq!(session_of(stack, &session_id).await?.backend, backend, "the child record");
-  assert_eq!(run_of(stack, &session_id, &run_id)?.backend.as_deref(), Some(backend), "the first run");
+  assert_eq!(session_of(stack, &session_id).await?.backend, child_backend, "the child record");
+  assert_eq!(run_of(stack, &session_id, &run_id)?.backend.as_deref(), Some(run_backend), "the first run");
   Ok(())
 }
 
@@ -675,7 +696,7 @@ async fn delegate_child_and_its_later_runs_keep_the_requested_backend() -> anyho
   Ok(())
 }
 
-/// A verify without a backend takes the cross-model member, and the child record keeps the backend its first run got.
+/// A verify without a backend takes the cross-model member; the child record keeps the pool it was routed through.
 #[tokio::test]
 #[ignore = "integration"]
 async fn verify_delegate_child_records_the_cross_model_backend() -> anyhow::Result<()> {
@@ -686,12 +707,13 @@ async fn verify_delegate_child_records_the_cross_model_backend() -> anyhow::Resu
   let (status, response) = post_delegate(&routes::routes(&stack.features), verify_body(&manager.id)).await?;
   assert_eq!(status, StatusCode::OK, "{response}");
   let first = settled_verify_run(&stack, &response).await?;
-  assert_eq!(first.backend.as_deref(), Some("codex-o3"));
-  assert_eq!(Some(session_of(&stack, &text(&response, "session_id")?).await?.backend), first.backend);
+  assert_eq!(first.backend.as_deref(), Some("codex-o3"), "the first run");
+  assert_eq!(session_of(&stack, &text(&response, "session_id")?).await?.backend, ROTATION_POOL_ID, "the child record");
   Ok(())
 }
 
-/// An implement without a backend resolves to the parent's backend, and the child record keeps it.
+/// An implement without a backend takes the pool, which here holds the parent's backend. The child keeps the pool id,
+/// and the first run records the member.
 #[tokio::test]
 #[ignore = "integration"]
 async fn implement_delegate_without_backend_resolves_to_the_parent_backend() -> anyhow::Result<()> {
@@ -706,7 +728,7 @@ async fn implement_delegate_without_backend_resolves_to_the_parent_backend() -> 
   let (status, response) =
     post_delegate(&routes::routes(&stack.features), delegate_body(&manager.id, &repo, "implement")).await?;
   assert_eq!(status, StatusCode::OK, "{response}");
-  assert_launched_on(&stack, &guard, &response, "opus").await?;
+  assert_launched_in_pool(&stack, &guard, &response, "opus").await?;
   Ok(())
 }
 
@@ -726,7 +748,7 @@ async fn pool_runs_unnamed_workers_and_leaves_named_and_verify_routing() -> anyh
 
   let (status, unnamed) = post_delegate(&router, delegate_body(&manager.id, &repo, "implement")).await?;
   assert_eq!(status, StatusCode::OK, "{unnamed}");
-  assert_launched_on(&stack, &guard, &unnamed, "opus").await?;
+  assert_launched_in_pool(&stack, &guard, &unnamed, "opus").await?;
 
   let named = with_backend(delegate_body(&manager.id, &repo, "quick-edit"), "kimi-k2.5");
   let (status, named) = post_delegate(&router, named).await?;
@@ -735,7 +757,7 @@ async fn pool_runs_unnamed_workers_and_leaves_named_and_verify_routing() -> anyh
 
   let (status, verify) = post_delegate(&router, verify_body(&manager.id)).await?;
   assert_eq!(status, StatusCode::OK, "{verify}");
-  assert_launched_on(&stack, &guard, &verify, "codex-o3").await?;
+  assert_launched_in_pool(&stack, &guard, &verify, "codex-o3").await?;
   Ok(())
 }
 
@@ -795,7 +817,7 @@ async fn cold_read_delegation_from_a_manager_succeeds_without_takeoff() -> anyho
     })
   );
   assert!(task.repo_path.is_none() && task.base_branch.is_none());
-  assert_launched_on(&stack, &guard, &response, "alpha").await?;
+  assert_launched_in_pool(&stack, &guard, &response, "alpha").await?;
   Ok(())
 }
 

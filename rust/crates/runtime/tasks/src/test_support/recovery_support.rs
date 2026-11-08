@@ -77,9 +77,6 @@ use tower::ServiceExt;
 /// The backend type every synthetic option of these tests uses.
 pub const BACKEND_TYPE: &str = "recovery_script";
 
-/// The package that registers the `pool_member` session slot, as the server's runtime registration does.
-const AUTO_PACKAGE: (&str, RegisterFn) = ("features.model_pool", charliebot_agents::model_pool::register);
-
 /// The option the synthetic nodes are created with.
 pub const BACKEND_ID: &str = "fake";
 
@@ -344,6 +341,8 @@ fn registry(extra: Option<(&'static str, RegisterFn)>) -> anyhow::Result<Registr
   registry.register_package("test.synthetic_loop", register_loop_controller)?;
   registry.register_package("test.synthetic_probe", register_probe_controller)?;
   registry.register_package("features.backend_pool", charliebot_agents::backend_pool::register)?;
+  // The `pool_member` session slot, which the server registers at startup: a pool-chosen delegation writes it.
+  registry.register_package("features.model_pool", charliebot_agents::model_pool::register)?;
   if let Some((package, register)) = extra {
     registry.register_package(package, register)?;
   }
@@ -627,7 +626,7 @@ impl Stack {
     let home = tempfile::tempdir()?;
     let mut cfg = config(home.path(), options, pool, 0);
     cfg.backends.pools.push(auto);
-    Stack::assemble(Arc::new(home), cfg, registry(Some(AUTO_PACKAGE))?).await
+    Stack::assemble(Arc::new(home), cfg, registry(None)?).await
   }
 
   /// The stack of the next boot on an earlier home, whose backends carry the priority pool `auto`.
@@ -639,7 +638,7 @@ impl Stack {
   ) -> anyhow::Result<Stack> {
     let mut cfg = config(home.path(), options, pool, 0);
     cfg.backends.pools.push(auto);
-    Stack::assemble(home, cfg, registry(Some(AUTO_PACKAGE))?).await
+    Stack::assemble(home, cfg, registry(None)?).await
   }
 
   /// An agent environment whose PATH starts with the checkout's `gh` wrapper, as the server builds.

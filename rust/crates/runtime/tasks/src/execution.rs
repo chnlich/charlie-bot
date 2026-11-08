@@ -1877,7 +1877,12 @@ impl TaskExecutionAdapter {
       let mut excluded = vec![work_run.backend.clone().unwrap_or_default()];
       excluded.extend(used_backends.iter().cloned());
       excluded.extend(tried_backends.iter().cloned());
-      match pool.pick_ordered(&cfg, "reviewer", &route.backends, &excluded)? {
+      // A route that names a pool leaves the member to that pool; a route of options ids is ordered by its ids.
+      let picked = match route.backends.iter().find(|backend| cfg.backends.pool(backend).is_some()) {
+        Some(route_pool_id) => pool.select(&cfg, "reviewer", route_pool_id, &excluded)?,
+        None => pool.pick_ordered(&cfg, "reviewer", &route.backends, &excluded)?,
+      };
+      match picked {
         Some(option) => {
           let option = spawner_backends::resolve_backend_option(&cfg, &option.id, Some(&option.model))?;
           Some((option.id, Some(option.model), tried_backends.clone()))

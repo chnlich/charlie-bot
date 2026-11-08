@@ -684,7 +684,7 @@ async fn improve_controller_keeps_base_registry_lookups_and_skips_run_replay() -
 #[ignore = "integration"]
 async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Result<()> {
   let explicit = LoopHarness::new(&["fake"], &["other"], Vec::new()).await?;
-  let (backend, model, source) = spawner_backends::resolve_requested_subagent_backend_model(
+  let subagent = spawner_backends::resolve_requested_subagent_backend_model(
     &explicit.stack.cfg,
     explicit.stack.store(),
     &explicit.manager.id,
@@ -693,9 +693,10 @@ async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Res
     &test_pool(),
   )
   .await?;
-  assert_eq!(backend, "other");
-  assert_eq!(model.as_deref(), Some("other-model"));
-  assert_eq!(source, BackendSource::Direct);
+  assert_eq!(subagent.session_backend, "other");
+  assert_eq!(subagent.model.as_deref(), Some("other-model"));
+  assert_eq!(subagent.source, BackendSource::Direct);
+  let backend = subagent.session_backend;
   let explicit_child = sequence::create_improve_child(
     explicit.stack.store(),
     &explicit.manager.id,
@@ -710,7 +711,7 @@ async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Res
   drop(explicit);
 
   let inherited = LoopHarness::new(&[], &[], Vec::new()).await?;
-  let (backend, model, source) = spawner_backends::resolve_requested_subagent_backend_model(
+  let subagent = spawner_backends::resolve_requested_subagent_backend_model(
     &inherited.stack.cfg,
     inherited.stack.store(),
     &inherited.manager.id,
@@ -719,9 +720,10 @@ async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Res
     &test_pool(),
   )
   .await?;
-  assert_eq!(backend, "fake");
-  assert_eq!(model.as_deref(), Some("fake-model"));
-  assert_eq!(source, BackendSource::Direct);
+  assert_eq!(subagent.session_backend, "fake");
+  assert_eq!(subagent.model.as_deref(), Some("fake-model"));
+  assert_eq!(subagent.source, BackendSource::Direct);
+  let backend = subagent.session_backend;
   let inherited_child = sequence::create_improve_child(
     inherited.stack.store(),
     &inherited.manager.id,

@@ -64,8 +64,8 @@ Backend selection (--backend):
   when routing is unset or the router gives no answer, each task type runs on its backends.calls key.
   An unset key runs on the session backend; a pool key takes the next member that is not cooling, and
   verify skips the session backend. A worker out of quota continues on the next member in the same
-  worktree. An explicit --backend replaces that routing for every task type, verify included, and is
-  never failed over. The resolved backend runs every work Run of the worker session.
+  worktree. An explicit --backend replaces that routing for every task type, verify included. An options
+  id runs every work Run and is never failed over; a pool id runs the work on the member the pool selects.
 "#;
 
 const LONG_OPTIONS: [&str; 8] =

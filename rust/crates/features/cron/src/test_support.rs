@@ -61,12 +61,8 @@ pub fn feature_context_with_auto(members: &[&str]) -> (tempfile::TempDir, Arc<Fe
   feature_context_with_entries(&entries, Some(auto))
 }
 
-/// A manager session on `auto` whose current member is `member`, the shape a turn start leaves.
-pub async fn auto_manager(
-  features: &FeatureContext,
-  request_id: &str,
-  member: &str,
-) -> anyhow::Result<SessionMetadata> {
+/// A manager session on `auto` that records no member yet, the shape of a bound session before its first turn start.
+pub async fn auto_session(features: &FeatureContext, request_id: &str) -> anyhow::Result<SessionMetadata> {
   let session = features
     .store
     .create_task(
@@ -84,6 +80,16 @@ pub async fn auto_manager(
       Map::new(),
     )
     .await?;
+  Ok(session)
+}
+
+/// A manager session on `auto` whose current member is `member`, the shape a turn start leaves.
+pub async fn auto_manager(
+  features: &FeatureContext,
+  request_id: &str,
+  member: &str,
+) -> anyhow::Result<SessionMetadata> {
+  let session = auto_session(features, request_id).await?;
   features
     .store
     .update_slot_fields(

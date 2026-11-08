@@ -5,7 +5,7 @@
 //! event per change. Everything that reads "the session's model" reads that member through the resolver.
 
 use anyhow::anyhow;
-use charliebot_core::config::{AUTO_BACKEND_ID, AutoBilling, AutoConfig, AutoMember, CharlieBotConfig};
+use charliebot_core::config::{AUTO_BACKEND_ID, AutoBilling, AutoConfig, AutoMember, BackendOption, CharlieBotConfig};
 use charliebot_core::{event_types, metadata_slot};
 use charliebot_registry::backend::MemberReading;
 use charliebot_registry::context::FeatureContext;
@@ -98,6 +98,13 @@ pub fn require_auto(cfg: &CharlieBotConfig) -> anyhow::Result<&AutoConfig> {
   })
 }
 
+/// The backend option a member of the Auto set names, or the refusal that it names no `backends.options` id.
+pub fn member_option<'a>(cfg: &'a CharlieBotConfig, member: &AutoMember) -> anyhow::Result<&'a BackendOption> {
+  cfg
+    .get_backend_option(&member.backend)
+    .ok_or_else(|| anyhow!("backends.auto names backend '{}', which is not a backends.options id", member.backend))
+}
+
 /// Read one member's quota reading through its backend type's registered reader, or `None` when the type exposes none.
 pub fn member_reading(
   cfg: &CharlieBotConfig,
@@ -105,9 +112,7 @@ pub fn member_reading(
   member: &AutoMember,
   now: UtcDateTime,
 ) -> anyhow::Result<Option<MemberReading>> {
-  let option = cfg
-    .get_backend_option(&member.backend)
-    .ok_or_else(|| anyhow!("backends.auto names backend '{}', which is not a backends.options id", member.backend))?;
+  let option = member_option(cfg, member)?;
   match registry.member_reading_for(&option.backend_type) {
     Some(read) => read(cfg, option, now),
     None => Ok(None),
@@ -179,6 +184,17 @@ pub fn select_member(
   Ok(candidates.iter().find(|candidate| candidate.member.billing == AutoBilling::Payg).map(|c| c.member.clone()))
 }
 
+/// What a turn start decides for a session, before it records anything.
+enum TurnDecision {
+  /// The session keeps the member it records.
+  Keep(String),
+  /// The session moves to `member`, which the turn start records. `change` is the event to log; a first assignment
+  /// logs none.
+  Move { member: String, change: Option<MemberChange> },
+  /// No member is selectable: the turn ends with this error.
+  Exhausted(String),
+}
+
 /// Choose the member for a turn that is about to dispatch, record it, and return the change to log.
 ///
 /// A session that is not on `auto` is left alone. A session with no recorded member, or whose member is out, gets a
@@ -194,6 +210,40 @@ pub async fn start_turn(
   if meta.backend != AUTO_BACKEND_ID {
     return Ok(TurnStart::Kept);
   }
+  match decide_turn(features, cfg, meta)? {
+    TurnDecision::Keep(_) => Ok(TurnStart::Kept),
+    TurnDecision::Move { member, change } => {
+      record_member(features, meta, &member).await?;
+      Ok(change.map_or(TurnStart::Kept, TurnStart::Changed))
+    }
+    TurnDecision::Exhausted(message) => Ok(TurnStart::Exhausted(message)),
+  }
+}
+
+/// The member a turn of the session runs on, as the turn start decides it, read without recording anything. The cron
+/// host gate asks it before a fire, so the gate judges the member the fire then runs on. `None` for a session not on
+/// `auto`, and when no member is selectable: the turn then ends with the exhausted error and runs nothing.
+pub fn turn_member(
+  features: &FeatureContext,
+  cfg: &CharlieBotConfig,
+  meta: &SessionMetadata,
+) -> anyhow::Result<Option<String>> {
+  if meta.backend != AUTO_BACKEND_ID {
+    return Ok(None);
+  }
+  Ok(match decide_turn(features, cfg, meta)? {
+    TurnDecision::Keep(member) | TurnDecision::Move { member, .. } => Some(member),
+    TurnDecision::Exhausted(_) => None,
+  })
+}
+
+/// The turn start's decision for `meta`, computed without recording it. [`start_turn`] applies it and [`turn_member`]
+/// reads it, so both answer from the one selection path.
+fn decide_turn(
+  features: &FeatureContext,
+  cfg: &CharlieBotConfig,
+  meta: &SessionMetadata,
+) -> anyhow::Result<TurnDecision> {
   let auto = require_auto(cfg)?;
   let availability = backend_availability::backend_availability(features)?;
   let now = UtcDateTime::now();
@@ -206,43 +256,36 @@ pub async fn start_turn(
   if let Some(current) = &current
     && !is_out(&availability, current, now)
   {
-    return keep_or_switch(features, cfg, meta, auto, &availability, current, now).await;
+    return decide_keep_or_switch(features, cfg, auto, &availability, current, now);
   }
 
-  let selected = select_member(cfg, &features.registry, &availability, &[], now)?;
-  let Some(selected) = selected else { return Ok(TurnStart::Exhausted(all_exhausted_message(features, cfg)?)) };
-  if current.as_deref() == Some(selected.backend.as_str()) {
-    return Ok(TurnStart::Kept);
-  }
-  record_member(features, meta, &selected.backend).await?;
-  let Some(from) = current else {
-    // The first assignment is not a change between members, so it leaves no failover event.
-    return Ok(TurnStart::Kept);
+  let Some(selected) = select_member(cfg, &features.registry, &availability, &[], now)? else {
+    return Ok(TurnDecision::Exhausted(all_exhausted_message(features, cfg)?));
   };
-  Ok(TurnStart::Changed(MemberChange::at_turn_start(
-    from.clone(),
-    selected.backend,
-    event_types::QUOTA_REASON_QUOTA_ERROR,
-    availability.out_until_minutes(&from),
-  )))
+  // The first assignment is not a change between members, so it leaves no failover event. A current member that is out
+  // is never selected, so the selection always differs from it.
+  let change = current.map(|from| {
+    let recovers_at = availability.out_until_minutes(&from);
+    MemberChange::at_turn_start(from, selected.backend.clone(), event_types::QUOTA_REASON_QUOTA_ERROR, recovers_at)
+  });
+  Ok(TurnDecision::Move { member: selected.backend, change })
 }
 
 /// Apply the turn-start rules 2 and 3 to a session whose current member is selectable.
-async fn keep_or_switch(
+fn decide_keep_or_switch(
   features: &FeatureContext,
   cfg: &CharlieBotConfig,
-  meta: &mut SessionMetadata,
   auto: &AutoConfig,
   availability: &BackendAvailability,
   current: &str,
   now: UtcDateTime,
-) -> anyhow::Result<TurnStart> {
+) -> anyhow::Result<TurnDecision> {
   let Some(selected) = select_member(cfg, &features.registry, availability, &[], now)? else {
     // The member is selectable by its out record but spent by its reading, and no other member is left.
-    return Ok(TurnStart::Exhausted(all_exhausted_message(features, cfg)?));
+    return Ok(TurnDecision::Exhausted(all_exhausted_message(features, cfg)?));
   };
   if selected.backend == current {
-    return Ok(TurnStart::Kept);
+    return Ok(TurnDecision::Keep(selected.backend));
   }
   let current_member = auto.member(current).expect("the current member is in the configured set");
   let current_reading = member_reading(cfg, &features.registry, current_member, now)?;
@@ -261,10 +304,12 @@ async fn keep_or_switch(
       let reset = current_reading.as_ref().and_then(MemberReading::earliest_reset).map(format_minutes);
       (event_types::QUOTA_REASON_NEAR_EXHAUSTION, reset)
     } else {
-      return Ok(TurnStart::Kept);
+      return Ok(TurnDecision::Keep(current.to_string()));
     };
-  record_member(features, meta, &selected.backend).await?;
-  Ok(TurnStart::Changed(MemberChange::at_turn_start(current.to_string(), selected.backend, reason, recovers_at)))
+  Ok(TurnDecision::Move {
+    member: selected.backend.clone(),
+    change: Some(MemberChange::at_turn_start(current.to_string(), selected.backend, reason, recovers_at)),
+  })
 }
 
 /// The error that ends a turn when no member of the Auto set is selectable: one line per member, in config order. A
@@ -325,32 +370,26 @@ fn format_minutes(datetime: UtcDateTime) -> String {
   crate::backend_availability::format_minutes(datetime.into_inner())
 }
 
-/// The member a session records in `auto_member`, or `None` when it records none. A recorded member the config no
-/// longer offers is a refusal. This is the whole of how the set resolves to a member once a turn start has run; a
-/// read-only caller such as the cron host gate uses it to ask which backend a fire will run on.
-pub fn recorded_member(cfg: &CharlieBotConfig, meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
+/// The member a session on `auto` runs on now, for the resolver. Every turn records one before it runs, so a session
+/// on `auto` with no recorded member is a refusal, and a recorded member the config no longer offers is too.
+pub fn current_member_id(cfg: &CharlieBotConfig, meta: &SessionMetadata) -> anyhow::Result<String> {
   let auto = require_auto(cfg)?;
-  let Some(member) = meta.extra(AUTO_MEMBER_FIELD).and_then(Value::as_str).filter(|backend_id| !backend_id.is_empty())
-  else {
-    return Ok(None);
-  };
+  let member = meta
+    .extra(AUTO_MEMBER_FIELD)
+    .and_then(Value::as_str)
+    .filter(|backend_id| !backend_id.is_empty())
+    .ok_or_else(|| {
+      anyhow!(
+        "session backend '{AUTO_BACKEND_ID}' has no recorded {AUTO_MEMBER_FIELD}; turn start records one before every run"
+      )
+    })?;
   if auto.member(member).is_none() {
     return Err(anyhow!(
       "session backend '{AUTO_BACKEND_ID}' records {AUTO_MEMBER_FIELD} '{member}', which config.yaml backends.auto no \
        longer lists"
     ));
   }
-  Ok(Some(member.to_string()))
-}
-
-/// The member a session on `auto` runs on now, for the resolver. Every turn records one before it runs, so a session
-/// on `auto` with no recorded member is a refusal, and a recorded member the config no longer offers is too.
-pub fn current_member_id(cfg: &CharlieBotConfig, meta: &SessionMetadata) -> anyhow::Result<String> {
-  recorded_member(cfg, meta)?.ok_or_else(|| {
-    anyhow!(
-      "session backend '{AUTO_BACKEND_ID}' has no recorded {AUTO_MEMBER_FIELD}; turn start records one before every run"
-    )
-  })
+  Ok(member.to_string())
 }
 
 #[cfg(test)]
@@ -691,5 +730,27 @@ backends:
     let without_auto_cfg = loaded_cfg(&without_auto.1);
     let error = current_member_id(&without_auto_cfg, &meta).unwrap_err().to_string();
     assert!(error.contains("backends.auto"), "{error}");
+  }
+
+  #[tokio::test]
+  async fn turn_member_is_the_member_a_turn_start_records_and_a_read_records_nothing() {
+    let (_home, features) = fixture();
+    let cfg = loaded_cfg(&features);
+    let mut meta = auto_session(&features, "auto-turn-member").await;
+    assert_eq!(turn_member(&features, &cfg, &meta).unwrap().as_deref(), Some("chatgpt"));
+    let stored = features.store.read_metadata_fresh(&meta.id).unwrap().unwrap();
+    assert_eq!(stored.extra(AUTO_MEMBER_FIELD).and_then(Value::as_str), None, "a read records no member");
+
+    start_turn(&features, &cfg, &mut meta).await.unwrap();
+    assert_eq!(current_member_id(&cfg, &meta).unwrap(), "chatgpt");
+
+    availability(&features).record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    assert_eq!(turn_member(&features, &cfg, &meta).unwrap().as_deref(), Some("claude-sub"));
+    let stored = features.store.read_metadata_fresh(&meta.id).unwrap().unwrap();
+    assert_eq!(stored.extra(AUTO_MEMBER_FIELD), Some(&json!("chatgpt")), "a read leaves the recorded member in place");
+
+    let change = changed(start_turn(&features, &cfg, &mut meta).await.unwrap());
+    assert_eq!((change.from.as_str(), change.to.as_str()), ("chatgpt", "claude-sub"));
+    assert_eq!(current_member_id(&cfg, &meta).unwrap(), "claude-sub");
   }
 }

@@ -1,7 +1,7 @@
 //! The host gate of a scheduled task, and the Waiting on you items that the gate's hosts derive.
 //!
 //! A worker fire of a task whose backend names a host (`host_auth_alias`) probes that host before it creates a worker.
-//! A task on `auto` is judged on the member its bound session records, the backend the fire itself runs on.
+//! A task on `auto` is judged on the member its bound session's turn start selects, the backend the fire runs on.
 //! A host that awaits the user's approval holds the fire: the fire records one skip and starts nothing, and no session
 //! wakes. Nothing is stored for the hold. The Waiting on you read derives one user-act item per holder session and host
 //! from the host state and the enabled tasks. The item shows while the host awaits approval and is gone once it does
@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use anyhow::Context;
 use charliebot_agents::auto_backend;
 use charliebot_core::approval_policy::TIER_USER_ACT;
-use charliebot_core::config::{AUTO_BACKEND_ID, CharlieBotConfig};
+use charliebot_core::config::{AUTO_BACKEND_ID, BackendOption, CharlieBotConfig};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::registry::{HostLogin, OpenWaitingRow};
 use charliebot_store::metadata::UtcDateTime;
@@ -60,15 +60,21 @@ async fn task_host(
   let option = cfg
     .get_backend_option(&backend)
     .ok_or_else(|| anyhow::anyhow!("scheduled task '{}' backend '{backend}' is not configured", task.name))?;
+  option_host(features, option).map_err(|error| anyhow::anyhow!("scheduled task '{}': {error}", task.name))
+}
+
+/// The alias of the host that `option` logs into, from its backend type's `host_auth_alias`. `None` for a backend type
+/// that names no host.
+fn option_host(features: &FeatureContext, option: &BackendOption) -> Result<Option<String>, String> {
   let Some(read_alias) = features.registry.backend_host_alias_reader(&option.backend_type) else {
     return Ok(None);
   };
-  read_alias(&option.type_fields).map_err(|error| anyhow::anyhow!("scheduled task '{}': {error}", task.name))
+  read_alias(&option.type_fields)
 }
 
-/// The backend a fire of `task` runs on: the task's configured one, or for `auto` the member its bound session
-/// records, which is the same resolution the fire reads. `None` while an `auto` task has no bound session or that
-/// session has recorded no member yet, so the fire's host is not known and no hold derives.
+/// The backend a fire of `task` runs on: the task's configured one, or for `auto` the member that the turn start of its
+/// bound session selects, which is the member the fire then runs on. The selection is read without recording it. `None`
+/// when no member of the set names a host, and while an `auto` task has no bound session or no member to run on.
 async fn fire_backend_id(
   features: &FeatureContext,
   task: &ScheduledTaskConfig,
@@ -78,6 +84,9 @@ async fn fire_backend_id(
   if configured != AUTO_BACKEND_ID {
     return Ok(Some(configured));
   }
+  if !auto_members_name_host(features, cfg)? {
+    return Ok(None);
+  }
   let Some(bound) = task.session_id.as_deref() else {
     return Ok(None);
   };
@@ -86,7 +95,22 @@ async fn fire_backend_id(
     .load_meta(bound)
     .await?
     .with_context(|| format!("scheduled task '{}' bound session {bound} does not exist", task.name))?;
-  auto_backend::recorded_member(cfg, &meta).map_err(|error| anyhow::anyhow!("scheduled task '{}': {error}", task.name))
+  auto_backend::turn_member(features, cfg, &meta)
+    .map_err(|error| anyhow::anyhow!("scheduled task '{}': {error}", task.name))
+}
+
+/// Whether a member of the Auto set names a host. A set with none holds no fire, so an `auto` task then reads no
+/// member's quota.
+fn auto_members_name_host(features: &FeatureContext, cfg: &CharlieBotConfig) -> anyhow::Result<bool> {
+  for member in &auto_backend::require_auto(cfg)?.members {
+    let option = auto_backend::member_option(cfg, member)?;
+    let host = option_host(features, option)
+      .map_err(|error| anyhow::anyhow!("backends.auto member '{}': {error}", member.backend))?;
+    if host.is_some() {
+      return Ok(true);
+    }
+  }
+  Ok(false)
 }
 
 /// One user-act item per holder session and host that awaits approval, for each enabled task on that host whose bound
@@ -156,13 +180,14 @@ fn wait_row(holder_id: String, holder_name: String, login: &HostLogin) -> anyhow
 
 #[cfg(test)]
 mod tests {
+  use charliebot_agents::backend_availability;
   use charliebot_registry::registry::HostLogin;
   use charliebot_store::metadata::UtcDateTime;
   use serde_json::json;
 
   use super::derived_waiting_rows;
   use crate::test_support::{
-    archive_task, auto_manager, child_manager, feature_context_with_auto_host_backends,
+    archive_task, auto_manager, auto_session, child_manager, feature_context_with_auto_host_backends,
     feature_context_with_host_backends, manager, set_host_login, write_prompted_task,
   };
 
@@ -273,17 +298,46 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn an_auto_task_whose_session_records_no_member_derives_no_item_and_no_error() {
-    let (_home, features) =
-      feature_context_with_auto_host_backends(&[("synthetic-host", "synthetic-login-host")], &["synthetic-host"]);
+  async fn an_auto_task_with_no_recorded_member_is_gated_on_the_member_its_first_turn_selects() {
+    let (_home, features) = feature_context_with_auto_host_backends(
+      &[("synthetic-host", "synthetic-login-host")],
+      &["synthetic-host", "synthetic"],
+    );
     let home = features.config.get().unwrap().charliebot_home.clone();
-    let node = manager(&features, "auto-unrecorded-member").await.unwrap();
-    write_prompted_task(&home, "auto-unrecorded", &task(&node.id, "auto", true));
+    let node = auto_session(&features, "auto-first-fire").await.unwrap();
+    write_prompted_task(&home, "auto-first", &task(&node.id, "auto", true));
     set_host_login(&home, verdict("synthetic-login-host", "needs-interactive-auth", SINCE));
 
+    let rows = derived_waiting_rows(&features).await.unwrap();
+    assert_eq!(
+      rows.iter().map(|row| row.session_id.as_str()).collect::<Vec<_>>(),
+      [node.id.as_str()],
+      "the first turn start selects the first member, which names the host: {rows:?}"
+    );
+  }
+
+  #[tokio::test]
+  async fn an_auto_task_is_gated_on_the_member_its_turn_start_switches_to() {
+    let (_home, features) = feature_context_with_auto_host_backends(
+      &[("synthetic-host", "synthetic-login-host")],
+      &["synthetic-host", "synthetic"],
+    );
+    let home = features.config.get().unwrap().charliebot_home.clone();
+    let node = auto_manager(&features, "auto-out-member", "synthetic-host").await.unwrap();
+    write_prompted_task(&home, "auto-out", &task(&node.id, "auto", true));
+    set_host_login(&home, verdict("synthetic-login-host", "needs-interactive-auth", SINCE));
+
+    let rows = derived_waiting_rows(&features).await.unwrap();
+    assert_eq!(rows.len(), 1, "the recorded member runs the fire while it is selectable: {rows:?}");
+
+    backend_availability::backend_availability(&features)
+      .unwrap()
+      .record("synthetic-host", None, backend_availability::REASON_QUOTA_ERROR, "spent")
+      .unwrap();
+    let rows = derived_waiting_rows(&features).await.unwrap();
     assert!(
-      derived_waiting_rows(&features).await.unwrap().is_empty(),
-      "no member is recorded yet, so no host is gated and the read stays Ok"
+      rows.is_empty(),
+      "the recorded member is out, so the turn start switches the fire to 'synthetic', which names no host: {rows:?}"
     );
   }
 

@@ -152,6 +152,20 @@ fn file_uri(repo: &Path, path: &str, extra: &[(&str, &str)]) -> String {
   target("/api/git/diff/file", &params)
 }
 
+fn lines_uri(repo: &Path, path: &str, side: &str, start: &str, end: &str, extra: &[(&str, &str)]) -> String {
+  let mut params = vec![
+    ("repo", path_text(repo)),
+    ("base", "main"),
+    ("head", "feature"),
+    ("path", path),
+    ("side", side),
+    ("start", start),
+    ("end", end),
+  ];
+  params.extend_from_slice(extra);
+  target("/api/git/diff/lines", &params)
+}
+
 #[tokio::test]
 #[ignore = "integration"]
 async fn the_manifest_lists_each_changed_file_with_its_status_and_counts() {
@@ -220,6 +234,96 @@ async fn a_file_diff_returns_the_unified_diff_and_its_byte_count() {
   assert_eq!(data["path"], "keep.txt");
   assert!(data["diff"].as_str().unwrap().contains("line2 changed"));
   assert_eq!(data["size_bytes"], json!(data["diff"].as_str().unwrap().len()));
+  // The resolved revisions and line totals a client passes back to the lines read.
+  assert_eq!(data["head_sha"], git(&repo, &["rev-parse", "feature"]).trim());
+  assert_eq!(data["base_total"], json!(3));
+  assert_eq!(data["head_total"], json!(4));
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn the_lines_read_returns_the_requested_lines_of_a_file_at_a_revision() {
+  let dir = tempfile::tempdir().expect("a temp dir");
+  let repo = build_repo(dir.path());
+  let router = routes_for(&dir.path().join("home"), dir.path(), false);
+
+  let head = get(&router, &lines_uri(&repo, "keep.txt", "head", "2", "3", &[])).await;
+  assert_eq!(head.status, StatusCode::OK);
+  let data = head.json();
+  assert_eq!(data["path"], "keep.txt");
+  assert_eq!(data["side"], "head");
+  assert_eq!(data["start"], json!(2));
+  assert_eq!(data["end"], json!(3));
+  assert_eq!(data["total"], json!(4));
+  assert_eq!(data["lines"], json!([{"line": 2, "text": "line2 changed"}, {"line": 3, "text": "line3"}]));
+
+  let base = get(&router, &lines_uri(&repo, "keep.txt", "base", "1", "2", &[])).await.json();
+  assert_eq!(base["total"], json!(3));
+  assert_eq!(base["lines"], json!([{"line": 1, "text": "line1"}, {"line": 2, "text": "line2"}]));
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn the_lines_read_answers_the_merge_base_for_a_three_dot_range_and_the_tip_for_a_two_dot_range() {
+  let dir = tempfile::tempdir().expect("a temp dir");
+  let repo = build_repo(dir.path());
+  // main moves keep.txt past the fork point, so the two modes name different base revisions.
+  git(&repo, &["checkout", "-q", "main"]);
+  fs::write(repo.join("keep.txt"), "main rewrote line1\nline2\nline3\n").expect("the file writes");
+  git(&repo, &["add", "-A"]);
+  git(&repo, &["commit", "-qm", "main rewrites"]);
+  let router = routes_for(&dir.path().join("home"), dir.path(), false);
+
+  let three_dot = get(&router, &lines_uri(&repo, "keep.txt", "base", "1", "1", &[("mode", "three-dot")])).await.json();
+  assert_eq!(three_dot["lines"], json!([{"line": 1, "text": "line1"}]));
+  let two_dot = get(&router, &lines_uri(&repo, "keep.txt", "base", "1", "1", &[("mode", "two-dot")])).await.json();
+  assert_eq!(two_dot["lines"], json!([{"line": 1, "text": "main rewrote line1"}]));
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn an_end_past_the_file_answers_through_its_last_line() {
+  let dir = tempfile::tempdir().expect("a temp dir");
+  let repo = build_repo(dir.path());
+  let router = routes_for(&dir.path().join("home"), dir.path(), false);
+
+  let reply = get(&router, &lines_uri(&repo, "keep.txt", "head", "3", "99", &[])).await;
+  assert_eq!(reply.status, StatusCode::OK);
+  let data = reply.json();
+  assert_eq!(data["end"], json!(4));
+  assert_eq!(data["lines"], json!([{"line": 3, "text": "line3"}, {"line": 4, "text": "line4"}]));
+
+  let past = get(&router, &lines_uri(&repo, "keep.txt", "head", "9", "99", &[])).await.json();
+  assert_eq!(past["lines"], json!([]));
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_missing_path_in_the_lines_read_answers_404_naming_the_path() {
+  let dir = tempfile::tempdir().expect("a temp dir");
+  let repo = build_repo(dir.path());
+  let router = routes_for(&dir.path().join("home"), dir.path(), false);
+
+  let reply = get(&router, &lines_uri(&repo, "nope.txt", "head", "1", "1", &[])).await;
+  assert_eq!(reply.status, StatusCode::NOT_FOUND);
+  let data = reply.json();
+  let detail = data["detail"].as_str().expect("the detail is text");
+  assert!(detail.contains("nope.txt"), "detail: {detail}");
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_binary_file_in_the_lines_read_answers_400_naming_the_path() {
+  let dir = tempfile::tempdir().expect("a temp dir");
+  let repo = build_repo(dir.path());
+  fs::write(repo.join("blob.bin"), [b'a', 0, b'b']).expect("the file writes");
+  git(&repo, &["add", "-A"]);
+  git(&repo, &["commit", "-qm", "binary"]);
+  let router = routes_for(&dir.path().join("home"), dir.path(), false);
+
+  let reply = get(&router, &lines_uri(&repo, "blob.bin", "head", "1", "1", &[])).await;
+  assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+  assert_eq!(reply.json(), json!({"detail": "binary file: blob.bin"}));
 }
 
 #[tokio::test]
@@ -484,6 +588,36 @@ async fn a_missing_required_parameter_or_a_bad_mode_is_422_with_its_location() {
   assert_eq!(bad_force.status, StatusCode::UNPROCESSABLE_ENTITY);
   let entry = &bad_force.json()["detail"][0];
   assert_eq!((&entry["type"], &entry["loc"]), (&json!("bool_parsing"), &json!(["query", "force"])));
+
+  let bad_side = get(&router, &lines_uri(&repo, "keep.txt", "sideways", "1", "1", &[])).await;
+  assert_eq!(bad_side.status, StatusCode::UNPROCESSABLE_ENTITY);
+  let entry = &bad_side.json()["detail"][0];
+  assert_eq!((&entry["type"], &entry["loc"]), (&json!("literal_error"), &json!(["query", "side"])));
+
+  let missing_start = get(
+    &router,
+    &target(
+      "/api/git/diff/lines",
+      &[
+        ("repo", path_text(&repo)),
+        ("base", "main"),
+        ("head", "feature"),
+        ("path", "keep.txt"),
+        ("side", "head"),
+        ("end", "1"),
+      ],
+    ),
+  )
+  .await;
+  assert_eq!(missing_start.status, StatusCode::UNPROCESSABLE_ENTITY);
+  let entry = &missing_start.json()["detail"][0];
+  assert_eq!((&entry["type"], &entry["loc"]), (&json!("missing"), &json!(["query", "start"])));
+
+  let low_start = get(&router, &lines_uri(&repo, "keep.txt", "head", "0", "1", &[])).await;
+  assert_eq!(low_start.status, StatusCode::UNPROCESSABLE_ENTITY);
+  let entry = &low_start.json()["detail"][0];
+  assert_eq!((&entry["type"], &entry["loc"]), (&json!("greater_than_equal"), &json!(["query", "start"])));
+  assert_eq!(entry["ctx"]["ge"], json!(1));
 }
 
 #[tokio::test]

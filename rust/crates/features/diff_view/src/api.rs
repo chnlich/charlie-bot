@@ -1,5 +1,5 @@
-//! The `/api/git` routes: the branch list, the repository list, and the manifest and
-//! the diff of one range.
+//! The `/api/git` routes: the branch list, the repository list, and the manifest, the diff and the
+//! line spans of one range.
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -36,6 +36,8 @@ pub(crate) const BRANCH_MEMO_LIMIT: usize = 8;
 const BRANCH_LIMIT: usize = 50;
 const MODES: &[&str] = &["three-dot", "two-dot"];
 const DEFAULT_MODE: &str = "three-dot";
+/// The sides of a range a `/api/git/diff/lines` read takes.
+const SIDES: &[&str] = &["base", "head"];
 
 /// The repo, both resolved SHAs, the range mode and the `.gitattributes` signature.
 #[derive(Eq, Hash, PartialEq)]
@@ -95,11 +97,15 @@ pub(crate) fn router(state: Arc<GitState>) -> Router {
     .route("/api/git/repos", get_only(list_repos))
     .route("/api/git/diff/files", get_only(diff_files))
     .route("/api/git/diff/file", get_only(diff_file))
+    .route("/api/git/diff/lines", get_only(diff_lines))
     .with_state(state)
 }
 
 pub(crate) fn matches(path: &str) -> bool {
-  matches!(path, "/api/git/branches" | "/api/git/repos" | "/api/git/diff/files" | "/api/git/diff/file")
+  matches!(
+    path,
+    "/api/git/branches" | "/api/git/repos" | "/api/git/diff/files" | "/api/git/diff/file" | "/api/git/diff/lines"
+  )
 }
 
 /// `list_branches`: the repo's branch names, `HEAD` first, most recent commit first, at most 50.
@@ -179,6 +185,22 @@ async fn diff_file(State(state): State<Arc<GitState>>, Query(query): Query<Param
   }
 }
 
+/// `diff_lines`: the requested line span of one file at the range's base or head revision.
+async fn diff_lines(State(state): State<Arc<GitState>>, Query(query): Query<Params>) -> Response {
+  let mut errors = Vec::new();
+  let range = take_range(&query, &mut errors);
+  let path = take(params::text(&query, "path"), &mut errors);
+  let side = take(params::one_of(&query, "side", SIDES), &mut errors);
+  let start = take(params::uint(&query, "start", 1), &mut errors);
+  let end = take(params::uint(&query, "end", 1), &mut errors);
+  match (range, path, side, start, end) {
+    (Some(range), Some(path), Some(side), Some(start), Some(end)) => {
+      answer(lines_answer(&state, &range, &path, side, start, end).await)
+    }
+    _ => validation::response(&errors),
+  }
+}
+
 /// Reads the four parameters every diff route shares, in declaration order.
 fn take_range(query: &Params, errors: &mut Vec<validation::FieldError>) -> Option<Range> {
   let repo = take(params::text(query, "repo"), errors);
@@ -251,7 +273,85 @@ async fn file_answer(
   if !force && size_bytes > state.diff_cap {
     return Ok(json!({"too_large": true, "size_bytes": size_bytes, "path": path}));
   }
-  Ok(json!({"diff": diff, "path": path, "size_bytes": size_bytes}))
+  // The two revisions the served diff was built between. A client passes them back to `diff_lines`, whose read
+  // then answers the same file content the hunk headers name even after a ref moves.
+  let head_revision = head_sha.clone();
+  let base_revision =
+    if range.mode == "three-dot" { git::merge_base(&repo_path, &base_sha, &head_sha).await? } else { base_sha };
+  let base_path = old_path.filter(|old_path| !old_path.is_empty()).unwrap_or(path);
+  let base_total = revision_line_count(&repo_path, &base_revision, base_path).await?;
+  let head_total = revision_line_count(&repo_path, &head_revision, path).await?;
+  Ok(json!({
+    "diff": diff,
+    "path": path,
+    "size_bytes": size_bytes,
+    "base_sha": base_revision,
+    "head_sha": head_revision,
+    "base_total": base_total,
+    "head_total": head_total,
+  }))
+}
+
+/// `diff_lines`: the line span `start..=end` of `path` at the range's base or head revision. An `end` past the
+/// file's last line answers the lines through the end.
+async fn lines_answer(
+  state: &GitState,
+  range: &Range,
+  path: &str,
+  side: &str,
+  start: i64,
+  end: i64,
+) -> Result<Value, Response> {
+  let cfg = config(state)?;
+  let repo_path = resolve_repo(&range.repo, &cfg, &state.registry)?;
+  let revision = resolved_revision(&repo_path, range, side).await?;
+  let bytes = git::show_bytes(&repo_path, &revision, path).await?.ok_or_else(|| {
+    responses::http_exception_with_detail(StatusCode::NOT_FOUND, &format!("{path} does not exist at {revision}"))
+  })?;
+  if bytes.contains(&0) {
+    return Err(responses::http_exception_with_detail(StatusCode::BAD_REQUEST, &format!("binary file: {path}")));
+  }
+  let text = git::decode(&bytes)?;
+  let mut lines: Vec<&str> = text.split('\n').collect();
+  if lines.last() == Some(&"") {
+    lines.pop();
+  }
+  let total = lines.len() as i64;
+  let end = end.min(total);
+  let rows: Vec<Value> = if start <= end {
+    lines[(start - 1) as usize..end as usize]
+      .iter()
+      .enumerate()
+      .map(|(offset, line)| json!({"line": start + offset as i64, "text": line}))
+      .collect()
+  } else {
+    Vec::new()
+  };
+  Ok(json!({"path": path, "side": side, "start": start, "end": end, "total": total, "lines": rows}))
+}
+
+/// The revision a side's lines come from: the head commit, or for a three-dot range's base side, the merge base
+/// the range's diff diffs against.
+async fn resolved_revision(repo: &Path, range: &Range, side: &str) -> Result<String, Response> {
+  if side == "head" {
+    let shas = git::resolve_commits(repo, &[range.head.as_str()]).await?;
+    return shas.into_iter().next().ok_or_else(|| missing_commit(range.head.as_str()));
+  }
+  if range.mode == "three-dot" {
+    return git::merge_base(repo, &range.base, &range.head).await;
+  }
+  let shas = git::resolve_commits(repo, &[range.base.as_str()]).await?;
+  shas.into_iter().next().ok_or_else(|| missing_commit(range.base.as_str()))
+}
+
+/// The internal error for a `rev-parse` that answered fewer SHAs than it was given refs.
+fn missing_commit(reference: &str) -> Response {
+  responses::internal_error("ValueError", format!("git rev-parse answered no commit for {reference}"))
+}
+
+/// The line count of `path` at `revision`, 0 when the path is absent there.
+async fn revision_line_count(repo: &Path, revision: &str, path: &str) -> Result<usize, Response> {
+  Ok(git::show_bytes(repo, revision, path).await?.map(|bytes| git::count_lines(&bytes)).unwrap_or(0))
 }
 
 /// The repository `repo` names, resolved, when it holds `.git` and lies under a

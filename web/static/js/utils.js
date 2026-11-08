@@ -46,3 +46,27 @@ function dateClockMDHM(date) {
   return String(date.getMonth() + 1).padStart(2, '0') + '/' + String(date.getDate()).padStart(2, '0')
     + ' ' + clockTimeHM(date);
 }
+
+// ---------------------------------------------------------------------------
+// Feature scripts a page loads on first use
+// ---------------------------------------------------------------------------
+// A page carries most of its scripts in its document, but a feature the reader may never open carries its scripts as
+// files under /static and loads them from the click that first needs it. The page's own bytes are then the price of
+// the features the reader sees. One promise per key: a second click while the files travel joins the first load, and
+// a failed load drops its entry so the next click tries again.
+const pageScriptLoads = new Map();
+
+function loadPageScripts(key, paths) {
+  if (!pageScriptLoads.has(key)) {
+    const loading = paths.reduce((previous, path) => previous.then(() => new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = path + '?v=' + encodeURIComponent(STATIC_ASSET_VERSION);
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('the page script did not load: ' + path));
+      document.head.appendChild(script);
+    })), Promise.resolve());
+    pageScriptLoads.set(key, loading);
+    loading.catch(() => pageScriptLoads.delete(key));
+  }
+  return pageScriptLoads.get(key);
+}

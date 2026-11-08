@@ -63,12 +63,14 @@ const RUN_ON_SESSION: &str = "session";
 /// The name of the one question each choice asks Jev.
 const CHOICE_QUESTION: &str = "kind";
 
-/// The two Jev bounds that the caller's [`timeouts::ROUTER_TIMEOUT_SECONDS`] budget shapes: one attempt and the pause
-/// before the single retry after an HTTP 429. A timeout takes its retry at once. Tests inject smaller values so no test
-/// sleeps the real 10 s wait or waits out the real 5 s attempt.
+/// The bounds that the caller's [`timeouts::ROUTER_TIMEOUT_SECONDS`] budget shapes: the bound on the first attempt, the
+/// bound on the retry, and the pause before the retry after an HTTP 429. A timeout takes its retry at once. Production
+/// gives both attempts the one configured bound. Tests shorten the first attempt's bound, so an attempt they make time
+/// out costs little wall time, and keep the retry's bound generous, so the retry's answer never loses to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Limits {
   pub request_timeout: Duration,
+  pub retry_request_timeout: Duration,
   pub rate_limit_wait: Duration,
 }
 
@@ -100,6 +102,7 @@ pub fn main(args: &[OsString]) {
   }
   let limits = Limits {
     request_timeout: Duration::from_secs(timeouts::ROUTER_JEV_REQUEST_TIMEOUT),
+    retry_request_timeout: Duration::from_secs(timeouts::ROUTER_JEV_REQUEST_TIMEOUT),
     rate_limit_wait: Duration::from_secs(timeouts::ROUTER_JEV_RATE_LIMIT_WAIT),
   };
   match route(&raw, cli.config.as_deref(), &limits, &mut |pause| std::thread::sleep(pause)) {
@@ -507,20 +510,19 @@ fn post(
     .build()
     .map_err(|error| format!("{url}: request failed: {error}"))?;
   runtime.block_on(async {
+    // Redirects are not followed: an unexpected one surfaces as its status.
     let client = reqwest::Client::builder()
-      // Redirects are not followed: an unexpected one surfaces as its status.
       .redirect(reqwest::redirect::Policy::none())
-      .timeout(limits.request_timeout)
       .build()
       .map_err(|error| format!("{url}: request failed: {}", source_chain(&error)))?;
-    match one_attempt(&client, url, body, api_key).await {
+    match one_attempt(&client, url, body, api_key, limits.request_timeout).await {
       Attempt::Answered(payload) => Ok(JevReply { payload, retried_timeout: false }),
       Attempt::Failed(cause) => Err(format!("{url}: {cause}")),
       Attempt::RateLimited(_) => {
         sleep(limits.rate_limit_wait);
-        retried(&client, url, body, api_key, false).await
+        retried(&client, url, body, api_key, false, limits.retry_request_timeout).await
       }
-      Attempt::TimedOut(_) => retried(&client, url, body, api_key, true).await,
+      Attempt::TimedOut(_) => retried(&client, url, body, api_key, true, limits.retry_request_timeout).await,
     }
   })
 }
@@ -533,18 +535,26 @@ async fn retried(
   body: &Value,
   api_key: &str,
   absorbed_timeout: bool,
+  request_timeout: Duration,
 ) -> Result<JevReply, String> {
-  let cause = match one_attempt(client, url, body, api_key).await {
+  let cause = match one_attempt(client, url, body, api_key, request_timeout).await {
     Attempt::Answered(payload) => return Ok(JevReply { payload, retried_timeout: absorbed_timeout }),
     Attempt::Failed(cause) | Attempt::RateLimited(cause) | Attempt::TimedOut(cause) => cause,
   };
   Err(format!("{url}: the retry attempt failed: {cause}"))
 }
 
-/// One Jev request: send it, then read the body. A 429 and a timeout are reported apart from every other failure, so
-/// the caller can retry only those two.
-async fn one_attempt(client: &reqwest::Client, url: &str, body: &Value, api_key: &str) -> Attempt {
-  let response = match client.post(url).bearer_auth(api_key).json(body).send().await {
+/// One Jev request, bounded by `request_timeout`: send it, then read the body. A 429 and a timeout are reported apart
+/// from every other failure, so the caller can retry only those two.
+async fn one_attempt(
+  client: &reqwest::Client,
+  url: &str,
+  body: &Value,
+  api_key: &str,
+  request_timeout: Duration,
+) -> Attempt {
+  let request = client.post(url).bearer_auth(api_key).json(body).timeout(request_timeout);
+  let response = match request.send().await {
     Ok(response) => response,
     Err(error) => return failed_attempt(&error),
   };
@@ -645,15 +655,20 @@ mod tests {
   const DEFAULT_ROLES: &str =
     "roles:\n  implement: [routine, context]\n  quick-edit: [routine, context]\n  script-run: [routine, context]\n";
 
-  /// The bounds the tests inject: a real attempt bound that still outruns the stub, and a wait no
-  /// test sleeps out for real.
+  /// The bounds of a call whose attempts answer: the production bound, which no answer reaches even under load, and a
+  /// wait no test sleeps out for real.
   fn test_limits() -> Limits {
-    Limits { request_timeout: Duration::from_millis(50), rate_limit_wait: Duration::from_millis(20) }
+    Limits {
+      request_timeout: Duration::from_secs(timeouts::ROUTER_JEV_REQUEST_TIMEOUT),
+      retry_request_timeout: Duration::from_secs(timeouts::ROUTER_JEV_REQUEST_TIMEOUT),
+      rate_limit_wait: Duration::from_millis(20),
+    }
   }
 
-  /// A reply delay past the injected request timeout, so the attempt that asks for it times out.
+  /// A reply delay far past every bound the timeout tests inject, so the attempt that asks for it times out at its
+  /// bound under any load. The stub sleeps on its own thread; the test does not wait for it.
   fn past_the_timeout() -> Duration {
-    timeout_limits().request_timeout + Duration::from_millis(5)
+    Duration::from_secs(1)
   }
 
   /// Each test runs behind this ceiling so a hang fails the test instead of the suite.
@@ -711,9 +726,13 @@ mod tests {
             break;
           }
           let Ok(stream) = stream else { break };
-          // One thread per connection, so a delayed reply does not hold back the retried attempt.
+          // The script is taken in accept order, the order the router connected in, so a timed-out attempt keeps its
+          // own reply and delay even when its serve thread reads the request late. One thread per connection, so a
+          // delayed reply does not hold back the retried attempt.
+          let scripted = thread_shared.replies.lock().unwrap().pop_front();
+          let delay = thread_shared.delays.lock().unwrap().pop_front().unwrap_or_default();
           let shared = thread_shared.clone();
-          std::thread::spawn(move || serve(stream, &shared));
+          std::thread::spawn(move || serve(stream, &shared, scripted, delay));
         }
       });
       FakeJev {
@@ -765,7 +784,7 @@ mod tests {
   }
 
   /// One request = one connection: the stub answers with `Connection: close`.
-  fn serve(mut stream: TcpStream, shared: &Shared) {
+  fn serve(mut stream: TcpStream, shared: &Shared, scripted: Option<(u16, Value)>, delay: Duration) {
     let mut buffered = Vec::new();
     let header_end = loop {
       let mut chunk = [0u8; 4096];
@@ -809,8 +828,7 @@ mod tests {
       })
       .unwrap_or_default();
     shared.authorizations.lock().unwrap().push(authorization);
-    let (status, reply) = shared.replies.lock().unwrap().pop_front().expect("the test scripted one reply per request");
-    let delay = shared.delays.lock().unwrap().pop_front().unwrap_or_default();
+    let (status, reply) = scripted.expect("the test scripted one reply per request");
     std::thread::sleep(delay);
     let reply_body = serde_json::to_vec(&reply).unwrap();
     let response = format!(
@@ -893,11 +911,15 @@ mod tests {
     .unwrap()
   }
 
-  /// The bound a timeout test pays per timed-out attempt. The delayed reply always lands past it, so that
-  /// attempt times out on any host. The retried attempt is a plain local round trip that must finish inside
-  /// the same bound, so the bound sits well above what a loaded host needs for one.
+  /// The first attempt's bound in the timeout tests. It is short because a timed-out attempt pays it in full, and the
+  /// two-timeout test pays it twice. The timed-out attempt's reply waits [`past_the_timeout`], so only the bound decides
+  /// the timeout.
+  const TIMED_OUT_ATTEMPT_BOUND: Duration = Duration::from_millis(20);
+
+  /// Limits for a call whose first attempt times out. The retry keeps the generous bound, so the retry's answer, or
+  /// its 429, never loses to the short bound that makes the timeout cheap.
   fn timeout_limits() -> Limits {
-    Limits { request_timeout: Duration::from_millis(200), rate_limit_wait: test_limits().rate_limit_wait }
+    Limits { request_timeout: TIMED_OUT_ATTEMPT_BOUND, ..test_limits() }
   }
 
   fn run(home: &TestHome, payload: &str, jev: &FakeJev, replies: Vec<(u16, Value)>) -> Result<Value, String> {
@@ -1340,12 +1362,14 @@ mod tests {
     let payload = request("implement", "Add a test for the parser.", &STRONG, None);
     jev.delay_next(past_the_timeout());
     jev.delay_next(past_the_timeout());
+    // The retry times out as well, so both attempts pay the short bound.
+    let both_short = Limits { retry_request_timeout: TIMED_OUT_ATTEMPT_BOUND, ..timeout_limits() };
     let error = run_with_limits(
       &home,
       &payload,
       &jev,
       vec![jev_reply("routine", 0.9, 0.1), jev_reply("routine", 0.9, 0.1)],
-      &timeout_limits(),
+      &both_short,
     )
     .unwrap_err();
 

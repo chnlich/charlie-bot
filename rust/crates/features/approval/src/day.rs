@@ -41,6 +41,15 @@ pub fn parse_date_param(text: &str) -> Result<Date, DayError> {
   })
 }
 
+/// The key of the day body's ranked queue: the open items, T0 first.
+pub const QUEUE: &str = "queue";
+
+/// The key of the day body's login sheet: the day's open user-act items.
+pub const LOGIN_SHEET: &str = "login_sheet";
+
+/// The key of the day body's digest: the day's digest entries and change records.
+pub const DIGEST: &str = "digest";
+
 /// A day view: the Pacific day it renders, the Pacific day it read as today, and the JSON the API answers. The page
 /// uses `today` to refresh only today's view when its tab becomes visible again.
 pub struct DayView {
@@ -79,9 +88,9 @@ pub(crate) async fn approval_day_view_at(
   let digest = digest_rows(&home, date)?;
   let body = json!({
     "date": date_text(date),
-    "queue": queue,
-    "login_sheet": login_sheet,
-    "digest": digest,
+    (QUEUE): queue,
+    (LOGIN_SHEET): login_sheet,
+    (DIGEST): digest,
   });
   Ok(DayView { date, today, body })
 }

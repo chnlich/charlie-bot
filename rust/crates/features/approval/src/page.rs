@@ -64,9 +64,9 @@ fn render(features: &FeatureContext, view: DayView, request: &Parts) -> Result<R
       "previous": previous.to_string(),
       "next": next.to_string(),
       "is_today": view.date == view.today,
-      "queue": view.body["queue"],
-      "login_sheet": view.body["login_sheet"],
-      "digest": view.body["digest"],
+      (day::QUEUE): view.body[day::QUEUE],
+      (day::LOGIN_SHEET): view.body[day::LOGIN_SHEET],
+      (day::DIGEST): view.body[day::DIGEST],
     },
   });
   templating

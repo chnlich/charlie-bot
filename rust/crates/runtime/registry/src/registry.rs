@@ -32,7 +32,7 @@ use crate::route_claims::RouteClaims;
 use crate::sequence::{SequenceBinding, SequenceController};
 use crate::sidebar::SidebarContribution;
 use crate::startup_stop::StartupStop;
-use crate::usage::{QuotaAccount, SourceSweep, SweepScope, UsageSource};
+use crate::usage::{MemberReading, QuotaAccount, SourceSweep, SweepScope, UsageSource};
 /// A package's `register` function: the package's contributions, made through the registry's typed methods.
 pub type RegisterFn = fn(&mut Registry) -> Result<(), RegistryError>;
 
@@ -586,35 +586,6 @@ pub type ReadingLimitsFn = fn(RunKind) -> ContextLimits;
 
 /// A reading kind's limits from one backend option (`register_backend_reading_limits`).
 pub type BackendReadingLimitsFn = fn(&BackendOption, RunKind) -> ContextLimits;
-
-/// One quota window of a member's reading, with its utilization in `0..=1`, its length when the backend states one,
-/// and the reset the backend states for it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct MemberWindow {
-  pub utilization: f64,
-  pub window_minutes: Option<i64>,
-  pub resets_at: Option<UtcDateTime>,
-}
-
-/// One backend member's quota reading: the windows the backend reports, the weekly window's reset, and the two
-/// decisions the reading's provider derives from them.
-#[derive(Clone, Debug, PartialEq)]
-pub struct MemberReading {
-  pub windows: Vec<MemberWindow>,
-  /// The reset of the member's weekly (longest) window, when the provider reports one.
-  pub weekly_resets_at: Option<UtcDateTime>,
-  /// A window is at or above the 90% line, and that window's reset is more than 45 minutes away or is not stated.
-  pub near_exhaustion: bool,
-  /// A live window is at 100%, and its reset is not stated or has not passed.
-  pub exhausted: bool,
-}
-
-impl MemberReading {
-  /// The earliest reset any window states.
-  pub fn earliest_reset(&self) -> Option<UtcDateTime> {
-    self.windows.iter().filter_map(|window| window.resets_at).min()
-  }
-}
 
 /// The reader of one backend option's quota state now, or `None` when the backend exposes no reading
 /// (`register_member_reading`). A member with no reading counts as under the 90% line until its first quota error.

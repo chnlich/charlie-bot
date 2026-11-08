@@ -20,8 +20,8 @@ commands live only in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
   gate).
 - `rust-lint` runs clippy over all targets with warnings as errors, and the formatter check.
 
-The other CI jobs — the PR-contract check with its Python guard, and the frontend suite — run in the same workflow; the
-integration suites run from `.github/workflows/integration.yml`.
+The other CI jobs — the PR-contract check and the frontend suite, which runs the no-Python guard — run in the same
+workflow; the integration suites run from `.github/workflows/integration.yml`.
 
 ## Run
 

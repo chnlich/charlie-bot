@@ -1,11 +1,11 @@
 # CharlieBot
 
 CharlieBot is a self-hosted agent system for real work: you chat with a master agent, it plans the
-job, delegates it to worker agents that each work in an isolated git worktree, and every result a
-worker produces is verified by a reviewer agent before it lands on the base branch. The whole tree
-runs on your own machine, across pluggable LLM CLI backends, and is operated through a web UI.
+job, delegates it to worker agents that each work in an isolated git worktree, and a reviewer agent
+checks the result before it lands on the base branch. The whole tree runs on your own machine,
+across pluggable LLM CLI backends, and is operated through a web UI.
 Steps that should not happen silently — publishing, sending in your name, spending money — pass an
-approval policy, and every approval is recorded in a daily digest.
+approval policy, and the steps the agent proceeds with on its own are recorded in a daily digest.
 
 ## How it works
 
@@ -111,8 +111,9 @@ The screenshots are generated from fabricated demo data by [`dev/readme-screensh
 
 ## Quick start
 
-You need git, and Node.js to run the frontend JavaScript tests. Build the server and CLI from
-`rust/` with the Rust toolchain (1.99), or install the release that CI built for a `main` commit:
+You need git to clone this repository, and Node.js to run the frontend JavaScript tests. Build the
+server and CLI from `rust/` with the Rust toolchain (1.99), or install the release that CI built for
+a `main` commit:
 
 ```bash
 scripts/release.sh <full main commit>   # download, trial and install the release CI built; prints the switch command

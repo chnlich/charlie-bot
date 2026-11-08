@@ -864,33 +864,6 @@ backends:
       members: [spent, payg-a, chatgpt]
 ";
 
-  /// `CONFIG` in the transitional mapping form: the priority members carry `billing`, and the options carry none.
-  const LEGACY_CONFIG: &str = "\
-backends:
-  options:
-    - {id: chatgpt, label: ChatGPT, type: synthetic, model: model-gpt}
-    - {id: claude-sub, label: Claude, type: synthetic, model: model-claude}
-    - {id: near, label: Near, type: synthetic, model: model-near}
-    - {id: spent, label: Spent, type: synthetic, model: model-spent}
-    - {id: devin, label: Devin, type: synthetic, model: model-devin}
-    - {id: payg-a, label: Payg A, type: synthetic, model: model-payg}
-  pools:
-    - id: auto
-      label: Auto
-      rule: priority
-      members:
-        - {backend: chatgpt, billing: subscription}
-        - {backend: claude-sub, billing: subscription}
-        - {backend: near, billing: subscription}
-        - {backend: spent, billing: subscription}
-        - {backend: devin, billing: subscription}
-        - {backend: payg-a, billing: payg}
-    - id: light
-      label: Light
-      rule: rotate
-      members: [spent, payg-a, chatgpt]
-";
-
   /// The priority pool `auto` over five subscriptions, for the tests that count the sessions each member holds.
   const ROTATION_CONFIG: &str = "\
 backends:
@@ -987,20 +960,18 @@ backends:
     positions(features).select(&selection).unwrap().map(|member| member.backend)
   }
 
-  /// The same facts pick the same members under the option form and the transitional mapping form.
+  /// The priority pool picks subscription members first, and the pay-as-you-go member only as the last resort.
   #[tokio::test]
   async fn subscription_tiers_precede_pay_as_you_go() {
-    for config in [CONFIG, LEGACY_CONFIG] {
-      let (_home, features) = fixture_with(config);
-      // Trade-off 3's example: ChatGPT (20% left, 6h), Claude (51%, 2 days), Devin (no reading).
-      assert_eq!(pick(&features, "auto", &[]), Some("chatgpt".to_string()));
-      assert_eq!(pick(&features, "auto", &["chatgpt"]), Some("claude-sub".to_string()));
-      assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub"]), Some("devin".to_string()));
-      // A subscription at or above the line is the last resort, before the first pay-as-you-go member.
-      assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub", "devin"]), Some("near".to_string()));
-      assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub", "devin", "near"]), Some("payg-a".to_string()));
-      assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub", "devin", "near", "payg-a"]), None);
-    }
+    let (_home, features) = fixture();
+    // Trade-off 3's example: ChatGPT (20% left, 6h), Claude (51%, 2 days), Devin (no reading).
+    assert_eq!(pick(&features, "auto", &[]), Some("chatgpt".to_string()));
+    assert_eq!(pick(&features, "auto", &["chatgpt"]), Some("claude-sub".to_string()));
+    assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub"]), Some("devin".to_string()));
+    // A subscription at or above the line is the last resort, before the first pay-as-you-go member.
+    assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub", "devin"]), Some("near".to_string()));
+    assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub", "devin", "near"]), Some("payg-a".to_string()));
+    assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub", "devin", "near", "payg-a"]), None);
   }
 
   #[tokio::test]

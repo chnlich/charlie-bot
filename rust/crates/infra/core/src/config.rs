@@ -844,7 +844,7 @@ fn parse_backends(
   value: Option<Value>,
   backend_types: &[&str],
 ) -> Result<BackendsConfig, ConfigError> {
-  let mut mapping = match value {
+  let mapping = match value {
     None => {
       return Ok(BackendsConfig {
         routing: None,
@@ -869,7 +869,7 @@ fn parse_backends(
   }
   let routing: Option<RoutingConfig> =
     typed_section(config_path, "backends.routing", mapping.get("routing").cloned(), || None)?;
-  let mut options = match mapping.get("options") {
+  let options = match mapping.get("options") {
     None => Vec::new(),
     Some(Value::Sequence(entries)) => entries
       .iter()
@@ -883,85 +883,10 @@ fn parse_backends(
       )));
     }
   };
-  if let Some(pools) = mapping.get_mut("pools") {
-    read_legacy_member_billing(config_path, pools, &mut options)?;
-  }
   let pools = parse_pools(config_path, mapping.get("pools"))?;
   check_pools(config_path, &pools, &options)?;
   let calls = parse_calls(config_path, mapping.get("calls"), &pools, &options)?;
   Ok(BackendsConfig { routing, options, pools, calls })
-}
-
-/// Transitional reader, for one release: a priority pool's member may still be written `{backend, billing}`, the form
-/// from before `billing` moved onto `backends.options`. Its billing becomes the option's billing, and the member is
-/// rewritten to the option id it names, so [`parse_pool`] reads ids alone. Two pools that give one option different
-/// billings, or a billing that differs from the option's own, refuse the file.
-///
-/// The release after the switch deletes this function and its call in [`parse_backends`]. Nothing else depends on it.
-fn read_legacy_member_billing(
-  config_path: &str,
-  pools: &mut Value,
-  options: &mut [BackendOption],
-) -> Result<(), ConfigError> {
-  #[derive(Deserialize)]
-  #[serde(deny_unknown_fields)]
-  struct PriorityMember {
-    backend: String,
-    billing: PoolBilling,
-  }
-
-  let Value::Sequence(entries) = pools else {
-    return Ok(());
-  };
-  // The billing each option takes from a mapping member, in config order, with the pool that gave it.
-  let mut given: Vec<(String, PoolBilling, String)> = Vec::new();
-  for (index, entry) in entries.iter_mut().enumerate() {
-    let Some(pool_id) = entry.get("id").and_then(Value::as_str).map(str::to_string) else {
-      continue;
-    };
-    if entry.get("rule").and_then(Value::as_str) != Some("priority") {
-      continue;
-    }
-    let Some(Value::Sequence(members)) = entry.get_mut("members") else {
-      continue;
-    };
-    for (member_index, member) in members.iter_mut().enumerate() {
-      if !member.is_mapping() {
-        continue;
-      }
-      let location = format!("backends.pools[{index}].members[{member_index}]");
-      let PriorityMember { backend, billing } = deserialize_at(config_path, &location, member.clone())?;
-      match given.iter().find(|(option_id, _, _)| *option_id == backend) {
-        Some((_, first, first_pool)) if *first != billing => {
-          return Err(ConfigError(format!(
-            "{config_path}: backend '{backend}' has conflicting billing: pool '{first_pool}' gives '{}', pool \
-             '{pool_id}' gives '{}'",
-            first.key(),
-            billing.key()
-          )));
-        }
-        Some(_) => {}
-        None => given.push((backend.clone(), billing, pool_id.clone())),
-      }
-      *member = Value::String(backend);
-    }
-  }
-  for (backend, billing, pool_id) in given {
-    let Some(option) = options.iter_mut().find(|option| option.id == backend) else {
-      continue;
-    };
-    match option.billing {
-      Some(declared) if declared != billing => {
-        return Err(ConfigError(format!(
-          "{config_path}: backend '{backend}' has billing '{}' in backends.options, but pool '{pool_id}' gives '{}'",
-          declared.key(),
-          billing.key()
-        )));
-      }
-      _ => option.billing = Some(billing),
-    }
-  }
-  Ok(())
 }
 
 /// The `backends.pools` list. Each member is a `backends.options` id under either rule.
@@ -1512,10 +1437,10 @@ mod tests {
   fn a_pool_member_that_is_a_pool_id_fails_loading() {
     let home = home_with(
       &[
-        TWO_OPTIONS,
+        TWO_BILLED_OPTIONS,
         concat!(
           "  pools:\n",
-          "    - {id: auto, label: Auto, rule: priority, members: [{backend: a, billing: payg}]}\n",
+          "    - {id: auto, label: Auto, rule: priority, members: [a]}\n",
           "    - {id: light, label: Light, rule: rotate, members: [auto]}\n",
         ),
       ]
@@ -1543,49 +1468,6 @@ mod tests {
   }
 
   #[test]
-  fn a_legacy_mapping_member_applies_its_billing_to_the_option_and_reads_as_an_id() {
-    let home = home_with(&format!(
-      "{TWO_OPTIONS}  pools:\n    - {{id: auto, label: Auto, rule: priority, members: [{{backend: a, billing: \
-       subscription}}, {{backend: b, billing: payg}}]}}\n"
-    ));
-    let cfg = load(&home).unwrap();
-    assert_eq!(member_ids(cfg.backends.pool("auto").unwrap()), ["a", "b"]);
-    assert_eq!(billing_of(&cfg, "a"), Some(PoolBilling::Subscription));
-    assert_eq!(billing_of(&cfg, "b"), Some(PoolBilling::Payg));
-  }
-
-  #[test]
-  fn a_legacy_mapping_that_agrees_with_the_option_and_with_other_pools_loads() {
-    let home = home_with(&format!(
-      "{TWO_BILLED_OPTIONS}  pools:\n    - {{id: auto, label: Auto, rule: priority, members: [{{backend: a, billing: \
-       subscription}}]}}\n    - {{id: review, label: Review, rule: priority, members: [{{backend: a, billing: \
-       subscription}}]}}\n"
-    ));
-    let cfg = load(&home).unwrap();
-    assert_eq!(billing_of(&cfg, "a"), Some(PoolBilling::Subscription));
-  }
-
-  #[test]
-  fn conflicting_billings_refuse_the_file_naming_the_option_and_both_values() {
-    for (options, pools, expected) in [
-      (
-        TWO_BILLED_OPTIONS,
-        "  pools:\n    - {id: auto, label: Auto, rule: priority, members: [{backend: a, billing: payg}]}\n",
-        "backend 'a' has billing 'subscription' in backends.options, but pool 'auto' gives 'payg'",
-      ),
-      (
-        TWO_OPTIONS,
-        "  pools:\n    - {id: auto, label: Auto, rule: priority, members: [{backend: a, billing: subscription}]}\n    \
-         - {id: review, label: Review, rule: priority, members: [{backend: a, billing: payg}]}\n",
-        "backend 'a' has conflicting billing: pool 'auto' gives 'subscription', pool 'review' gives 'payg'",
-      ),
-    ] {
-      let error = load(&home_with(&format!("{options}{pools}"))).unwrap_err().to_string();
-      assert!(error.contains(expected), "{expected}: {error}");
-    }
-  }
-
-  #[test]
   fn each_call_key_refuses_an_unknown_value_an_unknown_key_and_a_session_it_does_not_allow() {
     for (fragment, expected) in [
       (
@@ -1604,35 +1486,50 @@ mod tests {
 
   #[test]
   fn each_malformed_pool_entry_refuses_by_name() {
-    for (fragment, expected) in [
-      ("  pools:\n    - {id: p, label: P, rule: weekly, members: [a]}\n", "backends.pools[0].rule: unknown variant"),
+    for (options, fragment, expected) in [
       (
-        "  pools:\n    - {id: p, label: P, rule: priority, members: [{backend: a}]}\n",
-        "backends.pools[0].members[0]: missing field `billing`",
+        TWO_OPTIONS,
+        "  pools:\n    - {id: p, label: P, rule: weekly, members: [a]}\n",
+        "backends.pools[0].rule: unknown variant",
       ),
       (
-        "  pools:\n    - {id: p, label: P, rule: rotate, members: [{backend: a, billing: payg}]}\n",
+        TWO_OPTIONS,
+        "  pools:\n    - {id: p, label: P, rule: priority, members: [{backend: a, billing: payg}]}\n",
         "backends.pools[0].members[0]: a pool member is a backends.options id, got a mapping",
       ),
-      ("  pools:\n    - {id: p, label: P, rule: rotate, members: []}\n", "backends.pools[0].members lists no member"),
       (
-        "  pools:\n    - {id: p, label: P, rule: priority, members: [{backend: a, billing: payg}, \
-         {backend: a, billing: payg}]}\n",
+        TWO_OPTIONS,
+        "  pools:\n    - {id: p, label: P, rule: rotate, members: []}\n",
+        "backends.pools[0].members lists no member",
+      ),
+      (
+        TWO_BILLED_OPTIONS,
+        "  pools:\n    - {id: p, label: P, rule: priority, members: [a, a]}\n",
         "backends.pools[0].members[1]: backend 'a' appears twice",
       ),
       (
+        TWO_OPTIONS,
         "  pools:\n    - {id: p, label: P, rule: rotate, members: [ghost]}\n",
         "backends.pools[0].members[0]: backend 'ghost' is not a backends.options id",
       ),
-      ("  pools:\n    - {id: a, label: P, rule: rotate, members: [a]}\n", "id 'a' is already a backends.options id"),
-      ("  pools:\n    - {id: session, label: P, rule: rotate, members: [a]}\n", "id 'session' is reserved"),
       (
+        TWO_OPTIONS,
+        "  pools:\n    - {id: a, label: P, rule: rotate, members: [a]}\n",
+        "id 'a' is already a backends.options id",
+      ),
+      (
+        TWO_OPTIONS,
+        "  pools:\n    - {id: session, label: P, rule: rotate, members: [a]}\n",
+        "id 'session' is reserved",
+      ),
+      (
+        TWO_OPTIONS,
         "  pools:\n    - {id: p, label: P, rule: rotate, members: [a]}\n    - {id: p, label: P, \
          rule: rotate, members: [a]}\n",
         "backends.pools[1]: id 'p' is already another pool id",
       ),
     ] {
-      let error = load(&home_with(&format!("{TWO_OPTIONS}{fragment}"))).unwrap_err().to_string();
+      let error = load(&home_with(&format!("{options}{fragment}"))).unwrap_err().to_string();
       assert!(error.contains(expected), "{expected}: {error}");
     }
   }

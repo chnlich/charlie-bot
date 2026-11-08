@@ -27,16 +27,19 @@ fn router() -> Router {
 }
 
 async fn get_ext_usage() -> Response {
-  responses::json(StatusCode::OK, &snapshot(panel(), UtcDateTime::now()))
+  match snapshot(panel(), UtcDateTime::now()) {
+    Ok(snapshot) => responses::json(StatusCode::OK, &snapshot),
+    Err(error) => responses::json(StatusCode::INTERNAL_SERVER_ERROR, &json!({"error": format!("{error:#}")})),
+  }
 }
 
 /// The body `get_ext_usage` answers with: the error text while the panel holds no entry, else the annotated providers.
-fn snapshot(panel: &Panel, now: UtcDateTime) -> Value {
-  let providers = panel.annotated(now);
+fn snapshot(panel: &Panel, now: UtcDateTime) -> anyhow::Result<Value> {
+  let providers = panel.annotated(now)?;
   if providers.is_empty() {
-    return json!({"error": "Usage data not yet available"});
+    return Ok(json!({"error": "Usage data not yet available"}));
   }
-  json!({"providers": providers})
+  Ok(json!({"providers": providers}))
 }
 
 #[cfg(test)]
@@ -49,7 +52,7 @@ mod tests {
 
   #[test]
   fn an_empty_panel_answers_the_not_yet_available_error() {
-    let body = snapshot(&Panel::default(), UtcDateTime::now());
+    let body = snapshot(&Panel::default(), UtcDateTime::now()).unwrap();
     assert_eq!(body, json!({"error": "Usage data not yet available"}));
   }
 

@@ -79,7 +79,7 @@ fn register_test_sources(registry: &mut Registry) -> Result<(), RegistryError> {
     name: "opencode",
     id_prefixes: &["opencode-", "oc-"],
     run_logs_only: false,
-    implementation: Some(Arc::new(OpencodeLogs::new(hosts.opencode_db, PathBuf::from("/proc")))),
+    implementation: Some(Arc::new(OpencodeLogs::new(hosts.opencode_db, PathBuf::from("/proc"), Arc::default()))),
   })
 }
 

@@ -1,4 +1,7 @@
 .provider-pill { flex: 0 0 auto; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+.provider-devin { background: #713f12; color: #fde68a; }
+.provider-opencode { background: #164e63; color: #67e8f9; }
+.provider-antigravity { background: #581c87; color: #d8b4fe; }
 @media (max-width: 768px) {
   #ext-usage-strip [data-field$="-reset"] { display: none; }  /* hide verbose reset timestamps */
   #ext-usage-strip .w-24 { width: 4rem; }  /* shrink bars from w-24 (6rem) to 4rem */

@@ -50,6 +50,7 @@ pub const QUOTA_ERROR_PATTERNS: &[&str] = &[
   "tokens exhausted",
   "quota",
   "rate limit",
+  "limit will reset",
   "usage limit",
   "budget has been exceeded",
 ];

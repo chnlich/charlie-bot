@@ -76,7 +76,9 @@ function _sampledAtMs(providerData) {
   return _parseTimestampMs(providerData.fetched_at);
 }
 
-function _windowLabel(windowMinutes) {
+function _windowLabel(win) {
+  if (typeof win.window_name === 'string' && win.window_name !== '') return win.window_name;
+  const windowMinutes = win.window_minutes;
   if (!Number.isFinite(windowMinutes) || windowMinutes <= 0) return '?';
   if (windowMinutes % 1440 === 0) return (windowMinutes / 1440) + 'd';
   if (windowMinutes % 60 === 0) return (windowMinutes / 60) + 'h';
@@ -213,13 +215,16 @@ function _bucketFieldPrefix(displayLabel) {
 }
 
 function _buildBucket(row, win, providerData) {
-  const label = _windowLabel(win.window_minutes);
+  const label = _windowLabel(win);
   const scopeLabel = win.scope_label;
   const scoped = typeof scopeLabel === 'string' && scopeLabel !== '';
   const displayLabel = label + (scoped ? ' ' + scopeLabel : '') + ':';
   const fieldPrefix = _bucketFieldPrefix(displayLabel);
   const group = _el('div', 'flex items-center gap-1.5');
   const lbl = _el('span', '');
+  if (typeof win.window_name === 'string' && win.window_name !== '') {
+    lbl.setAttribute('data-window-name', win.window_name);
+  }
   lbl.textContent = displayLabel;
   group.appendChild(lbl);
   const barWrap = _el('div', 'w-24 h-1.5 bg-slate-700 rounded-full overflow-hidden');
@@ -317,6 +322,25 @@ function _buildStatusRow(key, providerData, field, text) {
   note.textContent = text;
   row.appendChild(note);
   return {row: row, buckets: [], asOfEl: null};
+}
+
+function _buildMemberStatusRows(key, providerData) {
+  if (!Array.isArray(providerData.status_rows)) return [];
+  return providerData.status_rows.map((status, index) => {
+    const row = _el('div', 'flex items-center gap-1.5 pl-4 text-slate-300');
+    row.setAttribute('data-key', key + ':status:' + index);
+    row.setAttribute('data-state', status.state);
+    if (status.resets_at) row.setAttribute('data-resets-at', status.resets_at);
+    const label = _el('span', 'text-slate-200 font-medium');
+    label.setAttribute('data-field', 'member-name');
+    label.textContent = status.name;
+    row.appendChild(label);
+    const note = _el('span', 'text-slate-400');
+    note.setAttribute('data-field', 'member-state');
+    note.textContent = status.state === 'cooling' ? 'cooling until ' + status.resets_at : 'available';
+    row.appendChild(note);
+    return row;
+  });
 }
 
 function _buildRow(key, providerData) {
@@ -487,6 +511,7 @@ function renderExtUsage(data) {
   for (const [key, providerData] of Object.entries(providers)) {
     const built = _buildRow(key, providerData);
     nodes.push(built.row);
+    nodes.push(..._buildMemberStatusRows(key, providerData));
     if (built.buckets.length > 0 || built.asOfEl) {
       rows.push({providerData: providerData, buckets: built.buckets, asOfEl: built.asOfEl});
     }

@@ -603,9 +603,9 @@ pub struct MemberReading {
   pub windows: Vec<MemberWindow>,
   /// The reset of the member's weekly (longest) window, when the provider reports one.
   pub weekly_resets_at: Option<UtcDateTime>,
-  /// Every healthy login or window sits at or above the 90% line and the earliest reset is beyond the horizon.
+  /// A window is at or above the 90% line, and that window's reset is more than 45 minutes away or is not stated.
   pub near_exhaustion: bool,
-  /// The member has no capacity left: no healthy login with headroom, or a window at 100%.
+  /// A live window is at 100%, and its reset is not stated or has not passed.
   pub exhausted: bool,
 }
 
@@ -711,9 +711,17 @@ pub const AGENTS_INSTRUCTIONS_FILE_NAME: &str = "AGENTS.md";
 pub const CLAUDE_INSTRUCTIONS_FILE_NAME: &str = "CLAUDE.md";
 
 /// The per-process pieces of the backend template method. The runner in `charliebot-agents` drives them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetryAfter {
+  /// The minimum duration before a retry may start.
+  pub after: Duration,
+  /// The absolute reset stated by the backend, or calculated from its relative reset text.
+  pub resets_at: time::OffsetDateTime,
+}
+
 pub trait AgentBackend: Send {
-  /// The reset duration stated by a retryable backend error, or `None` when it has no supported retry reset.
-  fn retry_after(&self, _error_text: &str) -> Option<Duration> {
+  /// The reset stated by a retryable backend error, or `None` when it has no supported reset form.
+  fn retry_after(&self, _error_text: &str) -> Option<RetryAfter> {
     None
   }
 

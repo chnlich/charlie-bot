@@ -12,9 +12,12 @@ use anyhow::Context;
 use charliebot_agents::cli_base::{CapturedEvents, finished, framed_prompt};
 use charliebot_agents::event_builders::make_error_event;
 use charliebot_core::str_methods;
-use charliebot_registry::backend::{AgentBackend, Env, FinalStdoutOutcome, LaunchArgs, Translate, TransportKind};
+use charliebot_registry::backend::{
+  AgentBackend, Env, FinalStdoutOutcome, LaunchArgs, RetryAfter, Translate, TransportKind,
+};
 use regex::Regex;
 use serde_json::Value;
+use time::{Date, Month, OffsetDateTime, Time};
 
 use super::export;
 
@@ -27,6 +30,12 @@ static RETRYABLE_ERROR_KEY: LazyLock<Regex> = LazyLock::new(|| {
 });
 static RESET_SECONDS: LazyLock<Regex> = LazyLock::new(|| {
   Regex::new(r"(?i)\breset in\s+(\d+)\s+seconds\b").expect("the Devin reset-duration pattern is valid")
+});
+static RESET_DAILY: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(
+    r"(?i)\breset in\s+(\d+)\s+hours?\s+(\d+)\s+minutes?\s+\(at\s+([A-Za-z]{3})\s+(\d{1,2})\s+(\d{2}):(\d{2})\s+UTC\)",
+  )
+  .expect("the Devin daily-reset pattern is valid")
 });
 
 /// The `devin --print` backend of one launch.
@@ -103,7 +112,7 @@ impl DevinBackend {
 }
 
 impl AgentBackend for DevinBackend {
-  fn retry_after(&self, error_text: &str) -> Option<Duration> {
+  fn retry_after(&self, error_text: &str) -> Option<RetryAfter> {
     retry_after_error(error_text)
   }
 
@@ -157,12 +166,56 @@ fn nonzero_exit_message(stderr: &str, exit_code: i32) -> String {
   }
 }
 
-fn retry_after_error(error_text: &str) -> Option<Duration> {
+fn retry_after_error(error_text: &str) -> Option<RetryAfter> {
+  retry_after_error_at(error_text, OffsetDateTime::now_utc())
+}
+
+fn retry_after_error_at(error_text: &str, now: OffsetDateTime) -> Option<RetryAfter> {
   if !RETRYABLE_ERROR_KEY.is_match(error_text) {
     return None;
   }
-  let seconds = RESET_SECONDS.captures(error_text)?.get(1)?.as_str().parse().ok()?;
-  Some(Duration::from_secs(seconds))
+  if let Some(captures) = RESET_DAILY.captures(error_text) {
+    let hours = captures.get(1)?.as_str().parse::<u64>().ok()?;
+    let minutes = captures.get(2)?.as_str().parse::<u64>().ok()?;
+    let seconds = hours.checked_mul(3600)?.checked_add(minutes.checked_mul(60)?)?;
+    let after = Duration::from_secs(seconds);
+    let expected = now.checked_add(time::Duration::try_from(after).ok()?)?;
+    let month = month(captures.get(3)?.as_str())?;
+    let day = captures.get(4)?.as_str().parse::<u8>().ok()?;
+    let hour = captures.get(5)?.as_str().parse::<u8>().ok()?;
+    let minute = captures.get(6)?.as_str().parse::<u8>().ok()?;
+    let resets_at = [now.year() - 1, now.year(), now.year() + 1]
+      .into_iter()
+      .filter_map(|year| {
+        let date = Date::from_calendar_date(year, month, day).ok()?;
+        let time = Time::from_hms(hour, minute, 0).ok()?;
+        Some(date.with_time(time).assume_utc())
+      })
+      .min_by_key(|candidate| (candidate.unix_timestamp() - expected.unix_timestamp()).abs())?;
+    return Some(RetryAfter { after, resets_at });
+  }
+  let seconds = RESET_SECONDS.captures(error_text)?.get(1)?.as_str().parse::<u64>().ok()?;
+  let after = Duration::from_secs(seconds);
+  let resets_at = now.checked_add(time::Duration::try_from(after).ok()?)?;
+  Some(RetryAfter { after, resets_at })
+}
+
+fn month(name: &str) -> Option<Month> {
+  match name.to_ascii_lowercase().as_str() {
+    "jan" => Some(Month::January),
+    "feb" => Some(Month::February),
+    "mar" => Some(Month::March),
+    "apr" => Some(Month::April),
+    "may" => Some(Month::May),
+    "jun" => Some(Month::June),
+    "jul" => Some(Month::July),
+    "aug" => Some(Month::August),
+    "sep" => Some(Month::September),
+    "oct" => Some(Month::October),
+    "nov" => Some(Month::November),
+    "dec" => Some(Month::December),
+    _ => None,
+  }
 }
 
 #[cfg(test)]
@@ -332,12 +385,31 @@ mod tests {
   "cognition.ai/errorKind": "unavailable",
   "cognition.ai/retryable": true
 }"#;
-    assert_eq!(retry_after_error(incident), Some(Duration::from_secs(22)));
+    assert_eq!(retry_after_error(incident).map(|retry| retry.after), Some(Duration::from_secs(22)));
     assert_eq!(retry_after_error(r#"Reached free model rate limit. reset in 22 seconds."#), None);
     assert_eq!(retry_after_error(r#"{"cognition.ai/retryable": true} Reached free model rate limit."#), None);
     assert_eq!(
-      retry_after_error(r#"{"cognition.ai/retryable": true} reset in 600 seconds."#),
+      retry_after_error(r#"{"cognition.ai/retryable": true} reset in 600 seconds."#).map(|retry| retry.after),
       Some(Duration::from_secs(600))
+    );
+  }
+
+  #[test]
+  fn the_daily_reset_keeps_its_absolute_time_separate_from_the_wait_duration() {
+    use time::format_description::well_known::Rfc3339;
+
+    let now = OffsetDateTime::parse("2026-11-07T08:19:00Z", &Rfc3339).unwrap();
+    let incident = r#"Your limit will reset in 15 hours 42 minutes (at Nov 8 00:01 UTC).: {
+  "cognition.ai/errorKind": "unavailable",
+  "cognition.ai/retryable": true
+}"#;
+
+    let retry = retry_after_error_at(incident, now).unwrap();
+
+    assert_eq!(retry.after, Duration::from_secs(15 * 60 * 60 + 42 * 60));
+    assert_eq!(
+      charliebot_store::metadata::UtcDateTime::from(retry.resets_at),
+      charliebot_store::metadata::UtcDateTime::parse("2026-11-08T00:01:00Z").unwrap()
     );
   }
 

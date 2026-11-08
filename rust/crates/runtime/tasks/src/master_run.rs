@@ -603,18 +603,16 @@ impl RunProcess for TurnProcess<'_> {
                   Some(message) => runner.retry_after(message).await,
                   None => None,
                 };
-                let retry_after = retry_after.filter(|delay| backend_retry::waits(self.automatic_retries, *delay));
+                self.quota_resets_at = retry_after.map(|retry| retry.resets_at);
+                let retry_after = retry_after.filter(|retry| backend_retry::waits(self.automatic_retries, retry.after));
                 crate::midturn_delivery::record_ack(
                   &mut self.item.user_event_ids,
                   &self.item.task_run.run_id,
                   &stream_event.event,
                 )?;
                 match (failure_message, retry_after) {
-                  (Some(message), Some(delay)) => {
-                    self.quota_resets_at = time::Duration::try_from(delay)
-                      .ok()
-                      .and_then(|delay| time::OffsetDateTime::now_utc().checked_add(delay));
-                    retry_candidate = Some((stream_event.event.clone(), message, delay));
+                  (Some(message), Some(retry)) => {
+                    retry_candidate = Some((stream_event.event.clone(), message, retry.after));
                   }
                   (failure_message, _) => {
                     if let Some(message) = failure_message {

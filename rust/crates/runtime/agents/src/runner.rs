@@ -11,7 +11,7 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{
-  AgentBackend, Env, ExitedProbe, LaunchArgs, ServeTransport, ServeTurnArgs, TransportKind,
+  AgentBackend, Env, ExitedProbe, LaunchArgs, RetryAfter, ServeTransport, ServeTurnArgs, TransportKind,
 };
 use charliebot_store::run_records::{RAW_LOG_NAME, STDERR_LOG_NAME};
 use futures_util::future::BoxFuture;
@@ -169,7 +169,7 @@ impl AgentRunner {
   }
 
   /// Ask the backend whether an error text states a retry reset.
-  pub async fn retry_after(&self, error_text: &str) -> Option<Duration> {
+  pub async fn retry_after(&self, error_text: &str) -> Option<RetryAfter> {
     self.backend.lock().await.retry_after(error_text)
   }
 

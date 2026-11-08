@@ -12,6 +12,8 @@ use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 
+use crate::backend::{MemberReading, MemberWindow};
+
 /// Keys of the quota panel payload and of one window in it (`usage_sources.PANEL_*`). The producers, the usage page
 /// and the browser share them.
 pub const PANEL_WINDOWS: &str = "windows";
@@ -25,6 +27,8 @@ pub const PANEL_UTILIZATION: &str = "utilization";
 pub const PANEL_RESETS_AT: &str = "resets_at";
 pub const PANEL_SCOPE_LABEL: &str = "scope_label";
 pub const PANEL_EXPIRED: &str = "expired";
+pub const PANEL_WINDOW_NAME: &str = "window_name";
+pub const PANEL_STATUS_ROWS: &str = "status_rows";
 
 /// The label a quota source gives the account that its config does not name. The producer's label and its provider
 /// form the `<provider>:<label>` cache key of one account.
@@ -33,7 +37,8 @@ pub const DEFAULT_ACCOUNT_LABEL: &str = "main";
 /// The utilization at and above which a quota account or Auto member is at the warning line.
 pub const WARNING_UTILIZATION: f64 = 0.90;
 
-/// A near-exhausted member whose earliest reset lies inside this horizon is not worth switching away from.
+/// A member is near exhaustion when a window at or above the 90% line resets more than this far ahead, or has no stated
+/// reset.
 pub const NEAR_EXHAUSTION_RESET_HORIZON: time::Duration = time::Duration::minutes(45);
 
 /// The length of the weekly quota window, in minutes: the seven-day window each backend's quota panel states with
@@ -98,9 +103,53 @@ pub fn mark_expired_windows(
   marked
 }
 
+/// Derive the Auto member reading from the same windows the usage panel displays.
+/// Windows outside the sample's live period do not participate in the reading.
+pub fn member_reading_from_windows(
+  windows: &[Value],
+  sampled: UtcDateTime,
+  now: UtcDateTime,
+) -> anyhow::Result<Option<MemberReading>> {
+  let now_inner = now.into_inner();
+  let near_horizon = now_inner + NEAR_EXHAUSTION_RESET_HORIZON;
+  let mut member_windows = Vec::new();
+  for window in windows.iter().filter(|window| !panel_window_expired(window, sampled, now)) {
+    let object = window.as_object().ok_or_else(|| anyhow::anyhow!("a quota panel window is not an object"))?;
+    let utilization = object
+      .get(PANEL_UTILIZATION)
+      .and_then(Value::as_f64)
+      .ok_or_else(|| anyhow::anyhow!("a quota panel window has no numeric utilization"))?
+      / 100.0;
+    let window_minutes = object.get(PANEL_WINDOW_MINUTES).and_then(Value::as_i64);
+    let resets_at = object
+      .get(PANEL_RESETS_AT)
+      .and_then(Value::as_str)
+      .filter(|reset| !reset.is_empty())
+      .map(UtcDateTime::parse)
+      .transpose()?;
+    member_windows.push(MemberWindow { utilization, window_minutes, resets_at });
+  }
+  if member_windows.is_empty() {
+    return Ok(None);
+  }
+
+  let weekly_resets_at = member_windows
+    .iter()
+    .find(|window| window.window_minutes == Some(WEEKLY_WINDOW_MINUTES))
+    .and_then(|window| window.resets_at);
+  let exhausted = member_windows
+    .iter()
+    .any(|window| window.utilization >= 1.0 && window.resets_at.is_none_or(|reset| reset.into_inner() >= now_inner));
+  let near_exhaustion = member_windows.iter().any(|window| {
+    window.utilization >= WARNING_UTILIZATION && window.resets_at.is_none_or(|reset| reset.into_inner() > near_horizon)
+  });
+
+  Ok(Some(MemberReading { windows: member_windows, weekly_resets_at, near_exhaustion, exhausted }))
+}
+
 /// One place usage is logged. `name` is the ledger's source value and the usage page's card title. A config backend
-/// id must start with one of `id_prefixes`. `run_logs_only` means CharlieBot's own run logs are the only home, and
-/// such a source has no implementation.
+/// id must start with one of `id_prefixes`. `run_logs_only` means CharlieBot's own run logs are the only source of
+/// token usage; the source may still implement quota-panel reads.
 pub struct UsageSource {
   pub name: &'static str,
   pub id_prefixes: &'static [&'static str],
@@ -203,8 +252,8 @@ pub trait QuotaAccount: Send + Sync {
   /// The `login_required` flag on the cached entry, set or cleared after each fetch of this account.
   fn mark_login_required(&self, _entry: &mut Map<String, Value>) {}
   /// The entry as one emit shows it at `now`. Never writes into `entry`.
-  fn mark_expired(&self, entry: &Map<String, Value>, _now: UtcDateTime) -> Map<String, Value> {
-    entry.clone()
+  fn mark_expired(&self, entry: &Map<String, Value>, _now: UtcDateTime) -> anyhow::Result<Map<String, Value>> {
+    Ok(entry.clone())
   }
 }
 
@@ -284,5 +333,100 @@ impl SweepScope {
       }
     }
     backend_sessions
+  }
+}
+
+#[cfg(test)]
+mod member_reading_tests {
+  use serde_json::json;
+
+  use super::*;
+
+  fn time_at(offset_seconds: i64) -> UtcDateTime {
+    let now = UtcDateTime::parse("2026-11-07T08:19:00Z").unwrap().into_inner();
+    UtcDateTime::from(now + time::Duration::seconds(offset_seconds))
+  }
+
+  fn window(utilization: f64, reset_seconds: Option<i64>, minutes: Option<i64>) -> Value {
+    let mut window = Map::from_iter([(PANEL_UTILIZATION.to_string(), json!(utilization))]);
+    if let Some(minutes) = minutes {
+      window.insert(PANEL_WINDOW_MINUTES.to_string(), json!(minutes));
+    }
+    if let Some(reset_seconds) = reset_seconds {
+      window.insert(PANEL_RESETS_AT.to_string(), Value::String(time_at(reset_seconds).to_str()));
+    }
+    Value::Object(window)
+  }
+
+  #[test]
+  fn the_weekly_reset_is_read_from_the_seven_day_window() {
+    let now = time_at(0);
+    let reading = member_reading_from_windows(
+      &[window(10.0, Some(20 * 60), Some(300)), window(97.0, Some(14 * 24 * 60 * 60), Some(WEEKLY_WINDOW_MINUTES))],
+      now,
+      now,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(reading.near_exhaustion);
+    assert!(!reading.exhausted);
+    assert_eq!(reading.weekly_resets_at, Some(time_at(14 * 24 * 60 * 60)));
+  }
+
+  #[test]
+  fn a_monthly_window_uses_its_own_reset_for_near_exhaustion() {
+    let now = time_at(0);
+    let reading = member_reading_from_windows(
+      &[window(10.0, Some(20 * 60), Some(300)), window(97.0, Some(14 * 24 * 60 * 60), None)],
+      now,
+      now,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(reading.near_exhaustion);
+  }
+
+  #[test]
+  fn a_window_at_one_hundred_percent_with_a_future_reset_is_exhausted() {
+    let now = time_at(0);
+    let reading =
+      member_reading_from_windows(&[window(100.0, Some(2 * 24 * 60 * 60), Some(300))], now, now).unwrap().unwrap();
+
+    assert!(reading.exhausted);
+  }
+
+  #[test]
+  fn a_window_that_resets_within_forty_five_minutes_is_not_near_exhaustion() {
+    let now = time_at(0);
+    let reading = member_reading_from_windows(&[window(92.0, Some(20 * 60), Some(300))], now, now).unwrap().unwrap();
+
+    assert!(!reading.near_exhaustion);
+  }
+
+  #[test]
+  fn a_fully_used_window_whose_reset_passed_is_not_exhausted() {
+    let sampled = time_at(0);
+    let now = time_at(60);
+    let reading = member_reading_from_windows(&[window(100.0, Some(-300), Some(300))], sampled, now).unwrap().unwrap();
+
+    assert!(!reading.exhausted);
+  }
+
+  #[test]
+  fn a_window_at_the_warning_line_without_a_reset_is_near_exhaustion() {
+    let now = time_at(0);
+    let reading = member_reading_from_windows(&[window(92.0, None, None)], now, now).unwrap().unwrap();
+
+    assert!(reading.near_exhaustion);
+  }
+
+  #[test]
+  fn expired_windows_do_not_produce_a_member_reading() {
+    let now = time_at(0);
+    let sampled = time_at(-120);
+
+    assert_eq!(member_reading_from_windows(&[window(100.0, Some(-60), Some(300))], sampled, now).unwrap(), None);
   }
 }

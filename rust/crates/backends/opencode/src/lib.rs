@@ -7,6 +7,7 @@ pub mod relay;
 pub(crate) mod server;
 mod sqlite;
 pub mod usage_logs;
+mod usage_quota;
 pub mod usage_sweep;
 
 #[cfg(test)]
@@ -89,11 +90,13 @@ pub fn register_usage_source(registry: &mut Registry) -> Result<(), RegistryErro
 /// The usage-source registration that [`register_usage_source`] performs, over an explicit database and process root
 /// for the writer count.
 fn register_source(registry: &mut Registry, db: PathBuf, proc_root: PathBuf) -> Result<(), RegistryError> {
+  let quota_state = Arc::new(usage_quota::OpenCodeQuotaState::default());
+  registry.member_reading("opencode", usage_quota::OpenCodeQuotaState::member_reading(Arc::clone(&quota_state)))?;
   registry.usage_source(UsageSource {
     name: USAGE_SOURCE,
     id_prefixes: &["opencode-", "oc-"],
     run_logs_only: false,
-    implementation: Some(Arc::new(OpencodeLogs::new(db, proc_root))),
+    implementation: Some(Arc::new(OpencodeLogs::new(db, proc_root, quota_state))),
   })?;
   registry.attribute_backend_type("opencode", USAGE_SOURCE)
 }
@@ -194,7 +197,7 @@ pub(crate) mod tests {
     assert!(!source.run_logs_only);
     assert_eq!(
       source.implementation.as_ref().unwrap().ops(),
-      UsageOps { logs: true, read: true, live_cli_sessions: false, quota_accounts: false, sweep: true }
+      UsageOps { logs: true, read: true, live_cli_sessions: false, quota_accounts: true, sweep: true }
     );
   }
 }

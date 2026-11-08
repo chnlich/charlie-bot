@@ -2997,6 +2997,10 @@ const DEVIN_INCIDENT: &str = r#"Error: Agent error: Reached free model rate limi
   "cognition.ai/errorKind": "unavailable",
   "cognition.ai/retryable": true
 }"#;
+const DEVIN_DAILY_RESET: &str = r#"Error: Agent error: Your limit will reset in 15 hours 42 minutes (at Nov 8 00:01 UTC).: {
+  "cognition.ai/errorKind": "unavailable",
+  "cognition.ai/retryable": true
+}"#;
 
 thread_local! {
   /// The fake Devin host of the next `test.devin` registration. The test sets it just before registering, on the
@@ -3240,6 +3244,76 @@ async fn a_pool_chosen_devin_worker_exhausts_retries_cools_at_the_reset_and_fail
   assert_eq!(switches[0]["to"], "fake2");
   assert_eq!(switches[0]["recovers_at"].as_str(), pool.availability().out_until_minutes("devin").as_deref());
   settle_node(&run.stack, &run.worker_id).await
+}
+
+/// The worker records the absolute daily reset from Devin's quota rejection even when the retry wait exceeds the cap.
+#[tokio::test(start_paused = true)]
+#[ignore = "integration"]
+async fn a_devin_worker_records_the_daily_reset_outside_the_automatic_wait_cap() -> anyhow::Result<()> {
+  let scripts = vec![result_script("settled"), result_script("manager noted")];
+  let run = launch_devin_error_worker(
+    true,
+    scripts,
+    &[StagedDevinCall { stderr: DEVIN_DAILY_RESET, exit_code: 1, succeeded: false }],
+  )
+  .await?;
+
+  assert_eq!(run.first.backend.as_deref(), Some("devin"));
+  assert_eq!(devin_call_count(&run.fake_bin)?, "1");
+  let until = backend_pool::backend_pool(&run.stack.features)?
+    .availability()
+    .out_until("devin")
+    .expect("the daily quota rejection records Devin cooling");
+  assert_eq!(UtcDateTime::from(until), UtcDateTime::parse("2026-11-08T00:01:00Z")?);
+  Ok(())
+}
+
+/// A manager turn records Devin's stated daily reset through its finish callback, without waiting for it.
+#[tokio::test(start_paused = true)]
+#[ignore = "integration"]
+async fn a_devin_manager_turn_records_the_daily_reset_outside_the_automatic_wait_cap() -> anyhow::Result<()> {
+  let root = tempfile::tempdir()?;
+  let fake_bin = root.path().join("fake-bin");
+  stage_fake_devin(&fake_bin)?;
+  stage_devin_response(&fake_bin, 1, DEVIN_DAILY_RESET, 1, false)?;
+  unsafe { std::env::set_var("CHARLIEBOT_TEST_FINAL_STDOUT_SUPERVISOR", fake_program_bin()) };
+  DEVIN_HOST.with(|cell| {
+    *cell.borrow_mut() = Some(CliHost { path: fake_bin.display().to_string(), home: root.path().join("fake-home") });
+  });
+
+  let scripts = Scripts::new(Vec::new());
+  let stack = Stack::start_with_package(
+    vec![scripts.option(BACKEND_ID, BACKEND_TYPE), devin_option()],
+    Vec::new(),
+    ("test.devin", register_test_devin),
+  )
+  .await?;
+  stack.write_access_key()?;
+  let manager = stack
+    .store()
+    .create_task(
+      CreateTask {
+        request_id: "manager-daily-reset".to_string(),
+        task_parent_id: None,
+        profile: TaskProfile::Manager,
+        task: None,
+        name: None,
+        backend: Some("devin".to_string()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  stack.dispatch.admit_input(&manager.id, event_types::USER, "continue", "user", json!({})).await?;
+  let run = launched_run_id(&stack.dispatch.dispatch_pending(&manager.id).await?)?;
+
+  assert_eq!(stack.wait_terminal(&manager.id, &run).await?, RunOutcomeKind::Failed);
+  assert_eq!(std::fs::read_to_string(fake_bin.join("call-count"))?.trim(), "1");
+  let until = backend_availability(&stack.features)?.out_until("devin").expect("the manager records Devin cooling");
+  assert_eq!(UtcDateTime::from(until), UtcDateTime::parse("2026-11-08T00:01:00Z")?);
+  Ok(())
 }
 
 /// A worker pinned on devin records devin out and does not fail over: the exhausted run reports the original error

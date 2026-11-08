@@ -8,18 +8,21 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths;
 use charliebot_core::text_repr::value_str;
 use charliebot_core::timefmt;
-use charliebot_registry::usage::{RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl};
+use charliebot_registry::usage::{
+  QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl,
+};
 use regex::Regex;
 use serde_json::{Map, Value};
 
 use super::sqlite::open_read_only;
+use super::usage_quota::{OpenCodeQuotaAccount, OpenCodeQuotaState};
 use super::usage_sweep;
 use charliebot_agents::cli_base::truthy;
 use charliebot_agents::usage_time::utc_isoformat;
@@ -39,18 +42,20 @@ static TOKENS_KEY: LazyLock<Regex> =
 pub struct OpencodeLogs {
   db: PathBuf,
   proc_root: PathBuf,
+  quota: Arc<OpenCodeQuotaAccount>,
 }
 
 impl OpencodeLogs {
-  /// A source over `db`. `proc_root` is the process directory the sweep counts live writers in.
-  pub fn new(db: PathBuf, proc_root: PathBuf) -> Self {
-    Self { db, proc_root }
+  /// A source over `db`, with its shared quota account. `proc_root` is the process directory the sweep counts live writers in.
+  pub fn new(db: PathBuf, proc_root: PathBuf, quota_state: Arc<OpenCodeQuotaState>) -> Self {
+    let quota = Arc::new(OpenCodeQuotaAccount::new(db.clone(), quota_state));
+    Self { db, proc_root, quota }
   }
 }
 
 impl UsageSourceImpl for OpencodeLogs {
   fn ops(&self) -> UsageOps {
-    UsageOps { logs: true, read: true, live_cli_sessions: false, quota_accounts: false, sweep: true }
+    UsageOps { logs: true, read: true, live_cli_sessions: false, quota_accounts: true, sweep: true }
   }
 
   fn logs(&self, _cfg: &CharlieBotConfig) -> anyhow::Result<Vec<(PathBuf, String)>> {
@@ -59,6 +64,10 @@ impl UsageSourceImpl for OpencodeLogs {
 
   fn read(&self, path: &Path, account: &str, previous: Option<&str>) -> anyhow::Result<(String, Vec<UsageRecord>)> {
     read(path, account, previous)
+  }
+
+  fn quota_accounts(&self, _cfg: &CharlieBotConfig) -> anyhow::Result<Vec<Arc<dyn QuotaAccount>>> {
+    Ok(vec![Arc::clone(&self.quota) as Arc<dyn QuotaAccount>])
   }
 
   fn sweep(&self, scope: &SweepScope) -> anyhow::Result<SourceSweep> {
@@ -241,7 +250,7 @@ mod tests {
     let root = TempDir::new().unwrap();
     let db = root.path().join("opencode.db");
     let cfg = Registry::new().load_config(root.path()).unwrap();
-    let source = OpencodeLogs::new(db.clone(), root.path().join("proc"));
+    let source = OpencodeLogs::new(db.clone(), root.path().join("proc"), Arc::default());
 
     assert!(source.logs(&cfg).unwrap().is_empty());
     create_store(&db, &[]);

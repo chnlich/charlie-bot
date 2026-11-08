@@ -105,6 +105,11 @@ impl BackendAvailability {
       .remove(backend_id)
   }
 
+  /// Read the current row for `backend_id`, returning file errors to callers that render the state.
+  pub fn try_row(&self, backend_id: &str) -> anyhow::Result<Option<AvailabilityRow>> {
+    Ok(Self::read_rows(&self.path)?.remove(backend_id))
+  }
+
   /// Return the stored "out until" instant, whether or not it has passed, from the file's current state.
   pub fn out_until(&self, backend_id: &str) -> Option<OffsetDateTime> {
     self.row(backend_id).map(|row| row.out_until.into_inner())

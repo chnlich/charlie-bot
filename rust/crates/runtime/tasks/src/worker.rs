@@ -31,7 +31,9 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types as ET;
 use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::timefmt;
-use charliebot_registry::backend::{BackendLifecycle, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch};
+use charliebot_registry::backend::{
+  BackendLifecycle, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch, RetryAfter,
+};
 use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
 use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_LOG_NAME, event_line};
@@ -73,7 +75,7 @@ pub type SpawnedFn = Arc<dyn Fn(ThreadMetadata) -> BoxFuture<'static, anyhow::Re
 pub struct QuotaExhaustedError {
   message: String,
   pub resets_at: Option<OffsetDateTime>,
-  retry_after: Option<Duration>,
+  retry_after: Option<RetryAfter>,
 }
 
 impl QuotaExhaustedError {
@@ -616,7 +618,11 @@ impl Worker {
           let _ = acknowledged.send(acknowledgement);
           if let Err(mut error) = result {
             if let Some(quota) = error.downcast_mut::<QuotaExhaustedError>() {
-              quota.retry_after = runner.retry_after(&quota.message).await;
+              let retry = runner.retry_after(&quota.message).await;
+              if let Some(retry) = retry {
+                quota.resets_at = Some(retry.resets_at);
+              }
+              quota.retry_after = retry;
             }
             return Err(self.stop_after(&runner, error).await);
           }
@@ -753,10 +759,10 @@ impl RunProcess for WorkerProcess<'_> {
         let result = self.worker.run_process(&self.sink, &self.env, launch, watch.as_deref_mut(), relays).await;
         let Err(error) = result else { return result };
         let Some(quota) = error.downcast_ref::<QuotaExhaustedError>() else { return Err(error) };
-        let Some(retry_after) = quota.retry_after else { return Err(error) };
-        if backend_retry::waits(self.automatic_retries, retry_after) {
+        let Some(retry) = quota.retry_after else { return Err(error) };
+        if backend_retry::waits(self.automatic_retries, retry.after) {
           self.automatic_retries += 1;
-          tokio::time::sleep(retry_after).await;
+          tokio::time::sleep(retry.after).await;
           continue;
         }
         let message = if self.automatic_retries == backend_retry::MAX_AUTOMATIC_RETRIES {
@@ -764,18 +770,12 @@ impl RunProcess for WorkerProcess<'_> {
         } else {
           quota.message.clone()
         };
-        let resets_at = reset_time_after(retry_after)?;
-        let mut quota = QuotaExhaustedError::new(message, Some(resets_at));
-        quota.retry_after = Some(retry_after);
+        let mut quota = QuotaExhaustedError::new(message, quota.resets_at);
+        quota.retry_after = Some(retry);
         return Err(quota.into());
       }
     })
   }
-}
-
-fn reset_time_after(delay: Duration) -> anyhow::Result<OffsetDateTime> {
-  let delay = time::Duration::try_from(delay).context("retry reset duration is outside the supported calendar")?;
-  OffsetDateTime::now_utc().checked_add(delay).context("retry reset is outside the supported calendar")
 }
 
 /// The events log of one run, held open for the whole run, and the broadcast channel of its thread.

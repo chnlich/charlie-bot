@@ -7,16 +7,21 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+charliebot-cli-common.workspace = true
 charliebot-agents.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
+charliebot-store.workspace = true
+futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 regex.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+time.workspace = true
+toml.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 charliebot-agents = { workspace = true, features = ["test-support"] }
-charliebot-store.workspace = true
 tempfile.workspace = true
-tokio.workspace = true

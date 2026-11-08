@@ -90,8 +90,10 @@ installs `openssh-server`, `iproute2` and `iptables` from Ubuntu's archive.
    in production.
 7. Applies the fault cases at the plan's single fault window, after every registration and after the last restart:
    a new-connection hold (an `INPUT` rule that drops `SYN` to port 22 for `--hold-seconds`, so established connections
-   survive) and a connection cut (an `INPUT` drop for `--cut-seconds`). The before side applies both, because the
-   container's firewall is shared.
+   survive it) and a connection cut (an `INPUT` rule that rejects every packet to port 22 with a TCP reset for
+   `--cut-seconds`, which ends the established connections). The server's ssh keeps one ControlMaster connection per
+   build, so after a cut it must dial again, and the hold makes that dial wait. The before side applies both, because
+   the container's firewall is shared.
 8. After the last segment, reads every job's state and end record from the container, and the sshd log's
    `Accepted publickey` lines. Both are the ground truth for the report.
 

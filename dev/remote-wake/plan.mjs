@@ -240,9 +240,9 @@ export function buildPlan(options) {
 
 // Both faults start together, after every registration and inside a wait that is still running. A registration needs a
 // fresh ssh connection, so a fault must not overlap one. The cut and the new-connection hold overlap on purpose: the
-// hold stands in for the approval wait that a restart's fresh connection meets, and the cut stands in for the link
-// dropping under the established connection. The restart boundaries are chosen outside the fault window, so a rule
-// never outlives the segment that installed it.
+// cut resets the established connection, and the hold makes the server's redial wait, as a Tailscale check-mode
+// approval would. The restart boundaries are chosen outside the fault window, so a rule never outlives the segment
+// that installed it.
 const FAULT_LEAD_SECONDS = 20;
 
 function chooseFaults(waits, options) {

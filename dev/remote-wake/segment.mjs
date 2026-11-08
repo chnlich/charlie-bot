@@ -191,6 +191,18 @@ async function registerWait(api, args, plan, wait, sessions) {
   });
 }
 
+// The firewall rule a fault installs on the sshd port. A cut resets every connection to the port, the established ones
+// included, so the server's ControlMaster has to dial again. A hold drops only new SYNs, so that dial waits out the hold.
+function faultRule(kind) {
+  if (kind === 'cut') {
+    return ['-p', 'tcp', '--dport', '22', '-j', 'REJECT', '--reject-with', 'tcp-reset'];
+  }
+  if (kind === 'hold') {
+    return ['-p', 'tcp', '--dport', '22', '--syn', '-j', 'DROP'];
+  }
+  throw new Error(`unknown fault kind ${kind}`);
+}
+
 async function applyFaults(args, plan, t0, segment) {
   const tasks = plan.faults
     .filter((fault) => fault.owner === args.build)
@@ -205,13 +217,7 @@ async function applyFaults(args, plan, t0, segment) {
       if (!(wait.startOffset < elapsed && elapsed < wait.startOffset + wait.length)) {
         throw new Error(`fault ${fault.kind} on wait ${fault.waitIndex} started outside its job window`);
       }
-      if (fault.kind === 'cut') {
-        docker(['exec', args.container, 'iptables', '-I', 'INPUT', '-p', 'tcp', '--dport', '22', '-j', 'DROP']);
-      } else {
-        docker([
-          'exec', args.container, 'iptables', '-I', 'INPUT', '-p', 'tcp', '--dport', '22', '--syn', '-j', 'DROP',
-        ]);
-      }
+      docker(['exec', args.container, 'iptables', '-I', 'INPUT', ...faultRule(fault.kind)]);
       jsonlAppend(path.join(args['run-dir'], 'faults.jsonl'), {
         kind: fault.kind,
         wait_index: fault.waitIndex,
@@ -220,13 +226,7 @@ async function applyFaults(args, plan, t0, segment) {
         applied: true,
       });
       await sleep(fault.seconds * 1000);
-      if (fault.kind === 'cut') {
-        docker(['exec', args.container, 'iptables', '-D', 'INPUT', '-p', 'tcp', '--dport', '22', '-j', 'DROP']);
-      } else {
-        docker([
-          'exec', args.container, 'iptables', '-D', 'INPUT', '-p', 'tcp', '--dport', '22', '--syn', '-j', 'DROP',
-        ]);
-      }
+      docker(['exec', args.container, 'iptables', '-D', 'INPUT', ...faultRule(fault.kind)]);
       jsonlAppend(path.join(args['run-dir'], 'faults.jsonl'), {
         kind: fault.kind,
         wait_index: fault.waitIndex,

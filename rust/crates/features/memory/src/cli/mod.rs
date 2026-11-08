@@ -268,7 +268,7 @@ fn write_capture(
   let slug = slugify(title);
   let slug = if slug.is_empty() { "capture" } else { &slug };
   let filename = format!("{timestamp}-{session_slug}-{slug}.md");
-  let target = memory_dir.join(store::STAGING_DIRNAME).join(filename);
+  let target = memory_dir.join(crate::memory::STAGING_DIRNAME).join(filename);
   fs::write(&target, body).map_err(|error| CliExit::error(format!("write {}: {error}", target.display())))?;
   Ok(target)
 }
@@ -384,11 +384,11 @@ mod tests {
       let cwd = sessions_root.join("12345678-session-id");
       fs::create_dir_all(&cwd).unwrap();
       fs::create_dir_all(&memory_dir).unwrap();
-      fs::write(memory_dir.join(store::TOPICS_FILENAME), "profile resident\n").unwrap();
+      fs::write(memory_dir.join(crate::memory::TOPICS_FILENAME), "profile resident\n").unwrap();
       let body = "# Prefers Dark Mode\n\nThe user prefers dark themes across all UIs.\n";
       let target =
         write_capture(&memory_dir, &sessions_root, &cwd, "Prefers Dark Mode", body, || Ok(fixed_clock())).unwrap();
-      let files = store::sorted_markdown_files(&memory_dir.join(store::STAGING_DIRNAME)).unwrap();
+      let files = store::sorted_markdown_files(&memory_dir.join(crate::memory::STAGING_DIRNAME)).unwrap();
       assert_eq!(files.len(), 1);
       assert_eq!(target.file_name().unwrap(), "20261027T123456Z-12345678-prefers-dark-mode.md");
       assert_eq!(fs::read_to_string(&target).unwrap(), body);
@@ -413,11 +413,11 @@ mod tests {
         assert!(memory_dir.join(name).exists(), "{name}");
       }
       assert_eq!(
-        fs::read_to_string(memory_dir.join(store::TOPICS_FILENAME)).unwrap(),
+        fs::read_to_string(memory_dir.join(crate::memory::TOPICS_FILENAME)).unwrap(),
         crate::memory::DEFAULT_MEMORY_TOPICS
       );
-      assert_eq!(fs::read_to_string(memory_dir.join(".gitignore")).unwrap(), crate::memory::DEFAULT_MEMORY_GITIGNORE);
-      let files = store::sorted_markdown_files(&memory_dir.join(store::STAGING_DIRNAME)).unwrap();
+      assert_eq!(fs::read_to_string(memory_dir.join(".gitignore")).unwrap(), crate::memory::default_memory_gitignore());
+      let files = store::sorted_markdown_files(&memory_dir.join(crate::memory::STAGING_DIRNAME)).unwrap();
       assert_eq!(files.as_slice(), std::slice::from_ref(&target));
       assert_eq!(fs::read_to_string(target).unwrap(), body);
     });

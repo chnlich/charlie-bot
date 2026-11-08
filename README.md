@@ -24,7 +24,7 @@ flowchart TB
   mgr -- "delegates" --> w2["Worker agent (isolated git worktree)"]
   w -- "result" --> rev["Reviewer agent"]
   rev -- "fast-forward push" --> base["Base branch"]
-  mgr <-. "plan: present, amend, approve" .-> plans["Plan registry"]
+  mgr -. "plan: present, amend, approve" .-> plans["Plan registry"]
   mgr -. "Waiting on you item" .-> you
 ```
 

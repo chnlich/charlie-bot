@@ -3,15 +3,15 @@
 // ---------------------------------------------------------------------------
 // A `stream` frame carries only the text added since the previous frame, so the page accumulates the draft
 // from them. `length` and `thinking_length` are the draft's lengths after the frame, in UTF-16 code units. A
-// frame whose end the page already holds either repeats text it has (a bootstrap or transcript snapshot may
-// be ahead of frames still in flight) or belongs to the next draft; the overlap with the held text tells the
-// two apart. The catch-up sends one `reset` frame holding the whole draft, so a page that joins or reconnects
-// mid-reply renders the same draft as one that saw every frame.
+// frame whose end the page already holds either repeats text it has or belongs to the next draft. The held
+// text may be ahead of frames still in flight, as a bootstrap or transcript snapshot can be. The overlap with
+// the held text tells the two apart. The catch-up sends one `reset` frame holding the whole draft, so a page
+// that joins or reconnects mid-reply renders the same draft as one that saw every frame.
 //
-// The tool rows ride the same frames as a suffix: a live frame's `tools_from` is the index of its first row in
-// the draft's rows, and a reset frame carries the whole list without it. The rows are per-draft socket state:
-// once the socket streams a suffix for the draft, a bootstrap or transcript seed's rows are older news, and
-// only socket frames change the held ones.
+// The tool rows ride the same frames as a suffix. A live frame's `tools_from` is the index of its first row
+// in the draft's rows, and a reset frame carries the whole list without it. The rows are per-draft socket
+// state. Once the socket streams a suffix for the draft, a bootstrap or transcript seed's rows are older
+// news, and only socket frames change the held ones.
 
 let streamDraft = {content: '', thinking: '', tools: null, socketRows: false};
 
@@ -46,8 +46,8 @@ function seedStreamDraft(draft) {
 
 // The tool rows of a frame. A frame without `tools_from` — a reset frame — replaces the rows with its whole
 // list. A frame with it keeps the held rows before that index and appends its own. A `tools_from` past the
-// held rows is a protocol error: the page reports it and leaves its rows alone, since a correct server never
-// sends one and no repair can guess the missing rows.
+// held rows is a protocol error. The page reports it and leaves its rows alone, because a correct server
+// never sends one and no repair can guess the missing rows.
 function applyStreamTools(ev) {
   if (!Array.isArray(ev.tools)) return;
   if (typeof ev.tools_from !== 'number') {

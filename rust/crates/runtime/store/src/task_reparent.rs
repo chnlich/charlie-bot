@@ -1,15 +1,22 @@
 //! The reparent rules of an agent caller and the `task_reparented` fact of every move.
 //!
 //! An agent rearranges its own subtree only: the moved task sits below the caller's task, and the new parent is the
-//! caller's task or below it. The move keeps each moved session's subtree rules word for word, because the user alone
-//! sets the rules that a session reads. Only the chain above the moved task changes, so the check compares the old
-//! chain with the new one below their shared prefix. A rule the new chain adds refuses the move. One rule the old
-//! chain drops moves onto the moved task (the carry) when that task holds no subtree rule of its own.
+//! caller's task or below it. One exception reaches into the caller's subtree from outside it: a root session that
+//! the current cron configuration binds may move under the caller's task or below it, so an agent can gather a cron
+//! task's session that no agent created. A cron session that already has a parent keeps the plain rule, so no agent
+//! pulls in another line's attached session. The move keeps each moved session's subtree rules word for word,
+//! because the user alone sets the rules that a session reads. Only the chain above the moved task changes, so the
+//! check compares the old chain with the new one below their shared prefix. A rule the new chain adds refuses the
+//! move. One rule the old chain drops moves onto the moved task (the carry) when that task holds no subtree rule of
+//! its own.
+
+use std::path::Path;
 
 use charliebot_core::event_types;
 use serde_json::{Value, json};
 
 use crate::control_events;
+use crate::cron_binding;
 use crate::task_tree_state::{TreeIndex, ancestor_ids, index_meta, task_below_caller, within_caller_subtree};
 use crate::{StoreError, StoreResult};
 
@@ -28,9 +35,12 @@ pub(crate) struct CarriedRule {
 }
 
 /// Refuse an agent reparent unless the moved task sits strictly below the caller's task and the new parent is the
-/// caller's task or below it. A null parent is outside every subtree. A missing task or parent answers its 404.
+/// caller's task or below it. A root session that the cron configuration under `home` binds may also move, and the
+/// new parent is then the caller's task or below it. A null parent is outside every subtree. A missing task or
+/// parent answers its 404.
 pub(crate) fn check_agent_scope(
   index: &TreeIndex,
+  home: &Path,
   caller_task: &str,
   session_id: &str,
   new_parent: Option<&str>,
@@ -40,10 +50,16 @@ pub(crate) fn check_agent_scope(
   };
   let task_below = task_below_caller(index, caller_task, session_id)?;
   let parent_within = within_caller_subtree(index, caller_task, parent_id)?;
-  if !(task_below && parent_within) {
-    return Err(StoreError::forbidden(AGENT_REPARENT_SCOPE_REFUSAL));
+  if task_below && parent_within {
+    return Ok(());
   }
-  Ok(())
+  let bound_root = parent_within
+    && index_meta(index, session_id)?.task_parent_id.is_none()
+    && cron_binding::bound_sessions(home)?.contains(session_id);
+  if bound_root {
+    return Ok(());
+  }
+  Err(StoreError::forbidden(AGENT_REPARENT_SCOPE_REFUSAL))
 }
 
 /// The prompt blockers of moving `session_id` under `new_parent`, and the rule the move carries when it drops exactly
@@ -259,6 +275,84 @@ mod tests {
     let ghost = PatchTask { task_parent_id: Some(Some("ghost".to_string())), ..Default::default() };
     let error = store.patch_task(&tree.g.id, ghost, agent(&tree.caller), &NoGuards).await.unwrap_err();
     assert_eq!(error.status_code(), Some(404));
+  }
+
+  /// One cron task file under the home's `config.d/cron.d`, binding `session_id`.
+  fn bind_cron_task(home: &Path, name: &str, session_id: &str, enabled: bool) {
+    let directory = home.join("config.d").join("cron.d");
+    std::fs::create_dir_all(&directory).unwrap();
+    let body = format!("name: {name}\nsession_id: {session_id}\nenabled: {enabled}\n");
+    std::fs::write(directory.join(format!("{name}.yaml")), body).unwrap();
+  }
+
+  #[tokio::test]
+  async fn a_cron_bound_root_session_moves_into_the_callers_subtree_and_the_fact_names_the_caller() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let tree = tree(&store).await;
+    let paused = create_node(&store, "paused", None, TaskProfile::Manager).await;
+    bind_cron_task(home.path(), "envelope", &tree.outside.id, true);
+    bind_cron_task(home.path(), "paused", &paused.id, false);
+
+    let moved =
+      store.patch_task(&tree.outside.id, move_under(Some(&tree.b)), agent(&tree.caller), &NoGuards).await.unwrap();
+    assert_eq!(moved.task_parent_id.as_deref(), Some(tree.b.id.as_str()));
+    let fact = facts(&store, &tree.outside.id, event_types::TASK_REPARENTED).pop().unwrap();
+    assert_eq!(fact["actor"], "agent");
+    assert_eq!(fact["previous_parent_id"], Value::Null);
+    assert_eq!(fact["task_parent_id"], json!(tree.b.id));
+    assert_eq!(fact["caller_session_id"], json!(tree.caller.id));
+
+    // A disabled task keeps its binding, so the caller moves its root session too.
+    let moved =
+      store.patch_task(&paused.id, move_under(Some(&tree.caller)), agent(&tree.caller), &NoGuards).await.unwrap();
+    assert_eq!(moved.task_parent_id.as_deref(), Some(tree.caller.id.as_str()));
+  }
+
+  #[tokio::test]
+  async fn cron_moves_outside_the_exception_keep_the_scope_refusal() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let tree = tree(&store).await;
+    let plain_root = create_node(&store, "plain-root", None, TaskProfile::Manager).await;
+    let other = create_node(&store, "other", None, TaskProfile::Manager).await;
+    let attached = create_node(&store, "attached", Some(&other.id), TaskProfile::Manager).await;
+    // `attached` sits in another line, and a cron task binds it; the outside root is bound, the plain root is not.
+    bind_cron_task(home.path(), "attached", &attached.id, true);
+    bind_cron_task(home.path(), "envelope", &tree.outside.id, true);
+
+    let refusals = [
+      // A root session no cron configuration binds.
+      (&plain_root, move_under(Some(&tree.b))),
+      // A cron session that already has a parent outside the caller's subtree.
+      (&attached, move_under(Some(&tree.b))),
+      // A bound root whose new parent sits outside the caller's subtree.
+      (&tree.outside, move_under(Some(&plain_root))),
+    ];
+    for (task, patch) in refusals {
+      let before = moved_state(&store, &task.id);
+      let error = store.patch_task(&task.id, patch, agent(&tree.caller), &NoGuards).await.unwrap_err();
+      assert_eq!(error.status_code(), Some(403));
+      assert_eq!(error.to_string(), AGENT_REPARENT_SCOPE_REFUSAL);
+      assert_eq!(moved_state(&store, &task.id), before);
+    }
+  }
+
+  #[tokio::test]
+  async fn a_cron_root_move_that_would_add_a_subtree_rule_is_refused_as_today() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let tree = tree(&store).await;
+    bind_cron_task(home.path(), "envelope", &tree.outside.id, true);
+    set_subtree_rule(&store, &tree.b, "rule of b\n").await;
+
+    let (outside, b) = (&tree.outside.id, &tree.b.id);
+    let added = format!("reparent of {outside} under {b} would add the subtree rule of task {b}");
+    let before = moved_state(&store, outside);
+    let error = store.patch_task(outside, move_under(Some(&tree.b)), agent(&tree.caller), &NoGuards).await.unwrap_err();
+    assert_eq!(error.status_code(), Some(409));
+    assert_eq!(error.blockers(), Some(std::slice::from_ref(&added)));
+    assert_eq!(moved_state(&store, outside), before);
   }
 
   #[tokio::test]

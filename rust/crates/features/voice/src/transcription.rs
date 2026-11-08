@@ -221,7 +221,8 @@ impl Backend {
           open_timeout: Some(GEMINI_OPEN_TIMEOUT),
           close_timeout: Some(WS_CLIENT_CLOSE_TIMEOUT),
           max_size: None,
-          ..WEBSOCKETS_16_DEFAULTS
+          ping_interval: WEBSOCKETS_16_DEFAULTS.ping_interval,
+          ping_timeout: WEBSOCKETS_16_DEFAULTS.ping_timeout,
         };
         let settings = ws_client::Settings::from_env();
         let connected = tokio::select! {
@@ -234,7 +235,13 @@ impl Backend {
       }
       BackendKind::Muse => {
         let token = self.token.as_deref().ok_or_else(|| TranscriptionError::Rejected(missing_credential(self.spec)))?;
-        let options = Options { close_timeout: Some(WS_CLIENT_CLOSE_TIMEOUT), ..WEBSOCKETS_16_DEFAULTS };
+        let options = Options {
+          open_timeout: WEBSOCKETS_16_DEFAULTS.open_timeout,
+          close_timeout: Some(WS_CLIENT_CLOSE_TIMEOUT),
+          max_size: WEBSOCKETS_16_DEFAULTS.max_size,
+          ping_interval: WEBSOCKETS_16_DEFAULTS.ping_interval,
+          ping_timeout: WEBSOCKETS_16_DEFAULTS.ping_timeout,
+        };
         let settings = ws_client::Settings::from_env();
         let connected = tokio::select! {
           result = ws_client::connect(&self.endpoint, &options, &settings) => result,

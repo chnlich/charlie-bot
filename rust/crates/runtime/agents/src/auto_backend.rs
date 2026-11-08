@@ -325,26 +325,32 @@ fn format_minutes(datetime: UtcDateTime) -> String {
   crate::backend_availability::format_minutes(datetime.into_inner())
 }
 
-/// The member a session on `auto` runs on now, for the resolver. Every turn records one before it runs, so a session
-/// on `auto` with no recorded member is a refusal, and a recorded member the config no longer offers is too.
-pub fn current_member_id(cfg: &CharlieBotConfig, meta: &SessionMetadata) -> anyhow::Result<String> {
+/// The member a session records in `auto_member`, or `None` when it records none. A recorded member the config no
+/// longer offers is a refusal. This is the whole of how the set resolves to a member once a turn start has run; a
+/// read-only caller such as the cron host gate uses it to ask which backend a fire will run on.
+pub fn recorded_member(cfg: &CharlieBotConfig, meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
   let auto = require_auto(cfg)?;
-  let member = meta
-    .extra(AUTO_MEMBER_FIELD)
-    .and_then(Value::as_str)
-    .filter(|backend_id| !backend_id.is_empty())
-    .ok_or_else(|| {
-      anyhow!(
-        "session backend '{AUTO_BACKEND_ID}' has no recorded {AUTO_MEMBER_FIELD}; turn start records one before every run"
-      )
-    })?;
+  let Some(member) = meta.extra(AUTO_MEMBER_FIELD).and_then(Value::as_str).filter(|backend_id| !backend_id.is_empty())
+  else {
+    return Ok(None);
+  };
   if auto.member(member).is_none() {
     return Err(anyhow!(
       "session backend '{AUTO_BACKEND_ID}' records {AUTO_MEMBER_FIELD} '{member}', which config.yaml backends.auto no \
        longer lists"
     ));
   }
-  Ok(member.to_string())
+  Ok(Some(member.to_string()))
+}
+
+/// The member a session on `auto` runs on now, for the resolver. Every turn records one before it runs, so a session
+/// on `auto` with no recorded member is a refusal, and a recorded member the config no longer offers is too.
+pub fn current_member_id(cfg: &CharlieBotConfig, meta: &SessionMetadata) -> anyhow::Result<String> {
+  recorded_member(cfg, meta)?.ok_or_else(|| {
+    anyhow!(
+      "session backend '{AUTO_BACKEND_ID}' has no recorded {AUTO_MEMBER_FIELD}; turn start records one before every run"
+    )
+  })
 }
 
 #[cfg(test)]

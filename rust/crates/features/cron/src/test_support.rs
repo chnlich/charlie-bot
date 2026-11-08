@@ -101,13 +101,33 @@ pub async fn auto_manager(
 /// A feature context whose synthetic backend entries each log into a host. Every `(backend id, host alias)` pair is an
 /// entry that names the host through `host_auth_alias`, as a `cc-anthropic-compatible` entry does.
 pub fn feature_context_with_host_backends(hosts: &[(&str, &str)]) -> (tempfile::TempDir, Arc<FeatureContext>) {
+  feature_context_with_entries(&host_entries(hosts), None)
+}
+
+/// A feature context with the same host-naming entries as [`feature_context_with_host_backends`] and a `backends.auto`
+/// set holding `members`, each a configured option.
+pub fn feature_context_with_auto_host_backends(
+  hosts: &[(&str, &str)],
+  members: &[&str],
+) -> (tempfile::TempDir, Arc<FeatureContext>) {
+  let auto = AutoConfig {
+    label: "Auto".to_string(),
+    members: members
+      .iter()
+      .map(|id| AutoMember { backend: id.to_string(), billing: AutoBilling::Subscription })
+      .collect(),
+  };
+  feature_context_with_entries(&host_entries(hosts), Some(auto))
+}
+
+fn host_entries<'a>(hosts: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, Mapping)> {
   let mut entries = vec![("synthetic", Mapping::new())];
   for (id, alias) in hosts {
     let mut fields = Mapping::new();
     fields.insert("host_auth_alias".into(), (*alias).into());
     entries.push((*id, fields));
   }
-  feature_context_with_entries(&entries, None)
+  entries
 }
 
 /// A feature context with one backend option per entry, each `(id, type fields)` of the synthetic type, and the

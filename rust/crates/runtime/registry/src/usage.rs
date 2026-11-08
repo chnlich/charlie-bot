@@ -200,7 +200,7 @@ pub trait QuotaAccount: Send + Sync {
   /// Why the last `fetch` returned `Ok(None)`.
   fn last_error(&self) -> String;
   fn fetch<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<Option<Map<String, Value>>>>;
-  /// Sets or clears `login_required` on the cached entry, after each fetch of this account.
+  /// The `login_required` flag on the cached entry, set or cleared after each fetch of this account.
   fn mark_login_required(&self, _entry: &mut Map<String, Value>) {}
   /// The entry as one emit shows it at `now`. Never writes into `entry`.
   fn mark_expired(&self, entry: &Map<String, Value>, _now: UtcDateTime) -> Map<String, Value> {

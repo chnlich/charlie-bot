@@ -1,4 +1,4 @@
-//! Resolve the verified operator or agent identity used by structural routes.
+//! The verified operator or agent identity that structural routes resolve.
 
 use std::sync::Arc;
 
@@ -42,7 +42,7 @@ impl CallerIdentity {
   }
 }
 
-/// Resolve a request caller with the live credentials and run identity in the feature context.
+/// The request caller resolved from the live credentials and run identity in the feature context.
 #[allow(clippy::result_large_err)]
 pub fn resolve_caller(headers: &HeaderMap, features: &FeatureContext) -> Result<CallerIdentity, Response> {
   let key = features

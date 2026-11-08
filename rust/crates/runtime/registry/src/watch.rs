@@ -179,7 +179,7 @@ impl TreeWatch {
     }
   }
 
-  /// Stop relying on the queue: every read now reports a change.
+  /// A watch that stops relying on the queue: every read now reports a change.
   fn blind(&self, state: &mut WatchState) {
     state.descriptor = None;
     state.trees.clear();

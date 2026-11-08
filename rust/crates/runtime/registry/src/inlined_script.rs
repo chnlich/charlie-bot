@@ -221,13 +221,13 @@ fn spans_lines(bytes: &[u8]) -> bool {
   line_end(bytes, 0).is_some()
 }
 
-/// Copy `source[start..end]` to `out`, returning `end`.
+/// The copy of `source[start..end]` to `out`, returning `end`.
 fn copy(out: &mut String, source: &str, start: usize, end: usize) -> usize {
   out.push_str(&source[start..end]);
   end
 }
 
-/// Copy the one character at `start` to `out`, returning the index after it.
+/// The copy of the one character at `start` to `out`, returning the index after it.
 fn copy_char(out: &mut String, source: &str, start: usize) -> usize {
   let end = start + char_len(&source[start..]);
   copy(out, source, start, end)

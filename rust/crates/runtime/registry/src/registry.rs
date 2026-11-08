@@ -77,7 +77,7 @@ impl<T> Ledger<T> {
     Ledger { kind, entries: Vec::new() }
   }
 
-  /// Add a registration; a name that another registration of this kind holds fails with that package named.
+  /// The addition of a registration; a name that another registration of this kind holds fails with that package named.
   pub(crate) fn insert(&mut self, package: &'static str, key: &'static str, value: T) -> Result<(), RegistryError> {
     if let Some(existing) = self.entries.iter().find(|entry| entry.key == key) {
       return Err(RegistryError {
@@ -89,7 +89,7 @@ impl<T> Ledger<T> {
     Ok(())
   }
 
-  /// Add the one registration this kind allows; a second one fails with the first one's package named.
+  /// The addition of the one registration this kind allows; a second one fails with the first one's package named.
   pub(crate) fn insert_single(
     &mut self,
     package: &'static str,
@@ -302,7 +302,7 @@ impl Registry {
     inventory
   }
 
-  /// Run one package's `register` and list the package's page parts after those of the earlier packages.
+  /// The run of one package's `register`, which lists the package's page parts after those of the earlier packages.
   /// The composition root calls this for each package in order (`page_render.register_page_package`).
   pub fn register_package(&mut self, package: &'static str, register: RegisterFn) -> Result<(), RegistryError> {
     if self.page_packages.contains(&package) {
@@ -324,7 +324,8 @@ impl Registry {
     })
   }
 
-  /// Bind the server's feature context. The server calls this once, right after it builds the context; a second call
+  /// The binding of the server's feature context. The server calls this once, right after it builds the context; a
+  /// second call
   /// fails and keeps the first binding.
   pub fn bind_feature_context(&self, features: &Arc<FeatureContext>) -> Result<(), StateError> {
     self
@@ -347,8 +348,8 @@ impl Registry {
     }
   }
 
-  /// Load `<home>/config.yaml` with the registered schema, then run each backend type's option model and each
-  /// config check on it. A failure fails the load, so a hot reload keeps the previous config.
+  /// The load of `<home>/config.yaml` with the registered schema, run through each backend type's option model and
+  /// each config check on it. A failure fails the load, so a hot reload keeps the previous config.
   pub fn load_config(&self, home: &Path) -> Result<CharlieBotConfig, ConfigError> {
     let cfg = charliebot_core::config::load_config(home, &self.config_schema())?;
     let config_file = paths::display(&cfg.config_file());
@@ -370,8 +371,8 @@ impl Registry {
     self.config_sections.values()
   }
 
-  /// Register the top-level metadata keys one package owns in one file, in registration order. A second owner
-  /// registration on one file fails (`metadata_slot_registration.register_metadata_fields`).
+  /// The registration of the top-level metadata keys one package owns in one file, in registration order. A second
+  /// owner registration on one file fails (`metadata_slot_registration.register_metadata_fields`).
   pub fn metadata_slot(&mut self, slot: MetadataSlot) -> Result<(), RegistryError> {
     let package = self.owner()?;
     if self.metadata_slots.iter().any(|registered| registered.owner == slot.owner && registered.on == slot.on) {
@@ -384,7 +385,7 @@ impl Registry {
     Ok(())
   }
 
-  /// Register one metadata slot with the validation the owner's Pydantic model applies to its values.
+  /// The registration of one metadata slot with the validation the owner's Pydantic model applies to its values.
   pub fn metadata_slot_with_validator(
     &mut self,
     slot: MetadataSlot,
@@ -411,7 +412,8 @@ impl Registry {
     self.metadata_slots.clone()
   }
 
-  /// Register the field that a chat platform's metadata slot holds as its thread origin. The field must name a field of
+  /// The registration of the field that a chat platform's metadata slot holds as its thread origin. The field must name
+  /// a field of
   /// a metadata slot already registered, so a platform cannot name an origin it does not store.
   pub fn thread_origin_field(&mut self, field: &'static str) -> Result<(), RegistryError> {
     let package = self.owner()?;
@@ -426,14 +428,14 @@ impl Registry {
     Ok(())
   }
 
-  /// Register a config section's parser and its legacy keys (`config_registry.register_config_section`).
+  /// The registration of a config section's parser and its legacy keys (`config_registry.register_config_section`).
   pub fn config_section(&mut self, section: ConfigSection) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.config_sections.insert(package, section.key, section)?;
     self.legacy_keys(section.legacy_keys)
   }
 
-  /// Register retired top-level keys that no section owns (`config_registry.register_legacy_keys`).
+  /// The registration of retired top-level keys that no section owns (`config_registry.register_legacy_keys`).
   pub fn legacy_keys(&mut self, legacy_keys: &[(&'static str, &'static str)]) -> Result<(), RegistryError> {
     let package = self.owner()?;
     for &(old, new) in legacy_keys {
@@ -442,8 +444,8 @@ impl Registry {
     Ok(())
   }
 
-  /// Register a backend type's `backends.options[]` field schema: its type-specific fields in declaration order,
-  /// with the value each holds when the entry omits it.
+  /// The registration of a backend type's `backends.options[]` field schema: its type-specific fields in declaration
+  /// order, with the value each holds when the entry omits it.
   ///
   /// `charliebot config get backends` renders an option from this schema. A backend package registers its own
   /// schema next to its [`Registry::backend_type`] registration.
@@ -461,7 +463,7 @@ impl Registry {
     self.option_schemas.get(backend_type).copied()
   }
 
-  /// Register a backend type's traits, option model, factory and lifecycle (`register_backend_type`).
+  /// The registration of a backend type's traits, option model, factory and lifecycle (`register_backend_type`).
   pub fn backend_type(&mut self, registration: BackendTypeRegistration) -> Result<(), RegistryError> {
     let package = self.owner()?;
     if registration.translate_fallback && self.backend_types.values().any(|known| known.translate_fallback) {
@@ -521,7 +523,8 @@ pub type Env = BTreeMap<String, String>;
 /// Edits one agent child process's environment in place (`backend_lifecycle_registration.register_child_env`).
 pub type ChildEnvFn = fn(&mut Env);
 
-/// Read one session directory's plan registry: the `plans` list of its `plans.json`, or `None` when it has none.
+/// The reader of one session directory's plan registry: the `plans` list of its `plans.json`, or `None` when it
+/// has none.
 pub type PlanRegistryFn = fn(&Path) -> anyhow::Result<Option<Vec<Value>>>;
 
 /// One open session's Waiting on you item, as `features/web_reply` reports it to the approval view
@@ -538,11 +541,11 @@ pub struct OpenWaitingRow {
   pub since: UtcDateTime,
 }
 
-/// Read every open session's Waiting on you items, the whole home's list (`status.open_waiting_items`).
+/// The reader of every open session's Waiting on you items, the whole home's list (`status.open_waiting_items`).
 pub type OpenWaitingItemsFn = for<'a> fn(&'a FeatureContext) -> BoxFuture<'a, anyhow::Result<Vec<OpenWaitingRow>>>;
 
-/// Read the host that a backend type's entry logs into, from the entry's type-specific keys. The host is `Some(alias)`
-/// for an entry that names one (`host_auth_alias`), and `None` for one that names none.
+/// The reader of the host that a backend type's entry logs into, from the entry's type-specific keys. The host is
+/// `Some(alias)` for an entry that names one (`host_auth_alias`), and `None` for one that names none.
 pub type BackendHostAliasFn = fn(&serde_yaml::Mapping) -> Result<Option<String>, String>;
 
 /// One probed host's login record as `features/host_auth` keeps it in `host_auth.json`.
@@ -559,15 +562,15 @@ pub struct HostLogin {
   pub awaits_approval: bool,
 }
 
-/// Read the login record of every probed host (`host_auth.host_logins`). An unreadable state file is an error.
+/// The reader of the login record of every probed host (`host_auth.host_logins`). An unreadable state file is an error.
 pub type HostLoginsFn = fn(&FeatureContext) -> anyhow::Result<Vec<HostLogin>>;
 
 /// Probe one host now over a new connection, write the result back, and return the host's record
 /// (`host_auth.probe_alias_now`).
 pub type HostProbeFn = for<'a> fn(&'a FeatureContext, &'a str) -> BoxFuture<'a, anyhow::Result<HostLogin>>;
 
-/// Run one page's fork assertions, each failure as `(assertion name, detail)`. `None` means the page's file name
-/// carries no genre prefix, so no assertion set applies to it.
+/// The runner of one page's fork assertions, each failure as `(assertion name, detail)`. `None` means the page's file
+/// name carries no genre prefix, so no assertion set applies to it.
 pub type ForkAssertionsFn = fn(page: &Path, home: &Path) -> anyhow::Result<Option<Vec<(String, String)>>>;
 
 /// The context limits of one reading kind. `declared_window` is `None` when the reading carries the window itself;
@@ -578,10 +581,10 @@ pub struct ContextLimits {
   pub compact_reserve: Option<u64>,
 }
 
-/// Computes the limits of one reading kind (`backend_lifecycle_registration.register_reading_limits`).
+/// The limits of one reading kind (`backend_lifecycle_registration.register_reading_limits`).
 pub type ReadingLimitsFn = fn(RunKind) -> ContextLimits;
 
-/// Computes a reading kind's limits from one backend option (`register_backend_reading_limits`).
+/// A reading kind's limits from one backend option (`register_backend_reading_limits`).
 pub type BackendReadingLimitsFn = fn(&BackendOption, RunKind) -> ContextLimits;
 
 /// One quota window of a member's reading, with its utilization in `0..=1`, its length when the backend states one,
@@ -613,7 +616,7 @@ impl MemberReading {
   }
 }
 
-/// Reads one backend option's quota state now, or `None` when the backend exposes no reading
+/// The reader of one backend option's quota state now, or `None` when the backend exposes no reading
 /// (`register_member_reading`). A member with no reading counts as under the 90% line until its first quota error.
 pub type MemberReadingFn =
   Arc<dyn Fn(&CharlieBotConfig, &BackendOption, UtcDateTime) -> anyhow::Result<Option<MemberReading>> + Send + Sync>;
@@ -626,8 +629,8 @@ pub(crate) struct BackendReadingLimitsRegistration {
   pub limits: BackendReadingLimitsFn,
 }
 
-/// Reads one backend type's usage from its session events (`register_usage_resolver`). A resolver returns the usage
-/// object for the session, or `None`.
+/// The reader of one backend type's usage from its session events (`register_usage_resolver`). A resolver returns the
+/// usage object for the session, or `None`.
 pub trait UsageResolver: Send + Sync {
   fn resolve(
     &self,
@@ -660,9 +663,9 @@ pub struct LaunchArgs {
   pub backend_kwargs: Map<String, Value>,
 }
 
-/// Builds the per-process backend of one launch (`factory(option, cfg, **launch_kwargs)`).
+/// The factory of the per-process backend of one launch (`factory(option, cfg, **launch_kwargs)`).
 pub trait BackendFactory: Send + Sync {
-  /// Builds one process's backend for a launch. `option` is `None` only for the translate-fallback type.
+  /// The build of one process's backend for a launch. `option` is `None` only for the translate-fallback type.
   fn build(
     &self,
     option: Option<&BackendOption>,
@@ -691,7 +694,7 @@ pub struct FinalStdoutOutcome {
   pub guard_error: Option<String>,
 }
 
-/// Maps one raw event of a backend's output to the runtime's events.
+/// The mapping of one raw event of a backend's output to the runtime's events.
 pub trait Translate: Send {
   fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>>;
 }
@@ -725,8 +728,8 @@ pub trait AgentBackend: Send {
   fn midturn_run_id(&self) -> Option<String> {
     None
   }
-  /// Write the run's first stdin payload and keep its stdin open for mid-turn writes. `exited` reports the child's
-  /// exit. The runner writes `stdin_prompt` and closes stdin when this returns `None`.
+  /// The write of the run's first stdin payload, with its stdin left open for mid-turn writes. `exited` reports the
+  /// child's exit. The runner writes `stdin_prompt` and closes stdin when this returns `None`.
   fn write_stdin_prompt(
     &self,
     _stdin: Box<dyn AsyncWrite + Send + Unpin>,
@@ -735,19 +738,19 @@ pub trait AgentBackend: Send {
   ) -> Option<BoxFuture<'static, anyhow::Result<()>>> {
     None
   }
-  /// Handle one translated event before the run's consumer sees it, or `None`.
+  /// The handling of one translated event before the run's consumer sees it, or `None`.
   fn on_event<'a>(&'a self, _event: &'a Value) -> Option<BoxFuture<'a, anyhow::Result<()>>> {
     None
   }
   fn translator(&self) -> Box<dyn Translate>;
   fn transport(&self) -> TransportKind;
-  /// Checks the run's uploaded files before any process starts. The default ignores them. `Err` ends the run with
+  /// The check of the run's uploaded files before any process starts. The default ignores them. `Err` ends the run with
   /// exactly one error event and no process.
   fn accept_uploads(&mut self, _uploaded_files: &[Value]) -> Result<(), String> {
     Ok(())
   }
-  /// Reads the output of a `FinalStdout` process once it has exited. Only a backend whose transport is `FinalStdout`
-  /// implements it; the runner calls it for no other.
+  /// The reader of the output of a `FinalStdout` process once it has exited. Only a backend whose transport is
+  /// `FinalStdout` implements it; the runner calls it for no other.
   fn finish_final_stdout(&mut self, _stdout: &str, _stderr: &str, _exit_code: i32) -> FinalStdoutOutcome {
     panic!("finish_final_stdout is called only for a FinalStdout transport")
   }
@@ -788,11 +791,12 @@ pub enum LaunchKind {
   Task,
 }
 
-/// Writes one event for the user. On a turn it persists and broadcasts the event; on a task it writes the run's log.
+/// The writer of one event for the user. On a turn it persists and broadcasts the event; on a task it writes the
+/// run's log.
 pub type EmitFn = Arc<dyn Fn(Value) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
 /// Persists the account label on the session.
 pub type RecordAccountFn = Arc<dyn Fn(String) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
-/// Reads the metadata of every other session with a running manager turn.
+/// The reader of the metadata of every other session with a running manager turn.
 pub type RunningTurnsFn = Arc<dyn Fn() -> Vec<SessionMetadata> + Send + Sync>;
 /// The session's context tokens and the time of its last request.
 pub type ContextStateFn =
@@ -830,7 +834,7 @@ pub struct CompactionOutcome {
   pub cache_read_tokens: Option<i64>,
 }
 
-/// Runs one compaction process (`claude_compaction.run_compaction` in the Claude Code backend).
+/// The run of one compaction process (`claude_compaction.run_compaction` in the Claude Code backend).
 pub type CompactionRunFn =
   Arc<dyn for<'a> Fn(CompactionRun<'a>) -> BoxFuture<'a, anyhow::Result<CompactionOutcome>> + Send + Sync>;
 
@@ -840,9 +844,9 @@ pub type SessionContextStateFn =
 
 /// The queue's control over one session's idle-compaction start.
 pub trait IdleStartGate: Send + Sync {
-  /// Take the session's start reservation, only while no turn is running or queued. `true` means it was taken.
+  /// The session's start reservation, taken only while no turn is running or queued. `true` means it was taken.
   fn reserve(&self, session_id: &str) -> anyhow::Result<bool>;
-  /// Return the reservation a started compaction took.
+  /// The release of the reservation a started compaction took.
   fn release(&self, session_id: &str) -> anyhow::Result<()>;
 }
 
@@ -858,7 +862,7 @@ pub struct IdleArmContext<'a> {
   pub cwd: PathBuf,
   /// The base agent environment of the compaction process.
   pub base_env: Env,
-  /// Writes one event for the user.
+  /// The writer of one event for the user.
   pub emit: EmitFn,
   /// The queue's compaction runner; `None` runs the hook's own.
   pub compaction: Option<CompactionRunFn>,
@@ -905,7 +909,7 @@ pub struct Launch {
 
 /// Folds one process's events and exit into the decision to start a next process.
 pub trait LaunchWatch: Send {
-  /// Records one event. `true` stops the process now, at a safe relay point.
+  /// The record of one event. `true` stops the process now, at a safe relay point.
   fn observe(&mut self, event: &Value) -> bool;
   /// Whether the run continues in a next process, which `next_launch` plans; `true` continues.
   fn wants_next(&self, exit_code: i32, stderr: &str) -> bool;
@@ -978,7 +982,7 @@ pub trait BackendLifecycle: Send + Sync {
   /// Drops the session's pending idle timer, when this backend keeps one.
   fn disarm_idle_compaction(&self, _session_id: &str) {}
 
-  /// Waits out the session's running idle compaction before a turn starts
+  /// The wait for the session's running idle compaction before a turn starts
   /// (`claude_idle_compaction.settle_for_turn`). The default has none to wait for.
   fn settle_idle_compaction<'a>(&'a self, _session_id: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async { Ok(()) })
@@ -1004,7 +1008,7 @@ pub trait BackendLifecycle: Send + Sync {
     None
   }
 
-  /// Records `label` on `meta` in memory. Returns `true` when the recorded label changed.
+  /// The record of `label` on `meta` in memory. Returns `true` when the recorded label changed.
   fn record_account_label(&self, _meta: &mut SessionMetadata, _label: Option<&str>) -> bool {
     false
   }
@@ -1014,7 +1018,7 @@ pub trait BackendLifecycle: Send + Sync {
     None
   }
 
-  /// Records on `thread` the conversation id the runtime chose for the task.
+  /// The record on `thread` of the conversation id the runtime chose for the task.
   fn assign_thread_native_id(&self, _thread: &mut ThreadMetadata, _native_id: Option<&str>) {}
 
   /// The serve transport of this type's processes, when they answer each turn over a local protocol
@@ -1027,7 +1031,7 @@ pub trait BackendLifecycle: Send + Sync {
 /// How the runner runs a turn of a serve backend type. The runner takes the turn's run plan before it spawns the
 /// process, then runs the turn in that process.
 pub trait ServeTransport: Send + Sync {
-  /// Takes the run plan that the backend registered for the process `command` starts. An error ends the run before
+  /// The run plan that the backend registered for the process `command` starts. An error ends the run before
   /// any process starts.
   fn take_turn(&self, command: &[String]) -> anyhow::Result<Box<dyn ServeTurn>>;
   /// Finishes the turn whose process is `pid`, when that turn has registered its session.
@@ -1035,7 +1039,8 @@ pub trait ServeTransport: Send + Sync {
   /// The progress deadline of a recovered turn whose run directory is `directory`, or `None` when the directory
   /// holds no turn record of this backend. The caller builds the follow's silence callback from it.
   fn recovery_silence(&self, directory: &Path) -> anyhow::Result<Option<RecoverySilence>>;
-  /// Rejects a raw event this backend cannot answer headless, ending the run. Called for every followed event of a
+  /// The rejection of a raw event this backend cannot answer headless, ending the run. Called for every followed event
+  /// of a
   /// recovered turn.
   fn reject_event(&self, event: &Value) -> anyhow::Result<()>;
 }
@@ -1053,7 +1058,7 @@ pub trait ServeTurn: Send {
     Ok(None)
   }
 
-  /// Runs the turn to its end in the process that `args` describes.
+  /// The turn run to its end in the process that `args` describes.
   fn run(self: Box<Self>, args: ServeTurnArgs) -> BoxFuture<'static, anyhow::Result<ServeTurnResult>>;
 }
 
@@ -1090,20 +1095,21 @@ pub struct ServeTurnResult {
 }
 
 impl Registry {
-  /// Register a child-process environment edit (`backend_lifecycle_registration.register_child_env`). The edits apply
+  /// The registration of a child-process environment edit (`backend_lifecycle_registration.register_child_env`). The
+  /// edits apply
   /// in registration order to every agent child process.
   pub fn child_env(&mut self, name: &'static str, edit: ChildEnvFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.child_envs.insert(package, name, edit)
   }
 
-  /// Register the context limits of a reading kind (`register_reading_limits`).
+  /// The registration of the context limits of a reading kind (`register_reading_limits`).
   pub fn reading_limits(&mut self, kind: &'static str, limits: ReadingLimitsFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.reading_limits.insert(package, kind, limits)
   }
 
-  /// Register context limits selected by backend type and reading kind.
+  /// The registration of context limits selected by backend type and reading kind.
   pub fn backend_reading_limits(
     &mut self,
     backend_type: &'static str,
@@ -1133,7 +1139,7 @@ impl Registry {
     Ok(())
   }
 
-  /// Register the usage resolver of a backend type (`register_usage_resolver`).
+  /// The registration of the usage resolver of a backend type (`register_usage_resolver`).
   pub fn usage_resolver(
     &mut self,
     backend_type: &'static str,
@@ -1182,7 +1188,7 @@ impl Registry {
     }
   }
 
-  /// Waits out the session's running idle compaction on every backend that keeps one.
+  /// The wait for the session's running idle compaction on every backend that keeps one.
   pub async fn settle_idle_compaction(&self, session_id: &str) -> anyhow::Result<()> {
     for lifecycle in self.lifecycles() {
       lifecycle.settle_idle_compaction(session_id).await?;
@@ -1207,7 +1213,7 @@ impl Registry {
     }
   }
 
-  /// Builds the backend of `option`'s type with its factory.
+  /// The backend of `option`'s type, built with its factory.
   pub fn build_backend(
     &self,
     option: &BackendOption,
@@ -1220,7 +1226,7 @@ impl Registry {
     registration.factory.build(Some(option), cfg, launch)
   }
 
-  /// Applies every child-environment edit to `env`, in registration order.
+  /// The application of every child-environment edit to `env`, in registration order.
   pub fn apply_child_env(&self, env: &mut Env) {
     for edit in self.child_envs.values() {
       edit(env);
@@ -1251,7 +1257,8 @@ impl Registry {
     self.usage_resolvers.get(backend_type).cloned()
   }
 
-  /// Register a backend type's quota reading (`register_member_reading`). A type whose quota is readable registers one;
+  /// The registration of a backend type's quota reading (`register_member_reading`). A type whose quota is readable
+  /// registers one;
   /// a type with no reading registers none, and the Auto set treats it as under the 90% line.
   pub fn member_reading(&mut self, backend_type: &'static str, read: MemberReadingFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
@@ -1264,7 +1271,7 @@ impl Registry {
   }
 }
 
-/// Builds a package's routes with their full paths, with the feature context applied as the router's state. The
+/// A package's routes with their full paths, with the feature context applied as the router's state. The
 /// server merges the routers in registration order.
 pub type RouterBuilder = fn(&Arc<FeatureContext>) -> Router;
 
@@ -1330,7 +1337,7 @@ pub enum Phase {
 /// What the lifespan hands each service's `start`.
 pub struct ServiceContext {
   pub features: Arc<FeatureContext>,
-  /// Resolves when the crash-recovery step ends. A service that reads recovered state awaits it.
+  /// The resolution of the crash-recovery step's end. A service that reads recovered state awaits it.
   pub recovery_done: Shared<BoxFuture<'static, ()>>,
 }
 
@@ -1370,15 +1377,15 @@ pub type DiffRootFn = fn(&CharlieBotConfig) -> PathBuf;
 pub type ScheduledHandlerFn = fn(Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<String>>;
 
 impl Registry {
-  /// Register a router (`wiring.register_router`). Routers merge in registration order.
+  /// The registration of a router (`wiring.register_router`). Routers merge in registration order.
   pub fn router(&mut self, build: RouterBuilder, matches: PathMatch) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.routers.push(RouterRegistration { package, build, claim: PathClaim::Predicate(matches) });
     Ok(())
   }
 
-  /// Register a router by the route patterns it mounts, in axum's syntax (`wiring.register_router`). Routers merge
-  /// in registration order.
+  /// The registration of a router by the route patterns it mounts, in axum's syntax (`wiring.register_router`). Routers
+  /// merge in registration order.
   pub fn router_patterns(&mut self, build: RouterBuilder, patterns: &[&str]) -> Result<(), RegistryError> {
     let package = self.owner()?;
     let claims = RouteClaims::new(patterns).map_err(|error| RegistryError { package, message: error.to_string() })?;
@@ -1386,7 +1393,7 @@ impl Registry {
     Ok(())
   }
 
-  /// Register an authenticated WebSocket route. Each `*` matches one non-empty path segment.
+  /// The registration of an authenticated WebSocket route. Each `*` matches one non-empty path segment.
   pub fn websocket(&mut self, pattern: &'static str, handler: WebSocketHandler) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.websocket_routes.insert(package, pattern, handler)
@@ -1415,14 +1422,14 @@ impl Registry {
     })
   }
 
-  /// Register a service under its own name (`wiring.register_service`).
+  /// The registration of a service under its own name (`wiring.register_service`).
   pub fn service(&mut self, service: Arc<dyn Service>) -> Result<(), RegistryError> {
     let package = self.owner()?;
     let name = service.name();
     self.services.insert(package, name, service)
   }
 
-  /// Register the plan-registry reader. `web_reply` reads a session's plan links through it.
+  /// The registration of the plan-registry reader. `web_reply` reads a session's plan links through it.
   pub fn plan_registry(&mut self, read: PlanRegistryFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.plan_registry.insert_single(package, "plan_registry", read)
@@ -1433,7 +1440,8 @@ impl Registry {
     self.plan_registry.values().next().copied().ok_or_else(|| anyhow::anyhow!("no package registers the plan registry"))
   }
 
-  /// Register the reader of every open session's Waiting on you items. `approval` reads the day view through it.
+  /// The registration of the reader of every open session's Waiting on you items. `approval` reads the day view
+  /// through it.
   pub fn open_waiting_items(&mut self, read: OpenWaitingItemsFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.open_waiting_items.insert_single(package, "open_waiting_items", read)
@@ -1449,7 +1457,8 @@ impl Registry {
       .ok_or_else(|| anyhow::anyhow!("no package registers the open Waiting on you reader"))
   }
 
-  /// Register the reader of the derived Waiting on you items. `web_reply` lists them beside the stored items.
+  /// The registration of the reader of the derived Waiting on you items. `web_reply` lists them beside the
+  /// stored items.
   pub fn derived_waiting_items(&mut self, read: OpenWaitingItemsFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.derived_waiting_items.insert_single(package, "derived_waiting_items", read)
@@ -1465,7 +1474,7 @@ impl Registry {
       .ok_or_else(|| anyhow::anyhow!("no package registers the derived Waiting on you reader"))
   }
 
-  /// Register the host alias reader of a backend type (`host_auth_alias`).
+  /// The registration of the host alias reader of a backend type (`host_auth_alias`).
   pub fn backend_host_alias(
     &mut self,
     backend_type: &'static str,
@@ -1480,7 +1489,7 @@ impl Registry {
     self.backend_host_aliases.get(backend_type).copied()
   }
 
-  /// Register the reader of the host login records.
+  /// The registration of the reader of the host login records.
   pub fn host_logins(&mut self, read: HostLoginsFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.host_logins.insert_single(package, "host_logins", read)
@@ -1496,7 +1505,7 @@ impl Registry {
       .ok_or_else(|| anyhow::anyhow!("no package registers the host login reader"))
   }
 
-  /// Register the probe of one host.
+  /// The registration of the probe of one host.
   pub fn host_probe(&mut self, probe: HostProbeFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.host_probes.insert_single(package, "host_probe", probe)
@@ -1507,7 +1516,7 @@ impl Registry {
     self.host_probes.values().next().copied().ok_or_else(|| anyhow::anyhow!("no package registers the host probe"))
   }
 
-  /// Register the fork-assertion runner. `web_reply`'s status gate runs a linked page through it.
+  /// The registration of the fork-assertion runner. `web_reply`'s status gate runs a linked page through it.
   pub fn fork_assertions(&mut self, run: ForkAssertionsFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.fork_assertions.insert_single(package, "fork_assertions", run)
@@ -1523,31 +1532,31 @@ impl Registry {
       .ok_or_else(|| anyhow::anyhow!("no package registers the fork assertions"))
   }
 
-  /// Register a file view (`wiring.register_file_view`).
+  /// The registration of a file view (`wiring.register_file_view`).
   pub fn file_view(&mut self, name: &'static str, view: Arc<dyn FileView>) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.file_views.insert(package, name, view)
   }
 
-  /// Register a startup check (`wiring.register_startup_check`).
+  /// The registration of a startup check (`wiring.register_startup_check`).
   pub fn startup_check(&mut self, name: &'static str, check: StartupCheckFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.startup_checks.insert(package, name, check)
   }
 
-  /// Register a config check (`config_registry.register_config_check`).
+  /// The registration of a config check (`config_registry.register_config_check`).
   pub fn config_check(&mut self, name: &'static str, check: CheckFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.config_checks.insert(package, name, check)
   }
 
-  /// Register a diff root (`wiring.register_diff_root`).
+  /// The registration of a diff root (`wiring.register_diff_root`).
   pub fn diff_root(&mut self, name: &'static str, root: DiffRootFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.diff_roots.insert(package, name, root)
   }
 
-  /// Register a scheduled handler under its task name (`scheduled_handlers.register_handler`).
+  /// The registration of a scheduled handler under its task name (`scheduled_handlers.register_handler`).
   pub fn scheduled_handler(&mut self, name: &'static str, handler: ScheduledHandlerFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.scheduled_handlers.insert(package, name, handler)
@@ -1597,13 +1606,13 @@ pub struct HomeCard {
 }
 
 impl Registry {
-  /// Register a template global (`page_render.register_template_global`).
+  /// The registration of a template global (`page_render.register_template_global`).
   pub fn template_global(&mut self, name: &'static str, global: TemplateGlobalFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.template_globals.insert(package, name, global)
   }
 
-  /// Register a home-page card (`page_render.register_home_card`).
+  /// The registration of a home-page card (`page_render.register_home_card`).
   pub fn home_card(&mut self, card: HomeCard) -> Result<(), RegistryError> {
     self.owner()?;
     self.home_cards.push(card);
@@ -1661,7 +1670,7 @@ pub const DELIVERY_FULL: &str = "full";
 /// A [`RuleSegment::delivery`] value: an index listing of the material.
 pub const DELIVERY_INDEX: &str = "index";
 
-/// Renders one persisted event type for the chat: the event in, the message out.
+/// The renderer of one persisted event type for the chat: the event in, the message out.
 pub type EventRenderer = fn(&Value) -> Value;
 
 /// One package's part in a master turn. Every step defaults to adding nothing.
@@ -1687,7 +1696,7 @@ pub trait TurnContribution: Send + Sync {
     None
   }
 
-  /// Runs when a turn's input is queued, before the user event is appended.
+  /// The contribution's work when a turn's input is queued, before the user event is appended.
   fn before_turn<'a>(
     &'a self,
     _meta: &'a SessionMetadata,
@@ -1697,7 +1706,7 @@ pub trait TurnContribution: Send + Sync {
     Box::pin(async { Ok(()) })
   }
 
-  /// Runs as its own logged task after the `MASTER_DONE` event is appended and broadcast.
+  /// The contribution's work as its own logged task after the `MASTER_DONE` event is appended and broadcast.
   fn after_turn<'a>(
     &'a self,
     _meta: &'a SessionMetadata,
@@ -1725,7 +1734,7 @@ pub trait TurnContribution: Send + Sync {
 }
 
 impl Registry {
-  /// Register a turn contribution. A chat renderer type that an
+  /// The registration of a turn contribution. A chat renderer type that an
   /// earlier contribution, or this one, already renders fails here, at the aggregator's build.
   pub fn turn_contribution(
     &mut self,
@@ -1793,7 +1802,7 @@ impl Registry {
     self.turn_contributions.values().any(|contribution| contribution.claims_turn_end_unread(meta))
   }
 
-  /// Run every contribution's `before_turn` in registration order.
+  /// The run of every contribution's `before_turn` in registration order.
   pub async fn before_turn(
     &self,
     meta: &SessionMetadata,
@@ -1808,7 +1817,8 @@ impl Registry {
 }
 
 impl Registry {
-  /// Register a sequence controller (`sequence_controllers.register_sequence_controller`). A repeated name fails.
+  /// The registration of a sequence controller (`sequence_controllers.register_sequence_controller`). A repeated
+  /// name fails.
   pub fn sequence_controller(
     &mut self,
     name: &'static str,
@@ -1823,7 +1833,7 @@ impl Registry {
     self.sequence_controllers.values()
   }
 
-  /// Register one platform's draft support. A repeated platform name fails.
+  /// The registration of one platform's draft support. A repeated platform name fails.
   pub fn draft_platform(&mut self, name: &'static str, factory: DraftPlatformFactory) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.draft_platforms.insert(package, name, factory)
@@ -1874,7 +1884,7 @@ impl Registry {
 }
 
 impl Registry {
-  /// Register a sidebar contribution (`sidebar_contributions.register_sidebar_contribution`).
+  /// The registration of a sidebar contribution (`sidebar_contributions.register_sidebar_contribution`).
   pub fn sidebar_contribution(
     &mut self,
     name: &'static str,
@@ -1891,7 +1901,8 @@ impl Registry {
 }
 
 impl Registry {
-  /// Register a usage source (`usage_source_registration.register_source`). A repeated name, or an id prefix that an
+  /// The registration of a usage source (`usage_source_registration.register_source`). A repeated name, or an id prefix
+  /// that an
   /// earlier source holds, fails.
   pub fn usage_source(&mut self, source: UsageSource) -> Result<(), RegistryError> {
     let package = self.owner()?;
@@ -1966,25 +1977,27 @@ impl Registry {
 pub type StepFn = fn(Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>>;
 
 impl Registry {
-  /// Register a pre-recovery step (for example the session cgroup sweep). Steps run in registration order.
+  /// The registration of a pre-recovery step (for example the session cgroup sweep). Steps run in registration order.
   pub fn pre_recovery_step(&mut self, name: &'static str, step: StepFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.pre_recovery_steps.insert(package, name, step)
   }
 
-  /// Register a recovery step. Steps run in registration order, each in its own task.
+  /// The registration of a recovery step. Steps run in registration order, each in its own task.
   pub fn recovery_step(&mut self, name: &'static str, step: StepFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.recovery_steps.insert(package, name, step)
   }
 
-  /// Register the trigger step, which runs after recovery and before the ready services. At most one registers it.
+  /// The registration of the trigger step, which runs after recovery and before the ready services. At most one
+  /// registers it.
   pub fn trigger_step(&mut self, name: &'static str, step: StepFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.trigger_step.insert_single(package, name, step)
   }
 
-  /// Register a let-go step. Normal stops run it after the shutdown log; failed startup runs it during cleanup.
+  /// The registration of a let-go step. Normal stops run it after the shutdown log; failed startup runs it
+  /// during cleanup.
   pub fn let_go_step(&mut self, name: &'static str, step: StepFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.let_go_steps.insert(package, name, step)
@@ -2053,17 +2066,17 @@ impl fmt::Display for StateError {
 impl std::error::Error for StateError {}
 
 impl StartupState {
-  /// Create startup state that shares the process's stop request.
+  /// Startup state that shares the process's stop request.
   pub fn with_stop(stop: StartupStop) -> Self {
     Self { values: RwLock::new(HashMap::new()), stop }
   }
 
-  /// Return the stop request shared by startup steps.
+  /// The stop request shared by startup steps.
   pub fn stop(&self) -> StartupStop {
     self.stop.clone()
   }
 
-  /// Store `value` as the one value of its type.
+  /// The storage of `value` as the one value of its type.
   pub fn insert<T: Any + Send + Sync>(&self, value: T) -> Result<(), StateError> {
     let mut values = self.values.write().expect("the startup state lock is never poisoned");
     if values.contains_key(&TypeId::of::<T>()) {
@@ -2175,8 +2188,8 @@ mod tests {
     }
   }
 
-  /// Registers under the package name `zeta`, which sorts after `alpha`: the tests check that the registration order,
-  /// not the name order, drives the outputs.
+  /// A test package registered under the name `zeta`, which sorts after `alpha`: the tests check that the registration
+  /// order, not the name order, drives the outputs.
   fn zeta(registry: &mut Registry) -> Result<(), RegistryError> {
     registry.router(no_routes, no_path)?;
     registry.metadata_slot(session_slot("zeta"))?;

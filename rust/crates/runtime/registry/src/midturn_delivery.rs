@@ -126,7 +126,7 @@ pub fn launch_kwargs(
   }
 }
 
-/// Bind a gated process while preserving this Run's replay evidence.
+/// The binding of a gated process, with this Run's replay evidence preserved.
 ///
 /// `backend_run_id` is `backend.midturn_run_id()`: `None` leaves the plain-text stdin path unbound. Each bind
 /// registers the process's first-line uuid, so a relay writes its continuation prompt under a uuid the transcript
@@ -179,7 +179,7 @@ pub fn is_first_line(run_id: &str, uuid: &str) -> bool {
   })
 }
 
-/// Encode one stream-json user input line.
+/// The encoded stream-json line of one user input.
 fn user_line(uuid: &str, content: &str) -> Vec<u8> {
   let mut line = json!({
     "type": "user",
@@ -192,7 +192,7 @@ fn user_line(uuid: &str, content: &str) -> Vec<u8> {
   line
 }
 
-/// Write the Run prompt as the first JSON message and keep stdin open.
+/// The Run prompt written as the first JSON message, with stdin left open.
 ///
 /// The line's uuid is the one `bind_process` registered for this process. It is the Run id for the first process,
 /// and a fresh derived uuid for a relay, whose copied transcript already holds the earlier first lines.
@@ -235,7 +235,7 @@ async fn write_line(
   Ok(())
 }
 
-/// Write each composed input once to the live Run's stdin, returning the ids this call wrote.
+/// Each composed input written once to the live Run's stdin, returning the ids this call wrote.
 ///
 /// `inputs` carries one composed `(event id, content)` pair per pending web user event. An id is attempted once per
 /// Run: a later offer of the same event writes nothing.
@@ -270,7 +270,7 @@ pub async fn offer(run_id: &str, inputs: Vec<(String, String)>) -> anyhow::Resul
   Ok(written)
 }
 
-/// Turn a replay of a delivered user message into a non-rendered acknowledgement.
+/// The non-rendered acknowledgement of a replay of a delivered user message.
 pub fn translate_replay(run_id: Option<&str>, event: &Value) -> anyhow::Result<Vec<Value>> {
   if event.get("type").and_then(Value::as_str) != Some(event_types::USER)
     || event.get(IS_REPLAY_FIELD) != Some(&Value::Bool(true))
@@ -297,7 +297,7 @@ pub fn translate_replay(run_id: Option<&str>, event: &Value) -> anyhow::Result<V
   })])
 }
 
-/// Close gated stdin under the write lock at the first result event.
+/// The close of gated stdin under the write lock at the first result event.
 pub async fn on_backend_event(run_id: Option<String>, event: &Value) -> anyhow::Result<()> {
   let Some(run_id) = run_id else {
     return Ok(());

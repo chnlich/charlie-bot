@@ -11,7 +11,7 @@ pub struct RouteClaims {
 }
 
 impl RouteClaims {
-  /// Build the claims from the patterns a router mounts. Fails when two patterns conflict.
+  /// The claims built from the patterns a router mounts. Fails when two patterns conflict.
   pub fn new(patterns: &[&str]) -> Result<Self, matchit::InsertError> {
     let mut routes = Router::new();
     for pattern in patterns {

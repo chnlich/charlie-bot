@@ -59,7 +59,7 @@ impl AccountLabelKeeper for LifecycleAccountLabels {
   }
 }
 
-/// Restores the resume anchors and each lifecycle's account label from disk before an ordinary save.
+/// The resume anchors and each lifecycle's account label, read from disk before an ordinary save.
 struct LifecycleAnchors {
   registry: Arc<Registry>,
 }
@@ -349,7 +349,7 @@ mod tests {
     }
   }
 
-  /// Records the session of each after-turn call.
+  /// A contribution that records the session of each after-turn call.
   struct RecordingContribution;
 
   impl TurnContribution for RecordingContribution {
@@ -408,7 +408,7 @@ mod tests {
     }
   }
 
-  /// Keeps each error event that the store's after-turn tasks log.
+  /// A capture that keeps each error event that the store's after-turn tasks log.
   struct ErrorCapture(Arc<Mutex<Vec<ErrorEvent>>>);
 
   impl EventSink for ErrorCapture {
@@ -449,7 +449,8 @@ mod tests {
     (errors, guard)
   }
 
-  /// Writes the session's metadata file. The synthetic registry registers no metadata slots, so none is written.
+  /// The writing of the session's metadata file. The synthetic registry registers no metadata slots, so
+  /// none is written.
   fn write_session(store: &Store, session_id: &str) {
     let meta = SessionMetadata::new(session_id, "Synthetic", TaskProfile::Manager);
     let path = store.metadata_path(session_id);
@@ -627,7 +628,7 @@ mod tests {
     assert_eq!(stale.cc_session_id, None);
   }
 
-  /// Yields until `done` holds. The store's after-turn tasks run on this test's current-thread runtime meanwhile.
+  /// The wait until `done` holds. The store's after-turn tasks run on this test's current-thread runtime meanwhile.
   async fn settle(done: impl Fn() -> bool) {
     tokio::time::timeout(Duration::from_secs(5), async {
       while !done() {

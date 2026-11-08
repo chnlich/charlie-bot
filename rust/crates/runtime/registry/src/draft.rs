@@ -19,7 +19,7 @@ pub struct DraftContext {
 }
 
 impl DraftContext {
-  /// Build the context from the two live inputs.
+  /// The context built from the two live inputs.
   pub fn new(config: Arc<HotReload<CharlieBotConfig>>, credentials: Arc<HotReload<Credentials>>) -> Self {
     Self { config, credentials }
   }
@@ -86,8 +86,8 @@ pub trait DraftPlatform: Send + Sync {
   /// The target's one-line label for the draft card.
   fn target_label(&self, target: &Value) -> String;
 
-  /// Send `body` exactly as registered. A transport failure after the request was sent reports `Unknown`; a platform
-  /// error response reports `Rejected`.
+  /// The send of `body` exactly as registered. A transport failure after the request was sent reports `Unknown`; a
+  /// platform error response reports `Rejected`.
   fn send<'a>(&'a self, target: &'a Value, body: &'a str) -> BoxFuture<'a, Result<DraftSent, DraftSendFailure>>;
 }
 

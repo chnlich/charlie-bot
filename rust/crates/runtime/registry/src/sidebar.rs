@@ -20,7 +20,7 @@ pub trait SidebarContribution: Send + Sync {
     Vec::new()
   }
 
-  /// Copy this feature's files from the parent's session directory into the child's.
+  /// The copy of this feature's files from the parent's session directory into the child's.
   fn copy_on_fork(&self, _parent_dir: &Path, _child_dir: &Path) -> anyhow::Result<()> {
     Ok(())
   }

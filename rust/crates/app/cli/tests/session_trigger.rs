@@ -748,11 +748,14 @@ fn test_launch_remote_end_to_end_localhost() {
 #[ignore = "integration"]
 fn test_launch_remote_wrapper_runs_the_command_under_a_local_stub_ssh() {
   // The remote path without the network: the wrapper's own shell script runs here, so a syntax or PID-capture slip
-  // in it shows up as a missing exit file or a wrong PID.
+  // in it shows up as a missing exit file or a wrong PID. The `~/` working directory is the stub shell's HOME, which
+  // is the sandbox root.
   let sandbox = Sandbox::new();
   stub_ssh_running_locally(&sandbox);
   let stub = StubApi::start(registering(sandbox.home.clone()));
   sandbox.write_config(stub.port);
+  let work = sandbox.root.path().join("work");
+  fs::create_dir_all(&work).expect("the working directory is created");
 
   let run = sandbox.run(&[
     "--session",
@@ -762,11 +765,11 @@ fn test_launch_remote_wrapper_runs_the_command_under_a_local_stub_ssh() {
     "--message",
     "m",
     "--cmd",
-    "sleep 0.2; echo hi",
+    "pwd; sleep 0.2; echo hi",
     "--host",
     "localhost",
     "--cwd",
-    "/tmp",
+    "~/work",
   ]);
 
   assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -777,7 +780,9 @@ fn test_launch_remote_wrapper_runs_the_command_under_a_local_stub_ssh() {
   assert_eq!(out["log"], remote_dir.join("log").display().to_string());
   let _cleanup = RemoteRunDir(remote_dir.clone());
   assert_eq!(wait_for_exit_code(&remote_dir.join("exit")), "0");
-  assert!(fs::read_to_string(remote_dir.join("log")).expect("the log reads").contains("hi"));
+  let log = fs::read_to_string(remote_dir.join("log")).expect("the log reads");
+  assert_eq!(log.lines().next(), Some(work.display().to_string().as_str()), "{log}");
+  assert!(log.contains("hi"), "{log}");
 }
 
 #[test]

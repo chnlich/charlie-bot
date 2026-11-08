@@ -122,6 +122,16 @@ fn absolute_remote_path(remote_path: &str, remote_home: &str) -> String {
   format!("{remote_home}{rest}")
 }
 
+/// A remote working directory as a shell word. A `~` or `~/` prefix names the ssh login directory: it stays a
+/// double-quoted `$HOME`, so the remote shell expands it as it does for the run paths. Other forms, `~user`
+/// included, are quoted.
+fn remote_dir_word(dir: &str) -> String {
+  match dir.strip_prefix('~') {
+    Some(rest) if rest.is_empty() || rest.starts_with('/') => remote_shell_word(&format!("{REMOTE_HOME}{rest}")),
+    _ => shell_quote(dir),
+  }
+}
+
 /// Start the wrapper on `host` over ssh and `setsid`, and return its remote PID with the absolute paths of its log and
 /// exit file.
 ///
@@ -138,7 +148,7 @@ pub fn launch_remote(host: &str, cmd: &str, cwd: Option<&str>, launch_id: &str) 
   // started command that stayed on the channel would keep ssh open until the command ends.
   let background =
     format!("setsid bash -lc {} < /dev/null > {} 2>&1 &", shell_quote(&inner), remote_shell_word(&remote_log));
-  let cd = cwd.map_or(String::new(), |dir| format!("cd {} && ", shell_quote(dir)));
+  let cd = cwd.map_or(String::new(), |dir| format!("cd {} && ", remote_dir_word(dir)));
   // The remote shell echoes its home before the PID, so the launch can record absolute paths.
   let wrapper = format!(
     "mkdir -p {} && echo \"{REMOTE_HOME}\" && {cd}{{ {background} echo $! > {pid_file} && cat {pid_file}; }}",

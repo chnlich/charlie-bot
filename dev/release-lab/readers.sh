@@ -35,10 +35,14 @@ if (( BLOCKS < 1 )); then
 fi
 DELAY=$(awk -v ms="$SLEEP_MS" 'BEGIN { printf "%.3f\n", ms / 1000 }')
 PIDS=()
+SLEEP_PID=
 
+# stop ends the readers at once. The timed sleep runs as a child, so a signal reaches this trap while it waits: a
+# foreground sleep would hold the trap off until the whole window had passed.
 stop() {
   local pid
   trap - TERM INT EXIT
+  [ -z "$SLEEP_PID" ] || kill -TERM "$SLEEP_PID" 2>/dev/null || true
   for pid in "${PIDS[@]}"; do
     kill -TERM "$pid" 2>/dev/null || true
   done
@@ -65,5 +69,7 @@ for ((index = 0; index < COUNT; index++)); do
   PIDS+=("$!")
 done
 printf 'readers.sh: %s reader(s) of %s for %s s\n' "$COUNT" "$FILE" "$SECONDS_TO_READ" >&2
-sleep "$SECONDS_TO_READ"
+sleep "$SECONDS_TO_READ" &
+SLEEP_PID=$!
+wait "$SLEEP_PID"
 stop

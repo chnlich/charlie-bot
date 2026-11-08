@@ -564,7 +564,7 @@ run_one_flow() {
   local run=$1 start_ms load1 rel_start sw_start sw_rc switch_log switch_pid run_dir
   local download_s units_s trial_s rehearsal_s install_s preflight_s gate_s stop_s start_s
   local ready_in_ms read_bytes release_to_live_s release_stamp_ms live_runs reattached verdict switch_exit
-  local gate_waits marks gate_start gate_end pre_preflight preflight_after_gate a b
+  local gate_waits marks gate_start gate_end pre_preflight preflight_after_gate a b server_log_before
 
   start_ms=$(ms_now)
   load1=$(cut -d' ' -f1 /proc/loadavg)
@@ -616,6 +616,7 @@ run_one_flow() {
   # launcher's preflight must compare it with the same commit's units, as a live host compares the live release's.
   install_flow_units
 
+  server_log_before=$(readlink "$SERVER_LOGS/server-latest.log" 2> /dev/null || true)
   sw_start=$(ms_now)
   : > "$RUN_DIR/switch.out"
   ( flow_vars && export CHARLIEBOT_SWITCH_LAB_MARKS=1 && "$SWITCH_SCRIPT" rust "$TO" ) \
@@ -664,11 +665,12 @@ run_one_flow() {
   gate_waits=0
   [ -n "$switch_log" ] && [ -f "$switch_log" ] && gate_waits=$(grep -c 'waiting for the root disk' "$switch_log" || true)
 
+  # The stand-in's server writes a log of its own; only a log the switch created carries the new server's reading.
   ready_in_ms=
   read_bytes=
-  if [ -L "$SERVER_LOGS/server-latest.log" ]; then
-    local server_log
-    server_log=$(readlink "$SERVER_LOGS/server-latest.log")
+  local server_log
+  server_log=$(readlink "$SERVER_LOGS/server-latest.log" 2> /dev/null || true)
+  if [ -n "$server_log" ] && [ "$server_log" != "$server_log_before" ]; then
     ready_in_ms=$(grep -oE '[[:space:]]ready_in_ms=[0-9]+' "$server_log" 2> /dev/null | tail -1 | cut -d= -f2)
     read_bytes=$(grep -oE '[[:space:]]read_bytes=[0-9]+' "$server_log" 2> /dev/null | tail -1 | cut -d= -f2)
   fi

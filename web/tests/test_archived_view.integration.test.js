@@ -729,3 +729,43 @@ test('a broadcast during a page append runs one refresh once the append lands', 
   // The trailing refresh finds the rows the append already merged: no repaint.
   assert.deepEqual(containers.map((el) => writes.get(el).length), written.map((n) => n + 1));
 });
+
+// The page's document carries the loader under web/templates, not the view itself: the template
+// loader reads web/templates before web/static, so the include of the same name resolves to the
+// loader. The first call starts the module's download from the static route and forwards once it
+// arrives; the module's own wire then replaces the forwards.
+test('the page loader forwards each wired entry to the archived module on first use', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const requests = [];
+  const forwarded = [];
+  let settle;
+  const context = vm.createContext({
+    Sidebar: {
+      wire(globals) { Object.assign(this, globals); },
+    },
+    loadPageScripts(key, paths) {
+      requests.push([key, paths]);
+      return new Promise((resolve) => { settle = resolve; });
+    },
+  });
+  const loader = fs.readFileSync(path.join(__dirname, '..', 'templates', 'js', 'sidebar', 'archived.js'), 'utf8');
+  vm.runInContext(loader, context, {filename: 'templates/js/sidebar/archived.js'});
+
+  const entries = ['loadArchivedView', 'refreshArchivedView', 'setArchivedGroupFilter',
+    'loadArchivedNextPage', 'archivedStarToggled', 'archivedForgetSession', 'applyArchivedGroupChange'];
+  for (const entry of entries) assert.equal(typeof context.Sidebar[entry], 'function', entry);
+  assert.equal(requests.length, 0, 'the loader fetches nothing until a call arrives');
+
+  const pending = context.Sidebar.loadArchivedView('session-a', 3);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0][0], 'sidebar-archived-view');
+  assert.deepEqual(Array.from(requests[0][1]), ['/static/js/sidebar/archived.js']);
+
+  // The module's own wire arrives with the download and replaces the forward.
+  context.Sidebar.loadArchivedView = (...args) => { forwarded.push(args); };
+  settle();
+  await pending;
+  assert.equal(forwarded.length, 1);
+  assert.deepEqual(Array.from(forwarded[0]), ['session-a', 3]);
+});

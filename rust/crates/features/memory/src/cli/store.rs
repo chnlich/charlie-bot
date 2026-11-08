@@ -7,9 +7,8 @@ use charliebot_core::str_methods;
 use charliebot_core::text_repr::str_repr;
 use unicode_width::UnicodeWidthChar;
 
-pub(super) const TOPICS_FILENAME: &str = "topics";
-const ENTRIES_DIRNAME: &str = "entries";
-pub(super) const STAGING_DIRNAME: &str = "staging";
+use crate::memory::{ENTRIES_DIRNAME, STAGING_DIRNAME, TOPICS_FILENAME};
+
 pub(super) const BODY_LINE_COLUMN_LIMIT: usize = 120;
 
 pub(super) fn lint_store(root: &Path) -> Result<(Vec<String>, Vec<String>), CliExit> {
@@ -88,7 +87,7 @@ fn parse_topic_line(raw: &str) -> Option<(&str, bool)> {
 
 fn validate_entry(entry: &crate::memory::Entry, topics: &BTreeMap<String, bool>) -> Vec<String> {
   let topic_label = entry.topic.as_deref().unwrap_or("?");
-  let violation = |message: String| format!("entries/{topic_label}/{}.md: {message}", entry.slug);
+  let violation = |message: String| format!("{ENTRIES_DIRNAME}/{topic_label}/{}.md: {message}", entry.slug);
   let mut violations = Vec::new();
   if !is_slug(&entry.slug) {
     violations

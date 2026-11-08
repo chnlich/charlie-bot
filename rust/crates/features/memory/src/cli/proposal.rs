@@ -11,6 +11,7 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use super::proposal_check;
 use super::store;
+use crate::memory::TOPICS_FILENAME;
 
 const PROPOSAL_BRANCH: &str = "proposal";
 const PROPOSAL_WORKTREE_SUFFIX: &str = "-proposal";
@@ -427,7 +428,7 @@ fn commit(memory_dir: &Path, path: &str, message_file: &Path, replace_pr_lines: 
   }
   let mut warnings = Vec::new();
   if let Some(text) = current_text.as_deref()
-    && relative.as_path() != Path::new("topics")
+    && relative.as_path() != Path::new(TOPICS_FILENAME)
   {
     let base_text = rev_text(memory_dir, &base, path)?;
     let head_body = rev_text(memory_dir, PROPOSAL_BRANCH, path)?.as_deref().map(body_counts).unwrap_or_default();

@@ -69,7 +69,7 @@ fn delivery_time<E: Borrow<ChatEvent>>(
     if event.get("run_id").and_then(CompactValue::as_str) != Some(run.id.as_str()) {
       continue;
     }
-    return Ok(Some(event_time(event, "input_delivered")?));
+    return Ok(Some(event_time(event, INPUT_DELIVERED)?));
   }
   Ok(None)
 }

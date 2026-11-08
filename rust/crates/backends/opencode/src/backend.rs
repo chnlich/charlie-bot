@@ -24,6 +24,7 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use super::options::{OpenCodeOption, model_overrides_config};
+use super::protocol;
 use super::relay::{self, TurnRecord};
 use super::server::{OpenCodeHost, OpenCodeServer, OpenCodeServerPool, Turn};
 use charliebot_agents::cli_base::{apply_proxy_env, image_mime};
@@ -41,7 +42,7 @@ const TOOL_EVENT_TYPES: [&str; 25] = [
   "session.agent.selected",
   "session.created",
   "session.deleted",
-  "session.execution.started",
+  protocol::EXECUTION_STARTED,
   "session.forked",
   "session.inbox.cancelled",
   "session.inbox.delivered",
@@ -315,7 +316,7 @@ impl ServeTurn for OpenCodeTurn {
     let mut env = Env::from([
       ("CHARLIEBOT_OPENCODE_RELAY_DIRECTORY".to_string(), run_directory.display().to_string()),
       (
-        "CHARLIEBOT_OPENCODE_SERVER_DIRECTORY".to_string(),
+        protocol::SERVER_DIRECTORY_VAR.to_string(),
         self
           .plan
           .host
@@ -818,20 +819,20 @@ impl OpenCodeTranslator {
     let event_type = required_string(event, "type")?;
     let data = object_or_empty(event.get("data"))?;
     match event_type {
-      "session.execution.succeeded" => {
+      protocol::EXECUTION_SUCCEEDED => {
         self.terminal = Some(TurnTerminal::Succeeded);
         Ok(vec![self.accumulated_result(self.model_limit.as_ref())])
       }
-      "session.execution.failed" => {
+      protocol::EXECUTION_FAILED => {
         self.terminal = Some(TurnTerminal::Failed);
         Ok(vec![event_builders::make_error_event(&error_text(data.get("error")))])
       }
-      "session.execution.interrupted" => {
+      protocol::EXECUTION_INTERRUPTED => {
         self.terminal = Some(TurnTerminal::Interrupted);
         let reason = data.get("reason").map(value_str).unwrap_or_else(|| "None".to_string());
         Ok(vec![event_builders::make_error_event(&format!("OpenCode execution interrupted (reason: {reason})"))])
       }
-      "charliebot.opencode_relay.ended" => {
+      protocol::RELAY_ENDED => {
         self.terminal = Some(TurnTerminal::RelayEnded);
         let reason = required_string(event, "reason")?;
         Ok(vec![event_builders::make_error_event(&format!("OpenCode backend failed: {reason}"))])

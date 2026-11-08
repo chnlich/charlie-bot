@@ -61,7 +61,7 @@ function startTrial({ args, meta, plan, segmentIndex, build }) {
   const logFile = path.join(logDir, `${build}-${segmentIndex}.log`);
   const log = fs.openSync(logFile, 'a');
   const [portMin, portMax] = PORT_RANGES[build];
-  const treeRoot = path.join('/tmp', `rw-${meta.run_id.slice(-6)}-${build[0]}${segmentIndex}`);
+  const treeRoot = `${meta.tree_prefix}-${build[0]}${segmentIndex}`;
   fs.rmSync(treeRoot, { recursive: true, force: true });
   fs.mkdirSync(treeRoot, { recursive: true });
   const seed = segmentIndex === 0

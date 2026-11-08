@@ -144,6 +144,9 @@ echo "remote-wake: run $run_id -> $run_dir"
 
 container="rw-$run_id"
 container_created=0
+# The orchestrator names each trial tree `$tree_prefix-<b><segment>`, and cleanup removes exactly that set, so the
+# prefix reaches the orchestrator through meta.json instead of being rebuilt from the run id on one side only.
+tree_prefix="/tmp/rw-$run_id"
 
 cleanup() {
   local code=$?
@@ -151,11 +154,15 @@ cleanup() {
   if [[ -n ${ctl_base:-} && $ctl_base == /tmp/rwc.* ]]; then
     rm -rf -- "$ctl_base"
   fi
-  for tree_root in /tmp/rw-${run_id##*-}-?*; do
+  for tree_root in "$tree_prefix"-?*; do
     if [[ -e $tree_root ]]; then
       rm -rf -- "$tree_root"
     fi
   done
+  if compgen -G "$tree_prefix-?*" >/dev/null; then
+    printf 'remote-wake: trial trees remain after cleanup under %s\n' "$tree_prefix" >&2
+    code=1
+  fi
   if ((container_created)); then
     docker rm -f "$container" >/dev/null 2>&1 || true
     if docker ps -a --format '{{.Names}}' | grep -qx "$container"; then
@@ -331,10 +338,12 @@ node "$SCRIPT_DIR/plan.mjs" --waits "$waits" --seed "$seed" --stagger-seconds "$
   >"$run_dir/plan.json" || die 1 "the workload plan could not be generated"
 
 node - "$run_dir/meta.json" "$run_id" "$before_commit" "$after_commit" "$rtt_ms" "$container" "$gate" \
-  "$run_dir" "${ssh_users[0]}" "${ssh_users[1]}" "$after_target" "$ctl_base" <<'NODE' || die 1 "meta.json could not be written"
-const [file, runId, beforeCommit, afterCommit, rttMs, container, gate, runDir, beforeUser, afterUser, afterTarget, ctlBase] = process.argv.slice(2);
+  "$run_dir" "${ssh_users[0]}" "${ssh_users[1]}" "$after_target" "$ctl_base" "$tree_prefix" \
+  <<'NODE' || die 1 "meta.json could not be written"
+const [file, runId, beforeCommit, afterCommit, rttMs, container, gate, runDir, beforeUser, afterUser, afterTarget, ctlBase, treePrefix] = process.argv.slice(2);
 const meta = {
   run_id: runId,
+  tree_prefix: treePrefix,
   created_at: new Date().toISOString(),
   commits: { before: beforeCommit, after: afterCommit },
   binaries: {

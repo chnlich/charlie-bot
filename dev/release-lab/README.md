@@ -74,8 +74,9 @@ unless it is that release's file plus the mark lines and nothing else.
 Each flow attempt prints one JSON line with the stages' seconds (`download_s`, `units_s`, `trial_s`, `rehearsal_s`,
 `install_s`, `preflight_s`, `gate_s`, `stop_s`, `start_s`), `ready_in_ms`, `read_bytes`, `release_to_live_s`,
 `live_runs`, `reattached`, `verdict` (`live`, `switched_back`, `kept_reported`, `flow_stopped`, `start_failed` or
-`switch_failed`) and the host's one-minute load at the start. `flow_stopped` and `start_failed` attempts are retried
-until `--runs` runs reached the switch, up to `--runs + 2` attempts.
+`switch_failed`), the host's one-minute load at the start and the host's `/proc` entry count at the start
+(`proc_entries`, which the gate's read-table walks cost scales with). `flow_stopped` and `start_failed` attempts are
+retried until `--runs` runs reached the switch, up to `--runs + 2` attempts.
 
 `--mode starts` prints one line per cold start of `--to` on the seed home: `ready_in_ms`, `read_bytes` and the reader
 count. Its readers start when the trial creates the server log and stop at `server_ready`.

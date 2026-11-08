@@ -181,8 +181,17 @@ paths:
     - $LAB/workspace
   worktree_dir: $LAB/worktrees
 backends:
-  pool:
-    - $BACKEND
+  calls:
+    worker: $BACKEND
+    improve: $BACKEND
+    verify: $BACKEND
+    review: $BACKEND
+    cold_read: $BACKEND
+    probe: $BACKEND
+    autoname: $BACKEND
+    triage: $BACKEND
+    thread: $BACKEND
+    new_session: $BACKEND
   options:
     - id: $BACKEND
       label: Release lab
@@ -577,7 +586,7 @@ release_start_ms() {
 mark_value() { awk -v name="$2" '$1 == name { print $2; exit }' <<< "$1"; }
 
 run_one_flow() {
-  local run=$1 start_ms load1 rel_start sw_start sw_rc switch_log switch_pid run_dir
+  local run=$1 start_ms load1 proc_entries rel_start sw_start sw_rc switch_log switch_pid run_dir
   # Every stage field prints, so each starts empty: a run that stops before the switch has no switch stage to time.
   local download_s='' units_s='' trial_s='' rehearsal_s='' install_s='' preflight_s='' gate_s='' stop_s='' start_s=''
   local ready_in_ms read_bytes release_to_live_s release_stamp_ms live_runs reattached verdict switch_exit
@@ -585,6 +594,8 @@ run_one_flow() {
 
   start_ms=$(ms_now)
   load1=$(cut -d' ' -f1 /proc/loadavg)
+  # The gate's read-table walks cost time in proportion to the /proc entry count, so the line records it at the start.
+  proc_entries=$(find /proc -maxdepth 1 -name '[0-9]*' 2> /dev/null | wc -l)
   RUN_DIR="$RUNS_DIR/$(date -u +%Y%m%dT%H%M%SZ)-run$run"
   mkdir -p "$RUN_DIR" || fail "the run directory writes: $RUN_DIR"
   log "run $run: $FROM -> $TO, flow $FLOW_REF, readers $READERS, load $load1"
@@ -598,8 +609,8 @@ run_one_flow() {
     standin_stop
     [ "$KEEP" = 1 ] || rm -rf "$STANDIN"
     LAST_VERDICT=start_failed
-    printf '{"kind":"flow","run":%s,"from":"%s","to":"%s","flow_ref":"%s","download_s":null,"units_s":null,"trial_s":null,"rehearsal_s":null,"install_s":null,"preflight_s":null,"gate_s":null,"stop_s":null,"start_s":null,"ready_in_ms":null,"read_bytes":null,"release_to_live_s":null,"live_runs":null,"reattached":null,"verdict":"start_failed","switch_exit":null,"load1":%s,"readers":%s,"gate_wait_samples":null,"download_source":"lab"}\n' \
-      "$run" "$FROM" "$TO" "$FLOW_REF" "$load1" "$READERS"
+    printf '{"kind":"flow","run":%s,"from":"%s","to":"%s","flow_ref":"%s","download_s":null,"units_s":null,"trial_s":null,"rehearsal_s":null,"install_s":null,"preflight_s":null,"gate_s":null,"stop_s":null,"start_s":null,"ready_in_ms":null,"read_bytes":null,"release_to_live_s":null,"live_runs":null,"reattached":null,"verdict":"start_failed","switch_exit":null,"load1":%s,"proc_entries":%s,"readers":%s,"gate_wait_samples":null,"download_source":"lab"}\n' \
+      "$run" "$FROM" "$TO" "$FLOW_REF" "$load1" "$proc_entries" "$READERS"
     return 1
   fi
 
@@ -623,9 +634,9 @@ run_one_flow() {
     standin_stop
     [ "$KEEP" = 1 ] || rm -rf "$STANDIN"
     LAST_VERDICT=flow_stopped
-    printf '{"kind":"flow","run":%s,"from":"%s","to":"%s","flow_ref":"%s","download_s":%s,"units_s":%s,"trial_s":%s,"rehearsal_s":%s,"install_s":%s,"preflight_s":null,"gate_s":null,"stop_s":null,"start_s":null,"ready_in_ms":null,"read_bytes":null,"release_to_live_s":null,"live_runs":null,"reattached":null,"verdict":"flow_stopped","switch_exit":null,"load1":%s,"readers":%s,"gate_wait_samples":null,"download_source":"lab"}\n' \
+    printf '{"kind":"flow","run":%s,"from":"%s","to":"%s","flow_ref":"%s","download_s":%s,"units_s":%s,"trial_s":%s,"rehearsal_s":%s,"install_s":%s,"preflight_s":null,"gate_s":null,"stop_s":null,"start_s":null,"ready_in_ms":null,"read_bytes":null,"release_to_live_s":null,"live_runs":null,"reattached":null,"verdict":"flow_stopped","switch_exit":null,"load1":%s,"proc_entries":%s,"readers":%s,"gate_wait_samples":null,"download_source":"lab"}\n' \
       "$run" "$FROM" "$TO" "$FLOW_REF" "$(json_num "$download_s")" "$(json_num "$units_s")" "$(json_num "$trial_s")" \
-      "$(json_num "$rehearsal_s")" "$(json_num "$install_s")" "$load1" "$READERS"
+      "$(json_num "$rehearsal_s")" "$(json_num "$install_s")" "$load1" "$proc_entries" "$READERS"
     return 1
   fi
 
@@ -719,12 +730,12 @@ run_one_flow() {
   else
     rm -rf "$STANDIN"
   fi
-  printf '{"kind":"flow","run":%s,"from":"%s","to":"%s","flow_ref":"%s","download_s":%s,"units_s":%s,"trial_s":%s,"rehearsal_s":%s,"install_s":%s,"preflight_s":%s,"gate_s":%s,"stop_s":%s,"start_s":%s,"ready_in_ms":%s,"read_bytes":%s,"release_to_live_s":%s,"live_runs":%s,"reattached":%s,"verdict":"%s","switch_exit":%s,"load1":%s,"readers":%s,"gate_wait_samples":%s,"download_source":"lab"}\n' \
+  printf '{"kind":"flow","run":%s,"from":"%s","to":"%s","flow_ref":"%s","download_s":%s,"units_s":%s,"trial_s":%s,"rehearsal_s":%s,"install_s":%s,"preflight_s":%s,"gate_s":%s,"stop_s":%s,"start_s":%s,"ready_in_ms":%s,"read_bytes":%s,"release_to_live_s":%s,"live_runs":%s,"reattached":%s,"verdict":"%s","switch_exit":%s,"load1":%s,"proc_entries":%s,"readers":%s,"gate_wait_samples":%s,"download_source":"lab"}\n' \
     "$run" "$FROM" "$TO" "$FLOW_REF" "$(json_num "$download_s")" "$(json_num "$units_s")" "$(json_num "$trial_s")" \
     "$(json_num "$rehearsal_s")" "$(json_num "$install_s")" "$(json_num "$preflight_s")" "$(json_num "$gate_s")" \
     "$(json_num "$stop_s")" "$(json_num "$start_s")" "$(json_num "$ready_in_ms")" "$(json_num "$read_bytes")" \
     "$(json_num "$release_to_live_s")" "$(json_num "$live_runs")" "$(json_bool "$reattached")" "$verdict" \
-    "$(json_num "$switch_exit")" "$load1" "$READERS" "$gate_waits"
+    "$(json_num "$switch_exit")" "$load1" "$proc_entries" "$READERS" "$gate_waits"
   LAST_VERDICT=$verdict
   return 0
 }
@@ -756,8 +767,9 @@ startup_lab_layout() {
 run_one_start() {
   local readers=$1 run=$2 pid rc ready read_bytes void=false started=0
   local trial_tree="$STARTUP/trials/trial-${TO:0:12}"
-  local out
+  local out proc_entries
   load1=$(cut -d' ' -f1 /proc/loadavg)
+  proc_entries=$(find /proc -maxdepth 1 -name '[0-9]*' 2> /dev/null | wc -l)
   RUN_DIR="$RUNS_DIR/$(date -u +%Y%m%dT%H%M%SZ)-start-r$readers-$run"
   mkdir -p "$RUN_DIR" || fail "the run directory writes: $RUN_DIR"
   rm -rf "$trial_tree"
@@ -785,8 +797,8 @@ run_one_start() {
   read_bytes=$(sed -n 's/.*disk_read_bytes=\([0-9]*\).*/\1/p' "$out" | tail -1)
   local void=false
   if [ "$rc" -ne 0 ] || [ -z "$ready" ]; then void=true; fi
-  printf '{"kind":"start","to":"%s","cache":"cold","readers":%s,"run":%s,"ready_in_ms":%s,"read_bytes":%s,"load1":%s,"exit":%s,"void":%s}\n' \
-    "$TO" "$readers" "$run" "$(json_num "$ready")" "$(json_num "$read_bytes")" "$load1" "$rc" "$void"
+  printf '{"kind":"start","to":"%s","cache":"cold","readers":%s,"run":%s,"ready_in_ms":%s,"read_bytes":%s,"load1":%s,"proc_entries":%s,"exit":%s,"void":%s}\n' \
+    "$TO" "$readers" "$run" "$(json_num "$ready")" "$(json_num "$read_bytes")" "$load1" "$proc_entries" "$rc" "$void"
   [ "$void" = false ]
 }
 

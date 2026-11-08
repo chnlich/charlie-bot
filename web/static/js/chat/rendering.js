@@ -51,12 +51,12 @@ function renderToolRows(tools) {
       var colorCls = tool.is_error ? 'text-red-400' : 'text-slate-400';
       if (outText.length > 500) {
         var oid = 'to-' + Math.random().toString(36).slice(2);
-        outputHtml = '<pre class="mt-1 text-xs ' + colorCls + ' whitespace-pre-wrap break-all">'
+        outputHtml = '<pre class="mt-1 text-xs ' + colorCls + ' whitespace-pre-wrap break-words">'
           + wrapWideChars(escapeHtml(outText.substring(0, 500)))
           + showMoreToggleHtml(oid, wrapWideChars(escapeHtml(outText.substring(500))))
           + '</pre>';
       } else {
-        outputHtml = '<pre class="mt-1 text-xs ' + colorCls + ' whitespace-pre-wrap break-all">' + wrapWideChars(escapeHtml(outText)) + '</pre>';
+        outputHtml = '<pre class="mt-1 text-xs ' + colorCls + ' whitespace-pre-wrap break-words">' + wrapWideChars(escapeHtml(outText)) + '</pre>';
       }
       if (tool.output_truncated) {
         outputHtml += '<div class="mt-1 text-xs text-slate-500">output truncated &mdash; full text in the session\'s raw events</div>';

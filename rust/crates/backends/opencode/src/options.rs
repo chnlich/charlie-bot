@@ -12,7 +12,8 @@ use serde_yaml::{Mapping, Value};
 const CONTEXT_LIMIT: &str = "context_limit";
 
 /// The `opencode` option's type-specific fields in `OpencodeBackend`'s declaration order, each with the value the
-/// option model holds when an entry omits it. `charliebot config get backends` renders them.
+/// option model holds when an entry omits it. `charliebot config get backends` renders them, and
+/// [`OpenCodeOption::from_fields`] accepts each of these names and no other.
 pub const SCHEMA: &[OptionField] = &[
   OptionField::field(PROXY_URL_KEY, OptionFieldDefault::Null),
   OptionField::field(CONTEXT_LIMIT, OptionFieldDefault::Null),
@@ -34,7 +35,7 @@ impl OpenCodeOption {
   pub fn from_fields(fields: &Mapping) -> Result<Self, String> {
     for key in fields.keys() {
       match key.as_str() {
-        Some(PROXY_URL_KEY | CONTEXT_LIMIT | EXTRA_BODY_KEY) => {}
+        Some(name) if SCHEMA.iter().any(|field| field.name == name) => {}
         Some(name) => return Err(format!("opencode option field {name:?} is not supported")),
         None => return Err(format!("opencode option key must be a string: {key:?}")),
       }
@@ -90,7 +91,7 @@ pub fn model_overrides_config(options: &[BackendOption]) -> anyhow::Result<Map<S
     let entry = models.entry(model.to_string()).or_insert_with(|| JsonValue::Object(Map::new()));
     let entry = entry.as_object_mut().expect("a model entry is an object");
     if let Some(limit) = fields.context_limit {
-      declare(&mut declared, &option.id, provider, model, "context_limit", &json!(limit))?;
+      declare(&mut declared, &option.id, provider, model, CONTEXT_LIMIT, &json!(limit))?;
       entry.insert("limit".to_string(), json!({"context": limit}));
     }
     if !fields.extra_body.is_empty() {

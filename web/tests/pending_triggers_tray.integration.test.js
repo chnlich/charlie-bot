@@ -39,15 +39,10 @@ function trigger(id, fireIso, message, targets = []) {
   };
 }
 
-function buildTrayContext({elements = new Map(), initialTriggers = null, windowListeners = null} = {}) {
+function buildTrayContext({elements = new Map(), initialTriggers = null} = {}) {
   const tray = createElement({id: 'pending-triggers-tray', className: 'hidden'});
   elements.set('pending-triggers-tray', tray);
   const {context} = baseSessionContext({elements});
-  // The tray is the first module to listen for offline and online (index.html loads it before status-panel.js and
-  // session-view.js), so the first registration of each event is the tray's.
-  if (windowListeners) {
-    context.window.addEventListener = (type, fn) => { if (!windowListeners.has(type)) windowListeners.set(type, fn); };
-  }
   context.Date = FixedDate;
   context.SESSION_ID = 'session-a';
 
@@ -494,27 +489,4 @@ test('the tray node sits between the thinking indicator and the input area', () 
   const input = html.indexOf('id="input-area"');
   assert.ok(thinking > -1 && tray > thinking && input > tray,
       `tray must sit between #thinking (${thinking}) and #input-area (${input}); got ${tray}`);
-});
-
-test('offline, the tray shows the offline label and sends no trigger request; back online it reloads', async () => {
-  const windowListeners = new Map();
-  const {context, tray, calls} = buildTrayContext({
-    windowListeners,
-    initialTriggers: [trigger('t1', at(3, 52), 'check the eval sweep results')],
-  });
-  context.navigator = {userAgent: 'TestAgent/1.0', onLine: false};
-
-  windowListeners.get('offline')();
-
-  assert.equal(tray.classList.contains('hidden'), false);
-  assert.equal(tray.textContent, context.OFFLINE_PANEL_LABEL);
-  assert.deepEqual(calls, [], 'no trigger request goes out while offline');
-
-  context.navigator = {userAgent: 'TestAgent/1.0', onLine: true};
-  windowListeners.get('online')();
-  await tick();
-
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, '/api/sessions/session-a/pending-triggers');
-  assert.match(tray.innerHTML, /check the eval sweep results/);
 });

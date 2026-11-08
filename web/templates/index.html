@@ -214,11 +214,6 @@
                session's waiting count, hidden at 0 (chat/status-panel.js). -->
           <button type="button" data-chat-view-option="status" onclick="setChatView('status')" aria-pressed="false"
                   class="hidden px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-slate-200 transition-colors aria-pressed:bg-blue-600/20 aria-pressed:text-blue-300">Status<span id="status-waiting-count" class="hidden ml-1 rounded-full bg-blue-600 px-2 py-0.5 text-xs text-white"></span></button>
-          <!-- The not-current mark: shown while the messages are a stored copy the page has not caught up
-               (sidebar/last-state.js sets data-freshness on it). -->
-          <span id="freshness-mark"
-                class="hidden ml-auto self-center px-2 py-0.5 text-xs rounded-md bg-amber-900/40
-                       text-amber-300">不是最新</span>
         </div>
         <div id="messages" class="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
           <!-- Streaming target (initialized from pending_draft if present) -->
@@ -376,7 +371,6 @@
   <script>{% include 'js/sidebar/groups.js' %}</script>
   <script>{% include 'js/sidebar/archived.js' %}</script>
   <script>{% include 'js/sidebar/filters.js' %}</script>
-  <script>{% include 'js/sidebar/last-state.js' %}</script>
   <script>{% include 'js/sidebar/session-view.js' %}</script>
   <script>{% include 'js/sidebar/modals.js' %}</script>
   <script>{% include 'js/sidebar/session-actions.js' %}</script>

@@ -42,11 +42,6 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' };
 // painting alike. index.html loads this file before every consumer; the static
 // #usage-bar markup renders before any script, so its copy stays local there.
 const PROGRESS_BAR_FILL_CLASS = 'h-full rounded-full transition-all duration-300';
-// The page's freshness labels: the not-current mark, the switch placeholder without a copy, and the right-hand
-// panels while the page is offline (sidebar/last-state.js and the panels that paint them).
-const NOT_CURRENT_LABEL = '不是最新';
-const NO_LOCAL_COPY_LABEL = '没有本机副本';
-const OFFLINE_PANEL_LABEL = '断网，联网后加载';
 
 // WebSocket endpoints take the access key as a 'token' query param: the
 // browser WebSocket API exposes no header channel for the fetch wrapper's

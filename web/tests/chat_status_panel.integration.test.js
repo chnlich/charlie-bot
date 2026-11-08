@@ -704,14 +704,3 @@ test('a platform.onChange switch redraws the shown Status view in the new layout
   switchLayout(rig, 'desktop');
   assert.equal(viewRow(rig.panel, 'goal').classList.contains('flex-col'), false, 'back to the label column');
 });
-
-test('offline, the status panel shows the offline label and asks the server for no status', () => {
-  const rig = panelRig();
-  rig.context.navigator = {userAgent: 'TestAgent/1.0', onLine: false};
-
-  rig.context.openSessionStatusPanel({id: 'session-c', profile: 'worker'}, []);
-
-  const texts = rig.panel.children.map((child) => child.textContent);
-  assert.ok(texts.includes(rig.context.OFFLINE_PANEL_LABEL), texts.join(' | '));
-  assert.deepEqual(rig.statusGets, [], 'no status request goes out while offline');
-});

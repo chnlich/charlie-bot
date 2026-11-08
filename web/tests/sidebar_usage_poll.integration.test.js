@@ -6,9 +6,6 @@ const {loadPageTimersOnce} = require('./websocket_context_stub');
 const { readStatic } = require('./read_static');
 const { createElement } = require('./dom_element_stub');
 const { escapeHtml } = require('./escape_html_stub');
-
-// A network answer: no stored-copy header (view-requests.js isStoredResponse reads it).
-const NO_STORED_COPY = {get: () => null};
 const { baseSessionContext, buildSidebarFilterElements, buildUsageElements, createChatSidebarContext,
   loadCronPackage, makeSessionMeta, sessionColumns } = require('./session_context_stub');
 
@@ -43,7 +40,7 @@ function buildContext(overrides = {}) {
     fetchRequests.push({url, opts});
     if (url.endsWith('/usage')) {
       return {
-        ok: true, headers: NO_STORED_COPY,
+        ok: true,
         async json() {
           return {
             session: {id: 'session-a', thinking_since: '2026-03-31T20:42:52Z'},
@@ -54,7 +51,7 @@ function buildContext(overrides = {}) {
       };
     }
     return {
-      ok: true, headers: NO_STORED_COPY,
+      ok: true,
       async json() {
         return {id: 'session-b', backend: context.ACTIVE_BACKEND_ID};
       },
@@ -313,7 +310,7 @@ test('pollSessionStatus names the Workspace rows by filter when every session it
   });
   context.fetch = async (url) => {
     requested.push(url);
-    return {ok: true, headers: NO_STORED_COPY, json: async () => ({})};
+    return {ok: true, json: async () => ({})};
   };
 
   await context.pollSessionStatus();
@@ -335,7 +332,7 @@ test('a session id list too long for one request is split and the results are me
     requested.push(url);
     const batch = url.slice(url.indexOf('?ids=') + 5).split(',').map(decodeURIComponent);
     return {
-      ok: true, headers: NO_STORED_COPY,
+      ok: true,
       json: async () =>
         statusAnswer(Object.fromEntries(batch.map((sid) => [sid, {has_unread: false, has_running_tasks: false}]))),
     };
@@ -359,7 +356,7 @@ test('pollSessionStatus updates pending trigger indicators from the status endpo
   context.fetch = async (url) => {
     assert.equal(url, '/api/sessions/status?filter=all&ids=session-a');
     return {
-      ok: true, headers: NO_STORED_COPY,
+      ok: true,
       async json() {
         return statusAnswer({
           'session-a': {
@@ -543,7 +540,7 @@ test('toggleSessionGroupLimit expansion is ephemeral and resets on the filter-pi
   // and both groups fall back to the five-session preview.
   context.fetch = async (url) => {
     assert.equal(url, '/api/sessions/starred');
-    return {ok: true, headers: NO_STORED_COPY, json: async () => sessions};
+    return {ok: true, json: async () => sessions};
   };
   context.enterSidebarFilter('starred');
   await new Promise(setImmediate);
@@ -557,7 +554,7 @@ test('toggleSessionGroupLimit expansion is ephemeral and resets on the filter-pi
 test('switchSidebarFilter owns no expansion reset and preserves expansion across filters', async () => {
   const {nav, context} = buildNavContext();
   const sessions = makeWorkSessions();
-  context.fetch = async () => ({ok: true, headers: NO_STORED_COPY, json: async () => sessions});
+  context.fetch = async () => ({ok: true, json: async () => sessions});
 
   // The render entry point must never reset the expansion table, not even when
   // the filter value differs from the current one; only the pill-enter path may.
@@ -576,7 +573,7 @@ test('enterSidebarFilter collapses expansions on a tab change and keeps them on 
   {
     const {nav, context} = buildNavContext();
     const sessions = makeWorkSessions();
-    context.fetch = async () => ({ok: true, headers: NO_STORED_COPY, json: async () => sessions});
+    context.fetch = async () => ({ok: true, json: async () => sessions});
 
     context.toggleSessionGroupLimit('Work');
     context.enterSidebarFilter('starred');
@@ -592,7 +589,7 @@ test('enterSidebarFilter collapses expansions on a tab change and keeps them on 
   {
     const {nav, context} = buildNavContext();
     const sessions = makeWorkSessions();
-    context.fetch = async () => ({ok: true, headers: NO_STORED_COPY, json: async () => sessions});
+    context.fetch = async () => ({ok: true, json: async () => sessions});
 
     context.toggleSessionGroupLimit('Work');
     context.enterSidebarFilter('all');
@@ -666,8 +663,8 @@ test('in-place refresh paths preserve group expansion', async () => {
     const {nav, context} = buildNavContext();
     const sessions = makeWorkSessions();
     context.fetch = async (url, opts = {}) => {
-      if (opts.method && opts.method !== 'GET') return {ok: true, headers: NO_STORED_COPY, async json() { return {}; }};
-      return {ok: true, headers: NO_STORED_COPY, async json() { return sessions; }};
+      if (opts.method && opts.method !== 'GET') return {ok: true, async json() { return {}; }};
+      return {ok: true, async json() { return sessions; }};
     };
     if (path.setup) path.setup(context);
 
@@ -726,7 +723,7 @@ test('group limit toggles and filter switches never write the expansion keys to 
   // touch the seeded storage values.
   context.toggleSessionGroupLimit('Work');
   context.toggleSessionGroupLimit('Work');
-  context.fetch = async () => ({ok: true, headers: NO_STORED_COPY, json: async () => []});
+  context.fetch = async () => ({ok: true, json: async () => []});
   context.switchSidebarFilter('archived');
   await new Promise(setImmediate);
   context.switchSidebarFilter('all');
@@ -774,13 +771,12 @@ test('switchSession preserves worker icon until authoritative status returns', a
       ['worker-indicator-session-b', workerIcon],
       ['spinner-session-b', createElement({className: 'hidden'})],
       ['unread-session-b', createElement({className: 'hidden'})],
-      ['freshness-mark', createElement({className: 'hidden'})],
     ]),
   });
   context.fetch = async (url) => {
     assert.equal(url, '/api/sessions/session-b/bootstrap');
     return {
-      ok: true, headers: NO_STORED_COPY,
+      ok: true,
       async json() {
         return {
           session: makeSession('session-b', 'Session B'),
@@ -857,7 +853,7 @@ test('loadOlderIfNeeded post-processes prepended messages through the shared hel
   context.fetch = async (url) => {
     assert.equal(url, '/api/sessions/session-a/events?before=4&limit=40');
     return {
-      ok: true, headers: NO_STORED_COPY,
+      ok: true,
       async json() {
         return {
           has_more: false,
@@ -910,7 +906,7 @@ test('loadOlderIfNeeded skips messages whose rendered id is already in the DOM',
   context.fetch = async (url) => {
     assert.equal(url, '/api/sessions/session-a/events?before=4&limit=40');
     return {
-      ok: true, headers: NO_STORED_COPY,
+      ok: true,
       async json() {
         return {
           has_more: false,
@@ -1069,11 +1065,11 @@ test('archiveSession removes the row inline and switches to the next rendered se
     requests.push({url, opts});
     if (url === '/api/sessions/session-a/archive') {
       assert.equal(opts.method, 'POST');
-      return {ok: true, headers: NO_STORED_COPY, async json() { return {}; }};
+      return {ok: true, async json() { return {}; }};
     }
     if (url === '/api/sessions/session-b/bootstrap') {
       return {
-        ok: true, headers: NO_STORED_COPY,
+        ok: true,
         async json() {
           return {
             session: makeSession('session-b', 'Backend Session B'),
@@ -1089,7 +1085,7 @@ test('archiveSession removes the row inline and switches to the next rendered se
     }
     if (url === '/api/sessions/session-b/read') {
       assert.equal(opts.method, 'POST');
-      return {ok: true, headers: NO_STORED_COPY, async json() { return {}; }};
+      return {ok: true, async json() { return {}; }};
     }
     throw new Error('unexpected fetch ' + url);
   };
@@ -1102,7 +1098,7 @@ test('archiveSession removes the row inline and switches to the next rendered se
   assert.deepEqual(requests.map((req) => req.url), [
     '/api/sessions/session-a/archive',
     '/api/sessions/session-b/bootstrap',
-    // The landed switch's read waits for its socket catch-up, which this fixture never delivers.
+    '/api/sessions/session-b/read',  // the landed switch marks the new session read post-render
   ]);
   assert.equal(rowA.removed, true);
   assert.equal(context.location.href, '');
@@ -1133,7 +1129,7 @@ test('deleteSessionPermanently renders the welcome state inline when no rendered
     requests.push({url, opts});
     if (url === '/api/sessions/session-a/permanent') {
       assert.equal(opts.method, 'DELETE');
-      return {ok: true, headers: NO_STORED_COPY, async json() { return {}; }};
+      return {ok: true, async json() { return {}; }};
     }
     throw new Error('unexpected fetch ' + url);
   };
@@ -1172,7 +1168,7 @@ test('saveCronTask sends backend selector value and null inherit value', async (
   const {context} = buildContext({elements});
   context.fetch = async (url, opts = {}) => {
     requests.push({url, opts});
-    return {ok: true, headers: NO_STORED_COPY, async json() { return {}; }, async text() { return ''; }};
+    return {ok: true, async json() { return {}; }, async text() { return ''; }};
   };
   context.switchSidebarFilter = () => {};
 
@@ -1304,7 +1300,7 @@ test('switchBackend updates the active backend badge in place on success', async
   const posts = [];
   context.fetch = async (url, opts = {}) => {
     posts.push({url, method: opts.method});
-    return {ok: true, headers: NO_STORED_COPY, async json() { return {id: 'session-a', backend: 'codex-o3'}; }};
+    return {ok: true, async json() { return {id: 'session-a', backend: 'codex-o3'}; }};
   };
 
   await context.Sidebar.switchBackend('codex-o3');

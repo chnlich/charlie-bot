@@ -93,61 +93,29 @@ function switchSidebarFilter(filter) {
     return;
   }
   // Fetch sessions for this filter
+  const registeredFilter = getSidebarFilter(filter);
+  if (!registeredFilter) throw new Error('Unknown sidebar filter: ' + filter);
   if (filter === 'all') {
     // The Workspace badges and the session list load in parallel, so badges
     // and list paint together in the one render call.
-    Promise.all([fetchFilterListing(filter, {networkOnly: false}), loadWorkspaceBadges()])
-      .then(([listing, workspaceBadges]) => paintListing(listing, filter, {workspaceBadges}))
+    Promise.all([
+      fetch(registeredFilter.url).then(res => {
+        if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
+        return res.json();
+      }),
+      loadWorkspaceBadges(),
+    ])
+      .then(([payload, workspaceBadges]) => renderSessionList(listingRows(payload), filter, {workspaceBadges}))
       .catch(err => console.error('Filter fetch failed:', err));
     return;
   }
-  fetchFilterListing(filter, {networkOnly: false})
-    .then(listing => paintListing(listing, filter))
+  fetch(registeredFilter.url)
+    .then(res => {
+      if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
+      return res.json();
+    })
+    .then(payload => renderSessionList(listingRows(payload), filter))
     .catch(err => console.error('Filter fetch failed:', err));
-}
-
-// One view's listing from its list route: `rows` and `stored`, which says a stored copy answered it. Rows the page
-// recorded an unread fact for after this request began keep that fact: fix E's gate (status.js replyIsCurrent)
-// refuses the older answer. `networkOnly` asks the worker for the network answer (last-state.js).
-function fetchFilterListing(filter, {networkOnly}) {
-  const registeredFilter = getSidebarFilter(filter);
-  if (!registeredFilter) throw new Error('Unknown sidebar filter: ' + filter);
-  const requestSeq = factSeqAtRequest();
-  const headers = networkOnly ? networkOnlyHeaders() : {};
-  return fetch(registeredFilter.url, {headers}).then(res => {
-    if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
-    const stored = isStoredResponse(res);
-    return res.json().then(payload => ({
-      rows: listingRows(payload).map(row => keepCurrentUnread(row, requestSeq)),
-      stored,
-    }));
-  });
-}
-
-function keepCurrentUnread(row, requestSeq) {
-  if (replyIsCurrent('unread', row.id, requestSeq)) return row;
-  return Object.assign({}, row, {has_unread: sessionUnread[row.id]});
-}
-
-function paintListing({rows, stored}, filter, options = {}) {
-  if (stored) document.dispatchEvent(new CustomEvent('charliebot:stored-list'));
-  renderSessionList(rows, filter, options);
-}
-
-// The sidebar list refresh that proves a copy current (last-state.js): the current view's list from the network,
-// painted while that view is still on screen. It rejects unless a network answer arrived. The archived view pages its
-// own rows and its list route is no copy source, so it has nothing to refresh here.
-function refreshCurrentList() {
-  const filter = currentFilter;
-  if (filter === 'archived') return Promise.resolve();
-  const listing = fetchFilterListing(filter, {networkOnly: true});
-  const pending = filter === 'all'
-    ? Promise.all([listing, loadWorkspaceBadges()])
-    : listing.then(result => [result]);
-  return pending.then(([result, workspaceBadges]) => {
-    if (result.stored) throw new Error('the list refresh was answered from a copy');
-    if (currentFilter === filter) paintListing(result, filter, workspaceBadges ? {workspaceBadges} : {});
-  });
 }
 
 // A listing's rows: the Workspace fetch answers with the page's column form, which expandSessionColumns restores,
@@ -365,7 +333,6 @@ const GLOBALS = {
   toggleSessionStar,
   queueRowRefresh,
   refreshWorkspaceBadges,
-  refreshCurrentList,
 };
 Sidebar.wire(GLOBALS);
 

@@ -110,10 +110,7 @@ async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String,
     }
     Ok(Ok(catchup)) => {
       let sent = send_catchup_frames(&mut sender, &catchup.frames, &session_id).await;
-      // The session's event count lets a page holding a stored copy tell whether the copy's position still
-      // lies inside the session (web/static/js/sidebar/last-state.js).
-      let complete = json!({"type": CATCHUP_COMPLETE_FRAME, "event_total": catchup.total});
-      match sender.send(Message::Text(complete.to_string().into())).await {
+      match sender.send(Message::Text(json!({"type": CATCHUP_COMPLETE_FRAME}).to_string().into())).await {
         Ok(()) => {
           replayed_through = Some(catchup.total);
           tracing::debug!(session_id, cursor, total = catchup.total, sent, "session_ws_catchup_sent");
@@ -1018,9 +1015,7 @@ mod tests {
     seed_manager_session(&features, "synthetic", 0).await;
     let (address, server) = start_server(Arc::clone(&features)).await;
     let mut client = connect(address, "synthetic", "cursor=9").await;
-    let complete = receive_json(&mut client).await;
-    assert_eq!(complete["type"], "catchup_complete");
-    assert_eq!(complete["event_total"], 3, "the seeded session holds three events");
+    assert_eq!(receive_json(&mut client).await["type"], "catchup_complete");
     // The subscription precedes the replay, so a live event reaches the same socket afterwards.
     features
       .store

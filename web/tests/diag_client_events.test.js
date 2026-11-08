@@ -492,7 +492,7 @@ test('a page load reports the newest message, the catch-up, the open case and th
   h.renderMessage('[data-message-id="8"]');
   h.notifyMutations();
   h.advance(1000);
-  h.dispatch('charliebot:page-current', {sessionId: 'session-a'});
+  h.dispatch('charliebot:client-socket-catchup', {bytes: 10});
   assert.equal(h.posts.length, 0, 'the report waits for the load event');
 
   h.dispatch('load');
@@ -645,9 +645,9 @@ test('the transport announces the reopen with the reconnect attempt count', () =
   const open = h.announced.filter((event) => event.type === 'charliebot:client-socket-open').pop();
   assert.deepEqual({...open.detail}, {attempts: 2});
 
-  socket.emitMessage({type: 'catchup_complete', event_total: 0});
+  socket.emitMessage({type: 'catchup_complete'});
   const catchup = h.announced.filter((event) => event.type === 'charliebot:client-socket-catchup').pop();
-  assert.deepEqual({...catchup.detail}, {bytes: 0, eventTotal: 0}, 'an empty replay reports zero bytes');
+  assert.deepEqual({...catchup.detail}, {bytes: 0}, 'an empty replay reports zero bytes');
 });
 
 test('the transport counts the replay bytes up to catchup_complete', () => {
@@ -658,12 +658,12 @@ test('the transport counts the replay bytes up to catchup_complete', () => {
 
   socket.emitMessage({type: 'ping'});
   socket.emitMessage({type: 'message', message: {role: 'assistant', content: 'héllo 世界', event_index: 1}});
-  socket.emitMessage({type: 'catchup_complete', event_total: 2});
+  socket.emitMessage({type: 'catchup_complete'});
   socket.emitMessage({type: 'message', message: {role: 'assistant', content: 'after the replay', event_index: 2}});
 
   const catchup = h.announced.find((event) => event.type === 'charliebot:client-socket-catchup');
   const replayed = JSON.stringify({type: 'ping'}) + JSON.stringify(
     {type: 'message', message: {role: 'assistant', content: 'héllo 世界', event_index: 1}});
-  assert.deepEqual({...catchup.detail}, {bytes: Buffer.byteLength(replayed, 'utf8'), eventTotal: 2},
+  assert.deepEqual({...catchup.detail}, {bytes: Buffer.byteLength(replayed, 'utf8')},
       'the replay bytes are the frames before catchup_complete, in UTF-8');
 });

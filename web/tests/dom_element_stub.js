@@ -97,7 +97,6 @@ function createElement(overrides = {}) {
       this._listeners[type].push(handler);
     },
     setAttribute(name, value) { this[name] = value; },
-    removeAttribute(name) { delete this[name]; },
     getAttribute(name) { return this[name]; },
     querySelectorAll: () => [],
     querySelector: () => null,

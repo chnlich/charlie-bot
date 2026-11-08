@@ -7,9 +7,6 @@ const {baseSessionContext, bootstrapPayload, createChatSidebarContext, installSe
 const {createElement} = require('./dom_element_stub');
 const {readPackageStatic, readStatic} = require('./read_static');
 
-// A network answer: no stored-copy header (view-requests.js isStoredResponse reads it).
-const NO_STORED_COPY = {get: () => null};
-
 // The wire path the diag package's client-events.js posts each client timing
 // event to; an endpoint move on either side breaks the pin.
 const CLIENT_EVENTS_URL = '/api/diag/client-events';
@@ -99,7 +96,6 @@ function buildSwitchHarness() {
     ['rename-input', createElement({id: 'rename-input', className: 'hidden', select() {}})],
     ['thinking', createElement({className: 'hidden'})],
     ['thinking-time', createElement()],
-    ['freshness-mark', createElement({id: 'freshness-mark'})],
     ...rows.map((row) => [row.id, row]),
   ]);
 
@@ -114,12 +110,12 @@ function buildSwitchHarness() {
       telemetryPosts.push(body);
       sequence.push('telemetry:' + body.phase);
       if (knobs.failTelemetry) throw new Error('telemetry down');
-      return {ok: true, headers: NO_STORED_COPY, status: 200, json: async () => ({ok: true, headers: NO_STORED_COPY})};
+      return {ok: true, status: 200, json: async () => ({ok: true})};
     }
     const readMatch = url.match(/\/api\/sessions\/([^/]+)\/read$/);
     if (readMatch && opts.method === 'POST') {
       readPosts.push(readMatch[1]);
-      return {ok: true, headers: NO_STORED_COPY, status: 200, json: async () => ({})};
+      return {ok: true, status: 200, json: async () => ({})};
     }
     const chatMatch = url.match(/\/api\/chat\/([^/]+)\/message$/);
     if (chatMatch && opts.method === 'POST') {
@@ -130,36 +126,35 @@ function buildSwitchHarness() {
         knobs.failChatOnce = false;
         throw new Error('chat POST down');
       }
-      return {ok: true, headers: NO_STORED_COPY, status: 202, json: async () => ({})};
+      return {ok: true, status: 202, json: async () => ({})};
     }
     const cancelMatch = url.match(/\/api\/chat\/([^/]+)\/cancel$/);
     if (cancelMatch) {
       cancelPosts.push(cancelMatch[1]);
       sequence.push('cancel:' + cancelMatch[1]);
-      return {ok: true, headers: NO_STORED_COPY, status: 200, json: async () => ({})};
+      return {ok: true, status: 200, json: async () => ({})};
     }
     const uploadMatch = url.match(/\/api\/chat\/([^/]+)\/upload$/);
     if (uploadMatch) {
       uploadPosts.push({sessionId: uploadMatch[1], filename: opts.body && opts.body.name});
       sequence.push('upload:' + uploadMatch[1]);
-      return {ok: true, headers: NO_STORED_COPY, status: 200,
-        json: async () => ({filename: 'notes.txt', path: '/tmp/notes.txt', size: 12})};
+      return {ok: true, status: 200, json: async () => ({filename: 'notes.txt', path: '/tmp/notes.txt', size: 12})};
     }
     const archiveMatch = url.match(/\/api\/sessions\/([^/]+)\/archive$/);
     if (archiveMatch) {
       sequence.push('archive:' + archiveMatch[1]);
-      return {ok: true, headers: NO_STORED_COPY, status: 200, json: async () => ({})};
+      return {ok: true, status: 200, json: async () => ({})};
     }
     const renameMatch = url.match(/\/api\/sessions\/([^/]+)$/);
     if (renameMatch && opts.method === 'PATCH') {
       renamePosts.push({sessionId: renameMatch[1], name: JSON.parse(opts.body).name});
-      return {ok: true, headers: NO_STORED_COPY, status: 200, json: async () => ({})};
+      return {ok: true, status: 200, json: async () => ({})};
     }
     if (url === '/api/sessions/' && opts.method === 'POST') {
       const created = {id: 'session-new', name: 'Nova', backend: 'claude-opus-4.6', archive_offset: 0,
         thinking_since: null};
       sequence.push('create');
-      return {ok: true, headers: NO_STORED_COPY, status: 200, json: async () => created};
+      return {ok: true, status: 200, json: async () => created};
     }
     const match = url.match(/\/api\/sessions\/([^/]+)\/bootstrap/);
     bootstrapFetches.push(url);
@@ -175,7 +170,7 @@ function buildSwitchHarness() {
     entry.done = new Promise((resolve, reject) => { entry.resolve = resolve; entry.reject = reject; });
     pendingSwitches.push(entry);
     return entry.done.then(() => ({
-      ok: true, headers: NO_STORED_COPY,
+      ok: true,
       status: 200,
       json: async () => {
         if (abortBodies.has(entry.sessionId)) throw Object.assign(new Error('aborted'), {name: 'AbortError'});
@@ -374,7 +369,6 @@ test('superseded generation never renders, logs superseded, and feeds the cache'
   await p1;
   h.pendingSwitches[1].resolve();
   await p2;
-  h.context.onSocketCatchupComplete(0);  // c's socket catches up: its read posts
 
   assert.deepEqual(h.telemetryPosts.map((t) => t.phase + ':' + t.to_session), [
     'started:session-b', 'started:session-c', 'superseded:session-b', 'completed:session-c',
@@ -390,7 +384,6 @@ test('superseded generation never renders, logs superseded, and feeds the cache'
   // A→B→A: the re-click of b hits the cached bootstrap — zero fetch, direct render.
   const fetchesBefore = h.bootstrapFetches.length;
   await h.context.switchSession('session-b');
-  h.context.onSocketCatchupComplete(0);
   assert.equal(h.bootstrapFetches.length, fetchesBefore, 'cache hit must skip the bootstrap fetch');
   assert.match(h.messages.innerHTML, /hello from session-b/);
   assert.doesNotMatch(h.messages.innerHTML, /hello from session-c/);
@@ -411,7 +404,6 @@ test('cache hit happens only within the 60s window', async () => {
   await p1;
   h.pendingSwitches[1].resolve();
   await p2;
-  h.context.onSocketCatchupComplete(0);
   // SESSION_ID is now c; b's superseded bootstrap sits in the cache.
 
   // Age the context clock past the TTL: the re-click must fetch afresh.
@@ -423,7 +415,6 @@ test('cache hit happens only within the 60s window', async () => {
   const p3 = h.context.switchSession('session-b');
   h.resolveLastSwitch();
   await p3;
-  h.context.onSocketCatchupComplete(0);
   h.context.__clockSkewMs = 0;
 
   assert.equal(h.bootstrapFetches.filter((u) => u.includes('/session-b/')).length, 2,

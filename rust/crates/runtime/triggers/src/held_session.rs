@@ -388,12 +388,15 @@ async fn run_session(
 ///
 /// A client that outlived the server would keep its ssh connection, and its command line names the server's
 /// ControlPath, until the remote script ends on its heartbeat. `PR_SET_PDEATHSIG` follows the thread that starts the
-/// child, and the sessions start their clients on runtime worker threads, which live as long as the server.
+/// child, and the sessions start their clients on runtime worker threads, which live as long as the server. The
+/// parent-death signal is Linux's; elsewhere the child still refuses to start once the server is gone, and an
+/// orphan ends when its channel closes.
 fn die_with_server(command: &mut std::process::Command) {
   let server = std::process::id() as libc::pid_t;
   // SAFETY: prctl and getppid are async-signal-safe, which is all a hook between fork and exec may call.
   unsafe {
     command.pre_exec(move || {
+      #[cfg(target_os = "linux")]
       if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
         return Err(io::Error::last_os_error());
       }

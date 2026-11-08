@@ -12,7 +12,7 @@
 //! memory, one per pool id.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
 use anyhow::anyhow;
 use charliebot_core::config::{CharlieBotConfig, PoolBilling, PoolConfig, PoolMember, PoolRule};
@@ -43,17 +43,42 @@ pub struct ModelPool {
   pub members: Vec<PoolMember>,
 }
 
-/// The loads one selection reads: how many active sessions each member of the pool holds.
-struct SelectionInput<'a> {
+/// What one selection reads: the config, the registry whose usage readings it consults, the availability owner, the
+/// pool, the ids the caller excludes, the moment it reads at, and the active sessions each member holds.
+pub struct Selection<'a> {
   cfg: &'a CharlieBotConfig,
   registry: &'a Registry,
   availability: &'a BackendAvailability,
   pool: &'a ModelPool,
-  position: Option<&'a mut usize>,
   excluded: &'a [String],
   now: UtcDateTime,
+  /// How many active sessions each member holds, which orders a priority pool's subscription tier; empty when the
+  /// caller keeps no such count.
   member_loads: &'a HashMap<String, usize>,
 }
+
+impl<'a> Selection<'a> {
+  /// A selection that reads no load counts, for a caller that keeps none: a worker's or a route's pick, or a pool whose
+  /// order alone decides.
+  pub fn new(
+    cfg: &'a CharlieBotConfig,
+    registry: &'a Registry,
+    availability: &'a BackendAvailability,
+    pool: &'a ModelPool,
+    excluded: &'a [String],
+    now: UtcDateTime,
+  ) -> Self {
+    Self { cfg, registry, availability, pool, excluded, now, member_loads: &NO_LOADS }
+  }
+
+  /// The same selection, reading the load counts `member_loads`.
+  pub fn with_loads(self, member_loads: &'a HashMap<String, usize>) -> Self {
+    Self { member_loads, ..self }
+  }
+}
+
+/// The load counts of a selection that reads none.
+static NO_LOADS: LazyLock<HashMap<String, usize>> = LazyLock::new(HashMap::new);
 
 impl ModelPool {
   /// The pool a `backends.pools` entry configures.
@@ -93,41 +118,21 @@ pub struct RotationPositions {
 }
 
 impl RotationPositions {
-  /// Select the member `pool` runs a call on and move the pool's position past it. The position is read under the lock,
-  /// the selection reads usage without the lock, and the advanced position is written under the lock in one step.
-  ///
-  /// `member_loads` counts the active sessions each member holds, which orders a priority pool's subscription tier;
-  /// a caller that keeps no such count passes none.
-  pub fn select(
-    &self,
-    cfg: &CharlieBotConfig,
-    registry: &Registry,
-    availability: &BackendAvailability,
-    pool: &ModelPool,
-    excluded: &[String],
-    now: UtcDateTime,
-    member_loads: &HashMap<String, usize>,
-  ) -> anyhow::Result<Option<PoolMember>> {
-    let mut position = self.position(&pool.id);
-    let selected = select(cfg, registry, availability, pool, Some(&mut position), excluded, now, member_loads)?;
-    self.set_position(&pool.id, position);
+  /// Select the member `selection`'s pool runs a call on and move the pool's position past it. The position is read
+  /// under the lock, the selection reads usage without the lock, and the advanced position is written under the lock in
+  /// one step.
+  pub fn select(&self, selection: &Selection<'_>) -> anyhow::Result<Option<PoolMember>> {
+    let mut position = self.position(&selection.pool.id);
+    let selected = select(selection, Some(&mut position))?;
+    self.set_position(&selection.pool.id, position);
     Ok(selected)
   }
 
-  /// The member `select` would pick for `pool` now, without moving the pool's position. A host gate and a turn read
-  /// use it, so reading a member leaves the rotation where it was.
-  pub fn peek(
-    &self,
-    cfg: &CharlieBotConfig,
-    registry: &Registry,
-    availability: &BackendAvailability,
-    pool: &ModelPool,
-    excluded: &[String],
-    now: UtcDateTime,
-    member_loads: &HashMap<String, usize>,
-  ) -> anyhow::Result<Option<PoolMember>> {
-    let mut position = self.position(&pool.id);
-    select(cfg, registry, availability, pool, Some(&mut position), excluded, now, member_loads)
+  /// The member `select` would pick now, without moving the pool's position. A host gate and a turn read use it, so
+  /// reading a member leaves the rotation where it was.
+  pub fn peek(&self, selection: &Selection<'_>) -> anyhow::Result<Option<PoolMember>> {
+    let mut position = self.position(&selection.pool.id);
+    select(selection, Some(&mut position))
   }
 
   fn position(&self, pool_id: &str) -> usize {
@@ -147,21 +152,8 @@ impl RotationPositions {
 /// reading does not say it is exhausted. A member whose backend type exposes no reading is selectable. A
 /// [`PoolRule::Priority`] pool orders its selectable members; a [`PoolRule::Rotate`] pool walks from `position` in
 /// member order and advances `position` past the member it selects, so `position` is required for a rotate pool.
-pub(crate) fn select(
-  cfg: &CharlieBotConfig,
-  registry: &Registry,
-  availability: &BackendAvailability,
-  pool: &ModelPool,
-  position: Option<&mut usize>,
-  excluded: &[String],
-  now: UtcDateTime,
-  member_loads: &HashMap<String, usize>,
-) -> anyhow::Result<Option<PoolMember>> {
-  select_with_loads(SelectionInput { cfg, registry, availability, pool, position, excluded, now, member_loads })
-}
-
-fn select_with_loads(input: SelectionInput<'_>) -> anyhow::Result<Option<PoolMember>> {
-  let SelectionInput { cfg, registry, availability, pool, position, excluded, now, member_loads } = input;
+pub(crate) fn select(selection: &Selection<'_>, position: Option<&mut usize>) -> anyhow::Result<Option<PoolMember>> {
+  let Selection { cfg, registry, availability, pool, excluded, now, member_loads } = *selection;
   match pool.rule {
     PoolRule::Priority => select_priority(cfg, registry, availability, pool, excluded, now, member_loads),
     PoolRule::Rotate => {
@@ -445,6 +437,7 @@ fn decide_turn(
   let positions = features.startup.require::<RotationPositions>()?;
   let now = UtcDateTime::now();
   let member_loads = member_loads(features, &pool)?;
+  let selection = Selection::new(cfg, &features.registry, &availability, &pool, &[], now).with_loads(&member_loads);
   let current = meta
     .extra(POOL_MEMBER_FIELD)
     .and_then(Value::as_str)
@@ -457,51 +450,41 @@ fn decide_turn(
     return match pool.rule {
       PoolRule::Rotate => {
         if reading_exhausted(cfg, &features.registry, current, now)? {
-          decide_fresh(features, cfg, &pool, &availability, Some(current), now, advance)
+          decide_fresh(features, &selection, Some(current), advance)
         } else {
           Ok(TurnDecision::Keep(current.clone()))
         }
       }
-      PoolRule::Priority => {
-        decide_keep_or_switch(features, cfg, &pool, &availability, &positions, current, now, &member_loads)
-      }
+      PoolRule::Priority => decide_keep_or_switch(features, &selection, &positions, current),
     };
   }
-  decide_fresh(features, cfg, &pool, &availability, current.as_deref(), now, advance, &member_loads)
+  decide_fresh(features, &selection, current.as_deref(), advance)
 }
 
 /// Select a member for a session whose current member is absent, out or spent. The change, when there was a current
 /// member, names it and the moment it recovers.
 fn decide_fresh(
   features: &FeatureContext,
-  cfg: &CharlieBotConfig,
-  pool: &ModelPool,
-  availability: &BackendAvailability,
+  selection: &Selection<'_>,
   current: Option<&str>,
-  now: UtcDateTime,
   advance: bool,
-  member_loads: &HashMap<String, usize>,
 ) -> anyhow::Result<TurnDecision> {
   let positions = features.startup.require::<RotationPositions>()?;
-  let selected = if advance {
-    positions.select(cfg, &features.registry, availability, pool, &[], now, member_loads)?
-  } else {
-    positions.peek(cfg, &features.registry, availability, pool, &[], now, member_loads)?
-  };
+  let selected = if advance { positions.select(selection)? } else { positions.peek(selection)? };
   let Some(selected) = selected else {
-    return Ok(TurnDecision::Exhausted(exhausted_message(features, cfg, pool)?));
+    return Ok(TurnDecision::Exhausted(exhausted_message(features, selection.cfg, selection.pool)?));
   };
   // The first assignment is not a change between members, so it leaves no failover event. A current member that is out
   // or spent is never selected, so the selection always differs from it.
   let change = match current {
     None => None,
     Some(from) => {
-      let recovers_at = match availability.out_until_minutes(from) {
+      let recovers_at = match selection.availability.out_until_minutes(from) {
         Some(until) => Some(until),
-        None => reading_reset(cfg, &features.registry, from, now)?,
+        None => reading_reset(selection.cfg, selection.registry, from, selection.now)?,
       };
       Some(MemberChange::at_turn_start(
-        &pool.id,
+        &selection.pool.id,
         from.to_string(),
         selected.backend.clone(),
         event_types::QUOTA_REASON_QUOTA_ERROR,
@@ -515,24 +498,20 @@ fn decide_fresh(
 /// Apply the priority turn-start rules to a session whose current member is selectable.
 fn decide_keep_or_switch(
   features: &FeatureContext,
-  cfg: &CharlieBotConfig,
-  pool: &ModelPool,
-  availability: &BackendAvailability,
+  selection: &Selection<'_>,
   positions: &RotationPositions,
   current: &str,
-  now: UtcDateTime,
-  member_loads: &HashMap<String, usize>,
 ) -> anyhow::Result<TurnDecision> {
-  let Some(selected) = positions.peek(cfg, &features.registry, availability, pool, &[], now, member_loads)? else {
+  let Some(selected) = positions.peek(selection)? else {
     // The member is selectable by its out record but spent by its reading, and no other member is left.
-    return Ok(TurnDecision::Exhausted(exhausted_message(features, cfg, pool)?));
+    return Ok(TurnDecision::Exhausted(exhausted_message(features, selection.cfg, selection.pool)?));
   };
   if selected.backend == current {
     return Ok(TurnDecision::Keep(selected.backend));
   }
-  let current_member = pool.member(current).expect("the current member is in the pool");
-  let current_reading = member_reading(cfg, &features.registry, &current_member.backend, now)?;
-  let selected_reading = member_reading(cfg, &features.registry, &selected.backend, now)?;
+  let current_member = selection.pool.member(current).expect("the current member is in the pool");
+  let current_reading = member_reading(selection.cfg, selection.registry, &current_member.backend, selection.now)?;
+  let selected_reading = member_reading(selection.cfg, selection.registry, &selected.backend, selection.now)?;
   let (reason, recovers_at) =
     if current_member.billing == Some(PoolBilling::Payg) && selected.billing == Some(PoolBilling::Subscription) {
       (event_types::QUOTA_REASON_SUBSCRIPTION_RESET, None)
@@ -551,7 +530,13 @@ fn decide_keep_or_switch(
     };
   Ok(TurnDecision::Move {
     member: selected.backend.clone(),
-    change: Some(MemberChange::at_turn_start(&pool.id, current.to_string(), selected.backend, reason, recovers_at)),
+    change: Some(MemberChange::at_turn_start(
+      &selection.pool.id,
+      current.to_string(),
+      selected.backend,
+      reason,
+      recovers_at,
+    )),
   })
 }
 
@@ -869,10 +854,8 @@ backends:
     let excluded = excluded.iter().map(|backend_id| (*backend_id).to_string()).collect::<Vec<_>>();
     let pool = pool_by_id(&cfg, id).unwrap();
     let availability = availability(features);
-    positions(features)
-      .select(&cfg, &features.registry, &availability, &pool, &excluded, UtcDateTime::now(), &HashMap::new())
-      .unwrap()
-      .map(|member| member.backend)
+    let selection = Selection::new(&cfg, &features.registry, &availability, &pool, &excluded, UtcDateTime::now());
+    positions(features).select(&selection).unwrap().map(|member| member.backend)
   }
 
   #[tokio::test]
@@ -977,10 +960,8 @@ backends:
     let rotate = |features: &FeatureContext, excluded: &[&str]| {
       let excluded = excluded.iter().map(|backend_id| (*backend_id).to_string()).collect::<Vec<_>>();
       let pool = pool_by_id(&cfg, "light").unwrap();
-      positions(features)
-        .select(&cfg, &features.registry, &availability, &pool, &excluded, now)
-        .unwrap()
-        .map(|member| member.backend)
+      let selection = Selection::new(&cfg, &features.registry, &availability, &pool, &excluded, now);
+      positions(features).select(&selection).unwrap().map(|member| member.backend)
     };
 
     // `spent`'s reading says it is exhausted; `payg-a` exposes no reading and is selectable.
@@ -1015,8 +996,8 @@ backends:
     let availability = availability(&features);
     let now = UtcDateTime::now();
     let light = pool_by_id(&cfg, "light").unwrap();
-    let peeked =
-      positions(&features).peek(&cfg, &features.registry, &availability, &light, &[], now, &HashMap::new()).unwrap();
+    let selection = Selection::new(&cfg, &features.registry, &availability, &light, &[], now);
+    let peeked = positions(&features).peek(&selection).unwrap();
     assert_eq!(peeked.map(|member| member.backend), Some("payg-a".to_string()));
     assert_eq!(pick(&features, "light", &[]), Some("payg-a".to_string()), "the peek did not move the position");
     assert_eq!(pick(&features, "light", &[]), Some("chatgpt".to_string()), "the next select moves to the next member");

@@ -1,6 +1,5 @@
 //! Process-local backend rotation for unpinned work, reading "out until" from the shared availability owner.
 
-use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::io::ErrorKind;
 use std::process::{ExitStatus, Stdio};
@@ -177,15 +176,9 @@ impl BackendPool {
     exclude: &[String],
   ) -> anyhow::Result<Option<BackendOption>> {
     let pool = model_pool::pool_by_id(cfg, pool_id)?;
-    let selected = self.positions.select(
-      cfg,
-      &self.registry,
-      &self.availability,
-      &pool,
-      exclude,
-      UtcDateTime::now(),
-      &HashMap::new(),
-    )?;
+    let selection =
+      model_pool::Selection::new(cfg, &self.registry, &self.availability, &pool, exclude, UtcDateTime::now());
+    let selected = self.positions.select(&selection)?;
     let Some(member) = selected else {
       let mut excluded = exclude.to_vec();
       excluded.sort();
@@ -218,15 +211,9 @@ impl BackendPool {
     exclude: &[String],
   ) -> anyhow::Result<Option<BackendOption>> {
     let pool = model_pool::pool_by_id(cfg, pool_id)?;
-    let peeked = self.positions.peek(
-      cfg,
-      &self.registry,
-      &self.availability,
-      &pool,
-      exclude,
-      UtcDateTime::now(),
-      &HashMap::new(),
-    )?;
+    let selection =
+      model_pool::Selection::new(cfg, &self.registry, &self.availability, &pool, exclude, UtcDateTime::now());
+    let peeked = self.positions.peek(&selection)?;
     Ok(peeked.map(|member| {
       cfg.get_backend_option(&member.backend).expect("the selected pool member is a backends.options id").clone()
     }))
@@ -248,16 +235,9 @@ impl BackendPool {
   ) -> anyhow::Result<Option<BackendOption>> {
     let pool = model_pool::ordered_pool(backends);
     let mut position = 0;
-    let selected = model_pool::select(
-      cfg,
-      &self.registry,
-      &self.availability,
-      &pool,
-      Some(&mut position),
-      exclude,
-      UtcDateTime::now(),
-      &HashMap::new(),
-    )?;
+    let selection =
+      model_pool::Selection::new(cfg, &self.registry, &self.availability, &pool, exclude, UtcDateTime::now());
+    let selected = model_pool::select(&selection, Some(&mut position))?;
     let Some(member) = selected else {
       tracing::warn!(target: "charliebot_agents", caller, backends = ?backends, excluded = ?exclude, "backend_pool_route_exhausted");
       return Ok(None);

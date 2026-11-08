@@ -45,8 +45,9 @@ pub async fn switch_member(
   let pool = model_pool::pool_by_id(&cfg, pool_id)?;
   let positions = features.startup.require::<RotationPositions>()?;
   let member_loads = model_pool::member_loads(features, &pool)?;
-  let Some(member) = positions.select(&cfg, &features.registry, &availability, &pool, &[], now, &member_loads)?
-  else {
+  let selection =
+    model_pool::Selection::new(&cfg, &features.registry, &availability, &pool, &[], now).with_loads(&member_loads);
+  let Some(member) = positions.select(&selection)? else {
     return Ok(AutoSwitch::Exhausted(model_pool::all_exhausted_message(
       &cfg,
       &features.registry,

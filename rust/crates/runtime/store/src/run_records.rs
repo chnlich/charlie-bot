@@ -31,7 +31,7 @@ use crate::control_events::{self, ACTOR_SYSTEM};
 use crate::event_types::{ChatEvent, SharedChatEvent};
 use crate::held_run_lists::RunListHold;
 pub use crate::metadata::MetadataReadError;
-use crate::metadata::UtcDateTime;
+use crate::metadata::{BASE_BRANCH_FIELD, REPO_PATH_FIELD, UtcDateTime};
 pub use crate::run_facts::RunFacts;
 #[cfg(test)]
 use crate::run_facts::{CachedRunFacts, RunFactsMemo};
@@ -58,8 +58,8 @@ pub const OBSERVATION_RAW_LOG_REF: &str = "raw_log_ref";
 pub const OBSERVATION_EVENTS_REF: &str = "events_ref";
 pub const OBSERVATION_RESULT_REF: &str = "result_ref";
 pub const OBSERVATION_PROMPT_SNAPSHOT_REF: &str = "prompt_snapshot_ref";
-pub const OBSERVATION_REPO_PATH: &str = "repo_path";
-pub const OBSERVATION_BASE_BRANCH: &str = "base_branch";
+pub const OBSERVATION_REPO_PATH: &str = REPO_PATH_FIELD;
+pub const OBSERVATION_BASE_BRANCH: &str = BASE_BRANCH_FIELD;
 pub const OBSERVATION_BRANCH_NAME: &str = "branch_name";
 pub const OBSERVATION_WORKTREE_PATH: &str = "worktree_path";
 

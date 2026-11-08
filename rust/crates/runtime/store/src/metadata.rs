@@ -82,6 +82,12 @@ pub const PARENT_SESSION_ID: &str = "parent_session_id";
 /// The task-spec field saying whether the run keeps its worktree after it ends. The delegate request and the stored
 /// thread record carry the same name, so it is spelled once, here.
 pub const KEEP_WORKTREE_FIELD: &str = "keep_worktree";
+/// The task-spec field holding the repository a task works in. The delegate request, the improve request and the run
+/// record carry the same name, so it is spelled once, here.
+pub const REPO_PATH_FIELD: &str = "repo_path";
+/// The task-spec field holding the branch a task branches from. The delegate request, the improve request and the run
+/// record carry the same name, so it is spelled once, here.
+pub const BASE_BRANCH_FIELD: &str = "base_branch";
 
 /// Datetime stored as UTC with a `Z` suffix and microsecond format.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

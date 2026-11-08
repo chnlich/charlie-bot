@@ -95,7 +95,7 @@ fn seed_digest(home: &Home) {
 /// One `policy_table_changed` record, appended by a table edit read back through the server-side loader.
 fn seed_table_change(home: &Home) -> String {
   let root = home.root();
-  let path = root.join("config.d").join("approval.d").join("policy.yaml");
+  let path = root.join(charliebot_core::approval_policy::TABLE_RELATIVE_PATH);
   let original = fs::read_to_string(&path).expect("the table reads");
   charliebot_core::approval_policy::load_and_record(&root).expect("the baseline records");
   fs::write(&path, format!("{original}# a comment changes the content\n")).expect("the edit writes");

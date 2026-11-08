@@ -3,12 +3,11 @@
 //! through.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Body;
-use charliebot_core::approval_policy::TABLE_RELATIVE_PATH;
 use charliebot_core::config::CREDENTIALS_FILENAME;
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
@@ -23,20 +22,7 @@ use serde_json::{Map, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-/// The approval policy table the test homes carry: one uncapped policy, one capped at 16, both expiring far out.
-pub const APPROVAL_POLICY_TABLE: &str = "\
-consequence_tests:
-  - {id: irreversible, rank: 1, text: \"Deletes data with no backup, or sends what cannot be recalled.\"}
-  - {id: chao-name, rank: 2, text: \"A message in Chao's name reaches other people.\"}
-  - {id: money, rank: 3, text: \"Spends money beyond a budget that Chao set.\"}
-  - {id: authority, rank: 4, text: \"Widens what agents may do.\"}
-  - {id: rule-named, rank: 4, text: \"A rule in force names the user's explicit approval for this step.\"}
-  - {id: reading, rank: 5, text: \"Picks a reading for work over about one worker-day.\"}
-standing_policies:
-  - {id: release-restart, scope: \"Release and restart the CharlieBot checkout.\", cap_per_pt_day: null, expires: 2099-01-01}
-  - {id: shared-repo-landing, scope: \"Land on a shared non-main branch.\", cap_per_pt_day: 16, expires: 2099-01-01}
-enable_ask_tier_refusal: false
-";
+pub use charliebot_core::test_support::{APPROVAL_POLICY_TABLE, write_approval_policy_table};
 
 /// A derived-item reader with no derived items: the approval tests hold no host waits.
 fn register_no_derived_waiting(registry: &mut Registry) -> Result<(), charliebot_registry::RegistryError> {
@@ -45,13 +31,6 @@ fn register_no_derived_waiting(registry: &mut Registry) -> Result<(), charliebot
 
 fn no_derived_waiting(_features: &FeatureContext) -> BoxFuture<'_, anyhow::Result<Vec<OpenWaitingRow>>> {
   Box::pin(async { Ok(Vec::new()) })
-}
-
-/// Writes `text` as the home's approval policy table.
-pub fn write_approval_policy_table(home: &Path, text: &str) {
-  let path = home.join(TABLE_RELATIVE_PATH);
-  fs::create_dir_all(path.parent().expect("the table path has a parent")).expect("config.d");
-  fs::write(path, text).expect("the approval policy table writes");
 }
 
 /// A store over a temporary home, with the web reply slot and this package registered.

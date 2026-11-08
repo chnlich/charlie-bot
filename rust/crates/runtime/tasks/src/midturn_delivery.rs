@@ -27,7 +27,6 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
 use crate::event_text::value_str;
-use crate::master_state::RunTracking;
 use crate::task_input_prompt::compose_input_prompt;
 
 /// True for a manager session that no Slack or Discord thread owns (`reply.is_web_session`).
@@ -58,17 +57,11 @@ pub async fn offer(
   offer_write(&run.id, inputs).await
 }
 
-/// Add one replayed user id to the live manager item's web-reply binding (`midturn_delivery.record_ack`).
+/// Add one replayed user id to the live manager item's input batch (`midturn_delivery.record_ack`).
 ///
-/// The manager queue carries the running ids by value, so an acknowledged input joins both the item and the queue's
-/// binding. A reply posted while the turn runs reads the queue (`running_user_event_ids`).
-pub fn record_ack(
-  tracking: &dyn RunTracking,
-  session_id: &str,
-  user_event_ids: &mut Vec<String>,
-  item_run_id: &str,
-  event: &Value,
-) -> anyhow::Result<()> {
+/// The item's batch becomes the turn's `master_done` input ids, while the run record holds the receipts that the
+/// web-reply readers consult.
+pub fn record_ack(user_event_ids: &mut Vec<String>, item_run_id: &str, event: &Value) -> anyhow::Result<()> {
   if event.get("type").and_then(Value::as_str) != Some(event_types::INPUT_DELIVERED) {
     return Ok(());
   }
@@ -78,9 +71,8 @@ pub fn record_ack(
   }
   let input_id = value_str(event.get(event_types::INPUT_EVENT_ID));
   if !user_event_ids.contains(&input_id) {
-    user_event_ids.push(input_id.clone());
+    user_event_ids.push(input_id);
   }
-  tracking.append_running_user_event_id(session_id, &input_id);
   Ok(())
 }
 
@@ -355,7 +347,7 @@ mod tests {
     let lines = lines.lines().map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
     assert_eq!(lines.iter().map(|line| line["uuid"].clone()).collect::<Vec<_>>(), [json!(run_id), json!(message_id)]);
     assert_eq!(lines[0]["message"]["content"], json!("Initial prompt"));
-    assert_eq!(lines[1]["message"]["content"], json!("[User message 22222222]\nPlease change the answer."));
+    assert_eq!(lines[1]["message"]["content"], json!("[User message]\nPlease change the answer."));
 
     let mut thread_meta = SessionMetadata::new("thread", "Slack", TaskProfile::Manager);
     thread_meta.extra.insert("slack_origin".to_string(), json!({"team_id":"T","channel_id":"C","thread_ts":"1.0"}));

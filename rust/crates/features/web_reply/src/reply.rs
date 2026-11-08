@@ -1,6 +1,5 @@
-//! The web reply record and the web-session test: the refusals, the `answer_ids`
-//! binding, the For-you layer and the readback. The round-end audit that nudges and notices over these records is in
-//! `audit.rs`.
+//! The web reply record and the web-session test: the refusals, the language check, the For-you layer and the
+//! readback. The round-end audit that nudges and notices over these records is in `audit.rs`.
 //!
 //! The web session test is chat_threads' `thread_sessions::is_thread_session`, restated over the same fields: this
 //! package does not depend on chat_threads.
@@ -17,11 +16,12 @@ use charliebot_core::event_types::{AGENT_MESSAGE, INPUT_EVENT_ID, NUDGE_OF, USER
 use charliebot_core::paths;
 use charliebot_core::regex_classes::compile_automata_regex;
 use charliebot_core::str_methods;
-use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
+use charliebot_registry::{FeatureContext, StateError};
 #[cfg(test)]
 use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::SessionMetadata;
+use charliebot_store::reply_order::{self, Receipt};
 use charliebot_store::{SESSION_NOT_FOUND_DETAIL, SharedChatEvent, Store, StoreError};
 use charliebot_user_text_checks::{self as user_text_checks, UserTextChecks, UserTextChecksConfig};
 use regex::{Captures, Regex};
@@ -30,35 +30,29 @@ use serde_json::{Value, json};
 /// The web reply rules file under `prompts/`.
 pub const RULES_FILE: &str = "web_reply.md";
 
-/// The field of a web reply record that names the user messages it answers.
-const ANSWER_IDS: &str = "answer_ids";
-/// The field of a web reply record posted before `answer_ids`: one user message id, or null.
-const ANSWERS: &str = "answers";
-
-/// The audit's nudge for the unanswered user message `user_event_id`.
-pub fn nudge_text(user_event_id: &str) -> String {
+/// The audit's nudge for the unanswered user message `message`.
+pub fn nudge_text(message: &str) -> String {
   let opening = "Web reply nudge: your last turn woke on a user message and ended without a web reply. \
                  The For-you view hides your turn output. ";
-  format!("{opening}{}", answer_request(user_event_id))
+  format!("{opening}{}", answer_request(message))
 }
 
-/// The sentences that ask for the web reply to the unanswered user message `user_event_id`: the tag the reply passes to
-/// `--answers`, and how a long answer reaches the For-you view.
-pub fn answer_request(user_event_id: &str) -> String {
-  let tag = message_tag(user_event_id);
+/// The sentences that ask for the web reply to the unanswered user message `message`, named by its opening, and how a
+/// long answer reaches the For-you view.
+pub fn answer_request(message: &str) -> String {
   format!(
-    "The unanswered message is [User message {tag}]. Post your answer as the web reply now, with `--answers {tag}`. \
-     The tag tells the round-end audit which message the reply answers. \
+    "The unanswered message begins: \"{}\". Post your answer as the web reply now. \
      For an answer over 500 characters, write the whole answer on a page first. \
      A reply over 500 characters is over budget, so the page keeps the full answer. \
      Then post the conclusion and the page link as the web reply. \
-     The For-you view then shows the conclusion, and the link leads to the full answer."
+     The For-you view then shows the conclusion, and the link leads to the full answer.",
+    message_opening(message)
   )
 }
 
-/// The tag of a user message: its first eight characters, the prefix that `--answers` takes.
-pub fn message_tag(user_event_id: &str) -> String {
-  user_event_id.chars().take(8).collect()
+/// The opening of a user message that a reminder names: its first 60 characters.
+pub fn message_opening(text: &str) -> String {
+  text.chars().take(60).collect()
 }
 
 /// The notice the user reads when the nudge turn also ended without a reply.
@@ -185,131 +179,44 @@ pub fn answered_user_id(event: &impl EventFields) -> Option<String> {
   nudge_of(event)
 }
 
-/// The user message ids a web reply record answers, in the order it names them. A record posted
-/// before `answer_ids` holds its one id under `answers`, or none when that is null. Every reader of the field goes
-/// through this function.
-pub fn answer_ids(record: &impl EventFields) -> Vec<String> {
-  if let Some(ids) = record.field(ANSWER_IDS) {
-    return ids.string_items().into_iter().map(str::to_string).collect();
-  }
-  record.field(ANSWERS).and_then(EventFields::as_str_field).map(|id| vec![id.to_string()]).unwrap_or_default()
+/// The event with `id` in the log.
+fn event_by_id<'a>(events: &'a [SharedChatEvent], id: &str) -> Option<&'a CompactValue> {
+  events.iter().map(SharedChatEvent::as_ref).find(|event| event.get("id").and_then(CompactValue::as_str) == Some(id))
 }
 
-/// A user message that the running turn can answer: its id and its text.
-#[derive(Clone, Copy)]
-struct Candidate<'a> {
-  id: &'a str,
-  text: &'a str,
-}
-
-/// The user messages the running turn can answer, in log order: each user message the turn holds, and each user
-/// message that one of its nudges was posted for.
-fn turn_candidates<'a>(events: &'a [SharedChatEvent], running: &[String]) -> Vec<Candidate<'a>> {
-  let running: HashSet<&str> = running.iter().map(String::as_str).collect();
-  let mut answerable: HashSet<String> = HashSet::new();
-  for event in events {
-    let event = event.as_ref();
-    let held = event.get("id").and_then(CompactValue::as_str).is_some_and(|id| running.contains(id));
-    if held && let Some(user_event_id) = answered_user_id(event) {
-      answerable.insert(user_event_id);
-    }
-  }
-  events
-    .iter()
-    .map(SharedChatEvent::as_ref)
-    .filter(|event| event.get("type").and_then(CompactValue::as_str) == Some(USER))
-    .filter_map(|event| {
-      let id = event.get("id").and_then(CompactValue::as_str)?;
-      let text = event.get("content").and_then(CompactValue::as_str)?;
-      answerable.contains(id).then_some(Candidate { id, text })
-    })
-    .collect()
-}
-
-/// The user message ids that a reply answers: the candidates that the `--answers` tags name, each tag matching one
-/// candidate by its full id or its eight-character tag. With no tag, the one candidate binds,
-/// and none leaves the reply answering nothing. Two or more candidates without a tag, and a tag that matches no
-/// candidate or several, refuse with 422 and the candidates' tags and text.
-fn bind_answers(candidates: &[Candidate], tags: &[String]) -> Result<Vec<String>, WebReplyError> {
-  if tags.is_empty() {
-    return match candidates {
-      [] => Ok(Vec::new()),
-      [only] => Ok(vec![only.id.to_string()]),
-      _ => Err(candidate_refusal(
-        format!(
-          "Reply not posted: pass --answers with the tag of each user message this reply answers. \
-           This turn has {} user messages:",
-          candidates.len()
-        ),
-        candidates.iter().copied(),
-        message_tag,
-      )),
+/// The text of every user message the turn whose `receipts` these are received, in receipt order, joined by line breaks.
+/// A receipt of a nudge contributes the user message the nudge was posted for. `None` when the turn received no user
+/// message; a receipt that names no event of the log is an error.
+fn received_user_texts(events: &[SharedChatEvent], receipts: &[Receipt]) -> Result<Option<String>, WebReplyError> {
+  let mut seen = HashSet::new();
+  let mut texts = Vec::new();
+  for receipt in receipts {
+    let input = event_by_id(events, &receipt.input_event_id).ok_or_else(|| {
+      WebReplyError::Failed(anyhow::anyhow!(
+        "run {} claims the input {} that the session log does not hold",
+        receipt.run_id,
+        receipt.input_event_id
+      ))
+    })?;
+    let Some(user_event_id) = answered_user_id(input) else {
+      continue;
     };
-  }
-  let mut ids: Vec<String> = Vec::new();
-  for tag in tags {
-    let matching: Vec<Candidate> =
-      candidates.iter().filter(|candidate| candidate.id == tag || message_tag(candidate.id) == *tag).copied().collect();
-    match matching.as_slice() {
-      [only] => {
-        if !ids.iter().any(|id| id == only.id) {
-          ids.push(only.id.to_string());
-        }
-      }
-      [] => {
-        return Err(candidate_refusal(
-          format!("Reply not posted: no user message of this turn has the tag {tag}. Use a tag from this list:"),
-          candidates.iter().copied(),
-          message_tag,
-        ));
-      }
-      many => {
-        return Err(candidate_refusal(
-          format!(
-            "Reply not posted: the tag {tag} matches {} user messages of this turn. \
-             Pass the full id of the message this reply answers:",
-            many.len()
-          ),
-          many.iter().copied(),
-          |id| id.to_string(),
-        ));
-      }
+    if !seen.insert(user_event_id.clone()) {
+      continue;
+    }
+    let user_event = event_by_id(events, &user_event_id).ok_or_else(|| {
+      WebReplyError::Failed(anyhow::anyhow!("the turn's input names the missing user message {user_event_id}"))
+    })?;
+    if let Some(text) = user_event.get("content").and_then(CompactValue::as_str) {
+      texts.push(text.to_string());
     }
   }
-  Ok(ids)
+  Ok((!texts.is_empty()).then(|| texts.join("\n")))
 }
 
-/// The 422 refusal that names each candidate by `label` of its id and the first 40 characters of its text.
-fn candidate_refusal<'a>(
-  headline: String,
-  candidates: impl Iterator<Item = Candidate<'a>>,
-  label: fn(&str) -> String,
-) -> WebReplyError {
-  let mut lines = vec![headline];
-  for candidate in candidates {
-    let text = candidate.text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let shown: String = text.chars().take(40).collect();
-    lines.push(format!("- {}: {shown}", label(candidate.id)));
-  }
-  WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, lines.join("\n"))
-}
-
-/// The text of the answered user messages, joined by line breaks; `None` when the reply answers none.
-fn answered_text(candidates: &[Candidate], answer_ids: &[String]) -> Option<String> {
-  let texts: Vec<&str> = candidates
-    .iter()
-    .filter(|candidate| answer_ids.iter().any(|id| id == candidate.id))
-    .map(|candidate| candidate.text)
-    .collect();
-  (!texts.is_empty()).then(|| texts.join("\n"))
-}
-
-/// Whether the log holds a web reply that answers `user_event_id`.
-pub fn replied(events: &[SharedChatEvent], user_event_id: &str) -> bool {
-  events.iter().any(|event| {
-    event.get("type").and_then(CompactValue::as_str) == Some(WEB_REPLY)
-      && event.get(WEB_REPLY).is_some_and(|record| answer_ids(record).iter().any(|id| id == user_event_id))
-  })
+/// Whether the log holds a web reply later than `receipt`: the order rule's answer test for a received user message.
+pub fn replied(receipt: &Receipt, events: &[SharedChatEvent]) -> Result<bool, StoreError> {
+  reply_order::answered(receipt, events, WEB_REPLY)
 }
 
 /// Whether the log holds the nudge posted for `user_event_id`.
@@ -399,9 +306,9 @@ fn visible_reply_chars(text: &str) -> anyhow::Result<usize> {
 
 /// Record `text` as the session's web reply and return the readback the CLI prints.
 ///
-/// Accepted text is recorded exactly as written. It answers the user messages that `answers` tags name among the
-/// running turn's candidates (see [`bind_answers`]). The language check holds the text unless `keep_language`, the
-/// agent's reason for posting it as written, is given; the reason is then recorded on the reply. User-text refusals
+/// Accepted text is recorded exactly as written. The language check compares it with the text of every user message the
+/// running turn received, replies posted earlier in the turn included. The check holds the text unless `keep_language`,
+/// the agent's reason for posting it as written, is given; the reason is then recorded on the reply. User-text refusals
 /// give a correction and its purpose so the writer can fix the text. A refusal records nothing and marks nothing.
 #[cfg(test)]
 pub async fn post_web_reply(
@@ -410,7 +317,7 @@ pub async fn post_web_reply(
   text: &str,
   keep_language: Option<&str>,
 ) -> Result<Value, WebReplyError> {
-  post_web_reply_with_request_id(features, session_id, text, &[], keep_language, None).await
+  post_web_reply_with_request_id(features, session_id, text, keep_language, None).await
 }
 
 /// Record a web reply for one caller request, replaying the original event when the run retries it.
@@ -418,7 +325,6 @@ pub async fn post_web_reply_with_request_id(
   features: &FeatureContext,
   session_id: &str,
   text: &str,
-  answers: &[String],
   keep_language: Option<&str>,
   request_id: Option<&str>,
 ) -> Result<Value, WebReplyError> {
@@ -459,16 +365,13 @@ pub async fn post_web_reply_with_request_id(
         return Ok(web_reply_receipt(&existing));
       }
     }
-    let running = features.startup.require::<RunningTurnInputs>()?.user_event_ids(session_id);
-    let candidates = turn_candidates(&events, &running);
-    let bound = bind_answers(&candidates, answers)?;
-    let answered = answered_text(&candidates, &bound);
-    drop(candidates);
-    if keep_language.is_none() && language_check_holds(answered.as_deref(), text)? {
+    let receipts = reply_order::running_receipts(&features.store, session_id, &events)?;
+    let received = received_user_texts(&events, &receipts)?;
+    if keep_language.is_none() && language_check_holds(received.as_deref(), text)? {
       tracing::info!(session = %session_id, chars, "web_reply_held");
       return Err(WebReplyError::refused(StatusCode::CONFLICT, LANGUAGE_HOLD_DETAIL));
     }
-    let mut web_reply = json!({"answer_ids": bound, "chars": chars});
+    let mut web_reply = json!({"chars": chars});
     if let Some(reason) = keep_language {
       web_reply["keep_language"] = json!(reason);
     }
@@ -485,9 +388,8 @@ pub async fn post_web_reply_with_request_id(
   features.store.announce_appended_event(session_id, &event, epoch).await?;
   features.store.mark_unread(session_id).await?;
   let over_budget = chars > REPLY_BUDGET_CHARS;
-  let answers = answer_ids(&event[WEB_REPLY]);
-  tracing::info!(session = %session_id, chars, over_budget, answers = ?answers, "web_reply_posted");
-  Ok(json!({"posted": true, "chars": chars, "over_budget": over_budget, "answers": answers}))
+  tracing::info!(session = %session_id, chars, over_budget, "web_reply_posted");
+  Ok(json!({"posted": true, "chars": chars, "over_budget": over_budget}))
 }
 
 fn web_reply_receipt(event: &Value) -> Value {
@@ -497,7 +399,6 @@ fn web_reply_receipt(event: &Value) -> Value {
     "posted": true,
     "chars": chars,
     "over_budget": chars as usize > REPLY_BUDGET_CHARS,
-    "answers": answer_ids(reply),
   })
 }
 
@@ -592,8 +493,8 @@ mod tests {
 
     let readback = post_web_reply(&home.features, &sid, "the answer", None).await.expect("the reply posts");
 
-    assert_eq!(readback, json!({"posted": true, "chars": 10, "over_budget": false, "answers": []}));
-    assert_eq!(replies(&home, &sid), vec![(json!("the answer"), json!({"answer_ids": [], "chars": 10}))]);
+    assert_eq!(readback, json!({"posted": true, "chars": 10, "over_budget": false}));
+    assert_eq!(replies(&home, &sid), vec![(json!("the answer"), json!({"chars": 10}))]);
     assert!(home.meta(&sid).await.has_unread);
   }
 
@@ -637,12 +538,12 @@ mod tests {
     let diff_url = format!("https://example.com/{}", "d".repeat(150 - "https://example.com/".len()));
     let pr_url = format!("https://example.com/{}", "p".repeat(183 - "https://example.com/".len()));
     let text = format!("{}[diff]({diff_url})[PR 页]({pr_url})", "x".repeat(200));
-    let expected = json!({"posted": true, "chars": 208, "over_budget": false, "answers": []});
+    let expected = json!({"posted": true, "chars": 208, "over_budget": false});
 
-    let first = post_web_reply_with_request_id(&home.features, &sid, &text, &[], None, Some("same-reply"))
+    let first = post_web_reply_with_request_id(&home.features, &sid, &text, None, Some("same-reply"))
       .await
       .expect("the first reply posts");
-    let replay = post_web_reply_with_request_id(&home.features, &sid, &text, &[], None, Some("same-reply"))
+    let replay = post_web_reply_with_request_id(&home.features, &sid, &text, None, Some("same-reply"))
       .await
       .expect("the retry replays its reply");
 
@@ -807,7 +708,7 @@ mod tests {
     for (index, (chars, over_budget)) in [(500, false), (501, true)].into_iter().enumerate() {
       let readback = post_web_reply(&home.features, &sid, &"x".repeat(chars), None).await.expect("the reply posts");
 
-      assert_eq!(readback, json!({"posted": true, "chars": chars, "over_budget": over_budget, "answers": []}));
+      assert_eq!(readback, json!({"posted": true, "chars": chars, "over_budget": over_budget}));
       assert_eq!(replies(&home, &sid).len(), index + 1);
     }
   }
@@ -826,204 +727,42 @@ mod tests {
 
     let readback = post_web_reply(&home.features, &sid, &text, None).await.expect("the reply posts");
 
-    assert_eq!(readback, json!({"posted": true, "chars": chars, "over_budget": false, "answers": []}));
-    assert_eq!(replies(&home, &sid), vec![(json!(text), json!({"answer_ids": [], "chars": chars}))]);
+    assert_eq!(readback, json!({"posted": true, "chars": chars, "over_budget": false}));
+    assert_eq!(replies(&home, &sid), vec![(json!(text), json!({"chars": chars}))]);
   }
 
+  /// A turn whose run record holds the receipts but whose `master_done` input ids were dropped by a restart is judged
+  /// from those receipts: the language check still compares the Chinese message the resumed turn received.
   #[tokio::test]
-  async fn a_reply_answers_the_user_message_that_woke_its_turn() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let user = home.append(&sid, user_event("the question")).await;
-    home.set_running(&[id_of(&user)]);
-
-    let readback = post_web_reply(&home.features, &sid, "the answer", None).await.expect("the reply posts");
-
-    assert_eq!(readback["answers"], json!([id_of(&user)]));
-  }
-
-  #[tokio::test]
-  async fn a_reply_in_a_nudge_turn_answers_the_user_message_the_nudge_asks_about() {
+  async fn a_web_reply_on_a_resumed_turn_compares_the_messages_its_run_received() {
     let home = Home::reply_only();
     let sid = "session";
-    let user = user_event_with_id("question-1", "the question");
-    let nudge = json!({
-      "id": "nudge-1",
-      "type": AGENT_MESSAGE,
-      "content": nudge_text(id_of(&user)),
-      WEB_REPLY: {"nudge_of": id_of(&user)}
-    });
-    seed_web_session(&home, sid, &[user.clone(), nudge.clone()]);
-    home.set_running(&[id_of(&nudge)]);
+    let chinese = user_event_with_id("chinese-message", CHINESE_MESSAGE);
+    seed_web_session(&home, sid, &[chinese]);
+    home.launch_run(sid, "resumed-run", &["chinese-message"], "2026-01-01T00:00:00Z");
+    let events_before = home.events(sid).len();
 
-    let readback = post_web_reply(&home.features, sid, "the answer", None).await.expect("the reply posts");
+    let (status, response) = post_reply(&home, sid, ENGLISH_REPLY, None).await;
 
-    assert_eq!(readback["answers"], json!([id_of(&user)]));
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(response["detail"], json!(LANGUAGE_HOLD_DETAIL));
+    assert_eq!(home.events(sid).len(), events_before);
   }
 
+  /// A session whose newest manager run ended has no running turn, so the language check has no received message to
+  /// compare.
   #[tokio::test]
-  async fn a_reply_in_a_background_turn_answers_nothing() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let wake = home.append(&sid, json!({"type": "scheduled_trigger", "content": "wake"})).await;
-    home.set_running(&[id_of(&wake)]);
-
-    let readback = post_web_reply(&home.features, &sid, "the answer", None).await.expect("the reply posts");
-
-    assert_eq!(readback["answers"], json!([]));
-  }
-
-  /// The refusal detail of a web reply that the route answers with 422, or panics when it is accepted or refused
-  /// otherwise.
-  fn refusal_detail(result: Result<Value, WebReplyError>) -> String {
-    match result.expect_err("the reply is refused") {
-      WebReplyError::Refused { status, detail } => {
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-        detail
-      }
-      other => panic!("expected a refusal, got {other:?}"),
-    }
-  }
-
-  #[tokio::test]
-  async fn two_candidates_refuse_a_reply_without_answers_and_record_nothing() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let first = home.append(&sid, user_event_with_id("11111111-a", "first question about the cap")).await;
-    let second = home.append(&sid, user_event_with_id("22222222-b", "second question about the limit")).await;
-    home.set_running(&[id_of(&first), id_of(&second)]);
-    let events_before = home.events(&sid).len();
-
-    let detail =
-      refusal_detail(post_web_reply_with_request_id(&home.features, &sid, "the answer", &[], None, None).await);
-
-    assert_eq!(
-      detail,
-      "Reply not posted: pass --answers with the tag of each user message this reply answers. \
-       This turn has 2 user messages:\n\
-       - 11111111: first question about the cap\n\
-       - 22222222: second question about the limit"
-    );
-    assert_eq!(home.events(&sid).len(), events_before);
-    assert!(!home.meta(&sid).await.has_unread);
-  }
-
-  #[tokio::test]
-  async fn one_candidate_binds_the_tag_that_names_it() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let only = home.append(&sid, user_event_with_id("11111111-a", "the question")).await;
-    home.set_running(&[id_of(&only)]);
-
-    let tags = ["11111111".to_string()];
-    let readback = post_web_reply_with_request_id(&home.features, &sid, "the answer", &tags, None, None)
-      .await
-      .expect("the reply posts");
-
-    assert_eq!(readback["answers"], json!([id_of(&only)]));
-  }
-
-  #[tokio::test]
-  async fn answers_tags_bind_each_named_candidate_in_the_order_given() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let first = home.append(&sid, user_event_with_id("11111111-a", "first question")).await;
-    let second = home.append(&sid, user_event_with_id("22222222-b", "second question")).await;
-    home.set_running(&[id_of(&first), id_of(&second)]);
-    let tags = ["22222222".to_string(), "11111111-a".to_string()];
-
-    let readback = post_web_reply_with_request_id(&home.features, &sid, "the answer", &tags, None, None)
-      .await
-      .expect("the reply posts");
-
-    assert_eq!(readback["answers"], json!(["22222222-b", "11111111-a"]));
-    assert_eq!(
-      replies(&home, &sid),
-      vec![(json!("the answer"), json!({"answer_ids": ["22222222-b", "11111111-a"], "chars": 10}))]
-    );
-  }
-
-  #[tokio::test]
-  async fn a_tag_that_matches_no_candidate_refuses_and_records_nothing() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let only = home.append(&sid, user_event_with_id("11111111-a", "the question")).await;
-    home.set_running(&[id_of(&only)]);
-    let events_before = home.events(&sid).len();
-
-    let detail = refusal_detail(
-      post_web_reply_with_request_id(&home.features, &sid, "the answer", &["33333333".to_string()], None, None).await,
-    );
-
-    assert_eq!(
-      detail,
-      "Reply not posted: no user message of this turn has the tag 33333333. Use a tag from this list:\n\
-       - 11111111: the question"
-    );
-    assert_eq!(home.events(&sid).len(), events_before);
-  }
-
-  #[tokio::test]
-  async fn a_tag_that_matches_two_candidates_refuses_and_names_their_full_ids() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let first = home.append(&sid, user_event_with_id("abcdef12-0001", "first question")).await;
-    let second = home.append(&sid, user_event_with_id("abcdef12-0002", "second question")).await;
-    home.set_running(&[id_of(&first), id_of(&second)]);
-
-    let detail = refusal_detail(
-      post_web_reply_with_request_id(&home.features, &sid, "the answer", &["abcdef12".to_string()], None, None).await,
-    );
-
-    assert_eq!(
-      detail,
-      "Reply not posted: the tag abcdef12 matches 2 user messages of this turn. \
-       Pass the full id of the message this reply answers:\n\
-       - abcdef12-0001: first question\n\
-       - abcdef12-0002: second question"
-    );
-  }
-
-  #[tokio::test]
-  async fn a_nudge_turn_with_two_nudges_names_both_user_messages_as_candidates() {
+  async fn a_web_reply_after_the_running_turn_ended_compares_no_messages() {
     let home = Home::reply_only();
     let sid = "session";
-    let first = user_event_with_id("11111111-a", "first question");
-    let second = user_event_with_id("22222222-b", "second question");
-    let nudges = [
-      json!({"id": "nudge-1", "type": AGENT_MESSAGE, "content": nudge_text(id_of(&first)), WEB_REPLY: {"nudge_of": id_of(&first)}}),
-      json!({"id": "nudge-2", "type": AGENT_MESSAGE, "content": nudge_text(id_of(&second)), WEB_REPLY: {"nudge_of": id_of(&second)}}),
-    ];
-    seed_web_session(&home, sid, &[first, second, nudges[0].clone(), nudges[1].clone()]);
-    home.set_running(&[id_of(&nudges[0]), id_of(&nudges[1])]);
+    seed_web_session(&home, sid, &[user_event_with_id("chinese-message", CHINESE_MESSAGE)]);
+    home.launch_run(sid, "run-1", &["chinese-message"], "2026-01-01T00:00:00Z");
+    home.end_run(sid, "run-1", "2026-01-02T00:00:00Z");
 
-    let tags = ["11111111".to_string(), "22222222".to_string()];
-    let readback = post_web_reply_with_request_id(&home.features, sid, "the answer", &tags, None, None)
-      .await
-      .expect("the reply posts");
+    let (status, readback) = post_reply(&home, sid, ENGLISH_REPLY, None).await;
 
-    assert_eq!(readback["answers"], json!(["11111111-a", "22222222-b"]));
-  }
-
-  #[test]
-  fn answer_ids_reads_the_list_and_the_legacy_single_id_as_one_list() {
-    assert_eq!(answer_ids(&json!({"answer_ids": ["u1", "u2"]})), ["u1", "u2"]);
-    assert_eq!(answer_ids(&json!({"answers": "u1"})), ["u1"]);
-    assert_eq!(answer_ids(&json!({"answers": null})), Vec::<String>::new());
-  }
-
-  #[tokio::test]
-  async fn a_legacy_reply_with_one_answers_id_answers_that_message() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let user = home.append(&sid, user_event("the question")).await;
-    home
-      .append(&sid, json!({"type": WEB_REPLY, "content": "old", WEB_REPLY: {"answers": id_of(&user), "chars": 3}}))
-      .await;
-
-    let events = load_events(&home.features, &sid).await.expect("the event snapshot reads");
-
-    assert!(replied(&events, id_of(&user)));
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(readback["posted"], json!(true));
   }
 
   #[tokio::test]
@@ -1032,7 +771,7 @@ mod tests {
     let sid = home.manager("session", None).await;
     home.append(&sid, user_event("first")).await;
     home.append(&sid, json!({"type": "scheduled_trigger", "content": "wake"})).await;
-    home.append(&sid, json!({"type": WEB_REPLY, "content": "answer", WEB_REPLY: {"answer_ids": [], "chars": 6}})).await;
+    home.append(&sid, json!({"type": WEB_REPLY, "content": "answer", WEB_REPLY: {"chars": 6}})).await;
     home.append(&sid, json!({"type": AGENT_MESSAGE, "content": nudge_text("u2"), WEB_REPLY: {"nudge_of": "u2"}})).await;
     home.append(&sid, user_event("second")).await;
     home
@@ -1093,10 +832,13 @@ mod tests {
     event
   }
 
-  /// Appends `message` as a user message that the running turn holds, and returns its id.
+  /// A start time before every event a test appends.
+  const RUN_START: &str = "2026-01-01T00:00:00Z";
+
+  /// Appends `message` as a user message that the session's running turn receives, and returns its id.
   async fn running_user_message(home: &Home, session_id: &str, message: Value) -> String {
     let id = id_of(&home.append(session_id, message).await).to_string();
-    home.set_running(&[id.as_str()]);
+    home.launch_run(session_id, "run-1", &[id.as_str()], RUN_START);
     id
   }
 
@@ -1147,7 +889,7 @@ mod tests {
   async fn a_reply_with_a_keep_language_reason_posts_as_written_and_records_the_reason() {
     let home = Home::new();
     let sid = home.manager("session", None).await;
-    let user = running_user_message(&home, &sid, user_message(CHINESE_MESSAGE)).await;
+    running_user_message(&home, &sid, user_message(CHINESE_MESSAGE)).await;
     let reason = "The reply quotes an English term.";
 
     let (status, readback) = post_reply(&home, &sid, ENGLISH_REPLY, Some(reason)).await;
@@ -1156,10 +898,7 @@ mod tests {
     assert_eq!(readback["posted"], json!(true));
     assert_eq!(
       replies(&home, &sid),
-      vec![(
-        json!(ENGLISH_REPLY),
-        json!({"answer_ids": [user], "chars": ENGLISH_REPLY.chars().count(), "keep_language": reason}),
-      )]
+      vec![(json!(ENGLISH_REPLY), json!({"chars": ENGLISH_REPLY.chars().count(), "keep_language": reason}),)]
     );
   }
 
@@ -1195,7 +934,7 @@ mod tests {
     let mut english = user_message("Please rerun the suite and report the failures.");
     english["id"] = json!("english");
     seed_web_session(&home, sid, &[chinese, english]);
-    home.set_running(&["english"]);
+    home.launch_run(sid, "run-1", &["english"], RUN_START);
 
     let (status, readback) = post_reply(&home, sid, ENGLISH_REPLY, None).await;
 
@@ -1246,7 +985,7 @@ mod tests {
     let mut user = user;
     user["id"] = json!("path-user");
     seed_web_session(&home, sid, &[user]);
-    home.set_running(&["path-user"]);
+    home.launch_run(sid, "run-1", &["path-user"], RUN_START);
     let reply = "好。ⓐ/ChatPanelStatusToggleWithLongName";
 
     let (status, _) = post_reply(&home, sid, reply, None).await;

@@ -16,8 +16,7 @@ shutdown and re-attachment into server lifespan.
 - `MasterResumeRequest` and its fields
 - `MasterQueue::run_message`
 - `MasterQueue::enqueue_master_resume`
-- `MasterQueue::queued_user_event_ids` and `master_queue::queued_user_event_ids`
-- `MasterQueue::running_user_event_ids` and `master_state::running_user_event_ids`
+- `MasterQueue::session_is_busy` and `master_queue::session_is_busy`
 - `MasterQueue::shutdown`, which cancels the consumers at server stop
 - `TaskRunBinding` and its fields
 - `MasterResumeRecord` and its fields

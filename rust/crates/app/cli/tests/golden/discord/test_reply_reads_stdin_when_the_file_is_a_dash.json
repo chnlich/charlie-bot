@@ -22,13 +22,12 @@
         "chars": 12,
         "chunks": 1,
         "over_budget": false,
-        "answers": "summon-1",
         "attachments": []
       }
     }
   ],
   "expect": {
-    "stdout": "{\"posted\": true, \"text\": \"piped reply\\n\", \"operator_only_note\": null, \"chars\": 12, \"chunks\": 1, \"over_budget\": false, \"answers\": \"summon-1\", \"attachments\": []}\n",
+    "stdout": "{\"posted\": true, \"text\": \"piped reply\\n\", \"operator_only_note\": null, \"chars\": 12, \"chunks\": 1, \"over_budget\": false, \"attachments\": []}\n",
     "stderr": "",
     "exit": 0,
     "requests": [

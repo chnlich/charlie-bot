@@ -360,12 +360,6 @@ fills a value makes it visible to a ready service, which reads it at start.
 `AgentBaseEnvironment` is the startup state's one owner of the base agent environment. Code with a `FeatureContext`
 reads it through `features.startup.require::<AgentBaseEnvironment>()?`; one-shot calls and launch contexts carry the
 environment explicitly.
-`RunningTurnInputs` (`charliebot_registry::RunningTurnInputs`) answers the input event ids of a session's running turn.
-The task runtime inserts it in the pre-recovery step
-that inserts `MasterQueue`, and it reads the same queue. Its one method is `user_event_ids(&self, session_id: &str) ->
-Vec<String>`, which is empty when no turn runs. The web reply package reads it with
-`features.startup.require::<RunningTurnInputs>()?`; a missing entry is an error.
-
 ## Rendering pages
 
 Two values in the startup state serve pages. `run()` inserts both before the lifespan starts, so a lifespan step or

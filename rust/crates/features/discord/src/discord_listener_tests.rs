@@ -852,7 +852,11 @@ async fn test_after_turn_audits_the_round_on_the_bound_blocks_and_persists_the_n
     .await
     .unwrap()
     .to_value();
-  let done = json!({"type": event_types::MASTER_DONE, "exit_code": 0, "input_event_id": summon["id"]});
+  let summon_id = summon["id"].as_str().expect("an appended event carries its id").to_string();
+  let summon_at = summon["timestamp"].as_str().expect("an appended event carries its timestamp").to_string();
+  home.launch_run(&sid, "run-1", &[summon_id.as_str()], &summon_at);
+  let done = json!({"type": event_types::MASTER_DONE, "run_id": "run-1", "exit_code": 0,
+                    "input_event_ids": [summon_id]});
   home.features.store.append_chat_event(&sid, done.clone()).await.unwrap();
   let meta = home.features.store.get_session(&sid).await.unwrap().unwrap();
   let config = home.features.config.get().unwrap();
@@ -886,7 +890,11 @@ async fn test_persisted_master_done_fires_both_deliver_tasks() {
   let summon = home
     .append(&sid, json!({"type": event_types::AGENT_MESSAGE, "content": DISCORD.summon_line, "discord": block}))
     .await;
-  let done = json!({"type": event_types::MASTER_DONE, "exit_code": 0, "input_event_ids": [summon["id"]]});
+  let summon_id = summon["id"].as_str().expect("an appended event carries its id").to_string();
+  let summon_at = summon["timestamp"].as_str().expect("an appended event carries its timestamp").to_string();
+  home.launch_run(&sid, "run-1", &[summon_id.as_str()], &summon_at);
+  let done =
+    json!({"type": event_types::MASTER_DONE, "run_id": "run-1", "exit_code": 0, "input_event_ids": [summon_id]});
   home.features.store.persist_and_broadcast(&sid, done).await.unwrap();
   wait_for(|| {
     home.features.store.load_chat_events_sync(&sid).unwrap().iter().any(|event| {

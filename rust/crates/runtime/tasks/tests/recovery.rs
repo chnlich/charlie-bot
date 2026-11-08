@@ -2818,6 +2818,119 @@ async fn manager_turn_master_done_enospc_retries_through_master_queue() -> anyho
   Ok(())
 }
 
+/// The packages the resumed-turn replay needs: the held backend types, so the turn can be cut while its translate blocks,
+/// and the web reply feature, whose round-end audit runs behind the store's turn hooks.
+fn register_replay_packages(
+  registry: &mut charliebot_registry::Registry,
+) -> Result<(), charliebot_registry::RegistryError> {
+  register_held_types(registry)?;
+  charliebot_web_reply::register(registry)
+}
+
+/// A live manager turn cut by the restart is re-attached at the next boot. Its `master_done` names its run and carries
+/// no input ids, and the web round-end audit nudges the user message the run received, which no reply answered.
+#[test]
+#[ignore = "integration"]
+fn a_resumed_manager_turn_nudges_the_message_no_reply_answered() -> anyhow::Result<()> {
+  /// A scripted backend option that starts nothing: the live process below stands in for the turn's agent.
+  fn idle_option() -> BackendOption {
+    script_option(BACKEND_ID, "exit 0")
+  }
+
+  let runtime = server_runtime()?;
+  let (stack, manager_id, input_id, run_id) = runtime.block_on(async {
+    let stack = Stack::start_with_package_and_store_hooks(
+      vec![idle_option()],
+      vec![BACKEND_ID.to_string()],
+      ("test.replay_packages", register_replay_packages),
+    )
+    .await?;
+    stack.write_access_key()?;
+    let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+    let input = stack.dispatch.admit_input(&manager.id, event_types::USER, "the question", "user", json!({})).await?;
+    let input_id =
+      input.get("id").and_then(ChatEvent::as_str).context("the admitted input carries its id")?.to_string();
+    let run = stack.queue_run(&manager.id, "run-live", RunKind::ManagerTurn).await?;
+    let claimed = stack.claim(&manager.id, "run-live").await?;
+    assert_eq!(claimed, std::slice::from_ref(&input_id), "the turn's reservation claims the user message");
+    anyhow::Ok((stack, manager.id, input_id, run.id))
+  })?;
+  // The live agent: a process this test owns, recorded as the run's launch, which exits once the test writes the
+  // release file. Its raw log holds one event before the result this test appends after the restart.
+  let release = tempfile::tempdir()?;
+  let release_file = release.path().join("release");
+  let guard = ProcessGroupGuard::new();
+  let mut live = Command::new("/bin/sh")
+    .arg("-c")
+    .arg(format!("while [ ! -e '{}' ]; do /bin/sleep 0.05; done", release_file.display()))
+    .process_group(0)
+    .spawn()?;
+  guard.track(live.id());
+  let identity = identity::pin_process_identity(live.id());
+  let pid_start = identity.pid_start.context("the live process has a stat line")?;
+  runtime.block_on(stack.launch(&manager_id, &run_id, live.id(), &pid_start))?;
+  let assistant =
+    json!({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}]}});
+  let raw = stack.store().run_dir(&manager_id, &run_id).join(RAW_LOG_NAME);
+  std::fs::write(&raw, format!("{}\n", serde_json::to_string(&assistant)?))?;
+
+  runtime.block_on(recovery::let_go_step(Arc::clone(&stack.features)))?;
+  drop(runtime);
+  assert!(live.try_wait()?.is_none(), "the agent outlives the server");
+  let run = stack.store().read_run_sync(&manager_id, &run_id)?.context("the live manager run is recorded")?;
+  assert_eq!((run.pid, run.ended_at), (Some(live.id()), None), "the stop leaves the manager turn open: {run:?}");
+
+  server_runtime()?.block_on(async {
+    let next = Stack::start_on_home_with_package_and_store_hooks(
+      Arc::clone(&stack.home),
+      vec![idle_option()],
+      vec![BACKEND_ID.to_string()],
+      ("test.replay_packages", register_replay_packages),
+    )
+    .await?;
+    let counters = next.boot().await?;
+    assert_eq!(counters.resumed, 1, "the live manager turn is re-attached: {counters:?}");
+    // The agent finishes after the restart: its result line lands in the raw log the follow reads.
+    use std::io::Write;
+    let result = json!({"type": "result", "subtype": "success", "result": "finished after the restart"});
+    std::fs::OpenOptions::new()
+      .append(true)
+      .open(&raw)?
+      .write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes())?;
+    // The agent exits after its result, as a real one does.
+    std::fs::write(&release_file, "")?;
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let (done, nudge) = loop {
+      let events = next.store().load_chat_events_sync(&manager_id)?;
+      let done = events
+        .iter()
+        .map(ChatEvent::to_value)
+        .find(|event| event["type"] == event_types::MASTER_DONE && event["run_id"] == run_id);
+      let nudge = events
+        .iter()
+        .map(ChatEvent::to_value)
+        .find(|event| event["type"] == event_types::AGENT_MESSAGE && event["web_reply"]["nudge_of"] == input_id);
+      if let (Some(done), Some(nudge)) = (done, nudge) {
+        break (done, nudge);
+      }
+      anyhow::ensure!(
+        Instant::now() < deadline,
+        "the resumed turn did not end with its reply nudge: {:?}",
+        events.iter().map(ChatEvent::to_value).collect::<Vec<_>>()
+      );
+      tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert!(
+      done.get(event_types::INPUT_EVENT_IDS).is_none_or(|ids| ids.as_array().is_some_and(Vec::is_empty)),
+      "a resumed turn's master_done records no input ids: {done}"
+    );
+    let text = nudge["content"].as_str().context("the nudge carries text")?;
+    assert!(text.contains("The unanswered message begins: \"the question\""), "{text}");
+    anyhow::Ok(())
+  })
+}
+
 #[tokio::test]
 #[ignore = "integration"]
 async fn recovery_stops_a_launched_run_on_a_closed_worker() -> anyhow::Result<()> {

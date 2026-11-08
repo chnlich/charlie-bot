@@ -1628,7 +1628,7 @@ mod tests {
   /// A posted web reply row, as the manager's chat events hold it.
   fn web_reply_row(content: &str) -> Value {
     json!({"id": "web-1", "type": event_types::WEB_REPLY, "content": content,
-      (event_types::WEB_REPLY): {"answer_ids": ["user-1"], "chars": content.chars().count()}})
+      (event_types::WEB_REPLY): {"chars": content.chars().count()}})
   }
 
   #[test]

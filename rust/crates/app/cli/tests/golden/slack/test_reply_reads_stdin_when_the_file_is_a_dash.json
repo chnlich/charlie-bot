@@ -19,13 +19,12 @@
         "posted": true,
         "chars": 12,
         "chunks": 1,
-        "over_budget": false,
-        "answers": "summon-1"
+        "over_budget": false
       }
     }
   ],
   "expect": {
-    "stdout": "{\"posted\": true, \"chars\": 12, \"chunks\": 1, \"over_budget\": false, \"answers\": \"summon-1\"}\n",
+    "stdout": "{\"posted\": true, \"chars\": 12, \"chunks\": 1, \"over_budget\": false}\n",
     "stderr": "",
     "exit": 0,
     "requests": [

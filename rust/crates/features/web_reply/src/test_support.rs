@@ -14,7 +14,7 @@ use charliebot_core::hot_reload::HotReload;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_registry::registry::OpenWaitingRow;
 use charliebot_registry::store_hooks::store_hooks;
-use charliebot_registry::{FeatureContext, Registry, RegistryError, RunningTurnInputs, StartupState};
+use charliebot_registry::{FeatureContext, Registry, RegistryError, StartupState};
 use charliebot_store::ChatEvent;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::{CreateTask, Store, Subscription, TaskCaller, session_channel};
@@ -92,7 +92,6 @@ fn register_origins(registry: &mut Registry) -> Result<(), RegistryError> {
 pub struct Home {
   _dir: TempDir,
   pub features: Arc<FeatureContext>,
-  running: Arc<Mutex<Vec<String>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -121,7 +120,6 @@ impl Home {
   }
 
   fn build(config_yaml: &str, packages: PackageSet) -> Self {
-    let running = Arc::new(Mutex::new(Vec::new()));
     let dir = tempfile::tempdir().expect("temporary directory exists");
     fs::write(dir.path().join("config.yaml"), config_yaml).expect("the synthetic config writes");
     if matches!(packages, PackageSet::Full) {
@@ -172,13 +170,8 @@ impl Home {
       Box::new(move || load_credentials(&credential_home)),
     ));
     let startup = StartupState::default();
-    if matches!(packages, PackageSet::Full | PackageSet::ReplyOnly) {
-      let reader = Arc::clone(&running);
-      let inputs = RunningTurnInputs::new(move |_| reader.lock().expect("the stub lock is never poisoned").clone());
-      startup.insert(inputs).expect("the stub inserts once");
-    }
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
-    Self { _dir: dir, features, running }
+    Self { _dir: dir, features }
   }
 
   /// The temporary home the store writes under: the CharlieBot home, which the config names.
@@ -186,18 +179,28 @@ impl Home {
     self._dir.path().to_path_buf()
   }
 
-  /// Names the input events the running turn answers, for every session.
-  /// Writes a manager run record that the store lists as the session's newest run.
-  pub fn launch_run(&self, session_id: &str, run_id: &str) {
+  /// Writes the manager run record that the order rule reads as the session's running turn: it received
+  /// `input_event_ids` at `started_at` and has not ended.
+  pub fn launch_run(&self, session_id: &str, run_id: &str, input_event_ids: &[&str], started_at: &str) {
     let run_path = self.features.store.run_metadata_path(session_id, run_id);
     std::fs::create_dir_all(run_path.parent().expect("run directory")).expect("run directory");
-    let run = json!({"id": run_id, "session_id": session_id, "kind": "manager_turn", "pid": 424242, "pid_start": "1"});
+    let run = json!({
+      "id": run_id,
+      "session_id": session_id,
+      "kind": "manager_turn",
+      "input_event_ids": input_event_ids,
+      "started_at": started_at,
+    });
     std::fs::write(&run_path, run.to_string()).expect("run record");
   }
 
-  pub fn set_running(&self, input_event_ids: &[&str]) {
-    let ids = input_event_ids.iter().map(|id| id.to_string()).collect();
-    *self.running.lock().expect("the stub lock is never poisoned") = ids;
+  /// Records the end of the manager run `run_id`, so the order rule reads no running turn.
+  pub fn end_run(&self, session_id: &str, run_id: &str, ended_at: &str) {
+    let run_path = self.features.store.run_metadata_path(session_id, run_id);
+    let mut run: Value = serde_json::from_str(&std::fs::read_to_string(&run_path).expect("the run record reads"))
+      .expect("the run record is JSON");
+    run["ended_at"] = json!(ended_at);
+    std::fs::write(&run_path, run.to_string()).expect("run record");
   }
 
   /// A root manager session named `name`, created as the operator creates one.
@@ -334,7 +337,7 @@ pub fn id_of(event: &Value) -> &str {
   event["id"].as_str().expect("an appended event carries its id")
 }
 
-/// A `master_done` event that answers `input_event_ids` and ended with `exit_code`.
-pub fn master_done(input_event_ids: &[&str], exit_code: i32) -> Value {
-  json!({"type": "master_done", "exit_code": exit_code, "input_event_ids": input_event_ids})
+/// A `master_done` event of `run_id` that answers `input_event_ids` and ended with `exit_code`.
+pub fn master_done(run_id: &str, input_event_ids: &[&str], exit_code: i32) -> Value {
+  json!({"type": "master_done", "run_id": run_id, "exit_code": exit_code, "input_event_ids": input_event_ids})
 }

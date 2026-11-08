@@ -441,7 +441,6 @@ fn turn_context_state(
 }
 
 struct TurnProcess<'a> {
-  tracking: Arc<dyn RunTracking>,
   item: &'a mut WorkItem,
   features: Arc<FeatureContext>,
   option: BackendOption,
@@ -605,10 +604,7 @@ impl RunProcess for TurnProcess<'_> {
                   None => None,
                 };
                 let retry_after = retry_after.filter(|delay| backend_retry::waits(self.automatic_retries, *delay));
-                let tracking = Arc::clone(&self.tracking);
                 crate::midturn_delivery::record_ack(
-                  tracking.as_ref(),
-                  &session_id,
                   &mut self.item.user_event_ids,
                   &self.item.task_run.run_id,
                   &stream_event.event,
@@ -845,7 +841,6 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
   let relay_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
   let session_id = metadata.id.clone();
   let mut process = TurnProcess {
-    tracking: Arc::clone(&tracking),
     item,
     features: Arc::clone(&features),
     option: option.clone(),
@@ -988,7 +983,7 @@ pub(crate) fn build_fresh_translate(
   crate::midturn_delivery::fresh_translate(features, cfg, option, meta, run_id, Some(log_dir))
 }
 
-pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) -> anyhow::Result<MasterRunOutcome> {
+pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOutcome> {
   let metadata = item.session_metadata();
   let record = item.resume_record.as_ref().context("resume item has no recorded run")?.clone();
   let is_alive = item.resume_is_alive.clone().context("resume item has no liveness probe")?;
@@ -1074,13 +1069,10 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
         let cc_session_id = Arc::clone(&stream_cc_session_id);
         let events = Arc::clone(&persisted_events);
         let ack_ids = Arc::clone(&stream_ack_ids);
-        let ack_tracking = Arc::clone(&tracking);
         let ack_run_id = ack_run_id.clone();
         async move {
           tracker.lock().expect("run timing mutex is not poisoned").on_event(&event);
           crate::midturn_delivery::record_ack(
-            ack_tracking.as_ref(),
-            &session_id,
             &mut ack_ids.lock().expect("resume acknowledgement mutex is not poisoned"),
             &ack_run_id,
             &event,

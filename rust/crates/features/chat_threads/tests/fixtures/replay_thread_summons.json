@@ -1,0 +1,115 @@
+{
+  "r3": {
+    "source": "session f6694627: a summon arrived at 09:45, the reply at 09:52 preceded the run start, and the round nudged",
+    "session_id": "f6694627-d753-5cf2-8c93-7be03798645b",
+    "run": {
+      "id": "2f8eca09-2e0e-56ab-943e-8236bc3e994f",
+      "session_id": "f6694627-d753-5cf2-8c93-7be03798645b",
+      "kind": "manager_turn",
+      "input_event_ids": ["0169d817-7cf1-5c42-b307-1df8283a9085"],
+      "started_at": "2026-11-03T09:53:21.751733Z",
+      "ended_at": "2026-11-03T09:54:49.300723Z"
+    },
+    "events": [
+      {
+        "id": "0169d817-7cf1-5c42-b307-1df8283a9085",
+        "type": "agent_message",
+        "timestamp": "2026-11-03T09:45:31.652255+00:00",
+        "content": "fakechat summon",
+        "fakechat": {
+          "channel_id": "C0reference1",
+          "thread_ts": "1793698335.731039",
+          "mention_id": "1793699131.294589"
+        }
+      },
+      {
+        "id": "670179f4-a93b-5d62-a036-6a5d786ffe21",
+        "type": "fakechat_reply",
+        "timestamp": "2026-11-03T09:52:57.043512+00:00",
+        "content": "The first measurement explained the delay.",
+        "fakechat_reply": {
+          "chars": 38,
+          "chunks": 1
+        }
+      },
+      {
+        "id": "96eb3608-df2b-4901-8258-813114682bbc",
+        "type": "master_done",
+        "timestamp": "2026-11-03T09:54:49.293965+00:00",
+        "run_id": "2f8eca09-2e0e-56ab-943e-8236bc3e994f",
+        "input_event_ids": ["0169d817-7cf1-5c42-b307-1df8283a9085"],
+        "exit_code": 0
+      },
+      {
+        "id": "06885499-8ede-59b9-b002-2f667e758c38",
+        "type": "agent_message",
+        "timestamp": "2026-11-03T09:54:49.466602+00:00",
+        "content": "Fakechat thread: the round answering this mention ended without posting a reply. Decide now:\nwhen the thread should hear something, post a reply; when there is nothing to say, end this\nround and the thread gets a one-line notice pointing to this session.",
+        "fakechat": {
+          "channel_id": "C0reference1",
+          "thread_ts": "1793698335.731039",
+          "mention_id": "1793699131.294589",
+          "nudge_of": "0169d817-7cf1-5c42-b307-1df8283a9085"
+        }
+      }
+    ],
+    "expect": {
+      "receipt_time": "2026-11-03T09:53:21.751733Z",
+      "answered": false,
+      "nudges_for": ["0169d817-7cf1-5c42-b307-1df8283a9085"]
+    }
+  },
+  "r4": {
+    "source": "session d58b6cce: the reply at 09:44:57 followed the run start and cleared the summon ack",
+    "session_id": "d58b6cce-998e-5cd8-b150-21a404f5c735",
+    "run": {
+      "id": "c9795a1d-9c0f-5010-8b49-1510c5edd040",
+      "session_id": "d58b6cce-998e-5cd8-b150-21a404f5c735",
+      "kind": "manager_turn",
+      "input_event_ids": ["e63e6dd5-9317-5843-95a4-89dae2f5eaab"],
+      "started_at": "2026-11-03T09:40:26.064432Z",
+      "ended_at": "2026-11-03T09:45:13.745837Z"
+    },
+    "events": [
+      {
+        "id": "e63e6dd5-9317-5843-95a4-89dae2f5eaab",
+        "type": "agent_message",
+        "timestamp": "2026-11-03T09:40:25.931425+00:00",
+        "content": "fakechat summon",
+        "fakechat": {
+          "channel_id": "C0reference2",
+          "thread_ts": "1793697700.518371",
+          "mention_id": "1793698825.664201"
+        }
+      },
+      {
+        "id": "54833a65-9477-5646-a380-7f22ca0374e1",
+        "type": "fakechat_reply",
+        "timestamp": "2026-11-03T09:44:57.374126+00:00",
+        "content": "The upstream returned 503; the key and the quota are fine.",
+        "fakechat_reply": {
+          "chars": 52,
+          "chunks": 1
+        }
+      },
+      {
+        "id": "66453d93-b5bd-40b9-b9b7-0d567795df3c",
+        "type": "master_done",
+        "timestamp": "2026-11-03T09:45:13.737793+00:00",
+        "run_id": "c9795a1d-9c0f-5010-8b49-1510c5edd040",
+        "input_event_ids": [],
+        "exit_code": 0
+      }
+    ],
+    "expect": {
+      "receipt_time": "2026-11-03T09:40:26.064432Z",
+      "answered": true,
+      "nudges": 0,
+      "ack_cleared": {
+        "channel_id": "C0reference2",
+        "thread_ts": "1793697700.518371",
+        "mention_id": "1793698825.664201"
+      }
+    }
+  }
+}

@@ -3126,10 +3126,6 @@ pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, an
     let pool = backend_pool::backend_pool(&features)?;
     features.startup.insert(MasterQueue::new(pool))?;
     let queue = features.startup.require::<MasterQueue>()?;
-    let running_queue = Arc::clone(&queue);
-    features.startup.insert(charliebot_registry::RunningTurnInputs::new(move |session_id| {
-      running_queue.running_user_event_ids(session_id)
-    }))?;
     features.startup.insert(crate::completion::TaskCompletion::new(Arc::clone(&features)))?;
     let completion = features.startup.require::<crate::completion::TaskCompletion>()?;
     let sequence_completion: Arc<dyn SequenceCompletion> = completion.clone();
@@ -3236,14 +3232,14 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn the_startup_step_answers_running_turn_inputs_as_the_master_state_reader_does() {
+  async fn the_startup_step_inserts_the_master_queue_that_reports_an_idle_session() {
     use std::sync::Arc;
 
     use charliebot_agents::backend_pool::BackendPool;
     use charliebot_core::credentials::load_credentials;
     use charliebot_core::hot_reload::HotReload;
     use charliebot_registry::store_hooks::store_hooks;
-    use charliebot_registry::{FeatureContext, Registry, RunningTurnInputs, StartupState};
+    use charliebot_registry::{FeatureContext, Registry, StartupState};
     use charliebot_store::Store;
 
     let home = tempfile::tempdir().expect("temporary directory exists");
@@ -3284,15 +3280,12 @@ mod tests {
 
     pre_recovery_step(Arc::clone(&features)).await.expect("the startup step runs");
 
-    let inputs = features.startup.require::<RunningTurnInputs>().expect("the startup step inserts the inputs");
-    let session_id = "synthetic-session";
-    let reader = crate::master_queue::running_user_event_ids(&features, session_id).expect("the queue is in startup");
-    assert_eq!(inputs.user_event_ids(session_id), reader);
-    assert!(reader.is_empty(), "no turn runs in an idle queue");
+    let busy = crate::master_queue::session_is_busy(&features, "synthetic-session").expect("the queue is in startup");
+    assert!(!busy, "no turn runs in an idle queue");
   }
 
   #[tokio::test]
-  async fn running_turn_inputs_returns_all_running_inputs_in_arrival_order() {
+  async fn a_running_turn_reports_the_session_busy_and_acknowledges_a_delivered_input() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
@@ -3303,7 +3296,7 @@ mod tests {
     use charliebot_core::credentials::load_credentials;
     use charliebot_core::hot_reload::HotReload;
     use charliebot_registry::store_hooks::store_hooks;
-    use charliebot_registry::{FeatureContext, Registry, RunningTurnInputs, StartupState};
+    use charliebot_registry::{FeatureContext, Registry, StartupState};
     use charliebot_store::Store;
     use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 
@@ -3345,7 +3338,6 @@ mod tests {
 
     pre_recovery_step(Arc::clone(&features)).await.expect("the startup step runs");
     let queue = features.startup.require::<MasterQueue>().expect("the startup step inserts the queue");
-    let inputs = features.startup.require::<RunningTurnInputs>().expect("the startup step inserts the inputs");
     let entered = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
     let first_persist = Arc::new(AtomicBool::new(true));
@@ -3400,13 +3392,10 @@ mod tests {
     tokio::time::timeout(Duration::from_secs(1), entered.notified())
       .await
       .expect("the running turn reaches its refusal callback");
-    assert_eq!(inputs.user_event_ids(session_id), ["input-first", "input-second"]);
-    // A mid-turn delivery joins the running binding, which holds the live item, so `record_ack`'s
-    // append reaches a web reply posted while the turn runs.
+    assert!(queue.session_is_busy(session_id), "the running turn makes the session busy");
+    // A mid-turn delivery joins the live item's batch, which becomes the turn's master_done input ids.
     let mut acked = vec!["input-first".to_string(), "input-second".to_string()];
     crate::midturn_delivery::record_ack(
-      queue.as_ref(),
-      session_id,
       &mut acked,
       "synthetic-run",
       &serde_json::json!({
@@ -3416,10 +3405,11 @@ mod tests {
       }),
     )
     .expect("the delivered input is acknowledged");
-    assert_eq!(inputs.user_event_ids(session_id), ["input-first", "input-second", "input-delivered"]);
+    assert_eq!(acked, ["input-first", "input-second", "input-delivered"]);
     release.notify_one();
     queue_task.await.expect("the queue task joins").expect("the turn settles");
     queue.shutdown().await.expect("the queue shuts down");
+    assert!(!queue.session_is_busy(session_id), "the settled turn leaves the session idle");
   }
 
   #[tokio::test]

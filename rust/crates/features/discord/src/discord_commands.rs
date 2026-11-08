@@ -12,7 +12,7 @@ use charliebot_core::event_types;
 use charliebot_core::text_repr;
 use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
-use charliebot_store::message_utils::master_done_input_event_ids;
+use charliebot_store::reply_order;
 use serde_json::{Value, json};
 
 use crate::config::DiscordConfig;
@@ -38,17 +38,19 @@ fn message_view(message: &Message, unread: bool, summon: bool, allowed_users: &B
   })
 }
 
-/// The mention message ids of the session's pending summons. A summon is pending while
-/// its event carries the discord block without `nudge_of`, no master_done names its id, no lost-summon backfill marker
-/// names it, and it has a mention id.
-fn pending_summon_mention_ids(events: &[ChatEvent]) -> HashSet<String> {
+/// The mention message ids of the session's pending summons. A summon is pending while its event carries the discord
+/// block without `nudge_of`, no finished turn received its id, it has no lost-summon backfill marker, and it has a
+/// mention id.
+fn pending_summon_mention_ids(
+  store: &charliebot_store::Store,
+  session_id: &str,
+  events: &[ChatEvent],
+) -> anyhow::Result<HashSet<String>> {
   let backfill_key = DISCORD.backfill_key();
-  let mut answered: HashSet<String> = HashSet::new();
+  let received = reply_order::received_by_finished_turns(store, session_id, events)?;
   let mut marked: HashSet<String> = HashSet::new();
   for event in events {
-    if event.get("type").and_then(CompactValue::as_str) == Some(event_types::MASTER_DONE) {
-      answered.extend(master_done_input_event_ids(event));
-    } else if let Some(marker) = event.get(&backfill_key) {
+    if let Some(marker) = event.get(&backfill_key) {
       marked.extend(marker.get(event_types::INPUT_EVENT_ID).and_then(CompactValue::as_str).map(str::to_string));
     }
   }
@@ -61,14 +63,14 @@ fn pending_summon_mention_ids(events: &[ChatEvent]) -> HashSet<String> {
       continue;
     }
     let id = event["id"].as_str().expect("a chat event carries a string id");
-    if block.get(event_types::NUDGE_OF).is_some() || answered.contains(id) || marked.contains(id) {
+    if block.get(event_types::NUDGE_OF).is_some() || received.contains(id) || marked.contains(id) {
       continue;
     }
     if let Some(mention) = block.get(DISCORD.mention_key).filter(|mention| !mention.is_null()) {
       pending.insert(text_repr::value_str(&mention.to_value()));
     }
   }
-  pending
+  Ok(pending)
 }
 
 /// The HTTP status a failed Discord call carries, or None when the call failed for another reason.
@@ -125,7 +127,8 @@ async fn read_own_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
   .into_iter()
   .map(|message| message.id.clone())
   .collect();
-  let pending = pending_summon_mention_ids(&load_chat_events(bot, session_id).await?);
+  let pending = pending_summon_mention_ids(&bot.features.store, session_id, &load_chat_events(bot, session_id).await?)
+    .map_err(ThreadReplyError::failure)?;
   let mut starts = Vec::new();
   if let Some(first) = thread_messages.iter().position(|message| unread_ids.contains(&message.id)) {
     starts.push(first);

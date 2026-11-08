@@ -24,8 +24,8 @@
 //! - Link checks: `assert_no_file_server_links`, `application_route_links`, `operator_only_note`.
 //!
 //! Runtime handles come from `FeatureContext`: the store (sessions, chat events, slots, task creation), the
-//! `Arc<TriggerManager>` and the `RunningTurnInputs` in startup state, and the master queue's queued ids. The round
-//! wake is `charliebot_tasks::master_trigger::trigger_master`. Background work (the round wake, the ack, the nudge)
+//! `Arc<TriggerManager>`, and the master queue's busy state. The round wake is
+//! `charliebot_tasks::master_trigger::trigger_master`. Background work (the round wake, the ack, the nudge)
 //! runs as `spawn_logged` tasks, which log a failure as `background_task_failed`.
 
 use std::collections::{HashMap, HashSet};
@@ -46,12 +46,13 @@ use charliebot_core::event_types;
 use charliebot_core::paths;
 use charliebot_core::str_methods;
 use charliebot_registry::turn::{DELIVERY_FULL, PromptSource, RuleSegment, SCOPE_BASE};
-use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
+use charliebot_registry::{FeatureContext, StateError};
 use charliebot_store::ChatEvent;
-use charliebot_store::message_utils::{SESSION_NOT_FOUND_DETAIL, master_done_input_event_ids};
+use charliebot_store::message_utils::SESSION_NOT_FOUND_DETAIL;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
+use charliebot_store::reply_order::{self, Receipt};
 use charliebot_store::trigger_files::{PendingTrigger, TriggerStatus};
-use charliebot_store::{CreateTask, SharedChatEvent, Store, StoreError, StoreResult, TaskCaller};
+use charliebot_store::{CompactValue, CreateTask, SharedChatEvent, Store, StoreError, StoreResult, TaskCaller};
 use charliebot_tasks::master_queue;
 use charliebot_tasks::master_trigger::{self, TriggerMasterRequest};
 use charliebot_triggers::triggers::{TriggerCreateError, TriggerManager};
@@ -535,14 +536,14 @@ pub fn newest_thread_input<E: ThreadEventData>(
   bound
 }
 
-/// Whether the log holds a reply event answering `summon_id` (`replied`).
-pub fn replied<E: ThreadEventData>(platform: &ThreadPlatform, events: &[E], summon_id: &str) -> bool {
-  events.iter().any(|event| {
-    let event = event.event_value();
-    event_type(&event) == Some(platform.reply_event_type)
-      && event.get(platform.reply_event_type).and_then(|payload| payload.get("answers")).and_then(Value::as_str)
-        == Some(summon_id)
-  })
+/// Whether the log holds a reply later than `receipt`: the order rule's answer test for a received summon (`replied`).
+pub fn replied<E: ThreadEventData>(
+  platform: &ThreadPlatform,
+  receipt: &Receipt,
+  events: &[E],
+) -> Result<bool, StoreError> {
+  let events: Vec<ChatEvent> = events.iter().map(|event| ChatEvent::from_value(&event.event_value())).collect();
+  reply_order::answered(receipt, &events, platform.reply_event_type)
 }
 
 /// Whether the log holds the nudge for `summon_id`: a summon-block message carrying `nudge_of` (`nudged`).
@@ -565,22 +566,16 @@ pub fn noticed<E: ThreadEventData>(platform: &ThreadPlatform, events: &[E], summ
   })
 }
 
-/// The summon injections in one session's log that nothing will ever answer (`lost_summons`). A summon or a nudge is
-/// lost when no `master_done` names it, this process does not own it (queued or running), and no earlier backfill
-/// marked it. The marker is the `<name>_backfill` payload, never a synthetic `master_done`.
+/// The summon injections in one session's log that no finished turn received (`lost_summons`). A summon or a nudge is
+/// lost when no finished turn received it and no earlier backfill marked it. `received` holds the input ids of every
+/// finished turn: the union of their `master_done` input ids and their runs' receipts. The marker is the
+/// `<name>_backfill` payload, never a synthetic `master_done`.
 pub fn lost_summons<E: ThreadEventData>(
   platform: &ThreadPlatform,
   events: &[E],
-  owned: &HashSet<String>,
-  running: &HashSet<String>,
+  received: &HashSet<String>,
 ) -> Vec<Value> {
   let backfill_key = platform.backfill_key();
-  let mut answered: HashSet<String> = HashSet::new();
-  for event in
-    events.iter().map(ThreadEventData::event_value).filter(|event| event_type(event) == Some(event_types::MASTER_DONE))
-  {
-    answered.extend(master_done_input_event_ids(&event));
-  }
   let marked: HashSet<String> = events
     .iter()
     .filter_map(|event| {
@@ -596,7 +591,7 @@ pub fn lost_summons<E: ThreadEventData>(
     .filter(|event| {
       let value = event.event_value();
       let id = event_id(&value);
-      !answered.contains(id) && !marked.contains(id) && !owned.contains(id) && !running.contains(id)
+      !received.contains(id) && !marked.contains(id)
     })
     .map(|event| event.event_value().clone())
     .collect()
@@ -828,10 +823,13 @@ pub async fn post_reply_with_caller_context(
   let operator_only_links = application_route_links(text, config.server.port);
 
   let chat_events = load_chat_events(features, session_id).await?;
-  // The in-process work item owns the input batch answered by this reply.
-  let running = features.startup.require::<RunningTurnInputs>()?.user_event_ids(session_id);
-  let bound = newest_thread_input(platform, &chat_events, &running);
-  let answers = bound.as_ref().map(|(input_id, block)| summon_of(block, input_id));
+  // The running turn's receipts name the inputs it received; the newest one carrying this platform's block binds the
+  // reply's ack, and a receipt of a nudge resolves to the summon the nudge was posted for.
+  let receipt_ids: Vec<String> = reply_order::running_receipts(&features.store, session_id, &chat_events)?
+    .into_iter()
+    .map(|receipt| receipt.input_event_id)
+    .collect();
+  let bound = newest_thread_input(platform, &chat_events, &receipt_ids);
   let ack_block = bound.as_ref().map(|(_, block)| (*block).clone());
   let address = adapter.address_of(&session.origin);
   let bodies = chunk_text(text, platform.max_post_chars);
@@ -886,7 +884,7 @@ pub async fn post_reply_with_caller_context(
   drop(bound);
   // The store appends to its cached event list in place; release the Arc before the same write.
   drop(chat_events);
-  let payload = json!({"answers": answers, "chars": chars, "chunks": bodies.len()});
+  let payload = json!({"chars": chars, "chunks": bodies.len()});
   let _event = if let (Some(request_id), Some(event_id)) = (request_id, event_id.as_deref()) {
     let event = json!({
       "id": event_id,
@@ -940,7 +938,6 @@ pub async fn post_reply_with_caller_context(
     chunks = bodies.len(),
     over_budget,
     budget = REPLY_BUDGET_CHARS,
-    answers = ?answers,
   );
   let note = operator_only_note(&operator_only_links);
   Ok(json!({
@@ -950,7 +947,6 @@ pub async fn post_reply_with_caller_context(
     "chars": chars,
     "chunks": bodies.len(),
     "over_budget": over_budget,
-    "answers": answers,
   }))
 }
 
@@ -975,7 +971,6 @@ fn reply_receipt(event: &Value, operator_only_links: &[String], platform: &Threa
     "chars": chars,
     "chunks": payload["chunks"],
     "over_budget": chars as usize > REPLY_BUDGET_CHARS,
-    "answers": payload["answers"],
   })
 }
 
@@ -1095,25 +1090,25 @@ fn nudge_text(platform: &ThreadPlatform) -> String {
   )
 }
 
-/// The round-end audit of one finished round whose input carried a summon block; true when it acted
-/// (`audit_round`). A summon round without a reply gets a nudge, once; a nudge round without one gets the thread
-/// notice, once, persisted only after the post succeeds.
+/// The round-end audit of one finished round whose received input carries a summon block; true when it acted
+/// (`audit_round`). A summon round without a reply later than `receipt` gets a nudge, once; a nudge round without one
+/// gets the thread notice, once, persisted only after the post succeeds.
 pub async fn audit_round(
   adapter: &Arc<dyn ThreadAdapter>,
   features: &Arc<FeatureContext>,
   session_id: &str,
-  input_event_id: &str,
+  receipt: &Receipt,
 ) -> Result<Option<Arc<Vec<SharedChatEvent>>>, ThreadReplyError> {
   let _session_guard = session_lock_for(session_id).lock_owned().await;
   let platform = adapter.platform();
   let chat_events = load_chat_events(features, session_id).await?;
-  let Some(input_event) = event_by_id(&chat_events, input_event_id) else {
+  let Some(input_event) = event_by_id(&chat_events, &receipt.input_event_id) else {
     return Ok(Some(chat_events));
   };
   let Some(target) = input_event.get(platform.name).filter(|block| block.is_object()).cloned() else {
     return Ok(Some(chat_events));
   };
-  let summon_id = summon_of(&target, input_event_id);
+  let summon_id = summon_of(&target, &receipt.input_event_id);
   let content = event_by_id(&chat_events, &summon_id)
     .and_then(|summon| summon.get("content").and_then(Value::as_str).map(str::to_string))
     .unwrap_or_default();
@@ -1121,7 +1116,7 @@ pub async fn audit_round(
   if content != platform.summon_line && !content.contains(platform.reply_command) {
     return Ok(Some(chat_events));
   }
-  if replied(platform, &chat_events, &summon_id) {
+  if replied(platform, receipt, &chat_events)? {
     return Ok(Some(chat_events));
   }
 
@@ -1204,7 +1199,7 @@ pub async fn audit_round(
 }
 
 /// The round-end audit for one finished round (`deliver_done`). It returns false without acting unless the round
-/// belongs to a thread-bound session and answered a summon or a nudge.
+/// belongs to a thread-bound session and received a summon or a nudge.
 pub async fn deliver_done(
   adapter: &Arc<dyn ThreadAdapter>,
   features: &Arc<FeatureContext>,
@@ -1218,21 +1213,27 @@ pub async fn deliver_done(
   if origin_of(&meta, platform).is_none() {
     return Ok(false);
   }
-  let input_event_ids = master_done_input_event_ids(done);
-  if input_event_ids.is_empty() {
+  let chat_events = load_chat_events(features, session_id).await?;
+  let receipts =
+    reply_order::turn_receipts(&features.store, session_id, done, &chat_events).map_err(ThreadReplyError::failure)?;
+  if receipts.is_empty() {
     return Ok(false);
   }
-  let chat_events = load_chat_events(features, session_id).await?;
-  let Some((input_event_id, _)) = newest_thread_input(platform, &chat_events, &input_event_ids) else {
+  let receipt_ids: Vec<String> = receipts.iter().map(|receipt| receipt.input_event_id.clone()).collect();
+  let Some((input_event_id, _)) = newest_thread_input(platform, &chat_events, &receipt_ids) else {
     return Ok(false);
   };
-  let input_event_id = input_event_id.to_string();
-  Ok(audit_round(adapter, features, session_id, &input_event_id).await?.is_none())
+  let receipt = receipts
+    .into_iter()
+    .find(|receipt| receipt.input_event_id == input_event_id)
+    .expect("the newest thread input is one of the turn's receipts");
+  Ok(audit_round(adapter, features, session_id, &receipt).await?.is_none())
 }
 
 /// Boot pass over every thread-bound session; returns how many notices and nudges it produced
-/// (`backfill_lost_summons`). Summons lost while queued get the lost-summon notice, then every finished round gets the
-/// round-end audit. A second pass finds nothing, because every predicate reads the log.
+/// (`backfill_lost_summons`). A session with a turn running or waiting is left alone: its summons belong to that turn's
+/// end. An idle session reports each summon that no finished turn received and re-runs the round-end audit of every
+/// round that carries a run id. A second pass finds nothing, because every predicate reads the log.
 pub async fn backfill_lost_summons(
   adapter: &Arc<dyn ThreadAdapter>,
   features: &Arc<FeatureContext>,
@@ -1245,13 +1246,14 @@ pub async fn backfill_lost_summons(
     if origin_of(&meta, platform).is_none() {
       continue;
     }
+    if master_queue::session_is_busy(features, &meta.id).map_err(ThreadReplyError::failure)? {
+      continue;
+    }
     let mut chat_events = {
       let _session_guard = session_lock_for(&meta.id).lock_owned().await;
       let chat_events = load_chat_events(features, &meta.id).await?;
-      let owned = master_queue::queued_user_event_ids(features, &meta.id)?;
-      let running: HashSet<String> =
-        features.startup.require::<RunningTurnInputs>()?.user_event_ids(&meta.id).into_iter().collect();
-      let lost = lost_summons(platform, &chat_events, &owned, &running);
+      let received = reply_order::received_by_finished_turns(&features.store, &meta.id, &chat_events)?;
+      let lost = lost_summons(platform, &chat_events, &received);
       for event in &lost {
         let summon_id = event_id(event).to_string();
         let block = event.get(platform.name).expect("lost summons carry their block");
@@ -1291,16 +1293,27 @@ pub async fn backfill_lost_summons(
       .iter()
       .enumerate()
       .filter(|(_, event)| event_type(&event.to_value()) == Some(event_types::MASTER_DONE))
-      .filter(|(_, event)| !master_done_input_event_ids(event.as_ref()).is_empty())
+      .filter(|(_, event)| {
+        event.as_ref().get("run_id").and_then(CompactValue::as_str).is_some_and(|run_id| !run_id.is_empty())
+      })
       .map(|(index, _)| index)
       .collect();
     for done_index in dones {
-      let done_ids = master_done_input_event_ids(chat_events[done_index].as_ref());
-      let Some((input_event_id, _)) = newest_thread_input(platform, &chat_events, &done_ids) else {
+      let done = chat_events[done_index].to_value();
+      let receipts = reply_order::turn_receipts(&features.store, &meta.id, &done, &chat_events)
+        .map_err(ThreadReplyError::failure)?;
+      if receipts.is_empty() {
+        continue;
+      }
+      let receipt_ids: Vec<String> = receipts.iter().map(|receipt| receipt.input_event_id.clone()).collect();
+      let Some((input_event_id, _)) = newest_thread_input(platform, &chat_events, &receipt_ids) else {
         continue;
       };
-      let input_event_id = input_event_id.to_string();
-      match audit_round(adapter, features, &meta.id, &input_event_id).await? {
+      let receipt = receipts
+        .into_iter()
+        .find(|receipt| receipt.input_event_id == input_event_id)
+        .expect("the newest thread input is one of the turn's receipts");
+      match audit_round(adapter, features, &meta.id, &receipt).await? {
         Some(snapshot) => chat_events = snapshot,
         None => {
           reported += 1;

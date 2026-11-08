@@ -24,16 +24,18 @@ const SEARCH_RESULT_LIMIT: usize = 200;
 const SEARCH_FILE_MEMO_LIMIT: usize = 4096;
 const SEARCH_ROOTS_PER_FILE: usize = 8;
 const SEARCH_MATCH_MEMO_LIMIT: usize = 8;
-/// How long a repeat query answers from the match it just verified, before it re-reads the watched files' signatures.
+/// How long a repeat query answers from the match it just verified, and how long a fresh query trusts a content index
+/// without reading its file's signature.
 ///
-/// The check is one `stat` per watched chat file: every active session's file while the answer is short of the cap,
-/// which is 7,160 reads and about 12 ms of CPU on the mock home for an answer of a few bytes. A chat file that an
-/// out-of-band writer changes is seen within this interval, the same bound the store's listing memo puts on its own
-/// out-of-band edits.
+/// The repeat check is one `stat` per watched chat file: every active session's file while the answer is short of the
+/// cap, which is 7,160 reads and about 12 ms of CPU on the mock home for an answer of a few bytes. The fresh query's
+/// index check is the same read per candidate file, and it is the route's dominant cost. A chat file that an
+/// out-of-band writer changes is seen within this interval either way, the same bound the store's listing memo puts on
+/// its own out-of-band edits.
 #[cfg(not(test))]
 const SEARCH_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
-/// A test changes a file behind the memo's back and expects the next query to see it, so tests verify on every
-/// repeat unless they name their own interval.
+/// A test changes a file behind the memo's back and expects the next query to see it, so tests read a signature on
+/// every query unless they name their own interval.
 #[cfg(test)]
 const SEARCH_SWEEP_INTERVAL: Duration = Duration::ZERO;
 const SEARCH_CHUNK_SIZE: usize = 1 << 18;
@@ -154,6 +156,9 @@ struct ContentIndexEntry {
   /// The file the index was built for, so a [`path_key`] collision answers as a missing index.
   path: PathBuf,
   signature: FileSignature,
+  /// When the sweep last read the file's signature and found it equal to [`Self::signature`], so the index still
+  /// describes the file.
+  verified_at: Instant,
   trigrams: Box<[u8]>,
   bigrams: Box<[u8]>,
   high_bigrams: Box<[u8]>,
@@ -171,6 +176,14 @@ enum ContentVerdict {
   /// A trigram, a bigram or a high-byte bigram of the needle is absent from the file, so the needle is absent from
   /// the file too.
   Absent,
+}
+
+/// Whether an index holds every sequence of the needle: the needle can occur in the file only then.
+fn index_holds(entry: &ContentIndexEntry, trigrams: &[usize], bigrams: &[usize], high_bigrams: &[usize]) -> bool {
+  let holds = |bits: &[u8], bit: usize| bits[bit >> 3] & (1u8 << (bit & 7)) != 0;
+  trigrams.iter().all(|bit| holds(&entry.trigrams, *bit))
+    && bigrams.iter().all(|bit| holds(&entry.bigrams, *bit))
+    && high_bigrams.iter().all(|bit| holds(&entry.high_bigrams, *bit))
 }
 
 /// One file's needle roots, newest needles kept: the same bounded per-needle list the per-file memo holds.
@@ -192,11 +205,13 @@ pub(crate) struct SearchMatch {
   /// The corpus the matched rows were taken from. A rebuilt listing answers a new `Arc`, so a pointer match names the
   /// same rows.
   corpus: Arc<Vec<Arc<SessionMetadata>>>,
-  /// The chat files a repeat query re-checks: every content candidate while the result is short of the cap, and only
+  /// The corpus's chat files, shared with the corpus work: a short result watches every candidate, so a copy of the
+  /// list would clone and later free 7,160 paths for each query the match memo keeps.
+  candidates: Arc<Vec<WatchedFile>>,
+  /// The candidates a repeat query re-checks: every content candidate while the result is short of the cap, and only
   /// the candidates at or above the last returned row's `updated_at` once the result reaches it.
-  ///
-  /// The batch shares this list instead of copying it, so a worker thread reads the memo's own paths.
-  watched: Arc<Vec<WatchedFile>>,
+  watched: Vec<usize>,
+  /// The signature each watched candidate was read at, in `watched` order.
   signatures: Vec<Option<FileSignature>>,
   /// The matched rows, newest first, capped at [`SEARCH_RESULT_LIMIT`].
   rows: Vec<Arc<SessionMetadata>>,
@@ -374,19 +389,36 @@ impl SearchMemos {
     bigrams: &[usize],
     high_bigrams: &[usize],
   ) -> ContentVerdict {
-    let Some(entry) = self.content.get(&file.key) else { return ContentVerdict::Missing };
+    let Some(entry) = self.content.get_mut(&file.key) else { return ContentVerdict::Missing };
     if entry.path != file.path || entry.signature != signature {
       return ContentVerdict::Missing;
     }
-    let holds = |bits: &[u8], bit: usize| bits[bit >> 3] & (1u8 << (bit & 7)) != 0;
-    if trigrams.iter().all(|bit| holds(&entry.trigrams, *bit))
-      && bigrams.iter().all(|bit| holds(&entry.bigrams, *bit))
-      && high_bigrams.iter().all(|bit| holds(&entry.high_bigrams, *bit))
-    {
-      ContentVerdict::Possible
-    } else {
-      ContentVerdict::Absent
+    entry.verified_at = Instant::now();
+    if index_holds(entry, trigrams, bigrams, high_bigrams) { ContentVerdict::Possible } else { ContentVerdict::Absent }
+  }
+
+  /// The signature of a file whose index, read within `interval` of `now`, already rules the needle out.
+  ///
+  /// `None` means the caller reads the file's signature before it asks [`Self::content_verdict`]. A fresh query reads
+  /// one signature per candidate, which is the route's dominant cost: 7,160 path walks on the mock home, 85% of its
+  /// CPU. The interval that already bounds how long a repeat query takes to see an out-of-band writer now bounds the
+  /// index's age too, so a query inside it answers from the indexes and a query after it re-reads the signatures.
+  ///
+  /// `now` is read once per sweep, because the clock read costs more than the index test it guards.
+  fn recent_absence(
+    &mut self,
+    file: &WatchedFile,
+    now: Instant,
+    interval: Duration,
+    trigrams: &[usize],
+    bigrams: &[usize],
+    high_bigrams: &[usize],
+  ) -> Option<FileSignature> {
+    let entry = self.content.get_mut(&file.key)?;
+    if entry.path != file.path || now.duration_since(entry.verified_at) >= interval {
+      return None;
     }
+    if index_holds(entry, trigrams, bigrams, high_bigrams) { None } else { Some(entry.signature) }
   }
 
   fn remember_content_index(
@@ -397,9 +429,17 @@ impl SearchMemos {
     bigrams: Box<[u8]>,
     high_bigrams: Box<[u8]>,
   ) {
-    self
-      .content
-      .put(file.key, ContentIndexEntry { path: file.path.clone(), signature, trigrams, bigrams, high_bigrams });
+    self.content.put(
+      file.key,
+      ContentIndexEntry {
+        path: file.path.clone(),
+        signature,
+        verified_at: Instant::now(),
+        trigrams,
+        bigrams,
+        high_bigrams,
+      },
+    );
   }
 
   fn cached_match(&mut self, query: &str) -> Option<Arc<SearchMatch>> {
@@ -451,13 +491,15 @@ fn search_sessions_with_limit(
     if cached.verification_holds(sweep_interval) {
       return Ok(SearchAnswer { rows: cached.rows.clone(), source: Some(cached) });
     }
-    let watched: Vec<usize> = (0..cached.watched.len()).collect();
     #[cfg(test)]
     {
       memos.lock().expect("session search memo mutex is not poisoned").repeat_sweeps += 1;
     }
     let signatures: Vec<Option<FileSignature>> =
-      file_signatures(&cached.watched, &watched, sessions_handle.as_ref()).into_iter().map(Result::ok).collect();
+      file_signatures(&cached.candidates, &cached.watched, sessions_handle.as_ref())
+        .into_iter()
+        .map(Result::ok)
+        .collect();
     if cached.signatures == signatures {
       cached.mark_verified();
       return Ok(SearchAnswer { rows: cached.rows.clone(), source: Some(cached) });
@@ -483,6 +525,9 @@ fn search_sessions_with_limit(
   // A candidate's place in `content_hits` follows the corpus order, because the result's order breaks ties on
   // insertion order.
   let mut content_hits = vec![false; work.candidates.len()];
+  // The candidates a content index ruled the needle out of without a signature read, so the verdict pass leaves them
+  // out instead of asking their index again.
+  let mut content_absent = vec![false; work.candidates.len()];
   // The signature of every candidate the sweep has read. A candidate the sweep stops before is never read, so its
   // slot stays None.
   let mut signatures: Vec<Option<FileSignature>> = vec![None; work.candidates.len()];
@@ -525,12 +570,33 @@ fn search_sessions_with_limit(
     // A session whose name matched already answers the query, so its chat file is not read.
     let selection: Vec<usize> =
       positions.iter().copied().filter(|index| !name_hits[work.candidate_rows[*index]]).collect();
+    // A file whose content index is younger than the sweep interval rules the needle out without a signature read,
+    // and a needle occurs in none of most files. The rest of the selection is read by the signature batch.
+    let mut unread: Vec<usize> = Vec::with_capacity(selection.len());
+    {
+      let mut guard = memos.lock().expect("session search memo mutex is not poisoned");
+      let interval = guard.sweep_interval;
+      let now = Instant::now();
+      for index in &selection {
+        let recent = if content_index_settles {
+          guard.recent_absence(&work.candidates[*index], now, interval, &trigrams, &bigrams, &high_bigrams)
+        } else {
+          None
+        };
+        match recent {
+          Some(signature) => {
+            signatures[*index] = Some(signature);
+            content_absent[*index] = true;
+          }
+          None => unread.push(*index),
+        }
+      }
+    }
     #[cfg(test)]
     {
-      memos.lock().expect("session search memo mutex is not poisoned").swept_candidates += selection.len();
+      memos.lock().expect("session search memo mutex is not poisoned").swept_candidates += unread.len();
     }
-    for (index, answer) in selection.iter().zip(file_signatures(&work.candidates, &selection, sessions_handle.as_ref()))
-    {
+    for (index, answer) in unread.iter().zip(file_signatures(&work.candidates, &unread, sessions_handle.as_ref())) {
       signatures[*index] = match answer {
         Ok(signature) => Some(signature),
         Err(error) => {
@@ -547,7 +613,7 @@ fn search_sessions_with_limit(
     {
       let mut guard = memos.lock().expect("session search memo mutex is not poisoned");
       for index in positions.iter().copied() {
-        if name_hits[work.candidate_rows[index]] {
+        if name_hits[work.candidate_rows[index]] || content_absent[index] {
           continue;
         }
         let Some(signature) = signatures[index] else { continue };
@@ -677,16 +743,16 @@ fn search_sessions_with_limit(
         continue;
       }
       if cutoff.is_none_or(|cutoff| all[*row].updated_at >= cutoff) {
-        watched.push(work.candidates[index].clone());
+        watched.push(index);
         watched_signatures.push(signature);
       }
     }
-    let watched = Arc::new(watched);
     let rows: Vec<Arc<SessionMetadata>> = names.into_iter().cloned().collect();
     let source = memos.lock().expect("session search memo mutex is not poisoned").remember_match(
       &needle,
       SearchMatch {
         corpus: Arc::clone(&all),
+        candidates: Arc::clone(&work.candidates),
         watched,
         signatures: watched_signatures,
         rows: rows.clone(),
@@ -1765,6 +1831,33 @@ mod tests {
       "the repeat query answers from the memo the first query built"
     );
     assert_eq!(memos.lock().unwrap().repeat_sweeps, 0, "the repeat query trusts the signatures the first query read");
+  }
+
+  /// A fresh query inside the sweep interval answers from the content indexes alone, and one at an exhausted interval
+  /// reads the signatures again: the index's age decides whether a file's signature is read.
+  #[test]
+  fn a_fresh_query_inside_the_sweep_interval_reads_no_signature() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    for index in 0..4 {
+      let id = format!("content-{index}");
+      write_session(&store, &id, &format!("session {index}"), SessionStatus::Active, "2026-08-01T12:00:00Z");
+      let path = store.chat_events_path(&id);
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      fs::write(&path, "no match here\n").unwrap();
+    }
+    let memos =
+      Mutex::new(super::SearchMemos { sweep_interval: std::time::Duration::from_secs(1), ..Default::default() });
+
+    assert!(super::search_sessions_with_memos(&store, "walrus", &memos).unwrap().rows.is_empty());
+    assert_eq!(memos.lock().unwrap().swept_candidates, 4, "the first query reads every candidate's signature");
+    assert!(super::search_sessions_with_memos(&store, "walruskin", &memos).unwrap().rows.is_empty());
+    assert_eq!(memos.lock().unwrap().swept_candidates, 4, "the fresh query answers from the indexes alone");
+
+    let memos = Mutex::new(super::SearchMemos::default());
+    assert!(super::search_sessions_with_memos(&store, "walrus", &memos).unwrap().rows.is_empty());
+    assert!(super::search_sessions_with_memos(&store, "walruskin", &memos).unwrap().rows.is_empty());
+    assert_eq!(memos.lock().unwrap().swept_candidates, 8, "an interval of zero reads every candidate's signature");
   }
 
   /// A fresh query answers from the content index of a file whose identity it already holds: a trigram the index

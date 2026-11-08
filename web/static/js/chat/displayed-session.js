@@ -80,9 +80,9 @@ function runHeldComposerActions(sessionId) {
   due.forEach((held) => held.run());
 }
 
-// The switch to sessionId will never land — a newer click took the view, the
-// bootstrap failed into a full page load, or the page moved to the welcome
-// view. A held message posts to the session it bound; a held Stop or
+// The switch to sessionId will never land. A newer click took the view, the
+// bootstrap failed and left its retry placeholder, or the page moved to the
+// welcome view. A held message posts to the session it bound; a held Stop or
 // attachment is dropped with a note.
 function abandonHeldComposerActions(sessionId) {
   const due = heldComposerActions.filter((held) => held.sessionId === sessionId);

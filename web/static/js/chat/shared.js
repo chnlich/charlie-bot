@@ -136,7 +136,7 @@ function showMoreToggleHtml(id, restHtml) {
 
 // Collapsed "Thinking…" button: the onclick flips the target element's display
 // in place, so the paired element must carry this id and start hidden. The id
-// is interpolated into a DOM query and must be page-unique — chat mints one per
+// is interpolated into a DOM query and must be page-unique. Chat mints one per
 // message; the streaming draft is a singleton, so its fixed id cannot collide.
 // Each caller passes its palette class; the button label and flip mechanism are
 // the shared part.

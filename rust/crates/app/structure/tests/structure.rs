@@ -889,6 +889,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
   OwnerRow { name: "config.d", owner: "infra/core", hint: "Use `charliebot_core::config::CONFIG_D_DIR_NAME`." },
   OwnerRow { name: "configs", owner: "infra/core", hint: "Use `charliebot_core::repo_root::CONFIGS_DIR_NAME`." },
   OwnerRow { name: "sessions", owner: "infra/core", hint: "Use `charliebot_core::config::sessions_dir_in`." },
+  OwnerRow { name: ".charliebot", owner: "infra/core", hint: "Use `charliebot_core::home::DEFAULT_HOME_DIR_NAME`." },
   OwnerRow {
     name: "state",
     owner: "infra/core",

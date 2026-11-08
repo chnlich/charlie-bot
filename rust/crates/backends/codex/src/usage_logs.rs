@@ -21,6 +21,7 @@ use serde_json::{Map, Value};
 
 use super::rollout::{self, SESSION_META, TURN_CONTEXT, token_count_payload, walk_files};
 use super::text::{count_or_zero, object_or_empty, truthy};
+use super::usage_fields;
 use super::usage_quota::CodexQuotaAccount;
 use super::usage_sweep;
 
@@ -140,19 +141,19 @@ fn read_rollout(codex_home: &Path, path: &Path, account: &str) -> anyhow::Result
       .as_deref()
       .with_context(|| format!("{}: token_count event with no session_meta session_id above it", path.display()))?;
     let info = object_or_empty(payload, "info")?;
-    let last = object_or_empty(info, "last_token_usage")?;
-    let cached = count_or_zero(last, "cached_input_tokens")?;
-    let fresh = count_or_zero(last, "input_tokens")? - cached;
-    let output = count_or_zero(last, "output_tokens")?;
+    let last = object_or_empty(info, usage_fields::LAST_TOKEN_USAGE)?;
+    let cached = count_or_zero(last, usage_fields::CACHED_INPUT_TOKENS)?;
+    let fresh = count_or_zero(last, usage_fields::INPUT_TOKENS)? - cached;
+    let output = count_or_zero(last, usage_fields::OUTPUT_TOKENS)?;
     if fresh == 0 && cached == 0 && output == 0 {
       continue;
     }
-    let Some(total) = info.get("total_token_usage").and_then(Value::as_object) else {
+    let Some(total) = info.get(usage_fields::TOTAL_TOKEN_USAGE).and_then(Value::as_object) else {
       bail!("{}: token_count event without total_token_usage", path.display());
     };
-    let total_in = count_or_zero(total, "input_tokens")?;
-    let total_cached = count_or_zero(total, "cached_input_tokens")?;
-    let total_out = count_or_zero(total, "output_tokens")?;
+    let total_in = count_or_zero(total, usage_fields::INPUT_TOKENS)?;
+    let total_cached = count_or_zero(total, usage_fields::CACHED_INPUT_TOKENS)?;
+    let total_out = count_or_zero(total, usage_fields::OUTPUT_TOKENS)?;
     // Within one file only the first record per id is kept.
     let record_id = format!("codex-total:{root}:{total_in}:{total_cached}:{total_out}");
     if !seen.insert(record_id.clone()) {

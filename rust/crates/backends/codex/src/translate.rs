@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use super::pricing;
 use super::text::{count_or_zero, empty_object, truthy};
+use super::usage_fields;
 use charliebot_agents::event_builders::{
   make_error_event, make_result_event, make_system_message_event, make_text_event, make_tool_result_event,
   make_tool_use_event,
@@ -87,9 +88,9 @@ impl CodexTranslator {
     };
     let cost = pricing::calculate_codex_usage_cost_usd(&self.model, usage)?;
     Ok(vec![make_result_event(
-      count_or_zero(usage, "input_tokens")?,
-      count_or_zero(usage, "output_tokens")?,
-      count_or_zero(usage, "cached_input_tokens")?,
+      count_or_zero(usage, usage_fields::INPUT_TOKENS)?,
+      count_or_zero(usage, usage_fields::OUTPUT_TOKENS)?,
+      count_or_zero(usage, usage_fields::CACHED_INPUT_TOKENS)?,
       0,
       json!(cost),
       None,

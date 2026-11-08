@@ -11,6 +11,7 @@ use serde_json::{Map, Value, json};
 use walkdir::WalkDir;
 
 use super::text::object_or_empty;
+use super::usage_fields;
 
 /// The directory under the Codex home that holds the rollout files. Codex names it, so the name stays here.
 pub const CODEX_SESSIONS_DIR_NAME: &str = "sessions";
@@ -104,18 +105,18 @@ fn usage_of_event(event: &Map<String, Value>) -> anyhow::Result<Option<UsagePart
     return Ok(None);
   };
   let info = object_or_empty(payload, "info")?;
-  let last = object_or_empty(info, "last_token_usage")?;
+  let last = object_or_empty(info, usage_fields::LAST_TOKEN_USAGE)?;
   // Codex reports the active prompt window in last_token_usage.input_tokens. total_token_usage is cumulative for the
   // session, and cached_input_tokens is a subset of the input, not an extra component of the window.
-  let Some(input_tokens) = last.get("input_tokens").filter(|value| !value.is_null()) else {
+  let Some(input_tokens) = last.get(usage_fields::INPUT_TOKENS).filter(|value| !value.is_null()) else {
     return Ok(None);
   };
   let Some(context_full) = info.get("model_context_window").filter(|value| !value.is_null()) else {
     return Ok(None);
   };
-  let total = info.get("total_token_usage").and_then(Value::as_object).map(|total| {
+  let total = info.get(usage_fields::TOTAL_TOKEN_USAGE).and_then(Value::as_object).map(|total| {
     let mut totals = Map::new();
-    for key in ["input_tokens", "cached_input_tokens", "output_tokens"] {
+    for key in [usage_fields::INPUT_TOKENS, usage_fields::CACHED_INPUT_TOKENS, usage_fields::OUTPUT_TOKENS] {
       totals.insert(key.to_string(), total.get(key).cloned().unwrap_or_else(|| json!(0)));
     }
     totals

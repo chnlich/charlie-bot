@@ -37,7 +37,7 @@ flowchart TB
 - Backend router: a routing config maps classes of work to backends, and the pool rotates among the healthy ones
 - `charliebot improve start` runs an autonomous change-run-verify iteration loop on a task
 - Plan registry (`charliebot plan`): HTML plan artifacts with versions, anchored comments, and the present-amend-approve lifecycle
-- Cron scheduled tasks in prompt, handler, or task-chain (`steps`) form, each run once now through `POST /api/cron/tasks/{name}/run`
+- Cron scheduled tasks — a prompt (inline or from a file), a handler, or a task chain (`steps`); `POST /api/cron/tasks/{name}/run` fires one now
 - Delayed triggers (`charliebot session trigger`) watch local and remote PIDs and SLURM jobs — one trigger can watch many targets — and `--cmd` starts a detached command whose wake carries the exit code and log path
 
 ### Approvals and oversight
@@ -134,40 +134,40 @@ The README you are reading is on `main`; a release serves the checkout of its ow
 The Rust `charliebot` binary is the only CLI, and it ships beside `charliebot-server` in the same
 release. By workflow:
 
-Delegation and planning
+**Delegation and planning**
 
 - `charliebot delegate` — delegate a task to a worker agent
 - `charliebot improve start` / `improve stop` — start, or stop after the current iteration, an autonomous improvement loop on this session
 - `charliebot plan` — present, amend, approve, close, diff, and list a session's plans
 - `charliebot session` — create sessions, page the task tree, relay a message to another session (`send`), archive, retry, and set a task's approver; `session trigger` schedules a delayed trigger
 
-Pages and replies
+**Pages and replies**
 
 - `charliebot artifact` — check a page's genre assertions and cold read, or wrap a content fragment into a genre page
 - `charliebot files` — probe a file link before you rely on it
 - `charliebot publish` — publish an artifact to the URL readers beyond your devices open
 - `charliebot web` — record a web reply, print a session's For-you layer, or set, confirm and show its status
 
-Approvals and knowledge
+**Approvals and knowledge**
 
 - `charliebot digest` — record one T1 policy use or T2 decision in the day's digest
 - `charliebot memory` — query, lint and propose from the memory store; `add` stages a capture
 - `charliebot taste` — add, query, mark and index the user's choice precedents
 
-Chat platforms
+**Chat platforms**
 
 - `charliebot slack` — reply to or ack the Slack thread a session was summoned from
 - `charliebot discord` — reply to or read the Discord thread a session was summoned from, and check the bot setup
 - `charliebot feishu` — reply to, read, or download from the Feishu thread a session was summoned from, check the app setup, and run the user-token verbs
 
-Other integrations
+**Other integrations**
 
 - `charliebot github` — open a draft pull request or post a comment as the operator
 - `charliebot google` — send one authenticated Google request, list the account table, and run the consent verbs
 - `charliebot linear` — send one GraphQL request to Linear
 - `charliebot voice` — transcribe an audio clip through the online transcription backend
 
-Operations
+**Operations**
 
 - `charliebot triage` — scan a window of failed runs and error logs for grouped failure signatures
 - `charliebot gc-trash` — inspect and purge quarantined worktree trash

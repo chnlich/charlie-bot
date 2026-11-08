@@ -163,7 +163,7 @@ rust/
 `crates/app/` — the two binaries and their composition:
 
 - [`cli`](crates/app/cli/README.md) — the `charliebot` dispatcher, one file per subcommand under `src/commands/`
-- `mock-home` — the synthetic session home the improve rounds and trial loads generate and check back
+- `mock-home` — the synthetic session home: `generate` writes it, `check` reads a served copy back against its manifest
 - [`packages`](crates/app/packages/README.md) — the composition root both binaries share: the runtime registrations and the package list, in registration order
 - `script-tests` — the stand-in servers (`src/bin`) and the switch-server tests (`tests/switch_server/`)
 - `server` — `charliebot-server`: startup, the middleware stack, the route families, graceful shutdown

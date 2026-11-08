@@ -11,7 +11,9 @@
 #   0  the release is installed; the switch command is printed.
 #
 # The stages run in order:
-#   download   gh downloads the charliebot-server-<commit> artifact, and sha256sum -c passes on both binaries;
+#   download   gh downloads the charliebot-server-<commit> artifact into a temporary directory outside the log
+#              directory, sha256sum -c passes on both binaries, and the log directory keeps a copy of the artifact's
+#              sha256sums.txt;
 #   units      scripts/install-slice-units.sh installs the commit's slice units and reloads the user manager, so the
 #              trial and the rehearsal run against the units the release runs with. A release that stops after this
 #              stage leaves the new units installed while the live server keeps running; the restore step is in that
@@ -23,6 +25,10 @@
 #
 # The release directory holds charliebot-server and charliebot from the same CI build, release.log with each stage's
 # verdict, and sha256sums.txt over both binaries and the log. It does not change the current link.
+#
+# The log directory holds each stage's text log and a copy of the artifact's sha256sums.txt, and holds no binary: the
+# binaries stay in the temporary directory, which every exit of the script removes, a failed stage and an interrupt
+# included, and can be re-downloaded from CI for 30 days.
 #
 # Environment: CHARLIEBOT_RELEASES_DIR (default $HOME/charliebot-releases); CHARLIEBOT_RELEASE_LOG_DIR (default
 # $HOME/charliebot-release-logs; stage logs and evidence live here, outside the repository and the release directory,
@@ -89,8 +95,22 @@ RUN_ID="$(ci_run_id)" || refuse "CI has no successful push run of release-build 
 RUN_DIR="$LOG_ROOT/${COMMIT}-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p -m 700 "$RUN_DIR" || refuse "cannot create the log directory $RUN_DIR"
 readonly RUN_DIR
-readonly ARTIFACT_DIR="$RUN_DIR/artifact"
 export CHARLIEBOT_RELEASE_RUN_DIR="$RUN_DIR"
+
+# The downloaded artifact lives outside the log directory, and every exit of the script removes it: success, a failed
+# stage, and an interrupt.
+ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/charliebot-release-artifact-${COMMIT}.XXXXXXXXXX")" \
+  || refuse "cannot create the artifact temporary directory"
+readonly ARTIFACT_DIR
+cleanup_artifact() {
+  local status=$?
+  trap - EXIT INT TERM
+  rm -rf -- "$ARTIFACT_DIR"
+  exit "$status"
+}
+trap cleanup_artifact EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 STAGE_LINES=()
 
@@ -110,10 +130,11 @@ run_stage() {
 }
 
 stage_download() {
-  mkdir -p "$ARTIFACT_DIR" || return 1
   gh run download "$RUN_ID" --repo "$REPO_SLUG" --name "${ARTIFACT_NAME_PREFIX}${COMMIT}" --dir "$ARTIFACT_DIR" \
     || return 1
-  (cd "$ARTIFACT_DIR" && sha256sum -c sha256sums.txt)
+  (cd "$ARTIFACT_DIR" && sha256sum -c sha256sums.txt) || return 1
+  # The log directory keeps the checksums and no binary: the binaries re-download from CI for 30 days.
+  cp "$ARTIFACT_DIR/sha256sums.txt" "$RUN_DIR/sha256sums.txt"
 }
 
 stage_units() {

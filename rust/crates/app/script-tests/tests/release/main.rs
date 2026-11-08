@@ -168,6 +168,132 @@ fn test_a_failed_download_stage_exits_1_and_installs_nothing() {
   assert!(!world.releases.join(&world.on_main).exists(), "{}", run.describe());
 }
 
+// ---- the downloaded artifact: a temporary directory the log directory never holds ------------------------------------
+
+/// Stub trial and rehearsal stages that read the downloaded binary and directory out of the artifact temporary
+/// directory and refuse anything else, recording what they read in the file this returns.
+fn stub_stages_that_record_the_downloaded_binary(world: &mut World) -> PathBuf {
+  world.sandbox.stub(
+    "record-trial",
+    r#"case "$2" in
+  "$TMPDIR"/charliebot-release-artifact-*/charliebot-server) ;;
+  *) printf 'trial got %s, not the downloaded server binary\n' "$2" >&2; exit 1 ;;
+esac
+[ -x "$2" ] || { printf 'trial: the downloaded server binary is not executable\n' >&2; exit 1; }
+printf 'trial read the downloaded server binary from the temporary directory\n' >> "$STAGE_CALLS"
+"#,
+  );
+  world.sandbox.stub(
+    "record-rehearsal",
+    r#"case "$2" in
+  "$TMPDIR"/charliebot-release-artifact-*) ;;
+  *) printf 'rehearsal got %s, not the downloaded directory\n' "$2" >&2; exit 1 ;;
+esac
+for name in charliebot charliebot-server sha256sums.txt; do
+  [ -f "$2/$name" ] || { printf 'rehearsal: %s missing from the downloaded directory\n' "$name" >&2; exit 1; }
+done
+printf 'rehearsal read the downloaded directory\n' >> "$STAGE_CALLS"
+"#,
+  );
+  let calls = world.sandbox.root().join("stage-calls.log");
+  world.env.insert("STAGE_CALLS".to_string(), calls.display().to_string());
+  world.env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), world.bin().join("record-trial").display().to_string());
+  world
+    .env
+    .insert("CHARLIEBOT_RELEASE_REHEARSAL".to_string(), world.bin().join("record-rehearsal").display().to_string());
+  calls
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_passing_run_keeps_no_binary_in_the_log_directory_and_removes_the_artifact_directory() {
+  let mut world = World::new();
+  let calls = stub_stages_that_record_the_downloaded_binary(&mut world);
+
+  let run = world.release(&world.on_main);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  // The trial read the downloaded server binary and the rehearsal the downloaded directory, both out of the artifact
+  // temporary directory.
+  assert_eq!(
+    fs::read_to_string(&calls).expect("the stage calls"),
+    "trial read the downloaded server binary from the temporary directory\n\
+     rehearsal read the downloaded directory\n",
+    "{}",
+    run.describe()
+  );
+  // The log directory keeps the stage logs and the artifact's checksums, and no binary.
+  let names = world.log_names();
+  for name in ["download.log", "units.log", "trial.log", "rehearsal.log", "install.log", "sha256sums.txt"] {
+    assert!(names.contains(&name.to_string()), "the log directory lacks {name}: {names:?}");
+  }
+  for name in ["charliebot", "charliebot-server", "artifact"] {
+    assert!(!names.contains(&name.to_string()), "the log directory holds {name}: {names:?}");
+  }
+  let copied = fs::read_to_string(world.stage_log("sha256sums.txt")).expect("the copied checksums");
+  assert_eq!(copied, fs::read_to_string(world.artifact.join("sha256sums.txt")).expect("the artifact checksums"));
+  // The artifact temporary directory is gone.
+  assert!(
+    world.artifact_temp_entries().is_empty(),
+    "the temporary directory stayed: {:?}",
+    world.artifact_temp_entries()
+  );
+  // The release directory still holds both installed binaries.
+  assert!(world.releases.join(&world.on_main).join("charliebot-server").is_file(), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_stage_that_fails_after_the_download_leaves_no_binary_and_no_artifact_directory() {
+  let mut world = World::new();
+  world.env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), world.bin().join("stage-fail").display().to_string());
+
+  let run = world.release(&world.on_main);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stderr.contains("stage trial failed"), "{}", run.describe());
+  let names = world.log_names();
+  assert!(names.contains(&"sha256sums.txt".to_string()), "the download's checksums did not stay: {names:?}");
+  assert!(names.contains(&"trial.log".to_string()), "the failed stage's log did not stay: {names:?}");
+  for name in ["charliebot", "charliebot-server", "artifact"] {
+    assert!(!names.contains(&name.to_string()), "the log directory holds {name}: {names:?}");
+  }
+  assert!(!world.releases.join(&world.on_main).exists(), "{}", run.describe());
+  assert!(
+    world.artifact_temp_entries().is_empty(),
+    "the temporary directory stayed: {:?}",
+    world.artifact_temp_entries()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_an_interrupt_during_a_stage_removes_the_artifact_directory() {
+  let mut world = World::new();
+  // The trial stage SIGTERMs the release script itself, as an interrupt does: the script must still remove the
+  // artifact temporary directory.
+  world.sandbox.stub("kill-release", "kill -TERM \"$PPID\"\n");
+  world.env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), world.bin().join("kill-release").display().to_string());
+
+  let run = world.release(&world.on_main);
+
+  assert_eq!(run.code, 143, "{}", run.describe());
+  assert!(!world.releases.join(&world.on_main).exists(), "{}", run.describe());
+  assert!(
+    world.artifact_temp_entries().is_empty(),
+    "the temporary directory stayed: {:?}",
+    world.artifact_temp_entries()
+  );
+  let names = world.log_names();
+  assert!(names.contains(&"trial.log".to_string()), "the interrupted stage's log did not stay: {names:?}");
+  for name in ["rehearsal.log", "install.log"] {
+    assert!(!names.contains(&name.to_string()), "the script ran past the interrupt: {names:?}");
+  }
+  for name in ["charliebot", "charliebot-server", "artifact"] {
+    assert!(!names.contains(&name.to_string()), "the log directory holds {name}: {names:?}");
+  }
+}
+
 // ---- a passing run: both binaries installed, current left alone -----------------------------------------------------
 
 #[test]

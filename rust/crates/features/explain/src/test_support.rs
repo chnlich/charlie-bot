@@ -190,22 +190,44 @@ pub struct Home {
 impl Home {
   /// A home whose `scripted` backend launches the queued starts in order.
   pub fn new(starts: Vec<Start>) -> Self {
-    let dir = tempfile::tempdir().expect("a temporary home");
-    let factory = Scripted::new(starts);
-    let registry = scripted_registry(Arc::clone(&factory));
-    fs::write(
-      dir.path().join("config.yaml"),
+    Self::with_config(
+      starts,
       format!(
         "server:\n  session_memory_max_mb: 0\n  session_tasks_max: 0\nbackends:\n  options:\n    - id: {OPTION_ID}\n      label: Scripted\n      type: scripted\n      model: scripted-model\n"
       ),
     )
-    .expect("the test config");
+  }
+
+  /// The same home plus the priority pool `auto`, whose single member is the scripted option.
+  pub fn with_pool(starts: Vec<Start>) -> Self {
+    Self::with_config(
+      starts,
+      format!(
+        "server:\n  session_memory_max_mb: 0\n  session_tasks_max: 0\nbackends:\n  options:\n    - id: {OPTION_ID}\n      label: Scripted\n      type: scripted\n      model: scripted-model\n  pools:\n    - id: auto\n      label: Auto\n      rule: priority\n      members:\n        - {{backend: {OPTION_ID}, billing: subscription}}\n"
+      ),
+    )
+  }
+
+  fn with_config(starts: Vec<Start>, config_yaml: String) -> Self {
+    let dir = tempfile::tempdir().expect("a temporary home");
+    let factory = Scripted::new(starts);
+    let registry = scripted_registry(Arc::clone(&factory));
+    fs::write(dir.path().join("config.yaml"), config_yaml).expect("the test config");
     let cfg = registry.load_config(dir.path()).expect("the test config loads");
     let store = Store::new(cfg, registry.metadata_slots(), store_hooks(Arc::clone(&registry))).expect("a store");
     let startup = StartupState::default();
     startup
       .insert(AgentBaseEnvironment { values: gh_wrapper_env(dir.path(), "/bin:/usr/bin") })
       .expect("the agent base environment");
+    startup
+      .insert(
+        charliebot_agents::backend_availability::BackendAvailability::load(dir.path())
+          .expect("the availability owner loads"),
+      )
+      .expect("the availability owner inserts once");
+    startup
+      .insert(charliebot_agents::model_pool::RotationPositions::default())
+      .expect("the rotation positions insert once");
     let config_home = dir.path().to_path_buf();
     let config_registry = Arc::clone(&registry);
     let credential_home = dir.path().to_path_buf();

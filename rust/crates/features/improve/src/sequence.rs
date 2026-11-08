@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, bail};
 use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool::BackendPool;
-use charliebot_core::config::{CallClass, CallTarget, CharlieBotConfig};
+use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{RUN_FINISHED, TASK_CLOSED};
 use charliebot_core::parallel_walk;
 use charliebot_core::repo_root::RepoRoot;
@@ -198,6 +198,7 @@ async fn register_iteration_run(
   cfg: &CharlieBotConfig,
   iteration: i64,
   pin: &Pin<'_>,
+  pool_id: Option<&str>,
 ) -> anyhow::Result<RunRecord> {
   let run_id = control_events::stable_run_id(spec.child_id, &iteration_run_request_id(spec.loop_id, iteration));
   if let Some(existing) = tree.get_run(spec.child_id, &run_id).await? {
@@ -237,6 +238,19 @@ async fn register_iteration_run(
   {
     let guard = tree.control_lock().await;
     tree.register_run_locked(&guard, spec.child_id, record, None).await?;
+    if pool_id.is_some() {
+      tree
+        .set_slot_fields_locked(
+          &guard,
+          spec.child_id,
+          charliebot_agents::model_pool::OWNER,
+          serde_json::Map::from_iter([(
+            charliebot_agents::model_pool::POOL_MEMBER_FIELD.to_string(),
+            Value::String(pin.backend.to_string()),
+          )]),
+        )
+        .await?;
+    }
   }
   tree.get_run(spec.child_id, &run_id).await?.context("the registered iteration run reads back")
 }
@@ -345,15 +359,6 @@ async fn settle_failure(
 }
 
 /// The controller's main path. Each early return has settled the loop before it returns.
-/// The pool that `backends.calls.improve` names: a loop with no backend of its own picks each iteration's member from
-/// it.
-fn improve_pool_id(cfg: &CharlieBotConfig) -> anyhow::Result<&str> {
-  match cfg.backends.calls.get(CallClass::Improve) {
-    Some(CallTarget::Backend(pool_id)) if cfg.backends.pool(pool_id).is_some() => Ok(pool_id.as_str()),
-    _ => anyhow::bail!("backends.calls.improve no longer names a pool, so the loop has no member to pick"),
-  }
-}
-
 async fn run_loop(
   spec: &LoopSpec<'_>,
   cfg: &CharlieBotConfig,
@@ -407,25 +412,27 @@ async fn run_loop(
     let description = compose_iteration_description(&progress.goal, plan.as_deref(), &progress.previous_summaries);
     let tip_before = git::git_rev_parse(&wt_path, "HEAD").await.unwrap_or_default();
 
-    let (iteration_backend, iteration_model) = if state.backend_from_pool {
-      let pool_id = improve_pool_id(cfg)?;
-      let member = match next_pool_member.take() {
-        Some(member) => Some(member),
-        None => pool.select(cfg, "improve", pool_id, &[])?,
+    let (iteration_backend, iteration_model) =
+      match state.backend.as_deref().filter(|id| cfg.backends.pool(id).is_some()) {
+        Some(pool_id) => {
+          let member = match next_pool_member.take() {
+            Some(member) => Some(member),
+            None => pool.selector(cfg).select(pool_id, &[])?,
+          };
+          match member {
+            Some(member) => {
+              let model = member.required_model("pool member").map_err(anyhow::Error::msg)?;
+              (member.id.clone(), Some(model))
+            }
+            None => {
+              progress.blocked = Some((iteration, pool.selector(cfg).exhausted_message(pool_id)?, String::new()));
+              break;
+            }
+          }
+        }
+        None => (state.backend.clone().unwrap_or_default(), state.model.clone()),
       };
-      match member {
-        Some(member) => {
-          let model = member.required_model("pool member").map_err(anyhow::Error::msg)?;
-          (member.id.clone(), Some(model))
-        }
-        None => {
-          progress.blocked = Some((iteration, pool.exhausted_message(cfg, pool_id)?, String::new()));
-          break;
-        }
-      }
-    } else {
-      (state.backend.clone().unwrap_or_default(), state.model.clone())
-    };
+    let iteration_pool_id = state.backend.as_deref().filter(|id| cfg.backends.pool(id).is_some());
     let base = base_branch.clone();
     let worktree = wt_path.to_string_lossy().into_owned();
     let repo = resolved_repo.to_string_lossy().into_owned();
@@ -437,7 +444,7 @@ async fn run_loop(
       work_branch: &work_branch,
       worktree_path: &worktree,
     };
-    let run = register_iteration_run(tree, spec, cfg, iteration, &pin).await?;
+    let run = register_iteration_run(tree, spec, cfg, iteration, &pin, iteration_pool_id).await?;
     let mut outcome = tree.terminal_outcome_of(spec.child_id, &run.id).await?;
     if outcome.is_none() {
       // The iteration's full context is composed here, where the repo root is in hand: the controller's launch hook
@@ -463,15 +470,15 @@ async fn run_loop(
       let (blocker_reason, failed_summary) = iteration_blocker(tree, spec.child_id, &run.id, iteration, &outcome)?;
       let quota_failure = adapter.take_quota_failure(spec.child_id, &run.id);
       if let Some(reason) = blocker_reason {
-        if state.backend_from_pool {
-          let pool_id = improve_pool_id(cfg)?;
+        if state.backend.as_deref().is_some_and(|id| cfg.backends.pool(id).is_some()) {
+          let pool_id = state.backend.as_deref().expect("a pool loop records its pool id");
           let (resets_at, cooling_reason, message) = match &quota_failure {
             Some(failure) => (failure.resets_at, backend_availability::REASON_QUOTA_ERROR, failure.message.clone()),
             None => (None, backend_availability::REASON_ITERATION_FAILURE, reason.clone()),
           };
           pool.availability().record(&iteration_backend, resets_at, cooling_reason, &message)?;
           if quota_failure.is_some() && run.pid.is_none() && iteration < spec.iterations {
-            match pool.select(cfg, "improve", pool_id, &[])? {
+            match pool.selector(cfg).select(pool_id, &[])? {
               Some(member) => next_pool_member = Some(member),
               None => {
                 progress.blocked = Some((iteration, reason, failed_summary));

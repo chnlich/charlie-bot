@@ -7,7 +7,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use charliebot_agents::backend_pool;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::run_records::{RunFacts, RunOutcomeKind, RunRecord};
@@ -44,10 +43,10 @@ pub(crate) fn select_step_member(
   if cfg.backends.pool(backend).is_none() {
     return Ok(StepMember::Selected(option_of(cfg, backend)?.clone()));
   }
-  let pool = backend_pool::backend_pool(features)?;
-  match pool.select(cfg, "cron", backend, exclude)? {
+  let selector = charliebot_agents::model_pool::Selector::from_features(features, cfg)?;
+  match selector.select(backend, exclude)? {
     Some(option) => Ok(StepMember::Selected(option)),
-    None => Ok(StepMember::Exhausted(pool.exhausted_message(cfg, backend)?)),
+    None => Ok(StepMember::Exhausted(selector.exhausted_message(backend)?)),
   }
 }
 

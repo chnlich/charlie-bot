@@ -18,7 +18,7 @@ use charliebot_store::metadata::{
   SCHEDULED_TASK, SessionMetadata, UtcDateTime,
 };
 use charliebot_store::run_records::{self, RunKind, RunRecord, SequenceRef};
-use charliebot_tasks::auto_switch::{self, AutoSwitch};
+use charliebot_tasks::auto_switch::{self, MemberSwitch};
 use charliebot_tasks::handoff::HandoffSource;
 use chrono::{Datelike, TimeZone, Utc};
 use futures_util::future::BoxFuture;
@@ -501,23 +501,17 @@ async fn switch_failed_step(
     .ok_or_else(|| anyhow::anyhow!("cron step leaf {leaf_id} vanished during its quota switch"))?;
   let parent_id =
     leaf.task_parent_id.as_deref().ok_or_else(|| anyhow::anyhow!("cron step leaf {leaf_id} names no bound session"))?;
-  let bound = tree
-    .load_meta(parent_id)
-    .await?
-    .ok_or_else(|| anyhow::anyhow!("cron step leaf {leaf_id}'s bound session {parent_id} vanished"))?;
   let from = run
     .backend
     .as_deref()
     .filter(|backend| !backend.is_empty())
     .ok_or_else(|| anyhow::anyhow!("step run {} records no backend; refusing to substitute one", run.id))?;
-  match auto_switch::switch_member(features, &pool_id, &bound, &leaf, HandoffSource::WorkerRun { run }, from, quota)
-    .await?
-  {
-    AutoSwitch::Exhausted(message) => {
+  match auto_switch::switch_member(features, &pool_id, &leaf, HandoffSource::WorkerRun { run }, from, quota).await? {
+    MemberSwitch::Exhausted(message) => {
       deliver_boundary_report(tree, leaf_id, parent_id, task, &firing, "failed", &message).await?;
       Ok(Some(BoundaryState::Finished))
     }
-    AutoSwitch::Moved { member } => {
+    MemberSwitch::Moved { member } => {
       let option = tree
         .config()
         .get_backend_option(&member)
@@ -828,7 +822,28 @@ async fn register_step_run(
     result_ref: None,
   };
   let guard = tree.control_lock().await;
-  tree.register_run_locked(&guard, leaf_id, run, Some(task_spec_text)).await
+  let run = tree.register_run_locked(&guard, leaf_id, run, Some(task_spec_text)).await?;
+  // A pool step records the member its run launches on, as every pool-id child does.
+  let step_backend = step_backend_id(
+    task,
+    tree.config(),
+    task.steps.as_ref().and_then(|steps| steps.get(position).and_then(|step| step.backend.as_deref())),
+  )
+  .map_err(|error| charliebot_store::StoreError::new(error.to_string()))?;
+  if tree.config().backends.pool(&step_backend).is_some() {
+    tree
+      .set_slot_fields_locked(
+        &guard,
+        leaf_id,
+        charliebot_agents::model_pool::OWNER,
+        serde_json::Map::from_iter([(
+          charliebot_agents::model_pool::POOL_MEMBER_FIELD.to_string(),
+          Value::String(backend.to_string()),
+        )]),
+      )
+      .await?;
+  }
+  Ok(run)
 }
 
 fn step_prompt(
@@ -1072,7 +1087,7 @@ mod tests {
   }
 
   /// Test ⑤: a two-step chain whose first step's run ends on a spent quota reruns that step on the next Auto member as
-  /// one retry run. It records the switch once in the Auto parent's chat.
+  /// one retry run. The child keeps the pool id and moves its own member, so the switch records once in its chat.
   #[tokio::test]
   #[ignore = "integration"]
   async fn a_quota_end_on_an_auto_step_reruns_that_step_on_the_next_member() {
@@ -1097,7 +1112,7 @@ mod tests {
             approver: TaskApprover::User,
           }),
           name: Some("Synthetic scheduled steps".to_string()),
-          backend: Some("member-a".to_string()),
+          backend: Some(AUTO_POOL_ID.to_string()),
           group: None,
           session_id: None,
         },
@@ -1151,20 +1166,27 @@ mod tests {
 
     let switches = features
       .store
-      .load_chat_events_sync(&parent.id)
+      .load_chat_events_sync(&leaf.id)
       .unwrap()
       .iter()
       .map(|event| event.to_value())
       .filter(|event| event["type"] == event_types::QUOTA_FAILOVER)
       .collect::<Vec<_>>();
-    assert_eq!(switches.len(), 1, "one switch record in the Auto parent's chat: {switches:?}");
+    assert_eq!(switches.len(), 1, "one switch record in the step child's chat: {switches:?}");
     assert_eq!(switches[0]["from"], "member-a");
     assert_eq!(switches[0]["to"], "member-b");
     assert_eq!(switches[0]["set"], AUTO_POOL_ID);
     let availability = charliebot_agents::backend_availability::backend_availability(&features).unwrap();
     assert!(availability.out_until("member-a").is_some(), "the spent member is recorded out");
+    let leaf_meta = features.store.get_session(&leaf.id).await.unwrap().unwrap();
+    assert_eq!(leaf_meta.backend, AUTO_POOL_ID, "the step child keeps the pool id");
+    assert_eq!(leaf_meta.extra(charliebot_agents::model_pool::POOL_MEMBER_FIELD), Some(&json!("member-b")));
     let parent_meta = features.store.get_session(&parent.id).await.unwrap().unwrap();
-    assert_eq!(parent_meta.extra(charliebot_agents::model_pool::POOL_MEMBER_FIELD), Some(&json!("member-b")));
+    assert_eq!(
+      parent_meta.extra(charliebot_agents::model_pool::POOL_MEMBER_FIELD),
+      Some(&json!("member-a")),
+      "the child's switch leaves the bound session's member alone"
+    );
     // A later step of the chain selects from its pool, which the switch left on the next member.
     let cfg = features.config.get().unwrap();
     let later_step = match crate::steps::select_step_member(&features, &cfg, AUTO_POOL_ID, &[]).unwrap() {

@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use charliebot_agents::backend_pool::BackendPool;
+use charliebot_agents::model_pool::Selector;
 use charliebot_core::config::{CallClass, CallTarget, CharlieBotConfig};
 use charliebot_core::event_types::MESSAGE_CONTENT_POINTER;
 use charliebot_store::run_records::visit_events_from_end;
@@ -95,7 +95,7 @@ pub fn worker_error_from_events_log(events: &[Value]) -> Option<String> {
 /// worker's backend unless that backend was already tried, which ends the selection with `None`.
 pub fn select_reviewer_backend(
   cfg: &CharlieBotConfig,
-  pool: &BackendPool,
+  selector: &Selector<'_>,
   class: CallClass,
   worker_backend: &str,
   worker_model: Option<&str>,
@@ -114,7 +114,7 @@ pub fn select_reviewer_backend(
   match cfg.backends.calls.get(class) {
     None | Some(CallTarget::Session) => return Ok(worker_fallback()),
     Some(CallTarget::Backend(target)) if cfg.backends.pool(target).is_some() => {
-      if let Some(option) = pool.select(cfg, caller, target, &excluded)? {
+      if let Some(option) = selector.select(target, &excluded)? {
         let model = option.required_model("pool member").map_err(anyhow::Error::msg)?;
         let mut tried = tried_backends.to_vec();
         tried.push(option.id.clone());

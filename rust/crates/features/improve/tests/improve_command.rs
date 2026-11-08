@@ -25,7 +25,6 @@ fn reservation<'a>(goal: &'a str, work_branch: &'a str, plan: Option<&'a str>) -
     merge_back: false,
     resolved_backend: "",
     resolved_model: "",
-    backend_from_pool: false,
   }
 }
 

@@ -223,9 +223,11 @@ pub async fn judge_signature(backends: &JudgeBackends<'_>, input: &JudgeInput) -
   }
   let reason = match target {
     None => "backends.calls.triage is unset; name a model or a pool to judge failures".to_string(),
-    Some(CallTarget::Backend(pool_id)) if backends.cfg.backends.pool(pool_id).is_some() => {
-      backends.pool.exhausted_message(backends.cfg, pool_id).map_err(|error| JudgeError::Call(format!("{error:#}")))?
-    }
+    Some(CallTarget::Backend(pool_id)) if backends.cfg.backends.pool(pool_id).is_some() => backends
+      .pool
+      .selector(backends.cfg)
+      .exhausted_message(pool_id)
+      .map_err(|error| JudgeError::Call(format!("{error:#}")))?,
     Some(_) => "backends.calls.triage names no selectable member".to_string(),
   };
   Err(JudgeError::Call(reason))
@@ -526,7 +528,7 @@ mod tests {
     // Another shared caller takes the first slot, so the judge must try beta before alpha. No "synthetic" type is
     // registered, so each build fails and the last error names the last member tried. That member is alpha under the
     // shared rotation order, and beta under the pool's own declaration order.
-    assert_eq!(pool.select(&config, "triage", "light", &[]).unwrap().unwrap().id, "alpha");
+    assert_eq!(pool.selector(&config).select("light", &[]).unwrap().unwrap().id, "alpha");
     let error = judge_signature(&backends, &judge_input()).await.unwrap_err().to_string();
     assert!(error.contains("backend alpha"), "{error}");
   }
@@ -550,7 +552,7 @@ mod tests {
     };
     let mut tried = Vec::new();
     let mut offered = Vec::new();
-    while let Some(option) = backends.pool.select(backends.cfg, "triage", "light", &tried).unwrap() {
+    while let Some(option) = backends.pool.selector(backends.cfg).select("light", &tried).unwrap() {
       offered.push(option.id.clone());
       tried.push(option.id);
     }

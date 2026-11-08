@@ -36,7 +36,7 @@ pub async fn post_explain(
   if let Some(response) = refusal(&features, &session_id).await {
     return response;
   }
-  let cfg = match features.config.get() {
+  let config = match features.config.get() {
     Ok(cfg) => cfg,
     Err(error) => return failure(error),
   };
@@ -44,16 +44,40 @@ pub async fn post_explain(
     Ok(model) => model,
     Err(response) => return *response,
   };
-  let Some(option) = cfg.get_backend_option(&model.backend).cloned() else {
-    return responses::json(StatusCode::BAD_REQUEST, &json!({"detail": format!("unknown backend: {}", model.backend)}));
+  let option = match explain_backend(&features, &config, &model.backend) {
+    Ok(option) => option,
+    Err(response) => return *response,
   };
-  match explain::request_explain(&features, &session_id, model.event_index, option, cfg).await {
+  match explain::request_explain(&features, &session_id, model.event_index, option, config).await {
     Ok((entry, created)) => {
       let status = if created { StatusCode::ACCEPTED } else { StatusCode::OK };
       responses::fast_json(status, &Value::Object(entry))
     }
     Err(error) => failure(error),
   }
+}
+
+/// The option one explain request runs on. A `backends.pools` id selects a member for this call, as a one-shot call
+/// reselects every time; an options id runs as written.
+fn explain_backend(
+  features: &FeatureContext,
+  cfg: &charliebot_core::config::CharlieBotConfig,
+  backend_id: &str,
+) -> Result<charliebot_core::config::BackendOption, Box<Response>> {
+  if cfg.backends.pool(backend_id).is_some() {
+    let selector = charliebot_agents::model_pool::Selector::from_features(features, cfg)
+      .map_err(|error| Box::new(failure(error)))?;
+    return match selector.select(backend_id, &[]).map_err(|error| Box::new(failure(error)))? {
+      Some(option) => Ok(option),
+      None => {
+        let detail = selector.exhausted_message(backend_id).map_err(|error| Box::new(failure(error)))?;
+        Err(Box::new(responses::json(StatusCode::BAD_REQUEST, &json!({"detail": detail}))))
+      }
+    };
+  }
+  cfg.get_backend_option(backend_id).cloned().ok_or_else(|| {
+    Box::new(responses::json(StatusCode::BAD_REQUEST, &json!({"detail": format!("unknown backend: {backend_id}")})))
+  })
 }
 
 /// `GET /api/sessions/{session_id}/explain?upto=`: the divider's entry, answer and error included.
@@ -228,6 +252,30 @@ mod tests {
     assert_eq!(entry["generated_at"], Value::Null);
     assert_eq!(live, StatusCode::OK);
     assert_eq!(again, entry);
+  }
+
+  /// Acceptance ①: an explain request naming a pool id selects the pool's member and launches the one-shot on it. The
+  /// entry records the member, not the pool.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_post_naming_a_pool_launches_on_the_member_the_pool_selects() {
+    let home = Home::with_pool(vec![Start::Script(answer_script("Explained."))]);
+    home.create_session("s1");
+    home.append_round("s1", Some("The answer.")).await;
+    let mut frames = crate::test_support::subscribe(&home.features.store, "s1");
+
+    let body = json!({"event_index": 2, "backend": "auto"}).to_string();
+    let (status, entry) = send(&home.features, "POST", "/api/sessions/s1/explain", Some(&body)).await;
+    frames.recv().await.expect("the generation finishes");
+
+    assert_eq!(status, StatusCode::ACCEPTED, "the explain route accepts a pool id");
+    assert_eq!(entry["backend"], OPTION_ID, "the pending entry names the member the pool selected");
+    assert_eq!(home.factory.builds(), 1, "the one-shot launches on the member");
+    let (status, entry) = send(&home.features, "GET", "/api/sessions/s1/explain?upto=2", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(entry["state"], "ready");
+    assert_eq!(entry["backend"], OPTION_ID);
+    assert_eq!(entry["answer"], "Explained.");
   }
 
   #[tokio::test]

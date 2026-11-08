@@ -415,7 +415,7 @@ mod tests {
 
     assert_eq!(*calls.lock().unwrap(), ["light-a".to_string(), "light-b".to_string()]);
     assert_eq!(generated, Some(("Synthetic title".to_string(), Some("Research".to_string()))));
-    assert_eq!(pool.select(&cfg, "light_oneshot", ROTATION_POOL_ID, &[]).unwrap().unwrap().id, "light-b");
+    assert_eq!(pool.selector(&cfg).select(ROTATION_POOL_ID, &[]).unwrap().unwrap().id, "light-b");
   }
 
   #[test]

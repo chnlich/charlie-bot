@@ -7,7 +7,7 @@
 .voice-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* The caret's backend menu takes the width of its longest row: an unavailable row names the config key the host
-   must provide, and a fixed 16 rem box cut that key off at both widths. On a phone the screen margin caps the
+   must provide. A fixed 16 rem box would cut that key off at both widths. On a phone the screen margin caps the
    menu, where the row wraps instead of losing its end. */
 #voice-backend-menu { width: max-content; max-width: 92vw; }
 #voice-backend-menu .voice-menu-label { min-width: 0; overflow-wrap: anywhere; }

@@ -63,6 +63,9 @@ impl World {
     let artifact = sandbox.dir("artifact");
     let home = sandbox.dir("home");
     harness::copy_file(&harness::repo_root().join("scripts/release.sh"), &scripts.join("release.sh"));
+    // release.sh sources the host release lock from beside itself.
+    fs::create_dir(scripts.join("release")).expect("the release scripts directory");
+    harness::copy_file(&harness::repo_root().join("scripts/release/lock.sh"), &scripts.join("release/lock.sh"));
     // The units stage installs the commit's units, read from this repository's commit object.
     harness::copy_file(
       &harness::repo_root().join("scripts/install-slice-units.sh"),
@@ -108,6 +111,8 @@ impl World {
 
     env.insert("CHARLIEBOT_RELEASES_DIR".to_string(), releases.display().to_string());
     env.insert("CHARLIEBOT_RELEASE_LOG_DIR".to_string(), logs.display().to_string());
+    // The host release lock lives under the sandbox, never beside the user's home.
+    env.insert("CHARLIEBOT_RELEASE_LOCK".to_string(), sandbox.root().join("release.lock").display().to_string());
     env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), sandbox.bin().join("stage-ok").display().to_string());
     env.insert("CHARLIEBOT_RELEASE_REHEARSAL".to_string(), sandbox.bin().join("stage-ok").display().to_string());
 

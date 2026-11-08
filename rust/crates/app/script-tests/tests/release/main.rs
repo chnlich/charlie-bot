@@ -5,6 +5,8 @@
 //! test builds a throwaway git repository, release root and log root in a sandbox, so nothing touches
 //! ~/charliebot-releases or the live home.
 
+#[path = "../common/release_lock.rs"]
+mod release_lock;
 mod world;
 
 use std::fs;
@@ -12,8 +14,10 @@ use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use charliebot_shell_harness::{self as harness, Env, Run, Sandbox, write_executable};
+use release_lock::LockHolder;
 use serde_json::json;
 use sha2::Digest as _;
 use world::World;
@@ -131,6 +135,42 @@ fn preflight_refuses_a_commit_without_both_rust_jobs_green(case: &str) {
 
   world.assert_refused_and_wrote_nothing(&run);
   assert!(run.stderr.contains("CI has no successful push run"), "{}", run.describe());
+}
+
+// ---- the host release lock -----------------------------------------------------------------------------------------
+
+#[test]
+#[ignore = "integration"]
+fn test_a_release_that_finds_the_host_lock_held_refuses_at_once_and_names_the_holder() {
+  let world = World::new();
+  let holder = LockHolder::start(&world.repo.join("scripts/release/lock.sh"), &world.env, "release.sh", &world.on_main);
+  let started = Instant::now();
+
+  let run = world.release(&world.on_main);
+
+  let elapsed = started.elapsed();
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(elapsed < Duration::from_secs(2), "the refusal took {elapsed:?}: {}", run.describe());
+  assert!(run.stderr.contains("script=release.sh"), "{}", run.describe());
+  assert!(run.stderr.contains(&format!("commit={}", world.on_main)), "{}", run.describe());
+  assert!(run.stderr.contains(&format!("pid={}", holder.pid())), "{}", run.describe());
+  assert!(run.stderr.contains("started="), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_holder_that_is_killed_leaves_the_lock_free_for_the_next_release() {
+  let world = World::new();
+  let mut holder =
+    LockHolder::start(&world.repo.join("scripts/release/lock.sh"), &world.env, "release.sh", &world.on_main);
+  holder.kill();
+  assert!(holder.record().exists(), "the killed holder left no stale record");
+
+  let run = world.release(&world.on_main);
+
+  // The stale record does not block: the release runs every stage and installs.
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.releases.join(&world.on_main).join("release.log").exists(), "{}", run.describe());
 }
 
 // ---- a failed stage: exit 1, the stage named, nothing installed -----------------------------------------------------
@@ -639,6 +679,7 @@ fn rehearsal_source(sandbox: &Sandbox) -> (PathBuf, String, String) {
   for relative in [
     "scripts/release/switch-rehearsal.sh",
     "scripts/release/standin-approval-policy.yaml",
+    "scripts/release/lock.sh",
     "scripts/switch-server.sh",
     "scripts/install-slice-units.sh",
   ] {

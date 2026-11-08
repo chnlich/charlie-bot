@@ -93,7 +93,7 @@ fn launcher_tee_outlives_sigint_and_records_the_exit_line() {
     "the launcher group outlived its test: {:?}",
     hold::group_members(group_id)
   );
-  assert!(hold::has_ended(group_id), "the watchdog still runs: {group_id}");
+  assert!(hold::all_ended_within(hold::END_WAIT, &[group_id]), "the watchdog still runs: {group_id}");
 }
 
 /// The launcher's whole group ends with its test process, which is killed here with SIGKILL: no guard runs, and the
@@ -127,7 +127,7 @@ fn the_launcher_group_ends_with_a_killed_test_process() {
     hold::processes_with_arg(&server_current),
     hold::processes_with_arg(&server_release)
   );
-  assert!(hold::has_ended(group_id), "the watchdog still runs: {group_id}");
+  assert!(hold::all_ended_within(hold::END_WAIT, &[group_id]), "the watchdog still runs: {group_id}");
   remove_killed_test_root(&root);
 }
 

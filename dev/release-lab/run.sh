@@ -809,6 +809,14 @@ run_starts() {
 kill_scope_leftovers() {
   local self_cgroup cgroup_dir protect p pid leftovers=0
   self_cgroup=$(sed -n 's/^0:://p' /proc/self/cgroup)
+  # Only the lab's own scope is swept. A shell that set RELEASE_LAB_IN_SCOPE by hand shares its cgroup with other work.
+  case $self_cgroup in
+    */release-lab-*.scope) ;;
+    *)
+      log "not in a release-lab scope; leaving the processes of $self_cgroup alone"
+      return 0
+      ;;
+  esac
   cgroup_dir="/sys/fs/cgroup$self_cgroup"
   [ -d "$cgroup_dir" ] || return 0
   protect=" $$ "

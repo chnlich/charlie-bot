@@ -1,123 +1,206 @@
 # CharlieBot
 
-CharlieBot is a self-hosted multi-agent orchestration system: a master agent drives worker and reviewer agents across pluggable LLM CLI backends, operated through a web UI.
+CharlieBot is a self-hosted agent system for real work: you chat with a master agent, it plans the
+job, delegates it to worker agents that each work in an isolated git worktree, and every result a
+worker produces is verified by a reviewer agent before it lands on the base branch. The whole tree
+runs on your own machine, across pluggable LLM CLI backends, and is operated through a web UI.
+Steps that should not happen silently — publishing, sending in your name, spending money — pass an
+approval policy, and every approval is recorded in a daily digest.
+
+## How it works
+
+Every conversation is a session, and sessions form a tree: the session you talk to is a manager,
+and the work it does not do itself it delegates to child sessions — worker agents that run in
+isolated git worktrees, and the reviewer that checks their result and pushes it to the base branch
+with a fast-forward-only push. A manager presents its approach as a plan in the plan registry
+before large work starts; plans carry versions and an approval record. What an agent may do on its
+own is tiered against an approval policy table: a step that needs you becomes a Waiting on you
+item, and the steps that did happen under a policy are written to the day's digest.
+
+```mermaid
+flowchart TB
+  you["You"] -- "chat / Slack / Discord / Feishu" --> mgr["Manager session"]
+  mgr -- "delegates" --> w["Worker agent (isolated git worktree)"]
+  mgr -- "delegates" --> w2["Worker agent (isolated git worktree)"]
+  w -- "result" --> rev["Reviewer agent"]
+  rev -- "fast-forward push" --> base["Base branch"]
+  mgr <-. "plan: present, amend, approve" .-> plans["Plan registry"]
+  mgr -. "Waiting on you item" .-> you
+```
 
 ## Features
 
 ### Orchestration
 
 - Master/worker/reviewer delegation in isolated git worktrees, integrated by fast-forward-only pushes to the base branch
-- Pluggable backends: Claude Code, Anthropic-compatible, OpenAI-compatible, Codex, Gemini CLI, OpenCode, Charlie Code, Antigravity CLI
-- Chat file uploads: text attachments ride the message's path text; image attachments reach the Charlie Code CLI as repeated `--image` flags by default, and are refused with one error event (nothing sent) when the backend entry sets `image_input: false`
-- `charliebot improve start` autonomous change-run-verify iteration loops
-- Plan registry (`charliebot plan`) with HTML plan artifacts and anchored comments
+- Pluggable backends: Claude Code, Anthropic-compatible, OpenAI-compatible, Codex, Gemini CLI, OpenCode, Charlie Code, Antigravity CLI, and Devin
+- Backend router: a routing config maps classes of work to backends, and the pool rotates among the healthy ones
+- `charliebot improve start` runs an autonomous change-run-verify iteration loop on a task
+- Plan registry (`charliebot plan`): HTML plan artifacts with versions, anchored comments, and the present-amend-approve lifecycle
+- Cron scheduled tasks in prompt, handler, or task-chain (`steps`) form, each run once now through `POST /api/cron/tasks/{name}/run`
+- Delayed triggers (`charliebot session trigger`) watch local and remote PIDs and SLURM jobs — one trigger can watch many targets — and `--cmd` starts a detached command whose wake carries the exit code and log path
 
-### Automation
+### Approvals and oversight
 
-- Cron scheduled tasks in prompt, handler, loop, and task-chain (`steps`) modes
-- Manual run of a scheduled task: `POST /api/cron/tasks/{name}/run` fires it once through the scheduled path
-- Delayed triggers (`charliebot session trigger`) watching local/remote PIDs and SLURM jobs; one trigger can watch many targets
-- `charliebot session trigger --cmd` starts a long-running command detached (locally or over ssh) and registers its wake; the wake carries the exit code and log path
+- Approval policy table: consequence tests tier each step; a T0 step becomes a Waiting on you item that holds the work until you act
+- Daily digest: T1 policy uses and T2 decisions are recorded with their undo, served per Pacific day on the approval page (`/approval`) with the queue and the login sheet
+- Draft cards: a message or publication in your name waits on an approval card only you can send
+- Failure triage: `charliebot triage scan` groups a time window of failed runs and error logs by signature and prints one verdict per signature
 
 ### Knowledge
 
 - Memory store: labeled entries with topic/audience scoping, queried mid-session via `charliebot memory`
+- Taste index: your choice precedents, recorded through `charliebot taste` and placed before every manager and worker run
 - Skills system: repo-shared (`skills/`) plus host-specific skills
 
 ### Web UI
 
-- Streaming chat over WebSockets
-- Sessions sidebar with groups, filters, and search; star / archive / fork sessions
-- Worker (thread) and plan panels
-- HTML artifact viewer with line-anchored comments
-- GitHub-style diff viewer with diff comments
-- Perfetto trace viewer
-- Built-in web terminal (tmux)
+- Streaming chat over WebSockets, with a sessions sidebar that has groups, filters, and search; star / archive / fork sessions
+- Per-session reading views: For you shows the replies addressed to you, and Status shows the session's Goal, Now and Waiting on you items
+- Worker (thread) and plan panels; HTML artifact viewer with line-anchored comments; GitHub-style diff viewer
+- Perfetto trace viewer, built-in web terminal (tmux), and the explain panel
 - Voice input with online speech transcription (Gemini and Muse backends)
 - Usage panels: external provider quotas and per-session context usage
 - File browser (`/absolute_filepath/`) and file uploads
+- Host login panel (`/host-auth`): a standing poller probes every ssh alias in the config, with a browser-login page for the hosts that need one
 - Access-key auth
+
+### Chat platforms
+
+- Slack, Discord, and Feishu summon entrypoints on a shared thread core — see [docs/discord.md](docs/discord.md) and [docs/chat-platforms.md](docs/chat-platforms.md)
 
 ### Integrations
 
+- Web search for agents: `POST /api/web-search/mcp`, an MCP endpoint that grounds searches and resolves redirects to their real URLs
+- `charliebot github` opens draft pull requests and posts comments with your own token, behind a draft-target validation
+- `charliebot google` mints an account's access token in-process and sends authenticated Google requests; the token never reaches a command line or a run record
+- `charliebot linear` sends GraphQL requests to Linear with the stored credential
 - code-server proxying (browser VS Code)
 - Anthropic Messages-compatible proxy endpoint (`POST /api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages`) fronting OpenAI-compatible backends
-- Slack, Discord, and Feishu summon entrypoints on a shared thread core — see [docs/discord.md](docs/discord.md) and [docs/chat-platforms.md](docs/chat-platforms.md)
+
+### Operations
+
+- Scheduled home backup with tiered retention
+- Disk sweep: finished task worktrees and scratch directories are archived and removed
+- Run-log compaction: run logs past an age are stored compressed in place
 
 ## Screenshots
 
 <p align="center">
   <img src="docs/assets/readme/ui-chat-desktop.png" alt="Desktop chat view" width="880">
 </p>
-<p align="center"><i>Desktop: chat view with the external-provider quota strip (Claude/Codex) and the per-session context usage indicator. Dollar values shown are fabricated demo data.</i></p>
+<p align="center"><i>Desktop: chat view with the external-provider quota strip (Claude/Codex) and the per-session context usage indicator. All content is fabricated demo data.</i></p>
+<p align="center">
+  <img src="docs/assets/readme/ui-status-desktop.png" alt="Desktop status view" width="880">
+</p>
+<p align="center"><i>Desktop: a session's Status view — the Goal, Now and Waiting on you items that hold work until you act.</i></p>
+<p align="center">
+  <img src="docs/assets/readme/ui-plans-desktop.png" alt="Plans tab" width="880">
+</p>
+<p align="center"><i>Desktop: the plans panel — an approved plan's HTML artifact with the plan/version switchers, revision badges and resolved trade-offs.</i></p>
+<p align="center">
+  <img src="docs/assets/readme/ui-approval-desktop.png" alt="Approval day page" width="880">
+</p>
+<p align="center"><i>Desktop: the approval page for one Pacific day — the ranked queue, the login sheet, and the digest with each step's undo.</i></p>
 <p align="center">
   <img src="docs/assets/readme/ui-chat-mobile.png" alt="Mobile chat view" width="320">
 </p>
 <p align="center"><i>Mobile: the same chat and session list in a phone-width layout.</i></p>
-<p align="center">
-  <img src="docs/assets/readme/ui-plans-desktop.png" alt="Plans tab" width="880">
-</p>
-<p align="center"><i>Plans: an approved plan's HTML artifact in the viewer — plan/version switchers, revision badges, and resolved trade-offs from the approval lifecycle.</i></p>
 
-## Prerequisites
-
-- git (worker tasks run in git worktrees) and the Rust toolchain (1.99) to build the server and CLI
-- Node.js runs the frontend JavaScript tests (`node --test`) and the frontend build
+The screenshots are generated from fabricated demo data by [`dev/readme-screenshots/capture.sh`](dev/readme-screenshots/capture.sh).
 
 ## Quick start
 
+You need git, and Node.js to run the frontend JavaScript tests. Build the server and CLI from
+`rust/` with the Rust toolchain (1.99), or install the release that CI built for a `main` commit:
+
 ```bash
-./scripts/setup.sh   # sync skills, provision $CHARLIEBOT_HOME (default ~/.charliebot), seed repo-default cron tasks
-# fill in the secret in $CHARLIEBOT_HOME/credentials.yaml: charliebot.access_key
-./scripts/start-server.sh
+scripts/release.sh <full main commit>   # download, trial and install the release CI built; prints the switch command
+./scripts/setup.sh                      # provision $CHARLIEBOT_HOME (default ~/.charliebot), sync skills, seed repo-default cron tasks
+# fill in the access key in $CHARLIEBOT_HOME/credentials.yaml: charliebot.access_key
+./scripts/start-server.sh               # start the release that $CHARLIEBOT_RELEASES_DIR/current names
 ```
 
-`start-server.sh` runs the release that `$RELEASES_DIR/current` names and refuses to start when there is none.
+A later update installs the next release and switches the live server onto it —
+`scripts/release.sh <commit>` then `scripts/switch-server.sh rust <commit>`. Each script's header
+comment is the one home of its stages, checks and exit codes; these scripts take no other
+documentation.
 
-`scripts/release.sh <full main commit>` installs the server and Rust CLI that CI built for the same `main` commit. It downloads the `charliebot-server-<commit>` artifact, verifies `sha256sums.txt` for both binaries, runs the trial and switch rehearsal, then writes `$RELEASES_DIR/<commit>/` with both binaries, `release.log` holding each stage's verdict, and `sha256sums.txt`. It prints the switch command. `scripts/switch-server.sh rust <commit>` moves the live server onto that release and moves the runtime clone to its commit, forward or back; rolling back is the same command with an earlier release commit. The emergency return to the Python server is a checkout, not a switch: reset the runtime clone to `8fe3e5bee`, the last commit that carries the Python server, and run that commit's `scripts/switch-server.sh python`. The switch ends with a probe turn in a session of its own: it passes once the new server records the run's first assistant output (or the run ends success), then archives the session after stopping every run the session still has open, including a follow-up run the server starts in it. After the probe turn, the switch runs a delegation check: it delegates one `script-run` task on the runtime clone with base branch `main`, and passes only when the run ends `success` and its worktree exists. A failed check restores the previous release and exits 2; `CHARLIEBOT_SWITCH_DELEGATION_WAIT_S` bounds the wait (default 300 s). The script header lists the preflight and the exit codes.
+The README you are reading is on `main`; a release serves the checkout of its own commit, so the
+[documentation](docs/project.md) and the prompts and skills it carries move with the release.
 
-`setup.sh` provisions `$CHARLIEBOT_HOME/` (home layout, `config.yaml` from `configs/config.example.yaml`, `credentials.yaml` from `configs/credentials.example.yaml`) and seeds repo-default cron tasks into `$CHARLIEBOT_HOME/config.d/cron.d/<name>.yaml` (one file per job). The runtime clone moves only through a release switch: `switch-server.sh` sets it to the release's commit with `git reset --keep`, so never pull in it — a pull would put the clone's prompts, skills and CLI ahead of the live server. Server startup never writes cron config, and a release switch runs no `setup.sh` either — only `setup.sh` writes cron config and syncs skills — so re-run `setup.sh` after each release switch to pick up new repo-default cron tasks and skills.
+## CLI
 
-## CLI at a glance
+The Rust `charliebot` binary is the only CLI, and it ships beside `charliebot-server` in the same
+release. By workflow:
 
-The Rust `charliebot` binary is the only CLI. It ships beside `charliebot-server` in the same
-release.
+Delegation and planning
 
-- `charliebot artifact` — check a page's genre DOM assertions and cold-read probe, or wrap a content fragment into a genre page
-- `charliebot compaction-context` — restore the skills a manager session read before Claude compacted its context
 - `charliebot delegate` — delegate a task to a worker agent
-- `charliebot discord` — reply to or read the Discord thread a session was summoned from, and check the bot setup
-- `charliebot feishu` — reply to, read, or download from the Feishu thread a session was summoned from, check the app setup, and run the user-token verbs (`request`, `consent-url`, `exchange-code`)
-- `charliebot gc-trash` — inspect and purge quarantined worktree trash
-- `charliebot improve start` — start an iterative improvement loop
-- `charliebot improve stop` — stop this session's running improvement loop after the current iteration
-- `charliebot memory` — query, lint and propose from the store; `add` stages a capture
-- `charliebot plan` — present (register), amend, approve, close, diff, and list a session's plans
-- `charliebot publish` — publish an artifact to the URL readers beyond the operator's devices open
-- `charliebot session trigger` — schedule a delayed trigger (timed, watching PIDs/SLURM jobs, or starting a command with `--cmd`)
-- `charliebot session` — create a session; `send` relays a message to another session as an agent_message
-- `charliebot slack` — reply to or ack the Slack thread a session was summoned from
-- `charliebot web` — reply to a web session, print its For-you layer as plain text, or set and show its status
+- `charliebot improve start` / `improve stop` — start, or stop after the current iteration, an autonomous improvement loop on this session
+- `charliebot plan` — present, amend, approve, close, diff, and list a session's plans
+- `charliebot session` — create sessions, page the task tree, relay a message to another session (`send`), archive, retry, and set a task's approver; `session trigger` schedules a delayed trigger
 
-A subcommand name the binary does not carry answers with the unknown-subcommand error.
+Pages and replies
+
+- `charliebot artifact` — check a page's genre assertions and cold read, or wrap a content fragment into a genre page
+- `charliebot files` — probe a file link before you rely on it
+- `charliebot publish` — publish an artifact to the URL readers beyond your devices open
+- `charliebot web` — record a web reply, print a session's For-you layer, or set, confirm and show its status
+
+Approvals and knowledge
+
+- `charliebot digest` — record one T1 policy use or T2 decision in the day's digest
+- `charliebot memory` — query, lint and propose from the memory store; `add` stages a capture
+- `charliebot taste` — add, query, mark and index the user's choice precedents
+
+Chat platforms
+
+- `charliebot slack` — reply to or ack the Slack thread a session was summoned from
+- `charliebot discord` — reply to or read the Discord thread a session was summoned from, and check the bot setup
+- `charliebot feishu` — reply to, read, or download from the Feishu thread a session was summoned from, check the app setup, and run the user-token verbs
+
+Other integrations
+
+- `charliebot github` — open a draft pull request or post a comment as the operator
+- `charliebot google` — send one authenticated Google request, list the account table, and run the consent verbs
+- `charliebot linear` — send one GraphQL request to Linear
+- `charliebot voice` — transcribe an audio clip through the online transcription backend
+
+Operations
+
+- `charliebot triage` — scan a window of failed runs and error logs for grouped failure signatures
+- `charliebot gc-trash` — inspect and purge quarantined worktree trash
+
+`charliebot --help` lists every subcommand the binary carries, including the internal hooks and
+script helpers this page leaves out.
 
 ## Repository layout
 
 Every root entry, one line each:
 
-- `.github/` — the CI workflow: the Python guard, the frontend suite, the release build and the Rust checks
+- `.github/` — the CI workflows: the Rust jobs, the frontend suite, the release build and the PR-contract check
 - `.gitignore` — the build outputs, dependencies and local environments git ignores
 - `AGENTS.md` — the repository guide for agents working in this checkout
 - `LICENSE` — the MIT license
 - `README.md` — this file
 - `configs/` — example configuration and the repository's default cron tasks
-- `dev/` — repository maintenance: git hooks, leak and style checks, the CSS build, the eval harnesses and the improve cron prompts
+- `dev/` — repository maintenance: git hooks, leak and style checks, the remote build runner, the browser and live harnesses, the eval runners, and the improve cron prompts
 - `docs/` — the design documents, the project specification and supplementary assets
 - `prompts/` — the agent prompt definitions and page templates
-- `rust/` — the server and CLI workspace; `cargo` builds and tests here
-- `scripts/` — operator scripts: setup, server launcher, release install and switch, skill sync, charlie-code preflight
+- `rust/` — the server and CLI workspace; `cargo` builds and tests here — see [rust/README.md](rust/README.md)
+- `scripts/` — operator scripts: release install and switch, server launcher, setup, skill sync, charlie-code preflight
 - `skills/` — repo-shared agent skills
-- `web/` — the frontend: Jinja2 templates and static assets, the page packages under `web/features` and `web/backends`, the `node --test` suites under `web/tests`, and the frontend `web/package.json` and `web/tailwind.config.js`
+- `web/` — the frontend: Jinja2 templates and static assets, the page packages under `web/features` and `web/backends`, and the `node --test` suites under `web/tests`
+
+## Documentation
+
+- [docs/project.md](docs/project.md) — the project specification
+- [docs/registry.md](docs/registry.md) — how packages register routes, pages and services
+- [docs/store-api.md](docs/store-api.md) — the session store's API
+- [docs/chat-platforms.md](docs/chat-platforms.md) and [docs/discord.md](docs/discord.md) — the chat platform integrations
+- [docs/networking.md](docs/networking.md) — the proxy and TLS setup around the server
+- [rust/README.md](rust/README.md) — the developer guide for the Rust workspace
 
 ## License
 

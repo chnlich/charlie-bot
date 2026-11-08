@@ -190,6 +190,17 @@ impl WaitSet {
       }
     }
   }
+
+  fn insert(&mut self, target: &HeldTarget) {
+    match target {
+      HeldTarget::Pid { pid, .. } => {
+        self.pids.insert(*pid);
+      }
+      HeldTarget::Slurm { job_id, .. } => {
+        self.jobs.insert(*job_id);
+      }
+    }
+  }
 }
 
 /// One wait's targets on one host that no session has reported yet, and the channel its ends go to.
@@ -256,6 +267,27 @@ impl HeldWatch {
   /// The next end a remote script reported for one of this watch's targets.
   pub async fn recv(&mut self) -> HeldEnd {
     self.rx.recv().await.expect("the watch holds the sender its channel needs")
+  }
+
+  /// Watch one target again after a readback found it still alive. The script dropped the target when it reported
+  /// that end, and the registry dropped it from this watch's set with the end, so without this call only the
+  /// interval probe watches the target. The reopened session checks the target on its first pass.
+  pub fn resubscribe(&mut self, target: HeldTarget) {
+    let host = match &target {
+      HeldTarget::Pid { host, .. } | HeldTarget::Slurm { host, .. } => host.clone(),
+    };
+    if !self.hosts.contains(&host) {
+      return;
+    }
+    let mut state = self.state.lock().expect("held session state is not poisoned");
+    let Some(entry) = state.hosts.get_mut(&host) else {
+      return;
+    };
+    let Some(watcher) = entry.watchers.iter_mut().find(|watcher| watcher.id == self.id) else {
+      return;
+    };
+    watcher.set.insert(&target);
+    refresh(&self.state, &mut state, &host);
   }
 }
 

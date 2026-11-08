@@ -1168,6 +1168,9 @@ impl TriggerManager {
               raw = outcome.raw.trim(),
               "held_readback_not_dead"
             );
+            // The registry dropped this target when it dispatched the end, so a readback that still finds it alive
+            // must put it back; otherwise only the interval probe watches it.
+            held.resubscribe(HeldTarget::Pid { host, pid });
           }
         }
       }
@@ -1295,6 +1298,11 @@ impl TriggerManager {
           remaining = self.settle_sacct(trigger, host, &reading, remaining, &mut finished, &mut remote_ends);
           if remaining.is_empty() {
             break;
+          }
+          // A job the readback could not settle stays in the wait, and the registry dropped it when it dispatched
+          // the end, so the watch takes it back; otherwise only the interval probe watches it.
+          if let (Some(host), true) = (host, remaining.contains(&job_id)) {
+            held.resubscribe(HeldTarget::Slurm { host: host.to_string(), job_id });
           }
         }
       }
@@ -3069,6 +3077,34 @@ mod tests {
     drop(second);
     drop(first);
     end_sleeper(alive);
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_resubscribed_pid_is_reported_again() {
+    let (home, features) = feature_context();
+    let manager = fake_probe_manager(
+      Arc::clone(&features),
+      home.path(),
+      json!({ "run_remote": true }),
+      probe_behavior("", "", 0),
+      Duration::from_secs(3600),
+    )
+    .with_held_session(true, PRODUCTION_TIMING);
+    let child = spawn_sleeper();
+    let pid = i64::from(child.id());
+    let mut watch = manager.held.watch("synthetic-held-rearm", vec![held_pid(pid)]);
+    wait_until(|| held_session_starts(home.path()) >= 1, "the held session").await;
+    end_sleeper(child);
+    let end = timeout(Duration::from_secs(20), watch.recv()).await.expect("the first end");
+    assert_eq!(end, HeldEnd::Pid { host: "synthetic-host".to_string(), pid });
+    // A readback that still finds the pid alive takes the target back, and the reopened session reports it again.
+    // Without the call the watch keeps no target and only the interval probe would see a later end.
+    let starts = held_session_starts(home.path());
+    watch.resubscribe(held_pid(pid));
+    let end = timeout(Duration::from_secs(20), watch.recv()).await.expect("the reopened session reports the pid");
+    assert_eq!(end, HeldEnd::Pid { host: "synthetic-host".to_string(), pid });
+    assert!(held_session_starts(home.path()) > starts, "the re-armed target reopened the session");
   }
 
   #[tokio::test]

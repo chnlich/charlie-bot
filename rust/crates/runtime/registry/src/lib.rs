@@ -14,6 +14,7 @@ mod inlined_literal;
 mod inlined_script;
 mod inlined_style;
 pub mod lifespan;
+mod member;
 pub mod midturn_delivery;
 pub mod pages;
 pub mod registry;

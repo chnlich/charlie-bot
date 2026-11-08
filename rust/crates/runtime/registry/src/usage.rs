@@ -12,7 +12,7 @@ use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 
-use crate::backend::{MemberReading, MemberWindow};
+use crate::member::{MemberReading, MemberWindow};
 
 /// Keys of the quota panel payload and of one window in it (`usage_sources.PANEL_*`). The producers, the usage page
 /// and the browser share them.

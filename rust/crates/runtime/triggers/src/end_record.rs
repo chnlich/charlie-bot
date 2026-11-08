@@ -26,6 +26,22 @@ const WATCH_DIR_WORD_PREFIX: &str = "$HOME/charliebot_runs/watch-";
 /// reading. The local and the remote query use the same list.
 pub const SACCT_FORMAT_COLUMNS: [&str; 4] = ["JobID", "State", "ExitCode", "End"];
 
+/// The Slurm states that end a job. A job in one of them has finished, whatever its exit code; the held session's
+/// remote script checks the same list.
+pub const SLURM_TERMINAL_STATES: [&str; 11] = [
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+  "TIMEOUT",
+  "OUT_OF_MEMORY",
+  "NODE_FAIL",
+  "BOOT_FAIL",
+  "DEADLINE",
+  "PREEMPTED",
+  "REVOKED",
+  "SPECIAL_EXIT",
+];
+
 /// The remote command prefix that measures the remote clock and zone in the sacct readback ssh.
 pub const SACCT_REMOTE_CLOCK_PREFIX: &str = "date +%s.%N; date +%z";
 

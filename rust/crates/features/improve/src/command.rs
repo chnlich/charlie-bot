@@ -52,7 +52,7 @@ pub struct ImproveState {
   pub backend: Option<String>,
   #[serde(default)]
   pub model: Option<String>,
-  /// True when the loop named no backend: each iteration takes a member from `backends.pool`.
+  /// True when the loop named no backend: each iteration takes a member of the pool `backends.calls.improve` names.
   #[serde(default)]
   pub backend_from_pool: bool,
   pub created_at: String,

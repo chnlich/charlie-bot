@@ -30,7 +30,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
-# The Auto session tests register the `auto_member` slot the production server's registry carries.
+# The pool session tests register the `pool_member` slot the production server's registry carries.
 charliebot-agents.workspace = true
 charliebot-core = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true

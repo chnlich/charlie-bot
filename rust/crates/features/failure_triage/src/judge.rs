@@ -1,8 +1,9 @@
-//! The judge: one small-model one-shot per signature, over the light backends of `backends.pool`.
+//! The judge: one small-model one-shot per signature, over the members of the pool that `backends.calls.triage`
+//! names.
 //!
 //! The judge runs only through a backend's native one-shot path, which starts no tools. A backend without that path
 //! is not a judge candidate, and the judge never falls back to the tool-capable one-shot. It takes its candidates from
-//! the process's shared pool rotation, as the autonamer does, so it holds no order or cooldown of its own. Each call
+//! the pool's shared rotation, as the autonamer does, so it holds no order or cooldown of its own. Each call
 //! has a thirty-second cap, a failed call rotates to the next light backend, and an answer that breaks the contract
 //! fails only its own signature. The same function serves this CLI and the server-side handler the later task adds.
 

@@ -39,6 +39,9 @@
   // 5.0:1 there; green-600 held 3.2:1 and 3.3:1, under the 4.5:1 floor for text this size.
   const ADDED_COUNT_CLASS = 'text-green-700';
 
+  // The lines one expand click reveals. A gap this size or smaller expands in one click.
+  const EXPAND_STEP = 20;
+
   function show(el) { el.classList.remove('hidden'); el.classList.add('flex'); }
   function hide(el) { el.classList.add('hidden'); el.classList.remove('flex'); }
   function setError(msg) {
@@ -55,6 +58,26 @@
   function responseDetail(data, status) {
     const detail = (data && (data.detail?.message || data.detail)) || `HTTP ${status}`;
     return typeof detail === 'string' ? detail : JSON.stringify(detail);
+  }
+
+  // The expand strips render inside diff2html's tables, so they take their look from a style block here rather
+  // than from Tailwind classes, which the compiled stylesheet carries only when a template already uses them.
+  installStyles();
+
+  function installStyles() {
+    const style = document.createElement('style');
+    style.textContent = `
+      .cbdx-gap-row > td { padding: 0; background: #f8fafc; border-top: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0; }
+      .cbdx-gap-cell { display: flex; align-items: center; gap: 6px; padding: 2px 8px; }
+      .cbdx-expand { border: 1px solid #cbd5e1; border-radius: 6px; padding: 2px 8px; background: white;
+        color: #334155; font: 12px system-ui, sans-serif; cursor: pointer; }
+      .cbdx-expand:hover { border-color: #2563eb; color: #2563eb; }
+      .cbdx-expand:disabled { cursor: not-allowed; opacity: .55; }
+      .cbdx-whole { margin-left: auto; }
+      .cbdx-gap-count { color: #64748b; font-size: 11px; }
+      .cbdx-gap-error { color: #b91c1c; font-size: 12px; }
+    `;
+    document.head.appendChild(style);
   }
 
   // The one error shape for the page-level fetches: a network failure or a
@@ -193,6 +216,55 @@
     });
     ui.draw();
     ui.highlightCode();
+    return ui;
+  }
+
+  // The "@@ -a,b +c,d @@" headers of the diff text, in order. git omits a count of one.
+  function parseHunks(diffText) {
+    const hunks = [];
+    for (const line of String(diffText).split('\n')) {
+      const match = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+      if (match) {
+        hunks.push({
+          a: Number(match[1]),
+          b: match[2] === undefined ? 1 : Number(match[2]),
+          c: Number(match[3]),
+          d: match[4] === undefined ? 1 : Number(match[4]),
+        });
+      }
+    }
+    return hunks;
+  }
+
+  // The hidden unchanged runs around the hunks: before the first hunk, between hunks, and after the last one.
+  // Each gap carries both sides' inclusive line ranges and the index of the hunk that follows it, hunks.length
+  // for the bottom gap; the two sides' ranges hold the same lines, so they have the same length.
+  function hiddenGaps(hunks, baseTotal, headTotal) {
+    const gaps = [];
+    let oldEnd = 0;
+    let newEnd = 0;
+    hunks.forEach((hunk, index) => {
+      const oldLast = hunk.b > 0 ? hunk.a - 1 : hunk.a;
+      const newLast = hunk.d > 0 ? hunk.c - 1 : hunk.c;
+      if (oldLast >= oldEnd + 1) {
+        gaps.push({oldLo: oldEnd + 1, oldHi: oldLast, newLo: newEnd + 1, newHi: newLast, hunkIndex: index});
+      }
+      oldEnd = hunk.b > 0 ? hunk.a + hunk.b - 1 : hunk.a;
+      newEnd = hunk.d > 0 ? hunk.c + hunk.d - 1 : hunk.c;
+    });
+    if (hunks.length > 0 && headTotal >= newEnd + 1) {
+      gaps.push({oldLo: oldEnd + 1, oldHi: baseTotal, newLo: newEnd + 1, newHi: headTotal, hunkIndex: hunks.length});
+    }
+    return gaps;
+  }
+
+  // The new-side range one control reveals: `up` the 20 lines above the gap's bottom edge, `down` the 20 below
+  // its top edge, `whole` the gap itself. A gap of EXPAND_STEP lines or fewer reveals whole in one click.
+  function revealRange(gap, direction) {
+    const size = gap.newHi - gap.newLo + 1;
+    if (direction === 'whole' || size <= EXPAND_STEP) return [gap.newLo, gap.newHi];
+    if (direction === 'up') return [gap.newHi - EXPAND_STEP + 1, gap.newHi];
+    return [gap.newLo, gap.newLo + EXPAND_STEP - 1];
   }
 
   // Both diff endpoints take the same four comparison selectors; single-file
@@ -217,6 +289,277 @@
       throw new Error(responseDetail(data, resp.status));
     }
     return data;
+  }
+
+  // One side's line span of the file at its resolved revision.
+  async function fetchLines(params, path, side, start, end) {
+    const qs = diffQuery(params);
+    qs.set('path', path);
+    qs.set('side', side);
+    qs.set('start', String(start));
+    qs.set('end', String(end));
+    const resp = await fetch(`/api/git/diff/lines?${qs.toString()}`);
+    const data = await resp.json();
+    if (!resp.ok) {
+      throw new Error(responseDetail(data, resp.status));
+    }
+    return data;
+  }
+
+  // A context row in the unified format: one row carrying both sides' numbers. The markup classes are the ones
+  // diff2html renders, so the diff stylesheet and the comment decoration treat a revealed row like any other
+  // context row.
+  function buildUnifiedRow(oldLine, newLine, text, lang) {
+    const row = document.createElement('tr');
+    const numberCell = document.createElement('td');
+    numberCell.className = 'd2h-code-linenumber d2h-cntx';
+    const oldNumber = document.createElement('div');
+    oldNumber.className = 'line-num1';
+    oldNumber.textContent = oldLine;
+    const newNumber = document.createElement('div');
+    newNumber.className = 'line-num2';
+    newNumber.textContent = newLine;
+    numberCell.append(oldNumber, newNumber);
+    const codeCell = document.createElement('td');
+    codeCell.className = 'd2h-cntx';
+    codeCell.appendChild(codeLineDiv('d2h-code-line', text, lang));
+    row.append(numberCell, codeCell);
+    return row;
+  }
+
+  // A context row in one side-by-side table: one row carrying its own side's number and text.
+  function buildSideRow(line, text, lang) {
+    const row = document.createElement('tr');
+    const numberCell = document.createElement('td');
+    numberCell.className = 'd2h-code-side-linenumber d2h-cntx';
+    numberCell.textContent = line;
+    const codeCell = document.createElement('td');
+    codeCell.className = 'd2h-cntx';
+    codeCell.appendChild(codeLineDiv('d2h-code-side-line', text, lang));
+    row.append(numberCell, codeCell);
+    return row;
+  }
+
+  function codeLineDiv(className, text, lang) {
+    const div = document.createElement('div');
+    div.className = className;
+    const prefix = document.createElement('span');
+    prefix.className = 'd2h-code-line-prefix';
+    prefix.textContent = ' ';
+    const code = document.createElement('span');
+    code.className = lang ? `d2h-code-line-ctn hljs ${lang}` : 'd2h-code-line-ctn';
+    if (text === '') {
+      code.appendChild(document.createElement('br'));
+    } else {
+      code.textContent = text;
+    }
+    div.append(prefix, code);
+    return div;
+  }
+
+  // The expand controls of one rendered file: a strip at each hidden gap, each strip carrying its expand up,
+  // expand down and whole-file buttons. Revealed rows go in place with both sides' line numbers, and the strip
+  // stays at the gap's top edge while its blocks of revealed rows keep their line order.
+  function installExpandControls(body, container, file, params, data, token) {
+    const hunks = parseHunks(data.diff);
+    const gaps = hiddenGaps(hunks, data.base_total || 0, data.head_total || 0);
+    if (hunks.length === 0 || gaps.length === 0) return;
+    const wrapper = container.querySelector('.d2h-file-wrapper');
+    if (!wrapper) return;
+    const sideDiffs = wrapper.querySelectorAll('.d2h-file-side-diff');
+    const unified = sideDiffs.length === 0;
+    const tables = unified
+      ? [wrapper.querySelector('.d2h-diff-table')]
+      : Array.from(sideDiffs, (sideDiff) => sideDiff.querySelector('table'));
+    const lang = wrapper.getAttribute('data-lang') || '';
+    // The read pins the revisions the served diff was built between, so a ref that moves mid-view cannot pair
+    // the revealed lines with the hunk headers they must number against.
+    const lineParams = {repo: params.repo, base: data.base_sha, head: data.head_sha, mode: params.mode};
+
+    gaps.forEach((gap) => {
+      gap.blocks = [];
+      gap.cells = [];
+      gap.stripRows = tables.map((table) => buildStripRow(table, gap));
+      renderGap(gap);
+      renderStripContent(gap);
+    });
+
+    // The row the gap's region sits in front of: the hunk that follows it, or the table's end for the bottom gap.
+    function anchorFor(gap, table) {
+      if (gap.hunkIndex >= hunks.length) return null;
+      let seen = -1;
+      for (const row of table.querySelectorAll('tr')) {
+        if (row.querySelector('td.d2h-info')) {
+          seen += 1;
+          if (seen === gap.hunkIndex) return row;
+        }
+      }
+      return null;
+    }
+
+    function buildStripRow(table, gap) {
+      const row = document.createElement('tr');
+      row.className = 'cbdx-gap-row';
+      const cell = document.createElement('td');
+      cell.className = 'cbdx-gap-cell';
+      cell.colSpan = 2;
+      row.appendChild(cell);
+      gap.cells.push(cell);
+      return row;
+    }
+
+    function stripButton(gap, label, direction) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'cbdx-expand';
+      button.textContent = label;
+      button.addEventListener('click', () => {
+        if (direction === 'all') revealAll();
+        else revealGap(gap, direction);
+      });
+      return button;
+    }
+
+    // The strip's buttons: both directions for a gap that outlives one click, the gap itself otherwise, and the
+    // whole file from every strip.
+    function renderStripContent(gap) {
+      const size = gap.newHi - gap.newLo + 1;
+      gap.cells.forEach((cell) => {
+        cell.innerHTML = '';
+        const directionButtons = size <= EXPAND_STEP
+          ? [stripButton(gap, `Expand ${size} ${size === 1 ? 'line' : 'lines'}`, 'whole')]
+          : [stripButton(gap, '↑ Expand up', 'up'), stripButton(gap, '↓ Expand down', 'down')];
+        const fileButton = stripButton(gap, 'Whole file', 'all');
+        fileButton.className = 'cbdx-expand cbdx-whole';
+        const count = document.createElement('span');
+        count.className = 'cbdx-gap-count';
+        count.textContent = `${size} hidden ${size === 1 ? 'line' : 'lines'}`;
+        const error = document.createElement('span');
+        error.className = 'cbdx-gap-error';
+        cell.append(...directionButtons, fileButton, count, error);
+      });
+    }
+
+    function setStripDisabled(gap, disabled) {
+      gap.cells.forEach((cell) => {
+        cell.querySelectorAll('button.cbdx-expand').forEach((button) => {
+          button.disabled = disabled;
+        });
+      });
+    }
+
+    function showGapError(gap, message) {
+      gap.cells.forEach((cell) => {
+        const error = cell.querySelector('.cbdx-gap-error');
+        if (error) error.textContent = `Failed to load lines: ${message}`;
+      });
+    }
+
+    // Moves the strip and every revealed block of the gap into the region in front of its anchor, in line order.
+    function renderGap(gap) {
+      tables.forEach((table, index) => {
+        const tbody = table.querySelector('tbody');
+        const anchor = anchorFor(gap, table);
+        const stripRow = gap.stripRows[index];
+        if (anchor) anchor.parentNode.insertBefore(stripRow, anchor);
+        else tbody.appendChild(stripRow);
+        let last = stripRow;
+        gap.blocks.forEach((block) => {
+          block.rows[index].forEach((row) => {
+            last.parentNode.insertBefore(row, last.nextSibling);
+            last = row;
+          });
+        });
+      });
+    }
+
+    async function fetchLinesPair(gap, newLo, newHi) {
+      const count = newHi - newLo + 1;
+      const oldLo = gap.oldLo + (newLo - gap.newLo);
+      const [head, base] = await Promise.all([
+        fetchLines(lineParams, file.path, 'head', newLo, newHi),
+        fetchLines(lineParams, file.old_path || file.path, 'base', oldLo, oldLo + count - 1),
+      ]);
+      if (head.lines.length === 0 || head.lines.length !== base.lines.length) {
+        throw new Error('the two sides disagree on the revealed range');
+      }
+      return {head, base};
+    }
+
+    function buildBlock(pair) {
+      const rows = tables.map((table, index) => {
+        const oldSide = !unified && index === 0;
+        return pair.head.lines.map((headLine, offset) => {
+          const baseLine = pair.base.lines[offset];
+          return unified
+            ? buildUnifiedRow(baseLine.line, headLine.line, headLine.text, lang)
+            : buildSideRow(oldSide ? baseLine.line : headLine.line, oldSide ? baseLine.text : headLine.text, lang);
+        });
+      });
+      return {newLo: pair.head.start, newHi: pair.head.end, rows};
+    }
+
+    function updateGapBounds(gap, direction, newLo, newHi) {
+      const count = newHi - newLo + 1;
+      if (direction === 'up') {
+        gap.newHi = newLo - 1;
+        gap.oldHi -= count;
+      } else if (direction === 'down') {
+        gap.newLo = newHi + 1;
+        gap.oldLo += count;
+      } else {
+        gap.newLo = newHi + 1;
+        gap.newHi = newLo - 1;
+        gap.oldLo += count;
+        gap.oldHi -= count;
+      }
+    }
+
+    function refreshStrip(gap) {
+      if (gap.newLo > gap.newHi) {
+        gap.stripRows.forEach((row) => row.remove());
+        gap.stripRows = null;
+        gap.cells = [];
+        return;
+      }
+      renderStripContent(gap);
+    }
+
+    async function revealGap(gap, direction) {
+      if (gap.inFlight || !gap.stripRows) return;
+      const [newLo, newHi] = revealRange(gap, direction);
+      gap.inFlight = true;
+      setStripDisabled(gap, true);
+      let pair;
+      try {
+        pair = await fetchLinesPair(gap, newLo, newHi);
+      } catch (e) {
+        showGapError(gap, e.message);
+        return;
+      } finally {
+        gap.inFlight = false;
+        setStripDisabled(gap, false);
+      }
+      if (token !== comparisonToken) return;
+      const block = buildBlock(pair);
+      gap.blocks.push(block);
+      gap.blocks.sort((first, second) => first.newLo - second.newLo);
+      updateGapBounds(gap, direction, newLo, newHi);
+      renderGap(gap);
+      refreshStrip(gap);
+      if (body.__cbdiffUi) body.__cbdiffUi.highlightCode();
+      body.dispatchEvent(new CustomEvent('cbdiff:file-rendered', {
+        bubbles: true,
+        detail: {body, container, file},
+      }));
+    }
+
+    // The whole file: every gap's remaining hidden lines, each once.
+    async function revealAll() {
+      for (const gap of gaps) {
+        if (gap.stripRows) await revealGap(gap, 'whole');
+      }
+    }
   }
 
   // Fetch one file's diff into a row body and render it. force=true bypasses the
@@ -260,11 +603,12 @@
     }
     const container = document.createElement('div');
     body.appendChild(container);
-    renderFileDiff(container, diffText);
+    body.__cbdiffUi = renderFileDiff(container, diffText);
     body.dispatchEvent(new CustomEvent('cbdiff:file-rendered', {
       bubbles: true,
       detail: { body, container, file },
     }));
+    installExpandControls(body, container, file, params, data, token);
   }
 
   function buildFileRow(params, file, token) {
@@ -440,6 +784,9 @@
 
   window.__cbdiffPage = {
     getComparison: () => comparison,
+    parseHunks,
+    hiddenGaps,
+    revealRange,
   };
 
   // Init from URL.

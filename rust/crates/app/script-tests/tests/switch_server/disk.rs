@@ -49,12 +49,7 @@ fn test_disk_preflight_proceeds_at_once_on_a_quiet_disk() {
   let world = World::new();
   let (walks, probe) = walk_probe(&world);
   let prepend = format!("{probe}disk_read_rate_mb() {{ echo 3; }}\n");
-  let run = world.stubbed_preflight_with(
-    &format!("rust {}", world.rust_sha),
-    "rust",
-    &world.rust_sha,
-    &prepend,
-  );
+  let run = world.stubbed_preflight_with(&format!("rust {}", world.rust_sha), "rust", &world.rust_sha, &prepend);
 
   assert_eq!(run.code, 0, "{}", world.report(&run));
   let quiet = "root disk read 3 MB/s over 0s, at or below 40 MB/s; proceeding";
@@ -70,8 +65,7 @@ fn test_disk_preflight_proceeds_after_a_busy_disk_falls_under_the_threshold() {
   let world = World::new();
   let (walks, probe) = walk_probe(&world);
   let prepend = format!("{probe}{}", sequence_sampler(&world, &[100, 5]));
-  let run =
-    world.stubbed_preflight_with(&format!("rust {}", world.rust_sha), "rust", &world.rust_sha, &prepend);
+  let run = world.stubbed_preflight_with(&format!("rust {}", world.rust_sha), "rust", &world.rust_sha, &prepend);
 
   assert_eq!(run.code, 0, "{}", world.report(&run));
   let waiting = "waiting for the root disk: 100 MB/s read over 0s, above 40 MB/s; up to 5s";

@@ -13,7 +13,7 @@
 #voice-backend-menu .voice-menu-label { min-width: 0; overflow-wrap: anywhere; }
 
 /* The ⋯ menu's voice backend entry: on phones the caret beside the mic is hidden
-   and this entry, added by voice-input.js, opens the backend menu. On wider
+   and this entry, added by voice-events.js, opens the backend menu. On wider
    screens the caret and its menu carry it, and the entry takes no space. */
 #voice-backend-menu-entry {
   display: none;

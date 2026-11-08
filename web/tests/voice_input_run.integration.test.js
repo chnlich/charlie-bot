@@ -360,9 +360,11 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
   };
 
   const context = vm.createContext(sandbox);
-  // Page order: file-upload.js lands before voice-input.js and owns the
-  // send-button lock the transcription windows report to.
+  // Page order: file-upload.js lands before the voice parts and owns the
+  // send-button lock the transcription windows report to; the voice-events
+  // part registers the badge and the mic title before the recording module.
   vm.runInContext(readStatic('file-upload.js'), context, {filename: 'file-upload.js'});
+  vm.runInContext(readPackageStatic('features', 'voice', 'voice-events.js'), context, {filename: 'voice-events.js'});
   vm.runInContext(readPackageStatic('features', 'voice', 'voice-input.js'), context, {filename: 'voice-input.js'});
 
   // Wrap the lock's open/close so tests can assert a path never engaged it

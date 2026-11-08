@@ -97,7 +97,8 @@ mkdir -p "$OUT"
 
 # The session the screenshots open is the one with the largest chat record, so the chat view is full;
 # two more carry waiting items so the approval queue holds several rows.
-MAIN=$(find "$SESSIONS_DIR" -name chat_events.jsonl -printf '%s %h\n' | sort -rn | head -1   | awk '{print $2}' | xargs dirname | xargs basename)
+MAIN=$(find "$SESSIONS_DIR" -name chat_events.jsonl -printf '%s %h\n' \
+  | awk '$1 > max { max = $1; dir = $2 } END { print dir }' | xargs dirname | xargs basename)
 mapfile -t sids < <(ls "$SESSIONS_DIR" | LC_ALL=C sort)
 (( ${#sids[@]} >= 20 )) || { printf 'inner: the seed home holds only %s sessions\n' "${#sids[@]}" >&2; exit 1; }
 WAIT_B=${sids[40]}
@@ -141,6 +142,48 @@ set_status "$WAIT_C" "$(status_text \
   'Keep the daily summary current while the README refresh lands.' \
   "Yesterday's summary went out with the digest attached." \
   '[{"text": "Read the release trial log", "context": "The log names the stage verdicts; the summary quotes them."}]')" user-act
+
+# Freeze the fabricated timestamps: the Status view renders the stored updated_at and the item
+# ages verbatim, so run-time stamps would age the view while it sits in the repository. The store
+# reads session metadata from disk on each request; the web_status chat event's copy of the
+# payload is patched too, though the page can also take that value from the server's memory, in
+# which case the "updated" clock shows the run's time — the one glyph that varies between runs.
+FIXED_STAMP=2026-11-08T12:00:00Z
+# The item age the Status view shows is now minus since in whole hours, so the since stamp rides
+# one day behind the run: the age renders as 1d whatever time the run happens at.
+DAY_OLD_STAMP=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+python3 - "$SESSIONS_DIR" "$MAIN" "$WAIT_B" "$WAIT_C" "$FIXED_STAMP" "$DAY_OLD_STAMP" <<'FREEZE'
+import json, pathlib, sys
+
+sessions, main, wait_b, wait_c, stamp, day_old = (sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4],
+                                                  sys.argv[5], sys.argv[6])
+for sid in (main, wait_b, wait_c):
+    path = pathlib.Path(sessions) / sid / 'metadata.json'
+    row = json.loads(path.read_text())
+    status = row.get('web_status')
+    if isinstance(status, dict):
+        status['updated_at'] = stamp
+        for item in status.get('waiting') or []:
+            item['since'] = day_old
+            item['since_exact'] = True
+        path.write_text(json.dumps(row, indent=2) + chr(10))
+    # The Status view reads its updated_at and the item ages from the web_status
+    # chat event when it is newer than the stored status, so the event's copy of
+    # the payload takes the same stamps.
+    log = pathlib.Path(sessions) / sid / 'data' / 'chat_events.jsonl'
+    lines = []
+    for line in log.read_text().splitlines():
+        event = json.loads(line)
+        payload = event.get('web_status')
+        if event.get('type') == 'web_status' and isinstance(payload, dict):
+            payload['updated_at'] = stamp
+            for item in payload.get('waiting') or []:
+                item['since'] = day_old
+                item['since_exact'] = True
+            line = json.dumps(event, separators=(',', ':'))
+        lines.append(line)
+    log.write_text(chr(10).join(lines) + chr(10))
+FREEZE
 
 digest() { # policy step undo scope_check
   local args=(digest add --session "$MAIN" --policy "$1" --step "$2" --undo "$3")

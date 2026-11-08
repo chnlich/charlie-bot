@@ -312,6 +312,13 @@ fi
 chmod 600 "$CB_HOME/credentials.yaml"
 printf 'header = "Authorization: Bearer %s"\n' "$ACCESS_KEY" > "$AUTH_CONFIG"
 chmod 600 "$AUTH_CONFIG"
+# The router the switch delegation check reaches the pool through, as the host's routine class does. The stub answers the
+# pool id for every role, so a delegation whose child keeps the pool id must launch its work on one of the pool's members.
+readonly REHEARSAL_ROUTER_STUB="$TREE/router-stub.sh"
+cat >"$REHEARSAL_ROUTER_STUB" <<'STUB'
+cat >/dev/null
+printf '%s' '{"routed":true,"backends":["pool"],"reason":"switch rehearsal router stub"}'
+STUB
 cat > "$CB_HOME/config.yaml" <<EOF
 server:
   host: 127.0.0.1
@@ -343,6 +350,8 @@ backends:
     probe: pool
     autoname: pool
     triage: pool
+  routing:
+    command: ["/bin/sh", "$REHEARSAL_ROUTER_STUB"]
   options:
     - id: $REHEARSAL_BACKEND
       label: Release rehearsal

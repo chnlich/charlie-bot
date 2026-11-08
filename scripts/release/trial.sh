@@ -392,6 +392,14 @@ if (( SERVE_MODE == 1 )); then
 else
   SESSION_MEMORY_MAX_MB=1024
 fi
+# The router the delegation check reaches the pool through, as the host's routine class does. The stub answers the pool id
+# for every role, so a delegation whose child keeps the pool id must launch its work on one of the pool's members.
+readonly TRIAL_ROUTER_STUB="$TREE/router-stub.sh"
+cat >"$TRIAL_ROUTER_STUB" <<'STUB'
+cat >/dev/null
+printf '%s' '{"routed":true,"backends":["pool"],"reason":"release trial router stub"}'
+STUB
+
 cat >"$TRIAL_CB_HOME/config.yaml" <<EOF
 server:
   host: 127.0.0.1
@@ -425,6 +433,8 @@ backends:
     probe: pool
     autoname: pool
     triage: pool
+  routing:
+    command: ["/bin/sh", "$TRIAL_ROUTER_STUB"]
   options:
     - id: charlie-code-release-trial
       label: Release trial

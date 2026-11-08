@@ -608,6 +608,18 @@ impl TriggerManager {
     purpose: SshPurpose,
     remote: &str,
   ) -> PidProbeOutcome {
+    self.ssh_probe_pid_with(target, trigger_id, purpose, remote, end_record::pid_probe_read).await
+  }
+
+  /// Run one pid ssh and read the clock and end lines its `read` parser names.
+  async fn ssh_probe_pid_with(
+    &self,
+    target: &RemotePid,
+    trigger_id: &str,
+    purpose: SshPurpose,
+    remote: &str,
+    read: fn(&str) -> end_record::PidProbeRead,
+  ) -> PidProbeOutcome {
     let run = self.run_remote_ssh(&target.host, remote, trigger_id, purpose).await;
     let output = match run.result {
       Ok(output) => output,
@@ -616,7 +628,7 @@ impl TriggerManager {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let raw = format!("{stdout}{stderr}");
-    let read = end_record::pid_probe_read(&stdout);
+    let read = read(&stdout);
     let last_line = stdout.trim().lines().last().unwrap_or_default().trim();
     let status = match last_line {
       PROBE_ALIVE_WORD => ProbeStatus::Alive,
@@ -637,9 +649,11 @@ impl TriggerManager {
   /// Confirm one pid that the held session reported gone, with the same verdict and end-file read the fire path
   /// takes from an interval probe. The ssh is a readback: the held report is only the trigger for it.
   async fn held_readback_pid(&self, target: &RemotePid, trigger_id: &str) -> PidProbeOutcome {
-    let end_file = end_record::end_file_word(trigger_id, target.pid);
-    let remote = pid_readback_command(target.pid, &end_file);
-    self.ssh_probe_pid(target, trigger_id, SshPurpose::Readback, &remote).await
+    // Only a pid-only target has a recorder end file; a `--cmd` target's end is the exit file `remote_finish` reads,
+    // so its readback waits for no recorder and stays short.
+    let end_file = target.exit_file.is_none().then(|| end_record::end_file_word(trigger_id, target.pid));
+    let remote = pid_readback_command(target.pid, end_file.as_deref());
+    self.ssh_probe_pid_with(target, trigger_id, SshPurpose::Readback, &remote, end_record::pid_readback_read).await
   }
 
   /// Run one remote ssh process, logging the `remote_ssh_started` row that counts ssh processes per wake across
@@ -1555,13 +1569,22 @@ fn pid_probe_command(target: &RemotePid, recorder: Option<&RecorderStart<'_>>, e
 }
 
 /// The remote command that reads back a pid the held session reported gone. It carries the same `kill -0` verdict
-/// and reads the end file after the verdict says dead. The end recorder polls the pid on its own clock, so the file
-/// can trail the held report by about a second; the read waits up to three seconds for it.
-fn pid_readback_command(pid: i64, end_file: &str) -> String {
+/// and, for a pid-only target, reads the end file the recorder writes. The recorder polls the pid on its own clock,
+/// so the file can trail the held report by about a second; the read waits up to three seconds for it. The two
+/// tagged dates bracket that wait, so the offset math keeps the ssh's own midpoint. A `--cmd` target has no recorder
+/// file, because its end is the exit file `remote_finish` reads, so its readback carries the verdict alone.
+fn pid_readback_command(pid: i64, end_file: Option<&str>) -> String {
+  let read = end_file.map_or_else(String::new, |end_file| {
+    format!(
+      "n=0; while [ ! -s {end_file} ] && [ $n -lt 30 ]; do sleep 0.1; n=$((n + 1)); done; \
+       cat {end_file} 2>/dev/null; rm -f {end_file}; "
+    )
+  });
   format!(
-    "date +%s.%N; if kill -0 {pid} >/dev/null 2>&1; then echo {PROBE_ALIVE_WORD}; else n=0; \
-     while [ ! -s {end_file} ] && [ $n -lt 30 ]; do sleep 0.1; n=$((n + 1)); done; \
-     cat {end_file} 2>/dev/null; rm -f {end_file}; echo {PROBE_DEAD_WORD}; fi"
+    "echo \"{start_tag} $(date +%s.%N)\"; if kill -0 {pid} >/dev/null 2>&1; then echo {PROBE_ALIVE_WORD}; \
+     else {read}echo \"{end_tag} $(date +%s.%N)\"; echo {PROBE_DEAD_WORD}; fi",
+    start_tag = end_record::READBACK_START_TAG,
+    end_tag = end_record::READBACK_END_TAG,
   )
 }
 
@@ -3017,6 +3040,39 @@ mod tests {
 
   #[tokio::test]
   #[ignore = "integration"]
+  async fn a_watch_that_names_a_reported_pid_reopens_the_session() {
+    let (home, features) = feature_context();
+    let manager = fake_probe_manager(
+      Arc::clone(&features),
+      home.path(),
+      json!({ "run_remote": true }),
+      probe_behavior("", "", 0),
+      Duration::from_secs(3600),
+    )
+    .with_held_session(true, PRODUCTION_TIMING);
+    let alive = spawn_sleeper();
+    let alive_pid = i64::from(alive.id());
+    let gone = spawn_sleeper();
+    let gone_pid = i64::from(gone.id());
+    let mut first = manager.held.watch("synthetic-held-existing", vec![held_pid(alive_pid), held_pid(gone_pid)]);
+    wait_until(|| held_session_starts(home.path()) >= 1, "the first held session").await;
+    end_sleeper(gone);
+    let end = timeout(Duration::from_secs(20), first.recv()).await.expect("the first watch reports the end");
+    assert_eq!(end, HeldEnd::Pid { host: "synthetic-host".to_string(), pid: gone_pid });
+    // A second wait names the pid the running script already reported. Only a reopened session can report it again,
+    // because the running script dropped the pid from its watch set; reusing it leaves this wait to the interval
+    // probe, an hour away.
+    let mut second = manager.held.watch("synthetic-held-late", vec![held_pid(gone_pid)]);
+    let end = timeout(Duration::from_secs(20), second.recv()).await.expect("the reopened session reports the end");
+    assert_eq!(end, HeldEnd::Pid { host: "synthetic-host".to_string(), pid: gone_pid });
+    assert!(held_session_starts(home.path()) >= 2, "the late watch reopened the session");
+    drop(second);
+    drop(first);
+    end_sleeper(alive);
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
   async fn startup_recovery_opens_the_held_session_at_once() {
     let (home, features) = feature_context();
     let manager = Arc::new(
@@ -3116,6 +3172,14 @@ mod tests {
     let (finished, still_alive, _ends) = manager.wait_with_sacct(&trigger, &[target]).await.expect("local SLURM wait");
     assert_eq!(finished, ["slurm:123: COMPLETED 0:0"]);
     assert!(still_alive.is_empty());
+  }
+
+  #[test]
+  fn a_cmd_readback_waits_for_no_recorder_file() {
+    let remote = pid_readback_command(41, None);
+    assert!(!remote.contains("watch-"), "a `--cmd` target has no recorder end file: {remote}");
+    assert!(!remote.contains("sleep"), "a `--cmd` readback waits for nothing: {remote}");
+    assert!(remote.contains("kill -0 41"), "{remote}");
   }
 
   #[test]

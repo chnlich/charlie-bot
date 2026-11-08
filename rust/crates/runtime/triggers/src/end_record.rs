@@ -157,6 +157,27 @@ pub fn pid_probe_read(stdout: &str) -> PidProbeRead {
   }
 }
 
+/// The tag the held pid readback prints before its first remote date, and the one it prints after any wait for the
+/// end file. The two dates bracket the wait, so their midpoint is the remote clock at the ssh's local midpoint
+/// however long the wait ran.
+pub const READBACK_START_TAG: &str = "T1";
+/// The tag of the readback's second remote date.
+pub const READBACK_END_TAG: &str = "T2";
+
+/// Parse one held pid readback's stdout: the two tagged dates and the bare end-file line between them. The clock the
+/// offset math uses is the midpoint of the two dates, because the local midpoint spans the same wait.
+pub fn pid_readback_read(stdout: &str) -> PidProbeRead {
+  let lines: Vec<&str> = stdout.trim().lines().collect();
+  let tagged =
+    |tag: &str| lines.iter().find_map(|line| line.strip_prefix(tag).and_then(|rest| parse_epoch_ns(rest.trim())));
+  let start = tagged(READBACK_START_TAG);
+  let now_ns = match (start, tagged(READBACK_END_TAG)) {
+    (Some(start), Some(end)) => Some(start + (end - start) / 2),
+    _ => start,
+  };
+  PidProbeRead { now_ns, end_ns: lines.iter().find_map(|line| parse_epoch_ns(line)) }
+}
+
 /// What one exit-read ssh printed: the exit code, the file's mtime, and the remote clock of the read.
 pub struct ExitRead {
   /// The exit file's content, when the file existed and held text.
@@ -275,4 +296,25 @@ pub fn rfc3339(at: OffsetDateTime) -> String {
 fn non_empty(text: &str) -> Option<String> {
   let text = text.trim();
   (!text.is_empty()).then(|| text.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn readback_clock_is_the_midpoint_of_the_dates_that_bracket_the_wait() {
+    let stdout = "T1 1762612345.000000000\n1762612347.500000000\nT2 1762612349.000000000\nDEAD\n";
+    let read = pid_readback_read(stdout);
+    assert_eq!(read.end_ns, Some(1_762_612_347_500_000_000));
+    assert_eq!(read.now_ns, Some(1_762_612_347_000_000_000));
+  }
+
+  #[test]
+  fn readback_without_an_end_file_still_carries_its_clock() {
+    let stdout = "T1 1762612345.000000000\nT2 1762612345.000000000\nDEAD\n";
+    let read = pid_readback_read(stdout);
+    assert_eq!(read.end_ns, None);
+    assert_eq!(read.now_ns, Some(1_762_612_345_000_000_000));
+  }
 }

@@ -360,6 +360,7 @@ fills a value makes it visible to a ready service, which reads it at start.
 `AgentBaseEnvironment` is the startup state's one owner of the base agent environment. Code with a `FeatureContext`
 reads it through `features.startup.require::<AgentBaseEnvironment>()?`; one-shot calls and launch contexts carry the
 environment explicitly.
+
 ## Rendering pages
 
 Two values in the startup state serve pages. `run()` inserts both before the lifespan starts, so a lifespan step or

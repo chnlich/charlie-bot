@@ -440,6 +440,12 @@ standin_make() {
       "$STANDIN/sessions/$session/data/runs/$run/metadata.json" > "$STANDIN/run.json" \
       && mv "$STANDIN/run.json" "$STANDIN/sessions/$session/data/runs/$run/metadata.json" \
       || fail "the live run record of $session/$run names the lab backend"
+    # The boot's resume of a live run's turn resolves the session's backend: one the config does not list fails the
+    # resume and finishes the run, so the session record names the lab backend too.
+    jq --arg backend "$BACKEND" '.backend = $backend' \
+      "$STANDIN/sessions/$session/metadata.json" > "$STANDIN/run.json" \
+      && mv "$STANDIN/run.json" "$STANDIN/sessions/$session/metadata.json" \
+      || fail "the session record of $session names the lab backend"
     # The live process must outlive the whole flow: the old server ends a run whose process ends, and the switch then
     # finds no live run to re-attach. standin_stop ends every one of them.
     setsid sleep 10800 < /dev/null > /dev/null 2>&1 &

@@ -65,15 +65,18 @@ fn resolve_link(argv0: &str) -> PathBuf {
 
 /// Run the remote command an ssh invocation names in a local `sh`, with the fake programs' directory first on its
 /// `PATH`, so the command's `sacct` is the fake of the same name. The held-session tests run their remote scripts
-/// this way, against real local pids, and exit with the script's status.
+/// this way, against real local pids, and exit with the script's status. The remote home is the test's own home,
+/// because a probe writes its end recorder and end file beneath `$HOME`; the runner's real home is no test's to use.
 fn run_remote_command(argv: &[String], link: &Path) -> ! {
   let command = argv.last().expect("an ssh invocation names a remote command");
   let bin = link.parent().expect("a fake program sits in the fake bin directory");
+  let remote_home = bin.parent().expect("the fake bin directory sits under the test's own home");
   let path = std::env::var("PATH").unwrap_or_default();
   let status = std::process::Command::new("/bin/sh")
     .arg("-c")
     .arg(command)
     .env("PATH", format!("{}:{path}", bin.display()))
+    .env("HOME", remote_home)
     .status()
     .expect("run the remote command");
   std::process::exit(status.code().unwrap_or(1));

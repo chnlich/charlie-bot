@@ -26,5 +26,6 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+charliebot-core = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 tower.workspace = true

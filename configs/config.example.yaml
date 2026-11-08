@@ -64,12 +64,22 @@ paths:
     - ~/workspace
   worktree_dir: ~/worktrees
 
-# Backends: the rotation pool of unpinned work and the model-switch options.
+# Backends: the model-switch options, the named pools of members, and the call classes that name them.
 backends:
-  # Pool members in rotation order: option ids. Unpinned work takes the next member that is
-  # not cooling; a member whose quota runs out cools until its reset. Empty = unpinned work
-  # runs on the delegating session's backend and the reviewer uses the worker's backend.
-  pool: []
+  # Pools: each names members from the options below. rule: rotate takes the next member that is
+  # not cooling, in turn; its members are option ids, and a repeated id takes a larger share.
+  # rule: priority takes the first member that is not cooling; each member names its billing
+  # (subscription or payg). A member whose quota runs out cools until its reset. Empty = no pool.
+  pools: []
+  #  - id: light
+  #    label: Light
+  #    rule: rotate
+  #    members: [claude-haiku]
+  # Call classes: each key names an option id, a pool id, or session (session only for worker,
+  # improve, verify, review and cold_read). A key left out keeps the default behavior of the call.
+  # calls:
+  #   worker: light
+  #   thread: light
   # Backends available for model switching. Editing the list REPLACES it — to
   # add a codex backend, append an entry such as:
   #   - id: codex-luna
@@ -86,8 +96,8 @@ backends:
   # An id names the model family, never a version: a version bump edits only the
   # entry's model and label (the id rule: usage's startup check in rust/crates/features/usage/src/backend_ids.rs
   # refuses an id outside the prefixes the backend types register).
-  # Router program that routes unpinned work (commented out: without this section the pool
-  # rotation alone decides, as it always has). The first item resolves on the server process's
+  # Router program that routes unpinned work (commented out: without this section each call class
+  # runs on its configured target). The first item resolves on the server process's
   # PATH; each request starts it once, feeds it one JSON object on stdin ({role, text,
   # session_backend, candidates: [{id, cooling_until}]}; session_backend is null for a thread) and
   # reads one JSON object on stdout ({routed: true|false, backends: [id, ...], reason: "one line"}).

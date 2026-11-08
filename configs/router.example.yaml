@@ -11,13 +11,13 @@
 #   jev.credential  the credentials.yaml section holding this router's key
 #   instructions    the one question Jev answers
 #   classes         each class of work: `when` is the criterion Jev reads for it, and `run_on` is where
-#                   the work runs: `pool` (the backends.pool rotation), `session` (the delegating
-#                   session's backend), or an ordered list of backends.options ids
+#                   the work runs: one backends.pools id (the pool selects the member the work runs on),
+#                   or `session` (the delegating session's backend)
 #   roles           each role that routes, with the ordered list of class names it chooses among; a
 #                   role this file does not list is not routed. A role with one class needs no Jev call.
 #
-# A list `run_on` answers only the ids that are candidates for the request, in the list's order.
-# Every id must be a backends.options id of config.yaml; the router refuses the file otherwise.
+# A `run_on` pool id answers only when the request offers that pool as a candidate. Every pool id must be
+# a backends.pools id of config.yaml; the router refuses the file otherwise.
 
 jev:
   # Placeholder: your gateway's choice endpoint.
@@ -28,7 +28,7 @@ instructions: Which class of CharlieBot work is this? Choose routine unless the 
 classes:
   routine:
     when: Default. Fixes a bug, adds tests, changes config, runs a script or a job, queries or counts state, follows a written plan or an approved design, lands reviewed work, or revises a page to close review or cold-read findings.
-    run_on: pool
+    run_on: light
   context:
     when: A first read of unfamiliar material, a diagnosis of an unexplained failure, an explanation of a mechanism or a cause (an explain or debugging page included), an understanding page, or a design or plan draft (a new plan version that changes the design included).
     run_on: session

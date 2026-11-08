@@ -410,8 +410,21 @@ paths:
     - $WORKSPACE
   worktree_dir: $WORKTREE_ROOT
 backends:
-  pool:
-    - charlie-code-release-trial
+  pools:
+    - id: pool
+      label: Pool
+      rule: rotate
+      members:
+        - charlie-code-release-trial
+  calls:
+    worker: pool
+    improve: pool
+    verify: pool
+    review: pool
+    cold_read: pool
+    probe: pool
+    autoname: pool
+    triage: pool
   options:
     - id: charlie-code-release-trial
       label: Release trial

@@ -328,8 +328,21 @@ paths:
     - $WORKSPACE
   worktree_dir: $TREE/worktrees
 backends:
-  pool:
-    - $REHEARSAL_BACKEND
+  pools:
+    - id: pool
+      label: Pool
+      rule: rotate
+      members:
+        - $REHEARSAL_BACKEND
+  calls:
+    worker: pool
+    improve: pool
+    verify: pool
+    review: pool
+    cold_read: pool
+    probe: pool
+    autoname: pool
+    triage: pool
   options:
     - id: $REHEARSAL_BACKEND
       label: Release rehearsal

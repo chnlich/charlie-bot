@@ -169,7 +169,7 @@ pub fn initial_line_uuid(run_id: &str, process: usize) -> String {
 }
 
 /// Whether a replayed uuid names a first line this Run's delivery wrote, rather than a mid-turn web input. Such a
-/// line is the Run id itself, or the uuid one of the Run's bound processes registered at `bind_process`.
+/// uuid is the Run id itself, or the uuid one of the Run's bound processes registered at `bind_process`.
 pub fn is_first_line(run_id: &str, uuid: &str) -> bool {
   if uuid == run_id {
     return true;

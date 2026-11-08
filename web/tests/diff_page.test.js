@@ -142,6 +142,24 @@ test('the start guide shows without a comparison and a repository button fills R
   assert.ok(fetches.includes('/api/git/branches?repo=%2Fwork%2Fbeta'));
 });
 
+test('Compare sends the Base and Head refs the form starts with', async () => {
+  const {elements, fetches} = loadDiffPage({
+    search: '?repo=/work/alpha',
+    repos: [{label: 'alpha', path: '/work/alpha'}],
+    manifest: MANIFEST,
+  });
+  await settle();
+
+  assert.equal(elements.get('base-input').value, 'main');
+  assert.equal(elements.get('head-input').value, 'HEAD');
+  elements.get('diff-form').listeners.submit({preventDefault() {}});
+  await settle();
+
+  assert.equal(elements.get('error').classList.contains('hidden'), true);
+  assert.ok(fetches.some((url) =>
+    url.startsWith('/api/git/diff/files?') && url.includes('base=main') && url.includes('head=HEAD')));
+});
+
 test('a comparison writes its totals above the list and leaves the form status line alone', async () => {
   const {elements} = loadDiffPage({
     search: '?repo=/work/alpha&base=main&head=feature',

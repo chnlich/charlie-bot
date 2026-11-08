@@ -751,6 +751,8 @@ mod tests {
       self.requests.0.lock().unwrap().clone()
     }
 
+    /// The requests recorded so far, after waiting up to 1 s for `count`. A timed-out attempt's serve thread records
+    /// its request after the call returns, so a test that counts requests waits instead of reading at once.
     fn wait_for_requests(&self, count: usize) -> Vec<Value> {
       let requests = self.requests.0.lock().unwrap();
       let (requests, _) =
@@ -1348,7 +1350,7 @@ mod tests {
         answer,
         json!({ "routed": true, "backends": [SESSION], "reason": "context p=0.81; retried after a timeout" })
       );
-      assert_eq!(jev.requests().len(), 2, "the timeout takes the call's one retry");
+      assert_eq!(jev.wait_for_requests(2).len(), 2, "the timeout takes the call's one retry");
       assert_eq!(jev.unserved(), 0);
     });
   }
@@ -1399,7 +1401,7 @@ mod tests {
       assert!(error.contains("429"), "{error}");
       assert!(error.contains("still limited"), "{error}");
       assert!(error.contains("retry"), "{error}");
-      assert_eq!(jev.requests().len(), 2, "the 429 after a timeout takes no second retry");
+      assert_eq!(jev.wait_for_requests(2).len(), 2, "the 429 after a timeout takes no second retry");
       assert_eq!(jev.unserved(), 0);
     });
   }

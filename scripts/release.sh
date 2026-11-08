@@ -156,8 +156,9 @@ stage_units() {
   "$SLICE_INSTALL" "$REPO_ROOT" "$COMMIT"
 }
 
+# stage_trial: the trial starts servers that outlive a killed release, so it runs without the lock's descriptor.
 stage_trial() {
-  "$TRIAL_CMD" "$COMMIT" "$ARTIFACT_DIR/charliebot-server"
+  ( release_lock_detach; exec "$TRIAL_CMD" "$COMMIT" "$ARTIFACT_DIR/charliebot-server" )
 }
 
 stage_rehearsal() {

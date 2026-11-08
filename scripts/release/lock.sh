@@ -3,10 +3,15 @@
 #
 #   release_lock_take SCRIPT COMMIT   take the lock without waiting; 0 this caller holds it, 1 it does not
 #   release_lock_release              remove the holder record of a lock this process took
+#   release_lock_detach               in a subshell, before a child that can outlive this caller: close the descriptor
 #
 # The lock is `flock` on an open descriptor, so the kernel frees it when the holder dies, and a stale record from a
 # dead holder blocks nobody. The holder writes its record beside the lock: one line naming the script, the commit,
 # the pid and the start time, which a refused caller prints.
+#
+# The descriptor is not close-on-exec, so every child inherits it. A child that outlives its holder — a trial's
+# server, the rehearsal's tmux server, a seeded run — must run after release_lock_detach, or the lock stays held
+# after the holder is killed.
 #
 # A stage that the release flow starts while scripts/release.sh still holds the lock — the switch rehearsal's
 # switches do — inherits the flow's descriptor through CHARLIEBOT_RELEASE_LOCK_FD in its environment: it takes
@@ -71,5 +76,15 @@ release_lock_take() {
 release_lock_release() {
   if [ "$RELEASE_LOCK_MINE" = 1 ]; then
     rm -f "$RELEASE_LOCK_RECORD"
+  fi
+}
+
+# release_lock_detach: closes the lock descriptor in this process and forgets the variable. Run it inside a subshell,
+# `( release_lock_detach; exec CHILD ... )`, so only the child that outlives the caller goes without the lock; the
+# caller keeps its descriptor. A caller that holds no descriptor does nothing.
+release_lock_detach() {
+  if [ -n "$CHARLIEBOT_RELEASE_LOCK_FD" ]; then
+    exec {CHARLIEBOT_RELEASE_LOCK_FD}>&-
+    unset CHARLIEBOT_RELEASE_LOCK_FD
   fi
 }

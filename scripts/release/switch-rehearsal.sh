@@ -47,6 +47,9 @@ umask 077
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SOURCE_REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 readonly SWITCH_SOURCE="$SOURCE_REPO/scripts/switch-server.sh"
+# The host release lock: the tmux server and the seeded run below run without its descriptor, and the switches it
+# runs keep it, as the flow that started them does.
+. "$SCRIPT_DIR/lock.sh"
 readonly RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
 readonly LOG_ROOT="${CHARLIEBOT_RELEASE_LOG_DIR:-$HOME/charliebot-release-logs}"
 readonly LIVE_HOME="${CHARLIEBOT_HOME:-$HOME/.charliebot}"
@@ -431,7 +434,8 @@ check_config new "$NEW_COMMIT" "$RELEASES/$NEW_COMMIT" "$NEW_CHECKOUT"
 
 SOCK="rehearsal-$$"
 export CHARLIEBOT_TMUX_SOCKET="$SOCK"
-tmux -L "$SOCK" new-session -d -s rehearsal -c "$REPO" -x 200 -y 50 || preflight_fail "start the private tmux server"
+( release_lock_detach; exec tmux -L "$SOCK" new-session -d -s rehearsal -c "$REPO" -x 200 -y 50 ) \
+  || preflight_fail "start the private tmux server"
 log "TMUX private socket $SOCK under $TMUX_ROOT"
 
 http_get() {  # http_get PATH OUTPUT: prints the status
@@ -469,7 +473,7 @@ seed_live_run() {
   [ "$status" = 200 ] || fail_step "seeding a live run: creating a session answered $status"
   session="$(helper session-id "$HTTP/seed-session.json")" \
     || fail_step "seeding a live run: the session response has no id"
-  sleep 1800 &
+  ( release_lock_detach; exec sleep 1800 ) &
   pid=$!
   SEED_PIDS+=("$pid")
   disown "$pid"   # the cleanup kills it by pid; the shell keeps no job that would report the kill

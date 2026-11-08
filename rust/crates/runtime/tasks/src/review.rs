@@ -107,8 +107,9 @@ pub struct ReviewScope<'a> {
 /// selection with `None`.
 ///
 /// `scope.route` is the worker session's recorded route. A review whose `backends.calls.review` is unset or `session`
-/// runs on the route's pool, or on the route's ids in order. A route never overrides a `backends.calls.review` backend
-/// target: that target alone decides the reviewer when the key is set.
+/// runs on the route's pool, or on the route's ids in order, and falls back to the worker's backend when the route has
+/// no member left. A route never overrides a `backends.calls.review` backend target: that target alone decides the
+/// reviewer when the key is set.
 pub fn select_reviewer_backend(
   cfg: &CharlieBotConfig,
   selector: &Selector<'_>,
@@ -130,18 +131,17 @@ pub fn select_reviewer_backend(
       let Some(route) = route.filter(|route| !route.backends.is_empty()) else {
         return Ok(worker_fallback());
       };
-      // A route that names a pool leaves the member to that pool; a route of options ids is ordered by its ids.
+      // A route that names a pool leaves the member to that pool; a route of options ids is ordered by its ids. A route
+      // with no member left falls back to the worker's backend, as a review with no route does.
       let picked = match route.backends.iter().find(|backend| cfg.backends.pool(backend).is_some()) {
         Some(route_pool_id) => selector.select(route_pool_id, &excluded)?,
         None => selector.ordered(&route.backends, &excluded)?,
       };
-      return match picked {
-        Some(option) => {
-          let model = option.required_model("route member").map_err(anyhow::Error::msg)?;
-          Ok(Some((option.id, Some(model), tried_backends.to_vec())))
-        }
-        None => Ok(None),
+      let Some(option) = picked else {
+        return Ok(worker_fallback());
       };
+      let model = option.required_model("route member").map_err(anyhow::Error::msg)?;
+      return Ok(Some((option.id, Some(model), tried_backends.to_vec())));
     }
     Some(CallTarget::Backend(target)) if cfg.backends.pool(target).is_some() => {
       if let Some(option) = selector.select(target, &excluded)? {

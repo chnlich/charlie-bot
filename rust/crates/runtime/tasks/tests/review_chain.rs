@@ -546,6 +546,32 @@ async fn empty_pool_reuses_the_worker_backend_on_every_attempt() -> anyhow::Resu
   Ok(())
 }
 
+/// With `calls.review` unset, a route whose members are all used leaves no routed reviewer: the review runs on the
+/// worker's backend, as it does with no route at all.
+#[tokio::test]
+#[ignore = "integration"]
+async fn exhausted_route_falls_back_to_the_worker_backend() -> anyhow::Result<()> {
+  let stack =
+    Stack::start_with(vec![script_option("fake", "exit 0"), script_option("fake2", "exit 0")], Vec::new()).await?;
+  let pool = test_pool();
+  let selector = pool.selector(&stack.cfg);
+  let route = BackendRoute { backends: vec!["fake2".to_string()], reason: "review route".to_string() };
+  let selection = review::select_reviewer_backend(
+    &stack.cfg,
+    &selector,
+    CallClass::Review,
+    review::ReviewScope {
+      route: Some(&route),
+      worker_backend: "fake",
+      worker_model: Some("fake-model"),
+      tried_backends: &[],
+      used_backends: &HashSet::from(["fake2".to_string()]),
+    },
+  )?;
+  assert_eq!(selection, Some(("fake".to_string(), Some("fake-model".to_string()), vec!["fake".to_string()])));
+  Ok(())
+}
+
 #[tokio::test]
 #[ignore = "integration"]
 async fn repo_review_context_carries_the_delegated_spec() -> anyhow::Result<()> {

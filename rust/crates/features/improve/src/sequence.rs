@@ -136,7 +136,7 @@ pub fn render_iteration_reports(repo_root: &RepoRoot, loop_dir: &str, iteration:
   let sections = spawner_prompt::load_marker_sections(
     &repo_root.path().join(spawner_prompt::WORKER_PROMPT_PATH),
     &[spawner_prompt::ITERATION_REPORTS_SECTION],
-    "worker-prompt",
+    spawner_prompt::WORKER_PROMPT_EXTRACTION,
   )?;
   let tokens = vec![
     ("{{loop_dir}}", loop_dir.to_string()),

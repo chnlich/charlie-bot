@@ -3650,6 +3650,18 @@ mod tests {
     panic!("trigger {trigger_id} never fired");
   }
 
+  /// Wait until the capture holds one trigger's `trigger_fired` line. `stamp_fired` writes the Fired record before it
+  /// emits that line, so a test that read the capture the moment the record turned Fired could still miss it.
+  async fn wait_for_fire_line(log: &LogCapture, trigger_id: &str) {
+    for _ in 0..500 {
+      if log.text().lines().any(|line| line.contains("trigger_fired") && line.contains(trigger_id)) {
+        return;
+      }
+      sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the trigger_fired line for {trigger_id} never appeared; captured:\n{}", log.text());
+  }
+
   /// A scripted pid-only wake, end to end: the verify ssh starts the end recorder, the probes wake on the
   /// ALIVE→DEAD transition, and the DEAD probe reads the end file back in the same ssh.
   #[tokio::test]
@@ -3712,6 +3724,7 @@ mod tests {
     );
 
     // The trigger_fired line carries the new fields, and the end converts by the offset it measured in the same ssh.
+    wait_for_fire_line(&log, &trigger.id).await;
     let text = log.text();
     let fired_lines: Vec<&str> =
       text.lines().filter(|line| line.contains("trigger_fired") && line.contains(&trigger.id)).collect();
@@ -3763,6 +3776,7 @@ mod tests {
     manager.recover_pending().await.expect("recover pending triggers");
     let fired = wait_until_fired(&manager, &trigger.id).await;
     assert_eq!(fired.fire_reason.as_deref(), Some("completed"));
+    wait_for_fire_line(&log, &trigger.id).await;
     let text = log.text();
     let line =
       text.lines().find(|line| line.contains("trigger_fired") && line.contains(&trigger.id)).expect("the fire logged");
@@ -3872,6 +3886,7 @@ mod tests {
       .expect("the scripted wake registers");
     let fired = wait_until_fired(&manager, &trigger.id).await;
     assert_eq!(fired.fire_reason.as_deref(), Some("completed"), "the missing end file never blocks the fire");
+    wait_for_fire_line(&log, &trigger.id).await;
     let text = log.text();
     let warning = text.lines().find(|line| line.contains("remote_end_read_failed")).expect("the warning logged");
     assert!(warning.contains(&trigger.id), "{warning}");

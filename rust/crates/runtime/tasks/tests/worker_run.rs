@@ -1090,12 +1090,29 @@ fn option_entries(options: &[BackendOption]) -> String {
     .collect()
 }
 
+/// The `server` section the harness runs with (`Stack::config`), written out because a loaded config otherwise takes the
+/// host defaults: a nonzero session memory cap starts a session cgroup, which a test host without the agents slice fails,
+/// and the headroom and work-guard switches make a launch depend on the host too.
+const HOME_SERVER_SECTION: &str = concat!(
+  "server:\n",
+  "  host: 127.0.0.1\n",
+  "  port: 18650\n",
+  "  subprocess_buffer_limit_mb: 1\n",
+  "  session_memory_max_mb: 0\n",
+  "  session_swap_max_mb: 0\n",
+  "  session_tasks_max: 0\n",
+  "  min_free_disk_gib: 0\n",
+  "  enable_session_cpu_weight: true\n",
+  "  enable_session_io_weight: true\n",
+  "  enable_local_work_guard: false\n",
+);
+
 /// The config a home loads when its `backends` section is `backends` (YAML under the key, indented two spaces) over the
 /// scripted `options`. It goes through the config loader, so a `backends.pool` key derives its pool as a host home does.
 fn home_config(stack: &Stack, options: &[BackendOption], backends: &str) -> anyhow::Result<CharlieBotConfig> {
   let home = stack.home.path();
   let yaml = format!(
-    "server:\n  host: 127.0.0.1\n  port: 18650\npaths:\n  workspace_dirs: []\n  worktree_dir: {}\n  scratch_dir: {}\nbackends:\n{backends}  options:\n{}",
+    "{HOME_SERVER_SECTION}paths:\n  workspace_dirs: []\n  worktree_dir: {}\n  scratch_dir: {}\nbackends:\n{backends}  options:\n{}",
     home.join("worktrees").display(),
     home.join("scripts").display(),
     option_entries(options),

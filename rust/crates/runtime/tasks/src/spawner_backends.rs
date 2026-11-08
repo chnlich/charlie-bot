@@ -298,10 +298,13 @@ pub async fn select_verify_backend(
     cfg,
     &selector,
     class,
-    &session_backend,
-    session_model.as_deref(),
-    tried_backends,
-    &HashSet::new(),
+    crate::review::ReviewScope {
+      route: None,
+      worker_backend: &session_backend,
+      worker_model: session_model.as_deref(),
+      tried_backends,
+      used_backends: &HashSet::new(),
+    },
   )
 }
 

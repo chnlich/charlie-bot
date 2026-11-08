@@ -419,10 +419,13 @@ async fn reviewer_avoids_every_member_the_worker_node_used() -> anyhow::Result<(
     &stack.cfg,
     &pool.selector(&stack.cfg),
     CallClass::Review,
-    "fake",
-    Some("fake-model"),
-    &[],
-    &used,
+    review::ReviewScope {
+      route: None,
+      worker_backend: "fake",
+      worker_model: Some("fake-model"),
+      tried_backends: &[],
+      used_backends: &used,
+    },
   )?;
   assert_eq!(selection, Some(("fake3".to_string(), Some("fake3-model".to_string()), vec!["fake3".to_string()])));
   Ok(())
@@ -447,10 +450,13 @@ async fn reviewer_never_falls_back_to_a_member_the_worker_node_used() -> anyhow:
       &stack.cfg,
       &pool.selector(&stack.cfg),
       CallClass::Review,
-      "fake",
-      Some("fake-model"),
-      &[],
-      &used
+      review::ReviewScope {
+        route: None,
+        worker_backend: "fake",
+        worker_model: Some("fake-model"),
+        tried_backends: &[],
+        used_backends: &used,
+      }
     )?
     .is_none()
   );
@@ -459,10 +465,13 @@ async fn reviewer_never_falls_back_to_a_member_the_worker_node_used() -> anyhow:
       &stack.cfg,
       &pool.selector(&stack.cfg),
       CallClass::Review,
-      "fake",
-      Some("fake-model"),
-      &[],
-      &HashSet::from(["fake".to_string(), "fake2".to_string()]),
+      review::ReviewScope {
+        route: None,
+        worker_backend: "fake",
+        worker_model: Some("fake-model"),
+        tried_backends: &[],
+        used_backends: &HashSet::from(["fake".to_string(), "fake2".to_string()]),
+      },
     )?
     .is_none()
   );
@@ -484,10 +493,13 @@ async fn check_without_used_members_keeps_the_session_backend_fallback() -> anyh
     &stack.cfg,
     &selector,
     CallClass::Verify,
-    "fake",
-    Some("fake-model"),
-    &tried,
-    &HashSet::new(),
+    review::ReviewScope {
+      route: None,
+      worker_backend: "fake",
+      worker_model: Some("fake-model"),
+      tried_backends: &tried,
+      used_backends: &HashSet::new(),
+    },
   )?;
   assert_eq!(
     selection,
@@ -506,20 +518,26 @@ async fn empty_pool_reuses_the_worker_backend_on_every_attempt() -> anyhow::Resu
     &stack.cfg,
     &selector,
     CallClass::Review,
-    "fake",
-    Some("fake-model"),
-    &[],
-    &HashSet::new(),
+    review::ReviewScope {
+      route: None,
+      worker_backend: "fake",
+      worker_model: Some("fake-model"),
+      tried_backends: &[],
+      used_backends: &HashSet::new(),
+    },
   )?
   .expect("an empty pool falls back to the worker backend");
   let second = review::select_reviewer_backend(
     &stack.cfg,
     &selector,
     CallClass::Review,
-    "fake",
-    Some("fake-model"),
-    &first.2,
-    &HashSet::from(["fake".to_string()]),
+    review::ReviewScope {
+      route: None,
+      worker_backend: "fake",
+      worker_model: Some("fake-model"),
+      tried_backends: &first.2,
+      used_backends: &HashSet::from(["fake".to_string()]),
+    },
   )?
   .expect("an empty pool keeps the legacy worker-backend fallback on retries");
   assert_eq!(first.0, "fake");
@@ -684,7 +702,7 @@ async fn review_launch_builds_its_task_context_and_managed_snapshot() -> anyhow:
   Ok(())
 }
 
-/// The reviewer follows the worker's route and skips the backend that ran the work.
+/// The reviewer follows the worker's route and skips the backend that ran the work, while `calls.review` is unset.
 #[tokio::test]
 #[ignore = "integration"]
 async fn reviewer_reuses_the_worker_route_and_avoids_its_backend() -> anyhow::Result<()> {
@@ -698,6 +716,9 @@ async fn reviewer_reuses_the_worker_route_and_avoids_its_backend() -> anyhow::Re
     vec!["fake2".to_string(), "fake3".to_string()],
   )
   .await?;
+  let mut cfg = stack.cfg.as_ref().clone();
+  cfg.backends.calls = Default::default();
+  stack.replace_config(cfg)?;
   set_access_key(&stack)?;
   stack.dispatch.set_executor(None);
   let worker =

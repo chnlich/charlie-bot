@@ -1161,6 +1161,16 @@ const LIGHT_POOL_BACKENDS: &str = "  pools:\n    - {id: light, label: Light, rul
 const AUTO_VERIFY_BACKENDS: &str =
   "  pools:\n    - {id: auto, label: Auto, rule: rotate, members: [fake, fake2, fake3]}\n  calls:\n    verify: auto\n";
 
+/// The `backends` of a home with a work pool (`fake`, `fake2`) and a disjoint review pool (`fake3`, `fake4`), and
+/// `calls.review` naming the review pool.
+const SPLIT_POOL_BACKENDS: &str = "  pools:\n    - {id: workpool, label: Work, rule: rotate, members: [fake, fake2]}\n    - {id: reviewpool, label: Review, rule: rotate, members: [fake3, fake4]}\n  calls:\n    review: reviewpool\n";
+
+/// The `backends` of a home whose review pool holds `fake`, the first work-pool member, beside `fake3`.
+const OVERLAPPING_POOL_BACKENDS: &str = "  pools:\n    - {id: workpool, label: Work, rule: rotate, members: [fake, fake2]}\n    - {id: reviewpool, label: Review, rule: rotate, members: [fake, fake3]}\n  calls:\n    review: reviewpool\n";
+
+/// The `backends` of a home with one work pool and no `calls.review` key.
+const ROUTE_ONLY_BACKENDS: &str = "  pools:\n    - {id: workpool, label: Work, rule: rotate, members: [fake, fake2]}\n";
+
 /// A router whose `run_on: light` answers the pool `light`: the routine delegation's work run launches on one member
 /// of `light`.
 #[tokio::test]
@@ -1269,6 +1279,87 @@ async fn wait_for_review_of(stack: &Stack, session_id: &str, work_run_id: &str) 
     anyhow::ensure!(std::time::Instant::now() < deadline, "work run {work_run_id} did not register its review");
     tokio::time::sleep(Duration::from_millis(20)).await;
   }
+}
+
+/// The body of a repo-backed implement delegation under `manager_id`.
+fn implement_body(manager_id: &str, repo: &Path) -> Value {
+  json!({
+    "session_id": manager_id,
+    "description": "add a marker file",
+    "task_type": "implement",
+    "repo_path": repo.display().to_string(),
+    "base_branch": "main",
+  })
+}
+
+/// A routed work run whose route names the work pool while `calls.review` names a disjoint review pool: the review
+/// takes a member of the review pool, never the route's pool.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_routed_work_run_reviews_on_the_calls_review_pool() -> anyhow::Result<()> {
+  let dir = tempfile::tempdir()?;
+  let scripts = Scripts::new(vec![result_script("implemented"), result_script("review ok")]);
+  let options = ["fake", "fake2", "fake3", "fake4"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  let cfg = home_config(&stack, &options, SPLIT_POOL_BACKENDS)?;
+  let router_dir = tempfile::tempdir()?;
+  install_router_on(&stack, cfg, router_dir.path(), &router_order_body(&["workpool"]), &[])?;
+  let (repo, _origin) = init_repo_with_origin(dir.path())?;
+
+  let (child_id, work) = delegate_and_run(&stack, implement_body(&manager, &repo), &["fake", "fake2"]).await?;
+  let review = wait_for_review_of(&stack, &child_id, &work.id).await?;
+  let review_member = review.backend.clone().unwrap_or_default();
+  assert!(
+    ["fake3", "fake4"].contains(&review_member.as_str()),
+    "the review runs on {review_member:?}, want a member of the calls.review pool"
+  );
+  assert_eq!(stack.wait_terminal(&child_id, &review.id).await?, RunOutcomeKind::Success);
+  Ok(())
+}
+
+/// `calls.review` names a pool that holds the member the work run used: the reviewer is another member of that pool.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_review_pool_holding_the_work_member_reviews_on_its_other_member() -> anyhow::Result<()> {
+  let dir = tempfile::tempdir()?;
+  let scripts = Scripts::new(vec![result_script("implemented"), result_script("review ok")]);
+  let options = ["fake", "fake2", "fake3"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  let cfg = home_config(&stack, &options, OVERLAPPING_POOL_BACKENDS)?;
+  let router_dir = tempfile::tempdir()?;
+  install_router_on(&stack, cfg, router_dir.path(), &router_order_body(&["workpool"]), &[])?;
+  let (repo, _origin) = init_repo_with_origin(dir.path())?;
+
+  let (child_id, work) = delegate_and_run(&stack, implement_body(&manager, &repo), &["fake", "fake2"]).await?;
+  let review = wait_for_review_of(&stack, &child_id, &work.id).await?;
+  assert_eq!(review.backend.as_deref(), Some("fake3"), "the review skips the review pool's copy of the work member");
+  assert_eq!(stack.wait_terminal(&child_id, &review.id).await?, RunOutcomeKind::Success);
+  Ok(())
+}
+
+/// With `calls.review` unset, a routed work run's review keeps the route's pool: another member of it.
+#[tokio::test]
+#[ignore = "integration"]
+async fn an_unset_calls_review_reviews_on_the_routes_pool() -> anyhow::Result<()> {
+  let dir = tempfile::tempdir()?;
+  let scripts = Scripts::new(vec![result_script("implemented"), result_script("review ok")]);
+  let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  let cfg = home_config(&stack, &options, ROUTE_ONLY_BACKENDS)?;
+  let router_dir = tempfile::tempdir()?;
+  install_router_on(&stack, cfg, router_dir.path(), &router_order_body(&["workpool"]), &[])?;
+  let (repo, _origin) = init_repo_with_origin(dir.path())?;
+
+  let (child_id, work) = delegate_and_run(&stack, implement_body(&manager, &repo), &["fake", "fake2"]).await?;
+  let review = wait_for_review_of(&stack, &child_id, &work.id).await?;
+  let review_member = review.backend.clone().unwrap_or_default();
+  let work_member = work.backend.clone().unwrap_or_default();
+  assert!(
+    ["fake", "fake2"].contains(&review_member.as_str()) && review_member != work_member,
+    "the review runs on {review_member:?}, want the route pool's member other than the work run's {work_member:?}"
+  );
+  assert_eq!(stack.wait_terminal(&child_id, &review.id).await?, RunOutcomeKind::Success);
+  Ok(())
 }
 
 /// Cooling route: the routed option is cooling, so the default path runs the work on the pool and the delegation still

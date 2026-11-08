@@ -1820,38 +1820,19 @@ impl TaskExecutionAdapter {
       .filter(|value| !value.is_null())
       .map(|value| serde_json::from_value::<backend_pool::BackendRoute>(value.clone()))
       .transpose()?;
-    let routed_selection = if let Some(route) = route.filter(|route| !route.backends.is_empty()) {
-      let mut excluded = vec![work_run.backend.clone().unwrap_or_default()];
-      excluded.extend(used_backends.iter().cloned());
-      excluded.extend(tried_backends.iter().cloned());
-      // A route that names a pool leaves the member to that pool; a route of options ids is ordered by its ids.
-      let picked = match route.backends.iter().find(|backend| cfg.backends.pool(backend).is_some()) {
-        Some(route_pool_id) => selector.select(route_pool_id, &excluded)?,
-        None => selector.ordered(&route.backends, &excluded)?,
-      };
-      match picked {
-        Some(option) => {
-          let option = spawner_backends::resolve_backend_option(&cfg, &option.id, Some(&option.model))?;
-          Some((option.id, Some(option.model), tried_backends.clone()))
-        }
-        None => None,
-      }
-    } else {
-      None
-    };
-    let selection = match routed_selection {
-      Some(selection) => Some(selection),
-      None => review::select_reviewer_backend(
-        &cfg,
-        &selector,
-        CallClass::Review,
-        work_run.backend.as_deref().unwrap_or_default(),
-        work_run.model.as_deref(),
-        &tried_backends,
-        &used_backends,
-      )?,
-    };
-    let Some((backend, model, _tried)) = selection else {
+    let Some((backend, model, _tried)) = review::select_reviewer_backend(
+      &cfg,
+      &selector,
+      CallClass::Review,
+      review::ReviewScope {
+        route: route.as_ref(),
+        worker_backend: work_run.backend.as_deref().unwrap_or_default(),
+        worker_model: work_run.model.as_deref(),
+        tried_backends: &tried_backends,
+        used_backends: &used_backends,
+      },
+    )?
+    else {
       tracing::warn!(target: "charliebot_tasks", session_id, work_run = %work_run.id, "reviewer_backends_exhausted");
       return Ok(None);
     };

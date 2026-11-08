@@ -39,6 +39,7 @@ shutdown and re-attachment into server lifespan.
 - `review::worker_error_from_events_log`
 - `review::extract_review_context`
 - `review::select_reviewer_backend`
+- `review::ReviewScope`
 - `review::ReviewerBackendSelection`
 - `task_sessions::create_retry`
 - `session_anchors::manager_context_reset_note` and `manager_switch_reset_note`

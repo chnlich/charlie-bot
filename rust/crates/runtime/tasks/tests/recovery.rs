@@ -21,7 +21,9 @@ use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use charliebot_agents::model_pool;
 use charliebot_agents::transport::identity;
-use charliebot_core::config::{BackendOption, CharlieBotConfig, PoolBilling, PoolConfig, PoolMember, PoolRule};
+use charliebot_core::config::{
+  BackendOption, CallClass, CallTarget, CharlieBotConfig, PoolBilling, PoolConfig, PoolMember, PoolRule,
+};
 use charliebot_core::event_types;
 use charliebot_registry::backend::{
   AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle, Translate,
@@ -1729,6 +1731,68 @@ async fn recovery_after_a_failed_review_picks_the_next_preference_backend() -> a
   assert_eq!(retry.backend.as_deref(), Some("fake3"));
   assert_eq!(retry.review_of_run_id.as_deref(), Some("run-work"));
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &retry.id).await?, RunOutcomeKind::Success);
+  Ok(())
+}
+
+/// A review re-run after a restart keeps the `calls.review` target: the routed worker's first review ran on a
+/// review-pool member, and the re-run stays in that pool instead of moving to the route's pool.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_review_rerun_after_restart_keeps_the_calls_review_pool() -> anyhow::Result<()> {
+  let repo = SyntheticRepo::create()?;
+  let stack = Stack::start_with(
+    vec![
+      script_option("fake", "exit 0"),
+      script_option("fake2", "exit 0"),
+      script_option("fake3", &result_script("review ok")),
+      script_option("fake4", &result_script("review ok")),
+    ],
+    vec!["fake2".to_string()],
+  )
+  .await?;
+  test_access_key(&stack)?;
+  stack.replace_config(split_pool_config(stack.cfg.as_ref().clone()))?;
+  stack.dispatch.set_executor(None);
+  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
+  set_route(&stack, &worker.id, &["workpool"]).await?;
+  let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-work")?;
+  finished_work_run(&stack, &worker.id, "run-work", &repo, &branch, &worktree, None).await?;
+  review_of(&stack, &worker.id, "review-failed", "run-work", RunOutcomeKind::Failed, "fake3").await?;
+  let guard = ProcessGroupGuard::new();
+
+  stack.node_pass(&worker.id).await?;
+  let reviews = run_ids_of_kind(&stack, &worker.id, RunKind::Review)?;
+  assert_eq!(reviews.len(), 2);
+  let retry_id = reviews.iter().find(|run_id| run_id.as_str() != "review-failed").context("retry is registered")?;
+  let retry = stack.store().read_run_sync(&worker.id, retry_id)?.expect("retry record is readable");
+  assert_eq!(retry.backend.as_deref(), Some("fake4"), "the re-run stays in the calls.review pool");
+  assert_eq!(retry.review_of_run_id.as_deref(), Some("run-work"));
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &retry.id).await?, RunOutcomeKind::Success);
+  Ok(())
+}
+
+/// A copy of `base` with a work pool (`fake`, `fake2`), a disjoint review pool (`fake3`, `fake4`), and
+/// `calls.review` naming the review pool.
+fn split_pool_config(mut cfg: CharlieBotConfig) -> CharlieBotConfig {
+  let pool = |id: &str, members: &[&str]| PoolConfig {
+    id: id.to_string(),
+    label: id.to_string(),
+    rule: PoolRule::Rotate,
+    members: members.iter().map(|backend| PoolMember { backend: backend.to_string() }).collect(),
+  };
+  cfg.backends.pools = vec![pool("workpool", &["fake", "fake2"]), pool("reviewpool", &["fake3", "fake4"])];
+  cfg.backends.calls = [(CallClass::Review, CallTarget::Backend("reviewpool".to_string()))].into_iter().collect();
+  cfg
+}
+
+/// Record `backends` as the session's route, as a delegation the router answered leaves it.
+async fn set_route(stack: &Stack, session_id: &str, backends: &[&str]) -> anyhow::Result<()> {
+  let fields = Map::from_iter([("route".to_string(), json!({"backends": backends, "reason": "synthetic route"}))]);
+  let guard = stack.store().control_lock().await;
+  stack
+    .store()
+    .update_task_slot_fields_locked(&guard, session_id, charliebot_agents::backend_pool::METADATA_OWNER, fields)
+    .await?;
   Ok(())
 }
 

@@ -363,7 +363,7 @@ mod tests {
   use charliebot_registry::backend::{ContextStateFn, EmitFn, RecordAccountFn, RunningTurnsFn};
   use charliebot_store::metadata::TaskProfile;
   use charliebot_store::run_records::RunKind;
-  use tokio::sync::Notify;
+  use tokio::sync::Barrier;
 
   use crate::login_dirs;
 
@@ -432,19 +432,8 @@ mod tests {
       .unwrap();
   }
 
-  async fn both_placements_reach_hook(
-    arrivals: Arc<AtomicUsize>,
-    notify: Arc<Notify>,
-    seen: Arc<std::sync::Mutex<Vec<usize>>>,
-  ) {
-    let notified = notify.notified();
-    if arrivals.fetch_add(1, Ordering::SeqCst) == 1 {
-      notify.notify_waiters();
-    }
-    if arrivals.load(Ordering::SeqCst) < 2 {
-      let _ = tokio::time::timeout(Duration::from_millis(200), notified).await;
-    }
-    seen.lock().unwrap().push(arrivals.load(Ordering::SeqCst));
+  async fn record_hook_entry(arrivals: Arc<AtomicUsize>, seen: Arc<std::sync::Mutex<Vec<usize>>>) {
+    seen.lock().unwrap().push(arrivals.fetch_add(1, Ordering::SeqCst) + 1);
   }
 
   #[test]
@@ -573,28 +562,26 @@ mod tests {
     ctx_a.session_meta = Arc::clone(&metadata_a);
     ctx_b.session_meta = Arc::clone(&metadata_b);
     let arrivals = Arc::new(AtomicUsize::new(0));
-    let notify = Arc::new(Notify::new());
+    let barrier = Arc::new(Barrier::new(2));
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let placement_a = {
       let state = Arc::clone(&state);
       let arrivals = Arc::clone(&arrivals);
-      let notify = Arc::clone(&notify);
+      let barrier = Arc::clone(&barrier);
       let seen = Arc::clone(&seen);
       tokio::spawn(async move {
-        place_turn_with_hook(&state, &ctx_a, None, None, None, None, both_placements_reach_hook(arrivals, notify, seen))
-          .await
-          .unwrap()
+        barrier.wait().await;
+        place_turn_with_hook(&state, &ctx_a, None, None, None, None, record_hook_entry(arrivals, seen)).await.unwrap()
       })
     };
     let placement_b = {
       let state = Arc::clone(&state);
       let arrivals = Arc::clone(&arrivals);
-      let notify = Arc::clone(&notify);
+      let barrier = Arc::clone(&barrier);
       let seen = Arc::clone(&seen);
       tokio::spawn(async move {
-        place_turn_with_hook(&state, &ctx_b, None, None, None, None, both_placements_reach_hook(arrivals, notify, seen))
-          .await
-          .unwrap()
+        barrier.wait().await;
+        place_turn_with_hook(&state, &ctx_b, None, None, None, None, record_hook_entry(arrivals, seen)).await.unwrap()
       })
     };
     let account_a = placement_a.await.unwrap();

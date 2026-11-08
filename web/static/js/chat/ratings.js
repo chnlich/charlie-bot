@@ -81,7 +81,7 @@ async function initializeRoundRatings() {
   if (!SESSION_ID) return;
   const sessionId = SESSION_ID;
   try {
-    const res = await fetch('/api/sessions/' + sessionId);
+    const res = await fetch('/api/sessions/' + sessionId, {signal: viewRequestSignal()});
     if (!res.ok) throw new Error(`Load round ratings failed: ${res.status}`);
     const session = await res.json();
     if (SESSION_ID !== sessionId) return;

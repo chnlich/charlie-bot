@@ -10,6 +10,7 @@ mod route_support;
 mod routes;
 mod search;
 mod sidebar;
+mod status_delta;
 #[cfg(test)]
 mod test_support;
 mod tree;

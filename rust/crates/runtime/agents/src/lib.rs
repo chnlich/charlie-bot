@@ -1,6 +1,8 @@
 //! Agent process transport, backend implementations, launch planning, and environment setup.
 
 pub mod agent_environment;
+pub mod auto_backend;
+pub mod backend_availability;
 pub mod backend_pool;
 pub mod backend_types;
 pub mod cli_base;
@@ -25,5 +27,6 @@ pub use one_shot::{agent_one_shot_text, one_shot_text};
 pub fn register_runtime(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.pre_recovery_step("session_cgroups", agent_environment::session_cgroup_step)?;
   registry.pre_recovery_step("backend_pool", backend_pool::pre_recovery_step)?;
-  registry.child_env("local_work_guard", local_work_guard::child_env)
+  registry.child_env("local_work_guard", local_work_guard::child_env)?;
+  auto_backend::register(registry)
 }

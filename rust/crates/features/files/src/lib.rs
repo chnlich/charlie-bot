@@ -16,12 +16,14 @@ use axum::extract::{Path, Request, State};
 use axum::http::request::Parts;
 use axum::response::Response;
 use charliebot_compat::mimetypes::MimeTypes;
+use charliebot_compat::mimetypes_table::TEXT_PLAIN;
 use charliebot_compat::responses;
 use charliebot_compat::routing::get_and_head;
 use charliebot_compat::static_files::{self, StaticDirectory};
 use charliebot_core::paths;
 use charliebot_registry::pages::HomeCard;
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
+use charliebot_store::run_logs;
 use http::{HeaderMap, Method, StatusCode, header};
 use listing::ListingError;
 use serde_json::json;
@@ -93,7 +95,8 @@ fn answer_from_disk(path: &str, method: &Method, headers: &HeaderMap) -> Respons
   match listing::dir_listing_page(&fs_path, &url_prefix) {
     Ok(Some(page)) => return responses::html(page),
     Ok(None) => {}
-    Err(ListingError::Missing) => return not_found(),
+    // A missing path is 404 unless the compaction stored a run log here as `<name>.zst`.
+    Err(ListingError::Missing) => return answer_compressed_run_log(&fs_path, method).unwrap_or_else(not_found),
     Err(ListingError::PermissionDenied) => return permission_denied(),
     Err(ListingError::Failed { kind, detail }) => return responses::internal_error(kind, detail),
   }
@@ -118,6 +121,26 @@ fn answer_file(fs_path: &FsPath, method: &Method, headers: &HeaderMap) -> Respon
   headers.remove(header::IF_NONE_MATCH);
   headers.remove(header::IF_MODIFIED_SINCE);
   static_files::serve(&StaticDirectory::new(PathBuf::from("/")), &MIME_TYPES, route_path, method, &headers)
+}
+
+/// A run log whose plain file the compaction replaced with `<name>.zst`: the decompressed bytes answer the plain
+/// path an evidence link names. Any other missing path, and an unreadable or empty log, answers `None` for the 404.
+fn answer_compressed_run_log(fs_path: &FsPath, method: &Method) -> Option<Response> {
+  if !run_logs::is_run_log_name(fs_path.file_name()?.to_str()?) {
+    return None;
+  }
+  let bytes = run_logs::read_bytes(fs_path).ok().flatten()?;
+  let guessed = MIME_TYPES.guess_type(&paths::display(fs_path)).unwrap_or(TEXT_PLAIN);
+  let content_type =
+    if guessed.starts_with("text/") { format!("{guessed}; charset=utf-8") } else { guessed.to_string() };
+  let size = bytes.len() as u64;
+  let body = if method == Method::HEAD { axum::body::Body::empty() } else { axum::body::Body::from(bytes.to_vec()) };
+  Response::builder()
+    .status(StatusCode::OK)
+    .header(header::CONTENT_TYPE, content_type)
+    .header(header::CONTENT_LENGTH, size)
+    .body(body)
+    .ok()
 }
 
 fn not_found() -> Response {
@@ -280,6 +303,36 @@ mod tests {
     let under_file = below(&dir, "plain.txt/gone.txt");
     let (status, body) = answer_text(&features, &get, &under_file).await;
     assert_eq!((status, body.as_str()), (StatusCode::NOT_FOUND, r#"{"detail":"Not found"}"#));
+  }
+
+  /// A run log the compaction stored as `<name>.zst` answers the plain path an evidence link names, with the
+  /// decompressed content.
+  #[tokio::test]
+  async fn a_compressed_run_log_answers_its_plain_path_with_the_decompressed_content() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let plain = dir.path().join("events.jsonl");
+    let content = "{\"type\": \"result\"}\n{\"type\": \"assistant\"}\n";
+    let compressed = run_logs::compressed_path(&plain);
+    fs::write(&compressed, zstd::stream::encode_all(content.as_bytes(), 3).expect("the content compresses"))
+      .expect("the compressed log writes");
+    let (_home, features) = test_features(Registry::new());
+    let path = below(&dir, "events.jsonl");
+    let (status, body) = answer_text(&features, &parts(Method::GET, &[]), &path).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, content));
+    let head = answer(&features, &parts(Method::HEAD, &[]), &path).await;
+    assert_eq!(head.status(), StatusCode::OK);
+  }
+
+  /// A compressed file that is not a run log keeps the 404 its missing plain path answers.
+  #[tokio::test]
+  async fn a_compressed_file_outside_the_run_logs_keeps_its_plain_path_a_404() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let plain = dir.path().join("notes.txt");
+    let content = "notes";
+    fs::write(run_logs::compressed_path(&plain), zstd::stream::encode_all(content.as_bytes(), 3).unwrap()).unwrap();
+    let (_home, features) = test_features(Registry::new());
+    let (status, _) = answer_text(&features, &parts(Method::GET, &[]), &below(&dir, "notes.txt")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
   }
 
   #[tokio::test]

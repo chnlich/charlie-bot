@@ -19,12 +19,11 @@ use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 
+use charliebot_core::home::boot_skip_proof_path;
 use serde_json::{Value, json};
 
 /// The format version of the proof file. A file of another version serves no node.
 const SKIP_PROOF_VERSION: u64 = 1;
-/// The proof's home-relative path, beside the boot marker.
-pub(crate) const SKIP_PROOF_PATH: &str = "state/boot_skip_proof.json";
 /// The separator inside one row. Session ids and backend names hold no whitespace other than this separator's bytes.
 const FIELD_SEPARATOR: char = '\t';
 
@@ -90,7 +89,7 @@ impl SkipProof {
   /// The proof a home holds, or an empty proof when the file is absent or not a proof of this version. An unreadable
   /// file other than an absence is logged rather than failing the boot: the proof only saves work.
   pub(crate) fn read(home: &Path) -> Self {
-    let path = home.join(SKIP_PROOF_PATH);
+    let path = boot_skip_proof_path(home);
     let raw = match std::fs::read(&path) {
       Ok(raw) => raw,
       Err(error) if error.kind() == io::ErrorKind::NotFound => return Self::default(),
@@ -118,7 +117,7 @@ impl SkipProof {
 /// Write the proof the pass left, holding one row per skipped node. The file is startup-only, so the write takes no
 /// sync. A write failure leaves the previous proof in place, whose rows the next boot validates by identity anyway.
 pub(crate) fn write(home: &Path, rows: &[SkipProofRow]) -> io::Result<()> {
-  let path = home.join(SKIP_PROOF_PATH);
+  let path = boot_skip_proof_path(home);
   if let Some(parent) = path.parent() {
     std::fs::create_dir_all(parent)?;
   }
@@ -230,7 +229,7 @@ mod tests {
     let source = row("open-none", None).source;
     assert_eq!(SkipProof::read(home.path()).served("open-none", &source), None, "an absent proof serves nothing");
 
-    let path = home.path().join(SKIP_PROOF_PATH);
+    let path = boot_skip_proof_path(home.path());
     std::fs::create_dir_all(path.parent().expect("the proof path has a parent")).expect("the state directory exists");
     std::fs::write(&path, b"{\"version\": 1}\nopen-none\t12\t34\t56\n").expect("the torn proof writes");
     assert_eq!(SkipProof::read(home.path()).served("open-none", &source), None, "a torn row serves nothing");

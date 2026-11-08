@@ -55,6 +55,7 @@ printf '%s\n' "fake_server_ready"
 "#;
 
 #[test]
+#[ignore = "integration"]
 fn launcher_tee_outlives_sigint_and_records_the_exit_line() {
   let sandbox = Sandbox::new();
   sandbox.install_systemd_stubs();
@@ -98,8 +99,9 @@ fn launcher_tee_outlives_sigint_and_records_the_exit_line() {
 /// The launcher's whole group ends with its test process, which is killed here with SIGKILL: no guard runs, and the
 /// watchdog kills the group when the pipe's write end closes.
 #[test]
+#[ignore = "integration"]
 fn the_launcher_group_ends_with_a_killed_test_process() {
-  let mut held_test = hold::HeldTest::start("hold_the_launcher_group_for_the_kill_check");
+  let mut held_test = hold::HeldTest::start("hold_the_launcher_group_subprocess_entry");
   let text = held_test.recorded();
   let field = |name: &str| {
     text
@@ -130,9 +132,10 @@ fn the_launcher_group_ends_with_a_killed_test_process() {
 }
 
 /// Started by `the_launcher_group_ends_with_a_killed_test_process` in a second copy of this binary. Without
-/// `LEAK_CHECK_HOLD` it does nothing, so an ordinary run of this file passes it.
+/// `LEAK_CHECK_HOLD` it does nothing; the ignore attribute keeps an ordinary run from holding.
 #[test]
-fn hold_the_launcher_group_for_the_kill_check() {
+#[ignore = "held by a kill check in a second copy of this binary"]
+fn hold_the_launcher_group_subprocess_entry() {
   let Some(marker) = hold::marker() else { return };
   let sandbox = Sandbox::new();
   sandbox.install_systemd_stubs();
@@ -160,6 +163,7 @@ fn remove_killed_test_root(root: &Path) {
 }
 
 #[test]
+#[ignore = "integration"]
 fn launcher_without_current_refuses_to_start_and_names_the_missing_release() {
   let sandbox = Sandbox::new();
   sandbox.install_systemd_stubs();
@@ -173,6 +177,7 @@ fn launcher_without_current_refuses_to_start_and_names_the_missing_release() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn launcher_with_current_runs_the_release_binary_with_the_repo_root() {
   let sandbox = Sandbox::new();
   sandbox.install_systemd_stubs();
@@ -197,6 +202,7 @@ fn launcher_with_current_runs_the_release_binary_with_the_repo_root() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn launcher_with_current_stops_when_check_config_fails_and_names_the_rollback() {
   let sandbox = Sandbox::new();
   sandbox.install_systemd_stubs();
@@ -213,6 +219,7 @@ fn launcher_with_current_stops_when_check_config_fails_and_names_the_rollback() 
 }
 
 #[test]
+#[ignore = "integration"]
 fn preflight_accepts_limits_that_match_the_unit_files() {
   let sandbox = Sandbox::new();
   let launcher = stash_launcher(&sandbox);
@@ -224,6 +231,7 @@ fn preflight_accepts_limits_that_match_the_unit_files() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn preflight_rejects_a_nonzero_swap_limit() {
   let sandbox = Sandbox::new();
   let launcher = stash_launcher(&sandbox);
@@ -239,6 +247,7 @@ fn preflight_rejects_a_nonzero_swap_limit() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn preflight_reads_a_unit_file_whose_last_line_has_no_newline() {
   let sandbox = Sandbox::new();
   let launcher = stash_launcher(&sandbox);
@@ -252,6 +261,7 @@ fn preflight_reads_a_unit_file_whose_last_line_has_no_newline() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn percentage_limit_rounds_down_to_whole_pages() {
   let sandbox = Sandbox::new();
   let script = harness::repo_root().join("scripts/start-server.sh");
@@ -264,6 +274,7 @@ fn percentage_limit_rounds_down_to_whole_pages() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn preflight_rejects_a_slice_limit_that_differs_from_its_unit_file() {
   let sandbox = Sandbox::new();
   let launcher = stash_launcher(&sandbox);
@@ -280,6 +291,7 @@ fn preflight_rejects_a_slice_limit_that_differs_from_its_unit_file() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn preflight_rejects_a_missing_required_unit_limit() {
   let sandbox = Sandbox::new();
   let launcher = stash_launcher(&sandbox);
@@ -295,6 +307,7 @@ fn preflight_rejects_a_missing_required_unit_limit() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn preflight_rejects_a_cpu_weight_that_differs_from_its_unit_file() {
   let sandbox = Sandbox::new();
   let launcher = stash_launcher(&sandbox);
@@ -308,6 +321,7 @@ fn preflight_rejects_a_cpu_weight_that_differs_from_its_unit_file() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn preflight_rejects_an_io_weight_that_differs_from_its_unit_file() {
   let sandbox = Sandbox::new();
   let launcher = stash_launcher(&sandbox);
@@ -321,6 +335,7 @@ fn preflight_rejects_an_io_weight_that_differs_from_its_unit_file() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn preflight_rejects_a_unit_file_without_a_required_weight() {
   let sandbox = Sandbox::new();
   let launcher = stash_launcher(&sandbox);
@@ -334,6 +349,7 @@ fn preflight_rejects_a_unit_file_without_a_required_weight() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn preflight_rejects_an_unset_live_weight() {
   let sandbox = Sandbox::new();
   let launcher = stash_launcher(&sandbox);
@@ -351,6 +367,7 @@ fn preflight_rejects_an_unset_live_weight() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn preflight_rejects_an_inactive_slice() {
   let sandbox = Sandbox::new();
   let launcher = stash_launcher(&sandbox);
@@ -365,6 +382,7 @@ fn preflight_rejects_an_inactive_slice() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn launcher_preflight_checks_slices_and_records_a_trial_scope() {
   let sandbox = Sandbox::new();
   let launcher = stash_launcher(&sandbox);
@@ -393,6 +411,7 @@ fn launcher_preflight_checks_slices_and_records_a_trial_scope() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn launcher_preflight_exits_1_when_systemd_refuses_the_trial_scope() {
   let sandbox = Sandbox::new();
   let launcher = stash_launcher(&sandbox);
@@ -409,6 +428,7 @@ fn launcher_preflight_exits_1_when_systemd_refuses_the_trial_scope() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn launcher_preflight_exits_1_when_a_slice_limit_differs() {
   let sandbox = Sandbox::new();
   let launcher = stash_launcher(&sandbox);
@@ -425,6 +445,7 @@ fn launcher_preflight_exits_1_when_a_slice_limit_differs() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn launcher_rejects_an_unknown_argument_before_writing_a_server_log() {
   let sandbox = Sandbox::new();
   let launcher = harness::repo_root().join("scripts/start-server.sh");
@@ -441,16 +462,19 @@ fn launcher_rejects_an_unknown_argument_before_writing_a_server_log() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn shell_entry_points_parse_start_server() {
   assert_shell_entry_point_parses("start-server.sh");
 }
 
 #[test]
+#[ignore = "integration"]
 fn shell_entry_points_parse_setup() {
   assert_shell_entry_point_parses("setup.sh");
 }
 
 #[test]
+#[ignore = "integration"]
 fn shell_entry_points_parse_trial() {
   assert_shell_entry_point_parses("release/trial.sh");
 }

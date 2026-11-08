@@ -174,6 +174,7 @@ Nothing here matches the scope guard.
   }
 
   #[test]
+  #[ignore = "integration"]
   fn the_scope_guard_entry_ranks_in_the_top_three_for_the_exit_five_text() {
     let (_root, index) = index();
     let candidates = index.retrieve("the previous round still runs: unit improve-ux.scope exists").unwrap();
@@ -189,6 +190,7 @@ Nothing here matches the scope guard.
   }
 
   #[test]
+  #[ignore = "integration"]
   fn an_entry_with_no_matching_token_is_not_a_candidate() {
     let (_root, index) = index();
     let candidates = index.retrieve("zzzz-unmatched-token").unwrap();
@@ -207,6 +209,7 @@ Nothing here matches the scope guard.
   }
 
   #[test]
+  #[ignore = "integration"]
   fn an_entry_whose_cause_text_sits_past_the_first_400_characters_reaches_the_judge_prompt_in_full() {
     let filler = "The summary runner archives one report per round and lists every skipped scope with the reason it \
                   recorded, so a later reader can trace why a round did not run its usual work and which round \

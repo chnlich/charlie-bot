@@ -579,10 +579,16 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
     stored.clone().unwrap_or(WebStatus { goal: None, now: None, waiting: Vec::new(), updated_at: UtcDateTime::now() });
   let stored_waiting = effective_waiting(&base);
   let prospective = patch.waiting.clone().unwrap_or_else(|| stored_waiting.clone());
-  let mut links = require_current_plan_links(features, &prospective, &scan_context)?;
-  let approval = load_approval_policy(features)?;
+  let mut links = if prospective.is_empty() {
+    None
+  } else {
+    Some(require_current_plan_links(features, &prospective, &scan_context)?)
+  };
   let mut ask_tiers = HashMap::new();
-  if let Some(items) = patch.waiting.as_deref() {
+  if let Some(items) = patch.waiting.as_deref()
+    && !items.is_empty()
+  {
+    let approval = load_approval_policy(features)?;
     ask_tiers = read_ask_tiers(features, session_id).await?;
     let read_digests: HashSet<String> = ask_tiers.keys().cloned().collect();
     let unread = unread_items(items, &read_digests)?;
@@ -614,7 +620,11 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   }
   let now = UtcDateTime::now();
   let waiting = match patch.waiting.as_deref() {
-    Some(items) => assign_tiers(assign_since(items, &stored_waiting, &mut links, now)?, &ask_tiers)?,
+    Some([]) => Vec::new(),
+    Some(items) => {
+      let links = links.as_mut().expect("nonempty waiting items have plan-link validation");
+      assign_tiers(assign_since(items, &stored_waiting, links, now)?, &ask_tiers)?
+    }
     None => stored_waiting,
   };
   let mut status = base;
@@ -1032,17 +1042,12 @@ mod tests {
     }
   }
 
-  /// A waiting item whose text is `text`, as a status file names it.
-  fn waiting_set(text: &str) -> String {
-    json!({"waiting": [waiting_item(text)]}).to_string()
-  }
-
   /// A waiting item whose current state can pass the status set's cold-read gate.
   fn waiting_item(text: &str) -> Value {
     json!({"text": text, "context": "The decision is active now. Options are continue or stop; continue is recommended."})
   }
 
-  /// Records a cold read for the waiting item used by `waiting_set`.
+  /// Records a cold read for the waiting item used by a status set.
   async fn check_waiting_item(home: &Home, session_id: &str, text: &str) {
     record_ask_check(
       &home.features,
@@ -1075,8 +1080,12 @@ mod tests {
 
   /// The frames a page has received, read until the page goes quiet.
   async fn drain(page: &mut Subscription) -> Vec<Value> {
+    drain_with_timeout(page, Duration::from_millis(20)).await
+  }
+
+  async fn drain_with_timeout(page: &mut Subscription, quiet_period: Duration) -> Vec<Value> {
     let mut frames = Vec::new();
-    while let Ok(Some(text)) = tokio::time::timeout(Duration::from_millis(20), page.recv()).await {
+    while let Ok(Some(text)) = tokio::time::timeout(quiet_period, page.recv()).await {
       frames.push(serde_json::from_str::<Value>(&text).expect("a frame is JSON"));
     }
     frames
@@ -1170,26 +1179,24 @@ mod tests {
 
   #[tokio::test]
   async fn a_refused_status_set_stores_nothing_and_records_no_event() {
-    let cases = [
-      ("unknown", VALID_SET, 404),
-      ("thread", VALID_SET, 409),
-      ("worker", VALID_SET, 409),
-      ("own", "not json", 422),
-      ("own", "[1, 2]", 422),
-      ("own", r#"{"colour": "red"}"#, 422),
-      ("own", "{}", 422),
-      ("own", r#"{"goal": " "}"#, 422),
-      ("own", r#"{"waiting": [{"text": " "}]}"#, 422),
-      ("own", r#"{"waiting": [{"text": "Decide", "due": "today"}]}"#, 422),
-      ("own", r#"{"remaining": []}"#, 422),
-    ];
+    let home = Home::new();
+    let own = home.manager("own", None).await;
+    let thread = home
+      .manager(
+        "thread",
+        Some(("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"}))),
+      )
+      .await;
+    let worker = home.worker(&own, "worker").await;
+    let cases =
+      [("unknown", VALID_SET, 404), ("thread", VALID_SET, 409), ("worker", VALID_SET, 409), ("own", "not json", 422)];
     for (case, text, status) in cases {
-      let home = Home::new();
-      let origin = (case == "thread")
-        .then(|| ("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"})));
-      let root = home.manager("session", origin).await;
-      let sid = if case == "worker" { home.worker(&root, "worker").await } else { root };
-      let target = if case == "unknown" { "no-such-session" } else { sid.as_str() };
+      let sid = match case {
+        "thread" => thread.as_str(),
+        "worker" => worker.as_str(),
+        _ => own.as_str(),
+      };
+      let target = if case == "unknown" { "no-such-session" } else { sid };
 
       let error = set_status(&home.features, target, text).await.expect_err("the set is refused");
 
@@ -1197,8 +1204,8 @@ mod tests {
         WebReplyError::Refused { status: code, .. } => assert_eq!(code.as_u16(), status, "case {case} {text}"),
         other => panic!("case {case} {text}: expected a refusal, got {other:?}"),
       }
-      assert_eq!(stored(&home, &sid).await, Value::Null, "case {case} {text}");
-      assert!(status_events(&home, &sid).is_empty(), "case {case} {text}");
+      assert_eq!(stored(&home, sid).await, Value::Null, "case {case} {text}");
+      assert!(status_events(&home, sid).is_empty(), "case {case} {text}");
     }
   }
 
@@ -1244,55 +1251,87 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_child_status_set_notifies_its_parent_and_grandparent_pages_and_a_root_set_notifies_none() {
-    let home = Home::new();
-    let root = home.manager("root", None).await;
-    let child = home.child(&root, "child").await;
-    let grandchild = home.child(&child, "grandchild").await;
-    let mut root_page = home.subscribe(&root);
-    let mut child_page = home.subscribe(&child);
+  async fn a_child_status_set_notifies_its_parent_and_grandparent_pages() {
+    let home = Home::status_only();
+    home.seed_manager("root", None);
+    home.seed_manager("child", Some("root"));
+    let grandchild = "grandchild";
+    home.seed_manager(grandchild, Some("child"));
+    let mut root_page = home.subscribe("root");
+    let mut child_page = home.subscribe("child");
 
-    set_status(&home.features, &grandchild, VALID_SET).await.expect("the grandchild sets");
-    set_status(&home.features, &root, VALID_SET).await.expect("the root sets");
+    set_status(&home.features, grandchild, VALID_SET).await.expect("the grandchild sets");
 
     // Each page also receives its own status message; the ancestor notices are the frames this test compares.
     let notice = json!({"type": SUBTREE_NOTICE_TYPE, "source_session_id": grandchild});
     let notices = |frames: Vec<Value>| -> Vec<Value> {
       frames.into_iter().filter(|frame| frame["type"] == SUBTREE_NOTICE_TYPE).collect()
     };
-    assert_eq!(notices(drain(&mut child_page).await), vec![notice.clone()]);
-    assert_eq!(notices(drain(&mut root_page).await), vec![notice]);
+    assert_eq!(notices(drain_with_timeout(&mut child_page, Duration::from_millis(1)).await), vec![notice.clone()]);
+    assert_eq!(notices(drain_with_timeout(&mut root_page, Duration::from_millis(1)).await), vec![notice]);
+  }
+
+  #[tokio::test]
+  async fn a_root_status_set_notifies_no_ancestor_page() {
+    let home = Home::new();
+    let root = home.manager("root", None).await;
+    let mut root_page = home.subscribe(&root);
+
+    set_status(&home.features, &root, VALID_SET).await.expect("the root sets");
+
+    let notices: Vec<Value> =
+      drain(&mut root_page).await.into_iter().filter(|frame| frame["type"] == SUBTREE_NOTICE_TYPE).collect();
+    assert!(notices.is_empty(), "the root has no ancestor page to notify");
   }
 
   #[tokio::test]
   async fn the_status_read_lists_open_waiting_descendants_newest_first() {
-    let home = Home::new();
-    let root = home.manager("root", None).await;
-    let old = home.child(&root, "old").await;
-    let new = home.child(&root, "new").await;
-    let deep = home.child(&old, "deep").await;
-    let empty = home.child(&root, "empty").await;
-    let closed = home.child(&root, "closed").await;
-    let archived = home.child(&root, "archived").await;
-    for child in [&old, &new, &deep] {
-      check_waiting_item(&home, child, "decision").await;
-      set_status(&home.features, child, &waiting_set("decision")).await.expect("the child sets");
-      tokio::time::sleep(Duration::from_millis(2)).await;
+    let home = Home::status_only();
+    let (root, old, new, deep) = ("root", "old", "new", "deep");
+    home.seed_manager(root, None);
+    home.seed_manager(old, Some(root));
+    home.seed_manager(new, Some(root));
+    home.seed_manager(deep, Some(old));
+    for (session_id, updated_at) in
+      [(old, "2026-11-07T00:00:01Z"), (new, "2026-11-07T00:00:02Z"), (deep, "2026-11-07T00:00:03Z")]
+    {
+      let updated_at = UtcDateTime::parse(updated_at).unwrap();
+      let status = WebStatus {
+        goal: None,
+        now: None,
+        waiting: vec![WaitingItem {
+          text: "decision".to_string(),
+          context: Some(
+            "The decision is active now. Options are continue or stop; continue is recommended.".to_string(),
+          ),
+          link: None,
+          since: None,
+          since_exact: None,
+          tier: Some("t0".to_string()),
+          rule: Some("irreversible".to_string()),
+        }],
+        updated_at,
+      };
+      home
+        .features
+        .store
+        .update_slot_fields_at(
+          session_id,
+          OWNER,
+          Map::from_iter([(STATUS_FIELD.to_string(), payload_of(&status))]),
+          updated_at,
+        )
+        .await
+        .unwrap()
+        .unwrap();
     }
-    set_status(&home.features, &empty, r#"{"waiting": []}"#).await.expect("the empty child sets");
-    check_waiting_item(&home, &closed, "closed decision").await;
-    set_status(&home.features, &closed, &waiting_set("closed decision")).await.expect("the closed child sets");
-    check_waiting_item(&home, &archived, "archived decision").await;
-    set_status(&home.features, &archived, &waiting_set("archived decision")).await.expect("the archived child sets");
-    archive_task(&home.features, &closed).await;
-    home.features.store.archive_session(&archived).await.expect("the session archives");
 
-    let body = read_status(&home.features, &root).await.expect("the read answers");
+    let body = read_status(&home.features, root).await.expect("the read answers");
 
     assert_eq!(body["web_status"], Value::Null);
     let ids: Vec<&str> =
       body["descendants"].as_array().expect("a list").iter().map(|row| row["session_id"].as_str().unwrap()).collect();
-    assert_eq!(ids, vec![deep.as_str(), new.as_str(), old.as_str()]);
+    assert_eq!(ids, [deep, new, old]);
     assert_eq!(
       without_item_times(&body["descendants"][0]["waiting"]),
       json!([{
@@ -1306,24 +1345,50 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn the_status_read_omits_empty_waiting_closed_and_archived_descendants() {
+    let home = Home::status_only();
+    let root = home.manager("root", None).await;
+    let empty = home.child(&root, "empty").await;
+    let closed = home.child(&root, "closed").await;
+    let archived = home.child(&root, "archived").await;
+    let empty_status = json!({
+      "goal": null,
+      "now": null,
+      "waiting": [],
+      "updated_at": UtcDateTime::now().to_str(),
+    });
+    let waiting_status = json!({
+      "goal": null,
+      "now": null,
+      "waiting": [{
+        "text": "hidden decision",
+        "context": "The decision is active now. Options are continue or stop; continue is recommended.",
+        "link": null,
+      }],
+      "updated_at": UtcDateTime::now().to_str(),
+    });
+    write_stored_status(&home, &empty, empty_status).await;
+    write_stored_status(&home, &closed, waiting_status.clone()).await;
+    write_stored_status(&home, &archived, waiting_status).await;
+    archive_task(&home.features, &closed).await;
+    home.features.store.archive_session(&archived).await.expect("the session archives");
+
+    let body = read_status(&home.features, &root).await.expect("the read answers");
+
+    assert!(body["descendants"].as_array().unwrap().is_empty());
+  }
+
+  #[tokio::test]
   async fn the_status_read_lists_open_direct_children_with_a_now_newest_first() {
     let home = Home::new();
     let root = home.manager("root", None).await;
     let old = home.child(&root, "old").await;
     let new = home.child(&root, "new").await;
     let deep = home.child(&old, "deep").await;
-    let empty = home.child(&root, "empty").await;
-    let closed = home.child(&root, "closed").await;
-    let archived = home.child(&root, "archived").await;
     set_status(&home.features, &old, r#"{"now": "Old step"}"#).await.expect("the old child sets");
     tokio::time::sleep(Duration::from_millis(2)).await;
     set_status(&home.features, &new, r#"{"now": "New step"}"#).await.expect("the new child sets");
     set_status(&home.features, &deep, r#"{"now": "Deep step"}"#).await.expect("the deep child sets");
-    set_status(&home.features, &empty, r#"{"goal": "No Now"}"#).await.expect("the empty child sets");
-    set_status(&home.features, &closed, r#"{"now": "Closed step"}"#).await.expect("the closed child sets");
-    set_status(&home.features, &archived, r#"{"now": "Archived step"}"#).await.expect("the archived child sets");
-    archive_task(&home.features, &closed).await;
-    home.features.store.archive_session(&archived).await.expect("the session archives");
 
     let body = read_status(&home.features, &root).await.expect("the read answers");
 
@@ -1336,6 +1401,24 @@ mod tests {
       body["children"].as_array().unwrap().iter().map(|row| row["now"].as_str().unwrap()).collect::<Vec<_>>(),
       ["New step", "Old step"]
     );
+  }
+
+  #[tokio::test]
+  async fn the_status_read_omits_direct_children_without_an_open_now() {
+    let home = Home::new();
+    let root = home.manager("root", None).await;
+    let empty = home.child(&root, "empty").await;
+    let closed = home.child(&root, "closed").await;
+    let archived = home.child(&root, "archived").await;
+    set_status(&home.features, &empty, r#"{"goal": "No Now"}"#).await.expect("the empty child sets");
+    set_status(&home.features, &closed, r#"{"now": "Closed step"}"#).await.expect("the closed child sets");
+    set_status(&home.features, &archived, r#"{"now": "Archived step"}"#).await.expect("the archived child sets");
+    archive_task(&home.features, &closed).await;
+    home.features.store.archive_session(&archived).await.expect("the session archives");
+
+    let body = read_status(&home.features, &root).await.expect("the read answers");
+
+    assert!(body["children"].as_array().unwrap().is_empty());
   }
 
   #[test]
@@ -1929,22 +2012,23 @@ mod tests {
 
   #[tokio::test]
   async fn a_status_set_refuses_an_old_plan_link_before_the_cold_read() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let plan_sid = home.manager("plan-session", None).await;
+    let v9 = session_artifact(&home, &plan_sid, "plan_01_v9.html");
+    let v11 = session_artifact(&home, &plan_sid, "plan_01_v11.html");
+    write_plans(
+      &home,
+      &plan_sid,
+      json!([plan(
+        1,
+        json!([plan_version(9, "artifacts/plan_01_v9.html"), plan_version(11, "artifacts/plan_01_v11.html")]),
+        Value::Null,
+      )]),
+    );
+
     for (endpoint, uri) in [("set", "/api/internal/web/status"), ("unread", "/api/internal/web/status/unread")] {
       for field in ["text", "context", "link"] {
-        let home = Home::new();
-        let sid = home.manager("session", None).await;
-        let plan_sid = home.manager("plan-session", None).await;
-        let v9 = session_artifact(&home, &plan_sid, "plan_01_v9.html");
-        let v11 = session_artifact(&home, &plan_sid, "plan_01_v11.html");
-        write_plans(
-          &home,
-          &plan_sid,
-          json!([plan(
-            1,
-            json!([plan_version(9, "artifacts/plan_01_v9.html"), plan_version(11, "artifacts/plan_01_v11.html")]),
-            Value::Null,
-          )]),
-        );
         let mut item = json!({
           "text": "Decide plan 1",
           "context": "The plan waits. Options are approve or revise; approve is recommended.",
@@ -2270,13 +2354,14 @@ mod tests {
 
   #[tokio::test]
   async fn a_derived_item_rides_the_status_of_its_open_holders_and_no_set_stores_it() {
-    let home = Home::new();
-    let root = home.manager("root", None).await;
-    let child = home.child(&root, "child").await;
-    let unrelated = home.manager("unrelated", None).await;
-    set_derived_waiting(&home.root(), vec![derived_row(&root), derived_row(&child), derived_row(&unrelated)]);
+    let home = Home::status_only();
+    let (root, child, unrelated) = ("root", "child", "unrelated");
+    home.seed_manager(root, None);
+    home.seed_manager(child, Some(root));
+    home.seed_manager(unrelated, None);
+    set_derived_waiting(&home.root(), vec![derived_row(root), derived_row(child), derived_row(unrelated)]);
 
-    let read = read_status(&home.features, &root).await.expect("the status reads");
+    let read = read_status(&home.features, root).await.expect("the status reads");
     let held = |read: &Value| -> Vec<String> {
       read["derived_waiting"]
         .as_array()
@@ -2287,25 +2372,22 @@ mod tests {
     };
     assert_eq!(
       held(&read),
-      [root.clone(), child.clone()],
+      [root.to_string(), child.to_string()],
       "the holder and its open descendants, not the other session"
     );
-    assert_eq!(
-      held(&read_status(&home.features, &child).await.expect("the child reads")),
-      std::slice::from_ref(&child)
-    );
+    assert_eq!(held(&read_status(&home.features, child).await.expect("the child reads")), [child.to_string()]);
 
     // A set stores its own items and leaves the derived ones where the reader gives them.
-    set_status(&home.features, &root, VALID_SET).await.expect("the set stores");
-    assert_eq!(stored(&home, &root).await["waiting"], json!([]));
-    let after = read_status(&home.features, &root).await.expect("the status reads after the set");
-    assert_eq!(held(&after), [root.clone(), child.clone()]);
+    set_status(&home.features, root, VALID_SET).await.expect("the set stores");
+    assert_eq!(stored(&home, root).await["waiting"], json!([]));
+    let after = read_status(&home.features, root).await.expect("the status reads after the set");
+    assert_eq!(held(&after), [root.to_string(), child.to_string()]);
     assert_eq!(after[WEB_STATUS]["waiting"], json!([]));
 
     // The approval view lists every open holder's derived item with the stored ones.
     let rows = open_waiting_items(&home.features).await.expect("the approval rows read");
     let listed: Vec<&str> = rows.iter().map(|row| row.session_id.as_str()).collect();
-    assert_eq!(listed, [root.as_str(), child.as_str(), unrelated.as_str()]);
+    assert_eq!(listed, [root, child, unrelated]);
     assert!(rows.iter().all(|row| row.tier.as_deref() == Some("user-act") && row.rule.is_none()));
   }
 

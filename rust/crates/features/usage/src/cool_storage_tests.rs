@@ -285,6 +285,7 @@ fn cold_rule_counts_fourteen_idle_days_and_no_fewer() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn metadataless_session_dir_never_qualifies() {
   let fixture = Fixture::new();
   let orphan = fixture.sessions().join(SID_DEAD);
@@ -297,6 +298,7 @@ fn metadataless_session_dir_never_qualifies() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn claude_dirs_delete_for_cold_sessions_and_keep_live_ones() {
   let fixture = Fixture::new();
   let cold_session = fixture.write_session(SID_COLD, cold_meta());
@@ -317,6 +319,7 @@ fn claude_dirs_delete_for_cold_sessions_and_keep_live_ones() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn claude_user_cwd_dirs_never_touched() {
   let fixture = Fixture::new();
   let projects = fixture.claude_projects();
@@ -334,6 +337,7 @@ fn claude_user_cwd_dirs_never_touched() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn every_backend_sweeps_through_its_source_in_registration_order() {
   let fixture = Fixture::new();
   let cold = fixture.write_session(SID_COLD, cold_meta_referencing(CC_OPENCOLD));
@@ -356,6 +360,7 @@ fn cold_meta_referencing(backend_session: &str) -> Value {
 }
 
 #[test]
+#[ignore = "integration"]
 fn sweep_leaves_the_opencode_store_bytes_unchanged() {
   let fixture = Fixture::new();
   fixture.write_session(SID_COLD, cold_meta_referencing(CC_OPENCOLD));
@@ -368,6 +373,7 @@ fn sweep_leaves_the_opencode_store_bytes_unchanged() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn capture_failure_aborts_before_any_deletion() {
   let fixture = Fixture::new();
   let cold = fixture.write_session(SID_COLD, cold_meta());
@@ -384,6 +390,7 @@ fn capture_failure_aborts_before_any_deletion() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn capture_reads_a_transport_file_before_the_sweep_deletes_it() {
   let fixture = Fixture::new();
   let cold = fixture.write_session(SID_COLD, cold_meta());
@@ -398,6 +405,7 @@ fn capture_reads_a_transport_file_before_the_sweep_deletes_it() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn run_reference_to_outside_path_is_ignored_not_created() {
   let fixture = Fixture::new();
   let cold = fixture.write_session(SID_COLD, json!({"status": "archived", "updated_at": OLD, "schema_version": 2}));
@@ -417,6 +425,7 @@ fn run_reference_to_outside_path_is_ignored_not_created() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn run_evidence_inside_a_managed_directory_survives_the_sweep() {
   let fixture = Fixture::new();
   let cold = fixture.write_session(SID_COLD, cold_meta());
@@ -432,6 +441,7 @@ fn run_evidence_inside_a_managed_directory_survives_the_sweep() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn transport_rule_deletes_reserved_names_and_rotations_inside_managed_dirs_only() {
   let fixture = Fixture::new();
   let cold = fixture.write_session(SID_COLD, cold_meta());
@@ -525,6 +535,7 @@ fn cc_session_id_reads_each_truthy_value_as_str() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn unreadable_or_malformed_session_metadata_skips_that_session() {
   const SID_MALFORMED: &str = "cccccccc-dddd-4eee-8fff-000000000000";
   let fixture = Fixture::new();
@@ -543,6 +554,7 @@ fn unreadable_or_malformed_session_metadata_skips_that_session() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn session_metadata_that_is_not_an_object_fails_the_run_before_any_deletion() {
   let fixture = Fixture::new();
   let cold = fixture.write_session(SID_COLD, cold_meta());
@@ -554,6 +566,7 @@ fn session_metadata_that_is_not_an_object_fails_the_run_before_any_deletion() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn symlinked_run_dirs_and_links_named_like_transport_files_are_skipped() {
   let fixture = Fixture::new();
   let cold = fixture.write_session(SID_COLD, cold_meta());

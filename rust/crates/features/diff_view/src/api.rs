@@ -112,7 +112,7 @@ async fn list_branches(State(state): State<Arc<GitState>>, Query(query): Query<P
   // This check is wider than `resolve_repo`'s: a path that IS a `.git` directory passes, since git resolves the repo
   // from the directory it runs in.
   if !repo_path.join(".git").exists() && repo_path.file_name() != Some(OsStr::new(".git")) {
-    return http_error(StatusCode::BAD_REQUEST, &format!("Not a git repo: {repo}"));
+    return responses::http_exception_with_detail(StatusCode::BAD_REQUEST, &format!("Not a git repo: {repo}"));
   }
   // The signature reads `<repo>/.git`, so a `.git` path normalizes to its parent: the same repo, one memo key.
   if repo_path.file_name() == Some(OsStr::new(".git")) {
@@ -259,13 +259,13 @@ async fn file_answer(
 fn resolve_repo(repo: &str, cfg: &CharlieBotConfig, registry: &Registry) -> Result<PathBuf, Response> {
   let repo_path = paths::realpath(&PathBuf::from(paths::expanduser(repo)));
   if !repo_path.join(".git").exists() {
-    return Err(http_error(StatusCode::BAD_REQUEST, &format!("Not a git repo: {repo}")));
+    return Err(responses::http_exception_with_detail(StatusCode::BAD_REQUEST, &format!("Not a git repo: {repo}")));
   }
   let mut roots: Vec<PathBuf> =
     cfg.paths.workspace_dirs.iter().map(|dir| paths::realpath(&PathBuf::from(paths::expanduser(dir)))).collect();
   roots.extend(registry.diff_roots().map(|(_, root)| paths::realpath(&root(cfg))));
   if !roots.iter().any(|root| repo_path.starts_with(root)) {
-    return Err(http_error(
+    return Err(responses::http_exception_with_detail(
       StatusCode::BAD_REQUEST,
       "repo must be under configured paths.workspace_dirs or a registered package repository",
     ));
@@ -302,11 +302,6 @@ fn answer(result: Result<Value, Response>) -> Response {
     Ok(value) => responses::json(StatusCode::OK, &value),
     Err(response) => response,
   }
-}
-
-/// `HTTPException(status, detail=...)`: `{"detail": ...}` at `status`.
-fn http_error(status: StatusCode, detail: &str) -> Response {
-  responses::json(status, &json!({"detail": detail}))
 }
 
 /// An unhandled `OSError`: the plain 500.

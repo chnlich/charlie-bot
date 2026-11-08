@@ -15,10 +15,9 @@ use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 
+use charliebot_core::home::boot_trigger_index_path;
 use serde_json::{Value, json};
 
-/// The index's home-relative path, beside the boot marker and the skip proof.
-pub(crate) const TRIGGER_INDEX_PATH: &str = "state/boot_trigger_index.json";
 /// The format version of the index file. A file of another version serves no row.
 const TRIGGER_INDEX_VERSION: u64 = 1;
 /// The separator inside one row. Session ids, file names and numbers hold no tab.
@@ -63,7 +62,7 @@ impl TriggerIndex {
   /// The index a home holds, or an empty index when the file is absent or not an index of this version. An unreadable
   /// file other than an absence is logged rather than failing the boot: the index only saves work.
   pub(crate) fn read(home: &Path) -> Self {
-    let path = home.join(TRIGGER_INDEX_PATH);
+    let path = boot_trigger_index_path(home);
     let raw = match std::fs::read(&path) {
       Ok(raw) => raw,
       Err(error) if error.kind() == io::ErrorKind::NotFound => return Self::default(),
@@ -101,7 +100,7 @@ impl TriggerIndex {
 /// Write the rows this boot proved, replacing the previous index. The boot writes the rows of the files it read and
 /// the rows it served, so a file's row survives while its identity holds and disappears when the file does.
 pub(crate) fn write(home: &Path, rows: &[TriggerIndexRow]) -> io::Result<()> {
-  let path = home.join(TRIGGER_INDEX_PATH);
+  let path = boot_trigger_index_path(home);
   if let Some(parent) = path.parent() {
     std::fs::create_dir_all(parent)?;
   }
@@ -190,7 +189,7 @@ mod tests {
     let home = tempfile::tempdir().expect("temporary directory exists");
     assert!(!TriggerIndex::read(home.path()).serves("session-a", "trigger-1.json", identity(12, 34)));
 
-    let path = home.path().join(TRIGGER_INDEX_PATH);
+    let path = boot_trigger_index_path(home.path());
     std::fs::create_dir_all(path.parent().expect("the index path has a parent")).expect("the state directory exists");
     std::fs::write(&path, b"{\"version\": 1}\nsession-a\ttrigger-1.json\t12\n").expect("the torn index writes");
     assert!(!TriggerIndex::read(home.path()).serves("session-a", "trigger-1.json", identity(12, 34)));

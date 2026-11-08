@@ -161,6 +161,8 @@ pub struct Registry {
   pub(crate) reading_limits: Ledger<ReadingLimitsFn>,
   pub(crate) backend_reading_limits: Vec<BackendReadingLimitsRegistration>,
   pub(crate) usage_resolvers: Ledger<UsageResolverConstructor>,
+  /// Each backend type's quota reading, keyed by the type name: what the Auto set selects on.
+  pub(crate) member_readings: Ledger<MemberReadingFn>,
   pub(crate) sequence_controllers: Ledger<Arc<dyn SequenceController>>,
   /// Each platform's draft support, keyed by the platform name its drafts carry.
   pub(crate) draft_platforms: Ledger<DraftPlatformFactory>,
@@ -222,6 +224,7 @@ impl Registry {
       reading_limits,
       backend_reading_limits,
       usage_resolvers,
+      member_readings,
       sequence_controllers,
       draft_platforms,
       plan_registry,
@@ -281,6 +284,7 @@ impl Registry {
       ));
     }
     append_ledger_inventory(&mut inventory, usage_resolvers);
+    append_ledger_inventory(&mut inventory, member_readings);
     append_ledger_inventory(&mut inventory, sequence_controllers);
     append_ledger_inventory(&mut inventory, draft_platforms);
     append_ledger_inventory(&mut inventory, plan_registry);
@@ -580,6 +584,40 @@ pub type ReadingLimitsFn = fn(RunKind) -> ContextLimits;
 /// Computes a reading kind's limits from one backend option (`register_backend_reading_limits`).
 pub type BackendReadingLimitsFn = fn(&BackendOption, RunKind) -> ContextLimits;
 
+/// One quota window of a member's reading, with its utilization in `0..=1`, its length when the backend states one,
+/// and the reset the backend states for it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MemberWindow {
+  pub utilization: f64,
+  pub window_minutes: Option<i64>,
+  pub resets_at: Option<UtcDateTime>,
+}
+
+/// One backend member's quota reading: the windows the backend reports, the weekly window's reset, and the two
+/// decisions the reading's provider derives from them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MemberReading {
+  pub windows: Vec<MemberWindow>,
+  /// The reset of the member's weekly (longest) window, kept apart from the limiting window for member ordering.
+  pub weekly_resets_at: Option<UtcDateTime>,
+  /// Every healthy login or window sits at or above the 90% line and the earliest reset is beyond the horizon.
+  pub near_exhaustion: bool,
+  /// The member has no capacity left: no healthy login with headroom, or a window at 100%.
+  pub exhausted: bool,
+}
+
+impl MemberReading {
+  /// The earliest reset any window states.
+  pub fn earliest_reset(&self) -> Option<UtcDateTime> {
+    self.windows.iter().filter_map(|window| window.resets_at).min()
+  }
+}
+
+/// Reads one backend option's quota state now, or `None` when the backend exposes no reading
+/// (`register_member_reading`). A member with no reading counts as under the 90% line until its first quota error.
+pub type MemberReadingFn =
+  Arc<dyn Fn(&CharlieBotConfig, &BackendOption, UtcDateTime) -> anyhow::Result<Option<MemberReading>> + Send + Sync>;
+
 /// One context-limits provider registered for a backend type and reading kind.
 pub(crate) struct BackendReadingLimitsRegistration {
   pub backend_type: &'static str,
@@ -671,6 +709,11 @@ pub const CLAUDE_INSTRUCTIONS_FILE_NAME: &str = "CLAUDE.md";
 
 /// The per-process pieces of the backend template method. The runner in `charliebot-agents` drives them.
 pub trait AgentBackend: Send {
+  /// The reset duration stated by a retryable backend error, or `None` when it has no supported retry reset.
+  fn retry_after(&self, _error_text: &str) -> Option<Duration> {
+    None
+  }
+
   /// The instructions file name and the log event that reports writing it, or `None` when the backend takes none.
   fn instructions_target(&self) -> Option<(&'static str, &'static str)>;
   fn prepare_transport(&mut self, log_dir: &Path) -> anyhow::Result<()>;
@@ -1207,6 +1250,18 @@ impl Registry {
   pub fn usage_resolver_for(&self, backend_type: &str) -> Option<UsageResolverConstructor> {
     self.usage_resolvers.get(backend_type).cloned()
   }
+
+  /// Register a backend type's quota reading (`register_member_reading`). A type whose quota is readable registers one;
+  /// a type with no reading registers none, and the Auto set treats it as under the 90% line.
+  pub fn member_reading(&mut self, backend_type: &'static str, read: MemberReadingFn) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    self.member_readings.insert(package, backend_type, read)
+  }
+
+  /// The quota reading of `backend_type`, or `None` when the type exposes none.
+  pub fn member_reading_for(&self, backend_type: &str) -> Option<MemberReadingFn> {
+    self.member_readings.get(backend_type).cloned()
+  }
 }
 
 /// Builds a package's routes with their full paths, with the feature context applied as the router's state. The
@@ -1589,6 +1644,22 @@ pub struct RuleSegment {
   pub sources: Vec<PromptSource>,
   pub delivery: String,
 }
+
+/// A [`PromptSource::scope`] value: the shared base rules.
+pub const SCOPE_BASE: &str = "base";
+/// A [`PromptSource::scope`] value: a memory selection.
+pub const SCOPE_MEMORY: &str = "memory";
+/// A [`PromptSource::scope`] value: a subtree rule.
+pub const SCOPE_SUBTREE: &str = "subtree";
+/// A [`PromptSource::scope`] value: a node rule.
+pub const SCOPE_NODE: &str = "node";
+/// A [`PromptSource::scope`] value: a taste index segment.
+pub const SCOPE_TASTE: &str = "taste";
+
+/// A [`RuleSegment::delivery`] value: the block's full text.
+pub const DELIVERY_FULL: &str = "full";
+/// A [`RuleSegment::delivery`] value: an index listing of the material.
+pub const DELIVERY_INDEX: &str = "index";
 
 /// Renders one persisted event type for the chat: the event in, the message out.
 pub type EventRenderer = fn(&Value) -> Value;

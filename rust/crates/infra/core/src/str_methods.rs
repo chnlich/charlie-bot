@@ -1,6 +1,6 @@
 //! This module provides string methods on Unicode text. They are `isalnum`, `isdigit`, the decimal value of a
 //! decimal digit, `isspace`, `strip()`, `split()` with its single-space collapse, the first-n and from-n slices,
-//! and the code point count.
+//! the code point count, and the newline translation of a text-mode read.
 
 use std::sync::LazyLock;
 
@@ -196,6 +196,11 @@ pub fn splitlines(text: &str) -> Vec<&str> {
   lines
 }
 
+/// The newline translation of a text-mode read: `\r\n` and a lone `\r` become `\n`.
+pub fn universal_newlines(text: &str) -> String {
+  text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 /// The first `count` characters of `text`.
 pub fn take_chars(text: &str, count: usize) -> String {
   text.chars().take(count).collect()
@@ -243,6 +248,12 @@ mod tests {
     assert_eq!(splitlines("a\n\nb"), ["a", "", "b"]);
     assert_eq!(splitlines("\n"), [""]);
     assert!(splitlines("").is_empty());
+  }
+
+  #[test]
+  fn universal_newlines_normalizes_crlf_and_lone_cr() {
+    assert_eq!(universal_newlines("a\r\nb\rc\nd"), "a\nb\nc\nd");
+    assert_eq!(universal_newlines("a\r\r\nb"), "a\n\nb");
   }
 
   #[test]

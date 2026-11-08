@@ -158,8 +158,9 @@ fn execute_request(
 ) -> Result<Vec<u8>, CliExit> {
   let request = args.prepare()?;
   let account = account_for(table, account_name)?;
-  let token = mint_access_token(table, account, &endpoints.token_url)?;
-  request::fetch(&request.bearer(&token), &[token.as_str()])
+  let client = request::HttpClient::new()?;
+  let token = mint_access_token(&client, table, account, &endpoints.token_url)?;
+  client.fetch(&request.bearer(&token), &[token.as_str()])
 }
 
 /// The `list` output: one tab-separated row per account, with the checked email address when
@@ -167,12 +168,13 @@ fn execute_request(
 fn list_output(table: &AccountTable, check: bool, endpoints: &Endpoints) -> Result<String, CliExit> {
   let mut checked_emails: HashMap<String, String> = HashMap::new();
   if check {
+    let client = request::HttpClient::new()?;
     for account in &table.accounts {
       if is_pending(account) {
         continue;
       }
-      let email = mint_access_token(table, account, &endpoints.token_url)
-        .and_then(|token| profile_email(&token, &endpoints.profile_url))
+      let email = mint_access_token(&client, table, account, &endpoints.token_url)
+        .and_then(|token| profile_email(&client, &token, &endpoints.profile_url))
         .map_err(|error| account_failure(&account.name, error))?;
       checked_emails.insert(account.name.clone(), email);
     }
@@ -631,10 +633,11 @@ fn add_account(
   let exchange = Request::new(reqwest::Method::POST, &endpoints.token_url)
     .header("Content-Type", "application/x-www-form-urlencoded")
     .body(form.into_bytes());
-  let payload = open_json(&exchange, "Google authorization-code exchange", &[&client_secret, &code])?;
+  let client = request::HttpClient::new()?;
+  let payload = open_json(&client, &exchange, "Google authorization-code exchange", &[&client_secret, &code])?;
   let refresh_token = required_response_string(&payload, "refresh_token", "Google authorization-code exchange")?;
   let access_token = required_response_string(&payload, "access_token", "Google authorization-code exchange")?;
-  let actual_email = profile_email(&access_token, &endpoints.profile_url)?;
+  let actual_email = profile_email(&client, &access_token, &endpoints.profile_url)?;
   // ASCII case folding; the compared addresses are ASCII.
   if !actual_email.eq_ignore_ascii_case(email.trim()) {
     return Err(CliExit::error(format!("email mismatch: Google returned {actual_email}")));
@@ -1181,7 +1184,12 @@ fn dump_double_quoted(value: &str, allow_unicode: bool) -> String {
 // Google's OAuth calls
 // ---------------------------------------------------------------------------
 
-fn mint_access_token(table: &AccountTable, account: &Account, token_url: &str) -> Result<String, CliExit> {
+fn mint_access_token(
+  client: &request::HttpClient,
+  table: &AccountTable,
+  account: &Account,
+  token_url: &str,
+) -> Result<String, CliExit> {
   let refresh_token = match account.values.get("refresh_token") {
     Some(Yaml::String(refresh_token)) if !refresh_token.trim().is_empty() => refresh_token.clone(),
     _ => return Err(CliExit::error(format!("account {} is pending authorization", account.name))),
@@ -1196,19 +1204,24 @@ fn mint_access_token(table: &AccountTable, account: &Account, token_url: &str) -
   let request = Request::new(reqwest::Method::POST, token_url)
     .header("Content-Type", "application/x-www-form-urlencoded")
     .body(form.into_bytes());
-  let payload = open_json(&request, "Google token refresh", &[&refresh_token, &client_secret])?;
+  let payload = open_json(client, &request, "Google token refresh", &[&refresh_token, &client_secret])?;
   required_response_string(&payload, "access_token", "Google token refresh")
 }
 
-fn profile_email(access_token: &str, profile_url: &str) -> Result<String, CliExit> {
+fn profile_email(client: &request::HttpClient, access_token: &str, profile_url: &str) -> Result<String, CliExit> {
   let request = Request::new(reqwest::Method::GET, profile_url).bearer(access_token);
-  let payload = open_json(&request, "Gmail profile lookup", &[access_token])?;
+  let payload = open_json(client, &request, "Gmail profile lookup", &[access_token])?;
   required_response_string(&payload, "emailAddress", "Gmail profile lookup")
 }
 
-fn open_json(request: &Request, operation: &str, redactions: &[&str]) -> Result<Map<String, Value>, CliExit> {
+fn open_json(
+  client: &request::HttpClient,
+  request: &Request,
+  operation: &str,
+  redactions: &[&str],
+) -> Result<Map<String, Value>, CliExit> {
   let response =
-    request::send(request, redactions).map_err(|_| CliExit::error(format!("{operation} failed: network error")))?;
+    client.send(request, redactions).map_err(|_| CliExit::error(format!("{operation} failed: network error")))?;
   if !(200..300).contains(&response.status) {
     return Err(CliExit::error(format!("{operation} failed: HTTP {}", response.status)));
   }
@@ -2022,32 +2035,18 @@ appointments and the tax paperwork of the household";
   }
 
   #[test]
-  fn add_long_description_on_pending_section_stays_on_one_line() {
+  fn long_description_on_existing_account_stays_on_one_line() {
     let home = credentials_home(&format!(
       "{DEFAULT_TABLE}\ngoogle_account_personal:\n  description: old text\n  refresh_token: old-refresh\n"
     ));
     let original_lines: Vec<String> =
       std::fs::read_to_string(credentials_path(&home)).unwrap().lines().map(str::to_string).collect();
-    let stub = Stub::start(vec![
-      exchange_response("temporary-access", "new-refresh"),
-      profile_response("person@example.invalid"),
-    ]);
-
-    let email = add(
-      &home,
-      "personal",
-      "person@example.invalid",
-      "http://localhost/?code=auth-code&state=personal",
-      Some(LONG_DESCRIPTION),
-      None,
-      &stub.endpoints(),
-    )
-    .unwrap();
-
-    let updated_lines: Vec<String> =
-      std::fs::read_to_string(credentials_path(&home)).unwrap().lines().map(str::to_string).collect();
-    assert_eq!(email, "person@example.invalid");
-    assert_eq!(exchange_code_output("personal", &email), "personal: person@example.invalid\n");
+    let credentials = table(&home);
+    let account = credentials.by_name.get("personal").expect("the personal account is recorded");
+    let (updated, expected) = updated_content(&credentials, account, "new-refresh", Some(LONG_DESCRIPTION), None)
+      .expect("the account update renders");
+    let updated_text = String::from_utf8(updated).unwrap();
+    let updated_lines: Vec<String> = updated_text.lines().map(str::to_string).collect();
     assert_eq!(updated_lines.len(), original_lines.len());
     let changes: Vec<(&String, &String)> =
       original_lines.iter().zip(&updated_lines).filter(|(before, after)| before != after).collect();
@@ -2058,8 +2057,10 @@ appointments and the tax paperwork of the household";
         (&"  refresh_token: old-refresh".to_string(), &"  refresh_token: new-refresh".to_string()),
       ]
     );
-    let parsed: Yaml = serde_yaml::from_str(&std::fs::read_to_string(credentials_path(&home)).unwrap()).unwrap();
+    let parsed: Yaml = serde_yaml::from_str(&updated_text).unwrap();
+    assert_eq!(parsed, Yaml::Mapping(expected));
     assert_eq!(parsed["google_account_personal"]["description"], LONG_DESCRIPTION);
+    assert_eq!(parsed["google_account_personal"]["refresh_token"], "new-refresh");
   }
 
   #[test]
@@ -2209,22 +2210,16 @@ appointments and the tax paperwork of the household";
   }
 
   #[test]
-  fn add_owner_writes_into_new_and_existing_sections() {
+  fn add_owner_writes_into_a_new_section() {
     let home = credentials_home(concat!(
       "google:\n",
       "  client_id: default-client\n",
       "  client_secret: default-secret\n",
       "  refresh_token: default-refresh\n",
       "  owner: avery\n",
-      "google_account_existing:\n",
-      "  description: existing\n",
     ));
-    let stub = Stub::start(vec![
-      exchange_response("new-access", "new-refresh"),
-      profile_response("new@example.invalid"),
-      exchange_response("existing-access", "existing-refresh"),
-      profile_response("existing@example.invalid"),
-    ]);
+    let stub =
+      Stub::start(vec![exchange_response("new-access", "new-refresh"), profile_response("new@example.invalid")]);
 
     add(
       &home,
@@ -2236,6 +2231,26 @@ appointments and the tax paperwork of the household";
       &stub.endpoints(),
     )
     .unwrap();
+
+    let parsed: Yaml = serde_yaml::from_str(&std::fs::read_to_string(credentials_path(&home)).unwrap()).unwrap();
+    assert_eq!(parsed["google_account_fresh"]["owner"], "blake");
+  }
+
+  #[test]
+  fn add_owner_writes_into_an_existing_section() {
+    let home = credentials_home(concat!(
+      "google:\n",
+      "  client_id: default-client\n",
+      "  client_secret: default-secret\n",
+      "  refresh_token: default-refresh\n",
+      "  owner: avery\n",
+      "google_account_existing:\n",
+      "  description: existing\n",
+    ));
+    let stub = Stub::start(vec![
+      exchange_response("existing-access", "existing-refresh"),
+      profile_response("existing@example.invalid"),
+    ]);
     add(
       &home,
       "existing",
@@ -2248,7 +2263,6 @@ appointments and the tax paperwork of the household";
     .unwrap();
 
     let parsed: Yaml = serde_yaml::from_str(&std::fs::read_to_string(credentials_path(&home)).unwrap()).unwrap();
-    assert_eq!(parsed["google_account_fresh"]["owner"], "blake");
     assert_eq!(parsed["google_account_existing"]["owner"], "carol");
     assert_eq!(parsed["google_account_existing"]["description"], "existing");
   }

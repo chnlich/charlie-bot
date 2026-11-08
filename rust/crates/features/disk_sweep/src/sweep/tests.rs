@@ -246,6 +246,7 @@ fn tar_files(path: &Path) -> BTreeMap<String, Vec<u8>> {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worktree_age_reopen_keep_and_unknown_owner_rules() {
   let root = tempdir().unwrap();
   let roots = fixture(root.path());
@@ -343,6 +344,7 @@ async fn test_worktree_age_reopen_keep_and_unknown_owner_rules() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_shared_worktree_uses_newest_owner_close_and_any_keep_flag() {
   let root = tempdir().unwrap();
   let roots = fixture(root.path());
@@ -406,6 +408,7 @@ async fn test_shared_worktree_uses_newest_owner_close_and_any_keep_flag() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_apply_archives_worktree_changes_before_removing_it() {
   let root = tempdir().unwrap();
   for change in ["tracked", "untracked"] {
@@ -449,6 +452,7 @@ async fn test_apply_archives_worktree_changes_before_removing_it() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_large_untracked_and_dirty_submodule_worktrees_are_skipped() {
   let root = tempdir().unwrap();
   let roots = fixture(root.path());
@@ -495,6 +499,7 @@ async fn test_large_untracked_and_dirty_submodule_worktrees_are_skipped() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_process_cwd_and_cmdline_paths_protect_a_worktree() {
   let root = tempdir().unwrap();
   for source in ["cwd", "cmdline"] {
@@ -544,6 +549,7 @@ async fn test_process_cwd_and_cmdline_paths_protect_a_worktree() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_process_root_exe_fd_and_maps_paths_protect_a_worktree() {
   let root = tempdir().unwrap();
   for source in ["root", "exe", "fd", "maps"] {
@@ -596,6 +602,7 @@ async fn test_process_root_exe_fd_and_maps_paths_protect_a_worktree() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_scratch_age_and_nested_repository_safety() {
   let root = tempdir().unwrap();
   let roots = fixture(root.path());
@@ -680,6 +687,7 @@ async fn test_scratch_child_that_cannot_be_statted_is_reported_as_unreadable() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_cli_without_yes_is_read_only_and_reports_a_total() {
   let root = tempdir().unwrap();
   let roots = fixture(root.path());

@@ -246,7 +246,7 @@ struct Builder<'a> {
 }
 
 impl Builder<'_> {
-  /// Walk one module's own items. Inline `mod` blocks become child modules and their items stay out of this module.
+  /// The walk over one module's own items: inline `mod` blocks become child modules, and their items stay out.
   fn process_scope(
     &mut self,
     path: Vec<String>,
@@ -555,7 +555,7 @@ impl Crate {
     }
   }
 
-  /// Follow `segs` from `base` through child modules, re-exports and globs to the module that defines the item.
+  /// The resolution of `segs` from `base` through child modules, re-exports and globs to the module that defines it.
   fn lookup(&self, target: usize, base: &[String], segs: &[String], depth: usize) -> Option<Vec<String>> {
     if depth > MAX_RESOLVE_DEPTH {
       return None;
@@ -831,9 +831,14 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_tasks::spawner_prompt::WORKER_PROMPT_PATH`.",
   },
   OwnerRow {
+    name: "master_cc_resuming",
+    owner: "runtime/tasks",
+    hint: "Use `charliebot_tasks::master_run::MASTER_CC_RESUMING_EVENT`.",
+  },
+  OwnerRow {
     name: "stdout.log",
-    owner: "runtime/agents",
-    hint: "Use `charliebot_agents::transport::final_stdout::STDOUT_LOG_NAME`.",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::run_records::STDOUT_LOG_NAME`.",
   },
   OwnerRow {
     name: "backend_from_pool",
@@ -882,11 +887,39 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_core::config::CREDENTIALS_FILENAME`.",
   },
   OwnerRow { name: "config.d", owner: "infra/core", hint: "Use `charliebot_core::config::CONFIG_D_DIR_NAME`." },
+  OwnerRow { name: "configs", owner: "infra/core", hint: "Use `charliebot_core::repo_root::CONFIGS_DIR_NAME`." },
   OwnerRow { name: "sessions", owner: "infra/core", hint: "Use `charliebot_core::config::sessions_dir_in`." },
+  OwnerRow {
+    name: "state",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::home::state_dir` for a path in the home's state directory, and \
+           `charliebot_core::home::OPENCODE_XDG_STATE_DIR_NAME` for the OpenCode store's state directory.",
+  },
   OwnerRow {
     name: "America/Los_Angeles",
     owner: "infra/core",
     hint: "Use `charliebot_core::pacific::ZONE`, the house time zone.",
+  },
+  OwnerRow { name: "NaN", owner: "infra/core", hint: "Use `charliebot_core::json_loads::NAN`." },
+  OwnerRow { name: "Infinity", owner: "infra/core", hint: "Use `charliebot_core::json_loads::INFINITY`." },
+  OwnerRow { name: "-Infinity", owner: "infra/core", hint: "Use `charliebot_core::json_loads::NEGATIVE_INFINITY`." },
+  OwnerRow {
+    name: "boot_recovery.json",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::home::BOOT_RECOVERY_FILE_NAME`, or `charliebot_core::home::boot_recovery_marker_path` \
+           for the path under a home.",
+  },
+  OwnerRow {
+    name: "boot_skip_proof.json",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::home::BOOT_SKIP_PROOF_FILE_NAME`, or `charliebot_core::home::boot_skip_proof_path` for \
+           the path under a home.",
+  },
+  OwnerRow {
+    name: "boot_trigger_index.json",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::home::BOOT_TRIGGER_INDEX_FILE_NAME`, or \
+           `charliebot_core::home::boot_trigger_index_path` for the path under a home.",
   },
   OwnerRow {
     name: "metadata.json",
@@ -919,6 +952,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "infra/core",
     hint: "Use `charliebot_core::event_types::MESSAGE_CONTENT_POINTER`.",
   },
+  OwnerRow { name: "WebSearch", owner: "infra/core", hint: "Use `charliebot_core::web_search::TOOL_NAME`." },
   OwnerRow { name: "data", owner: "runtime/store", hint: "Use `charliebot_store::layout::data_dir`." },
   OwnerRow { name: "runs", owner: "runtime/store", hint: "Use `charliebot_store::layout::runs_dir`." },
   OwnerRow { name: "triggers", owner: "runtime/store", hint: "Use `charliebot_store::layout::triggers_dir`." },
@@ -926,6 +960,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     name: "chat_events.jsonl",
     owner: "runtime/store",
     hint: "Use `charliebot_store::layout::chat_events_path`.",
+  },
+  OwnerRow {
+    name: "scripts/v1_session_conversion.py",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::v1_session_conversion::CONVERSION_SCRIPT`.",
   },
   OwnerRow { name: "schedule_task", owner: "runtime/store", hint: "Use `charliebot_store::metadata::SCHEDULE_TASK`." },
   OwnerRow { name: "schedule_cron", owner: "runtime/store", hint: "Use `charliebot_store::metadata::SCHEDULE_CRON`." },
@@ -995,6 +1034,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::metadata::KEEP_WORKTREE_FIELD`.",
   },
   OwnerRow {
+    name: "parent_session_id",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::PARENT_SESSION_ID`.",
+  },
+  OwnerRow {
     name: "has_pending_trigger",
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::HAS_PENDING_TRIGGER`.",
@@ -1038,6 +1082,16 @@ const OWNER_TABLE: &[OwnerRow] = &[
     name: "result_ref",
     owner: "runtime/store",
     hint: "Use `charliebot_store::run_records::OBSERVATION_RESULT_REF`.",
+  },
+  OwnerRow {
+    name: "branch_name",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::run_records::OBSERVATION_BRANCH_NAME`.",
+  },
+  OwnerRow {
+    name: "worktree_path",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::run_records::OBSERVATION_WORKTREE_PATH`.",
   },
   OwnerRow {
     name: "local_pid",
@@ -1124,6 +1178,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "infra/compat",
     hint: "Use `charliebot_compat::request_body::CLIENT_TS`; the diag telemetry body and the voice startup body both \
            declare the browser's clock stamp.",
+  },
+  OwnerRow {
+    name: "/static/",
+    owner: "runtime/registry",
+    hint: "Use `charliebot_registry::pages::STATIC_URL_PREFIX`; the router mounts it, the access-key gate leaves it \
+           public, and the template engine inlines a stylesheet from it.",
   },
 ];
 
@@ -1464,7 +1524,7 @@ enum Codec {
 }
 
 impl FunctionRecord {
-  /// Record a call by its callee path when the call decodes or encodes.
+  /// The callee path of a call, recorded when the call decodes or encodes.
   fn note_call(&mut self, path: &[String]) {
     let joined = path.join("::");
     match codec_of_call(path) {
@@ -1478,7 +1538,7 @@ impl FunctionRecord {
     }
   }
 
-  /// Record a call by its callee path when the path ends in a process-environment writer.
+  /// The callee path of a call, recorded when the path ends in a process-environment writer.
   fn note_environment_write(&mut self, path: &[String], line: usize) {
     if let Some(writer) = path.last().filter(|writer| ENVIRONMENT_WRITERS.contains(&writer.as_str())) {
       self.environment_writes.push(EnvironmentWrite { writer: writer.clone(), line });
@@ -1503,7 +1563,7 @@ fn codec_of_call(path: &[String]) -> Option<Codec> {
   }
 }
 
-/// Collects the production functions of one module: each item and impl item that is not `#[cfg(test)]`, with the
+/// The collector of one module's production functions: each item and impl item that is not `#[cfg(test)]`, with the
 /// names its body uses and the codec calls in it. An inline module is its own scope and stays out.
 #[derive(Default)]
 struct FunctionCollector {
@@ -1622,8 +1682,8 @@ impl<'ast> Visit<'ast> for FunctionCollector {
   }
 }
 
-/// Record the identifiers of a macro call's tokens and the calls among them. Syn does not parse a macro's tokens, so a
-/// path that a parenthesized group follows counts as a call.
+/// The identifiers and calls of a macro call's tokens, recorded from the token stream. Syn does not parse a macro's
+/// tokens, so a path that a parenthesized group follows counts as a call.
 fn scan_macro_tokens(tokens: TokenStream, record: &mut FunctionRecord) {
   let trees: Vec<TokenTree> = tokens.into_iter().collect();
   for (index, tree) in trees.iter().enumerate() {
@@ -1790,7 +1850,7 @@ fn global_state_failures(workspace: &Workspace) -> Vec<String> {
   failures.into_iter().map(|(_, _, message)| message).collect()
 }
 
-/// Collects a module's production statics and the production `use` items that import a process-environment writer.
+/// The collector of a module's production statics and production `use` items importing a process-environment writer.
 #[derive(Default)]
 struct GlobalStateCollector {
   statics: Vec<StaticRecord>,
@@ -1882,48 +1942,56 @@ fn real_workspace() -> &'static Workspace {
 }
 
 #[test]
+#[ignore = "integration"]
 fn every_crate_is_in_a_group() {
   let failures = group_failures(real_workspace());
   assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn dependencies_follow_the_group_directions() {
   let failures = direction_failures(real_workspace());
   assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn no_runtime_crate_depends_on_a_higher_layer() {
   let failures = layer_break_failures(real_workspace());
   assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn every_runtime_crate_has_a_layer() {
   let failures = unplaced_runtime_failures(real_workspace());
   assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn every_layer_names_a_runtime_crate() {
   let failures = stale_layer_failures(real_workspace());
   assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn no_crate_has_a_module_cycle() {
   let failures = cycle_failures(real_workspace());
   assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn no_production_path_attribute_reaches_outside_its_crate() {
   let failures = &real_workspace().path_failures;
   assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn no_name_is_spelled_outside_its_owner() {
   let workspace = real_workspace();
   let rows: Vec<OwnerRow> = OWNER_TABLE.iter().copied().chain(event_name_rows(workspace)).collect();
@@ -1932,12 +2000,14 @@ fn no_name_is_spelled_outside_its_owner() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn every_file_kind_is_read_and_written_by_its_owner() {
   let failures = format_failures(real_workspace(), FORMAT_TABLE);
   assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn no_global_state_outside_its_owner() {
   let failures = global_state_failures(real_workspace());
   assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -1987,6 +2057,7 @@ fn cycle_of<'a>(cycles: &'a [Cycle], package: &str) -> Option<&'a Cycle> {
 /// One test builds small synthetic workspaces and checks one failure per case. A check that skips a form of break
 /// would let that break into the workspace unseen.
 #[test]
+#[ignore = "integration"]
 fn the_checks_find_each_break() {
   let groups_dir = tempfile::tempdir().expect("create a temporary directory");
   let groups_root = groups_dir.path();
@@ -2198,6 +2269,7 @@ fn the_checks_find_each_break() {
 /// A route path that holds a layout name and a test target also pass. Each line number below is the line of the
 /// fixture text.
 #[test]
+#[ignore = "integration"]
 fn the_owner_rule_finds_each_break() {
   let owner_dir = tempfile::tempdir().expect("create a temporary directory");
   let owner_root = owner_dir.path();
@@ -2344,6 +2416,7 @@ mod tests {
 /// spellings that differ only in a parameter's name count as one path, and a `strip_prefix` or `starts_with` argument
 /// names no path, so the reader crate passes.
 #[test]
+#[ignore = "integration"]
 fn the_route_rule_finds_each_break() {
   let dir = tempfile::tempdir().expect("create a temporary directory");
   let root = dir.path();
@@ -2390,6 +2463,7 @@ fn the_route_rule_finds_each_break() {
 /// that references that const passes. A composition crate that spells the label itself fails with each site and the
 /// hint, so the label cannot drift between the two crates.
 #[test]
+#[ignore = "integration"]
 fn the_backend_package_rule_finds_each_break() {
   let dir = tempfile::tempdir().expect("create a temporary directory");
   let root = dir.path();
@@ -2429,6 +2503,7 @@ pub const SPELLED: &str = "backends.thing";
 /// `_`, but not the names the backend output formats also use, nor any single word. A writer crate spelling the
 /// protected name fails with its `file:line` and hint; its spellings of the unprotected ones pass.
 #[test]
+#[ignore = "integration"]
 fn the_event_names_of_event_types_are_protected() {
   let dir = tempfile::tempdir().expect("create a temporary directory");
   let root = dir.path();
@@ -2478,6 +2553,7 @@ fn the_event_names_of_event_types_are_protected() {
 /// A name holding an uppercase letter on a synthetic workspace. The writer crate fails on a literal equal to the name,
 /// and passes on a longer literal that only holds its letters.
 #[test]
+#[ignore = "integration"]
 fn a_camel_case_owner_name_matches_an_exact_literal_only() {
   let dir = tempfile::tempdir().expect("create a temporary directory");
   let root = dir.path();
@@ -2515,6 +2591,7 @@ fn a_camel_case_owner_name_matches_an_exact_literal_only() {
 /// that only passes the path on passes, and so does a test-only function. Each failure gives its `file:line`, the kind
 /// and the hint.
 #[test]
+#[ignore = "integration"]
 fn the_format_rule_finds_each_break() {
   let dir = tempfile::tempdir().expect("create a temporary directory");
   let root = dir.path();
@@ -2594,6 +2671,7 @@ fn fixture_count(home: &Path) -> usize {
 /// `thread_local!` fails too. The production calls to `set_var` and `setenv` fail, and so does the aliased `use`.
 /// A private static and a `#[cfg(test)]` function pass. Each line number below is the line of the fixture text.
 #[test]
+#[ignore = "integration"]
 fn the_global_state_rule_finds_each_break() {
   let dir = tempfile::tempdir().expect("create a temporary directory");
   let root = dir.path();
@@ -2839,7 +2917,7 @@ fn path_segments(path: &syn::Path) -> Vec<String> {
   path.segments.iter().map(|segment| segment.ident.to_string()).collect()
 }
 
-/// Collect every `crate::`, `super::` and `self::` sequence in a macro call's tokens; syn expands no macro.
+/// The scan for every `crate::`, `super::` and `self::` sequence in a macro call's tokens. Syn expands no macro.
 fn scan_tokens(tokens: &TokenStream, line: usize, paths: &mut Vec<PathRecord>, idents: &mut BTreeSet<String>) {
   let trees: Vec<TokenTree> = tokens.clone().into_iter().collect();
   let mut index = 0;

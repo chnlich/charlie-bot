@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::BackendPool;
-use charliebot_core::config::BackendOption;
+use charliebot_core::config::{AUTO_BACKEND_ID, AutoBilling, AutoConfig, AutoMember, BackendOption};
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::repo_root::RepoRoot;
@@ -45,7 +45,57 @@ pub fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
 pub fn feature_context_with_extra_backends(extra_backend_ids: &[&str]) -> (tempfile::TempDir, Arc<FeatureContext>) {
   let entries: Vec<(&str, Mapping)> =
     std::iter::once("synthetic").chain(extra_backend_ids.iter().copied()).map(|id| (id, Mapping::new())).collect();
-  feature_context_with_entries(&entries)
+  feature_context_with_entries(&entries, None)
+}
+
+/// A feature context whose `backends.auto` set holds `members`, each a synthetic backend option in config order.
+pub fn feature_context_with_auto(members: &[&str]) -> (tempfile::TempDir, Arc<FeatureContext>) {
+  let entries: Vec<(&str, Mapping)> = members.iter().map(|id| (*id, Mapping::new())).collect();
+  let auto = AutoConfig {
+    label: "Auto".to_string(),
+    members: members
+      .iter()
+      .map(|id| AutoMember { backend: id.to_string(), billing: AutoBilling::Subscription })
+      .collect(),
+  };
+  feature_context_with_entries(&entries, Some(auto))
+}
+
+/// A manager session on `auto` whose current member is `member`, the shape a turn start leaves.
+pub async fn auto_manager(
+  features: &FeatureContext,
+  request_id: &str,
+  member: &str,
+) -> anyhow::Result<SessionMetadata> {
+  let session = features
+    .store
+    .create_task(
+      CreateTask {
+        request_id: request_id.to_string(),
+        task_parent_id: None,
+        profile: TaskProfile::Manager,
+        task: None,
+        name: Some("Synthetic Auto manager".to_string()),
+        backend: Some(AUTO_BACKEND_ID.to_string()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  features
+    .store
+    .update_slot_fields(
+      &session.id,
+      charliebot_agents::auto_backend::OWNER,
+      Map::from_iter([(
+        charliebot_agents::auto_backend::AUTO_MEMBER_FIELD.to_string(),
+        Value::String(member.to_string()),
+      )]),
+    )
+    .await?;
+  Ok(session)
 }
 
 /// A feature context whose synthetic backend entries each log into a host. Every `(backend id, host alias)` pair is an
@@ -57,11 +107,15 @@ pub fn feature_context_with_host_backends(hosts: &[(&str, &str)]) -> (tempfile::
     fields.insert("host_auth_alias".into(), (*alias).into());
     entries.push((*id, fields));
   }
-  feature_context_with_entries(&entries)
+  feature_context_with_entries(&entries, None)
 }
 
-/// A feature context with one backend option per entry, each `(id, type fields)` of the synthetic type.
-fn feature_context_with_entries(entries: &[(&str, Mapping)]) -> (tempfile::TempDir, Arc<FeatureContext>) {
+/// A feature context with one backend option per entry, each `(id, type fields)` of the synthetic type, and the
+/// `backends.auto` set when one is given.
+fn feature_context_with_entries(
+  entries: &[(&str, Mapping)],
+  auto: Option<AutoConfig>,
+) -> (tempfile::TempDir, Arc<FeatureContext>) {
   let home = tempfile::tempdir().expect("temporary cron home");
   std::fs::create_dir_all(home.path().join("sessions")).expect("session directory provisions");
   std::fs::create_dir_all(home.path().join("config.d/cron.d")).expect("cron directory provisions");
@@ -71,6 +125,12 @@ fn feature_context_with_entries(entries: &[(&str, Mapping)]) -> (tempfile::TempD
   registry.register_package("test.cron_handlers", register_test_handler).expect("handler registration");
   registry.register_package("test.cron_backend", register_test_backend).expect("backend registration");
   registry.register_package("test.host_auth", register_host_auth_stub).expect("host auth registration");
+  registry
+    .register_package("features.auto_backend", charliebot_agents::auto_backend::register)
+    .expect("auto backend registration");
+  registry
+    .register_package("features.backend_pool", charliebot_agents::backend_pool::register)
+    .expect("backend pool registration");
   let registry = Arc::new(registry);
   let mut cfg = registry.load_config(home.path()).expect("default config loads");
   cfg.paths.worktree_dir = home.path().join("worktrees").display().to_string();
@@ -90,6 +150,7 @@ fn feature_context_with_entries(entries: &[(&str, Mapping)]) -> (tempfile::TempD
     });
     cfg.backends.pool.push(id.to_string());
   }
+  cfg.backends.auto = auto;
   let store = Arc::new(
     Store::new(
       cfg.clone(),
@@ -115,7 +176,19 @@ fn feature_context_with_entries(entries: &[(&str, Mapping)]) -> (tempfile::TempD
   startup
     .insert(AgentBaseEnvironment { values: gh_wrapper_env(home.path(), "/usr/bin") })
     .expect("agent base environment inserts");
-  startup.insert(BackendPool::default()).expect("backend pool inserts");
+  startup
+    .insert(
+      charliebot_agents::backend_availability::BackendAvailability::load(home.path())
+        .expect("the availability owner loads"),
+    )
+    .expect("the owner inserts");
+  startup
+    .insert(BackendPool::new(
+      startup
+        .require::<charliebot_agents::backend_availability::BackendAvailability>()
+        .expect("the owner is in the startup state"),
+    ))
+    .expect("backend pool inserts");
   startup
     .insert(RepoRoot::new(Some(repo_root().into_os_string())).expect("repo root value"))
     .expect("repo root inserts");

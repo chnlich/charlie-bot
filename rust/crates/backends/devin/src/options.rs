@@ -6,7 +6,7 @@ use serde_yaml::Mapping;
 /// The `devin` option's type-specific fields: none, as `DevinBackend` names none.
 pub const SCHEMA: &[OptionField] = &[];
 
-/// Accepts an option with no type-specific fields and refuses any other key.
+/// The option check for a type with no fields: an empty option is accepted and any other key is refused.
 pub fn option_model(fields: &Mapping) -> Result<(), String> {
   match fields.keys().next() {
     None => Ok(()),

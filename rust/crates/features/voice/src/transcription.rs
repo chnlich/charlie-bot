@@ -4,12 +4,12 @@ use std::time::Duration;
 
 use base64::Engine;
 use charliebot_compat::ws_client::{self, Message, Options, Sender, WEBSOCKETS_16_DEFAULTS};
-use charliebot_core::credentials::Credentials;
+use charliebot_core::credentials::{Credentials, REDACTED};
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::{self, DEFAULT_JSON};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::audio::{AudioQueue, SAMPLE_RATE};
@@ -143,6 +143,8 @@ pub(crate) struct Backend {
   token: Option<String>,
   endpoint: String,
   clock: Arc<dyn Clock>,
+  #[cfg(test)]
+  muse_audio_bytes_per_second: f64,
 }
 
 impl Backend {
@@ -153,22 +155,36 @@ impl Backend {
       token: credential_token(credentials, spec),
       endpoint: spec.endpoint.to_string(),
       clock: Arc::new(EventLoopClock),
+      #[cfg(test)]
+      muse_audio_bytes_per_second: AUDIO_BYTES_PER_SECOND,
     })
   }
 
   #[cfg(test)]
   pub(crate) fn gemini_for_test(token: &str, endpoint_url: &str) -> Self {
-    Self::for_test(BackendKind::Gemini, token, endpoint_url, Arc::new(EventLoopClock))
+    Self::for_test(BackendKind::Gemini, token, endpoint_url, Arc::new(EventLoopClock), AUDIO_BYTES_PER_SECOND)
   }
 
   #[cfg(test)]
-  fn muse_for_test(token: &str, endpoint_url: &str, clock: Arc<dyn Clock>) -> Self {
-    Self::for_test(BackendKind::Muse, token, endpoint_url, clock)
+  fn muse_for_test(token: &str, endpoint_url: &str, clock: Arc<dyn Clock>, audio_bytes_per_second: f64) -> Self {
+    Self::for_test(BackendKind::Muse, token, endpoint_url, clock, audio_bytes_per_second)
   }
 
   #[cfg(test)]
-  fn for_test(kind: BackendKind, token: &str, endpoint_url: &str, clock: Arc<dyn Clock>) -> Self {
-    Self { spec: spec_of(kind), token: Some(token.to_string()), endpoint: endpoint_url.to_string(), clock }
+  fn for_test(
+    kind: BackendKind,
+    token: &str,
+    endpoint_url: &str,
+    clock: Arc<dyn Clock>,
+    muse_audio_bytes_per_second: f64,
+  ) -> Self {
+    Self {
+      spec: spec_of(kind),
+      token: Some(token.to_string()),
+      endpoint: endpoint_url.to_string(),
+      clock,
+      muse_audio_bytes_per_second,
+    }
   }
 
   pub(crate) fn id(&self) -> &'static str {
@@ -177,6 +193,16 @@ impl Backend {
 
   pub(crate) fn unavailable_reason(&self) -> Option<String> {
     self.token.is_none().then(|| needed_credential(self.spec))
+  }
+
+  #[cfg(test)]
+  fn muse_audio_bytes_per_second(&self) -> f64 {
+    self.muse_audio_bytes_per_second
+  }
+
+  #[cfg(not(test))]
+  fn muse_audio_bytes_per_second(&self) -> f64 {
+    AUDIO_BYTES_PER_SECOND
   }
 
   pub(crate) async fn transcribe(
@@ -203,7 +229,7 @@ impl Backend {
           _ = wait_cancelled(&mut cancelled) => return Ok(()),
         };
         let (sender, receiver) =
-          connected.map_err(|error| TranscriptionError::Failure(error.to_string().replace(token, "[redacted]")))?;
+          connected.map_err(|error| TranscriptionError::Failure(error.to_string().replace(token, REDACTED)))?;
         run_gemini(sender, receiver, audio, &mut cancelled, events, vocabulary, languages).await
       }
       BackendKind::Muse => {
@@ -226,6 +252,7 @@ impl Backend {
             vocabulary,
             languages,
             clock: Arc::clone(&self.clock),
+            audio_bytes_per_second: self.muse_audio_bytes_per_second(),
           },
         )
         .await
@@ -254,7 +281,7 @@ impl Clock for EventLoopClock {
 
 async fn run_gemini(
   sender: Sender,
-  mut receiver: ws_client::Receiver,
+  receiver: ws_client::Receiver,
   audio: Arc<AudioQueue>,
   cancelled: &mut watch::Receiver<bool>,
   events: mpsc::UnboundedSender<TranscriptEvent>,
@@ -262,14 +289,13 @@ async fn run_gemini(
   languages: Vec<String>,
 ) -> Result<(), TranscriptionError> {
   let sender = Arc::new(sender);
-  let result =
-    run_gemini_session(Arc::clone(&sender), &mut receiver, audio, cancelled, events, vocabulary, languages).await;
+  let socket = Arc::new(WebSocketVoiceSocket { sender: Arc::clone(&sender), receiver: AsyncMutex::new(receiver) });
+  let result = run_gemini_session(socket, audio, cancelled, events, vocabulary, languages).await;
   close_sender(&sender, result).await
 }
 
-async fn run_gemini_session(
-  sender: Arc<Sender>,
-  receiver: &mut ws_client::Receiver,
+async fn run_gemini_session<S: VoiceSocket + 'static>(
+  socket: Arc<S>,
   audio: Arc<AudioQueue>,
   cancelled: &mut watch::Receiver<bool>,
   events: mpsc::UnboundedSender<TranscriptEvent>,
@@ -277,12 +303,12 @@ async fn run_gemini_session(
   languages: Vec<String>,
 ) -> Result<(), TranscriptionError> {
   let setup_send = tokio::select! {
-    result = sender.send(Message::Text(dumps_default(&gemini_setup(&vocabulary, &languages)))) => result,
+    result = socket.send(Message::Text(dumps_default(&gemini_setup(&vocabulary, &languages)))) => result,
     _ = wait_cancelled(cancelled) => return Ok(()),
   };
   setup_send.map_err(|error| TranscriptionError::Failure(error.to_string()))?;
   let setup_reply = tokio::select! {
-    result = tokio::time::timeout(GEMINI_OPEN_TIMEOUT, receiver.recv()) => result
+    result = tokio::time::timeout(GEMINI_OPEN_TIMEOUT, socket.recv()) => result
       .map_err(|_| TranscriptionError::Failure("timed out waiting for setup reply".to_string()))?,
     _ = wait_cancelled(cancelled) => return Ok(()),
   };
@@ -299,11 +325,11 @@ async fn run_gemini_session(
     )));
   }
 
-  let sender_task = tokio::spawn(gemini_send_audio(Arc::clone(&sender), audio, cancelled.clone()));
+  let sender_task = tokio::spawn(gemini_send_audio(Arc::clone(&socket), audio, cancelled.clone()));
   let mut sender_task = Some(sender_task);
   let result = loop {
     tokio::select! {
-      incoming = receiver.recv() => {
+      incoming = socket.recv() => {
         let incoming = match receive_result(incoming) {
           Ok(incoming) => incoming,
           Err(error) => break Err(error),
@@ -359,12 +385,12 @@ async fn run_gemini_session(
   result
 }
 
-async fn gemini_send_audio(
-  sender: Arc<Sender>,
+async fn gemini_send_audio<S: VoiceSocket + 'static>(
+  socket: Arc<S>,
   audio: Arc<AudioQueue>,
   mut cancelled: watch::Receiver<bool>,
 ) -> Result<(), String> {
-  send_json(&sender, json!({ "realtimeInput": { "activityStart": {} } })).await?;
+  send_json(socket.as_ref(), json!({ "realtimeInput": { "activityStart": {} } })).await?;
   while let Some(chunk) = audio_or_cancel(&audio, &mut cancelled).await {
     let frame = json!({
       "realtimeInput": {
@@ -374,10 +400,10 @@ async fn gemini_send_audio(
         }
       }
     });
-    send_json(&sender, frame).await?;
+    send_json(socket.as_ref(), frame).await?;
   }
   if !*cancelled.borrow() {
-    send_json(&sender, json!({ "realtimeInput": { "activityEnd": {} } })).await?;
+    send_json(socket.as_ref(), json!({ "realtimeInput": { "activityEnd": {} } })).await?;
   }
   Ok(())
 }
@@ -408,6 +434,7 @@ struct MuseSession {
   vocabulary: Vec<String>,
   languages: Vec<String>,
   clock: Arc<dyn Clock>,
+  audio_bytes_per_second: f64,
 }
 
 async fn run_muse(
@@ -417,24 +444,44 @@ async fn run_muse(
   session: MuseSession,
 ) -> Result<(), TranscriptionError> {
   let sender = Arc::new(sender);
-  let result = run_muse_session(Arc::clone(&sender), receiver, cancelled, session).await;
+  let socket = Arc::new(WebSocketVoiceSocket { sender: Arc::clone(&sender), receiver: AsyncMutex::new(receiver) });
+  let result = run_muse_session(socket, cancelled, session).await;
   close_sender(&sender, result).await
 }
 
-async fn run_muse_session(
+trait VoiceSocket: Send + Sync {
+  fn send(&self, message: Message) -> BoxFuture<'_, Result<(), String>>;
+  fn recv(&self) -> BoxFuture<'_, Option<Result<Message, ws_client::Error>>>;
+}
+
+struct WebSocketVoiceSocket {
   sender: Arc<Sender>,
-  mut receiver: ws_client::Receiver,
+  receiver: AsyncMutex<ws_client::Receiver>,
+}
+
+impl VoiceSocket for WebSocketVoiceSocket {
+  fn send(&self, message: Message) -> BoxFuture<'_, Result<(), String>> {
+    Box::pin(async move { self.sender.send(message).await.map_err(|error| error.to_string()) })
+  }
+
+  fn recv(&self) -> BoxFuture<'_, Option<Result<Message, ws_client::Error>>> {
+    Box::pin(async move { self.receiver.lock().await.recv().await })
+  }
+}
+
+async fn run_muse_session<S: VoiceSocket + 'static>(
+  socket: Arc<S>,
   cancelled: &mut watch::Receiver<bool>,
   session: MuseSession,
 ) -> Result<(), TranscriptionError> {
   let handshake = muse_handshake(&session.token, &session.vocabulary, &session.languages);
   let handshake_send = tokio::select! {
-    result = sender.send(Message::Text(dumps_default(&handshake))) => result,
+    result = socket.send(Message::Text(dumps_default(&handshake))) => result,
     _ = wait_cancelled(cancelled) => return Ok(()),
   };
   handshake_send.map_err(|error| TranscriptionError::Failure(error.to_string()))?;
   let raw_handshake = tokio::select! {
-    result = receiver.recv() => result,
+    result = socket.recv() => result,
     _ = wait_cancelled(cancelled) => return Ok(()),
   };
   let handshake_message = receive_result(raw_handshake).map_err(|error| match error {
@@ -464,8 +511,14 @@ async fn run_muse_session(
   }
 
   let (inbound_tx, mut inbound_rx) = mpsc::unbounded_channel::<Result<Value, TranscriptionError>>();
-  let reader = tokio::spawn(muse_read_events(receiver, inbound_tx));
-  let sender_task = tokio::spawn(muse_send_audio(Arc::clone(&sender), session.audio, cancelled.clone(), session.clock));
+  let reader = tokio::spawn(muse_read_events(Arc::clone(&socket), inbound_tx));
+  let sender_task = tokio::spawn(muse_send_audio(
+    Arc::clone(&socket),
+    session.audio,
+    cancelled.clone(),
+    session.clock,
+    session.audio_bytes_per_second,
+  ));
   let mut reader = Some(reader);
   let mut sender_task = Some(sender_task);
   let mut pending_final: Option<String> = None;
@@ -526,11 +579,11 @@ async fn run_muse_session(
   result
 }
 
-async fn muse_read_events(
-  mut receiver: ws_client::Receiver,
+async fn muse_read_events<S: VoiceSocket + 'static>(
+  socket: Arc<S>,
   events: mpsc::UnboundedSender<Result<Value, TranscriptionError>>,
 ) {
-  while let Some(message) = receiver.recv().await {
+  while let Some(message) = socket.recv().await {
     match message {
       Ok(Message::Text(raw)) => {
         let parsed = parse_json(&raw).map_err(TranscriptionError::Failure);
@@ -567,11 +620,12 @@ async fn muse_read_events(
   }
 }
 
-async fn muse_send_audio(
-  sender: Arc<Sender>,
+async fn muse_send_audio<S: VoiceSocket + 'static>(
+  socket: Arc<S>,
   audio: Arc<AudioQueue>,
   mut cancelled: watch::Receiver<bool>,
   clock: Arc<dyn Clock>,
+  audio_bytes_per_second: f64,
 ) -> Result<(), String> {
   let mut session_start = None;
   let mut sent_seconds = 0.0;
@@ -588,11 +642,12 @@ async fn muse_send_audio(
     if *cancelled.borrow() {
       return Ok(());
     }
-    sender.send(Message::Binary(chunk.clone())).await.map_err(|error| error.to_string())?;
-    sent_seconds += chunk.len() as f64 / AUDIO_BYTES_PER_SECOND;
+    let chunk_seconds = chunk.len() as f64 / audio_bytes_per_second;
+    socket.send(Message::Binary(chunk)).await?;
+    sent_seconds += chunk_seconds;
   }
   if !*cancelled.borrow() {
-    send_json(&sender, json!({ "type": "endStream" })).await?;
+    send_json(socket.as_ref(), json!({ "type": "endStream" })).await?;
   }
   Ok(())
 }
@@ -617,8 +672,8 @@ fn muse_handshake(token: &str, vocabulary: &[String], languages: &[String]) -> V
   handshake
 }
 
-async fn send_json(sender: &Sender, value: Value) -> Result<(), String> {
-  sender.send(Message::Text(dumps_default(&value))).await.map_err(|error| error.to_string())
+async fn send_json<S: VoiceSocket>(socket: &S, value: Value) -> Result<(), String> {
+  socket.send(Message::Text(dumps_default(&value))).await
 }
 
 fn dumps_default(value: &Value) -> String {
@@ -840,6 +895,21 @@ mod tests {
     state: StdMutex<(f64, Vec<f64>)>,
   }
 
+  struct FakeVoiceSocket {
+    outgoing: mpsc::UnboundedSender<Message>,
+    incoming: AsyncMutex<mpsc::UnboundedReceiver<Result<Message, ws_client::Error>>>,
+  }
+
+  impl VoiceSocket for FakeVoiceSocket {
+    fn send(&self, message: Message) -> BoxFuture<'_, Result<(), String>> {
+      Box::pin(async move { self.outgoing.send(message).map_err(|_| "the fake voice peer is closed".to_string()) })
+    }
+
+    fn recv(&self) -> BoxFuture<'_, Option<Result<Message, ws_client::Error>>> {
+      Box::pin(async move { self.incoming.lock().await.recv().await })
+    }
+  }
+
   impl VirtualClock {
     fn new() -> Self {
       Self { state: StdMutex::new((0.0, Vec::new())) }
@@ -872,6 +942,7 @@ mod tests {
 
   async fn accept_fake(listener: TcpListener) -> FakeSocket {
     let (stream, _) = listener.accept().await.expect("accept the backend connection");
+    stream.set_nodelay(true).expect("disable Nagle on the fake backend socket");
     accept_async(stream).await.expect("complete the fake WebSocket handshake")
   }
 
@@ -961,138 +1032,168 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn gemini_loopback_preserves_setup_audio_partial_and_final_frames() {
-    let (listener, endpoint) = fake_listener().await;
-    let fake = tokio::spawn(async move {
-      let mut socket = accept_fake(listener).await;
-      let mut sent = vec![next_text(&mut socket).await];
-      socket.send(ServerMessage::Text(r#"{"setupComplete":{}}"#.into())).await.expect("send the setup reply");
-      loop {
-        let Some(message) = socket.next().await else {
-          break;
-        };
-        match message.expect("read Gemini frame") {
-          ServerMessage::Text(text) => {
-            let text = text.to_string();
-            let is_end = serde_json::from_str::<Value>(&text)
-              .expect("Gemini sends JSON")
-              .pointer("/realtimeInput/activityEnd")
-              .is_some();
-            sent.push(text);
-            if is_end {
-              socket
-                .send(ServerMessage::Text(
-                  r#"{"serverContent":{"interimInputTranscription":{"text":"请 查 一 下"}}}"#.into(),
-                ))
-                .await
-                .expect("send the partial");
-              socket
-                .send(ServerMessage::Text(r#"{"serverContent":{"inputTranscription":{"text":"任务完成"}}}"#.into()))
-                .await
-                .expect("send the final");
-            }
-          }
-          ServerMessage::Close(_) => {
-            socket.flush().await.expect("flush the Gemini close reply");
-            break;
-          }
-          message => panic!("unexpected Gemini frame: {message:?}"),
-        }
-      }
-      sent
-    });
-
-    let audio = AudioQueue::new();
+  async fn gemini_session_preserves_setup_audio_partial_and_final_frames() {
+    let audio = AudioQueue::new_with_limits_for_test(2, 0);
     assert!(audio.put(vec![1, 2]).await);
     audio.end(None).await;
-    let backend = Backend::gemini_for_test("synthetic-key", &endpoint);
-    let (task, mut events, _cancel) = start_transcription(backend, audio);
+
+    let (outgoing, mut fake_outgoing) = mpsc::unbounded_channel();
+    let (fake_incoming, incoming) = mpsc::unbounded_channel();
+    let socket = Arc::new(FakeVoiceSocket { outgoing, incoming: AsyncMutex::new(incoming) });
+    let fake = tokio::spawn(async move {
+      let setup = match fake_outgoing.recv().await.expect("Gemini sends its setup") {
+        Message::Text(setup) => serde_json::from_str::<Value>(&setup).expect("Gemini setup is JSON"),
+        message => panic!("expected Gemini setup, got {message:?}"),
+      };
+      fake_incoming.send(Ok(Message::Text(r#"{"setupComplete":{}}"#.into()))).expect("send the Gemini setup reply");
+
+      let mut frames = Vec::new();
+      for _ in 0..3 {
+        let frame = match fake_outgoing.recv().await.expect("Gemini sends its audio frames") {
+          Message::Text(frame) => serde_json::from_str::<Value>(&frame).expect("Gemini audio frame is JSON"),
+          message => panic!("expected a Gemini text frame, got {message:?}"),
+        };
+        frames.push(frame);
+      }
+      fake_incoming
+        .send(Ok(Message::Text(r#"{"serverContent":{"interimInputTranscription":{"text":"请 查 一 下"}}}"#.into())))
+        .expect("send the Gemini partial");
+      fake_incoming
+        .send(Ok(Message::Text(r#"{"serverContent":{"inputTranscription":{"text":"任务完成"}}}"#.into())))
+        .expect("send the Gemini final");
+      (setup, frames)
+    });
+
+    let (events, mut event_receiver) = mpsc::unbounded_channel();
+    let (cancel, cancelled) = watch::channel(false);
+    let task = tokio::spawn(async move {
+      let mut cancelled = cancelled;
+      run_gemini_session(
+        socket,
+        audio,
+        &mut cancelled,
+        events,
+        vec!["Ada".to_string()],
+        vec!["zh".to_string(), "fr".to_string()],
+      )
+      .await
+    });
     let mut transcript = Vec::new();
     for _ in 0..2 {
-      let event = next_event(&mut events).await;
+      let event = next_event(&mut event_receiver).await;
       transcript.push((event.kind, event.text.clone()));
       event.acknowledged.send(()).expect("relay acknowledges the event");
     }
     assert_eq!(
       transcript,
-      [(TranscriptKind::Partial, "请查一下".to_string()), (TranscriptKind::Final, "任务完成".to_string()),]
+      [(TranscriptKind::Partial, "请查一下".to_string()), (TranscriptKind::Final, "任务完成".to_string())]
     );
     tokio::time::timeout(Duration::from_secs(3), task)
       .await
       .expect("Gemini session completes")
       .expect("Gemini task succeeds")
       .expect("Gemini transcription succeeds");
-    let sent = tokio::time::timeout(Duration::from_secs(3), fake)
+    assert!(!*cancel.borrow());
+    let (setup, frames) = tokio::time::timeout(Duration::from_secs(3), fake)
       .await
       .expect("fake Gemini server completes")
       .expect("fake Gemini task succeeds");
     assert_eq!(
-      sent,
+      setup,
+      json!({
+        "setup": {
+          "model": "models/gemini-3.5-transcribe-live",
+          "generationConfig": {"responseModalities": ["TEXT"]},
+          "inputAudioTranscription": {
+            "languageCodes": ["cmn-Hans-CN"],
+            "customVocabulary": ["Ada"],
+            "mode": "VERBATIM"
+          },
+          "realtimeInputConfig": {"automaticActivityDetection": {"disabled": true}}
+        }
+      })
+    );
+    assert_eq!(
+      frames,
       [
-        r#"{"setup": {"model": "models/gemini-3.5-transcribe-live", "generationConfig": {"responseModalities": ["TEXT"]}, "inputAudioTranscription": {"languageCodes": ["cmn-Hans-CN"], "customVocabulary": ["Ada"], "mode": "VERBATIM"}, "realtimeInputConfig": {"automaticActivityDetection": {"disabled": true}}}}"#,
-        r#"{"realtimeInput": {"activityStart": {}}}"#,
-        r#"{"realtimeInput": {"audio": {"data": "AQI=", "mimeType": "audio/pcm;rate=16000"}}}"#,
-        r#"{"realtimeInput": {"activityEnd": {}}}"#,
+        json!({"realtimeInput": {"activityStart": {}}}),
+        json!({"realtimeInput": {"audio": {"data": "AQI=", "mimeType": "audio/pcm;rate=16000"}}}),
+        json!({"realtimeInput": {"activityEnd": {}}}),
       ]
     );
   }
 
   #[tokio::test]
-  async fn muse_loopback_streams_partial_and_final_with_a_four_second_lead_cap() {
-    let (listener, endpoint) = fake_listener().await;
-    let chunks = vec![vec![1; 96_000], vec![2; 96_000], vec![3; 96_000]];
-    let fake_chunks = chunks.clone();
+  async fn muse_session_streams_partial_and_final_with_a_four_second_lead_cap() {
+    let muse_audio_bytes_per_second = 2.0;
+    let chunks = [(10, 1), (2, 2)];
+    let queued_bytes = chunks.iter().map(|(size, _)| *size).sum();
+    let audio = AudioQueue::new_with_limits_for_test(queued_bytes, 0);
+    for (size, value) in chunks.iter().copied() {
+      assert!(audio.put(vec![value; size]).await);
+    }
+    audio.end(None).await;
+
+    let (outgoing, mut fake_outgoing) = mpsc::unbounded_channel();
+    let (fake_incoming, incoming) = mpsc::unbounded_channel();
+    let socket = Arc::new(FakeVoiceSocket { outgoing, incoming: AsyncMutex::new(incoming) });
     let fake = tokio::spawn(async move {
-      let mut socket = accept_fake(listener).await;
-      let handshake = next_text(&mut socket).await;
-      socket
-        .send(ServerMessage::Text(r#"{"type":"sessionStarted"}"#.into()))
-        .await
+      let mut expected_chunks = chunks.into_iter();
+      let handshake = match fake_outgoing.recv().await.expect("Muse sends its handshake") {
+        Message::Text(handshake) => serde_json::from_str::<Value>(&handshake).expect("Muse handshake is JSON"),
+        message => panic!("expected a Muse handshake, got {message:?}"),
+      };
+      fake_incoming
+        .send(Ok(Message::Text(r#"{"type":"sessionStarted"}"#.into())))
         .expect("send the Muse session reply");
-      let mut binary = Vec::new();
-      let mut sent = vec![handshake];
       loop {
-        let Some(message) = socket.next().await else {
-          break;
-        };
-        match message.expect("read Muse frame") {
-          ServerMessage::Binary(bytes) => binary.push(bytes.to_vec()),
-          ServerMessage::Text(text) => {
-            let text = text.to_string();
-            let is_end = text == r#"{"type": "endStream"}"#;
-            sent.push(text);
-            if is_end {
-              socket
-                .send(ServerMessage::Text(r#"{"type":"transcript","text":"synthetic partial"}"#.into()))
-                .await
-                .expect("send the Muse partial");
-              socket
-                .send(ServerMessage::Text(r#"{"type":"speechComplete","transcript":"synthetic final"}"#.into()))
-                .await
-                .expect("send the Muse final");
-            }
+        match fake_outgoing.recv().await.expect("Muse sends the end of its audio stream") {
+          Message::Binary(bytes) => {
+            let (expected_size, expected_value) =
+              expected_chunks.next().expect("Muse forwards every queued chunk once");
+            assert_eq!(bytes.len(), expected_size);
+            assert!(bytes.iter().all(|byte| *byte == expected_value));
           }
-          ServerMessage::Close(_) => {
-            socket.flush().await.expect("flush the Muse close reply");
+          Message::Text(text) if text == r#"{"type": "endStream"}"# => {
+            assert!(expected_chunks.next().is_none(), "Muse forwards every queued chunk");
+            fake_incoming
+              .send(Ok(Message::Text(r#"{"type":"transcript","text":"synthetic partial"}"#.into())))
+              .expect("send the Muse partial");
+            fake_incoming
+              .send(Ok(Message::Text(r#"{"type":"speechComplete","transcript":"synthetic final"}"#.into())))
+              .expect("send the Muse final");
             break;
           }
           message => panic!("unexpected Muse frame: {message:?}"),
         }
       }
-      (sent, binary, fake_chunks)
+      handshake
     });
 
     let clock = Arc::new(VirtualClock::new());
-    let audio = AudioQueue::new();
-    for chunk in &chunks {
-      assert!(audio.put(chunk.clone()).await);
-    }
-    audio.end(None).await;
-    let backend = Backend::muse_for_test("synthetic-token", &endpoint, clock.clone());
-    let (task, mut events, _cancel) = start_transcription(backend, audio);
+    let session_clock = Arc::clone(&clock);
+    let (events, mut event_receiver) = mpsc::unbounded_channel();
+    let (cancel, cancelled) = watch::channel(false);
+    let task = tokio::spawn(async move {
+      let mut cancelled = cancelled;
+      run_muse_session(
+        socket,
+        &mut cancelled,
+        MuseSession {
+          token: "synthetic-token".to_string(),
+          audio,
+          events,
+          vocabulary: vec!["Ada".to_string()],
+          languages: vec!["zh".to_string(), "fr".to_string()],
+          clock: session_clock,
+          audio_bytes_per_second: muse_audio_bytes_per_second,
+        },
+      )
+      .await
+    });
     let mut transcript = Vec::new();
     for _ in 0..2 {
-      let event = next_event(&mut events).await;
+      let event = next_event(&mut event_receiver).await;
       transcript.push((event.kind, event.text.clone()));
       event.acknowledged.send(()).expect("relay acknowledges the event");
     }
@@ -1108,17 +1209,27 @@ mod tests {
       .expect("Muse session completes")
       .expect("Muse task succeeds")
       .expect("Muse transcription succeeds");
-    let (sent, binary, expected_binary) = tokio::time::timeout(Duration::from_secs(3), fake)
+    assert!(!*cancel.borrow());
+    let handshake = tokio::time::timeout(Duration::from_secs(3), fake)
       .await
       .expect("fake Muse server completes")
       .expect("fake Muse task succeeds");
     assert_eq!(
-      sent[0],
-      r#"{"mode": "PUSH_TO_TALK", "authorization": {"accessToken": "synthetic-token"}, "audioEncoding": "PCM_16KHZ", "model": "muse-voice-transcribe-1.0", "partialMode": "CUMULATIVE", "emitAudioProgress": false, "keywords": ["Ada"], "languageBias": ["Mandarin Chinese"]}"#
+      handshake,
+      json!({
+        "mode": "PUSH_TO_TALK",
+        "authorization": {"accessToken": "synthetic-token"},
+        "audioEncoding": "PCM_16KHZ",
+        "model": "muse-voice-transcribe-1.0",
+        "partialMode": "CUMULATIVE",
+        "emitAudioProgress": false,
+        "keywords": ["Ada"],
+        "languageBias": ["Mandarin Chinese"]
+      })
     );
-    assert_eq!(sent[1], r#"{"type": "endStream"}"#);
-    assert_eq!(binary, expected_binary);
-    assert_eq!(clock.sleeps(), [2.0]);
+    let sleeps = clock.sleeps();
+    assert_eq!(sleeps.len(), 1);
+    assert!((sleeps[0] - 1.0).abs() < 1e-12);
   }
 
   #[tokio::test]
@@ -1139,7 +1250,8 @@ mod tests {
         .await
         .expect("send the abnormal close");
     });
-    let backend = Backend::muse_for_test("synthetic-token", &endpoint, Arc::new(EventLoopClock));
+    let backend =
+      Backend::muse_for_test("synthetic-token", &endpoint, Arc::new(EventLoopClock), AUDIO_BYTES_PER_SECOND);
     let (task, _events, _cancel) = start_transcription(backend, AudioQueue::new());
     assert_eq!(
       tokio::time::timeout(Duration::from_secs(3), task)
@@ -1178,49 +1290,59 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn both_backend_cancellations_wait_for_the_one_second_close_timeout() {
-    for backend_kind in [BackendKind::Gemini, BackendKind::Muse] {
-      let (listener, endpoint) = fake_listener().await;
-      let (ready, wait_until_open) = tokio::sync::oneshot::channel();
-      let fake = tokio::spawn(async move {
-        let mut socket = accept_fake(listener).await;
-        let _ = next_text(&mut socket).await;
-        let reply = match backend_kind {
-          BackendKind::Gemini => r#"{"setupComplete":{}}"#,
-          BackendKind::Muse => r#"{"type":"sessionStarted"}"#,
-        };
-        socket.send(ServerMessage::Text(reply.into())).await.expect("send the session reply");
-        if matches!(backend_kind, BackendKind::Gemini) {
-          let activity_start = next_text(&mut socket).await;
-          assert!(activity_start.contains("activityStart"));
-        }
-        let audio = socket.next().await.expect("client sends audio").expect("audio frame is valid");
-        assert!(matches!(audio, ServerMessage::Text(_) | ServerMessage::Binary(_)));
-        ready.send(()).expect("notify the test that the session is open");
-        std::future::pending::<()>().await;
-      });
-      let backend = match backend_kind {
-        BackendKind::Gemini => Backend::gemini_for_test("synthetic-key", &endpoint),
-        BackendKind::Muse => Backend::muse_for_test("synthetic-token", &endpoint, Arc::new(EventLoopClock)),
+  async fn gemini_cancellation_waits_for_the_one_second_close_timeout() {
+    assert_backend_cancellation_waits_for_close_timeout(BackendKind::Gemini).await;
+  }
+
+  #[tokio::test]
+  async fn muse_cancellation_waits_for_the_one_second_close_timeout() {
+    assert_backend_cancellation_waits_for_close_timeout(BackendKind::Muse).await;
+  }
+
+  async fn assert_backend_cancellation_waits_for_close_timeout(backend_kind: BackendKind) {
+    let (listener, endpoint) = fake_listener().await;
+    let (ready, wait_until_open) = tokio::sync::oneshot::channel();
+    let fake = tokio::spawn(async move {
+      let mut socket = accept_fake(listener).await;
+      let _ = next_text(&mut socket).await;
+      let reply = match backend_kind {
+        BackendKind::Gemini => r#"{"setupComplete":{}}"#,
+        BackendKind::Muse => r#"{"type":"sessionStarted"}"#,
       };
-      let audio = AudioQueue::new();
-      assert!(audio.put(vec![0, 0]).await);
-      let (task, _events, cancel) = start_transcription(backend, audio);
-      tokio::time::timeout(Duration::from_secs(3), wait_until_open)
-        .await
-        .expect("backend connection opens")
-        .expect("fake server reports open");
-      let started = tokio::time::Instant::now();
-      cancel.send_replace(true);
-      tokio::time::timeout(Duration::from_secs(3), task)
-        .await
-        .expect("backend cancellation finishes")
-        .expect("backend task completes")
-        .expect("cancelled backend returns cleanly");
-      let elapsed = started.elapsed();
-      assert!(elapsed >= Duration::from_millis(800), "close wait was only {elapsed:?}");
-      assert!(elapsed < Duration::from_secs(2), "close wait exceeded its one-second limit: {elapsed:?}");
-      fake.abort();
-    }
+      socket.send(ServerMessage::Text(reply.into())).await.expect("send the session reply");
+      if matches!(backend_kind, BackendKind::Gemini) {
+        let activity_start = next_text(&mut socket).await;
+        assert!(activity_start.contains("activityStart"));
+      }
+      let audio = socket.next().await.expect("client sends audio").expect("audio frame is valid");
+      assert!(matches!(audio, ServerMessage::Text(_) | ServerMessage::Binary(_)));
+      ready.send(()).expect("notify the test that the session is open");
+      std::future::pending::<()>().await;
+    });
+    let backend = match backend_kind {
+      BackendKind::Gemini => Backend::gemini_for_test("synthetic-key", &endpoint),
+      BackendKind::Muse => {
+        Backend::muse_for_test("synthetic-token", &endpoint, Arc::new(EventLoopClock), AUDIO_BYTES_PER_SECOND)
+      }
+    };
+    let audio = AudioQueue::new();
+    assert!(audio.put(vec![0, 0]).await);
+    let (task, _events, cancel) = start_transcription(backend, audio);
+    tokio::time::timeout(Duration::from_secs(3), wait_until_open)
+      .await
+      .expect("backend connection opens")
+      .expect("fake server reports open");
+    tokio::time::pause();
+    let started = tokio::time::Instant::now();
+    cancel.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(3), task)
+      .await
+      .expect("backend cancellation finishes")
+      .expect("backend task completes")
+      .expect("cancelled backend returns cleanly");
+    let elapsed = started.elapsed();
+    assert!(elapsed >= Duration::from_millis(800), "close wait was only {elapsed:?}");
+    assert!(elapsed < Duration::from_secs(2), "close wait exceeded its one-second limit: {elapsed:?}");
+    fake.abort();
   }
 }

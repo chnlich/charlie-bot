@@ -21,6 +21,7 @@ const PROCESS_TIMEOUT: Duration = Duration::from_secs(20);
 const CDP_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[test]
+#[ignore = "integration"]
 fn artifact_check_closes_the_fake_chrome_process_group_before_exit() {
   let page = fs::read_to_string(harness::repo_root().join("prompts/plan_template.html")).unwrap();
   let run = run_check(&page, false);
@@ -31,6 +32,7 @@ fn artifact_check_closes_the_fake_chrome_process_group_before_exit() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn artifact_check_closes_the_fake_chrome_process_group_after_assertion_failures() {
   let run = run_check("<html><body></body></html>", false);
 
@@ -40,6 +42,7 @@ fn artifact_check_closes_the_fake_chrome_process_group_after_assertion_failures(
 }
 
 #[test]
+#[ignore = "integration"]
 fn artifact_check_closes_the_fake_chrome_process_group_after_assertion_errors() {
   let page = fs::read_to_string(harness::repo_root().join("prompts/plan_template.html")).unwrap();
   let run = run_check(&page, true);

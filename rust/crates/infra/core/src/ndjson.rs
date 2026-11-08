@@ -24,6 +24,17 @@ pub fn parse_line(raw: &[u8]) -> Option<Result<Value, serde_json::Error>> {
   }
 }
 
+/// Skip the spaces and tabs at the start of `bytes`.
+///
+/// A reader uses this between the punctuation of a line's JSON header, where the producer's spacing is free-form, so
+/// a header comparison needs no parse of the whole line.
+pub fn trim_horizontal_space(mut bytes: &[u8]) -> &[u8] {
+  while matches!(bytes.first(), Some(b' ' | b'\t')) {
+    bytes = &bytes[1..];
+  }
+  bytes
+}
+
 #[cfg(test)]
 mod tests {
   use serde_json::json;
@@ -32,6 +43,13 @@ mod tests {
 
   fn value(raw: &[u8]) -> Value {
     parse_line(raw).expect("the line is present").expect("the line parses")
+  }
+
+  #[test]
+  fn only_leading_spaces_and_tabs_are_trimmed() {
+    assert_eq!(trim_horizontal_space(b" \t{\"type\""), b"{\"type\"");
+    assert_eq!(trim_horizontal_space(b"\r\n x"), b"\r\n x");
+    assert_eq!(trim_horizontal_space(b"x \t"), b"x \t");
   }
 
   #[test]

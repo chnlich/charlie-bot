@@ -9,7 +9,7 @@ use super::charlie_code_cli::CharlieCodeBackend;
 use super::options::CharlieCodeOption;
 use charliebot_agents::cli_base::CliHost;
 
-/// Builds one charlie-code backend per launch, resolving the binary from the package's host.
+/// The factory that builds one charlie-code backend per launch, resolving the binary from the package's host.
 pub struct CharlieCodeFactory {
   host: CliHost,
 }

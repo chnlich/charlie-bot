@@ -712,7 +712,7 @@ mod tests {
   }
 
   /// How long the test service's stop takes, in milliseconds.
-  const SLOW_STOP_MS: u64 = 200;
+  const SLOW_STOP_MS: u64 = 30;
 
   /// A service whose stop takes `SLOW_STOP_MS`, so the shutdown line has a known delay to cover.
   struct SlowStop;

@@ -30,8 +30,9 @@ pub fn feishu_origin(meta: &SessionMetadata) -> anyhow::Result<Option<FeishuOrig
   }
 }
 
-/// Validate a `feishu_origin` value in place (the slot validator): null, or an object whose `tenant_key`, `chat_id`
-/// and `root_id` are strings and whose `thread_id` is a string or absent. Other keys are dropped.
+/// The `feishu_origin` slot validator: it checks the value in place. The value is null, or an object whose
+/// `tenant_key`, `chat_id` and `root_id` are strings and whose `thread_id` is a string or absent. Other keys are
+/// dropped.
 ///
 /// `valid_origin` in core requires every listed field, which cannot express the optional `thread_id`.
 pub fn valid_origin(value: &mut Value) -> bool {

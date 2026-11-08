@@ -9,7 +9,6 @@ publish.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 bstr.workspace = true
-charliebot-agents.workspace = true
 charliebot-claude-code.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true
@@ -25,6 +24,5 @@ reqwest = { workspace = true, features = ["json", "query", "stream"] }
 
 [dev-dependencies]
 charliebot-store.workspace = true
-regex.workspace = true
 tempfile.workspace = true
 tower.workspace = true

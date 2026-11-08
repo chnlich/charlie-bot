@@ -600,6 +600,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn present_returns_awaiting_approval() {
     let (_home, features) = plan_session("sess", None);
     write_plan_artifact(&features, "sess", "plan_01.html", &plan_page("Ship the fix."));
@@ -631,26 +632,31 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn cross_format_duplicate_present_after_a_relative_present() {
     cross_format_duplicate(false, false).await;
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn cross_format_duplicate_present_after_an_absolute_present() {
     cross_format_duplicate(true, false).await;
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn cross_format_duplicate_amend_after_a_relative_present() {
     cross_format_duplicate(false, true).await;
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn cross_format_duplicate_amend_after_an_absolute_present() {
     cross_format_duplicate(true, true).await;
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn present_refuses_a_file_outside_the_session_directory() {
     let (home, features) = plan_session("sess", None);
     let outside = home.path().join("outside.html");
@@ -664,6 +670,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn present_refuses_a_nul_byte_as_resolve_does() {
     let (_home, features) = plan_session("sess", None);
     let error = present_p1(&features, "sess", "artifacts/a\0b.html").await.unwrap_err();
@@ -671,6 +678,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn present_rejects_goal_over_budget_with_measured_value() {
     let (_home, features) = plan_session("sess", None);
     write_plan_artifact(&features, "sess", "plan_01.html", &plan_page(&"x".repeat(241)));
@@ -682,6 +690,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn present_names_every_failed_assertion_with_the_measure_hint() {
     let (_home, features) = plan_session("sess", None);
     let broken = plan_page("Ship the fix.")
@@ -700,6 +709,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn present_refuses_a_page_with_a_raw_tsv_link_before_registering_it() {
     let (_home, features) = plan_session("sess", None);
     let page = plan_page(r#"The result is <a href="https://example.invalid/result.tsv">here</a>."#);
@@ -716,6 +726,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn amend_requires_non_empty_note() {
     let (_home, features) = plan_session("sess", None);
     write_plan_artifact(&features, "sess", "plan_01.html", &plan_page("Ship the fix."));
@@ -730,6 +741,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn amend_requires_non_empty_note_whitespace() {
     let (_home, features) = plan_session("sess", None);
     write_plan_artifact(&features, "sess", "plan_01.html", &plan_page("Ship the fix."));
@@ -744,6 +756,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn plans_json_shape_matches_schema() {
     let (_home, features) = plan_session("sess", None);
     write_plan_artifact(&features, "sess", "plan_01.html", &plan_page("Ship the fix."));
@@ -773,6 +786,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn present_broadcasts_the_frame_and_marks_the_sidebar() {
     let (_home, features) = plan_session("frames-present", None);
     write_plan_artifact(&features, "frames-present", "plan_01.html", &plan_page("Ship the fix."));
@@ -786,6 +800,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn amend_appends_a_version_and_clears_the_takeoff() {
     let (_home, features) = plan_session("sess", Some(APPROVED_REGISTRY));
     let f2 = write_plan_artifact(&features, "sess", "plan_02.html", &plan_page("Ship the fix."));
@@ -799,6 +814,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn amend_refuses_without_an_open_lineage_or_with_several() {
     let (_home, features) = plan_session("closed", Some(CLOSED_REGISTRY));
     let f2 = write_plan_artifact(&features, "closed", "plan_02.html", &plan_page("Ship the fix."));
@@ -817,6 +833,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn approve_returns_approved() {
     let (_home, features) = session_with_registry("sess", AWAITING_REGISTRY);
     let result = approve(&features, &SessionLocks::default(), "sess", None).await.expect("the approval succeeds");
@@ -824,6 +841,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn close_superseded_and_abandoned() {
     let (_home, features) = session_with_registry("sess", TWO_AWAITING_REGISTRY);
     let locks = SessionLocks::default();
@@ -834,6 +852,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn closing_already_closed_rejected() {
     let (_home, features) = session_with_registry("sess", AWAITING_REGISTRY);
     let locks = SessionLocks::default();
@@ -843,6 +862,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn approve_refuses_each_plan_it_cannot_approve_with_the_message() {
     let cases = [
       (TWO_AWAITING_REGISTRY, None, "approve requires --plan (multiple candidates: 1, 2)"),
@@ -863,6 +883,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn approve_broadcasts_the_frame_and_marks_the_sidebar() {
     let (_home, features) = session_with_registry("frames-approve", AWAITING_REGISTRY);
     let mut frames = features.store.subscribe(&session_channel("frames-approve"));
@@ -876,6 +897,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn close_broadcasts_the_frame_and_marks_the_sidebar() {
     let (_home, features) = session_with_registry("frames-close", AWAITING_REGISTRY);
     let mut frames = features.store.subscribe(&session_channel("frames-close"));

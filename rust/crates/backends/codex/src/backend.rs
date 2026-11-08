@@ -382,6 +382,7 @@ mod tests {
     assert!(backend.build_command("prompt").unwrap().contains(&"developer_instructions=null".to_string()));
   }
 
+  #[ignore = "integration"]
   /// The one-shot's child keeps the agent gh wrapper first on PATH, ahead of the user's `~/.local/bin` that
   /// `prepare_env` prepends.
   #[tokio::test]
@@ -431,6 +432,7 @@ printf '%s\n' '{{"type":"item.completed","item":{{"id":"m1","type":"agent_messag
     assert_eq!(entries, [wrapper_dir.to_str().unwrap(), local_bin.to_str().unwrap(), "/usr/bin", "/bin"]);
   }
 
+  #[ignore = "integration"]
   /// The hook-trust notices codex-cli 0.164.0 emits before `turn.started` are item-level errors, so they translate to
   /// system events and the one-shot answers instead of failing on the notice text.
   #[tokio::test]

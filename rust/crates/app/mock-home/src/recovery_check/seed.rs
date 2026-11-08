@@ -11,7 +11,9 @@ use charliebot_core::event_types::{INPUT_EVENT_IDS, RUN_FINISHED, TASK_CLOSED, T
 use charliebot_store::layout;
 use charliebot_store::metadata::{HAS_UNREAD, KEEP_WORKTREE_FIELD};
 use charliebot_store::run_records::{
-  OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF, OBSERVATION_RESULT_REF, RAW_LOG_NAME, RUN_METADATA_NAME,
+  OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_MODEL,
+  OBSERVATION_NATIVE_SESSION_ID, OBSERVATION_PROMPT_SNAPSHOT_REF, OBSERVATION_RAW_LOG_REF, OBSERVATION_REPO_PATH,
+  OBSERVATION_RESULT_REF, OBSERVATION_WORKTREE_PATH, RAW_LOG_NAME, RUN_METADATA_NAME,
 };
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -183,21 +185,21 @@ fn run_record(run: RunRecord) -> Value {
     (INPUT_EVENT_IDS): run.inputs,
     "task_spec_hash": null,
     "task_spec_ref": null,
-    "prompt_snapshot_ref": null,
+    (OBSERVATION_PROMPT_SNAPSHOT_REF): null,
     "retry_of_run_id": null,
     "review_of_run_id": null,
     "backend": BACKEND,
-    "model": MODEL,
-    "native_session_id": null,
+    (OBSERVATION_MODEL): MODEL,
+    (OBSERVATION_NATIVE_SESSION_ID): null,
     "pid": run.pid,
     "pid_start": "12345",
     "started_at": format!("{}Z", run.started_at),
     "ended_at": run.ended_at.as_ref().map(|at| format!("{at}Z")),
     "exit_code": run.ended_at.as_ref().map(|_| 0),
-    "repo_path": null,
-    "base_branch": null,
-    "branch_name": null,
-    "worktree_path": null,
+    (OBSERVATION_REPO_PATH): null,
+    (OBSERVATION_BASE_BRANCH): null,
+    (OBSERVATION_BRANCH_NAME): null,
+    (OBSERVATION_WORKTREE_PATH): null,
     "sequence_ref": null,
     (OBSERVATION_RAW_LOG_REF): null,
     (OBSERVATION_EVENTS_REF): null,

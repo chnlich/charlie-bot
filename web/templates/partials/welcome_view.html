@@ -8,7 +8,9 @@
 <div class="flex-1 flex items-center justify-center">
   <div class="text-center">
     <h2 class="text-xl font-semibold text-slate-400 mb-2">Welcome to CharlieBot</h2>
-    <p class="text-slate-500 mb-4">Create or select a session to get started</p>
+    {# The invitation line reads in the secondary slate-400 tone. slate-500 on the slate-900 page
+       draws 3.75:1 at 16 px, under the 4.5:1 floor for body text; slate-400 renders 7.01:1. #}
+    <p class="text-slate-400 mb-4">Create or select a session to get started</p>
     <button onclick="createSession()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors">New Session</button>
   </div>
 </div>

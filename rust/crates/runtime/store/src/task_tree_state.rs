@@ -441,6 +441,11 @@ pub(crate) fn task_below_caller(index: &TreeIndex, caller_task: &str, session_id
   Ok(ancestor_ids(index, session_id)?.iter().any(|id| id == caller_task))
 }
 
+/// Whether the node is the caller's task or sits below it: the subtree test that reparent scope and cron binding share.
+pub(crate) fn within_caller_subtree(index: &TreeIndex, caller_task: &str, session_id: &str) -> StoreResult<bool> {
+  Ok(session_id == caller_task || ancestor_ids(index, session_id)?.iter().any(|id| id == caller_task))
+}
+
 pub(crate) struct CachedTreeIndex {
   pub(crate) generation: u64,
   pub(crate) built_at: Instant,

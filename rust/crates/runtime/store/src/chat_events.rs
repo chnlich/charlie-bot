@@ -8,6 +8,7 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, ErrorKind};
 use std::path::{Path, PathBuf};
 
+use charliebot_core::str_methods::universal_newlines;
 use serde_json::Value;
 
 use crate::layout;
@@ -126,7 +127,7 @@ fn split_whole(text: &str, rule: LineRule) -> Vec<String> {
     LineRule::Lines | LineRule::LossyLines => text.lines().map(str::to_string).collect(),
     LineRule::Terminated => text.split_inclusive('\n').map(str::to_string).collect(),
     LineRule::Universal => {
-      let normalized = read_universal(text);
+      let normalized = universal_newlines(text);
       normalized.split_terminator('\n').map(str::to_string).collect()
     }
     LineRule::PerLine => unreachable!("the per-line rule reads the file one line at a time, not as one text"),
@@ -138,11 +139,7 @@ fn split_whole(text: &str, rule: LineRule) -> Vec<String> {
 pub fn read_universal_text(path: &Path) -> Result<String, LogReadError> {
   let bytes = fs::read(path).map_err(LogReadError::Io)?;
   let text = String::from_utf8(bytes).map_err(LogReadError::Utf8)?;
-  Ok(read_universal(&text))
-}
-
-fn read_universal(text: &str) -> String {
-  text.replace("\r\n", "\n").replace('\r', "\n")
+  Ok(universal_newlines(&text))
 }
 
 /// The complete lines of `text` after byte `consumed`, each numbered after the `lines` already taken, and advance

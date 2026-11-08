@@ -27,8 +27,11 @@ use charliebot_core::repo_root::REPO_ROOT_ENV;
 use charliebot_core::timefmt;
 use charliebot_session_api::api as session_routes;
 use charliebot_store::layout;
-use charliebot_store::metadata::MetadataReadError;
-use charliebot_store::run_records::{RUN_EVENTS_NAME, event_line, read_run_metadata};
+use charliebot_store::metadata::{MetadataReadError, PARENT_SESSION_ID};
+use charliebot_store::run_records::{
+  OBSERVATION_BRANCH_NAME, OBSERVATION_WORKTREE_PATH, RUN_EVENTS_NAME, event_line, read_run_metadata,
+};
+use charliebot_tasks::master_run::MASTER_CC_RESUMING_EVENT;
 use charliebot_tasks::routes as task_routes;
 use regex::Regex;
 use serde::Deserialize;
@@ -203,7 +206,7 @@ fn recovery_logs(home: &Path, adopt: bool) -> io::Result<()> {
       if adopt {
         log("task_recovery_resume", json!({"session_id": meta["session_id"], "run_id": meta["id"]}));
       }
-      log("master_cc_resuming", json!({"session_id": meta["session_id"], "run_id": meta["id"]}));
+      log(MASTER_CC_RESUMING_EVENT, json!({"session_id": meta["session_id"], "run_id": meta["id"]}));
     }
   }
   Ok(())
@@ -413,7 +416,7 @@ impl Server {
         200,
         json!({
           "session_id": CHILD_SESSION,
-          "parent_session_id": request["session_id"],
+          PARENT_SESSION_ID: request["session_id"],
           "run_id": TASK_RUN,
           "thread_id": TASK_RUN,
           "description": request["description"],
@@ -450,8 +453,8 @@ impl Server {
       "id": TASK_RUN,
       "state": self.behavior.task_state,
       "repo_path": repo,
-      "branch_name": null,
-      "worktree_path": null,
+      (OBSERVATION_BRANCH_NAME): null,
+      (OBSERVATION_WORKTREE_PATH): null,
     });
     if self.behavior.worktree == "created" {
       let worktree = self.home.join("worktrees/task-switch-check");
@@ -464,12 +467,12 @@ impl Server {
       if !status.success() {
         return Err(io::Error::other(format!("git worktree add failed: {status}")));
       }
-      task["branch_name"] = json!("charliebot/task-switch-check");
-      task["worktree_path"] = json!(fs::canonicalize(&worktree)?.display().to_string());
+      task[OBSERVATION_BRANCH_NAME] = json!("charliebot/task-switch-check");
+      task[OBSERVATION_WORKTREE_PATH] = json!(fs::canonicalize(&worktree)?.display().to_string());
     }
     // The run's record names a backend. Its ended_at is set, so the switch's scan does not take the stand-in's run for
     // a live one after the check.
-    let cwd = task["worktree_path"].as_str().unwrap_or(repo).to_string();
+    let cwd = task[OBSERVATION_WORKTREE_PATH].as_str().unwrap_or(repo).to_string();
     let run_dir = layout::runs_dir(&sessions_dir_in(&self.home).join(CHILD_SESSION)).join(TASK_RUN);
     fs::create_dir_all(&run_dir)?;
     let metadata = json!({"id": TASK_RUN, "backend": "fake-backend", "ended_at": "2026-11-03T00:00:00Z"});

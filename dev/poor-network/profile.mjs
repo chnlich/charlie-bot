@@ -28,6 +28,10 @@ export const TARGETS = Object.freeze({
   resetBlackoutBaseMs: 2000,
   // Scenario 6: the socket bytes of one reply are at most this multiple of the reply's text bytes.
   longStreamRatio: 1.2,
+  // Scenario 7: the tool-row bytes the stream frames move are at most this multiple of the final rows' bytes.
+  toolStreamRatio: 2.0,
+  // Scenario 7's turn is background traffic while it runs, so its socket bytes per minute read the scenario 1
+  // target (`backgroundKbPerMinute`), not a target of their own.
 });
 
 // The background load of scenarios 1 to 3: the task-tree changes a live turn produces, one burst per window.
@@ -36,24 +40,63 @@ export const TASK_TREE_LOAD = Object.freeze({
   windowMs: 75000,
 });
 
+// The status churn of the same load: the row-state changes the live device's status body carried. The live readback
+// answered 200 to 72% of its 20 polls a minute, so about 14 answers a minute carried a body that differed from the one
+// before. Two kinds of change make up that churn:
+//
+// - a held turn starts and is cancelled, which moves `thinking_since`, `has_running_tasks` and `work_state`; the server
+//   broadcasts it, so the page polls at once and the change costs an extra poll;
+// - a delayed trigger appears on a row and is cancelled, which moves `has_pending_trigger`, `pending_trigger_count` and
+//   `next_trigger_at`; nothing broadcasts it, so the page meets it on its next poll.
+//
+// Both are one row's own state, and the rates are per 75 s window. The background tab polls about 27 times a minute,
+// against the live readback's 20, so reproducing its 72% share takes about 19 changed answers a minute. Consecutive
+// trigger flips cancel one another between two polls, so a flip is caught by a poll about half the time: 33 flips a
+// window measured a 0.56 share at 27 polls a minute, 44 a 0.63, and 51, a silent step every 1.5 s, carried the
+// calibration and the acceptance's before side past the live share. `report.mjs` prints the measured share beside
+// `LIVE_READBACK.status200Share`.
+export const STATUS_CHURN = Object.freeze({
+  turnFlipsPerWindow: 14,
+  triggerFlipsPerWindow: 51,
+  // Long past any window the bench measures, so a held trigger never fires into the load.
+  triggerDelaySeconds: 600,
+  windowMs: 75000,
+});
+
 // Repetitions of each scenario. The report takes the median and the 90th percentile of the repetitions.
 export const REPETITIONS = 5;
 
-// The calibration: the origin/main baseline's switch during the background must take at least this long to render.
+// The calibration: on the baseline, a switch clicked while a background list refresh is in flight must take at least
+// this long to render.
 export const CALIBRATION_HOLD_MS = 10000;
 
+// The one commit the calibration gate checks the condition on: the pre-fix baseline whose switch holds the spec cites.
+// The fixes remove the background bursts the hold lived on, so a fix's own before side no longer reproduces it; the
+// gate reads only a before side measured at this commit, and every other before side runs ungated.
+export const CALIBRATION_REFERENCE = '408aa851c401c595f8f47e49a233fffd48f64b8a';
+
 // The shape of the view the bench measures, taken from a live release's default "all" view: 124 rows, a raw median row
-// of 3,260 bytes, and a switch target whose bootstrap takes a median 26,592 bytes on the wire. The bench's own sessions
-// are rows of that view, and the mock home holds the rest.
+// of 3,260 bytes, and a switch target whose bootstrap content takes a median 26,592 bytes on the wire untrimmed. The
+// bench's own sessions are rows of that view, and the mock home holds the rest. The first screen's trim serves that
+// content within its budget; the sizing measures the content, not the served bytes, so both sides size alike.
 export const VIEW = Object.freeze({
   rows: 124,
   rawRowMedianBytes: 3260,
-  bootstrapWireBytes: 26592,
+  bootstrapUntrimmedWireBytes: 26592,
+});
+
+// The other sidebar views the background is measured on, at the sizes of a live release's views: the starred view held
+// 18 rows (8 active, 10 archived) and the Threads view 63 active thread sessions. The bench's rows of these views are
+// all active.
+export const OTHER_VIEWS = Object.freeze({
+  starred: { rows: 18 },
+  threads: { rows: 63 },
 });
 
 // The sessions the bench creates on the trial's backend: one open, one running in the background, three for the
-// probes, one switch target and five for the held blackout. They are task-tree nodes, so the server takes a message.
-export const BENCH_SESSIONS = 11;
+// probes, one switch target, five for the held blackout and one whose status churns. They are task-tree nodes, so the
+// server takes a message.
+export const BENCH_SESSIONS = 12;
 
 // The live readback of a release's default view, from one visible tab for 4.02 h: status polls about 20 per minute at
 // 5,767 bytes received each, and full-list fetches, 174 at 113,791 bytes each. Together they receive about 206 KB a
@@ -61,5 +104,40 @@ export const BENCH_SESSIONS = 11;
 export const LIVE_READBACK = Object.freeze({
   receivedKbPerMin: 206,
   statusPollBytes: 5767,
+  status200Share: 0.72,
   fullListBytes: 113791,
+});
+
+// The open scenario: the three cases of plan 2 section 3 under the link's conditions. A: this browser opened the
+// session before; B: it opened a chat page before, but not this session; C: it never opened a chat page. Every
+// constant the scenario reads is here.
+export const OPEN = Object.freeze({
+  // A session's newest message on screen, from navigation start, on the link (plan 2 section 3).
+  targetMs: 1000,
+  // The page's bytes after its load event are counted for this long.
+  postLoadWindowMs: 30000,
+  // A held or reset blackout starts this long before the open navigates, so the open happens inside it.
+  blackoutLeadMs: 1000,
+  // Repeated drops: the link is up for upSeconds, then down for downSeconds, until totalSeconds have passed. Each
+  // drop resets every connection, so each recovery reconnects.
+  flaps: Object.freeze({upSeconds: 5, downSeconds: 5, totalSeconds: 60}),
+  // The first open after a release: the resource version changes this long after a held blackout starts, and the
+  // open navigates openAfterMs after it, so the open is inside the hold.
+  releaseAtMs: 5000,
+  openAfterMs: 10000,
+  // An open that has not shown its newest message or its catch-up by this time is recorded at the cap.
+  capMs: 240000,
+  // An offline navigation that has not shown the page within this time is recorded as not reached.
+  offlineSettleMs: 5000,
+});
+
+// Chao's devices, from the live server log's page loads (2026-11-06 03:40Z to 08:40Z). A page load's CPU tail is its
+// DOMContentLoaded minus its responseEnd: the time after the document's last byte, which is parsing and running the
+// blocking scripts and styles. The raw DOMContentLoaded includes the document's transfer, and the live link carried
+// that transfer about ten times faster than the modeled link, so the raw value is not compared. The device with
+// enough loads is the one with cause "open" loads, and the other device has none.
+export const LIVE_CPU_TAIL = Object.freeze({
+  device: '100.84.122.38',
+  loads: 13,
+  medianMs: 297,
 });

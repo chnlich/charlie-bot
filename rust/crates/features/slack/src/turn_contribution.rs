@@ -5,6 +5,7 @@ use std::sync::Arc;
 use charliebot_chat_threads::thread_entry::{self, ThreadAdapter, thread_reply_contract, thread_reply_segment};
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::run_kind::RunKind;
 use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{EventRenderer, RuleSegment, TurnContribution};
@@ -15,9 +16,6 @@ use serde_json::{Value, json};
 use crate::event_types::SLACK_REPLY;
 use crate::metadata::slack_origin;
 use crate::thread_contract::{SLACK, thread_contract_part};
-
-/// The run kind that takes the manager contract.
-const MANAGER_KIND: &str = "manager_turn";
 
 /// The Slack turn contribution.
 pub struct SlackTurnContribution;
@@ -34,7 +32,7 @@ impl TurnContribution for SlackTurnContribution {
     cfg: &CharlieBotConfig,
     repo: &RepoRoot,
   ) -> anyhow::Result<Vec<RuleSegment>> {
-    if kind != MANAGER_KIND {
+    if kind != RunKind::ManagerTurn.as_str() {
       return Ok(Vec::new());
     }
     let Some(origin) = slack_origin(meta)? else {
@@ -132,7 +130,7 @@ mod tests {
         worktree_dir: "/synthetic/worktrees".to_string(),
         scratch_dir: "/synthetic/scripts".to_string(),
       },
-      backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
+      backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new(), auto: None },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       remote_run: charliebot_core::config::RemoteRunConfig::default(),

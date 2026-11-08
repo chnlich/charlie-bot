@@ -71,6 +71,7 @@ fn fails_naming(run: &Run, path: &str) {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_clean_tree_passes() {
   let sandbox = Sandbox::new();
   let env = env_for(&sandbox);
@@ -80,6 +81,7 @@ fn a_clean_tree_passes() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_tracked_python_file_fails() {
   let sandbox = Sandbox::new();
   let env = env_for(&sandbox);
@@ -89,6 +91,7 @@ fn a_tracked_python_file_fails() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_python_shebang_fails() {
   let sandbox = Sandbox::new();
   let env = env_for(&sandbox);
@@ -98,6 +101,7 @@ fn a_python_shebang_fails() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_script_or_ci_line_that_runs_python_fails() {
   let sandbox = Sandbox::new();
   let env = env_for(&sandbox);
@@ -110,6 +114,7 @@ fn a_script_or_ci_line_that_runs_python_fails() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_prompts_skills_or_docs_line_that_runs_python_fails() {
   let sandbox = Sandbox::new();
   let env = env_for(&sandbox);
@@ -122,6 +127,7 @@ fn a_prompts_skills_or_docs_line_that_runs_python_fails() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_exempt_path_passes() {
   let sandbox = Sandbox::new();
   let env = env_for(&sandbox);

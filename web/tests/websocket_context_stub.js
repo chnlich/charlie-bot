@@ -17,6 +17,7 @@ const { readStatic } = require('./read_static');
 
 const PAGE_TIMERS_JS = readStatic('page-timers.js');
 const WEBSOCKET_JS = readStatic('websocket.js');
+const STREAM_DRAFT_JS = readStatic('stream-draft.js');
 const WEBSOCKET_HANDLERS_JS = readStatic('websocket-handlers.js');
 
 function loadWebsocketContext(extraContext) {
@@ -70,14 +71,15 @@ function loadWebsocketContext(extraContext) {
   return {context, FakeWebSocket: context.WebSocket};
 }
 
-// The three-file load sequence on its own, for a harness whose vm context
+// The four-file load sequence on its own, for a harness whose vm context
 // already exists: the page-timers registry (which websocket.js defers its
-// hidden-tab work through), websocket.js's transport, then the core handlers
-// whose registrations it accepts. The caller's context supplies the page
+// hidden-tab work through), the streamed-draft accumulator, websocket.js's
+// transport, then the core handlers whose registrations it accepts. The caller's context supplies the page
 // globals the files read (SESSION_ID, WebSocket, wsUrlWithToken, the sidebar hooks).
 function loadWebsocketModules(context) {
   prepareWebsocketGlobals(context);
   loadPageTimersOnce(context);
+  vm.runInContext(STREAM_DRAFT_JS, context, {filename: 'stream-draft.js'});
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
   vm.runInContext(WEBSOCKET_HANDLERS_JS, context, {filename: 'websocket-handlers.js'});
 }

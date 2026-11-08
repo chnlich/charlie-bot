@@ -20,7 +20,6 @@ nix.workspace = true
 procfs.workspace = true
 regex.workspace = true
 rusqlite.workspace = true
-rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

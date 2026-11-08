@@ -23,9 +23,12 @@ const planPanel = (() => {
   let _loadedViewerKey = null;
   let _stale = true;
   let _fetchGeneration = 0;
-  let _actionBarGeneration = 0;
   let _loadPromise = null;
   let _loadPromiseSessionId = null;
+  // The session whose panel markup render() last painted. The chat's artifact cards load the
+  // registry at page load, before the Plans tab is ever shown. The first show can then find a
+  // committed load and a panel that still carries the template's default markup.
+  let _renderedSessionId = null;
 
   // -- Pure helpers (exported for testing) --------------------------------
 
@@ -202,10 +205,6 @@ const planPanel = (() => {
     return files ? buildStandaloneUrl(files.file, sessionId, sessionsRoot, files.diffFile) : null;
   }
 
-  function _buildFilesFetchUrl(file, sessionId, sessionsRoot) {
-    return _filesUrl(file, sessionId, sessionsRoot, 'plan panel files fetch');
-  }
-
   // Full literal class strings: Tailwind's content scan only generates
   // classes it sees as complete tokens, so these stay whole literals, never
   // `bg-${color}-900`-style fragments.
@@ -334,38 +333,25 @@ const planPanel = (() => {
     }
   }
 
-  async function _renderActionBar() {
-    var generation = ++_actionBarGeneration;
+  // The fork chips read the viewer's document, not a second fetch of the plan page: the iframe
+  // carries the page already, so an opened plan costs its one request. The viewer's load event
+  // fills the cache and paints the bar. The renders between reloads paint from the cache, so the
+  // chips always agree with the page the viewer shows.
+  var _forksByViewerKey = {};
+
+  function _currentViewerKey() {
+    return _viewerKey(_selectedPlanId, _selectedVersion, _currentSessionId(), _diffEnabled);
+  }
+
+  function _renderActionBar() {
     var bar = _getEl('plan-action-bar');
     if (!bar) return;
     bar.innerHTML = '';
     var plan = _findPlan(_selectedPlanId);
     if (!plan || _selectedVersion == null) return;
-    var ver = _findVersion(plan, _selectedVersion);
-    if (!ver) return;
-    var url;
-    try {
-      url = _buildFilesFetchUrl(ver.file, SESSION_ID);
-    } catch (e) {
-      console.error('plan-panel: action bar URL failed', e);
-      return;
-    }
-    var resp;
-    try {
-      resp = await fetch(url);
-    } catch (e) {
-      console.error('plan-panel: action bar fetch failed', e);
-      return;
-    }
-    if (generation !== _actionBarGeneration) return;
-    if (!resp.ok) return;
-    var html = await resp.text();
-    if (generation !== _actionBarGeneration) return;
-    var doc = new DOMParser().parseFromString(html, 'text/html');
-    var forks = parseOpenForks(doc);
-    if (generation !== _actionBarGeneration) return;
-    bar.innerHTML = '';
-    if (!forks.length) return;
+    if (!_findVersion(plan, _selectedVersion)) return;
+    if (_loadedViewerKey === null || _loadedViewerKey !== _currentViewerKey()) return;
+    var forks = _forksByViewerKey[_loadedViewerKey] || [];
     forks.forEach(function(fork) {
       var chip = document.createElement('button');
       chip.type = 'button';
@@ -379,6 +365,15 @@ const planPanel = (() => {
       });
       bar.appendChild(chip);
     });
+  }
+
+  // The viewer's load hook: parse the loaded page's open forks into the cache and paint the bar
+  // when the loaded page is still the selection's.
+  function _parseViewerForks() {
+    var iframe = _getEl('plan-viewer');
+    if (!iframe || _loadedViewerKey === null || !iframe.contentDocument) return;
+    _forksByViewerKey[_loadedViewerKey] = parseOpenForks(iframe.contentDocument);
+    if (_loadedViewerKey === _currentViewerKey()) _renderActionBar();
   }
 
   function _prefillChat(text) {
@@ -408,6 +403,7 @@ const planPanel = (() => {
   function render() {
     var panel = _getEl('tab-plans');
     if (!panel) return;
+    _renderedSessionId = _currentSessionId();
     var empty = _getEl('plan-empty-state');
     var viewer = _getEl('plan-viewer');
     var plans = _registry.plans || [];
@@ -459,6 +455,8 @@ const planPanel = (() => {
     }
     _loaded = true;
     _loadedSessionId = sid;
+    // The committed registry is current: only a later network loss may stale it again.
+    _stale = false;
     return true;
   }
 
@@ -473,13 +471,14 @@ const planPanel = (() => {
     _selectedVersion = null;
     _diffEnabled = false;
     _loadedViewerKey = null;
-    ++_actionBarGeneration;      // discard in-flight action-bar renders for the old session
+    _forksByViewerKey = {};
     _highlightTabBadge(false);   // fallback for any path that skips the hook
     render();                    // empty state, synchronously
   }
 
   async function _fetchRegistry(sid) {
-    var resp = await fetch('/api/sessions/' + encodeURIComponent(sid) + '/plans');
+    var resp = await fetch('/api/sessions/' + encodeURIComponent(sid) + '/plans',
+        {signal: viewRequestSignal()});
     if (!resp.ok) {
       throw new Error('plan registry fetch failed: HTTP ' + resp.status);
     }
@@ -522,7 +521,9 @@ const planPanel = (() => {
         _commitRegistry(sid, data, generation);
       } catch (e) {
         console.error('plan-panel ensureLoaded failed:', e);
-        _commitRegistry(sid, {plans: []}, generation);
+        // The empty commit keeps the previous session's rows off the panel;
+        // the stale mark gives the next tab open a retry.
+        if (_commitRegistry(sid, {plans: []}, generation)) _stale = true;
       }
     })();
     return _loadPromise;
@@ -569,7 +570,7 @@ const planPanel = (() => {
     if (!await _refetchRegistry(sid, 'plan-panel refresh failed:')) return;
     _ensureSelection();
     render();
-    await _renderActionBar();
+    _renderActionBar();
   }
 
   async function onPlanUpdated(planId) {
@@ -591,7 +592,7 @@ const planPanel = (() => {
       _ensureSelection();
     }
     render();
-    await _renderActionBar();
+    _renderActionBar();
   }
 
   function _refreshPlanCardBadges() {
@@ -603,21 +604,27 @@ const planPanel = (() => {
     }
   }
 
-  function onReconnect() {
-    _stale = true;
-  }
-
-  function onActiveSessionChanged() {
+  async function onActiveSessionChanged() {
     // Sole owner of clearing the cached selection / loaded viewer key and
-    // blanking the iframe on a session change. onReconnect() only marks stale
-    // on a WS reconnect and leaves session state alone.
+    // blanking the iframe on a session change. The WS connect handler only
+    // marks the registry stale after a network loss and leaves session state
+    // alone.
     _selectedPlanId = null;
     _selectedVersion = null;
     _loadedViewerKey = null;
+    _forksByViewerKey = {};
     var iframe = _getEl('plan-viewer');
     if (iframe) iframe.src = '';
     _highlightTabBadge(false);
-    return refresh();
+    var sid = _currentSessionId();
+    if (!sid) return;
+    // The switch's one registry fetch: the chat render's ready() joins this
+    // load instead of starting a second request for the same session.
+    await ensureLoaded();
+    if (_loadedSessionId !== sid) return;
+    _ensureSelection();
+    render();
+    _renderActionBar();
   }
 
   function invalidate() {
@@ -625,15 +632,33 @@ const planPanel = (() => {
   }
 
   async function onTabShown() {
-    // Fallback for the paths the hook cannot fix: its refresh() failed, or
-    // SESSION_ID went null (refresh() returns immediately). Reset first so the
-    // panel never shows the previous session, then re-fetch.
+    // Fallback for the paths the hook cannot fix: its load failed, or
+    // SESSION_ID went null. Reset first so the panel never shows the previous
+    // session. A switch's own registry load may still be in flight for this
+    // session: the tab opens from that one request instead of a second one.
     var sid = _currentSessionId();
     var switched = (_loadedSessionId !== sid);
     if (switched) _resetForSessionChange();
-    if (!_stale && !switched) return;
-    _stale = false;
-    await refresh();
+    if (!_stale && !switched) {
+      if (_renderedSessionId === sid) return;
+      // The registry is current but the markup is still the template's default. Paint it from the
+      // committed registry rather than refetching; render() reloads the viewer only when its key
+      // changes.
+      _ensureSelection();
+      render();
+      _renderActionBar();
+      return;
+    }
+    if (switched && _loadPromise && _loadPromiseSessionId === sid) {
+      await _loadPromise;
+      if (_loadedSessionId !== sid) return;
+    } else if (sid) {
+      _stale = false;
+      if (!await _refetchRegistry(sid, 'plan-panel onTabShown fetch failed:')) return;
+    }
+    _ensureSelection();
+    render();
+    _renderActionBar();
   }
 
   // -- Selection ----------------------------------------------------------
@@ -692,6 +717,9 @@ const planPanel = (() => {
     if (!iframe) return;
     iframe.addEventListener('load', function() {
       _highlightTabBadge(false);
+      // The page is in: the fork chips read it here, so an opened plan page
+      // costs the viewer's one request.
+      _parseViewerForks();
     });
   }
 
@@ -730,7 +758,6 @@ const planPanel = (() => {
     refresh,
     render,
     onPlanUpdated,
-    onReconnect,
     onActiveSessionChanged,
     invalidate,
     onTabShown,
@@ -772,11 +799,13 @@ registerTab({
   onHide() { document.getElementById('tab-plans').classList.add('hidden'); },
 });
 
-// The panel re-syncs its registry on every socket (re)connect, re-fetches on a
-// plan_updated event, and drops its selection when the active session changes.
-registerWsConnectHandler(() => {
-  planPanel.invalidate();
-  planPanel.onReconnect();
+// The panel re-fetches on a plan_updated event and drops its selection when
+// the active session changes. On a socket connect, only a network loss stales
+// the registry. A page-driven reconnect (a switch) closed its own socket after
+// the switch's registry fetch started, so that fetch's data is current.
+// Marking stale here would refetch it within the same switch.
+registerWsConnectHandler((connect) => {
+  if (connect.afterNetworkLoss) planPanel.invalidate();
 });
 registerWsMessageHandler('plan_updated', (ev) => planPanel.onPlanUpdated(ev.plan_id), {advancesCursor: true});
 document.addEventListener('charliebot:active-session-changed', () => planPanel.onActiveSessionChanged());

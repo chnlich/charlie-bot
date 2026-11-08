@@ -55,7 +55,7 @@ async fn send_async(request: &WireRequest) -> Result<WireResponse, TransportErro
   Ok(WireResponse { status: status.as_u16(), reason, body: body.to_vec() })
 }
 
-/// Classify a failure of the response-head phase. A connect that never established is the retry
+/// The classification of a response-head failure. A connect that never established is the retry
 /// class; a connection closed before any status line is a missing-status-line failure.
 fn map_response_head_error(error: reqwest::Error) -> TransportError {
   if error.is_connect() {

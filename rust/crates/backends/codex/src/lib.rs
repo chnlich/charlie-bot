@@ -55,6 +55,9 @@ pub fn register_with_host(registry: &mut Registry, host: &CodexHost) -> Result<(
     translate_fallback: false,
   })?;
   registry.option_schema("codex", options::SCHEMA)?;
+  let sessions_dir = host.codex_home().join(rollout::CODEX_SESSIONS_DIR_NAME);
+  registry
+    .member_reading("codex", Arc::new(move |_cfg, _option, now| usage_quota::member_reading(&sessions_dir, now)))?;
   let codex_home = host.codex_home();
   registry
     .usage_resolver("codex", Arc::new(move |usage_host| resolver::usage_resolver(codex_home.clone(), usage_host)))?;

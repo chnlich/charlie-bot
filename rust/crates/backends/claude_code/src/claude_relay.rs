@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{MESSAGE_CONTENT_POINTER, RATE_LIMIT_EVENT, RATE_LIMIT_INFO};
-use charliebot_registry::backend::LaunchWatch as LaunchWatchTrait;
+use charliebot_registry::backend::{LaunchRefused, LaunchWatch as LaunchWatchTrait};
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Value, json};
 use time::Duration;
@@ -14,7 +14,7 @@ use time::Duration;
 use super::{claude_accounts, claude_config, event_types};
 
 pub const MAX_RELAYS_PER_TURN: usize = 3;
-pub const RELAY_MIN_RESET_AHEAD: Duration = Duration::minutes(45);
+pub const RELAY_MIN_RESET_AHEAD: Duration = charliebot_registry::usage::NEAR_EXHAUSTION_RESET_HORIZON;
 pub const CONTINUATION_PROMPT: &str = "The previous process was interrupted right after a tool call completed. Continue from where it stopped; do not redo the steps that are already done.";
 pub const AUTH_FAILURE_MARKER: &str = "Failed to authenticate";
 pub const RELAY_REJECTED: &str = "rejected";
@@ -201,6 +201,34 @@ pub fn relay_limit_message(
   ))
 }
 
+/// The refusal the relay cap produces, or `None` when the cap does not stop this relay. A warning decision whose
+/// pool still holds a login below the 90% line relays past the cap. Every other decision at the cap refuses the
+/// launch. A quota decision with no login below the line marks the pool's quota exhausted, with the earliest reset
+/// its rejections stated, so the caller records the member out. With a login below the line the refusal is not a
+/// quota fact. An authentication failure is not a quota fact and refuses without the mark.
+pub fn relay_cap_refusal(
+  state: &ClaudeAccountStateRef,
+  cfg: &CharlieBotConfig,
+  model: Option<&str>,
+  relays: usize,
+  decision: &str,
+  account_pool: Option<&str>,
+) -> anyhow::Result<Option<LaunchRefused>> {
+  if relays < MAX_RELAYS_PER_TURN {
+    return Ok(None);
+  }
+  let has_cool_destination = claude_accounts::cool_destination(state, cfg, model, account_pool, None)?.is_some();
+  if decision == RELAY_WARNING && has_cool_destination {
+    return Ok(None);
+  }
+  let exhausted = decision != LOGIN_FAILED && !has_cool_destination;
+  Ok(Some(LaunchRefused {
+    message: relay_limit_message(state, cfg, account_pool)?,
+    quota_exhausted: exhausted,
+    resets_at: if exhausted { claude_accounts::earliest_reset(state, cfg, None, account_pool)? } else { None },
+  }))
+}
+
 pub fn login_required_event(account: &claude_config::ClaudeAccount, reason: &str) -> Value {
   json!({
     "type": event_types::CLAUDE_ACCOUNT_LOGIN_REQUIRED,
@@ -325,6 +353,70 @@ mod tests {
     let mut registry = Registry::new();
     registry.register_package("backends.claude_code", crate::register).unwrap();
     registry.load_config(home).unwrap()
+  }
+
+  #[test]
+  fn the_relay_cap_refusal_marks_a_quota_decision_exhausted_but_not_an_auth_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let write_login = |label: &str| -> (String, std::path::PathBuf) {
+      let dir = root.path().join(label);
+      std::fs::create_dir_all(&dir).unwrap();
+      std::fs::write(dir.join(login_dirs::CREDENTIALS_FILE), r#"{"claudeAiOauth":{"accessToken":"synthetic"}}"#)
+        .unwrap();
+      (label.to_string(), dir)
+    };
+    let spent = write_login("spent");
+    let fresh = write_login("fresh");
+    let accounts = [(spent.0.as_str(), spent.1.as_path()), (fresh.0.as_str(), fresh.1.as_path())];
+    let cfg = pooled_config(&home, &accounts);
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let now = UtcDateTime::parse("2025-01-01T12:00:00Z").unwrap();
+    let reset = UtcDateTime::parse("2030-01-01T00:00:00Z").unwrap().into_inner().unix_timestamp() as f64;
+    let rejected = json!({
+      "unifiedWindows": {"five_hour": {"utilization": 1.0}},
+      "status": "rejected",
+      "resetsAt": reset,
+    });
+    let below_line = json!({"unifiedWindows":{"five_hour":{"utilization":0.20}}});
+    claude_accounts::observe_rate_limit(&state, "spent", &rejected, Some(now));
+    claude_accounts::observe_rate_limit(&state, "fresh", &below_line, Some(now));
+
+    // The cap does not stop a relay while a login below the line can take over.
+    assert!(
+      relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), MAX_RELAYS_PER_TURN, RELAY_WARNING, None)
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+      relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), MAX_RELAYS_PER_TURN - 1, RELAY_REJECTED, None)
+        .unwrap()
+        .is_none()
+    );
+
+    // A rejected relay at the cap still refuses, but a login below the line is in the pool, so it is no quota fact.
+    let refused_below_line =
+      relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), MAX_RELAYS_PER_TURN, RELAY_REJECTED, None)
+        .unwrap()
+        .expect("the cap refuses a rejected relay");
+    assert!(!refused_below_line.quota_exhausted);
+    assert_eq!(refused_below_line.resets_at, None);
+
+    // With every login at or above the line, a quota decision refuses with the mark and the stated reset.
+    claude_accounts::observe_rate_limit(&state, "fresh", &rejected, Some(now));
+    let refusal = relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), MAX_RELAYS_PER_TURN, RELAY_WARNING, None)
+      .unwrap()
+      .expect("the cap refuses with no login below the line");
+    assert!(refusal.quota_exhausted);
+    assert_eq!(refusal.resets_at.map(|value| value.to_str()).as_deref(), Some("2030-01-01T00:00:00Z"));
+
+    let auth_failure =
+      relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), MAX_RELAYS_PER_TURN, LOGIN_FAILED, None)
+        .unwrap()
+        .expect("the cap refuses an auth failure too");
+    assert!(!auth_failure.quota_exhausted);
+    assert_eq!(auth_failure.resets_at, None);
   }
 
   #[test]

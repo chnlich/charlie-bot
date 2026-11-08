@@ -85,11 +85,13 @@
 .turn-row-title { color: #cbd5e1; }
 /* The fold row's secondary tone: the conclusion arrow and the steps/time meta
    read beside the title. #64748b rendered 3.75:1 on the row's #0f172a
-   background, under the 4.5:1 floor for text this small; #94a3b8 renders
+   background, under the 4.5:1 floor for text this small. #94a3b8 renders
    6.96:1, the tone the row's own label already uses. */
 .turn-row-conclusion:not(:empty)::before { content: "\2192\00a0"; color: #94a3b8; }
 .turn-row-meta { font-family: 'Fira Code', ui-monospace, monospace; font-size: 0.65rem; color: #94a3b8; }
-.turn-row-meta > span:not(:empty) ~ span:not(:empty)::before { content: " \00b7 "; }
+/* The middle dot separates the step count from the time. A hex escape consumes
+   its terminating space, so the trailing space is spelled `\0020`. */
+.turn-row-meta > span:not(:empty) ~ span:not(:empty)::before { content: " \00b7\0020"; }
 @media (max-width: 820px) {
   .turn-row { grid-template-columns: auto minmax(0, 1fr) auto; }
   .turn-row-conclusion { display: none; }
@@ -100,13 +102,24 @@
 }
 /* Window placeholder: an unready turn entering the window during active
    scroll — estimated height, replaced by the READY fragment when pre-render
-   completes. */
+   completes. The box is a UI region, so its dashed outline takes the 3:1
+   component floor. slate-400 at 60% draws 3.31:1 on the slate-900 list. The
+   old slate-500 at 28% drew 1.37:1, and the region read as a page gap. */
 .turn-placeholder {
   display: flex; align-items: center; justify-content: center;
-  border: 1px dashed rgba(100, 116, 139, 0.28); border-radius: 0.5rem;
-  background: rgba(15, 23, 42, 0.25); color: #475569; font-size: 0.75rem;
-  box-sizing: border-box; overflow: hidden;
+  border: 1px dashed rgba(148, 163, 184, 0.6); border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.25); color: #94a3b8; font-size: 0.75rem;
+  box-sizing: border-box;
 }
+/* The placeholder's one mark. A placeholder standing for a long flat stretch
+   can be taller than the window. A centred mark would then sit outside the
+   visible slice, leaving the reader a blank dashed region. Both sticky insets
+   are set because each one only moves the mark one way. `top` pulls it down
+   when the box enters from above, and `bottom` pulls it up when the box enters
+   from below. Together they hold the mark in the band between 40vh from either
+   edge wherever the box meets the window. slate-400 draws 6.96:1 on the list,
+   above the 4.5:1 floor for 12px text. */
+.turn-placeholder-label { position: sticky; top: 40vh; bottom: 40vh; }
 .turn-spacer { pointer-events: none; }
 /* The height model's spacer heights are the exact layout extent of the rows
    the spacers stand for. A space-y-3 margin on the spacer itself would add
@@ -168,6 +181,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* The chat page's field placeholders read in the slate-400 tone. Their placeholder-slate-500 class draws
    3.07:1 on the slate-800 field, under the 4.5:1 floor for text this size; slate-400 renders 5.71:1. */
 #auth-key-input::placeholder, #sidebar-search::placeholder, #msg-input::placeholder { color: #94a3b8; }
+/* The Set Group dialog's field sits on a slate-700 fill. slate-500 renders 2.18:1 there and slate-400
+   4.04:1, both under the 4.5:1 floor for the 14 px hint; slate-300 renders 6.97:1. */
+#new-group-input::placeholder { color: #cbd5e1; }
 /* A file link the server found nothing at. Sits next to the link it belongs to, and reads as a
    warning without hiding the link, which stays clickable. */
 .file-link-missing {
@@ -298,8 +314,8 @@ main > header > a[title="View JSONL events"] {
   display: flex; gap: 0.5rem; justify-content: flex-end;
   padding: 0.75rem 1rem; border-top: 1px solid #475569;
 }
-/* The scheduled-task Save button fills green-700, where its slate-200 label renders 4.07:1, under
-   the 4.5:1 floor for 14 px text; its green-600 hover renders 2.67:1. A white label on the
+/* The scheduled-task Save button fills green-700, where its slate-200 label renders 4.07:1. That is
+   under the 4.5:1 floor for 14 px text, and its green-600 hover renders 2.67:1. A white label on the
    green-800 fill renders 7.13:1, and the green-700 hover keeps 5.02:1. */
 #cron-save-btn { background-color: #166534; color: #ffffff; }
 #cron-save-btn:hover { background-color: #15803d; }
@@ -311,10 +327,10 @@ main > header > a[title="View JSONL events"] {
    that keeps its place at rest: it shows the row's state rather than an
    action on it. The star toggle and the highlight move both flip classes on
    the existing row, so neither needs a list repaint.
-   Geometry: a button's icon slot is 22px (p-1 around its 14px glyph), the
-   row's flex gap is 8px and its horizontal padding 12px. One stack pitch is
-   30px. A hover-revealed box stretches over the row's full height, and its
-   flex centering keeps that slot vertically centered in it. The offsets run
+   Geometry: a button's box is 24px (p-1 around its 14px glyph, widened to the
+   pointer floor), the row's flex gap is 8px and its horizontal padding 12px.
+   One stack pitch is 30px. A hover-revealed box stretches over the row's full
+   height, and its flex centering keeps that slot vertically centered in it. The offsets run
    from the row's padding edge right-to-left in reverse DOM order;
    nth-last-of-type keeps non-button trailing spans (the archived tree's
    active tag) out of the count. */
@@ -324,6 +340,25 @@ main > header > a[title="View JSONL events"] {
    row menu's z-index to paint above the drawer instead of behind it. */
 #rename-input { z-index: 150; }
 .session-row > button { position: absolute; right: 12px; pointer-events: none; }
+/* Pointer floor: a row action draws a 14px glyph in p-1's 8px, a 22px box. A named group
+   header's two actions draw a 12px glyph in p-0.5's 4px, a 16px box. Both sit under the 24px
+   minimum. The row's hover boxes are out of flow, so a 24px minimum grows each into the gap without
+   moving the row. The starred star stays in flow, so it takes a -1px margin, which keeps its 22px
+   layout slot while its box grows. The header's boxes are in flow, so 6px of padding with the -4px
+   margin around it grows the box 4px each way. The header keeps its 28px row and the glyphs
+   keep their places. Neither rule adds a row, strip or label: the controls take the space their own
+   boxes already hold. */
+.session-row > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+}
+.session-group > [data-sgroup-toggle-key] > button {
+  padding: 6px;
+  margin: -4px;
+}
 /* Each out-of-flow button stretches over the row's full height (top to
    bottom of the row box), and its own flex keeps the icon slot vertically
    centered. So the hovered cover is one continuous block from the row's top
@@ -346,8 +381,11 @@ main > header > a[title="View JSONL events"] {
 .session-row > .star-btn.\!opacity-100 ~ button:nth-last-of-type(2) { right: 72px; }
 .session-row > .star-btn.\!opacity-100 ~ button:nth-last-of-type(3) { right: 102px; }
 /* The starred star stays visible and clickable at rest, and its flow slot is
-   what the hover neighbours above clear. */
-.session-row > button.\!opacity-100 { position: static; pointer-events: auto; }
+   what the hover neighbours above clear. It is the one in-flow button of the
+   pointer-floor rule above. Its -1px margin takes the layout footprint back to
+   the 22px slot the text block was laid out against. The name and the second
+   line keep their width while the box keeps its 24px. */
+.session-row > button.\!opacity-100 { position: static; pointer-events: auto; margin: -1px; }
 /* Scope the reveal to the hovered row: the buttons' Tailwind group-hover
    class rides every ancestor carrying the `group` class. Each group
    section wrapper (groups.js's <div class="session-group group">) carries
@@ -361,8 +399,9 @@ main > header > a[title="View JSONL events"] {
 /* Hover: the revealed buttons cover the text end with the hovered row's own
    composite. That composite is the sidebar panel (slate-850) under the row's
    hover tint, given as a color layer plus image. So the browser blends it
-   exactly like the row behind. Each button's shadow fills the 8px flex gap
-   to its right, keeping the strip continuous. The boxes span the row's full
+   exactly like the row behind. The 30px stack pitch leaves 6px between the
+   24px boxes, and each button's 8px shadow spans that gap and 2px of its
+   neighbour, keeping the strip continuous. The boxes span the row's full
    height, so the cover runs from the row's top edge to its bottom edge. No
    text sliver shows above or below it. The transitions ride the row's
    transition-colors beat (they replace the buttons' transition-opacity,
@@ -394,7 +433,7 @@ main > header > a[title="View JSONL events"] {
    row without a gear keeps its one action: a worker row's Archive, an
    archived-tree context row's Star. Worker-thread rows and the (No group)
    header render no buttons and stay bare. The 44px touch boxes ride negative
-   margins -- outer size back at the button's desktop box -- so the row and
+   margins -- outer width 22px, the desktop star's slot -- so the row and
    header heights stay put. The desktop hover cover background is explicitly
    off, because a tap's sticky hover must not paint it. */
 @media (hover: none) {
@@ -434,8 +473,8 @@ body { overscroll-behavior: none; }
 .child-report[data-folded="false"] .child-report-more { display: none; }
 .child-report-toggle { display: block; margin-top: 0.25rem; font-size: 0.75rem; color: rgba(110, 231, 183, 0.75); }
 .child-report-toggle:hover { color: #a7f3d0; text-decoration: underline; }
-/* A user text folds by its rendered height (chat/attachments.js, fitUserMessageClamp): the clamp shows ten lines, and
-   the control appears only while the clamp hides some of the text. */
+/* A user text folds by its rendered height (chat/attachments.js, fitUserMessageClamp). The clamp shows ten
+   lines, and the control appears only while the clamp hides some of the text. */
 .user-msg-fold[data-folded="true"] .user-msg-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 10; line-clamp: 10; overflow: hidden; }
 .user-msg-more { display: none; margin-top: 0.4rem; padding: 0.2rem 0.7rem; font-size: 0.72rem; font-weight: 600; color: #eff6ff; background: rgba(15, 23, 42, 0.28); border: 1px solid rgba(191, 219, 254, 0.45); border-radius: 9999px; cursor: pointer; }
 .user-msg-fold[data-folded="true"][data-overflows="true"] .user-msg-more { display: block; }

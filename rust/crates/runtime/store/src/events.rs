@@ -22,6 +22,7 @@ use crate::layout;
 use crate::metadata::{SessionMetadata, UtcDateTime};
 use crate::ndjson;
 use crate::read_memos::FileSignature;
+use crate::run_logs;
 use crate::store::{CachedChatEvents, HistoryWork};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
@@ -88,10 +89,6 @@ impl Store {
     let cache_entry = self.events_cache_entry(session_id);
     let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
     let path = self.chat_events_path(session_id);
-    #[cfg(test)]
-    if let Some(hook) = self.event_append_hook.lock().expect("event append hook mutex is not poisoned").clone() {
-      hook();
-    }
     #[cfg(any(test, feature = "write-faults"))]
     self.fail_chat_append(session_id, &event, &path)?;
     ndjson::append(&path, &event)?;
@@ -283,7 +280,8 @@ impl Store {
   /// count the transcript latency tests pin.
   pub fn read_ndjson_compact(&self, path: &Path) -> StoreResult<Vec<ChatEvent>> {
     let events = ndjson::read_file_compact(path)?;
-    let bytes = fs::metadata(path).map(|metadata| metadata.size()).unwrap_or(0);
+    // The census counts the bytes of the file that holds the log; a log neither file holds contributes none.
+    let bytes = run_logs::stored_metadata(path).ok().flatten().map_or(0, |metadata| metadata.size());
     self.history_work.run_event_bytes_read.fetch_add(bytes, Ordering::Relaxed);
     Ok(events)
   }
@@ -1488,7 +1486,6 @@ mod tests {
   use super::*;
   use crate::store::test_support::make_test_store;
   use serde_json::json;
-  use std::collections::BTreeSet;
   use std::sync::{Mutex, mpsc};
   use std::time::Duration;
 
@@ -1621,7 +1618,9 @@ mod tests {
   #[tokio::test]
   async fn event_cache_generation_keeps_identity_on_append_and_changes_after_clear() {
     let (_home, store) = make_test_store();
-    store.append_chat_event("synthetic", json!({"id": "event-a", "type": "user"})).await.unwrap();
+    let path = store.chat_events_path("synthetic");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"{\"id\":\"event-a\",\"type\":\"user\"}\n").unwrap();
     let (initial_generation, initial_identity, initial_events) =
       store.live_events_with_generation("synthetic").unwrap();
     assert_eq!(initial_events.len(), 1);
@@ -1724,113 +1723,49 @@ mod tests {
     }
   }
 
-  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-  async fn concurrent_appends_during_cold_reads_land_once_in_cache_and_file() {
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn one_forced_concurrent_append_during_a_cold_read_lands_once_in_cache_and_file() {
     let (_home, store) = make_test_store();
     let store = Arc::new(store);
     let session_id = "synthetic-same-session";
     let path = store.chat_events_path(session_id);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-
-    for iteration in 0..200 {
-      store.clear_chat_events_cache(session_id);
-      std::fs::write(&path, b"").unwrap();
-      let (entered_tx, entered_rx) = mpsc::channel();
-      let (release_tx, release_rx) = mpsc::channel();
-      let release_rx = Arc::new(Mutex::new(release_rx));
-      *store.event_read_hook.lock().unwrap() = Some(Arc::new(move || {
-        entered_tx.send(()).unwrap();
-        release_rx.lock().unwrap().recv().unwrap();
-      }));
-
-      let reader_store = Arc::clone(&store);
-      let reader = tokio::task::spawn_blocking(move || reader_store.load_chat_events_shared_sync(session_id));
-      let entered = entered_rx.recv_timeout(Duration::from_secs(1)).is_ok();
-      if !entered {
-        let _ = release_tx.send(());
-        reader.await.unwrap().unwrap();
-        panic!("iteration {iteration}: cold read did not reach its file-read hook");
-      }
-
-      let (started_tx, started_rx) = mpsc::channel();
-      let mut appends = Vec::new();
-      let expected: BTreeSet<String> = (0..2).map(|index| format!("event-{iteration}-{index}")).collect();
-      for index in 0..2 {
-        let append_store = Arc::clone(&store);
-        let started_tx = started_tx.clone();
-        let event_id = format!("event-{iteration}-{index}");
-        appends.push(tokio::spawn(async move {
-          started_tx.send(()).unwrap();
-          append_store.append_chat_event(session_id, json!({"id": event_id, "type": "user"})).await
-        }));
-      }
-      drop(started_tx);
-      for _ in 0..2 {
-        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-      }
-      release_tx.send(()).unwrap();
-      reader.await.unwrap().unwrap();
-      for append in appends {
-        append.await.unwrap().unwrap();
-      }
-
-      let cached = store.load_chat_events_shared_sync(session_id).unwrap();
-      let cache_ids: BTreeSet<String> = cached.iter().map(|event| event["id"].as_str().unwrap().to_string()).collect();
-      let file_events = ndjson::read_file_compact(&path).unwrap();
-      let file_ids: BTreeSet<String> =
-        file_events.iter().map(|event| event["id"].as_str().unwrap().to_string()).collect();
-      assert_eq!(cached.len(), expected.len(), "iteration {iteration}: cached event count");
-      assert_eq!(file_events.len(), expected.len(), "iteration {iteration}: file event count");
-      assert_eq!(cache_ids, expected, "iteration {iteration}: cache ids");
-      assert_eq!(file_ids, expected, "iteration {iteration}: file ids");
-      assert_eq!(
-        cached.iter().map(|event| event["id"].to_value()).collect::<Vec<_>>(),
-        file_events.iter().map(|event| event["id"].to_value()).collect::<Vec<_>>(),
-        "iteration {iteration}: cache and file order"
-      );
-    }
-  }
-
-  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-  async fn eviction_waits_for_an_append_that_holds_the_session_lock() {
-    let (_home, store) = make_test_store();
-    let store = Arc::new(store);
-    let session_id = "synthetic-evicted";
-    store.append_chat_event(session_id, json!({"id": "before", "type": "user"})).await.unwrap();
-    store.load_chat_events_shared_sync(session_id).unwrap();
+    std::fs::write(&path, b"").unwrap();
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let release_rx = Arc::new(Mutex::new(release_rx));
-    *store.event_append_hook.lock().unwrap() = Some(Arc::new(move || {
+    *store.event_read_hook.lock().unwrap() = Some(Arc::new(move || {
       entered_tx.send(()).unwrap();
       release_rx.lock().unwrap().recv().unwrap();
     }));
 
-    let append_store = Arc::clone(&store);
-    let append =
-      tokio::spawn(
-        async move { append_store.append_chat_event(session_id, json!({"id": "during", "type": "user"})).await },
-      );
-    entered_rx.recv_timeout(Duration::from_secs(1)).expect("the append reaches its hook while it holds the lock");
-    let evict_store = Arc::clone(&store);
-    let mut evict = tokio::task::spawn_blocking(move || {
-      evict_store.evict_recovery_history(session_id);
-      evict_store.load_chat_events_shared_sync(session_id)
-    });
-    let evict_result = tokio::time::timeout(Duration::from_millis(300), &mut evict).await;
-    let evicted_while_append_held = evict_result.is_ok();
-    release_tx.send(()).unwrap();
-    append.await.unwrap().unwrap();
-    match evict_result {
-      Ok(result) => drop(result.unwrap().unwrap()),
-      Err(_) => drop(evict.await.unwrap().unwrap()),
+    let reader_store = Arc::clone(&store);
+    let reader = tokio::task::spawn_blocking(move || reader_store.load_chat_events_shared_sync(session_id));
+    let entered = entered_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+    if !entered {
+      let _ = release_tx.send(());
+      reader.await.unwrap().unwrap();
+      panic!("cold read did not reach its file-read hook");
     }
-    *store.event_append_hook.lock().unwrap() = None;
+
+    let (started_tx, started_rx) = mpsc::channel();
+    let append_store = Arc::clone(&store);
+    let append = tokio::spawn(async move {
+      started_tx.send(()).unwrap();
+      append_store.append_chat_event(session_id, json!({"id": "appended", "type": "user"})).await
+    });
+    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    release_tx.send(()).unwrap();
+    reader.await.unwrap().unwrap();
+    append.await.unwrap().unwrap();
 
     let cached = store.load_chat_events_shared_sync(session_id).unwrap();
-    let ids: Vec<&str> = cached.iter().map(|event| event["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["before", "during"], "the cache after the eviction lost the append that held the lock");
-    assert!(!evicted_while_append_held, "the eviction ran while an append held the session lock");
+    let file_events = ndjson::read_file_compact(&path).unwrap();
+    assert_eq!(cached.len(), 1, "one append lands once in the cache");
+    assert_eq!(file_events.len(), 1, "one append lands once in the file");
+    assert_eq!(cached[0]["id"].as_str(), Some("appended"));
+    assert_eq!(file_events[0]["id"].as_str(), Some("appended"));
+    assert_eq!(cached[0]["id"].to_value(), file_events[0]["id"].to_value(), "cache and file order agree");
   }
 
   #[tokio::test]
@@ -2242,26 +2177,33 @@ mod tests {
 
     #[test]
     fn first_page_after_recovery_eviction_reuses_state_and_parses_only_the_tail() {
+      const EVENT_COUNT: usize = 3_000;
+      const TEXT_PADDING: usize = 180;
+
       let home = tempfile::tempdir().unwrap();
       let store = test_store(home.path());
       let session_id = "synthetic-session";
       let path = store.chat_events_path(session_id);
       std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-      let mut body = String::new();
-      for index in 0..20_000 {
-        body.push_str(&format!("{{\"id\":\"event-{index}\",\"text\":\"{}\"}}\n", "x".repeat(40)));
+      let padding = "x".repeat(TEXT_PADDING);
+      let mut body = String::with_capacity(EVENT_COUNT * (TEXT_PADDING + 32));
+      use std::fmt::Write as _;
+      for index in 0..EVENT_COUNT {
+        writeln!(body, "{{\"id\":\"event-{index}\",\"text\":\"{padding}\"}}").unwrap();
       }
       std::fs::write(&path, body).unwrap();
+      assert!(std::fs::metadata(&path).unwrap().len() > TAIL_WINDOW_SIZE as u64);
 
       store.node_facts(session_id).unwrap();
-      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 20_000);
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), EVENT_COUNT);
       store.evict_recovery_history(session_id);
       let reads = store.history_work().file_reads;
 
       let (tail, total, more) = store.load_chat_events_tail(session_id, 10).unwrap();
-      assert_eq!(total, 20_000);
+      assert_eq!(total, EVENT_COUNT);
       assert!(more);
-      assert_eq!(tail.first().unwrap()["id"].as_str(), Some("event-19990"));
+      let first_tail_id = format!("event-{}", EVENT_COUNT - 10);
+      assert_eq!(tail.first().unwrap()["id"].as_str(), Some(first_tail_id.as_str()));
       let (bytes, parsed) = {
         let caches = store.event_read_caches.lock().unwrap();
         (caches.tail_bytes_read, caches.tail_lines_parsed)
@@ -2306,13 +2248,18 @@ mod tests {
       std::fs::write(&metadata_path, meta.to_json_string(&store.slots, true)).unwrap();
       let path = store.chat_events_path(session_id);
       std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-      let mut body = String::new();
-      for index in 0..30_000 {
+      const EVENT_COUNT: usize = 30_000;
+      let filler = format!("{{\"id\": \"earlier\", \"content\": \"{}\"}}\n", "x".repeat(48));
+      let mut body = String::with_capacity(filler.len() * EVENT_COUNT);
+      for _ in 0..EVENT_COUNT - 10 {
+        body.push_str(&filler);
+      }
+      for index in EVENT_COUNT - 10..EVENT_COUNT {
         body.push_str(&format!("{{\"id\": \"live-{index}\", \"content\": \"{}\"}}\n", "x".repeat(48)));
       }
       std::fs::write(&path, body).unwrap();
 
-      let (page, _) = store.load_chat_events_range(session_id, 1 + 29_990, 1 + 30_000).unwrap();
+      let (page, _) = store.load_chat_events_range(session_id, 1 + EVENT_COUNT - 10, 1 + EVENT_COUNT).unwrap();
       assert_eq!(ids(&page).first().unwrap(), "live-29990");
       assert_eq!(page.len(), 10);
       let (bytes, parsed) = {

@@ -7,7 +7,7 @@ use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 use super::gemini_cli::GeminiBackend;
 use charliebot_agents::cli_base::CliHost;
 
-/// Builds one gemini backend per launch.
+/// The factory that builds one gemini backend per launch.
 pub struct GeminiFactory {
   host: CliHost,
 }

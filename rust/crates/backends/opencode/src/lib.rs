@@ -35,7 +35,7 @@ pub use usage_logs::USAGE_SOURCE;
 /// The package label the composition list registers this backend's package under.
 pub const PACKAGE: &str = "backends.opencode";
 
-/// Register the backend type, shared server factory, usage source and snapshot reading limits.
+/// The registration of the backend type, shared server factory, usage source and snapshot reading limits.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   let host = registration_step(PACKAGE, OpenCodeHost::from_process())?;
   register_with_host(registry, host, ServerTimeouts::default())
@@ -79,8 +79,8 @@ fn register_backend_type(
   registry.option_schema("opencode", options::SCHEMA)
 }
 
-/// Registers the opencode usage source and attributes the `opencode` backend type to it. The database is the
-/// profile's `opencode_db()`, resolved once here.
+/// The registration of the opencode usage source, which attributes the `opencode` backend type to it. The database
+/// is the profile's `opencode_db()`, resolved once here.
 pub fn register_usage_source(registry: &mut Registry) -> Result<(), RegistryError> {
   let db = home::opencode_db().map_err(|error| RegistryError { package: PACKAGE, message: error.to_string() })?;
   register_source(registry, db, PathBuf::from("/proc"))

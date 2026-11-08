@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::Context;
+use charliebot_core::ndjson::trim_horizontal_space;
 use serde_json::Value;
 use serde_json::value::RawValue;
 use time::OffsetDateTime;
@@ -44,13 +45,6 @@ impl TypeLineFilter {
     };
     !self.keep_types.iter().any(|kind| kind == event_type)
   }
-}
-
-fn trim_horizontal_space(mut bytes: &[u8]) -> &[u8] {
-  while matches!(bytes.first(), Some(b' ' | b'\t')) {
-    bytes = &bytes[1..];
-  }
-  bytes
 }
 
 /// Parse raw NDJSON lines, skipping blank and malformed lines.
@@ -95,7 +89,9 @@ pub fn project_raw_file<T>(
 where
   T: FnMut(Value) -> anyhow::Result<Vec<Value>>,
 {
-  let raw_bytes = fs::read(raw_path)?;
+  let log = charliebot_store::run_logs::resolve(raw_path)
+    .ok_or_else(|| anyhow::anyhow!("the run log {} is missing", raw_path.display()))?;
+  let raw_bytes = log.read_bytes()?.map(|bytes| bytes.to_vec()).unwrap_or_default();
   let events = raw_bytes
     .split(|byte| *byte == b'\n')
     .filter(|line| !line_filter.is_some_and(|filter| filter.rejects(line)))
@@ -133,7 +129,11 @@ pub fn scan_result_exit<T>(raw_path: &Path, translate: T) -> anyhow::Result<(Vec
 where
   T: FnMut(Value) -> anyhow::Result<Vec<Value>>,
 {
-  let events = if raw_path.is_file() { project_raw_file(raw_path, translate, None)? } else { Vec::new() };
+  let events = if charliebot_store::run_logs::resolve(raw_path).is_some() {
+    project_raw_file(raw_path, translate, None)?
+  } else {
+    Vec::new()
+  };
   let result = events.iter().rev().find(|event| event.get("type").and_then(Value::as_str) == Some("result")).cloned();
   let exit_code = match super::final_stdout::read_outcome(raw_path.parent().expect("raw log has a parent"))? {
     Some(outcome) if outcome.guard_error.is_none() => outcome.exit_code,

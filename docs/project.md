@@ -67,6 +67,9 @@ thread branch — the directory name is the branch name with `/` replaced by `-`
 - Individual Worker logs are in `data/runs/{run_id}/`: the raw-log spawn writes `agent.raw.ndjson` (the
   CLI's stream) plus `agent.stderr.log`; the pipe transports write `stdout.log` plus `stderr.log`;
   `events.jsonl` holds the translated events.
+- The `run_log_compaction` cron handler replaces those two log files with `<name>.zst` once the run's record
+  holds an end at least 24 hours old. Metadata refs keep the plain names, and readers resolve each name through
+  `charliebot_store::run_logs`, which opens the plain file or the `.zst` and yields the decompressed bytes.
 - `workspace_dirs`: Config option (`config.yaml`) listing workspace directories to scan for git projects. The diff page's repo picker lists the discovered projects.
 
 ### 3.2 Repository Code Structure (Stateless)
@@ -304,3 +307,4 @@ recording for the browser's retry.
 - `$CHARLIEBOT_HOME/config.yaml` holds structure in sections (`server`, `paths`, `backends`, `accounts`, `voice`, `code_server`, `ui`, `slack`, `discord`, `feishu`, `publish`, `telegram`); `$CHARLIEBOT_HOME/credentials.yaml` holds every secret as section → key and is the single source of truth for API keys — no environment variables
 - `backends.options`: configurable list of LLM backends (see that file for the current list); an option id names the model family, never a version, and starts with a prefix its type's usage source registers (the id rule: usage's startup check, `rust/crates/features/usage/src/backend_ids.rs`, refuses an id outside those prefixes)
 - `backends.pool`: ordered list of backend IDs in rotation order (`rust/crates/runtime/agents/src/backend_pool.rs`); server startup refuses a pool entry (the pool field validation in that file) or a cron task or step backend (cron's startup check, `backend_refs_check` in `rust/crates/features/cron/src/loader.rs`) that names no option id
+- `backends.auto`: the Auto set — a label and ordered members, each naming a `backends.options` id and `billing: subscription|payg`; a session whose backend is `auto` runs each turn on one member, which turn start records in the `auto_member` metadata slot (`rust/crates/runtime/agents/src/auto_backend.rs`). A member that spends its quota during a manager turn is recorded out in `state/backend_availability.json` (its stated reset, else 30 minutes), and the turn continues as a retry run on the next member under a switch note naming the session chat log, its archives and the failed run's directory (`rust/crates/runtime/tasks/src/handoff.rs`); with no member left the turn ends with one error that lists each member. Removing the section makes `auto` an invalid session backend and fails an Auto session's next turn by name.

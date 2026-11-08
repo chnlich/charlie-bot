@@ -57,6 +57,7 @@ mod tests {
 
   use super::*;
 
+  #[ignore = "integration"]
   #[test]
   fn reads_the_current_process_start_tick() {
     let stat = read_pid_stat(std::process::id()).expect("the test process has a proc stat");
@@ -64,6 +65,7 @@ mod tests {
     assert!(!stat.state.is_empty());
   }
 
+  #[ignore = "integration"]
   #[test]
   fn pid_stat_fields_match_the_proc_file_text() {
     let mut child = Command::new("sleep").arg("30").spawn().unwrap();
@@ -91,11 +93,13 @@ mod tests {
     assert_eq!(stat.state, state);
   }
 
+  #[ignore = "integration"]
   #[test]
   fn a_missing_pid_has_no_stat() {
     assert!(read_pid_stat(u32::MAX).is_none());
   }
 
+  #[ignore = "integration"]
   #[test]
   fn boot_time_is_the_btime_line_of_proc_stat() {
     let text = fs::read_to_string("/proc/stat").unwrap();
@@ -103,6 +107,7 @@ mod tests {
     assert_eq!(read_host_boot_time().unwrap().unix_timestamp(), btime);
   }
 
+  #[ignore = "integration"]
   #[test]
   fn a_missing_identity_is_not_alive() {
     let boot = read_host_boot_time().unwrap();

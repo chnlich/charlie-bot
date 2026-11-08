@@ -13,7 +13,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::{responses, validation};
-use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::config::{AUTO_BACKEND_ID, BackendOption, CharlieBotConfig};
 use charliebot_core::metadata_slot::MetadataFile;
 use charliebot_core::{event_types, text_repr};
 use charliebot_registry::caller::{self, CallerIdentity};
@@ -33,7 +33,7 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
 use crate::detail::response_metadata;
-use crate::route_support::store_error;
+use crate::route_support::{auto_switchable, store_error};
 
 const LOG_TARGET: &str = "charliebot_session_api";
 const PROFILE_CHOICES: &[&str] = &["manager", "worker"];
@@ -372,10 +372,14 @@ async fn switch(
     .registry
     .binding_for(session_id)
     .map_err(|error| responses::internal_error("RuntimeError", error.to_string()))?;
-  if let Some(binding) = binding
-    && binding.dedicated_backend()
-    && !same_continuation_domain(&effective, &target, &cfg, &features.registry).map_err(store_error)?
-  {
+  let dedicated = binding.as_ref().is_some_and(|binding| binding.dedicated_backend());
+  let lock_refuses = if target == AUTO_BACKEND_ID {
+    !auto_switchable(&cfg, dedicated)
+  } else {
+    dedicated && !same_continuation_domain(&effective, &target, &cfg, &features.registry).map_err(store_error)?
+  };
+  if lock_refuses {
+    let binding = binding.expect("a lock refusal requires the session's dedicated binding");
     return Err(store_error(StoreError::invalid(binding.backend_lock_detail(&target))));
   }
 
@@ -494,8 +498,13 @@ pub(crate) fn config(features: &FeatureContext) -> Result<Arc<CharlieBotConfig>,
   features.config.get().map_err(|error| responses::internal_error("RuntimeError", error.to_string()))
 }
 
+/// The backend ids a session may take: every `backends.options` id, plus `auto` when `backends.auto` is configured.
 fn valid_backend_ids(cfg: &CharlieBotConfig) -> Vec<&str> {
-  cfg.backends.options.iter().map(|option| option.id.as_str()).collect()
+  let mut ids = cfg.backends.options.iter().map(|option| option.id.as_str()).collect::<Vec<_>>();
+  if cfg.backends.auto.is_some() {
+    ids.push(AUTO_BACKEND_ID);
+  }
+  ids
 }
 
 /// `_default_backend_id`: the first configured option, else `claude`.
@@ -604,7 +613,9 @@ mod tests {
   use tracing::field::{Field, Visit};
 
   use super::*;
-  use crate::test_support::{answer, create_node, feature_context, install_dispatcher, json_request};
+  use crate::test_support::{
+    answer, create_node, feature_context, feature_context_with_auto, install_dispatcher, json_request,
+  };
 
   struct LogMessage(Arc<Mutex<Vec<String>>>);
 
@@ -1161,5 +1172,70 @@ mod tests {
 
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(detail, json!({"detail": AGENT_CREATE_SCOPE_REFUSAL}));
+  }
+
+  const AUTO_CONFIG: &str = "\
+backends:
+  options:
+    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a}
+    - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b}
+  auto:
+    label: Auto
+    members:
+      - {backend: synthetic-a, billing: subscription}
+      - {backend: synthetic-b, billing: payg}
+";
+
+  #[tokio::test]
+  async fn create_and_switch_accept_auto_only_when_the_config_lists_it() {
+    let (_home, features) = feature_context_with_auto(AUTO_CONFIG);
+    let (headers, body) = json_request(json!({"request_id": "auto-root", "profile": "manager", "backend": "auto"}));
+    let (status, created) = answer(create_session(State(features.clone()), headers, body).await).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["backend"], "auto");
+
+    let node = create_node(&features.store, "auto-switch-node", None, TaskProfile::Manager).await;
+    let (headers, body) = json_request(json!({"backend": "auto"}));
+    let (status, switched) =
+      answer(switch_backend(State(features.clone()), AxumPath(node.id.clone()), headers, body).await).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(switched["backend"], "auto");
+    assert_eq!(features.store.read_metadata_fresh(&node.id).unwrap().unwrap().backend, "auto");
+  }
+
+  #[tokio::test]
+  async fn without_backends_auto_the_backend_id_auto_is_refused() {
+    let (_home, features) = feature_context();
+    let (headers, body) = json_request(json!({"request_id": "auto-root", "backend": "auto"}));
+    let (status, detail) = answer(create_session(State(features), headers, body).await).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+      detail["detail"].as_str().expect("detail text").contains("valid ids: ['synthetic-a', 'synthetic-b']"),
+      "{detail}"
+    );
+  }
+
+  #[tokio::test]
+  async fn a_dedicated_lock_refuses_auto_when_backends_auto_is_configured() {
+    let (_home, features) = feature_context_with_auto(AUTO_CONFIG);
+    let request = CreateTask {
+      request_id: "sequence-locked-auto-node".to_string(),
+      task_parent_id: None,
+      profile: TaskProfile::Manager,
+      task: None,
+      name: Some("Locked auto node".to_string()),
+      backend: Some("synthetic-a".to_string()),
+      group: None,
+      session_id: Some("sequence-locked-node".to_string()),
+    };
+    let node = features.store.create_task(request, TaskCaller::System, Map::new()).await.unwrap();
+    let (headers, body) = json_request(json!({"backend": "auto"}));
+
+    let (status, detail) =
+      answer(switch_backend(State(features.clone()), AxumPath(node.id.clone()), headers, body).await).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(detail, json!({"detail": "backend 'auto' is locked by the session API test sequence"}));
+    assert_eq!(features.store.read_metadata_fresh(&node.id).unwrap().unwrap().backend, "synthetic-a");
   }
 }

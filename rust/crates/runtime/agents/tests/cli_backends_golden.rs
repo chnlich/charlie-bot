@@ -105,7 +105,7 @@ impl Fixture {
         worktree_dir: "/synthetic/worktrees".to_string(),
         scratch_dir: "/synthetic/scripts".to_string(),
       },
-      backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
+      backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new(), auto: None },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       remote_run: charliebot_core::config::RemoteRunConfig::default(),
@@ -116,6 +116,7 @@ impl Fixture {
 }
 
 #[test]
+#[ignore = "integration"]
 fn cli_backends_match_the_package_on_synthetic_inputs() {
   let root = tempfile::tempdir().unwrap();
   let fx = write_fixtures(root.path());

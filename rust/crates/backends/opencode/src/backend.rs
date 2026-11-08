@@ -329,7 +329,7 @@ impl ServeTurn for OpenCodeTurn {
       ("CHARLIEBOT_OPENCODE_PARENT_START".to_string(), parent_start.clone()),
     ]);
     #[cfg(test)]
-    let args = vec!["--exact".into(), "test_backend::relay_subprocess".into(), "--ignored".into()];
+    let args = vec!["--exact".into(), "test_backend::relay_subprocess_entry".into(), "--ignored".into()];
     #[cfg(not(test))]
     let args = vec![
       relay::RELAY_ARG.into(),
@@ -530,7 +530,7 @@ async fn run_turn_body(
   }
 }
 
-/// Reject interactive permission requests, including during raw-log recovery.
+/// The refusal of an interactive permission request, raised during raw-log recovery as well.
 pub fn reject_permission(event: &Value) -> anyhow::Result<()> {
   if event.get("type").and_then(Value::as_str) == Some("permission.asked") {
     let data = object_or_empty(event.get("data"))?;
@@ -813,7 +813,7 @@ impl OpenCodeTranslator {
     }
   }
 
-  /// Map one opencode session event to zero or more CharlieBot events.
+  /// The translation of one opencode session event into zero or more CharlieBot events.
   pub fn translate_event(&mut self, event: &Value) -> anyhow::Result<Vec<Value>> {
     let event_type = required_string(event, "type")?;
     let data = object_or_empty(event.get("data"))?;
@@ -1025,7 +1025,7 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
   let mut env = base_env;
   env.extend(host.extra_env.clone());
   env.insert("XDG_DATA_HOME".to_string(), root.path().join(home::OPENCODE_XDG_DATA_DIR_NAME).display().to_string());
-  env.insert("XDG_STATE_HOME".to_string(), root.path().join("state").display().to_string());
+  env.insert("XDG_STATE_HOME".to_string(), root.path().join(home::OPENCODE_XDG_STATE_DIR_NAME).display().to_string());
   env.insert("XDG_CACHE_HOME".to_string(), root.path().join("cache").display().to_string());
   let mut config = json!({"permission": {"*": "deny"}});
   config.as_object_mut().expect("the one-shot config is a JSON object").extend(one_shot_context);

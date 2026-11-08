@@ -60,6 +60,17 @@ pub struct MessageAggregator {
   last_event_id: Option<String>,
   tool_rows: ToolRows,
   emit_stream_deltas: bool,
+  omit_streamed_content: bool,
+  /// The global index of the event being fed, which a stream frame carries so a page can place it in the replay.
+  current_index: usize,
+  /// What earlier stream frames carried: the assistant text's byte length, and the thinking text itself, which
+  /// an assistant event may replace rather than extend. The UTF-16 lengths are the draft's lengths at that point.
+  streamed_text_bytes: usize,
+  streamed_text_utf16: usize,
+  streamed_thinking: String,
+  streamed_thinking_utf16: usize,
+  /// The draft tool rows of the previous stream frame, so a frame repeats them only when they changed.
+  streamed_tools: Option<Value>,
   event_renderers: HashMap<String, Arc<dyn EventRenderer>>,
 }
 
@@ -85,6 +96,13 @@ impl MessageAggregator {
       last_event_id: None,
       tool_rows: ToolRows::default(),
       emit_stream_deltas,
+      omit_streamed_content: false,
+      current_index: 0,
+      streamed_text_bytes: 0,
+      streamed_text_utf16: 0,
+      streamed_thinking: String::new(),
+      streamed_thinking_utf16: 0,
+      streamed_tools: None,
       event_renderers,
     }
   }
@@ -106,6 +124,14 @@ impl MessageAggregator {
     Ok(deltas)
   }
 
+  /// Process an event at the absolute event index the store stamped on it, which is its position in the
+  /// session's event log. The fed-event counter skips events that are appended without being fed (control
+  /// facts), so a frame that used it could carry an index below the event's place in the log.
+  pub fn feed_at_absolute<E: EventFields>(&mut self, event: &E, index: usize) -> StoreResult<Vec<Value>> {
+    self.processed += 1;
+    self.feed_at(event, index)
+  }
+
   /// Return an independent copy that continues at the same event index.
   pub fn clone_state(&self) -> Self {
     Self {
@@ -118,6 +144,13 @@ impl MessageAggregator {
       last_event_id: self.last_event_id.clone(),
       tool_rows: self.tool_rows.clone(),
       emit_stream_deltas: self.emit_stream_deltas,
+      omit_streamed_content: self.omit_streamed_content,
+      current_index: self.current_index,
+      streamed_text_bytes: self.streamed_text_bytes,
+      streamed_text_utf16: self.streamed_text_utf16,
+      streamed_thinking: self.streamed_thinking.clone(),
+      streamed_thinking_utf16: self.streamed_thinking_utf16,
+      streamed_tools: self.streamed_tools.clone(),
       event_renderers: self.event_renderers.clone(),
     }
   }
@@ -148,17 +181,24 @@ impl MessageAggregator {
     Some(message)
   }
 
-  /// Set whether future feeds emit stream snapshots.
+  /// Set whether future feeds emit stream frames.
   pub fn set_emit_stream_deltas(&mut self, emit: bool) {
     self.emit_stream_deltas = emit;
   }
 
-  /// Return whether stream snapshots are enabled.
+  /// Return whether stream frames are enabled.
   pub fn emits_stream_deltas(&self) -> bool {
     self.emit_stream_deltas
   }
 
+  /// Set whether a committed draft leaves out the text already sent in stream frames. The live feed sets this,
+  /// so a page that holds the draft is not sent it twice; a replay keeps the full text for a page that missed it.
+  pub fn set_omit_streamed_content(&mut self, omit: bool) {
+    self.omit_streamed_content = omit;
+  }
+
   fn feed_at<E: EventFields>(&mut self, event: &E, index: usize) -> StoreResult<Vec<Value>> {
+    self.current_index = index;
     if !event.is_object() {
       return Err(StoreError::new("chat event must be a JSON object"));
     }
@@ -266,6 +306,7 @@ impl MessageAggregator {
           self.assistant_buf.clear();
           self.last_assistant_timestamp = None;
           self.last_event_id = None;
+          self.reset_stream_positions();
           deltas.push(json!({"type": "message", "message": plan_message}));
         }
       }
@@ -361,6 +402,11 @@ impl MessageAggregator {
     // A run that ends leaves no subagent running: its cards show stopped, committed drafts included.
     let ends_run = matches!(event_type, event_types::MASTER_DONE | event_types::RUN_END | event_types::RUN_ERROR);
     let mut deltas = if ends_run { self.tool_rows.end_run() } else { Vec::new() };
+    if ends_run {
+      // The stop lands in the open draft's rows right before the commit closes it, and the live commit leaves out
+      // the rows a page holds, so the suffix frame is what tells that page its rows stopped.
+      deltas.extend(self.stream_delta());
+    }
     deltas.extend(self.flush_to_message_delta());
     if ends_run {
       self.tool_rows.forget_committed();
@@ -377,13 +423,36 @@ impl MessageAggregator {
   }
 
   fn flush_to_message_delta(&mut self) -> Vec<Value> {
+    self.reset_stream_positions();
     let Some(message) = self.pending_draft_message() else { return Vec::new() };
     self.tool_rows.commit_draft(&message);
     self.assistant_buf.clear();
     self.thinking_buf.clear();
     self.last_assistant_timestamp = None;
     self.last_event_id = None;
-    vec![json!({"type": "message", "message": message})]
+    vec![json!({"type": "message", "message": self.committed(message)})]
+  }
+
+  /// The committed message as the live feed sends it: a page that received the stream frames holds the draft
+  /// text, thinking and tool rows, so the frame carries only what the page needs to commit them.
+  fn committed(&self, mut message: Value) -> Value {
+    if !self.omit_streamed_content || !self.emit_stream_deltas {
+      return message;
+    }
+    let Some(object) = message.as_object_mut() else { return message };
+    for streamed in ["content", "thinking", "tools"] {
+      object.remove(streamed);
+    }
+    object.insert("content_streamed".to_string(), json!(true));
+    message
+  }
+
+  fn reset_stream_positions(&mut self) {
+    self.streamed_text_bytes = 0;
+    self.streamed_text_utf16 = 0;
+    self.streamed_thinking.clear();
+    self.streamed_thinking_utf16 = 0;
+    self.streamed_tools = None;
   }
 
   /// Whether a tool result has a row to attach to: the row that its tool_use id names, when that row has a
@@ -475,12 +544,73 @@ impl MessageAggregator {
     Ok(deltas)
   }
 
-  fn stream_delta(&self) -> Vec<Value> {
+  /// The current draft as a stream frame: only the text, thinking and tool rows the page does not hold yet. The
+  /// tool rows go out as a suffix: `tools_from` is the index of the frame's first row in the draft's rows, from 0.
+  /// `length` and `thinking_length` are the draft's lengths after this frame, in UTF-16 code units, so the page
+  /// can tell a replayed append from new text.
+  fn stream_delta(&mut self) -> Vec<Value> {
     if !self.emit_stream_deltas {
       return Vec::new();
     }
-    let Some(message) = self.pending_draft_message() else { return Vec::new() };
-    vec![json!({"type": "stream", "message": message})]
+    if self.assistant_buf.is_empty() && self.tool_rows.is_draft_empty() && self.thinking_buf.is_empty() {
+      self.reset_stream_positions();
+      return Vec::new();
+    }
+    let append = self.assistant_buf[self.streamed_text_bytes..].to_string();
+    // An assistant event may replace the thinking instead of extending it; a replacement resends it whole.
+    let thinking_extends = self.thinking_buf.starts_with(self.streamed_thinking.as_str());
+    let thinking_append = if thinking_extends {
+      self.thinking_buf[self.streamed_thinking.len()..].to_string()
+    } else {
+      self.thinking_buf.clone()
+    };
+    let tools = self.tool_rows.draft_json();
+    // The frame carries the rows from the first one that differs from the rows the earlier frames streamed, so a
+    // draft's row bytes grow with its row count instead of with its row count squared.
+    let tools_from = first_changed_row(self.streamed_tools.as_ref(), tools.as_ref());
+    if append.is_empty() && thinking_append.is_empty() && tools_from.is_none() {
+      return Vec::new();
+    }
+    let mut frame = json!({"type": "stream", "event_index": self.current_index});
+    if !append.is_empty() {
+      self.streamed_text_bytes = self.assistant_buf.len();
+      self.streamed_text_utf16 += append.encode_utf16().count();
+      frame["append"] = json!(append);
+      frame["length"] = json!(self.streamed_text_utf16);
+    }
+    if !thinking_append.is_empty() {
+      self.streamed_thinking_utf16 = if thinking_extends {
+        self.streamed_thinking_utf16 + thinking_append.encode_utf16().count()
+      } else {
+        self.thinking_buf.encode_utf16().count()
+      };
+      self.streamed_thinking.clone_from(&self.thinking_buf);
+      frame["thinking_append"] = json!(thinking_append);
+      frame["thinking_length"] = json!(self.streamed_thinking_utf16);
+    }
+    if let Some(from) = tools_from {
+      self.streamed_tools = tools.clone();
+      if let Some(tools) = tools {
+        let rows = tools.as_array().expect("draft_json renders an array");
+        frame["tools_from"] = json!(from);
+        frame["tools"] = json!(rows[from..]);
+      }
+    }
+    vec![frame]
+  }
+}
+
+/// The index of the first row of `current` that the rows streamed so far do not hold, when the rows changed. Rows
+/// never streamed start the suffix at 0; a draft whose rows equal the streamed ones changed none; rows only ever
+/// grow or change in place between commits, so a suffix that would shrink has no case.
+fn first_changed_row(streamed: Option<&Value>, current: Option<&Value>) -> Option<usize> {
+  let Some(current_rows) = current.and_then(Value::as_array) else { return streamed.is_some().then_some(0) };
+  let Some(streamed_rows) = streamed.and_then(Value::as_array) else { return Some(0) };
+  let shared = streamed_rows.len().min(current_rows.len());
+  match (0..shared).find(|&index| streamed_rows[index] != current_rows[index]) {
+    Some(index) => Some(index),
+    None if current_rows.len() > streamed_rows.len() => Some(streamed_rows.len()),
+    None => None,
   }
 }
 
@@ -618,13 +748,29 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
     }),
     event_types::QUOTA_FAILOVER => {
       let from_backend = string_default(event, "from", "");
+      let to_backend = string_default(event, "to", "");
       let recovers_at = event.field("recovers_at").filter(|value| is_truthy(*value));
       let recovery =
         recovers_at.map_or_else(String::new, |value| format!("; {from_backend} recovers at {}", event_str(value)));
-      json!({
-        "role": "system",
-        "content": format!("Quota exhausted on {from_backend}: switched to {}{recovery}", string_default(event, "to", "")),
-      })
+      let reason = event.field(event_types::QUOTA_FAILOVER_REASON).and_then(EventFields::as_str_field);
+      let head = match reason {
+        Some(event_types::QUOTA_REASON_NEAR_EXHAUSTION) => {
+          format!("Near quota exhaustion on {from_backend}: switched to {to_backend}")
+        }
+        Some(event_types::QUOTA_REASON_SUBSCRIPTION_RESET) => {
+          format!("Subscription quota reset: switched {from_backend} → {to_backend}")
+        }
+        Some(event_types::QUOTA_REASON_QUOTA_ERROR) | None => {
+          format!("Quota exhausted on {from_backend}: switched to {to_backend}")
+        }
+        Some(reason) => format!("Quota change on {from_backend}: switched to {to_backend} ({reason})"),
+      };
+      let handoff = event
+        .field(event_types::QUOTA_FAILOVER_SUMMARY)
+        .and_then(EventFields::as_str_field)
+        .filter(|summary| !summary.is_empty() && *summary != event_types::QUOTA_SUMMARY_OK)
+        .map_or_else(String::new, |summary| format!("; handoff summary {summary}"));
+      json!({"role": "system", "content": format!("{head}{recovery}{handoff}")})
     }
     event_types::BACKEND_OVERLAY_INACTIVE | event_types::BACKEND_OVERLAY_UNDECLARED => {
       let backend = string_default(event, "backend", "");
@@ -1196,22 +1342,95 @@ mod tests {
     ])
   }
 
+  /// The fixture's stream frames are whole-draft snapshots, which is the wire form of the Python aggregator
+  /// they were recorded from. The live feed carries only new text, so the appends are accumulated here and the
+  /// draft at each frame must equal that frame's snapshot; every other frame must match exactly.
   fn assert_parity_frames(actual: Vec<Value>, expected: &[Value], case: &str) {
-    if actual == expected {
-      return;
+    let expected = without_repeated_snapshots(expected);
+    let mut actual = actual.into_iter();
+    let mut content = String::new();
+    let mut thinking = String::new();
+    let mut tools = Value::Null;
+    for (index, expected_frame) in expected.iter().enumerate() {
+      let Some(frame) = actual.next() else {
+        panic!("{case}: the feed ended before frame {index}; expected {expected_frame:?}");
+      };
+      if expected_frame["type"] != "stream" {
+        assert_eq!(&frame, expected_frame, "{case}: frame {index} differs from the fixture");
+        content.clear();
+        thinking.clear();
+        tools = Value::Null;
+        continue;
+      }
+      assert_eq!(frame["type"], "stream", "{case}: frame {index} is not a stream frame: {frame:?}");
+      if let Some(append) = frame["append"].as_str() {
+        content = extend_streamed(&content, append, frame["length"].as_u64());
+      }
+      if let Some(append) = frame["thinking_append"].as_str() {
+        thinking = extend_streamed(&thinking, append, frame["thinking_length"].as_u64());
+      }
+      if let Some(frame_tools) = frame.get("tools") {
+        // A live frame carries the rows from `tools_from` on; the page keeps the rows before it.
+        tools = match frame["tools_from"].as_u64() {
+          Some(from) => {
+            let mut held = tools.as_array().cloned().unwrap_or_default();
+            held.truncate(from as usize);
+            held.extend(frame_tools.as_array().cloned().unwrap_or_default());
+            Value::Array(held)
+          }
+          None => frame_tools.clone(),
+        };
+      }
+      let snapshot = &expected_frame["message"];
+      assert_eq!(content, snapshot["content"].as_str().unwrap_or(""), "{case}: draft text at frame {index}");
+      assert_eq!(
+        thinking,
+        snapshot.get("thinking").and_then(Value::as_str).unwrap_or(""),
+        "{case}: draft thinking at frame {index}"
+      );
+      if let Some(snapshot_tools) = snapshot.get("tools") {
+        assert_eq!(&tools, snapshot_tools, "{case}: draft tools at frame {index}");
+      }
     }
-    let first_difference = actual
-      .iter()
-      .zip(expected)
-      .position(|(actual, expected)| actual != expected)
-      .unwrap_or(actual.len().min(expected.len()));
-    panic!(
-      "Python aggregator frames differ for {case} at frame {first_difference}; actual: {:?}; expected: {:?}; lengths: {}/{}",
-      actual.get(first_difference),
-      expected.get(first_difference),
-      actual.len(),
-      expected.len()
-    );
+    assert!(actual.next().is_none(), "{case}: the feed sent frames the fixture does not have");
+  }
+
+  /// Drop the snapshots that repeat their predecessor: the append feed sends nothing when a draft is unchanged.
+  fn without_repeated_snapshots(frames: &[Value]) -> Vec<Value> {
+    let mut kept = Vec::new();
+    let mut previous: Option<Value> = None;
+    for frame in frames {
+      if frame["type"] != "stream" {
+        previous = None;
+        kept.push(frame.clone());
+        continue;
+      }
+      let snapshot = &frame["message"];
+      let state = json!([snapshot["content"], snapshot.get("thinking"), snapshot.get("tools"),]);
+      if previous.as_ref() == Some(&state) {
+        continue;
+      }
+      previous = Some(state);
+      kept.push(frame.clone());
+    }
+    kept
+  }
+
+  /// The draft text after one append frame, the way the page accumulates it. The fixture's texts are ASCII, so
+  /// a UTF-16 length is its byte length.
+  fn extend_streamed(held: &str, append: &str, end: Option<u64>) -> String {
+    let Some(end) = end.map(|end| end as usize) else { return format!("{held}{append}") };
+    let start = end.saturating_sub(append.len());
+    if end <= held.len() {
+      return if &held[start..end] == append { held.to_string() } else { append.to_string() };
+    }
+    if start >= held.len() {
+      return format!("{held}{append}");
+    }
+    if held[start..] != append[..held.len() - start] {
+      return append.to_string();
+    }
+    format!("{held}{}", &append[held.len() - start..])
   }
 
   #[test]
@@ -1433,7 +1652,8 @@ mod tests {
       }))
       .unwrap();
     assert_eq!(stream[0]["type"], "stream");
-    assert_eq!(stream[0]["message"]["id"], "legacy:1");
+    assert_eq!(stream[0]["append"], "answer");
+    assert_eq!(stream[0]["length"], 6);
   }
 
   #[test]
@@ -1484,7 +1704,96 @@ mod tests {
       .unwrap();
     assert_eq!(deltas.len(), 1);
     assert_eq!(deltas[0]["type"], "stream");
-    assert_eq!(deltas[0]["message"]["tools"][0]["output"], "read");
+    assert_eq!(deltas[0]["tools_from"], 0);
+    assert_eq!(deltas[0]["tools"][0]["output"], "read");
+    assert!(deltas[0].get("append").is_none(), "the draft text did not change");
+  }
+
+  /// The stream frames of these events, as the live feed sends them.
+  fn live_stream_frames(events: &[Value]) -> Vec<Value> {
+    let mut aggregator = MessageAggregator::new(0, true);
+    let mut frames = Vec::new();
+    for event in events {
+      frames.extend(aggregator.feed(event).unwrap());
+    }
+    frames.into_iter().filter(|frame| frame["type"] == "stream").collect()
+  }
+
+  fn tool_use_event(id: &str, command: &str) -> Value {
+    json!({"type": "tool_use", "tool_use_id": id, "name": "Bash", "input": {"command": command}, "timestamp": "t"})
+  }
+
+  #[test]
+  fn tool_row_frames_carry_the_suffix_from_the_first_changed_row() {
+    let mut events = vec![tool_use_event("r1", "one"), tool_use_event("r2", "two"), tool_use_event("r3", "three")];
+    let frames = live_stream_frames(&events);
+    let starts: Vec<u64> = frames.iter().map(|frame| frame["tools_from"].as_u64().unwrap()).collect();
+    let widths: Vec<usize> = frames.iter().map(|frame| frame["tools"].as_array().unwrap().len()).collect();
+    // Each new row appends one row: the suffix starts at the new row and holds it alone.
+    assert_eq!(starts, [0, 1, 2]);
+    assert_eq!(widths, [1, 1, 1]);
+    assert_eq!(frames[0]["tools"][0]["input"]["command"], "one");
+    assert_eq!(frames[2]["tools"][0]["input"]["command"], "three");
+
+    // A result on the last row resends that row only, with its output.
+    events.push(json!({"type": "tool_result", "tool_use_id": "r3", "content": "done", "timestamp": "t"}));
+    // A change to an earlier row starts the suffix there: the subagent hangs under the second row.
+    events.push(json!({
+      "type": "system", "subtype": "task_started", "tool_use_id": "r2",
+      "subagent_type": "general-purpose", "description": "Check", "prompt": "look",
+    }));
+    let frames = live_stream_frames(&events);
+    let result_frame = &frames[3];
+    assert_eq!(result_frame["tools_from"], 2);
+    assert_eq!(result_frame["tools"].as_array().unwrap().len(), 1);
+    assert_eq!(result_frame["tools"][0]["output"], "done");
+    let subagent_frame = &frames[4];
+    assert_eq!(subagent_frame["tools_from"], 1);
+    let suffix = subagent_frame["tools"].as_array().unwrap();
+    assert_eq!(suffix.len(), 2, "the suffix reaches the end of the draft's rows");
+    assert_eq!(suffix[0]["id"], "r2");
+    assert_eq!(suffix[0]["subagent"]["status"], "running");
+    assert_eq!(suffix[1]["input"]["command"], "three");
+  }
+
+  #[test]
+  fn the_first_tool_frame_after_a_commit_starts_the_suffix_at_zero() {
+    let mut events = vec![tool_use_event("r1", "one")];
+    let frames = live_stream_frames(&events);
+    assert_eq!(frames[0]["tools_from"], 0);
+    assert_eq!(frames[0]["tools"].as_array().unwrap().len(), 1);
+
+    // The commit closes the draft, so the next draft's rows stream from zero again.
+    events.push(json!({"type": "master_done", "timestamp": "t"}));
+    events.push(tool_use_event("r2", "two"));
+    let frames = live_stream_frames(&events);
+    assert_eq!(frames.last().unwrap()["tools_from"], 0);
+    assert_eq!(frames.last().unwrap()["tools"].as_array().unwrap().len(), 1);
+  }
+
+  #[test]
+  fn a_run_end_that_stops_a_row_streams_the_suffix_from_that_row() {
+    let events = vec![
+      tool_use_event("r1", "one"),
+      json!({
+        "type": "system", "subtype": "task_started", "tool_use_id": "r1",
+        "subagent_type": "general-purpose", "description": "Check", "prompt": "look",
+      }),
+      json!({"type": "master_done", "timestamp": "t"}),
+    ];
+    let mut aggregator = MessageAggregator::new(0, true);
+    let mut deltas = Vec::new();
+    for event in &events {
+      deltas.extend(aggregator.feed(event).unwrap());
+    }
+    // The stop streams before the commit closes the draft.
+    let stop = deltas
+      .iter()
+      .position(|frame| frame["type"] == "stream" && frame["tools"][0]["subagent"]["status"] == "stopped")
+      .expect("the run end streams the stopped row");
+    let commit = deltas.iter().position(|frame| frame["type"] == "message").unwrap();
+    assert!(stop < commit, "the suffix frame precedes the commit");
+    assert_eq!(deltas[stop]["tools_from"], 0);
   }
 
   #[test]
@@ -1657,6 +1966,27 @@ mod tests {
         "id": "legacy:0",
         "timestamp": null,
       })
+    );
+  }
+
+  #[test]
+  fn quota_failover_states_an_unavailable_handoff_summary() {
+    let mut aggregator = MessageAggregator::new(0, true);
+    let deltas = aggregator
+      .feed(&json!({
+        "type": "quota_failover",
+        "from": "fake",
+        "to": "strong",
+        "recovers_at": "2030-01-02T03:04+00:00",
+        "reason": "quota_error",
+        "set": "auto",
+        "summary": "unavailable: the run's events log is missing",
+      }))
+      .unwrap();
+    assert_eq!(
+      deltas[0]["message"]["content"],
+      "Quota exhausted on fake: switched to strong; fake recovers at 2030-01-02T03:04+00:00; handoff summary \
+       unavailable: the run's events log is missing"
     );
   }
 

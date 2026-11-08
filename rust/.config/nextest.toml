@@ -1,0 +1,32 @@
+# The release trial tests take the in-process TRIAL_RUNS mutex so their port picks cannot collide;
+# a mutex cannot reach across nextest's one-process-per-test isolation, so this group serializes
+# them the way the mutex did under `cargo test`.
+[test-groups]
+release-trials = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary_id(=charliebot-script-tests::release) and (test(/^test_trial_serve/) or test(/^test_trial_config/) or test(=test_trial_installs_the_commits_units_and_reloads_before_its_server_starts))'
+test-group = 'release-trials'
+
+# The profile CI runs nextest with (`cargo nextest run --profile ci`). A failure cancels nothing so the
+# JUnit report covers every test; the report carries each test's wall-clock time for the 0.1 s check.
+[profile.ci]
+fail-fast = false
+
+[profile.ci.junit]
+path = "junit.xml"
+
+[profile.integration]
+inherits = "ci"
+
+[profile.integration.junit]
+path = "junit.xml"
+
+# The profile the 0.1 s check uses for each isolated round. One test thread keeps selected tests serial;
+# fail-fast stays off so every selected test has a JUnit row even when a test fails.
+[profile.check]
+test-threads = 1
+fail-fast = false
+
+[profile.check.junit]
+path = "junit.xml"

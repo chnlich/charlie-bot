@@ -155,6 +155,7 @@ const TASK_ID: &str = "4f1c2a0e-7b1d-5c3e-9a2f-1d2e3f4a5b6c";
 const PARENT_ID: &str = "9a8b7c6d-5e4f-5a3b-8c2d-1e0f9a8b7c6d";
 
 #[test]
+#[ignore = "integration"]
 fn set_approver_patches_the_task_with_the_approver() {
   let stub = StubApi::start();
   let sandbox = Sandbox::new(stub.port);
@@ -170,6 +171,7 @@ fn set_approver_patches_the_task_with_the_approver() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn set_approver_refuses_an_unknown_approver_before_any_request() {
   let stub = StubApi::start();
   let sandbox = Sandbox::new(stub.port);
@@ -181,6 +183,7 @@ fn set_approver_refuses_an_unknown_approver_before_any_request() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn create_sends_the_approver_with_the_task_object() {
   let stub = StubApi::start();
   let sandbox = Sandbox::new(stub.port);

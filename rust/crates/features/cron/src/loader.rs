@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use charliebot_core::config::{CONFIG_D_DIR_NAME, CharlieBotConfig};
+use charliebot_core::home::state_dir;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::Registry;
 use charliebot_registry::context::FeatureContext;
@@ -465,7 +466,7 @@ fn repo_root(features: &FeatureContext) -> Arc<RepoRoot> {
 
 fn fire_error_alert(features: &Arc<FeatureContext>, cfg: &CharlieBotConfig, errors: &[ScheduledTaskError]) {
   let names = errors.iter().map(|error| error.name.clone()).collect::<Vec<_>>();
-  let path = cfg.charliebot_home.join("state/cron_alert_fingerprint.json");
+  let path = state_dir(&cfg.charliebot_home).join("cron_alert_fingerprint.json");
   let old = match std::fs::read_to_string(&path) {
     Ok(raw) => match serde_json::from_str::<Vec<String>>(&raw) {
       Ok(names) => names.into_iter().collect::<std::collections::HashSet<_>>(),

@@ -143,7 +143,7 @@ struct InlineCode {
   content: Range<usize>,
 }
 
-/// Register the user_text_checks section so the loader accepts and compiles its patterns.
+/// The `user_text_checks` section's registration, which makes the loader accept and compile its patterns.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.config_section(config_section())
 }
@@ -177,7 +177,7 @@ fn dump_config(value: &SectionValue) -> Result<Value, String> {
 }
 
 impl UserTextChecks {
-  /// Build checks for home, reading the session directory names used to resolve session ids.
+  /// The checks for `home`: the configured patterns, and the session directory names that resolve session ids.
   pub fn new(config: &UserTextChecksConfig, home: &Path) -> anyhow::Result<UserTextChecks> {
     let sessions_path = sessions_dir_in(home);
     let mut names = Vec::new();
@@ -205,7 +205,7 @@ impl UserTextChecks {
     Ok(UserTextChecks { config: config.clone(), sessions: SessionIndex { names } })
   }
 
-  /// Check one web reply, using its one-line blocks and file-link resolution context.
+  /// The violations in one web reply, found in its one-line blocks and through the file-link resolution context.
   pub fn check_reply(&self, text: &str, file_scan_context: &ScanContext) -> anyhow::Result<Vec<TextViolation>> {
     let mut violations = self.tracker_violations(line_blocks(text))?;
     violations.extend(self.reply_session_violations(text)?);
@@ -213,7 +213,7 @@ impl UserTextChecks {
     Ok(violations)
   }
 
-  /// Check one rendered HTML page, using its configured text blocks and anchor targets.
+  /// The violations in one rendered HTML page, found in its configured text blocks and at its anchor targets.
   pub fn check_page(&self, html: &str) -> anyhow::Result<Vec<TextViolation>> {
     let page = parse_page(html)?;
     let blocks = page.blocks.iter().enumerate().map(|(index, text)| (index, text.as_str())).collect::<Vec<_>>();
@@ -413,7 +413,7 @@ impl TextViolation {
   }
 }
 
-/// Format one page failure with its snippet, containing block, fix and reason.
+/// One page failure as a line of text, with its snippet, containing block, fix and reason.
 pub fn page_failure_detail(violation: &TextViolation) -> String {
   format!(
     "snippet {:?}; block {:?}; fix: {}. {}",
@@ -424,7 +424,7 @@ pub fn page_failure_detail(violation: &TextViolation) -> String {
   )
 }
 
-/// Format web-reply refusals as one line per hit, with each correction's purpose.
+/// Web-reply refusals as one line per hit, with each correction's purpose.
 pub fn reply_refusal_detail(violations: &[TextViolation]) -> String {
   violations
     .iter()

@@ -20,6 +20,7 @@ time.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+zstd.workspace = true
 
 [features]
 # The test-only write-fault seam (`write_faults`). Off by default; only a dev-dependency turns it on.

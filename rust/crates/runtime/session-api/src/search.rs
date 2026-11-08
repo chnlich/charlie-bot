@@ -15,7 +15,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use charliebot_core::timefmt;
-use charliebot_store::metadata::{SessionMetadata, SessionStatus};
+use charliebot_store::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
 use charliebot_store::{Store, StoreResult};
 use lru::LruCache;
 
@@ -24,6 +24,34 @@ const SEARCH_FILE_MEMO_LIMIT: usize = 4096;
 const SEARCH_ROOTS_PER_FILE: usize = 8;
 const SEARCH_MATCH_MEMO_LIMIT: usize = 8;
 const SEARCH_CHUNK_SIZE: usize = 1 << 18;
+/// The number of lowercase ASCII letters a trigram position may take.
+const TRIGRAM_LETTERS: u8 = 26;
+/// Every three-letter sequence's bit in one file's content index.
+const TRIGRAM_BITS: usize = 26 * 26 * 26;
+/// The bytes one file's trigram bitmap takes.
+const TRIGRAM_BYTES: usize = TRIGRAM_BITS.div_ceil(8);
+/// The bytes one file's bigram bitmap takes: one bit per pair of [`BIGRAM_SYMBOLS`].
+const BIGRAM_BYTES: usize = BIGRAM_SYMBOLS.len() * BIGRAM_SYMBOLS.len() / 8;
+/// The bytes one file's high-byte bigram bitmap takes: one bit per pair of bytes at or above 0x80.
+///
+/// A multibyte character's UTF-8 bytes all lie at or above 0x80, so every pair inside such a needle is a high-byte
+/// pair this bitmap can test. Unknown or rare multibyte text carries few of the pairs a common needle holds, so the
+/// test rules out the files a trigram cannot encode.
+const HIGH_BIGRAM_BYTES: usize = 128 * 128 / 8;
+/// The code of a byte that is neither a lowercase ASCII letter nor a [`BIGRAM_SYMBOLS`] entry.
+const CONTENT_NONE: u8 = u8::MAX;
+/// The symbols a content index's bigrams distinguish: the lowercase ASCII letters, the digits, and the punctuation
+/// text carries.
+///
+/// The trigram bitmap keeps the 26 letters alone, because a bitmap over these 64 symbols would take 32 KB per file.
+/// A bigram needs only 64 × 64 bits, so it covers the digits and symbols that a needle such as an identifier, a
+/// version number or a path holds, which no letter trigram can prove absent.
+const BIGRAM_SYMBOLS: &[u8; 64] = b"abcdefghijklmnopqrstuvwxyz0123456789 ._-/:,;()[]{}<>=\"'`|&#*@+%!";
+/// The files whose content indexes the memo keeps.
+///
+/// One index's bitmaps are 4,757 bytes and the 7,160-session mock home takes about 34 MB. The cap exceeds that
+/// count, so a fresh query does not evict the indexes its next query would reuse.
+const SEARCH_CONTENT_INDEX_MEMO_LIMIT: usize = 16_384;
 /// The threads one signature batch may split across.
 ///
 /// The batch is one `stat` per watched file and the route waits on its slowest chunk. On the 7,160-session home,
@@ -39,6 +67,22 @@ const SIGNATURE_BATCH_CHUNK_FLOOR: usize = 50;
 ///
 /// A dispatched chunk costs a message round trip, so only a batch long enough to pay it takes the pool.
 const SIGNATURE_BATCH_MIN_PATHS: usize = 32;
+/// The threads one content-scan batch may split across.
+///
+/// A sparse needle's first query scans nearly every active session's chat file: 5.5 GB on the 7,160-session mock home,
+/// which one thread spends about 0.6 s on. The scans read different files and do not depend on each other.
+const SCAN_BATCH_WORKERS: usize = 16;
+/// The fewest scans a batch runs on its own threads: starting them costs more than a short batch saves.
+const SCAN_BATCH_MIN_JOBS: usize = 32;
+/// The candidates the first sweep window reads before the route checks whether the answer's slots are full.
+///
+/// The sweep runs newest-first, so the first window holds the newest candidates a full answer can carry. A window
+/// larger than the slots need would read files the answer cannot hold; a smaller one needs more batches to fill it.
+/// Tests shrink it, so a stopped sweep needs a corpus small enough to write inside the unit-test time bound.
+#[cfg(not(test))]
+const SWEEP_WINDOW_CANDIDATES: usize = 256;
+#[cfg(test)]
+const SWEEP_WINDOW_CANDIDATES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FileSignature {
@@ -55,7 +99,65 @@ struct FileSignature {
 #[derive(Clone)]
 struct WatchedFile {
   path: PathBuf,
+  /// The path's [`path_key`], which the content index memo is keyed by.
+  key: u64,
   below_sessions: Option<CString>,
+}
+
+/// The key a chat file's content index is stored under.
+///
+/// The sweep looks every candidate's index up, so the key is the path's FNV-1a hash: an eight-byte key costs one
+/// hashbrown probe, where the path itself cost a hash of its bytes and a compare on every candidate. A hash is not
+/// unique, so an entry keeps the path it was built for, and a mismatched path answers as a missing index.
+fn path_key(path: &Path) -> u64 {
+  let mut key: u64 = 0xcbf2_9ce4_8422_2325;
+  for byte in path.as_os_str().as_bytes() {
+    key ^= u64::from(*byte);
+    key = key.wrapping_mul(0x0000_0100_0000_01b3);
+  }
+  key
+}
+
+/// The content index's code per byte: the byte's position in [`BIGRAM_SYMBOLS`], its letter's position for an
+/// uppercase letter, and [`CONTENT_NONE`] for every byte the symbols do not hold.
+static CONTENT_CODES: LazyLock<[u8; 256]> = LazyLock::new(|| {
+  let mut codes = [CONTENT_NONE; 256];
+  for (code, symbol) in BIGRAM_SYMBOLS.iter().enumerate() {
+    let code = code as u8;
+    codes[*symbol as usize] = code;
+    if symbol.is_ascii_lowercase() {
+      codes[symbol.to_ascii_uppercase() as usize] = code;
+    }
+  }
+  codes
+});
+
+/// One file's content index: a bit per three-letter sequence, a bit per two-symbol sequence, and a bit per pair of
+/// high bytes its text holds.
+///
+/// `signature` is the file's identity when the index was built. A file whose identity moved needs its index rebuilt,
+/// because text that grew or changed can hold sequences the old index lacks.
+struct ContentIndexEntry {
+  /// The file the index was built for, so a [`path_key`] collision answers as a missing index.
+  path: PathBuf,
+  signature: FileSignature,
+  trigrams: Box<[u8]>,
+  bigrams: Box<[u8]>,
+  high_bigrams: Box<[u8]>,
+}
+
+/// One file's content index and whether the needle occurs in it, or the read that failed.
+type ContentIndexAnswer = io::Result<(Box<[u8]>, Box<[u8]>, Box<[u8]>, bool)>;
+
+/// What a file's content index says about a query.
+enum ContentVerdict {
+  /// No index holds this file at its current signature.
+  Missing,
+  /// The index cannot rule the file out, so the file is scanned.
+  Possible,
+  /// A trigram, a bigram or a high-byte bigram of the needle is absent from the file, so the needle is absent from
+  /// the file too.
+  Absent,
 }
 
 /// One file's needle roots, newest needles kept: the same bounded per-needle list the per-file memo holds.
@@ -116,37 +218,105 @@ pub(crate) struct SearchAnswer {
   pub source: Option<Arc<SearchMatch>>,
 }
 
+/// The work every fresh query of one corpus shares: each session's lowercase name, and each active session's chat
+/// file.
+///
+/// A fresh query tests the needle against every session name and checks the chat files of the active sessions that the
+/// capped answer can still take, and both sets depend only on the corpus. The store keeps a corpus until a metadata
+/// write or the sweep interval rebuilds it, so the entry serves the queries between two rebuilds. `corpus` is the key
+/// and holds the rows it names alive, so a pointer match names the same sessions; `sessions_dir` is the directory the
+/// paths resolve below.
+struct CorpusWork {
+  corpus: Arc<Vec<Arc<SessionMetadata>>>,
+  sessions_dir: PathBuf,
+  /// Each corpus row's name, lowercased once.
+  lowered_names: Vec<String>,
+  /// Every active session's chat file, in corpus order. The signature batch shares it across its workers.
+  candidates: Arc<Vec<WatchedFile>>,
+  /// The corpus row of each candidate, so a verdict maps back to its session.
+  candidate_rows: Vec<usize>,
+  /// The candidates, newest first, so a window of the sweep holds the newest candidates a full answer can carry.
+  ///
+  /// The order breaks ties on corpus order, as the answer does, so a scan's insertion order does not move.
+  newest_first: Vec<usize>,
+}
+
 struct SearchMemos {
+  corpus_work: Option<Arc<CorpusWork>>,
   files: LruCache<PathBuf, SearchFileRoots>,
+  content: LruCache<u64, ContentIndexEntry>,
   matches: LruCache<String, Arc<SearchMatch>>,
   read_failures: HashSet<(String, String)>,
   #[cfg(test)]
   scan_calls: usize,
+  /// The candidates the scan windows read, so a test can tell a stopped scan from a complete one.
+  #[cfg(test)]
+  scanned_candidates: usize,
+  /// The candidates whose signatures the sweep read, so a test can tell a stopped sweep from a complete one.
+  #[cfg(test)]
+  swept_candidates: usize,
 }
 
 impl Default for SearchMemos {
   fn default() -> Self {
     let files = LruCache::new(NonZeroUsize::new(SEARCH_FILE_MEMO_LIMIT).expect("the file memo limit is nonzero"));
+    let content = LruCache::new(
+      NonZeroUsize::new(SEARCH_CONTENT_INDEX_MEMO_LIMIT).expect("the content index memo limit is nonzero"),
+    );
     let matches = LruCache::new(NonZeroUsize::new(SEARCH_MATCH_MEMO_LIMIT).expect("the match memo limit is nonzero"));
     Self {
+      corpus_work: None,
       files,
+      content,
       matches,
       read_failures: HashSet::new(),
       #[cfg(test)]
       scan_calls: 0,
+      #[cfg(test)]
+      scanned_candidates: 0,
+      #[cfg(test)]
+      swept_candidates: 0,
     }
   }
 }
 
-/// One verdict helper's root list: needle-and-signature pairs whose order the helpers do not care about.
-type RootList = Vec<(String, FileSignature)>;
-
 impl SearchMemos {
-  /// The miss and hit roots of one file. Their order is irrelevant: the verdict helpers only scan them.
-  fn roots(&mut self, path: &Path) -> (RootList, RootList) {
-    let Some(entry) = self.files.get_mut(path) else { return (Vec::new(), Vec::new()) };
-    let collect = |roots: &RootMemo| roots.iter().map(|(needle, signature)| (needle.clone(), *signature)).collect();
-    (collect(&entry.misses), collect(&entry.hits))
+  /// The corpus work for `all`: the cached entry while the corpus and its sessions directory still hold, and a fresh
+  /// one otherwise.
+  fn corpus_work(
+    &mut self,
+    all: &Arc<Vec<Arc<SessionMetadata>>>,
+    sessions_dir: &Path,
+    store: &Store,
+  ) -> Arc<CorpusWork> {
+    if let Some(work) = self.corpus_work.as_ref()
+      && Arc::ptr_eq(&work.corpus, all)
+      && work.sessions_dir == sessions_dir
+    {
+      return Arc::clone(work);
+    }
+    let mut lowered_names = Vec::with_capacity(all.len());
+    let mut candidates = Vec::new();
+    let mut candidate_rows = Vec::new();
+    for (row, meta) in all.iter().enumerate() {
+      lowered_names.push(meta.name.to_lowercase());
+      if meta.status == SessionStatus::Active {
+        candidates.push(watched_file(sessions_dir, store.chat_events_path(&meta.id)));
+        candidate_rows.push(row);
+      }
+    }
+    let mut newest_first: Vec<usize> = (0..candidates.len()).collect();
+    newest_first.sort_by_key(|index| Reverse(all[candidate_rows[*index]].updated_at));
+    let work = Arc::new(CorpusWork {
+      corpus: Arc::clone(all),
+      sessions_dir: sessions_dir.to_path_buf(),
+      lowered_names,
+      candidates: Arc::new(candidates),
+      candidate_rows,
+      newest_first,
+    });
+    self.corpus_work = Some(Arc::clone(&work));
+    work
   }
 
   fn remember_root(&mut self, path: &Path, needle: &str, signature: FileSignature, hit: bool) {
@@ -159,6 +329,43 @@ impl SearchMemos {
     };
     let roots = if hit { &mut entry.hits } else { &mut entry.misses };
     roots.put(needle.to_string(), signature);
+  }
+
+  /// What this file's content index says about a needle, given the needle's trigrams, bigrams and high-byte bigrams.
+  fn content_verdict(
+    &mut self,
+    file: &WatchedFile,
+    signature: FileSignature,
+    trigrams: &[usize],
+    bigrams: &[usize],
+    high_bigrams: &[usize],
+  ) -> ContentVerdict {
+    let Some(entry) = self.content.get(&file.key) else { return ContentVerdict::Missing };
+    if entry.path != file.path || entry.signature != signature {
+      return ContentVerdict::Missing;
+    }
+    let holds = |bits: &[u8], bit: usize| bits[bit >> 3] & (1u8 << (bit & 7)) != 0;
+    if trigrams.iter().all(|bit| holds(&entry.trigrams, *bit))
+      && bigrams.iter().all(|bit| holds(&entry.bigrams, *bit))
+      && high_bigrams.iter().all(|bit| holds(&entry.high_bigrams, *bit))
+    {
+      ContentVerdict::Possible
+    } else {
+      ContentVerdict::Absent
+    }
+  }
+
+  fn remember_content_index(
+    &mut self,
+    file: &WatchedFile,
+    signature: FileSignature,
+    trigrams: Box<[u8]>,
+    bigrams: Box<[u8]>,
+    high_bigrams: Box<[u8]>,
+  ) {
+    self
+      .content
+      .put(file.key, ContentIndexEntry { path: file.path.clone(), signature, trigrams, bigrams, high_bigrams });
   }
 
   fn cached_match(&mut self, query: &str) -> Option<Arc<SearchMatch>> {
@@ -180,6 +387,15 @@ pub(crate) fn search_sessions(store: &Store, query: &str) -> StoreResult<SearchA
 }
 
 fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMemos>) -> StoreResult<SearchAnswer> {
+  search_sessions_with_limit(store, query, memos, SEARCH_RESULT_LIMIT)
+}
+
+fn search_sessions_with_limit(
+  store: &Store,
+  query: &str,
+  memos: &Mutex<SearchMemos>,
+  result_limit: usize,
+) -> StoreResult<SearchAnswer> {
   if query.trim().is_empty() {
     return Ok(SearchAnswer { rows: store.list_sessions(Some(SessionStatus::Active), None, None)?.rows, source: None });
   }
@@ -193,84 +409,228 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
   if let Some(cached) = memos.lock().expect("session search memo mutex is not poisoned").cached_match(&needle)
     && Arc::ptr_eq(&cached.corpus, &all)
   {
+    let watched: Vec<usize> = (0..cached.watched.len()).collect();
     let signatures: Vec<Option<FileSignature>> =
-      file_signatures(&cached.watched, sessions_handle.as_ref()).into_iter().map(Result::ok).collect();
+      file_signatures(&cached.watched, &watched, sessions_handle.as_ref()).into_iter().map(Result::ok).collect();
     if cached.signatures == signatures {
       return Ok(SearchAnswer { rows: cached.rows.clone(), source: Some(cached) });
     }
   }
 
+  let work = memos.lock().expect("session search memo mutex is not poisoned").corpus_work(&all, &sessions_dir, store);
   let mut names = Vec::new();
-  let mut content_metas = Vec::new();
-  let mut candidate_paths = Vec::new();
-  for meta in all.iter() {
-    if meta.name.to_lowercase().contains(&needle) {
+  let mut name_hits = vec![false; all.len()];
+  for (row, meta) in all.iter().enumerate() {
+    if work.lowered_names[row].contains(&needle) {
+      name_hits[row] = true;
       names.push(meta);
-    } else if meta.status == SessionStatus::Active {
-      content_metas.push(meta);
-      candidate_paths.push(watched_file(&sessions_dir, store.chat_events_path(&meta.id)));
     }
   }
   names.sort_by_key(|left| Reverse(left.updated_at));
-  names.truncate(SEARCH_RESULT_LIMIT);
-  let candidate_paths = Arc::new(candidate_paths);
-  let signatures: Vec<Option<FileSignature>> = file_signatures(&candidate_paths, sessions_handle.as_ref())
-    .into_iter()
-    .zip(&content_metas)
-    .map(|(result, meta)| match result {
-      Ok(signature) => Some(signature),
-      Err(error) => {
-        log_search_read_failed_once(memos, &meta.id, &error);
-        None
-      }
-    })
-    .collect();
+  names.truncate(result_limit);
 
-  let mut content_hits = Vec::new();
+  let trigrams = needle_trigrams(&needle);
+  let bigrams = needle_bigrams(&needle);
+  let high_bigrams = needle_high_bigrams(&needle);
+  let content_index_settles = !(trigrams.is_empty() && bigrams.is_empty() && high_bigrams.is_empty());
+  // A candidate's place in `content_hits` follows the corpus order, because the result's order breaks ties on
+  // insertion order.
+  let mut content_hits = vec![false; work.candidates.len()];
+  // The signature of every candidate the sweep has read. A candidate the sweep stops before is never read, so its
+  // slot stays None.
+  let mut signatures: Vec<Option<FileSignature>> = vec![None; work.candidates.len()];
+  // Every match already known counts toward the cap: a name hit answers the query without reading a chat file.
+  let mut matched: Vec<UtcDateTime> =
+    name_hits.iter().enumerate().filter(|(_, hit)| **hit).map(|(row, _)| all[row].updated_at).collect();
   let mut scan_failures = 0;
-  for (index, (meta, signature)) in content_metas.iter().zip(&signatures).enumerate() {
-    let path = &candidate_paths[index].path;
-    let Some(signature) = signature else { continue };
-    let (miss_roots, hit_roots) = memos.lock().expect("session search memo mutex is not poisoned").roots(path);
-    if hit_root_covers(&hit_roots, *signature, &needle) {
-      content_hits.push(*meta);
-      continue;
+
+  // The result keeps the newest `result_limit` matches, so the sweep reads candidates newest-first and stops
+  // once every unread candidate is older than the result's slot at rank `result_limit`: such a candidate cannot
+  // enter the capped result, however its chat file reads. A common word matches most of the corpus, so this is the
+  // difference between reading the corpus and reading the rows the answer can hold.
+  //
+  // While the answer is short, the next window is sized to the candidates the matches so far say it still needs: a
+  // window that matches nothing means the answer sits far below it, so the rest of the corpus goes in one batch and
+  // pays no further signature round trip.
+  let mut processed = 0;
+  let mut window = SWEEP_WINDOW_CANDIDATES;
+  loop {
+    if processed == work.newest_first.len() {
+      break;
     }
-    let Some(start) = absence_rescan_start(&miss_roots, *signature, &needle) else {
-      continue;
+    let cutoff = result_cutoff(&mut matched, result_limit);
+    let end = match cutoff {
+      // Every candidate at or above the cutoff can still change the answer, and every candidate below it cannot. A
+      // full answer still checks those candidates a window at a time, because each match raises the cutoff and leaves
+      // the candidates below the new one unread.
+      Some(cutoff) => {
+        let above =
+          work.newest_first[processed..].partition_point(|index| all[work.candidate_rows[*index]].updated_at >= cutoff);
+        if above == 0 {
+          break;
+        }
+        (processed + SWEEP_WINDOW_CANDIDATES).min(processed + above)
+      }
+      None => (processed + window).min(work.newest_first.len()),
     };
+    let matched_before = matched.len();
+    let positions = &work.newest_first[processed..end];
+    // A session whose name matched already answers the query, so its chat file is not read.
+    let selection: Vec<usize> =
+      positions.iter().copied().filter(|index| !name_hits[work.candidate_rows[*index]]).collect();
     #[cfg(test)]
     {
-      memos.lock().expect("session search memo mutex is not poisoned").scan_calls += 1;
+      memos.lock().expect("session search memo mutex is not poisoned").swept_candidates += selection.len();
     }
-    match scan_content(path, &needle, start) {
-      Ok(true) => {
-        memos.lock().expect("session search memo mutex is not poisoned").remember_root(path, &needle, *signature, true);
-        content_hits.push(*meta);
+    for (index, answer) in selection.iter().zip(file_signatures(&work.candidates, &selection, sessions_handle.as_ref()))
+    {
+      signatures[*index] = match answer {
+        Ok(signature) => Some(signature),
+        Err(error) => {
+          log_search_read_failed_once(memos, &all[work.candidate_rows[*index]].id, &error);
+          None
+        }
+      };
+    }
+
+    // The per-file verdicts are read here, on the request's thread, and the files that need a scan are collected so
+    // one batch can read them across threads.
+    let mut scans: Vec<(usize, u64)> = Vec::new();
+    let mut unindexed: Vec<usize> = Vec::new();
+    {
+      let mut guard = memos.lock().expect("session search memo mutex is not poisoned");
+      for index in positions.iter().copied() {
+        if name_hits[work.candidate_rows[index]] {
+          continue;
+        }
+        let Some(signature) = signatures[index] else { continue };
+        let path = &work.candidates[index].path;
+        // The content index settles most fresh queries before the per-file roots are read.
+        let needs_index = if content_index_settles {
+          match guard.content_verdict(&work.candidates[index], signature, &trigrams, &bigrams, &high_bigrams) {
+            ContentVerdict::Absent => continue,
+            ContentVerdict::Possible => false,
+            ContentVerdict::Missing => true,
+          }
+        } else {
+          false
+        };
+        let (covered, start) = match guard.files.get_mut(path) {
+          Some(entry) => (
+            hit_root_covers(entry.hits.iter(), signature, &needle),
+            absence_rescan_start(&entry.misses, signature, &needle),
+          ),
+          // A file with no memo entry has no recorded root: none covers it, and its scan starts at the first byte.
+          None => (false, Some(0)),
+        };
+        if covered {
+          content_hits[index] = true;
+          matched.push(all[work.candidate_rows[index]].updated_at);
+          continue;
+        }
+        let Some(start) = start else { continue };
+        if needs_index {
+          unindexed.push(index);
+        }
+        #[cfg(test)]
+        {
+          guard.scan_calls += 1;
+        }
+        scans.push((index, start));
       }
-      Ok(false) => {
-        memos.lock().expect("session search memo mutex is not poisoned").remember_root(path, &needle, *signature, false)
+    }
+    // A file with no fresh content index gets one, and the same pass searches it, so the query reads it once. A file
+    // whose index rules the needle out leaves the scan batch here, while a file the index cannot rule out is searched
+    // by the pass itself and leaves it too.
+    if !unindexed.is_empty() {
+      let answers = index_and_search_files(&work.candidates, &unindexed, &signatures, &needle);
+      let mut indexed = HashSet::new();
+      for (index, answer) in answers {
+        let signature = signatures[index].expect("an indexed candidate holds its signature");
+        match answer {
+          Ok((trigrams, bigrams, high_bigrams, found)) => {
+            let path = &work.candidates[index].path;
+            memos.lock().expect("session search memo mutex is not poisoned").remember_content_index(
+              &work.candidates[index],
+              signature,
+              trigrams,
+              bigrams,
+              high_bigrams,
+            );
+            memos
+              .lock()
+              .expect("session search memo mutex is not poisoned")
+              .remember_root(path, &needle, signature, found);
+            content_hits[index] = found;
+            if found {
+              matched.push(all[work.candidate_rows[index]].updated_at);
+            }
+            indexed.insert(index);
+          }
+          Err(error) => log_search_read_failed_once(memos, &all[work.candidate_rows[index]].id, &error),
+        }
       }
-      Err(error) => {
-        scan_failures += 1;
-        log_search_read_failed_once(memos, &meta.id, &error);
+      if !indexed.is_empty() {
+        scans.retain(|(index, _)| !indexed.contains(index));
       }
+    }
+    if !scans.is_empty() {
+      #[cfg(test)]
+      {
+        memos.lock().expect("session search memo mutex is not poisoned").scanned_candidates += scans.len();
+      }
+      for ((index, _), answer) in scans.iter().zip(scan_contents(&work.candidates, &scans, &signatures, &needle)) {
+        let path = &work.candidates[*index].path;
+        let signature = signatures[*index].expect("a scanned candidate holds its signature");
+        match answer {
+          Ok(true) => {
+            memos
+              .lock()
+              .expect("session search memo mutex is not poisoned")
+              .remember_root(path, &needle, signature, true);
+            content_hits[*index] = true;
+            matched.push(all[work.candidate_rows[*index]].updated_at);
+          }
+          Ok(false) => memos
+            .lock()
+            .expect("session search memo mutex is not poisoned")
+            .remember_root(path, &needle, signature, false),
+          Err(error) => {
+            scan_failures += 1;
+            log_search_read_failed_once(memos, &all[work.candidate_rows[*index]].id, &error);
+          }
+        }
+      }
+    }
+    processed = end;
+    if cutoff.is_none() {
+      let found = matched.len() - matched_before;
+      let need = result_limit.saturating_sub(matched.len());
+      // The candidates the window's match rate says the answer still needs. A window that matched nothing leaves no
+      // rate, and the answer then sits far below the rest of the corpus.
+      window = need
+        .checked_mul(positions.len())
+        .and_then(|scaled| scaled.checked_div(found))
+        .map_or(work.newest_first.len(), |next| next.max(SWEEP_WINDOW_CANDIDATES));
     }
   }
 
-  names.extend(content_hits);
+  names.extend(work.candidate_rows.iter().zip(&content_hits).filter(|(_, hit)| **hit).map(|(row, _)| &all[*row]));
   names.sort_by_key(|left| Reverse(left.updated_at));
-  names.truncate(SEARCH_RESULT_LIMIT);
+  names.truncate(result_limit);
   if scan_failures == 0 {
-    // The result holds at most the newest `SEARCH_RESULT_LIMIT` rows, so a candidate older than the last row cannot
+    // The result holds at most the newest `result_limit` rows, so a candidate older than the last row cannot
     // enter a full result however its chat file changes. A repeat query re-checks only the candidates that could
     // enter it; a short result can still take any candidate, so it keeps watching all of them.
-    let cutoff = names.get(SEARCH_RESULT_LIMIT - 1).map(|meta| meta.updated_at);
+    let cutoff = names.get(result_limit - 1).map(|meta| meta.updated_at);
     let mut watched = Vec::new();
     let mut watched_signatures = Vec::new();
-    for (index, (meta, signature)) in content_metas.iter().zip(signatures).enumerate() {
-      if cutoff.is_none_or(|cutoff| meta.updated_at >= cutoff) {
-        watched.push(candidate_paths[index].clone());
+    for (index, (row, signature)) in work.candidate_rows.iter().zip(signatures).enumerate() {
+      if name_hits[*row] {
+        continue;
+      }
+      if cutoff.is_none_or(|cutoff| all[*row].updated_at >= cutoff) {
+        watched.push(work.candidates[index].clone());
         watched_signatures.push(signature);
       }
     }
@@ -291,7 +651,7 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
   Ok(SearchAnswer { rows: names.into_iter().map(Arc::clone).collect(), source: None })
 }
 
-/// The signature of every path, in the argument order.
+/// The signatures of the selected paths, in the selection's order.
 ///
 /// Each read is one `stat` and the answers do not depend on each other, so a batch reads on the signature pool's
 /// threads. The pool lives for the process: a repeat query re-checks one `stat` per watched file, 200 on the mock
@@ -299,19 +659,25 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
 ///
 /// When `sessions_dir` is open, a read resolves the file below it instead of walking the home's whole path to the
 /// session's `data` directory, which is most of the route's kernel time on a repeat query.
-fn file_signatures(paths: &Arc<Vec<WatchedFile>>, sessions_dir: Option<&Arc<File>>) -> Vec<io::Result<FileSignature>> {
+fn file_signatures(
+  paths: &Arc<Vec<WatchedFile>>,
+  selection: &[usize],
+  sessions_dir: Option<&Arc<File>>,
+) -> Vec<io::Result<FileSignature>> {
   let pool = &*SIGNATURE_POOL;
-  if paths.len() < SIGNATURE_BATCH_MIN_PATHS || pool.senders.len() < 2 {
-    return paths.iter().map(|file| file_signature(file, sessions_dir.map(Arc::as_ref))).collect();
+  if selection.len() < SIGNATURE_BATCH_MIN_PATHS || pool.senders.len() < 2 {
+    return selection.iter().map(|index| file_signature(&paths[*index], sessions_dir.map(Arc::as_ref))).collect();
   }
-  let chunk = paths.len().div_ceil(pool.senders.len()).max(SIGNATURE_BATCH_CHUNK_FLOOR);
-  let mut chunks: Vec<Option<Vec<io::Result<FileSignature>>>> = paths.chunks(chunk).map(|_| None).collect();
+  let selection = Arc::new(selection.to_vec());
+  let chunk = selection.len().div_ceil(pool.senders.len()).max(SIGNATURE_BATCH_CHUNK_FLOOR);
+  let mut chunks: Vec<Option<Vec<io::Result<FileSignature>>>> = selection.chunks(chunk).map(|_| None).collect();
   let (reply, answers) = mpsc::channel();
   for (index, _) in chunks.iter().enumerate() {
     let start = index * chunk;
-    let end = (start + chunk).min(paths.len());
+    let end = (start + chunk).min(selection.len());
     pool.dispatch(SignatureJob {
       paths: Arc::clone(paths),
+      selection: Arc::clone(&selection),
       sessions_dir: sessions_dir.cloned(),
       start,
       end,
@@ -323,7 +689,7 @@ fn file_signatures(paths: &Arc<Vec<WatchedFile>>, sessions_dir: Option<&Arc<File
     let (chunk_start, signatures) = answers.recv().expect("a signature worker answers every dispatched chunk");
     chunks[chunk_start / chunk] = Some(signatures);
   }
-  let mut out = Vec::with_capacity(paths.len());
+  let mut out = Vec::with_capacity(selection.len());
   for chunk in chunks {
     out.extend(chunk.expect("every dispatched signature chunk answers"));
   }
@@ -338,10 +704,11 @@ fn file_signature(file: &WatchedFile, sessions_dir: Option<&File>) -> io::Result
   }
 }
 
-/// One chunk of one signature batch: the shared paths, the sessions directory handle, the chunk's half-open range,
-/// and its reply channel.
+/// One chunk of one signature batch: the shared paths, the candidate indices it reads, the sessions directory handle,
+/// the chunk's half-open range into the indices, and its reply channel.
 struct SignatureJob {
   paths: Arc<Vec<WatchedFile>>,
+  selection: Arc<Vec<usize>>,
   sessions_dir: Option<Arc<File>>,
   start: usize,
   end: usize,
@@ -381,7 +748,8 @@ impl SignaturePool {
 fn signature_worker(jobs: Receiver<SignatureJob>) {
   for job in jobs {
     let sessions_dir = job.sessions_dir.as_deref();
-    let signatures = job.paths[job.start..job.end].iter().map(|file| file_signature(file, sessions_dir)).collect();
+    let signatures =
+      job.selection[job.start..job.end].iter().map(|index| file_signature(&job.paths[*index], sessions_dir)).collect();
     // A batch that stopped waiting has no reader for this chunk.
     let _ = job.reply.send((job.start, signatures));
   }
@@ -415,7 +783,8 @@ fn sessions_dir_handle(dir: &Path) -> Option<Arc<File>> {
 fn watched_file(sessions_dir: &Path, path: PathBuf) -> WatchedFile {
   let below_sessions =
     path.strip_prefix(sessions_dir).ok().and_then(|relative| CString::new(relative.as_os_str().as_bytes()).ok());
-  WatchedFile { path, below_sessions }
+  let key = path_key(&path);
+  WatchedFile { path, key, below_sessions }
 }
 
 fn file_signature_unlogged(path: &Path) -> io::Result<FileSignature> {
@@ -452,15 +821,19 @@ fn log_search_read_failed_once(memos: &Mutex<SearchMemos>, session_id: &str, err
   }
 }
 
-fn hit_root_covers(roots: &[(String, FileSignature)], signature: FileSignature, needle: &str) -> bool {
-  roots.iter().any(|(root, root_signature)| {
+fn hit_root_covers<'a>(
+  roots: impl Iterator<Item = (&'a String, &'a FileSignature)>,
+  signature: FileSignature,
+  needle: &str,
+) -> bool {
+  roots.into_iter().any(|(root, root_signature)| {
     root.contains(needle) && root_signature.inode == signature.inode && signature.size >= root_signature.size
   })
 }
 
 /// `None` means a stored absence already proves this query; otherwise return the byte offset to re-scan.
-fn absence_rescan_start(roots: &[(String, FileSignature)], signature: FileSignature, needle: &str) -> Option<u64> {
-  for (root, root_signature) in roots {
+fn absence_rescan_start(roots: &RootMemo, signature: FileSignature, needle: &str) -> Option<u64> {
+  for (root, root_signature) in roots.iter() {
     if needle.starts_with(root) && *root_signature == signature {
       return None;
     }
@@ -468,44 +841,270 @@ fn absence_rescan_start(roots: &[(String, FileSignature)], signature: FileSignat
   let best_size = roots
     .iter()
     .filter(|(root, root_signature)| {
-      needle.starts_with(root) && root_signature.inode == signature.inode && signature.size > root_signature.size
+      needle.starts_with(root.as_str())
+        && root_signature.inode == signature.inode
+        && signature.size > root_signature.size
     })
     .map(|(_, root_signature)| root_signature.size)
     .max();
   Some(best_size.map_or(0, |size| size.saturating_sub((4 * needle.chars().count() + 8) as u64)))
 }
 
-fn scan_content(path: &Path, needle: &str, start: u64) -> io::Result<bool> {
+/// The `updated_at` of the oldest row a full result holds, or `None` while the matches are fewer than the cap.
+///
+/// A candidate older than this value cannot enter the answer however its chat file reads, because the cap already
+/// holds `limit` matches at or above it.
+fn result_cutoff(matched: &mut [UtcDateTime], limit: usize) -> Option<UtcDateTime> {
+  if matched.len() < limit {
+    return None;
+  }
+  let (_, cutoff, _) = matched.select_nth_unstable_by(limit - 1, |left, right| right.cmp(left));
+  Some(*cutoff)
+}
+
+/// The trigrams a lowercase ASCII needle holds; a window with any other byte contributes none.
+///
+/// Every window of the needle's own bytes is a window of any text that holds the needle, so an index that lacks one
+/// of these trigrams proves the needle absent. A window the index cannot encode proves nothing and is dropped.
+fn needle_trigrams(needle: &str) -> Vec<usize> {
+  if !needle.is_ascii() {
+    return Vec::new();
+  }
+  let codes = &*CONTENT_CODES;
+  let bytes = needle.as_bytes();
+  bytes
+    .windows(3)
+    .filter_map(|window| {
+      trigram_number(codes[window[0] as usize], codes[window[1] as usize], codes[window[2] as usize])
+    })
+    .collect()
+}
+
+/// The bigrams a lowercase ASCII needle holds; a pair of letters and a pair holding a byte outside [`BIGRAM_SYMBOLS`]
+/// contribute none.
+///
+/// A bigram holds a digit or a symbol the trigram index cannot, so a needle such as an identifier or a version number
+/// becomes provable absent. A pair of letters adds nothing the trigram index does not already prove.
+fn needle_bigrams(needle: &str) -> Vec<usize> {
+  if !needle.is_ascii() {
+    return Vec::new();
+  }
+  let codes = &*CONTENT_CODES;
+  let bytes = needle.as_bytes();
+  bytes.windows(2).filter_map(|window| bigram_number(codes[window[0] as usize], codes[window[1] as usize])).collect()
+}
+
+/// The high-byte bigrams a needle holds: one for each adjacent pair of bytes at or above 0x80.
+///
+/// Every multibyte character's UTF-8 bytes lie at or above 0x80, so a needle that holds one carries at least one of
+/// these pairs, and the trigram and bigram indexes cannot encode it.
+///
+/// Only a needle the raw-byte scan handles gets them. The index folds ASCII only, while any other needle is scanned
+/// with Unicode lowercase folding, and that fold can produce bytes the index never saw: U+0130 lowers to `i` and
+/// U+0307, whose bytes an index built from a file that holds U+0130 lacks.
+fn needle_high_bigrams(needle: &str) -> Vec<usize> {
+  if needle.is_ascii() || !uncased_alphanumeric(needle) {
+    return Vec::new();
+  }
+  needle.as_bytes().windows(2).filter_map(|window| high_bigram_number(window[0], window[1])).collect()
+}
+
+/// The bit position of three letter codes, or None when one code is not a lowercase letter.
+///
+/// Each code is checked: a later code that is not a letter would still sum below [`TRIGRAM_BITS`] and alias the bit of
+/// a letter sequence the text does not hold.
+fn trigram_number(first: u8, second: u8, third: u8) -> Option<usize> {
+  if first >= TRIGRAM_LETTERS || second >= TRIGRAM_LETTERS || third >= TRIGRAM_LETTERS {
+    return None;
+  }
+  Some(first as usize * 676 + second as usize * 26 + third as usize)
+}
+
+/// The bit position of a pair of bytes at or above 0x80, or None when either byte lies below that.
+fn high_bigram_number(first: u8, second: u8) -> Option<usize> {
+  if first < 0x80 || second < 0x80 {
+    return None;
+  }
+  Some((first as usize - 0x80) * 128 + (second as usize - 0x80))
+}
+
+/// The bit position of two symbol codes, or None when a code is not a [`BIGRAM_SYMBOLS`] entry or both codes are
+/// letters.
+///
+/// A pair of letters needs no bit: the trigram index already holds every letter sequence, and giving most positions a
+/// bigram would double the first query's indexing pass for evidence the next query does not need.
+fn bigram_number(first: u8, second: u8) -> Option<usize> {
+  let symbols = BIGRAM_SYMBOLS.len() as u8;
+  if first >= symbols || second >= symbols || (first < TRIGRAM_LETTERS && second < TRIGRAM_LETTERS) {
+    return None;
+  }
+  Some(first as usize * BIGRAM_SYMBOLS.len() + second as usize)
+}
+
+/// One file's content index and whether the needle occurs in it, from one pass over its bytes.
+///
+/// The needle search matches the scan's rule: both read the text with ASCII case folding, so a needle the index
+/// cleared the file for can still match here. `window` carries the last bytes of each chunk, which keeps a trigram,
+/// a bigram and a needle that span the boundary.
+fn index_and_search_file(path: &Path, needle: &str) -> ContentIndexAnswer {
+  let mut file = File::open(path)?;
+  let mut trigrams = vec![0u8; TRIGRAM_BYTES];
+  let mut bigrams = vec![0u8; BIGRAM_BYTES];
+  let mut high_bigrams = vec![0u8; HIGH_BIGRAM_BYTES];
+  let finder = memchr::memmem::Finder::new(needle.as_bytes());
+  let codes = &*CONTENT_CODES;
+  let overlap = needle.len().saturating_sub(1).max(2);
+  let mut carry: Vec<u8> = Vec::with_capacity(overlap);
+  let mut chunk = vec![0u8; SEARCH_CHUNK_SIZE];
+  let mut window: Vec<u8> = Vec::with_capacity(overlap + SEARCH_CHUNK_SIZE);
+  let mut matched = false;
+  loop {
+    let count = file.read(&mut chunk)?;
+    if count == 0 {
+      return Ok((trigrams.into_boxed_slice(), bigrams.into_boxed_slice(), high_bigrams.into_boxed_slice(), matched));
+    }
+    window.clear();
+    window.extend_from_slice(&carry);
+    window.extend_from_slice(&chunk[..count]);
+    window.make_ascii_lowercase();
+    // One pass sets all three bitmaps: a second pass over the window would stream the whole file through memory again.
+    // The loop ends two bytes short of the window, so the last pair's bigram follows it. ASCII folding leaves the high
+    // bytes unchanged, so the high-byte pairs are the text's own.
+    let last_pair = window.len().saturating_sub(2);
+    for position in 0..last_pair {
+      let first = codes[window[position] as usize];
+      let second = codes[window[position + 1] as usize];
+      let third = codes[window[position + 2] as usize];
+      if let Some(index) = bigram_number(first, second) {
+        bigrams[index >> 3] |= 1u8 << (index & 7);
+      }
+      if let Some(index) = trigram_number(first, second, third) {
+        trigrams[index >> 3] |= 1u8 << (index & 7);
+      }
+      if let Some(index) = high_bigram_number(window[position], window[position + 1]) {
+        high_bigrams[index >> 3] |= 1u8 << (index & 7);
+      }
+    }
+    if window.len() >= 2 {
+      let first = codes[window[window.len() - 2] as usize];
+      let second = codes[window[window.len() - 1] as usize];
+      if let Some(index) = bigram_number(first, second) {
+        bigrams[index >> 3] |= 1u8 << (index & 7);
+      }
+      if let Some(index) = high_bigram_number(window[window.len() - 2], window[window.len() - 1]) {
+        high_bigrams[index >> 3] |= 1u8 << (index & 7);
+      }
+    }
+    if !matched && finder.find(&window).is_some() {
+      matched = true;
+    }
+    let keep = window.len().min(overlap);
+    carry.clear();
+    carry.extend_from_slice(&window[window.len() - keep..]);
+  }
+}
+
+/// A content index and a needle search for each named candidate, each answer carrying its candidate's index.
+///
+/// The split is why the answers come in no fixed order; the caller pairs each answer with the index it carries.
+fn index_and_search_files(
+  paths: &[WatchedFile],
+  jobs: &[usize],
+  signatures: &[Option<FileSignature>],
+  needle: &str,
+) -> Vec<(usize, ContentIndexAnswer)> {
+  let workers = std::thread::available_parallelism().map_or(1, |count| count.get()).min(SCAN_BATCH_WORKERS);
+  if jobs.len() < SCAN_BATCH_MIN_JOBS || workers < 2 {
+    return jobs.iter().map(|index| (*index, index_and_search_file(&paths[*index].path, needle))).collect();
+  }
+  let bins =
+    size_balanced_bins(jobs.len(), |slot| signatures[jobs[slot]].map_or(0, |signature| signature.size), workers);
+  let mut answers = Vec::with_capacity(jobs.len());
+  std::thread::scope(|scope| {
+    let handles: Vec<_> = bins
+      .into_iter()
+      .filter(|bin| !bin.is_empty())
+      .map(|bin| {
+        scope.spawn(move || {
+          bin
+            .into_iter()
+            .map(|slot| (jobs[slot], index_and_search_file(&paths[jobs[slot]].path, needle)))
+            .collect::<Vec<_>>()
+        })
+      })
+      .collect();
+    for handle in handles {
+      answers.extend(handle.join().expect("an index worker finishes without panic"));
+    }
+  });
+  answers
+}
+
+fn scan_content(path: &Path, needle: &str, start: u64, buffer: &mut ScanBuffer) -> io::Result<bool> {
   let mut file = File::open(path)?;
   file.seek(SeekFrom::Start(start))?;
   if needle.is_ascii() {
-    return scan_ascii(&mut file, needle.as_bytes());
+    return scan_ascii(&mut file, needle.as_bytes(), buffer);
+  }
+  // Folding the text is the scan's expensive half. On the 7,160-session mock home, a Chinese needle spends four
+  // fifths of its user CPU in Unicode lowercase conversion and UTF-8 validation, against under 1% in the needle
+  // search. A needle folding cannot change reads the file's bytes directly instead.
+  if uncased_alphanumeric(needle) {
+    return scan_bytes(&mut file, needle.as_bytes(), false, buffer);
   }
   scan_unicode(&mut file, needle, start > 0)
 }
 
-fn scan_ascii(file: &mut File, needle: &[u8]) -> io::Result<bool> {
+/// Whether Unicode case folding leaves every occurrence of `needle` exactly where the raw bytes hold it.
+///
+/// Folding rewrites only cased characters, and the characters it produces are cased or combining marks: Unicode's
+/// only unconditional lowercase expansion, U+0130, yields `i` and a combining dot. A needle of uncased
+/// alphanumerics — Han characters, digits, uncased letters — is therefore present in the folded text exactly when
+/// the file's own bytes carry it. The scan then searches the bytes and skips decoding and lowering every chunk.
+fn uncased_alphanumeric(needle: &str) -> bool {
+  needle.chars().all(|c| c.is_alphanumeric() && !c.is_lowercase() && !c.is_uppercase())
+}
+
+/// The read buffer one scan worker reuses across the files it scans.
+///
+/// A query scans thousands of files, so a fresh zeroed buffer per file would cost more than the reads it holds. The
+/// buffer keeps each read's last bytes in front of the next read, so a needle that spans a chunk boundary is still
+/// one contiguous window.
+struct ScanBuffer {
+  bytes: Vec<u8>,
+}
+
+impl ScanBuffer {
+  fn new(overlap: usize) -> Self {
+    Self { bytes: vec![0_u8; overlap + SEARCH_CHUNK_SIZE] }
+  }
+}
+
+fn scan_ascii(file: &mut File, needle: &[u8], buffer: &mut ScanBuffer) -> io::Result<bool> {
+  scan_bytes(file, needle, true, buffer)
+}
+
+/// The needle searched for in each window of the file's bytes, with each window ASCII-folded when `fold_ascii`.
+fn scan_bytes(file: &mut File, needle: &[u8], fold_ascii: bool, buffer: &mut ScanBuffer) -> io::Result<bool> {
   let overlap = needle.len().saturating_sub(1);
-  // memchr's memmem is the two-way search behind the substring test,
-  // built once per scan over the folded windows.
+  // memchr's memmem is the two-way search behind the substring test, built once per scan over the windows.
   let finder = memchr::memmem::Finder::new(needle);
-  let mut tail = Vec::with_capacity(overlap);
-  let mut chunk = vec![0_u8; SEARCH_CHUNK_SIZE];
-  let mut window = Vec::with_capacity(SEARCH_CHUNK_SIZE + overlap);
+  let mut carry = 0;
   loop {
-    let count = file.read(&mut chunk)?;
+    let count = file.read(&mut buffer.bytes[carry..])?;
     if count == 0 {
       return Ok(false);
     }
-    chunk[..count].make_ascii_lowercase();
-    window.clear();
-    window.extend_from_slice(&tail);
-    window.extend_from_slice(&chunk[..count]);
-    if finder.find(&window).is_some() {
+    let filled = carry + count;
+    let window = &mut buffer.bytes[..filled];
+    if fold_ascii {
+      window.make_ascii_lowercase();
+    }
+    if finder.find(window).is_some() {
       return Ok(true);
     }
-    tail.clear();
-    tail.extend_from_slice(&window[window.len().saturating_sub(overlap)..]);
+    carry = filled.min(overlap);
+    buffer.bytes.copy_within(filled - carry..filled, 0);
   }
 }
 
@@ -562,6 +1161,67 @@ fn scan_unicode(file: &mut File, needle: &str, replace_invalid: bool) -> io::Res
   }
 }
 
+/// Split `jobs` across `workers` bins so the heaviest bin holds the least bytes it can.
+///
+/// The batches' files range over four orders of magnitude, and a batch waits on its heaviest worker. A file count per
+/// worker would hand one worker a 144 MB file beside its share of the small ones.
+fn size_balanced_bins(jobs: usize, size: impl Fn(usize) -> u64, workers: usize) -> Vec<Vec<usize>> {
+  let mut order: Vec<usize> = (0..jobs).collect();
+  order.sort_by_key(|job| Reverse(size(*job)));
+  let mut bins: Vec<Vec<usize>> = (0..workers).map(|_| Vec::new()).collect();
+  let mut loads = vec![0u64; workers];
+  for job in order {
+    let lightest = (0..workers).min_by_key(|worker| loads[*worker]).expect("a worker exists");
+    loads[lightest] += size(job);
+    bins[lightest].push(job);
+  }
+  bins
+}
+
+/// The scan answer of every job, in the jobs' order.
+///
+/// A scan reads its file from the start offset to the end. The jobs touch different files, so a batch long
+/// enough to pay for them runs the jobs on their own threads, each holding one read buffer for every file it scans.
+fn scan_contents(
+  paths: &[WatchedFile],
+  scans: &[(usize, u64)],
+  signatures: &[Option<FileSignature>],
+  needle: &str,
+) -> Vec<io::Result<bool>> {
+  let workers = std::thread::available_parallelism().map_or(1, |count| count.get()).min(SCAN_BATCH_WORKERS);
+  if scans.len() < SCAN_BATCH_MIN_JOBS || workers < 2 {
+    let mut buffer = ScanBuffer::new(needle.len().saturating_sub(1));
+    return scans.iter().map(|(index, start)| scan_content(&paths[*index].path, needle, *start, &mut buffer)).collect();
+  }
+  let bins =
+    size_balanced_bins(scans.len(), |slot| signatures[scans[slot].0].map_or(0, |signature| signature.size), workers);
+  let mut answers: Vec<Option<io::Result<bool>>> = scans.iter().map(|_| None).collect();
+  std::thread::scope(|scope| {
+    let handles: Vec<_> = bins
+      .into_iter()
+      .filter(|bin| !bin.is_empty())
+      .map(|bin| {
+        scope.spawn(move || {
+          let mut buffer = ScanBuffer::new(needle.len().saturating_sub(1));
+          bin
+            .into_iter()
+            .map(|slot| {
+              let (index, start) = scans[slot];
+              (slot, scan_content(&paths[index].path, needle, start, &mut buffer))
+            })
+            .collect::<Vec<_>>()
+        })
+      })
+      .collect();
+    for handle in handles {
+      for (slot, answer) in handle.join().expect("a scan worker finishes without panic") {
+        answers[slot] = Some(answer);
+      }
+    }
+  });
+  answers.into_iter().map(|answer| answer.expect("every scan job answers")).collect()
+}
+
 #[cfg(test)]
 mod tests {
   use std::collections::HashMap;
@@ -588,7 +1248,7 @@ mod tests {
     file.write_all(&body).unwrap();
     file.seek(SeekFrom::Start(0)).unwrap();
 
-    assert!(super::scan_ascii(&mut file, b"boundary-needle").unwrap());
+    assert!(super::scan_ascii(&mut file, b"boundary-needle", &mut super::ScanBuffer::new(14)).unwrap());
   }
 
   #[test]
@@ -596,9 +1256,35 @@ mod tests {
     let mut file = tempfile::tempfile().unwrap();
     file.write_all(b"needle at the start, then synthetic filler").unwrap();
     file.seek(SeekFrom::Start(0)).unwrap();
-    assert!(super::scan_ascii(&mut file, b"needle at").unwrap());
+    assert!(super::scan_ascii(&mut file, b"needle at", &mut super::ScanBuffer::new(8)).unwrap());
     file.seek(SeekFrom::Start(0)).unwrap();
-    assert!(!super::scan_ascii(&mut file, b"absent-needle").unwrap());
+    assert!(!super::scan_ascii(&mut file, b"absent-needle", &mut super::ScanBuffer::new(12)).unwrap());
+  }
+
+  /// The raw scan reads the needle's own bytes. A Han needle is six or more bytes for two characters, so a chunk
+  /// boundary can fall inside it; the buffer's overlap must keep the whole needle.
+  #[test]
+  fn raw_scan_finds_a_multibyte_needle_across_a_chunk_boundary() {
+    let mut file = tempfile::tempfile().unwrap();
+    let mut body = vec![b'x'; super::SEARCH_CHUNK_SIZE - 2];
+    body.extend_from_slice("缓存层".as_bytes());
+    file.write_all(&body).unwrap();
+    file.seek(SeekFrom::Start(0)).unwrap();
+    assert!(super::scan_bytes(&mut file, "缓存".as_bytes(), false, &mut super::ScanBuffer::new(5)).unwrap());
+    file.seek(SeekFrom::Start(0)).unwrap();
+    assert!(!super::scan_bytes(&mut file, "调度".as_bytes(), false, &mut super::ScanBuffer::new(5)).unwrap());
+  }
+
+  /// The raw scan serves needles that folding cannot move: Han characters, digits and other uncased characters.
+  /// A cased or combining character keeps the folded scan, because folding can rewrite or create it.
+  #[test]
+  fn only_an_uncased_alphanumeric_needle_takes_the_raw_scan() {
+    for needle in ["缓存", "2026", "٣٤"] {
+      assert!(super::uncased_alphanumeric(needle), "{needle}");
+    }
+    for needle in ["Cache", "café", "ä", "\u{307}", "two words", "a-b"] {
+      assert!(!super::uncased_alphanumeric(needle), "{needle}");
+    }
   }
 
   /// A batch keeps the argument order across its threads: a signature that moved to another file's
@@ -623,7 +1309,8 @@ mod tests {
     }
     let paths = Arc::new(paths);
     let handle = Arc::new(fs::File::open(&sessions_dir).unwrap());
-    let batch = super::file_signatures(&paths, Some(&handle));
+    let selection: Vec<usize> = (0..paths.len()).collect();
+    let batch = super::file_signatures(&paths, &selection, Some(&handle));
     assert_eq!(batch.len(), paths.len());
     for (index, (answer, file)) in batch.iter().zip(paths.iter()).enumerate() {
       if index % 97 == 0 {
@@ -633,6 +1320,30 @@ mod tests {
       let signature = answer.as_ref().expect("a written path reads");
       assert_eq!(signature.size, (format!("event {index}\n").len() as u64), "path {index} answers for itself");
       assert_eq!(*signature, super::file_signature_unlogged(&file.path).unwrap(), "path {index} matches a direct read");
+    }
+  }
+
+  /// A scan batch pairs every answer with its own file: a needle found in one candidate must not mark another.
+  #[test]
+  fn scan_batch_answers_in_argument_order() {
+    let home = tempfile::tempdir().unwrap();
+    let mut paths = Vec::new();
+    for index in 0..super::SCAN_BATCH_MIN_JOBS + 13 {
+      let path = home.path().join(format!("chat-{index:03}.jsonl"));
+      let mut body =
+        if index % 7 == 0 { format!("event {index} carries the needle\n") } else { format!("event {index}\n") };
+      // Files of different sizes take different shares of a size-balanced batch.
+      body.push_str(&".".repeat(index * 37));
+      fs::write(&path, body).unwrap();
+      paths.push(super::watched_file(home.path(), path));
+    }
+    let scans: Vec<(usize, u64)> = (0..paths.len()).map(|index| (index, 0)).collect();
+    let signatures: Vec<Option<super::FileSignature>> =
+      paths.iter().map(|file| super::file_signature_unlogged(&file.path).ok()).collect();
+    let answers = super::scan_contents(&paths, &scans, &signatures, "needle");
+    assert_eq!(answers.len(), paths.len());
+    for (index, answer) in answers.iter().enumerate() {
+      assert_eq!(answer.as_ref().unwrap(), &(index % 7 == 0), "candidate {index} answers for itself");
     }
   }
 
@@ -725,6 +1436,36 @@ mod tests {
     fs::write(path, meta.to_json_string(&[], true)).unwrap();
   }
 
+  fn write_archived_sessions(store: &Store, count: usize) {
+    let mut template = SessionMetadata::new("archived-000", "needle-000", TaskProfile::Manager);
+    template.status = SessionStatus::Archived;
+    template.updated_at = UtcDateTime::parse("2026-08-01T12:00:00Z").unwrap();
+    let template_timestamp = template.updated_at.to_str();
+    let template_json = template.to_json_string(&[], true);
+    let sessions = (0..count)
+      .map(|index| {
+        let id = format!("archived-{index:03}");
+        let name = format!("needle-{index:03}");
+        let timestamp = format!("2026-08-01T{:02}:{:02}:00Z", 12 + index / 60, index % 60);
+        let contents = template_json
+          .replace("archived-000", &id)
+          .replace("needle-000", &name)
+          .replace(&template_timestamp, &timestamp);
+        (store.metadata_path(&id), contents)
+      })
+      .collect::<Vec<_>>();
+    std::thread::scope(|scope| {
+      for chunk in sessions.chunks(25) {
+        scope.spawn(move || {
+          for (path, contents) in chunk {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+          }
+        });
+      }
+    });
+  }
+
   #[test]
   fn blank_search_returns_active_sessions_newest_first() {
     let home = tempfile::tempdir().unwrap();
@@ -737,19 +1478,122 @@ mod tests {
     assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["new", "old"]);
   }
 
+  /// A full result stops the sweep once every unread session is older than the answer's last row, and it still holds
+  /// exactly the newest matches.
+  ///
+  /// Eight name hits fill the cap on their own. Two newer content hits enter the answer and push the cutoff to the
+  /// sixth name hit; eight older content hits are past the
+  /// cutoff and stay unread. Rank 0 is the newest session.
+  #[test]
+  fn a_full_result_stops_the_scan_at_the_newest_matches() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    let limit = 8;
+    let stamp = |rank: usize| {
+      let minutes = 700 - rank;
+      format!("2026-08-01T{:02}:{:02}:00Z", 12 + minutes / 60, minutes % 60)
+    };
+    let content = |id: &str, rank: usize| {
+      write_session(&store, id, id, SessionStatus::Active, &stamp(rank));
+      let path = store.chat_events_path(id);
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      fs::write(&path, "needle in the events\n").unwrap();
+    };
+    for index in 0..limit {
+      write_session(
+        &store,
+        &format!("name-{index:03}"),
+        &format!("needle name {index:03}"),
+        SessionStatus::Active,
+        &stamp(100 + index),
+      );
+    }
+    for index in 0..2 {
+      content(&format!("new-{index}"), index);
+    }
+    for index in 0..8 {
+      content(&format!("old-{index}"), 400 + index);
+    }
+    let memos = Mutex::new(super::SearchMemos::default());
+    // The first query indexes every chat file; the second reaches the first sweep window through that index.
+    assert!(super::search_sessions_with_limit(&store, "zzzq", &memos, limit).unwrap().rows.is_empty());
+
+    let rows = super::search_sessions_with_limit(&store, "needle", &memos, limit).unwrap().rows;
+    let ids: Vec<&str> = rows.iter().map(|meta| meta.id.as_str()).collect();
+    assert_eq!(ids.len(), limit);
+    assert_eq!(ids.first().copied(), Some("new-0"), "the newest content hit leads the answer");
+    assert_eq!(ids[2], "name-000", "the name hits follow the content hits");
+    assert_eq!(ids.last().copied(), Some("name-005"), "the answer stops at the newest matches");
+    assert!(!ids.iter().any(|id| id.starts_with("old-")), "the rows past the cutoff stay out");
+    assert_eq!(
+      memos.lock().unwrap().scanned_candidates,
+      2,
+      "the sweep read only the newer candidates and left the older files unread"
+    );
+  }
+
+  /// A query whose matching names fill the cap reads no chat file: the name hits already hold every slot of the
+  /// answer, and the sweep stops before it reads a candidate older than the answer's last row.
+  #[test]
+  fn name_hits_that_fill_the_cap_read_no_chat_file() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    let limit = 8;
+    for index in 0..limit {
+      let id = format!("name-{index:03}");
+      let minutes = 200 - index;
+      write_session(
+        &store,
+        &id,
+        &format!("needle name {index:03}"),
+        SessionStatus::Active,
+        &format!("2026-08-01T{:02}:{:02}:00Z", 12 + minutes / 60, minutes % 60),
+      );
+      // The chat file holds the needle too, so a sweep that ran would read it and report a scan.
+      let path = store.chat_events_path(&id);
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      fs::write(&path, "needle in the events\n").unwrap();
+    }
+    let memos = Mutex::new(super::SearchMemos::default());
+
+    let rows = super::search_sessions_with_limit(&store, "needle", &memos, limit).unwrap().rows;
+    let ids: Vec<&str> = rows.iter().map(|meta| meta.id.as_str()).collect();
+    assert_eq!(ids.len(), limit);
+    assert_eq!(ids.first().copied(), Some("name-000"), "the newest name hit leads the answer");
+    let counters = memos.lock().unwrap();
+    assert_eq!(counters.swept_candidates, 0, "the name hits filled the cap, so no chat file's signature was read");
+    assert_eq!(counters.scan_calls, 0, "no chat file was opened");
+  }
+
+  /// Rows tied at the answer's last timestamp keep corpus order, so the cap drops the corpus-last of them: the cutoff
+  /// selection reorders `matched`'s timestamps, and only their values reach the stop test.
+  #[test]
+  fn rows_tied_at_the_answers_last_row_keep_corpus_order() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    let limit = 8;
+    // One more match than the cap, all written at the same instant and all holding the needle in their chat file.
+    for index in 0..limit + 1 {
+      let id = format!("tied-{index:03}");
+      write_session(&store, &id, &id, SessionStatus::Active, "2026-08-01T12:00:00Z");
+      let path = store.chat_events_path(&id);
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      fs::write(&path, "needle in the events\n").unwrap();
+    }
+    let (all, _) = store.load_session_metas_snapshot_versioned(None).unwrap();
+    let expected: Vec<&str> = all.iter().take(limit).map(|meta| meta.id.as_str()).collect();
+
+    let memos = Mutex::new(super::SearchMemos::default());
+    let rows = super::search_sessions_with_limit(&store, "needle", &memos, limit).unwrap().rows;
+    let ids: Vec<&str> = rows.iter().map(|meta| meta.id.as_str()).collect();
+    assert_eq!(ids, expected, "the tied rows answer in corpus order and the cap drops the corpus-last one");
+  }
+
   #[test]
   fn content_hits_compete_with_name_hits_at_the_two_hundred_row_cap() {
     let home = tempfile::tempdir().unwrap();
     let store = test_store(home.path());
-    for index in 0..200 {
-      write_session(
-        &store,
-        &format!("archived-{index:03}"),
-        &format!("needle-{index:03}"),
-        SessionStatus::Archived,
-        &format!("2026-08-01T{:02}:{:02}:00Z", 12 + index / 60, index % 60),
-      );
-    }
+    write_archived_sessions(&store, 200);
     write_session(&store, "above", "unrelated above", SessionStatus::Active, "2026-08-02T04:40:00Z");
     write_session(&store, "below", "unrelated below", SessionStatus::Active, "2026-08-01T11:59:00Z");
     for id in ["above", "below"] {
@@ -785,6 +1629,36 @@ mod tests {
     assert_eq!(all_hits.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["named", "carrier"]);
   }
 
+  /// A Han needle holds no case, so its content scan reads the file's bytes. The scan must still find the needle
+  /// in chat content and report an absent needle as absent.
+  #[test]
+  fn a_han_needle_matches_chat_content_and_reports_absence() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_session(&store, "carrier", "carrier", SessionStatus::Active, "2026-08-01T12:00:00Z");
+    let events = store.chat_events_path("carrier");
+    fs::create_dir_all(events.parent().unwrap()).unwrap();
+    fs::write(&events, "{\"content\":\"这个缓存的失效规则目前只看时间\"}\n").unwrap();
+
+    let rows = search_sessions(&store, "缓存").unwrap().rows;
+    assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["carrier"]);
+    assert!(search_sessions(&store, "缓存好").unwrap().rows.is_empty(), "an absent Han needle matches nothing");
+  }
+
+  /// A cased non-ASCII needle keeps the folded scan: the file's upper-case text holds the needle's lower-case form.
+  #[test]
+  fn a_cased_non_ascii_needle_still_matches_folded_text() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_session(&store, "carrier", "carrier", SessionStatus::Active, "2026-08-01T12:00:00Z");
+    let events = store.chat_events_path("carrier");
+    fs::create_dir_all(events.parent().unwrap()).unwrap();
+    fs::write(&events, "{\"content\":\"ÄPFEL und Birnen\"}\n").unwrap();
+
+    let rows = search_sessions(&store, "äpfel").unwrap().rows;
+    assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["carrier"]);
+  }
+
   #[test]
   fn search_reuses_query_and_file_verdicts_until_the_chat_file_changes() {
     let home = tempfile::tempdir().unwrap();
@@ -813,37 +1687,250 @@ mod tests {
     assert_eq!(memos.lock().unwrap().scan_calls, 2, "the changed file rescans once and its hit covers substrings");
   }
 
+  /// A fresh query answers from the content index of a file whose identity it already holds: a trigram the index
+  /// lacks proves the needle absent, while a needle the index cannot rule out still reaches the file.
+  #[test]
+  fn a_fresh_query_skips_a_file_whose_content_index_lacks_one_of_its_trigrams() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_session(&store, "content", "content session", SessionStatus::Active, "2026-08-01T12:00:00Z");
+    let path = store.chat_events_path("content");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "the quick brown fox\n").unwrap();
+    let memos = Mutex::new(super::SearchMemos::default());
+
+    assert!(super::search_sessions_with_memos(&store, "walrus", &memos).unwrap().rows.is_empty());
+    assert_eq!(memos.lock().unwrap().scan_calls, 1, "the first query reads the file and keeps its index");
+
+    // "wal" is absent from the file, so this fresh query answers without reading it.
+    assert!(super::search_sessions_with_memos(&store, "walq1rus", &memos).unwrap().rows.is_empty());
+    assert_eq!(memos.lock().unwrap().scan_calls, 1, "the content index ruled the needle out");
+
+    // Every trigram of this needle occurs in the file, and the query's case does not matter.
+    let rows = super::search_sessions_with_memos(&store, "BROWN", &memos).unwrap().rows;
+    assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
+    assert_eq!(memos.lock().unwrap().scan_calls, 2, "the index lets through a needle the file holds");
+  }
+
+  /// A file that gains matching text must rebuild its index: an index read at the old signature would hide the match.
+  #[test]
+  fn a_changed_file_rebuilds_its_content_index() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_session(&store, "content", "content session", SessionStatus::Active, "2026-08-01T12:00:00Z");
+    let path = store.chat_events_path("content");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "no match here\n").unwrap();
+    let memos = Mutex::new(super::SearchMemos::default());
+
+    assert!(super::search_sessions_with_memos(&store, "walrus", &memos).unwrap().rows.is_empty());
+    fs::write(&path, "no match here; walrus appears\n").unwrap();
+    let rows = super::search_sessions_with_memos(&store, "walrus", &memos).unwrap().rows;
+    assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
+  }
+
+  /// Two paths whose keys collide must not answer with each other's index: the entry names the file it was built for.
+  #[test]
+  fn a_content_index_key_collision_answers_as_a_missing_index() {
+    let mut memos = super::SearchMemos::default();
+    let file = |path: &str| super::WatchedFile { path: std::path::PathBuf::from(path), key: 7, below_sessions: None };
+    let first = file("/home/sessions/first/data/chat_events.jsonl");
+    let second = file("/home/sessions/second/data/chat_events.jsonl");
+    let signature = super::FileSignature { mtime_ns: 1, size: 2, inode: 3 };
+    memos.remember_content_index(
+      &first,
+      signature,
+      vec![u8::MAX; super::TRIGRAM_BYTES].into_boxed_slice(),
+      vec![u8::MAX; super::BIGRAM_BYTES].into_boxed_slice(),
+      vec![u8::MAX; super::HIGH_BIGRAM_BYTES].into_boxed_slice(),
+    );
+
+    assert!(
+      matches!(memos.content_verdict(&first, signature, &[0], &[0], &[0]), super::ContentVerdict::Possible),
+      "the file the index was built for reads its own index"
+    );
+    assert!(
+      matches!(memos.content_verdict(&second, signature, &[0], &[0], &[0]), super::ContentVerdict::Missing),
+      "a colliding key answers as no index, so the file is read again"
+    );
+  }
+
+  /// A non-letter in any position must name no trigram: the combined sum alone would alias another sequence's bit.
+  #[test]
+  fn a_window_with_a_non_letter_names_no_trigram() {
+    let codes = &*super::CONTENT_CODES;
+    let code = |byte: u8| codes[byte as usize];
+    assert_eq!(super::trigram_number(code(b'a'), code(b'{'), code(b'a')), None);
+    assert_eq!(super::trigram_number(code(b'a'), code(b'b'), code(b'{')), None);
+    assert_eq!(super::trigram_number(code(b'{'), code(b'b'), code(b'c')), None);
+    assert_eq!(super::trigram_number(code(b'a'), code(b'b'), code(b'c')), Some(28));
+    // The bigram index keeps the symbols the trigram index drops.
+    assert_eq!(super::bigram_number(code(b'a'), code(b'1')), Some(27));
+    assert_eq!(super::bigram_number(code(b'a'), code(b'b')), None);
+    assert_eq!(super::bigram_number(code(b'a'), code(b'\r')), None);
+  }
+
+  #[test]
+  fn the_content_index_holds_trigrams_across_chunk_boundaries() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("chat.jsonl");
+    let mut body = vec![b'x'; super::SEARCH_CHUNK_SIZE - 1];
+    body.extend_from_slice(b"Boundary-Needle");
+    fs::write(&path, &body).unwrap();
+
+    let (trigrams, bigrams, _, found) = super::index_and_search_file(&path, "boundary-needle").unwrap();
+    assert!(found, "the needle search reads the text with ASCII case folding");
+    for trigram in super::needle_trigrams("boundary-needle") {
+      assert_ne!(trigrams[trigram >> 3] & (1u8 << (trigram & 7)), 0, "trigram {trigram} is indexed");
+    }
+    assert!(bigrams.iter().any(|byte| *byte != 0), "a pair with a symbol is indexed too");
+  }
+
+  #[test]
+  fn the_content_index_holds_symbol_bigrams_across_chunk_boundaries() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("chat.jsonl");
+    // A chunk boundary between the '9' and the '-' leaves the "9-" bigram to the window's carry.
+    let mut body = vec![b'x'; super::SEARCH_CHUNK_SIZE - 1];
+    body.extend_from_slice(b"9-needle");
+    fs::write(&path, &body).unwrap();
+    let (_, bigrams, _, found) = super::index_and_search_file(&path, "9-needle").unwrap();
+    assert!(found, "the needle search reads the text with ASCII case folding");
+    for bigram in super::needle_bigrams("9-needle") {
+      assert_ne!(bigrams[bigram >> 3] & (1u8 << (bigram & 7)), 0, "bigram {bigram} spans the boundary");
+    }
+  }
+
+  #[test]
+  fn the_content_index_holds_high_byte_bigrams_across_chunk_boundaries() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("chat.jsonl");
+    // A chunk boundary inside "缓存" leaves its high-byte pairs to the window's carry.
+    let mut body = vec![b'x'; super::SEARCH_CHUNK_SIZE - 2];
+    body.extend_from_slice("缓存".as_bytes());
+    fs::write(&path, &body).unwrap();
+    let (_, _, high_bigrams, found) = super::index_and_search_file(&path, "缓存").unwrap();
+    assert!(found, "a multibyte needle is found in the text's bytes");
+    for bigram in super::needle_high_bigrams("缓存") {
+      assert_ne!(high_bigrams[bigram >> 3] & (1u8 << (bigram & 7)), 0, "high-byte bigram {bigram} spans the boundary");
+    }
+  }
+
+  #[test]
+  fn the_content_index_lacks_pairs_for_an_absent_needle() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("chat.jsonl");
+    let mut body = vec![b'x'; super::SEARCH_CHUNK_SIZE - 2];
+    body.extend_from_slice("缓存".as_bytes());
+    fs::write(&path, &body).unwrap();
+    let (trigrams, bigrams, _, found) = super::index_and_search_file(&path, "walq1rus").unwrap();
+    assert!(!found);
+    assert!(
+      super::needle_trigrams("walq1rus").iter().any(|trigram| trigrams[trigram >> 3] & (1u8 << (trigram & 7)) == 0),
+      "the index lacks a trigram of the absent needle"
+    );
+    assert!(
+      super::needle_bigrams("walq1rus").iter().any(|bigram| bigrams[bigram >> 3] & (1u8 << (bigram & 7)) == 0),
+      "the index lacks a bigram of the absent needle"
+    );
+  }
+
+  /// A multibyte needle never reaches a file whose high-byte pairs the index lacks: the trigram and bigram indexes
+  /// cannot encode it, and the high-byte index answers it.
+  #[test]
+  fn a_fresh_query_skips_a_file_whose_content_index_lacks_one_of_its_high_byte_bigrams() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_session(&store, "content", "content session", SessionStatus::Active, "2026-08-01T12:00:00Z");
+    let path = store.chat_events_path("content");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "the quick brown fox\n").unwrap();
+    let memos = Mutex::new(super::SearchMemos::default());
+
+    assert!(super::search_sessions_with_memos(&store, "缓存", &memos).unwrap().rows.is_empty());
+    assert_eq!(memos.lock().unwrap().scan_calls, 1, "the first query reads the file and keeps its index");
+
+    assert!(super::search_sessions_with_memos(&store, "量子", &memos).unwrap().rows.is_empty());
+    assert_eq!(memos.lock().unwrap().scan_calls, 1, "the high-byte index ruled the needle out");
+
+    fs::write(&path, "the quick brown fox 量子\n").unwrap();
+    let rows = super::search_sessions_with_memos(&store, "量子", &memos).unwrap().rows;
+    assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
+  }
+
+  /// A needle Unicode lowering composes out of a cased character keeps the scan: U+0130 lowers to "i" and a
+  /// combining dot, bytes an index built from the file's own U+0130 never saw.
+  #[test]
+  fn a_needle_folded_out_of_a_cased_character_reaches_the_file() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_session(&store, "content", "content session", SessionStatus::Active, "2026-08-01T12:00:00Z");
+    let path = store.chat_events_path("content");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "İstanbul\n").unwrap();
+    let memos = Mutex::new(super::SearchMemos::default());
+
+    assert!(super::search_sessions_with_memos(&store, "缓存", &memos).unwrap().rows.is_empty());
+    let rows = super::search_sessions_with_memos(&store, "i\u{307}stanbul", &memos).unwrap().rows;
+    assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
+  }
+
+  /// A needle whose only absent sequence is a bigram never reaches the file: the trigram index shares no evidence
+  /// about a digit, and the bigram index answers it.
+  #[test]
+  fn a_fresh_query_skips_a_file_whose_content_index_lacks_one_of_its_bigrams() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_session(&store, "content", "content session", SessionStatus::Active, "2026-08-01T12:00:00Z");
+    let path = store.chat_events_path("content");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "the quick brown fox\n").unwrap();
+    let memos = Mutex::new(super::SearchMemos::default());
+
+    assert!(super::search_sessions_with_memos(&store, "walrus", &memos).unwrap().rows.is_empty());
+    assert_eq!(memos.lock().unwrap().scan_calls, 1, "the first query reads the file and keeps its index");
+
+    // Every trigram of "qu1ck" occurs in the file; its "1c" bigram does not, and the query answers without reading it.
+    assert!(super::search_sessions_with_memos(&store, "qu1ck", &memos).unwrap().rows.is_empty());
+    assert_eq!(memos.lock().unwrap().scan_calls, 1, "a missing bigram ruled the file out");
+
+    let rows = super::search_sessions_with_memos(&store, "brown f", &memos).unwrap().rows;
+    assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["content"]);
+    assert_eq!(memos.lock().unwrap().scan_calls, 2, "the index lets through a needle the file holds");
+  }
+
   /// A full result re-checks only the candidates at or above its last row: a new match in an older session cannot
-  /// enter the 200-row result, while a new match in a newer candidate does.
+  /// enter the capped result, while a new match in a newer candidate does.
   #[test]
   fn a_full_result_watches_only_candidates_at_or_above_its_last_row() {
     let home = tempfile::tempdir().unwrap();
     let store = test_store(home.path());
+    let memos = Mutex::new(super::SearchMemos::default());
     let write_content = |id: &str, content: &str| {
       let path = store.chat_events_path(id);
       fs::create_dir_all(path.parent().unwrap()).unwrap();
       fs::write(&path, content).unwrap();
     };
-    for index in 0..super::SEARCH_RESULT_LIMIT {
-      let id = format!("hit-{index:03}");
-      write_session(&store, &id, &format!("hit {index:03}"), SessionStatus::Active, "2026-08-02T12:00:00Z");
+    for index in 0..2 {
+      let id = format!("hit-{index}");
+      write_session(&store, &id, &format!("hit {index}"), SessionStatus::Active, "2026-08-02T12:00:00Z");
       write_content(&id, "{\"content\":\"walrus in the events\"}\n");
     }
     write_session(&store, "old", "old session", SessionStatus::Active, "2026-08-01T12:00:00Z");
     write_session(&store, "newer", "newer session", SessionStatus::Active, "2026-08-03T12:00:00Z");
 
-    let rows = search_sessions(&store, "walrus").unwrap().rows;
-    assert_eq!(rows.len(), super::SEARCH_RESULT_LIMIT);
+    let rows = super::search_sessions_with_limit(&store, "walrus", &memos, 2).unwrap().rows;
+    assert_eq!(rows.len(), 2);
     assert!(rows.iter().all(|meta| meta.id.starts_with("hit-")));
 
     write_content("old", "{\"content\":\"walrus in the events\"}\n");
-    let rows = search_sessions(&store, "walrus").unwrap().rows;
-    assert_eq!(rows.len(), super::SEARCH_RESULT_LIMIT);
+    let rows = super::search_sessions_with_limit(&store, "walrus", &memos, 2).unwrap().rows;
+    assert_eq!(rows.len(), 2);
     assert!(!rows.iter().any(|meta| meta.id == "old"), "a match older than the last row stays out of the full result");
 
     write_content("newer", "{\"content\":\"walrus in the events\"}\n");
-    let rows = search_sessions(&store, "walrus").unwrap().rows;
-    assert_eq!(rows.len(), super::SEARCH_RESULT_LIMIT);
+    let rows = super::search_sessions_with_limit(&store, "walrus", &memos, 2).unwrap().rows;
+    assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].id, "newer", "a new match in a watched candidate enters the result");
     assert!(!rows.iter().any(|meta| meta.id == "old"));
   }

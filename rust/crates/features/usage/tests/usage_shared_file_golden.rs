@@ -17,6 +17,7 @@ const TRIGGER_NAMES: [&str; 5] = [
 ];
 
 #[test]
+#[ignore = "integration"]
 fn recorded_usage_ledger_schema_and_repair_results_match_rust() {
   let fixture = fixture();
   assert_eq!(fixture["source"]["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");

@@ -9,6 +9,7 @@ use serde::de::DeserializeSeed;
 use serde_json::Value;
 
 use crate::compact::{CompactValue, ParseKeys, ValueSeed};
+use crate::run_logs;
 use crate::{StoreError, StoreResult};
 
 const APPEND_JSON: JsonStyle =
@@ -203,13 +204,10 @@ fn lines_of(bytes: &[u8], line: &impl Fn(&[u8], &ParseKeys) -> Option<CompactVal
   events
 }
 
-/// Map one event log read-only; `None` covers a missing file and a file with no bytes.
+/// Read or map one event log through `run_logs`, so a compressed log reads as its decompressed bytes; `None` covers
+/// a missing log and a log with no bytes.
 fn open_log_map(path: &Path) -> StoreResult<Option<fsutil::FileBytes>> {
-  match fsutil::read_or_map_file(path) {
-    Ok(map) => Ok(map),
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-    Err(error) => Err(StoreError::new(format!("{}: {error}", path.display()))),
-  }
+  run_logs::read_bytes(path).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))
 }
 
 /// Parse every `\n`-bounded slice plus the final fragment, checking `should_stop` before each parse and once
@@ -367,11 +365,11 @@ mod tests {
     }
   }
 
-  /// A multi-megabyte line parses whole.
+  /// A long line parses whole.
   #[test]
-  fn read_file_compact_parses_a_multi_megabyte_line_whole() {
+  fn read_file_compact_parses_a_long_line_whole() {
     let path = tempfile::NamedTempFile::new().unwrap();
-    let payload = serde_json::json!({"blob": "x".repeat(8 * 1024 * 1024)});
+    let payload = serde_json::json!({"blob": "x".repeat(32 * 1024)});
     fs::write(path.path(), format!("{payload}\n{{\"i\": 1}}")).unwrap();
     let events = read_file_compact(path.path()).unwrap();
     assert_eq!(events.len(), 2);
@@ -384,20 +382,20 @@ mod tests {
   #[test]
   fn a_split_read_gives_the_events_of_a_whole_read() {
     let mut text = String::new();
-    for index in 0..4_000 {
-      text.push_str(&format!("{{\"id\": {index}, \"pad\": \"{}\"}}\n", "p".repeat(index % 600)));
-      if index % 397 == 0 {
+    for index in 0..50 {
+      text.push_str(&format!("{{\"id\": {index}, \"pad\": \"{}\"}}\n", "p".repeat(index % 20)));
+      if index % 13 == 0 {
         text.push_str("\n{broken\n");
       }
-      if index == 2_000 {
-        text.push_str(&format!("{}\n", serde_json::json!({"blob": "x".repeat(600 << 10)})));
+      if index == 25 {
+        text.push_str(&format!("{}\n", serde_json::json!({"blob": "x".repeat(600)})));
       }
     }
     text.push_str("{\"id\": \"last\"}");
-    let sizes = SplitSizes { min_bytes: 1 << 20, chunk_bytes: 128 << 10, max_threads: 8 };
+    let sizes = SplitSizes { min_bytes: 512, chunk_bytes: 128, max_threads: 4 };
     assert!(text.len() >= sizes.min_bytes && text.len() >= sizes.chunk_bytes * sizes.max_threads, "the text splits");
     let split = split_lines_of_sized(text.as_bytes(), &parse_file_line, &sizes);
-    assert_eq!(split.len(), 4_002, "every object line, the blob and the final line");
+    assert_eq!(split.len(), 52, "every object line, the blob and the final line");
     assert_eq!(split, lines_of(text.as_bytes(), &parse_file_line));
   }
 

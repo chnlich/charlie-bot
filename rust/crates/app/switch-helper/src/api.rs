@@ -14,6 +14,7 @@ use charliebot_core::logline;
 use charliebot_core::text_repr;
 use charliebot_store::layout;
 use charliebot_store::metadata::KEEP_WORKTREE_FIELD;
+use charliebot_store::run_logs;
 use charliebot_store::run_records::{
   EventReadError, RUN_EVENTS_NAME, parse_event_line, read_event_values, read_run_metadata,
 };
@@ -219,9 +220,9 @@ pub fn run_first_command(args: &[OsString]) -> Result<(), CliExit> {
   let [home, session_id, run_id] = exact::<3>(args)?;
   let dir = run_dir(&home, &session_id, &run_id);
   let events_path = dir.join(RUN_EVENTS_NAME);
-  let events: Vec<Value> = match fs::read(&events_path) {
-    Ok(bytes) => bytes.split(|byte| *byte == b'\n').filter_map(parse_event_line).collect(),
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+  let events: Vec<Value> = match run_logs::read_bytes(&events_path) {
+    Ok(Some(bytes)) => bytes.split(|byte| *byte == b'\n').filter_map(parse_event_line).collect(),
+    Ok(None) => Vec::new(),
     Err(error) => return Err(failed(format!("read {}: {error}", events_path.display()))),
   };
   let metadata_path = layout::metadata_path(&dir);

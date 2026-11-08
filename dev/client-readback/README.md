@@ -18,6 +18,22 @@ address the server logged (`forwarded_for`), and prints per device:
   tab-time the traffic events' `window_s` fields cover, so a tab that stayed
   hidden for hours still divides out
 - `page loads` — the count of each load cause
+- `newest message` — each page load's first chat render (`newest_message_ms`)
+  and catch-up (`current_ms`), by `open_case` and `content_source`; a null
+  timing counts as not reached
+- `cross-origin files` — each render-blocking file the page loaded from another
+  origin. A load whose `transfer_size` is 0 is a cache hit (no bytes crossed the
+  network); a load whose `transfer_size` is greater than 0 is a network load.
+  The rule reads `transfer_size`, which the browser reports for a cross-origin
+  load only when its origin sends `Timing-Allow-Origin`; the page's CDNs
+  (jsDelivr, cdnjs, Google Fonts) do, so the rule holds for the files the page
+  loads. The two groups are reported apart. The `link` column is the time the
+  same
+  bytes (the file's `encoded_body_size`) take over the CharlieBot link, from the
+  same load's same-origin timings: the round trip is the least
+  request-to-first-byte time among them, and the throughput is the bytes over
+  the transfer time of the largest same-origin body. `link` is the median over
+  the loads that carry both.
 
 ## Usage
 

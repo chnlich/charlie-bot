@@ -85,17 +85,15 @@ pub(super) fn tmux_session_name(session_id: &str) -> String {
   format!("charliebot-{session_id}")
 }
 
+// tmux's nested-session guard can reject a client when its reused PTY name matches a dead pane's recorded tty.
 pub(super) fn filtered_env(
   source: impl IntoIterator<Item = (OsString, OsString)>,
-  remove_tmux: bool,
   replace_term: bool,
 ) -> Vec<(OsString, OsString)> {
   let mut env = source
     .into_iter()
     .filter(|(key, _)| {
-      key != OsStr::new(SESSION_ID_ENV)
-        && (!remove_tmux || key != OsStr::new("TMUX"))
-        && (!replace_term || key != OsStr::new("TERM"))
+      key != OsStr::new(SESSION_ID_ENV) && key != OsStr::new("TMUX") && (!replace_term || key != OsStr::new("TERM"))
     })
     .collect::<Vec<_>>();
   if replace_term {
@@ -105,11 +103,11 @@ pub(super) fn filtered_env(
 }
 
 fn tmux_command_env() -> Vec<(OsString, OsString)> {
-  filtered_env(std::env::vars_os(), true, false)
+  filtered_env(std::env::vars_os(), false)
 }
 
 fn tmux_pty_env() -> Vec<(OsString, OsString)> {
-  filtered_env(std::env::vars_os(), false, true)
+  filtered_env(std::env::vars_os(), true)
 }
 
 pub(super) fn tmux_binary() -> Result<PathBuf, String> {

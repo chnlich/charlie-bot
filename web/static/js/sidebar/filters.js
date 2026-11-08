@@ -83,6 +83,8 @@ function loadWorkspaceBadges() {
 }
 
 function switchSidebarFilter(filter) {
+  // The rows the page polls move with the view, so the next status poll asks for the whole set.
+  resetSessionStatusPoll();
   setSidebarFilterPill(filter);
   if (filter === 'archived') {
     // The archived view owns its fetch: keyset pagination with a group filter
@@ -119,15 +121,15 @@ function switchSidebarFilter(filter) {
 // A listing's rows: the Workspace fetch answers with the page's column form, which expandSessionColumns restores,
 // and a filter that answers with a row array needs no expansion.
 function listingRows(payload) {
-  return Array.isArray(payload) ? payload : expandSessionColumns(payload);
+  return Array.isArray(payload) ? payload : Sidebar.expandSessionColumns(payload);
 }
 
 // ---------------------------------------------------------------------------
-// Workspace row refresh
+// Sidebar row refresh
 // ---------------------------------------------------------------------------
-// A task-tree change names the session whose row changed. The Workspace fetches those rows alone and merges them into
-// the list it painted. Ids that arrive while a fetch is in flight go into the next fetch, and a hidden tab fetches once
-// it is visible.
+// A task-tree change names the session whose row changed. Every list the server can scope by filter fetches that row
+// alone and merges it into the list it painted: the Workspace, the starred view and each registered view. Ids that
+// arrive while a fetch is in flight go into the next fetch, and a hidden tab fetches once it is visible.
 const ROW_REFRESH_BATCH = 50;
 const pendingRowIds = new Set();
 let rowRefreshInFlight = false;
@@ -137,25 +139,35 @@ function queueRowRefresh(sessionId) {
   deferWhileHidden('row-refresh', drainRowRefresh);
 }
 
+// The row refresh URL of one view: the view's own list route with the changed rows named by `ids`. The view whose
+// list is painted answers those rows in the compact column form the full list uses.
+function rowRefreshUrl(filter, ids) {
+  const registered = getSidebarFilter(filter);
+  if (!registered) throw new Error('Unknown sidebar filter: ' + filter);
+  const separator = registered.url.includes('?') ? '&' : '?';
+  return registered.url + separator + 'ids=' + ids.map(encodeURIComponent).join(',');
+}
+
 function drainRowRefresh() {
   if (rowRefreshInFlight) return;
-  if (!workspaceRowsShown()) {
+  if (!sidebarRowsRefreshable()) {
     pendingRowIds.clear();
     return;
   }
   if (pendingRowIds.size === 0) return;
+  const filter = currentFilter;
   const batch = Array.from(pendingRowIds).slice(0, ROW_REFRESH_BATCH);
   batch.forEach(id => pendingRowIds.delete(id));
   rowRefreshInFlight = true;
-  fetch('/api/sessions/?compact=1&ids=' + batch.map(encodeURIComponent).join(','))
+  fetch(rowRefreshUrl(filter, batch))
     .then(res => {
       if (!res.ok) throw new Error(`Row refresh failed: ${res.status}`);
       return res.json();
     })
     .then(payload => {
       // A view the reader left while the fetch was in flight takes no rows: its own load paints it.
-      if (workspaceRowsShown()) {
-        mergeRowsIntoRenderedList(expandSessionColumns(payload.sessions), payload.gone);
+      if (sidebarRowsRefreshable() && currentFilter === filter) {
+        mergeRowsIntoRenderedList(Sidebar.expandSessionColumns(payload.sessions), payload.gone);
       }
     })
     .catch(err => console.error('Row refresh failed:', err))
@@ -188,90 +200,17 @@ function renderSidebarLoadErrors(errors) {
   ).join('');
 }
 
-// The base64url alphabet: a UUID session id travels as its 16 bytes in this alphabet.
-const UUID_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-
-// The bytes a base64url text carries.
-function decodeBase64Url(text) {
-  let buffer = 0;
-  let bits = 0;
-  const bytes = [];
-  for (const character of text) {
-    const index = UUID_ALPHABET.indexOf(character);
-    if (index < 0) throw new Error('Encoded session id character ' + character);
-    buffer = (buffer << 6) | index;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      bytes.push((buffer >> bits) & 0xff);
-    }
-  }
-  return bytes;
-}
-
-// The session id 16 bytes spell in the canonical UUID form the store and the routes name it by.
-function sessionIdOf(bytes) {
-  if (bytes.length !== 16) throw new Error('Encoded session id of ' + bytes.length + ' bytes');
-  const hex = bytes.map(byte => byte.toString(16).padStart(2, '0')).join('');
-  return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' +
-    hex.slice(16, 20) + '-' + hex.slice(20);
-}
-
-// The session id one `uuid-b64` cell carries: 22 base64url characters that encode its 16 bytes, or a `~` id as
-// its text.
-function expandSessionId(cell) {
-  if (cell[0] === '~') return cell.slice(1);
-  if (cell.length !== 22) throw new Error('Encoded session id of ' + cell.length + ' characters');
-  return sessionIdOf(decodeBase64Url(cell));
-}
-
-// The session ids one `uuid-b64` column carries. A string holds every id's 16 bytes in row order. An array holds one
-// cell per row, which is how a home whose ids are not all canonical UUIDs travels.
-function expandSessionIds(values, count) {
-  if (Array.isArray(values)) return values.map(value => (value == null ? null : expandSessionId(value)));
-  const bytes = decodeBase64Url(values);
-  if (bytes.length !== count * 16) throw new Error('Encoded session id blob of ' + bytes.length + ' bytes');
-  return Array.from({length: count}, (_, index) => sessionIdOf(bytes.slice(index * 16, (index + 1) * 16)));
-}
-
-// The page carries the sidebar rows as columns: one array per field, in row order, with null where a row leaves the
-// field out. The page declares under `$encoded` the columns whose cells are not their field's value. A `uuid-b64`
-// column holds the session ids' 16 bytes in base64url. A `delta` column holds the first value as it stands and every
-// later value as its difference from the row before. Expanding the columns once here gives every sidebar view
-// the row objects it reads.
-function expandSessionColumns(columns) {
-  const encoding = columns.$encoded || {};
-  const fields = Object.keys(columns).filter(field => field !== '$encoded');
-  const first = fields.length ? columns[fields[0]] : [];
-  // The `id` column's string form carries 16 bytes per row, and base64url carries 3 bytes in 4 characters.
-  const count = Array.isArray(first) ? first.length : Math.floor(first.length * 3 / 4 / 16);
-  const rows = Array.from({length: count}, () => ({}));
-  fields.forEach(field => {
-    const values = columns[field];
-    const kind = encoding[field];
-    if (kind === 'uuid-b64') {
-      expandSessionIds(values, count).forEach((id, index) => {
-        if (id != null) rows[index][field] = id;
-      });
-      return;
-    }
-    let running = 0;
-    for (let i = 0; i < count; i++) {
-      let value = values[i];
-      if (value == null) continue;
-      if (kind === 'delta') {
-        running += value;
-        value = running;
-      }
-      rows[i][field] = value;
-    }
-  });
-  return rows;
+// The rows of the sidebar the page carries, as `$screen` declares them: the first screen's rows, each group's whole
+// row count, and whether the page left rows out. The page leaves a group's rows out once it paints more roots than
+// the preview limit, so the reader's "Show all" fetches them from the listing route.
+function pageScreen() {
+  const screen = INITIAL_SESSIONS && INITIAL_SESSIONS.$screen;
+  return screen && screen.partial ? screen : null;
 }
 
 function restoreSidebarFromUrl() {
   renderSidebarFilterPills();
-  const initialSessions = expandSessionColumns(INITIAL_SESSIONS);
+  const initialSessions = Sidebar.expandSessionColumns(INITIAL_SESSIONS);
   Sidebar.resyncSessionUnread(initialSessions);
   const params = new URLSearchParams(location.search);
   const urlFilter = params.get('filter');
@@ -286,7 +225,7 @@ function restoreSidebarFromUrl() {
     if (INITIAL_LOAD_ERRORS.length) {
       renderSidebarLoadErrors(INITIAL_LOAD_ERRORS);
     } else {
-      renderSessionList(initialSessions, 'all');
+      renderSessionList(initialSessions, 'all', {listing: pageScreen()});
       // The Workspace badges load on their own so the first paint never waits
       // for them; the repaint discards itself when the view has moved on. A
       // hidden tab loads them once it is visible.
@@ -390,7 +329,6 @@ const GLOBALS = {
   switchSidebarFilter,
   enterSidebarFilter,
   restoreSidebarFromUrl,
-  expandSessionColumns,
   handleSidebarSearch,
   toggleSessionStar,
   queueRowRefresh,

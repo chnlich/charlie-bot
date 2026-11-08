@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
-use charliebot_agents::transport::final_stdout::STDOUT_LOG_NAME;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths::realpath;
 use charliebot_core::str_methods;
@@ -24,7 +23,8 @@ use charliebot_store::metadata::{UtcDateTime, read_metadata};
 use charliebot_store::run_identity::SESSION_METADATA_NAME;
 use charliebot_store::run_records::{
   CURSOR_NAME, DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF,
-  OBSERVATION_RESULT_REF, RAW_LOG_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME, STDERR_LOG_NAME, THREADS_DIR_NAME,
+  OBSERVATION_RESULT_REF, RAW_LOG_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME, STDERR_LOG_NAME, STDOUT_LOG_NAME,
+  THREADS_DIR_NAME,
 };
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;

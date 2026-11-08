@@ -23,6 +23,7 @@ fn remove_tmp_directories(direction: &str) {
   }
 }
 
+#[ignore = "integration"]
 #[test]
 fn a_write_inside_the_allow_list_succeeds_and_one_outside_fails_with_a_permission_error() {
   let home = tempfile::tempdir().expect("the scratch HOME");

@@ -70,7 +70,7 @@ async fn rate_limit_retries_once_with_reported_wait() {
   let counter = Arc::clone(&calls);
   let client = client(move |_| {
     if counter.fetch_add(1, Ordering::SeqCst) == 0 {
-      Reply::json(429, json!({"message": "You are being rate limited.", "retry_after": 0.05}))
+      Reply::json(429, json!({"message": "You are being rate limited.", "retry_after": 0.005}))
     } else {
       Reply::json(200, json!({"url": "wss://gateway.example/synthetic"}))
     }
@@ -80,7 +80,7 @@ async fn rate_limit_retries_once_with_reported_wait() {
   let started = Instant::now();
   assert_eq!(client.get_gateway_url().await.unwrap(), "wss://gateway.example/synthetic");
   assert_eq!(calls.load(Ordering::SeqCst), 2);
-  assert!(started.elapsed() >= Duration::from_millis(50), "the retry waited the reported 0.05 s");
+  assert!(started.elapsed() >= Duration::from_millis(5), "the retry waited the reported 0.005 s");
 }
 
 #[tokio::test]

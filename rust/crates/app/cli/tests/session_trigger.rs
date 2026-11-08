@@ -353,6 +353,7 @@ fn accept_any(_: &Value) -> Option<(u16, Value)> {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_cmd_exit_3_writes_the_launch_record_and_the_exit_file() {
   let sandbox = Sandbox::new();
   let stub = StubApi::start(registering(sandbox.home.clone()));
@@ -397,6 +398,7 @@ fn test_cmd_exit_3_writes_the_launch_record_and_the_exit_file() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_registered_target_carries_exit_file_and_log() {
   let sandbox = Sandbox::new();
   let stub = StubApi::start(registering(sandbox.home.clone()));
@@ -424,6 +426,7 @@ fn test_registered_target_carries_exit_file_and_log() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_rejected_registration_kills_the_process_group() {
   let sandbox = Sandbox::new();
   let stub = StubApi::start(Box::new(|_| Some((422, json!({ "detail": REJECTION })))));
@@ -441,6 +444,7 @@ fn test_rejected_registration_kills_the_process_group() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_failed_readback_kills_the_process_group() {
   let sandbox = Sandbox::new();
   // The stub answers but persists nothing, so the readback finds no pending trigger.
@@ -461,6 +465,7 @@ fn test_failed_readback_kills_the_process_group() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_ssh_failure_exits_3_and_posts_nothing() {
   let sandbox = Sandbox::new();
   stub_ssh(&sandbox, "", "ssh: could not resolve hostname nonexistent.invalid\n", 255);
@@ -486,6 +491,7 @@ fn test_ssh_failure_exits_3_and_posts_nothing() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_unparseable_remote_pid_exits_3_and_posts_nothing() {
   let sandbox = Sandbox::new();
   stub_ssh(&sandbox, "not-a-pid\n", "", 0);
@@ -514,6 +520,7 @@ fn test_unparseable_remote_pid_exits_3_and_posts_nothing() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_launch_remote_parses_the_wrapper_pid() {
   let sandbox = Sandbox::new();
   let argv_file = stub_ssh(&sandbox, REMOTE_REPLY, "", 0);
@@ -570,6 +577,7 @@ fn test_launch_remote_parses_the_wrapper_pid() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_launch_remote_without_cwd_runs_in_the_login_directory() {
   let sandbox = Sandbox::new();
   let argv_file = stub_ssh(&sandbox, REMOTE_REPLY, "", 0);
@@ -598,6 +606,7 @@ fn test_launch_remote_without_cwd_runs_in_the_login_directory() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_launch_remote_ssh_failure_raises() {
   let sandbox = Sandbox::new();
   stub_ssh(&sandbox, "", "ssh: connect to host nonexistent.invalid port 22: Name or service not known\n", 255);
@@ -628,6 +637,7 @@ fn test_launch_remote_ssh_failure_raises() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_launch_remote_unparseable_pid_raises() {
   let sandbox = Sandbox::new();
   stub_ssh(&sandbox, "/home/remote\nnot-a-pid\n", "", 0);
@@ -682,6 +692,7 @@ fn ssh_localhost_works() -> bool {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_launch_remote_end_to_end_localhost() {
   if !ssh_localhost_works() {
     eprintln!("skipped: ssh localhost does not work without a password");
@@ -722,6 +733,7 @@ fn test_launch_remote_end_to_end_localhost() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_launch_remote_wrapper_runs_the_command_under_a_local_stub_ssh() {
   // The remote path without the network: the wrapper's own shell script runs here, so a syntax or PID-capture slip
   // in it shows up as a missing exit file or a wrong PID.

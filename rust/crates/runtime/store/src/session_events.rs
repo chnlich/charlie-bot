@@ -230,7 +230,11 @@ impl Store {
     event: &ChatEvent,
     aggregator: &Arc<Mutex<MessageAggregator>>,
   ) -> StoreResult<()> {
-    let deltas = aggregator.lock().await.feed(&event.to_value())?;
+    let index = event
+      .get("event_index")
+      .and_then(|value| value.as_u64())
+      .ok_or_else(|| StoreError::new("feed_and_broadcast needs an event stamped with event_index"))?;
+    let deltas = aggregator.lock().await.feed_at_absolute(event, index as usize)?;
     let channel = streaming::session_channel(session_id);
     for delta in deltas {
       self.broadcast(&channel, delta).await?;
@@ -280,6 +284,7 @@ impl Store {
         continue;
       }
       aggregator.set_emit_stream_deltas(true);
+      aggregator.set_omit_streamed_content(true);
       let aggregator = Arc::new(Mutex::new(aggregator));
       self
         .session_events
@@ -527,6 +532,11 @@ mod tests {
   async fn persist_broadcast_sends_message_deltas_and_suppresses_replaced_raw_events() {
     let (_home, store) = make_test_store();
     let mut subscription = store.subscribe(&streaming::session_channel("synthetic"));
+    // A control fact enters the log without feeding the aggregator, so the fed-event count sits below the
+    // event's position. The frame must carry the position, which the catch-up's replay counts from.
+    let guard = store.control_lock().await;
+    store.append_control_fact(&guard, "synthetic", json!({"type": "run_finished"})).await.unwrap();
+    drop(guard);
     let event = store
       .persist_and_broadcast(
         "synthetic",
@@ -539,10 +549,12 @@ mod tests {
       )
       .await
       .unwrap();
-    assert_eq!(event["event_index"].as_i64(), Some(0));
+    assert_eq!(event["event_index"].as_i64(), Some(1));
     let frame: Value = serde_json::from_str(&subscription.recv().await.unwrap()).unwrap();
     assert_eq!(frame["type"], "stream");
-    assert_eq!(frame["message"]["content"], "hello");
+    assert_eq!(frame["append"], "hello");
+    assert_eq!(frame["length"], 5);
+    assert_eq!(frame["event_index"].as_i64(), event["event_index"].as_i64());
   }
 
   #[tokio::test]

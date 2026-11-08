@@ -21,6 +21,7 @@ use world::World;
 // ---- preflight refusals: exit 2 and nothing written ----------------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refuses_an_argument_that_is_not_a_full_sha() {
   let world = World::new();
 
@@ -31,6 +32,7 @@ fn test_preflight_refuses_an_argument_that_is_not_a_full_sha() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refuses_a_commit_that_is_not_on_origin_main() {
   let world = World::new();
 
@@ -41,6 +43,7 @@ fn test_preflight_refuses_a_commit_that_is_not_on_origin_main() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refuses_a_commit_whose_release_exists() {
   let world = World::new();
   let existing = world.releases.join(&world.on_main);
@@ -55,6 +58,7 @@ fn test_preflight_refuses_a_commit_whose_release_exists() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refuses_without_gh_authentication() {
   let world = World::new();
   let mut behavior = world.gh_defaults();
@@ -68,16 +72,19 @@ fn test_preflight_refuses_without_gh_authentication() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refuses_a_commit_without_both_rust_jobs_green_no_run_for_the_commit() {
   preflight_refuses_a_commit_without_both_rust_jobs_green("no-run-for-the-commit");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refuses_a_commit_without_both_rust_jobs_green_rust_test_failed() {
   preflight_refuses_a_commit_without_both_rust_jobs_green("rust-test-failed");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refuses_a_commit_without_both_rust_jobs_green_run_failed() {
   preflight_refuses_a_commit_without_both_rust_jobs_green("run-failed");
 }
@@ -129,6 +136,7 @@ fn preflight_refuses_a_commit_without_both_rust_jobs_green(case: &str) {
 // ---- a failed stage: exit 1, the stage named, nothing installed -----------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_a_failed_stage_exits_1_names_the_stage_and_installs_nothing() {
   let mut world = World::new();
   let stage_fail = world.bin().join("stage-fail").display().to_string();
@@ -146,6 +154,7 @@ fn test_a_failed_stage_exits_1_names_the_stage_and_installs_nothing() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_a_failed_download_stage_exits_1_and_installs_nothing() {
   let world = World::new();
   let mut behavior = world.gh_defaults();
@@ -162,6 +171,7 @@ fn test_a_failed_download_stage_exits_1_and_installs_nothing() {
 // ---- a passing run: both binaries installed, current left alone -----------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_a_passing_run_installs_both_binaries_and_leaves_current() {
   let world = World::new();
 
@@ -193,6 +203,7 @@ fn test_a_passing_run_installs_both_binaries_and_leaves_current() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_a_release_installs_the_commits_units_before_its_trial_and_its_rehearsal() {
   let mut world = World::new();
   world.sandbox.stub("record-trial", "printf 'trial\\n' >> \"$UNIT_CALLS\"\n");
@@ -230,11 +241,13 @@ const JSON_LOG: &str = concat!(
 );
 
 #[test]
+#[ignore = "integration"]
 fn test_sweep_check_reports_each_removed_name_against_the_home_text_own_names() {
   sweep_check_reports_each_removed_name_against_the_home(TEXT_LOG, 0);
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_sweep_check_reports_each_removed_name_against_the_home_json_foreign_name() {
   sweep_check_reports_each_removed_name_against_the_home(JSON_LOG, 1);
 }
@@ -262,6 +275,7 @@ fn sweep_check_reports_each_removed_name_against_the_home(log_text: &str, expect
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_release_helper_self_test_passes() {
   let sandbox = Sandbox::new();
   let mut command = harness::command(harness::built_binary("charliebot"), &sandbox.env());
@@ -278,6 +292,7 @@ fn test_release_helper_self_test_passes() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_trial_refuses_a_server_binary_whose_cli_lacks_release_helper() {
   let sandbox = Sandbox::new();
   let release = sandbox.dir("release");
@@ -300,6 +315,7 @@ fn test_trial_refuses_a_server_binary_whose_cli_lacks_release_helper() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_rehearsal_refuses_a_new_release_without_a_release_helper_cli() {
   let sandbox = Sandbox::new();
   let releases = sandbox.dir("releases");
@@ -321,6 +337,7 @@ fn test_rehearsal_refuses_a_new_release_without_a_release_helper_cli() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_rehearsal_usage_refuses_a_missing_argument() {
   let sandbox = Sandbox::new();
   let mut command = harness::command("bash", &sandbox.env());
@@ -547,6 +564,7 @@ fn write_trial_release(sandbox: &Sandbox) -> (PathBuf, PathBuf) {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_trial_preflight_accepts_a_live_endpoint_without_a_credential() {
   let sandbox = Sandbox::new();
   sandbox.stub("charlie-code", "exit 0\n");
@@ -572,6 +590,7 @@ fn test_trial_preflight_accepts_a_live_endpoint_without_a_credential() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_trial_preflight_reads_the_live_key_when_the_endpoint_names_a_credential() {
   let sandbox = Sandbox::new();
   sandbox.stub("charlie-code", "exit 0\n");
@@ -604,6 +623,7 @@ fn committed_text(env: &Env, cwd: &Path, commit: &str, path: &str) -> String {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_trial_installs_the_commits_units_and_reloads_before_its_server_starts() {
   let sandbox = Sandbox::new();
   sandbox.stub("charlie-code", "exit 0\n");
@@ -649,6 +669,7 @@ fn test_trial_installs_the_commits_units_and_reloads_before_its_server_starts() 
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_trial_preflight_refuses_a_live_config_without_an_api_base_entry() {
   let sandbox = Sandbox::new();
   sandbox.stub("charlie-code", "exit 0\n");
@@ -665,6 +686,7 @@ fn test_trial_preflight_refuses_a_live_config_without_an_api_base_entry() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_trial_preflight_accepts_a_live_config_with_only_the_endpoint_key_set() {
   let sandbox = Sandbox::new();
   sandbox.stub("charlie-code", "exit 0\n");
@@ -690,6 +712,7 @@ fn test_trial_preflight_accepts_a_live_config_with_only_the_endpoint_key_set() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_rehearsal_preflight_accepts_a_live_endpoint_without_a_credential() {
   let sandbox = Sandbox::new();
   let home = live_home(&sandbox, false);
@@ -708,6 +731,7 @@ fn test_rehearsal_preflight_accepts_a_live_endpoint_without_a_credential() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_rehearsal_preflight_reads_the_live_key_when_the_endpoint_names_a_credential() {
   let sandbox = Sandbox::new();
   let home = live_home(&sandbox, true);
@@ -727,6 +751,7 @@ fn test_rehearsal_preflight_reads_the_live_key_when_the_endpoint_names_a_credent
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_rehearsal_redacts_the_backend_key_from_saved_evidence() {
   let sandbox = Sandbox::new();
   let home = live_home(&sandbox, true);
@@ -772,6 +797,7 @@ fn allow_free_port(release: &Path) {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_rehearsal_config_check_stops_at_a_key_the_old_release_refuses_and_names_it() {
   let sandbox = Sandbox::new();
   sandbox.stub("tmux", TMUX_STOP);
@@ -799,6 +825,7 @@ fn test_rehearsal_config_check_stops_at_a_key_the_old_release_refuses_and_names_
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_rehearsal_config_check_reads_each_releases_own_checkout() {
   let sandbox = Sandbox::new();
   sandbox.stub("tmux", TMUX_STOP);
@@ -830,6 +857,7 @@ fn test_rehearsal_config_check_reads_each_releases_own_checkout() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_the_rehearsal_home_the_script_writes_passes_the_built_server_check() {
   let sandbox = Sandbox::new();
   let rendered_home = sandbox.dir("rendered-home");
@@ -969,6 +997,7 @@ const CHECK_SERVED_HOME: &[&str] =
   &["sh", "-c", "\"$MOCK_HOME_TOOL\" check \"$MOCK_HOME_SEED\" \"$CHARLIEBOT_SERVE_URL\""];
 
 #[test]
+#[ignore = "integration"]
 fn test_trial_serve_seeded_home_passes_the_mock_home_check() {
   let world = ServeWorld::new();
   let seed = world.seed_home("seed", "30");
@@ -982,6 +1011,7 @@ fn test_trial_serve_seeded_home_passes_the_mock_home_check() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_trial_config_carries_the_live_weight_switches_and_an_absent_one_takes_its_default() {
   let world = ServeWorld::new();
   // The live config switches the cpu weight off and leaves the io weight absent.
@@ -1005,6 +1035,7 @@ fn test_trial_config_carries_the_live_weight_switches_and_an_absent_one_takes_it
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_trial_serve_check_exits_1_and_names_a_session_whose_event_log_is_corrupted() {
   let world = ServeWorld::new();
   let seed = world.seed_home("seed", "30");
@@ -1036,6 +1067,7 @@ fn test_trial_serve_check_exits_1_and_names_a_session_whose_event_log_is_corrupt
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_trial_serve_stops_the_tmux_server_it_started_and_removes_its_tree() {
   let world = ServeWorld::new();
   let seed = world.seed_home("seed", "1");
@@ -1066,6 +1098,7 @@ fn process_is_running(pid: i32) -> bool {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_trial_serve_refuses_a_tmux_socket_path_of_108_bytes_or_more() {
   let world = ServeWorld::new();
   let seed = world.seed_home("seed", "1");

@@ -20,8 +20,9 @@ use nix::unistd::Pid;
 /// The variable through which a `hold_*` test learns the marker file it writes its processes to.
 pub const HOLD: &str = "LEAK_CHECK_HOLD";
 
-/// How long a process gets to end after the test process that started it is killed.
-pub const END_WAIT: Duration = Duration::from_secs(2);
+/// How long a process gets to end after the test process that started it is killed. The processes end through their
+/// parent-death signals; the bound leaves room for scheduling delay on a loaded runner.
+pub const END_WAIT: Duration = Duration::from_secs(10);
 
 /// How long the held test gets to start its processes and write its marker. Starting a world costs a few hundred
 /// milliseconds alone, and the whole binary's tests run beside this check.
@@ -55,7 +56,7 @@ impl HeldTest {
     let log = sandbox.root().join("held-test.log");
     let log_file = fs::File::create(&log).expect("the held test's output file");
     let mut command = harness::command(env::current_exe().expect("the test binary"), &sandbox.env());
-    command.args(["--exact", hold_test, "--test-threads=1"]).env(HOLD, &marker);
+    command.args(["--exact", hold_test, "--ignored", "--test-threads=1"]).env(HOLD, &marker);
     command
       .stdin(Stdio::null())
       .stdout(Stdio::from(log_file.try_clone().expect("a second log handle")))

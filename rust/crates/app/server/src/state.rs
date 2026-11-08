@@ -9,7 +9,7 @@ use charliebot_compat::static_files::StaticDirectory;
 use charliebot_core::config::{self, CharlieBotConfig, ConfigError};
 use charliebot_core::credentials::{self, Credentials};
 use charliebot_core::hot_reload::HotReload;
-use charliebot_registry::pages::package_directory;
+use charliebot_registry::pages::{package_directory, package_static_prefix, static_mount_prefix};
 use charliebot_registry::{FeatureContext, Registry};
 
 use crate::buildinfo::BuildInfo;
@@ -28,13 +28,14 @@ impl StaticMount {
     let mut mounts: Vec<StaticMount> = packages
       .iter()
       .map(|package| StaticMount {
-        prefix: format!("/static/{}", package.replace('.', "/")),
+        prefix: package_static_prefix(package),
         directory: StaticDirectory::new(package_directory(repo_root, package).join("static")),
       })
       .collect();
     let web_static = repo_root.join("web").join("static");
     if web_static.exists() {
-      mounts.push(StaticMount { prefix: "/static".to_string(), directory: StaticDirectory::new(web_static) });
+      mounts
+        .push(StaticMount { prefix: static_mount_prefix().to_string(), directory: StaticDirectory::new(web_static) });
     }
     mounts
   }

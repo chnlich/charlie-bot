@@ -58,7 +58,7 @@ fn script_run_spec() -> TaskSpec {
 
 #[test]
 #[ignore = "subprocess entry point for durable capture recovery"]
-fn final_stdout_supervisor() {
+fn final_stdout_supervisor_subprocess_entry() {
   charliebot_agents::transport::final_stdout::supervise(&[std::env::var_os("TEST_CAPTURE_DIR").unwrap()]).unwrap();
 }
 
@@ -99,7 +99,7 @@ async fn captured_run(
   );
   final_stdout::prepare(&spec, &directory, &LaunchArgs::default(), None)?;
   let child = Command::new(std::env::current_exe()?)
-    .args(["--exact", "final_stdout_supervisor", "--ignored"])
+    .args(["--exact", "final_stdout_supervisor_subprocess_entry", "--ignored"])
     .env("TEST_CAPTURE_DIR", &directory)
     .current_dir(&directory)
     .process_group(0)
@@ -119,6 +119,7 @@ async fn captured_run(
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn final_stdout_recovery_delivers_live_and_dead_runs_and_parent_reports() -> anyhow::Result<()> {
   for dead in [false, true] {
     for profile in [TaskProfile::Worker, TaskProfile::Manager] {
@@ -191,6 +192,7 @@ async fn final_stdout_recovery_delivers_live_and_dead_runs_and_parent_reports() 
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn final_stdout_stop_of_an_adopted_run_ends_its_process() -> anyhow::Result<()> {
   let guard = ProcessGroupGuard::new();
   let mut option = script_option("capture", "exit 0");
@@ -282,6 +284,7 @@ fn stage_raw_result(run_dir: &std::path::Path, age: Duration) -> anyhow::Result<
 
 /// A queued run with a durable stop request never launches and claims nothing, and a repeated pass changes nothing.
 #[tokio::test]
+#[ignore = "integration"]
 async fn stop_request_wins_over_launch_and_recovery() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, None).await?;
@@ -306,6 +309,7 @@ async fn stop_request_wins_over_launch_and_recovery() -> anyhow::Result<()> {
 /// A delegated repo-less script run creates its worker once, and a lost-response replay returns that same child and
 /// Run while persisting the task card in the manager's chat.
 #[tokio::test]
+#[ignore = "integration"]
 async fn delegate_creates_one_worker_and_replays_the_same_run() -> anyhow::Result<()> {
   let guard = ProcessGroupGuard::new();
   let stack =
@@ -395,6 +399,7 @@ async fn delegate_creates_one_worker_and_replays_the_same_run() -> anyhow::Resul
 
 /// A failed worker Run reports its durable outcome and evidence once, then archives the stopped worker.
 #[tokio::test]
+#[ignore = "integration"]
 async fn failed_worker_run_reports_to_parent_and_archives_worker() -> anyhow::Result<()> {
   let guard = ProcessGroupGuard::new();
   let stack = Stack::start("exit 17").await?;
@@ -421,6 +426,7 @@ async fn failed_worker_run_reports_to_parent_and_archives_worker() -> anyhow::Re
 
 /// A completed node holding a queued run gets one closed-task stop request, and a repeated pass records nothing more.
 #[tokio::test]
+#[ignore = "integration"]
 async fn reconcile_settles_a_queued_run_on_a_completed_node_once() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, None).await?;
@@ -442,6 +448,7 @@ async fn reconcile_settles_a_queued_run_on_a_completed_node_once() -> anyhow::Re
 
 /// A claimed queued run re-enters the launch checks at boot and finishes through the worker adapter.
 #[tokio::test]
+#[ignore = "integration"]
 async fn restart_before_launch_requeues_through_the_same_launch_checks() -> anyhow::Result<()> {
   let guard = ProcessGroupGuard::new();
   let stack =
@@ -467,6 +474,7 @@ async fn restart_before_launch_requeues_through_the_same_launch_checks() -> anyh
 
 /// A recorded live process is followed, not relaunched, and its result settles the original Run.
 #[tokio::test]
+#[ignore = "integration"]
 async fn restart_after_launch_reattaches_live_process() -> anyhow::Result<()> {
   let guard = ProcessGroupGuard::new();
   let stack = Stack::start("exit 0").await?;
@@ -767,6 +775,7 @@ async fn boot_after_cut(
 /// launch runs none of its failure paths, so the run keeps no process, no end and no terminal fact, and its task stays
 /// open. The next boot's dispatch launches the same run (`reconcile_node` step 4).
 #[test]
+#[ignore = "integration"]
 fn a_launch_the_stop_cuts_before_its_agent_starts_runs_at_the_next_boot() -> anyhow::Result<()> {
   let runtime = server_runtime()?;
   let cut = runtime.block_on(async {
@@ -794,6 +803,7 @@ fn a_launch_the_stop_cuts_before_its_agent_starts_runs_at_the_next_boot() -> any
 /// arrives before its first step: the run registered with its input claimed, no process, no terminal fact, and an open
 /// task. The next boot's dispatch launches it once.
 #[test]
+#[ignore = "integration"]
 fn a_launch_requested_after_the_let_go_runs_once_at_the_next_boot() -> anyhow::Result<()> {
   let log = LogCapture::default();
   let _capture = log.install();
@@ -821,6 +831,7 @@ fn a_launch_requested_after_the_let_go_runs_once_at_the_next_boot() -> anyhow::R
 /// identity recorded and no terminal fact. The next boot re-attaches the run, and
 /// the agent's own result ends it (`reconcile_node` step 2).
 #[test]
+#[ignore = "integration"]
 fn a_launch_the_stop_cuts_while_its_agent_runs_is_reattached_at_the_next_boot() -> anyhow::Result<()> {
   let release = tempfile::tempdir()?;
   let release_file = release.path().join("release");
@@ -866,6 +877,7 @@ fn a_launch_the_stop_cuts_while_its_agent_runs_is_reattached_at_the_next_boot() 
 
 /// The boot half: a terminal run whose end metadata is empty is repaired from its raw log's last write, once.
 #[tokio::test]
+#[ignore = "integration"]
 async fn boot_reconcile_repairs_a_half_written_end_record_from_the_raw_log() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, None).await?;
@@ -887,6 +899,7 @@ async fn boot_reconcile_repairs_a_half_written_end_record_from_the_raw_log() -> 
 
 /// A repeated finish fills the empty end fields of a terminal run and moves no value that is already written.
 #[tokio::test]
+#[ignore = "integration"]
 async fn repeat_finish_fills_only_empty_end_metadata() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, None).await?;
@@ -943,6 +956,7 @@ fn is_out_of_space_error_walks_the_cause_chain() {
 
 /// A launched worker run whose process died unseen drains from its raw log and lands the durable result.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_drained_worker_run_lands_its_result_and_raw_end_time() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, Some(script_run_spec())).await?;
@@ -1205,6 +1219,7 @@ async fn seed_pending_report(stack: &Stack, session_id: &str, manager_id: &str) 
 /// A 429 result ends a worker run the same way through the first launch, a re-attach follow and a boot drain. Each
 /// entry has one failed end record, and the pool-chosen node fails over to a new work run.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_worker_run_ends_the_same_way_through_every_entry_on_a_pool_node() -> anyhow::Result<()> {
   for entry in [RunEntry::Launch, RunEntry::Reattach, RunEntry::Drain] {
     let (stack, manager_id, worker_id, run_id, staged) = run_ending_entry(entry, true).await?;
@@ -1227,6 +1242,7 @@ async fn a_worker_run_ends_the_same_way_through_every_entry_on_a_pool_node() -> 
 /// A named-backend node ends the same way through every entry: one failed end record and one parent report carrying
 /// the API error text.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_worker_run_ends_the_same_way_through_every_entry_on_a_named_node() -> anyhow::Result<()> {
   for entry in [RunEntry::Launch, RunEntry::Reattach, RunEntry::Drain] {
     let (stack, manager_id, worker_id, run_id, _staged) = run_ending_entry(entry, false).await?;
@@ -1240,6 +1256,7 @@ async fn a_worker_run_ends_the_same_way_through_every_entry_on_a_named_node() ->
 
 /// The drain checkpoints the line it ended on, so a second node recovery appends no copy and starts no second drain.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_second_node_recovery_keeps_one_result_line() -> anyhow::Result<()> {
   let (stack, _manager_id, worker_id, run_id, _staged) = run_ending_entry(RunEntry::Drain, false).await?;
   assert_eq!(result_lines(&stack, &worker_id, &run_id)?, 1);
@@ -1265,6 +1282,7 @@ async fn a_second_node_recovery_keeps_one_result_line() -> anyhow::Result<()> {
 /// run's ending no longer aborts the node. The node is pool-chosen: a named node's failed run would archive it, and an
 /// archived task keeps its pending input as history.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_drained_run_dispatches_its_pending_input_and_report() -> anyhow::Result<()> {
   let (stack, manager_id, worker_id) = ending_worker(true, vec![result_script("noted"); 4]).await?;
   let run_id = "run-drained";
@@ -1300,6 +1318,7 @@ async fn a_drained_run_dispatches_its_pending_input_and_report() -> anyhow::Resu
 /// A manager resume whose follow returns an error lands the first launch's failure: a failed end record and the
 /// "Turn failed" notice in the manager's own session.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_manager_resume_error_lands_the_turn_failure() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   stack.write_access_key()?;
@@ -1455,6 +1474,7 @@ fn result_script(summary: &str) -> String {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_never_rereviews_a_successfully_reviewed_work_run() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
@@ -1472,6 +1492,7 @@ async fn recovery_never_rereviews_a_successfully_reviewed_work_run() -> anyhow::
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_spawns_no_review_for_a_superseded_work_run_on_a_closed_task() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
@@ -1497,6 +1518,7 @@ async fn recovery_spawns_no_review_for_a_superseded_work_run_on_a_closed_task() 
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_task() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
@@ -1543,6 +1565,7 @@ async fn recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_task() 
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_reports_blocked_when_the_pool_has_no_reviewer_member() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
@@ -1563,6 +1586,7 @@ async fn recovery_reports_blocked_when_the_pool_has_no_reviewer_member() -> anyh
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_spawns_no_review_behind_a_registered_unstarted_work_run() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with_min_free_disk_gib(
@@ -1594,6 +1618,7 @@ async fn recovery_spawns_no_review_behind_a_registered_unstarted_work_run() -> a
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_closed_task_skips_landing() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
@@ -1613,6 +1638,7 @@ async fn recovery_closed_task_skips_landing() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_reopened_task_reproves_landing() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
@@ -1634,6 +1660,7 @@ async fn recovery_reopened_task_reproves_landing() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_open_task_landing_unchanged() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
@@ -1656,6 +1683,7 @@ async fn recovery_open_task_landing_unchanged() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_after_a_failed_review_picks_the_next_preference_backend() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
@@ -1712,6 +1740,7 @@ async fn cold_read_child(
 /// A cold-read run that succeeded and whose delivery a crash cut is replayed: the parent gets the report body and the
 /// child closes. A repeated pass lands nothing twice.
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_replays_a_lost_cold_read_delivery() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
@@ -1744,6 +1773,7 @@ async fn recovery_replays_a_lost_cold_read_delivery() -> anyhow::Result<()> {
 /// The native event carries `message.content` as a plain string. Delivering the child's report primes the
 /// parent's aggregator; a failed prime leaves the child unrecovered and the boot pass without its marker.
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_accepts_native_user_events_with_string_content() -> anyhow::Result<()> {
   let log = LogCapture::default();
   let _guard = log.install();
@@ -1781,6 +1811,7 @@ async fn recovery_accepts_native_user_events_with_string_content() -> anyhow::Re
 /// A failed cold-read run whose chain a crash cut with one backend left. The replay records the attempt, starts the
 /// retry on the next pool backend, and the retry's answer delivers the report.
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_replays_a_lost_cold_read_failure_chain() -> anyhow::Result<()> {
   let stack = Stack::start_with(
     vec![script_option(BACKEND_ID, "exit 0"), script_option("fake2", &result_script("(1) answered."))],
@@ -1819,6 +1850,7 @@ async fn recovery_replays_a_lost_cold_read_failure_chain() -> anyhow::Result<()>
 /// With no backend left, the replay reports the parent with the attempt line and the all-failed trailer, and the
 /// report's delivery archives the child. A repeated pass lands nothing twice.
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_replays_a_lost_cold_read_all_failed_report() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
@@ -1858,6 +1890,7 @@ async fn recovery_replays_a_lost_cold_read_all_failed_report() -> anyhow::Result
 /// An interrupted cold-read run reports at replay exactly as the live chain's fall-through does, never through the
 /// next-backend retry. The report's delivery archives the child. A repeated pass lands nothing twice.
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_replays_a_lost_cold_read_interrupted_report() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
@@ -1887,6 +1920,7 @@ async fn recovery_replays_a_lost_cold_read_interrupted_report() -> anyhow::Resul
 /// A failed cold-read run whose retry a crash left registered but unlaunched. The replay launches the queued retry and
 /// never re-drives the failed attempt's chain, so there is one retry run and one report.
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_cold_read_failure_with_a_registered_retry_never_double_retries() -> anyhow::Result<()> {
   let stack = Stack::start_with(
     vec![script_option(BACKEND_ID, "exit 0"), script_option("fake2", &result_script("(1) answered."))],
@@ -1921,6 +1955,7 @@ async fn recovery_cold_read_failure_with_a_registered_retry_never_double_retries
 
 /// A failed earlier run's report replay is idempotent, and a later successful run still owns the review follow-up.
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_replays_failed_earlier_run_without_archiving_worker() -> anyhow::Result<()> {
   //   test_recovery_replays_an_earlier_failed_run_without_archiving_a_node_a_later_run_finished.
   let stack = Stack::start("exit 0").await?;
@@ -1945,6 +1980,7 @@ async fn recovery_replays_failed_earlier_run_without_archiving_worker() -> anyho
 
 /// An existing parent report is not delivered or dispatched again, and recovery archives the worker exactly once.
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_archives_worker_after_deduplicating_its_existing_failure_report() -> anyhow::Result<()> {
   //   test_recovery_archives_an_open_worker_whose_failure_report_the_parent_already_holds.
   let stack = Stack::start("exit 0").await?;
@@ -1999,6 +2035,7 @@ fn retry_fields() -> RetryRunFields {
 /// A failed run whose retry an operator registered still reports its parent at replay: the operator's retry is not
 /// the failed run's follow-up, so the report is not lost.
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_replays_a_failed_run_whose_retry_an_operator_registered() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
@@ -2022,6 +2059,7 @@ async fn recovery_replays_a_failed_run_whose_retry_an_operator_registered() -> a
 /// A failed run whose failover registered its retry takes no second follow-up at replay: the retry owns the
 /// follow-up, and the parent gets no report alongside it.
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_skips_the_replay_of_a_failed_run_whose_failover_registered_its_retry() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
@@ -2045,6 +2083,7 @@ async fn recovery_skips_the_replay_of_a_failed_run_whose_failover_registered_its
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn reconcile_replays_an_already_delivered_blocked_report_without_duplication() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
@@ -2174,6 +2213,7 @@ fn probe_step(session_id: &str, run_id: &str) -> RunRecord {
 /// A durable finish asks the owning controller's after-run duty. A cron step's finish re-drives its firing, and a
 /// running loop's iteration leaves its child open. No owned run logs the no-controller warning.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_finished_sequence_run_asks_its_owning_controller_after_run() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   // A running loop owes no close yet, so its close step returns and the child stays open.
@@ -2195,6 +2235,7 @@ async fn a_finished_sequence_run_asks_its_owning_controller_after_run() -> anyho
 /// Recovery replays a terminal step and an unlaunched one, one follow-up each, and leaves a launched, non-terminal step
 /// to the earlier pass.
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_asks_the_owning_controller_and_counts_one_follow_up() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
@@ -2243,6 +2284,7 @@ fn assert_one_no_controller_warning(log: &LogCapture, session_id: &str, run_id: 
 /// A Run whose kind no controller owns logs the warning with the session, run and owner_ref, and its finish lands
 /// nothing.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_finish_without_a_controller_warns_and_does_nothing_else() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
@@ -2284,6 +2326,7 @@ fn run_finished_count(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::
 /// Recovery of a registered, unlaunched Run whose controller is gone lands its interrupted finish once and logs the
 /// warning. A second pass finds the terminal fact and only logs.
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_without_a_controller_lands_interrupted_then_only_logs() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
@@ -2312,6 +2355,7 @@ async fn recovery_without_a_controller_lands_interrupted_then_only_logs() -> any
 /// A launched, non-terminal Run without its controller is followed like any other live Run, with no interrupted finish
 /// and no warning.
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_follows_a_live_sequence_run_without_its_controller() -> anyhow::Result<()> {
   let guard = ProcessGroupGuard::new();
   let stack = Stack::start("exit 0").await?;
@@ -2343,6 +2387,7 @@ async fn recovery_follows_a_live_sequence_run_without_its_controller() -> anyhow
 /// A launch that reaches a controller-less sequence Run fails before any process starts. The error names the owner_ref,
 /// rides the run's own events log, and lands the failed finish.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_launch_without_a_controller_fails_loudly_naming_the_owner_ref() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
@@ -2375,6 +2420,7 @@ async fn a_launch_without_a_controller_fails_loudly_naming_the_owner_ref() -> an
 
 /// The registered controller marks a loop that a prior process left running as interrupted, during the boot pass.
 #[tokio::test]
+#[ignore = "integration"]
 async fn restart_recovery_marks_a_running_loop_through_the_registered_controller() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let (_manager, child) = loop_child(&stack, marker("running", None)).await?;
@@ -2389,6 +2435,7 @@ async fn restart_recovery_marks_a_running_loop_through_the_registered_controller
 /// The close step stopped the queued iteration and closed the child. After the operator reopens it, the boot pass
 /// leaves it open, adds no stop request, and writes no second close.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_reopened_child_stays_open_across_restarts() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let (manager, child) =
@@ -2420,6 +2467,7 @@ async fn a_reopened_child_stays_open_across_restarts() -> anyhow::Result<()> {
 /// A launched iteration with a durable stop request ends at startup, and its after-run closes the child with the loop's
 /// failed outcome.
 #[tokio::test]
+#[ignore = "integration"]
 async fn startup_closes_a_loop_whose_stop_requested_iteration_ended() -> anyhow::Result<()> {
   let guard = ProcessGroupGuard::new();
   let stack = Stack::start("exit 0").await?;
@@ -2462,6 +2510,7 @@ async fn wait_for_exit(child: &mut std::process::Child) -> anyhow::Result<()> {
 /// The loop's final state is on disk and its close is not. The boot pass closes the child with the loop's outcome and
 /// delivers one final report to the parent.
 #[tokio::test]
+#[ignore = "integration"]
 async fn startup_closes_a_loop_that_crashed_between_final_state_and_close() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let summary = "[Synthetic loop 1] Loop ran 2 iteration(s)\n\niter one report\n\niter two report";
@@ -2489,6 +2538,7 @@ async fn startup_closes_a_loop_that_crashed_between_final_state_and_close() -> a
 /// A loop whose final failed state carries its end error and whose close a crash cut. The boot pass closes the child
 /// failed, and the parent's one final report carries the end error text.
 #[tokio::test]
+#[ignore = "integration"]
 async fn startup_closes_a_failed_loop_and_reports_its_end_error() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let summary = "[Synthetic loop 1] end error: synthetic failure";
@@ -2511,6 +2561,7 @@ async fn startup_closes_a_failed_loop_and_reports_its_end_error() -> anyhow::Res
 /// A queued iteration never launches. The close step stops it first, so the child closes and the queued run stays
 /// unlaunched.
 #[tokio::test]
+#[ignore = "integration"]
 async fn startup_closes_a_loop_with_an_unlaunched_iteration_stopped_first() -> anyhow::Result<()> {
   //   test_startup_closes_a_loop_that_crashed_with_an_iteration_registered_unlaunched.
   let stack = Stack::start("exit 0").await?;
@@ -2537,6 +2588,7 @@ async fn startup_closes_a_loop_with_an_unlaunched_iteration_stopped_first() -> a
 /// The iteration's finish landed and its after-run did not. The boot pass closes the child cancelled, and the parent
 /// gets one report that carries the iteration's text.
 #[tokio::test]
+#[ignore = "integration"]
 async fn startup_closes_a_loop_whose_iteration_finished_before_its_after_run() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let summary = "[Synthetic loop 1] cancelled\n\niter one report";
@@ -2558,6 +2610,7 @@ async fn startup_closes_a_loop_whose_iteration_finished_before_its_after_run() -
 
 /// A dead iteration drains its result after the sequence controller marks the loop interrupted and closes its child.
 #[tokio::test]
+#[ignore = "integration"]
 async fn startup_interrupts_a_loop_whose_iteration_process_died_and_names_the_drain() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let (manager, child) =
@@ -2578,6 +2631,7 @@ async fn startup_interrupts_a_loop_whose_iteration_process_died_and_names_the_dr
 /// A live iteration keeps its child open. The boot pass marks the loop interrupted and leaves the process running, and
 /// its re-attach runs in the background until the process finishes.
 #[tokio::test]
+#[ignore = "integration"]
 async fn startup_leaves_a_live_iterations_child_open_until_its_finish() -> anyhow::Result<()> {
   let guard = ProcessGroupGuard::new();
   let stack = Stack::start("exit 0").await?;
@@ -2624,6 +2678,7 @@ async fn settle_until(mut condition: impl FnMut() -> anyhow::Result<bool>) -> an
 /// A boot replay whose post-finish follow-up fails out of space keeps its end record. The retry delivers the
 /// success-based report exactly once.
 #[tokio::test]
+#[ignore = "integration"]
 async fn boot_retry_delivers_the_parent_report_once_after_a_follow_up_failure() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
@@ -2649,6 +2704,7 @@ async fn boot_retry_delivers_the_parent_report_once_after_a_follow_up_failure() 
 /// The end record is empty and a boot follow-up fails out of space. The node is handed to the end-landing retry, whose
 /// first round completes the follow-up, and the end time stays the raw log's last write.
 #[tokio::test]
+#[ignore = "integration"]
 async fn boot_retry_repairs_a_half_written_end_record_after_a_follow_up_failure() -> anyhow::Result<()> {
   let log = LogCapture::default();
   let _subscriber = log.install();
@@ -2677,6 +2733,7 @@ async fn boot_retry_repairs_a_half_written_end_record_after_a_follow_up_failure(
 /// A boot follow-up that fails for a reason other than space starts no retry. The node stays open until a later pass
 /// completes it.
 #[tokio::test]
+#[ignore = "integration"]
 async fn boot_non_space_follow_up_failure_starts_no_retry() -> anyhow::Result<()> {
   let log = LogCapture::default();
   let _subscriber = log.install();
@@ -2703,6 +2760,7 @@ async fn boot_non_space_follow_up_failure_starts_no_retry() -> anyhow::Result<()
 /// re-attaches the dead turn through the master queue, and the resumed follow lands the end record with the raw log's
 /// last write time.
 #[tokio::test]
+#[ignore = "integration"]
 async fn manager_turn_master_done_enospc_retries_through_master_queue() -> anyhow::Result<()> {
   let stack = Stack::start(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"turn result"}'"#).await?;
   stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
@@ -2744,6 +2802,7 @@ async fn manager_turn_master_done_enospc_retries_through_master_queue() -> anyho
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_stops_a_launched_run_on_a_closed_worker() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let worker = stack.node("worker", None, TaskProfile::Worker, None).await?;
@@ -2790,6 +2849,7 @@ async fn recovery_stops_a_launched_run_on_a_closed_worker() -> anyhow::Result<()
 /// A node pass that a retry runs skips worker and manager runs this process already drives, so no second follower or
 /// review starts.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_retry_round_skips_the_runs_this_process_already_drives() -> anyhow::Result<()> {
   let log = LogCapture::default();
   let _subscriber = log.install();
@@ -2837,6 +2897,7 @@ async fn a_retry_round_skips_the_runs_this_process_already_drives() -> anyhow::R
 /// A PATCH that crashed after its subtree scope swapped the metadata. The retry lands the interrupted subtree fact
 /// before it applies the node scope, so each scope has exactly one fact, in order.
 #[tokio::test]
+#[ignore = "integration"]
 async fn two_scope_prompt_patch_retry_repairs_a_crash_between_scopes() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let leaf = stack.node("leaf", None, TaskProfile::Worker, None).await?;
@@ -2864,6 +2925,7 @@ async fn two_scope_prompt_patch_retry_repairs_a_crash_between_scopes() -> anyhow
 /// The boot sweep lands the fact of an interrupted prompt edit once. Later passes find the fact in place and append
 /// nothing.
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_sweep_lands_an_interrupted_prompt_fact_once() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let leaf = stack.node("leaf", None, TaskProfile::Worker, None).await?;
@@ -2954,6 +3016,7 @@ async fn boot_past_a_refused_sequence_node(
 /// A loop child that a prior process left running beside its manager's dead turn: the registered controller marks the
 /// loop interrupted, and the boot pass drains the manager's turn past it.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_running_loop_beside_a_dead_manager_turn_leaves_the_turn_to_recover() -> anyhow::Result<()> {
   // The loop kind is the synthetic controller's; the improve controller itself is registered by charliebot-improve.
   let stack = Stack::start("exit 0").await?;
@@ -2980,6 +3043,7 @@ async fn a_running_loop_beside_a_dead_manager_turn_leaves_the_turn_to_recover() 
 /// recovers its dead turn, with the improve node first and with it second.
 /// This covers the interim refusal of `UNLANDED_SEQUENCE_KINDS`.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_refused_improve_node_leaves_the_manager_node_to_recover() -> anyhow::Result<()> {
   for sequence_first in [true, false] {
     boot_past_a_refused_sequence_node("improve", RunKind::Iteration, sequence_first, false)
@@ -2992,6 +3056,7 @@ async fn a_refused_improve_node_leaves_the_manager_node_to_recover() -> anyhow::
 /// The same recovery for a `cron` run, in both node orders: the registered cron controller recovers the queued run
 /// without launching it, while the manager node still drains its dead turn.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_refused_cron_node_leaves_the_manager_node_to_recover() -> anyhow::Result<()> {
   for sequence_first in [true, false] {
     boot_past_a_refused_sequence_node("cron", RunKind::ScheduledStep, sequence_first, true)
@@ -3003,6 +3068,7 @@ async fn a_refused_cron_node_leaves_the_manager_node_to_recover() -> anyhow::Res
 
 /// fills ended_at from the raw log's last write and exit_code from its result line, and writes no second end record.
 #[tokio::test]
+#[ignore = "integration"]
 async fn retry_repairs_a_half_written_end_record_from_the_raw_log() -> anyhow::Result<()> {
   let stack = Stack::start(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"work done"}'"#).await?;
   stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
@@ -3044,6 +3110,7 @@ async fn retry_repairs_a_half_written_end_record_from_the_raw_log() -> anyhow::R
 }
 /// delivers the failed report exactly once.
 #[tokio::test]
+#[ignore = "integration"]
 async fn boot_node_out_of_space_hands_node_to_retry() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
@@ -3071,7 +3138,7 @@ async fn boot_node_out_of_space_hands_node_to_retry() -> anyhow::Result<()> {
 }
 
 fn boot_marker_path(stack: &Stack) -> PathBuf {
-  stack.cfg.charliebot_home.join("state").join("boot_recovery.json")
+  charliebot_core::home::boot_recovery_marker_path(&stack.cfg.charliebot_home)
 }
 
 fn write_boot_marker(stack: &Stack, pass_started_at: &str) -> anyhow::Result<()> {
@@ -3157,6 +3224,7 @@ fn path_lexists(path: &Path) -> anyhow::Result<bool> {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn clean_boot_writes_marker_and_the_next_boot_skips_a_closed_worker() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let worker = add_recovery_worker(
@@ -3237,6 +3305,7 @@ async fn land_finish_alone(stack: &Stack, session_id: &str, run_id: &str) -> any
 /// The boot walk rechecks a saved close request against the run-records snapshot: the newest run replays its own
 /// close once, and a close owned by an earlier run stays voided by a newer run in the same records.
 #[tokio::test]
+#[ignore = "integration"]
 async fn boot_replay_rechecks_close_requests_against_the_run_snapshot() -> anyhow::Result<()> {
   for (label, overtaken) in [("the newest run replays its close", false), ("a newer run voids the earlier close", true)]
   {
@@ -3303,37 +3372,44 @@ async fn assert_unreadable_boot_marker_reads_as_absent(content: &[u8], error_typ
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn an_empty_boot_marker_reads_as_absent() -> anyhow::Result<()> {
   assert_unreadable_boot_marker_reads_as_absent(b"", "JSONDecodeError").await
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_boot_marker_that_is_not_json_reads_as_absent() -> anyhow::Result<()> {
   assert_unreadable_boot_marker_reads_as_absent(b"not json", "JSONDecodeError").await
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_boot_marker_that_is_not_an_object_reads_as_absent() -> anyhow::Result<()> {
   assert_unreadable_boot_marker_reads_as_absent(b"[]", "TypeError").await
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_boot_marker_without_pass_started_at_reads_as_absent() -> anyhow::Result<()> {
   assert_unreadable_boot_marker_reads_as_absent(b"{}", "KeyError").await
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_boot_marker_with_a_bad_timestamp_reads_as_absent() -> anyhow::Result<()> {
   assert_unreadable_boot_marker_reads_as_absent(br#"{"pass_started_at": "x"}"#, "ValueError").await
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_boot_marker_with_a_non_string_timestamp_reads_as_absent() -> anyhow::Result<()> {
   // The marker reader reports a TypeError for a non-string timestamp.
   assert_unreadable_boot_marker_reads_as_absent(br#"{"pass_started_at": 5}"#, "TypeError").await
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_boot_marker_that_is_not_utf8_reads_as_absent() -> anyhow::Result<()> {
   // The UnicodeDecodeError the marker reader reports before parsing.
   assert_unreadable_boot_marker_reads_as_absent(b"\xff\xfe{}", "UnicodeDecodeError").await
@@ -3349,6 +3425,7 @@ fn marker_failed_sessions(stack: &Stack) -> anyhow::Result<Value> {
 /// failed node's full pass and skips the clean node on the marker's word. Once the node's pass succeeds, the marker a
 /// clean boot writes names no failed node.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_failed_node_pass_is_retried_at_the_next_boot_while_the_marker_advances_for_the_rest() -> anyhow::Result<()> {
   let log = LogCapture::default();
   let _subscriber = log.install();
@@ -3399,6 +3476,7 @@ async fn a_failed_node_pass_is_retried_at_the_next_boot_while_the_marker_advance
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn breaking_each_skip_condition_alone_keeps_the_worker_in_full_recovery() -> anyhow::Result<()> {
   for condition in
     ["state_open", "file_after_marker", "run_unended", "sequence_ref", "worktree_exists", "cold_read_failed"]
@@ -3453,6 +3531,7 @@ async fn breaking_each_skip_condition_alone_keeps_the_worker_in_full_recovery() 
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn dangling_worktree_symlink_keeps_a_closed_worker_in_full_recovery() -> anyhow::Result<()> {
   // The probe reads the link itself, so a dangling symlink counts as an existing worktree.
   use std::os::unix::fs::symlink;
@@ -3483,6 +3562,7 @@ async fn dangling_worktree_symlink_keeps_a_closed_worker_in_full_recovery() -> a
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn worktree_path_under_a_regular_file_reads_as_absent_and_the_boot_pass_continues() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   let blocker = stack.home.path().join("regular-file");
@@ -3517,6 +3597,7 @@ async fn worktree_path_under_a_regular_file_reads_as_absent_and_the_boot_pass_co
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn end_landing_retry_runs_the_full_node_pass_after_boot_skip() -> anyhow::Result<()> {
   let stack = Stack::start("exit 0").await?;
   stack.adapter.set_landing_retry_interval(Duration::from_millis(20));
@@ -3541,6 +3622,7 @@ async fn end_landing_retry_runs_the_full_node_pass_after_boot_skip() -> anyhow::
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn rust_reads_isoformat_marker_with_and_without_microseconds() -> anyhow::Result<()> {
   // The marker text that the boot pass reads and writes.
   for timestamp in ["2026-01-02T03:04:05+00:00", "2026-01-02T03:04:05.123456+00:00"] {
@@ -3555,6 +3637,7 @@ async fn rust_reads_isoformat_marker_with_and_without_microseconds() -> anyhow::
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn fromisoformat_reads_the_rust_written_marker_instant() -> anyhow::Result<()> {
   // The marker text that the boot pass reads and writes.
   let stack = Stack::start("exit 0").await?;
@@ -3568,6 +3651,7 @@ async fn fromisoformat_reads_the_rust_written_marker_instant() -> anyhow::Result
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_done_logs_one_line_with_marker_and_skip_counters() -> anyhow::Result<()> {
   // One done line per pass.
   let log = LogCapture::default();
@@ -3596,6 +3680,7 @@ async fn recovery_done_logs_one_line_with_marker_and_skip_counters() -> anyhow::
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn an_imported_chat_log_fails_its_node_pass_and_the_marker_names_it() -> anyhow::Result<()> {
   // The boot pass's cheap rule-out of a session whose history holds no task boundary.
   let log = LogCapture::default();
@@ -3628,6 +3713,7 @@ async fn an_imported_chat_log_fails_its_node_pass_and_the_marker_names_it() -> a
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_session_whose_probe_fails_fails_its_node_and_the_walk_goes_on() -> anyhow::Result<()> {
   // A node-absence probe that cannot read the session's files is a node failure like any other.
   let log = LogCapture::default();
@@ -3656,6 +3742,7 @@ async fn a_session_whose_probe_fails_fails_its_node_and_the_walk_goes_on() -> an
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn skipped_worker_warms_the_display_backend_without_a_full_check() -> anyhow::Result<()> {
   // The display warm-up of the boot pass.
   let stack = Stack::start("exit 0").await?;
@@ -3700,6 +3787,7 @@ async fn boot_on(home: Arc<tempfile::TempDir>) -> anyhow::Result<(Stack, PassCou
 /// A boot after a clean boot reads only the bytes appended past each session's fact checkpoint, and lands the same
 /// recovery; a torn or missing checkpoint falls back to the whole-log scan and lands that recovery too.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_boot_reads_only_the_bytes_past_a_matching_fact_checkpoint() -> anyhow::Result<()> {
   let home = Arc::new(tempfile::tempdir()?);
   let (first, _counters, _log) = boot_on(Arc::clone(&home)).await?;

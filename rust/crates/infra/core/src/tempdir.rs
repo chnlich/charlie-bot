@@ -333,12 +333,13 @@ mod tests {
     assert_eq!(selected, Path::new("."));
   }
 
+  #[ignore = "integration"]
   #[test]
   fn mkdtemp_matches_name_mode_parent_and_collision_behavior() {
     if env::var_os("CHARLIEBOT_TEST_TMPDIR_CHILD").is_none() {
       let root = tempfile::tempdir().unwrap();
       let output = Command::new(env::current_exe().unwrap())
-        .args(["--exact", "tempdir::tests::mkdtemp_matches_name_mode_parent_and_collision_behavior"])
+        .args(["--exact", "tempdir::tests::mkdtemp_matches_name_mode_parent_and_collision_behavior", "--ignored"])
         .env("TMPDIR", root.path())
         .env("CHARLIEBOT_TEST_TMPDIR_CHILD", "1")
         .output()

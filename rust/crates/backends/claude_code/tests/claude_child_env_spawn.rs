@@ -13,6 +13,7 @@ use charliebot_registry::Registry;
 use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, Translate, TransportKind};
 use serde_json::Value;
 
+#[ignore = "integration"]
 #[tokio::test]
 async fn registered_claude_child_edits_apply_at_the_spawn_boundary() {
   let root = tempfile::tempdir().unwrap();

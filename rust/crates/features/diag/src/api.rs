@@ -5,8 +5,9 @@
 //! The five kinds and their fields follow plan section 4.1 of the poor-network line: `switch`
 //! carries the switch phases plus the bootstrap's Resource Timing, `send` one message send's
 //! click-to-response and click-to-echo waits, `socket` one disconnect episode from the disconnect
-//! through the reconnect and its catch-up, `page_load` the document's Navigation Timing, and
-//! `traffic` one tab's per-minute received bytes by endpoint.
+//! through the reconnect and its catch-up, `page_load` the document's Navigation Timing with the
+//! open case, the first chat render and catch-up, and the page's render-blocking and same-origin
+//! resource timings, and `traffic` one tab's per-minute received bytes by endpoint.
 
 use std::sync::Arc;
 
@@ -40,6 +41,12 @@ const MAX_TRAFFIC_ENDPOINTS: usize = 40;
 /// The largest length of `client_ts` and of the other timestamp strings the client sends.
 const MAX_TIMESTAMP_CHARS: usize = 64;
 
+/// The largest URL one page load's resource timing row carries.
+const MAX_RESOURCE_URL_CHARS: usize = 2048;
+
+/// The largest number of resource rows one page load carries, of each of its two lists.
+const MAX_PAGE_LOAD_RESOURCES: usize = 16;
+
 const KINDS: &[&str] = &["switch", "send", "socket", "page_load", "traffic"];
 const SWITCH_KIND: &[&str] = &["switch"];
 const SEND_KIND: &[&str] = &["send"];
@@ -48,6 +55,8 @@ const PAGE_LOAD_KIND: &[&str] = &["page_load"];
 const TRAFFIC_KIND: &[&str] = &["traffic"];
 const SOCKET_CAUSES: &[&str] = &["switch", "network"];
 const PAGE_LOAD_CAUSES: &[&str] = &["open", "bootstrap_failure", "stale_asset"];
+const OPEN_CASES: &[&str] = &["A", "B", "C"];
+const CONTENT_SOURCES: &[&str] = &["network", "stored"];
 const VISIBILITY_STATES: &[&str] = &["visible", "hidden", "prerender"];
 const PHASES: &[&str] = &["started", "completed", "superseded", "failed", "render_error"];
 
@@ -107,14 +116,46 @@ const SOCKET_FIELDS: &[Field] = &[
 ];
 const SOCKET_BODY: BodyModel = BodyModel::required(SOCKET_FIELDS).forbid_extra();
 
+/// One render-blocking file the page loaded from another origin: its Resource Timing in ms from
+/// navigation start, and its body bytes. A null field is an entry the browser did not report.
+const RENDER_BLOCKING_FIELDS: &[Field] = &[
+  Field::required("url", FieldType::String).max_length(MAX_RESOURCE_URL_CHARS),
+  Field::required("start_ms", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::required("response_end_ms", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::required("transfer_size", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::required("encoded_body_size", FieldType::NullableInteger).ge(Bound::Int(0)),
+];
+const RENDER_BLOCKING_BODY: BodyModel = BodyModel::required(RENDER_BLOCKING_FIELDS).forbid_extra();
+
+/// One same-origin resource timing of the page load: the document or a same-origin render-blocking
+/// file. The link estimate reads its round trip and throughput.
+const SAME_ORIGIN_FIELDS: &[Field] = &[
+  Field::required("url", FieldType::String).max_length(MAX_RESOURCE_URL_CHARS),
+  Field::required("request_start_ms", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::required("response_start_ms", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::required("response_end_ms", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::required("encoded_body_size", FieldType::NullableInteger).ge(Bound::Int(0)),
+];
+const SAME_ORIGIN_BODY: BodyModel = BodyModel::required(SAME_ORIGIN_FIELDS).forbid_extra();
+
 /// The page-load body: the document's Navigation Timing, once per page load, with the cause the
-/// navigating path announced.
+/// navigating path announced, the open case and the timings of the first chat render and of the
+/// first catch-up, and the page's render-blocking and same-origin resource timings. The open case
+/// and the content source are null on a page without a session.
 const PAGE_LOAD_FIELDS: &[Field] = &[
   Field::required("kind", FieldType::Literal(PAGE_LOAD_KIND)),
   Field::required("response_end_ms", FieldType::Integer).ge(Bound::Int(0)),
   Field::required("dom_content_loaded_ms", FieldType::Integer).ge(Bound::Int(0)),
   Field::optional("transfer_size", FieldType::NullableInteger).ge(Bound::Int(0)),
   Field::required("cause", FieldType::Literal(PAGE_LOAD_CAUSES)),
+  Field::required("newest_message_ms", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::required("current_ms", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::required("open_case", FieldType::NullableLiteral(OPEN_CASES)),
+  Field::required("content_source", FieldType::NullableLiteral(CONTENT_SOURCES)),
+  Field::required("offline_shell", FieldType::Boolean),
+  Field::required("render_blocking", FieldType::ModelList { model: &RENDER_BLOCKING_BODY })
+    .max_length(MAX_PAGE_LOAD_RESOURCES),
+  Field::required("same_origin", FieldType::ModelList { model: &SAME_ORIGIN_BODY }).max_length(MAX_PAGE_LOAD_RESOURCES),
   Field::required(request_body::CLIENT_TS, FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
 ];
 const PAGE_LOAD_BODY: BodyModel = BodyModel::required(PAGE_LOAD_FIELDS).forbid_extra();
@@ -306,6 +347,13 @@ fn log_page_load(values: &Map<String, Value>, forwarded_for: &str) {
       .expect("a required integer validates to a value"),
     transfer_size = %LogValue::of_int(integer_field(values, "transfer_size")),
     cause = %text_field(values, "cause"),
+    newest_message_ms = %LogValue::of_int(integer_field(values, "newest_message_ms")),
+    current_ms = %LogValue::of_int(integer_field(values, "current_ms")),
+    open_case = %LogValue::of(optional_text_field_ref(values, "open_case")),
+    content_source = %LogValue::of(optional_text_field_ref(values, "content_source")),
+    offline_shell = %values.get("offline_shell").expect("a required boolean validates to a value"),
+    render_blocking = %values.get("render_blocking").expect("a required list validates to a value"),
+    same_origin = %values.get("same_origin").expect("a required list validates to a value"),
     client_ts = %text_field(values, request_body::CLIENT_TS),
     forwarded_for = %forwarded_for,
     "diag_client"
@@ -406,6 +454,25 @@ mod tests {
         "dom_content_loaded_ms": 34500,
         "transfer_size": 415115,
         "cause": "bootstrap_failure",
+        "newest_message_ms": 1200,
+        "current_ms": 1900,
+        "open_case": "A",
+        "content_source": "network",
+        "offline_shell": false,
+        "render_blocking": [{
+          "url": "https://cdn.jsdelivr.net/npm/marked/marked.min.js",
+          "start_ms": 400,
+          "response_end_ms": 900,
+          "transfer_size": 2500,
+          "encoded_body_size": 2500,
+        }],
+        "same_origin": [{
+          "url": "https://page.example/",
+          "request_start_ms": 0,
+          "response_start_ms": 300,
+          "response_end_ms": 1300,
+          "encoded_body_size": 12500,
+        }],
         "client_ts": "2026-02-13T10:00:00Z",
       }),
       "traffic" => json!({
@@ -680,8 +747,42 @@ mod tests {
     assert_eq!(field(&event, "dom_content_loaded_ms"), "34500");
     assert_eq!(field(&event, "transfer_size"), "415115");
     assert_eq!(field(&event, "cause"), "bootstrap_failure");
+    assert_eq!(field(&event, "newest_message_ms"), "1200");
+    assert_eq!(field(&event, "current_ms"), "1900");
+    assert_eq!(field(&event, "open_case"), "A");
+    assert_eq!(field(&event, "content_source"), "network");
+    assert_eq!(field(&event, "offline_shell"), "false");
+    assert!(field(&event, "render_blocking").contains("marked.min.js"));
+    assert!(field(&event, "same_origin").contains("page.example"));
     assert_eq!(field(&event, "client_ts"), "2026-02-13T10:00:00Z");
     assert_eq!(field(&event, "forwarded_for"), "100.64.0.8");
+  }
+
+  #[test]
+  fn a_page_load_without_a_session_validates_with_null_case_source_and_timings() {
+    let mut page_load = base_body("page_load");
+    page_load["newest_message_ms"] = Value::Null;
+    page_load["current_ms"] = Value::Null;
+    page_load["open_case"] = Value::Null;
+    page_load["content_source"] = Value::Null;
+    validate_event(page_load).expect("a page with no session carries nulls");
+  }
+
+  #[test]
+  fn an_unknown_open_case_is_a_literal_error_at_the_field() {
+    let mut page_load = base_body("page_load");
+    page_load["open_case"] = json!("D");
+    let errors = validate_event(page_load).expect_err("D is not an open case");
+    assert_eq!(loc(&errors[0]), ["body", "open_case"]);
+    assert!(matches!(errors[0].kind, Kind::Literal(_)));
+  }
+
+  #[test]
+  fn a_render_blocking_row_without_a_url_is_a_missing_field() {
+    let mut page_load = base_body("page_load");
+    page_load["render_blocking"][0].as_object_mut().expect("a row").remove("url");
+    let errors = validate_event(page_load).expect_err("the row has no url");
+    assert_eq!(errors[0].kind, Kind::Missing);
   }
 
   #[test]

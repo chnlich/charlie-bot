@@ -41,6 +41,18 @@ test('a backend id retired from config renders the raw id', () => {
   assert.equal(model[2], 'claude-fable-sub');
 });
 
+test('an Auto session row shows the Auto label and its current member', () => {
+  const model = modelSpan(row({backend: 'auto', auto_member: 'claude-opus-5'}));
+  assert.equal(model[2], 'Auto → CC · Opus 5');
+  assert.equal(model[3], 'Auto → CC · Opus 5');
+});
+
+test('an Auto row with no recorded member shows the Auto label alone', () => {
+  const model = modelSpan(row({backend: 'auto'}));
+  assert.equal(model[2], 'Auto');
+  assert.equal(model[3], 'Auto');
+});
+
 test('a session without a backend renders no model element', () => {
   assert.equal(modelSpan(row({backend: ''})), null);
   assert.equal(modelSpan(row({})), null);

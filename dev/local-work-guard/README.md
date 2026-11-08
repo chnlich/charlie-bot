@@ -1,10 +1,10 @@
 # Local work guard
 
-The server sets the variables in this table on every agent child process. Each variable points at a script in this
-directory, and a refused run reaches the agent as the refusal text. The server's own environment, the web terminal and
-the one-shot calls carry none of them. The variables are set in `rust/crates/runtime/agents/src/local_work_guard.rs`,
-and the switch is `server.enable_local_work_guard` in `config.yaml`. `refuse.sh` reads the build host from
-`remote_run.host` in `config.yaml` at each refusal, so the refusal names the host that the runner uses.
+When `server.enable_local_work_guard` is true, the server sets the variables in this table on every agent child
+process. Each variable points at a script in this directory, and a refused run reaches the agent as the refusal text.
+The server's own environment, the web terminal and the one-shot calls carry none of them. The variables are set in
+`rust/crates/runtime/agents/src/local_work_guard.rs`. `refuse.sh` reads `remote_run.host` from `config.yaml` at each
+refusal, so its refusal text uses the same value as the runner.
 
 | Toolchain | Variables | Scripts |
 |---|---|---|

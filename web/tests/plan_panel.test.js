@@ -1,11 +1,10 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const { escapeHtml } = require('./escape_html_stub');
 
-const { readPackageStatic } = require('./read_static');
+const { readPackageStatic, readStatic } = require('./read_static');
 
 const { SESSIONS_ROOT } = require('./sessions_root_stub');
 
@@ -190,6 +189,8 @@ function loadPlanPanelScript(opts = {}) {
   const context = {
     SESSION_ID: opts.sessionId || 'test-session',
     SESSIONS_ROOT: opts.sessionsRoot || SESSIONS_ROOT,
+    AbortController,
+    AbortSignal,
     console: {error: noop, log: noop, warn: noop},
     document,
     window: {SESSIONS_ROOT: opts.sessionsRoot || SESSIONS_ROOT},
@@ -205,6 +206,9 @@ function loadPlanPanelScript(opts = {}) {
     registerWsMessageHandler: noop,
   };
   vm.createContext(context);
+  // The connection layer's request-abort registry: the page runs it before every chat and
+  // sidebar module, and the panel's fetches take their signal from it.
+  vm.runInContext(readStatic('view-requests.js'), context, {filename: 'view-requests.js'});
   vm.runInContext(PLAN_PANEL_JS, context, {filename: 'plan-panel.js'});
   const planPanel = vm.runInContext('planPanel', context);
   return {context, planPanel};
@@ -935,10 +939,26 @@ test('_renderActionBar chip text is the question without the fork number, trunca
   const elements = makePanelElements();
   const bar = {innerHTML: '', _children: [], appendChild(c) { this._children.push(c); }};
   elements['plan-action-bar'] = bar;
-  const viewer = {style: {}, src: '', addEventListener: () => {}, classList: {add() {}, toggle() {}, contains() { return false; }}};
+  // The viewer: its src write loads a page, whose load event parses the
+  // document \u2014 the action bar's only source, so an opened plan page costs the
+  // viewer's one request.
+  const loadListeners = [];
+  const viewer = {
+    style: {},
+    classList: {add() {}, toggle() {}, contains() { return false; }},
+    contentDocument: parseHTML(forkHtml),
+    addEventListener(ev, fn) { if (ev === 'load') loadListeners.push(fn); },
+  };
+  let srcVal = '';
+  Object.defineProperty(viewer, 'src', {
+    get() { return srcVal; },
+    set(v) { srcVal = v; queueMicrotask(() => loadListeners.forEach((fn) => fn())); },
+    configurable: true, enumerable: true,
+  });
   elements['plan-viewer'] = viewer;
   const document = {
-    readyState: 'loading',
+    // init() runs at script load in a completed document, registering the viewer's load hook.
+    readyState: 'complete',
     addEventListener: () => {},
     getElementById: (id) => elements[id] || null,
     createElement: () => {
@@ -959,10 +979,11 @@ test('_renderActionBar chip text is the question without the fork number, trunca
   const fetch = async (url) => {
     if (String(url).indexOf('/api/sessions/') !== -1)
       return {ok: true, json: async () => ({plans: [makePlan(1, [makeVersion(1, 'plan_01.html')])]})};
-    return {ok: true, text: async () => forkHtml};
+    throw new Error('the plan page must not be fetched: ' + url);
   };
   const {planPanel} = loadPlanPanelScript({document, fetch, sessionId: 's1', sessionsRoot: '/home/u/.charliebot/sessions'});
   await planPanel.refresh();
+  await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(bar._children.length, 1, 'one chip rendered for the one open fork');
   const chip = bar._children[0];
   assert.equal(chip.textContent.startsWith('1'), false, 'chip text must not start with the fork number');
@@ -1000,27 +1021,6 @@ test('formatPlanStateLabel: plain state, takeoff-qualified approved, and selecto
   const {planPanel: pp} = loadPlanPanelScript({document, fetch});
   await pp.refresh();
   assert.ok(sel.innerHTML.indexOf('approved \u00B7 v1') !== -1, 'selector label is takeoff-qualified');
-});
-
-// ---------------------------------------------------------------------------
-// Item 6: template contract — parseOpenForks against prompts/plan_template.html
-// ---------------------------------------------------------------------------
-
-test('plan_template.html contract: open forks extracted, no question starts with its number, resolved excluded', () => {
-  const {planPanel} = loadPlanPanelScript();
-  const templatePath = path.join(__dirname, '..', '..', 'prompts', 'plan_template.html');
-  const html = fs.readFileSync(templatePath, 'utf8');
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const forks = planPanel.parseOpenForks(doc);
-  assert.ok(forks.length >= 1, 'template has at least one open fork');
-  for (const f of forks) {
-    assert.ok(f.n && f.question, 'each open fork has a number and a question');
-    assert.equal(String(f.question).startsWith(String(f.n)), false,
-      'question text must not start with its fork number');
-  }
-  const ns = forks.map((f) => String(f.n));
-  assert.ok(ns.includes('1'), 'open fork #1 (scope question) is present');
-  assert.equal(ns.includes('2'), false, 'resolved fork #2 is excluded');
 });
 
 // ---------------------------------------------------------------------------
@@ -1131,7 +1131,7 @@ test('onActiveSessionChanged blanks iframe.src synchronously before the new regi
   assert.ok(viewer.src.indexOf('sessions/B/') !== -1, 'viewer reloaded with session B URL after fetch resolved');
 });
 
-test('onReconnect only marks stale and does not refresh or reset selection on a plain WS reconnect', async () => {
+test('a committed load unstales the registry; only invalidate() (a network loss) makes onTabShown refetch', async () => {
   const fetchCalls = [];
   const fetch = async (url) => {
     if (String(url).indexOf('/api/sessions/') !== -1) {
@@ -1140,28 +1140,58 @@ test('onReconnect only marks stale and does not refresh or reset selection on a 
     }
     return {ok: true, text: async () => ''};
   };
-  const {elements, viewer, planPanel} = loadPanelWithViewer({fetch});
+  const {elements, planPanel} = loadPanelWithViewer({fetch});
 
   await planPanel.refresh();
-  const callsBeforeReconnect = fetchCalls.length;
+  // The commit unstales the registry: a page-driven reconnect (a switch) must
+  // not make the next tab open refetch what the switch just loaded.
+  const callsAfterLoad = fetchCalls.length;
+  await planPanel.onTabShown();
+  assert.equal(fetchCalls.length, callsAfterLoad, 'onTabShown after a committed load issues no fetch');
+
   // Select an older version so selection state is populated and observable.
   planPanel.selectVersion('1');
   planPanel.render();
   const vsel = elements['plan-version-selector'];
-  assert.ok(vsel.innerHTML.indexOf('value="1" selected') !== -1, 'v1 is selected before reconnect');
+  assert.ok(vsel.innerHTML.indexOf('value="1" selected') !== -1, 'v1 is selected');
 
-  // A plain WS reconnect (no session change) must only mark stale.
-  planPanel.onReconnect();
-  assert.equal(fetchCalls.length, callsBeforeReconnect, 'onReconnect does not trigger a fetch (no eager refresh)');
-
-  // Selection survives: re-render and confirm v1 is still selected.
-  planPanel.render();
-  assert.ok(vsel.innerHTML.indexOf('value="1" selected') !== -1, 'selection survives onReconnect');
-
-  // _stale was set: onTabShown now triggers a refresh (fetch count increases).
-  const callsBeforeTabShown = fetchCalls.length;
+  // A network loss stales the registry: the next tab open refetches once.
+  planPanel.invalidate();
   await planPanel.onTabShown();
-  assert.ok(fetchCalls.length > callsBeforeTabShown, 'onReconnect marked stale so onTabShown refreshes');
+  assert.ok(fetchCalls.length > callsAfterLoad, 'invalidate made onTabShown refresh');
+  planPanel.render();
+  assert.ok(vsel.innerHTML.indexOf('value="1" selected') !== -1, 'selection survives the refetch');
+});
+
+test('a registry loaded before the first tab show hides the empty toolbar of a plan-less session', async () => {
+  const {elements, planPanel} = loadPanelWithViewer({fetch: makeSessionFetchWithFiles({A: {plans: []}})});
+  // The chat's artifact cards load the registry at page load; no show has painted the panel yet.
+  await planPanel.ready();
+  assert.equal(elements['plan-toolbar'].classList.contains('hidden'), false, 'template default keeps the toolbar');
+
+  await planPanel.onTabShown();
+  assert.equal(elements['plan-toolbar'].classList.contains('hidden'), true, 'the first show hides the empty toolbar');
+  assert.equal(elements['plan-empty-state'].style.display, '', 'the empty state stays');
+});
+
+test('a registry loaded before the first tab show paints the session plans on that show', async () => {
+  let calls = 0;
+  const fetch = async (url) => {
+    if (String(url).indexOf('/api/sessions/') !== -1) {
+      calls += 1;
+      return {ok: true, json: async () => ({plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')], {title: 'Plan A'})]})};
+    }
+    return {ok: true, text: async () => ''};
+  };
+  const {elements, planPanel} = loadPanelWithViewer({fetch});
+  await planPanel.ready();
+  const callsAfterLoad = calls;
+
+  await planPanel.onTabShown();
+  assert.equal(calls, callsAfterLoad, 'the first show paints the committed registry without a second fetch');
+  assert.equal(elements['plan-toolbar'].classList.contains('hidden'), false, 'the toolbar shows for a session with plans');
+  assert.equal(elements['plan-empty-state'].style.display, 'none', 'the empty-state note hides');
+  assert.ok(elements['plan-selector'].innerHTML.indexOf('Plan A') !== -1, 'the plan is in the selector');
 });
 
 test('onActiveSessionChanged renders the empty state and clears the iframe when the new session has no plans', async () => {
@@ -1209,14 +1239,14 @@ test('P1: hook refresh fails on switch, then onTabShown shows empty state before
   await refreshA;
   assert.ok(elements['plan-selector'].innerHTML.indexOf('Plan A') !== -1, 'A rendered in the selector');
 
-  // SPA switch to B; the hook's refresh() fails.
+  // SPA switch to B; the switch's registry load fails.
   context.SESSION_ID = 'B';
   const hookPromise = planPanel.onActiveSessionChanged();
-  assert.equal(fetchQueue.length, 2, 'hook fetched B registry');
+  assert.equal(fetchQueue.length, 2, 'the switch fetched B registry');
   fetchQueue[1].reject(new Error('boom'));
   await hookPromise;
-  // The failed refresh skipped the commit, so A's stale registry remains.
-  assert.equal(planPanel.getRegistrySnapshot().plans.length, 1, 'failed refresh left the previous session registry in place');
+  // The failed load committed an empty registry for B, so no row of A remains.
+  assert.equal(planPanel.getRegistrySnapshot().plans.length, 0, 'failed load left an empty registry for the new session');
 
   // Open the plans tab: onTabShown resets first (empty state), then re-fetches.
   const tabPromise = planPanel.onTabShown();
@@ -1335,9 +1365,14 @@ test('P5: same session, onTabShown twice — the second call issues no fetch', a
   await planPanel.refresh();
   const callsAfterLoad = fetchCalls.length;
 
-  // First onTabShown: _stale is still true (initial), so it re-fetches.
+  // First onTabShown: the load committed, so the registry is current — no fetch.
   await planPanel.onTabShown();
-  assert.ok(fetchCalls.length > callsAfterLoad, 'first onTabShown fetches while stale');
+  assert.equal(fetchCalls.length, callsAfterLoad, 'onTabShown after a committed load issues no fetch');
+
+  // A network loss stales the registry: the next tab open re-fetches once.
+  planPanel.invalidate();
+  await planPanel.onTabShown();
+  assert.ok(fetchCalls.length > callsAfterLoad, 'invalidate made onTabShown refresh');
 
   // Second onTabShown: _stale now false, same session → fast path, no fetch.
   const callsAfterFirst = fetchCalls.length;

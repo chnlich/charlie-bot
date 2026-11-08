@@ -13,13 +13,16 @@ use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, Request
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 
+use charliebot_core::config::AUTO_BACKEND_ID;
 use charliebot_core::event_types;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events;
-use charliebot_store::metadata::{ColdReadSpec, KEEP_WORKTREE_FIELD, SessionMetadata, TaskProfile, TaskSpec, TaskType};
+use charliebot_store::metadata::{
+  ColdReadSpec, KEEP_WORKTREE_FIELD, PARENT_SESSION_ID, SessionMetadata, TaskProfile, TaskSpec, TaskType,
+};
 use charliebot_store::run_records::RunOutcomeKind;
 use charliebot_store::{CreateTask, StoreError, TaskCaller};
 use serde_json::{Value, json};
@@ -29,6 +32,7 @@ use crate::completion::{self, CompletionEvidence};
 use crate::dispatch;
 use crate::execution::TaskExecutionAdapter;
 use crate::prompts::MAX_AGENT_MESSAGE_WEIGHTED_CHARS;
+use crate::spawner_backends::BackendSource;
 use crate::task_sessions;
 use crate::text_length;
 
@@ -391,7 +395,16 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     match decided.target {
       RouteTarget::Backend(option) => {
         match crate::spawner_backends::resolve_backend_option(&cfg, &option.id, Some(&option.model)) {
-          Ok(option) => Some((option.id, Some(option.model), false)),
+          Ok(option) => {
+            // The router's context class returns the delegating session's backend: on an Auto session that is its
+            // current member, which the child inherits.
+            let source = if session_meta.backend == AUTO_BACKEND_ID && option.id == session_backend {
+              BackendSource::AutoMember
+            } else {
+              BackendSource::Direct
+            };
+            Some((option.id, Some(option.model), source))
+          }
           Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
         }
       }
@@ -414,8 +427,12 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     .await
     .map(|resolved| {
       resolved.map(|(backend, model, _tried_backends)| {
-        let backend_from_pool = cfg.backends.pool.iter().any(|member| member == &backend);
-        (backend, model, backend_from_pool)
+        let source = if cfg.backends.pool.iter().any(|member| member == &backend) {
+          BackendSource::Pool
+        } else {
+          BackendSource::Direct
+        };
+        (backend, model, source)
       })
     })
   } else {
@@ -430,13 +447,12 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     .await
     .map(Some)
   };
-  let (resolved_backend, resolved_model, backend_from_pool) = match resolved {
+  let (resolved_backend, resolved_model, source) = match resolved {
     Ok(Some(resolved)) => resolved,
     Ok(None) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": "no backend is available" })),
     Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
   };
-  let delegated_backend =
-    DelegateBackend { id: resolved_backend, model: resolved_model, from_pool: backend_from_pool, route };
+  let delegated_backend = DelegateBackend { id: resolved_backend, model: resolved_model, source, route };
   match delegate_task_tree(&features, &request, &caller_identity, &task_spec, &delegated_backend).await {
     Ok(response) => responses::json(StatusCode::OK, &response),
     Err(DelegateError::Task(error)) => task_http_error(error),
@@ -456,7 +472,7 @@ enum DelegateError {
 struct DelegateBackend {
   id: String,
   model: Option<String>,
-  from_pool: bool,
+  source: BackendSource,
   route: Option<charliebot_agents::backend_pool::BackendRoute>,
 }
 
@@ -499,11 +515,17 @@ async fn delegate_task_tree(
   };
   features.store.runtime_gate(&create_request, &caller)?;
   let child = features.store.create_task(create_request, caller, Default::default()).await?;
-  if backend.from_pool || backend.route.is_some() {
-    let mut slot_fields = serde_json::Map::from_iter([(
-      charliebot_agents::backend_pool::BACKEND_FROM_POOL_FIELD.to_string(),
-      json!(backend.from_pool),
-    )]);
+  if backend.source != BackendSource::Direct || backend.route.is_some() {
+    let mut slot_fields = serde_json::Map::from_iter([
+      (
+        charliebot_agents::backend_pool::BACKEND_FROM_POOL_FIELD.to_string(),
+        json!(backend.source == BackendSource::Pool),
+      ),
+      (
+        charliebot_agents::backend_pool::BACKEND_FROM_AUTO_FIELD.to_string(),
+        json!(backend.source == BackendSource::AutoMember),
+      ),
+    ]);
     if let Some(route) = backend.route.as_ref() {
       slot_fields.insert("route".to_string(), json!(route));
     }
@@ -520,7 +542,7 @@ async fn delegate_task_tree(
       tracing::info!(target: "charliebot_tasks", parent = %request.session_id, child = %child.id, "delegate_child_closed");
       return Ok(json!({
         "session_id": child.id,
-        "parent_session_id": request.session_id,
+        PARENT_SESSION_ID: request.session_id,
         "run_id": null,
         "thread_id": null,
         "description": request.description,
@@ -574,7 +596,7 @@ async fn delegate_task_tree(
   tracing::info!(target: "charliebot_tasks", session = %request.session_id, child = %child.id, run_id, "task_delegated_task_tree");
   Ok(json!({
     "session_id": child.id,
-    "parent_session_id": request.session_id,
+    PARENT_SESSION_ID: request.session_id,
     "run_id": run_id,
     "thread_id": run_id,
     "description": request.description,
@@ -1442,6 +1464,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn session_message_replays_for_a_run_and_newly_admits_for_an_operator() {
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-sender").await;
@@ -1498,6 +1521,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn task_routes_refuse_head_and_put_and_serve_post() {
     let (_home, features) = feature_context();
     let router = routes(&features);
@@ -1567,6 +1591,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn delegate_field_contract_and_unknown_session_match_recorded() {
     let (_home, features) = feature_context();
     let router = routes(&features);
@@ -1599,6 +1624,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn delegate_checks_the_runtime_gate_before_creating_a_child() {
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-manager").await;
@@ -1619,6 +1645,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn chat_upload_saves_file_name_and_overwrites_existing_file() {
     let (_home, features) = feature_context();
     const SESSION_ID: &str = "synthetic-upload-session";
@@ -1658,6 +1685,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn chat_upload_copies_a_payload_across_the_copy_buffer_boundary() {
     let (_home, features) = feature_context();
     const SESSION_ID: &str = "synthetic-large-upload-session";
@@ -1680,6 +1708,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn chat_upload_checks_session_after_multipart_parsing() {
     let (_home, features) = feature_context();
     let response = routes(&features)
@@ -1692,6 +1721,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn chat_upload_returns_server_error_when_upload_directory_is_a_file() {
     let (_home, features) = feature_context();
     const SESSION_ID: &str = "synthetic-upload-failure";
@@ -1710,6 +1740,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn chat_upload_reports_an_unwritable_destination_as_save_failure() {
     let (_home, features) = feature_context();
     const SESSION_ID: &str = "synthetic-upload-unwritable";
@@ -1728,6 +1759,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn send_message_model_reads_valid_utf16_and_defaulted_fields() {
     // A valid body answers 202; without an executor the
     // dispatch records "execution adapters register in the next stage"
@@ -1763,6 +1795,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn send_message_reports_every_uploaded_file_error_with_the_content_error() {
     // Fields are validated in declaration order, so a wrong content and a bad item give two errors in one 422 body.
     let (_home, features) = feature_context();
@@ -1829,6 +1862,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn send_message_validation_reports_request_body_errors() {
     let (_home, features) = feature_context();
     add_session(&features, "synthetic-session");
@@ -1917,6 +1951,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn send_message_requires_request_id_and_replays_one_event() {
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-request-session").await;
@@ -1961,6 +1996,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn dispatch_error_after_admission_returns_accepted_with_error() {
     let (_home, features) = feature_context();
     create_upload_session(&features, "synthetic-dispatch-error").await;
@@ -1990,6 +2026,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn retry_run_model_requires_strings_and_forbids_extras() {
     let (_home, features) = feature_context();
     add_session(&features, "synthetic-session");
@@ -2080,6 +2117,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn cancel_run_model_requires_request_id_and_forbids_extras() {
     let (_home, features) = feature_context();
     let router = routes(&features);

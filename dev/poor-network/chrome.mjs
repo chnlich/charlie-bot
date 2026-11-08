@@ -38,13 +38,13 @@ const CHROME_FLAGS = [
   '--disable-features=Translate,OptimizationHints,MediaRouter,AutofillServerCommunication,CertificateTransparencyComponentUpdater',
   // The loopback bypass would send the bench's own host past the proxy, so it is cleared.
   '--proxy-bypass-list=<-loopback>',
-  '--ignore-certificate-errors',
   '--window-size=1440,900',
 ];
 
 // The DevTools protocol over the pipe: one JSON message per NUL-terminated frame in each direction.
-class CdpConnection {
+export class CdpConnection {
   #writable;
+  #readable;
   #nextId = 1;
   #pending = new Map();
   #listeners = new Set();
@@ -52,6 +52,7 @@ class CdpConnection {
 
   constructor(writable, readable) {
     this.#writable = writable;
+    this.#readable = readable;
     readable.setEncoding('utf8');
     readable.on('data', (chunk) => this.#onData(chunk));
   }
@@ -93,6 +94,18 @@ class CdpConnection {
   onMessage(listener) {
     this.#listeners.add(listener);
   }
+
+  // Destroys both pipe streams and fails every pending call. After the group kill a Chrome descendant that escaped it
+  // (a crashpad handler) can hold the pipe's far end, so the streams never see EOF and the bench's process would never
+  // drain; destroying them drops the handles.
+  close() {
+    for (const waiter of this.#pending.values()) {
+      waiter.reject(new Error(`${waiter.method}: the browser's DevTools pipe was closed`));
+    }
+    this.#pending.clear();
+    this.#writable.destroy();
+    this.#readable.destroy();
+  }
 }
 
 // A page target: its session id and the DevTools calls the bench makes on it.
@@ -120,11 +133,13 @@ export class Browser {
   #child;
   #cdp;
   #exited;
+  #logFd;
 
-  constructor(child, cdp, exited) {
+  constructor(child, cdp, exited, logFd) {
     this.#child = child;
     this.#cdp = cdp;
     this.#exited = exited;
+    this.#logFd = logFd;
   }
 
   // Opens a page target. Its network and page events go to the listener that the page's owner registers.
@@ -149,6 +164,15 @@ export class Browser {
 
   send(method, params = {}) {
     return this.#cdp.send(method, params);
+  }
+
+  // Asks Chrome to shut down, so it writes its profile (localStorage and the HTTP cache) to disk, and waits for the exit.
+  // A Chrome that does not answer in time is stopped by close().
+  async shutdown() {
+    const answer = this.#cdp.send('Browser.close').catch(() => {});
+    await Promise.race([answer, new Promise((resolve) => setTimeout(resolve, 5000))]);
+    await Promise.race([this.#exited, new Promise((resolve) => setTimeout(resolve, 10000))]);
+    await this.close();
   }
 
   // Stops Chrome and every process in its group. The bench calls it on every path, including a failed run.
@@ -181,25 +205,46 @@ export class Browser {
         throw error;
       }
     }
+    // The dead browser can still answer nothing, so the pipe's pending calls fail and its handles go.
+    this.#cdp.close();
+    fs.closeSync(this.#logFd);
   }
 }
 
 // Starts Chrome with its proxy setting and returns once its DevTools pipe answers.
-export async function launchBrowser({ binary, proxyPort, userDataDir, logPath }) {
+//
+// `trustedSpki` is the base64 SHA-256 of the TLS front's public key. Chrome trusts that key as a person's browser
+// trusts the Serve certificate: the certificate verifies with no error, so the HTTP cache stores the JSON answers and
+// the page revalidates them with If-None-Match. Chrome stores no response that came over a certificate error, so
+// --ignore-certificate-errors would leave every revalidating request a full 200. The allowlist needs --user-data-dir.
+export async function launchBrowser({ binary, proxyPort, userDataDir, logPath, trustedSpki }) {
   fs.mkdirSync(userDataDir, { recursive: true });
   const log = fs.openSync(logPath, 'a');
   const args = [
     ...CHROME_FLAGS,
     `--user-data-dir=${userDataDir}`,
+    `--ignore-certificate-errors-spki-list=${trustedSpki}`,
     `--proxy-server=http://127.0.0.1:${proxyPort}`,
     '--remote-debugging-pipe',
     'about:blank',
   ];
+  // Chrome's process-singleton socket lives under TMPDIR, and a sockaddr_un path is short. The trial points TMPDIR
+  // into its tree, whose path grows with the caller's scratch; the caller's own TMPDIR is short and writable, so
+  // run.sh passes it back here and Chrome keeps that socket under the limit.
+  const env = { ...process.env };
+  if (process.env.POOR_NETWORK_CHROME_TMPDIR) {
+    env.TMPDIR = process.env.POOR_NETWORK_CHROME_TMPDIR;
+  }
   const child = spawn(binary, args, {
     detached: true,
+    env,
     stdio: ['ignore', log, log, 'pipe', 'pipe'],
   });
-  const exited = new Promise((resolve) => child.once('exit', resolve));
+  // A spawn failure emits 'error' without 'exit', and close() waits on this promise on every path.
+  const exited = new Promise((resolve) => {
+    child.once('exit', resolve);
+    child.once('error', resolve);
+  });
   const failed = new Promise((_, reject) => {
     child.once('error', reject);
     child.once('exit', (code, signal) => reject(new Error(`Chrome exited (${code ?? signal}) before its DevTools pipe answered`)));
@@ -207,8 +252,15 @@ export async function launchBrowser({ binary, proxyPort, userDataDir, logPath })
   // The race below handles a launch failure; an exit after launch is handled by Browser.close, not by this promise.
   failed.catch(() => {});
   const cdp = new CdpConnection(child.stdio[3], child.stdio[4]);
-  const browser = new Browser(child, cdp, exited);
-  const { product } = await Promise.race([browser.send('Browser.getVersion'), failed]);
+  const browser = new Browser(child, cdp, exited, log);
+  let product;
+  try {
+    ({ product } = await Promise.race([browser.send('Browser.getVersion'), failed]));
+  } catch (caught) {
+    // A failed launch must not leave the detached child, its pipe or its log fd behind.
+    await browser.close();
+    throw caught;
+  }
   browser.version = product;
   return browser;
 }

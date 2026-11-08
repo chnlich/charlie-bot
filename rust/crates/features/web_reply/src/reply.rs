@@ -561,6 +561,22 @@ mod tests {
       .collect()
   }
 
+  fn seed_web_session(home: &Home, session_id: &str, events: &[Value]) {
+    let metadata = SessionMetadata::new(session_id, "Synthetic web session", TaskProfile::Manager);
+    let metadata_path = home.features.store.metadata_path(session_id);
+    fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
+    fs::write(&metadata_path, metadata.to_json_string(&home.features.registry.metadata_slots(), true)).unwrap();
+
+    let events_path = home.features.store.chat_events_path(session_id);
+    fs::create_dir_all(events_path.parent().unwrap()).unwrap();
+    let mut lines = String::new();
+    for event in events {
+      lines.push_str(&event.to_string());
+      lines.push('\n');
+    }
+    fs::write(events_path, lines).unwrap();
+  }
+
   async fn sidebar_frames(subscription: &mut Subscription) -> Vec<Value> {
     let mut frames = Vec::new();
     while let Ok(Some(frame)) = tokio::time::timeout(Duration::from_millis(1), subscription.recv()).await {
@@ -786,14 +802,13 @@ mod tests {
 
   #[tokio::test]
   async fn the_budget_flags_an_over_budget_reply_and_the_reply_still_posts() {
-    for (chars, over_budget) in [(500, false), (501, true)] {
-      let home = Home::new();
-      let sid = home.manager("session", None).await;
-
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    for (index, (chars, over_budget)) in [(500, false), (501, true)].into_iter().enumerate() {
       let readback = post_web_reply(&home.features, &sid, &"x".repeat(chars), None).await.expect("the reply posts");
 
       assert_eq!(readback, json!({"posted": true, "chars": chars, "over_budget": over_budget, "answers": []}));
-      assert_eq!(replies(&home, &sid).len(), 1);
+      assert_eq!(replies(&home, &sid).len(), index + 1);
     }
   }
 
@@ -829,18 +844,19 @@ mod tests {
 
   #[tokio::test]
   async fn a_reply_in_a_nudge_turn_answers_the_user_message_the_nudge_asks_about() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let user = home.append(&sid, user_event("the question")).await;
-    let nudge = home
-      .append(
-        &sid,
-        json!({"type": AGENT_MESSAGE, "content": nudge_text(id_of(&user)), WEB_REPLY: {"nudge_of": id_of(&user)}}),
-      )
-      .await;
+    let home = Home::reply_only();
+    let sid = "session";
+    let user = user_event_with_id("question-1", "the question");
+    let nudge = json!({
+      "id": "nudge-1",
+      "type": AGENT_MESSAGE,
+      "content": nudge_text(id_of(&user)),
+      WEB_REPLY: {"nudge_of": id_of(&user)}
+    });
+    seed_web_session(&home, sid, &[user.clone(), nudge.clone()]);
     home.set_running(&[id_of(&nudge)]);
 
-    let readback = post_web_reply(&home.features, &sid, "the answer", None).await.expect("the reply posts");
+    let readback = post_web_reply(&home.features, sid, "the answer", None).await.expect("the reply posts");
 
     assert_eq!(readback["answers"], json!([id_of(&user)]));
   }
@@ -970,21 +986,19 @@ mod tests {
 
   #[tokio::test]
   async fn a_nudge_turn_with_two_nudges_names_both_user_messages_as_candidates() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let first = home.append(&sid, user_event_with_id("11111111-a", "first question")).await;
-    let second = home.append(&sid, user_event_with_id("22222222-b", "second question")).await;
-    let mut nudges = Vec::new();
-    for user in [&first, &second] {
-      let nudge =
-        json!({"type": AGENT_MESSAGE, "content": nudge_text(id_of(user)), WEB_REPLY: {"nudge_of": id_of(user)}});
-      nudges.push(home.append(&sid, nudge).await);
-    }
+    let home = Home::reply_only();
+    let sid = "session";
+    let first = user_event_with_id("11111111-a", "first question");
+    let second = user_event_with_id("22222222-b", "second question");
+    let nudges = [
+      json!({"id": "nudge-1", "type": AGENT_MESSAGE, "content": nudge_text(id_of(&first)), WEB_REPLY: {"nudge_of": id_of(&first)}}),
+      json!({"id": "nudge-2", "type": AGENT_MESSAGE, "content": nudge_text(id_of(&second)), WEB_REPLY: {"nudge_of": id_of(&second)}}),
+    ];
+    seed_web_session(&home, sid, &[first, second, nudges[0].clone(), nudges[1].clone()]);
     home.set_running(&[id_of(&nudges[0]), id_of(&nudges[1])]);
 
-    refusal_detail(post_web_reply_with_request_id(&home.features, &sid, "the answer", &[], None, None).await);
     let tags = ["11111111".to_string(), "22222222".to_string()];
-    let readback = post_web_reply_with_request_id(&home.features, &sid, "the answer", &tags, None, None)
+    let readback = post_web_reply_with_request_id(&home.features, sid, "the answer", &tags, None, None)
       .await
       .expect("the reply posts");
 
@@ -1105,11 +1119,14 @@ mod tests {
   );
   const ENGLISH_REPLY: &str = "I will hold the merge until the review is done.";
 
-  /// A Chinese reply whose fenced block holds twenty code names, which the language check does not count.
-  fn code_heavy_reply() -> String {
-    let names = vec!["ChatPanelStatusToggle"; 20].join(" ");
-    format!("改好了，入口在下面：\n\n```\n{names}\n```\n测试全部通过。")
-  }
+  const CODE_HEAVY_REPLY: &str = concat!(
+    "改好了，入口在下面：\n\n```\n",
+    "ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ",
+    "ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle\n",
+    "ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ",
+    "ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle ChatPanelStatusToggle\n",
+    "```\n测试全部通过。"
+  );
 
   #[tokio::test]
   async fn an_english_reply_after_a_chinese_message_is_held_and_records_nothing() {
@@ -1162,44 +1179,33 @@ mod tests {
     }
   }
 
-  #[tokio::test]
-  async fn an_english_reply_after_a_chinese_message_with_english_inside_it_is_held() {
+  #[test]
+  fn english_terms_inside_chinese_user_messages_still_trigger_the_language_hold() {
     for message in [MANY_TERMS_MESSAGE, ARTIFACT_COMMENT_MESSAGE] {
-      let home = Home::new();
-      let sid = home.manager("session", None).await;
-      running_user_message(&home, &sid, user_message(message)).await;
-
-      let (status, response) = post_reply(&home, &sid, ENGLISH_REPLY, None).await;
-
-      assert_eq!(status, StatusCode::CONFLICT, "message {message:?}");
-      assert_eq!(response["detail"], json!(LANGUAGE_HOLD_DETAIL), "message {message:?}");
+      assert!(language_check_holds(Some(message), ENGLISH_REPLY).unwrap(), "message {message:?}");
     }
   }
 
   #[tokio::test]
   async fn an_english_reply_after_an_english_message_posts_even_after_a_chinese_one() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    home.append(&sid, user_message(CHINESE_MESSAGE)).await;
-    let english = home.append(&sid, user_message("Please rerun the suite and report the failures.")).await;
-    home.set_running(&[id_of(&english)]);
+    let home = Home::reply_only();
+    let sid = "session";
+    let mut chinese = user_message(CHINESE_MESSAGE);
+    chinese["id"] = json!("chinese");
+    let mut english = user_message("Please rerun the suite and report the failures.");
+    english["id"] = json!("english");
+    seed_web_session(&home, sid, &[chinese, english]);
+    home.set_running(&["english"]);
 
-    let (status, readback) = post_reply(&home, &sid, ENGLISH_REPLY, None).await;
+    let (status, readback) = post_reply(&home, sid, ENGLISH_REPLY, None).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(readback["posted"], json!(true));
   }
 
-  #[tokio::test]
-  async fn a_chinese_reply_with_many_code_names_posts() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    running_user_message(&home, &sid, user_message(CHINESE_MESSAGE)).await;
-
-    let (status, readback) = post_reply(&home, &sid, &code_heavy_reply(), None).await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(readback["posted"], json!(true));
+  #[test]
+  fn fenced_code_with_many_names_does_not_trigger_the_language_hold() {
+    assert!(!language_check_holds(Some(CHINESE_MESSAGE), CODE_HEAVY_REPLY).unwrap());
   }
 
   #[tokio::test]
@@ -1234,29 +1240,40 @@ mod tests {
 
   #[tokio::test]
   async fn a_path_after_nonword_alphanumerics_is_removed() {
-    for marker in ["ⓐ", "\u{0345}"] {
-      let home = Home::new();
-      let sid = home.manager("session", None).await;
-      running_user_message(&home, &sid, user_message(CHINESE_MESSAGE)).await;
-      let reply = format!("好。{marker}/ChatPanelStatusToggleWithLongName");
+    let home = Home::reply_only();
+    let sid = "session";
+    let user = user_message(CHINESE_MESSAGE);
+    let mut user = user;
+    user["id"] = json!("path-user");
+    seed_web_session(&home, sid, &[user]);
+    home.set_running(&["path-user"]);
+    let reply = "好。ⓐ/ChatPanelStatusToggleWithLongName";
 
-      let (status, _) = post_reply(&home, &sid, &reply, None).await;
+    let (status, _) = post_reply(&home, sid, reply, None).await;
 
-      assert_eq!(status, StatusCode::OK, "reply {reply:?}");
-    }
+    assert_eq!(status, StatusCode::OK, "reply {reply:?}");
   }
 
+  /// The route runs in-process and its file access stays in this test's TempDir-backed Home.
+  /// With no other process or network in the call chain, plan 1 v5 classifies this as a unit test.
   #[tokio::test]
   async fn a_nonword_alphanumeric_stops_a_path_run() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    running_user_message(&home, &sid, user_message(CHINESE_MESSAGE)).await;
+    let reply = "好。/ⓐChatPanelStatusToggleWithLongName";
+
+    let (status, _) = post_reply(&home, &sid, reply, None).await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "reply {reply:?}");
+  }
+
+  #[test]
+  fn a_nonword_alphanumeric_stops_a_path_run_in_the_language_check() {
     for marker in ["ⓐ", "\u{0345}"] {
-      let home = Home::new();
-      let sid = home.manager("session", None).await;
-      running_user_message(&home, &sid, user_message(CHINESE_MESSAGE)).await;
       let reply = format!("好。/{marker}ChatPanelStatusToggleWithLongName");
 
-      let (status, _) = post_reply(&home, &sid, &reply, None).await;
-
-      assert_eq!(status, StatusCode::CONFLICT, "reply {reply:?}");
+      assert!(language_check_holds(Some(CHINESE_MESSAGE), &reply).unwrap(), "reply {reply:?}");
     }
   }
 }

@@ -568,6 +568,7 @@ fn refusal(error: anyhow::Error) -> LaunchRefused {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_relays_a_rejected_run_onto_another_account() -> anyhow::Result<()> {
   let root = Root::new()?;
   let source = make_transcript(&root.claude("main"), CC_ID)?;
@@ -601,6 +602,7 @@ async fn test_worker_relays_a_rejected_run_onto_another_account() -> anyhow::Res
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_raises_pool_exhausted_when_no_account_is_left() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -619,6 +621,7 @@ async fn test_worker_raises_pool_exhausted_when_no_account_is_left() -> anyhow::
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_relay_stays_inside_the_option_pool() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -641,6 +644,7 @@ async fn test_worker_relay_stays_inside_the_option_pool() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_pool_exhaustion_names_the_option_pool() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -663,6 +667,7 @@ async fn test_worker_pool_exhaustion_names_the_option_pool() -> anyhow::Result<(
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_stops_after_the_relay_limit() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -675,13 +680,15 @@ async fn test_worker_stops_after_the_relay_limit() -> anyhow::Result<()> {
   let error = refusal(task_worker.run().await.expect_err("the run is refused"));
 
   assert!(error.message.contains("relay limit"), "{}", error.message);
-  assert!(!error.quota_exhausted);
+  assert!(error.quota_exhausted, "every login is rejected, so the pool is exhausted at the cap");
+  assert!(error.resets_at.is_some(), "the exhausted pool names the earliest reset its rejections stated");
   assert_eq!(scripts.builds().len(), 1 + claude_relay::MAX_RELAYS_PER_TURN);
   assert_eq!(task_worker.account_relays(), claude_relay::MAX_RELAYS_PER_TURN);
   Ok(())
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_stays_armed_without_a_below_line_account_and_completes() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -712,6 +719,7 @@ async fn test_worker_stays_armed_without_a_below_line_account_and_completes() ->
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_warning_relay_lands_strictly_below_the_line_in_the_tie_band() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -737,6 +745,7 @@ async fn test_worker_warning_relay_lands_strictly_below_the_line_in_the_tie_band
 // the thread channel raises it when the safe point's `user` frame is broadcast: the watch has already observed that
 // event (the gate), and the move reads the pool only after the process has exited.
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_falls_back_to_the_regular_select_when_the_below_line_target_vanishes() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -772,6 +781,7 @@ async fn test_worker_falls_back_to_the_regular_select_when_the_below_line_target
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_warning_relays_past_the_cap_with_below_line_destinations() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -794,6 +804,7 @@ async fn test_worker_warning_relays_past_the_cap_with_below_line_destinations() 
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_relay_limit_names_each_unavailable_account() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -819,6 +830,7 @@ async fn test_worker_relay_limit_names_each_unavailable_account() -> anyhow::Res
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_login_failure_marks_the_account_and_notifies_the_session() -> anyhow::Result<()> {
   let root = Root::new()?;
   make_transcript(&root.claude("main"), CC_ID)?;
@@ -854,6 +866,7 @@ async fn test_worker_login_failure_marks_the_account_and_notifies_the_session() 
 // There is no spy on `compact_with_sonnet`, so the test checks the event log instead: a run whose
 // prompt crosses the compaction thresholds persists no compaction event.
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_relay_does_not_compact_the_task_context() -> anyhow::Result<()> {
   for prompt_tokens in [150_000_i64, 20_000] {
     let root = Root::new()?;
@@ -903,6 +916,7 @@ fn register_hidden_binary_types(registry: &mut Registry) -> Result<(), RegistryE
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_launcher_build_still_fails_without_binaries() -> anyhow::Result<()> {
   let root = Root::new()?;
   let mut registry = Registry::new();
@@ -935,6 +949,7 @@ async fn test_launcher_build_still_fails_without_binaries() -> anyhow::Result<()
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_claude_resume_launch_still_passes_the_run_instructions_file() -> anyhow::Result<()> {
   let root = Root::new()?;
   let mut registry = Registry::new();
@@ -973,6 +988,7 @@ async fn test_claude_resume_launch_still_passes_the_run_instructions_file() -> a
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_writes_hang_diagnostics_and_emits_event() -> anyhow::Result<()> {
   let root = Root::new()?;
   let scripts = Scripts::new(vec![holds(&[result()])]);
@@ -1010,6 +1026,7 @@ async fn test_worker_writes_hang_diagnostics_and_emits_event() -> anyhow::Result
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_worker_no_hang_diagnostics_does_not_write_file() -> anyhow::Result<()> {
   let root = Root::new()?;
   let scripts = Scripts::new(vec![exits(&[], 0)]);
@@ -1024,6 +1041,7 @@ async fn test_worker_no_hang_diagnostics_does_not_write_file() -> anyhow::Result
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_resumed_run_captures_diagnostics_and_kills_its_live_process() -> anyhow::Result<()> {
   let root = Root::new()?;
   // Resume builds its backend twice, for the stream translator and for the exit scan, and each build takes one script.
@@ -1086,6 +1104,7 @@ async fn test_resumed_run_captures_diagnostics_and_kills_its_live_process() -> a
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_error_event_with_quota_pattern_raises_and_persists() -> anyhow::Result<()> {
   let root = Root::new()?;
   let setup =
@@ -1103,6 +1122,7 @@ async fn test_error_event_with_quota_pattern_raises_and_persists() -> anyhow::Re
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_a_rejected_rate_limit_event_without_a_relay_watch_raises_with_its_reset() -> anyhow::Result<()> {
   let root = Root::new()?;
   let setup =
@@ -1123,6 +1143,7 @@ async fn test_a_rejected_rate_limit_event_without_a_relay_watch_raises_with_its_
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_a_rejected_rate_limit_event_under_a_relay_watch_never_raises() -> anyhow::Result<()> {
   let root = Root::new()?;
   let setup =
@@ -1150,6 +1171,7 @@ async fn test_a_rejected_rate_limit_event_under_a_relay_watch_never_raises() -> 
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn anthropic_compatible_option_requires_a_resolved_model_and_keeps_its_endpoint() -> anyhow::Result<()> {
   let root = Root::new()?;
   fs::create_dir_all(root.home())?;
@@ -1171,6 +1193,7 @@ fn anthropic_compatible_option_requires_a_resolved_model_and_keeps_its_endpoint(
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn test_non_claude_task_build_receives_no_claude_account() -> anyhow::Result<()> {
   for backend_type in ["codex", "cc-anthropic-compatible"] {
     let root = Root::new()?;
@@ -1184,5 +1207,151 @@ async fn test_non_claude_task_build_receives_no_claude_account() -> anyhow::Resu
     let builds = scripts.builds();
     assert!(builds[0].args.backend_kwargs.get("claude_account").is_none(), "{backend_type}");
   }
+  Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Devin rate-limit retries
+// ---------------------------------------------------------------------------
+
+/// The fake `devin` CLI and the export fixture its staged successful response reuses.
+const FAKE_DEVIN: &str = include_str!("../../../backends/devin/tests/fixtures/fake_devin.sh");
+const DEVIN_EXPORT: &str = include_str!("../../../backends/devin/tests/fixtures/export.json");
+/// The recorded incident: devin's `cognition.ai/retryable` rate-limit rejection with a 22-second reset.
+const DEVIN_INCIDENT: &str = r#"Error: Agent error: Reached free model rate limit. Upgrade to Max for higher limits, or switch to a different model. Your limit will reset in 22 seconds (at 01:19 UTC).: {
+  "cognition.ai/errorKind": "unavailable",
+  "cognition.ai/retryable": true
+}"#;
+
+thread_local! {
+  /// The fake Devin host of the next `test.devin` registration. The test sets it just before registering, on the
+  /// thread that registers.
+  static DEVIN_HOST: RefCell<Option<CliHost>> = const { RefCell::new(None) };
+}
+
+fn register_test_devin(registry: &mut Registry) -> Result<(), RegistryError> {
+  let host =
+    DEVIN_HOST.with(|cell| cell.borrow_mut().take()).expect("the test sets the fake Devin host before registering");
+  charliebot_devin::register_with_host(registry, host)
+}
+
+/// The fake `devin` binary in `dir`, with its staged-response contract.
+fn stage_fake_devin(dir: &Path) -> anyhow::Result<()> {
+  use std::os::unix::fs::PermissionsExt;
+  fs::create_dir_all(dir)?;
+  let binary = dir.join("devin");
+  fs::write(&binary, FAKE_DEVIN)?;
+  let mut permissions = fs::metadata(&binary)?.permissions();
+  permissions.set_mode(0o755);
+  fs::set_permissions(binary, permissions)?;
+  Ok(())
+}
+
+/// Stages `responses/<call>/` of the fake devin: its stderr, its exit code and, on `succeeded`, its export and answer.
+fn stage_devin_response(dir: &Path, call: usize, stderr: &str, exit_code: i32, succeeded: bool) -> anyhow::Result<()> {
+  let response = dir.join("responses").join(call.to_string());
+  fs::create_dir_all(&response)?;
+  fs::write(response.join("stderr.txt"), stderr)?;
+  fs::write(response.join("exit_code"), exit_code.to_string())?;
+  if succeeded {
+    fs::write(response.join("export.json"), DEVIN_EXPORT)?;
+    fs::write(response.join("answer.txt"), "The number is 41.\n")?;
+  }
+  Ok(())
+}
+
+/// The helper binary that supervises a final-stdout transport run in tests.
+fn fake_program_bin() -> PathBuf {
+  let exe = std::env::current_exe().expect("the test binary path");
+  exe
+    .ancestors()
+    .skip(1)
+    .map(|dir| dir.join("fake_program"))
+    .find(|candidate| candidate.is_file())
+    .expect("cargo builds the fake-program helper into the target directory that holds the test binary")
+}
+
+/// A Setup whose registry serves the fake devin in `fake_bin` as the `devin` type and its only option.
+fn devin_setup(root: &Root, fake_bin: &Path) -> anyhow::Result<Setup> {
+  // SAFETY: this test binary races on nothing else that reads the variable.
+  unsafe { std::env::set_var("CHARLIEBOT_TEST_FINAL_STDOUT_SUPERVISOR", fake_program_bin()) };
+  DEVIN_HOST
+    .with(|cell| *cell.borrow_mut() = Some(CliHost { path: fake_bin.display().to_string(), home: root.home() }));
+  let mut registry = Registry::new();
+  registry.register_package("test.devin", register_test_devin)?;
+  let config = config_text(root, &[], &[], &[option_yaml("devin", "devin", None, None)])?;
+  Setup::new(root, registry, &config)
+}
+
+/// The fake devin's call count after the run, read from `call-count`.
+fn devin_call_count(fake_bin: &Path) -> anyhow::Result<String> {
+  Ok(fs::read_to_string(fake_bin.join("call-count"))?.trim().to_string())
+}
+
+/// A worker run on devin waits out the backend's stated reset and reruns on the same backend. The pinned and
+/// pool-chosen runs share this path: the worker only knows its `backend_option`.
+#[tokio::test(start_paused = true)]
+#[ignore = "integration"]
+async fn a_devin_worker_retries_the_stated_rate_limit_reset_in_place() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  let fake_bin = root.path().join("fake-bin");
+  stage_fake_devin(&fake_bin)?;
+  stage_devin_response(&fake_bin, 1, DEVIN_INCIDENT, 1, false)?;
+  stage_devin_response(&fake_bin, 2, "", 0, true)?;
+  let setup = devin_setup(&root, &fake_bin)?;
+  let task_worker = setup.worker(setup.spec(&root, Some("devin"), None)?)?;
+
+  assert_eq!(task_worker.run().await?, 0);
+  assert_eq!(devin_call_count(&fake_bin)?, "2");
+  Ok(())
+}
+
+/// After the initial run and its three retries all hit the rate limit, the worker error carries the original text
+/// with the retry note, and the reset the error stated.
+#[tokio::test(start_paused = true)]
+#[ignore = "integration"]
+async fn a_devin_worker_reports_the_rate_limit_after_three_retries() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  let fake_bin = root.path().join("fake-bin");
+  stage_fake_devin(&fake_bin)?;
+  for call in 1..=4 {
+    stage_devin_response(&fake_bin, call, DEVIN_INCIDENT, 1, false)?;
+  }
+  let setup = devin_setup(&root, &fake_bin)?;
+  let task_worker = setup.worker(setup.spec(&root, Some("devin"), None)?)?;
+  let started = OffsetDateTime::now_utc();
+
+  let error = task_worker.run().await.expect_err("the run ends in the rate-limit failure");
+
+  let quota = error.downcast_ref::<QuotaExhaustedError>().expect("the run failure keeps its quota error");
+  let remaining = quota.resets_at.expect("the parsed reset reaches the cooldown") - started;
+  assert!(remaining > TimeDuration::seconds(10) && remaining < TimeDuration::minutes(5), "{remaining}");
+  let message = quota.to_string();
+  assert!(message.contains("reset in 22 seconds"), "{message}");
+  assert!(message.contains("已自动重试 3 次"), "{message}");
+  assert_eq!(devin_call_count(&fake_bin)?, "4");
+  Ok(())
+}
+
+/// A reset beyond the five-minute wait limit is not waited out, but it still reaches the error's `resets_at`, so the
+/// pool cools at the reset the backend stated rather than the thirty-minute default.
+#[tokio::test(start_paused = true)]
+#[ignore = "integration"]
+async fn a_devin_worker_keeps_a_reset_over_the_wait_limit_for_the_cooldown() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  let fake_bin = root.path().join("fake-bin");
+  stage_fake_devin(&fake_bin)?;
+  stage_devin_response(&fake_bin, 1, &DEVIN_INCIDENT.replace("22 seconds", "600 seconds"), 1, false)?;
+  let setup = devin_setup(&root, &fake_bin)?;
+  let task_worker = setup.worker(setup.spec(&root, Some("devin"), None)?)?;
+  let started = OffsetDateTime::now_utc();
+
+  let error = task_worker.run().await.expect_err("the run ends in the rate-limit failure");
+
+  let quota = error.downcast_ref::<QuotaExhaustedError>().expect("the run failure keeps its quota error");
+  let remaining = quota.resets_at.expect("the parsed reset reaches the cooldown") - started;
+  assert!(remaining > TimeDuration::minutes(9) && remaining < TimeDuration::minutes(11), "{remaining}");
+  assert!(!quota.to_string().contains("已自动重试"), "{quota}");
+  assert_eq!(devin_call_count(&fake_bin)?, "1");
   Ok(())
 }

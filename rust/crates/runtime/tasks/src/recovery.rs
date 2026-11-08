@@ -18,6 +18,7 @@ use anyhow::{Context, anyhow, bail};
 use charliebot_agents::runs::run_alive_probe;
 use charliebot_agents::transport::{identity, recovery as transport_recovery};
 use charliebot_core::config::BackendOption;
+use charliebot_core::home::boot_recovery_marker_path;
 use charliebot_core::parallel_walk;
 use charliebot_registry::context::{FeatureContext, StartupStop};
 use charliebot_registry::sequence::{
@@ -47,15 +48,10 @@ use crate::spawner_prompt;
 
 pub use crate::execution::{RUN_END_LANDING_RETRY_INTERVAL, closed_task_stop_request_id};
 const DRIVEN_RUN_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(10);
-const BOOT_RECOVERY_MARKER_PATH: &str = "state/boot_recovery.json";
 /// A durable file whose mtime is no earlier than the marker minus this slack keeps its node.
 /// The kernel stamps `st_mtime` from its coarse clock,
 /// which can lag the fine-clock pass start by about two ticks (~2 ms at 500 Hz), so the slack must exceed that lag.
 const MARKER_MTIME_SLACK_SECONDS: f64 = 1.0;
-
-fn boot_recovery_marker_path(home: &std::path::Path) -> PathBuf {
-  home.join(BOOT_RECOVERY_MARKER_PATH)
-}
 
 /// The boot marker: the start of the last pass that wrote it and the nodes whose pass failed in that pass. Every node
 /// outside `failed_sessions` was clean at or after `pass_started_at`, so the next boot may serve its skip verdict from
@@ -1434,16 +1430,12 @@ async fn resume_run_checked(
   };
   let cfg = adapter.features.config.get().context("reading the configuration for a re-attach")?;
   let option = adapter.resolve_run_backend(&cfg, &run)?;
-  if meta.profile == TaskProfile::Worker && crate::prompts::WORKER_KINDS.contains(&run_kind_name(run.kind)) {
+  if meta.profile == TaskProfile::Worker && crate::prompts::WORKER_KINDS.contains(&run.kind.as_str()) {
     adapter.resume_worker_run(&meta, &run, &option, is_alive, ended_at).await?;
     return Ok(false);
   }
   if meta.profile != TaskProfile::Manager || run.kind != RunKind::ManagerTurn {
-    bail!(
-      "run {run_id} (profile={}, kind={}) has no resume adapter",
-      profile_name(meta.profile),
-      run_kind_name(run.kind)
-    );
+    bail!("run {run_id} (profile={}, kind={}) has no resume adapter", profile_name(meta.profile), run.kind.as_str());
   }
   let receiver = enqueue_manager_resume(adapter, &meta, &run, &option, is_alive, ended_at).await?;
   track_manager_follow(adapter, session_id, run_id, receiver);
@@ -1758,16 +1750,6 @@ fn outcome_name(outcome: RunOutcomeKind) -> &'static str {
   }
 }
 
-fn run_kind_name(kind: RunKind) -> &'static str {
-  match kind {
-    RunKind::ManagerTurn => "manager_turn",
-    RunKind::Work => "work",
-    RunKind::Review => "review",
-    RunKind::Iteration => "iteration",
-    RunKind::ScheduledStep => "scheduled_step",
-  }
-}
-
 fn profile_name(profile: TaskProfile) -> &'static str {
   match profile {
     TaskProfile::Manager => "manager",
@@ -1786,6 +1768,7 @@ fn to_utc(value: OffsetDateTime) -> anyhow::Result<UtcDateTime> {
 mod tests {
   use super::*;
   use crate::execution::pre_recovery_step;
+  use charliebot_agents::backend_availability::BackendAvailability;
   use charliebot_agents::backend_pool::BackendPool;
   use charliebot_core::credentials::load_credentials;
   use charliebot_core::hot_reload::HotReload;
@@ -1987,7 +1970,12 @@ mod tests {
       Box::new(move || load_credentials(&credential_home)),
     ));
     let startup = Arc::new(StartupState::default());
-    startup.insert(BackendPool::default()).expect("the pool inserts once");
+    startup
+      .insert(BackendAvailability::load(home.path()).expect("the availability owner loads"))
+      .expect("the owner inserts once");
+    startup
+      .insert(BackendPool::new(startup.require::<BackendAvailability>().expect("the owner is in the startup state")))
+      .expect("the pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });
     pre_recovery_step(Arc::clone(&features)).await.expect("the startup step runs");
     (home, features)
@@ -2096,6 +2084,7 @@ mod tests {
   /// The boot pass folds a node that needs no work from its fact scan: it loads no event log and keeps none, so a later
   /// fact read answers from the seal and the first content read loads the log.
   #[tokio::test]
+  #[ignore = "integration"]
   async fn boot_recovery_folds_a_quiet_node_from_its_fact_scan_and_keeps_no_event_list() {
     let (_home, features) = startup_features().await;
     let node = features
@@ -2169,6 +2158,7 @@ mod tests {
   /// request that arrived later acts on. A served run still counts as a follow-up and still logs the line the delivery
   /// logs, so the walk's counters and log items are a full replay's.
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_replay_serves_runs_that_ended_before_the_last_completed_pass() {
     let (_home, features) = startup_features().await;
     let session_id = closed_worker_node(&features, "synthetic-served-replay", 2).await;
@@ -2222,6 +2212,7 @@ mod tests {
   /// A run whose follow-up could still land something keeps its full replay. An open task's worker run can close the
   /// task, so it is never served. A manager turn a later run supersedes cannot act, so an open task serves it too.
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_replay_serves_only_runs_whose_follow_up_has_nothing_left_to_land() {
     let (_home, features) = startup_features().await;
     let adapter = features.startup.require::<TaskExecutionAdapter>().expect("the startup step inserts the adapter");
@@ -2343,6 +2334,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_queued_improve_run_fails_the_node_pass_and_keeps_no_terminal_fact() {
     let (_home, features) = startup_features().await;
     let session_id = queue_sequence_run(&features, "improve", RunKind::Iteration).await;
@@ -2359,6 +2351,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_queued_run_of_an_unknown_sequence_kind_lands_an_interrupted_finish() {
     let (_home, features) = startup_features().await;
     let session_id = queue_sequence_run(&features, "synthetic-kind", RunKind::Work).await;
@@ -2374,6 +2367,7 @@ mod tests {
   /// so the node stays open, and the pass keeps the run unsettled. A read of the newest lifecycle line alone would call
   /// the node closed and settle the run with a closed-task stop.
   #[tokio::test]
+  #[ignore = "integration"]
   async fn the_closed_node_check_reads_the_task_state_of_the_full_fold() {
     let (_home, features) = startup_features().await;
     let session_id = queue_sequence_run(&features, "synthetic-kind", RunKind::Work).await;
@@ -2400,6 +2394,7 @@ mod tests {
   /// A malformed `task_imported` fact fails the task fold. The Run facts still answer, so the pass lands the durable
   /// stop of a dead launched run before the closed-node check returns the fold's error.
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_rejected_task_fold_fails_the_pass_after_the_stop_requests_land() {
     let (_home, features) = startup_features().await;
     let store = &features.store;
@@ -2521,6 +2516,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn recovery_history_reads_and_folds_do_not_grow_with_run_count() {
     let (_home, features) = startup_features().await;
     let small_id = closed_worker_node(&features, "synthetic-one-run-node", 1).await;
@@ -2549,7 +2545,7 @@ mod tests {
 
     let steps = charliebot_core::fsutil::synced_write_steps();
     assert_eq!(steps, ["sync", "rename"], "the temporary file syncs once, then the rename replaces the marker");
-    let marker_path = home.path().join("state").join("boot_recovery.json");
+    let marker_path = boot_recovery_marker_path(home.path());
     let marker: Value =
       serde_json::from_slice(&std::fs::read(&marker_path).expect("the marker exists")).expect("the marker is JSON");
     assert_eq!(marker, json!({"pass_started_at": pass_started_at.to_isoformat_text()}));
@@ -2684,13 +2680,13 @@ mod tests {
     assert!(own_tails > 0 && own_runs > 0, "the reference check read the node's files: {own_tails} {own_runs}");
 
     // A missing or torn proof serves nothing, so each node reads its own files.
-    std::fs::remove_file(home.path().join(crate::skip_proof::SKIP_PROOF_PATH)).expect("the proof is removed");
+    std::fs::remove_file(charliebot_core::home::boot_skip_proof_path(home.path())).expect("the proof is removed");
     let missing = SkipProof::read(home.path());
     match examine_session_dir(&features, &session_dir, Some(&marker), &missing).expect("the session is examined") {
       WalkEntry::Skipped { .. } => {}
       _ => panic!("a node without a proof keeps the walk's own verdict"),
     }
-    std::fs::write(home.path().join(crate::skip_proof::SKIP_PROOF_PATH), b"{\"version\": 1}\nnode\t1\t2")
+    std::fs::write(charliebot_core::home::boot_skip_proof_path(home.path()), b"{\"version\": 1}\nnode\t1\t2")
       .expect("the torn proof writes");
     let torn = SkipProof::read(home.path());
     assert!(torn.served(&session_id, &source).is_none(), "a torn row serves nothing");

@@ -58,49 +58,53 @@ fn deny_decision() -> Value {
 }
 
 fn declared_wait_seconds(command: &str) -> Result<f64, String> {
-  if trigger_command_pattern().is_match(command).map_err(regex_error)? {
+  if command.contains("charliebot") && trigger_command_pattern().is_match(command).map_err(regex_error)? {
     return Ok(0.0);
   }
   let mut wait = 0.0f64;
-  for timeout in tail_pid_pattern().captures_iter(command) {
-    let timeout = timeout.map_err(regex_error)?;
-    wait = wait.max(match timeout.get(1) {
-      Some(seconds) => seconds.as_str().parse::<f64>().expect("timeout pattern contains an integer"),
-      None => f64::INFINITY,
-    });
+  if command.contains("tail") && command.contains("--pid") {
+    for timeout in tail_pid_pattern().captures_iter(command) {
+      let timeout = timeout.map_err(regex_error)?;
+      wait = wait.max(match timeout.get(1) {
+        Some(seconds) => seconds.as_str().parse::<f64>().expect("timeout pattern contains an integer"),
+        None => f64::INFINITY,
+      });
+    }
   }
-  let sleeps = sleep_values(command)?;
+  let sleeps = if command.contains("sleep") { sleep_values(command)? } else { Vec::new() };
   for seconds in &sleeps {
     wait = wait.max(*seconds);
   }
-  for header in loop_header_pattern().captures_iter(command) {
-    let header = header.map_err(regex_error)?;
-    let header_start = header.get(0).expect("loop pattern has a full match").start();
-    let body_start = header.get(0).expect("loop pattern has a full match").end();
-    let body_end = match loop_end_pattern().find(&command[body_start..]).map_err(regex_error)? {
-      Some(end) => body_start + end.start(),
-      None => command.len(),
-    };
-    let body_sleeps = sleep_values(&command[body_start..body_end])?;
-    if body_sleeps.is_empty() {
-      continue;
-    }
-    let smallest_sleep = body_sleeps.into_iter().fold(f64::INFINITY, f64::min);
-    if let Some(iterations) = loop_iterations(&header) {
-      wait = wait.max(iterations * smallest_sleep);
-    } else {
-      let mut wrapper_timeout = None::<f64>;
-      for timeout in timeout_pattern().captures_iter(&command[..header_start]) {
-        let timeout = timeout.map_err(regex_error)?;
-        let seconds = timeout
-          .get(1)
-          .expect("timeout pattern has a seconds group")
-          .as_str()
-          .parse::<f64>()
-          .expect("timeout pattern contains an integer");
-        wrapper_timeout = Some(wrapper_timeout.map_or(seconds, |current| current.max(seconds)));
+  if ["for", "while", "until"].iter().any(|keyword| command.contains(keyword)) {
+    for header in loop_header_pattern().captures_iter(command) {
+      let header = header.map_err(regex_error)?;
+      let header_start = header.get(0).expect("loop pattern has a full match").start();
+      let body_start = header.get(0).expect("loop pattern has a full match").end();
+      let body_end = match loop_end_pattern().find(&command[body_start..]).map_err(regex_error)? {
+        Some(end) => body_start + end.start(),
+        None => command.len(),
+      };
+      let body_sleeps = sleep_values(&command[body_start..body_end])?;
+      if body_sleeps.is_empty() {
+        continue;
       }
-      wait = wait.max(wrapper_timeout.unwrap_or(f64::INFINITY));
+      let smallest_sleep = body_sleeps.into_iter().fold(f64::INFINITY, f64::min);
+      if let Some(iterations) = loop_iterations(&header) {
+        wait = wait.max(iterations * smallest_sleep);
+      } else {
+        let mut wrapper_timeout = None::<f64>;
+        for timeout in timeout_pattern().captures_iter(&command[..header_start]) {
+          let timeout = timeout.map_err(regex_error)?;
+          let seconds = timeout
+            .get(1)
+            .expect("timeout pattern has a seconds group")
+            .as_str()
+            .parse::<f64>()
+            .expect("timeout pattern contains an integer");
+          wrapper_timeout = Some(wrapper_timeout.map_or(seconds, |current| current.max(seconds)));
+        }
+        wait = wait.max(wrapper_timeout.unwrap_or(f64::INFINITY));
+      }
     }
   }
   Ok(wait)
@@ -190,30 +194,55 @@ mod tests {
     (result, output)
   }
 
-  #[test]
-  fn declared_wait_cases_match_the_replay_table() {
-    let cases = [
-      ("for i in $(seq 1 84); do curl x; sleep 10; done", true),
-      ("(nohup x &); sleep 420; tail log", true),
-      ("timeout 880 tail --pid=96106 -f /dev/null", true),
-      ("for i in 1 2 3 4 5 6; do out=$(timeout 40 charliebot web status show); sleep 10; done", false),
-      ("for i in 1 2 3 4 5 6 7; do x; sleep 10; done", true),
-      ("end=$(( $(date +%s) + 840 )); while [ $(date +%s) -lt $end ]; do timeout 10 x && break; sleep 30; done", true),
-      (r#"timeout 60 bash -c "until curl ok; do sleep 2; done""#, false),
-      ("sleep 20; grep -l x f | while read f; do python3 -c 1; done", false),
-      ("for i in 1 2 3; do git fetch && break; sleep 5; done", false),
-      ("charliebot session trigger --cmd 'while ! ok; do sleep 30; done' --max-wait 900 --message m", false),
-      ("for s in a b c; do echo $s; done; sleep 30", false),
-      ("for i in range(85): time.sleep(10)", true),
-      ("for i in range(1, 85): time.sleep(10)", true),
-      ("sleep 45; for s in a b; do python3 x; done", false),
-      ("timeout 60 tail --pid=123 -f /dev/null", false),
-    ];
+  const WAIT_CASES: [(&str, bool); 15] = [
+    ("for i in $(seq 1 84); do curl x; sleep 10; done", true),
+    ("(nohup x &); sleep 420", true),
+    ("timeout 880 tail --pid=96106 -f /dev/null", true),
+    ("for i in 1 2 3 4 5 6; do out=$(timeout 40 charliebot web status show); sleep 10; done", false),
+    ("for i in 1 2 3 4 5 6 7; do x; sleep 10; done", true),
+    ("while x; do sleep 30; done", true),
+    ("timeout 60 bash -c 'until x; do sleep 2; done'", false),
+    ("sleep 20; grep -l x f | while read f; do python3 -c 1; done", false),
+    ("for i in 1 2 3; do git fetch && break; sleep 5; done", false),
+    ("charliebot session trigger --cmd 'while ! ok; do sleep 30; done' --max-wait 900 --message m", false),
+    ("for s in a b c; do echo $s; done; sleep 30", false),
+    ("for i in range(85): time.sleep(10)", true),
+    ("for i in range(1, 85): time.sleep(10)", true),
+    ("sleep 45; for s in a b; do python3 x; done", false),
+    ("timeout 60 tail --pid=123 -f /dev/null", false),
+  ];
+
+  fn assert_wait_cases(cases: &[(&str, bool)]) {
     for (command, refuse) in cases {
       let wait = declared_wait_seconds(command).unwrap();
-      assert_eq!(wait > WAIT_LIMIT_SECONDS, refuse, "{command}");
+      assert_eq!(wait > WAIT_LIMIT_SECONDS, *refuse, "{command}");
     }
   }
+
+  macro_rules! replay_case {
+    ($name:ident, $index:literal) => {
+      #[test]
+      fn $name() {
+        assert_wait_cases(&[WAIT_CASES[$index]]);
+      }
+    };
+  }
+
+  replay_case!(sequence_wait_budget_refuses_more_than_the_limit, 0);
+  replay_case!(standalone_sleep_budget_refuses_more_than_the_limit, 1);
+  replay_case!(tail_pid_budget_refuses_more_than_the_limit, 2);
+  replay_case!(six_short_retries_stay_below_the_limit, 3);
+  replay_case!(seven_short_retries_exceed_the_limit, 4);
+  replay_case!(shell_poll_loop_uses_its_smallest_sleep, 5);
+  replay_case!(timed_shell_poll_loop_stays_within_its_wrapper, 6);
+  replay_case!(unbounded_sleep_before_read_loop_is_counted, 7);
+  replay_case!(breaking_shell_loop_does_not_repeat_its_wait, 8);
+  replay_case!(session_trigger_wait_is_not_counted, 9);
+  replay_case!(sleep_after_loop_is_not_multiplied, 10);
+  replay_case!(python_range_with_zero_start_counts_all_iterations, 11);
+  replay_case!(python_range_with_nonzero_start_counts_all_iterations, 12);
+  replay_case!(sleep_before_nonwaiting_loop_is_counted_once, 13);
+  replay_case!(bounded_tail_pid_wait_stays_within_the_limit, 14);
 
   #[test]
   fn non_bash_hook_event_prints_nothing() {

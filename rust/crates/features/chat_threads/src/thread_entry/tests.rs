@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::http::StatusCode;
+use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_core::RepoRoot;
 use charliebot_core::config::BackendOption;
 use charliebot_core::credentials::load_credentials;
@@ -116,7 +117,7 @@ async fn thread_replies_and_assistant_errors_do_not_notify_task_tree_changes() {
     .await
     .expect("the thread reply posts");
 
-  let reply_frames = Home::sidebar_frames(&mut reply_sidebar).await;
+  let reply_frames = home.sidebar_frames(&mut reply_sidebar).await;
   assert!(reply_frames.iter().all(|frame| frame["type"] != "task_tree_changed"), "{reply_frames:?}");
   let replies: Vec<_> =
     home.events("reply-session").into_iter().filter(|event| event["type"] == FAKECHAT.reply_event_type).collect();
@@ -149,7 +150,7 @@ async fn thread_replies_and_assistant_errors_do_not_notify_task_tree_changes() {
     .await
     .expect("the no-reply audit posts its assistant error");
 
-  let error_frames = Home::sidebar_frames(&mut error_sidebar).await;
+  let error_frames = home.sidebar_frames(&mut error_sidebar).await;
   assert!(error_frames.iter().all(|frame| frame["type"] != "task_tree_changed"), "{error_frames:?}");
   let errors: Vec<_> =
     home.events("error-session").into_iter().filter(|event| event["type"] == event_types::ASSISTANT_ERROR).collect();
@@ -213,7 +214,20 @@ impl Home {
     Self::build(Some(command))
   }
 
+  /// The same home with `backends.auto` listing the synthetic backends, for the unrouted-thread cases.
+  fn with_auto() -> Self {
+    Self::build_with(None, true)
+  }
+
+  fn with_router_and_auto(command: Vec<String>) -> Self {
+    Self::build_with(Some(command), true)
+  }
+
   fn build(command: Option<Vec<String>>) -> Self {
+    Self::build_with(command, false)
+  }
+
+  fn build_with(command: Option<Vec<String>>, auto: bool) -> Self {
     let dir = tempfile::tempdir().expect("temporary directory exists");
     let mut registry = Registry::new();
     registry.register_package("tests.fakechat", register_fakechat).expect("the fakechat slot registers");
@@ -241,6 +255,21 @@ impl Home {
       type_fields: Default::default(),
     });
     loaded.backends.routing = command.map(|command| charliebot_core::config::RoutingConfig { command });
+    if auto {
+      loaded.backends.auto = Some(charliebot_core::config::AutoConfig {
+        label: "Auto".to_string(),
+        members: vec![
+          charliebot_core::config::AutoMember {
+            backend: "synthetic-fakechat".to_string(),
+            billing: charliebot_core::config::AutoBilling::Subscription,
+          },
+          charliebot_core::config::AutoMember {
+            backend: "synthetic-strong".to_string(),
+            billing: charliebot_core::config::AutoBilling::Payg,
+          },
+        ],
+      });
+    }
     let reload_config = loaded.clone();
     let config = Arc::new(HotReload::new(
       loaded.config_file(),
@@ -258,7 +287,14 @@ impl Home {
     ));
     let startup = StartupState::default();
     startup.insert(RunningTurnInputs::new(|_| Vec::new())).expect("the stub inserts once");
-    startup.insert(backend_pool::BackendPool::default()).expect("the backend pool inserts once");
+    startup
+      .insert(BackendAvailability::load(dir.path()).expect("the availability owner loads"))
+      .expect("the owner inserts once");
+    startup
+      .insert(backend_pool::BackendPool::new(
+        startup.require::<BackendAvailability>().expect("the owner is in the startup state"),
+      ))
+      .expect("the backend pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
 
     features.startup.insert(TaskCompletion::new(Arc::clone(&features))).expect("the completion inserts once");
@@ -321,13 +357,20 @@ impl Home {
     self.executor.launches.lock().expect("the launch log is never poisoned").clone()
   }
 
-  /// Every sidebar frame that arrives within a short quiet window.
-  async fn sidebar_frames(subscription: &mut Subscription) -> Vec<Value> {
+  /// The sidebar frames sent before this call. The helper sends its own sentinel frame on the sidebar channel and reads
+  /// up to it: an empty result then means no frame was sent, and a dead subscription fails the read.
+  async fn sidebar_frames(&self, subscription: &mut Subscription) -> Vec<Value> {
+    const SENTINEL: &str = "test_sentinel";
+    self.features.store.broadcast(SIDEBAR_CHANNEL, json!({"type": SENTINEL})).await.expect("the sentinel broadcasts");
     let mut frames = Vec::new();
-    while let Ok(Some(frame)) = tokio::time::timeout(Duration::from_millis(100), subscription.recv()).await {
-      frames.push(serde_json::from_str(&frame).expect("a sidebar frame is JSON"));
+    loop {
+      let frame = subscription.recv().await.expect("the sidebar subscription stays open until its sentinel");
+      let frame: Value = serde_json::from_str(&frame).expect("a sidebar frame is JSON");
+      if frame["type"] == SENTINEL {
+        return frames;
+      }
+      frames.push(frame);
     }
-    frames
   }
 }
 
@@ -344,7 +387,7 @@ fn router_command(directory: &TempDir, body: &str, arguments: &[&str]) -> Vec<St
 struct FakeAdapter {
   posts: Mutex<Vec<(Value, String, String)>>,
   post_keys: Mutex<HashSet<String>>,
-  post_delay: Duration,
+  yield_before_post: bool,
   acks: Mutex<Vec<Value>>,
   removed: Mutex<Vec<Value>>,
   thread: Mutex<Vec<ThreadMessage>>,
@@ -352,11 +395,11 @@ struct FakeAdapter {
 
 impl FakeAdapter {
   fn with_thread(messages: &[(&str, &str)]) -> Arc<Self> {
-    Self::with_thread_and_delay(messages, Duration::ZERO)
+    Self::with_thread_yield_before_post(messages, false)
   }
 
-  fn with_thread_and_delay(messages: &[(&str, &str)], post_delay: Duration) -> Arc<Self> {
-    let adapter = Self { post_delay, ..Self::default() };
+  fn with_thread_yield_before_post(messages: &[(&str, &str)], yield_before_post: bool) -> Arc<Self> {
+    let adapter = Self { yield_before_post, ..Self::default() };
     *adapter.thread.lock().expect("the thread lock is never poisoned") = messages
       .iter()
       .map(|(id, text)| ThreadMessage {
@@ -379,9 +422,11 @@ impl ThreadAdapter for FakeAdapter {
   }
 
   fn post<'a>(&'a self, address: &'a Value, text: &'a str, post_key: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
-    let post_delay = self.post_delay;
+    let yield_before_post = self.yield_before_post;
     Box::pin(async move {
-      tokio::time::sleep(post_delay).await;
+      if yield_before_post {
+        tokio::task::yield_now().await;
+      }
       self.posts.lock().expect("the post log is never poisoned").push((
         address.clone(),
         text.to_string(),
@@ -845,7 +890,7 @@ async fn round_completion_and_boot_audit_emit_one_nudge_then_notice() {
     .startup
     .insert(charliebot_tasks::master_queue::MasterQueue::new(backend_pool))
     .expect("the master queue inserts once");
-  let adapter = FakeAdapter::with_thread_and_delay(&[], Duration::from_millis(50));
+  let adapter = FakeAdapter::with_thread_yield_before_post(&[], true);
   let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
   let summon = home
     .append(
@@ -950,7 +995,7 @@ async fn follow_message_revives_an_archived_session_and_arms_after_the_unarchive
 
   assert_eq!(armed.as_deref(), Some("s1"));
   assert_eq!(home.meta("s1").await.status, SessionStatus::Active);
-  let frames = Home::sidebar_frames(&mut sidebar).await;
+  let frames = home.sidebar_frames(&mut sidebar).await;
   assert!(frames.iter().any(is_unarchive_frame), "{frames:?}");
   // The unarchive lands before the arm: create_trigger rejects an archived session, so the arm's record proves the order.
   assert_eq!(home.triggers("s1").await.len(), 1);
@@ -977,7 +1022,7 @@ async fn accept_summon_unarchive_broadcasts_the_task_tree_change() {
   assert_eq!(sid, "s1");
   assert_eq!(home.meta("s1").await.status, SessionStatus::Active);
   // The mention path's unarchive notifies the sidebar the same way the follow path's does.
-  let frames = Home::sidebar_frames(&mut sidebar).await;
+  let frames = home.sidebar_frames(&mut sidebar).await;
   assert!(frames.iter().any(is_unarchive_frame), "{frames:?}");
   settle(|| home.launches().len() == 1 && adapter.acks.lock().unwrap().len() == 1).await;
 }
@@ -995,7 +1040,7 @@ async fn backfill_revives_an_archived_session_with_unread_messages() {
 
   assert_eq!(armed_count, 1);
   assert_eq!(home.meta("s1").await.status, SessionStatus::Active);
-  let frames = Home::sidebar_frames(&mut sidebar).await;
+  let frames = home.sidebar_frames(&mut sidebar).await;
   assert!(frames.iter().any(is_unarchive_frame), "{frames:?}");
   let labels: Vec<String> = home.triggers("s1").await.into_iter().map(|record| record.message).collect();
   assert_eq!(labels, ["fakechat-thread-follow floor=105"]);
@@ -1011,15 +1056,20 @@ async fn backfill_arms_an_active_session_without_a_revival() {
   let armed_count = backfill_followed_threads(&adapter, &home.features).await.unwrap();
 
   assert_eq!(armed_count, 1);
-  assert!(Home::sidebar_frames(&mut sidebar).await.iter().all(|frame| !is_unarchive_frame(frame)));
+  assert!(home.sidebar_frames(&mut sidebar).await.iter().all(|frame| !is_unarchive_frame(frame)));
   assert_eq!(home.triggers("s1").await.len(), 1);
 }
 
 #[tokio::test]
 async fn backfill_leaves_an_archived_session_without_unread_archived() {
   let home = Home::new();
-  home.thread_session("s1", origin()).await;
-  home.features.store.archive_session("s1").await.unwrap();
+  let mut archived = SessionMetadata::new("s1", "session s1", TaskProfile::Manager);
+  archived.status = SessionStatus::Archived;
+  archived.set_extra("fakechat_origin", origin());
+  let path = home.features.store.metadata_path("s1");
+  fs::create_dir_all(path.parent().unwrap()).unwrap();
+  let slots = home.features.registry.metadata_slots();
+  fs::write(&path, archived.to_json_string(&slots, true)).unwrap();
   let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[]);
 
   let armed_count = backfill_followed_threads(&adapter, &home.features).await.unwrap();
@@ -1060,6 +1110,7 @@ async fn accept_summon_creates_the_session_and_spawns_the_round_and_ack() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn accept_summon_routes_the_full_thread_before_creating_the_session() {
   let router_dir = tempfile::tempdir().unwrap();
   let capture = router_dir.path().join("router-input.json");
@@ -1088,6 +1139,7 @@ async fn accept_summon_routes_the_full_thread_before_creating_the_session() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn accept_summon_takes_the_default_backend_when_the_router_fails_without_posting() {
   let router_dir = tempfile::tempdir().unwrap();
   let command = router_command(&router_dir, "cat >/dev/null\nprintf '%s' 'router boom' >&2\nexit 3", &[]);
@@ -1109,6 +1161,7 @@ async fn accept_summon_takes_the_default_backend_when_the_router_fails_without_p
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn accept_summon_takes_the_default_backend_when_the_router_does_not_route_the_thread() {
   let router_dir = tempfile::tempdir().unwrap();
   let command = router_command(
@@ -1131,6 +1184,51 @@ async fn accept_summon_takes_the_default_backend_when_the_router_does_not_route_
 }
 
 #[tokio::test]
+async fn a_thread_session_without_routing_configured_defaults_to_auto() {
+  let home = Home::with_auto();
+  let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[]);
+
+  let (backend, route) = route_thread_session(&adapter, &home.features, "s1", &origin()).await.unwrap();
+
+  assert_eq!(backend.as_deref(), Some("auto"));
+  assert_eq!(route, None);
+}
+
+#[tokio::test]
+async fn a_thread_session_without_backends_auto_keeps_the_empty_default_backend() {
+  let home = Home::new();
+  let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[]);
+
+  let (backend, route) = route_thread_session(&adapter, &home.features, "s1", &origin()).await.unwrap();
+
+  assert_eq!(backend, None);
+  assert_eq!(route, None);
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn accept_summon_defaults_an_unrouted_thread_to_auto() {
+  let router_dir = tempfile::tempdir().unwrap();
+  let command = router_command(
+    &router_dir,
+    "cat >/dev/null\nprintf '%s' '{\"routed\":false,\"backends\":[],\"reason\":\"thread not routed\"}'",
+    &[],
+  );
+  let home = Home::with_router_and_auto(command);
+  let adapter = FakeAdapter::with_thread(&[]);
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+  let (origin_value, block) = (origin(), summon_block());
+
+  let sid = accept_summon(&dyn_adapter, &home.features, summon(&origin_value, &block)).await.unwrap();
+
+  let meta = home.meta(&sid).await;
+  assert_eq!(meta.backend, "auto");
+  assert_eq!(meta.extra("route"), Some(&json!({"backends": [], "reason": "thread not routed"})));
+  settle(|| home.launches().len() == 1 && adapter.acks.lock().unwrap().len() == 1).await;
+}
+
+#[tokio::test]
+#[ignore = "integration"]
 async fn accept_summon_uses_the_pool_for_an_empty_router_order() {
   let router_dir = tempfile::tempdir().unwrap();
   let command = router_command(

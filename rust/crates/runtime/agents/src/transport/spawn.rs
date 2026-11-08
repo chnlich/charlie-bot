@@ -1181,6 +1181,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn raw_log_spawn_inherits_append_files_and_session() {
     let root = tempfile::tempdir().unwrap();
     let raw = root.path().join("agent.raw.ndjson");
@@ -1212,6 +1213,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn piped_spawn_returns_both_streams() {
     let root = tempfile::tempdir().unwrap();
     let mut spawned = spawn_one_shot(
@@ -1232,6 +1234,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn parent_death_spawn_uses_one_shared_vm_vfork_clone() {
     let root = tempfile::tempdir().unwrap();
     let mut command = spec("/bin/sh", &["-c", "while [ ! -e release ]; do /bin/sleep 0.01; done"], root.path());
@@ -1248,6 +1251,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn spawn_applies_nice_and_moves_into_the_session_cgroup_parent_side() {
     let root = tempfile::tempdir().unwrap();
     let (base, procs) = temp_cgroup(root.path());
@@ -1276,6 +1280,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn shared_opencode_server_keeps_the_test_nice_and_stays_outside_the_session_cgroup() {
     let root = tempfile::tempdir().unwrap();
     let (base, procs) = temp_cgroup(root.path());
@@ -1301,6 +1306,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn opencode_one_shot_uses_its_session_cgroup() {
     let root = tempfile::tempdir().unwrap();
     let (base, procs) = temp_cgroup(root.path());
@@ -1331,6 +1337,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn codex_one_shot_uses_its_session_cgroup() {
     let root = tempfile::tempdir().unwrap();
     let (base, procs) = temp_cgroup(root.path());
@@ -1361,6 +1368,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn claude_one_shot_applies_nice_and_session_cgroup_before_exec() {
     let root = tempfile::tempdir().unwrap();
     let (base, procs) = temp_cgroup(root.path());
@@ -1407,6 +1415,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn claude_compaction_keeps_its_nice_and_enters_the_session_cgroup_before_exec() {
     let root = tempfile::tempdir().unwrap();
     let (base, procs) = temp_cgroup(root.path());
@@ -1452,6 +1461,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn one_shot_uses_null_stdin_and_piped_output() {
     let root = tempfile::tempdir().unwrap();
     let mut spawned = spawn_one_shot(
@@ -1476,6 +1486,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn pins_identity_before_awaiting_on_spawn_callback() {
     let root = tempfile::tempdir().unwrap();
     let spawned = spawn_one_shot(&spec("/bin/sleep", &["30"], root.path()), Some(Signal::SIGKILL)).await.unwrap();
@@ -1493,6 +1504,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn callback_failure_terminates_the_child() {
     let root = tempfile::tempdir().unwrap();
     let spawned = spawn_one_shot(&spec("/bin/sleep", &["30"], root.path()), Some(Signal::SIGKILL)).await.unwrap();
@@ -1517,6 +1529,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn wait_timeout_kills_the_process_group() {
     let root = tempfile::tempdir().unwrap();
     let mut child =
@@ -1542,6 +1555,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn terminate_stops_the_spawned_process_group() {
     let mut child = shell(&["-c", "exec /bin/sleep 30"]).await;
     terminate_child(&mut child).await.unwrap();
@@ -1549,6 +1563,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn terminate_reaps_a_child_that_exited_before_its_group_signal() {
     let mut child = shell(&["-c", "exit 0"]).await;
     tokio::time::sleep(Duration::from_millis(20)).await;

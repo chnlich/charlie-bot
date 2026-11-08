@@ -8,7 +8,6 @@ use anyhow::Context as _;
 use charliebot_core::json_loads;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot};
 use charliebot_core::text_repr::{self, JsonStyle};
-use charliebot_core::v1_sessions::V1_SESSION_CONVERSION_GUIDANCE;
 use serde::de::{MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -16,6 +15,7 @@ use serde_json::{Map, Value};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use crate::v1_session_conversion::V1_SESSION_CONVERSION_GUIDANCE;
 use crate::{StoreError, StoreResult};
 
 const MODEL_JSON: JsonStyle =
@@ -76,6 +76,9 @@ pub const NEXT_TRIGGER_AT: &str = "next_trigger_at";
 pub const ARCHIVE_OFFSET: &str = "archive_offset";
 /// The session-metadata field holding each rated round's feedback, keyed by the rated event's id.
 pub const ROUND_RATINGS: &str = "round_ratings";
+/// The session-metadata field holding the parent session's id. The delegate route's response carries the same name,
+/// so it is spelled once, here.
+pub const PARENT_SESSION_ID: &str = "parent_session_id";
 /// The task-spec field saying whether the run keeps its worktree after it ends. The delegate request and the stored
 /// thread record carry the same name, so it is spelled once, here.
 pub const KEEP_WORKTREE_FIELD: &str = "keep_worktree";
@@ -190,6 +193,19 @@ pub enum TaskType {
   Verify,
   #[serde(rename = "cold-read")]
   ColdRead,
+}
+
+impl TaskType {
+  /// The wire spelling persisted in `TaskSpec` and sent by a delegate request.
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Implement => "implement",
+      Self::QuickEdit => "quick-edit",
+      Self::ScriptRun => "script-run",
+      Self::Verify => "verify",
+      Self::ColdRead => "cold-read",
+    }
+  }
 }
 
 /// Who approves a task and takes over its delivery, persisted in `TaskSpec`. `User` holds a manager's self-archive
@@ -700,7 +716,7 @@ impl SessionMetadata {
       push(&mut declared, SCHEDULE_PROJECT, &self.schedule_project);
       push(&mut declared, SCHEDULE_ALLOW_FAILURE, &self.schedule_allow_failure);
     }
-    push(&mut declared, "parent_session_id", &self.parent_session_id);
+    push(&mut declared, PARENT_SESSION_ID, &self.parent_session_id);
     push(&mut declared, "successor_session_id", &self.successor_session_id);
     push(&mut declared, "schema_version", &self.schema_version);
     push(&mut declared, "task_parent_id", &self.task_parent_id);

@@ -4,20 +4,20 @@
 use serde_json::{Value, json};
 
 use crate::exit::CliExit;
+use crate::fields::SESSION_ID;
 use crate::{client, json_out, resolve};
 
 /// The internal route that registers a draft.
 pub const REGISTER_PATH: &str = "/api/internal/drafts";
 
-/// The registration payload's field names, which this module owns because it builds the payload. The
-/// `charliebot-drafts` package's register route declares the same names, and its draft events carry them.
-pub const SESSION_ID: &str = "session_id";
+/// The registration payload's field names that belong to the draft alone; the session field comes from `crate::fields`.
+/// The `charliebot-drafts` package's register route declares the same names, and its draft events carry them.
 pub const PLATFORM: &str = "platform";
 pub const TARGET: &str = "target";
 pub const BODY: &str = "body";
 pub const REPLACES: &str = "replaces";
 
-/// Register one draft for the current session and print the readback (`draft_id` and `card`).
+/// The registration of one draft for the current session, with the readback (`draft_id` and `card`) printed.
 ///
 /// The caller validates the target and reads the body first: a failed validation never reaches this call, so an
 /// unparseable target registers nothing.

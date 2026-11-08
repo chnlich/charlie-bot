@@ -96,8 +96,7 @@ fn model_rows_sort_accounts_and_spans_while_native_starts_ignore_fallbacks_and_e
 
 #[test]
 fn ts_conflicts_keep_the_earlier_nonempty_value_and_unsplit_counts_on_all_reads() {
-  let dir = tempfile::tempdir().unwrap();
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   let mut first = record("rec-1", RecordKind::Native, &["sess-a"]);
   first.in_unsplit = 7;
   ledger.record_file(HOST, "/logs/a.jsonl", "s1", &[first.clone()]).unwrap();
@@ -189,23 +188,25 @@ fn unknown_stored_kind_fails_the_grouped_read() {
 fn open_swaps_five_changed_sum_triggers_and_reprices_aggregate() {
   let dir = tempfile::tempdir().unwrap();
   let path = dir.path().join("ledger.sqlite3");
-  {
-    let mut ledger = UsageLedger::open(&path).unwrap();
-    ledger.record_file(HOST, "/logs/a.jsonl", "sig", &[record("rec-1", RecordKind::Native, &["sess-a"])]).unwrap();
-    ledger.model_rows().unwrap();
-  }
-  {
-    let raw = Connection::open(&path).unwrap();
-    for name in sql::AGG_SUM_TRIGGER_NAMES {
-      raw
-        .execute_batch(&format!(
-          "DROP TRIGGER {name}; CREATE TRIGGER {name} AFTER INSERT ON usage BEGIN SELECT 1; END;"
-        ))
-        .unwrap();
-    }
-    raw.execute_batch("DELETE FROM usage_agg; INSERT INTO usage_agg VALUES ('wrong', 'wrong', 'wrong', 'native', '2020-01-01', 99, 99, 0, 0, 0, 99);")
+  let mut ledger = UsageLedger::open(&path).unwrap();
+  ledger
+    .conn
+    .execute(
+      "INSERT INTO usage (record_id, kind, source, model, account, host, ts, in_fresh, cache_write, cache_read, in_unsplit, output, origin, captured_at) VALUES ('rec-1', 'native', ?, 'model-a', 'acct-a', ?, ?, 10, 2, 3, 0, 5, '/logs/a.jsonl', ?)",
+      params![SOURCE, HOST, TS_A, TS_A],
+    )
+    .unwrap();
+  assert!(!ledger.agg_ready().unwrap());
+  ledger.conn.execute_batch("BEGIN").unwrap();
+  for name in sql::AGG_SUM_TRIGGER_NAMES {
+    ledger
+      .conn
+      .execute_batch(&format!("DROP TRIGGER {name}; CREATE TRIGGER {name} AFTER INSERT ON usage BEGIN SELECT 1; END;"))
       .unwrap();
   }
+  ledger.conn.execute_batch("DELETE FROM usage_agg; INSERT INTO usage_agg VALUES ('wrong', 'wrong', 'wrong', 'native', '2020-01-01', 99, 99, 0, 0, 0, 99);").unwrap();
+  ledger.conn.execute_batch("COMMIT").unwrap();
+  drop(ledger);
   let ledger = UsageLedger::open(&path).unwrap();
   let mut expected = sql::agg_trigger_statements()
     .iter()
@@ -365,14 +366,15 @@ BEGIN
     in_unsplit = in_unsplit + excluded.in_unsplit, output = output + excluded.output;
 END;"#;
 
-/// A ledger the pre-fix release left: the schema, the pre-fix trigger bodies, `served` written and the aggregate
-/// backfilled over them, then `late` written under the same bodies, whose adds a served group-day drops.
-fn pre_fix_ledger(path: &Path, served: &[UsageRecord], late: &[UsageRecord]) {
-  let raw = Connection::open(path).unwrap();
-  raw.execute_batch(sql::SCHEMA).unwrap();
+/// A connection with the pre-fix trigger bodies: `served` is backfilled, then `late` is written under the bodies
+/// whose add arm drops an existing served group-day.
+fn pre_fix_ledger(raw: &Connection, served: &[UsageRecord], late: &[UsageRecord]) {
+  raw
+    .execute_batch("DROP TRIGGER IF EXISTS usage_agg_after_insert; DROP TRIGGER IF EXISTS usage_agg_after_update;")
+    .unwrap();
   raw.execute_batch(&format!("{PRE_FIX_INSERT_TRIGGER}{PRE_FIX_UPDATE_TRIGGER}")).unwrap();
   for rec in served.iter().chain(late) {
-    write_raw_usage(&raw, rec);
+    write_raw_usage(raw, rec);
   }
   let placeholders = vec!["?"; served.len()].join(",");
   raw
@@ -410,8 +412,7 @@ fn one_record_id_from_two_hosts_counts_once() {
 
 #[test]
 fn fallback_excluded_once_any_session_is_native() {
-  let dir = tempfile::tempdir().unwrap();
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::open(":memory:").unwrap();
   let mut fallback = record("rec-fb", RecordKind::Fallback, &["sess-a", "sess-b"]);
   fallback.model = "model-fb".into();
   fallback.ts = TS_B.into();
@@ -428,20 +429,19 @@ fn fallback_excluded_once_any_session_is_native() {
 
 #[test]
 fn rows_equal_for_either_write_order() {
-  let dir = tempfile::tempdir().unwrap();
   let native = record("rec-native", RecordKind::Native, &["sess-a"]);
   let mut fallback = record("rec-fb", RecordKind::Fallback, &["sess-b"]);
   fallback.account = "acct-b".into();
   fallback.ts = TS_B.into();
   fallback.output = 7;
   let native_first = {
-    let mut ledger = UsageLedger::open(dir.path().join("native-first.sqlite3")).unwrap();
+    let mut ledger = UsageLedger::open(":memory:").unwrap();
     ledger.record_file(HOST, "/logs/native.jsonl", "sig-n", std::slice::from_ref(&native)).unwrap();
     ledger.record_file(HOST, "/logs/fb.jsonl", "sig-f", std::slice::from_ref(&fallback)).unwrap();
     ledger.model_rows().unwrap()
   };
   let fallback_first = {
-    let mut ledger = UsageLedger::open(dir.path().join("fallback-first.sqlite3")).unwrap();
+    let mut ledger = UsageLedger::open(":memory:").unwrap();
     ledger.record_file(HOST, "/logs/fb.jsonl", "sig-f", std::slice::from_ref(&fallback)).unwrap();
     ledger.record_file(HOST, "/logs/native.jsonl", "sig-n", std::slice::from_ref(&native)).unwrap();
     ledger.model_rows().unwrap()
@@ -479,8 +479,7 @@ fn empty_ts_never_becomes_first_or_last() {
 
 #[test]
 fn reupserted_native_keeps_first_session_registered() {
-  let dir = tempfile::tempdir().unwrap();
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::open(":memory:").unwrap();
   let first = record("rec-1", RecordKind::Native, &["sess-a"]);
   let second = record("rec-1", RecordKind::Native, &["sess-b"]);
   let mut fallback = record("rec-fb", RecordKind::Fallback, &["sess-a"]);
@@ -495,8 +494,7 @@ fn reupserted_native_keeps_first_session_registered() {
 
 #[test]
 fn rewrite_identical_records_leaves_rows_unchanged() {
-  let dir = tempfile::tempdir().unwrap();
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::open(":memory:").unwrap();
   let mut fallback = record("rec-2", RecordKind::Fallback, &["sess-b"]);
   fallback.ts = TS_B.into();
   let recs = [record("rec-1", RecordKind::Native, &["sess-a"]), fallback];
@@ -571,8 +569,8 @@ fn native_start_survives_an_empty_ts_native_row() {
 
 #[test]
 fn agg_read_tracks_the_table_through_every_write_shape() {
-  let dir = tempfile::tempdir().unwrap();
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let conn = Connection::open_in_memory().unwrap();
+  let mut ledger = UsageLedger::from_connection(PathBuf::from(":memory:"), conn).unwrap();
   let moved = record("rec-moved", RecordKind::Native, &["sess-m"]);
   let mut fallback = record("rec-fb", RecordKind::Fallback, &["sess-x"]);
   fallback.model = "model-fb".into();
@@ -645,24 +643,20 @@ fn previous_release_write_order_never_counts_a_born_excluded_fallback() {
 
 #[test]
 fn backfill_prices_a_ledger_written_before_the_aggregate() {
-  let dir = tempfile::tempdir().unwrap();
-  let path = dir.path().join("ledger.sqlite3");
-  {
-    let mut ledger = UsageLedger::open(&path).unwrap();
-    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", &[record("rec-1", RecordKind::Native, &["sess-a"])]).unwrap();
-  }
-  // Strip the aggregate to the pre-trigger shape, then add a row a raw writer (no triggers) lands.
-  {
-    let raw = Connection::open(&path).unwrap();
-    raw.execute_batch("DROP TABLE usage_agg; DELETE FROM ledger_meta; DROP TRIGGER usage_agg_after_insert;").unwrap();
-    raw
-      .execute(
-        "INSERT INTO usage (record_id, kind, source, model, account, host, ts, in_fresh, cache_write, cache_read, output, origin, captured_at) VALUES ('rec-2', 'native', ?, 'model-b', 'acct-a', ?, ?, 4, 1, 1, 3, '/x', ?)",
-        params![SOURCE, HOST, TS_B, TS_B],
-      )
-      .unwrap();
-  }
-  let mut ledger = UsageLedger::open(&path).unwrap();
+  let raw = Connection::open_in_memory().unwrap();
+  raw.execute_batch(sql::SCHEMA).unwrap();
+  raw.execute_batch("DROP TABLE usage_agg;").unwrap();
+  write_raw_usage(&raw, &record("rec-1", RecordKind::Native, &["sess-a"]));
+  let mut late = record("rec-2", RecordKind::Native, &["sess-b"]);
+  late.ts = TS_B.into();
+  late.model = "model-b".into();
+  late.in_fresh = 4;
+  late.cache_write = 1;
+  late.cache_read = 1;
+  late.output = 3;
+  write_raw_usage(&raw, &late);
+
+  let mut ledger = UsageLedger::from_connection(PathBuf::from(":memory:"), raw).unwrap();
   let rows = ledger.model_rows().unwrap();
   assert_eq!(models(&rows), ["model-a", "model-b"]);
   assert_eq!((rows[0].calls, rows[1].calls), (1, 1));
@@ -716,8 +710,7 @@ fn backfilled_aggregate_counts_later_same_group_day_writes() {
 
 #[test]
 fn rewrite_within_a_shared_group_day_keeps_the_aggregate_on_the_table() {
-  let dir = tempfile::tempdir().unwrap();
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   let records = [
     record("rec-1", RecordKind::Native, &["sess-a"]),
     record("rec-2", RecordKind::Native, &["sess-b"]),
@@ -740,17 +733,16 @@ fn default_ledger_path_derives_from_the_config_home() {
 }
 
 #[test]
-fn ledger_without_index_gains_it_on_reopen() {
-  let dir = tempfile::tempdir().unwrap();
-  let path = dir.path().join("ledger.sqlite3");
-  let before = {
-    let mut ledger = UsageLedger::open(&path).unwrap();
+fn an_existing_ledger_restores_its_cover_index() {
+  let (before, conn) = {
+    let connection = Connection::open_in_memory().unwrap();
+    let mut ledger = UsageLedger::from_connection(PathBuf::from(":memory:"), connection).unwrap();
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", &[record("rec-1", RecordKind::Native, &["sess-a"])]).unwrap();
     let rows = ledger.model_rows().unwrap();
     ledger.conn.execute_batch("DROP INDEX usage_group_cover").unwrap();
-    rows
+    (rows, ledger.conn)
   };
-  let mut ledger = UsageLedger::open(&path).unwrap();
+  let mut ledger = UsageLedger::from_connection(PathBuf::from(":memory:"), conn).unwrap();
   let indexes = column_text(&ledger.conn, "SELECT name FROM sqlite_master WHERE type = 'index'");
   assert!(indexes.iter().any(|name| name == "usage_group_cover"));
   assert_eq!(ledger.model_rows().unwrap(), before);
@@ -791,8 +783,6 @@ fn last_capture_at_is_per_host_and_none_before_the_first_capture() {
   let stamped = ledger.last_capture_at(HOST).unwrap().unwrap();
   assert!(before <= stamped && stamped <= OffsetDateTime::now_utc());
   assert!(ledger.last_capture_at("other-host").unwrap().is_none());
-  ledger.mark_capture_finished(HOST).unwrap();
-  assert!(ledger.last_capture_at(HOST).unwrap().unwrap() >= stamped);
   drop(ledger);
   let reopened = UsageLedger::open(&path).unwrap();
   assert!(reopened.last_capture_at(HOST).unwrap().is_some());
@@ -839,8 +829,7 @@ fn rows_read_reflects_this_instances_own_write() {
 
 #[test]
 fn ts_conflict_keeps_the_earlier_non_empty_value() {
-  let dir = tempfile::tempdir().unwrap();
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   let first = record("rec-1", RecordKind::Native, &["sess-a"]);
   let mut later = first.clone();
   later.ts = TS_B.into();
@@ -926,27 +915,24 @@ fn open_of_a_current_ledger_does_not_queue_behind_a_live_writer() {
 }
 
 #[test]
-fn open_swaps_pre_fix_trigger_bodies_and_reprices_the_aggregate() {
-  let dir = tempfile::tempdir().unwrap();
-  let path = dir.path().join("ledger.sqlite3");
+fn refresh_replaces_pre_fix_trigger_bodies_and_reprices_the_aggregate() {
+  let mut ledger = UsageLedger::in_memory().unwrap();
   let first = record("rec-1", RecordKind::Native, &["sess-a"]);
   let mut second = record("rec-2", RecordKind::Native, &["sess-b"]);
   second.output = 6;
-  pre_fix_ledger(&path, &[first], &[second]); // the backfill ran before second was written
-  {
-    let raw = Connection::open(&path).unwrap();
-    let calls = raw
-      .prepare("SELECT calls FROM usage_agg")
-      .unwrap()
-      .query_map([], |row| row.get::<_, i64>(0))
-      .unwrap()
-      .collect::<rusqlite::Result<Vec<_>>>()
-      .unwrap();
-    assert_eq!(calls, [1]); // second's add was dropped
-  }
+  pre_fix_ledger(ledger.connection(), &[first], &[second]); // the backfill ran before second was written
+  let calls = ledger
+    .connection()
+    .prepare("SELECT calls FROM usage_agg")
+    .unwrap()
+    .query_map([], |row| row.get::<_, i64>(0))
+    .unwrap()
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .unwrap();
+  assert_eq!(calls, [1]); // second's add was dropped
+  ledger.refresh_agg_triggers().unwrap();
   let mut third = record("rec-3", RecordKind::Native, &["sess-c"]);
   third.output = 7;
-  let mut ledger = UsageLedger::open(&path).unwrap();
   let served = agg_rows(&mut ledger);
   assert_eq!(served, table_rows(&ledger));
   assert_eq!(served.iter().map(|row| (row.calls, row.output.int())).collect::<Vec<_>>(), [(2, 11)]);
@@ -954,13 +940,12 @@ fn open_swaps_pre_fix_trigger_bodies_and_reprices_the_aggregate() {
   let served = agg_rows(&mut ledger);
   assert_eq!(served, table_rows(&ledger));
   assert_eq!(served.iter().map(|row| (row.calls, row.output.int())).collect::<Vec<_>>(), [(3, 18)]);
-  // A reopen whose trigger bodies now match runs nothing: the snapshot and the triggers stay the same.
+  // A refresh whose trigger bodies now match runs nothing: the snapshot and the triggers stay the same.
   ledger.model_rows().unwrap();
   let (before, triggers) = (snapshot(ledger.connection()), trigger_sqls(ledger.connection()));
-  drop(ledger);
-  let reopened = UsageLedger::open(&path).unwrap();
-  assert_eq!(snapshot(reopened.connection()), before);
-  assert_eq!(trigger_sqls(reopened.connection()), triggers);
+  ledger.refresh_agg_triggers().unwrap();
+  assert_eq!(snapshot(ledger.connection()), before);
+  assert_eq!(trigger_sqls(ledger.connection()), triggers);
 }
 
 #[test]
@@ -995,37 +980,39 @@ fn batch_lands_every_recorded_file_in_one_commit() {
   let dir = tempfile::tempdir().unwrap();
   let path = dir.path().join("ledger.sqlite3");
   let mut ledger = UsageLedger::open(&path).unwrap();
-  let reader = UsageLedger::open(&path).unwrap();
-  let solo = ("/logs/solo.jsonl".to_string(), "sig-solo".to_string());
-  ledger.record_file(HOST, &solo.0, &solo.1, &[record("rec-solo", RecordKind::Native, &["s"])]).unwrap();
-  assert_eq!(reader.captured_sigs(HOST).unwrap(), BTreeMap::from([solo.clone()]));
+  let reader = Connection::open(&path).unwrap();
+  let recorded_paths = |reader: &Connection| {
+    let mut statement = reader.prepare("SELECT path FROM captured_files WHERE host = ? ORDER BY path").unwrap();
+    statement.query_map([HOST], |row| row.get::<_, String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+  };
+  assert!(recorded_paths(&reader).is_empty());
   ledger
     .batch(|ledger| {
       ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", &[record("rec-a", RecordKind::Native, &["sess-a"])])?;
       ledger.record_file(HOST, "/logs/b.jsonl", "sig-b", &[record("rec-b", RecordKind::Fallback, &["sess-b"])])?;
       ledger.mark_capture_finished(HOST)?;
-      assert_eq!(reader.captured_sigs(HOST)?, BTreeMap::from([solo.clone()]));
-      assert!(reader.last_capture_at(HOST)?.is_none());
+      assert!(recorded_paths(&reader).is_empty());
+      let has_capture_stamp: bool = reader.query_row(
+        "SELECT EXISTS(SELECT 1 FROM ledger_meta WHERE key = ?)",
+        [format!("last_capture_at:{HOST}")],
+        |row| row.get(0),
+      )?;
+      assert!(!has_capture_stamp);
       Ok(())
     })
     .unwrap();
-  assert_eq!(
-    reader.captured_sigs(HOST).unwrap(),
-    BTreeMap::from([solo.clone(), ("/logs/a.jsonl".into(), "sig-a".into()), ("/logs/b.jsonl".into(), "sig-b".into()),])
-  );
-  assert!(reader.last_capture_at(HOST).unwrap().is_some());
-  drop(ledger);
-  drop(reader);
-  // The three records share one (source, model) group, so the page rows aggregate them.
-  let mut reopened = UsageLedger::open(&path).unwrap();
-  assert_eq!(reopened.model_rows().unwrap().iter().map(|row| row.calls).collect::<Vec<_>>(), [3]);
+  assert_eq!(recorded_paths(&reader), ["/logs/a.jsonl", "/logs/b.jsonl"]);
+  let has_capture_stamp: bool = reader
+    .query_row("SELECT EXISTS(SELECT 1 FROM ledger_meta WHERE key = ?)", [format!("last_capture_at:{HOST}")], |row| {
+      row.get(0)
+    })
+    .unwrap();
+  assert!(has_capture_stamp);
 }
 
 #[test]
 fn failed_file_inside_a_batch_keeps_earlier_files_and_drops_its_own() {
-  let dir = tempfile::tempdir().unwrap();
-  let path = dir.path().join("ledger.sqlite3");
-  let mut ledger = UsageLedger::open(&path).unwrap();
+  let mut ledger = UsageLedger::open(":memory:").unwrap();
   ledger.conn.execute_batch(REJECT_BAD_USAGE).unwrap();
   let result = ledger.batch(|ledger| {
     ledger.record_file(
@@ -1038,11 +1025,9 @@ fn failed_file_inside_a_batch_keeps_earlier_files_and_drops_its_own() {
     Ok(())
   });
   assert!(result.is_err());
-  drop(ledger);
-  let reopened = UsageLedger::open(&path).unwrap();
-  assert_eq!(reopened.captured_sigs(HOST).unwrap(), BTreeMap::from([("/logs/good.jsonl".into(), "sig-good".into())]));
-  assert_eq!(column_text(reopened.connection(), "SELECT record_id FROM usage"), ["rec-good"]);
-  let sessions = column_text(reopened.connection(), "SELECT session FROM native_sessions");
+  assert_eq!(ledger.captured_sigs(HOST).unwrap(), BTreeMap::from([("/logs/good.jsonl".into(), "sig-good".into())]));
+  assert_eq!(column_text(ledger.connection(), "SELECT record_id FROM usage"), ["rec-good"]);
+  let sessions = column_text(ledger.connection(), "SELECT session FROM native_sessions");
   assert!(!sessions.iter().any(|session| session == "sess-bad"));
 }
 

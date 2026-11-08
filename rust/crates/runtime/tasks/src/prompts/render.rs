@@ -16,7 +16,7 @@ pub fn render_session_info(checkout: &RepoRoot, session_name: &str) -> anyhow::R
   let sections = spawner_prompt::load_marker_sections(
     &checkout.path().join(spawner_prompt::WORKER_PROMPT_PATH),
     &["session_info"],
-    "worker-prompt",
+    spawner_prompt::WORKER_PROMPT_EXTRACTION,
   )?;
   Ok(sections["session_info"].replace("{{session_name}}", session_name))
 }
@@ -45,7 +45,7 @@ pub fn render_worktree_bindings(
   let sections = spawner_prompt::load_marker_sections(
     &checkout.path().join(spawner_prompt::WORKER_PROMPT_PATH),
     &[section],
-    "worker-prompt",
+    spawner_prompt::WORKER_PROMPT_EXTRACTION,
   )?;
   let tokens: Tokens =
     spawner_prompt::worktree_binding_tokens(intro_line, branch_name, base_branch_origin, wt_path, repo_path);
@@ -57,7 +57,7 @@ pub fn render_task_body(checkout: &RepoRoot, description: &str) -> anyhow::Resul
   let sections = spawner_prompt::load_marker_sections(
     &checkout.path().join(spawner_prompt::WORKER_PROMPT_PATH),
     &["task"],
-    "worker-prompt",
+    spawner_prompt::WORKER_PROMPT_EXTRACTION,
   )?;
   let tokens: Tokens = vec![("{{description}}", description.to_string())];
   Ok(spawner_prompt::substitute_tokens(&sections["task"], &tokens))
@@ -68,7 +68,7 @@ pub fn render_worktree_persistence(checkout: &RepoRoot) -> anyhow::Result<String
   let sections = spawner_prompt::load_marker_sections(
     &checkout.path().join(spawner_prompt::WORKER_PROMPT_PATH),
     &["worktree_persistence"],
-    "worker-prompt",
+    spawner_prompt::WORKER_PROMPT_EXTRACTION,
   )?;
   Ok(sections["worktree_persistence"].clone())
 }

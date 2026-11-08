@@ -32,7 +32,7 @@ fn chunk_header(body: &[u8], position: usize) -> Option<ChunkHeader> {
   Some(ChunkHeader { name, size, body: position + 8 })
 }
 
-/// Parse a WAV body, returning the format and the data chunk's frames.
+/// A WAV body parsed into its format and the data chunk's frames.
 pub(crate) fn read(body: &[u8]) -> Result<WaveData<'_>, String> {
   let riff = chunk_header(body, 0).ok_or("truncated WAV header")?;
   if &riff.name != b"RIFF" {

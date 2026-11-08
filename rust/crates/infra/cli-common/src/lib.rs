@@ -13,6 +13,7 @@ pub mod channel_verb;
 pub mod client;
 pub mod draft;
 pub mod exit;
+pub mod fields;
 pub mod files;
 pub mod headers;
 pub mod http;

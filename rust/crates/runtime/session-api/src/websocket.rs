@@ -90,6 +90,10 @@ async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String,
     })
     .await;
 
+  // Frames the subscription queues while the replay is built can repeat events the replay already sent. A
+  // repeated stream append would concatenate its text, so those frames are dropped. Both sides compare the
+  // event's stamped index, its position in the log, which the replay counts from the same snapshot.
+  let mut replayed_through = None;
   match catchup_result {
     Err(error) => {
       tracing::error!(session_id, error = %error, "session_ws_catchup_failed");
@@ -107,14 +111,25 @@ async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String,
     Ok(Ok(catchup)) => {
       let sent = send_catchup_frames(&mut sender, &catchup.frames, &session_id).await;
       match sender.send(Message::Text(json!({"type": CATCHUP_COMPLETE_FRAME}).to_string().into())).await {
-        Ok(()) => tracing::debug!(session_id, cursor, total = catchup.total, sent, "session_ws_catchup_sent"),
+        Ok(()) => {
+          replayed_through = Some(catchup.total);
+          tracing::debug!(session_id, cursor, total = catchup.total, sent, "session_ws_catchup_sent");
+        }
         Err(error) => tracing::warn!(session_id, error = %error, "session_ws_catchup_failed"),
       }
     }
   }
 
-  keepalive(&mut sender, &mut receiver, &mut session_subscription, &mut sidebar_subscription, &mut socket, &session_id)
-    .await;
+  keepalive(
+    &mut sender,
+    &mut receiver,
+    &mut session_subscription,
+    &mut sidebar_subscription,
+    &mut socket,
+    &session_id,
+    replayed_through,
+  )
+  .await;
   features.store.unsubscribe(&mut session_subscription);
   features.store.unsubscribe(&mut sidebar_subscription);
   tracing::info!(session_id, "session_ws_disconnected");
@@ -205,7 +220,8 @@ async fn prepare_catchup(
   let events_store = Arc::clone(&store);
   let events_session_id = session_id.clone();
   let events = blocking_store(move || events_store.load_chat_events_shared_sync(&events_session_id)).await?;
-  let total = event_count.unwrap_or(event_index_offset + events.len());
+  // The frames are built from this snapshot, so its end is the replay's end.
+  let total = event_index_offset + events.len();
   let frames = replay_events(&store, events, cursor, event_index_offset).await?;
   Ok(Catchup { frames, total })
 }
@@ -233,7 +249,9 @@ async fn replay_events<E: CatchupEvent + Send + Sync>(
   cursor: i128,
   event_index_offset: usize,
 ) -> StoreResult<Vec<Value>> {
-  let mut walk = CatchupWalk::new(store.new_message_aggregator(event_index_offset, true), cursor, event_index_offset);
+  // The replay sends no stream frames: the draft it ends with goes out as one frame that a page replaces its
+  // own draft with, so a page that joins mid-reply renders the text it missed.
+  let mut walk = CatchupWalk::new(store.new_message_aggregator(event_index_offset, false), cursor, event_index_offset);
   for start in (0..events.len()).step_by(CATCHUP_SLICE_EVENTS) {
     let end = (start + CATCHUP_SLICE_EVENTS).min(events.len());
     walk.feed_slice(events.as_slice(), start, end)?;
@@ -247,12 +265,11 @@ struct CatchupWalk {
   cursor: i128,
   event_index_offset: usize,
   frames: Vec<Value>,
-  latest_stream: Option<Value>,
 }
 
 impl CatchupWalk {
   fn new(aggregator: MessageAggregator, cursor: i128, event_index_offset: usize) -> Self {
-    Self { aggregator, cursor, event_index_offset, frames: Vec::new(), latest_stream: None }
+    Self { aggregator, cursor, event_index_offset, frames: Vec::new() }
   }
 
   fn feed_slice<E: CatchupEvent>(&mut self, events: &[E], start: usize, end: usize) -> StoreResult<()> {
@@ -263,14 +280,7 @@ impl CatchupWalk {
       if (global_index as i128) < self.cursor {
         continue;
       }
-      for delta in deltas {
-        if delta.get("type").and_then(Value::as_str) == Some("stream") {
-          self.latest_stream = Some(delta);
-        } else {
-          self.latest_stream = None;
-          self.frames.push(delta);
-        }
-      }
+      self.frames.extend(deltas);
       let event_type = event.get("type").and_then(Value::as_str);
       if event_type.is_some_and(|event_type| RAW_EVENTS_REPLACED_BY_DELTAS.contains(&event_type)) {
         continue;
@@ -287,11 +297,35 @@ impl CatchupWalk {
   }
 
   fn finish(mut self) -> Vec<Value> {
-    if let Some(stream) = self.latest_stream {
-      self.frames.push(stream);
+    if let Some(draft) = self.aggregator.pending_draft_message() {
+      self.frames.push(draft_stream_frame(&draft));
     }
     self.frames
   }
+}
+
+/// The whole pending draft as one stream frame that replaces the page's draft: the text, thinking and tool rows
+/// a page needs to render the same draft as a page that received every live frame.
+fn draft_stream_frame(draft: &Value) -> Value {
+  let mut frame = json!({
+    "type": "stream",
+    "reset": true,
+    "event_index": draft.get("event_index").cloned().unwrap_or(Value::Null),
+  });
+  let content = draft.get("content").and_then(Value::as_str).unwrap_or_default();
+  if !content.is_empty() {
+    frame["append"] = json!(content);
+    frame["length"] = json!(content.encode_utf16().count());
+  }
+  let thinking = draft.get("thinking").and_then(Value::as_str).unwrap_or_default();
+  if !thinking.is_empty() {
+    frame["thinking_append"] = json!(thinking);
+    frame["thinking_length"] = json!(thinking.encode_utf16().count());
+  }
+  if let Some(tools) = draft.get("tools") {
+    frame["tools"] = tools.clone();
+  }
+  frame
 }
 
 async fn send_catchup_frames(
@@ -318,6 +352,7 @@ async fn keepalive(
   sidebar_subscription: &mut Subscription,
   socket: &mut SocketHandle,
   session_id: &str,
+  replayed_through: Option<usize>,
 ) {
   let keepalive = time::sleep(KEEPALIVE_TIMEOUT);
   tokio::pin!(keepalive);
@@ -337,10 +372,15 @@ async fn keepalive(
         }
       },
       frame = session_subscription.recv() => match frame {
-        Some(frame) => if let Err(error) = sender.send(Message::Text(frame.into())).await {
-          tracing::info!(session_id, reason = %error, "session_ws_closed");
-          return;
-        },
+        Some(frame) => {
+          if covered_by_replay(&frame, replayed_through) {
+            continue;
+          }
+          if let Err(error) = sender.send(Message::Text(frame.into())).await {
+            tracing::info!(session_id, reason = %error, "session_ws_closed");
+            return;
+          }
+        }
         None => unreachable!("the store keeps a subscriber's sender until this socket unsubscribes"),
       },
       frame = sidebar_subscription.recv() => match frame {
@@ -369,6 +409,19 @@ async fn keepalive(
       }
     }
   }
+}
+
+/// Whether a queued session frame repeats an event the catch-up replay already sent. Only stream frames need
+/// this: a repeated append would concatenate its text a second time, where a repeated committed message is
+/// recognized by its id. `replayed_through` is the replay's event count, in the same stamped index the live
+/// frames carry; frames of later events are new.
+fn covered_by_replay(frame: &str, replayed_through: Option<usize>) -> bool {
+  let Some(replayed_through) = replayed_through else { return false };
+  let Ok(value) = serde_json::from_str::<Value>(frame) else { return false };
+  if value.get("type").and_then(Value::as_str) != Some("stream") {
+    return false;
+  }
+  value.get("event_index").and_then(Value::as_u64).is_some_and(|index| index < replayed_through as u64)
 }
 
 async fn close_with_code(
@@ -522,7 +575,8 @@ mod tests {
     let types: Vec<&str> = catchup.frames.iter().map(|frame| frame["type"].as_str().unwrap()).collect();
     assert_eq!(types, ["task_created", "stream"]);
     assert_eq!(catchup.frames[0]["event_index"], 9);
-    assert_eq!(catchup.frames[1]["message"]["event_index"], 8);
+    assert_eq!(catchup.frames[1]["event_index"], 8);
+    assert_eq!(catchup.frames[1]["reset"], true);
   }
 
   #[tokio::test]
@@ -556,16 +610,20 @@ mod tests {
     assert_eq!(catchup.frames[1]["type"], "run_header");
     assert_eq!(catchup.frames[2]["message"]["content"], "worker question");
     assert_eq!(catchup.frames.last().unwrap()["type"], "stream");
-    assert_eq!(catchup.frames.last().unwrap()["message"]["content"], "worker answer");
-    assert_eq!(catchup.frames.last().unwrap()["message"]["event_index"], 2);
+    assert_eq!(catchup.frames.last().unwrap()["reset"], true);
+    assert_eq!(catchup.frames.last().unwrap()["append"], "worker answer");
+    assert_eq!(catchup.frames.last().unwrap()["event_index"], 2);
   }
 
   #[tokio::test]
-  async fn the_latest_stream_delta_is_buffered_at_the_end_of_catchup() {
+  async fn the_pending_draft_goes_out_as_one_whole_draft_reset_frame() {
     let (_home, features) = test_context();
     let events: Vec<SharedChatEvent> = vec![json!({
       "type": "assistant",
-      "message": {"content": [{"type": "text", "text": "draft"}]},
+      "message": {"content": [
+        {"type": "text", "text": "draft"},
+        {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}},
+      ]},
     })]
     .into_iter()
     .map(|event| SharedChatEvent::new(charliebot_store::ChatEvent::from_value(&event)))
@@ -573,7 +631,78 @@ mod tests {
     let frames = replay_events(&features.store, Arc::new(events), 0, 0).await.unwrap();
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0]["type"], "stream");
-    assert_eq!(frames[0]["message"]["content"], "draft");
+    assert_eq!(frames[0]["reset"], true);
+    assert_eq!(frames[0]["append"], "draft");
+    assert_eq!(frames[0]["length"], 5);
+    // The reset frame carries the whole list and no tools_from: the page replaces its rows with it.
+    let tools = frames[0]["tools"].as_array().expect("the draft's tool rows ride the reset frame");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["name"], "Bash");
+    assert!(frames[0].get("tools_from").is_none());
+  }
+
+  /// What a page would render from these frames: the committed assistant messages, and the draft it holds.
+  fn rendered_turns(frames: &[Value]) -> (Vec<String>, String) {
+    let mut turns = Vec::new();
+    let mut draft = String::new();
+    for frame in frames {
+      match frame["type"].as_str() {
+        Some("stream") => {
+          if frame["reset"] == true {
+            draft.clear();
+          }
+          if let Some(append) = frame["append"].as_str() {
+            draft.push_str(append);
+          }
+        }
+        Some("message") => {
+          let message = &frame["message"];
+          if message["role"] != "assistant" {
+            continue;
+          }
+          if message["content_streamed"] == true {
+            turns.push(draft.clone());
+          } else {
+            turns.push(message["content"].as_str().unwrap_or_default().to_string());
+          }
+          draft.clear();
+        }
+        _ => {}
+      }
+    }
+    (turns, draft)
+  }
+
+  #[tokio::test]
+  async fn live_appends_and_the_catchup_draft_render_the_same_turns() {
+    let (_home, features) = test_context();
+    let values: Vec<Value> = vec![
+      json!({"type": "user", "content": "question"}),
+      json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "first "}]}}),
+      json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "second"}]}}),
+    ];
+    let mut live = charliebot_store::aggregator::MessageAggregator::new(0, true);
+    live.set_omit_streamed_content(true);
+    let mut live_frames = Vec::new();
+    for event in &values {
+      live_frames.extend(live.feed(event).unwrap());
+    }
+    let events: Vec<SharedChatEvent> =
+      values.iter().map(|event| SharedChatEvent::new(charliebot_store::ChatEvent::from_value(event))).collect();
+    let catchup_frames = replay_events(&features.store, Arc::new(events), 0, 0).await.unwrap();
+
+    assert_eq!(rendered_turns(&live_frames), (vec!["first ".to_string()], "second".to_string()));
+    assert_eq!(rendered_turns(&live_frames), rendered_turns(&catchup_frames));
+  }
+
+  #[test]
+  fn a_queued_frame_is_dropped_when_the_replay_already_covered_its_event() {
+    let stream = json!({"type": "stream", "append": "x", "length": 1, "event_index": 3}).to_string();
+    assert!(covered_by_replay(&stream, Some(4)));
+    assert!(!covered_by_replay(&stream, Some(3)), "an event past the replay's end is new");
+    assert!(!covered_by_replay(&stream, None), "a failed catch-up covers nothing");
+    let message = json!({"type": "message", "message": {"role": "user"}, "event_index": 1}).to_string();
+    assert!(!covered_by_replay(&message, Some(4)), "a repeated message is recognized by its id");
   }
 
   #[tokio::test]
@@ -785,10 +914,19 @@ mod tests {
     tokio::task::yield_now().await;
     let deadline = time::sleep(Duration::from_secs(5));
     tokio::pin!(deadline);
+    let mut streamed = String::new();
     loop {
       tokio::select! {
         frame = receive_json(&mut client) => {
-          if frame["type"] == "message" && frame["message"]["content"] == "The synthetic stream trigger was handled." {
+          if frame["type"] == "stream"
+            && let Some(append) = frame["append"].as_str()
+          {
+            streamed.push_str(append);
+          }
+          if frame["type"] == "message" && frame["message"]["content_streamed"] == true {
+            // The commit names the draft the page streamed and carries no second copy of its text.
+            assert_eq!(streamed, "The synthetic stream trigger was handled.");
+            assert!(frame["message"].get("content").is_none());
             turn.abort();
             server.abort();
             let _ = server.await;

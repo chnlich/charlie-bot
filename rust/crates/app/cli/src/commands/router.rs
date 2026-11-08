@@ -130,8 +130,7 @@ fn route_in_home(
   limits: &Limits,
   sleep: &mut dyn FnMut(Duration),
 ) -> Result<Value, String> {
-  let backend_ids = live_backend_ids(home)?;
-  let rules = load_rules(rules_path, &backend_ids)?;
+  let rules = load_home_rules(home, rules_path)?;
   let request = read_request(raw)?;
   let answer = answer(home, &rules, &request, limits, sleep)?;
   Ok(json!({ "routed": answer.routed, "backends": answer.backends, "reason": answer.reason }))
@@ -147,6 +146,11 @@ fn live_backend_ids(home: &Path) -> Result<Vec<String>, String> {
   let registry = charliebot_packages::registry().map_err(|error| error.to_string())?;
   let cfg = registry.load_config(home).map_err(|error| error.to_string())?;
   Ok(cfg.backends.options.into_iter().map(|option| option.id).collect())
+}
+
+fn load_home_rules(home: &Path, rules_path: &Path) -> Result<RouterRules, String> {
+  let backend_ids = live_backend_ids(home)?;
+  load_rules(rules_path, &backend_ids)
 }
 
 /// One validated rules file: where Jev lives, the question it answers, the classes, and the classes each role lists.
@@ -633,7 +637,7 @@ mod tests {
   use std::io::Write;
   use std::net::{TcpListener, TcpStream};
   use std::sync::atomic::{AtomicBool, Ordering};
-  use std::sync::{Arc, Mutex};
+  use std::sync::{Arc, Condvar, Mutex};
 
   use super::*;
 
@@ -651,12 +655,12 @@ mod tests {
   /// The bounds the tests inject: a real attempt bound that still outruns the stub, and a wait no
   /// test sleeps out for real.
   fn test_limits() -> Limits {
-    Limits { request_timeout: Duration::from_secs(2), rate_limit_wait: Duration::from_millis(20) }
+    Limits { request_timeout: Duration::from_millis(50), rate_limit_wait: Duration::from_millis(20) }
   }
 
   /// A reply delay past the injected request timeout, so the attempt that asks for it times out.
   fn past_the_timeout() -> Duration {
-    test_limits().request_timeout + Duration::from_secs(1)
+    timeout_limits().request_timeout + Duration::from_millis(5)
   }
 
   /// Each test runs behind this ceiling so a hang fails the test instead of the suite.
@@ -670,7 +674,7 @@ mod tests {
       if std::time::Instant::now() >= deadline {
         panic!("the test exceeded its 10 s timeout");
       }
-      std::thread::sleep(Duration::from_millis(20));
+      std::thread::sleep(Duration::from_millis(2));
     }
   }
 
@@ -678,7 +682,7 @@ mod tests {
   struct FakeJev {
     url: String,
     port: u16,
-    requests: Arc<Mutex<Vec<Value>>>,
+    requests: Arc<(Mutex<Vec<Value>>, Condvar)>,
     authorizations: Arc<Mutex<Vec<String>>>,
     replies: Arc<Mutex<VecDeque<(u16, Value)>>>,
     delays: Arc<Mutex<VecDeque<Duration>>>,
@@ -688,7 +692,7 @@ mod tests {
 
   #[derive(Clone)]
   struct Shared {
-    requests: Arc<Mutex<Vec<Value>>>,
+    requests: Arc<(Mutex<Vec<Value>>, Condvar)>,
     authorizations: Arc<Mutex<Vec<String>>>,
     replies: Arc<Mutex<VecDeque<(u16, Value)>>>,
     delays: Arc<Mutex<VecDeque<Duration>>>,
@@ -699,7 +703,7 @@ mod tests {
       let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
       let port = listener.local_addr().unwrap().port();
       let shared = Shared {
-        requests: Arc::new(Mutex::new(Vec::new())),
+        requests: Arc::new((Mutex::new(Vec::new()), Condvar::new())),
         authorizations: Arc::new(Mutex::new(Vec::new())),
         replies: Arc::new(Mutex::new(replies.into())),
         delays: Arc::new(Mutex::new(VecDeque::new())),
@@ -732,7 +736,14 @@ mod tests {
     }
 
     fn requests(&self) -> Vec<Value> {
-      self.requests.lock().unwrap().clone()
+      self.requests.0.lock().unwrap().clone()
+    }
+
+    fn wait_for_requests(&self, count: usize) -> Vec<Value> {
+      let requests = self.requests.0.lock().unwrap();
+      let (requests, _) =
+        self.requests.1.wait_timeout_while(requests, Duration::from_secs(1), |r| r.len() < count).unwrap();
+      requests.clone()
     }
 
     fn authorizations(&self) -> Vec<String> {
@@ -792,7 +803,8 @@ mod tests {
       body.extend_from_slice(&chunk[..read]);
     }
     let request: Value = serde_json::from_slice(&body).expect("the router sends one JSON object");
-    shared.requests.lock().unwrap().push(request);
+    shared.requests.0.lock().unwrap().push(request);
+    shared.requests.1.notify_all();
     let authorization = head
       .lines()
       .find_map(|line| {
@@ -888,11 +900,26 @@ mod tests {
     .unwrap()
   }
 
+  /// The bound a timeout test pays per timed-out attempt: two timed-out attempts still fit the unit-test
+  /// budget, while the delayed reply stays far past it.
+  fn timeout_limits() -> Limits {
+    Limits { request_timeout: Duration::from_millis(8), rate_limit_wait: test_limits().rate_limit_wait }
+  }
+
   fn run(home: &TestHome, payload: &str, jev: &FakeJev, replies: Vec<(u16, Value)>) -> Result<Value, String> {
+    run_with_limits(home, payload, jev, replies, &test_limits())
+  }
+
+  fn run_with_limits(
+    home: &TestHome,
+    payload: &str,
+    jev: &FakeJev,
+    replies: Vec<(u16, Value)>,
+    limits: &Limits,
+  ) -> Result<Value, String> {
     jev.replies.lock().unwrap().extend(replies);
     let mut pauses = Vec::new();
-    let result =
-      route_in_home(&home.home, &home.rules_path(), payload, &test_limits(), &mut |pause| pauses.push(pause));
+    let result = route_in_home(&home.home, &home.rules_path(), payload, limits, &mut |pause| pauses.push(pause));
     if result.is_ok() {
       assert_eq!(pauses, Vec::<Duration>::new(), "a success path sleeps no rate-limit wait");
     }
@@ -1101,7 +1128,27 @@ mod tests {
   }
 
   #[test]
-  fn delegation_text_is_cut_to_its_first_characters_and_thread_text_to_its_last() {
+  fn delegation_text_is_cut_to_its_first_characters() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
+      let long_text = "x".repeat(TEXT_LIMIT + 1);
+      let label = "Task type: implement\n\n";
+
+      let delegation = request("implement", &long_text, &STRONG, None);
+      run(&home, &delegation, &jev, vec![jev_reply("routine", 0.9, 0.1)]).unwrap();
+
+      let requests = jev.requests();
+      let request = &requests[0];
+      let delegation_state = request["state"].as_str().unwrap();
+      assert_eq!(delegation_state.chars().count(), TEXT_LIMIT);
+      assert_eq!(delegation_state, format!("{label}{}", "x".repeat(TEXT_LIMIT - label.len())));
+    });
+  }
+
+  #[test]
+  fn thread_text_is_cut_to_its_last_characters() {
     with_timeout(|| {
       let home = TestHome::new();
       let jev = FakeJev::start(Vec::new());
@@ -1111,27 +1158,19 @@ mod tests {
         &default_classes(),
         "roles:\n  implement: [routine, context]\n  thread: [routine, context]\n",
       );
-      let long_text = format!("{}THREAD-END", "x".repeat(25_000));
-      let label = "Task type: implement\n\n";
-
-      let delegation = request("implement", &long_text, &STRONG, None);
-      run(&home, &delegation, &jev, vec![jev_reply("routine", 0.9, 0.1)]).unwrap();
+      let long_text = format!("{}THREAD-END", "x".repeat(TEXT_LIMIT + 1));
       let thread = request("thread", &long_text, &STRONG, None);
       run(&home, &thread, &jev, vec![jev_reply("routine", 0.9, 0.1)]).unwrap();
 
-      let requests = jev.requests();
-      let delegation_state = requests[0]["state"].as_str().unwrap();
-      assert_eq!(delegation_state.chars().count(), TEXT_LIMIT);
-      assert_eq!(delegation_state, format!("{label}{}", "x".repeat(TEXT_LIMIT - label.len())));
-      let thread_state = requests[1]["state"].as_str().unwrap();
-      let expected_tail: String = long_text.chars().skip(25_010 - TEXT_LIMIT).collect();
+      let thread_state = jev.requests()[0]["state"].as_str().unwrap().to_string();
+      let expected_tail: String = long_text.chars().skip(long_text.chars().count() - TEXT_LIMIT).collect();
       assert_eq!(thread_state, expected_tail);
       assert_eq!(thread_state.chars().count(), TEXT_LIMIT);
     });
   }
 
   #[test]
-  fn the_server_and_the_replay_send_the_same_jev_input_for_one_spec() {
+  fn the_server_sends_the_expected_jev_input_for_one_spec() {
     with_timeout(|| {
       let home = TestHome::new();
       let jev = FakeJev::start(Vec::new());
@@ -1140,21 +1179,53 @@ mod tests {
 
       // The server sends the delegation's description with its role and the manager's backend.
       let server_request = request("implement", spec, &STRONG, Some(SESSION));
-      run(&home, &server_request, &jev, vec![jev_reply("context", 0.3, 0.7)]).unwrap();
+      let answer = run(&home, &server_request, &jev, vec![jev_reply("context", 0.3, 0.7)]).unwrap();
+
+      assert_eq!(answer, json!({ "routed": true, "backends": [SESSION], "reason": "context p=0.70" }));
+      let requests = jev.requests();
+      assert_eq!(requests.len(), 1);
+      assert_expected_spec_request(&requests[0], spec);
+    });
+  }
+
+  #[test]
+  fn the_replay_sends_the_expected_jev_input_for_one_spec() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
+      let spec = "Goal: explain the routing contract.\n\n## Requester Words\n- \"keep it simple\"";
+      let request = request("implement", spec, &STRONG, Some(SESSION));
 
       // A calibration replay reads the same spec and role from another rules file under --config.
       let replay_dir = tempfile::tempdir().unwrap();
       let replay_rules = replay_dir.path().join("router.yaml");
       std::fs::write(&replay_rules, rules_text(&jev.url, &default_classes(), DEFAULT_ROLES)).unwrap();
       jev.replies.lock().unwrap().push_back(jev_reply("context", 0.3, 0.7));
-      let replay = route_in_home(&home.home, &replay_rules, &server_request, &test_limits(), &mut |_| {}).unwrap();
+      let answer = route_in_home(&home.home, &replay_rules, &request, &test_limits(), &mut |_| {}).unwrap();
 
+      assert_eq!(answer, json!({ "routed": true, "backends": [SESSION], "reason": "context p=0.70" }));
       let requests = jev.requests();
-      assert_eq!(requests.len(), 2);
-      assert_eq!(requests[0], requests[1], "one spec gives one Jev input");
-      assert_eq!(requests[0]["state"], format!("Task type: implement\n\n{spec}"));
-      assert_eq!(replay, json!({ "routed": true, "backends": [SESSION], "reason": "context p=0.70" }));
+      assert_eq!(requests.len(), 1);
+      assert_expected_spec_request(&requests[0], spec);
     });
+  }
+
+  fn assert_expected_spec_request(request: &Value, spec: &str) {
+    assert_eq!(
+      request,
+      &json!({
+        "model": "jev-test",
+        "state": format!("Task type: implement\n\n{spec}"),
+        "questions": {
+          "kind": {
+            "type": "choice",
+            "instructions": INSTRUCTIONS,
+            "criteria": {"context": CONTEXT_RULE, "routine": ROUTINE_RULE},
+          },
+        },
+      })
+    );
   }
 
   #[test]
@@ -1228,8 +1299,14 @@ mod tests {
 
       let payload = request("implement", "Understand the caching layer.", &STRONG, Some(SESSION));
       jev.delay_next(past_the_timeout());
-      let answer =
-        run(&home, &payload, &jev, vec![jev_reply("context", 0.19, 0.81), jev_reply("context", 0.19, 0.81)]).unwrap();
+      let answer = run_with_limits(
+        &home,
+        &payload,
+        &jev,
+        vec![jev_reply("context", 0.19, 0.81), jev_reply("context", 0.19, 0.81)],
+        &timeout_limits(),
+      )
+      .unwrap();
 
       assert_eq!(
         answer,
@@ -1242,21 +1319,25 @@ mod tests {
 
   #[test]
   fn two_timeouts_exit_non_zero_naming_the_timeout_and_the_retry() {
-    with_timeout(|| {
-      let home = TestHome::new();
-      let jev = FakeJev::start(Vec::new());
-      write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
+    let home = TestHome::new();
+    let jev = FakeJev::start(Vec::new());
+    write_rules(&home, &jev.url, &default_classes(), DEFAULT_ROLES);
 
-      let payload = request("implement", "Add a test for the parser.", &STRONG, None);
-      jev.delay_next(past_the_timeout());
-      jev.delay_next(past_the_timeout());
-      let error =
-        run(&home, &payload, &jev, vec![jev_reply("routine", 0.9, 0.1), jev_reply("routine", 0.9, 0.1)]).unwrap_err();
+    let payload = request("implement", "Add a test for the parser.", &STRONG, None);
+    jev.delay_next(past_the_timeout());
+    jev.delay_next(past_the_timeout());
+    let error = run_with_limits(
+      &home,
+      &payload,
+      &jev,
+      vec![jev_reply("routine", 0.9, 0.1), jev_reply("routine", 0.9, 0.1)],
+      &timeout_limits(),
+    )
+    .unwrap_err();
 
-      assert!(error.contains("timed out"), "{error}");
-      assert!(error.contains("retry"), "{error}");
-      assert_eq!(jev.requests().len(), 2, "the router makes no third attempt");
-    });
+    assert!(error.contains("timed out"), "{error}");
+    assert!(error.contains("retry"), "{error}");
+    assert_eq!(jev.wait_for_requests(2).len(), 2, "the router makes no third attempt");
   }
 
   #[test]
@@ -1268,9 +1349,14 @@ mod tests {
 
       let payload = request("implement", "Add a test for the parser.", &STRONG, None);
       jev.delay_next(past_the_timeout());
-      let error =
-        run(&home, &payload, &jev, vec![jev_reply("routine", 0.9, 0.1), (429, json!({ "error": "still limited" }))])
-          .unwrap_err();
+      let error = run_with_limits(
+        &home,
+        &payload,
+        &jev,
+        vec![jev_reply("routine", 0.9, 0.1), (429, json!({ "error": "still limited" }))],
+        &timeout_limits(),
+      )
+      .unwrap_err();
 
       assert!(error.contains("429"), "{error}");
       assert!(error.contains("still limited"), "{error}");
@@ -1330,24 +1416,30 @@ mod tests {
   }
 
   #[test]
-  fn an_edit_to_the_rules_file_takes_effect_on_the_next_call() {
+  fn load_home_rules_reads_an_edit_on_the_next_call() {
     with_timeout(|| {
       let home = TestHome::new();
-      let jev = FakeJev::start(Vec::new());
+      let jev_url = "http://127.0.0.1:9/v1/systemone";
       let classes = |target: &str| {
         format!(
           "classes:\n  routine: {{when: \"{ROUTINE_RULE}\", run_on: pool}}\n  context: {{when: \"{CONTEXT_RULE}\", run_on: [{target}]}}\n"
         )
       };
-      write_rules(&home, &jev.url, &classes(STRONG[0]), DEFAULT_ROLES);
+      write_rules(&home, jev_url, &classes(STRONG[0]), DEFAULT_ROLES);
+      let first = load_home_rules(&home.home, &home.rules_path()).unwrap();
+      let first_targets = match &first.classes["context"].run_on {
+        RunOn::Backends(targets) => targets.iter().map(String::as_str).collect::<Vec<_>>(),
+        _ => panic!("expected an explicit backend list"),
+      };
+      assert_eq!(first_targets.as_slice(), &[STRONG[0]]);
 
-      let payload = request("implement", "Understand the caching layer.", &STRONG, Some(SESSION));
-      let first = run(&home, &payload, &jev, vec![jev_reply("context", 0.19, 0.81)]).unwrap();
-      assert_eq!(first["backends"], json!([STRONG[0]]));
-
-      write_rules(&home, &jev.url, &classes(STRONG[1]), DEFAULT_ROLES);
-      let second = run(&home, &payload, &jev, vec![jev_reply("context", 0.19, 0.81)]).unwrap();
-      assert_eq!(second["backends"], json!([STRONG[1]]));
+      write_rules(&home, jev_url, &classes(STRONG[1]), DEFAULT_ROLES);
+      let second = load_home_rules(&home.home, &home.rules_path()).unwrap();
+      let second_targets = match &second.classes["context"].run_on {
+        RunOn::Backends(targets) => targets.iter().map(String::as_str).collect::<Vec<_>>(),
+        _ => panic!("expected an explicit backend list"),
+      };
+      assert_eq!(second_targets.as_slice(), &[STRONG[1]]);
     });
   }
 
@@ -1412,6 +1504,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn the_example_rules_file_loads_with_the_loader() {
     let example = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../configs/router.example.yaml"));
     let rules = load_rules(example, &[]).unwrap();

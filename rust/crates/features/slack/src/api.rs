@@ -233,7 +233,7 @@ mod tests {
 
   #[tokio::test]
   async fn gated_route_412_then_ack_then_reply_posts() {
-    let home = Home::new();
+    let home = Home::for_thread_reply();
     let session = home.thread_session("synthetic-slack-session", "1700000000.000100").await;
     home
       .features

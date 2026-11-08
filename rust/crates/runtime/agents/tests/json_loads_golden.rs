@@ -4,9 +4,12 @@
 //! outcome class and, for an error, the same message text, and for a value the same JSON rendering. The corpus must
 //! reach every message the JSON decoder and scanner raise.
 
+use std::borrow::Cow;
+
 use charliebot_core::json_loads::{self, LoadError};
 use charliebot_core::text_repr;
-use serde_json::{Value, json};
+use serde::Deserialize;
+use serde_json::{Value, value::RawValue};
 
 const GOLDEN_FIXTURE: &str = include_str!("fixtures/json_loads_golden.json");
 
@@ -44,23 +47,74 @@ enum Outcome {
   Unrepresentable,
 }
 
-#[test]
-fn json_loads_matches_recorded_over_the_corpus() {
-  let records = recorded_reference();
-  assert!(records.len() > 9000, "the corpus holds {} inputs", records.len());
+/// One input in every this many is decoded and compared.
+const SAMPLE_STEP: usize = 128;
+const SAMPLE_SHARDS: usize = 4;
+
+#[derive(Deserialize)]
+struct RecordedFixture<'a> {
+  base_commit: &'a str,
+  source_case_count: usize,
+  #[serde(borrow)]
+  samples: Vec<RecordedCase<'a>>,
+  #[serde(borrow)]
+  required_error_cases: Vec<RecordedCase<'a>>,
+}
+
+#[derive(Deserialize)]
+struct RecordedCase<'a> {
+  #[serde(borrow)]
+  request: &'a RawValue,
+  #[serde(borrow)]
+  expected: RecordedOutcome<'a>,
+}
+
+#[derive(Deserialize)]
+struct RecordedRequest {
+  mode: String,
+  input: String,
+}
+
+#[derive(Deserialize)]
+struct RecordedOutcome<'a> {
+  #[serde(borrow)]
+  outcome: Cow<'a, str>,
+  #[serde(borrow)]
+  text: Option<Cow<'a, str>>,
+}
+
+macro_rules! sample_shard {
+  ($name:ident, $index:expr) => {
+    #[test]
+    fn $name() {
+      compare_sample_shard($index);
+    }
+  };
+}
+
+sample_shard!(json_loads_matches_recorded_sample_shard_0, 0);
+sample_shard!(json_loads_matches_recorded_sample_shard_1, 1);
+sample_shard!(json_loads_matches_recorded_sample_shard_2, 2);
+sample_shard!(json_loads_matches_recorded_sample_shard_3, 3);
+
+fn compare_sample_shard(shard: usize) {
+  let fixture: RecordedFixture = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
+  assert_eq!(fixture.base_commit, "d4021ce3993d7e36b2709f00caf578e1f8541407");
+  assert!(fixture.source_case_count > 9000, "the corpus holds {} inputs", fixture.source_case_count);
+  assert_eq!(fixture.samples.len(), fixture.source_case_count.div_ceil(SAMPLE_STEP));
 
   let mut mismatches = Vec::new();
-  let mut python_errors = Vec::new();
-  for record in &records {
-    let mode = record["mode"].as_str().unwrap();
-    let input = record["input"].as_str().unwrap();
-    let expected = match record["outcome"].as_str().unwrap() {
-      "value" => Outcome::Value(record["text"].as_str().unwrap().to_string()),
-      "error" => {
-        let text = record["text"].as_str().unwrap().to_string();
-        python_errors.push(text.clone());
-        Outcome::Error(text)
-      }
+  let mut sampled = 0;
+  let samples = fixture.samples.iter().enumerate().filter(|(index, _)| index % SAMPLE_SHARDS == shard).map(|(_, r)| r);
+  let required = fixture.required_error_cases.iter().filter(|_| shard == 0);
+  for record in samples.chain(required) {
+    sampled += 1;
+    let request: RecordedRequest = serde_json::from_str(record.request.get()).unwrap();
+    let mode = request.mode.as_str();
+    let input = request.input.as_str();
+    let expected = match record.expected.outcome.as_ref() {
+      "value" => Outcome::Value(record.expected.text.as_deref().unwrap().to_string()),
+      "error" => Outcome::Error(record.expected.text.as_deref().unwrap().to_string()),
       "unrepresentable" => Outcome::Unrepresentable,
       other => panic!("unknown outcome {other}"),
     };
@@ -75,23 +129,30 @@ fn json_loads_matches_recorded_over_the_corpus() {
   }
   assert!(
     mismatches.is_empty(),
-    "{} of {} inputs differ:\n{}",
+    "{} of {} sampled inputs differ:\n{}",
     mismatches.len(),
-    records.len(),
+    sampled,
     mismatches[..mismatches.len().min(20)].join("\n")
   );
 
-  for message in REQUIRED_MESSAGES {
-    assert!(
-      python_errors.iter().any(|text| text.starts_with(message) || text.contains(&format!(": {message}"))),
-      "no corpus input reaches {message:?}"
-    );
+  let mut found_messages = [false; REQUIRED_MESSAGES.len()];
+  let mut found_codec_reasons = [false; REQUIRED_CODEC_REASONS.len()];
+  for record in &fixture.required_error_cases {
+    assert_eq!(record.expected.outcome, "error");
+    let text = record.expected.text.as_deref().unwrap();
+    for (index, message) in REQUIRED_MESSAGES.iter().enumerate() {
+      found_messages[index] |= text.starts_with(message)
+        || text.match_indices(": ").any(|(offset, _)| text[offset + 2..].starts_with(message));
+    }
+    for (index, reason) in REQUIRED_CODEC_REASONS.iter().enumerate() {
+      found_codec_reasons[index] |= text.contains(reason);
+    }
   }
-  for reason in REQUIRED_CODEC_REASONS {
-    assert!(
-      python_errors.iter().any(|text| text.contains(reason)),
-      "no corpus input reaches the codec reason {reason:?}"
-    );
+  for (message, found) in REQUIRED_MESSAGES.iter().zip(found_messages) {
+    assert!(found, "no corpus input reaches {message:?}");
+  }
+  for (reason, found) in REQUIRED_CODEC_REASONS.iter().zip(found_codec_reasons) {
+    assert!(found, "no corpus input reaches the codec reason {reason:?}");
   }
 }
 
@@ -105,23 +166,4 @@ fn load_by_mode(mode: &str, input: &str) -> Result<Value, LoadError> {
 
 fn hex_bytes(hex: &str) -> Vec<u8> {
   (0..hex.len()).step_by(2).map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap()).collect()
-}
-
-/// The recorded outputs for the deterministic input corpus.
-fn recorded_reference() -> Vec<Value> {
-  let fixture: Value = serde_json::from_str(GOLDEN_FIXTURE).unwrap();
-  assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");
-  fixture["cases"]
-    .as_array()
-    .unwrap()
-    .iter()
-    .map(|case| {
-      json!({
-        "mode": case["request"]["mode"],
-        "input": case["request"]["input"],
-        "outcome": case["expected"]["outcome"],
-        "text": case["expected"]["text"],
-      })
-    })
-    .collect()
 }

@@ -1,0 +1,140 @@
+[[entry]]
+paths = ["docs/**"]
+none = true
+
+# The structure checks read the whole workspace: every crate's manifest and source file.
+[[entry]]
+paths = ["rust/crates/**/Cargo.toml", "rust/crates/**/*.rs"]
+rust = "binary_id(charliebot-structure::structure)"
+
+# The script tests run these binaries without a Cargo dependency on them.
+[[entry]]
+paths = ["rust/crates/app/cli/**"]
+rust = "binary_id(charliebot-script-tests::release) + binary_id(charliebot-script-tests::remote_run)"
+
+[[entry]]
+paths = ["rust/crates/app/server/**"]
+rust = "binary_id(charliebot-script-tests::release)"
+
+[[entry]]
+paths = ["rust/crates/app/mock-home/**"]
+rust = "binary_id(charliebot-script-tests::improve) + binary_id(charliebot-script-tests::release)"
+
+# The server-lifecycle scripts call one another, so each selects the four binaries that run them for real.
+[[entry]]
+paths = ["scripts/switch-server.sh", "scripts/start-server.sh", "scripts/install-slice-units.sh", "scripts/release.sh", "scripts/release/**", "scripts/setup.sh", "scripts/systemd/**"]
+rust = "binary_id(charliebot-script-tests::switch_server) + binary_id(charliebot-script-tests::release) + binary_id(charliebot-script-tests::start_server) + binary_id(charliebot-script-tests::setup_scripts)"
+
+[[entry]]
+paths = ["scripts/sync-skills.sh", "scripts/preflight-charlie-code.sh"]
+rust = "binary_id(charliebot-script-tests::setup_scripts)"
+
+[[entry]]
+paths = ["dev/improve/**"]
+rust = "binary_id(charliebot-script-tests::improve_remote) + binary_id(charliebot-script-tests::leak_checks) + binary_id(charliebot-script-tests::no_python)"
+
+[[entry]]
+paths = ["dev/git-hooks/**", "dev/leak-patterns.sh", "dev/check-skills-host-leak.sh"]
+rust = "binary_id(charliebot-script-tests::leak_checks) + binary_id(charliebot-script-tests::setup_scripts)"
+
+[[entry]]
+paths = ["dev/check-no-python.sh", "dev/gen.sh", "dev/note.sh"]
+rust = "binary_id(charliebot-script-tests::no_python)"
+
+[[entry]]
+paths = ["dev/remote-run/**", "dev/local-work-guard/**"]
+rust = "binary_id(charliebot-script-tests::remote_run)"
+
+[[entry]]
+paths = ["dev/week-review/**"]
+rust = "binary_id(charliebot-script-tests::week_review)"
+
+[[entry]]
+paths = ["dev/stress-tests.sh"]
+rust = "binary_id(charliebot-script-tests::setup_scripts)"
+
+# The CLI's setup test validates the committed cron defaults; the router unit test loads the example rules.
+[[entry]]
+paths = ["configs/**"]
+rust = "binary_id(charliebot-cli::setup) + binary_id(charliebot-cli::bin/charliebot)"
+
+# The prompt tree drives the setup seed's validation, the artifact renderer's page checks, and the server's
+# thread-rule tests.
+[[entry]]
+paths = ["prompts/**"]
+rust = "binary_id(charliebot-cli::setup) + binary_id(charliebot-cli::artifact_renderer) + binary_id(charliebot-server::bin/charliebot-server)"
+
+# The package-directory check resolves each frontend package under web/.
+[[entry]]
+paths = ["web/features/**", "web/backends/**"]
+rust = "binary_id(charliebot-server::bin/charliebot-server)"
+[[entry]]
+paths = ["web/backends/opencode/cgroup_join.sh"]
+rust = "package(charliebot-opencode)"
+
+[[entry]]
+paths = ["web/**"]
+node = ["web/tests/*.integration.test.*"]
+
+[[entry]]
+paths = ["dev/poor-network/**"]
+node = ["dev/poor-network/*.integration.test.*"]
+
+[[entry]]
+paths = [".gitignore", "dev/check-unit-test-time.mjs"]
+none = true
+
+[[entry]]
+paths = ["prompts/**"]
+rust = "package(charliebot-artifacts)"
+
+[[entry]]
+paths = ["web/templates/**", "web/static/**", "web/features/artifacts/**"]
+rust = "package(charliebot-artifacts)"
+
+[[entry]]
+paths = ["web/templates/**", "web/static/**", "web/features/approval/**"]
+rust = "package(charliebot-approval)"
+
+[[entry]]
+paths = ["web/templates/**", "web/static/**", "web/features/host_auth/**"]
+rust = "package(charliebot-host-auth)"
+
+[[entry]]
+paths = ["web/templates/**", "web/static/**", "web/features/usage/**"]
+rust = "package(charliebot-usage-page)"
+
+[[entry]]
+paths = ["rust/crates/features/artifacts/tests/data/waiting_page.html"]
+rust = "package(charliebot-artifacts)"
+
+[[entry]]
+paths = ["configs/cron.default.yaml"]
+rust = "package(charliebot-cron)"
+
+[[entry]]
+paths = ["rust/crates/features/voice/tests/fixtures/audio/**"]
+rust = "package(charliebot-voice)"
+
+[[entry]]
+paths = ["web/features/voice/**"]
+rust = "package(charliebot-voice)"
+
+# The tasks tests read the manager and worker prompts from the checkout, and skill_pointers.rs resolves every
+# skills/<name>/ reference in them.
+[[entry]]
+paths = ["prompts/**"]
+rust = "rdeps(=charliebot-tasks)"
+
+[[entry]]
+paths = ["skills/**"]
+rust = "rdeps(=charliebot-tasks)"
+
+# The devin and antigravity integration tests run these fixture scripts through symlinks they create.
+[[entry]]
+paths = ["rust/crates/backends/devin/tests/fixtures/fake_devin.sh"]
+rust = "package(charliebot-devin)"
+
+[[entry]]
+paths = ["rust/crates/backends/antigravity/tests/fixtures/final_stdout_agy.sh"]
+rust = "package(charliebot-antigravity)"

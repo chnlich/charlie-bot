@@ -59,12 +59,12 @@
       <div class="contents max-sm:flex max-sm:basis-full max-sm:gap-3">
         <div class="flex flex-col gap-1 max-sm:flex-1 max-sm:min-w-0">
           <label for="base-input" class="text-xs text-slate-600">Base</label>
-          <input id="base-input" list="branches-list" type="text" placeholder="main"
+          <input id="base-input" list="branches-list" type="text" value="main"
                  class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 w-48 max-sm:w-full" />
         </div>
         <div class="flex flex-col gap-1 max-sm:shrink-0">
           <label for="head-input" class="text-xs text-slate-600">Head</label>
-          <input id="head-input" list="branches-list" type="text" placeholder="HEAD"
+          <input id="head-input" list="branches-list" type="text" value="HEAD"
                  class="bg-white border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500 text-slate-900 w-48" />
           <datalist id="branches-list"></datalist>
         </div>
@@ -104,9 +104,9 @@
     <section id="start" class="hidden">
       <p class="max-w-2xl text-sm leading-6 text-slate-600">
         Compare lists every file that changed between two refs of a repository, with its line counts.
-        Fill in <b>Repo</b>, then <b>Base</b> (where the work started, such as <code>main</code>) and <b>Head</b>
-        (the branch or commit to review), and press Compare. The totals then sit above the file list, and each file
-        opens into its diff.
+        Fill in <b>Repo</b>, then check <b>Base</b> (where the work started, defaulting to <code>main</code>) and
+        <b>Head</b> (the branch or commit to review), and press Compare. The totals then sit above the file list,
+        and each file opens into its diff.
       </p>
       <div id="start-repos" class="flex flex-wrap items-center gap-2 mt-3 text-xs text-slate-600 hidden">
         <span>Repositories in your workspace:</span>

@@ -372,25 +372,17 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
           .map_err(|error| refused(error, false, None))?;
       }
       let account_pool = claude_accounts::option_pool(&ctx.option);
-      if pooled.relays >= claude_relay::MAX_RELAYS_PER_TURN {
-        let warning_has_cool_destination = if decision == claude_relay::RELAY_WARNING {
-          claude_accounts::cool_destination(
-            &self.state,
-            &ctx.cfg,
-            Some(&ctx.option.model),
-            account_pool.as_deref(),
-            None,
-          )
-          .map_err(|error| refused(error, false, None))?
-          .is_some()
-        } else {
-          false
-        };
-        if !warning_has_cool_destination {
-          let message = claude_relay::relay_limit_message(&self.state, &ctx.cfg, account_pool.as_deref())
-            .map_err(|error| refused(error, false, None))?;
-          return Err(LaunchRefused { message, quota_exhausted: false, resets_at: None });
-        }
+      if let Some(cap_refusal) = claude_relay::relay_cap_refusal(
+        &self.state,
+        &ctx.cfg,
+        Some(&ctx.option.model),
+        pooled.relays,
+        &decision,
+        account_pool.as_deref(),
+      )
+      .map_err(|error| refused(error, false, None))?
+      {
+        return Err(cap_refusal);
       }
       let relays = pooled.relays + 1;
       let account =

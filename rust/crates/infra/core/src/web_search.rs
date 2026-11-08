@@ -8,6 +8,10 @@ pub const MCP_PATH: &str = "/api/web-search/mcp";
 /// `mcpServers`. It lives here for the same reason as the path: a backend may depend only on infra and runtime.
 pub const MCP_SERVER_NAME: &str = "charliebot-web";
 
+/// The tool name the event stream reports for a web search. Claude Code's built-in tool carries it, and codex names
+/// its own web-search item the same, so the store shows one search tool.
+pub const TOOL_NAME: &str = "WebSearch";
+
 #[cfg(test)]
 mod tests {
   use super::*;

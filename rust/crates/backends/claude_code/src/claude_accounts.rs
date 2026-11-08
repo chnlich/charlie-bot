@@ -12,7 +12,8 @@ use std::time::UNIX_EPOCH;
 use anyhow::{Context, anyhow};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::text_repr::is_truthy;
-use charliebot_registry::usage;
+use charliebot_registry::backend::{MemberReading, MemberWindow};
+use charliebot_registry::usage::{self, WEEKLY_WINDOW_MINUTES};
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
@@ -22,7 +23,7 @@ use walkdir::WalkDir;
 use super::{claude_config, login_dirs};
 
 pub const POOL_DOMAIN: &str = "pool";
-pub const WARNING_UTILIZATION: f64 = 0.90;
+pub const WARNING_UTILIZATION: f64 = usage::WARNING_UTILIZATION;
 pub const AUTH_FAILURE_COOLDOWN: Duration = Duration::minutes(15);
 pub const GUARD_REFUSAL_MARKER: &str = "refusing to overwrite newer transcript";
 pub const PROBE_TAIL_BYTES: u64 = 16 * 1024;
@@ -356,6 +357,37 @@ pub fn headroom(state: &ClaudeAccountState, label: &str, model: Option<&str>, no
   (1.0 - reading.utilization).max(0.0)
 }
 
+/// The candidates tiering lets contend for selection. The healthy, unexcluded accounts of the pool whose headroom
+/// exceeds `min_headroom` contend, those below the 90% line first and the accounts at or above it as the last
+/// resort.
+/// Login selection and the later member selection tier through this one function.
+#[allow(clippy::too_many_arguments)]
+pub fn tiered_candidates(
+  state: &ClaudeAccountState,
+  cfg: &CharlieBotConfig,
+  model: Option<&str>,
+  exclude: &HashSet<String>,
+  now: Option<UtcDateTime>,
+  account_pool: Option<&str>,
+  min_headroom: f64,
+) -> anyhow::Result<Vec<(claude_config::ClaudeAccount, f64)>> {
+  let moment = now_or(now);
+  let available = pool_accounts(cfg, account_pool)?
+    .into_iter()
+    .filter(|account| !exclude.contains(&account.label) && healthy(state, account, Some(moment)))
+    .filter_map(|account| {
+      let remaining = headroom(state, &account.label, model, Some(moment));
+      (remaining > min_headroom).then_some((account, remaining))
+    })
+    .collect::<Vec<_>>();
+  if available.is_empty() {
+    return Ok(available);
+  }
+  let under_line =
+    available.iter().filter(|(_, remaining)| *remaining > 1.0 - WARNING_UTILIZATION).cloned().collect::<Vec<_>>();
+  Ok(if under_line.is_empty() { available } else { under_line })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn select(
   state: &ClaudeAccountState,
@@ -368,21 +400,10 @@ pub fn select(
   min_headroom: f64,
 ) -> anyhow::Result<Option<claude_config::ClaudeAccount>> {
   let moment = now_or(now);
-  let accounts = pool_accounts(cfg, account_pool)?;
-  let available = accounts
-    .into_iter()
-    .filter(|account| !exclude.contains(&account.label) && healthy(state, account, Some(moment)))
-    .filter_map(|account| {
-      let remaining = headroom(state, &account.label, model, Some(moment));
-      (remaining > min_headroom).then_some((account, remaining))
-    })
-    .collect::<Vec<_>>();
-  if available.is_empty() {
+  let tier = tiered_candidates(state, cfg, model, exclude, Some(moment), account_pool, min_headroom)?;
+  if tier.is_empty() {
     return Ok(None);
   }
-  let under_line =
-    available.iter().filter(|(_, remaining)| *remaining > 1.0 - WARNING_UTILIZATION).cloned().collect::<Vec<_>>();
-  let tier = if under_line.is_empty() { available } else { under_line };
   let idle = tier
     .iter()
     .filter(|(account, _)| busy_accounts.is_none_or(|busy| !busy.contains(&account.label)))
@@ -455,6 +476,121 @@ fn time_to_reset(
       ordering => ordering,
     })?;
   limiting.1.get(usage::PANEL_RESETS_AT).and_then(Value::as_str).and_then(|value| UtcDateTime::parse(value).ok())
+}
+
+/// One login's per-window reading: its utilization, the limiting window's reset, its weekly window's reset, and every
+/// live window.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoginReading {
+  /// The login's utilization, `1.0` once it rejects requests.
+  pub utilization: f64,
+  /// The reset of the window with the highest utilization, or the rejection's reset.
+  pub limiting_resets_at: Option<UtcDateTime>,
+  /// The reset of the weekly (7-day) window.
+  pub weekly_resets_at: Option<UtcDateTime>,
+  /// The login's live windows.
+  pub windows: Vec<MemberWindow>,
+}
+
+/// Read one login's windows from its newest event and panel observations. `None` when no observation exists.
+pub fn login_reading(
+  state: &ClaudeAccountState,
+  label: &str,
+  model: Option<&str>,
+  now: Option<UtcDateTime>,
+) -> Option<LoginReading> {
+  let moment = now_or(now);
+  let reading = latest_reading(state, label, model, Some(moment));
+  let windows = {
+    let readings = state.readings.lock().expect("Claude account state is not poisoned");
+    readings
+      .panel
+      .get(label)
+      .map(|panel| {
+        live_windows(panel, model, moment)
+          .into_iter()
+          .filter_map(|window| {
+            let utilization = window.get(usage::PANEL_UTILIZATION).and_then(Value::as_f64)? / 100.0;
+            let window_minutes = window.get(usage::PANEL_WINDOW_MINUTES).and_then(Value::as_i64);
+            let resets_at = window
+              .get(usage::PANEL_RESETS_AT)
+              .and_then(Value::as_str)
+              .and_then(|value| UtcDateTime::parse(value).ok());
+            Some(MemberWindow { utilization, window_minutes, resets_at })
+          })
+          .collect::<Vec<_>>()
+      })
+      .unwrap_or_default()
+  };
+  let reading = reading?;
+  let rejected = reading.rejected_until.is_some_and(|reset| reset > moment);
+  let limiting_resets_at = if rejected {
+    reading.rejected_until
+  } else {
+    windows
+      .iter()
+      .filter(|window| window.resets_at.is_some())
+      .max_by(|left, right| {
+        left
+          .utilization
+          .total_cmp(&right.utilization)
+          .then(left.window_minutes.unwrap_or_default().cmp(&right.window_minutes.unwrap_or_default()))
+      })
+      .and_then(|window| window.resets_at)
+  };
+  let weekly_resets_at = windows
+    .iter()
+    .filter(|window| window.window_minutes == Some(WEEKLY_WINDOW_MINUTES))
+    .max_by(|left, right| left.utilization.total_cmp(&right.utilization))
+    .and_then(|window| window.resets_at);
+  Some(LoginReading {
+    utilization: if rejected { 1.0 } else { reading.utilization },
+    limiting_resets_at,
+    weekly_resets_at,
+    windows,
+  })
+}
+
+/// The Auto set's reading of one Claude member. It carries the best login's windows and weekly reset, and the
+/// earliest reset among the healthy logins. It also says whether every healthy login sits at or above the 90% line
+/// with a reset beyond 45 minutes, and whether no healthy login has headroom left.
+pub fn member_reading(
+  state: &ClaudeAccountState,
+  cfg: &CharlieBotConfig,
+  option: &BackendOption,
+  now: UtcDateTime,
+) -> anyhow::Result<Option<MemberReading>> {
+  let accounts = pool_accounts(cfg, option_pool(option).as_deref())?;
+  if accounts.is_empty() {
+    return Ok(None);
+  }
+  let model = Some(option.model.as_str());
+  let healthy = accounts.iter().filter(|account| healthy(state, account, Some(now))).collect::<Vec<_>>();
+  if healthy.is_empty() {
+    return Ok(Some(MemberReading {
+      windows: Vec::new(),
+      weekly_resets_at: None,
+      near_exhaustion: false,
+      exhausted: true,
+    }));
+  }
+  let readings =
+    healthy.iter().filter_map(|account| login_reading(state, &account.label, model, Some(now))).collect::<Vec<_>>();
+  let exhausted = healthy.iter().all(|account| headroom(state, &account.label, model, Some(now)) <= 0.0);
+  let Some(best) = readings.iter().min_by(|left, right| left.utilization.total_cmp(&right.utilization)) else {
+    // Health checks pass, but the panel has reported no reading yet: the member has none until it does.
+    return Ok(None);
+  };
+  let earliest_reset = readings.iter().filter_map(|reading| reading.limiting_resets_at).min();
+  let near_exhaustion = readings.len() == healthy.len()
+    && readings.iter().all(|reading| reading.utilization >= WARNING_UTILIZATION)
+    && earliest_reset.is_some_and(|reset| reset.into_inner() > now.into_inner() + usage::NEAR_EXHAUSTION_RESET_HORIZON);
+  Ok(Some(MemberReading {
+    windows: best.windows.clone(),
+    weekly_resets_at: best.weekly_resets_at,
+    near_exhaustion,
+    exhausted,
+  }))
 }
 
 pub fn earliest_reset(
@@ -973,6 +1109,64 @@ mod tests {
     assert!((headroom(&state, "a", Some("claude-fable-5-1"), Some(now)) - 0.15).abs() < 1e-12);
     assert!((headroom(&state, "a", Some("claude-opus-4-8"), Some(now)) - 0.80).abs() < 1e-12);
     let _ = cfg;
+  }
+
+  fn panel_window(utilization: f64, minutes: i64, resets_at: &str) -> Value {
+    json!({"fetched_at":"2025-01-01T11:59:00Z","windows":[{"utilization":utilization,"window_minutes":minutes,"resets_at":resets_at}]})
+  }
+
+  #[test]
+  fn the_member_reading_takes_the_best_login_and_orders_near_exhaustion() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    add_credentials(&a);
+    add_credentials(&b);
+    let cfg = config(&home, &[("a", &a), ("b", &b)]);
+    let option = cfg.get_backend_option("fable").expect("the fable option").clone();
+    let state = ClaudeAccountState::new();
+    let now = timestamp("2025-01-01T12:00:00Z");
+    let weekly = "2025-01-08T12:00:00Z";
+    observe_usage_panel(&state, "a", &panel_window(20.0, WEEKLY_WINDOW_MINUTES, weekly));
+    observe_usage_panel(&state, "b", &panel_window(40.0, WEEKLY_WINDOW_MINUTES, weekly));
+
+    let reading = member_reading(&state, &cfg, &option, now).unwrap().expect("both logins read");
+    assert!((reading.windows[0].utilization - 0.20).abs() < 1e-12, "the lower login is the member's reading");
+    assert_eq!(reading.windows[0].window_minutes, Some(WEEKLY_WINDOW_MINUTES));
+    assert_eq!(reading.weekly_resets_at, Some(timestamp(weekly)));
+    assert!(!reading.near_exhaustion, "a login below the line keeps the member selectable");
+    assert!(!reading.exhausted);
+
+    // Every healthy login at the line, with its reset beyond the 45-minute horizon, is near exhaustion.
+    observe_usage_panel(&state, "b", &panel_window(97.0, WEEKLY_WINDOW_MINUTES, weekly));
+    observe_usage_panel(&state, "a", &panel_window(95.0, WEEKLY_WINDOW_MINUTES, weekly));
+    let reading = member_reading(&state, &cfg, &option, now).unwrap().expect("both logins read");
+    assert!(reading.near_exhaustion);
+    assert!(!reading.exhausted);
+
+    // No healthy login has headroom once the last one rejects.
+    let rejected =
+      json!({"unifiedWindows":{"five_hour":{"utilization":1.0}},"status":"rejected","resetsAt":4102462800.0});
+    observe_rate_limit(&state, "a", &rejected, Some(now));
+    observe_rate_limit(&state, "b", &rejected, Some(now));
+    let reading = member_reading(&state, &cfg, &option, now).unwrap().expect("rejected logins still read");
+    assert!(reading.exhausted);
+  }
+
+  #[test]
+  fn the_member_reading_of_a_pool_with_no_reading_is_none() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let a = root.path().join("a");
+    add_credentials(&a);
+    let cfg = config(&home, &[("a", &a)]);
+    let option = cfg.get_backend_option("fable").expect("the fable option").clone();
+    let state = ClaudeAccountState::new();
+
+    assert_eq!(member_reading(&state, &cfg, &option, timestamp("2025-01-01T12:00:00Z")).unwrap(), None);
   }
 
   #[test]

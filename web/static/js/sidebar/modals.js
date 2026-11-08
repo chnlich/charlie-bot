@@ -9,10 +9,14 @@ function startRename(e, id) {
   e.stopPropagation();
   const link = document.getElementById('session-' + id);
   const header = document.getElementById('header-session-name');
+  // The control the reader used owns the field: a chat-header click opens it on the header's name
+  // line, and a row click or its menu opens it on the row's. A row that draws no box, as in the
+  // closed phone drawer, leaves the header.
+  const fromHeader = !!(header && e.currentTarget && e.currentTarget.contains(header));
   const linkRect = link ? link.getBoundingClientRect() : null;
-  const linkUsable = !!(linkRect && linkRect.width);
+  const linkUsable = !fromHeader && !!(linkRect && linkRect.width);
   const anchor = linkUsable ? link : header;
-  const valueEl = linkUsable && link.querySelector('.session-name') || header;
+  const valueEl = linkUsable ? (link.querySelector('.session-name') || header) : header;
   if (!anchor || !valueEl) return;
   renameSessionId = id;
   const rect = anchor.getBoundingClientRect();

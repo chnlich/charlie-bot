@@ -21,7 +21,7 @@ pub struct Message<'a> {
 
 /// A new store at `db` holding `messages`, written in one transaction.
 pub fn create_store(db: &Path, messages: &[Message]) {
-  let mut connection = Connection::open(db).unwrap();
+  let mut connection = open_test_store(db);
   connection.execute(SCHEMA, []).unwrap();
   let transaction = connection.transaction().unwrap();
   for message in messages {
@@ -30,21 +30,17 @@ pub fn create_store(db: &Path, messages: &[Message]) {
   transaction.commit().unwrap();
 }
 
-/// Inserts a row, or replaces the row with the same id.
+/// The write of one message row: an insert, or a replace of the row with the same id.
 pub fn write_message(db: &Path, message: &Message) {
-  insert(&Connection::open(db).unwrap(), message);
+  insert(&open_test_store(db), message);
 }
 
-pub fn delete_message(db: &Path, id: &str) {
-  Connection::open(db).unwrap().execute("delete from session_message where id = ?", [id]).unwrap();
-}
-
-/// Deletes every row in one statement, which leaves its pages on the freelist.
+/// The deletion of every row in one statement, which leaves its pages on the freelist.
 pub fn clear_messages(db: &Path) {
-  Connection::open(db).unwrap().execute("delete from session_message", []).unwrap();
+  open_test_store(db).execute("delete from session_message", []).unwrap();
 }
 
-/// Sets the file's modification time, so a test sets the signature's mtime instead of depending on the clock.
+/// The file's modification time, set by a test so the signature's mtime does not depend on the clock.
 pub fn touch(path: &Path, seconds: u64) {
   File::options().write(true).open(path).unwrap().set_modified(UNIX_EPOCH + Duration::from_secs(seconds)).unwrap();
 }
@@ -57,4 +53,11 @@ fn insert(connection: &Connection, message: &Message) {
       params![message.id, message.session, message.role, message.updated, message.data],
     )
     .unwrap();
+}
+
+fn open_test_store(db: &Path) -> Connection {
+  let connection = Connection::open(db).unwrap();
+  connection.pragma_update(None, "journal_mode", "OFF").unwrap();
+  connection.pragma_update(None, "synchronous", "OFF").unwrap();
+  connection
 }

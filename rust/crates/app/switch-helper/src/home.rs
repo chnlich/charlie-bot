@@ -11,6 +11,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
 use charliebot_core::credentials;
 use charliebot_core::event_types;
+use charliebot_core::run_kind::RunKind;
 use charliebot_core::text_repr;
 use charliebot_store::chat_events::{self, LineRule, LogReadError};
 use charliebot_store::layout;
@@ -92,7 +93,7 @@ fn outcome(args: &[OsString]) -> Result<(), CliExit> {
   let metadata_path = layout::runs_dir(&session).join(&run_id).join(RUN_METADATA_NAME);
   let metadata =
     read_run_metadata(&metadata_path).map_err(|error| failed(metadata_read_failure(&metadata_path, error)))?;
-  let manager_turn = metadata.get("kind").and_then(Value::as_str) == Some("manager_turn");
+  let manager_turn = metadata.get("kind").and_then(Value::as_str) == Some(RunKind::ManagerTurn.as_str());
   let mut outcome = Outcome::default();
   for archive in chat_events::archive_files(&session).map_err(failed)? {
     for line in chat_events::read_lines(&archive, LineRule::Universal).map_err(failed)? {

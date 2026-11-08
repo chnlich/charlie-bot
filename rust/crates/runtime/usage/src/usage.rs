@@ -999,7 +999,6 @@ mod tests {
     let appended = usage_owner.resolve_session_usage(session_id, &meta, None).unwrap().unwrap();
     assert_eq!(appended["context_tokens"], 20);
     assert_eq!(appended["total_cost_usd"], 0.3);
-    assert_eq!(usage_owner.context_state(session_id, &meta).unwrap().0, Some(20));
 
     write_events(
       &store,

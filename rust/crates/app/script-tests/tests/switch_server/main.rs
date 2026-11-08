@@ -36,11 +36,13 @@ use world::{
 // ---- home helper: the config's port -------------------------------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_home_helper_config_uses_server_default_host_only() {
   home_helper_config_uses_server_default("server:\n  host: 127.0.0.1\n");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_home_helper_config_uses_server_default_absent() {
   home_helper_config_uses_server_default("{}\n");
 }
@@ -61,6 +63,7 @@ fn home_helper_config_uses_server_default(config: &str) {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_home_helper_config_uses_explicit_port() {
   let world = World::new();
 
@@ -76,6 +79,7 @@ fn first_line_port(run: &Run) -> u16 {
 // ---- the runtime clone from the input -------------------------------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_an_outside_copy_without_the_repo_root_refuses_before_any_step() {
   let sandbox = Sandbox::new();
   let outside = sandbox.dir("outside");
@@ -102,61 +106,73 @@ fn test_an_outside_copy_without_the_repo_root_refuses_before_any_step() {
 // ---- live backend switch directions ---------------------------------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_live_backend_switch_directions_both_carry_agy_gemini_flash() {
   live_backend_switch_directions(true, true, "agy-gemini-flash");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_live_backend_switch_directions_both_carry_oc_deepseek_flash() {
   live_backend_switch_directions(true, true, "oc-deepseek-flash");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_live_backend_switch_directions_both_carry_claude_opus() {
   live_backend_switch_directions(true, true, "claude-opus");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_live_backend_switch_directions_both_carry_oc_retired() {
   live_backend_switch_directions(true, true, "oc-retired");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_live_backend_switch_directions_running_lacks_agy_gemini_flash() {
   live_backend_switch_directions(false, true, "agy-gemini-flash");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_live_backend_switch_directions_running_lacks_oc_deepseek_flash() {
   live_backend_switch_directions(false, true, "oc-deepseek-flash");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_live_backend_switch_directions_running_lacks_claude_opus() {
   live_backend_switch_directions(false, true, "claude-opus");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_live_backend_switch_directions_running_lacks_oc_retired() {
   live_backend_switch_directions(false, true, "oc-retired");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_live_backend_switch_directions_target_lacks_agy_gemini_flash() {
   live_backend_switch_directions(true, false, "agy-gemini-flash");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_live_backend_switch_directions_target_lacks_oc_deepseek_flash() {
   live_backend_switch_directions(true, false, "oc-deepseek-flash");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_live_backend_switch_directions_target_lacks_claude_opus() {
   live_backend_switch_directions(true, false, "claude-opus");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_live_backend_switch_directions_target_lacks_oc_retired() {
   live_backend_switch_directions(true, false, "oc-retired");
 }
@@ -199,6 +215,7 @@ fn live_backend_switch_directions(running_carries: bool, target_carries: bool, b
 // ---- backend registration layouts -----------------------------------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_backend_registration_reads_the_layout_of_each_build_old_layout_to_new_layout() {
   backend_registration_reads_the_layout_of_each_build(
     "old",
@@ -209,6 +226,7 @@ fn test_backend_registration_reads_the_layout_of_each_build_old_layout_to_new_la
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_backend_registration_reads_the_layout_of_each_build_new_layout_to_new_layout() {
   backend_registration_reads_the_layout_of_each_build(
     "rust",
@@ -219,6 +237,7 @@ fn test_backend_registration_reads_the_layout_of_each_build_new_layout_to_new_la
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_backend_registration_reads_the_layout_of_each_build_new_layout_back_to_old_layout() {
   backend_registration_reads_the_layout_of_each_build(
     "new",
@@ -229,6 +248,7 @@ fn test_backend_registration_reads_the_layout_of_each_build_new_layout_back_to_o
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_backend_registration_reads_the_layout_of_each_build_pre_grouping_to_split() {
   backend_registration_reads_the_layout_of_each_build(
     "pre",
@@ -239,6 +259,7 @@ fn test_backend_registration_reads_the_layout_of_each_build_pre_grouping_to_spli
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_backend_registration_reads_the_layout_of_each_build_split_back_to_pre_grouping() {
   backend_registration_reads_the_layout_of_each_build(
     "rust",
@@ -276,11 +297,13 @@ fn build_sha<'a>(world: &'a World, name: &str) -> &'a str {
 // ---- preflight: a live run from the build before the grouping -------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_pre_grouping_build_passes_the_preflight_with_a_live_run_grouped_layout() {
   pre_grouping_build_passes_the_preflight_with_a_live_run("old");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_pre_grouping_build_passes_the_preflight_with_a_live_run_split_layout() {
   pre_grouping_build_passes_the_preflight_with_a_live_run("rust");
 }
@@ -304,11 +327,13 @@ fn pre_grouping_build_passes_the_preflight_with_a_live_run(target: &str) {
 // ---- preflight: a build missing from the clone ----------------------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_fails_when_a_build_is_not_in_the_clone_running() {
   preflight_fails_when_a_build_is_not_in_the_clone("running");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_fails_when_a_build_is_not_in_the_clone_target() {
   preflight_fails_when_a_build_is_not_in_the_clone("target");
 }
@@ -340,51 +365,61 @@ fn preflight_fails_when_a_build_is_not_in_the_clone(missing: &str) {
 // ---- preflight refusals: exit 1 and no change -----------------------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refusal_exits_1_and_changes_nothing_checksum() {
   preflight_refusal_exits_1_and_changes_nothing("checksum");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refusal_exits_1_and_changes_nothing_check_config() {
   preflight_refusal_exits_1_and_changes_nothing("check-config");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refusal_exits_1_and_changes_nothing_opencode_run() {
   preflight_refusal_exits_1_and_changes_nothing("opencode-run");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refusal_exits_1_and_changes_nothing_antigravity_run() {
   preflight_refusal_exits_1_and_changes_nothing("antigravity-run");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refusal_exits_1_and_changes_nothing_unknown_backend_run() {
   preflight_refusal_exits_1_and_changes_nothing("unknown-backend-run");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refusal_exits_1_and_changes_nothing_missing_backend_run() {
   preflight_refusal_exits_1_and_changes_nothing("missing-backend-run");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refusal_exits_1_and_changes_nothing_improve_loop() {
   preflight_refusal_exits_1_and_changes_nothing("improve-loop");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refusal_exits_1_and_changes_nothing_stopped_improve_loop() {
   preflight_refusal_exits_1_and_changes_nothing("improve-loop-stopped");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refusal_exits_1_and_changes_nothing_dirty_clone() {
   preflight_refusal_exits_1_and_changes_nothing("dirty-clone");
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refusal_exits_1_and_changes_nothing_launcher_preflight() {
   preflight_refusal_exits_1_and_changes_nothing("launcher-preflight");
 }
@@ -426,6 +461,7 @@ fn assert_no_temporary_directory_left(tmp: &Path) {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_switch_passes_a_config_check_that_needs_a_file_only_the_target_commit_adds() {
   let mut world = World::new();
   let target = commit_agent_gh_wrapper(&world);
@@ -445,6 +481,7 @@ fn test_switch_passes_a_config_check_that_needs_a_file_only_the_target_commit_ad
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_a_refusal_by_the_target_config_check_changes_nothing() {
   let mut world = World::new();
   // The target's own commit lacks the wrapper, so the refusal is real: the check reads that commit, not the clone.
@@ -481,6 +518,7 @@ fn sha256_of(bytes: &[u8]) -> String {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_refuses_when_the_old_release_rejects_the_config_and_stops_nothing() {
   let world = World::new();
   let pane = world.start_pane();
@@ -500,6 +538,7 @@ fn test_preflight_refuses_when_the_old_release_rejects_the_config_and_stops_noth
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_rollback_keeps_the_serving_new_release_when_the_old_release_rejects_the_config() {
   let mut world = World::new();
   world.env.insert("CHARLIEBOT_SWITCH_DELEGATION_WAIT_S".to_string(), "2".to_string());
@@ -539,6 +578,7 @@ fn test_rollback_keeps_the_serving_new_release_when_the_old_release_rejects_the_
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_rollback_exits_3_without_starting_the_old_release_when_the_old_release_rejects_the_config() {
   let world = World::new();
   let pane = world.start_pane();
@@ -571,6 +611,7 @@ fn test_rollback_exits_3_without_starting_the_old_release_when_the_old_release_r
 // ---- preflight: the session-weight controllers ------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_stops_when_the_cpu_switch_is_on_and_cpu_is_missing_from_the_agents_slice() {
   let world = World::new();
   world.write_agents_controllers("memory pids");
@@ -584,6 +625,7 @@ fn test_preflight_stops_when_the_cpu_switch_is_on_and_cpu_is_missing_from_the_ag
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_stops_when_the_io_switch_is_on_and_io_is_missing_from_the_agents_slice() {
   let world = World::new();
   world.set_weight_switches(true, true);
@@ -599,6 +641,7 @@ fn test_preflight_stops_when_the_io_switch_is_on_and_io_is_missing_from_the_agen
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_passes_a_missing_controller_when_its_switch_is_off() {
   let world = World::new();
   world.set_weight_switches(false, false);
@@ -611,6 +654,7 @@ fn test_preflight_passes_a_missing_controller_when_its_switch_is_off() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_skips_the_weight_controller_check_for_a_helper_without_the_switches() {
   let world = World::new();
   // The target release's helper serves switch-helper but predates the switches read: every other subcommand still
@@ -734,6 +778,7 @@ fn scan_blocks(world: &World) -> Vec<String> {
 /// A loop that `charliebot improve stop` marked stopped keeps its controller and its active lock while the current
 /// iteration runs: the scan still blocks the restart, and the block line names the loop, its status and its signal.
 #[test]
+#[ignore = "integration"]
 fn test_scan_blocks_a_stopped_loop_whose_controller_still_runs() {
   let mut world = World::new();
   let controller = world.spawn_live();
@@ -750,6 +795,7 @@ fn test_scan_blocks_a_stopped_loop_whose_controller_still_runs() {
 
 /// The loop's end removes the active lock: the same loop then no longer blocks, whatever its state file holds.
 #[test]
+#[ignore = "integration"]
 fn test_scan_passes_a_loop_whose_lock_its_end_removed() {
   let mut world = World::new();
   let controller = world.spawn_live();
@@ -763,6 +809,7 @@ fn test_scan_passes_a_loop_whose_lock_its_end_removed() {
 /// A lock the end path leaked while the server kept running — the failure and completion leaks — still blocks, because
 /// the scan cannot tell it from a live controller.
 #[test]
+#[ignore = "integration"]
 fn test_scan_blocks_a_lock_leaked_in_the_same_server_lifetime() {
   let mut world = World::new();
   let controller = world.spawn_live();
@@ -777,6 +824,7 @@ fn test_scan_blocks_a_lock_leaked_in_the_same_server_lifetime() {
 
 /// A lock leaked by a controller that no longer runs — the server is gone — never blocks: the restart cannot end it.
 #[test]
+#[ignore = "integration"]
 fn test_scan_passes_a_lock_whose_controller_no_longer_runs() {
   let mut world = World::new();
   let controller = world.spawn_live();
@@ -789,6 +837,7 @@ fn test_scan_passes_a_lock_whose_controller_no_longer_runs() {
 
 /// An active lock that names no loop id fails the scan instead of passing it.
 #[test]
+#[ignore = "integration"]
 fn test_scan_fails_on_an_active_lock_that_names_no_loop() {
   let world = World::new();
   let loops_dir = world.home.join("sessions").join(SESSION).join("loops");
@@ -816,6 +865,7 @@ fn drain_line(run_id: &str) -> String {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_adoption_passes_when_the_recorded_run_ended_during_the_switch() {
   let mut world = World::new();
   let run_id = "run-ended";
@@ -848,6 +898,7 @@ fn test_adoption_passes_when_the_recorded_run_ended_during_the_switch() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_adoption_fails_only_for_a_recorded_run_that_still_runs() {
   let mut world = World::new();
   world.seed_live_run("run-ended", Some("claude-opus"));
@@ -875,6 +926,7 @@ fn test_adoption_fails_only_for_a_recorded_run_that_still_runs() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_adoption_treats_a_reused_pid_as_an_ended_run() {
   let mut world = World::new();
   world.seed_live_run("run-reused", Some("claude-opus"));
@@ -894,21 +946,25 @@ fn test_adoption_treats_a_reused_pid_as_an_ended_run() {
 // ---- the forward path's exit by the outcome of a stopped run --------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_switch_exits_by_the_recorded_outcome_of_a_run_the_stop_ended_completed() {
   switch_exits_by_the_recorded_outcome_of_a_run_the_stop_ended(Some("success"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_switch_exits_by_the_recorded_outcome_of_a_run_the_stop_ended_interrupted() {
   switch_exits_by_the_recorded_outcome_of_a_run_the_stop_ended(Some("interrupted"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_switch_exits_by_the_recorded_outcome_of_a_run_the_stop_ended_failed() {
   switch_exits_by_the_recorded_outcome_of_a_run_the_stop_ended(Some("failed"));
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_switch_exits_by_the_recorded_outcome_of_a_run_the_stop_ended_no_outcome() {
   switch_exits_by_the_recorded_outcome_of_a_run_the_stop_ended(None);
 }
@@ -949,6 +1005,7 @@ fn switch_exits_by_the_recorded_outcome_of_a_run_the_stop_ended(outcome: Option<
 // ---- the switch installs the slice units ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_switch_forward_installs_the_slice_units_and_reloads_before_the_new_server_starts() {
   let mut world = World::new();
   world.seed_live_run("run-install", Some("claude-opus"));
@@ -972,6 +1029,7 @@ fn test_switch_forward_installs_the_slice_units_and_reloads_before_the_new_serve
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_a_switch_to_a_release_whose_checkout_predates_the_slice_install_owner_installs_its_units() {
   let mut world = World::new();
   let pane = world.start_pane();
@@ -997,6 +1055,7 @@ fn test_a_switch_to_a_release_whose_checkout_predates_the_slice_install_owner_in
 // ---- escalation: a server under the pane is stopped by SIGTERM, then SIGKILL --------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_escalation_stops_a_server_under_the_pane_with_sigterm() {
   let sandbox = Sandbox::new();
   let releases = sandbox.dir("releases");
@@ -1012,6 +1071,7 @@ fn test_escalation_stops_a_server_under_the_pane_with_sigterm() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_escalation_sigkills_a_survivor_and_spares_a_server_outside_the_pane() {
   let sandbox = Sandbox::new();
   let releases = sandbox.dir("releases");
@@ -1159,6 +1219,7 @@ fn logging_charliebot(marker: &Path) -> String {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_switch_helper_binary_falls_back_to_the_current_release_when_the_target_lacks_it() {
   let world = World::new();
   replace_charliebot(&world.releases.join(&world.new_sha), "exit 2\n");
@@ -1174,6 +1235,7 @@ fn test_switch_helper_binary_falls_back_to_the_current_release_when_the_target_l
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_switch_helper_binary_uses_the_target_release_when_it_has_the_subcommand() {
   let world = World::new();
   replace_charliebot(&world.releases.join(&world.old_sha), "exit 2\n");
@@ -1188,6 +1250,7 @@ fn test_switch_helper_binary_uses_the_target_release_when_it_has_the_subcommand(
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_preflight_exits_2_when_neither_release_has_switch_helper() {
   let world = World::new();
   replace_charliebot(&world.releases.join(&world.rust_sha), "exit 2\n");
@@ -1208,6 +1271,7 @@ fn test_preflight_exits_2_when_neither_release_has_switch_helper() {
 // ---- the switch on a real pane --------------------------------------------------------------------------------------
 
 #[test]
+#[ignore = "integration"]
 fn test_switch_on_a_real_pane_restores_then_round_trips_then_refuses_at_preflight() {
   let mut world = World::new();
   // This release ignores SIGTERM, so a zero stop wait reaches the SIGKILL path at once.

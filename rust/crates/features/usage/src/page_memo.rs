@@ -121,7 +121,7 @@ mod tests {
 
   use super::*;
   use crate::ledger::default_ledger_path;
-  use crate::test_support::{feature_context, registry};
+  use charliebot_core::config::{self, ConfigSchema};
 
   /// One page body per ledger version and input set: a repeat view builds nothing, and a capture's commit or a changed
   /// input builds the next body.
@@ -129,8 +129,7 @@ mod tests {
   fn a_body_is_built_once_per_ledger_version_and_input_set() {
     let home = tempfile::tempdir().expect("the home directory");
     let path = default_ledger_path(home.path());
-    UsageLedger::open(&path).expect("the ledger opens").close().expect("the ledger closes");
-    let config = feature_context(home.path(), registry()).config.get().expect("the config loads");
+    let config = Arc::new(config::load_config(home.path(), &ConfigSchema::default()).expect("the config loads"));
     let inputs = |query: &str| PageInputs {
       host: "host-a".to_string(),
       week: "2026-11-02 → 2026-11-08".to_string(),
@@ -165,7 +164,6 @@ mod tests {
     assert_eq!(builds.get(), 3);
 
     fs::remove_file(&path).expect("the ledger is deleted");
-    UsageLedger::open(&path).expect("the ledger opens again").close().expect("the ledger closes");
     assert_eq!(body(&mut memo, "?view=week", "five"), "five", "a ledger created again under the path is read again");
     assert_eq!(builds.get(), 4);
   }

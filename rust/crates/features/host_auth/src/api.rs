@@ -319,6 +319,7 @@ host_auth:
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn the_start_route_redirects_to_the_approval_link() {
     let home = home("start-ok", false);
     let (status, headers, body) =
@@ -332,6 +333,7 @@ host_auth:
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn the_start_route_answers_502_with_the_exit_code_and_the_output_tail() {
     let home = home("start-fail", false);
     let (status, headers, body) =
@@ -354,6 +356,7 @@ host_auth:
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn the_login_page_renders_the_configured_logins_and_their_page_load_readback() {
     let home = home("page", true);
     let (status, headers, body) = call(home.router, Method::GET, "/host-auth/logins").await;

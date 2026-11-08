@@ -8,6 +8,7 @@ use std::process::Command;
 use serde_json::json;
 
 #[test]
+#[ignore = "integration"]
 fn a_fake_plays_its_steps_in_order_and_exits_with_its_code() {
   let directory = tempfile::tempdir().expect("a temporary directory is available");
   let profile = directory.path().join("profile");

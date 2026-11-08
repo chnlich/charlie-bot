@@ -35,9 +35,10 @@ use crate::recovery::{self, PassCounters};
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
+use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::{
-  BackendOption, BackendsConfig, CONFIG_D_DIR_NAME, CharlieBotConfig, PathsConfig, Sections, ServerConfig,
+  AutoConfig, BackendOption, BackendsConfig, CONFIG_D_DIR_NAME, CharlieBotConfig, PathsConfig, Sections, ServerConfig,
   TelegramConfig, UiConfig,
 };
 use charliebot_core::credentials::load_credentials;
@@ -54,7 +55,9 @@ use charliebot_registry::backend::{
   Translate, TransportKind,
 };
 use charliebot_registry::context::{FeatureContext, StartupState};
-use charliebot_registry::sequence::{SequenceBinding, SequenceCompletion, SequenceController, SequenceTree};
+use charliebot_registry::sequence::{
+  QuotaFailure, SequenceBinding, SequenceCompletion, SequenceController, SequenceTree,
+};
 use charliebot_store::ChatEvent;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, UtcDateTime};
 use charliebot_store::run_records;
@@ -72,6 +75,10 @@ use tower::ServiceExt;
 
 /// The backend type every synthetic option of these tests uses.
 pub const BACKEND_TYPE: &str = "recovery_script";
+
+/// The package that registers the `auto_member` session slot, as the server's runtime registration does.
+const AUTO_PACKAGE: (&str, RegisterFn) = ("features.auto_backend", charliebot_agents::auto_backend::register);
+
 /// The option the synthetic nodes are created with.
 pub const BACKEND_ID: &str = "fake";
 
@@ -399,7 +406,7 @@ fn config(home: &Path, options: Vec<BackendOption>, pool: Vec<String>, min_free_
       worktree_dir: home.join("worktrees").display().to_string(),
       scratch_dir: home.join("scripts").display().to_string(),
     },
-    backends: BackendsConfig { pool, routing: None, options },
+    backends: BackendsConfig { pool, routing: None, options, auto: None },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
     remote_run: charliebot_core::config::RemoteRunConfig::default(),
@@ -578,6 +585,30 @@ impl Stack {
     Stack::assemble(home, cfg, registry(None)?).await
   }
 
+  /// A stack whose backend options carry an Auto set.
+  pub async fn start_with_auto(
+    options: Vec<BackendOption>,
+    pool: Vec<String>,
+    auto: AutoConfig,
+  ) -> anyhow::Result<Stack> {
+    let home = tempfile::tempdir()?;
+    let mut cfg = config(home.path(), options, pool, 0);
+    cfg.backends.auto = Some(auto);
+    Stack::assemble(Arc::new(home), cfg, registry(Some(AUTO_PACKAGE))?).await
+  }
+
+  /// The stack of the next boot on an earlier home, whose backend options carry an Auto set.
+  pub async fn start_on_home_with_auto(
+    home: Arc<TempDir>,
+    options: Vec<BackendOption>,
+    pool: Vec<String>,
+    auto: AutoConfig,
+  ) -> anyhow::Result<Stack> {
+    let mut cfg = config(home.path(), options, pool, 0);
+    cfg.backends.auto = Some(auto);
+    Stack::assemble(home, cfg, registry(Some(AUTO_PACKAGE))?).await
+  }
+
   /// An agent environment whose PATH starts with the checkout's `gh` wrapper, as the server builds.
   fn gh_wrapper_env(checkout: &Path, path: &str) -> Env {
     let wrapper_dir = charliebot_agents::gh_wrapper::dir_under(checkout);
@@ -611,7 +642,8 @@ impl Stack {
       .context("tasks crate manifest has no repository root ancestor")?;
     let startup = Arc::new(StartupState::default());
     startup.insert(AgentBaseEnvironment { values: Stack::gh_wrapper_env(checkout, "/usr/bin") })?;
-    startup.insert(BackendPool::default())?;
+    startup.insert(BackendAvailability::load(&cfg.charliebot_home)?)?;
+    startup.insert(BackendPool::new(startup.require::<BackendAvailability>()?))?;
     startup.insert(RepoRoot::new(Some(checkout.as_os_str().to_os_string()))?)?;
     let served = Arc::new(Mutex::new((*cfg).clone()));
     let config_source = Arc::clone(&served);
@@ -1056,6 +1088,7 @@ impl SequenceController for SyntheticLoop {
     &'a self,
     session_id: &'a str,
     _run: &'a RunRecord,
+    _quota: Option<&'a QuotaFailure>,
     tree: &'a dyn SequenceTree,
   ) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async move { SyntheticLoop::close_if_due(session_id, tree).await.map(|_| ()) })
@@ -1154,6 +1187,7 @@ impl SequenceController for SyntheticProbe {
     &'a self,
     session_id: &'a str,
     run: &'a RunRecord,
+    _quota: Option<&'a QuotaFailure>,
     tree: &'a dyn SequenceTree,
   ) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async move { SyntheticProbe::record(tree.config(), session_id, &format!("after_run {}", run.id)) })
@@ -1236,6 +1270,7 @@ impl SequenceController for CronRecoveryProbe {
     &'a self,
     _session_id: &'a str,
     _run: &'a RunRecord,
+    _quota: Option<&'a QuotaFailure>,
     _tree: &'a dyn SequenceTree,
   ) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async { Ok(()) })

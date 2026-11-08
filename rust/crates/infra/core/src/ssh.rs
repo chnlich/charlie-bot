@@ -116,8 +116,8 @@ mod tests {
   #[test]
   fn fresh_argv_is_the_launch_preflight_without_a_control_socket() {
     assert_eq!(
-      fresh_argv("host3", &["true"]),
-      ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-n", "host3", "true"]
+      fresh_argv("gpu-box-1", &["true"]),
+      ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-n", "gpu-box-1", "true"]
     );
   }
 

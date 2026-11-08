@@ -12,6 +12,7 @@ use anyhow::Context;
 use charliebot_core::event_types;
 use charliebot_core::fsutil;
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
+use charliebot_core::ndjson::trim_horizontal_space;
 use charliebot_core::proc_identity;
 use charliebot_core::run_token;
 use charliebot_core::text_repr::{self, JsonStyle};
@@ -34,16 +35,19 @@ use crate::metadata::UtcDateTime;
 pub use crate::run_facts::RunFacts;
 #[cfg(test)]
 use crate::run_facts::{CachedRunFacts, RunFactsMemo};
+use crate::run_logs;
 pub use crate::run_record::{RunRecord, SequenceRef};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 pub use charliebot_core::run_kind::RunKind;
 
 pub use crate::layout::{DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RUNS_DIR_NAME, THREADS_DIR_NAME};
 pub const RUN_METADATA_NAME: &str = METADATA_FILE_NAME;
-pub const RAW_LOG_NAME: &str = "agent.raw.ndjson";
+// The log-file names live in `run_logs`, which resolves each name to its plain or compressed file; the readers that
+// name a log file import them here.
+pub use crate::run_logs::{RAW_LOG_NAME, RUN_EVENTS_NAME};
+pub const STDOUT_LOG_NAME: &str = "stdout.log";
 pub const STDERR_LOG_NAME: &str = "agent.stderr.log";
 pub const CURSOR_NAME: &str = "agent.raw.cursor";
-pub const RUN_EVENTS_NAME: &str = "events.jsonl";
 pub const RUN_TASK_SPEC_NAME: &str = "task_spec.md";
 
 // The `record_observation` field names. The task side sends them, and this crate validates and applies them, so the
@@ -140,19 +144,31 @@ impl fmt::Display for EventReadError {
   }
 }
 
-/// The run event log at `path` as its event values, oldest first, under the strict decode. The file reads as text,
-/// and every line, a blank one included, must be one JSON value, so a bad line fails the read with that line's
-/// parse error. A missing file is `Err` with `NotFound`, so the caller decides whether that means no events.
+/// The run event log at `path` as its event values, oldest first, under the strict decode. The name resolves to the
+/// plain or compressed file, which reads as text, and every line, a blank one included, must be one JSON value, so a
+/// bad line fails the read with that line's parse error. A missing log is `Err` with `NotFound`, so the caller decides
+/// whether that means no events.
 pub fn read_event_values(path: &Path) -> Result<Vec<Value>, EventReadError> {
-  let text = fs::read_to_string(path).map_err(EventReadError::Io)?;
+  let bytes = read_log_bytes_or_missing(path)?;
+  let text = String::from_utf8(bytes)
+    .map_err(|error| EventReadError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, error)))?;
   text.lines().map(|line| decode_event_line(line).map_err(EventReadError::Json)).collect()
 }
 
+/// A run event log's decompressed bytes under `run_logs` resolution; neither file existing is `NotFound`, so the
+/// callers that read a missing log as "no events" keep that decision.
+fn read_log_bytes_or_missing(path: &Path) -> Result<Vec<u8>, EventReadError> {
+  let Some(log) = run_logs::resolve(path) else {
+    return Err(EventReadError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, path.display().to_string())));
+  };
+  Ok(log.read_bytes().map_err(EventReadError::Io)?.map(|bytes| bytes.to_vec()).unwrap_or_default())
+}
+
 /// The run event log's lines, read with each invalid byte replaced by U+FFFD, as the chat event log's
-/// `LineRule::LossyLines` reads. A missing file is `Err` with `NotFound`, so the caller decides whether that means
-/// no lines.
+/// `LineRule::LossyLines` reads. The name resolves to the plain or compressed file. A missing log is `Err` with
+/// `NotFound`, so the caller decides whether that means no lines.
 pub fn read_event_lines_lossy(path: &Path) -> Result<Vec<String>, EventReadError> {
-  let bytes = fs::read(path).map_err(EventReadError::Io)?;
+  let bytes = read_log_bytes_or_missing(path)?;
   Ok(String::from_utf8_lossy(&bytes).lines().map(str::to_string).collect())
 }
 
@@ -188,13 +204,9 @@ pub struct EventScanStats {
 }
 
 impl<'k> NewestFirstEvents<'k> {
-  /// Map `path` for a walk of the events `keep_types` names; a missing file has no events.
+  /// Read or map `path` for a walk of the events `keep_types` names; a missing log has no events.
   pub fn open(path: &Path, keep_types: &'k [&'k str]) -> anyhow::Result<Self> {
-    let map = match fsutil::read_or_map_file(path) {
-      Ok(map) => map,
-      Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-      Err(error) => return Err(error).with_context(|| format!("opening event log {}", path.display())),
-    };
+    let map = run_logs::read_bytes(path).with_context(|| format!("opening event log {}", path.display()))?;
     let end = map.as_ref().map_or(0, |map| map.len());
     Ok(Self { map, end, keep_types, pending: Vec::new().into_iter(), stats: EventScanStats::default() })
   }
@@ -269,13 +281,6 @@ fn first_header_string(mut rest: &[u8]) -> Option<(&[u8], &[u8])> {
   let quoted = rest.strip_prefix(b"\"")?;
   let end = quoted.iter().position(|byte| *byte == b'\"')?;
   Some((&quoted[..end], &quoted[end + 1..]))
-}
-
-fn trim_horizontal_space(mut bytes: &[u8]) -> &[u8] {
-  while matches!(bytes.first(), Some(b' ' | b'\t')) {
-    bytes = &bytes[1..];
-  }
-  bytes
 }
 
 /// The record fields a retry caller passes, in keyword order. `input_event_ids` is empty for a worker

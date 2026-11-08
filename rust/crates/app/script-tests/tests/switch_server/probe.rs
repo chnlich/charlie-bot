@@ -17,6 +17,7 @@ const NUDGE_CANCEL: &str = "POST /api/sessions/probe-session/runs/nudge-run/canc
 const SLOW_LISTING: &str = "GET /api/sessions/probe-session/runs?limit=500";
 
 #[test]
+#[ignore = "integration"]
 fn test_probe_passes_on_first_output_then_stops_the_run_and_archives() {
   let world = World::new();
   let (run, calls) = world.probe_turn(&[
@@ -32,6 +33,7 @@ fn test_probe_passes_on_first_output_then_stops_the_run_and_archives() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_probe_passes_without_a_cancel_when_the_run_ends_success() {
   let world = World::new();
   let (run, calls) = world.probe_turn(&[("run_state", json!("success")), ("output", json!("none"))]);
@@ -42,6 +44,7 @@ fn test_probe_passes_without_a_cancel_when_the_run_ends_success() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_probe_fails_at_once_when_the_run_fails_before_any_output() {
   let world = World::new();
   let (run, calls) = world.probe_turn(&[("run_state", json!("failed")), ("output", json!("none"))]);
@@ -54,6 +57,7 @@ fn test_probe_fails_at_once_when_the_run_fails_before_any_output() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_probe_fails_and_stops_the_run_when_no_output_comes_within_the_wait() {
   let world = World::new();
   let (run, calls) = world.probe_turn(&[("run_state", json!("running")), ("output", json!("none"))]);
@@ -64,6 +68,7 @@ fn test_probe_fails_and_stops_the_run_when_no_output_comes_within_the_wait() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_probe_fails_when_the_stop_does_not_settle_within_its_wait() {
   let world = World::new();
   let (run, calls) =
@@ -74,6 +79,7 @@ fn test_probe_fails_when_the_stop_does_not_settle_within_its_wait() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_probe_archive_stops_the_follow_up_run_that_refuses_the_archive() {
   // The probe run ends success, then the server starts a follow-up run. The archive's 409 makes the probe stop it.
   let world = World::new();
@@ -100,6 +106,7 @@ fn test_probe_archive_stops_the_follow_up_run_that_refuses_the_archive() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_probe_archive_fails_naming_the_follow_up_run_that_does_not_settle() {
   // A follow-up run that the stop cannot end holds the archive: the probe fails and logs the run it waited for.
   let world = World::new();
@@ -121,6 +128,7 @@ fn test_probe_archive_fails_naming_the_follow_up_run_that_does_not_settle() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_probe_archive_does_not_cancel_an_empty_run_id() {
   // A refused message leaves no run to stop, but the probe still archives the empty session.
   let world = World::new();
@@ -133,6 +141,7 @@ fn test_probe_archive_does_not_cancel_an_empty_run_id() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_probe_archive_bounds_a_slow_run_list_by_its_wait() {
   // A run listing that answers only after END reports the wait timeout, not the listing's timed-out status.
   let world = World::new();
@@ -152,6 +161,7 @@ fn test_probe_archive_bounds_a_slow_run_list_by_its_wait() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_probe_archive_names_the_run_when_its_listing_answers_after_the_wait() {
   // The wait ends while the run listing that follows the stop request is in flight: the probe reports the settle
   // timeout with the run it waited for, as the clock check at the top of a pass does.

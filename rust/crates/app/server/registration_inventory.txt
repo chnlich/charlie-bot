@@ -17,6 +17,7 @@ page_packages	features.github	features.github
 page_packages	features.discord	features.discord
 page_packages	features.feishu	features.feishu
 page_packages	features.disk_sweep	features.disk_sweep
+page_packages	features.run_log_compaction	features.run_log_compaction
 page_packages	features.web_reply	features.web_reply
 page_packages	features.approval	features.approval
 page_packages	features.host_auth	features.host_auth
@@ -115,11 +116,14 @@ template global	features.voice	voice_default_backend
 home_cards	-	Host login authorization
 home_cards	-	Diff viewer
 home_cards	-	Token usage by model
+home_cards	-	Recent recordings
 home_cards	-	File browser
 scheduled handler	features.backup	backup
 scheduled handler	features.disk_sweep	disk_sweep
+scheduled handler	features.run_log_compaction	run_log_compaction
 scheduled handler	features.usage	usage_ledger
 scheduled handler	features.usage	cool_storage
+metadata_slots	-	auto_backend:Session
 metadata_slots	-	backend_pool:Session
 metadata_slots	-	cron:Session
 metadata_slots	-	slack:Session
@@ -128,6 +132,7 @@ metadata_slots	-	feishu:Session
 metadata_slots	-	web_reply:Session
 metadata_slots	-	claude_code:Session
 metadata_slots	-	claude_code:Thread
+metadata_slot_validators	-	auto_backend:Session
 metadata_slot_validators	-	backend_pool:Session
 metadata_slot_validators	-	cron:Session
 metadata_slot_validators	-	slack:Session
@@ -186,6 +191,8 @@ reading limits	backends.claude_code	claude
 reading limits	backends.opencode	snapshot
 backend_reading_limits	backends.anthropic_compatible	cc-anthropic-compatible:claude
 usage resolver	backends.codex	codex
+member reading	backends.claude_code	cc-claude
+member reading	backends.codex	codex
 sequence controller	features.cron	cron
 sequence controller	features.improve	improve
 draft platform	features.slack	slack

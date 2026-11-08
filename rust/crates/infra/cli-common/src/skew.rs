@@ -29,8 +29,8 @@ pub fn compose_version_skew_hint(
   Some(format!("server running {server_sha}{started_clause}, repo at {local_sha} — server restart may be required"))
 }
 
-/// Gather the server and local SHAs and compose the restart hint. Every failure while gathering
-/// means no hint, so the CLI error path never raises from the hint.
+/// The restart hint composed from the server and local SHAs, gathered here. Every failure while
+/// gathering means no hint, so the CLI error path never raises from the hint.
 pub fn version_skew_hint(
   base_url: &str,
   headers: &[(String, String)],

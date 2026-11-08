@@ -25,7 +25,7 @@
   }
 
   const {sendInput, sendResize} = makePtySenders(sendJson);
-  // The socket opens from the fit callback: the pty then starts at the measured grid, so the shell's first
+  // The socket opens from the fit callback: the pty then starts at the measured grid. The shell's first
   // output is wrapped at the width the user sees instead of being rewrapped by a later resize.
   const {fitAndSendResize, scheduleFitAndSendResize} =
       makeTerminalFitBridge(sendResize, () => term, () => fitAddon, () => terminalOpen, connect);
@@ -58,8 +58,8 @@
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
-    // The pty is created for this grid: a resize sent after it started makes tmux redraw content it laid out at
-    // the old width, and the phone frame then shows the first line from its middle.
+    // The pty is created for this grid. A resize sent after it started makes tmux redraw content it laid out at
+    // the old width. The phone frame then shows the first line from its middle.
     const grid = term ? `?cols=${term.cols}&rows=${term.rows}` : '';
     const url = wsUrlWithToken('/ws/terminal' + grid);
 

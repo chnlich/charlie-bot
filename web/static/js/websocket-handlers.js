@@ -21,6 +21,12 @@ function _commitMessage(msg) {
     return;
   }
   if (engine && engine.hasMessage(msg)) return;
+  // A committed draft the page streamed arrives without its text, thinking or tool rows: they are what the
+  // page already holds. An assistant or plan message closes the draft, and the server starts the next draft's
+  // positions at zero, so the page drops the text it held: a next draft that opens like the closed one would
+  // otherwise match that text and lose its own.
+  if (msg.content_streamed) msg = withStreamedDraft(msg);
+  if (msg.role === 'assistant' || msg.role === 'plan') resetStreamDraft();
   // A committed bubble supersedes the streaming preview: the draft it carries is
   // the same text the preview holds. The local tab did not produce the message;
   // it arrived over the wire, so it never forces the follow. A reader pinned at
@@ -57,20 +63,25 @@ registerWsMessageHandler('session_group_changed', () => deferWhileHidden('sessio
     {advancesCursor: false});
 // A worker run's finish reaches the page as a task_tree_changed frame, and the concurrency badge counts that run, so
 // the badge refetches with the rows. Its 5 s poll covers a worker run's start, which broadcasts nothing. The frame
-// names the session whose row changed: the Workspace fetches that row alone, and the views that keep their own list
-// refetch it. A hidden tab holds each request until it is visible.
+// names the session whose row changed: a list scoped by filter fetches that row alone, and the views that keep their
+// own list refetch it. A hidden tab holds each request until it is visible.
 registerWsMessageHandler('task_tree_changed', (ev) => {
-  if (workspaceRowsShown()) queueRowRefresh(ev.session_id);
+  if (sidebarRowsRefreshable()) queueRowRefresh(ev.session_id);
   else deferWhileHidden('session-list', refetchSessionList);
   deferWhileHidden('workspace-badges', refreshWorkspaceBadges);
   globalThis.ConcurrencyBadge?.refreshSoon();
 }, {advancesCursor: false});
 
-// The socket does not replay task_tree_changed frames, so a socket that reopens after a network loss reloads the list,
-// which recovers the rows the outage hid. A page-driven reconnect (a switch) leaves the flag clear.
+// The socket does not replay task_tree_changed frames, so an open that follows a close reloads the list, which
+// recovers the rows the gap hid. A switch closes and reopens the page's socket, and a welcome view has no socket at
+// all, so those opens sync the list too. A page load's own first socket needs no reload: the page carries the
+// server's snapshot in its rows.
 registerWsConnectHandler(() => {
-  if (!networkLossPending) return;
+  // The network-loss flag feeds the connect handlers that repair their own state (the plan panel); the list resync
+  // below covers every open that could have missed a frame.
   networkLossPending = false;
+  if (!sessionListResyncPending) return;
+  sessionListResyncPending = false;
   deferWhileHidden('session-list', refetchSessionList);
 });
 
@@ -135,9 +146,23 @@ function _replaceCommittedMessage(msg) {
 }
 registerWsMessageHandler('message', (ev) => _commitMessage(ev.message || {}), {advancesCursor: true});
 registerWsMessageHandler('message_update', (ev) => _replaceCommittedMessage(ev.message), {advancesCursor: false});
+
+// A stream frame carries only the text added since the previous frame; stream-draft.js accumulates it. The
+// catch-up sends one `reset` frame holding the whole draft, so a page that joins or reconnects mid-reply
+// renders the same draft as one that saw every frame.
+function withStreamedDraft(msg) {
+  const draft = takeStreamedDraft();
+  const committed = Object.assign({}, msg, {content: draft.content, thinking: draft.thinking});
+  if (draft.tools) committed.tools = draft.tools;
+  return committed;
+}
+
 registerWsMessageHandler('stream', (ev) => {
-  const draft = ev.message || {};
-  if (draft.content || draft.thinking) showStreaming(draft);
+  const applied = applyStreamFrame(ev);
+  const draft = applied.draft;
+  if (applied.changed && (draft.content || draft.thinking)) {
+    showStreaming({content: draft.content, thinking: draft.thinking, tools: draft.tools});
+  }
 }, {advancesCursor: true});
 registerWsMessageHandler('master_done', (ev) => {
   if (!ev.still_thinking) {

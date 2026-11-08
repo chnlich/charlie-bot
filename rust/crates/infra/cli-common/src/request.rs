@@ -10,6 +10,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use charliebot_core::credentials::REDACTED;
 use clap::Args;
 use serde_json::json;
 
@@ -25,19 +26,21 @@ pub struct RequestArgs {
   pub method: String,
   /// The absolute URL.
   pub url: String,
-  /// Read the request body from this file.
+  /// The file that holds the request body.
   #[arg(long, value_name = "PATH", conflicts_with = "json")]
   pub data_file: Option<PathBuf>,
-  /// Send this text as the request body, with a JSON content type.
+  /// The text sent as the request body, with a JSON content type.
   #[arg(long, value_name = "TEXT", conflicts_with = "data_file")]
   pub json: Option<String>,
-  /// Add one request header, `NAME:VALUE`. Repeat for more.
+  /// One request header, `NAME:VALUE`. Repeat for more.
   #[arg(long = "header", value_name = "NAME:VALUE")]
   pub header: Vec<String>,
 }
 
 impl RequestArgs {
-  /// Validate the arguments and read the body. The credential's bearer header is added later, so a
+  /// The request these arguments describe, with a body from `--data-file` or `--json` when either is given.
+  ///
+  /// The arguments are validated here, and the credential's bearer header is added later, so a
   /// usage error costs no token minting.
   pub fn prepare(&self) -> Result<Request, CliExit> {
     let method = parse_method(&self.method)?;
@@ -96,19 +99,19 @@ impl Request {
     Request { method, url: url.into(), headers: Vec::new(), body: None }
   }
 
-  /// Add one request header.
+  /// The request with one more header.
   pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Request {
     self.headers.push((name.into(), value.into()));
     self
   }
 
-  /// Send this body.
+  /// The request with this body.
   pub fn body(mut self, body: Vec<u8>) -> Request {
     self.body = Some(body);
     self
   }
 
-  /// Add the credential's bearer header. Nothing else carries the token out of the process.
+  /// The request with the credential's bearer header. Nothing else carries the token out of the process.
   pub fn bearer(self, token: &str) -> Request {
     self.header("Authorization", format!("Bearer {token}"))
   }
@@ -123,44 +126,71 @@ pub struct Response {
   pub content_type: Option<String>,
 }
 
-/// Send one prepared request.
+/// The send of one prepared request.
 pub fn send(request: &Request, redactions: &[&str]) -> Result<Response, CliExit> {
-  crate::http::ensure_crypto_provider();
-  let runtime = tokio::runtime::Builder::new_current_thread()
-    .enable_all()
-    .build()
-    .map_err(|error| transport_failure(&error.to_string(), redactions))?;
-  runtime.block_on(async {
-    let client = reqwest::Client::builder()
-      // curl without `-L` does not follow a redirect, and the command replaced curl in the skills.
-      // An unexpected redirect then surfaces as its status instead of silently changing the target.
-      .redirect(reqwest::redirect::Policy::none())
-      .timeout(TIMEOUT)
+  HttpClient::new()?.send(request, redactions)
+}
+
+/// The HTTP client and runtime of one command operation.
+pub struct HttpClient {
+  client: reqwest::Client,
+  runtime: tokio::runtime::Runtime,
+}
+
+impl HttpClient {
+  /// The transport for one high-level command operation.
+  pub fn new() -> Result<HttpClient, CliExit> {
+    crate::http::ensure_crypto_provider();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
       .build()
-      .map_err(|error| transport_failure(&error.to_string(), redactions))?;
-    let mut pending = client.request(request.method.clone(), &request.url);
-    for (name, value) in &request.headers {
-      pending = pending.header(name.as_str(), value.as_str());
+      .map_err(|error| transport_failure(&error.to_string(), &[]))?;
+    let client = runtime
+      .block_on(async {
+        reqwest::Client::builder()
+          // curl without `-L` does not follow a redirect, and the command replaced curl in the skills.
+          // An unexpected redirect then surfaces as its status instead of silently changing the target.
+          .redirect(reqwest::redirect::Policy::none())
+          .timeout(TIMEOUT)
+          .build()
+      })
+      .map_err(|error| transport_failure(&error.to_string(), &[]))?;
+    Ok(HttpClient { client, runtime })
+  }
+
+  /// One request sent through the operation's client and runtime.
+  pub fn send(&self, request: &Request, redactions: &[&str]) -> Result<Response, CliExit> {
+    self.runtime.block_on(async {
+      let mut pending = self.client.request(request.method.clone(), &request.url);
+      for (name, value) in &request.headers {
+        pending = pending.header(name.as_str(), value.as_str());
+      }
+      if let Some(body) = &request.body {
+        pending = pending.body(body.clone());
+      }
+      let response =
+        pending.send().await.map_err(|error| transport_failure(&exit::source_chain(&error), redactions))?;
+      let status = response.status().as_u16();
+      let content_type =
+        response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|value| value.to_str().ok()).map(str::to_owned);
+      let body = response.bytes().await.map_err(|error| transport_failure(&exit::source_chain(&error), redactions))?;
+      Ok(Response { status, body: body.to_vec(), content_type })
+    })
+  }
+
+  /// The 2xx response body; another status is an HTTP failure on stderr with exit 1.
+  pub fn fetch(&self, request: &Request, redactions: &[&str]) -> Result<Vec<u8>, CliExit> {
+    let response = self.send(request, redactions)?;
+    if !(200..300).contains(&response.status) {
+      return Err(http_failure(response.status, &response.body, redactions));
     }
-    if let Some(body) = &request.body {
-      pending = pending.body(body.clone());
-    }
-    let response = pending.send().await.map_err(|error| transport_failure(&exit::source_chain(&error), redactions))?;
-    let status = response.status().as_u16();
-    let content_type =
-      response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|value| value.to_str().ok()).map(str::to_owned);
-    let body = response.bytes().await.map_err(|error| transport_failure(&exit::source_chain(&error), redactions))?;
-    Ok(Response { status, body: body.to_vec(), content_type })
-  })
+    Ok(redact_bytes(&response.body, redactions))
+  }
 }
 
 /// The response body of a 2xx answer; another status is an HTTP failure on stderr with exit 1.
 pub fn fetch(request: &Request, redactions: &[&str]) -> Result<Vec<u8>, CliExit> {
-  let response = send(request, redactions)?;
-  if !(200..300).contains(&response.status) {
-    return Err(http_failure(response.status, &response.body, redactions));
-  }
-  Ok(redact_bytes(&response.body, redactions))
+  HttpClient::new()?.fetch(request, redactions)
 }
 
 /// The whole verb for a service whose credential is one bearer token: prepare, send, print.
@@ -169,7 +199,7 @@ pub fn run(args: &RequestArgs, token: &str) -> Result<(), CliExit> {
   write_stdout(&body)
 }
 
-/// Print a successful answer on stdout.
+/// The successful answer written to stdout.
 pub fn write_stdout(body: &[u8]) -> Result<(), CliExit> {
   io::stdout().write_all(body).map_err(|_| CliExit::error("could not write the response"))
 }
@@ -185,16 +215,16 @@ pub fn transport_failure(cause: &str, redactions: &[&str]) -> CliExit {
   CliExit::contract(json!({ "status": null, "response": "request failed", "error": redact(cause, redactions) }), 1)
 }
 
-/// Replace every non-empty secret in `text`, so a credential never reaches a log or a transcript.
+/// The redacted `text`: every non-empty secret replaced, so a credential never reaches a log or a transcript.
 pub fn redact(text: &str, redactions: &[&str]) -> String {
   let mut text = text.to_string();
   for secret in redactions.iter().filter(|secret| !secret.is_empty()) {
-    text = text.replace(secret, "[redacted]");
+    text = text.replace(secret, REDACTED);
   }
   text
 }
 
-/// Replace every non-empty secret in a response body, preserving bytes that are not a secret.
+/// A response body with every non-empty secret replaced, preserving bytes that are not a secret.
 pub fn redact_bytes(body: &[u8], redactions: &[&str]) -> Vec<u8> {
   let mut body = body.to_vec();
   for secret in redactions.iter().filter(|secret| !secret.is_empty()) {
@@ -203,7 +233,7 @@ pub fn redact_bytes(body: &[u8], redactions: &[&str]) -> Vec<u8> {
     let mut position = 0;
     while position < body.len() {
       if body[position..].starts_with(secret) {
-        redacted.extend_from_slice(b"[redacted]");
+        redacted.extend_from_slice(REDACTED.as_bytes());
         position += secret.len();
       } else {
         redacted.push(body[position]);

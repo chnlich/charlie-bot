@@ -69,9 +69,22 @@ function rollbackBackendSelect(badge) {
   if (select) select.value = getActiveBackendId();
 }
 
+// The label a backend id shows in the header and the switch menu. An Auto session shows
+// the member its current turn runs on: "Auto → <member>".
+function backendDisplayLabel(backendId) {
+  const base = backendId === 'auto'
+    ? ((typeof AUTO_BACKEND !== 'undefined' && AUTO_BACKEND && AUTO_BACKEND.label) || backendId)
+    : ((typeof BACKEND_OPTIONS !== 'undefined' && BACKEND_OPTIONS[backendId]) || backendId);
+  if (backendId !== 'auto') return base;
+  const member = globalThis.ACTIVE_AUTO_MEMBER;
+  if (!member) return base;
+  const memberLabel = (typeof BACKEND_OPTIONS !== 'undefined' && BACKEND_OPTIONS[member]) || member;
+  return base + ' → ' + memberLabel;
+}
+
 function updateActiveBackendBadges() {
   const activeBackendId = getActiveBackendId();
-  const activeBackendLabel = BACKEND_OPTIONS[activeBackendId] || activeBackendId;
+  const activeBackendLabel = backendDisplayLabel(activeBackendId);
 
   const backendBadge = document.getElementById('backend-badge');
   if (backendBadge) {
@@ -85,7 +98,7 @@ function updateActiveBackendBadges() {
 
 function renderSwitchableBackendBadge(badge, backendIds, activeId) {
   const options = backendIds.map((id) => {
-    const label = BACKEND_OPTIONS[id] || id;
+    const label = backendDisplayLabel(id);
     return '<option value="' + id + '"' + (id === activeId ? ' selected' : '') + '>' + label + '</option>';
   }).join('');
   badge.innerHTML = '<select data-backend-switch class="bg-slate-800 border border-slate-600 rounded text-slate-200 text-xs px-1.5 py-0.5">' + options + '</select>';
@@ -213,7 +226,8 @@ async function pollTranscript(opts) {
       after: String(transcriptMessageCount),
       revision: transcriptRevision,
     });
-    const res = await fetch('/api/sessions/' + target.sessionId + '/transcript?' + params.toString());
+    const res = await fetch('/api/sessions/' + target.sessionId + '/transcript?' + params.toString(),
+        {signal: viewRequestSignal()});
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
     if (SESSION_ID !== target.sessionId) return;
@@ -276,6 +290,7 @@ function applyTranscriptUpdate(data) {
   transcriptActiveRunId = data.active_run_id || null;
   if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking
       || (data.pending_draft.tools || []).length)) {
+    if (typeof seedStreamDraft === 'function') seedStreamDraft(data.pending_draft);
     showStreaming(data.pending_draft);
   } else {
     hideStreaming();
@@ -345,12 +360,13 @@ async function pollActiveSessionView(opts) {
   const pollSessionId = SESSION_ID;
   activeSessionViewPollInflight = true;
   try {
-    const res = await fetch('/api/sessions/' + pollSessionId + '/usage');
+    const res = await fetch('/api/sessions/' + pollSessionId + '/usage', {signal: viewRequestSignal()});
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
     if (pollSessionId !== SESSION_ID) return;
 
     THINKING_SINCE = data.session.thinking_since || null;
+    globalThis.ACTIVE_AUTO_MEMBER = data.session.auto_member || null;
     setActiveBackendId(data.active_backend);
     setSwitchableBackends(data.switchable_backends);
     updateActiveBackendBadges();
@@ -521,6 +537,49 @@ function switchTargetName(sessionId) {
   return (nameEl && nameEl.textContent) || sessionId;
 }
 
+// The switch's one awaited request: the target's bootstrap. A network failure or a 5xx retries
+// the same request on the send path's backoff (chat/input.js): 1 s doubling to a 30 s cap,
+// unbounded attempts. A failure no longer navigates the page to a full load, which on the
+// measured link costs 415 KB. A 4xx fails the switch: the server refused the bootstrap.
+const BOOTSTRAP_RETRY_BASE_MS = 1000;
+const BOOTSTRAP_RETRY_MAX_MS = 30000;
+
+function waitForBootstrapRetry(delayMs) {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+// Resolves the bootstrap payload, or null when a newer click superseded this switch. Throws on
+// the failures no retry can fix.
+async function fetchBootstrapWithRetry(sessionId, gen) {
+  let retryDelay = BOOTSTRAP_RETRY_BASE_MS;
+  for (;;) {
+    let response;
+    try {
+      response = await fetch('/api/sessions/' + sessionId + '/bootstrap', {signal: viewRequestSignal()});
+    } catch (err) {
+      if (gen !== switchGeneration) return null;
+      await waitForBootstrapRetry(retryDelay);
+      if (gen !== switchGeneration) return null;
+      retryDelay = Math.min(retryDelay * 2, BOOTSTRAP_RETRY_MAX_MS);
+      continue;
+    }
+    if (response.ok) return response.json();
+    if (response.status < 500) throw new Error(String(response.status));
+    if (gen !== switchGeneration) return null;
+    await waitForBootstrapRetry(retryDelay);
+    if (gen !== switchGeneration) return null;
+    retryDelay = Math.min(retryDelay * 2, BOOTSTRAP_RETRY_MAX_MS);
+  }
+}
+
+// The failed switch leaves its placeholder standing: the row names the failure and the way
+// back, another click on the session's sidebar row.
+function failSwitchPlaceholder(sessionId) {
+  const row = document.getElementById('switch-placeholder');
+  if (!row) return;
+  row.textContent = 'Could not open ' + switchTargetName(sessionId) + ' — click the row to retry';
+}
+
 // Click-time immediate feedback: the placeholder row (thinking pulse-dot
 // style) replaces the stale session DOM before any network wait. The
 // displayed-session module paints the header at the click, and
@@ -557,6 +616,10 @@ async function switchSession(sessionId) {
   const gen = ++switchGeneration;
   const fromSessionId = SESSION_ID;
   const switchStartedAt = Date.now();
+  const reportSuperseded = () => reportSwitchEvent('superseded', fromSessionId, sessionId, gen, {
+    winner_generation: switchGeneration,
+    elapsed_ms: Date.now() - switchStartedAt,
+  });
 
   saveDraftNow();
 
@@ -579,6 +642,13 @@ async function switchSession(sessionId) {
   teardownActiveSessionView();
   document.getElementById('text-modal-overlay')?.setAttribute('style', 'display:none');
 
+  // The wipe below must not page the session it leaves: the pagination state stands down until
+  // the target's render re-arms it. The leaving session's in-flight requests and every
+  // superseded bootstrap abort here.
+  sessionHasMore = false;
+  sessionLoadingMore = false;
+  abortViewRequests();
+
   // Close WebSocket (suppress auto-reconnect)
   disconnectWS();
   cancelReconnect();
@@ -598,26 +668,29 @@ async function switchSession(sessionId) {
   let data = freshCachedBootstrap(sessionId);
   if (!data) {
     try {
-      const res = await fetch('/api/sessions/' + sessionId + '/bootstrap');
-      if (!res.ok) throw new Error(res.status);
-      data = await res.json();
+      data = await fetchBootstrapWithRetry(sessionId, gen);
     } catch (err) {
+      // A newer click owns the view and its held actions. A superseded switch ends as superseded
+      // even when the click's abort is what failed it: a body read cut short throws here.
+      if (gen !== switchGeneration) {
+        reportSuperseded();
+        return;
+      }
       console.error('switchSession bootstrap fetch failed:', err);
       reportSwitchEvent('failed', fromSessionId, sessionId, gen, {
         error: String(err?.message || err),
         elapsed_ms: Date.now() - switchStartedAt,
       });
-      // A newer click owns the view and its held actions: a failure of a
-      // superseded switch navigates nowhere.
-      if (gen !== switchGeneration) return;
-      // The page navigates to a full load of the target. A composer action
-      // held by this switch resolves first: a held message posts to the
-      // session it bound before the navigation drops the page.
+      // A composer action held by this switch can never land: a held message
+      // posts to the session it bound before the failure drops the switch.
       abandonHeldComposerActions(sessionId);
       switching = false;
-      // The page-load telemetry names this navigation's cause on the other side.
-      document.dispatchEvent(new CustomEvent('charliebot:page-load-cause', {detail: {cause: 'bootstrap_failure'}}));
-      location.href = '/?session=' + sessionId;
+      failSwitchPlaceholder(sessionId);
+      return;
+    }
+    // A bootstrap retry the newer click cut short resolves null.
+    if (data === null) {
+      reportSuperseded();
       return;
     }
   }
@@ -626,10 +699,7 @@ async function switchSession(sessionId) {
   if (gen !== switchGeneration) {
     // Keep the fetched bootstrap so an immediate re-click skips the fetch.
     cacheBootstrap(sessionId, data);
-    reportSwitchEvent('superseded', fromSessionId, sessionId, gen, {
-      winner_generation: switchGeneration,
-      elapsed_ms: Date.now() - switchStartedAt,
-    });
+    reportSuperseded();
     return;  // newer switch owns the flag
   }
 
@@ -705,6 +775,7 @@ function openMountOptions(session, data, messages) {
 function renderSessionView(data) {
   const session = data.session;
   const messages = data.messages || [];
+  globalThis.ACTIVE_AUTO_MEMBER = session.auto_member || null;
   setActiveBackendId(data.active_backend);
   setSwitchableBackends(data.switchable_backends);
   setActiveRoundRatings(session.round_ratings || {});
@@ -769,12 +840,17 @@ function renderSessionView(data) {
   setInputAreaVisible(!isWorker);
 
   // Initialize streaming preview from pending draft (in-progress assistant
-  // response carried over from a tail-loaded session). A worker transcript
-  // streams tool activity only, so a draft carrying buffered tools shows even
-  // without text — the paint renders those rows.
+  // response carried over from a tail-loaded session). The draft's tool rows
+  // seed the accumulation in every mode: they are the base the socket's
+  // suffix frames build on, and the catch-up of a page whose cursor is at the
+  // log end sends nothing to complete them. A worker transcript streams tool
+  // activity only, so a draft carrying buffered tools shows even without
+  // text — the paint renders those rows. A manager's preview paints no rows,
+  // so it stays hidden until the draft has text.
   if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking
-      || (isWorker && (data.pending_draft.tools || []).length))) {
-    showStreaming(data.pending_draft);
+      || (data.pending_draft.tools || []).length)) {
+    if (typeof seedStreamDraft === 'function') seedStreamDraft(data.pending_draft);
+    if (data.pending_draft.content || data.pending_draft.thinking || isWorker) showStreaming(data.pending_draft);
   } else {
     hideStreaming();
   }
@@ -894,7 +970,8 @@ async function loadOlderIfNeeded(container, isContinuation) {
   let pageLanded = false;
   const stale = () => flight.generation !== switchGeneration || flight.sessionId !== SESSION_ID;
   try {
-    const res = await fetch(url, {signal: abortCtrl.signal});
+    // The page's own timeout and the switch's view abort both cancel the flight.
+    const res = await fetch(url, {signal: AbortSignal.any([abortCtrl.signal, viewRequestSignal()])});
     clearTimeout(timeout);
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
@@ -1165,6 +1242,7 @@ async function createTaskNode(taskParentId, group) {
     if (draftInput) { draftInput.value = ''; autoResize(draftInput); }
     if (masterThinking) stopThinking();
     teardownActiveSessionView();
+    abortViewRequests();
     disconnectWS();
     cancelReconnect();
     hideStreaming();
@@ -1198,6 +1276,7 @@ function renderNoActiveSessionView() {
   if (masterThinking) stopThinking({preserveSessionIndicator: true});
   teardownActiveSessionView();
   hideStreaming();
+  abortViewRequests();
   disconnectWS();
   cancelReconnect();
 

@@ -27,11 +27,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check integration ignore reasons
+        run: node dev/check-integration-ignores.mjs
+
       # The no-Python guard: a tracked .py file, a Python shebang, a Python-naming line in scripts or CI
       # configuration and a Python-naming line in prompts, skills or docs all fail the job. It needs git alone, so it
       # runs before the installs.
       - name: Reject Python
         run: dev/check-no-python.sh
+
+      - name: Install integration selector dependencies
+        run: npm ci --prefix dev/integration-selection --ignore-scripts --no-audit --no-fund
 
       # The suites that parse JavaScript (sucrase) or build Tailwind resolve devDependencies from node_modules;
       # installing up front keeps the installs the suites run themselves at no-op speed.
@@ -39,17 +45,32 @@ jobs:
         working-directory: web
         run: npm install --no-audit --no-fund
 
-      # One suite per web/tests/*.test.{js,mjs} file on disk: the glob is the single source, so a suite file that
-      # lands runs here without a registration edit. The bound turns a hung runner into a step failure instead
-      # of a CI hang.
+      # One suite per web/tests/*.test.{js,mjs} file on disk, minus the integration suites, which the Integration
+      # workflow runs. The glob is the single source, so a suite file that lands runs here without a registration
+      # edit. The dev/ unit suites run in the same process set, so their tests report their times too. The JUnit
+      # report feeds the 0.1 s check; the spec output is the log. The bound turns a hung runner into a step failure
+      # instead of a CI hang.
       - name: Test
         working-directory: web
         run: |
-          suites=$(find tests -maxdepth 1 \( -name '*.test.js' -o -name '*.test.mjs' \) | sort)
+          suites=$(find tests -maxdepth 1 \( -name '*.test.js' -o -name '*.test.mjs' \) ! -name '*.integration.test.*' | sort)
           count=$(printf '%s\n' "$suites" | grep -c .)
           echo "Running $count node suite files"
           [ "$count" -gt 0 ]
-          timeout 780 node --test $suites
+          mkdir -p target/node-test
+          timeout 780 node --test \
+            --test-reporter=junit --test-reporter-destination=target/node-test/junit.xml \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            $suites ../dev/integration-selection/select.test.mjs ../dev/week-review/test/review.test.mjs
+
+      # If a parallel over-limit test's first alone run exceeds 0.1 s, two more alone runs decide by the shortest.
+      - name: Unit tests over 0.1 s
+        if: always()
+        run: dev/check-unit-test-time.mjs --runner node --junit web/target/node-test/junit.xml
+
+      - name: Measure node unit tests over 0.05 s alone
+        if: always() && github.event_name == 'workflow_dispatch'
+        run: dev/check-unit-test-time.mjs --runner node --junit web/target/node-test/junit.xml --parallel-limit 0.05
 
   # The image is pinned by name. The live host runs Ubuntu 24.04 with glibc 2.39, and a binary built against a
   # newer glibc does not start there.
@@ -106,7 +127,8 @@ jobs:
 
   rust-test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # The 0.1 s check runs parallel over-limit tests alone and gives a first alone run over 0.1 s two retries.
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -129,33 +151,65 @@ jobs:
           workspaces: rust
           key: rust-test
 
+      # nextest runs each test in its own process and writes a JUnit report with a per-test `time`
+      # attribute; `cargo test` cannot report per-test times on stable Rust. Pinned to one version,
+      # installed from the prebuilt binary so the install takes seconds and stays reproducible.
+      - name: Install cargo-nextest
+        run: |
+          curl -LsSf https://get.nexte.st/0.9.150/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+          cargo nextest --version
+
       - name: Test
         working-directory: rust
-        run: cargo test --locked
+        run: cargo nextest run --locked --profile ci
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-test-junit
+          path: rust/target/nextest/ci/junit.xml
+          retention-days: 30
+          if-no-files-found: error
+
+      # Each parallel over-limit test runs alone; a first alone time over 0.1 s triggers two more runs.
+      # The shortest alone time decides, and a failure names the test and all of its alone times.
+      - name: Unit tests over 0.1 s
+        if: always()
+        run: dev/check-unit-test-time.mjs --runner rust --junit rust/target/nextest/ci/junit.xml
+
+      - name: Measure Rust unit tests over 0.05 s alone
+        if: always() && github.event_name == 'workflow_dispatch'
+        run: dev/check-unit-test-time.mjs --runner rust --junit rust/target/nextest/ci/junit.xml --parallel-limit 0.05
+
+      # Doc-tests carry no per-test time, so a doc-test that runs dodges the 0.1 s rule: the step fails
+      # when `cargo test --doc` runs any, and names each. Today zero doc-tests run.
+      - name: No doc-tests run
+        if: always()
+        working-directory: rust
+        run: |
+          set +e
+          cargo test --doc --locked > /tmp/doc-tests.txt 2>&1
+          rc=$?
+          set -e
+          cat /tmp/doc-tests.txt
+          if [ "$rc" -ne 0 ]; then
+            echo "cargo test --doc failed" >&2
+            exit 1
+          fi
+          ran=$(grep -E '^test .* \.\.\. (ok|FAILED|bench)' /tmp/doc-tests.txt || true)
+          if [ -n "$ran" ]; then
+            echo "doc-tests carry no per-test time, so none may run; these ran:" >&2
+            echo "$ran" >&2
+            exit 1
+          fi
+          echo "0 doc-tests ran"
 
       # A script test that leaves a stand-in behind reparents it to pid 1. Run after a failed test too, which is
       # exactly when a leak appears.
       - name: Check for leaked script-test processes
         if: always()
-        run: |
-          prefix=/tmp/charliebot-script-
-          leaked=""
-          for entry in /proc/[0-9]*/stat; do
-            pid=${entry#/proc/}
-            pid=${pid%/stat}
-            ppid=$(sed 's/^.*) //' "$entry" 2>/dev/null | cut -d' ' -f2)
-            [ "$ppid" = "1" ] || continue
-            if tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | grep -q "^${prefix}"; then
-              leaked="$leaked $pid"
-            fi
-          done
-          if [ -n "$leaked" ]; then
-            echo "leaked script-test processes:$leaked" >&2
-            for pid in $leaked; do
-              printf '  %s: %s\n' "$pid" "$(tr '\0' ' ' < "/proc/$pid/cmdline")" >&2
-            done
-            exit 1
-          fi
+        run: dev/check-leaked-script-test-processes.sh
 
   rust-lint:
     runs-on: ubuntu-24.04

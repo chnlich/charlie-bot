@@ -63,7 +63,7 @@ impl AgentBackend for GeminiBackend {
     Ok(self.argv(prompt))
   }
 
-  /// Strips the Google API keys, so the CLI bills through its OAuth login.
+  /// The environment with the Google API keys stripped, so the CLI bills through its OAuth login.
   fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
     Ok(strip_google_api_keys(&env))
   }

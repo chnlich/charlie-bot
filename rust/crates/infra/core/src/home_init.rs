@@ -7,6 +7,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use crate::config::CharlieBotConfig;
+use crate::repo_root::CONFIGS_DIR_NAME;
+use crate::str_methods::universal_newlines;
 
 /// The default `config.yaml` for a checkout without the template.
 const DEFAULT_CONFIG_YAML: &str = "paths:\n  workspace_dirs:\n  - ~/workspace\n  worktree_dir: ~/worktrees\n";
@@ -19,7 +21,7 @@ pub fn init_charliebot_home(cfg: &CharlieBotConfig, repo_root: &Path) -> io::Res
   }
   let config_file = cfg.config_file();
   if !config_file.exists() {
-    let template = repo_root.join("configs").join("config.example.yaml");
+    let template = repo_root.join(CONFIGS_DIR_NAME).join("config.example.yaml");
     let text = if template.exists() {
       universal_newlines(&fs::read_to_string(&template)?)
     } else {
@@ -29,13 +31,8 @@ pub fn init_charliebot_home(cfg: &CharlieBotConfig, repo_root: &Path) -> io::Res
   }
   let credentials_file = cfg.credentials_file();
   if !credentials_file.exists() {
-    fs::copy(repo_root.join("configs").join("credentials.example.yaml"), &credentials_file)?;
+    fs::copy(repo_root.join(CONFIGS_DIR_NAME).join("credentials.example.yaml"), &credentials_file)?;
     fs::set_permissions(&credentials_file, fs::Permissions::from_mode(0o600))?;
   }
   Ok(())
-}
-
-/// A text-mode read: `\r\n` and `\r` become `\n`.
-fn universal_newlines(text: &str) -> String {
-  text.replace("\r\n", "\n").replace('\r', "\n")
 }

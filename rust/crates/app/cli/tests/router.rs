@@ -185,6 +185,7 @@ fn run_binary(home: &Path, arguments: &[&str], stdin_text: &str) -> (i32, String
 }
 
 #[test]
+#[ignore = "integration"]
 fn router_end_to_end_prints_one_answer_and_reports_failures_through_the_built_binary() {
   with_timeout(|| {
     let temp = tempfile::tempdir().unwrap();

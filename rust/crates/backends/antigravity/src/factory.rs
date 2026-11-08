@@ -8,7 +8,7 @@ use super::antigravity_cli::AntigravityBackend;
 use super::options;
 use charliebot_agents::cli_base::CliHost;
 
-/// Builds one antigravity backend per launch.
+/// The factory that builds one antigravity backend per launch.
 pub struct AntigravityFactory {
   host: CliHost,
 }

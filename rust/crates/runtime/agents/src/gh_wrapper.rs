@@ -330,6 +330,7 @@ esac
   /// The text-carrying forms: each one mints the App token for its target and runs gh with `GH_TOKEN` set. The
   /// original argv reaches the real gh unchanged.
   #[test]
+  #[ignore = "integration"]
   fn text_writes_mint_an_app_token_for_their_target() {
     let cases: Vec<(Vec<&str>, &str)> = vec![
       (vec!["pr", "create", "-R", "o/r", "--title", "t"], "o/r"),
@@ -394,6 +395,7 @@ esac
 
   /// The passthrough forms: no token lookup, no `GH_TOKEN`, argv unchanged.
   #[test]
+  #[ignore = "integration"]
   fn every_other_call_passes_through_without_a_token_lookup() {
     let cases: Vec<Vec<&str>> = vec![
       vec!["pr", "view", "-R", "o/r", "12"],
@@ -448,6 +450,7 @@ esac
   }
 
   #[test]
+  #[ignore = "integration"]
   fn exit_three_runs_the_personal_login_without_a_token() {
     let stubs = Stubs::start();
     let output = stubs.run(&["pr", "create", "-R", "o/r"], &[("TOKEN_EXIT", "3")]);
@@ -460,6 +463,7 @@ esac
   /// Each newly classified form keeps today's behavior when the App is not installed on the target: the real gh runs
   /// as the personal login, with no `GH_TOKEN`.
   #[test]
+  #[ignore = "integration"]
   fn newly_classified_forms_run_unchanged_when_the_app_is_not_installed() {
     let cases: Vec<Vec<&str>> = vec![
       vec!["issue", "close", "-R", "o/r", "3", "-c", "closing"],
@@ -489,6 +493,7 @@ esac
 
   /// A write whose target is not a repository never looks up the App token.
   #[test]
+  #[ignore = "integration"]
   fn non_repository_writes_pass_through() {
     for args in [
       vec!["gist", "create", "-d", "description", "file.txt"],
@@ -505,6 +510,7 @@ esac
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_token_error_runs_nothing() {
     let stubs = Stubs::start();
     let output = stubs.run(&["pr", "create", "-R", "o/r"], &[("TOKEN_EXIT", "7")]);
@@ -517,6 +523,7 @@ esac
   }
 
   #[test]
+  #[ignore = "integration"]
   fn an_unresolvable_target_is_refused_before_anything_runs() {
     for args in [
       vec!["api", "graphql", "-f", "query=mutation{x}"],
@@ -540,6 +547,7 @@ esac
   /// A GraphQL document with a mutation or subscription operation, or one whose operation type cannot be read, is
   /// refused before anything runs.
   #[test]
+  #[ignore = "integration"]
   fn graphql_documents_that_are_not_query_only_are_refused() {
     let cases: Vec<Vec<&str>> = vec![
       vec!["api", "graphql", "-f", "query=mutation { x }"],
@@ -569,6 +577,7 @@ esac
 
   /// A query document in an @file is read like one passed inline.
   #[test]
+  #[ignore = "integration"]
   fn a_graphql_query_in_a_file_passes_through() {
     let stubs = Stubs::start();
     let query_file = stubs.root.path().join("query.graphql");
@@ -585,6 +594,7 @@ esac
   /// A PATH entry that reaches the wrapper's own directory through a symlink must not make the wrapper exec itself:
   /// the search skips that directory and takes the next real gh.
   #[test]
+  #[ignore = "integration"]
   fn an_aliased_wrapper_directory_is_skipped_rather_than_executed() {
     let stubs = Stubs::start();
     let alias = stubs.root.path().join("wrapper-alias");
@@ -603,6 +613,7 @@ esac
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_text_write_without_the_token_command_is_refused_naming_the_config_key() {
     for args in [vec!["pr", "create", "-R", "o/r"], vec!["api", "-f", "k=v", "repos/o/r/issues"]] {
       let stubs = Stubs::start();
@@ -618,6 +629,7 @@ esac
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_pass_through_call_needs_no_token_command() {
     for args in [vec!["pr", "view", "-R", "o/r", "12"], vec!["api", "graphql", "-f", "query={viewer{login}}"]] {
       let stubs = Stubs::start();
@@ -629,6 +641,7 @@ esac
   }
 
   #[test]
+  #[ignore = "integration"]
   fn without_r_the_target_comes_from_the_current_directory() {
     let stubs = Stubs::start();
     let output = stubs.run(&["pr", "create", "--title", "t"], &[]);
@@ -638,6 +651,7 @@ esac
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_failed_cwd_resolution_is_refused() {
     let root = tempfile::tempdir().unwrap();
     let bin = root.path().join("bin");

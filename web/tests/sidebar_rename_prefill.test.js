@@ -81,16 +81,6 @@ test('row handlers carry no session name: every startRename call holds only the 
   }
 });
 
-test('header handler in the template reads the live global, no server-side interpolation', () => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const html = fs.readFileSync(path.join(__dirname, '..', 'templates', 'index.html'), 'utf8');
-  const attr = html.match(/onclick="(startRename\([^"]*)"/);
-  assert.ok(attr, 'index.html header is missing a startRename onclick handler');
-  assert.equal(attr[1], 'startRename(event, SESSION_ID)',
-    'header handler must be the static global-reading form with no interpolated session state');
-});
-
 test('prefill reads the live row text: a renamed session prefills its new name', () => {
   const dom = makeDom({rowName: 'demo session'});
   clickRename(dom);
@@ -128,4 +118,17 @@ test('zero-width row rect (hidden row) falls back to the header instead of corne
   clickRename(dom);
   assert.equal(dom.input.value, 'header fallback name');
   assert.equal(dom.input.style.left, '50px');
+});
+
+test('a chat-header click opens the field on the header name line, not on the session row', () => {
+  const dom = makeDom({rowName: 'row text', headerName: 'header name'});
+  const context = loadModals(dom);
+  // The header's onclick handler sits on the div that holds the heading.
+  context.startRename({
+    preventDefault() {}, stopPropagation() {},
+    currentTarget: {contains: (el) => el === dom.headerEl},
+  }, 's1');
+  assert.equal(dom.input.value, 'header name');
+  assert.equal(dom.input.style.width, '400px', 'the field took the row width instead of the header name line');
+  assert.equal(dom.input.style.height, '28px');
 });

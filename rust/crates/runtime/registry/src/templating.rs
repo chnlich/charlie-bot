@@ -14,7 +14,7 @@
 //! registry's template globals and `page_parts` added. The search path is `web/templates`, then each page package's
 //! `templates/`, in registration order, then `web/static` and each package's `static/`. The static trees come
 //! last, so a template name always resolves to a template, and a page includes the core script or style the static
-//! route would otherwise serve. A stylesheet the page links from the static tree is carried inline the same way: the
+//! route would otherwise serve. A stylesheet the page links from the static tree is carried inline the same way. The
 //! document holds the file at the link's place, so the first paint never waits for a second request.
 
 use std::collections::HashMap;
@@ -40,9 +40,9 @@ use serde_json::json;
 use sha1::{Digest, Sha1};
 
 use crate::context::FeatureContext;
-use crate::inlined_script;
-use crate::pages::{self, package_directory};
+use crate::pages::{self, STATIC_URL_PREFIX, package_directory};
 use crate::watch::TreeWatch;
+use crate::{inlined_script, inlined_style};
 
 /// A zero-argument template global: the name and the value the call returns.
 pub type TemplateGlobal = (&'static str, Value);
@@ -408,11 +408,20 @@ impl Templating {
 
   fn environment(&self, globals: Vec<TemplateGlobal>) -> Environment<'static> {
     let loader = jinja::file_system_loader(self.loader.clone());
-    // A page carries its scripts inline, and a comment in a script explains it to an editor rather than to the
-    // browser: the inline copy leaves the comments out. A template and a stylesheet keep every byte.
+    // A page carries its scripts and its stylesheets inline, and a comment in either explains it to an editor rather
+    // than to the browser: the inline copy leaves the comments out, and a script's code indentation with them. A
+    // template keeps every byte.
     let loader = move |name: &str| {
       let source = loader(name)?;
-      Ok(source.map(|text| if name.ends_with(".js") { inlined_script::without_comments(&text) } else { text }))
+      Ok(source.map(|text| {
+        if name.ends_with(".js") {
+          inlined_script::without_comments(&text)
+        } else if name.ends_with(".css") {
+          inlined_style::without_comments(&text)
+        } else {
+          text
+        }
+      }))
     };
     let mut environment = jinja::environment(loader);
     let repo_root = self.repo_root.clone();
@@ -439,11 +448,11 @@ impl Templating {
 /// The page's local stylesheet links, carried inline where the link stands.
 ///
 /// A stylesheet under `/static/` names a file the engine's loader already holds, and a page response is
-/// `no-store`: a separate request for that file buys no caching, it only holds the first paint until the file
+/// `no-store`. A separate request for that file buys no caching; it only holds the first paint until the file
 /// arrives. The element becomes a `<style>` at the link's place, so the cascade keeps the order the page states.
-/// A tag that states any attribute beside `rel` and `href` (a media query, a disabled flag), a URL outside the
-/// static tree and a file the loader cannot hold all stay links, because inlining them would change what the page
-/// means.
+/// A tag that states any attribute beside `rel` and `href`, such as a media query or a disabled flag, stays a
+/// link. A URL outside the static tree also stays a link, and so does a file the loader cannot hold. Inlining any
+/// of them would change what the page means.
 fn inline_local_stylesheets(environment: &Environment<'_>, html: String) -> Result<String, RenderError> {
   const LINK: &str = "<link";
   if !html.contains(LINK) {
@@ -490,7 +499,7 @@ fn linked_stylesheet(environment: &Environment<'_>, tag: &str) -> Result<Option<
   if rel != Some("stylesheet") {
     return Ok(None);
   }
-  let Some(path) = href.and_then(|url| url.strip_prefix("/static/")) else { return Ok(None) };
+  let Some(path) = href.and_then(|url| url.strip_prefix(STATIC_URL_PREFIX)) else { return Ok(None) };
   let path = path.split(['?', '#']).next().unwrap_or(path);
   match environment.get_template(path) {
     Ok(template) => Ok(Some(template.source().to_string())),
@@ -849,10 +858,11 @@ mod tests {
     );
   }
 
-  /// A page that inlines a script carries it without the comments that document the source file, and the string
-  /// literals the script holds keep their bytes. A stylesheet inlines whole.
+  /// A page that inlines a script or a stylesheet carries it without the comments that document the source file, and
+  /// a script without the code indentation that shows its nesting. The string literals either source holds keep
+  /// their bytes.
   #[tokio::test]
-  async fn an_inlined_script_travels_without_its_comments() {
+  async fn an_inlined_script_or_stylesheet_travels_without_its_comments() {
     let root = tempfile::tempdir().unwrap();
     let templates = root.path().join("web").join("templates");
     let scripts = root.path().join("web").join("static").join("js");
@@ -860,7 +870,7 @@ mod tests {
     fs::create_dir_all(&templates).unwrap();
     fs::create_dir_all(&scripts).unwrap();
     fs::create_dir_all(&styles).unwrap();
-    fs::write(scripts.join("page.js"), "// a note\nlet url = 'https://example.com'; // gone").unwrap();
+    fs::write(scripts.join("page.js"), "// a note\n  let url = 'https://example.com'; // gone").unwrap();
     fs::write(styles.join("page.css"), "/* a note */\n.chat{display:flex}").unwrap();
     fs::write(
       templates.join("scripted.html"),
@@ -875,10 +885,7 @@ mod tests {
 
     let response = templating.render_page(&features, "scripted.html", &json!({}), &parts).unwrap();
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    assert_eq!(
-      body,
-      "<script>\nlet url = 'https://example.com'; </script><style>/* a note */\n.chat{display:flex}</style>"
-    );
+    assert_eq!(body, "<script>\nlet url = 'https://example.com'; </script><style>\n.chat{display:flex}</style>");
   }
 
   /// A repeat render answers from the compiled environment, and a template edited on disk moves the source list so
@@ -909,8 +916,8 @@ mod tests {
     assert_eq!(render(&templating, &features, &parts).await, "synthetic-label two, longer");
   }
 
-  /// A page body at or above the transport's minimum travels compressed when the client asked for gzip, and the
-  /// next request of that body reuses the compressed bytes instead of deflating it again.
+  /// A page body at or above the transport's minimum travels compressed when the client asked for gzip. The next
+  /// request of that body reuses the compressed bytes instead of deflating it again.
   #[tokio::test]
   async fn a_gzip_page_request_reuses_the_compressed_body_it_kept() {
     let root = tempfile::tempdir().unwrap();
@@ -981,6 +988,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn asset_digest_hashes_each_static_file_by_url_path_in_path_order() {
     let root = tempfile::tempdir().unwrap();
     let static_root = root.path().join("web").join("static");

@@ -34,6 +34,7 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
 use charliebot_core::event_types;
+use charliebot_core::home::BOOT_RECOVERY_FILE_NAME;
 use charliebot_core::text_repr::{self, DEFAULT_JSON};
 use charliebot_store::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use charliebot_store::layout;
@@ -50,9 +51,6 @@ use crate::rng::Rng;
 use crate::session::{self, EventLog};
 use crate::text::{self, SyntheticText};
 
-/// The file beside the sessions that holds the boot marker. `scripts/release/trial.sh --seed-home` copies it to the
-/// trial home's `state/boot_recovery.json`, where the walk reads it.
-pub const MARKER_SEED_NAME: &str = "boot_recovery.json";
 /// The directory beside the sessions that holds the worktrees the run records name. Its dot keeps it out of the seed
 /// copy, which takes only visible directories.
 const WORKTREES_DIR: &str = ".worktrees";
@@ -890,7 +888,8 @@ fn set_session_times(session_dir: &Path, modified_at: NaiveDateTime) -> Result<(
 /// Writes the marker the walk reads, in the bytes the server writes it (`write_boot_recovery_marker`).
 ///
 /// The marker names the plan's open sessions, as a server's pass writes the sessions it left open. A build without that
-/// key reads each state itself.
+/// key reads each state itself. `scripts/release/trial.sh --seed-home` copies the file into a trial home's
+/// `state/boot_recovery.json`, where the walk reads it.
 fn write_marker_seed(home: &Path, plan: &HomePlan) -> Result<()> {
   let open: Vec<&str> =
     plan.sessions.iter().filter(|session| session.close.is_none()).map(|session| session.id.as_str()).collect();
@@ -898,7 +897,7 @@ fn write_marker_seed(home: &Path, plan: &HomePlan) -> Result<()> {
   if !open.is_empty() {
     payload["open_sessions"] = json!(open);
   }
-  let path = home.join(MARKER_SEED_NAME);
+  let path = home.join(BOOT_RECOVERY_FILE_NAME);
   fs::write(&path, text_repr::json_dumps(&payload, &DEFAULT_JSON))
     .with_context(|| format!("cannot write {}", path.display()))
 }
@@ -1148,8 +1147,8 @@ mod tests {
   /// within the A1 range of the reference start. Its full passes replay about the reference start's run follow-ups:
   /// one per finished manager turn and work run, the workers' work runs among them.
   #[test]
-  fn a_production_size_plan_deals_each_keep_reason_its_scaled_count() {
-    let sessions = 8_929;
+  fn a_scaled_plan_deals_each_keep_reason_its_scaled_count() {
+    let sessions = 1_200;
     let (_, _, sizes) = session::planned_home(sessions, 1);
     let plan = HomePlan::new(&sizes, 1);
     for (reason, reference) in REFERENCE_KEEPS {
@@ -1181,12 +1180,16 @@ mod tests {
     }
     assert!(plan.sessions.iter().all(|session| session.task_type != Some(TaskType::ColdRead)), "no cold read");
 
-    // An archive takes a large parent's log, and a plan of this size archives several of them.
+    // An archive takes a large parent's log: each archived session is a parent in the band. A plan whose logs
+    // all sit in the band archives every parent a child lands under, so a small plan deals several archives.
     let archived: Vec<usize> = (0..sessions).filter(|index| plan.sessions[*index].archived).collect();
-    assert!(archived.len() >= 5, "{} archived sessions", archived.len());
     for index in archived {
       let band = ARCHIVE_MIN_BYTES..=ARCHIVE_MAX_BYTES;
       assert!(parents.contains(&index) && band.contains(&sizes[index]), "session {index}");
     }
+    let band_sizes = vec![30_000_000_u64; 500];
+    let band_plan = HomePlan::new(&band_sizes, 1);
+    let band_archived = band_plan.sessions.iter().filter(|session| session.archived).count();
+    assert!(band_archived >= 5, "{band_archived} archived sessions");
   }
 }

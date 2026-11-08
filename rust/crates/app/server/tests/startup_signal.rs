@@ -270,6 +270,7 @@ fn assert_boot_signal(signal_to_send: Signal) {
 // The delay gate `wait_test_recovery_gate` exists only in debug builds, so a release build has no gate to stop in.
 #[cfg(debug_assertions)]
 #[test]
+#[ignore = "integration"]
 fn sigterm_stops_task_recovery_during_boot() {
   assert_boot_signal(Signal::SIGTERM);
 }
@@ -277,6 +278,7 @@ fn sigterm_stops_task_recovery_during_boot() {
 // The delay gate `wait_test_recovery_gate` exists only in debug builds, so a release build has no gate to stop in.
 #[cfg(debug_assertions)]
 #[test]
+#[ignore = "integration"]
 fn sigint_stops_task_recovery_during_boot() {
   assert_boot_signal(Signal::SIGINT);
 }
@@ -284,6 +286,7 @@ fn sigint_stops_task_recovery_during_boot() {
 /// A port another listener holds: the bind fails after `server_ready`, so the server logs `bind_failed` as an error line
 /// that carries the address, and exits with the config status.
 #[test]
+#[ignore = "integration"]
 fn a_failed_bind_logs_an_error_line_and_exits_with_the_config_status() {
   let temporary = tempfile::tempdir().expect("the synthetic home tempdir is created");
   let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("a port to occupy");
@@ -375,6 +378,7 @@ fn assert_segments_cover_ready(lines: &[String]) {
 /// run on one CPU, where the walk's length follows the fixture; on many cores its parallel reads end it in a fraction of
 /// `WALK_MIN_MS`.
 #[test]
+#[ignore = "integration"]
 fn sigterm_stops_the_node_walk_without_the_delay_gate() {
   let temporary = tempfile::tempdir().expect("the synthetic home tempdir is created");
   let home = prepare_home(temporary.path(), 0);

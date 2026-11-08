@@ -260,7 +260,8 @@ and the run-context read. On this branch neither has a caller outside `tests/tas
 the validated checkout root held in typed startup state.
 
 - `prompts::SNAPSHOT_FILENAME`, `prompts::LAUNCH_TEXT_FILENAME`
-- `prompts::SCOPE_BASE`, `SCOPE_MEMORY`, `SCOPE_SUBTREE`, `SCOPE_NODE`, `DELIVERY_FULL`
+- `charliebot_registry::turn::SCOPE_BASE`, `SCOPE_MEMORY`, `SCOPE_SUBTREE`, `SCOPE_NODE`, `SCOPE_TASTE`,
+  `DELIVERY_FULL`, `DELIVERY_INDEX`
 - `prompts::MANAGER_KINDS`, `prompts::WORKER_KINDS`
 - `prompts::COHERENCE_PASSES`
 - `prompts::MAX_AGENT_MESSAGE_WEIGHTED_CHARS`

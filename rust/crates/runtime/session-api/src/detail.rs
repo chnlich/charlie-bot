@@ -1214,6 +1214,36 @@ backends:
     assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "synthetic-b", "auto"]));
   }
 
+  /// A config with two pools: the priority pool `auto` and the rotate pool `light`.
+  const TWO_POOLS_CONFIG: &str = "\
+backends:
+  options:
+    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a}
+    - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b}
+  pools:
+    - id: auto
+      label: Auto
+      rule: priority
+      members:
+        - {backend: synthetic-a, billing: subscription}
+        - {backend: synthetic-b, billing: payg}
+    - id: light
+      label: Light
+      rule: rotate
+      members: [synthetic-b]
+";
+
+  #[tokio::test]
+  async fn a_session_on_a_plain_option_lists_every_pool_as_switchable() {
+    let (_home, features) = feature_context_with_auto(TWO_POOLS_CONFIG);
+    let meta = create_node(&features.store, "two-pools-node", None, TaskProfile::Manager).await;
+    let cfg = features.config.get().expect("the test config loads");
+
+    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
+    assert_eq!(backend["active_backend"], "synthetic-a");
+    assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "synthetic-b", "auto", "light"]));
+  }
+
   #[tokio::test]
   async fn a_dedicated_lock_keeps_the_pools_out_of_the_switch_list() {
     let (_home, features) = feature_context_with_auto(AUTO_CONFIG);

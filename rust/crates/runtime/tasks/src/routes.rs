@@ -148,7 +148,7 @@ const RETRY_RUN_BODY: BodyModel = BodyModel::required(RETRY_RUN_BODY_FIELDS).for
 const CANCEL_RUN_BODY_FIELDS: &[Field] = &[Field::required("request_id", FieldType::String)];
 const CANCEL_RUN_BODY: BodyModel = BodyModel::required(CANCEL_RUN_BODY_FIELDS).forbid_extra();
 
-const DELEGATE_TASK_TYPE: &[&str] = &["implement", "quick-edit", "script-run", "verify", "cold-read"];
+const DELEGATE_TASK_TYPE: &[&str] = TaskType::NAMES;
 
 /// The class name every request schema gives the store's `ColdReadSpec` model, in the schema docs and in a
 /// validation error.
@@ -208,13 +208,9 @@ struct DelegateRequest {
 fn parse_delegate_request(body: &RequestBody) -> Result<DelegateRequest, Box<Response>> {
   let values = body.validate(&DELEGATE_BODY)?;
   let values = values.expect("a required request body validates to an object");
-  let task_type = match values.get(DELEGATE_TASK_TYPE_FIELD).and_then(Value::as_str).unwrap_or("implement") {
-    "implement" => TaskType::Implement,
-    "quick-edit" => TaskType::QuickEdit,
-    "script-run" => TaskType::ScriptRun,
-    "verify" => TaskType::Verify,
-    "cold-read" => TaskType::ColdRead,
-    _ => unreachable!("validated task_type is a known task type"),
+  let task_type = match values.get(DELEGATE_TASK_TYPE_FIELD) {
+    Some(value) => serde_json::from_value(value.clone()).expect("validated task_type is a known task type"),
+    None => TaskType::Implement,
   };
   let cold_read = values
     .get("cold_read")
@@ -238,18 +234,8 @@ fn optional_string(values: &Value, key: &str) -> Option<String> {
   values.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
-fn task_type_name(task_type: TaskType) -> &'static str {
-  match task_type {
-    TaskType::Implement => "implement",
-    TaskType::QuickEdit => "quick-edit",
-    TaskType::ScriptRun => "script-run",
-    TaskType::Verify => "verify",
-    TaskType::ColdRead => "cold-read",
-  }
-}
-
 fn delegate_field_contract(request: &DelegateRequest) -> Result<(), String> {
-  let task_type = task_type_name(request.task_type);
+  let task_type = request.task_type.as_str();
   if request.task_type == TaskType::ColdRead && request.cold_read.is_none() {
     return Err("cold-read delegations require cold_read".to_string());
   }
@@ -285,11 +271,7 @@ fn delegate_task_spec(request: &DelegateRequest) -> TaskSpec {
 
 fn delegate_request_id(request: &DelegateRequest) -> String {
   request.request_id.as_deref().filter(|request_id| !request_id.is_empty()).map(str::to_string).unwrap_or_else(|| {
-    control_events::derived_delegate_request_id(
-      &request.session_id,
-      task_type_name(request.task_type),
-      &request.description,
-    )
+    control_events::derived_delegate_request_id(&request.session_id, request.task_type.as_str(), &request.description)
   })
 }
 
@@ -297,7 +279,7 @@ fn delegate_invocation_event_payload(request: &DelegateRequest) -> Value {
   let invocation = request.delegate_invocation.as_ref().unwrap_or(&Value::Null);
   if invocation.is_null() {
     return json!({
-      (DELEGATE_TASK_TYPE_FIELD): task_type_name(request.task_type),
+      (DELEGATE_TASK_TYPE_FIELD): request.task_type.as_str(),
       (DELEGATE_REPO_PATH_FIELD): request.repo_path,
       (DELEGATE_BASE_BRANCH_FIELD): request.base_branch,
       (DELEGATE_TASK_SPEC_FILE_FIELD): null,
@@ -378,7 +360,7 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
       .filter(|id| avoided != Some(*id))
       .map(str::to_string)
       .collect::<Vec<_>>();
-    let role = task_type_name(request.task_type);
+    let role = request.task_type.as_str();
     let decided = match pool.route(&cfg, role, &request.description, &candidates, Some(&session_backend)).await {
       Ok(answer) => match pool.decide(&cfg, role, answer) {
         Ok(decided) => decided,

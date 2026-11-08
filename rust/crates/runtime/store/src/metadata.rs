@@ -191,20 +191,19 @@ pub enum TaskProfile {
 
 /// Task type persisted in `TaskSpec`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum TaskType {
-  #[serde(rename = "implement")]
   Implement,
-  #[serde(rename = "quick-edit")]
   QuickEdit,
-  #[serde(rename = "script-run")]
   ScriptRun,
-  #[serde(rename = "verify")]
   Verify,
-  #[serde(rename = "cold-read")]
   ColdRead,
 }
 
 impl TaskType {
+  /// The wire spellings of every task type, which a request schema accepts as choices.
+  pub const NAMES: &[&str] = &["implement", "quick-edit", "script-run", "verify", "cold-read"];
+
   /// The wire spelling persisted in `TaskSpec` and sent by a delegate request.
   pub fn as_str(self) -> &'static str {
     match self {

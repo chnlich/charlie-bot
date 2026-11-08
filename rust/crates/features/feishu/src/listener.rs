@@ -57,7 +57,13 @@ async fn run_listener(features: Arc<FeatureContext>) -> anyhow::Result<()> {
   let bot = Bot::new(Arc::clone(&features), BASE_URL);
   let client = bot.client()?;
   let _trigger_manager = features.startup.require::<Arc<TriggerManager>>()?;
-  let options = Options { max_size: None, close_timeout: Some(CLOSE_TIMEOUT), ..ws_client::WEBSOCKETS_16_DEFAULTS };
+  let options = Options {
+    open_timeout: ws_client::WEBSOCKETS_16_DEFAULTS.open_timeout,
+    close_timeout: Some(CLOSE_TIMEOUT),
+    max_size: None,
+    ping_interval: ws_client::WEBSOCKETS_16_DEFAULTS.ping_interval,
+    ping_timeout: ws_client::WEBSOCKETS_16_DEFAULTS.ping_timeout,
+  };
   run_listener_loop(features, client, options, ws_client::Settings::from_env()).await
 }
 
@@ -337,7 +343,13 @@ mod tests {
     let client = FeishuClient::new(http, stub.base_url.clone(), "cli_listener_bot", "synthetic-secret");
     let capture = LogCapture::default();
     let _guard = capture.install();
-    let options = Options { max_size: None, close_timeout: Some(CLOSE_TIMEOUT), ..ws_client::WEBSOCKETS_16_DEFAULTS };
+    let options = Options {
+      open_timeout: ws_client::WEBSOCKETS_16_DEFAULTS.open_timeout,
+      close_timeout: Some(CLOSE_TIMEOUT),
+      max_size: None,
+      ping_interval: ws_client::WEBSOCKETS_16_DEFAULTS.ping_interval,
+      ping_timeout: ws_client::WEBSOCKETS_16_DEFAULTS.ping_timeout,
+    };
     tokio::time::timeout(
       Duration::from_secs(2),
       run_listener_loop(Arc::clone(&home.features), client, options, ws_client::Settings::from_env()),

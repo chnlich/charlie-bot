@@ -9,10 +9,10 @@
 //!
 //! `<charliebot home>/router.yaml` (or the file `--config` names) lists the classes of work and the roles that route.
 //! A role lists its classes; when it lists more than one, Jev chooses one of them, and the chosen class names the
-//! backends the work runs on: `pool`, `session` (the delegating session's backend) or an ordered list of backend ids.
-//! A role the file does not list is not routed, and its caller keeps its own default. The Jev key comes from the
-//! `credentials.yaml` section that `jev.credential` names, even when `--config` names the file. The rules file is read
-//! on every call, so an edit takes effect at the next choice.
+//! backend the work runs on: `session` (the delegating session's backend id itself) or one `backends.options` id or one
+//! `backends.pools` id. A role the file does not list is not routed, and its caller keeps its own default. The Jev key
+//! comes from the `credentials.yaml` section that `jev.credential` names, even when `--config` names the file. The rules
+//! file is read on every call, so an edit takes effect at the next choice.
 //!
 //! The caller bounds one routing call at [`timeouts::ROUTER_TIMEOUT_SECONDS`], which is why one attempt is bounded at 5 s
 //! and the call has one retry: a timed-out attempt takes it at once, and an HTTP 429 takes it after a 10 s wait. Two
@@ -57,7 +57,7 @@ const JEV_FIELDS: &[&str] = &["url", "model", "credential"];
 const CLASS_FIELDS: &[&str] = &["when", "run_on"];
 
 /// The `run_on` keyword that sends a class to the delegating session's backend. Any other `run_on` value is one
-/// `backends.pools` id.
+/// `backends.options` id or one `backends.pools` id.
 const RUN_ON_SESSION: &str = "session";
 
 /// The name of the one question each choice asks Jev.
@@ -144,16 +144,25 @@ fn config_path(home: &Path) -> PathBuf {
   home.join(ROUTER_FILENAME)
 }
 
-/// The `backends.pools` ids of the home's `config.yaml`, loaded by the same loader the server uses.
-fn live_pool_ids(home: &Path) -> Result<Vec<String>, String> {
+/// The `backends.options` and `backends.pools` ids of the home's `config.yaml`, loaded by the same loader the server
+/// uses. A `run_on` value is one of them.
+fn live_backend_ids(home: &Path) -> Result<Vec<String>, String> {
   let registry = charliebot_packages::registry().map_err(|error| error.to_string())?;
   let cfg = registry.load_config(home).map_err(|error| error.to_string())?;
-  Ok(cfg.backends.pools.into_iter().map(|pool| pool.id).collect())
+  Ok(
+    cfg
+      .backends
+      .options
+      .iter()
+      .map(|option| option.id.clone())
+      .chain(cfg.backends.pools.iter().map(|pool| pool.id.clone()))
+      .collect(),
+  )
 }
 
 fn load_home_rules(home: &Path, rules_path: &Path) -> Result<RouterRules, String> {
-  let pool_ids = live_pool_ids(home)?;
-  load_rules(rules_path, &pool_ids)
+  let backend_ids = live_backend_ids(home)?;
+  load_rules(rules_path, &backend_ids)
 }
 
 /// One validated rules file: where Jev lives, the question it answers, the classes, and the classes each role lists.
@@ -173,8 +182,9 @@ struct ClassRule {
 }
 
 enum RunOn {
-  /// One `backends.pools` id: the server selects the member the class runs on.
-  Pool(String),
+  /// One backend id: a `backends.options` id runs as written, and a `backends.pools` id runs on the member the server
+  /// selects.
+  Backend(String),
   Session,
 }
 
@@ -225,7 +235,7 @@ fn reject_unknown_fields(mapping: &Mapping, known: &[&str], path_text: &str, pre
 
 /// Read and validate one rules file. A missing file, an old-form file, an unknown field, an unknown class in a role and
 /// an unknown backend id each fail with a message that names the file and the field.
-fn load_rules(path: &Path, pool_ids: &[String]) -> Result<RouterRules, String> {
+fn load_rules(path: &Path, backend_ids: &[String]) -> Result<RouterRules, String> {
   let path_text = paths::display(path);
   let text = match std::fs::read_to_string(path) {
     Ok(text) => text,
@@ -253,12 +263,16 @@ fn load_rules(path: &Path, pool_ids: &[String]) -> Result<RouterRules, String> {
   let model = required_text(jev, "model", &path_text, "jev.")?;
   let credential = required_text(jev, "credential", &path_text, "jev.")?;
   let instructions = required_text(document, "instructions", &path_text, "")?;
-  let classes = classes_of(document, pool_ids, &path_text)?;
+  let classes = classes_of(document, backend_ids, &path_text)?;
   let roles = roles_of(document, &classes, &path_text)?;
   Ok(RouterRules { url, model, credential, instructions, classes, roles })
 }
 
-fn classes_of(document: &Mapping, pool_ids: &[String], path_text: &str) -> Result<BTreeMap<String, ClassRule>, String> {
+fn classes_of(
+  document: &Mapping,
+  backend_ids: &[String],
+  path_text: &str,
+) -> Result<BTreeMap<String, ClassRule>, String> {
   let expectation = "a non-empty mapping of class names to rules";
   let Some(YamlValue::Mapping(classes)) = document.get(yaml_key("classes")) else {
     return Err(field_error(path_text, "classes", expectation));
@@ -280,24 +294,25 @@ fn classes_of(document: &Mapping, pool_ids: &[String], path_text: &str) -> Resul
       name.to_string(),
       ClassRule {
         when: required_text(rule, "when", path_text, &prefix)?,
-        run_on: run_on_of(rule, name, pool_ids, path_text)?,
+        run_on: run_on_of(rule, name, backend_ids, path_text)?,
       },
     );
   }
   Ok(rules)
 }
 
-fn run_on_of(rule: &Mapping, class: &str, pool_ids: &[String], path_text: &str) -> Result<RunOn, String> {
+fn run_on_of(rule: &Mapping, class: &str, backend_ids: &[String], path_text: &str) -> Result<RunOn, String> {
   let field = format!("classes.{class}.run_on");
-  let expectation = "session, or one backends.pools id";
+  let expectation = "session, or one backends.options or backends.pools id";
   match rule.get(yaml_key("run_on")) {
     Some(YamlValue::String(target)) if target == RUN_ON_SESSION => Ok(RunOn::Session),
-    Some(YamlValue::String(target)) if pool_ids.contains(target) => Ok(RunOn::Pool(target.clone())),
+    Some(YamlValue::String(target)) if backend_ids.contains(target) => Ok(RunOn::Backend(target.clone())),
     Some(YamlValue::String(target)) => Err(format!(
-      "{path_text}: {field}: '{target}' is not a backends.pools id; write session or one backends.pools id"
+      "{path_text}: {field}: '{target}' is not a backends.options or backends.pools id; write session, one model id or \
+       one pool id"
     )),
     Some(YamlValue::Sequence(_)) => {
-      Err(format!("{path_text}: {field}: a list of backend ids is retired; write session or one backends.pools id"))
+      Err(format!("{path_text}: {field}: a list of backend ids is retired; write session, one model id or one pool id"))
     }
     _ => Err(field_error(path_text, &field, expectation)),
   }
@@ -417,9 +432,9 @@ fn answer(
     reason.push_str("; retried after a timeout");
   }
   let backend = match &rules.classes[chosen].run_on {
-    RunOn::Pool(pool_id) if request.candidate_ids.contains(pool_id) => pool_id.clone(),
-    RunOn::Pool(pool_id) => {
-      let reason = format!("{reason}; pool {pool_id} is not a candidate here; ran on the default path");
+    RunOn::Backend(backend_id) if request.candidate_ids.contains(backend_id) => backend_id.clone(),
+    RunOn::Backend(backend_id) => {
+      let reason = format!("{reason}; backend {backend_id} is not a candidate here; ran on the default path");
       return Ok(Answer { routed: false, backends: Vec::new(), reason });
     }
     RunOn::Session => match &request.session_backend {
@@ -985,6 +1000,25 @@ mod tests {
     });
   }
 
+  /// Acceptance ④: `run_on` takes a `backends.options` id as well as a pool id, and the answer routes there.
+  #[test]
+  fn a_run_on_naming_a_model_id_loads_and_routes_there() {
+    with_timeout(|| {
+      let home = TestHome::new();
+      let jev = FakeJev::start(Vec::new());
+      let classes = format!(
+        "classes:\n  routine: {{when: \"{ROUTINE_RULE}\", run_on: {}}}\n  context: {{when: \"{CONTEXT_RULE}\", run_on: session}}\n",
+        STRONG[1]
+      );
+      write_rules(&home, &jev.url, &classes, DEFAULT_ROLES);
+
+      let payload = request("implement", "Add a test for the parser.", &STRONG, Some(SESSION));
+      let answer = run(&home, &payload, &jev, vec![jev_reply("routine", 0.88, 0.12)]).unwrap();
+
+      assert_eq!(answer, json!({ "routed": true, "backends": [STRONG[1]], "reason": "routine p=0.88" }));
+    });
+  }
+
   #[test]
   fn a_run_on_naming_a_missing_pool_id_is_refused_when_the_rules_load() {
     with_timeout(|| {
@@ -1005,7 +1039,7 @@ mod tests {
       let error = run(&home, &payload, &jev, Vec::new()).unwrap_err();
 
       assert!(error.contains("classes.routine.run_on") && error.contains("'pool'"), "{error}");
-      assert!(error.contains("write session or one backends.pools id"), "{error}");
+      assert!(error.contains("write session, one model id or one pool id"), "{error}");
     });
   }
 
@@ -1023,7 +1057,7 @@ mod tests {
       let error = run(&home, &payload, &jev, Vec::new()).unwrap_err();
 
       assert!(error.contains("classes.design.run_on") && error.contains("a list of backend ids is retired"), "{error}");
-      assert!(error.contains("write session or one backends.pools id"), "{error}");
+      assert!(error.contains("write session, one model id or one pool id"), "{error}");
     });
   }
 
@@ -1141,7 +1175,7 @@ mod tests {
       let error = run(&home, &payload, &jev, Vec::new()).unwrap_err();
 
       assert!(error.contains("classes.context.run_on") && error.contains("ghost-pool"), "{error}");
-      assert!(error.contains("write session or one backends.pools id"), "{error}");
+      assert!(error.contains("write session, one model id or one pool id"), "{error}");
     });
   }
 
@@ -1464,11 +1498,11 @@ mod tests {
         |target: &str| format!("classes:\n{routine}  context: {{when: \"{CONTEXT_RULE}\", run_on: {target}}}\n");
       write_rules(&home, jev_url, &classes(POOL), DEFAULT_ROLES);
       let first = load_home_rules(&home.home, &home.rules_path()).unwrap();
-      assert!(matches!(&first.classes["context"].run_on, RunOn::Pool(id) if id == POOL));
+      assert!(matches!(&first.classes["context"].run_on, RunOn::Backend(id) if id == POOL));
 
       write_rules(&home, jev_url, &classes(DELTA), DEFAULT_ROLES);
       let second = load_home_rules(&home.home, &home.rules_path()).unwrap();
-      assert!(matches!(&second.classes["context"].run_on, RunOn::Pool(id) if id == DELTA));
+      assert!(matches!(&second.classes["context"].run_on, RunOn::Backend(id) if id == DELTA));
     });
   }
 

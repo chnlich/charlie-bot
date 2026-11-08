@@ -74,6 +74,7 @@ const REPLY_FORMAT_DOC: &str = "thread_reply_format.md";
 /// Waits between the retries of one platform call; exhausting them logs an error, not a raise.
 const RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(4)];
 /// The retry delays a test installed through `test_support::keyed_post_retry_delays_for_test`; None reads RETRY_DELAYS.
+#[cfg(feature = "test-support")]
 static TEST_RETRY_DELAYS: StdMutex<Option<[Duration; 2]>> = StdMutex::new(None);
 /// How much of an unread message's text the 412 refusal carries.
 const TEXT_PREVIEW_CHARS: usize = 200;
@@ -661,14 +662,22 @@ pub async fn post_with_retry(
 }
 
 /// The delays between a platform's keyed-post retries: the installed test value, else RETRY_DELAYS.
+#[cfg(feature = "test-support")]
 fn keyed_post_retry_delays() -> [Duration; 2] {
   TEST_RETRY_DELAYS.lock().expect("the keyed-post retry delays are never poisoned").unwrap_or(RETRY_DELAYS)
 }
 
+#[cfg(not(feature = "test-support"))]
+fn keyed_post_retry_delays() -> [Duration; 2] {
+  RETRY_DELAYS
+}
+
+#[cfg(feature = "test-support")]
 pub(crate) fn install_keyed_post_retry_delays(delays: [Duration; 2]) {
   *TEST_RETRY_DELAYS.lock().expect("the keyed-post retry delays are never poisoned") = Some(delays);
 }
 
+#[cfg(feature = "test-support")]
 pub(crate) fn clear_keyed_post_retry_delays() {
   *TEST_RETRY_DELAYS.lock().expect("the keyed-post retry delays are never poisoned") = None;
 }

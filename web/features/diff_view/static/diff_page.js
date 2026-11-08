@@ -61,7 +61,7 @@
   }
 
   // The expand strips render inside diff2html's tables, so their look comes from a style block here.
-  // Tailwind classes are unreliable here: the compiled stylesheet carries one only when a template uses it.
+  // Each cbdx- class exists only in that block, so a rename has to move its rule with the name.
   installStyles();
 
   function installStyles() {

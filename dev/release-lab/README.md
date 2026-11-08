@@ -61,9 +61,13 @@ dev/release-lab/run.sh --teardown
 ```
 
 `--from` is the release the stand-in serves, `--to` the release the flow ships and `--flow-ref` the commit whose
-`release.sh` and `switch-server.sh` run. The flow's trial and rehearsal commands are read from the checkout running the
-lab (`trial-lab.sh` and `rehearsal-lab.sh` beside the flow's own scripts), so a lab override applies there without
-touching the flow's tracked files.
+`release.sh` and stage scripts run. The flow's trial and rehearsal commands are read from the checkout running the lab
+(`trial-lab.sh` and `rehearsal-lab.sh` beside the flow's own scripts), so a lab override applies there without touching
+the flow's tracked files.
+
+The switch is timed from mark lines that `switch-server.sh` logs only when `CHARLIEBOT_SWITCH_LAB_MARKS` is 1. A
+`--flow-ref` whose own file carries them runs that file; an older one runs `switch-lab.sh`, the lab checkout's copy,
+which the run refuses unless it is that release's file plus the mark lines and nothing else.
 
 Each flow attempt prints one JSON line with the stages' seconds (`download_s`, `units_s`, `trial_s`, `rehearsal_s`,
 `install_s`, `preflight_s`, `gate_s`, `stop_s`, `start_s`), `ready_in_ms`, `read_bytes`, `release_to_live_s`,

@@ -62,8 +62,8 @@
 # CHARLIEBOT_SWITCH_DISK_SAMPLE_S replace the disk preflight's 40 MB/s threshold, 15 min bound and 10 s sample window;
 # CHARLIEBOT_SWITCH_DISKSTATS, CHARLIEBOT_SWITCH_MOUNTINFO, CHARLIEBOT_SWITCH_CGROUP_ROOT and CHARLIEBOT_SWITCH_PROC
 # replace the /proc and /sys/fs/cgroup paths the disk preflight reads, so its tests inject their own.
-# CHARLIEBOT_SWITCH_LAB_MARKS=1 logs one timestamped line at each stage boundary (the preflight, the disk gate, the stop
-# and the start) for a lab that times the flow; a switch without it logs no such line.
+# CHARLIEBOT_SWITCH_LAB_MARKS=1 logs a lab_mark line at each stage boundary (the preflight, the disk gate, the stop and
+# the start) for a lab that times the flow; a switch without the variable logs no such lab_mark line.
 # CHARLIEBOT_SYSTEMD_USER_DIR replaces the user manager's unit directory the slice units install into.
 #
 # The disk preflight reads files only. It samples the root disk's read rate and waits while the rate stays above the
@@ -154,10 +154,10 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') switch: $*"; }
 fail() { log "preflight failed: $*"; exit 1; }
 
 # lab_mark NAME: one timestamped stage boundary for the release lab, which sets CHARLIEBOT_SWITCH_LAB_MARKS to time the
-# preflight, the disk gate, the stop and the start. A switch without the variable logs no such line.
+# lab_mark points: the preflight, the disk gate, the stop and the start. A switch without the variable logs no lab_mark.
 lab_mark() {
   [ "${CHARLIEBOT_SWITCH_LAB_MARKS:-0}" = 1 ] || return 0
-  log "lab mark=$1 at=$(date +%s%3N)"
+  log "lab_mark=$1 at=$(date +%s%3N)"
 }
 
 RELEASE_DIR="$RELEASES_DIR/$TARGET_SHA"

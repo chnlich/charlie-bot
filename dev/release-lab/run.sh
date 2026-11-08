@@ -319,13 +319,28 @@ require_tools() {
 }
 
 # reset_flow_checkout: the flow checkout at --flow-ref, clean in its tracked files, with the lab's two stage-script
-# copies beside the flow's own. The copies are untracked, so the switch's clean-clone check still passes.
+# copies beside the flow's own. The copies are untracked, so the switch's clean-clone check still passes. SWITCH_SCRIPT is
+# the switch the run times: the flow-ref's own file when it carries the lab's mark lines, otherwise the lab checkout's
+# copy of it.
 reset_flow_checkout() {
   git -C "$FLOW" fetch --quiet origin || fail "the flow checkout fetches $ORIGIN"
   git -C "$FLOW" reset --hard --quiet "$FLOW_REF" || fail "the flow checkout moves to $FLOW_REF"
   cp "$REPO_TREE/scripts/release/trial.sh" "$FLOW/scripts/release/trial-lab.sh" \
     && cp "$REPO_TREE/scripts/release/switch-rehearsal.sh" "$FLOW/scripts/release/rehearsal-lab.sh" \
     || fail 'the lab stage-script copies install into the flow checkout'
+  SWITCH_SCRIPT="$FLOW/scripts/switch-server.sh"
+  if ! grep -q 'lab_mark gate_start' "$SWITCH_SCRIPT"; then
+    # A flow-ref older than the lab's marks still needs its switch timed. The lab's copy must be that release's file plus
+    # the mark lines, so nothing else about the switch changes; any other difference fails the run.
+    SWITCH_SCRIPT="$FLOW/scripts/switch-lab.sh"
+    cp "$REPO_TREE/scripts/switch-server.sh" "$SWITCH_SCRIPT" || fail "the lab switch copy installs into $FLOW"
+    if diff "$FLOW/scripts/switch-server.sh" "$REPO_TREE/scripts/switch-server.sh" \
+        | awk '/^[<>]/ && $0 !~ /lab_mark|LAB_MARK/ && NF > 1 && $2 !~ /^[{}]$/ { bad = 1 } END { exit bad }'; then
+      :
+    else
+      fail "the lab switch copy differs from $FLOW_REF's switch by more than its mark lines; see $SWITCH_SCRIPT"
+    fi
+  fi
 }
 
 # check_commits: every commit the run names is in the lab's origin.
@@ -399,7 +414,9 @@ standin_make() {
       "$STANDIN/sessions/$session/data/runs/$run/metadata.json" > "$STANDIN/run.json" \
       && mv "$STANDIN/run.json" "$STANDIN/sessions/$session/data/runs/$run/metadata.json" \
       || fail "the live run record of $session/$run names the lab backend"
-    setsid sleep 1800 < /dev/null > /dev/null 2>&1 &
+    # The live process must outlive the whole flow: the old server ends a run whose process ends, and the switch then
+    # finds no live run to re-attach. standin_stop ends every one of them.
+    setsid sleep 10800 < /dev/null > /dev/null 2>&1 &
     pid=$!
     for ((attempt = 0; attempt < 100; attempt++)); do
       [ "$(cat "/proc/$pid/comm" 2> /dev/null)" = sleep ] && break
@@ -598,7 +615,7 @@ run_one_flow() {
 
   sw_start=$(ms_now)
   : > "$RUN_DIR/switch.out"
-  ( flow_vars && export CHARLIEBOT_SWITCH_LAB_MARKS=1 && "$FLOW/scripts/switch-server.sh" rust "$TO" ) \
+  ( flow_vars && export CHARLIEBOT_SWITCH_LAB_MARKS=1 && "$SWITCH_SCRIPT" rust "$TO" ) \
     > "$RUN_DIR/switch.out" 2>&1 &
   switch_pid=$!
   switch_log=
@@ -607,7 +624,7 @@ run_one_flow() {
     if [ -z "$switch_log" ]; then
       switch_log=$(sed -n 's/^switch log: //p' "$RUN_DIR/switch.out" | head -1)
     fi
-    if [ -z "$READERS_PID" ] && [ -n "$switch_log" ] && grep -q 'lab mark=gate_start' "$switch_log" 2> /dev/null; then
+    if [ -z "$READERS_PID" ] && [ -n "$switch_log" ] && grep -q 'lab_mark=gate_start' "$switch_log" 2> /dev/null; then
       start_readers "$READERS" "$READER_SECONDS"
       log "run $run: $READERS reader(s) start at the gate"
     fi
@@ -629,7 +646,7 @@ run_one_flow() {
 
   marks=
   [ -n "$switch_log" ] && [ -f "$switch_log" ] \
-    && marks=$(sed -n 's/.*lab mark=\([a-z_]*\) at=\([0-9]*\).*/\1 \2/p' "$switch_log")
+    && marks=$(sed -n 's/.*lab_mark=\([a-z_]*\) at=\([0-9]*\).*/\1 \2/p' "$switch_log")
   gate_start=$(mark_value "$marks" gate_start)
   gate_end=$(mark_value "$marks" gate_end)
   pre_preflight=$(mark_value "$marks" switch_start)

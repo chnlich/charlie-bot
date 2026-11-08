@@ -42,6 +42,9 @@
       {% endfor %}
     };
     const BACKEND_COMPACT = {{ backend_compact|tojson }};
+    // The Auto set's label, and the member the active Auto session runs on; null without backends.auto.
+    const AUTO_BACKEND = {{ auto_backend|tojson }};
+    globalThis.ACTIVE_AUTO_MEMBER = {{ active_auto_member|tojson }};
     const DEFAULT_BACKEND_ID = {{ default_backend_id|tojson }};
     globalThis.ACTIVE_BACKEND_ID = {{ active_backend|tojson }};
     const AUTH_ENABLED = {{ auth_enabled|tojson }};
@@ -91,6 +94,9 @@
             {% for opt in backend_options %}
             <option value="{{ opt.id }}" {% if opt.id == active_backend %}selected{% endif %}>{{ opt.label }}</option>
             {% endfor %}
+            {% if auto_backend %}
+            <option value="{{ auto_backend.id }}" {% if auto_backend.id == active_backend %}selected{% endif %}>{{ auto_backend.label }}</option>
+            {% endif %}
           </select>
           {% endif %}
         </div>
@@ -336,12 +342,15 @@
   <script>{% include 'js/math-scanner.js' %}</script>
   <script>{% include 'js/markdown-renderer.js' %}</script>
   <script>{% include 'js/config.js' %}</script>
+  <script>{% include 'js/opened-sessions.js' %}</script>
   <script>{% include 'js/utils.js' %}</script>
   <script>{% include 'js/page-timers.js' %}</script>
   <script>{% include 'js/chat/namespace.js' %}</script>
   <script>{% include 'js/sidebar/namespace.js' %}</script>
   <script>{% include 'js/chat/shared.js' %}</script>
   <script>{% include 'js/chat/displayed-session.js' %}</script>
+  <script>{% include 'js/view-requests.js' %}</script>
+  <script>{% include 'js/stream-draft.js' %}</script>
   <script>{% include 'js/websocket.js' %}</script>
   <script>{% include 'js/tabs.js' %}</script>
   <script>{% include 'js/chat/ratings.js' %}</script>

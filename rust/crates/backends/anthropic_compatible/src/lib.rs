@@ -17,7 +17,8 @@ pub const PACKAGE: &str = "backends.anthropic_compatible";
 
 const TYPE_NAME: &str = "cc-anthropic-compatible";
 
-/// Register Claude Code against an Anthropic-compatible endpoint.
+/// The `cc-anthropic-compatible` type's registration: its backend type, option schema, reading limits, host alias and
+/// usage attribution.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.backend_type(BackendTypeRegistration {
     type_name: TYPE_NAME,

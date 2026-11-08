@@ -31,6 +31,7 @@ struct Case {
 }
 
 #[test]
+#[ignore = "integration"]
 fn complete_agent_child_environments_match_recorded_for_each_launch_kind() {
   let root = tempfile::tempdir().unwrap();
   let venv_bin = root.path().join("venv/bin");
@@ -218,7 +219,7 @@ fn main_config() -> CharlieBotConfig {
       worktree_dir: "/synthetic/worktrees".to_string(),
       scratch_dir: "/synthetic/scripts".to_string(),
     },
-    backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
+    backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new(), auto: None },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
     remote_run: charliebot_core::config::RemoteRunConfig::default(),

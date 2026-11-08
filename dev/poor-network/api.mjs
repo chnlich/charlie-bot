@@ -5,9 +5,13 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 
-import { TASK_TREE_LOAD } from './profile.mjs';
+import { STATUS_CHURN, TASK_TREE_LOAD } from './profile.mjs';
 
 const IDLE_QUIET_MS = 3000;
+// The bench's own calls answer promptly: a message is queued, a rename and a cancel are single writes, and the widest
+// answer is a session's run records. A call that runs past this is a server that stopped answering, and the repetition
+// fails with its name rather than holding the trial open.
+const REQUEST_TIMEOUT_MS = 60000;
 
 export class ServerApi {
   #base;
@@ -41,6 +45,7 @@ export class ServerApi {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     const text = await response.text();
     return { status: response.status, body: text };
@@ -54,8 +59,11 @@ export class ServerApi {
     return text.length > 0 ? JSON.parse(text) : null;
   }
 
-  // The body bytes a session's bootstrap takes on the wire, counted before any decoding. The page asks for a compressed
-  // body too; this is the size its request moves when the page's own request cannot finish within the bench's cap.
+  // The bytes a session's bootstrap moves on the wire, counted before any decoding: the body's own
+  // size, plus the untrimmed size the server names in `x-bootstrap-untrimmed-bytes`. The first
+  // screen's trim keeps the served body near 10 KB; the untrimmed size is the session's content
+  // size, and the measure the switch targets are sized against. A server without the header (the
+  // baseline) serves the untrimmed body, so the body's size is both.
   bootstrapWireBytes(sessionId) {
     const url = new URL(`${this.#base}/api/sessions/${sessionId}/bootstrap`);
     const headers = { ...this.#headers, 'accept-encoding': 'gzip, deflate, br, zstd' };
@@ -69,7 +77,8 @@ export class ServerApi {
           if (response.statusCode !== 200) {
             reject(new Error(`GET bootstrap of ${sessionId} answered ${response.statusCode}`));
           } else {
-            resolve(bytes);
+            const untrimmed = Number(response.headers['x-bootstrap-untrimmed-bytes']);
+            resolve({ wireBytes: bytes, untrimmedBytes: Number.isFinite(untrimmed) && untrimmed > 0 ? untrimmed : bytes });
           }
         });
         response.on('error', reject);
@@ -79,10 +88,12 @@ export class ServerApi {
     });
   }
 
-  // Creates a manager root on `backend`, a task-tree node that accepts messages. Returns its id.
-  async createSession(name, backend) {
-    const meta = await this.json('POST', '/api/sessions/', { name, backend });
-    return meta.id;
+  // Creates a manager root on `backend`, a task-tree node that accepts messages. `slots` are registered metadata slot
+  // values, such as a Slack origin. Returns its id and the key of the sidebar group that lists it: the row's `group`,
+  // or '' for a row without one, as groupSessionsBySortedKeys in web/static/js/sidebar/groups.js keys it.
+  async createSession(name, backend, slots = {}) {
+    const meta = await this.json('POST', '/api/sessions/', { name, backend, ...slots });
+    return { id: meta.id, group: meta.group || '' };
   }
 
   // Sends one user message, as the composer does. Returns the server's answer time in milliseconds.
@@ -139,6 +150,22 @@ export class ServerApi {
     const page = await this.json('GET', `/api/sessions/${sessionId}/runs?order=asc&limit=500`);
     return page.items;
   }
+
+  // Registers one delayed trigger on the session, as a worker's wake-up does, and returns its id. It fires only after
+  // `delaySeconds`, so a window the bench measures ends long before it could.
+  async scheduleTrigger(sessionId, delaySeconds, message) {
+    const reply = await this.json('POST', '/api/internal/schedule-trigger', {
+      session_id: sessionId,
+      delay_seconds: delaySeconds,
+      message,
+    });
+    return reply.trigger_id;
+  }
+
+  // Removes a delayed trigger the bench scheduled, before it fires.
+  async cancelTrigger(sessionId, triggerId) {
+    await this.json('POST', `/api/internal/triggers/${sessionId}/${triggerId}/cancel`);
+  }
 }
 
 function pause(ms) {
@@ -172,6 +199,93 @@ export function startTaskTreeDriver(api, sessionId) {
       clearTimeout(timer);
       await inFlight;
       return count;
+    },
+  };
+}
+
+// The status churn a live tab meets with no event to tell it: a delayed trigger appears on a painted row and is
+// cancelled, so `has_pending_trigger`, `pending_trigger_count` and `next_trigger_at` move and nothing broadcasts the
+// move. The page learns of it on its next poll — the poll that still costs a whole body — which is the churn the delta
+// exists for. A step that fails fails the repetition: a churn that stopped early would report a share the load did not
+// produce.
+//
+// Returns {stop, flips}; stop cancels the trigger it holds and waits for the last step.
+export function startTriggerChurn(api, sessionId) {
+  const intervalMs = STATUS_CHURN.windowMs / STATUS_CHURN.triggerFlipsPerWindow;
+  let held = null;
+  let stopped = false;
+  let flips = 0;
+  let failure = null;
+  let step = Promise.resolve();
+  const loop = async () => {
+    while (!stopped) {
+      const startedAt = performance.now();
+      if (held) {
+        await api.cancelTrigger(sessionId, held);
+        held = null;
+      } else {
+        held = await api.scheduleTrigger(sessionId, STATUS_CHURN.triggerDelaySeconds, `bench-churn ${flips}`);
+      }
+      flips += 1;
+      await pause(Math.max(50, intervalMs - (performance.now() - startedAt)));
+    }
+  };
+  step = loop().catch((error) => {
+    failure = error;
+  });
+  return {
+    async stop() {
+      stopped = true;
+      await step;
+      if (failure) {
+        throw new Error(`the trigger churn stopped after ${flips} flips: ${failure.message}`);
+      }
+      if (held) {
+        await api.cancelTrigger(sessionId, held);
+      }
+      return flips;
+    },
+  };
+}
+
+// The status churn a live turn broadcasts: a held turn starts, and the next step cancels it, so `thinking_since`,
+// `has_running_tasks` and `work_state` move and the page is told at once. A step that fails fails the repetition.
+//
+// Returns {stop, flips}; stop cancels a held turn and waits for the last step.
+export function startTurnChurn(api, sessionId) {
+  const intervalMs = STATUS_CHURN.windowMs / STATUS_CHURN.turnFlipsPerWindow;
+  let running = false;
+  let stopped = false;
+  let flips = 0;
+  let failure = null;
+  let step = Promise.resolve();
+  const loop = async () => {
+    while (!stopped) {
+      const startedAt = performance.now();
+      if (running) {
+        await api.cancelRuns(sessionId);
+      } else {
+        await api.sendMessage(sessionId, `bench-hold churn ${flips} ${crypto.randomUUID()}`);
+      }
+      running = !running;
+      flips += 1;
+      await pause(Math.max(50, intervalMs - (performance.now() - startedAt)));
+    }
+  };
+  step = loop().catch((error) => {
+    failure = error;
+  });
+  return {
+    async stop() {
+      stopped = true;
+      await step;
+      if (failure) {
+        throw new Error(`the turn churn stopped after ${flips} flips: ${failure.message}`);
+      }
+      if (running) {
+        await api.cancelRuns(sessionId);
+      }
+      return flips;
     },
   };
 }

@@ -24,16 +24,27 @@ use charliebot_core::event_types;
 use charliebot_core::home::{CHARLIEBOT_HOME_ENV, DEFAULT_HOME_DIR_NAME};
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_store::layout::DATA_DIR_NAME;
+use charliebot_store::run_logs::COMPRESSED_SUFFIX;
 use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME, STDERR_LOG_NAME};
-use fancy_regex::{Captures, Regex};
+use regex::{Captures, Regex};
 use serde_json::{Value, json};
-use shell::{parse_error, resolve_paths, shell_text, strip_quotes};
+use shell::{needs_path_resolution, parse_error, resolve_paths, shell_text, strip_quotes};
 
-/// A recursive `grep`: `-r`, `-R` or `--recursive` among its options, alone or grouped with other flags.
-const RECURSIVE_GREP: &str = r"grep\b(?=[^|;&\n]*\s(?:--recursive|-[a-zA-Z]*[rR][a-zA-Z]*)(?=\s|$))";
+/// A recursive `grep`: `-r`, `-R` or `--recursive` among its options, alone or grouped with other flags. The
+/// command-word patterns match every `grep` and this checks the flag after the match, so the search patterns stay
+/// inside the fast regular-expression engine's syntax.
+const RECURSIVE_GREP: &str = r"grep\b[^|;&\n]*?\s(?:--recursive|-[a-zA-Z]*[rR][a-zA-Z]*)(?:[\s]|$)";
 
 /// The file names a run directory holds that a glob can reach as run logs, and examples of them for name matching.
-const RUN_LOG_EXAMPLES: [&str; 4] = [RUN_EVENTS_NAME, RAW_LOG_NAME, "agent.raw.ndjson.1", STDERR_LOG_NAME];
+///
+/// The transport rotation numbers a stale raw log with a suffix, so the rotated example derives from the raw log name
+/// that `charliebot_store::run_records` owns.
+fn run_log_examples() -> Vec<String> {
+  let plain =
+    [RUN_EVENTS_NAME.to_string(), RAW_LOG_NAME.to_string(), format!("{RAW_LOG_NAME}.1"), STDERR_LOG_NAME.to_string()];
+  let compressed = plain.iter().map(|name| format!("{name}{COMPRESSED_SUFFIX}")).collect::<Vec<_>>();
+  compressed.into_iter().chain(plain).collect()
+}
 
 /// The commands that read a file's text, for the glob rule: a glob given to one of them reads every file it names.
 const READERS: &[&str] = &[
@@ -176,11 +187,14 @@ fn deny_decision(reason: &str) -> Value {
 /// its relative paths resolved against the hook's cwd, so `cd .. && find .` is the same search as its absolute form.
 fn scan_forms(command: &str, cwd: &str) -> Result<Vec<ScanForm>, String> {
   let shell = shell_text(command);
-  let resolved = resolve_paths(&shell, cwd, store_root_pattern()?)?;
+  let resolved =
+    if needs_path_resolution(&shell) { resolve_paths(&shell, cwd, store_root_pattern()?) } else { shell.clone() };
   let mut forms = search_forms(&shell)?;
-  for form in search_forms(&resolved)? {
-    if !forms.contains(&form) {
-      forms.push(form);
+  if resolved != shell {
+    for form in search_forms(&resolved)? {
+      if !forms.contains(&form) {
+        forms.push(form);
+      }
     }
   }
   Ok(forms)
@@ -188,33 +202,50 @@ fn scan_forms(command: &str, cwd: &str) -> Result<Vec<ScanForm>, String> {
 
 fn search_forms(shell: &str) -> Result<Vec<ScanForm>, String> {
   let mut forms = Vec::new();
-  if per_file_process_pattern()?.is_match(shell).map_err(parse_error)? && !bounded_metadata_loops(shell)? {
+  if ["for", "while", "xargs", "find"].iter().any(|word| shell.contains(word))
+    && per_file_process_pattern()?.is_match(shell)
+    && !bounded_metadata_loops(shell)?
+  {
     forms.push(ScanForm::PerFileProcess);
   }
-  for captures in rooted_search_pattern()?.captures_iter(shell) {
-    let captures = captures.map_err(parse_error)?;
-    let around = groups_text(&captures);
-    let prunes_store = around.contains("-prune") && around.contains(SESSIONS_DIR_NAME);
-    let bounded_depth = depth_limited(&around)?;
-    if !bounded_depth && !prunes_store {
-      forms.push(ScanForm::RootedSearch);
-      break;
+  if (shell.contains('/') || shell.contains('~') || shell.contains("$HOME"))
+    && ["find", "rg", "grep", "fd"].iter().any(|word| shell.contains(word))
+  {
+    for captures in rooted_search_pattern()?.captures_iter(shell) {
+      if non_recursive_grep(&captures)? {
+        continue;
+      }
+      let around = groups_text(&captures);
+      let prunes_store = around.contains("-prune") && around.contains(SESSIONS_DIR_NAME);
+      let bounded_depth = depth_limited(&around)?;
+      if !bounded_depth && !prunes_store {
+        forms.push(ScanForm::RootedSearch);
+        break;
+      }
     }
   }
-  for captures in run_log_search_pattern()?.captures_iter(shell) {
-    let captures = captures.map_err(parse_error)?;
-    let globs = glob_names(&groups_text(&captures))?;
-    if globs.is_empty() || globs.iter().any(|glob| is_run_log_glob(glob)) {
-      forms.push(ScanForm::RunLogSearch);
-      break;
+  if ["rg", "grep"].iter().any(|word| shell.contains(word))
+    && (shell.contains(DEFAULT_HOME_DIR_NAME) || shell.contains(CHARLIEBOT_HOME_ENV))
+  {
+    for captures in run_log_search_pattern()?.captures_iter(shell) {
+      if non_recursive_grep(&captures)? {
+        continue;
+      }
+      let globs = glob_names(&groups_text(&captures));
+      if globs.is_empty() || globs.iter().any(|glob| is_run_log_glob(glob)) {
+        forms.push(ScanForm::RunLogSearch);
+        break;
+      }
     }
   }
   let mut walks_store = false;
   let mut runs_per_file = false;
-  for segment in find_segments(shell)? {
-    if walks_store_root(&segment)? {
-      walks_store = true;
-      runs_per_file |= per_file_command_pattern().is_match(&segment.region).map_err(parse_error)?;
+  if shell.contains("find") {
+    for segment in find_segments(shell) {
+      if walks_store_root(&segment)? {
+        walks_store = true;
+        runs_per_file |= per_file_command_pattern().is_match(&segment.region);
+      }
     }
   }
   if runs_per_file {
@@ -223,7 +254,10 @@ fn search_forms(shell: &str) -> Result<Vec<ScanForm>, String> {
   if walks_store {
     forms.push(ScanForm::FindWalk);
   }
-  if reads_run_logs_by_glob(shell)? {
+  if shell.contains(['*', '?', '['])
+    && (shell.contains(DEFAULT_HOME_DIR_NAME) || shell.contains(CHARLIEBOT_HOME_ENV))
+    && reads_run_logs_by_glob(shell)?
+  {
     forms.push(ScanForm::RunLogGlob);
   }
   Ok(forms)
@@ -233,23 +267,36 @@ fn groups_text(captures: &Captures<'_>) -> String {
   [1, 2].into_iter().filter_map(|index| captures.get(index)).map(|group| group.as_str()).collect()
 }
 
-fn glob_names(text: &str) -> Result<Vec<String>, String> {
+fn glob_names(text: &str) -> Vec<String> {
   glob_pattern()
     .captures_iter(text)
-    .map(|captures| {
-      Ok(captures.map_err(parse_error)?.get(1).expect("glob pattern has a name group").as_str().to_string())
-    })
+    .map(|captures| captures.get(1).expect("glob pattern has a name group").as_str().to_string())
     .collect()
 }
 
 /// Whether a file-name filter reaches run logs: one of the run-log names, or a pattern that matches one of their
 /// examples.
 fn is_run_log_glob(name: &str) -> bool {
-  run_log_globs().contains(&name) || RUN_LOG_EXAMPLES.iter().any(|example| wildcard_matches(name, example))
+  run_log_globs().iter().any(|glob| glob == name)
+    || run_log_examples().iter().any(|example| wildcard_matches(name, example))
 }
 
-fn run_log_globs() -> [&'static str; 9] {
-  ["*", "**", "*.jsonl", "*.ndjson", "*.json", RUN_EVENTS_NAME, RAW_LOG_NAME, "agent.raw*", "*.log"]
+/// The file-name filters that reach run logs whole, including the raw log's name with any suffix and the compressed
+/// forms the compaction leaves in place of a finished run's logs.
+fn run_log_globs() -> Vec<String> {
+  vec![
+    "*".to_string(),
+    "**".to_string(),
+    "*.jsonl".to_string(),
+    "*.ndjson".to_string(),
+    "*.json".to_string(),
+    RUN_EVENTS_NAME.to_string(),
+    format!("{RUN_EVENTS_NAME}{COMPRESSED_SUFFIX}"),
+    RAW_LOG_NAME.to_string(),
+    format!("{RAW_LOG_NAME}*"),
+    "*.log".to_string(),
+    format!("*{COMPRESSED_SUFFIX}"),
+  ]
 }
 
 /// Whether a shell wildcard pattern matches a whole name: `*` matches any run of characters and `?` one character.
@@ -284,13 +331,12 @@ struct FindSegment {
   region: String,
 }
 
-fn find_segments(shell: &str) -> Result<Vec<FindSegment>, String> {
+fn find_segments(shell: &str) -> Vec<FindSegment> {
   let text = without_prose(shell);
   let mut segments = Vec::new();
   for word in find_word_pattern().find_iter(&text) {
-    let word = word.map_err(parse_error)?;
     let rest = &text[word.end()..];
-    let region = find_region_pattern().find(rest).map_err(parse_error)?.map_or("", |region| region.as_str());
+    let region = find_region_pattern().find(rest).map_or("", |region| region.as_str());
     let args = region.split(['|', '&']).next().unwrap_or("");
     let mut roots = Vec::new();
     for argument in args.split_whitespace() {
@@ -301,14 +347,14 @@ fn find_segments(shell: &str) -> Result<Vec<FindSegment>, String> {
     }
     segments.push(FindSegment { roots, args: args.to_string(), region: region.to_string() });
   }
-  Ok(segments)
+  segments
 }
 
 /// A find that walks the session store or a parent of it: a store root, with no `-maxdepth` and no prune of `sessions`.
 fn walks_store_root(segment: &FindSegment) -> Result<bool, String> {
   let mut names_store = false;
   for root in &segment.roots {
-    if store_root_pattern()?.is_match(root.trim_end_matches('/')).map_err(parse_error)? {
+    if store_root_pattern()?.is_match(root.trim_end_matches('/')) {
       names_store = true;
       break;
     }
@@ -319,9 +365,16 @@ fn walks_store_root(segment: &FindSegment) -> Result<bool, String> {
 
 /// Whether a reader command's glob names run logs: one process that reads the run logs of every session.
 fn reads_run_logs_by_glob(shell: &str) -> Result<bool, String> {
+  if !shell.contains('"') {
+    let text = shell;
+    return read_run_log_glob_segments(text);
+  }
   let text = without_prose(shell);
-  for segment in command_segment_pattern().find_iter(&text) {
-    let segment = segment.map_err(parse_error)?;
+  read_run_log_glob_segments(&text)
+}
+
+fn read_run_log_glob_segments(text: &str) -> Result<bool, String> {
+  for segment in command_segment_pattern().find_iter(text) {
     if !is_reader_segment(segment.as_str()) {
       continue;
     }
@@ -342,6 +395,9 @@ fn reads_run_logs_by_glob(shell: &str) -> Result<bool, String> {
 /// separator is not one shell argument. A string holding a command substitution or backtick stays, because that is
 /// shell.
 fn without_prose(shell: &str) -> String {
+  if !shell.contains('"') {
+    return shell.to_string();
+  }
   prose_pattern()
     .replace_all(shell, |captures: &Captures<'_>| {
       let whole = captures.get(0).expect("group 0 is the whole match").as_str();
@@ -402,7 +458,7 @@ fn reaches_run_logs(token: &str) -> Result<bool, String> {
 /// The part of a token under the session store: what follows `sessions/`, or `None` when the token is not in the
 /// store at all.
 fn store_remainder(token: &str) -> Result<Option<&str>, String> {
-  let Some(prefix) = store_prefix_pattern()?.find(token).map_err(parse_error)? else {
+  let Some(prefix) = store_prefix_pattern()?.find(token) else {
     return Ok(None);
   };
   Ok(Some(token[prefix.end()..].trim_start_matches('/')))
@@ -464,7 +520,7 @@ fn store_or_parent_token() -> Result<String, String> {
 /// store, or `$(ls|find ... <store>)`.
 fn enumeration_token(store: &str) -> String {
   format!(
-    concat!(r"(?:", r"{store}/\*", r"|(?<![\w/])\*/(?:{metadata}|{data}/)", r"|\$\((?:ls|find)\s[^)]*{store}", r")"),
+    concat!(r"(?:", r"{store}/\*", r"|(?:^|[^\w/])\*/(?:{metadata}|{data}/)", r"|\$\((?:ls|find)\s[^)]*{store}", r")"),
     store = store,
     metadata = regex::escape(METADATA_FILE_NAME),
     data = regex::escape(DATA_DIR_NAME),
@@ -480,16 +536,12 @@ fn enumeration_token(store: &str) -> String {
 fn bounded_metadata_loops(shell: &str) -> Result<bool, String> {
   let mut spans = Vec::new();
   for captures in metadata_loop_pattern()?.captures_iter(shell) {
-    let captures = captures.map_err(parse_error)?;
     let whole = captures.get(0).expect("the metadata loop pattern has a whole match");
     let body = captures.name("body").map_or("", |body| body.as_str());
     let list_end = captures.name("list").map_or(whole.end(), |list| list.end());
     let segment_start = shell[..whole.start()].rfind([';', '&', '\n']).map_or(0, |at| at + 1);
     let list = &shell[segment_start..list_end];
-    if !body.contains(METADATA_FILE_NAME)
-      || !loop_body_is_builtin(body)
-      || list_reads_below_pattern()?.is_match(list).map_err(parse_error)?
-    {
+    if !body.contains(METADATA_FILE_NAME) || !loop_body_is_builtin(body) || list_reads_below_pattern()?.is_match(list) {
       continue;
     }
     spans.push((whole.start(), whole.end()));
@@ -505,7 +557,7 @@ fn bounded_metadata_loops(shell: &str) -> Result<bool, String> {
     last = end;
   }
   masked.push_str(&shell[last..]);
-  Ok(!per_file_process_pattern()?.is_match(&masked).map_err(parse_error)?)
+  Ok(!per_file_process_pattern()?.is_match(&masked))
 }
 
 /// (a) One process per session directory at the shell level. The forms are a `for` loop over an enumeration, an
@@ -571,11 +623,7 @@ fn rooted_search_pattern() -> Result<&'static Regex, String> {
   PATTERN
     .get_or_init(|| {
       Regex::new(&format!(
-        concat!(
-          r"\b(?:find|rg|{recursive_grep}|fd)\b([^|;&\n]*?)",
-          r"\s(?:/home/?|/|~|~/|\$HOME|{home}/?)(?=\s|$|\))([^|;&\n]*)"
-        ),
-        recursive_grep = RECURSIVE_GREP,
+        concat!(r"\b(?:find|rg|grep|fd)\b([^|;&\n]*?)", r"\s(?:/home/?|/|~|~/|\$HOME|{home}/?)(?:[\s)]|$)([^|;&\n]*)"),
         home = home_token()?
       ))
       .map_err(parse_error)
@@ -584,19 +632,35 @@ fn rooted_search_pattern() -> Result<&'static Regex, String> {
     .map_err(Clone::clone)
 }
 
+/// Whether the match's command word is a `grep` that holds no recursive flag: the arm matches every grep, and a
+/// non-recursive grep is no refused form. `whole` is the match, which starts at the command word.
+fn non_recursive_grep(captures: &Captures<'_>) -> Result<bool, String> {
+  let whole = captures.get(0).expect("group 0 is the whole match").as_str();
+  if !whole.starts_with("grep") {
+    return Ok(false);
+  }
+  Ok(!recursive_flag_pattern()?.is_match(whole))
+}
+
+/// A recursive `grep` inside one command segment: `grep` with `-r`, `-R` or `--recursive` later in the segment.
+fn recursive_flag_pattern() -> Result<&'static Regex, String> {
+  static PATTERN: OnceLock<Result<Regex, String>> = OnceLock::new();
+  PATTERN.get_or_init(|| Regex::new(RECURSIVE_GREP).map_err(parse_error)).as_ref().map_err(Clone::clone)
+}
+
 /// Whether the search bounds its depth: find's `-maxdepth`, or rg's and fd's `--max-depth` (spaced or with `=`) and
 /// `-d N`. grep's `-d` takes an action word, not a depth, so the short flag needs a number.
 fn depth_limited(search_text: &str) -> Result<bool, String> {
   if search_text.contains("-maxdepth") {
     return Ok(true);
   }
-  depth_flag_pattern()?.is_match(search_text).map_err(parse_error)
+  Ok(depth_flag_pattern()?.is_match(search_text))
 }
 
 fn depth_flag_pattern() -> Result<&'static Regex, String> {
   static PATTERN: OnceLock<Result<Regex, String>> = OnceLock::new();
   PATTERN
-    .get_or_init(|| Regex::new(concat!(r"(?<![\w-])-d\s*\d", r"|--max-depth(?:\s+|=)\d")).map_err(parse_error))
+    .get_or_init(|| Regex::new(concat!(r"(?:^|[^\w-])-d\s*\d", r"|--max-depth(?:\s+|=)\d")).map_err(parse_error))
     .as_ref()
     .map_err(Clone::clone)
 }
@@ -607,8 +671,7 @@ fn run_log_search_pattern() -> Result<&'static Regex, String> {
   PATTERN
     .get_or_init(|| {
       Regex::new(&format!(
-        concat!(r"\b(?:rg|{recursive_grep})\b([^|;&\n]*?)", r#"\s\"?(?:{store_or_parent})/?\"?(?=\s|$|\))([^|;&\n]*)"#),
-        recursive_grep = RECURSIVE_GREP,
+        concat!(r"\b(?:rg|grep)\b([^|;&\n]*?)", r#"\s\"?(?:{store_or_parent})/?\"?(?:[\s)]|$)([^|;&\n]*)"#),
         store_or_parent = store_or_parent_token()?
       ))
       .map_err(parse_error)
@@ -668,7 +731,7 @@ fn command_segment_pattern() -> &'static Regex {
 fn glob_pattern() -> &'static Regex {
   static PATTERN: OnceLock<Regex> = OnceLock::new();
   PATTERN
-    .get_or_init(|| Regex::new(r#"(?:-g|--glob|--include)[ =]['"]?(?!!)([^'" ]+)"#).expect("glob pattern is valid"))
+    .get_or_init(|| Regex::new(r#"(?:-g|--glob|--include)[ =]['"]?([^'" !][^'" ]*)"#).expect("glob pattern is valid"))
 }
 
 #[cfg(test)]
@@ -692,36 +755,42 @@ mod tests {
   }
 
   #[test]
-  fn scan_form_cases_match_the_replay_table() {
-    let denied = [
-      ScanForm::PerFileProcess,
-      ScanForm::RootedSearch,
-      ScanForm::RunLogSearch,
-      ScanForm::PerFileProcess,
-      ScanForm::PerFileProcess,
-      ScanForm::PerFileProcess,
-      ScanForm::RunLogSearch,
-      ScanForm::RunLogSearch,
-      ScanForm::PerFileProcess,
-      ScanForm::RunLogSearch,
-      ScanForm::PerFileProcess,
-    ];
-    let commands: [&str; 11] = [
-      // The replay's first real command: a metadata loop after a `cd` into the store.
-      r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json; print(json.load(open('$f')))"; done"#,
-      "find / -path /proc -prune -o -type d -name dataviz -print 2>/dev/null | head -3",
-      r#"rg -o 'ur-[A-Za-z0-9._-]+' "$CHARLIEBOT_HOME/sessions" ~/.charlie-code/sessions 2>/dev/null | sort -u"#,
-      // A run-record loop whose python body is a heredoc, not shell.
-      "cd ~/.charliebot/sessions && for m in */data/runs/*/metadata.json; do python3 - \"$m\" <<'EOF2'\nimport json\nd = json.load(open(\"$m\"))\nprint(d)\nEOF2\ndone",
+  fn per_file_process_replay_case_matches_its_scan_form() {
+    // The replay's first real command: a metadata loop after a `cd` into the store.
+    let command = r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json; print(json.load(open('$f')))"; done"#;
+    let forms = scan_forms(command, &home()).unwrap();
+    assert_eq!(forms.first(), Some(&ScanForm::PerFileProcess), "{command}");
+  }
+
+  #[test]
+  fn rooted_search_replay_case_matches_its_scan_form() {
+    let command = "find / -path /proc -prune -o -type d -name dataviz -print 2>/dev/null | head -3";
+    let forms = scan_forms(command, &home()).unwrap();
+    assert_eq!(forms.first(), Some(&ScanForm::RootedSearch), "{command}");
+  }
+
+  #[test]
+  fn store_search_cases_match_the_replay_table() {
+    let command =
+      r#"rg -o 'ur-[A-Za-z0-9._-]+' "$CHARLIEBOT_HOME/sessions" ~/.charlie-code/sessions 2>/dev/null | sort -u"#;
+    let forms = scan_forms(command, &home()).unwrap();
+    assert_eq!(forms.first(), Some(&ScanForm::RunLogSearch), "{command}");
+  }
+
+  #[test]
+  fn heredoc_loop_cases_match_the_replay_table() {
+    // A run-record loop whose Python body is a heredoc, not shell.
+    let command = "cd ~/.charliebot/sessions && for m in */data/runs/*/metadata.json; do python3 - \"$m\" <<'EOF2'\nimport json\nd = json.load(open(\"$m\"))\nprint(d)\nEOF2\ndone";
+    let forms = scan_forms(command, &home()).unwrap();
+    assert_eq!(forms.first(), Some(&ScanForm::PerFileProcess), "{command}");
+  }
+
+  #[test]
+  fn per_session_process_cases_match_the_replay_table() {
+    let denied = [ScanForm::PerFileProcess, ScanForm::PerFileProcess];
+    let commands: [&str; 2] = [
       r#"for d in $(ls ~/.charliebot/sessions); do python3 -I -c 'print(1)' $d/metadata.json; done"#,
       "find ~/.charliebot/sessions -name metadata.json | xargs -n1 python3 -I x.py",
-      r"rg -l X ~/.charliebot/sessions -g '*.jsonl'",
-      r"rg -l X ~/.charliebot/sessions -g 'agent.raw.ndjson'",
-      r"grep -l 520ad103 ~/.charliebot/sessions/*/metadata.json | while read f; do stat $f; done",
-      // The absolute home form, spelled through the test home.
-      &format!("grep -rl '39828874' {}/.charliebot/ 2>/dev/null", home()),
-      // The same loop shape with a different body still refuses.
-      r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json,sys; print(json.load(open('$f')).get('title'))"; done"#,
     ];
     for (command, expected) in commands.iter().zip(denied) {
       let forms = scan_forms(command, &home()).unwrap();
@@ -730,13 +799,61 @@ mod tests {
   }
 
   #[test]
+  fn the_rest_of_the_replay_table_matches_its_scan_forms() {
+    let denied = [ScanForm::RunLogSearch, ScanForm::RunLogSearch];
+    let commands: [&str; 2] =
+      [r"rg -l X ~/.charliebot/sessions -g '*.jsonl'", r"rg -l X ~/.charliebot/sessions -g 'agent.raw.ndjson'"];
+    for (command, expected) in commands.iter().zip(denied) {
+      let forms = scan_forms(command, &home()).unwrap();
+      assert_eq!(forms.first(), Some(&expected), "{command}");
+    }
+  }
+
+  #[test]
+  fn grep_loop_and_home_search_cases_match_the_replay_table() {
+    let denied = [ScanForm::PerFileProcess, ScanForm::RunLogSearch];
+    let commands: [&str; 2] = [
+      r"grep -l 520ad103 ~/.charliebot/sessions/*/metadata.json | while read f; do stat $f; done",
+      // The absolute home form, spelled through the test home.
+      &format!("grep -rl '39828874' {}/.charliebot/ 2>/dev/null", home()),
+    ];
+    for (command, expected) in commands.iter().zip(denied) {
+      let forms = scan_forms(command, &home()).unwrap();
+      assert_eq!(forms.first(), Some(&expected), "{command}");
+    }
+  }
+
+  #[test]
+  fn per_session_glob_loop_is_refused() {
+    let command = r#"cd ~/.charliebot/sessions && for f in */metadata.json; do python3 -I -c "import json,sys; print(json.load(open('$f')).get('title'))"; done"#;
+    let forms = scan_forms(command, &home()).unwrap();
+    assert_eq!(forms.first(), Some(&ScanForm::PerFileProcess), "{command}");
+  }
+
+  #[test]
+  fn rotated_raw_log_search_is_refused() {
+    let command = r"rg -l X ~/.charliebot/sessions -g 'agent.raw.ndjson.1'";
+    let forms = scan_forms(command, &home()).unwrap();
+    assert_eq!(forms.first(), Some(&ScanForm::RunLogSearch), "{command}");
+  }
+
+  #[test]
   fn bounded_lookup_cases_hold_no_scan_form() {
-    let commands: [&str; 10] = [
+    let commands: [&str; 5] = [
       "charliebot session tree --root 28f1df1f --include-archived --limit 500",
       r"rg -l -F X ~/.charliebot/sessions -g 'chat_events*.jsonl'",
       r"rg -l -F X ~/.charliebot/sessions -g '*.md'",
       "find / -maxdepth 4 -name X",
       &format!(r"find / \( -path /proc -o -path {}/.charliebot/sessions \) -prune -o -name X -print", home()),
+    ];
+    for command in commands {
+      assert!(scan_forms(command, &home()).unwrap().is_empty(), "{command}");
+    }
+  }
+
+  #[test]
+  fn bounded_glob_and_loop_lookups_hold_no_scan_form() {
+    let commands: [&str; 5] = [
       r"ls -d ~/.charliebot/sessions/92b2*",
       "rg -n X ~/workspace/charlie-bot/rust",
       r"for p in 92b28639 c8eb085f; do ls -d ~/.charliebot/sessions/${p}*/; done",
@@ -752,14 +869,21 @@ mod tests {
   }
 
   #[test]
-  fn recursive_grep_and_unpruned_home_search_are_refused() {
+  fn recursive_grep_over_the_store_is_refused() {
     let denied = [
       "grep -n -r X ~/.charliebot/sessions",
       "grep -R X ~/.charliebot/sessions",
       "grep --recursive X ~/.charliebot/sessions",
-      r#"find ~ -path "*/sessions/*" -name metadata.json"#,
-      "rg -l X / ~/.charliebot/sessions -g metadata.json",
     ];
+    for command in denied {
+      assert!(!scan_forms(command, &home()).unwrap().is_empty(), "{command}");
+    }
+  }
+
+  #[test]
+  fn unpruned_home_and_multi_root_searches_are_refused() {
+    let denied =
+      [r#"find ~ -path "*/sessions/*" -name metadata.json"#, "rg -l X / ~/.charliebot/sessions -g metadata.json"];
     for command in denied {
       assert!(!scan_forms(command, &home()).unwrap().is_empty(), "{command}");
     }
@@ -767,28 +891,31 @@ mod tests {
   }
 
   #[test]
-  fn quoted_store_paths_mean_the_same_thing_bare() {
-    // A single-quoted store path is the same search root as its bare form, and its run-log glob still refuses.
-    assert_eq!(
-      scan_forms(&format!(r"rg -l X '{}/.charliebot/sessions' -g '*.jsonl'", home()), &home()).unwrap(),
-      vec![ScanForm::RunLogSearch]
-    );
-    // A single-quoted prune path keeps the prune it names.
-    assert!(scan_forms(r"find ~ -path '*/.charliebot/sessions' -prune -o -name X -print", &home()).unwrap().is_empty());
-    assert!(
-      scan_forms(
-        &format!(r"find / \( -path '/proc' -o -path '{}/.charliebot/sessions' \) -prune -o -name X -print", home()),
-        &home()
-      )
-      .unwrap()
-      .is_empty()
-    );
-    // Quoted prose holding a space is not shell, so a root written inside it is not a search root.
-    assert!(
-      scan_forms(&format!(r"rg -l 'find / and replace' {}/.charliebot/sessions -g metadata.json", home()), &home())
-        .unwrap()
-        .is_empty()
-    );
+  fn a_single_quoted_store_path_keeps_its_run_log_glob() {
+    let home = home();
+    let command = format!(r"rg -l X '{home}/.charliebot/sessions' -g '*.jsonl'");
+    assert_eq!(scan_forms(&command, &home).unwrap(), vec![ScanForm::RunLogSearch]);
+  }
+
+  #[test]
+  fn a_single_quoted_prune_path_keeps_its_prune() {
+    let command = r"find ~ -path '*/.charliebot/sessions' -prune -o -name X -print";
+    assert!(scan_forms(command, &home()).unwrap().is_empty(), "{command}");
+  }
+
+  #[test]
+  fn an_absolute_single_quoted_prune_path_keeps_its_prune() {
+    let home = home();
+    let command =
+      format!(r"find / \( -path '/proc' -o -path '{home}/.charliebot/sessions' \) -prune -o -name X -print");
+    assert!(scan_forms(&command, &home).unwrap().is_empty(), "{command}");
+  }
+
+  #[test]
+  fn quoted_prose_does_not_hide_a_store_search() {
+    let home = home();
+    let command = format!(r"rg -l 'find / and replace' {home}/.charliebot/sessions -g metadata.json");
+    assert!(scan_forms(&command, &home).unwrap().is_empty(), "{command}");
   }
 
   #[test]
@@ -803,18 +930,53 @@ mod tests {
   }
 
   #[test]
-  fn finds_that_walk_the_store_and_glob_reads_of_run_logs_refuse() {
+  fn a_find_walk_of_the_store_is_refused() {
+    let home = home();
+    let command = format!("find {home}/.charliebot -newermt @1 -name X");
+    assert_eq!(scan_forms(&command, &home).unwrap(), vec![ScanForm::FindWalk]);
+  }
+
+  #[test]
+  fn a_find_read_of_the_store_is_refused() {
+    let home = home();
+    let command = format!("find {home}/.charliebot/sessions -name metadata.json -exec grep -l X {{}} +");
+    assert_eq!(scan_forms(&command, &home).unwrap(), vec![ScanForm::FindRead, ScanForm::FindWalk]);
+  }
+
+  #[test]
+  fn a_run_log_glob_read_is_refused() {
+    let home = home();
+    let command = format!("cat {home}/.charliebot/sessions/*/data/runs/*/events.jsonl");
+    assert_eq!(scan_forms(&command, &home).unwrap(), vec![ScanForm::RunLogGlob]);
+  }
+
+  #[test]
+  fn an_apostrophe_in_double_quoted_prose_does_not_hide_a_find_walk() {
+    let home = home();
+    let command = format!("echo \"session's note\"; find {home}/.charliebot -newermt @1 -name X");
+    assert_eq!(scan_forms(&command, &home).unwrap(), vec![ScanForm::FindWalk]);
+  }
+
+  #[test]
+  fn a_pipe_in_double_quoted_prose_does_not_hide_a_run_log_search() {
+    let home = home();
+    let command = format!(r#"grep -rn "a\|b" {home}/.charliebot/sessions"#);
+    assert_eq!(scan_forms(&command, &home).unwrap(), vec![ScanForm::RunLogSearch]);
+  }
+
+  /// The compressed names the compaction leaves in place of a finished run's logs are refused exactly as the plain
+  /// names are.
+  #[test]
+  fn run_log_globs_reach_the_compressed_names() {
+    let home = home();
     let denied = [
-      (format!("find {}/.charliebot -newermt @1 -name X", home()), ScanForm::FindWalk),
-      (format!("find {}/.charliebot/sessions -name metadata.json -exec grep -l X {{}} +", home()), ScanForm::FindRead),
-      (format!("cat {}/.charliebot/sessions/*/data/runs/*/events.jsonl", home()), ScanForm::RunLogGlob),
-      // The apostrophe inside double quotes does not open a single-quoted span that hides the find after it.
-      (format!("echo \"session's note\"; find {}/.charliebot -newermt @1 -name X", home()), ScanForm::FindWalk),
-      // A `|` inside double quotes is not a pipe, so the recursive grep still reaches the store.
-      (format!(r#"grep -rn "a\|b" {}/.charliebot/sessions"#, home()), ScanForm::RunLogSearch),
+      (format!("cat {home}/.charliebot/sessions/*/data/runs/*/events.jsonl.zst"), ScanForm::RunLogGlob),
+      (format!("cat {home}/.charliebot/sessions/*/data/runs/*/agent.raw.ndjson.1.zst"), ScanForm::RunLogGlob),
+      (format!("rg -l X {home}/.charliebot/sessions -g '*.zst'"), ScanForm::RunLogSearch),
+      (format!("rg -l X {home}/.charliebot/sessions -g 'agent.raw.ndjson.zst'"), ScanForm::RunLogSearch),
     ];
     for (command, expected) in denied {
-      assert_eq!(scan_forms(&command, &home()).unwrap().first(), Some(&expected), "{command}");
+      assert_eq!(scan_forms(&command, &home).unwrap().first(), Some(&expected), "{command}");
     }
   }
 
@@ -836,13 +998,19 @@ mod tests {
   }
 
   #[test]
-  fn bounded_metadata_loops_and_session_id_prefix_globs_pass() {
+  fn a_bounded_metadata_loop_passes() {
+    let home = home();
+    // A top-level listing whose body only tests one session's metadata.json with shell builtins.
+    let command = format!(
+      "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
+    );
+    assert!(scan_forms(&command, &home).unwrap().is_empty(), "{command}");
+  }
+
+  #[test]
+  fn session_id_prefix_globs_pass() {
     let home = home();
     let passed = [
-      // A top-level listing whose body only tests one session's metadata.json with shell builtins.
-      format!(
-        "cd {home}/.charliebot/sessions && ls -d */ | sed 's#/##' | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done > /tmp/ids.txt"
-      ),
       // A glob under one session id prefix names one session, not every session.
       format!("grep -l X {home}/.charliebot/sessions/dfb20fec*/specs/*"),
       format!("grep -l X {home}/.charliebot/sessions/d7645e8f-*/data/runs/*/events.jsonl"),
@@ -850,6 +1018,11 @@ mod tests {
     for command in passed {
       assert!(scan_forms(&command, &home).unwrap().is_empty(), "{command}");
     }
+  }
+
+  #[test]
+  fn per_session_processes_are_refused() {
+    let home = home();
     let denied = [
       // The same builtin body on a `for ... in */` list is the one-process-per-session shape.
       format!("cd {home}/.charliebot/sessions && for id in */; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"),
@@ -861,25 +1034,53 @@ mod tests {
       format!(
         "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do [ -f \"$id/metadata.json\" ] && echo done; jq -r .name \"$id/metadata.json\"; done"
       ),
-      // A command outside the builtins, such as perl, starts a process per session.
-      format!(
-        "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do [ -f \"$id/metadata.json\" ] && perl -ne 1 \"$id/metadata.json\"; done"
-      ),
-      // A builtin redirect reads each session's file inside the shell.
-      format!(
-        "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do read -r line < \"$id/metadata.json\"; echo \"$line\"; done"
-      ),
-      // A producer ahead of the session enumeration reads every session's metadata.json.
-      format!(
-        "cat {home}/.charliebot/sessions/*/metadata.json | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
-      ),
-      format!(
-        "cd {home}/.charliebot/sessions && sed -n 1p */metadata.json | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
-      ),
-      // A recursive listing walks below every session directory.
-      format!(
-        "cd {home}/.charliebot/sessions && ls -R */ | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
-      ),
+    ];
+    for command in denied {
+      assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
+    }
+  }
+
+  #[test]
+  fn a_process_per_session_is_refused() {
+    let home = home();
+    let command = format!(
+      "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do [ -f \"$id/metadata.json\" ] && perl -ne 1 \"$id/metadata.json\"; done"
+    );
+    assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
+  }
+
+  #[test]
+  fn a_builtin_redirect_per_session_is_refused() {
+    let home = home();
+    let command = format!(
+      "cd {home}/.charliebot/sessions && ls -d */ | while read -r id; do read -r line < \"$id/metadata.json\"; echo \"$line\"; done"
+    );
+    assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
+  }
+
+  #[test]
+  fn a_producer_reading_session_metadata_is_refused() {
+    let home = home();
+    let command = format!(
+      "cat {home}/.charliebot/sessions/*/metadata.json | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
+    );
+    assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
+  }
+
+  #[test]
+  fn a_recursive_session_list_is_refused() {
+    let home = home();
+    // A recursive listing walks below every session directory.
+    let command = format!(
+      "cd {home}/.charliebot/sessions && ls -R */ | while read -r id; do [ -f \"$id/metadata.json\" ] && echo \"$id\"; done"
+    );
+    assert!(!scan_forms(&command, &home).unwrap().is_empty(), "{command}");
+  }
+
+  #[test]
+  fn multi_session_prefix_globs_are_refused() {
+    let home = home();
+    let denied = [
       // A short prefix, or one that is not a session id, can match many sessions.
       format!("grep -l X {home}/.charliebot/sessions/1680*/specs/*"),
       format!("grep -l X {home}/.charliebot/sessions/session-*/specs/*"),

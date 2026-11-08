@@ -80,6 +80,7 @@ function loadChatContext(elements) {
   loadPageTimersOnce(context);
   vm.runInContext(readStatic('websocket.js'), context, { filename: 'websocket.js' });
   vm.runInContext(DISPLAYED_SESSION_JS, context, { filename: 'chat/displayed-session.js' });
+  vm.runInContext(readStatic('stream-draft.js'), context, { filename: 'stream-draft.js' });
   vm.runInContext(readStatic('websocket-handlers.js'), context, { filename: 'websocket-handlers.js' });
   vm.runInContext(readStatic('chat/input.js'), context, { filename: 'chat/input.js' });
   return context;

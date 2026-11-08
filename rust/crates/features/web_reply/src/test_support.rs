@@ -1,5 +1,5 @@
-//! Fixtures for the web reply tests: a store-backed feature context over a temporary home, with this package's
-//! registrations and the origin slots a thread session carries, and the route calls the tests make.
+//! Fixtures for the web reply tests: store-backed feature contexts over temporary homes with registrations for each
+//! route the tests exercise.
 
 use std::fs;
 use std::io;
@@ -108,36 +108,63 @@ fn register_origins(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.thread_origin_field("discord_origin")
 }
 
-/// A store over a temporary home, with the web reply package and the origin slots registered, and a
-/// `RunningTurnInputs` stub that answers the ids `set_running` last named, for every session.
+/// A store over a temporary home. Each constructor registers the packages and startup services its test path needs.
 pub struct Home {
   _dir: TempDir,
   pub features: Arc<FeatureContext>,
   running: Arc<Mutex<Vec<String>>>,
 }
 
+#[derive(Clone, Copy)]
+enum PackageSet {
+  Full,
+  StatusOnly,
+  ReplyOnly,
+}
+
 impl Home {
   pub fn new() -> Self {
-    Self::with_config("")
+    Self::build("", PackageSet::Full)
   }
 
   pub fn with_config(config_yaml: &str) -> Self {
+    Self::build(config_yaml, PackageSet::Full)
+  }
+
+  pub fn status_only() -> Self {
+    Self::build("", PackageSet::StatusOnly)
+  }
+
+  /// The web reply route and its user-text checks, with the running input ids set by `set_running`.
+  pub fn reply_only() -> Self {
+    Self::build("", PackageSet::ReplyOnly)
+  }
+
+  fn build(config_yaml: &str, packages: PackageSet) -> Self {
     let running = Arc::new(Mutex::new(Vec::new()));
     let dir = tempfile::tempdir().expect("temporary directory exists");
     fs::write(dir.path().join("config.yaml"), config_yaml).expect("the synthetic config writes");
-    fs::write(dir.path().join(CREDENTIALS_FILENAME), "charliebot:\n  access_key: synthetic-access-key\n")
-      .expect("the synthetic access key writes");
-    write_approval_policy_table(dir.path(), APPROVAL_POLICY_TABLE);
+    if matches!(packages, PackageSet::Full) {
+      fs::write(dir.path().join(CREDENTIALS_FILENAME), "charliebot:\n  access_key: synthetic-access-key\n")
+        .expect("the synthetic access key writes");
+      write_approval_policy_table(dir.path(), APPROVAL_POLICY_TABLE);
+    }
     let mut registry = Registry::new();
-    registry
-      .register_package("features.user_text_checks", charliebot_user_text_checks::register)
-      .expect("the user text checks package registers");
+    if matches!(packages, PackageSet::Full | PackageSet::ReplyOnly) {
+      registry
+        .register_package("features.user_text_checks", charliebot_user_text_checks::register)
+        .expect("the user text checks package registers");
+    }
     registry.register_package("features.web_reply", crate::register).expect("the web reply package registers");
-    registry.register_package("tests.origins", register_origins).expect("the origin slots register");
-    registry.register_package("tests.plans", register_plans).expect("the plan registry reader registers");
-    registry
-      .register_package("tests.derived_waiting", register_derived_waiting)
-      .expect("the derived Waiting on you reader registers");
+    if matches!(packages, PackageSet::Full) {
+      registry.register_package("tests.origins", register_origins).expect("the origin slots register");
+      registry.register_package("tests.plans", register_plans).expect("the plan registry reader registers");
+    }
+    if matches!(packages, PackageSet::Full | PackageSet::StatusOnly) {
+      registry
+        .register_package("tests.derived_waiting", register_derived_waiting)
+        .expect("the derived Waiting on you reader registers");
+    }
     let registry = Arc::new(registry);
     let mut loaded = registry.load_config(dir.path()).expect("an empty home loads with the defaults");
     // Task creation takes the first configured backend when a create names none.
@@ -165,9 +192,11 @@ impl Home {
       Box::new(move || load_credentials(&credential_home)),
     ));
     let startup = StartupState::default();
-    let reader = Arc::clone(&running);
-    let inputs = RunningTurnInputs::new(move |_| reader.lock().expect("the stub lock is never poisoned").clone());
-    startup.insert(inputs).expect("the stub inserts once");
+    if matches!(packages, PackageSet::Full | PackageSet::ReplyOnly) {
+      let reader = Arc::clone(&running);
+      let inputs = RunningTurnInputs::new(move |_| reader.lock().expect("the stub lock is never poisoned").clone());
+      startup.insert(inputs).expect("the stub inserts once");
+    }
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
     Self { _dir: dir, features, running }
   }
@@ -238,6 +267,17 @@ impl Home {
       session_id: None,
     };
     self.create(request, Map::new()).await
+  }
+
+  /// Seeds one manager row for tests whose behavior depends on a stored parent chain.
+  pub fn seed_manager(&self, id: &str, parent: Option<&str>) {
+    let mut metadata = SessionMetadata::new(id, id, TaskProfile::Manager);
+    metadata.backend = "synthetic-web".to_string();
+    metadata.task_parent_id = parent.map(str::to_string);
+    let path = self.features.store.metadata_path(id);
+    fs::create_dir_all(path.parent().expect("metadata path has a session directory")).expect("session directory");
+    fs::write(path, metadata.to_json_string(&self.features.registry.metadata_slots(), true))
+      .expect("manager metadata writes");
   }
 
   async fn create(&self, request: CreateTask, slots: Map<String, Value>) -> String {

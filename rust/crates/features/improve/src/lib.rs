@@ -7,6 +7,7 @@ pub mod controller;
 pub mod judgment;
 pub mod landing;
 pub mod sequence;
+pub(crate) mod wire;
 
 use charliebot_registry::{Registry, RegistryError};
 

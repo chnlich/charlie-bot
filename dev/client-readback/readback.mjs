@@ -15,6 +15,15 @@
 //   traffic     received bytes per tab-hour by endpoint (a tab-hour is the tab-time the traffic
 //               events' windows cover)
 //   page loads  the count of each load cause
+//   newest      each page load's first chat render (newest_message_ms) and catch-up (current_ms), by
+//               open case and content source; a null timing counts as not reached
+//   cross-origin files
+//               each render-blocking file the page loaded from another origin, in two groups. A load
+//               whose transfer_size is 0 is a cache hit (no bytes crossed the network), and a load
+//               whose transfer_size is greater than 0 is a network load. The link time is the time the
+//               same bytes take over the CharlieBot link, from the same load's same-origin timings: the
+//               round trip is the least request-to-first-byte time, and the throughput is the bytes over
+//               the transfer time of the largest same-origin body. The bytes are the file's encoded body.
 //
 // A percentile is the sorted sample's `floor(p * (n - 1))` element, the convention the research
 // scripts of the poor-network line use.
@@ -28,7 +37,8 @@ const FIELDS = {
   send: ['kind', 'request_id', 'click_to_response_ms', 'click_to_echo_ms', 'retries', 'client_ts', 'forwarded_for'],
   socket: ['kind', 'disconnect_at', 'cause', 'close_code', 'reconnect_at', 'reconnect_count', 'catchup_at',
     'catchup_bytes', 'client_ts', 'forwarded_for'],
-  page_load: ['kind', 'response_end_ms', 'dom_content_loaded_ms', 'transfer_size', 'cause', 'client_ts',
+  page_load: ['kind', 'response_end_ms', 'dom_content_loaded_ms', 'transfer_size', 'cause', 'newest_message_ms',
+    'current_ms', 'open_case', 'content_source', 'offline_shell', 'render_blocking', 'same_origin', 'client_ts',
     'forwarded_for'],
   traffic: ['kind', 'window_s', 'endpoints', 'visibility_state', 'client_ts', 'forwarded_for'],
 };
@@ -193,6 +203,139 @@ function summarizeDevice(events) {
   return {completedElapsed, overSlow, echoWaits, disconnects, reconnectWaits, tabSeconds, endpointBytes, causes};
 }
 
+// A logged value that is absent or `null` is null; a number-looking value is its number.
+function orNull(value) {
+  return value === undefined || value === 'null' ? null : value;
+}
+
+function numberOrNull(value) {
+  const logged = orNull(value);
+  return logged === null || !Number.isFinite(Number(logged)) ? null : Number(logged);
+}
+
+function sortedNumbers(values) {
+  return values.filter((value) => value !== null).sort((a, b) => a - b);
+}
+
+function msText(value) {
+  return value === null ? '-' : `${value}ms`;
+}
+
+// A list field's JSON, or none when the line predates the field. A value that is not a JSON array is
+// a broken log line, so it stops the readback with the line's time.
+function listField(event, name) {
+  if (event.fields[name] === undefined) return [];
+  let rows;
+  try {
+    rows = JSON.parse(event.fields[name]);
+  } catch (error) {
+    throw new Error(`${name} at ${new Date(event.at).toISOString()} is not JSON: ${error.message}`);
+  }
+  if (!Array.isArray(rows)) throw new Error(`${name} at ${new Date(event.at).toISOString()} is not a list`);
+  return rows;
+}
+
+// The newest message and the catch-up of each page load, by open case and content source.
+function printPageLoadTimings(pageLoads) {
+  const groups = new Map();
+  for (const event of pageLoads) {
+    const openCase = orNull(event.fields.open_case) ?? '-';
+    const source = orNull(event.fields.content_source) ?? '-';
+    const key = `open_case=${openCase} content_source=${source}`;
+    const group = groups.get(key) ?? {newest: [], current: [], notReached: 0};
+    const newest = numberOrNull(event.fields.newest_message_ms);
+    if (newest === null) group.notReached += 1;
+    else group.newest.push(newest);
+    const current = numberOrNull(event.fields.current_ms);
+    if (current !== null) group.current.push(current);
+    groups.set(key, group);
+  }
+  if (groups.size === 0) {
+    console.log('  newest message none');
+    return;
+  }
+  console.log('  newest message (ms from navigation start)');
+  for (const [key, group] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
+    const newest = sortedNumbers(group.newest);
+    const current = sortedNumbers(group.current);
+    console.log(`    ${key} n=${newest.length + group.notReached} not-reached=${group.notReached}` +
+      ` newest_message_ms p50=${msText(percentile(newest, 0.5))} p90=${msText(percentile(newest, 0.9))}` +
+      ` current_ms p50=${msText(percentile(current, 0.5))} p90=${msText(percentile(current, 0.9))}`);
+  }
+}
+
+// The link terms of one page load, from its same-origin timings: the round trip, and the throughput in
+// bytes per ms of the largest same-origin body. Null when the load carries too few timings for either.
+function linkTerms(sameOrigin) {
+  let rttMs = null;
+  let largest = null;
+  for (const row of sameOrigin) {
+    const requestStart = numberOrNull(row.request_start_ms);
+    const responseStart = numberOrNull(row.response_start_ms);
+    const responseEnd = numberOrNull(row.response_end_ms);
+    const bytes = numberOrNull(row.encoded_body_size);
+    if (requestStart !== null && responseStart !== null) {
+      const wait = responseStart - requestStart;
+      if (rttMs === null || wait < rttMs) rttMs = wait;
+    }
+    if (responseStart !== null && responseEnd !== null && bytes !== null && bytes > 0 && responseEnd > responseStart) {
+      if (largest === null || bytes > largest.bytes) largest = {bytes, transferMs: responseEnd - responseStart};
+    }
+  }
+  if (rttMs === null || largest === null) return null;
+  return {rttMs, bytesPerMs: largest.bytes / largest.transferMs};
+}
+
+// The render-blocking files the page loaded from another origin, one row per URL. See the header for the
+// rule that keeps network loads and cache hits apart and for the link time.
+function printCrossOrigin(pageLoads) {
+  const files = new Map();
+  let loads = 0;
+  for (const event of pageLoads) {
+    if (event.fields.render_blocking === undefined) continue;
+    loads += 1;
+    const terms = linkTerms(listField(event, 'same_origin'));
+    for (const row of listField(event, 'render_blocking')) {
+      if (typeof row.url !== 'string') continue;
+      const file = files.get(row.url) ?? {network: [], cache: [], unknown: 0, bytes: [], links: []};
+      files.set(row.url, file);
+      const start = numberOrNull(row.start_ms);
+      const end = numberOrNull(row.response_end_ms);
+      const transfer = numberOrNull(row.transfer_size);
+      const duration = start !== null && end !== null ? end - start : null;
+      if (transfer === null) file.unknown += 1;
+      else if (transfer === 0) {
+        if (duration !== null) file.cache.push(duration);
+      } else if (duration !== null) file.network.push(duration);
+      const bytes = numberOrNull(row.encoded_body_size);
+      if (bytes === null) continue;
+      file.bytes.push(bytes);
+      if (terms !== null) file.links.push(Math.round(terms.rttMs + bytes / terms.bytesPerMs));
+    }
+  }
+  if (files.size === 0) {
+    console.log(`  cross-origin files none (page loads with the timings: ${loads})`);
+    return;
+  }
+  console.log('  cross-origin files (network = transfer_size > 0; cache = transfer_size 0; link = the same bytes ' +
+    'over the CharlieBot link, from the same load\'s same-origin timings)');
+  const rows = [...files].map(([url, file]) => ({
+    url,
+    network: sortedNumbers(file.network),
+    cache: sortedNumbers(file.cache),
+    unknown: file.unknown,
+    bytes: sortedNumbers(file.bytes),
+    links: sortedNumbers(file.links),
+  }));
+  rows.sort((a, b) => (percentile(b.network, 0.5) ?? -1) - (percentile(a.network, 0.5) ?? -1));
+  for (const row of rows) {
+    console.log(`    ${row.url} network n=${row.network.length} p50=${msText(percentile(row.network, 0.5))}` +
+      ` p90=${msText(percentile(row.network, 0.9))} | cache n=${row.cache.length}` +
+      ` p50=${msText(percentile(row.cache, 0.5))} | bytes=${percentile(row.bytes, 0.5) ?? '-'}` +
+      ` link=${msText(percentile(row.links, 0.5))} (loads with link ${row.links.length}, unknown ${row.unknown})`);
+  }
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const events = args.logs.flatMap((log) => parseLog(log)).filter((event) => event.at >= args.from && event.at < args.to)
@@ -237,6 +380,9 @@ function main() {
 
     const causes = Object.entries(summary.causes).map(([cause, count]) => `${cause}=${count}`).join(' ');
     console.log('  page loads ' + (causes || 'none'));
+    const pageLoads = deviceEvents.filter((event) => event.kind === 'page_load');
+    printPageLoadTimings(pageLoads);
+    printCrossOrigin(pageLoads);
   }
 }
 

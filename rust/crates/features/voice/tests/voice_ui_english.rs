@@ -67,6 +67,7 @@ fn cjk_hits(root: &Path) -> Vec<String> {
 }
 
 #[test]
+#[ignore = "integration"]
 fn voice_ui_sources_hold_no_cjk() {
   let root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("repo root");
   let hits = cjk_hits(root);

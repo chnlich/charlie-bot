@@ -124,6 +124,9 @@ mod tests {
 
   #[test]
   fn a_thread_message_keeps_its_text_without_a_tag_line() {
+    // A Slack session is a thread only while some package has registered `slack_origin` as a
+    // thread-origin field; the chat packages do that at server start.
+    charliebot_registry::thread_origin::register_origin_field("slack_origin");
     let home = tempfile::tempdir().unwrap();
     let mut thread = SessionMetadata::new("thread", "Slack", TaskProfile::Manager);
     thread.extra.insert("slack_origin".to_string(), json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1.0"}));

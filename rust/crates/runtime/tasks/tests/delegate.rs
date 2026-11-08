@@ -187,6 +187,7 @@ fn run_token_header(session_id: &str, run_id: &str, agent: &str) -> anyhow::Resu
 /// A child manager with no user message of its own delegates through an authorized ancestor. One leaf and one run are
 /// created, and a replay returns the same child and run without a second process.
 #[tokio::test]
+#[ignore = "integration"]
 async fn authorized_ancestor_delegates_without_a_local_user_message() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
@@ -223,6 +224,7 @@ async fn authorized_ancestor_delegates_without_a_local_user_message() -> anyhow:
 /// A question is a real user message, so the root and the child each delegate an implement worker under their own
 /// question.
 #[tokio::test]
+#[ignore = "integration"]
 async fn user_questions_admit_root_and_child_delegations() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
@@ -248,6 +250,7 @@ async fn user_questions_admit_root_and_child_delegations() -> anyhow::Result<()>
 /// A root manager whose log holds a recorded thread summon delegates, and a root whose only input is an agent message
 /// relayed through the session-message route is refused.
 #[tokio::test]
+#[ignore = "integration"]
 async fn summon_authorizes_a_root_manager_but_a_relayed_agent_message_does_not() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
@@ -302,6 +305,7 @@ async fn summon_authorizes_a_root_manager_but_a_relayed_agent_message_does_not()
 /// The child holds its own user message, but the archived root closes the line. The route refuses and nothing is
 /// created.
 #[tokio::test]
+#[ignore = "integration"]
 async fn closed_ancestor_refuses_delegation() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
@@ -341,6 +345,7 @@ async fn closed_ancestor_refuses_delegation() -> anyhow::Result<()> {
 
 /// Agents run only under a manager, so a worker cannot delegate.
 #[tokio::test]
+#[ignore = "integration"]
 async fn worker_caller_cannot_delegate() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
@@ -361,6 +366,7 @@ async fn worker_caller_cannot_delegate() -> anyhow::Result<()> {
 
 /// A run token bound to one node cannot create a worker under a different node.
 #[tokio::test]
+#[ignore = "integration"]
 async fn foreign_run_token_cannot_delegate() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
@@ -385,6 +391,7 @@ async fn foreign_run_token_cannot_delegate() -> anyhow::Result<()> {
 /// A verify delegation needs no user message and launches on the route, while a repo task under the same tree stays
 /// blocked.
 #[tokio::test]
+#[ignore = "integration"]
 async fn verify_exemption_on_the_v2_route_and_launch() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
@@ -413,6 +420,7 @@ async fn verify_exemption_on_the_v2_route_and_launch() -> anyhow::Result<()> {
 /// The CLI's run token delegates a read-only verify with no user instruction anywhere, and the repo-less child runs to
 /// a result.
 #[tokio::test]
+#[ignore = "integration"]
 async fn agent_run_token_delegates_verify_without_a_takeoff() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("verdict: yes")]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
@@ -438,6 +446,7 @@ async fn agent_run_token_delegates_verify_without_a_takeoff() -> anyhow::Result<
 
 /// A manager with no user message delegates a repo task. The gate refuses, and no child or delegation fact is written.
 #[tokio::test]
+#[ignore = "integration"]
 async fn delegate_task_returns_403_when_takeoff_gate_blocks() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
@@ -459,6 +468,7 @@ async fn delegate_task_returns_403_when_takeoff_gate_blocks() -> anyhow::Result<
 
 /// A verify delegation names no repository, and the schema gate refuses one before the session is read.
 #[tokio::test]
+#[ignore = "integration"]
 async fn delegate_task_verify_rejects_repo_path() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
@@ -483,6 +493,7 @@ async fn delegate_task_verify_rejects_repo_path() -> anyhow::Result<()> {
 /// Each repo-scoped type takes `repo_path` and `base_branch` together, so one of them alone is refused. Covers the six
 /// parametrized cases (three types, two halves).
 #[tokio::test]
+#[ignore = "integration"]
 async fn repo_scoped_types_take_repo_and_base_together() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
@@ -511,6 +522,7 @@ async fn repo_scoped_types_take_repo_and_base_together() -> anyhow::Result<()> {
 
 /// Omitting `repo_path` and `base_branch` together is a valid repo-less delegation for each of the three types.
 #[tokio::test]
+#[ignore = "integration"]
 async fn repo_less_request_passes_the_schema_gate() -> anyhow::Result<()> {
   let scripts = Scripts::new((0..3).map(|n| result_script(&format!("done {n}"))).collect());
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
@@ -537,6 +549,7 @@ async fn repo_less_request_passes_the_schema_gate() -> anyhow::Result<()> {
 
 /// A backend the configuration does not name is refused, and nothing is created.
 #[tokio::test]
+#[ignore = "integration"]
 async fn delegate_task_returns_400_for_invalid_backend() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let (_origin, repo) = init_repo_with_origin(dir.path())?;
@@ -555,6 +568,7 @@ async fn delegate_task_returns_400_for_invalid_backend() -> anyhow::Result<()> {
 
 /// A verify without a backend takes the first pool member that differs from the session's backend.
 #[tokio::test]
+#[ignore = "integration"]
 async fn verify_no_backend_defaults_to_first_differing_preference() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("verdict: yes")]);
   let stack = stack_with(&scripts, &OPTIONS, &["opus", "codex-o3"]).await?;
@@ -568,6 +582,7 @@ async fn verify_no_backend_defaults_to_first_differing_preference() -> anyhow::R
 
 /// A session backend outside the pool leaves the first pool member.
 #[tokio::test]
+#[ignore = "integration"]
 async fn verify_no_backend_session_backend_not_in_preference_uses_first_entry() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("verdict: yes")]);
   let stack = stack_with(&scripts, &OPTIONS, &["opus", "codex-o3"]).await?;
@@ -581,6 +596,7 @@ async fn verify_no_backend_session_backend_not_in_preference_uses_first_entry() 
 
 /// With no pool, a verify keeps the session's backend.
 #[tokio::test]
+#[ignore = "integration"]
 async fn verify_no_backend_empty_preference_keeps_session_backend() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("verdict: yes")]);
   let stack = stack_with(&scripts, &OPTIONS, &[]).await?;
@@ -594,6 +610,7 @@ async fn verify_no_backend_empty_preference_keeps_session_backend() -> anyhow::R
 
 /// A named backend wins over the pool's preference.
 #[tokio::test]
+#[ignore = "integration"]
 async fn verify_explicit_backend_wins_over_preference() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("verdict: yes")]);
   let stack = stack_with(&scripts, &OPTIONS, &["opus", "codex-o3"]).await?;
@@ -608,6 +625,7 @@ async fn verify_explicit_backend_wins_over_preference() -> anyhow::Result<()> {
 
 /// A named backend the configuration does not hold is refused.
 #[tokio::test]
+#[ignore = "integration"]
 async fn verify_unknown_explicit_backend_returns_400() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![]);
   let stack = stack_with(&scripts, &OPTIONS, &["opus", "codex-o3"]).await?;
@@ -626,6 +644,7 @@ async fn verify_unknown_explicit_backend_returns_400() -> anyhow::Result<()> {
 /// The review half (a review on a pool member other than the work run's backend) is not covered: the review spawn
 /// is private to the task execution adapter.
 #[tokio::test]
+#[ignore = "integration"]
 async fn delegate_child_and_its_later_runs_keep_the_requested_backend() -> anyhow::Result<()> {
   let guard = ProcessGroupGuard::new();
   let dir = tempfile::tempdir()?;
@@ -658,6 +677,7 @@ async fn delegate_child_and_its_later_runs_keep_the_requested_backend() -> anyho
 
 /// A verify without a backend takes the cross-model member, and the child record keeps the backend its first run got.
 #[tokio::test]
+#[ignore = "integration"]
 async fn verify_delegate_child_records_the_cross_model_backend() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("verdict: yes")]);
   let stack = stack_with(&scripts, &OPTIONS, &["opus", "codex-o3"]).await?;
@@ -673,6 +693,7 @@ async fn verify_delegate_child_records_the_cross_model_backend() -> anyhow::Resu
 
 /// An implement without a backend resolves to the parent's backend, and the child record keeps it.
 #[tokio::test]
+#[ignore = "integration"]
 async fn implement_delegate_without_backend_resolves_to_the_parent_backend() -> anyhow::Result<()> {
   let guard = ProcessGroupGuard::new();
   let dir = tempfile::tempdir()?;
@@ -692,6 +713,7 @@ async fn implement_delegate_without_backend_resolves_to_the_parent_backend() -> 
 /// An implement that names no backend takes the first pool member, a named backend is never pooled, and a verify takes
 /// the next member other than the session's own.
 #[tokio::test]
+#[ignore = "integration"]
 async fn pool_runs_unnamed_workers_and_leaves_named_and_verify_routing() -> anyhow::Result<()> {
   let guard = ProcessGroupGuard::new();
   let dir = tempfile::tempdir()?;
@@ -720,6 +742,7 @@ async fn pool_runs_unnamed_workers_and_leaves_named_and_verify_routing() -> anyh
 /// An unpinned implement asks the router when `backends.routing` is set, runs on the backend the router names, and keeps
 /// the route and its reason on the child record. Without routing, the same delegation takes the pool.
 #[tokio::test]
+#[ignore = "integration"]
 async fn an_unpinned_implement_takes_the_routers_answer() -> anyhow::Result<()> {
   let guard = ProcessGroupGuard::new();
   let dir = tempfile::tempdir()?;
@@ -746,6 +769,7 @@ async fn an_unpinned_implement_takes_the_routers_answer() -> anyhow::Result<()> 
 /// A manager with no user message delegates a cold read. The read-only exemption admits it, the child is named after
 /// the page file, and its first run goes to the first pool member.
 #[tokio::test]
+#[ignore = "integration"]
 async fn cold_read_delegation_from_a_manager_succeeds_without_takeoff() -> anyhow::Result<()> {
   let guard = ProcessGroupGuard::new();
   let dir = tempfile::tempdir()?;
@@ -777,6 +801,7 @@ async fn cold_read_delegation_from_a_manager_succeeds_without_takeoff() -> anyho
 
 /// A cold-read delegation that names a repository or a base branch is refused with 400, and no child is written.
 #[tokio::test]
+#[ignore = "integration"]
 async fn cold_read_delegation_with_a_repo_field_gets_400() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
@@ -798,6 +823,7 @@ async fn cold_read_delegation_with_a_repo_field_gets_400() -> anyhow::Result<()>
 
 /// A cold-read delegation without its `cold_read` spec is refused with 400.
 #[tokio::test]
+#[ignore = "integration"]
 async fn cold_read_delegation_requires_cold_read() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
@@ -815,6 +841,7 @@ async fn cold_read_delegation_requires_cold_read() -> anyhow::Result<()> {
 
 /// A verify delegation that carries a `cold_read` spec is refused with 400.
 #[tokio::test]
+#[ignore = "integration"]
 async fn other_task_types_reject_cold_read() -> anyhow::Result<()> {
   let dir = tempfile::tempdir()?;
   let page = write_sitrep(dir.path())?;
@@ -851,6 +878,7 @@ fn admitted_messages(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<Valu
 
 /// A relay to an archived task node is refused with 409 and the archived sentence, and the node stays archived.
 #[tokio::test]
+#[ignore = "integration"]
 async fn session_message_refuses_an_archived_task_node() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
@@ -878,6 +906,7 @@ async fn session_message_refuses_an_archived_task_node() -> anyhow::Result<()> {
 /// A relay admits one `agent_message` into the target, carrying the sender's identity, and dispatch starts the
 /// target's turn with it.
 #[tokio::test]
+#[ignore = "integration"]
 async fn session_message_relay_admits_and_dispatches_a_task_input() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("status received")]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
@@ -902,6 +931,7 @@ async fn session_message_relay_admits_and_dispatches_a_task_input() -> anyhow::R
 
 /// A field the request model does not name is refused with 422.
 #[tokio::test]
+#[ignore = "integration"]
 async fn session_message_request_rejects_extra_fields() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
@@ -928,6 +958,7 @@ async fn session_message_request_rejects_extra_fields() -> anyhow::Result<()> {
 
 /// 1000 CJK ideographs weigh exactly the limit, so the relay is accepted and admits one `agent_message`.
 #[tokio::test]
+#[ignore = "integration"]
 async fn session_message_accepts_a_message_at_the_weighted_limit() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
@@ -947,6 +978,7 @@ async fn session_message_accepts_a_message_at_the_weighted_limit() -> anyhow::Re
 /// 1001 CJK ideographs weigh 2002, so the relay answers 422 with the measured length and the limit, and the target
 /// gains no input.
 #[tokio::test]
+#[ignore = "integration"]
 async fn session_message_refuses_a_message_over_the_weighted_limit() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
@@ -971,6 +1003,7 @@ async fn session_message_refuses_a_message_over_the_weighted_limit() -> anyhow::
 
 /// 2001 ASCII characters weigh 2001, so the relay answers 422 and writes nothing to the target.
 #[tokio::test]
+#[ignore = "integration"]
 async fn session_message_refuses_an_over_limit_ascii_message() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![]);
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;

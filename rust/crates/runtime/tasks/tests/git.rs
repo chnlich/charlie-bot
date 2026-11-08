@@ -271,8 +271,11 @@ fn worktree_head(wt_path: &Path) -> String {
 // --- base-branch resolution matrix -----------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn local_equals_origin_uses_origin_tip() {
   let _guard = GIT_TEST_LOCK.lock().await;
+  // The 300 ms hook value times out an add on a loaded host; this test's add must finish.
+  let _write_timeout = charliebot_tasks::git::override_git_write_timeout(Duration::from_secs(10));
   let repo = RepoFixture::create();
   let expected = git_out(&repo.main_checkout, &["rev-parse", "feature"]);
 
@@ -293,8 +296,11 @@ async fn local_equals_origin_uses_origin_tip() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn local_behind_origin_starts_from_origin_tip() {
   let _guard = GIT_TEST_LOCK.lock().await;
+  // The 300 ms hook value times out an add on a loaded host; this test's add must finish.
+  let _write_timeout = charliebot_tasks::git::override_git_write_timeout(Duration::from_secs(10));
   let repo = RepoFixture::create();
   let origin_tip = commit(&repo.seed, "advance.txt", "advance\n", "advance origin");
   git(&repo.seed, &["push", "origin", "feature"]);
@@ -322,6 +328,7 @@ async fn local_behind_origin_starts_from_origin_tip() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn merge_base_unexpected_exit_code_raises() {
   let _guard = GIT_TEST_LOCK.lock().await;
   let repo = RepoFixture::create();
@@ -347,8 +354,11 @@ async fn merge_base_unexpected_exit_code_raises() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn worktree_add_retries_a_transient_config_lock() {
   let _guard = GIT_TEST_LOCK.lock().await;
+  // The 300 ms hook value times out an add on a loaded host; this test's adds must finish.
+  let _write_timeout = charliebot_tasks::git::override_git_write_timeout(Duration::from_secs(10));
   let repo = RepoFixture::create();
   let expected = git_out(&repo.main_checkout, &["rev-parse", "feature"]);
   let fake = FakeGit::new(&FakeGitOptions {
@@ -370,6 +380,7 @@ async fn worktree_add_retries_a_transient_config_lock() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn concurrent_worktree_adds_in_one_repo_never_overlap() {
   let _guard = GIT_TEST_LOCK.lock().await;
   // Each timed add runs the probe's 0.1 s sleep before a real git call, which leaves the 300 ms hook value about
@@ -404,8 +415,11 @@ async fn concurrent_worktree_adds_in_one_repo_never_overlap() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn worktree_add_persistent_lock_error_raises_after_three_retries() {
   let _guard = GIT_TEST_LOCK.lock().await;
+  // The 300 ms hook value times out an add on a loaded host; this test's adds must finish.
+  let _write_timeout = charliebot_tasks::git::override_git_write_timeout(Duration::from_secs(10));
   let repo = RepoFixture::create();
   let fake = FakeGit::new(&FakeGitOptions {
     verb: "worktree add",
@@ -427,8 +441,11 @@ async fn worktree_add_persistent_lock_error_raises_after_three_retries() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn worktree_add_non_lock_failure_raises_immediately() {
   let _guard = GIT_TEST_LOCK.lock().await;
+  // The 300 ms hook value times out an add on a loaded host; this test's add must finish.
+  let _write_timeout = charliebot_tasks::git::override_git_write_timeout(Duration::from_secs(10));
   let repo = RepoFixture::create();
   let fake = FakeGit::new(&FakeGitOptions {
     verb: "worktree add",
@@ -454,8 +471,11 @@ async fn worktree_add_non_lock_failure_raises_immediately() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn baseless_launch_starts_at_remote_default_tip() {
   let _guard = GIT_TEST_LOCK.lock().await;
+  // The 300 ms hook value times out an add on a loaded host; this test's add must finish.
+  let _write_timeout = charliebot_tasks::git::override_git_write_timeout(Duration::from_secs(10));
   let repo = RemoteDefaultRepo::create();
   let origin_tip = commit(&repo.seed, "advance.txt", "advance\n", "advance origin main");
   git(&repo.seed, &["push", "origin", "main"]);
@@ -486,6 +506,7 @@ async fn baseless_launch_starts_at_remote_default_tip() {
 // --- remote operations: a per-attempt limit, retried at once on failure ----------------------
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn remote_op_hung_first_attempt_succeeds_on_retry() {
   let _guard = GIT_TEST_LOCK.lock().await;
   let dir = tempfile::tempdir().expect("temporary directory is available");
@@ -511,6 +532,7 @@ async fn remote_op_hung_first_attempt_succeeds_on_retry() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn remote_op_failing_every_attempt_returns_timeout_error() {
   let _guard = GIT_TEST_LOCK.lock().await;
   let dir = tempfile::tempdir().expect("temporary directory is available");
@@ -535,6 +557,7 @@ async fn remote_op_failing_every_attempt_returns_timeout_error() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn remote_op_failing_every_attempt_returns_last_stderr() {
   let _guard = GIT_TEST_LOCK.lock().await;
   let dir = tempfile::tempdir().expect("temporary directory is available");
@@ -558,6 +581,7 @@ async fn remote_op_failing_every_attempt_returns_last_stderr() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn worktree_add_keeps_the_write_limit() {
   let _guard = GIT_TEST_LOCK.lock().await;
   let repo = RepoFixture::create();
@@ -572,6 +596,7 @@ async fn worktree_add_keeps_the_write_limit() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn ls_remote_takes_the_attempt_limit() {
   let _guard = GIT_TEST_LOCK.lock().await;
   let repo = RepoFixture::create();
@@ -591,6 +616,7 @@ async fn ls_remote_takes_the_attempt_limit() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn fetch_takes_the_attempt_limit() {
   let _guard = GIT_TEST_LOCK.lock().await;
   let repo = RepoFixture::create();
@@ -623,6 +649,7 @@ async fn remove_worktree(tmp: &Path, wt_path: &Path, expected_residue_name: &str
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn git_worktree_remove_does_not_delete_residue_after_git_failure() {
   let _guard = GIT_TEST_LOCK.lock().await;
   let tmp = tempfile::tempdir().expect("temporary directory is available");
@@ -647,6 +674,7 @@ async fn git_worktree_remove_does_not_delete_residue_after_git_failure() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn git_worktree_remove_refuses_path_outside_allowed_parent() {
   let _guard = GIT_TEST_LOCK.lock().await;
   let tmp = tempfile::tempdir().expect("temporary directory is available");
@@ -660,6 +688,7 @@ async fn git_worktree_remove_refuses_path_outside_allowed_parent() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn git_worktree_remove_refuses_repo_root() {
   let _guard = GIT_TEST_LOCK.lock().await;
   let tmp = tempfile::tempdir().expect("temporary directory is available");
@@ -682,6 +711,7 @@ async fn git_worktree_remove_refuses_repo_root() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn git_worktree_remove_refuses_symlink_target() {
   let _guard = GIT_TEST_LOCK.lock().await;
   let tmp = tempfile::tempdir().expect("temporary directory is available");

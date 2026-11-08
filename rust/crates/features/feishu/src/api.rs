@@ -58,10 +58,12 @@ const DOWNLOAD_BODY: BodyModel = BodyModel::required(DOWNLOAD_FIELDS).forbid_ext
 /// The check request's body: no fields.
 const CHECK_BODY: BodyModel = BodyModel::required(&[]).forbid_extra();
 
-const REPLY_PATH: &str = "/api/internal/feishu/reply";
-const READ_PATH: &str = "/api/internal/feishu/read";
-const DOWNLOAD_PATH: &str = "/api/internal/feishu/download";
-const CHECK_PATH: &str = "/api/internal/feishu/check";
+/// The four internal route paths. The `cli` verbs build their requests from these names, so a rename here cannot
+/// leave a verb posting to a path the router no longer serves.
+pub(crate) const REPLY_PATH: &str = "/api/internal/feishu/reply";
+pub(crate) const READ_PATH: &str = "/api/internal/feishu/read";
+pub(crate) const DOWNLOAD_PATH: &str = "/api/internal/feishu/download";
+pub(crate) const CHECK_PATH: &str = "/api/internal/feishu/check";
 
 /// The route table on Feishu's Open API base.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {

@@ -121,6 +121,7 @@ fn post(sandbox: &Sandbox) -> (Env, PathBuf, PathBuf) {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_pr_comment_refuses_a_home_path() {
   let sandbox = Sandbox::new();
   let (env, gh_log, _home) = post(&sandbox);
@@ -134,6 +135,7 @@ fn a_pr_comment_refuses_a_home_path() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_pr_comment_refuses_a_tailnet_host() {
   let sandbox = Sandbox::new();
   let (env, gh_log, _home) = post(&sandbox);
@@ -146,6 +148,7 @@ fn a_pr_comment_refuses_a_tailnet_host() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_pr_comment_refuses_a_pattern_file_term() {
   let sandbox = Sandbox::new();
   let (env, gh_log, _home) = post(&sandbox);
@@ -158,6 +161,7 @@ fn a_pr_comment_refuses_a_pattern_file_term() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_pr_comment_sends_a_clean_body() {
   let sandbox = Sandbox::new();
   let (env, gh_log, _home) = post(&sandbox);
@@ -173,6 +177,7 @@ fn a_pr_comment_sends_a_clean_body() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_missing_pattern_file_exits_2() {
   let sandbox = Sandbox::new();
   let (env, gh_log, home) = post(&sandbox);
@@ -186,6 +191,7 @@ fn a_missing_pattern_file_exits_2() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_pr_create_checks_title_and_body() {
   let sandbox = Sandbox::new();
   let (env, gh_log, _home) = post(&sandbox);
@@ -216,6 +222,7 @@ fn a_pr_create_checks_title_and_body() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_pr_close_sends_the_comment_from_its_file() {
   let sandbox = Sandbox::new();
   let (env, gh_log, _home) = post(&sandbox);
@@ -232,6 +239,7 @@ fn a_pr_close_sends_the_comment_from_its_file() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn inline_text_flags_are_refused() {
   let sandbox = Sandbox::new();
   let (env, gh_log, _home) = post(&sandbox);
@@ -254,6 +262,7 @@ fn inline_text_flags_are_refused() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_push_refuses_a_leaky_commit_message() {
   let sandbox = Sandbox::new();
   let (env, _gh_log, _home) = post(&sandbox);
@@ -271,6 +280,7 @@ fn a_push_refuses_a_leaky_commit_message() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_push_refuses_a_leaky_branch_name() {
   let sandbox = Sandbox::new();
   let (env, _gh_log, _home) = post(&sandbox);
@@ -290,6 +300,7 @@ fn a_push_refuses_a_leaky_branch_name() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_push_refuses_when_origin_main_is_unknown() {
   let sandbox = Sandbox::new();
   let (env, _gh_log, _home) = post(&sandbox);
@@ -307,6 +318,7 @@ fn a_push_refuses_when_origin_main_is_unknown() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_push_updates_the_bare_repository() {
   let sandbox = Sandbox::new();
   let (env, _gh_log, _home) = post(&sandbox);
@@ -323,6 +335,7 @@ fn a_push_updates_the_bare_repository() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_tilde_profile_home_names_the_pattern_file_under_home() {
   let sandbox = Sandbox::new();
   let (mut env, gh_log, _home) = post(&sandbox);
@@ -343,6 +356,7 @@ fn a_tilde_profile_home_names_the_pattern_file_under_home() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_stdin_mode_exit_codes() {
   let sandbox = Sandbox::new();
   let (mut env, _gh_log, home) = post(&sandbox);
@@ -432,6 +446,7 @@ fn leak_run(repo: &Path, env: &Env, args: &[&str]) -> Run {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_hooks_check_staged_bytes_and_commit_fields() {
   let sandbox = Sandbox::new();
   let (repo, env) = leak_repo(&sandbox);
@@ -466,6 +481,7 @@ fn the_hooks_check_staged_bytes_and_commit_fields() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_installed_checkouts_hooks_check_the_committers_tree() {
   let sandbox = Sandbox::new();
   let (repo, env) = cross_checkout_repo(&sandbox);
@@ -503,6 +519,7 @@ fn the_installed_checkouts_hooks_check_the_committers_tree() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_host_scan_covers_tracked_gzip_and_explicit_files() {
   let sandbox = Sandbox::new();
   let (repo, env) = leak_repo(&sandbox);

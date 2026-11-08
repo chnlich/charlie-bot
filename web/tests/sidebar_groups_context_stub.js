@@ -23,12 +23,15 @@ const BACKEND_OPTIONS = {
   'codex-gpt-5.3-codex-spark': 'Codex · GPT-5.3 Codex Spark xHigh (personal)',
 };
 
+const AUTO_BACKEND = {id: 'auto', label: 'Auto'};
+
 function loadGroups() {
   const Sidebar = {state: {}};
   const context = {
     Sidebar,
     globalThis: null,
     BACKEND_OPTIONS,
+    AUTO_BACKEND,
     SESSION_ID: 'other-session',
     console: {error: () => {}},
     localStorage: {getItem: () => null, setItem: () => {}},

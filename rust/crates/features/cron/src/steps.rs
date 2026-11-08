@@ -5,23 +5,41 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_agents::auto_backend;
+use charliebot_core::config::{AUTO_BACKEND_ID, CharlieBotConfig};
+use charliebot_store::metadata::SessionMetadata;
 use charliebot_store::run_records::{RunFacts, RunOutcomeKind, RunRecord};
 
-use crate::config::ScheduledTaskConfig;
+use crate::config::{ScheduledTaskConfig, StepConfig};
 
+/// Whether a step's run is on `auto`: its own backend, or the task's when the step names none.
+pub(crate) fn step_runs_on_auto(task: &ScheduledTaskConfig, step: &StepConfig) -> bool {
+  step.backend.as_deref().or(task.backend.as_deref()) == Some(AUTO_BACKEND_ID)
+}
+
+/// Resolve a step's backend and model. `auto` resolves to the bound session's current member, which the fire's turn start
+/// recorded; `parent` is that bound session and is required for `auto`.
 pub(crate) fn resolved_backend(
   task: &ScheduledTaskConfig,
   cfg: &CharlieBotConfig,
   backend: Option<&str>,
+  parent: Option<&SessionMetadata>,
 ) -> anyhow::Result<(String, Option<String>)> {
   let backend = backend
     .filter(|backend| !backend.is_empty())
     .or(task.backend.as_deref().filter(|backend| !backend.is_empty()))
     .or_else(|| cfg.backends.options.first().map(|option| option.id.as_str()))
     .ok_or_else(|| anyhow::anyhow!("scheduled task backend resolution requires a configured backends.options entry"))?;
+  let backend = if backend == AUTO_BACKEND_ID {
+    let parent = parent.ok_or_else(|| {
+      anyhow::anyhow!("scheduled task '{}' runs on backend 'auto' outside its bound session", task.name)
+    })?;
+    auto_backend::current_member_id(cfg, parent)?
+  } else {
+    backend.to_string()
+  };
   let option = cfg
-    .get_backend_option(backend)
+    .get_backend_option(&backend)
     .ok_or_else(|| anyhow::anyhow!("scheduled task '{}' backend '{}' is not configured", task.name, backend))?;
   Ok((option.id.clone(), (!option.model.is_empty()).then(|| option.model.clone())))
 }
@@ -40,8 +58,8 @@ pub(crate) fn distinct_backend_conflict(
       .copied()
       .ok_or_else(|| anyhow::anyhow!("step '{}' names missing distinct backend source '{prior_name}'", step.name))?;
     let prior = &steps[prior_position];
-    let (backend, model) = resolved_backend(task, cfg, step.backend.as_deref())?;
-    let (prior_backend, prior_model) = resolved_backend(task, cfg, prior.backend.as_deref())?;
+    let (backend, model) = resolved_backend(task, cfg, step.backend.as_deref(), None)?;
+    let (prior_backend, prior_model) = resolved_backend(task, cfg, prior.backend.as_deref(), None)?;
     let own = cfg.get_backend_option(&backend).expect("resolved backend option exists");
     let old = cfg.get_backend_option(&prior_backend).expect("resolved backend option exists");
     if own.backend_type == old.backend_type && model == prior_model {

@@ -92,6 +92,7 @@ function buildPage(initialMessages = [], sessionId = 'session-a', {renderMessage
     context.Chat.buildTurnEngineMessageNode = () => createElement();
   }
   vm.runInContext(readStatic('chat/turn-engine.js'), context, {filename: 'chat/turn-engine.js'});
+  vm.runInContext(readStatic('stream-draft.js'), context, {filename: 'stream-draft.js'});
   vm.runInContext(readStatic('websocket-handlers.js'), context, {filename: 'websocket-handlers.js'});
   const engine = context.Chat.TurnEngine.mountIfAvailable(messages, initialMessages, sessionId);
   const socket = connect(context);

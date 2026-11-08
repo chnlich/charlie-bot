@@ -41,6 +41,7 @@ use time::OffsetDateTime;
 
 use charliebot_registry::context::FeatureContext;
 
+use crate::backend_retry;
 use crate::run_support::{
   StreamEvent, extra_flags_of, read_stderr_tail, route_resume_session_style, silence_callback, stream_event_channel,
   subprocess_buffer_bytes,
@@ -72,11 +73,12 @@ pub type SpawnedFn = Arc<dyn Fn(ThreadMetadata) -> BoxFuture<'static, anyhow::Re
 pub struct QuotaExhaustedError {
   message: String,
   pub resets_at: Option<OffsetDateTime>,
+  retry_after: Option<Duration>,
 }
 
 impl QuotaExhaustedError {
   pub fn new(message: impl Into<String>, resets_at: Option<OffsetDateTime>) -> Self {
-    Self { message: message.into(), resets_at }
+    Self { message: message.into(), resets_at, retry_after: None }
   }
 }
 
@@ -194,7 +196,8 @@ impl Worker {
   /// the last process (`Worker.run`).
   pub async fn run(&self) -> anyhow::Result<i32> {
     let sink = self.open_sink()?;
-    let mut process = WorkerProcess { worker: self, sink: Arc::clone(&sink), env: self.process_env()? };
+    let mut process =
+      WorkerProcess { worker: self, sink: Arc::clone(&sink), env: self.process_env()?, automatic_retries: 0 };
     match self.backend_option.as_ref() {
       None => {
         let launch =
@@ -554,7 +557,7 @@ impl Worker {
     sink: &Arc<RunSink>,
     env: &Env,
     launch: &Launch,
-    mut watch: Option<&mut dyn LaunchWatch>,
+    mut watch: Option<&mut (dyn LaunchWatch + '_)>,
     relays: usize,
   ) -> anyhow::Result<ProcessResult> {
     self.relays.store(relays, Ordering::Release);
@@ -611,7 +614,10 @@ impl Worker {
           let acknowledgement = result.as_ref().map(|_| ()).map_err(|error| format!("{error:#}"));
           // The send fails only when the runner's follow is gone, and the error below ends this process either way.
           let _ = acknowledged.send(acknowledgement);
-          if let Err(error) = result {
+          if let Err(mut error) = result {
+            if let Some(quota) = error.downcast_mut::<QuotaExhaustedError>() {
+              quota.retry_after = runner.retry_after(&quota.message).await;
+            }
             return Err(self.stop_after(&runner, error).await);
           }
         }
@@ -731,6 +737,7 @@ struct WorkerProcess<'a> {
   worker: &'a Worker,
   sink: Arc<RunSink>,
   env: Env,
+  automatic_retries: usize,
 }
 
 impl RunProcess for WorkerProcess<'_> {
@@ -740,8 +747,35 @@ impl RunProcess for WorkerProcess<'_> {
     watch: Option<&'a mut dyn LaunchWatch>,
     relays: usize,
   ) -> BoxFuture<'a, anyhow::Result<ProcessResult>> {
-    Box::pin(self.worker.run_process(&self.sink, &self.env, launch, watch, relays))
+    Box::pin(async move {
+      let mut watch = watch;
+      loop {
+        let result = self.worker.run_process(&self.sink, &self.env, launch, watch.as_deref_mut(), relays).await;
+        let Err(error) = result else { return result };
+        let Some(quota) = error.downcast_ref::<QuotaExhaustedError>() else { return Err(error) };
+        let Some(retry_after) = quota.retry_after else { return Err(error) };
+        if backend_retry::waits(self.automatic_retries, retry_after) {
+          self.automatic_retries += 1;
+          tokio::time::sleep(retry_after).await;
+          continue;
+        }
+        let message = if self.automatic_retries == backend_retry::MAX_AUTOMATIC_RETRIES {
+          backend_retry::exhausted_message(&quota.message)
+        } else {
+          quota.message.clone()
+        };
+        let resets_at = reset_time_after(retry_after)?;
+        let mut quota = QuotaExhaustedError::new(message, Some(resets_at));
+        quota.retry_after = Some(retry_after);
+        return Err(quota.into());
+      }
+    })
   }
+}
+
+fn reset_time_after(delay: Duration) -> anyhow::Result<OffsetDateTime> {
+  let delay = time::Duration::try_from(delay).context("retry reset duration is outside the supported calendar")?;
+  OffsetDateTime::now_utc().checked_add(delay).context("retry reset is outside the supported calendar")
 }
 
 /// The events log of one run, held open for the whole run, and the broadcast channel of its thread.

@@ -13,10 +13,11 @@ use charliebot_compat::responses;
 use charliebot_compat::routing::{post_only, refuse_other_methods};
 use charliebot_core::event_types;
 use charliebot_core::repo_root::RepoRoot;
+use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::context::FeatureContext;
 use serde_json::{Map, Value, json};
 
-use crate::{config, loader, scheduler};
+use crate::{agent_binding, config, loader, scheduler};
 
 /// The cron task routes: list and create at the collection, update and delete at one task, and a run path for one task.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
@@ -69,7 +70,11 @@ async fn list_tasks(State(features): State<Arc<FeatureContext>>) -> Response {
   responses::fast_json(StatusCode::OK, &Value::Array(rows))
 }
 
-async fn create_task(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+async fn create_task(
+  State(features): State<Arc<FeatureContext>>,
+  caller: CallerIdentity,
+  request: Request<Body>,
+) -> Response {
   let (parts, body) = request.into_parts();
   let body = match request_body::read(&parts.headers, body).await {
     Ok(body) => body,
@@ -89,21 +94,40 @@ async fn create_task(State(features): State<Arc<FeatureContext>>, request: Reque
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
   if let Some(backend) = values.get("backend").and_then(Value::as_str).filter(|value| !value.is_empty())
-    && cfg.get_backend_option(backend).is_none()
+    && !crate::config::backend_resolves(&cfg, backend)
   {
-    return detail(StatusCode::BAD_REQUEST, format!("backend '{backend}' is not in backends.options"));
+    return detail(
+      StatusCode::BAD_REQUEST,
+      format!("backend '{backend}' {}", crate::config::unresolved_backend_reason(backend)),
+    );
+  }
+  let requested_session = values.get("session_id").and_then(Value::as_str).filter(|value| !value.is_empty());
+  if let CallerIdentity::Agent { claims } = &caller
+    && let Err(response) = agent_binding::authorize_create(&features, &claims.session_id, requested_session).await
+  {
+    return response;
   }
   let path = loader::cron_path(&cfg, &name);
   if path.exists() {
     return detail(StatusCode::CONFLICT, format!("Task \"{name}\" already exists"));
   }
-  let body = create_file_body(&values);
+  let mut body = create_file_body(&values);
   let repo = match features.startup.require::<RepoRoot>() {
     Ok(repo) => repo,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
-  if let Err(error) = loader::validate_body(&name, Value::Object(body.clone()), repo.path()) {
-    return detail(StatusCode::CONFLICT, error);
+  let task = match loader::validate_body(&name, Value::Object(body.clone()), repo.path()) {
+    Ok(task) => task,
+    Err(error) => return detail(StatusCode::CONFLICT, error),
+  };
+  if let CallerIdentity::Agent { claims } = &caller
+    && requested_session.is_none()
+  {
+    let session = match agent_binding::create_bound_session(&features, &cfg, &claims.session_id, &task).await {
+      Ok(session) => session,
+      Err(response) => return response,
+    };
+    body.insert("session_id".to_string(), Value::String(session.id));
   }
   if let Err(error) = std::fs::create_dir_all(loader::cron_dir(&cfg)) {
     return responses::internal_error("OSError", error.to_string());
@@ -119,6 +143,7 @@ async fn create_task(State(features): State<Arc<FeatureContext>>, request: Reque
 
 async fn update_task(
   State(features): State<Arc<FeatureContext>>,
+  caller: CallerIdentity,
   Path(name): Path<String>,
   request: Request<Body>,
 ) -> Response {
@@ -161,9 +186,12 @@ async fn update_task(
   if let Some(backend) = values.get("backend")
     && !backend.is_null()
     && let Some(backend) = backend.as_str().filter(|value| !value.is_empty())
-    && cfg.get_backend_option(backend).is_none()
+    && !crate::config::backend_resolves(&cfg, backend)
   {
-    return detail(StatusCode::BAD_REQUEST, format!("backend '{backend}' is not in backends.options"));
+    return detail(
+      StatusCode::BAD_REQUEST,
+      format!("backend '{backend}' {}", crate::config::unresolved_backend_reason(backend)),
+    );
   }
   let repo = match features.startup.require::<RepoRoot>() {
     Ok(repo) => repo,
@@ -176,6 +204,15 @@ async fn update_task(
     Ok(value) => value,
     Err(error) => return detail(StatusCode::CONFLICT, error),
   };
+  let stored = original.get("session_id").and_then(Value::as_str).filter(|value| !value.is_empty());
+  let requested = values.get("session_id").and_then(Value::as_str).filter(|value| !value.is_empty());
+  if let CallerIdentity::Agent { claims } = &caller
+    && values.contains_key("session_id")
+    && stored != requested
+    && let Err(response) = agent_binding::authorize_rebind(&features, &claims.session_id, stored, requested).await
+  {
+    return response;
+  }
   let candidate = apply_update(original, &values);
   let candidate_task = match loader::validate_body(&name, Value::Object(candidate.clone()), repo.path()) {
     Ok(task) => task,
@@ -338,17 +375,23 @@ fn internal_error(kind: &str, message: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
+  use std::path::Path;
   use std::sync::Arc;
 
   use axum::body::{Body, to_bytes};
   use axum::http::{Request, StatusCode, header};
+  use charliebot_core::config::CREDENTIALS_FILENAME;
   use charliebot_core::event_types;
+  use charliebot_core::run_token::{self, RunTokenClaims};
+  use charliebot_registry::context::FeatureContext;
   use charliebot_registry::route_claims::RouteClaims;
-  use charliebot_store::metadata::{LAST_RUN_STATUS, LAST_SCHEDULED_RUN, SCHEDULED_TASK};
-  use serde_json::{Value, json};
+  use charliebot_store::metadata::{LAST_RUN_STATUS, LAST_SCHEDULED_RUN, SCHEDULED_TASK, SessionMetadata, TaskProfile};
+  use charliebot_store::{CreateTask, RunKind, RunRecord, TaskCaller};
+  use serde_json::{Map, Value, json};
   use tower::ServiceExt;
 
   use super::{ROUTE_PATTERNS, routes};
+  use crate::agent_binding::{BINDING_SCOPE_REFUSAL, MANAGER_REFUSAL};
 
   #[test]
   fn matches_claims_the_task_routes_and_refuses_empty_or_extra_segments() {
@@ -370,21 +413,28 @@ mod tests {
     }
   }
   use crate::scheduler::CronScheduler;
-  use crate::test_support::{feature_context, feature_context_with_extra_backends, manager};
+  use crate::test_support::{
+    child_manager, feature_context, feature_context_with_extra_backends, manager, write_prompted_task,
+  };
 
   async fn send(router: &axum::Router, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
-    let response = router
-      .clone()
-      .oneshot(
-        Request::builder()
-          .method(method)
-          .uri(path)
-          .header(header::CONTENT_TYPE, "application/json")
-          .body(Body::from(serde_json::to_vec(&body).unwrap()))
-          .unwrap(),
-      )
-      .await
-      .unwrap();
+    send_as(router, method, path, body, None).await
+  }
+
+  /// One request whose bearer token, when given, is the caller's credential.
+  async fn send_as(
+    router: &axum::Router,
+    method: &str,
+    path: &str,
+    body: Value,
+    bearer: Option<&str>,
+  ) -> (StatusCode, Value) {
+    let mut request = Request::builder().method(method).uri(path).header(header::CONTENT_TYPE, "application/json");
+    if let Some(bearer) = bearer {
+      request = request.header(header::AUTHORIZATION, format!("Bearer {bearer}"));
+    }
+    let response =
+      router.clone().oneshot(request.body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap()).await.unwrap();
     let status = response.status();
     let failure = response
       .extensions()
@@ -662,5 +712,240 @@ mod tests {
     assert_eq!(listed[0]["project"], "synthetic-project");
     assert_eq!(listed[0]["allow_failure"], true);
     assert_eq!(listed[0]["enabled"], false);
+  }
+
+  const ACCESS_KEY: &str = "synthetic-access-key";
+
+  /// A feature context whose credentials hold `ACCESS_KEY`, the key that signs the run tokens the tests send.
+  fn keyed_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
+    let (home, features) = feature_context();
+    std::fs::write(home.path().join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))
+      .unwrap();
+    (home, features)
+  }
+
+  /// Launch one run of `session_id` and sign the run token that names it: the credential an agent sends.
+  async fn agent_token(features: &FeatureContext, session_id: &str) -> String {
+    let run_id = format!("run-{session_id}");
+    let record = RunRecord {
+      id: run_id.clone(),
+      session_id: session_id.to_string(),
+      kind: RunKind::Work,
+      input_event_ids: Vec::new(),
+      task_spec_hash: None,
+      task_spec_ref: None,
+      prompt_snapshot_ref: None,
+      retry_of_run_id: None,
+      review_of_run_id: None,
+      backend: None,
+      model: None,
+      native_session_id: None,
+      pid: None,
+      pid_start: None,
+      started_at: None,
+      ended_at: None,
+      exit_code: None,
+      repo_path: None,
+      base_branch: None,
+      branch_name: None,
+      worktree_path: None,
+      sequence_ref: None,
+      raw_log_ref: None,
+      events_ref: None,
+      result_ref: None,
+    };
+    let guard = features.store.control_lock().await;
+    features.store.register_run_locked(&guard, session_id, record, Some("synthetic cron run")).await.unwrap();
+    drop(guard);
+    features.store.record_launch(session_id, &run_id, 424242, "12345").await.unwrap();
+    let claims = RunTokenClaims { session_id: session_id.to_string(), run_id, agent: "synthetic-agent".to_string() };
+    run_token::sign_run_token(&claims, ACCESS_KEY).unwrap()
+  }
+
+  /// A worker session under `parent_id`, the shape a worker agent's run holds.
+  async fn worker(features: &FeatureContext, parent_id: &str, request_id: &str) -> SessionMetadata {
+    features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: request_id.to_string(),
+          task_parent_id: Some(parent_id.to_string()),
+          profile: TaskProfile::Worker,
+          task: None,
+          name: Some("Synthetic cron worker".to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::Operator,
+        Map::new(),
+      )
+      .await
+      .unwrap()
+  }
+
+  fn create_body(name: &str, prompt: &Path, session_id: Option<&str>) -> Value {
+    let mut body = json!({"name": name, "cron": "0 8 * * *", "prompt_file": prompt});
+    if let Some(session_id) = session_id {
+      body["session_id"] = json!(session_id);
+    }
+    body
+  }
+
+  #[tokio::test]
+  async fn an_agent_manager_creates_a_task_whose_bound_session_is_its_child() {
+    let (home, features) = keyed_context();
+    let caller = manager(&features, "cron-agent-caller").await.unwrap();
+    let token = agent_token(&features, &caller.id).await;
+    let prompt = home.path().join("synthetic-prompt.md");
+    std::fs::write(&prompt, "Synthetic scheduled prompt\n").unwrap();
+    let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
+
+    let (status, created) = send_as(
+      &routes(&features),
+      "POST",
+      "/api/cron/tasks",
+      create_body("synthetic-task", &prompt, None),
+      Some(&token),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let session_id = created["session_id"].as_str().unwrap();
+    let node = features.store.get_session(session_id).await.unwrap().unwrap();
+    assert_eq!(node.task_parent_id.as_deref(), Some(caller.id.as_str()));
+    assert_eq!(node.profile, TaskProfile::Manager);
+    let persisted = serde_yaml::from_str::<serde_yaml::Value>(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(persisted.get("session_id").and_then(serde_yaml::Value::as_str), Some(session_id));
+  }
+
+  #[tokio::test]
+  async fn an_agent_binds_a_new_task_only_to_its_own_session_or_below() {
+    let (home, features) = keyed_context();
+    let caller = manager(&features, "cron-bind-caller").await.unwrap();
+    let child = child_manager(&features, &caller.id, "cron-bind-child").await.unwrap();
+    let outside = manager(&features, "cron-bind-outside").await.unwrap();
+    let worker = worker(&features, &caller.id, "cron-bind-worker").await;
+    let caller_token = agent_token(&features, &caller.id).await;
+    let worker_token = agent_token(&features, &worker.id).await;
+    let prompt = home.path().join("synthetic-prompt.md");
+    std::fs::write(&prompt, "Synthetic scheduled prompt\n").unwrap();
+    let router = routes(&features);
+
+    let refused = [
+      (
+        create_body("refused-outside", &prompt, Some(outside.id.as_str())),
+        caller_token.as_str(),
+        BINDING_SCOPE_REFUSAL,
+      ),
+      (create_body("refused-worker-unbound", &prompt, None), worker_token.as_str(), MANAGER_REFUSAL),
+      (create_body("refused-worker-bound", &prompt, Some(child.id.as_str())), worker_token.as_str(), MANAGER_REFUSAL),
+    ];
+    for (body, token, rule) in refused {
+      let path = home.path().join(format!("config.d/cron.d/{}.yaml", body["name"].as_str().unwrap()));
+      let (status, response) = send_as(&router, "POST", "/api/cron/tasks", body, Some(token)).await;
+      assert_eq!(status, StatusCode::FORBIDDEN);
+      assert_eq!(response["detail"], rule);
+      assert!(!path.exists());
+    }
+
+    for (name, session_id) in [("bound-child-task", &child.id), ("bound-self-task", &caller.id)] {
+      let body = create_body(name, &prompt, Some(session_id.as_str()));
+      let (status, created) = send_as(&router, "POST", "/api/cron/tasks", body, Some(&caller_token)).await;
+      assert_eq!(status, StatusCode::OK);
+      assert_eq!(created["session_id"], json!(session_id));
+    }
+  }
+
+  #[tokio::test]
+  async fn an_agent_rebinds_a_task_only_within_its_subtree() {
+    let (home, features) = keyed_context();
+    let caller = manager(&features, "cron-rebind-caller").await.unwrap();
+    let child = child_manager(&features, &caller.id, "cron-rebind-child").await.unwrap();
+    let outside = manager(&features, "cron-rebind-outside").await.unwrap();
+    let worker = worker(&features, &caller.id, "cron-rebind-worker").await;
+    let caller_token = agent_token(&features, &caller.id).await;
+    let worker_token = agent_token(&features, &worker.id).await;
+    let router = routes(&features);
+    write_prompted_task(home.path(), "inside-task", &json!({"cron": "0 8 * * *", "session_id": child.id}));
+    write_prompted_task(home.path(), "outside-task", &json!({"cron": "0 8 * * *", "session_id": outside.id}));
+
+    let refused = [
+      ("inside-task", json!({"session_id": outside.id}), caller_token.as_str(), BINDING_SCOPE_REFUSAL),
+      ("inside-task", json!({"session_id": null}), caller_token.as_str(), BINDING_SCOPE_REFUSAL),
+      ("inside-task", json!({"session_id": "ghost-session"}), caller_token.as_str(), BINDING_SCOPE_REFUSAL),
+      ("inside-task", json!({"session_id": caller.id}), worker_token.as_str(), MANAGER_REFUSAL),
+      ("outside-task", json!({"session_id": child.id}), caller_token.as_str(), BINDING_SCOPE_REFUSAL),
+    ];
+    for (name, body, token, rule) in refused {
+      let path = home.path().join(format!("config.d/cron.d/{name}.yaml"));
+      let before = std::fs::read_to_string(&path).unwrap();
+      let (status, response) = send_as(&router, "PUT", &format!("/api/cron/tasks/{name}"), body, Some(token)).await;
+      assert_eq!(status, StatusCode::FORBIDDEN);
+      assert_eq!(response["detail"], rule);
+      assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+
+    // A schedule-only update by a worker agent changes the schedule and keeps the binding.
+    let (status, updated) =
+      send_as(&router, "PUT", "/api/cron/tasks/inside-task", json!({"cron": "0 9 * * *"}), Some(&worker_token)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["cron"], "0 9 * * *");
+    assert_eq!(updated["session_id"], json!(child.id));
+
+    // The caller moves the binding to its own session, which is within its subtree.
+    let (status, moved) =
+      send_as(&router, "PUT", "/api/cron/tasks/inside-task", json!({"session_id": caller.id}), Some(&caller_token))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(moved["session_id"], json!(caller.id));
+
+    // A request that repeats the stored binding changes nothing about it, for a worker agent too.
+    let (status, repeated) =
+      send_as(&router, "PUT", "/api/cron/tasks/inside-task", json!({"session_id": caller.id}), Some(&worker_token))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated["session_id"], json!(caller.id));
+  }
+
+  #[tokio::test]
+  async fn operator_calls_on_the_cron_routes_keep_their_behavior() {
+    let (home, features) = keyed_context();
+    let outside = manager(&features, "cron-operator-outside").await.unwrap();
+    let router = routes(&features);
+    let prompt = home.path().join("synthetic-prompt.md");
+    std::fs::write(&prompt, "Synthetic scheduled prompt\n").unwrap();
+
+    // A create without a session binds none: the scheduler auto-binds a root session later.
+    let (status, created) =
+      send(&router, "POST", "/api/cron/tasks", create_body("operator-root-task", &prompt, None)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(created.get("session_id").is_none());
+
+    // The access key may bind a session outside every agent subtree, and may clear a binding.
+    let (status, created) = send_as(
+      &router,
+      "POST",
+      "/api/cron/tasks",
+      create_body("operator-bound-task", &prompt, Some(outside.id.as_str())),
+      Some(ACCESS_KEY),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(created["session_id"], json!(outside.id));
+    let (status, updated) = send_as(
+      &router,
+      "PUT",
+      "/api/cron/tasks/operator-root-task",
+      json!({"session_id": outside.id}),
+      Some(ACCESS_KEY),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["session_id"], json!(outside.id));
+    let (status, cleared) =
+      send(&router, "PUT", "/api/cron/tasks/operator-bound-task", json!({"session_id": null})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(cleared.get("session_id").is_none());
   }
 }

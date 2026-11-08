@@ -4,8 +4,8 @@
 use anyhow::bail;
 use charliebot_registry::backend::LaunchArgs;
 
-use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_claude_code::AnthropicEndpointBackend;
+use charliebot_core::cgroup::SessionCgroupConfig;
 
 /// The backend for `model` behind the proxy at `proxy_base_url`, authenticated with the access key `auth_token`.
 /// `server_port` is the port of the CharlieBot server that serves the web search MCP tool. `enable_subagents` is the

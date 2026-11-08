@@ -33,7 +33,8 @@ struct ChannelState {
 
 struct StreamWindow {
   id: u64,
-  pending: Option<String>,
+  /// The pending frame of the window, with every append broadcast since the leading edge merged into it.
+  pending: Option<Value>,
 }
 
 struct StreamingInner {
@@ -148,12 +149,9 @@ impl StreamingManager {
     frame: Value,
     serializer: impl Fn(&Value) -> StoreResult<String>,
   ) -> StoreResult<()> {
-    let serialized = serializer(&frame)?;
     let event_type = frame.get("type").and_then(Value::as_str);
-    let is_stream = event_type == Some("stream");
-    let hides_preview = event_type.is_some_and(|event_type| PREVIEW_HIDING_TYPES.contains(&event_type));
 
-    if is_stream {
+    if event_type == Some("stream") {
       let window_id = {
         let mut state = self.inner.state.lock().expect("streaming state mutex is not poisoned");
         let Some(channel_state) = state.channels.get_mut(channel) else { return Ok(()) };
@@ -161,9 +159,13 @@ impl StreamingManager {
           return Ok(());
         }
         if let Some(window) = channel_state.stream_window.as_mut() {
-          window.pending = Some(serialized);
+          window.pending = Some(match window.pending.take() {
+            Some(previous) => merge_stream_frames(previous, frame),
+            None => frame,
+          });
           return Ok(());
         }
+        let serialized = serializer(&frame)?;
         let window_id = state.next_window_id;
         state.next_window_id += 1;
         let channel_state = state.channels.get_mut(channel).expect("channel was checked above");
@@ -181,8 +183,12 @@ impl StreamingManager {
       return Ok(());
     }
 
+    let serialized = serializer(&frame)?;
+    let hides_preview = event_type.is_some_and(|event_type| PREVIEW_HIDING_TYPES.contains(&event_type));
     let mut state = self.inner.state.lock().expect("streaming state mutex is not poisoned");
     let Some(channel_state) = state.channels.get_mut(channel) else { return Ok(()) };
+    // The pending appends were broadcast before this frame, so they reach the page first.
+    flush_pending_frame(channel_state);
     if hides_preview {
       channel_state.stream_window = None;
     }
@@ -240,6 +246,33 @@ fn send_to_channel(channel: &mut ChannelState, frame: String) {
   channel.subscribers.retain(|_, sender| sender.send(frame.clone()).is_ok());
 }
 
+/// Send the window's pending frame now. A frame that follows it must reach the page after the appends it was
+/// broadcast after, so every non-stream frame flushes the window first.
+fn flush_pending_frame(channel: &mut ChannelState) {
+  let pending = channel.stream_window.as_mut().and_then(|window| window.pending.take());
+  let Some(pending) = pending else { return };
+  match serialize_frame(&pending) {
+    Ok(text) => send_to_channel(channel, text),
+    Err(error) => tracing::warn!(error = %error, "stream_frame_serialize_failed"),
+  }
+}
+
+/// Merge a stream frame into the window's pending one. A stream frame carries only the text added since the
+/// previous frame, so the appended text of the two frames adds up; every other field takes the newer value.
+fn merge_stream_frames(mut previous: Value, next: Value) -> Value {
+  let Some(next_object) = next.as_object() else { return next };
+  let Some(previous_object) = previous.as_object_mut() else { return next };
+  for (key, value) in next_object {
+    let text_key = matches!(key.as_str(), "append" | "thinking_append");
+    let merged = match (text_key, previous_object.get(key).and_then(Value::as_str), value.as_str()) {
+      (true, Some(have), Some(more)) => Some(format!("{have}{more}")),
+      _ => None,
+    };
+    previous_object.insert(key.clone(), merged.map_or_else(|| value.clone(), Value::String));
+  }
+  previous
+}
+
 async fn close_socket(requests: &mpsc::UnboundedSender<CloseRequest>) -> Result<(), String> {
   let (reply, outcome) = oneshot::channel();
   requests.send(reply).map_err(|_| "the socket ended before the shutdown reached it".to_string())?;
@@ -271,7 +304,10 @@ fn end_stream_window(manager: Weak<StreamingInner>, channel: &str, window_id: u6
   }
   let pending = channel_state.stream_window.take().and_then(|window| window.pending);
   if let Some(pending) = pending {
-    send_to_channel(channel_state, pending);
+    match serialize_frame(&pending) {
+      Ok(text) => send_to_channel(channel_state, text),
+      Err(error) => tracing::warn!(error = %error, "stream_frame_serialize_failed"),
+    }
   }
   if channel_state.subscribers.is_empty() {
     state.channels.remove(channel);
@@ -306,7 +342,9 @@ mod tests {
   }
 
   #[tokio::test(start_paused = true)]
-  async fn hiding_frames_drop_the_pending_preview_and_open_a_new_window() {
+  async fn a_hiding_frame_flushes_the_pending_appends_before_it() {
+    // A stream frame carries only new text, so a frame that hides the preview must not swallow the appends
+    // broadcast before it: the page builds the message it commits from them.
     let manager = StreamingManager::new();
     let mut subscription = manager.subscribe("sidebar");
     manager.broadcast("sidebar", json!({"type": "stream", "sequence": 1})).await.unwrap();
@@ -314,6 +352,7 @@ mod tests {
     assert!(subscription.recv().await.unwrap().contains("\"sequence\":1"));
     manager.broadcast("sidebar", json!({"type": "stream", "sequence": 2})).await.unwrap();
     manager.broadcast("sidebar", json!({"type": "message"})).await.unwrap();
+    assert_eq!(subscription.recv().await.unwrap(), r#"{"type":"stream","sequence":2}"#);
     assert_eq!(subscription.recv().await.unwrap(), r#"{"type":"message"}"#);
     manager.broadcast("sidebar", json!({"type": "stream", "sequence": 3})).await.unwrap();
     tokio::task::yield_now().await;
@@ -321,6 +360,36 @@ mod tests {
     advance(Duration::from_millis(200)).await;
     tokio::task::yield_now().await;
     assert!(subscription.receiver.try_recv().is_err());
+  }
+
+  #[tokio::test(start_paused = true)]
+  async fn a_window_sends_one_frame_whose_appends_add_up() {
+    let manager = StreamingManager::new();
+    let mut subscription = manager.subscribe("session:synthetic");
+    manager
+      .broadcast("session:synthetic", json!({"type": "stream", "append": "a", "length": 1, "event_index": 1}))
+      .await
+      .unwrap();
+    tokio::task::yield_now().await;
+    assert_eq!(subscription.recv().await.unwrap(), r#"{"type":"stream","append":"a","length":1,"event_index":1}"#);
+    manager
+      .broadcast("session:synthetic", json!({"type": "stream", "append": "b", "length": 2, "event_index": 2}))
+      .await
+      .unwrap();
+    manager
+      .broadcast(
+        "session:synthetic",
+        json!({"type": "stream", "append": "c", "length": 4, "event_index": 3, "tools": [{"id": "t"}]}),
+      )
+      .await
+      .unwrap();
+    assert!(subscription.receiver.try_recv().is_err());
+    advance(Duration::from_millis(200)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(
+      subscription.recv().await.unwrap(),
+      r#"{"type":"stream","append":"bc","length":4,"event_index":3,"tools":[{"id":"t"}]}"#
+    );
   }
 
   #[tokio::test]

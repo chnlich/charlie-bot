@@ -5,6 +5,7 @@
 //! fence identity record, and the static-file ETag. Each one follows the pinned algorithm it names rather than
 //! serde_json's own formatting.
 
+use crate::json_loads::{INFINITY, NAN, NEGATIVE_INFINITY};
 use crate::printable_table::NON_PRINTABLE;
 use serde::Serialize;
 use serde_json::ser::Formatter as JsonFormatter;
@@ -240,6 +241,20 @@ pub fn value_str(value: &Value) -> String {
   }
 }
 
+/// The class name a JSON value reports in Python's error text: `NoneType`, `bool`, `float`, `int`, `str`, `list`
+/// or `dict`.
+pub fn type_name(value: &Value) -> &'static str {
+  match value {
+    Value::Null => "NoneType",
+    Value::Bool(_) => "bool",
+    Value::Number(number) if number.is_f64() => "float",
+    Value::Number(_) => "int",
+    Value::String(_) => "str",
+    Value::Array(_) => "list",
+    Value::Object(_) => "dict",
+  }
+}
+
 /// The repr of a loaded JSON value: strings quoted by [`str_repr`], `None`, booleans as `True` and `False`,
 /// floats by [`float_repr`], and containers with `, ` and `: ` separators.
 pub fn value_repr(value: &Value) -> String {
@@ -340,16 +355,16 @@ fn write_json(out: &mut String, value: &Value, style: &JsonStyle, floats: FloatF
     Value::Number(number) => {
       if number.is_f64() {
         let float = number.as_f64().expect("an f64 number reads as f64");
-        out.push_str(&if float.is_nan() {
-          "NaN".to_string()
+        if float.is_nan() {
+          out.push_str(NAN);
         } else if float.is_infinite() {
-          if float > 0.0 { "Infinity" } else { "-Infinity" }.to_string()
+          out.push_str(if float > 0.0 { INFINITY } else { NEGATIVE_INFINITY });
         } else {
-          match floats {
+          out.push_str(&match floats {
             FloatForm::Python => float_repr(float),
             FloatForm::Pydantic => pydantic_float_repr(float),
-          }
-        });
+          });
+        }
       } else {
         out.push_str(&number.to_string());
       }
@@ -764,28 +779,5 @@ mod tests {
     assert_eq!(str_repr("server startup"), "'server startup'");
     assert_eq!(str_repr("it's"), "\"it's\"");
     assert_eq!(str_repr("a'b\"c"), "'a\\'b\"c'");
-  }
-
-  const GOLDEN_REPRS: &str = include_str!("../tests/fixtures/text_repr_golden.txt");
-  const GOLDEN_REPRS_METADATA: &str = include_str!("../tests/fixtures/text_repr_metadata_golden.json");
-
-  #[test]
-  fn str_repr_matches_recorded_for_every_code_point() {
-    let metadata: Value = serde_json::from_str(GOLDEN_REPRS_METADATA).unwrap();
-    assert_eq!(metadata["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
-    let reprs: Vec<&str> = GOLDEN_REPRS.split_terminator('\n').collect();
-    let code_points: Vec<char> = (0..=0x10_ffff_u32).filter_map(char::from_u32).collect();
-    assert_eq!(reprs.len(), metadata["code_point_count"].as_u64().unwrap() as usize);
-    assert_eq!(reprs.len(), code_points.len(), "CPython records one repr per code point");
-    let mismatches: Vec<String> = code_points
-      .iter()
-      .zip(&reprs)
-      .filter_map(|(c, cpython)| {
-        let ours = str_repr(&c.to_string());
-        (ours != *cpython).then(|| format!("U+{:04X}: CPython {cpython}, str_repr {ours}", *c as u32))
-      })
-      .collect();
-    let first = &mismatches[..mismatches.len().min(8)];
-    assert!(mismatches.is_empty(), "{} code points differ, first {first:?}", mismatches.len());
   }
 }

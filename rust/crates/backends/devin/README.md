@@ -21,14 +21,23 @@ The runner calls `prepare_transport` with the run's log directory. The turn then
 2. runs `devin --prompt-file=… --permission-mode=dangerous --respect-workspace-trust=false --model=… [--resume=<id>]
    --export=<log dir>/devin_export.json --print`, with no stdin;
 3. on exit 0, reads stdout as the final answer and the export as the events: `session_attached` from `session_id`,
-   the steps after the last `user` step, which are the ones this turn added (text, tool calls and tool results), and
-   the usage summed over those steps' `metrics`, with a null cost. `input_tokens` is the prompt sum, the cached part
-   included, and `cache_read_input_tokens` is the cached count, as the codex translator reports OpenAI-style counts;
-   the ledger's run-logs-only record reads `input_tokens`, so each input token is counted once. The export holds every
-   turn of the conversation, so the earlier turns' steps become no events and add no usage.
+   the steps after the last `user` step or compaction summary, whichever comes later, which are the ones this turn
+   added (text, tool calls and tool results), and the usage summed over those steps' `metrics`, with a null cost.
+   `input_tokens` is the prompt sum, the cached part included, and `cache_read_input_tokens` is the cached count, as
+   the codex translator reports OpenAI-style counts; the ledger's run-logs-only record reads `input_tokens`, so each
+   input token is counted once. The export also holds the earlier turns, whose steps become no events and add no
+   usage.
 
-A nonzero exit fails the turn with Devin's stderr. A missing export, one without `session_id`, one without a `user`
-step, or one whose current-turn agent step has no `metrics` fails the turn and names the export path.
+When a conversation grows long, Devin compacts it: a system step tagged `extra.telemetry` `source: "compaction"`,
+`operation: "summary"` replaces the earlier steps, the current turn's `user` step included. The turn then starts
+after that summary. The export drops the compacted steps and their `metrics`, so that turn's usage leaves out the
+tokens spent before the compaction.
+
+A nonzero exit fails the turn with Devin's stderr. When that stderr carries `"cognition.ai/retryable": true` and
+states `reset in N seconds`, `retry_after` returns N seconds, and the manager turn or worker run reruns the input on
+devin after the reset, within the limits of the `backend_retry` module in `charliebot-tasks`. A missing export,
+one without `session_id`, one with neither a `user` step nor a compaction summary, or one whose current-turn agent
+step has no `metrics` fails the turn and names the export path.
 
 ## Where the field names live
 

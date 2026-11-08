@@ -1,0 +1,9 @@
+{
+  "name": "charliebot-integration-selection",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@iarna/toml": "2.2.5",
+    "minimatch": "10.2.6"
+  }
+}

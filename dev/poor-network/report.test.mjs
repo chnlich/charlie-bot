@@ -1,0 +1,134 @@
+// Tests of the report's calibration gate: it reads the switch holds that were clicked during a list refresh, not the
+// scored scenario's random-phase holds, and only the reference before side's summary line carries a verdict.
+
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { test } from 'node:test';
+
+import { CALIBRATION_HOLD_MS, CALIBRATION_REFERENCE } from './profile.mjs';
+import { METRICS, calibrate, formatSide, regressions, summarize } from './report.mjs';
+
+// One background repetition's calibration fields. `random` is the scored scenario's hold, which the gate must not read.
+function rep(duringMs, randomMs) {
+  return { switchDuringRefreshMs: duringMs, switchMs: randomMs };
+}
+
+test('the gate reads the during-refresh holds, not the random-phase switch holds', () => {
+  // Random-phase holds above the threshold with during-refresh holds below it must not reproduce. Reading the scored
+  // scenario's holds here is the regression this suite exists to catch.
+  const background = [
+    rep(CALIBRATION_HOLD_MS - 2000, CALIBRATION_HOLD_MS + 4000),
+    rep(CALIBRATION_HOLD_MS - 1000, CALIBRATION_HOLD_MS + 3000),
+    rep(CALIBRATION_HOLD_MS - 3000, CALIBRATION_HOLD_MS + 5000),
+  ];
+  const calibration = calibrate(background);
+  assert.equal(calibration.reproduced, false);
+  assert.equal(calibration.medianMs, CALIBRATION_HOLD_MS - 2000);
+});
+
+test('a median at or above the threshold reproduces', () => {
+  const background = [
+    rep(CALIBRATION_HOLD_MS, 0),
+    rep(CALIBRATION_HOLD_MS + 5000, 0),
+    rep(CALIBRATION_HOLD_MS + 1000, 0),
+  ];
+  assert.equal(calibrate(background).reproduced, true);
+});
+
+test('the holds carry their count of repetitions recorded at the cap', () => {
+  const background = [rep(CALIBRATION_HOLD_MS + 1000, 0), rep(CALIBRATION_HOLD_MS + 2000, 0)];
+  background[1].switchDuringRefreshCapped = true;
+  assert.equal(calibrate(background).cappedCount, 1);
+});
+
+function side(name, calibration, commit = 'test') {
+  return { side: name, commit, chrome: { version: 'test' }, metrics: {}, calibration };
+}
+
+function calibrationLine(aSide) {
+  return formatSide(aSide).split('\n').find((row) => row.startsWith('calibration:'));
+}
+
+test("the reference before side's line prints the raw holds and the verdict", () => {
+  const calibration = calibrate([rep(CALIBRATION_HOLD_MS + 500, 0), rep(CALIBRATION_HOLD_MS + 1500, 0)]);
+  const line = calibrationLine(side('before', calibration, CALIBRATION_REFERENCE));
+  assert.match(line, /holds 10\.50 s, 11\.50 s, median 10\.50 s/);
+  assert.match(line, /reproduced$/);
+});
+
+test("a before side at another commit prints the raw holds without the verdict run.sh does not apply there", () => {
+  const calibration = calibrate([rep(CALIBRATION_HOLD_MS - 6000, 0), rep(CALIBRATION_HOLD_MS - 5000, 0)]);
+  const line = calibrationLine(side('before', calibration, 'another-commit'));
+  assert.match(line, /holds 4\.00 s, 5\.00 s, median 4\.00 s/);
+  assert.match(line, /the gate reads the reference before side only$/);
+  assert.doesNotMatch(line, /NOT reproduced/);
+});
+
+test("the after side's line prints the raw holds without a gate verdict", () => {
+  const calibration = calibrate([rep(CALIBRATION_HOLD_MS - 5000, 0), rep(CALIBRATION_HOLD_MS - 4000, 0)]);
+  const line = calibrationLine(side('after', calibration));
+  assert.match(line, /holds 5\.00 s, 6\.00 s, median 5\.00 s/);
+  assert.match(line, /the gate reads the reference before side only$/);
+  assert.doesNotMatch(line, /reproduced/);
+});
+
+// One side of a cross-side comparison, with the switch metric's summary. `switchMs - switchFloorMs` is the value the
+// bench holds against `TARGETS.switchExtraMs`.
+function switchSide(name, switchMs, switchFloorMs) {
+  const metric = METRICS.find((candidate) => candidate.id === 'switch');
+  return {
+    side: name,
+    commit: 'test',
+    chrome: { version: 'test' },
+    metrics: { switch: summarize([{ switchMs, switchFloorMs }], metric) },
+  };
+}
+
+test('a metric that passed before and fails after is a regression', () => {
+  const found = regressions(switchSide('before', 500, 400), switchSide('after', 2000, 400));
+  assert.deepEqual(found.map((metric) => metric.id), ['switch']);
+});
+
+test('a metric that failed before and passes after is not a regression, and neither is one absent from a side', () => {
+  assert.deepEqual(regressions(switchSide('before', 2000, 400), switchSide('after', 500, 400)), []);
+  assert.deepEqual(regressions(switchSide('before', 500, 400), { side: 'after', metrics: {} }), []);
+});
+
+test('the cross-side CLI exits 4 on a regression and 0 without one', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pn-report-'));
+  const report = new URL('./report.mjs', import.meta.url).pathname;
+  const run = (before, after) => {
+    const beforePath = path.join(dir, 'before.json');
+    const afterPath = path.join(dir, 'after.json');
+    fs.writeFileSync(beforePath, JSON.stringify(before));
+    fs.writeFileSync(afterPath, JSON.stringify(after));
+    return spawnSync(process.execPath, [report, beforePath, afterPath], { encoding: 'utf8' });
+  };
+  try {
+    const regressed = run(switchSide('before', 500, 400), switchSide('after', 2000, 400));
+    assert.equal(regressed.status, 4);
+    assert.match(regressed.stdout, /regression: switch/);
+    const clean = run(switchSide('before', 2000, 400), switchSide('after', 500, 400));
+    assert.equal(clean.status, 0);
+    assert.match(clean.stdout, /regressions: none/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the switch-to-catchup number is reported with a median and p90, and has no target', () => {
+  const metric = METRICS.find((candidate) => candidate.id === 'switch-catchup');
+  const summary = summarize([{ switchCatchupMs: 1200 }, { switchCatchupMs: 1400 }], metric);
+  assert.equal(summary.target, null);
+  assert.equal(summary.pass, null);
+  assert.equal(summary.median, 1200);
+  assert.equal(summary.p90, 1400);
+  const aSide = { side: 'after', commit: 'test', chrome: { version: 'test' }, metrics: { 'switch-catchup': summary } };
+  const line = formatSide(aSide)
+    .split('\n')
+    .find((row) => row.startsWith('| switch-catchup'));
+  assert.match(line, /1\.20 s \| 1\.40 s \| 1\.20 s \| 0 of 2 \| - \| - \|$/);
+});

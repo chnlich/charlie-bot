@@ -55,7 +55,7 @@ impl Settings {
     }
   }
 
-  /// Appends `entry` to the request log as one JSON line, tagged with this process's pid.
+  /// The request-log line for `entry`: one JSON line tagged with this process's pid.
   fn record(&self, mut entry: Value) {
     let Some(log) = &self.log else { return };
     entry["pid"] = json!(std::process::id());

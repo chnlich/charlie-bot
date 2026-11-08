@@ -2,7 +2,9 @@
 # The bench's scripted backend: a stand-in for the charlie-code CLI, which the server runs once per turn. It prints the
 # NDJSON that the backend reads: session_attached, the next reply piece of POOR_NETWORK_REPLY_DIR, then result. It
 # calls no model and reads no credential. A prompt carrying the marker bench-hold keeps its turn open, so the session
-# stays running for the background load until the bench cancels it.
+# stays running for the background load until the bench cancels it. A prompt carrying the marker bench-tools prints the
+# tool piece instead of a reply piece. Each line is replayed after the delay it states in bench_delay_s; a line that
+# states none keeps 0.05 s.
 set -eu
 
 task_file=
@@ -23,15 +25,22 @@ else
 fi
 printf '{"type":"session_attached","session_id":"%s"}\n' "$session_id"
 
-# The reply pieces are printed in turn, so consecutive turns carry different text.
+# The reply pieces are printed in turn, so consecutive turns carry different text. The tool piece is selected, not
+# rotated: it never advances the rotation.
 replies=$POOR_NETWORK_REPLY_DIR
-next=$(cat "$replies/next")
-pieces=$(ls "$replies" | grep -c '^reply-')
-printf '%s\n' "$((next + 1))" > "$replies/next"
+if [ -n "$task_file" ] && grep -q 'bench-tools' "$task_file"; then
+  piece="$replies/tools-0.ndjson"
+else
+  next=$(cat "$replies/next")
+  pieces=$(ls "$replies" | grep -c '^reply-')
+  printf '%s\n' "$((next + 1))" > "$replies/next"
+  piece="$replies/reply-$((next % pieces)).ndjson"
+fi
 while IFS= read -r line; do
   printf '%s\n' "$line"
-  sleep 0.05
-done < "$replies/reply-$((next % pieces)).ndjson"
+  delay=$(printf '%s' "$line" | sed -n 's/.*"bench_delay_s":\([0-9.]*\).*/\1/p')
+  sleep "${delay:-0.05}"
+done < "$piece"
 
 if [ -n "$task_file" ] && grep -q 'bench-hold' "$task_file"; then
   # A cancel stops this shell; the sleep it waits on ends with it, so no orphan outlives the turn.

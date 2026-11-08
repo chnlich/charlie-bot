@@ -37,6 +37,7 @@ fn wait_until(limit: Duration, mut condition: impl FnMut() -> bool) -> bool {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_round_receives_claudes_arguments_with_the_launch_directory_paths() {
   let world = World::new();
   let run = world.run(&world.env());
@@ -67,6 +68,7 @@ fn the_round_receives_claudes_arguments_with_the_launch_directory_paths() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_prompt_on_the_launchers_standard_input_reaches_the_remote_claude() {
   let world = World::new();
   let prompt = world.sandbox.root().join("prompt.txt");
@@ -85,6 +87,7 @@ fn the_prompt_on_the_launchers_standard_input_reaches_the_remote_claude() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_cron_sessions_own_turn_runs_this_hosts_claude_with_its_arguments_and_input() {
   let world = World::new();
   let prompt = world.sandbox.root().join("node-prompt.txt");
@@ -105,6 +108,7 @@ fn a_cron_sessions_own_turn_runs_this_hosts_claude_with_its_arguments_and_input(
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_cron_sessions_own_turn_keeps_this_hosts_profile_home_config_dir_and_token() {
   let world = World::new();
   let run = world.run(&world.node_env());
@@ -121,6 +125,7 @@ fn a_cron_sessions_own_turn_keeps_this_hosts_profile_home_config_dir_and_token()
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_cron_sessions_own_turn_without_a_local_claude_exits_1_and_names_it() {
   let world = World::new();
   let mut env = world.node_env();
@@ -144,6 +149,7 @@ fn a_cron_sessions_own_turn_without_a_local_claude_exits_1_and_names_it() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_round_worker_whose_parent_is_a_cron_session_still_runs_over_ssh() {
   let world = World::new();
   // The worker's metadata names PARENT_ID as its task_parent_id, and the cron task file binds
@@ -161,6 +167,7 @@ fn a_round_worker_whose_parent_is_a_cron_session_still_runs_over_ssh() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_round_gets_the_gateway_token_under_both_tools_variables() {
   let world = World::new();
   let run = world.run(&world.env());
@@ -213,6 +220,7 @@ fn run_in_scope(world: &World, launch_id: &str) -> harness::Run {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_in_scope_runner_exports_the_credentials_token_under_both_tools_names() {
   let world = World::new();
   // The fixture token differs from the launcher's, so the check reads the credentials file and not the environment.
@@ -235,6 +243,7 @@ fn the_in_scope_runner_exports_the_credentials_token_under_both_tools_names() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_in_scope_runner_without_a_credentials_token_exits_1_and_names_the_file() {
   let world = World::new();
   fs::write(world.remote_home.join("improve/home/credentials.yaml"), "").expect("the empty credentials file");
@@ -252,6 +261,7 @@ fn the_in_scope_runner_without_a_credentials_token_exits_1_and_names_the_file() 
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_round_writes_only_the_evidence_copy_on_this_host() {
   let world = World::new();
   let run = world.run(&world.env());
@@ -272,6 +282,7 @@ fn the_round_writes_only_the_evidence_copy_on_this_host() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_failed_evidence_copy_reports_the_copys_status_and_the_round_still_starts() {
   let world = World::new();
   let mut env = world.env();
@@ -287,6 +298,7 @@ fn a_failed_evidence_copy_reports_the_copys_status_and_the_round_still_starts() 
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_second_evidence_copy_leaves_complete_evidence_alone() {
   let world = World::new();
   let previous = world.remote_home.join("improve").join(DIRECTION).join("evidence").join("20261101T090000Z");
@@ -315,6 +327,7 @@ fn a_second_evidence_copy_leaves_complete_evidence_alone() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_partly_copied_evidence_directory_completes_on_the_next_copy() {
   let world = World::new();
   let remote_round = world.remote_home.join("improve").join(DIRECTION).join("evidence").join("20261101T090000Z");
@@ -352,6 +365,7 @@ fn status_change_time(path: &std::path::Path) -> (i64, i64) {
 }
 
 #[test]
+#[ignore = "integration"]
 fn no_token_value_reaches_an_ssh_argument_or_any_file_but_the_credentials_file() {
   let world = World::new();
   let run = world.run(&world.env());
@@ -379,6 +393,7 @@ fn no_token_value_reaches_an_ssh_argument_or_any_file_but_the_credentials_file()
 }
 
 #[test]
+#[ignore = "integration"]
 fn claudes_exit_code_passes_through() {
   let world = World::new();
   let mut env = world.env();
@@ -389,6 +404,7 @@ fn claudes_exit_code_passes_through() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_forwarded_variables_reach_the_round_and_the_run_token_and_this_hosts_config_dir_do_not() {
   let world = World::new();
   let run = world.run(&world.env());
@@ -416,6 +432,7 @@ fn the_forwarded_variables_reach_the_round_and_the_run_token_and_this_hosts_conf
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_evidence_copy_past_its_limit_stops_and_the_round_still_exits_with_claudes_code() {
   let world = World::new();
   let mut env = world.env();
@@ -435,6 +452,7 @@ fn an_evidence_copy_past_its_limit_stops_and_the_round_still_exits_with_claudes_
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_approval_prompt_exits_3_inside_five_seconds() {
   let world = World::new();
   let approval = world.sandbox.root().join("approval-needed");
@@ -456,6 +474,7 @@ fn an_approval_prompt_exits_3_inside_five_seconds() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_direction_comes_from_the_worker_session_and_its_task_file() {
   let world = World::new();
   // A task file of another session comes first in the directory; its direction must not win.
@@ -472,6 +491,7 @@ fn the_direction_comes_from_the_worker_session_and_its_task_file() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_round_without_a_direction_exits_6() {
   let world = World::new();
   fs::remove_file(world.profile_home.join("config.d/cron.d").join(format!("improve-{DIRECTION}.yaml")))
@@ -483,6 +503,7 @@ fn a_round_without_a_direction_exits_6() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_worker_session_without_a_parent_exits_6() {
   let world = World::new();
   let metadata = world.profile_home.join("sessions").join(world::SESSION_ID).join("metadata.json");
@@ -494,6 +515,7 @@ fn a_worker_session_without_a_parent_exits_6() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_existing_scope_exits_5_and_starts_no_claude() {
   let world = World::new();
   let mut env = world.env();
@@ -507,6 +529,7 @@ fn an_existing_scope_exits_5_and_starts_no_claude() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_failed_scope_is_reset_and_the_round_starts() {
   let world = World::new();
   let mut env = world.env();
@@ -525,6 +548,7 @@ fn a_failed_scope_is_reset_and_the_round_starts() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_active_scope_whose_round_is_over_is_stopped_and_the_round_starts() {
   let world = World::new();
   let mut env = world.env();
@@ -555,6 +579,7 @@ fn an_active_scope_whose_round_is_over_is_stopped_and_the_round_starts() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_active_scope_with_a_launch_directory_but_no_leader_is_stopped_and_the_round_starts() {
   let world = World::new();
   // A launch directory alone is not a live round: its wrapper removes it when it exits, and the
@@ -576,6 +601,7 @@ fn an_active_scope_with_a_launch_directory_but_no_leader_is_stopped_and_the_roun
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_active_scope_with_a_live_round_still_refuses_with_status_5() {
   let world = World::new();
   // The previous round: its launch directory, which its wrapper removes when it exits, and its
@@ -591,6 +617,8 @@ fn an_active_scope_with_a_live_round_still_refuses_with_status_5() {
   let mut env = world.env();
   env.insert("FAKE_SCOPE_STATE".to_string(), "active".to_string());
   let run = world.run(&env);
+  // The leader's `sleep` survives a lone kill of the bash that started it: stop the children first.
+  let _ = std::process::Command::new("pkill").args(["-KILL", "-P", &leader.id().to_string()]).status();
   leader.kill().expect("kill the leader");
   let _ = leader.wait();
   assert_eq!(run.code, 5, "{}", run.describe());
@@ -610,6 +638,7 @@ fn an_active_scope_with_a_live_round_still_refuses_with_status_5() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_absent_scope_starts_without_a_reset() {
   let world = World::new();
   let run = world.run(&world.env());
@@ -625,6 +654,7 @@ fn an_absent_scope_starts_without_a_reset() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_missing_direction_clone_exits_4_and_starts_no_claude() {
   let world = World::new();
   fs::remove_dir_all(world.remote_home.join("improve").join(DIRECTION).join("charlie-bot")).expect("remove the clone");
@@ -636,6 +666,7 @@ fn a_missing_direction_clone_exits_4_and_starts_no_claude() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_clone_without_the_hooks_exits_4_and_starts_no_claude() {
   let world = World::new();
   let clone = world.remote_home.join("improve").join(DIRECTION).join("charlie-bot");
@@ -652,6 +683,7 @@ fn a_clone_without_the_hooks_exits_4_and_starts_no_claude() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_heartbeat_stops_the_scope_after_the_launcher_is_killed() {
   let world = World::new();
   let mut env = world.env();
@@ -679,6 +711,7 @@ fn the_heartbeat_stops_the_scope_after_the_launcher_is_killed() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_other_directions_clone_adds_its_files_to_the_rounds_in_flight_list() {
   let world = World::new();
   // A standalone clone of another direction, like the host worker's five clones on the remote host.
@@ -705,6 +738,7 @@ fn the_other_directions_clone_adds_its_files_to_the_rounds_in_flight_list() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_open_pull_requests_files_appear_in_the_in_flight_list() {
   let world = World::new();
   let pull_requests = world.sandbox.root().join("open-pull-requests.tsv");
@@ -723,6 +757,7 @@ fn an_open_pull_requests_files_appear_in_the_in_flight_list() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_squash_merged_worktree_branch_contributes_no_files() {
   let world = World::new();
   // A leftover branch of a round that already landed, checked out in its worktree as the host leaves it.
@@ -750,6 +785,7 @@ fn a_squash_merged_worktree_branch_contributes_no_files() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_unlanded_branch_names_its_file_even_when_origin_main_has_changed_it() {
   let world = World::new();
   // A leftover branch whose commit never reached origin/main, checked out in its worktree as the host leaves it.
@@ -778,6 +814,7 @@ fn an_unlanded_branch_names_its_file_even_when_origin_main_has_changed_it() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_rebased_branch_whose_resolved_copy_differs_names_nothing() {
   let world = World::new();
   // A leftover branch of a round that a rebase landed, checked out in its worktree as the host leaves it.
@@ -803,6 +840,7 @@ fn a_rebased_branch_whose_resolved_copy_differs_names_nothing() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_other_directions_clone_is_read_after_its_origin_main_is_fetched() {
   let world = World::new();
   let clone = world.other_direction_clone("ux");
@@ -833,6 +871,7 @@ fn an_other_directions_clone_is_read_after_its_origin_main_is_fetched() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_other_directions_clone_whose_fetch_fails_stops_the_round_with_exit_1() {
   let world = World::new();
   let clone = world.other_direction_clone("ux");
@@ -853,6 +892,7 @@ fn an_other_directions_clone_whose_fetch_fails_stops_the_round_with_exit_1() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_runners_own_checkout_contributes_no_files() {
   let world = World::new();
   // The runner's checkout, with mainline work that its remote's main does not hold.
@@ -880,6 +920,7 @@ fn the_runners_own_checkout_contributes_no_files() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_runner_builds_the_round_tools_with_its_own_cargo_home_and_tmpdir_and_the_launchers_origin() {
   let world = World::new();
   // The commit the runner builds needs a rust/ directory, and its origin is a bare copy of the launcher's repository.
@@ -913,6 +954,7 @@ fn the_runner_builds_the_round_tools_with_its_own_cargo_home_and_tmpdir_and_the_
 }
 
 #[test]
+#[ignore = "integration"]
 fn two_runners_that_need_the_same_missing_commit_build_it_once_and_both_use_it() {
   let world = World::new();
   // The commit both rounds need carries a rust/ directory, as the build's `cd` needs, and sits on
@@ -1020,6 +1062,7 @@ fn two_runners_that_need_the_same_missing_commit_build_it_once_and_both_use_it()
 }
 
 #[test]
+#[ignore = "integration"]
 fn another_clones_locked_origin_main_ref_does_not_stop_the_rounds_in_flight_read() {
   let world = World::new();
   let clone = world.other_direction_clone("ux");
@@ -1064,6 +1107,7 @@ fn another_clones_locked_origin_main_ref_does_not_stop_the_rounds_in_flight_read
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_locked_origin_main_ref_does_not_stop_the_launchers_in_flight_list() {
   let world = World::new();
   // The origin's main moves ahead of the checkout's tracking ref, so the script's fetch has a ref

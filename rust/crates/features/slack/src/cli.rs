@@ -225,7 +225,7 @@ fn ack(args: &AckArgs) -> Result<(), CliExit> {
 #[cfg(test)]
 mod tests {
   use std::io::{Read, Write};
-  use std::net::{TcpListener, TcpStream};
+  use std::net::{SocketAddr, TcpListener, TcpStream};
   use std::thread;
   use std::time::Duration;
 
@@ -234,8 +234,6 @@ mod tests {
   const USER_TOKEN: &str = "synthetic-user-token";
   const BOT_TOKEN: &str = "synthetic-bot-token";
   const TIMEOUT: Duration = Duration::from_secs(2);
-  /// How long a refused call's stub waits for a connection that must never arrive.
-  const NO_CALL_TIMEOUT: Duration = Duration::from_millis(500);
 
   const TABLE: &str =
     concat!("slack:\n", "  user_token: synthetic-user-token\n", "  bot_token: synthetic-bot-token\n",);
@@ -293,6 +291,39 @@ mod tests {
     (url, receiver)
   }
 
+  /// A local endpoint that records an accidental request and can be woken without waiting when no request is made.
+  fn no_call_stub() -> (String, SocketAddr, std::sync::mpsc::Receiver<bool>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}/api");
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let server = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      let request = read_request(&mut stream);
+      let received_request = !request.is_empty();
+      sender.send(received_request).unwrap();
+      if received_request {
+        let body = br#"{"ok":true}"#;
+        let response = format!(
+          "HTTP/1.1 200 Status\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+          body.len()
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+        stream.write_all(body).unwrap();
+      }
+    });
+    (url, address, receiver, server)
+  }
+
+  fn assert_no_request(address: SocketAddr, receiver: std::sync::mpsc::Receiver<bool>, server: thread::JoinHandle<()>) {
+    let no_request = matches!(receiver.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
+    if no_request {
+      drop(TcpStream::connect(address).expect("the local stub wakes for cleanup"));
+    }
+    server.join().unwrap();
+    assert!(no_request, "the request was sent before the policy refusal");
+  }
+
   fn read_request(stream: &mut TcpStream) -> Vec<u8> {
     stream.set_read_timeout(Some(TIMEOUT)).unwrap();
     let mut request = Vec::new();
@@ -327,25 +358,52 @@ mod tests {
   }
 
   #[test]
-  fn every_read_method_reaches_the_send_step_with_the_user_token() {
+  fn auth_test_reaches_the_send_step_with_the_user_token() {
+    assert_user_read_method_reaches_send_step("auth.test");
+  }
+
+  #[test]
+  fn users_list_reaches_the_send_step_with_the_user_token() {
+    assert_user_read_method_reaches_send_step("users.list");
+  }
+
+  #[test]
+  fn conversations_list_reaches_the_send_step_with_the_user_token() {
+    assert_user_read_method_reaches_send_step("conversations.list");
+  }
+
+  #[test]
+  fn conversations_history_reaches_the_send_step_with_the_user_token() {
+    assert_user_read_method_reaches_send_step("conversations.history");
+  }
+
+  #[test]
+  fn conversations_replies_reaches_the_send_step_with_the_user_token() {
+    assert_user_read_method_reaches_send_step("conversations.replies");
+  }
+
+  #[test]
+  fn search_messages_reaches_the_send_step_with_the_user_token() {
+    assert_user_read_method_reaches_send_step("search.messages");
+  }
+
+  fn assert_user_read_method_reaches_send_step(method: &str) {
     let home = credentials_home(TABLE);
-    for method in token::USER_READ_METHODS {
-      let (url, receiver) = stub(200, br#"{"ok":true}"#);
-      let command = arguments(&format!("{url}/{method}"), "user");
+    let (url, receiver) = stub(200, br#"{"ok":true}"#);
+    let command = arguments(&format!("{url}/{method}"), "user");
 
-      run_request_at(home.path(), &command).unwrap();
-      let request = String::from_utf8(receiver.recv_timeout(TIMEOUT).unwrap()).unwrap();
+    run_request_at(home.path(), &command).unwrap();
+    let request = String::from_utf8(receiver.recv_timeout(TIMEOUT).unwrap()).unwrap();
 
-      assert!(request.starts_with(&format!("GET /api/{method} HTTP/1.1")), "{request}");
-      assert!(request.to_ascii_lowercase().contains(&format!("authorization: bearer {USER_TOKEN}")));
-    }
+    assert!(request.starts_with(&format!("GET /api/{method} HTTP/1.1")), "{request}");
+    assert!(request.to_ascii_lowercase().contains(&format!("authorization: bearer {USER_TOKEN}")));
   }
 
   #[test]
   fn a_user_token_write_is_refused_before_any_network_call() {
     let home = credentials_home(TABLE);
     for method in ["chat.postMessage", "reactions.add", "conversations.open", "files.upload"] {
-      let (url, receiver) = stub(200, br#"{"ok":true}"#);
+      let (url, address, receiver, server) = no_call_stub();
       let command = arguments(&format!("{url}/{method}"), "user");
 
       let error = run_request_at(home.path(), &command).unwrap_err();
@@ -355,15 +413,14 @@ mod tests {
       assert!(text.contains(method), "{text}");
       assert!(text.contains("charliebot slack draft") && text.contains("--token bot"), "{text}");
       assert_no_token(&text);
-      // The stub channel stays empty: no connection, so no bot-token fallback either.
-      assert!(receiver.recv_timeout(NO_CALL_TIMEOUT).is_err());
+      assert_no_request(address, receiver, server);
     }
   }
 
   #[test]
   fn a_user_token_url_without_a_method_is_refused() {
     let home = credentials_home(TABLE);
-    let (url, receiver) = stub(200, br#"{"ok":true}"#);
+    let (url, address, receiver, server) = no_call_stub();
     let command = arguments(&url, "user");
 
     let error = run_request_at(home.path(), &command).unwrap_err();
@@ -371,7 +428,7 @@ mod tests {
     assert_eq!(error.code, 1);
     assert!(error_text(&error).contains("not a Slack Web API method URL"));
     assert_no_token(&error_text(&error));
-    assert!(receiver.recv_timeout(NO_CALL_TIMEOUT).is_err());
+    assert_no_request(address, receiver, server);
   }
 
   #[test]
@@ -556,7 +613,7 @@ mod tests {
   fn a_download_off_the_slack_file_host_is_refused_before_any_network_call() {
     let home = credentials_home(TABLE);
     let (_dir, path) = output_path();
-    let (url, receiver) = stub_with_type(200, "image/png", b"not reached");
+    let (url, address, receiver, server) = no_call_stub();
 
     let error = run_download_at(home.path(), &download_args(&format!("{url}/files-pri/T-F/image.png"), &path, "user"))
       .unwrap_err();
@@ -565,14 +622,14 @@ mod tests {
     assert_eq!(error.code, 1);
     assert!(text.contains("not a Slack file URL"), "{text}");
     assert_no_token(&text);
-    assert!(receiver.recv_timeout(NO_CALL_TIMEOUT).is_err(), "the refusal happens before the network");
+    assert_no_request(address, receiver, server);
     assert!(!path.exists());
   }
 
   #[test]
   fn slack_request_still_refuses_a_file_url_for_the_user_token() {
     let home = credentials_home(TABLE);
-    let (url, receiver) = stub(200, br#"{"ok":true}"#);
+    let (url, address, receiver, server) = no_call_stub();
     let command = arguments(&format!("{url}/files-pri/T-F/image.png"), "user");
 
     let error = run_request_at(home.path(), &command).unwrap_err();
@@ -580,7 +637,7 @@ mod tests {
     assert_eq!(error.code, 1);
     assert!(error_text(&error).contains("not a Slack Web API method URL"), "{}", error_text(&error));
     assert_no_token(&error_text(&error));
-    assert!(receiver.recv_timeout(NO_CALL_TIMEOUT).is_err());
+    assert_no_request(address, receiver, server);
   }
 
   #[test]

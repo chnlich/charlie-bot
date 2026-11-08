@@ -75,6 +75,7 @@ async fn render_at(home: &Home, date: Option<Date>, now: Timestamp) -> (http::St
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn the_page_renders_the_day_s_three_lists_and_moves_between_days() {
   let (home, session) = seeded_home().await;
 
@@ -104,6 +105,7 @@ async fn the_page_renders_the_day_s_three_lists_and_moves_between_days() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_mistyped_date_refuses_before_any_read() {
   let (home, _session) = seeded_home().await;
 
@@ -114,6 +116,7 @@ async fn a_mistyped_date_refuses_before_any_read() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_queue_row_and_a_login_sheet_row_show_their_age() {
   let home = Home::new();
   let session = home.manager("Alpha").await;
@@ -148,6 +151,7 @@ async fn a_queue_row_and_a_login_sheet_row_show_their_age() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn today_s_view_refreshes_when_the_tab_becomes_visible_and_a_past_day_does_not() {
   let home = Home::new();
   home

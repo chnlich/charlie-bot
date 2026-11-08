@@ -5,11 +5,13 @@
 (function() {
   const CLIENT_EVENTS_URL = '/api/diag/client-events';
 
+  // keepalive: a post made at page hide must reach the server after the page unloads.
   function postClientEvent(kind, fields) {
     fetch(CLIENT_EVENTS_URL, {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(Object.assign({kind, client_ts: new Date().toISOString()}, fields)),
+      keepalive: true,
     }).catch(() => {});
   }
 
@@ -44,14 +46,20 @@
   // The composer announces the click, every retry, the POST's outcome and the
   // socket echo of the same request id. One send posts when the echo lands on
   // a response that returned. A refused POST gets no echo, so its send posts
-  // at once with the echo time null.
+  // at once with the echo time null. A send whose POST succeeded but whose
+  // echo never arrives posts nothing today, which reads the live echo p90 low:
+  // its send posts at the cutoff, one TTL after the POST returned, with the
+  // echo time null. A page that hides first posts its pending sends at the
+  // hide — visibilitychange hidden is not a cutoff, because a hidden tab's
+  // socket still delivers echoes.
   const SEND_TIMING_TTL_MS = 120000;
   const sendTimings = new Map();
 
   document.addEventListener('charliebot:client-send-click', (event) => {
     const now = Date.now();
     for (const [requestId, timing] of sendTimings) {
-      if (now - timing.click > SEND_TIMING_TTL_MS) sendTimings.delete(requestId);
+      // A send whose POST returned is owned by its cutoff timer, however late it returned.
+      if (!timing.cutoff && now - timing.click > SEND_TIMING_TTL_MS) sendTimings.delete(requestId);
     }
     sendTimings.set(event.detail.request_id, {click: now, retries: 0});
   });
@@ -66,6 +74,9 @@
     if (!timing) return;
     timing.response = Date.now();
     if (event.detail.ok) {
+      timing.cutoff = setTimeout(() => {
+        if (sendTimings.get(event.detail.request_id) === timing) finishSend(event.detail.request_id, timing);
+      }, SEND_TIMING_TTL_MS);
       if (timing.echo) finishSend(event.detail.request_id, timing);
     } else {
       finishSend(event.detail.request_id, timing);
@@ -80,6 +91,7 @@
   });
 
   function finishSend(requestId, timing) {
+    if (timing.cutoff) clearTimeout(timing.cutoff);
     postClientEvent('send', {
       request_id: requestId,
       click_to_response_ms: timing.response - timing.click,
@@ -88,6 +100,12 @@
     });
     sendTimings.delete(requestId);
   }
+
+  window.addEventListener('pagehide', () => {
+    for (const [requestId, timing] of sendTimings) {
+      if (timing.response) finishSend(requestId, timing);
+    }
+  });
 
   // --- socket disconnect episodes ---------------------------------------------
   // websocket.js announces the close (with its cause), the successful reopen
@@ -117,6 +135,7 @@
   });
 
   document.addEventListener('charliebot:client-socket-catchup', (event) => {
+    markCatchup();
     if (!socketEpisode || socketEpisode.reconnect_at === null) return;
     socketEpisode.catchup_at = new Date().toISOString();
     socketEpisode.catchup_bytes = event.detail.bytes;
@@ -137,12 +156,29 @@
   }
 
   // --- page loads --------------------------------------------------------------
-  // The page reports its own Navigation Timing once, after the load event. The
-  // report carries the document's responseEnd, the DOMContentLoaded mark and the
-  // transfer size. It also carries the cause a navigating path announced through
-  // a page-load-cause event.
+  // The page reports its own Navigation Timing once, after the load event and the
+  // first catch-up. The report carries the document's responseEnd, the DOMContentLoaded
+  // mark and the transfer size. It also carries the cause a navigating path announced
+  // through a page-load-cause event, the open case, the newest message's time and the
+  // catch-up's time (both ms from navigation start), and the page's render-blocking
+  // files from another origin beside the same-origin timings of the same load.
   const PAGE_LOAD_CAUSE_KEY = 'charliebot-page-load-cause';
   const PAGE_LOAD_CAUSE_TTL_MS = 60000;
+  // The longest the report waits past the load event for the first catch-up.
+  const PAGE_LOAD_CATCHUP_WAIT_MS = 60000;
+  // The most rows each of the report's two resource lists carries; the server's model allows this many.
+  const PAGE_LOAD_ROWS_MAX = 16;
+
+  let pageLoaded = false;
+  let pageLoadReported = false;
+  let catchupMs = null;
+  let newestMessageMs = null;
+  // The page's markup-named blocking URLs, read now: the markup is parsed by the time this script runs.
+  const blockingUrls = new Set(renderBlockingUrls());
+  // The last Resource Timing entry of each blocking URL, kept as the entries arrive: the traffic flush clears
+  // the browser's buffer every minute, and a load can finish after the first flush.
+  const blockingEntries = new Map();
+  watchNewestMessage();
 
   document.addEventListener('charliebot:page-load-cause', (event) => {
     try {
@@ -152,16 +188,111 @@
     }
   });
 
-  window.addEventListener('load', () => setTimeout(reportPageLoad, 0));
+  window.addEventListener('load', () => {
+    pageLoaded = true;
+    reportIfReady();
+    setTimeout(reportPageLoad, PAGE_LOAD_CATCHUP_WAIT_MS);
+  });
+
+  // The report waits for the load event and the first catch-up of the page's socket, or for the wait past
+  // the load to pass, whichever comes first. A catch-up that never comes reports as null.
+  function reportIfReady() {
+    if (pageLoaded && catchupMs !== null) reportPageLoad();
+  }
+
+  function markCatchup() {
+    if (catchupMs === null) catchupMs = performance.now();
+    reportIfReady();
+  }
+
+  // The newest message of the page's session is the last message of the embedded bootstrap, and its element
+  // carries its id. The time the element first reaches the DOM is the newest message on screen.
+  function watchNewestMessage() {
+    const messages = SESSION_BOOTSTRAP === null ? [] : SESSION_BOOTSTRAP.messages;
+    if (messages.length === 0) return;
+    const selector = '[data-message-id="' + CSS.escape(String(messages[messages.length - 1].id)) + '"]';
+    const observer = new MutationObserver(() => {
+      if (document.querySelector(selector) === null) return;
+      newestMessageMs = performance.now();
+      observer.disconnect();
+    });
+    observer.observe(document, {childList: true, subtree: true});
+  }
+
+  // The URLs the page's markup names as stylesheets and as scripts without async or defer. A script that a
+  // page inserts at run time is async unless the page clears that, so it does not count.
+  function renderBlockingUrls() {
+    const urls = [];
+    for (const element of document.querySelectorAll('link[rel~="stylesheet"], script[src]')) {
+      if (element.tagName === 'SCRIPT' && (element.async || element.defer)) continue;
+      urls.push(element.tagName === 'LINK' ? element.href : element.src);
+    }
+    return urls;
+  }
+
+  function roundOrNull(value) {
+    return typeof value === 'number' ? Math.round(value) : null;
+  }
+
+  function renderBlockingRows() {
+    return renderBlockingUrls()
+      .filter((url) => new URL(url).origin !== location.origin)
+      .slice(0, PAGE_LOAD_ROWS_MAX)
+      .map((url) => {
+        const entry = blockingEntries.get(url) || null;
+        return {
+          url,
+          start_ms: entry ? roundOrNull(entry.startTime) : null,
+          response_end_ms: entry ? roundOrNull(entry.responseEnd) : null,
+          transfer_size: entry ? roundOrNull(entry.transferSize) : null,
+          encoded_body_size: entry ? roundOrNull(entry.encodedBodySize) : null,
+        };
+      });
+  }
+
+  // The document first, then the same-origin render-blocking files. The readback takes the round trip from
+  // each row's request-to-first-byte time and the throughput from the largest body.
+  function sameOriginRows(navigation) {
+    const rows = [{
+      url: navigation.name,
+      request_start_ms: roundOrNull(navigation.requestStart),
+      response_start_ms: roundOrNull(navigation.responseStart),
+      response_end_ms: roundOrNull(navigation.responseEnd),
+      encoded_body_size: roundOrNull(navigation.encodedBodySize),
+    }];
+    for (const url of blockingUrls) {
+      const entry = blockingEntries.get(url);
+      if (new URL(url).origin !== location.origin || !entry) continue;
+      rows.push({
+        url,
+        request_start_ms: roundOrNull(entry.requestStart),
+        response_start_ms: roundOrNull(entry.responseStart),
+        response_end_ms: roundOrNull(entry.responseEnd),
+        encoded_body_size: roundOrNull(entry.encodedBodySize),
+      });
+    }
+    return rows.slice(0, PAGE_LOAD_ROWS_MAX);
+  }
 
   function reportPageLoad() {
+    if (pageLoadReported) return;
     const navigation = performance.getEntriesByType('navigation')[0];
     if (!navigation) return;
+    pageLoadReported = true;
     postClientEvent('page_load', {
       response_end_ms: Math.round(navigation.responseEnd),
       dom_content_loaded_ms: Math.round(navigation.domContentLoadedEventEnd),
       transfer_size: navigation.transferSize == null ? null : Math.round(navigation.transferSize),
       cause: consumePageLoadCause(),
+      newest_message_ms: roundOrNull(newestMessageMs),
+      current_ms: roundOrNull(catchupMs),
+      open_case: OpenedSessions.openCase(),
+      // Stored copies (task 2) are the only other source; until then a session page loads from the network.
+      content_source: SESSION_ID === null ? null : 'network',
+      // The service worker (task 2) makes this true; until then no page has an offline shell.
+      offline_shell: false,
+      render_blocking: renderBlockingRows(),
+      same_origin: sameOriginRows(navigation),
     });
   }
 
@@ -188,7 +319,10 @@
 
   if (typeof PerformanceObserver === 'function') {
     new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) recordTrafficEntry(entry);
+      for (const entry of list.getEntries()) {
+        recordTrafficEntry(entry);
+        if (blockingUrls.has(entry.name)) blockingEntries.set(entry.name, entry);
+      }
     }).observe({type: 'resource', buffered: true});
   }
 

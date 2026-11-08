@@ -347,6 +347,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn an_unknown_session_answers_404_with_the_session_detail() {
     let (_home, features) = features();
     let (status, body) = get(&features, "/api/sessions/no-such/plans").await;
@@ -358,6 +359,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_corrupt_registry_answers_200_with_one_error_entry() {
     let (_home, features) = features();
     write_session(&features, "sess");
@@ -378,6 +380,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_session_without_a_registry_answers_no_plans() {
     let (_home, features) = features();
     write_session(&features, "sess");
@@ -388,6 +391,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn the_listing_renders_the_derived_states_in_the_registry_order() {
     let (_home, features) = features();
     write_session(&features, "sess");
@@ -427,6 +431,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn plan_present_endpoint_happy_path() {
     let (_home, features) = plan_session("sess", None);
     write_plan_artifact(&features, "sess", "plan_01.html", &plan_page("Ship the fix."));
@@ -441,6 +446,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn plan_amend_endpoint_happy_path() {
     let (_home, features) = plan_session("sess", None);
     write_plan_artifact(&features, "sess", "plan_01.html", &plan_page("Ship the fix."));
@@ -477,6 +483,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn plan_amend_rejects_422_missing_note() {
     let (_home, features) = plan_session("sess", Some(AWAITING_REGISTRY));
     let (status, body) = post(
@@ -491,6 +498,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn plan_amend_rejects_422_initial_trigger() {
     let (_home, features) = plan_session("sess", Some(AWAITING_REGISTRY));
     let (status, body) = post(
@@ -511,6 +519,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn plan_present_rejects_unknown_session_404() {
     let (_home, features) = features();
     let (status, body) = post(
@@ -524,6 +533,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn plan_approve_endpoint_happy_path() {
     let (_home, features) = session_with_registry("sess", AWAITING_REGISTRY);
     let (status, body) = post(&features, "/api/internal/plan/approve", json!({"session_id": "sess"})).await;
@@ -532,6 +542,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn plan_close_endpoint_happy_path() {
     let (_home, features) = session_with_registry("sess", AWAITING_REGISTRY);
     let (status, body) = post(
@@ -545,6 +556,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn plan_close_rejects_already_closed_400() {
     let (_home, features) = session_with_registry("sess", AWAITING_REGISTRY);
     let close_superseded = json!({"session_id": "sess", "plan_id": 1, "close_as": "superseded"});
@@ -557,6 +569,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn the_verbs_answer_404_for_an_unknown_session() {
     let (_home, features) = features();
     let (status, body) = post(&features, "/api/internal/plan/approve", json!({"session_id": "no-such"})).await;
@@ -565,6 +578,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_body_the_model_refuses_answers_422_before_the_session_check() {
     let (_home, features) = features();
     let (status, body) =

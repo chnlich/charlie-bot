@@ -12,6 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
+use charliebot_agents::auto_backend;
+use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool;
 use charliebot_agents::backend_types;
 use charliebot_agents::launch_loop;
@@ -23,7 +25,7 @@ use charliebot_core::run_token::{RUN_TOKEN_ENV, RunTokenClaims, sign_run_token};
 use charliebot_core::text_repr;
 use charliebot_registry::backend::{Env, LaunchArgs, LaunchRefused};
 use charliebot_registry::context::FeatureContext;
-use charliebot_registry::sequence::{SequenceCompletion, SequenceExecutor, SequenceLaunchSettlement};
+use charliebot_registry::sequence::{QuotaFailure, SequenceCompletion, SequenceExecutor, SequenceLaunchSettlement};
 use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events::{self, ACTOR_SYSTEM};
@@ -43,9 +45,12 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+use crate::auto_switch::{self, AutoSwitch};
+use crate::backend_retry;
 use crate::cold_read::{self, ColdReadOutcome};
 use crate::dispatch::{DispatchExecutor, Dispatcher, RunFinishedCompletion};
 use crate::git;
+use crate::handoff::HandoffSource;
 use crate::master_queue::{MasterQueue, PersistAndBroadcastFn, SessionCallbacks, TaskTreeActivityFn};
 use crate::master_run;
 use crate::master_state::{MasterTurnRequest, TaskFinishCallback, TaskRunBinding, TaskSpawnCallback};
@@ -135,7 +140,7 @@ pub struct TaskExecutionAdapter {
   pub(crate) dispatch: Arc<Dispatcher>,
   pub(crate) launches: Arc<Mutex<LaunchState>>,
   pub(crate) recovery: Arc<RecoveryState>,
-  quota_failures: Arc<Mutex<HashMap<LaunchKey, Option<UtcDateTime>>>>,
+  quota_failures: Arc<Mutex<HashMap<LaunchKey, QuotaFailure>>>,
 }
 
 struct RunContinuation {
@@ -173,10 +178,16 @@ impl TaskExecutionAdapter {
     launch_run_id: Option<&str>,
   ) -> StoreResult<Option<String>> {
     let mut scheduled = None;
+    let mut member_event: Option<ChatEvent> = None;
+    // An Auto set with no selectable member ends the turn here, after the end of this lock.
+    let mut exhausted_turn: Option<(String, String)> = None;
+    // A turn start that changes an Auto session's member appends its event under the control lock; the epoch primes
+    // the live aggregator the announce after the lock feeds.
+    let member_epoch = self.features.store.prime_aggregator(session_id).await?;
     let run_id;
     {
       let guard = self.features.store.control_lock().await;
-      let meta = self.features.store.load_task_meta(session_id).await?;
+      let mut meta = self.features.store.load_task_meta(session_id).await?;
       let state = self.features.store.node_state(session_id)?;
       if state.task_state()? != "open" {
         return Ok(None);
@@ -207,8 +218,20 @@ impl TaskExecutionAdapter {
           return Ok(None);
         }
         let cfg = self.features.config.get().map_err(|error| StoreError::new(error.to_string()))?;
-        let (backend, model) = spawner_backends::resolve_session_default_backend_model(&cfg, &meta)
-          .map_err(|error| StoreError::invalid(error.to_string()))?;
+        // Turn start runs before the run is built, so the run records the member this turn runs on.
+        let (change, exhausted) = match auto_backend::start_turn(&self.features, &cfg, &mut meta)
+          .await
+          .map_err(|error| StoreError::invalid(error.to_string()))?
+        {
+          auto_backend::TurnStart::Kept => (None, None),
+          auto_backend::TurnStart::Changed(change) => (Some(change), None),
+          auto_backend::TurnStart::Exhausted(message) => (None, Some(message)),
+        };
+        let (backend, model) = match &exhausted {
+          Some(_) => (String::new(), None),
+          None => spawner_backends::resolve_session_default_backend_model(&cfg, &meta)
+            .map_err(|error| StoreError::invalid(error.to_string()))?,
+        };
         let mut input_ids = pending_now
           .iter()
           .map(|event| event.get("id").and_then(CompactValue::as_str).map_or("None".to_string(), str::to_string))
@@ -218,7 +241,12 @@ impl TaskExecutionAdapter {
         run_id = control_events::stable_run_id(session_id, &request_id);
         if self.features.store.read_run_sync(session_id, &run_id)?.is_none() {
           let run = if meta.profile == TaskProfile::Manager {
-            manager_run_record(session_id, &run_id, &backend, model.as_deref())
+            let mut run = manager_run_record(session_id, &run_id, &backend, model.as_deref());
+            if exhausted.is_some() {
+              // The turn never names a member: it ends with the exhausted error.
+              run.backend = meta.extra(auto_backend::AUTO_MEMBER_FIELD).and_then(Value::as_str).map(str::to_string);
+            }
+            run
           } else {
             let mut run = worker_run_record(session_id, &run_id, &backend, model.as_deref());
             self.inherit_worker_continuation(&meta, &mut run)?;
@@ -240,15 +268,45 @@ impl TaskExecutionAdapter {
           }
           Err(error) => return Err(error),
         }
+        if let Some(change) = change {
+          member_event = Some(self.features.store.append_control_fact(&guard, session_id, change.event()).await?);
+        }
+        if let Some(message) = exhausted {
+          exhausted_turn = Some((run_id.clone(), message));
+        }
       }
-      let key = (session_id.to_string(), run_id.clone());
-      let mut state = self.launches.lock().expect("task execution launch state is not poisoned");
-      if !state.inflight.contains(&key) {
-        state.inflight.insert(key.clone());
-        let (sender, _) = watch::channel(None);
-        state.settlements.insert(key.clone(), sender);
-        scheduled = Some(key);
+      if exhausted_turn.is_none() {
+        let key = (session_id.to_string(), run_id.clone());
+        let mut state = self.launches.lock().expect("task execution launch state is not poisoned");
+        if !state.inflight.contains(&key) {
+          state.inflight.insert(key.clone());
+          let (sender, _) = watch::channel(None);
+          state.settlements.insert(key.clone(), sender);
+          scheduled = Some(key);
+        }
       }
+    }
+    if let Some(event) = member_event {
+      self.features.store.announce_appended_event(session_id, &event, member_epoch).await?;
+    }
+    if let Some((run_id, message)) = exhausted_turn {
+      // The turn ends with this one error and its input is consumed: the retry the user would resend has no member
+      // to run on either. The run lands terminal first, so no reader mistakes it for one waiting to launch.
+      self.dispatch.finish_run(session_id, &run_id, RunOutcome::new(RunOutcomeKind::Failed)).await?;
+      self
+        .features
+        .store
+        .persist_and_broadcast(
+          session_id,
+          json!({
+            "type": event_types::ASSISTANT_ERROR,
+            "content": message,
+            event_types::QUOTA_EXHAUSTED: true,
+          }),
+        )
+        .await?;
+      self.features.store.mark_unread(session_id).await?;
+      return Ok(Some(run_id));
     }
     if let Some(key) = scheduled {
       self.schedule_launch(key.0.clone(), key.1.clone(), None);
@@ -301,7 +359,7 @@ impl TaskExecutionAdapter {
           StoreError::invalid(format!(
             "run {run_id} (profile={}, kind={}) has no executable adapter",
             profile_name(meta.profile),
-            kind_name(run.kind)
+            run.kind.as_str()
           ))
           .into(),
         );
@@ -376,7 +434,7 @@ impl TaskExecutionAdapter {
     let snapshot = match self.prepare_launch_snapshot(Arc::clone(&cfg), &meta, &run, &option).await {
       Ok(snapshot) => snapshot,
       Err(error) if error.downcast_ref::<TaskPromptError>().is_some() => {
-        tracing::error!(target: "charliebot_tasks", session_id, run_id, kind = kind_name(run.kind), error = %error, "task_prompt_preparation_failed");
+        tracing::error!(target: "charliebot_tasks", session_id, run_id, kind = run.kind.as_str(), error = %error, "task_prompt_preparation_failed");
         let reason = format!("prompt preparation failed: {error}");
         self.record_launch_withheld(&meta, &run, &reason).await?;
         return Ok(LaunchSettlement { outcome: None, withheld: Some(format!("withheld: {reason}")) });
@@ -518,7 +576,7 @@ impl TaskExecutionAdapter {
       Arc::clone(&self.features.registry),
       checkout,
       meta,
-      kind_name(run.kind),
+      run.kind.as_str(),
       option,
     )
     .await?;
@@ -604,7 +662,17 @@ impl TaskExecutionAdapter {
       option,
     );
     let mut prompt = content;
-    if fresh_native && wake_meta.cc_session_id.is_some() {
+    if let Some((previous, reason)) = auto_switch_source(&self.features, meta, run, option)? {
+      let goal = wake_meta.task.as_ref().map_or(wake_meta.name.as_str(), |task| task.goal.as_str());
+      let handoff = crate::handoff::handoff(
+        &self.features,
+        &wake_meta,
+        crate::handoff::HandoffSource::ManagerRun { run: &previous },
+        &reason,
+        goal,
+      );
+      prompt = format!("{}\n\n{prompt}", handoff.note);
+    } else if fresh_native && wake_meta.cc_session_id.is_some() {
       let reason = match wake_meta.native_backend.as_deref().filter(|backend| !backend.is_empty() && *backend != option.id) {
         Some(previous) => session_anchors::backend_switch_reset_reason(previous, &option.id),
         None => "this task's managed instructions or sources changed since the previous turn, so this turn starts a fresh native conversation".to_string(),
@@ -758,8 +826,25 @@ impl TaskExecutionAdapter {
       } else {
         "this task's managed instructions or sources changed since the previous run, so this run starts a fresh native conversation".to_string()
       };
-      let previous_log = self.features.store.run_dir(session_id, &previous.id).join(run_records::RUN_EVENTS_NAME);
-      prompt = format!("{}\n\n{prompt}", worker_continuation_reset_note(&reason, &previous_log));
+      let goal = meta.task.as_ref().map_or(meta.name.as_str(), |task| task.goal.as_str());
+      let handoff = crate::handoff::handoff(
+        &self.features,
+        meta,
+        crate::handoff::HandoffSource::WorkerRun { run: previous },
+        &reason,
+        goal,
+      );
+      prompt = format!("{}\n\n{prompt}", handoff.note);
+    } else if let Some((previous, from)) = worker_failover_source(&self.features, meta, run, option)? {
+      let goal = meta.task.as_ref().map_or(meta.name.as_str(), |task| task.goal.as_str());
+      let handoff = crate::handoff::handoff(
+        &self.features,
+        meta,
+        crate::handoff::HandoffSource::WorkerRun { run: &previous },
+        &format!("this task switched from backend {from} to {} after {from} spent its quota", option.id),
+        goal,
+      );
+      prompt = format!("{}\n\n{prompt}", handoff.note);
     }
     drop(history);
     drop(facts);
@@ -882,11 +967,12 @@ impl TaskExecutionAdapter {
     if let Some(refusal) = error.downcast_ref::<LaunchRefused>() {
       tracing::warn!(target: "charliebot_tasks", session_id, run_id, error = %refusal.message, quota_exhausted = refusal.quota_exhausted, "task_run_launch_refused");
       if refusal.quota_exhausted {
+        let failure = QuotaFailure { resets_at: refusal.resets_at, message: refusal.message.clone() };
         self
           .quota_failures
           .lock()
           .expect("worker quota failure map is not poisoned")
-          .insert((session_id.to_string(), run_id.to_string()), refusal.resets_at);
+          .insert((session_id.to_string(), run_id.to_string()), failure);
       }
       self.record_launch_error_event(session_id, run_id, &refusal.message, Some(refusal.quota_exhausted)).await?;
     } else if let Some(quota) = error.downcast_ref::<worker::QuotaExhaustedError>() {
@@ -897,11 +983,12 @@ impl TaskExecutionAdapter {
         .transpose()?
         .map(|value| UtcDateTime::parse(&value))
         .transpose()?;
+      let failure = QuotaFailure { resets_at, message: quota.to_string() };
       self
         .quota_failures
         .lock()
         .expect("worker quota failure map is not poisoned")
-        .insert((session_id.to_string(), run_id.to_string()), resets_at);
+        .insert((session_id.to_string(), run_id.to_string()), failure);
     } else {
       tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %error, "task_run_failed");
     }
@@ -1450,11 +1537,12 @@ impl TaskExecutionAdapter {
 
   #[cfg(feature = "test-hooks")]
   pub fn record_quota_failure_for_test(&self, session_id: &str, run_id: &str, resets_at: Option<UtcDateTime>) {
+    let failure = QuotaFailure { resets_at, message: "synthetic quota error".to_string() };
     self
       .quota_failures
       .lock()
       .expect("worker quota failure map is not poisoned")
-      .insert((session_id.to_string(), run_id.to_string()), resets_at);
+      .insert((session_id.to_string(), run_id.to_string()), failure);
   }
 
   async fn after_worker_run_inner(
@@ -1478,17 +1566,22 @@ impl TaskExecutionAdapter {
         return Ok(());
       };
       let tree = self.sequence_tree()?;
-      controller.after_run(session_id, run, &tree).await?;
+      // The failure stays recorded: the owner that settles the run's launch takes it from here.
+      let quota_failure = self.quota_failure_of(session_id, &run.id);
+      controller.after_run(session_id, run, quota_failure.as_ref(), &tree).await?;
       return Ok(());
     }
 
     let quota_failure = self.take_quota_failure(session_id, &run.id);
-    if let (Some(resets_at), Some(backend)) = (quota_failure, run.backend.as_deref())
+    // A worker that inherited an Auto member records its quota end with the Auto switch, not with the pool.
+    let from_auto = backend_from_auto(meta);
+    if let (Some(failure), Some(backend)) = (quota_failure.as_ref(), run.backend.as_deref())
+      && !from_auto
       && self.pool_chose_backend(meta, run)
     {
-      backend_pool::backend_pool(&self.features)?.cool(backend, resets_at);
+      let availability = backend_availability::backend_availability(&self.features)?;
+      availability.record(backend, failure.resets_at, backend_availability::REASON_QUOTA_ERROR, &failure.message)?;
     }
-    let quota_failed = quota_failure.is_some();
 
     if run.kind == RunKind::Review {
       return self.after_review_run(meta, run, durable_outcome).await;
@@ -1526,21 +1619,77 @@ impl TaskExecutionAdapter {
     }
     if matches!(durable_outcome, "failed" | "interrupted") {
       let mut summary = None;
-      if quota_failed && durable_outcome == "failed" && self.fails_over(meta, run) {
-        if self.fail_over_quota(meta, run).await? {
-          return Ok(());
+      if let Some(failure) = quota_failure.as_ref().filter(|_| durable_outcome == "failed") {
+        if from_auto {
+          match self.fail_over_auto(meta, run, failure).await? {
+            AutoSwitch::Moved { .. } => return Ok(()),
+            AutoSwitch::Exhausted(message) => summary = Some(message),
+          }
+        } else if self.fails_over(meta, run) {
+          if self.fail_over_quota(meta, run).await? {
+            return Ok(());
+          }
+          let recovery = backend_pool::backend_pool(&self.features)?;
+          let cfg = self.features.config.get()?;
+          summary = Some(format!(
+            "{}\n\n{}",
+            self.worker_failure_summary(session_id, run).await?,
+            recovery.no_member_message(cfg.as_ref())
+          ));
         }
-        let recovery = backend_pool::backend_pool(&self.features)?;
-        let cfg = self.features.config.get()?;
-        summary = Some(format!(
-          "{}\n\n{}",
-          self.worker_failure_summary(session_id, run).await?,
-          recovery.no_member_message(cfg.as_ref())
-        ));
       }
       self.report_failure_to_parent(session_id, run, durable_outcome, summary.as_deref()).await?;
     }
     Ok(())
+  }
+
+  /// Continue a worker run on the next Auto member after its member's quota ended. The worker inherited its member from
+  /// its Auto parent, so the switch and its record belong to that session, and the pool is not consulted.
+  async fn fail_over_auto(
+    &self,
+    meta: &SessionMetadata,
+    run: &RunRecord,
+    failure: &QuotaFailure,
+  ) -> anyhow::Result<AutoSwitch> {
+    let parent_id = meta
+      .task_parent_id
+      .as_deref()
+      .ok_or_else(|| anyhow!("run {} inherited an Auto member but its task names no parent session", run.id))?;
+    let auto_session = self.features.store.load_task_meta(parent_id).await?;
+    let from = run
+      .backend
+      .as_deref()
+      .filter(|backend| !backend.is_empty())
+      .ok_or_else(|| anyhow!("run {} records no backend; refusing to substitute one", run.id))?;
+    let switch =
+      auto_switch::switch_member(&self.features, &auto_session, meta, HandoffSource::WorkerRun { run }, from, failure)
+        .await?;
+    let AutoSwitch::Moved { member } = &switch else { return Ok(switch) };
+    let cfg = self.features.config.get()?;
+    let guard = self.features.store.control_lock().await;
+    self.features.store.set_node_backend_locked(&guard, &meta.id, member).await?;
+    drop(guard);
+    let retry = crate::task_sessions::create_retry(
+      &self.features.store,
+      &cfg,
+      &meta.id,
+      &auto_failover_retry_id(&meta.id, &run.id),
+      &run.id,
+      Some(member),
+      Some(run.input_event_ids.clone()),
+    )
+    .await?;
+    tracing::warn!(
+      target: "charliebot_tasks",
+      session_id = %meta.id,
+      run_id = %run.id,
+      retry_run_id = %retry.id,
+      from_backend = from,
+      to_backend = %member,
+      "worker_auto_quota_failover"
+    );
+    self.launch(&meta.id, &retry.id)?;
+    Ok(switch)
   }
 
   /// The cold-read delivery chain: report the answer, retry the next backend, or report that every model failed
@@ -1927,8 +2076,18 @@ impl TaskExecutionAdapter {
     (Some((target, commit, repo_path.to_string())), String::new())
   }
 
-  /// Remove and return the quota reset recorded for one run, distinguishing no failure from an unknown reset.
-  pub fn take_quota_failure(&self, session_id: &str, run_id: &str) -> Option<Option<UtcDateTime>> {
+  /// The quota failure recorded for one run, left recorded for the owner that takes it.
+  fn quota_failure_of(&self, session_id: &str, run_id: &str) -> Option<QuotaFailure> {
+    self
+      .quota_failures
+      .lock()
+      .expect("worker quota failure map is not poisoned")
+      .get(&(session_id.to_string(), run_id.to_string()))
+      .cloned()
+  }
+
+  /// Remove and return the quota failure recorded for one run, distinguishing no failure from an unknown reset.
+  pub fn take_quota_failure(&self, session_id: &str, run_id: &str) -> Option<QuotaFailure> {
     self
       .quota_failures
       .lock()
@@ -1997,7 +2156,16 @@ impl TaskExecutionAdapter {
     )
     .await?;
     let from_backend = run.backend.as_deref().unwrap_or_default();
-    let recovers_at = pool.cooling_until_minutes(from_backend).unwrap_or_default();
+    let recovers_at =
+      backend_availability::backend_availability(&self.features)?.out_until_minutes(from_backend).unwrap_or_default();
+    let goal = meta.task.as_ref().map_or(meta.name.as_str(), |task| task.goal.as_str());
+    let handoff = crate::handoff::handoff(
+      &self.features,
+      meta,
+      crate::handoff::HandoffSource::WorkerRun { run },
+      &format!("this task switched from backend {from_backend} to {} after {from_backend} spent its quota", member.id),
+      goal,
+    );
     self
       .features
       .store
@@ -2008,6 +2176,9 @@ impl TaskExecutionAdapter {
           "from": from_backend,
           "to": member.id,
           "recovers_at": recovers_at,
+          event_types::QUOTA_FAILOVER_REASON: event_types::QUOTA_REASON_QUOTA_ERROR,
+          event_types::QUOTA_FAILOVER_SET: event_types::QUOTA_SET_POOL,
+          event_types::QUOTA_FAILOVER_SUMMARY: handoff.summary,
         }),
       )
       .await?;
@@ -2206,6 +2377,7 @@ impl TaskExecutionAdapter {
   ) -> TaskFinishCallback {
     let features = Arc::clone(&self.features);
     let dispatch = Arc::clone(&self.dispatch);
+    let adapter = self.clone();
     let session_id = meta.id.clone();
     let run_id = run_id.to_string();
     let option = option.clone();
@@ -2213,6 +2385,7 @@ impl TaskExecutionAdapter {
     Arc::new(move |native_session_id, exit_code, extras, done_event| {
       let features = Arc::clone(&features);
       let dispatch = Arc::clone(&dispatch);
+      let adapter = adapter.clone();
       let persist_done = Arc::clone(&persist_done);
       let session_id = session_id.clone();
       let run_id = run_id.clone();
@@ -2272,6 +2445,8 @@ impl TaskExecutionAdapter {
           drop(guard);
 
           dispatch.finish_run(&session_id, &run_id, outcome).await?;
+          // The failed run's terminal fact is durable, so the retry this switch registers points at a finished run.
+          adapter.auto_quota_failover(&meta, &run_id, &option, &extras).await?;
           Ok(true)
         }
         .await;
@@ -2283,6 +2458,116 @@ impl TaskExecutionAdapter {
         Ok(true)
       })
     })
+  }
+
+  /// Continue an Auto session's manager turn on its next member when this run ended on a member's spent quota.
+  ///
+  /// The switch records the launched member out and selects the next one (`auto_switch::switch_member`). The retry run
+  /// on that member reuses the failed turn's input and launches. When no member is selectable the turn ends with one
+  /// error that lists every member.
+  async fn auto_quota_failover(
+    &self,
+    meta: &SessionMetadata,
+    run_id: &str,
+    option: &BackendOption,
+    extras: &Map<String, Value>,
+  ) -> anyhow::Result<()> {
+    if meta.backend != charliebot_core::config::AUTO_BACKEND_ID {
+      return Ok(());
+    }
+    let Some(failure) = auto_quota_failure(extras) else { return Ok(()) };
+    let run = self
+      .features
+      .store
+      .read_run_sync(&meta.id, run_id)?
+      .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, &meta.id)))?;
+    // The run launched on `option`, the member it spent: a turn with no recorded member cannot reach this point.
+    let switch = auto_switch::switch_member(
+      &self.features,
+      meta,
+      meta,
+      HandoffSource::ManagerRun { run: &run },
+      &option.id,
+      &failure,
+    )
+    .await?;
+    match switch {
+      AutoSwitch::Exhausted(message) => {
+        self
+          .features
+          .store
+          .persist_and_broadcast(
+            &meta.id,
+            json!({
+              "type": event_types::ASSISTANT_ERROR,
+              "content": message,
+              event_types::QUOTA_EXHAUSTED: true,
+            }),
+          )
+          .await?;
+        tracing::warn!(target: "charliebot_tasks", session_id = %meta.id, run_id, "auto_set_exhausted_mid_turn");
+        Ok(())
+      }
+      AutoSwitch::Moved { member } => {
+        let cfg = self.features.config.get()?;
+        let retry = crate::task_sessions::create_retry(
+          &self.features.store,
+          &cfg,
+          &meta.id,
+          &auto_failover_retry_id(&meta.id, run_id),
+          run_id,
+          Some(&member),
+          Some(run.input_event_ids.clone()),
+        )
+        .await?;
+        tracing::warn!(
+          target: "charliebot_tasks",
+          session_id = %meta.id,
+          run_id,
+          retry_run_id = %retry.id,
+          from_backend = %option.id,
+          to_backend = %member,
+          "manager_auto_quota_failover"
+        );
+        self.launch(&meta.id, &retry.id)?;
+        Ok(())
+      }
+    }
+  }
+
+  /// Apply the turn-start rule to a scheduled fire's bound Auto session and return the member the fire's child runs on.
+  /// A set with no selectable member ends the fire with the error that lists every member, posted to the session, and
+  /// returns None.
+  pub async fn auto_fire_member(&self, session_id: &str) -> anyhow::Result<Option<String>> {
+    let cfg = self.features.config.get()?;
+    let (start, meta) = {
+      let _guard = self.features.store.control_lock().await;
+      let mut meta = self.features.store.load_task_meta(session_id).await?;
+      let start = auto_backend::start_turn(&self.features, &cfg, &mut meta).await?;
+      (start, meta)
+    };
+    match start {
+      auto_backend::TurnStart::Kept => {}
+      auto_backend::TurnStart::Changed(change) => {
+        self.features.store.persist_and_broadcast(session_id, change.event()).await?;
+      }
+      auto_backend::TurnStart::Exhausted(message) => {
+        self
+          .features
+          .store
+          .persist_and_broadcast(
+            session_id,
+            json!({
+              "type": event_types::ASSISTANT_ERROR,
+              "content": message,
+              event_types::QUOTA_EXHAUSTED: true,
+            }),
+          )
+          .await?;
+        return Ok(None);
+      }
+    }
+    Ok(Some(auto_backend::current_member_id(&cfg, &meta)?))
   }
 
   /// Whether this process already drives `run_id`: its launch is in flight, or a resume follow holds it.
@@ -2403,7 +2688,7 @@ impl TaskExecutionAdapter {
   ) {
     let session_id = meta.id.as_str();
     let run_id = initial_run.id.as_str();
-    tracing::error!(target: "charliebot_tasks", session_id, run_id, kind = kind_name(initial_run.kind), error = %error, "task_run_launch_failed");
+    tracing::error!(target: "charliebot_tasks", session_id, run_id, kind = initial_run.kind.as_str(), error = %error, "task_run_launch_failed");
     let run =
       self.features.store.read_run_sync(session_id, run_id).ok().flatten().unwrap_or_else(|| initial_run.clone());
     let error_text = format!("{error_kind}: {error}").chars().take(2000).collect::<String>();
@@ -2552,6 +2837,60 @@ impl TaskExecutionAdapter {
       }
     });
   }
+}
+
+/// The quota failure an Auto session's manager turn ended on, read from the finish extras.
+fn auto_quota_failure(extras: &Map<String, Value>) -> Option<QuotaFailure> {
+  let message = extras.get(master_run::FINISH_ERROR_MESSAGE).and_then(Value::as_str)?.to_string();
+  let quota_exhausted = extras.get(master_run::FINISH_QUOTA_EXHAUSTED).and_then(Value::as_bool);
+  if !backend_retry::is_quota_end(&message, quota_exhausted) {
+    return None;
+  }
+  let resets_at = extras
+    .get(master_run::FINISH_QUOTA_RESETS_AT)
+    .and_then(Value::as_str)
+    .and_then(|text| UtcDateTime::parse(text).ok());
+  Some(QuotaFailure { resets_at, message })
+}
+
+/// The stable run id of the retry an Auto session's mid-turn switch registers (`_auto_failover_retry_id`).
+fn auto_failover_retry_id(session_id: &str, run_id: &str) -> String {
+  control_events::stable_run_id(session_id, &format!("auto-quota-failover:{run_id}"))
+}
+
+/// The failed run an Auto switch retry continues, with the reason its fresh conversation starts, when this run is a
+/// retry the Auto set's quota failover registered.
+fn auto_switch_source(
+  features: &FeatureContext,
+  meta: &SessionMetadata,
+  run: &RunRecord,
+  option: &BackendOption,
+) -> anyhow::Result<Option<(RunRecord, String)>> {
+  if meta.backend != charliebot_core::config::AUTO_BACKEND_ID {
+    return Ok(None);
+  }
+  let Some(previous_id) = run.retry_of_run_id.as_deref() else { return Ok(None) };
+  let Some(previous) = features.store.read_run_sync(&meta.id, previous_id)? else { return Ok(None) };
+  let from = previous.backend.clone().unwrap_or_default();
+  if from == option.id || from.is_empty() {
+    return Ok(None);
+  }
+  let switched = features.store.load_chat_events_sync(&meta.id)?.iter().rev().any(|event| {
+    event.get("type").and_then(CompactValue::as_str) == Some(event_types::QUOTA_FAILOVER)
+      && event.get(event_types::QUOTA_FAILOVER_SET).and_then(CompactValue::as_str) == Some(event_types::QUOTA_SET_AUTO)
+      && event.get(event_types::QUOTA_FAILOVER_REASON).and_then(CompactValue::as_str)
+        == Some(event_types::QUOTA_REASON_QUOTA_ERROR)
+      && event.get("from").and_then(CompactValue::as_str) == Some(from.as_str())
+      && event.get("to").and_then(CompactValue::as_str) == Some(option.id.as_str())
+  });
+  if !switched {
+    return Ok(None);
+  }
+  let recovers_at = backend_availability::backend_availability(features)?.out_until_minutes(&from).unwrap_or_default();
+  Ok(Some((
+    previous,
+    format!("auto switched from {from} to {}: the member's quota is spent, resets at {recovers_at}", option.id),
+  )))
 }
 
 impl DispatchExecutor for TaskExecutionAdapter {
@@ -2794,11 +3133,43 @@ fn worker_binding(run_id: &str, session_id: &str, run: &RunRecord) -> ThreadMeta
   }
 }
 
-fn worker_continuation_reset_note(reason: &str, previous_log_path: &Path) -> String {
-  format!(
-    "[Context reset: {reason}. The task continues on the same branch and worktree; its spec and the new input follow. The previous run's log is at {} — read it before acting, so finished work is not repeated.]",
-    previous_log_path.display()
-  )
+/// The failed run a quota-failover retry continues, with its backend, when this run is the retry a quota failover
+/// registered. An inherited Auto worker's switch is recorded in its Auto parent; a pool worker's in its own chat.
+fn worker_failover_source(
+  features: &FeatureContext,
+  meta: &SessionMetadata,
+  run: &RunRecord,
+  option: &BackendOption,
+) -> anyhow::Result<Option<(RunRecord, String)>> {
+  let Some(previous_id) = run.retry_of_run_id.as_deref() else { return Ok(None) };
+  let Some(previous) = features.store.read_run_sync(&meta.id, previous_id)? else { return Ok(None) };
+  let from = previous.backend.clone().unwrap_or_default();
+  if from == option.id || from.is_empty() {
+    return Ok(None);
+  }
+  let (record_session, set) = if backend_from_auto(meta) {
+    let parent = meta
+      .task_parent_id
+      .as_deref()
+      .ok_or_else(|| anyhow!("run {} inherited an Auto member but its task names no parent session", run.id))?;
+    (parent.to_string(), event_types::QUOTA_SET_AUTO)
+  } else {
+    (meta.id.clone(), event_types::QUOTA_SET_POOL)
+  };
+  let switched = features.store.load_chat_events_sync(&record_session)?.iter().rev().any(|event| {
+    event.get("type").and_then(CompactValue::as_str) == Some(event_types::QUOTA_FAILOVER)
+      && event.get(event_types::QUOTA_FAILOVER_SET).and_then(CompactValue::as_str) == Some(set)
+      && event.get(event_types::QUOTA_FAILOVER_REASON).and_then(CompactValue::as_str)
+        == Some(event_types::QUOTA_REASON_QUOTA_ERROR)
+      && event.get("from").and_then(CompactValue::as_str) == Some(from.as_str())
+      && event.get("to").and_then(CompactValue::as_str) == Some(option.id.as_str())
+  });
+  Ok(switched.then_some((previous, from)))
+}
+
+/// Whether a worker's backend came from its Auto session's current member, which its quota end fails over within Auto.
+fn backend_from_auto(meta: &SessionMetadata) -> bool {
+  meta.extra(backend_pool::BACKEND_FROM_AUTO_FIELD).and_then(Value::as_bool).unwrap_or(false)
 }
 
 fn parse_outcome(outcome: &str) -> RunOutcomeKind {
@@ -2886,16 +3257,6 @@ fn profile_name(profile: TaskProfile) -> &'static str {
   match profile {
     TaskProfile::Manager => "manager",
     TaskProfile::Worker => "worker",
-  }
-}
-
-fn kind_name(kind: RunKind) -> &'static str {
-  match kind {
-    RunKind::ManagerTurn => "manager_turn",
-    RunKind::Work => "work",
-    RunKind::Review => "review",
-    RunKind::Iteration => "iteration",
-    RunKind::ScheduledStep => "scheduled_step",
   }
 }
 
@@ -3044,7 +3405,19 @@ mod tests {
       Box::new(move || load_credentials(&credential_home)),
     ));
     let startup = Arc::new(StartupState::default());
-    startup.insert(BackendPool::default()).expect("the pool inserts once");
+    startup
+      .insert(
+        charliebot_agents::backend_availability::BackendAvailability::load(home.path())
+          .expect("the availability owner loads"),
+      )
+      .expect("the owner inserts once");
+    startup
+      .insert(BackendPool::new(
+        startup
+          .require::<charliebot_agents::backend_availability::BackendAvailability>()
+          .expect("the owner is in the startup state"),
+      ))
+      .expect("the pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });
 
     pre_recovery_step(Arc::clone(&features)).await.expect("the startup step runs");
@@ -3091,7 +3464,19 @@ mod tests {
       Box::new(move || load_credentials(&credential_home)),
     ));
     let startup = Arc::new(StartupState::default());
-    startup.insert(BackendPool::default()).expect("the pool inserts once");
+    startup
+      .insert(
+        charliebot_agents::backend_availability::BackendAvailability::load(home.path())
+          .expect("the availability owner loads"),
+      )
+      .expect("the owner inserts once");
+    startup
+      .insert(BackendPool::new(
+        startup
+          .require::<charliebot_agents::backend_availability::BackendAvailability>()
+          .expect("the owner is in the startup state"),
+      ))
+      .expect("the pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup });
 
     pre_recovery_step(Arc::clone(&features)).await.expect("the startup step runs");
@@ -3183,7 +3568,16 @@ mod tests {
 
     let home = tempfile::tempdir().unwrap();
     let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
-    features.startup.insert(BackendPool::default()).unwrap();
+    features
+      .startup
+      .insert(charliebot_agents::backend_availability::BackendAvailability::load(&home.path().join("home")).unwrap())
+      .unwrap();
+    features
+      .startup
+      .insert(BackendPool::new(
+        features.startup.require::<charliebot_agents::backend_availability::BackendAvailability>().unwrap(),
+      ))
+      .unwrap();
     pre_recovery_step(Arc::clone(&features)).await.unwrap();
     let meta = test_fixtures::manager_session(&features, "await-terminal-count", "fable", None, "claude-await").await;
     features.store.append_chat_event(&meta.id, json!({"type":"user","content":"synthetic input"})).await.unwrap();
@@ -3219,7 +3613,16 @@ mod tests {
 
     let home = tempfile::tempdir().unwrap();
     let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
-    features.startup.insert(BackendPool::default()).unwrap();
+    features
+      .startup
+      .insert(charliebot_agents::backend_availability::BackendAvailability::load(&home.path().join("home")).unwrap())
+      .unwrap();
+    features
+      .startup
+      .insert(BackendPool::new(
+        features.startup.require::<charliebot_agents::backend_availability::BackendAvailability>().unwrap(),
+      ))
+      .unwrap();
     pre_recovery_step(Arc::clone(&features)).await.unwrap();
     let meta = test_fixtures::manager_session(&features, "launch-history-count", "fable", None, "claude-launch").await;
     for (id, content) in [("input-a", "first input"), ("input-b", "second input")] {

@@ -23,6 +23,7 @@ pub mod projection;
 mod read_memos;
 mod run_facts;
 pub mod run_identity;
+pub mod run_logs;
 mod run_record;
 pub mod run_records;
 mod session_events;
@@ -38,6 +39,7 @@ mod task_tree_state;
 mod thinking;
 mod tool_rows;
 pub mod trigger_files;
+pub mod v1_session_conversion;
 pub mod v1_sessions;
 #[cfg(any(test, feature = "write-faults"))]
 mod write_fault_types;

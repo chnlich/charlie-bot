@@ -18,6 +18,7 @@ use axum::response::Response;
 use axum::routing::any;
 use charliebot_compat::responses;
 use charliebot_compat::static_files;
+use charliebot_registry::pages::STATIC_URL_PREFIX;
 use http::{StatusCode, header};
 
 use crate::connection::ConnectionInfo;
@@ -36,7 +37,8 @@ pub(crate) const STATIC_FAMILY: Family = Family {
 };
 
 fn static_routes() -> Router<Arc<AppState>> {
-  Router::new().route("/static/", any(serve)).route("/static/{*rest}", any(serve))
+  let rest = format!("{STATIC_URL_PREFIX}{{*rest}}");
+  Router::new().route(STATIC_URL_PREFIX, any(serve)).route(&rest, any(serve))
 }
 
 /// The first mount whose prefix holds the path serves it; a path under no mount (no `web/static` at

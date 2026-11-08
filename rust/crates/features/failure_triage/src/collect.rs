@@ -19,10 +19,12 @@ use charliebot_core::config::sessions_dir_in;
 use charliebot_core::event_types;
 use charliebot_core::logline;
 use charliebot_core::pacific;
+use charliebot_core::run_kind::RunKind;
 use charliebot_registry::backend::Env;
 use charliebot_store::CompactValue;
 use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::layout::{chat_events_path, runs_dir};
+use charliebot_store::run_logs;
 use charliebot_store::run_records::{
   self, OBSERVATION_EVENTS_REF, OBSERVATION_RESULT_REF, RUN_METADATA_NAME, STDERR_LOG_NAME, stop_requested_in_events,
 };
@@ -199,7 +201,7 @@ fn run_fields(path: &Path) -> Result<RunFields> {
   };
   Ok(RunFields {
     id: id.to_string(),
-    kind: value.get("kind").and_then(serde_json::Value::as_str).unwrap_or("work").to_string(),
+    kind: value.get("kind").and_then(serde_json::Value::as_str).unwrap_or(RunKind::Work.as_str()).to_string(),
     exit_code: value.get("exit_code").and_then(serde_json::Value::as_i64).map(|code| code as i32),
     backend: value.get("backend").and_then(serde_json::Value::as_str).unwrap_or("unknown").to_string(),
     event_log: named_event_log(&value),
@@ -337,11 +339,9 @@ fn read_named_events(log: Option<&Path>) -> Result<RunEvents> {
   let Some(path) = log else {
     return Ok(RunEvents::default());
   };
-  match fs::metadata(path) {
-    Ok(_) => read_run_events(path),
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-      bail!("the run record names the event log {}, which is missing", path.display())
-    }
+  match run_logs::stored_metadata(path) {
+    Ok(Some(_)) => read_run_events(path),
+    Ok(None) => bail!("the run record names the event log {}, which is missing", path.display()),
     Err(error) => Err(error).with_context(|| format!("stating {}", path.display())),
   }
 }
@@ -761,7 +761,7 @@ mod tests {
     let run_dir = home.join("sessions").join("session").join("data").join("runs").join("run-raw");
     let raw_path = run_dir.join(RAW_LOG_NAME);
     let metadata = format!(
-      r#"{{"id":"run-raw","kind":"work","exit_code":1,"backend":"claude-code-improve-host3","result_ref":"{}"}}"#,
+      r#"{{"id":"run-raw","kind":"work","exit_code":1,"backend":"claude-code-improve-gpu-box-1","result_ref":"{}"}}"#,
       raw_path.display()
     );
     let notice = r#"[claude-code:unrecognized_model] {"model":"synthetic-model","query_source":"sdk"}"#;

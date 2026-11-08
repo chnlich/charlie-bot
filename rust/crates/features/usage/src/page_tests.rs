@@ -253,6 +253,7 @@ fn register_reordered(registry: &mut Registry) -> Result<(), RegistryError> {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn page_lists_seeded_models_with_output_totals() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -269,6 +270,7 @@ async fn page_lists_seeded_models_with_output_totals() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn an_empty_ledger_renders_an_empty_state_without_the_charts() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -282,6 +284,7 @@ async fn an_empty_ledger_renders_an_empty_state_without_the_charts() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn counted_fallback_row_carries_a_lower_bound_and_native_rows_do_not() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -295,6 +298,7 @@ async fn counted_fallback_row_carries_a_lower_bound_and_native_rows_do_not() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn each_source_native_start_appears() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -309,6 +313,7 @@ async fn each_source_native_start_appears() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn spellings_of_one_model_merge_into_one_row() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -330,6 +335,7 @@ fn spellings_of_one_model_merge_into_one_row() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn canonical_name_merges_spellings_but_keeps_versions_apart() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -353,6 +359,7 @@ fn canonical_name_merges_spellings_but_keeps_versions_apart() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn per_source_tiles_count_attributed_accounts() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -373,6 +380,7 @@ fn per_source_tiles_count_attributed_accounts() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn in_unsplit_carries_into_the_payload_row() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -384,6 +392,7 @@ fn in_unsplit_carries_into_the_payload_row() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn rendered_page_has_one_row_per_canonical_model() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -404,6 +413,7 @@ async fn rendered_page_has_one_row_per_canonical_model() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn charlie_bot_native_accounts_read_as_clc() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -418,6 +428,7 @@ fn charlie_bot_native_accounts_read_as_clc() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn charlie_bot_antigravity_accounts_read_as_antigravity() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -432,6 +443,7 @@ fn charlie_bot_antigravity_accounts_read_as_antigravity() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn page_builds_with_a_ledger_row_attributed_to_antigravity() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -450,6 +462,7 @@ async fn page_builds_with_a_ledger_row_attributed_to_antigravity() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn charlie_bot_fallback_accounts_join_their_cli_s_source() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -471,6 +484,7 @@ fn charlie_bot_fallback_accounts_join_their_cli_s_source() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn every_tile_total_sums_to_the_page_total() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -490,6 +504,7 @@ fn every_tile_total_sums_to_the_page_total() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn page_legend_names_the_cli_sources_without_charlie_bot() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -506,6 +521,7 @@ async fn page_legend_names_the_cli_sources_without_charlie_bot() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn cards_follow_registration_order_with_run_log_sources_last() {
   let home = tempfile::tempdir().expect("a temporary home");
   let mut reordered = Registry::new();
@@ -523,6 +539,7 @@ async fn cards_follow_registration_order_with_run_log_sources_last() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn page_says_when_the_ledger_was_last_captured() {
   let captured_home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(captured_home.path(), registry());
@@ -545,12 +562,14 @@ fn at(text: &str) -> Timestamp {
 }
 
 #[test]
+#[ignore = "integration"]
 fn stamps_read_in_pacific_time_whatever_the_server_zone() {
   assert_eq!(pacific::stamp(at("2026-10-26T07:00:00Z")).expect("the stamp formats"), "2026-10-26 00:00 PDT");
   assert_eq!(pacific::stamp(at("2027-01-15T08:00:00Z")).expect("the stamp formats"), "2027-01-15 00:00 PST");
 }
 
 #[test]
+#[ignore = "integration"]
 fn ledger_stamps_name_their_pacific_day_and_the_week_holds_them() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -569,6 +588,7 @@ fn ledger_stamps_name_their_pacific_day_and_the_week_holds_them() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn last_week_reads_the_same_rows_on_the_table_and_the_aggregate() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -595,6 +615,7 @@ fn last_week_reads_the_same_rows_on_the_table_and_the_aggregate() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn rows_rank_by_output_then_model_not_by_total() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -610,6 +631,7 @@ fn rows_rank_by_output_then_model_not_by_total() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_account_no_source_attributes_fails_the_context() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -620,6 +642,7 @@ fn an_account_no_source_attributes_fails_the_context() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_window_spans_the_first_and_last_stamps() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -635,6 +658,7 @@ fn the_window_spans_the_first_and_last_stamps() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn the_route_answers_get_and_refuses_other_methods() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());
@@ -667,6 +691,7 @@ async fn served_body(features: &Arc<FeatureContext>) -> String {
 
 /// The route serves the body the memo holds, and a capture that commits after a view reaches the next one.
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_capture_after_a_view_reaches_the_next_one() {
   let home = tempfile::tempdir().expect("a temporary home");
   let features = page_features(home.path(), registry());

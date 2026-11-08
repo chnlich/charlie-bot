@@ -459,6 +459,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_ready_generation_lands_the_answer_and_its_generation_time() {
     let home = Home::new(vec![Start::Script(answer_script(ANSWER))]);
     home.create_session("s1");
@@ -491,6 +492,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn an_empty_answer_ends_in_the_empty_error() {
     let home = Home::new(vec![Start::Script(empty_script())]);
     home.create_session("s1");
@@ -504,6 +506,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn an_agent_that_exits_with_an_error_and_says_nothing_ends_in_the_empty_error() {
     let home = Home::new(vec![Start::Script(failing_script())]);
     home.create_session("s1");
@@ -539,6 +542,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_one_shot_past_its_budget_ends_in_the_timeout_error() {
     let home = Home::new(vec![Start::Script(hanging_script())]);
     home.create_session("s1");
@@ -552,6 +556,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn the_terminal_state_is_broadcast_as_a_frame_without_the_answer() {
     let home = Home::new(vec![Start::Script(answer_script(ANSWER))]);
     home.create_session("s1");
@@ -584,6 +589,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn two_concurrent_requests_on_one_divider_start_one_generation() {
     let home = Home::new(vec![Start::Script(delayed_answer_script(1, ANSWER))]);
     home.create_session("s1");

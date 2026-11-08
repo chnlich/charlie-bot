@@ -72,12 +72,15 @@ const VOICE_HINT_RETRY = 'Upload failed — click to retry';
 const VOICE_OVERLAY_CLASS = 'absolute left-0 right-0 bottom-full mb-2 rounded-lg border border-blue-500/40 bg-slate-800 px-3 py-2 text-sm text-slate-100 shadow-lg max-h-28 overflow-y-auto';
 // Not-yet-final words from the preview relay: grey, above the level bar.
 const VOICE_PARTIAL_CLASS = 'voice-partial-text text-sm text-slate-400 whitespace-pre-wrap break-words';
-// The caret's dropdown, anchored above the mic group the template renders.
-const VOICE_MENU_CLASS = 'absolute bottom-full right-0 mb-2 w-64 rounded-lg border border-slate-600 bg-slate-800 py-1 shadow-lg z-50';
-const VOICE_MENU_TITLE_CLASS = 'px-3 py-1.5 text-xs text-slate-500';
+// The caret's dropdown, anchored above the mic group the template renders. voice.css sizes it to its longest row.
+const VOICE_MENU_CLASS = 'absolute bottom-full right-0 mb-2 rounded-lg border border-slate-600 bg-slate-800 py-1 shadow-lg z-50';
+// The menu sits on slate-800, where slate-500 holds 3.07:1: under the 4.5:1 floor for the title's 12 px and the
+// unavailable rows' 14 px. slate-400 holds 5.7:1 and still reads dimmer than enabled rows' slate-200.
+const VOICE_MENU_TITLE_CLASS = 'px-3 py-1.5 text-xs text-slate-400';
 const VOICE_MENU_ITEM_CLASS = 'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm';
 const VOICE_MENU_ITEM_ENABLED_CLASS = ' text-slate-200 hover:bg-slate-700';
-const VOICE_MENU_ITEM_DISABLED_CLASS = ' text-slate-500 cursor-not-allowed';
+// An unavailable backend stays readable: its label names the config key the host must provide.
+const VOICE_MENU_ITEM_DISABLED_CLASS = ' text-slate-400 cursor-not-allowed';
 const VOICE_MENU_CHECK_CLASS = 'w-4 shrink-0 text-green-400';
 // On phones the caret is hidden and the composer's ⋯ menu carries this entry
 // instead; it opens the same menu the caret does.
@@ -196,7 +199,7 @@ function ensureVoiceBackendMenu() {
     const check = document.createElement('span');
     check.className = VOICE_MENU_CHECK_CLASS;
     const labelSpan = document.createElement('span');
-    labelSpan.className = 'truncate';
+    labelSpan.className = 'voice-menu-label';
     // An unconfigured backend stays visible but unselectable, naming the key it
     // needs (never its value).
     labelSpan.textContent = unavailable ? entry.label + ' · ' + entry.unavailableReason : entry.label;
@@ -246,8 +249,8 @@ function toggleVoiceBackendMenu() {
 }
 
 // The composer's ⋯ menu entry, created by this package so the core template
-// names nothing it defines. Opening from the entry closes the ⋯ menu first;
-// both entries drive the one backend menu.
+// names nothing it defines. Opening it from the ⋯ menu closes the ⋯ menu
+// first; it drives the one backend menu.
 function ensureVoiceBackendEntry() {
   const overflow = document.getElementById(VOICE_OVERFLOW_MENU_ID);
   if (!overflow || document.getElementById(VOICE_OVERFLOW_ENTRY_ID)) return;
@@ -329,6 +332,10 @@ async function toggleVoice() {
 function newVoiceRun(sessionId, backend) {
   return {
     sessionId,
+    // The run id the browser makes at the click. The startup report, the relay
+    // socket and the upload all carry it, so the server keeps every file of
+    // this recording under one stem (rust/crates/features/voice/src/recordings.rs).
+    runId: newVoiceRunId(),
     stream: null,
     audioContext: null,
     sourceNode: null,
@@ -356,6 +363,14 @@ function newVoiceRun(sessionId, backend) {
     relayWaitTimer: null,
     relayFailure: null,
   };
+}
+
+// The run id of one recording: eight lowercase hex characters, the suffix the
+// server keeps every file of the run under. One draw of Math.random is enough —
+// the id is not a secret and only has to stay unique among the recordings of
+// one session.
+function newVoiceRunId() {
+  return Math.floor(Math.random() * 2 ** 32).toString(16).padStart(8, '0');
 }
 
 async function startRecording() {
@@ -623,6 +638,7 @@ function voiceStartupBody(run) {
   const context = run.audioContext;
   const track = run.stream ? run.stream.getAudioTracks()[0] : null;
   return {
+    run_id: run.runId,
     backend: run.backend.id,
     reached: startup.reached,
     end: startup.end,
@@ -833,6 +849,7 @@ async function startUpload(run) {
   }, VOICE_UPLOAD_TIMEOUT_MS);
   const wav = assembleVoiceWav(run.pcmChunks, Math.min(run.totalSamples, VOICE_MAX_SAMPLES));
   postVoiceRecording(`/api/voice/${encodeURIComponent(run.sessionId)}`, wav, {
+    runId: run.runId,
     backendId: run.backend.id,
     devices,
     onXhr: (xhr) => { run.xhr = xhr; },
@@ -970,13 +987,14 @@ function sendVoiceXhr(path, body, {onSent, onXhr}) {
   });
 }
 
-// The upload's transport: a multipart form with the audio plus the
-// backend the browser selected and the recording's device object as JSON. The
-// server persists the recording, transcribes it, and returns the text.
-// A null backendId or devices leaves that form field out.
-function postVoiceRecording(path, wavBuffer, {backendId, devices, ...opts}) {
+// The upload's transport: a multipart form with the audio plus the run id,
+// the backend the browser selected and the recording's device object as JSON.
+// The server keeps the recording under the run id's stem, transcribes it, and
+// returns the text. A null backendId or devices leaves that form field out.
+function postVoiceRecording(path, wavBuffer, {runId, backendId, devices, ...opts}) {
   const form = new FormData();
   form.append('audio', new Blob([wavBuffer]), 'recording.wav');
+  form.append('run_id', runId);
   if (backendId !== null) form.append('backend', backendId);
   if (devices !== null) form.append('devices', JSON.stringify(devices));
   return sendVoiceXhr(path, form, opts);
@@ -1000,7 +1018,8 @@ function clearVoiceUploadTimer(run) {
 
 function openVoiceRelay(run) {
   const socket = new WebSocket(wsUrlWithToken(
-      `/ws/voice/${encodeURIComponent(run.sessionId)}?backend=${encodeURIComponent(run.backend.id)}`));
+      `/ws/voice/${encodeURIComponent(run.sessionId)}?backend=${encodeURIComponent(run.backend.id)}` +
+      `&run_id=${encodeURIComponent(run.runId)}`));
   run.relaySocket = socket;
   socket.onopen = () => {
     if (activeVoiceRun !== run) return;

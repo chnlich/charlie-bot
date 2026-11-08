@@ -79,14 +79,14 @@ function registerInputMode(mode, badgeHtml) {
   inputModeBadges.set(mode, badgeHtml);
 }
 
-// A user text folds by its rendered height: the clamp (styles.css, .user-msg-clamp) shows its first ten lines, and the
-// 展开全文 control shows only while the clamp hides some of the text. Every text starts clamped and undecided, and the
-// observer below decides it once it is laid out.
+// A user text folds by its rendered height. The clamp (styles.css, .user-msg-clamp) shows its first ten lines, and the
+// Show full text control shows only while the clamp hides some of the text. Every text starts clamped and undecided,
+// and the observer below decides it once it is laid out.
 function renderUserTextHtml(text) {
   return '<div class="user-msg-fold" data-folded="true" data-overflows="false">'
     + `<div class="user-msg-clamp whitespace-pre-wrap">${escapeHtml(text)}</div>`
     + `<button type="button" class="user-msg-more"`
-      + ` onclick="this.closest('.user-msg-fold').dataset.folded='false'">展开全文</button>`
+      + ` onclick="this.closest('.user-msg-fold').dataset.folded='false'">Show full text</button>`
     + '</div>';
 }
 
@@ -103,7 +103,7 @@ function fitUserMessageClamp(clamp, sizes) {
 }
 
 // Rows are built detached and mount into the message list later (turn-engine.js, buildNode), so the list is watched.
-// Each clamp that enters it is observed; the observer decides it at its first layout and again at every size change,
+// Each clamp that enters it is observed. The observer decides it at its first layout and again at every size change,
 // and a width change is the one that rewraps the text.
 document.addEventListener('DOMContentLoaded', () => {
   const sizes = new ResizeObserver((entries) => {

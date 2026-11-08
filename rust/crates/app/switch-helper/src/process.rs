@@ -49,6 +49,7 @@ mod tests {
   use super::*;
 
   #[test]
+  #[ignore = "integration"]
   fn a_started_process_instance_is_alive_and_a_wrong_start_is_not() {
     let mut child = std::process::Command::new("sleep").arg("30").spawn().expect("spawn sleep");
     let pid = child.id();
@@ -61,6 +62,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_start_is_after_the_boot_only_when_its_instant_is() {
     let boot = boot_time().expect("the boot time");
     assert!(started_after_boot("2999-01-01T00:00:00+00:00", boot).expect("a parsed start"));

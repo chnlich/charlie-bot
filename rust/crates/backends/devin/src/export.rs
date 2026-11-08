@@ -4,6 +4,12 @@
 //! (`ATIF-v1.x`), not from a Devin document. The names are `session_id`, `steps[]` with `source`, `message`,
 //! `tool_calls[]`, `observation.results[]` and each agent step's `metrics`. A live export that disagrees with them is
 //! fixed here.
+//!
+//! A compaction summary is the system step that devin writes when it compacts a long conversation. The summary
+//! replaces the earlier steps, the current turn's user step included, so that turn's prompt lives only inside the
+//! summary. The step is marked by `extra.telemetry` with `source` "compaction" and `operation` "summary", as the
+//! exports of CLI 3000.12.17 (`ATIF-v1.7`) show. The agent steps devin keeps from before the compaction follow the
+//! summary step.
 
 use std::collections::HashMap;
 
@@ -17,9 +23,12 @@ use serde_json::{Value, json};
 
 /// The `source` of a step the agent wrote. A user step's message is the prompt, so it becomes no text event.
 const AGENT_SOURCE: &str = "agent";
-/// The `source` of a step that carries a turn's prompt. The export holds every turn, and each turn's user step starts
-/// the steps that turn added.
+/// The `source` of a step that carries a turn's prompt. Each turn's user step starts the steps that turn added, unless
+/// a compaction summary replaced it.
 const USER_SOURCE: &str = "user";
+/// The telemetry `source` and `operation` of a compaction summary step.
+const COMPACTION_SOURCE: &str = "compaction";
+const SUMMARY_OPERATION: &str = "summary";
 
 #[derive(Deserialize)]
 struct Export {
@@ -35,6 +44,35 @@ struct Step {
   tool_calls: Vec<ToolCall>,
   observation: Option<Observation>,
   metrics: Option<StepMetrics>,
+  extra: Option<StepExtra>,
+}
+
+impl Step {
+  /// Whether the steps after this one belong to one turn: a user step holds that turn's prompt, and a compaction
+  /// summary holds it after a compaction.
+  fn starts_turn(&self) -> bool {
+    self.source == USER_SOURCE || self.is_compaction_summary()
+  }
+
+  fn is_compaction_summary(&self) -> bool {
+    let Some(telemetry) = self.extra.as_ref().and_then(|extra| extra.telemetry.as_ref()) else {
+      return false;
+    };
+    telemetry.source.as_deref() == Some(COMPACTION_SOURCE) && telemetry.operation.as_deref() == Some(SUMMARY_OPERATION)
+  }
+}
+
+/// The CLI's own metadata of a step. Only its telemetry is read here.
+#[derive(Deserialize)]
+struct StepExtra {
+  telemetry: Option<Telemetry>,
+}
+
+/// What produced a step, such as `source` "assistant" with `operation` "inference" for a model call.
+#[derive(Deserialize)]
+struct Telemetry {
+  source: Option<String>,
+  operation: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -76,21 +114,23 @@ struct TurnUsage {
 /// The events of one turn, in the order the session page shows them: the attached session, each step's text and tool
 /// events, the final answer, and the usage result.
 ///
-/// The export holds the whole conversation, every earlier turn included, so only the steps after the last user step
-/// become events. `answer` is the stdout text, the final answer. The last agent message of that turn carries the same
-/// answer, so that message is not repeated as a text event. The usage is the sum of those steps' metrics, not the
-/// export's `final_metrics`, which covers every turn. The usage result has a null cost, because Devin bills in credits
-/// and reports no dollar figure.
+/// The export holds every turn's steps, except those a compaction replaced with its summary. Only the steps after the
+/// last user step or compaction summary, whichever comes later, become events. `answer` is the stdout text, the final
+/// answer. The last agent message of that turn carries the same answer, so that message is not repeated as a text
+/// event. The usage is the sum of those steps' metrics, not the export's `final_metrics`, which covers every turn. A
+/// compaction drops the compacted steps with their metrics, so a compacted turn's usage leaves out the tokens spent
+/// before the compaction. The usage result has a null cost, because Devin bills in credits and reports no dollar
+/// figure.
 pub fn turn_events(export_text: &str, answer: &str) -> anyhow::Result<Vec<Value>> {
   let export: Export = serde_json::from_str(export_text).context("the export is not the trajectory JSON")?;
   let session_id = match export.session_id {
     Some(session_id) if !session_id.is_empty() => session_id,
     _ => bail!("devin export has no session_id"),
   };
-  let Some(prompt_step) = export.steps.iter().rposition(|step| step.source == USER_SOURCE) else {
-    bail!("devin export has no user step");
+  let Some(turn_start) = export.steps.iter().rposition(Step::starts_turn) else {
+    bail!("devin export has no user step and no compaction summary");
   };
-  let steps = &export.steps[prompt_step + 1..];
+  let steps = &export.steps[turn_start + 1..];
   let usage = turn_usage(steps)?;
   let final_message = steps.iter().rposition(|step| step.source == AGENT_SOURCE && !step.message.is_empty());
 
@@ -156,6 +196,7 @@ mod tests {
 
   const FIXTURE: &str = include_str!("../tests/fixtures/export.json");
   const MULTITURN_FIXTURE: &str = include_str!("../tests/fixtures/export_multiturn.json");
+  const COMPACTED_FIXTURE: &str = include_str!("../tests/fixtures/export_compacted.json");
 
   #[test]
   fn a_trajectory_becomes_the_session_tool_text_and_usage_events() {
@@ -209,6 +250,66 @@ mod tests {
   }
 
   #[test]
+  fn a_compacted_turn_becomes_events_from_the_steps_after_the_compaction_summary() {
+    let events = turn_events(COMPACTED_FIXTURE, "The sum is 42.").unwrap();
+    assert_eq!(
+      events,
+      vec![
+        json!({"type": "session_attached", "session_id": "devin-session-5b1d"}),
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Next I read b.txt."}]}}),
+        json!({"type": "tool_use", "name": "read_file", "input": {"path": "b.txt"}}),
+        json!({"type": "tool_result", "tool_name": "read_file", "content": "23"}),
+        json!({"type": "tool_use", "name": "exec", "input": {"command": "expr 19 + 23"}}),
+        json!({"type": "tool_result", "tool_name": "exec", "content": "42"}),
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "The sum is 42."}]}}),
+        json!({
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 3200,
+            "output_tokens": 90,
+            "cache_read_input_tokens": 2800,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": null
+        }),
+      ]
+    );
+  }
+
+  #[test]
+  fn a_turn_after_a_compacted_turn_starts_after_its_user_step() {
+    let mut export: Value = serde_json::from_str(COMPACTED_FIXTURE).unwrap();
+    let steps = export["steps"].as_array_mut().unwrap();
+    steps.push(json!({"step_id": 9, "source": "user", "message": "Double the sum."}));
+    steps.push(json!({
+      "step_id": 10,
+      "source": "agent",
+      "message": "84.",
+      "metrics": {"prompt_tokens": 1300, "completion_tokens": 5, "cached_tokens": 1200}
+    }));
+    let events = turn_events(&export.to_string(), "84.").unwrap();
+    assert_eq!(
+      events,
+      vec![
+        json!({"type": "session_attached", "session_id": "devin-session-5b1d"}),
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "84."}]}}),
+        json!({
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 1300,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 1200,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": null
+        }),
+      ]
+    );
+  }
+
+  #[test]
   fn a_step_metrics_without_cached_tokens_counts_zero_cached_tokens() {
     let mut export: Value = serde_json::from_str(MULTITURN_FIXTURE).unwrap();
     for step in export["steps"].as_array_mut().unwrap() {
@@ -224,10 +325,10 @@ mod tests {
   }
 
   #[test]
-  fn an_export_without_a_user_step_is_refused() {
+  fn an_export_without_a_user_step_or_a_compaction_summary_is_refused() {
     let without_user = MULTITURN_FIXTURE.replace("\"source\": \"user\"", "\"source\": \"system\"");
     let error = turn_events(&without_user, "x").unwrap_err();
-    assert_eq!(error.to_string(), "devin export has no user step");
+    assert_eq!(error.to_string(), "devin export has no user step and no compaction summary");
   }
 
   #[test]

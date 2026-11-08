@@ -16,6 +16,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
+use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{RUN_FINISHED, TASK_CLOSED};
@@ -25,6 +26,7 @@ use charliebot_core::str_methods::take_chars;
 use charliebot_registry::sequence::SequenceTree;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec, TaskType};
+use charliebot_store::run_logs;
 use charliebot_store::run_records::{RUN_EVENTS_NAME, RunKind, RunRecord, SequenceRef};
 use charliebot_store::{CreateTask, SharedChatEvent, Store, StoreError, StoreResult, TaskCaller, control_events};
 use charliebot_tasks::completion::RUN_REF_PREFIX;
@@ -134,7 +136,7 @@ pub fn render_iteration_reports(repo_root: &RepoRoot, loop_dir: &str, iteration:
   let sections = spawner_prompt::load_marker_sections(
     &repo_root.path().join(spawner_prompt::WORKER_PROMPT_PATH),
     &[spawner_prompt::ITERATION_REPORTS_SECTION],
-    "worker-prompt",
+    spawner_prompt::WORKER_PROMPT_EXTRACTION,
   )?;
   let tokens = vec![
     ("{{loop_dir}}", loop_dir.to_string()),
@@ -248,7 +250,7 @@ fn iteration_blocker(
   outcome: &str,
 ) -> anyhow::Result<(Option<String>, String)> {
   let events_path = tree.run_dir(child_id, run_id).join(RUN_EVENTS_NAME);
-  if !events_path.is_file() {
+  if run_logs::existing_path(&events_path).is_none() {
     return Ok((None, format!("Iteration {iteration} {outcome} (no events log).")));
   }
   crate::judgment::failed_iteration_judgments_from_events(
@@ -452,7 +454,11 @@ async fn run_loop(
       let quota_failure = adapter.take_quota_failure(spec.child_id, &run.id);
       if let Some(reason) = blocker_reason {
         if state.backend_from_pool {
-          pool.cool(&iteration_backend, quota_failure.flatten());
+          let (resets_at, cooling_reason, message) = match &quota_failure {
+            Some(failure) => (failure.resets_at, backend_availability::REASON_QUOTA_ERROR, failure.message.clone()),
+            None => (None, backend_availability::REASON_ITERATION_FAILURE, reason.clone()),
+          };
+          pool.availability().record(&iteration_backend, resets_at, cooling_reason, &message)?;
           if quota_failure.is_some() && run.pid.is_none() && iteration < spec.iterations {
             match pool.select(cfg, "improve", &[])? {
               Some(member) => next_pool_member = Some(member),
@@ -565,8 +571,9 @@ async fn create_worktree(
   Ok(resolution.canonical)
 }
 
-/// Settle a loop whose iteration launch was withheld: no terminal fact will arrive, so the state is blocked, the lock is
-/// released and the failed report names the reason. The close step then stops the queued Run and closes the child.
+/// The settlement of a loop whose iteration launch was withheld. No terminal fact will arrive, so the state is
+/// blocked, the lock is released and the failed report names the reason. The close step then stops the queued Run
+/// and closes the child.
 async fn settle_withheld_iteration(
   spec: &LoopSpec<'_>,
   cfg: &CharlieBotConfig,
@@ -625,7 +632,7 @@ async fn judge_iteration(
   if !report_path.exists() {
     let mut fallback = format!("Iteration {iteration} finished without a report file.");
     let events_path = tree.run_dir(spec.child_id, run_id).join(RUN_EVENTS_NAME);
-    if events_path.is_file() {
+    if run_logs::existing_path(&events_path).is_some() {
       fallback = crate::judgment::extract_iteration_summary_from_events(
         crate::judgment::newest_first_event_iter(&events_path)?,
         iteration,
@@ -953,8 +960,9 @@ async fn loop_close_verdict(
   Ok((outcome, evidence))
 }
 
-/// Mark every improve loop whose controller died with the old process, then close what ended. A loop whose state says
-/// `running` under this process's pid is left alone: its controller is live. Returns how many loops were marked.
+/// The reconciliation of every improve loop whose controller died with the old process, closing what ended. A loop
+/// whose state says `running` under this process's pid is left alone: its controller is live. Returns how many loops
+/// were marked.
 pub async fn reconcile_interrupted_sequences(
   cfg: &CharlieBotConfig,
   tree: &dyn SequenceTree,

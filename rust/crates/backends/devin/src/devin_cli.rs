@@ -5,12 +5,15 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+use std::time::Duration;
 
 use anyhow::Context;
 use charliebot_agents::cli_base::framed_prompt;
 use charliebot_agents::event_builders::make_error_event;
 use charliebot_core::str_methods;
 use charliebot_registry::backend::{AgentBackend, Env, FinalStdoutOutcome, LaunchArgs, Translate, TransportKind};
+use regex::Regex;
 use serde_json::Value;
 
 use super::export;
@@ -19,6 +22,12 @@ use super::export;
 const PROMPT_FILE_NAME: &str = "devin_prompt.md";
 /// The export file the CLI writes after the turn, in the run's log directory.
 const EXPORT_FILE_NAME: &str = "devin_export.json";
+static RETRYABLE_ERROR_KEY: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r#""cognition\.ai/retryable"\s*:\s*true\b"#).expect("the Devin retryable-key pattern is valid")
+});
+static RESET_SECONDS: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(r"(?i)\breset in\s+(\d+)\s+seconds\b").expect("the Devin reset-duration pattern is valid")
+});
 
 /// The `devin --print` backend of one launch.
 pub struct DevinBackend {
@@ -94,6 +103,10 @@ impl DevinBackend {
 }
 
 impl AgentBackend for DevinBackend {
+  fn retry_after(&self, error_text: &str) -> Option<Duration> {
+    retry_after_error(error_text)
+  }
+
   fn instructions_target(&self) -> Option<(&'static str, &'static str)> {
     None
   }
@@ -103,7 +116,7 @@ impl AgentBackend for DevinBackend {
     Ok(())
   }
 
-  /// Writes the framed prompt into the run's log directory, then returns the command that reads it. The prompt file is
+  /// The command that reads the framed prompt file written into the run's log directory. The prompt file is
   /// the only carrier of the instructions: the type writes no instructions file in the working directory.
   fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
     let run_dir = self.run_dir()?;
@@ -154,6 +167,14 @@ fn nonzero_exit_message(stderr: &str, exit_code: i32) -> String {
   } else {
     format!("devin exited {exit_code}: {text}")
   }
+}
+
+fn retry_after_error(error_text: &str) -> Option<Duration> {
+  if !RETRYABLE_ERROR_KEY.is_match(error_text) {
+    return None;
+  }
+  let seconds = RESET_SECONDS.captures(error_text)?.get(1)?.as_str().parse().ok()?;
+  Some(Duration::from_secs(seconds))
 }
 
 #[cfg(test)]
@@ -207,6 +228,10 @@ mod tests {
   /// The argv the fake `devin` recorded, without its program name.
   fn recorded_argv(root: &Path) -> Vec<String> {
     fs::read_to_string(root.join("argv.txt")).unwrap().lines().map(str::to_string).collect()
+  }
+
+  fn recorded_call_argv(root: &Path, call: usize) -> Vec<String> {
+    fs::read_to_string(root.join(format!("call-{call}-argv.txt"))).unwrap().lines().map(str::to_string).collect()
   }
 
   /// An agent environment whose PATH resolves `gh` to a stub wrapper, as every agent spawn requires.
@@ -314,6 +339,21 @@ mod tests {
   }
 
   #[test]
+  fn retry_after_reads_only_marked_devin_resets() {
+    let incident = r#"devin exited 1: Error: Agent error: Reached free model rate limit. Upgrade to Max for higher limits, or switch to a different model. Your limit will reset in 22 seconds (at 01:19 UTC).: {
+  "cognition.ai/errorKind": "unavailable",
+  "cognition.ai/retryable": true
+}"#;
+    assert_eq!(retry_after_error(incident), Some(Duration::from_secs(22)));
+    assert_eq!(retry_after_error(r#"Reached free model rate limit. reset in 22 seconds."#), None);
+    assert_eq!(retry_after_error(r#"{"cognition.ai/retryable": true} Reached free model rate limit."#), None);
+    assert_eq!(
+      retry_after_error(r#"{"cognition.ai/retryable": true} reset in 600 seconds."#),
+      Some(Duration::from_secs(600))
+    );
+  }
+
+  #[test]
   fn the_prompt_file_holds_the_framed_instructions_and_the_message() {
     let root = tempfile::tempdir().unwrap();
     let prompt_file = root.path().join(PROMPT_FILE_NAME);
@@ -331,6 +371,7 @@ mod tests {
     assert_eq!(fs::read_to_string(&prompt_file).unwrap(), "just the message");
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn a_turn_runs_devin_in_print_mode_and_emits_the_export_events() {
     let root = tempfile::tempdir().unwrap();
@@ -354,6 +395,7 @@ mod tests {
     assert_eq!(run.events, export::turn_events(FIXTURE, ANSWER).unwrap());
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn a_resumed_turn_passes_the_native_session_id() {
     let root = tempfile::tempdir().unwrap();
@@ -363,6 +405,7 @@ mod tests {
     assert!(recorded_argv(root.path()).contains(&format!("--resume={SESSION_ID}")));
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn a_missing_export_fails_the_turn_and_names_its_path() {
     let root = tempfile::tempdir().unwrap();
@@ -376,6 +419,7 @@ mod tests {
     assert_eq!(run.events[0]["type"], "error");
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn an_export_without_a_session_id_fails_the_turn() {
     let root = tempfile::tempdir().unwrap();
@@ -387,6 +431,7 @@ mod tests {
     assert!(error.contains("devin export has no session_id"), "the error names the missing field: {error}");
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn an_export_without_a_user_step_fails_the_turn_and_names_the_file() {
     let root = tempfile::tempdir().unwrap();
@@ -395,11 +440,15 @@ mod tests {
     let logs = root.path().join("logs");
     let run = run_turn(root.path(), launch(Some(&logs), None), SessionCgroupConfig::disabled()).await;
     let error = run.result.unwrap_err().to_string();
-    assert!(error.contains("devin export has no user step"), "the error names the missing step: {error}");
+    assert!(
+      error.contains("devin export has no user step and no compaction summary"),
+      "the error names the cause: {error}"
+    );
     let export_path = logs.join(EXPORT_FILE_NAME);
     assert!(error.contains(&export_path.display().to_string()), "the error names the export path: {error}");
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn a_current_turn_agent_step_without_metrics_fails_the_turn_and_names_the_file() {
     let root = tempfile::tempdir().unwrap();
@@ -416,6 +465,7 @@ mod tests {
     assert!(error.contains(&export_path.display().to_string()), "the error names the export path: {error}");
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn a_nonzero_exit_fails_the_turn_with_devins_stderr() {
     let root = tempfile::tempdir().unwrap();
@@ -428,6 +478,34 @@ mod tests {
     assert_eq!(run.events[0]["message"], "devin exited 1: Error: Usage limit reached. Try again later.");
   }
 
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn the_fake_devin_returns_staged_responses_and_records_each_argv() {
+    let root = tempfile::tempdir().unwrap();
+    let responses = root.path().join("responses");
+    let first = responses.join("1");
+    let second = responses.join("2");
+    fs::create_dir_all(&first).unwrap();
+    fs::create_dir_all(&second).unwrap();
+    fs::write(first.join("stderr.txt"), "rate limit\n").unwrap();
+    fs::write(first.join("exit_code"), "1").unwrap();
+    fs::write(second.join("export.json"), FIXTURE).unwrap();
+    fs::write(second.join("answer.txt"), ANSWER).unwrap();
+    stage_devin(root.path(), &[]);
+    let logs = root.path().join("logs");
+
+    let first_run = run_turn(root.path(), launch(Some(&logs), None), SessionCgroupConfig::disabled()).await;
+    assert_eq!(first_run.result.unwrap().exit_code, Some(1));
+    let second_run =
+      run_turn(root.path(), launch(Some(&logs), Some(SESSION_ID)), SessionCgroupConfig::disabled()).await;
+    assert_eq!(second_run.result.unwrap().exit_code, Some(0));
+
+    assert_eq!(recorded_call_argv(root.path(), 1).iter().filter(|arg| arg.starts_with("--resume=")).count(), 0);
+    assert!(recorded_call_argv(root.path(), 2).contains(&format!("--resume={SESSION_ID}")));
+    assert!(recorded_argv(root.path()).contains(&format!("--resume={SESSION_ID}")));
+  }
+
+  #[ignore = "integration"]
   #[tokio::test]
   async fn a_devin_launch_joins_the_session_cgroup_of_its_session() {
     use_fake_cgroup_hierarchy();
@@ -458,7 +536,7 @@ mod tests {
   fn a_recovered_capture_finishes_from_the_directory_it_was_launched_with() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join(EXPORT_FILE_NAME), FIXTURE).unwrap();
-    fs::write(root.path().join(final_stdout::STDOUT_LOG_NAME), ANSWER).unwrap();
+    fs::write(root.path().join(charliebot_store::run_records::STDOUT_LOG_NAME), ANSWER).unwrap();
     fs::write(root.path().join(charliebot_store::run_records::STDERR_LOG_NAME), "").unwrap();
     let mut recovered = backend(launch(Some(root.path()), None));
     let outcome = final_stdout::materialize(&mut recovered, root.path(), Some(0)).unwrap();

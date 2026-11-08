@@ -11,6 +11,8 @@ use nix::errno::Errno;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 
+use crate::config::CharlieBotConfig;
+
 pub const SESSION_CGROUP_PREFIX: &str = "charliebot-sess-";
 /// The one leaf slice that holds every session cgroup. It carries the host's agent memory limit.
 pub const AGENTS_SLICE: &str = "charliebot-agents.slice";
@@ -27,6 +29,50 @@ pub const SESSION_CGROUP_SWEEP_REMOVED_EVENT: &str = "session_cgroup_sweep_remov
 /// The `oom_score_adj` of every agent process: a host-wide OOM picks an agent process before the server, which keeps
 /// the default 0. The value is positive, which an unprivileged writer may set.
 pub const SESSION_CGROUP_OOM_SCORE_ADJ: i64 = 500;
+/// The cpu and io weight of each session cgroup: the cgroup-v2 default, so competing sessions split evenly.
+pub const SESSION_WEIGHT: u64 = 100;
+
+/// The session cgroup placement: the delegated cgroup base and the caps and switches copied from the server
+/// configuration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionCgroupConfig {
+  /// Delegated cgroup directory that holds the session cgroups.
+  pub base_dir: PathBuf,
+  pub memory_max_mb: i64,
+  pub swap_max_mb: i64,
+  pub tasks_max: i64,
+  /// Session cgroups carry a cpu weight of [`SESSION_WEIGHT`]; `server.enable_session_cpu_weight` turns this off.
+  pub enable_cpu_weight: bool,
+  /// Session cgroups carry an io weight of [`SESSION_WEIGHT`]; `server.enable_session_io_weight` turns this off.
+  pub enable_io_weight: bool,
+}
+
+impl SessionCgroupConfig {
+  /// The caps and switches of the server configuration `cfg`, under this user's delegated cgroup base.
+  pub fn from_config(cfg: &CharlieBotConfig) -> Self {
+    Self {
+      base_dir: system_cgroup_base_dir(),
+      memory_max_mb: cfg.server.session_memory_max_mb,
+      swap_max_mb: cfg.server.session_swap_max_mb,
+      tasks_max: cfg.server.session_tasks_max,
+      enable_cpu_weight: cfg.server.enable_session_cpu_weight,
+      enable_io_weight: cfg.server.enable_session_io_weight,
+    }
+  }
+
+  /// A placement with cgroup control off: a zero memory cap starts no session cgroup, so no directory is read.
+  pub fn disabled() -> Self {
+    Self {
+      base_dir: PathBuf::new(),
+      memory_max_mb: 0,
+      swap_max_mb: 0,
+      tasks_max: 0,
+      enable_cpu_weight: false,
+      enable_io_weight: false,
+    }
+  }
+}
+
 /// The `/proc/<pid>/exe` file names of the browser processes a session sweep ends. `exe` rather than `comm`, which
 /// truncates to 15 characters.
 const BROWSER_EXE_NAMES: [&str; 6] =
@@ -230,6 +276,7 @@ mod tests {
     (child, binary)
   }
 
+  #[ignore = "integration"]
   #[test]
   fn the_sweep_ends_the_browser_processes_and_leaves_the_others() {
     let directory = tempfile::tempdir().unwrap();
@@ -250,6 +297,7 @@ mod tests {
     bystander.wait().unwrap();
   }
 
+  #[ignore = "integration"]
   #[test]
   fn the_sweep_recognizes_a_browser_whose_binary_the_kernel_marks_deleted() {
     let directory = tempfile::tempdir().unwrap();

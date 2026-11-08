@@ -232,7 +232,7 @@ fn add(args: &AddArgs) -> Result<(), CliExit> {
     None => {
       let mut body = String::new();
       io::stdin().read_to_string(&mut body).map_err(|error| CliExit::error(error.to_string()))?;
-      store::normalize_newlines(&body)
+      str_methods::universal_newlines(&body)
     }
   };
   let first_line = body.split('\n').next().unwrap_or_default();
@@ -374,6 +374,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_cli_add_creates_one_staging_file() {
     run_with_timeout(|| {
       let temp = tempfile::tempdir().unwrap();
@@ -396,6 +397,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_cli_add_on_a_fresh_home_creates_the_scaffold_and_the_capture() {
     run_with_timeout(|| {
       let temp = tempfile::tempdir().unwrap();

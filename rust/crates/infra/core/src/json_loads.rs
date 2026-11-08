@@ -26,6 +26,12 @@ static INTEGER_FORM_OF_SCANNER: LazyLock<Regex> =
 /// The nesting depth the scanner accepts. The bound keeps the recursive parse from overflowing its stack.
 pub const MAX_DEPTH: usize = 500;
 
+/// The number tokens Python's `json` writes and reads for a value standard JSON cannot represent. `text_repr` writes
+/// them and `features/web_reply` strips them alongside this reader, so the three spellings have one home.
+pub const NAN: &str = "NaN";
+pub const INFINITY: &str = "Infinity";
+pub const NEGATIVE_INFINITY: &str = "-Infinity";
+
 /// Why a document did not load.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadError {
@@ -227,17 +233,17 @@ impl Scanner<'_> {
       Some('n') if self.word(idx, "null") => Ok((Value::Null, idx + 4)),
       Some('t') if self.word(idx, "true") => Ok((Value::Bool(true), idx + 4)),
       Some('f') if self.word(idx, "false") => Ok((Value::Bool(false), idx + 5)),
-      Some('N') if self.word(idx, "NaN") => {
-        self.refuse("NaN");
-        Ok((Value::Null, idx + 3))
+      Some('N') if self.word(idx, NAN) => {
+        self.refuse(NAN);
+        Ok((Value::Null, idx + NAN.len()))
       }
-      Some('I') if self.word(idx, "Infinity") => {
-        self.refuse("Infinity");
-        Ok((Value::Null, idx + 8))
+      Some('I') if self.word(idx, INFINITY) => {
+        self.refuse(INFINITY);
+        Ok((Value::Null, idx + INFINITY.len()))
       }
-      Some('-') if self.word(idx, "-Infinity") => {
-        self.refuse("-Infinity");
-        Ok((Value::Null, idx + 9))
+      Some('-') if self.word(idx, NEGATIVE_INFINITY) => {
+        self.refuse(NEGATIVE_INFINITY);
+        Ok((Value::Null, idx + NEGATIVE_INFINITY.len()))
       }
       _ => self.number(idx).ok_or(Fail::Stop(idx)),
     }

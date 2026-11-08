@@ -8,9 +8,9 @@ use serde_json::Value;
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::parallel_walk;
-use charliebot_core::v1_sessions::{CONVERSION_SCRIPT, V1_SESSION_CONVERSION_GUIDANCE};
 
 use crate::metadata::MetadataReadError;
+use crate::v1_session_conversion::{CONVERSION_SCRIPT, V1_SESSION_CONVERSION_GUIDANCE};
 
 /// Count session directories whose metadata has no non-null `profile` field. The directories are read in parallel; the
 /// first unreadable one in directory order fails the count.

@@ -287,7 +287,9 @@ mod tests {
       registry,
       repo_root: PathBuf::from("/synthetic/checkout"),
       base_env: agent_base(home),
-      pool: Arc::new(BackendPool::default()),
+      pool: Arc::new(BackendPool::new(Arc::new(
+        charliebot_agents::backend_availability::BackendAvailability::load(home).unwrap(),
+      ))),
     }
   }
 
@@ -503,6 +505,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_command_lane_returns_the_url_the_program_prints() {
     let home = tempfile::tempdir().unwrap();
     let home_path = home.path().join("home");
@@ -521,6 +524,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_command_lane_runs_the_command_on_the_absolute_artifact_path_then_the_lane_options() {
     let current_dir = std::env::current_dir().unwrap();
     let home = tempfile::tempdir_in(&current_dir).unwrap();
@@ -548,6 +552,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_command_lane_nonzero_exit_raises_with_the_exit_code_and_stderr() {
     let home = tempfile::tempdir().unwrap();
     let home_path = home.path().join("home");
@@ -567,6 +572,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_command_lane_refuses_stdout_that_is_not_exactly_one_url() {
     let home = tempfile::tempdir().unwrap();
     let home_path = home.path().join("home");
@@ -589,6 +595,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_command_lane_names_a_program_that_cannot_start() {
     let home = tempfile::tempdir().unwrap();
     let home_path = home.path().join("home");

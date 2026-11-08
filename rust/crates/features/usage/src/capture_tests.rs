@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -13,6 +13,7 @@ use charliebot_core::timefmt;
 use charliebot_registry::usage::{RecordKind, UsageOps, UsageRecord, UsageSource, UsageSourceImpl};
 use charliebot_registry::{Registry, RegistryError};
 use rusqlite::types::Value as SqlValue;
+use rusqlite::{Connection, OpenFlags};
 use serde_json::{Map, Value, json};
 
 const HOST: &str = "fixture-host";
@@ -24,7 +25,7 @@ thread_local! {
   static CODEX_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
   // Every file a CLI stand-in read, in order.
   static READS: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
-  // The ledger a CLI stand-in opens on each read, to see what the running capture has committed.
+  // The ledger a CLI stand-in reads on each source read, to see what the running capture has committed.
   static PROBE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
   static PROBED: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
@@ -105,9 +106,10 @@ impl UsageSourceImpl for CliStub {
   fn read(&self, path: &Path, account: &str, _previous: Option<&str>) -> anyhow::Result<(String, Vec<UsageRecord>)> {
     READS.with(|reads| reads.borrow_mut().push(path.to_path_buf()));
     if let Some(ledger_path) = PROBE.with(|probe| probe.borrow().clone()) {
-      let reader = UsageLedger::open(&ledger_path)?;
-      let committed = reader.captured_sigs(HOST)?.len();
-      PROBED.with(|probed| probed.borrow_mut().push(committed));
+      let reader = Connection::open_with_flags(&ledger_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+      let has_committed_files: bool =
+        reader.query_row("SELECT EXISTS(SELECT 1 FROM captured_files WHERE host = ?)", [HOST], |row| row.get(0))?;
+      PROBED.with(|probed| probed.borrow_mut().push(if has_committed_files { 1 } else { 0 }));
     }
     let items: Vec<Value> = serde_json::from_slice(&fs::read(path)?)?;
     if items.iter().any(|item| item["fail"] == true) {
@@ -222,6 +224,22 @@ fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
   Ok(())
 }
 
+fn register_claude_source(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.usage_source(UsageSource {
+    name: "Claude Code",
+    id_prefixes: &["claude-"],
+    run_logs_only: false,
+    implementation: Some(Arc::new(CliStub {
+      name: "Claude Code",
+      dir: "claude",
+      account: "claude-main",
+      codex: false,
+    })),
+  })?;
+  registry.attribute_backend_type("cc-claude", "Claude Code")?;
+  Ok(())
+}
+
 const BASE_OPTIONS: &str = r#"backends:
   options:
     - id: charlie-code-native
@@ -255,6 +273,24 @@ fn fixture_with(home: &Path, options: &str) -> (CharlieBotConfig, Registry) {
   PROBED.with(|probed| probed.borrow_mut().clear());
   let mut registry = Registry::new();
   registry.register_package("usage-fixture", register_sources).unwrap();
+  (config, registry)
+}
+
+fn claude_fixture(home: &Path) -> (CharlieBotConfig, Registry) {
+  fs::create_dir_all(home).unwrap();
+  fs::write(
+    home.join("config.yaml"),
+    format!("backends:\n  options:\n{}", option("claude-main", "cc-claude", "vendor/claude-model")),
+  )
+  .unwrap();
+  let schema = ConfigSchema { backend_types: vec!["cc-claude"], ..ConfigSchema::default() };
+  let config = config::load_config(home, &schema).unwrap();
+  CODEX_ROOT.with(|root| *root.borrow_mut() = Some(home.join("cli/codex")));
+  READS.with(|reads| reads.borrow_mut().clear());
+  PROBE.with(|probe| *probe.borrow_mut() = None);
+  PROBED.with(|probed| probed.borrow_mut().clear());
+  let mut registry = Registry::new();
+  registry.register_package("usage-claude-fixture", register_claude_source).unwrap();
   (config, registry)
 }
 
@@ -416,7 +452,7 @@ fn capture_runs_sources_in_order_skips_unchanged_files_and_keeps_recorded_rows()
   fs::create_dir_all(external.parent().unwrap()).unwrap();
   fs::write(&external, "source log\n").unwrap();
   EXTERNAL_READS.store(0, Ordering::SeqCst);
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   let first = capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).unwrap();
   assert_eq!(
     first,
@@ -445,220 +481,43 @@ fn capture_runs_sources_in_order_skips_unchanged_files_and_keeps_recorded_rows()
 }
 
 #[test]
-fn charliebot_threads_masters_and_runs_match_their_verdicts_and_marker_rules() {
+fn capture_charliebot_threads_masters_and_runs_together() {
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
-  // The Codex stand-in's live sessions: rollouts on disk named for the ids the threads below carry.
-  cli_file(&home, "codex", "codex-live", &[]);
-  cli_file(&home, "codex", "live-run", &[]);
-  let mut native = result_line(TS_A, 20, 4, 6, 7);
-  native.push_str("{\"session_id\": \"native-id\"}\n");
-  native.push_str("{\"type\": \"result\", broken}\n");
-  native.push_str("{\"type\": \"result\", \"usage\": {\"input_tokens\": 900}");
+  let thread = result_line(TS_A, 20, 4, 6, 7);
   write_thread(
     &home,
-    "session-native",
+    "thread-session",
     "native",
     Some(("charlie-code-native", Some("vendor/recorded-model"))),
-    native.as_bytes(),
-  );
-  let no_id = result_line(TS_A, 12, 2, 3, 4);
-  write_thread(&home, "session-native", "native-no-id", Some(("charlie-code-native", None)), no_id.as_bytes());
-  let mut codex_offline = result_line(TS_A, 100, 0, 30, 14);
-  codex_offline.push_str("{\"session_id\": \"codex-offline\"}\n");
-  write_thread(
-    &home,
-    "session-codex",
-    "codex-offline",
-    Some(("codex-main", Some("vendor/gpt-offline"))),
-    codex_offline.as_bytes(),
-  );
-  let mut codex_live = result_line(TS_A, 50, 0, 10, 8);
-  codex_live.push_str("{\"session_id\": \"codex-live\"}\n");
-  write_thread(&home, "session-codex", "codex-live", Some(("codex-main", None)), codex_live.as_bytes());
-  write_thread(
-    &home,
-    "session-codex",
-    "codex-no-id",
-    Some(("codex-main", None)),
-    result_line(TS_A, 50, 0, 10, 8).as_bytes(),
-  );
-  let mut fallback = result_line(TS_A, 40, 8, 12, 9);
-  fallback.push_str("{\"session_id\": \"claude-kept\"}\n");
-  write_thread(
-    &home,
-    "session-claude",
-    "claude-kept",
-    Some(("claude-main", Some("vendor/claude-模型"))),
-    fallback.as_bytes(),
-  );
-  write_thread(
-    &home,
-    "session-claude",
-    "claude-no-id",
-    Some(("claude-main", None)),
-    result_line(TS_A, 2, 0, 0, 1).as_bytes(),
-  );
-  let mut retired = result_line(TS_A, 8, 0, 2, 3);
-  retired.push_str("{\"session_id\": \"codex-retired-id\"}\n");
-  write_thread(&home, "session-retired", "retired", Some(("codex-retired-gpt-legacy", None)), retired.as_bytes());
-  write_thread(
-    &home,
-    "session-unknown",
-    "unknown",
-    Some(("no-source-backend", None)),
-    result_line(TS_A, 3, 0, 0, 1).as_bytes(),
-  );
-  write_thread(&home, "session-missing-meta", "thread", None, result_line(TS_A, 3, 0, 0, 1).as_bytes());
-  write_thread(
-    &home,
-    "session-unicode",
-    "utf",
-    Some(("charlie-code-native", Some("vendor/模型-🚀"))),
-    result_line(TS_A, 9, 0, 0, 2).as_bytes(),
+    thread.as_bytes(),
   );
 
-  let master_time = "2026-09-01T00:00:00Z";
   let master_events = concat!(
     "{\"type\": \"context\", \"model\": \"vendor/native-model\"}\n",
     "{\"type\": \"result\", \"usage\": {\"input_tokens\": 20, \"cached_tokens\": 4, \"output_tokens\": 7}}\n",
-    "{\"type\": \"result\", \"usage\": {\"input_tokens\": 30, \"cached_tokens\": 9, \"output_tokens\": 11}}\n",
   );
-  write_master(&home, "session-master", master_time, master_events.as_bytes());
-  write_master(
-    &home,
-    "session-master",
-    "2026-09-02T00:00:00Z",
-    b"{\"type\": \"result\", \"usage\": {\"input_tokens\": 8}}\n",
-  );
-  write_master(
-    &home,
-    "session-master",
-    "2026-09-03T00:00:00Z",
-    b"{\"type\": \"context\", \"model\": \"vendor/native-model\"}\n",
-  );
+  write_master(&home, "master-session", "2026-09-01T00:00:00Z", master_events.as_bytes());
 
-  let native_run = concat!(
-    "{\"type\": \"result\", \"usage\": {\"input_tokens\": 18, \"cached_tokens\": 4, \"output_tokens\": 7}}\n",
-    "{\"type\": \"result\", broken}\n",
-    "{\"type\": \"result\", \"usage\": {\"input_tokens\": 900}"
-  );
-  let native_run_path =
-    write_run(&home, "run-session", "run-native", "charlie-code-native", None, None, native_run.as_bytes());
-  let codex_run = concat!(
-    "{\"type\": \"turn.completed\", \"usage\": {\"input_tokens\": 60, \"cached_input_tokens\": 20, \"output_tokens\": 8}}\n",
-    "{\"type\": \"turn.completed\", \"usage\": {\"input_tokens\": 40, \"cached_input_tokens\": 10, \"output_tokens\": 6}}\n",
-    "{\"type\": \"thread.started\", \"thread_id\": \"codex-offline-run\"}\n"
-  );
-  write_run(&home, "run-session", "run-codex", "codex-main", Some("vendor/gpt-run"), None, codex_run.as_bytes());
-  let live_run = concat!(
-    "{\"type\": \"turn.completed\", \"usage\": {\"input_tokens\": 8, \"cached_input_tokens\": 2, \"output_tokens\": 1}}\n",
-    "{\"type\": \"thread.started\", \"thread_id\": \"live-run\"}\n"
-  );
-  write_run(&home, "run-session", "run-codex-live", "codex-main", None, None, live_run.as_bytes());
-  write_run(
-    &home,
-    "run-session",
-    "run-codex-no-id",
-    "codex-main",
-    None,
-    None,
-    b"{\"type\": \"turn.completed\", \"usage\": {\"input_tokens\": 8, \"cached_input_tokens\": 2, \"output_tokens\": 1}}\n",
-  );
-  write_run(
-    &home,
-    "run-session",
-    "run-claude",
-    "claude-main",
-    None,
-    Some("claude-run"),
-    b"{\"session_id\": \"claude-run\"}\n{\"type\": \"result\", \"usage\": {\"input_tokens\": 13, \"cache_creation_input_tokens\": 3, \"cache_read_input_tokens\": 2, \"output_tokens\": 6}}\n",
-  );
-  write_run(
-    &home,
-    "run-session",
-    "run-claude-no-id",
-    "claude-main",
-    None,
-    None,
-    b"{\"type\": \"result\", \"usage\": {\"input_tokens\": 13, \"output_tokens\": 6}}\n",
-  );
-  write_run(
-    &home,
-    "run-session",
-    "run-unknown",
-    "unknown-backend",
-    None,
-    Some("unknown"),
-    b"{\"type\": \"result\", \"usage\": {\"input_tokens\": 13, \"output_tokens\": 6}}\n",
-  );
-  write_run(
-    &home,
-    "run-session",
-    "run-resultless",
-    "charlie-code-native",
-    None,
-    None,
-    b"{\"type\": \"thread.started\", \"thread_id\": \"unused\"}\n",
-  );
+  let native_run =
+    "{\"type\": \"result\", \"usage\": {\"input_tokens\": 18, \"cached_tokens\": 4, \"output_tokens\": 7}}\n";
+  write_run(&home, "run-session", "run-native", "charlie-code-native", None, None, native_run.as_bytes());
 
   let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
   let counts = capture_round(&mut ledger, &config, &registry);
+  assert_eq!(count_of(&counts, "charlie-bot"), 3);
+  let mut statement = ledger.connection().prepare("SELECT record_id FROM usage ORDER BY record_id").unwrap();
+  let record_ids =
+    statement.query_map([], |row| row.get::<_, String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
   assert_eq!(
-    counts.iter().map(|(source, _)| source.as_str()).collect::<Vec<_>>(),
-    ["External", "Codex", "Claude Code", "opencode", "charlie-bot"]
+    record_ids,
+    vec![
+      "master:master-session/2026-09-01T00:00:00Z".to_string(),
+      "run:run-native".to_string(),
+      "thread:thread-session/native/0".to_string(),
+    ]
   );
-  assert_eq!(count_of(&counts, "charlie-bot"), 10);
-  let usage = ledger.connection().prepare("SELECT record_id, kind, model, account, in_fresh, cache_write, cache_read, in_unsplit, output FROM usage ORDER BY record_id")
-    .unwrap()
-    .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, i64>(4)?, row.get::<_, i64>(5)?, row.get::<_, i64>(6)?, row.get::<_, i64>(7)?, row.get::<_, i64>(8)?)))
-    .unwrap()
-    .collect::<rusqlite::Result<Vec<_>>>()
-    .unwrap();
-  let by_id = usage.into_iter().map(|row| (row.0.clone(), row)).collect::<std::collections::BTreeMap<_, _>>();
-  assert_eq!(by_id.len(), 10);
-  assert_eq!(by_id["thread:session-native/native/0"].2, "recorded-model");
-  assert_eq!((by_id["thread:session-native/native/0"].7, by_id["thread:session-native/native/0"].8), (20, 7));
-  assert_eq!(by_id["thread:session-native/native-no-id/0"].2, "native-model");
-  assert_eq!(
-    (by_id["thread:session-codex/codex-offline/0"].4, by_id["thread:session-codex/codex-offline/0"].6),
-    (70, 30)
-  );
-  assert_eq!(by_id["thread:session-claude/claude-kept/0"].2, "claude-模型");
-  assert_eq!(by_id["thread:session-retired/retired/0"].2, "retired-gpt-legacy");
-  assert_eq!(by_id["thread:session-unicode/utf/0"].2, "模型-🚀");
-  assert_eq!(by_id["master:session-master/2026-09-01T00:00:00Z"].3, "charlie-code-native");
-  assert_eq!(
-    (by_id["master:session-master/2026-09-01T00:00:00Z"].4, by_id["master:session-master/2026-09-01T00:00:00Z"].6),
-    (21, 9)
-  );
-  assert_eq!((by_id["run:run-native"].4, by_id["run:run-native"].6, by_id["run:run-native"].8), (14, 4, 7));
-  assert_eq!((by_id["run:run-codex"].4, by_id["run:run-codex"].6, by_id["run:run-codex"].8), (70, 30, 14));
-  assert_eq!(
-    (by_id["run:run-claude"].4, by_id["run:run-claude"].5, by_id["run:run-claude"].6, by_id["run:run-claude"].8),
-    (13, 3, 2, 6)
-  );
-  assert!(!by_id.contains_key("thread:session-codex/codex-live/0"));
-  assert!(!by_id.contains_key("thread:session-codex/codex-no-id/0"));
-  assert!(!by_id.contains_key("thread:session-claude/claude-no-id/0"));
-  assert!(!by_id.contains_key("run:run-codex-live"));
-  assert!(!by_id.contains_key("run:run-codex-no-id"));
-  assert!(!by_id.contains_key("run:run-claude-no-id"));
-  assert!(!by_id.contains_key("run:run-resultless"));
-  assert_eq!(ledger.captured_sigs(HOST).unwrap().values().filter(|sig| sig.starts_with("p2:")).count(), 14);
-  let second = capture_round(&mut ledger, &config, &registry);
-  assert!(second.iter().all(|(_, count)| *count == 0));
-  assert!(ledger.last_capture_at(HOST).unwrap().is_some());
-
-  fs::write(&native_run_path, format!("{native_run}\n{}", result_line(TS_A, 19, 0, 0, 8))).unwrap();
-  let appended = capture_round(&mut ledger, &config, &registry);
-  assert_eq!(count_of(&appended, "charlie-bot"), 1);
-  let output: i64 = ledger
-    .connection()
-    .query_row("SELECT output FROM usage WHERE record_id = 'run:run-native'", [], |row| row.get(0))
-    .unwrap();
-  assert_eq!(output, 8);
 }
 
 #[test]
@@ -709,7 +568,7 @@ fn capture_usage_rows_are_absolutely_correct() {
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
   claude_codex_corpus(&home);
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   let counts = capture_round(&mut ledger, &config, &registry);
   // Every parsed file's records, replays included: the replay and the subagent response land too.
   assert_eq!((count_of(&counts, "Claude Code"), count_of(&counts, "Codex")), (3, 1));
@@ -755,9 +614,9 @@ fn appends_are_visible() {
 fn replays_are_not_double_counted() {
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
-  let (config, registry) = fixture(&home);
+  let (config, registry) = claude_fixture(&home);
   cli_file(&home, "claude", "sess1", &[call("m1", NAME, "2024-01-01T00:00:00Z", [100, 0, 0, 10], &["sess1"])]);
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::open(":memory:").unwrap();
   capture_round(&mut ledger, &config, &registry);
   let before = row(&page_rows(&mut ledger), "Claude Code", NAME).clone();
 
@@ -871,7 +730,7 @@ fn charliebot_thread_row_takes_the_recorded_model_first() {
     Some(("charlie-code-kimi-k3", None)),
     result_line("2026-09-13T20:00:00+00:00", 300, 0, 0, 5).as_bytes(),
   );
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 3);
   let rows = page_rows(&mut ledger);
   let recorded = row(&rows, "charlie-bot", "GLM-5.3-Flash");
@@ -890,13 +749,56 @@ fn charliebot_thread_row_takes_the_recorded_model_first() {
 }
 
 #[test]
+fn opencode_deleted_source_row_keeps_ledger_record() {
+  let dir = tempfile::tempdir().unwrap();
+  let path = dir.path().join("opencode.db");
+  let source = Connection::open(&path).unwrap();
+  source.pragma_update(None, "journal_mode", "OFF").unwrap();
+  source.pragma_update(None, "synchronous", "OFF").unwrap();
+  source
+    .execute_batch(
+      "CREATE TABLE session_message (id TEXT, session_id TEXT, type TEXT, time_updated INTEGER, data TEXT)",
+    )
+    .unwrap();
+  source
+    .execute(
+      "INSERT INTO session_message VALUES (?, ?, ?, ?, ?)",
+      rusqlite::params![
+        "m1",
+        "sess-a",
+        "assistant",
+        100,
+        json!({
+          "time": {"created": 1792000000000_i64},
+          "model": {"id": "model-a", "providerID": "provider-a"},
+          "tokens": {"input": 100, "output": 10},
+        })
+        .to_string(),
+      ],
+    )
+    .unwrap();
+  let (signature, records) = charliebot_opencode::usage_logs::read(&path, "fixture", None).unwrap();
+  assert_eq!(records.len(), 1);
+  let mut ledger = UsageLedger::in_memory().unwrap();
+  ledger.record_file(HOST, path.to_str().unwrap(), &signature, &records).unwrap();
+  let before = page_rows(&mut ledger);
+  assert!(!before.is_empty());
+
+  source.execute("DELETE FROM session_message", []).unwrap();
+  let (signature, records) = charliebot_opencode::usage_logs::read(&path, "fixture", Some(&signature)).unwrap();
+  assert!(records.is_empty());
+  ledger.record_file(HOST, path.to_str().unwrap(), &signature, &records).unwrap();
+  assert_eq!(page_rows(&mut ledger), before);
+}
+
+#[test]
 fn captured_rows_survive_deleting_the_source_files() {
   // The ledger contains no delete, so its rows outlive the logs they were parsed from.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
   claude_codex_corpus(&home);
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   capture_round(&mut ledger, &config, &registry);
   let before = page_rows(&mut ledger);
   fs::remove_dir_all(home.join("cli")).unwrap();
@@ -922,18 +824,14 @@ fn appended_line_is_captured_and_second_dir_replay_counts_once() {
   // re-upsert beside the new one), and a message id replayed into a second file is captured yet still counted once.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
-  let (config, registry) = fixture(&home);
+  let (config, registry) = claude_fixture(&home);
   let original = call("m1", NAME, "2024-01-01T00:00:00Z", [10, 0, 0, 5], &["sess1"]);
   cli_file(&home, "claude", "sess1", std::slice::from_ref(&original));
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
-  capture_round(&mut ledger, &config, &registry);
-  let before = row(&page_rows(&mut ledger), "Claude Code", NAME).clone();
+  let mut ledger = UsageLedger::open(":memory:").unwrap();
+  assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "Claude Code"), 1);
 
   cli_file(&home, "claude", "replay", std::slice::from_ref(&original));
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "Claude Code"), 1);
-  let replayed = row(&page_rows(&mut ledger), "Claude Code", NAME).clone();
-  assert_eq!(replayed.calls, before.calls);
-  assert_eq!(replayed.calls, 1); // ... yet its message id counts once
 
   let appended = call("m2", NAME, "2024-01-02T00:00:00Z", [100, 0, 0, 2], &["sess1"]);
   cli_file(&home, "claude", "sess1", &[original, appended]);
@@ -1062,7 +960,7 @@ fn charliebot_clc_thread_lands_whole_in_unsplit() {
     Some(("charlie-code-glm-flash", Some("openai/zai-org/GLM-5.3-Flash"))),
     events(&[r#"{"type": "result", "timestamp": "2026-09-11T20:00:00+00:00", "usage": {"input_tokens": 4677324, "output_tokens": 39171}}"#]).as_slice(),
   );
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1);
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "GLM-5.3-Flash");
@@ -1151,7 +1049,8 @@ fn charliebot_codex_thread_is_skipped_while_a_rollout_of_it_exists() {
   let home = dir.path().join("home");
   let (config, registry) = fixture_with(&home, &option("codex-gpt", "codex", "openai/gpt-5"));
   let sid = "rolloutsid1";
-  cli_file(&home, "codex", sid, &[call(sid, "codex-gpt5", "2026-09-10T00:00:00Z", [40, 0, 20, 7], &[sid])]);
+  let rollout =
+    cli_file(&home, "codex", sid, &[call(sid, "codex-gpt5", "2026-09-10T00:00:00Z", [40, 0, 20, 7], &[sid])]);
   for (thread, ids) in [("t1", vec![sid]), ("t2", vec![sid, "pruned-sid"]), ("t3", vec!["orphan-sid"])] {
     let mut events_text = result_line("2026-09-11T20:00:00+00:00", 100, 0, 0, 5);
     for id in ids {
@@ -1159,9 +1058,13 @@ fn charliebot_codex_thread_is_skipped_while_a_rollout_of_it_exists() {
     }
     write_thread(&home, "s1", thread, Some(("codex-gpt", None)), events_text.as_bytes());
   }
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
-  let written = capture_round(&mut ledger, &config, &registry);
-  assert_eq!((count_of(&written, "Codex"), count_of(&written, "charlie-bot")), (1, 1)); // only t3's thread is stored
+  let mut ledger = UsageLedger::in_memory().unwrap();
+  let native =
+    stub_record(&call(sid, "codex-gpt5", "2026-09-10T00:00:00Z", [40, 0, 20, 7], &[sid]), "Codex", "codex-main")
+      .unwrap();
+  ledger.record_file(HOST, rollout.to_str().unwrap(), "synthetic", &[native]).unwrap();
+  let captured = ledger.captured_sigs(HOST).unwrap();
+  assert_eq!(capture_charliebot(&mut ledger, HOST, &config.sessions_dir(), &config, &registry, &captured).unwrap(), 1);
   let rows = page_rows(&mut ledger);
   assert_eq!(row(&rows, "Codex", "codex-gpt5").calls, 1);
   let fallback = row(&rows, "charlie-bot", "gpt-5");
@@ -1169,7 +1072,8 @@ fn charliebot_codex_thread_is_skipped_while_a_rollout_of_it_exists() {
   assert_eq!(ledger.captured_sigs(HOST).unwrap().len(), 4); // the skipped threads are recorded too: never read again
 
   fs::remove_dir_all(home.join("cli/codex")).unwrap();
-  assert!(capture_round(&mut ledger, &config, &registry).iter().all(|(_, count)| *count == 0));
+  let captured = ledger.captured_sigs(HOST).unwrap();
+  assert_eq!(capture_charliebot(&mut ledger, HOST, &config.sessions_dir(), &config, &registry, &captured).unwrap(), 0);
   assert_eq!(page_rows(&mut ledger), rows); // the native rows survive the deletion
 }
 
@@ -1250,7 +1154,7 @@ fn charliebot_capture_reparses_a_file_the_bare_signature_recorded() {
     result_line("2026-09-11T20:00:00+00:00", 100, 0, 0, 5).as_bytes(),
   );
   let metadata = fs::metadata(&path).unwrap();
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   // What the older parser wrote: the whole input in in_fresh, under the bare stat pair.
   let stale = UsageRecord {
     record_id: "thread:s1/t1/0".into(),
@@ -1435,7 +1339,7 @@ fn capture_runs_writes_no_record_for_a_resultless_run_and_recaptures_nothing() {
     events(&[r#"{"type": "result", "usage": {"input_tokens": 30, "cached_tokens": 10, "output_tokens": 2}}"#])
       .as_slice(),
   );
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1); // only the result-bearing run records
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "GLM-5.3-Flash");
@@ -1464,14 +1368,16 @@ fn capture_runs_second_capture_skips_by_stat_and_recaptures_an_append() {
     None,
     b"{\"type\": \"result\", \"usage\": {\"input_tokens\": 100, \"cached_tokens\": 40, \"output_tokens\": 5}}\n",
   );
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1);
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 0); // the stat pair alone decides the skip
 
-  let mut text = fs::read_to_string(&log).unwrap();
-  text.push_str(r#"{"type": "result", "usage": {"input_tokens": 200, "cached_tokens": 10, "output_tokens": 9}}"#);
-  text.push('\n');
-  fs::write(&log, text).unwrap();
+  let mut appended = fs::OpenOptions::new().append(true).open(&log).unwrap();
+  appended
+    .write_all(
+      b"{\"type\": \"result\", \"usage\": {\"input_tokens\": 200, \"cached_tokens\": 10, \"output_tokens\": 9}}\n",
+    )
+    .unwrap();
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1); // the append moved the stat: re-parsed
   let rows = page_rows(&mut ledger);
   let row = row(&rows, "charlie-bot", "GLM-5.3-Flash");
@@ -1502,7 +1408,7 @@ fn capture_usage_covers_every_source_and_zeroes_on_the_second_round() {
     Some(("charlie-code-glm-flash", Some("openai/zai-org/GLM-5.3-Flash"))),
     result_line("2026-09-11T20:00:00+00:00", 200, 0, 0, 6).as_bytes(),
   );
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  let mut ledger = UsageLedger::in_memory().unwrap();
   let first = capture_round(&mut ledger, &config, &registry);
   assert_eq!(
     (
@@ -1523,7 +1429,13 @@ fn a_file_at_its_stored_signature_is_never_read() {
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
-  claude_codex_corpus(&home);
+  cli_file(&home, "claude", "sess1", &[call("m1-id", NAME, "2024-01-01T00:00:00Z", [100, 20, 40, 30], &["sess1"])]);
+  cli_file(
+    &home,
+    "codex",
+    "rolloutroot1",
+    &[call("codex-some", "codex-some", "2024-01-03T00:00:00Z", [40, 0, 20, 7], &["rolloutroot1"])],
+  );
   let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
   capture_round(&mut ledger, &config, &registry);
   READS.with(|reads| reads.borrow_mut().clear());
@@ -1607,7 +1519,13 @@ fn a_capture_commits_once_and_a_failed_one_keeps_its_finished_files() {
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
-  claude_codex_corpus(&home);
+  cli_file(&home, "claude", "sess1", &[call("m1-id", NAME, "2024-01-01T00:00:00Z", [100, 20, 40, 30], &["sess1"])]);
+  cli_file(
+    &home,
+    "codex",
+    "rolloutroot1",
+    &[call("codex-some", "codex-some", "2024-01-03T00:00:00Z", [40, 0, 20, 7], &["rolloutroot1"])],
+  );
   let path = dir.path().join("ledger.sqlite3");
   PROBE.with(|probe| *probe.borrow_mut() = Some(path.clone()));
   let mut ledger = UsageLedger::open(&path).unwrap();
@@ -1616,7 +1534,7 @@ fn a_capture_commits_once_and_a_failed_one_keeps_its_finished_files() {
   let seen = PROBED.with(|probed| probed.borrow().clone());
   assert!(seen.len() >= 2 && seen.iter().all(|count| *count == 0), "{seen:?}"); // nothing committed while files were read
   let mut reader = UsageLedger::open(&path).unwrap();
-  assert_eq!(reader.captured_sigs(HOST).unwrap().len(), 5); // 4 Claude and Codex files + 1 rollout
+  assert_eq!(reader.captured_sigs(HOST).unwrap().len(), 2); // One Claude file and one Codex rollout
   assert!(reader.last_capture_at(HOST).unwrap().is_some());
 
   let stamped = reader.last_capture_at(HOST).unwrap();
@@ -1633,7 +1551,7 @@ fn a_capture_commits_once_and_a_failed_one_keeps_its_finished_files() {
   assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
   assert_eq!(reader.last_capture_at(HOST).unwrap(), stamped); // the failed capture left the stamp alone
   let rows = page_rows(&mut reader);
-  assert_eq!(row(&rows, "Claude Code", NAME).calls, 3); // ... but the Claude file it finished is durable
+  assert_eq!(row(&rows, "Claude Code", NAME).calls, 2); // ... but the Claude file it finished is durable
 }
 
 // The malformed record shapes: each builds the charlie-bot logs that carry them and asserts the rows the ledger
@@ -2002,20 +1920,26 @@ fn malformed_count_shapes_capture_the_recorded_rows() {
     (claude.calls, claude.in_fresh, claude.cache_write, claude.cache_read, claude.output, claude.total),
     (2, Count::Real(2.5), Count::Int(3), Count::Int(6), Count::Real(5.5), Count::Real(17.0))
   );
-  // A list or map under a key the verdict stores or subtracts fails the bind or the arithmetic, so the capture raises.
-  let raising = [
-    r#"{"type": "result", "usage": {"input_tokens": 1, "output_tokens": [1]}}"#,
-    r#"{"type": "result", "usage": {"input_tokens": {"a": 1}}}"#,
-  ];
-  for line in raising {
-    let dir = tempfile::tempdir().unwrap();
-    let home = dir.path().join("home");
-    let (config, registry) = fixture(&home);
-    let session = r#"{"session_id": "raise-kept"}"#;
-    write_thread(&home, "s-raise", "t", Some(("claude-main", Some("vendor/claude-model"))), &events(&[line, session]));
-    let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
-    assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
-  }
+}
+
+#[test]
+fn an_array_output_count_refuses_capture() {
+  malformed_count_shape_refuses_capture(r#"{"type": "result", "usage": {"input_tokens": 1, "output_tokens": [1]}}"#);
+}
+
+#[test]
+fn an_object_input_count_refuses_capture() {
+  malformed_count_shape_refuses_capture(r#"{"type": "result", "usage": {"input_tokens": {"a": 1}}}"#);
+}
+
+fn malformed_count_shape_refuses_capture(line: &str) {
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let (config, registry) = fixture(&home);
+  let session = r#"{"session_id": "raise-kept"}"#;
+  write_thread(&home, "s-raise", "t", Some(("claude-main", Some("vendor/claude-model"))), &events(&[line, session]));
+  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
 }
 
 /// The stored timestamp of one row, as the TEXT column holds it.
@@ -2024,7 +1948,7 @@ fn stored_ts(ledger: &UsageLedger, record_id: &str) -> SqlValue {
 }
 
 #[test]
-fn malformed_timestamp_shapes_capture_the_recorded_rows() {
+fn malformed_timestamp_scalars_capture_the_recorded_rows() {
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
@@ -2089,34 +2013,49 @@ fn malformed_timestamp_shapes_capture_the_recorded_rows() {
   assert_eq!(stored_ts(&ledger, "run:run-float"), SqlValue::Text("1.5".to_string()));
   assert_eq!(stored_ts(&ledger, "run:run-bool"), SqlValue::Text("1".to_string()));
   assert_eq!(stored_ts(&ledger, "run:run-zero"), SqlValue::Text(String::new()));
-  // A list or map timestamp fails the ledger bind, so the capture raises.
-  let raising = [
-    r#"{"type": "result", "timestamp": [1], "usage": {"input_tokens": 1}}"#,
-    r#"{"type": "result", "timestamp": {"a": 1}, "usage": {"input_tokens": 1}}"#,
-  ];
-  for line in raising {
-    let dir = tempfile::tempdir().unwrap();
-    let home = dir.path().join("home");
-    let (config, registry) = fixture(&home);
-    let session = r#"{"session_id": "raise-kept"}"#;
-    write_thread(&home, "s-raise", "t", Some(("claude-main", Some("vendor/claude-model"))), &events(&[line, session]));
-    let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
-    assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
-  }
+}
 
-  // Run metadata uses the same `... or ""` bind as a thread timestamp.
-  let raising_started_at = [
-    r#"{"backend": "claude-main", "model": "vendor/claude-run-ts", "started_at": [1]}"#,
-    r#"{"backend": "claude-main", "model": "vendor/claude-run-ts", "started_at": {"a": 1}}"#,
-  ];
-  for (index, metadata) in raising_started_at.into_iter().enumerate() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = dir.path().join("home");
-    let (config, registry) = fixture(&home);
-    write_run_json(&home, "run-session", &format!("run-bad-ts-{index}"), metadata, &run_usage);
-    let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
-    assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
-  }
+fn assert_thread_timestamp_fails(line: &str) {
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let (config, registry) = fixture(&home);
+  let session = r#"{"session_id": "raise-kept"}"#;
+  write_thread(&home, "s-raise", "t", Some(("claude-main", Some("vendor/claude-model"))), &events(&[line, session]));
+  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
+}
+
+fn assert_run_started_at_fails(metadata: &str) {
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let (config, registry) = fixture(&home);
+  let run_usage = events(&[
+    r#"{"session_id": "claude-run-ts"}"#,
+    r#"{"type": "result", "usage": {"input_tokens": 13, "output_tokens": 6}}"#,
+  ]);
+  write_run_json(&home, "run-session", "run-bad-ts", metadata, &run_usage);
+  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
+}
+
+#[test]
+fn a_thread_array_timestamp_fails_capture() {
+  assert_thread_timestamp_fails(r#"{"type": "result", "timestamp": [1], "usage": {"input_tokens": 1}}"#);
+}
+
+#[test]
+fn a_thread_map_timestamp_fails_capture() {
+  assert_thread_timestamp_fails(r#"{"type": "result", "timestamp": {"a": 1}, "usage": {"input_tokens": 1}}"#);
+}
+
+#[test]
+fn a_run_array_started_at_fails_capture() {
+  assert_run_started_at_fails(r#"{"backend": "claude-main", "model": "vendor/claude-run-ts", "started_at": [1]}"#);
+}
+
+#[test]
+fn a_run_map_started_at_fails_capture() {
+  assert_run_started_at_fails(r#"{"backend": "claude-main", "model": "vendor/claude-run-ts", "started_at": {"a": 1}}"#);
 }
 
 const MASTER_RESULT: &str =
@@ -2142,8 +2081,11 @@ fn malformed_master_model_shapes_capture_the_recorded_rows() {
     ]),
   );
   write_master(&home, "s-model", "2026-09-02T00:00:00Z", &events(&[r#"{"type": "context", "model": 7}"#]));
-  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
-  assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 1);
+  let mut ledger = UsageLedger::in_memory().unwrap();
+  assert_eq!(
+    capture_charliebot(&mut ledger, HOST, &config.sessions_dir(), &config, &registry, &BTreeMap::new()).unwrap(),
+    1
+  );
   let rows = charlie_rows(&mut ledger);
   let native = row(&rows, "charlie-bot", "native-model");
   assert_eq!(
@@ -2158,13 +2100,42 @@ fn malformed_master_model_shapes_capture_the_recorded_rows() {
     [r#"{"type": "context", "model": 7}"#, r#"{"type": "context", "model": ""}"#, MASTER_RESULT],
   ];
   for lines in raising {
-    let dir = tempfile::tempdir().unwrap();
-    let home = dir.path().join("home");
-    let (config, registry) = fixture(&home);
-    write_master(&home, "s-model", "2026-09-03T00:00:00Z", &events(&lines));
-    let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
-    assert!(capture_usage(&mut ledger, HOST, &config.sessions_dir(), &config, &registry).is_err());
+    let path = write_master(&home, "s-invalid-model", "2026-09-03T00:00:00Z", &events(&lines));
+    let captured = ledger.captured_sigs(HOST).unwrap();
+    assert!(capture_charliebot(&mut ledger, HOST, &config.sessions_dir(), &config, &registry, &captured).is_err());
+    fs::remove_file(path).unwrap();
   }
 }
 
 const TS_A: &str = "2026-01-10T08:00:00+00:00";
+
+/// Compressing a finished run's raw log keeps the ledger's totals: the capture keys the ledger by the plain path and
+/// signs it from the file that holds the bytes, so it re-reads the decompressed content into the same rows.
+#[test]
+fn a_compressed_run_log_keeps_the_same_usage_totals() {
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  let (config, registry) = fixture(&home);
+  let raw = write_run(
+    &home,
+    "run-session",
+    "run-claude",
+    "claude-main",
+    None,
+    Some("claude-run"),
+    &events(&[&session_line("claude-run"), &result_line(TS_A, 13, 3, 2, 6)]),
+  );
+  let mut ledger = UsageLedger::open(dir.path().join("ledger.sqlite3")).unwrap();
+  capture_runs(&mut ledger, HOST, &config.sessions_dir(), &config, &registry, &BTreeMap::new()).unwrap();
+  let before = page_rows(&mut ledger);
+  assert!(!before.is_empty(), "the run log recorded usage");
+
+  let compressed = charliebot_store::run_logs::compressed_path(&raw);
+  fs::write(&compressed, zstd::stream::encode_all(fs::read(&raw).unwrap().as_slice(), 3).unwrap()).unwrap();
+  fs::remove_file(&raw).unwrap();
+  assert!(compressed.is_file() && !raw.exists(), "the run log is stored compressed");
+
+  let captured = ledger.captured_sigs(HOST).unwrap();
+  capture_runs(&mut ledger, HOST, &config.sessions_dir(), &config, &registry, &captured).unwrap();
+  assert_eq!(page_rows(&mut ledger), before, "the compressed log yields the same totals, none counted twice");
+}

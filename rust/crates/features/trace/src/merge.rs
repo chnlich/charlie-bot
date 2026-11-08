@@ -1,6 +1,7 @@
 //! Trace decoding, event rewriting, gzip output and the per-profile cache.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fs::{self, File, FileTimes};
 use std::io::{Read, Write};
 use std::os::unix::fs::MetadataExt;
@@ -381,15 +382,17 @@ impl IdSequencer {
     self.seen.clear();
   }
 
-  fn admit(&mut self, original: &Value) -> u64 {
+  fn admit(&mut self, original: &Value) -> (u64, bool) {
     let key = value_text(original);
-    if let Some(id) = self.seen.get(&key) {
-      return *id;
+    match self.seen.entry(key) {
+      Entry::Occupied(entry) => (*entry.get(), false),
+      Entry::Vacant(entry) => {
+        let id = self.next_id;
+        entry.insert(id);
+        self.next_id += 1;
+        (id, true)
+      }
     }
-    let id = self.next_id;
-    self.seen.insert(key, id);
-    self.next_id += 1;
-    id
   }
 }
 
@@ -429,8 +432,8 @@ fn merge_one_trace(
     let Some(mut event) = original.as_object().cloned() else {
       return Err(attribute_failure(original, "get"));
     };
-    let phase = event.get("ph").cloned().unwrap_or(Value::Null);
-    if walk_drops(&event, &phase, slim)? {
+    let remap_flow_id = matches!(event.get("ph").and_then(Value::as_str), Some("s" | "t" | "f"));
+    if walk_drops(&event, event.get("ph").unwrap_or(&Value::Null), slim)? {
       continue;
     }
     if slim && let Some(Value::Object(args)) = event.get("args") {
@@ -446,30 +449,25 @@ fn merge_one_trace(
         }
       }
     }
-    let original_pid = event.get("pid").cloned().unwrap_or(Value::Null);
-    let pid_key = value_text(&original_pid);
+    let pid_key = value_text(event.get("pid").unwrap_or(&Value::Null));
     let synthetic_pid = pid_label_lookup
       .get(&pid_key)
       .map(|label| if label == "CPU" { rank_label.clone() } else { format!("{rank_label}/{label}") })
       .unwrap_or_else(|| rank_label.clone());
     event.insert("pid".to_string(), Value::String(synthetic_pid.clone()));
 
-    if let Some(original_tid) = event.get("tid").cloned() {
-      let tid_key = value_text(&original_tid);
-      let first_sight = !tid_seq.seen.contains_key(&tid_key);
-      let synthetic_tid = tid_seq.admit(&original_tid);
+    if let Some(original_tid) = event.get("tid") {
+      let (synthetic_tid, first_sight) = tid_seq.admit(original_tid);
       if first_sight {
-        pending.push(thread_name_event(&synthetic_pid, synthetic_tid, &original_tid, &rank_label));
+        pending.push(thread_name_event(&synthetic_pid, synthetic_tid, original_tid, &rank_label));
         if pending.len() >= MERGE_BATCH_EVENTS {
           batcher.flush(&mut pending);
         }
       }
       event.insert("tid".to_string(), Value::Number(Number::from(synthetic_tid)));
     }
-    if matches!(phase.as_str(), Some("s" | "t" | "f"))
-      && let Some(original_id) = event.get("id").cloned()
-    {
-      let synthetic_id = flow_seq.admit(&original_id);
+    if remap_flow_id && let Some(original_id) = event.get("id") {
+      let (synthetic_id, _) = flow_seq.admit(original_id);
       event.insert("id".to_string(), Value::Number(Number::from(synthetic_id)));
     }
     pending.push(Value::Object(event));
@@ -478,7 +476,7 @@ fn merge_one_trace(
     }
   }
 
-  let meta_tid = tid_seq.admit(&Value::String("meta".to_string()));
+  let (meta_tid, _) = tid_seq.admit(&Value::String("meta".to_string()));
   for (synthetic_pid, (sort_index, label)) in synthetic_meta {
     for (name, args) in [
       ("process_name", serde_json::json!({"name": label})),
@@ -857,8 +855,9 @@ mod differential_tests {
   use std::time::{Duration, SystemTime};
 
   use flate2::read::GzDecoder;
-  use serde::Serialize;
+  use serde::{Deserialize, Serialize};
   use serde_json::Value;
+  use serde_json::value::RawValue;
   use tempfile::tempdir;
 
   use super::*;
@@ -894,77 +893,164 @@ mod differential_tests {
     mode: &'a str,
   }
 
+  /// The fixture's borrowed form: `RawValue` and `&str` references leave the corpus bytes in the fixture,
+  /// so a case parses only its own paths and references.
+  #[derive(Deserialize)]
+  struct GoldenFixture<'a> {
+    source: Value,
+    #[serde(borrow)]
+    corpus: HashMap<String, &'a RawValue>,
+    #[serde(borrow)]
+    case: &'a RawValue,
+  }
+
+  #[derive(Deserialize)]
+  struct GoldenCase<'a> {
+    #[serde(borrow)]
+    name: &'a str,
+    #[serde(borrow)]
+    paths: Vec<&'a str>,
+    slim: bool,
+    #[serde(borrow)]
+    references: HashMap<String, GoldenReference<'a>>,
+    #[serde(borrow)]
+    cache_keys: HashMap<String, &'a RawValue>,
+  }
+
+  #[derive(Deserialize)]
+  struct GoldenReference<'a> {
+    #[serde(borrow)]
+    gzip_hex: Option<&'a str>,
+    #[serde(borrow)]
+    json_hex: Option<&'a str>,
+    #[serde(borrow)]
+    error: Option<&'a str>,
+  }
+
+  macro_rules! recorded_trace_case {
+    ($name:ident, $fixture:literal) => {
+      #[test]
+      fn $name() {
+        compare_recorded_trace_builders(include_str!($fixture), &["merge", "multi", "direct"]);
+      }
+    };
+  }
+
+  recorded_trace_case!(recorded_trace_bare_array, "../tests/fixtures/trace_cases/case-00.json");
+  recorded_trace_case!(recorded_trace_metadata_siblings_and_numbers, "../tests/fixtures/trace_cases/case-01.json");
+  recorded_trace_case!(recorded_trace_missing_and_string_tids, "../tests/fixtures/trace_cases/case-02.json");
+  recorded_trace_case!(recorded_trace_flow_id_phases, "../tests/fixtures/trace_cases/case-03.json");
+  recorded_trace_case!(recorded_trace_process_labels_and_slim, "../tests/fixtures/trace_cases/case-04.json");
+  recorded_trace_case!(recorded_trace_multi_member_skip, "../tests/fixtures/trace_cases/case-05.json");
+  recorded_trace_case!(recorded_trace_empty_file, "../tests/fixtures/trace_cases/case-06.json");
+  recorded_trace_case!(recorded_trace_all_members_non_trace, "../tests/fixtures/trace_cases/case-07.json");
+  recorded_trace_case!(recorded_trace_non_object_event, "../tests/fixtures/trace_cases/case-08.json");
+  recorded_trace_case!(recorded_trace_truthy_non_object_label_args, "../tests/fixtures/trace_cases/case-09.json");
+  recorded_trace_case!(recorded_trace_truthy_non_string_metadata_name, "../tests/fixtures/trace_cases/case-10.json");
+  recorded_trace_case!(recorded_trace_unexpected_end, "../tests/fixtures/trace_cases/case-11.json");
+  recorded_trace_case!(recorded_trace_trailing_content, "../tests/fixtures/trace_cases/case-12.json");
+  recorded_trace_case!(recorded_trace_missing_colon, "../tests/fixtures/trace_cases/case-13.json");
+  recorded_trace_case!(recorded_trace_missing_comma, "../tests/fixtures/trace_cases/case-14.json");
+  recorded_trace_case!(recorded_trace_invalid_value, "../tests/fixtures/trace_cases/case-15.json");
+  recorded_trace_case!(recorded_trace_invalid_escape, "../tests/fixtures/trace_cases/case-16.json");
+  recorded_trace_case!(recorded_trace_unterminated_string, "../tests/fixtures/trace_cases/case-17.json");
+  recorded_trace_case!(recorded_trace_leading_zero, "../tests/fixtures/trace_cases/case-18.json");
+  recorded_trace_case!(recorded_trace_invalid_object_key, "../tests/fixtures/trace_cases/case-19.json");
+  recorded_trace_case!(recorded_trace_missing_array_comma, "../tests/fixtures/trace_cases/case-20.json");
+  recorded_trace_case!(recorded_trace_missing_object_value, "../tests/fixtures/trace_cases/case-21.json");
+  recorded_trace_case!(recorded_trace_nan_literal, "../tests/fixtures/trace_cases/case-22.json");
+  recorded_trace_case!(recorded_trace_infinity_literal, "../tests/fixtures/trace_cases/case-23.json");
+  recorded_trace_case!(recorded_trace_negative_infinity_literal, "../tests/fixtures/trace_cases/case-24.json");
+  recorded_trace_case!(recorded_trace_control_character, "../tests/fixtures/trace_cases/case-25.json");
+  recorded_trace_case!(recorded_trace_overflow_float, "../tests/fixtures/trace_cases/case-26.json");
+  recorded_trace_case!(recorded_trace_invalid_unicode_escape, "../tests/fixtures/trace_cases/case-27.json");
+
   #[test]
-  fn recorded_trace_builders_match_seeded_corpus() {
-    let bytes = include_bytes!("../tests/fixtures/trace_golden.json.gz");
-    let mut decoder = GzDecoder::new(bytes.as_slice());
-    let mut contents = Vec::new();
-    decoder.read_to_end(&mut contents).unwrap();
-    let fixture: Value = serde_json::from_slice(&contents).unwrap();
-    assert_eq!(fixture["source"]["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
-    assert_eq!(fixture["source"]["mtime_ns"], "$FIXED_MTIME_NS");
+  fn merge_batches_keep_the_event_after_a_full_batch() {
+    let document = serde_json::json!({
+      "traceEvents": (0..=MERGE_BATCH_EVENTS).map(|_| serde_json::json!({"ph": "X"})).collect::<Vec<_>>(),
+    });
+    let mut output = Vec::new();
+    let mut batcher = EventBatcher::new(&mut output);
+    let mut tid_seq = IdSequencer::new(1);
+    let mut flow_seq = IdSequencer::new(1);
+    merge_one_trace(&document, Path::new("rank513.json"), 0, &mut batcher, &mut tid_seq, &mut flow_seq, false).unwrap();
+
+    let fragment = String::from_utf8(output).unwrap();
+    let events: Vec<Value> = serde_json::from_str(&format!("[{fragment}]")).unwrap();
+    assert_eq!(events.len(), MERGE_BATCH_EVENTS + 1);
+    assert_eq!(events[MERGE_BATCH_EVENTS]["pid"], "rank513");
+  }
+
+  #[test]
+  fn recorded_trace_merge_builder_matches_seeded_corpus_last_slice() {
+    compare_recorded_trace_builders(include_str!("../tests/fixtures/trace_cases/case-28.json"), &["merge"]);
+  }
+
+  #[test]
+  fn recorded_trace_multi_builder_matches_seeded_corpus_last_slice() {
+    compare_recorded_trace_builders(include_str!("../tests/fixtures/trace_cases/case-28.json"), &["multi"]);
+  }
+
+  #[test]
+  fn recorded_trace_direct_builder_matches_seeded_corpus_last_slice() {
+    compare_recorded_trace_builders(include_str!("../tests/fixtures/trace_cases/case-28.json"), &["direct"]);
+  }
+
+  fn compare_recorded_trace_builders(contents: &str, builders: &[&str]) {
+    let fixture: GoldenFixture = serde_json::from_str(contents).unwrap();
+    assert_eq!(fixture.source["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+    assert_eq!(fixture.source["mtime_ns"], "$FIXED_MTIME_NS");
+    let cases = [serde_json::from_str::<GoldenCase>(fixture.case.get()).unwrap()];
 
     let root = tempdir().unwrap();
-    for (relative, encoded) in fixture["corpus"].as_object().unwrap() {
-      let path = root.path().join(relative);
-      fs::create_dir_all(path.parent().unwrap()).unwrap();
-      fs::write(&path, decode_hex(encoded.as_str().unwrap())).unwrap();
-      let modified =
-        SystemTime::UNIX_EPOCH + Duration::new(FIXED_MTIME_NS / 1_000_000_000, (FIXED_MTIME_NS % 1_000_000_000) as u32);
-      File::options()
-        .write(true)
-        .open(path)
-        .unwrap()
-        .set_times(std::fs::FileTimes::new().set_modified(modified))
-        .unwrap();
+    for case in &cases {
+      for &relative in &case.paths {
+        let encoded: &str = serde_json::from_str(fixture.corpus[relative].get()).unwrap();
+        let path = root.path().join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, decode_hex(encoded)).unwrap();
+        let modified = SystemTime::UNIX_EPOCH
+          + Duration::new(FIXED_MTIME_NS / 1_000_000_000, (FIXED_MTIME_NS % 1_000_000_000) as u32);
+        File::options()
+          .write(true)
+          .open(path)
+          .unwrap()
+          .set_times(std::fs::FileTimes::new().set_modified(modified))
+          .unwrap();
+      }
     }
 
-    let cases = fixture["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 29);
     let mut comparisons = 0;
     let mut differences = Vec::new();
-    for case in cases {
-      let name = case["name"].as_str().unwrap();
-      let paths: Vec<PathBuf> =
-        case["paths"].as_array().unwrap().iter().map(|path| root.path().join(path.as_str().unwrap())).collect();
-      let slim = case["slim"].as_bool().unwrap();
-      for builder in ["merge", "multi", "direct"] {
-        let reference = &case["references"][builder];
-        let output = tempdir().unwrap();
-        let artifact = output.path().join(format!("{builder}.json.gz"));
-        let actual = actual_artifact(builder, &paths, slim, &artifact);
-        if let Some(expected_error) = reference.get("error") {
-          match actual {
-            Err(actual_error) if normalize_root(&actual_error, root.path()) == expected_error.as_str().unwrap() => {}
-            Err(actual_error) => differences.push(format!(
-              "error text differs for {name}/{builder}: {:?} != {:?}",
-              normalize_root(&actual_error, root.path()),
-              expected_error.as_str().unwrap()
-            )),
-            Ok(_) => differences.push(format!("Rust succeeded for failing Python case {name}/{builder}")),
-          }
-        } else {
-          let recorded = decode_hex(reference["gzip_hex"].as_str().unwrap());
-          let expected_json = decode_hex(reference["json_hex"].as_str().unwrap());
-          if decompress(&recorded) != expected_json {
-            differences.push(format!("recorded reference gzip does not decompress to its JSON for {name}/{builder}"));
-          }
-          match actual {
-            Ok(actual) => {
-              if decompress(&actual) != expected_json {
-                differences.push(format!("JSON bytes differ for {name}/{builder}"));
-              }
-            }
-            Err(error) => differences.push(format!("unexpected Rust error for {name}/{builder}: {error}")),
-          }
-        }
-        comparisons += 1;
-      }
+    for case in &cases {
+      let name = case.name;
+      let paths: Vec<PathBuf> = case.paths.iter().map(|relative| root.path().join(relative)).collect();
+      let output = tempdir().unwrap();
+      let case_paths = paths.as_slice();
+      let output_dir = output.path();
+      let corpus_root = root.path();
+      let builder_checks = std::thread::scope(|scope| {
+        builders
+          .iter()
+          .map(|&builder| {
+            scope.spawn(move || check_builder(builder, case, case_paths, case.slim, output_dir, corpus_root))
+          })
+          .collect::<Vec<_>>()
+          .into_iter()
+          .map(|handle| match handle.join() {
+            Ok(differences) => differences,
+            Err(payload) => std::panic::resume_unwind(payload),
+          })
+          .collect::<Vec<_>>()
+      });
+      comparisons += builder_checks.len();
+      differences.extend(builder_checks.into_iter().flatten());
       for mode in ["gzip", "merge"] {
-        let key = &case["cache_keys"][mode];
+        let key: Value = serde_json::from_str(case.cache_keys[mode].get()).unwrap();
         assert_eq!(key["recorded_python_key"], "$SHA256(paths, slim, mode)");
-        let expected = cache_key(key, root.path(), slim, mode);
-        match merge_cache_key(&paths, slim, mode) {
+        let expected = cache_key(&key, root.path(), case.slim, mode);
+        match merge_cache_key(&paths, case.slim, mode) {
           Ok(actual) if actual == expected => {}
           Ok(actual) => differences.push(format!("cache key differs for {name}/{mode}: {actual} != {expected}")),
           Err(error) => differences.push(format!("cache key failed for {name}/{mode}: {}", error.message())),
@@ -973,6 +1059,47 @@ mod differential_tests {
     }
     println!("matched {comparisons} builder results and {} cache keys", cases.len() * 2);
     assert!(differences.is_empty(), "{} differential mismatches:\n{}", differences.len(), differences.join("\n"));
+  }
+
+  fn check_builder(
+    builder: &str,
+    case: &GoldenCase<'_>,
+    paths: &[PathBuf],
+    slim: bool,
+    output: &Path,
+    root: &Path,
+  ) -> Vec<String> {
+    let name = case.name;
+    let reference = &case.references[builder];
+    let artifact = output.join(format!("{builder}.json.gz"));
+    let actual = actual_artifact(builder, paths, slim, &artifact);
+    let mut differences = Vec::new();
+    if let Some(expected_error) = reference.error {
+      match actual {
+        Err(actual_error) if normalize_root(&actual_error, root) == expected_error => {}
+        Err(actual_error) => differences.push(format!(
+          "error text differs for {name}/{builder}: {:?} != {:?}",
+          normalize_root(&actual_error, root),
+          expected_error
+        )),
+        Ok(_) => differences.push(format!("Rust succeeded for failing Python case {name}/{builder}")),
+      }
+    } else {
+      let recorded = decode_hex(reference.gzip_hex.unwrap());
+      let expected_json = decode_hex(reference.json_hex.unwrap());
+      if decompress(&recorded) != expected_json {
+        differences.push(format!("recorded reference gzip does not decompress to its JSON for {name}/{builder}"));
+      }
+      match actual {
+        Ok(actual) => {
+          if decompress(&actual) != expected_json {
+            differences.push(format!("JSON bytes differ for {name}/{builder}"));
+          }
+        }
+        Err(error) => differences.push(format!("unexpected Rust error for {name}/{builder}: {error}")),
+      }
+    }
+    differences
   }
 
   fn cache_key(reference: &Value, root: &Path, slim: bool, mode: &str) -> String {

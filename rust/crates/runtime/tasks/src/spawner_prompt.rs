@@ -22,6 +22,10 @@ const SECTION_MARKER_SUFFIX: &str = " -->";
 /// The worker contract under the checkout's `prompts/`: the file every worker-template reader loads.
 pub const WORKER_PROMPT_PATH: &str = "prompts/worker.md";
 
+/// The extraction name a failed worker-template read reports: it names the commit a stale checkout predates. The
+/// prompt-body reads of `WORKER_PROMPT_PATH` pass it, so their failure text names one extraction.
+pub const WORKER_PROMPT_EXTRACTION: &str = "worker-prompt";
+
 /// The `{{name}}` tokens of one template, each replaced in order (`str.replace`, never `str.format`).
 pub type Tokens = Vec<(&'static str, String)>;
 
@@ -278,7 +282,7 @@ fn marker_id(line: &str) -> &str {
 /// The worker prompt's sections: `prompts/task_base.md` read first, then `prompts/worker.md`. A section id that both
 /// files define is a template error, never a silent override (`load_worker_prompt_sections`).
 pub fn load_worker_prompt_sections(repo: &Path) -> anyhow::Result<HashMap<String, String>> {
-  let worker = load_marker_sections(&repo.join(WORKER_PROMPT_PATH), &[], "worker-prompt")?;
+  let worker = load_marker_sections(&repo.join(WORKER_PROMPT_PATH), &[], WORKER_PROMPT_EXTRACTION)?;
   let base = load_marker_sections(&repo.join("prompts/task_base.md"), &[], "task-base-prompt")?;
   let mut duplicate: Vec<&String> = base.keys().filter(|id| worker.contains_key(*id)).collect();
   if !duplicate.is_empty() {
@@ -354,6 +358,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn missing_plan_template_resolves_to_its_absolute_path() {
     let repo = tempfile::tempdir().expect("temp repo");
     fs::create_dir(repo.path().join("prompts")).expect("prompts dir");

@@ -360,7 +360,7 @@ fn config(home: &Path) -> CharlieBotConfig {
       worktree_dir: "/synthetic/worktrees".to_string(),
       scratch_dir: "/synthetic/scripts".to_string(),
     },
-    backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
+    backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new(), auto: None },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
     remote_run: charliebot_core::config::RemoteRunConfig::default(),
@@ -490,6 +490,7 @@ fn damaged_errors(snapshot: &PromptSnapshot) -> Value {
 }
 
 #[test]
+#[ignore = "integration"]
 fn snapshots_match_the_recorded_server_output_byte_for_byte() {
   let cases = matrix();
   let prepared: Vec<Prepared> = cases.iter().map(prepare).collect();

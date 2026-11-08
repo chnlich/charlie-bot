@@ -66,6 +66,7 @@ fn stderr(output: &Output) -> String {
 }
 
 #[test]
+#[ignore = "integration"]
 fn taste_help_lists_the_five_subcommands() {
   let sandbox = Sandbox::new();
   let output = sandbox.run(&["taste", "--help"]);
@@ -77,6 +78,7 @@ fn taste_help_lists_the_five_subcommands() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_row_round_trips_through_add_query_index_and_mark() {
   let sandbox = Sandbox::new();
   let path = sandbox.row_file(&valid_row());
@@ -109,6 +111,7 @@ fn a_row_round_trips_through_add_query_index_and_mark() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn two_comment_items_of_one_event_land_and_a_rerun_of_one_is_refused() {
   let sandbox = Sandbox::new();
   let first = sandbox.row_file(&row_with_comment_item(3));
@@ -141,6 +144,7 @@ fn two_comment_items_of_one_event_land_and_a_rerun_of_one_is_refused() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_row_without_a_comment_item_is_refused_when_added_twice() {
   let sandbox = Sandbox::new();
   let path = sandbox.row_file(&valid_row());
@@ -153,6 +157,7 @@ fn a_row_without_a_comment_item_is_refused_when_added_twice() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_row_with_a_comment_item_lands_beside_an_older_row_of_the_same_event_without_one() {
   let sandbox = Sandbox::new();
   let plain = sandbox.row_file(&valid_row());

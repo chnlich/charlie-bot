@@ -22,6 +22,7 @@ use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_L
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
+use crate::backend_retry;
 use crate::master_state::{ContextStateFn, RunTracking, SessionCallbacks, WorkItem};
 use crate::run_support::{
   extra_flags_of, read_stderr_tail, route_resume_session, silence_callback, stream_event_channel,
@@ -30,6 +31,17 @@ use crate::run_support::{
 
 const NOTICE: &str = "[模型未输出正文，以下为其思考内容]";
 const POST_RESULT_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// The finish-extras key saying an Auto session's manager turn ended on a quota error.
+pub const FINISH_QUOTA_EXHAUSTED: &str = event_types::QUOTA_EXHAUSTED;
+/// The finish-extras key carrying the manager turn's error text for an Auto session.
+pub const FINISH_ERROR_MESSAGE: &str = "error_message";
+/// The finish-extras key carrying the reset a retryable quota error stated, for an Auto session.
+pub const FINISH_QUOTA_RESETS_AT: &str = "quota_resets_at";
+
+/// The log event a recovered manager turn logs when it resumes a session's recorded Claude Code run. The
+/// release-switch script tests' fake server emits the same line, so both read the name here.
+pub const MASTER_CC_RESUMING_EVENT: &str = "master_cc_resuming";
 
 /// The per-round result consumed by the session queue.
 pub(crate) struct MasterRunOutcome {
@@ -444,6 +456,9 @@ struct TurnProcess<'a> {
   last_exit_code: Option<i32>,
   relay_count: Arc<std::sync::atomic::AtomicUsize>,
   was_built: bool,
+  automatic_retries: usize,
+  /// The reset a retryable backend error stated, read off the turn's last retry candidate.
+  quota_resets_at: Option<time::OffsetDateTime>,
 }
 
 impl RunProcess for TurnProcess<'_> {
@@ -454,219 +469,276 @@ impl RunProcess for TurnProcess<'_> {
     relays: usize,
   ) -> BoxFuture<'a, anyhow::Result<ProcessResult>> {
     Box::pin(async move {
-      let metadata = self.item.session_metadata();
-      self.relay_count.store(relays, Ordering::Release);
-      if *self.item.cancel.borrow() {
-        *self.cancelled.lock().expect("cancel state mutex is not poisoned") = Some(false);
-        return Err(TurnCancelled.into());
-      }
-      if self.was_built {
-        self.record_persisted.store(false, Ordering::Release);
-      }
-      let process_prompt = launch.prompt.as_deref().unwrap_or(&self.item.user_content);
-      if relays == 0 {
-        let resume_id = launch.resume_id.as_deref();
-        if resume_id.is_none() && !self.item.task_run.fresh_native_context && metadata.cc_session_id.is_some() {
-          tracing::error!(
+      let mut watch = watch;
+      loop {
+        let metadata = self.item.session_metadata();
+        self.relay_count.store(relays, Ordering::Release);
+        if *self.item.cancel.borrow() {
+          *self.cancelled.lock().expect("cancel state mutex is not poisoned") = Some(false);
+          return Err(TurnCancelled.into());
+        }
+        if self.was_built {
+          self.record_persisted.store(false, Ordering::Release);
+        }
+        let process_prompt = launch.prompt.as_deref().unwrap_or(&self.item.user_content);
+        if relays == 0 && self.automatic_retries == 0 {
+          let resume_id = launch.resume_id.as_deref();
+          if resume_id.is_none() && !self.item.task_run.fresh_native_context && metadata.cc_session_id.is_some() {
+            tracing::error!(
+              target: "charliebot_tasks",
+              session = %metadata.id,
+              backend = %self.option.backend_type,
+              reason = event_types::RESUME_REASON_TRANSCRIPT_MISSING,
+              "master_cc_resume_anchor_missing"
+            );
+            (self.item.callbacks.persist_and_broadcast)(
+              metadata.id.clone(),
+              json!({
+                "type": event_types::RESUME_CONTEXT_DROPPED,
+                "reason": event_types::RESUME_REASON_TRANSCRIPT_MISSING
+              }),
+            )
+            .await?;
+          }
+          tracing::info!(
             target: "charliebot_tasks",
             session = %metadata.id,
             backend = %self.option.backend_type,
-            reason = event_types::RESUME_REASON_TRANSCRIPT_MISSING,
-            "master_cc_resume_anchor_missing"
+            model = %self.option.model,
+            prompt_chars = process_prompt.chars().count(),
+            resume_session = resume_id.is_some_and(|id| !id.is_empty()),
+            cwd = %self.cwd.display(),
+            account = launch.account_label.as_deref(),
+            "master_cc_starting"
           );
-          (self.item.callbacks.persist_and_broadcast)(
-            metadata.id.clone(),
-            json!({
-              "type": event_types::RESUME_CONTEXT_DROPPED,
-              "reason": event_types::RESUME_REASON_TRANSCRIPT_MISSING
-            }),
+        }
+        let (extra_flags, resume_session_id) = build_extra_flags(&self.features, &self.option, launch, self.item)?;
+        let mut launch_args = LaunchArgs {
+          extra_flags,
+          buffer_limit: Some(subprocess_buffer_bytes(&self.item.cfg)?),
+          instructions_content: self.item.task_instructions.clone(),
+          resume_session_id,
+          log_dir: Some(self.log_dir.clone()),
+          cgroup_session_id: Some(metadata.id.clone()),
+          ..LaunchArgs::default()
+        };
+        launch_args.backend_kwargs = launch
+          .backend_kwargs
+          .iter()
+          .filter(|(key, _)| key.as_str() != "extra_flags")
+          .map(|(key, value)| (key.clone(), value.clone()))
+          .collect();
+        let built =
+          backend_types::build_backend(Arc::clone(&self.features.registry), &self.option, &self.item.cfg, launch_args)?;
+        if launch
+          .backend_kwargs
+          .get(charliebot_registry::midturn_delivery::BACKEND_KWARG)
+          .and_then(Value::as_bool)
+          .unwrap_or(false)
+        {
+          charliebot_registry::midturn_delivery::bind_process(
+            &self.item.task_run.run_id,
+            built.backend.midturn_run_id(),
           )
           .await?;
         }
-        tracing::info!(
-          target: "charliebot_tasks",
-          session = %metadata.id,
-          backend = %self.option.backend_type,
-          model = %self.option.model,
-          prompt_chars = process_prompt.chars().count(),
-          resume_session = resume_id.is_some_and(|id| !id.is_empty()),
-          cwd = %self.cwd.display(),
-          account = launch.account_label.as_deref(),
-          "master_cc_starting"
+        let runner = Arc::new(AgentRunner::new(&built.backend_type, built.backend, built.launch.clone()));
+        self.was_built = true;
+        let session_id = metadata.id.clone();
+        let (on_event, mut receiver) =
+          stream_event_channel("manager event consumer stopped", "manager event acknowledgement stopped");
+        let task_session_id = self
+          .item
+          .extra_env
+          .as_ref()
+          .and_then(|env| env.get(launch_loop::SESSION_ID_ENV))
+          .cloned()
+          .unwrap_or_else(|| session_id.clone());
+        let mut request = RunRequest::new(
+          process_prompt.to_string(),
+          self.cwd.clone(),
+          agent_environment::spawn_base_environment(&self.features)?,
+          charliebot_agents::transport::cgroup::SessionCgroupConfig::from_config(&self.item.cfg),
+          Arc::clone(&self.features.registry),
         );
-      }
-      let (extra_flags, resume_session_id) = build_extra_flags(&self.features, &self.option, launch, self.item)?;
-      let mut launch_args = LaunchArgs {
-        extra_flags,
-        buffer_limit: Some(subprocess_buffer_bytes(&self.item.cfg)?),
-        instructions_content: self.item.task_instructions.clone(),
-        resume_session_id,
-        log_dir: Some(self.log_dir.clone()),
-        cgroup_session_id: Some(metadata.id.clone()),
-        ..LaunchArgs::default()
-      };
-      launch_args.backend_kwargs = launch
-        .backend_kwargs
-        .iter()
-        .filter(|(key, _)| key.as_str() != "extra_flags")
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-      let built =
-        backend_types::build_backend(Arc::clone(&self.features.registry), &self.option, &self.item.cfg, launch_args)?;
-      if launch
-        .backend_kwargs
-        .get(charliebot_registry::midturn_delivery::BACKEND_KWARG)
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-      {
-        charliebot_registry::midturn_delivery::bind_process(&self.item.task_run.run_id, built.backend.midturn_run_id())
-          .await?;
-      }
-      let runner = Arc::new(AgentRunner::new(&built.backend_type, built.backend, built.launch.clone()));
-      self.was_built = true;
-      let session_id = metadata.id.clone();
-      let (on_event, mut receiver) =
-        stream_event_channel("manager event consumer stopped", "manager event acknowledgement stopped");
-      let task_session_id = self
-        .item
-        .extra_env
-        .as_ref()
-        .and_then(|env| env.get(launch_loop::SESSION_ID_ENV))
-        .cloned()
-        .unwrap_or_else(|| session_id.clone());
-      let mut request = RunRequest::new(
-        process_prompt.to_string(),
-        self.cwd.clone(),
-        agent_environment::spawn_base_environment(&self.features)?,
-        charliebot_agents::transport::cgroup::SessionCgroupConfig::from_config(&self.item.cfg),
-        Arc::clone(&self.features.registry),
-      );
-      request.environment_overlay = self.env.clone();
-      request.uploaded_files = self.item.uploaded_files.clone().unwrap_or_default();
-      request.session_id = Some(task_session_id);
-      request.on_event = on_event;
-      request.gate_child_until_on_spawn();
-      request.on_spawn = Some({
-        let tracker = Arc::clone(&self.tracker);
-        let on_task_spawn = Arc::clone(&self.item.on_task_spawn);
-        let record_persisted = Arc::clone(&self.record_persisted);
-        Arc::new(move |identity| {
-          let tracker = Arc::clone(&tracker);
-          let on_task_spawn = Arc::clone(&on_task_spawn);
-          let record_persisted = Arc::clone(&record_persisted);
-          Box::pin(async move {
-            tracker.lock().expect("run timing mutex is not poisoned").on_spawn(identity.pid);
-            on_task_spawn(identity.pid, identity.pid_start).await?;
-            record_persisted.store(true, Ordering::Release);
-            Ok(())
+        request.environment_overlay = self.env.clone();
+        request.uploaded_files = self.item.uploaded_files.clone().unwrap_or_default();
+        request.session_id = Some(task_session_id);
+        request.on_event = on_event;
+        request.gate_child_until_on_spawn();
+        request.on_spawn = Some({
+          let tracker = Arc::clone(&self.tracker);
+          let on_task_spawn = Arc::clone(&self.item.on_task_spawn);
+          let record_persisted = Arc::clone(&self.record_persisted);
+          Arc::new(move |identity| {
+            let tracker = Arc::clone(&tracker);
+            let on_task_spawn = Arc::clone(&on_task_spawn);
+            let record_persisted = Arc::clone(&record_persisted);
+            Box::pin(async move {
+              tracker.lock().expect("run timing mutex is not poisoned").on_spawn(identity.pid);
+              on_task_spawn(identity.pid, identity.pid_start).await?;
+              record_persisted.store(true, Ordering::Release);
+              Ok(())
+            })
           })
-        })
-      });
-      let run_future = runner.run(request);
-      tokio::pin!(run_future);
-      let mut watch = watch;
-      let outcome = loop {
-        tokio::select! {
-          result = &mut run_future => {
-            match result {
-              Ok(outcome) => break outcome,
-              Err(error) => {
-                let _ = runner.terminate().await;
+        });
+        let run_future = runner.run(request);
+        tokio::pin!(run_future);
+        let mut retry_candidate = None;
+        let outcome = loop {
+          tokio::select! {
+            result = &mut run_future => {
+              match result {
+                Ok(outcome) => break outcome,
+                Err(error) => {
+                  let _ = runner.terminate().await;
+                  return Err(error);
+                }
+              }
+            }
+            Some(stream_event) = receiver.recv() => {
+              let result = async {
+                self.tracker.lock().expect("run timing mutex is not poisoned").on_event(&stream_event.event);
+                let failure_message = charliebot_agents::runs::failure_message(&stream_event.event);
+                let retry_after = match failure_message.as_deref() {
+                  Some(message) => runner.retry_after(message).await,
+                  None => None,
+                };
+                let retry_after = retry_after.filter(|delay| backend_retry::waits(self.automatic_retries, *delay));
+                let tracking = Arc::clone(&self.tracking);
+                crate::midturn_delivery::record_ack(
+                  tracking.as_ref(),
+                  &session_id,
+                  &mut self.item.user_event_ids,
+                  &self.item.task_run.run_id,
+                  &stream_event.event,
+                )?;
+                match (failure_message, retry_after) {
+                  (Some(message), Some(delay)) => {
+                    self.quota_resets_at = time::Duration::try_from(delay)
+                      .ok()
+                      .and_then(|delay| time::OffsetDateTime::now_utc().checked_add(delay));
+                    retry_candidate = Some((stream_event.event.clone(), message, delay));
+                  }
+                  (failure_message, _) => {
+                    if let Some(message) = failure_message {
+                      self.error_event_messages.push(message);
+                    }
+                    let mut cc_session_id =
+                      self.cc_session_id.lock().expect("native session id mutex is not poisoned").clone();
+                    handle_event(
+                      &self.features,
+                      &self.item.callbacks,
+                      &session_id,
+                      stream_event.event.clone(),
+                      &mut cc_session_id,
+                    )
+                    .await?;
+                    *self.cc_session_id.lock().expect("native session id mutex is not poisoned") = cc_session_id;
+                    if let Some(watch) = watch.as_deref_mut()
+                      && watch.observe(&stream_event.event)
+                    {
+                      runner.terminate().await?;
+                    }
+                  }
+                }
+                Ok::<(), anyhow::Error>(())
+              }.await;
+              let ack_result = match &result {
+                Ok(()) => Ok(()),
+                Err(error) => Err(error.to_string()),
+              };
+              let _ = stream_event.acknowledged.send(ack_result);
+              if let Err(error) = result {
+                runner.terminate().await?;
                 return Err(error);
               }
             }
-          }
-          Some(stream_event) = receiver.recv() => {
-            let result = async {
-              self.tracker.lock().expect("run timing mutex is not poisoned").on_event(&stream_event.event);
-              if let Some(message) = charliebot_agents::runs::failure_message(&stream_event.event) {
-                self.error_event_messages.push(message);
+            changed = self.item.cancel.changed() => {
+              if changed.is_err() || *self.item.cancel.borrow() {
+                let covered = self
+                  .features
+                  .registry
+                  .backend_type_of(&self.option.backend_type)
+                  .context("manager backend type is not registered")?
+                  .traits
+                  .restart_reattach
+                  && self.record_persisted.load(Ordering::Acquire);
+                if covered {
+                  runner.detach();
+                } else {
+                  runner.terminate().await?;
+                }
+                *self.cancelled.lock().expect("cancel state mutex is not poisoned") = Some(covered);
+                return Err(TurnCancelled.into());
               }
-              let tracking = Arc::clone(&self.tracking);
-              crate::midturn_delivery::record_ack(
-                tracking.as_ref(),
-                &session_id,
-                &mut self.item.user_event_ids,
-                &self.item.task_run.run_id,
-                &stream_event.event,
-              )?;
-              let mut cc_session_id = self.cc_session_id.lock().expect("native session id mutex is not poisoned").clone();
-              handle_event(
-                &self.features,
-                &self.item.callbacks,
-                &session_id,
-                stream_event.event.clone(),
-                &mut cc_session_id,
-              )
-              .await?;
-              *self.cc_session_id.lock().expect("native session id mutex is not poisoned") = cc_session_id;
-              if let Some(watch) = watch.as_deref_mut()
-                && watch.observe(&stream_event.event)
-              {
-                runner.terminate().await?;
-              }
-              Ok::<(), anyhow::Error>(())
-            }.await;
-            let ack_result = match &result {
-              Ok(()) => Ok(()),
-              Err(error) => Err(error.to_string()),
-            };
-            let _ = stream_event.acknowledged.send(ack_result);
-            if let Err(error) = result {
-              runner.terminate().await?;
-              return Err(error);
             }
           }
-          changed = self.item.cancel.changed() => {
-            if changed.is_err() || *self.item.cancel.borrow() {
-              let covered = self
-                .features
-                .registry
-                .backend_type_of(&self.option.backend_type)
-                .context("manager backend type is not registered")?
-                .traits
-                .restart_reattach
-                && self.record_persisted.load(Ordering::Acquire);
-              if covered {
-                runner.detach();
-              } else {
-                runner.terminate().await?;
-              }
-              *self.cancelled.lock().expect("cancel state mutex is not poisoned") = Some(covered);
+        };
+        if let Some(covered) = *self.cancelled.lock().expect("cancel state mutex is not poisoned") {
+          let _ = covered;
+          return Err(TurnCancelled.into());
+        }
+        let exit_code = outcome.exit_code.unwrap_or(-1);
+        if exit_code != 0
+          && let Some((_, _, delay)) = retry_candidate.take()
+        {
+          let attempt = self.automatic_retries + 1;
+          let notice = backend_retry::retry_notice(&self.option.backend_type, delay, attempt);
+          (self.item.callbacks.persist_and_broadcast)(
+            metadata.id.clone(),
+            json!({
+              "type": event_types::SYSTEM,
+              "subtype": event_types::COMMAND_PROGRESS,
+              "content": notice,
+            }),
+          )
+          .await?;
+          self.automatic_retries = attempt;
+          if *self.item.cancel.borrow() {
+            *self.cancelled.lock().expect("cancel state mutex is not poisoned") = Some(false);
+            return Err(TurnCancelled.into());
+          }
+          tokio::select! {
+            _ = tokio::time::sleep(delay) => {}
+            _ = self.item.cancel.changed() => {
+              *self.cancelled.lock().expect("cancel state mutex is not poisoned") = Some(false);
               return Err(TurnCancelled.into());
             }
           }
+          continue;
         }
-      };
-      if let Some(covered) = *self.cancelled.lock().expect("cancel state mutex is not poisoned") {
-        let _ = covered;
-        return Err(TurnCancelled.into());
-      }
-      let exit_code = outcome.exit_code.unwrap_or(-1);
-      self.last_exit_code = Some(exit_code);
-      if !outcome.stderr_text.is_empty() {
-        tracing::warn!(target: "charliebot_tasks", session = %session_id, stderr = %outcome.stderr_text, "master_cc_stderr");
-      }
-      let lifecycle = self.features.registry.lifecycle_for(&self.option.backend_type)?;
-      if launch_loop::has_round_notices(lifecycle.as_ref()) {
-        let raw_path = self.log_dir.join(RAW_LOG_NAME);
-        if !raw_path.is_file() {
-          tracing::warn!(target: "charliebot_tasks", session = %session_id, raw_log = %raw_path.display(), "master_cc_fallback_notice_raw_log_missing");
-        } else {
-          let metadata = self.item.session_metadata();
-          let events = project_fresh_raw(
-            &self.features,
-            &self.option,
-            &self.item.cfg,
-            &metadata,
-            &self.item.task_run.run_id,
-            &raw_path,
-            true,
-          )?;
-          emit_round_notices(self.item, &self.option, &self.features, &events).await?;
+        if let Some((event, message, _)) = retry_candidate {
+          self.error_event_messages.push(message);
+          let mut cc_session_id = self.cc_session_id.lock().expect("native session id mutex is not poisoned").clone();
+          handle_event(&self.features, &self.item.callbacks, &session_id, event, &mut cc_session_id).await?;
+          *self.cc_session_id.lock().expect("native session id mutex is not poisoned") = cc_session_id;
         }
+        self.last_exit_code = Some(exit_code);
+        if !outcome.stderr_text.is_empty() {
+          tracing::warn!(target: "charliebot_tasks", session = %session_id, stderr = %outcome.stderr_text, "master_cc_stderr");
+        }
+        let lifecycle = self.features.registry.lifecycle_for(&self.option.backend_type)?;
+        if launch_loop::has_round_notices(lifecycle.as_ref()) {
+          let raw_path = self.log_dir.join(RAW_LOG_NAME);
+          if !raw_path.is_file() {
+            tracing::warn!(target: "charliebot_tasks", session = %session_id, raw_log = %raw_path.display(), "master_cc_fallback_notice_raw_log_missing");
+          } else {
+            let metadata = self.item.session_metadata();
+            let events = project_fresh_raw(
+              &self.features,
+              &self.option,
+              &self.item.cfg,
+              &metadata,
+              &self.item.task_run.run_id,
+              &raw_path,
+              true,
+            )?;
+            emit_round_notices(self.item, &self.option, &self.features, &events).await?;
+          }
+        }
+        return Ok((exit_code, outcome.stderr_text));
       }
-      Ok((exit_code, outcome.stderr_text))
     })
   }
 }
@@ -788,6 +860,8 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
     last_exit_code: None,
     relay_count: Arc::clone(&relay_count),
     was_built: false,
+    automatic_retries: 0,
+    quota_resets_at: None,
   };
   let _on_relay = {
     let relay_count = Arc::clone(&relay_count);
@@ -824,6 +898,9 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
     if exit_code != 0 {
       let stderr = read_stderr_tail(&log_dir.join(STDERR_LOG_NAME)).await?;
       error_msg = charliebot_agents::runs::select_error_hint(&process.error_event_messages, &stderr);
+      if process.automatic_retries == backend_retry::MAX_AUTOMATIC_RETRIES {
+        error_msg = error_msg.map(|message| backend_retry::exhausted_message(&message));
+      }
     }
   }
   let mut finish_extras = tracker.lock().expect("run timing mutex is not poisoned").finish_extras();
@@ -834,7 +911,11 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
   if relays > 0 {
     finish_extras.insert("account_relays".to_string(), json!(relays));
   }
-  report_turn_error_and_salvage(&tracker, process.item, error_msg.as_deref(), quota_exhausted).await?;
+  add_auto_quota_extras(&metadata, error_msg.as_deref(), quota_exhausted, process.quota_resets_at, &mut finish_extras);
+  // An Auto session's quota end is continued on its next member, so this turn posts no "Agent error" of its own.
+  if !is_auto_quota_end(&metadata, &finish_extras) {
+    report_turn_error_and_salvage(&tracker, process.item, error_msg.as_deref(), quota_exhausted).await?;
+  }
   let was_cancelled = cancelled.lock().expect("cancel state mutex is not poisoned").is_some();
   let covered = cancelled.lock().expect("cancel state mutex is not poisoned").unwrap_or(false);
   if !was_cancelled || !covered {
@@ -850,6 +931,36 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
     cancelled: was_cancelled,
     let_go: was_cancelled && covered,
   })
+}
+
+/// Record an Auto session's quota failure in the finish extras, from which the finish recorder writes the member's
+/// "out until" row and switches the turn to its next member. A turn that ends for any other reason records nothing.
+fn add_auto_quota_extras(
+  metadata: &SessionMetadata,
+  error_msg: Option<&str>,
+  quota_exhausted: Option<bool>,
+  resets_at: Option<time::OffsetDateTime>,
+  extras: &mut Map<String, Value>,
+) {
+  if metadata.backend != charliebot_core::config::AUTO_BACKEND_ID {
+    return;
+  }
+  let Some(message) = error_msg else { return };
+  // One decision rule serves this suppression and the finish recorder's switch.
+  if !crate::backend_retry::is_quota_end(message, quota_exhausted) {
+    return;
+  }
+  extras.insert(FINISH_QUOTA_EXHAUSTED.to_string(), json!(true));
+  extras.insert(FINISH_ERROR_MESSAGE.to_string(), json!(message));
+  if let Some(reset) = resets_at {
+    extras.insert(FINISH_QUOTA_RESETS_AT.to_string(), json!(UtcDateTime::from(reset).to_str()));
+  }
+}
+
+/// Whether the finish extras of this turn describe an Auto session's quota end.
+fn is_auto_quota_end(metadata: &SessionMetadata, extras: &Map<String, Value>) -> bool {
+  metadata.backend == charliebot_core::config::AUTO_BACKEND_ID
+    && extras.get(FINISH_QUOTA_EXHAUSTED).and_then(Value::as_bool) == Some(true)
 }
 
 fn resolve_resume_option(item: &WorkItem) -> Option<BackendOption> {
@@ -886,7 +997,7 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   let cursor_path = log_dir.join(CURSOR_NAME);
   let stderr_path = log_dir.join(STDERR_LOG_NAME);
   let option = resolve_resume_option(item);
-  tracing::info!(target: "charliebot_tasks", session = %metadata.id, pid = record.pid, raw_log = %raw_path.display(), "master_cc_resuming");
+  tracing::info!(target: "charliebot_tasks", session = %metadata.id, pid = record.pid, raw_log = %raw_path.display(), "{}", MASTER_CC_RESUMING_EVENT);
   let backend_type = option.as_ref().map(|option| option.backend_type.as_str()).unwrap_or("unknown");
   let model = option.as_ref().map(|option| option.model.as_str());
   let tracker = Arc::new(Mutex::new(RunTimingTracker::new(&metadata.id, backend_type, model)));
@@ -1074,9 +1185,13 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
       }
     }
   }
-  let finish_extras = tracker.lock().expect("run timing mutex is not poisoned").finish_extras();
+  let mut finish_extras = tracker.lock().expect("run timing mutex is not poisoned").finish_extras();
+  add_auto_quota_extras(&metadata, error_msg.as_deref(), None, None, &mut finish_extras);
   item.user_event_ids = std::mem::take(&mut *ack_ids.lock().expect("resume acknowledgement mutex is not poisoned"));
-  report_turn_error_and_salvage(&tracker, item, error_msg.as_deref(), None).await?;
+  // The drain takes the same path as a live turn: an Auto quota end continues on the next member silently.
+  if !is_auto_quota_end(&metadata, &finish_extras) {
+    report_turn_error_and_salvage(&tracker, item, error_msg.as_deref(), None).await?;
+  }
   if !let_go {
     mark_turn_end_unread(item, error_msg.as_deref(), exit_code, &finish_extras).await?;
   }
@@ -1145,8 +1260,10 @@ mod tests {
       &root.path().join("home"),
       &test_fixtures::claude_config(Some(account_dir.as_path())),
     );
+    let availability =
+      Arc::new(charliebot_agents::backend_availability::BackendAvailability::load(&root.path().join("home")).unwrap());
     let queue = Arc::new(crate::master_queue::MasterQueue::new(Arc::new(
-      charliebot_agents::backend_pool::BackendPool::default(),
+      charliebot_agents::backend_pool::BackendPool::new(availability),
     )));
     let meta = test_fixtures::manager_session(
       &features,

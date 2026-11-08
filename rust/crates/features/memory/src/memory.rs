@@ -12,6 +12,7 @@ use std::sync::Mutex;
 use anyhow::{Context, bail};
 use charliebot_core::str_methods;
 use charliebot_core::text_repr::str_repr;
+use charliebot_registry::turn::{DELIVERY_FULL, DELIVERY_INDEX};
 
 const TOPICS_FILENAME: &str = "topics";
 const ENTRIES_DIRNAME: &str = "entries";
@@ -491,12 +492,16 @@ fn selection_from_parts(
   if !full.is_empty() {
     let texts: Vec<String> = full.iter().map(|entry| full_text(entry)).collect();
     segments.push(MemorySegment {
-      delivery: "full",
+      delivery: DELIVERY_FULL,
       text: texts.join("\n\n"),
       sources: full
         .iter()
         .zip(texts)
-        .map(|(entry, text)| MemoryEntrySource { source_ref: format!("memory:{}", entry.id()), delivery: "full", text })
+        .map(|(entry, text)| MemoryEntrySource {
+          source_ref: format!("memory:{}", entry.id()),
+          delivery: DELIVERY_FULL,
+          text,
+        })
         .collect(),
     });
   }
@@ -504,13 +509,13 @@ fn selection_from_parts(
     let mut lines = vec![INDEX_HEADER.to_string()];
     lines.extend(index.iter().map(|entry| index_line(entry)));
     segments.push(MemorySegment {
-      delivery: "index",
+      delivery: DELIVERY_INDEX,
       text: lines.join("\n"),
       sources: index
         .iter()
         .map(|entry| MemoryEntrySource {
           source_ref: format!("memory:{}", entry.id()),
-          delivery: "index",
+          delivery: DELIVERY_INDEX,
           text: index_line(entry),
         })
         .collect(),
@@ -519,8 +524,8 @@ fn selection_from_parts(
   if let Some(usage) = usage_line {
     match segments.last_mut() {
       // The usage line rides the index segment; a selection with no index entries gets a usage-only one.
-      Some(last) if last.delivery == "index" => last.text = format!("{}\n\n{usage}", last.text),
-      _ => segments.push(MemorySegment { delivery: "index", text: usage.to_string(), sources: Vec::new() }),
+      Some(last) if last.delivery == DELIVERY_INDEX => last.text = format!("{}\n\n{usage}", last.text),
+      _ => segments.push(MemorySegment { delivery: DELIVERY_INDEX, text: usage.to_string(), sources: Vec::new() }),
     }
   }
   let text = (!segments.is_empty()).then(|| {
@@ -605,6 +610,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn the_store_load_rejects_each_placement_with_the_violation_it_names() {
     let cases = [
       ("entries/nonexistent/x.md", entry_text("nonexistent", "master, worker"), "not in topics vocabulary"),
@@ -636,6 +642,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn selecting_on_a_missing_dir_creates_the_scaffold_and_selects_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let memory_dir = dir.path().join("nope");
@@ -652,6 +659,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn ensure_store_twice_keeps_a_curated_vocabulary() {
     let dir = tempfile::tempdir().unwrap();
     let memory_dir = dir.path().join("store");
@@ -664,6 +672,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn concurrent_first_use_leaves_one_whole_scaffold() {
     let dir = tempfile::tempdir().unwrap();
     let memory_dir = Arc::new(dir.path().join("store"));
@@ -685,6 +694,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_staged_capture_never_enters_a_selection() {
     let dir = tempfile::tempdir().unwrap();
     write_files(
@@ -698,6 +708,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_worker_selection_without_entries_is_the_usage_line_alone() {
     let dir = tempfile::tempdir().unwrap();
     write_files(dir.path(), &[("topics", "profile resident\n")]);
@@ -709,6 +720,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn residents_take_full_text_and_the_rest_of_the_master_audience_takes_index_lines() {
     let dir = tempfile::tempdir().unwrap();
     write_files(dir.path(), &[("topics", "profile resident\nbeta\n")]);
@@ -731,6 +743,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_worker_selection_puts_its_repo_topic_in_full_and_the_rest_in_the_index() {
     let dir = tempfile::tempdir().unwrap();
     write_files(dir.path(), &[("topics", "profile resident\ngamma-service\n")]);

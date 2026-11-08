@@ -466,10 +466,21 @@ async fn run_listener_loop(
   options: Options,
   settings: ws_client::Settings,
 ) -> anyhow::Result<()> {
+  run_listener_loop_with_initial_backoff(features, client, token, options, settings, Duration::from_secs(1)).await
+}
+
+async fn run_listener_loop_with_initial_backoff(
+  features: Arc<FeatureContext>,
+  client: Arc<DiscordClient>,
+  token: String,
+  options: Options,
+  settings: ws_client::Settings,
+  initial_backoff: Duration,
+) -> anyhow::Result<()> {
   if !preflight(&client).await? {
     return Ok(());
   }
-  let mut backoff = Duration::from_secs(1);
+  let mut backoff = initial_backoff;
   loop {
     let url = match client.get_gateway_url().await {
       Ok(url) => url,
@@ -510,9 +521,7 @@ async fn run_listener_loop(
       }
       Ok(ConnectionExit::Dropped { error, saw_ready }) => {
         tracing::warn!(event = "discord_listener_connection_dropped", error);
-        if saw_ready {
-          backoff = Duration::from_secs(1);
-        }
+        backoff = reconnect_backoff_after_drop(backoff, saw_ready, initial_backoff);
       }
       Err(error) => tracing::warn!(event = "discord_listener_connection_dropped", error = %error),
     }
@@ -525,6 +534,38 @@ async fn run_listener_loop(
 enum ConnectionExit {
   Stopped { code: u16 },
   Dropped { error: String, saw_ready: bool },
+}
+
+struct HeartbeatSchedule {
+  interval: Duration,
+  deadline: Instant,
+  acknowledged: bool,
+}
+
+impl HeartbeatSchedule {
+  fn new(interval: Duration, deadline: Instant) -> Self {
+    Self { interval, deadline, acknowledged: true }
+  }
+
+  fn deadline(&self) -> Instant {
+    self.deadline
+  }
+
+  fn begin(&mut self) -> bool {
+    if !self.acknowledged {
+      return false;
+    }
+    self.acknowledged = false;
+    true
+  }
+
+  fn sent_at(&mut self, now: Instant) {
+    self.deadline = now + self.interval;
+  }
+
+  fn acknowledge(&mut self) {
+    self.acknowledged = true;
+  }
 }
 
 async fn run_connection(
@@ -547,9 +588,8 @@ async fn run_connection(
     .and_then(Value::as_u64)
     .context("Discord HELLO has no integer heartbeat_interval")?;
   let interval = Duration::from_millis(interval_ms);
-  let mut next_heartbeat = Instant::now() + heartbeat_delay(interval)?;
+  let mut heartbeat = HeartbeatSchedule::new(interval, Instant::now() + heartbeat_delay(interval)?);
   let mut last_sequence = Value::Null;
-  let mut acked = true;
   let mut saw_ready = false;
   let mut bot_user_id = String::new();
 
@@ -559,8 +599,8 @@ async fn run_connection(
 
   loop {
     tokio::select! {
-      _ = tokio::time::sleep_until(next_heartbeat) => {
-        if !acked {
+      _ = tokio::time::sleep_until(heartbeat.deadline()) => {
+        if !heartbeat.begin() {
           let close = WsMessage::Close(Some(CloseFrame { code: 4000, reason: String::new() }));
           if let Err(error) = sender.send(close).await {
             return closed_exit(error, saw_ready);
@@ -570,11 +610,10 @@ async fn run_connection(
             saw_ready,
           });
         }
-        acked = false;
         if let Err(error) = sender.send(WsMessage::Text(json!({"op": 1, "d": last_sequence}).to_string())).await {
         return closed_exit(error, saw_ready);
         }
-        next_heartbeat = Instant::now() + interval;
+        heartbeat.sent_at(Instant::now());
       }
       incoming = receive_json(&mut receiver, saw_ready) => {
         let payload = match incoming? {
@@ -590,7 +629,7 @@ async fn run_connection(
           return closed_exit(error, saw_ready);
             }
           }
-          Some(11) => acked = true,
+          Some(11) => heartbeat.acknowledge(),
           Some(7 | 9) => {
             let op = payload["op"].as_u64().expect("the reconnect op was matched");
             return Ok(ConnectionExit::Dropped { error: format!("gateway op {op}"), saw_ready });
@@ -687,6 +726,10 @@ fn heartbeat_delay(interval: Duration) -> anyhow::Result<Duration> {
 
 fn next_backoff(backoff: Duration) -> Duration {
   backoff.saturating_mul(2).min(MAX_BACKOFF)
+}
+
+fn reconnect_backoff_after_drop(backoff: Duration, saw_ready: bool, initial_backoff: Duration) -> Duration {
+  if saw_ready { initial_backoff } else { backoff }
 }
 
 /// Re-run the shared thread follow backfill after each gateway READY.

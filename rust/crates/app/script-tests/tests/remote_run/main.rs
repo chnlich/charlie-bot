@@ -110,6 +110,7 @@ fn ssh_log(sandbox: &Sandbox) -> String {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_login_link_in_the_check_gives_86_and_the_stop_text() {
   let sandbox = Sandbox::new();
   sandbox.stub("ssh", FAKE_SSH);
@@ -124,6 +125,7 @@ fn a_login_link_in_the_check_gives_86_and_the_stop_text() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_check_failure_gives_87_and_the_stop_text() {
   let sandbox = Sandbox::new();
   sandbox.stub("ssh", FAKE_SSH);
@@ -137,6 +139,7 @@ fn a_check_failure_gives_87_and_the_stop_text() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_check_past_its_limit_gives_87() {
   let sandbox = Sandbox::new();
   sandbox.stub("ssh", FAKE_SSH);
@@ -151,6 +154,7 @@ fn a_check_past_its_limit_gives_87() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_missing_public_url_names_the_key() {
   let sandbox = Sandbox::new();
   sandbox.stub("ssh", FAKE_SSH);
@@ -164,6 +168,7 @@ fn a_missing_public_url_names_the_key() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn an_unset_host_stops_before_any_ssh_call_and_names_the_key() {
   let sandbox = Sandbox::new();
   sandbox.stub("ssh", FAKE_SSH);
@@ -179,6 +184,7 @@ fn an_unset_host_stops_before_any_ssh_call_and_names_the_key() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_host_written_after_the_start_reaches_the_next_run() {
   let sandbox = Sandbox::new();
   sandbox.stub("ssh", FAKE_SSH);
@@ -197,6 +203,7 @@ fn a_host_written_after_the_start_reaches_the_next_run() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_passing_check_leaves_a_remote_255_unchanged() {
   let sandbox = Sandbox::new();
   sandbox.stub("ssh", FAKE_SSH);
@@ -232,6 +239,7 @@ fn run_with_fake_build_home(sandbox: &Sandbox, project: &Path) -> harness::Run {
 /// The 08:15Z install case: the build host holds a tree named like the sync root, recorded to a
 /// local directory an earlier run's temp directory removed. The run sweeps the tree, then syncs.
 #[test]
+#[ignore = "integration"]
 fn a_same_name_tree_whose_recorded_directory_is_gone_is_removed_and_the_run_succeeds() {
   let sandbox = Sandbox::new();
   sandbox.stub("ssh", FAKE_SSH);
@@ -260,6 +268,7 @@ fn a_same_name_tree_whose_recorded_directory_is_gone_is_removed_and_the_run_succ
 /// Two live local directories must never share one build-host tree: the same-name refusal holds
 /// while the recorded owner directory exists.
 #[test]
+#[ignore = "integration"]
 fn a_same_name_tree_whose_recorded_directory_exists_keeps_the_refusal() {
   let sandbox = Sandbox::new();
   sandbox.stub("ssh", FAKE_SSH);
@@ -289,6 +298,7 @@ fn refuse(env: &Env, tool: &str) -> harness::Run {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_refusal_names_the_build_host_from_config() {
   let sandbox = Sandbox::new();
   install_cli(&sandbox);
@@ -301,6 +311,7 @@ fn the_refusal_names_the_build_host_from_config() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_refusal_prints_in_full_and_names_the_key_while_the_host_is_unset() {
   let sandbox = Sandbox::new();
   install_cli(&sandbox);
@@ -358,6 +369,7 @@ fn run_remote_exec(env: &Env, payload: &str) -> harness::Run {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_command_gets_a_short_tmpdir_and_its_own_exit_code() {
   let sandbox = Sandbox::new();
   install_remote_state(&sandbox);
@@ -370,6 +382,7 @@ fn a_command_gets_a_short_tmpdir_and_its_own_exit_code() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_command_leaving_a_daemon_does_not_hold_the_runner() {
   let sandbox = Sandbox::new();
   install_remote_state(&sandbox);
@@ -383,6 +396,7 @@ fn a_command_leaving_a_daemon_does_not_hold_the_runner() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn a_cargo_command_without_slots_is_refused() {
   let sandbox = Sandbox::new();
   install_remote_state(&sandbox);

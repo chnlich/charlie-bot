@@ -219,6 +219,7 @@ mod tests {
   /// Every leaf of the nested repository is ignored by the outer one, so `check-ignore` answers 10,000 paths on its
   /// stdout while it still reads them on stdin: both pipes fill, and the answers must be drained as the paths go in.
   #[tokio::test]
+  #[ignore = "integration"]
   async fn check_ignore_answers_a_large_ignored_nested_repository_without_blocking() {
     let root = tempdir().unwrap();
     let repo = root.path().join("outer");

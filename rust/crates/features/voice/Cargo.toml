@@ -24,7 +24,6 @@ time.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 unsafe-libopus.workspace = true
-uuid.workspace = true
 
 [dev-dependencies]
 charliebot-core = { workspace = true, features = ["test-support"] }

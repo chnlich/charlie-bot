@@ -389,11 +389,14 @@ mod tests {
       registry: Arc::new(registry),
       repo_root: repo_root.to_path_buf(),
       base_env: agent_base(home, repo_root),
-      pool: Arc::new(BackendPool::default()),
+      pool: Arc::new(BackendPool::new(Arc::new(
+        charliebot_agents::backend_availability::BackendAvailability::load(home).unwrap(),
+      ))),
     }
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_cli_assertions_only_passes_a_page_over_the_height_target() {
     // The fake Chrome is the chrome-stub helper; its measured height is
     // injected, as `test_support::plan_session` does, so no renderer runs.
@@ -426,6 +429,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn the_artifact_check_fail_line_shows_each_user_text_hit_and_its_fix() {
     let home = tempfile::tempdir().unwrap();
     let chrome = crate::test_support::chrome_program(home.path(), json!([{"exit": 0}]));

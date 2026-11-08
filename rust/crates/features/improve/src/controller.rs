@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
-use charliebot_registry::sequence::{SequenceBinding, SequenceController, SequenceTree};
+use charliebot_registry::sequence::{QuotaFailure, SequenceBinding, SequenceController, SequenceTree};
 use charliebot_registry::{Registry, RegistryError};
 use charliebot_store::RunRecord;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
@@ -48,6 +48,7 @@ impl SequenceController for ImproveSequenceController {
     &'a self,
     _session_id: &'a str,
     run: &'a RunRecord,
+    _quota: Option<&'a QuotaFailure>,
     tree: &'a dyn SequenceTree,
   ) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async move { close_loop_for_run(run, tree).await })

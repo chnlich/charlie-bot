@@ -1,9 +1,7 @@
 # Remote runner
 
-The runner compiles and tests a local tree on a separate build host. An agent starts every
-compile and test through it, so one run's build load never lands on the agent host and slows the
-other agents. The runner syncs the tree, runs the command under a build slot, and copies the
-results back to the original directory.
+The runner compiles and tests a local tree on a separate build host. It syncs the tree, runs the
+command there, and copies the results back to the original directory.
 
 ## Invoke
 
@@ -104,12 +102,12 @@ a later run reclaims the ones no process holds.
 | 86 | The connectivity check saw a Tailscale login link. The runner prints a stop text that tells the agent to end the run and report the blocker, with the full `/host-auth` page URL. |
 | 87 | The connectivity check failed any other way, or ran past its 60-second limit. The same stop text is printed. |
 
-## Refused toolchains on the agent host
+## Refused toolchains
 
-The agent environment refuses a direct local run of every toolchain this list names, and the agent runs that work on
-the build host through this runner instead. C and C++ compilers have one scoped local exception for prescreen runs,
-documented in `dev/local-work-guard/README.md`; that entry point keeps every other guard refusal active. This list is
-the single home of the refused toolchains.
+When `server.enable_local_work_guard` is true, the agent environment refuses a direct local run of every toolchain
+this list names. C and C++ compilers have one scoped local exception for prescreen runs, documented in
+`dev/local-work-guard/README.md`; that entry point keeps every other guard refusal active. This list is the single
+home of the refused toolchains.
 
 - cargo and rustc
 - pytest in all its entry forms: `pytest`, `python -m pytest`, `uv run pytest`, `.venv/bin/pytest`

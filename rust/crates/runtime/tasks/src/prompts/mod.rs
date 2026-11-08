@@ -22,6 +22,7 @@ mod sources;
 
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::run_kind::RunKind;
 use charliebot_registry::Registry;
 
 pub use crate::spawner_prompt::reviewer_run_follows;
@@ -43,19 +44,11 @@ pub const SNAPSHOT_FILENAME: &str = "prompt_snapshot.json";
 /// The launch text file a run directory holds (`LAUNCH_TEXT_FILENAME`).
 pub const LAUNCH_TEXT_FILENAME: &str = "launch_prompt.md";
 
-/// Provenance scopes of a block source: the shared rules, the memory selection, a subtree rule, a node rule.
-pub const SCOPE_BASE: &str = "base";
-pub const SCOPE_MEMORY: &str = "memory";
-pub const SCOPE_SUBTREE: &str = "subtree";
-pub const SCOPE_NODE: &str = "node";
-
-/// The delivery of a full text block; the only delivery the assembly emits.
-pub const DELIVERY_FULL: &str = "full";
-
 /// The run kinds that take the manager contract (`MANAGER_KINDS`).
-pub const MANAGER_KINDS: [&str; 1] = ["manager_turn"];
+pub const MANAGER_KINDS: [&str; 1] = [RunKind::ManagerTurn.as_str()];
 /// The run kinds that take the worker contract (`WORKER_KINDS`).
-pub const WORKER_KINDS: [&str; 4] = ["work", "review", "iteration", "scheduled_step"];
+pub const WORKER_KINDS: [&str; 4] =
+  [RunKind::Work.as_str(), RunKind::Review.as_str(), RunKind::Iteration.as_str(), RunKind::ScheduledStep.as_str()];
 
 /// The bounded number of coherence passes the launch-time recheck runs (`_COHERENCE_PASSES`).
 pub const COHERENCE_PASSES: usize = 3;

@@ -544,6 +544,7 @@ pub fn config(home: &Path) -> CharlieBotConfig {
         backend_type: "codex".to_string(),
         type_fields: Mapping::new(),
       }],
+      auto: None,
     },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },

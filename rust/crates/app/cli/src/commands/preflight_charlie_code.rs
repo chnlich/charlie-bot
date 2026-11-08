@@ -71,7 +71,7 @@ fn preflight(backend_id: &str) -> Result<(), String> {
       "option-missing: add a backends.options entry with id {backend_id} and type charlie-code to {config_file}"
     ));
   };
-  if option.backend_type != "charlie-code" {
+  if option.backend_type != charliebot_charlie_code::TYPE_NAME {
     return Err(format!(
       "option-missing: backend option {backend_id} has type {}, not charlie-code; \
        add a backends.options entry with id {backend_id} and type charlie-code to {config_file}",
@@ -97,7 +97,7 @@ fn preflight(backend_id: &str) -> Result<(), String> {
       return Err(format!("option-missing: {text}"));
     }
   };
-  let bin = host.resolve_binary("charlie-code").map_err(|_| {
+  let bin = host.resolve_binary(charliebot_charlie_code::BINARY_NAME).map_err(|_| {
     format!("binary-missing: install charlie-code so it resolves on PATH or in ~/.local/bin ({INSTALL_HINT})")
   })?;
 

@@ -153,6 +153,7 @@ fn file_uri(repo: &Path, path: &str, extra: &[(&str, &str)]) -> String {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn the_manifest_lists_each_changed_file_with_its_status_and_counts() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let repo = build_repo(dir.path());
@@ -188,6 +189,7 @@ async fn the_manifest_lists_each_changed_file_with_its_status_and_counts() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn the_two_dot_mode_compares_the_tips_and_the_three_dot_mode_compares_from_the_merge_base() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let repo = build_repo(dir.path());
@@ -206,6 +208,7 @@ async fn the_two_dot_mode_compares_the_tips_and_the_three_dot_mode_compares_from
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_file_diff_returns_the_unified_diff_and_its_byte_count() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let repo = build_repo(dir.path());
@@ -220,6 +223,7 @@ async fn a_file_diff_returns_the_unified_diff_and_its_byte_count() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_rename_with_its_old_path_renders_as_a_rename_and_without_it_as_a_new_file() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let repo = build_repo(dir.path());
@@ -237,6 +241,7 @@ async fn a_rename_with_its_old_path_renders_as_a_rename_and_without_it_as_a_new_
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_diff_over_the_cap_answers_a_stub_and_force_loads_it() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let repo = build_repo(dir.path());
@@ -257,6 +262,7 @@ async fn a_diff_over_the_cap_answers_a_stub_and_force_loads_it() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_moved_feature_ref_busts_the_manifest_memo_and_the_file_diff() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let repo = build_repo(dir.path());
@@ -280,6 +286,7 @@ async fn a_moved_feature_ref_busts_the_manifest_memo_and_the_file_diff() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_repeat_view_of_an_unchanged_range_reuses_its_manifest_and_its_branch_listing() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let repo = build_repo(dir.path());
@@ -298,6 +305,7 @@ async fn a_repeat_view_of_an_unchanged_range_reuses_its_manifest_and_its_branch_
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_gitattributes_file_moves_the_manifest_key() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let repo = build_repo(dir.path());
@@ -312,6 +320,7 @@ async fn a_gitattributes_file_moves_the_manifest_key() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_memos_keep_their_bounds_and_evict_the_least_recent_entry() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let state = state_for(&dir.path().join("home"), dir.path(), false);
@@ -342,6 +351,7 @@ fn the_memos_keep_their_bounds_and_evict_the_least_recent_entry() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn the_memory_store_repo_is_accepted_outside_the_workspace_dirs() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let workspace = dir.path().join("workspace");
@@ -358,6 +368,7 @@ async fn the_memory_store_repo_is_accepted_outside_the_workspace_dirs() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_repo_outside_the_workspace_dirs_and_the_memory_store_is_refused() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let repo = build_repo(&dir.path().join("stray-repo"));
@@ -372,6 +383,7 @@ async fn a_repo_outside_the_workspace_dirs_and_the_memory_store_is_refused() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn the_memory_store_repo_is_refused_when_the_memory_package_is_not_registered() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let home = dir.path().join("charliebot-home");
@@ -387,6 +399,7 @@ async fn the_memory_store_repo_is_refused_when_the_memory_package_is_not_registe
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn the_branch_list_starts_with_head_and_a_dot_git_path_lists_its_repo() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let repo = build_repo(dir.path());
@@ -400,6 +413,7 @@ async fn the_branch_list_starts_with_head_and_a_dot_git_path_lists_its_repo() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_branch_request_for_a_plain_directory_is_400() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let plain = dir.path().join("plain");
@@ -412,6 +426,7 @@ async fn a_branch_request_for_a_plain_directory_is_400() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn the_repository_list_is_sorted_by_name_and_skips_directories_without_git() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let workspace = dir.path().join("workspace");
@@ -436,6 +451,7 @@ async fn the_repository_list_is_sorted_by_name_and_skips_directories_without_git
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn an_unknown_ref_answers_500_with_the_git_error() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let repo = build_repo(dir.path());
@@ -448,6 +464,7 @@ async fn an_unknown_ref_answers_500_with_the_git_error() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_missing_required_parameter_or_a_bad_mode_is_422_with_its_location() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let repo = build_repo(dir.path());
@@ -470,6 +487,7 @@ async fn a_missing_required_parameter_or_a_bad_mode_is_422_with_its_location() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn head_and_other_methods_are_405_with_the_get_allow_header() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let repo = build_repo(dir.path());
@@ -484,6 +502,7 @@ async fn head_and_other_methods_are_405_with_the_get_allow_header() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_ref_signature_moves_with_each_ref_change_and_holds_still_otherwise() {
   let dir = tempfile::tempdir().expect("a temp dir");
   let repo = build_repo(dir.path());

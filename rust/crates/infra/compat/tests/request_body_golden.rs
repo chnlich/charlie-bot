@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::OnceLock;
 
 use axum::Router;
 use axum::body::Body;
@@ -13,6 +14,8 @@ use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
 const GOLDEN_FIXTURE: &str = include_str!("fixtures/request_body_golden.json");
+
+static CRYPTO_PROVIDER: OnceLock<()> = OnceLock::new();
 
 const FIELDS: &[Field] = &[
   Field::required("name", FieldType::String),
@@ -96,8 +99,84 @@ struct Case {
 }
 
 #[tokio::test]
-async fn request_body_matches_recorded_for_the_request_corpus() {
-  rustls::crypto::ring::default_provider().install_default().expect("the test installs its rustls crypto provider");
+async fn request_body_matches_recorded_for_first_half_of_item_requests() {
+  let cases = corpus();
+  compare_route("/items", &cases, 0, 0, 20).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_second_half_of_item_requests() {
+  let cases = corpus();
+  compare_route("/items", &cases, 0, 20, 40).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_first_half_of_bounded_requests() {
+  let cases = bounded_corpus();
+  compare_route("/bounds", &cases, 40, 0, 14).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_second_half_of_bounded_requests() {
+  let cases = bounded_corpus();
+  compare_route("/bounds", &cases, 40, 14, 28).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_first_half_of_message_requests() {
+  let cases = message_corpus();
+  compare_route("/messages", &cases, 68, 0, 9).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_second_half_of_message_requests() {
+  let cases = message_corpus();
+  compare_route("/messages", &cases, 68, 9, 17).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_first_half_of_attachment_requests() {
+  let cases = attachment_corpus();
+  compare_route("/attachments", &cases, 85, 0, 10).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_second_half_of_attachment_requests() {
+  let cases = attachment_corpus();
+  compare_route("/attachments", &cases, 85, 10, 20).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_first_half_of_trigger_requests() {
+  let cases = trigger_corpus();
+  compare_route("/triggers", &cases, 105, 0, 16).await;
+}
+
+#[tokio::test]
+async fn request_body_matches_recorded_for_second_half_of_trigger_requests() {
+  let cases = trigger_corpus();
+  compare_route("/triggers", &cases, 105, 16, 32).await;
+}
+
+/// The process's rustls crypto provider, installed once: the split golden tests run in one process and race on
+/// `install_default`, which panics for every caller after the first.
+fn install_crypto_provider() {
+  CRYPTO_PROVIDER.get_or_init(|| {
+    rustls::crypto::ring::default_provider().install_default().expect("the test installs its rustls crypto provider")
+  });
+}
+
+async fn compare_route(route: &str, cases: &[Case], fixture_start: usize, case_start: usize, case_end: usize) {
+  let expected_len = match route {
+    "/items" => 40,
+    "/bounds" => 28,
+    "/messages" => 17,
+    "/attachments" => 20,
+    "/triggers" => 32,
+    _ => panic!("unexpected request corpus route: {route}"),
+  };
+  assert_eq!(cases.len(), expected_len);
+  install_crypto_provider();
   let rust_listener = TcpListener::bind("127.0.0.1:0").await.expect("a loopback port is available");
   let rust_address = rust_listener.local_addr().expect("the Rust address is readable");
   let rust_server = tokio::spawn(async move {
@@ -115,23 +194,16 @@ async fn request_body_matches_recorded_for_the_request_corpus() {
   assert_eq!(fixture["base_commit"], "d4021ce3993d7e36b2709f00caf578e1f8541407");
   let fixture_cases = fixture["cases"].as_array().unwrap();
   assert_eq!(fixture_cases.len(), 137);
-  let mut fixture_index = 0;
-  let items = corpus();
-  assert_eq!(items.len(), 40);
-  compare_corpus(&client, rust_address, "/items", &items, fixture_cases, &mut fixture_index).await;
-  let bounded = bounded_corpus();
-  assert_eq!(bounded.len(), 28);
-  compare_corpus(&client, rust_address, "/bounds", &bounded, fixture_cases, &mut fixture_index).await;
-  let messages = message_corpus();
-  assert_eq!(messages.len(), 17);
-  compare_corpus(&client, rust_address, "/messages", &messages, fixture_cases, &mut fixture_index).await;
-  let attachments = attachment_corpus();
-  assert_eq!(attachments.len(), 20);
-  compare_corpus(&client, rust_address, "/attachments", &attachments, fixture_cases, &mut fixture_index).await;
-  let triggers = trigger_corpus();
-  assert_eq!(triggers.len(), 32);
-  compare_corpus(&client, rust_address, "/triggers", &triggers, fixture_cases, &mut fixture_index).await;
-  assert_eq!(fixture_index, fixture_cases.len());
+  let fixture_start = fixture_start + case_start;
+  let fixture_end = fixture_start + case_end - case_start;
+  compare_corpus(
+    &client,
+    rust_address,
+    route,
+    &cases[case_start..case_end],
+    &fixture_cases[fixture_start..fixture_end],
+  )
+  .await;
 
   rust_server.abort();
   match rust_server.await {
@@ -185,10 +257,8 @@ async fn compare_corpus(
   route: &str,
   cases: &[Case],
   fixture_cases: &[Value],
-  fixture_index: &mut usize,
 ) {
-  for case in cases {
-    let recorded = &fixture_cases[*fixture_index];
+  for (case, recorded) in cases.iter().zip(fixture_cases) {
     let request = json!({
       "path": format!("{route}/{}", case.item_id),
       "name": case.name,
@@ -208,7 +278,6 @@ async fn compare_corpus(
     } else if recorded_status == StatusCode::UNPROCESSABLE_ENTITY {
       assert_eq!(error_shape(&rust_body), error_shape(recorded_body), "validation shape for {}", case.name);
     }
-    *fixture_index += 1;
   }
 }
 

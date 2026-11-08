@@ -18,6 +18,8 @@ pub const PANEL_WINDOWS: &str = "windows";
 pub const PANEL_FETCHED_AT: &str = "fetched_at";
 pub const PANEL_PROVIDER: &str = "provider";
 pub const PANEL_PROVIDER_LABEL: &str = "provider_label";
+/// The plan an account is on, as the provider's event names it. A row shows this string verbatim.
+pub const PANEL_PLAN_TYPE: &str = "plan_type";
 pub const PANEL_WINDOW_MINUTES: &str = "window_minutes";
 pub const PANEL_UTILIZATION: &str = "utilization";
 pub const PANEL_RESETS_AT: &str = "resets_at";
@@ -27,6 +29,16 @@ pub const PANEL_EXPIRED: &str = "expired";
 /// The label a quota source gives the account that its config does not name. The producer's label and its provider
 /// form the `<provider>:<label>` cache key of one account.
 pub const DEFAULT_ACCOUNT_LABEL: &str = "main";
+
+/// The utilization at and above which a quota account or Auto member is at the warning line.
+pub const WARNING_UTILIZATION: f64 = 0.90;
+
+/// A near-exhausted member whose earliest reset lies inside this horizon is not worth switching away from.
+pub const NEAR_EXHAUSTION_RESET_HORIZON: time::Duration = time::Duration::minutes(45);
+
+/// The length of the weekly quota window, in minutes: the seven-day window each backend's quota panel states with
+/// `PANEL_WINDOW_MINUTES`.
+pub const WEEKLY_WINDOW_MINUTES: i64 = 10_080;
 
 /// The reading-limits kind a backend registers when a session's context follows Claude Code's event stream. The
 /// usage fold classifies such a session under this kind and looks its limits up.
@@ -47,8 +59,8 @@ pub fn as_utilization(value: Option<&Value>) -> Option<f64> {
   }
 }
 
-/// Whether one stored panel window is expired at `now` (`usage_sources.panel_window_expired`): its reset passed while
-/// the reading's sample time predates it, or the sample is older than the window is long.
+/// Whether one stored panel window is expired at `now` (`usage_sources.panel_window_expired`). It is expired when its
+/// reset passed while the reading's sample time predates it, or when the sample is older than the window is long.
 pub fn panel_window_expired(window: &Value, sampled: UtcDateTime, now: UtcDateTime) -> bool {
   let resets_at = window.get(PANEL_RESETS_AT).and_then(Value::as_str).and_then(|value| UtcDateTime::parse(value).ok());
   if resets_at.is_some_and(|reset| reset <= now && sampled < reset) {

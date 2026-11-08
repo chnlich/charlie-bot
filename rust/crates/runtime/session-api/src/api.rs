@@ -21,6 +21,19 @@ pub const SESSION_TREE_CURSOR_QUERY: &str = "cursor";
 /// The session replay websocket. A client connects with its cursor in the query string.
 pub const SESSION_WEBSOCKET_PATH: &str = "/ws/sessions/{session_id}";
 
+/// The session ids a comma-separated `ids` query value names, trimmed, without empty entries, each once in first-seen
+/// order.
+pub fn parse_session_ids(raw: &str) -> Vec<String> {
+  let mut seen = std::collections::HashSet::new();
+  let mut ids = Vec::new();
+  for id in raw.split(',').map(str::trim).filter(|id| !id.is_empty()) {
+    if seen.insert(id) {
+      ids.push(id.to_string());
+    }
+  }
+  ids
+}
+
 /// The replay websocket's last catch-up frame, in its `type` field: every event before it has been sent. A client that
 /// replays an earlier stretch of the session holds its frames until this one arrives.
 pub const CATCHUP_COMPLETE_FRAME: &str = "catchup_complete";

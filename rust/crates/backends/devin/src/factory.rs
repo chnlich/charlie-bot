@@ -7,7 +7,7 @@ use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 
 use super::devin_cli::DevinBackend;
 
-/// Builds one devin backend per launch.
+/// The factory that builds one devin backend per launch.
 pub struct DevinFactory {
   host: CliHost,
 }

@@ -684,7 +684,7 @@ mod tests {
   use std::sync::Arc;
 
   use base64::Engine;
-  use futures_util::{SinkExt, StreamExt};
+  use futures_util::{FutureExt, SinkExt, StreamExt};
   use rcgen::{BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyPair};
   use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
   use sha1::{Digest, Sha1};
@@ -983,7 +983,6 @@ mod tests {
     let server = tokio::spawn(tls_echo_server(listener, tls.acceptor));
     let proxy_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind the unused proxy");
     let proxy_address = proxy_listener.local_addr().expect("read unused proxy address");
-    let proxy_watch = tokio::spawn(async move { timeout(Duration::from_millis(200), proxy_listener.accept()).await });
     let settings = Settings::from_lookup(|name| match name {
       "HTTPS_PROXY" => Some(format!("http://{proxy_address}")),
       "NO_PROXY" => Some("localhost".to_string()),
@@ -1016,7 +1015,7 @@ mod tests {
       .await
       .expect("close completes")
       .expect("close the direct connection");
-    assert!(proxy_watch.await.expect("proxy watch finishes").is_err(), "NO_PROXY bypasses the proxy");
+    assert!(proxy_listener.accept().now_or_never().is_none(), "NO_PROXY bypasses the proxy");
     timeout(Duration::from_secs(2), server).await.expect("TLS server finishes").expect("TLS server succeeds");
   }
 
@@ -1051,7 +1050,7 @@ mod tests {
       (close_code(&close), String::from_utf8(close.payload[2..].to_vec()).expect("close reason is UTF-8"))
     });
     let options =
-      options(Some(1024), Duration::from_secs(1), Some(Duration::from_millis(20)), Some(Duration::from_millis(60)));
+      options(Some(1024), Duration::from_secs(1), Some(Duration::from_millis(3)), Some(Duration::from_millis(5)));
     let url = format!("ws://{address}/socket");
     let (_sender, mut receiver) = connect(&url, &options, &Settings::default()).await.expect("connect to peer");
     let error = receiver.recv().await.expect("receive keepalive error").expect_err("missing pong fails the connection");
@@ -1067,15 +1066,17 @@ mod tests {
       let (stream, _) = listener.accept().await.expect("accept the client");
       let mut reader = raw_websocket(stream).await;
       let close = read_raw_frame(&mut reader).await;
-      tokio::time::sleep(Duration::from_millis(250)).await;
+      // The peer never answers the close frame; the client's own close deadline drops the socket.
+      let mut byte = [0_u8; 1];
+      while reader.read(&mut byte).await.unwrap_or(0) != 0 {}
       close_code(&close)
     });
-    let options = options(Some(1024), Duration::from_millis(60), None, None);
+    let options = options(Some(1024), Duration::from_millis(4), None, None);
     let url = format!("ws://{address}/socket");
     let (sender, _receiver) = connect(&url, &options, &Settings::default()).await.expect("connect to peer");
     let start = Instant::now();
     sender.close().await.expect("close returns when its deadline expires");
-    assert!(start.elapsed() >= Duration::from_millis(50));
+    assert!(start.elapsed() >= Duration::from_millis(3));
     assert!(start.elapsed() < Duration::from_millis(200));
     assert_eq!(server.await.expect("raw peer finishes"), 1000);
   }
@@ -1085,8 +1086,10 @@ mod tests {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind the stalled peer");
     let address = listener.local_addr().expect("read peer address");
     let server = tokio::spawn(async move {
-      let (_stream, _) = listener.accept().await.expect("accept the client");
-      tokio::time::sleep(Duration::from_millis(150)).await;
+      let (mut stream, _) = listener.accept().await.expect("accept the client");
+      // The stalled peer reads the opening request but never answers; the open timeout drops the socket.
+      let mut buffer = [0_u8; 256];
+      while stream.read(&mut buffer).await.unwrap_or(0) != 0 {}
     });
     let mut options = options(Some(1024), Duration::from_secs(1), None, None);
     options.open_timeout = Some(Duration::from_millis(30));

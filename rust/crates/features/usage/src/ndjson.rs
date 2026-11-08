@@ -1,15 +1,18 @@
-use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use anyhow::Context;
+use charliebot_store::run_logs;
 use charliebot_store::run_records::parse_event_line;
 use memchr::memmem;
 use serde_json::Value;
 
 pub fn parse_marker_lines(path: &Path, markers: &[&[u8]]) -> anyhow::Result<Vec<Value>> {
-  let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-  let mut reader = BufReader::new(file);
+  // A compressed log reads as its decompressed bytes; the caller still names the plain path that keys the ledger.
+  let reader = run_logs::open(path)
+    .with_context(|| format!("opening {}", path.display()))?
+    .ok_or_else(|| anyhow::anyhow!("the log {} is missing", path.display()))?;
+  let mut reader = BufReader::new(reader);
   let mut line = Vec::new();
   let mut objects = Vec::new();
   let finders = markers.iter().filter(|marker| !marker.is_empty()).map(memmem::Finder::new).collect::<Vec<_>>();

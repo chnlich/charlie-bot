@@ -739,29 +739,9 @@ fn format_message_block(message: &Value) -> Option<String> {
   }
   lines.extend(tools.iter().map(|tool| {
     let name = text_repr::value_str(tool.get("name").unwrap_or(&Value::Null));
-    format!("$ {name} {}", tool_input_first_line(tool))
+    format!("$ {name} {}", charliebot_tasks::tool_line::tool_input_first_line(tool))
   }));
   Some(lines.join("\n"))
-}
-
-/// One tool call's natural one-line form: Bash carries its command, every other tool a compact
-/// JSON rendering of the input; only the first line survives.
-fn tool_input_first_line(tool: &Value) -> String {
-  let rendered = match tool.get("input") {
-    Some(Value::Object(input)) => {
-      let is_bash = matches!(tool.get("name").and_then(Value::as_str), Some("Bash") | Some("bash"));
-      match (is_bash, input.get("command")) {
-        (true, Some(Value::String(command))) => command.clone(),
-        _ => text_repr::json_dumps(&Value::Object(input.clone()), &JSON_ENSURE_ASCII_FALSE),
-      }
-    }
-    Some(Value::String(text)) => text.clone(),
-    _ => String::new(),
-  };
-  match rendered.split_once('\n') {
-    Some((first, _)) => first.to_string(),
-    None => rendered,
-  }
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::repo_root::CONFIGS_DIR_NAME;
 use serde_json::Value;
 
 use crate::config::effective_backend;
@@ -123,7 +124,7 @@ fn split_entry(entry: &Value) -> Result<(String, Value), String> {
 /// direct parse keeps the document's key order, which the seeded host file keeps; a missing or empty file
 /// reads as `Null`.
 fn read_defaults(repo_root: &Path) -> Result<Value, String> {
-  let path: PathBuf = repo_root.join("configs").join("cron.default.yaml");
+  let path: PathBuf = repo_root.join(CONFIGS_DIR_NAME).join("cron.default.yaml");
   let text = std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
   serde_yaml::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))
 }
@@ -154,6 +155,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_real_run_writes_one_host_file_per_default_entry_and_the_rerun_reports_exists() {
     let repo = repo_with_defaults();
     let home = tempfile::tempdir().expect("a temp home");
@@ -185,6 +187,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn a_dry_run_validates_and_writes_nothing() {
     let repo = repo_with_defaults();
     let home = tempfile::tempdir().expect("a temp home");
@@ -199,6 +202,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn an_unreadable_prompt_file_fails_the_dry_run_and_the_real_run_alike() {
     let repo = repo_with_defaults();
     fs::remove_file(repo.path().join("prompts/cron/memory_curator/memory_selector.md"))

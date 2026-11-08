@@ -293,6 +293,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_launch_local_exit_code_lands_in_the_exit_file() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let launch = local(dir.path(), "exit 3");
@@ -304,6 +305,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_launch_local_runs_in_cwd_and_logs_output() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let launch = launch_local("pwd; echo hello", dir.path(), &dir.path().join("log"), &dir.path().join("exit"))
@@ -317,6 +319,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_launch_local_trailing_comment_in_cmd_still_writes_the_exit_file() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let launch =
@@ -329,6 +332,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_kill_launch_local_kills_the_process_group() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let launch = local(dir.path(), "sleep 600");

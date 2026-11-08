@@ -110,7 +110,12 @@ fn config(home: &Path) -> CharlieBotConfig {
       worktree_dir: "/synthetic/worktrees".to_string(),
       scratch_dir: "/synthetic/scripts".to_string(),
     },
-    backends: BackendsConfig { pool: vec![BACKEND_ID.to_string()], routing: None, options: vec![backend_option(None)] },
+    backends: BackendsConfig {
+      pool: vec![BACKEND_ID.to_string()],
+      routing: None,
+      options: vec![backend_option(None)],
+      auto: None,
+    },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
     remote_run: charliebot_core::config::RemoteRunConfig::default(),
@@ -288,6 +293,7 @@ fn position(snapshot: &PromptSnapshot, reference: &str) -> usize {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn manager_template_is_identical_at_every_depth_with_no_pm_load() {
   let harness = Harness::new();
   let tree = harness.tree().await;
@@ -305,6 +311,7 @@ async fn manager_template_is_identical_at_every_depth_with_no_pm_load() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn manager_prompt_carries_the_shared_master_rules_in_order() {
   let harness = Harness::new();
   let tree = harness.tree().await;
@@ -324,6 +331,7 @@ async fn manager_prompt_carries_the_shared_master_rules_in_order() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn default_empty_local_rules_launch_cleanly() {
   let harness = Harness::new();
   let tree = harness.tree().await;
@@ -337,6 +345,7 @@ async fn default_empty_local_rules_launch_cleanly() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn worker_kinds_get_their_applicable_contracts() {
   let harness = Harness::new();
   let tree = harness.tree().await;
@@ -353,6 +362,7 @@ async fn worker_kinds_get_their_applicable_contracts() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn verify_task_gets_the_verify_contract() {
   let harness = Harness::new();
   let tree = harness.tree().await;
@@ -405,6 +415,7 @@ fn harness_sections_and_after_run_branch_agree_on_reviewer_presence() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn type_less_work_harness_states_the_no_reviewer_contract() {
   let harness = Harness::new();
   let tree = harness.tree().await;
@@ -416,6 +427,7 @@ async fn type_less_work_harness_states_the_no_reviewer_contract() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn implement_work_harness_keeps_the_reviewer_stop_line() {
   let harness = Harness::new();
   let tree = harness.tree().await;
@@ -444,6 +456,7 @@ fn worker_block(snapshot: &PromptSnapshot) -> &str {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn three_levels_with_both_scopes_prove_inheritance_and_ordering() {
   let mut harness = Harness::new();
   let tree = harness.tree().await;
@@ -505,6 +518,7 @@ impl StructuralBlockers for NoGuards {
 /// An agent reparent keeps each moved session's instructions word for word. The move of `moved` drops the rule of
 /// `holder`, which the store carries onto `moved`; the move of `wanderer` drops no rule and keeps the hash too.
 #[tokio::test]
+#[ignore = "integration"]
 async fn an_agent_reparent_keeps_each_moved_prompt_word_for_word() {
   let mut harness = Harness::new();
   let caller = harness.node("caller", None, TaskProfile::Manager, None, "Caller").await;
@@ -541,6 +555,7 @@ async fn an_agent_reparent_keeps_each_moved_prompt_word_for_word() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn manager_prompt_fills_the_agent_message_limit() {
   let harness = Harness::new();
   let root = harness.node("root", None, TaskProfile::Manager, None, "Root").await;
@@ -551,6 +566,7 @@ async fn manager_prompt_fills_the_agent_message_limit() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn overlay_states_of_a_launch_are_judged_and_reported() {
   let harness = Harness::new();
   let tree = harness.tree().await;
@@ -599,6 +615,7 @@ async fn record_snapshot_ref(harness: &Harness, session_id: &str, run_id: &str, 
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn run_context_returns_the_stored_snapshot() {
   let mut harness = Harness::new();
   let tree = harness.tree().await;
@@ -623,6 +640,7 @@ async fn run_context_returns_the_stored_snapshot() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn corrupt_new_snapshot_is_an_error() {
   let harness = Harness::new();
   let tree = harness.tree().await;
@@ -642,6 +660,7 @@ async fn corrupt_new_snapshot_is_an_error() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn unknown_run_is_a_404_with_the_task_text() {
   let harness = Harness::new();
   let tree = harness.tree().await;
@@ -651,6 +670,7 @@ async fn unknown_run_is_a_404_with_the_task_text() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_manager_prompt_carries_the_approval_policy_table_and_an_edit_reaches_the_next_prompt() {
   let harness = Harness::new();
   let tree = harness.tree().await;
@@ -681,6 +701,7 @@ async fn a_manager_prompt_carries_the_approval_policy_table_and_an_edit_reaches_
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_worker_prompt_carries_no_approval_policy_table() {
   let harness = Harness::new();
   let tree = harness.tree().await;

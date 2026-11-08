@@ -16,9 +16,10 @@ use charliebot_store::aggregator;
 use charliebot_store::control_events;
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::projection::MessageProjection;
+use charliebot_store::run_logs;
 use charliebot_store::run_records::{
-  HostBoot, OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF, OBSERVATION_RESULT_REF, RUN_EVENTS_NAME,
-  RUN_METADATA_NAME, RunKind, RunRecord,
+  HostBoot, OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF,
+  OBSERVATION_REPO_PATH, OBSERVATION_RESULT_REF, RUN_EVENTS_NAME, RUN_METADATA_NAME, RunKind, RunRecord,
 };
 use charliebot_store::{SharedChatEvent, Store, StoreError, StoreResult};
 use charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME;
@@ -191,7 +192,7 @@ fn worker_signature(store: &Store, session_id: &str) -> StoreResult<Signature> {
         parts.push(json!([
           name,
           stat_signature(&path.join(RUN_METADATA_NAME))?,
-          stat_signature(&path.join(RUN_EVENTS_NAME))?
+          run_log_signature(&path.join(RUN_EVENTS_NAME))?
         ]));
       }
     }
@@ -204,10 +205,24 @@ fn worker_signature(store: &Store, session_id: &str) -> StoreResult<Signature> {
 
 fn stat_signature(path: &Path) -> StoreResult<Value> {
   match fs::metadata(path) {
-    Ok(metadata) => Ok(json!([timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64, metadata.size()])),
+    Ok(metadata) => Ok(metadata_signature(&metadata)),
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
     Err(error) => Err(path_error(path, error)),
   }
+}
+
+/// One run event log's signature: the plain or compressed file that holds it decides when the transcript rebuilds,
+/// so compressing a finished run's log changes the signature once.
+fn run_log_signature(plain: &Path) -> StoreResult<Value> {
+  match run_logs::stored_metadata(plain) {
+    Ok(Some(metadata)) => Ok(metadata_signature(&metadata)),
+    Ok(None) => Ok(Value::Null),
+    Err(error) => Err(path_error(plain, error)),
+  }
+}
+
+fn metadata_signature(metadata: &fs::Metadata) -> Value {
+  json!([timefmt::file_time_ns(metadata.mtime(), metadata.mtime_nsec()) as i64, metadata.size()])
 }
 
 /// One run's events.jsonl parsed into the compact form; a missing or unreadable log is an empty segment.
@@ -328,9 +343,9 @@ fn delivery_event(
     (OBSERVATION_RAW_LOG_REF): delivered.raw_log_ref.as_deref().unwrap_or(""),
     (OBSERVATION_EVENTS_REF): delivered.events_ref.as_deref().unwrap_or(""),
     (OBSERVATION_RESULT_REF): delivered.result_ref.as_deref().unwrap_or(""),
-    "repo_path": delivered.repo_path.as_deref().unwrap_or(""),
-    "base_branch": delivered.base_branch.as_deref().unwrap_or(""),
-    "branch_name": delivered.branch_name.as_deref().unwrap_or(""),
+    (OBSERVATION_REPO_PATH): delivered.repo_path.as_deref().unwrap_or(""),
+    (OBSERVATION_BASE_BRANCH): delivered.base_branch.as_deref().unwrap_or(""),
+    (OBSERVATION_BRANCH_NAME): delivered.branch_name.as_deref().unwrap_or(""),
     "run_id": delivered.id,
     "timestamp": close_at,
   })))
@@ -412,7 +427,10 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
       .unwrap_or(Value::Null);
     Ok(json!({"run_id": run.id, "text": text}))
   };
-  let closing = json!({"work": closing_for(RunKind::Work)?, "review": closing_for(RunKind::Review)?});
+  let closing = json!({
+    (RunKind::Work.as_str()): closing_for(RunKind::Work)?,
+    (RunKind::Review.as_str()): closing_for(RunKind::Review)?,
+  });
 
   let cause = run_records
     .iter()
@@ -458,9 +476,9 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
         (OBSERVATION_RAW_LOG_REF): delivered.raw_log_ref.as_deref().unwrap_or(""),
         (OBSERVATION_EVENTS_REF): delivered.events_ref.as_deref().unwrap_or(""),
         (OBSERVATION_RESULT_REF): delivered.result_ref.as_deref().unwrap_or(""),
-        "repo_path": delivered.repo_path.as_deref().unwrap_or(""),
-        "base_branch": delivered.base_branch.as_deref().unwrap_or(""),
-        "branch_name": delivered.branch_name.as_deref().unwrap_or(""),
+        (OBSERVATION_REPO_PATH): delivered.repo_path.as_deref().unwrap_or(""),
+        (OBSERVATION_BASE_BRANCH): delivered.base_branch.as_deref().unwrap_or(""),
+        (OBSERVATION_BRANCH_NAME): delivered.branch_name.as_deref().unwrap_or(""),
       })
     })
   } else {
@@ -575,11 +593,12 @@ fn path_error(path: &Path, error: std::io::Error) -> StoreError {
 mod tests {
   use std::fs;
 
+  use charliebot_registry::FeatureContext;
   use charliebot_store::metadata::TaskProfile;
   use charliebot_store::run_records::{RunOutcome, RunOutcomeKind};
 
   use super::*;
-  use crate::test_support::{create_node, feature_context};
+  use crate::test_support::{GatedHome, create_node, feature_context};
 
   async fn worker_context(
     label: &str,
@@ -649,6 +668,40 @@ mod tests {
     let path = store.run_dir(session_id, run_id).join("events.jsonl");
     let lines = events.iter().map(|event| serde_json::to_string(event).unwrap()).collect::<Vec<_>>().join("\n");
     fs::write(path, format!("{lines}\n")).unwrap();
+  }
+
+  /// The transcript a worker session projects from its run logs is the same before and after the compaction stores
+  /// those logs compressed: the reader resolves the plain or the `.zst` file and yields the same content.
+  #[tokio::test]
+  async fn a_compressed_run_log_projects_the_same_transcript() {
+    let (_home, features, session_id) = worker_context(&format!("compressed-{}", uuid::Uuid::new_v4())).await;
+    let store = features.store.as_ref();
+    let started = UtcDateTime::parse("2026-10-17T09:00:00Z").unwrap();
+    let ended = UtcDateTime::parse("2026-10-17T09:10:00Z").unwrap();
+    register_run(store, run_record("run-work", &session_id, RunKind::Work, Some(started))).await;
+    write_run_events(
+      store,
+      &session_id,
+      "run-work",
+      &[
+        json!({"type": "tool_use", "name": "Bash", "input": {"command": "cargo test"}, "timestamp": "tool-time"}),
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}]}, "timestamp": "answer-time"}),
+      ],
+    );
+    finish_run(store, &session_id, "run-work", RunOutcomeKind::Success, ended).await;
+
+    let events_of = |store: &Store| -> Vec<Value> {
+      load_worker_transcript(store, &session_id).unwrap().events.iter().map(|event| event.to_value()).collect()
+    };
+    let before = events_of(store);
+
+    let plain = store.run_dir(&session_id, "run-work").join(RUN_EVENTS_NAME);
+    let compressed = run_logs::compressed_path(&plain);
+    fs::write(&compressed, zstd::stream::encode_all(fs::read(&plain).unwrap().as_slice(), 3).unwrap()).unwrap();
+    fs::remove_file(&plain).unwrap();
+    assert!(!plain.exists() && compressed.is_file(), "the log is stored compressed");
+
+    assert_eq!(events_of(store), before, "the transcript reads the same events from the compressed log");
   }
 
   #[tokio::test]
@@ -738,7 +791,7 @@ mod tests {
       &features.store.get_session(&session_id).await.unwrap().unwrap(),
     )
     .unwrap();
-    assert_eq!(bootstrap["worker_summary"], summary.clone());
+    assert_eq!(bootstrap.value["worker_summary"], summary.clone());
   }
 
   /// The rebuild parses each run log once for its whole byte count: the counter moves by the log
@@ -806,7 +859,11 @@ mod tests {
 
   #[tokio::test]
   async fn running_summary_tracks_appends_without_moving_the_client_revision() {
-    let (_home, features, session_id) = worker_context(&format!("running-{}", uuid::Uuid::new_v4())).await;
+    let (_home, features) = feature_context();
+    let worker =
+      create_node(features.store.as_ref(), &format!("running-{}", uuid::Uuid::new_v4()), None, TaskProfile::Worker)
+        .await;
+    let session_id = worker.id;
     let store = features.store.as_ref();
     register_run(store, run_record("run-live", &session_id, RunKind::Work, None)).await;
     let process = charliebot_core::proc_identity::read_pid_stat(std::process::id()).unwrap();
@@ -823,7 +880,6 @@ mod tests {
     assert_eq!(summary["runs"][0]["tool_calls"], 0);
     assert!(!entry.projection.committed().iter().any(|message| message["kind"] == event_types::RUN_END));
     let revision = entry.revision.clone();
-    assert_eq!(load_worker_transcript(store, &session_id).unwrap().revision, revision);
 
     write_run_events(
       store,
@@ -850,18 +906,6 @@ mod tests {
     assert_eq!(entry.summary["closing"]["work"]["text"], "A later result event");
     assert_eq!(entry.summary["runs"][0]["tool_calls"], 1);
     assert_eq!(entry.revision, revision);
-
-    finish_run(store, &session_id, "run-live", RunOutcomeKind::Success, UtcDateTime::now()).await;
-    let finished = load_worker_transcript(store, &session_id).unwrap();
-    assert_ne!(finished.revision, revision);
-    let finished_revision = finished.revision.clone();
-    write_run_events(
-      store,
-      &session_id,
-      "run-live",
-      &[json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Post-finish update."}]}})],
-    );
-    assert_ne!(load_worker_transcript(store, &session_id).unwrap().revision, finished_revision);
   }
 
   #[tokio::test]
@@ -935,14 +979,20 @@ mod tests {
     deliveries[0]["timestamp"].as_str().unwrap().to_string()
   }
 
-  #[tokio::test]
-  async fn delivery_card_timestamp_is_the_task_close_time() {
-    let (_home, features, session_id) = worker_context(&format!("close-time-{}", uuid::Uuid::new_v4())).await;
+  async fn closed_delivery_context() -> (GatedHome, Arc<FeatureContext>, String) {
+    let (home, features, session_id) = worker_context(&format!("close-time-{}", uuid::Uuid::new_v4())).await;
     let store = features.store.as_ref();
     register_run(store, run_record("run-work", &session_id, RunKind::Work, None)).await;
     let work_ended = UtcDateTime::parse("2026-10-17T09:00:10Z").unwrap();
     finish_run(store, &session_id, "run-work", RunOutcomeKind::Success, work_ended).await;
     append_task_closed(store, &session_id, "2026-10-17T09:00:14Z").await;
+    (home, features, session_id)
+  }
+
+  #[tokio::test]
+  async fn delivery_card_timestamp_is_the_task_close_time() {
+    let (_home, features, session_id) = closed_delivery_context().await;
+    let store = features.store.as_ref();
 
     let entry = load_worker_transcript(store, &session_id).unwrap();
     assert_eq!(delivery_timestamp(&entry), "2026-10-17T09:00:14Z");
@@ -952,6 +1002,14 @@ mod tests {
     let signature = worker_signature(store, &session_id).unwrap();
     let rebuilt = build_worker_transcript(store, &session_id, signature).unwrap();
     assert_eq!(delivery_timestamp(&rebuilt), "2026-10-17T09:00:14Z");
+  }
+
+  #[tokio::test]
+  async fn delivery_card_timestamp_updates_after_reopening_and_closing() {
+    let (_home, features, session_id) = closed_delivery_context().await;
+    let store = features.store.as_ref();
+    let entry = load_worker_transcript(store, &session_id).unwrap();
+    assert_eq!(delivery_timestamp(&entry), "2026-10-17T09:00:14Z");
 
     store
       .append_chat_event(

@@ -29,6 +29,7 @@ const REPO_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../..");
 const CASES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden");
 
 #[test]
+#[ignore = "integration"]
 fn golden_cases() {
   let mut failures = Vec::new();
   let mut cases = 0;
@@ -168,6 +169,7 @@ const GOLDEN_CASE_TESTS: &[&str] = &[
 ];
 
 #[test]
+#[ignore = "integration"]
 fn every_listed_test_has_a_golden_case() {
   let stems: Vec<String> = case_files()
     .iter()
@@ -700,6 +702,7 @@ fn root_placed_value(value: &Value, root: &str) -> Value {
 /// A changed `server.port` in config.yaml takes effect on the next call: the port is read from the
 /// config on every call, and there is no port cache to serve a stale one.
 #[test]
+#[ignore = "integration"]
 fn changed_server_port_takes_effect_on_the_next_call() {
   let temp = tempfile::tempdir().unwrap();
   let config_path = temp.path().join("home").join("config.yaml");
@@ -848,6 +851,7 @@ mod authenticated_commands {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn files_probe_uses_the_access_key_and_reports_status_without_response_bodies() {
     for status in [200, 401, 404, 302] {
       let (port, request_receiver, server) =
@@ -876,6 +880,7 @@ mod authenticated_commands {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn files_probe_prefers_a_run_token_and_encodes_links_like_a_browser() {
     let run_token = charliebot_core::run_token::sign_run_token(
       &charliebot_core::run_token::RunTokenClaims {
@@ -909,6 +914,7 @@ mod authenticated_commands {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn files_probe_handles_each_link_component_and_rejects_relative_paths() {
     let links = [
       ("/bare/path", "/bare/path"),
@@ -939,6 +945,7 @@ mod authenticated_commands {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn files_probe_connection_failures_have_no_status_or_credential() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -956,6 +963,7 @@ mod authenticated_commands {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn files_probe_credential_load_failure_names_only_the_file() {
     let home = home_for_port(1);
     std::fs::write(home.path().join("credentials.yaml"), format!("charliebot: [{ACCESS_KEY}]\n")).unwrap();
@@ -971,6 +979,7 @@ mod authenticated_commands {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn linear_graphql_connection_failures_report_a_cause_without_credentials() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let proxy_port = listener.local_addr().unwrap().port();
@@ -988,6 +997,7 @@ mod authenticated_commands {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn files_probe_returns_after_the_status_line_without_reading_the_body() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();

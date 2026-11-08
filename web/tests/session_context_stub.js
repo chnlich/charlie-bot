@@ -11,6 +11,9 @@ const {createElement, createEscapingElement} = require('./dom_element_stub');
 
 const PAGE_TIMERS_JS = readStatic('page-timers.js');
 const CRON_JS = readPackageStatic('features', 'cron', 'cron.js');
+// The connection layer's request-abort registry; the page loads it before every chat and
+// sidebar module, so the harnesses run it before those too.
+const VIEW_REQUESTS_JS = readStatic('view-requests.js');
 
 function baseSessionContext(overrides = {}) {
   const elements = overrides.elements || new Map();
@@ -56,6 +59,7 @@ function baseSessionContext(overrides = {}) {
     console: {error: () => {}, log: () => {}},
     URLSearchParams,
     AbortController,
+    AbortSignal,
     document: {
       // document lookups (getElementById/querySelector*) differ per harness and
       // are assigned by each fork; createElement is shared.
@@ -132,6 +136,7 @@ function baseSessionContext(overrides = {}) {
 function createChatSidebarContext(context) {
   vm.createContext(context);
   vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
+  vm.runInContext(VIEW_REQUESTS_JS, context, {filename: 'view-requests.js'});
   runStaticModules(context, chatModules());
   standInForUsageJs(context);
   runStaticModules(context, sidebarModules());

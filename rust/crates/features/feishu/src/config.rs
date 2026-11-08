@@ -20,7 +20,7 @@ pub fn section() -> ConfigSection {
   ConfigSection { key: "feishu", legacy_keys: &[], parse: parse_section, dump: dump_section }
 }
 
-/// Render the section as its model dumps it (`charliebot config get feishu`).
+/// The section as its model dumps it (`charliebot config get feishu`).
 fn dump_section(value: &SectionValue) -> Result<serde_json::Value, String> {
   let settings = value.downcast_ref::<FeishuConfig>().ok_or("the feishu section holds an unexpected value")?;
   serde_json::to_value(settings).map_err(|error| error.to_string())

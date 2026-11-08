@@ -1,12 +1,15 @@
 //! Manager turns and task execution adapters.
 
+pub mod auto_switch;
 pub mod autonamer;
+mod backend_retry;
 pub mod cold_read;
 pub mod completion;
 pub mod dispatch;
 pub mod event_text;
 pub mod execution;
 pub mod git;
+pub mod handoff;
 pub mod master_queue;
 pub mod master_run;
 pub mod master_state;
@@ -25,6 +28,7 @@ pub mod spawner_prompt;
 pub mod task_input_prompt;
 pub mod task_sessions;
 pub mod text_length;
+pub mod tool_line;
 pub mod upload;
 pub mod verify_trailer;
 pub mod worker;

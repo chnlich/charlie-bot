@@ -1,4 +1,4 @@
-//! Decode one audio file to the 16 kHz mono PCM16 that the recording transcription takes.
+//! One audio file decoded to the 16 kHz mono PCM16 that the recording transcription takes.
 //!
 //! Symphonia reads the container and the codec. Opus packets go to `opus`, and the container's own priming and
 //! padding go to `edit_list` (MP4) and `matroska` (WebM). A `.pcm` or `.s16` file is already in the target format and
@@ -100,8 +100,8 @@ fn decode(path: &Path) -> Result<Mono, String> {
   Ok(Mono { samples, rate })
 }
 
-/// Keep the frames that an MP4 edit list plays: it starts at `media_time` and runs for its duration. A file without an
-/// edit list has no priming to cut; symphonia already applies the MP3 and Ogg priming in its decoders.
+/// The frames of `samples` that an MP4 edit list plays: it starts at `media_time` and runs for its duration. A file
+/// without an edit list has no priming to cut; symphonia already applies the MP3 and Ogg priming in its decoders.
 fn trim_mp4_edit(samples: &mut Vec<f32>, rate: u32, edit: Option<AudioEdit>) -> Result<(), String> {
   let Some(edit) = edit else {
     return Ok(());
@@ -114,7 +114,7 @@ fn trim_mp4_edit(samples: &mut Vec<f32>, rate: u32, edit: Option<AudioEdit>) -> 
   Ok(())
 }
 
-/// Append each frame's mean over the channels. A mono track is copied as it is.
+/// The mean of each frame over the channels, appended to `out`. A mono track is copied as it is.
 fn push_mono(planes: &[Vec<f32>], out: &mut Vec<f32>) {
   let frames = planes.first().map_or(0, Vec::len);
   let scale = 1.0 / planes.len() as f32;
@@ -123,7 +123,7 @@ fn push_mono(planes: &[Vec<f32>], out: &mut Vec<f32>) {
   }
 }
 
-/// Resample with an FFT resampler.
+/// The samples at `TARGET_RATE`, resampled with an FFT resampler.
 /// Its delay is a whole number of frames at both rates, so the output starts on the input's first frame.
 /// A sinc resampler truncates a fractional delay and shifts the output by up to one frame.
 fn resample(samples: &[f32], rate: u32) -> Result<Vec<f32>, String> {
@@ -162,8 +162,8 @@ mod tests {
 
   use super::*;
 
-  /// A fixture clip and the reference the decoder must match: the reference's sample count and SHA-256, as
-  /// recorded when the reference was made (`tests/fixtures/audio/README.md`).
+  /// A fixture clip and the reference the decoder must match. The fields hold the reference's sample count and
+  /// SHA-256, recorded when the reference was made (`tests/fixtures/audio/README.md`).
   struct Clip {
     file: &'static str,
     samples: usize,
@@ -205,7 +205,7 @@ mod tests {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/audio").join(name)
   }
 
-  /// Decode the clip, and check its length and its correlation with the reference.
+  /// The clip decoded and checked against the reference for length and correlation.
   fn assert_decodes_like_pyav(clip: &Clip) {
     let reference = fs::read(fixture(&format!("{}.pyav16k.s16", clip.file))).expect("the PyAV reference is committed");
     assert_eq!(format!("{:x}", Sha256::digest(&reference)), clip.sha256, "{} reference changed", clip.file);
@@ -237,31 +237,37 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn wav_decodes_like_pyav() {
     assert_decodes_like_pyav(&WAV);
   }
 
   #[test]
+  #[ignore = "integration"]
   fn mp4_aac_decodes_like_pyav() {
     assert_decodes_like_pyav(&MP4_AAC);
   }
 
   #[test]
+  #[ignore = "integration"]
   fn mp3_decodes_like_pyav() {
     assert_decodes_like_pyav(&MP3);
   }
 
   #[test]
+  #[ignore = "integration"]
   fn ogg_vorbis_decodes_like_pyav() {
     assert_decodes_like_pyav(&OGG_VORBIS);
   }
 
   #[test]
+  #[ignore = "integration"]
   fn webm_opus_decodes_like_pyav() {
     assert_decodes_like_pyav(&WEBM_OPUS);
   }
 
   #[test]
+  #[ignore = "integration"]
   fn ogg_opus_decodes_like_pyav() {
     assert_decodes_like_pyav(&OGG_OPUS);
   }

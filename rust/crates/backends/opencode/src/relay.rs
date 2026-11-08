@@ -63,17 +63,7 @@ pub fn run_args(args: &[OsString]) -> anyhow::Result<()> {
   runtime.block_on(run(&directory, parent_pid, &parent_start))
 }
 
-/// Install reqwest's rustls provider when this server process has not configured one yet.
-pub fn ensure_crypto_provider() -> anyhow::Result<()> {
-  if rustls::crypto::CryptoProvider::get_default().is_none() {
-    rustls::crypto::ring::default_provider()
-      .install_default()
-      .map_err(|error| anyhow::anyhow!("installing rustls ring crypto provider: {error:?}"))?;
-  }
-  Ok(())
-}
-
-/// Write a complete connection record with owner-only permissions before publishing its name.
+/// The write of a complete connection record: owner-only permissions, and the name published after it.
 pub fn write_server_record(path: &Path, record: &ServerRecord) -> anyhow::Result<()> {
   write_atomic_json(path, record, 0o600)
 }
@@ -96,20 +86,20 @@ impl ServerRecordReadError {
   }
 }
 
-/// Read one server record: the bytes at `path` decoded as the record `write_server_record` wrote.
+/// The server record at `path`: its bytes decoded as the record `write_server_record` wrote.
 pub fn read_server_record(path: &Path) -> Result<ServerRecord, ServerRecordReadError> {
   let bytes = fs::read(path).map_err(ServerRecordReadError::Read)?;
   serde_json::from_slice(&bytes).map_err(ServerRecordReadError::Decode)
 }
 
-/// Persist why the OpenCode process or its event stream ended while this server was running.
+/// The persisted exit reason: why the OpenCode process or its event stream ended while this server was running.
 pub fn write_server_exit_reason(path: &Path, reason: String) -> anyhow::Result<()> {
   let mut record = read_server_record(path).map_err(ServerRecordReadError::into_error)?;
   record.exit_reason = Some(reason);
   write_atomic_json(path, &record, 0o600)
 }
 
-/// Write the per-turn connection and prompt request atomically.
+/// The atomic write of a turn record: the per-turn connection and prompt request.
 pub fn write_turn_record(path: &Path, record: &TurnRecord) -> anyhow::Result<()> {
   write_atomic_json(path, record, 0o600)
 }
@@ -127,7 +117,7 @@ fn write_atomic_json(path: &Path, value: &impl Serialize, mode: u32) -> anyhow::
   Ok(())
 }
 
-/// Read a turn record when the run belongs to OpenCode.
+/// The turn record of a directory whose run belongs to OpenCode.
 pub fn read_turn_record(directory: &Path) -> anyhow::Result<Option<TurnRecord>> {
   let path = directory.join(TURN_RECORD_NAME);
   match fs::read(&path) {
@@ -165,12 +155,12 @@ pub fn parent_identity() -> anyhow::Result<ProcessIdentity> {
   Ok(identity)
 }
 
-/// Return whether a pid still names the recorded process instance.
+/// The process-instance check: whether a pid still names the recorded process instance.
 pub fn same_process(pid: u32, pid_start: &str) -> bool {
   read_pid_stat(pid).is_some_and(|stat| stat.pid_start == pid_start && stat.state != "Z")
 }
 
-/// Return the name stored in each turn record for the server's connection record.
+/// The connection-record name stored in each turn record.
 pub fn server_record_name(path: &Path) -> anyhow::Result<String> {
   path
     .file_name()
@@ -179,7 +169,7 @@ pub fn server_record_name(path: &Path) -> anyhow::Result<String> {
     .map(str::to_string)
 }
 
-/// Check the per-turn server record reference before joining it to a directory.
+/// The check of a per-turn server record reference before it is joined to a directory.
 pub fn validate_server_record_name(name: &str) -> anyhow::Result<()> {
   let file_name = Path::new(name).file_name().and_then(|name| name.to_str());
   anyhow::ensure!(file_name == Some(name), "OpenCode turn server_record must be a file name");
@@ -199,7 +189,6 @@ async fn run(directory: &Path, parent_pid: u32, parent_start: &str) -> anyhow::R
 }
 
 async fn run_inner(directory: &Path, parent_pid: u32, parent_start: &str, raw_path: &Path) -> anyhow::Result<bool> {
-  ensure_crypto_provider()?;
   let mut terminate = signal(SignalKind::terminate())?;
   let turn = loop {
     tokio::select! {
@@ -228,7 +217,8 @@ async fn run_inner(directory: &Path, parent_pid: u32, parent_start: &str, raw_pa
   let record: ServerRecord = serde_json::from_slice(
     &fs::read(&record_path).with_context(|| format!("reading OpenCode server record {}", record_path.display()))?,
   )?;
-  let client = Client::builder().no_proxy().build()?;
+  let client = charliebot_compat::http_client::client(&charliebot_compat::http_client::Settings::from_env())
+    .context("building the OpenCode relay HTTP client")?;
   let event_url = format!("{}/api/event", record.base_url);
   let response = tokio::select! {
     response = client.get(event_url).basic_auth("opencode", Some(&record.password)).send() => {

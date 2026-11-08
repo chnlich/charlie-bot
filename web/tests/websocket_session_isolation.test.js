@@ -76,7 +76,7 @@ test('only active socket schedules reconnect on close', () => {
   assert.equal(timers.length, 0);
 
   activeSocket.emitClose();
-  assert.equal(timers.length, 1);
+  assert.deepEqual(timers.map((timer) => timer.ms), [1000, 250], 'only the active socket reconnects');
 });
 
 test('disconnectWS detaches handlers and delayed stale callbacks are ignored', () => {

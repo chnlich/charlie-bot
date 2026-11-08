@@ -10,7 +10,7 @@ use charliebot_core::event_types;
 use serde_json::{Value, json};
 
 use crate::control_events;
-use crate::task_tree_state::{TreeIndex, ancestor_ids, index_meta, task_below_caller};
+use crate::task_tree_state::{TreeIndex, ancestor_ids, index_meta, task_below_caller, within_caller_subtree};
 use crate::{StoreError, StoreResult};
 
 /// The refusal for an agent reparent outside the caller's own subtree.
@@ -39,7 +39,7 @@ pub(crate) fn check_agent_scope(
     return Err(StoreError::forbidden(AGENT_REPARENT_SCOPE_REFUSAL));
   };
   let task_below = task_below_caller(index, caller_task, session_id)?;
-  let parent_within = parent_id == caller_task || ancestor_ids(index, parent_id)?.iter().any(|id| id == caller_task);
+  let parent_within = within_caller_subtree(index, caller_task, parent_id)?;
   if !(task_below && parent_within) {
     return Err(StoreError::forbidden(AGENT_REPARENT_SCOPE_REFUSAL));
   }
@@ -313,21 +313,30 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_move_that_drops_one_rule_carries_it_onto_the_moved_task() {
+  async fn a_minimal_move_that_drops_one_rule_carries_it_onto_the_moved_task() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
-    let tree = tree(&store).await;
-    let rule = set_subtree_rule(&store, &tree.a, "rule of a\n").await;
+    let caller = create_node(&store, "caller", None, TaskProfile::Manager).await;
+    let old_parent = create_node(&store, "a", Some(&caller.id), TaskProfile::Manager).await;
+    let moved_task = create_node(&store, "g", Some(&old_parent.id), TaskProfile::Manager).await;
+    let new_parent = create_node(&store, "b", Some(&caller.id), TaskProfile::Manager).await;
+    let rule = set_subtree_rule(&store, &old_parent, "rule of a\n").await;
 
-    let moved = store.patch_task(&tree.g.id, move_under(Some(&tree.b)), agent(&tree.caller), &NoGuards).await.unwrap();
+    let moved =
+      store.patch_task(&moved_task.id, move_under(Some(&new_parent)), agent(&caller), &NoGuards).await.unwrap();
 
-    assert_eq!(moved.task_parent_id.as_deref(), Some(tree.b.id.as_str()));
+    assert_eq!(moved.task_parent_id.as_deref(), Some(new_parent.id.as_str()));
     assert_eq!(moved.subtree_prompt_ref.as_deref(), Some(rule.as_str()));
-    let prompt_fact = facts(&store, &tree.g.id, event_types::PROMPT_CHANGED).pop().unwrap();
+    let prompt_fact = facts(&store, &moved_task.id, event_types::PROMPT_CHANGED).pop().unwrap();
     assert_eq!((&prompt_fact["scope"], &prompt_fact["previous_ref"]), (&json!("subtree"), &Value::Null));
-    assert_eq!(prompt_fact["new_ref"], json!(rule));
-    let fact = facts(&store, &tree.g.id, event_types::TASK_REPARENTED).pop().unwrap();
-    assert_eq!(fact["carried_subtree_prompt"], json!({"ref": rule, "from_session_id": tree.a.id}));
+    assert_eq!(prompt_fact["new_ref"], json!(rule.as_str()));
+    let fact = facts(&store, &moved_task.id, event_types::TASK_REPARENTED).pop().unwrap();
+    assert_eq!(fact["previous_parent_id"], json!(old_parent.id));
+    assert_eq!(fact["task_parent_id"], json!(new_parent.id));
+    assert_eq!(
+      fact["carried_subtree_prompt"],
+      json!({"ref": rule.as_str(), "from_session_id": old_parent.id.as_str()})
+    );
   }
 
   #[tokio::test]

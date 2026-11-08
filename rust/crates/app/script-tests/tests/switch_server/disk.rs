@@ -31,6 +31,7 @@ fn sequence_sampler(world: &World, rates: &[u64]) -> String {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_disk_preflight_proceeds_at_once_on_a_quiet_disk() {
   let world = World::new();
   let run = world.stubbed_preflight_with(
@@ -48,6 +49,7 @@ fn test_disk_preflight_proceeds_at_once_on_a_quiet_disk() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_disk_preflight_proceeds_after_a_busy_disk_falls_under_the_threshold() {
   let world = World::new();
   let run = world.stubbed_preflight_with(
@@ -66,6 +68,7 @@ fn test_disk_preflight_proceeds_after_a_busy_disk_falls_under_the_threshold() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_disk_preflight_times_out_and_names_the_heaviest_cgroup_and_process() {
   let mut world = World::new();
   world.write_session_cgroup("charliebot-sess-aaaa", 1000);
@@ -97,6 +100,7 @@ fn test_disk_preflight_times_out_and_names_the_heaviest_cgroup_and_process() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_session_rbytes_table_names_a_missing_io_stat_and_reads_proc_instead() {
   let world = World::new();
   let pid = 4321;
@@ -116,6 +120,7 @@ fn test_session_rbytes_table_names_a_missing_io_stat_and_reads_proc_instead() {
 }
 
 #[test]
+#[ignore = "integration"]
 fn test_switch_records_session_reads_before_the_stop_and_after_the_new_server_is_ready() {
   let mut world = World::new();
   world.write_session_cgroup("charliebot-sess-cccc", 4096);
@@ -136,6 +141,7 @@ fn test_switch_records_session_reads_before_the_stop_and_after_the_new_server_is
 
 /// A sampler's exit code reaches the preflight: a sampler that cannot read the disk fails it instead of waiting.
 #[test]
+#[ignore = "integration"]
 fn test_disk_preflight_fails_when_the_sampler_cannot_read_the_disk() {
   let world = World::new();
   let run = world.stubbed_preflight_with(
@@ -167,6 +173,7 @@ fn resolved_root_disk(world: &mut World, diskstats: &str, root_dev: &str) -> Str
 /// Linux names the partitions of a disk whose name ends in a digit "<disk>p<N>", so partition 10 of sda is a partition
 /// of sda, not of sda1. The root disk is the disk that holds the root partition, whatever the partition's number.
 #[test]
+#[ignore = "integration"]
 fn test_root_disk_resolves_a_partition_numbered_above_nine_to_its_own_disk() {
   let mut world = World::new();
   assert_eq!(resolved_root_disk(&mut world, "8 0 sda\n8 1 sda1\n8 10 sda10\n", "8:10"), "sda");
@@ -178,6 +185,7 @@ fn test_root_disk_resolves_a_partition_numbered_above_nine_to_its_own_disk() {
 
 /// A process that starts inside the last sample read its bytes inside that sample, so the timeout report names it.
 #[test]
+#[ignore = "integration"]
 fn test_disk_preflight_names_a_process_that_started_inside_the_last_sample() {
   let mut world = World::new();
   // A process that was already running gives the before snapshot a baseline, as every real host has.
@@ -206,6 +214,7 @@ fn test_disk_preflight_names_a_process_that_started_inside_the_last_sample() {
 
 /// A cgroup root that cannot be listed is a failed read, not a switch with no sessions.
 #[test]
+#[ignore = "integration"]
 fn test_session_rbytes_table_fails_when_the_cgroup_root_is_missing() {
   let mut world = World::new();
   let missing = world.root().join("no-cgroup-root");

@@ -183,16 +183,18 @@ test('the artifacts package registers the Plans tab, its plan events and its ses
   });
   const panel = vm.runInContext('planPanel', context);
   const calls = [];
-  for (const name of ['invalidate', 'onReconnect', 'onPlanUpdated', 'onActiveSessionChanged']) {
+  for (const name of ['invalidate', 'onPlanUpdated', 'onActiveSessionChanged']) {
     panel[name] = (...args) => calls.push([name, ...args]);
   }
 
-  connectHandlers.forEach((handler) => handler());
+  // A page-driven reconnect (a switch) stales nothing; a network loss does.
+  connectHandlers.forEach((handler) => handler({afterNetworkLoss: false}));
+  connectHandlers.forEach((handler) => handler({afterNetworkLoss: true}));
   handlers.get('plan_updated')({plan_id: 7});
   listeners.get('charliebot:active-session-changed')();
 
   assert.deepEqual(tabLayouts(tabs), [{id: 'chat-plans', showsChat: false, fullScreenOnMobile: false, keepOnSessionSwitch: false}]);
-  assert.deepEqual(calls, [['invalidate'], ['onReconnect'], ['onPlanUpdated', 7], ['onActiveSessionChanged']]);
+  assert.deepEqual(calls, [['invalidate'], ['onPlanUpdated', 7], ['onActiveSessionChanged']]);
 });
 
 test('the usage package renders its strip from its event type', () => {

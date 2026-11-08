@@ -657,6 +657,7 @@ mod tests {
     }
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn fake_claude_compaction_checks_env_argv_success_failure_and_timeout_notices() {
     let root = tempfile::tempdir().unwrap();
@@ -736,6 +737,7 @@ mod tests {
     assert_eq!(events.lock().unwrap()[2]["type"], charliebot_core::event_types::CONTEXT_COMPACT_FAILED);
   }
 
+  #[ignore = "integration"]
   #[tokio::test]
   async fn generic_runner_judges_the_last_stream_json_result_and_returns_post_readings() {
     let root = tempfile::tempdir().unwrap();

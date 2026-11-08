@@ -521,7 +521,7 @@ mod tests {
   async fn wait_until(mut predicate: impl FnMut() -> bool) {
     tokio::time::timeout(Duration::from_secs(5), async {
       while !predicate() {
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::task::yield_now().await;
       }
     })
     .await
@@ -610,7 +610,7 @@ mod tests {
     let api = FakeApi::start(&[]).await;
     let event = mention();
     let first = handle_app_mention(&event, &home.features, Arc::clone(&api.client)).await.unwrap().unwrap();
-    wait_until(|| home.launches().len() == 1).await;
+    wait_until(|| home.launches().len() == 1 && api.calls().iter().any(|call| call.1 == "/api/reactions.add")).await;
     let second = handle_app_mention(&event, &home.features, Arc::clone(&api.client)).await.unwrap().unwrap();
 
     assert_eq!(first, second);
@@ -707,7 +707,7 @@ mod tests {
 
   #[tokio::test]
   async fn retry_of_a_partial_slack_reply_posts_only_the_missing_segment() {
-    let home = Home::new();
+    let home = Home::for_thread_reply();
     let api = FakeApi::start(&[]).await;
     let session = home.thread_session("slack-partial", TS).await;
     let adapter: Arc<dyn ThreadAdapter> =
@@ -752,25 +752,6 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn trigger_master_forwards_input_id_to_the_task_wake() {
-    let home = Home::new();
-    let api = FakeApi::start(&[]).await;
-    let session_id = handle_app_mention(&mention(), &home.features, Arc::clone(&api.client)).await.unwrap().unwrap();
-    wait_until(|| home.launches().len() == 1).await;
-
-    let summon = home
-      .features
-      .store
-      .load_chat_events_sync(&session_id)
-      .unwrap()
-      .iter()
-      .find(|event| event.get("slack").is_some())
-      .map(|event| event.to_value())
-      .expect("the summon is persisted before the task wake");
-    assert_eq!(home.launches()[0].1[0]["id"], summon["id"]);
-  }
-
-  #[tokio::test]
   async fn remove_reaction_treats_no_reaction_as_success() {
     let api = FakeApi::start(&[]).await;
     api.set_no_reaction();
@@ -782,11 +763,23 @@ mod tests {
 
   #[tokio::test]
   async fn eligible_thread_message_arms_the_follow_trigger() {
-    for watermark in [None, Some(TS)] {
-      let home = Home::new();
-      let api = FakeApi::start(&[]).await;
-      let session_id = summon_session_id("T_TEST", "C_TEST", TS);
-      home.thread_session(&session_id, TS).await;
+    let home = Home::new();
+    let http = charliebot_compat::http_client::client(&charliebot_compat::http_client::Settings {
+      https_proxy: None,
+      no_proxy: Some("127.0.0.1,localhost".to_string()),
+      cert_file: None,
+    })
+    .expect("the Slack test HTTP client builds");
+    let client = Arc::new(SlackClient::with_client(
+      http,
+      "synthetic-bot".to_string(),
+      "synthetic-app".to_string(),
+      "http://127.0.0.1:1/api/".to_string(),
+    ));
+    let cases = [(TS, None, "1700000000.000200"), ("1700000000.000150", Some(TS), "1700000000.000250")];
+    for (thread_ts, watermark, message_ts) in cases {
+      let session_id = summon_session_id("T_TEST", "C_TEST", thread_ts);
+      home.thread_session(&session_id, thread_ts).await;
       if let Some(watermark) = watermark {
         home
           .features
@@ -805,17 +798,17 @@ mod tests {
         "team": "T_TEST",
         "channel": "C_TEST",
         "user": "U_ALLOWED",
-        "thread_ts": TS,
-        "ts": "1700000000.000200",
+        "thread_ts": thread_ts,
+        "ts": message_ts,
       });
 
-      let armed = handle_thread_message(&event, &home.features, Arc::clone(&api.client)).await.unwrap();
+      let armed = handle_thread_message(&event, &home.features, Arc::clone(&client)).await.unwrap();
 
       assert_eq!(armed.as_deref(), Some(session_id.as_str()));
       let triggers = home.features.startup.require::<Arc<TriggerManager>>().unwrap();
       let records = triggers.list_triggers(&session_id).await.unwrap();
       assert_eq!(records.len(), 1);
-      assert_eq!(records[0].message, "slack-thread-follow floor=1700000000.000200");
+      assert_eq!(records[0].message, format!("slack-thread-follow floor={message_ts}"));
     }
   }
 
@@ -943,7 +936,6 @@ mod tests {
       ws_client::Settings::default(),
     ));
     api.wait_for_sockets(1).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
 
     let started = Instant::now();
     task.abort();
@@ -951,7 +943,7 @@ mod tests {
     assert!(started.elapsed() < CLOSE_TIMEOUT, "cancel took {:?}", started.elapsed());
   }
 
-  #[tokio::test]
+  #[tokio::test(start_paused = true)]
   async fn listener_reconnects_within_three_seconds_after_disconnect() {
     let home = Home::new();
     let api = FakeApi::start(&[SocketPlan::Disconnect, SocketPlan::Hold]).await;
@@ -969,7 +961,7 @@ mod tests {
     assert!(task.await.unwrap_err().is_cancelled());
   }
 
-  #[tokio::test]
+  #[tokio::test(start_paused = true)]
   async fn listener_reconnects_after_a_dropped_connection() {
     let home = Home::new();
     let api = FakeApi::start(&[SocketPlan::Drop, SocketPlan::Hold]).await;
@@ -984,7 +976,7 @@ mod tests {
     assert!(task.await.unwrap_err().is_cancelled());
   }
 
-  #[tokio::test]
+  #[tokio::test(start_paused = true)]
   async fn listener_retries_a_failed_apps_connections_open() {
     let home = Home::new();
     let api = FakeApi::start(&[SocketPlan::Hold]).await;

@@ -1,6 +1,5 @@
-//! Process-local backend rotation and quota cooldowns for unpinned work.
+//! Process-local backend rotation for unpinned work, reading "out until" from the shared availability owner.
 
-use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::io::ErrorKind;
 use std::process::{ExitStatus, Stdio};
@@ -19,13 +18,14 @@ use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use time::{Duration, OffsetDateTime, UtcOffset};
+use time::{OffsetDateTime, UtcOffset};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 
+use crate::backend_availability::{self, BackendAvailability};
 use charliebot_store::metadata::UtcDateTime;
 
-/// Error substrings that mark a backend as out of quota.
+/// Error substrings that mark a backend as out of quota; the aigw gateway's `402 Insufficient Balance` text is one.
 pub const QUOTA_ERROR_PATTERNS: &[&str] = &[
   "quota exhausted",
   "quota exceeded",
@@ -46,6 +46,7 @@ pub const QUOTA_ERROR_PATTERNS: &[&str] = &[
   "out of token",
   "out-of-token",
   "insufficient tokens",
+  "insufficient balance",
   "tokens exhausted",
   "quota",
   "rate limit",
@@ -78,8 +79,9 @@ pub const METADATA_OWNER: &str = "backend_pool";
 /// The session metadata field that records whether the pool chose the backend, held in the `backend_pool` slot.
 pub const BACKEND_FROM_POOL_FIELD: &str = "backend_from_pool";
 
-/// The cooldown for a quota error that names no reset time.
-pub const DEFAULT_COOLDOWN: Duration = Duration::minutes(30);
+/// The session metadata field that records whether an Auto session's current member chose the backend, so a quota end
+/// on it moves to the next Auto member and not to the pool.
+pub const BACKEND_FROM_AUTO_FIELD: &str = "backend_from_auto";
 
 /// The route a request keeps on its session: the backend ids the router named, and the router's explanation.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -139,17 +141,30 @@ impl std::error::Error for RouterError {}
 #[derive(Default)]
 struct PoolState {
   position: usize,
-  cooling_until: HashMap<String, OffsetDateTime>,
 }
 
-/// The shared rotation position and cooldown map for every unpinned backend caller.
-#[derive(Default)]
+/// The shared rotation position for every unpinned backend caller; "out until" lives on the availability owner.
 pub struct BackendPool {
+  availability: Arc<BackendAvailability>,
   state: Mutex<PoolState>,
 }
 
 impl BackendPool {
-  /// Select the next configured pool member that is neither cooling nor excluded.
+  /// Build the pool on top of the availability owner every caller reads "out until" from.
+  pub fn new(availability: Arc<BackendAvailability>) -> Self {
+    Self { availability, state: Mutex::new(PoolState::default()) }
+  }
+
+  /// The availability owner this pool reads "out until" from, for callers that record a member out.
+  pub fn availability(&self) -> Arc<BackendAvailability> {
+    Arc::clone(&self.availability)
+  }
+
+  fn out_until(&self, member: &str) -> Option<OffsetDateTime> {
+    self.availability.out_until(member)
+  }
+
+  /// Select the next configured pool member that is neither out nor excluded.
   pub fn select(
     &self,
     cfg: &CharlieBotConfig,
@@ -166,14 +181,14 @@ impl BackendPool {
         tracing::info!(target: "charliebot_agents", caller, member, reason = "excluded by caller", "backend_pool_skipped");
         continue;
       }
-      if let Some(until) = state.cooling_until.get(member)
-        && *until > now
+      if let Some(until) = self.out_until(member)
+        && until > now
       {
         tracing::info!(
           target: "charliebot_agents",
           caller,
           member,
-          reason = %format!("cooling until {}", format_minutes(*until)),
+          reason = %format!("cooling until {}", backend_availability::format_minutes(until)),
           "backend_pool_skipped"
         );
         continue;
@@ -200,20 +215,19 @@ impl BackendPool {
     exclude: &[String],
   ) -> anyhow::Result<Option<BackendOption>> {
     let now = UtcDateTime::now().into_inner();
-    let state = self.state.lock().expect("backend pool mutex is not poisoned");
     for member in backends {
       if exclude.iter().any(|excluded| excluded == member) {
         tracing::info!(target: "charliebot_agents", caller, member, reason = "excluded by caller", "backend_pool_skipped");
         continue;
       }
-      if let Some(until) = state.cooling_until.get(member)
-        && *until > now
+      if let Some(until) = self.out_until(member)
+        && until > now
       {
         tracing::info!(
           target: "charliebot_agents",
           caller,
           member,
-          reason = %format!("cooling until {}", format_minutes(*until)),
+          reason = %format!("cooling until {}", backend_availability::format_minutes(until)),
           "backend_pool_skipped"
         );
         continue;
@@ -326,53 +340,26 @@ impl BackendPool {
 
   fn route_candidates(&self, candidates: &[String]) -> Vec<Value> {
     let now = UtcDateTime::now().into_inner();
-    let state = self.state.lock().expect("backend pool mutex is not poisoned");
     candidates
       .iter()
       .map(|candidate| {
-        let cooling_until =
-          state.cooling_until.get(candidate).filter(|until| **until > now).map(|until| format_isoformat(*until));
+        let cooling_until = self.out_until(candidate).filter(|until| *until > now).map(format_isoformat);
         json!({"id": candidate, "cooling_until": cooling_until})
       })
       .collect()
   }
 
-  /// Keep `backend_id` out of selection until its reset time, or the default cooldown.
-  /// Return the instant when the member becomes selectable again.
-  pub fn cool(&self, backend_id: &str, resets_at: Option<UtcDateTime>) -> OffsetDateTime {
-    let until =
-      resets_at.map(UtcDateTime::into_inner).unwrap_or_else(|| UtcDateTime::now().into_inner() + DEFAULT_COOLDOWN);
-    self.state.lock().expect("backend pool mutex is not poisoned").cooling_until.insert(backend_id.to_string(), until);
-    tracing::warn!(
-      target: "charliebot_agents",
-      member = backend_id,
-      until = %format_minutes(until),
-      reset_known = resets_at.is_some(),
-      "backend_pool_cooled"
-    );
-    until
-  }
-
-  /// Return the stored cooldown deadline, whether or not it has passed.
-  pub fn cooling_until(&self, backend_id: &str) -> Option<OffsetDateTime> {
-    self.state.lock().expect("backend pool mutex is not poisoned").cooling_until.get(backend_id).copied()
-  }
-
-  /// Return the stored cooldown deadline in the minute-resolution event format.
-  pub fn cooling_until_minutes(&self, backend_id: &str) -> Option<String> {
-    self.cooling_until(backend_id).map(format_minutes)
-  }
-
-  /// Describe every configured member and whether its cooldown has ended.
+  /// Describe every configured member and whether its cooling has ended.
   pub fn recovery_report(&self, cfg: &CharlieBotConfig) -> String {
     let now = UtcDateTime::now().into_inner();
-    let state = self.state.lock().expect("backend pool mutex is not poisoned");
     let parts = cfg
       .backends
       .pool
       .iter()
-      .map(|member| match state.cooling_until.get(member) {
-        Some(until) if *until > now => format!("{member} cooling until {}", format_minutes(*until)),
+      .map(|member| match self.out_until(member) {
+        Some(until) if until > now => {
+          format!("{member} cooling until {}", backend_availability::format_minutes(until))
+        }
         _ => format!("{member} not cooling"),
       })
       .collect::<Vec<_>>();
@@ -417,10 +404,13 @@ pub fn backend_pool(features: &FeatureContext) -> anyhow::Result<Arc<BackendPool
   Ok(features.startup.require::<BackendPool>()?)
 }
 
-/// Insert the empty process-wide pool before recovery starts.
+/// Insert the process-wide availability owner and the pool that reads it before recovery starts. A state file that
+/// exists but cannot be read fails the step, and the startup stops with the error that names the file.
 pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
   Box::pin(async move {
-    features.startup.insert(BackendPool::default())?;
+    let cfg = features.config.get()?;
+    features.startup.insert(BackendAvailability::load(&cfg.charliebot_home)?)?;
+    features.startup.insert(BackendPool::new(features.startup.require::<BackendAvailability>()?))?;
     Ok(())
   })
 }
@@ -434,6 +424,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
       after: None,
       fields: vec![
         SlotField { name: BACKEND_FROM_POOL_FIELD, default: serde_json::json!(false) },
+        SlotField { name: BACKEND_FROM_AUTO_FIELD, default: serde_json::json!(false) },
         SlotField { name: "route", default: Value::Null },
       ],
     },
@@ -442,19 +433,11 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 }
 
 fn validate_backend_pool_fields(values: &mut Map<String, Value>) -> Option<String> {
-  let value = values.get_mut(BACKEND_FROM_POOL_FIELD)?;
-  let boolean = match value {
-    Value::Bool(value) => *value,
-    Value::Number(value) if value.as_i64() == Some(0) || value.as_f64() == Some(0.0) => false,
-    Value::Number(value) if value.as_i64() == Some(1) || value.as_f64() == Some(1.0) => true,
-    Value::String(value) => match value.to_ascii_lowercase().as_str() {
-      "1" | "true" | "t" | "yes" | "y" | "on" => true,
-      "0" | "false" | "f" | "no" | "n" | "off" => false,
-      _ => return Some(format!("{BACKEND_FROM_POOL_FIELD} must be a boolean")),
-    },
-    _ => return Some(format!("{BACKEND_FROM_POOL_FIELD} must be a boolean")),
-  };
-  *value = Value::Bool(boolean);
+  for field in [BACKEND_FROM_POOL_FIELD, BACKEND_FROM_AUTO_FIELD] {
+    if let Some(error) = coerce_boolean_field(values, field) {
+      return Some(error);
+    }
+  }
   if let Some(route) = values.get("route")
     && !route.is_null()
     && serde_json::from_value::<BackendRoute>(route.clone()).is_err()
@@ -464,11 +447,22 @@ fn validate_backend_pool_fields(values: &mut Map<String, Value>) -> Option<Strin
   None
 }
 
-fn format_minutes(datetime: OffsetDateTime) -> String {
-  const MINUTES: &[time::format_description::FormatItem<'static>] = time::macros::format_description!(
-    "[year]-[month]-[day]T[hour]:[minute][offset_hour sign:mandatory]:[offset_minute]"
-  );
-  datetime.to_offset(UtcOffset::UTC).format(MINUTES).expect("a UTC timestamp formats")
+/// Store a present boolean field as a JSON boolean, or name the field when its value is not one.
+fn coerce_boolean_field(values: &mut Map<String, Value>, field: &str) -> Option<String> {
+  let value = values.get_mut(field)?;
+  let boolean = match value {
+    Value::Bool(value) => *value,
+    Value::Number(value) if value.as_i64() == Some(0) || value.as_f64() == Some(0.0) => false,
+    Value::Number(value) if value.as_i64() == Some(1) || value.as_f64() == Some(1.0) => true,
+    Value::String(value) => match value.to_ascii_lowercase().as_str() {
+      "1" | "true" | "t" | "yes" | "y" | "on" => true,
+      "0" | "false" | "f" | "no" | "n" | "off" => false,
+      _ => return Some(format!("{field} must be a boolean")),
+    },
+    _ => return Some(format!("{field} must be a boolean")),
+  };
+  *value = Value::Bool(boolean);
+  None
 }
 
 fn format_isoformat(datetime: OffsetDateTime) -> String {
@@ -587,8 +581,9 @@ mod tests {
   use charliebot_core::config::{BackendsConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig};
   use serde_yaml::Mapping;
   use std::fs;
-  use std::path::PathBuf;
+  use std::path::{Path, PathBuf};
   use std::time::Duration as StdDuration;
+  use time::Duration;
 
   fn config(pool: &[&str]) -> CharlieBotConfig {
     let options = ["a", "b", "c"]
@@ -627,6 +622,7 @@ mod tests {
         pool: pool.iter().map(|member| (*member).to_string()).collect(),
         routing: None,
         options,
+        auto: None,
       },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
@@ -639,6 +635,24 @@ mod tests {
   fn select_id(pool: &BackendPool, cfg: &CharlieBotConfig, caller: &str, exclude: &[&str]) -> Option<String> {
     let excluded = exclude.iter().map(|member| (*member).to_string()).collect::<Vec<_>>();
     pool.select(cfg, caller, &excluded).unwrap().map(|option| option.id)
+  }
+
+  /// A pool whose owner holds no record and never persists one: the selection tests never record.
+  fn pool() -> BackendPool {
+    let home = tempfile::tempdir().unwrap();
+    pool_at(home.path())
+  }
+
+  /// A pool on a live home, for the tests that record a member out through the owner.
+  fn pool_at(home: &Path) -> BackendPool {
+    BackendPool::new(Arc::new(BackendAvailability::load(home).unwrap()))
+  }
+
+  fn record(pool: &BackendPool, member: &str, reset: Option<UtcDateTime>) {
+    pool
+      .availability()
+      .record(member, reset, backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
+      .unwrap();
   }
 
   fn router_command(directory: &tempfile::TempDir, body: &str, arguments: &[&str]) -> Vec<String> {
@@ -656,50 +670,66 @@ mod tests {
   #[test]
   fn rotation_follows_the_pool_order() {
     let cfg = config(&["a", "b", "c"]);
-    let pool = BackendPool::default();
+    let pool = pool();
     assert_eq!((0..4).map(|_| select_id(&pool, &cfg, "test", &[]).unwrap()).collect::<Vec<_>>(), ["a", "b", "c", "a"]);
   }
 
   #[test]
-  fn selection_skips_cooling_members_and_callers_exclusions() {
+  fn selection_skips_out_members_and_callers_exclusions() {
+    let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a", "b", "c"]);
-    let pool = BackendPool::default();
-    pool.cool("a", None);
+    let pool = pool_at(home.path());
+    record(&pool, "a", None);
     assert_eq!(select_id(&pool, &cfg, "test", &["c"]), Some("b".to_string()));
     assert_eq!(select_id(&pool, &cfg, "test", &["b", "c"]), None);
   }
 
   #[test]
-  fn cooldown_ends_at_the_reported_reset() {
+  fn a_member_the_owner_recorded_out_stays_out_after_a_rebuild_from_the_same_home() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg = config(&["a", "b", "c"]);
+    let pool = pool_at(home.path());
+    record(&pool, "a", None);
+
+    let reloaded = pool_at(home.path());
+    assert_eq!(select_id(&reloaded, &cfg, "test", &[]), Some("b".to_string()));
+  }
+
+  #[test]
+  fn cooling_ends_at_the_reported_reset() {
+    let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a"]);
-    let pool = BackendPool::default();
+    let pool = pool_at(home.path());
     let reset = UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap();
-    pool.cool("a", Some(reset));
+    record(&pool, "a", Some(reset));
     assert_eq!(select_id(&pool, &cfg, "test", &[]), None);
     let expired = UtcDateTime::parse("2000-01-02T03:04:00Z").unwrap();
-    pool.cool("a", Some(expired));
+    record(&pool, "a", Some(expired));
     assert_eq!(select_id(&pool, &cfg, "test", &[]), Some("a".to_string()));
   }
 
   #[test]
   fn unknown_reset_uses_the_default_cooldown() {
+    let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a"]);
-    let pool = BackendPool::default();
-    let until = pool.cool("a", None);
+    let pool = pool_at(home.path());
+    let until =
+      pool.availability().record("a", None, backend_availability::REASON_QUOTA_ERROR, "synthetic quota error").unwrap();
     let after = OffsetDateTime::now_utc();
     let remaining = until - after;
-    assert!(remaining >= DEFAULT_COOLDOWN - Duration::seconds(5));
-    assert!(remaining <= DEFAULT_COOLDOWN + Duration::seconds(5));
+    assert!(remaining >= backend_availability::DEFAULT_COOLDOWN - Duration::seconds(5));
+    assert!(remaining <= backend_availability::DEFAULT_COOLDOWN + Duration::seconds(5));
     assert_eq!(select_id(&pool, &cfg, "test", &[]), None);
   }
 
   #[test]
   fn recovery_report_names_cooldowns_in_pool_order() {
+    let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a", "b"]);
-    let pool = BackendPool::default();
+    let pool = pool_at(home.path());
     let reset = UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap();
-    pool.cool("a", Some(reset));
-    pool.cool("b", Some(UtcDateTime::parse("2030-01-02T04:04:00Z").unwrap()));
+    record(&pool, "a", Some(reset));
+    record(&pool, "b", Some(UtcDateTime::parse("2030-01-02T04:04:00Z").unwrap()));
     assert_eq!(
       pool.recovery_report(&cfg),
       "a cooling until 2030-01-02T03:04+00:00; b cooling until 2030-01-02T04:04+00:00"
@@ -708,14 +738,15 @@ mod tests {
 
   #[test]
   fn empty_pool_recovery_report_names_the_empty_pool() {
-    assert_eq!(BackendPool::default().recovery_report(&config(&[])), "backends.pool is empty");
+    assert_eq!(pool().recovery_report(&config(&[])), "backends.pool is empty");
   }
 
   #[test]
   fn no_member_message_joins_the_refusal_and_the_recovery_report() {
+    let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a"]);
-    let pool = BackendPool::default();
-    pool.cool("a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
+    let pool = pool_at(home.path());
+    record(&pool, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
     assert_eq!(
       pool.no_member_message(&cfg),
       "no backends.pool member is available: a cooling until 2030-01-02T03:04+00:00"
@@ -723,12 +754,13 @@ mod tests {
   }
 
   #[test]
-  fn callers_share_cooldowns_and_rotation_position() {
+  fn callers_share_the_out_records_and_rotation_position() {
+    let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a", "b", "c"]);
-    let pool = BackendPool::default();
+    let pool = pool_at(home.path());
     assert_eq!(select_id(&pool, &cfg, "caller-a", &[]), Some("a".to_string()));
     assert_eq!(select_id(&pool, &cfg, "caller-b", &[]), Some("b".to_string()));
-    pool.cool("a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
+    record(&pool, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
     assert_eq!(select_id(&pool, &cfg, "caller-b", &[]), Some("c".to_string()));
     assert_eq!(select_id(&pool, &cfg, "caller-a", &[]), Some("b".to_string()));
   }
@@ -736,15 +768,16 @@ mod tests {
   #[test]
   fn pick_ordered_takes_the_first_available_route_member() {
     let cfg = config(&["a", "b", "c"]);
-    let selected = BackendPool::default().pick_ordered(&cfg, "test", &["b".to_string(), "a".to_string()], &[]).unwrap();
+    let selected = pool().pick_ordered(&cfg, "test", &["b".to_string(), "a".to_string()], &[]).unwrap();
     assert_eq!(selected.map(|option| option.id), Some("b".to_string()));
   }
 
   #[test]
-  fn pick_ordered_skips_cooling_and_excluded_members() {
+  fn pick_ordered_skips_out_and_excluded_members() {
+    let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a", "b", "c"]);
-    let pool = BackendPool::default();
-    pool.cool("b", None);
+    let pool = pool_at(home.path());
+    record(&pool, "b", None);
     assert_eq!(
       pool.pick_ordered(&cfg, "test", &["b".to_string(), "a".to_string()], &[]).unwrap().map(|option| option.id),
       Some("a".to_string())
@@ -753,10 +786,11 @@ mod tests {
   }
 
   #[test]
-  fn pick_ordered_shares_the_pool_cooldown_table() {
+  fn pick_ordered_shares_the_owner_state_with_selection() {
+    let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a", "b"]);
-    let pool = BackendPool::default();
-    pool.cool("a", None);
+    let pool = pool_at(home.path());
+    record(&pool, "a", None);
     assert_eq!(select_id(&pool, &cfg, "test", &[]), Some("b".to_string()));
     assert_eq!(
       pool.pick_ordered(&cfg, "test", &["a".to_string(), "b".to_string()], &[]).unwrap().map(|option| option.id),
@@ -772,6 +806,7 @@ mod tests {
       "Disk quota exceeded",
       "rate limit reached for this key",
       "HTTP 429 Too Many Requests",
+      "API Error: 402 Insufficient Balance",
     ] {
       assert!(is_quota_error(text), "{text}");
     }
@@ -784,10 +819,11 @@ mod tests {
   fn pool_entries_without_options_fail_selection() {
     let mut cfg = config(&["missing"]);
     cfg.backends.options.clear();
-    assert!(BackendPool::default().select(&cfg, "test", &[]).is_err());
+    assert!(pool().select(&cfg, "test", &[]).is_err());
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn router_returns_its_order_and_reason() {
     let directory = tempfile::tempdir().unwrap();
     let command = router_command(
@@ -798,10 +834,8 @@ mod tests {
     let mut cfg = config(&["a", "b"]);
     configured_router(&mut cfg, command);
 
-    let answer = BackendPool::default()
-      .route(&cfg, "implement", "design task", &["a".to_string(), "b".to_string()], Some("a"))
-      .await
-      .unwrap();
+    let answer =
+      pool().route(&cfg, "implement", "design task", &["a".to_string(), "b".to_string()], Some("a")).await.unwrap();
     assert_eq!(
       answer,
       RouterAnswer { routed: true, backends: vec!["b".to_string(), "a".to_string()], reason: "ranked".to_string() }
@@ -809,6 +843,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn router_receives_role_text_session_backend_and_each_cooling_deadline() {
     let directory = tempfile::tempdir().unwrap();
     let capture = directory.path().join("stdin.json");
@@ -820,9 +855,10 @@ mod tests {
     );
     let mut cfg = config(&["a", "b"]);
     configured_router(&mut cfg, command);
-    let pool = BackendPool::default();
-    pool.cool("a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
-    pool.cool("b", Some(UtcDateTime::parse("2000-01-02T03:04:00Z").unwrap()));
+    let home = tempfile::tempdir().unwrap();
+    let pool = pool_at(home.path());
+    record(&pool, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
+    record(&pool, "b", Some(UtcDateTime::parse("2000-01-02T03:04:00Z").unwrap()));
 
     let answer =
       pool.route(&cfg, "thread", "untrimmed thread", &["a".to_string(), "b".to_string()], Some("b")).await.unwrap();
@@ -841,8 +877,9 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn router_failures_surface_start_exit_contract_unknown_id_and_timeout() {
-    let pool = BackendPool::default();
+    let pool = pool();
     let candidates = ["a".to_string(), "b".to_string()];
 
     let missing = pool

@@ -29,6 +29,7 @@ pub mod regex_classes;
 pub mod repo_root;
 pub mod run_kind;
 pub mod run_token;
+pub mod sequence_diff;
 pub mod ssh;
 pub mod str_methods;
 pub mod tempdir;
@@ -37,7 +38,6 @@ pub mod test_support;
 pub mod text_repr;
 pub mod timefmt;
 pub mod timeouts;
-pub mod v1_sessions;
 pub mod web_search;
 
 pub use metadata_slot::{MetadataFile, MetadataSlot, MetadataSlotValidator, SlotField};

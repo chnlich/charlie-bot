@@ -24,7 +24,8 @@ use charliebot_core::text_repr::is_truthy;
 use charliebot_core::timefmt::utc_now_iso;
 use charliebot_registry::usage::{
   DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_SCOPE_LABEL, PANEL_UTILIZATION,
-  PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT, as_utilization, mark_expired_windows,
+  PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT, WEEKLY_WINDOW_MINUTES, as_utilization,
+  mark_expired_windows,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -58,9 +59,10 @@ const PROVIDER_LABEL: &str = "Claude";
 const NO_DATA: &str = "no data";
 
 /// The plan windows the response names by field: `(camel name, snake name, window length in minutes)`.
-const CLAUDE_WINDOW_FIELDS: [(&str, &str, i64); 2] = [("fiveHour", "five_hour", 300), ("sevenDay", "seven_day", 10080)];
+const CLAUDE_WINDOW_FIELDS: [(&str, &str, i64); 2] =
+  [("fiveHour", "five_hour", 300), ("sevenDay", "seven_day", WEEKLY_WINDOW_MINUTES)];
 /// The window length of each `limits[].group` the response reports. Any other group is skipped with a warning.
-const LIMIT_GROUP_WINDOW_MINUTES: [(&str, i64); 2] = [("session", 300), ("weekly", 10080)];
+const LIMIT_GROUP_WINDOW_MINUTES: [(&str, i64); 2] = [("session", 300), ("weekly", WEEKLY_WINDOW_MINUTES)];
 
 static CLI_VERSION: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(r"\d+\.\d+\.\d+").expect("the version pattern is valid"));
@@ -598,8 +600,8 @@ fn expires_at_ms(token: &Map<String, Value>) -> Option<i64> {
   token.get("expires_in").and_then(Value::as_f64).map(|relative| ((now_seconds() + relative) * 1000.0) as i64)
 }
 
-/// Replaces the renewed tokens in a credentials file: the file is read again, its other keys are kept in place, and the
-/// new file replaces the old in one step.
+/// Replaces the renewed tokens in a credentials file. The file is read again and its other keys are kept in place.
+/// The new file replaces the old in one step.
 fn write_renewed_credentials(
   path: &Path,
   access_token: &str,
@@ -621,8 +623,9 @@ fn write_renewed_credentials(
   write_private_atomically(path, &text)
 }
 
-/// Writes `text` to `path` through a uniquely named sibling that is created 0600 and swapped in by `rename`, so the token
-/// never appears at its final path readable by anyone but the owner. The sibling is removed when a step fails.
+/// Writes `text` to `path` through a uniquely named sibling that is created 0600 and swapped in by `rename`.
+/// The token never appears at its final path readable by anyone but the owner. The sibling is removed when a
+/// step fails.
 fn write_private_atomically(path: &Path, text: &str) -> anyhow::Result<()> {
   let name = path.file_name().context("a credentials path names a file")?.to_string_lossy();
   let directory = path.parent().context("a credentials path names a file in a directory")?;
@@ -646,7 +649,7 @@ struct Window {
   entry: Value,
 }
 
-/// The usage the panel stores, built from one response: the plan windows come first in their fixed order, then the
+/// The usage the panel stores, built from one response. The plan windows come first in their fixed order, then the
 /// scoped windows, all sorted by window length and scope label. A reading timestamp and the provider complete it.
 pub fn transform_response(raw: &Value, account: &str, quota: &QuotaState) -> anyhow::Result<Map<String, Value>> {
   let raw = raw.as_object().context("the usage response is not a JSON object")?;

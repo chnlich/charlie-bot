@@ -4,7 +4,8 @@
 // served home against the mock home, runs the chosen scenarios and writes one JSON file for the side.
 //
 //   node bench.mjs --side before|after --out <file.json> --mock-home <dir> --mock-home-bin <path> \
-//     --reply-dir <dir> --assets <dir> --commit <text> [--repetitions N] [--scenarios background,held,reset,stream]
+//     --reply-dir <dir> --assets <dir> --commit <text> [--repetitions N] \
+//     [--scenarios background,held,reset,stream,starred,threads]
 //
 // Exit: 0 when the scenarios were measured (the verdicts are in the JSON and the table); 1 when a measurement failed.
 
@@ -16,38 +17,60 @@ import path from 'node:path';
 import { ServerApi } from './api.mjs';
 import { loadAssets } from './assets.mjs';
 import { chromeBinary } from './chrome.mjs';
+import { startCdn } from './cdn.mjs';
 import { startFront } from './front.mjs';
 import {
   BENCH_SESSIONS,
   LINK,
   LIVE_READBACK,
   REPETITIONS,
+  STATUS_CHURN,
   TARGETS,
   TASK_TREE_LOAD,
   VIEW,
 } from './profile.mjs';
-import { REPLY_PIECES, REPLY_SOURCES } from './reply.mjs';
-import { backgroundRep, heldBlackoutRep, longStreamRep, resetBlackoutRep } from './scenarios.mjs';
+import { REPLY_PIECES, REPLY_SOURCES, TOOL_CALL_SPAN_SECONDS, TOOL_PAIRS, toolRowBytes } from './reply.mjs';
+import {
+  backgroundRep,
+  heldBlackoutRep,
+  longStreamRep,
+  resetBlackoutRep,
+  toolStreamRep,
+  viewBackgroundRep,
+} from './scenarios.mjs';
+import { formatOpen, openScenario } from './open.mjs';
 import { METRICS, calibrate, formatSide, percentile, summarize } from './report.mjs';
+import { TrialWatch } from './trials.mjs';
 
+// `starred` and `threads` measure scenario 1's background with the visible tab on that sidebar view. They run only when
+// named, after the six scenarios' own.
 const SCENARIOS = Object.freeze({
   background: backgroundRep,
   held: heldBlackoutRep,
   reset: resetBlackoutRep,
   stream: longStreamRep,
+  tools: toolStreamRep,
+  starred: viewBackgroundRep('starred'),
+  threads: viewBackgroundRep('threads'),
 });
+const DEFAULT_SCENARIOS = Object.freeze(['background', 'held', 'reset', 'stream']);
+
+// The open scenario runs its own cells, five repetitions each, in cell order, so it is not one of the per-repetition
+// scenarios above. It is selected by name only: the default run keeps the four scenarios of README.md.
+const OPEN_SCENARIO = 'open';
 
 // The sessions the bench needs are created on the trial's backend option, which scripts/release/trial.sh writes as
 // charlie-code-release-trial; the charlie-code binary behind it is the stub that run.sh puts on PATH. Index 1 is the
 // open session, 2 the background one, 3 to 5 the probes, and from FIRST_SIZED_INDEX on the switch target and the held
-// targets, which take turns until their bootstrap reaches the live view's size.
+// targets, which take turns until their bootstrap reaches the live view's size. The last index is the row whose status
+// churns, which the background load keeps idle in size.
 const STUB_BACKEND_ID = 'charlie-code-release-trial';
 const SEED_TIMEOUT_MS = 120000;
 const FIRST_SIZED_INDEX = 6;
 const MAX_SIZING_TURNS = 30;
 
 function parseArgs(argv) {
-  const args = { repetitions: REPETITIONS, scenarios: Object.keys(SCENARIOS) };
+  const args = { repetitions: REPETITIONS, scenarios: DEFAULT_SCENARIOS.join(',') };
   const flags = {
     '--side': 'side',
     '--out': 'out',
@@ -75,12 +98,15 @@ function parseArgs(argv) {
     throw new Error(`--side must be before or after, got ${args.side}`);
   }
   args.repetitions = Number(args.repetitions);
-  args.scenarios = args.scenarios.split(',');
-  for (const name of args.scenarios) {
-    if (!(name in SCENARIOS)) {
+  const named = new Set(args.scenarios.split(','));
+  for (const name of named) {
+    if (!(name in SCENARIOS) && name !== OPEN_SCENARIO) {
       throw new Error(`unknown scenario ${name}`);
     }
   }
+  // The scenarios run in SCENARIOS' order, so a view scenario's starred rows never reach the six scenarios' own. The
+  // open scenario runs after them: it is not one of the per-repetition scenarios.
+  args.scenarios = [...Object.keys(SCENARIOS).filter((name) => named.has(name)), ...named.has(OPEN_SCENARIO) ? [OPEN_SCENARIO] : []];
   return args;
 }
 
@@ -96,27 +122,28 @@ function requireEnv(names) {
   return values;
 }
 
-// Creates one bench session and seeds it. A session with `targetBytes` takes turns until its bootstrap reaches that
-// many bytes on the wire, and reports the turns it took; any other takes one turn. The mock home's own sessions hold no
-// task boundary, so the server refuses a message to them; the bench's sessions are task-tree nodes. Each session's
-// marker is its last turn's text, unique to it, so the page shows a switch only when that session's own message is
-// rendered.
+// Creates one bench session and seeds it. A session with `targetBytes` takes turns until its bootstrap content
+// reaches that many bytes on the wire untrimmed — the served body may be smaller, because the first screen's trim
+// keeps it near its budget — and reports the turns it took; any other takes one turn. The mock home's own sessions
+// hold no task boundary, so the server refuses a message to them; the bench's sessions are task-tree nodes. Each
+// session's marker is its last turn's text, unique to it, so the page shows a switch only when that session's own
+// message is rendered.
 async function seedSession(api, tag, index, targetBytes) {
-  const id = await api.createSession(`pn-${tag}-${index}`, STUB_BACKEND_ID);
+  const { id, group } = await api.createSession(`pn-${tag}-${index}`, STUB_BACKEND_ID);
   for (let turn = 1; ; turn++) {
     const marker = `pn-seed ${tag} ${index} ${turn}`;
     await api.sendMessage(id, marker);
     await api.waitForIdle(id, SEED_TIMEOUT_MS);
     if (targetBytes === null) {
-      return { id, marker, turns: 1, bootstrapWireBytes: null };
+      return { id, group, marker, turns: 1, bootstrapWireBytes: null };
     }
-    const bootstrapWireBytes = await api.bootstrapWireBytes(id);
-    if (bootstrapWireBytes >= targetBytes) {
-      return { id, marker, turns: turn, bootstrapWireBytes };
+    const { untrimmedBytes } = await api.bootstrapWireBytes(id);
+    if (untrimmedBytes >= targetBytes) {
+      return { id, group, marker, turns: turn, bootstrapWireBytes: untrimmedBytes };
     }
     if (turn === MAX_SIZING_TURNS) {
       throw new Error(
-        `session ${id} reached ${bootstrapWireBytes} bootstrap bytes in ${turn} turns, short of ${targetBytes}; ` +
+        `session ${id} reached ${untrimmedBytes} untrimmed bootstrap bytes in ${turn} turns, short of ${targetBytes}; ` +
           await describeBootstrap(api, id),
       );
     }
@@ -139,15 +166,16 @@ async function createSessions(api) {
   const tag = crypto.randomBytes(4).toString('hex');
   const made = [];
   for (let index = 1; index <= BENCH_SESSIONS; index++) {
-    const targetBytes = index >= FIRST_SIZED_INDEX ? VIEW.bootstrapWireBytes : null;
-    made.push(await seedSession(api, tag, index, targetBytes));
+    const sized = index >= FIRST_SIZED_INDEX && index < BENCH_SESSIONS;
+    made.push(await seedSession(api, tag, index, sized ? VIEW.bootstrapUntrimmedWireBytes : null));
   }
   return {
     open: made[0],
     background: made[1],
     probes: made.slice(2, 5),
     switchTarget: made[FIRST_SIZED_INDEX - 1],
-    held: made.slice(FIRST_SIZED_INDEX),
+    held: made.slice(FIRST_SIZED_INDEX, BENCH_SESSIONS - 1),
+    churn: made[BENCH_SESSIONS - 1],
   };
 }
 
@@ -180,8 +208,8 @@ function replyTextBytes(dir) {
   return bytes;
 }
 
-// A self-signed certificate for the TLS front. The browser accepts it under --ignore-certificate-errors, as it accepts
-// the trial's certificate on Tailscale Serve's test stand-in.
+// A self-signed certificate for the TLS front, and the base64 SHA-256 of its public key, which Chrome trusts by name
+// (launchBrowser in chrome.mjs).
 function makeCertificate(dir) {
   fs.mkdirSync(dir, { recursive: true });
   const key = path.join(dir, 'key.pem');
@@ -195,11 +223,18 @@ function makeCertificate(dir) {
     ],
     { stdio: 'ignore' },
   );
-  return { key: fs.readFileSync(key), cert: fs.readFileSync(cert) };
+  const certPem = fs.readFileSync(cert);
+  const spkiDer = new crypto.X509Certificate(certPem).publicKey.export({ type: 'spki', format: 'der' });
+  return {
+    key: fs.readFileSync(key),
+    cert: certPem,
+    spki: crypto.createHash('sha256').update(spkiDer).digest('base64'),
+  };
 }
 
 function buildSide({
-  args, startedAt, finishedAt, status, error, results, assets, sessions, view, replyBytes, chromeVersion,
+  args, startedAt, finishedAt, status, error, results, openResult, assets, sessions, view, otherViews, replyBytes,
+  chromeVersion,
 }) {
   const side = {
     side: args.side,
@@ -212,10 +247,17 @@ function buildSide({
     link: LINK,
     targets: TARGETS,
     taskTreeLoad: TASK_TREE_LOAD,
+    statusChurn: STATUS_CHURN,
     repetitions: args.repetitions,
-    reply: { sources: REPLY_SOURCES, pieces: REPLY_PIECES, textBytes: replyBytes },
+    reply: {
+      sources: REPLY_SOURCES,
+      pieces: REPLY_PIECES,
+      textBytes: replyBytes,
+      toolPiece: { pairs: TOOL_PAIRS, callSpanSeconds: TOOL_CALL_SPAN_SECONDS, rowBytes: toolRowBytes() },
+    },
     assets: Object.fromEntries([...assets].map(([url, asset]) => [url, asset.sha256])),
     view: view && { ...view, live: VIEW },
+    otherViews,
     liveReadback: LIVE_READBACK,
     sessions: sessions && {
       open: sessions.open.id,
@@ -223,6 +265,7 @@ function buildSide({
       probes: sessions.probes.map((session) => session.id),
       switchTarget: sessions.switchTarget.id,
       held: sessions.held.map((session) => session.id),
+      churn: sessions.churn.id,
       sizedTargets: [sessions.switchTarget, ...sessions.held].map(({ id, turns, bootstrapWireBytes }) => ({
         id,
         turns,
@@ -230,6 +273,7 @@ function buildSide({
       })),
     },
     reps: results,
+    open: openResult,
     metrics: {},
     calibration: null,
   };
@@ -237,7 +281,7 @@ function buildSide({
     side.calibration = calibrate(results.background);
   }
   for (const metric of METRICS) {
-    const repsOf = { 1: 'background', 2: 'background', 3: 'background', 4: 'held', 5: 'reset', 6: 'stream' }[metric.scenario];
+    const repsOf = { 1: 'background', 2: 'background', 3: 'background', 4: 'held', 5: 'reset', 6: 'stream', 7: 'tools' }[metric.scenario];
     if (results[repsOf].length > 0 && status === 'measured') {
       side.metrics[metric.id] = summarize(results[repsOf], metric);
     }
@@ -260,15 +304,24 @@ async function main() {
     assets: new Map(),
     replyBytes: 0,
     frontPort: null,
+    trustedSpki: null,
     origin: null,
     runDir: path.dirname(args.out),
     chromeVersion: null,
+    backendId: STUB_BACKEND_ID,
+    otherViews: {},
   };
-  const results = { background: [], held: [], reset: [], stream: [] };
+  const results = Object.fromEntries(Object.keys(SCENARIOS).map((name) => [name, []]));
+  // The open scenario fills this object cell by cell, so a failure part-way leaves the cells measured so far.
+  const openResult = { cpu: null, reference: null, cells: [], releases: 0 };
   let status = 'measured';
   let error = null;
   let front = null;
+  let cdn = null;
+  const trials = new TrialWatch();
+  ctx.trials = trials;
   try {
+    trials.start();
     const check = spawnSync(args.mockHomeBin, ['check', args.mockHome, api.base], { stdio: 'inherit' });
     if (check.status !== 0) {
       throw new Error(`mock-home check exited ${check.status}: the served home is not the mock home`);
@@ -279,19 +332,41 @@ async function main() {
     ctx.view = await measureView(api);
     const serve = new URL(api.base);
     const tls = makeCertificate(path.join(ctx.runDir, `tls-${args.side}`));
-    front = await startFront({ ...tls, target: { host: serve.hostname, port: Number(serve.port) } });
+    const target = { host: serve.hostname, port: Number(serve.port) };
+    front = await startFront({ key: tls.key, cert: tls.cert, target });
     ctx.frontPort = front.port;
+    ctx.trustedSpki = tls.spki;
     ctx.origin = `https://localhost:${front.port}`;
+    if (args.scenarios.includes(OPEN_SCENARIO)) {
+      const cdnTls = makeCertificate(path.join(ctx.runDir, `tls-cdn-${args.side}`));
+      cdn = await startCdn({ key: cdnTls.key, cert: cdnTls.cert, assets: ctx.assets });
+      ctx.cdnPort = cdn.port;
+      // The browser pins both servers' keys: the front's and the CDN stand-in's. Without the stand-in's pin every
+      // CDN file fails the certificate check and no CDN byte crosses the link.
+      ctx.cdnSpki = cdnTls.spki;
+    }
     for (const name of args.scenarios) {
+      if (name === OPEN_SCENARIO) {
+        await openScenario(ctx, args.repetitions, openResult);
+        continue;
+      }
       for (let repetition = 1; repetition <= args.repetitions; repetition++) {
         process.stderr.write(`[${args.side}] ${name} repetition ${repetition}/${args.repetitions}\n`);
-        results[name].push(await SCENARIOS[name](ctx, repetition));
+        const from = trials.mark();
+        const rep = await SCENARIOS[name](ctx, repetition);
+        const otherTrials = trials.since(from);
+        const startedAt = new Date(from).toISOString();
+        results[name].push({ ...rep, startedAt, finishedAt: new Date().toISOString(), otherTrials });
       }
     }
   } catch (caught) {
     status = 'failed';
     error = caught.stack ?? String(caught);
   } finally {
+    trials.stop();
+    if (cdn) {
+      await cdn.close();
+    }
     if (front) {
       await front.close();
     }
@@ -304,9 +379,11 @@ async function main() {
     status,
     error,
     results,
+    openResult,
     assets: ctx.assets,
     sessions: ctx.sessions,
     view: ctx.view,
+    otherViews: ctx.otherViews,
     replyBytes: ctx.replyBytes,
     chromeVersion: ctx.chromeVersion,
   });
@@ -314,13 +391,19 @@ async function main() {
   process.stderr.write(`wrote ${args.out}\n`);
   if (status !== 'measured') {
     process.stderr.write(`${error}\n`);
-    process.exitCode = 1;
-    return;
+    process.exit(1);
   }
-  process.stdout.write(`${formatSide(side)}\n`);
+  // The side's JSON and its table are its whole product, and the trial waits for this process before it stops the
+  // server. A socket or a Chrome handle left behind must not hold the trial open, so the process ends once the
+  // table and the open scenario's line are out the door.
+  await new Promise((resolve) => process.stdout.write(`${formatSide(side)}\n`, resolve));
+  if (openResult.cpu !== null) {
+    await new Promise((resolve) => process.stdout.write(`${formatOpen(openResult)}\n`, resolve));
+  }
+  process.exit(0);
 }
 
 main().catch((caught) => {
   process.stderr.write(`${caught.stack ?? caught}\n`);
-  process.exitCode = 1;
+  process.exit(1);
 });

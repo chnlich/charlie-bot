@@ -107,8 +107,7 @@ test('a close with another code schedules the reconnect as before', () => {
   context.connectWS();
   FakeWebSocket.instances[0].emitClose({code: 1006});
 
-  assert.equal(timers.length, 1);
-  assert.equal(timers[0].ms, 1000);
+  assert.deepEqual(timers.map((timer) => timer.ms), [1000, 250], 'the reconnect backoff, then the quick retry');
   assert.deepEqual(reloaded, []);
   assert.equal(sessionStorage.store.size, 0, 'a plain close stores no reload time');
 });

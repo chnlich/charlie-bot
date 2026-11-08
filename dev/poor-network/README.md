@@ -2,7 +2,7 @@
 
 One command drives the web client in headless Chrome through a shaping proxy at the link profile in `profile.mjs`.
 The browser's connections all share that proxy's bandwidth budget. The client talks to a trial server on the mock home.
-The bench reports six scenarios, five repetitions each, as JSON and as a summary table with a pass or fail against each
+The bench reports seven scenarios, five repetitions each, as JSON and as a summary table with a pass or fail against each
 target.
 
 ## Run
@@ -18,18 +18,26 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 |---|---|
 | `--side after` | Measure this tree. |
 | `--side before` | Measure `--before-rev` (default `origin/main`) of the clone at `--before-clone`. |
-| `--side both` | Measure the before side, then the after side. If the before side's calibration does not reproduce, stop with exit 3 and do not run the after side. |
+| `--side both` | Measure the before side, then the after side. If the before side is the reference commit (`CALIBRATION_REFERENCE`) and its calibration does not reproduce, stop with exit 3 and do not run the after side. |
 | `--out-dir DIR` | Where the run's files go, outside the tree. |
 | `--repetitions N` | Repetitions per scenario (default 5). |
-| `--scenarios LIST` | Any of `background,held,reset,stream` (default all). |
+| `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,open` (default the first four). `open` runs its own cells, see below. |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
 | `--detach` | Start a transient systemd user unit and return; the log is `DIR/pn-<id>.log`. |
 
 Exit codes: 0 both sides measured; 1 a measurement or build failed (the side's JSON still names the error); 2 a
-precondition failed and nothing started; 3 the baseline calibration did not reproduce.
+precondition failed and nothing started; 3 the baseline calibration did not reproduce; 4 a scenario the bench passed
+on the before side fails on the after side; 75 a side's wait for the lock ran out. Every side takes the bench's own
+advisory lock, `$HOME/pn-runs/.bench.lock`, around its trial (not the builds), waiting up to 2 h for it; no option
+chooses another lock file or skips it. One lock hold covers one side attempt: a caller that retries a timed-out side
+runs the command again, which takes the lock again at the back of the queue. The side JSON is the bench's last
+artifact; when it is 120 s old and the bench still runs, the runner ends the trial tree itself, so a bench that hangs
+after its work never holds the lock, and the summary is reprinted from the JSON.
 
 Chrome comes from `POOR_NETWORK_CHROME`, or else the newest `~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome`.
 The trial replaces `HOME`, so the discovery happens in `run.sh`.
+The trial points `TMPDIR` into its tree, and Chrome's process-singleton socket path is short, so `run.sh` passes the
+caller's own `TMPDIR` to Chrome as `POOR_NETWORK_CHROME_TMPDIR`.
 
 Output: `DIR/<run id>/before.json` and `after.json`, one per side, with the link, the targets, the Chrome version, the
 asset hashes, the session ids, the view as measured against the live view, and every repetition's raw numbers. The
@@ -43,18 +51,93 @@ The link is in `LINK` and the targets are in `TARGETS` of `profile.mjs`. No othe
 - 100 kbit/s per direction (12,500 bytes/s), one budget per direction shared by every browser connection. Bytes move in
   1 KB quanta, round robin across the connections.
 - A 1 s delay spike once every 60 s, both directions.
-- A scripted 30 s blackout, in `hold` mode (bytes wait) or `reset` mode (every connection is reset when it starts).
+- A scripted 30 s blackout that drops every packet in both directions, a new connection's SYN included. No byte crosses
+  the link while it runs, and a connection attempt that starts inside it is never answered — not even at the restore —
+  so the browser retries it on its own schedule. In `hold` mode the established connections survive: their bytes stop
+  with the link and travel again at the restore. In `reset` mode every connection is reset when the blackout starts.
 
 | Scenario | Measures | Target |
 |---|---|---|
 | 1 background, received and sent | KB/min at the proxy over one task-tree window | <= 75 KB/min each direction |
 | 2 switch during background | click to rendered, over the floor (300 ms + bootstrap bytes / 12.5 KB/s) | <= 1000 ms over floor |
+| 2 switch to real-time connection | click to the target session's `catchup_complete` | reported, not scored |
 | 3 send during background | click to echo, over the floor (300 ms + server processing) | <= 500 ms over floor |
 | 4 held blackout | restore to the last switch rendered, over that switch's floor | <= 2000 ms over floor |
 | 5 reset blackout | restore to `catchup_complete`, over the catch-up bytes / 12.5 KB/s | <= 2000 ms over the byte time |
 | 6 long stream | socket bytes of one reply, per reply text byte | <= 1.20 |
+| 7 tool stream | stream frames' tool-row bytes, per final row byte; the turn's socket bytes per minute | <= 2.0; <= 75 KB/min |
+
+The switch to real-time connection number is the before value of the one-socket-per-tab fix: today's page opens a new
+socket for the target after the first screen renders, and the fix keeps the page's socket and subscribes the session on
+it. The bench reads both the same way — today's `catchup_complete` belongs to the socket the page opened for that
+session, and the fix's frame names its session. The send of scenario 3 waits for the same frame: a person types for
+longer than a socket's setup takes, and the send floor assumes an open socket.
+
+That wait fixes the send's phase in the repetition, so a link hold would land on it in every repetition. A 1 s delay
+spike is the link's time and not the page's, so the send's click waits out a hold that covers the next second
+(`holdEndWithin` in `proxy.mjs`).
 
 Each scenario's median and 90th percentile go in the table, with the raw median next to them for the time metrics.
+
+Runs that measure side by side share the host: overlapping trials put a mode of about 3 s into the switch and send
+timings, while byte counts stay the same. Bench runs on a host never overlap: every side holds
+`$HOME/pn-runs/.bench.lock`. Every repetition also records its start, its end and the other serve trials on the host
+during it (`trials.mjs`, a sample every 30 s), and the summary prints them.
+
+Below the table, scenario 1's received bytes are split by endpoint. The visible tab's status polls are counted by the
+server's answer, the wire status: Chrome hands a revalidated answer to the page as its cached 200, and only the wire
+status says 304. Each 200 is applied to the row state the tab held for its row set — the poll's URL without its `since`
+token — so the report names the fields that changed; the change's server answers only the rows that moved
+(`{"token", "rows", "gone"}`), and the baseline's answers the whole map. A 200 that repeats the state the tab held moved
+nothing: its body was resent with no row changed. The report also prints the share of 200 answers beside the live
+device's `LIVE_READBACK.status200Share`, and the bytes the tab received per 200 and per 304.
+
+## Status churn
+
+The status body of a live tab changes on its own: the live device answered 200 to 72% of about 20 polls a minute, each
+answer about 5.8 KB, so roughly 14 answers a minute differed from the one before. Two kinds of change make that churn,
+and both are one row's own state at `STATUS_CHURN`'s rates, per 75 s window:
+
+- a held turn starts and is cancelled (14 flips), moving `thinking_since`, `has_running_tasks` and `work_state`. The
+  server broadcasts each change, so the page polls at once and the change also costs an extra poll;
+- a delayed trigger appears on the row and is cancelled (51 flips), moving `has_pending_trigger`,
+  `pending_trigger_count` and `next_trigger_at`. Nothing broadcasts it, so the page meets it on its next poll — the poll
+  whose body a delta now keeps small.
+
+The background scenarios start both with the task-tree driver and stop them with the load: the Workspace's churn row is
+the bench's twelfth session, the starred view stars that session, and the Threads view churns one of its thread roots.
+The pair is tuned so that the background tab, which polls about 27 times a minute while the held turn keeps its cadence
+at 3 s, answers a changed body at the live device's share; consecutive trigger flips cancel one another between two
+polls, so about half the flips are caught — 33 a window measured a 0.56 share, 44 a 0.63, and 51 the live one. The
+report prints the measured share beside the readback's.
+
+The window also reports two counters of the visible tab's sidebar: the full sidebar repaints (the paints that replace
+the session list's rows wholesale) and the spinner restarts (a visible running spinner's rotation jumping against its
+steady turn), both per minute. They are findings, not targets: the summary prints them, and a fix that keeps a running
+row's spinner through an update reads as restarts near zero.
+
+## Other sidebar views
+
+`starred` and `threads` measure scenario 1's background with the visible tab on the starred view or the Threads view.
+At its first repetition, the bench fills the view to the live size in `OTHER_VIEWS`:
+
+- the starred view: the background session, the churn session and the first mock rows of the Workspace, starred;
+- the Threads view: sessions created with a Slack origin, which makes each one a thread root.
+
+The task-tree driver renames a row of the view, and the status churn flips another, so the view's rows change at the
+rate the Workspace's rows change in scenario 1. A task-tree frame fetches the named row alone on both of the change's
+paths — the row refresh and the status delta — so the whole list is fetched only on the page's open, a view change and
+a reconnect after a network loss. These scenarios have no target. The report prints their received and sent bytes, the
+endpoint split, the status polls and the rows the tab painted.
+
+## Switch clicks
+
+A sidebar group paints its first five roots and keeps the others behind its Show all toggle. The chat page carries only
+the rows its first screen paints, so a kept-back row is absent from the document until the toggle fetches the full
+listing. Before a switch, the bench puts the target's row on screen as a person does: when the row is not painted, it
+clicks the Show all of the session's group and waits for the row. The switch's time starts at the row's click. The held
+blackout's five targets are put on screen before the blackout starts, because a Show all inside the blackout would wait
+for the link. The bench clicks only painted rows, so a target that no toggle reaches stops the run.
 
 ## Capped steps
 
@@ -64,17 +147,30 @@ state at the cap (the sockets, the frames seen, and whether the target's bootstr
 When the target's bootstrap never finished, the step's bytes are the size of the same body on the wire, read from the
 server, so the floor still follows the bytes the step needs.
 
-## Scenarios 4 to 6 have no background
+## Scenarios 4 to 7 have no background
 
 Scenarios 1 to 3 share one repetition: the background load runs, the proxy counts its bytes, and the switch and the
-send happen inside that background. The targets of scenarios 4 to 6 do not mention a background load, so those
+send happen inside that background. The calibration's during-refresh switch (see Calibration) is a second switch in the
+same repetition, after the send. The targets of scenarios 4 to 7 do not mention a background load, so those
 repetitions run without one.
 
 ## Calibration
 
-The baseline must reproduce the switch hold: on origin/main, a switch during the background must take at least
-`CALIBRATION_HOLD_MS` (10 s) to render. If it does not, the proxy does not model the link, and `--side both` stops before
-the after side. The table prints the calibration line.
+The calibration's condition is the plan's: a session switch clicked while a background list refresh is in flight must
+take at least `CALIBRATION_HOLD_MS` (10 s) to render. Each background repetition makes a second switch, whose click the
+bench times to land while the list refresh that a `task_tree_changed` frame has just triggered is in flight; the bench
+reads the frame and the refresh from its own request records, and checks afterwards that the refresh was still in
+flight when the switch's bootstrap request started.
+
+The gate reads one before side: the pre-fix baseline named by `CALIBRATION_REFERENCE` in `profile.mjs`. The fixes
+remove the background bursts the hold lived on, so a fix's own before side no longer reproduces the condition; a
+`--side both` run stops with exit 3 only when its before side is the reference and the median of its five raw holds
+stays under 10 s. Every other before side runs ungated, and both sides print the raw holds in the calibration line, so
+the after side's holds show whether the wait a person felt is gone. The scored switch scenario keeps its clicks at
+random points of the refresh cycle, so its numbers stay comparable with the baseline.
+
+To exercise the gate, run the before side at that commit: `--side both --before-rev <CALIBRATION_REFERENCE>`, in a
+clone that holds the commit.
 
 A second check sets the background scenario's received rate beside the live readback in `LIVE_READBACK`: about 206 KB a
 minute, from one visible tab on a live release. The table prints the gap. The check does not gate the run: a gap is a
@@ -83,17 +179,23 @@ finding to state with the numbers.
 ## Sessions and the server
 
 The trial server runs on the mock home, which holds the view's rows that the bench's own sessions do not: `VIEW.rows`
-less `BENCH_SESSIONS` (113 sessions with the current profile), generated with `--shape view`. Each carries a task spec of
+less `BENCH_SESSIONS` (112 sessions with the current profile), generated with `--shape view`. Each carries a task spec of
 synthetic acceptance criteria and context references, sized so the rows' median matches the live view's; the default
 shape writes no task spec. The mock's sessions carry no task boundary, so the server refuses a message to them. The bench therefore creates its sessions through `POST /api/sessions/`, on the trial's backend
 option. Those sessions are rows of the default view too, so the view holds `VIEW.rows` rows.
 
 The view's shape comes from a live release's default "all" view: 124 rows, a raw median row of 3,260 bytes, and a switch
-target whose bootstrap takes a median 26,592 bytes on the wire. The bench checks the row count before any scenario runs
-and records the median raw row in the JSON. The switch target and the held targets take turns until their bootstrap
-reaches 26,592 bytes on the wire, and the JSON records each one's turns and bytes. The other bench sessions take one
-turn. Each session's last turn carries a seed text unique to it, and the page shows a switch once that text renders. The
-switch floor adjusts for the bootstrap bytes.
+target whose bootstrap content takes a median 26,592 bytes on the wire. The bench checks the row count before any
+scenario runs and records the median raw row in the JSON. The switch target and the held targets take turns until their
+bootstrap content reaches 26,592 bytes on the wire untrimmed — the size the server names in
+`x-bootstrap-untrimmed-bytes`, since the first screen's trim keeps the served body near its 10 KB budget — and the JSON
+records each one's turns and bytes. The other bench sessions take one turn. Each session's last turn carries a seed text
+unique to it, and the page shows a switch once that text renders. Every background repetition sends the switch target a
+fresh turn before its switch, and takes the switch's marker from a plain-text run of the reply the trimmed bootstrap
+serves: the trim is the switch's first screen, so the marker sits inside the 40 messages the switch loads first however
+far the session has grown, and the stub prints a different reply piece each turn, so the run names this repetition's
+turn. A run already on the page cannot time the switch, so the first unseen one wins. The switch floor adjusts for the
+bytes the page's bootstrap actually moved.
 
 The trial's backend is `charlie-code`, which `run.sh` puts on `PATH` as `stub/charlie-code`. Each turn the stub prints the
 next of 16 reply pieces, 8 KB each, cut from repository docs (`reply.mjs`), in the charlie-code NDJSON the backend reads.
@@ -101,21 +203,102 @@ The pieces differ, so the gzip of a session's history does not fold its replies 
 about three or four text events of 2.2 KB, and the server keeps each event as one chat message; a bootstrap carries the
 last 40 messages, of which the event size and the turns' own messages set how much reply text a switch target carries. The stub calls no model
 and reads no credential. A prompt carrying the marker `bench-hold` keeps its turn open for the background load, until
-the bench cancels it.
+the bench cancels it; the status churn sends such a prompt and cancels it, so one row's activity facts move. A prompt
+carrying the marker `bench-tools` prints the tool piece instead: 20 Bash call and result pairs whose final rows are
+770 bytes each, one call every 5 s, then a short reply. Each NDJSON line states its replay delay in `bench_delay_s`,
+which the stub sleeps for; a line that states none keeps 0.05 s. Scenario 7 sends that prompt.
 
 The web client reads its access key from `localStorage` and sends it as the `Authorization` header and as the `token`
 of each WebSocket URL. The bench writes the same `localStorage` entry before each page loads, so the page behaves as
 after a login.
 
+The TLS front serves a self-signed certificate. Chrome trusts its key by hash (`--ignore-certificate-errors-spki-list`),
+so the certificate verifies as Serve's does in a person's browser. Under `--ignore-certificate-errors` Chrome would
+store no response in its HTTP cache. It would then never revalidate, and every JSON read would answer 200.
+
+## TLS records
+
+The live front is Tailscale Serve, which terminates TLS in Go. Go's `crypto/tls` picks a connection's record sizes
+(`maxPayloadSizeForWrite` in `crypto/tls/conn.go`): records grow in arithmetic progression from one TCP MSS estimate
+(1208 bytes less the record's overhead, 1186 payload bytes for a TLS 1.3 AEAD suite) up to 16 KB, and the connection
+uses 16 KB records once it has sent 128 KB. A Node TLS record carries whatever one write gives it, so the front writes
+each record on its own at the size Go would pick, on both the HTTP/2 responses and the upgraded socket. A body the
+server writes in one 11.7 KB piece therefore reaches the browser as records of 1.2 KB, 2.4 KB, 3.6 KB and so on, and
+the browser decrypts its first bytes after the first record. `front.integration.test.mjs` reads the record headers the
+front writes and checks those sizes.
+
 ## CDN assets
 
 The page loads scripts and styles from CDNs (jsDelivr, cdnjs, Google Fonts). `assets.mjs` downloads a copy of each URL
-once into the assets directory, and records its SHA-256 in the JSON. One URL is unpinned (`marked`), so a changed copy
-shows as a changed hash. Chrome serves those copies locally through the
-DevTools Fetch domain. Any other external host fails at once, so nothing outside the trial reaches the link.
+once into the assets directory: the raw bytes as the CDN sends them to a browser that accepts brotli, the headers the
+browser's cache and Resource Timing read, and the decoded body's SHA-256, which the JSON records. One URL is unpinned
+(`marked`), so a changed copy shows as a changed hash. The scenarios other than `open` serve those copies from the
+browser's request interception, so the CDN bytes never cross the shaped link and the bench measures the application's
+own traffic. Any other external host fails at once, so nothing outside the trial reaches the link.
 
-The gap: those CDN bytes do not cross the shaped link, so the bench does not count them. The bench measures the
-application's own traffic.
+## Open scenario (`--scenarios open`)
+
+The cases of plan 2 section 3, under the link's conditions. The cases name the browser's state before the open:
+
+- **A**: this browser opened this session before. Its profile holds the session's record and the CDN files in the HTTP
+  cache, and its pool holds a connection from that visit.
+- **B**: this browser opened a chat page before, but not this session. The record names another session.
+- **C**: the browser never opened a chat page. Its profile is empty.
+
+The record is `localStorage` key `charliebot_opened_pages`, written by `web/static/js/opened-sessions.js`, which owns
+the case. A side whose client predates that module (origin/main before the telemetry lands) gets the same record from
+the bench, so both sides start from the same browser state; the measured page's own case is compared with the cell's
+only when its client reports one.
+
+Conditions, each a fresh browser profile behind a fresh proxy, with the CDN files crossing the link:
+
+| Condition | What the link does during the open |
+|---|---|
+| `link` | Only the link model: 300 ms round trip, 12.5 KB/s per direction, the 1 s stall once a minute. |
+| `held` | A 30 s held blackout starts 1 s before the open navigates, so the open is inside it. |
+| `reset` | As `held`, but the blackout resets every connection when it starts. The pooled connection of A and B ends there. |
+| `flaps` | Up 5 s, then down 5 s, six times (60 s). Each drop resets every connection, so each recovery reconnects. |
+| `offline` | Chrome's network emulation is offline for the open. The navigation fails at once and the open is not reached. |
+| `release` | A held blackout starts; 5 s in, the server's static asset version changes (the bench appends a comment to the trial tree's served `web/static/js/config.js`, and the version the server answers must move); the open navigates 10 s in, inside the hold. |
+
+The open is `switchTarget` (a session whose bootstrap is the view's 26,592 bytes); B's other session is `probes[0]`.
+The CPU rate is `Emulation.setCPUThrottlingRate`. The cells run in this order: a reference cell (A, link, rate 1), the
+other conditions at the derived rate, then the release cells, because each release changes the version and each
+case's warm profile is built at the version then served.
+
+**CPU rate.** `profile.mjs` holds `LIVE_CPU_TAIL`, the median of Chao's device's page loads with cause `open` (13 loads
+on 100.84.122.38 from the live log, 2026-11-06): 297 ms of DOMContentLoaded minus responseEnd. The tail is used instead
+of the raw DOMContentLoaded, because the raw value includes the document's transfer, and the live loads ran about ten
+times faster than the modeled link (a 340 KB document at 2.5 s). The other device has no `open` loads (one
+`stale_asset` load), so it gives no rate. The reference cell's tail median, measured at rate 1 on the same kind of load
+(A, cache-warm, the link), gives the rate: `max(1, live tail / reference tail)`. The run prints both inputs.
+
+**Measured per repetition.** Times are ms from the page's time origin (navigation start): `newest_message_ms` is when the
+text of the session's newest message is in `#messages`, `catchup_ms` is the first `catchup_complete` frame of the page's
+socket, and `load_ms` is the load event. `bytes_to_newest` is the link's bytes (both directions) from the navigation to
+that moment, and `bytes_after_load` the bytes in the 30 s after the load event; the proxy's counters are sampled every
+25 ms. `dcl_ms`, `response_end_ms` and `tail_ms` come from the page's Navigation Timing, and `mark` is whether the
+not-current mark was in the document at any sample. Each repetition also names what the tab and the page saw:
+`sockets` (the WebSocket opens), `frames` and `frame_types` (the socket frames by type), `requests` (the requests),
+`ws_state` (the client's own socket state), and the last console lines and page errors, so a missing time can be read
+against what the page reported.
+
+**The mark's DOM contract (task 3 implements it).** A page marks a stored copy as not current with the attribute
+`data-freshness="not-current"` on one element of its document. The bench watches for that element and reports the
+first time it appears. Before task 3 no page carries the attribute, so every cell reports the mark as absent.
+
+**Page's own timings.** A page reports `newest_message_ms` and `current_ms` in its `page_load` event
+(`web/features/diag/templates/diag/client-events.js`), with the open case, the content source and the render-blocking
+files beside their same-origin timings. `dev/client-readback/readback.mjs` reads them from the server log.
+
+**Gaps.** The CDN stand-in serves the webfont stylesheet empty, as the other scenarios do, so the font files it names
+are not loaded. The bench's DOMContentLoaded and newest-message times are measured from outside the page, so they are
+not compared with the page's own `page_load` numbers in the same run.
+
+**Output.** The JSON's `open` section holds `cpu` (the rate and its inputs), `reference`, and `cells`: each cell's
+`reps`, one object per repetition with the fields above. The table prints one row per cell: the median newest-message
+time, the five values in repetition order, the catch-up median, the bytes to the newest message and after the load, and
+how many repetitions reached the newest message.
 
 ## Host requirements
 
@@ -137,14 +320,37 @@ which stops it and every tunnel it holds. Its tunnels reach the target's port on
 direction, as the bench's connections do. A target without an `http` port or with a path exits non-zero and prints no
 address.
 
+## Perf loop
+
+The perf direction runs a named scenario set on both sides when the round's change can move it. `--side both` prints
+each side's verdict and the cross-side regression line, and exits 4 when a scenario that passed on the before side
+fails on the after side. The caller passes a scenario set and a repetition count; the bench takes its own lock, shared
+with the other bench runs on the host. Each side's trial tree goes under `$TMPDIR` when the caller sets it, so a round
+inside a writable sandbox keeps the trees in its scratch; Chrome keeps its own temp files there too.
+
 ## Tests
 
-The proxy's tests run through the remote runner:
+The relay tests are integration tests because they start the relay as a child process. The Integration workflow runs
+them when a change touches this directory. To reproduce them through the remote runner:
 
 ```sh
-dev/remote-run/run.sh node --test dev/poor-network/proxy.test.mjs
+dev/remote-run/run.sh node --test dev/poor-network/proxy.integration.test.mjs dev/poor-network/report.test.mjs \
+  dev/poor-network/front.integration.test.mjs dev/poor-network/chrome.test.mjs \
+  dev/poor-network/scenarios.test.mjs dev/poor-network/tabs.test.mjs dev/poor-network/lock.test.mjs
 ```
 
-They check the transfer times within tolerance, two concurrent tunnels sharing one budget, the held and reset
-blackouts, the byte counters, and the relay entry: its tunnel's transfer time at the link, its stop on SIGTERM, and its
-refusal of a target without a port.
+They check the relay's tunnel transfer time at the link, its stop on SIGTERM, and its refusal of a target without a
+port; a blackout drops a connection attempt without answering it at the restore, keeps an established tunnel's bytes for
+the restore, and resets the tunnels in reset mode. Two tests drive the shaping proxy itself: a route reaches its own
+server over the same link while the proxy refuses every other authority, and a scheduled reset window resets the open
+tunnels when it starts. The front tests read the TLS record sizes the front writes and check them against Go's. The
+report's tests check the calibration gate: it reads the during-refresh holds, not the scored scenario's random-phase
+holds, and only the reference before side's line carries a verdict. The chrome tests check the browser teardown: a
+closed browser fails its unanswered DevTools calls and drops its pipe handles. The scenario tests check the status
+counting against synthetic poll records of both answer shapes: the baseline's whole row map and the change's
+`{token, rows, gone}`.
+The tab tests check the switch's row handling against a stub sidebar that keeps rows back: a row absent from the
+document or hidden in it is clicked only after its group's Show all paints it, and a row that no toggle reaches fails
+the step.
+The lock tests check that one concurrent side attempt holds the bench lock and the next waits for it, and that the
+bench code names the lock path only in `lock.sh`.

@@ -31,6 +31,8 @@ pub fn display_dir(relative: &str) -> String {
 pub const OPENCODE_DIR_NAME: &str = "opencode";
 /// The `data` directory under the OpenCode store, which OpenCode itself lays out as its `XDG_DATA_HOME`.
 pub const OPENCODE_XDG_DATA_DIR_NAME: &str = "data";
+/// The `state` directory under the OpenCode store, which OpenCode itself lays out as its `XDG_STATE_HOME`.
+pub const OPENCODE_XDG_STATE_DIR_NAME: &str = "state";
 
 /// A `CHARLIEBOT_HOME` value that names no usable home.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,6 +120,53 @@ fn opencode_db_in(home: &Path) -> PathBuf {
   opencode_data_in(home).join("opencode").join("opencode.db")
 }
 
+/// The home's `state` directory: the writer fence's files and the files a boot leaves for the next boot.
+pub const STATE_DIR_NAME: &str = "state";
+
+/// The boot's recovery marker: the start of the last pass that reconciled the task tree, and the nodes whose pass
+/// failed in it.
+pub const BOOT_RECOVERY_FILE_NAME: &str = "boot_recovery.json";
+
+/// The boot's skip proof: one row per task node the last pass skipped, with the identities its verdict was proven
+/// from.
+pub const BOOT_SKIP_PROOF_FILE_NAME: &str = "boot_skip_proof.json";
+
+/// The boot's trigger index: one row per trigger file a boot proved not pending.
+pub const BOOT_TRIGGER_INDEX_FILE_NAME: &str = "boot_trigger_index.json";
+
+/// The backends' persisted usage availability: one row per backend option id that is out until a time.
+pub const BACKEND_AVAILABILITY_FILE_NAME: &str = "backend_availability.json";
+
+/// The home's `state` directory.
+pub fn state_dir(home: &Path) -> PathBuf {
+  home.join(STATE_DIR_NAME)
+}
+
+/// The path of `file_name` in the home's `state` directory, relative to the home: the form a home walk reports.
+pub fn state_rel_path(file_name: &str) -> String {
+  format!("{STATE_DIR_NAME}/{file_name}")
+}
+
+/// The boot's recovery marker.
+pub fn boot_recovery_marker_path(home: &Path) -> PathBuf {
+  state_dir(home).join(BOOT_RECOVERY_FILE_NAME)
+}
+
+/// The boot's skip proof.
+pub fn boot_skip_proof_path(home: &Path) -> PathBuf {
+  state_dir(home).join(BOOT_SKIP_PROOF_FILE_NAME)
+}
+
+/// The boot's trigger index.
+pub fn boot_trigger_index_path(home: &Path) -> PathBuf {
+  state_dir(home).join(BOOT_TRIGGER_INDEX_FILE_NAME)
+}
+
+/// The backends' persisted usage availability.
+pub fn backend_availability_path(home: &Path) -> PathBuf {
+  state_dir(home).join(BACKEND_AVAILABILITY_FILE_NAME)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -128,6 +177,17 @@ mod tests {
     assert_eq!(opencode_store_in(home), PathBuf::from("/synthetic/profile/opencode"));
     assert_eq!(opencode_data_in(home), PathBuf::from("/synthetic/profile/opencode/data"));
     assert_eq!(opencode_db_in(home), PathBuf::from("/synthetic/profile/opencode/data/opencode/opencode.db"));
+  }
+
+  #[test]
+  fn boot_state_paths_derive_from_the_profile() {
+    let home = Path::new("/synthetic/profile");
+    assert_eq!(state_dir(home), PathBuf::from("/synthetic/profile/state"));
+    assert_eq!(boot_recovery_marker_path(home), PathBuf::from("/synthetic/profile/state/boot_recovery.json"));
+    assert_eq!(boot_skip_proof_path(home), PathBuf::from("/synthetic/profile/state/boot_skip_proof.json"));
+    assert_eq!(boot_trigger_index_path(home), PathBuf::from("/synthetic/profile/state/boot_trigger_index.json"));
+    assert_eq!(state_rel_path(BOOT_SKIP_PROOF_FILE_NAME), format!("{STATE_DIR_NAME}/{BOOT_SKIP_PROOF_FILE_NAME}"));
+    assert_eq!(backend_availability_path(home), PathBuf::from("/synthetic/profile/state/backend_availability.json"));
   }
 
   #[test]

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
+use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::{self, BackendPool};
 use charliebot_core::event_types;
 use charliebot_core::repo_root::RepoRoot;
@@ -16,10 +17,16 @@ use charliebot_store::StoreResult;
 use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcomeKind, SequenceRef};
 use charliebot_tasks::dispatch::DispatchExecutor;
-use charliebot_tasks::spawner_backends::{self, SubagentRole};
+use charliebot_tasks::spawner_backends::{self, BackendSource, SubagentRole};
 use charliebot_tasks::test_support::process_guard;
 use charliebot_tasks::test_support::recovery_support::{self, Scripts, Stack, SyntheticRepo};
 use futures_util::future::BoxFuture;
+
+/// A pool whose availability owner reads the empty state of a fresh home; these sites never record.
+fn test_pool() -> BackendPool {
+  let home = tempfile::tempdir().unwrap();
+  BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap()))
+}
 use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use tokio::task::{AbortHandle, JoinHandle};
@@ -301,6 +308,7 @@ fn run_events_of(harness: &LoopHarness, run_id: &str) -> anyhow::Result<Vec<Valu
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn two_iterations_use_one_child_and_keep_their_run_order() -> anyhow::Result<()> {
   let harness = LoopHarness::new(
     &[],
@@ -326,6 +334,7 @@ async fn two_iterations_use_one_child_and_keep_their_run_order() -> anyhow::Resu
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn the_second_iteration_reads_the_live_goal_file() -> anyhow::Result<()> {
   let home = tempfile::tempdir()?;
   let gate = home.path().join("release-first-iteration");
@@ -379,6 +388,7 @@ async fn the_second_iteration_reads_the_live_goal_file() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn each_pooled_iteration_run_records_the_selected_backend() -> anyhow::Result<()> {
   let harness = LoopHarness::new(
     &["account-main"],
@@ -400,6 +410,7 @@ async fn each_pooled_iteration_run_records_the_selected_backend() -> anyhow::Res
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_launch_quota_failure_cools_the_only_member_with_its_reset() -> anyhow::Result<()> {
   let harness = LoopHarness::new(&["quota"], &[], Vec::new()).await?;
 
@@ -429,6 +440,7 @@ async fn a_launch_quota_failure_cools_the_only_member_with_its_reset() -> anyhow
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_cooling_pool_member_is_followed_by_the_next_member() -> anyhow::Result<()> {
   let harness =
     LoopHarness::new(&["quota", "next"], &[], vec![recovery_support::result_script("second words")]).await?;
@@ -461,6 +473,7 @@ async fn a_cooling_pool_member_is_followed_by_the_next_member() -> anyhow::Resul
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_textual_quota_error_blocks_when_the_next_selection_finds_no_member() -> anyhow::Result<()> {
   let quota_error = json!({"type": "error", "message": "Budget has been exceeded!"});
   let harness = LoopHarness::new(&["fake"], &[], vec![event_script(&quota_error, 1)]).await?;
@@ -479,6 +492,7 @@ async fn a_textual_quota_error_blocks_when_the_next_selection_finds_no_member() 
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn three_iterations_deliver_reports_and_wake_the_parent_four_times() -> anyhow::Result<()> {
   let harness = LoopHarness::new(
     &[],
@@ -516,6 +530,7 @@ async fn three_iterations_deliver_reports_and_wake_the_parent_four_times() -> an
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn an_iteration_report_carries_the_mechanical_header_and_fallback_file() -> anyhow::Result<()> {
   let harness = LoopHarness::new(&[], &[], vec![recovery_support::result_script("worker words")]).await?;
 
@@ -535,6 +550,7 @@ async fn an_iteration_report_carries_the_mechanical_header_and_fallback_file() -
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_non_quota_failed_iteration_is_reported_and_the_loop_continues() -> anyhow::Result<()> {
   let failed = json!({"type": "result", "subtype": "success", "result": "the build broke", "is_error": true});
   let harness =
@@ -559,6 +575,25 @@ async fn a_non_quota_failed_iteration_is_reported_and_the_loop_continues() -> an
 }
 
 #[tokio::test]
+#[ignore = "integration"]
+async fn a_textual_quota_error_without_an_adapter_failure_records_the_iteration_reason() -> anyhow::Result<()> {
+  // The worker's transcript names the quota, but no launch refusal or worker quota error reached the adapter: the
+  // record must not claim a quota failure the run never reported.
+  let quota_text = json!({"type": "assistant_error", "content": "quota exceeded for this model"});
+  let harness = LoopHarness::new(&["fake"], &[], vec![event_script(&quota_text, 1)]).await?;
+
+  harness.finish_loop(harness.start_loop(3)).await;
+
+  let path = charliebot_core::home::backend_availability_path(&harness.stack.cfg.charliebot_home);
+  let state: Value = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+  assert_eq!(state["fake"]["reason"], "iteration_failure", "{state}");
+  let detail = state["fake"]["detail"].as_str().expect("the record carries the blocker detail");
+  assert!(detail.contains("quota exceeded"), "{detail}");
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
 async fn replaying_an_iteration_report_is_idempotent() -> anyhow::Result<()> {
   let harness = LoopHarness::new(&[], &[], vec![recovery_support::result_script("first words")]).await?;
 
@@ -596,6 +631,7 @@ async fn replaying_an_iteration_report_is_idempotent() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn improve_controller_keeps_base_registry_lookups_and_skips_run_replay() -> anyhow::Result<()> {
   let harness = LoopHarness::new(&[], &[], Vec::new()).await?;
   let controller = harness
@@ -642,20 +678,21 @@ async fn improve_controller_keeps_base_registry_lookups_and_skips_run_replay() -
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Result<()> {
   let explicit = LoopHarness::new(&["fake"], &["other"], Vec::new()).await?;
-  let (backend, model, from_pool) = spawner_backends::resolve_requested_subagent_backend_model(
+  let (backend, model, source) = spawner_backends::resolve_requested_subagent_backend_model(
     &explicit.stack.cfg,
     explicit.stack.store(),
     &explicit.manager.id,
     Some("other"),
     SubagentRole::Improve,
-    &BackendPool::default(),
+    &test_pool(),
   )
   .await?;
   assert_eq!(backend, "other");
   assert_eq!(model.as_deref(), Some("other-model"));
-  assert!(!from_pool);
+  assert_eq!(source, BackendSource::Direct);
   let explicit_child = sequence::create_improve_child(
     explicit.stack.store(),
     &explicit.manager.id,
@@ -670,18 +707,18 @@ async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Res
   drop(explicit);
 
   let inherited = LoopHarness::new(&[], &[], Vec::new()).await?;
-  let (backend, model, from_pool) = spawner_backends::resolve_requested_subagent_backend_model(
+  let (backend, model, source) = spawner_backends::resolve_requested_subagent_backend_model(
     &inherited.stack.cfg,
     inherited.stack.store(),
     &inherited.manager.id,
     None,
     SubagentRole::Improve,
-    &BackendPool::default(),
+    &test_pool(),
   )
   .await?;
   assert_eq!(backend, "fake");
   assert_eq!(model.as_deref(), Some("fake-model"));
-  assert!(!from_pool);
+  assert_eq!(source, BackendSource::Direct);
   let inherited_child = sequence::create_improve_child(
     inherited.stack.store(),
     &inherited.manager.id,
@@ -697,6 +734,7 @@ async fn improve_children_keep_the_requested_or_session_backend() -> anyhow::Res
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn recovery_loads_a_legacy_failed_state_without_end_error() -> anyhow::Result<()> {
   let harness = LoopHarness::new(&[], &[], Vec::new()).await?;
   let loop_id = harness.state.loop_id;
@@ -755,6 +793,7 @@ fn install_git_script(script: &str) -> GitOverrideGuard {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_rejected_fast_forward_names_the_branch_that_was_pushed() {
   let _lock = GIT_OVERRIDE_LOCK.lock().await;
   let _override = install_git_script(
@@ -776,6 +815,7 @@ async fn a_rejected_fast_forward_names_the_branch_that_was_pushed() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn two_rejected_landing_pushes_name_the_branch_push_error() {
   let _lock = GIT_OVERRIDE_LOCK.lock().await;
   let script = "case \"$2\" in *:*) printf '%s\\n' 'rejected: non-fast-forward' >&2 ;; *) printf '%s\\n' 'auth expired' >&2 ;; esac; exit 1";
@@ -795,6 +835,7 @@ async fn two_rejected_landing_pushes_name_the_branch_push_error() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_best_effort_branch_push_failure_is_reported_without_merge_back() {
   let _lock = GIT_OVERRIDE_LOCK.lock().await;
   let _override = install_git_script("printf '%s\\n' 'auth expired' >&2; exit 1");

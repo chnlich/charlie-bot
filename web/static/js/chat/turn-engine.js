@@ -537,7 +537,13 @@
       // gap the placeholder's own margin-top adds back.
       el.style.height = Math.round(this.heightOf(seg) - this.rowGap()) + 'px';
       if (seg.kind === 'turn') el.dataset.turnKey = seg.key;
-      el.textContent = '…';
+      // The mark is its own span, not the box's text. A placeholder standing
+      // for more than one window of height draws its text at the box's centre,
+      // which is off-screen. The span sticks to the window's middle instead.
+      const label = document.createElement('span');
+      label.className = 'turn-placeholder-label';
+      label.textContent = '…';
+      el.appendChild(label);
       return el;
     }
 
@@ -1691,7 +1697,7 @@
 
     // ---- ingest: a committed message again -------------------------------------
     // A message_update frame names a committed message by id, as the store's
-    // projection does: the last entry with that id takes the new message where
+    // projection does. The last entry with that id takes the new message where
     // it stands. Its segment is invalidated, so the projection rebuilds that
     // segment's DOM and the message stays under its turn.
     replaceMessage(msg) {

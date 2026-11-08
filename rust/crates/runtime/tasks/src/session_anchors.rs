@@ -25,6 +25,11 @@ pub fn context_reset_note(reason: &str, task_goal: &str) -> String {
   format!("[Context reset: {reason}. The task is: {task_goal}. {HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
 }
 
+/// The bracketed note of a retry that continues another run's context at `context`, the absolute paths that hold it.
+pub fn switch_reset_note(reason: &str, task_goal: &str, context: &str) -> String {
+  format!("[Context reset: {reason}. The task is: {task_goal}. {context} {CONTEXT_RESET_INSTRUCTION}]")
+}
+
 #[cfg(test)]
 mod tests {
   use super::{backend_switch_reset_reason, context_reset_note};

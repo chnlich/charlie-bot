@@ -379,7 +379,8 @@
     const gen = ++panelFetchGen;
     let body;
     try {
-      const res = await fetch('/api/internal/web/status?session_id=' + encodeURIComponent(sessionId));
+      const res = await fetch('/api/internal/web/status?session_id=' + encodeURIComponent(sessionId),
+          {signal: viewRequestSignal()});
       if (!res.ok) throw new Error('HTTP ' + res.status);
       body = await res.json();
     } catch (err) {

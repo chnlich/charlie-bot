@@ -115,7 +115,7 @@ impl Home {
     Self { _dir: dir, features }
   }
 
-  /// Create a Feishu-origin manager session with an optional read watermark.
+  /// The creation of a Feishu-origin manager session with an optional read watermark.
   pub async fn thread_session(&self, session_id: &str, origin: Value, watermark: Option<&str>) -> String {
     let mut slots = Map::from_iter([(crate::metadata::FEISHU_ORIGIN.to_string(), origin)]);
     if let Some(watermark) = watermark {
@@ -152,8 +152,8 @@ impl Home {
   }
 }
 
-/// Start a stub on a loopback port. It answers the tenant-token call itself, and every other request with
-/// `handler`. A request is recorded before its answer is written, so the test reads it once the client returns.
+/// A stub on a loopback port. It answers the tenant-token call itself, and every other request with `handler`. A
+/// request is recorded before its answer is written, so the test reads it once the client returns.
 pub async fn serve(handler: impl Fn(&Recorded) -> Answer + Send + Sync + 'static) -> Stub {
   let listener = TcpListener::bind("127.0.0.1:0").await.expect("the loopback port binds");
   let address = listener.local_addr().expect("the listener has an address");

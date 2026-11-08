@@ -9,7 +9,6 @@ publish.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 caseless.workspace = true
-charliebot-agents.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
@@ -35,3 +34,4 @@ libc.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tower.workspace = true
+zstd.workspace = true

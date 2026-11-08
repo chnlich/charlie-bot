@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+charliebot-agents.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
@@ -26,7 +27,6 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-charliebot-agents.workspace = true
 charliebot-tasks = { workspace = true, features = ["test-hooks", "test-fixtures"] }
 nix.workspace = true
 tempfile.workspace = true

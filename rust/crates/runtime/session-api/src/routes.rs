@@ -1,10 +1,12 @@
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use lru::LruCache;
 
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
@@ -24,13 +26,13 @@ use serde_json::{Map, Value, json};
 use crate::api;
 use crate::listing::{self, CompactListingMemo, SessionsListMemos};
 use crate::route_support::{Query, blocking_store, store_error};
-use crate::{search, sidebar, tree, write_routes};
+use crate::{search, sidebar, status_delta, tree, write_routes};
 
 static ACTIVE_MEMOS: LazyLock<SessionsListMemos> = LazyLock::new(SessionsListMemos::default);
 static COMPACT_LISTING_MEMO: LazyLock<CompactListingMemo> = LazyLock::new(CompactListingMemo::default);
 const STATUS_BODY_MEMO_LIMIT: usize = 4;
 
-type StatusBodyCache = Mutex<LruCache<StatusKey, Vec<u8>>>;
+type StatusBodyCache = Mutex<LruCache<StatusKey, Arc<StatusBody>>>;
 type GzipBodyCache = Mutex<LruCache<Vec<u8>, Vec<u8>>>;
 
 fn gzip_body_memo(limit: usize) -> GzipBodyCache {
@@ -38,17 +40,90 @@ fn gzip_body_memo(limit: usize) -> GzipBodyCache {
 }
 
 static STATUS_BODY_MEMO: OnceLock<StatusBodyCache> = OnceLock::new();
-static STATUS_GZIP_MEMO: LazyLock<GzipBodyCache> = LazyLock::new(|| gzip_body_memo(16));
 static SEARCH_GZIP_MEMO: LazyLock<GzipBodyCache> = LazyLock::new(|| gzip_body_memo(2));
 static TREE_GZIP_MEMO: LazyLock<GzipBodyCache> = LazyLock::new(|| gzip_body_memo(4));
 
 /// The body length below which the transport middleware leaves a response uncompressed (`GZipMiddleware`).
 const TRANSPORT_GZIP_MINIMUM_SIZE: usize = 1000;
 
+/// The identity of one status body.
+///
+/// A `filter=all` body answers the Workspace's rows, and the listing's derived overlay names that corpus: it holds one
+/// entry per row, and a rebuild replaces it whenever a row, an overlay or the order moves. The key holds that overlay
+/// instead of the 7,160 id strings, so a repeat poll neither clones nor sorts nor compares them. A request that names
+/// its filter and ids keys on those. `generation` names the sidebar state the body reads beyond the rows, and `since`
+/// the answer's own delta base: a page that holds the state of its last answer sends that answer's token back, so the
+/// same state answers with the same token.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-struct StatusKey {
-  ids: Vec<String>,
-  generation: u64,
+enum StatusKey {
+  Listing { derived: ListingOverlay, extra: Vec<String>, generation: u64, since: Option<String> },
+  Ids { filter: Option<String>, members: Vec<String>, ids: Vec<String>, generation: u64, since: Option<String> },
+}
+
+/// The listing's derived overlay as a key part. It compares and hashes by address, and it holds the overlay so the
+/// address stays this overlay's alone while the entry lives.
+#[derive(Clone, Debug)]
+struct ListingOverlay(Arc<sidebar_state::DerivedSidebarMap>);
+
+impl PartialEq for ListingOverlay {
+  fn eq(&self, other: &Self) -> bool {
+    Arc::ptr_eq(&self.0, &other.0)
+  }
+}
+
+impl Eq for ListingOverlay {}
+
+impl Hash for ListingOverlay {
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    Arc::as_ptr(&self.0).hash(state);
+  }
+}
+
+/// One status body: the plain bytes and, on the first request that accepts gzip, their compressed form.
+///
+/// A repeat request shares both allocations instead of copying the body. The response hands the ETag layer the same
+/// `Bytes` every time, so its tag memo answers the repeat without hashing the body again. The memo keeps the body,
+/// so its compressed form is paid once per version and takes the smaller level-6 form a kept body uses.
+struct StatusBody {
+  plain: Bytes,
+  gzip: OnceLock<Bytes>,
+}
+
+impl StatusBody {
+  fn new(plain: Bytes) -> Self {
+    Self { plain, gzip: OnceLock::new() }
+  }
+
+  /// The bytes a request that names `wants_gzip` sends.
+  fn bytes(&self, wants_gzip: bool) -> Bytes {
+    if wants_gzip {
+      self.gzip.get_or_init(|| Bytes::from(charliebot_compat::compression::gzip_memoized_body(&self.plain))).clone()
+    } else {
+      self.plain.clone()
+    }
+  }
+}
+
+fn get_status_body(key: &StatusKey) -> Option<Arc<StatusBody>> {
+  let memo = STATUS_BODY_MEMO.get_or_init(|| {
+    Mutex::new(LruCache::new(NonZeroUsize::new(STATUS_BODY_MEMO_LIMIT).expect("the status memo limit is nonzero")))
+  });
+  let mut memo = memo.lock().expect("status body memo mutex is not poisoned");
+  memo.get(key).cloned()
+}
+
+fn store_status_body(key: StatusKey, body: Arc<StatusBody>) {
+  let memo = STATUS_BODY_MEMO.get_or_init(|| {
+    Mutex::new(LruCache::new(NonZeroUsize::new(STATUS_BODY_MEMO_LIMIT).expect("the status memo limit is nonzero")))
+  });
+  let mut memo = memo.lock().expect("status body memo mutex is not poisoned");
+  memo.put(key, body);
+}
+
+/// The response for one status body, compressed when the request accepts gzip.
+fn status_response(request: &Request<Body>, body: &StatusBody) -> Response {
+  let wants_gzip = accepts_gzip(request);
+  json_bytes_response(body.bytes(wants_gzip), wants_gzip)
 }
 
 /// The route patterns `routes` mounts, the merged writes, fork and detail routers included. The trailing-slash redirect
@@ -116,7 +191,7 @@ async fn list_active(State(features): State<Arc<FeatureContext>>, request: Reque
       );
     }
     let response = blocking_store(move || {
-      let page = listing::active_page_rows(&features.store, &features.registry)?;
+      let page = listing::active_page_rows_for(&features.store, &features.registry, &ids)?;
       let text = listing::row_refresh_text(&features.store, &page, &ids)?;
       Ok(responses::fast_json_rendered(StatusCode::OK, text.into_bytes()))
     })
@@ -241,11 +316,17 @@ fn archived_page_body(
   Ok(responses::fast_json(StatusCode::OK, &body))
 }
 
-async fn list_starred(State(features): State<Arc<FeatureContext>>) -> Response {
-  blocking_store(move || Ok(starred_response(&features))).await.unwrap_or_else(store_error)
+async fn list_starred(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  blocking_store(move || Ok(starred_response(&features, &request))).await.unwrap_or_else(store_error)
 }
 
-fn starred_response(features: &FeatureContext) -> Response {
+/// The starred view: every starred session, or with `ids`, only the named rows among them, as a row refresh.
+fn starred_response(features: &FeatureContext, request: &Request<Body>) -> Response {
+  let query = Query::new(request);
+  let refresh = query.get("ids").map(parse_session_ids);
+  if refresh.as_ref().is_some_and(Vec::is_empty) {
+    return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({"detail": "ids must name at least one session"}));
+  }
   let listed = match features.store.list_sessions(None, Some(true), None) {
     Ok(listed) => listed,
     Err(error) => return store_error(error),
@@ -255,18 +336,26 @@ fn starred_response(features: &FeatureContext) -> Response {
       Ok(derived) => derived,
       Err(error) => return store_error(error),
     };
+  if let Some(ids) = refresh {
+    let text = match listing::row_refresh_text_for(
+      &features.store,
+      &listed.rows,
+      &derived,
+      &listed.sequence_fields,
+      &ids,
+      listing::STARRED_PROJECTION,
+    ) {
+      Ok(text) => text,
+      Err(error) => return store_error(error),
+    };
+    return responses::fast_json_rendered(StatusCode::OK, text.into_bytes());
+  }
   let rows = match listing::listed_values(
     &features.store,
     &listed.rows,
     &derived,
     &listed.sequence_fields,
-    listing::SidebarProjection {
-      include_running: true,
-      include_trigger: true,
-      include_plan: false,
-      display_backend: false,
-      include_run_backend: true,
-    },
+    listing::STARRED_PROJECTION,
   ) {
     Ok(rows) => rows,
     Err(error) => return store_error(error),
@@ -298,6 +387,12 @@ async fn session_status(State(features): State<Arc<FeatureContext>>, request: Re
   blocking_store(move || Ok(session_status_response(&features, &request))).await.unwrap_or_else(store_error)
 }
 
+/// The sidebar's status poll: the rows of one filter, plus any further sessions the page names, answered as the rows
+/// whose state moved since the page's last answer.
+///
+/// A `since` token names the state the page holds; without one, or with a token this process did not publish, the
+/// answer carries every row. The answer is `{"token": <state>, "rows": {<id>: <state>}, "gone": [<id>, ...]}`: the
+/// token to send back, the rows that moved, and the ids that left the filter's set.
 fn session_status_response(features: &FeatureContext, request: &Request<Body>) -> Response {
   let query = Query::new(request);
   let filter = query.get("filter");
@@ -305,100 +400,171 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
   if filter.is_none() && raw_ids.is_none() {
     return validation::response(&[validation::missing(validation::Source::Query, "ids")]);
   }
-  // `filter=all` names the Workspace's rows, which the server knows; `ids` names any further sessions the client
-  // paints or holds open, such as the open chat and a delegate card's child.
-  let mut ids = Vec::new();
-  match filter {
-    None => {}
-    Some("all") => match listing::active_page_rows(&features.store, &features.registry) {
-      Ok(page) => ids.extend(page.rows().iter().map(|row| row.id.clone())),
-      Err(error) => return store_error(error),
-    },
-    Some(name) => {
-      return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({"detail": format!("unknown filter: {name}")}));
-    }
-  }
-  if let Some(raw_ids) = raw_ids {
-    ids.extend(parse_session_ids(raw_ids));
-  }
-  let mut ids = unique_session_ids(ids);
-  // The body's bytes follow its key order, so the order the caller named the ids in must not reach it: `filter=all`
-  // follows the listing, whose rows move as they update, and a moved row would otherwise change the body with no row's
-  // state changed. The poll would then answer 200, never 304.
-  ids.sort();
-  if filter.is_none() && ids.is_empty() {
-    return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({"detail": "ids must name at least one session"}));
-  }
+  // The filter names the row set the page shows, and the ids add the sessions the list does not paint, such as the
+  // open chat. A view the registry does not know is refused rather than answered with an empty set. The filter's own
+  // set is kept apart: membership follows it alone, since two pages on one filter name different extra sessions.
+  //
+  // `all` is the Workspace's page, whose memoized derived overlay names the row corpus; every other filter names its
+  // own rows. The key holds that overlay instead of 7,160 ids, so a repeat poll leaves the ids unbuilt.
+  let extra = raw_ids.map(parse_session_ids).unwrap_or_default();
   let force = match query.parse_bool("force", false) {
     Ok(force) => force,
     Err(response) => return *response,
   };
+  let since = query.get("since").map(str::to_string);
+  // Read the generation before the rows, so a state change during this request leaves the body stamped with a
+  // generation no later request serves.
   let generation = sidebar_state::derived_generation();
-  let key = StatusKey { ids: ids.clone(), generation };
-  if !force && let Some(body) = get_status_body(&key) {
-    let full_poll = sidebar_state::register_poll(false);
-    let _sessions = if full_poll {
-      match fresh_sessions(features, &ids) {
-        Ok(sessions) => sessions,
-        Err(error) => return store_error(error),
+  let mut page = None;
+  let key = match filter {
+    Some("all") => match listing::page_corpus_rows(&features.store, &features.registry) {
+      Ok(corpus) => {
+        let overlay = ListingOverlay(corpus.derived);
+        page = Some((corpus.rows, overlay.clone()));
+        StatusKey::Listing { derived: overlay, extra: sorted_unique(extra.clone()), generation, since: since.clone() }
       }
-    } else {
-      Vec::new()
+      Err(error) => return store_error(error),
+    },
+    name => {
+      let members = match name {
+        None => Vec::new(),
+        Some(name) => match listing::status_filter_ids(&features.store, &features.registry, name) {
+          Ok(Some(rows)) => rows,
+          Ok(None) => {
+            return responses::json(
+              StatusCode::UNPROCESSABLE_ENTITY,
+              &json!({"detail": format!("unknown filter: {name}")}),
+            );
+          }
+          Err(error) => return store_error(error),
+        },
+      };
+      let ids = sorted_unique(members.iter().cloned().chain(extra.iter().cloned()).collect());
+      if name.is_none() && ids.is_empty() {
+        return responses::json(
+          StatusCode::UNPROCESSABLE_ENTITY,
+          &json!({"detail": "ids must name at least one session"}),
+        );
+      }
+      StatusKey::Ids {
+        filter: name.map(str::to_string),
+        members: sorted_unique(members),
+        ids,
+        generation,
+        since: since.clone(),
+      }
+    }
+  };
+  // A body whose corpus, sidebar state and delta base still hold is the body a rebuild would render. A miss rebuilds
+  // every row payload: about 50 ms for 7,160 rows, on a poll an open page sends every few seconds. A repeat request
+  // reads the memo instead. The poll still counts toward the periodic self-heal sweep, which moves the generation and
+  // so replaces the entry.
+  if !force && let Some(body) = get_status_body(&key) {
+    let owned;
+    let sessions: &[Arc<SessionMetadata>] = match &page {
+      Some((rows, _)) => rows.as_slice(),
+      None => {
+        let ids = match &key {
+          StatusKey::Ids { ids, .. } => ids,
+          StatusKey::Listing { .. } => unreachable!("a listing poll keeps its page rows"),
+        };
+        match fresh_sessions(features, ids) {
+          Ok(sessions) => {
+            owned = sessions;
+            &owned
+          }
+          Err(error) => return store_error(error),
+        }
+      }
     };
-    return gzip_response(request, body, &STATUS_GZIP_MEMO);
+    if let Err(error) = sidebar::count_memoized_read(&features.store, &features.registry, sessions) {
+      return store_error(error);
+    }
+    return status_response(request, &body);
   }
-  let sessions = match fresh_sessions(features, &ids) {
+  let (requested, members) = match &page {
+    Some((rows, _)) => {
+      let members = sorted_unique(rows.iter().map(|row| row.id.clone()).collect());
+      let mut requested = members.clone();
+      requested.extend(extra.iter().cloned());
+      (sorted_unique(requested), members)
+    }
+    None => match &key {
+      StatusKey::Ids { ids, members, .. } => (ids.clone(), members.clone()),
+      StatusKey::Listing { .. } => unreachable!("a listing poll keeps its page rows"),
+    },
+  };
+  let sessions = match fresh_sessions(features, &requested) {
     Ok(sessions) => sessions,
     Err(error) => return store_error(error),
   };
-  if sessions.is_empty() {
-    return gzip_response(request, b"{}".to_vec(), &STATUS_GZIP_MEMO);
-  }
+  let ids: Vec<String> = sessions.iter().map(|meta| meta.id.clone()).collect();
+  let present: HashSet<&str> = ids.iter().map(String::as_str).collect();
+  let members: Vec<String> = members.into_iter().filter(|id| present.contains(id.as_str())).collect();
   let derived =
     match sidebar::resolve_sidebar_state(&features.store, &features.registry, &sessions, true, true, true, force) {
       Ok(derived) => derived,
       Err(error) => return store_error(error),
     };
-  let mut result = Map::new();
-  for meta in &sessions {
-    let entry = derived.get(&meta.id);
-    let mut payload = Map::new();
-    payload.insert(HAS_UNREAD.to_string(), Value::Bool(meta.has_unread));
-    payload.insert(
-      HAS_RUNNING_TASKS.to_string(),
-      entry.and_then(|row| row.get(HAS_RUNNING_TASKS)).cloned().unwrap_or(Value::Bool(false)),
-    );
-    payload.insert(
-      "thinking_since".to_string(),
-      features.store.busy_since(&meta.id).map_or(Value::Null, |value| json!(value.to_isoformat_text())),
-    );
-    payload.insert(
-      HAS_PENDING_TRIGGER.to_string(),
-      entry.and_then(|row| row.get(HAS_PENDING_TRIGGER)).cloned().unwrap_or(Value::Bool(false)),
-    );
-    payload.insert(
-      PENDING_TRIGGER_COUNT.to_string(),
-      entry.and_then(|row| row.get(PENDING_TRIGGER_COUNT)).cloned().unwrap_or(Value::from(0)),
-    );
-    let next = entry.and_then(|row| row.get(NEXT_TRIGGER_AT)).cloned().unwrap_or(Value::Null);
-    payload.insert(
-      NEXT_TRIGGER_AT.to_string(),
-      next.as_str().map_or(next.clone(), |value| {
-        UtcDateTime::parse(value).map_or(next.clone(), |at| json!(at.to_isoformat_text()))
-      }),
-    );
-    payload.insert(
-      sidebar_state::HAS_PENDING_PLAN_APPROVAL.to_string(),
-      entry.and_then(|row| row.get(sidebar_state::HAS_PENDING_PLAN_APPROVAL)).cloned().unwrap_or(Value::Bool(false)),
-    );
-    if let Some(work_state) = entry.and_then(|row| row.get(WORK_STATE)) {
-      payload.insert(WORK_STATE.to_string(), work_state.clone());
-    }
-    result.insert(meta.id.clone(), Value::Object(payload));
+  let payloads = sessions.iter().map(|meta| status_row_payload(features, meta, derived.get(&meta.id))).collect();
+  let answer = status_delta::record(filter, &members, &ids, payloads, since.as_deref());
+  let body = Arc::new(StatusBody::new(Bytes::from(charliebot_compat::json::fast_json_bytes(&json!({
+    "token": answer.token,
+    "rows": Value::Object(answer.rows),
+    "gone": answer.gone,
+  })))));
+  if !force {
+    store_status_body(key, Arc::clone(&body));
   }
-  let body = charliebot_compat::json::fast_json_bytes(&Value::Object(result));
-  store_status_body(key, body.clone());
-  gzip_response(request, body, &STATUS_GZIP_MEMO)
+  status_response(request, &body)
+}
+
+/// The ids in sorted order, each once.
+fn sorted_unique(mut ids: Vec<String>) -> Vec<String> {
+  ids.sort();
+  ids.dedup();
+  ids
+}
+
+/// One row of the status answer: the facts the sidebar paints beside a session's name.
+fn status_row_payload(
+  features: &FeatureContext,
+  meta: &SessionMetadata,
+  entry: Option<&Arc<Map<String, Value>>>,
+) -> Value {
+  let mut payload = Map::new();
+  payload.insert(HAS_UNREAD.to_string(), Value::Bool(meta.has_unread));
+  payload.insert(
+    HAS_RUNNING_TASKS.to_string(),
+    entry.and_then(|row| row.get(HAS_RUNNING_TASKS)).cloned().unwrap_or(Value::Bool(false)),
+  );
+  payload.insert(
+    "thinking_since".to_string(),
+    features.store.busy_since(&meta.id).map_or(Value::Null, |value| json!(value.to_isoformat_text())),
+  );
+  payload.insert(
+    HAS_PENDING_TRIGGER.to_string(),
+    entry.and_then(|row| row.get(HAS_PENDING_TRIGGER)).cloned().unwrap_or(Value::Bool(false)),
+  );
+  payload.insert(
+    PENDING_TRIGGER_COUNT.to_string(),
+    entry.and_then(|row| row.get(PENDING_TRIGGER_COUNT)).cloned().unwrap_or(Value::from(0)),
+  );
+  let next = entry.and_then(|row| row.get(NEXT_TRIGGER_AT)).cloned().unwrap_or(Value::Null);
+  payload.insert(
+    NEXT_TRIGGER_AT.to_string(),
+    next
+      .as_str()
+      .map_or(next.clone(), |value| UtcDateTime::parse(value).map_or(next.clone(), |at| json!(at.to_isoformat_text()))),
+  );
+  payload.insert(
+    sidebar_state::HAS_PENDING_PLAN_APPROVAL.to_string(),
+    entry.and_then(|row| row.get(sidebar_state::HAS_PENDING_PLAN_APPROVAL)).cloned().unwrap_or(Value::Bool(false)),
+  );
+  if let Some(work_state) = entry.and_then(|row| row.get(WORK_STATE)) {
+    payload.insert(WORK_STATE.to_string(), work_state.clone());
+  }
+  Value::Object(payload)
 }
 
 async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
@@ -563,39 +729,21 @@ fn fresh_sessions(
 }
 
 fn parse_session_ids(ids: &str) -> Vec<String> {
-  unique_session_ids(ids.split(',').map(str::trim).filter(|id| !id.is_empty()).map(str::to_string))
+  api::parse_session_ids(ids)
 }
 
-/// The ids in their first-seen order, each once.
-fn unique_session_ids(ids: impl IntoIterator<Item = String>) -> Vec<String> {
-  let mut seen = std::collections::HashSet::new();
-  ids.into_iter().filter(|id| seen.insert(id.clone())).collect()
-}
-
-fn get_status_body(key: &StatusKey) -> Option<Vec<u8>> {
-  let memo = STATUS_BODY_MEMO.get_or_init(|| {
-    Mutex::new(LruCache::new(NonZeroUsize::new(STATUS_BODY_MEMO_LIMIT).expect("the status memo limit is nonzero")))
-  });
-  let mut memo = memo.lock().expect("status body memo mutex is not poisoned");
-  memo.get(key).cloned()
-}
-
-fn store_status_body(key: StatusKey, body: Vec<u8>) {
-  let memo = STATUS_BODY_MEMO.get_or_init(|| {
-    Mutex::new(LruCache::new(NonZeroUsize::new(STATUS_BODY_MEMO_LIMIT).expect("the status memo limit is nonzero")))
-  });
-  let mut memo = memo.lock().expect("status body memo mutex is not poisoned");
-  memo.put(key, body);
-}
-
-fn gzip_response(request: &Request<Body>, body: Vec<u8>, memo: &'static GzipBodyCache) -> Response {
-  let wants_gzip = request
+/// Whether the request accepts a gzip response body.
+fn accepts_gzip(request: &Request<Body>) -> bool {
+  request
     .headers()
     .get(header::ACCEPT_ENCODING)
     .and_then(|value| value.to_str().ok())
-    .is_some_and(|value| value.contains("gzip"));
-  if !wants_gzip {
-    return json_bytes_response(body, None);
+    .is_some_and(|value| value.contains("gzip"))
+}
+
+fn gzip_response(request: &Request<Body>, body: Vec<u8>, memo: &'static GzipBodyCache) -> Response {
+  if !accepts_gzip(request) {
+    return json_bytes_response(Bytes::from(body), false);
   }
   let compressed = {
     let mut cache = memo.lock().expect("gzip body memo mutex is not poisoned");
@@ -608,17 +756,17 @@ fn gzip_response(request: &Request<Body>, body: Vec<u8>, memo: &'static GzipBody
       }
     }
   };
-  json_bytes_response(compressed, Some("gzip"))
+  json_bytes_response(Bytes::from(compressed), true)
 }
 
-fn json_bytes_response(body: Vec<u8>, encoding: Option<&'static str>) -> Response {
+fn json_bytes_response(body: Bytes, gzip: bool) -> Response {
   let mut builder = Response::builder()
     .status(StatusCode::OK)
     .header(header::CONTENT_TYPE, "application/json")
     .header(header::CONTENT_LENGTH, body.len());
-  if let Some(encoding) = encoding {
+  if gzip {
     builder = builder
-      .header(header::CONTENT_ENCODING, HeaderValue::from_static(encoding))
+      .header(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"))
       .header(header::VARY, HeaderValue::from_static("Accept-Encoding"));
   }
   builder.body(Body::from(body)).expect("a JSON response builds")
@@ -712,8 +860,7 @@ mod tests {
     assert_eq!(payload["sessions"]["name"], json!(["refresh-kept"]), "only the named row answers");
   }
 
-  /// `filter=all` names the Workspace's rows, and answers the same body as those rows named by `ids`. An unknown
-  /// filter is refused.
+  /// `filter=all` names the Workspace's rows and answers the same rows those ids name. An unknown filter is refused.
   #[tokio::test]
   async fn a_status_filter_names_the_workspace_rows_and_answers_as_their_ids_do() {
     let (_home, features) = crate::test_support::feature_context();
@@ -731,13 +878,82 @@ mod tests {
     let (_, by_ids) = status(format!("/api/sessions/status?ids={},{}", first.id, second.id)).await;
 
     assert_eq!(code, StatusCode::OK);
-    assert_eq!(by_filter, by_ids);
-    assert!(by_filter.get(&first.id).is_some() && by_filter.get(&second.id).is_some());
-    let (code, _) = status("/api/sessions/status?filter=starred".to_string()).await;
+    assert_eq!(by_filter["rows"], by_ids["rows"]);
+    assert!(by_filter["rows"].get(&first.id).is_some() && by_filter["rows"].get(&second.id).is_some());
+    let (code, _) = status("/api/sessions/status?filter=unknown-filter".to_string()).await;
     assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
   }
 
-  /// The status body's bytes do not follow the order the caller named the ids in: a row that moved in the listing
+  /// A poll that carries the token of the answer before it names only the row whose state moved, so a task-tree change
+  /// costs one row rather than the whole body.
+  #[tokio::test]
+  async fn a_status_poll_with_a_token_answers_only_the_rows_that_moved() {
+    let (_home, features) = crate::test_support::feature_context();
+    let moved = crate::test_support::create_node(&features.store, "delta-moved", None, TaskProfile::Manager).await;
+    let quiet = crate::test_support::create_node(&features.store, "delta-quiet", None, TaskProfile::Manager).await;
+    let status = |uri: String| {
+      let features = Arc::clone(&features);
+      async move {
+        let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        crate::test_support::answer(session_status(State(features), request).await).await
+      }
+    };
+
+    let (_, full) = status(format!("/api/sessions/status?ids={},{}", moved.id, quiet.id)).await;
+    let token = full["token"].as_str().expect("a full answer names the state it answers").to_string();
+    assert_eq!(full["rows"].as_object().expect("rows are an object").len(), 2);
+
+    features.store.mark_busy(&moved.id, UtcDateTime::parse("2026-11-06T06:00:00Z").unwrap()).unwrap();
+    let (_, delta) = status(format!("/api/sessions/status?ids={},{}&since={token}", moved.id, quiet.id)).await;
+    let rows = delta["rows"].as_object().expect("rows are an object");
+    assert_eq!(rows.keys().collect::<Vec<_>>(), vec![&moved.id], "only the busy row answers");
+    assert_eq!(rows[&moved.id]["thinking_since"], json!("2026-11-06T06:00:00+00:00"));
+
+    let token = delta["token"].as_str().expect("a delta names its state").to_string();
+    let (_, repeat) = status(format!("/api/sessions/status?ids={},{}&since={token}", moved.id, quiet.id)).await;
+    assert!(repeat["rows"].as_object().expect("rows are an object").is_empty(), "nothing moved since the delta");
+  }
+
+  /// A token names a state this process published. Without one, or with one a restart left behind, the answer is the
+  /// whole row set.
+  #[tokio::test]
+  async fn a_status_poll_answers_every_row_without_a_token_from_this_process() {
+    let (_home, features) = crate::test_support::feature_context();
+    let node = crate::test_support::create_node(&features.store, "delta-token", None, TaskProfile::Manager).await;
+    let status = |uri: String| {
+      let features = Arc::clone(&features);
+      async move {
+        let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        crate::test_support::answer(session_status(State(features), request).await).await
+      }
+    };
+
+    let (_, stale) = status(format!("/api/sessions/status?ids={}&since=1-7", node.id)).await;
+    assert_eq!(stale["rows"].as_object().expect("rows are an object").len(), 1);
+    let (_, absent) = status(format!("/api/sessions/status?ids={}", node.id)).await;
+    assert_eq!(absent["rows"].as_object().expect("rows are an object").len(), 1);
+  }
+
+  /// The starred view's row refresh answers the named rows in the compact form and names the ids it no longer holds.
+  #[tokio::test]
+  async fn a_starred_row_refresh_answers_the_named_rows_and_the_ids_the_view_no_longer_holds() {
+    let (_home, features) = crate::test_support::feature_context();
+    let kept = crate::test_support::create_node(&features.store, "starred-kept", None, TaskProfile::Manager).await;
+    crate::test_support::create_node(&features.store, "starred-other", None, TaskProfile::Manager).await;
+    features.store.star_session(&kept.id).await.unwrap();
+    let request = Request::builder()
+      .uri(format!("/api/sessions/starred?ids={},missing-session", kept.id))
+      .body(Body::empty())
+      .unwrap();
+
+    let (status, payload) = crate::test_support::answer(list_starred(State(features), request).await).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(payload["gone"], json!(["missing-session"]));
+    assert_eq!(payload["sessions"]["name"], json!(["starred-kept"]), "only the named row answers");
+  }
+
+  /// The status answer's bytes do not follow the order the caller named the ids in: a row that moved in the listing
   /// must not change the body, or the poll answers 200 with no row's state changed.
   #[tokio::test]
   async fn the_status_body_ignores_the_order_the_caller_named_the_ids_in() {
@@ -757,6 +973,57 @@ mod tests {
     let reverse = body(format!("/api/sessions/status?ids={},{}", second.id, first.id)).await;
 
     assert_eq!(forward, reverse);
+  }
+
+  /// A repeat `filter=all` poll that carries the token of its last answer answers the listing as it stands now: the
+  /// row whose fact moved and the row that appeared, and not the rows that stand.
+  #[tokio::test]
+  async fn a_repeat_status_filter_answers_the_listing_as_it_stands_now() {
+    let (_home, features) = crate::test_support::feature_context();
+    let status = |uri: String| {
+      let features = Arc::clone(&features);
+      async move {
+        let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        crate::test_support::answer(session_status(State(features), request).await).await
+      }
+    };
+
+    let listed = crate::test_support::create_node(&features.store, "status-listed", None, TaskProfile::Manager).await;
+    let (_, first) = status("/api/sessions/status?filter=all".to_string()).await;
+    let token = first["token"].as_str().expect("a full answer names the state it answers").to_string();
+    assert_eq!(first["rows"][&listed.id][HAS_UNREAD], json!(false));
+
+    features.store.mark_unread(&listed.id).await.expect("the row is marked unread");
+    let later = crate::test_support::create_node(&features.store, "status-later", None, TaskProfile::Manager).await;
+    let (_, repeat) = status(format!("/api/sessions/status?filter=all&since={token}")).await;
+
+    assert_eq!(repeat["rows"][&listed.id][HAS_UNREAD], json!(true), "the repeat poll answers the row's new state");
+    assert!(repeat["rows"].get(&later.id).is_some(), "the repeat poll answers the row that appeared");
+    let answered = repeat["rows"].as_object().expect("rows are an object");
+    assert_eq!(answered.len(), 2, "the repeat poll answers only the rows that moved");
+  }
+
+  /// A repeat poll without a token answers the state as it stands now rather than the body an earlier poll kept: the
+  /// memo answers only while the row corpus and the sidebar state it was built from still hold.
+  #[tokio::test]
+  async fn a_repeat_status_poll_answers_the_state_as_it_stands_now() {
+    let (_home, features) = crate::test_support::feature_context();
+    let status = |uri: String| {
+      let features = Arc::clone(&features);
+      async move {
+        let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        crate::test_support::answer(session_status(State(features), request).await).await
+      }
+    };
+
+    let listed = crate::test_support::create_node(&features.store, "status-repeat", None, TaskProfile::Manager).await;
+    let (_, first) = status("/api/sessions/status?filter=all".to_string()).await;
+    assert_eq!(first["rows"][&listed.id][HAS_UNREAD], json!(false));
+
+    features.store.mark_unread(&listed.id).await.expect("the row is marked unread");
+    let (_, repeated) = status("/api/sessions/status?filter=all".to_string()).await;
+
+    assert_eq!(repeated["rows"][&listed.id][HAS_UNREAD], json!(true), "the repeat poll answers the row's new state");
   }
 
   #[tokio::test]
@@ -811,10 +1078,8 @@ mod tests {
   #[tokio::test]
   async fn a_tree_page_answers_gzip_with_the_bytes_the_transport_would_send() {
     let (_home, features) = crate::test_support::feature_context();
-    for index in 0..20 {
-      crate::test_support::create_node(&features.store, &format!("tree-gzip-{index}"), None, TaskProfile::Manager)
-        .await;
-    }
+    let long_tree_name = format!("tree-gzip-{}", "g".repeat(1200));
+    crate::test_support::create_node(&features.store, &long_tree_name, None, TaskProfile::Manager).await;
     let page = |accept_encoding: &str| {
       Request::builder()
         .uri(api::SESSION_TREE_PATH)

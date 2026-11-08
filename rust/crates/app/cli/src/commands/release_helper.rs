@@ -1,7 +1,8 @@
 //! The release scripts' helper verbs: `charliebot release-helper <name>`.
 //!
 //! `scripts/release/trial.sh` and `scripts/release/switch-rehearsal.sh` call these verbs from the `charliebot` binary.
-//! Each verb keeps its arguments, its output format and its exit code.
+//! Each verb keeps its arguments and its exit code. `assistant-reply` prints the form that answered the word; the other
+//! verbs keep their output format.
 //! Both scripts run the `charliebot` of the release under test, so a release's checks and the server they check come
 //! from one commit.
 
@@ -25,6 +26,7 @@ use charliebot_core::credentials;
 use charliebot_core::event_types;
 use charliebot_core::logline::{self, Row};
 use charliebot_core::proc_identity;
+use charliebot_core::run_kind::RunKind;
 use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_session_api::api;
 use charliebot_store::chat_events::{self, LineRule};
@@ -232,7 +234,9 @@ fn run_summary_fields(value: &Value) -> Result<Vec<String>, String> {
   let items = value.get("items").and_then(Value::as_array).ok_or("run response has no items list")?;
   let item = items.last().cloned().unwrap_or_else(|| json!({}));
   let mut fields = vec![items.len().to_string()];
-  for key in ["id", "state", "pid", "repo_path", "worktree_path", "branch_name"] {
+  for key in
+    ["id", "state", "pid", "repo_path", run_records::OBSERVATION_WORKTREE_PATH, run_records::OBSERVATION_BRANCH_NAME]
+  {
     fields.push(or_default(item.get(key)));
   }
   fields.push(items.iter().map(run_state).collect::<Vec<_>>().join(","));
@@ -564,10 +568,47 @@ fn normalize_reply(text: &str) -> &str {
   text.trim_end_matches(['.', '!', ' '])
 }
 
-fn assistant_reply(args: &[String]) -> Result<i32, String> {
-  let [path, expected] = arguments::<2>(args, "assistant-reply")?;
-  let mut found = false;
-  for event in event_rows(path)? {
+/// The form that answers a reply check's word, as `assistant-reply` names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReplyForm {
+  /// The manager's posted web reply, the answer the user reads.
+  WebReply,
+  /// An assistant text of the session.
+  AssistantText,
+  /// Neither form is the word.
+  NoMatch,
+}
+
+impl ReplyForm {
+  fn name(self) -> &'static str {
+    match self {
+      ReplyForm::WebReply => event_types::WEB_REPLY,
+      ReplyForm::AssistantText => "assistant_text",
+      ReplyForm::NoMatch => "none",
+    }
+  }
+}
+
+/// Whether a reply's text is the word: normalized, it equals the word and holds no space or newline.
+fn is_reply_word(content: &Value, expected: &str) -> bool {
+  let mut parts = Vec::new();
+  content_text(content, &mut parts);
+  parts.iter().any(|text| {
+    let normalized = normalize_reply(text);
+    normalized == expected && !normalized.contains(' ') && !normalized.contains('\n')
+  })
+}
+
+/// The form that answers `expected` in a session's chat events. The posted web reply, the answer the user reads, is
+/// judged first; an assistant text answers only when no web reply does.
+fn reply_form(events: &[Value], expected: &str) -> ReplyForm {
+  let mut web_reply = false;
+  let mut assistant_text = false;
+  for event in events {
+    if event.get("type").and_then(Value::as_str) == Some(event_types::WEB_REPLY) {
+      web_reply |= event.get("content").is_some_and(|content| is_reply_word(content, expected));
+      continue;
+    }
     let message = event.get("message");
     let mut role = event.get("type").and_then(Value::as_str) == Some(event_types::ASSISTANT)
       || event.get("role").and_then(Value::as_str) == Some(event_types::ASSISTANT);
@@ -583,18 +624,20 @@ fn assistant_reply(args: &[String]) -> Result<i32, String> {
       Some(Value::Object(_)) => message.and_then(|message| message.get("content")),
       _ => event.get("content"),
     };
-    let mut parts = Vec::new();
-    if let Some(content) = content {
-      content_text(content, &mut parts);
-    }
-    for text in parts {
-      let normalized = normalize_reply(&text);
-      if normalized == expected && !normalized.contains(' ') && !normalized.contains('\n') {
-        found = true;
-      }
-    }
+    assistant_text |= content.is_some_and(|content| is_reply_word(content, expected));
   }
-  println!("{}", i32::from(found));
+  if web_reply {
+    ReplyForm::WebReply
+  } else if assistant_text {
+    ReplyForm::AssistantText
+  } else {
+    ReplyForm::NoMatch
+  }
+}
+
+fn assistant_reply(args: &[String]) -> Result<i32, String> {
+  let [path, expected] = arguments::<2>(args, "assistant-reply")?;
+  println!("{}", reply_form(&event_rows(path)?, expected).name());
   Ok(0)
 }
 
@@ -1045,7 +1088,7 @@ fn seed_run(args: &[String]) -> Result<i32, String> {
   let record = json!({
     "id": run_id,
     "session_id": session,
-    "kind": "manager_turn",
+    "kind": RunKind::ManagerTurn.as_str(),
     "backend": backend,
     "pid": pid,
     "pid_start": pid_start,
@@ -1071,13 +1114,13 @@ fn write_message(args: &[String]) -> Result<i32, String> {
   Ok(0)
 }
 
-/// Replaces every occurrence of `value`, and of its quoted form, with `[redacted]`. An empty value is not a pattern:
-/// a deployment whose endpoint needs no key has none to redact.
+/// Replaces every occurrence of `value`, and of its quoted form, with the redaction marker. An empty value is not a
+/// pattern: a deployment whose endpoint needs no key has none to redact.
 fn redact_value(text: &mut String, value: &str) {
   if value.is_empty() {
     return;
   }
-  *text = text.replace(value, "[redacted]");
+  *text = text.replace(value, credentials::REDACTED);
   let characters: Vec<char> = value.chars().collect();
   if characters.len() >= 2
     && characters[0] == characters[characters.len() - 1]
@@ -1085,7 +1128,7 @@ fn redact_value(text: &mut String, value: &str) {
   {
     let inner: String = characters[1..characters.len() - 1].iter().collect();
     if !inner.is_empty() {
-      *text = text.replace(&inner, "[redacted]");
+      *text = text.replace(&inner, credentials::REDACTED);
     }
   }
 }
@@ -1139,7 +1182,7 @@ fn replay(
   // The replay cursor rides the handshake query; cursor 0 replays every event.
   let path = route::fill(api::SESSION_WEBSOCKET_PATH, &[session]);
   let url = format!("{base_url}{path}?token={}&cursor=0", quote_component(&token));
-  let outcome = replay_frames(&url).map_err(|error| error.replace(&token, "[redacted]"))?;
+  let outcome = replay_frames(&url).map_err(|error| error.replace(&token, credentials::REDACTED))?;
   let frames = outcome.ok_or("ValueError: replay returned no catchup frames")?;
   let mut signatures = Vec::new();
   for frame in &frames {
@@ -1219,8 +1262,10 @@ fn self_test(args: &[String]) -> Result<i32, String> {
     return Err("self-test: wrong number of arguments".to_string());
   }
   let summary = json!({"items": [
-    {"id": "run-a", "state": "success", "pid": 101, "repo_path": "/repo", "worktree_path": "/work", "branch_name": "trial"},
-    {"id": "run-b", "state": "", "pid": null, "repo_path": "", "worktree_path": "", "branch_name": ""},
+    {"id": "run-a", "state": "success", "pid": 101, "repo_path": "/repo",
+     (run_records::OBSERVATION_WORKTREE_PATH): "/work", (run_records::OBSERVATION_BRANCH_NAME): "trial"},
+    {"id": "run-b", "state": "", "pid": null, "repo_path": "",
+     (run_records::OBSERVATION_WORKTREE_PATH): "", (run_records::OBSERVATION_BRANCH_NAME): ""},
   ]});
   let fields = run_summary_fields(&summary)?;
   let expected = ["2", "run-b", "", "", "", "", "", "success,"];
@@ -1573,5 +1618,38 @@ mod tests {
     assert_eq!(normalize_reply("`HELLO`."), "HELLO`");
     assert_eq!(normalize_reply("HELLO!"), "HELLO");
     assert_eq!(normalize_reply("two words"), "two words");
+  }
+
+  /// An assistant text row, as a session's chat events hold a model's text block.
+  fn assistant_text_row(text: &str) -> Value {
+    json!({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}})
+  }
+
+  /// A posted web reply row, as the manager's chat events hold it.
+  fn web_reply_row(content: &str) -> Value {
+    json!({"id": "web-1", "type": event_types::WEB_REPLY, "content": content,
+      (event_types::WEB_REPLY): {"answer_ids": ["user-1"], "chars": content.chars().count()}})
+  }
+
+  #[test]
+  fn a_posted_web_reply_answers_the_word_when_the_assistant_text_adds_prose() {
+    // The assistant text carries prose around the word; the posted web reply is the bare word.
+    let started = [assistant_text_row("STARTED — worker w-1 delegated; the run is queued."), web_reply_row("STARTED")];
+    assert_eq!(reply_form(&started, "STARTED"), ReplyForm::WebReply);
+    let done = [assistant_text_row("DONE\n\nThe worker session s-1 completed its run."), web_reply_row("DONE")];
+    assert_eq!(reply_form(&done, "DONE"), ReplyForm::WebReply);
+  }
+
+  #[test]
+  fn an_assistant_text_that_is_the_word_still_answers_it() {
+    assert_eq!(reply_form(&[assistant_text_row("HELLO")], "HELLO"), ReplyForm::AssistantText);
+    let both = [assistant_text_row("HELLO"), web_reply_row("HELLO")];
+    assert_eq!(reply_form(&both, "HELLO"), ReplyForm::WebReply);
+  }
+
+  #[test]
+  fn a_session_whose_web_reply_and_assistant_texts_differ_from_the_word_does_not_answer_it() {
+    let events = [assistant_text_row("DONE soon"), web_reply_row("DONE soon")];
+    assert_eq!(reply_form(&events, "DONE"), ReplyForm::NoMatch);
   }
 }

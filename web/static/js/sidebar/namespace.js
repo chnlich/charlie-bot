@@ -58,14 +58,16 @@
     return handler(...args);
   }
 
-  // Whether the sidebar shows the Workspace list: the all filter with no search text. The list refresh and the status
-  // poll both read it, so it lives in the first sidebar file they load after.
-  function workspaceRowsShown() {
+  // Whether the sidebar paints a list the server can refresh row by row and scope by filter: the Workspace, the Later
+  // view and every registered view. The archive view owns its pagination and a search answers its own query, so both
+  // name their rows by id instead. The row refresh and the status poll both read it, so it lives in the first sidebar
+  // file they load after.
+  function sidebarRowsRefreshable() {
     const searchInput = global.document.getElementById('sidebar-search');
-    return global.currentFilter === 'all' && !(searchInput && searchInput.value.trim());
+    return global.currentFilter !== 'archived' && !(searchInput && searchInput.value.trim());
   }
 
   Sidebar.wire = wire;
-  wire({registerSidebarControl, sidebarControl, workspaceRowsShown});
+  wire({registerSidebarControl, sidebarControl, sidebarRowsRefreshable});
   global.Sidebar = Sidebar;
 })(globalThis);

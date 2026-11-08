@@ -9,6 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::bail;
+use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool::is_quota_error;
 use charliebot_agents::cli_host::CliHost;
 use charliebot_agents::{backend_types, one_shot_text};
@@ -400,7 +401,8 @@ pub async fn run_light_probe(host: &CliHost, prompt: &str, system_prompt: &str) 
       Err(error) => {
         let message = format!("{error:#}");
         if is_quota_error(&message) {
-          host.pool.cool(&option.id, None);
+          let availability = host.pool.availability();
+          availability.record(&option.id, None, backend_availability::REASON_QUOTA_ERROR, &message)?;
         }
         attempts.push((option.id, format!("{error_type}: {message}")));
       }
@@ -574,7 +576,7 @@ mod tests {
         worktree_dir: "/synthetic/worktrees".to_string(),
         scratch_dir: "/synthetic/scripts".to_string(),
       },
-      backends: BackendsConfig { pool: ids.map(str::to_string).to_vec(), routing: None, options },
+      backends: BackendsConfig { pool: ids.map(str::to_string).to_vec(), routing: None, options, auto: None },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       remote_run: charliebot_core::config::RemoteRunConfig::default(),
@@ -648,6 +650,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn an_edited_table_reaches_the_next_ask_probe_without_a_prompt_file_change() {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_path_buf();
     let home = tempfile::tempdir().unwrap();
@@ -703,11 +706,11 @@ enable_ask_tier_refusal: false
     )
   }
 
-  const INLINE_PNG_PLACEHOLDER: &str = "data:image/png;base64,[2.0 MB omitted]";
+  const INLINE_PNG_PLACEHOLDER: &str = "data:image/png;base64,[64.0 KB omitted]";
 
   #[test]
   fn probe_input_omits_an_inline_image_and_keeps_the_alt_text() {
-    let page = page_with_inline_png(2 * 1024 * 1024);
+    let page = page_with_inline_png(64 * 1024);
     let input = probe_input(&page, "questions", "the trigger").unwrap();
     assert!(input.len() < 50 * 1024, "the probe input is {} bytes", input.len());
     assert!(input.contains("The monitor line chart"), "the alt text stays in the source");
@@ -718,7 +721,7 @@ enable_ask_tier_refusal: false
 
   #[test]
   fn ask_probe_input_omits_an_inline_image_in_the_linked_page() {
-    let page = page_with_inline_png(2 * 1024 * 1024);
+    let page = page_with_inline_png(64 * 1024);
     let item = serde_json::json!({"text": "Choose."});
     let input = ask_probe_input(&item, Some(&page), "policy section", "questions").unwrap();
     assert!(input.len() < 50 * 1024, "the ask probe input is {} bytes", input.len());
@@ -782,6 +785,7 @@ BBBB
     // The probe records both failures as `RuntimeError`, the first with an empty message.
     let mut registry = Registry::new();
     registry.register_package("tests.cold_read", register_failing).unwrap();
+    let home = tempfile::tempdir().unwrap();
     let host = CliHost {
       cfg: probe_cfg(["alpha", "beta"]),
       registry: Arc::new(registry),
@@ -792,7 +796,9 @@ BBBB
           (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), "/synthetic/gh-wrapper/gh".to_string()),
         ]),
       },
-      pool: std::sync::Arc::new(charliebot_agents::backend_pool::BackendPool::default()),
+      pool: std::sync::Arc::new(charliebot_agents::backend_pool::BackendPool::new(std::sync::Arc::new(
+        charliebot_agents::backend_availability::BackendAvailability::load(home.path()).unwrap(),
+      ))),
     };
 
     let probe = run_light_probe(&host, "prompt", "system").await.unwrap();

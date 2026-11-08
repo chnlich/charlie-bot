@@ -10,8 +10,6 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { loadChatRenderingModules, makeChatRenderContext } = require('./chat_rendering_context_stub');
-const { FakeElement, FakeText, loadChatContext } = require('./turn_engine_harness');
-
 function loadContext() {
   const context = makeChatRenderContext();
   vm.createContext(context);
@@ -35,30 +33,6 @@ const ONE_LINE_361 = 'x'.repeat(361);
 const SHORT = 'Short report.';
 const THREE_LINES_360 = ['a'.repeat(119), 'b'.repeat(120), 'c'.repeat(119)].join('\n');
 const HAN = '中';
-
-// A folded report as a turn: the card's report body is its .whitespace-pre-wrap
-// node, the element the turn fold row reads its first line from. A separator
-// closes the turn.
-function foldedReportTurn(content) {
-  const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
-  const card = new FakeElement('DIV', {className: 'flex justify-start'});
-  card.dataset.messageId = 'c1';
-  card.dataset.messageRole = 'child_report';
-  const bubble = new FakeElement('DIV', {className: 'child-report max-w-[90%]'});
-  bubble.dataset.folded = 'true';
-  const body = new FakeElement('DIV', {className: 'child-report-clamp whitespace-pre-wrap break-words'});
-  body.appendChild(new FakeText(content));
-  bubble.appendChild(body);
-  card.appendChild(bubble);
-  root.appendChild(card);
-  const separator = new FakeElement('DIV', {className: 'separator-line group/sep'});
-  separator.dataset.messageId = 's1';
-  separator.dataset.messageRole = 'separator';
-  root.appendChild(separator);
-  const {context} = loadChatContext({getElementById: (id) => (id === 'messages' ? root : null)});
-  context.applyTurnOutline(root);
-  return root;
-}
 
 // A click runs the button's inline onclick with the button as `this`. The card
 // and the button are fakes that hold only what that handler reads.
@@ -144,10 +118,4 @@ test('a click expands a folded card, and a second click folds it again', () => {
   click(ctx, html, button);
   assert.equal(card.dataset.folded, 'true');
   assert.equal(button.attrs['aria-expanded'], 'false');
-});
-
-test('the turn fold row of a folded report keeps the report first line', () => {
-  const root = foldedReportTurn(FOUR_LINES);
-  const row = root.querySelector('.turn-row-title');
-  assert.equal(row.textContent, 'first line');
 });

@@ -12,7 +12,6 @@ use charliebot_registry::templating::Templating;
 use charliebot_registry::wiring::FileView;
 use charliebot_registry::{FeatureContext, StateError};
 use http::{HeaderValue, StatusCode, header};
-use serde_json::json;
 
 use crate::plan_diff;
 
@@ -184,7 +183,7 @@ fn internal_error(error_type: &str, detail: String) -> ViewError {
 }
 
 fn http_error(status: StatusCode, detail: String) -> ViewError {
-  Box::new(responses::json(status, &json!({"detail": detail})))
+  Box::new(responses::http_exception_with_detail(status, &detail))
 }
 
 fn html_response(body: String) -> Response {
@@ -251,6 +250,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_session_artifact_page_gets_ui_and_no_store_headers() {
     let (home, features) = features();
     let page = home.path().join("sessions/S/artifacts/plan.html");
@@ -267,6 +267,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_nested_artifact_uses_the_first_session_directory() {
     let (home, features) = features();
     let page = home.path().join("sessions/S/threads/T/sub/artifacts/plan.html");
@@ -276,6 +277,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn paths_outside_session_artifacts_and_non_html_paths_pass_through() {
     let (home, features) = features();
     let outside = home.path().join("workspace/artifacts/outside.html");
@@ -288,6 +290,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn diff_answers_annotated_html_with_the_comment_layer() {
     let (home, features) = features();
     let base = home.path().join("sessions/S/artifacts/plan_01.html");
@@ -306,6 +309,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn missing_diff_target_passes_to_the_file_server_before_diff_validation() {
     let (home, features) = features();
     let missing = home.path().join("sessions/S/artifacts/missing.html");
@@ -314,6 +318,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn diff_target_directories_and_outside_pages_are_bad_requests() {
     let (home, features) = features();
     let directory = home.path().join("sessions/S/artifacts/directory.html");
@@ -332,6 +337,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn invalid_and_missing_diff_bases_keep_their_status_and_details() {
     let (home, features) = features();
     let target = home.path().join("sessions/S/artifacts/plan.html");

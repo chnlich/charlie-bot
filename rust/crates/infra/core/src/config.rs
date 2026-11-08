@@ -344,12 +344,50 @@ pub struct RoutingConfig {
   pub command: Vec<String>,
 }
 
-/// `backends:` section: the rotation pool, optional router command, and model-switch options.
+/// The session backend id that runs each turn on one member of the configured `backends.auto` set.
+pub const AUTO_BACKEND_ID: &str = "auto";
+
+/// How one member of the `backends.auto` set is paid for.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoBilling {
+  /// A subscription seat with quota windows.
+  Subscription,
+  /// Pay-as-you-go credit.
+  Payg,
+}
+
+/// One `backends.auto.members[]` entry: the backend option id and how it is paid for.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AutoMember {
+  pub backend: String,
+  pub billing: AutoBilling,
+}
+
+/// `backends.auto:` section: the Auto set the `auto` session backend selects from, in config order.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AutoConfig {
+  pub label: String,
+  pub members: Vec<AutoMember>,
+}
+
+impl AutoConfig {
+  /// The member naming `backend_id`, or `None` when the set holds none.
+  pub fn member(&self, backend_id: &str) -> Option<&AutoMember> {
+    self.members.iter().find(|member| member.backend == backend_id)
+  }
+}
+
+/// `backends:` section: the rotation pool, optional router command, model-switch options, and the Auto set.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackendsConfig {
   pub pool: Vec<String>,
   pub routing: Option<RoutingConfig>,
   pub options: Vec<BackendOption>,
+  /// The Auto set; `None` means no `auto` session backend is offered.
+  pub auto: Option<AutoConfig>,
 }
 
 /// One `/home` page service card.
@@ -699,7 +737,7 @@ fn parse_backends(
 ) -> Result<BackendsConfig, ConfigError> {
   let mapping = match value {
     None => {
-      return Ok(BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() });
+      return Ok(BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new(), auto: None });
     }
     Some(Value::Mapping(mapping)) => mapping,
     Some(other) => {
@@ -710,7 +748,7 @@ fn parse_backends(
     }
   };
   for key in mapping.keys() {
-    if !matches!(key.as_str(), Some("pool" | "options" | "routing")) {
+    if !matches!(key.as_str(), Some("pool" | "options" | "routing" | "auto")) {
       let shown = key.as_str().map_or_else(|| yaml_key_repr(key), str::to_string);
       return Err(ConfigError(format!("{config_path}: invalid config key backends.{shown}: unknown field")));
     }
@@ -732,7 +770,37 @@ fn parse_backends(
       )));
     }
   };
-  Ok(BackendsConfig { pool, routing, options })
+  let auto: Option<AutoConfig> = typed_section(config_path, "backends.auto", mapping.get("auto").cloned(), || None)?;
+  if let Some(auto) = &auto {
+    check_auto(config_path, auto, &options)?;
+  }
+  for (index, option) in options.iter().enumerate() {
+    if option.id == AUTO_BACKEND_ID {
+      return Err(ConfigError(format!(
+        "{config_path}: backends.options[{index}] uses the reserved id '{AUTO_BACKEND_ID}'; '{AUTO_BACKEND_ID}' names \
+         the backends.auto set, not a backend option"
+      )));
+    }
+  }
+  Ok(BackendsConfig { pool, routing, options, auto })
+}
+
+/// Refuse an Auto set whose members are empty, repeated, or name no `backends.options` id. The error names the entry.
+fn check_auto(config_path: &str, auto: &AutoConfig, options: &[BackendOption]) -> Result<(), ConfigError> {
+  if auto.members.is_empty() {
+    return Err(ConfigError(format!("{config_path}: backends.auto.members lists no member")));
+  }
+  let mut seen = std::collections::HashSet::new();
+  for (index, member) in auto.members.iter().enumerate() {
+    let location = format!("{config_path}: backends.auto.members[{index}]");
+    if !options.iter().any(|option| option.id == member.backend) {
+      return Err(ConfigError(format!("{location}: backend '{}' is not a backends.options id", member.backend)));
+    }
+    if !seen.insert(member.backend.as_str()) {
+      return Err(ConfigError(format!("{location}: backend '{}' appears twice", member.backend)));
+    }
+  }
+  Ok(())
 }
 
 /// One backend entry, validated as the option model its `type` names would (`parse_option`).
@@ -1046,6 +1114,58 @@ mod tests {
     );
     let error = load(&home).unwrap_err().to_string();
     assert!(error.contains("invalid config key backends.strong") && error.contains("unknown field"), "{error}");
+  }
+
+  #[test]
+  fn backends_auto_parses_its_label_and_ordered_members() {
+    let home = home_with(concat!(
+      "backends:\n",
+      "  options:\n",
+      "    - {id: a, label: A, type: codex, model: m}\n",
+      "    - {id: b, label: B, type: codex, model: m}\n",
+      "  auto:\n",
+      "    label: Auto\n",
+      "    members:\n",
+      "      - {backend: b, billing: payg}\n",
+      "      - {backend: a, billing: subscription}\n",
+    ));
+    let cfg = load(&home).unwrap();
+    let auto = cfg.backends.auto.expect("backends.auto parses");
+    assert_eq!(auto.label, "Auto");
+    assert_eq!(
+      auto.members,
+      vec![
+        AutoMember { backend: "b".to_string(), billing: AutoBilling::Payg },
+        AutoMember { backend: "a".to_string(), billing: AutoBilling::Subscription },
+      ]
+    );
+  }
+
+  #[test]
+  fn backends_auto_refuses_each_malformed_entry_by_name() {
+    let options = "backends:\n  options:\n    - {id: a, label: A, type: codex, model: m}\n";
+    for (fragment, expected) in [
+      (
+        "  auto:\n    label: Auto\n    members:\n      - {backend: ghost, billing: subscription}\n",
+        "backends.auto.members[0]: backend 'ghost' is not a backends.options id",
+      ),
+      (
+        "  auto:\n    label: Auto\n    members:\n      - {backend: a, billing: subscription}\n      - {backend: a, billing: payg}\n",
+        "backends.auto.members[1]: backend 'a' appears twice",
+      ),
+      ("  auto:\n    label: Auto\n    members: []\n", "backends.auto.members lists no member"),
+      (
+        "  auto:\n    label: Auto\n    members:\n      - {backend: a, billing: weekly}\n",
+        "backends.auto.members[0].billing",
+      ),
+    ] {
+      let error = load(&home_with(&format!("{options}{fragment}"))).unwrap_err().to_string();
+      assert!(error.contains(expected), "{error}");
+    }
+    let error = load(&home_with("backends:\n  options:\n    - {id: auto, label: A, type: codex, model: m}\n"))
+      .unwrap_err()
+      .to_string();
+    assert!(error.contains("backends.options[0] uses the reserved id 'auto'"), "{error}");
   }
 
   #[test]

@@ -19,9 +19,10 @@ pub const SENT_AT: &str = "sent_at";
 pub const ERROR: &str = "error";
 pub const OUTCOME: &str = "outcome";
 
-/// The registration payload's field names. `charliebot_cli_common::draft` owns them because it builds the payload, and
-/// the register route reads the same payload into the draft events.
-pub const SESSION_ID: &str = charliebot_cli_common::draft::SESSION_ID;
+/// The registration payload's field names. `charliebot_cli_common::draft` owns the draft's own names because it builds
+/// the payload, and the register route reads the same payload into the draft events. The session field is the shared
+/// internal-API name from `charliebot_cli_common::fields`.
+pub const SESSION_ID: &str = charliebot_cli_common::fields::SESSION_ID;
 pub const PLATFORM: &str = charliebot_cli_common::draft::PLATFORM;
 pub const TARGET: &str = charliebot_cli_common::draft::TARGET;
 pub const BODY: &str = charliebot_cli_common::draft::BODY;

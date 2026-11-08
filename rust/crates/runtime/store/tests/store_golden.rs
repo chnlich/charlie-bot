@@ -71,6 +71,7 @@ const OPS: &[&str] = &[
 ];
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn store_operations_write_identical_files_and_read_each_others_output() {
   let root = tempfile::tempdir().unwrap();
   run_golden_helper("prepare", root.path(), &[]);
@@ -201,6 +202,7 @@ async fn store_operations_write_identical_files_and_read_each_others_output() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn keep_a_resource_class_key_from_an_older_session_file() {
   // A session file written before 637df0572 keeps its resource_class key as an unknown key, after the declared
   // fields. Rust reads it into the unknown keys and writes the same bytes back.
@@ -289,6 +291,7 @@ fn read_optional(path: &Path) -> Option<Vec<u8>> {
 /// failure outcome, the archived count, and the live and archive bytes. A failed call must also leave the live log,
 /// the archive and `archive_offset` unchanged.
 #[tokio::test]
+#[ignore = "integration"]
 async fn archive_events_before_matches_archive_old_chat_events_sync() {
   let cutoff = UtcDateTime::parse("2025-02-03T00:00:00Z").unwrap();
   let cases: [(&str, &[u8]); 9] = [
@@ -430,6 +433,7 @@ fn listing_filters_status_and_builds_stable_archived_pages() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn run_operations_share_record_and_fact_bytes() {
   let root = tempfile::tempdir().unwrap();
   run_golden_helper("prepare_runs", root.path(), &[]);
@@ -570,6 +574,7 @@ async fn run_operations_share_record_and_fact_bytes() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn task_trees_share_nodes_gates_and_mutation_bytes() {
   let root = tempfile::tempdir().unwrap();
   run_golden_helper("prepare_tasks", root.path(), &[]);
@@ -675,6 +680,7 @@ async fn task_trees_share_nodes_gates_and_mutation_bytes() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn name_an_unnamed_node_from_a_corrupt_counter_the_same_way() {
   let root = tempfile::tempdir().unwrap();
   run_golden_helper("prepare_counter", root.path(), &[]);
@@ -707,6 +713,7 @@ async fn name_an_unnamed_node_from_a_corrupt_counter_the_same_way() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn archive_a_subtree_into_the_same_fact_bytes() {
   let root = tempfile::tempdir().unwrap();
   run_golden_helper("prepare_archive", root.path(), &[]);
@@ -831,6 +838,7 @@ fn normalized_home(home: &Path, base: &BTreeSet<String>) -> BTreeMap<PathBuf, Ve
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn fork_and_elone_write_the_same_session_files_at_every_index() {
   let root = tempfile::tempdir().unwrap();
   run_golden_helper("prepare_fork", root.path(), &[]);
@@ -865,6 +873,7 @@ async fn fork_and_elone_write_the_same_session_files_at_every_index() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn delegate_a_task_spec_into_the_same_node_run_and_spec_bytes() {
   let root = tempfile::tempdir().unwrap();
   run_golden_helper("prepare_delegate", root.path(), &[]);
@@ -949,6 +958,7 @@ async fn delegate_a_task_spec_into_the_same_node_run_and_spec_bytes() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn task_gate_matches_recorded_cases_and_the_parity_fixture_tree() {
   let root = tempfile::tempdir().unwrap();
   let cases = materialize_gate_cases();
@@ -1044,6 +1054,7 @@ async fn task_gate_matches_recorded_cases_and_the_parity_fixture_tree() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn stop_checks_process_identity_and_reconciles_after_the_fact_is_durable() {
   let root = tempfile::tempdir().unwrap();
   let store = make_store(root.path());
@@ -1088,6 +1099,7 @@ async fn stop_checks_process_identity_and_reconciles_after_the_fact_is_durable()
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn stop_request_overrides_a_later_successful_finish() {
   let root = tempfile::tempdir().unwrap();
   let store = make_store(root.path());
@@ -1139,6 +1151,7 @@ async fn stopped_run_keeps_its_null_exit_code_after_a_late_process_finish() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn stop_escalates_to_sigkill_when_the_process_ignores_sigterm() {
   let root = tempfile::tempdir().unwrap();
   let store = make_store(root.path());
@@ -1158,6 +1171,7 @@ async fn stop_escalates_to_sigkill_when_the_process_ignores_sigterm() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn stop_refuses_a_process_that_is_not_its_own_group_leader() {
   let root = tempfile::tempdir().unwrap();
   let store = make_store(root.path());
@@ -1179,6 +1193,7 @@ async fn stop_refuses_a_process_that_is_not_its_own_group_leader() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn launch_refuses_a_durable_stop_and_preserves_the_first_start_time() {
   let root = tempfile::tempdir().unwrap();
   let store = make_store(root.path());
@@ -1202,6 +1217,7 @@ async fn launch_refuses_a_durable_stop_and_preserves_the_first_start_time() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_late_stop_keeps_a_finished_runs_outcome_and_a_repeat_finish_keeps_its_exit_code() {
   let root = tempfile::tempdir().unwrap();
   let store = make_store(root.path());
@@ -1258,6 +1274,7 @@ async fn run_pages_walk_the_launch_order_and_refuse_a_malformed_cursor() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn last_ended_run_ranks_a_run_by_its_last_finish_fact() {
   let root = tempfile::tempdir().unwrap();
   let seed_home = root.path().join("last_ended").join("seed-home");
@@ -1274,6 +1291,7 @@ async fn last_ended_run_ranks_a_run_by_its_last_finish_fact() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn terminal_outcome_is_the_last_finish_fact() {
   let root = tempfile::tempdir().unwrap();
   let seed_home = root.path().join("terminal_outcome").join("seed-home");
@@ -1288,6 +1306,7 @@ async fn terminal_outcome_is_the_last_finish_fact() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn descending_run_pages_and_cross_order_cursor_refusals_match_recorded() {
   let root = tempfile::tempdir().unwrap();
   let seed_home = root.path().join("pages").join("seed-home");
@@ -1320,6 +1339,7 @@ async fn newest_run_is_the_latest_launch_and_a_queued_reservation_never_leads() 
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn run_blockers_name_each_run_that_blocks_a_structural_change() {
   let root = tempfile::tempdir().unwrap();
   let store = make_store(root.path());
@@ -1360,6 +1380,7 @@ async fn run_blockers_name_each_run_that_blocks_a_structural_change() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn a_session_with_two_blocked_runs_reports_both() {
   let root = tempfile::tempdir().unwrap();
   let seed_home = root.path().join("blockers").join("seed-home");
@@ -2353,6 +2374,7 @@ fn parity_case_dir(root: &Path, case: &str) -> PathBuf {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn range_read_matches_when_archive_offset_is_positive_and_lines_are_blank_or_malformed() {
   let root = tempfile::tempdir().unwrap();
   let case_dir = parity_case_dir(root.path(), "range_read");
@@ -2394,6 +2416,7 @@ async fn range_read_matches_when_archive_offset_is_positive_and_lines_are_blank_
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn listing_and_raw_scan_skip_a_malformed_metadata_file() {
   let root = tempfile::tempdir().unwrap();
   let case_dir = parity_case_dir(root.path(), "listing_raw_scan");
@@ -2441,6 +2464,7 @@ async fn listing_and_raw_scan_skip_a_malformed_metadata_file() {
 }
 
 #[tokio::test]
+#[ignore = "integration"]
 async fn load_all_facts_matches_fact_history_over_a_stale_archive_file() {
   let root = tempfile::tempdir().unwrap();
   let case_dir = parity_case_dir(root.path(), "facts");
@@ -2565,7 +2589,94 @@ fn message_aggregator_accepts_every_recorded_shape() {
   for event in events.as_array().unwrap() {
     rust_frames.extend(aggregator.feed(event).unwrap());
   }
-  assert_eq!(Value::Array(rust_frames), run_golden_message_aggregator(&events));
+  assert_recorded_drafts(rust_frames, run_golden_message_aggregator(&events));
+}
+
+/// Compare a live frame feed with a recording whose stream frames are whole-draft snapshots. The live feed
+/// sends only the new text, so its appends are accumulated and each frame's draft is compared with that
+/// frame's recorded snapshot; every other frame must match exactly.
+fn assert_recorded_drafts(actual: Vec<Value>, recorded: Value) {
+  let recorded = without_repeated_snapshots(recorded.as_array().unwrap());
+  let mut actual = actual.into_iter();
+  let (mut content, mut thinking, mut tools) = (String::new(), String::new(), Value::Null);
+  for (index, frame) in recorded.iter().enumerate() {
+    let live = actual.next().unwrap_or_else(|| panic!("the feed ended before frame {index}"));
+    if frame["type"] != "stream" {
+      assert_eq!(live, *frame, "frame {index} differs from the recording");
+      content.clear();
+      thinking.clear();
+      tools = Value::Null;
+      continue;
+    }
+    assert_eq!(live["type"], "stream", "frame {index} is not a stream frame: {live:?}");
+    if let Some(append) = live["append"].as_str() {
+      content = extend_streamed(&content, append, live["length"].as_u64());
+    }
+    if let Some(append) = live["thinking_append"].as_str() {
+      thinking = extend_streamed(&thinking, append, live["thinking_length"].as_u64());
+    }
+    if let Some(frame_tools) = live.get("tools") {
+      // A live frame carries the rows from `tools_from` on; the page keeps the rows before it.
+      tools = match live["tools_from"].as_u64() {
+        Some(from) => {
+          let mut held = tools.as_array().cloned().unwrap_or_default();
+          held.truncate(from as usize);
+          held.extend(frame_tools.as_array().cloned().unwrap_or_default());
+          Value::Array(held)
+        }
+        None => frame_tools.clone(),
+      };
+    }
+    let snapshot = &frame["message"];
+    assert_eq!(content, snapshot["content"].as_str().unwrap_or(""), "draft text at frame {index}");
+    assert_eq!(
+      thinking,
+      snapshot.get("thinking").and_then(Value::as_str).unwrap_or(""),
+      "draft thinking at frame {index}"
+    );
+    if let Some(snapshot_tools) = snapshot.get("tools") {
+      assert_eq!(tools, *snapshot_tools, "draft tools at frame {index}");
+    }
+  }
+  assert!(actual.next().is_none(), "the feed sent frames the recording does not have");
+}
+
+/// Drop the snapshots that repeat their predecessor: an unchanged draft sends no frame.
+fn without_repeated_snapshots(frames: &[Value]) -> Vec<Value> {
+  let mut kept = Vec::new();
+  let mut previous: Option<Value> = None;
+  for frame in frames {
+    if frame["type"] != "stream" {
+      previous = None;
+      kept.push(frame.clone());
+      continue;
+    }
+    let snapshot = &frame["message"];
+    let state = json!([snapshot["content"], snapshot.get("thinking"), snapshot.get("tools")]);
+    if previous.as_ref() == Some(&state) {
+      continue;
+    }
+    previous = Some(state);
+    kept.push(frame.clone());
+  }
+  kept
+}
+
+/// The draft text after one append frame, the way the page accumulates it. The recordings' texts are ASCII, so
+/// a UTF-16 length is its byte length.
+fn extend_streamed(held: &str, append: &str, end: Option<u64>) -> String {
+  let Some(end) = end.map(|end| end as usize) else { return format!("{held}{append}") };
+  let start = end.saturating_sub(append.len());
+  if end <= held.len() {
+    return if &held[start..end] == append { held.to_string() } else { append.to_string() };
+  }
+  if start >= held.len() {
+    return format!("{held}{append}");
+  }
+  if held[start..] != append[..held.len() - start] {
+    return append.to_string();
+  }
+  format!("{held}{}", &append[held.len() - start..])
 }
 
 /// Plain tool rows keep the frames that main produced before subagent cards existed.
@@ -2583,7 +2694,7 @@ fn message_aggregator_keeps_plain_tool_row_frames() {
     frames.extend(aggregator.feed(event).unwrap());
   }
   frames.extend(aggregator.flush_pending());
-  assert_eq!(Value::Array(frames), fixture["expected"]);
+  assert_recorded_drafts(frames, fixture["expected"].clone());
 }
 
 /// A running copy of the system sleep binary named `name`, whose `/proc/<pid>/exe` file name is `name`.
@@ -2602,6 +2713,7 @@ fn sleep_stub(directory: &Path, name: &str) -> (Child, PathBuf) {
 /// The delete runs the session's browser sweep to completion. The chrome stub in the session's fake cgroup is dead
 /// when `delete_session_permanently` returns, and the plain sleep beside it is not.
 #[tokio::test]
+#[ignore = "integration"]
 async fn delete_session_permanently_ends_the_session_browsers_before_the_cgroup_cleanup() {
   let root = tempfile::tempdir().unwrap();
   let home = root.path().join("home");

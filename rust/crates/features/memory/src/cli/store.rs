@@ -200,11 +200,7 @@ fn is_topic_name(value: &str) -> bool {
 
 pub(super) fn read_text(path: &Path) -> Result<String, CliExit> {
   let text = fs::read_to_string(path).map_err(|error| CliExit::error(format!("read {}: {error}", path.display())))?;
-  Ok(normalize_newlines(&text))
-}
-
-pub(super) fn normalize_newlines(text: &str) -> String {
-  text.replace("\r\n", "\n").replace('\r', "\n")
+  Ok(str_methods::universal_newlines(&text))
 }
 
 #[cfg(test)]

@@ -124,7 +124,7 @@ impl CcAnthropicCompatibleOption {
   }
 }
 
-/// Validate the fields of a `cc-anthropic-compatible` config entry.
+/// The option model that validates the fields of a `cc-anthropic-compatible` config entry.
 pub fn option_model(fields: &Mapping) -> Result<(), String> {
   CcAnthropicCompatibleOption::from_fields(fields).map(|_| ())
 }
@@ -145,9 +145,12 @@ mod tests {
   #[test]
   fn host_auth_alias_parses_and_other_unknown_keys_stay_refused() {
     let base = "api_base: https://upstream.example\ncontext_window: 200000\n";
-    assert_eq!(host_auth_alias(&fields(&format!("{base}host_auth_alias: host3\n"))), Ok(Some("host3".to_string())));
+    assert_eq!(
+      host_auth_alias(&fields(&format!("{base}host_auth_alias: gpu-box-1\n"))),
+      Ok(Some("gpu-box-1".to_string()))
+    );
     assert_eq!(host_auth_alias(&fields(&format!("{base}host_auth_alias: null\n"))), Ok(None));
     assert!(host_auth_alias(&fields(&format!("{base}host_auth_alias: ''\n"))).is_err());
-    assert!(option_model(&fields(&format!("{base}host: host3\n"))).is_err());
+    assert!(option_model(&fields(&format!("{base}host: gpu-box-1\n"))).is_err());
   }
 }

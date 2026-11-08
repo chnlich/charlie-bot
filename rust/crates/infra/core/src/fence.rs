@@ -14,9 +14,9 @@ use std::path::{Path, PathBuf};
 use nix::fcntl::{Flock, FlockArg, OFlag};
 use serde_json::{Map, Value, json};
 
+use crate::home::STATE_DIR_NAME;
 use crate::{fsutil, paths, proc_identity, text_repr, timefmt};
 
-pub const STATE_DIR_NAME: &str = "state";
 pub const FENCE_LOCK_NAME: &str = "home_writer.lock";
 pub const FENCE_IDENTITY_NAME: &str = "writer_identity.json";
 
@@ -226,6 +226,7 @@ fn checked_fence_paths(home: &Path) -> Result<(), FenceError> {
 mod tests {
   use super::*;
 
+  #[ignore = "integration"]
   #[test]
   fn a_second_acquisition_refuses_and_names_the_holder() {
     let home = tempfile::tempdir().unwrap();

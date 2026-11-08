@@ -5,18 +5,12 @@ use anyhow::Result;
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths;
-use charliebot_registry::turn::{PromptSource, RuleSegment, TurnContribution};
+use charliebot_core::run_kind::RunKind;
+use charliebot_registry::turn::{PromptSource, RuleSegment, SCOPE_MEMORY, TurnContribution};
 use charliebot_store::metadata::SessionMetadata;
 
 use crate::memory::{self, MemorySelection};
 use crate::store_root;
-
-/// The run kinds whose managed instructions are the manager contract. Every other kind
-/// takes the worker audience.
-const MANAGER_KINDS: &[&str] = &["manager_turn"];
-
-/// The scope of a memory source.
-const SCOPE_MEMORY: &str = "memory";
 
 /// The memory package's turn contribution.
 pub struct MemoryTurn;
@@ -42,7 +36,7 @@ impl TurnContribution for MemoryTurn {
 /// other kind the worker selection for its repo.
 fn memory_selection_for(meta: &SessionMetadata, kind: &str, cfg: &CharlieBotConfig) -> Result<Option<MemorySelection>> {
   let memory_dir = store_root::memory_dir(cfg);
-  if MANAGER_KINDS.contains(&kind) {
+  if kind == RunKind::ManagerTurn.as_str() {
     return memory::select_master_memory(&memory_dir);
   }
   Ok(Some(memory::select_worker_memory(&memory_dir, repo_basename(meta))?))
@@ -117,7 +111,7 @@ mod tests {
         worktree_dir: "/synthetic/worktrees".to_string(),
         scratch_dir: "/synthetic/scripts".to_string(),
       },
-      backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() },
+      backends: BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new(), auto: None },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       remote_run: charliebot_core::config::RemoteRunConfig::default(),

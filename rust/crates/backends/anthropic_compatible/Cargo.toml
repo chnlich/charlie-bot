@@ -7,7 +7,6 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-charliebot-agents.workspace = true
 charliebot-claude-code.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true

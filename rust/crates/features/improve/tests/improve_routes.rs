@@ -13,8 +13,8 @@ use charliebot_improve::command::{self, Reservation};
 use charliebot_registry::backend::{BackendTraits, ResumeStyle};
 use charliebot_registry::context::StartupState;
 use charliebot_registry::{FeatureContext, Registry, RegistryError, store_hooks};
-use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+use charliebot_store::{SESSION_NOT_FOUND_DETAIL, Store};
 use charliebot_tasks::test_support::recovery_support;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -74,7 +74,19 @@ fn feature_context_with_config(config_yaml: Option<&str>) -> (tempfile::TempDir,
     Box::new(move || load_credentials(&credential_home)),
   ));
   let startup = StartupState::default();
-  startup.insert(BackendPool::default()).expect("the pool inserts once");
+  startup
+    .insert(
+      charliebot_agents::backend_availability::BackendAvailability::load(home.path())
+        .expect("the availability owner loads"),
+    )
+    .expect("the owner inserts once");
+  startup
+    .insert(BackendPool::new(
+      startup
+        .require::<charliebot_agents::backend_availability::BackendAvailability>()
+        .expect("the owner is in the startup state"),
+    ))
+    .expect("the pool inserts once");
   let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
   (home, features)
 }
@@ -129,7 +141,7 @@ async fn start_for_a_missing_session_is_not_found() {
   let (status, body) = post(&features, START, start_body("missing-session", None)).await;
 
   assert_eq!(status, StatusCode::NOT_FOUND);
-  assert_eq!(body["detail"], "Session not found");
+  assert_eq!(body["detail"], SESSION_NOT_FOUND_DETAIL);
 }
 
 #[tokio::test]
@@ -203,7 +215,7 @@ async fn stop_for_a_missing_session_is_not_found() {
   let (status, body) = post(&features, STOP, json!({"session_id": "missing-session"})).await;
 
   assert_eq!(status, StatusCode::NOT_FOUND);
-  assert_eq!(body["detail"], "Session not found");
+  assert_eq!(body["detail"], SESSION_NOT_FOUND_DETAIL);
 }
 
 #[tokio::test]

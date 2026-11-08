@@ -1,4 +1,4 @@
-//! Run one improve round's command under a write-only Landlock boundary.
+//! The sandbox that runs one improve round's command under a write-only Landlock boundary.
 //!
 //! Usage: `improve-sandbox <direction> -- <command> [args...]`
 //!
@@ -71,7 +71,7 @@ struct PathBeneathAttr {
   parent_fd: i32,
 }
 
-/// Turn a negative system call result into the error of the last OS call, with the operation's name.
+/// The conversion of a negative system call result into the error of the last OS call, named by the operation.
 fn check(ret: i64, what: &str) -> Result<i64> {
   if ret < 0 {
     return Err(io::Error::last_os_error()).with_context(|| what.to_string());
@@ -121,7 +121,7 @@ fn parse_argv(args: &[OsString]) -> Result<(&str, &[OsString])> {
   Ok((direction, command))
 }
 
-/// Create each missing allow-list directory, after checking that every device path exists.
+/// The creation of each missing allow-list directory, after checking that every device path exists.
 fn create_writable_directories(paths: &[PathBuf]) -> Result<()> {
   for device in DEVICE_PATHS {
     if !Path::new(device).exists() {
@@ -161,7 +161,8 @@ fn open_path(path: &Path) -> Result<OwnedFd> {
   Ok(unsafe { OwnedFd::from_raw_fd(fd as RawFd) })
 }
 
-/// Restrict this process's writes to `write_allowed`. Reads stay open. Returns the ABI version.
+/// The restriction of this process's writes to `write_allowed`, with reads left open. The return value is the ABI
+/// version.
 fn restrict(write_allowed: &BTreeSet<PathBuf>) -> Result<i64> {
   let abi = landlock_abi()?;
   if abi < REQUIRED_ABI {

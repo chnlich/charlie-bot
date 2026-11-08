@@ -147,7 +147,7 @@ fn response_failure(
 }
 
 fn redact_key(text: &str, api_key: &str) -> String {
-  if api_key.is_empty() { text.to_string() } else { text.replace(api_key, "[redacted]") }
+  if api_key.is_empty() { text.to_string() } else { text.replace(api_key, credentials::REDACTED) }
 }
 
 #[cfg(test)]
@@ -252,22 +252,30 @@ mod tests {
   }
 
   #[test]
-  fn graphql_errors_include_status_and_redact_the_key() {
+  fn graphql_errors_payload_includes_status_and_redacts_the_key() {
+    assert_graphql_error(200, br#"{"errors":[{"message":"failed"}]}"#.to_vec());
+  }
+
+  #[test]
+  fn graphql_http_error_includes_status_and_redacts_the_key() {
+    assert_graphql_error(400, API_KEY.as_bytes().to_vec());
+  }
+
+  #[test]
+  fn graphql_malformed_response_includes_status_and_redacts_the_key() {
+    assert_graphql_error(200, b"not-json".to_vec());
+  }
+
+  fn assert_graphql_error(status: u16, response_body: Vec<u8>) {
     let home = credentials_home(Some(API_KEY));
-    for (status, response_body) in [
-      (200, br#"{"errors":[{"message":"failed"}]}"#.to_vec()),
-      (400, API_KEY.as_bytes().to_vec()),
-      (200, b"not-json".to_vec()),
-    ] {
-      let (endpoint, request_receiver) = start_stub(status, response_body);
-      let error = execute_graphql(REQUEST_BODY, &endpoint, home.path()).unwrap_err();
-      assert_authorized(&request_receiver.recv_timeout(Duration::from_secs(2)).unwrap());
-      let text = error_text(&error);
-      assert_eq!(error.code, 1);
-      assert_no_key(&text);
-      assert!(text.contains(&format!("\"status\":{status}")));
-      assert!(error.body.get("error").is_none());
-    }
+    let (endpoint, request_receiver) = start_stub(status, response_body);
+    let error = execute_graphql(REQUEST_BODY, &endpoint, home.path()).unwrap_err();
+    assert_authorized(&request_receiver.recv_timeout(Duration::from_secs(2)).unwrap());
+    let text = error_text(&error);
+    assert_eq!(error.code, 1);
+    assert_no_key(&text);
+    assert!(text.contains(&format!("\"status\":{status}")));
+    assert!(error.body.get("error").is_none());
   }
 
   #[test]

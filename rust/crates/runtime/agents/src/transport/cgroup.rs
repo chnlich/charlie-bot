@@ -5,6 +5,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cgfs::{Cgroup, EntryKind, Hierarchy, LeafSpec};
@@ -13,52 +14,8 @@ use charliebot_core::cgroup::{
   SESSION_CGROUP_OOM_SCORE_ADJ, SESSION_CGROUP_SWEEP_REMOVED_EVENT, agents_slice_dir, session_cgroup_name,
   session_cgroup_path, session_slice_dirs,
 };
-use charliebot_core::config::CharlieBotConfig;
+pub use charliebot_core::cgroup::{SESSION_WEIGHT, SessionCgroupConfig};
 use charliebot_registry::StartupStop;
-
-/// The session cgroup placement of one spawn: the delegated cgroup base and the caps and switches copied from the
-/// server configuration.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SessionCgroupConfig {
-  /// Delegated cgroup directory that holds the session cgroups.
-  pub base_dir: PathBuf,
-  pub memory_max_mb: i64,
-  pub swap_max_mb: i64,
-  pub tasks_max: i64,
-  /// Session cgroups carry a cpu weight of `SESSION_WEIGHT`; `server.enable_session_cpu_weight` turns this off.
-  pub enable_cpu_weight: bool,
-  /// Session cgroups carry an io weight of `SESSION_WEIGHT`; `server.enable_session_io_weight` turns this off.
-  pub enable_io_weight: bool,
-}
-
-/// The cpu and io weight of each session cgroup: the cgroup-v2 default, so competing sessions split evenly.
-pub const SESSION_WEIGHT: u64 = 100;
-
-impl SessionCgroupConfig {
-  /// The caps and switches of the server configuration `cfg`, under this user's delegated cgroup base.
-  pub fn from_config(cfg: &CharlieBotConfig) -> Self {
-    Self {
-      base_dir: charliebot_core::cgroup::system_cgroup_base_dir(),
-      memory_max_mb: cfg.server.session_memory_max_mb,
-      swap_max_mb: cfg.server.session_swap_max_mb,
-      tasks_max: cfg.server.session_tasks_max,
-      enable_cpu_weight: cfg.server.enable_session_cpu_weight,
-      enable_io_weight: cfg.server.enable_session_io_weight,
-    }
-  }
-
-  /// A placement with cgroup control off: a zero memory cap starts no session cgroup, so no directory is read.
-  pub fn disabled() -> Self {
-    Self {
-      base_dir: PathBuf::new(),
-      memory_max_mb: 0,
-      swap_max_mb: 0,
-      tasks_max: 0,
-      enable_cpu_weight: false,
-      enable_io_weight: false,
-    }
-  }
-}
 
 /// The pre-spawn memory counter snapshot for one session cgroup.
 #[derive(Clone, Debug)]
@@ -188,20 +145,22 @@ fn weight_switch(controller: &str) -> &'static str {
 
 /// Open `path` as a cgroup hierarchy root, which a delegated subtree is.
 fn open_hierarchy(path: &Path) -> io::Result<Hierarchy> {
+  #[cfg(any(test, feature = "test-support"))]
   if cfg!(test) || FAKE_HIERARCHY.load(Ordering::Relaxed) {
     // SAFETY: unit tests and the tests that call `use_fake_cgroup_hierarchy` pass a private temporary directory that
     // stands in for cgroupfs; the server never turns the flag on.
-    unsafe { Hierarchy::open_for_test(path) }
-  } else {
-    Hierarchy::open(path)
+    return unsafe { Hierarchy::open_for_test(path) };
   }
+  Hierarchy::open(path)
 }
 
 /// Whether the cgroup handles name a test tree. The tests' temporary directories hold the control files a cgroupfs
 /// would publish, but they are not cgroup2.
+#[cfg(any(test, feature = "test-support"))]
 static FAKE_HIERARCHY: AtomicBool = AtomicBool::new(false);
 
 /// Mark this process's cgroup bases as fake test trees. Integration tests call this before their first cgroup call.
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub fn use_fake_cgroup_hierarchy() {
   FAKE_HIERARCHY.store(true, Ordering::Relaxed);
@@ -552,11 +511,13 @@ mod tests {
   fn an_io_switch_off_with_the_cpu_on_enables_only_cpu() {
     let root = fake_slices();
     fake_leaf(root.path(), AGENTS_SLICE);
-    let path = ensure_session_cgroup(&cgroup_config_with(root.path(), 64, true, false), SESSION_ID).unwrap();
+    let config = SessionCgroupConfig { tasks_max: 50, ..cgroup_config_with(root.path(), 64, true, false) };
+    let path = ensure_session_cgroup(&config, SESSION_ID).unwrap();
     assert_eq!(
       fs::read_to_string(leaf_slice(root.path(), AGENTS_SLICE).join("cgroup.subtree_control")).unwrap(),
       "+memory +pids +cpu\n"
     );
+    assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "50\n");
     assert_eq!(fs::read_to_string(path.join("cpu.weight")).unwrap(), format!("{}\n", SESSION_WEIGHT));
     assert_eq!(fs::read_to_string(path.join("io.weight")).unwrap(), "");
   }
@@ -620,21 +581,12 @@ mod tests {
   }
 
   #[test]
-  fn ensure_session_cgroup_rewrites_task_cap_and_zero_lifts_it() {
+  fn ensure_session_cgroup_zero_lifts_a_preexisting_task_cap() {
     let root = fake_slices();
-    fake_leaf(root.path(), AGENTS_SLICE);
-    let path =
-      ensure_session_cgroup(&SessionCgroupConfig { tasks_max: 50, ..cgroup_config(root.path(), 64) }, SESSION_ID)
-        .unwrap();
-    assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "50\n");
-    assert_eq!(
-      ensure_session_cgroup(
-        &SessionCgroupConfig { tasks_max: 0, enable_io_weight: false, ..cgroup_config(root.path(), 64) },
-        SESSION_ID
-      )
-      .unwrap(),
-      path
-    );
+    let path = fake_leaf(root.path(), AGENTS_SLICE);
+    fs::write(path.join("pids.max"), "50").unwrap();
+    let config = SessionCgroupConfig { tasks_max: 0, enable_io_weight: false, ..cgroup_config(root.path(), 64) };
+    assert_eq!(ensure_session_cgroup(&config, SESSION_ID).unwrap(), path);
     assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "max\n");
   }
 

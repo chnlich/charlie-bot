@@ -95,9 +95,10 @@ async fn load_chat_events(bot: &Bot, session_id: &str) -> Result<Vec<ChatEvent>,
   Ok(events?)
 }
 
-/// Read the session's topic, and ack the unread messages the window returns. The window starts at the earlier of the
-/// oldest unread message and the oldest pending summon's message, or holds the newest `limit` messages when neither
-/// exists. The summon's root message rides first, outside the count, when the thread's listing does not carry it.
+/// The read of the session's topic, which acks the unread messages the window returns. The window starts at the
+/// earlier of the oldest unread message and the oldest pending summon's message, or holds the newest `limit` messages
+/// when neither exists. The summon's root message rides first, outside the count, when the thread's listing does not
+/// carry it.
 pub async fn read_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Value, ThreadReplyError> {
   let session = thread_entry::require_thread_session(&FEISHU, &bot.features, session_id).await?;
   let origin: FeishuOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
@@ -161,7 +162,8 @@ pub async fn read_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
   }))
 }
 
-/// Read up to `limit` messages from the session group's main chat, newest first, without changing the topic watermark.
+/// The read of up to `limit` messages from the session group's main chat, newest first, without changing the topic
+/// watermark.
 pub async fn read_chat(
   bot: &Bot,
   session_id: &str,
@@ -207,7 +209,8 @@ pub async fn read_chat(
   Ok(output)
 }
 
-/// Read up to `limit` messages in one topic of the session's group, oldest first, without changing its watermark.
+/// The read of up to `limit` messages in one topic of the session's group, oldest first, without changing its
+/// watermark.
 pub async fn read_topic(
   bot: &Bot,
   session_id: &str,
@@ -431,8 +434,9 @@ async fn check_endpoint(client: &FeishuClient) -> Value {
   }
 }
 
-/// Download one image or file from the session's group into its session directory. Refusals: 404 unknown session or
-/// message from another group, 409 no Feishu thread, 422 invalid message id or output path, and 502 Feishu refusal.
+/// The download of one image or file from the session's group into its session directory. Refusals: 404 unknown
+/// session or message from another group, 409 no Feishu thread, 422 invalid message id or output path, and 502 Feishu
+/// refusal.
 pub async fn download(
   bot: &Bot,
   session_id: &str,
@@ -633,7 +637,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn topic_reads_page_and_refuse_other_groups_or_feishu_errors() {
+  async fn topic_reads_pages_without_changing_the_watermark() {
     let home = Home::new();
     let watermark = "1700000000000-om_seen";
     let session_id = home.thread_session(SESSION_ID, origin(), Some(watermark)).await;
@@ -643,21 +647,14 @@ mod tests {
       message("om_reply_two", "1700000001000", CHAT_ID, Some(TOPIC_ID), Some("om_topic_root"), "reply two");
     let reply_three =
       message("om_reply_three", "1700000002000", CHAT_ID, Some(TOPIC_ID), Some("om_topic_root"), "reply three");
-    let cross_group =
-      message("om_cross", "1700000000000", OTHER_CHAT_ID, Some("omt_cross"), Some("om_cross_root"), "private");
     let first = vec![reply_one.clone(), reply_two.clone()];
     let second = reply_two.clone();
     let third = reply_three.clone();
-    let other = cross_group.clone();
     let stub = serve(move |request: &Recorded| {
       if request.target.starts_with("/open-apis/im/v1/messages/om_topic_root") {
         response_items(vec![message("om_topic_root", "1699999999000", CHAT_ID, Some(TOPIC_ID), None, "topic root")])
       } else if request.target.starts_with("/open-apis/im/v1/messages/om_reply_two") {
         response_items(vec![second.clone()])
-      } else if request.target.contains("container_id=omt_cross") {
-        list(vec![other.clone()], false, None)
-      } else if request.target.contains("container_id=omt_refused") {
-        api_error(400, 230027, "permission denied")
       } else if request.target.contains("page_token=topic_two") {
         list(vec![third.clone()], false, None)
       } else {
@@ -666,7 +663,6 @@ mod tests {
     })
     .await;
     let bot = Bot::new(Arc::clone(&home.features), stub.base_url.clone());
-    let before = home.meta(&session_id).await.extra(crate::metadata::FEISHU_WATERMARK_ID).cloned();
 
     let readback = read_topic(&bot, &session_id, TOPIC_ID, 2, None).await.unwrap();
     assert_eq!(
@@ -705,13 +701,39 @@ mod tests {
       assert!(requests.iter().any(|request| request.target.contains("page_token=topic_two")));
     }
 
+    assert_eq!(
+      home.meta(&session_id).await.extra(crate::metadata::FEISHU_WATERMARK_ID).cloned(),
+      Some(json!(watermark))
+    );
+  }
+
+  #[tokio::test]
+  async fn topic_reads_reject_other_groups_and_feishu_errors() {
+    let home = Home::new();
+    let watermark = "1700000000000-om_seen";
+    let session_id = home.thread_session(SESSION_ID, origin(), Some(watermark)).await;
+    let other =
+      message("om_cross", "1700000000000", OTHER_CHAT_ID, Some("omt_cross"), Some("om_cross_root"), "private");
+    let stub = serve(move |request: &Recorded| {
+      if request.target.contains("container_id=omt_cross") {
+        list(vec![other.clone()], false, None)
+      } else {
+        api_error(400, 230027, "permission denied")
+      }
+    })
+    .await;
+    let bot = Bot::new(Arc::clone(&home.features), stub.base_url.clone());
+
     let cross_error = read_topic(&bot, &session_id, "omt_cross", 10, None).await.unwrap_err();
     assert_eq!(cross_error.status, StatusCode::NOT_FOUND);
     assert_eq!(error_text(&cross_error), "the message is not in this session's group");
     let feishu_error = read_topic(&bot, &session_id, "omt_refused", 10, None).await.unwrap_err();
     assert_eq!(feishu_error.status, StatusCode::BAD_GATEWAY);
     assert!(error_text(&feishu_error).contains("permission denied"));
-    assert_eq!(home.meta(&session_id).await.extra(crate::metadata::FEISHU_WATERMARK_ID).cloned(), before);
+    assert_eq!(
+      home.meta(&session_id).await.extra(crate::metadata::FEISHU_WATERMARK_ID).cloned(),
+      Some(json!(watermark))
+    );
   }
 
   #[tokio::test]

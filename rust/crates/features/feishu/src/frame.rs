@@ -119,8 +119,8 @@ impl Frame {
   }
 }
 
-/// Rebuilds event payloads that Feishu splits across frames. A frame whose `sum` header is above 1 is fragment `seq` of
-/// `sum` fragments that share its `message_id`.
+/// The reassembly of event payloads that Feishu splits across frames. A frame whose `sum` header is above 1 is
+/// fragment `seq` of `sum` fragments that share its `message_id`.
 #[derive(Debug, Default)]
 pub struct Reassembler {
   pending: HashMap<String, Fragments>,

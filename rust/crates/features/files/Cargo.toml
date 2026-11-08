@@ -10,6 +10,7 @@ axum.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
+charliebot-store.workspace = true
 html-escape.workspace = true
 http.workspace = true
 percent-encoding.workspace = true
@@ -18,7 +19,7 @@ time.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
-charliebot-store.workspace = true
 futures-util.workspace = true
 nix.workspace = true
 tempfile.workspace = true
+zstd.workspace = true

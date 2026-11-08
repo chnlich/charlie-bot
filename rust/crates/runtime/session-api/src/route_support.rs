@@ -1,10 +1,11 @@
 //! Request and response helpers the session route modules share: the blocking-pool store call, the Starlette-style
-//! query string, and the store-error response.
+//! query string, the store-error response, and the `auto` switch rule.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::response::Response;
 use charliebot_compat::{responses, validation};
+use charliebot_core::config::CharlieBotConfig;
 use charliebot_store::{StoreError, StoreResult};
 use serde_json::json;
 
@@ -24,6 +25,13 @@ pub(crate) fn store_error(error: StoreError) -> Response {
     return responses::json(status, &json!({"detail": error.to_string()}));
   }
   responses::internal_error("RuntimeError", error.to_string())
+}
+
+/// The `auto` rule the header switch list and the switch route share: a session may take `auto` when `backends.auto`
+/// is configured and no dedicated binding locks its switches. An `auto` target belongs to no continuation domain, so a
+/// dedicated lock always refuses it.
+pub(crate) fn auto_switchable(cfg: &CharlieBotConfig, dedicated: bool) -> bool {
+  cfg.backends.auto.is_some() && !dedicated
 }
 
 pub(crate) struct Query {

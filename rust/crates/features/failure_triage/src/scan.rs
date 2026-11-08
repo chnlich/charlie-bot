@@ -276,6 +276,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn the_two_improve_ux_exit_five_texts_are_one_signature_and_reach_the_judge() {
     let fixture = Fixture::new();
     let text = "the previous round still runs: unit improve-ux.scope exists";
@@ -323,6 +324,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_signature_one_character_off_the_archived_key_goes_to_the_judge() {
     let fixture = Fixture::new();
     let signature = "run:work:5:the previous round still runs: unit improve-ux.scope exists";
@@ -350,6 +352,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn a_missing_yaml_frontmatter_skill_load_error_has_its_own_signature() {
     let fixture = Fixture::new();
     fixture.add_run(
@@ -421,6 +424,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore = "integration"]
   async fn each_judge_failure_marks_only_its_own_signature() {
     let fixture = Fixture::new();
     let causes = [
@@ -464,6 +468,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn preflight_names_rg_the_pool_and_the_log_directory() {
     let fixture = Fixture::new();
     let config = synthetic_config(Vec::new());
@@ -499,7 +504,7 @@ mod tests {
         worktree_dir: "/synthetic".to_string(),
         scratch_dir: "/synthetic".to_string(),
       },
-      backends: BackendsConfig { pool, routing: None, options: Vec::new() },
+      backends: BackendsConfig { pool, routing: None, options: Vec::new(), auto: None },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       remote_run: charliebot_core::config::RemoteRunConfig::default(),

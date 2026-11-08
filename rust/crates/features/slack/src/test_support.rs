@@ -64,6 +64,14 @@ pub(crate) struct Home {
 
 impl Home {
   pub(crate) fn new() -> Self {
+    Self::build(true)
+  }
+
+  pub(crate) fn for_thread_reply() -> Self {
+    Self::build(false)
+  }
+
+  fn build(with_dispatch: bool) -> Self {
     let dir = tempfile::tempdir().expect("the synthetic home exists");
     std::fs::write(dir.path().join("config.yaml"), "slack:\n  allowed_user_ids:\n    - U_ALLOWED\n")
       .expect("the synthetic config writes");
@@ -104,19 +112,21 @@ impl Home {
     startup.insert(RunningTurnInputs::new(|_| Vec::new())).expect("running inputs insert once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
 
-    features.startup.insert(TaskCompletion::new(Arc::clone(&features))).expect("task completion inserts once");
-    let completion = features.startup.require::<TaskCompletion>().expect("task completion is present");
-    let sequence: Arc<dyn charliebot_registry::sequence::SequenceCompletion> = completion.clone();
-    let run: Arc<dyn charliebot_tasks::dispatch::RunFinishedCompletion> = completion;
     let executor = Arc::new(RecordingExecutor::default());
-    let dispatcher = Dispatcher::new(Arc::clone(&features.store), Arc::clone(&features), sequence, run);
-    let dyn_executor: Arc<dyn DispatchExecutor> = executor.clone();
-    dispatcher.set_executor(Some(dyn_executor));
-    features.startup.insert(dispatcher).expect("dispatcher inserts once");
-    features
-      .startup
-      .insert(Arc::new(TriggerManager::new(Arc::clone(&features))))
-      .expect("trigger manager inserts once");
+    if with_dispatch {
+      features.startup.insert(TaskCompletion::new(Arc::clone(&features))).expect("task completion inserts once");
+      let completion = features.startup.require::<TaskCompletion>().expect("task completion is present");
+      let sequence: Arc<dyn charliebot_registry::sequence::SequenceCompletion> = completion.clone();
+      let run: Arc<dyn charliebot_tasks::dispatch::RunFinishedCompletion> = completion;
+      let dispatcher = Dispatcher::new(Arc::clone(&features.store), Arc::clone(&features), sequence, run);
+      let dyn_executor: Arc<dyn DispatchExecutor> = executor.clone();
+      dispatcher.set_executor(Some(dyn_executor));
+      features.startup.insert(dispatcher).expect("dispatcher inserts once");
+      features
+        .startup
+        .insert(Arc::new(TriggerManager::new(Arc::clone(&features))))
+        .expect("trigger manager inserts once");
+    }
 
     Self { _dir: dir, features, executor }
   }

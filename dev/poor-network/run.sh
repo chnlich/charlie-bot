@@ -1,26 +1,38 @@
 #!/usr/bin/env bash
-# The poor-network bench's entry command. It runs on the build host (host3) inside a synced tree, through
-# dev/remote-run/run.sh, and drives the six scenarios of README.md against a trial server on the mock home.
+# The poor-network bench's entry command. It runs on the build host inside a synced tree, through
+# dev/remote-run/run.sh, and drives the seven scenarios of README.md against a trial server on the mock home.
 #
 #   dev/remote-run/run.sh dev/poor-network/run.sh --side both --out-dir <dir> --before-clone <clone>
 #   dev/remote-run/run.sh dev/poor-network/run.sh --side after --out-dir <dir>
 #
-# --side before  measures origin/main (--before-rev, default origin/main, in --before-clone, a git clone that holds it);
+# --side before  measures origin/main (--before-rev, default origin/main, a commit of --before-clone, which holds it);
 # --side after   measures this tree;
-# --side both    runs before, then after, back to back in one invocation. If the before side's calibration does not
-#                reproduce the switch hold, it stops after before, prints its numbers, and exits 3.
+# --side both    runs before, then after, back to back in one invocation. If the before side measures the calibration
+#                reference (CALIBRATION_REFERENCE in profile.mjs) and does not reproduce the switch-during-refresh
+#                hold, it stops after before, prints its numbers, and exits 3. Any other before side runs ungated.
 # --detach       starts the run as a transient systemd user unit and returns at once; the log is <out-dir>/pn-<id>.log.
+#
+# Every side holds the bench lock of lock.sh around its trial, not the builds, waiting up to 2 h for it, so two bench
+# runs on a host never measure side by side; no option chooses another lock or skips it. One hold covers one side
+# attempt; a side also ends once its JSON is 120 s old even if its bench hangs, and a retry re-queues.
 #
 # Each side runs as the command of `scripts/release/trial.sh --serve`, so the trial starts, checks and stops the server
 # the bench measures, and proves that no process of the trial remains. The bench's own children (Chrome, the proxy, the
 # TLS front) end with the bench. The server's charlie-code backend is the scripted stub in dev/poor-network/stub.
 #
+# Each side's trial tree goes under TMPDIR when the caller sets it, and under /tmp otherwise, so a caller inside a
+# writable sandbox keeps the trees in its scratch.
+#
 # Exit: 0 both sides measured; 1 a measurement or build failed; 2 a precondition failed, nothing started; 3 the baseline
-# calibration did not reproduce, so the after side did not run.
+# calibration did not reproduce, so the after side did not run; 4 a scenario that passed on the before side fails on the
+# after side; 75 a side's wait for the lock ran out.
 set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly BENCH_DIR="$SCRIPT_DIR"
+source "$SCRIPT_DIR/lock.sh"
+# How long a side's written JSON may sit beside a bench that does not exit, before the runner ends the trial tree.
+readonly SIDE_EXIT_GRACE_SECONDS=120
 
 side=both
 out_dir=
@@ -32,7 +44,8 @@ assets_dir=
 detach=0
 
 usage() {
-  sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  # The header block runs from line 2 to the `set -euo pipefail` that ends it, so an added line never drops text.
+  sed -n '2,/^set -euo pipefail$/{/^set -euo pipefail$/d;p}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 die() {
@@ -163,41 +176,85 @@ YAML
 # Runs one side as the command of a serve trial. $1 side, $2 trial script, $3 commit, $4 server binary.
 run_side() {
   local name=$1 trial_script=$2 commit=$3 server_bin=$4 trial_root trial_status
-  trial_root="/tmp/pn-$run_id-$name"
+  trial_root="${TMPDIR:-/tmp}/pn-$run_id-$name"
   mkdir -p "$trial_root"
   local label=$commit
   [[ $name == after ]] && label=$after_label
   export CHARLIEBOT_HOME=$live_home
   export CHARLIEBOT_RELEASE_RUN_DIR="$run_dir/evidence-$name"
   export POOR_NETWORK_REPLY_DIR="$run_dir/replies"
+  # Chrome's process-singleton socket lives under TMPDIR, and the trial points TMPDIR into its tree. The caller's own
+  # TMPDIR is short and writable, so Chrome gets it back beside the trial's long one.
+  export POOR_NETWORK_CHROME_TMPDIR=${TMPDIR:-/tmp}
+  # The bench lock (lock.sh) covers this side's trial, so no other bench run on the host measures beside it.
+  echo "poor-network: $name side queues for the bench lock"
   set +e
-  systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0 --unit="pn-$run_id-$name" \
+  bench_lock systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0 --unit="pn-$run_id-$name" \
     "$trial_script" --serve --in-caller-scope --tree-root "$trial_root" --seed-home "$mock_home" \
     "$commit" "$server_bin" -- \
     node "$BENCH_DIR/bench.mjs" --side "$name" --out "$run_dir/$name.json" \
       --mock-home "$mock_home" --mock-home-bin "$mock_bin" --reply-dir "$run_dir/replies" \
       --assets "$POOR_NETWORK_ASSETS" --commit "$label" \
-      --repetitions "$repetitions" --scenarios "$scenarios"
+      --repetitions "$repetitions" --scenarios "$scenarios" &
+  trial_pid=$!
+  # The side JSON is the bench's last artifact, and a bench that has written it can still sit alive and hold the trial,
+  # and so the lock (this line's known defect). Once the JSON is SIDE_EXIT_GRACE_SECONDS old and the trial still runs,
+  # the runner ends the trial tree itself: the lock is released at that point, and the summary is reprinted from the
+  # JSON afterwards, so the kill loses nothing but the hang.
+  local json_seen_at="" ended_tree=0
+  while :; do
+    kill -0 "$trial_pid" 2>/dev/null || break
+    if [[ -f "$run_dir/$name.json" ]]; then
+      [[ -n $json_seen_at ]] || json_seen_at=$(date +%s)
+      if (( $(date +%s) - json_seen_at >= SIDE_EXIT_GRACE_SECONDS )) \
+        && systemctl --user is-active --quiet "pn-$run_id-$name.scope"; then
+        echo "poor-network: the $name side's JSON is ${SIDE_EXIT_GRACE_SECONDS}s old and its bench is still running; ending the trial tree"
+        systemctl --user stop "pn-$run_id-$name.scope"
+        ended_tree=1
+      fi
+    fi
+    sleep 5
+  done
+  wait "$trial_pid"
   trial_status=$?
+  # A tree the runner ended on purpose leaves the side's own verdict in its JSON; the kill is not a failure.
+  if ((ended_tree)); then
+    trial_status=0
+  fi
   set -e
+  # The timeout keeps flock's own exit code, so a caller that retries can tell it from a failed measurement and take
+  # its place at the back of the queue again. One lock hold covers one side attempt; run.sh never retries inside it.
+  ((trial_status != BENCH_LOCK_TIMEOUT_EXIT)) || die "$BENCH_LOCK_TIMEOUT_EXIT" "the $name side did not get the bench lock within $BENCH_LOCK_WAIT_SECONDS s"
   echo "poor-network: $name side exit $trial_status"
   [[ -f "$run_dir/$name.json" ]] || die 1 "the $name side wrote no JSON"
   return "$trial_status"
 }
 
 if [[ $side == before || $side == both ]]; then
-  (cd "$before_clone" && run_side before "$before_clone/scripts/release/trial.sh" "$before_commit" "$before_bin") \
-    || die 1 "the before side failed; see $run_dir/before.json"
-  calibrated=$(node -e 'const s = require(process.argv[1]); process.stdout.write(s.calibration ? String(s.calibration.reproduced) : "none")' "$run_dir/before.json")
-  if [[ $side == both && $calibrated != true ]]; then
-    node "$BENCH_DIR/report.mjs" "$run_dir/before.json"
-    die 3 "the baseline did not reproduce the switch hold; the proxy does not model the link. The after side did not run."
+  # The trial script is the measured commit's own. The clone at --before-clone may be on another commit, so a scratch
+  # clone at the commit holds the script; its origin/main is the commit, which the trial's preflight reads.
+  before_repo="$run_dir/before-repo"
+  git clone -q --shared --no-checkout "$before_clone" "$before_repo"
+  git -C "$before_repo" update-ref refs/remotes/origin/main "$before_commit"
+  git -C "$before_repo" checkout -q --detach "$before_commit"
+  (cd "$before_repo" && run_side before "$before_repo/scripts/release/trial.sh" "$before_commit" "$before_bin") \
+    || die "$?" "the before side failed; see $run_dir/before.json"
+  # The gate reads one before side: the reference commit the plan's condition is checked on. A fix's own before side no
+  # longer holds the condition (the earlier fixes removed the bursts it lived on), so only a run whose before side is
+  # the reference stops on it.
+  calibration_reference=$(node -e 'import(process.argv[1]).then((profile) => process.stdout.write(String(profile.CALIBRATION_REFERENCE)))' "file://$BENCH_DIR/profile.mjs")
+  if [[ $side == both && $before_commit == "$calibration_reference" ]]; then
+    calibrated=$(node -e 'const s = require(process.argv[1]); process.stdout.write(s.calibration ? String(s.calibration.reproduced) : "none")' "$run_dir/before.json")
+    if [[ $calibrated != true ]]; then
+      node "$BENCH_DIR/report.mjs" "$run_dir/before.json"
+      die 3 "the reference baseline $calibration_reference did not reproduce the switch-during-refresh hold; the proxy does not model the link. The after side did not run."
+    fi
   fi
 fi
 
 if [[ $side == after || $side == both ]]; then
   (cd "$tree" && run_side after "$tree/scripts/release/trial.sh" "$after_commit" "$after_bin") \
-    || die 1 "the after side failed; see $run_dir/after.json"
+    || die "$?" "the after side failed; see $run_dir/after.json"
 fi
 
 echo "poor-network: JSON in $run_dir"

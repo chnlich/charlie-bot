@@ -19,6 +19,7 @@ fn suites() -> Vec<PathBuf> {
 }
 
 #[test]
+#[ignore = "integration"]
 fn the_review_tool_suites_pass() {
   let mut command = Command::new("node");
   command.arg("--test").args(suites());

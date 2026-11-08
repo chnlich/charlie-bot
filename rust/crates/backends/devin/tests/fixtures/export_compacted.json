@@ -1,0 +1,71 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "session_id": "devin-session-5b1d",
+  "steps": [
+    {
+      "step_id": 1,
+      "source": "system",
+      "message": "You are a command line agent.",
+      "extra": {"telemetry": {"source": "sysprompt", "operation": "normal"}}
+    },
+    {
+      "step_id": 2,
+      "source": "system",
+      "message": "You are powered by a test model.",
+      "extra": {"telemetry": {"source": "system", "operation": "unknown"}}
+    },
+    {
+      "step_id": 3,
+      "source": "system",
+      "message": "<available_skills>none</available_skills>",
+      "extra": {"telemetry": {"source": "skills", "operation": "available"}}
+    },
+    {
+      "step_id": 4,
+      "source": "system",
+      "message": "Summary of the compacted conversation: the user asked for the sum of a.txt and b.txt; a.txt holds 19.",
+      "extra": {"telemetry": {"source": "compaction", "operation": "summary"}}
+    },
+    {
+      "step_id": 5,
+      "source": "agent",
+      "message": "Next I read b.txt.",
+      "tool_calls": [
+        {"tool_call_id": "call-2", "function_name": "read_file", "arguments": {"path": "b.txt"}}
+      ],
+      "observation": {"results": [{"source_call_id": "call-2", "content": "23"}]},
+      "metrics": {"prompt_tokens": 900, "completion_tokens": 40, "cached_tokens": 800},
+      "extra": {"telemetry": {"source": "assistant", "operation": "inference"}}
+    },
+    {
+      "step_id": 6,
+      "source": "system",
+      "message": "<rules type=\"always-on\">Answer in one sentence.</rules>",
+      "extra": {"telemetry": {"source": "rules", "operation": "content"}}
+    },
+    {
+      "step_id": 7,
+      "source": "agent",
+      "message": "",
+      "tool_calls": [
+        {"tool_call_id": "call-3", "function_name": "exec", "arguments": {"command": "expr 19 + 23"}}
+      ],
+      "observation": {"results": [{"source_call_id": "call-3", "content": "42"}]},
+      "metrics": {"prompt_tokens": 1100, "completion_tokens": 30, "cached_tokens": 900},
+      "extra": {"telemetry": {"source": "assistant", "operation": "inference"}}
+    },
+    {
+      "step_id": 8,
+      "source": "agent",
+      "message": "The sum is 42.",
+      "metrics": {"prompt_tokens": 1200, "completion_tokens": 20, "cached_tokens": 1100},
+      "extra": {"telemetry": {"source": "assistant", "operation": "inference"}}
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 3200,
+    "total_completion_tokens": 90,
+    "total_cached_tokens": 2800,
+    "total_steps": 8
+  }
+}

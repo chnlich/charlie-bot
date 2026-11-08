@@ -184,10 +184,10 @@ mod tests {
   fn node_command(test_name: &str) -> std::io::Result<Option<Vec<OsString>>> {
     let node = executable("node")?;
     let Some(node) = node else {
-      println!("skipping {test_name}: node is not installed on host3");
+      println!("skipping {test_name}: node is not installed on the build host");
       return Ok(None);
     };
-    let timeout = executable("timeout")?.expect("host3 provides timeout for each Node-dependent test");
+    let timeout = executable("timeout")?.expect("the build host provides timeout for each Node-dependent test");
     Ok(Some(vec![timeout.into_os_string(), OsString::from("20s"), node.into_os_string()]))
   }
 
@@ -226,6 +226,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_wrap_takes_head_and_style_from_the_template_and_the_body_from_the_fragment() {
     let home = tempfile::tempdir().unwrap();
     let Some(node) =
@@ -246,6 +247,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_driver_runs_as_a_subprocess() {
     let home = tempfile::tempdir().unwrap();
     let Some(node) = node_command("test_driver_runs_as_a_subprocess").unwrap() else {
@@ -257,6 +259,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_cli_defaults_math_on_for_explain_and_off_for_other_genres() {
     let home = tempfile::tempdir().unwrap();
     let Some(node) = node_command("test_cli_defaults_math_on_for_explain_and_off_for_other_genres").unwrap() else {
@@ -313,6 +316,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_wrap_byte_gate_aborts_before_write_and_names_offsets() {
     let home = tempfile::tempdir().unwrap();
     let Some(node) = node_command("test_wrap_byte_gate_aborts_before_write_and_names_offsets").unwrap() else {
@@ -332,6 +336,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore = "integration"]
   fn test_wrap_byte_gate_runs_on_the_assembled_bytes() {
     let home = tempfile::tempdir().unwrap();
     let Some(node) = node_command("test_wrap_byte_gate_runs_on_the_assembled_bytes").unwrap() else {

@@ -1151,15 +1151,15 @@ mod tests {
   const AUTO_CONFIG: &str = "\
 backends:
   options:
-    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a}
-    - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b}
+    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a, billing: subscription}
+    - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b, billing: payg}
   pools:
     - id: auto
       label: Auto
       rule: priority
       members:
-        - {backend: synthetic-a, billing: subscription}
-        - {backend: synthetic-b, billing: payg}
+        - synthetic-a
+        - synthetic-b
 ";
 
   #[tokio::test]
@@ -1218,15 +1218,15 @@ backends:
   const TWO_POOLS_CONFIG: &str = "\
 backends:
   options:
-    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a}
-    - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b}
+    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a, billing: subscription}
+    - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b, billing: payg}
   pools:
     - id: auto
       label: Auto
       rule: priority
       members:
-        - {backend: synthetic-a, billing: subscription}
-        - {backend: synthetic-b, billing: payg}
+        - synthetic-a
+        - synthetic-b
     - id: light
       label: Light
       rule: rotate

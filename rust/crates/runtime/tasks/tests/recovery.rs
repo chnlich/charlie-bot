@@ -1022,16 +1022,16 @@ const AUTO_POOL_ID: &str = "auto";
 /// The node an ending case runs on: a script-run worker under a manager, pool-chosen or named.
 async fn ending_worker(pool_chosen: bool, scripts: Vec<String>) -> anyhow::Result<(Stack, String, String)> {
   let scripts = Scripts::new(scripts);
-  let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
+  let options = ["fake", "fake2"]
+    .map(|id| BackendOption { billing: Some(PoolBilling::Subscription), ..scripts.option(id, BACKEND_TYPE) })
+    .to_vec();
   let route = vec!["fake".to_string(), "fake2".to_string()];
   let stack = if pool_chosen {
     let auto = PoolConfig {
       id: AUTO_POOL_ID.to_string(),
       label: "Auto".to_string(),
       rule: PoolRule::Priority,
-      members: ["fake", "fake2"]
-        .map(|backend| PoolMember { backend: backend.to_string(), billing: Some(PoolBilling::Subscription) })
-        .to_vec(),
+      members: ["fake", "fake2"].map(|backend| PoolMember { backend: backend.to_string() }).to_vec(),
     };
     Stack::start_with_auto(options, route, auto).await?
   } else {

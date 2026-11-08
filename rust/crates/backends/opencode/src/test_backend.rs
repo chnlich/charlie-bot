@@ -57,6 +57,7 @@ fn adoption_option() -> BackendOption {
     label: "OpenCode test".to_string(),
     model: MODEL.to_string(),
     prompt_overlay: None,
+    billing: None,
     backend_type: "opencode".to_string(),
     type_fields: serde_yaml::Mapping::new(),
   }
@@ -2036,6 +2037,7 @@ fn opencode_option(id: &str, model: &str, type_fields: &str) -> BackendOption {
     label: id.to_string(),
     model: model.to_string(),
     prompt_overlay: None,
+    billing: None,
     backend_type: "opencode".to_string(),
     type_fields: serde_yaml::from_str(type_fields).unwrap(),
   }

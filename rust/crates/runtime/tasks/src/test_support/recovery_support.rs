@@ -39,8 +39,8 @@ use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_agents::model_pool::RotationPositions;
 use charliebot_core::config::{
-  BackendOption, BackendsConfig, CONFIG_D_DIR_NAME, CallClass, CallTarget, CallsConfig, CharlieBotConfig, PathsConfig,
-  PoolConfig, PoolMember, PoolRule, Sections, ServerConfig, TelegramConfig, UiConfig,
+  BackendOption, BackendsConfig, CONFIG_D_DIR_NAME, CONFIG_FILENAME, CallClass, CallTarget, CallsConfig,
+  CharlieBotConfig, PathsConfig, PoolConfig, PoolMember, PoolRule, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::event_types;
@@ -191,6 +191,7 @@ impl Scripts {
       id: id.to_string(),
       label: id.to_string(),
       prompt_overlay: None,
+      billing: None,
       model: format!("{id}-model"),
       backend_type: backend_type.to_string(),
       type_fields,
@@ -378,6 +379,7 @@ pub fn script_option(id: &str, script: &str) -> BackendOption {
     id: id.to_string(),
     label: id.to_string(),
     prompt_overlay: None,
+    billing: None,
     model: format!("{id}-model"),
     backend_type: BACKEND_TYPE.to_string(),
     type_fields,
@@ -397,7 +399,7 @@ pub fn rotation_pools(members: Vec<String>) -> (Vec<PoolConfig>, CallsConfig) {
     id: ROTATION_POOL_ID.to_string(),
     label: "Pool".to_string(),
     rule: PoolRule::Rotate,
-    members: members.into_iter().map(|backend| PoolMember { backend, billing: None }).collect(),
+    members: members.into_iter().map(|backend| PoolMember { backend }).collect(),
   }];
   let calls = [
     CallClass::Worker,
@@ -651,6 +653,19 @@ impl Stack {
     let mut cfg = config(home.path(), options, pool, 0);
     cfg.backends.pools.push(auto);
     Stack::assemble(Arc::new(home), cfg, registry(None)?).await
+  }
+
+  /// A stack whose `backends` section is `backends`, written to `config.yaml` and read back through the config loader
+  /// as the server reads it. The other sections are this stack's own.
+  pub async fn start_with_backends_file(backends: &serde_json::Value) -> anyhow::Result<Stack> {
+    let home = tempfile::tempdir()?;
+    let file = serde_json::json!({ "backends": backends });
+    std::fs::write(home.path().join(CONFIG_FILENAME), serde_json::to_string_pretty(&file)?)?;
+    let registry = registry(None)?;
+    let loaded = registry.load_config(home.path())?;
+    let mut cfg = config(home.path(), Vec::new(), Vec::new(), 0);
+    cfg.backends = loaded.backends;
+    Stack::assemble(Arc::new(home), cfg, registry).await
   }
 
   /// The stack of the next boot on an earlier home, whose backends carry the priority pool `auto`.

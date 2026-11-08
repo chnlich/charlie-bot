@@ -84,6 +84,7 @@ impl Home {
       label: "Synthetic Feishu fixture".to_string(),
       model: "synthetic-model".to_string(),
       prompt_overlay: None,
+      billing: None,
       backend_type: "synthetic".to_string(),
       type_fields: Default::default(),
     });

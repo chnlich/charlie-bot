@@ -25,7 +25,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_core::approval_policy;
 use charliebot_core::config::{
-  self, BackendOption, CallClass, CallTarget, CharlieBotConfig, OptionFieldKind, PoolBilling, PoolConfig, PoolRule,
+  self, BackendOption, CallClass, CallTarget, CharlieBotConfig, OptionFieldKind, PoolConfig, PoolRule,
 };
 use charliebot_core::home;
 use charliebot_core::paths;
@@ -288,15 +288,7 @@ fn pool_json(pool: &PoolConfig) -> Value {
     PoolRule::Priority => "priority",
     PoolRule::Rotate => "rotate",
   };
-  let members = pool
-    .members
-    .iter()
-    .map(|member| match member.billing {
-      None => json!({ "backend": member.backend }),
-      Some(PoolBilling::Subscription) => json!({ "backend": member.backend, "billing": "subscription" }),
-      Some(PoolBilling::Payg) => json!({ "backend": member.backend, "billing": "payg" }),
-    })
-    .collect::<Vec<_>>();
+  let members = pool.members.iter().map(|member| member.backend.as_str()).collect::<Vec<_>>();
   json!({ "id": pool.id, "label": pool.label, "rule": rule, "members": members })
 }
 
@@ -309,6 +301,7 @@ fn option_json(option: &BackendOption, registry: &Registry) -> Result<Value, Str
   object.insert("label".to_string(), Value::String(option.label.clone()));
   object.insert("model".to_string(), Value::String(option.model.clone()));
   object.insert("prompt_overlay".to_string(), option.prompt_overlay.clone().map_or(Value::Null, Value::String));
+  object.insert("billing".to_string(), option.billing.map_or(Value::Null, |billing| json!(billing.key())));
   object.insert("type".to_string(), Value::String(option.backend_type.clone()));
   for field in schema {
     let value = match option.type_fields.get(field.name) {

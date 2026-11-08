@@ -459,6 +459,7 @@ mod tests {
         label: (*id).to_string(),
         model: String::new(),
         prompt_overlay: None,
+        billing: None,
         backend_type: "synthetic".to_string(),
         type_fields: Default::default(),
       })
@@ -489,7 +490,7 @@ mod tests {
           id: "light".to_string(),
           label: "Light".to_string(),
           rule: PoolRule::Rotate,
-          members: ids.iter().map(|id| PoolMember { backend: (*id).to_string(), billing: None }).collect(),
+          members: ids.iter().map(|id| PoolMember { backend: (*id).to_string() }).collect(),
         }],
         routing: None,
         options,

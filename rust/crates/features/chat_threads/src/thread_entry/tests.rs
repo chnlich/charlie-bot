@@ -254,6 +254,7 @@ impl Home {
       label: "Synthetic fakechat".to_string(),
       model: "synthetic-model".to_string(),
       prompt_overlay: None,
+      billing: auto.then_some(charliebot_core::config::PoolBilling::Subscription),
       backend_type: "synthetic".to_string(),
       type_fields: Default::default(),
     });
@@ -261,13 +262,14 @@ impl Home {
       id: "pool".to_string(),
       label: "Pool".to_string(),
       rule: charliebot_core::config::PoolRule::Rotate,
-      members: vec![charliebot_core::config::PoolMember { backend: "synthetic-fakechat".to_string(), billing: None }],
+      members: vec![charliebot_core::config::PoolMember { backend: "synthetic-fakechat".to_string() }],
     });
     loaded.backends.options.push(BackendOption {
       id: "synthetic-strong".to_string(),
       label: "Synthetic strong".to_string(),
       model: "synthetic-model".to_string(),
       prompt_overlay: None,
+      billing: auto.then_some(charliebot_core::config::PoolBilling::Payg),
       backend_type: "synthetic".to_string(),
       type_fields: Default::default(),
     });
@@ -278,14 +280,8 @@ impl Home {
         label: "Auto".to_string(),
         rule: charliebot_core::config::PoolRule::Priority,
         members: vec![
-          charliebot_core::config::PoolMember {
-            backend: "synthetic-fakechat".to_string(),
-            billing: Some(charliebot_core::config::PoolBilling::Subscription),
-          },
-          charliebot_core::config::PoolMember {
-            backend: "synthetic-strong".to_string(),
-            billing: Some(charliebot_core::config::PoolBilling::Payg),
-          },
+          charliebot_core::config::PoolMember { backend: "synthetic-fakechat".to_string() },
+          charliebot_core::config::PoolMember { backend: "synthetic-strong".to_string() },
         ],
       });
       loaded.backends.calls = [(

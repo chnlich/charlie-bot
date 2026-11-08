@@ -830,6 +830,7 @@ mod tests {
       label: "Synthetic resolver".to_string(),
       model: "synthetic-model".to_string(),
       prompt_overlay: None,
+      billing: None,
       backend_type: "synthetic_usage".to_string(),
       type_fields: serde_yaml::Mapping::new(),
     });

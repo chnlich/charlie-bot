@@ -192,6 +192,7 @@ fn backend_option(backend_type: &str) -> BackendOption {
     label: "Synthetic backend".to_string(),
     model: model.to_string(),
     prompt_overlay: None,
+    billing: None,
     backend_type: backend_type.to_string(),
     type_fields: Mapping::new(),
   }

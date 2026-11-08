@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use charliebot_agents::backend_availability;
-use charliebot_core::config::{PoolBilling, PoolConfig, PoolMember, PoolRule};
+use charliebot_core::config::{BackendOption, PoolBilling, PoolConfig, PoolMember, PoolRule};
 use charliebot_core::event_types;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind};
@@ -14,7 +14,7 @@ use charliebot_tasks::handoff;
 use charliebot_tasks::master_queue::PersistAndBroadcastFn;
 use charliebot_tasks::master_run::{FINISH_ERROR_MESSAGE, FINISH_QUOTA_EXHAUSTED};
 use charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME;
-use charliebot_tasks::test_support::recovery_support::{Stack, script_option, synthetic_run};
+use charliebot_tasks::test_support::recovery_support::{BACKEND_TYPE, Stack, script_option, synthetic_run};
 use serde_json::{Map, Value, json};
 
 const MEMBER_A: &str = "member-a";
@@ -25,15 +25,17 @@ const QUOTA_ERROR: &str = "API Error: 402 Insufficient Balance";
 /// The id of the priority pool that the Auto sessions of these tests run on.
 const AUTO_POOL_ID: &str = "auto";
 
+/// A scripted option billed as a subscription, the billing the Auto pool's members have.
+fn subscription(id: &str, script: &str) -> BackendOption {
+  BackendOption { billing: Some(PoolBilling::Subscription), ..script_option(id, script) }
+}
+
 fn auto_set() -> PoolConfig {
   PoolConfig {
     id: AUTO_POOL_ID.to_string(),
     label: "Auto".to_string(),
     rule: PoolRule::Priority,
-    members: vec![
-      PoolMember { backend: MEMBER_A.to_string(), billing: Some(PoolBilling::Subscription) },
-      PoolMember { backend: MEMBER_B.to_string(), billing: Some(PoolBilling::Subscription) },
-    ],
+    members: vec![PoolMember { backend: MEMBER_A.to_string() }, PoolMember { backend: MEMBER_B.to_string() }],
   }
 }
 
@@ -73,7 +75,7 @@ fn success_script() -> String {
 
 async fn auto_stack(script_a: &str, script_b: &str) -> anyhow::Result<Stack> {
   let stack = Stack::start_with_auto(
-    vec![script_option(MEMBER_A, script_a), script_option(MEMBER_B, script_b)],
+    vec![subscription(MEMBER_A, script_a), subscription(MEMBER_B, script_b)],
     Vec::new(),
     auto_set(),
   )
@@ -347,6 +349,29 @@ async fn a_transient_error_ends_the_turn_without_switching_members() -> anyhow::
   Ok(())
 }
 
+/// The loader reads the pool from `config.yaml`: the payg member is listed first, so the turn runs on the subscription
+/// member only because the option's billing says so.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_priority_pool_read_from_the_config_file_runs_on_its_subscription_member() -> anyhow::Result<()> {
+  let backends = json!({
+    "options": [
+      {"id": MEMBER_A, "label": "Payg", "type": BACKEND_TYPE, "model": "payg-model", "billing": "payg",
+       "script": success_script()},
+      {"id": MEMBER_B, "label": "Subscription", "type": BACKEND_TYPE, "model": "subscription-model",
+       "billing": "subscription", "script": success_script()},
+    ],
+    "pools": [{"id": AUTO_POOL_ID, "label": "Auto", "rule": "priority", "members": [MEMBER_A, MEMBER_B]}],
+  });
+  let stack = Stack::start_with_backends_file(&backends).await?;
+  stack.write_access_key()?;
+  let session = auto_session(&stack, "auto-from-file").await?;
+  dispatch_turn(&stack, &session.id).await?;
+  let runs = settle(&stack, &session.id).await?;
+  assert_eq!(runs[0].backend.as_deref(), Some(MEMBER_B), "the subscription member runs the turn: {runs:?}");
+  Ok(())
+}
+
 /// Test ④: a quota end the live process never reports — the turn drains after a restart — switches the same way.
 #[tokio::test]
 #[ignore = "integration"]
@@ -389,7 +414,7 @@ async fn a_drained_quota_end_switches_like_a_live_turn() -> anyhow::Result<()> {
 
   let next = Stack::start_on_home_with_auto(
     home,
-    vec![script_option(MEMBER_A, "exit 0"), script_option(MEMBER_B, &success_script())],
+    vec![subscription(MEMBER_A, "exit 0"), subscription(MEMBER_B, &success_script())],
     Vec::new(),
     auto_set(),
   )

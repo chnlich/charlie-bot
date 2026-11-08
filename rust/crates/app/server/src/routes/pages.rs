@@ -612,7 +612,7 @@ mod tests {
 
   fn label_config() -> CharlieBotConfig {
     use charliebot_core::config::{
-      BackendOption, BackendsConfig, CallsConfig, PathsConfig, PoolBilling, PoolConfig, PoolMember, PoolRule, Sections,
+      BackendOption, BackendsConfig, CallsConfig, PathsConfig, PoolConfig, PoolMember, PoolRule, Sections,
       ServerConfig, TelegramConfig, UiConfig,
     };
     CharlieBotConfig {
@@ -643,6 +643,7 @@ mod tests {
           label: "CC · Opus 5".to_string(),
           model: "claude-opus-5".to_string(),
           prompt_overlay: None,
+          billing: None,
           backend_type: "synthetic".to_string(),
           type_fields: Default::default(),
         }],
@@ -650,7 +651,7 @@ mod tests {
           id: "auto".to_string(),
           label: "Auto".to_string(),
           rule: PoolRule::Priority,
-          members: vec![PoolMember { backend: "claude-opus-5".to_string(), billing: Some(PoolBilling::Subscription) }],
+          members: vec![PoolMember { backend: "claude-opus-5".to_string() }],
         }],
         calls: CallsConfig::default(),
       },

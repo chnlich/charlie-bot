@@ -413,10 +413,10 @@ mod tests {
       id: POOL_ID.to_string(),
       label: "Auto".to_string(),
       rule: charliebot_core::config::PoolRule::Priority,
-      members: vec![charliebot_core::config::PoolMember {
-        backend: "synthetic".to_string(),
-        billing: Some(charliebot_core::config::PoolBilling::Subscription),
-      }],
+      members: vec![charliebot_core::config::PoolMember { backend: "synthetic".to_string() }],
+    });
+    cfg.backends.options.iter_mut().for_each(|option| {
+      option.billing = Some(charliebot_core::config::PoolBilling::Subscription);
     });
     cfg
   }
@@ -463,6 +463,7 @@ mod tests {
           label: "synthetic".to_string(),
           model: "model-1".to_string(),
           prompt_overlay: Some("none".to_string()),
+          billing: None,
           backend_type: "synthetic".to_string(),
           type_fields: Default::default(),
         }],

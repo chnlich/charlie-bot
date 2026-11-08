@@ -32,10 +32,7 @@ fn auto_pool(members: &[&str]) -> PoolConfig {
     id: AUTO_POOL_ID.to_string(),
     label: "Auto".to_string(),
     rule: PoolRule::Priority,
-    members: members
-      .iter()
-      .map(|id| PoolMember { backend: id.to_string(), billing: Some(PoolBilling::Subscription) })
-      .collect(),
+    members: members.iter().map(|id| PoolMember { backend: id.to_string() }).collect(),
   }
 }
 
@@ -175,6 +172,8 @@ fn feature_context_with_entries(
       id: id.to_string(),
       label: id.to_string(),
       prompt_overlay: None,
+      // The members of the Auto fixtures are subscriptions; the other fixtures' options never reach a priority pool.
+      billing: Some(PoolBilling::Subscription),
       model: format!("{id}-model"),
       backend_type: "synthetic".to_string(),
       type_fields: type_fields.clone(),

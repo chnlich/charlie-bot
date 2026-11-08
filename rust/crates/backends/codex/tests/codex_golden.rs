@@ -670,6 +670,7 @@ fn option_of(case: &Value) -> BackendOption {
     label: "Codex".to_string(),
     model: text(&case["model"]).to_string(),
     prompt_overlay: None,
+    billing: None,
     backend_type: "codex".to_string(),
     type_fields: serde_yaml::from_value::<Mapping>(serde_yaml::to_value(&case["type_fields"]).unwrap()).unwrap(),
   }

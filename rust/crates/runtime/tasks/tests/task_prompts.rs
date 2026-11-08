@@ -130,6 +130,7 @@ fn backend_option(prompt_overlay: Option<&str>) -> BackendOption {
     label: "Golden".to_string(),
     model: "golden-model".to_string(),
     prompt_overlay: prompt_overlay.map(String::from),
+    billing: None,
     backend_type: "codex".to_string(),
     type_fields: serde_yaml::Mapping::new(),
   }

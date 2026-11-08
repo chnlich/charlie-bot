@@ -69,6 +69,7 @@ fn endpoint_backend(type_fields: &str) -> Box<dyn AgentBackend> {
     label: "Anthropic compatible".to_string(),
     model: "synthetic/model-1".to_string(),
     prompt_overlay: None,
+    billing: None,
     backend_type: "cc-anthropic-compatible".to_string(),
     type_fields: serde_yaml::from_str(type_fields).unwrap(),
   };

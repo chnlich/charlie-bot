@@ -532,6 +532,7 @@ mod tests {
         label: id.to_string(),
         model: "synthetic-model".to_string(),
         prompt_overlay: None,
+        billing: None,
         backend_type: "codex".to_string(),
         type_fields: Mapping::new(),
       })
@@ -540,7 +541,7 @@ mod tests {
       id: POOL.to_string(),
       label: "Light".to_string(),
       rule: PoolRule::Rotate,
-      members: members.iter().map(|member| PoolMember { backend: (*member).to_string(), billing: None }).collect(),
+      members: members.iter().map(|member| PoolMember { backend: (*member).to_string() }).collect(),
     }];
     CharlieBotConfig {
       charliebot_home: PathBuf::from("/synthetic/home"),

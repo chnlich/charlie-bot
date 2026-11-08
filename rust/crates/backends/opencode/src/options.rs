@@ -151,6 +151,7 @@ mod tests {
       label: id.to_string(),
       model: model.to_string(),
       prompt_overlay: None,
+      billing: None,
       backend_type: "opencode".to_string(),
       type_fields: fields(type_fields),
     }
@@ -181,6 +182,7 @@ mod tests {
       label: "Other".to_string(),
       model: MODEL.to_string(),
       prompt_overlay: None,
+      billing: None,
       backend_type: "codex".to_string(),
       type_fields: Mapping::new(),
     };

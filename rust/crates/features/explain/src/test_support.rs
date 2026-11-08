@@ -203,7 +203,7 @@ impl Home {
     Self::with_config(
       starts,
       format!(
-        "server:\n  session_memory_max_mb: 0\n  session_tasks_max: 0\nbackends:\n  options:\n    - id: {OPTION_ID}\n      label: Scripted\n      type: scripted\n      model: scripted-model\n  pools:\n    - id: auto\n      label: Auto\n      rule: priority\n      members:\n        - {{backend: {OPTION_ID}, billing: subscription}}\n"
+        "server:\n  session_memory_max_mb: 0\n  session_tasks_max: 0\nbackends:\n  options:\n    - id: {OPTION_ID}\n      label: Scripted\n      type: scripted\n      model: scripted-model\n      billing: subscription\n  pools:\n    - id: auto\n      label: Auto\n      rule: priority\n      members:\n        - {OPTION_ID}\n"
       ),
     )
   }

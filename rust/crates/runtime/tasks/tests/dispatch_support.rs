@@ -542,6 +542,7 @@ pub fn config(home: &Path) -> CharlieBotConfig {
         label: "Synthetic".to_string(),
         model: "synthetic-model".to_string(),
         prompt_overlay: None,
+        billing: None,
         backend_type: "codex".to_string(),
         type_fields: Mapping::new(),
       }],

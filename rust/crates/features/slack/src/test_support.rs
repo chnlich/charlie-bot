@@ -90,6 +90,7 @@ impl Home {
       label: "Synthetic Slack".to_string(),
       model: "synthetic-model".to_string(),
       prompt_overlay: None,
+      billing: None,
       backend_type: "synthetic".to_string(),
       type_fields: Default::default(),
     });

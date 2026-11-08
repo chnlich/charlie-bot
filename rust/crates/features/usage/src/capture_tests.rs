@@ -299,6 +299,11 @@ fn option(id: &str, backend_type: &str, model: &str) -> String {
   format!("    - id: {id}\n      label: {id}\n      type: {backend_type}\n      model: {model}\n")
 }
 
+/// An option that carries its account's billing, the field a priority pool's member reads.
+fn billed_option(id: &str, backend_type: &str, model: &str, billing: &str) -> String {
+  format!("{}      billing: {billing}\n", option(id, backend_type, model))
+}
+
 fn write_thread(
   home: &Path,
   session: &str,
@@ -1216,9 +1221,9 @@ fn capture_runs_attributes_a_pool_sessions_runs_to_the_members_they_ran_on() {
   fs::write(
     home.join("config.yaml"),
     format!(
-      "backends:\n  options:\n{}{}  pools:\n    - {{id: auto, label: Auto, rule: priority, members: [{{backend: member-a, billing: subscription}}, {{backend: member-b, billing: subscription}}]}}\n",
-      option("member-a", "charlie-code", "openai/zai-org/GLM-5.3-Flash"),
-      option("member-b", "charlie-code", "openai/zai-org/GLM-5.3-Flash"),
+      "backends:\n  options:\n{}{}  pools:\n    - {{id: auto, label: Auto, rule: priority, members: [member-a, member-b]}}\n",
+      billed_option("member-a", "charlie-code", "openai/zai-org/GLM-5.3-Flash", "subscription"),
+      billed_option("member-b", "charlie-code", "openai/zai-org/GLM-5.3-Flash", "subscription"),
     ),
   )
   .unwrap();

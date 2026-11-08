@@ -3098,6 +3098,7 @@ fn native_anchor_matches(meta: &SessionMetadata, prompt_hash: &str, backend: &st
       label: backend.to_string(),
       model: model.to_string(),
       prompt_overlay: None,
+      billing: None,
       backend_type: String::new(),
       type_fields: Default::default(),
     },
@@ -3202,6 +3203,7 @@ mod tests {
       label: "Synthetic backend".to_string(),
       model: "synthetic-model".to_string(),
       prompt_overlay: None,
+      billing: None,
       backend_type: "synthetic".to_string(),
       type_fields: Default::default(),
     };
@@ -3502,6 +3504,7 @@ mod tests {
       label: "Fable".to_string(),
       model: "claude-fable-5-1".to_string(),
       prompt_overlay: None,
+      billing: None,
       backend_type: "cc-claude".to_string(),
       type_fields: Default::default(),
     };

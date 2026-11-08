@@ -52,6 +52,7 @@ mod tests {
       label: "CLC".to_string(),
       model: "synthetic-model".to_string(),
       prompt_overlay: None,
+      billing: None,
       backend_type: "charlie-code".to_string(),
       type_fields: serde_yaml::from_str(fields).unwrap(),
     }

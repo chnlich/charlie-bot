@@ -159,7 +159,7 @@ impl<'a> Selector<'a> {
 
   /// Whether the `backends.options` id `backend_id` can run now.
   pub fn option_available(&self, backend_id: &str, excluded: &[String]) -> anyhow::Result<bool> {
-    let member = PoolMember { backend: backend_id.to_string(), billing: None };
+    let member = PoolMember { backend: backend_id.to_string() };
     Ok(candidate(self.cfg, self.registry, &self.availability, &member, excluded, UtcDateTime::now())?.is_some())
   }
 
@@ -205,7 +205,7 @@ pub(crate) fn ordered_pool(backends: &[String]) -> ModelPool {
   ModelPool {
     id: ROUTE_POOL_ID.to_string(),
     rule: PoolRule::Rotate,
-    members: backends.iter().map(|backend| PoolMember { backend: backend.clone(), billing: None }).collect(),
+    members: backends.iter().map(|backend| PoolMember { backend: backend.clone() }).collect(),
   }
 }
 
@@ -317,7 +317,7 @@ fn select_priority(
 
   let subscriptions = candidates
     .iter()
-    .filter(|candidate| candidate.member.billing == Some(PoolBilling::Subscription))
+    .filter(|candidate| member_billing(cfg, &candidate.member) == Some(PoolBilling::Subscription))
     .collect::<Vec<_>>();
   if !subscriptions.is_empty() {
     let under_line = subscriptions
@@ -340,7 +340,7 @@ fn select_priority(
   Ok(
     candidates
       .iter()
-      .find(|candidate| candidate.member.billing == Some(PoolBilling::Payg))
+      .find(|candidate| member_billing(cfg, &candidate.member) == Some(PoolBilling::Payg))
       .map(|candidate| candidate.member.clone()),
   )
 }
@@ -611,22 +611,23 @@ fn decide_keep_or_switch(
   let current_member = selection.pool.member(current).expect("the current member is in the pool");
   let current_reading = member_reading(selection.cfg, selection.registry, &current_member.backend, selection.now)?;
   let selected_reading = member_reading(selection.cfg, selection.registry, &selected.backend, selection.now)?;
-  let (reason, recovers_at) =
-    if current_member.billing == Some(PoolBilling::Payg) && selected.billing == Some(PoolBilling::Subscription) {
-      (event_types::QUOTA_REASON_SUBSCRIPTION_RESET, None)
-    } else if current_reading.as_ref().is_some_and(|reading| reading.exhausted) {
-      // The reading says the member has no capacity left; the turn start leaves it, as an out record would.
-      let reset = current_reading.as_ref().and_then(MemberReading::earliest_reset).map(format_minutes);
-      (event_types::QUOTA_REASON_QUOTA_ERROR, reset)
-    } else if near_exhaustion(current_reading.as_ref())
-      && selected.billing == Some(PoolBilling::Subscription)
-      && !near_exhaustion(selected_reading.as_ref())
-    {
-      let reset = current_reading.as_ref().and_then(MemberReading::earliest_reset).map(format_minutes);
-      (event_types::QUOTA_REASON_NEAR_EXHAUSTION, reset)
-    } else {
-      return Ok(TurnDecision::Keep(current.to_string()));
-    };
+  let (reason, recovers_at) = if member_billing(selection.cfg, current_member) == Some(PoolBilling::Payg)
+    && member_billing(selection.cfg, &selected) == Some(PoolBilling::Subscription)
+  {
+    (event_types::QUOTA_REASON_SUBSCRIPTION_RESET, None)
+  } else if current_reading.as_ref().is_some_and(|reading| reading.exhausted) {
+    // The reading says the member has no capacity left; the turn start leaves it, as an out record would.
+    let reset = current_reading.as_ref().and_then(MemberReading::earliest_reset).map(format_minutes);
+    (event_types::QUOTA_REASON_QUOTA_ERROR, reset)
+  } else if near_exhaustion(current_reading.as_ref())
+    && member_billing(selection.cfg, &selected) == Some(PoolBilling::Subscription)
+    && !near_exhaustion(selected_reading.as_ref())
+  {
+    let reset = current_reading.as_ref().and_then(MemberReading::earliest_reset).map(format_minutes);
+    (event_types::QUOTA_REASON_NEAR_EXHAUSTION, reset)
+  } else {
+    return Ok(TurnDecision::Keep(current.to_string()));
+  };
   Ok(TurnDecision::Move {
     member: selected.backend.clone(),
     change: Some(MemberChange::at_turn_start(
@@ -665,8 +666,8 @@ fn exhausted_message(features: &FeatureContext, cfg: &CharlieBotConfig, pool: &M
   all_exhausted_message(cfg, &features.registry, &availability, pool)
 }
 
-/// The error that ends a turn when no member of the pool is selectable: one line per member, in config order. A
-/// member's line names its billing when the pool has billing, the reason it is out and when it recovers.
+/// The error that ends a turn when no member of the pool is selectable: one line per member, in config order. On a
+/// priority pool a member's line names its billing, the reason it is out and when it recovers.
 pub fn all_exhausted_message(
   cfg: &CharlieBotConfig,
   registry: &Registry,
@@ -690,10 +691,18 @@ pub fn all_exhausted_message(
         _ => "not selectable".to_string(),
       },
     };
-    let label = member.billing.map_or(String::new(), |billing| format!(" ({})", billing_label(billing)));
+    let label = match (pool.rule, member_billing(cfg, member)) {
+      (PoolRule::Priority, Some(billing)) => format!(" ({})", billing_label(billing)),
+      _ => String::new(),
+    };
     lines.push(format!("- {}{label}: {state}", member.backend));
   }
   Ok(format!("pool '{}' has no selectable member:\n{}", pool.id, lines.join("\n")))
+}
+
+/// The billing of the `backends.options` entry a member names: the option owns it, so every pool reads it there.
+fn member_billing(cfg: &CharlieBotConfig, member: &PoolMember) -> Option<PoolBilling> {
+  cfg.get_backend_option(&member.backend).and_then(|option| option.billing)
 }
 
 fn billing_label(billing: PoolBilling) -> &'static str {
@@ -838,6 +847,27 @@ mod tests {
   const CONFIG: &str = "\
 backends:
   options:
+    - {id: chatgpt, label: ChatGPT, type: synthetic, model: model-gpt, billing: subscription}
+    - {id: claude-sub, label: Claude, type: synthetic, model: model-claude, billing: subscription}
+    - {id: near, label: Near, type: synthetic, model: model-near, billing: subscription}
+    - {id: spent, label: Spent, type: synthetic, model: model-spent, billing: subscription}
+    - {id: devin, label: Devin, type: synthetic, model: model-devin, billing: subscription}
+    - {id: payg-a, label: Payg A, type: synthetic, model: model-payg, billing: payg}
+  pools:
+    - id: auto
+      label: Auto
+      rule: priority
+      members: [chatgpt, claude-sub, near, spent, devin, payg-a]
+    - id: light
+      label: Light
+      rule: rotate
+      members: [spent, payg-a, chatgpt]
+";
+
+  /// `CONFIG` in the transitional mapping form: the priority members carry `billing`, and the options carry none.
+  const LEGACY_CONFIG: &str = "\
+backends:
+  options:
     - {id: chatgpt, label: ChatGPT, type: synthetic, model: model-gpt}
     - {id: claude-sub, label: Claude, type: synthetic, model: model-claude}
     - {id: near, label: Near, type: synthetic, model: model-near}
@@ -865,21 +895,16 @@ backends:
   const ROTATION_CONFIG: &str = "\
 backends:
   options:
-    - {id: member-a, label: Member A, type: synthetic, model: model-a}
-    - {id: member-b, label: Member B, type: synthetic, model: model-b}
-    - {id: member-c, label: Member C, type: synthetic, model: model-c}
-    - {id: member-d, label: Member D, type: synthetic, model: model-d}
-    - {id: member-e, label: Member E, type: synthetic, model: model-e}
+    - {id: member-a, label: Member A, type: synthetic, model: model-a, billing: subscription}
+    - {id: member-b, label: Member B, type: synthetic, model: model-b, billing: subscription}
+    - {id: member-c, label: Member C, type: synthetic, model: model-c, billing: subscription}
+    - {id: member-d, label: Member D, type: synthetic, model: model-d, billing: subscription}
+    - {id: member-e, label: Member E, type: synthetic, model: model-e, billing: subscription}
   pools:
     - id: auto
       label: Auto
       rule: priority
-      members:
-        - {backend: member-a, billing: subscription}
-        - {backend: member-b, billing: subscription}
-        - {backend: member-c, billing: subscription}
-        - {backend: member-d, billing: subscription}
-        - {backend: member-e, billing: subscription}
+      members: [member-a, member-b, member-c, member-d, member-e]
 ";
 
   fn fixture() -> (tempfile::TempDir, Arc<FeatureContext>) {
@@ -962,17 +987,20 @@ backends:
     positions(features).select(&selection).unwrap().map(|member| member.backend)
   }
 
+  /// The same facts pick the same members under the option form and the transitional mapping form.
   #[tokio::test]
   async fn subscription_tiers_precede_pay_as_you_go() {
-    let (_home, features) = fixture();
-    // Trade-off 3's example: ChatGPT (20% left, 6h), Claude (51%, 2 days), Devin (no reading).
-    assert_eq!(pick(&features, "auto", &[]), Some("chatgpt".to_string()));
-    assert_eq!(pick(&features, "auto", &["chatgpt"]), Some("claude-sub".to_string()));
-    assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub"]), Some("devin".to_string()));
-    // A subscription at or above the line is the last resort, before the first pay-as-you-go member.
-    assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub", "devin"]), Some("near".to_string()));
-    assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub", "devin", "near"]), Some("payg-a".to_string()));
-    assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub", "devin", "near", "payg-a"]), None);
+    for config in [CONFIG, LEGACY_CONFIG] {
+      let (_home, features) = fixture_with(config);
+      // Trade-off 3's example: ChatGPT (20% left, 6h), Claude (51%, 2 days), Devin (no reading).
+      assert_eq!(pick(&features, "auto", &[]), Some("chatgpt".to_string()));
+      assert_eq!(pick(&features, "auto", &["chatgpt"]), Some("claude-sub".to_string()));
+      assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub"]), Some("devin".to_string()));
+      // A subscription at or above the line is the last resort, before the first pay-as-you-go member.
+      assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub", "devin"]), Some("near".to_string()));
+      assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub", "devin", "near"]), Some("payg-a".to_string()));
+      assert_eq!(pick(&features, "auto", &["chatgpt", "claude-sub", "devin", "near", "payg-a"]), None);
+    }
   }
 
   #[tokio::test]

@@ -184,3 +184,78 @@ fn the_local_work_guard_starts_on_a_home_without_a_runner_section() {
   let output = run_server(&home, &["--check-config"], true, &server_bin_dir);
   assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
 }
+
+/// The live host config's backends in the transitional mapping form: `auto` names `{backend, billing}` members, and
+/// the rotate pools name option ids. The options carry no billing; the mapping does.
+const LIVE_MAPPING_BACKENDS: &str = r#"backends:
+  routing:
+    command: [charliebot, router]
+  pools:
+  - id: auto
+    label: Auto
+    rule: priority
+    members:
+    - {backend: claude-opus-5, billing: subscription}
+    - {backend: devin-swe2-flash, billing: subscription}
+    - {backend: claude-code-gemini-4-argon, billing: payg}
+    - {backend: codex-gpt-sol, billing: payg}
+    - {backend: claude-code-glm53-flash, billing: payg}
+  - id: light
+    label: Light
+    rule: rotate
+    members: [claude-code-deepseek-flash, claude-haiku, claude-code-glm53-flash]
+  - id: implement
+    label: Implement
+    rule: rotate
+    members: [claude-code-deepseek-flash, claude-code-glm53-flash, claude-haiku]
+  - id: review
+    label: Review
+    rule: rotate
+    members: [claude-code-kimi-k3.1-pro, claude-code-glm53, claude-code-gemini-4-argon]
+  - id: verify
+    label: Verify
+    rule: rotate
+    members: [claude-code-gemini-3.8-flash, claude-code-deepseek-flash, claude-code-glm53-flash]
+  - id: cold-read
+    label: Cold read
+    rule: rotate
+    members: [claude-haiku, claude-code-gemini-3.8-flash, claude-code-deepseek-flash]
+  calls:
+    worker: implement
+    improve: implement
+    verify: verify
+    review: review
+    cold_read: cold-read
+    probe: cold-read
+    autoname: light
+    triage: light
+    thread: auto
+    new_session: claude-opus-5
+  options:
+    - {id: claude-opus-5, label: Opus 5, type: cc-claude, model: claude-opus-5}
+    - {id: devin-swe2-flash, label: Devin SWE 2 Flash, type: devin, model: swe-2-flash}
+    - {id: claude-code-gemini-4-argon, label: Gemini 4 Argon, type: cc-claude, model: gemini-4-argon}
+    - {id: codex-gpt-sol, label: GPT Sol, type: codex, model: gpt-sol}
+    - {id: claude-code-glm53-flash, label: GLM 5.3 Flash, type: cc-claude, model: glm-5.3-flash}
+    - {id: claude-code-deepseek-flash, label: DeepSeek Flash, type: cc-claude, model: deepseek-flash}
+    - {id: claude-haiku, label: Haiku, type: cc-claude, model: claude-haiku-5-5}
+    - {id: claude-code-kimi-k3.1-pro, label: Kimi K3.1 Pro, type: cc-claude, model: kimi-k3.1-pro}
+    - {id: claude-code-glm53, label: GLM 5.3, type: cc-claude, model: glm-5.3}
+    - {id: claude-code-gemini-3.8-flash, label: Gemini 3.8 Flash, type: cc-claude, model: gemini-3.8-flash}
+"#;
+
+#[test]
+#[ignore = "integration"]
+fn the_live_mapping_form_passes_check_config_on_this_release() {
+  let temporary = tempfile::tempdir().unwrap();
+  let home = temporary.path().join("home");
+  let server_bin_dir = prepare_server_bin_dir(temporary.path(), true);
+  fs::create_dir_all(home.join("config.d/approval.d")).unwrap();
+  fs::write(home.join("config.d/approval.d/policy.yaml"), approval_policy_table()).unwrap();
+  fs::write(home.join("credentials.yaml"), "").unwrap();
+  fs::write(home.join("config.yaml"), LIVE_MAPPING_BACKENDS).unwrap();
+
+  let output = run_server(&home, &["--check-config"], true, &server_bin_dir);
+  assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
+  assert_eq!(output.stdout, b"config ok\n");
+}

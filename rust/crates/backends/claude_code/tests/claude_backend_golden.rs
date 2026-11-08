@@ -89,6 +89,7 @@ fn option(case: &Value) -> BackendOption {
     label: case["label"].as_str().unwrap().to_string(),
     model: case["model"].as_str().unwrap().to_string(),
     prompt_overlay: None,
+    billing: None,
     backend_type: "cc-claude".to_string(),
     type_fields,
   }

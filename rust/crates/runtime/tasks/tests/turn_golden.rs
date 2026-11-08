@@ -296,6 +296,7 @@ fn devin_option() -> BackendOption {
     label: "Devin".to_string(),
     model: "swe-2-test".to_string(),
     prompt_overlay: None,
+    billing: None,
     backend_type: "devin".to_string(),
     type_fields: Mapping::new(),
   }
@@ -428,6 +429,7 @@ fn backend_option_for(id: &str, backend_type: &str, script: String, one_shot_res
     id: id.to_string(),
     label: "Fake".to_string(),
     prompt_overlay: None,
+    billing: None,
     model: "fake-model".to_string(),
     backend_type: backend_type.to_string(),
     type_fields,

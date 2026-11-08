@@ -1831,10 +1831,10 @@ async fn a_verify_quota_switch_leaves_the_initiating_sessions_member_out() -> an
 #[ignore = "integration"]
 async fn a_priority_pool_delegation_picks_the_least_loaded_member() -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("distributed")]);
-  let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
-  let members = ["fake", "fake2"]
-    .map(|backend| PoolMember { backend: backend.to_string(), billing: Some(PoolBilling::Subscription) })
+  let options = ["fake", "fake2"]
+    .map(|id| BackendOption { billing: Some(PoolBilling::Subscription), ..scripts.option(id, BACKEND_TYPE) })
     .to_vec();
+  let members = ["fake", "fake2"].map(|backend| PoolMember { backend: backend.to_string() }).to_vec();
   let auto = PoolConfig { id: AUTO_POOL_ID.to_string(), label: "Auto".to_string(), rule: PoolRule::Priority, members };
   let stack = Stack::start_with_auto(options, Vec::new(), auto).await?;
   stack.write_access_key()?;
@@ -1995,11 +1995,13 @@ async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Res
   // The delegation launches the worker's first run, which takes the first script; the retry takes the second.
   let scripts = Scripts::new(vec![result_script("retry done"), result_script("retry done")]);
   let options = ["fake", "fake2", "fake3"]
-    .map(|id| BackendOption { model: "fake-model".to_string(), ..scripts.option(id, BACKEND_TYPE) })
+    .map(|id| BackendOption {
+      model: "fake-model".to_string(),
+      billing: Some(PoolBilling::Subscription),
+      ..scripts.option(id, BACKEND_TYPE)
+    })
     .to_vec();
-  let members = ["fake", "fake2", "fake3"]
-    .map(|backend| PoolMember { backend: backend.to_string(), billing: Some(PoolBilling::Subscription) })
-    .to_vec();
+  let members = ["fake", "fake2", "fake3"].map(|backend| PoolMember { backend: backend.to_string() }).to_vec();
   let auto = PoolConfig { id: AUTO_POOL_ID.to_string(), label: "Auto".to_string(), rule: PoolRule::Priority, members };
   let stack = Stack::start_with_auto(options, Vec::new(), auto).await?;
   stack.write_access_key()?;
@@ -2875,6 +2877,7 @@ fn devin_option() -> BackendOption {
     label: "Devin".to_string(),
     model: "fake-model".to_string(),
     prompt_overlay: None,
+    billing: None,
     backend_type: "devin".to_string(),
     type_fields: Mapping::new(),
   }

@@ -60,8 +60,8 @@
     return typeof detail === 'string' ? detail : JSON.stringify(detail);
   }
 
-  // The expand strips render inside diff2html's tables, so they take their look from a style block here rather
-  // than from Tailwind classes, which the compiled stylesheet carries only when a template already uses them.
+  // The expand strips render inside diff2html's tables, so their look comes from a style block here.
+  // Each cbdx- class exists only in that block, so a rename has to move its rule with the name.
   installStyles();
 
   function installStyles() {
@@ -237,8 +237,8 @@
   }
 
   // The hidden unchanged runs around the hunks: before the first hunk, between hunks, and after the last one.
-  // Each gap carries both sides' inclusive line ranges and the index of the hunk that follows it, hunks.length
-  // for the bottom gap; the two sides' ranges hold the same lines, so they have the same length.
+  // Each gap carries both sides' inclusive line ranges and the index of the hunk that follows it.
+  // The bottom gap carries hunks.length. Both sides' ranges hold the same lines, so both have the same length.
   function hiddenGaps(hunks, baseTotal, headTotal) {
     const gaps = [];
     let oldEnd = 0;
@@ -372,8 +372,8 @@
       ? [wrapper.querySelector('.d2h-diff-table')]
       : Array.from(sideDiffs, (sideDiff) => sideDiff.querySelector('table'));
     const lang = wrapper.getAttribute('data-lang') || '';
-    // The read pins the revisions the served diff was built between, so a ref that moves mid-view cannot pair
-    // the revealed lines with the hunk headers they must number against.
+    // The read pins the revisions the served diff was built between.
+    // A ref that moves mid-view cannot pair revealed lines with the hunk headers they number against.
     const lineParams = {repo: params.repo, base: data.base_sha, head: data.head_sha, mode: params.mode};
 
     gaps.forEach((gap) => {

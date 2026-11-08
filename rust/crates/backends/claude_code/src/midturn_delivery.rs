@@ -52,7 +52,7 @@ mod tests {
 
   use charliebot_registry::Registry;
   use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs};
-  use charliebot_registry::midturn_delivery::{bind_process, offer, release_run, translate_replay};
+  use charliebot_registry::midturn_delivery::{bind_process, initial_line_uuid, offer, release_run, translate_replay};
   use serde_json::{Value, json};
 
   use crate::backend::ClaudeCodeBackend;
@@ -194,6 +194,120 @@ mod tests {
       .collect::<Vec<_>>();
     assert_eq!(results, ["first", "second"]);
     assert!(events.iter().any(|event| event["type"] == "input_delivered" && event["input_event_id"] == message_id));
+    release_run(run_id);
+  }
+
+  /// A CLI that reads one stream-json line, echoes it, and skips it as a duplicate when its transcript already
+  /// holds the uuid — the behavior probe_dedupe.py measured on Claude Code 2.1.312 and later. A skipped line is
+  /// echoed, marked completed, and the CLI then waits for the next stdin line instead of running a result.
+  const DEDUPE_STUB: &str = concat!(
+    "#!/bin/sh\n",
+    "read -r line\n",
+    "uuid=$(printf '%s' \"$line\" | sed -n 's/.*\"uuid\":\"\\([^\"]*\\)\".*/\\1/p')\n",
+    "if [ -f \"$TRANSCRIPT\" ] && grep -qxF \"$uuid\" \"$TRANSCRIPT\"; then\n",
+    "  printf '{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"%s\",\"message\":{\"role\":\"user\"}}\\n' \"$uuid\"\n",
+    "  printf '%s\\n' '{\"type\":\"command_lifecycle\",\"state\":\"completed\"}'\n",
+    "  : > \"$SKIPPED_MARKER\"\n",
+    "  cat > /dev/null\n",
+    "  exit 0\n",
+    "fi\n",
+    "printf '%s\\n' \"$uuid\" >> \"$TRANSCRIPT\"\n",
+    "printf '%s\\n' \"$line\" > \"$RAN_MARKER\"\n",
+    "printf '{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"%s\",\"message\":{\"role\":\"user\"}}\\n' \"$uuid\"\n",
+    "printf '%s\\n' '{\"type\":\"result\",\"result\":\"ran\",\"usage\":{}}'\n",
+  );
+
+  async fn run_one_leg(
+    root: &std::path::Path,
+    stub: &std::path::Path,
+    run_id: &str,
+    prompt: &str,
+    overlay: Env,
+  ) -> charliebot_agents::runner::RunOutcome {
+    let backend = ClaudeCodeBackend::from_launch(
+      None,
+      None,
+      Some(stub.display().to_string()),
+      false,
+      false,
+      None,
+      LaunchArgs {
+        log_dir: Some(root.join("run")),
+        backend_kwargs: serde_json::Map::from_iter([
+          ("midturn_delivery".to_string(), Value::Bool(true)),
+          ("midturn_run_id".to_string(), Value::String(run_id.to_string())),
+        ]),
+        ..LaunchArgs::default()
+      },
+      disabled_cgroup(),
+    )
+    .unwrap();
+    bind_process(run_id, backend.midturn_run_id()).await.unwrap();
+    std::fs::create_dir_all(root.join("cwd")).unwrap();
+    let mut request = RunRequest::new(
+      prompt.to_string(),
+      root.join("cwd"),
+      AgentBaseEnvironment { values: gh_wrapper_env(root) },
+      SessionCgroupConfig::disabled(),
+      Arc::new(Registry::new()),
+    );
+    request.cleanup_timeout = Duration::from_secs(2);
+    request.environment_overlay = overlay;
+    let runner = AgentRunner::new(
+      "cc-claude",
+      Box::new(backend),
+      LaunchArgs { log_dir: Some(root.join("run")), ..LaunchArgs::default() },
+    );
+    match tokio::time::timeout(Duration::from_secs(30), runner.run(request)).await {
+      Ok(outcome) => outcome.unwrap(),
+      Err(_) => {
+        let _ = runner.terminate().await;
+        panic!("the process produced no result; the CLI skipped its first line as a duplicate uuid");
+      }
+    }
+  }
+
+  #[ignore = "integration"]
+  // A relayed process receives its continuation prompt under a fresh uuid, so a CLI that skips duplicate uuids
+  // still runs the turn to a result and the run finishes.
+  #[tokio::test]
+  async fn a_relayed_process_produces_a_result_when_the_cli_skips_duplicate_uuids() {
+    let root = tempfile::tempdir().unwrap();
+    let run_id = "11111111-2222-3333-4444-555555555564";
+    let transcript = root.path().join("transcript.jsonl");
+    let skipped = root.path().join("skipped");
+    let ran = root.path().join("ran");
+    let stub = root.path().join("claude-dedupe-stub");
+    charliebot_shell_harness::write_executable(&stub, DEDUPE_STUB);
+    let overlay = || {
+      Env::from([
+        ("TRANSCRIPT".to_string(), transcript.display().to_string()),
+        ("SKIPPED_MARKER".to_string(), skipped.display().to_string()),
+        ("RAN_MARKER".to_string(), ran.display().to_string()),
+      ])
+    };
+
+    // The stub records the stream-json line it received, so each leg is checked on its uuid and its prompt.
+    let received = || {
+      serde_json::from_str::<Value>(std::fs::read_to_string(&ran).unwrap().trim())
+        .expect("the CLI received one stream-json line")
+    };
+
+    let first = run_one_leg(root.path(), &stub, run_id, "Initial prompt", overlay()).await;
+    assert_eq!(first.exit_code, Some(0));
+    assert_eq!(received()["uuid"], run_id, "the first process received the Run id line");
+    assert_eq!(received()["message"]["content"], "Initial prompt");
+
+    // The relay binds the same Run again and hands the new process the continuation prompt, as the master loop does.
+    let second = run_one_leg(root.path(), &stub, run_id, crate::claude_relay::CONTINUATION_PROMPT, overlay()).await;
+    assert_eq!(second.exit_code, Some(0), "the relayed process produced a result and the run finished");
+    assert_eq!(
+      received()["uuid"],
+      initial_line_uuid(run_id, 1),
+      "the relay's first line carries a uuid the transcript does not hold"
+    );
+    assert_eq!(received()["message"]["content"], crate::claude_relay::CONTINUATION_PROMPT);
+    assert!(!skipped.exists(), "the CLI ran the continuation prompt instead of skipping it as a duplicate");
     release_run(run_id);
   }
 }

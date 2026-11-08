@@ -32,8 +32,8 @@ use crate::wire;
 /// The `ImproveRequest` fields in the model's declaration order, which fixes the order of its 422 errors.
 const IMPROVE_FIELDS: &[Field] = &[
   Field::required(wire::SESSION_ID, FieldType::String),
-  Field::required(wire::REPO_PATH, FieldType::String),
-  Field::required(wire::BASE_BRANCH, FieldType::String),
+  Field::required(wire::REPO_PATH_FIELD, FieldType::String),
+  Field::required(wire::BASE_BRANCH_FIELD, FieldType::String),
   Field::optional(wire::BACKEND, FieldType::NullableString),
   Field::optional(wire::ITERATIONS, FieldType::Integer),
   Field::required(wire::GOAL, FieldType::String),
@@ -66,8 +66,8 @@ const DEFAULT_ITERATIONS: i64 = 3;
 fn improve_request(fields: &Map<String, Value>) -> ImproveRequest {
   ImproveRequest {
     session_id: text_field(fields, wire::SESSION_ID),
-    repo_path: text_field(fields, wire::REPO_PATH),
-    base_branch: text_field(fields, wire::BASE_BRANCH),
+    repo_path: text_field(fields, wire::REPO_PATH_FIELD),
+    base_branch: text_field(fields, wire::BASE_BRANCH_FIELD),
     backend: optional_text_field_ref(fields, wire::BACKEND).map(str::to_string),
     iterations: match integer_field(fields, wire::ITERATIONS) {
       Some(value) => i64::try_from(value).expect("a validated iterations fits i64"),

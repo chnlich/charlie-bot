@@ -1732,7 +1732,7 @@ impl Store {
         Some(parent) => parent.as_deref(),
         None => meta.task_parent_id.as_deref(),
       };
-      task_reparent::check_agent_scope(&index, caller_task, session_id, new_parent)?;
+      task_reparent::check_agent_scope(&index, &self.cfg.charliebot_home, caller_task, session_id, new_parent)?;
     }
     let prompt_changed = subtree_prompt.is_some() || node_prompt.is_some();
     let structural = task.is_some() || profile.is_some() || task_parent_id.is_some();

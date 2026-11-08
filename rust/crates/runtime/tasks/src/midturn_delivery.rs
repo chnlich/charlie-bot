@@ -130,6 +130,9 @@ impl<'de> Deserialize<'de> for ReplayLine {
 }
 
 /// Read non-initial replay uuids from every raw transport leg of this Run (`_echoed_input_ids`).
+///
+/// A uuid the delivery wrote as a bound process's first line (`charliebot_registry::midturn_delivery::is_first_line`)
+/// names the initial or continuation prompt, not a pending web input, so it stays out of the set.
 fn echoed_input_ids(transport_dir: &Path, run_id: &str) -> anyhow::Result<HashSet<String>> {
   if !transport_dir.is_dir() {
     // `run_dir.glob` over an absent transport directory matches nothing.
@@ -168,7 +171,7 @@ fn echoed_input_ids(transport_dir: &Path, run_id: &str) -> anyhow::Result<HashSe
       }
       if let Some(input_id) = event.uuid.as_ref().and_then(Value::as_str)
         && !input_id.is_empty()
-        && input_id != run_id
+        && !charliebot_registry::midturn_delivery::is_first_line(run_id, input_id)
       {
         echoed.insert(input_id.to_string());
       }
@@ -397,8 +400,8 @@ mod tests {
     ChatEvent::from(json!({"id": message_id, "type": event_types::USER, "content": "Please change the answer."}))
   }
 
-  #[test]
-  fn echoed_ids_are_the_complete_non_initial_replays_of_every_raw_leg() {
+  #[tokio::test]
+  async fn echoed_ids_are_the_complete_non_initial_replays_of_every_raw_leg() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
       dir.path().join(RAW_LOG_NAME),
@@ -418,15 +421,22 @@ mod tests {
       ),
     )
     .unwrap();
+    let relay_uuid = charliebot_registry::midturn_delivery::initial_line_uuid("run-1", 1);
     std::fs::write(
       dir.path().join(format!("{RAW_LOG_NAME}.1")),
-      "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"in-5\"}\n",
+      format!(
+        "{{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"in-5\"}}\n{{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"{relay_uuid}\"}}\n"
+      ),
     )
     .unwrap();
+    charliebot_registry::midturn_delivery::bind_process("run-1", Some("run-1".to_string())).await.unwrap();
+    charliebot_registry::midturn_delivery::bind_process("run-1", Some("run-1".to_string())).await.unwrap();
     let echoed = echoed_input_ids(dir.path(), "run-1").unwrap();
+    charliebot_registry::midturn_delivery::release_run("run-1");
     assert_eq!(
       echoed,
-      HashSet::from(["in-1".to_string(), "in-4".to_string(), "in-5".to_string(), "in-duplicate".to_string()])
+      HashSet::from(["in-1".to_string(), "in-4".to_string(), "in-5".to_string(), "in-duplicate".to_string()]),
+      "the relay's continuation-prompt echo is not a web input"
     );
   }
 }

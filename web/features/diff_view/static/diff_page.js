@@ -89,12 +89,20 @@
     return window.matchMedia('(max-width: 768px)').matches ? 'line-by-line' : 'side-by-side';
   }
 
+  // The refs the form starts with. They are the fields' values rather than
+  // their hints, so Compare acts on the refs the reader sees.
+  const DEFAULT_BASE = 'main';
+  const DEFAULT_HEAD = 'HEAD';
+
   function readQuery() {
     const p = new URLSearchParams(location.search);
     return {
       repo: p.get('repo') || '',
-      base: p.get('base') || '',
-      head: p.get('head') || '',
+      base: p.get('base') || DEFAULT_BASE,
+      head: p.get('head') || DEFAULT_HEAD,
+      // Only a URL that names all three refs asks for its own comparison; the
+      // defaults fill the form without starting one.
+      named: Boolean(p.get('repo') && p.get('base') && p.get('head')),
       mode: p.get('mode') || 'three-dot',
       outputFormat: p.get('outputFormat') || defaultOutputFormat(),
       session: p.get('session') || '',
@@ -405,11 +413,19 @@
     };
   }
 
+  // "repo", "base and head", "repo, base, and head": the fields the form shows
+  // empty, so the message never names one it has a value for.
+  function joinedFields(fields) {
+    if (fields.length < 3) return fields.join(' and ');
+    return fields.slice(0, -1).join(', ') + ', and ' + fields[fields.length - 1];
+  }
+
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const params = currentParams();
-    if (!params.repo || !params.base || !params.head) {
-      setError('repo, base, and head are required');
+    const empty = ['repo', 'base', 'head'].filter((field) => !params[field]);
+    if (empty.length) {
+      setError(`${joinedFields(empty)} ${empty.length === 1 ? 'is' : 'are'} required`);
       return;
     }
     const event = new CustomEvent('cbdiff:before-compare', { cancelable: true, detail: { params } });
@@ -435,7 +451,7 @@
     modeSelect.value = q.mode;
     formatSelect.value = q.outputFormat;
 
-    const named = q.repo && q.base && q.head;
+    const named = q.named;
     if (!named) startEl.classList.remove('hidden');
     await loadRepos();
     if (q.repo) await loadBranches(q.repo);

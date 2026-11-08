@@ -15,7 +15,7 @@ use charliebot_core::approval_policy::{self};
 use charliebot_core::pacific::{self, date_text, day_of_stamp};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::registry::OpenWaitingRow;
-use charliebot_store::metadata::UtcDateTime;
+use charliebot_store::metadata::{SESSION_NAME_FIELD, UtcDateTime};
 use jiff::Timestamp;
 use jiff::civil::Date;
 use serde_json::{Value, json};
@@ -99,7 +99,7 @@ pub(crate) async fn approval_day_view_at(
 fn row_json(row: &OpenWaitingRow, now: Timestamp) -> Value {
   json!({
     "session_id": row.session_id,
-    "session_name": row.session_name,
+    (SESSION_NAME_FIELD): row.session_name,
     "text": row.text,
     "context": row.context,
     "link": row.link,

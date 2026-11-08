@@ -1186,6 +1186,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_registry::pages::STATIC_URL_PREFIX`; the router mounts it, the access-key gate leaves it \
            public, and the template engine inlines a stylesheet from it.",
   },
+  OwnerRow {
+    name: "session_name",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::SESSION_NAME_FIELD`; the approval day view's rows and the voice recordings \
+           page's rows both carry a session's display name under it.",
+  },
 ];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one

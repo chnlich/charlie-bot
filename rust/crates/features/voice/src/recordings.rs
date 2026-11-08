@@ -436,7 +436,7 @@ fn recording_row(sessions_dir: &Path, session_id: &str, stem: &str) -> io::Resul
   let (stamp, _) = stem_shape(stem).expect("the scan validated the stem shape");
   Ok(json!({
     "session_id": session_id,
-    "session_name": session_name(&sessions_dir.join(session_id))?,
+    (metadata::SESSION_NAME_FIELD): session_name(&sessions_dir.join(session_id))?,
     "stem": stem,
     "recorded_at": recorded_at(stamp),
     "audio_url": audio_url,

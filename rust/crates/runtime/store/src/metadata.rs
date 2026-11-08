@@ -88,6 +88,9 @@ pub const REPO_PATH_FIELD: &str = "repo_path";
 /// The task-spec field holding the branch a task branches from. The delegate request, the improve request and the run
 /// record carry the same name, so it is spelled once, here.
 pub const BASE_BRANCH_FIELD: &str = "base_branch";
+/// The response field holding a session's display name. The approval day view's rows and the voice recordings page's
+/// rows carry the same name, so it is spelled once, here.
+pub const SESSION_NAME_FIELD: &str = "session_name";
 
 /// Datetime stored as UTC with a `Z` suffix and microsecond format.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

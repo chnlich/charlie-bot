@@ -311,23 +311,35 @@ teardown() {
 
 require_tools() {
   local tool
-  for tool in git tmux systemd-run ss curl jq sha256sum flock dd setsid ps; do
+  for tool in git tmux systemd-run ss curl jq sha256sum flock dd setsid ps patch; do
     command -v "$tool" > /dev/null || fail "$tool is on PATH"
   done
   command -v charlie-code > /dev/null \
     || fail 'charlie-code is on PATH; the flow runs its model checks with it'
 }
 
+# lab_stage_copy SOURCE DEST MARK PATCH: DEST, in the flow checkout, is the flow-ref's stage script SOURCE. A flow-ref that
+# predates the lab's overrides lacks MARK, so PATCH, the lab's override delta, applies to the copy. A PATCH that does not
+# apply stops the run, so a copy differs from its flow-ref's script by the override alone.
+lab_stage_copy() {
+  local source=$1 dest=$2 mark=$3 patch=$4
+  cp "$FLOW/$source" "$FLOW/$dest" || fail "the flow-ref's $source copies to $dest"
+  if ! grep -q -- "$mark" "$FLOW/$dest"; then
+    patch --batch --quiet "$FLOW/$dest" "$patch" || fail "the lab override $patch applies to $FLOW_REF's $source"
+  fi
+}
+
 # reset_flow_checkout: the flow checkout at --flow-ref, clean in its tracked files, with the lab's two stage-script
-# copies beside the flow's own. The copies are untracked, so the switch's clean-clone check still passes. SWITCH_SCRIPT is
-# the switch the run times: the flow-ref's own file when it carries the lab's mark lines, otherwise the lab checkout's
-# copy of it.
+# copies beside the flow's own, each the flow-ref's stage script with the lab's override applied. The copies are
+# untracked, so the switch's clean-clone check still passes. SWITCH_SCRIPT is the switch the run times: the flow-ref's own
+# file when it carries the lab's mark lines, otherwise the lab checkout's copy of it.
 reset_flow_checkout() {
   git -C "$FLOW" fetch --quiet origin || fail "the flow checkout fetches $ORIGIN"
   git -C "$FLOW" reset --hard --quiet "$FLOW_REF" || fail "the flow checkout moves to $FLOW_REF"
-  cp "$REPO_TREE/scripts/release/trial.sh" "$FLOW/scripts/release/trial-lab.sh" \
-    && cp "$REPO_TREE/scripts/release/switch-rehearsal.sh" "$FLOW/scripts/release/rehearsal-lab.sh" \
-    || fail 'the lab stage-script copies install into the flow checkout'
+  lab_stage_copy scripts/release/trial.sh scripts/release/trial-lab.sh CHARLIEBOT_TRIAL_LIVE_URL \
+    "$REPO_TREE/dev/release-lab/overrides/trial.patch"
+  lab_stage_copy scripts/release/switch-rehearsal.sh scripts/release/rehearsal-lab.sh CHARLIEBOT_REHEARSAL_PORT_MIN \
+    "$REPO_TREE/dev/release-lab/overrides/switch-rehearsal.patch"
   SWITCH_SCRIPT="$FLOW/scripts/switch-server.sh"
   if ! grep -q 'lab_mark gate_start' "$SWITCH_SCRIPT"; then
     # A flow-ref older than the lab's marks still needs its switch timed. The lab's copy must be that release's file plus

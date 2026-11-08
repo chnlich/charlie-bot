@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
+use std::os::unix::process::CommandExt;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -340,6 +341,29 @@ async fn run_session(
   }
 }
 
+/// Make the kernel SIGKILL `command`'s child when this server exits, so no held ssh client outlives the server.
+///
+/// A client that outlived the server would keep its ssh connection, and its command line names the server's
+/// ControlPath, until the remote script ends on its heartbeat. `PR_SET_PDEATHSIG` follows the thread that starts the
+/// child, and the sessions start their clients on runtime worker threads, which live as long as the server.
+fn die_with_server(command: &mut std::process::Command) {
+  let server = std::process::id() as libc::pid_t;
+  // SAFETY: prctl and getppid are async-signal-safe, which is all a hook between fork and exec may call.
+  unsafe {
+    command.pre_exec(move || {
+      if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+        return Err(io::Error::last_os_error());
+      }
+      // The kernel signals only a child whose parent is alive when prctl runs. A server that exited first has left
+      // the child reparented, so the child does not start.
+      if libc::getppid() != server {
+        return Err(io::Error::other("the server exited before the held ssh client started"));
+      }
+      Ok(())
+    });
+  }
+}
+
 /// One ssh session from its start to its end. It returns the reason the session ended.
 async fn run_once(
   shared: &StdMutex<State>,
@@ -365,14 +389,10 @@ async fn run_once(
     "remote_ssh_started"
   );
   let (program, args) = command.split_first().expect("an ssh command names a program");
-  let mut child = match Command::new(program)
-    .args(args)
-    .stdin(Stdio::null())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .kill_on_drop(true)
-    .spawn()
-  {
+  let mut process = Command::new(program);
+  process.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+  die_with_server(process.as_std_mut());
+  let mut child = match process.spawn() {
     Ok(child) => child,
     Err(error) => return format!("spawn failed: {error}"),
   };

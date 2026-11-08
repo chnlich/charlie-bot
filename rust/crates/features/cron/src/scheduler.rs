@@ -792,7 +792,7 @@ impl CronExpression {
     self.next_after_with_work(base).0
   }
 
-  /// Searches for the next fire and reports the work done, on the error path too.
+  /// The next fire and the work its search did, reported on the error path too.
   fn next_after_with_work<Tz: chrono::TimeZone + Clone>(
     &self,
     base: chrono::DateTime<Tz>,

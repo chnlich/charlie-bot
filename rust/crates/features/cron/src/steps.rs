@@ -17,8 +17,8 @@ pub(crate) fn step_runs_on_auto(task: &ScheduledTaskConfig, step: &StepConfig) -
   step.backend.as_deref().or(task.backend.as_deref()) == Some(AUTO_BACKEND_ID)
 }
 
-/// Resolve a step's backend and model. `auto` resolves to the bound session's current member, which the fire's turn start
-/// recorded; `parent` is that bound session and is required for `auto`.
+/// The backend and model that a step resolves to. `auto` resolves to the bound session's current member, which the
+/// fire's turn start recorded; `parent` is that bound session and is required for `auto`.
 pub(crate) fn resolved_backend(
   task: &ScheduledTaskConfig,
   cfg: &CharlieBotConfig,

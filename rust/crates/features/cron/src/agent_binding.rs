@@ -54,7 +54,7 @@ pub(crate) async fn authorize_rebind(
   require_within_caller(features, caller_session, requested).await
 }
 
-/// Create the session that a new cron task binds: a manager child of the caller's session, by the create-subtask rule.
+/// The session that a new cron task binds: a manager child of the caller's session, by the create-subtask rule.
 /// The session takes the backend the task fires on, so the scheduler's backend alignment has nothing to change.
 #[allow(clippy::result_large_err)]
 pub(crate) async fn create_bound_session(

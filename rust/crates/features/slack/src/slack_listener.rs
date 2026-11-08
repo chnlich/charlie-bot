@@ -943,7 +943,7 @@ mod tests {
     assert!(started.elapsed() < CLOSE_TIMEOUT, "cancel took {:?}", started.elapsed());
   }
 
-  #[tokio::test(start_paused = true)]
+  #[tokio::test]
   async fn listener_reconnects_within_three_seconds_after_disconnect() {
     let home = Home::new();
     let api = FakeApi::start(&[SocketPlan::Disconnect, SocketPlan::Hold]).await;
@@ -961,7 +961,7 @@ mod tests {
     assert!(task.await.unwrap_err().is_cancelled());
   }
 
-  #[tokio::test(start_paused = true)]
+  #[tokio::test]
   async fn listener_reconnects_after_a_dropped_connection() {
     let home = Home::new();
     let api = FakeApi::start(&[SocketPlan::Drop, SocketPlan::Hold]).await;
@@ -976,7 +976,7 @@ mod tests {
     assert!(task.await.unwrap_err().is_cancelled());
   }
 
-  #[tokio::test(start_paused = true)]
+  #[tokio::test]
   async fn listener_retries_a_failed_apps_connections_open() {
     let home = Home::new();
     let api = FakeApi::start(&[SocketPlan::Hold]).await;

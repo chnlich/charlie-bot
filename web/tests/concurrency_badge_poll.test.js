@@ -9,7 +9,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const BADGE_JS = fs.readFileSync(
-    path.join(__dirname, '..', 'templates', 'partials', 'concurrency-badge.js'), 'utf8');
+    path.join(__dirname, '..', 'static', 'js', 'concurrency-badge.js'), 'utf8');
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 

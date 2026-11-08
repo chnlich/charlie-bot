@@ -3,7 +3,12 @@
     One fragment, included once by every app page: inside the page's top bar where it has one, and as a direct child
     of <body> where it has none (the `body > .cb-slot` rules then paint that bar). The file-served pages (the file
     browser and artifact pages) carry neither the bar nor this fragment. The counting belongs to
-    rust/crates/runtime/session-api/src/concurrency.rs; the inline script below only displays it. -#}
+    rust/crates/runtime/session-api/src/concurrency.rs; the script at the end of this fragment only displays it.
+
+    A page whose document is the whole load sets `defer_concurrency_badge_poll` before including this fragment: its
+    badge paints from the markup above and starts the poll after the document, so the poller's bytes stay off the
+    page's critical path. A page that already carries the app's bootstrap script (index.html) keeps the script inline,
+    where it costs a small share of a document that is large anyway. -#}
 <div class="cb-slot">
   <div class="cb-anchor">
     <button id="concurrency-badge" class="cb-badge" type="button" data-running="0"
@@ -98,4 +103,11 @@
   .cb-status { margin: 8px 0 0; opacity: .7 }
   .cb-empty { margin: 0; padding: 56px 0; text-align: center; opacity: .7 }
 </style>
-<script>{% include 'partials/concurrency-badge.js' %}</script>
+{% if defer_concurrency_badge_poll %}<script>
+  // The badge paints from its markup; the poll starts once the document has parsed.
+  document.addEventListener('DOMContentLoaded', function () {
+    const script = document.createElement('script');
+    script.src = '/static/js/concurrency-badge.js?v={{ static_asset_version|urlencode }}';
+    document.head.appendChild(script);
+  }, {once: true});
+</script>{% else %}<script>{% include 'js/concurrency-badge.js' %}</script>{% endif %}

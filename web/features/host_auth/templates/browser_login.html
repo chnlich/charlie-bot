@@ -31,6 +31,7 @@
 </style>
 </head>
 <body>
+{% set defer_concurrency_badge_poll = true %}
 {% include 'partials/concurrency_badge.html' %}
 {% macro readback_row(exit_code, output) -%}
 <div class="status"><span class="badge">exit {{ exit_code }}</span><pre>{{ output }}</pre></div>

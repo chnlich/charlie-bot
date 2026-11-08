@@ -140,8 +140,8 @@ fn host_entries<'a>(hosts: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, Mapping)> 
   entries
 }
 
-/// A feature context with one backend option per entry, each `(id, type fields)` of the synthetic type. The rotation
-/// pool `pool` holds every entry, and the call classes read it as the old form derived them. `auto` adds one more pool.
+/// A feature context with one backend option per entry, each `(id, type fields)` of the synthetic type. The declared
+/// rotation pool `pool` holds every entry, and the call classes name it. `auto` adds one more pool.
 fn feature_context_with_entries(
   entries: &[(&str, Mapping)],
   auto: Option<PoolConfig>,

@@ -196,7 +196,7 @@ impl Home {
     fs::write(
       dir.path().join("config.yaml"),
       format!(
-        "server:\n  session_memory_max_mb: 0\n  session_tasks_max: 0\nbackends:\n  pool: []\n  options:\n    - id: {OPTION_ID}\n      label: Scripted\n      type: scripted\n      model: scripted-model\n"
+        "server:\n  session_memory_max_mb: 0\n  session_tasks_max: 0\nbackends:\n  options:\n    - id: {OPTION_ID}\n      label: Scripted\n      type: scripted\n      model: scripted-model\n"
       ),
     )
     .expect("the test config");

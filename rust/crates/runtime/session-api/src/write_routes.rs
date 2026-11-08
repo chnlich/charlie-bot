@@ -1183,11 +1183,13 @@ backends:
   options:
     - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a}
     - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b}
-  auto:
-    label: Auto
-    members:
-      - {backend: synthetic-a, billing: subscription}
-      - {backend: synthetic-b, billing: payg}
+  pools:
+    - id: auto
+      label: Auto
+      rule: priority
+      members:
+        - {backend: synthetic-a, billing: subscription}
+        - {backend: synthetic-b, billing: payg}
 ";
 
   #[tokio::test]
@@ -1241,7 +1243,7 @@ backends:
   }
 
   #[tokio::test]
-  async fn a_dedicated_lock_refuses_auto_when_backends_auto_is_configured() {
+  async fn a_dedicated_lock_refuses_auto_when_a_pool_names_it() {
     let (_home, features) = feature_context_with_auto(AUTO_CONFIG);
     let request = CreateTask {
       request_id: "sequence-locked-auto-node".to_string(),

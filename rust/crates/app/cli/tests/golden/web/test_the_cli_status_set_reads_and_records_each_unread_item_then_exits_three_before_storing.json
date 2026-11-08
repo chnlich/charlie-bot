@@ -15,7 +15,7 @@
     "CHARLIEBOT_REPO_ROOT": "{repo}"
   },
   "files": {
-    "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pool:\n    - claude-light\n  options:\n    - id: claude-light\n      label: CC Light\n      type: cc-claude\n      model: claude-light-test\n",
+    "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pools:\n    - {id: pool, label: Pool, rule: rotate, members: [claude-light]}\n  calls:\n    worker: pool\n    improve: pool\n    verify: pool\n    review: pool\n    cold_read: pool\n    probe: pool\n    autoname: pool\n    triage: pool\n  options:\n    - id: claude-light\n      label: CC Light\n      type: cc-claude\n      model: claude-light-test\n",
     "bin/claude": "#!/bin/sh\n/bin/cat > /dev/null\nprintf '%s\\n' 'Keep the file page.'\n",
     "linked-page.html": "HOST-SERVED-PAGE-CONTENT",
     "status.json": "{\"waiting\": [{\"text\": \"Should we use the file page?\", \"context\": \"The line is ready now. Options are keep or change; keep is recommended.\", \"link\": \"http://localhost:9443/absolute_filepath{root}/linked-page.html\"}, {\"text\": \"Should we use the remote page?\", \"context\": \"The review is open now. Options are merge or wait; wait is recommended.\", \"link\": \"https://code.example/example/project/pull/12\"}]}",

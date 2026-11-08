@@ -384,11 +384,11 @@ pub fn script_option(id: &str, script: &str) -> BackendOption {
   }
 }
 
-/// The id of the rotate pool that a fixture's `pool` list names. The call classes a rotation pool serves read it.
+/// The id of the fixture's declared rotate pool. The call classes a rotation pool serves read it.
 pub const ROTATION_POOL_ID: &str = "pool";
 
-/// The rotate pool that `members` name, and the call classes that read it. Without members the fixture has no pool, and
-/// no call class reads one.
+/// The rotate pool named `pool` that `members` make up, and the call classes that read it. Without members the fixture
+/// has no pool, and no call class reads one.
 pub fn rotation_pools(members: Vec<String>) -> (Vec<PoolConfig>, CallsConfig) {
   if members.is_empty() {
     return (Vec::new(), CallsConfig::default());

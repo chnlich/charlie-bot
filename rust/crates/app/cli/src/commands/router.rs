@@ -986,17 +986,15 @@ mod tests {
   }
 
   #[test]
-  fn a_retired_config_still_routes_run_on_pool_to_its_derived_pool() {
+  fn a_run_on_naming_a_missing_pool_id_is_refused_when_the_rules_load() {
     with_timeout(|| {
       let home = TestHome::new();
-      // The retired form: `backends.pool` loads as the rotate pool `pool`, which `run_on: pool` still names.
+      // The config declares the pools {POOL, DELTA} and none named `pool`, so `run_on: pool` names no id.
       let options: String = STRONG
         .iter()
         .map(|id| format!("    - {{id: {id}, label: {id}, type: codex, model: synthetic-model}}\n"))
         .collect();
-      let rotation: String = STRONG.iter().map(|id| format!("    - {id}\n")).collect();
-      std::fs::write(home.home.join("config.yaml"), format!("backends:\n  options:\n{options}  pool:\n{rotation}"))
-        .unwrap();
+      std::fs::write(home.home.join("config.yaml"), format!("backends:\n  options:\n{options}")).unwrap();
       let jev = FakeJev::start(Vec::new());
       let classes = format!(
         "classes:\n  routine: {{when: \"{ROUTINE_RULE}\", run_on: pool}}\n  context: {{when: \"{CONTEXT_RULE}\", run_on: session}}\n"
@@ -1004,9 +1002,10 @@ mod tests {
       write_rules(&home, &jev.url, &classes, DEFAULT_ROLES);
 
       let payload = request("implement", "Add a test for the parser.", &[STRONG[0], "pool"], Some(SESSION));
-      let answer = run(&home, &payload, &jev, vec![jev_reply("routine", 0.88, 0.12)]).unwrap();
+      let error = run(&home, &payload, &jev, Vec::new()).unwrap_err();
 
-      assert_eq!(answer, json!({ "routed": true, "backends": ["pool"], "reason": "routine p=0.88" }));
+      assert!(error.contains("classes.routine.run_on") && error.contains("'pool'"), "{error}");
+      assert!(error.contains("write session or one backends.pools id"), "{error}");
     });
   }
 

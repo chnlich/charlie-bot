@@ -53,7 +53,7 @@ impl Search {
   }
 }
 
-/// One web search for `query`, with every source's redirect URL resolved.
+/// One web search for `query`, with each source's redirect URL resolved or its resolution failure kept.
 ///
 /// Every failure is the tool result text: a missing `gemini.api_key`, a non-200 answer, a body without a candidate,
 /// or a request that did not complete.

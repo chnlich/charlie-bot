@@ -470,9 +470,9 @@ fn steps_task_of(run: &RunRecord, tree: &dyn SequenceTree) -> anyhow::Result<Opt
   Ok(task.steps.as_ref().is_some_and(|steps| !steps.is_empty()).then_some(task))
 }
 
-/// Move a steps firing off a step run that ended on a spent quota, when that step runs on `auto`. The member is
-/// recorded out, the next member is selected, and the step reruns on it as a retry run. Returns whether the chain has
-/// finished, or None when the step is not on Auto and the chain takes its normal path.
+/// The switch of a failed step to the next member, when its run ended on a spent quota and the step runs on `auto`. The
+/// member is recorded out, the next member is selected, and the step reruns on it as a retry run. Returns whether the
+/// chain has finished, or None when the step is not on Auto and the chain takes its normal path.
 async fn switch_failed_step(
   features: &FeatureContext,
   leaf_id: &str,

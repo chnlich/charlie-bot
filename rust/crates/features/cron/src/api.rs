@@ -724,7 +724,7 @@ mod tests {
     (home, features)
   }
 
-  /// Launch one run of `session_id` and sign the run token that names it: the credential an agent sends.
+  /// The signed run token of one launched run of `session_id`: the credential an agent sends.
   async fn agent_token(features: &FeatureContext, session_id: &str) -> String {
     let run_id = format!("run-{session_id}");
     let record = RunRecord {

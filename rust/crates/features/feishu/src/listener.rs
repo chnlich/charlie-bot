@@ -268,8 +268,6 @@ mod tests {
       thread_id: thread_id.map(str::to_string),
       create_time: "1700000000000".to_string(),
       sender_open_id: sender.to_string(),
-      message_type: "text".to_string(),
-      content: "{\"text\":\"@_user_1 hello\"}".to_string(),
       mentions: Vec::new(),
     }
   }

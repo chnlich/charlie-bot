@@ -25,9 +25,6 @@ pub struct Message {
   pub create_time: String,
   /// The sender's open_id.
   pub sender_open_id: String,
-  pub message_type: String,
-  /// The message content as Feishu writes it: a JSON string.
-  pub content: String,
   pub mentions: Vec<Mention>,
 }
 
@@ -91,8 +88,6 @@ pub fn classify(event: &Value, bot_open_id: &str) -> anyhow::Result<Inbound> {
     thread_id: optional_text(raw, "thread_id")?,
     create_time: text_at(raw, &["create_time"])?.to_string(),
     sender_open_id: sender_open_id.to_string(),
-    message_type: text_at(raw, &["message_type"])?.to_string(),
-    content: text_at(raw, &["content"])?.to_string(),
     mentions,
   };
   if mentioned {

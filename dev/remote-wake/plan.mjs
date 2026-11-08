@@ -9,15 +9,18 @@
 // as plain integers in w2-waits.txt. A length is clamped to LENGTH_FLOOR_SECONDS because a job must outlive its
 // own verify-on-create probe; the source list's shortest wait lasted 0.2 s, which no registration can catch.
 //
-// The restart boundaries are chosen so that the share of waits in flight at a boundary lies in
-// RESTART_SHARE_RANGE. A boundary is a restart: the last running server stops and a fresh one starts from the
-// same home. Both builds use the same boundaries.
+// The restart boundaries are chosen so that the share of waits a boundary crosses lies in RESTART_SHARE_RANGE. A
+// wait is crossed when a restart falls between its registration and its fire, and the fire is the one today's probe
+// schedule predicts (probe-schedule.mjs). A boundary is a restart: the last running server stops and a fresh one
+// starts from the same home. Both builds use the same boundaries.
 //
 // Every random choice comes from one seeded generator, so the same arguments produce the same plan.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { predictedFireSeconds } from './probe-schedule.mjs';
 
 export const KIND_SHARES = Object.freeze({ pid: 0.71, cmd: 0.04, slurm: 0.25 });
 export const RESTART_SHARE_RANGE = Object.freeze([0.2, 0.25]);
@@ -109,14 +112,18 @@ function clampLength(value, cap) {
   return Math.max(LENGTH_FLOOR_SECONDS, Math.min(cap, value));
 }
 
-// The waits in flight at `offset`: started before it, not yet ended. This is the set that crosses a restart there.
-export function inFlightAt(waits, offset) {
-  return waits.filter((wait) => wait.startOffset < offset && offset < wait.startOffset + wait.length);
+function predictedFire(wait) {
+  return predictedFireSeconds(wait.startOffset, wait.startOffset + wait.length);
+}
+
+// The waits a restart at `offset` crosses: it falls after their registration and before their predicted fire.
+export function crossingAt(waits, offset) {
+  return waits.filter((wait) => wait.startOffset < offset && offset < predictedFire(wait));
 }
 
 // Choose `restarts` boundaries whose crossing share lies in RESTART_SHARE_RANGE, closest first, each at least
-// MIN_RESTART_SEPARATION_SECONDS after the one before it. A candidate needs at least MIN_RESTART_IN_FLIGHT waits in
-// flight and lies at least MIN_RESTART_DELAY_SECONDS after the plan's first start, so a boundary never restarts two
+// MIN_RESTART_SEPARATION_SECONDS after the one before it. A candidate needs at least MIN_RESTART_IN_FLIGHT crossed
+// waits and lies at least MIN_RESTART_DELAY_SECONDS after the plan's first start, so a boundary never restarts two
 // idle servers and never falls inside the first few registrations.
 const MIN_RESTART_SEPARATION_SECONDS = 300;
 const BOUNDARY_STEP_SECONDS = 15;
@@ -134,7 +141,7 @@ export function chooseRestarts(
     return { boundaries: [], share: 0 };
   }
   const earliest = Math.min(...waits.map((wait) => wait.startOffset));
-  const latest = Math.max(...waits.map((wait) => wait.startOffset + wait.length));
+  const latest = Math.max(...waits.map((wait) => predictedFire(wait)));
   const inFlightMin = Math.min(MIN_RESTART_IN_FLIGHT, waits.length);
   const candidates = [];
   for (
@@ -145,7 +152,7 @@ export function chooseRestarts(
     if (excludeRanges.some(([from, to]) => offset >= from && offset <= to)) {
       continue;
     }
-    const crossed = inFlightAt(waits, offset).map((wait) => wait.index);
+    const crossed = crossingAt(waits, offset).map((wait) => wait.index);
     if (crossed.length >= inFlightMin) {
       candidates.push({ offset, crossed, score: Math.abs(crossed.length / waits.length - target) });
     }
@@ -198,7 +205,12 @@ export function buildPlan(options) {
     jobId: 100000 + index,
   }));
 
-  const restarts = chooseRestarts(waits, options.restarts, 0.225, Math.floor(options.staggerSeconds / 4));
+  // The faults start after the last restart and must land inside a running job, so no boundary falls within the fault
+  // lead of the last job's end.
+  const latestEnd = Math.max(...waits.map((wait) => wait.startOffset + wait.length));
+  const restarts = chooseRestarts(waits, options.restarts, 0.225, Math.floor(options.staggerSeconds / 4), [
+    [latestEnd - FAULT_LEAD_SECONDS, Infinity],
+  ]);
   const segments = [];
   const bounds = [0, ...restarts.boundaries];
   for (let index = 0; index < bounds.length; index++) {

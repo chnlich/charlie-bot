@@ -4,8 +4,19 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { buildPlan, chooseRestarts, kindCounts, loadW2Waits, pickLengths, FAULT_LEAD_SECONDS, KIND_SHARES, RESTART_SHARE_RANGE } from './plan.mjs';
-import { intervalInForceMs, lengthBin, PROBE_INTERVALS_SECONDS } from './report.mjs';
+import {
+  buildPlan,
+  chooseRestarts,
+  crossingAt,
+  FAULT_LEAD_SECONDS,
+  kindCounts,
+  KIND_SHARES,
+  loadW2Waits,
+  pickLengths,
+  RESTART_SHARE_RANGE,
+} from './plan.mjs';
+import { faultAllowanceMs, lengthBin } from './report.mjs';
+import { intervalInForceMs, PROBE_INTERVALS_SECONDS, predictedFireSeconds } from './probe-schedule.mjs';
 
 const PLAN_OPTIONS = Object.freeze({
   waits: 100,
@@ -53,14 +64,36 @@ test('the restart boundaries put the crossed share inside the production range',
   }
 });
 
-test('a boundary restarts a server with waits in flight, not an idle one', () => {
-  // Ten waits start one after another and each runs for 300 s: a late boundary crosses two of them, a fifth of the
-  // plan, which is the share the production window showed.
+test('a restart crosses a wait until its predicted fire, not only while its job runs', () => {
+  // A 100 s job registers at 0 and ends at 100. Today's schedule probes at 0, 15, 40, 85 and 170 with mean noise, so a
+  // restart at 120 s finds the job finished and the wake still pending.
+  const wait = { index: 0, startOffset: 0, length: 100 };
+  assert.equal(predictedFireSeconds(0, 100), 170);
+  assert.equal(crossingAt([wait], 120).length, 1);
+  assert.equal(crossingAt([wait], 180).length, 0);
+});
+
+test('a boundary crosses two of ten waits, a fifth of the plan, not an idle server', () => {
+  // Ten waits start every 10 s and run for 300 s, so each wake is predicted at 335 s after its registration. The first
+  // restart that crosses exactly two waits is the one the planner takes for a 20% share.
   const waits = Array.from({ length: 10 }, (_, index) => ({ index, startOffset: index * 10, length: 300 }));
   const { boundaries, share } = chooseRestarts(waits, 1, 0.225, 0);
   assert.equal(boundaries.length, 1);
-  assert.ok(boundaries[0] > 300 && boundaries[0] < 400);
+  assert.equal(crossingAt(waits, boundaries[0]).length, 2);
   assert.ok(share >= RESTART_SHARE_RANGE[0] && share <= RESTART_SHARE_RANGE[1], `share ${share}`);
+});
+
+test('a faulted wake is allowed the length of the union of the faults it overlaps', () => {
+  const cut = { fromMs: 1_000, toMs: 61_000 };
+  const hold = { fromMs: 1_000, toMs: 301_000 };
+  const later = { fromMs: 100_000, toMs: 160_000 };
+  // Faults that start together count once, at the longer one's length.
+  assert.equal(faultAllowanceMs([cut, hold], 0, 500_000), 300_000);
+  // Separate faults add up.
+  assert.equal(faultAllowanceMs([cut, later], 0, 500_000), 120_000);
+  // A wake that ends before a fault starts, or starts after it ends, is allowed nothing.
+  assert.equal(faultAllowanceMs([cut, hold], 400_000, 500_000), 0);
+  assert.equal(faultAllowanceMs([cut, hold], 0, 1_000), 0);
 });
 
 test('both faults start together after every registration and inside a running wait', () => {
@@ -71,6 +104,25 @@ test('both faults start together after every registration and inside a running w
   for (const fault of plan.faults) {
     assert.equal(fault.startOffset, Math.max(lastStart, lastRestart) + FAULT_LEAD_SECONDS);
     const wait = plan.waits.find((item) => item.index === fault.waitIndex);
+    assert.ok(wait.startOffset < fault.startOffset && fault.startOffset < wait.startOffset + wait.length);
+  }
+});
+
+test('the smoke plan takes one restart and both faults land inside a running job', () => {
+  // The default seed's ten-wait plan takes no restart, so the smoke names the first seed after it that does.
+  const plan = buildPlan({
+    waits: 10,
+    seed: 20261112,
+    staggerSeconds: 120,
+    restarts: 1,
+    faults: ['cut', 'hold'],
+    cutSeconds: 60,
+    holdSeconds: 120,
+    lengthCap: 300,
+  });
+  assert.equal(plan.restarts.length, 1);
+  for (const fault of plan.faults) {
+    const wait = plan.waits[fault.waitIndex];
     assert.ok(wait.startOffset < fault.startOffset && fault.startOffset < wait.startOffset + wait.length);
   }
 });

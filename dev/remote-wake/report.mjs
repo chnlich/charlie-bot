@@ -4,18 +4,18 @@
 // time is the record the job wrote inside the container, so it does not depend on the server code under test.
 // A wake that never fired has no lag and is reported with its last status.
 //
-// The probe schedule bound is what today's back-off allows: the wake comes at most one probe interval after
-// max(job end, the waiter's effective start), plus the 10 s of interval noise. The effective start is the
-// creation time, unless a server restart happened after it, in which case it is the restarted server's start.
+// The schedule bound is what today's probe schedule allows (probe-schedule.mjs). The schedule starts at the waiter's
+// effective start: the registration, or the last server restart after it. A wake's bound is one probe interval in
+// force at its fire, plus the probe noise, plus the length of the fault windows it overlaps, plus the time from
+// max(job end, registration) to the effective start, because the schedule did not run before a restart.
 //
 // Exit: 0 the run's gate passed; 3 the gate failed; 1 the report could not be built.
 
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const PROBE_INTERVALS_SECONDS = Object.freeze([10, 20, 40, 80, 160, 320]);
-export const PROBE_PLATEAU_SECONDS = 600;
-export const PROBE_NOISE_SECONDS = 10;
+import { intervalInForceMs, PROBE_NOISE_SECONDS } from './probe-schedule.mjs';
+
 export const LENGTH_BINS = Object.freeze([
   { label: '0-70', max: 70 },
   { label: '70-310', max: 310 },
@@ -46,17 +46,22 @@ function isoToMs(text) {
   return text === null || text === undefined ? null : Date.parse(text);
 }
 
-// The interval in force `elapsedMs` after the waiter's effective start: the length of the sleep that ends at the first
-// probe after that moment. The probe noise is not part of this interval; the caller adds it to the bound once.
-export function intervalInForceMs(elapsedMs) {
-  let cumulative = 0;
-  for (const interval of PROBE_INTERVALS_SECONDS) {
-    cumulative += interval * 1000;
-    if (elapsedMs <= cumulative) {
-      return interval * 1000;
+// The delay a fault can add to a wake: the length of the union of the fault windows that overlap the wake's window
+// [created, fired]. Faults that start together count once, at the longer one's length.
+export function faultAllowanceMs(faultWindows, createdMs, firedMs) {
+  const touching = faultWindows
+    .filter((window) => createdMs < window.toMs && (firedMs === null || firedMs > window.fromMs))
+    .sort((a, b) => a.fromMs - b.fromMs);
+  let total = 0;
+  let coveredUntil = Number.NEGATIVE_INFINITY;
+  for (const window of touching) {
+    const from = Math.max(window.fromMs, coveredUntil);
+    if (window.toMs > from) {
+      total += window.toMs - from;
     }
+    coveredUntil = Math.max(coveredUntil, window.toMs);
   }
-  return PROBE_PLATEAU_SECONDS * 1000;
+  return total;
 }
 
 export function lengthBin(length) {
@@ -149,15 +154,21 @@ function countSshProcesses(logsDir, build, triggerId) {
   return { logged, count };
 }
 
-function sshdConnections(groundTruth, user, fromMs, toMs) {
-  return groundTruth.sshd_connections.filter(
+// The container sshd's authenticated connections for one build's user between a wake's request and its fire. A
+// connection a fault holds or cuts before it authenticates has no line in the sshd log, so it is not counted.
+function authenticatedConnections(groundTruth, user, fromMs, toMs) {
+  return groundTruth.authenticated_connections.filter(
     (entry) => entry.user === user && entry.at_ms >= fromMs && entry.at_ms <= toMs,
   ).length;
 }
 
 export function buildReport({ runDir, gate }) {
   const plan = readJson(path.join(runDir, 'plan.json'), null);
-  const groundTruth = readJson(path.join(runDir, 'ground-truth.json'), { jobs: {}, sshd_connections: [], rtt_ms: null });
+  const groundTruth = readJson(path.join(runDir, 'ground-truth.json'), {
+    jobs: {},
+    authenticated_connections: [],
+    rtt_ms: null,
+  });
   const meta = readJson(path.join(runDir, 'meta.json'), {});
   if (plan === null) {
     throw new Error(`no plan.json in ${runDir}`);
@@ -194,12 +205,10 @@ export function buildReport({ runDir, gate }) {
       const restartOffsetMs = Math.max(0, effectiveStartMs - Math.max(endMs ?? createdMs, createdMs));
       const elapsedMs = firedMs === null ? null : firedMs - effectiveStartMs;
       const intervalMs = elapsedMs === null ? null : intervalInForceMs(elapsedMs);
-      const intervalBoundMs = intervalMs === null ? null : intervalMs + PROBE_NOISE_SECONDS * 1000;
-      const boundMs = intervalBoundMs === null ? null : intervalBoundMs + restartOffsetMs;
       // The faults are global to the container's sshd, so every wake whose window touches a fault window is affected.
-      const faulted = faultWindows.some(
-        (window) => createdMs < window.toMs && (firedMs === null || firedMs > window.fromMs),
-      );
+      const faultMs = faultAllowanceMs(faultWindows, createdMs, firedMs);
+      const intervalBoundMs = intervalMs === null ? null : intervalMs + PROBE_NOISE_SECONDS * 1000 + faultMs;
+      const boundMs = intervalBoundMs === null ? null : intervalBoundMs + restartOffsetMs;
       // The verify-on-create connection is made after the registration request, so a wake's connection count starts at
       // the recorded request time, not at the server's creation time a few seconds later.
       const requestedMs = isoToMs(registration.registered_at);
@@ -214,26 +223,37 @@ export function buildReport({ runDir, gate }) {
         fire_reason: fireReason,
         lag_ms: lagMs,
         schedule_interval_ms: intervalMs,
+        fault_allowance_ms: faultMs,
+        restart_offset_ms: restartOffsetMs,
         interval_bound_ms: intervalBoundMs,
         schedule_bound_ms: boundMs,
         within_interval: lagMs !== null && intervalBoundMs !== null && lagMs <= intervalBoundMs,
         within_bound: lagMs !== null && boundMs !== null && lagMs <= boundMs,
-        faulted,
+        faulted: faultMs > 0,
         ssh_processes: logged ? count : null,
-        sshd_connections:
+        authenticated_connections:
           firedMs === null
             ? null
-            : sshdConnections(groundTruth, build === 'before' ? meta.ssh_users?.before : meta.ssh_users?.after, requestedMs, firedMs),
+            : authenticatedConnections(groundTruth, meta.ssh_users?.[build], requestedMs, firedMs),
       });
     }
   }
   rows.sort((a, b) => a.wait - b.wait || a.build.localeCompare(b.build));
 
-  const summary = { run_dir: runDir, gate, rtt_ms: groundTruth.rtt_ms ?? null, restarts: plan.restarts, faults: faultWindows.map((window) => ({ kind: window.kind, wait: window.waitIndex })), builds: {} };
+  const summary = {
+    run_dir: runDir,
+    gate,
+    rtt_ms: groundTruth.rtt_ms ?? null,
+    restarts: plan.restarts,
+    restart_share_planned: plan.restartShare,
+    faults: faultWindows.map((window) => ({ kind: window.kind, wait: window.waitIndex })),
+    builds: {},
+  };
   for (const build of ['before', 'after']) {
     const buildRows = rows.filter((row) => row.build === build);
     const lagged = buildRows.filter((row) => row.lag_ms !== null).map((row) => row.lag_ms);
     const completed = buildRows.filter((row) => row.fire_reason === 'completed');
+    const crossedCount = buildRows.filter((row) => row.crossed_restart).length;
     const summaryBuild = {
       waits: buildRows.length,
       completed: completed.length,
@@ -244,11 +264,12 @@ export function buildReport({ runDir, gate }) {
         crossed: stats(buildRows.filter((row) => row.crossed_restart && row.lag_ms !== null).map((row) => row.lag_ms)),
         not_crossed: stats(buildRows.filter((row) => !row.crossed_restart && row.lag_ms !== null).map((row) => row.lag_ms)),
       },
+      restart_share: { crossed: crossedCount, share: buildRows.length === 0 ? null : crossedCount / buildRows.length },
       ssh_processes: {
         logged: buildRows.some((row) => row.ssh_processes !== null),
         total: buildRows.reduce((sum, row) => sum + (row.ssh_processes ?? 0), 0),
       },
-      sshd_connections: buildRows.reduce((sum, row) => sum + (row.sshd_connections ?? 0), 0),
+      authenticated_connections: buildRows.reduce((sum, row) => sum + (row.authenticated_connections ?? 0), 0),
       within_interval: buildRows.filter((row) => row.within_interval).length,
       within_bound: buildRows.filter((row) => row.within_bound).length,
       outside_bound: buildRows.filter((row) => row.lag_ms !== null && !row.within_bound).map((row) => ({ wait: row.wait, lag_ms: row.lag_ms, bound_ms: row.schedule_bound_ms, faulted: row.faulted, crossed_restart: row.crossed_restart })),
@@ -300,10 +321,7 @@ function evaluateGate(summary, rows, gate) {
       }
     }
     for (const row of rows) {
-      // A fault window is an outage on the container's link: today's server cannot probe through it either, so the
-      // schedule bound does not apply to a wake it touches. The wake must still fire completed, which the earlier
-      // check requires.
-      if (row.lag_ms !== null && !row.faulted && !row.within_bound) {
+      if (row.lag_ms !== null && !row.within_bound) {
         failures.push(
           `wait ${row.wait} (${row.build}): lag ${Math.round(row.lag_ms)} ms outside the schedule bound ${row.schedule_bound_ms} ms`,
         );
@@ -326,12 +344,28 @@ function formatMs(value) {
   return value === null || value === undefined ? '-' : `${(value / 1000).toFixed(1)}s`;
 }
 
+function formatPercent(share) {
+  return share === null || share === undefined ? '-' : `${(share * 100).toFixed(0)}%`;
+}
+
 export function formatReport(summary) {
   const lines = [];
   lines.push(`remote-wake run ${summary.run_dir}`);
   lines.push(`rtt=${summary.rtt_ms} ms restarts=${summary.restarts.length} faults=${summary.faults.map((fault) => `${fault.kind}@wait${fault.wait}`).join(',')}`);
   lines.push('');
-  const header = ['build', 'waits', 'completed', 'mean', 'median', 'p90', 'max', 'interval/bound-ok', 'ssh-proc', 'tcp-conn'];
+  lines.push(
+    `restart share: planned ${formatPercent(summary.restart_share_planned)}, ` +
+      ['before', 'after']
+        .map((build) => {
+          const item = summary.builds[build].restart_share;
+          return `${build} measured ${formatPercent(item.share)} (${item.crossed}/${summary.builds[build].waits})`;
+        })
+        .join(', '),
+  );
+  const header = [
+    'build', 'waits', 'completed', 'mean', 'median', 'p90', 'max', 'within-interval/within-bound/n', 'ssh-proc',
+    'auth-conn',
+  ];
   lines.push(header.join('\t'));
   for (const build of ['before', 'after']) {
     const item = summary.builds[build];
@@ -346,7 +380,7 @@ export function formatReport(summary) {
         formatMs(item.lag.max_ms),
         `${item.within_interval}/${item.within_bound}/${item.lag.n}`,
         item.ssh_processes.logged ? item.ssh_processes.total : 'not-logged',
-        item.sshd_connections,
+        item.authenticated_connections,
       ].join('\t'),
     );
   }
@@ -388,8 +422,8 @@ export function formatReport(summary) {
 export function rowsToTsv(rows) {
   const columns = [
     'build', 'wait', 'kind', 'length_s', 'length_bin', 'crossed_restart', 'fire_reason', 'lag_ms',
-    'schedule_interval_ms', 'interval_bound_ms', 'schedule_bound_ms', 'within_interval', 'within_bound', 'faulted',
-    'ssh_processes', 'sshd_connections',
+    'schedule_interval_ms', 'fault_allowance_ms', 'restart_offset_ms', 'interval_bound_ms', 'schedule_bound_ms',
+    'within_interval', 'within_bound', 'faulted', 'ssh_processes', 'authenticated_connections',
   ];
   const lines = [columns.join('\t')];
   for (const row of rows) {

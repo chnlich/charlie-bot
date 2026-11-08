@@ -164,7 +164,7 @@ function groundTruth(container, users) {
     }
     connections.push({ at_ms: Number(match[1]) * 1000, user: match[2], source_port: Number(match[3]) });
   }
-  return { jobs, sshd_connections: connections };
+  return { jobs, authenticated_connections: connections };
 }
 
 async function main() {

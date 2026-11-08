@@ -598,7 +598,7 @@ pub struct MemberWindow {
 #[derive(Clone, Debug, PartialEq)]
 pub struct MemberReading {
   pub windows: Vec<MemberWindow>,
-  /// The reset of the member's weekly (longest) window, kept apart from the limiting window for member ordering.
+  /// The reset of the member's weekly (longest) window, when the provider reports one.
   pub weekly_resets_at: Option<UtcDateTime>,
   /// Every healthy login or window sits at or above the 90% line and the earliest reset is beyond the horizon.
   pub near_exhaustion: bool,

@@ -1388,11 +1388,12 @@ impl Store {
     metadata.created_by_event = Some(EventRef { session_id: task_id.clone(), event_id: Some(created_event_id) });
 
     self.publish_task_node(&metadata, &created_event)?;
-    self.invalidate_cache(&task_id);
+    self.invalidate_metadata_cache_entry(&task_id);
     self.invalidate_tree_index();
     let fresh = self
       .read_metadata_fresh(&task_id)?
       .ok_or_else(|| StoreError::new(format!("created task {task_id} is missing")))?;
+    self.update_session_metadata_value_index(&fresh);
     // The creation fact is published by the rename above, which appends no control fact. The signal follows the
     // publication and the index invalidation, so a receiver can read the node at once (`task_sessions.create_task`).
     self.notify_task_tree_changed(&task_id, Some(event_types::TASK_CREATED)).await;

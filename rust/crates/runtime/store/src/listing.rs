@@ -9,7 +9,7 @@ use charliebot_core::timefmt;
 use serde_json::Value;
 
 use crate::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
-use crate::store::{CachedListing, CachedSortedListing, DirNames};
+use crate::store::{CachedListing, CachedSortedListing, DirNames, SessionMetadataValueIndex};
 use crate::{Store, StoreError, StoreResult};
 
 /// One read-only view of session metadata and the sequence fields derived for its rows.
@@ -59,6 +59,40 @@ pub struct ArchivedPage {
 const LISTINGS_SWEEP_INTERVAL: Duration = Duration::from_secs(10);
 
 impl Store {
+  /// Count active sessions by a backend's string metadata field, from the store's indexed metadata.
+  pub fn active_session_string_metadata_counts(
+    &self,
+    backend: &str,
+    field: &str,
+  ) -> StoreResult<HashMap<String, usize>> {
+    let mut index = self.session_metadata_value_index.lock().expect("session metadata index mutex is not poisoned");
+    if index.is_none() {
+      let mut loaded = SessionMetadataValueIndex::default();
+      for meta in self.load_session_metas(Some(SessionStatus::Active))? {
+        loaded.update(&meta);
+      }
+      *index = Some(loaded);
+    }
+    let index = index.as_ref().expect("the session metadata index is initialized");
+    Ok(index.counts.get(&(backend.to_string(), field.to_string())).cloned().unwrap_or_default())
+  }
+
+  pub(crate) fn update_session_metadata_value_index(&self, meta: &SessionMetadata) {
+    if let Some(index) =
+      self.session_metadata_value_index.lock().expect("session metadata index mutex is not poisoned").as_mut()
+    {
+      index.update(meta);
+    }
+  }
+
+  pub(crate) fn remove_session_from_metadata_value_index(&self, session_id: &str) {
+    if let Some(index) =
+      self.session_metadata_value_index.lock().expect("session metadata index mutex is not poisoned").as_mut()
+    {
+      index.remove(session_id);
+    }
+  }
+
   /// Read all metadata rows, optionally restricted to one stored status.
   ///
   /// Each filter's result is memoized on the listings revision, the sessions root's

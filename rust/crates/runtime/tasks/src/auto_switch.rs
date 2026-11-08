@@ -40,7 +40,7 @@ pub async fn switch_member(
   let availability = backend_availability::backend_availability(features)?;
   availability.record(from, failure.resets_at, REASON_QUOTA_ERROR, &failure.message)?;
   let now = UtcDateTime::now();
-  let Some(member) = model_pool::select_member(&cfg, &features.registry, &availability, &[], now)? else {
+  let Some(member) = model_pool::select_member(features, &cfg, &features.registry, &availability, &[], now)? else {
     return Ok(AutoSwitch::Exhausted(model_pool::all_exhausted_message(features, &cfg)?));
   };
   let recovers_at = availability.out_until_minutes(from);

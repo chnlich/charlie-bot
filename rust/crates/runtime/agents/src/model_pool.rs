@@ -6,6 +6,8 @@
 //! out is skipped by the other. The module also owns the `auto_member` session slot and the turn-start decision of a
 //! session whose backend is `auto`.
 
+use std::collections::HashMap;
+
 use anyhow::anyhow;
 use charliebot_core::config::{AUTO_BACKEND_ID, AutoBilling, AutoConfig, AutoMember, BackendOption, CharlieBotConfig};
 use charliebot_core::{event_types, metadata_slot};
@@ -26,9 +28,9 @@ pub const AUTO_MEMBER_FIELD: &str = "auto_member";
 /// How a pool picks the member a call runs on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PoolRule {
-  /// The highest-priority selectable member: subscriptions below the 90% line, ordered by their weekly reset;
-  /// subscriptions at or above the line as the last resort; pay-as-you-go in list order only when no subscription
-  /// is selectable.
+  /// Subscriptions below the 90% line, then all subscriptions as a last resort; the caller's load counts order each
+  /// subscription tier, with configured order breaking ties. Pay-as-you-go follows only when no subscription is
+  /// selectable.
   Priority,
   /// The first selectable member after the rotation position, which advances past the chosen member.
   Rotate,
@@ -48,6 +50,17 @@ pub struct PoolMember {
 pub struct ModelPool {
   pub rule: PoolRule,
   pub members: Vec<PoolMember>,
+}
+
+struct SelectionInput<'a> {
+  cfg: &'a CharlieBotConfig,
+  registry: &'a Registry,
+  availability: &'a BackendAvailability,
+  pool: &'a ModelPool,
+  position: Option<&'a mut usize>,
+  excluded: &'a [String],
+  now: UtcDateTime,
+  member_loads: &'a HashMap<String, usize>,
 }
 
 /// The priority pool that `backends.auto` configures, or the refusal that names the missing section.
@@ -82,7 +95,7 @@ pub(crate) fn ordered_pool(backends: &[String]) -> ModelPool {
 /// usage reading does not say it is exhausted. A member whose backend type exposes no reading is selectable. A
 /// [`PoolRule::Priority`] pool orders its selectable members; a [`PoolRule::Rotate`] pool walks from `position` in
 /// member order and advances `position` past the member it selects, so `position` is required for a rotate pool.
-pub fn select(
+pub(crate) fn select(
   cfg: &CharlieBotConfig,
   registry: &Registry,
   availability: &BackendAvailability,
@@ -91,8 +104,22 @@ pub fn select(
   excluded: &[String],
   now: UtcDateTime,
 ) -> anyhow::Result<Option<PoolMember>> {
+  select_with_loads(SelectionInput {
+    cfg,
+    registry,
+    availability,
+    pool,
+    position,
+    excluded,
+    now,
+    member_loads: &HashMap::new(),
+  })
+}
+
+fn select_with_loads(input: SelectionInput<'_>) -> anyhow::Result<Option<PoolMember>> {
+  let SelectionInput { cfg, registry, availability, pool, position, excluded, now, member_loads } = input;
   match pool.rule {
-    PoolRule::Priority => select_priority(cfg, registry, availability, pool, excluded, now),
+    PoolRule::Priority => select_priority(cfg, registry, availability, pool, excluded, now, member_loads),
     PoolRule::Rotate => {
       let position = position.ok_or_else(|| anyhow!("a rotate pool needs the rotation position to advance"))?;
       select_rotate(cfg, registry, availability, pool, position, excluded, now)
@@ -100,7 +127,7 @@ pub fn select(
   }
 }
 
-/// One selectable member with the reading that ordered it.
+/// One selectable member and its quota reading.
 struct Candidate {
   member: PoolMember,
   reading: Option<MemberReading>,
@@ -136,7 +163,7 @@ fn candidate(
   Ok(Some(Candidate { member: member.clone(), reading }))
 }
 
-/// Pick from a priority pool: subscriptions before pay-as-you-go, under-line subscriptions first.
+/// Pick the least-assigned member from the subscription tier that the quota readings allow.
 fn select_priority(
   cfg: &CharlieBotConfig,
   registry: &Registry,
@@ -144,6 +171,7 @@ fn select_priority(
   pool: &ModelPool,
   excluded: &[String],
   now: UtcDateTime,
+  member_loads: &HashMap<String, usize>,
 ) -> anyhow::Result<Option<PoolMember>> {
   let mut candidates = Vec::new();
   for member in &pool.members {
@@ -163,15 +191,15 @@ fn select_priority(
       .copied()
       .collect::<Vec<_>>();
     let tier = if under_line.is_empty() { subscriptions } else { under_line };
-    let mut with_reset = tier
-      .iter()
-      .filter_map(|candidate| candidate.reading.as_ref()?.weekly_resets_at.map(|reset| (reset, *candidate)))
-      .collect::<Vec<_>>();
-    with_reset.sort_by_key(|(reset, _)| *reset);
-    if let Some((_, candidate)) = with_reset.first() {
-      return Ok(Some(candidate.member.clone()));
-    }
-    return Ok(tier.first().map(|candidate| candidate.member.clone()));
+    return Ok(
+      tier
+        .iter()
+        .enumerate()
+        .min_by_key(|(config_order, candidate)| {
+          (member_loads.get(&candidate.member.backend).copied().unwrap_or_default(), *config_order)
+        })
+        .map(|(_, candidate)| candidate.member.clone()),
+    );
   }
 
   Ok(
@@ -319,15 +347,27 @@ fn is_out(availability: &BackendAvailability, backend_id: &str, now: UtcDateTime
 
 /// Select the member a turn of a session on `auto` runs on, or `None` when no member is selectable.
 ///
-/// The Auto set is the priority pool that `backends.auto` configures, with no exclusion and no rotation position.
+/// The Auto set uses the least-assigned selectable subscription under the 90% line, then the least-assigned
+/// selectable subscription overall; configured order breaks ties. Pay-as-you-go keeps its existing last-resort rule.
 pub fn select_member(
+  features: &FeatureContext,
   cfg: &CharlieBotConfig,
   registry: &Registry,
   availability: &BackendAvailability,
   excluded: &[String],
   now: UtcDateTime,
 ) -> anyhow::Result<Option<PoolMember>> {
-  select(cfg, registry, availability, &auto_pool(cfg)?, None, excluded, now)
+  let member_loads = features.store.active_session_string_metadata_counts(AUTO_BACKEND_ID, AUTO_MEMBER_FIELD)?;
+  select_with_loads(SelectionInput {
+    cfg,
+    registry,
+    availability,
+    pool: &auto_pool(cfg)?,
+    position: None,
+    excluded,
+    now,
+    member_loads: &member_loads,
+  })
 }
 
 /// What a turn start decides for a session, before it records anything.
@@ -405,7 +445,7 @@ fn decide_turn(
     return decide_keep_or_switch(features, cfg, auto, &availability, current, now);
   }
 
-  let Some(selected) = select_member(cfg, &features.registry, &availability, &[], now)? else {
+  let Some(selected) = select_member(features, cfg, &features.registry, &availability, &[], now)? else {
     return Ok(TurnDecision::Exhausted(all_exhausted_message(features, cfg)?));
   };
   // The first assignment is not a change between members, so it leaves no failover event. A current member that is out
@@ -426,7 +466,7 @@ fn decide_keep_or_switch(
   current: &str,
   now: UtcDateTime,
 ) -> anyhow::Result<TurnDecision> {
-  let Some(selected) = select_member(cfg, &features.registry, availability, &[], now)? else {
+  let Some(selected) = select_member(features, cfg, &features.registry, availability, &[], now)? else {
     // The member is selectable by its out record but spent by its reading, and no other member is left.
     return Ok(TurnDecision::Exhausted(all_exhausted_message(features, cfg)?));
   };
@@ -568,7 +608,7 @@ mod tests {
     }
   }
 
-  /// The Auto set's reading of a synthetic member: the canned windows the selection tests order.
+  /// The Auto set's reading of a synthetic member used to test selection tiers.
   fn test_reading(option: &BackendOption, now: UtcDateTime) -> Option<MemberReading> {
     let reset = |minutes: i64| Some(UtcDateTime::from(now.into_inner() + time::Duration::minutes(minutes)));
     let weekly = |utilization: f64, minutes: i64| MemberReading {
@@ -578,9 +618,7 @@ mod tests {
       exhausted: false,
     };
     match option.id.as_str() {
-      // 20% left, weekly reset in 6 hours.
       "chatgpt" => Some(weekly(0.80, 360)),
-      // 51% left, weekly reset in 2 days.
       "claude-sub" => Some(weekly(0.49, 2_880)),
       // Near exhaustion: 95% used with a reset beyond the 45-minute horizon.
       "near" => Some(MemberReading { near_exhaustion: true, ..weekly(0.95, 180) }),
@@ -632,6 +670,24 @@ backends:
       - {backend: payg-a, billing: payg}
 ";
 
+  const ROTATION_CONFIG: &str = "\
+backends:
+  options:
+    - {id: member-a, label: Member A, type: synthetic, model: model-a}
+    - {id: member-b, label: Member B, type: synthetic, model: model-b}
+    - {id: member-c, label: Member C, type: synthetic, model: model-c}
+    - {id: member-d, label: Member D, type: synthetic, model: model-d}
+    - {id: member-e, label: Member E, type: synthetic, model: model-e}
+  auto:
+    label: Auto
+    members:
+      - {backend: member-a, billing: subscription}
+      - {backend: member-b, billing: subscription}
+      - {backend: member-c, billing: subscription}
+      - {backend: member-d, billing: subscription}
+      - {backend: member-e, billing: subscription}
+";
+
   fn fixture() -> (tempfile::TempDir, Arc<FeatureContext>) {
     fixture_with(CONFIG)
   }
@@ -665,7 +721,7 @@ backends:
     features.config.get().unwrap()
   }
 
-  async fn auto_session(features: &FeatureContext, request_id: &str) -> SessionMetadata {
+  async fn session_with_backend(features: &FeatureContext, request_id: &str, backend: &str) -> SessionMetadata {
     features
       .store
       .create_task(
@@ -675,7 +731,7 @@ backends:
           profile: charliebot_store::metadata::TaskProfile::Manager,
           task: None,
           name: Some("Auto session".to_string()),
-          backend: Some(AUTO_BACKEND_ID.to_string()),
+          backend: Some(backend.to_string()),
           group: None,
           session_id: None,
         },
@@ -684,6 +740,10 @@ backends:
       )
       .await
       .unwrap()
+  }
+
+  async fn auto_session(features: &FeatureContext, request_id: &str) -> SessionMetadata {
+    session_with_backend(features, request_id, AUTO_BACKEND_ID).await
   }
 
   fn availability(features: &FeatureContext) -> Arc<BackendAvailability> {
@@ -712,18 +772,18 @@ backends:
   }
 
   #[tokio::test]
-  async fn selection_orders_by_weekly_reset_then_config_order_then_pay_as_you_go() {
+  async fn subscription_tiers_precede_pay_as_you_go() {
     let (_home, features) = fixture();
     let cfg = loaded_cfg(&features);
     let availability = availability(&features);
     let now = UtcDateTime::now();
-    let pool = auto_pool(&cfg).unwrap();
     let pick = |excluded: &[&str]| {
       let excluded = excluded.iter().map(|id| (*id).to_string()).collect::<Vec<_>>();
-      select(&cfg, &features.registry, &availability, &pool, None, &excluded, now).unwrap().map(|member| member.backend)
+      select_member(&features, &cfg, &features.registry, &availability, &excluded, now)
+        .unwrap()
+        .map(|member| member.backend)
     };
 
-    // Trade-off 3's example: ChatGPT (20% left, 6h), Claude (51%, 2 days), Devin (no reading).
     assert_eq!(pick(&[]), Some("chatgpt".to_string()));
     assert_eq!(pick(&["chatgpt"]), Some("claude-sub".to_string()));
     assert_eq!(pick(&["chatgpt", "claude-sub"]), Some("devin".to_string()));
@@ -734,13 +794,91 @@ backends:
   }
 
   #[tokio::test]
+  async fn five_members_rotate_by_least_active_auto_assignments() {
+    let (_home, features) = fixture_with(ROTATION_CONFIG);
+    let cfg = loaded_cfg(&features);
+    let expected = ["member-a", "member-b", "member-c", "member-d", "member-e", "member-a"];
+
+    for (index, expected_member) in expected.into_iter().enumerate() {
+      let mut meta = auto_session(&features, &format!("auto-rotation-{index}")).await;
+      let gate_member = turn_member(&features, &cfg, &meta).unwrap();
+      assert_eq!(gate_member.as_deref(), Some(expected_member));
+
+      start_turn(&features, &cfg, &mut meta).await.unwrap();
+      assert_eq!(current_member_id(&cfg, &meta).unwrap(), expected_member);
+    }
+  }
+
+  #[tokio::test]
+  async fn archived_auto_and_other_backend_sessions_do_not_add_member_load() {
+    let (_home, features) = fixture_with(ROTATION_CONFIG);
+    let cfg = loaded_cfg(&features);
+    features.store.active_session_string_metadata_counts(AUTO_BACKEND_ID, AUTO_MEMBER_FIELD).unwrap();
+
+    let active = auto_session(&features, "auto-load-active").await;
+    features
+      .store
+      .update_slot_fields(&active.id, OWNER, Map::from_iter([(AUTO_MEMBER_FIELD.to_string(), json!("member-a"))]))
+      .await
+      .unwrap();
+
+    let archived = auto_session(&features, "auto-load-archived").await;
+    features
+      .store
+      .update_slot_fields(&archived.id, OWNER, Map::from_iter([(AUTO_MEMBER_FIELD.to_string(), json!("member-b"))]))
+      .await
+      .unwrap();
+    features.store.archive_session(&archived.id).await.unwrap();
+
+    let other_backend = session_with_backend(&features, "auto-load-other-backend", "member-a").await;
+    features
+      .store
+      .update_slot_fields(
+        &other_backend.id,
+        OWNER,
+        Map::from_iter([(AUTO_MEMBER_FIELD.to_string(), json!("member-b"))]),
+      )
+      .await
+      .unwrap();
+
+    let counts = features.store.active_session_string_metadata_counts(AUTO_BACKEND_ID, AUTO_MEMBER_FIELD).unwrap();
+    assert_eq!(counts.get("member-a"), Some(&1));
+    assert!(!counts.contains_key("member-b"));
+
+    let availability = availability(&features);
+    let selected =
+      select_member(&features, &cfg, &features.registry, &availability, &[], UtcDateTime::now()).unwrap().unwrap();
+    assert_eq!(selected.backend, "member-b");
+  }
+
+  #[tokio::test]
+  async fn under_line_subscriptions_win_over_a_less_assigned_near_exhausted_member() {
+    let (_home, features) = fixture();
+    let cfg = loaded_cfg(&features);
+    for (index, member) in ["chatgpt", "chatgpt", "claude-sub", "devin"].into_iter().enumerate() {
+      let session = auto_session(&features, &format!("auto-load-under-line-{index}")).await;
+      features
+        .store
+        .update_slot_fields(&session.id, OWNER, Map::from_iter([(AUTO_MEMBER_FIELD.to_string(), json!(member))]))
+        .await
+        .unwrap();
+    }
+
+    let selected =
+      select_member(&features, &cfg, &features.registry, &availability(&features), &[], UtcDateTime::now())
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.backend, "claude-sub");
+  }
+
+  #[tokio::test]
   async fn an_out_member_is_skipped_and_an_exhausted_reading_is_skipped() {
     let (_home, features) = fixture();
     let cfg = loaded_cfg(&features);
     let availability = availability(&features);
     let now = UtcDateTime::now();
     availability.record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
-    let selected = select_member(&cfg, &features.registry, &availability, &[], now).unwrap().unwrap();
+    let selected = select_member(&features, &cfg, &features.registry, &availability, &[], now).unwrap().unwrap();
     assert_eq!(selected.backend, "claude-sub");
   }
 
@@ -785,7 +923,7 @@ backends:
     // `chatgpt` is a member of the priority set and of the rotate pool; one out record covers both.
     availability.record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
 
-    let selected = select_member(&cfg, &features.registry, &availability, &[], now).unwrap().unwrap();
+    let selected = select_member(&features, &cfg, &features.registry, &availability, &[], now).unwrap().unwrap();
     assert_eq!(selected.backend, "claude-sub");
 
     let mut position = 2;
@@ -847,7 +985,7 @@ backends:
     start_turn(&features, &cfg, &mut meta).await.unwrap();
     assert_eq!(meta.extra(AUTO_MEMBER_FIELD), Some(&json!("payg-a")));
 
-    // The subscriptions reset (an expired row): the next turn start returns to the first one.
+    // Their out records expire, so turn start returns the session to the subscription tier.
     let expired = UtcDateTime::from(time::OffsetDateTime::now_utc() - time::Duration::hours(1));
     for member in ["chatgpt", "claude-sub", "near", "devin"] {
       availability.record(member, Some(expired), backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();

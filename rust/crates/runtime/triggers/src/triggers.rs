@@ -3454,6 +3454,7 @@ mod tests {
     assert_eq!(end_record::zone_seconds("+0000"), Some(0));
     assert_eq!(end_record::zone_seconds("-0700"), Some(-25_200));
     assert_eq!(end_record::zone_seconds("123|RUNNING|0:0"), None);
+    assert_eq!(end_record::zone_seconds(""), None, "a blank line states no zone");
     assert_eq!(end_record::end_source_label(None), "none");
     assert_eq!(end_record::end_source_label(Some(EndSource::SacctEnd)), "sacct_end");
     assert_eq!(end_record::end_source_label(Some(EndSource::ExitFileMtime)), "exit_file_mtime");

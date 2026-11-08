@@ -205,7 +205,7 @@ pub fn parse_epoch_ns(text: &str) -> Option<i128> {
 
 /// One `date +%z` output, as seconds east of UTC.
 pub fn zone_seconds(text: &str) -> Option<i32> {
-  let (sign, digits) = text.split_at(1);
+  let (sign, digits) = text.split_at_checked(1)?;
   let sign = match sign {
     "+" => 1,
     "-" => -1,

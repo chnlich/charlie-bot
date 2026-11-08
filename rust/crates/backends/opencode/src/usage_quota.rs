@@ -114,7 +114,7 @@ fn read_member(
   option: &BackendOption,
   now: UtcDateTime,
 ) -> anyhow::Result<Option<MemberReading>> {
-  if option.billing != Some(PoolBilling::Subscription) {
+  if option.billing != Some(PoolBilling::Subscription) || !option.model.starts_with("opencode-go/") {
     return Ok(None);
   }
   let current = state.current.lock().expect("the OpenCode quota state is not poisoned");
@@ -208,5 +208,32 @@ mod tests {
     assert_eq!(entry[PANEL_WINDOWS][1][PANEL_UTILIZATION], 3.0);
     assert!(entry[PANEL_WINDOWS][2].get(PANEL_WINDOW_MINUTES).is_none());
     assert_eq!(entry[PANEL_WINDOWS][2][PANEL_WINDOW_NAME], "每月");
+  }
+
+  #[test]
+  fn a_subscription_on_another_provider_does_not_use_go_quota() {
+    let now = UtcDateTime::parse("2026-11-07T08:19:00Z").unwrap();
+    let state = OpenCodeQuotaState::default();
+    state.current.lock().unwrap().reading = Some(
+      parse_usage(
+        &json!({"usage": {
+          "rolling": {"percent": 0}, "weekly": {"percent": 3}, "monthly": {"percent": 97}
+        }}),
+        now,
+      )
+      .unwrap(),
+    );
+    let mut option = BackendOption {
+      id: "member".into(),
+      label: "Member".into(),
+      model: "other/model".into(),
+      prompt_overlay: None,
+      billing: Some(PoolBilling::Subscription),
+      backend_type: "opencode".into(),
+      type_fields: Default::default(),
+    };
+    assert!(read_member(&state, &option, now).unwrap().is_none());
+    option.model = "opencode-go/model".into();
+    assert!(read_member(&state, &option, now).unwrap().unwrap().near_exhaustion);
   }
 }

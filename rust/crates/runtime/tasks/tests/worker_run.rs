@@ -2997,7 +2997,7 @@ const DEVIN_INCIDENT: &str = r#"Error: Agent error: Reached free model rate limi
   "cognition.ai/errorKind": "unavailable",
   "cognition.ai/retryable": true
 }"#;
-const DEVIN_DAILY_RESET: &str = r#"Error: Agent error: Your limit will reset in 15 hours 42 minutes (at Nov 8 00:01 UTC).: {
+const DEVIN_DAILY_RESET: &str = r#"Error: Agent error: Reached free model rate limit. Upgrade to Max for higher limits, or switch to a different model. Your limit will reset in 15 hours 42 minutes (at Nov 8 00:01 UTC).: {
   "cognition.ai/errorKind": "unavailable",
   "cognition.ai/retryable": true
 }"#;

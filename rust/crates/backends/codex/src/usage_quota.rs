@@ -784,6 +784,29 @@ mod tests {
   }
 
   #[test]
+  fn member_reading_uses_each_windows_own_reset() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join(CODEX_SESSIONS_DIR_NAME);
+    let now = UtcDateTime::parse("2026-10-18T12:00:00Z").unwrap();
+    write_rollout(
+      &sessions,
+      &plan_event(
+        (10.0, 300, epoch("2026-10-18T12:20:00Z")),
+        (97.0, WEEKLY_WINDOW_MINUTES, epoch("2026-10-25T12:00:00Z")),
+      ),
+    );
+    assert!(member_reading(&sessions, now).unwrap().unwrap().near_exhaustion);
+    write_rollout(
+      &sessions,
+      &plan_event(
+        (100.0, 300, epoch("2026-10-18T11:58:00Z")),
+        (10.0, WEEKLY_WINDOW_MINUTES, epoch("2026-10-25T12:00:00Z")),
+      ),
+    );
+    assert!(!member_reading(&sessions, now).unwrap().unwrap().exhausted);
+  }
+
+  #[test]
   fn a_sessions_directory_without_rollouts_reads_none() {
     let root = tempfile::tempdir().unwrap();
     let sessions = root.path().join(CODEX_SESSIONS_DIR_NAME);

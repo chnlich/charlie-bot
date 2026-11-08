@@ -266,7 +266,8 @@ fn parse_status(status: &Value, fetched_at: UtcDateTime) -> anyhow::Result<Map<S
   };
   let daily_reset = reset_timestamp(plan_status.get("dailyQuotaResetAtUnix"))?;
   let weekly_reset = reset_timestamp(plan_status.get("weeklyQuotaResetAtUnix"))?;
-  let plan = status.get("planInfo").and_then(|value| value.get("planName")).and_then(Value::as_str).map(str::to_string);
+  let plan =
+    plan_status.get("planInfo").and_then(|value| value.get("planName")).and_then(Value::as_str).map(str::to_string);
   let mut entry = Map::from_iter([
     (PANEL_PROVIDER.to_string(), Value::String(PROVIDER.to_string())),
     (PANEL_FETCHED_AT.to_string(), Value::String(fetched_at.to_str())),
@@ -355,9 +356,9 @@ mod tests {
       "userStatus": {"planStatus": {
         "dailyQuotaRemainingPercent": 82,
         "dailyQuotaResetAtUnix": "1794096060",
-        "weeklyQuotaResetAtUnix": "1794697260"
-      }},
-      "planInfo": {"planName": "Subscription"}
+        "weeklyQuotaResetAtUnix": "1794697260",
+        "planInfo": {"planName": "Subscription"}
+      }}
     });
 
     let entry = parse_status(&status, fetched_at).unwrap();

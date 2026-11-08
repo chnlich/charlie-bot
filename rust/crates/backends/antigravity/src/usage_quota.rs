@@ -212,26 +212,14 @@ fn parse_usage(response: &Value, models: &[String], fetched_at: UtcDateTime) -> 
   let mut panel_windows = Vec::new();
   let mut seen_groups = HashSet::new();
   for model in models {
-    let mut best_group = None;
-    let mut best_score = 0;
-    let mut ambiguous = false;
-    for group in groups {
-      let score = group_match_score(group, model);
-      if score > best_score {
-        best_group = Some(group);
-        best_score = score;
-        ambiguous = false;
-      } else if score > 0 && score == best_score {
-        ambiguous = true;
-      }
-    }
-    if best_score == 0 {
+    let matches: Vec<_> = groups.iter().filter(|group| group_matches(group, model)).collect();
+    if matches.is_empty() {
       bail!("Antigravity model {model:?} matched no quota group");
     }
-    if ambiguous {
+    if matches.len() > 1 {
       bail!("Antigravity model {model:?} matched multiple quota groups");
     }
-    let group = best_group.expect("a positive group score has a matching group");
+    let group = matches[0];
     let group_name = group.get("name").and_then(Value::as_str).unwrap_or_default();
     let buckets = group
       .get("buckets")
@@ -256,18 +244,16 @@ fn parse_usage(response: &Value, models: &[String], fetched_at: UtcDateTime) -> 
   Ok((entry, by_model))
 }
 
-fn group_match_score(group: &Value, model: &str) -> usize {
+fn group_matches(group: &Value, model: &str) -> bool {
   let model_parts: HashSet<String> = model_tokens(model).into_iter().collect();
-  if model_parts.is_empty() {
-    return 0;
-  }
-  let group_text = ["name", "description"]
-    .into_iter()
-    .filter_map(|key| group.get(key).and_then(Value::as_str))
-    .collect::<Vec<_>>()
-    .join(" ");
-  let group_parts: HashSet<String> = model_tokens(&group_text).into_iter().collect();
-  model_parts.intersection(&group_parts).count()
+  let description = group.get("description").and_then(Value::as_str).unwrap_or_default();
+  let families = description
+    .strip_prefix("Models within this group:")
+    .unwrap_or_else(|| group.get("name").and_then(Value::as_str).unwrap_or_default());
+  families.split(',').any(|family| {
+    let parts = model_tokens(family);
+    !parts.is_empty() && parts.iter().all(|part| model_parts.contains(part))
+  })
 }
 
 fn model_tokens(value: &str) -> Vec<String> {
@@ -382,5 +368,12 @@ mod tests {
       .to_string()
       .contains("series-1")
     );
+  }
+
+  #[test]
+  fn matches_the_listed_family_not_a_shared_word() {
+    let group = json!({"name": "Series Models", "description": "Models within this group: Series Alpha, Series Beta"});
+    assert!(group_matches(&group, "series-alpha-1-high"));
+    assert!(!group_matches(&group, "series-other-1"));
   }
 }

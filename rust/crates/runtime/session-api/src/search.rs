@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use charliebot_core::timefmt;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
@@ -23,6 +24,18 @@ const SEARCH_RESULT_LIMIT: usize = 200;
 const SEARCH_FILE_MEMO_LIMIT: usize = 4096;
 const SEARCH_ROOTS_PER_FILE: usize = 8;
 const SEARCH_MATCH_MEMO_LIMIT: usize = 8;
+/// How long a repeat query answers from the match it just verified, before it re-reads the watched files' signatures.
+///
+/// The check is one `stat` per watched chat file: every active session's file while the answer is short of the cap,
+/// which is 7,160 reads and about 12 ms of CPU on the mock home for an answer of a few bytes. A chat file that an
+/// out-of-band writer changes is seen within this interval, the same bound the store's listing memo puts on its own
+/// out-of-band edits.
+#[cfg(not(test))]
+const SEARCH_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
+/// A test changes a file behind the memo's back and expects the next query to see it, so tests verify on every
+/// repeat unless they name their own interval.
+#[cfg(test)]
+const SEARCH_SWEEP_INTERVAL: Duration = Duration::ZERO;
 const SEARCH_CHUNK_SIZE: usize = 1 << 18;
 /// The number of lowercase ASCII letters a trigram position may take.
 const TRIGRAM_LETTERS: u8 = 26;
@@ -189,6 +202,9 @@ pub(crate) struct SearchMatch {
   rows: Vec<Arc<SessionMetadata>>,
   /// The response body rendered from `rows`, with the derived-state generation it holds for.
   body: Mutex<Option<SearchBody>>,
+  /// When `signatures` last held. A repeat query inside [`SEARCH_SWEEP_INTERVAL`] answers from this match without
+  /// reading the watched files again.
+  verified_at: Mutex<Instant>,
 }
 
 /// One rendered search response and the derived-state generation its overlay fields came from.
@@ -207,6 +223,16 @@ impl SearchMatch {
   /// Keep the body built for `generation` for the repeat requests that generation still answers.
   pub(crate) fn remember_body(&self, generation: u64, bytes: Arc<Vec<u8>>) {
     *self.body.lock().expect("search body mutex is not poisoned") = Some(SearchBody { generation, bytes });
+  }
+
+  /// Whether this match's file check is recent enough for a repeat query to answer without reading the files again.
+  fn verification_holds(&self, interval: Duration) -> bool {
+    self.verified_at.lock().expect("search verification mutex is not poisoned").elapsed() < interval
+  }
+
+  /// Record that the watched files' signatures held just now.
+  fn mark_verified(&self) {
+    *self.verified_at.lock().expect("search verification mutex is not poisoned") = Instant::now();
   }
 }
 
@@ -247,8 +273,13 @@ struct SearchMemos {
   content: LruCache<u64, ContentIndexEntry>,
   matches: LruCache<String, Arc<SearchMatch>>,
   read_failures: HashSet<(String, String)>,
+  /// How long a verified match answers a repeat query: [`SEARCH_SWEEP_INTERVAL`], or the interval a test names.
+  sweep_interval: Duration,
   #[cfg(test)]
   scan_calls: usize,
+  /// The repeat queries that re-read the watched files' signatures, so a test can tell a memo answer from a sweep.
+  #[cfg(test)]
+  repeat_sweeps: usize,
   /// The candidates the scan windows read, so a test can tell a stopped scan from a complete one.
   #[cfg(test)]
   scanned_candidates: usize,
@@ -270,8 +301,11 @@ impl Default for SearchMemos {
       content,
       matches,
       read_failures: HashSet::new(),
+      sweep_interval: SEARCH_SWEEP_INTERVAL,
       #[cfg(test)]
       scan_calls: 0,
+      #[cfg(test)]
+      repeat_sweeps: 0,
       #[cfg(test)]
       scanned_candidates: 0,
       #[cfg(test)]
@@ -406,13 +440,26 @@ fn search_sessions_with_limit(
   let (all, _) = store.load_session_metas_snapshot_versioned(None)?;
   // The query result's listing identity is checked first, then each stored file signature, before name matching or
   // content classification. Keep that hot path ahead of candidate rebuilds.
-  if let Some(cached) = memos.lock().expect("session search memo mutex is not poisoned").cached_match(&needle)
+  let cached_and_interval = {
+    let mut guard = memos.lock().expect("session search memo mutex is not poisoned");
+    let sweep_interval = guard.sweep_interval;
+    guard.cached_match(&needle).map(|cached| (cached, sweep_interval))
+  };
+  if let Some((cached, sweep_interval)) = cached_and_interval
     && Arc::ptr_eq(&cached.corpus, &all)
   {
+    if cached.verification_holds(sweep_interval) {
+      return Ok(SearchAnswer { rows: cached.rows.clone(), source: Some(cached) });
+    }
     let watched: Vec<usize> = (0..cached.watched.len()).collect();
+    #[cfg(test)]
+    {
+      memos.lock().expect("session search memo mutex is not poisoned").repeat_sweeps += 1;
+    }
     let signatures: Vec<Option<FileSignature>> =
       file_signatures(&cached.watched, &watched, sessions_handle.as_ref()).into_iter().map(Result::ok).collect();
     if cached.signatures == signatures {
+      cached.mark_verified();
       return Ok(SearchAnswer { rows: cached.rows.clone(), source: Some(cached) });
     }
   }
@@ -644,6 +691,7 @@ fn search_sessions_with_limit(
         signatures: watched_signatures,
         rows: rows.clone(),
         body: Mutex::new(None),
+        verified_at: Mutex::new(Instant::now()),
       },
     );
     return Ok(SearchAnswer { rows, source: Some(source) });
@@ -1685,6 +1733,38 @@ mod tests {
     assert!(source.body(8).is_none(), "a moved derived-state generation drops the body");
     assert_eq!(super::search_sessions_with_memos(&store, "eed", &memos).unwrap().rows.len(), 1);
     assert_eq!(memos.lock().unwrap().scan_calls, 2, "the changed file rescans once and its hit covers substrings");
+    assert_eq!(
+      memos.lock().unwrap().repeat_sweeps,
+      3,
+      "with no interval the memo re-reads the watched signatures on every repeat"
+    );
+  }
+
+  /// A repeat query inside [`super::SEARCH_SWEEP_INTERVAL`] answers from the match it shares, so it reads no chat
+  /// file's signature: the sweep is one `stat` per watched file, and every active session's file is watched while the
+  /// answer is short of the cap.
+  #[test]
+  fn a_repeat_query_inside_the_sweep_interval_reads_no_signature() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    for index in 0..4 {
+      let id = format!("content-{index}");
+      write_session(&store, &id, &format!("session {index}"), SessionStatus::Active, "2026-08-01T12:00:00Z");
+      let path = store.chat_events_path(&id);
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      fs::write(&path, "no match here\n").unwrap();
+    }
+    let memos =
+      Mutex::new(super::SearchMemos { sweep_interval: std::time::Duration::from_secs(1), ..Default::default() });
+
+    let first = super::search_sessions_with_memos(&store, "absentneedle", &memos).unwrap();
+    assert!(first.rows.is_empty());
+    let repeat = super::search_sessions_with_memos(&store, "absentneedle", &memos).unwrap();
+    assert!(
+      Arc::ptr_eq(first.source.as_ref().unwrap(), repeat.source.as_ref().unwrap()),
+      "the repeat query answers from the memo the first query built"
+    );
+    assert_eq!(memos.lock().unwrap().repeat_sweeps, 0, "the repeat query trusts the signatures the first query read");
   }
 
   /// A fresh query answers from the content index of a file whose identity it already holds: a trigram the index

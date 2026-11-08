@@ -30,7 +30,9 @@ Exit codes: 0 both sides measured; 1 a measurement or build failed (the side's J
 precondition failed and nothing started; 3 the baseline calibration did not reproduce; 4 a scenario the bench passed
 on the before side fails on the after side; 75 a side's wait for the lock ran out. Every side takes the bench's own
 advisory lock, `$HOME/pn-runs/.bench.lock`, around its trial (not the builds), waiting up to 2 h for it; no option
-chooses another lock file or skips it. One lock hold covers one side attempt: a caller that retries a timed-out side
+chooses another lock file or skips it. The remote-wake bench takes the same lock for its container's whole run,
+because each start and stop of that container adds or removes a veth interface, which Chrome reports as a network
+change and drops the page in transfer. One lock hold covers one side attempt: a caller that retries a timed-out side
 runs the command again, which takes the lock again at the back of the queue. The side JSON is the bench's last
 artifact; when it is 120 s old and the bench still runs, the runner ends the trial tree itself, so a bench that hangs
 after its work never holds the lock, and the summary is reprinted from the JSON.
@@ -82,7 +84,8 @@ Each scenario's median and 90th percentile go in the table, with the raw median 
 
 Runs that measure side by side share the host: overlapping trials put a mode of about 3 s into the switch and send
 timings, while byte counts stay the same. Bench runs on a host never overlap: every side holds
-`$HOME/pn-runs/.bench.lock`. Every repetition also records its start, its end and the other serve trials on the host
+`$HOME/pn-runs/.bench.lock`, the host's one bench lock, which the remote-wake bench also holds while its container
+runs. Every repetition also records its start, its end and the other serve trials on the host
 during it (`trials.mjs`, a sample every 30 s), and the summary prints them.
 
 Below the table, scenario 1's received bytes are split by endpoint. The visible tab's status polls are counted by the

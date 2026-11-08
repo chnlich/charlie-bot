@@ -250,11 +250,13 @@ for side in before after; do
   done
 done
 
-# The bench lock covers the container and the measured runs, so no other bench measures beside this one. It is taken
-# after the builds, so a run does not hold it while compiling, and before the container exists.
+# The host's one bench lock, shared with the poor-network bench, covers the container and the measured runs: the
+# container's start and stop each add or remove a veth interface, which Chrome in a poor-network side reports as a
+# network change. It is taken after the builds, so a run does not hold it while compiling, and before the container
+# exists.
 echo "remote-wake: waiting for the bench lock"
-remote_wake_lock || die "$REMOTE_WAKE_LOCK_TIMEOUT_EXIT" \
-  "the bench lock was not free within $REMOTE_WAKE_LOCK_WAIT_SECONDS s"
+remote_wake_lock || die "$BENCH_LOCK_TIMEOUT_EXIT" \
+  "the bench lock was not free within $BENCH_LOCK_WAIT_SECONDS s"
 
 # The container is the remote host. A published loopback port keeps it off the network; the bench reaches it only
 # through the trial servers' ssh and through docker exec.

@@ -31,6 +31,7 @@ use time::{Duration, OffsetDateTime, UtcOffset};
 use super::pricing;
 use super::rollout::{self, token_count_payload, walk_files};
 use super::text::{empty_object, object_or_empty, splitlines, truthy};
+use super::usage_fields;
 use charliebot_agents::usage_time::utc_isoformat;
 
 const PROVIDER: &str = "codex";
@@ -648,16 +649,16 @@ fn spend_row(line: &str, current_model: &mut String) -> anyhow::Result<Option<Sp
     Some(Value::Object(info)) => info,
     Some(other) => bail!("info must be an object, got {other}"),
   };
-  let last = match info.get("last_token_usage") {
+  let last = match info.get(usage_fields::LAST_TOKEN_USAGE) {
     None => return Ok(None),
     Some(value) if !truthy(value) => return Ok(None),
     Some(Value::Object(last)) => last,
     Some(other) => bail!("last_token_usage must be an object, got {other}"),
   };
   let usage = SpendUsage {
-    input: integer_field(last, "input_tokens")?,
-    cached: integer_field(last, "cached_input_tokens")?,
-    output: integer_field(last, "output_tokens")?,
+    input: integer_field(last, usage_fields::INPUT_TOKENS)?,
+    cached: integer_field(last, usage_fields::CACHED_INPUT_TOKENS)?,
+    output: integer_field(last, usage_fields::OUTPUT_TOKENS)?,
   };
   let observed = parse_codex_timestamp(event.get("timestamp"))?;
   Ok(Some((observed, current_model.clone(), usage)))

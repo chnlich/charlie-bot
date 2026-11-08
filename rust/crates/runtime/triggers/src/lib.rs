@@ -1,5 +1,6 @@
 //! Delayed and watched triggers that admit scheduled task inputs.
 
+mod end_record;
 mod trigger_index;
 pub mod triggers;
 

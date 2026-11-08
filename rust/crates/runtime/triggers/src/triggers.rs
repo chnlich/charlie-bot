@@ -10,7 +10,7 @@ use std::process::Stdio;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, anyhow};
 use axum::Router;
@@ -37,6 +37,7 @@ use tokio::process::Command;
 use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep, sleep_until, timeout};
 
+use crate::end_record::{self, EndSource, RemoteTargetEnd};
 use crate::trigger_index::{self, TriggerFileIdentity, TriggerIndex, TriggerIndexRow};
 
 /// The maximum number of pending triggers for one session.
@@ -77,6 +78,61 @@ impl std::fmt::Display for ProbeStatus {
       Self::Error => PROBE_ERROR_WORD,
     })
   }
+}
+
+/// Why the trigger code starts one remote ssh process. The `remote_ssh_started` log line carries it, so counting a
+/// wake's ssh processes across restarts reads one row per process.
+#[derive(Clone, Copy, Debug)]
+enum SshPurpose {
+  /// The verify-on-create probe that guards a registration.
+  Verify,
+  /// One interval probe of a pending watch.
+  Probe,
+  /// The ssh that reads a finished `--cmd` target's exit file back.
+  Readback,
+}
+
+impl std::fmt::Display for SshPurpose {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.write_str(match self {
+      Self::Verify => "verify",
+      Self::Probe => "probe",
+      Self::Readback => "readback",
+    })
+  }
+}
+
+/// The end recorder one verify-on-create ssh starts for a pid-only target, with the trigger's max wait as its
+/// bound.
+struct RecorderStart<'a> {
+  trigger_id: &'a str,
+  max_wait_seconds: i64,
+}
+
+/// What one remote pid probe answered, with the end-file and date lines the end readback reads.
+struct PidProbeOutcome {
+  status: ProbeStatus,
+  raw: String,
+  read: end_record::PidProbeRead,
+  /// The probe ssh's local midpoint, in server-clock epoch ns.
+  local_mid_ns: Option<i128>,
+}
+
+impl PidProbeOutcome {
+  fn error(raw: String) -> Self {
+    PidProbeOutcome {
+      status: ProbeStatus::Error,
+      raw,
+      read: end_record::PidProbeRead { now_ns: None, end_ns: None },
+      local_mid_ns: None,
+    }
+  }
+}
+
+/// One remote ssh process the trigger code ran, with the local midpoint its offset math needs.
+struct SshRun {
+  result: Result<ProbeOutput, String>,
+  local_mid_ns: Option<i128>,
 }
 
 static PROGRAM_AVAILABILITY: OnceLock<StdMutex<HashMap<String, bool>>> = OnceLock::new();
@@ -209,6 +265,7 @@ struct Timing {
   sacct_interval: Duration,
   remote_sacct_grace: Duration,
   dormancy_interval: Duration,
+  noise_max_seconds: u64,
 }
 
 impl TriggerManager {
@@ -226,6 +283,7 @@ impl TriggerManager {
         sacct_interval: Duration::from_secs(SACCT_POLL_INTERVAL_SECONDS),
         remote_sacct_grace: Duration::from_secs(REMOTE_SACCT_UNREACHABLE_GRACE_SECONDS),
         dormancy_interval: Duration::from_secs(DORMANCY_CHECK_SECONDS),
+        noise_max_seconds: REMOTE_PROBE_NOISE_MAX_SECONDS,
       },
     }
   }
@@ -264,15 +322,22 @@ impl TriggerManager {
     }
 
     let remote_pids = targets.iter().filter_map(remote_pid).collect::<Vec<_>>();
+    let remote_slurm = targets.iter().filter_map(slurm_job).filter(|target| target.host.is_some()).collect::<Vec<_>>();
+    // The id exists before the verifications because the verify ssh starts a pid-only target's end recorder under
+    // it, and every verify's remote_ssh_started row names it. A refused registration leaves a recorder that its own
+    // timeout bounds.
+    let trigger_id = fresh_uuid();
     if !remote_pids.is_empty() {
-      self.verify_remote_pids(&remote_pids).await.map_err(TriggerCreateError::RemoteVerify)?;
+      self
+        .verify_remote_pids(&remote_pids, &trigger_id, delay_seconds)
+        .await
+        .map_err(TriggerCreateError::RemoteVerify)?;
     }
 
-    let remote_slurm = targets.iter().filter_map(slurm_job).filter(|target| target.host.is_some()).collect::<Vec<_>>();
     let observed = if remote_slurm.is_empty() {
       Map::new()
     } else {
-      self.verify_remote_slurm(&remote_slurm).await.map_err(TriggerCreateError::RemoteVerify)?
+      self.verify_remote_slurm(&remote_slurm, &trigger_id).await.map_err(TriggerCreateError::RemoteVerify)?
     };
     if let Some(probe_out) = probe_out {
       probe_out.extend(observed);
@@ -301,7 +366,7 @@ impl TriggerManager {
     }
 
     let trigger = PendingTrigger {
-      id: fresh_uuid(),
+      id: trigger_id,
       session_id: session_id.to_string(),
       fire_at,
       message: message.to_string(),
@@ -312,7 +377,7 @@ impl TriggerManager {
       fire_reason: None,
     };
     self.save_trigger(&trigger).await.map_err(TriggerCreateError::Failure)?;
-    self.start_task(trigger.clone());
+    self.start_task(trigger.clone(), false);
     tracing::info!(
       target: "charliebot_triggers",
       trigger_id = %trigger.id,
@@ -323,13 +388,30 @@ impl TriggerManager {
     Ok(trigger)
   }
 
-  async fn verify_remote_pids(&self, targets: &[RemotePid]) -> Result<(), String> {
-    let probes = targets.iter().map(|target| self.ssh_probe_pid(target));
+  async fn verify_remote_pids(
+    &self,
+    targets: &[RemotePid],
+    trigger_id: &str,
+    max_wait_seconds: i64,
+  ) -> Result<(), String> {
+    let probes = targets.iter().map(|target| {
+      // A pid-only target gets its end recorder inside this verify ssh; a `--cmd` target reads its end from the
+      // exit file's mtime instead.
+      let recorder =
+        (target.exit_file.is_none() && max_wait_seconds > 0).then_some(RecorderStart { trigger_id, max_wait_seconds });
+      async move { self.ssh_probe_pid(target, trigger_id, SshPurpose::Verify, recorder.as_ref(), None).await }
+    });
     let results = join_all(probes).await;
     let mut bad = Vec::new();
-    for (target, (status, raw)) in targets.iter().zip(results) {
-      if status != ProbeStatus::Alive {
-        bad.push(format!("{}:{} -> {} ({})", target.host, target.pid, status, text_repr::str_repr(raw.trim())));
+    for (target, outcome) in targets.iter().zip(results) {
+      if outcome.status != ProbeStatus::Alive {
+        bad.push(format!(
+          "{}:{} -> {} ({})",
+          target.host,
+          target.pid,
+          outcome.status,
+          text_repr::str_repr(outcome.raw.trim())
+        ));
       }
     }
     if bad.is_empty() {
@@ -339,7 +421,7 @@ impl TriggerManager {
     }
   }
 
-  async fn verify_remote_slurm(&self, targets: &[SlurmJob]) -> Result<Map<String, Value>, String> {
+  async fn verify_remote_slurm(&self, targets: &[SlurmJob], trigger_id: &str) -> Result<Map<String, Value>, String> {
     let mut by_host: HashMap<String, Vec<i64>> = HashMap::new();
     for target in targets {
       by_host.entry(target.host.clone().expect("remote SLURM targets have hosts")).or_default().push(target.job_id);
@@ -350,13 +432,13 @@ impl TriggerManager {
       let host = host.clone();
       let mut ids = by_host.get(&host).expect("the host was inserted").clone();
       ids.sort_unstable();
-      async move { self.probe_sacct(&ids, "verify-on-create", Some(&host)).await }
+      async move { self.probe_sacct(&ids, trigger_id, Some(&host), SshPurpose::Verify).await }
     });
     let results = join_all(probes).await;
     let mut observed = Map::new();
     let mut bad = Vec::new();
-    for (host, (states, error)) in hosts.iter().zip(results) {
-      if let Some(error) = error {
+    for (host, reading) in hosts.iter().zip(results) {
+      if let Some(error) = &reading.error {
         bad.push(format!("{host} -> {error}"));
         continue;
       }
@@ -364,7 +446,7 @@ impl TriggerManager {
       ids.sort_unstable();
       for job_id in ids {
         let key = slurm_label(Some(host), job_id);
-        let state = states.get(&job_id).map_or("not-yet-registered", |row| row.0.as_str());
+        let state = reading.states.get(&job_id).map_or("not-yet-registered", |row| row.state.as_str());
         observed.insert(key, Value::String(state.to_string()));
       }
     }
@@ -450,7 +532,7 @@ impl TriggerManager {
           }
         };
         if trigger.status == TriggerStatus::Pending {
-          self.start_task(trigger.clone());
+          self.start_task(trigger.clone(), true);
           recovered += 1;
           tracing::info!(
             target: "charliebot_triggers",
@@ -471,14 +553,14 @@ impl TriggerManager {
     Ok(())
   }
 
-  fn start_task(self: &Arc<Self>, trigger: PendingTrigger) {
+  fn start_task(self: &Arc<Self>, trigger: PendingTrigger, recovered: bool) {
     let id = trigger.id.clone();
     let task_id = id.clone();
     let manager = Arc::clone(self);
     let (start, wait) = tokio::sync::oneshot::channel();
     let handle = tokio::spawn(async move {
       let _ = wait.await;
-      if let Err(error) = manager.wait_and_fire(trigger).await {
+      if let Err(error) = manager.wait_and_fire(trigger, recovered).await {
         tracing::error!(target: "charliebot_triggers", trigger_id = %id, error = %error, "trigger_wait_failed");
       }
       manager.tasks.lock().expect("trigger task map is not poisoned").remove(&id);
@@ -522,24 +604,28 @@ impl TriggerManager {
       .expect("trigger publish task completes")
   }
 
-  async fn ssh_probe_pid(&self, target: &RemotePid) -> (ProbeStatus, String) {
-    let remote = format!("kill -0 {} 2>&1 && echo {PROBE_ALIVE_WORD} || echo {PROBE_DEAD_WORD}", target.pid);
-    let command = match self.ssh_argv(&target.host, &remote) {
-      Ok(command) => command,
-      Err(error) => return (ProbeStatus::Error, format!("spawn failed: {error}")),
-    };
-    let result = run_probe_command(command, Some(Duration::from_secs(SSH_OVERALL_TIMEOUT_SECONDS)), "ssh").await;
-    let output = match result {
+  async fn ssh_probe_pid(
+    &self,
+    target: &RemotePid,
+    trigger_id: &str,
+    purpose: SshPurpose,
+    recorder: Option<&RecorderStart<'_>>,
+    end_read: Option<&str>,
+  ) -> PidProbeOutcome {
+    let remote = pid_probe_command(target, recorder, end_read);
+    let run = self.run_remote_ssh(&target.host, &remote, trigger_id, purpose).await;
+    let output = match run.result {
       Ok(output) => output,
-      Err(error) => return (ProbeStatus::Error, error),
+      Err(error) => return PidProbeOutcome::error(error),
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let raw = format!("{stdout}{stderr}");
+    let read = end_record::pid_probe_read(&stdout);
     let last_line = stdout.trim().lines().last().unwrap_or_default().trim();
-    match last_line {
-      PROBE_ALIVE_WORD => (ProbeStatus::Alive, raw),
-      PROBE_DEAD_WORD => (ProbeStatus::Dead, raw),
+    let status = match last_line {
+      PROBE_ALIVE_WORD => ProbeStatus::Alive,
+      PROBE_DEAD_WORD => ProbeStatus::Dead,
       _ => {
         let combined = raw.trim();
         let error = if combined.is_empty() {
@@ -547,9 +633,31 @@ impl TriggerManager {
         } else {
           combined.to_string()
         };
-        (ProbeStatus::Error, error)
+        return PidProbeOutcome { status: ProbeStatus::Error, raw: error, read, local_mid_ns: run.local_mid_ns };
       }
-    }
+    };
+    PidProbeOutcome { status, raw, read, local_mid_ns: run.local_mid_ns }
+  }
+
+  /// Run one remote ssh process, logging the `remote_ssh_started` row that counts ssh processes per wake across
+  /// restarts. The local midpoint brackets the whole run, so a readback's offset math measures the same ssh it
+  /// reads the remote time from.
+  async fn run_remote_ssh(&self, host: &str, remote: &str, trigger_id: &str, purpose: SshPurpose) -> SshRun {
+    let command = match self.ssh_argv(host, remote) {
+      Ok(command) => command,
+      Err(error) => return SshRun { result: Err(format!("spawn failed: {error}")), local_mid_ns: None },
+    };
+    tracing::info!(
+      target: "charliebot_triggers",
+      trigger_ids = %trigger_id,
+      host = %host,
+      purpose = %purpose,
+      "remote_ssh_started"
+    );
+    let started = SystemTime::now();
+    let result = run_probe_command(command, Some(Duration::from_secs(SSH_OVERALL_TIMEOUT_SECONDS)), "ssh").await;
+    let local_mid_ns = end_record::local_midpoint_ns(started, SystemTime::now());
+    SshRun { result, local_mid_ns }
   }
 
   fn ssh_argv(&self, host: &str, remote: &str) -> io::Result<Vec<String>> {
@@ -565,33 +673,37 @@ impl TriggerManager {
     Ok(argv)
   }
 
+  /// Run one sacct query, locally or over ssh, and read the states it answers. The remote ssh also prints the
+  /// clock and zone lines that convert a terminal row's `End` column, so a remote end readback measures its offset
+  /// in the ssh that read the end back.
   async fn probe_sacct(
     &self,
     job_ids: &[i64],
     trigger_id: &str,
     host: Option<&str>,
-  ) -> (HashMap<i64, (String, String)>, Option<String>) {
+    purpose: SshPurpose,
+  ) -> SacctReading {
     let ids = job_ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
-    let sacct_args = ["sacct", "-j", &ids, "-X", "-n", "-P", "--format=JobID,State,ExitCode"];
-    let (command, deadline, executable) = match host {
+    let format = format!("--format={}", end_record::SACCT_FORMAT_COLUMNS.join(","));
+    let sacct_args = ["sacct", "-j", &ids, "-X", "-n", "-P", &format];
+    let (output, local_mid_ns) = match host {
       Some(host) => {
-        let remote = sacct_args.join(" ");
-        match self.ssh_argv(host, &remote) {
-          Ok(command) => (command, Some(Duration::from_secs(SSH_OVERALL_TIMEOUT_SECONDS)), "ssh"),
-          Err(error) => return (HashMap::new(), Some(format!("spawn failed: {error}"))),
+        let remote = format!("{}; {}", end_record::SACCT_REMOTE_CLOCK_PREFIX, sacct_args.join(" "));
+        let run = self.run_remote_ssh(host, &remote, trigger_id, purpose).await;
+        match run.result {
+          Ok(output) => (output, run.local_mid_ns),
+          Err(error) => return SacctReading::error(error),
         }
       }
-      None => (
-        std::iter::once(self.probe_programs.sacct.clone())
+      None => {
+        let command = std::iter::once(self.probe_programs.sacct.clone())
           .chain(sacct_args.iter().skip(1).map(|arg| arg.to_string()))
-          .collect(),
-        None,
-        "sacct",
-      ),
-    };
-    let output = match run_probe_command(command, deadline, executable).await {
-      Ok(output) => output,
-      Err(error) => return (HashMap::new(), Some(error)),
+          .collect();
+        match run_probe_command(command, None, "sacct").await {
+          Ok(output) => (output, None),
+          Err(error) => return SacctReading::error(error),
+        }
+      }
     };
     if !output.status.success() {
       let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -603,13 +715,10 @@ impl TriggerManager {
         stderr,
         "sacct_probe_nonzero"
       );
-      return (
-        HashMap::new(),
-        Some(format!(
-          "sacct exit {}: {stderr}",
-          output.status.code().map_or_else(|| "None".to_string(), |code| code.to_string())
-        )),
-      );
+      return SacctReading::error(format!(
+        "sacct exit {}: {stderr}",
+        output.status.code().map_or_else(|| "None".to_string(), |code| code.to_string())
+      ));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut states = HashMap::new();
@@ -619,33 +728,36 @@ impl TriggerManager {
         continue;
       }
       let Ok(job_id) = fields[0].parse::<i64>() else {
+        // The date and zone lines the remote command leads with parse as no job id and fall through here.
         continue;
       };
-      states.insert(job_id, (fields[1].trim().to_string(), fields[2].trim().to_string()));
+      let end_raw = fields.get(3).map(|field| field.trim()).filter(|end| !end.is_empty()).map(str::to_string);
+      states.insert(
+        job_id,
+        SlurmRow { state: fields[1].trim().to_string(), exit_code: fields[2].trim().to_string(), end_raw },
+      );
     }
-    (states, None)
+    SacctReading { states, error: None, prefix: end_record::sacct_probe_prefix(&stdout), local_mid_ns }
   }
 
-  async fn remote_read_exit_code(&self, target: &RemotePid) -> Option<String> {
-    let remote = match remote_exit_read_command(target.exit_file.as_deref()?) {
+  /// Read one `--cmd` target's exit file back over ssh: the exit code, the file's mtime as the launch's end
+  /// instant, and the date line that measures the offset. A failure is logged and yields no reading; it never
+  /// delays or blocks the fire.
+  async fn remote_exit_read(&self, target: &RemotePid, trigger_id: &str) -> (end_record::ExitRead, Option<i128>) {
+    let failed = |read: end_record::ExitRead| (read, None);
+    let Some(exit_file) = target.exit_file.as_deref() else {
+      return failed(end_record::ExitRead { code: None, mtime_ns: None, now_ns: None });
+    };
+    let remote = match end_record::exit_read_command(exit_file) {
       Ok(remote) => remote,
       Err(error) => {
         tracing::debug!(target: "charliebot_triggers", host = %target.host, error = %error, "ssh_exit_read_failed");
-        return None;
+        return failed(end_record::ExitRead { code: None, mtime_ns: None, now_ns: None });
       }
     };
-    let command = match self.ssh_argv(&target.host, &remote) {
-      Ok(command) => command,
-      Err(error) => {
-        tracing::debug!(target: "charliebot_triggers", host = %target.host, error = %error, "ssh_exit_read_failed");
-        return None;
-      }
-    };
-    match run_probe_command(command, Some(Duration::from_secs(SSH_OVERALL_TIMEOUT_SECONDS)), "ssh").await {
-      Ok(output) if output.status.success() => {
-        let content = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        (!content.is_empty()).then_some(content)
-      }
+    let run = self.run_remote_ssh(&target.host, &remote, trigger_id, SshPurpose::Readback).await;
+    let output = match run.result {
+      Ok(output) if output.status.success() => output,
       Ok(output) => {
         tracing::debug!(
           target: "charliebot_triggers",
@@ -653,13 +765,59 @@ impl TriggerManager {
           returncode = output.status.code().unwrap_or(-1),
           "ssh_exit_read_failed"
         );
-        None
+        return failed(end_record::ExitRead { code: None, mtime_ns: None, now_ns: None });
       }
       Err(error) => {
         tracing::debug!(target: "charliebot_triggers", host = %target.host, error, "ssh_exit_read_failed");
-        None
+        return failed(end_record::ExitRead { code: None, mtime_ns: None, now_ns: None });
       }
+    };
+    (end_record::exit_read(&String::from_utf8_lossy(&output.stdout)), run.local_mid_ns)
+  }
+
+  /// The label and the end reading one remote target carries once a probe saw it gone. The reading rides the ssh
+  /// calls that already exist: a pid-only target's end file is read by the DEAD probe itself, and a `--cmd`
+  /// target's mtime by the exit read it pays anyway. A readback failure logs a warning naming the trigger and
+  /// leaves the fire untouched.
+  async fn remote_finish(
+    &self,
+    target: &RemotePid,
+    trigger_id: &str,
+    probe: &PidProbeOutcome,
+    seen_gone_at: time::OffsetDateTime,
+  ) -> (String, RemoteTargetEnd) {
+    let base = format!("{}:{}", target.host, target.pid);
+    if target.exit_file.is_none() {
+      let end = match (probe.read.end_ns, probe.read.now_ns, probe.local_mid_ns) {
+        (Some(end_remote_ns), Some(now_ns), Some(local_mid_ns)) => end_reading_or_warn(
+          end_remote_ns,
+          now_ns,
+          local_mid_ns,
+          EndSource::EndRecorder,
+          seen_gone_at,
+          trigger_id,
+          &base,
+        )
+        .unwrap_or_else(|| seen_gone_only(seen_gone_at)),
+        _ => {
+          tracing::warn!(target: "charliebot_triggers", trigger_id, target = %base, "remote_end_read_failed");
+          seen_gone_only(seen_gone_at)
+        }
+      };
+      return (base, end);
     }
+    let (read, local_mid_ns) = self.remote_exit_read(target, trigger_id).await;
+    let end = match (read.mtime_ns, read.now_ns, local_mid_ns) {
+      (Some(mtime_ns), Some(now_ns), Some(local_mid_ns)) => {
+        end_reading_or_warn(mtime_ns, now_ns, local_mid_ns, EndSource::ExitFileMtime, seen_gone_at, trigger_id, &base)
+          .unwrap_or_else(|| seen_gone_only(seen_gone_at))
+      }
+      _ => {
+        tracing::warn!(target: "charliebot_triggers", trigger_id, target = %base, "remote_end_read_failed");
+        seen_gone_only(seen_gone_at)
+      }
+    };
+    (exit_state_label(&base, read.code.as_deref(), target.log.as_deref()), end)
   }
 
   async fn local_finished_label(&self, target: &LocalPid, gone_at_start: bool) -> String {
@@ -680,38 +838,40 @@ impl TriggerManager {
     exit_state_label(&target.pid.to_string(), code.as_deref(), target.log.as_deref())
   }
 
-  async fn remote_finished_label(&self, target: &RemotePid) -> String {
-    let base = format!("{}:{}", target.host, target.pid);
-    if target.exit_file.is_none() {
-      return base;
-    }
-    let code = self.remote_read_exit_code(target).await;
-    exit_state_label(&base, code.as_deref(), target.log.as_deref())
-  }
-
   async fn wait_for_trigger(&self, trigger: &PendingTrigger) -> anyhow::Result<WaitOutcome> {
     let groups = wait_groups(&trigger.watch_targets);
     if groups.is_empty() {
       sleep(remaining_until(trigger.fire_at)).await;
-      return Ok(WaitOutcome { reason: WaitReason::Timeout, finished: Vec::new(), still_alive: Vec::new() });
+      return Ok(WaitOutcome {
+        reason: WaitReason::Timeout,
+        finished: Vec::new(),
+        still_alive: Vec::new(),
+        remote_ends: Vec::new(),
+      });
     }
     let waits = groups.into_iter().map(|group| async move {
-      match group {
-        WaitGroup::Local(targets) => self.wait_with_pidfd(trigger, &targets).await,
-        WaitGroup::Remote(targets) => self.wait_with_remote_probe(trigger, &targets).await,
-        WaitGroup::Slurm(targets) => self.wait_with_sacct(trigger, &targets).await,
-      }
+      let (group_finished, group_alive, group_ends) = match group {
+        WaitGroup::Local(targets) => {
+          let (finished, still_alive) = self.wait_with_pidfd(trigger, &targets).await?;
+          (finished, still_alive, Vec::new())
+        }
+        WaitGroup::Remote(targets) => self.wait_with_remote_probe(trigger, &targets).await?,
+        WaitGroup::Slurm(targets) => self.wait_with_sacct(trigger, &targets).await?,
+      };
+      Ok::<_, anyhow::Error>((group_finished, group_alive, group_ends))
     });
     let results = join_all(waits).await;
     let mut finished = Vec::new();
     let mut still_alive = Vec::new();
+    let mut remote_ends = Vec::new();
     for result in results {
-      let (group_finished, group_alive) = result?;
+      let (group_finished, group_alive, group_ends) = result?;
       finished.extend(group_finished);
       still_alive.extend(group_alive);
+      remote_ends.extend(group_ends);
     }
     let reason = if still_alive.is_empty() { WaitReason::Completed } else { WaitReason::Timeout };
-    Ok(WaitOutcome { reason, finished, still_alive })
+    Ok(WaitOutcome { reason, finished, still_alive, remote_ends })
   }
 
   async fn watch_dormancy(&self, session_id: &str) -> anyhow::Result<String> {
@@ -723,7 +883,7 @@ impl TriggerManager {
     }
   }
 
-  async fn wait_and_fire(self: &Arc<Self>, trigger: PendingTrigger) -> anyhow::Result<()> {
+  async fn wait_and_fire(self: &Arc<Self>, trigger: PendingTrigger, recovered: bool) -> anyhow::Result<()> {
     let outcome = tokio::select! {
       biased;
       dormant = self.watch_dormancy(&trigger.session_id) => {
@@ -734,6 +894,8 @@ impl TriggerManager {
       }
       outcome = self.wait_for_trigger(&trigger) => outcome?,
     };
+    // The wake moment, taken before the fire path runs, so lag_ms and wait_s measure the wait and not the dispatch.
+    let fired_at = UtcDateTime::now();
     let Some(mut fresh) = self.reload_pending(&trigger).await? else { return Ok(()) };
     let message = if fresh.watch_targets.is_empty() {
       format!("[Scheduled trigger fired] {}", fresh.message)
@@ -753,8 +915,11 @@ impl TriggerManager {
       self.cancel_undeliverable(&mut fresh, reason).await?;
       return Ok(());
     }
+    // Only a trigger with remote targets gains the end fields; a local or pure-delay trigger keeps its plain line.
+    let fire_log = has_remote_target(&fresh.watch_targets)
+      .then(|| build_fire_log(&fresh, fired_at, &outcome.remote_ends, recovered));
     self.fire_task_tree(&mut fresh, &message).await?;
-    self.stamp_fired(&mut fresh, outcome.reason).await?;
+    self.stamp_fired(&mut fresh, outcome.reason, fire_log).await?;
     Ok(())
   }
 
@@ -816,19 +981,27 @@ impl TriggerManager {
     Ok(())
   }
 
-  async fn stamp_fired(&self, trigger: &mut PendingTrigger, reason: WaitReason) -> anyhow::Result<()> {
+  async fn stamp_fired(
+    &self,
+    trigger: &mut PendingTrigger,
+    reason: WaitReason,
+    fire_log: Option<FireLog>,
+  ) -> anyhow::Result<()> {
     trigger.status = TriggerStatus::Fired;
     trigger.fired_at = Some(UtcDateTime::now());
     trigger.fire_reason = Some(reason.to_string());
     self.save_trigger(trigger).await?;
     self.tasks.lock().expect("trigger task map is not poisoned").remove(&trigger.id);
-    tracing::info!(
-      target: "charliebot_triggers",
-      trigger_id = %trigger.id,
-      session = %trigger.session_id,
-      reason = %reason,
-      "trigger_fired"
-    );
+    match fire_log {
+      None => tracing::info!(
+        target: "charliebot_triggers",
+        trigger_id = %trigger.id,
+        session = %trigger.session_id,
+        reason = %reason,
+        "trigger_fired"
+      ),
+      Some(log) => log_remote_fired(trigger, reason, &log),
+    }
     Ok(())
   }
 
@@ -897,7 +1070,7 @@ impl TriggerManager {
     &self,
     trigger: &PendingTrigger,
     targets: &[RemotePid],
-  ) -> anyhow::Result<(Vec<String>, Vec<String>)> {
+  ) -> anyhow::Result<(Vec<String>, Vec<String>, Vec<RemoteTargetEnd>)> {
     let mut remaining: Vec<(String, i64, RemotePid)> = Vec::new();
     for target in targets {
       if let Some((_, _, previous)) =
@@ -909,6 +1082,7 @@ impl TriggerManager {
       }
     }
     let mut finished = Vec::new();
+    let mut remote_ends = Vec::new();
     let mut step = 0;
     loop {
       let time_to_fire = remaining_until(trigger.fire_at);
@@ -920,20 +1094,26 @@ impl TriggerManager {
       if time_to_fire.is_zero() {
         break;
       }
-      let probes = remaining.iter().map(|(_, _, target)| self.ssh_probe_pid(target));
+      let probes = remaining.iter().map(|(_, _, target)| {
+        // A pid-only target's end file rides this probe: the DEAD answer reads and deletes it in the same ssh.
+        let end_read = target.exit_file.is_none().then(|| end_record::end_file_word(&trigger.id, target.pid));
+        async move { self.ssh_probe_pid(target, &trigger.id, SshPurpose::Probe, None, end_read.as_deref()).await }
+      });
       let results = join_all(probes).await;
       let mut keep = Vec::new();
-      for ((host, pid, target), (status, raw)) in remaining.into_iter().zip(results) {
-        if status == ProbeStatus::Dead {
-          finished.push(self.remote_finished_label(&target).await);
+      for ((host, pid, target), outcome) in remaining.into_iter().zip(results) {
+        if outcome.status == ProbeStatus::Dead {
+          let (label, end) = self.remote_finish(&target, &trigger.id, &outcome, time::OffsetDateTime::now_utc()).await;
+          finished.push(label);
+          remote_ends.push(end);
         } else {
-          if status != ProbeStatus::Alive {
+          if outcome.status != ProbeStatus::Alive {
             tracing::debug!(
               target: "charliebot_triggers",
               trigger_id = %trigger.id,
               host,
               pid,
-              raw = raw.trim(),
+              raw = outcome.raw.trim(),
               "remote_probe_transient_error"
             );
           }
@@ -950,14 +1130,14 @@ impl TriggerManager {
       .iter()
       .map(|(_, _, target)| still_alive_label(&format!("{}:{}", target.host, target.pid), target.log.as_deref()))
       .collect();
-    Ok((finished, still_alive))
+    Ok((finished, still_alive, remote_ends))
   }
 
   async fn wait_with_sacct(
     &self,
     trigger: &PendingTrigger,
     targets: &[SlurmJob],
-  ) -> anyhow::Result<(Vec<String>, Vec<String>)> {
+  ) -> anyhow::Result<(Vec<String>, Vec<String>, Vec<RemoteTargetEnd>)> {
     // One wait group per host, in first-seen order; a job id repeated under a host joins its group once.
     let mut groups: Vec<(Option<String>, Vec<i64>, HashSet<i64>)> = Vec::new();
     let mut group_indexes: HashMap<Option<String>, usize> = HashMap::new();
@@ -977,12 +1157,14 @@ impl TriggerManager {
       join_all(groups.iter().map(|(host, ids, _)| self.wait_sacct_group(trigger, host.as_deref(), ids.clone()))).await;
     let mut finished = Vec::new();
     let mut still_alive = Vec::new();
+    let mut remote_ends = Vec::new();
     for result in results {
-      let (group_finished, group_alive) = result?;
+      let (group_finished, group_alive, group_ends) = result?;
       finished.extend(group_finished);
       still_alive.extend(group_alive);
+      remote_ends.extend(group_ends);
     }
-    Ok((finished, still_alive))
+    Ok((finished, still_alive, remote_ends))
   }
 
   async fn wait_sacct_group(
@@ -990,19 +1172,20 @@ impl TriggerManager {
     trigger: &PendingTrigger,
     host: Option<&str>,
     mut remaining: Vec<i64>,
-  ) -> anyhow::Result<(Vec<String>, Vec<String>)> {
+  ) -> anyhow::Result<(Vec<String>, Vec<String>, Vec<RemoteTargetEnd>)> {
     remaining.sort_unstable();
     if host.is_none() && !program_available(&self.probe_programs.sacct) {
       tracing::warn!(target: "charliebot_triggers", trigger_id = %trigger.id, job_ids = ?remaining, "slurm_watch_no_sacct_skip");
       sleep(remaining_until(trigger.fire_at)).await;
-      return Ok((Vec::new(), remaining.iter().map(|job_id| slurm_label(None, *job_id)).collect()));
+      return Ok((Vec::new(), remaining.iter().map(|job_id| slurm_label(None, *job_id)).collect(), Vec::new()));
     }
     let mut finished = Vec::new();
+    let mut remote_ends = Vec::new();
     let mut step = 0;
     let mut last_success = Instant::now();
     loop {
-      let (states, error) = self.probe_sacct(&remaining, &trigger.id, host).await;
-      if let Some(error) = error {
+      let reading = self.probe_sacct(&remaining, &trigger.id, host, SshPurpose::Probe).await;
+      if let Some(error) = &reading.error {
         tracing::debug!(target: "charliebot_triggers", trigger_id = %trigger.id, host = host.unwrap_or(""), %error, "sacct_probe_transient_error");
         let dark_for = last_success.elapsed();
         if host.is_some() && dark_for >= self.timing.remote_sacct_grace {
@@ -1021,24 +1204,35 @@ impl TriggerManager {
               format!("{} (unreachable {}m: {})", slurm_label(host, *job_id), dark_for.as_secs() / 60, note)
             })
             .collect();
-          return Ok((finished, alive));
+          return Ok((finished, alive, remote_ends));
         }
       } else {
         last_success = Instant::now();
       }
       let mut keep = Vec::new();
       for job_id in remaining {
-        let Some((state, exit_code)) = states.get(&job_id) else {
+        let Some(row) = reading.states.get(&job_id) else {
           keep.push(job_id);
           continue;
         };
-        let state_key = state.split_whitespace().next().unwrap_or_default();
+        let state_key = row.state.split_whitespace().next().unwrap_or_default();
         if SLURM_ACTIVE_STATES.contains(&state_key) {
           keep.push(job_id);
         } else if SLURM_TERMINAL_STATES.contains(&state_key) {
-          finished.push(format!("{}: {state} {exit_code}", slurm_label(host, job_id)));
+          let label = format!("{}: {} {}", slurm_label(host, job_id), row.state, row.exit_code);
+          finished.push(label.clone());
+          // The sacct readback ssh that answered this row is also the ssh the end conversion measures.
+          if let Some(host) = host {
+            remote_ends.push(self.sacct_end_reading(
+              &trigger.id,
+              host,
+              job_id,
+              &reading,
+              time::OffsetDateTime::now_utc(),
+            ));
+          }
         } else {
-          tracing::warn!(target: "charliebot_triggers", trigger_id = %trigger.id, job_id, %state, "slurm_unknown_state");
+          tracing::warn!(target: "charliebot_triggers", trigger_id = %trigger.id, job_id, state = %row.state, "slurm_unknown_state");
           keep.push(job_id);
         }
       }
@@ -1051,19 +1245,51 @@ impl TriggerManager {
       step += 1;
     }
     let still_alive = remaining.iter().map(|job_id| slurm_label(host, *job_id)).collect();
-    Ok((finished, still_alive))
+    Ok((finished, still_alive, remote_ends))
+  }
+
+  /// The end reading one terminal remote slurm row carries: the `End` column names the remote host's local zone,
+  /// which the same readback ssh printed. A row without a readable end logs a warning naming the trigger and
+  /// leaves the fire untouched.
+  fn sacct_end_reading(
+    &self,
+    trigger_id: &str,
+    host: &str,
+    job_id: i64,
+    reading: &SacctReading,
+    seen_gone_at: time::OffsetDateTime,
+  ) -> RemoteTargetEnd {
+    let label = slurm_label(Some(host), job_id);
+    let end_raw = reading.states.get(&job_id).and_then(|row| row.end_raw.as_deref());
+    let parts = (end_raw, reading.prefix.zone_seconds, reading.prefix.now_ns, reading.local_mid_ns);
+    if let (Some(end_raw), Some(zone), Some(now_ns), Some(local_mid_ns)) = parts
+      && let Some(end_remote_ns) = end_record::sacct_end_remote_ns(end_raw, zone)
+    {
+      return end_reading_or_warn(
+        end_remote_ns,
+        now_ns,
+        local_mid_ns,
+        EndSource::SacctEnd,
+        seen_gone_at,
+        trigger_id,
+        &label,
+      )
+      .unwrap_or_else(|| seen_gone_only(seen_gone_at));
+    }
+    tracing::warn!(target: "charliebot_triggers", trigger_id, target = %label, "remote_end_read_failed");
+    seen_gone_only(seen_gone_at)
   }
 
   fn remote_interval(&self, step: usize) -> Duration {
     let base = self.timing.remote_intervals.get(step).copied().unwrap_or(self.timing.remote_plateau);
-    let noise = if REMOTE_PROBE_NOISE_MAX_SECONDS == 0 {
+    let noise = if self.timing.noise_max_seconds == 0 {
       0
     } else {
       (std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system time is after the Unix epoch")
         .subsec_nanos() as u64)
-        % (REMOTE_PROBE_NOISE_MAX_SECONDS + 1)
+        % (self.timing.noise_max_seconds + 1)
     };
     base + Duration::from_secs(noise)
   }
@@ -1091,6 +1317,165 @@ struct WaitOutcome {
   reason: WaitReason,
   finished: Vec<String>,
   still_alive: Vec<String>,
+  /// One entry per remote target the server saw gone during the wait.
+  remote_ends: Vec<RemoteTargetEnd>,
+}
+
+/// One sacct query's answer: the rows the fire decision reads, plus the clock and zone lines that convert a
+/// terminal row's `End` column, and the readback ssh's local midpoint.
+struct SacctReading {
+  states: HashMap<i64, SlurmRow>,
+  error: Option<String>,
+  prefix: end_record::SacctProbePrefix,
+  local_mid_ns: Option<i128>,
+}
+
+impl SacctReading {
+  fn error(error: String) -> Self {
+    SacctReading {
+      states: HashMap::new(),
+      error: Some(error),
+      prefix: end_record::SacctProbePrefix { now_ns: None, zone_seconds: None },
+      local_mid_ns: None,
+    }
+  }
+}
+
+/// One sacct row: the state and exit code the fire decision reads, and the `End` column the end readback reads.
+struct SlurmRow {
+  state: String,
+  exit_code: String,
+  end_raw: Option<String>,
+}
+
+/// The remote-end fields one `trigger_fired` line of a remote-target trigger gains. `end` is set when at least one
+/// remote target recorded an end; `seen_gone_at` is set when the server saw any remote target gone.
+struct FireLog {
+  seen_gone_at: Option<time::OffsetDateTime>,
+  end: Option<EndFields>,
+  recovered: bool,
+  wait_s: f64,
+}
+
+/// The end-derived fields: they appear on the `trigger_fired` line only when an end was recorded.
+struct EndFields {
+  end_at: time::OffsetDateTime,
+  source: EndSource,
+  lag_ms: i64,
+  clock_offset_ms: i64,
+}
+
+/// Select one trigger's fire log from its remote end readings: the latest recorded end wins, and a job that ended
+/// before the trigger was created lags from the creation instead.
+fn build_fire_log(
+  trigger: &PendingTrigger,
+  fired_at: UtcDateTime,
+  ends: &[RemoteTargetEnd],
+  recovered: bool,
+) -> FireLog {
+  let created_at = trigger.created_at.into_inner();
+  let seen_gone_at = ends.iter().map(|end| end.seen_gone_at).max();
+  let end = ends
+    .iter()
+    .filter_map(|end| Some((end.end_at?, end.source?, end.clock_offset_ms?)))
+    .max_by_key(|(end_at, _, _)| *end_at)
+    .map(|(end_at, source, clock_offset_ms)| {
+      let basis = end_at.max(created_at);
+      EndFields { end_at, source, lag_ms: (fired_at.into_inner() - basis).whole_milliseconds() as i64, clock_offset_ms }
+    });
+  FireLog { seen_gone_at, end, recovered, wait_s: (fired_at.into_inner() - created_at).as_seconds_f64() }
+}
+
+/// The `trigger_fired` line of a remote-target trigger. The end-derived fields are absent when no end was
+/// recorded; `seen_gone_at` is absent when the server never saw a remote target gone.
+fn log_remote_fired(trigger: &PendingTrigger, reason: WaitReason, log: &FireLog) {
+  let end_source = end_record::end_source_label(log.end.as_ref().map(|end| end.source));
+  let wait_s = format!("{:.3}", log.wait_s);
+  match (&log.end, log.seen_gone_at) {
+    (Some(end), Some(seen_gone_at)) => tracing::info!(
+      target: "charliebot_triggers",
+      trigger_id = %trigger.id,
+      session = %trigger.session_id,
+      reason = %reason,
+      recovered = %log.recovered,
+      wait_s = %wait_s,
+      seen_gone_at = %end_record::rfc3339(seen_gone_at),
+      remote_end_at = %end_record::rfc3339(end.end_at),
+      end_source = %end_source,
+      lag_ms = end.lag_ms,
+      clock_offset_ms = end.clock_offset_ms,
+      "trigger_fired"
+    ),
+    (None, Some(seen_gone_at)) => tracing::info!(
+      target: "charliebot_triggers",
+      trigger_id = %trigger.id,
+      session = %trigger.session_id,
+      reason = %reason,
+      recovered = %log.recovered,
+      wait_s = %wait_s,
+      seen_gone_at = %end_record::rfc3339(seen_gone_at),
+      end_source = %end_source,
+      "trigger_fired"
+    ),
+    (None, None) => tracing::info!(
+      target: "charliebot_triggers",
+      trigger_id = %trigger.id,
+      session = %trigger.session_id,
+      reason = %reason,
+      recovered = %log.recovered,
+      wait_s = %wait_s,
+      end_source = %end_source,
+      "trigger_fired"
+    ),
+    (Some(_), None) => unreachable!("an end reading carries the moment the server saw the target gone"),
+  }
+}
+
+/// One remote target's end reading from the ssh that read the end back, or a warning naming the trigger when the
+/// clock math fails. A failure never delays or blocks the fire.
+fn end_reading_or_warn(
+  end_remote_ns: i128,
+  remote_now_ns: i128,
+  local_midpoint_ns: i128,
+  source: EndSource,
+  seen_gone_at: time::OffsetDateTime,
+  trigger_id: &str,
+  target: &str,
+) -> Option<RemoteTargetEnd> {
+  match end_record::reading(end_remote_ns, remote_now_ns, local_midpoint_ns, source, seen_gone_at) {
+    Some(end) => Some(end),
+    None => {
+      tracing::warn!(target: "charliebot_triggers", trigger_id, target, "remote_end_read_failed");
+      None
+    }
+  }
+}
+
+/// The entry a target the server saw gone carries when no end was recorded.
+fn seen_gone_only(seen_gone_at: time::OffsetDateTime) -> RemoteTargetEnd {
+  RemoteTargetEnd { end_at: None, source: None, clock_offset_ms: None, seen_gone_at }
+}
+
+/// Whether one watch target reaches a remote host, and so gains the end fields on its `trigger_fired` line.
+fn has_remote_target(targets: &[WatchTarget]) -> bool {
+  targets
+    .iter()
+    .any(|target| matches!(target, WatchTarget::RemotePid { .. } | WatchTarget::SlurmJob { host: Some(_), .. }))
+}
+
+/// The remote command one pid probe runs. The end-recorder start and the end-file readback ride this command, so
+/// the probe verdict stays the last stdout line the parser reads and no wake gains an ssh process.
+fn pid_probe_command(target: &RemotePid, recorder: Option<&RecorderStart<'_>>, end_read: Option<&str>) -> String {
+  let verdict = format!("kill -0 {} 2>&1 && echo {PROBE_ALIVE_WORD} || echo {PROBE_DEAD_WORD}", target.pid);
+  let mut segments = Vec::new();
+  if let Some(recorder) = recorder {
+    segments.push(end_record::recorder_command(target.pid, recorder.trigger_id, recorder.max_wait_seconds));
+  }
+  if let Some(end_file) = end_read {
+    segments.push(end_record::probe_read_prefix(end_file));
+  }
+  segments.push(verdict);
+  segments.concat()
 }
 
 enum WaitGroup {
@@ -1435,12 +1820,6 @@ fn format_suffix(reason: WaitReason, finished: &[String], still_alive: &[String]
   }
 }
 
-/// The remote command that prints an exit file, with the path quoted for the remote shell. A path with a NUL byte has
-/// no shell quoting.
-fn remote_exit_read_command(exit_file: &str) -> Result<String, shlex::QuoteError> {
-  Ok(format!("cat {} 2>/dev/null", shlex::try_quote(exit_file)?))
-}
-
 /// The route path that the `session trigger` command posts to. The router and `ROUTE_PATTERNS` use it, and so does the
 /// CLI.
 pub const SCHEDULE_TRIGGER_PATH: &str = "/api/internal/schedule-trigger";
@@ -1635,6 +2014,7 @@ impl TriggerManager {
     self.ssh_control_dir = Some(control_dir.to_path_buf());
     self.timing.remote_intervals = vec![interval];
     self.timing.remote_plateau = interval;
+    self.timing.noise_max_seconds = 0;
     self.timing.sacct_interval = interval;
     self.timing.remote_sacct_grace = Duration::from_millis(100);
     self.timing.dormancy_interval = Duration::from_millis(20);
@@ -1664,6 +2044,7 @@ mod tests {
   use charliebot_core::config::CREDENTIALS_FILENAME;
   use charliebot_core::credentials::load_credentials;
   use charliebot_core::hot_reload::HotReload;
+  use charliebot_core::test_support::LogCapture;
   use charliebot_registry::context::StartupState;
   use charliebot_registry::route_claims::RouteClaims;
   use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
@@ -1676,6 +2057,7 @@ mod tests {
   use charliebot_tasks::completion::TaskCompletion;
   use futures_util::future::BoxFuture;
   use serde_json::Value;
+  use time::OffsetDateTime;
   use tower::ServiceExt;
 
   use super::*;
@@ -1912,16 +2294,22 @@ mod tests {
 
   #[test]
   #[ignore = "integration"]
-  fn remote_exit_read_command_hands_the_remote_shell_the_same_path() {
+  fn exit_read_command_hands_the_remote_shell_the_same_path() {
     let dir = tempfile::tempdir().expect("temporary directory");
     for name in ["exit code.txt", "it's done", "quote\"d", "dollar$HOME", "semi;colon"] {
       let path = dir.path().join(name);
-      std::fs::write(&path, format!("{name}-status")).expect("write exit file");
-      let command = remote_exit_read_command(path.to_str().expect("UTF-8 path")).expect("path has no NUL byte");
+      // The wrapper writes the exit file with `echo`, which ends in a newline; the content line ends there.
+      std::fs::write(&path, format!("{name}-status\n")).expect("write exit file");
+      let command = end_record::exit_read_command(path.to_str().expect("UTF-8 path")).expect("path has no NUL byte");
       let output = std::process::Command::new("sh").arg("-c").arg(&command).output().expect("sh runs");
-      assert_eq!(String::from_utf8_lossy(&output.stdout), format!("{name}-status"), "command: {command}");
+      let stdout = String::from_utf8_lossy(&output.stdout);
+      assert_eq!(
+        end_record::exit_read(&stdout).code.as_deref(),
+        Some(&format!("{name}-status")[..]),
+        "command: {command}"
+      );
     }
-    assert!(remote_exit_read_command("bad\0path").is_err());
+    assert!(end_record::exit_read_command("bad\0path").is_err());
   }
 
   #[test]
@@ -2237,7 +2625,10 @@ mod tests {
       exit_file: Some("/synthetic/exit file".to_string()),
       log: Some("/synthetic/remote log".to_string()),
     };
-    assert_eq!(manager.remote_finished_label(&target).await, "synthetic-host:41: exit 7, log /synthetic/remote log");
+    let (label, end) =
+      manager.remote_finish(&target, "synthetic-trigger", &dead_probe(), time::OffsetDateTime::now_utc()).await;
+    assert_eq!(label, "synthetic-host:41: exit 7, log /synthetic/remote log");
+    assert_eq!(end.end_at, None, "a static-output fake prints no date or mtime line");
   }
 
   #[tokio::test]
@@ -2253,7 +2644,9 @@ mod tests {
       exit_file: Some("/synthetic/missing-exit".to_string()),
       log: None,
     };
-    assert_eq!(manager.remote_finished_label(&target).await, "synthetic-host:41: exit file missing");
+    let (label, _) =
+      manager.remote_finish(&target, "synthetic-trigger", &dead_probe(), time::OffsetDateTime::now_utc()).await;
+    assert_eq!(label, "synthetic-host:41: exit file missing");
   }
 
   #[tokio::test]
@@ -2268,7 +2661,20 @@ mod tests {
       exit_file: None,
       log: None,
     };
-    assert_eq!(manager.remote_finished_label(&target).await, "synthetic-host:41");
+    let (label, end) =
+      manager.remote_finish(&target, "synthetic-trigger", &dead_probe(), time::OffsetDateTime::now_utc()).await;
+    assert_eq!(label, "synthetic-host:41");
+    assert_eq!(end.end_at, None, "a pid-only target without an end file records no end");
+  }
+
+  /// A DEAD probe outcome without any readback lines, for the label tests.
+  fn dead_probe() -> PidProbeOutcome {
+    PidProbeOutcome {
+      status: ProbeStatus::Dead,
+      raw: String::new(),
+      read: end_record::PidProbeRead { now_ns: None, end_ns: None },
+      local_mid_ns: None,
+    }
   }
 
   #[tokio::test]
@@ -2285,7 +2691,8 @@ mod tests {
       exit_file: None,
       log: Some("/synthetic/remote log".to_string()),
     };
-    let (finished, still_alive) = manager.wait_with_remote_probe(&trigger, &[target]).await.expect("remote wait");
+    let (finished, still_alive, _ends) =
+      manager.wait_with_remote_probe(&trigger, &[target]).await.expect("remote wait");
     assert!(finished.is_empty());
     assert_eq!(still_alive, ["synthetic-host:41, log /synthetic/remote log"]);
   }
@@ -2302,7 +2709,7 @@ mod tests {
     );
     let trigger = pending_trigger("synthetic-slurm", SESSION_ID, near_future(10), Vec::new());
     let target = SlurmJob { kind: "slurm_job".to_string(), host: Some("synthetic-host".to_string()), job_id: 123 };
-    let (finished, still_alive) = manager.wait_with_sacct(&trigger, &[target]).await.expect("remote SLURM wait");
+    let (finished, still_alive, _ends) = manager.wait_with_sacct(&trigger, &[target]).await.expect("remote SLURM wait");
     assert_eq!(finished, ["synthetic-host:slurm:123: COMPLETED 0:0"]);
     assert!(still_alive.is_empty());
   }
@@ -2319,7 +2726,7 @@ mod tests {
     );
     let trigger = pending_trigger("synthetic-slurm-dark", SESSION_ID, near_future(10), Vec::new());
     let target = SlurmJob { kind: "slurm_job".to_string(), host: Some("synthetic-host".to_string()), job_id: 123 };
-    let (finished, still_alive) = manager.wait_with_sacct(&trigger, &[target]).await.expect("remote SLURM wait");
+    let (finished, still_alive, _ends) = manager.wait_with_sacct(&trigger, &[target]).await.expect("remote SLURM wait");
     assert!(finished.is_empty());
     assert_eq!(still_alive, ["synthetic-host:slurm:123 (unreachable 0m: sacct exit 255: synthetic ssh refusal)"]);
   }
@@ -2336,7 +2743,7 @@ mod tests {
     );
     let trigger = pending_trigger("synthetic-local-slurm", SESSION_ID, near_future(10), Vec::new());
     let target = SlurmJob { kind: "slurm_job".to_string(), host: None, job_id: 123 };
-    let (finished, still_alive) = manager.wait_with_sacct(&trigger, &[target]).await.expect("local SLURM wait");
+    let (finished, still_alive, _ends) = manager.wait_with_sacct(&trigger, &[target]).await.expect("local SLURM wait");
     assert_eq!(finished, ["slurm:123: COMPLETED 0:0"]);
     assert!(still_alive.is_empty());
   }
@@ -2483,7 +2890,7 @@ mod tests {
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
     let trigger = pending_trigger("synthetic-durable-trigger", SESSION_ID, near_future(-1), Vec::new());
     manager.save_trigger(&trigger).await.expect("save trigger");
-    manager.wait_and_fire(trigger.clone()).await.expect("fire trigger");
+    manager.wait_and_fire(trigger.clone(), false).await.expect("fire trigger");
     let fresh = manager.load_trigger(SESSION_ID, &trigger.id).await.expect("read fired trigger");
     assert_eq!(fresh.status, TriggerStatus::Fired);
     assert_eq!(fresh.fire_reason.as_deref(), Some("timeout"));
@@ -2579,7 +2986,7 @@ mod tests {
     let trigger = pending_trigger("synthetic-archived-trigger", SESSION_ID, near_future(0), Vec::new());
     manager.save_trigger(&trigger).await.expect("save trigger");
     archive_task(&features, SESSION_ID).await;
-    manager.wait_and_fire(trigger.clone()).await.expect("dormant trigger retires");
+    manager.wait_and_fire(trigger.clone(), false).await.expect("dormant trigger retires");
     let fresh = manager.load_trigger(SESSION_ID, &trigger.id).await.expect("read cancelled trigger");
     assert_eq!(fresh.status, TriggerStatus::Cancelled);
     assert_eq!(fresh.fire_reason.as_deref(), Some("target task is archived"));
@@ -2602,7 +3009,7 @@ mod tests {
     let manager = Arc::new(manager_value);
     let trigger = pending_trigger("synthetic-watchdog-trigger", SESSION_ID, near_future(3600), Vec::new());
     manager.save_trigger(&trigger).await.expect("save trigger");
-    manager.wait_and_fire(trigger.clone()).await.expect("watchdog cancels trigger");
+    manager.wait_and_fire(trigger.clone(), false).await.expect("watchdog cancels trigger");
     let fresh = manager.load_trigger(SESSION_ID, &trigger.id).await.expect("read cancelled trigger");
     assert_eq!(fresh.status, TriggerStatus::Cancelled);
     assert_eq!(fresh.fire_reason.as_deref(), Some("target task is archived"));
@@ -3033,5 +3440,445 @@ mod tests {
       json!(["body", malformed_missing_session.len()]),
     )
     .await;
+  }
+
+  // ---- End-time readback: parsers and clock math ----
+
+  #[test]
+  fn epoch_and_zone_parsing_cover_the_forms_the_readbacks_print() {
+    assert_eq!(end_record::parse_epoch_ns("1700000000.500000000"), Some(1_700_000_000_500_000_000));
+    assert_eq!(end_record::parse_epoch_ns("1700000000.5"), Some(1_700_000_000_500_000_000));
+    assert_eq!(end_record::parse_epoch_ns("7"), None, "an exit code is no epoch");
+    assert_eq!(end_record::parse_epoch_ns("COMPLETED"), None);
+    assert_eq!(end_record::parse_epoch_ns(""), None);
+    assert_eq!(end_record::zone_seconds("+0000"), Some(0));
+    assert_eq!(end_record::zone_seconds("-0700"), Some(-25_200));
+    assert_eq!(end_record::zone_seconds("123|RUNNING|0:0"), None);
+    assert_eq!(end_record::end_source_label(None), "none");
+    assert_eq!(end_record::end_source_label(Some(EndSource::SacctEnd)), "sacct_end");
+    assert_eq!(end_record::end_source_label(Some(EndSource::ExitFileMtime)), "exit_file_mtime");
+    assert_eq!(end_record::end_source_label(Some(EndSource::EndRecorder)), "end_recorder");
+  }
+
+  #[test]
+  fn sacct_end_converts_the_local_zone_value_to_a_remote_epoch() {
+    let expected =
+      |text: &str| OffsetDateTime::parse(text, &Rfc3339).expect("the expected instant parses").unix_timestamp_nanos();
+    assert_eq!(end_record::sacct_end_remote_ns("2026-11-03T09:12:29", 0).unwrap(), expected("2026-11-03T09:12:29Z"));
+    assert_eq!(
+      end_record::sacct_end_remote_ns("2026-11-03T09:12:29", -25_200).unwrap(),
+      expected("2026-11-03T16:12:29Z")
+    );
+    assert_eq!(end_record::sacct_end_remote_ns("Unknown", 0), None, "a running job states no end");
+    assert_eq!(end_record::sacct_end_remote_ns("", 0), None);
+  }
+
+  #[test]
+  fn pid_probe_read_takes_the_date_and_end_lines_between_it_and_the_verdict() {
+    let read = end_record::pid_probe_read("1700000100.0\n1700000060.5\nDEAD\n");
+    assert_eq!(read.now_ns, Some(1_700_000_100_000_000_000));
+    assert_eq!(read.end_ns, Some(1_700_000_060_500_000_000));
+    let read = end_record::pid_probe_read("1700000100.0\nALIVE\n");
+    assert_eq!(read.now_ns, Some(1_700_000_100_000_000_000));
+    assert_eq!(read.end_ns, None);
+    let read = end_record::pid_probe_read("ALIVE\n");
+    assert_eq!(read.now_ns, None, "a probe without the read prefix states no clock");
+    assert_eq!(read.end_ns, None);
+    // A DEAD probe whose verdict failed prints the shell's kill error between the date line and the verdict.
+    let read = end_record::pid_probe_read("1700000100.0\nbash: kill: (41) - No such process\nDEAD\n");
+    assert_eq!(read.now_ns, Some(1_700_000_100_000_000_000));
+    assert_eq!(read.end_ns, None);
+  }
+
+  #[test]
+  fn exit_read_keeps_the_whole_stdout_as_the_code_without_a_date_line() {
+    // A static-output fake prints only the exit file, which is all the exit read ever printed.
+    let read = end_record::exit_read("7\n");
+    assert_eq!(read.code.as_deref(), Some("7"));
+    assert_eq!(read.mtime_ns, None);
+    assert_eq!(read.now_ns, None);
+    let read = end_record::exit_read("1700000100.0\n7\n1700000060.5\n");
+    assert_eq!(read.code.as_deref(), Some("7"));
+    assert_eq!(read.mtime_ns, Some(1_700_000_060_500_000_000));
+    assert_eq!(read.now_ns, Some(1_700_000_100_000_000_000));
+    // A missing exit file prints only the date line.
+    let read = end_record::exit_read("1700000100.0\n");
+    assert_eq!(read.code, None);
+    assert_eq!(read.mtime_ns, None);
+  }
+
+  #[test]
+  fn the_offset_math_places_the_remote_end_on_the_server_clock() {
+    let started = SystemTime::UNIX_EPOCH + Duration::from_millis(1_000_000_000_000);
+    let ended = started + Duration::from_millis(700);
+    let mid = end_record::local_midpoint_ns(started, ended).expect("post-epoch instants convert");
+    assert_eq!(mid, 1_000_000_000_000_000_000 + 350_000_000);
+    let remote_now = mid + 400_000_000; // the remote clock is 400 ms ahead
+    let seen_gone = OffsetDateTime::from_unix_timestamp(1).expect("a fixed instant");
+    let end = end_record::reading(1_700_000_060_500_000_000, remote_now, mid, EndSource::EndRecorder, seen_gone)
+      .expect("the reading converts");
+    assert_eq!(end.clock_offset_ms, Some(400));
+    // end_server = end_remote − offset.
+    assert_eq!(end.end_at.unwrap().unix_timestamp_nanos(), 1_700_000_060_500_000_000 - 400_000_000);
+  }
+
+  #[test]
+  fn recorder_command_detaches_like_the_cmd_launcher_and_bounds_itself() {
+    let command = end_record::recorder_command(41, "abc-123", 3600);
+    assert!(
+      command.contains("setsid sh -c 'timeout 3600 tail --pid=41 -f /dev/null"),
+      "bounded by the trigger's max wait: {command}"
+    );
+    assert!(command.contains("</dev/null >/dev/null 2>&1 &"), "fully detached: {command}");
+    assert!(
+      command.contains("$HOME/charliebot_runs/watch-abc-123/41.end"),
+      "end file under the remote home: {command}"
+    );
+    assert!(command.ends_with("; "), "the probe verdict follows the recorder: {command}");
+    let probe = format!("{command}kill -0 41 2>&1 && echo ALIVE || echo DEAD");
+    assert!(probe.lines().last().expect("one line").ends_with("echo DEAD"), "verdict stays last: {probe}");
+    assert_eq!(end_record::end_file_word("abc-123", 41), "\"$HOME/charliebot_runs/watch-abc-123/41.end\"");
+  }
+
+  // ---- End-time readback: the fire log ----
+
+  #[test]
+  fn fire_log_takes_the_latest_end_and_lags_from_creation_when_the_end_precedes_it() {
+    let trigger = pending_trigger(
+      "synthetic-fire-log",
+      SESSION_ID,
+      near_future(10),
+      vec![WatchTarget::RemotePid { host: "synthetic-host".to_string(), pid: 41, exit_file: None, log: None }],
+    );
+    let created = trigger.created_at.into_inner();
+    let seen_gone = |offset: time::Duration| created + offset;
+    let early = RemoteTargetEnd {
+      end_at: Some(created - time::Duration::seconds(5)),
+      source: Some(EndSource::SacctEnd),
+      clock_offset_ms: Some(10),
+      seen_gone_at: seen_gone(time::Duration::seconds(1)),
+    };
+    let late = RemoteTargetEnd {
+      end_at: Some(created + time::Duration::seconds(30)),
+      source: Some(EndSource::EndRecorder),
+      clock_offset_ms: Some(20),
+      seen_gone_at: seen_gone(time::Duration::seconds(31)),
+    };
+    let fired_at = UtcDateTime::from(created + time::Duration::seconds(60));
+    let log = build_fire_log(&trigger, fired_at, &[early, late], false);
+    let end = log.end.expect("the latest end wins");
+    assert_eq!(end.source, EndSource::EndRecorder);
+    assert_eq!(end.clock_offset_ms, 20);
+    assert_eq!(end.end_at, created + time::Duration::seconds(30));
+    assert_eq!(end.lag_ms, 30_000);
+    assert_eq!(log.seen_gone_at, Some(created + time::Duration::seconds(31)));
+    assert!(!log.recovered);
+    assert!((log.wait_s - 60.0).abs() < 0.001);
+    // No recorded end: the end-derived fields stay absent and the label reads none.
+    let seen = seen_gone_only(created);
+    let log = build_fire_log(&trigger, fired_at, &[seen], true);
+    assert!(log.end.is_none());
+    assert_eq!(end_record::end_source_label(log.end.as_ref().map(|end| end.source)), "none");
+    assert_eq!(log.seen_gone_at, Some(created));
+    assert!(log.recovered);
+    let log = build_fire_log(&trigger, fired_at, &[], false);
+    assert!(log.end.is_none() && log.seen_gone_at.is_none(), "a timeout fire with nothing seen gone logs neither");
+  }
+
+  // ---- End-time readback: scripted ssh sequences ----
+
+  /// The fixed end instant a scripted sequence writes, far before any test's creation time, as one epoch.ns line.
+  const SCRIPTED_END_NS: i128 = 1_700_000_060_500_000_000;
+
+  /// The same instant as the epoch.ns line the recorder writes.
+  fn scripted_end_line() -> String {
+    format!("{}.500000000", SCRIPTED_END_NS / 1_000_000_000)
+  }
+
+  fn sequence(entries: serde_json::Value) -> Value {
+    json!({ "sequence": entries })
+  }
+
+  fn scripted_manager(
+    features: Arc<FeatureContext>,
+    root: &Path,
+    ssh_sequence: Value,
+    sacct_sequence: Value,
+  ) -> Arc<TriggerManager> {
+    fake_manager(features, root, sequence(ssh_sequence), sequence(sacct_sequence))
+  }
+
+  fn fake_calls(root: &Path, role: &str) -> usize {
+    std::fs::read_to_string(root.join("fake-bin").join(format!("{role}.calls")))
+      .expect("the fake recorded its call count")
+      .trim()
+      .parse()
+      .expect("the call count parses")
+  }
+
+  /// One JSON array of argv per invocation of the fake program.
+  fn fake_argv(root: &Path, role: &str) -> Vec<Vec<String>> {
+    std::fs::read_to_string(root.join("fake-bin").join(format!("{role}.argv.jsonl")))
+      .expect("the fake recorded its argv")
+      .lines()
+      .map(|line| serde_json::from_str(line).expect("an argv line parses"))
+      .collect()
+  }
+
+  fn log_line_count(text: &str, line: &str) -> usize {
+    text.lines().filter(|logged| logged.contains(line)).count()
+  }
+
+  /// One `key=value` field of the rendered log text, up to the next space or newline.
+  fn log_field(text: &str, field: &str) -> String {
+    let start = text.find(&format!("{field}=")).expect("the log line names the field") + field.len() + 1;
+    let rest = &text[start..];
+    let end = rest.find([' ', '\n']).unwrap_or(rest.len());
+    rest[..end].to_string()
+  }
+
+  async fn wait_until_fired(manager: &Arc<TriggerManager>, trigger_id: &str) -> PendingTrigger {
+    for _ in 0..500 {
+      sleep(Duration::from_millis(10)).await;
+      if let Ok(trigger) = manager.load_trigger(SESSION_ID, trigger_id).await
+        && trigger.status == TriggerStatus::Fired
+      {
+        return trigger;
+      }
+    }
+    panic!("trigger {trigger_id} never fired");
+  }
+
+  /// A scripted pid-only wake, end to end: the verify ssh starts the end recorder, the probes wake on the
+  /// ALIVE→DEAD transition, and the DEAD probe reads the end file back in the same ssh.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn scripted_remote_pid_wake_wakes_and_logs_the_recorded_end() {
+    let (home, features) = feature_context();
+    add_task_node(&features, SESSION_ID).await;
+    install_dispatcher(&features);
+    let end_line = scripted_end_line();
+    let ssh_sequence = json!([
+      { "stdout": "ALIVE\n", "stderr": "", "exit": 0 },
+      { "stdout": "$NOW_NS\nALIVE\n", "stderr": "", "exit": 0 },
+      { "stdout": format!("$NOW_NS\n{end_line}\nDEAD\n"), "stderr": "", "exit": 0 },
+    ]);
+    let manager = scripted_manager(Arc::clone(&features), home.path(), ssh_sequence, json!([]));
+    let log = LogCapture::default();
+    let _capture = log.install();
+
+    let trigger = manager
+      .create_trigger(
+        SESSION_ID,
+        3600,
+        "scripted wake",
+        Some(vec![WatchTarget::RemotePid { host: "synthetic-host".to_string(), pid: 41, exit_file: None, log: None }]),
+        None,
+        None,
+        true,
+      )
+      .await
+      .expect("the scripted wake registers");
+    let fired = wait_until_fired(&manager, &trigger.id).await;
+    assert_eq!(fired.fire_reason.as_deref(), Some("completed"), "the wait that wakes today still wakes");
+
+    // ssh processes per wake: the same 3 the before build starts (1 verify + 2 probe rounds), each logged once.
+    assert_eq!(fake_calls(home.path(), "fake-ssh"), 3);
+    let started_lines = log_line_count(&log.text(), "remote_ssh_started");
+    assert_eq!(started_lines, 3, "{}", log.text());
+    let purposes: Vec<String> = log
+      .text()
+      .lines()
+      .filter(|line| line.contains("remote_ssh_started"))
+      .map(|line| log_field(line, "purpose"))
+      .collect();
+    assert_eq!(purposes, ["verify", "probe", "probe"], "{}", log.text());
+    assert_eq!(fake_argv(home.path(), "fake-ssh").len(), 3, "every logged start names one ssh process");
+
+    // The recorder rode the verify ssh, and the end readback rode the DEAD probe: no extra ssh per wake.
+    let argv = fake_argv(home.path(), "fake-ssh");
+    let verify_command = argv[0].last().expect("the remote command");
+    assert!(verify_command.contains(&format!("watch-{}/41.end", trigger.id)), "{verify_command}");
+    assert!(verify_command.contains("setsid sh -c 'timeout 3600 tail --pid=41"), "{verify_command}");
+    let dead_command = argv[2].last().expect("the remote command");
+    assert!(
+      dead_command.contains(&format!("cat \"$HOME/charliebot_runs/watch-{}/41.end\"", trigger.id)),
+      "{dead_command}"
+    );
+    assert!(
+      dead_command.contains(&format!("rm -f \"$HOME/charliebot_runs/watch-{}/41.end\"", trigger.id)),
+      "{dead_command}"
+    );
+
+    // The trigger_fired line carries the new fields, and the end converts by the offset it measured in the same ssh.
+    let text = log.text();
+    let fired_lines: Vec<&str> =
+      text.lines().filter(|line| line.contains("trigger_fired") && line.contains(&trigger.id)).collect();
+    assert_eq!(fired_lines.len(), 1, "{text}");
+    let line = fired_lines[0];
+    for field in [
+      "remote_end_at=",
+      "end_source=end_recorder",
+      "lag_ms=",
+      "clock_offset_ms=",
+      "seen_gone_at=",
+      "recovered=false",
+      "wait_s=",
+    ] {
+      assert!(line.contains(field), "missing {field}: {line}");
+    }
+    let offset_ms: i128 = log_field(line, "clock_offset_ms").parse().expect("the offset is an integer");
+    let remote_end_at = log_field(line, "remote_end_at");
+    let end_ns =
+      OffsetDateTime::parse(&remote_end_at, &Rfc3339).expect("the end instant parses").unix_timestamp_nanos();
+    assert_eq!(end_ns, SCRIPTED_END_NS - offset_ms * 1_000_000);
+    let lag_ms: i64 = log_field(line, "lag_ms").parse().expect("the lag is an integer");
+    assert!(lag_ms >= 0, "the job ended before the trigger was created, so the lag runs from creation: {line}");
+    let wait_s: f64 = log_field(line, "wait_s").parse().expect("the wait is a float");
+    assert!(wait_s > 0.0, "{line}");
+  }
+
+  /// The same scripted wake after boot recovery: the waiter the recovery started logs `recovered=true`.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_recovered_remote_wake_logs_recovered_true() {
+    let (home, features) = feature_context();
+    add_task_node(&features, SESSION_ID).await;
+    install_dispatcher(&features);
+    let ssh_sequence = json!([
+      { "stdout": "$NOW_NS\nALIVE\n", "stderr": "", "exit": 0 },
+      { "stdout": format!("$NOW_NS\n{}\nDEAD\n", scripted_end_line()), "stderr": "", "exit": 0 },
+    ]);
+    let manager = scripted_manager(Arc::clone(&features), home.path(), ssh_sequence, json!([]));
+    let trigger = pending_trigger(
+      "synthetic-recovered-remote",
+      SESSION_ID,
+      near_future(60),
+      vec![WatchTarget::RemotePid { host: "synthetic-host".to_string(), pid: 41, exit_file: None, log: None }],
+    );
+    manager.save_trigger(&trigger).await.expect("save the pending trigger");
+    let log = LogCapture::default();
+    let _capture = log.install();
+    manager.recover_pending().await.expect("recover pending triggers");
+    let fired = wait_until_fired(&manager, &trigger.id).await;
+    assert_eq!(fired.fire_reason.as_deref(), Some("completed"));
+    let text = log.text();
+    let line =
+      text.lines().find(|line| line.contains("trigger_fired") && line.contains(&trigger.id)).expect("the fire logged");
+    assert!(line.contains("recovered=true"), "{line}");
+    assert!(line.contains("end_source=end_recorder"), "{line}");
+  }
+
+  /// A scripted remote slurm wake: the sacct readback ssh that answers the terminal state also carries the clock
+  /// and zone lines the `End` conversion reads.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn scripted_remote_slurm_wake_reads_the_sacct_end() {
+    let (home, features) = feature_context();
+    let end_raw = "2026-11-03T09:12:29";
+    let ssh_sequence = json!([
+      { "stdout": "$NOW_NS\n+0000\n123|RUNNING|0:0|\n", "stderr": "", "exit": 0 },
+      { "stdout": format!("$NOW_NS\n+0000\n123|COMPLETED|0:0|{end_raw}\n"), "stderr": "", "exit": 0 },
+    ]);
+    let manager = scripted_manager(Arc::clone(&features), home.path(), ssh_sequence, json!([]));
+    let trigger = pending_trigger("synthetic-scripted-slurm", SESSION_ID, near_future(10), Vec::new());
+    let log = LogCapture::default();
+    let _capture = log.install();
+    let target = SlurmJob { kind: "slurm_job".to_string(), host: Some("synthetic-host".to_string()), job_id: 123 };
+    let (finished, still_alive, ends) = manager.wait_with_sacct(&trigger, &[target]).await.expect("remote SLURM wait");
+    assert_eq!(finished, ["synthetic-host:slurm:123: COMPLETED 0:0"]);
+    assert!(still_alive.is_empty());
+    assert_eq!(fake_calls(home.path(), "fake-ssh"), 2, "one ssh per probe round, as the before build starts");
+    assert_eq!(log_line_count(&log.text(), "remote_ssh_started"), 2, "{}", log.text());
+    assert_eq!(ends.len(), 1);
+    let end = &ends[0];
+    assert_eq!(end.source, Some(EndSource::SacctEnd));
+    let expected_utc =
+      OffsetDateTime::parse("2026-11-03T09:12:29Z", &Rfc3339).expect("the end instant parses").unix_timestamp_nanos();
+    let offset_ms = i128::from(end.clock_offset_ms.expect("the readback measured an offset"));
+    assert_eq!(end.end_at.expect("the end converts").unix_timestamp_nanos(), expected_utc - offset_ms * 1_000_000);
+  }
+
+  /// A scripted `--cmd` wake: the exit read it pays anyway also reads the file's mtime as the end instant.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn scripted_remote_cmd_wake_reads_the_exit_file_mtime() {
+    let (home, features) = feature_context();
+    let ssh_sequence = json!([
+      { "stdout": "ALIVE\n", "stderr": "", "exit": 0 },
+      { "stdout": "DEAD\n", "stderr": "", "exit": 0 },
+      { "stdout": "$NOW_NS\n7\n1700000060.500000000\n", "stderr": "", "exit": 0 },
+    ]);
+    let manager = scripted_manager(Arc::clone(&features), home.path(), ssh_sequence, json!([]));
+    let trigger = pending_trigger("synthetic-scripted-cmd", SESSION_ID, near_future(10), Vec::new());
+    let log = LogCapture::default();
+    let _capture = log.install();
+    let target = RemotePid {
+      kind: "remote_pid".to_string(),
+      host: "synthetic-host".to_string(),
+      pid: 41,
+      exit_file: Some("/synthetic/exit".to_string()),
+      log: None,
+    };
+    let (finished, still_alive, ends) = manager.wait_with_remote_probe(&trigger, &[target]).await.expect("remote wait");
+    assert_eq!(finished, ["synthetic-host:41: exit 7"]);
+    assert!(still_alive.is_empty());
+    // ssh processes per wake: the same 3 the before build starts (2 probe rounds + 1 exit read).
+    assert_eq!(fake_calls(home.path(), "fake-ssh"), 3);
+    assert_eq!(log_line_count(&log.text(), "remote_ssh_started"), 3, "{}", log.text());
+    assert!(ends[0].source == Some(EndSource::ExitFileMtime));
+    let offset_ms = i128::from(ends[0].clock_offset_ms.expect("the readback measured an offset"));
+    assert_eq!(
+      ends[0].end_at.expect("the end converts").unix_timestamp_nanos(),
+      1_700_000_060_500_000_000 - offset_ms * 1_000_000
+    );
+    let purposes: Vec<String> = log
+      .text()
+      .lines()
+      .filter(|line| line.contains("remote_ssh_started"))
+      .map(|line| log_field(line, "purpose"))
+      .collect();
+    assert_eq!(purposes, ["probe", "probe", "readback"], "{}", log.text());
+  }
+
+  /// A scripted pid-only wake whose recorder left no end file: the fire is untouched and the warning names the
+  /// trigger, and the line reads `end_source=none` without the end-derived fields.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_dead_probe_without_an_end_file_warns_and_fires_without_end_fields() {
+    let (home, features) = feature_context();
+    add_task_node(&features, SESSION_ID).await;
+    install_dispatcher(&features);
+    let ssh_sequence = json!([
+      { "stdout": "ALIVE\n", "stderr": "", "exit": 0 },
+      { "stdout": "$NOW_NS\nALIVE\n", "stderr": "", "exit": 0 },
+      { "stdout": "$NOW_NS\nDEAD\n", "stderr": "", "exit": 0 },
+    ]);
+    let manager = scripted_manager(Arc::clone(&features), home.path(), ssh_sequence, json!([]));
+    let log = LogCapture::default();
+    let _capture = log.install();
+    let trigger = manager
+      .create_trigger(
+        SESSION_ID,
+        3600,
+        "wake without an end file",
+        Some(vec![WatchTarget::RemotePid { host: "synthetic-host".to_string(), pid: 41, exit_file: None, log: None }]),
+        None,
+        None,
+        true,
+      )
+      .await
+      .expect("the scripted wake registers");
+    let fired = wait_until_fired(&manager, &trigger.id).await;
+    assert_eq!(fired.fire_reason.as_deref(), Some("completed"), "the missing end file never blocks the fire");
+    let text = log.text();
+    let warning = text.lines().find(|line| line.contains("remote_end_read_failed")).expect("the warning logged");
+    assert!(warning.contains(&trigger.id), "{warning}");
+    let line = text.lines().find(|line| line.contains("trigger_fired")).expect("the fire logged");
+    assert!(line.contains("end_source=none"), "{line}");
+    for absent in ["remote_end_at=", "lag_ms=", "clock_offset_ms="] {
+      assert!(!line.contains(absent), "{absent} must be absent: {line}");
+    }
+    assert!(line.contains("seen_gone_at="), "the server did see the target gone: {line}");
   }
 }

@@ -227,7 +227,13 @@ body.resizing { cursor: col-resize; user-select: none; }
   max-width: 220px;
 }
 .file-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-chip button { background: transparent; border: none; cursor: pointer; color: #64748b; padding: 0; line-height: 1; flex-shrink: 0; }
+/* The chip's one control: a 24 px box clears WCAG 2.5.8's pointer floor, and the chip's own text
+   tone #94a3b8 reads 5.71:1 on the #1e293b chip, above the 4.5:1 floor for this 12 px glyph. The
+   box is the chip's tallest child, so the chip takes the box's height plus its own 0.2 rem padding
+   and 1 px border on each side. */
+.file-chip button { display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; background: transparent; border: none; cursor: pointer;
+  color: #94a3b8; padding: 0; line-height: 1; flex-shrink: 0; }
 .file-chip button:hover { color: #e2e8f0; }
 .file-chip-icon {
   display: inline-flex;

@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 use crate::adapter::{self, Bot};
 use crate::client::BASE_URL;
 use crate::commands;
+use crate::fields::MESSAGE_ID;
 
 /// The read request's default window size: 50, bounded to 1..=100.
 const DEFAULT_READ_LIMIT: u64 = 50;
@@ -49,7 +50,7 @@ const READ_BODY: BodyModel = BodyModel::required(READ_FIELDS).forbid_extra();
 /// path.
 const DOWNLOAD_FIELDS: &[Field] = &[
   Field::required(SESSION_ID, FieldType::String),
-  Field::required("message_id", FieldType::String),
+  Field::required(MESSAGE_ID, FieldType::String),
   Field::required("file_key", FieldType::String),
   Field::required("kind", FieldType::Literal(DOWNLOAD_KINDS)),
   Field::required("output", FieldType::String),
@@ -173,7 +174,7 @@ async fn post_download(State(bot): State<Bot>, request: Request<Body>) -> Respon
     commands::download(
       &bot,
       &text_field(&fields, SESSION_ID),
-      &text_field(&fields, "message_id"),
+      &text_field(&fields, MESSAGE_ID),
       &text_field(&fields, "file_key"),
       &text_field(&fields, "kind"),
       &text_field(&fields, "output"),

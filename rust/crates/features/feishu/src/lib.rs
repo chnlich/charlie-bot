@@ -9,6 +9,7 @@ mod commands;
 mod config;
 mod event;
 mod event_types;
+mod fields;
 mod frame;
 mod listener;
 pub mod metadata;

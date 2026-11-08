@@ -23,6 +23,7 @@ use uuid::Uuid;
 use crate::client::{BASE_URL, FeishuAPIError, FeishuClient, Page};
 use crate::config::FeishuConfig;
 use crate::event::{self, Inbound, Message};
+use crate::fields::{CHAT_ID, CREATE_TIME, MENTION_ID, MESSAGE_ID, ROOT_ID, THREAD_ID};
 use crate::metadata::{FEISHU_ORIGIN, FeishuOrigin};
 use crate::owners;
 use crate::thread_contract::FEISHU;
@@ -133,7 +134,7 @@ impl FeishuThreadAdapter {
     let client = self.client().await?;
     let thread_id = match thread_id {
       Some(thread_id) => thread_id.to_string(),
-      None => match client.message(root_id).await?.get("thread_id").and_then(Value::as_str) {
+      None => match client.message(root_id).await?.get(THREAD_ID).and_then(Value::as_str) {
         Some(thread_id) => thread_id.to_string(),
         None => return Ok(Vec::new()),
       },
@@ -168,13 +169,13 @@ pub fn thread_message(item: &Value) -> anyhow::Result<ThreadMessage> {
   let text_of = |object: &Value, name: &str| -> anyhow::Result<String> {
     Ok(object.get(name).and_then(Value::as_str).with_context(|| format!("a message has no {name}"))?.to_string())
   };
-  let message_id = text_of(item, "message_id")?;
-  let create_time = text_of(item, "create_time")?;
+  let message_id = text_of(item, MESSAGE_ID)?;
+  let create_time = text_of(item, CREATE_TIME)?;
   let sender = item.get("sender").context("a message has no sender")?;
   let sender_type = text_of(sender, "sender_type")?;
   let sender_id = text_of(sender, "id")?;
   let thread_id = item
-    .get("thread_id")
+    .get(THREAD_ID)
     .filter(|value| !value.is_null())
     .map(|value| value.as_str().context("a message thread_id is not a string"))
     .transpose()?;
@@ -194,10 +195,10 @@ pub fn thread_message(item: &Value) -> anyhow::Result<ThreadMessage> {
     text,
     created_at: Some(rfc3339_of_millis(&create_time)?),
     metadata: Some(json!({
-      "message_id": message_id,
+      (MESSAGE_ID): message_id,
       "message_type": message_type_of(item)?,
-      "chat_id": item.get("chat_id").and_then(Value::as_str),
-      "thread_id": thread_id,
+      (CHAT_ID): item.get(CHAT_ID).and_then(Value::as_str),
+      (THREAD_ID): thread_id,
     })),
     bot_id: (sender_type == "app").then_some(sender_id.clone()),
     eligible: is_user && !deleted,
@@ -211,7 +212,7 @@ impl ThreadAdapter for FeishuThreadAdapter {
 
   fn post<'a>(&'a self, address: &'a Value, text: &'a str, post_key: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async move {
-      let chat_id = str_field(address, "chat_id")?;
+      let chat_id = str_field(address, CHAT_ID)?;
       let config = self.bot.config()?;
       let owners = &config.section::<FeishuConfig>("feishu").allowed_users;
       let client = self.client().await?;
@@ -219,7 +220,7 @@ impl ThreadAdapter for FeishuThreadAdapter {
         bail!("chat {chat_id} has no listed owner among its members, so the reply is refused");
       }
       let uuid = Uuid::new_v5(&FEISHU_NS, post_key.as_bytes()).to_string();
-      client.reply_in_thread(str_field(address, "root_id")?, text, &uuid).await?;
+      client.reply_in_thread(str_field(address, ROOT_ID)?, text, &uuid).await?;
       Ok(())
     })
   }
@@ -237,8 +238,8 @@ impl ThreadAdapter for FeishuThreadAdapter {
       let thread = match messages {
         Some(messages) => messages.to_vec(),
         None => {
-          let thread_id = address.get("thread_id").and_then(Value::as_str);
-          self.thread_messages(str_field(address, "root_id")?, thread_id).await?
+          let thread_id = address.get(THREAD_ID).and_then(Value::as_str);
+          self.thread_messages(str_field(address, ROOT_ID)?, thread_id).await?
         }
       };
       let created_after = UtcDateTime::parse(created_after)?;
@@ -298,17 +299,17 @@ impl ThreadAdapter for FeishuThreadAdapter {
   fn address_of(&self, origin: &Value) -> Value {
     let origin = origin_of(origin).expect("a stored feishu_origin names its chat and root");
     let mut address = Map::new();
-    address.insert("chat_id".to_string(), json!(origin.chat_id));
-    address.insert("root_id".to_string(), json!(origin.root_id));
+    address.insert(CHAT_ID.to_string(), json!(origin.chat_id));
+    address.insert(ROOT_ID.to_string(), json!(origin.root_id));
     if let Some(thread_id) = origin.thread_id {
-      address.insert("thread_id".to_string(), json!(thread_id));
+      address.insert(THREAD_ID.to_string(), json!(thread_id));
     }
     Value::Object(address)
   }
 
   fn log_fields(&self, address: &Value) -> Value {
-    let thread = address.get("thread_id").filter(|value| !value.is_null()).unwrap_or(&address["root_id"]);
-    json!({"chat": address["chat_id"], "thread": thread})
+    let thread = address.get(THREAD_ID).filter(|value| !value.is_null()).unwrap_or(&address[ROOT_ID]);
+    json!({"chat": address[CHAT_ID], "thread": thread})
   }
 }
 
@@ -364,7 +365,7 @@ async fn record_thread_id(bot: &Bot, session_id: &str) -> Result<(), thread_entr
   }
   let root = bot.client()?.message(&origin.root_id).await.map_err(api_failure)?;
   let thread_id = root
-    .get("thread_id")
+    .get(THREAD_ID)
     .and_then(Value::as_str)
     .with_context(|| format!("the root message {} has no thread after the reply", origin.root_id))?;
   let origin = FeishuOrigin { thread_id: Some(thread_id.to_string()), ..origin };
@@ -427,9 +428,9 @@ pub async fn accept_summon(
   };
   let origin = serde_json::to_value(&origin)?;
   let block = json!({
-    "chat_id": message.chat_id,
-    "root_id": message.thread_root()?,
-    "mention_id": composite_id(&message.create_time, &message.message_id),
+    (CHAT_ID): message.chat_id,
+    (ROOT_ID): message.thread_root()?,
+    (MENTION_ID): composite_id(&message.create_time, &message.message_id),
   });
   let label = format!("{SESSION_LABEL}{}", message.chat_id);
   let accepted = thread_entry::accept_summon(
@@ -463,8 +464,8 @@ pub async fn route_inbound(
       let session_id = summon_session_id(&message.tenant_key, &message.chat_id, &root);
       let composite = composite_id(&message.create_time, &message.message_id);
       let origin_matches = |origin: &Value| {
-        origin.get("chat_id").and_then(Value::as_str) == Some(message.chat_id.as_str())
-          && origin.get("root_id").and_then(Value::as_str) == Some(root.as_str())
+        origin.get(CHAT_ID).and_then(Value::as_str) == Some(message.chat_id.as_str())
+          && origin.get(ROOT_ID).and_then(Value::as_str) == Some(root.as_str())
       };
       Ok(thread_entry::follow_message(adapter, features, &session_id, &composite, origin_matches).await?)
     }

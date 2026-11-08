@@ -26,6 +26,7 @@ use crate::event::{self, Inbound, Message};
 use crate::fields::{CHAT_ID, CREATE_TIME, MENTION_ID, MESSAGE_ID, ROOT_ID, THREAD_ID};
 use crate::metadata::{FEISHU_ORIGIN, FeishuOrigin};
 use crate::owners;
+use crate::package::NAME;
 use crate::thread_contract::FEISHU;
 
 /// The namespace of Feishu session ids. Changing it would orphan every existing Feishu-backed session.
@@ -83,15 +84,15 @@ impl Bot {
   /// The app's client, built on `credentials.feishu.app_id` and `app_secret`. A missing value fails the call.
   pub fn client(&self) -> anyhow::Result<FeishuClient> {
     let credentials = self.features.credentials.get()?;
-    let app_id = credentials.require("feishu", "app_id")?;
-    let app_secret = credentials.require("feishu", "app_secret")?;
+    let app_id = credentials.require(NAME, "app_id")?;
+    let app_secret = credentials.require(NAME, "app_secret")?;
     let http = http_client::client(&http_client::Settings::from_env())?;
     Ok(FeishuClient::new(http, self.base_url.clone(), app_id, app_secret))
   }
 
   /// The app id, which is the sender id of every message the bot posts.
   pub fn app_id(&self) -> anyhow::Result<String> {
-    Ok(self.features.credentials.get()?.require("feishu", "app_id")?)
+    Ok(self.features.credentials.get()?.require(NAME, "app_id")?)
   }
 
   /// The loaded config, read for one call.
@@ -214,7 +215,7 @@ impl ThreadAdapter for FeishuThreadAdapter {
     Box::pin(async move {
       let chat_id = str_field(address, CHAT_ID)?;
       let config = self.bot.config()?;
-      let owners = &config.section::<FeishuConfig>("feishu").allowed_users;
+      let owners = &config.section::<FeishuConfig>(NAME).allowed_users;
       let client = self.client().await?;
       if !owners::chat_has_owner(client, owners, chat_id).await? {
         bail!("chat {chat_id} has no listed owner among its members, so the reply is refused");

@@ -6,6 +6,8 @@ use std::sync::Arc;
 use charliebot_core::config::{ConfigSection, SectionValue};
 use serde::{Deserialize, Serialize};
 
+use crate::package::NAME;
+
 /// The `feishu:` section. `allowed_users` maps the Feishu open_id of each owner to the person that account belongs to.
 /// A group is admitted when one of these people is a member of it, and then every human member of the group can summon
 /// the bot. An empty map leaves the Feishu feature unconfigured.
@@ -17,7 +19,7 @@ pub struct FeishuConfig {
 }
 
 pub fn section() -> ConfigSection {
-  ConfigSection { key: "feishu", legacy_keys: &[], parse: parse_section, dump: dump_section }
+  ConfigSection { key: NAME, legacy_keys: &[], parse: parse_section, dump: dump_section }
 }
 
 /// The section as its model dumps it (`charliebot config get feishu`).

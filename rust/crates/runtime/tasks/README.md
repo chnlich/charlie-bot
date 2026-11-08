@@ -42,7 +42,8 @@ shutdown and re-attachment into server lifespan.
 - `review::select_reviewer_backend`
 - `review::ReviewerBackendSelection`
 - `task_sessions::create_retry`
-- `session_anchors::context_reset_note` and `backend_switch_reset_reason`
+- `session_anchors::manager_context_reset_note` and `manager_switch_reset_note`
+- `session_anchors::worker_switch_reset_note` and `backend_switch_reset_reason`
 - `execution::LaunchSettlement`
 - `execution::TaskExecutionAdapter` and `TaskExecutionAdapter::new`
 - `TaskExecutionAdapter::take_quota_failure`

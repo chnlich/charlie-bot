@@ -152,8 +152,8 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 - Rust: `turn_contribution(name: &'static str, contribution: Arc<dyn TurnContribution>)`. The trait's one required
   method is `class_name()`, the name the after-turn task name carries. The other steps default to
   adding nothing: `instruction_segments(&self, meta: &SessionMetadata, kind: &str, cfg: &CharlieBotConfig,
-  repo: &RepoRoot)`, `workflow_rules_file`, `input_preamble`, `event_renderers`, `claims_turn_end_unread`, and the
-  async `before_turn` and `after_turn(meta, done_event, cfg, features)` hooks. `repo` is the checkout the server serves
+  repo: &RepoRoot)`, `workflow_rules_file`, `input_preamble`, `status_goal_line(meta)`, `event_renderers`,
+  `claims_turn_end_unread`, and the async `before_turn` and `after_turn(meta, done_event, cfg, features)` hooks. `repo` is the checkout the server serves
   (`RepoRoot`); a contribution reads its prompt docs through it, and `Registry::instruction_segments` takes the same
   `repo` argument and passes it to each contribution. The registry's readers run them in registration order. Two
   contributions that render the same event type fail.

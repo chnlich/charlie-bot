@@ -2142,22 +2142,29 @@ impl TaskExecutionAdapter {
       .map(|value| serde_json::from_value::<backend_pool::BackendRoute>(value.clone()))
       .transpose()?;
     let routed = route.filter(|route| !route.backends.is_empty());
-    let routed_member = match routed.as_ref() {
-      // A route that names a pool id leaves the member to that pool; a route of options ids is ordered here.
+    // The pool that picks the member, which the switch record names.
+    let mut pool_id = String::new();
+    let mut member = match routed.as_ref() {
+      // A route that names a pool id leaves the member to that pool; a route of options ids is ordered by its id.
       Some(route) => match route.backends.iter().find(|backend| cfg.backends.pool(backend).is_some()) {
-        Some(pool_id) => pool.select(&cfg, "failover", pool_id, &exclude)?,
-        None => pool.pick_ordered(&cfg, "failover", &route.backends, &exclude)?,
+        Some(route_pool_id) => {
+          pool_id = route_pool_id.clone();
+          pool.select(&cfg, "failover", route_pool_id, &exclude)?
+        }
+        None => {
+          pool_id = model_pool::ROUTE_POOL_ID.to_string();
+          pool.pick_ordered(&cfg, "failover", &route.backends, &exclude)?
+        }
       },
       None => None,
     };
     // A spent route falls back to the worker's own pool.
-    let member = match routed_member {
-      Some(member) => Some(member),
-      None => match spawner_backends::worker_pool_id(&cfg, meta) {
-        Some(pool_id) => pool.select(&cfg, "failover", pool_id, &exclude)?,
-        None => None,
-      },
-    };
+    if member.is_none()
+      && let Some(worker_pool_id) = spawner_backends::worker_pool_id(&cfg, meta)
+    {
+      pool_id = worker_pool_id.to_string();
+      member = pool.select(&cfg, "failover", worker_pool_id, &exclude)?;
+    }
     let Some(member) = member else { return Ok(false) };
     let guard = self.features.store.control_lock().await;
     self.features.store.set_node_backend_locked(&guard, &meta.id, &member.id).await?;
@@ -2194,7 +2201,7 @@ impl TaskExecutionAdapter {
           "to": member.id,
           "recovers_at": recovers_at,
           event_types::QUOTA_FAILOVER_REASON: event_types::QUOTA_REASON_QUOTA_ERROR,
-          event_types::QUOTA_FAILOVER_SET: event_types::QUOTA_SET_POOL,
+          event_types::QUOTA_FAILOVER_SET: pool_id,
           event_types::QUOTA_FAILOVER_SUMMARY: handoff.summary,
         }),
       )
@@ -2860,7 +2867,6 @@ fn auto_switch_source(
   }
   let switched = features.store.load_chat_events_sync(&meta.id)?.iter().rev().any(|event| {
     event.get("type").and_then(CompactValue::as_str) == Some(event_types::QUOTA_FAILOVER)
-      && event.get(event_types::QUOTA_FAILOVER_SET).and_then(CompactValue::as_str) == Some(event_types::QUOTA_SET_POOL)
       && event.get(event_types::QUOTA_FAILOVER_REASON).and_then(CompactValue::as_str)
         == Some(event_types::QUOTA_REASON_QUOTA_ERROR)
       && event.get("from").and_then(CompactValue::as_str) == Some(from.as_str())
@@ -3144,7 +3150,6 @@ fn worker_failover_source(
   };
   let switched = features.store.load_chat_events_sync(&record_session)?.iter().rev().any(|event| {
     event.get("type").and_then(CompactValue::as_str) == Some(event_types::QUOTA_FAILOVER)
-      && event.get(event_types::QUOTA_FAILOVER_SET).and_then(CompactValue::as_str) == Some(event_types::QUOTA_SET_POOL)
       && event.get(event_types::QUOTA_FAILOVER_REASON).and_then(CompactValue::as_str)
         == Some(event_types::QUOTA_REASON_QUOTA_ERROR)
       && event.get("from").and_then(CompactValue::as_str) == Some(from.as_str())

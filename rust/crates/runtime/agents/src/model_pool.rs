@@ -302,7 +302,7 @@ impl MemberChange {
       ("from".to_string(), json!(self.from)),
       ("to".to_string(), json!(self.to)),
       (event_types::QUOTA_FAILOVER_REASON.to_string(), json!(self.reason)),
-      (event_types::QUOTA_FAILOVER_SET.to_string(), json!(event_types::QUOTA_SET_POOL)),
+      (event_types::QUOTA_FAILOVER_SET.to_string(), json!(self.pool)),
       ("recovers_at".to_string(), json!(self.recovers_at.clone().unwrap_or_default())),
     ]);
     if let Some(summary) = &self.summary {
@@ -1039,7 +1039,7 @@ backends:
     assert_eq!(event["from"], "chatgpt");
     assert_eq!(event["to"], "claude-sub");
     assert_eq!(event["reason"], "quota_error");
-    assert_eq!(event["set"], "pool", "the set names the kind of selector that switched");
+    assert_eq!(event["set"], "auto", "the set names the pool that switched");
     assert_eq!(meta.extra(POOL_MEMBER_FIELD), Some(&json!("claude-sub")));
   }
 
@@ -1058,7 +1058,7 @@ backends:
     availability(&features).record("payg-a", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
     let change = changed(start_turn(&features, &cfg, &mut meta).await.unwrap());
     assert_eq!((change.from.as_str(), change.to.as_str()), ("payg-a", "chatgpt"));
-    assert_eq!(change.event()["set"], "pool");
+    assert_eq!(change.event()["set"], "light");
   }
 
   #[tokio::test]

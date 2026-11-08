@@ -1921,7 +1921,7 @@ mod tests {
     assert_eq!(switches.len(), 1, "one switch record in the bound session's chat: {switches:?}");
     assert_eq!(switches[0]["from"], "member-a");
     assert_eq!(switches[0]["to"], "member-b");
-    assert_eq!(switches[0]["set"], event_types::QUOTA_SET_POOL);
+    assert_eq!(switches[0]["set"], AUTO_POOL_ID);
     assert_eq!(switches[0]["summary"], charliebot_tasks::handoff::SUMMARY_OK);
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);

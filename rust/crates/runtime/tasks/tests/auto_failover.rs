@@ -195,7 +195,7 @@ async fn a_quota_end_continues_the_turn_on_the_next_member_with_the_switch_note(
   assert_eq!(switches[0]["from"], MEMBER_A);
   assert_eq!(switches[0]["to"], MEMBER_B);
   assert_eq!(switches[0]["reason"], event_types::QUOTA_REASON_QUOTA_ERROR);
-  assert_eq!(switches[0]["set"], event_types::QUOTA_SET_POOL);
+  assert_eq!(switches[0]["set"], AUTO_POOL_ID);
   assert_eq!(switches[0]["summary"], handoff::SUMMARY_OK);
 
   let availability = backend_availability::backend_availability(&stack.features)?;
@@ -361,7 +361,7 @@ async fn a_drained_quota_end_switches_like_a_live_turn() -> anyhow::Result<()> {
   assert_eq!(switches.len(), 1, "{switches:?}");
   assert_eq!(switches[0]["from"], MEMBER_A);
   assert_eq!(switches[0]["reason"], event_types::QUOTA_REASON_QUOTA_ERROR);
-  assert_eq!(switches[0]["set"], event_types::QUOTA_SET_POOL);
+  assert_eq!(switches[0]["set"], AUTO_POOL_ID);
   Ok(())
 }
 

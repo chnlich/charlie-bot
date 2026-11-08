@@ -1600,7 +1600,7 @@ fn write_run_events(stack: &Stack, worker: &str, run: &str) -> anyhow::Result<()
 }
 
 /// Test ③: a worker that inherits the Auto session's current member fails over within Auto when its run ends on quota.
-/// The member cools, the node moves to the next Auto member and not to `backends.pool`, and the switch record sits in
+/// The member cools, the node moves to the next Auto member and not to the rotation pool, and the switch record sits in
 /// the Auto parent's chat with the handoff summary from the run's events log.
 #[tokio::test]
 #[ignore = "integration"]
@@ -1680,7 +1680,7 @@ async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Res
   assert_eq!(switches.len(), 1, "one switch record in the Auto parent's chat: {switches:?}");
   assert_eq!(switches[0]["from"], "fake");
   assert_eq!(switches[0]["to"], "fake2");
-  assert_eq!(switches[0]["set"], event_types::QUOTA_SET_POOL);
+  assert_eq!(switches[0]["set"], AUTO_POOL_ID);
   assert_eq!(switches[0]["summary"], handoff::SUMMARY_OK);
 
   let launches = scripts.builds();

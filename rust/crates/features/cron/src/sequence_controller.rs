@@ -1155,7 +1155,7 @@ mod tests {
     assert_eq!(switches.len(), 1, "one switch record in the Auto parent's chat: {switches:?}");
     assert_eq!(switches[0]["from"], "member-a");
     assert_eq!(switches[0]["to"], "member-b");
-    assert_eq!(switches[0]["set"], event_types::QUOTA_SET_POOL);
+    assert_eq!(switches[0]["set"], AUTO_POOL_ID);
     let availability = charliebot_agents::backend_availability::backend_availability(&features).unwrap();
     assert!(availability.out_until("member-a").is_some(), "the spent member is recorded out");
     let parent_meta = features.store.get_session(&parent.id).await.unwrap().unwrap();

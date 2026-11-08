@@ -111,7 +111,7 @@ pub const BACKEND_SWITCHED: &str = "backend_switched";
 pub const QUOTA_FAILOVER: &str = "quota_failover";
 /// The `quota_failover` field naming why the backend changed.
 pub const QUOTA_FAILOVER_REASON: &str = "reason";
-/// The `quota_failover` field naming the selector kind that made the change: [`QUOTA_SET_POOL`], the only kind now.
+/// The `quota_failover` field naming the `backends.pools` entry that moved the work to another member.
 pub const QUOTA_FAILOVER_SET: &str = "set";
 /// The `quota_failover` field carrying the handoff summary state of the retry the change started.
 pub const QUOTA_FAILOVER_SUMMARY: &str = "summary";
@@ -125,8 +125,6 @@ pub const QUOTA_REASON_QUOTA_ERROR: &str = "quota_error";
 pub const QUOTA_REASON_NEAR_EXHAUSTION: &str = "near_exhaustion";
 /// The reason of a turn-start change back to a subscription that reset.
 pub const QUOTA_REASON_SUBSCRIPTION_RESET: &str = "subscription_reset";
-/// The `set` value of a change the backend pool made.
-pub const QUOTA_SET_POOL: &str = "pool";
 pub const MODEL_FALLBACK_NOTICE: &str = "model_fallback_notice";
 /// The configured model in a `model_fallback_notice` payload.
 pub const CONFIGURED_MODEL: &str = "configured_model";

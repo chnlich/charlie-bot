@@ -76,6 +76,18 @@ build_binaries() {
   done
 }
 
+# Rewrite one JSON file through a jq program. jq writes a scratch file first, so a failed program stops the
+# script before the file changes; the copy back keeps the file's inode and mode. -a writes non-ASCII text as
+# \u escapes, so the rewritten files are ASCII.
+rewrite_json() { # file jq-args... program
+  local file=$1 tmp
+  shift
+  tmp=$(mktemp)
+  jq -a "$@" "$file" > "$tmp"
+  cat -- "$tmp" > "$file"
+  rm -f -- "$tmp"
+}
+
 # --inner runs as the served command of trial.sh: the trial environment has CHARLIEBOT_HOME pointed at
 # the trial home, CHARLIEBOT_SERVE_URL at the trial server and CHARLIEBOT_SERVE_AUTH_HEADER at the
 # Authorization header that server accepts.
@@ -151,39 +163,25 @@ set_status "$WAIT_C" "$(status_text \
 FIXED_STAMP=2026-11-08T12:00:00Z
 # The item age the Status view shows is now minus since in whole hours, so the since stamp rides
 # one day behind the run: the age renders as 1d whatever time the run happens at.
-DAY_OLD_STAMP=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
-python3 - "$SESSIONS_DIR" "$MAIN" "$WAIT_B" "$WAIT_C" "$FIXED_STAMP" "$DAY_OLD_STAMP" <<'FREEZE'
-import json, pathlib, sys
-
-sessions, main, wait_b, wait_c, stamp, day_old = (sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4],
-                                                  sys.argv[5], sys.argv[6])
-for sid in (main, wait_b, wait_c):
-    path = pathlib.Path(sessions) / sid / 'metadata.json'
-    row = json.loads(path.read_text())
-    status = row.get('web_status')
-    if isinstance(status, dict):
-        status['updated_at'] = stamp
-        for item in status.get('waiting') or []:
-            item['since'] = day_old
-            item['since_exact'] = True
-        path.write_text(json.dumps(row, indent=2) + chr(10))
-    # The Status view reads its updated_at and the item ages from the web_status
-    # chat event when it is newer than the stored status, so the event's copy of
-    # the payload takes the same stamps.
-    log = pathlib.Path(sessions) / sid / 'data' / 'chat_events.jsonl'
-    lines = []
-    for line in log.read_text().splitlines():
-        event = json.loads(line)
-        payload = event.get('web_status')
-        if event.get('type') == 'web_status' and isinstance(payload, dict):
-            payload['updated_at'] = stamp
-            for item in payload.get('waiting') or []:
-                item['since'] = day_old
-                item['since_exact'] = True
-            line = json.dumps(event, separators=(',', ':'))
-        lines.append(line)
-    log.write_text(chr(10).join(lines) + chr(10))
-FREEZE
+DAY_OLD_STAMP=$(date -u -d "@$(( $(date -u +%s) - 86400 ))" +%Y-%m-%dT%H:%M:%SZ)
+# freeze stamps one web_status payload: updated_at, and since and since_exact on each waiting item. A payload
+# with no waiting list gets only updated_at.
+FREEZE_PAYLOAD='def freeze: .updated_at = $stamp
+  | if (.waiting | type) == "array" then .waiting |= map(.since = $day_old | .since_exact = true) else . end;'
+# Two programs apply freeze: one to the web_status of a metadata file, one to each web_status chat event.
+METADATA_PROGRAM="$FREEZE_PAYLOAD"'
+  if (.web_status | type) == "object" then .web_status |= freeze else . end'
+EVENT_PROGRAM="$FREEZE_PAYLOAD"'
+  if .type == "web_status" and (.web_status | type) == "object" then .web_status |= freeze else . end'
+for sid in "$MAIN" "$WAIT_B" "$WAIT_C"; do
+  rewrite_json "$SESSIONS_DIR/$sid/metadata.json" --arg stamp "$FIXED_STAMP" --arg day_old "$DAY_OLD_STAMP" \
+    "$METADATA_PROGRAM"
+  # The Status view reads its updated_at and the item ages from the web_status
+  # chat event when it is newer than the stored status, so the event's copy of
+  # the payload takes the same stamps.
+  rewrite_json "$SESSIONS_DIR/$sid/data/chat_events.jsonl" -c --arg stamp "$FIXED_STAMP" \
+    --arg day_old "$DAY_OLD_STAMP" "$EVENT_PROGRAM"
+done
 
 digest() { # policy step undo scope_check
   local args=(digest add --session "$MAIN" --policy "$1" --step "$2" --undo "$3")
@@ -516,27 +514,36 @@ printf 'mock home: generating %s sessions (seed %s, view shape)\n' "$SESSIONS" "
 "$BIN/mock-home" generate "$SCRATCH/mock-home" --sessions "$SESSIONS" --seed "$SEED" --shape view
 # The mock corpus draws some session titles from a non-English pool; the README screenshots read
 # better with one language, so the seed's non-ASCII titles take fabricated English ones.
-python3 - "$SCRATCH/mock-home" <<'NAMES'
-import json, pathlib, re, sys
+NAME_TITLES=('release notes draft' 'session list paging' 'backup and restore' 'diff viewer colors'
+  'scheduler timeout audit' 'metrics panel' 'trace merge cache' 'worktree sweep'
+  'cron seed refresh' 'trigger backlog' 'sidebar grouping' 'draft card lock'
+  'usage ledger sweep' 'voice preview relay' 'terminal resize' 'plan diff view'
+  'memory lint pass' 'taste index build' 'digest day view' 'login sheet poll')
 
-root = pathlib.Path(sys.argv[1])
-titles = ['release notes draft', 'session list paging', 'backup and restore', 'diff viewer colors',
-          'scheduler timeout audit', 'metrics panel', 'trace merge cache', 'worktree sweep',
-          'cron seed refresh', 'trigger backlog', 'sidebar grouping', 'draft card lock',
-          'usage ledger sweep', 'voice preview relay', 'terminal resize', 'plan diff view',
-          'memory lint pass', 'taste index build', 'digest day view', 'login sheet poll']
-count = 0
-for meta in sorted(root.glob('*/metadata.json')):
-    row = json.loads(meta.read_text())
-    name = row.get('name', '')
-    suffix_match = re.search(r' / #\S+$', name)
-    suffix = suffix_match.group(0) if suffix_match else ''
-    if not name.isascii():
-        row['name'] = titles[count % len(titles)] + suffix
-        count += 1
-        meta.write_text(json.dumps(row, indent=2) + '\n')
-print(f'renamed {count} sessions')
-NAMES
+# A name is non-ASCII when a byte above 0x7f appears; the test runs in the C locale, where bytes are characters.
+is_ascii() {
+  local LC_ALL=C
+  [[ $1 != *[$'\x80'-$'\xff']* ]]
+}
+
+# The sessions are visited in byte order of their directory names, which fixes the title each non-ASCII
+# session takes. A sort on whole paths would put session "a-b" before session "a".
+mapfile -t session_dirs < <(find "$SCRATCH/mock-home" -mindepth 2 -maxdepth 2 -name metadata.json -printf '%h\n' \
+  | sed 's|.*/||' | LC_ALL=C sort)
+count=0
+for dir in "${session_dirs[@]}"; do
+  meta="$SCRATCH/mock-home/$dir/metadata.json"
+  name=$(jq -r '.name // ""' "$meta")
+  if ! is_ascii "$name"; then
+    # The suffix is the session's " / #..." tag at the end of the name, kept on the fabricated title.
+    suffix=''
+    if [[ $name =~ ' / #'[^[:space:]]+$ ]]; then suffix=${BASH_REMATCH[0]}; fi
+    title=${NAME_TITLES[count % ${#NAME_TITLES[@]}]}
+    rewrite_json "$meta" --arg name "$title$suffix" '.name = $name'
+    count=$((count + 1))
+  fi
+done
+printf 'renamed %s sessions\n' "$count"
 
 printf 'trial: starting the isolated server for commit %s\n' "$COMMIT"
 mkdir -p "$SCRATCH/tree"

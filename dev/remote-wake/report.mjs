@@ -385,10 +385,11 @@ export function formatReport(summary) {
   return `${lines.join('\n')}\n`;
 }
 
-function toTsv(rows) {
+export function rowsToTsv(rows) {
   const columns = [
     'build', 'wait', 'kind', 'length_s', 'length_bin', 'crossed_restart', 'fire_reason', 'lag_ms',
-    'schedule_bound_ms', 'within_bound', 'faulted', 'ssh_processes', 'sshd_connections',
+    'schedule_interval_ms', 'interval_bound_ms', 'schedule_bound_ms', 'within_interval', 'within_bound', 'faulted',
+    'ssh_processes', 'sshd_connections',
   ];
   const lines = [columns.join('\t')];
   for (const row of rows) {
@@ -410,7 +411,7 @@ if (invokedDirectly) {
   }
   try {
     const { rows, summary } = buildReport({ runDir, gate: args.get('--gate') ?? 'smoke' });
-    fs.writeFileSync(path.join(runDir, 'rows.tsv'), toTsv(rows));
+    fs.writeFileSync(path.join(runDir, 'rows.tsv'), rowsToTsv(rows));
     fs.writeFileSync(path.join(runDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
     const text = formatReport(summary);
     fs.writeFileSync(path.join(runDir, 'report.txt'), text);

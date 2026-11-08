@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { buildReport, formatReport } from './report.mjs';
+import { buildReport, formatReport, rowsToTsv } from './report.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SEGMENT_SCRIPT = path.join(HERE, 'segment.mjs');
@@ -243,19 +243,6 @@ async function main() {
   process.stdout.write(text);
   fs.writeFileSync(path.join(runDir, 'done'), summary.passed ? 'pass\n' : 'fail\n');
   return failures.length > 0 ? 1 : summary.passed ? 0 : 3;
-}
-
-function rowsToTsv(rows) {
-  const columns = [
-    'build', 'wait', 'kind', 'length_s', 'length_bin', 'crossed_restart', 'fire_reason', 'lag_ms',
-    'schedule_interval_ms', 'interval_bound_ms', 'schedule_bound_ms', 'within_interval', 'within_bound', 'faulted',
-    'ssh_processes', 'sshd_connections',
-  ];
-  const lines = [columns.join('\t')];
-  for (const row of rows) {
-    lines.push(columns.map((column) => (row[column] === null ? '' : row[column])).join('\t'));
-  }
-  return `${lines.join('\n')}\n`;
 }
 
 main()

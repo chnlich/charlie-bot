@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 use crate::adapter::{Bot, FeishuThreadAdapter, api_failure, message_id_of, thread_message};
 use crate::client::{FeishuClient, PAGE_SIZE};
 use crate::config::FeishuConfig;
+use crate::fields::{CHAT_ID, MESSAGE_ID, ROOT_ID, THREAD_ID};
 use crate::metadata::FeishuOrigin;
 use crate::thread_contract::FEISHU;
 
@@ -41,9 +42,9 @@ fn message_view(message: &ThreadMessage, unread: bool, summon: bool, allowed: &B
   let author_id = message.user.clone().or_else(|| message.bot_id.clone());
   json!({
     "id": message.id,
-    "message_id": field("message_id"),
+    (MESSAGE_ID): field(MESSAGE_ID),
     "message_type": field("message_type"),
-    "thread_id": field("thread_id"),
+    (THREAD_ID): field(THREAD_ID),
     "author_id": author_id,
     "person": message.user.as_deref().and_then(|user| allowed.get(user)),
     "timestamp": message.created_at,
@@ -251,13 +252,13 @@ pub async fn read_topic(
       let root_id = response
         .items
         .iter()
-        .find_map(|item| item.get("root_id").filter(|value| !value.is_null()))
+        .find_map(|item| item.get(ROOT_ID).filter(|value| !value.is_null()))
         .map(|value| {
           value.as_str().context("a Feishu topic message has a non-string root_id").map_err(ThreadReplyError::failure)
         })
         .transpose()?;
       if let Some(root_id) = root_id
-        && !response.items.iter().any(|item| item.get("message_id").and_then(Value::as_str) == Some(root_id))
+        && !response.items.iter().any(|item| item.get(MESSAGE_ID).and_then(Value::as_str) == Some(root_id))
       {
         let root = client.message(root_id).await.map_err(api_failure)?;
         require_item_group(&root, &origin.chat_id)?;
@@ -355,14 +356,11 @@ fn invalid_topic_page_token() -> ThreadReplyError {
 }
 
 fn require_item_group(item: &Value, chat_id: &str) -> Result<(), ThreadReplyError> {
-  require_chat_id(item.get("chat_id").and_then(Value::as_str), chat_id)
+  require_chat_id(item.get(CHAT_ID).and_then(Value::as_str), chat_id)
 }
 
 fn require_thread_message_group(message: &ThreadMessage, chat_id: &str) -> Result<(), ThreadReplyError> {
-  require_chat_id(
-    message.metadata.as_ref().and_then(|metadata| metadata.get("chat_id")).and_then(Value::as_str),
-    chat_id,
-  )
+  require_chat_id(message.metadata.as_ref().and_then(|metadata| metadata.get(CHAT_ID)).and_then(Value::as_str), chat_id)
 }
 
 fn require_chat_id(item_chat_id: Option<&str>, chat_id: &str) -> Result<(), ThreadReplyError> {

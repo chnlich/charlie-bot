@@ -7,6 +7,7 @@ use futures_util::future::BoxFuture;
 
 use crate::config::FeishuConfig;
 use crate::listener::FeishuListener;
+use crate::package::NAME;
 
 /// The Feishu long connection and boot backfill, started when the app's credentials and an owner are configured.
 pub(crate) struct FeishuService {
@@ -15,13 +16,13 @@ pub(crate) struct FeishuService {
 
 impl Default for FeishuService {
   fn default() -> Self {
-    Self { entrypoint: ChannelService::new("feishu", FeishuListener) }
+    Self { entrypoint: ChannelService::new(NAME, FeishuListener) }
   }
 }
 
 impl Service for FeishuService {
   fn name(&self) -> &'static str {
-    "feishu"
+    NAME
   }
 
   fn phase(&self) -> Phase {
@@ -32,7 +33,7 @@ impl Service for FeishuService {
     Box::pin(async move {
       let config = ctx.features.config.get()?;
       let credentials = ctx.features.credentials.get()?;
-      let feishu = config.section::<FeishuConfig>("feishu");
+      let feishu = config.section::<FeishuConfig>(NAME);
       self.entrypoint.start(ctx, configured(feishu, &credentials));
       Ok(())
     })
@@ -44,7 +45,7 @@ impl Service for FeishuService {
 }
 
 fn configured(config: &FeishuConfig, credentials: &Credentials) -> bool {
-  ["app_id", "app_secret"].iter().all(|key| credentials.get("feishu", key).is_some_and(CredentialValue::is_truthy))
+  ["app_id", "app_secret"].iter().all(|key| credentials.get(NAME, key).is_some_and(CredentialValue::is_truthy))
     && !config.allowed_users.is_empty()
 }
 

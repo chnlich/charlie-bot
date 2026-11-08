@@ -25,6 +25,7 @@ use crate::config::FeishuConfig;
 use crate::event::{self, Drop, Inbound};
 use crate::frame::{Frame, METHOD_DATA, Reassembler, TYPE_EVENT};
 use crate::owners;
+use crate::package::NAME;
 
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
@@ -200,7 +201,7 @@ async fn handle_frame(
 async fn handle_event(payload: &[u8], connection: &Connection) -> anyhow::Result<()> {
   let event: Value = serde_json::from_slice(payload).context("the event payload is not JSON")?;
   let config = connection.features.config.get()?;
-  let allowed = &config.section::<FeishuConfig>("feishu").allowed_users;
+  let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
   let inbound = admit(event::classify(&event, &connection.bot_open_id)?, &connection.client, allowed).await?;
   if let Inbound::Drop(reason) = inbound {
     tracing::debug!(event = "feishu_listener_event_dropped", reason = ?reason);

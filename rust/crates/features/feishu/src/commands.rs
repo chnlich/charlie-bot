@@ -23,6 +23,7 @@ use crate::client::{FeishuClient, PAGE_SIZE};
 use crate::config::FeishuConfig;
 use crate::fields::{CHAT_ID, MESSAGE_ID, ROOT_ID, THREAD_ID};
 use crate::metadata::FeishuOrigin;
+use crate::package::NAME;
 use crate::thread_contract::FEISHU;
 
 const TOPIC_PAGE_TOKEN_PREFIX: &str = "charliebot-topic-v1:";
@@ -108,7 +109,7 @@ pub async fn read_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
   let origin: FeishuOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
   let watermark = session.meta.extra(FEISHU.watermark_field).and_then(Value::as_str).map(str::to_string);
   let config = bot.config().map_err(ThreadReplyError::failure)?;
-  let allowed = &config.section::<FeishuConfig>("feishu").allowed_users;
+  let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
   let adapter = Arc::new(FeishuThreadAdapter::new(bot.clone()));
   let thread_messages =
     adapter.thread_messages(&origin.root_id, origin.thread_id.as_deref()).await.map_err(api_failure)?;
@@ -177,7 +178,7 @@ pub async fn read_chat(
   let session = thread_entry::require_thread_session(&FEISHU, &bot.features, session_id).await?;
   let origin: FeishuOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
   let config = bot.config().map_err(ThreadReplyError::failure)?;
-  let allowed = &config.section::<FeishuConfig>("feishu").allowed_users;
+  let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
   let client = bot.client().map_err(ThreadReplyError::failure)?;
   let mut messages = Vec::with_capacity(limit);
   let mut page_token = page.map(str::to_string);
@@ -225,7 +226,7 @@ pub async fn read_topic(
   let session = thread_entry::require_thread_session(&FEISHU, &bot.features, session_id).await?;
   let origin: FeishuOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
   let config = bot.config().map_err(ThreadReplyError::failure)?;
-  let allowed = &config.section::<FeishuConfig>("feishu").allowed_users;
+  let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
   let client = bot.client().map_err(ThreadReplyError::failure)?;
   let cursor = page.map(|token| decode_topic_page_cursor(token, thread_id)).transpose()?.unwrap_or(TopicPageCursor {
     thread_id: thread_id.to_string(),
@@ -393,13 +394,13 @@ async fn root_message(
 pub async fn check_setup(bot: &Bot) -> Result<Value, ThreadReplyError> {
   let credentials = bot.features.credentials.get().map_err(ThreadReplyError::failure)?;
   for key in ["app_id", "app_secret"] {
-    if credentials.get("feishu", key).is_none() {
+    if credentials.get(NAME, key).is_none() {
       return Err(ThreadReplyError::refused(StatusCode::CONFLICT, format!("credentials.feishu.{key} is not set")));
     }
   }
   let client = bot.client().map_err(ThreadReplyError::failure)?;
   let config = bot.config().map_err(ThreadReplyError::failure)?;
-  let allowed = &config.section::<FeishuConfig>("feishu").allowed_users;
+  let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
   let token = check_token(&client).await;
   let bot_open_id = check_bot(&client).await;
   let endpoint = check_endpoint(&client).await;

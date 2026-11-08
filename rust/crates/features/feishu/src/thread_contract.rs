@@ -4,6 +4,7 @@
 use charliebot_chat_threads::thread_entry::{IdOrdering, LINKED_PAGES_LINE, ThreadPlatform};
 
 use crate::fields::{CHAT_ID, MENTION_ID, ROOT_ID};
+use crate::package::NAME;
 
 /// The command the reply-format contract names for posting a reply.
 pub const REPLY_COMMAND: &str = "charliebot feishu reply";
@@ -16,7 +17,7 @@ pub const FOLLOW_TRIGGER_PREFIX: &str = "feishu-thread-follow";
 
 /// The Feishu platform as the shared contract reads it.
 pub const FEISHU: ThreadPlatform = ThreadPlatform {
-  name: "feishu",
+  name: NAME,
   display_name: "Feishu",
   reply_event_type: crate::event_types::FEISHU_REPLY,
   reply_command: REPLY_COMMAND,

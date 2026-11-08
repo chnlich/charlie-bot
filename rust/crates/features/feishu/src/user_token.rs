@@ -13,7 +13,8 @@ use charliebot_core::home;
 use charliebot_core::paths;
 use serde_json::{Value, json};
 
-const FEISHU_SECTION: &str = "feishu";
+use crate::package::NAME;
+
 const AUTHORIZE_URL: &str = "https://open.feishu.cn/open-apis/authen/v1/authorize";
 const APP_TOKEN_URL: &str = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal";
 const REFRESH_URL: &str = "https://open.feishu.cn/open-apis/authen/v1/oidc/refresh_access_token";
@@ -69,7 +70,7 @@ fn load(home: &Path) -> Result<Credentials, CliExit> {
 fn required(credentials: &Credentials, key: &str, home: &Path) -> Result<String, CliExit> {
   let failure = || credential_failure(key, Some(&credentials_path(home)));
   credentials
-    .require(FEISHU_SECTION, key)
+    .require(NAME, key)
     .map_err(|_| failure())
     .and_then(|value| if value.trim().is_empty() { Err(failure()) } else { Ok(value) })
 }
@@ -194,12 +195,9 @@ fn store_tokens(home: &Path, access: &str, refresh: &str) -> Result<(), CliExit>
     std::fs::read(&path).map_err(|_| CliExit::error(format!("could not read {}", paths::display(&path))))?;
   let text =
     String::from_utf8(original).map_err(|_| CliExit::error(format!("{} must use UTF-8", paths::display(&path))))?;
-  let updated = credentials::with_credential_values(
-    &text,
-    FEISHU_SECTION,
-    &[("user_access_token", access), ("refresh_token", refresh)],
-  )
-  .map_err(|error| CliExit::error(error.to_string()))?;
+  let updated =
+    credentials::with_credential_values(&text, NAME, &[("user_access_token", access), ("refresh_token", refresh)])
+      .map_err(|error| CliExit::error(error.to_string()))?;
   credentials::write_credentials(home, updated.as_bytes()).map_err(|error| CliExit::error(error.to_string()))
 }
 

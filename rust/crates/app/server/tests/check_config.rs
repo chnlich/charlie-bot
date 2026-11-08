@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -283,4 +285,70 @@ fn a_mapping_pool_member_fails_check_config_through_the_ordinary_member_error() 
       && lines[0].contains("a pool member is a backends.options id, got a mapping"),
     "{stderr}"
   );
+}
+
+/// A check-config command whose launch path, `argv[0]`, the test chooses.
+fn release_server_command(server: &Path, argv0: &OsStr, temporary: &Path) -> Command {
+  let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+  let mut command = Command::new(server);
+  command.arg0(argv0);
+  command
+    .args(["--check-config"])
+    .current_dir(&repo_root)
+    .env_clear()
+    .env("PATH", "/usr/bin:/bin")
+    .env("HOME", temporary)
+    .env("CHARLIEBOT_HOME", temporary.join("home"))
+    .env("CHARLIEBOT_REPO_ROOT", &repo_root);
+  command
+}
+
+/// The server takes its agent PATH entry from the launch path, `argv[0]`, not from the symlink-resolved executable:
+/// started through the `current` link, a later release switch moves the entry to the release that serves. The launch
+/// directory is what the agent environment checks, and a bare command name determines no launch path: the server
+/// refuses with the named input instead of falling back to the resolved path.
+#[test]
+#[ignore = "integration"]
+fn check_config_runs_through_a_release_link_and_takes_the_agent_path_entry_from_argv0() {
+  let temporary = tempfile::tempdir().unwrap();
+  let home = temporary.path().join("home");
+  fs::create_dir_all(home.join("config.d/approval.d")).unwrap();
+  fs::write(home.join("config.d/approval.d/policy.yaml"), approval_policy_table()).unwrap();
+  fs::write(home.join("credentials.yaml"), "").unwrap();
+  fs::write(
+    home.join("config.yaml"),
+    "backends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n",
+  )
+  .unwrap();
+  let releases = temporary.path().join("releases");
+  let release = releases.join("0e876cb17");
+  fs::create_dir_all(&release).unwrap();
+  let server = release.join("charliebot-server");
+  copy_file(Path::new(env!("CARGO_BIN_EXE_charliebot-server")), &server);
+  write_fake_cli(&release);
+  let current = releases.join("current");
+  std::os::unix::fs::symlink(&release, &current).unwrap();
+
+  let output =
+    release_server_command(&server, current.join("charliebot-server").as_os_str(), temporary.path()).output().unwrap();
+  assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
+  assert_eq!(output.stdout, b"config ok\n");
+
+  // Without a CLI in the release, the refusal names the path through the link: the launch directory, not the
+  // resolved release directory, is what the agent environment checks.
+  fs::remove_file(release.join("charliebot")).unwrap();
+  let output =
+    release_server_command(&server, current.join("charliebot-server").as_os_str(), temporary.path()).output().unwrap();
+  assert_eq!(output.status.code(), Some(1));
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  let through_link = current.join("charliebot");
+  let resolved = release.join("charliebot");
+  assert!(stderr.contains(&through_link.display().to_string()), "{stderr}");
+  assert!(!stderr.contains(&resolved.display().to_string()), "{stderr}");
+
+  let output = release_server_command(&server, OsStr::new("charliebot-server"), temporary.path()).output().unwrap();
+  assert_eq!(output.status.code(), Some(1));
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(stderr.contains("cannot determine the server launch path"), "{stderr}");
+  assert!(stderr.contains("charliebot-server"), "{stderr}");
 }

@@ -107,8 +107,8 @@ pub fn turn_receipts<D: EventFields, E: Borrow<ChatEvent>>(
   receipts(&run, events)
 }
 
-/// The receipts of the session's running manager turn: the newest manager run that has not ended, in the run
-/// records' canonical order. A session whose newest manager run has ended has no running turn.
+/// The receipts of the session's running manager turn: the newest manager run whose record has no end time, in the run
+/// records' canonical order. A session with no such run has no running turn, and its receipts are empty.
 pub fn running_receipts<E: Borrow<ChatEvent>>(
   store: &Store,
   session_id: &str,

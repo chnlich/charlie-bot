@@ -79,6 +79,9 @@ pub const ROUND_RATINGS: &str = "round_ratings";
 /// The session-metadata field holding the parent session's id. The delegate route's response carries the same name,
 /// so it is spelled once, here.
 pub const PARENT_SESSION_ID: &str = "parent_session_id";
+/// The session-metadata field holding the id of the session that took over this one's work. The Discord, Feishu and
+/// Slack packages place their metadata fields after it, so it is spelled once, here.
+pub const SUCCESSOR_SESSION_ID: &str = "successor_session_id";
 /// The task-spec field saying whether the run keeps its worktree after it ends. The delegate request and the stored
 /// thread record carry the same name, so it is spelled once, here.
 pub const KEEP_WORKTREE_FIELD: &str = "keep_worktree";
@@ -725,7 +728,7 @@ impl SessionMetadata {
       push(&mut declared, SCHEDULE_ALLOW_FAILURE, &self.schedule_allow_failure);
     }
     push(&mut declared, PARENT_SESSION_ID, &self.parent_session_id);
-    push(&mut declared, "successor_session_id", &self.successor_session_id);
+    push(&mut declared, SUCCESSOR_SESSION_ID, &self.successor_session_id);
     push(&mut declared, "schema_version", &self.schema_version);
     push(&mut declared, "task_parent_id", &self.task_parent_id);
     push(&mut declared, "profile", &self.profile);

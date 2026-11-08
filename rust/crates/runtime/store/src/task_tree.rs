@@ -21,7 +21,8 @@ use crate::event_types::{FileIdentity, SharedChatEvent};
 use crate::events::LiveHistory;
 use crate::layout;
 use crate::metadata::{
-  EventRef, SessionMetadata, SessionStatus, TaskApprover, TaskProfile, TaskSpec, TaskType, UtcDateTime, WORK_STATE,
+  EventRef, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TaskApprover, TaskProfile, TaskSpec, TaskType,
+  UtcDateTime, WORK_STATE,
 };
 use crate::run_facts::{CachedRunFacts, RunFacts};
 use crate::run_records::{HostBoot, RunDisplayState, RunOutcomeKind};
@@ -1672,7 +1673,7 @@ impl Store {
         refs.push("parent_session_id");
       }
       if other.successor_session_id.as_deref() == Some(session_id) {
-        refs.push("successor_session_id");
+        refs.push(SUCCESSOR_SESSION_ID);
       }
       if other.origin_ref.as_ref().is_some_and(|reference| reference.session_id == session_id) {
         refs.push("origin_ref");

@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_registry::{Registry, RegistryError};
+use charliebot_store::metadata::SUCCESSOR_SESSION_ID;
 use serde_json::{Map, Value};
 use service::FeishuService;
 use turn_contribution::FeishuTurnContribution;
@@ -37,7 +38,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     MetadataSlot {
       owner: "feishu",
       on: MetadataFile::Session,
-      after: Some("successor_session_id"),
+      after: Some(SUCCESSOR_SESSION_ID),
       fields: [metadata::FEISHU_ORIGIN, metadata::FEISHU_WATERMARK_ID]
         .into_iter()
         .map(|name| SlotField { name, default: Value::Null })

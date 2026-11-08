@@ -18,7 +18,7 @@ commands live only in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 - `rust-test` runs the Rust suite through `cargo nextest` with Rust 1.99.0, then fails a unit test whose alone time went
   over the 0.1 s gate, and fails when any doc-test runs (doc-tests carry no per-test time, so one that runs dodges the
   gate).
-- `rust-lint` runs `cargo clippy --all-targets --locked -- -D warnings` and `cargo fmt --check`.
+- `rust-lint` runs clippy over all targets with warnings as errors, and the formatter check.
 
 The other CI jobs — the PR-contract check with its Python guard, and the frontend suite — run in the same workflow; the
 integration suites run from `.github/workflows/integration.yml`.

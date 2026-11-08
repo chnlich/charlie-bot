@@ -74,8 +74,8 @@ backends:
   # the first selectable member after the pool's rotation position, which then moves past the member it took. The
   # position lives in server memory, so a restart starts each rotation again at its first member.
   #
-  # rule: priority. Members are {backend, billing}, billing being subscription or payg; no member repeats. Each call
-  # takes the best selectable member:
+  # rule: priority. Members are option ids too, and no member repeats; each member's option names its billing
+  # (subscription or payg). Each call takes the best selectable member:
   #   1. Subscriptions first. A subscription is near exhaustion when its usage is at or above 90% and its earliest
   #      reset is more than 45 minutes away. The selectable subscriptions below that line form the tier; when none
   #      is below it, all selectable subscriptions form the tier.
@@ -90,10 +90,7 @@ backends:
   #  - id: primary
   #    label: Primary
   #    rule: priority
-  #    members:
-  #      - {backend: claude-opus, billing: subscription}
-  #      - {backend: claude-sonnet, billing: subscription}
-  #      - {backend: claude-fable, billing: payg}
+  #    members: [claude-opus, claude-sonnet, claude-fable]
   #  - id: light
   #    label: Light
   #    rule: rotate
@@ -132,6 +129,8 @@ backends:
   #     label: "Devin · SWE-2"
   #     type: devin
   #     model: <id from devin models list>
+  # billing: subscription | payg (optional) says how the entry's account is paid for; a priority pool's
+  # member needs it, and every pool that names the entry reads it here.
   # An id names the model family, never a version: a version bump edits only the
   # entry's model and label (the id rule: usage's startup check in rust/crates/features/usage/src/backend_ids.rs
   # refuses an id outside the prefixes the backend types register).
@@ -150,16 +149,19 @@ backends:
       label: "CC · Fable 5.1"
       type: cc-claude
       model: claude-fable-5-1
+      billing: subscription
       effort: xhigh
     - id: claude-opus
       label: "CC · Opus 5"
       type: cc-claude
       model: claude-opus-5
+      billing: subscription
       effort: xhigh
     - id: claude-sonnet
       label: "CC · Sonnet 5"
       type: cc-claude
       model: claude-sonnet-5
+      billing: subscription
       effort: xhigh
 
 # Accounts: the Claude subscription pool and its compaction floors.

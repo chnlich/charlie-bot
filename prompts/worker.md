@@ -44,9 +44,10 @@ Follow these steps exactly:
 <!-- section: workflow_implement -->
 STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.
 <!-- section: workflow_no_reviewer -->
-No reviewer run follows this run.
-Without a reviewer run, finish the landing steps that the task spec names.
-The landing steps deliver your work to the base branch.
+No reviewer run follows this run. This removes the delegated reviewer only.
+A review that the task spec's own protocol names still runs before the landing, and its verdict gates the landing.
+The landing-step rules stay as they are.
+Finish the landing steps that the task spec names; they deliver your work to the base branch.
 If the task spec names no landing steps, stop after your commit and report the commit and its branch.
 The reported branch keeps the commit after the worktree is removed.
 <!-- section: workflow_quick_edit -->

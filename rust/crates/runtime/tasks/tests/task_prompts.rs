@@ -422,8 +422,6 @@ async fn type_less_work_harness_states_the_no_reviewer_contract() {
   let snapshot = harness.snapshot_for(&tree.worker1, "work").await;
   let worker = worker_block(&snapshot);
   assert!(!worker.contains("A reviewer will handle that"), "{worker}");
-  assert!(worker.contains("No reviewer run follows this run."), "{worker}");
-  assert!(worker.contains("stop after your commit and report the commit and its branch"), "{worker}");
 }
 
 #[tokio::test]

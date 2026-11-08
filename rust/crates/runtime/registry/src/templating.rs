@@ -1,17 +1,17 @@
 //! The request-time template engine: a minijinja environment with the Jinja2 syntax the templates use.
 //!
-//! The server builds one `Templating` at startup and puts it in the startup state. A feature reads it with
+//! The server builds one `Templating` at startup and keeps it in the startup state. A feature reads it with
 //! `startup.require::<Templating>()` and renders a page with `render_page`, as Starlette's `TemplateResponse` does. A
-//! render reads each source's `(mtime, size)` and reuses its compiled minijinja environment while that list and globals
-//! compare equal. A repeat render skips compiling the page and its partials. The template and static trees carry an
-//! inotify watch ([`TreeWatch`]); the list and static digests are read only after an event reports a change. A render
-//! that drained no event reuses its list, digest and page text; an unchanged page is one comparison of inputs. A
-//! changed template, page part or template directory moves the list. The next render compiles a fresh environment, so
-//! an edit takes effect without a restart, as Jinja2's auto-reload does. The environment is charliebot-compat's
-//! (`jinja::environment`) plus the registry's globals and `page_parts`. The search path is `web/templates`, package
-//! `templates/` in registration order, `web/static`, then each package's `static/`. The static trees come last, so a
-//! template name resolves to a template. A page includes the core script or style the static route serves. A linked
-//! stylesheet is inlined as well. The file sits at the link, so the first paint never waits for a second request.
+//! render reads each source's `(mtime, size)` and reuses its compiled environment while that list and globals compare
+//! equal. A repeat render skips compiling the page and its partials. The template and static trees carry an inotify
+//! watch ([`TreeWatch`]); the list and static digests are read only after an event reports a change. A render that
+//! drained no event reuses its list, digest and page text; an unchanged page is one comparison of inputs. A changed
+//! template, page part or template directory moves the list. The next render compiles a fresh environment; an edit then
+//! takes effect without a restart, as Jinja2 auto-reload does. The environment is charliebot-compat's
+//! `jinja::environment` with the registry's globals and `page_parts`. The search path is `web/templates`, package
+//! `templates/` in registration order, `web/static`, then package `static/`. Static trees come last, so a template name
+//! resolves to a template. A page includes the core script or style the static route serves. A stylesheet linked from
+//! the static tree is inlined too. The file sits at the link, so the first paint never waits for a second request.
 
 use std::collections::HashMap;
 use std::fs;

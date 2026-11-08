@@ -212,7 +212,9 @@
     const plotTop = 12;
     const plotBottom = height - 18;
     const maximum = points.reduce((most, point) => Math.max(most, point.running), 0);
-    // The scale keeps a nonzero height for a series that is all zero, while the axis names the real maximum.
+    // The scale keeps a nonzero height for a series that is all zero. A nonzero maximum draws its gridline
+    // above the zero line and carries the axis label; an all-zero series draws only the zero line, and the
+    // label sits on that line, where the flat series lies.
     const scale = Math.max(1, maximum);
     const step = points.length > 1 ? (width - 2) / (points.length - 1) : 0;
     const xAt = (index) => 1 + index * step;
@@ -221,12 +223,15 @@
     const area = `${segments.join('')}L${xAt(points.length - 1).toFixed(1)},${plotBottom}L1,${plotBottom}Z`;
     const first = points[0].t;
     const last = points[points.length - 1].t;
+    const axisTop = maximum > 0
+      ? `<line class="cb-grid" x1="1" y1="${yAt(scale)}" x2="${width - 1}" y2="${yAt(scale)}"></line>`
+        + `<text class="cb-axis" x="1" y="${yAt(scale) - 3}">${maximum}</text>`
+      : `<text class="cb-axis" x="1" y="${yAt(0) - 3}">0</text>`;
     container.innerHTML = `
       <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img"
            aria-label="Running agents over the last ${range === 'all' ? 'recorded period' : range}">
         <line class="cb-grid" x1="1" y1="${yAt(0)}" x2="${width - 1}" y2="${yAt(0)}"></line>
-        <line class="cb-grid" x1="1" y1="${yAt(scale)}" x2="${width - 1}" y2="${yAt(scale)}"></line>
-        <text class="cb-axis" x="1" y="${yAt(scale) - 3}">${maximum}</text>
+        ${axisTop}
         <text class="cb-axis" x="1" y="${height - 4}">${dayLabel(first)}</text>
         <text class="cb-axis" x="${width - 1}" y="${height - 4}" text-anchor="end">${dayLabel(last)}</text>
         <path class="cb-area" d="${area}"></path>

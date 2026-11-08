@@ -348,7 +348,7 @@ impl Registry {
     }
   }
 
-  /// The load of `<home>/config.yaml` with the registered schema, after running each backend type's option model and
+  /// The load of `<home>/config.yaml` with the registered schema, run through each backend type's option model and
   /// each config check on it. A failure fails the load, so a hot reload keeps the previous config.
   pub fn load_config(&self, home: &Path) -> Result<CharlieBotConfig, ConfigError> {
     let cfg = charliebot_core::config::load_config(home, &self.config_schema())?;

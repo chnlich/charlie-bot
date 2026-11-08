@@ -60,7 +60,7 @@
   }
 
   // The hover tip repeats the live counts, and its z-index paints it over the open panel's range buttons and close
-  // button, so the tip waits for the panel to close.
+  // button. The tip waits for the panel to close.
   function hideHoverTip() {
     const tip = byId('concurrency-tip');
     if (tip) tip.hidden = true;

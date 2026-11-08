@@ -120,8 +120,8 @@ fn start_loop(args: &StartArgs) -> Result<(), CliExit> {
 
   let mut payload = Map::new();
   payload.insert(wire::SESSION_ID.to_string(), json!(session_id));
-  payload.insert(wire::REPO_PATH.to_string(), json!(args.repo));
-  payload.insert(wire::BASE_BRANCH.to_string(), json!(args.base_branch));
+  payload.insert(wire::REPO_PATH_FIELD.to_string(), json!(args.repo));
+  payload.insert(wire::BASE_BRANCH_FIELD.to_string(), json!(args.base_branch));
   payload.insert(wire::BACKEND.to_string(), optional_string(&args.backend));
   payload.insert(wire::ITERATIONS.to_string(), json!(args.iterations));
   payload.insert(wire::GOAL.to_string(), json!(goal));

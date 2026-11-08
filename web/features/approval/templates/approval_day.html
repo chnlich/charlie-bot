@@ -6,7 +6,8 @@
   .meta { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:0 0 22px }
   .mtag { font-size:11.5px; font-family:var(--mono); background:var(--panel2);
     border:1px solid var(--bd); border-radius:6px; padding:3px 9px; color:var(--tx) }
-  .nav { display:flex; gap:10px; align-items:center; margin:0 0 6px }
+  /* The date navigation rides in the count-chip row, so the Queue heading and the first card rise. */
+  .nav { display:flex; gap:10px; align-items:center }
   /* The three day links keep a 24 px target and read as one row. They sit 10 px apart, and a target
      shorter than that floor invites a mis-tap onto the neighbouring day. */
   .nav a { color:var(--acc); text-decoration:none; font-size:13px; display:inline-flex;
@@ -15,6 +16,7 @@
   h2 { font-size:15px; margin:26px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--bd) }
   h2 .n { display:inline-flex; width:22px; height:22px; border-radius:6px; background:var(--acc); color:var(--panel);
     font-size:12px; font-weight:700; align-items:center; justify-content:center; margin-right:8px }
+  h2 .hint { margin-left:auto; font-size:11.5px; font-weight:400; color:var(--mut) }
   p { margin:8px 0 }
   ul { list-style:none; margin:8px 0 0; padding:0 }
   li { margin:6px 0; padding:9px 12px; background:var(--panel); border:1px solid var(--bd); border-radius:9px }
@@ -27,7 +29,6 @@
   .t0 { background:#8b1d1d; color:#fff }
   .review { background:#6a3fc0; color:#fff }
   .tier { background:var(--panel2); color:var(--mut); border:1px solid var(--bd); font-weight:600 }
-  .rank { background:var(--panel2); border:1px solid var(--bd); color:var(--tx); font-family:var(--mono) }
   .sess { font-size:12px; color:var(--mut) }
   .sess a { color:var(--acc); text-decoration:none }
   .sess a:hover { text-decoration:underline }
@@ -35,6 +36,26 @@
   .openlink { font-size:12px; margin-left:auto; white-space:nowrap }
   .openlink a { color:var(--acc); text-decoration:none }
   .openlink a:hover { text-decoration:underline }
+  /* A queue card is the decision row plus the page link; the context sits behind the card until the card is opened.
+     At 1440 px the link holds a right column of its own, at the phone width it is the card's last line. */
+  .queue li { position:relative; display:grid; grid-template-columns:minmax(0,1fr) auto; column-gap:14px;
+    align-items:start }
+  .queue li[data-fold] { cursor:pointer }
+  .queue li .row1 { grid-column:1 }
+  /* The script below adds folded; without it the context stays in the card, as before. */
+  .queue li .ctx { grid-column:1 }
+  .queue li.folded .ctx { display:none }
+  .queue li .openlink { grid-column:2; grid-row:1 / -1; margin-left:0 }
+  .queue li[data-fold]:focus-visible { outline:2px solid var(--acc); outline-offset:2px }
+  .fold { margin-left:auto; color:var(--mut2); font-size:11px; line-height:1; user-select:none }
+  .fold::after { content:"\25B8" }
+  .queue li.open .fold::after { content:"\25BE" }
+  @media (max-width:640px) {
+    .queue li { grid-template-columns:minmax(0,1fr) }
+    .queue li .openlink { grid-column:1; grid-row:auto; margin-top:6px; text-align:right }
+    /* At the phone width the fold marker holds the card's corner, so it never takes a line of its own. */
+    .fold { position:absolute; top:11px; right:12px; margin:0 }
+  }
   /* A day reads as one value: the hyphens in 2026-11-02 are not break opportunities. */
   .day { white-space:nowrap }
   .none { color:var(--mut); font-size:13px; margin:0 }
@@ -47,14 +68,13 @@
 {% include 'partials/concurrency_badge.html' %}
 <div class="wrap">
 <h1>Approvals</h1>
-<p class="sub">One Pacific day of the tiered approval: the ranked T0 queue, the day's login sheet, and the day's
-  digest. Silence on a digest entry accepts the step.</p>
-<div class="nav">
-  <a href="/approval?date={{ ctx.previous }}">&larr; {{ ctx.previous }}</a>
-  <a href="/approval">Today</a>
-  <a href="/approval?date={{ ctx.next }}">{{ ctx.next }} &rarr;</a>
-</div>
+<p class="sub">One Pacific day of the tiered approval.</p>
 <div class="meta">
+  <div class="nav">
+    <a href="/approval?date={{ ctx.previous }}">&larr; {{ ctx.previous }}</a>
+    <a href="/approval">Today</a>
+    <a href="/approval?date={{ ctx.next }}">{{ ctx.next }} &rarr;</a>
+  </div>
   <span class="mtag">PT day &middot; {{ ctx.date }}</span>
   <span class="mtag">Queue &middot; {{ ctx.queue|length }}</span>
   <span class="mtag">Login actions &middot; {{ ctx.login_sheet|length }}</span>
@@ -65,14 +85,12 @@
 {% if not ctx.queue %}
 <p class="none">No open Waiting on you items.</p>
 {% else %}
-<ul>
+<ul class="queue">
   {% for item in ctx.queue %}
-  <li>
+  <li{% if item.context %} data-fold="1"{% endif %}>
     <div class="row1">
       {% if item.tier == 't0' %}
-      <span class="tag t0">T0</span>
-      {% if item.rank is not none %}<span class="tag rank">rank {{ item.rank }}</span>{% endif %}
-      {% if item.rule %}<span class="tag tier">{{ item.rule }}</span>{% endif %}
+      <span class="tag t0">T0{% if item.rank is not none %} &middot; rank {{ item.rank }}{% endif %}{% if item.rule %} &middot; {{ item.rule }}{% endif %}</span>
       {% elif item.tier == 'review' %}
       <span class="tag review">review</span>
       {% else %}
@@ -80,9 +98,10 @@
       {% endif %}
       <span class="age">{{ item.age }}</span>
       <span class="text">{{ item.text }}</span>
-      <span class="openlink">{% if item.link %}<a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">Open page</a> &middot; {% endif %}<a href="/?session={{ item.session_id }}">{{ item.session_name }}</a></span>
+      {% if item.context %}<span class="fold" aria-hidden="true"></span>{% endif %}
     </div>
     {% if item.context %}<p class="ctx">{{ item.context }}</p>{% endif %}
+    <span class="openlink">{% if item.link %}<a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">Open page</a> &middot; {% endif %}<a href="/?session={{ item.session_id }}">{{ item.session_name }}</a></span>
   </li>
   {% endfor %}
 </ul>
@@ -107,7 +126,7 @@
 </ul>
 {% endif %}
 
-<h2><span class="n">3</span>Digest</h2>
+<h2><span class="n">3</span>Digest<span class="hint">Silence accepts the step.</span></h2>
 {% if not ctx.digest %}
 <p class="none">No digest entries and no policy table changes on <span class="day">{{ ctx.date }}</span>.</p>
 {% else %}
@@ -137,6 +156,28 @@
 </ul>
 {% endif %}
 </div>
+<script>
+  // A queue card's context is folded behind the card: a click on the card, or Enter or Space on it, shows or hides it.
+  // A click or key press on a link inside the card follows the link instead.
+  for (const card of document.querySelectorAll('ul.queue > li[data-fold]')) {
+    card.classList.add('folded');
+    card.tabIndex = 0;
+    card.setAttribute('role', 'button');
+    card.setAttribute('aria-expanded', 'false');
+    const toggle = () => {
+      const open = card.classList.toggle('open');
+      card.classList.toggle('folded', !open);
+      card.setAttribute('aria-expanded', String(open));
+    };
+    card.addEventListener('click', (event) => { if (!event.target.closest('a')) toggle(); });
+    card.addEventListener('keydown', (event) => {
+      if ((event.key === 'Enter' || event.key === ' ') && !event.target.closest('a')) {
+        event.preventDefault();
+        toggle();
+      }
+    });
+  }
+</script>
 {% if ctx.is_today %}
 <script>
   // A tab that comes back after being hidden reloads today's view, so it shows current data. A past day's view

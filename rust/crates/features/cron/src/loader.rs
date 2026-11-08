@@ -539,7 +539,6 @@ async fn send_telegram(
 /// The backend-reference check over every valid cron file, run before the server serves.
 pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Result<(), String> {
   let mut problems = Vec::new();
-  let known = cfg.backends.options.iter().map(|option| option.id.as_str()).collect::<std::collections::HashSet<_>>();
   let directory = cron_dir(cfg);
   let entries = match std::fs::read_dir(&directory) {
     Ok(entries) => entries,
@@ -566,7 +565,7 @@ pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Resul
       task.steps.iter().flatten().map(|step| (format!("steps '{}' backend", step.name), step.backend.as_deref())),
     ) {
       if let Some(backend) = backend.filter(|backend| !backend.is_empty())
-        && !known.contains(backend)
+        && !crate::config::backend_resolves(cfg, backend)
       {
         problems.push(format!("{}: {entry} names unknown backend '{backend}'", path.display()));
       }
@@ -576,7 +575,8 @@ pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Resul
     return Ok(());
   }
   Err(format!(
-    "backend references must name a backends.options id (id rule: charliebot_core::config::BackendsConfig):\n{}",
+    "backend references must name a backends.options id, or 'auto' with backends.auto configured (id rule: \
+     charliebot_core::config::BackendsConfig):\n{}",
     problems.into_iter().map(|problem| format!("  {problem}")).collect::<Vec<_>>().join("\n")
   ))
 }

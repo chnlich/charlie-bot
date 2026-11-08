@@ -1,4 +1,4 @@
-// JSON syntax highlighting for the events viewer. The value is walked, not matched: a regex over the JSON text
+// JSON syntax highlighting for the events viewer. The value is walked, not matched. A regex over the JSON text
 // keeps one V8 backtrack record per character of a string, and in Chrome 153 a string over about 4.19M characters
 // throws RangeError. web/templates/events_viewer.html includes this script in the page's document, before the
 // viewer's inline script, so the page makes no separate request for it; both functions are globals.

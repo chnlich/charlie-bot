@@ -41,10 +41,10 @@ ends, so a lab host's process count returns to where it was.
 ## Builds
 
 The lab reads release binaries built on the lab host for that host's architecture; it never downloads a CI artifact.
-`build.sh` builds the commit of the worktree it runs from through `dev/remote-run/` and installs the files:
+`build.sh` builds the commit of the worktree it is given through `dev/remote-run/` and installs the files:
 
 ```sh
-dev/release-lab/build.sh <lab bin dir on the build host>
+dev/release-lab/build.sh <worktree at the commit> <lab bin dir on the build host>
 ```
 
 It writes `<lab bin dir>/release/` (the CI artifact's `charliebot-server`, `charliebot`, `release.log` and

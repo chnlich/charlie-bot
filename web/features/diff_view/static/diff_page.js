@@ -68,14 +68,22 @@
     const style = document.createElement('style');
     style.textContent = `
       .cbdx-gap-row > td { padding: 0; background: #f8fafc; border-top: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0; }
-      .cbdx-gap-cell { display: flex; align-items: center; gap: 6px; padding: 2px 8px; }
-      .cbdx-expand { border: 1px solid #cbd5e1; border-radius: 6px; padding: 2px 8px; background: white;
-        color: #334155; font: 12px system-ui, sans-serif; cursor: pointer; }
+      .cbdx-gap-cell { display: flex; align-items: center; gap: 6px; padding: 2px 8px; white-space: nowrap; }
+      .cbdx-expand { display: inline-flex; align-items: center; min-height: 24px; border: 1px solid #cbd5e1;
+        border-radius: 6px; padding: 2px 8px; background: white; color: #334155; font: 12px system-ui, sans-serif;
+        cursor: pointer; }
       .cbdx-expand:hover { border-color: #2563eb; color: #2563eb; }
       .cbdx-expand:disabled { cursor: not-allowed; opacity: .55; }
       .cbdx-whole { margin-left: auto; }
       .cbdx-gap-count { color: #64748b; font-size: 11px; }
       .cbdx-gap-error { color: #b91c1c; font-size: 12px; }
+      /* A phone's line-by-line table can stand wider than the screen, where a right-aligned control would
+         sit past the visible edge. Below the page's phone breakpoint the strip keeps its controls together
+         at the left. A strip too wide for the screen wraps onto a second line rather than hide one. */
+      @media (max-width: 768px) {
+        .cbdx-gap-cell { flex-wrap: wrap; }
+        .cbdx-whole { margin-left: 0; }
+      }
     `;
     document.head.appendChild(style);
   }
@@ -379,7 +387,7 @@
     gaps.forEach((gap) => {
       gap.blocks = [];
       gap.cells = [];
-      gap.stripRows = tables.map((table) => buildStripRow(table, gap));
+      gap.stripRows = tables.map(() => buildStripRow(gap));
       renderGap(gap);
       renderStripContent(gap);
     });
@@ -397,14 +405,18 @@
       return null;
     }
 
-    function buildStripRow(table, gap) {
+    // The strip's flex content sits in a div inside the cell. A td that is itself the flex container stops
+    // sizing as a table cell, so its colspan no longer reaches across the row.
+    function buildStripRow(gap) {
       const row = document.createElement('tr');
       row.className = 'cbdx-gap-row';
       const cell = document.createElement('td');
-      cell.className = 'cbdx-gap-cell';
       cell.colSpan = 2;
+      const strip = document.createElement('div');
+      strip.className = 'cbdx-gap-cell';
+      cell.appendChild(strip);
       row.appendChild(cell);
-      gap.cells.push(cell);
+      gap.cells.push(strip);
       return row;
     }
 

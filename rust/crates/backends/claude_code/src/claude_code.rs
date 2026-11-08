@@ -16,7 +16,7 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use charliebot_agents::cli_base::SKIP_PERMISSIONS_FLAG;
+use charliebot_agents::cli_base::{CapturedEvents, SKIP_PERMISSIONS_FLAG};
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::kill::{exit_code, kill_process_group};
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
@@ -482,7 +482,7 @@ impl AgentBackend for ClaudeCodeBackend {
   fn translator(&self) -> Box<dyn Translate> {
     match self.midturn_run_id() {
       Some(run_id) => Box::new(MidturnTranslate { run_id: Some(run_id) }),
-      None => Box::new(IdentityTranslate),
+      None => Box::new(CapturedEvents),
     }
   }
 
@@ -746,14 +746,6 @@ impl AgentBackend for AnthropicEndpointBackend {
       )
       .await
     }))
-  }
-}
-
-struct IdentityTranslate;
-
-impl Translate for IdentityTranslate {
-  fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
-    Ok(vec![raw])
   }
 }
 

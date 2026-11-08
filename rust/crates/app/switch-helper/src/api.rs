@@ -13,7 +13,7 @@ use charliebot_core::event_types;
 use charliebot_core::logline;
 use charliebot_core::text_repr;
 use charliebot_store::layout;
-use charliebot_store::metadata::KEEP_WORKTREE_FIELD;
+use charliebot_store::metadata::{KEEP_WORKTREE_FIELD, TaskType};
 use charliebot_store::run_logs;
 use charliebot_store::run_records::{
   EventReadError, RUN_EVENTS_NAME, parse_event_line, read_event_values, read_run_metadata,
@@ -179,7 +179,7 @@ fn delegation_request(session: &str, repo: &str, goal: &str) -> String {
     "description": goal,
     "repo_path": repo,
     "base_branch": "main",
-    "task_type": "script-run",
+    "task_type": TaskType::ScriptRun.as_str(),
     (KEEP_WORKTREE_FIELD): true,
     "request_id": format!("switch-delegation:{session}"),
   });

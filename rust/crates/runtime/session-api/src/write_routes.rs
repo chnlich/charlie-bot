@@ -20,7 +20,7 @@ use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{
-  KEEP_WORKTREE_FIELD, SessionMetadata, TaskApprover, TaskProfile, TaskSpec, WORK_STATE,
+  KEEP_WORKTREE_FIELD, SessionMetadata, TaskApprover, TaskProfile, TaskSpec, TaskType, WORK_STATE,
 };
 use charliebot_store::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, PatchTask, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreResult,
@@ -38,7 +38,7 @@ use crate::route_support::store_error;
 const LOG_TARGET: &str = "charliebot_session_api";
 const PROFILE_CHOICES: &[&str] = &["manager", "worker"];
 const APPROVER_CHOICES: &[&str] = &["user", "parent"];
-const TASK_TYPE_CHOICES: &[&str] = &["implement", "quick-edit", "script-run", "verify", "cold-read"];
+const TASK_TYPE_CHOICES: &[&str] = TaskType::NAMES;
 const PROFILE_REQUIRED: &str = "profile must be 'manager' or 'worker'";
 const RENAME_REQUIRES_NAME: &str = "rename requires a non-empty name";
 const APPROVER_NEEDS_TASK: &str = "approver is a field of the task record: send it with a task object";
@@ -150,7 +150,7 @@ where
 fn cold_read_matches_task_type(task: &Map<String, Value>) -> Option<String> {
   let task_type = task.get("task_type").and_then(Value::as_str);
   let has_cold_read = task.get("cold_read").is_some_and(|value| !value.is_null());
-  if task_type == Some("cold-read") {
+  if task_type == Some(TaskType::ColdRead.as_str()) {
     return (!has_cold_read).then(|| "a cold-read task requires cold_read".to_string());
   }
   has_cold_read.then(|| format!("a {} task rejects cold_read", task_type.unwrap_or("None")))

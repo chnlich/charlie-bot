@@ -143,13 +143,16 @@ fn reply_steps(
 ) -> Result<Vec<ReplyStep>, charliebot_store::StoreError> {
   let mut steps: Vec<ReplyStep> = Vec::new();
   for receipt in receipts {
-    let Some(event) = loaded
+    let event = loaded
       .iter()
       .map(charliebot_store::SharedChatEvent::as_ref)
       .find(|event| event.get("id").and_then(CompactValue::as_str) == Some(receipt.input_event_id.as_str()))
-    else {
-      continue;
-    };
+      .ok_or_else(|| {
+        charliebot_store::StoreError::new(format!(
+          "run {} claims the input {} that the session log does not hold",
+          receipt.run_id, receipt.input_event_id
+        ))
+      })?;
     let Some(user_event_id) = reply::answered_user_id(event) else {
       continue;
     };
@@ -496,6 +499,20 @@ mod tests {
 
     let nudged: Vec<Value> = home.nudges(sid).iter().map(|nudge| nudge[WEB_REPLY]["nudge_of"].clone()).collect();
     assert_eq!(nudged, vec![json!("second-message")]);
+  }
+
+  #[tokio::test]
+  async fn a_turn_that_received_an_input_the_log_lacks_fails_its_audit() {
+    let home = Home::reply_only();
+    let sid = "session";
+    home.launch_run(sid, "run-1", &["missing-message"], TURN_START);
+
+    let error = audit_reply(&home.features, sid, &master_done("run-1", &["missing-message"], 0))
+      .await
+      .expect_err("the audit refuses a receipt that names no event of the log");
+
+    assert!(format!("{error:#}").contains("missing-message"), "{error:#}");
+    assert!(home.nudges(sid).is_empty());
   }
 
   #[tokio::test]

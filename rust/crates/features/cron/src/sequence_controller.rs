@@ -338,7 +338,7 @@ impl SequenceController for CronSequenceController {
             Err(error) => Err(error),
           };
           match switched {
-            Ok(Some(finished)) => Ok(finished),
+            Ok(Some(state)) => Ok(state),
             Ok(None) => redrive_firing(&features, session_id, tree).await,
             Err(error) => Err(error),
           }
@@ -347,8 +347,7 @@ impl SequenceController for CronSequenceController {
       };
       if let Some(owner_ref) = owner_ref {
         let state = match &result {
-          Ok(true) => BoundaryState::Finished,
-          Ok(false) => BoundaryState::Running,
+          Ok(state) => *state,
           Err(_) => BoundaryState::Errored,
         };
         crate::boundary::notify_boundary(session_id, &owner_ref, state);
@@ -478,8 +477,8 @@ fn steps_task_of(run: &RunRecord, tree: &dyn SequenceTree) -> anyhow::Result<Opt
 
 /// The switch of a failed step to the next member of its pool, when its run ended on a spent quota and the step runs on
 /// a `backends.pools` id. The member is recorded out, the next member is selected, and the step reruns on it as a retry
-/// run. Returns whether the chain has finished, or None when the step is not on a pool and the chain takes its normal
-/// path.
+/// run. Returns the chain's state after the switch, or None when the step is not on a pool and the chain takes its
+/// normal path.
 async fn switch_failed_step(
   features: &FeatureContext,
   leaf_id: &str,
@@ -487,7 +486,7 @@ async fn switch_failed_step(
   quota: &QuotaFailure,
   tree: &dyn SequenceTree,
   task: &ScheduledTaskConfig,
-) -> anyhow::Result<Option<bool>> {
+) -> anyhow::Result<Option<BoundaryState>> {
   let Some(sequence) = run.sequence_ref.as_ref() else { return Ok(None) };
   let Some((_, firing)) = parse_firing_ref(&sequence.owner_ref) else { return Ok(None) };
   let Some(steps) = task.steps.as_ref().filter(|steps| !steps.is_empty()) else { return Ok(None) };
@@ -516,7 +515,7 @@ async fn switch_failed_step(
   {
     AutoSwitch::Exhausted(message) => {
       deliver_boundary_report(tree, leaf_id, parent_id, task, &firing, "failed", &message).await?;
-      Ok(Some(true))
+      Ok(Some(BoundaryState::Finished))
     }
     AutoSwitch::Moved { member } => {
       let option = tree
@@ -537,29 +536,33 @@ async fn switch_failed_step(
       let by_position = current_step_runs(tree, leaf_id, task, &firing)?;
       let prompt = step_prompt(steps, position, &by_position, tree)?;
       schedule_settle(tree.executor(), leaf_id.to_string(), retry.id, prompt);
-      Ok(Some(false))
+      Ok(Some(BoundaryState::Running))
     }
   }
 }
 
-async fn redrive_firing(features: &FeatureContext, leaf_id: &str, tree: &dyn SequenceTree) -> anyhow::Result<bool> {
+async fn redrive_firing(
+  features: &FeatureContext,
+  leaf_id: &str,
+  tree: &dyn SequenceTree,
+) -> anyhow::Result<BoundaryState> {
   let records = tree.list_run_records_sync(leaf_id)?;
   let Some(sequence) =
     records.iter().filter_map(|run| run.sequence_ref.as_ref()).find(|sequence| sequence.kind == "cron_steps")
   else {
-    return Ok(true);
+    return Ok(BoundaryState::Finished);
   };
   let Some((task_name, firing)) = parse_firing_ref(&sequence.owner_ref) else {
     tracing::warn!(leaf = leaf_id, owner_ref = %sequence.owner_ref, "cron_firing_ref_unparsable");
-    return Ok(true);
+    return Ok(BoundaryState::Finished);
   };
   let Some(task) = load_bound_task(&task_name, tree.config())? else {
     tracing::warn!(leaf = leaf_id, task = task_name, "cron_firing_task_missing");
-    return Ok(true);
+    return Ok(BoundaryState::Finished);
   };
-  let Some(leaf_meta) = tree.load_meta(leaf_id).await? else { return Ok(true) };
-  let Some(parent_id) = leaf_meta.task_parent_id.as_deref() else { return Ok(true) };
-  let Some(parent) = tree.load_meta(parent_id).await? else { return Ok(true) };
+  let Some(leaf_meta) = tree.load_meta(leaf_id).await? else { return Ok(BoundaryState::Finished) };
+  let Some(parent_id) = leaf_meta.task_parent_id.as_deref() else { return Ok(BoundaryState::Finished) };
+  let Some(parent) = tree.load_meta(parent_id).await? else { return Ok(BoundaryState::Finished) };
   reconcile_bound_firing(features, &task, &parent, tree, &firing, leaf_id).await
 }
 
@@ -570,12 +573,12 @@ async fn reconcile_bound_firing(
   tree: &dyn SequenceTree,
   firing: &str,
   leaf_id: &str,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<BoundaryState> {
   if tree.task_state(leaf_id)? != "open" {
-    return Ok(true);
+    return Ok(BoundaryState::Finished);
   }
   let Some(steps) = task.steps.as_ref().filter(|steps| !steps.is_empty()) else {
-    return Ok(true);
+    return Ok(BoundaryState::Finished);
   };
   let events = tree.load_events_sync(leaf_id)?;
   let by_position = current_step_runs(tree, leaf_id, task, firing)?;
@@ -592,7 +595,7 @@ async fn reconcile_bound_firing(
   if let Some(position) = pending.first().copied() {
     let run = &by_position[&position];
     if run.pid.is_some() {
-      return Ok(false);
+      return Ok(BoundaryState::Running);
     }
     if let Some(conflict) = distinct_backend_conflict(task, tree.config())? {
       let summary = format!(
@@ -601,13 +604,13 @@ async fn reconcile_bound_firing(
       );
       return deliver_boundary_report(tree, leaf_id, parent.id.as_str(), task, firing, "failed", &summary)
         .await
-        .map(|()| true);
+        .map(|()| BoundaryState::Finished);
     }
     let prompt = step_prompt(steps, position, &by_position, tree)?;
     schedule_settle(tree.executor(), leaf_id.to_string(), run.id.clone(), prompt);
-    return Ok(false);
+    return Ok(BoundaryState::Running);
   }
-  let Some(last_position) = executed.last().copied() else { return Ok(true) };
+  let Some(last_position) = executed.last().copied() else { return Ok(BoundaryState::Finished) };
   let last_run = &by_position[&last_position];
   let last_outcome = tree.terminal_outcome(&events, &last_run.id);
   if last_position + 1 < steps.len() && last_outcome.as_deref() == Some("success") && last_run.exit_code == Some(0) {
@@ -619,7 +622,7 @@ async fn reconcile_bound_firing(
       );
       return deliver_boundary_report(tree, leaf_id, parent.id.as_str(), task, firing, "failed", &summary)
         .await
-        .map(|()| true);
+        .map(|()| BoundaryState::Finished);
     }
     let position = last_position + 1;
     let backend = step_backend_id(task, tree.config(), steps[position].backend.as_deref())?;
@@ -631,7 +634,7 @@ async fn reconcile_bound_firing(
           format!("Scheduled task '{}' stopped before launching step '{}': {message}", task.name, steps[position].name);
         return deliver_boundary_report(tree, leaf_id, parent.id.as_str(), task, firing, "failed", &summary)
           .await
-          .map(|()| true);
+          .map(|()| BoundaryState::Finished);
       }
     };
     let next =
@@ -639,12 +642,12 @@ async fn reconcile_bound_firing(
         .await?;
     let prompt = step_prompt(steps, position, &by_position, tree)?;
     schedule_settle(tree.executor(), leaf_id.to_string(), next.id, prompt);
-    return Ok(false);
+    return Ok(BoundaryState::Running);
   }
   if last_outcome.as_deref() == Some("success") && last_position + 1 == steps.len() {
     return finish_successful_chain(tree, leaf_id, parent.id.as_str(), task, firing, steps, &by_position)
       .await
-      .map(|()| true);
+      .map(|()| BoundaryState::Finished);
   }
   let mut blocks = Vec::new();
   for position in &executed {
@@ -662,7 +665,9 @@ async fn reconcile_bound_firing(
     last_outcome.as_deref().unwrap_or("None"),
     blocks.join("\n\n")
   );
-  deliver_boundary_report(tree, leaf_id, parent.id.as_str(), task, firing, "failed", &summary).await.map(|()| true)
+  deliver_boundary_report(tree, leaf_id, parent.id.as_str(), task, firing, "failed", &summary)
+    .await
+    .map(|()| BoundaryState::Finished)
 }
 
 async fn finish_successful_chain(
@@ -1132,8 +1137,8 @@ mod tests {
       register_step_run(&tree, &leaf.id, &task, firing, 0, "member-a", Some("member-a-model"), None).await.unwrap();
     let quota = QuotaFailure { resets_at: None, message: "API Error: 402 Insufficient Balance".to_string() };
 
-    let finished = switch_failed_step(&features, &leaf.id, &failed, &quota, &tree, &task).await.unwrap();
-    assert_eq!(finished, Some(false), "the chain waits on the rerun");
+    let state = switch_failed_step(&features, &leaf.id, &failed, &quota, &tree, &task).await.unwrap();
+    assert_eq!(state, Some(BoundaryState::Running), "the chain waits on the rerun");
 
     let runs = features.store.list_run_records_sync(&leaf.id).unwrap();
     let retries =

@@ -44,12 +44,12 @@ use time::{Duration as TimeDuration, OffsetDateTime};
 /// The id of the priority pool that the Auto sessions of the failover tests run on.
 const AUTO_POOL_ID: &str = "auto";
 
-/// The members of the rotation pool, in config order.
-fn member_ids(cfg: &charliebot_core::config::CharlieBotConfig) -> Vec<&str> {
+/// The members of the pool `pool_id`, in config order.
+fn member_ids<'a>(cfg: &'a charliebot_core::config::CharlieBotConfig, pool_id: &str) -> Vec<&'a str> {
   cfg
     .backends
-    .pool(ROTATION_POOL_ID)
-    .expect("the rotation pool")
+    .pool(pool_id)
+    .expect("the pool is configured")
     .members
     .iter()
     .map(|member| member.backend.as_str())
@@ -2314,10 +2314,25 @@ fn claude_error_result(api_error_status: Value, result: &str) -> Value {
   json!({"type": event_types::RESULT, "is_error": true, "api_error_status": api_error_status, "result": result})
 }
 
+/// Where an error-event worker's first run is chosen: a named backend, the rotate pool `ROTATION_POOL_ID`, or the
+/// priority pool `AUTO_POOL_ID`. Each pool holds `fake` and `fake2`, in that order.
+#[derive(Clone, Copy)]
+enum ErrorEventPool {
+  Named,
+  Rotate,
+  Priority,
+}
+
+/// Launch a rotate-pool or named worker's first run, as `launch_error_event_worker_on` does.
+async fn launch_error_event_worker(first_events: &[Value], pool_chosen: bool) -> anyhow::Result<ErrorEventRun> {
+  let pool = if pool_chosen { ErrorEventPool::Rotate } else { ErrorEventPool::Named };
+  launch_error_event_worker_on(first_events, pool).await
+}
+
 /// Launch an implement worker's first run, which prints `first_events` and exits 1, and wait for it to end. A
 /// pool-chosen worker takes the pool's first member; a named worker takes `fake`. The retry on the next member prints
 /// one assistant line and exits 1, and the manager's turn after the failure report prints one result.
-async fn launch_error_event_worker(first_events: &[Value], pool_chosen: bool) -> anyhow::Result<ErrorEventRun> {
+async fn launch_error_event_worker_on(first_events: &[Value], pool: ErrorEventPool) -> anyhow::Result<ErrorEventRun> {
   let retry_events =
     [json!({"type": event_types::ASSISTANT, "message": {"content": [{"type": "text", "text": "retry stopped"}]}})];
   let scripts =
@@ -2325,15 +2340,35 @@ async fn launch_error_event_worker(first_events: &[Value], pool_chosen: bool) ->
   let options = ["fake", "fake2"]
     .map(|id| BackendOption { model: "fake-model".to_string(), ..scripts.option(id, BACKEND_TYPE) })
     .to_vec();
-  let stack = Stack::start_with(options, vec!["fake".to_string(), "fake2".to_string()]).await?;
+  let stack = match pool {
+    ErrorEventPool::Named | ErrorEventPool::Rotate => {
+      Stack::start_with(options, vec!["fake".to_string(), "fake2".to_string()]).await?
+    }
+    ErrorEventPool::Priority => {
+      let options = options
+        .into_iter()
+        .map(|option| BackendOption { billing: Some(PoolBilling::Subscription), ..option })
+        .collect();
+      let members = ["fake", "fake2"].map(|backend| PoolMember { backend: backend.to_string() }).to_vec();
+      let auto =
+        PoolConfig { id: AUTO_POOL_ID.to_string(), label: "Auto".to_string(), rule: PoolRule::Priority, members };
+      Stack::start_with_auto(options, Vec::new(), auto).await?
+    }
+  };
   stack.write_access_key()?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
-  let (session_backend, first_backend) = if pool_chosen {
-    let pool = backend_pool::backend_pool(&stack.features)?;
-    let member = pool.selector(&stack.cfg).select(ROTATION_POOL_ID, &[])?.expect("the pool selects a first member").id;
-    (ROTATION_POOL_ID.to_string(), member)
-  } else {
-    ("fake".to_string(), "fake".to_string())
+  let pool_id = match pool {
+    ErrorEventPool::Named => None,
+    ErrorEventPool::Rotate => Some(ROTATION_POOL_ID),
+    ErrorEventPool::Priority => Some(AUTO_POOL_ID),
+  };
+  let (session_backend, first_backend) = match pool_id {
+    Some(pool_id) => {
+      let backends = backend_pool::backend_pool(&stack.features)?;
+      let member = backends.selector(&stack.cfg).select(pool_id, &[])?.expect("the pool selects a first member").id;
+      (pool_id.to_string(), member)
+    }
+    None => ("fake".to_string(), "fake".to_string()),
   };
 
   let root = tempfile::tempdir()?;
@@ -2365,7 +2400,7 @@ async fn launch_error_event_worker(first_events: &[Value], pool_chosen: bool) ->
       Map::new(),
     )
     .await?;
-  if pool_chosen {
+  if pool_id.is_some() {
     stack
       .store()
       .update_slot_fields(
@@ -2411,9 +2446,10 @@ fn quota_failover_events(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<
   Ok(stack.run_events(session_id)?.into_iter().filter(|event| event["type"] == event_types::QUOTA_FAILOVER).collect())
 }
 
-/// The failover of a pool-chosen worker whose first run ended on a temporary error: the member cools, the node moves
-/// to `fake2`, the retry binds the failed run's inputs and worktree, and the parent hears only the retry's failure.
-async fn assert_temporary_failover(error: &ErrorEventRun) -> anyhow::Result<()> {
+/// The failover of a pool-chosen worker whose first run ended on a temporary error or a spent quota: the member cools,
+/// the node moves to `fake2`, the retry binds the failed run's inputs and worktree, and the parent hears only the
+/// retry's failure.
+async fn assert_failover_to_next_member(error: &ErrorEventRun) -> anyhow::Result<()> {
   let stack = &error.stack;
   let pool = backend_pool::backend_pool(&stack.features)?;
   assert_eq!(error.outcome, RunOutcomeKind::Failed);
@@ -2443,7 +2479,8 @@ async fn assert_temporary_failover(error: &ErrorEventRun) -> anyhow::Result<()> 
   assert_eq!(reports.len(), 1, "{reports:?}");
   assert_eq!(reports[0]["outcome"], "failed");
   assert_eq!(reports[0]["result_refs"], json!([format!("run:{}", retry.id)]));
-  assert_eq!(member_ids(&stack.cfg), ["fake", "fake2"]);
+  let pool_id = switches[0][event_types::QUOTA_FAILOVER_SET].as_str().unwrap_or_default();
+  assert_eq!(member_ids(&stack.cfg, pool_id), ["fake", "fake2"], "the switch names a pool of both members");
   settle_node(stack, &error.worker_id).await?;
   settle_node(stack, &error.manager_id).await
 }
@@ -2514,7 +2551,7 @@ fn assert_result_logged(error: &ErrorEventRun, result: &str) -> anyhow::Result<(
 #[ignore = "integration"]
 async fn at_capacity_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let error = launch_error_event_worker(&[error_event(CAPACITY_MESSAGE, "")], true).await?;
-  assert_temporary_failover(&error).await
+  assert_failover_to_next_member(&error).await
 }
 
 // A run with no output fails over on the worker path.
@@ -2522,7 +2559,7 @@ async fn at_capacity_error_fails_over_on_the_worker_path() -> anyhow::Result<()>
 #[ignore = "integration"]
 async fn no_output_stall_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let error = launch_error_event_worker(&[error_event("model produced no output for 1200s", "")], true).await?;
-  assert_temporary_failover(&error).await
+  assert_failover_to_next_member(&error).await
 }
 
 // A bad gateway error fails over on the worker path.
@@ -2531,7 +2568,7 @@ async fn no_output_stall_error_fails_over_on_the_worker_path() -> anyhow::Result
 async fn bad_gateway_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let message = "litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway";
   let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
-  assert_temporary_failover(&error).await
+  assert_failover_to_next_member(&error).await
 }
 
 // A connection error fails over on the worker path.
@@ -2540,7 +2577,7 @@ async fn bad_gateway_error_fails_over_on_the_worker_path() -> anyhow::Result<()>
 async fn internal_server_error_with_connection_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let message = "litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.";
   let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
-  assert_temporary_failover(&error).await
+  assert_failover_to_next_member(&error).await
 }
 
 // A 500 error fails over on the worker path.
@@ -2548,7 +2585,7 @@ async fn internal_server_error_with_connection_error_fails_over_on_the_worker_pa
 #[ignore = "integration"]
 async fn internal_server_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
   let error = launch_error_event_worker(&[error_event("Internal Server Error", "")], true).await?;
-  assert_temporary_failover(&error).await
+  assert_failover_to_next_member(&error).await
 }
 
 // An SSE stall fails over on the worker path.
@@ -2558,7 +2595,7 @@ async fn opencode_session_stall_error_fails_over_on_the_worker_path() -> anyhow:
   let message = "OpenCode backend failed: OpenCode SSE stream carried no session progress for 3600.0 s \
     (heartbeats during silence: 359)";
   let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
-  assert_temporary_failover(&error).await
+  assert_failover_to_next_member(&error).await
 }
 
 // A closed peer fails over on the worker path.
@@ -2568,7 +2605,7 @@ async fn opencode_closed_peer_error_fails_over_on_the_worker_path() -> anyhow::R
   let message = "OpenCode backend failed: peer closed connection without sending complete message body \
     (incomplete chunked read)";
   let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
-  assert_temporary_failover(&error).await
+  assert_failover_to_next_member(&error).await
 }
 
 // A stderr tail and request id do not trigger failover: the step case.
@@ -2621,7 +2658,7 @@ async fn claude_result_502_fails_over_on_the_worker_path() -> anyhow::Result<()>
   let result = "API Error: 502 litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway";
   let error = launch_error_event_worker(&[claude_error_result(json!(502), result)], true).await?;
   assert_result_logged(&error, result)?;
-  assert_temporary_failover(&error).await
+  assert_failover_to_next_member(&error).await
 }
 
 // A 529 result error fails over on the worker path.
@@ -2631,7 +2668,7 @@ async fn claude_result_529_fails_over_on_the_worker_path() -> anyhow::Result<()>
   let result = r#"API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
   let error = launch_error_event_worker(&[claude_error_result(json!(529), result)], true).await?;
   assert_result_logged(&error, result)?;
-  assert_temporary_failover(&error).await
+  assert_failover_to_next_member(&error).await
 }
 
 // A 429 result error fails over on the worker path.
@@ -2641,7 +2678,55 @@ async fn claude_result_429_fails_over_on_the_worker_path() -> anyhow::Result<()>
   let result = "API Error: 429 litellm.RateLimitError: RateLimitError: OpenAIException - rate limit exceeded";
   let error = launch_error_event_worker(&[claude_error_result(json!(429), result)], true).await?;
   assert_result_logged(&error, result)?;
-  assert_temporary_failover(&error).await
+  assert_failover_to_next_member(&error).await
+}
+
+/// The line the aigw gateway returns through the Claude Code CLI when a key's balance is spent: an errored `result`
+/// event with status 402. The failure-triage fixtures carry the same line from a real work run.
+const AIGW_SPENT_QUOTA: &str = "API Error: 402 litellm.BadRequestError: OpenAIException - Insufficient Balance";
+
+// A spent quota in an errored result fails over on a priority pool.
+#[tokio::test]
+#[ignore = "integration"]
+async fn claude_result_spent_quota_fails_over_on_a_priority_pool() -> anyhow::Result<()> {
+  let event = claude_error_result(json!(402), AIGW_SPENT_QUOTA);
+  let error = launch_error_event_worker_on(&[event], ErrorEventPool::Priority).await?;
+  assert_result_logged(&error, AIGW_SPENT_QUOTA)?;
+  assert_failover_to_next_member(&error).await
+}
+
+// A spent quota in an errored result fails over on a rotate pool.
+#[tokio::test]
+#[ignore = "integration"]
+async fn claude_result_spent_quota_fails_over_on_a_rotate_pool() -> anyhow::Result<()> {
+  let error = launch_error_event_worker(&[claude_error_result(json!(402), AIGW_SPENT_QUOTA)], true).await?;
+  assert_result_logged(&error, AIGW_SPENT_QUOTA)?;
+  assert_failover_to_next_member(&error).await
+}
+
+// A spent quota on a named backend records that model out and ends the run with the quota error, without a switch.
+#[tokio::test]
+#[ignore = "integration"]
+async fn claude_result_spent_quota_on_a_named_backend_ends_without_switching() -> anyhow::Result<()> {
+  let error = launch_error_event_worker(&[claude_error_result(json!(402), AIGW_SPENT_QUOTA)], false).await?;
+  assert_result_logged(&error, AIGW_SPENT_QUOTA)?;
+  assert_named_worker(&error).await?;
+  assert_named_member_recorded_out(&error)?;
+  let row = backend_availability(&error.stack.features)?.row("fake").expect("the named model is recorded out");
+  assert_eq!(row.reason, backend_availability::REASON_QUOTA_ERROR);
+  assert_eq!(row.detail, AIGW_SPENT_QUOTA, "the record keeps the quota error");
+  assert_no_failover(&error).await
+}
+
+// A request error whose request id carries 429 digits is not a spent quota: it fails fast and cools no member.
+#[tokio::test]
+#[ignore = "integration"]
+async fn request_error_result_with_429_in_its_request_id_does_not_fail_over() -> anyhow::Result<()> {
+  let result = "API Error: 400 litellm.BadRequestError: OpenAIException - invalid request \
+    (request_id: 0b429c7d-1e2f-4a5b-8c9d-0e1f2a3b4c5d)";
+  let error = launch_error_event_worker(&[claude_error_result(json!(400), result)], true).await?;
+  assert_no_member_cooled(&error)?;
+  assert_no_failover(&error).await
 }
 
 // A result error with no status fails over on the worker path.
@@ -2651,7 +2736,7 @@ async fn claude_result_without_status_connection_error_fails_over_on_the_worker_
   let result = "API Error: Connection error.";
   let error = launch_error_event_worker(&[claude_error_result(Value::Null, result)], true).await?;
   assert_result_logged(&error, result)?;
-  assert_temporary_failover(&error).await
+  assert_failover_to_next_member(&error).await
 }
 
 // Bad request result errors do not fail over: the reasoning case.

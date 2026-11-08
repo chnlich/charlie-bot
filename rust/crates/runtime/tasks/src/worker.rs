@@ -939,12 +939,13 @@ async fn handle_event<W: LaunchWatch + ?Sized>(
     return Err(QuotaExhaustedError::new(text, None).into());
   }
 
-  // Only an errored Claude Code result is classified here, by its status and then by its text.
+  // Only an errored Claude Code result is classified here: a temporary failure by its status and then its text, or a
+  // spent quota by its text. Both end the run as a quota failure, so the member is recorded out and the run fails over.
   if event_type == ET::RESULT
     && event.get("is_error") == Some(&Value::Bool(true))
-    && backend_pool::is_temporary_unavailable_result(&event)
+    && (backend_pool::is_temporary_unavailable_result(&event) || backend_pool::is_spent_quota_result(&event))
   {
-    let text = text_repr::value_str(event.get("result").context("a temporary result error carries its result text")?);
+    let text = text_repr::value_str(event.get("result").context("an errored result carries its result text")?);
     sink.append(&event)?;
     return Err(QuotaExhaustedError::new(text, None).into());
   }

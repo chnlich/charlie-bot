@@ -329,10 +329,37 @@ pub fn one_shot_members<'a>(
   })
 }
 
-/// Return whether an error string contains a known quota error substring.
+/// Return whether an error string contains a known quota error substring. A bare status code matches only as a whole
+/// token: a request id carries the same digits, and a request error that names one must fail fast.
 pub fn is_quota_error(text: &str) -> bool {
   let lowered = text.to_lowercase();
-  QUOTA_ERROR_PATTERNS.iter().any(|pattern| lowered.contains(pattern))
+  QUOTA_ERROR_PATTERNS.iter().any(|pattern| {
+    if pattern.bytes().all(|byte| byte.is_ascii_digit()) {
+      contains_token(&lowered, pattern)
+    } else {
+      lowered.contains(pattern)
+    }
+  })
+}
+
+/// Whether `token` occurs in `text` with no letter, digit or underscore on either side.
+fn contains_token(text: &str, token: &str) -> bool {
+  let is_word = |character: char| character.is_alphanumeric() || character == '_';
+  text.match_indices(token).any(|(start, _)| {
+    !text[..start].chars().next_back().is_some_and(is_word)
+      && !text[start + token.len()..].chars().next().is_some_and(is_word)
+  })
+}
+
+/// Return whether an error text marks a spent quota rather than a temporary failure. This is the one verdict that
+/// manager turns and worker runs share: a quota substring matches and no temporary-failure substring does.
+pub fn is_spent_quota_error(text: &str) -> bool {
+  is_quota_error(text) && !is_temporary_unavailable_error(text)
+}
+
+/// Return whether a Claude Code `result` event's text marks a spent quota. The caller has checked `is_error`.
+pub fn is_spent_quota_result(event: &Value) -> bool {
+  event.get("result").map(text_repr::value_str).is_some_and(|text| is_spent_quota_error(&text))
 }
 
 /// Return whether an error string contains a temporary backend failure substring.
@@ -785,9 +812,26 @@ mod tests {
     ] {
       assert!(is_quota_error(text), "{text}");
     }
-    for text in ["syntax error in the diff", "connection reset by peer"] {
+    for text in [
+      "syntax error in the diff",
+      "connection reset by peer",
+      // A request id whose hex digits contain 429 is not a status code.
+      "Error code: 400 - invalid request (request_id: 0b429c7d-1e2f-4a5b-8c9d-0e1f2a3b4c5d)",
+      "Error code: 400 - invalid request (request id req_429ab)",
+    ] {
       assert!(!is_quota_error(text), "{text}");
     }
+  }
+
+  #[test]
+  fn a_spent_quota_text_is_one_verdict_and_a_temporary_text_is_not() {
+    let aigw_402 = "API Error: 402 litellm.BadRequestError: OpenAIException - Insufficient Balance";
+    assert!(is_spent_quota_error(aigw_402));
+    assert!(!is_spent_quota_error("500 Internal Server Error: quota exhausted"));
+    assert!(!is_spent_quota_error("Error code: 400 - invalid request"));
+    let result = json!({"type": "result", "is_error": true, "api_error_status": 402, "result": aigw_402});
+    assert!(is_spent_quota_result(&result));
+    assert!(!is_spent_quota_result(&json!({"type": "result", "is_error": true, "result": null})));
   }
 
   #[test]

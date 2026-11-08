@@ -43,6 +43,18 @@ fn result_script(summary: &str) -> String {
   format!("printf '%s\\n' '{}'", serde_json::to_string(&event).expect("JSON event serializes"))
 }
 
+/// A CLI whose balance is spent: one errored `result` event with the aigw line, then exit 1.
+fn spent_quota_script() -> String {
+  let event = json!({
+    "type": "result",
+    "subtype": "success",
+    "is_error": true,
+    "api_error_status": 402,
+    "result": "API Error: 402 litellm.BadRequestError: OpenAIException - Insufficient Balance",
+  });
+  format!("printf '%s\\n' '{}'; exit 1", serde_json::to_string(&event).expect("JSON event serializes"))
+}
+
 fn gate_script(control_dir: &Path, summary: &str) -> String {
   let control = control_dir.display();
   let result = serde_json::to_string(&json!({"type": "result", "subtype": "success", "result": summary}))
@@ -914,6 +926,51 @@ async fn repo_less_implement_review_failure_takes_the_failure_report() -> anyhow
   assert_eq!(reports.len(), 1);
   assert_eq!(reports[0]["outcome"], "blocked");
   assert!(reports[0]["summary"].as_str().unwrap_or_default().contains("failed on every configured reviewer backend"));
+  Ok(())
+}
+
+/// A review that ends on its member's spent quota records that member out, and the review moves to the next reviewer as
+/// a failed review does.
+#[tokio::test]
+#[ignore = "integration"]
+async fn review_ending_on_a_spent_quota_moves_to_the_next_reviewer() -> anyhow::Result<()> {
+  let repo = SyntheticRepo::create()?;
+  let stack = Stack::start_with(
+    vec![
+      script_option("fake", &result_script("implemented")),
+      script_option("fake2", &spent_quota_script()),
+      script_option("fake3", &result_script("review retry ok")),
+    ],
+    vec!["fake".to_string(), "fake2".to_string(), "fake3".to_string()],
+  )
+  .await?;
+  set_access_key(&stack)?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack
+    .node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_task("add marker", Some(&repo.repo))))
+    .await?;
+  stack.dispatch.set_executor(None);
+  let guard = ProcessGroupGuard::new();
+  queue_and_launch_work(&stack, &worker.id, "run-work", "add marker").await?;
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
+  let first_review = wait_for_review(&stack, &worker.id, "run-work").await?;
+  assert_eq!(first_review.backend.as_deref(), Some("fake2"));
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &first_review.id).await?, RunOutcomeKind::Failed);
+  let pool = charliebot_agents::backend_pool::backend_pool(&stack.features)?;
+  assert!(pool.availability().out_until("fake2").is_some(), "the reviewer that spent its quota cools");
+
+  let retry = loop {
+    if let Some(review) =
+      stack.run_records(&worker.id)?.into_iter().find(|run| run.kind == RunKind::Review && run.id != first_review.id)
+    {
+      break review;
+    }
+    tokio::time::sleep(Duration::from_millis(20)).await;
+  };
+  assert_eq!(retry.backend.as_deref(), Some("fake3"));
+  assert_eq!(retry.review_of_run_id.as_deref(), Some("run-work"));
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &retry.id).await?, RunOutcomeKind::Success);
+  wait_for_task_state(&stack, &worker.id, "completed").await?;
   Ok(())
 }
 

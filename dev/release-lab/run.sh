@@ -282,7 +282,7 @@ prepare() {
   fi
   cp "$TOOLS/tools/mock-home" "$TOOLS/tools/startup-lab-launcher" "$STARTUP/tools/" \
     || fail "the lab tools copy from $TOOLS/tools"
-  ln -sfn "$TOOLS" "$STARTUP/bin-to"
+  startup_build_link
   if [ ! -d "$SEED" ]; then
     log 'generating the lab seed home'
     STARTUP_LAB_DIR="$STARTUP" "$FLOW/scripts/release/startup-lab.sh" generate \
@@ -717,9 +717,21 @@ run_one_flow() {
 
 # ---- the start matrix ------------------------------------------------------------------------------------------------
 
+# startup_build_link: the build directory scripts/release/startup-lab.sh reads for the build it is asked to start, named
+# `to`: the two binaries and the commit they were built from, as that script's own `install` writes them.
+startup_build_link() {
+  local bin="$STARTUP/bin-to"
+  rm -rf "$bin"
+  mkdir -p "$bin" || fail "the startup lab's build directory writes: $bin"
+  ln -sfn "$TOOLS/release/charliebot-server" "$bin/charliebot-server" \
+    && ln -sfn "$TOOLS/release/charliebot" "$bin/charliebot" \
+    && ln -sfn "$TOOLS/COMMIT" "$bin/COMMIT" \
+    || fail "the startup lab's build links write: $bin"
+}
+
 # startup_lab_layout: the entries scripts/release/startup-lab.sh reads, pointed at this lab's seed, tools and build.
 startup_lab_layout() {
-  ln -sfn "$TOOLS" "$STARTUP/bin-to"
+  startup_build_link
   [ -d "$SEED" ] || fail "the lab seed home exists; run --prepare: $SEED"
   [ -f "$STARTUP/live-home/config.yaml" ] || fail "the lab live home exists; run --prepare: $STARTUP/live-home"
 }
@@ -738,7 +750,7 @@ run_one_start() {
   out="$RUN_DIR/startup-lab.out"
   log "start $run with $readers reader(s): $TO cold on the seed home, load $load1"
 
-  ( STARTUP_LAB_DIR="$STARTUP" LAB_START=release "$FLOW/scripts/release/startup-lab.sh" time bin-to cold "r$readers-$run" ) \
+  ( STARTUP_LAB_DIR="$STARTUP" LAB_START=release "$FLOW/scripts/release/startup-lab.sh" time to cold "r$readers-$run" ) \
     > "$out" 2>&1 &
   pid=$!
   READERS_PID=

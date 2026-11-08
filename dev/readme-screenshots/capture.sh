@@ -83,8 +83,8 @@ if [[ ${1:-} == --inner ]]; then
   shift
   source /dev/stdin <<'INNER'
 set -euo pipefail
+# REPO_ROOT is already resolved above from this script's own path; the served command re-enters it.
 SCRATCH=$1
-REPO_ROOT=$2
 CHROME=$3
 BIN="$REPO_ROOT/rust/target/release"
 URL=$CHARLIEBOT_SERVE_URL
@@ -95,13 +95,14 @@ OUT="$REPO_ROOT/docs/assets/readme"
 [[ -n $URL && -n $AUTH && -n ${CHARLIEBOT_HOME:-} ]] || { printf 'inner: the trial environment is incomplete\n' >&2; exit 1; }
 mkdir -p "$OUT"
 
-# Deterministic picks out of the seeded home: one session carries the plan and the statuses the
-# screenshots show, two more carry waiting items so the approval queue holds several rows.
+# The session the screenshots open is the one with the largest chat record, so the chat view is full;
+# two more carry waiting items so the approval queue holds several rows.
+MAIN=$(find "$SESSIONS_DIR" -name chat_events.jsonl -printf '%s %h\n' | sort -rn | head -1   | awk '{print $2}' | xargs dirname | xargs basename)
 mapfile -t sids < <(ls "$SESSIONS_DIR" | LC_ALL=C sort)
 (( ${#sids[@]} >= 20 )) || { printf 'inner: the seed home holds only %s sessions\n' "${#sids[@]}" >&2; exit 1; }
-MAIN=${sids[3]}
-WAIT_B=${sids[8]}
-WAIT_C=${sids[13]}
+WAIT_B=${sids[40]}
+WAIT_C=${sids[80]}
+printf 'inner: main session %s\n' "$MAIN"
 
 api() { # method path body
   curl -fsS -X "$1" -H "$AUTH" -H 'Content-Type: application/json' ${3:+-d "$3"} "$URL$2"
@@ -115,33 +116,31 @@ status_text() { # goal now waiting_json
 # Store one session's status. Every Waiting on you item needs a recorded cold read before the server
 # stores it, so each unread item first gets one ask-check whose answer ends with the tier line the
 # approval policy parser reads.
-set_status() { # sid text
-  local sid=$1 text=$2 body unread item tier answer payload
+set_status() { # sid text tier
+  local sid=$1 text=$2 tier=$3 body unread item answer payload
   body=$(jq -n --arg sid "$sid" --arg text "$text" '{session_id: $sid, text: $text}')
   unread=$(api POST /api/internal/web/status/unread "$body" | jq '.unread')
-  local tier=t0
   while IFS= read -r item; do
     answer="The item's context reads as its description states, and the approval policy table tiers it.
 tier: $tier rule: none"
     payload=$(jq -n --arg sid "$sid" --argjson item "$item" --arg backend "readme-demo" --arg answer "$answer" \
       '{session_id: $sid, item: $item, backend: $backend, answer: $answer}')
     api POST /api/internal/web/ask-check "$payload" >/dev/null
-    tier=user-act
   done < <(jq -c '.[]' <<<"$unread")
   api POST /api/internal/web/status "$body" >/dev/null
 }
 set_status "$MAIN" "$(status_text \
   'Land the README refresh: rewritten entry docs, five new screenshots, and the delivery page.' \
   'The reviewer is checking the screenshots and the fact list against main.' \
-  '[{"text": "Approve the delivery page publish", "context": "Publishing puts the page at a URL beyond your devices, so the step waits for you."}]')"
+  '[{"text": "Approve the delivery page publish", "context": "Publishing puts the page at a URL beyond your devices, so the step waits for you."}]')" t0
 set_status "$WAIT_B" "$(status_text \
   'Prepare the release that carries the README refresh.' \
   'The release trial runs on the build host.' \
-  '[{"text": "Confirm the release trial verdict", "context": "The trial log ends in the verdict; the release waits on it."}]')"
+  '[{"text": "Confirm the release trial verdict", "context": "The trial log ends in the verdict; the release waits on it."}]')" t0
 set_status "$WAIT_C" "$(status_text \
   'Keep the daily summary current while the README refresh lands.' \
-  'Yesterday's summary went out with the digest attached.' \
-  '[{"text": "Read the release trial log", "context": "The log names the stage verdicts; the summary quotes them."}]')"
+  "Yesterday's summary went out with the digest attached." \
+  '[{"text": "Read the release trial log", "context": "The log names the stage verdicts; the summary quotes them."}]')" user-act
 
 digest() { # policy step undo scope_check
   local args=(digest add --session "$MAIN" --policy "$1" --step "$2" --undo "$3")
@@ -155,7 +154,10 @@ digest release-restart 'Released the server onto the commit that carries the REA
 digest t2 'Sent the screenshot review request from your account' \
   'The message cannot be recalled; post the correction in the same thread'
 
-# The plan page the plans panel shows: fabricated content in the plan genre.
+# The plan page the plans panel shows, and its registry row. The plan CLI's registration runs the
+# plan genre's page-height assertion through the server, whose trial config carries no
+# headless_chrome_bin, so this writes the session's plans.json and the artifact directly — the home
+# files the CLI's own registration would have written.
 PLAN_DIR="$SESSIONS_DIR/$MAIN/artifacts"
 mkdir -p "$PLAN_DIR"
 cat > "$PLAN_DIR/plan_01_v1.html" <<'PLAN'
@@ -163,35 +165,84 @@ cat > "$PLAN_DIR/plan_01_v1.html" <<'PLAN'
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Demo plan: session archive policy</title>
+<title>CharlieBot Plan</title>
+<style>
+  :root{--bg:#f3f5f7;--panel:#ffffff;--panel2:#eef1f5;--bd:#d9dfe6;--tx:#1b2430;--mut:#5b6774;--acc:#1163c0;--grn:#187f37;--amb:#9a6700;--mono:ui-monospace,Menlo,Consolas,monospace}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:24px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:21px;margin:0 0 4px}
+  .status{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.6px;background:var(--grn);color:#fff;border-radius:5px;padding:2px 7px;vertical-align:middle;margin-left:8px}
+  .sub{color:var(--mut);margin:0 0 18px;font-size:13px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+  .mtag{font-size:11.5px;font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:3px 9px}
+  h2{font-size:15px;margin:26px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--bd)}
+  h2 .n{display:inline-flex;width:22px;height:22px;border-radius:6px;background:var(--acc);color:#fff;font-size:12px;font-weight:700;align-items:center;justify-content:center;margin-right:8px;vertical-align:-4px}
+  p{margin:7px 0}
+  ul,ol{margin:6px 0 0;padding-left:18px}
+  li{margin:3px 0}
+  .src{font-size:11px;color:#66707b}
+  code{font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;font-size:12.5px;color:#7a4b00}
+  pre{background:#f6f8fa;border:1px solid var(--bd);border-radius:8px;padding:11px 13px;overflow:auto;font-family:var(--mono);font-size:12px;margin:9px 0 0}
+  .fork{background:var(--panel);border:1px solid var(--bd);border-left:3px solid var(--amb);border-radius:8px;padding:12px 15px;margin:12px 0}
+  .fork .q{font-weight:600;margin:0 0 4px}
+  .fork .fn{display:inline-flex;width:20px;height:20px;border-radius:6px;background:var(--amb);color:#fff;font-size:11.5px;font-weight:700;align-items:center;justify-content:center;margin-right:9px;vertical-align:-3px}
+  .fork .rec{margin:4px 0 0;font-size:12.5px}
+  .fork .rec b{color:var(--grn)}
+  .fork .trade{margin:3px 0 0;font-size:12.5px;color:var(--mut)}
+  .fork .resolved{margin:8px 0 0;padding-top:8px;border-top:1px dashed var(--bd);font-size:12.5px;font-weight:600;color:#187f37}
+  .foot{margin-top:22px;padding:13px 15px;background:linear-gradient(90deg,rgba(188,140,255,.10),transparent);border:1px solid var(--bd);border-radius:9px;color:var(--mut);font-size:12.5px}
+</style>
 </head>
 <body>
-<h1>Demo plan: session archive policy <span>PLAN</span></h1>
-<p>Give closed sessions a single archive path so the sidebar stays a working set.</p>
-<h2>1 Goal</h2>
-<p>Archived sessions leave the sidebar but keep every run record, so an audit reads the full tree.</p>
-<h2>2 Design</h2>
-<ul>
-  <li>An archive request writes a summary and the run ids it covers into the session record.</li>
-  <li>The sidebar lists an archived session only in the archived filter.</li>
-  <li>A subtree archive moves every descendant in one request.</li>
-</ul>
-<h2>3 Trade-offs</h2>
-<ol>
-  <li>Archive on run end or by request? By request: the reader decides when a thread is done, and the
-      archived filter can undo it.</li>
-</ol>
-<h2>4 Acceptance</h2>
-<ol>
-  <li>An archived session answers its API reads with the same records as before.</li>
-  <li>The sidebar's archived filter lists the session; the working filters do not.</li>
-</ol>
+<div class="wrap">
+  <h1>Demo plan: session archive policy<span class="status">APPROVED</span></h1>
+  <p class="sub">Give closed sessions one archive path so the sidebar stays a working set, without losing a run record.</p>
+  <div class="meta">
+    <span class="mtag">repo &middot; workspace/synthetic</span>
+    <span class="mtag">base &middot; main</span>
+    <span class="mtag">v1 &middot; initial</span>
+  </div>
+  <h2><span class="n">1</span> Problem / Goal</h2>
+  <p>Closed sessions keep their place in the sidebar, so the working set grows past what a person scans.
+     The archive path has to keep every run record readable and undoable.</p>
+  <h2><span class="n">2</span> Context</h2>
+  <p>The sidebar reads its rows from the session records; the archived filter exists but nothing moves a
+     session into it today. <span class="src">web/static/js/sidebar/archived.js</span></p>
+  <h2><span class="n">3</span> High Level Solution</h2>
+  <p>An archive request writes a summary and the covered run ids into the session record, and the record's
+     status moves to archived. The sidebar lists the session only in the archived filter; the API reads
+     answer unchanged.</p>
+  <h2><span class="n">4</span> Detailed Design</h2>
+  <ul>
+    <li>The request carries the summary, the run ids and a request id that binds the retry.</li>
+    <li>A subtree archive moves every descendant in one request.</li>
+    <li>Opening an archived session serves the full history, runs included.</li>
+  </ul>
+  <h2><span class="n">5</span> Trade-offs</h2>
+  <div class="fork">
+    <p class="q"><span class="fn">1</span> Archive on run end or by request?</p>
+    <p class="rec"><b>By request:</b> the reader decides when a thread is done, and the archived filter undoes it.</p>
+    <p class="trade">Cost: a session nobody archives lingers; the daily digest names the candidates instead.</p>
+    <p class="resolved">Resolved: by request, with the digest listing archive candidates.</p>
+  </div>
+  <h2><span class="n">6</span> Other Details</h2>
+  <ul>
+    <li>The archived filter keeps its own page of rows, so the working filters stay fast.</li>
+  </ul>
+  <div class="foot"><p>Approved after one verify round and the cold read. The plan registry holds this
+     version's record; the artifact viewer shows it with its switchers.</p></div>
+</div>
 </body>
 </html>
 PLAN
-"$BIN/charliebot" plan present --session "$MAIN" --file artifacts/plan_01_v1.html \
-  --title 'Demo plan: session archive policy' >/dev/null
-"$BIN/charliebot" plan approve --session "$MAIN" >/dev/null
+jq -n --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg approved "$(date -u +%Y-%m-%dT%H:%M:%SZ)"   '{plans: [{
+      id: 1,
+      title: "Demo plan: session archive policy",
+      takeoff: ({v: 1, at: $approved}),
+      closed: null,
+      versions: [{v: 1, file: "artifacts/plan_01_v1.html", created_at: $created, trigger: "initial", base: null, note: null}]
+  }]}' > "$SESSIONS_DIR/$MAIN/plans.json"
 
 cat > "$SCRATCH/shoot.mjs" <<DRIVER
 import { spawn } from 'node:child_process';
@@ -242,8 +293,11 @@ class Cdp {
 }
 
 async function launchBrowser(binary) {
-  const userDataDir = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'shoot-profile.'));
-  const log = fs.openSync(path.join(process.env.SHOOT_LOG || '/tmp', 'chrome.log'), 'a');
+  // The trial points TMPDIR into its own tree, whose path grows with the caller's scratch; the short
+  // caller TMPDIR comes back in README_CAPTURE_TMPDIR, so Chrome's singleton socket stays short.
+  const shortTmp = process.env.README_CAPTURE_TMPDIR || process.env.TMPDIR || '/tmp';
+  const userDataDir = fs.mkdtempSync(path.join(shortTmp, 'shoot-profile.'));
+  const log = fs.openSync(path.join(process.env.SHOOT_LOG || shortTmp, 'chrome.log'), 'a');
   const child = spawn(binary, [
     '--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
     '--disable-background-networking', '--disable-component-update', '--disable-sync',
@@ -279,7 +333,6 @@ async function openPage(browser) {
   await send('Network.enable');
   await send('Runtime.enable');
   await send('Emulation.setDeviceMetricsOverride', { ...DESKTOP, deviceScaleFactor: 1 });
-  await send('Network.setCookie', { name: 'charliebot_access_key', value: accessKey, url: baseUrl });
   return page;
 }
 
@@ -290,6 +343,15 @@ async function evaluate(page, expression) {
 }
 
 async function openUrl(page, url) {
+  // The page's initAuth reads the access key from localStorage and mirrors it into a cookie, so both
+  // go in the way the page itself writes them; every navigation after the first then carries the key.
+  await page.send('Page.navigate', { url: baseUrl + '/' });
+  await sleep(500);
+  await evaluate(page, \`localStorage.setItem('charliebot_access_key', \${JSON.stringify(accessKey)});
+    document.cookie = 'charliebot_access_key=' + \${JSON.stringify(accessKey)} + '; path=/; SameSite=Strict';\`);
+  const auth = await evaluate(page,
+    "fetch('/api/auth/status').then(r => r.text().then(t => r.status + ' ' + t)).catch(e => 'ERR ' + e)");
+  console.log(\`auth: \${auth}, cookie bytes: \${(await evaluate(page, 'document.cookie')).length}\`);
   await page.send('Page.navigate', { url });
   await sleep(2500);
 }
@@ -369,7 +431,7 @@ try {
 }
 DRIVER
 
-SHOOT_LOG="$SCRATCH/chrome-driver.log" node "$SCRATCH/shoot.mjs" \
+SHOOT_LOG="$SCRATCH" node "$SCRATCH/shoot.mjs" \
   "$URL" "$(printf '%s' "$AUTH" | sed 's/^Authorization: Bearer //')" "$OUT" "$MAIN" "$CHROME"
 
 printf 'inner: fabrication and capture finished\n'
@@ -385,7 +447,19 @@ BIN="$REPO_ROOT/rust/target/release"
 COMMIT=$(git -C "$REPO_ROOT" rev-parse HEAD)
 [[ $COMMIT =~ ^[0-9a-f]{40}$ ]] || { printf 'capture: %s is not a full commit sha\n' "$COMMIT" >&2; exit 1; }
 
+# The trial reads the operator's config through CHARLIEBOT_HOME, so on a build host with no profile
+# home this script writes a bench-owned one: a stand-in endpoint the served command never calls.
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/readme-shots.XXXXXX")
+mkdir -p "$SCRATCH/live-home"
+cat > "$SCRATCH/live-home/config.yaml" <<'YAML'
+backends:
+  options:
+    - id: readme-capture-endpoint
+      label: Readme capture endpoint
+      type: charlie-code
+      model: capture/stub
+      api_base: http://127.0.0.1:9/v1
+YAML
 cleanup() {
   if [[ $1 == 0 ]]; then
     rm -rf -- "$SCRATCH"
@@ -397,9 +471,36 @@ trap 'status=$?; cleanup "$status"' EXIT
 
 printf 'mock home: generating %s sessions (seed %s, view shape)\n' "$SESSIONS" "$SEED"
 "$BIN/mock-home" generate "$SCRATCH/mock-home" --sessions "$SESSIONS" --seed "$SEED" --shape view
+# The mock corpus draws some session titles from a non-English pool; the README screenshots read
+# better with one language, so the seed's non-ASCII titles take fabricated English ones.
+python3 - "$SCRATCH/mock-home" <<'NAMES'
+import json, pathlib, re, sys
+
+root = pathlib.Path(sys.argv[1])
+titles = ['release notes draft', 'session list paging', 'backup and restore', 'diff viewer colors',
+          'scheduler timeout audit', 'metrics panel', 'trace merge cache', 'worktree sweep',
+          'cron seed refresh', 'trigger backlog', 'sidebar grouping', 'draft card lock',
+          'usage ledger sweep', 'voice preview relay', 'terminal resize', 'plan diff view',
+          'memory lint pass', 'taste index build', 'digest day view', 'login sheet poll']
+count = 0
+for meta in sorted(root.glob('*/metadata.json')):
+    row = json.loads(meta.read_text())
+    name = row.get('name', '')
+    suffix_match = re.search(r' / #\S+$', name)
+    suffix = suffix_match.group(0) if suffix_match else ''
+    if not name.isascii():
+        row['name'] = titles[count % len(titles)] + suffix
+        count += 1
+        meta.write_text(json.dumps(row, indent=2) + '\n')
+print(f'renamed {count} sessions')
+NAMES
 
 printf 'trial: starting the isolated server for commit %s\n' "$COMMIT"
-"$REPO_ROOT/scripts/release/trial.sh" --serve --tree-root "$SCRATCH/tree" \
+mkdir -p "$SCRATCH/tree"
+# The server walks the mock home at boot inside the caller's scope, as the browser bench's trial does.
+README_CAPTURE_TMPDIR="${TMPDIR:-/tmp}" CHARLIEBOT_HOME="$SCRATCH/live-home" \
+  systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0 --unit="readme-shots-$$" \
+  "$REPO_ROOT/scripts/release/trial.sh" --serve --in-caller-scope --tree-root "$SCRATCH/tree" \
   --seed-home "$SCRATCH/mock-home" "$COMMIT" "$BIN/charliebot-server" \
   -- "$SCRIPT_PATH/capture.sh" --inner "$SCRATCH" "$REPO_ROOT" "$CHROME"
 

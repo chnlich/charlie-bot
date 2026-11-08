@@ -89,23 +89,23 @@ flowchart TB
 <p align="center">
   <img src="docs/assets/readme/ui-chat-desktop.png" alt="Desktop chat view" width="880">
 </p>
-<p align="center"><i>Desktop: chat view with the external-provider quota strip (Claude/Codex) and the per-session context usage indicator. All content is fabricated demo data.</i></p>
+<p align="center"><i>Desktop: a session's Everything view — user messages, tool calls with their results, and the sessions sidebar. All content is fabricated demo data.</i></p>
 <p align="center">
   <img src="docs/assets/readme/ui-status-desktop.png" alt="Desktop status view" width="880">
 </p>
-<p align="center"><i>Desktop: a session's Status view — the Goal, Now and Waiting on you items that hold work until you act.</i></p>
+<p align="center"><i>Desktop: the same session's Status view — the Goal, Now and Waiting on you items that hold work until you act.</i></p>
 <p align="center">
   <img src="docs/assets/readme/ui-plans-desktop.png" alt="Plans tab" width="880">
 </p>
-<p align="center"><i>Desktop: the plans panel — an approved plan's HTML artifact with the plan/version switchers, revision badges and resolved trade-offs.</i></p>
+<p align="center"><i>Desktop: the plans panel — an approved plan's HTML artifact with its version switcher and resolved trade-offs.</i></p>
 <p align="center">
   <img src="docs/assets/readme/ui-approval-desktop.png" alt="Approval day page" width="880">
 </p>
-<p align="center"><i>Desktop: the approval page for one Pacific day — the ranked queue, the login sheet, and the digest with each step's undo.</i></p>
+<p align="center"><i>Desktop: the approval page for one Pacific day — the ranked queue, the login sheet, and the digest, each entry with its undo.</i></p>
 <p align="center">
   <img src="docs/assets/readme/ui-chat-mobile.png" alt="Mobile chat view" width="320">
 </p>
-<p align="center"><i>Mobile: the same chat and session list in a phone-width layout.</i></p>
+<p align="center"><i>Mobile: the same chat in a phone-width layout.</i></p>
 
 The screenshots are generated from fabricated demo data by [`dev/readme-screenshots/capture.sh`](dev/readme-screenshots/capture.sh).
 

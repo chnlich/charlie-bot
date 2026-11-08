@@ -332,16 +332,20 @@ impl BackendPool {
 
   /// Describe every configured member and whether its cooling has ended.
   pub fn recovery_report(&self, cfg: &CharlieBotConfig) -> String {
-    let now = UtcDateTime::now().into_inner();
+    let now = UtcDateTime::now();
     let parts = cfg
       .backends
       .pool
       .iter()
       .map(|member| match self.out_until(member) {
-        Some(until) if until > now => {
+        Some(until) if until > now.into_inner() => {
           format!("{member} cooling until {}", backend_availability::format_minutes(until))
         }
-        _ => format!("{member} not cooling"),
+        _ => match model_pool::member_reading(cfg, &self.registry, member, now) {
+          Ok(Some(reading)) if reading.exhausted => format!("{member} exhausted by its usage reading"),
+          Ok(_) => format!("{member} not cooling"),
+          Err(error) => format!("{member} usage reading failed: {error:#}"),
+        },
       })
       .collect::<Vec<_>>();
     if parts.is_empty() { "backends.pool is empty".to_string() } else { parts.join("; ") }
@@ -751,6 +755,14 @@ mod tests {
   #[test]
   fn empty_pool_recovery_report_names_the_empty_pool() {
     assert_eq!(pool().recovery_report(&config(&[])), "backends.pool is empty");
+  }
+
+  #[test]
+  fn recovery_report_names_a_member_its_usage_reading_exhausted() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg = config(&["a", "b", "c"]);
+    let pool = BackendPool::new(Arc::new(BackendAvailability::load(home.path()).unwrap()), exhausted_b_registry());
+    assert_eq!(pool.recovery_report(&cfg), "a not cooling; b exhausted by its usage reading; c not cooling");
   }
 
   #[test]

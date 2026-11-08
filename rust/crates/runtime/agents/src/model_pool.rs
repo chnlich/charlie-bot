@@ -293,7 +293,7 @@ pub fn member_option<'a>(cfg: &'a CharlieBotConfig, member: &AutoMember) -> anyh
 
 /// Read one backend option's quota reading through its backend type's registered reader, or `None` when the type
 /// exposes none.
-fn member_reading(
+pub(crate) fn member_reading(
   cfg: &CharlieBotConfig,
   registry: &Registry,
   backend_id: &str,

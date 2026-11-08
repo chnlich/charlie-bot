@@ -270,8 +270,7 @@ fn chat_page(
     }
   };
 
-  let default_backend_id =
-    cfg.backends.new_session_backend().expect("config loading requires a backends.options entry");
+  let default_backend_id = cfg.backends.new_session_backend().unwrap_or_else(|| "claude".to_string());
   let active_backend = active_backend_id(&cfg, &active_session, &default_backend_id);
   let active_option = cfg.get_backend_option(active_backend);
   let backend_pools =

@@ -108,6 +108,8 @@ woken `completed` by the after build.
 
 ## Gates
 
+Both gates also fail a completed wake whose job wrote no end record, and a wake that fired before `max(job end, registration)`.
+
 - `--gate smoke`: every wait fires `completed` in both builds, parity holds, and every wake's lag lies at most one probe interval plus the 10 s of noise after
   `max(job end, the restarted waiter's start)`. The report also prints the stricter count that ignores the restart
   gap, so a reader sees both. The smoke run uses `--waits 10 --stagger-seconds 120 --restarts 1 --length-cap 300 --hold-seconds 120`, so its

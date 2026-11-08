@@ -186,9 +186,11 @@ export function buildReport({ runDir, gate }) {
       const fireReason = record?.status === 'fired' ? record.fire_reason : record?.status ?? 'missing';
       const firedSegment = firedMs === null ? null : fireSegment(windows, firedMs);
       const crossedRestart = firedSegment !== null && firedSegment.index > registration.segment;
-      const effectiveStartMs = firedSegment?.readyAt ?? createdMs;
-      const lagBaseMs = Math.max(endMs ?? -Infinity, createdMs);
-      const lagMs = firedMs === null ? null : firedMs - lagBaseMs;
+      // The probe schedule runs from the trigger's creation, unless a restart after the creation restarted it.
+      const effectiveStartMs = Math.max(createdMs, firedSegment?.readyAt ?? createdMs);
+      // A wake without the job's end record has no lag: the lag is measured from the job's own end, never from the
+      // registration alone. The gate fails a completed wake that has none.
+      const lagMs = firedMs === null || endMs === null ? null : firedMs - Math.max(endMs, createdMs);
       const restartOffsetMs = Math.max(0, effectiveStartMs - Math.max(endMs ?? createdMs, createdMs));
       const elapsedMs = firedMs === null ? null : firedMs - effectiveStartMs;
       const intervalMs = elapsedMs === null ? null : intervalInForceMs(elapsedMs);
@@ -279,6 +281,15 @@ function evaluateGate(summary, rows, gate) {
   const failures = [];
   const before = summary.builds.before;
   const after = summary.builds.after;
+  for (const row of rows) {
+    if (row.fire_reason === 'completed' && row.lag_ms === null) {
+      failures.push(`wait ${row.wait} (${row.build}): completed without the job's end record`);
+    }
+    if (row.lag_ms !== null && row.lag_ms < 0) {
+      const early = Math.round(-row.lag_ms);
+      failures.push(`wait ${row.wait} (${row.build}): fired ${early} ms before max(job end, registration)`);
+    }
+  }
   if (summary.parity.failures.length > 0) {
     failures.push(`parity: ${summary.parity.failures.length} wait(s) completed on before but not after`);
   }

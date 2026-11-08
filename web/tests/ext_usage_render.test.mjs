@@ -958,3 +958,13 @@ test('renderExtUsage marks a pool account that needs a new login with its direct
   const healthy = _rowByKey(strip, 'claude:main');
   assert.equal(_field(healthy, 'login-required'), null, 'a healthy account carries no login note');
 });
+
+test('a quota group error is shown beside the retained reading', () => {
+  const { context, strip } = loadExtUsageScript();
+  context.renderExtUsage({ providers: { 'antigravity:main': {
+    provider: 'antigravity', provider_label: 'Antigravity', account: 'main', windows: [],
+    status_rows: [{ name: 'Antigravity', state: 'error', message: 'model matched no quota group' }],
+  } } });
+  const row = _rowByKey(strip, 'antigravity:main:status:0');
+  assert.equal(_field(row, 'member-state').textContent, 'model matched no quota group');
+});

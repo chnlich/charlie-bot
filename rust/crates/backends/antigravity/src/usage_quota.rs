@@ -9,8 +9,8 @@ use charliebot_agents::cli_base::CliHost;
 use charliebot_core::config::{BackendOption, CharlieBotConfig, PoolBilling};
 use charliebot_registry::backend::{MemberReading, MemberReadingFn};
 use charliebot_registry::usage::{
-  DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_SCOPE_LABEL, PANEL_UTILIZATION,
-  PANEL_WINDOW_MINUTES, PANEL_WINDOW_NAME, PANEL_WINDOWS, QuotaAccount, UsageOps, UsageSourceImpl,
+  DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_SCOPE_LABEL, PANEL_STATUS_ROWS,
+  PANEL_UTILIZATION, PANEL_WINDOW_MINUTES, PANEL_WINDOW_NAME, PANEL_WINDOWS, QuotaAccount, UsageOps, UsageSourceImpl,
   mark_expired_windows, member_reading_from_windows,
 };
 use charliebot_store::metadata::UtcDateTime;
@@ -104,7 +104,15 @@ impl AntigravityQuotaAccount {
 
   fn mark_expired(&self, entry: &Map<String, Value>, now: UtcDateTime) -> anyhow::Result<Map<String, Value>> {
     let sampled = entry.get(PANEL_FETCHED_AT).and_then(Value::as_str).map(UtcDateTime::parse).transpose()?;
-    Ok(mark_expired_windows(entry, sampled, now))
+    let mut marked = mark_expired_windows(entry, sampled, now);
+    let state = self.state.current.lock().expect("the Antigravity quota state is not poisoned");
+    if state.last_error.starts_with("Antigravity model ") && !entry.contains_key("error") {
+      marked.insert(
+        PANEL_STATUS_ROWS.to_string(),
+        json!([{ "name": "Antigravity", "state": "error", "message": state.last_error }]),
+      );
+    }
+    Ok(marked)
   }
 }
 
@@ -375,5 +383,17 @@ mod tests {
     let group = json!({"name": "Series Models", "description": "Models within this group: Series Alpha, Series Beta"});
     assert!(group_matches(&group, "series-alpha-1-high"));
     assert!(!group_matches(&group, "series-other-1"));
+  }
+
+  #[test]
+  fn a_group_matching_error_is_visible_with_the_previous_reading() {
+    let state = Arc::new(AntigravityQuotaState::default());
+    state.current.lock().unwrap().last_error = "Antigravity model \"unknown\" matched no quota group".into();
+    let host = CliHost { path: String::new(), home: std::path::PathBuf::new() };
+    let account = AntigravityQuotaAccount::new(host, state);
+    let entry = Map::from_iter([(PANEL_WINDOWS.to_string(), json!([]))]);
+    let marked = account.mark_expired(&entry, UtcDateTime::now()).unwrap();
+    assert_eq!(marked[PANEL_WINDOWS], json!([]));
+    assert_eq!(marked[PANEL_STATUS_ROWS][0]["message"], "Antigravity model \"unknown\" matched no quota group");
   }
 }

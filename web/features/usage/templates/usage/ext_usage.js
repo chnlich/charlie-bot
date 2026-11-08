@@ -337,7 +337,8 @@ function _buildMemberStatusRows(key, providerData) {
     row.appendChild(label);
     const note = _el('span', 'text-slate-400');
     note.setAttribute('data-field', 'member-state');
-    note.textContent = status.state === 'cooling' ? 'cooling until ' + status.resets_at : 'available';
+    note.textContent = status.state === 'cooling' ? 'cooling until ' + status.resets_at :
+      status.state === 'error' ? status.message : 'available';
     row.appendChild(note);
     return row;
   });

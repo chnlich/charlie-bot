@@ -31,8 +31,8 @@ No value in this directory names a host, a user or one machine's path. The lab t
 | `RELEASE_LAB_TMUX_SOCKET` | the lab's tmux socket name (default `release-lab`) |
 | `RELEASE_LAB_SCOPE_MEMORY` | the lab's systemd user scope memory cap (default 24G) |
 | `RELEASE_LAB_MODEL` | the stand-in backend's model (default `openai/glm-5.3-flash`) |
-| `RELEASE_LAB_READER_SECONDS` | how long the flow's readers run from the gate's start (default 11) |
-| `RELEASE_LAB_READER_SLEEP_MS` | the pause between one reader's 1 MiB reads (default 5) |
+| `RELEASE_LAB_READER_SECONDS` | the cap on how long the flow's readers run from the gate's start (default 1800); they stop at the gate's first waiting sample |
+| `RELEASE_LAB_READER_SLEEP_MS` | the pause between one reader's 1 MiB reads (default 12) |
 | `RELEASE_LAB_KEEP` | keep a run's stand-in home and logs for inspection (default 0) |
 
 The lab runs inside a systemd user scope with `RELEASE_LAB_SCOPE_MEMORY`, and it stops every process it started when it
@@ -78,6 +78,7 @@ count. Its readers start when the trial creates the server log and stop at `serv
 
 The switch's disk gate samples the root disk's read rate over ten seconds and waits while the rate stays above 40 MB/s.
 `readers.sh` starts the configured number of readers at a fixed point of each run (the gate's start for a flow run, the
-server start for a start-matrix cell), each streaming a lab file through `O_DIRECT` in 1 MiB blocks, so the gate waits
-at least one sample and every run sees the same schedule. The JSON line's `gate_wait_samples` records how many samples
-the gate waited.
+server start for a start-matrix cell), each streaming the seed home's largest file through `O_DIRECT` in 1 MiB blocks,
+so no reader file of its own is written. A flow run's readers stop at the gate's first waiting sample: the gate reads
+its two process tables before it samples the disk, so the readers must cover that stretch for the sample to be theirs.
+The JSON line's `gate_wait_samples` records how many samples the gate waited.

@@ -31,8 +31,9 @@
 #   RELEASE_LAB_TMUX_SOCKET     the lab's tmux socket name (default release-lab)
 #   RELEASE_LAB_SCOPE_MEMORY    the lab's systemd user scope memory cap (default 24G)
 #   RELEASE_LAB_MODEL           the stand-in backend's model (default openai/glm-5.3-flash)
-#   RELEASE_LAB_READER_SECONDS  how long the flow's readers run from the gate's start (default 11)
-#   RELEASE_LAB_READER_SLEEP_MS the pause between one reader's 1 MiB reads (default 5)
+#   RELEASE_LAB_READER_SECONDS  the cap on how long the flow's readers run from the gate's start (default 1800); they
+#                               stop at the gate's first waiting sample
+#   RELEASE_LAB_READER_SLEEP_MS the pause between one reader's 1 MiB reads (default 12)
 #   RELEASE_LAB_KEEP            keep the run's stand-in home and logs for inspection (default 0)
 #
 # Exit: 0 every requested run completed with a live verdict; 1 a run failed or a cleanup failed; 2 the lab refused to
@@ -117,8 +118,8 @@ require_env() {
   SOCK=${RELEASE_LAB_TMUX_SOCKET:-release-lab}
   SCOPE_MEMORY=${RELEASE_LAB_SCOPE_MEMORY:-24G}
   MODEL=${RELEASE_LAB_MODEL:-openai/glm-5.3-flash}
-  READER_SECONDS=${RELEASE_LAB_READER_SECONDS:-11}
-  READER_SLEEP_MS=${RELEASE_LAB_READER_SLEEP_MS:-5}
+  READER_SECONDS=${RELEASE_LAB_READER_SECONDS:-1800}
+  READER_SLEEP_MS=${RELEASE_LAB_READER_SLEEP_MS:-12}
   KEEP=${RELEASE_LAB_KEEP:-0}
   BACKEND=charlie-code-release-lab
   [[ $PORT =~ ^[0-9]+$ ]] || fail "RELEASE_LAB_PORT is a number: $PORT"
@@ -289,12 +290,14 @@ prepare() {
   fi
   lab_write_config "$STARTUP/live-home" "$(od -An -N32 -tx1 /dev/urandom | tr -d '[:space:]')"
   lab_write_gh
-  if [ ! -f "$READER_FILE" ]; then
-    log "writing the reader file $READER_FILE"
-    dd if=/dev/urandom of="$READER_FILE" bs=1M count=1024 status=none || fail "the reader file writes: $READER_FILE"
-    chmod 600 "$READER_FILE"
+  if [ ! -s "$READER_FILE" ]; then
+    log "choosing the reader file under $SEED"
+    find "$SEED" -type f -size +8M -printf '%s %p\n' 2> /dev/null | sort -rn | head -1 | cut -d' ' -f2- \
+      > "$READER_FILE" || fail "the reader file path writes: $READER_FILE"
+    [ -s "$READER_FILE" ] || fail "the seed home holds a file of 8 MiB or more for the readers: $SEED"
   fi
-  printf '{"kind":"prepare","to":"%s","seed":"%s","flow":"%s","readers":"%s"}\n' "$TO" "$SEED" "$FLOW" "$READER_FILE"
+  printf '{"kind":"prepare","to":"%s","seed":"%s","flow":"%s","reader_file":"%s"}\n' "$TO" "$SEED" "$FLOW" \
+    "$(cat "$READER_FILE")"
 }
 
 # teardown: delete the lab's copy of the model key and the homes it wrote. The report names the key file's path.
@@ -464,11 +467,17 @@ standin_stop() {
 
 READERS_PID=
 
+# reader_target: the file the readers stream. It is the largest file of the seed home, so the readers need no file of
+# their own and read one the boot also reads.
+reader_target() { [ -s "$READER_FILE" ] && cat "$READER_FILE"; }
+
 start_readers() {
-  local count=$1 seconds=$2
+  local count=$1 seconds=$2 target
   READERS_PID=
   ((count > 0)) || return 0
-  setsid "$SCRIPT_DIR/readers.sh" "$READER_FILE" "$count" "$seconds" "$READER_SLEEP_MS" \
+  target=$(reader_target)
+  [ -n "$target" ] && [ -f "$target" ] || fail "the reader file exists; run --prepare: $READER_FILE"
+  setsid "$SCRIPT_DIR/readers.sh" "$target" "$count" "$seconds" "$READER_SLEEP_MS" \
     > /dev/null 2>> "${RUN_DIR:-/dev/null}/readers.log" &
   READERS_PID=$!
 }
@@ -601,6 +610,13 @@ run_one_flow() {
     if [ -z "$READERS_PID" ] && [ -n "$switch_log" ] && grep -q 'lab mark=gate_start' "$switch_log" 2> /dev/null; then
       start_readers "$READERS" "$READER_SECONDS"
       log "run $run: $READERS reader(s) start at the gate"
+    fi
+    # The gate samples the disk only after its two read tables, and those take minutes on a host whose process table is
+    # large. The readers therefore run until the first waiting sample is logged and then stop: that sample is theirs, and
+    # the next one sees a quiet disk.
+    if [ -n "$READERS_PID" ] && grep -q 'waiting for the root disk' "$switch_log" 2> /dev/null; then
+      stop_readers
+      log "run $run: readers stop at the gate's first waiting sample"
     fi
     sleep 0.2
   done

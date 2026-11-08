@@ -73,6 +73,8 @@ const REDLINE_DOC: &str = "thread_reply_redline.md";
 const REPLY_FORMAT_DOC: &str = "thread_reply_format.md";
 /// Waits between the retries of one platform call; exhausting them logs an error, not a raise.
 const RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(4)];
+/// The retry delays a test installed through `test_support::keyed_post_retry_delays_for_test`; None reads RETRY_DELAYS.
+static TEST_RETRY_DELAYS: StdMutex<Option<[Duration; 2]>> = StdMutex::new(None);
 /// How much of an unread message's text the 412 refusal carries.
 const TEXT_PREVIEW_CHARS: usize = 200;
 /// The reply budget the format contract states: the depth goes to a page.
@@ -631,7 +633,8 @@ pub async fn post_with_retry(
   if adapter.find_own_post_by_key(address, post_key, text, created_after, messages).await? {
     return Ok(true);
   }
-  let attempts = RETRY_DELAYS.len() + 1;
+  let retry_delays = keyed_post_retry_delays();
+  let attempts = retry_delays.len() + 1;
   for attempt in 1..=attempts {
     match adapter.post(address, text, post_key).await {
       Ok(()) => return Ok(true),
@@ -650,11 +653,24 @@ pub async fn post_with_retry(
         let event = format!("{}_post_retry", platform.name);
         let thread = adapter.log_fields(address);
         tracing::warn!(%event, session = session_id, thread = %thread, attempt, error = %error);
-        tokio::time::sleep(RETRY_DELAYS[attempt - 1]).await;
+        tokio::time::sleep(retry_delays[attempt - 1]).await;
       }
     }
   }
   unreachable!("the final keyed-post attempt returns")
+}
+
+/// The delays between a platform's keyed-post retries: the installed test value, else RETRY_DELAYS.
+fn keyed_post_retry_delays() -> [Duration; 2] {
+  TEST_RETRY_DELAYS.lock().expect("the keyed-post retry delays are never poisoned").unwrap_or(RETRY_DELAYS)
+}
+
+pub(crate) fn install_keyed_post_retry_delays(delays: [Duration; 2]) {
+  *TEST_RETRY_DELAYS.lock().expect("the keyed-post retry delays are never poisoned") = Some(delays);
+}
+
+pub(crate) fn clear_keyed_post_retry_delays() {
+  *TEST_RETRY_DELAYS.lock().expect("the keyed-post retry delays are never poisoned") = None;
 }
 
 /// Clear the summon ack once its question is closed (`ack_clear`). The remove runs as its own logged task, and a block

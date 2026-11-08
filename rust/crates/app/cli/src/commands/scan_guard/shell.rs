@@ -4,6 +4,8 @@
 
 use std::sync::OnceLock;
 
+use charliebot_core::config::SESSIONS_DIR_NAME;
+use charliebot_core::home::DEFAULT_HOME_DIR_NAME;
 use regex::{Captures, Regex};
 
 /// Replaces a `|`, `;` or `&` inside double quotes, so the quoted character is not a shell separator.
@@ -106,7 +108,7 @@ pub(super) fn needs_path_resolution(shell: &str) -> bool {
     if bare.starts_with('*') && !bare.starts_with("*/") {
       return false;
     }
-    bare.contains('/') || matches!(bare, "." | ".." | ".charliebot" | "sessions")
+    bare.contains('/') || matches!(bare, "." | ".." | DEFAULT_HOME_DIR_NAME | SESSIONS_DIR_NAME)
   })
 }
 

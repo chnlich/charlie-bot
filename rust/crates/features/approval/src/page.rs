@@ -18,14 +18,17 @@ use super::day::{self, DayError, DayView};
 
 const TEMPLATE: &str = "approval_day.html";
 
+/// The page route's path.
+const PAGE_PATH: &str = "/approval";
+
 /// The router of the page's one route. The feature context is the route's state.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
-  Router::new().route("/approval", routing::get_only(approval_page)).with_state(Arc::clone(features))
+  Router::new().route(PAGE_PATH, routing::get_only(approval_page)).with_state(Arc::clone(features))
 }
 
 /// The paths the routes answer, for the trailing-slash redirect.
 pub fn matches(path: &str) -> bool {
-  path == "/approval"
+  path == PAGE_PATH
 }
 
 /// The page. The read and the render run off the async runtime, as the usage page's do.

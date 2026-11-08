@@ -13,14 +13,17 @@ use serde_json::{Value, json};
 
 use super::day::{self, DayError};
 
+/// The day route's path.
+const DAY_PATH: &str = "/api/approval/day";
+
 /// The router of the API's one route. The feature context is the route's state.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
-  Router::new().route("/api/approval/day", routing::get_only(day_api)).with_state(Arc::clone(features))
+  Router::new().route(DAY_PATH, routing::get_only(day_api)).with_state(Arc::clone(features))
 }
 
 /// The paths the routes answer, for the trailing-slash redirect.
 pub fn matches(path: &str) -> bool {
-  path == "/api/approval/day"
+  path == DAY_PATH
 }
 
 /// The day route: the day view for one `date` query, where an absent date answers today's Pacific day. It answers

@@ -173,6 +173,38 @@ fn test_a_holder_that_is_killed_leaves_the_lock_free_for_the_next_release() {
   assert!(world.releases.join(&world.on_main).join("release.log").exists(), "{}", run.describe());
 }
 
+#[test]
+#[ignore = "integration"]
+fn test_a_trial_server_that_outlives_a_killed_release_does_not_keep_the_host_lock() {
+  let mut world = World::new();
+  let server_pid = world.sandbox.root().join("trial-server.pid");
+  let stage = world.bin().join("trial-outlives");
+  // A trial whose server outlives the stage, as trial.sh's server does, and that then kills the release running it.
+  write_executable(
+    &stage,
+    format!(
+      "#!/usr/bin/env bash\nsleep 300 < /dev/null > /dev/null 2>&1 &\necho $! > '{}'\nkill -9 \"$PPID\"\n",
+      server_pid.display()
+    ),
+  );
+  world.env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), stage.display().to_string());
+
+  let killed = world.release(&world.on_main);
+  assert_ne!(killed.code, 0, "{}", killed.describe());
+  let server: i32 = fs::read_to_string(&server_pid).expect("the trial's server pid").trim().parse().expect("a pid");
+
+  let mut command = harness::command("bash", &world.env);
+  command
+    .args(["-c", "source \"$1\" && release_lock_take probe.sh \"$2\"", "bash"])
+    .arg(world.repo.join("scripts/release/lock.sh"))
+    .arg(&world.on_main);
+  let probe = harness::run(&mut command);
+  // Stop the stranded server before the assertion, so a failure leaves nothing running.
+  nix::sys::signal::kill(nix::unistd::Pid::from_raw(server), nix::sys::signal::Signal::SIGKILL)
+    .expect("stop the trial's server");
+  assert_eq!(probe.code, 0, "the server kept the lock after the release died: {}", probe.describe());
+}
+
 // ---- a failed stage: exit 1, the stage named, nothing installed -----------------------------------------------------
 
 #[test]

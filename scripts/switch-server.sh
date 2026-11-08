@@ -66,6 +66,14 @@
 # the start) for a lab that times the flow; a switch without the variable logs no such lab_mark line.
 # CHARLIEBOT_SYSTEMD_USER_DIR replaces the user manager's unit directory the slice units install into.
 #
+# The host release lock: one lock file per host, outside the repository, named once by scripts/release/lock.sh. The
+# lock covers the switch from its preflight to its exit, the restore path included, so a release and a switch of one
+# host run one at a time. A caller that finds the lock held exits 1 at once and prints the holder's record — script,
+# commit, pid and start time — read from beside the lock; a holder that died left the lock free, because the lock is
+# `flock` on an open descriptor. A switch that the release flow starts while scripts/release.sh still holds the lock
+# — the rehearsal's switches do — inherits the flow's descriptor through CHARLIEBOT_RELEASE_LOCK_FD and takes
+# nothing of its own, so it does not deadlock on its caller's lock.
+#
 # The disk preflight reads files only. It samples the root disk's read rate and waits while the rate stays above the
 # threshold, up to the bound, logging why it waits. A quiet disk proceeds at once. On timeout the switch exits 1 with
 # the old server untouched, and the log names the heaviest session cgroups and processes over the last sample with
@@ -93,6 +101,9 @@ REPO_ROOT="${CHARLIEBOT_REPO_ROOT:-$SCRIPT_DIR/..}"
 }
 REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
 export CHARLIEBOT_REPO_ROOT="$REPO_ROOT"
+# The host release lock comes from scripts/release/lock.sh, the one definition: the detached run below takes the
+# lock, and a sourced copy reaches none of it.
+. "$SCRIPT_DIR/release/lock.sh"
 # The slice-unit install this switch calls. switch_forward points this at a copy outside the checkout, because the
 # clone moves to a rollback target whose checkout may predate the owner.
 SLICE_INSTALL="$SCRIPT_DIR/install-slice-units.sh"
@@ -1486,12 +1497,11 @@ run_detached() {
   LOG=$DETACHED_LOG
   RUNS_FILE="${LOG%.log}.runs"
   WORK="$(mktemp -d)"
-  trap 'rm -rf "$WORK"' EXIT
-  exec 9> "$LOG_DIR/switch.lock"
-  flock -n 9 || {
-    log "another switch holds $LOG_DIR/switch.lock"
-    exit 1
-  }
+  trap 'rm -rf "$WORK"; release_lock_release' EXIT
+  release_lock_take switch-server.sh "$TARGET_SHA" || exit 1
+  if [ -n "$CHARLIEBOT_RELEASE_LOCK_FD" ] && [ "$RELEASE_LOCK_MINE" = 0 ]; then
+    log "the release flow holds the host release lock $RELEASE_LOCK_FILE on descriptor $CHARLIEBOT_RELEASE_LOCK_FD"
+  fi
   RELEASES_REAL="$(readlink -f "$RELEASES_DIR")"
   OLD_STOPPED=0
   NEW_STARTED=0

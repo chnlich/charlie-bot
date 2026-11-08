@@ -343,16 +343,18 @@ reset_flow_checkout() {
   SWITCH_SCRIPT="$FLOW/scripts/switch-server.sh"
   if ! grep -q 'lab_mark gate_start' "$SWITCH_SCRIPT"; then
     # A flow-ref older than the lab's marks still needs its switch timed. The lab's copy must be that release's file plus
-    # the mark lines, so nothing else about the switch changes; any other difference fails the run. The switch re-executes
-    # itself as switch-server.sh beside its slice-unit install, so the copy keeps both names in a directory of its own.
+    # the mark lines and the host release lock the current switch sources, so nothing else about the switch changes; any
+    # other difference fails the run. The switch re-executes itself as switch-server.sh beside its slice-unit install, so
+    # the copy keeps both names in a directory of its own, with the lock file the copy sources beside it.
     local unexpected
     unexpected=$(diff "$SWITCH_SCRIPT" "$REPO_TREE/scripts/switch-server.sh" \
-      | awk '/^[<>]/ && $0 !~ /lab_mark|LAB_MARK/ && NF > 1 && $2 !~ /^[{}]$/') || true
+      | awk '/^[<>]/ && $0 !~ /lab_mark|LAB_MARK|lock|LOCK/ && NF > 1 && $2 !~ /^[{}]$/') || true
     [ -z "$unexpected" ] \
-      || fail "the lab switch copy differs from $FLOW_REF's switch by more than its mark lines: $unexpected"
-    mkdir -p "$FLOW/scripts/lab-switch" \
+      || fail "the lab switch copy differs from $FLOW_REF's switch by more than its mark lines and its release lock: $unexpected"
+    mkdir -p "$FLOW/scripts/lab-switch/release" \
       && cp "$REPO_TREE/scripts/switch-server.sh" "$FLOW/scripts/lab-switch/switch-server.sh" \
       && cp "$FLOW/scripts/install-slice-units.sh" "$FLOW/scripts/lab-switch/install-slice-units.sh" \
+      && cp "$REPO_TREE/scripts/release/lock.sh" "$FLOW/scripts/lab-switch/release/lock.sh" \
       || fail "the lab switch copy installs into $FLOW/scripts/lab-switch"
     SWITCH_SCRIPT="$FLOW/scripts/lab-switch/switch-server.sh"
   fi

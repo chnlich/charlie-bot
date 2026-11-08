@@ -288,10 +288,12 @@ done
 git -C "$REPO" checkout -q -B main "$OLD_COMMIT" || preflight_fail "check out the old release's commit"
 
 # The switch under test runs from .cutover-switch/ outside the checkout, as a first live switch runs it before the
-# checkout itself carries the new script.
-mkdir -m 700 "$SWITCH_DIR" && cp "$SWITCH_SOURCE" "$SWITCH_SCRIPT" && cp "$SLICE_SOURCE" "$SLICE_INSTALL" \
+# checkout itself carries the new script. The copy sources the release lock beside itself, so the lock definition
+# travels with it.
+mkdir -m 700 "$SWITCH_DIR" "$SWITCH_DIR/release" && cp "$SWITCH_SOURCE" "$SWITCH_SCRIPT" \
+  && cp "$SLICE_SOURCE" "$SLICE_INSTALL" && cp "$SOURCE_REPO/scripts/release/lock.sh" "$SWITCH_DIR/release/lock.sh" \
   && chmod 700 "$SWITCH_SCRIPT" "$SLICE_INSTALL" \
-  || preflight_fail "copy $SWITCH_SOURCE and $SLICE_SOURCE to $SWITCH_DIR"
+  || preflight_fail "copy $SWITCH_SOURCE, $SLICE_SOURCE and the release lock to $SWITCH_DIR"
 log "SWITCH SCRIPT copied to $SWITCH_SCRIPT, with its slice install at $SLICE_INSTALL"
 
 # The isolated releases: a copy of the old release and the new release, both verified, with current on the old one.

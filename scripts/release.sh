@@ -3,10 +3,17 @@
 #
 #   scripts/release.sh <full main commit>
 #
+# The host release lock: one lock file per host, outside the repository, named once by scripts/release/lock.sh. This
+# script takes it before its first stage and holds it to its exit, so two releases of one host run one at a time and
+# two trials cannot race for one trial port. A caller that finds the lock held exits 2 at once and prints the
+# holder's record — script, commit, pid and start time — read from beside the lock; a holder that died left the lock
+# free, because the lock is `flock` on an open descriptor. The switch this release hands over to takes the lock in
+# its turn, and the rehearsal's switches run under this script's descriptor instead of taking their own.
+#
 # Exit codes:
 #   2  the preflight refused and wrote nothing: the argument is not a full 40-character sha on origin/main, the
-#      release directory already exists, gh is not authenticated for this repository, or CI has no successful push
-#      run of both Rust jobs for the commit.
+#      release directory already exists, gh is not authenticated for this repository, CI has no successful push
+#      run of both Rust jobs for the commit, or another release holds the host release lock.
 #   1  a stage failed; the stage name and its log path are printed, and nothing is installed.
 #   0  the release is installed; the switch command is printed.
 #
@@ -46,6 +53,9 @@ readonly REHEARSAL_CMD="${CHARLIEBOT_RELEASE_REHEARSAL:-$REPO_ROOT/scripts/relea
 readonly SLICE_INSTALL="$REPO_ROOT/scripts/install-slice-units.sh"
 readonly ARTIFACT_NAME_PREFIX="charliebot-server-"
 
+# The host release lock, defined once in scripts/release/lock.sh.
+. "$SCRIPT_DIR/release/lock.sh"
+
 usage() {
   echo "usage: release.sh <full main commit>" >&2
   exit 2
@@ -59,6 +69,11 @@ refuse() {
 [ $# -eq 1 ] || usage
 COMMIT=$1
 [[ $COMMIT =~ ^[0-9a-f]{40}$ ]] || refuse "$COMMIT is not a full 40-character commit sha"
+
+# The lock covers every stage from here to the exit, and the preflight too, so a second release stops before it
+# races this one for a trial port.
+release_lock_take release.sh "$COMMIT" || exit 2
+trap release_lock_release EXIT
 
 command -v gh > /dev/null 2>&1 || refuse "gh is not on PATH"
 gh auth status > /dev/null 2>&1 || refuse "gh is not authenticated"

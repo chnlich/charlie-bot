@@ -1119,27 +1119,24 @@ report_heavy_readers() {
 }
 
 # wait_for_quiet_disk: samples the root disk's read rate and returns once it is at or below DISK_QUIET_MB, up to
-# DISK_WAIT_S. It logs every sample, so the operator sees why a switch waits. On timeout it reports the heaviest
-# session cgroups and processes over the last sample and returns 1; no server is touched here.
+# DISK_WAIT_S. It logs every sample, so the operator sees why a switch waits. The /proc and session-cgroup walks serve
+# only the heavy-reader report, so they run on the timeout path alone: a gate that finds the disk quiet costs one disk
+# sample and no walk. On timeout it takes one more sample window with the walks around it, reports the heaviest session
+# cgroups and processes over that window, and returns 1; no server is touched here.
 wait_for_quiet_disk() {
-  local dir end rate sample_rc
+  local dir end rate
   dir="$(mktemp -d)" || {
     log "cannot make a work directory for the disk preflight"
     return 1
   }
   end=$((SECONDS + DISK_WAIT_S))
   while :; do
-    session_rbytes_table > "$dir/cgroups.before" || true
-    process_io_table > "$dir/procs.before" || true
     rate="$(disk_read_rate_mb)"
-    sample_rc=$?
-    if [ "$sample_rc" -ne 0 ]; then
+    if [ "$?" -ne 0 ]; then
       log "cannot read the root disk's read rate from $DISKSTATS"
       rm -rf "$dir"
       return 1
     fi
-    session_rbytes_table > "$dir/cgroups.after" || true
-    process_io_table > "$dir/procs.after" || true
     if [ "$rate" -le "$DISK_QUIET_MB" ]; then
       log "root disk read ${rate} MB/s over ${DISK_SAMPLE_S}s, at or below ${DISK_QUIET_MB} MB/s; proceeding"
       rm -rf "$dir"
@@ -1148,6 +1145,17 @@ wait_for_quiet_disk() {
     log "waiting for the root disk: ${rate} MB/s read over ${DISK_SAMPLE_S}s, above ${DISK_QUIET_MB} MB/s;" \
       "up to ${DISK_WAIT_S}s"
     if [ "$SECONDS" -ge "$end" ]; then
+      log "the root disk read above ${DISK_QUIET_MB} MB/s for ${DISK_WAIT_S}s;" \
+        "one more sample window names the heaviest readers"
+      session_rbytes_table > "$dir/cgroups.before" || true
+      process_io_table > "$dir/procs.before" || true
+      if ! disk_read_rate_mb > /dev/null; then
+        log "cannot read the root disk's read rate from $DISKSTATS"
+        rm -rf "$dir"
+        return 1
+      fi
+      session_rbytes_table > "$dir/cgroups.after" || true
+      process_io_table > "$dir/procs.after" || true
       report_heavy_readers "$dir"
       rm -rf "$dir"
       return 1

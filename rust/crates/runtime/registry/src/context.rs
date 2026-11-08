@@ -1,4 +1,4 @@
-//! Handles and startup state for registered features.
+//! The handles and startup state of registered features.
 
 use std::sync::Arc;
 

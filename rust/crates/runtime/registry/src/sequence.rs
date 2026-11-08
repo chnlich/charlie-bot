@@ -35,13 +35,13 @@ pub trait SequenceBinding: Send + Sync {
   fn dedicated_backend(&self) -> bool;
   /// The error detail when a backend switch to `target_backend` is refused.
   fn backend_lock_detail(&self, target_backend: &str) -> String;
-  /// Runs the node's wake duties and returns an optional turn-input prefix.
+  /// The node's wake duties, which return an optional turn-input prefix.
   fn on_wake<'a>(
     &'a self,
     meta: &'a SessionMetadata,
     input_events: &'a [Value],
   ) -> BoxFuture<'a, anyhow::Result<Option<String>>>;
-  /// Runs the sequence's archive duty for this node.
+  /// The sequence's archive duty for this node.
   fn on_archive<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<()>>;
 }
 
@@ -61,7 +61,7 @@ pub trait SequenceController: Send + Sync {
     launch_text: &'a str,
   ) -> BoxFuture<'a, anyhow::Result<Option<String>>>;
 
-  /// Apply the owning sequence's durable finish duty. `quota` is the spent quota the run ended on, when the run did.
+  /// The owning sequence's durable finish duty. `quota` is the spent quota the run ended on, when the run did.
   fn after_run<'a>(
     &'a self,
     session_id: &'a str,
@@ -102,7 +102,7 @@ pub trait SequenceController: Send + Sync {
     None
   }
 
-  /// Moves every binding of `source` onto `new`, the node that replaced it. `true` when a binding moved.
+  /// The move of every binding of `source` onto `new`, the node that replaced it. `true` when a binding moved.
   fn move_bindings<'a>(&'a self, _source: &'a str, _new: &'a str) -> BoxFuture<'a, anyhow::Result<bool>> {
     Box::pin(async { Ok(false) })
   }
@@ -260,7 +260,7 @@ pub struct SequenceTreeRuntime {
   pub startup_stop: StartupStop,
 }
 
-/// Store-owned task-tree and run operations available to a sequence controller.
+/// Task-tree and run operations that the store owns, available to a sequence controller.
 pub trait SequenceTree: Send + Sync {
   fn startup_stop(&self) -> StartupStop;
 
@@ -331,7 +331,7 @@ pub struct StoreSequenceTree {
 }
 
 impl StoreSequenceTree {
-  /// Bind a sequence tree to the server's store.
+  /// The binding of a sequence tree to the server's store.
   pub fn new(store: Arc<Store>, runtime: SequenceTreeRuntime) -> Self {
     Self { store, runtime }
   }

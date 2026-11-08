@@ -69,7 +69,7 @@ pub struct Shutdown {
 }
 
 impl Lifespan {
-  /// Runs the startup steps in the order of the module docs, ending one `clock` segment per step and service. A failure
+  /// The startup steps run in the order of the module docs, ending one `clock` segment per step and service. A failure
   /// stops the services that started, runs the let-go steps, and returns the startup error.
   pub async fn start(features: Arc<FeatureContext>, clock: &mut StartupClock) -> anyhow::Result<StartupOutcome> {
     let mut lifespan = Lifespan { stop: features.startup.stop(), features, started: Vec::new() };
@@ -136,7 +136,7 @@ impl Lifespan {
     self.start_services(Phase::Ready, &recovery_done, clock).await
   }
 
-  /// Spawns every registered recovery step as its own task, so the early services start while the steps run. Returns
+  /// Every registered recovery step spawned as its own task, so the early services start while the steps run. Returns
   /// each step's name and outcome in registration order.
   fn spawn_recovery_steps(&self) -> Vec<(&'static str, RecoveryOutcome)> {
     self
@@ -175,7 +175,7 @@ impl Lifespan {
     Ok(true)
   }
 
-  /// Stops what started after a failed startup and returns the startup error, with any shutdown error added to it.
+  /// The startup error returned after stopping what started, with any shutdown error added to it.
   async fn abort(mut self, error: anyhow::Error) -> anyhow::Error {
     let (step_closes, mut first_error) = self.stop_services().await;
     if let Err(error) = self.run_let_go_steps().await {
@@ -188,7 +188,7 @@ impl Lifespan {
     }
   }
 
-  /// Stops started services in reverse phase order, closes the shared clients, and returns the first service failure.
+  /// The first service failure, after stopping started services in reverse phase order and closing the shared clients.
   pub async fn shutdown(&mut self) -> Shutdown {
     let (step_closes, error) = self.stop_services().await;
     let closes = self.close_clients(step_closes).await;
@@ -212,7 +212,7 @@ impl Lifespan {
     (step_closes, first_error)
   }
 
-  /// Runs every let-go step in registration order and returns the first failure after all steps run.
+  /// The first failure of the let-go steps, run in registration order, after all steps run.
   pub async fn run_let_go_steps(&self) -> anyhow::Result<()> {
     let mut first_error: Option<anyhow::Error> = None;
     for (name, step) in self.features.registry.let_go_steps() {
@@ -234,8 +234,8 @@ impl Lifespan {
   }
 }
 
-/// Waits for each spawned recovery step in registration order, ending one `recovery:<step>` segment per step. The first
-/// failing step's error ends the wait, with the step's name in it.
+/// The wait for each spawned recovery step in registration order, ending one `recovery:<step>` segment per step. The
+/// first failing step's error ends the wait, with the step's name in it.
 async fn await_recovery(
   recovery: Vec<(&'static str, RecoveryOutcome)>,
   clock: &mut StartupClock,
@@ -282,7 +282,7 @@ mod tests {
     })
   }
 
-  /// Takes long enough that the early services start before it ends.
+  /// A recovery step slow enough that the early services start before it ends.
   fn recover(_features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
     Box::pin(async {
       log("recovery_start");

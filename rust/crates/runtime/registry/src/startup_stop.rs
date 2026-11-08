@@ -22,7 +22,7 @@ impl Default for StartupStop {
 }
 
 impl StartupStop {
-  /// Mark startup as stopped and wake any startup step waiting for the request.
+  /// The stop mark on startup, which wakes any startup step waiting for the request.
   pub fn cancel(&self) {
     self.sender.send_if_modified(|phase| {
       if *phase == StartupPhase::Starting {
@@ -34,12 +34,12 @@ impl StartupStop {
     });
   }
 
-  /// Return whether startup has received a stop request.
+  /// Whether startup has received a stop request.
   pub fn is_cancelled(&self) -> bool {
     *self.receiver.borrow() == StartupPhase::Stopped
   }
 
-  /// Mark startup ready unless a stop request arrived first.
+  /// Whether startup was marked ready, false when a stop request arrived first.
   pub fn mark_ready(&self) -> bool {
     let mut ready = false;
     self.sender.send_if_modified(|phase| match phase {
@@ -57,7 +57,7 @@ impl StartupStop {
     ready
   }
 
-  /// Wait until startup is ready, or return false when a stop request arrived first.
+  /// The wait for startup to become ready, which returns false when a stop request arrived first.
   pub async fn ready(&self) -> bool {
     let mut receiver = self.receiver.clone();
     loop {
@@ -72,7 +72,7 @@ impl StartupStop {
     }
   }
 
-  /// Wait until startup receives a stop request.
+  /// The wait until startup receives a stop request.
   pub async fn cancelled(&self) {
     let mut receiver = self.receiver.clone();
     while *receiver.borrow() != StartupPhase::Stopped {

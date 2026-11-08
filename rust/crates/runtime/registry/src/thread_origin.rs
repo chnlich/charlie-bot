@@ -10,7 +10,7 @@ use charliebot_store::metadata::SessionMetadata;
 
 static THREAD_ORIGIN_FIELDS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
 
-/// Record `field` as a thread-origin field. Recording a field again changes nothing.
+/// The registration of `field` as a thread-origin field. Recording a field again changes nothing.
 pub fn register_origin_field(field: &'static str) {
   let mut fields = THREAD_ORIGIN_FIELDS.lock().expect("the thread-origin field list is not poisoned");
   if !fields.contains(&field) {

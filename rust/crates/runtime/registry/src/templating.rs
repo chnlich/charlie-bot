@@ -232,7 +232,7 @@ impl Templating {
     Ok(value)
   }
 
-  /// Renders template `name` with `context`, the request under `request`, the template globals of
+  /// The render of template `name` with `context`, the request under `request`, the template globals of
   /// `features.registry` and the page parts, as Starlette's `TemplateResponse(request, name, context)` does.
   /// A failing global fails the render.
   pub fn render_page(
@@ -245,7 +245,7 @@ impl Templating {
     self.render_page_with_substitutions(features, name, context, request, &[])
   }
 
-  /// Render a page, then write each `(placeholder, text)` pair's text where the page carries its placeholder.
+  /// The render of a page, with each `(placeholder, text)` pair's text written where the page carries its placeholder.
   ///
   /// The template engine copies every value it writes, and a page can carry one value far larger than its template.
   /// Such a value renders as a short placeholder and is substituted into the finished HTML, so one request copies it
@@ -296,7 +296,7 @@ impl Templating {
     gzip
   }
 
-  /// Render a page and each `(placeholder, text)` substitution as the finished HTML.
+  /// The rendered page and each `(placeholder, text)` substitution, as the finished HTML.
   ///
   /// A caller that builds its own response reads the page this way, so the response headers have one owner.
   pub fn render_page_html(
@@ -311,7 +311,7 @@ impl Templating {
     substitute_placeholders(name, html, substitutions)
   }
 
-  /// Render a page with its placeholders still in place, for a caller that keeps the finished page while its
+  /// The render of a page with its placeholders still in place, for a caller that keeps the finished page while its
   /// template output and substituted texts hold their value.
   pub fn render_page_template(
     &self,
@@ -348,7 +348,7 @@ impl Templating {
     Ok(html)
   }
 
-  /// Render template `name` with `context` and the zero-argument `globals`, at watch revision `revision`.
+  /// The render of template `name` with `context` and the zero-argument `globals`, at watch revision `revision`.
   fn render(
     &self,
     name: &str,
@@ -528,7 +528,7 @@ fn link_attributes(tag: &str) -> Option<Vec<(&str, &str)>> {
   Some(attributes)
 }
 
-/// Write each `(placeholder, text)` pair's text where `html` carries its placeholder.
+/// The write of each `(placeholder, text)` pair's text where `html` carries its placeholder.
 ///
 /// A placeholder that the rendered page does not carry fails the render, because serving the placeholder would
 /// break the page's script.
@@ -609,7 +609,7 @@ fn compressed_html(body: Vec<u8>) -> Response {
     .expect("a page response builds")
 }
 
-/// Build a recursive walk that applies no hidden-file or ignore-file filters.
+/// A recursive walk that applies no hidden-file or ignore-file filters.
 fn filesystem_walk(directory: &Path, follow_links: bool) -> WalkBuilder {
   let mut builder = WalkBuilder::new(directory);
   builder.min_depth(Some(1)).follow_links(follow_links).hidden(false).standard_filters(false).parents(true);

@@ -67,11 +67,19 @@ async fn effective_prompt(
     Ok(cfg) => cfg,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
-  // The preview resolves the backend as a launch does: a task without its own backend takes the first configured one.
+  // The preview resolves the backend as a launch does: a task without its own backend takes the new_session target.
   let option = if meta.backend.is_empty() {
-    match cfg.backends.options.first() {
+    let Some(backend) = cfg.backends.new_session_backend() else {
+      return detail(StatusCode::BAD_REQUEST, EMPTY_BACKENDS_OPTIONS_REFUSAL);
+    };
+    match cfg.get_backend_option(&backend) {
       Some(option) => option,
-      None => return detail(StatusCode::BAD_REQUEST, EMPTY_BACKENDS_OPTIONS_REFUSAL),
+      None => {
+        return detail(
+          StatusCode::BAD_REQUEST,
+          format!("backends.calls.new_session names {backend:?}, which is not a configured backends.options id"),
+        );
+      }
     }
   } else {
     match cfg.get_backend_option(&meta.backend) {

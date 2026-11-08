@@ -221,8 +221,8 @@ async fn update_task(
   if values.contains_key("backend")
     && let Some(session_id) = candidate_task.session_id.as_deref()
   {
-    let target =
-      candidate_task.backend.as_deref().or_else(|| cfg.backends.options.first().map(|option| option.id.as_str()));
+    let default_backend = cfg.backends.new_session_backend();
+    let target = candidate_task.backend.as_deref().or(default_backend.as_deref());
     let Some(target) = target else {
       return detail(
         StatusCode::CONFLICT,

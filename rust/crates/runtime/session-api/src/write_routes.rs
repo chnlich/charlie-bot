@@ -617,7 +617,8 @@ mod tests {
 
   use super::*;
   use crate::test_support::{
-    answer, create_node, feature_context, feature_context_with_auto, install_dispatcher, json_request,
+    answer, create_node, feature_context, feature_context_with_auto, feature_context_with_config, install_dispatcher,
+    json_request,
   };
 
   struct LogMessage(Arc<Mutex<Vec<String>>>);
@@ -1206,8 +1207,29 @@ backends:
     assert_eq!(features.store.read_metadata_fresh(&node.id).unwrap().unwrap().backend, "auto");
   }
 
+  /// A config whose `backends.calls.new_session` names the second option.
+  const NEW_SESSION_CONFIG: &str = "\
+backends:
+  options:
+    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a}
+    - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b}
+  calls:
+    new_session: synthetic-b
+";
+
   #[tokio::test]
-  async fn without_backends_auto_the_backend_id_auto_is_refused() {
+  async fn create_takes_the_new_session_target_when_the_request_names_no_backend() {
+    let (_home, features) = feature_context_with_config(NEW_SESSION_CONFIG);
+    let (headers, body) = json_request(json!({"request_id": "new-session-root", "profile": "manager"}));
+
+    let (status, created) = answer(create_session(State(features.clone()), headers, body).await).await;
+
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["backend"], "synthetic-b");
+  }
+
+  #[tokio::test]
+  async fn the_backend_id_auto_is_refused_when_no_pool_names_it() {
     let (_home, features) = feature_context();
     let (headers, body) = json_request(json!({"request_id": "auto-root", "backend": "auto"}));
     let (status, detail) = answer(create_session(State(features), headers, body).await).await;

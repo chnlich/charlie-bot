@@ -136,11 +136,13 @@ pub fn resolve_session_default_backend_model(
       }
     }
   } else {
-    cfg
+    let backend = cfg
       .backends
-      .options
-      .first()
-      .ok_or_else(|| value_error("session backend resolution requires a configured backends.options entry"))?
+      .new_session_backend()
+      .ok_or_else(|| value_error("session backend resolution requires a configured backends.options entry"))?;
+    cfg.get_backend_option(&backend).ok_or_else(|| {
+      value_error(format!("backends.calls.new_session names '{backend}', which is not a backends.options id"))
+    })?
   };
   let model = option.required_model("session backend").map_err(value_error)?;
   Ok((option.id.clone(), Some(model)))

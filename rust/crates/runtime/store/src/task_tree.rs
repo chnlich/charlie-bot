@@ -1371,7 +1371,7 @@ impl Store {
       .filter(|backend| !backend.is_empty())
       .or_else(|| parent_meta.as_ref().map(|parent| parent.backend.as_str()).filter(|backend| !backend.is_empty()))
       .map(str::to_string)
-      .or_else(|| self.cfg.backends.options.first().map(|backend| backend.id.clone()))
+      .or_else(|| self.cfg.backends.new_session_backend())
       .ok_or_else(|| StoreError::new("task create requires a configured backend"))?;
     set_registered_slot_values(&self.slots, &mut metadata, slot_values)?;
 

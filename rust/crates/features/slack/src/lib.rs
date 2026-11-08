@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField, valid_origin};
 use charliebot_registry::{Registry, RegistryError};
+use charliebot_store::metadata::SUCCESSOR_SESSION_ID;
 use serde_json::{Map, Value};
 use service::SlackService;
 use turn_contribution::SlackTurnContribution;
@@ -33,7 +34,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     MetadataSlot {
       owner: "slack",
       on: MetadataFile::Session,
-      after: Some("successor_session_id"),
+      after: Some(SUCCESSOR_SESSION_ID),
       fields: ["slack_origin", "slack_watermark_ts"]
         .into_iter()
         .map(|name| SlotField { name, default: serde_json::Value::Null })

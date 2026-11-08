@@ -1,12 +1,17 @@
 #!/usr/bin/env node
-// Reads the parallel JUnit report and reruns each test above the parallel limit alone. If its first alone time is over
-// 0.1 s, the check runs it alone twice more and judges by the shortest time. A missing JUnit row fails.
+// Reads the parallel JUnit report and reruns each test above the parallel limit alone, except an allowed test.
+// If its first alone time is over 0.1 s, the check runs it alone twice more and judges by the shortest time.
+// A missing JUnit row fails.
+//
+// Two ceilings. The 0.1 s ceiling judges the tests that a change can speed up. A test that waits on a real timeout
+// cannot finish sooner than that timeout, so it is listed by name in ALLOWED_OVER_LIMIT, with its reason, and keeps
+// the coarser 1.0 s ceiling. The check judges an allowed test by its JUnit time and never reruns it alone.
 //
 //   dev/check-unit-test-time.mjs --runner rust|node --junit <path> [--parallel-limit <seconds>] [--workspace-dir <dir>]
 //
 //   --runner            the suite the report came from: rust (nextest) or node (node --test) (required)
 //   --junit             the JUnit report of the parallel run (required)
-//   --parallel-limit    rerun tests above this parallel time alone (default: 0.1)
+//   --parallel-limit    rerun tests above this parallel time alone, allowed tests excepted (default: 0.1)
 //   --workspace-dir     the directory the reruns run in (default: rust for rust, web for node)
 //
 // A rust rerun is one nextest run, one test thread. A node rerun is one `node --test` per suspect, on the
@@ -19,8 +24,30 @@ import path from 'node:path';
 import process from 'node:process';
 
 const LIMIT_S = 0.1;
+const ALLOWED_LIMIT_S = 1.0;
 const RERUN_TIMEOUT_MS = 55 * 60_000;
 const RUNNER_DIRECTORY = { rust: 'rust', node: 'web' };
+
+// The tests allowed over LIMIT_S. Each entry holds the classname (binaryId) and the name that the JUnit report
+// gives the test, which the check prints as `<binaryId> <name>`. An allowed test skips the alone rerun and fails
+// only above ALLOWED_LIMIT_S. A renamed test has no entry, so it returns to LIMIT_S.
+const ALLOWED_OVER_LIMIT = [
+  {
+    binaryId: 'charliebot-cli::bin/charliebot',
+    name: 'commands::router::tests::a_timed_out_attempt_is_retried_once_and_the_answer_records_it',
+    reason: 'waits on a real request timeout: the delayed reply lands past the 200 ms bound in timeout_limits()',
+  },
+  {
+    binaryId: 'charliebot-cli::bin/charliebot',
+    name: 'commands::router::tests::a_timeout_followed_by_a_rate_limit_exits_non_zero_without_a_third_request',
+    reason: 'waits on a real request timeout: the delayed reply lands past the 200 ms bound in timeout_limits()',
+  },
+  {
+    binaryId: 'charliebot-cli::bin/charliebot',
+    name: 'commands::router::tests::two_timeouts_exit_non_zero_naming_the_timeout_and_the_retry',
+    reason: 'waits on two real request timeouts: each delayed reply lands past the 200 ms bound in timeout_limits()',
+  },
+];
 
 main();
 
@@ -40,16 +67,36 @@ function main() {
   suspects.sort((a, b) => b.time - a.time);
 
   const lines = [];
+  // An allowed test is judged by its JUnit time. Its time is the timeout it waits on, so a rerun alone adds nothing.
+  const allowed = suspects.filter((test) => allowanceOf(test) !== undefined);
+  const rerunSuspects = suspects.filter((test) => allowanceOf(test) === undefined);
+  let overAllowance = 0;
+  for (const test of allowed) {
+    const { reason } = allowanceOf(test);
+    const named = `${test.binaryId} ${test.name} ${formatTime(test.time)} s parallel`;
+    if (test.time > ALLOWED_LIMIT_S) {
+      overAllowance += 1;
+      lines.push(
+        `unit test over the ${ALLOWED_LIMIT_S.toFixed(1)} s allowance: ${named}` +
+          ` (allowed over ${LIMIT_S} s: ${reason})`
+      );
+    } else {
+      lines.push(
+        `unit test within the ${ALLOWED_LIMIT_S.toFixed(1)} s allowance: ${named}` +
+          ` (allowed over ${LIMIT_S} s: ${reason})`
+      );
+    }
+  }
   let stillOverAlone = 0;
   let failedAlone = 0;
   let checkFailed = false;
-  if (suspects.length > 0) {
-    const rerun = rerunAlone(suspects, options);
+  if (rerunSuspects.length > 0) {
+    const rerun = rerunAlone(rerunSuspects, options);
     if (rerun.error !== undefined) {
       checkFailed = true;
       lines.push(`unit test rerun failed: ${rerun.error}`);
     } else {
-      for (const suspect of suspects) {
+      for (const suspect of rerunSuspects) {
         const rows = rerun.byId.get(`${suspect.binaryId} ${suspect.name}`);
         const times = rows.map((row) => row.time);
         const shortest = Math.min(...times);
@@ -84,14 +131,20 @@ function main() {
     );
   } else {
     lines.push(
-      `${suspects.length} tests over ${options.parallelLimit} s in the parallel run; ${stillOverAlone} still over alone;` +
-        ` ${failedAlone} failed alone`
+      `${suspects.length} tests over ${options.parallelLimit} s in the parallel run;` +
+        ` ${stillOverAlone} still over alone; ${failedAlone} failed alone;` +
+        ` ${allowed.length} allowed, ${overAllowance} over ${ALLOWED_LIMIT_S.toFixed(1)} s`
     );
   }
   report(lines);
-  if (checkFailed || stillOverAlone > 0 || failedAlone > 0) {
+  if (checkFailed || stillOverAlone > 0 || failedAlone > 0 || overAllowance > 0) {
     process.exit(1);
   }
+}
+
+// The table entry for a test, or undefined when the test is not allowed over LIMIT_S.
+function allowanceOf(test) {
+  return ALLOWED_OVER_LIMIT.find((entry) => entry.binaryId === test.binaryId && entry.name === test.name);
 }
 
 function rerunAlone(suspects, options) {

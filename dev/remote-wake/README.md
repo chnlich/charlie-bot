@@ -72,8 +72,10 @@ installs `openssh-server`, `iproute2` and `iptables` from Ubuntu's archive.
 ## What one run does
 
 1. Builds each side from a scratch clone of its commit with the host's cargo, in that side's own target directory.
-2. Takes the bench lock (`lock.sh`, `$HOME/remote-wake-runs/.bench.lock`). The lock covers the container and the
-   measured segments, so two bench runs never measure side by side.
+2. Takes the host's one bench lock, which `dev/poor-network/lock.sh` names. The lock covers the container and the
+   measured segments, so two bench runs never measure side by side. The poor-network bench takes the same file
+   because each start and stop of the container adds or removes a veth interface, and Chrome in a poor-network side
+   reports that as a network change and drops the page in transfer.
 3. Starts one container from `container/`: an sshd on a published loopback port, a `tc netem` delay of `--rtt-ms`, a
    stub `sacct` that answers the trigger code's query from a per-user job table, and a job script that writes its own
    end time. Each build gets its own user and key, so the sshd log attributes every authenticated connection to one

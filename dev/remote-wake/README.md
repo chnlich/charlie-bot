@@ -163,7 +163,7 @@ Exit codes: 0 the gate passed; 1 a build, trial or measurement failed; 2 a preco
   line of the container's sshd log per connection. A connection that a fault holds (its `SYN` dropped) or cuts before
   it authenticates has no such line, so it is not counted. A row counts the connections the container saw between that
   wait's registration request and its fire. Overlapping waits of one build share those connections, so a single row's
-  count is not exclusive to it; the per-build total is the tighter figure.
+  count is not exclusive to it. The summary's per-build total counts each connection once, from the sshd log.
 - A build that predates the remote-end ruler logs no `remote_ssh_started` lines and no `End` column. The bench's lag
   never reads either: it reads the job's own end record. The ssh process count is reported as `not-logged` for such a
   build.

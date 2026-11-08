@@ -269,7 +269,11 @@ export function buildReport({ runDir, gate }) {
         logged: buildRows.some((row) => row.ssh_processes !== null),
         total: buildRows.reduce((sum, row) => sum + (row.ssh_processes ?? 0), 0),
       },
-      authenticated_connections: buildRows.reduce((sum, row) => sum + (row.authenticated_connections ?? 0), 0),
+      // The run's total for the build, counted once from the sshd log. Summing the rows would count a connection once per
+      // wake that overlaps it.
+      authenticated_connections: groundTruth.authenticated_connections.filter(
+        (entry) => entry.user === meta.ssh_users?.[build],
+      ).length,
       within_interval: buildRows.filter((row) => row.within_interval).length,
       within_bound: buildRows.filter((row) => row.within_bound).length,
       outside_bound: buildRows.filter((row) => row.lag_ms !== null && !row.within_bound).map((row) => ({ wait: row.wait, lag_ms: row.lag_ms, bound_ms: row.schedule_bound_ms, faulted: row.faulted, crossed_restart: row.crossed_restart })),

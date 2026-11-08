@@ -24,15 +24,15 @@ dev/remote-run/run.sh dev/poor-network/run.sh --side both --before-clone "$CLONE
 | `--scenarios LIST` | Any of `background,held,reset,stream,tools,starred,threads,open` (default the first four). `open` runs its own cells, see below. |
 | `--assets-dir DIR` | Where the CDN copies are kept (default `DIR/assets`). |
 | `--detach` | Start a transient systemd user unit and return; the log is `DIR/pn-<id>.log`. |
-| `--lock FILE` | Hold an advisory lock on `FILE` around each side's trial (not the builds), waiting up to 2 h. |
 
 Exit codes: 0 both sides measured; 1 a measurement or build failed (the side's JSON still names the error); 2 a
 precondition failed and nothing started; 3 the baseline calibration did not reproduce; 4 a scenario the bench passed
-on the before side fails on the after side; 75 a side's wait for the lock ran out. One lock hold covers one side
-attempt: a caller that retries a timed-out side runs the command again, which takes the lock again at the back of the
-queue. The side JSON is the bench's last artifact; when it is 120 s old and the
-bench still runs, the runner ends the trial tree itself, so a bench that hangs after its work never holds the lock, and
-the summary is reprinted from the JSON.
+on the before side fails on the after side; 75 a side's wait for the lock ran out. Every side takes the bench's own
+advisory lock, `$HOME/pn-runs/.bench.lock`, around its trial (not the builds), waiting up to 2 h for it; no option
+chooses another lock file or skips it. One lock hold covers one side attempt: a caller that retries a timed-out side
+runs the command again, which takes the lock again at the back of the queue. The side JSON is the bench's last
+artifact; when it is 120 s old and the bench still runs, the runner ends the trial tree itself, so a bench that hangs
+after its work never holds the lock, and the summary is reprinted from the JSON.
 
 Chrome comes from `POOR_NETWORK_CHROME`, or else the newest `~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome`.
 The trial replaces `HOME`, so the discovery happens in `run.sh`.
@@ -80,9 +80,9 @@ spike is the link's time and not the page's, so the send's click waits out a hol
 Each scenario's median and 90th percentile go in the table, with the raw median next to them for the time metrics.
 
 Runs that measure side by side share the host: overlapping trials put a mode of about 3 s into the switch and send
-timings, while byte counts stay the same. Bench runs that pass the same `--lock` file never overlap. Every repetition
-also records its start, its end and the other serve trials on the host during it (`trials.mjs`, a sample every 30 s),
-and the summary prints them.
+timings, while byte counts stay the same. Bench runs on a host never overlap: every side holds
+`$HOME/pn-runs/.bench.lock`. Every repetition also records its start, its end and the other serve trials on the host
+during it (`trials.mjs`, a sample every 30 s), and the summary prints them.
 
 Below the table, scenario 1's received bytes are split by endpoint. The visible tab's status polls are counted by the
 server's answer, the wire status: Chrome hands a revalidated answer to the page as its cached 200, and only the wire
@@ -324,9 +324,9 @@ address.
 
 The perf direction runs a named scenario set on both sides when the round's change can move it. `--side both` prints
 each side's verdict and the cross-side regression line, and exits 4 when a scenario that passed on the before side
-fails on the after side. The caller passes the bench lock it shares with the other bench runs, a scenario set and a
-repetition count. Each side's trial tree goes under `$TMPDIR` when the caller sets it, so a round inside a writable
-sandbox keeps the trees in its scratch; Chrome keeps its own temp files there too.
+fails on the after side. The caller passes a scenario set and a repetition count; the bench takes its own lock, shared
+with the other bench runs on the host. Each side's trial tree goes under `$TMPDIR` when the caller sets it, so a round
+inside a writable sandbox keeps the trees in its scratch; Chrome keeps its own temp files there too.
 
 ## Tests
 
@@ -336,7 +336,7 @@ them when a change touches this directory. To reproduce them through the remote 
 ```sh
 dev/remote-run/run.sh node --test dev/poor-network/proxy.integration.test.mjs dev/poor-network/report.test.mjs \
   dev/poor-network/front.integration.test.mjs dev/poor-network/chrome.test.mjs \
-  dev/poor-network/scenarios.test.mjs dev/poor-network/tabs.test.mjs
+  dev/poor-network/scenarios.test.mjs dev/poor-network/tabs.test.mjs dev/poor-network/lock.test.mjs
 ```
 
 They check the relay's tunnel transfer time at the link, its stop on SIGTERM, and its refusal of a target without a
@@ -352,3 +352,5 @@ counting against synthetic poll records of both answer shapes: the baseline's wh
 The tab tests check the switch's row handling against a stub sidebar that keeps rows back: a row absent from the
 document or hidden in it is clicked only after its group's Show all paints it, and a row that no toggle reaches fails
 the step.
+The lock tests check that one concurrent side attempt holds the bench lock and the next waits for it, and that the
+bench code names the lock path only in `lock.sh`.

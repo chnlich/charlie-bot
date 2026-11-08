@@ -11,9 +11,10 @@
 #                reference (CALIBRATION_REFERENCE in profile.mjs) and does not reproduce the switch-during-refresh
 #                hold, it stops after before, prints its numbers, and exits 3. Any other before side runs ungated.
 # --detach       starts the run as a transient systemd user unit and returns at once; the log is <out-dir>/pn-<id>.log.
-# --lock FILE    holds an advisory lock on FILE around each side's trial (not the builds), waiting up to 2 h for it, so
-#                bench runs that take the same lock never measure side by side. One hold covers one side attempt; a
-#                side also ends once its JSON is 120 s old even if its bench hangs, and a retry re-queues.
+#
+# Every side holds the bench lock of lock.sh around its trial, not the builds, waiting up to 2 h for it, so two bench
+# runs on a host never measure side by side; no option chooses another lock or skips it. One hold covers one side
+# attempt; a side also ends once its JSON is 120 s old even if its bench hangs, and a retry re-queues.
 #
 # Each side runs as the command of `scripts/release/trial.sh --serve`, so the trial starts, checks and stops the server
 # the bench measures, and proves that no process of the trial remains. The bench's own children (Chrome, the proxy, the
@@ -29,9 +30,7 @@ set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly BENCH_DIR="$SCRIPT_DIR"
-readonly LOCK_WAIT_SECONDS=7200
-# flock's exit code when the wait runs out: one no trial or bench exit code uses.
-readonly LOCK_TIMEOUT_EXIT=75
+source "$SCRIPT_DIR/lock.sh"
 # How long a side's written JSON may sit beside a bench that does not exit, before the runner ends the trial tree.
 readonly SIDE_EXIT_GRACE_SECONDS=120
 
@@ -43,7 +42,6 @@ repetitions=5
 scenarios=background,held,reset,stream
 assets_dir=
 detach=0
-lock_file=
 
 usage() {
   # The header block runs from line 2 to the `set -euo pipefail` that ends it, so an added line never drops text.
@@ -67,7 +65,6 @@ while (($#)); do
     --scenarios) scenarios=${2:?--scenarios needs a value}; shift 2 ;;
     --assets-dir) assets_dir=${2:?--assets-dir needs a value}; shift 2 ;;
     --detach) detach=1; shift ;;
-    --lock) lock_file=${2:?--lock needs a value}; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die 2 "unknown argument: $1" ;;
   esac
@@ -97,7 +94,6 @@ if ((detach)); then
   forwarded=(--side "$side" --out-dir "$out_dir" --before-rev "$before_rev" --repetitions "$repetitions" --scenarios "$scenarios")
   [[ -n $before_clone ]] && forwarded+=(--before-clone "$before_clone")
   [[ -n $assets_dir ]] && forwarded+=(--assets-dir "$assets_dir")
-  [[ -n $lock_file ]] && forwarded+=(--lock "$lock_file")
   systemd-run --user --unit="pn-$run_id" --collect --working-directory="$tree" \
     --setenv=PATH="$PATH" --setenv=HOME="$HOME" \
     ${POOR_NETWORK_CHROME:+--setenv=POOR_NETWORK_CHROME="$POOR_NETWORK_CHROME"} \
@@ -190,14 +186,10 @@ run_side() {
   # Chrome's process-singleton socket lives under TMPDIR, and the trial points TMPDIR into its tree. The caller's own
   # TMPDIR is short and writable, so Chrome gets it back beside the trial's long one.
   export POOR_NETWORK_CHROME_TMPDIR=${TMPDIR:-/tmp}
-  # flock -o keeps the lock in flock's own process, so no process of the trial holds it past the trial's end.
-  local lock=()
-  if [[ -n $lock_file ]]; then
-    lock=(flock -o -w "$LOCK_WAIT_SECONDS" -E "$LOCK_TIMEOUT_EXIT" "$lock_file")
-    echo "poor-network: $name side waits for $lock_file"
-  fi
+  # The bench lock (lock.sh) covers this side's trial, so no other bench run on the host measures beside it.
+  echo "poor-network: $name side queues for the bench lock"
   set +e
-  "${lock[@]}" systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0 --unit="pn-$run_id-$name" \
+  bench_lock systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0 --unit="pn-$run_id-$name" \
     "$trial_script" --serve --in-caller-scope --tree-root "$trial_root" --seed-home "$mock_home" \
     "$commit" "$server_bin" -- \
     node "$BENCH_DIR/bench.mjs" --side "$name" --out "$run_dir/$name.json" \
@@ -232,7 +224,7 @@ run_side() {
   set -e
   # The timeout keeps flock's own exit code, so a caller that retries can tell it from a failed measurement and take
   # its place at the back of the queue again. One lock hold covers one side attempt; run.sh never retries inside it.
-  ((trial_status != LOCK_TIMEOUT_EXIT)) || die "$LOCK_TIMEOUT_EXIT" "the $name side did not get $lock_file within $LOCK_WAIT_SECONDS s"
+  ((trial_status != BENCH_LOCK_TIMEOUT_EXIT)) || die "$BENCH_LOCK_TIMEOUT_EXIT" "the $name side did not get the bench lock within $BENCH_LOCK_WAIT_SECONDS s"
   echo "poor-network: $name side exit $trial_status"
   [[ -f "$run_dir/$name.json" ]] || die 1 "the $name side wrote no JSON"
   return "$trial_status"

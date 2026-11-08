@@ -21,7 +21,7 @@ The mock home has the production number of sessions, so the numbers show the loa
 ## Poor-network scenarios
 
 A round whose change can move a scenario of the poor-network bench takes that scenario as its topic.
-It runs the scenario before and after its change, on host3, with the bench lock held.
+It runs the scenario before and after its change, on host3. The bench takes its own lock, so no other bench run on the host measures beside it.
 The bench's entry is `dev/poor-network/run.sh`: it runs a named scenario set on both sides and prints the bench's verdict for each scenario.
 The target of a scenario is in `TARGETS` of `dev/poor-network/profile.mjs`, and the bench's verdict decides; this prompt copies no target value.
 Run only the scenarios the change can move, with the background scenario at 3 repetitions, so the check stays inside the round's time.

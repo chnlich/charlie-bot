@@ -73,7 +73,20 @@ COMMIT=$1
 # The lock covers every stage from here to the exit, and the preflight too, so a second release stops before it
 # races this one for a trial port.
 release_lock_take release.sh "$COMMIT" || exit 2
-trap release_lock_release EXIT
+# cleanup: the one EXIT handler. It removes the lock's holder record on every exit, and the artifact's temporary
+# directory once the download stage has made it: success, a refusal, a failed stage and an interrupt.
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
+  release_lock_release
+  if [ -n "${ARTIFACT_DIR:-}" ]; then
+    rm -rf -- "$ARTIFACT_DIR"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 command -v gh > /dev/null 2>&1 || refuse "gh is not on PATH"
 gh auth status > /dev/null 2>&1 || refuse "gh is not authenticated"
@@ -117,15 +130,6 @@ export CHARLIEBOT_RELEASE_RUN_DIR="$RUN_DIR"
 ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/charliebot-release-artifact-${COMMIT}.XXXXXXXXXX")" \
   || refuse "cannot create the artifact temporary directory"
 readonly ARTIFACT_DIR
-cleanup_artifact() {
-  local status=$?
-  trap - EXIT INT TERM
-  rm -rf -- "$ARTIFACT_DIR"
-  exit "$status"
-}
-trap cleanup_artifact EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
 
 STAGE_LINES=()
 

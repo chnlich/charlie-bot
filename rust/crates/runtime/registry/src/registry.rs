@@ -1722,6 +1722,12 @@ pub trait TurnContribution: Send + Sync {
     None
   }
 
+  /// The line a manager reset note carries for `meta`: the session's status Goal when it stores one. An unreadable
+  /// status fails the turn.
+  fn status_goal_line(&self, _meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
+    Ok(None)
+  }
+
   /// Chat renderers by event type. A type that two contributions render fails the registration.
   fn event_renderers(&self) -> Vec<(&'static str, EventRenderer)> {
     Vec::new()
@@ -1795,6 +1801,18 @@ impl Registry {
       .filter_map(|contribution| contribution.input_preamble(meta, input_event))
       .collect();
     (!preambles.is_empty()).then(|| preambles.join("\n"))
+  }
+
+  /// The status Goal line of `meta`: the lines that the contributions give, one line each, in registration order;
+  /// `None` when no contribution gives one. A contribution that cannot read the status fails the call.
+  pub fn status_goal_line(&self, meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
+    let mut lines: Vec<String> = Vec::new();
+    for contribution in self.turn_contributions.values() {
+      if let Some(line) = contribution.status_goal_line(meta)? {
+        lines.push(line);
+      }
+    }
+    Ok((!lines.is_empty()).then(|| lines.join("\n")))
   }
 
   /// True when a registered contribution marks the turn-end unread flag for `meta` itself.

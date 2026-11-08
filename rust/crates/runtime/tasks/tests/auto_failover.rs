@@ -218,6 +218,14 @@ async fn a_quota_end_continues_the_turn_on_the_next_member_with_the_switch_note(
   assert!(prompt.contains(&archives.display().to_string()), "{prompt}");
   assert!(prompt.contains(&failed_run_dir.display().to_string()), "{prompt}");
   assert!(prompt.contains("pool 'auto' switched from member-a to member-b"), "{prompt}");
+  // A manager's retry carries the manager note: the task record's goal, the orientation order and the sort.
+  assert!(prompt.contains("The task record's goal is: Auto session"), "{prompt}");
+  assert!(
+    prompt.contains("get oriented from your session status, then your child tasks, then the last two turns"),
+    "{prompt}"
+  );
+  assert!(prompt.contains(&format!("Run `charliebot session tree --root {}`", session.id)), "{prompt}");
+  assert!(prompt.contains("Then sort the parts of your task"), "{prompt}");
   assert!(prompt.contains("Handoff summary:"), "{prompt}");
   assert!(prompt.contains("goal: Auto session"), "{prompt}");
   assert!(prompt.contains("done (1):"), "{prompt}");

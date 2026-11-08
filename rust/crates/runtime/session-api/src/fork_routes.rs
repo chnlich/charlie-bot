@@ -20,7 +20,9 @@ use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::StoreResult;
 use charliebot_store::control_events::{ACTOR_AGENT, ACTOR_USER};
 use charliebot_store::metadata::SessionMetadata;
-use charliebot_store::session_fork::{ELONE_BOOTSTRAP_OPENER, FORK_BOOTSTRAP_OPENER, HISTORY_LOCATION_NOTE};
+use charliebot_store::session_fork::{
+  ELONE_BOOTSTRAP_OPENER, FORK_BOOTSTRAP_OPENER, HISTORY_LOCATION_NOTE, child_task_list_note,
+};
 use charliebot_tasks::completion::TaskCompletion;
 use charliebot_tasks::dispatch::{self, Dispatcher};
 use serde::Deserialize;
@@ -208,8 +210,8 @@ fn parent_backend_or_default(parent: &SessionMetadata, cfg: &CharlieBotConfig) -
 /// `_successor_tree_note`: the two tree sentences that every fork and elone bootstrap appends.
 fn successor_tree_note(new_session_id: &str) -> String {
   format!(
-    "Run `charliebot session tree --root {new_session_id}` to list your current child tasks. \
-     Child tasks in the copied history can belong to the source session."
+    "{} Child tasks in the copied history can belong to the source session.",
+    child_task_list_note(new_session_id)
   )
 }
 

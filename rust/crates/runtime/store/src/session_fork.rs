@@ -29,6 +29,12 @@ pub const HISTORY_LOCATION_NOTE: &str = concat!(
   "data/chat_events.jsonl in the working directory."
 );
 
+/// The command that lists `session_id`'s current child tasks. The fork and elone bootstraps and the manager reset
+/// note share it.
+pub fn child_task_list_note(session_id: &str) -> String {
+  format!("Run `charliebot session tree --root {session_id}` to list your current child tasks.")
+}
+
 /// The bytes that `_REFERENCE_LINE_WS` strips from the edges of a line when it checks for a blank line.
 const REFERENCE_LINE_WS: &[u8] = b" \t\r\n\x0b\x0c";
 

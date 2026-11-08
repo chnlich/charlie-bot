@@ -564,7 +564,8 @@ mark_value() { awk -v name="$2" '$1 == name { print $2; exit }' <<< "$1"; }
 
 run_one_flow() {
   local run=$1 start_ms load1 rel_start sw_start sw_rc switch_log switch_pid run_dir
-  local download_s units_s trial_s rehearsal_s install_s preflight_s gate_s stop_s start_s
+  # Every stage field prints, so each starts empty: a run that stops before the switch has no switch stage to time.
+  local download_s='' units_s='' trial_s='' rehearsal_s='' install_s='' preflight_s='' gate_s='' stop_s='' start_s=''
   local ready_in_ms read_bytes release_to_live_s release_stamp_ms live_runs reattached verdict switch_exit
   local gate_waits marks gate_start gate_end pre_preflight preflight_after_gate a b server_log_before readers_started
 

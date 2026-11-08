@@ -8,6 +8,8 @@
 //! string, a template literal or a regular expression holds. It also keeps the indentation inside a template
 //! literal, which is part of the text it builds.
 
+use crate::inlined_literal::{char_len, escape_end, string_end};
+
 /// The JavaScript `source` with its comments and its code indentation removed.
 ///
 /// A line comment loses its text and keeps the newline that ends it. A block comment becomes one newline when it
@@ -227,7 +229,7 @@ fn copy(out: &mut String, source: &str, start: usize, end: usize) -> usize {
 
 /// Copy the one character at `start` to `out`, returning the index after it.
 fn copy_char(out: &mut String, source: &str, start: usize) -> usize {
-  let end = start + source[start..].chars().next().map_or(1, char::len_utf8);
+  let end = start + char_len(&source[start..]);
   copy(out, source, start, end)
 }
 
@@ -269,36 +271,6 @@ fn expects_expression(word: &str) -> bool {
       | "yield"
       | "await"
   )
-}
-
-/// The index after the quoted string that starts at `start`: its closing quote, or the line's end when the line
-/// ends first. A JavaScript string cannot span lines except through a backslash that ends one, so the line's end
-/// bounds the scan.
-fn string_end(source: &str, start: usize) -> usize {
-  let bytes = source.as_bytes();
-  let quote = bytes[start];
-  let mut i = start + 1;
-  while i < bytes.len() {
-    match bytes[i] {
-      b'\\' => i = escape_end(source, i),
-      b'\n' | b'\r' => return i,
-      byte if byte == quote => return i + 1,
-      _ => i += 1,
-    }
-  }
-  bytes.len()
-}
-
-/// The index after the character that the escape at `start` consumes: the line terminator after its backslash, the
-/// escaped character, or the backslash alone at the source's end.
-fn escape_end(source: &str, start: usize) -> usize {
-  let bytes = source.as_bytes();
-  let i = start + 1;
-  match bytes.get(i) {
-    None => i,
-    Some(b'\r') if bytes.get(i + 1) == Some(&b'\n') => i + 2,
-    Some(_) => i + source[i..].chars().next().map_or(1, char::len_utf8),
-  }
 }
 
 /// The index after the regex literal that starts at `start`, when the line holds its closing slash and flag

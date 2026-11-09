@@ -175,7 +175,16 @@ function standInForUsageJs(context) {
 // cron parts runs it after createChatSidebarContext. The page runs a package's
 // script after the core modules the same way.
 function loadCronPackage(context) {
-  vm.runInContext(CRON_JS, context, {filename: 'cron.js'});
+  // A harness runs the page's scripts in include order, as the document parses: the module's page part fetches it
+  // after the document on a real page, and the late-load path has its own tests (cron_broken_ui.test.js).
+  const readyState = context.document.readyState;
+  context.document.readyState = 'loading';
+  try {
+    vm.runInContext(CRON_JS, context, {filename: 'cron.js'});
+  } finally {
+    if (readyState === undefined) delete context.document.readyState;
+    else context.document.readyState = readyState;
+  }
 }
 
 // One sidebar row as the harnesses mount it: querySelector answers only

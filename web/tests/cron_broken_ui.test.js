@@ -70,7 +70,8 @@ function loadCron(fetch, readyState = 'complete') {
   const context = {
     Sidebar: {
       wire(globals, sidebarOnly) { Object.assign(this, globals, sidebarOnly || {}); },
-      repaintRenderedRows() { repaints.push(true); },
+      repaintRenderedRows() { repaints.push('rows'); },
+      refreshWorkspaceBadges() { repaints.push('badges'); },
     },
     console: {error: () => {}},
     document: {readyState, getElementById: (id) => elements[id] || (elements[id] = makeEl())},
@@ -240,9 +241,9 @@ test('New scheduled task creates a manager node in the group, then opens the add
 // The page fetches cron.js after its document, so the sidebar's rows are painted before the schedule badge and line
 // register. The module repaints those rows when it lands; a module that lands while the page still parses leaves the
 // paint to the page, which runs after every registration.
-test('a cron module fetched after the document repaints the painted rows', () => {
+test('a cron module fetched after the document repaints the rows and re-reads the Workspace badges', () => {
   const {repaints} = loadCron(tasksFetch([]));
-  assert.equal(repaints.length, 1);
+  assert.deepEqual(repaints, ['rows', 'badges']);
 });
 
 test('a cron module that lands while the page still parses repaints nothing', () => {

@@ -63,7 +63,11 @@ function loadGroups() {
 function loadGroupsWithCron() {
   const context = loadGroups();
   context.registerWorkspaceBadge = () => {};
+  // The load sequence runs while the document parses; a real page fetches this module after the document, and the
+  // late-load path (repaint of the painted rows, re-read of the Workspace badges) has its own tests.
+  context.document.readyState = 'loading';
   vm.runInContext(CRON_JS, context, {filename: 'cron.js'});
+  context.document.readyState = 'complete';
   return context;
 }
 

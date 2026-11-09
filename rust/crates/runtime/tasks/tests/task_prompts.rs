@@ -133,6 +133,7 @@ fn backend_option(prompt_overlay: Option<&str>) -> BackendOption {
     billing: None,
     backend_type: "codex".to_string(),
     type_fields: serde_yaml::Mapping::new(),
+    visible: true,
   }
 }
 

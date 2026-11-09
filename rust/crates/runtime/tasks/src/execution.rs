@@ -3082,6 +3082,7 @@ fn native_anchor_matches(meta: &SessionMetadata, prompt_hash: &str, backend: &st
       billing: None,
       backend_type: String::new(),
       type_fields: Default::default(),
+      visible: true,
     },
   )
 }
@@ -3187,6 +3188,7 @@ mod tests {
       billing: None,
       backend_type: "synthetic".to_string(),
       type_fields: Default::default(),
+      visible: true,
     };
     assert!(native_continuation_matches(
       Some("native-session"),
@@ -3488,6 +3490,7 @@ mod tests {
       billing: None,
       backend_type: "cc-claude".to_string(),
       type_fields: Default::default(),
+      visible: true,
     };
     let snapshot = PromptSnapshot::default();
     let before: HistoryWork = features.store.history_work();

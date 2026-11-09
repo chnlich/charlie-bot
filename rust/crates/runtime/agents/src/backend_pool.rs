@@ -562,6 +562,7 @@ mod tests {
         billing: None,
         backend_type: "codex".to_string(),
         type_fields: Mapping::new(),
+        visible: true,
       })
       .collect();
     let pools = vec![PoolConfig {
@@ -569,6 +570,7 @@ mod tests {
       label: "Light".to_string(),
       rule: PoolRule::Rotate,
       members: members.iter().map(|member| PoolMember { backend: (*member).to_string() }).collect(),
+      visible: true,
     }];
     CharlieBotConfig {
       charliebot_home: PathBuf::from("/synthetic/home"),

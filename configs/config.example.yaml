@@ -68,6 +68,8 @@ paths:
 backends:
   # Pools: each entry has an id, label, rule and members, and no other key. Ids are unique across the options ids,
   # the pool ids and the word `session`. One option may be a member of several pools: its out record belongs to the
+  # option. visible: false (optional, default true) keeps the pool out of the web pickers; a session it runs stays
+  # shown on it, and it still serves as a calls target and switch target.
   # option, so a member that runs out is skipped by every pool that names it. Empty = no pool.
   #
   # rule: rotate. Members are option ids in order, and a repeated id takes a larger share of calls. Each call takes
@@ -131,6 +133,9 @@ backends:
   #     model: <id from devin models list>
   # billing: subscription | payg (optional) says how the entry's account is paid for; a priority pool's
   # member needs it, and every pool that names the entry reads it here.
+  # visible: false (optional, default true) keeps the entry out of the web pickers. Its label still renders
+  # wherever a session row or pool member shows it, and it still serves as a pool member, a calls target and a
+  # switch target.
   # An id names the model family, never a version: a version bump edits only the
   # entry's model and label (the id rule: usage's startup check in rust/crates/features/usage/src/backend_ids.rs
   # refuses an id outside the prefixes the backend types register).

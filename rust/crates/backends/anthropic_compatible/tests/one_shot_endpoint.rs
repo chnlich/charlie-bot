@@ -72,6 +72,7 @@ fn endpoint_backend(type_fields: &str) -> Box<dyn AgentBackend> {
     billing: None,
     backend_type: "cc-anthropic-compatible".to_string(),
     type_fields: serde_yaml::from_str(type_fields).unwrap(),
+    visible: true,
   };
   let home = tempfile::tempdir().unwrap();
   let cfg = Registry::new().load_config(home.path()).unwrap();

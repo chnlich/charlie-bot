@@ -195,6 +195,7 @@ fn backend_option(backend_type: &str) -> BackendOption {
     billing: None,
     backend_type: backend_type.to_string(),
     type_fields: Mapping::new(),
+    visible: true,
   }
 }
 

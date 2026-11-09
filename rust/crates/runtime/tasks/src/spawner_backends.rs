@@ -417,6 +417,7 @@ mod tests {
       label: "Auto".to_string(),
       rule: charliebot_core::config::PoolRule::Priority,
       members: vec![charliebot_core::config::PoolMember { backend: "synthetic".to_string() }],
+      visible: true,
     });
     cfg.backends.options.iter_mut().for_each(|option| {
       option.billing = Some(charliebot_core::config::PoolBilling::Subscription);
@@ -469,6 +470,7 @@ mod tests {
           billing: None,
           backend_type: "synthetic".to_string(),
           type_fields: Default::default(),
+          visible: true,
         }],
       },
       ui: UiConfig { home_services: Vec::new() },

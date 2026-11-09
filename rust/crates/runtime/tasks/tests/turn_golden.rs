@@ -299,6 +299,7 @@ fn devin_option() -> BackendOption {
     billing: None,
     backend_type: "devin".to_string(),
     type_fields: Mapping::new(),
+    visible: true,
   }
 }
 
@@ -433,6 +434,7 @@ fn backend_option_for(id: &str, backend_type: &str, script: String, one_shot_res
     model: "fake-model".to_string(),
     backend_type: backend_type.to_string(),
     type_fields,
+    visible: true,
   }
 }
 

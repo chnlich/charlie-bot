@@ -515,6 +515,7 @@ mod tests {
           label: "Light".to_string(),
           rule: PoolRule::Rotate,
           members: members.into_iter().map(|backend| PoolMember { backend }).collect(),
+          visible: true,
         }],
         routing: None,
         options: Vec::new(),

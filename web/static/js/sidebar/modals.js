@@ -78,11 +78,11 @@ function populateSessionActionBackendSelect(selectedBackendId) {
   if (!select) return;
 
   select.innerHTML = '';
-  for (const [backendId, label] of Object.entries(BACKEND_OPTIONS || {})) {
+  for (const entry of BACKEND_PICKER_ENTRIES || []) {
     const option = document.createElement('option');
-    option.value = backendId;
-    option.textContent = label;
-    option.selected = backendId === selectedBackendId;
+    option.value = entry.id;
+    option.textContent = entry.label;
+    option.selected = entry.id === selectedBackendId;
     select.appendChild(option);
   }
 

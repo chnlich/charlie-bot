@@ -79,6 +79,7 @@ function loadRoundActionModules(context, wsHandlers) {
   context.registerSidebarControl = () => {};
   context.registerWsMessageHandler = (type, handler) => wsHandlers.set(type, handler);
   context.BACKEND_OPTIONS = {test: 'Test backend'};
+  context.BACKEND_PICKER_ENTRIES = [{id: 'test', label: 'Test backend'}];
   context.JSON_HEADERS = {'Content-Type': 'application/json'};
   context.getActiveBackendId = () => 'test';
   context.getDefaultBackendId = () => 'test';

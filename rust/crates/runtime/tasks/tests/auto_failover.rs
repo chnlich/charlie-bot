@@ -36,6 +36,7 @@ fn auto_set() -> PoolConfig {
     label: "Auto".to_string(),
     rule: PoolRule::Priority,
     members: vec![PoolMember { backend: MEMBER_A.to_string() }, PoolMember { backend: MEMBER_B.to_string() }],
+    visible: true,
   }
 }
 

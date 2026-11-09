@@ -1034,6 +1034,7 @@ async fn ending_worker(pool_chosen: bool, scripts: Vec<String>) -> anyhow::Resul
       label: "Auto".to_string(),
       rule: PoolRule::Priority,
       members: ["fake", "fake2"].map(|backend| PoolMember { backend: backend.to_string() }).to_vec(),
+      visible: true,
     };
     Stack::start_with_auto(options, route, auto).await?
   } else {
@@ -1779,6 +1780,7 @@ fn split_pool_config(mut cfg: CharlieBotConfig) -> CharlieBotConfig {
     label: id.to_string(),
     rule: PoolRule::Rotate,
     members: members.iter().map(|backend| PoolMember { backend: backend.to_string() }).collect(),
+    visible: true,
   };
   cfg.backends.pools = vec![pool("workpool", &["fake", "fake2"]), pool("reviewpool", &["fake3", "fake4"])];
   cfg.backends.calls = [(CallClass::Review, CallTarget::Backend("reviewpool".to_string()))].into_iter().collect();

@@ -33,7 +33,7 @@
             <label class="{{ form_label_class }}">Backend</label>
             <select id="cron-backend" class="{{ cron_field_class }}">
               <option value="">Inherit / default</option>
-              {% for opt in backend_options %}
+              {% for opt in picker_options %}
               <option value="{{ opt.id }}">{{ opt.label }}</option>
               {% endfor %}
             </select>

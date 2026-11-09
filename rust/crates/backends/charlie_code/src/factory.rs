@@ -55,6 +55,7 @@ mod tests {
       billing: None,
       backend_type: "charlie-code".to_string(),
       type_fields: serde_yaml::from_str(fields).unwrap(),
+      visible: true,
     }
   }
 

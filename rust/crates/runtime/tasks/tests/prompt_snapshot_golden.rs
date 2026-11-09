@@ -429,6 +429,7 @@ fn rust_case(case: &Case, home: &Path, registry: &Registry, checkout: &RepoRoot)
     billing: None,
     backend_type: "codex".to_string(),
     type_fields: serde_yaml::Mapping::new(),
+    visible: true,
   };
   let (overlay, declared) = resolve_launch_overlay(&option);
   let chain: Vec<ChainLink> = case

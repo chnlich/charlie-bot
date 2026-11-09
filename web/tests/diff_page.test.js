@@ -545,6 +545,10 @@ test('an expanded file carries a strip at the top, between-hunk and bottom gap',
   const rightRows = lastStripRows(page);
   assert.equal(rightRows.length, 3, 'both panes carry a strip row for every gap');
   assert.deepEqual(rightRows.map((row) => stripCell(row).querySelectorAll('button.cbdx-expand').length), [0, 0, 0]);
+  // Both panes' cells take the stack class, so a narrow pane stacks its controls without moving the other
+  // pane's lines. Every gap here outlives one click, so each strip carries the three-button height too.
+  const stackClasses = [...rows, ...rightRows].map((row) => row.querySelector('.cbdx-gap-cell').classList.toString());
+  assert.deepEqual(stackClasses, Array(6).fill('cbdx-gap-cell cbdx-gap-stack cbdx-gap-stack-three'));
   // The strips sit before their hunk's header row, the bottom strip at the table's end.
   const positions = firstTable(page).querySelectorAll('tr').map((row) => row.matches('tr.cbdx-gap-row') ? 'strip'
     : row.children[0].classList.contains('d2h-info') ? 'info' : 'row');
@@ -593,6 +597,13 @@ test('expand down and expand up fill the top gap in line order with both sides\'
   const revealedNew = page.output.children[0].children[1].querySelectorAll('.d2h-file-side-diff')[1]
     .querySelector('table').querySelectorAll('tr')[1];
   assert.equal(revealedNew.children[1].querySelector('.d2h-code-line-ctn').textContent, 'head text 1');
+  // The gap shrank to the one-click size, so its strip draws one direction button and drops the taller
+  // three-button height from both panes' cells.
+  assert.equal(gapCount(page, 0).textContent, '20 hidden lines');
+  const cells = [stripRows(page)[0], lastStripRows(page)[0]]
+    .map((row) => row.querySelector('.cbdx-gap-cell').classList);
+  assert.deepEqual(cells.map((cls) => [cls.contains('cbdx-gap-stack'), cls.contains('cbdx-gap-stack-three')]),
+    [[true, false], [true, false]]);
 });
 
 test('the between-hunk and bottom gaps expand toward their own edges', async () => {

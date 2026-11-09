@@ -15,6 +15,9 @@ use charliebot_registry::{Registry, RegistryError, registration_step};
 
 use charliebot_agents::cli_base::CliHost;
 
+/// The backend type this package registers: the `type` a `backends.options` entry names.
+pub use options::TYPE_NAME;
+
 /// The ledger's source value and the usage page's card title for antigravity's usage.
 pub const USAGE_SOURCE: &str = "Antigravity";
 
@@ -31,7 +34,7 @@ pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), 
   let state = Arc::new(usage_quota::AntigravityQuotaState::default());
   let account = Arc::new(usage_quota::AntigravityQuotaAccount::new(host.clone(), Arc::clone(&state)));
   registry.backend_type(BackendTypeRegistration {
-    type_name: "antigravity",
+    type_name: TYPE_NAME,
     traits: BackendTraits {
       resume: ResumeStyle::NativeId,
       restart_reattach: true,
@@ -45,13 +48,13 @@ pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), 
     lifecycle: None,
     translate_fallback: false,
   })?;
-  registry.option_schema("antigravity", options::SCHEMA)?;
-  registry.member_reading("antigravity", usage_quota::AntigravityQuotaState::member_reading(Arc::clone(&state)))?;
+  registry.option_schema(TYPE_NAME, options::SCHEMA)?;
+  registry.member_reading(TYPE_NAME, usage_quota::AntigravityQuotaState::member_reading(Arc::clone(&state)))?;
   registry.usage_source(UsageSource {
     name: USAGE_SOURCE,
     id_prefixes: &["antigravity-", "agy-"],
     run_logs_only: true,
     implementation: Some(Arc::new(usage_quota::AntigravityUsageSource::new(account))),
   })?;
-  registry.attribute_backend_type("antigravity", USAGE_SOURCE)
+  registry.attribute_backend_type(TYPE_NAME, USAGE_SOURCE)
 }

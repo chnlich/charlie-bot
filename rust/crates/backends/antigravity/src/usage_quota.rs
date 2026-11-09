@@ -18,6 +18,8 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::process::Command;
 
+use super::options::TYPE_NAME;
+
 const PROVIDER: &str = "antigravity";
 const PROVIDER_LABEL: &str = "Antigravity";
 type ModelReadings = HashMap<String, Vec<Value>>;
@@ -53,7 +55,7 @@ impl AntigravityQuotaAccount {
       .backends
       .options
       .iter()
-      .filter(|option| option.backend_type == "antigravity" && option.billing == Some(PoolBilling::Subscription))
+      .filter(|option| option.backend_type == TYPE_NAME && option.billing == Some(PoolBilling::Subscription))
       .map(|option| option.model.clone())
       .collect();
     models.sort();

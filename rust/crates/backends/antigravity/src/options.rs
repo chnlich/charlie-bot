@@ -3,6 +3,10 @@
 use charliebot_core::config::{OptionField, OptionFieldDefault};
 use serde_yaml::{Mapping, Value};
 
+/// The backend type this package registers: the `type` a `backends.options` entry names, and the key `SCHEMA` below
+/// is registered under.
+pub const TYPE_NAME: &str = "antigravity";
+
 const PRINT_TIMEOUT: &str = "print_timeout";
 
 /// The `antigravity` option's type-specific fields in `AntigravityBackend`'s declaration order, each with the default

@@ -265,7 +265,7 @@ fn tool_result(event: &Value, run_dir: &Path) -> Result<Option<Value>, CliExit> 
           tool_name: tool_name.to_string(),
           chars: size,
         });
-        let notice = withhold_notice(size, BUDGET_CHARS - state.counted);
+        let notice = withhold_notice(size, BUDGET_CHARS.saturating_sub(state.counted));
         decision = Some(withhold_decision(tool_name, response, &notice));
         return;
       }
@@ -458,9 +458,9 @@ fn preview_chars(stdout: &str) -> usize {
   if total <= PERSISTED_PREVIEW_CHARS {
     return total;
   }
-  let prefix = stdout.chars().take(PERSISTED_PREVIEW_CHARS).collect::<String>();
-  match prefix.rfind('\n') {
-    Some(at) if at > PERSISTED_PREVIEW_CHARS / 2 => stdout[..at].chars().count(),
+  let prefix: Vec<char> = stdout.chars().take(PERSISTED_PREVIEW_CHARS).collect();
+  match prefix.iter().rposition(|&c| c == '\n') {
+    Some(at) if at > PERSISTED_PREVIEW_CHARS / 2 => at,
     _ => PERSISTED_PREVIEW_CHARS,
   }
 }
@@ -649,6 +649,22 @@ mod tests {
     assert_eq!(state.withheld[0].tool_use_id, "toolu_01");
     assert_eq!(state.withheld[0].chars, 6_001);
     assert_eq!(state.notices, 0);
+  }
+
+  #[test]
+  fn an_over_budget_bash_output_when_counted_already_exceeds_budget_shows_zero_left() {
+    let home = RunHome::new();
+    home.seed_counted(20_000);
+    let stdout = "x".repeat(500);
+    let (result, output) = run_event(&home, &bash_event("after-prior-over-budget", &stdout));
+    result.unwrap();
+    let decision = decision_of(&output);
+    let replaced = &decision["hookSpecificOutput"]["updatedToolOutput"];
+    assert_eq!(replaced["stdout"].as_str().unwrap(), withhold_text(500, 0));
+    assert!(
+      replaced["stdout"].as_str().unwrap().starts_with("Output withheld: 500 characters exceed the 0 characters left")
+    );
+    assert_eq!(home.state().counted, 20_000);
   }
 
   #[test]
@@ -853,6 +869,15 @@ mod tests {
     assert_eq!(preview_chars(&"b".repeat(20_000)), 2_000);
     // A short output is its own preview.
     assert_eq!(preview_chars("short"), 5);
+    // Multibyte UTF-8 characters: line end past halfway in character count (1,500 chars > 1,000).
+    let prefix = "中".repeat(1_500);
+    let stdout = format!("{prefix}\n{}", "中".repeat(2_000));
+    assert_eq!(preview_chars(&stdout), 1_500);
+    // Multibyte UTF-8 characters: line end before halfway in character count (500 chars <= 1,000)
+    // keeps the full 2,000 characters even though byte offset (1,500) exceeds 1,000.
+    let prefix = "中".repeat(500);
+    let stdout = format!("{prefix}\n{}", "中".repeat(2_000));
+    assert_eq!(preview_chars(&stdout), 2_000);
   }
 
   #[test]

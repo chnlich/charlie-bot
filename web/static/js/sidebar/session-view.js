@@ -1121,6 +1121,10 @@ async function loadOlderIfNeeded(container, isContinuation) {
   }
 }
 
+// The cost cell's tooltip when the cost is a sum, and its label when a native session's reading fell.
+const USAGE_COST_TITLE = 'API list-price equivalent for this session\'s own turns; excludes delegated workers';
+const USAGE_COST_ERROR_LABEL = 'cost error';
+
 function renderUsageFromData(usage) {
   const indicator = document.getElementById('usage-indicator');
   if (!usage) { if (indicator) indicator.classList.add('hidden'); return; }
@@ -1129,12 +1133,13 @@ function renderUsageFromData(usage) {
   const contextFull = usage.context_full;
   const contextCompactAt = usage.context_compact_at;
   const hasContext = contextTokens != null && contextFull != null;
-  const hasCost = usage.total_cost_usd != null;
+  const costError = usage.total_cost_error || null;
+  const showCost = usage.total_cost_usd != null || costError != null;
 
   // The header shows readings only. A record with no reading at all keeps the
   // indicator hidden, and a missing reading hides its own cell instead of an
   // empty meter or "unknown".
-  if (indicator) indicator.classList.toggle('hidden', !hasContext && !hasCost);
+  if (indicator) indicator.classList.toggle('hidden', !hasContext && !showCost);
 
   const bar = document.getElementById('usage-bar');
   const compactLine = document.getElementById('usage-compact-line');
@@ -1186,8 +1191,15 @@ function renderUsageFromData(usage) {
   }
   const cost = document.getElementById('usage-cost');
   if (cost) {
-    cost.classList.toggle('hidden', !hasCost);
-    cost.textContent = formatUsageCostValue(usage.total_cost_usd);
+    cost.classList.toggle('hidden', !showCost);
+    if (costError) {
+      // The error text stays one hover away; the cell shows only the label.
+      cost.textContent = USAGE_COST_ERROR_LABEL;
+      cost.title = costError;
+    } else {
+      cost.textContent = formatUsageCostValue(usage.total_cost_usd);
+      cost.title = USAGE_COST_TITLE;
+    }
   }
 }
 

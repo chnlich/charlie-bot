@@ -429,6 +429,29 @@ test('renderUsageFromData hides an incomplete context reading with no cost', () 
   assert.equal(elements.get('usage-indicator').classList.contains('hidden'), true);
 });
 
+test('renderUsageFromData shows a cost error label with its text on hover, and keeps the context reading', () => {
+  const elements = buildUsageElements();
+  const {context} = buildContext({elements});
+  const costError = 'native session native-x total_cost_usd fell from 2 to 1.5; a cumulative reading cannot decrease';
+
+  context.renderUsageFromData({
+    context_tokens: 500,
+    context_full: 1000,
+    context_compact_at: null,
+    total_cost_usd: null,
+    total_cost_error: costError,
+    model: 'claude-test',
+  });
+
+  assert.equal(elements.get('usage-indicator').classList.contains('hidden'), false);
+  assert.equal(elements.get('usage-text').classList.contains('hidden'), false);
+  // The cost cell is shown with a label, not a dollar sum, and its hover title is the error text.
+  assert.equal(elements.get('usage-cost').classList.contains('hidden'), false);
+  assert.match(elements.get('usage-cost').textContent, /\S/);
+  assert.doesNotMatch(elements.get('usage-cost').textContent, /\$/);
+  assert.equal(elements.get('usage-cost').title, costError);
+});
+
 test('renderUsageFromData draws the bar when both context fields are present', () => {
   const elements = buildUsageElements();
   const {context} = buildContext({elements});

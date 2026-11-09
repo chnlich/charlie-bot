@@ -85,6 +85,19 @@
       .cbdx-gap-count-end { display: inline-flex; align-items: center; min-height: 24px; margin-left: auto;
         position: sticky; right: 0; }
       .cbdx-gap-error { color: #b91c1c; font-size: 12px; }
+      /* A side-by-side pane is half the window, and on a phone it is narrower than these controls: 190 px for
+         two buttons, 298 px for three. The pane measures its strip here, so a strip that would not fit stacks
+         its buttons in one column. Both panes' cells then take the stacked height, keeping the code lines under
+         them level. */
+      .d2h-file-side-diff { container-type: inline-size; }
+      @container (max-width: 210px) {
+        .cbdx-gap-stack { min-height: 58px; }
+        .cbdx-gap-stack .cbdx-gap-controls { flex-direction: column; }
+      }
+      @container (max-width: 320px) {
+        .cbdx-gap-stack-three { min-height: 88px; }
+        .cbdx-gap-stack-three .cbdx-gap-controls { flex-direction: column; }
+      }
       /* A phone's line-by-line table can stand wider than the screen too. The strip keeps its controls and
          count together at the left there, and a strip too wide for the screen wraps rather than hide one. */
       @media (max-width: 768px) {
@@ -466,6 +479,12 @@
       if (last === first) {
         first.append(count, error);
       } else {
+        // A side-by-side strip's two cells take one height, so the style block can stack a narrow pane's
+        // controls without moving the other pane's lines. The three-button strip needs a taller cell.
+        const stack = ['cbdx-gap-stack'];
+        if (directionButtons.length === 2) stack.push('cbdx-gap-stack-three');
+        first.classList.add(...stack);
+        last.classList.add(...stack);
         first.append(error);
         count.classList.add('cbdx-gap-count-end');
         last.append(count);

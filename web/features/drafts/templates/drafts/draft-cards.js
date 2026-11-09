@@ -21,6 +21,15 @@
   const STATE_CLASS = 'draft-state-line mt-2 text-xs text-slate-400';
   const BUTTON_CLASS = 'draft-send mt-2 px-3 py-1.5 rounded bg-slate-600 hover:bg-slate-500 text-white text-xs font-semibold';
 
+  // The card's status names: the `data-draft-status` values, and the state the send path reports.
+  const DRAFT_STATUS = {
+    SENDABLE: 'sendable',
+    SENT: 'sent',
+    SUPERSEDED: 'superseded',
+    STALE: 'stale',
+    FAILED: 'failed',
+  };
+
   // The card's target line: the platform's own label, or the target fields in order.
   function targetText(msg) {
     if (msg.target_label != null && String(msg.target_label) !== '') return String(msg.target_label);
@@ -29,16 +38,16 @@
   }
 
   function stateLineHtml(state) {
-    if (!state || !state.status || state.status === 'sendable') return '';
-    if (state.status === 'sent') {
+    if (!state || !state.status || state.status === DRAFT_STATUS.SENDABLE) return '';
+    if (state.status === DRAFT_STATUS.SENT) {
       const link = state.url
         ? ' · <a class="underline text-blue-400" href="' + escapeHtmlAttr(state.url) + '" target="_blank" rel="noopener">Open</a>'
         : '';
       return 'Sent by ' + escapeHtml(state.sender || '') + link;
     }
-    if (state.status === 'superseded') return 'Superseded by a newer draft';
-    if (state.status === 'stale') return 'This draft was already sent or replaced';
-    if (state.status === 'failed') {
+    if (state.status === DRAFT_STATUS.SUPERSEDED) return 'Superseded by a newer draft';
+    if (state.status === DRAFT_STATUS.STALE) return 'This draft was already sent or replaced';
+    if (state.status === DRAFT_STATUS.FAILED) {
       const hint = state.outcome === 'unknown' ? ' Check the target before resending.' : '';
       return 'Send failed: ' + escapeHtml(state.detail || '') + hint;
     }
@@ -59,7 +68,7 @@
       : ' data-draft-replaces="' + escapeHtmlAttr(msg.replaces) + '"';
     return '<div class="' + CARD_CLASS + '"' + Chat.messageIdentityAttrs(msg)
       + ' data-draft-id="' + escapeHtmlAttr(draftId) + '"'
-      + ' data-draft-status="sendable"' + replaces + '>'
+      + ' data-draft-status="' + DRAFT_STATUS.SENDABLE + '"' + replaces + '>'
       + '<div class="flex items-center gap-2 text-blue-400 text-xs font-semibold">'
       + '<span>Draft</span><span class="text-slate-400">' + escapeHtml(msg.platform || '') + '</span></div>'
       + '<div class="draft-target mt-1 text-slate-300">To: ' + escapeHtml(targetText(msg)) + '</div>'
@@ -100,30 +109,34 @@
   // Apply one state to one card: the status attribute, the state line, and the button's presence.
   function applyDraftState(card, state) {
     if (!card) return;
-    const status = state && state.status ? state.status : 'sendable';
+    const status = state && state.status ? state.status : DRAFT_STATUS.SENDABLE;
     card.dataset.draftStatus = status;
     const line = card.querySelector('.draft-state-line');
     if (line) line.innerHTML = stateLineHtml(state);
     const button = card.querySelector('.draft-send');
-    if (button && (status === 'sent' || status === 'superseded' || status === 'stale')) button.remove();
+    if (button && (status === DRAFT_STATUS.SENT || status === DRAFT_STATUS.SUPERSEDED
+      || status === DRAFT_STATUS.STALE)) {
+      button.remove();
+    }
   }
 
   // Apply the outcome markers in one rendered root. A marker appended on its own names a card that
   // already sits in the document, so `findCard` falls back to the document.
   function applyDraftUpdates(root) {
     queryAll(root, '[data-draft-replaces]').forEach((marker) => {
-      applyDraftState(findCard(root, marker.getAttribute('data-draft-replaces')), {status: 'superseded'});
+      const card = findCard(root, marker.getAttribute('data-draft-replaces'));
+      applyDraftState(card, {status: DRAFT_STATUS.SUPERSEDED});
     });
     queryAll(root, '[data-draft-sent]').forEach((marker) => {
       applyDraftState(findCard(root, marker.getAttribute('data-draft-sent')), {
-        status: 'sent',
+        status: DRAFT_STATUS.SENT,
         sender: marker.getAttribute('data-sender') || '',
         url: marker.getAttribute('data-url') || '',
       });
     });
     queryAll(root, '[data-draft-failed]').forEach((marker) => {
       applyDraftState(findCard(root, marker.getAttribute('data-draft-failed')), {
-        status: 'failed',
+        status: DRAFT_STATUS.FAILED,
         detail: marker.getAttribute('data-error') || '',
         outcome: marker.getAttribute('data-outcome') || 'rejected',
       });
@@ -141,20 +154,20 @@
           {method: 'POST', headers: JSON_HEADERS});
       const body = await res.json().catch(() => ({}));
       if (res.status === 409) {
-        applyDraftState(card, {status: 'stale'});
+        applyDraftState(card, {status: DRAFT_STATUS.STALE});
         return;
       }
       if (!res.ok) {
         applyDraftState(card, {
-          status: 'failed',
+          status: DRAFT_STATUS.FAILED,
           detail: body.detail || ('HTTP ' + res.status),
           outcome: body.outcome || 'rejected',
         });
         return;
       }
-      applyDraftState(card, {status: 'sent', sender: body.sender || '', url: body.url || ''});
+      applyDraftState(card, {status: DRAFT_STATUS.SENT, sender: body.sender || '', url: body.url || ''});
     } catch (error) {
-      applyDraftState(card, {status: 'failed', detail: String(error), outcome: 'unknown'});
+      applyDraftState(card, {status: DRAFT_STATUS.FAILED, detail: String(error), outcome: 'unknown'});
     } finally {
       // A failed send leaves the button clickable: the operator decides whether to resend, and the
       // server never retries on its own. A sent or superseded card lost its button above.

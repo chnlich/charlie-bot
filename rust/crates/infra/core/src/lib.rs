@@ -10,6 +10,7 @@ pub mod event_types;
 pub mod fence;
 pub mod fsutil;
 pub mod git;
+pub mod headers;
 pub mod home;
 pub mod home_init;
 pub mod hot_reload;

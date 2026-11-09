@@ -20,6 +20,7 @@ use charliebot_cli_common::route;
 use charliebot_cli_common::skew;
 use charliebot_core::config::{CONFIG_FILENAME, CREDENTIALS_FILENAME, sessions_dir_in};
 use charliebot_core::event_types;
+use charliebot_core::headers::AUTHORIZATION;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
 use charliebot_core::logging;
 use charliebot_core::logline;
@@ -266,7 +267,8 @@ impl Server {
     reader.read_exact(&mut body)?;
     let request: Value =
       if body.is_empty() { json!({}) } else { serde_json::from_slice(&body).map_err(io::Error::other)? };
-    let authorized = headers.get("authorization").is_some_and(|value| *value == format!("Bearer {}", self.key));
+    let authorized =
+      headers.get(&AUTHORIZATION.to_ascii_lowercase()).is_some_and(|value| *value == format!("Bearer {}", self.key));
     let (status, reply) =
       if authorized { self.route(&method, &path, &request)? } else { (401, json!({"detail": "unauthorized"})) };
     write_response(&mut stream, status, &reply)

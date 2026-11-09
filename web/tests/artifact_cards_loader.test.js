@@ -24,11 +24,17 @@ function messageRoot({hrefs = [], text = ''} = {}) {
 
 function buildContext({moduleLoaded = false, loadFails = false} = {}) {
   const loads = [];
+  const fileLinkLoads = [];
   const processors = [];
   const embedded = [];
   const errors = [];
   const context = {
     console: {error(...args) { errors.push(args.join(' ')); }},
+    // The chat page's file-link loader: the artifact module reads the helpers the module installs.
+    loadFileLinks() {
+      fileLinkLoads.push(loads.length);
+      return Promise.resolve();
+    },
     loadPageScripts(key, paths) {
       loads.push({key, paths});
       if (loadFails) return Promise.reject(new Error('the page script did not load: ' + paths[0]));
@@ -45,16 +51,17 @@ function buildContext({moduleLoaded = false, loadFails = false} = {}) {
   vm.createContext(context);
   vm.runInContext(LOADER_JS, context, {filename: 'artifact-cards.js'});
   assert.equal(processors.length, 1, 'the loader registers one post-processor');
-  return {context, loads, processors, embedded, errors};
+  return {context, loads, fileLinkLoads, processors, embedded, errors};
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 test('a message that names no artifact page fetches nothing', async () => {
-  const {loads, processors, embedded} = buildContext();
+  const {loads, fileLinkLoads, processors, embedded} = buildContext();
   processors[0](messageRoot({text: 'plain prose with no link'}));
   await settle();
   assert.deepEqual(loads, []);
+  assert.deepEqual(fileLinkLoads, [], 'the file-link module is not fetched either');
   assert.deepEqual(embedded, []);
 });
 
@@ -73,10 +80,11 @@ test('an anchor that links a non-HTML artifact path names no artifact page', asy
 });
 
 test('a message whose anchor links an artifact page loads the module, then names the message for its card', async () => {
-  const {loads, processors, embedded} = buildContext();
+  const {loads, fileLinkLoads, processors, embedded} = buildContext();
   const root = messageRoot({hrefs: ['/absolute_filepath/home/x/artifacts/plan.html']});
   processors[0](root);
   await settle();
+  assert.deepEqual(fileLinkLoads, [0], 'the file-link module loads first, so its helpers exist for the card module');
   assert.deepEqual(loads.map((load) => load.key), ['artifacts-cards']);
   assert.equal(loads[0].paths[0], '/static/features/artifacts/artifact-cards.js');
   assert.equal(loads[0].paths.length, 1);

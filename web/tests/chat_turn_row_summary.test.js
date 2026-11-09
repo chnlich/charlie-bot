@@ -17,7 +17,7 @@ function rowFields(headText, conclusionText) {
     headTs: null,
   });
   const field = (className) => row.children.find((child) => child.className === className).textContent;
-  return { title: field('turn-row-title'), conclusion: field('turn-row-conclusion') };
+  return { row, title: field('turn-row-title'), conclusion: field('turn-row-conclusion') };
 }
 
 test('a fenced block reads as its first code line, not the language tag', () => {
@@ -68,4 +68,12 @@ test('a plain line and the existing heading and link cleanup stay unchanged', ()
   assert.equal(rowFields('', 'plain words').conclusion, 'plain words');
   assert.equal(rowFields('', '## 标题').conclusion, '标题');
   assert.equal(rowFields('', 'see [the doc](https://example.test/y) now').conclusion, 'see the doc now');
+});
+
+// The row drops the conclusion column when it has no text, so the title keeps
+// that width. The class drives the grid in styles.css.
+test('a row marks itself when it has no conclusion for the column to show', () => {
+  assert.equal(rowFields('a title', '').row.classList.contains('turn-row-no-conclusion'), true);
+  assert.equal(rowFields('a title', null).row.classList.contains('turn-row-no-conclusion'), true);
+  assert.equal(rowFields('a title', 'the conclusion').row.classList.contains('turn-row-no-conclusion'), false);
 });

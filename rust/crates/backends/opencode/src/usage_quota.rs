@@ -149,11 +149,11 @@ fn read_access_token(db: &std::path::Path) -> anyhow::Result<String> {
 fn parse_usage(data: &Value, fetched_at: UtcDateTime) -> anyhow::Result<Map<String, Value>> {
   let usage =
     data.get("usage").and_then(Value::as_object).ok_or_else(|| anyhow!("OpenCode Go response has no usage object"))?;
-  let windows =
-    [("rolling", "5 小时", Some(300)), ("weekly", "每周", Some(WEEKLY_WINDOW_MINUTES)), ("monthly", "每月", None)];
+  // The calendar month has no fixed length, so it alone carries a name; the fixed windows are named from their minutes.
+  let windows = [("rolling", Some(300)), ("weekly", Some(WEEKLY_WINDOW_MINUTES)), ("monthly", None)];
   let windows = windows
     .into_iter()
-    .map(|(key, name, minutes)| {
+    .map(|(key, minutes)| {
       let reading =
         usage.get(key).and_then(Value::as_object).ok_or_else(|| anyhow!("OpenCode usage has no {key} window"))?;
       let utilization = reading
@@ -166,12 +166,14 @@ fn parse_usage(data: &Value, fetched_at: UtcDateTime) -> anyhow::Result<Map<Stri
         .filter(|reset| !reset.is_empty())
         .map(UtcDateTime::parse)
         .transpose()?;
-      let mut window = Map::from_iter([
-        (PANEL_WINDOW_NAME.to_string(), Value::String(name.to_string())),
-        (PANEL_UTILIZATION.to_string(), json!(utilization)),
-      ]);
-      if let Some(minutes) = minutes {
-        window.insert(PANEL_WINDOW_MINUTES.to_string(), Value::Number(minutes.into()));
+      let mut window = Map::from_iter([(PANEL_UTILIZATION.to_string(), json!(utilization))]);
+      match minutes {
+        Some(minutes) => {
+          window.insert(PANEL_WINDOW_MINUTES.to_string(), Value::Number(minutes.into()));
+        }
+        None => {
+          window.insert(PANEL_WINDOW_NAME.to_string(), Value::String("1mo".to_string()));
+        }
       }
       if let Some(reset) = resets_at {
         window.insert(PANEL_RESETS_AT.to_string(), Value::String(reset.to_str()));
@@ -206,10 +208,11 @@ mod tests {
     .unwrap();
 
     assert_eq!(entry[PANEL_WINDOWS][0][PANEL_WINDOW_MINUTES], 300);
-    assert_eq!(entry[PANEL_WINDOWS][0][PANEL_WINDOW_NAME], "5 小时");
+    assert!(entry[PANEL_WINDOWS][0].get(PANEL_WINDOW_NAME).is_none());
+    assert_eq!(entry[PANEL_WINDOWS][1][PANEL_WINDOW_MINUTES], 10080);
     assert_eq!(entry[PANEL_WINDOWS][1][PANEL_UTILIZATION], 3.0);
     assert!(entry[PANEL_WINDOWS][2].get(PANEL_WINDOW_MINUTES).is_none());
-    assert_eq!(entry[PANEL_WINDOWS][2][PANEL_WINDOW_NAME], "每月");
+    assert_eq!(entry[PANEL_WINDOWS][2][PANEL_WINDOW_NAME], "1mo");
   }
 
   #[test]

@@ -12,7 +12,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig, PoolBilling};
 use charliebot_registry::backend::{MemberReading, MemberReadingFn};
 use charliebot_registry::usage::{
   DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PLAN_TYPE, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_STATUS_ROWS,
-  PANEL_UTILIZATION, PANEL_WINDOW_MINUTES, PANEL_WINDOW_NAME, PANEL_WINDOWS, QuotaAccount, UsageOps, UsageSourceImpl,
+  PANEL_UTILIZATION, PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UsageOps, UsageSourceImpl,
   WEEKLY_WINDOW_MINUTES, mark_expired_windows, member_reading_from_windows,
 };
 use charliebot_store::metadata::UtcDateTime;
@@ -274,8 +274,8 @@ fn parse_status(status: &Value, fetched_at: UtcDateTime) -> anyhow::Result<Map<S
     (
       PANEL_WINDOWS.to_string(),
       Value::Array(vec![
-        quota_window("每日", DAILY_WINDOW_MINUTES, 100.0 - remaining("dailyQuotaRemainingPercent")?, daily_reset),
-        quota_window("每周", WEEKLY_WINDOW_MINUTES, 100.0 - remaining("weeklyQuotaRemainingPercent")?, weekly_reset),
+        quota_window(DAILY_WINDOW_MINUTES, 100.0 - remaining("dailyQuotaRemainingPercent")?, daily_reset),
+        quota_window(WEEKLY_WINDOW_MINUTES, 100.0 - remaining("weeklyQuotaRemainingPercent")?, weekly_reset),
       ]),
     ),
   ]);
@@ -285,9 +285,9 @@ fn parse_status(status: &Value, fetched_at: UtcDateTime) -> anyhow::Result<Map<S
   Ok(entry)
 }
 
-fn quota_window(name: &str, minutes: i64, utilization: f64, reset: Option<UtcDateTime>) -> Value {
+/// One fixed-length window. The panel names it from its minutes, so it carries no `window_name`.
+fn quota_window(minutes: i64, utilization: f64, reset: Option<UtcDateTime>) -> Value {
   let mut window = Map::from_iter([
-    (PANEL_WINDOW_NAME.to_string(), Value::String(name.to_string())),
     (PANEL_WINDOW_MINUTES.to_string(), Value::Number(minutes.into())),
     (PANEL_UTILIZATION.to_string(), json!(utilization)),
   ]);
@@ -345,6 +345,7 @@ fn model_key(model: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+  use charliebot_registry::usage::PANEL_WINDOW_NAME;
   use serde_json::json;
 
   use super::*;
@@ -364,7 +365,9 @@ mod tests {
     let entry = parse_status(&status, fetched_at).unwrap();
 
     assert_eq!(entry[PANEL_WINDOWS][0][PANEL_UTILIZATION], 18.0);
-    assert_eq!(entry[PANEL_WINDOWS][0][PANEL_WINDOW_NAME], "每日");
+    assert_eq!(entry[PANEL_WINDOWS][0][PANEL_WINDOW_MINUTES], 1440);
+    assert_eq!(entry[PANEL_WINDOWS][1][PANEL_WINDOW_MINUTES], 10080);
+    assert!(entry[PANEL_WINDOWS][0].get(PANEL_WINDOW_NAME).is_none());
     assert_eq!(entry[PANEL_WINDOWS][1][PANEL_UTILIZATION], 100.0);
     assert_eq!(entry[PANEL_PLAN_TYPE], "Subscription");
 

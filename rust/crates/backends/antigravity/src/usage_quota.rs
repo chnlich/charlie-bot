@@ -10,7 +10,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig, PoolBilling};
 use charliebot_registry::backend::{MemberReading, MemberReadingFn};
 use charliebot_registry::usage::{
   DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_SCOPE_LABEL, PANEL_STATUS_ROWS,
-  PANEL_UTILIZATION, PANEL_WINDOW_MINUTES, PANEL_WINDOW_NAME, PANEL_WINDOWS, QuotaAccount, UsageOps, UsageSourceImpl,
+  PANEL_UTILIZATION, PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UsageOps, UsageSourceImpl,
   WEEKLY_WINDOW_MINUTES, mark_expired_windows, member_reading_from_windows,
 };
 use charliebot_store::metadata::UtcDateTime;
@@ -274,9 +274,9 @@ fn parse_bucket(bucket: &Value, group_name: &str) -> anyhow::Result<Value> {
     .get("window")
     .and_then(Value::as_str)
     .ok_or_else(|| anyhow!("Antigravity quota bucket has no window name"))?;
-  let (label, minutes) = match window_name {
-    "5h" => ("5 小时", 300),
-    "weekly" => ("每周", WEEKLY_WINDOW_MINUTES),
+  let minutes = match window_name {
+    "5h" => 300,
+    "weekly" => WEEKLY_WINDOW_MINUTES,
     other => bail!("Antigravity quota window {other:?} is not a supported model-group window"),
   };
   let remaining = bucket
@@ -290,7 +290,6 @@ fn parse_bucket(bucket: &Value, group_name: &str) -> anyhow::Result<Value> {
     .map(UtcDateTime::parse)
     .transpose()?;
   let mut window = Map::from_iter([
-    (PANEL_WINDOW_NAME.to_string(), Value::String(label.to_string())),
     (PANEL_WINDOW_MINUTES.to_string(), Value::Number(minutes.into())),
     (PANEL_UTILIZATION.to_string(), json!(100.0 - remaining * 100.0)),
     (PANEL_SCOPE_LABEL.to_string(), Value::String(group_name.to_string())),
@@ -303,6 +302,7 @@ fn parse_bucket(bucket: &Value, group_name: &str) -> anyhow::Result<Value> {
 
 #[cfg(test)]
 mod tests {
+  use charliebot_registry::usage::PANEL_WINDOW_NAME;
   use serde_json::json;
 
   use super::*;
@@ -320,9 +320,10 @@ mod tests {
     let (entry, readings) = parse_usage(&response, &["series-1".to_string()], sampled).unwrap();
 
     assert_eq!(entry[PANEL_WINDOWS].as_array().unwrap().len(), 2);
-    assert_eq!(entry[PANEL_WINDOWS][0][PANEL_WINDOW_NAME], "每周");
+    assert_eq!(entry[PANEL_WINDOWS][0][PANEL_WINDOW_MINUTES], 10080);
     assert_eq!(entry[PANEL_WINDOWS][0][PANEL_UTILIZATION], 25.0);
-    assert_eq!(entry[PANEL_WINDOWS][1][PANEL_WINDOW_NAME], "5 小时");
+    assert_eq!(entry[PANEL_WINDOWS][1][PANEL_WINDOW_MINUTES], 300);
+    assert!(entry[PANEL_WINDOWS][1].get(PANEL_WINDOW_NAME).is_none());
     assert_eq!(entry[PANEL_WINDOWS][1][PANEL_UTILIZATION], 8.0);
     assert_eq!(readings.get("series-1").unwrap().len(), 2);
   }

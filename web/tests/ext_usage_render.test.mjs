@@ -288,9 +288,9 @@ test('renderExtUsage uses provider window names and renders member cooling state
         account: 'main',
         fetched_at: _iso(-1 * MINUTE),
         windows: [
-          { window_minutes: 300, window_name: '5 小时', utilization: 8, resets_at: _iso(HOUR) },
-          { window_minutes: 10080, window_name: '每周', utilization: 25, resets_at: _iso(DAY) },
-          { window_name: '每月', utilization: 97, resets_at: _iso(14 * DAY) },
+          { window_minutes: 300, utilization: 8, resets_at: _iso(HOUR) },
+          { window_minutes: 10080, utilization: 25, resets_at: _iso(DAY) },
+          { window_name: '1mo', utilization: 97, resets_at: _iso(14 * DAY) },
         ],
       },
     },
@@ -302,10 +302,36 @@ test('renderExtUsage uses provider window names and renders member cooling state
   assert.ok(_field(coolingRow, 'member-name'));
   assert.ok(_field(coolingRow, 'member-state'));
 
+  // The fixed windows are named from their minutes; the calendar month keeps its own name.
   const opencodeRow = _rowByKey(strip, 'opencode:main');
-  for (const name of ['5 小时', '每周', '每月']) {
-    assert.ok(_walk(opencodeRow, _byAttr('data-window-name', name)), 'window name is preserved in the row');
+  for (const label of ['5h:', '7d:']) {
+    assert.ok(_walk(opencodeRow, (el) => el.textContent === label), `${label} labels a fixed window`);
   }
+  assert.ok(_walk(opencodeRow, _byAttr('data-window-name', '1mo')), 'the month window keeps its name');
+  assert.ok(_walk(opencodeRow, (el) => el.textContent === '1mo:'), 'the month window is labelled 1mo');
+});
+
+test('renderExtUsage names a one-day window 1d from its minutes', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'devin:main': {
+        provider: 'devin',
+        provider_label: 'Devin',
+        account: 'main',
+        fetched_at: _iso(-1 * MINUTE),
+        windows: [
+          { window_minutes: 1440, utilization: 18, resets_at: _iso(5 * HOUR) },
+          { window_minutes: 10080, utilization: 0, resets_at: _iso(6 * DAY) },
+        ],
+      },
+    },
+  });
+
+  const devinRow = _rowByKey(strip, 'devin:main');
+  assert.ok(_walk(devinRow, (el) => el.textContent === '1d:'), 'the daily window is labelled 1d');
+  assert.ok(_walk(devinRow, (el) => el.textContent === '7d:'), 'the weekly window is labelled 7d');
 });
 
 // Metered credits: the payload's credits reading (unlimited=false + balance)

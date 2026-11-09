@@ -373,6 +373,22 @@ function stripRows(page) {
   return [...firstTable(page).querySelectorAll('tr.cbdx-gap-row')];
 }
 
+// The last rendered table: the right pane of a side-by-side diff, or the one line-by-line table.
+function lastTable(page) {
+  const body = page.output.children[0].children[1];
+  const sideDiffs = body.querySelectorAll('.d2h-file-side-diff');
+  return sideDiffs.length ? sideDiffs[sideDiffs.length - 1].querySelector('table') : firstTable(page);
+}
+
+function lastStripRows(page) {
+  return [...lastTable(page).querySelectorAll('tr.cbdx-gap-row')];
+}
+
+// The gap count of the gap at index. One gap draws one set of controls, so the last strip carries the count.
+function gapCount(page, index) {
+  return stripCell(lastStripRows(page)[index]).querySelector('.cbdx-gap-count');
+}
+
 function stripCell(stripRow) {
   return stripRow.children[0];
 }
@@ -522,9 +538,13 @@ test('an expanded file carries a strip at the top, between-hunk and bottom gap',
   assert.equal(rows.length, 3);
   const top = stripCell(rows[0]).querySelectorAll('button.cbdx-expand').map((button) => button.textContent);
   assert.deepEqual(top, ['↑ Expand up', '↓ Expand down', 'Whole file']);
-  assert.equal(stripCell(rows[0]).querySelector('.cbdx-gap-count').textContent, '60 hidden lines');
-  assert.equal(stripCell(rows[1]).querySelector('.cbdx-gap-count').textContent, '50 hidden lines');
-  assert.equal(stripCell(rows[2]).querySelector('.cbdx-gap-count').textContent, '22 hidden lines');
+  assert.equal(gapCount(page, 0).textContent, '60 hidden lines');
+  assert.equal(gapCount(page, 1).textContent, '50 hidden lines');
+  assert.equal(gapCount(page, 2).textContent, '22 hidden lines');
+  // One gap draws one set of controls: the second pane's strips keep their rows and carry no buttons.
+  const rightRows = lastStripRows(page);
+  assert.equal(rightRows.length, 3, 'both panes carry a strip row for every gap');
+  assert.deepEqual(rightRows.map((row) => stripCell(row).querySelectorAll('button.cbdx-expand').length), [0, 0, 0]);
   // The strips sit before their hunk's header row, the bottom strip at the table's end.
   const positions = firstTable(page).querySelectorAll('tr').map((row) => row.matches('tr.cbdx-gap-row') ? 'strip'
     : row.children[0].classList.contains('d2h-info') ? 'info' : 'row');
@@ -553,7 +573,7 @@ test('expand down and expand up fill the top gap in line order with both sides\'
   await settle();
   let numbers = contentNumbers(page);
   assert.deepEqual(numbers.slice(0, 22), [...Array.from({length: 20}, (_, i) => String(i + 1)), '61', '62']);
-  assert.equal(stripCell(stripRows(page)[0]).querySelector('.cbdx-gap-count').textContent, '40 hidden lines');
+  assert.equal(gapCount(page, 0).textContent, '40 hidden lines');
 
   stripButton(stripRows(page)[0], '↑ Expand up').click();
   await settle();
@@ -675,7 +695,7 @@ test('a short gap expands whole in one click and its strip goes away', async () 
 
   const rows = stripRows(short);
   assert.equal(rows.length, 2);
-  assert.equal(stripCell(rows[0]).querySelector('.cbdx-gap-count').textContent, '12 hidden lines');
+  assert.equal(gapCount(short, 0).textContent, '12 hidden lines');
   assert.deepEqual(
     stripCell(rows[0]).querySelectorAll('button.cbdx-expand').map((button) => button.textContent),
     ['Expand 12 lines', 'Whole file']);

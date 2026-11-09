@@ -13,7 +13,7 @@ use charliebot_core::event_types;
 use charliebot_core::logline;
 use charliebot_core::text_repr;
 use charliebot_store::layout;
-use charliebot_store::metadata::{KEEP_WORKTREE_FIELD, TaskType};
+use charliebot_store::metadata::{KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, TaskType};
 use charliebot_store::run_logs;
 use charliebot_store::run_records::{
   EventReadError, RUN_EVENTS_NAME, parse_event_line, read_event_values, read_run_metadata,
@@ -177,7 +177,7 @@ fn delegation_request(session: &str, repo: &str, goal: &str) -> String {
   let body = json!({
     "session_id": session,
     "description": goal,
-    "repo_path": repo,
+    (REPO_PATH_FIELD): repo,
     "base_branch": "main",
     "task_type": TaskType::ScriptRun.as_str(),
     (KEEP_WORKTREE_FIELD): true,

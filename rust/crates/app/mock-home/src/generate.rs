@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use charliebot_store::{layout, run_records};
+use charliebot_store::{layout, metadata, run_records};
 use chrono::{NaiveDateTime, TimeDelta};
 use serde_json::{Value, json};
 
@@ -132,7 +132,8 @@ fn view_task(rng: &mut Rng) -> Value {
   let context_refs: Vec<String> = (0..rng.range(VIEW_ITEMS_MIN, VIEW_ITEMS_MAX))
     .map(|_| format!("workspace/synthetic/{:04x}/{:08x}.md", rng.below(65_536), rng.next_u64() as u32))
     .collect();
-  json!({"acceptance": acceptance, "context_refs": context_refs, "repo_path": "workspace/synthetic", "base_branch": "main"})
+  json!({"acceptance": acceptance, "context_refs": context_refs, (metadata::REPO_PATH_FIELD): "workspace/synthetic",
+         "base_branch": "main"})
 }
 
 /// Writes the sessions and the manifest into `home`, and returns the total event-log bytes. The view shape adds a task

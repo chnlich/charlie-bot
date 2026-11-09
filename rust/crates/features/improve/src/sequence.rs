@@ -25,7 +25,7 @@ use charliebot_core::repo_root::RepoRoot;
 use charliebot_core::str_methods::take_chars;
 use charliebot_registry::sequence::SequenceTree;
 use charliebot_store::compact::CompactValue;
-use charliebot_store::metadata::{SessionMetadata, TaskApprover, TaskProfile, TaskSpec, TaskType};
+use charliebot_store::metadata::{REPO_PATH_FIELD, SessionMetadata, TaskApprover, TaskProfile, TaskSpec, TaskType};
 use charliebot_store::run_logs;
 use charliebot_store::run_records::{RUN_EVENTS_NAME, RunKind, RunRecord, SequenceRef};
 use charliebot_store::{CreateTask, SharedChatEvent, Store, StoreError, StoreResult, TaskCaller, control_events};
@@ -956,7 +956,7 @@ async fn loop_close_verdict(
       json!({
         "branch": format!("origin/{base}"),
         "commit": commit,
-        "repo_path": state.repo_path,
+        (REPO_PATH_FIELD): state.repo_path,
       })
     }),
     None => None,

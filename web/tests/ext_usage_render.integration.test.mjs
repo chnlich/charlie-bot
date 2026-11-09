@@ -465,7 +465,7 @@ test('collapse state stays internally consistent across render and toggle sequen
   _assertCollapseConsistent(harness, expect, 'summary click while expanded is inert');
 });
 
-test('summary worst reading is the max live utilization across all reported windows', () => {
+test('summary keeps one segment per provider at its tightest live reading', () => {
   const { context, strip } = loadExtUsageScript();
   const accounts = {
     'claude:main': _claudePayload({
@@ -503,9 +503,12 @@ test('summary worst reading is the max live utilization across all reported wind
 
   const summary = strip.children[0];
   assert.equal(summary.getAttribute('data-field'), 'summary', 'summary row leads the strip');
-  const lastSegment = summary.children[summary.children.length - 1];
-  assert.equal(lastSegment.getAttribute('data-summary-account'), 'claude:broken',
-      'summary row ends at its last account reading');
+  const segments = summary.children.filter((c) => c.getAttribute('data-summary-account') !== null);
+  assert.deepEqual(segments.map((c) => c.getAttribute('data-summary-account')),
+      ['codex:main', 'claude:main'],
+      'one segment per provider: the 96% Codex account first, the 51% Claude account second');
+  assert.equal(segments[segments.length - 1].getAttribute('data-summary-account'), 'claude:main',
+      'summary row ends at its last provider reading');
   assert.equal(_field(summary, 'summary-chevron'), null,
       'summary row draws no second disclosure arrow beside the floating chip');
 
@@ -524,7 +527,9 @@ test('summary worst reading is the max live utilization across all reported wind
         'committed tailwind.css carries .' + textClass + ' — the summary colour must exist in the build');
   }
 
-  for (const [key, providerData] of Object.entries(accounts)) {
+  // Codex keeps its live 96%; the expired 96%, the 12% and the states are
+  // folded into the count. Claude keeps its live 51%, not the error account.
+  for (const [key, wantPct, wantCount] of [['codex:main', 96, '×6'], ['claude:main', 51, '×2']]) {
     const seg = _walk(summary, _byAttr('data-summary-account', key));
     assert.ok(seg, key + ': summary segment rendered');
     const detailRow = _rowByKey(strip, key);
@@ -533,38 +538,26 @@ test('summary worst reading is the max live utilization across all reported wind
     assert.ok(pill && detailPill, key + ': both rows carry a provider pill');
     assert.equal(pill.textContent, detailPill.textContent, key + ': summary pill matches the detail pill');
     const pctEl = _field(seg, 'summary-pct');
-    assert.ok(pctEl, key + ': summary reading element rendered');
+    assert.equal(pctEl.textContent, wantPct + '%', key + ': summary shows the provider\'s tightest live reading');
+    const wantColor = TEXT_BY_BAR_COLOR[context._barColor(wantPct)];
+    assert.ok(wantColor, key + ': _barColor(' + wantPct + ') has a text sibling');
+    assert.ok(pctEl.classList.contains(wantColor),
+        key + ': summary colour tracks _barColor(' + wantPct + ')');
+    assert.equal(_field(seg, 'summary-count').textContent, wantCount, key + ': segment counts its accounts');
+  }
 
-    // Independently recompute the expectation straight from the payload.
-    let wantText;
-    let wantPct = null;
-    if (providerData.pending) {
-      wantText = 'loading';
-    } else if (providerData.error) {
-      wantText = 'error';
-    } else if (!Array.isArray(providerData.windows) || providerData.windows.length === 0) {
-      wantText = 'no cap';
-    } else {
-      const live = providerData.windows.filter((win) => {
-        if (typeof win.utilization !== 'number' || !Number.isFinite(win.utilization)) return false;
-        return win.expired !== true;
-      });
-      if (live.length === 0) {
-        wantText = '—';
-      } else {
-        wantPct = Math.round(Math.max(...live.map((win) => win.utilization)));
-        wantText = wantPct + '%';
-      }
-    }
-    assert.equal(pctEl.textContent, wantText, key + ': summary reading recomputed from the payload');
-    if (wantPct === null) {
-      assert.ok(pctEl.classList.contains('text-slate-400'), key + ': special state reads at 6:1, not 3:1');
-    } else {
-      const wantColor = TEXT_BY_BAR_COLOR[context._barColor(wantPct)];
-      assert.ok(wantColor, key + ': _barColor(' + wantPct + ') has a text sibling');
-      assert.ok(pctEl.classList.contains(wantColor),
-          key + ': summary colour tracks _barColor(' + wantPct + ')');
-    }
+  // The readings the summary folded away stay in the opened strip: one row per
+  // account, each showing its own reading.
+  for (const [key, text] of [
+    ['codex:rolled', '12%'],
+    ['codex:unknown', '?'],
+    ['codex:expired', '—'],
+    ['codex:loading', 'loading'],
+    ['claude:broken', 'credentials not found'],
+  ]) {
+    const detailRow = _rowByKey(strip, key);
+    assert.ok(detailRow, key + ': detail row rendered');
+    assert.ok(_walk(detailRow, (el) => el.textContent === text), key + ': reading stays on its own row');
   }
 });
 

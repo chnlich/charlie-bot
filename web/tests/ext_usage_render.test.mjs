@@ -432,6 +432,82 @@ test('renderExtUsage shows a dash for metered credits without a balance', () => 
   assert.equal(_field(summarySeg, 'summary-pct').textContent, 'cr \u2014');
 });
 
+// The collapsed summary merges one segment per provider. The account with the
+// highest percentage keeps the segment and \u00d7N counts the accounts it stands
+// for; segments run tightest percentage first, then readings without one.
+test('renderExtUsage merges the collapsed summary into one segment per provider', () => {
+  const { context, strip } = loadExtUsageScript();
+  const week = (utilization) => [{ window_minutes: 10080, utilization: utilization, resets_at: _iso(3 * DAY) }];
+
+  context.renderExtUsage({
+    providers: {
+      // Payload order is deliberately not the reading order.
+      'claude:main': _claudePayload({ account: 'main', windows: week(62.0) }),
+      'devin:main': {
+        provider: 'devin', provider_label: 'Devin', account: 'main', plan_type: 'Pro',
+        windows: [{ window_minutes: 1440, utilization: 0, resets_at: _iso(HOUR) }],
+      },
+      'claude:ext-2': _claudePayload({ account: 'ext-2', windows: week(60.0) }),
+      'codex:main': _codexPayload({ windows: [], credits: { unlimited: false, balance: 692 }, plan_type: 'ent26' }),
+      'claude:ext-1': _claudePayload({ account: 'ext-1', windows: week(71.0) }),
+      'opencode:main': {
+        provider: 'opencode', provider_label: 'OpenCode Go', account: 'main', error: 'credentials not found',
+      },
+    },
+  });
+
+  const summary = strip.children[0];
+  const segments = summary.children.filter((c) => c.getAttribute('data-summary-account') !== null);
+  assert.deepEqual(segments.map((c) => c.getAttribute('data-summary-account')),
+      ['claude:ext-1', 'devin:main', 'codex:main', 'opencode:main'],
+      'segments run by percentage, tightest first, then the readings without a percentage');
+
+  const [claude, devin, codex, opencode] = segments;
+  assert.equal(_field(claude, 'summary-pct').textContent, '71%', 'the tightest Claude account keeps the segment');
+  assert.ok(_walk(claude, (el) => el.textContent === 'ext-1'), 'the kept account is named');
+  assert.equal(_field(claude, 'summary-count').textContent, '\u00d73', 'the Claude segment counts its three accounts');
+  assert.equal(_field(devin, 'summary-count'), null, 'a single-account segment carries no count');
+  assert.equal(_field(devin, 'summary-pct').textContent, '0% \u00b7 Pro', 'a 0% reading is still a percentage');
+  assert.equal(_field(codex, 'summary-pct').textContent, 'cr 692 \u00b7 ent26', 'credits follow the percentages');
+  assert.equal(_field(opencode, 'summary-pct').textContent, 'error', 'an error state follows the percentages');
+
+  // Every account keeps its own row in the opened strip.
+  for (const key of ['claude:main', 'claude:ext-1', 'claude:ext-2', 'devin:main', 'codex:main', 'opencode:main']) {
+    assert.ok(_rowByKey(strip, key), key + ' keeps its own detail row');
+  }
+});
+
+// A tie keeps payload order, and a provider whose accounts all lack a
+// percentage keeps the payload's first account.
+test('renderExtUsage keeps payload order on ties and for providers without a percentage', () => {
+  const { context, strip } = loadExtUsageScript();
+  const half = [{ window_minutes: 10080, utilization: 50.0, resets_at: _iso(3 * DAY) }];
+
+  context.renderExtUsage({
+    providers: {
+      'claude:second': _claudePayload({ account: 'second', windows: half }),
+      'claude:first': _claudePayload({ account: 'first', windows: half }),
+      'devin:main': {
+        provider: 'devin', provider_label: 'Devin', account: 'main',
+        windows: [{ window_minutes: 1440, utilization: 50.0, resets_at: _iso(HOUR) }],
+      },
+      'codex:b': _codexPayload({ account: 'b', windows: [] }),
+      'codex:a': _codexPayload({ account: 'a', windows: [] }),
+    },
+  });
+
+  const summary = strip.children[0];
+  const segments = summary.children.filter((c) => c.getAttribute('data-summary-account') !== null);
+  assert.deepEqual(segments.map((c) => c.getAttribute('data-summary-account')),
+      ['claude:second', 'devin:main', 'codex:b'],
+      'equal percentages keep payload order; the no-percentage provider follows them');
+  assert.equal(_field(segments[0], 'summary-count').textContent, '\u00d72',
+      'the first Claude account stands for both');
+  assert.equal(_field(segments[2], 'summary-pct').textContent, 'no cap');
+  assert.equal(_field(segments[2], 'summary-count').textContent, '\u00d72',
+      'the first Codex account stands for both');
+});
+
 test('renderExtUsage keeps the unlimited badge and no-cap marker for unlimited credits', () => {
   const { context, strip } = loadExtUsageScript();
 

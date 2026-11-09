@@ -457,12 +457,44 @@ function _summaryReading(providerData) {
   return { text: pct + '%' + plan, pct: pct };
 }
 
+// One segment per provider for the collapsed summary. The account with the
+// highest _summaryReading percentage keeps the segment; a provider without a
+// percentage keeps its first account's credit or state reading. Segments run
+// tightest percentage first, then the readings without a percentage in payload
+// order. A segment standing for several accounts carries ×N after its name.
+function _summarySegments(providers) {
+  const groups = new Map();
+  for (const [key, providerData] of Object.entries(providers)) {
+    const provider = providerData.provider || key;
+    if (!groups.has(provider)) groups.set(provider, []);
+    groups.get(provider).push({key: key, providerData: providerData, reading: _summaryReading(providerData)});
+  }
+  const segments = [];
+  for (const accounts of groups.values()) {
+    let kept = accounts[0];
+    for (const account of accounts) {
+      if (account.reading.pct === null) continue;
+      if (kept.reading.pct === null || account.reading.pct > kept.reading.pct) kept = account;
+    }
+    segments.push({key: kept.key, providerData: kept.providerData, reading: kept.reading, count: accounts.length});
+  }
+  // Array#sort is stable, so a tie and the state segments keep payload order.
+  segments.sort((a, b) => {
+    if (a.reading.pct === null && b.reading.pct === null) return 0;
+    if (a.reading.pct === null) return 1;
+    if (b.reading.pct === null) return -1;
+    return b.reading.pct - a.reading.pct;
+  });
+  return segments;
+}
+
 // Summary row: the strip's first child on every render with providers, shown
 // only in collapsed state (CSS keys off the strip's .collapsed class). One
-// segment per account — provider pill + account name + worst reading. The
-// floating collapse chip carries the strip's one disclosure glyph, so the row
-// ends at its last reading rather than repeating a second arrow beside the
-// chip. Clicking anywhere on the row expands the strip.
+// segment per provider — provider pill + the kept account name + ×N when the
+// segment stands for several accounts + its reading. The floating collapse chip
+// carries the strip's one disclosure glyph, so the row ends at its last reading
+// rather than repeating a second arrow beside the chip. Clicking anywhere on
+// the row expands the strip.
 function _buildSummaryRow(providers) {
   const row = _el('div', 'flex items-center gap-1.5');
   row.setAttribute('data-field', 'summary');
@@ -470,7 +502,7 @@ function _buildSummaryRow(providers) {
     if (_extUsageCollapsed) _setExtUsageCollapsed(false);
   });
   let first = true;
-  for (const [key, providerData] of Object.entries(providers)) {
+  for (const segment of _summarySegments(providers)) {
     if (!first) {
       // The account boundary in the collapsed summary. slate-400 renders 6.0:1 on the
       // strip; slate-700's 1.48:1 hides the dot and runs two accounts into one phrase.
@@ -480,12 +512,18 @@ function _buildSummaryRow(providers) {
     }
     first = false;
     const seg = _el('span', 'inline-flex items-center gap-1.5');
-    seg.setAttribute('data-summary-account', key);
-    seg.appendChild(_providerPill(providerData));
+    seg.setAttribute('data-summary-account', segment.key);
+    seg.appendChild(_providerPill(segment.providerData));
     const name = _el('span', 'text-slate-300 font-medium');
-    name.textContent = providerData.account || key;
+    name.textContent = segment.providerData.account || segment.key;
     seg.appendChild(name);
-    const reading = _summaryReading(providerData);
+    if (segment.count > 1) {
+      const countEl = _el('span', 'text-slate-400');
+      countEl.setAttribute('data-field', 'summary-count');
+      countEl.textContent = '×' + segment.count;
+      seg.appendChild(countEl);
+    }
+    const reading = segment.reading;
     // A reading without a percentage is text, not a demoted number. The state words
     // ("loading", "error"), "no cap", a credit balance and the unknown-credit dash
     // all take this branch. On the strip, slate-400 renders 6.0:1, where slate-500

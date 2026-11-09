@@ -26,11 +26,11 @@
        keeps the file's identity on the row above and hands the row to the diff content. */
     .d2h-file-header { display: none; }
     /* diff2html paints each hunk header and every line number at rgba(0, 0, 0, 0.3): 2.10:1 on
-       the hunk's #f8fafd row and 2.11:1 on the white context rows, under the 4.5:1 floor for
-       their 13 px text. The reader needs the header to know which lines a hunk covers and the
-       numbers to name a line. #475569 draws 7.25:1 on the hunk row and 7.58:1 on white, and it
-       stays above 6:1 on the added and removed rows' tints. A hunk header owns .d2h-info in both
-       layouts; line numbers are .d2h-code-linenumber when line-by-line and
+       the hunk's #f8fafd row and 2.11:1 on the white context rows. Both ratios fall short of the
+       4.5:1 floor for their 13 px text. The reader needs the header to know which lines a hunk
+       covers and the numbers to name a line. #475569 draws 7.25:1 on the hunk row and 7.58:1 on
+       white, and it stays above 6:1 on the added and removed rows' tints. A hunk header owns
+       .d2h-info in both layouts; line numbers are .d2h-code-linenumber when line-by-line and
        .d2h-code-side-linenumber when side-by-side, and their .line-num1 and .line-num2 spans
        take the cell's tone. */
     .d2h-wrapper .d2h-info,
@@ -44,7 +44,7 @@
     .back-link { min-height: 24px; }
     /* A phone cannot hold a file row on one line, so it becomes a grid. The status, the file name and
        the counts share the first line, and a path with a directory puts it on the second line under
-       the name. A file at the repository root has no second line to draw, so its row keeps one line
+       the name. A file at the repository root has no second line to draw. Its row keeps one line,
        where the old two-line grid spent a line on the counts alone. The name wraps rather than being
        cut off, and the counts keep their fixed pair so the figures stay in one column of the list.
        The same rule as Tailwind's max-sm, the width the row's utilities use. */

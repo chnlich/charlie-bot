@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Builds web/static/css/tailwind.css from web/tailwind.config.js via the Tailwind CLI.
+# Builds the two committed Tailwind stylesheets via the Tailwind CLI:
+#   web/static/css/tailwind.css         the app pages, from web/tailwind.config.js
+#   web/static/css/events-tailwind.css  the events viewer, from web/tailwind.events.config.js
 # Idempotent: safe to rerun any time the templates/JS class usage changes.
-# Usage: build-css.sh [output-path]  (default: web/static/css/tailwind.css)
 set -euo pipefail
 
 # Resolve paths relative to this script so the build works from any cwd.
@@ -32,12 +33,11 @@ cat > "$ENTRY_CSS" <<'CSS'
 @tailwind utilities;
 CSS
 
-OUT_CSS="${1:-$WEB_DIR/static/css/tailwind.css}"
-mkdir -p "$(dirname "$OUT_CSS")"
+build_sheet() {
+  local config=$1 output=$2
+  npx tailwindcss --config "$WEB_DIR/$config" --input "$ENTRY_CSS" --output "$WEB_DIR/$output"
+  echo "Built $WEB_DIR/$output"
+}
 
-npx tailwindcss \
-  --config "$WEB_DIR/tailwind.config.js" \
-  --input "$ENTRY_CSS" \
-  --output "$OUT_CSS"
-
-echo "Built $OUT_CSS"
+build_sheet tailwind.config.js static/css/tailwind.css
+build_sheet tailwind.events.config.js static/css/events-tailwind.css

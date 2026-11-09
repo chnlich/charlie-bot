@@ -25,7 +25,9 @@ use charliebot_core::repo_root::RepoRoot;
 use charliebot_core::str_methods::take_chars;
 use charliebot_registry::sequence::SequenceTree;
 use charliebot_store::compact::CompactValue;
-use charliebot_store::metadata::{REPO_PATH_FIELD, SessionMetadata, TaskApprover, TaskProfile, TaskSpec, TaskType};
+use charliebot_store::metadata::{
+  BASE_BRANCH_FIELD, REPO_PATH_FIELD, SessionMetadata, TaskApprover, TaskProfile, TaskSpec, TaskType,
+};
 use charliebot_store::run_logs;
 use charliebot_store::run_records::{RUN_EVENTS_NAME, RunKind, RunRecord, SequenceRef};
 use charliebot_store::{CreateTask, SharedChatEvent, Store, StoreError, StoreResult, TaskCaller, control_events};
@@ -560,7 +562,7 @@ async fn run_loop(
     payload.insert("blocked_summary".to_string(), json!(take_chars(summary, 500)));
   }
   payload.insert("work_branch".to_string(), json!(work_branch));
-  payload.insert("base_branch".to_string(), json!(base_branch));
+  payload.insert(BASE_BRANCH_FIELD.to_string(), json!(base_branch));
   if let Some(merge) = merge_result {
     payload.insert("merge_result".to_string(), merge);
   }

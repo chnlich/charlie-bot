@@ -1128,6 +1128,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
            for a run record.",
   },
   OwnerRow {
+    name: "base_branch",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::BASE_BRANCH_FIELD`.",
+  },
+  OwnerRow {
     name: "worktree_path",
     owner: "runtime/store",
     hint: "Use `charliebot_store::run_records::OBSERVATION_WORKTREE_PATH`.",

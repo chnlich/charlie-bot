@@ -9,7 +9,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use charliebot_core::event_types::{INPUT_EVENT_IDS, RUN_FINISHED, TASK_CLOSED, TASK_CREATED};
 use charliebot_store::layout;
-use charliebot_store::metadata::{HAS_UNREAD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD};
+use charliebot_store::metadata::{BASE_BRANCH_FIELD, HAS_UNREAD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD};
 use charliebot_store::run_records::{
   OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_MODEL,
   OBSERVATION_NATIVE_SESSION_ID, OBSERVATION_PROMPT_SNAPSHOT_REF, OBSERVATION_RAW_LOG_REF, OBSERVATION_REPO_PATH,
@@ -157,7 +157,7 @@ fn session_meta(session_id: &str, case: &Case, index: usize) -> Value {
       "acceptance": if worker { json!(["The recovery check passes."]) } else { json!([]) },
       "context_refs": [],
       (REPO_PATH_FIELD): null,
-      "base_branch": null,
+      (BASE_BRANCH_FIELD): null,
       "task_type": null,
       (KEEP_WORKTREE_FIELD): false,
       "cold_read": null,

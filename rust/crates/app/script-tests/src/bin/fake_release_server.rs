@@ -80,6 +80,8 @@ struct Behavior {
   reaches_ready: bool,
   /// A top-level key that `--check-config` refuses when config.yaml names it; empty refuses nothing.
   refuses_config_key: String,
+  /// The probe run's error event, written to its event log as the server writes a launch failure; empty writes none.
+  probe_error: String,
 }
 
 /// One run of the probe session, in the order the server created it.
@@ -295,6 +297,7 @@ impl Server {
         return Ok((self.behavior.message_status, json!({"detail": "message refused"})));
       }
       self.lock().runs.push(RunRecord { id: "probe-run".to_string(), state: self.behavior.run_state.clone() });
+      self.write_probe_error()?;
       return Ok((ACCEPTED, json!({(event_types::INPUT_EVENT_ID): "probe-input"})));
     }
     if method == "GET" && RUNS_LISTING.is_match(path) {
@@ -312,6 +315,19 @@ impl Server {
       return Ok(self.archive_probe_session(request));
     }
     Ok((404, json!({"detail": "not found"})))
+  }
+
+  /// The probe run's error event, when the behavior names one: the run's log is where the server writes a failure.
+  fn write_probe_error(&self) -> io::Result<()> {
+    if self.behavior.probe_error.is_empty() {
+      return Ok(());
+    }
+    let run_dir = layout::runs_dir(&sessions_dir_in(&self.home).join(PROBE_SESSION)).join("probe-run");
+    fs::create_dir_all(&run_dir)?;
+    fs::write(
+      run_dir.join(RUN_EVENTS_NAME),
+      event_line(&json!({"type": "error", "message": self.behavior.probe_error})),
+    )
   }
 
   fn log_call(&self, method: &str, path: &str) -> io::Result<()> {

@@ -7,7 +7,7 @@
 # and scope, and checks that every switched-on session-weight switch (server.enable_session_cpu_weight,
 # server.enable_session_io_weight, read through the release's `charliebot switch-helper`) has its controller in the
 # agents slice's cgroup.controllers. The check runs before the install below, so the target's units must already be
-# installed: scripts/release.sh installs them ahead of its trial and rehearsal. It refuses a clone with local changes
+# installed: scripts/release.sh installs them ahead of its install stage. It refuses a clone with local changes
 # and a target commit that a fetch does not bring. Its scan refuses a restart while an improve loop's controller still
 # runs in the server: the loop's active lock is present and the server pid its state names is live, whatever status the
 # state file holds — `charliebot improve stop` writes `stopped` while the current iteration keeps running. Its last
@@ -15,17 +15,33 @@
 # the commit that release starts on: the target's own commit, and the old release on OLD_SHA, the clone's commit, since
 # the clone holds the old commit until the move. The switch then stops the old server, moves the clone with
 # `git reset --keep <commit>` (forward or back), installs the target commit's slice units with
-# scripts/install-slice-units.sh and reloads the user manager, starts the release and reads it back. A refusal changes
-# nothing and exits 1 with the refusing release's text, except that a missing helper binary exits 2 (below). The switch
+# scripts/install-slice-units.sh and reloads the user manager, starts the release, reads it back, probes a turn and
+# checks a delegation. A refusal changes nothing and exits 1 with the refusing release's text, except that a missing
+# helper binary exits 2 (below). The switch
 # runs detached under setsid, because stopping the old server ends the master turn that started this command. The
 # command prints the log path, waits for the verdict and exits with it: 0 when the readback, the probe turn and the
-# delegation check passed; 2 when the switch failed and the previous implementation serves again; 3 when the restore
-# failed too, and the log ends with the state the server is in, and with the old release's refusal text when that is
-# the cause; 4 when the switch completed but a recorded run died during it: the new server keeps serving, nothing is
-# restored, and the log names the run and its outcome; 5 when a check failed and the old release refuses the home while
-# the new release serves: nothing is stopped, the new release keeps serving, and the log names the failed step and the
-# refusal text. When the pane stays busy after Ctrl-C, the restore sends SIGTERM, then SIGKILL, to the server processes
-# under the pane.
+# delegation check passed; 2 when a check failed on the server's side and the switch switched back, so the previous
+# implementation serves again; 3 when the switch back failed too, and the log ends with the state the server is in, and
+# with the old release's refusal text when that is the cause; 4 when the switch completed but a recorded run died
+# during it: the new server keeps serving, nothing is switched back, and the log names the run and its outcome; 5 when
+# the switch back found that the old release refuses the home while the new release serves: the new release keeps
+# serving, and the log names the failed step and the refusal text; 6 when the probe turn or the delegation check failed
+# on the model's side after one retry: the new release keeps serving and the log names the check and the model's error.
+#
+# The checks that need a model run after the readback, on the new server and the production home, so the release path
+# ends at server_ready: the probe turn and the delegation check. Each wait is bounded from the measured times (see
+# PROBE_WAIT_S and DELEGATION_WAIT_S below). A check that fails because the model service or the gateway failed —
+# their error text names a 5xx, a rate limit or an overloaded service — is a model-side failure: it is retried once,
+# and a second such failure keeps the new release serving and exits 6, which leaves the decision to the release's
+# operator. A check that fails any other way is a server-side failure, and the switch switches back. A check that hangs
+# fails the same way, on its wait's bound.
+#
+# The switch back runs the forward path's own steps with the previous release as the target: it stops the new release,
+# moves the clone and `current` back, installs the previous release's slice units, starts it, and reads back every run
+# it recorded before the forward switch. It skips the disk-read gate, which guards a cold start's reads and is the one
+# preflight step a switch back does not need. Before it stops the new release it runs the previous release's
+# --check-config on the home as it stands; when the previous release refuses the home, the new release keeps serving and
+# the switch exits 5.
 #
 # Every read of the home, of a run record and of an API answer goes through
 # `charliebot switch-helper` (rust/crates/app/switch-helper). The binary is chosen once, when the switch starts: the
@@ -56,8 +72,8 @@
 # CHARLIEBOT_LOG_DIR (default /tmp/charliebot-logs), CHARLIEBOT_TMUX_SOCKET (a tmux -L socket; unset means the default
 # server, where the production pane runs). CHARLIEBOT_SWITCH_CTRL_C_WAIT_S, CHARLIEBOT_SWITCH_STOP_WAIT_S and
 # CHARLIEBOT_SWITCH_READY_WAIT_S replace the 60 s, 60 s and 15 min waits. CHARLIEBOT_SWITCH_PROBE_WAIT_S and
-# CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S replace the 300 s and 60 s probe waits.
-# CHARLIEBOT_SWITCH_DELEGATION_WAIT_S replaces the 300 s delegation wait. The tests shorten the stop, ready, probe and
+# CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S replace the 30 s and 60 s probe waits.
+# CHARLIEBOT_SWITCH_DELEGATION_WAIT_S replaces the 80 s delegation wait. The tests shorten the stop, ready, probe and
 # delegation waits. CHARLIEBOT_SWITCH_DISK_QUIET_MB, CHARLIEBOT_SWITCH_DISK_WAIT_S and
 # CHARLIEBOT_SWITCH_DISK_SAMPLE_S replace the disk preflight's 40 MB/s threshold, 15 min bound and 10 s sample window;
 # CHARLIEBOT_SWITCH_DISKSTATS, CHARLIEBOT_SWITCH_MOUNTINFO, CHARLIEBOT_SWITCH_CGROUP_ROOT and CHARLIEBOT_SWITCH_PROC
@@ -67,12 +83,10 @@
 # CHARLIEBOT_SYSTEMD_USER_DIR replaces the user manager's unit directory the slice units install into.
 #
 # The host release lock: one lock file per host, outside the repository, named once by scripts/release/lock.sh. The
-# lock covers the switch from its preflight to its exit, the restore path included, so a release and a switch of one
+# lock covers the switch from its preflight to its exit, the switch-back included, so a release and a switch of one
 # host run one at a time. A caller that finds the lock held exits 1 at once and prints the holder's record — script,
 # commit, pid and start time — read from beside the lock; a holder that died left the lock free, because the lock is
-# `flock` on an open descriptor. A switch that the release flow starts while scripts/release.sh still holds the lock
-# — the rehearsal's switches do — inherits the flow's descriptor through CHARLIEBOT_RELEASE_LOCK_FD and takes
-# nothing of its own, so it does not deadlock on its caller's lock.
+# `flock` on an open descriptor.
 #
 # The disk preflight reads files only. It samples the root disk's read rate and waits while the rate stays above the
 # threshold, up to the bound, logging why it waits. A quiet disk proceeds at once. On timeout the switch exits 1 with
@@ -81,6 +95,8 @@
 # the new server is ready. The threshold and bound are the 40 MB/s and 15 min the switch runbook has used live: the
 # findings' 20 MB/s over 60 s sits inside the quiet tail of the 2026-10-29 incident (0.1-25 MB/s), where it would keep
 # waiting after the reader ended, while 40 MB/s leaves at least 85 MB/s of the 125 MB/s volume for the boot's reads.
+# A switch back skips the gate: the previous release starts from a page cache the new release's start has just filled,
+# and the gate's bound would otherwise hold a switch back for up to its 15 minutes.
 # A dry run of these readings, with no switch: source this file with any 40-hex commit and call `dry_run_disk`.
 set -uo pipefail
 
@@ -105,7 +121,7 @@ export CHARLIEBOT_REPO_ROOT="$REPO_ROOT"
 # lock, and a sourced copy reaches none of it.
 . "$SCRIPT_DIR/release/lock.sh"
 # The slice-unit install this switch calls. switch_forward points this at a copy outside the checkout, because the
-# clone moves to a rollback target whose checkout may predate the owner.
+# clone moves to a switch-back target whose checkout may predate the owner.
 SLICE_INSTALL="$SCRIPT_DIR/install-slice-units.sh"
 HOME_DIR="${CHARLIEBOT_HOME:-$HOME/.charliebot}"
 RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
@@ -114,11 +130,16 @@ CURRENT="$RELEASES_DIR/current"
 CTRL_C_WAIT_S="${CHARLIEBOT_SWITCH_CTRL_C_WAIT_S:-60}"
 STOP_WAIT_S="${CHARLIEBOT_SWITCH_STOP_WAIT_S:-60}"
 READY_WAIT_S="${CHARLIEBOT_SWITCH_READY_WAIT_S:-900}"
-PROBE_WAIT_S="${CHARLIEBOT_SWITCH_PROBE_WAIT_S:-300}"
+# The probe turn's wait for its run's first output. It was 300 s, longer than any check the switch runs. The measured
+# turns since 2026-10-30 took 8.7 s at the median and 10.0 s at p90 (findings.md §1); 30 s is three times the p90, so a
+# slow model call passes and a hung turn fails the check.
+PROBE_WAIT_S="${CHARLIEBOT_SWITCH_PROBE_WAIT_S:-30}"
 PROBE_CANCEL_WAIT_S="${CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S:-60}"
-# The delegation check's wait for its run. A release rehearsal of 2026-10-27 on a clone of this repository passed the
-# check in 14 s and 16 s; 300 s leaves room for a slower host.
-DELEGATION_WAIT_S="${CHARLIEBOT_SWITCH_DELEGATION_WAIT_S:-300}"
+# The delegation check's wait for its run. It was 300 s, which held a switch on a hung check for five minutes. The
+# measured checks since 2026-10-30 took 9.3 s at the median, 13.4 s at p90 and 65.6 s at their longest (findings.md
+# §1); 80 s leaves the longest about 14 s of room. With the probe's bound, a release whose checks both hang is switched
+# back about 2 minutes after server_ready: 30 s + 80 s of waits and the switch back's stop, start and readback.
+DELEGATION_WAIT_S="${CHARLIEBOT_SWITCH_DELEGATION_WAIT_S:-80}"
 # The disk preflight. The threshold and bound are the values the switch runbook has used live; the sample window
 # follows one boot's cold-read burst, about 36 s, so a sample responds within it.
 DISK_QUIET_MB="${CHARLIEBOT_SWITCH_DISK_QUIET_MB:-40}"
@@ -152,7 +173,9 @@ case "$MODE" in
 esac
 PANE=""
 DETACHED_LOG=""
-DIED_RUNS=0   # no restore can recover an ended run, so keep count until the switch exits 4
+DIED_RUNS=0   # no switch back can recover an ended run, so keep count until the switch exits 4
+OLD_STOPPED=0 # the server that served the port before the switch has stopped
+BACK=0        # the switch is running its switch-back path
 while [ $# -gt 0 ]; do
   case "$1" in
     --pane) [ $# -ge 2 ] || usage; PANE=$2; shift 2 ;;
@@ -172,6 +195,9 @@ lab_mark() {
 }
 
 RELEASE_DIR="$RELEASES_DIR/$TARGET_SHA"
+# TARGET_RELEASE names the release directory of the target. A forward switch's target is its own commit; a switch back
+# targets the directory `current` named before the switch, whose name need not be the commit it starts on.
+TARGET_RELEASE="$TARGET_SHA"
 HELPER_BIN=""   # the release's `charliebot`, chosen by helper_binary below
 
 # supports_switch_helper BIN: the binary exists and carries the reads the script calls: the subcommand group, and
@@ -361,7 +387,6 @@ start_in_pane() {
   OLD_SIZE="$(stat -c %s "$OLD_LOG" 2> /dev/null || echo 0)"
   tm send-keys -t "$PANE" -X cancel 2> /dev/null || true   # copy mode would swallow the command
   tm send-keys -t "$PANE" C-u "$(launch_command)" Enter || return 1
-  NEW_STARTED=1
 }
 
 # new_output: this launch's output so far.
@@ -414,7 +439,7 @@ run_process_ended() {
 # adopted: every live run recorded before the stop is accounted for by this launch's recovery. A run whose process still
 # runs must have a task_recovery_resume line. A run whose process has ended needs its recorded outcome: a run's process
 # survives a server stop by design, so an ended run died during the switch unless it completed on its own. A death is
-# logged and counted in DIED_RUNS without failing the readback: no restore can adopt an ended run, so switch_forward
+# logged and counted in DIED_RUNS without failing the readback: no switch back can adopt an ended run, so switch_forward
 # keeps the new server and exits 4.
 adopted() {
   local run_id pid pid_start session_id outcome
@@ -489,6 +514,16 @@ check_log() {
     "elapsed=$((($(check_clock) - CHECK_START) / 1000000))s"
 }
 
+# check_note_model_error STATE: a check's run ended with STATE. When it failed and its last error names a model service
+# failure, the check's failure is a model-side one: it records the error text in CHECK_ERROR and the class in
+# CHECK_MODEL_ERROR, which run_check reads to retry the check once. Any other end leaves the failure to the server.
+check_note_model_error() {
+  [ "$1" = failed ] || return 0
+  CHECK_ERROR="$(run_error "$CHECK_SESSION")"
+  model_side_error "$CHECK_ERROR" && CHECK_MODEL_ERROR=1
+  return 0
+}
+
 # check_settle_failed STUCK: the report the archive step gives when its wait ends before the session settles. The run
 # the step last waited for is named when one is known; with none, the archive itself is what did not finish.
 check_settle_failed() {
@@ -550,6 +585,7 @@ probe_wait_output() {
     fi
     if run_ended "$CHECK_STATE"; then
       check_log "run ended $CHECK_STATE before its first output"
+      check_note_model_error "$CHECK_STATE"
       return 1
     fi
     if [ "$(check_clock)" -ge "$end" ]; then
@@ -711,10 +747,28 @@ delegation_body() {
   helper delegation-body "$CHECK_SESSION" "$REPO_ROOT" "$DELEGATION_TASK"
 }
 
-# run_error: the message of the last error event in the check's run, read from the run's event log. Each line of that
-# log is one JSON object. Empty when the run logged no error.
+# run_error SESSION: the message of the last error event in the check's run, read from the run's event log. Each line of
+# that log is one JSON object. Empty when the run logged no error.
 run_error() {
-  helper run-error "$HOME_DIR" "$DELEG_CHILD" "$CHECK_RUN"
+  helper run-error "$HOME_DIR" "$1" "$CHECK_RUN"
+}
+
+# model_side_error TEXT: TEXT, a run's error message, names a failure of the model service rather than of the server.
+# The measured false alarms since 2026-10-30 were the gateway's 5xx and the model service's errors (a BadGatewayError
+# and Error code: 520, findings.md §2a), and the class the release decision keeps without a switch back is a gateway
+# 5xx, a rate limit or a model-call error. A spawn failure, a cgroup failure and a git timeout name none of these, so
+# they read as the server's.
+model_side_error() {
+  local text
+  text="$(tr '[:upper:]' '[:lower:]' <<<"$1")"
+  case "$text" in
+    *badgatewayerror* | *"bad gateway"* | *internalservererror* | *"internal server error"* | \
+      *ratelimiterror* | *"rate limit"* | *"too many requests"* | *"error code: 429"* | *"error code: 5"* | \
+      *"service unavailable"* | *overloaded*)
+      return 0
+      ;;
+  esac
+  return 1
 }
 
 # delegation_read_first_command: reads the check's run first command from its event log into FIRST_CWD (the init cwd),
@@ -807,7 +861,8 @@ delegation_run() {
   fields="$(newest_run_fields worktree_path repo_path)" || return 1
   IFS=$'\x1f' read -r worktree repo <<<"$fields"
   if [ "$CHECK_STATE" != success ]; then
-    error="$(run_error)"
+    check_note_model_error "$CHECK_STATE"
+    error="$(run_error "$CHECK_SESSION")"
     delegation_fail run "run $CHECK_RUN ended $CHECK_STATE; the server's error: ${error:-none recorded}"
     return 1
   fi
@@ -903,6 +958,28 @@ stop_old() {
   OLD_STOPPED=1
   wait_pane_idle 30 || return 1
   log "old server stopped; pane $PANE is free"
+}
+
+# stop_serving: the step both directions start with. It stops the one server on the port, and a port with no server has
+# nothing to stop: a new release that never bound leaves none, and the switch back still has to start the previous one.
+# The pane must then be free, because the next launch types into it; a launcher that outlives its server gets Ctrl-C.
+stop_serving() {
+  local pids
+  pids="$(listener_pids)"
+  if [ -z "$pids" ]; then
+    log "no server listens on port $PORT; nothing to stop"
+    OLD_STOPPED=1
+  else
+    [ "$(grep -c . <<<"$pids")" -eq 1 ] || die "expected one server listening on port $PORT, found: $(tr '\n' ' ' <<<"$pids")"
+    LISTENER=$pids
+    OLD_IMPL="$(impl_of_pid "$LISTENER")"
+    stop_old || die "the server on port $PORT did not stop"
+  fi
+  if pane_busy; then
+    log "pane $PANE still runs a launcher; Ctrl-C, ${CTRL_C_WAIT_S}s budget"
+    tm send-keys -t "$PANE" C-c
+    wait_pane_idle "$CTRL_C_WAIT_S" || die "the pane's launcher did not exit"
+  fi
 }
 
 # ---- disk preflight: a bounded wait for a quiet root disk, and per-session read records -----------------------------
@@ -1270,7 +1347,7 @@ weight_controller_check() {
 # starts on (web/templates, the agent gh wrapper), and the clone holds the old commit until switch_forward moves it.
 # `git archive` writes nothing into the clone, so its HEAD, index, files and git metadata stay as they are. The check
 # writes no config. The export is removed before the function returns, whether the check accepts or refuses. The
-# callers decide what a refusal means: the preflight stops, and a rollback keeps a serving new release.
+# callers decide what a refusal means: the preflight stops, and a switch back keeps a serving new release.
 config_check() {
   local binary=$1 commit=$2 tree text rc
   tree="$(mktemp -d)" || {
@@ -1312,6 +1389,7 @@ preflight() {
   [ "$(listener_pids | grep -c .)" -eq 1 ] || fail "expected one server listening on port $PORT"
   LISTENER="$(listener_pids)"
   OLD_IMPL="$(impl_of_pid "$LISTENER")"
+  PREV_IMPL=$OLD_IMPL   # the release a switch back starts, kept after the forward move renames OLD_IMPL
   [ "$OLD_IMPL" != unknown ] || fail "pid $LISTENER on port $PORT is not a release binary"
   scan_home || fail "cannot read the run records in $HOME_DIR"
   [ -z "$BLOCKERS" ] || fail "a restart would lose live work: ${BLOCKERS//$'\n'/; }"
@@ -1322,13 +1400,13 @@ preflight() {
     PANE="$(pane_of_pid "$LISTENER")" || fail "no tmux pane runs the server on port $PORT; pass --pane"
   fi
   PANE_PID="$(tm display-message -p -t "$PANE" '#{pane_pid}' 2> /dev/null)" || fail "no tmux pane $PANE"
-  WANT="rust $TARGET_SHA"
+  WANT="rust $TARGET_RELEASE"
   lab_mark gate_start
   wait_for_quiet_disk \
     || fail "the root disk read stayed above ${DISK_QUIET_MB} MB/s within ${DISK_WAIT_S}s;" \
       "the heaviest readers are the lines above"
   lab_mark gate_end
-  # The last step: the target and the old release must both accept the home as it stands, because a rollback starts
+  # The last step: the target and the old release must both accept the home as it stands, because a switch back starts
   # the old release, and the config may have changed since the old server started.
   local refusal
   refusal="$(config_check "$RELEASE_DIR/charliebot-server" "$TARGET_SHA")" \
@@ -1340,71 +1418,11 @@ preflight() {
   log "preflight passed: $OLD_IMPL -> $WANT; clone at $OLD_SHA; pane $PANE; port $PORT"
 }
 
-# server_running PID: PID runs a server, as impl_of_pid names it. A zombie has no argv, so it counts as stopped.
-server_running() {
-  local impl
-  impl="$(impl_of_pid "$1")"
-  [[ "$impl" == rust* ]]
-}
-
-# servers_gone PID...: succeeds once no PID runs a server.
-servers_gone() {
-  local pid
-  for pid in "$@"; do
-    server_running "$pid" && return 1
-  done
-  return 0
-}
-
-# alive_servers PID...: prints the PIDs that still run a server.
-alive_servers() {
-  local pid
-  for pid in "$@"; do
-    if server_running "$pid"; then echo "$pid"; fi
-  done
-}
-
-# signal_servers SIGNAL PID...: sends SIGNAL to each PID that still runs a server, so a recycled PID is never signaled.
-signal_servers() {
-  local sig=$1 pid
-  shift
-  for pid in "$@"; do
-    if server_running "$pid"; then kill "-$sig" "$pid" 2> /dev/null; fi
-  done
-}
-
-# server_pids_under PID: the server processes under PID, one per line, parents before children.
-server_pids_under() {
-  local child
-  for child in $(pgrep -P "$1"); do
-    if server_running "$child"; then echo "$child"; fi
-    server_pids_under "$child"
-  done
-}
-
-# escalate_pane: the pane is busy after Ctrl-C. Each server process under the pane gets SIGTERM and STOP_WAIT_S to exit;
-# each survivor gets SIGKILL and 10 s; the pane must then go idle within 10 s.
-escalate_pane() {
-  local -a pids survivors
-  mapfile -t pids < <(server_pids_under "$PANE_PID")
-  log "pane $PANE is busy after Ctrl-C; server pid(s) under it: ${pids[*]:-none}"
-  log "SIGTERM to pid(s) ${pids[*]:-none}; ${STOP_WAIT_S}s budget"
-  signal_servers TERM "${pids[@]}"
-  if ! poll "$STOP_WAIT_S" servers_gone "${pids[@]}"; then
-    mapfile -t survivors < <(alive_servers "${pids[@]}")
-    log "pid(s) ${survivors[*]} survived SIGTERM; SIGKILL, 10s budget"
-    signal_servers KILL "${survivors[@]}"
-    poll 10 servers_gone "${survivors[@]}"
-  fi
-  wait_pane_idle 10 || return 1
-  log "pane $PANE is idle"
-}
-
-# restore_failed: the state the server is in, then exit 3.
-restore_failed() {
+# back_failed: the switch back failed: the state the server is in, then exit 3.
+back_failed() {
   local head
   head="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2> /dev/null)"
-  log "RESTORE FAILED: $*"
+  log "SWITCH BACK FAILED: $*"
   log "state: listener on port $PORT is $(listener_impl); pane $PANE busy: $(pane_busy && echo yes || echo no)"
   log "state: current -> $(readlink "$CURRENT" 2> /dev/null || echo none); clone HEAD $head"
   log "state: newest server log, last lines:"
@@ -1412,63 +1430,123 @@ restore_failed() {
   exit 3
 }
 
-# new_serving: the new release is the listener on the port and answers the version route. It does not poll: the rollback
-# decides from the state the switch left.
+# new_serving: the new release is the listener on the port and answers the version route. It does not poll: the switch
+# back decides from the state the switch left.
 new_serving() {
   listener_is "$WANT" && version_ok
 }
 
-# restore_config_refused REFUSAL: the old release refuses the home, so the rollback cannot start it. While the new
-# release still serves, nothing is stopped and the switch exits 5. Otherwise the port has no server: the rollback exits 3.
-restore_config_refused() {
-  log "restore: $OLD_IMPL --check-config refuses the home: $1"
+# back_config_refused REFUSAL: the previous release refuses the home, so the switch back cannot start it. While the
+# new release still serves, nothing is stopped and the switch exits 5. Otherwise the port has no server: the switch
+# back exits 3.
+back_config_refused() {
+  log "switch back: $PREV_IMPL --check-config refuses the home: $1"
   if new_serving; then
     log "SWITCH CHECK FAILED, NEW RELEASE KEEPS SERVING: $FAILURE; $WANT serves port $PORT"
     exit 5
   fi
-  restore_failed "$OLD_IMPL --check-config refuses the home: $1"
+  back_failed "$PREV_IMPL --check-config refuses the home: $1"
 }
 
-# restore: put back the clone, the current link and the previous implementation, then exit 2.
-restore() {
-  local refusal
-  log "restoring $OLD_IMPL at $OLD_SHA"
-  if [ "$OLD_STOPPED" = 1 ]; then
-    # The old release starts only after this check, so the check comes before the new release stops.
-    refusal="$(config_check "$RELEASES_DIR/$PREV_CURRENT/charliebot-server" "$OLD_SHA")" \
-      || restore_config_refused "${refusal//$'\n'/; }"
-    log "restore: $OLD_IMPL accepts $HOME_DIR at $OLD_SHA"
-  fi
-  if { [ "$OLD_STOPPED" = 1 ] || [ "$NEW_STARTED" = 1 ]; } && pane_busy; then
-    tm send-keys -t "$PANE" C-c
-    if ! wait_pane_idle "$CTRL_C_WAIT_S"; then
-      escalate_pane || restore_failed "the pane's launcher did not exit after Ctrl-C, SIGTERM or SIGKILL"
+# keep_new CHECK: the model side failed the check on both attempts. The new release keeps serving and the switch exits
+# 6: only the release's operator can tell a bad release from a bad gateway, and a switch back on a false alarm costs a
+# second restart of every live session.
+keep_new() {
+  log "SWITCH KEPT, MODEL CHECK FAILED: $1 failed on both attempts (${CHECK_ERROR:-no error text});" \
+    "$WANT serves port $PORT; clone at $(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+  exit 6
+}
+
+# run_check CHECK: one post-ready check, retried once when its failure is a model-side error. It returns 0 on a pass,
+# and 1 when the check failed on the server's side, which the caller answers with a switch back. A model-side failure
+# gets one retry: the check runs again, and when the retry fails the same way the new release keeps serving (exit 6).
+run_check() {
+  local check=$1 attempt=1
+  while :; do
+    CHECK_MODEL_ERROR=0
+    CHECK_ERROR=""
+    if "$check"; then
+      return 0
     fi
-  fi
-  git -C "$REPO_ROOT" reset --keep -q "$OLD_SHA" || restore_failed "git reset --keep $OLD_SHA failed"
-  set_current "$PREV_CURRENT" || restore_failed "could not put current back"
-  install_slice_units "$OLD_SHA" || restore_failed "the restored release's slice units did not install"
-  if [ "$OLD_STOPPED" = 1 ]; then
-    start_in_pane || restore_failed "could not type the launcher into pane $PANE"
-    wait_ready || restore_failed "the previous implementation did not reach server_ready"
-    serving "$OLD_IMPL" || restore_failed "the previous implementation failed its readback"
-    adopted || restore_failed "the previous implementation did not adopt the live runs"
-  else
-    serving "$OLD_IMPL" || restore_failed "the previous implementation is not serving"
-  fi
-  log "restored: $OLD_IMPL serves port $PORT; clone at $(git -C "$REPO_ROOT" rev-parse --short HEAD)"
-  exit 2
+    if [ "$CHECK_MODEL_ERROR" != 1 ]; then
+      log "$check: the failure is not a model-side error, so the switch switches back"
+      return 1
+    fi
+    if [ "$attempt" -ge 2 ]; then
+      keep_new "$check"
+    fi
+    log "$check: model-side error on attempt $attempt: ${CHECK_ERROR:-no error text}; retrying it once"
+    attempt=$((attempt + 1))
+  done
 }
 
-# die: a step after the switch began failed; the previous state comes back.
+# post_ready_checks: the checks that need a model, after the readback and so after the release path's end. Each failure
+# the server owns switches back here; a model-side failure that survives its retry keeps the new release.
+post_ready_checks() {
+  run_check probe_turn || switch_back "the probe turn failed"
+  run_check delegation_check || switch_back "the delegation check failed"
+}
+
+# switch_move: the steps from a serving server to the target release at a ready server. Both directions run them: stop
+# the serving server, move the clone and `current`, install the target commit's slice units, start it and wait for
+# server_ready. The target's commit is TARGET_SHA and the release directory it starts from is TARGET_RELEASE.
+switch_move() {
+  lab_mark stop_start
+  stop_serving
+  lab_mark stop_end
+  git -C "$REPO_ROOT" reset --keep -q "$TARGET_SHA" || die "git reset --keep $TARGET_SHA failed"
+  set_current "$TARGET_RELEASE" || die "could not point current at $TARGET_RELEASE"
+  install_slice_units "$TARGET_SHA" || die "the slice units of $TARGET_SHA did not install"
+  lab_mark start_start
+  start_in_pane || die "could not type the launcher into pane $PANE"
+  wait_ready || die "the new server did not reach server_ready"
+  lab_mark start_end
+}
+
+# die: a step after the switch began failed. The switch back is the answer, except inside a switch back, whose own
+# failure the switch back reports.
 die() {
   FAILURE="$*"
   log "step failed: $*"
-  restore
+  if [ "$BACK" = 1 ]; then
+    back_failed "$*"
+  fi
+  switch_back "$*"
+}
+
+# switch_back STEP: the failure path. It runs the forward path's own steps to the release `current` named before the
+# switch, at OLD_SHA, and skips the disk-read gate: the gate guards a start's cold reads, and the previous release's
+# start follows the new one's with the page cache warm. Before the new release stops, the previous release must accept
+# the home as it stands, which is the check a release that would break the switch back fails. The recorded runs are the
+# forward scan's list, and the previous release must adopt every one of them, as the forward direction must.
+switch_back() {
+  local step=$* prev=$PREV_CURRENT prev_sha=$OLD_SHA refusal
+  BACK=1
+  FAILURE=$step
+  log "switch back: $step"
+  if [ "$OLD_STOPPED" = 0 ]; then
+    # The new release never took the port, so the previous one still serves and nothing is switched.
+    log "switch back: nothing changed; $OLD_IMPL still serves port $PORT"
+    exit 2
+  fi
+  [ -n "$prev" ] || back_failed "no release current named before the switch, so there is no release to switch back to"
+  refusal="$(config_check "$RELEASES_DIR/$prev/charliebot-server" "$prev_sha")" \
+    || back_config_refused "${refusal//$'\n'/; }"
+  log "switch back: $PREV_IMPL accepts $HOME_DIR at $prev_sha"
+  TARGET_SHA=$prev_sha
+  TARGET_RELEASE=$prev
+  RELEASE_DIR="$RELEASES_DIR/$prev"
+  WANT="rust $prev"
+  switch_move
+  record_session_reads "after the switch back is ready" || true
+  serving "$WANT" || back_failed "the previous implementation failed its readback"
+  adopted || back_failed "the previous implementation did not adopt the live runs"
+  log "switched back: $WANT serves port $PORT; clone at $(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+  exit 2
 }
 
 switch_forward() {
-  # The clone moves to each install's target first, and a rollback target may predate the owner in its checkout, so
+  # The clone moves to each install's target first, and a switch-back target may predate the owner in its checkout, so
   # every install below runs from a copy outside the checkout.
   cp "$SLICE_INSTALL" "$WORK/install-slice-units.sh" || die "copy the slice-unit install to $WORK"
   SLICE_INSTALL="$WORK/install-slice-units.sh"
@@ -1476,21 +1554,11 @@ switch_forward() {
   [ -z "$BLOCKERS" ] || die "live work appeared after the preflight: ${BLOCKERS//$'\n'/; }"
   log "recorded $(wc -l < "$RUNS_FILE") live run(s) in $RUNS_FILE"
   record_session_reads "before the old server stops" || true
-  lab_mark stop_start
-  stop_old || die "the old server did not stop"
-  lab_mark stop_end
-  git -C "$REPO_ROOT" reset --keep -q "$TARGET_SHA" || die "git reset --keep $TARGET_SHA failed"
-  set_current "$TARGET_SHA" || die "could not point current at $TARGET_SHA"
-  install_slice_units "$TARGET_SHA" || die "the slice units of $TARGET_SHA did not install"
-  lab_mark start_start
-  start_in_pane || die "could not type the launcher into pane $PANE"
-  wait_ready || die "the new server did not reach server_ready"
-  lab_mark start_end
+  switch_move
   record_session_reads "after the new server is ready" || true
   serving "$WANT" || die "the new server failed its readback"
   adopted || die "a live run was not adopted"
-  probe_turn || die "the probe turn failed"
-  delegation_check || die "the delegation check failed"
+  post_ready_checks
   local head
   head="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
   if [ "$DIED_RUNS" -gt 0 ]; then
@@ -1507,12 +1575,7 @@ run_detached() {
   WORK="$(mktemp -d)"
   trap 'rm -rf "$WORK"; release_lock_release' EXIT
   release_lock_take switch-server.sh "$TARGET_SHA" || exit 1
-  if [ -n "$CHARLIEBOT_RELEASE_LOCK_FD" ] && [ "$RELEASE_LOCK_MINE" = 0 ]; then
-    log "the release flow holds the host release lock $RELEASE_LOCK_FILE on descriptor $CHARLIEBOT_RELEASE_LOCK_FD"
-  fi
   RELEASES_REAL="$(readlink -f "$RELEASES_DIR")"
-  OLD_STOPPED=0
-  NEW_STARTED=0
   lab_mark switch_start
   preflight
   lab_mark preflight_end

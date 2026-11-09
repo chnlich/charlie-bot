@@ -1,8 +1,8 @@
 //! The switch command's tests (scripts/switch-server.sh), run for real against stub commands and the stand-in servers.
 //!
 //! Every parametrized case is its own test. Each asserts the
-//! output lines and the exit code: the main module holds the preflight, readback, escalation and pane
-//! tests, `probe` the probe-turn tests, and `delegation` the delegation-check tests and the restore they drive.
+//! output lines and the exit code: the main module holds the preflight, readback and pane tests, `probe` the
+//! probe-turn tests, and `delegation` the delegation-check tests and the switch back they drive.
 
 mod cleanup;
 mod delegation;
@@ -32,8 +32,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use wait_timeout::ChildExt;
 use world::{
-  SESSION, World, fake_charliebot, fake_pane_server, install_release, pid_start, quote, replace_charliebot,
-  repo_switch, sha1_hex, step_target_sha, stop, wait_until, write_behavior,
+  SESSION, World, fake_charliebot, fake_pane_server, install_release, pid_start, quote, replace_charliebot, sha1_hex,
+  stop, wait_until, write_behavior,
 };
 
 // ---- home helper: the config's port -------------------------------------------------------------------------------
@@ -462,36 +462,6 @@ fn test_a_switch_that_finds_the_release_lock_held_refuses_at_once_and_names_the_
   );
 }
 
-#[test]
-#[ignore = "integration"]
-fn test_a_switch_the_release_flow_started_does_not_deadlock_on_its_callers_lock() {
-  let world = World::new();
-  let commit = world.rust_sha.clone();
-  // The caller takes the lock the way release.sh does and hands to the switch on the inherited descriptor, as the
-  // rehearsal's switches run under the release's own.
-  let body = format!(
-    "source \"{0}/scripts/release/lock.sh\" && release_lock_take release.sh \"$1\" \
-     && exec bash \"{1}\" rust \"$1\"",
-    world.clone.display(),
-    world.switch_script().display()
-  );
-  let mut command = harness::command("bash", &world.env);
-  command.args(["-c", body.as_str(), "bash", &commit]);
-  let run = harness::run(&mut command);
-
-  assert!(
-    run.stdout.contains("the release flow holds the host release lock"),
-    "the switch did not run on its caller's lock: {}",
-    run.describe()
-  );
-  assert!(!run.stdout.contains("is held"), "the switch deadlocked on its caller's lock: {}", run.describe());
-  assert!(
-    run.stdout.contains("expected one server listening"),
-    "the switch did not get past its caller's lock: {}",
-    run.describe()
-  );
-}
-
 // ---- preflight: the configuration check reads the target's own commit -------------------------------------------
 
 /// The agent gh wrapper: a file the configuration check requires, which the fixture's old commit lacks.
@@ -607,7 +577,7 @@ fn test_preflight_refuses_when_the_old_release_rejects_the_config_and_stops_noth
 
 #[test]
 #[ignore = "integration"]
-fn test_rollback_keeps_the_serving_new_release_when_the_old_release_rejects_the_config() {
+fn test_switch_back_keeps_the_serving_new_release_when_the_old_release_rejects_the_config() {
   let mut world = World::new();
   world.env.insert("CHARLIEBOT_SWITCH_DELEGATION_WAIT_S".to_string(), "2".to_string());
   let pane = world.start_pane();
@@ -647,13 +617,13 @@ fn test_rollback_keeps_the_serving_new_release_when_the_old_release_rejects_the_
 
 #[test]
 #[ignore = "integration"]
-fn test_rollback_exits_3_without_starting_the_old_release_when_the_old_release_rejects_the_config() {
+fn test_switch_back_exits_3_without_starting_the_old_release_when_the_old_release_rejects_the_config() {
   let world = World::new();
   let pane = world.start_pane();
   world.start_server(&pane);
   let new_sha = world.new_sha.clone();
   write_behavior(&world.releases.join(&world.old_sha), &[("refuses_config_key", json!(UNKNOWN_SECTION))]);
-  // The new release adds the section and exits before server_ready, so no server serves the port when the rollback
+  // The new release adds the section and exits before server_ready, so no server serves the port when the switch
   // checks the old release.
   write_behavior(
     &world.releases.join(&new_sha),
@@ -665,13 +635,13 @@ fn test_rollback_exits_3_without_starting_the_old_release_when_the_old_release_r
   assert_eq!(run.code, 3, "{}", world.report(&run));
   assert!(
     world.report(&run).contains(&format!(
-      "RESTORE FAILED: rust {} --check-config refuses the home: charliebot-server: unknown config key(s) 'github'",
+      "SWITCH BACK FAILED: rust {} --check-config refuses the home: charliebot-server: unknown config key(s) 'github'",
       world.old_sha
     )),
     "{}",
     world.report(&run)
   );
-  // One launch for the server the test started and one for the new release; the rollback started nothing.
+  // One launch for the server the test started and one for the new release; the switch back started nothing.
   world.assert_server_scope_records(2);
   assert!(world.listener_pids().is_empty(), "a server still listens on port {}", world.port);
 }
@@ -1120,69 +1090,7 @@ fn test_a_switch_to_a_release_whose_checkout_predates_the_slice_install_owner_in
   assert_eq!(installed, target_text, "{}", world.report(&run));
 }
 
-// ---- escalation: a server under the pane is stopped by SIGTERM, then SIGKILL --------------------------------------
-
-#[test]
-#[ignore = "integration"]
-fn test_escalation_stops_a_server_under_the_pane_with_sigterm() {
-  let sandbox = Sandbox::new();
-  let releases = sandbox.dir("releases");
-  let mut pane = Pane::start(&sandbox, &releases, "honest");
-  let server = pane.server_under();
-
-  let run = escalate(&sandbox, &releases, pane.pid());
-
-  assert_eq!(run.code, 0, "{}", run.describe());
-  assert!(logged_with(&run.stdout, "SIGTERM", server), "{}", run.describe());
-  assert!(!run.stdout.contains("SIGKILL"), "{}", run.describe());
-  assert_eq!(pane.wait_exit(Duration::from_secs(5)), 0);
-}
-
-#[test]
-#[ignore = "integration"]
-fn test_escalation_sigkills_a_survivor_and_spares_a_server_outside_the_pane() {
-  let sandbox = Sandbox::new();
-  let releases = sandbox.dir("releases");
-  let mut pane = Pane::start(&sandbox, &releases, "stubborn");
-  let server = pane.server_under();
-  let outside = sandbox.dir("outside");
-  harness::copy_file(&fake_pane_server(), &outside.join("charliebot-server"));
-  let env = sandbox.env();
-  let mut bystander_command = harness::command(outside.join("charliebot-server"), &env);
-  bystander_command.arg("honest").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-  let mut bystander = harness::spawn(&mut bystander_command);
-
-  let run = escalate(&sandbox, &releases, pane.pid());
-  let bystander_alive = bystander.try_wait().expect("poll the bystander").is_none();
-  stop(&mut bystander);
-
-  assert!(bystander_alive, "a server outside the pane was signaled");
-  assert_eq!(run.code, 0, "{}", run.describe());
-  assert!(logged_with(&run.stdout, "SIGTERM", server), "{}", run.describe());
-  assert!(logged_with(&run.stdout, "SIGKILL", server), "{}", run.describe());
-  assert_eq!(pane.wait_exit(Duration::from_secs(5)), 0);
-}
-
-/// The escalation step against the pane shell, with a one-second SIGTERM wait.
-fn escalate(sandbox: &Sandbox, releases: &Path, shell_pid: u32) -> Run {
-  // impl_of_pid reads RELEASES_REAL, which run_detached sets; a sourced copy of the script needs it set too.
-  let mut env = sandbox.env();
-  env.insert("PANE".to_string(), "%escalation".to_string());
-  env.insert("PANE_PID".to_string(), shell_pid.to_string());
-  let releases_real = releases.canonicalize().expect("the release root");
-  env.insert("RELEASES_REAL".to_string(), releases_real.display().to_string());
-  env.insert("CHARLIEBOT_SWITCH_STOP_WAIT_S".to_string(), "1".to_string());
-  let snippet = format!("source \"$1\" rust {} && escalate_pane", step_target_sha());
-  let mut command = harness::command("bash", &env);
-  command.args(["-c", snippet.as_str(), "bash"]).arg(repo_switch());
-  harness::run(&mut command)
-}
-
-/// Whether one escalation log line names the signal and the pid it was sent to.
-fn logged_with(output: &str, signal_name: &str, pid: u32) -> bool {
-  let pid_word = Regex::new(&format!(r"\b{pid}\b")).expect("the pid pattern");
-  output.lines().any(|line| line.contains(signal_name) && pid_word.is_match(line))
-}
+// ---- a pane's shell, whose one child is a stand-in server ----------------------------------------------
 
 /// A pane's shell, whose one child is a stand-in server in `mode`. Dropping it kills what is left.
 pub(crate) struct Pane {
@@ -1223,6 +1131,7 @@ impl Pane {
     children_of(&self.env, self.pid())[0]
   }
 
+  #[allow(dead_code)]
   fn wait_exit(&mut self, timeout: Duration) -> i32 {
     let status = self
       .shell
@@ -1387,7 +1296,7 @@ fn test_switch_on_a_real_pane_restores_then_round_trips_then_refuses_at_prefligh
   assert!(world.serves_release(&old_sha), "the old release does not serve");
 
   // An old release that rejects its config is refused by the preflight, before the switch stops anything, so the old
-  // server keeps serving. The rollback's refusal, which leaves the port empty, is exit 3 in its own test.
+  // server keeps serving. The switch back's refusal, which leaves the port empty, is exit 3 in its own test.
   write_behavior(&world.releases.join(&old_sha), &[("check_config", json!("fail"))]);
   write_behavior(&world.releases.join(&new_sha), &[("adopt", json!(false))]);
   let run = world.switch(&["rust", &new_sha]);

@@ -4,6 +4,7 @@
 //! check to leaving no worktree and no branch behind. The delegation wait and the probe cancel wait are one second.
 
 use std::fs;
+use std::path::PathBuf;
 
 use charliebot_shell_harness::Run;
 use serde_json::{Value, json};
@@ -109,8 +110,8 @@ fn test_delegation_times_out_then_stops_the_run_and_removes_its_worktree() {
 
 #[test]
 #[ignore = "integration"]
-fn test_switch_restores_and_exits_2_when_the_delegation_check_fails() {
-  // A failed delegation check takes the path of a failed probe turn, so the switch restores the previous release.
+fn test_switch_switches_back_and_exits_2_when_the_delegation_check_fails_on_the_server_side() {
+  // A failed delegation check takes the path of a failed probe turn, so the switch switches back.
   let mut world = World::new();
   let pid = world.spawn_live();
 
@@ -118,7 +119,7 @@ fn test_switch_restores_and_exits_2_when_the_delegation_check_fails() {
 
   assert_eq!(run.code, 2, "{}", world.report(&run));
   assert!(world.root().join("restored").exists(), "{}", world.report(&run));
-  assert!(run.stdout.contains("switch: step failed: the delegation check failed"), "{}", world.report(&run));
+  assert!(run.stdout.contains("switch back: the delegation check failed"), "{}", world.report(&run));
   assert!(!run.stdout.contains("SWITCH COMPLETE"), "{}", world.report(&run));
 }
 
@@ -143,7 +144,7 @@ fn test_switch_passes_the_delegation_on_the_first_command_while_the_run_still_ru
 
 #[test]
 #[ignore = "integration"]
-fn test_switch_restores_when_the_first_tool_result_is_a_failed_command() {
+fn test_switch_switches_back_when_the_first_tool_result_is_a_failed_command() {
   // A command that errored is not a pass, even though the run goes on; the check fails at its wait's end.
   let mut world = World::new();
   let run = switch_to_new_release(&mut world, &[("task_state", json!("running")), ("first_command", json!("failed"))]);
@@ -162,7 +163,7 @@ fn test_switch_restores_when_the_first_tool_result_is_a_failed_command() {
 
 #[test]
 #[ignore = "integration"]
-fn test_switch_restores_when_the_first_tool_result_is_not_a_command() {
+fn test_switch_switches_back_when_the_first_tool_result_is_not_a_command() {
   // A first tool result from another tool is not a command, so the check does not pass on it either.
   let mut world = World::new();
   let run =
@@ -181,7 +182,7 @@ fn test_switch_restores_when_the_first_tool_result_is_not_a_command() {
 
 #[test]
 #[ignore = "integration"]
-fn test_switch_restores_when_the_run_makes_no_tool_call_and_names_its_backend() {
+fn test_switch_switches_back_when_the_run_makes_no_tool_call_and_names_its_backend() {
   // A worker that never calls a tool leaves its log without a result, so the check names the backend whose log that is.
   let mut world = World::new();
   let run = switch_to_new_release(&mut world, &[("task_state", json!("running")), ("first_command", json!("none"))]);
@@ -196,6 +197,107 @@ fn test_switch_restores_when_the_run_makes_no_tool_call_and_names_its_backend() 
     world.report(&run)
   );
   world.assert_untouched();
+}
+
+/// One gateway failure as a run's error event names it: the class the release decision keeps without a switch back.
+const GATEWAY_ERROR: &str = "litellm.BadGatewayError: Bad Gateway while calling the model endpoint";
+
+/// One agent failure before its model call, as the slice's refusal names it: the server's own class.
+const SPAWN_ERROR: &str =
+  "master_cc_crashed: session cgroup slice charliebot-agents.slice cannot enable cpu for its children";
+
+#[test]
+#[ignore = "integration"]
+fn test_switch_keeps_the_new_release_and_exits_6_when_the_model_fails_the_delegation_twice() {
+  // The delegation run ends failed with a gateway error: a model-side failure. The check is retried once, the retry
+  // fails the same way, and the new release keeps serving with the exit status of its own.
+  let mut world = World::new();
+  let run = switch_to_new_release(
+    &mut world,
+    &[("task_state", json!("failed")), ("worktree", json!("missing")), ("task_error", json!(GATEWAY_ERROR))],
+  );
+
+  assert_eq!(run.code, 6, "{}", world.report(&run));
+  let report = world.report(&run);
+  assert!(
+    report.contains(&format!(
+      "SWITCH KEPT, MODEL CHECK FAILED: delegation_check failed on both attempts ({GATEWAY_ERROR}); rust {} serves \
+       port {}",
+      world.new_sha, world.port
+    )),
+    "{report}"
+  );
+  assert!(report.contains("delegation_check: model-side error on attempt 1"), "{report}");
+  assert_eq!(release_calls(&world, &world.new_sha).iter().filter(|call| **call == DELEGATE).count(), 2, "{report}");
+  assert!(world.serves_release(&world.new_sha), "{report}");
+  assert_eq!(fs::read_link(world.releases.join("current")).expect("current"), PathBuf::from(&world.new_sha));
+  assert_eq!(world.git(&world.clone, &["rev-parse", "HEAD"]), world.new_sha, "{report}");
+  assert_eq!(task_left_behind(&world), Vec::<String>::new(), "{report}");
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_switch_switches_back_when_the_delegation_run_fails_before_its_model_call() {
+  // The same shape of failure with the agent's own error text: the server's class, so the switch switches back.
+  let mut world = World::new();
+  let run = switch_to_new_release(
+    &mut world,
+    &[("task_state", json!("failed")), ("worktree", json!("missing")), ("task_error", json!(SPAWN_ERROR))],
+  );
+
+  assert_eq!(run.code, 2, "{}", world.report(&run));
+  let report = world.report(&run);
+  assert!(report.contains("switch back: the delegation check failed"), "{report}");
+  assert!(report.contains(&format!("switched back: rust {} serves port {}", world.old_sha, world.port)), "{report}");
+  world.assert_untouched();
+  assert_eq!(release_calls(&world, &world.new_sha).iter().filter(|call| **call == DELEGATE).count(), 1, "{report}");
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_switch_keeps_the_new_release_and_exits_6_when_the_probe_fails_on_the_model_side_twice() {
+  // The probe run ends failed with a rate limit: a model-side failure, retried once and then kept and reported.
+  let mut world = World::new();
+  let run = switch_to_new_release(
+    &mut world,
+    &[
+      ("run_state", json!("failed")),
+      ("output", json!("none")),
+      ("probe_error", json!("Error code: 429: rate limited")),
+    ],
+  );
+
+  assert_eq!(run.code, 6, "{}", world.report(&run));
+  let report = world.report(&run);
+  assert!(report.contains("SWITCH KEPT, MODEL CHECK FAILED: probe_turn failed on both attempts"), "{report}");
+  assert!(world.serves_release(&world.new_sha), "{report}");
+  assert_eq!(
+    release_calls(&world, &world.new_sha).iter().filter(|call| **call == "POST /api/sessions/").count(),
+    2,
+    "{report}"
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_switch_switches_back_when_the_probe_run_fails_on_the_server_side() {
+  // The probe run ends failed with no error text, and then with a spawn error: no model service is named, so the
+  // switch treats the failure as the server's and switches back on the first attempt.
+  let mut world = World::new();
+  let run = switch_to_new_release(
+    &mut world,
+    &[("run_state", json!("failed")), ("output", json!("none")), ("probe_error", json!(SPAWN_ERROR))],
+  );
+
+  assert_eq!(run.code, 2, "{}", world.report(&run));
+  assert!(world.report(&run).contains("switch back: the probe turn failed"), "{}", world.report(&run));
+  world.assert_untouched();
+  assert_eq!(
+    release_calls(&world, &world.new_sha).iter().filter(|call| **call == "POST /api/sessions/").count(),
+    1,
+    "{}",
+    world.report(&run)
+  );
 }
 
 #[test]

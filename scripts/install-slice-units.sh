@@ -6,9 +6,8 @@
 # The units are the commit's scripts/systemd/*.slice, read from the commit object, so the checkout that runs this
 # script can sit at another release. The unit directory is CHARLIEBOT_SYSTEMD_USER_DIR, default
 # $HOME/.config/systemd/user. This script is the one place that writes slice units into that directory:
-# scripts/setup.sh, scripts/switch-server.sh, scripts/release.sh, scripts/release/trial.sh and
-# scripts/release/switch-rehearsal.sh call it. The switch calls the copy beside its own script, so the call still
-# finds this script after the checkout moves to a commit that predates it.
+# scripts/setup.sh, scripts/switch-server.sh and scripts/release.sh call it. The switch calls the copy beside its own
+# script, so the call still finds this script after the checkout moves to a commit that predates it.
 #
 # The reload applies the slice properties to the running agents slice without restarting it. A controller that a unit
 # adds (cpu for CPUWeight, io for IOWeight) joins the slice's cgroup.controllers that way.

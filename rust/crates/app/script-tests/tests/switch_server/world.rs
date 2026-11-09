@@ -323,8 +323,8 @@ impl World {
   }
 
   /// The forward path from the scan through the readback to the exit, with its stop, pane, server and probe steps
-  /// stubbed out. `delegation` is the shell command that stands in for the delegation check. A restore touches a
-  /// marker file and exits 2, so a test tells a restore from the switch's own exit.
+  /// stubbed out. `delegation` is the shell command that stands in for the delegation check. A switch back touches a
+  /// marker file and exits 2, so a test tells a switch back from the switch's own exit.
   pub fn switch_forward(&self, run_pid: u32, launch_output: &str, delegation: &str) -> Run {
     let (launch_log, work) = self.launch_files(launch_output);
     let mut env = self.env.clone();
@@ -343,13 +343,14 @@ impl World {
 source "$1" rust "$2"
 REPO_ROOT="$CLONE"
 OLD_IMPL="$3"
-stop_old() { kill -KILL "$RUN_PID"; log "old server stopped"; }
+PREV_IMPL="$3"
+stop_serving() { OLD_STOPPED=1; kill -KILL "$RUN_PID" 2>/dev/null; log "old server stopped"; }
 start_in_pane() { printf 'server-start\n' >> "$SYSTEMCTL_RECORDS"; }
 wait_ready() { :; }
 serving() { :; }
 probe_turn() { :; }
 delegation_check() { $DELEGATION; }
-restore() { touch "$RESTORED"; exit 2; }
+switch_back() { log "switch back: $*"; touch "$RESTORED"; exit 2; }
 switch_forward
 "#;
     let mut command = harness::command("bash", &env);
@@ -887,6 +888,7 @@ fn behavior_defaults() -> Map<String, Value> {
     "adds_config_key": "",
     "reaches_ready": true,
     "refuses_config_key": "",
+    "probe_error": "",
   }) else {
     unreachable!("an object literal");
   };

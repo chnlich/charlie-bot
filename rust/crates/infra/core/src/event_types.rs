@@ -138,6 +138,15 @@ pub const USAGE_OUTPUT_TOKENS: &str = "output_tokens";
 pub const USAGE_CACHE_READ_INPUT_TOKENS: &str = "cache_read_input_tokens";
 pub const USAGE_CACHE_CREATION_INPUT_TOKENS: &str = "cache_creation_input_tokens";
 pub const RESULT_TOTAL_COST_USD: &str = "total_cost_usd";
+/// The native session a result event names: the backend's own session id, such as Claude Code's session or a Codex
+/// thread. Its `total_cost_usd` is that session's running total, so the usage fold counts only the increase.
+pub const NATIVE_SESSION_ID: &str = "session_id";
+/// The `modelUsage` entry field that says how the model's cost was priced.
+pub const COST_BASIS: &str = "costBasis";
+/// The [`COST_BASIS`] value of a model whose cost the backend cannot price.
+pub const COST_BASIS_UNKNOWN: &str = "unknown";
+/// The session usage field that names a cost error: a native session's cumulative reading fell.
+pub const TOTAL_COST_ERROR: &str = "total_cost_error";
 /// The per-model usage table, keyed by model name, that a result event or a cost-state row carries.
 pub const MODEL_USAGE: &str = "modelUsage";
 /// The result event's context snapshot: the model, its context limit and the token counts at the result.

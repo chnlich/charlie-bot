@@ -3483,7 +3483,8 @@
             "cache_read_input_tokens": 400,
             "cache_creation_input_tokens": 0
           },
-          "total_cost_usd": 0.0038
+          "total_cost_usd": 0.0038,
+          "session_id": "synthetic-thread-0001"
         }
       ],
       []
@@ -3532,7 +3533,6 @@
           "context_tokens": 500,
           "context_full": 258400,
           "context_compact_at": 150000,
-          "total_cost_usd": 1.38,
           "model": "gpt-5.5"
         }
       },
@@ -3542,7 +3542,6 @@
           "context_tokens": 500,
           "context_full": 258400,
           "context_compact_at": 150000,
-          "total_cost_usd": 1.38,
           "model": "gpt-5.5"
         }
       },
@@ -3552,7 +3551,6 @@
           "context_tokens": 500,
           "context_full": 258400,
           "context_compact_at": 150000,
-          "total_cost_usd": 1.38,
           "model": "gpt-5.5"
         }
       },
@@ -3566,7 +3564,6 @@
           "context_tokens": 500,
           "context_full": 258400,
           "context_compact_at": null,
-          "total_cost_usd": 1.38,
           "model": "gpt-5.5"
         }
       },
@@ -3576,7 +3573,6 @@
           "context_tokens": 500,
           "context_full": 258400,
           "context_compact_at": null,
-          "total_cost_usd": 1.38,
           "model": "gpt-5.5"
         }
       },
@@ -3586,7 +3582,6 @@
           "context_tokens": 10,
           "context_full": 258400,
           "context_compact_at": 150000,
-          "total_cost_usd": null,
           "model": "unknown-model"
         }
       },
@@ -3600,7 +3595,6 @@
           "context_tokens": 500,
           "context_full": 258400,
           "context_compact_at": 150000,
-          "total_cost_usd": 1.38,
           "model": "gpt-5.5"
         }
       }

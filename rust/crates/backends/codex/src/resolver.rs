@@ -23,7 +23,6 @@ use charliebot_store::metadata::SessionMetadata;
 use serde_json::{Map, Value, json};
 
 use super::options;
-use super::pricing;
 use super::rollout::{self, RolloutUsage, walk_files};
 
 /// The two server values the resolver reads beyond the registry's arguments.
@@ -68,7 +67,7 @@ pub fn usage_resolver(codex_home: PathBuf, host: &UsageResolverHost) -> Arc<dyn 
   Arc::new(CodexUsageResolver::new(codex_home, Arc::new(UsageHost::new(host))))
 }
 
-/// Reads one session's context and cost from its codex rollout.
+/// Reads one session's context from its codex rollout.
 pub struct CodexUsageResolver {
   codex_home: PathBuf,
   host: Arc<dyn CodexSessionHost>,
@@ -90,7 +89,7 @@ impl CodexUsageResolver {
   }
 
   /// The context reading of one session. The merged usage carries the rollout's context tokens and window, the
-  /// session backend's compaction limit, the cost of the cumulative totals, and the model.
+  /// session backend's compaction limit, and the model. The session cost is the usage fold's.
   fn resolve_with_host(
     &self,
     session_id: &str,
@@ -108,15 +107,10 @@ impl CodexUsageResolver {
       "" => None,
       backend_id => host.auto_compact_limit(backend_id)?,
     };
-    let cost = match &native.total_token_usage {
-      Some(totals) => pricing::calculate_codex_usage_cost_usd(&native.model, totals)?,
-      None => None,
-    };
     Ok(Some(Map::from_iter([
       (event_types::CONTEXT_TOKENS.to_string(), native.context_tokens),
       (event_types::CONTEXT_FULL.to_string(), native.context_full),
       (event_types::CONTEXT_COMPACT_AT.to_string(), json!(auto_compact_limit)),
-      (event_types::RESULT_TOTAL_COST_USD.to_string(), json!(cost)),
       ("model".to_string(), json!(native.model)),
     ])))
   }
@@ -208,5 +202,9 @@ impl UsageResolver for CodexUsageResolver {
 
 /// The first event's non-empty string session id.
 fn translated_session_id(event: &impl EventFields) -> Option<String> {
-  event.field("session_id").and_then(EventFields::as_str_field).filter(|id| !id.is_empty()).map(str::to_string)
+  event
+    .field(event_types::NATIVE_SESSION_ID)
+    .and_then(EventFields::as_str_field)
+    .filter(|id| !id.is_empty())
+    .map(str::to_string)
 }

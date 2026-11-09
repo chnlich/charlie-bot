@@ -33,6 +33,8 @@ const TOOL_ITEM_SPECS: &[(&str, (&str, &str, bool))] =
 /// Translates one codex run's events. A fresh translator starts a run.
 pub struct CodexTranslator {
   model: String,
+  /// The thread id `thread.started` named. Each result of the run names it as its native session.
+  thread_id: Option<String>,
   last_agent_text: HashMap<ItemKey, String>,
   last_reasoning_text: HashMap<ItemKey, String>,
   last_todo_text: HashMap<ItemKey, String>,
@@ -52,6 +54,7 @@ impl CodexTranslator {
   pub fn new(model: &str) -> Self {
     Self {
       model: model.to_string(),
+      thread_id: None,
       last_agent_text: HashMap::new(),
       last_reasoning_text: HashMap::new(),
       last_todo_text: HashMap::new(),
@@ -65,10 +68,11 @@ impl CodexTranslator {
     };
     let event_type = text_of(event, "type").unwrap_or("");
     match event_type {
-      "thread.started" => Ok(vec![json!({
-        "type": event_types::SESSION_ATTACHED,
-        "session_id": event.get("thread_id").cloned().unwrap_or_else(|| json!("")),
-      })]),
+      "thread.started" => {
+        let thread_id = event.get("thread_id").cloned().unwrap_or_else(|| json!(""));
+        self.thread_id = thread_id.as_str().filter(|id| !id.is_empty()).map(str::to_string);
+        Ok(vec![json!({"type": event_types::SESSION_ATTACHED, "session_id": thread_id})])
+      }
       "turn.started" => Ok(Vec::new()),
       "turn.completed" => self.turn_completed(event),
       "turn.failed" | "error" => Ok(vec![make_error_event(&failure_message(event_type, event))]),
@@ -86,15 +90,22 @@ impl CodexTranslator {
       Some(Value::Object(usage)) => usage,
       Some(other) => bail!("codex turn.completed usage must be a JSON object, got {other}"),
     };
+    let Some(thread_id) = self.thread_id.as_deref() else {
+      bail!("codex turn.completed arrived before thread.started named its thread");
+    };
     let cost = pricing::calculate_codex_usage_cost_usd(&self.model, usage)?;
-    Ok(vec![make_result_event(
+    let mut result = make_result_event(
       count_or_zero(usage, usage_fields::INPUT_TOKENS)?,
       count_or_zero(usage, usage_fields::OUTPUT_TOKENS)?,
       count_or_zero(usage, usage_fields::CACHED_INPUT_TOKENS)?,
       0,
       json!(cost),
       None,
-    )])
+    );
+    // The usage of turn.completed accumulates over the thread's runs, so the usage fold reads the thread's running
+    // total from the thread id.
+    result[event_types::NATIVE_SESSION_ID] = json!(thread_id);
+    Ok(vec![result])
   }
 
   fn translate_item(&mut self, event: &Map<String, Value>) -> anyhow::Result<Vec<Value>> {

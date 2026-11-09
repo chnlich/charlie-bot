@@ -12,6 +12,7 @@ charliebot-registry.workspace = true
 charliebot-store.workspace = true
 futures-util.workspace = true
 serde_json.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 charliebot-anthropic-compatible.workspace = true

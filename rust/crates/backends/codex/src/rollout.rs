@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, bail};
 use charliebot_core::fsutil;
 use memchr::memrchr;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 use walkdir::WalkDir;
 
 use super::text::object_or_empty;
@@ -28,7 +28,6 @@ pub const TOKEN_COUNT: &str = "token_count";
 pub struct RolloutUsage {
   pub context_tokens: Value,
   pub context_full: Value,
-  pub total_token_usage: Option<Map<String, Value>>,
   pub model: String,
 }
 
@@ -42,8 +41,8 @@ pub fn token_count_payload(event: &Map<String, Value>) -> anyhow::Result<Option<
   Ok((text_of(payload, "type") == Some(TOKEN_COUNT)).then_some(payload))
 }
 
-/// A rollout line's context tokens, context window and cumulative totals.
-type UsageParts = (Value, Value, Option<Map<String, Value>>);
+/// A rollout line's context tokens and context window.
+type UsageParts = (Value, Value);
 
 /// The newest usage in one rollout, read backwards from its last line. `None` when no line carries a token count.
 pub fn extract_latest_rollout_usage(path: &Path) -> anyhow::Result<Option<RolloutUsage>> {
@@ -91,10 +90,9 @@ fn inspect_rollout_line(
 }
 
 fn rollout_usage(usage: Option<UsageParts>, model: Option<String>) -> Option<RolloutUsage> {
-  usage.map(|(context_tokens, context_full, total_token_usage)| RolloutUsage {
+  usage.map(|(context_tokens, context_full)| RolloutUsage {
     context_tokens,
     context_full,
-    total_token_usage,
     model: model.unwrap_or_default(),
   })
 }
@@ -106,22 +104,14 @@ fn usage_of_event(event: &Map<String, Value>) -> anyhow::Result<Option<UsagePart
   };
   let info = object_or_empty(payload, "info")?;
   let last = object_or_empty(info, usage_fields::LAST_TOKEN_USAGE)?;
-  // Codex reports the active prompt window in last_token_usage.input_tokens. total_token_usage is cumulative for the
-  // session, and cached_input_tokens is a subset of the input, not an extra component of the window.
+  // Codex reports the active prompt window in last_token_usage.input_tokens.
   let Some(input_tokens) = last.get(usage_fields::INPUT_TOKENS).filter(|value| !value.is_null()) else {
     return Ok(None);
   };
   let Some(context_full) = info.get("model_context_window").filter(|value| !value.is_null()) else {
     return Ok(None);
   };
-  let total = info.get(usage_fields::TOTAL_TOKEN_USAGE).and_then(Value::as_object).map(|total| {
-    let mut totals = Map::new();
-    for key in [usage_fields::INPUT_TOKENS, usage_fields::CACHED_INPUT_TOKENS, usage_fields::OUTPUT_TOKENS] {
-      totals.insert(key.to_string(), total.get(key).cloned().unwrap_or_else(|| json!(0)));
-    }
-    totals
-  });
-  Ok(Some((input_tokens.clone(), context_full.clone(), total)))
+  Ok(Some((input_tokens.clone(), context_full.clone())))
 }
 
 /// The model a `session_meta` or `turn_context` record names, when it names a non-empty one.
@@ -198,6 +188,8 @@ fn rollout_stem(name: &str) -> Option<&str> {
 mod tests {
   use std::fs;
 
+  use serde_json::json;
+
   use super::*;
 
   #[test]
@@ -220,7 +212,6 @@ mod tests {
     assert_eq!(usage.context_tokens, json!(500));
     assert_eq!(usage.context_full, json!(1000));
     assert_eq!(usage.model, "gpt-5.5");
-    assert_eq!(usage.total_token_usage.unwrap()["cached_input_tokens"], json!(400));
   }
 
   #[test]

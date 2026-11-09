@@ -1,6 +1,6 @@
 //! The session usage owner. The crate root states the vocabulary this module's comments use.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
@@ -33,7 +33,7 @@ enum ReadingKind {
   Resolved,
 }
 
-/// What the fold's result events have reported as the run's cost.
+/// The session's cost, summed from its result events.
 ///
 /// A null report makes the cost unknown, and it stays unknown through a later number: one unknown report means no
 /// sum is shown.
@@ -42,12 +42,17 @@ enum CostTotal {
   /// No result event has reported a cost yet.
   #[default]
   Unreported,
-  /// A result event reported a null cost.
+  /// A result event reported a null cost, or a model whose cost the backend cannot price.
   Unknown,
-  /// The reports so far add up to this sum.
+  /// The sum of the run costs so far.
   Known(f64),
 }
 
+/// The session usage fold: the context reading and the session cost, accumulated from chat events.
+///
+/// The cost has one rule for every backend. A result event that names its native session carries that session's
+/// running total, so the run adds the increase over the session's previous reading; its first reading counts in
+/// full. A result without a native session is the run's own cost and counts in full.
 #[derive(Clone, Default)]
 struct UsageFold {
   chosen_prompt_tokens: i64,
@@ -58,6 +63,10 @@ struct UsageFold {
   reading_kind: ReadingKind,
   reading: Option<Value>,
   cost_total: CostTotal,
+  /// The last running total of each native session, keyed by its `session_id`.
+  native_readings: HashMap<String, f64>,
+  /// The first native reading that fell. The cost is not shown while it stands.
+  cost_error: Option<String>,
   last_request_at: Option<UtcDateTime>,
 }
 
@@ -140,6 +149,9 @@ impl UsageFold {
       let model_usage = model_usage.as_object().expect("a truthy modelUsage object reads as an object");
       for (model_name, info_value) in model_usage {
         let Some(info) = truthy_object(Some(info_value), "result.modelUsage entry")? else { continue };
+        if info.get(event_types::COST_BASIS).and_then(Value::as_str) == Some(event_types::COST_BASIS_UNKNOWN) {
+          self.cost_total = CostTotal::Unknown;
+        }
         if let Some(window) = info.get("contextWindow").and_then(int_value) {
           self.model_windows.insert(model_name.clone(), Value::from(window));
         }
@@ -149,13 +161,19 @@ impl UsageFold {
       self.snapshot = Some(snapshot.to_owned_value());
       self.reading_kind = ReadingKind::Snapshot;
     }
+    let native =
+      event.field(event_types::NATIVE_SESSION_ID).and_then(EventFields::as_str_field).filter(|id| !id.is_empty());
     match event.field(event_types::RESULT_TOTAL_COST_USD) {
       Some(value) if value.is_null() => self.cost_total = CostTotal::Unknown,
       Some(value) => {
-        let reported = number_value(&value.to_owned_value(), "result.total_cost_usd")?;
+        let reading = number_value(&value.to_owned_value(), "result.total_cost_usd")?;
+        let run_cost = match native {
+          Some(native) => self.native_increase(native, reading),
+          None => reading,
+        };
         self.cost_total = match self.cost_total {
-          CostTotal::Unreported => CostTotal::Known(reported),
-          CostTotal::Known(total) => CostTotal::Known(total + reported),
+          CostTotal::Unreported => CostTotal::Known(run_cost),
+          CostTotal::Known(total) => CostTotal::Known(total + run_cost),
           CostTotal::Unknown => CostTotal::Unknown,
         };
       }
@@ -164,13 +182,39 @@ impl UsageFold {
     Ok(())
   }
 
+  /// The part of one native session's reading that this run adds: the increase over the session's previous reading,
+  /// or the whole reading for its first one. A reading below the previous one is recorded as the cost error.
+  fn native_increase(&mut self, native: &str, reading: f64) -> f64 {
+    match self.native_readings.insert(native.to_string(), reading) {
+      None => reading,
+      Some(previous) if reading < previous => {
+        self.cost_error.get_or_insert_with(|| {
+          format!(
+            "native session {native} total_cost_usd fell from {previous} to {reading}; \
+             a cumulative reading cannot decrease"
+          )
+        });
+        0.0
+      }
+      Some(previous) => reading - previous,
+    }
+  }
+
   fn cost(&self) -> Option<f64> {
     match self.cost_total {
-      CostTotal::Known(total) if total > 0.0 => {
+      CostTotal::Known(total) if total > 0.0 && self.cost_error.is_none() => {
         // Rounding to four places rounds the exact binary value, as {:.4} does and scaling by 10_000 does not.
         Some(format!("{:.4}", total).parse().expect("a formatted float parses back"))
       }
       _ => None,
+    }
+  }
+
+  /// Writes the session cost into a usage object: the total, and the error when a native reading fell.
+  fn attach_cost(&self, usage: &mut Map<String, Value>) {
+    usage.insert(event_types::RESULT_TOTAL_COST_USD.to_string(), json!(self.cost()));
+    if let Some(error) = &self.cost_error {
+      usage.insert(event_types::TOTAL_COST_ERROR.to_string(), json!(error));
     }
   }
 
@@ -185,29 +229,22 @@ impl UsageFold {
     if event_count == 0 {
       return Ok(None);
     }
-    let cost = self.cost();
-    let usage = match self.reading_kind {
-      ReadingKind::Claude => Some(self.resolve_claude(registry, cost, run_kind, backend_option)?),
-      ReadingKind::Snapshot => Some(self.resolve_snapshot(registry, cost, run_kind)?),
-      ReadingKind::Resolved => Some(self.resolve_reading(cost)),
-      ReadingKind::Unset => Some(json!({
-        (event_types::CONTEXT_TOKENS): null,
-        (event_types::CONTEXT_FULL): null,
-        (event_types::CONTEXT_COMPACT_AT): null,
-        (event_types::RESULT_TOTAL_COST_USD): cost,
-        "model": "",
-      })),
+    let mut usage = match self.reading_kind {
+      ReadingKind::Claude => self.resolve_claude(registry, run_kind, backend_option)?,
+      ReadingKind::Snapshot => self.resolve_snapshot(registry, run_kind)?,
+      ReadingKind::Resolved => self.resolve_reading(),
+      ReadingKind::Unset => usage_value(None, None, None, ""),
     };
-    Ok(usage)
+    self.attach_cost(&mut usage);
+    Ok(Some(Value::Object(usage)))
   }
 
   fn resolve_claude(
     &self,
     registry: &Registry,
-    cost: Option<f64>,
     run_kind: RunKind,
     backend_option: Option<&BackendOption>,
-  ) -> StoreResult<Value> {
+  ) -> StoreResult<Map<String, Value>> {
     let context_tokens = self.post_compact_tokens.unwrap_or(self.chosen_prompt_tokens);
     let limits = registry.reading_limits_for(CLAUDE_READING_KIND, run_kind, backend_option);
     let (context_full, compact_at) = match limits {
@@ -222,10 +259,10 @@ impl UsageFold {
       }
       None => (None, None),
     };
-    Ok(usage_value(Some(context_tokens), context_full, compact_at, &self.chosen_model, cost))
+    Ok(usage_value(Some(context_tokens), context_full, compact_at, &self.chosen_model))
   }
 
-  fn resolve_snapshot(&self, registry: &Registry, cost: Option<f64>, run_kind: RunKind) -> StoreResult<Value> {
+  fn resolve_snapshot(&self, registry: &Registry, run_kind: RunKind) -> StoreResult<Map<String, Value>> {
     let snapshot = self.snapshot.as_ref().expect("snapshot reading kind carries a snapshot");
     let tokens = truthy_object(snapshot.get("tokens"), "context_snapshot.tokens")?;
     let token_sum = match tokens {
@@ -252,10 +289,10 @@ impl UsageFold {
       None => (None, None),
     };
     let model = snapshot.get("model").filter(|value| is_truthy(*value)).map_or_else(String::new, value_str);
-    Ok(usage_value(Some(token_sum), context_full, compact_at, &model, cost))
+    Ok(usage_value(Some(token_sum), context_full, compact_at, &model))
   }
 
-  fn resolve_reading(&self, cost: Option<f64>) -> Value {
+  fn resolve_reading(&self) -> Map<String, Value> {
     let reading = self.reading.as_ref().expect("resolved reading kind carries a reading");
     let number = |key: &str| {
       reading.get(key).and_then(|value| match value {
@@ -269,7 +306,6 @@ impl UsageFold {
       number(event_types::CONTEXT_FULL),
       number(event_types::CONTEXT_COMPACT_AT),
       &model,
-      cost,
     )
   }
 }
@@ -281,13 +317,15 @@ struct FactsMemoEntry {
   fold: UsageFold,
 }
 
-/// One owner for backend resolver precedence, event-fold tiers, and context state.
+/// One owner for backend resolver precedence, event-fold tiers, context state, and session cost.
 pub struct SessionUsage {
   config: Arc<HotReload<CharlieBotConfig>>,
   store: Arc<Store>,
   registry: Arc<Registry>,
   usage_resolvers: Mutex<HashMap<String, Option<Arc<dyn UsageResolver>>>>,
   facts_memo: Mutex<VecDeque<FactsMemoEntry>>,
+  /// The sessions whose cost error this owner has logged.
+  cost_errors_logged: Mutex<HashSet<String>>,
 }
 
 impl SessionUsage {
@@ -299,6 +337,7 @@ impl SessionUsage {
       registry,
       usage_resolvers: Mutex::new(HashMap::new()),
       facts_memo: Mutex::new(VecDeque::new()),
+      cost_errors_logged: Mutex::new(HashSet::new()),
     }
   }
 
@@ -315,11 +354,14 @@ impl SessionUsage {
   /// The event-only tiers for an already-loaded transcript; no backend resolver and no cross-call memo.
   pub fn resolve_events_usage<E: EventFields>(
     &self,
+    session_id: &str,
     events: &[&E],
     run_kind: RunKind,
     backend_option: Option<&BackendOption>,
   ) -> StoreResult<Option<Value>> {
-    fold_usage(events, run_kind, &self.registry, backend_option)
+    let fold = fold_events(events)?;
+    self.log_cost_error_once(session_id, &fold);
+    fold.resolve(&self.registry, events.len(), run_kind, backend_option)
   }
 
   /// The selected context-token reading and the latest assistant/result request time.
@@ -342,16 +384,35 @@ impl SessionUsage {
     backend_option: Option<&BackendOption>,
   ) -> StoreResult<(Option<Value>, UsageFold)> {
     let (fold, event_count) = self.fold_cached(session_id)?;
+    self.log_cost_error_once(session_id, &fold);
     if let Some(resolver) = self.usage_resolver(&meta.backend)? {
       let events = self.store.load_chat_events_shared_sync(session_id)?;
-      if let Some(usage) = resolver
+      if let Some(mut usage) = resolver
         .resolve(session_id, meta, events.as_slice())
         .map_err(|error| StoreError::new(format!("usage resolver failed: {error:#}")))?
       {
+        // The resolver reads the context; the session cost is the fold's, whatever the backend.
+        fold.attach_cost(&mut usage);
         return Ok((Some(Value::Object(usage)), fold));
       }
     }
     Ok((fold.resolve(&self.registry, event_count, usage_run_kind(meta), backend_option)?, fold))
+  }
+
+  /// Logs a session's cost error the first time this owner folds it. A memo rebuild folds the same events again, so the
+  /// memo entry cannot record that the log was written.
+  fn log_cost_error_once(&self, session_id: &str, fold: &UsageFold) {
+    let Some(error) = fold.cost_error.as_deref() else {
+      return;
+    };
+    let first = self
+      .cost_errors_logged
+      .lock()
+      .expect("the cost-error log set mutex is not poisoned")
+      .insert(session_id.to_string());
+    if first {
+      tracing::warn!(target: "charliebot_usage", session_id, error, "session_cost_reading_fell");
+    }
   }
 
   fn usage_resolver(&self, backend_id: &str) -> StoreResult<Option<Arc<dyn UsageResolver>>> {
@@ -431,16 +492,23 @@ fn initialize(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Resul
   })
 }
 
-/// The session events folded through the source tiers, without a registered backend usage resolver.
+/// The session events folded through the source tiers, without a registered backend usage resolver. The owner folds
+/// through [`SessionUsage::resolve_events_usage`]; the tests fold through this shorthand.
+#[cfg(test)]
 pub fn fold_usage<E: EventFields>(
   events: &[&E],
   run_kind: RunKind,
   registry: &Registry,
   backend_option: Option<&BackendOption>,
 ) -> StoreResult<Option<Value>> {
+  fold_events(events)?.resolve(registry, events.len(), run_kind, backend_option)
+}
+
+/// The fold of an event slice, before any reading is resolved from it.
+fn fold_events<E: EventFields>(events: &[&E]) -> StoreResult<UsageFold> {
   let mut fold = UsageFold::default();
   fold.feed(events)?;
-  fold.resolve(registry, events.len(), run_kind, backend_option)
+  Ok(fold)
 }
 
 /// The run kind the session usage view assigns to a node profile.
@@ -461,20 +529,19 @@ fn snapshot_compact_at(full: i64, output: i64, registry: &Registry, run_kind: Ru
   reserve.map(|reserve| full - i64::try_from(reserve).expect("compact reserve fits i64").min(output))
 }
 
+/// The context fields of a usage object. The cost fields are attached by [`UsageFold::attach_cost`].
 fn usage_value(
   context_tokens: Option<i64>,
   context_full: Option<i64>,
   context_compact_at: Option<i64>,
   model: &str,
-  cost: Option<f64>,
-) -> Value {
-  json!({
-    (event_types::CONTEXT_TOKENS): context_tokens,
-    (event_types::CONTEXT_FULL): context_full,
-    (event_types::CONTEXT_COMPACT_AT): context_compact_at,
-    (event_types::RESULT_TOTAL_COST_USD): cost,
-    "model": model,
-  })
+) -> Map<String, Value> {
+  Map::from_iter([
+    (event_types::CONTEXT_TOKENS.to_string(), json!(context_tokens)),
+    (event_types::CONTEXT_FULL.to_string(), json!(context_full)),
+    (event_types::CONTEXT_COMPACT_AT.to_string(), json!(context_compact_at)),
+    ("model".to_string(), json!(model)),
+  ])
 }
 
 /// Truthiness of one borrowed event field, with `None` false.
@@ -793,6 +860,100 @@ mod tests {
     }
   }
 
+  /// A result event of one native session, whose total cost is that session's running total.
+  fn native_result(native: &str, total_cost_usd: f64) -> Value {
+    json!({"type": "result", "session_id": native, "total_cost_usd": total_cost_usd})
+  }
+
+  fn total_cost_of(events: &[Value]) -> Value {
+    fold_usage(&event_refs(events), RunKind::Work, &registry(), None).unwrap().unwrap()["total_cost_usd"].clone()
+  }
+
+  #[test]
+  fn cumulative_readings_of_one_native_session_add_up_to_its_last_reading() {
+    let events = [native_result("native-a", 0.25), native_result("native-a", 0.5), native_result("native-a", 1.0)];
+    assert_eq!(total_cost_of(&events), 1.0);
+  }
+
+  #[test]
+  fn interleaved_native_sessions_each_add_their_own_increases() {
+    let events = [
+      native_result("native-a", 1.0),
+      native_result("native-b", 2.0),
+      native_result("native-a", 1.5),
+      native_result("native-b", 2.5),
+    ];
+    // native-a adds 1.0 and 0.5; native-b adds 2.0 and 0.5.
+    assert_eq!(total_cost_of(&events), 4.0);
+  }
+
+  #[test]
+  fn a_native_reading_adds_its_increase_over_the_previous_reading_of_its_session() {
+    // The six manager turns of one native session, after its reading from the turn before them.
+    let turns = [14.765944, 14.912121, 15.113857, 15.208510, 15.299786, 15.597326];
+    let before = [native_result("native-root", 14.382913)];
+    let after: Vec<Value> =
+      before.iter().cloned().chain(turns.iter().map(|cost| native_result("native-root", *cost))).collect();
+    let added = total_cost_of(&after).as_f64().unwrap() - total_cost_of(&before).as_f64().unwrap();
+    assert!((added - 1.2144).abs() < 0.0001, "the six turns add {added}");
+  }
+
+  #[test]
+  fn an_unknown_cost_basis_makes_the_cost_unknown_and_other_bases_count() {
+    let result = |basis: Option<&str>, total_cost_usd: f64| {
+      let mut entry = json!({"contextWindow": 100});
+      if let Some(basis) = basis {
+        entry["costBasis"] = json!(basis);
+      }
+      json!({"type": "result", "modelUsage": {"model-a": entry}, "total_cost_usd": total_cost_usd})
+    };
+    assert_eq!(total_cost_of(&[result(None, 0.5)]), 0.5);
+    assert_eq!(total_cost_of(&[result(Some("list"), 0.5)]), 0.5);
+    assert!(total_cost_of(&[result(Some("unknown"), 0.5)]).is_null());
+    assert!(total_cost_of(&[result(None, 0.5), result(Some("unknown"), 0.25)]).is_null());
+  }
+
+  #[test]
+  fn a_native_reading_that_falls_is_named_and_leaves_the_context_reading() {
+    let home = tempfile::tempdir().unwrap();
+    let (usage_owner, store) = owner_over(home.path(), Arc::new(registry()));
+    let session_id = "synthetic-usage-fall";
+    let mut meta = SessionMetadata::new(session_id, "Usage fall", TaskProfile::Manager);
+    meta.backend = "unregistered-backend".to_string();
+    write_events(
+      &store,
+      session_id,
+      &[
+        json!({"type": "assistant", "message": {"model": "model-a", "usage": {"input_tokens": 20}}}),
+        native_result("native-fall", 2.0),
+        native_result("native-fall", 1.5),
+      ],
+    );
+
+    let usage = usage_owner.resolve_session_usage(session_id, &meta, None).unwrap().unwrap();
+
+    assert_eq!(usage["context_tokens"], 20);
+    assert!(usage["total_cost_usd"].is_null());
+    let error = usage["total_cost_error"].as_str().unwrap();
+    assert!(error.contains("native-fall") && error.contains("2") && error.contains("1.5"), "{error}");
+  }
+
+  #[tokio::test]
+  async fn native_readings_continue_their_difference_across_memoized_requests() {
+    let home = tempfile::tempdir().unwrap();
+    let (usage_owner, store) = owner_over(home.path(), Arc::new(registry()));
+    let session_id = "synthetic-usage-native-memo";
+    let mut meta = SessionMetadata::new(session_id, "Usage native memo", TaskProfile::Manager);
+    meta.backend = "unregistered-backend".to_string();
+    write_events(&store, session_id, &[native_result("native-memo", 1.0)]);
+    let first = usage_owner.resolve_session_usage(session_id, &meta, None).unwrap().unwrap();
+    assert_eq!(first["total_cost_usd"], 1.0);
+
+    store.append_chat_event(session_id, native_result("native-memo", 1.25)).await.unwrap();
+    let appended = usage_owner.resolve_session_usage(session_id, &meta, None).unwrap().unwrap();
+    assert_eq!(appended["total_cost_usd"], 1.25);
+  }
+
   #[test]
   fn claude_reading_takes_the_smaller_of_model_and_declared_windows() {
     let mut registry = Registry::new();
@@ -962,7 +1123,7 @@ mod tests {
     registry.register_package("backends.codex", register_codex).unwrap();
     let registry = Arc::new(registry);
     let home = tempfile::tempdir().unwrap();
-    let (usage_owner, _store) = owner_over(home.path(), Arc::clone(&registry));
+    let (usage_owner, store) = owner_over(home.path(), Arc::clone(&registry));
 
     let thread_id = "12345678-1234-4234-9234-123456789abc";
     let rollout = synthetic_codex_home()
@@ -988,11 +1149,14 @@ mod tests {
     let mut meta = SessionMetadata::new("synthetic-codex-session", "Synthetic Codex", TaskProfile::Manager);
     meta.backend = "codex-retired-option".to_string();
     meta.cc_session_id = Some(thread_id.to_string());
+    // The thread's running total is the session cost; the resolver supplies the context only.
+    write_events(&store, &meta.id, &[native_result(thread_id, 0.42)]);
 
     let first = usage_owner.resolve_session_usage(&meta.id, &meta, None).unwrap().unwrap();
     assert_eq!(first["context_tokens"], 321);
     assert_eq!(first["context_full"], 12345);
     assert_eq!(first["model"], "gpt-5.5");
+    assert_eq!(first["total_cost_usd"], 0.42);
     let first_resolver = usage_owner.usage_resolvers.lock().unwrap()["codex"].as_ref().unwrap().clone();
 
     let second = usage_owner.resolve_session_usage(&meta.id, &meta, None).unwrap().unwrap();

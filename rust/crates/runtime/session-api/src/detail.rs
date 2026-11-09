@@ -465,7 +465,7 @@ async fn session_usage(
       Ok(transcript) => {
         let events = transcript.events.iter().map(Arc::as_ref).collect::<Vec<_>>();
         (
-          usage_owner.resolve_events_usage(&events, run_kind, cfg.get_backend_option(&meta.backend)),
+          usage_owner.resolve_events_usage(&session_id, &events, run_kind, cfg.get_backend_option(&meta.backend)),
           transcript.active_run_id.clone(),
         )
       }

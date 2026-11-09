@@ -22,7 +22,7 @@ use charliebot_registry::usage::{
   SessionFacts, SweepScope,
 };
 use charliebot_registry::{FeatureContext, Registry};
-use charliebot_store::metadata::{UtcDateTime, read_metadata};
+use charliebot_store::metadata::{CC_SESSION_ID_FIELD, UtcDateTime, read_metadata};
 use charliebot_store::run_identity::SESSION_METADATA_NAME;
 use charliebot_store::run_records::{
   CURSOR_NAME, DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_RAW_LOG_REF,
@@ -153,7 +153,11 @@ fn scan_sessions(sessions_dir: &Path, now: UtcDateTime) -> anyhow::Result<HashMa
     };
     facts.insert(
       id.clone(),
-      SessionFacts { id, cold: is_cold_session(&meta, now), cc_session_id: optional_text(meta.get("cc_session_id")) },
+      SessionFacts {
+        id,
+        cold: is_cold_session(&meta, now),
+        cc_session_id: optional_text(meta.get(CC_SESSION_ID_FIELD)),
+      },
     );
   }
   Ok(facts)

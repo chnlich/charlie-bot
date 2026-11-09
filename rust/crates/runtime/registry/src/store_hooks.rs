@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_store::hooks::{AfterTurnWork, EventRenderer, RuntimeEventHooks};
-use charliebot_store::metadata::{NATIVE_BACKEND, SessionMetadata, UtcDateTime};
+use charliebot_store::metadata::{CC_SESSION_ID_FIELD, NATIVE_BACKEND, SessionMetadata, UtcDateTime};
 use charliebot_store::{
   AccountLabelKeeper, AnchorFieldReconciler, SequenceArchiveHook, SequenceBindingMover, SequenceListingFields,
   StoreError, StoreHookFuture, StoreHooks, StoreResult,
@@ -69,7 +69,7 @@ impl AnchorFieldReconciler for LifecycleAnchors {
     if attempted.cc_session_id != disk.cc_session_id {
       tracing::warn!(
         session_id = %attempted.id,
-        field = "cc_session_id",
+        field = CC_SESSION_ID_FIELD,
         on_disk = ?disk.cc_session_id,
         attempted = ?attempted.cc_session_id,
         "session_anchor_write_corrected"

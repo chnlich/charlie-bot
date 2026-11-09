@@ -274,7 +274,7 @@ const GLOBALS = {
 Sidebar.wire(GLOBALS, {applyCronBrokenView});
 
 // The page fetches this module after its document, so the sidebar's rows were already painted without the schedule
-// badge and line registered above, and its Workspace badge list was sampled before this module's loader registered.
+// badge and line registered above. Its Workspace badge list was sampled before this module's loader registered.
 // Repaint the rows the sidebar still shows, then re-read the Workspace badges with this module's loader in the list.
 if (document.readyState !== 'loading') {
   Sidebar.repaintRenderedRows();

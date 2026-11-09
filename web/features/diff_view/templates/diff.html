@@ -29,6 +29,21 @@
        extend it. The 24 px box gives the page's only way back to chat the pointer floor its buttons
        keep; the concurrency badge keeps the header at its height. */
     .back-link { min-height: 24px; }
+    /* A phone cannot hold a file row on one line, so it becomes a grid: the status, the file name and
+       the counts share the first line, and a path with a directory puts it on the second line under
+       the name. A file at the repository root has no second line to draw, so its row keeps one line
+       where the old two-line grid spent a line on the counts alone. The name wraps rather than being
+       cut off, and the counts keep their fixed pair so the figures stay in one column of the list.
+       The same rule as Tailwind's max-sm, the width the row's utilities use. */
+    @media not all and (min-width: 640px) {
+      .diff-file-row { display: grid; column-gap: 0.75rem; row-gap: 0.125rem;
+        grid-template-columns: auto auto minmax(0, 1fr) auto; }
+      .diff-file-name { grid-column: 3; grid-row: 1; white-space: normal; word-break: break-all; }
+      .diff-file-counts { grid-column: 4; grid-row: 1; }
+      .diff-file-dir { grid-column: 3 / span 2; grid-row: 2; }
+      .diff-file-row:has(.diff-file-dir) .diff-file-chevron,
+      .diff-file-row:has(.diff-file-dir) .diff-file-badge { grid-row: span 2; }
+    }
   </style>
 </head>
 <body class="bg-white text-slate-900 min-h-screen">

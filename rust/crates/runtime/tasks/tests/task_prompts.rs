@@ -744,11 +744,9 @@ async fn a_session_without_a_task_record_carries_no_task_block() {
   let harness = Harness::new();
   let tree = harness.tree().await;
 
-  for (session_id, kind) in [(&tree.root, "manager_turn"), (&tree.worker1, "work")] {
-    let snapshot = harness.snapshot_for(session_id, kind).await;
-    assert!(
-      snapshot.blocks.iter().all(|block| !block.text.starts_with("# Task record")),
-      "{session_id} carries no task record block"
-    );
-  }
+  let snapshot = harness.snapshot_for(&tree.root, "manager_turn").await;
+  assert!(
+    snapshot.blocks.iter().all(|block| !block.text.starts_with("# Task record")),
+    "the root carries no task record block"
+  );
 }

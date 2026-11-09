@@ -131,6 +131,7 @@ function loadExtUsageScript(options = {}) {
   const storage = options.storage || makeStorage();
   const documentHandlers = {};
   const document = {
+    readyState: options.readyState || 'loading',
     addEventListener(type, handler) {
       documentHandlers[type] = handler;
     },
@@ -166,7 +167,7 @@ function loadExtUsageScript(options = {}) {
     context.platform = options.platform;
   }
 
-  const scriptPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../features/usage/templates/usage/ext_usage.js');
+  const scriptPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../features/usage/static/ext_usage.js');
   const scriptSource = fs.readFileSync(scriptPath, 'utf8');
   const pageTimersPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../static/js/page-timers.js');
   const pageTimersSource = fs.readFileSync(pageTimersPath, 'utf8');
@@ -888,6 +889,15 @@ test('collapsed default is the summary row at every width, a stored choice wins,
     assert.equal(storage.getItem(COLLAPSE_STORAGE_KEY), (!c.want) ? '1' : '0',
         c.name + ': explicit toggle writes the new value');
   }
+});
+
+test('a module that lands after the document starts the strip without a page event', () => {
+  const storage = makeStorage({ [COLLAPSE_STORAGE_KEY]: '1' });
+  const harness = loadExtUsageScript({ readyState: 'complete', storage });
+
+  assert.equal(harness.isCollapsed(), true, 'the stored choice applies as the module lands');
+  assert.equal(storage.calls.get, 1, 'the module reads the stored choice once');
+  assert.equal(storage.calls.set, 0, 'evaluating the default performs no writes');
 });
 
 test('repeated renders are structurally identical and click handlers never accumulate', () => {

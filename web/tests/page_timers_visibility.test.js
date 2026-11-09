@@ -17,6 +17,8 @@ const EXT_USAGE_JS = readPackageStatic('features', 'usage', 'ext_usage.js');
 function createFakeDocument() {
   const listeners = new Map();
   return {
+    // A script the page carries in its document runs while the document is still parsing.
+    readyState: 'loading',
     hidden: false,
     elements: new Map(),
     addEventListener(type, fn) {

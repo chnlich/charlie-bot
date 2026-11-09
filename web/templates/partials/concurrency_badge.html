@@ -11,7 +11,8 @@
 
     A copy inside a `<template>` is inert markup: its scripts never run, so it would carry the poller's bytes to the
     page and do nothing with them. The includer sets `concurrency_badge_markup_only` for that copy, which leaves the
-    script out and keeps the markup the client-side rebuild clones. -#}
+    script out and keeps the markup the client-side rebuild clones. The copy's stylesheet goes too: the header copy
+    has already declared the same rules for the whole document. -#}
 <div class="cb-slot">
   <div class="cb-anchor">
     <button id="concurrency-badge" class="cb-badge" type="button" data-running="0"
@@ -36,7 +37,7 @@
     </div>
   </div>
 </div>
-<style>
+{% if not concurrency_badge_markup_only %}<style>
   .cb-slot { position: relative; display: flex; align-items: center; margin-left: auto; flex: 0 0 auto }
   /* A page with no top bar: the fragment's own slot is the bar. */
   body > .cb-slot { justify-content: flex-end; margin-left: 0; padding: 8px 24px;
@@ -105,8 +106,9 @@
     color: #ffffff; font-size: 11px; white-space: nowrap; pointer-events: none; transform: translate(-50%, -130%) }
   .cb-status { margin: 8px 0 0; opacity: .7 }
   .cb-empty { margin: 0; padding: 56px 0; text-align: center; opacity: .7 }
-</style>
-{% if concurrency_badge_markup_only %}{# The template copy keeps the markup and leaves the script out. #}{% elif defer_concurrency_badge_poll %}<script>
+</style>{% endif %}
+{% if concurrency_badge_markup_only %}{# The template copy keeps the markup and leaves the script and its stylesheet out: the
+   header copy's <style> already applies the same rules, and a <template>'s own style is inert. #}{% elif defer_concurrency_badge_poll %}<script>
   // The badge paints from its markup; the poll starts once the document has parsed.
   document.addEventListener('DOMContentLoaded', function () {
     const script = document.createElement('script');

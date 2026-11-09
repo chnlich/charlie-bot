@@ -126,6 +126,7 @@ function loadExtUsageScript(options = {}) {
   const storage = options.storage || makeStorage();
   const documentHandlers = {};
   const document = {
+    readyState: options.readyState || 'loading',
     addEventListener(type, handler) {
       documentHandlers[type] = handler;
     },
@@ -161,7 +162,7 @@ function loadExtUsageScript(options = {}) {
     context.platform = options.platform;
   }
 
-  const scriptPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../features/usage/templates/usage/ext_usage.js');
+  const scriptPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../features/usage/static/ext_usage.js');
   const scriptSource = fs.readFileSync(scriptPath, 'utf8');
   const pageTimersPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../static/js/page-timers.js');
   const pageTimersSource = fs.readFileSync(pageTimersPath, 'utf8');

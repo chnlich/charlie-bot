@@ -30,7 +30,12 @@ function startRename(e, id) {
   input.style.height = valueRect.height + 'px';
   input.style.paddingTop = '0px';
   input.style.paddingBottom = '0px';
-  input.value = valueEl.textContent;
+  // The field prefills the session's full name, not the row's rendered title:
+  // a grouped Threads title drops its header's label (sessionRowTitle), and
+  // Enter on an untouched field must keep the name. The shortened row carries
+  // its full name in data-full-name (renderSessionRowShell, kept current by
+  // updateSidebarSessionName); every other row's text is the name itself.
+  input.value = linkUsable && link.dataset.fullName ? link.dataset.fullName : valueEl.textContent;
   input.classList.remove('hidden');
   input.focus();
   input.select();

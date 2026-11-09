@@ -98,6 +98,24 @@ function createElement(overrides = {}) {
     },
     setAttribute(name, value) { this[name] = value; },
     getAttribute(name) { return this[name]; },
+    removeAttribute(name) {
+      if (name.startsWith('data-')) {
+        delete this.dataset[name.replace(/^data-(.)/, (_, c) => c.toUpperCase())];
+      } else {
+        delete this[name];
+      }
+    },
+    // The one closest use the sidebar bundle makes today reads the row's group
+    // container by class. The walk follows the stub's parentNode links.
+    closest(selector) {
+      const wanted = selector.startsWith('.') ? {class: selector.slice(1)}
+        : selector.startsWith('#') ? {id: selector.slice(1)} : {tag: selector.toUpperCase()};
+      for (let node = this; node; node = node.parentElement) {
+        if (wanted.class ? (node.classList && node.classList.contains(wanted.class))
+            : wanted.id ? node.id === wanted.id : node.tagName === wanted.tag) return node;
+      }
+      return null;
+    },
     querySelectorAll: () => [],
     querySelector: () => null,
   };

@@ -301,16 +301,21 @@ function sessionRowActiveClass(isActive) {
 // after the name span — and actions the trailing button column. The anchor's
 // session-row class is the plain-CSS hook styles.css's hover reveal keys on
 // (positioning context for the row's out-of-flow action buttons).
-function renderSessionRowShell(s, {filter, activeClass, options, indicators, line, actions}) {
+// A title the row rule shortened (sessionRowTitle) carries its full name in
+// data-full-name, the way the row menu's Settings button carries its row facts:
+// the rename field and the opening notice read it off the anchor at click time,
+// and every other row's text is already the full name.
+function renderSessionRowShell(s, {filter, title, activeClass, options, indicators, line, actions}) {
   const extraClass = options.extraClass ? ' ' + options.extraClass : '';
   const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
+  const fullNameAttrs = title === s.name ? '' : ` data-full-name="${escapeHtmlAttr(s.name)}"`;
   return `<a href="/?session=${s.id}&filter=${filter}"
      class="session-row group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}" ondblclick="sidebarControl('startRename', event, '${s.id}')"
      onclick="event.preventDefault(); sidebarControl('switchSession', '${s.id}')"
-     id="session-${s.id}"${extraAttrs}>
+     id="session-${s.id}"${fullNameAttrs}${extraAttrs}>
     ${indicators}
     <span class="flex-1 min-w-0">
-      <span class="truncate block session-name">${escapeHtml(s.name)}</span>
+      <span class="truncate block session-name">${escapeHtml(title)}</span>
       ${line}
     </span>
     ${actions}
@@ -453,7 +458,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
       return limitToggle + renderSessionTree(
         session,
         filter,
-        {...rowOptions, staticTime: !!options.staticTime},
+        {...rowOptions, staticTime: !!options.staticTime, groupHeader: key},
         childrenOf
       );
     }).join('');
@@ -690,7 +695,7 @@ function renderSessionTree(s, filter, options, childrenOf) {
   const hiddenClass = treeExpandedNodes.has(s.id) ? '' : ' hidden';
   return `${row}<div class="${wrapClass}"${wrapAttrs}>
     <div class="tree-children ml-4 pl-1.5 mt-0.5 border-l border-slate-600${hiddenClass}" data-tree-children="${s.id}">
-      ${children.map(c => renderSessionTree(c, filter, {}, childrenOf)).join('')}
+      ${children.map(c => renderSessionTree(c, filter, {groupHeader: options.groupHeader}, childrenOf)).join('')}
     </div>
   </div>`;
 }
@@ -801,6 +806,7 @@ function renderSessionItem(s, filter, options = {}) {
   // push it out.
   return renderSessionRowShell(s, {
     filter,
+    title: sessionRowTitle(s, filter, options.groupHeader),
     activeClass: activeClass + (isContextRow ? ' opacity-60' : ''),
     options,
     indicators: lead,

@@ -151,12 +151,31 @@ function updateBackendHeaderControls(backendType) {
   }
 }
 
+// The title a row shows. A Threads row under a named group header drops the header's label from its title: the
+// header already names the channel, so the title keeps the thread's date and time. Every other row keeps its full
+// name: rows outside Threads, rows under the keyless "(No group)" header, and a title that does not start with its
+// header's label. status.js carries the rule because it loads before the row renderers (groups.js) and owns the one
+// name write both the rename commit and the session_renamed event funnel into; the renderers read it as a global.
+function sessionRowTitle(s, filter, groupHeader) {
+  const label = groupHeader + ' ';
+  if (filter !== 'threads' || !groupHeader || !s.name.startsWith(label)) return s.name;
+  return s.name.slice(label.length);
+}
+
 function updateSidebarSessionName(sessionId, name) {
   const link = document.getElementById('session-' + sessionId);
   if (!link) return;
   const nameEl = link.querySelector('.session-name');
   if (!nameEl) return;
-  nameEl.textContent = name;
+  // The row paints the title the next list repaint would give it: under a named
+  // Threads group header the title drops that label (sessionRowTitle, whose
+  // header the row's own group container carries), everywhere else the title is
+  // the name. The full name stays the row's data for the rename field.
+  const group = link.closest('.session-group');
+  const title = sessionRowTitle({name}, currentFilter, group ? group.dataset.sgroupKey : '');
+  if (title === name) link.removeAttribute('data-full-name');
+  else link.dataset.fullName = name;
+  nameEl.textContent = title;
 }
 
 function getSessionIndicatorState(status) {
@@ -619,6 +638,7 @@ function pollSessionStatus() {
 const API = {
   recordRenderedSessionStatus,
   recordTreeShape,
+  sessionRowTitle,
   updateBackendHeaderControls,
   updateSidebarSessionName,
   getSessionIndicatorState,

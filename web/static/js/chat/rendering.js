@@ -315,14 +315,38 @@ function messageSourceText(el) {
   return renderedNodeText(el);
 }
 
+// The one-line field drops the markdown it cannot show: a heading's #, a list marker, a link's
+// target, inline code's backticks and emphasis markers. A fenced block contributes its first code
+// line, not the fence's language tag. A table contributes its first data row's cells, not the
+// header or the delimiter row.
 function turnFirstLine(text) {
   const lines = String(text).split('\n');
+  let inFence = false;
+  let tableHeader = false;
   for (const raw of lines) {
-    const line = raw.replace(/^\s*(?:#{1,6}|[-*+>]|\d+[.)])\s+/, '')
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^(?:`{3,}|~{3,})/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) return line;
+    if (line.startsWith('|') && line.endsWith('|')) {
+      if (!tableHeader) {
+        tableHeader = true;
+        continue;
+      }
+      if (/^\|[\s:|-]+\|$/.test(line)) continue;
+      return line.split('|').slice(1, -1).map((cell) => cell.trim()).join(' · ');
+    }
+    tableHeader = false;
+    const cleaned = line
+      .replace(/^(?:#{1,6}|[-*+>]|\d+[.)])\s+/, '')
       .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/\*\*|__/g, '')
       .replace(/`/g, '')
       .trim();
-    if (line) return line;
+    if (cleaned) return cleaned;
   }
   return '';
 }

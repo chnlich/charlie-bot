@@ -76,6 +76,9 @@
       .cbdx-expand:disabled { cursor: not-allowed; opacity: .55; }
       .cbdx-whole { margin-left: auto; }
       .cbdx-gap-count { color: #64748b; font-size: 11px; }
+      /* A side-by-side gap's last strip carries the count alone. Its 24 px minimum height matches the control
+         strip's buttons, so both panes' strip rows keep one height and the lines under them stay level. */
+      .cbdx-gap-count-end { display: inline-flex; align-items: center; min-height: 24px; margin-left: auto; }
       .cbdx-gap-error { color: #b91c1c; font-size: 12px; }
       /* A phone's line-by-line table can stand wider than the screen, where a right-aligned control would
          sit past the visible edge. Below the page's phone breakpoint the strip keeps its controls together
@@ -365,9 +368,11 @@
     return div;
   }
 
-  // The expand controls of one rendered file: a strip at each hidden gap, each strip carrying its expand up,
-  // expand down and whole-file buttons. Revealed rows go in place with both sides' line numbers, and the strip
-  // stays at the gap's top edge while its blocks of revealed rows keep their line order.
+  // The expand controls of one rendered file: a strip at each hidden gap. A side-by-side file draws one strip row
+  // per pane. Its first pane's strip carries the expand up, expand down and whole-file buttons; its last strip
+  // carries the hidden-line count. A single-table file draws both in its one strip. Revealed rows go in place
+  // with both sides' line numbers, and the strip stays at the gap's top edge while its blocks of revealed rows
+  // keep their line order.
   function installExpandControls(body, container, file, params, data, token) {
     const hunks = parseHunks(data.diff);
     const gaps = hiddenGaps(hunks, data.base_total || 0, data.head_total || 0);
@@ -432,24 +437,33 @@
       return button;
     }
 
-    // The strip's buttons: both directions for a gap that outlives one click, the gap itself otherwise, and the
-    // whole file from every strip.
+    // The strip's controls, drawn once for the gap: both directions for a gap that outlives one click, the gap
+    // itself otherwise, and the whole file. A side-by-side file carries one strip row per pane to hold the two
+    // sides' lines level, and the gap is one region with one set of controls, so the first strip draws the
+    // buttons and the last carries the count. A single-table file draws both in its one strip.
     function renderStripContent(gap) {
       const size = gap.newHi - gap.newLo + 1;
-      gap.cells.forEach((cell) => {
-        cell.innerHTML = '';
-        const directionButtons = size <= EXPAND_STEP
-          ? [stripButton(gap, `Expand ${size} ${size === 1 ? 'line' : 'lines'}`, 'whole')]
-          : [stripButton(gap, '↑ Expand up', 'up'), stripButton(gap, '↓ Expand down', 'down')];
-        const fileButton = stripButton(gap, 'Whole file', 'all');
-        fileButton.className = 'cbdx-expand cbdx-whole';
-        const count = document.createElement('span');
-        count.className = 'cbdx-gap-count';
-        count.textContent = `${size} hidden ${size === 1 ? 'line' : 'lines'}`;
-        const error = document.createElement('span');
-        error.className = 'cbdx-gap-error';
-        cell.append(...directionButtons, fileButton, count, error);
-      });
+      const directionButtons = size <= EXPAND_STEP
+        ? [stripButton(gap, `Expand ${size} ${size === 1 ? 'line' : 'lines'}`, 'whole')]
+        : [stripButton(gap, '↑ Expand up', 'up'), stripButton(gap, '↓ Expand down', 'down')];
+      const fileButton = stripButton(gap, 'Whole file', 'all');
+      fileButton.className = 'cbdx-expand cbdx-whole';
+      const count = document.createElement('span');
+      count.className = 'cbdx-gap-count';
+      count.textContent = `${size} hidden ${size === 1 ? 'line' : 'lines'}`;
+      const error = document.createElement('span');
+      error.className = 'cbdx-gap-error';
+      const first = gap.cells[0];
+      const last = gap.cells[gap.cells.length - 1];
+      gap.cells.forEach((cell) => { cell.innerHTML = ''; });
+      first.append(...directionButtons, fileButton);
+      if (last === first) {
+        first.append(count, error);
+      } else {
+        first.append(error);
+        count.classList.add('cbdx-gap-count-end');
+        last.append(count);
+      }
     }
 
     function setStripDisabled(gap, disabled) {

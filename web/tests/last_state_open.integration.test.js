@@ -215,5 +215,5 @@ test('an offline usage panel shows the offline label and loads no usage', async 
 
   h.context.renderUsageFromData({});
 
-  assert.equal(h.elements.get('usage-text')?.textContent, h.context.OFFLINE_PANEL_LABEL);
+  assert.equal(h.elements.get('usage-text')?.innerHTML, h.context.OFFLINE_PANEL_MARK);
 });

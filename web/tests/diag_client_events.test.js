@@ -90,6 +90,8 @@ function buildClientEventsHarness() {
     SESSION_ID: 'sess-1',
     SESSION_BOOTSTRAP: {messages: [{id: 7}, {id: 8}]},
     OpenedSessions: {openCase: () => 'B'},
+    openContentSource: () => 'network',
+    offlineShellPresent: () => false,
     CSS: {escape: (value) => value},
     performance: {
       now: () => clock - navigationStart,
@@ -567,6 +569,8 @@ function openCaseOf(storage, sessionId) {
       setItem: (key, value) => storage.set(key, String(value)),
     },
     SESSION_ID: sessionId,
+    location: {search: ''},
+    URLSearchParams,
     console: {warn: () => {}},
   };
   vm.createContext(context);
@@ -605,6 +609,7 @@ function buildTransportHarness() {
     wsUrlWithToken: (path) => path,
     setTimeout: (fn, ms) => { timers.push({fn, ms}); return timers.length; },
     clearTimeout: () => {},
+    reloadAfterDroppingShell: () => {},
     document: {
       getElementById: () => null,
       dispatchEvent: (event) => {

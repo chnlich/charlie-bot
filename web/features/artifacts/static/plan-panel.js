@@ -409,7 +409,7 @@ const planPanel = (() => {
     _getEl('plan-empty-state').style.display = 'none';
     _getEl('plan-viewer').style.display = 'none';
     var label = _getEl('plan-offline-label');
-    label.textContent = OFFLINE_PANEL_LABEL;
+    label.innerHTML = OFFLINE_PANEL_MARK;
     label.style.display = '';
   }
 

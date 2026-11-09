@@ -23,6 +23,14 @@ const LIST_REFRESH_RETRY_MAX_MS = 30000;
 
 let catchUp = null;
 
+// The source of the content the page's first open painted: 'stored' for a copy, 'network' otherwise. page_load
+// reports it as content_source; null until the page opens a session.
+let firstOpenSource = null;
+
+function openContentSource() {
+  return firstOpenSource;
+}
+
 // The copy's bytes as the page measures them: the JSON text of the parsed first screen.
 function jsonBytes(value) {
   return new TextEncoder().encode(JSON.stringify(value)).length;
@@ -49,6 +57,7 @@ function listStillPending(sessionId) {
 // Starts the catch-up of an open. A copy's open also starts the sidebar list refresh. A restart passes
 // the list state it inherits and starts no second refresh, since the first one still runs.
 function beginCatchUp({sessionId, storedPosition, copyBytes, listPending, readPending}) {
+  if (firstOpenSource === null) firstOpenSource = copyBytes !== null ? 'stored' : 'network';
   catchUp = {
     sessionId,
     storedPosition,

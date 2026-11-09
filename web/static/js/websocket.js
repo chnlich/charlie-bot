@@ -426,7 +426,7 @@ function reloadStalePage() {
   sessionStorage.setItem(STALE_PAGE_RELOAD_KEY, String(now));
   // The page-load telemetry names this reload's cause on the other side.
   document.dispatchEvent(new CustomEvent('charliebot:page-load-cause', {detail: {cause: 'stale_asset'}}));
-  location.reload();
+  reloadAfterDroppingShell();
 }
 
 function showStalePageBanner() {

@@ -23,7 +23,7 @@ function _commitMessage(msg) {
   if (engine && engine.hasMessage(msg)) return;
   // A committed draft the page streamed arrives without its text, thinking or tool rows: they are what the
   // page already holds. An assistant or plan message closes the draft, and the server starts the next draft's
-  // positions at zero, so the page drops the text it held: a next draft that opens like the closed one would
+  // positions at zero, so the page drops the text it held. A next draft that opens like the closed one would
   // otherwise match that text and lose its own.
   if (msg.content_streamed) msg = withStreamedDraft(msg);
   if (msg.role === 'assistant' || msg.role === 'plan') resetStreamDraft();
@@ -74,7 +74,7 @@ registerWsMessageHandler('task_tree_changed', (ev) => {
 
 // The socket does not replay task_tree_changed frames, so an open that follows a network close reloads the list,
 // which recovers the rows the gap hid. A switch keeps the socket and rides a subscribe frame, and the no-session view
-// closes it, so a network close is the only close whose rows are missing; a page load's own first socket needs no
+// closes it, so a network close is the only close whose rows are missing. A page load's own first socket needs no
 // reload because the page carries the server's snapshot in its rows.
 registerWsConnectHandler(() => {
   // The network-loss flag feeds the connect handlers that repair their own state (the plan panel); the list resync

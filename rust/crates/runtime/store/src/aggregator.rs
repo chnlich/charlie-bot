@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use crate::hooks::EventRenderer;
 use crate::message_events;
+use crate::streaming::{APPEND, LENGTH, THINKING_APPEND, THINKING_LENGTH};
 use crate::tool_rows::{SubagentStatus, ToolRow, ToolRows, Usage, tool_preview};
 use crate::{StoreError, StoreResult};
 
@@ -575,8 +576,8 @@ impl MessageAggregator {
     if !append.is_empty() {
       self.streamed_text_bytes = self.assistant_buf.len();
       self.streamed_text_utf16 += append.encode_utf16().count();
-      frame["append"] = json!(append);
-      frame["length"] = json!(self.streamed_text_utf16);
+      frame[APPEND] = json!(append);
+      frame[LENGTH] = json!(self.streamed_text_utf16);
     }
     if !thinking_append.is_empty() {
       self.streamed_thinking_utf16 = if thinking_extends {
@@ -585,8 +586,8 @@ impl MessageAggregator {
         self.thinking_buf.encode_utf16().count()
       };
       self.streamed_thinking.clone_from(&self.thinking_buf);
-      frame["thinking_append"] = json!(thinking_append);
-      frame["thinking_length"] = json!(self.streamed_thinking_utf16);
+      frame[THINKING_APPEND] = json!(thinking_append);
+      frame[THINKING_LENGTH] = json!(self.streamed_thinking_utf16);
     }
     if let Some(from) = tools_from {
       self.streamed_tools = tools.clone();

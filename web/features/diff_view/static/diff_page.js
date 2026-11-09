@@ -627,24 +627,24 @@
     const row = document.createElement('div');
     row.className = 'border border-slate-200 rounded mb-2 overflow-hidden';
 
-    // Desktop: one line of chevron, status, counts, then the path. Phone (max-sm): a grid of two lines, the file name
-    // first and the counts with the directory under it. The name spans the row, so it is never cut short.
+    // Desktop: one line of chevron, status, counts, then the path. A phone lays the row out as the diff page's
+    // `.diff-file-row` grid: the name and the counts share its first line, and a path with a directory puts it on the
+    // second line, so a file at the repository root keeps one line.
     const header = document.createElement('button');
     header.type = 'button';
     header.className =
-      'w-full flex items-center gap-3 px-3 py-2 bg-slate-50 hover:bg-slate-100 text-left ' +
-      'max-sm:grid max-sm:grid-cols-[auto_auto_5.5rem_minmax(0,1fr)] max-sm:gap-x-3 max-sm:gap-y-0.5';
+      'diff-file-row w-full flex items-center gap-3 px-3 py-2 bg-slate-50 hover:bg-slate-100 text-left';
 
     const chevron = document.createElement('span');
     chevron.textContent = '▶';
-    chevron.className = 'text-slate-400 text-xs shrink-0 transition-transform max-sm:row-span-2';
+    chevron.className = 'diff-file-chevron text-slate-400 text-xs shrink-0 transition-transform';
 
     const badge = statusBadge(file.status);
-    badge.classList.add('max-sm:row-span-2');
+    badge.classList.add('diff-file-badge');
 
     // The line counts sit in a fixed-width pair, so the + and - figures of every row line up in one column.
     const counts = document.createElement('span');
-    counts.className = 'flex font-mono text-xs whitespace-nowrap shrink-0 max-sm:row-start-2 max-sm:col-start-3';
+    counts.className = 'diff-file-counts flex font-mono text-xs whitespace-nowrap shrink-0';
     const add = document.createElement('span');
     add.className = 'w-10 text-right ' + ADDED_COUNT_CLASS;
     add.textContent = `+${file.additions}`;
@@ -660,14 +660,12 @@
     if (slash >= 0) {
       const dir = document.createElement('span');
       dir.textContent = file.path.slice(0, slash + 1);
-      dir.className = 'min-w-0 truncate text-slate-500 max-sm:row-start-2 max-sm:col-start-4';
+      dir.className = 'diff-file-dir min-w-0 truncate text-slate-500';
       pathEl.append(dir);
     }
     const name = document.createElement('span');
     name.textContent = file.path.slice(slash + 1);
-    name.className =
-      'shrink-0 font-semibold text-slate-900 max-sm:col-span-2 max-sm:col-start-3 ' +
-      'max-sm:whitespace-normal max-sm:break-all';
+    name.className = 'diff-file-name shrink-0 font-semibold text-slate-900';
     pathEl.append(name);
 
     header.append(chevron, badge, counts, pathEl);

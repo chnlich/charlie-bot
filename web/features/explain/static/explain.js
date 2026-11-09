@@ -284,11 +284,18 @@ const GLOBALS = {
 Chat.wire(GLOBALS, {});
 
 // The page fetches this module after its document, so the rounds it decorates are usually rendered by the time it
-// lands and the registrations above reached none of them. Repaint the rendered rounds, and read the statuses of the
-// session the page shows when its session-data-load event has already fired.
+// lands: their button groups were built before the registration above and carry no explain button. Add the button
+// to each rendered group, paint its state, and read the statuses of the session the page shows when its
+// session-data-load event has already fired.
 if (document.readyState !== 'loading') {
-  Chat.repaintRoundButtons(document);
-  if (!sessionDataLoaded && SESSION_ID) loadExplainStatuses({sessionId: SESSION_ID, isCurrent: () => true});
+  if (SESSION_ID) {
+    document.querySelectorAll('.round-buttons[data-round-event-index]').forEach((group) => {
+      if (group.querySelector('.explain-toggle')) return;
+      group.insertAdjacentHTML('afterbegin', renderExplainButton(SESSION_ID, Number(group.dataset.roundEventIndex)));
+    });
+    Chat.repaintRoundButtons(document);
+    if (!sessionDataLoaded) loadExplainStatuses({sessionId: SESSION_ID, isCurrent: () => true});
+  }
 }
 
 })();

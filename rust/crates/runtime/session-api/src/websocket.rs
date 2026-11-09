@@ -1344,8 +1344,9 @@ mod tests {
       .subscribe_session_before_load("synthetic", || async { load_store.load_chat_events_sync("synthetic").unwrap() })
       .await;
     assert_eq!(events.len(), 1);
+    // A copied event sits in the channel at once, so the window stays short of the 0.1 s unit-test budget.
     assert!(
-      time::timeout(Duration::from_millis(100), subscription.recv()).await.is_err(),
+      time::timeout(Duration::from_millis(50), subscription.recv()).await.is_err(),
       "the subscription carries no copy of the event the replay delivers"
     );
   }
@@ -1377,8 +1378,9 @@ mod tests {
     assert!(events.is_empty(), "the read's snapshot predates the append it blocked");
     let frame = time::timeout(Duration::from_millis(500), subscription.recv()).await.unwrap().unwrap();
     assert_eq!(serde_json::from_str::<Value>(&frame).unwrap()["content"], "mid-flight");
+    // A second delivery sits in the channel at once, so the window stays short of the 0.1 s unit-test budget.
     assert!(
-      time::timeout(Duration::from_millis(100), subscription.recv()).await.is_err(),
+      time::timeout(Duration::from_millis(50), subscription.recv()).await.is_err(),
       "the subscription delivers the blocked append once, never twice"
     );
   }

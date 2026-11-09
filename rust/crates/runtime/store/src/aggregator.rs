@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use crate::hooks::EventRenderer;
 use crate::message_events;
+use crate::metadata::BASE_BRANCH_FIELD;
 use crate::streaming::{APPEND, LENGTH, THINKING_APPEND, THINKING_LENGTH};
 use crate::tool_rows::{SubagentStatus, ToolRow, ToolRows, Usage, tool_preview};
 use crate::{StoreError, StoreResult};
@@ -841,7 +842,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
         "events_ref": event.field("events_ref").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
         "result_ref": event.field("result_ref").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
         "repo_path": event.field("repo_path").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
-        "base_branch": event.field("base_branch").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
+        (BASE_BRANCH_FIELD): event.field(BASE_BRANCH_FIELD).filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
         "branch_name": event.field("branch_name").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
         "run_id": event.field("run_id").filter(|value| is_truthy(*value)).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       })

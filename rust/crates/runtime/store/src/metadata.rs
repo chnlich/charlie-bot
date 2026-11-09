@@ -92,8 +92,8 @@ pub const KEEP_WORKTREE_FIELD: &str = "keep_worktree";
 /// The task-spec field holding the repository a task works in. The delegate request, the improve request and the run
 /// record carry the same name, so it is spelled once, here.
 pub const REPO_PATH_FIELD: &str = "repo_path";
-/// The task-spec field holding the branch a task branches from. The delegate request, the improve request and the run
-/// record carry the same name, so it is spelled once, here.
+/// The branch a task, its plan and its run record branch from. The delegate request, the improve request, the plan
+/// request and the run record carry the same name, so it is spelled once, here.
 pub const BASE_BRANCH_FIELD: &str = "base_branch";
 /// The response field holding a session's display name. The approval day view's rows and the voice recordings page's
 /// rows carry the same name, so it is spelled once, here.

@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use charliebot_store::metadata::BASE_BRANCH_FIELD;
 use charliebot_tasks::git;
 use serde_json::{Value, json};
 
@@ -50,7 +51,10 @@ pub async fn land_work_branch_after_loop(
   if merge_back && !stopped_by_user && summary_count > 0 {
     let (ok, push_err) = git::git_push_refspec(resolved_repo, work_branch, base_branch).await;
     if ok {
-      return Landing { merge_result: Some(json!({"merged": true, "base_branch": base_branch})), end_error: None };
+      return Landing {
+        merge_result: Some(json!({"merged": true, (BASE_BRANCH_FIELD): base_branch})),
+        end_error: None,
+      };
     }
     tracing::warn!(
       target: "charliebot_improve",
@@ -81,7 +85,7 @@ pub async fn land_work_branch_after_loop(
         "merged": false,
         "error": push_err,
         "work_branch": work_branch,
-        "base_branch": base_branch,
+        (BASE_BRANCH_FIELD): base_branch,
       })),
       end_error: Some(end_error),
     };

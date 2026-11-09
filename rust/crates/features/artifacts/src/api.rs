@@ -13,6 +13,7 @@ use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, Request
 use charliebot_compat::responses;
 use charliebot_compat::routing::{get_only, post_only};
 use charliebot_registry::FeatureContext;
+use charliebot_store::metadata::BASE_BRANCH_FIELD;
 use serde_json::{Map, Value, json};
 
 use crate::plan_verbs::{self, Amendment, SessionLocks, VerbError};
@@ -148,7 +149,7 @@ const PRESENT_FIELDS: &[Field] = &[
   Field::required("file", FieldType::String),
   Field::required("title", FieldType::String),
   Field::optional("base_repo", FieldType::NullableString),
-  Field::optional("base_branch", FieldType::NullableString),
+  Field::optional(BASE_BRANCH_FIELD, FieldType::NullableString),
   Field::optional("base_sha", FieldType::NullableString),
 ];
 const PRESENT_BODY: BodyModel = BodyModel::required(PRESENT_FIELDS).forbid_extra();
@@ -163,7 +164,7 @@ const AMEND_FIELDS: &[Field] = &[
   Field::optional("trigger", FieldType::Literal(AMEND_TRIGGERS)),
   Field::required("note", FieldType::String),
   Field::optional("base_repo", FieldType::NullableString),
-  Field::optional("base_branch", FieldType::NullableString),
+  Field::optional(BASE_BRANCH_FIELD, FieldType::NullableString),
   Field::optional("base_sha", FieldType::NullableString),
 ];
 const AMEND_BODY: BodyModel = BodyModel::required(AMEND_FIELDS).forbid_extra();
@@ -222,7 +223,7 @@ impl AmendRequest {
 /// The base a version records, `null` when the request names none of the three base fields.
 fn build_base(fields: &mut Map<String, Value>) -> Value {
   let repo = fields.remove("base_repo").unwrap_or(Value::Null);
-  let branch = fields.remove("base_branch").unwrap_or(Value::Null);
+  let branch = fields.remove(BASE_BRANCH_FIELD).unwrap_or(Value::Null);
   let sha = fields.remove("base_sha").unwrap_or(Value::Null);
   if repo.is_null() && branch.is_null() && sha.is_null() {
     Value::Null

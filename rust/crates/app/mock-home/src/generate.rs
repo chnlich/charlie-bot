@@ -133,7 +133,7 @@ fn view_task(rng: &mut Rng) -> Value {
     .map(|_| format!("workspace/synthetic/{:04x}/{:08x}.md", rng.below(65_536), rng.next_u64() as u32))
     .collect();
   json!({"acceptance": acceptance, "context_refs": context_refs, (metadata::REPO_PATH_FIELD): "workspace/synthetic",
-         "base_branch": "main"})
+         (metadata::BASE_BRANCH_FIELD): "main"})
 }
 
 /// Writes the sessions and the manifest into `home`, and returns the total event-log bytes. The view shape adds a task

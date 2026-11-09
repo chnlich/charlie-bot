@@ -20,7 +20,8 @@ use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{
-  KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SessionMetadata, TaskApprover, TaskProfile, TaskSpec, TaskType, WORK_STATE,
+  BASE_BRANCH_FIELD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SessionMetadata, TaskApprover, TaskProfile, TaskSpec,
+  TaskType, WORK_STATE,
 };
 use charliebot_store::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, PatchTask, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreResult,
@@ -52,7 +53,7 @@ const TASK_SPEC_FIELDS: &[Field] = &[
   Field::optional("acceptance", FieldType::StringList),
   Field::optional("context_refs", FieldType::StringList),
   Field::optional(REPO_PATH_FIELD, FieldType::NullableString),
-  Field::optional("base_branch", FieldType::NullableString),
+  Field::optional(BASE_BRANCH_FIELD, FieldType::NullableString),
   Field::optional("task_type", FieldType::NullableEnum(TASK_TYPE_CHOICES)),
   Field::optional(KEEP_WORKTREE_FIELD, FieldType::Boolean),
   Field::optional(

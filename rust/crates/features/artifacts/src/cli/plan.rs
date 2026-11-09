@@ -14,6 +14,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_core::paths;
+use charliebot_store::metadata::BASE_BRANCH_FIELD;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Value, json};
 
@@ -213,7 +214,7 @@ fn present_payload(session_id: &str, args: &PresentArgs) -> Value {
     "file": args.file,
     "title": args.title,
     "base_repo": args.base.base_repo,
-    "base_branch": args.base.base_branch,
+    (BASE_BRANCH_FIELD): args.base.base_branch,
     "base_sha": args.base.base_sha,
   })
 }
@@ -226,7 +227,7 @@ fn amend_payload(session_id: &str, args: &AmendArgs) -> Value {
     "trigger": args.trigger,
     "note": args.note,
     "base_repo": args.base.base_repo,
-    "base_branch": args.base.base_branch,
+    (BASE_BRANCH_FIELD): args.base.base_branch,
     "base_sha": args.base.base_sha,
   })
 }

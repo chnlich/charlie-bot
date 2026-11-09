@@ -18,14 +18,15 @@ pub const SIDEBAR_CHANNEL: &str = "sidebar";
 pub const STREAM_COALESCE_INTERVAL: Duration = Duration::from_millis(200);
 
 /// The stream frame field holding the answer text added since the previous frame. The aggregator writes it, the
-/// window merges it, and a page that missed the live frames builds it into its catch-up frame.
+/// window merges it, and `session-api` writes it into the catch-up frame a page replays after missing the live frames.
 pub const APPEND: &str = "append";
 
 /// The stream frame field holding the answer's UTF-16 length after the frame, so a page can tell a replayed append
 /// from new text.
 pub const LENGTH: &str = "length";
 
-/// The stream frame field holding the thinking text added since the previous frame.
+/// The stream frame field holding the thinking text to append to the page's held thinking. A frame that extends the
+/// earlier thinking carries only the new text; a frame that replaces it carries the whole buffer.
 pub const THINKING_APPEND: &str = "thinking_append";
 
 /// The stream frame field holding the thinking's UTF-16 length after the frame.

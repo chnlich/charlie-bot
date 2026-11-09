@@ -21,6 +21,7 @@ use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::kill::{exit_code, kill_process_group};
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
 use charliebot_core::event_types;
+use charliebot_core::headers::AUTHORIZATION;
 use charliebot_core::run_token;
 use charliebot_core::text_repr::is_truthy;
 use charliebot_core::web_search::{MCP_PATH, MCP_SERVER_NAME, TOOL_NAME};
@@ -560,7 +561,7 @@ pub fn without_gateway_env(env: &Env) -> Env {
 pub fn web_search_mcp_config(server_port: u16) -> String {
   let bearer = format!("Bearer ${{{}}}", run_token::RUN_TOKEN_ENV);
   let mut headers = Map::new();
-  headers.insert("Authorization".to_string(), Value::String(bearer));
+  headers.insert(AUTHORIZATION.to_string(), Value::String(bearer));
   let mut server = Map::new();
   server.insert("type".to_string(), Value::String("http".to_string()));
   server.insert("url".to_string(), Value::String(format!("http://localhost:{server_port}{MCP_PATH}")));

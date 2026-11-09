@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use charliebot_core::credentials::REDACTED;
+use charliebot_core::headers::AUTHORIZATION;
 use clap::Args;
 use serde_json::json;
 
@@ -71,7 +72,7 @@ impl RequestArgs {
       {
         return Err(CliExit::usage("each --header must be one NAME:VALUE line"));
       }
-      if name.eq_ignore_ascii_case("authorization") {
+      if name.eq_ignore_ascii_case(AUTHORIZATION) {
         return Err(CliExit::usage("the Authorization header is set by the command"));
       }
       headers.push((name.to_string(), value.to_string()));
@@ -113,7 +114,7 @@ impl Request {
 
   /// The request with the credential's bearer header. Nothing else carries the token out of the process.
   pub fn bearer(self, token: &str) -> Request {
-    self.header("Authorization", format!("Bearer {token}"))
+    self.header(AUTHORIZATION, format!("Bearer {token}"))
   }
 }
 

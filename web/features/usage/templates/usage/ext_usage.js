@@ -307,9 +307,9 @@ function _buildPlanGroup(row, plan) {
 // strip's slate-800 background the note at slate-300 renders 4.7:1 and the
 // account name at slate-200 renders 5.4:1. Both sit above the 4.5:1 a 12px line
 // needs.
-// The provider pill keeps full opacity. Its tinted background drops a dimmed
-// Claude pill to 3.4:1 and a dimmed Codex pill to 3.7:1, while the same pill
-// reads 6.4:1 and 6.5:1 at full opacity.
+// The provider pill keeps full opacity. A dimmed Claude pill drops to 3.4:1 and
+// a dimmed Codex pill to 3.7:1, under the 4.5:1 floor. At full opacity the same
+// pill reads 6.4:1 and 6.5:1.
 function _buildStatusRow(key, providerData, field, text) {
   const row = _el('div', 'flex items-center gap-1.5 text-slate-300');
   row.setAttribute('data-key', key);
@@ -409,7 +409,7 @@ function _buildRow(key, providerData) {
     const s24 = _el('span', '');
     s24.setAttribute('data-field', 'spend-24h');
     s24.textContent = _formatSpendUsd(spend.last_24h_usd);
-    // The separator is a glyph the reader sees: slate-400 renders 6.0:1 on the strip, where
+    // The separator is a glyph the reader sees: slate-400 renders 6.0:1 on the strip.
     // slate-700's 1.48:1 leaves the 24h and 7d readings without a boundary.
     const dot = _el('span', 'text-slate-400');
     dot.textContent = '·';
@@ -472,8 +472,8 @@ function _buildSummaryRow(providers) {
   let first = true;
   for (const [key, providerData] of Object.entries(providers)) {
     if (!first) {
-      // The account boundary in the collapsed summary. slate-400 renders 6.0:1 on the strip,
-      // where slate-700's 1.48:1 hides the dot and runs two accounts into one phrase.
+      // The account boundary in the collapsed summary. slate-400 renders 6.0:1 on the
+      // strip; slate-700's 1.48:1 hides the dot and runs two accounts into one phrase.
       const sep = _el('span', 'text-slate-400');
       sep.textContent = '·';
       row.appendChild(sep);
@@ -486,10 +486,10 @@ function _buildSummaryRow(providers) {
     name.textContent = providerData.account || key;
     seg.appendChild(name);
     const reading = _summaryReading(providerData);
-    // A reading without a percentage is text, not a demoted number: the state
-    // words ("loading", "error"), "no cap", a credit balance and the
-    // unknown-credit dash all take this branch. slate-400 renders 6.0:1 on the
-    // strip, where slate-500 rendered 3.1:1.
+    // A reading without a percentage is text, not a demoted number. The state words
+    // ("loading", "error"), "no cap", a credit balance and the unknown-credit dash
+    // all take this branch. On the strip, slate-400 renders 6.0:1, where slate-500
+    // rendered 3.1:1.
     const pctEl = _el('span', reading.pct === null ? 'text-slate-400' : _barTextColor(reading.pct));
     pctEl.setAttribute('data-field', 'summary-pct');
     pctEl.textContent = reading.text;

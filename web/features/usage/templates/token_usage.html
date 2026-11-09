@@ -31,12 +31,15 @@
   .meta { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 22px }
   .mtag { font-size:11.5px; font-family:var(--mono); background:var(--panel2);
     border:1px solid var(--bd); border-radius:6px; padding:3px 9px; color:var(--tx) }
-  /* The sources and scope chips fold behind one "Details" chip under the subtitle: the subtitle already prints the
-     ledger time and the all-time card its call count, so only this pair needs a fold. The button keeps the chip's
-     shape; opened, its chips take the row under the chip row and the fold's chevron turns. */
+  /* The sources and scope chips fold behind one "Details" chip under the subtitle.
+     The subtitle already prints the ledger time, and the all-time card its call
+     count, so only this pair needs a fold. The button keeps the chip's shape;
+     opened, its chips take the row under the chip row and the fold's chevron
+     turns. */
   .detBtn { line-height:inherit; cursor:pointer }
-  /* The keyboard ring uses the page's accent, as the approval page's folded rows do, so Enter and Space give the chip
-     the same visible focus the rest of the page shows. */
+  /* The keyboard ring uses the page's accent, as the approval page's folded rows
+     do. Enter and Space then give the chip the same visible focus the rest of the
+     page shows. */
   .detBtn:focus-visible { outline:2px solid var(--acc); outline-offset:2px }
   .detBtn::after { content:" \25B8" }
   .detBtn[aria-expanded="true"]::after { content:" \25BE" }
@@ -49,9 +52,10 @@
   .heroCard { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:14px 16px; min-width:0 }
   .heroCard .lab { font-size:12px; color:var(--mut); margin:0 0 2px }
   .heroCard .val { font-size:34px; line-height:1.1; font-weight:640; letter-spacing:-1px; font-variant-numeric:tabular-nums }
-  /* Every secondary figure on this page reads in the body muted tone. --mut2 falls under the 4.5:1 floor for text
-     this small: it renders 3.70:1 on the white card and 3.38:1 on the page background. --mut renders 5.77:1 and
-     5.28:1, so it carries those figures. */
+  /* Every secondary figure on this page reads in the body muted tone. --mut2 falls
+     under the 4.5:1 floor for text this small. It renders 3.70:1 on the white card
+     and 3.38:1 on the page background. The --mut tone renders 5.77:1 and 5.28:1,
+     so it carries those figures. */
   .heroCard .foot { font-size:12px; color:var(--mut); margin:4px 0 0 }
   .heroCard .split { font-size:11.5px; line-height:1.5 }
   .card { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:16px 18px 12px }

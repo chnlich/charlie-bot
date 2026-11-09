@@ -16,8 +16,8 @@
   #ext-usage-strip [data-field="summary"] > span.text-slate-400 { display: none; }
 }
 /* Account rows are single-line flex and can exceed a narrow viewport, and body is
-   overflow:hidden — without a scroll container here the row tail is clipped and
-   unreachable. nowrap keeps each account row on that one line: a hyphenated
+   overflow:hidden. Without a scroll container here the row tail is clipped and
+   unreachable. The nowrap rule keeps each account row on that one line: a hyphenated
    account name otherwise splits mid-word, leaving its percentage on a second
    line. The collapsed summary is the exception, wrapped on phones above. */
 #ext-usage-strip { overflow-x: auto; white-space: nowrap; }

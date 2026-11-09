@@ -9,6 +9,7 @@ use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::context::{FeatureContext, StateError};
 use charliebot_registry::sequence::{SequenceCompletion, SequenceDispatch};
 use charliebot_store::compact::CompactValue;
+use charliebot_store::control_events::{ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use charliebot_store::metadata::{TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord, run_not_found_in_task_text};
 use charliebot_store::session_fork::CloseReportRedelivery;
@@ -92,10 +93,10 @@ impl Dispatcher {
     {
       return Err(StoreError::invalid(format!("input_mode applies to a user message, not to {event_type}")));
     }
-    if event_type == event_types::USER && actor != "user" {
+    if event_type == event_types::USER && actor != ACTOR_USER {
       return Err(StoreError::forbidden("only verified operator input is a real user message"));
     }
-    if event_type == event_types::SCHEDULED_TRIGGER && actor != "system" {
+    if event_type == event_types::SCHEDULED_TRIGGER && actor != ACTOR_SYSTEM {
       return Err(StoreError::forbidden("only the server's own scheduler mints scheduled triggers"));
     }
     let fields = admit_fields(&fields)?;
@@ -554,7 +555,7 @@ impl Dispatcher {
         summary,
         result_refs,
         recipient,
-        actor: "agent",
+        actor: ACTOR_AGENT,
       })
       .await
   }
@@ -580,7 +581,7 @@ impl Dispatcher {
         summary,
         result_refs,
         recipient,
-        "agent",
+        ACTOR_AGENT,
       )
       .await
   }
@@ -691,7 +692,7 @@ impl Dispatcher {
           summary: &summary,
           result_refs: Some(&result_refs),
           recipient: Some(&recipient),
-          actor: "system",
+          actor: ACTOR_SYSTEM,
         })
         .await?;
       if created {
@@ -723,7 +724,7 @@ impl Dispatcher {
             summary: &summary,
             result_refs: Some(&result_refs),
             recipient: Some(&recipient),
-            actor: "system",
+            actor: ACTOR_SYSTEM,
           },
         )
         .await?;

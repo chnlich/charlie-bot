@@ -75,13 +75,13 @@ and your changes land directly on the host paths the task names.
 
 <!-- section: task_spec_source_files_repo_less -->
 ## Task Spec Source Files
-- If the task text below is a structured task spec or contains a `## Source Files` section, read every listed source file before editing.
+- If the goal of your task record is a structured task spec or contains a `## Source Files` section, read every listed source file before editing.
 - If the task spec and source files conflict, stop and report the conflict instead of inventing a merged requirement.
 - Source Files entries name the host paths this task works on; there is no repository checkout and no worktree.
 
 <!-- section: task_spec_source_files -->
 ## Task Spec Source Files
-- If the task text below is a structured task spec or contains a `## Source Files` section, read every listed source file before editing.
+- If the goal of your task record is a structured task spec or contains a `## Source Files` section, read every listed source file before editing.
 - If the task spec and source files conflict, stop and report the conflict instead of inventing a merged requirement.
 - Source Files entries are read-only references into the base checkout. Make every edit inside your assigned worktree via repo-relative paths; writing to any path outside your worktree is forbidden.
 

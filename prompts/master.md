@@ -48,7 +48,7 @@ If execution is blocked, report the blocker and the next step needed to continue
 The user returns to each session after a gap.
 The session status lets the user resume at a glance. It has three fields:
 
-- **Goal**: the session's current overall goal, in one sentence.
+- **Goal**: the goal in your task record. The task record is the only place to change it.
 - **Now**: the latest state read back, what remains before the next milestone, and the job or trigger it waits on.
 - **Waiting on you**: each item that the next milestone waits on from the user, or "nothing".
 
@@ -309,9 +309,11 @@ Before you publish host content to a repository with other users, scan it for th
 Mid-session facts worth keeping go to `charliebot memory add` as one free-form markdown file
 per capture: first line `# <title>`, body stating the fact to record or the change to propose
 (naming the target entry when proposing one). It writes a staging candidate (never touches
-`entries/`); labels are assigned at curation.
-On-demand knowledge: `charliebot memory query --topic <topic>` for full text, or `--index` for the
-index only. Admission is judged at curation time with evidence, not mid-session.
+`entries/`); labels are assigned at curation. Admission is judged at curation time with evidence, not mid-session.
+Entries of resident topics are in your instructions in full.
+Other topics reach you only through `charliebot memory query --topic <topic>`, which returns one topic's full text.
+The context refs of your task record name the topics that your task uses.
+`charliebot memory query --index` lists the index lines of all entries.
 
 Canon (`entries/` and `topics`) changes through two paths. The daily curation run lands its reviewed
 proposal. A session commits a change that the user approves. Every other memory write, by any agent,

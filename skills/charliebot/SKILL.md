@@ -99,15 +99,11 @@ A spec for one of the kinds of work listed under Requester Words in `charliebot 
 
 ### Task-Spec Amendments
 
-- `charliebot delegate` stores each task spec as JSON in `<child-session>/data/runs/<run>/task_spec.md`.
+- `charliebot delegate` stores each task spec as JSON in `<child-session>/data/runs/<run>/task_spec.md`, an audit copy that the code never sends to a model.
 - The `goal` field contains the Markdown task text.
-- Workers receive that text in their launch prompt.
-- Edit a running worker's run copy with a JSON parser because the worker reads only that file.
-- Count reads with `grep -c task_spec <run-dir>/agent.raw.ndjson` after an edit. A finished run stores that log as `agent.raw.ndjson.zst`, whose decompressed content is the same text.
-- Stop the worker and delegate again when the count is zero or does not increase.
+- Workers receive that text in the task block of their instructions.
 - Later work runs and review runs read the spec from the worker session task record in `metadata.json`.
-- Editing one run copy changes that run only.
-- Delegate again to amend a worker that resumes after a trigger.
+- To amend a worker's spec, write its task record with `charliebot session task-record <task id>`. The worker reads the changed block at its next run.
 - A `charliebot session send` message stays pending until the current run ends.
 - A pending message can start one extra work run after review.
 - The backend that `delegate` resolves runs every work run of the worker session, including follow-up runs that pending input starts. The worker session task record keeps that backend. See `charliebot delegate --help`, Backend selection.
@@ -143,7 +139,7 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 
 - **Propagate `repo_path` explicitly to every derived/downstream task** (review workers, retries, continuations, chained tasks) — pass it from the originating task via `ThreadMetadata.repo_path`. `discover_repos()` returns repos in non-deterministic order, so it is only safe at the top-level entry point (user delegation, CLI); downstream tasks read the propagated value instead. This is a recurring bug — always propagate repo_path explicitly.
 - **Package-owned metadata keys**: A package registers its top-level `metadata.json` keys from its `register()` as a `MetadataSlot` (`rust/crates/infra/core/src/metadata_slot.rs`), and the store's metadata module (`rust/crates/runtime/store/src/metadata.rs`) serializes and writes them. A package reads and writes its fields through its own `metadata.rs` accessors. `SessionMetadata` and `ThreadMetadata` keep a key that no package registers and write it back unchanged. The cc-claude package owns `claude_account` and `claude_session_id`.
-- Session instructions: the prompts task in `rust/crates/runtime/tasks/src/prompts/` assembles the ordered instruction blocks for each Run, and pins them in the Run's `prompt_snapshot.json`. A manager's blocks hold `prompts/task_base.md`, `prompts/master.md`, the workflow rules file, `prompts/task_manager.md`, and the host supplement (`$CHARLIEBOT_HOME/MASTER_AGENT_PROMPT.md`, named by `cfg.claude_md_file`). The memory package adds its segments through the turn-contribution registry: `select_master_memory` and `select_worker_memory` in `rust/crates/features/memory/src/memory.rs`, reached through `rust/crates/features/memory/src/turn_contribution.rs`, serve a manager and every worker kind. Each selection carries the full bodies of the applicable entries in resident or repo topics. After them come the `# Memory index` header line and one line per remaining entry. Each backend delivers the joined text on every launch, a resumed run and a pool relay included. A manager turn writes it to the instruction file in the session cwd (Claude Code `CLAUDE.md`, other backends `AGENTS.md`), and a worker or review run writes it to `harness_instructions.md` in its Run directory.
+- Session instructions: the prompts task in `rust/crates/runtime/tasks/src/prompts/` assembles the ordered instruction blocks for each Run, and pins them in the Run's `prompt_snapshot.json`. A manager's blocks hold `prompts/task_base.md`, `prompts/master.md`, the workflow rules file, `prompts/task_manager.md`, and the host supplement (`$CHARLIEBOT_HOME/MASTER_AGENT_PROMPT.md`, named by `cfg.claude_md_file`). The memory package adds its segments through the turn-contribution registry: `select_master_memory` and `select_worker_memory` in `rust/crates/features/memory/src/memory.rs`, reached through `rust/crates/features/memory/src/turn_contribution.rs`, serve a manager and every worker kind. Each selection carries the full bodies of the applicable entries in resident or repo topics. Other entries reach a session only through `charliebot memory query`. The task block (`# Task record`, rendered from the task record by `render_task_block` in `rust/crates/runtime/tasks/src/prompts/task_block.rs`) comes last. Each backend delivers the joined text on every launch, a resumed run and a pool relay included. A manager turn writes it to the instruction file in the session cwd (Claude Code `CLAUDE.md`, other backends `AGENTS.md`), and a worker or review run writes it to `harness_instructions.md` in its Run directory.
 - Worker log display: In main chat panel, only show "worker {id} started/ended" with general purpose description. Full logs belong in the worker panel only.
 - Draft preservation: User's unsubmitted message text is preserved per-session when switching sessions.
 - Process-session recovery:

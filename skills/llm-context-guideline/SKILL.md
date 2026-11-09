@@ -12,11 +12,10 @@ user-invocable: false
 
 The store manages session context, and context is capability: a model reasons worse as its
 window fills, so curation optimizes for the smallest store whose entries still change future
-actions. Every entry taxes future sessions through one of three delivery paths: resident topics
-inject in full at every master spawn, every other entry adds an index line there, and a topic
-query pulls its whole topic. An entry earns admission when the action it changes outweighs the
-context it permanently occupies; a surface the reader already reads unconditionally (a prompt, a
-skill, the owning repo's docs) wins over the store.
+actions. Every entry taxes future sessions through one of two delivery paths: full text injected at a
+spawn that selects it (see Labeling), or a topic query that pulls its whole topic. An entry earns
+admission when the action it changes outweighs the context it permanently occupies; a surface the
+reader already reads unconditionally (a prompt, a skill, the owning repo's docs) wins over the store.
 
 The memory store (`$CHARLIEBOT_HOME/memory/`) is a local git repo of labeled entries: one durable
 fact or rule set per file under `entries/<topic>/<slug>.md`, with front matter restricted to
@@ -126,8 +125,8 @@ Every entry carries `scope`, `topic`, `audience`, and `title` in its front matte
   topics only, split entries for curation and audience separation, with the topic as the sole retrieval unit.
 - **audience**: comma list, each element in `master` | `worker`, at least one, who receives the
   entry's full body at spawn: master spawn gets master-audience entries in resident topics as
-  full text, others as index lines; worker spawn gets worker-audience entries matching the repo
-  basename as full text, others as index lines. Both roles: `audience: master, worker`.
+  full text; worker spawn gets worker-audience entries matching the repo basename as full text.
+  Other entries reach a session only through a topic query. Both roles: `audience: master, worker`.
 - **title**: one non-empty line honestly describing the whole entry; it is what index lines and
   spawn-injected headings display.
 

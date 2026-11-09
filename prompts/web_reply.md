@@ -1,7 +1,8 @@
 # Web reply and session status
 
 The web reply is the message that the user reads in the For-you view of this session.
-The session status is the Goal, Now and Waiting on you of this session, as the Status Block section defines them.
+The session status is the Now and Waiting on you of this session, with the Goal from its task record,
+as the Status Block section defines them.
 The Status view of the session page shows the session status.
 The Everything view shows the full output of each turn.
 The For-you view shows your web replies and hides the rest of your turn output.
@@ -43,7 +44,7 @@ The For-you view shows your web replies and hides the rest of your turn output.
 
 ## When to set the session status
 
-- At the end of each turn, run one status command. When Goal, Now or Waiting on you differs from the state that this
+- At the end of each turn, run one status command. When Now or Waiting on you differs from the state that this
   turn read back, run `charliebot web status set`. Otherwise, run `charliebot web status confirm`. The panel then
   shows the state that the last turn read back.
 - The server reminds the session once when a turn ends without either command.
@@ -112,7 +113,7 @@ The For-you view shows your web replies and hides the rest of your turn output.
   The For-you view then shows each answer once.
 - Write the changed session status fields to a JSON file.
   Each field that the file leaves out keeps its stored value.
-- The JSON object takes any of the keys `goal`, `now` and `waiting`.
+- The JSON object takes any of the keys `now` and `waiting`. The goal comes from the task record.
 - `waiting` is a list of objects with the keys `text`, `context` and `link`.
 - When the file holds `waiting`, run `charliebot web status show` right before you write the file, and write the
   whole list from it: each item that stays, and each new or changed item. Each set replaces the whole list.

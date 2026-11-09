@@ -53,18 +53,28 @@ function dateClockMDHM(date) {
 // A page carries most of its scripts in its document, but a feature the reader may never open carries its scripts as
 // files under /static and loads them from the click that first needs it. The page's own bytes are then the price of
 // the features the reader sees. One promise per key: a second click while the files travel joins the first load, and
-// a failed load drops its entry so the next click tries again.
+// a failed load drops its entry so the next click tries again. The retry starts at the file that failed, because a
+// file that already ran must not run twice: its registrations would be duplicates.
 const pageScriptLoads = new Map();
+const pageScriptProgress = new Map();
 
 function loadPageScripts(key, paths) {
   if (!pageScriptLoads.has(key)) {
-    const loading = paths.reduce((previous, path) => previous.then(() => new Promise((resolve, reject) => {
+    const start = pageScriptProgress.get(key) || 0;
+    const loadOne = (path, index) => new Promise((resolve, reject) => {
       const script = document.createElement('script');
       script.src = path + '?v=' + encodeURIComponent(STATIC_ASSET_VERSION);
-      script.onload = resolve;
+      script.onload = () => {
+        pageScriptProgress.set(key, start + index + 1);
+        resolve();
+      };
       script.onerror = () => reject(new Error('the page script did not load: ' + path));
       document.head.appendChild(script);
-    })), Promise.resolve());
+    });
+    const loading = paths.slice(start).reduce(
+      (previous, path, index) => previous.then(() => loadOne(path, index)),
+      Promise.resolve(),
+    );
     pageScriptLoads.set(key, loading);
     loading.catch(() => pageScriptLoads.delete(key));
   }

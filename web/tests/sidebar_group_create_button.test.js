@@ -9,9 +9,12 @@
 // Harness follows sidebar_rename_prefill.test.js via
 // sidebar_groups_context_stub.js (namespace.js + groups.js only); the gear's
 // test adds session-actions.js and session-menus.js, whose openGroupHeaderMenu
-// the gear calls.
+// the gear calls. The deferral case runs the loader the page's document carries
+// in place of the row-menu module and watches the group's one download.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
@@ -142,4 +145,60 @@ test('expandSessionGroup turns a stored collapsed group into an expanded one', (
   context.Sidebar.expandSessionGroup('alpha');
 
   assert.deepEqual(writes, [[SESSION_GROUP_COLLAPSED_STORAGE_KEY, '{"alpha":false}']]);
+});
+
+test('a control click before the interaction scripts arrive loads the group once and then dispatches', async () => {
+  const {context} = buildContext();
+  const requests = [];
+  const forwarded = [];
+  let settle;
+  context.loadPageScripts = (key, paths) => {
+    requests.push([key, Array.from(paths)]);
+    return new Promise((resolve) => { settle = resolve; });
+  };
+  const loader = fs.readFileSync(
+    path.join(__dirname, '..', 'templates', 'js', 'sidebar', 'row-menu.js'), 'utf8');
+  vm.runInContext(loader, context, {filename: 'templates/js/sidebar/row-menu.js'});
+
+  assert.equal(typeof context.Sidebar.openSessionRowMenu, 'function', 'the loader forwards the menu control');
+  assert.equal(requests.length, 0, 'the loader fetches nothing until a control call');
+
+  const pending = context.sidebarControl('openSessionRowMenu', {id: 'gear'}, 's1');
+  assert.equal(requests.length, 1, 'the first call starts one download');
+  assert.equal(requests[0][0], 'sidebar-interactions');
+  assert.deepEqual(requests[0][1], [
+    '/static/js/sidebar/row-menu.js', '/static/js/sidebar/modals.js',
+    '/static/js/sidebar/session-actions.js', '/static/js/sidebar/session-menus.js',
+  ]);
+
+  // A second click while the group downloads joins the first load.
+  const second = context.sidebarControl('openSessionRowMenu', {id: 'gear2'}, 's2');
+  assert.equal(requests.length, 1);
+
+  // The module's own registration arrives with the download and takes the dispatch.
+  context.registerSidebarControl('openSessionRowMenu', (...args) => { forwarded.push(args); });
+  settle();
+  await pending;
+  await second;
+  assert.deepEqual(forwarded, [[{id: 'gear'}, 's1'], [{id: 'gear2'}, 's2']]);
+});
+
+test('a deferred handler reads the currentTarget the click was made with', async () => {
+  const {context} = buildContext();
+  let settle;
+  context.loadPageScripts = () => new Promise((resolve) => { settle = resolve; });
+  const loader = fs.readFileSync(
+    path.join(__dirname, '..', 'templates', 'js', 'sidebar', 'row-menu.js'), 'utf8');
+  vm.runInContext(loader, context, {filename: 'templates/js/sidebar/row-menu.js'});
+
+  const wrapper = {id: 'header-wrapper'};
+  const event = {currentTarget: wrapper, preventDefault() {}};
+  const seen = [];
+  const pending = context.startRename(event, 's1');
+  // The browser clears currentTarget when the dispatch ends, before the group arrives.
+  event.currentTarget = null;
+  context.Sidebar.startRename = (e, id) => { seen.push([e.currentTarget, id]); };
+  settle();
+  await pending;
+  assert.deepEqual(seen, [[wrapper, 's1']]);
 });

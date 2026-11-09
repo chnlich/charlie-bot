@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
@@ -83,6 +85,12 @@ function loadRoundActionModules(context, wsHandlers) {
   context.location = {};
   context.alert = () => {};
   vm.runInContext(readStatic('sidebar/modals.js'), context, {filename: 'sidebar/modals.js'});
+  // The page's document carries the loader in place of the module; it registers the separator line's
+  // Clone and Elon-e buttons at load, and the module's copy leaves that registration to it.
+  context.Sidebar.deferSidebarInteractions = () => {};
+  vm.runInContext(
+    fs.readFileSync(path.join(__dirname, '..', 'templates', 'js', 'sidebar', 'modals.js'), 'utf8'),
+    context, {filename: 'templates/js/sidebar/modals.js'});
   context.AbortController = AbortController;
   vm.runInContext(readStatic('view-requests.js'), context, {filename: 'view-requests.js'});
   vm.runInContext(readPackageStatic('features', 'explain', 'explain.js'), context, {filename: 'explain.js'});

@@ -77,7 +77,8 @@ thread branch — the directory name is the branch name with `/` replaced by `-`
 charlie-bot/
 ├── rust/crates/        # The Rust server and CLI crates; the server's entry point is app/server
 ├── web/                # The whole frontend: templates/, static/, features/, backends/, tests/ and the
-│                       # frontend web/package.json and web/tailwind.config.js
+│                       # frontend web/package.json and web/tailwind.config.js, plus the events viewer's own
+│                       # build in web/tailwind.events.config.js
 ├── configs/            # Default templates and examples
 ├── dev/                # Repository maintenance: git hooks, checks, the CSS build and the improve prompts
 ├── docs/               # This specification and the design documents

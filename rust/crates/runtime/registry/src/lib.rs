@@ -29,6 +29,7 @@ pub mod templating;
 pub mod thread_origin;
 pub mod turn;
 pub mod usage;
+pub mod usage_sweep;
 mod watch;
 pub mod wiring;
 

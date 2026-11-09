@@ -805,6 +805,7 @@ async fn a_finished_manager_turn_persists_its_observation_before_master_done_and
     billing: None,
     backend_type: "synthetic".to_string(),
     type_fields: serde_yaml::Mapping::new(),
+    visible: true,
   };
   // The run's raw log is set by the observation, so each master_done records whether it came after it.
   let raw_log_at_master_done = Arc::new(Mutex::new(Vec::new()));

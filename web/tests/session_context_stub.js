@@ -127,6 +127,9 @@ function baseSessionContext(overrides = {}) {
     BACKEND_OPTIONS: overrides.BACKEND_OPTIONS || {},
     BACKEND_TYPES: overrides.BACKEND_TYPES || {},
     BACKEND_ALIASES: overrides.BACKEND_ALIASES || {},
+    // index.html's picker list: the config's visible options and pools, options first. The backend
+    // pickers read it; BACKEND_OPTIONS stays the full label map.
+    BACKEND_PICKER_ENTRIES: overrides.BACKEND_PICKER_ENTRIES || [],
     // index.html's server facts: the compact button's facts by backend type and
     // the configured default backend id.
     BACKEND_COMPACT: overrides.BACKEND_COMPACT || {},

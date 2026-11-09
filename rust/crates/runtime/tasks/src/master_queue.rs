@@ -833,6 +833,7 @@ mod tests {
       billing: None,
       backend_type: "synthetic_usage".to_string(),
       type_fields: serde_yaml::Mapping::new(),
+      visible: true,
     });
     let store_config = config.clone();
     let reload_config = config.clone();

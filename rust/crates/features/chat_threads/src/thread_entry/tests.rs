@@ -257,12 +257,14 @@ impl Home {
       billing: auto.then_some(charliebot_core::config::PoolBilling::Subscription),
       backend_type: "synthetic".to_string(),
       type_fields: Default::default(),
+      visible: true,
     });
     loaded.backends.pools.push(charliebot_core::config::PoolConfig {
       id: "pool".to_string(),
       label: "Pool".to_string(),
       rule: charliebot_core::config::PoolRule::Rotate,
       members: vec![charliebot_core::config::PoolMember { backend: "synthetic-fakechat".to_string() }],
+      visible: true,
     });
     loaded.backends.options.push(BackendOption {
       id: "synthetic-strong".to_string(),
@@ -272,6 +274,7 @@ impl Home {
       billing: auto.then_some(charliebot_core::config::PoolBilling::Payg),
       backend_type: "synthetic".to_string(),
       type_fields: Default::default(),
+      visible: true,
     });
     loaded.backends.routing = command.map(|command| charliebot_core::config::RoutingConfig { command });
     if auto {
@@ -283,6 +286,7 @@ impl Home {
           charliebot_core::config::PoolMember { backend: "synthetic-fakechat".to_string() },
           charliebot_core::config::PoolMember { backend: "synthetic-strong".to_string() },
         ],
+        visible: true,
       });
       loaded.backends.calls = [(
         charliebot_core::config::CallClass::Thread,

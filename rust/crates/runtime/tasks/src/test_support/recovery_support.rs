@@ -195,6 +195,7 @@ impl Scripts {
       model: format!("{id}-model"),
       backend_type: backend_type.to_string(),
       type_fields,
+      visible: true,
     }
   }
 
@@ -383,6 +384,7 @@ pub fn script_option(id: &str, script: &str) -> BackendOption {
     model: format!("{id}-model"),
     backend_type: BACKEND_TYPE.to_string(),
     type_fields,
+    visible: true,
   }
 }
 
@@ -400,6 +402,7 @@ pub fn rotation_pools(members: Vec<String>) -> (Vec<PoolConfig>, CallsConfig) {
     label: "Pool".to_string(),
     rule: PoolRule::Rotate,
     members: members.into_iter().map(|backend| PoolMember { backend }).collect(),
+    visible: true,
   }];
   let calls = [
     CallClass::Worker,

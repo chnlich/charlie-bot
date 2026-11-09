@@ -233,6 +233,7 @@ mod tests {
       billing: Some(PoolBilling::Subscription),
       backend_type: "opencode".into(),
       type_fields: Default::default(),
+      visible: true,
     };
     assert!(read_member(&state, &option, now).unwrap().is_none());
     option.model = "opencode-go/model".into();

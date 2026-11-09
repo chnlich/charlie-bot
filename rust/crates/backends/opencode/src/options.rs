@@ -154,6 +154,7 @@ mod tests {
       billing: None,
       backend_type: "opencode".to_string(),
       type_fields: fields(type_fields),
+      visible: true,
     }
   }
 
@@ -185,6 +186,7 @@ mod tests {
       billing: None,
       backend_type: "codex".to_string(),
       type_fields: Mapping::new(),
+      visible: true,
     };
     assert_eq!(model_overrides_config(&[other.clone(), option("oc", "provider/org/model", "{}")]).unwrap(), Map::new());
     assert_eq!(

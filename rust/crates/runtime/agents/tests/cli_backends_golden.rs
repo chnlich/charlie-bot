@@ -648,6 +648,7 @@ fn option_of(case: &Value) -> BackendOption {
     billing: None,
     backend_type: text(&case["backend_type"]).to_string(),
     type_fields: serde_yaml::from_value::<Mapping>(serde_yaml::to_value(&case["type_fields"]).unwrap()).unwrap(),
+    visible: true,
   }
 }
 

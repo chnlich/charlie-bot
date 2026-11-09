@@ -70,6 +70,7 @@ mod tests {
       billing: None,
       backend_type: "cc-anthropic-compatible".to_string(),
       type_fields: serde_yaml::from_str(type_fields).unwrap(),
+      visible: true,
     }
   }
 

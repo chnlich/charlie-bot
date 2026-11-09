@@ -67,6 +67,7 @@ impl Home {
       billing: None,
       backend_type: "synthetic".to_string(),
       type_fields: Default::default(),
+      visible: true,
     });
     let reload_config = loaded.clone();
     let config = Arc::new(HotReload::new(

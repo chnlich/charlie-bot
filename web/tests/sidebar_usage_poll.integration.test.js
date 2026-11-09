@@ -1211,6 +1211,10 @@ test('forkSession opens the reusable modal with the active backend selected by d
       'claude-opus-4.6': 'Opus',
       'codex-o3': 'Codex',
     },
+    BACKEND_PICKER_ENTRIES: [
+      {id: 'claude-opus-4.6', label: 'Opus'},
+      {id: 'codex-o3', label: 'Codex'},
+    ],
     elements,
   });
 
@@ -1223,6 +1227,36 @@ test('forkSession opens the reusable modal with the active backend selected by d
     ['claude-opus-4.6', 'codex-o3']
   );
   assert.equal(elements.get('session-action-modal-confirm').textContent, 'Clone');
+});
+
+// The session action modal is a picker: it lists only the page's visible entries, while a hidden
+// entry's label keeps rendering from BACKEND_OPTIONS.
+test('forkSession offers only the picker entries, not every labeled backend', () => {
+  const elements = buildSessionActionElements();
+  const {context} = buildContext({
+    ACTIVE_BACKEND_ID: 'codex-o3',
+    BACKEND_OPTIONS: {
+      'claude-opus-4.6': 'Opus',
+      'codex-o3': 'Codex',
+      'codex-hidden': 'Codex · hidden pool member',
+    },
+    BACKEND_PICKER_ENTRIES: [
+      {id: 'claude-opus-4.6', label: 'Opus'},
+      {id: 'codex-o3', label: 'Codex'},
+    ],
+    elements,
+  });
+
+  context.forkSession('session-a', null);
+
+  assert.deepEqual(
+    elements.get('session-action-backend').options.map((option) => option.value),
+    ['claude-opus-4.6', 'codex-o3']
+  );
+  assert.deepEqual(
+    elements.get('session-action-backend').options.map((option) => option.textContent),
+    ['Opus', 'Codex']
+  );
 });
 
 test('closeSessionActionModal hides the modal without sending a request', () => {
@@ -1248,6 +1282,10 @@ test('submitSessionActionModal sends backend and null event_index for header clo
       'claude-opus-4.6': 'Opus',
       'codex-o3': 'Codex',
     },
+    BACKEND_PICKER_ENTRIES: [
+      {id: 'claude-opus-4.6', label: 'Opus'},
+      {id: 'codex-o3', label: 'Codex'},
+    ],
     elements,
   });
 
@@ -1269,6 +1307,10 @@ test('submitSessionActionModal sends backend and event_index for message-level c
       'claude-opus-4.6': 'Opus',
       'codex-o3': 'Codex',
     },
+    BACKEND_PICKER_ENTRIES: [
+      {id: 'claude-opus-4.6', label: 'Opus'},
+      {id: 'codex-o3', label: 'Codex'},
+    ],
     elements,
   });
 

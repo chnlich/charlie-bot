@@ -299,6 +299,7 @@ impl Home {
       billing: None,
       backend_type: "synthetic".to_string(),
       type_fields: Default::default(),
+      visible: true,
     });
     fs::create_dir_all(loaded.sessions_dir()).expect("the synthetic sessions directory exists");
     let store = Arc::new(

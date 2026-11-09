@@ -287,6 +287,46 @@ fn a_mapping_pool_member_fails_check_config_through_the_ordinary_member_error() 
   );
 }
 
+/// The check-config home's backends with the visibility field: one option and one pool hidden from the
+/// web pickers, the rest left at the default.
+const VISIBILITY_BACKENDS: &str = r#"backends:
+  options:
+    - {id: claude-synthetic, label: Synthetic, type: cc-claude, model: claude-fable-5-1, billing: subscription, visible: false}
+    - {id: codex-synthetic, label: Codex, type: codex, model: codex-synthetic}
+  pools:
+    - id: auto
+      label: Auto
+      rule: priority
+      visible: false
+      members: [claude-synthetic]
+"#;
+
+#[test]
+#[ignore = "integration"]
+fn check_config_accepts_the_visibility_field_and_refuses_a_non_boolean() {
+  let temporary = tempfile::tempdir().unwrap();
+  let home = temporary.path().join("home");
+  let server_bin_dir = prepare_server_bin_dir(temporary.path(), true);
+  fs::create_dir_all(home.join("config.d/approval.d")).unwrap();
+  fs::write(home.join("config.d/approval.d/policy.yaml"), approval_policy_table()).unwrap();
+  fs::write(home.join("credentials.yaml"), "").unwrap();
+
+  fs::write(home.join("config.yaml"), VISIBILITY_BACKENDS).unwrap();
+  let output = run_server(&home, &["--check-config"], true, &server_bin_dir);
+  assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
+  assert_eq!(output.stdout, b"config ok\n");
+
+  fs::write(
+    home.join("config.yaml"),
+    VISIBILITY_BACKENDS.replace("billing: subscription, visible: false", "billing: subscription, visible: certainly"),
+  )
+  .unwrap();
+  let output = run_server(&home, &["--check-config"], true, &server_bin_dir);
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert_eq!(output.status.code(), Some(1), "{stderr}");
+  assert!(stderr.contains("backends.options[0].visible") && stderr.contains("expected a boolean"), "{stderr}");
+}
+
 /// A check-config command whose launch path, `argv[0]`, the test chooses.
 fn release_server_command(server: &Path, argv0: &OsStr, temporary: &Path) -> Command {
   let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../..");

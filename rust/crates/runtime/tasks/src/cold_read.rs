@@ -555,6 +555,7 @@ mod tests {
         billing: None,
         backend_type: "failing-probe".to_string(),
         type_fields: Mapping::new(),
+        visible: true,
       })
       .collect();
     CharlieBotConfig {

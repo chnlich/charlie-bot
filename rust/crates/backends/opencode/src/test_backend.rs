@@ -60,6 +60,7 @@ fn adoption_option() -> BackendOption {
     billing: None,
     backend_type: "opencode".to_string(),
     type_fields: serde_yaml::Mapping::new(),
+    visible: true,
   }
 }
 
@@ -2040,6 +2041,7 @@ fn opencode_option(id: &str, model: &str, type_fields: &str) -> BackendOption {
     billing: None,
     backend_type: "opencode".to_string(),
     type_fields: serde_yaml::from_str(type_fields).unwrap(),
+    visible: true,
   }
 }
 

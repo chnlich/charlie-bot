@@ -337,6 +337,7 @@ mod tests {
         billing: None,
         backend_type: "codex".to_string(),
         type_fields: Mapping::new(),
+        visible: true,
       })
       .collect();
     CharlieBotConfig {

@@ -92,6 +92,7 @@ fn option(case: &Value) -> BackendOption {
     billing: None,
     backend_type: "cc-claude".to_string(),
     type_fields,
+    visible: true,
   }
 }
 

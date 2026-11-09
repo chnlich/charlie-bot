@@ -328,6 +328,10 @@ pub struct BackendOption {
   pub backend_type: String,
   /// The type-specific keys, raw until the backend package parses them.
   pub type_fields: Mapping,
+  /// Whether the web pickers list the entry (`visible: true`, the default). A hidden entry keeps its
+  /// label everywhere a label renders and still serves pool membership, `backends.calls` targets and
+  /// the switch route; only what a picker offers changes.
+  pub visible: bool,
 }
 
 impl BackendOption {
@@ -400,6 +404,8 @@ pub struct PoolConfig {
   pub rule: PoolRule,
   /// The members in config order. A rotate pool may name one option twice; the repeat takes a larger share of calls.
   pub members: Vec<PoolMember>,
+  /// Whether the web pickers list the pool (`visible: true`, the default). See [`BackendOption::visible`].
+  pub visible: bool,
 }
 
 /// One internal call class that `backends.calls` configures.
@@ -496,6 +502,34 @@ impl BackendsConfig {
   /// The pool named `id`, or `None` when no `backends.pools` entry has that id.
   pub fn pool(&self, id: &str) -> Option<&PoolConfig> {
     self.pools.iter().find(|pool| pool.id == id)
+  }
+
+  /// The visible `backends.options` entries as their `(id, label)` pairs, in config order: the
+  /// options a picker lists.
+  pub fn picker_options(&self) -> Vec<(String, String)> {
+    self
+      .options
+      .iter()
+      .filter(|option| option.visible)
+      .map(|option| (option.id.clone(), option.label.clone()))
+      .collect()
+  }
+
+  /// The entries every web picker lists: [`Self::picker_options`], then the visible `backends.pools`
+  /// entries, each as its `(id, label)` in config order.
+  pub fn picker_entries(&self) -> Vec<(String, String)> {
+    self
+      .picker_options()
+      .into_iter()
+      .chain(self.pools.iter().filter(|pool| pool.visible).map(|pool| (pool.id.clone(), pool.label.clone())))
+      .collect()
+  }
+
+  /// Whether the id names a `backends.options` or `backends.pools` entry a picker lists. A hidden entry
+  /// answers false; a session's own active entry stays exempt, so the header menu still shows it.
+  pub fn picker_visible(&self, id: &str) -> bool {
+    self.options.iter().any(|option| option.id == id && option.visible)
+      || self.pools.iter().any(|pool| pool.id == id && pool.visible)
   }
 
   /// The backend a session or scheduled task takes when its request names none: the `backends.calls.new_session`
@@ -912,10 +946,14 @@ fn parse_pool(config_path: &str, index: usize, entry: &Value) -> Result<PoolConf
     label: String,
     rule: PoolRule,
     members: Vec<Value>,
+    /// Left out: the pool lists in the web pickers. A non-boolean refuses through serde's type check.
+    #[serde(default)]
+    visible: Option<bool>,
   }
 
   let location = format!("backends.pools[{index}]");
-  let PoolEntry { id, label, rule, members } = deserialize_at(config_path, &location, entry.clone())?;
+  let PoolEntry { id, label, rule, members, visible } = deserialize_at(config_path, &location, entry.clone())?;
+  let visible = visible.unwrap_or(true);
   let members = members
     .iter()
     .enumerate()
@@ -928,7 +966,7 @@ fn parse_pool(config_path: &str, index: usize, entry: &Value) -> Result<PoolConf
       ))),
     })
     .collect::<Result<Vec<_>, _>>()?;
-  Ok(PoolConfig { id, label, rule, members })
+  Ok(PoolConfig { id, label, rule, members, visible })
 }
 
 /// Refuse pools that break the id rules, name a member that is not a `backends.options` id, or name a billingless
@@ -1093,12 +1131,21 @@ fn parse_option(
     None | Some(Value::Null) => None,
     Some(value) => Some(deserialize_at(config_path, &format!("backends.options[{index}].billing"), value.clone())?),
   };
+  let visible = match entry.get("visible") {
+    None | Some(Value::Null) => true,
+    Some(Value::Bool(flag)) => *flag,
+    Some(other) => {
+      return Err(ConfigError(format!("{location}.visible: expected a boolean, got {}", yaml_value_kind(other))));
+    }
+  };
   let type_fields: Mapping = entry
     .iter()
-    .filter(|(key, _)| !matches!(key.as_str(), Some("id" | "label" | "model" | "prompt_overlay" | "billing" | "type")))
+    .filter(|(key, _)| {
+      !matches!(key.as_str(), Some("id" | "label" | "model" | "prompt_overlay" | "billing" | "visible" | "type"))
+    })
     .map(|(key, value)| (key.clone(), value.clone()))
     .collect();
-  Ok(BackendOption { id, label, model, prompt_overlay, billing, backend_type, type_fields })
+  Ok(BackendOption { id, label, model, prompt_overlay, billing, backend_type, type_fields, visible })
 }
 
 /// A YAML mapping key as its repr prints the value loaded for it.
@@ -1252,8 +1299,74 @@ mod tests {
       billing: None,
       backend_type: "opencode".to_string(),
       type_fields: Mapping::new(),
+      visible: true,
     };
     assert_eq!(option.required_model("backend").unwrap_err(), "backend 'opencode' has no default model");
+  }
+
+  /// The VALID config with one option and one pool hidden from the pickers.
+  const VISIBILITY: &str = "\
+server:
+  host: 127.0.0.1
+  port: 18650
+backends:
+  pools:
+    - {id: pool, label: Pool, rule: rotate, members: [claude-fable], visible: false}
+    - {id: shown, label: Shown, rule: rotate, members: [claude-fable]}
+  options:
+    - id: claude-fable
+      label: \"CC · Fable\"
+      type: cc-claude
+      model: claude-fable-5-1
+      visible: false
+    - id: codex-fake
+      label: Codex
+      type: codex
+      model: codex-model
+voice: {}
+";
+
+  #[test]
+  fn visible_defaults_to_true_and_the_pickers_drop_the_hidden_entries() {
+    let cfg = load(&home_with(VISIBILITY)).unwrap();
+    assert!(!cfg.get_backend_option("claude-fable").unwrap().visible);
+    assert!(cfg.get_backend_option("codex-fake").unwrap().visible);
+    assert!(!cfg.backends.pool("pool").unwrap().visible);
+    assert!(cfg.backends.pool("shown").unwrap().visible);
+    assert_eq!(
+      cfg.backends.picker_entries(),
+      vec![("codex-fake".to_string(), "Codex".to_string()), ("shown".to_string(), "Shown".to_string())]
+    );
+    assert!(!cfg.backends.picker_visible("claude-fable"));
+    assert!(!cfg.backends.picker_visible("pool"));
+    assert!(cfg.backends.picker_visible("shown"));
+    // The visibility switch stays a shared field: it never lands in the type's own fields.
+    assert!(!cfg.get_backend_option("claude-fable").unwrap().type_fields.contains_key("visible"));
+  }
+
+  #[test]
+  fn a_config_without_the_field_lists_every_entry_in_the_pickers() {
+    let cfg = load(&home_with(VALID)).unwrap();
+    assert!(cfg.get_backend_option("claude-fable").unwrap().visible);
+    assert!(cfg.backends.pool("pool").unwrap().visible);
+    assert_eq!(
+      cfg.backends.picker_entries(),
+      vec![("claude-fable".to_string(), "CC · Fable".to_string()), ("pool".to_string(), "Pool".to_string())]
+    );
+    assert!(cfg.backends.picker_visible("claude-fable") && cfg.backends.picker_visible("pool"));
+  }
+
+  #[test]
+  fn a_visible_value_that_is_not_a_boolean_refuses_the_option_and_the_pool() {
+    let home = home_with(&VISIBILITY.replace("      visible: false", "      visible: certainly"));
+    let error = load(&home).unwrap_err().to_string();
+    assert!(error.contains("backends.options[0].visible: expected a boolean, got a string"), "{error}");
+
+    let home = home_with(
+      &VISIBILITY.replace("members: [claude-fable], visible: false}", "members: [claude-fable], visible: [true]}"),
+    );
+    let error = load(&home).unwrap_err().to_string();
+    assert!(error.contains("backends.pools[0].visible") && error.contains("expected a boolean"), "{error}");
   }
 
   #[test]

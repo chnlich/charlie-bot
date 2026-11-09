@@ -462,6 +462,7 @@ mod tests {
         billing: None,
         backend_type: "synthetic".to_string(),
         type_fields: Default::default(),
+        visible: true,
       })
       .collect();
     CharlieBotConfig {
@@ -491,6 +492,7 @@ mod tests {
           label: "Light".to_string(),
           rule: PoolRule::Rotate,
           members: ids.iter().map(|id| PoolMember { backend: (*id).to_string() }).collect(),
+          visible: true,
         }],
         routing: None,
         options,

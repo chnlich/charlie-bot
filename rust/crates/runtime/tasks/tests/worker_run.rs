@@ -1926,7 +1926,13 @@ async fn a_priority_pool_delegation_picks_the_least_loaded_member() -> anyhow::R
     .map(|id| BackendOption { billing: Some(PoolBilling::Subscription), ..scripts.option(id, BACKEND_TYPE) })
     .to_vec();
   let members = ["fake", "fake2"].map(|backend| PoolMember { backend: backend.to_string() }).to_vec();
-  let auto = PoolConfig { id: AUTO_POOL_ID.to_string(), label: "Auto".to_string(), rule: PoolRule::Priority, members };
+  let auto = PoolConfig {
+    id: AUTO_POOL_ID.to_string(),
+    label: "Auto".to_string(),
+    rule: PoolRule::Priority,
+    members,
+    visible: true,
+  };
   let stack = Stack::start_with_auto(options, Vec::new(), auto).await?;
   stack.write_access_key()?;
   let parent = auto_manager_on_member(&stack, "fake").await?;
@@ -2093,7 +2099,13 @@ async fn an_inherited_worker_fails_over_to_the_next_auto_member() -> anyhow::Res
     })
     .to_vec();
   let members = ["fake", "fake2", "fake3"].map(|backend| PoolMember { backend: backend.to_string() }).to_vec();
-  let auto = PoolConfig { id: AUTO_POOL_ID.to_string(), label: "Auto".to_string(), rule: PoolRule::Priority, members };
+  let auto = PoolConfig {
+    id: AUTO_POOL_ID.to_string(),
+    label: "Auto".to_string(),
+    rule: PoolRule::Priority,
+    members,
+    visible: true,
+  };
   let stack = Stack::start_with_auto(options, Vec::new(), auto).await?;
   stack.write_access_key()?;
   let parent = stack
@@ -2350,8 +2362,13 @@ async fn launch_error_event_worker_on(first_events: &[Value], pool: ErrorEventPo
         .map(|option| BackendOption { billing: Some(PoolBilling::Subscription), ..option })
         .collect();
       let members = ["fake", "fake2"].map(|backend| PoolMember { backend: backend.to_string() }).to_vec();
-      let auto =
-        PoolConfig { id: AUTO_POOL_ID.to_string(), label: "Auto".to_string(), rule: PoolRule::Priority, members };
+      let auto = PoolConfig {
+        id: AUTO_POOL_ID.to_string(),
+        label: "Auto".to_string(),
+        rule: PoolRule::Priority,
+        members,
+        visible: true,
+      };
       Stack::start_with_auto(options, Vec::new(), auto).await?
     }
   };
@@ -3060,6 +3077,7 @@ fn devin_option() -> BackendOption {
     billing: None,
     backend_type: "devin".to_string(),
     type_fields: Mapping::new(),
+    visible: true,
   }
 }
 

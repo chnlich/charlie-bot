@@ -33,6 +33,7 @@ fn auto_pool(members: &[&str]) -> PoolConfig {
     label: "Auto".to_string(),
     rule: PoolRule::Priority,
     members: members.iter().map(|id| PoolMember { backend: id.to_string() }).collect(),
+    visible: true,
   }
 }
 
@@ -177,6 +178,7 @@ fn feature_context_with_entries(
       model: format!("{id}-model"),
       backend_type: "synthetic".to_string(),
       type_fields: type_fields.clone(),
+      visible: true,
     });
   }
   let (rotation, calls) = rotation_pools(entries.iter().map(|(id, _)| id.to_string()).collect());

@@ -275,6 +275,10 @@ fn chat_page(
   let active_option = cfg.get_backend_option(active_backend);
   let backend_pools =
     cfg.backends.pools.iter().map(|pool| json!({"id": pool.id, "label": pool.label})).collect::<Vec<_>>();
+  let picker_entries =
+    cfg.backends.picker_entries().into_iter().map(|(id, label)| json!({"id": id, "label": label})).collect::<Vec<_>>();
+  let picker_options =
+    cfg.backends.picker_options().into_iter().map(|(id, label)| json!({"id": id, "label": label})).collect::<Vec<_>>();
   let active_pool_member = active_session.get("pool_member").cloned().unwrap_or(Value::Null);
   let active_backend_label = active_backend_label(&cfg, active_backend, &active_pool_member);
   let backend_compact = compact_facts(&cfg, &state.features.registry)?;
@@ -289,6 +293,8 @@ fn chat_page(
       .map(|option| json!({"id": option.id, "label": option.label, "type": option.backend_type}))
       .collect::<Vec<_>>(),
     "backend_pools": backend_pools,
+    "picker_entries": picker_entries,
+    "picker_options": picker_options,
     "active_pool_member": active_pool_member,
     "backend_compact": Value::Object(backend_compact),
     "default_backend_id": default_backend_id,
@@ -646,12 +652,14 @@ mod tests {
           billing: None,
           backend_type: "synthetic".to_string(),
           type_fields: Default::default(),
+          visible: true,
         }],
         pools: vec![PoolConfig {
           id: "auto".to_string(),
           label: "Auto".to_string(),
           rule: PoolRule::Priority,
           members: vec![PoolMember { backend: "claude-opus-5".to_string() }],
+          visible: true,
         }],
         calls: CallsConfig::default(),
       },

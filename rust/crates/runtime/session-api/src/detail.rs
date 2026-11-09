@@ -964,12 +964,9 @@ fn active_backend_payload(
     // The switch route refuses an option from a pool session under a dedicated lock: `same_continuation_domain` has no
     // domain for a pool. The list follows the same rule; each pool stays listed, since the route takes its own id as a
     // no-op.
-    let mut switchable: Vec<Value> = if dedicated {
-      Vec::new()
-    } else {
-      cfg.backends.options.iter().map(|option| Value::String(option.id.clone())).collect()
-    };
-    switchable.extend(cfg.backends.pools.iter().map(|pool| Value::String(pool.id.clone())));
+    let mut switchable: Vec<String> =
+      if dedicated { Vec::new() } else { cfg.backends.options.iter().map(|option| option.id.clone()).collect() };
+    switchable.extend(cfg.backends.pools.iter().map(|pool| pool.id.clone()));
     switchable
   } else if let Some(active_option) = active_option {
     if dedicated {
@@ -981,26 +978,29 @@ fn active_backend_payload(
         let lifecycle =
           registry.lifecycle_for(&option.backend_type).map_err(|error| StoreError::new(error.to_string()))?;
         if lifecycle.continuation_domain(option, cfg) == active_domain {
-          switchable.push(Value::String(option.id.clone()));
+          switchable.push(option.id.clone());
         }
       }
       switchable
     } else {
-      let mut switchable: Vec<Value> =
-        cfg.backends.options.iter().map(|option| Value::String(option.id.clone())).collect();
-      switchable.extend(cfg.backends.pools.iter().map(|pool| Value::String(pool.id.clone())));
+      let mut switchable: Vec<String> = cfg.backends.options.iter().map(|option| option.id.clone()).collect();
+      switchable.extend(cfg.backends.pools.iter().map(|pool| pool.id.clone()));
       switchable
     }
   } else {
     Vec::new()
   };
+  // The pickers list only the config's visible entries; the session's own active entry stays exempt, so the
+  // header menu still shows it as the current value.
+  let switchable: Vec<String> =
+    switchable.into_iter().filter(|id| id == &active_backend || cfg.backends.picker_visible(id)).collect();
   let mut payload = Map::new();
   payload.insert(ACTIVE_BACKEND_FIELD.to_string(), Value::String(active_backend.clone()));
   payload.insert(
     ACTIVE_BACKEND_TYPE_FIELD.to_string(),
     Value::String(active_option.map_or_else(String::new, |option| option.backend_type.clone())),
   );
-  payload.insert("switchable_backends".to_string(), Value::Array(switchable));
+  payload.insert("switchable_backends".to_string(), Value::Array(switchable.into_iter().map(Value::String).collect()));
   Ok(payload)
 }
 
@@ -1242,6 +1242,99 @@ backends:
     let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
     assert_eq!(backend["active_backend"], "synthetic-a");
     assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "synthetic-b", "auto", "light"]));
+  }
+
+  /// The two-pools config with one option and one pool hidden from the pickers.
+  const VISIBILITY_CONFIG: &str = "\
+backends:
+  options:
+    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a, billing: subscription}
+    - {id: synthetic-b, label: Synthetic B, type: synthetic, model: model-b, billing: payg, visible: false}
+  pools:
+    - id: auto
+      label: Auto
+      rule: priority
+      members:
+        - synthetic-a
+        - synthetic-b
+    - id: light
+      label: Light
+      rule: rotate
+      visible: false
+      members: [synthetic-b]
+";
+
+  /// The pickers list only the visible entries: the hidden option and the hidden pool stay out, and the
+  /// visible option and pool stay in config order.
+  #[tokio::test]
+  async fn a_switch_list_drops_the_hidden_option_and_the_hidden_pool() {
+    let (_home, features) = feature_context_with_auto(VISIBILITY_CONFIG);
+    let meta = create_node(&features.store, "visibility-node", None, TaskProfile::Manager).await;
+    let cfg = features.config.get().expect("the test config loads");
+
+    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
+    assert_eq!(backend["active_backend"], "synthetic-a");
+    assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "auto"]));
+  }
+
+  /// A session whose active backend is a hidden entry still shows it: the hidden active stays in the
+  /// list as the current value, while the other hidden entries stay out.
+  #[tokio::test]
+  async fn a_session_on_a_hidden_option_still_shows_it_as_its_current_value() {
+    let (_home, features) = feature_context_with_auto(VISIBILITY_CONFIG);
+    let meta = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "hidden-active-node".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some("Hidden active".to_string()),
+          backend: Some("synthetic-b".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await
+      .expect("the hidden-active node");
+    let cfg = features.config.get().expect("the test config loads");
+
+    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
+    assert_eq!(backend["active_backend"], "synthetic-b");
+    assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "synthetic-b", "auto"]));
+  }
+
+  /// The same exemption covers a hidden pool: a session running it lists it as current, and the visible
+  /// pool stays offered.
+  #[tokio::test]
+  async fn a_session_on_a_hidden_pool_still_shows_it_as_its_current_value() {
+    let (_home, features) = feature_context_with_auto(VISIBILITY_CONFIG);
+    let meta = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "hidden-pool-node".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some("Hidden pool".to_string()),
+          backend: Some("light".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await
+      .expect("the hidden-pool node");
+    let cfg = features.config.get().expect("the test config loads");
+
+    let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
+    assert_eq!(backend["active_backend"], "light");
+    assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "auto", "light"]));
   }
 
   #[tokio::test]

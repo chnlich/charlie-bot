@@ -34,6 +34,7 @@ pub const FAMILY: Family = Family { routes, matches: |_, path| is_page_path(path
 fn routes() -> Router<Arc<AppState>> {
   Router::new()
     .route("/", get_only(index))
+    .route(crate::auth::OFFLINE_SHELL_WORKER_PATH, get_only(offline_shell_worker))
     .route("/home", get_only(home_page))
     .route("/sessions/{session_id}/events", get_only(events_viewer))
 }
@@ -68,6 +69,9 @@ const SESSION_BOOTSTRAP_PLACEHOLDER: &str = "\u{2}charliebot-session-bootstrap\u
 
 /// The text a page without a session bootstrap carries: JSON's `null`.
 const NO_SESSION_BOOTSTRAP: &str = "null";
+
+/// The text the shell carries for its sidebar rows: JSON's `null`, which makes the page fetch the listing itself.
+const NO_INITIAL_SESSIONS: &str = "null";
 
 /// The chat page's rendered row texts, reused across requests while a row's inputs are unchanged.
 static PAGE_ROWS_MEMO: LazyLock<listing::PageRowsMemo> = LazyLock::new(listing::PageRowsMemo::default);
@@ -244,22 +248,28 @@ fn chat_page(
     }
   }
 
-  // A page opened without a session redirects to the first row before any row renders.
+  // A page opened without a session redirects to the first row before any row renders. The shell (`?session=`
+  // with an empty value) names no session and embeds no sidebar rows: its list comes from the listing route.
   let redirect_to_first = session.is_none();
-  let listing_result = (|| -> StoreResult<PageListing> {
-    if redirect_to_first && let Some(first) = listing::first_page_row_id(&state.features.store)? {
-      return Ok(PageListing::Redirect(first));
-    }
-    let page = listing::active_page_rows(&state.features.store, &state.features.registry)?;
-    listing::active_page_json_text(
-      &state.features.store,
-      &page,
-      clear_unread.as_deref(),
-      session.as_deref(),
-      &PAGE_ROWS_MEMO,
-    )
-    .map(PageListing::Text)
-  })();
+  let shell = session.as_deref() == Some("");
+  let listing_result = if shell {
+    Ok(PageListing::Text(Arc::new(NO_INITIAL_SESSIONS.to_string())))
+  } else {
+    (|| -> StoreResult<PageListing> {
+      if redirect_to_first && let Some(first) = listing::first_page_row_id(&state.features.store)? {
+        return Ok(PageListing::Redirect(first));
+      }
+      let page = listing::active_page_rows(&state.features.store, &state.features.registry)?;
+      listing::active_page_json_text(
+        &state.features.store,
+        &page,
+        clear_unread.as_deref(),
+        session.as_deref(),
+        &PAGE_ROWS_MEMO,
+      )
+      .map(PageListing::Text)
+    })()
+  };
   let initial_sessions_json = match listing_result {
     Ok(PageListing::Redirect(session_id)) => return Ok(responses::redirect(&format!("/?session={session_id}"))),
     Ok(PageListing::Text(text)) => text,
@@ -304,6 +314,35 @@ fn chat_page(
     context,
     PageRuntime::Index { cfg, auth_enabled, sidebar_text: initial_sessions_json, bootstrap_text },
   )
+}
+
+/// The offline shell's worker script: the shell's worker source behind its config, the switch and the release version
+/// the worker's store names. The browser checks the script on navigation, so `no-cache` keeps a stale copy from
+/// outliving a release.
+async fn offline_shell_worker(State(state): State<Arc<AppState>>, request: Parts) -> Response {
+  let rendered = tokio::task::spawn_blocking(move || worker_script(&state, &request))
+    .await
+    .expect("rendering the worker script does not panic");
+  match rendered {
+    Ok(response) => response,
+    Err(error) => responses::internal_error(&error.kind, error.detail),
+  }
+}
+
+fn worker_script(state: &Arc<AppState>, request: &Parts) -> Result<Response, Failure> {
+  let cfg = state.config().map_err(|error| failure("ValueError", error))?;
+  let templating =
+    state.features.startup.require::<Templating>().expect("run() inserts the Templating before the server binds");
+  let version = templating.static_asset_version().map_err(|error| failure("OSError", error))?;
+  let worker_config = json!({"version": version, "enabled": cfg.server.enable_offline_shell});
+  let context = json!({"worker_config_json": worker_config.to_string()});
+  let body = templating
+    .render_page_template(&state.features, "offline-shell-worker.js", &context, request)
+    .map_err(|error| failure(error.kind(), error))?;
+  let mut response = Response::new(Body::from(body));
+  response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/javascript; charset=utf-8"));
+  response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+  Ok(response)
 }
 
 async fn home_page(State(state): State<Arc<AppState>>, request: Parts) -> Response {
@@ -630,6 +669,7 @@ mod tests {
         enable_session_cpu_weight: true,
         enable_session_io_weight: true,
         enable_local_work_guard: false,
+        enable_offline_shell: false,
       },
       paths: PathsConfig {
         workspace_dirs: Vec::new(),

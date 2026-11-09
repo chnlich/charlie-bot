@@ -616,6 +616,7 @@ mod tests {
         enable_session_cpu_weight: false,
         enable_session_io_weight: false,
         enable_local_work_guard: false,
+        enable_offline_shell: false,
         min_free_disk_gib: 0,
         public_url: None,
       },

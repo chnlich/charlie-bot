@@ -391,6 +391,7 @@ fn config(home: &Path, option: Option<BackendOption>) -> CharlieBotConfig {
       enable_session_cpu_weight: true,
       enable_session_io_weight: true,
       enable_local_work_guard: false,
+      enable_offline_shell: false,
     },
     paths: PathsConfig {
       workspace_dirs: Vec::new(),

@@ -513,6 +513,7 @@ mod tests {
         enable_session_cpu_weight: true,
         enable_session_io_weight: true,
         enable_local_work_guard: false,
+        enable_offline_shell: false,
       };
 
       run_session_cgroup_startup(base.path(), &sessions, &server).unwrap();

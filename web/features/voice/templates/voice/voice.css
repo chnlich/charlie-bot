@@ -27,6 +27,17 @@
   white-space: nowrap;
 }
 #voice-backend-menu-entry:hover { border-color: #64748b; }
+
+/* The microphone and its backend caret are one split control. The microphone keeps its left rounding and
+   drops its right border; the caret starts at the microphone's right edge and spans its height. The caret's
+   rounded corners no longer cut into the microphone's border, and its box no longer covers the microphone's
+   right edge as a click target. A phone hides the caret, so its microphone keeps every edge. */
+@media (min-width: 769px) {
+  #voice-btn { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right-width: 0; }
+  #voice-backend-btn { align-self: stretch; display: flex; align-items: center; justify-content: center;
+    border-radius: 0 0.75rem 0.75rem 0; }
+}
+
 @media (max-width: 768px) {
   #voice-backend-btn { display: none; }
   #voice-backend-menu-entry { display: inline-flex; }

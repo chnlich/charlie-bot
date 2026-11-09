@@ -11,7 +11,10 @@
 //
 // The status is the session's web_status at open, then the web_status messages
 // of this session, live or in history. The newest updated_at wins, so an older
-// page of history never moves the view back. The descendant and child rows
+// page of history never moves the view back. The Goal is not part of it: the
+// panel reads the task record's goal, from the session detail at open and the
+// goal field of GET /api/internal/web/status on each fetch, refreshed when a
+// task_record_changed message lands. The descendant and child rows
 // come from GET /api/internal/web/status, fetched at open and on each
 // web_status_subtree notice (websocket-handlers.js).
 (function() {
@@ -27,6 +30,7 @@
   // panelSessionId means the page shows none of the surfaces.
   let panelSessionId = null;
   let panelStatus = null;
+  let panelGoal = null;
   let panelDescendants = [];
   let panelChildren = [];
   let panelDerived = [];
@@ -140,10 +144,39 @@
     return textSpan(platform.isMobile ? 'text-slate-500' : 'shrink-0 w-28 text-slate-500', text);
   }
 
+  // A delegation goal may run several paragraphs: the row clamps to three
+  // lines and a click shows the full text.
+  const GOAL_CLAMP_LINES = 3;
+
+  function clampGoalValue(value) {
+    value.dataset.goalClamped = 'true';
+    value.style.display = '-webkit-box';
+    value.style.webkitBoxOrient = 'vertical';
+    value.style.webkitLineClamp = String(GOAL_CLAMP_LINES);
+    value.style.overflow = 'hidden';
+    value.style.cursor = 'pointer';
+    value.onclick = () => {
+      if (value.dataset.goalClamped === 'true') {
+        value.dataset.goalClamped = 'false';
+        value.style.display = '';
+        value.style.webkitBoxOrient = '';
+        value.style.webkitLineClamp = '';
+        value.style.overflow = '';
+        value.style.cursor = '';
+      } else {
+        clampGoalValue(value);
+      }
+    };
+  }
+
   function goalRow(goal) {
     const row = statusRow('goal');
     row.appendChild(labelSpan('Goal'));
-    row.appendChild(textSpan('min-w-0 break-words text-slate-200', goal || ''));
+    const value = document.createElement('div');
+    value.className = 'min-w-0 break-words text-slate-200';
+    value.appendChild(textSpan('', goal || ''));
+    clampGoalValue(value);
+    row.appendChild(value);
     return row;
   }
 
@@ -309,28 +342,30 @@
   }
 
   function statusPanelBody(el) {
-    if (!panelStatus) {
+    if (!panelStatus && !panelGoal) {
       const none = statusRow('none');
       none.appendChild(textSpan('text-slate-400', 'No status yet'));
       el.appendChild(none);
     } else {
-      el.appendChild(goalRow(panelStatus.goal));
-      el.appendChild(nowRow(panelStatus));
-      const waiting = statusRow('waiting');
-      waiting.appendChild(labelSpan('Waiting on you'));
-      const column = document.createElement('div');
-      column.className = 'min-w-0 flex-1 space-y-1';
-      if (!panelStatus.waiting.length) {
-        const nothing = textSpan('text-slate-400', 'Nothing');
-        nothing.dataset.waitingEmpty = 'true';
-        column.appendChild(nothing);
+      el.appendChild(goalRow(panelGoal));
+      if (panelStatus) {
+        el.appendChild(nowRow(panelStatus));
+        const waiting = statusRow('waiting');
+        waiting.appendChild(labelSpan('Waiting on you'));
+        const column = document.createElement('div');
+        column.className = 'min-w-0 flex-1 space-y-1';
+        if (!panelStatus.waiting.length) {
+          const nothing = textSpan('text-slate-400', 'Nothing');
+          nothing.dataset.waitingEmpty = 'true';
+          column.appendChild(nothing);
+        }
+        for (const item of panelStatus.waiting) {
+          if (isUserAct(item)) continue;
+          column.appendChild(waitingItem(item, true));
+        }
+        waiting.appendChild(column);
+        el.appendChild(waiting);
       }
-      for (const item of panelStatus.waiting) {
-        if (isUserAct(item)) continue;
-        column.appendChild(waitingItem(item, true));
-      }
-      waiting.appendChild(column);
-      el.appendChild(waiting);
     }
     const sheet = loginSheetRow();
     if (sheet) el.appendChild(sheet);
@@ -388,6 +423,7 @@
       return;
     }
     if (gen !== panelFetchGen || sessionId !== panelSessionId) return;
+    panelGoal = body.goal || null;
     if (body.web_status && (!panelStatus || Date.parse(body.web_status.updated_at) >= Date.parse(panelStatus.updated_at))) {
       panelStatus = body.web_status;
     }
@@ -408,6 +444,7 @@
     }
     panelSessionId = session.id;
     panelStatus = session.web_status || null;
+    panelGoal = (session.task && session.task.goal) || null;
     panelDescendants = [];
     panelChildren = [];
     panelDerived = [];
@@ -419,6 +456,7 @@
   function clearSessionStatusPanel() {
     panelSessionId = null;
     panelStatus = null;
+    panelGoal = null;
     panelDescendants = [];
     panelChildren = [];
     panelDerived = [];
@@ -434,6 +472,15 @@
     if (panelStatus !== before) renderPanel();
   }
 
+  // A task_record_changed message of this session: the goal moved in the task
+  // record, so the panel re-reads it.
+  function observeTaskRecordMessages(messages) {
+    if (!panelSessionId) return;
+    if (messages.some((msg) => msg.role === 'system' && msg.kind === 'task_record_changed')) {
+      fetchDescendants(panelSessionId);
+    }
+  }
+
   // A descendant session set its status: the page re-reads the child rows.
   function refreshSessionStatusPanel() {
     if (panelSessionId) fetchDescendants(panelSessionId);
@@ -446,6 +493,7 @@
     openSessionStatusPanel,
     clearSessionStatusPanel,
     observeWebStatusMessages,
+    observeTaskRecordMessages,
     refreshSessionStatusPanel,
   });
 

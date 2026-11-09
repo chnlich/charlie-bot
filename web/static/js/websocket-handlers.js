@@ -35,6 +35,7 @@ function _commitMessage(msg) {
   hideStreaming();
   appendMessageObject(msg, SESSION_ID, false);
   observeWebStatusMessages([msg]);
+  observeTaskRecordMessages([msg]);
 }
 
 // Session rename can arrive at any time

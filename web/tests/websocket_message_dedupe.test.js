@@ -42,6 +42,7 @@ function buildPage(initialMessages = [], sessionId = 'session-a', {renderMessage
     hideStreaming() {},
     showStreaming() {},
     observeWebStatusMessages() {},
+    observeTaskRecordMessages() {},
     appendMessageObject(msg, _sessionId, forceScroll) {
       const engine = context.Chat.activeTurnEngineFor(messages);
       if (engine) engine.appendMessage(msg, forceScroll);

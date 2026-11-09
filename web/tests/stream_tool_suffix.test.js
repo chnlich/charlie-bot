@@ -30,6 +30,7 @@ function buildPage() {
     hideStreaming() {},
     showStreaming(draft) { painted.push(draft); },
     observeWebStatusMessages() {},
+    observeTaskRecordMessages() {},
     appendMessageObject(msg) { appended.push(msg); },
     appendMessage() {},
     refreshSessionStatusPanel() {},

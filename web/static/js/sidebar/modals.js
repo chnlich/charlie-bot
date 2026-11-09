@@ -190,13 +190,13 @@ function eloneSession(sessionId, eventIndex) {
 }
 
 // ---------------------------------------------------------------------------
-// Task & context dialog (plan 4.2): a read-only view of a logical session's
-// task record (goal, acceptance, context refs). Below it sits the context its
-// next Run would assemble: GET /api/sessions/{id}/effective-prompt returns one
-// row per managed block with its sources, delivery and measured length. The
-// dialog shell shares the session-action modal's chrome in index.html. The
-// body is fetched on every open, so it shows the current configuration and
-// stores nothing.
+// Task & context dialog: the upper half is the session's task record as the
+// model reads it - the effective-prompt preview's block whose source scope is
+// task, the same rendered text the system prompt carries as its last block.
+// Below it sits the context the next Run would assemble: one row per managed
+// block with its sources, delivery and measured length. The dialog shell
+// shares the session-action modal's chrome in index.html. The body is fetched
+// on every open, so it shows the current configuration and stores nothing.
 // ---------------------------------------------------------------------------
 // The dialog's muted tone: its empty values, source labels and prompt table header sit on the
 // modal's slate-800, where slate-500 renders 3.07:1. That is under the 4.5:1 floor for text
@@ -206,36 +206,19 @@ const TASK_CONTEXT_NONE = `<span class="${TASK_CONTEXT_MUTED}">(none)</span>`;
 
 let taskContextModalSession = null;
 
-function taskContextField(label, valueHtml, {preWrap}) {
-  const wrap = preWrap ? 'whitespace-pre-wrap ' : '';
-  return `<div><div class="text-xs text-slate-400 mb-1">${label}</div><div class="${wrap}break-words">${valueHtml}</div></div>`;
+// The preview's task block: the one whose sources name the task scope.
+function taskScopeBlock(preview) {
+  const blocks = Array.isArray(preview.blocks) ? preview.blocks : [];
+  return blocks.find((block) => (block.sources || []).some((source) => source.scope === 'task')) || null;
 }
 
-function taskContextList(items) {
-  if (!Array.isArray(items) || !items.length) return TASK_CONTEXT_NONE;
-  return `<ul class="list-disc pl-4 space-y-0.5">${items.map((item) => `<li>${escapeHtml(String(item))}</li>`).join('')}</ul>`;
-}
-
-// A full goal body renders as prose through the chat bubble's pipeline:
-// escape + renderProseMarkdown + data-raw round-trip. Delegation goals open
-// with a "## Goal" heading, and a field that shows it raw paints a literal
-// '## '. The renderer escapes raw HTML itself, so the field stays
+// The task block renders as prose through the chat bubble's pipeline: escape +
+// renderProseMarkdown + data-raw round-trip, and data-raw carries the block
+// text itself. The renderer escapes raw HTML, so the dialog stays
 // injection-safe.
-function taskContextGoalHtml(goal) {
-  const raw = escapeHtml(goal).replace(/"/g, '&quot;');
-  return `<div class="prose-msg break-words" data-raw="${raw}">${renderProseMarkdown(goal)}</div>`;
-}
-
-// The upper half: the task record's three fields, each with a visible empty state.
-function taskContextTaskHtml(task) {
-  const t = task || {};
-  const goal = (t.goal || '').trim();
-  return `<div class="space-y-3">
-    <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">Task</div>
-    ${taskContextField('Goal', goal ? taskContextGoalHtml(goal) : TASK_CONTEXT_NONE, {preWrap: false})}
-    ${taskContextField('Acceptance', taskContextList(t.acceptance), {preWrap: true})}
-    ${taskContextField('Context refs', taskContextList(t.context_refs), {preWrap: true})}
-  </div>`;
+function taskContextTaskBlockHtml(block) {
+  const raw = escapeHtml(block.text).replace(/"/g, '&quot;');
+  return `<div class="prose-msg break-words" data-raw="${raw}">${renderProseMarkdown(block.text)}</div>`;
 }
 
 function promptSourceLabel(source) {
@@ -299,10 +282,10 @@ async function fetchJsonOrDetail(url) {
   return {ok: false, detail};
 }
 
-// Assembles the dialog body for one session: the task record from the
-// session detail, then the effective-prompt preview. A session without a
-// profile is not a task node yet, so its context section says so in place of
-// a preview request the server would refuse.
+// Assembles the dialog body for one session: the effective-prompt preview's
+// task block above the run-context table. A preview failure shows the error
+// and no fallback layout, and a session without a profile is not a task node
+// yet, so its body says so in place of a preview request the server refuses.
 async function loadTaskContextModal(sessionId) {
   const detail = await fetchJsonOrDetail('/api/sessions/' + sessionId);
   if (!detail.ok) {
@@ -314,18 +297,23 @@ async function loadTaskContextModal(sessionId) {
   if (titleEl && taskContextModalSession === sessionId) {
     titleEl.textContent = 'Task & context · ' + (session.name || sessionId);
   }
-  const taskHtml = taskContextTaskHtml(session.task);
   if (!session.profile) {
-    setTaskContextModalBody(sessionId, taskHtml + taskContextNoteHtml(
+    setTaskContextModalBody(sessionId, taskContextNoteHtml(
         'Not a task node yet: this session becomes one on its first child session or delegation; '
         + 'its next run context is assembled from then on.'));
     return;
   }
-  setTaskContextModalBody(sessionId, taskHtml + taskContextNoteHtml('Loading next run context…'));
+  setTaskContextModalBody(sessionId, taskContextNoteHtml('Loading…'));
   const preview = await fetchJsonOrDetail('/api/sessions/' + sessionId + '/effective-prompt');
-  setTaskContextModalBody(sessionId, taskHtml + (preview.ok
-      ? taskContextPromptHtml(preview.data)
-      : taskContextNoteHtml('Next run context unavailable: ' + preview.detail)));
+  if (!preview.ok) {
+    setTaskContextModalBody(sessionId, taskContextNoteHtml('Task & context unavailable: ' + preview.detail));
+    return;
+  }
+  const block = taskScopeBlock(preview.data);
+  const taskHtml = block
+    ? taskContextTaskBlockHtml(block)
+    : taskContextNoteHtml('(no task record: the goal, acceptance and context refs are all empty)');
+  setTaskContextModalBody(sessionId, taskHtml + taskContextPromptHtml(preview.data));
 }
 
 function openTaskContextModal(sessionId) {

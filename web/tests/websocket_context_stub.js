@@ -51,6 +51,7 @@ function loadWebsocketContext(extraContext) {
     appendMessage: () => {},
     appendMessageObject: () => {},
     observeWebStatusMessages: () => {},
+    observeTaskRecordMessages: () => {},
     refreshSessionStatusPanel: () => {},
     startThinking: () => {},
     stopThinking: () => {},

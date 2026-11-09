@@ -59,6 +59,7 @@ function loadChatContext(elements) {
     restoreBottomPin: () => {},
     hideStreaming: () => {},
     observeWebStatusMessages: () => {},
+    observeTaskRecordMessages: () => {},
     CSS: { escape: (v) => String(v) },
     SESSION_ID: 'session-a',
     confirm: () => true,

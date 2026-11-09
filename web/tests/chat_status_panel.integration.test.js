@@ -29,8 +29,11 @@ const {readStatic} = require('./read_static');
 // runs each onChange callback.
 // ---------------------------------------------------------------------------
 
+// The Goal is the task record's, not the status's: the rig's session detail
+// carries it as session.task.goal and the status GET carries it at the top level.
+const TASK_GOAL = 'Ship the status panel';
+
 const STATUS = {
-  goal: 'Ship the status panel',
   now: 'Frontend under review',
   waiting: [
     {text: 'Decide the sample size', link: 'https://example.com/plan'},
@@ -40,14 +43,12 @@ const STATUS = {
 };
 
 const NEWER = {
-  goal: 'Ship the status panel',
   now: 'Tests running',
   waiting: [{text: 'Review the diff', link: null}],
   updated_at: '2026-10-16T21:00:00Z',
 };
 
 const OLDER = {
-  goal: 'Ship the status panel',
   now: 'Planning',
   waiting: [],
   updated_at: '2026-10-16T19:00:00Z',
@@ -99,7 +100,7 @@ function panelRig() {
     ['status-waiting-count', badge], ['btn-chat', chatButton],
     ['scroll-to-bottom', scrollButton], ['input-area', inputArea],
   ]);
-  const page = {web_status: null, descendants: [], children: [], derived_waiting: []};
+  const page = {goal: TASK_GOAL, web_status: null, descendants: [], children: [], derived_waiting: []};
   const statusGets = [];
   const {context} = baseSessionContext();
   const layout = {mode: 'desktop', callbacks: []};
@@ -122,8 +123,8 @@ function panelRig() {
       statusGets.push(url);
       const sessionId = url.slice(url.indexOf('session_id=') + 'session_id='.length);
       return {ok: true, status: 200, json: async () => ({
-        session_id: sessionId, web_status: page.web_status, descendants: page.descendants, children: page.children,
-        derived_waiting: page.derived_waiting,
+        session_id: sessionId, goal: page.goal, web_status: page.web_status, descendants: page.descendants,
+        children: page.children, derived_waiting: page.derived_waiting,
       })};
     }
     return {ok: true, status: 200, json: async () => []};
@@ -182,6 +183,7 @@ async function openSession(rig, session, messages = []) {
     backend: 'claude-opus-4.6',
     round_ratings: {},
     task_parent_id: null,
+    task: {goal: TASK_GOAL},
   }, session);
   rig.context.SESSION_ID = data.id;
   rig.context.renderSessionView({
@@ -262,7 +264,7 @@ test('the Status view shows Goal, Now, Waiting on you, children and child Now ro
   selectStatus(rig);
   assert.equal(rig.panel.classList.contains('hidden'), false);
   assert.deepEqual(viewKinds(rig.panel), ['goal', 'now', 'waiting', 'children', 'children-now']);
-  assert.equal(viewRow(rig.panel, 'goal').children[1].textContent, STATUS.goal);
+  assert.equal(viewRow(rig.panel, 'goal').children[1].textContent, TASK_GOAL);
 });
 
 test('the Now row carries the full text and its update time', async () => {
@@ -445,13 +447,37 @@ test('without children rows the Status view ends at Waiting on you', async () =>
   assert.deepEqual(viewKinds(rig.panel), ['goal', 'now', 'waiting']);
 });
 
-test('a session with no status shows "No status yet" in the Status view, with the child rows beside it', async () => {
+test('a session with no status shows its task-record Goal and "No status yet", with the child rows beside it', async () => {
   const rig = panelRig();
   rig.page.descendants = descendantRows(1);
   await openSession(rig, {web_status: null});
   selectStatus(rig);
-  assert.deepEqual(viewKinds(rig.panel), ['none', 'children']);
+  assert.deepEqual(viewKinds(rig.panel), ['goal', 'children']);
+  assert.equal(viewRow(rig.panel, 'goal').children[1].textContent, TASK_GOAL);
+});
+
+test('a session with neither a status nor a task record shows "No status yet"', async () => {
+  const rig = panelRig();
+  rig.page.goal = null;
+  await openSession(rig, {web_status: null, task: null});
+  selectStatus(rig);
+  assert.deepEqual(viewKinds(rig.panel), ['none']);
   assert.equal(viewRow(rig.panel, 'none').textContent, 'No status yet');
+});
+
+test('a task_record_changed message re-reads the goal from the status GET', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: STATUS});
+  selectStatus(rig);
+  assert.equal(viewRow(rig.panel, 'goal').children[1].textContent, TASK_GOAL);
+  const before = rig.statusGets.length;
+
+  rig.page.goal = 'Raised the cap to ten';
+  rig.context.observeTaskRecordMessages([{role: 'system', kind: 'task_record_changed', content: '任务说明已更新'}]);
+  await settled();
+
+  assert.equal(rig.statusGets.length, before + 1, 'the panel re-fetched');
+  assert.equal(viewRow(rig.panel, 'goal').children[1].textContent, 'Raised the cap to ten');
 });
 
 test('waiting ages show for own items and for descendant items in the Status view', async () => {

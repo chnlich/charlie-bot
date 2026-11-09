@@ -273,4 +273,8 @@ const GLOBALS = {
 };
 Sidebar.wire(GLOBALS, {applyCronBrokenView});
 
+// The page fetches this module after its document, so the sidebar's rows were already painted without the schedule
+// badge and line registered above. Repaint the rows the sidebar still shows.
+if (document.readyState !== 'loading') Sidebar.repaintRenderedRows();
+
 })();

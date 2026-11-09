@@ -272,11 +272,23 @@ registerWsMessageHandler(
   (ev) => updateExplainStatus(SESSION_ID, ev.upto, ev.state, ev.backend),
   {advancesCursor: true},
 );
-document.addEventListener('charliebot:session-data-load', (event) => loadExplainStatuses(event.detail));
+let sessionDataLoaded = false;
+document.addEventListener('charliebot:session-data-load', (event) => {
+  sessionDataLoaded = true;
+  loadExplainStatuses(event.detail);
+});
 
 const GLOBALS = {
   explainSession,
 };
 Chat.wire(GLOBALS, {});
+
+// The page fetches this module after its document, so the rounds it decorates are usually rendered by the time it
+// lands and the registrations above reached none of them. Repaint the rendered rounds, and read the statuses of the
+// session the page shows when its session-data-load event has already fired.
+if (document.readyState !== 'loading') {
+  Chat.repaintRoundButtons(document);
+  if (!sessionDataLoaded && SESSION_ID) loadExplainStatuses({sessionId: SESSION_ID, isCurrent: () => true});
+}
 
 })();

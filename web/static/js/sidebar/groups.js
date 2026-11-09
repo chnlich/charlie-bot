@@ -347,6 +347,16 @@ function paintWorkspaceBadges(workspaceBadges) {
   renderGroupedSessionList(lastGroupedRenderArgs.sessions, 'all',
     {workspaceBadges, listing: lastGroupedRenderArgs.listing});
 }
+// A module the page fetched after its document registers a row decoration (a badge, a line, a menu item) after the
+// rows painted, so the paint it missed leaves the rows it decorates bare. It asks for this repaint, which re-renders
+// from the last grouped paint's own arguments: no list refetch, and a paint the search overlay has replaced keeps
+// the rows it already showed.
+function repaintRenderedRows() {
+  if (searchListPainted || !lastGroupedRenderArgs) return;
+  const {sessions, filter, workspaceBadges, listing} = lastGroupedRenderArgs;
+  renderGroupedSessionList(sessions, filter, {workspaceBadges, listing});
+}
+
 // Whether the last renderSessionList call painted the search overlay. The
 // search flow never assigns currentFilter, so this marker — not the filter
 // state — is what tells the delete path a flat search list is on screen.
@@ -975,6 +985,7 @@ const GLOBALS = {
   renderEmptyNote,
   renderSearchNote,
   paintWorkspaceBadges,
+  repaintRenderedRows,
   resetGroupLimitState,
   toggleSessionGroupLimit,
   toggleSessionGroup,

@@ -34,6 +34,9 @@ function loadGroups() {
     BACKEND_POOLS,
     SESSION_ID: 'other-session',
     console: {error: () => {}},
+    // A package script the page fetched after its document reads readyState; no paint is on screen in this harness,
+    // so the repaint such a script asks for has no last paint to re-render.
+    document: {readyState: 'complete', getElementById: () => null},
     localStorage: {getItem: () => null, setItem: () => {}},
     escapeHtml: escapeHtmlText,
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),

@@ -51,8 +51,8 @@ enum CostTotal {
 /// The session usage fold: the context reading and the session cost, accumulated from chat events.
 ///
 /// The cost has one rule for every backend. A result event that names its native session carries that session's
-/// running total, so the run adds the increase over the session's previous reading; its first reading counts in
-/// full. A result without a native session is the run's own cost and counts in full.
+/// running total. The run adds the increase over the session's previous reading, and its first reading counts
+/// in full. A result without a native session is the run's own cost and counts in full.
 #[derive(Clone, Default)]
 struct UsageFold {
   chosen_prompt_tokens: i64,

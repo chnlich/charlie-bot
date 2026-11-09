@@ -69,8 +69,9 @@ const VOICE_OVERLAY_CLASS = 'absolute left-0 right-0 bottom-full mb-2 rounded-lg
 const VOICE_PARTIAL_CLASS = 'voice-partial-text text-sm text-slate-400 whitespace-pre-wrap break-words';
 // The caret's dropdown, anchored above the mic group the template renders. voice.css sizes it to its longest row.
 const VOICE_MENU_CLASS = 'absolute bottom-full right-0 mb-2 rounded-lg border border-slate-600 bg-slate-800 py-1 shadow-lg z-50';
-// The menu sits on slate-800, where slate-500 holds 3.07:1: under the 4.5:1 floor for the title's 12 px and the
-// unavailable rows' 14 px. slate-400 holds 5.7:1 and still reads dimmer than enabled rows' slate-200.
+// The menu sits on slate-800. There, slate-500 holds 3.07:1, under the 4.5:1 floor for the title's
+// 12 px and the unavailable rows' 14 px. A slate-400 label holds 5.7:1 and still reads dimmer than
+// the enabled rows' slate-200.
 const VOICE_MENU_TITLE_CLASS = 'px-3 py-1.5 text-xs text-slate-400';
 const VOICE_MENU_ITEM_CLASS = 'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm';
 const VOICE_MENU_ITEM_ENABLED_CLASS = ' text-slate-200 hover:bg-slate-700';
@@ -290,7 +291,8 @@ function newVoiceRun(sessionId, backend) {
     sessionId,
     // The run id the browser makes at the click. The startup report, the relay
     // socket and the upload all carry it, so the server keeps every file of
-    // this recording under one stem (rust/crates/features/voice/src/recordings.rs).
+    // this recording under one stem. That stem is set in the voice crate's
+    // `recordings.rs`.
     runId: newVoiceRunId(),
     stream: null,
     audioContext: null,

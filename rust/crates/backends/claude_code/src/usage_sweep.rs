@@ -16,7 +16,10 @@ use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::git::TRASH_DIR_NAME;
 use charliebot_core::timefmt;
-use charliebot_registry::usage::{CategoryResult, SourceSweep, SweepScope};
+use charliebot_registry::usage::{
+  CategoryResult, SWEEP_DIR_SCAN_FAILED_EVENT, SWEEP_FILE_DELETE_FAILED_EVENT, SWEEP_FILE_STAT_FAILED_EVENT,
+  SourceSweep, SweepScope,
+};
 use regex::Regex;
 use walkdir::WalkDir;
 
@@ -135,7 +138,13 @@ fn project_files(root: &Path) -> Vec<PathBuf> {
     let entry = match entry {
       Ok(entry) => entry,
       Err(error) => {
-        tracing::warn!(target: "charliebot_agents", path = %error_path(&error), error = %error, "storage_cool_dir_scan_failed");
+        tracing::warn!(
+          target: "charliebot_agents",
+          path = %error_path(&error),
+          error = %error,
+          "{}",
+          SWEEP_DIR_SCAN_FAILED_EVENT
+        );
         continue;
       }
     };
@@ -158,7 +167,13 @@ fn root_entries(roots: &[PathBuf]) -> Vec<PathBuf> {
     match sorted_children(root) {
       Ok(children) => entries.extend(children),
       Err(error) => {
-        tracing::warn!(target: "charliebot_agents", dir = %root.display(), error = %error, "storage_cool_dir_scan_failed");
+        tracing::warn!(
+          target: "charliebot_agents",
+          dir = %root.display(),
+          error = %error,
+          "{}",
+          SWEEP_DIR_SCAN_FAILED_EVENT
+        );
       }
     }
   }
@@ -187,12 +202,24 @@ impl Counter {
     let size = match fs::metadata(path) {
       Ok(metadata) => metadata.len(),
       Err(error) => {
-        tracing::warn!(target: "charliebot_agents", path = %path.display(), error = %error, "storage_cool_file_stat_failed");
+        tracing::warn!(
+          target: "charliebot_agents",
+          path = %path.display(),
+          error = %error,
+          "{}",
+          SWEEP_FILE_STAT_FAILED_EVENT
+        );
         return;
       }
     };
     if !dry_run && let Err(error) = fs::remove_file(path) {
-      tracing::warn!(target: "charliebot_agents", path = %path.display(), error = %error, "storage_cool_file_delete_failed");
+      tracing::warn!(
+        target: "charliebot_agents",
+        path = %path.display(),
+        error = %error,
+        "{}",
+        SWEEP_FILE_DELETE_FAILED_EVENT
+      );
       return;
     }
     self.bytes += size;

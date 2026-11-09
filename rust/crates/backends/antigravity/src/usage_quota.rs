@@ -11,7 +11,7 @@ use charliebot_registry::backend::{MemberReading, MemberReadingFn};
 use charliebot_registry::usage::{
   DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_SCOPE_LABEL, PANEL_STATUS_ROWS,
   PANEL_UTILIZATION, PANEL_WINDOW_MINUTES, PANEL_WINDOW_NAME, PANEL_WINDOWS, QuotaAccount, UsageOps, UsageSourceImpl,
-  mark_expired_windows, member_reading_from_windows,
+  WEEKLY_WINDOW_MINUTES, mark_expired_windows, member_reading_from_windows,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -282,7 +282,7 @@ fn parse_bucket(bucket: &Value, group_name: &str) -> anyhow::Result<Value> {
     .ok_or_else(|| anyhow!("Antigravity quota bucket has no window name"))?;
   let (label, minutes) = match window_name {
     "5h" => ("5 小时", 300),
-    "weekly" => ("每周", 10_080),
+    "weekly" => ("每周", WEEKLY_WINDOW_MINUTES),
     other => bail!("Antigravity quota window {other:?} is not a supported model-group window"),
   };
   let remaining = bucket

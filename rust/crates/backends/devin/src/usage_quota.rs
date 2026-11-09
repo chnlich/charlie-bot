@@ -13,7 +13,7 @@ use charliebot_registry::backend::{MemberReading, MemberReadingFn};
 use charliebot_registry::usage::{
   DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PLAN_TYPE, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_STATUS_ROWS,
   PANEL_UTILIZATION, PANEL_WINDOW_MINUTES, PANEL_WINDOW_NAME, PANEL_WINDOWS, QuotaAccount, UsageOps, UsageSourceImpl,
-  mark_expired_windows, member_reading_from_windows,
+  WEEKLY_WINDOW_MINUTES, mark_expired_windows, member_reading_from_windows,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -28,7 +28,6 @@ const PROVIDER_LABEL: &str = "Devin";
 const STATUS_URL_PATH: &str = "/exa.seat_management_pb.SeatManagementService/GetUserStatus";
 const MODEL_CATALOG_ARGS: [&str; 4] = ["models", "list", "--format", "json"];
 const DAILY_WINDOW_MINUTES: i64 = 1_440;
-const WEEKLY_WINDOW_MINUTES: i64 = 10_080;
 
 /// The state shared by the Devin panel account and its pool-member reader.
 #[derive(Default)]

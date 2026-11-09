@@ -9,7 +9,7 @@ use charliebot_core::config::{BackendOption, PoolBilling};
 use charliebot_registry::backend::{MemberReading, MemberReadingFn};
 use charliebot_registry::usage::{
   DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION, PANEL_WINDOW_MINUTES,
-  PANEL_WINDOW_NAME, PANEL_WINDOWS, QuotaAccount, member_reading_from_windows,
+  PANEL_WINDOW_NAME, PANEL_WINDOWS, QuotaAccount, WEEKLY_WINDOW_MINUTES, member_reading_from_windows,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -149,7 +149,9 @@ fn read_access_token(db: &std::path::Path) -> anyhow::Result<String> {
 fn parse_usage(data: &Value, fetched_at: UtcDateTime) -> anyhow::Result<Map<String, Value>> {
   let usage =
     data.get("usage").and_then(Value::as_object).ok_or_else(|| anyhow!("OpenCode Go response has no usage object"))?;
-  let windows = [("rolling", "5 小时", Some(300)), ("weekly", "每周", Some(10_080)), ("monthly", "每月", None)]
+  let windows =
+    [("rolling", "5 小时", Some(300)), ("weekly", "每周", Some(WEEKLY_WINDOW_MINUTES)), ("monthly", "每月", None)];
+  let windows = windows
     .into_iter()
     .map(|(key, name, minutes)| {
       let reading =

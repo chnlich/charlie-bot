@@ -9,7 +9,8 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::Request;
 use axum::response::Response;
-use charliebot_chat_threads::thread_entry::{ThreadDetail, ThreadReplyError};
+use charliebot_chat_threads::channel_service::reply_response;
+use charliebot_chat_threads::thread_entry::ThreadReplyError;
 use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, text_field};
 use charliebot_compat::responses;
@@ -18,7 +19,7 @@ use charliebot_compat::validation::Bound;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller;
 use http::StatusCode;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::adapter::{self, Bot};
 use crate::client::BASE_URL;
@@ -127,7 +128,7 @@ async fn post_reply(State(bot): State<Bot>, request: Request<Body>) -> Response 
   let result =
     adapter::post_reply_with_caller_context(&bot, &session_id, &text, request_id.as_deref(), run_started_at.as_deref())
       .await;
-  answer(result)
+  reply_response(result)
 }
 
 /// The read route (`POST /api/internal/feishu/read`): the session's topic or one of its read-only group views.
@@ -155,7 +156,7 @@ async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
       "read mode parameters do not match the selected mode",
     )),
   };
-  answer(result)
+  reply_response(result)
 }
 
 /// The download route (`POST /api/internal/feishu/download`): writes one image or file from the session's group into
@@ -170,7 +171,7 @@ async fn post_download(State(bot): State<Bot>, request: Request<Body>) -> Respon
     Ok(fields) => fields,
     Err(response) => return *response,
   };
-  answer(
+  reply_response(
     commands::download(
       &bot,
       &text_field(&fields, SESSION_ID),
@@ -193,22 +194,5 @@ async fn post_check(State(bot): State<Bot>, request: Request<Body>) -> Response 
   if let Err(response) = body.declared_fields(&CHECK_BODY) {
     return *response;
   }
-  answer(commands::check_setup(&bot).await)
-}
-
-/// A handler's answer: the readback with 200, a refusal with its status and detail, or the unhandled failure's 500.
-fn answer(result: Result<Value, ThreadReplyError>) -> Response {
-  match result {
-    Ok(body) => responses::json(StatusCode::OK, &body),
-    Err(error) if error.status == StatusCode::INTERNAL_SERVER_ERROR => {
-      responses::internal_error("RuntimeError", error.to_string())
-    }
-    Err(ThreadReplyError { status, detail }) => {
-      let detail = match detail {
-        ThreadDetail::Text(text) => Value::String(text),
-        ThreadDetail::Structured(value) => value,
-      };
-      responses::json(status, &json!({"detail": detail}))
-    }
-  }
+  reply_response(commands::check_setup(&bot).await)
 }

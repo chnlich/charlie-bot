@@ -246,6 +246,23 @@ fn events_file(stack: &Stack, session_id: &str, run_id: &str) -> PathBuf {
   stack.store().run_dir(session_id, run_id).join(run_records::RUN_EVENTS_NAME)
 }
 
+/// The text of a run's snapshot blocks whose source is the task record (scope `task`): the Task record block that
+/// the run's system prompt carries.
+fn task_record_text(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<String> {
+  let snapshot: Value =
+    serde_json::from_slice(&fs::read(stack.store().run_dir(session_id, run_id).join("prompt_snapshot.json"))?)?;
+  Ok(
+    snapshot["blocks"]
+      .as_array()
+      .context("the snapshot has blocks")?
+      .iter()
+      .filter(|block| block["sources"].as_array().into_iter().flatten().any(|source| source["scope"] == "task"))
+      .filter_map(|block| block["text"].as_str())
+      .collect::<Vec<_>>()
+      .join("\n\n"),
+  )
+}
+
 fn write_events(path: &Path, events: &[Value]) -> anyhow::Result<()> {
   let mut bytes = Vec::new();
   for event in events {
@@ -616,8 +633,10 @@ async fn repo_review_context_carries_the_delegated_spec() -> anyhow::Result<()> 
   let review_run = wait_for_review(&stack, &worker.id, "run-work").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &review_run.id).await?, RunOutcomeKind::Success);
   let prompt = fs::read_to_string(stack.store().run_dir(&worker.id, &review_run.id).join("launch_prompt.md"))?;
-  assert!(prompt.contains("the legacy key still loads"), "{prompt}");
-  assert!(prompt.contains("**Task spec:**"), "{prompt}");
+  let task_text = task_record_text(&stack, &worker.id, &review_run.id)?;
+  assert!(task_text.contains("rename the config key"), "{task_text}");
+  assert!(task_text.contains("the legacy key still loads"), "{task_text}");
+  assert!(!prompt.contains("**Task spec:**"), "{prompt}");
   Ok(())
 }
 
@@ -671,8 +690,11 @@ async fn review_context_without_claimed_inputs_goes_from_spec_to_summary() -> an
   let review_run = wait_for_review(&stack, &worker.id, "run-work").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &review_run.id).await?, RunOutcomeKind::Success);
   let prompt = fs::read_to_string(stack.store().run_dir(&worker.id, &review_run.id).join("launch_prompt.md"))?;
-  assert!(prompt.contains("**Task spec:**\nrename config\n**Worker summary:** renamed"), "{prompt}");
+  assert!(prompt.contains("**Worker summary:** renamed"), "{prompt}");
+  assert!(!prompt.contains("**Task spec:**"), "{prompt}");
   assert!(!prompt.contains("Later Messages"), "{prompt}");
+  let task_text = task_record_text(&stack, &worker.id, &review_run.id)?;
+  assert!(task_text.contains("rename config"), "{task_text}");
   Ok(())
 }
 
@@ -723,7 +745,9 @@ async fn review_launch_builds_its_task_context_and_managed_snapshot() -> anyhow:
   assert_eq!(review_run.backend.as_deref(), Some("fake2"));
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &review_run.id).await?, RunOutcomeKind::Success);
   let prompt = fs::read_to_string(stack.store().run_dir(&worker.id, &review_run.id).join("launch_prompt.md"))?;
-  assert!(prompt.contains("**Task spec:**\nship it"), "{prompt}");
+  assert!(!prompt.contains("**Task spec:**"), "{prompt}");
+  let task_text = task_record_text(&stack, &worker.id, &review_run.id)?;
+  assert!(task_text.contains("ship it"), "{task_text}");
   assert!(prompt.contains("worker done"), "{prompt}");
   assert!(prompt.contains("Review the changes: `git diff origin/main..."), "{prompt}");
   let snapshot: Value =
@@ -1264,7 +1288,9 @@ async fn changed_prompt_hash_at_work_continuation_starts_a_fresh_context() -> an
   assert_eq!(continuation.branch_name, first.branch_name);
   assert_eq!(continuation.input_event_ids.len(), 1);
   let prompt = fs::read_to_string(stack.store().run_dir(&worker.id, &continuation.id).join("launch_prompt.md"))?;
-  assert!(prompt.contains("add marker"), "{prompt}");
+  assert!(!prompt.contains("add marker"), "the goal is not re-sent in the launch text: {prompt}");
+  let task_text = task_record_text(&stack, &worker.id, &continuation.id)?;
+  assert!(task_text.contains("add marker"), "{task_text}");
   assert!(prompt.contains("keep going"), "{prompt}");
   assert!(prompt.contains("managed instructions or sources changed"), "{prompt}");
   assert!(prompt.contains(&stack.store().run_dir(&worker.id, "run-work").display().to_string()), "{prompt}");

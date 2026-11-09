@@ -2,8 +2,12 @@
 // vm-context loader for web/static/js/sidebar/groups.js, shared by the node
 // --test harnesses that drive groups.js standalone. It holds one base context
 // carrying the globals renderSessionItem reaches for, then one load sequence:
-// createContext, sidebar/namespace.js, sidebar/groups.js. The load order every
-// suite depends on lives in one place. The sandbox `escapeHtmlAttr`
+// createContext, sidebar/namespace.js, sidebar/status.js, sidebar/groups.js —
+// the page's order, which the row title rule needs: groups.js reads
+// sessionRowTitle, which status.js defines and the page loads first. The load
+// order every suite depends on lives in one place. The indicator fakes return
+// after status.js's load, so the suites keep the empty indicators they had.
+// The sandbox `escapeHtmlAttr`
 // global wraps `escapeHtml`, not escapeHtmlText: that is the wrapper
 // escape_html_stub.js documents as reproducing production escapeHtmlAttr, and
 // groups.js interpolates its output into title/data attributes.
@@ -14,6 +18,7 @@ const {readStatic, readPackageStatic} = require('./read_static');
 const {escapeHtml, escapeHtmlText} = require('./escape_html_stub');
 
 const NAMESPACE_JS = readStatic('sidebar/namespace.js');
+const STATUS_JS = readStatic('sidebar/status.js');
 const GROUPS_JS = readStatic('sidebar/groups.js');
 const CRON_JS = readPackageStatic('features', 'cron', 'cron.js');
 
@@ -25,6 +30,17 @@ const BACKEND_OPTIONS = {
 
 const BACKEND_POOLS = [{id: 'auto', label: 'Auto'}];
 
+// The status.js members the suites stub out: status.js defines them for real,
+// so they go back to their fakes after its load.
+const STATUS_FAKES = {
+  getSessionIndicatorState: () => 'idle',
+  renderSessionIndicators: () => '',
+  renderPendingTriggerIndicator: () => '',
+  renderPendingPlanApprovalIndicator: () => '',
+  recordRenderedSessionStatus: () => {},
+  recordTreeShape: () => {},
+};
+
 function loadGroups() {
   const Sidebar = {state: {}};
   const context = {
@@ -35,21 +51,19 @@ function loadGroups() {
     SESSION_ID: 'other-session',
     console: {error: () => {}},
     localStorage: {getItem: () => null, setItem: () => {}},
+    fetch: () => Promise.resolve({ok: true, json: async () => ({})}),
+    JSON_HEADERS: {},
     escapeHtml: escapeHtmlText,
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
     relativeTime: () => 'Jul 29, 5:12 PM',
     formatBubbleTime: () => '',
-    getSessionIndicatorState: () => 'idle',
-    renderSessionIndicators: () => '',
-    renderPendingTriggerIndicator: () => '',
-    renderPendingPlanApprovalIndicator: () => '',
-    recordRenderedSessionStatus: () => {},
-    recordTreeShape: () => {},
   };
   context.globalThis = context;
   vm.createContext(context);
   // namespace.js first, as on the page: it supplies the shared sidebar namespace.
   vm.runInContext(NAMESPACE_JS, context, {filename: 'namespace.js'});
+  vm.runInContext(STATUS_JS, context, {filename: 'status.js'});
+  Object.assign(context, STATUS_FAKES);
   vm.runInContext(GROUPS_JS, context, {filename: 'groups.js'});
   return context;
 }

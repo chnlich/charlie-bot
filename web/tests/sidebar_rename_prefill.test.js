@@ -18,7 +18,7 @@ const MODALS_JS = readStatic('sidebar/modals.js');
 // modals.js wires startRename as a bare global through Sidebar.wire; the fake
 // DOM below covers exactly what startRename touches: getElementById,
 // getBoundingClientRect, querySelector, classList, style, focus, select.
-function loadModals(dom) {
+function loadModals(dom, fetchImpl) {
   const Sidebar = {};
   const context = {
     Sidebar,
@@ -27,8 +27,12 @@ function loadModals(dom) {
     document: dom.document,
     console: {error: () => {}},
     setTimeout: () => 0,
-    fetch: () => Promise.resolve({ok: true}),
+    fetch: fetchImpl || (() => Promise.resolve({ok: true})),
     JSON_HEADERS: {},
+    // status.js and session-view.js define these on the page; this harness
+    // loads modals.js alone, and the commit path calls both.
+    updateSidebarSessionName: () => {},
+    refreshDisplayedSessionName: () => {},
   };
   context.globalThis = context;
   vm.createContext(context);
@@ -51,6 +55,8 @@ function makeDom({rowWidth = 220, rowName = 'demo session', headerName = 'demo s
   };
   const nameSpan = {textContent: rowName, getBoundingClientRect: () => ({top: 100, left: 50, width: rowWidth, height: 20})};
   const rowEl = withRow ? {
+    dataset: {},
+    removeAttribute(name) { delete this.dataset[name.replace(/^data-(.)/, (_, c) => c.toUpperCase())]; },
     getBoundingClientRect: () => fakeRect(rowWidth),
     querySelector: (sel) => (sel === '.session-name' ? nameSpan : null),
   } : null;
@@ -93,11 +99,38 @@ test('prefill reads the live row text: a renamed session prefills its new name',
   assert.equal(dom.input.style.paddingTop, '0px');
   assert.equal(dom.input.style.paddingBottom, '0px');
   // updateSidebarSessionName (status.js) and the session_renamed websocket
-  // handler both funnel into this one textContent write.
+  // handler both funnel into this one write: the title text, plus
+  // data-full-name when the title is a shortened one. A non-shortened row has
+  // neither, so the text is the name.
   dom.nameSpan.textContent = 'renamed by first pass';
   clickRename(dom);
   assert.equal(dom.input.value, 'renamed by first pass',
     'second rename prefilled a stale name instead of the live row text');
+});
+
+test('a shortened Threads title prefills the full session name', () => {
+  const dom = makeDom({rowName: '2026-11-10 12:17'});
+  dom.rowEl.dataset.fullName = 'Slack #docs-review 2026-11-10 12:17';
+  clickRename(dom);
+  assert.equal(dom.input.value, 'Slack #docs-review 2026-11-10 12:17',
+    'Enter on an untouched field would have committed the shortened title');
+});
+
+test('Enter on an untouched shortened field commits the full name', async () => {
+  const fetches = [];
+  const dom = makeDom({rowName: '2026-11-10 12:17'});
+  dom.rowEl.dataset.fullName = 'Slack #docs-review 2026-11-10 12:17';
+  const context = loadModals(dom, async (url, opts) => {
+    fetches.push({url, opts});
+    return {ok: true};
+  });
+  context.startRename({preventDefault() {}, stopPropagation() {}}, 's1');
+  context.handleRenameKey({key: 'Enter', preventDefault() {}});
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(fetches.length, 1, 'one PATCH went out');
+  assert.equal(fetches[0].url, '/api/sessions/s1');
+  assert.deepEqual(JSON.parse(fetches[0].opts.body), {name: 'Slack #docs-review 2026-11-10 12:17'});
 });
 
 test('hostile names round-trip exactly through the prefill', () => {

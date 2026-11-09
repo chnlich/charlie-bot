@@ -534,7 +534,12 @@ function reportSwitchEvent(phase, fromSessionId, sessionId, generation, extra = 
 function switchTargetName(sessionId) {
   const row = document.getElementById('session-' + sessionId);
   const nameEl = row ? row.querySelector('.session-name') : null;
-  return (nameEl && nameEl.textContent) || sessionId;
+  // The session's full name, not the row's rendered title: a grouped Threads
+  // title drops its header's label (sessionRowTitle), and the opening notice
+  // and the chat header the click moves name the session's own name.
+  return (row && row.dataset && row.dataset.fullName)
+    || (nameEl && nameEl.textContent)
+    || sessionId;
 }
 
 // The switch's one awaited request: the target's bootstrap. A network failure or a 5xx retries

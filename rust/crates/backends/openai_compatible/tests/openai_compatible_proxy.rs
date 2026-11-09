@@ -33,7 +33,7 @@ use charliebot_registry::store_hooks::store_hooks;
 use charliebot_registry::{FeatureContext, Registry, RegistryError, StartupState};
 use charliebot_store::Store;
 use futures_util::stream;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tokio::net::TcpListener;
 
 const PACKAGE: &str = "backends.openai_compatible";
@@ -270,7 +270,22 @@ fn the_factory_builds_the_proxy_backend_for_the_server_port() {
   let option = cfg.get_backend_option("cc-glm52").unwrap();
   let factory = &registry.backend_type_of("cc-openai-compatible").unwrap().factory;
 
-  let backend = factory.build(Some(option), &cfg, LaunchArgs::default()).unwrap();
+  let backend = factory
+    .build(
+      Some(option),
+      &cfg,
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+      },
+    )
+    .unwrap();
 
   let env = backend.prepare_env(Default::default()).unwrap();
   assert_eq!(env["ANTHROPIC_BASE_URL"], "http://localhost:8123/api/anthropic-proxy/openai-compatible/cc-glm52");

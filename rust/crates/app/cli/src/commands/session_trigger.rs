@@ -15,7 +15,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_core::config;
-use charliebot_core::text_repr::{self, JsonStyle};
+use charliebot_core::text_repr;
 use charliebot_core::timefmt;
 use charliebot_store::trigger_files::{LOCAL_PID_KIND, REMOTE_PID_KIND, SLURM_JOB_KIND};
 use charliebot_store::{layout, trigger_files};
@@ -36,10 +36,6 @@ const EXIT_VERIFY_REJECTED: i32 = 2;
 
 /// Exit code when the `--cmd` start over ssh failed or the remote PID did not parse.
 const EXIT_SSH_FAILED: i32 = 3;
-
-/// The launch record's bytes: compact separators, ASCII escapes.
-const LAUNCH_RECORD_JSON: JsonStyle =
-  JsonStyle { ensure_ascii: true, sort_keys: false, item_separator: ",", key_separator: ":", indent: None };
 
 /// One `--watch` target: the key order here is the order on the wire.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -334,7 +330,7 @@ fn start_and_register(sessions_dir: &Path, session_id: &str, args: &Args, cmd: &
   let Value::Object(record) = record else { unreachable!("the record literal is an object") };
   let dir = launch_dir(sessions_dir, session_id, &launch_id);
   fs::create_dir_all(&dir).map_err(io_failure)?;
-  let record_text = text_repr::json_dumps(&Value::Object(record.clone()), &LAUNCH_RECORD_JSON);
+  let record_text = text_repr::json_dumps(&Value::Object(record.clone()), &text_repr::COMPACT_ASCII_JSON);
   fs::write(launch_record_path(&dir), format!("{record_text}\n")).map_err(io_failure)?;
 
   // The output object: trigger_id and fire_at first, then the record's fields (its trigger_id keeps the first slot).

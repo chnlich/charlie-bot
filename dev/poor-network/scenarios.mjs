@@ -11,9 +11,9 @@ import fs from 'node:fs';
 import { launchBrowser, chromeBinary } from './chrome.mjs';
 import { startTaskTreeDriver, startTriggerChurn, startTurnChurn } from './api.mjs';
 import { ShapingProxy } from './proxy.mjs';
-import { LINK, OTHER_VIEWS, TASK_TREE_LOAD } from './profile.mjs';
+import { LINK, OPEN, OTHER_VIEWS, TASK_TREE_LOAD } from './profile.mjs';
 import { percentile } from './report.mjs';
-import { Tabs, pollFor, sleep, waitFor } from './tabs.mjs';
+import { Tabs, pollFor, sleep, waitFor, WARM_PROBE_INIT, waitForWarm } from './tabs.mjs';
 
 // Bytes per millisecond of the link: 12.5 KB/s.
 const BYTES_PER_MS = LINK.bytesPerSecond / 1000;
@@ -86,10 +86,11 @@ async function withCleanup(body, cleanup) {
 }
 
 // One repetition's browser, proxy and tabs, torn down on every path.
-async function withLink(ctx, label, tabNames, body) {
+async function withLink(ctx, label, tabNames, body, { warmDir = null } = {}) {
   const proxy = new ShapingProxy({ target: { host: '127.0.0.1', port: ctx.frontPort } });
   const proxyPort = await proxy.start();
   const profile = `${ctx.runDir}/profile-${label}-${randomTag()}`;
+  if (warmDir !== null) fs.cpSync(warmDir, profile, { recursive: true });
   const browser = await launchBrowser({
     binary: chromeBinary(),
     proxyPort,
@@ -112,6 +113,56 @@ async function withLink(ctx, label, tabNames, body) {
     await proxy.stop();
     fs.rmSync(profile, { recursive: true, force: true });
   }
+}
+
+// The steady state of a browser under the offline shell: the shell and its files stored, and the first
+// screens of the sessions the scenario's page visits already in the copy store. A blacked-out switch to
+// such a session paints its stored copy at once and catches up when the link returns, which is the
+// behaviour a browser that opened the session before holds. The profile is built once per side and each
+// repetition copies it.
+async function steadyWarmProfile(ctx, label, sessionIds) {
+  ctx.steadyWarms ??= {};
+  if (ctx.steadyWarms[label]) return ctx.steadyWarms[label];
+  const dir = `${ctx.runDir}/warm-steady-${label}-${randomTag()}`;
+  const proxy = new ShapingProxy({ target: { host: '127.0.0.1', port: ctx.frontPort } });
+  const proxyPort = await proxy.start();
+  const browser = await launchBrowser({
+    binary: chromeBinary(),
+    proxyPort,
+    userDataDir: dir,
+    logPath: `${ctx.runDir}/chrome.log`,
+    trustedSpki: ctx.trustedSpki,
+  });
+  try {
+    const tabs = new Tabs({
+      browser, assets: ctx.assets, accessKey: ctx.api.accessKey, origin: ctx.origin, cdn: 'local',
+    });
+    const tab = await tabs.open('warm', WARM_PROBE_INIT);
+    await tabs.navigate(tab, `/?session=${ctx.sessions.open.id}`);
+    await tab.ready();
+    await tabs.show(tab);
+    await tabs.waitIdle(SETTLE_TIMEOUT_MS);
+    await waitForWarm(tab, OPEN.warmTimeoutMs);
+    // The second open boots through the stored shell, so the worker controls the page from its start
+    // and the first screens the fetches below bring home are stored as they pass. It runs in a fresh
+    // tab: the first page's requests that a navigation would interrupt are records no settle can close.
+    await tabs.close(tab);
+    const second = await tabs.open('warm-shell', WARM_PROBE_INIT);
+    await tabs.navigate(second, `/?session=${ctx.sessions.open.id}`);
+    await second.ready();
+    await tabs.waitIdle(SETTLE_TIMEOUT_MS);
+    for (const sessionId of sessionIds) {
+      await second.evaluate(`fetch('/api/sessions/${sessionId}/bootstrap').then((response) => response.status)`);
+    }
+    const now = Date.now();
+    const record = { first_open_ms: now, sessions: Object.fromEntries(sessionIds.map((id) => [id, now])) };
+    await second.evaluate(`localStorage.setItem('charliebot_opened_pages', ${JSON.stringify(JSON.stringify(record))})`);
+  } finally {
+    await browser.shutdown();
+    await proxy.stop();
+  }
+  ctx.steadyWarms[label] = dir;
+  return dir;
 }
 
 // The probe answers: the server's time for one message, measured on the direct path, not through the link. The floor
@@ -586,6 +637,7 @@ export function viewBackgroundRep(filter) {
 // Scenario 4: a 30 s held blackout with five switch clicks inside it.
 export async function heldBlackoutRep(ctx) {
   const { api, sessions } = ctx;
+  const warmDir = await steadyWarmProfile(ctx, 'held', [sessions.open.id, ...sessions.held.map((session) => session.id)]);
   return withLink(ctx, 'held', ['visible'], async ({ proxy, tabs, tab }) => {
     await tabs.navigate(tab, `/?session=${sessions.open.id}`);
     await tab.ready();
@@ -661,12 +713,13 @@ export async function heldBlackoutRep(ctx) {
       supersededServerBytes,
       blackoutProxyBytes: proxy.counters(),
     };
-  });
+  }, { warmDir });
 }
 
 // Scenario 5: a 30 s blackout that resets every connection when it starts.
 export async function resetBlackoutRep(ctx) {
   const { sessions } = ctx;
+  const warmDir = await steadyWarmProfile(ctx, 'reset', [sessions.open.id]);
   return withLink(ctx, 'reset', ['visible'], async ({ proxy, tabs, tab }) => {
     await tabs.navigate(tab, `/?session=${sessions.open.id}`);
     await tab.ready();
@@ -705,7 +758,7 @@ export async function resetBlackoutRep(ctx) {
       // its `catchup_complete`, counted and sized by type.
       catchupFrames: tab.frameBreakdown(handshake.at, catchupAt),
     };
-  });
+  }, { warmDir });
 }
 
 // Scenario 6: the socket bytes of one reply of about 8 KB.

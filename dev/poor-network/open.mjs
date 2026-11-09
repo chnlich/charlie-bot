@@ -15,7 +15,7 @@ import { cdnRoutes } from './cdn.mjs';
 import { LINK, OPEN, LIVE_CPU_TAIL } from './profile.mjs';
 import { ShapingProxy } from './proxy.mjs';
 import { percentile } from './report.mjs';
-import { NETWORK_CHANGED_ERROR, Tabs, sleep } from './tabs.mjs';
+import { NETWORK_CHANGED_ERROR, Tabs, sleep, WARM_PROBE_INIT, waitForWarm } from './tabs.mjs';
 
 const CONDITIONS = ['link', 'held', 'reset', 'flaps', 'offline'];
 const CASES = ['A', 'B', 'C'];
@@ -222,15 +222,26 @@ async function buildWarm(ctx, caseName) {
     const tabs = new Tabs({
       browser, assets: ctx.assets, accessKey: ctx.api.accessKey, origin: ctx.origin, cdn: 'link',
     });
-    const tab = await tabs.open('warm');
+    const tab = await tabs.open('warm', WARM_PROBE_INIT);
     await tabs.navigate(tab, `/?session=${session.id}`);
     await tab.ready();
     await tabs.show(tab);
     await tabs.waitIdle(SETTLE_MS);
+    // The warm's fetches live in the worker, so the idle wait above does not cover them; the report
+    // does. The second open then boots through the stored shell, and the open path's first screen
+    // fetch stores the session's copy — the browser state the case names under the offline shell. The
+    // second open runs in a fresh tab: the first page's requests that the navigation would interrupt
+    // are records no settle can close.
+    await waitForWarm(tab, OPEN.warmTimeoutMs);
+    await tabs.close(tab);
+    const second = await tabs.open('warm-shell', WARM_PROBE_INIT);
+    await tabs.navigate(second, `/?session=${session.id}`);
+    await second.ready();
+    await tabs.waitIdle(SETTLE_MS);
     const now = Date.now();
     const record = { first_open_ms: now, sessions: { [session.id]: now } };
-    await tab.evaluate(`localStorage.setItem('charliebot_opened_pages', ${JSON.stringify(JSON.stringify(record))})`);
-    await tabs.close(tab);
+    await second.evaluate(`localStorage.setItem('charliebot_opened_pages', ${JSON.stringify(JSON.stringify(record))})`);
+    await tabs.close(second);
   } finally {
     await browser.shutdown();
     await link.proxy.stop();

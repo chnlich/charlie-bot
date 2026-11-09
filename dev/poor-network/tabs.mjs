@@ -14,6 +14,19 @@ const ROW_PAINT_TIMEOUT_MS = 180000;
 // (web/static/js/view-requests.js).
 const STORED_AT_HEADER = 'x-charliebot-stored-at';
 
+// The client-event telemetry posts are fire-and-forget keepalive fetches, by the sender's own design never awaited
+// (web/features/diag/templates/diag/client-events.js). Chromium answers them at once but can leave the page's
+// loadingFinished unreported, and a settle that waits for them then burns its whole timeout
+// (~/pn-runs/20261109_pn2_landing/20261109T143455Z). The idle wait never holds on them.
+const IDLE_IGNORED_PATTERN = /\/api\/diag\/client-events$/;
+
+// Chromium on a worker-controlled page can leave a request's completion event unreported altogether while the
+// request itself ends: the server logs its answer and the page keeps polling on schedule, but the page's CDP
+// session never delivers loadingFinished, and the settle burns its whole timeout on one entry
+// (~/pn-runs/20261109_pn2_landing/20261109T155027Z, /api/concurrency/now). No transfer of the app runs this
+// long even over the shaped link, so an entry in flight this long stops holding the settle and reads as failed.
+const IDLE_STUCK_MS = 120000;
+
 // One header of a CDP response, by name, case-insensitively: the browser reports a server's own casing.
 function responseHeader(headers, name) {
   for (const [key, value] of Object.entries(headers || {})) {
@@ -115,6 +128,29 @@ export async function waitFor(check, timeoutMs, label) {
     throw new Error(`timed out after ${timeoutMs} ms waiting for ${label}`);
   }
   return value;
+}
+
+// The page side of the offline shell reports the warm's outcome once the worker has stored this
+// release's shell and files, or once it knows no worker will come. The warm's fetches live in the
+// worker, where a page's own idle wait cannot see them, so a caller that closes a warm browser reads
+// this before closing: the script records the report on every document of the tab.
+export const WARM_PROBE_INIT = 'window.__pnWarm = null;' +
+    'document.addEventListener(\'charliebot:offline-shell-warm\', (ev) => { window.__pnWarm = ev.detail ?? {}; });';
+
+// Waits for the warm's outcome, or for the absence of any registration on a client that predates the
+// offline shell: either closes the wait. A warm that failed throws, so a profile without a stored shell
+// never reaches a measured cell.
+export async function waitForWarm(tab, timeoutMs) {
+  await waitFor(
+      () => tab.evaluate(
+          'window.__pnWarm !== null ? true : navigator.serviceWorker.getRegistration()' +
+          '.then((registration) => !registration)'),
+      timeoutMs,
+      'the offline shell warm to settle');
+  const warm = await tab.evaluate('window.__pnWarm');
+  if (warm !== null && warm.stored === false) {
+    throw new Error('the offline shell warm failed: ' + (warm.error ?? 'no stored shell'));
+  }
 }
 
 export class Tab {
@@ -634,13 +670,16 @@ export class Tabs {
   async waitIdle(timeoutMs) {
     const pending = this.#tabs.flatMap((tab) =>
       [...tab.requests.entries()]
-        .filter(([, request]) => request.finishAt === null && request.failed === null)
+        .filter(([, request]) => request.finishAt === null && request.failed === null && !IDLE_IGNORED_PATTERN.test(request.url))
         .map(([requestId]) => ({ tab, requestId })),
     );
     await waitFor(
       () =>
         pending.every(({ tab, requestId }) => {
           const request = tab.requests.get(requestId);
+          if (request.failed === null && Date.now() - request.startAt >= IDLE_STUCK_MS) {
+            request.failed = `no completion reported by the browser in ${IDLE_STUCK_MS} ms`;
+          }
           return request.finishAt !== null || request.failed !== null;
         }),
       timeoutMs,

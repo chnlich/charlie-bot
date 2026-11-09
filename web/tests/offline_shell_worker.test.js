@@ -106,6 +106,12 @@ function request(url, {method = 'GET', mode = 'cors', headers = {}} = {}) {
   return {url, method, mode, headers: new Headers(headers)};
 }
 
+// A message channel the test reads the worker's replies from: the worker posts to the port it is given.
+function messageChannel() {
+  const replies = [];
+  return {replies, port2: {postMessage: (message) => replies.push(message)}, port1: {onmessage: null}};
+}
+
 // Answers one fetch event with the response (or the rejection), once the background work it kept has ended.
 async function answer(h, req) {
   const result = await answerNow(h, req);
@@ -136,11 +142,48 @@ test('the first load reaches the network, and a warm shell then answers the navi
   const first = await answer(h, nav);
   assert.equal(await first.response.text(), '<html><body>shell</body></html>', 'the first load is the network page');
 
-  await Promise.all(h.fire('message', {data: {type: 'warm'}}).waits);
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'warm'}, ports: [channel.port2]}).waits);
+  assert.equal(channel.replies.length, 1, 'the warm answers once');
+  assert.equal(channel.replies[0].stored, true, 'the warm reports the stored shell over its channel');
   const second = await answer(h, nav);
   assert.equal(await second.response.text(), '<html><body>shell</body></html>');
   assert.equal(h.state.calls.filter((call) => call.url === SHELL_URL).length, 2,
       'the first load and the warm fetch reached the network; the stored shell answers the second navigation');
+});
+
+test('a warm that finds the shell stored fetches nothing and reports the shell it has', async () => {
+  const h = harness();
+  h.state.network = async (req) => (req.url === SHELL_URL
+    ? new Response('<html><body>shell</body></html>', {status: 200, headers: {ETag: '"shell"'}})
+    : new Response('unexpected', {status: 500}));
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'warm'}, ports: [channel.port2]}).waits);
+  const again = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'warm'}, ports: [again.port2]}).waits);
+  assert.equal(again.replies.length, 1);
+  assert.equal(again.replies[0].stored, true);
+  assert.equal(h.state.calls.filter((call) => call.url === SHELL_URL).length, 1,
+      'the second warm of the same release fetches no shell');
+});
+
+test('a warm whose shell fetch fails reports the failure', async () => {
+  const h = harness();
+  h.state.network = async () => new Response('no', {status: 503});
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'warm'}, ports: [channel.port2]}).waits);
+  assert.equal(channel.replies.length, 1);
+  assert.equal(channel.replies[0].stored, false);
+  assert.match(channel.replies[0].error, /503/);
+});
+
+test('the retired form answers no message', async () => {
+  const h = harness({enabled: false});
+  h.state.network = async () => new Response('unexpected', {status: 200});
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'warm'}, ports: [channel.port2]}).waits);
+  assert.equal(channel.replies.length, 0, 'a worker the switch retired stores nothing');
+  assert.deepEqual(h.state.calls, [], 'a worker the switch retired fetches nothing');
 });
 
 test('warming stores the shell and the same-origin files it names, and drops the files it no longer names', async () => {
@@ -155,7 +198,10 @@ test('warming stores the shell and the same-origin files it names, and drops the
   };
   const files = h.caches.api;
   await (await files.open('last-state-files')).put(ORIGIN + '/static/old.css', new Response('old'));
-  await Promise.all(h.fire('message', {data: {type: 'warm'}}).waits);
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'warm'}, ports: [channel.port2]}).waits);
+  assert.equal(channel.replies.length, 1);
+  assert.equal(channel.replies[0].stored, true);
 
   const stored = await (await files.open('last-state-files')).keys();
   assert.deepEqual(stored.map((entry) => entry.url), [ORIGIN + '/static/css/a.css?v=1'],
@@ -333,4 +379,10 @@ test('the retired form empties the worker stores, claims the pages and unregiste
   assert.equal(h.state.unregistered, 1);
   const result = await answer(h, request(BOOTSTRAP_URL));
   assert.equal(result.responded, false, 'the retired form answers nothing');
+});
+
+test('the enabled form claims no page: the load it arrives in keeps its own requests', async () => {
+  const h = harness();
+  await Promise.all(h.fire('activate').waits);
+  assert.equal(h.state.claimed, 0);
 });

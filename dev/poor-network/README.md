@@ -270,6 +270,15 @@ The CPU rate is `Emulation.setCPUThrottlingRate`. The cells run in this order: a
 other conditions at the derived rate, then the release cells, because each release changes the version and each
 case's warm profile is built at the version then served.
 
+**Warm profiles under the offline shell.** The offline shell's warm runs in the service worker, where a page's own
+idle wait cannot see it, so a warm profile waits for the page's `charliebot:offline-shell-warm` report before it
+closes its browser. It then opens the session a second time, through the stored shell: the open path's first screen
+fetch is what stores a session's copy, and a case's browser holds that copy under the new release. The worker skips
+the fetch of a shell it already stored, so the second open and every later one cost nothing. The held and reset
+scenarios copy a steady-state profile instead of a fresh one: the shell, its files, and the first screens of the
+sessions their page visits are stored before the first repetition, because a browser with CharlieBot open holds them
+— and a warm that was still fetching when a blackout started would queue its bytes and delay every restore.
+
 **CPU rate.** `profile.mjs` holds `LIVE_CPU_TAIL`, the median of Chao's device's page loads with cause `open` (13 loads
 on 100.84.122.38 from the live log, 2026-11-06): 297 ms of DOMContentLoaded minus responseEnd. The tail is used instead
 of the raw DOMContentLoaded, because the raw value includes the document's transfer, and the live loads ran about ten

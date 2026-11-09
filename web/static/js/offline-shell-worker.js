@@ -42,7 +42,8 @@ async function activateCurrent() {
       await caches.delete(name);
     }
   }
-  await self.clients.claim();
+  // The pages this load opened stay their own: a worker that claims a page mid-load reroutes the rest of
+  // that load through itself. The next navigation in the worker's scope is controlled without a claim.
 }
 
 async function retire() {
@@ -219,7 +220,11 @@ function shellStaticRefs(html) {
 }
 
 // Fetches the shell and the files it names, stores them, and drops the stored files it no longer names.
+// A shell this release already stored stays: the fetch it needs happens once per release, on the first
+// open after it (the cache name carries the version), and once more after a 4409 drops the shell.
 async function warmShell() {
+  const cache = await caches.open(COPY_CACHE);
+  if (await cache.match(SHELL_KEY)) return;
   const response = await fetch('/?session=', {cache: 'no-store', credentials: 'same-origin'});
   if (response.status === 401) {
     await dropCopies();
@@ -227,7 +232,6 @@ async function warmShell() {
   }
   if (!response.ok) throw new Error('shell fetch failed: ' + response.status);
   const html = await response.text();
-  const cache = await caches.open(COPY_CACHE);
   await cache.put(SHELL_KEY, new Response(html, {headers: {'Content-Type': 'text/html; charset=utf-8'}}));
   const refs = shellStaticRefs(html);
   const files = await caches.open(FILE_CACHE);
@@ -255,10 +259,13 @@ async function dropShell() {
 
 self.addEventListener('message', (event) => {
   const data = event.data || {};
+  if (!WORKER_CONFIG.enabled) return;
   if (data.type === 'warm') {
-    event.waitUntil(warmShell());
+    event.waitUntil(warmShell().then(
+        () => replyTo(event, {stored: true}),
+        (error) => replyTo(event, {stored: false, error: String(error)})));
   } else if (data.type === 'drop-shell') {
-    event.waitUntil(dropShell().then(() => replyTo(event)));
+    event.waitUntil(dropShell().then(() => replyTo(event, {done: true})));
   } else if (data.type === 'drop-copies') {
     event.waitUntil(dropCopies());
   } else {
@@ -266,6 +273,6 @@ self.addEventListener('message', (event) => {
   }
 });
 
-function replyTo(event) {
-  if (event.ports && event.ports[0]) event.ports[0].postMessage({done: true});
+function replyTo(event, message) {
+  if (event.ports && event.ports[0]) event.ports[0].postMessage(message);
 }

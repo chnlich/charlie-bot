@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import vm from 'node:vm';
 
-import { Tab } from './tabs.mjs';
+import { Tab, waitForWarm } from './tabs.mjs';
 
 // The toggle's listing fetch: the rows paint this long after its click.
 const FETCH_MS = 30;
@@ -136,4 +136,38 @@ test('the tab records whether a request\'s answer came from the worker\'s stored
   tab.handle({method: 'Network.loadingFinished', params: {requestId: 'network', encodedDataLength: 900}});
   assert.equal(tab.lastRequest(pattern).storedAt, null, 'a network answer carries no stored-at header');
   assert.equal(tab.bytesOf(pattern, 0, Infinity), 900);
+});
+
+// The warm wait reads the page's own warm report, and a client that predates the offline shell closes it by holding
+// no registration at all. A stub tab answers the expressions the wait evaluates.
+function warmTab({ reported, registered }) {
+  return {
+    async evaluate(expression) {
+      if (expression.startsWith('window.__pnWarm !== null')) {
+        if (reported !== null) return true;
+        return Promise.resolve(!registered);
+      }
+      return reported;
+    },
+  };
+}
+
+test('the warm wait closes on the page report and lets a stored warm through', async () => {
+  const tab = warmTab({ reported: {stored: true}, registered: true });
+  await waitForWarm(tab, 1000);
+});
+
+test('the warm wait closes on a client with no registration, which predates the offline shell', async () => {
+  const tab = warmTab({ reported: null, registered: false });
+  await waitForWarm(tab, 1000);
+});
+
+test('the warm wait fails the run on a warm that reports a failure', async () => {
+  const tab = warmTab({ reported: {stored: false, error: 'Error: shell fetch failed: 503'}, registered: true });
+  await assert.rejects(waitForWarm(tab, 1000), /shell fetch failed: 503/);
+});
+
+test('the warm wait times out when a registration is there and no report comes', async () => {
+  const tab = warmTab({ reported: null, registered: true });
+  await assert.rejects(waitForWarm(tab, 1), /the offline shell warm to settle/);
 });

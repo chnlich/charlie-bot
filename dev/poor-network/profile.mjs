@@ -132,6 +132,9 @@ export const OPEN = Object.freeze({
   // A repetition the host's network change spoiled is rerun at most this many times; one that still meets the
   // interference at the bound fails the run.
   interferenceReruns: 3,
+  // The wait for a warm profile's offline shell to report its stored shell and files. The warm moves
+  // the shell and the files it names over the link (about 160 KB, 13 s) before it reports.
+  warmTimeoutMs: 300000,
 });
 
 // Chao's devices, from the live server log's page loads (2026-11-06 03:40Z to 08:40Z). A page load's CPU tail is its

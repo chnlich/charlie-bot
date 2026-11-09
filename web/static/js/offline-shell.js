@@ -16,12 +16,31 @@ function offlineShellPresent() {
   return offlineShellSupported() && navigator.serviceWorker.controller !== null;
 }
 
+// The warm's outcome, one event per page load: the worker's reply once it has stored this release's
+// shell and files ({stored: true} or {stored: false, error}), or {supported: false} when this browser
+// has no service worker to ask. The poor-network bench waits for it before it closes a warm browser,
+// so a shell the warm was storing survives the close.
+function reportWarm(detail) {
+  document.dispatchEvent(new CustomEvent('charliebot:offline-shell-warm', {detail}));
+}
+
 function registerOfflineShell() {
-  if (!offlineShellSupported()) return;
+  if (!offlineShellSupported()) {
+    reportWarm({supported: false});
+    return;
+  }
   navigator.serviceWorker.register(OFFLINE_SHELL_WORKER_PATH, {scope: '/?session='})
     .catch((err) => console.error('offline shell worker registration failed:', err));
   window.addEventListener('load', () => {
-    navigator.serviceWorker.ready.then((registration) => registration.active.postMessage({type: 'warm'}));
+    navigator.serviceWorker.ready.then((registration) => {
+      if (!registration.active) {
+        reportWarm({supported: false});
+        return;
+      }
+      const channel = new MessageChannel();
+      channel.port1.onmessage = (event) => reportWarm(event.data ?? {});
+      registration.active.postMessage({type: 'warm'}, [channel.port2]);
+    }, (err) => reportWarm({error: String(err)}));
   });
 }
 

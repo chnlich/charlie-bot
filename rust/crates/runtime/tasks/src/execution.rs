@@ -48,7 +48,7 @@ use uuid::Uuid;
 use crate::auto_switch::{self, MemberSwitch};
 use crate::backend_retry;
 use crate::cold_read::{self, ColdReadOutcome};
-use crate::dispatch::{DispatchExecutor, Dispatcher, RunFinishedCompletion};
+use crate::dispatch::{DispatchExecutor, Dispatcher, RunFinishedCompletion, note_run_liveness};
 use crate::git;
 use crate::handoff::HandoffSource;
 use crate::master_queue::{MasterQueue, PersistAndBroadcastFn, SessionCallbacks, TaskTreeActivityFn};
@@ -905,7 +905,8 @@ impl TaskExecutionAdapter {
         let pid_start =
           thread.pid_start.as_deref().ok_or_else(|| anyhow!("run {run_id} spawned without a pinned pid_start"))?;
         let pid = thread.pid.ok_or_else(|| anyhow!("run {run_id} spawned without a pid"))?;
-        features.store.record_launch(&session_id, &run_id, pid, pid_start).await?;
+        let run = features.store.record_launch(&session_id, &run_id, pid, pid_start).await?;
+        note_run_liveness(&features.store, &session_id, &run).await;
         Ok(())
       }) as BoxFuture<'static, anyhow::Result<()>>
     });

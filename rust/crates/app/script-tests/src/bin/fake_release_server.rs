@@ -27,9 +27,10 @@ use charliebot_core::repo_root::REPO_ROOT_ENV;
 use charliebot_core::timefmt;
 use charliebot_session_api::api as session_routes;
 use charliebot_store::layout;
-use charliebot_store::metadata::{MetadataReadError, PARENT_SESSION_ID};
+use charliebot_store::metadata::{MetadataReadError, PARENT_SESSION_ID, REPO_PATH_FIELD};
 use charliebot_store::run_records::{
-  OBSERVATION_BRANCH_NAME, OBSERVATION_WORKTREE_PATH, RUN_EVENTS_NAME, event_line, read_run_metadata,
+  OBSERVATION_BRANCH_NAME, OBSERVATION_REPO_PATH, OBSERVATION_WORKTREE_PATH, RUN_EVENTS_NAME, event_line,
+  read_run_metadata,
 };
 use charliebot_tasks::master_run::MASTER_CC_RESUMING_EVENT;
 use charliebot_tasks::routes as task_routes;
@@ -426,7 +427,7 @@ impl Server {
           format!("Delegation blocked: no user request on the task chain from task {PARENT_SESSION} to its root.");
         return Ok((403, json!({"detail": detail})));
       }
-      let task = self.start_task(string_field(request, "repo_path")?)?;
+      let task = self.start_task(string_field(request, REPO_PATH_FIELD)?)?;
       self.lock().task = Some(task);
       return Ok((
         200,
@@ -468,7 +469,7 @@ impl Server {
     let mut task = json!({
       "id": TASK_RUN,
       "state": self.behavior.task_state,
-      "repo_path": repo,
+      (OBSERVATION_REPO_PATH): repo,
       (OBSERVATION_BRANCH_NAME): null,
       (OBSERVATION_WORKTREE_PATH): null,
     });

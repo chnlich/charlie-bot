@@ -1117,6 +1117,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::run_records::OBSERVATION_BRANCH_NAME`.",
   },
   OwnerRow {
+    name: "repo_path",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::REPO_PATH_FIELD`, or `charliebot_store::run_records::OBSERVATION_REPO_PATH` \
+           for a run record.",
+  },
+  OwnerRow {
     name: "worktree_path",
     owner: "runtime/store",
     hint: "Use `charliebot_store::run_records::OBSERVATION_WORKTREE_PATH`.",

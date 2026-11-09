@@ -890,7 +890,9 @@ async fn manager_stops_after_three_automatic_retries_and_shows_the_original_erro
     .filter(|event| event["type"] == event_types::SYSTEM && event["subtype"] == event_types::COMMAND_PROGRESS)
     .collect::<Vec<_>>();
   assert_eq!(notices.len(), 3);
-  assert!(notices[2]["content"].as_str().unwrap().contains("第 3/3 次"));
+  assert!(
+    notices[2]["content"].as_str().unwrap().contains("devin rate limited, retrying automatically in 22 s (retry 3/3)")
+  );
   let error = values
     .iter()
     .find(|event| event["type"] == event_types::ASSISTANT_ERROR)

@@ -368,9 +368,11 @@
     return div;
   }
 
-  // The expand controls of one rendered file: a strip at each hidden gap, each strip carrying its expand up,
-  // expand down and whole-file buttons. Revealed rows go in place with both sides' line numbers, and the strip
-  // stays at the gap's top edge while its blocks of revealed rows keep their line order.
+  // The expand controls of one rendered file: a strip at each hidden gap. A side-by-side file draws one strip row
+  // per pane. Its first pane's strip carries the expand up, expand down and whole-file buttons; its last strip
+  // carries the hidden-line count. A single-table file draws both in its one strip. Revealed rows go in place
+  // with both sides' line numbers, and the strip stays at the gap's top edge while its blocks of revealed rows
+  // keep their line order.
   function installExpandControls(body, container, file, params, data, token) {
     const hunks = parseHunks(data.diff);
     const gaps = hiddenGaps(hunks, data.base_total || 0, data.head_total || 0);

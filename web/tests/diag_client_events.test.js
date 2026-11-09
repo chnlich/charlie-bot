@@ -519,9 +519,12 @@ test('a page load reports the newest message, the catch-up, the open case and th
   h.notifyMutations();
   h.advance(1000);
   h.dispatch('charliebot:client-socket-catchup', {subscription: 0, session_id: 'session-a', bytes: 10});
-  // The catch-up posts its own socket record at once; the page load waits for the load event.
+  // The catch-up posts its own socket record at once; the page is current once the page-current event
+  // lands, and the page load waits for the load event.
   assert.equal(h.posts.length, 1);
   assert.equal(h.posts[0].kind, 'socket');
+  h.dispatch('charliebot:page-current', {sessionId: 'session-a'});
+  assert.equal(h.posts.length, 1, 'the report waits for the load event');
 
   h.dispatch('load');
   assert.equal(h.posts.length, 2);

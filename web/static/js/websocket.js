@@ -329,8 +329,9 @@ function connectWS() {
       return;
     }
     // A replay's frames are counted into the subscription's byte total until its `catchup_complete`.
+    const frameBytes = replayBytesEncoder.encode(e.data).length;
     if (!replayDone) {
-      replayBytes += replayBytesEncoder.encode(e.data).length;
+      replayBytes += frameBytes;
     }
     // The view accepts only frames of the subscription it took: a switch drops every frame of the
     // session it left from its click until its `subscribed` frame binds the target, and a socket
@@ -339,6 +340,9 @@ function connectWS() {
     // switch the way it does across the socket a network close leaves behind.
     const registered = wsMessageHandlers.get(type);
     if ((viewSubscription === null || boundSession !== SESSION_ID) && !(registered && registered.sidebar)) return;
+    if (!replayDone) {
+      document.dispatchEvent(new CustomEvent('charliebot:client-socket-replay', {detail: {bytes: frameBytes}}));
+    }
     handleWSEvent(data);
   };
 

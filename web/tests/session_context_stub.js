@@ -138,6 +138,10 @@ function baseSessionContext(overrides = {}) {
     // config.js before the chat/sidebar modules createChatSidebarContext fans
     // out to.
     JSON_HEADERS: {'Content-Type': 'application/json'},
+    // config.js's freshness labels (sidebar/last-state.js and the panels paint them).
+    NOT_CURRENT_LABEL: '不是最新',
+    NO_LOCAL_COPY_LABEL: '没有本机副本',
+    OFFLINE_PANEL_LABEL: '断网，联网后加载',
     crypto: {randomUUID: () => 'archive-request-id'},
     PROGRESS_BAR_FILL_CLASS: 'h-full rounded-full transition-all duration-300',
     saveDraftNow: () => {},
@@ -304,6 +308,7 @@ function buildSwitchFlowHarness({rows, scrollHeight, fields, fetch, contextTweak
     ['header-session-name', createElement({id: 'header-session-name'})],
     ['backend-badge', createElement()],
     ['msg-input', createElement()],
+    ['freshness-mark', createElement({id: 'freshness-mark'})],
     ...rows.map((row) => [row.id, row]),
   ]);
   const h = {messages, elements, ...fields};

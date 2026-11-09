@@ -404,9 +404,9 @@ impl QuotaAccount for ClaudeQuotaAccount {
     }
   }
 
-  fn mark_expired(&self, entry: &Map<String, Value>, now: UtcDateTime) -> Map<String, Value> {
+  fn mark_expired(&self, entry: &Map<String, Value>, now: UtcDateTime) -> anyhow::Result<Map<String, Value>> {
     let sampled = entry.get(PANEL_FETCHED_AT).and_then(Value::as_str).and_then(|text| UtcDateTime::parse(text).ok());
-    mark_expired_windows(entry, sampled, now)
+    Ok(mark_expired_windows(entry, sampled, now))
   }
 }
 
@@ -1021,7 +1021,7 @@ mod tests {
     invite.mark_login_required(&mut entry);
     assert!(!entry.contains_key("login_required"));
 
-    let emitted = invite.mark_expired(&entry, UtcDateTime::parse("2026-01-02T00:00:00+00:00").unwrap());
+    let emitted = invite.mark_expired(&entry, UtcDateTime::parse("2026-01-02T00:00:00+00:00").unwrap()).unwrap();
     let marks: Vec<Option<&Value>> =
       emitted[PANEL_WINDOWS].as_array().unwrap().iter().map(|window| window.get(PANEL_EXPIRED)).collect();
     assert_eq!(marks, vec![Some(&Value::Bool(true)), None]);

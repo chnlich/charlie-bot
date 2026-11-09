@@ -1,0 +1,32 @@
+#!/bin/sh
+# One watched job. Writes its pid, its state and, at the end, its own end time inside the container.
+#
+# The end file is the bench's ground truth: it is written by this process when the job ends, independent of
+# the server code under test. The stub sacct reads the state and end files of the job table.
+#
+# Usage: bench-job <job id> <length seconds> [exit-file path]
+set -eu
+
+id=$1
+length=$2
+exit_file=${3:-}
+user=$(id -un)
+dir="/run/bench/$user/jobs/$id"
+
+mkdir -p "$dir"
+printf '%s\n' "$$" >"$dir/pid"
+printf '%s\n' RUNNING >"$dir/state"
+
+if [ -n "$exit_file" ]; then
+  mkdir -p "$(dirname "$exit_file")"
+fi
+
+sleep "$length"
+
+# The exit file is the last witness the --cmd path reads; the end file is the bench's ground truth. Both are
+# written by this process, so their times differ by less than a millisecond.
+if [ -n "$exit_file" ]; then
+  printf '%s\n' 0 >"$exit_file"
+fi
+date +%s.%N >"$dir/end"
+printf '%s\n' COMPLETED >"$dir/state"

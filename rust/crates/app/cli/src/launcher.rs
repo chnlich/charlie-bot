@@ -122,6 +122,16 @@ fn absolute_remote_path(remote_path: &str, remote_home: &str) -> String {
   format!("{remote_home}{rest}")
 }
 
+/// A remote working directory as a shell word. A `~` or `~/` prefix names the ssh login directory: it stays a
+/// double-quoted `$HOME`, so the remote shell expands it as it does for the run paths. Other forms, `~user`
+/// included, are quoted.
+fn remote_dir_word(dir: &str) -> String {
+  match dir.strip_prefix('~') {
+    Some(rest) if rest.is_empty() || rest.starts_with('/') => remote_shell_word(&format!("{REMOTE_HOME}{rest}")),
+    _ => shell_quote(dir),
+  }
+}
+
 /// Start the wrapper on `host` over ssh and `setsid`, and return its remote PID with the absolute paths of its log and
 /// exit file.
 ///
@@ -132,19 +142,17 @@ pub fn launch_remote(host: &str, cmd: &str, cwd: Option<&str>, launch_id: &str) 
   let remote_log = format!("{remote_dir}/log");
   let remote_exit = format!("{remote_dir}/exit");
   let pid_file = remote_shell_word(&format!("{remote_dir}/pid"));
-  // The brace group carries the stream redirections for both wrapper steps, so the backgrounded setsid process
-  // holds no ssh channel fd and ssh returns.
-  let inner = format!(
-    "{{ {}; }} < /dev/null > {} 2>&1",
-    wrapper_command(cmd, &remote_shell_word(&remote_exit)),
-    remote_shell_word(&remote_log)
-  );
-  let cd = cwd.map_or(String::new(), |dir| format!("cd {} && ", shell_quote(dir)));
+  let inner = wrapper_command(cmd, &remote_shell_word(&remote_exit));
+  // The redirections sit on the `setsid` command, so the backgrounded bash holds the log and never the ssh channel,
+  // not even while its login profile runs. ssh returns once the shell that printed the PID exits. Any stream of the
+  // started command that stayed on the channel would keep ssh open until the command ends.
+  let background =
+    format!("setsid bash -lc {} < /dev/null > {} 2>&1 &", shell_quote(&inner), remote_shell_word(&remote_log));
+  let cd = cwd.map_or(String::new(), |dir| format!("cd {} && ", remote_dir_word(dir)));
   // The remote shell echoes its home before the PID, so the launch can record absolute paths.
   let wrapper = format!(
-    "mkdir -p {} && echo \"{REMOTE_HOME}\" && {cd}{{ setsid bash -lc {} & echo $! > {pid_file} && cat {pid_file}; }}",
+    "mkdir -p {} && echo \"{REMOTE_HOME}\" && {cd}{{ {background} echo $! > {pid_file} && cat {pid_file}; }}",
     remote_shell_word(&remote_dir),
-    shell_quote(&inner)
   );
   let quoted = shell_quote(&wrapper);
   let argv = ssh::ssh_cmd(host, &["bash", "-c", quoted.as_str()]).map_err(io)?;

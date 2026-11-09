@@ -15,12 +15,13 @@ use charliebot_compat::request_body::{
 };
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
-use charliebot_core::config::{CallClass, CharlieBotConfig};
+use charliebot_core::config::{CallClass, CallTarget, CharlieBotConfig};
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::SequenceTree;
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::SESSION_NOT_FOUND_DETAIL;
+use charliebot_store::metadata::SessionMetadata;
 use charliebot_tasks::execution::TaskExecutionAdapter;
 use charliebot_tasks::{recovery, spawner_backends};
 use serde_json::{Map, Value, json};
@@ -138,38 +139,11 @@ async fn start_improve_sequence(features: &Arc<FeatureContext>, req: ImproveRequ
   let cfg = features.config.get().map_err(refuse_runtime)?;
   let pool = backend_pool::backend_pool(features).map_err(refuse_runtime)?;
 
-  // Backend and model resolve before the reservation, so an unknown backend never leaves a running loop behind. A loop
-  // that names no backend takes a member of the `backends.calls.improve` pool for each iteration, so it reserves no
-  // backend here.
-  let backend_from_pool = req.backend.is_none() && spawner_backends::class_pool_id(&cfg, CallClass::Improve).is_some();
-  // An improve loop's requested backend is an options id: its runs never take a pool id, and a pool serves the loop only
-  // through `backends.calls.improve`.
-  if let Some(backend) = req.backend.as_deref().filter(|backend| cfg.backends.pool(backend).is_some()) {
-    return Err(Box::new(bad_request(anyhow::anyhow!("requested backend '{backend}' is not in backends.options"))));
-  }
-  let (resolved_backend, resolved_model) = if backend_from_pool {
-    (String::new(), String::new())
-  } else {
-    // The requested backend is an options id (a pool was refused above), so the resolver answers with that option, or
-    // with the session's own backend when none is requested.
-    let subagent = spawner_backends::resolve_requested_subagent_backend_model(
-      &cfg,
-      store,
-      &req.session_id,
-      req.backend.as_deref(),
-      spawner_backends::SubagentRole::Improve,
-      &pool,
-    )
-    .await
-    .map_err(|error| {
-      if error.downcast_ref::<spawner_backends::BackendResolutionValueError>().is_some() {
-        Box::new(bad_request(error))
-      } else {
-        refuse_runtime(error)
-      }
-    })?;
-    (subagent.run_backend, subagent.model.unwrap_or_default())
-  };
+  // The loop's child session takes its backend now: the requested id (a model or a pool), the improve class's target, or
+  // the session's own default. A pool id stays the child's backend, and each iteration selects its member.
+  let meta = store.require_session(&req.session_id).await.map_err(|error| Box::new(task_http_error(error)))?;
+  let (resolved_backend, resolved_model) =
+    loop_backend(&cfg, &meta, req.backend.as_deref()).map_err(|error| Box::new(bad_request(error)))?;
 
   let work_branch = req.work_branch.clone().unwrap_or_else(|| format!("improve/{}", unix_seconds()));
   let reservation = Reservation {
@@ -180,8 +154,7 @@ async fn start_improve_sequence(features: &Arc<FeatureContext>, req: ImproveRequ
     base_branch: Some(req.base_branch.as_str()),
     merge_back: req.merge_back,
     resolved_backend: &resolved_backend,
-    resolved_model: &resolved_model,
-    backend_from_pool,
+    resolved_model: resolved_model.as_deref().unwrap_or_default(),
   };
   let state = command::reserve_loop_state(&cfg, &req.session_id, &reservation).map_err(|error| {
     if error.is::<ImproveLoopAlreadyRunningError>() {
@@ -262,6 +235,35 @@ fn runner_parts(features: &Arc<FeatureContext>) -> anyhow::Result<ImproveRunnerP
 /// The 400 answer for a refused backend or model: its detail is the refusal's message.
 fn bad_request(error: anyhow::Error) -> Response {
   responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() }))
+}
+
+/// The child session's backend for one loop, and its model when the backend is a concrete model.
+///
+/// The requested id (a model or a pool), the `backends.calls.improve` target, or the session's own default decides it. A
+/// pool id stays the child's backend, and each iteration selects the member its run launches on.
+fn loop_backend(
+  cfg: &CharlieBotConfig,
+  meta: &SessionMetadata,
+  requested: Option<&str>,
+) -> anyhow::Result<(String, Option<String>)> {
+  let concrete = |backend_id: &str| -> anyhow::Result<(String, Option<String>)> {
+    let option = cfg
+      .get_backend_option(backend_id)
+      .ok_or_else(|| anyhow::anyhow!("backend '{backend_id}' is not in backends.options"))?;
+    let model = option.required_model("backend").map_err(anyhow::Error::msg)?;
+    Ok((option.id.clone(), Some(model)))
+  };
+  if let Some(backend_id) = requested {
+    if cfg.backends.pool(backend_id).is_some() {
+      return Ok((backend_id.to_string(), None));
+    }
+    return concrete(backend_id);
+  }
+  match cfg.backends.calls.get(CallClass::Improve) {
+    Some(CallTarget::Backend(target)) if cfg.backends.pool(target).is_some() => Ok((target.clone(), None)),
+    Some(CallTarget::Backend(target)) => concrete(target),
+    None | Some(CallTarget::Session) => spawner_backends::resolve_session_default_backend_model(cfg, meta),
+  }
 }
 
 /// Fail a freshly reserved loop whose child was refused: the state is marked failed and the active lock cleared.

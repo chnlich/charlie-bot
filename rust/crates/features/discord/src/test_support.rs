@@ -13,7 +13,7 @@ use charliebot_core::config::{BackendOption, CONFIG_FILENAME, CREDENTIALS_FILENA
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::store_hooks::store_hooks;
-use charliebot_registry::{FeatureContext, Registry, RunningTurnInputs, StartupState};
+use charliebot_registry::{FeatureContext, Registry, StartupState};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::{CreateTask, Store, TaskCaller};
 use serde_json::{Map, Value, json};
@@ -296,6 +296,7 @@ impl Home {
       label: "Synthetic fixture".to_string(),
       model: "synthetic-model".to_string(),
       prompt_overlay: None,
+      billing: None,
       backend_type: "synthetic".to_string(),
       type_fields: Default::default(),
     });
@@ -304,7 +305,6 @@ impl Home {
       Store::new(loaded, registry.metadata_slots(), store_hooks(Arc::clone(&registry))).expect("the store opens"),
     );
     let startup = StartupState::default();
-    startup.insert(RunningTurnInputs::new(|_| Vec::new())).expect("the running-turn stub inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
     features.registry.bind_feature_context(&features).expect("the registry binds its feature context once");
     if matches!(runtime, ListenerRuntime::Full) {
@@ -370,6 +370,20 @@ impl Home {
   /// Appends one chat event and returns it with its stamped id.
   pub async fn append(&self, session_id: &str, event: Value) -> Value {
     self.features.store.persist_and_broadcast(session_id, event).await.expect("the chat event appends").to_value()
+  }
+
+  /// Writes the manager run record the order rule reads: `run_id` received `input_event_ids` at `started_at`.
+  pub fn launch_run(&self, session_id: &str, run_id: &str, input_event_ids: &[&str], started_at: &str) {
+    let run_path = self.features.store.run_metadata_path(session_id, run_id);
+    fs::create_dir_all(run_path.parent().expect("run directory")).expect("run directory");
+    let run = json!({
+      "id": run_id,
+      "session_id": session_id,
+      "kind": "manager_turn",
+      "input_event_ids": input_event_ids,
+      "started_at": started_at,
+    });
+    fs::write(&run_path, run.to_string()).expect("run record");
   }
 
   /// The session's chat events in log order.

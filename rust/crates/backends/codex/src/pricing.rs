@@ -2,6 +2,8 @@
 
 use serde_json::{Map, Value};
 
+use super::usage_fields;
+
 /// Dollars per million tokens: (input, cached input, output). Rates from the 2026-06-01 rate card.
 const USD_PER_1M_TOKENS: &[(&str, (f64, f64, f64))] = &[
   ("gpt-5.6-sol", (5.00, 0.50, 30.0)),
@@ -19,9 +21,9 @@ pub fn calculate_codex_usage_cost_usd(model: &str, usage: &Map<String, Value>) -
   let Some(rates) = rates_for(model) else {
     return Ok(None);
   };
-  let input = number(usage, "input_tokens")?;
-  let cached = number(usage, "cached_input_tokens")?;
-  let output = number(usage, "output_tokens")?;
+  let input = number(usage, usage_fields::INPUT_TOKENS)?;
+  let cached = number(usage, usage_fields::CACHED_INPUT_TOKENS)?;
+  let output = number(usage, usage_fields::OUTPUT_TOKENS)?;
   Ok(Some(priced(rates, input, cached, output)))
 }
 

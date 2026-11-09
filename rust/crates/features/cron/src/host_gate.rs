@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 
 use anyhow::Context;
-use charliebot_agents::backend_pool;
+use charliebot_agents::model_pool;
 use charliebot_core::approval_policy::TIER_USER_ACT;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::FeatureContext;
@@ -86,8 +86,8 @@ async fn fire_backend_id(
   if cfg.backends.pool(&configured).is_none() {
     return Ok(Some(configured));
   }
-  let pool = backend_pool::backend_pool(features)?;
-  Ok(pool.peek(cfg, &configured, &[])?.map(|option| option.id))
+  let selector = model_pool::Selector::from_features(features, cfg)?;
+  Ok(selector.peek(&configured, &[])?.map(|option| option.id))
 }
 
 /// One user-act item per holder session and host that awaits approval, for each enabled task on that host whose bound

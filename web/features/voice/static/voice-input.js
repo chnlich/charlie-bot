@@ -48,17 +48,12 @@ const VOICE_UPLOAD_TIMEOUT_MS = 60 * 1000;
 const VOICE_CONTEXT_RESUME_BOUND_MS = 2 * 1000;
 // The send gate's message while a transcription window (upload + decode) is open.
 const VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE = 'Please wait for the voice transcription to finish';
-// The input_mode a dictated message carries (rust/crates/features/voice/src/lib.rs VOICE_INPUT_MODE).
-const VOICE_INPUT_MODE = 'voice';
 // The preview relay's final budget after the end frame: a base plus 20 ms per
 // recorded second. The backend needs longer to finalize longer recordings, so
 // the budget grows with the run. A fixed wait is either too short for long
 // recordings or too long for short ones.
 const VOICE_RELAY_FINAL_BUDGET_BASE_MS = 2 * 1000;
 const VOICE_RELAY_FINAL_BUDGET_PER_SECOND_MS = 20;
-// Where the caret's choice lives; the server default backs an unknown or
-// unavailable stored id.
-const VOICE_BACKEND_STORAGE_KEY = 'charliebot-voice-backend';
 // WebSocket readyState OPEN: relay chunks go out only on an open socket; the
 // chunks captured before that ride the open event's replay.
 const VOICE_WS_OPEN = 1;
@@ -82,10 +77,6 @@ const VOICE_MENU_ITEM_ENABLED_CLASS = ' text-slate-200 hover:bg-slate-700';
 // An unavailable backend stays readable: its label names the config key the host must provide.
 const VOICE_MENU_ITEM_DISABLED_CLASS = ' text-slate-400 cursor-not-allowed';
 const VOICE_MENU_CHECK_CLASS = 'w-4 shrink-0 text-green-400';
-// On phones the caret is hidden and the composer's ⋯ menu carries this entry
-// instead; it opens the same menu the caret does.
-const VOICE_OVERFLOW_MENU_ID = 'overflow-menu';
-const VOICE_OVERFLOW_ENTRY_ID = 'voice-backend-menu-entry';
 
 const VOICE_WORKLET_SOURCE = `
 class VoiceCaptureProcessor extends AudioWorkletProcessor {
@@ -157,24 +148,15 @@ registerProcessor('voice-capture', VoiceCaptureProcessor);
 `;
 
 // ---------------------------------------------------------------------------
-// Backend selection and the caret menu
+// The caret menu
 // ---------------------------------------------------------------------------
 // The choices ride the page as VOICE_BACKENDS (id, label, livePartials,
 // unavailableReason) with the server's VOICE_DEFAULT_BACKEND; the user's pick
 // lives in localStorage. The relay, the upload's backend field, and the mic's
 // tooltip all read the same selection; none of them compares
-// against a backend id — the livePartials attribute decides everything.
-
-function selectedVoiceBackend() {
-  // The stored choice wins while it exists and is configured; an unknown or
-  // unavailable stored id falls back to the server default (a typo there fails
-  // config load). The stored id stays put, so a credential that arrives later
-  // re-activates it on the next page load.
-  const stored = localStorage.getItem(VOICE_BACKEND_STORAGE_KEY);
-  const storedEntry = stored ? VOICE_BACKENDS.find((entry) => entry.id === stored) : null;
-  if (storedEntry && !storedEntry.unavailableReason) return storedEntry;
-  return VOICE_BACKENDS.find((entry) => entry.id === VOICE_DEFAULT_BACKEND);
-}
+// against a backend id — the livePartials attribute decides everything. The
+// page's voice-events part owns the selection and the tooltip, so both exist
+// before this file loads.
 
 let voiceMenu = null;
 let voiceMenuRows = null;
@@ -229,12 +211,6 @@ function renderVoiceBackendMenu() {
   updateVoiceMicTitle();
 }
 
-function updateVoiceMicTitle() {
-  const btn = document.getElementById('voice-btn');
-  const selected = selectedVoiceBackend();
-  if (btn && selected) btn.title = 'Voice input · ' + selected.label;
-}
-
 function selectVoiceBackend(id) {
   localStorage.setItem(VOICE_BACKEND_STORAGE_KEY, id);
   closeVoiceBackendMenu();
@@ -246,26 +222,6 @@ function toggleVoiceBackendMenu() {
   if (!menu) return;
   if (menu.classList.contains('hidden')) openVoiceBackendMenu();
   else closeVoiceBackendMenu();
-}
-
-// The composer's ⋯ menu entry, created by this package so the core template
-// names nothing it defines. Opening it from the ⋯ menu closes the ⋯ menu
-// first; it drives the one backend menu.
-function ensureVoiceBackendEntry() {
-  const overflow = document.getElementById(VOICE_OVERFLOW_MENU_ID);
-  if (!overflow || document.getElementById(VOICE_OVERFLOW_ENTRY_ID)) return;
-  const entry = document.createElement('button');
-  entry.type = 'button';
-  entry.id = VOICE_OVERFLOW_ENTRY_ID;
-  entry.textContent = 'Voice backend';
-  entry.onclick = openVoiceBackendMenuFromOverflow;
-  overflow.appendChild(entry);
-}
-
-function openVoiceBackendMenuFromOverflow() {
-  const overflow = document.getElementById(VOICE_OVERFLOW_MENU_ID);
-  if (overflow) overflow.classList.remove('show');
-  openVoiceBackendMenu();
 }
 
 function openVoiceBackendMenu() {
@@ -1365,14 +1321,10 @@ function removeVoiceOverlay() {
   document.getElementById('voice-partial-overlay')?.remove();
 }
 
-// First paint: the mic's tooltip names the backend a recording would use, and
-// the composer's ⋯ menu carries the backend entry phones use. The page-close
-// report listens from here, before any run exists.
-updateVoiceMicTitle();
-ensureVoiceBackendEntry();
+// The page-close report listens from here, before any run exists. The mic's
+// tooltip, the composer's ⋯ menu entry and the dictated-message badge belong
+// to the page's voice-events part, which runs before this file loads.
 window.addEventListener('pagehide', onVoicePageHide);
 
-// A dictated message's bubble carries the microphone badge, and the run ends
-// with the session view it belongs to.
-Chat.registerInputMode(VOICE_INPUT_MODE, '&#127908; Voice');
+// A run ends with the session view it belongs to.
 document.addEventListener('charliebot:session-view-teardown', resetVoiceState);

@@ -1,0 +1,55 @@
+#!/bin/sh
+# Answer the trigger code's sacct query from the calling user's job table.
+#
+# The trigger code asks for `JobID,State,ExitCode` and, once the remote-end ruler lands, also `End`. The stub
+# prints the requested columns in the requested order, pipe separated, one row per known job. A job that the
+# table does not hold prints no row, which the server reads as not-yet-registered.
+#
+# Usage shape: sacct -j <id>[,<id>...] -X -n -P --format=<col>[,<col>...]
+set -eu
+
+ids=
+columns=
+while [ $# -gt 0 ]; do
+  case $1 in
+    -j|--jobs) shift; ids=$1 ;;
+    -j*) ids=${1#-j} ;;
+    --jobs=*) ids=${1#--jobs=} ;;
+    --format=*) columns=${1#--format=} ;;
+    -o|--format) shift; columns=$1 ;;
+    -o*) columns=${1#-o} ;;
+  esac
+  shift
+done
+
+[ -n "$ids" ] || exit 0
+[ -n "$columns" ] || columns=JobID,State,ExitCode
+
+user=$(id -un)
+table="/run/bench/$user/jobs"
+
+value_of() {
+  # $1 job id, $2 column name
+  case $2 in
+    JobID) printf '%s' "$1" ;;
+    State) cat "$table/$1/state" 2>/dev/null || printf 'RUNNING' ;;
+    ExitCode) printf '0:0' ;;
+    End)
+      if [ -f "$table/$1/end" ]; then
+        date -u -d "@$(cat "$table/$1/end")" +%Y-%m-%dT%H:%M:%S
+      fi
+      ;;
+    *) printf '' ;;
+  esac
+}
+
+for id in $(printf '%s' "$ids" | tr ',' ' '); do
+  [ -d "$table/$id" ] || continue
+  line=
+  for column in $(printf '%s' "$columns" | tr ',' ' '); do
+    case $column in
+      JobID|State|ExitCode|End) line="$line|$(value_of "$id" "$column")" ;;
+    esac
+  done
+  printf '%s\n' "${line#|}"
+done

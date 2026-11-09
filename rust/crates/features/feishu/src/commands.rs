@@ -14,14 +14,16 @@ use charliebot_core::event_types;
 use charliebot_core::paths;
 use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
-use charliebot_store::message_utils::master_done_input_event_ids;
+use charliebot_store::reply_order;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::adapter::{Bot, FeishuThreadAdapter, api_failure, message_id_of, thread_message};
 use crate::client::{FeishuClient, PAGE_SIZE};
 use crate::config::FeishuConfig;
+use crate::fields::{CHAT_ID, MESSAGE_ID, ROOT_ID, THREAD_ID};
 use crate::metadata::FeishuOrigin;
+use crate::package::NAME;
 use crate::thread_contract::FEISHU;
 
 const TOPIC_PAGE_TOKEN_PREFIX: &str = "charliebot-topic-v1:";
@@ -41,9 +43,9 @@ fn message_view(message: &ThreadMessage, unread: bool, summon: bool, allowed: &B
   let author_id = message.user.clone().or_else(|| message.bot_id.clone());
   json!({
     "id": message.id,
-    "message_id": field("message_id"),
+    (MESSAGE_ID): field(MESSAGE_ID),
     "message_type": field("message_type"),
-    "thread_id": field("thread_id"),
+    (THREAD_ID): field(THREAD_ID),
     "author_id": author_id,
     "person": message.user.as_deref().and_then(|user| allowed.get(user)),
     "timestamp": message.created_at,
@@ -54,15 +56,18 @@ fn message_view(message: &ThreadMessage, unread: bool, summon: bool, allowed: &B
 }
 
 /// The composite ids of the session's pending summons. A summon is pending while its event carries the feishu block
-/// without `nudge_of` and has a mention id. No master_done and no lost-summon backfill marker may name its id either.
-fn pending_summon_mention_ids(events: &[ChatEvent]) -> anyhow::Result<HashSet<String>> {
+/// without `nudge_of` and has a mention id. Neither a finished turn's receipt nor a lost-summon backfill marker may
+/// name its id either.
+fn pending_summon_mention_ids(
+  store: &charliebot_store::Store,
+  session_id: &str,
+  events: &[ChatEvent],
+) -> anyhow::Result<HashSet<String>> {
   let backfill_key = FEISHU.backfill_key();
-  let mut answered: HashSet<String> = HashSet::new();
+  let received = reply_order::received_by_finished_turns(store, session_id, events)?;
   let mut marked: HashSet<String> = HashSet::new();
   for event in events {
-    if event.get("type").and_then(CompactValue::as_str) == Some(event_types::MASTER_DONE) {
-      answered.extend(master_done_input_event_ids(event));
-    } else if let Some(marker) = event.get(&backfill_key) {
+    if let Some(marker) = event.get(&backfill_key) {
       marked.extend(marker.get(event_types::INPUT_EVENT_ID).and_then(CompactValue::as_str).map(str::to_string));
     }
   }
@@ -75,7 +80,7 @@ fn pending_summon_mention_ids(events: &[ChatEvent]) -> anyhow::Result<HashSet<St
       continue;
     }
     let id = event["id"].as_str().expect("a chat event carries a string id");
-    if block.get(event_types::NUDGE_OF).is_some() || answered.contains(id) || marked.contains(id) {
+    if block.get(event_types::NUDGE_OF).is_some() || received.contains(id) || marked.contains(id) {
       continue;
     }
     if let Some(mention) = block.get(FEISHU.mention_key).filter(|mention| !mention.is_null()) {
@@ -104,7 +109,7 @@ pub async fn read_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
   let origin: FeishuOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
   let watermark = session.meta.extra(FEISHU.watermark_field).and_then(Value::as_str).map(str::to_string);
   let config = bot.config().map_err(ThreadReplyError::failure)?;
-  let allowed = &config.section::<FeishuConfig>("feishu").allowed_users;
+  let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
   let adapter = Arc::new(FeishuThreadAdapter::new(bot.clone()));
   let thread_messages =
     adapter.thread_messages(&origin.root_id, origin.thread_id.as_deref()).await.map_err(api_failure)?;
@@ -115,8 +120,8 @@ pub async fn read_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
   if let Some(root) = &root {
     require_thread_message_group(root, &origin.chat_id)?;
   }
-  let pending =
-    pending_summon_mention_ids(&load_chat_events(bot, session_id).await?).map_err(ThreadReplyError::failure)?;
+  let pending = pending_summon_mention_ids(&bot.features.store, session_id, &load_chat_events(bot, session_id).await?)
+    .map_err(ThreadReplyError::failure)?;
   let unread_ids: HashSet<String> = thread_entry::unread_after(
     &thread_messages,
     |message| message.eligible,
@@ -173,7 +178,7 @@ pub async fn read_chat(
   let session = thread_entry::require_thread_session(&FEISHU, &bot.features, session_id).await?;
   let origin: FeishuOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
   let config = bot.config().map_err(ThreadReplyError::failure)?;
-  let allowed = &config.section::<FeishuConfig>("feishu").allowed_users;
+  let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
   let client = bot.client().map_err(ThreadReplyError::failure)?;
   let mut messages = Vec::with_capacity(limit);
   let mut page_token = page.map(str::to_string);
@@ -195,8 +200,8 @@ pub async fn read_chat(
     }
     page_token = page.next_page_token;
   };
-  let pending =
-    pending_summon_mention_ids(&load_chat_events(bot, session_id).await?).map_err(ThreadReplyError::failure)?;
+  let pending = pending_summon_mention_ids(&bot.features.store, session_id, &load_chat_events(bot, session_id).await?)
+    .map_err(ThreadReplyError::failure)?;
   let mut output = json!({
     "messages": messages
       .iter()
@@ -221,7 +226,7 @@ pub async fn read_topic(
   let session = thread_entry::require_thread_session(&FEISHU, &bot.features, session_id).await?;
   let origin: FeishuOrigin = serde_json::from_value(session.origin.clone()).map_err(ThreadReplyError::failure)?;
   let config = bot.config().map_err(ThreadReplyError::failure)?;
-  let allowed = &config.section::<FeishuConfig>("feishu").allowed_users;
+  let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
   let client = bot.client().map_err(ThreadReplyError::failure)?;
   let cursor = page.map(|token| decode_topic_page_cursor(token, thread_id)).transpose()?.unwrap_or(TopicPageCursor {
     thread_id: thread_id.to_string(),
@@ -248,13 +253,13 @@ pub async fn read_topic(
       let root_id = response
         .items
         .iter()
-        .find_map(|item| item.get("root_id").filter(|value| !value.is_null()))
+        .find_map(|item| item.get(ROOT_ID).filter(|value| !value.is_null()))
         .map(|value| {
           value.as_str().context("a Feishu topic message has a non-string root_id").map_err(ThreadReplyError::failure)
         })
         .transpose()?;
       if let Some(root_id) = root_id
-        && !response.items.iter().any(|item| item.get("message_id").and_then(Value::as_str) == Some(root_id))
+        && !response.items.iter().any(|item| item.get(MESSAGE_ID).and_then(Value::as_str) == Some(root_id))
       {
         let root = client.message(root_id).await.map_err(api_failure)?;
         require_item_group(&root, &origin.chat_id)?;
@@ -278,8 +283,8 @@ pub async fn read_topic(
   if messages.is_empty() {
     return Err(ThreadReplyError::refused(StatusCode::NOT_FOUND, "the topic has no message in this session's group"));
   }
-  let pending =
-    pending_summon_mention_ids(&load_chat_events(bot, session_id).await?).map_err(ThreadReplyError::failure)?;
+  let pending = pending_summon_mention_ids(&bot.features.store, session_id, &load_chat_events(bot, session_id).await?)
+    .map_err(ThreadReplyError::failure)?;
   let mut output = json!({
     "messages": messages
       .iter()
@@ -352,14 +357,11 @@ fn invalid_topic_page_token() -> ThreadReplyError {
 }
 
 fn require_item_group(item: &Value, chat_id: &str) -> Result<(), ThreadReplyError> {
-  require_chat_id(item.get("chat_id").and_then(Value::as_str), chat_id)
+  require_chat_id(item.get(CHAT_ID).and_then(Value::as_str), chat_id)
 }
 
 fn require_thread_message_group(message: &ThreadMessage, chat_id: &str) -> Result<(), ThreadReplyError> {
-  require_chat_id(
-    message.metadata.as_ref().and_then(|metadata| metadata.get("chat_id")).and_then(Value::as_str),
-    chat_id,
-  )
+  require_chat_id(message.metadata.as_ref().and_then(|metadata| metadata.get(CHAT_ID)).and_then(Value::as_str), chat_id)
 }
 
 fn require_chat_id(item_chat_id: Option<&str>, chat_id: &str) -> Result<(), ThreadReplyError> {
@@ -392,13 +394,13 @@ async fn root_message(
 pub async fn check_setup(bot: &Bot) -> Result<Value, ThreadReplyError> {
   let credentials = bot.features.credentials.get().map_err(ThreadReplyError::failure)?;
   for key in ["app_id", "app_secret"] {
-    if credentials.get("feishu", key).is_none() {
+    if credentials.get(NAME, key).is_none() {
       return Err(ThreadReplyError::refused(StatusCode::CONFLICT, format!("credentials.feishu.{key} is not set")));
     }
   }
   let client = bot.client().map_err(ThreadReplyError::failure)?;
   let config = bot.config().map_err(ThreadReplyError::failure)?;
-  let allowed = &config.section::<FeishuConfig>("feishu").allowed_users;
+  let allowed = &config.section::<FeishuConfig>(NAME).allowed_users;
   let token = check_token(&client).await;
   let bot_open_id = check_bot(&client).await;
   let endpoint = check_endpoint(&client).await;

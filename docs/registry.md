@@ -152,8 +152,8 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 - Rust: `turn_contribution(name: &'static str, contribution: Arc<dyn TurnContribution>)`. The trait's one required
   method is `class_name()`, the name the after-turn task name carries. The other steps default to
   adding nothing: `instruction_segments(&self, meta: &SessionMetadata, kind: &str, cfg: &CharlieBotConfig,
-  repo: &RepoRoot)`, `workflow_rules_file`, `input_preamble`, `event_renderers`, `claims_turn_end_unread`, and the
-  async `before_turn` and `after_turn(meta, done_event, cfg, features)` hooks. `repo` is the checkout the server serves
+  repo: &RepoRoot)`, `workflow_rules_file`, `input_preamble`, `status_goal_line(meta)`, `event_renderers`,
+  `claims_turn_end_unread`, and the async `before_turn` and `after_turn(meta, done_event, cfg, features)` hooks. `repo` is the checkout the server serves
   (`RepoRoot`); a contribution reads its prompt docs through it, and `Registry::instruction_segments` takes the same
   `repo` argument and passes it to each contribution. The registry's readers run them in registration order. Two
   contributions that render the same event type fail.
@@ -360,11 +360,6 @@ fills a value makes it visible to a ready service, which reads it at start.
 `AgentBaseEnvironment` is the startup state's one owner of the base agent environment. Code with a `FeatureContext`
 reads it through `features.startup.require::<AgentBaseEnvironment>()?`; one-shot calls and launch contexts carry the
 environment explicitly.
-`RunningTurnInputs` (`charliebot_registry::RunningTurnInputs`) answers the input event ids of a session's running turn.
-The task runtime inserts it in the pre-recovery step
-that inserts `MasterQueue`, and it reads the same queue. Its one method is `user_event_ids(&self, session_id: &str) ->
-Vec<String>`, which is empty when no turn runs. The web reply package reads it with
-`features.startup.require::<RunningTurnInputs>()?`; a missing entry is an error.
 
 ## Rendering pages
 

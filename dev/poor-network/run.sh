@@ -7,7 +7,9 @@
 #
 # --side before  measures origin/main (--before-rev, default origin/main, a commit of --before-clone, which holds it);
 # --side after   measures this tree;
-# --side both    runs before, then after, back to back in one invocation. If the before side measures the calibration
+# --side both    runs before, then after, back to back in one invocation. The open scenario runs both sides at one
+#                CPU rate: the after side runs at the rate the before side's reference cell derived, so the sides'
+#                numbers compare. If the before side measures the calibration
 #                reference (CALIBRATION_REFERENCE in profile.mjs) and does not reproduce the switch-during-refresh
 #                hold, it stops after before, prints its numbers, and exits 3. Any other before side runs ungated.
 # --detach       starts the run as a transient systemd user unit and returns at once; the log is <out-dir>/pn-<id>.log.
@@ -45,6 +47,7 @@ scenarios=background,held,reset,stream
 open_conditions=link,held,reset,flaps,offline,release
 assets_dir=
 detach=0
+open_rate_args=()
 
 usage() {
   # The header block runs from line 2 to the `set -euo pipefail` that ends it, so an added line never drops text.
@@ -200,7 +203,8 @@ run_side() {
     node "$BENCH_DIR/bench.mjs" --side "$name" --out "$run_dir/$name.json" \
       --mock-home "$mock_home" --mock-home-bin "$mock_bin" --reply-dir "$run_dir/replies" \
       --assets "$POOR_NETWORK_ASSETS" --commit "$label" \
-      --repetitions "$repetitions" --scenarios "$scenarios" --open-conditions "$open_conditions" &
+      --repetitions "$repetitions" --scenarios "$scenarios" --open-conditions "$open_conditions" \
+      ${open_rate_args+"${open_rate_args[@]}"} &
   trial_pid=$!
   # The side JSON is the bench's last artifact, and a bench that has written it can still sit alive and hold the trial,
   # and so the lock (this line's known defect). Once the JSON is SIDE_EXIT_GRACE_SECONDS old and the trial still runs,
@@ -254,6 +258,22 @@ if [[ $side == before || $side == both ]]; then
       node "$BENCH_DIR/report.mjs" "$run_dir/before.json"
       die 3 "the reference baseline $calibration_reference did not reproduce the switch-during-refresh hold; the proxy does not model the link. The after side did not run."
     fi
+  fi
+  # One CPU rate per invocation: the after side's open cells run at the rate the before side's reference cell
+  # derived, so the two sides' numbers compare at one CPU speed. bench.mjs records the rate it ran at beside the
+  # one its own reference would give. The before side has measured (its failure would have stopped above), so its
+  # JSON names the rate whenever the open scenario was selected.
+  if [[ $side == both && ",$scenarios," == *",open,"* ]]; then
+    open_cpu_rate=$(node -e '
+      const side = require(process.argv[1]);
+      const rate = side.open?.cpu?.rate;
+      if (typeof rate !== "number" || !(rate >= 1)) {
+        throw new Error(`before.json open.cpu.rate is ${JSON.stringify(rate)}`);
+      }
+      process.stdout.write(String(rate));
+    ' "$run_dir/before.json") || die 1 "could not read the open CPU rate to share from $run_dir/before.json"
+    open_rate_args=(--open-cpu-rate "$open_cpu_rate")
+    echo "poor-network: the after side runs the open scenario at the before side's CPU rate $open_cpu_rate"
   fi
 fi
 

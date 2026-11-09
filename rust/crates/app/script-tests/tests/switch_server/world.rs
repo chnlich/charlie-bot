@@ -129,6 +129,9 @@ impl World {
     copy_repo_file("scripts/start-server.sh", &scripts.join("start-server.sh"));
     copy_repo_file("scripts/switch-server.sh", &scripts.join("switch-server.sh"));
     copy_repo_file("scripts/install-slice-units.sh", &scripts.join("install-slice-units.sh"));
+    // The switch sources the host release lock from beside itself.
+    fs::create_dir(scripts.join("release")).expect("the release scripts directory");
+    copy_repo_file("scripts/release/lock.sh", &scripts.join("release/lock.sh"));
     // The launcher's preflight reads its expected limits from this directory.
     let systemd = scripts.join("systemd");
     fs::create_dir_all(&systemd).expect("the systemd directory");
@@ -219,6 +222,8 @@ impl World {
     env.insert("CHARLIEBOT_HOME".to_string(), home.display().to_string());
     env.insert("CHARLIEBOT_RELEASES_DIR".to_string(), releases.display().to_string());
     env.insert("CHARLIEBOT_LOG_DIR".to_string(), logs.display().to_string());
+    // The host release lock lives under the sandbox, never beside the user's home.
+    env.insert("CHARLIEBOT_RELEASE_LOCK".to_string(), sandbox.root().join("release.lock").display().to_string());
     // The slice units install into the sandbox, never into the user running the tests.
     env.insert("CHARLIEBOT_SYSTEMD_USER_DIR".to_string(), sandbox.dir("user-units").display().to_string());
     // A long TMPDIR puts the sandbox's private TMUX_TMPDIR past the 108-byte unix socket path limit.

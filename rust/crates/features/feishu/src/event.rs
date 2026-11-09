@@ -7,6 +7,8 @@
 use anyhow::{Context, bail};
 use serde_json::Value;
 
+use crate::fields::{CHAT_ID, CREATE_TIME, MESSAGE_ID, ROOT_ID, TENANT_KEY, THREAD_ID};
+
 /// The event type this module parses.
 pub const RECEIVE_EVENT: &str = "im.message.receive_v1";
 
@@ -25,9 +27,6 @@ pub struct Message {
   pub create_time: String,
   /// The sender's open_id.
   pub sender_open_id: String,
-  pub message_type: String,
-  /// The message content as Feishu writes it: a JSON string.
-  pub content: String,
   pub mentions: Vec<Mention>,
 }
 
@@ -84,15 +83,13 @@ pub fn classify(event: &Value, bot_open_id: &str) -> anyhow::Result<Inbound> {
   let mentions = mentions_of(raw)?;
   let mentioned = mentions.iter().any(|mention| mention.open_id == bot_open_id);
   let message = Message {
-    tenant_key: text_at(event, &["header", "tenant_key"])?.to_string(),
-    chat_id: text_at(raw, &["chat_id"])?.to_string(),
-    message_id: text_at(raw, &["message_id"])?.to_string(),
-    root_id: optional_text(raw, "root_id")?,
-    thread_id: optional_text(raw, "thread_id")?,
-    create_time: text_at(raw, &["create_time"])?.to_string(),
+    tenant_key: text_at(event, &["header", TENANT_KEY])?.to_string(),
+    chat_id: text_at(raw, &[CHAT_ID])?.to_string(),
+    message_id: text_at(raw, &[MESSAGE_ID])?.to_string(),
+    root_id: optional_text(raw, ROOT_ID)?,
+    thread_id: optional_text(raw, THREAD_ID)?,
+    create_time: text_at(raw, &[CREATE_TIME])?.to_string(),
     sender_open_id: sender_open_id.to_string(),
-    message_type: text_at(raw, &["message_type"])?.to_string(),
-    content: text_at(raw, &["content"])?.to_string(),
     mentions,
   };
   if mentioned {

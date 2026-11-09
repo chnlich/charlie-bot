@@ -18,13 +18,12 @@
       "body": {
         "posted": true,
         "chars": 10,
-        "over_budget": false,
-        "answers": "u1"
+        "over_budget": false
       }
     }
   ],
   "expect": {
-    "stdout": "{\"posted\": true, \"chars\": 10, \"over_budget\": false, \"answers\": \"u1\"}\n",
+    "stdout": "{\"posted\": true, \"chars\": 10, \"over_budget\": false}\n",
     "stderr": "",
     "exit": 0,
     "requests": [

@@ -14,17 +14,22 @@ use charliebot_core::str_methods;
 use charliebot_core::text_repr::str_repr;
 use charliebot_registry::turn::{DELIVERY_FULL, DELIVERY_INDEX};
 
-const TOPICS_FILENAME: &str = "topics";
-const ENTRIES_DIRNAME: &str = "entries";
-const STAGING_DIRNAME: &str = "staging";
+/// The store's topics vocabulary file, the one place a reader of the store reads it.
+pub(crate) const TOPICS_FILENAME: &str = "topics";
+/// The store's directory of labeled entries, one directory per topic.
+pub(crate) const ENTRIES_DIRNAME: &str = "entries";
+/// The store's staging directory, where a capture waits before it joins the entries.
+pub(crate) const STAGING_DIRNAME: &str = "staging";
 const GITIGNORE_FILENAME: &str = ".gitignore";
 
 /// The vocabulary seeded when a store has no `topics` file (`DEFAULT_MEMORY_TOPICS`).
 pub const DEFAULT_MEMORY_TOPICS: &str =
   "profile resident\ncommunication resident\nworkflow resident\nrulings resident\nhost resident\ncharliebot\n";
 
-/// The `.gitignore` seeded when a store has none (`DEFAULT_MEMORY_GITIGNORE`).
-pub const DEFAULT_MEMORY_GITIGNORE: &str = "staging/\n";
+/// The `.gitignore` seeded when a store has none: the staging directory, ignored by its one name.
+pub fn default_memory_gitignore() -> String {
+  format!("{STAGING_DIRNAME}/\n")
+}
 
 /// The header line of every selection's index (`INDEX_HEADER`).
 pub const INDEX_HEADER: &str = concat!(
@@ -139,7 +144,7 @@ pub fn ensure_store(memory_dir: &Path) -> anyhow::Result<()> {
     git_init(memory_dir)?;
   }
   seed_if_missing(&memory_dir.join(TOPICS_FILENAME), DEFAULT_MEMORY_TOPICS)?;
-  seed_if_missing(&memory_dir.join(GITIGNORE_FILENAME), DEFAULT_MEMORY_GITIGNORE)?;
+  seed_if_missing(&memory_dir.join(GITIGNORE_FILENAME), &default_memory_gitignore())?;
   make_dir(&memory_dir.join(ENTRIES_DIRNAME))?;
   make_dir(&memory_dir.join(STAGING_DIRNAME))?;
   Ok(())
@@ -655,7 +660,7 @@ mod tests {
       assert!(memory_dir.join(name).exists(), "{name} is missing");
     }
     assert_eq!(fs::read_to_string(memory_dir.join("topics")).unwrap(), DEFAULT_MEMORY_TOPICS);
-    assert_eq!(fs::read_to_string(memory_dir.join(".gitignore")).unwrap(), DEFAULT_MEMORY_GITIGNORE);
+    assert_eq!(fs::read_to_string(memory_dir.join(".gitignore")).unwrap(), default_memory_gitignore());
   }
 
   #[test]

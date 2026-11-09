@@ -102,6 +102,13 @@ impl Drop for HeldTest {
   }
 }
 
+/// Whether every pid in `pids` has ended within `timeout`. A process's command line is empty from the moment it
+/// leaves its address space at exit, while `/proc` reports it as a zombie only later, so a check that waited on a
+/// command-line match alone can pass while [`has_ended`] still sees the process. This waits on `has_ended` itself.
+pub fn all_ended_within(timeout: Duration, pids: &[u32]) -> bool {
+  within(timeout, || pids.iter().all(|pid| has_ended(*pid)))
+}
+
 /// Whether `condition` holds within `timeout`.
 pub fn within(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
   let deadline = Instant::now() + timeout;
@@ -169,4 +176,36 @@ fn pids() -> impl Iterator<Item = u32> {
   fs::read_dir("/proc")
     .expect("the process directory")
     .filter_map(|entry| entry.ok()?.file_name().to_string_lossy().parse().ok())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// A live process never reads as ended, and one ended process among live ones still leaves the answer false: the
+  /// kill checks rest their leak verdict on this.
+  #[test]
+  #[ignore = "integration"]
+  fn all_ended_within_waits_for_every_pid() {
+    let env: harness::Env = env::vars().collect();
+    let mut ended = sleep_process(&env);
+    ended.kill().expect("kill the ended process");
+    ended.wait().expect("reap the ended process");
+    let mut live = sleep_process(&env);
+
+    assert!(!all_ended_within(Duration::from_millis(100), &[ended.id(), live.id()]), "a live process read as ended");
+    live.kill().expect("kill the live process");
+    live.wait().expect("reap the live process");
+    assert!(
+      all_ended_within(Duration::from_millis(100), &[ended.id(), live.id()]),
+      "an ended process did not read as ended"
+    );
+  }
+
+  /// A process that sleeps far past the test, so only the test's own end can stop it.
+  fn sleep_process(env: &harness::Env) -> Child {
+    let mut command = harness::command("sleep", env);
+    command.arg("60").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    harness::spawn(&mut command)
+  }
 }

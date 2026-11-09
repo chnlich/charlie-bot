@@ -1,0 +1,66 @@
+diff --git a/scripts/release/trial.sh b/scripts/release/trial.sh
+index 8755274d3..c5942bf59 100755
+--- a/scripts/release/trial.sh
++++ b/scripts/release/trial.sh
+@@ -61,6 +61,11 @@ readonly CGROUP_BASE="$USER_SERVICE_CGROUP/charliebot.slice/charliebot-agents.sl
+ # The port range a trial picks from. A caller that runs trials beside another trial names its own range.
+ readonly PORT_MIN=${TRIAL_PORT_MIN:-18650}
+ readonly PORT_MAX=${TRIAL_PORT_MAX:-18669}
++# The live server's version route, which LIVE_BEFORE and LIVE_AFTER read to prove the live server was untouched. A
++# caller that serves the flow with a stand-in production server names that server here; a run without the variable keeps
++# the live server's address and its `port=18498` report.
++readonly LIVE_URL=${CHARLIEBOT_TRIAL_LIVE_URL:-http://127.0.0.1:18498}
++readonly LIVE_LABEL=${CHARLIEBOT_TRIAL_LIVE_URL:+url=$CHARLIEBOT_TRIAL_LIVE_URL}
+ # The trial server's git calls run at production-repository speed. A wrapper first on that server's PATH only (see
+ # SLOW_GIT_BIN) waits this long before every git invocation. The release 8fe3e5bee of 2026-10-27 shipped a build whose
+ # git write timeout (worktree add) and per-attempt remote timeout (ls-remote, fetch) were 0.3 s in place of 60 s and 120 s, so
+@@ -587,9 +592,9 @@ readonly STARTED_AT="$(date +%s)"
+ live_version_probe() {
+   local status
+   if [[ -n $LIVE_ACCESS_KEY ]]; then
+-    status=$(curl --config <(printf 'header = "Authorization: Bearer %s"\n' "$LIVE_ACCESS_KEY") --silent --show-error --connect-timeout 2 --max-time 5 --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18498/api/internal/version)
++    status=$(curl --config <(printf 'header = "Authorization: Bearer %s"\n' "$LIVE_ACCESS_KEY") --silent --show-error --connect-timeout 2 --max-time 5 --output /dev/null --write-out '%{http_code}' "$LIVE_URL/api/internal/version")
+   else
+-    status=$(curl --silent --show-error --connect-timeout 2 --max-time 5 --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18498/api/internal/version)
++    status=$(curl --silent --show-error --connect-timeout 2 --max-time 5 --output /dev/null --write-out '%{http_code}' "$LIVE_URL/api/internal/version")
+   fi
+   local curl_status=$?
+   if (( curl_status != 0 )); then
+@@ -931,9 +936,9 @@ cleanup_on_exit() {
+       local live_status
+       live_status=$(live_version_probe)
+       if [[ $live_status == 200 ]]; then
+-        printf 'LIVE_AFTER PASS GET /api/internal/version port=18498 HTTP 200\n'
++        printf 'LIVE_AFTER PASS GET /api/internal/version %s HTTP 200\n' "${LIVE_LABEL:-port=18498}"
+       else
+-        printf 'LIVE_AFTER FAIL GET /api/internal/version port=18498 HTTP %s\n' "$live_status"
++        printf 'LIVE_AFTER FAIL GET /api/internal/version %s HTTP %s\n' "${LIVE_LABEL:-port=18498}" "$live_status"
+         exit_status=1
+       fi
+     fi
+@@ -955,10 +960,10 @@ if (( SERVE_MODE == 0 )); then
+   live_status=$(live_version_probe)
+   if [[ $live_status == 200 ]]; then
+     LIVE_BEFORE_OK=1
+-    printf 'LIVE_BEFORE PASS GET /api/internal/version port=18498 HTTP 200\n'
++    printf 'LIVE_BEFORE PASS GET /api/internal/version %s HTTP 200\n' "${LIVE_LABEL:-port=18498}"
+   else
+     OVERALL_FAIL=1
+-    printf 'LIVE_BEFORE FAIL GET /api/internal/version port=18498 HTTP %s\n' "$live_status"
++    printf 'LIVE_BEFORE FAIL GET /api/internal/version %s HTTP %s\n' "${LIVE_LABEL:-port=18498}" "$live_status"
+   fi
+ fi
+ 
+@@ -1650,10 +1655,10 @@ live_status=$(live_version_probe)
+ LIVE_AFTER_RECORDED=1
+ if [[ $live_status == 200 ]]; then
+   LIVE_AFTER_OK=1
+-  printf 'LIVE_AFTER PASS GET /api/internal/version port=18498 HTTP 200\n'
++  printf 'LIVE_AFTER PASS GET /api/internal/version %s HTTP 200\n' "${LIVE_LABEL:-port=18498}"
+ else
+   OVERALL_FAIL=1
+-  printf 'LIVE_AFTER FAIL GET /api/internal/version port=18498 HTTP %s\n' "$live_status"
++  printf 'LIVE_AFTER FAIL GET /api/internal/version %s HTTP %s\n' "${LIVE_LABEL:-port=18498}" "$live_status"
+ fi
+ 
+ tree_removed=0

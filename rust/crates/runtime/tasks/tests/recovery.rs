@@ -19,9 +19,11 @@ use std::time::{Duration, Instant, SystemTime};
 use anyhow::Context;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
-use charliebot_agents::backend_pool;
+use charliebot_agents::model_pool;
 use charliebot_agents::transport::identity;
-use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::config::{
+  BackendOption, CallClass, CallTarget, CharlieBotConfig, PoolBilling, PoolConfig, PoolMember, PoolRule,
+};
 use charliebot_core::event_types;
 use charliebot_registry::backend::{
   AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle, Translate,
@@ -1016,18 +1018,35 @@ fn events_script(events: &[Value], code: i32) -> String {
   lines.join("\n")
 }
 
+/// The priority pool a pool-chosen ending case runs its worker on.
+const AUTO_POOL_ID: &str = "auto";
+
 /// The node an ending case runs on: a script-run worker under a manager, pool-chosen or named.
 async fn ending_worker(pool_chosen: bool, scripts: Vec<String>) -> anyhow::Result<(Stack, String, String)> {
   let scripts = Scripts::new(scripts);
-  let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
-  let stack = Stack::start_with(options, vec!["fake".to_string(), "fake2".to_string()]).await?;
+  let options = ["fake", "fake2"]
+    .map(|id| BackendOption { billing: Some(PoolBilling::Subscription), ..scripts.option(id, BACKEND_TYPE) })
+    .to_vec();
+  let route = vec!["fake".to_string(), "fake2".to_string()];
+  let stack = if pool_chosen {
+    let auto = PoolConfig {
+      id: AUTO_POOL_ID.to_string(),
+      label: "Auto".to_string(),
+      rule: PoolRule::Priority,
+      members: ["fake", "fake2"].map(|backend| PoolMember { backend: backend.to_string() }).to_vec(),
+    };
+    Stack::start_with_auto(options, route, auto).await?
+  } else {
+    Stack::start_with(options, route).await?
+  };
   stack.write_access_key()?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
   let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(script_run_spec())).await?;
   if pool_chosen {
+    stack.store().switch_backend(&worker.id, AUTO_POOL_ID).await?;
     let guard = stack.store().control_lock().await;
-    let flag = Map::from_iter([("backend_from_pool".to_string(), json!(true))]);
-    stack.store().update_task_slot_fields_locked(&guard, &worker.id, backend_pool::METADATA_OWNER, flag).await?;
+    let member = Map::from_iter([(model_pool::POOL_MEMBER_FIELD.to_string(), json!("fake"))]);
+    stack.store().update_task_slot_fields_locked(&guard, &worker.id, model_pool::OWNER, member).await?;
   }
   Ok((stack, manager.id, worker.id))
 }
@@ -1712,6 +1731,68 @@ async fn recovery_after_a_failed_review_picks_the_next_preference_backend() -> a
   assert_eq!(retry.backend.as_deref(), Some("fake3"));
   assert_eq!(retry.review_of_run_id.as_deref(), Some("run-work"));
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &retry.id).await?, RunOutcomeKind::Success);
+  Ok(())
+}
+
+/// A review re-run after a restart keeps the `calls.review` target: the routed worker's first review ran on a
+/// review-pool member, and the re-run stays in that pool instead of moving to the route's pool.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_review_rerun_after_restart_keeps_the_calls_review_pool() -> anyhow::Result<()> {
+  let repo = SyntheticRepo::create()?;
+  let stack = Stack::start_with(
+    vec![
+      script_option("fake", "exit 0"),
+      script_option("fake2", "exit 0"),
+      script_option("fake3", &result_script("review ok")),
+      script_option("fake4", &result_script("review ok")),
+    ],
+    vec!["fake2".to_string()],
+  )
+  .await?;
+  test_access_key(&stack)?;
+  stack.replace_config(split_pool_config(stack.cfg.as_ref().clone()))?;
+  stack.dispatch.set_executor(None);
+  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
+  set_route(&stack, &worker.id, &["workpool"]).await?;
+  let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-work")?;
+  finished_work_run(&stack, &worker.id, "run-work", &repo, &branch, &worktree, None).await?;
+  review_of(&stack, &worker.id, "review-failed", "run-work", RunOutcomeKind::Failed, "fake3").await?;
+  let guard = ProcessGroupGuard::new();
+
+  stack.node_pass(&worker.id).await?;
+  let reviews = run_ids_of_kind(&stack, &worker.id, RunKind::Review)?;
+  assert_eq!(reviews.len(), 2);
+  let retry_id = reviews.iter().find(|run_id| run_id.as_str() != "review-failed").context("retry is registered")?;
+  let retry = stack.store().read_run_sync(&worker.id, retry_id)?.expect("retry record is readable");
+  assert_eq!(retry.backend.as_deref(), Some("fake4"), "the re-run stays in the calls.review pool");
+  assert_eq!(retry.review_of_run_id.as_deref(), Some("run-work"));
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &retry.id).await?, RunOutcomeKind::Success);
+  Ok(())
+}
+
+/// A copy of `base` with a work pool (`fake`, `fake2`), a disjoint review pool (`fake3`, `fake4`), and
+/// `calls.review` naming the review pool.
+fn split_pool_config(mut cfg: CharlieBotConfig) -> CharlieBotConfig {
+  let pool = |id: &str, members: &[&str]| PoolConfig {
+    id: id.to_string(),
+    label: id.to_string(),
+    rule: PoolRule::Rotate,
+    members: members.iter().map(|backend| PoolMember { backend: backend.to_string() }).collect(),
+  };
+  cfg.backends.pools = vec![pool("workpool", &["fake", "fake2"]), pool("reviewpool", &["fake3", "fake4"])];
+  cfg.backends.calls = [(CallClass::Review, CallTarget::Backend("reviewpool".to_string()))].into_iter().collect();
+  cfg
+}
+
+/// Record `backends` as the session's route, as a delegation the router answered leaves it.
+async fn set_route(stack: &Stack, session_id: &str, backends: &[&str]) -> anyhow::Result<()> {
+  let fields = Map::from_iter([("route".to_string(), json!({"backends": backends, "reason": "synthetic route"}))]);
+  let guard = stack.store().control_lock().await;
+  stack
+    .store()
+    .update_task_slot_fields_locked(&guard, session_id, charliebot_agents::backend_pool::METADATA_OWNER, fields)
+    .await?;
   Ok(())
 }
 
@@ -2799,6 +2880,119 @@ async fn manager_turn_master_done_enospc_retries_through_master_queue() -> anyho
   settle_until(|| Ok(!stack.adapter.resume_follows().contains(&follow))).await?;
   settle_until(|| Ok(stack.adapter.landing_retry_nodes().is_empty())).await?;
   Ok(())
+}
+
+/// The packages the resumed-turn replay needs: the held backend types, so the turn can be cut while its translate blocks,
+/// and the web reply feature, whose round-end audit runs behind the store's turn hooks.
+fn register_replay_packages(
+  registry: &mut charliebot_registry::Registry,
+) -> Result<(), charliebot_registry::RegistryError> {
+  register_held_types(registry)?;
+  charliebot_web_reply::register(registry)
+}
+
+/// A live manager turn cut by the restart is re-attached at the next boot. Its `master_done` names its run and carries
+/// no input ids, and the web round-end audit nudges the user message the run received, which no reply answered.
+#[test]
+#[ignore = "integration"]
+fn a_resumed_manager_turn_nudges_the_message_no_reply_answered() -> anyhow::Result<()> {
+  /// A scripted backend option that starts nothing: the live process below stands in for the turn's agent.
+  fn idle_option() -> BackendOption {
+    script_option(BACKEND_ID, "exit 0")
+  }
+
+  let runtime = server_runtime()?;
+  let (stack, manager_id, input_id, run_id) = runtime.block_on(async {
+    let stack = Stack::start_with_package_and_store_hooks(
+      vec![idle_option()],
+      vec![BACKEND_ID.to_string()],
+      ("test.replay_packages", register_replay_packages),
+    )
+    .await?;
+    stack.write_access_key()?;
+    let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+    let input = stack.dispatch.admit_input(&manager.id, event_types::USER, "the question", "user", json!({})).await?;
+    let input_id =
+      input.get("id").and_then(ChatEvent::as_str).context("the admitted input carries its id")?.to_string();
+    let run = stack.queue_run(&manager.id, "run-live", RunKind::ManagerTurn).await?;
+    let claimed = stack.claim(&manager.id, "run-live").await?;
+    assert_eq!(claimed, std::slice::from_ref(&input_id), "the turn's reservation claims the user message");
+    anyhow::Ok((stack, manager.id, input_id, run.id))
+  })?;
+  // The live agent: a process this test owns, recorded as the run's launch, which exits once the test writes the
+  // release file. Its raw log holds one event before the result this test appends after the restart.
+  let release = tempfile::tempdir()?;
+  let release_file = release.path().join("release");
+  let guard = ProcessGroupGuard::new();
+  let mut live = Command::new("/bin/sh")
+    .arg("-c")
+    .arg(format!("while [ ! -e '{}' ]; do /bin/sleep 0.05; done", release_file.display()))
+    .process_group(0)
+    .spawn()?;
+  guard.track(live.id());
+  let identity = identity::pin_process_identity(live.id());
+  let pid_start = identity.pid_start.context("the live process has a stat line")?;
+  runtime.block_on(stack.launch(&manager_id, &run_id, live.id(), &pid_start))?;
+  let assistant =
+    json!({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}]}});
+  let raw = stack.store().run_dir(&manager_id, &run_id).join(RAW_LOG_NAME);
+  std::fs::write(&raw, format!("{}\n", serde_json::to_string(&assistant)?))?;
+
+  runtime.block_on(recovery::let_go_step(Arc::clone(&stack.features)))?;
+  drop(runtime);
+  assert!(live.try_wait()?.is_none(), "the agent outlives the server");
+  let run = stack.store().read_run_sync(&manager_id, &run_id)?.context("the live manager run is recorded")?;
+  assert_eq!((run.pid, run.ended_at), (Some(live.id()), None), "the stop leaves the manager turn open: {run:?}");
+
+  server_runtime()?.block_on(async {
+    let next = Stack::start_on_home_with_package_and_store_hooks(
+      Arc::clone(&stack.home),
+      vec![idle_option()],
+      vec![BACKEND_ID.to_string()],
+      ("test.replay_packages", register_replay_packages),
+    )
+    .await?;
+    let counters = next.boot().await?;
+    assert_eq!(counters.resumed, 1, "the live manager turn is re-attached: {counters:?}");
+    // The agent finishes after the restart: its result line lands in the raw log the follow reads.
+    use std::io::Write;
+    let result = json!({"type": "result", "subtype": "success", "result": "finished after the restart"});
+    std::fs::OpenOptions::new()
+      .append(true)
+      .open(&raw)?
+      .write_all(format!("{}\n", serde_json::to_string(&result)?).as_bytes())?;
+    // The agent exits after its result, as a real one does.
+    std::fs::write(&release_file, "")?;
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let (done, nudge) = loop {
+      let events = next.store().load_chat_events_sync(&manager_id)?;
+      let done = events
+        .iter()
+        .map(ChatEvent::to_value)
+        .find(|event| event["type"] == event_types::MASTER_DONE && event["run_id"] == run_id);
+      let nudge = events
+        .iter()
+        .map(ChatEvent::to_value)
+        .find(|event| event["type"] == event_types::AGENT_MESSAGE && event["web_reply"]["nudge_of"] == input_id);
+      if let (Some(done), Some(nudge)) = (done, nudge) {
+        break (done, nudge);
+      }
+      anyhow::ensure!(
+        Instant::now() < deadline,
+        "the resumed turn did not end with its reply nudge: {:?}",
+        events.iter().map(ChatEvent::to_value).collect::<Vec<_>>()
+      );
+      tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert!(
+      done.get(event_types::INPUT_EVENT_IDS).is_none_or(|ids| ids.as_array().is_some_and(Vec::is_empty)),
+      "a resumed turn's master_done records no input ids: {done}"
+    );
+    let text = nudge["content"].as_str().context("the nudge carries text")?;
+    assert!(text.contains("The unanswered message begins: \"the question\""), "{text}");
+    anyhow::Ok(())
+  })
 }
 
 #[tokio::test]

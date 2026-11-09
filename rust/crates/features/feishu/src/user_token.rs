@@ -13,11 +13,17 @@ use charliebot_core::home;
 use charliebot_core::paths;
 use serde_json::{Value, json};
 
-const FEISHU_SECTION: &str = "feishu";
-const AUTHORIZE_URL: &str = "https://open.feishu.cn/open-apis/authen/v1/authorize";
-const APP_TOKEN_URL: &str = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal";
-const REFRESH_URL: &str = "https://open.feishu.cn/open-apis/authen/v1/oidc/refresh_access_token";
-const EXCHANGE_URL: &str = "https://open.feishu.cn/open-apis/authen/v1/oidc/access_token";
+use crate::client::BASE_URL;
+use crate::package::NAME;
+
+/// The browser endpoint that starts a re-authorization, relative to `BASE_URL` like every Open API path.
+const AUTHORIZE_PATH: &str = "/open-apis/authen/v1/authorize";
+/// The endpoint that mints the app token a user-token refresh carries.
+const APP_TOKEN_PATH: &str = "/open-apis/auth/v3/app_access_token/internal";
+/// The endpoint that trades a refresh token for a new user token.
+const REFRESH_PATH: &str = "/open-apis/authen/v1/oidc/refresh_access_token";
+/// The endpoint that trades an authorization code for a user token.
+const EXCHANGE_PATH: &str = "/open-apis/authen/v1/oidc/access_token";
 const REDIRECT_URI: &str = "http://localhost:9999/callback";
 /// The open API's token-expired code.
 const TOKEN_EXPIRED_CODE: i64 = 99991663;
@@ -36,10 +42,10 @@ pub(crate) struct Endpoints {
 impl Endpoints {
   pub(crate) fn production() -> Endpoints {
     Endpoints {
-      authorize_url: AUTHORIZE_URL.to_string(),
-      app_token_url: APP_TOKEN_URL.to_string(),
-      refresh_url: REFRESH_URL.to_string(),
-      exchange_url: EXCHANGE_URL.to_string(),
+      authorize_url: format!("{BASE_URL}{AUTHORIZE_PATH}"),
+      app_token_url: format!("{BASE_URL}{APP_TOKEN_PATH}"),
+      refresh_url: format!("{BASE_URL}{REFRESH_PATH}"),
+      exchange_url: format!("{BASE_URL}{EXCHANGE_PATH}"),
     }
   }
 }
@@ -69,7 +75,7 @@ fn load(home: &Path) -> Result<Credentials, CliExit> {
 fn required(credentials: &Credentials, key: &str, home: &Path) -> Result<String, CliExit> {
   let failure = || credential_failure(key, Some(&credentials_path(home)));
   credentials
-    .require(FEISHU_SECTION, key)
+    .require(NAME, key)
     .map_err(|_| failure())
     .and_then(|value| if value.trim().is_empty() { Err(failure()) } else { Ok(value) })
 }
@@ -194,12 +200,9 @@ fn store_tokens(home: &Path, access: &str, refresh: &str) -> Result<(), CliExit>
     std::fs::read(&path).map_err(|_| CliExit::error(format!("could not read {}", paths::display(&path))))?;
   let text =
     String::from_utf8(original).map_err(|_| CliExit::error(format!("{} must use UTF-8", paths::display(&path))))?;
-  let updated = credentials::with_credential_values(
-    &text,
-    FEISHU_SECTION,
-    &[("user_access_token", access), ("refresh_token", refresh)],
-  )
-  .map_err(|error| CliExit::error(error.to_string()))?;
+  let updated =
+    credentials::with_credential_values(&text, NAME, &[("user_access_token", access), ("refresh_token", refresh)])
+      .map_err(|error| CliExit::error(error.to_string()))?;
   credentials::write_credentials(home, updated.as_bytes()).map_err(|error| CliExit::error(error.to_string()))
 }
 
@@ -499,7 +502,7 @@ mod tests {
     )
     .unwrap();
 
-    assert!(url.starts_with("https://open.feishu.cn/open-apis/authen/v1/authorize?app_id=synthetic-app-id"));
+    assert!(url.starts_with(&format!("{BASE_URL}{AUTHORIZE_PATH}?app_id=synthetic-app-id")));
     assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A9999%2Fcallback"));
     assert!(url.contains("scope=docs%3Apermission.setting%3Aread+search%3Adocs%3Aread"));
     assert_no_token(&url);

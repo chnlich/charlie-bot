@@ -32,6 +32,9 @@ pub struct World {
   /// The stage logs' root. A preflight refusal leaves it absent.
   pub logs: PathBuf,
   pub artifact: PathBuf,
+  /// The temporary directory the script creates its artifact directory in: this world's TMPDIR, so one test's scan
+  /// never sees another test's directories.
+  pub tmp: PathBuf,
   /// The commit that `origin/main` names.
   pub on_main: String,
   /// One commit on top of `on_main`.
@@ -60,6 +63,9 @@ impl World {
     let artifact = sandbox.dir("artifact");
     let home = sandbox.dir("home");
     harness::copy_file(&harness::repo_root().join("scripts/release.sh"), &scripts.join("release.sh"));
+    // release.sh sources the host release lock from beside itself.
+    fs::create_dir(scripts.join("release")).expect("the release scripts directory");
+    harness::copy_file(&harness::repo_root().join("scripts/release/lock.sh"), &scripts.join("release/lock.sh"));
     // The units stage installs the commit's units, read from this repository's commit object.
     harness::copy_file(
       &harness::repo_root().join("scripts/install-slice-units.sh"),
@@ -76,6 +82,8 @@ impl World {
     sandbox.stub("systemctl", "printf '%s\\n' \"$*\" >> \"$UNIT_CALLS\"\n");
 
     let mut env = sandbox.env();
+    let tmp = sandbox.dir("tmp");
+    env.insert("TMPDIR".to_string(), tmp.display().to_string());
     env.insert("UNIT_CALLS".to_string(), sandbox.root().join("unit-calls.log").display().to_string());
     env.insert("CHARLIEBOT_SYSTEMD_USER_DIR".to_string(), sandbox.dir("user-units").display().to_string());
     for (name, value) in GIT_IDENTITY {
@@ -103,10 +111,12 @@ impl World {
 
     env.insert("CHARLIEBOT_RELEASES_DIR".to_string(), releases.display().to_string());
     env.insert("CHARLIEBOT_RELEASE_LOG_DIR".to_string(), logs.display().to_string());
+    // The host release lock lives under the sandbox, never beside the user's home.
+    env.insert("CHARLIEBOT_RELEASE_LOCK".to_string(), sandbox.root().join("release.lock").display().to_string());
     env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), sandbox.bin().join("stage-ok").display().to_string());
     env.insert("CHARLIEBOT_RELEASE_REHEARSAL".to_string(), sandbox.bin().join("stage-ok").display().to_string());
 
-    let world = Self { sandbox, repo, releases, logs, artifact, on_main, off_main, env };
+    let world = Self { sandbox, repo, releases, logs, artifact, tmp, on_main, off_main, env };
     world.write_gh(&world.gh_defaults());
     world
   }
@@ -183,6 +193,23 @@ impl World {
     panic!("no {name} under {}", self.logs.display());
   }
 
+  /// Every file and directory name under the log root, at any depth.
+  pub fn log_names(&self) -> Vec<String> {
+    let mut names = Vec::new();
+    collect_names(&self.logs, &mut names);
+    names
+  }
+
+  /// The entries under this world's TMPDIR: the artifact temporary directories the script creates and removes.
+  pub fn artifact_temp_entries(&self) -> Vec<String> {
+    match fs::read_dir(&self.tmp) {
+      Ok(entries) => {
+        entries.map(|entry| entry.expect("a tmp entry").file_name().into_string().expect("a name")).collect()
+      }
+      Err(_) => Vec::new(),
+    }
+  }
+
   /// The target that the `current` link names.
   pub fn current_link(&self) -> PathBuf {
     fs::read_link(self.releases.join("current")).expect("the current link")
@@ -203,13 +230,15 @@ impl Default for World {
   }
 }
 
-/// The artifact fixture: both fake binaries and the checksums `sha256sum -c` verifies.
+/// The artifact fixture: both fake binaries, executable as the CI build's are, and the checksums `sha256sum -c`
+/// verifies.
 fn install_artifacts(artifact: &Path) {
   let binaries = [("charliebot", "fake CLI binary\n"), ("charliebot-server", "fake server binary\n")];
   let mut checksums = String::new();
   for (name, contents) in binaries {
     let binary = artifact.join(name);
     fs::write(&binary, contents).expect("an artifact binary");
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("the artifact binary mode");
     checksums.push_str(&format!("{}  {name}\n", sha256_hex(&binary)));
   }
   fs::write(artifact.join("sha256sums.txt"), checksums).expect("the artifact checksums");
@@ -250,6 +279,20 @@ fn collect(dir: &Path, paths: &mut Vec<String>) {
     paths.push(path.display().to_string());
     if path.is_dir() {
       collect(&path, paths);
+    }
+  }
+}
+
+/// Every file and directory name under `root`, at any depth, in directory order.
+fn collect_names(dir: &Path, names: &mut Vec<String>) {
+  if !dir.exists() {
+    return;
+  }
+  for entry in fs::read_dir(dir).expect("a directory") {
+    let path = entry.expect("an entry").path();
+    names.push(path.file_name().expect("a name").to_string_lossy().into_owned());
+    if path.is_dir() {
+      collect_names(&path, names);
     }
   }
 }

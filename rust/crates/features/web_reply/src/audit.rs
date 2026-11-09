@@ -21,6 +21,7 @@ use charliebot_core::event_types::{
 use charliebot_registry::FeatureContext;
 use charliebot_store::MessageProvenance;
 use charliebot_store::compact::CompactValue;
+use charliebot_store::reply_order::{self, Receipt};
 use charliebot_tasks::master_trigger::{TriggerMasterRequest, trigger_master};
 use serde_json::{Value, json};
 
@@ -38,12 +39,12 @@ fn status_reminder_text() -> String {
 }
 
 /// The one reminder that a turn gets when it missed both its web reply and its status, for the unanswered user message
-/// `user_event_id`.
-fn combined_reminder_text(user_event_id: &str) -> String {
+/// `message`.
+fn combined_reminder_text(message: &str) -> String {
   format!(
     "Web reply and session status reminder: your last turn woke on a user message and ended without a web reply and \
      without a status set or confirm. {} {STATUS_SENTENCES}",
-    reply::answer_request(user_event_id)
+    reply::answer_request(message)
   )
 }
 /// The sender name a status reminder carries in the chat log.
@@ -68,28 +69,29 @@ pub async fn audit_turn(
 ) -> anyhow::Result<()> {
   let input_ids = features.store.master_done_input_event_ids(done);
   let loaded = reply::load_events(features, session_id).await?;
+  let receipts = reply_order::turn_receipts(&features.store, session_id, done, &loaded)?;
   let pending_close = close_request_pending(features, session_id).await?;
   let status_needed =
     !archived && status_reminder_needed(features, session_id, done, &input_ids, &loaded, pending_close).await?;
-  let steps = reply_steps(&loaded, &input_ids);
+  let steps = reply_steps(&loaded, &receipts)?;
   let turn_id = done.get("id").and_then(Value::as_str);
   // A turn that needs a status reminder posts it first. Its first nudge rides the reminder, so one wake covers both.
   let mut nudge_on_reminder = None;
   if status_needed {
-    nudge_on_reminder =
-      steps.iter().find(|step| step.action == ReplyAction::Nudge).map(|step| step.user_event_id.clone());
+    nudge_on_reminder = steps.iter().find(|step| step.action == ReplyAction::Nudge).cloned();
     match &nudge_on_reminder {
-      Some(user_event_id) => {
-        let text = combined_reminder_text(user_event_id);
-        post_status_reminder(features, session_id, &text, turn_id, Some(user_event_id)).await?;
+      Some(step) => {
+        let text = combined_reminder_text(&step.user_text);
+        post_status_reminder(features, session_id, &text, turn_id, Some(&step.user_event_id)).await?;
       }
       None => post_status_reminder(features, session_id, &status_reminder_text(), turn_id, None).await?,
     }
   }
   for step in steps {
     match step.action {
-      ReplyAction::Nudge if nudge_on_reminder.as_ref() == Some(&step.user_event_id) => {}
-      ReplyAction::Nudge if !pending_close => nudge(features, session_id, &step.user_event_id).await?,
+      ReplyAction::Nudge
+        if nudge_on_reminder.as_ref().is_some_and(|first| first.user_event_id == step.user_event_id) => {}
+      ReplyAction::Nudge if !pending_close => nudge(features, session_id, &step.user_event_id, &step.user_text).await?,
       ReplyAction::Nudge => {}
       ReplyAction::Notice => notice(features, session_id, &step.user_event_id).await?,
     }
@@ -102,11 +104,11 @@ pub async fn audit_turn(
 /// drive this reply-only step directly.
 #[cfg(test)]
 pub async fn audit_reply(features: &Arc<FeatureContext>, session_id: &str, done: &Value) -> anyhow::Result<()> {
-  let input_ids = features.store.master_done_input_event_ids(done);
   let loaded = reply::load_events(features, session_id).await?;
-  for step in reply_steps(&loaded, &input_ids) {
+  let receipts = reply_order::turn_receipts(&features.store, session_id, done, &loaded)?;
+  for step in reply_steps(&loaded, &receipts)? {
     match step.action {
-      ReplyAction::Nudge => nudge(features, session_id, &step.user_event_id).await?,
+      ReplyAction::Nudge => nudge(features, session_id, &step.user_event_id, &step.user_text).await?,
       ReplyAction::Notice => notice(features, session_id, &step.user_event_id).await?,
     }
   }
@@ -123,42 +125,57 @@ enum ReplyAction {
 }
 
 /// A reply step and the user message it answers.
+#[derive(Clone)]
 struct ReplyStep {
   action: ReplyAction,
   user_event_id: String,
+  /// The unanswered message's text, which the reminder names by its opening.
+  user_text: String,
 }
 
-/// The reply steps of one turn, in log order. Each input of the turn, a user message or a nudge,
-/// is judged on the user message it answers: a user message that no web reply answers gets a nudge, unless a nudge was
-/// already posted for it; a nudge whose user message no web reply answers gets a notice, unless one was posted. A user
-/// message named by several inputs gets one step.
-fn reply_steps(loaded: &[charliebot_store::SharedChatEvent], input_ids: &[String]) -> Vec<ReplyStep> {
-  let wanted: HashSet<&str> = input_ids.iter().map(String::as_str).collect();
+/// The reply steps of one turn, in receipt order. Each received input, a user message or a nudge, is judged on the user
+/// message it answers: a user message that no web reply later than its receipt answers gets a nudge, unless a nudge was
+/// already posted for it; a nudge whose user message no web reply later than the nudge's receipt answers gets a notice,
+/// unless one was posted. A user message named by several receipts gets one step.
+fn reply_steps(
+  loaded: &[charliebot_store::SharedChatEvent],
+  receipts: &[Receipt],
+) -> Result<Vec<ReplyStep>, charliebot_store::StoreError> {
   let mut steps: Vec<ReplyStep> = Vec::new();
-  for event in loaded {
-    let event = event.as_ref();
-    let Some(id) = event.get("id").and_then(CompactValue::as_str) else {
-      continue;
-    };
-    if !wanted.contains(id) {
-      continue;
-    }
+  for receipt in receipts {
+    let event = loaded
+      .iter()
+      .map(charliebot_store::SharedChatEvent::as_ref)
+      .find(|event| event.get("id").and_then(CompactValue::as_str) == Some(receipt.input_event_id.as_str()))
+      .ok_or_else(|| {
+        charliebot_store::StoreError::new(format!(
+          "run {} claims the input {} that the session log does not hold",
+          receipt.run_id, receipt.input_event_id
+        ))
+      })?;
     let Some(user_event_id) = reply::answered_user_id(event) else {
       continue;
     };
-    if reply::replied(loaded, &user_event_id) || steps.iter().any(|step| step.user_event_id == user_event_id) {
+    if reply::replied(receipt, loaded)? || steps.iter().any(|step| step.user_event_id == user_event_id) {
       continue;
     }
+    let user_text = loaded
+      .iter()
+      .map(charliebot_store::SharedChatEvent::as_ref)
+      .find(|event| event.get("id").and_then(CompactValue::as_str) == Some(user_event_id.as_str()))
+      .and_then(|event| event.get("content").and_then(CompactValue::as_str))
+      .unwrap_or_default()
+      .to_string();
     let action = if reply::nudge_of(event).is_some() {
       (!reply::noticed(loaded, &user_event_id)).then_some(ReplyAction::Notice)
     } else {
       (!reply::nudged(loaded, &user_event_id)).then_some(ReplyAction::Nudge)
     };
     if let Some(action) = action {
-      steps.push(ReplyStep { action, user_event_id });
+      steps.push(ReplyStep { action, user_event_id, user_text });
     }
   }
-  steps
+  Ok(steps)
 }
 
 /// The events one turn recorded, from the previous round end to `done`.
@@ -285,10 +302,15 @@ async fn post_status_reminder(
   Ok(())
 }
 
-/// Persist the nudge for `user_event_id`, then wake a new turn with it as its own task. A failed wake
-/// is logged in that task.
-async fn nudge(features: &Arc<FeatureContext>, session_id: &str, user_event_id: &str) -> anyhow::Result<()> {
-  let text = reply::nudge_text(user_event_id);
+/// Persist the nudge for `user_event_id`, naming the unanswered message `user_text`, then wake a new turn with it as its
+/// own task. A failed wake is logged in that task.
+async fn nudge(
+  features: &Arc<FeatureContext>,
+  session_id: &str,
+  user_event_id: &str,
+  user_text: &str,
+) -> anyhow::Result<()> {
+  let text = reply::nudge_text(user_text);
   let provenance =
     MessageProvenance { from_session: session_id.to_string(), from_session_name: reply::NUDGE_SENDER_NAME.to_string() };
   let mut event = features.store.build_agent_message_event(session_id, &text, provenance);
@@ -354,24 +376,46 @@ async fn notice(features: &Arc<FeatureContext>, session_id: &str, user_event_id:
 
 #[cfg(test)]
 mod tests {
+  use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
+
   use super::*;
   use crate::test_support::{Home, id_of, master_done, user_event, user_event_with_id};
+
+  /// A start time before every event a test appends.
+  const TURN_START: &str = "2026-01-01T00:00:00Z";
+
+  /// The log's parsed events, for the order rule's receipt and reply times.
+  fn loaded(home: &Home, session_id: &str) -> Vec<charliebot_store::SharedChatEvent> {
+    let store = &home.features.store;
+    store
+      .load_chat_events_shared_sync(session_id)
+      .expect("the chat log reads")
+      .as_ref()
+      .iter()
+      .map(std::sync::Arc::clone)
+      .collect()
+  }
 
   #[tokio::test]
   async fn a_user_turn_without_a_reply_gets_one_nudge() {
     let home = Home::new();
     let sid = home.manager("session", None).await;
     let user = home.append(&sid, user_event("the question")).await;
-    let done = master_done(&[id_of(&user)], 0);
+    home.launch_run(&sid, "run-1", &[id_of(&user)], TURN_START);
+    let done = master_done("run-1", &[id_of(&user)], 0);
 
     audit_reply(&home.features, &sid, &done).await.expect("the audit runs");
     audit_reply(&home.features, &sid, &done).await.expect("the audit runs");
 
     let nudges = home.nudges(&sid);
     assert_eq!(nudges.len(), 1);
-    assert_eq!(nudges[0]["content"], json!(reply::nudge_text(id_of(&user))));
+    assert_eq!(nudges[0]["content"], json!(reply::nudge_text("the question")));
     assert_eq!(nudges[0]["from_session_name"], json!(reply::NUDGE_SENDER_NAME));
     assert_eq!(nudges[0][WEB_REPLY], json!({"nudge_of": id_of(&user)}));
+    let text = nudges[0]["content"].as_str().expect("the nudge carries text");
+    assert!(text.contains("The unanswered message begins: \"the question\"."), "{text}");
+    assert!(!text.contains("--answers"), "{text}");
+    assert!(!text.contains("[User message "), "{text}");
   }
 
   #[tokio::test]
@@ -379,9 +423,11 @@ mod tests {
     let home = Home::status_only();
     let sid = home.manager("session", None).await;
     let user = home.append(&sid, user_event("the question")).await;
-    audit_reply(&home.features, &sid, &master_done(&[id_of(&user)], 0)).await.expect("the audit runs");
+    home.launch_run(&sid, "run-1", &[id_of(&user)], TURN_START);
+    audit_reply(&home.features, &sid, &master_done("run-1", &[id_of(&user)], 0)).await.expect("the audit runs");
     let nudge_id = id_of(&home.nudges(&sid)[0]).to_string();
-    let nudged_turn = master_done(&[nudge_id.as_str()], 0);
+    home.launch_run(&sid, "run-2", &[nudge_id.as_str()], TURN_START);
+    let nudged_turn = master_done("run-2", &[nudge_id.as_str()], 0);
 
     audit_reply(&home.features, &sid, &nudged_turn).await.expect("the audit runs");
     audit_reply(&home.features, &sid, &nudged_turn).await.expect("the audit runs");
@@ -395,42 +441,78 @@ mod tests {
 
   #[test]
   fn a_reply_in_the_nudge_turn_ends_the_audit_with_no_notice() {
-    let user = Arc::new(CompactValue::from_value(&json!({"type": "user", "id": "user-1"})));
-    let nudge = Arc::new(CompactValue::from_value(&json!({
+    let user = charliebot_store::ChatEvent::from_value(&json!({"type": "user", "id": "user-1"}));
+    let nudge = charliebot_store::ChatEvent::from_value(&json!({
       "type": AGENT_MESSAGE,
       "id": "nudge-1",
+      "timestamp": "2026-11-02T08:22:23.103374+00:00",
       WEB_REPLY: {(NUDGE_OF): "user-1"},
-    })));
-    let reply = Arc::new(CompactValue::from_value(&json!({
+    }));
+    let reply = charliebot_store::ChatEvent::from_value(&json!({
       "type": WEB_REPLY,
-      WEB_REPLY: {"answer_ids": ["user-1"]},
-    })));
-    let loaded = [user, nudge, reply];
+      "timestamp": "2026-11-02T08:23:00Z",
+      WEB_REPLY: {"chars": 3},
+    }));
+    let loaded = vec![std::sync::Arc::new(user), std::sync::Arc::new(nudge), std::sync::Arc::new(reply)];
+    let receipt = Receipt {
+      input_event_id: "nudge-1".to_string(),
+      run_id: "run-1".to_string(),
+      at: UtcDateTime::parse("2026-11-02T08:22:23.103374Z").expect("the fixture time parses"),
+    };
 
-    assert!(reply_steps(&loaded, &["nudge-1".to_string()]).is_empty());
+    assert!(reply_steps(&loaded, &[receipt]).expect("the steps read").is_empty());
+  }
+
+  /// A resumed turn's receipts time each message the old server delivered. A reply between the two receipts answers the
+  /// earlier message only, so the later one gets the turn's one nudge.
+  #[tokio::test]
+  async fn a_resumed_turn_nudges_only_the_message_received_after_its_reply() {
+    let home = Home::reply_only();
+    let sid = "session";
+    let first = user_event_with_id("first-message", "the first question");
+    let second = user_event_with_id("second-message", "the second question");
+    let mut first = first;
+    first["timestamp"] = json!("2026-11-02T08:20:54.578131+00:00");
+    let mut second = second;
+    second["timestamp"] = json!("2026-11-02T08:22:22.926386+00:00");
+    let reply = json!({
+      "type": WEB_REPLY,
+      "content": "the first answer",
+      "timestamp": "2026-11-02T08:21:10Z",
+      WEB_REPLY: {"chars": 15},
+    });
+    let delivered = json!({
+      "type": "input_delivered",
+      "input_event_id": "second-message",
+      "run_id": "resumed-run",
+      "timestamp": "2026-11-02T08:22:23.103374+00:00",
+    });
+    seed_events(&home, sid, &[first, reply, second, delivered]);
+    home.launch_run(sid, "resumed-run", &["first-message", "second-message"], "2026-11-02T08:20:54.838607Z");
+    let events = loaded(&home, sid);
+    let receipts = reply_order::turn_receipts(&home.features.store, sid, &master_done("resumed-run", &[], 0), &events)
+      .expect("the receipts read");
+    assert!(reply::replied(&receipts[0], &events).expect("the first receipt reads"));
+    assert!(!reply::replied(&receipts[1], &events).expect("the second receipt reads"));
+
+    audit_reply(&home.features, sid, &master_done("resumed-run", &[], 0)).await.expect("the audit runs");
+
+    let nudged: Vec<Value> = home.nudges(sid).iter().map(|nudge| nudge[WEB_REPLY]["nudge_of"].clone()).collect();
+    assert_eq!(nudged, vec![json!("second-message")]);
   }
 
   #[tokio::test]
-  async fn each_unanswered_user_message_of_a_turn_gets_its_own_nudge() {
-    let home = Home::status_only();
-    let sid = home.manager("session", None).await;
-    let first = home.append(&sid, user_event_with_id("11111111-a", "first question")).await;
-    let answered = home.append(&sid, user_event_with_id("22222222-b", "second question")).await;
-    let last = home.append(&sid, user_event_with_id("33333333-c", "third question")).await;
-    let turn = [id_of(&first), id_of(&answered), id_of(&last)];
-    home
-      .append(
-        &sid,
-        json!({"type": WEB_REPLY, "content": "the answer", WEB_REPLY: {"answer_ids": [id_of(&answered)], "chars": 10}}),
-      )
-      .await;
-    let done = master_done(&turn, 0);
+  async fn a_turn_that_received_an_input_the_log_lacks_fails_its_audit() {
+    let home = Home::reply_only();
+    let sid = "session";
+    home.launch_run(sid, "run-1", &["missing-message"], TURN_START);
 
-    audit_reply(&home.features, &sid, &done).await.expect("the reply audit runs");
-    audit_reply(&home.features, &sid, &done).await.expect("the reply audit runs");
+    let error = audit_reply(&home.features, sid, &master_done("run-1", &["missing-message"], 0))
+      .await
+      .expect_err("the audit refuses a receipt that names no event of the log");
 
-    let nudged: Vec<Value> = home.nudges(&sid).iter().map(|nudge| nudge[WEB_REPLY]["nudge_of"].clone()).collect();
-    assert_eq!(nudged, vec![json!("11111111-a"), json!("33333333-c")]);
+    assert!(format!("{error:#}").contains("missing-message"), "{error:#}");
+    assert!(home.nudges(sid).is_empty());
   }
 
   #[tokio::test]
@@ -439,11 +521,14 @@ mod tests {
     let sid = home.manager("session", None).await;
     let first = home.append(&sid, user_event_with_id("11111111-a", "first question")).await;
     let second = home.append(&sid, user_event_with_id("22222222-b", "second question")).await;
-    audit_reply(&home.features, &sid, &master_done(&[id_of(&first), id_of(&second)], 0)).await.expect("the audit runs");
+    let ids = [id_of(&first), id_of(&second)];
+    home.launch_run(&sid, "run-1", &ids, TURN_START);
+    audit_reply(&home.features, &sid, &master_done("run-1", &ids, 0)).await.expect("the audit runs");
     let nudge_ids: Vec<String> = home.nudges(&sid).iter().map(|nudge| id_of(nudge).to_string()).collect();
     assert_eq!(nudge_ids.len(), 2);
 
-    audit_reply(&home.features, &sid, &master_done(&[nudge_ids[0].as_str(), nudge_ids[1].as_str()], 0))
+    home.launch_run(&sid, "run-2", &[nudge_ids[0].as_str(), nudge_ids[1].as_str()], TURN_START);
+    audit_reply(&home.features, &sid, &master_done("run-2", &[nudge_ids[0].as_str(), nudge_ids[1].as_str()], 0))
       .await
       .expect("the audit runs");
 
@@ -459,7 +544,7 @@ mod tests {
     let home = Home::new();
     let stale = home.manager("stale", None).await;
     let control = home.manager("control", None).await;
-    home.launch_run(&stale, "run-1");
+    home.launch_run(&stale, "run-1", &[], TURN_START);
     home
       .append(
         &stale,
@@ -476,7 +561,8 @@ mod tests {
     let mut turns = Vec::new();
     for session in [&stale, &control] {
       let user = home.append(session, user_event("the question")).await;
-      turns.push((session.clone(), master_done(&[id_of(&user)], 0)));
+      home.launch_run(session, "run-1", &[id_of(&user)], TURN_START);
+      turns.push((session.clone(), master_done("run-1", &[id_of(&user)], 0)));
     }
 
     for (session, done) in &turns {
@@ -485,5 +571,113 @@ mod tests {
 
     assert_eq!(home.nudges(&stale).len(), 1, "a voided close gates nothing");
     assert_eq!(home.nudges(&control).len(), 1, "without a close request the turn is nudged");
+  }
+
+  /// A seeded fixture run record becomes the turn's run record on disk.
+  fn launch_fixture_run(home: &Home, run: &Value) {
+    let ids: Vec<&str> = run["input_event_ids"]
+      .as_array()
+      .expect("the fixture run lists its input ids")
+      .iter()
+      .map(|id| id.as_str().expect("a fixture input id is a string"))
+      .collect();
+    home.launch_run(
+      run["session_id"].as_str().expect("the fixture run names its session"),
+      run["id"].as_str().expect("the fixture run carries its id"),
+      &ids,
+      run["started_at"].as_str().expect("the fixture run carries its start time"),
+    );
+  }
+
+  /// The fixture master_done that names its run.
+  fn fixture_done(events: &[Value]) -> Value {
+    events
+      .iter()
+      .find(|event| event["type"] == MASTER_DONE && event.get("run_id").is_some())
+      .cloned()
+      .expect("the fixture holds the turn's master_done")
+  }
+
+  fn replay_fixture() -> Value {
+    serde_json::from_str(include_str!("../tests/fixtures/replay_resumed_replies.json"))
+      .expect("the replay fixture reads")
+  }
+
+  /// R1: a release restart resumed the turn after both messages arrived. The resumed turn's master_done names its run
+  /// and carries no input ids; the run's receipts time the start input at the run start and the delivered input at its
+  /// delivery row, and the one reply after both answers them both.
+  #[tokio::test]
+  async fn replay_r1_marks_both_messages_of_a_resumed_turn_answered() {
+    let fixture = replay_fixture();
+    let home = Home::reply_only();
+    let r1 = &fixture["r1"];
+    let sid = r1["session_id"].as_str().expect("the fixture names its session");
+    let events = r1["events"].as_array().expect("the fixture lists its events");
+    seed_events(&home, sid, events);
+    launch_fixture_run(&home, &r1["run"]);
+
+    let loaded = loaded(&home, sid);
+    let done = fixture_done(events);
+    let receipts =
+      reply_order::turn_receipts(&home.features.store, sid, &done, &loaded).expect("the resumed turn's receipts read");
+    assert_eq!(receipts.len(), 2);
+    assert_eq!(receipts[0].at, UtcDateTime::parse("2026-11-02T08:20:54.838607Z").expect("the fixture time parses"));
+    assert_eq!(receipts[1].at, UtcDateTime::parse("2026-11-02T08:22:23.103374Z").expect("the fixture time parses"));
+    for receipt in &receipts {
+      assert!(reply::replied(receipt, &loaded).expect("the reply reads"));
+    }
+
+    audit_reply(&home.features, sid, &done).await.expect("the audit runs");
+
+    assert!(home.nudges(sid).is_empty());
+  }
+
+  /// R2: two runs over one session. The stopped run's message and the current turn's message both precede the reply,
+  /// so both count as answered and the current turn's audit posts no nudge.
+  #[tokio::test]
+  async fn replay_r2_answers_the_message_of_a_stopped_run_and_the_current_turns_message() {
+    let fixture = replay_fixture();
+    let home = Home::reply_only();
+    let r2 = &fixture["r2"];
+    let sid = r2["session_id"].as_str().expect("the fixture names its session");
+    let events = r2["events"].as_array().expect("the fixture lists its events");
+    seed_events(&home, sid, events);
+    let runs = r2["runs"].as_array().expect("the fixture lists its runs");
+    for run in runs {
+      launch_fixture_run(&home, run);
+    }
+
+    let loaded = loaded(&home, sid);
+    let mut answered = Vec::new();
+    for run in runs {
+      let record: charliebot_store::RunRecord = serde_json::from_value(run.clone()).expect("the fixture run decodes");
+      let receipts = reply_order::receipts(&record, &loaded).expect("the run's receipts read");
+      answered.extend(receipts.iter().map(|receipt| reply::replied(receipt, &loaded).expect("the reply reads")));
+    }
+    assert_eq!(answered, [true, true]);
+    let received =
+      reply_order::received_by_finished_turns(&home.features.store, sid, &loaded).expect("the received ids read");
+    assert!(received.contains("70bc9630-25b2-54a7-bd34-f097462893ff"));
+    assert!(received.contains("a8223322-6c39-5604-b98e-066e041a20b9"));
+
+    audit_reply(&home.features, sid, &fixture_done(events)).await.expect("the audit runs");
+
+    assert!(home.nudges(sid).is_empty());
+  }
+
+  /// Seeds a session's log with events that keep their own ids and timestamps.
+  fn seed_events(home: &Home, session_id: &str, events: &[Value]) {
+    let metadata = SessionMetadata::new(session_id, "Synthetic web session", TaskProfile::Manager);
+    let metadata_path = home.features.store.metadata_path(session_id);
+    std::fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
+    std::fs::write(&metadata_path, metadata.to_json_string(&home.features.registry.metadata_slots(), true)).unwrap();
+    let events_path = home.features.store.chat_events_path(session_id);
+    std::fs::create_dir_all(events_path.parent().unwrap()).unwrap();
+    let mut lines = String::new();
+    for event in events {
+      lines.push_str(&event.to_string());
+      lines.push('\n');
+    }
+    std::fs::write(events_path, lines).unwrap();
   }
 }

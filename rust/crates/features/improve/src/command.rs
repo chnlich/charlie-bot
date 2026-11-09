@@ -52,9 +52,6 @@ pub struct ImproveState {
   pub backend: Option<String>,
   #[serde(default)]
   pub model: Option<String>,
-  /// True when the loop named no backend: each iteration takes a member of the pool `backends.calls.improve` names.
-  #[serde(default)]
-  pub backend_from_pool: bool,
   pub created_at: String,
   /// The server process that owns this loop's controller.
   #[serde(default)]
@@ -372,7 +369,6 @@ pub struct Reservation<'a> {
   pub merge_back: bool,
   pub resolved_backend: &'a str,
   pub resolved_model: &'a str,
-  pub backend_from_pool: bool,
 }
 
 /// Reserve a loop id and persist its running state before any background work starts. The active lock is created
@@ -409,7 +405,6 @@ pub fn reserve_loop_state(
       merge_back: reservation.merge_back,
       backend: non_empty(reservation.resolved_backend),
       model: non_empty(reservation.resolved_model),
-      backend_from_pool: reservation.backend_from_pool,
       created_at: utc_now_iso(),
       server_pid: Some(i64::from(std::process::id())),
       end_error: None,

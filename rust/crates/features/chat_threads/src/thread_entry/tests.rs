@@ -17,8 +17,9 @@ use charliebot_core::event_types;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_registry::store_hooks::store_hooks;
-use charliebot_registry::{FeatureContext, Registry, RegistryError, RunningTurnInputs, StartupState};
-use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile};
+use charliebot_registry::{FeatureContext, Registry, RegistryError, StartupState};
+use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
+use charliebot_store::reply_order::Receipt;
 use charliebot_store::trigger_files::PendingTrigger;
 use charliebot_store::{CreateTask, SIDEBAR_CHANNEL, Store, StoreResult, Subscription, TaskCaller};
 use charliebot_tasks::completion::TaskCompletion;
@@ -59,6 +60,16 @@ fn summon_block() -> Value {
 /// A fakechat summon injection as the log holds it.
 fn summon_event(event_id: &str) -> Value {
   json!({"id": event_id, "type": event_types::AGENT_MESSAGE, "content": "summon", "fakechat": {"thread": "t1"}})
+}
+
+/// The receipt of an appended event: its own id and log time, under run `run_id`.
+fn receipt_of(event: &Value, run_id: &str) -> Receipt {
+  Receipt {
+    input_event_id: event["id"].as_str().expect("an appended event carries its id").to_string(),
+    run_id: run_id.to_string(),
+    at: UtcDateTime::parse(event["timestamp"].as_str().expect("an appended event carries its timestamp"))
+      .expect("the store stamps a parsable time"),
+  }
 }
 
 /// The arguments of one fakechat summon into session `s1`, borrowed from the caller's owned origin and block.
@@ -146,7 +157,7 @@ async fn thread_replies_and_assistant_errors_do_not_notify_task_tree_changes() {
     .await;
   let mut error_sidebar = home.features.store.subscribe(SIDEBAR_CHANNEL);
 
-  audit_round(&dyn_adapter, &home.features, "error-session", nudge["id"].as_str().unwrap())
+  audit_round(&dyn_adapter, &home.features, "error-session", &receipt_of(&nudge, "nudge-run"))
     .await
     .expect("the no-reply audit posts its assistant error");
 
@@ -243,6 +254,7 @@ impl Home {
       label: "Synthetic fakechat".to_string(),
       model: "synthetic-model".to_string(),
       prompt_overlay: None,
+      billing: auto.then_some(charliebot_core::config::PoolBilling::Subscription),
       backend_type: "synthetic".to_string(),
       type_fields: Default::default(),
     });
@@ -250,13 +262,14 @@ impl Home {
       id: "pool".to_string(),
       label: "Pool".to_string(),
       rule: charliebot_core::config::PoolRule::Rotate,
-      members: vec![charliebot_core::config::PoolMember { backend: "synthetic-fakechat".to_string(), billing: None }],
+      members: vec![charliebot_core::config::PoolMember { backend: "synthetic-fakechat".to_string() }],
     });
     loaded.backends.options.push(BackendOption {
       id: "synthetic-strong".to_string(),
       label: "Synthetic strong".to_string(),
       model: "synthetic-model".to_string(),
       prompt_overlay: None,
+      billing: auto.then_some(charliebot_core::config::PoolBilling::Payg),
       backend_type: "synthetic".to_string(),
       type_fields: Default::default(),
     });
@@ -267,14 +280,8 @@ impl Home {
         label: "Auto".to_string(),
         rule: charliebot_core::config::PoolRule::Priority,
         members: vec![
-          charliebot_core::config::PoolMember {
-            backend: "synthetic-fakechat".to_string(),
-            billing: Some(charliebot_core::config::PoolBilling::Subscription),
-          },
-          charliebot_core::config::PoolMember {
-            backend: "synthetic-strong".to_string(),
-            billing: Some(charliebot_core::config::PoolBilling::Payg),
-          },
+          charliebot_core::config::PoolMember { backend: "synthetic-fakechat".to_string() },
+          charliebot_core::config::PoolMember { backend: "synthetic-strong".to_string() },
         ],
       });
       loaded.backends.calls = [(
@@ -300,7 +307,6 @@ impl Home {
       Box::new(move || load_credentials(&credential_home)),
     ));
     let startup = StartupState::default();
-    startup.insert(RunningTurnInputs::new(|_| Vec::new())).expect("the stub inserts once");
     startup
       .insert(BackendAvailability::load(dir.path()).expect("the availability owner loads"))
       .expect("the owner inserts once");
@@ -363,6 +369,32 @@ impl Home {
 
   async fn append(&self, session_id: &str, event: Value) -> Value {
     self.features.store.append_chat_event(session_id, event).await.expect("the chat event appends").to_value()
+  }
+
+  /// Writes the session's chat log from `events`, keeping each event's own id and timestamp.
+  fn seed_events(&self, session_id: &str, events: &[Value]) {
+    let path = self.features.store.chat_events_path(session_id);
+    fs::create_dir_all(path.parent().expect("the log has a parent")).expect("the log directory");
+    let mut lines = String::new();
+    for event in events {
+      lines.push_str(&event.to_string());
+      lines.push('\n');
+    }
+    fs::write(&path, lines).expect("the seeded chat log writes");
+  }
+
+  /// Writes the manager run record the order rule reads: `run_id` received `input_event_ids` at `started_at`.
+  fn launch_run(&self, session_id: &str, run_id: &str, input_event_ids: &[&str], started_at: &str) {
+    let run_path = self.features.store.run_metadata_path(session_id, run_id);
+    fs::create_dir_all(run_path.parent().expect("run directory")).expect("run directory");
+    let run = json!({
+      "id": run_id,
+      "session_id": session_id,
+      "kind": "manager_turn",
+      "input_event_ids": input_event_ids,
+      "started_at": started_at,
+    });
+    fs::write(&run_path, run.to_string()).expect("run record");
   }
 
   async fn triggers(&self, session_id: &str) -> Vec<PendingTrigger> {
@@ -661,14 +693,18 @@ fn newest_thread_input_picks_the_newest_fakechat_block() {
 
 #[test]
 fn replied_nudged_noticed_read_the_fakechat_shapes() {
+  let receipt = UtcDateTime::parse("2026-11-02T08:22:00Z").unwrap();
+  let receipt = Receipt { input_event_id: "s1".to_string(), run_id: "run-1".to_string(), at: receipt };
   let events = vec![
-    json!({"id": "r1", "type": reply_type(), "fakechat_reply": {"answers": "s1"}}),
-    json!({"id": "r2", "type": reply_type(), "fakechat_reply": {"answers": "s2"}}),
+    json!({"id": "r1", "type": reply_type(), "timestamp": "2026-11-02T08:21:00Z"}),
+    json!({"id": "r2", "type": reply_type(), "timestamp": "2026-11-02T08:23:00Z"}),
     json!({"id": "n1", "type": event_types::AGENT_MESSAGE, "fakechat": {"nudge_of": "s1"}}),
     json!({"id": "x1", "type": event_types::ASSISTANT_ERROR, "fakechat_notice": {event_types::INPUT_EVENT_ID: "s1"}}),
   ];
-  assert!(replied(&FAKECHAT, &events, "s1"));
-  assert!(!replied(&FAKECHAT, &events, "s9"));
+  assert!(replied(&FAKECHAT, &receipt, &events).unwrap());
+  // A reply at the receipt's own instant or before it does not answer the message.
+  let later = Receipt { at: UtcDateTime::parse("2026-11-02T08:23:00Z").unwrap(), ..receipt.clone() };
+  assert!(!replied(&FAKECHAT, &later, &events).unwrap());
   assert!(nudged(&FAKECHAT, &events, "s1"));
   assert!(!nudged(&FAKECHAT, &events, "s2"));
   assert!(noticed(&FAKECHAT, &events, "s1"));
@@ -676,7 +712,7 @@ fn replied_nudged_noticed_read_the_fakechat_shapes() {
 }
 
 #[test]
-fn lost_summons_reports_only_the_unanswered_unowned_unmarked() {
+fn lost_summons_reports_only_the_unreceived_unmarked() {
   let mut events = vec![
     summon_event("s1"),
     summon_event("s2"),
@@ -687,14 +723,15 @@ fn lost_summons_reports_only_the_unanswered_unowned_unmarked() {
   ];
   let ids = |list: &[&str]| list.iter().map(|id| id.to_string()).collect::<HashSet<String>>();
   let ids_of = |lost: Vec<Value>| lost.iter().map(|ev| ev["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
-  assert_eq!(ids_of(lost_summons(&FAKECHAT, &events, &ids(&["s3"]), &HashSet::new())), ["s4"]);
-  // The running set keeps its summon off the report the same way.
-  assert!(lost_summons(&FAKECHAT, &events, &ids(&["s3"]), &ids(&["s4"])).is_empty());
+  // s1 was received, s2 was marked by a backfill; s3 and s4 were neither.
+  assert_eq!(ids_of(lost_summons(&FAKECHAT, &events, &ids(&["s1"]))), ["s3", "s4"]);
+  // A summon a finished turn received is not lost.
+  assert_eq!(ids_of(lost_summons(&FAKECHAT, &events, &ids(&["s1", "s3"]))), ["s4"]);
   // A marker under another platform's backfill key marks nothing here.
   events.push(
     json!({"id": "m3", "type": event_types::ASSISTANT_ERROR, "slack_backfill": {event_types::INPUT_EVENT_ID: "s4"}}),
   );
-  assert_eq!(ids_of(lost_summons(&FAKECHAT, &events, &ids(&["s3"]), &HashSet::new())), ["s4"]);
+  assert_eq!(ids_of(lost_summons(&FAKECHAT, &events, &ids(&["s1", "s3"]))), ["s4"]);
 }
 
 #[test]
@@ -846,14 +883,16 @@ async fn audit_nudges_a_summon_of_the_current_contract(content: &str) {
   let home = Home::new();
   home.thread_session("s1", origin()).await;
   let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[]);
-  home
+  let summon = home
     .append(
       "s1",
       json!({"id": "s1", "type": event_types::AGENT_MESSAGE, "content": content,
              "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}}),
     )
     .await;
-  let done = json!({"type": event_types::MASTER_DONE, "input_event_id": "s1", "exit_code": 0, "still_thinking": false});
+  home.launch_run("s1", "run-1", &["s1"], summon["timestamp"].as_str().unwrap());
+  let done = json!({"type": event_types::MASTER_DONE, "run_id": "run-1", "input_event_ids": ["s1"],
+                    "exit_code": 0, "still_thinking": false});
 
   let acted = deliver_done(&adapter, &home.features, "s1", &done).await.unwrap();
 
@@ -880,15 +919,17 @@ async fn audit_leaves_a_marker_contract_summon_alone() {
   home.thread_session("s1", origin()).await;
   let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[]);
   // A summon carrying neither the one-line input nor the reply command predates the contract.
-  home
+  let summon = home
     .append(
       "s1",
       json!({"id": "s1", "type": event_types::AGENT_MESSAGE, "content": "fakechat marker summon",
              "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}}),
     )
     .await;
+  home.launch_run("s1", "run-1", &["s1"], summon["timestamp"].as_str().unwrap());
   let before = home.events("s1").len();
-  let done = json!({"type": event_types::MASTER_DONE, "input_event_id": "s1", "exit_code": 0, "still_thinking": false});
+  let done = json!({"type": event_types::MASTER_DONE, "run_id": "run-1", "input_event_ids": ["s1"],
+                    "exit_code": 0, "still_thinking": false});
 
   let acted = deliver_done(&adapter, &home.features, "s1", &done).await.unwrap();
 
@@ -919,8 +960,14 @@ async fn round_completion_and_boot_audit_emit_one_nudge_then_notice() {
       }),
     )
     .await;
+  let summon_id = summon["id"].as_str().expect("an appended event carries its id").to_string();
+  let summon_at = summon["timestamp"].as_str().expect("an appended event carries its timestamp").to_string();
+  home.launch_run("audit-retry", "run-1", &[summon_id.as_str()], &summon_at);
   let summon_done = home
-    .append("audit-retry", json!({"type": event_types::MASTER_DONE, "input_event_id": summon["id"], "exit_code": 0}))
+    .append(
+      "audit-retry",
+      json!({"type": event_types::MASTER_DONE, "run_id": "run-1", "input_event_ids": [summon_id], "exit_code": 0}),
+    )
     .await;
 
   assert!(deliver_done(&dyn_adapter, &home.features, "audit-retry", &summon_done).await.unwrap());
@@ -930,8 +977,14 @@ async fn round_completion_and_boot_audit_emit_one_nudge_then_notice() {
     .into_iter()
     .find(|event| event.get("fakechat").and_then(|block| block.get("nudge_of")).is_some())
     .expect("the silent summon creates a nudge");
+  let nudge_id = nudge["id"].as_str().expect("an appended event carries its id").to_string();
+  let nudge_at = nudge["timestamp"].as_str().expect("an appended event carries its timestamp").to_string();
+  home.launch_run("audit-retry", "run-2", &[nudge_id.as_str()], &nudge_at);
   let nudge_done = home
-    .append("audit-retry", json!({"type": event_types::MASTER_DONE, "input_event_id": nudge["id"], "exit_code": 0}))
+    .append(
+      "audit-retry",
+      json!({"type": event_types::MASTER_DONE, "run_id": "run-2", "input_event_ids": [nudge_id], "exit_code": 0}),
+    )
     .await;
 
   let (delivered, backfilled) = tokio::join!(
@@ -953,6 +1006,229 @@ async fn round_completion_and_boot_audit_emit_one_nudge_then_notice() {
   assert_eq!(adapter.posts.lock().unwrap().len(), 1);
   assert_eq!(nudges[0]["request_id"], format!("fakechat-nudge:{}", summon["id"].as_str().unwrap()));
   assert_eq!(notices[0]["request_id"], format!("fakechat-notice:{}", summon["id"].as_str().unwrap()));
+}
+
+/// A reply posted while a resumed turn runs clears the 👀 of the summon that turn's run received, and the reply
+/// records no per-message binding.
+#[tokio::test]
+async fn a_reply_on_a_resumed_turn_clears_the_received_summons_ack() {
+  let home = Home::new();
+  home.thread_session("s1", origin()).await;
+  let summon = home
+    .append(
+      "s1",
+      json!({"type": event_types::AGENT_MESSAGE, "content": FAKECHAT.summon_line,
+             "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}}),
+    )
+    .await;
+  let summon_id = summon["id"].as_str().expect("an appended event carries its id").to_string();
+  let started = summon["timestamp"].as_str().expect("an appended event carries its timestamp").to_string();
+  home.launch_run("s1", "resumed-run", &[summon_id.as_str()], &started);
+  let adapter = FakeAdapter::with_thread(&[]);
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+
+  let readback = post_reply_with_request_id(&dyn_adapter, &home.features, "s1", "the answer", Some("reply-run"))
+    .await
+    .expect("the thread reply posts");
+
+  assert_eq!(readback["posted"], json!(true));
+  assert!(readback.get("answers").is_none(), "{readback}");
+  settle(|| !adapter.removed.lock().expect("the removal log is never poisoned").is_empty()).await;
+  let removed = adapter.removed.lock().expect("the removal log is never poisoned").clone();
+  assert_eq!(removed, [json!({"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"})]);
+  let reply =
+    home.events("s1").into_iter().find(|event| event["type"] == reply_type()).expect("the reply is persisted");
+  assert_eq!(reply["fakechat_reply"], json!({"chars": 10, "chunks": 1}));
+}
+
+/// A resumed thread turn that posted no thread reply gets the round-end nudge: its run record holds the summon even
+/// though the restart dropped the `master_done` input ids.
+#[tokio::test]
+async fn a_resumed_thread_turn_that_posted_no_reply_gets_a_nudge() {
+  let home = Home::new();
+  home.thread_session("s1", origin()).await;
+  let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[]);
+  let summon = home
+    .append(
+      "s1",
+      json!({"type": event_types::AGENT_MESSAGE, "content": FAKECHAT.summon_line,
+             "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}}),
+    )
+    .await;
+  let summon_id = summon["id"].as_str().expect("an appended event carries its id").to_string();
+  let started = summon["timestamp"].as_str().expect("an appended event carries its timestamp").to_string();
+  home.launch_run("s1", "resumed-run", &[summon_id.as_str()], &started);
+  let done = json!({"type": event_types::MASTER_DONE, "run_id": "resumed-run", "exit_code": 0,
+                    "input_event_ids": []});
+
+  let acted = deliver_done(&adapter, &home.features, "s1", &done).await.unwrap();
+
+  assert!(acted);
+  settle(|| home.launches().len() == 1).await;
+  let nudge = home
+    .events("s1")
+    .into_iter()
+    .find(|event| event["fakechat"]["nudge_of"] == summon_id)
+    .expect("the resumed turn's unanswered summon gets a nudge");
+  assert_eq!(nudge["type"], event_types::AGENT_MESSAGE);
+}
+
+/// The boot backfill retires a summon that a finished resumed turn received through its run record, and reports a
+/// summon no finished turn received.
+#[tokio::test]
+async fn the_boot_backfill_reports_only_summons_no_finished_turn_received() {
+  let home = Home::new();
+  home.thread_session("s1", origin()).await;
+  let backend_pool =
+    home.features.startup.require::<backend_pool::BackendPool>().expect("the backend pool is in startup");
+  home
+    .features
+    .startup
+    .insert(charliebot_tasks::master_queue::MasterQueue::new(backend_pool))
+    .expect("the master queue inserts once");
+  let adapter = FakeAdapter::with_thread(&[]);
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+  let received = home
+    .append(
+      "s1",
+      json!({"type": event_types::AGENT_MESSAGE, "content": FAKECHAT.summon_line,
+             "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}}),
+    )
+    .await;
+  let received_id = received["id"].as_str().expect("an appended event carries its id").to_string();
+  let received_at = received["timestamp"].as_str().expect("an appended event carries its timestamp").to_string();
+  home.launch_run("s1", "resumed-run", &[received_id.as_str()], &received_at);
+  home
+    .append(
+      "s1",
+      json!({"type": event_types::MASTER_DONE, "run_id": "resumed-run", "exit_code": 0, "input_event_ids": []}),
+    )
+    .await;
+  // The reply follows the receipt, so the second pass finds nothing to nudge for this turn.
+  home
+    .append("s1", json!({"type": reply_type(), "content": "the answer", "fakechat_reply": {"chars": 10, "chunks": 1}}))
+    .await;
+  let lost = home
+    .append(
+      "s1",
+      json!({"type": event_types::AGENT_MESSAGE, "content": FAKECHAT.summon_line,
+             "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m2"}}),
+    )
+    .await;
+  let lost_id = lost["id"].as_str().expect("an appended event carries its id").to_string();
+
+  let reported = backfill_lost_summons(&dyn_adapter, &home.features).await.unwrap();
+
+  assert_eq!(reported, 1);
+  assert_eq!(adapter.posts.lock().unwrap().len(), 1, "only the unreceived summon gets the lost notice");
+  let events = home.events("s1");
+  let markers: Vec<String> = events
+    .iter()
+    .filter_map(|event| {
+      event
+        .get(FAKECHAT.backfill_key())
+        .and_then(|marker| marker.get(event_types::INPUT_EVENT_ID))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    })
+    .collect();
+  assert_eq!(markers, [lost_id]);
+}
+
+fn replay_fixture() -> Value {
+  serde_json::from_str(include_str!("../../tests/fixtures/replay_thread_summons.json"))
+    .expect("the replay fixture reads")
+}
+
+/// The fixture master_done that names its run.
+fn fixture_done(events: &[Value]) -> Value {
+  events
+    .iter()
+    .find(|event| event["type"] == event_types::MASTER_DONE && event.get("run_id").is_some())
+    .cloned()
+    .expect("the fixture holds the turn's master_done")
+}
+
+/// A session seeded from the fixture and its run record written, with the fixture's summon block as the origin.
+async fn fixture_session(home: &Home, fixture: &Value) -> (String, Value) {
+  let sid = fixture["session_id"].as_str().expect("the fixture names its session").to_string();
+  let events = fixture["events"].as_array().expect("the fixture lists its events");
+  let block = events[0]["fakechat"].clone();
+  home.thread_session(&sid, block).await;
+  home.seed_events(&sid, events);
+  let run = &fixture["run"];
+  let ids: Vec<&str> = run["input_event_ids"]
+    .as_array()
+    .expect("the fixture run lists its input ids")
+    .iter()
+    .map(|id| id.as_str().expect("a fixture input id is a string"))
+    .collect();
+  home.launch_run(
+    &sid,
+    run["id"].as_str().expect("the fixture run carries its id"),
+    &ids,
+    run["started_at"].as_str().expect("the fixture run carries its start time"),
+  );
+  (sid, events[0].clone())
+}
+
+/// R3: the reply at 09:52:57 preceded the run start at 09:53:21, so the summon is unanswered and the log's nudge is
+/// the one the rule produces. The audit finds that nudge and posts no second one.
+#[tokio::test]
+async fn replay_r3_nudges_a_summon_whose_reply_preceded_the_run() {
+  let fixture = replay_fixture();
+  let r3 = &fixture["r3"];
+  let home = Home::new();
+  let (sid, summon) = fixture_session(&home, r3).await;
+  let adapter: Arc<dyn ThreadAdapter> = FakeAdapter::with_thread(&[]);
+  let events = r3["events"].as_array().expect("the fixture lists its events");
+  let shared = home.features.store.load_chat_events_shared_sync(&sid).expect("the chat log reads");
+
+  let receipts = reply_order::turn_receipts(&home.features.store, &sid, &fixture_done(events), shared.as_ref())
+    .expect("the turn's receipts read");
+  assert_eq!(receipts.len(), 1);
+  assert_eq!(receipts[0].at, UtcDateTime::parse("2026-11-03T09:53:21.751733Z").expect("the fixture time parses"));
+  assert!(!replied(&FAKECHAT, &receipts[0], shared.as_ref()).expect("the reply reads"));
+
+  let acted = deliver_done(&adapter, &home.features, &sid, &fixture_done(events)).await.unwrap();
+
+  assert!(!acted, "the recorded nudge already answers the round");
+  let nudges: Vec<Value> =
+    home.events(&sid).into_iter().filter(|event| event["fakechat"].get("nudge_of").is_some()).collect();
+  assert_eq!(nudges.len(), 1);
+  assert_eq!(nudges[0]["fakechat"]["nudge_of"], summon["id"]);
+  assert_eq!(nudges[0]["id"], json!("06885499-8ede-59b9-b002-2f667e758c38"));
+}
+
+/// R4: the reply at 09:44:57 followed the run start at 09:40:26, so the summon is answered. The round's audit posts
+/// no nudge, and the reply clears the summon's 👀.
+#[tokio::test]
+async fn replay_r4_answers_a_summon_replied_during_the_run_and_clears_its_ack() {
+  let fixture = replay_fixture();
+  let r4 = &fixture["r4"];
+  let home = Home::new();
+  let (sid, summon) = fixture_session(&home, r4).await;
+  let adapter = FakeAdapter::with_thread(&[]);
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+  let events = r4["events"].as_array().expect("the fixture lists its events");
+  let shared = home.features.store.load_chat_events_shared_sync(&sid).expect("the chat log reads");
+
+  let receipts = reply_order::turn_receipts(&home.features.store, &sid, &fixture_done(events), shared.as_ref())
+    .expect("the turn's receipts read");
+  assert_eq!(receipts.len(), 1);
+  assert_eq!(receipts[0].at, UtcDateTime::parse("2026-11-03T09:40:26.064432Z").expect("the fixture time parses"));
+  assert!(replied(&FAKECHAT, &receipts[0], shared.as_ref()).expect("the reply reads"));
+
+  let acted = deliver_done(&dyn_adapter, &home.features, &sid, &fixture_done(events)).await.unwrap();
+
+  assert!(!acted);
+  assert!(home.events(&sid).iter().all(|event| event["fakechat"].get("nudge_of").is_none()));
+  post_reply_with_request_id(&dyn_adapter, &home.features, &sid, "The upstream returned 503.", Some("replay-reply"))
+    .await
+    .expect("the thread reply posts");
+  settle(|| !adapter.removed.lock().expect("the removal log is never poisoned").is_empty()).await;
+  let block = summon["fakechat"].clone();
+  assert_eq!(adapter.removed.lock().expect("the removal log is never poisoned").clone(), [block]);
 }
 
 #[tokio::test]

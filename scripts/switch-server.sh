@@ -62,7 +62,17 @@
 # CHARLIEBOT_SWITCH_DISK_SAMPLE_S replace the disk preflight's 40 MB/s threshold, 15 min bound and 10 s sample window;
 # CHARLIEBOT_SWITCH_DISKSTATS, CHARLIEBOT_SWITCH_MOUNTINFO, CHARLIEBOT_SWITCH_CGROUP_ROOT and CHARLIEBOT_SWITCH_PROC
 # replace the /proc and /sys/fs/cgroup paths the disk preflight reads, so its tests inject their own.
+# CHARLIEBOT_SWITCH_LAB_MARKS=1 logs a lab_mark line at each stage boundary (the preflight, the disk gate, the stop and
+# the start) for a lab that times the flow; a switch without the variable logs no such lab_mark line.
 # CHARLIEBOT_SYSTEMD_USER_DIR replaces the user manager's unit directory the slice units install into.
+#
+# The host release lock: one lock file per host, outside the repository, named once by scripts/release/lock.sh. The
+# lock covers the switch from its preflight to its exit, the restore path included, so a release and a switch of one
+# host run one at a time. A caller that finds the lock held exits 1 at once and prints the holder's record — script,
+# commit, pid and start time — read from beside the lock; a holder that died left the lock free, because the lock is
+# `flock` on an open descriptor. A switch that the release flow starts while scripts/release.sh still holds the lock
+# — the rehearsal's switches do — inherits the flow's descriptor through CHARLIEBOT_RELEASE_LOCK_FD and takes
+# nothing of its own, so it does not deadlock on its caller's lock.
 #
 # The disk preflight reads files only. It samples the root disk's read rate and waits while the rate stays above the
 # threshold, up to the bound, logging why it waits. A quiet disk proceeds at once. On timeout the switch exits 1 with
@@ -91,6 +101,9 @@ REPO_ROOT="${CHARLIEBOT_REPO_ROOT:-$SCRIPT_DIR/..}"
 }
 REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
 export CHARLIEBOT_REPO_ROOT="$REPO_ROOT"
+# The host release lock comes from scripts/release/lock.sh, the one definition: the detached run below takes the
+# lock, and a sourced copy reaches none of it.
+. "$SCRIPT_DIR/release/lock.sh"
 # The slice-unit install this switch calls. switch_forward points this at a copy outside the checkout, because the
 # clone moves to a rollback target whose checkout may predate the owner.
 SLICE_INSTALL="$SCRIPT_DIR/install-slice-units.sh"
@@ -150,6 +163,13 @@ done
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') switch: $*"; }
 fail() { log "preflight failed: $*"; exit 1; }
+
+# lab_mark NAME: one timestamped stage boundary for the release lab, which sets CHARLIEBOT_SWITCH_LAB_MARKS to time the
+# lab_mark points: the preflight, the disk gate, the stop and the start. A switch without the variable logs no lab_mark.
+lab_mark() {
+  [ "${CHARLIEBOT_SWITCH_LAB_MARKS:-0}" = 1 ] || return 0
+  log "lab_mark=$1 at=$(date +%s%3N)"
+}
 
 RELEASE_DIR="$RELEASES_DIR/$TARGET_SHA"
 HELPER_BIN=""   # the release's `charliebot`, chosen by helper_binary below
@@ -1099,27 +1119,24 @@ report_heavy_readers() {
 }
 
 # wait_for_quiet_disk: samples the root disk's read rate and returns once it is at or below DISK_QUIET_MB, up to
-# DISK_WAIT_S. It logs every sample, so the operator sees why a switch waits. On timeout it reports the heaviest
-# session cgroups and processes over the last sample and returns 1; no server is touched here.
+# DISK_WAIT_S. It logs every sample, so the operator sees why a switch waits. The /proc and session-cgroup walks serve
+# only the heavy-reader report, so they run on the timeout path alone: a gate that finds the disk quiet costs one disk
+# sample and no walk. On timeout it takes one more sample window with the walks around it, reports the heaviest session
+# cgroups and processes over that window, and returns 1; no server is touched here.
 wait_for_quiet_disk() {
-  local dir end rate sample_rc
+  local dir end rate
   dir="$(mktemp -d)" || {
     log "cannot make a work directory for the disk preflight"
     return 1
   }
   end=$((SECONDS + DISK_WAIT_S))
   while :; do
-    session_rbytes_table > "$dir/cgroups.before" || true
-    process_io_table > "$dir/procs.before" || true
     rate="$(disk_read_rate_mb)"
-    sample_rc=$?
-    if [ "$sample_rc" -ne 0 ]; then
+    if [ "$?" -ne 0 ]; then
       log "cannot read the root disk's read rate from $DISKSTATS"
       rm -rf "$dir"
       return 1
     fi
-    session_rbytes_table > "$dir/cgroups.after" || true
-    process_io_table > "$dir/procs.after" || true
     if [ "$rate" -le "$DISK_QUIET_MB" ]; then
       log "root disk read ${rate} MB/s over ${DISK_SAMPLE_S}s, at or below ${DISK_QUIET_MB} MB/s; proceeding"
       rm -rf "$dir"
@@ -1128,6 +1145,17 @@ wait_for_quiet_disk() {
     log "waiting for the root disk: ${rate} MB/s read over ${DISK_SAMPLE_S}s, above ${DISK_QUIET_MB} MB/s;" \
       "up to ${DISK_WAIT_S}s"
     if [ "$SECONDS" -ge "$end" ]; then
+      log "the root disk read above ${DISK_QUIET_MB} MB/s for ${DISK_WAIT_S}s;" \
+        "one more sample window names the heaviest readers"
+      session_rbytes_table > "$dir/cgroups.before" || true
+      process_io_table > "$dir/procs.before" || true
+      if ! disk_read_rate_mb > /dev/null; then
+        log "cannot read the root disk's read rate from $DISKSTATS"
+        rm -rf "$dir"
+        return 1
+      fi
+      session_rbytes_table > "$dir/cgroups.after" || true
+      process_io_table > "$dir/procs.after" || true
       report_heavy_readers "$dir"
       rm -rf "$dir"
       return 1
@@ -1295,9 +1323,11 @@ preflight() {
   fi
   PANE_PID="$(tm display-message -p -t "$PANE" '#{pane_pid}' 2> /dev/null)" || fail "no tmux pane $PANE"
   WANT="rust $TARGET_SHA"
+  lab_mark gate_start
   wait_for_quiet_disk \
     || fail "the root disk read stayed above ${DISK_QUIET_MB} MB/s within ${DISK_WAIT_S}s;" \
       "the heaviest readers are the lines above"
+  lab_mark gate_end
   # The last step: the target and the old release must both accept the home as it stands, because a rollback starts
   # the old release, and the config may have changed since the old server started.
   local refusal
@@ -1446,12 +1476,16 @@ switch_forward() {
   [ -z "$BLOCKERS" ] || die "live work appeared after the preflight: ${BLOCKERS//$'\n'/; }"
   log "recorded $(wc -l < "$RUNS_FILE") live run(s) in $RUNS_FILE"
   record_session_reads "before the old server stops" || true
+  lab_mark stop_start
   stop_old || die "the old server did not stop"
+  lab_mark stop_end
   git -C "$REPO_ROOT" reset --keep -q "$TARGET_SHA" || die "git reset --keep $TARGET_SHA failed"
   set_current "$TARGET_SHA" || die "could not point current at $TARGET_SHA"
   install_slice_units "$TARGET_SHA" || die "the slice units of $TARGET_SHA did not install"
+  lab_mark start_start
   start_in_pane || die "could not type the launcher into pane $PANE"
   wait_ready || die "the new server did not reach server_ready"
+  lab_mark start_end
   record_session_reads "after the new server is ready" || true
   serving "$WANT" || die "the new server failed its readback"
   adopted || die "a live run was not adopted"
@@ -1471,16 +1505,17 @@ run_detached() {
   LOG=$DETACHED_LOG
   RUNS_FILE="${LOG%.log}.runs"
   WORK="$(mktemp -d)"
-  trap 'rm -rf "$WORK"' EXIT
-  exec 9> "$LOG_DIR/switch.lock"
-  flock -n 9 || {
-    log "another switch holds $LOG_DIR/switch.lock"
-    exit 1
-  }
+  trap 'rm -rf "$WORK"; release_lock_release' EXIT
+  release_lock_take switch-server.sh "$TARGET_SHA" || exit 1
+  if [ -n "$CHARLIEBOT_RELEASE_LOCK_FD" ] && [ "$RELEASE_LOCK_MINE" = 0 ]; then
+    log "the release flow holds the host release lock $RELEASE_LOCK_FILE on descriptor $CHARLIEBOT_RELEASE_LOCK_FD"
+  fi
   RELEASES_REAL="$(readlink -f "$RELEASES_DIR")"
   OLD_STOPPED=0
   NEW_STARTED=0
+  lab_mark switch_start
   preflight
+  lab_mark preflight_end
   switch_forward
 }
 

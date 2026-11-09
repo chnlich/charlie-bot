@@ -1,7 +1,8 @@
 // Client timing telemetry covers every kind: a session switch, a message send, a socket disconnect
-// episode, a page load, one tab-minute of background traffic. Each kind goes to the server's
-// client-event log as one fire-and-forget POST. Fire-and-forget by design: never awaited, failures
-// dropped, so the telemetry channel never delays a request the user waits on.
+// episode and the socket's per-subscription catch-ups, a page load, one tab-minute of background
+// traffic. Each kind goes to the server's client-event log as one fire-and-forget POST.
+// Fire-and-forget by design: never awaited, failures dropped, so the telemetry channel never
+// delays a request the user waits on.
 (function() {
   const CLIENT_EVENTS_URL = '/api/diag/client-events';
 
@@ -108,11 +109,16 @@
   });
 
   // --- socket disconnect episodes ---------------------------------------------
-  // websocket.js announces the close (with its cause), the successful reopen
-  // (with the reconnect attempt count) and the replay's completion (with the
-  // replay's bytes). One episode posts at catchup_complete; an episode still
-  // open at the next close posts with what it gathered, so a page that never
-  // reaches catchup_complete still reports its disconnect.
+  // websocket.js announces the close (always a network close now: a switch keeps
+  // the socket and rides a subscribe frame instead of closing it), the successful
+  // reopen (with the reconnect attempt count) and each replay's completion (with
+  // the subscription number, the session it served and the replay's bytes).
+  // Each replay completion posts its own record at once, so a page whose sockets
+  // stay open reports every subscription's catch-up. The reconnect episode also
+  // posts as one record at its replay's catchup_complete — the disconnect, the
+  // reconnect wait and the replay it took; an episode still open at the next
+  // close posts with what it gathered, so a page that never reaches
+  // catchup_complete still reports its disconnect.
   let socketEpisode = null;
 
   document.addEventListener('charliebot:client-socket-close', (event) => {
@@ -135,10 +141,22 @@
   });
 
   document.addEventListener('charliebot:client-socket-catchup', (event) => {
+    const detail = event.detail;
     markCatchup();
-    if (!socketEpisode || socketEpisode.reconnect_at === null) return;
+    postClientEvent('socket', {
+      disconnect_at: null,
+      cause: null,
+      close_code: null,
+      reconnect_at: null,
+      reconnect_count: null,
+      subscription: detail.subscription,
+      session_id: detail.session_id,
+      catchup_at: new Date().toISOString(),
+      catchup_bytes: detail.bytes,
+    });
+    if (!socketEpisode || socketEpisode.reconnect_at === null || detail.subscription !== 0) return;
     socketEpisode.catchup_at = new Date().toISOString();
-    socketEpisode.catchup_bytes = event.detail.bytes;
+    socketEpisode.catchup_bytes = detail.bytes;
     postSocket(socketEpisode);
     socketEpisode = null;
   });

@@ -163,9 +163,10 @@ const planPanel = (() => {
 
   // The address shape every plan-page URL this panel builds shares: the
   // /absolute_filepath URL, then the ?diff= query ahead of the fragment (see
-  // encodeDiffFile), then the #cbsession= fragment. withPanelMarker appends
-  // `&cbpanel=1` inside the fragment, the marker artifact-comments.js's
-  // framed guard reads. urlKind names the caller in the SESSIONS_ROOT error.
+  // encodeDiffFile), then the #cbsession= fragment. The withPanelMarker flag
+  // appends `&cbpanel=1` inside the fragment; the framed guard in
+  // artifact-comments.js reads that marker. The urlKind parameter names the
+  // caller in the SESSIONS_ROOT error.
   function _planPageUrl(file, sessionId, sessionsRoot, diffFile, urlKind, withPanelMarker) {
     var url = _filesUrl(file, sessionId, sessionsRoot, urlKind);
     if (diffFile) url += '?diff=' + encodeDiffFile(diffFile);
@@ -461,7 +462,7 @@ const planPanel = (() => {
   }
 
   // Second writer of the cached registry, complementing _commitRegistry: this
-  // one only *clears*, and it never writes _loadedSessionId—leaving the
+  // one only *clears*, and it never writes _loadedSessionId. Leaving the
   // session mismatch in place is what makes the next onTabShown retry.
   function _resetForSessionChange() {
     _registry = {plans: []};
@@ -799,13 +800,12 @@ registerTab({
   onHide() { document.getElementById('tab-plans').classList.add('hidden'); },
 });
 
-// The panel re-fetches on a plan_updated event and drops its selection when
-// the active session changes. On a socket connect, only a network loss stales
-// the registry. A page-driven reconnect (a switch) closed its own socket after
-// the switch's registry fetch started, so that fetch's data is current.
-// Marking stale here would refetch it within the same switch.
+// The page's plan-events part subscribes to plan_updated and calls planPanel.onPlanUpdated, so an update raises the
+// tab's dot before this script loads. The panel drops its selection when the active session changes. On a socket
+// connect, only a network loss stales the registry. A page-driven reconnect (a switch) closed its own socket after
+// the switch's registry fetch started, so that fetch's data is current. Marking stale here would refetch it within
+// the same switch.
 registerWsConnectHandler((connect) => {
   if (connect.afterNetworkLoss) planPanel.invalidate();
 });
-registerWsMessageHandler('plan_updated', (ev) => planPanel.onPlanUpdated(ev.plan_id), {advancesCursor: true});
 document.addEventListener('charliebot:active-session-changed', () => planPanel.onActiveSessionChanged());

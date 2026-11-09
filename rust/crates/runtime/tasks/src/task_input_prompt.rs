@@ -92,18 +92,18 @@ mod tests {
   }
 
   #[test]
-  fn each_user_message_of_a_web_session_opens_with_its_tag_line() {
+  fn each_user_message_of_a_web_session_opens_with_the_user_message_line() {
     let home = tempfile::tempdir().unwrap();
     let meta = SessionMetadata::new("session", "Web", TaskProfile::Manager);
     let events = [user_message("909c6592-first", "first"), user_message("a1b2c3d4-second", "second")];
 
     let (content, _) = compose_input_prompt(&features(&home), &meta, &events, &Map::new()).unwrap();
 
-    assert_eq!(content, "[User message 909c6592]\nfirst\n\n[User message a1b2c3d4]\nsecond");
+    assert_eq!(content, "[User message]\nfirst\n\n[User message]\nsecond");
   }
 
   #[test]
-  fn a_dictated_web_message_carries_the_voice_note_then_the_tag_line() {
+  fn a_dictated_web_message_carries_the_voice_note_then_the_user_message_line() {
     let home = tempfile::tempdir().unwrap();
     let meta = SessionMetadata::new("session", "Web", TaskProfile::Manager);
     let dictated = ChatEvent::from(json!({
@@ -116,7 +116,7 @@ mod tests {
     let (content, _) = compose_input_prompt(&features(&home), &meta, &[dictated], &Map::new()).unwrap();
 
     let mut lines = content.lines();
-    assert_eq!(lines.next(), Some("[User message 909c6592]"));
+    assert_eq!(lines.next(), Some("[User message]"));
     assert!(lines.next().is_some_and(|note| note.starts_with("[Voice input: ")), "{content}");
     assert_eq!(lines.next(), Some("the dictated text"));
     assert_eq!(lines.next(), None);

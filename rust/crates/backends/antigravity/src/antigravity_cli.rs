@@ -13,7 +13,8 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 
 use charliebot_agents::cli_base::{
-  SKIP_PERMISSIONS_FLAG, framed_prompt, int_field, prepend_path_dir, strip_google_api_keys, truthy,
+  CapturedEvents, SKIP_PERMISSIONS_FLAG, finished, framed_prompt, int_field, prepend_path_dir, strip_google_api_keys,
+  truthy,
 };
 use charliebot_agents::event_builders::{make_error_event, make_result_event, make_text_event};
 
@@ -196,18 +197,6 @@ impl AgentBackend for AntigravityBackend {
   fn finish_final_stdout(&mut self, stdout: &str, stderr: &str, exit_code: i32) -> FinalStdoutOutcome {
     self.finish(stdout, stderr, exit_code)
   }
-}
-
-struct CapturedEvents;
-
-impl Translate for CapturedEvents {
-  fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
-    Ok(vec![raw])
-  }
-}
-
-fn finished(events: Vec<Value>, exit_code: i32, guard_error: Option<String>) -> FinalStdoutOutcome {
-  FinalStdoutOutcome { events, exit_code, guard_error }
 }
 
 /// An `agy` JSON envelope: an object whose `status` is a string. The other fields stay in `fields`.

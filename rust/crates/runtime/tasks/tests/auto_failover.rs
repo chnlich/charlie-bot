@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use charliebot_agents::backend_availability;
-use charliebot_core::config::{PoolBilling, PoolConfig, PoolMember, PoolRule};
+use charliebot_core::config::{BackendOption, PoolBilling, PoolConfig, PoolMember, PoolRule};
 use charliebot_core::event_types;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind};
@@ -14,7 +14,7 @@ use charliebot_tasks::handoff;
 use charliebot_tasks::master_queue::PersistAndBroadcastFn;
 use charliebot_tasks::master_run::{FINISH_ERROR_MESSAGE, FINISH_QUOTA_EXHAUSTED};
 use charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME;
-use charliebot_tasks::test_support::recovery_support::{Stack, script_option, synthetic_run};
+use charliebot_tasks::test_support::recovery_support::{BACKEND_TYPE, Stack, script_option, synthetic_run};
 use serde_json::{Map, Value, json};
 
 const MEMBER_A: &str = "member-a";
@@ -25,15 +25,17 @@ const QUOTA_ERROR: &str = "API Error: 402 Insufficient Balance";
 /// The id of the priority pool that the Auto sessions of these tests run on.
 const AUTO_POOL_ID: &str = "auto";
 
+/// A scripted option billed as a subscription, the billing the Auto pool's members have.
+fn subscription(id: &str, script: &str) -> BackendOption {
+  BackendOption { billing: Some(PoolBilling::Subscription), ..script_option(id, script) }
+}
+
 fn auto_set() -> PoolConfig {
   PoolConfig {
     id: AUTO_POOL_ID.to_string(),
     label: "Auto".to_string(),
     rule: PoolRule::Priority,
-    members: vec![
-      PoolMember { backend: MEMBER_A.to_string(), billing: Some(PoolBilling::Subscription) },
-      PoolMember { backend: MEMBER_B.to_string(), billing: Some(PoolBilling::Subscription) },
-    ],
+    members: vec![PoolMember { backend: MEMBER_A.to_string() }, PoolMember { backend: MEMBER_B.to_string() }],
   }
 }
 
@@ -73,7 +75,7 @@ fn success_script() -> String {
 
 async fn auto_stack(script_a: &str, script_b: &str) -> anyhow::Result<Stack> {
   let stack = Stack::start_with_auto(
-    vec![script_option(MEMBER_A, script_a), script_option(MEMBER_B, script_b)],
+    vec![subscription(MEMBER_A, script_a), subscription(MEMBER_B, script_b)],
     Vec::new(),
     auto_set(),
   )
@@ -218,6 +220,14 @@ async fn a_quota_end_continues_the_turn_on_the_next_member_with_the_switch_note(
   assert!(prompt.contains(&archives.display().to_string()), "{prompt}");
   assert!(prompt.contains(&failed_run_dir.display().to_string()), "{prompt}");
   assert!(prompt.contains("pool 'auto' switched from member-a to member-b"), "{prompt}");
+  // A manager's retry carries the manager note: the task record's goal, the orientation order and the sort.
+  assert!(prompt.contains("The task record's goal is: Auto session"), "{prompt}");
+  assert!(
+    prompt.contains("get oriented from your session status, then your child tasks, then the last two turns"),
+    "{prompt}"
+  );
+  assert!(prompt.contains(&format!("Run `charliebot session tree --root {}`", session.id)), "{prompt}");
+  assert!(prompt.contains("Then sort the parts of your task"), "{prompt}");
   assert!(prompt.contains("Handoff summary:"), "{prompt}");
   assert!(prompt.contains("goal: Auto session"), "{prompt}");
   assert!(prompt.contains("done (1):"), "{prompt}");
@@ -303,6 +313,65 @@ async fn an_exhausted_set_ends_the_turn_with_one_error_listing_every_member() ->
   Ok(())
 }
 
+/// Acceptance ③'s manager half: a transient error (5xx) ends the manager turn on its member with the error; the turn
+/// switches no member, records none out, and starts no retry.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_transient_error_ends_the_turn_without_switching_members() -> anyhow::Result<()> {
+  let failure = scripted_process(
+    &[
+      json!({"type":"assistant","message":{"content":[{"type":"text","text":"I tried."}]}}),
+      json!({"type":"result","subtype":"error","is_error":true,"result":"API Error: 500 Internal Server Error"}),
+    ],
+    1,
+  );
+  let stack = auto_stack(&failure, &success_script()).await?;
+  let session = auto_session(&stack, "auto-transient").await?;
+  dispatch_turn(&stack, &session.id).await?;
+  let runs = settle(&stack, &session.id).await?;
+
+  assert_eq!(runs.len(), 1, "a transient error starts no retry: {runs:?}");
+  assert_eq!(runs[0].backend.as_deref(), Some(MEMBER_A), "the turn stays on its member");
+  assert!(quota_failovers(&stack, &session.id)?.is_empty(), "a transient error switches no member");
+  let errors = stack
+    .run_events(&session.id)?
+    .iter()
+    .map(|event| event.to_value())
+    .filter(|event| event["type"] == event_types::ASSISTANT_ERROR)
+    .collect::<Vec<_>>();
+  assert_eq!(errors.len(), 1, "the turn ends with one error: {errors:?}");
+  let content = errors[0]["content"].as_str().expect("the error carries text");
+  assert!(content.contains("500"), "the error is the run's own: {content}");
+  let availability = backend_availability::backend_availability(&stack.features)?;
+  assert!(availability.out_until(MEMBER_A).is_none(), "a transient error records no member out");
+  let stored = stack.store().read_metadata_fresh(&session.id)?.expect("the session is recorded");
+  assert_eq!(stored.extra(charliebot_agents::model_pool::POOL_MEMBER_FIELD), Some(&json!(MEMBER_A)));
+  Ok(())
+}
+
+/// The loader reads the pool from `config.yaml`: the payg member is listed first, so the turn runs on the subscription
+/// member only because the option's billing says so.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_priority_pool_read_from_the_config_file_runs_on_its_subscription_member() -> anyhow::Result<()> {
+  let backends = json!({
+    "options": [
+      {"id": MEMBER_A, "label": "Payg", "type": BACKEND_TYPE, "model": "payg-model", "billing": "payg",
+       "script": success_script()},
+      {"id": MEMBER_B, "label": "Subscription", "type": BACKEND_TYPE, "model": "subscription-model",
+       "billing": "subscription", "script": success_script()},
+    ],
+    "pools": [{"id": AUTO_POOL_ID, "label": "Auto", "rule": "priority", "members": [MEMBER_A, MEMBER_B]}],
+  });
+  let stack = Stack::start_with_backends_file(&backends).await?;
+  stack.write_access_key()?;
+  let session = auto_session(&stack, "auto-from-file").await?;
+  dispatch_turn(&stack, &session.id).await?;
+  let runs = settle(&stack, &session.id).await?;
+  assert_eq!(runs[0].backend.as_deref(), Some(MEMBER_B), "the subscription member runs the turn: {runs:?}");
+  Ok(())
+}
+
 /// Test ④: a quota end the live process never reports — the turn drains after a restart — switches the same way.
 #[tokio::test]
 #[ignore = "integration"]
@@ -345,7 +414,7 @@ async fn a_drained_quota_end_switches_like_a_live_turn() -> anyhow::Result<()> {
 
   let next = Stack::start_on_home_with_auto(
     home,
-    vec![script_option(MEMBER_A, "exit 0"), script_option(MEMBER_B, &success_script())],
+    vec![subscription(MEMBER_A, "exit 0"), subscription(MEMBER_B, &success_script())],
     Vec::new(),
     auto_set(),
   )

@@ -638,7 +638,8 @@ fn check_quota(fx: &Fixture, cases: &[Value], python: &Value, failures: &mut Vec
   for (case, python_case) in cases.iter().zip(expected) {
     let account = CodexQuotaAccount::new(Path::new(text(&case["codex_home"])));
     let fetch = runtime.block_on(account.fetch()).expect("the rollout listing succeeds");
-    let marked = fetch.as_ref().map(|entry| account.mark_expired(entry, UtcDateTime::parse(&rfc3339(fx.now)).unwrap()));
+    let marked =
+      fetch.as_ref().map(|entry| account.mark_expired(entry, UtcDateTime::parse(&rfc3339(fx.now)).unwrap()).unwrap());
     let rust = json!({
       "id": case["id"],
       "fetch": without_fetched_at(fetch.as_ref()),
@@ -670,6 +671,7 @@ fn option_of(case: &Value) -> BackendOption {
     label: "Codex".to_string(),
     model: text(&case["model"]).to_string(),
     prompt_overlay: None,
+    billing: None,
     backend_type: "codex".to_string(),
     type_fields: serde_yaml::from_value::<Mapping>(serde_yaml::to_value(&case["type_fields"]).unwrap()).unwrap(),
   }

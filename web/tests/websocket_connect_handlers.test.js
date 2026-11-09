@@ -23,13 +23,15 @@ test('every connect handler sees the network-loss flag, whichever handler clears
   assert.deepEqual(seen, [false, true]);
 });
 
-// The socket replays no task_tree_changed frame, so an open after a close (a session switch closes and reopens the
-// page's socket) and an open after a view without a socket both reload the list. A page load's own first socket
+// The socket replays no task_tree_changed frame, so an open after a close (only a network close closes the page's
+// socket now) and an open after a view without a socket both reload the list. A page load's own first socket
 // reloads nothing: the page carried the server's snapshot.
 test('an open after a close or a session-less view reloads the list', () => {
   const reloads = [];
+  const timers = [];
   const {context, FakeWebSocket} = loadWebsocketContext({
     SESSION_ID: 'session-a',
+    setTimeout: (fn) => { timers.push(fn); return timers.length; },
     switchSidebarFilter: (filter) => reloads.push(filter),
   });
 
@@ -37,8 +39,8 @@ test('an open after a close or a session-less view reloads the list', () => {
   FakeWebSocket.instances[0].emitOpen();
   assert.deepEqual(reloads, [], "a page load's first socket reloads nothing");
 
-  context.disconnectWS();
-  context.connectWS();
+  FakeWebSocket.instances[0].emitClose({code: 1006});
+  timers[0]();
   FakeWebSocket.instances[1].emitOpen();
   assert.deepEqual(reloads, ['all'], 'a reopen reloads the list the closed socket could have changed');
 
@@ -48,7 +50,6 @@ test('an open after a close or a session-less view reloads the list', () => {
   assert.deepEqual(reloads, ['all', 'all'], 'a socket replaced without a close event reloads the list too');
 
   context.SESSION_ID = null;
-  context.disconnectWS();
   context.connectWS();
   assert.equal(FakeWebSocket.instances.length, 3, 'a view without a session opens no socket');
   context.SESSION_ID = 'session-b';

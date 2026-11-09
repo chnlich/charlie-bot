@@ -10,12 +10,13 @@ anyhow.workspace = true
 charliebot-agents.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
+charliebot-store.workspace = true
+futures-util.workspace = true
 regex.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
-charliebot-store.workspace = true
 tempfile.workspace = true
 time.workspace = true
-tokio.workspace = true

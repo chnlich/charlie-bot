@@ -16,8 +16,7 @@ shutdown and re-attachment into server lifespan.
 - `MasterResumeRequest` and its fields
 - `MasterQueue::run_message`
 - `MasterQueue::enqueue_master_resume`
-- `MasterQueue::queued_user_event_ids` and `master_queue::queued_user_event_ids`
-- `MasterQueue::running_user_event_ids` and `master_state::running_user_event_ids`
+- `MasterQueue::session_is_busy` and `master_queue::session_is_busy`
 - `MasterQueue::shutdown`, which cancels the consumers at server stop
 - `TaskRunBinding` and its fields
 - `MasterResumeRecord` and its fields
@@ -40,9 +39,11 @@ shutdown and re-attachment into server lifespan.
 - `review::worker_error_from_events_log`
 - `review::extract_review_context`
 - `review::select_reviewer_backend`
+- `review::ReviewScope`
 - `review::ReviewerBackendSelection`
 - `task_sessions::create_retry`
-- `session_anchors::context_reset_note` and `backend_switch_reset_reason`
+- `session_anchors::manager_context_reset_note` and `manager_switch_reset_note`
+- `session_anchors::worker_switch_reset_note` and `backend_switch_reset_reason`
 - `execution::LaunchSettlement`
 - `execution::TaskExecutionAdapter` and `TaskExecutionAdapter::new`
 - `TaskExecutionAdapter::take_quota_failure`

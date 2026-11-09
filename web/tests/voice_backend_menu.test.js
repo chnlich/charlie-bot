@@ -9,6 +9,9 @@ const vm = require('node:vm');
 
 const {readPackageStatic} = require('./read_static');
 
+const VOICE_EVENTS_JS = readPackageStatic('features', 'voice', 'voice-events.js');
+const VOICE_INPUT_JS = readPackageStatic('features', 'voice', 'voice-input.js');
+
 const BACKENDS = [
   {id: 'batch', label: 'Batch backend', livePartials: false, unavailableReason: null},
   {id: 'gemini', label: 'Gemini 3.5 Transcribe Live', livePartials: true, unavailableReason: null},
@@ -77,12 +80,18 @@ function buildHarness({stored = null, defaultBackend = 'batch', backends = BACKE
     Chat: {registerInputMode() {}},
     VOICE_BACKENDS: backends,
     VOICE_DEFAULT_BACKEND: defaultBackend,
+    // The page's loader: the harness has already run the recording module, so
+    // a lazy click resolves without fetching.
+    loadPageScripts: () => Promise.resolve(),
     autoResize() {},
     saveDraft() {},
     window: {innerWidth: 1024, location: {href: ''}, addEventListener() {}, removeEventListener() {}},
   };
   vm.createContext(sandbox);
-  vm.runInContext(readPackageStatic('features', 'voice', 'voice-input.js'), sandbox, {filename: 'voice-input.js'});
+  // Page order: the voice-events part registers the badge, the mic title and
+  // the ⋯ entry, and the recording module loads after it.
+  vm.runInContext(VOICE_EVENTS_JS, sandbox, {filename: 'voice-events.js'});
+  vm.runInContext(VOICE_INPUT_JS, sandbox, {filename: 'voice-input.js'});
 
   // Open the menu and hand back its backend entry rows (title row first, then
   // one row per backend).
@@ -153,7 +162,7 @@ test('the caret toggles the menu open and closed', () => {
   assert.ok(!menu.classList.contains('hidden'));
 });
 
-test('the ⋯ menu entry opens the same backend menu and a tap picks a backend', () => {
+test('the ⋯ menu entry opens the same backend menu and a tap picks a backend', async () => {
   const {overflow, menu, rows, storage} = buildHarness();
   const entry = overflow.children.find((child) => child.id === 'voice-backend-menu-entry');
   assert.equal(entry.textContent, 'Voice backend');
@@ -161,6 +170,7 @@ test('the ⋯ menu entry opens the same backend menu and a tap picks a backend',
   menu.classList.add('hidden');
   overflow.classList.add('show');
   entry.onclick();
+  await Promise.resolve(); // the entry loads the recording module before opening
 
   assert.ok(!menu.classList.contains('hidden'));
   assert.ok(!overflow.classList.contains('show'));

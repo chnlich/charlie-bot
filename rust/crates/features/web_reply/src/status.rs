@@ -120,6 +120,25 @@ fn stored_status(meta: &SessionMetadata) -> Result<Option<WebStatus>, WebReplyEr
   }
 }
 
+/// The line a manager reset note carries for the session's stored status Goal, or `None` when it stores none. An
+/// unreadable status is the failure this package raises for it.
+pub fn manager_reset_status_goal_line(meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
+  let status = stored_status(meta).map_err(status_failure)?;
+  Ok(
+    status
+      .and_then(|status| status.goal)
+      .map(|goal| format!("This session's status Goal, as this session last set it, is: {goal}")),
+  )
+}
+
+/// The status error as the failure a caller outside this package reports.
+fn status_failure(error: WebReplyError) -> anyhow::Error {
+  match error {
+    WebReplyError::Refused { detail, .. } => anyhow::anyhow!("{detail}"),
+    WebReplyError::Failed(error) => error,
+  }
+}
+
 /// The JSON error's message without the `: line L column C (char P)` suffix the error text adds.
 fn json_message(error_text: &str) -> &str {
   error_text.rsplit_once(": line ").map_or(error_text, |(msg, _)| msg)

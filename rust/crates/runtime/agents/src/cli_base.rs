@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use charliebot_core::proxy_env::{HTTP_PROXY, HTTPS_PROXY, NO_PROXY};
-use charliebot_registry::backend::Env;
+use charliebot_registry::backend::{Env, FinalStdoutOutcome, Translate};
 use serde_json::{Map, Value};
 
 use crate::one_shot::frame_system_prompt;
@@ -186,6 +186,21 @@ pub fn int_field(fields: &Map<String, Value>, key: &str) -> anyhow::Result<i64> 
     None => Ok(0),
     Some(value) => value.as_i64().with_context(|| format!("event field {key} must be an integer, got {value}")),
   }
+}
+
+/// A translator that passes each raw event through unchanged. Devin's and Antigravity's final-stdout turns and Claude
+/// Code's raw-log turns replay their captured output through it, so no value needs a per-value rewrite.
+pub struct CapturedEvents;
+
+impl Translate for CapturedEvents {
+  fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
+    Ok(vec![raw])
+  }
+}
+
+/// The outcome of a final-stdout turn: the events it emitted, its exit code, and the guard error when one stopped it.
+pub fn finished(events: Vec<Value>, exit_code: i32, guard_error: Option<String>) -> FinalStdoutOutcome {
+  FinalStdoutOutcome { events, exit_code, guard_error }
 }
 
 #[cfg(test)]

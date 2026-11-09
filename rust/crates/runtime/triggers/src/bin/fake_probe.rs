@@ -22,7 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 fn main() {
   let argv: Vec<String> = std::env::args().collect();
   let argv0 = argv.first().expect("the helper always receives argv[0]");
-  let link = PathBuf::from(argv0);
+  let link = resolve_link(argv0);
   let role = link.file_name().expect("argv[0] names the role").to_string_lossy().into_owned();
   let data_path = link.with_file_name("probe.json");
   let body = fs::read_to_string(&data_path)
@@ -33,6 +33,9 @@ fn main() {
     behavior.get(&role).unwrap_or_else(|| panic!("probe behavior {} states no role {role}", data_path.display()));
   let entry = sequence_entry(role_behavior, &link, &role);
   record_invocation(&argv, &link, &role);
+  if role_behavior.get("run_remote").and_then(serde_json::Value::as_bool) == Some(true) {
+    run_remote_command(&argv, &link);
+  }
   let stdout = entry["stdout"].as_str().expect("probe behavior stdout is a string");
   let stdout = stdout.replace("$NOW_NS", &now_epoch_ns());
   let stderr = entry["stderr"].as_str().expect("probe behavior stderr is a string");
@@ -44,6 +47,39 @@ fn main() {
     std::io::stderr().write_all(stderr.as_bytes()).expect("write fake stderr");
   }
   std::process::exit(i32::try_from(exit).expect("probe behavior exit fits i32"));
+}
+
+/// The path of the link this helper was started through. A shell that finds a fake by name on `PATH` passes that
+/// bare name as argv[0], so the link is resolved the way the shell resolved it.
+fn resolve_link(argv0: &str) -> PathBuf {
+  let named = PathBuf::from(argv0);
+  if named.components().count() > 1 {
+    return named;
+  }
+  let paths = std::env::var_os("PATH").expect("a bare program name is found through PATH");
+  std::env::split_paths(&paths)
+    .map(|directory| directory.join(argv0))
+    .find(|candidate| candidate.is_file())
+    .unwrap_or_else(|| panic!("no fake program {argv0} on PATH"))
+}
+
+/// Run the remote command an ssh invocation names in a local `sh`, with the fake programs' directory first on its
+/// `PATH`, so the command's `sacct` is the fake of the same name. The held-session tests run their remote scripts
+/// this way, against real local pids, and exit with the script's status. The remote home is the test's own home,
+/// because a probe writes its end recorder and end file beneath `$HOME`; the runner's real home is no test's to use.
+fn run_remote_command(argv: &[String], link: &Path) -> ! {
+  let command = argv.last().expect("an ssh invocation names a remote command");
+  let bin = link.parent().expect("a fake program sits in the fake bin directory");
+  let remote_home = bin.parent().expect("the fake bin directory sits under the test's own home");
+  let path = std::env::var("PATH").unwrap_or_default();
+  let status = std::process::Command::new("/bin/sh")
+    .arg("-c")
+    .arg(command)
+    .env("PATH", format!("{}:{path}", bin.display()))
+    .env("HOME", remote_home)
+    .status()
+    .expect("run the remote command");
+  std::process::exit(status.code().unwrap_or(1));
 }
 
 /// The answer this invocation gives: the next sequence entry, the last one past the end, or the static answer.

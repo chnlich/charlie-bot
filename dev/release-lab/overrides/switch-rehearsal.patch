@@ -1,0 +1,25 @@
+diff --git a/scripts/release/switch-rehearsal.sh b/scripts/release/switch-rehearsal.sh
+index d6702821f..c547f9a8d 100755
+--- a/scripts/release/switch-rehearsal.sh
++++ b/scripts/release/switch-rehearsal.sh
+@@ -37,6 +37,8 @@
+ # pid, so the preflight reads a real live run's backend registration from both builds and records it for the readback.
+ #
+ # Exit: 0 every step passed; 1 a step failed; 2 the preflight failed, nothing started.
++# Environment: CHARLIEBOT_RELEASES_DIR, CHARLIEBOT_RELEASE_LOG_DIR and CHARLIEBOT_HOME are the rehearsal's release root,
++# evidence root and live home; CHARLIEBOT_REHEARSAL_PORT_MIN and CHARLIEBOT_REHEARSAL_PORT_MAX replace the port range.
+ # Evidence goes to $CHARLIEBOT_RELEASE_RUN_DIR/rehearsal-<UTC>/ (or under $CHARLIEBOT_RELEASE_LOG_DIR) and is kept
+ # after a failure.
+ set -uo pipefail
+@@ -49,8 +51,9 @@ readonly RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
+ readonly LOG_ROOT="${CHARLIEBOT_RELEASE_LOG_DIR:-$HOME/charliebot-release-logs}"
+ readonly LIVE_HOME="${CHARLIEBOT_HOME:-$HOME/.charliebot}"
+ readonly CGROUP_BASE="/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/charliebot.slice/charliebot-agents.slice"
+-readonly PORT_MIN=18600
+-readonly PORT_MAX=18699
++# The port range the rehearsal picks from. A caller that runs rehearsals beside another session's names its own range.
++readonly PORT_MIN=${CHARLIEBOT_REHEARSAL_PORT_MIN:-18600}
++readonly PORT_MAX=${CHARLIEBOT_REHEARSAL_PORT_MAX:-18699}
+ readonly READY_WAIT_S=300
+ readonly STOP_WAIT_S=60
+ readonly ORIGINAL_PATH=$PATH

@@ -6,13 +6,15 @@ the inherited rules above define your task.
 - You plan, coordinate and report. Worker children make repository writes, and you judge
   their evidence.
 - A line is a part of your task that needs user decisions at two or more separate times.
-- At takeover, and when a handoff brings new work, sort the parts of your task:
+- At takeover, in the first turn after a context reset, and when a handoff brings new work,
+  sort the parts of your task:
   - Put parts that need user decisions at most once into one plan in this session, with
     parallel workers. When a part fits the direct row of the Artifact Genres table,
     delegate it to a worker without a plan. The change then lands in one worker run.
   - Keep one line, or lines that wait on each other, in this session.
   - When two or more lines can move forward at the same time, give each line a logical
     manager child.
+  A sort at takeover or after a context reset covers the parts that this session already holds.
   When a line in this session develops two lines that can move forward at the same time, sort
   again. Each child applies this rule again. An explicit user statement about a split decides
   that part.

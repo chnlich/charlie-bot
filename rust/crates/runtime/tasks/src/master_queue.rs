@@ -32,7 +32,9 @@ struct QueueState {
   session_queues: HashMap<String, VecDeque<WorkItem>>,
   session_consumers: HashMap<String, JoinHandle<()>>,
   consumer_cancel: HashMap<String, watch::Sender<bool>>,
-  current_items: HashMap<String, Vec<String>>,
+  /// The sessions whose consumer is running a turn. Only the session key matters: the running turn's input ids live on
+  /// its work item and its `master_done`, not in the queue.
+  current_items: HashSet<String>,
   idle_reservations: HashMap<String, watch::Sender<bool>>,
   running_turns: HashMap<String, Arc<Mutex<SessionMetadata>>>,
   shutdown: bool,
@@ -216,21 +218,18 @@ impl MasterQueue {
     Ok(result)
   }
 
-  pub fn queued_user_event_ids(&self, session_id: &str) -> HashSet<String> {
+  /// Whether the session has a manager turn running or waiting in the queue.
+  pub fn session_is_busy(&self, session_id: &str) -> bool {
     let state = self.state.lock().expect("master queue mutex is not poisoned");
-    let mut ids = state.current_items.get(session_id).into_iter().flatten().cloned().collect::<HashSet<_>>();
-    if let Some(queue) = state.session_queues.get(session_id) {
-      for item in queue {
-        ids.extend(item.user_event_ids.iter().cloned());
-      }
-    }
-    ids
+    state.current_items.contains(session_id)
+      || state.session_queues.get(session_id).is_some_and(|queue| !queue.is_empty())
+      || state.idle_reservations.contains_key(session_id)
   }
 
   /// Reserve an idle-compaction start only while no session turn is running or queued.
   fn reserve_idle_compaction(&self, session_id: &str) -> bool {
     let mut state = self.state.lock().expect("master queue mutex is not poisoned");
-    let busy = state.current_items.contains_key(session_id)
+    let busy = state.current_items.contains(session_id)
       || state.session_queues.get(session_id).is_some_and(|queue| !queue.is_empty())
       || state.idle_reservations.contains_key(session_id);
     if busy {
@@ -265,17 +264,6 @@ impl MasterQueue {
         receiver.changed().await.context("waiting for idle compaction start reservation")?;
       }
     }
-  }
-
-  pub fn running_user_event_ids(&self, session_id: &str) -> Vec<String> {
-    self
-      .state
-      .lock()
-      .expect("master queue mutex is not poisoned")
-      .current_items
-      .get(session_id)
-      .cloned()
-      .unwrap_or_default()
   }
 
   /// Cancel every per-session consumer at server stop.
@@ -334,7 +322,7 @@ impl MasterQueue {
         let mut state = self.state.lock().expect("master queue mutex is not poisoned");
         match state.session_queues.get_mut(&session_id).and_then(VecDeque::pop_front) {
           Some(item) => {
-            state.current_items.insert(session_id.clone(), item.user_event_ids.clone());
+            state.current_items.insert(session_id.clone());
             state.running_turns.insert(session_id.clone(), Arc::clone(&item.session_meta));
             last_turn = Some((item.callbacks.clone(), item.auto_trigger));
             item
@@ -347,7 +335,7 @@ impl MasterQueue {
             let mut state = self.state.lock().expect("master queue mutex is not poisoned");
             match state.session_queues.get_mut(&session_id).and_then(VecDeque::pop_front) {
               Some(item) => {
-                state.current_items.insert(session_id.clone(), item.user_event_ids.clone());
+                state.current_items.insert(session_id.clone());
                 state.running_turns.insert(session_id.clone(), Arc::clone(&item.session_meta));
                 last_turn = Some((item.callbacks.clone(), item.auto_trigger));
                 item
@@ -444,7 +432,7 @@ impl MasterQueue {
     refresh_anchors_from_disk(item, last_cc_session_id, last_account_label)?;
     let tracking: Arc<dyn RunTracking> = self.clone();
     let mut result = if item.resume_record.is_some() {
-      master_run::resume_cc(Arc::clone(&tracking), item).await?
+      master_run::resume_cc(item).await?
     } else {
       master_run::run_cc(tracking, item).await?
     };
@@ -525,6 +513,7 @@ impl MasterQueue {
     };
     let mut done_event = charliebot_agents::event_builders::make_master_done_event(result.exit_code, still_thinking);
     let done_object = done_event.as_object_mut().expect("master_done builder returns an object");
+    done_object.insert("run_id".to_string(), json!(item.task_run.run_id.clone()));
     if !item.user_event_ids.is_empty() {
       done_object.insert(event_types::INPUT_EVENT_IDS.to_string(), json!(item.user_event_ids));
     }
@@ -653,7 +642,7 @@ impl IdleStartGate for QueueIdleStartGate {
   }
 }
 
-/// The queue's run tracking, as the live turn and delivery modules read it.
+/// The queue's run tracking, as the live turn module reads it.
 impl RunTracking for MasterQueue {
   fn running_turns_except(&self, session_id: &str) -> Vec<SessionMetadata> {
     let metadata = {
@@ -670,31 +659,12 @@ impl RunTracking for MasterQueue {
       .map(|metadata| metadata.lock().expect("running turn metadata mutex is not poisoned").clone())
       .collect()
   }
-
-  /// Append one acknowledged input id to the running session's binding (`running_user_event_ids`).
-  ///
-  /// `midturn_delivery.record_ack`'s append is visible to a web reply posted while the turn runs. This queue stores
-  /// the ids by value, so the ack reaches the reader through this method as well as through the item.
-  fn append_running_user_event_id(&self, session_id: &str, input_id: &str) {
-    let mut state = self.state.lock().expect("master queue mutex is not poisoned");
-    if let Some(ids) = state.current_items.get_mut(session_id)
-      && !ids.iter().any(|id| id == input_id)
-    {
-      ids.push(input_id.to_string());
-    }
-  }
 }
 
-/// Return the event ids queued or running for one session.
-pub fn queued_user_event_ids(features: &FeatureContext, session_id: &str) -> anyhow::Result<HashSet<String>> {
+/// Whether one session has a manager turn running or waiting in its queue.
+pub fn session_is_busy(features: &FeatureContext, session_id: &str) -> anyhow::Result<bool> {
   let queue = features.startup.require::<MasterQueue>()?;
-  Ok(queue.queued_user_event_ids(session_id))
-}
-
-/// Return the current turn's input event ids from the startup-owned `MasterQueue`.
-pub fn running_user_event_ids(features: &FeatureContext, session_id: &str) -> anyhow::Result<Vec<String>> {
-  let queue = features.startup.require::<MasterQueue>()?;
-  Ok(queue.running_user_event_ids(session_id))
+  Ok(queue.session_is_busy(session_id))
 }
 
 fn refresh_anchors_from_disk(
@@ -860,6 +830,7 @@ mod tests {
       label: "Synthetic resolver".to_string(),
       model: "synthetic-model".to_string(),
       prompt_overlay: None,
+      billing: None,
       backend_type: "synthetic_usage".to_string(),
       type_fields: serde_yaml::Mapping::new(),
     });

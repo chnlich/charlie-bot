@@ -100,7 +100,7 @@ impl fmt::Display for ParseError {
 
 impl Error for ParseError {}
 
-/// Tokenize a document as `feed(source)` followed by `close()` on a fresh parser.
+/// The parsed events of a document, tokenized as `feed(source)` followed by `close()` on a fresh parser.
 pub fn parse(source: &str, convert_charrefs: bool) -> Result<Vec<Event>, ParseError> {
   let mut events = Vec::new();
   let mut positions = SourcePositions::new(source);
@@ -116,9 +116,9 @@ pub fn parse(source: &str, convert_charrefs: bool) -> Result<Vec<Event>, ParseEr
   Ok(events)
 }
 
-/// Tokenize a document as `feed(source)` followed by `close()` on a fresh parser, passing each callback to `handler`
-/// as soon as it is emitted. The streamed form carries the byte offset alone; a consumer that needs line and column
-/// positions calls `parse` instead.
+/// The events of a document, passed to `handler` as each is emitted. `feed(source)` followed by `close()` on a
+/// fresh parser tokenizes the document. The streamed form carries the byte offset alone; a consumer that needs
+/// line and column positions calls `parse` instead.
 pub fn parse_with<F>(source: &str, convert_charrefs: bool, handler: F) -> Result<(), ParseError>
 where
   F: FnMut(StreamEvent),

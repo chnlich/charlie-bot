@@ -9,10 +9,12 @@ mod commands;
 mod config;
 mod event;
 mod event_types;
+mod fields;
 mod frame;
 mod listener;
 pub mod metadata;
 mod owners;
+mod package;
 mod service;
 #[cfg(test)]
 mod test_support;
@@ -24,6 +26,8 @@ use std::sync::Arc;
 
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_registry::{Registry, RegistryError};
+use charliebot_store::metadata::SUCCESSOR_SESSION_ID;
+use package::NAME;
 use serde_json::{Map, Value};
 use service::FeishuService;
 use turn_contribution::FeishuTurnContribution;
@@ -35,9 +39,9 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.config_section(config::section())?;
   registry.metadata_slot_with_validator(
     MetadataSlot {
-      owner: "feishu",
+      owner: NAME,
       on: MetadataFile::Session,
-      after: Some("successor_session_id"),
+      after: Some(SUCCESSOR_SESSION_ID),
       fields: [metadata::FEISHU_ORIGIN, metadata::FEISHU_WATERMARK_ID]
         .into_iter()
         .map(|name| SlotField { name, default: Value::Null })
@@ -46,7 +50,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     validate_session_fields,
   )?;
   registry.thread_origin_field(metadata::FEISHU_ORIGIN)?;
-  registry.turn_contribution("feishu", Arc::new(FeishuTurnContribution))
+  registry.turn_contribution(NAME, Arc::new(FeishuTurnContribution))
 }
 
 fn validate_session_fields(values: &mut Map<String, Value>) -> Option<String> {

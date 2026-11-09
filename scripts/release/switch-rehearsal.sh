@@ -37,6 +37,8 @@
 # pid, so the preflight reads a real live run's backend registration from both builds and records it for the readback.
 #
 # Exit: 0 every step passed; 1 a step failed; 2 the preflight failed, nothing started.
+# Environment: CHARLIEBOT_RELEASES_DIR, CHARLIEBOT_RELEASE_LOG_DIR and CHARLIEBOT_HOME are the rehearsal's release root,
+# evidence root and live home; CHARLIEBOT_REHEARSAL_PORT_MIN and CHARLIEBOT_REHEARSAL_PORT_MAX replace the port range.
 # Evidence goes to $CHARLIEBOT_RELEASE_RUN_DIR/rehearsal-<UTC>/ (or under $CHARLIEBOT_RELEASE_LOG_DIR) and is kept
 # after a failure.
 set -uo pipefail
@@ -45,12 +47,16 @@ umask 077
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SOURCE_REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 readonly SWITCH_SOURCE="$SOURCE_REPO/scripts/switch-server.sh"
+# The host release lock: the tmux server and the seeded run below run without its descriptor, and the switches it
+# runs keep it, as the flow that started them does.
+. "$SCRIPT_DIR/lock.sh"
 readonly RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
 readonly LOG_ROOT="${CHARLIEBOT_RELEASE_LOG_DIR:-$HOME/charliebot-release-logs}"
 readonly LIVE_HOME="${CHARLIEBOT_HOME:-$HOME/.charliebot}"
 readonly CGROUP_BASE="/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/charliebot.slice/charliebot-agents.slice"
-readonly PORT_MIN=18600
-readonly PORT_MAX=18699
+# The port range the rehearsal picks from. A caller that runs rehearsals beside another session's names its own range.
+readonly PORT_MIN=${CHARLIEBOT_REHEARSAL_PORT_MIN:-18600}
+readonly PORT_MAX=${CHARLIEBOT_REHEARSAL_PORT_MAX:-18699}
 readonly READY_WAIT_S=300
 readonly STOP_WAIT_S=60
 readonly ORIGINAL_PATH=$PATH
@@ -285,10 +291,12 @@ done
 git -C "$REPO" checkout -q -B main "$OLD_COMMIT" || preflight_fail "check out the old release's commit"
 
 # The switch under test runs from .cutover-switch/ outside the checkout, as a first live switch runs it before the
-# checkout itself carries the new script.
-mkdir -m 700 "$SWITCH_DIR" && cp "$SWITCH_SOURCE" "$SWITCH_SCRIPT" && cp "$SLICE_SOURCE" "$SLICE_INSTALL" \
+# checkout itself carries the new script. The copy sources the release lock beside itself, so the lock definition
+# travels with it.
+mkdir -m 700 "$SWITCH_DIR" "$SWITCH_DIR/release" && cp "$SWITCH_SOURCE" "$SWITCH_SCRIPT" \
+  && cp "$SLICE_SOURCE" "$SLICE_INSTALL" && cp "$SOURCE_REPO/scripts/release/lock.sh" "$SWITCH_DIR/release/lock.sh" \
   && chmod 700 "$SWITCH_SCRIPT" "$SLICE_INSTALL" \
-  || preflight_fail "copy $SWITCH_SOURCE and $SLICE_SOURCE to $SWITCH_DIR"
+  || preflight_fail "copy $SWITCH_SOURCE, $SLICE_SOURCE and the release lock to $SWITCH_DIR"
 log "SWITCH SCRIPT copied to $SWITCH_SCRIPT, with its slice install at $SLICE_INSTALL"
 
 # The isolated releases: a copy of the old release and the new release, both verified, with current on the old one.
@@ -426,7 +434,8 @@ check_config new "$NEW_COMMIT" "$RELEASES/$NEW_COMMIT" "$NEW_CHECKOUT"
 
 SOCK="rehearsal-$$"
 export CHARLIEBOT_TMUX_SOCKET="$SOCK"
-tmux -L "$SOCK" new-session -d -s rehearsal -c "$REPO" -x 200 -y 50 || preflight_fail "start the private tmux server"
+( release_lock_detach; exec tmux -L "$SOCK" new-session -d -s rehearsal -c "$REPO" -x 200 -y 50 ) \
+  || preflight_fail "start the private tmux server"
 log "TMUX private socket $SOCK under $TMUX_ROOT"
 
 http_get() {  # http_get PATH OUTPUT: prints the status
@@ -464,7 +473,7 @@ seed_live_run() {
   [ "$status" = 200 ] || fail_step "seeding a live run: creating a session answered $status"
   session="$(helper session-id "$HTTP/seed-session.json")" \
     || fail_step "seeding a live run: the session response has no id"
-  sleep 1800 &
+  ( release_lock_detach; exec sleep 1800 ) &
   pid=$!
   SEED_PIDS+=("$pid")
   disown "$pid"   # the cleanup kills it by pid; the shell keeps no job that would report the kill

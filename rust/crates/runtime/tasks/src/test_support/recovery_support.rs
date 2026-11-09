@@ -39,8 +39,8 @@ use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_agents::model_pool::RotationPositions;
 use charliebot_core::config::{
-  BackendOption, BackendsConfig, CONFIG_D_DIR_NAME, CallClass, CallTarget, CallsConfig, CharlieBotConfig, PathsConfig,
-  PoolConfig, PoolMember, PoolRule, Sections, ServerConfig, TelegramConfig, UiConfig,
+  BackendOption, BackendsConfig, CONFIG_D_DIR_NAME, CONFIG_FILENAME, CallClass, CallTarget, CallsConfig,
+  CharlieBotConfig, PathsConfig, PoolConfig, PoolMember, PoolRule, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::event_types;
@@ -191,6 +191,7 @@ impl Scripts {
       id: id.to_string(),
       label: id.to_string(),
       prompt_overlay: None,
+      billing: None,
       model: format!("{id}-model"),
       backend_type: backend_type.to_string(),
       type_fields,
@@ -378,6 +379,7 @@ pub fn script_option(id: &str, script: &str) -> BackendOption {
     id: id.to_string(),
     label: id.to_string(),
     prompt_overlay: None,
+    billing: None,
     model: format!("{id}-model"),
     backend_type: BACKEND_TYPE.to_string(),
     type_fields,
@@ -397,7 +399,7 @@ pub fn rotation_pools(members: Vec<String>) -> (Vec<PoolConfig>, CallsConfig) {
     id: ROTATION_POOL_ID.to_string(),
     label: "Pool".to_string(),
     rule: PoolRule::Rotate,
-    members: members.into_iter().map(|backend| PoolMember { backend, billing: None }).collect(),
+    members: members.into_iter().map(|backend| PoolMember { backend }).collect(),
   }];
   let calls = [
     CallClass::Worker,
@@ -586,6 +588,18 @@ impl Stack {
     Stack::assemble(Arc::new(home), cfg, registry(Some(extra))?).await
   }
 
+  /// A stack with one additional package registration whose store runs the registry's turn contributions after a
+  /// turn, as the server's store does. The turn contributions need the bound feature context that the server binds.
+  pub async fn start_with_package_and_store_hooks(
+    options: Vec<BackendOption>,
+    pool: Vec<String>,
+    extra: (&'static str, RegisterFn),
+  ) -> anyhow::Result<Stack> {
+    let home = tempfile::tempdir()?;
+    let cfg = config(home.path(), options, pool, 0);
+    Stack::assemble_with_registry_hooks(Arc::new(home), cfg, registry(Some(extra))?).await
+  }
+
   pub async fn start_with_min_free_disk_gib(
     options: Vec<BackendOption>,
     pool: Vec<String>,
@@ -617,6 +631,18 @@ impl Stack {
     Stack::assemble(home, cfg, registry(None)?).await
   }
 
+  /// The stack of the next boot on an earlier home, with one additional package whose store runs the registry's turn
+  /// contributions after a turn.
+  pub async fn start_on_home_with_package_and_store_hooks(
+    home: Arc<TempDir>,
+    options: Vec<BackendOption>,
+    pool: Vec<String>,
+    extra: (&'static str, RegisterFn),
+  ) -> anyhow::Result<Stack> {
+    let cfg = config(home.path(), options, pool, 0);
+    Stack::assemble_with_registry_hooks(home, cfg, registry(Some(extra))?).await
+  }
+
   /// A stack whose backends carry the priority pool `auto`.
   pub async fn start_with_auto(
     options: Vec<BackendOption>,
@@ -627,6 +653,19 @@ impl Stack {
     let mut cfg = config(home.path(), options, pool, 0);
     cfg.backends.pools.push(auto);
     Stack::assemble(Arc::new(home), cfg, registry(None)?).await
+  }
+
+  /// A stack whose `backends` section is `backends`, written to `config.yaml` and read back through the config loader
+  /// as the server reads it. The other sections are this stack's own.
+  pub async fn start_with_backends_file(backends: &serde_json::Value) -> anyhow::Result<Stack> {
+    let home = tempfile::tempdir()?;
+    let file = serde_json::json!({ "backends": backends });
+    std::fs::write(home.path().join(CONFIG_FILENAME), serde_json::to_string_pretty(&file)?)?;
+    let registry = registry(None)?;
+    let loaded = registry.load_config(home.path())?;
+    let mut cfg = config(home.path(), Vec::new(), Vec::new(), 0);
+    cfg.backends = loaded.backends;
+    Stack::assemble(Arc::new(home), cfg, registry).await
   }
 
   /// The stack of the next boot on an earlier home, whose backends carry the priority pool `auto`.
@@ -651,10 +690,32 @@ impl Stack {
   }
 
   async fn assemble(home: Arc<TempDir>, cfg: CharlieBotConfig, registry: Registry) -> anyhow::Result<Stack> {
+    Stack::assemble_with_hooks(home, cfg, Arc::new(registry), Arc::new(EmptyRuntimeEventHooks)).await
+  }
+
+  /// Assemble the stack, with the registry's turn contributions behind the store's runtime hooks when `registry_hooks`
+  /// holds the registry.
+  async fn assemble_with_registry_hooks(
+    home: Arc<TempDir>,
+    cfg: CharlieBotConfig,
+    registry: Registry,
+  ) -> anyhow::Result<Stack> {
+    let registry = Arc::new(registry);
+    let runtime_events = charliebot_registry::store_hooks::store_hooks(Arc::clone(&registry))
+      .runtime_events
+      .context("the registry's store hooks carry their runtime events")?;
+    Stack::assemble_with_hooks(home, cfg, registry, runtime_events).await
+  }
+
+  async fn assemble_with_hooks(
+    home: Arc<TempDir>,
+    cfg: CharlieBotConfig,
+    registry: Arc<Registry>,
+    runtime_events: Arc<dyn charliebot_store::RuntimeEventHooks>,
+  ) -> anyhow::Result<Stack> {
     std::fs::create_dir_all(home.path().join(format!("{CONFIG_D_DIR_NAME}/approval.d")))?;
     std::fs::write(home.path().join(format!("{CONFIG_D_DIR_NAME}/approval.d/policy.yaml")), APPROVAL_POLICY_TABLE)?;
     let cfg = Arc::new(cfg);
-    let registry = Arc::new(registry);
     let hooks = Arc::new(TestHooks);
     let store = Store::new(
       (*cfg).clone(),
@@ -665,7 +726,7 @@ impl Stack {
         sequence_listing: Some(hooks.clone()),
         sequence_archive: Some(hooks.clone()),
         sequence_binding_mover: Some(hooks),
-        runtime_events: Some(Arc::new(EmptyRuntimeEventHooks)),
+        runtime_events: Some(runtime_events),
       },
     )?;
     let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -702,6 +763,8 @@ impl Stack {
       registry,
       startup,
     });
+    // The server binds the feature context once its store exists; the turn contributions read it while a turn ends.
+    features.registry.bind_feature_context(&features)?;
 
     // The wiring of `execution::pre_recovery_step`, with the run-finish completion behind a fault seam.
     let pool = charliebot_agents::backend_pool::backend_pool(&features)?;

@@ -247,8 +247,15 @@ fn wait_bounded(child: &mut Child) -> Option<i32> {
 /// option pairs and the host before the command, those eleven arguments are dropped, and the rest is joined with
 /// spaces and re-parsed, as ssh hands it to the remote login shell. The wrapper's mkdir, setsid, PID capture and exit
 /// file then run for real, with no network.
+///
+/// As with ssh, the stub stays up until the command's output closes: the substitution reads both streams to their end,
+/// so a started process that keeps either stream open holds the stub, and so the launch, until that process ends. The
+/// stub's stderr is merged into its stdout, and its exit status is the command's.
 fn stub_ssh_running_locally(sandbox: &Sandbox) {
-  charliebot_shell_harness::write_executable(&sandbox.bin.join("ssh"), "#!/bin/sh\nshift 11\neval \"$*\"\n");
+  charliebot_shell_harness::write_executable(
+    &sandbox.bin.join("ssh"),
+    "#!/bin/sh\nshift 11\nout=$(eval \"$*\" 2>&1)\nstatus=$?\nprintf '%s\\n' \"$out\"\nexit $status\n",
+  );
 }
 
 /// What the remote shell prints for a launch that starts: its home, then the wrapper's PID.
@@ -307,6 +314,11 @@ fn pid_of(record: &Value) -> i32 {
 /// Poll until the exit file holds its code and returns it. The wrapper writes the code with one `echo`, so a complete
 /// code ends in a newline.
 fn wait_for_exit_code(path: &Path) -> String {
+  wait_for_exit_code_within(path, PROCESS_TIMEOUT)
+}
+
+/// `wait_for_exit_code` with its own bound, for a command that runs longer than `PROCESS_TIMEOUT`.
+fn wait_for_exit_code_within(path: &Path, bound: Duration) -> String {
   let started = Instant::now();
   loop {
     if let Ok(text) = fs::read_to_string(path)
@@ -314,7 +326,7 @@ fn wait_for_exit_code(path: &Path) -> String {
     {
       return text.trim().to_string();
     }
-    assert!(started.elapsed() < PROCESS_TIMEOUT, "{} never completed", path.display());
+    assert!(started.elapsed() < bound, "{} never completed", path.display());
     std::thread::sleep(Duration::from_millis(10));
   }
 }
@@ -558,10 +570,10 @@ fn test_launch_remote_parses_the_wrapper_pid() {
   assert!(wrapper.contains("setsid bash -lc"), "{wrapper}");
   assert!(wrapper.contains("echo $!"), "{wrapper}");
   assert!(wrapper.contains("cd /data && "), "{wrapper}");
-  assert!(wrapper.contains("} < /dev/null >"), "{wrapper}");
+  assert!(wrapper.contains(&format!("< /dev/null > \"$HOME\"/charliebot_runs/{launch_id}/log 2>&1 & ")), "{wrapper}");
   assert!(wrapper.contains("echo \"$HOME\" && "), "{wrapper}");
   assert!(wrapper.contains(&format!("mkdir -p \"$HOME\"/charliebot_runs/{launch_id} && ")), "{wrapper}");
-  let exit_write = format!("{{ (echo hi\n); echo $? > \"$HOME\"/charliebot_runs/{launch_id}/exit; }}");
+  let exit_write = format!("(echo hi\n); echo $? > \"$HOME\"/charliebot_runs/{launch_id}/exit");
   assert!(wrapper.contains(&exit_write), "{wrapper}");
   let bodies = stub.bodies();
   assert_eq!(
@@ -736,11 +748,14 @@ fn test_launch_remote_end_to_end_localhost() {
 #[ignore = "integration"]
 fn test_launch_remote_wrapper_runs_the_command_under_a_local_stub_ssh() {
   // The remote path without the network: the wrapper's own shell script runs here, so a syntax or PID-capture slip
-  // in it shows up as a missing exit file or a wrong PID.
+  // in it shows up as a missing exit file or a wrong PID. The `~/` working directory is the stub shell's HOME, which
+  // is the sandbox root.
   let sandbox = Sandbox::new();
   stub_ssh_running_locally(&sandbox);
   let stub = StubApi::start(registering(sandbox.home.clone()));
   sandbox.write_config(stub.port);
+  let work = sandbox.root.path().join("work");
+  fs::create_dir_all(&work).expect("the working directory is created");
 
   let run = sandbox.run(&[
     "--session",
@@ -750,11 +765,11 @@ fn test_launch_remote_wrapper_runs_the_command_under_a_local_stub_ssh() {
     "--message",
     "m",
     "--cmd",
-    "sleep 0.2; echo hi",
+    "pwd; sleep 0.2; echo hi",
     "--host",
     "localhost",
     "--cwd",
-    "/tmp",
+    "~/work",
   ]);
 
   assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -765,5 +780,44 @@ fn test_launch_remote_wrapper_runs_the_command_under_a_local_stub_ssh() {
   assert_eq!(out["log"], remote_dir.join("log").display().to_string());
   let _cleanup = RemoteRunDir(remote_dir.clone());
   assert_eq!(wait_for_exit_code(&remote_dir.join("exit")), "0");
-  assert!(fs::read_to_string(remote_dir.join("log")).expect("the log reads").contains("hi"));
+  let log = fs::read_to_string(remote_dir.join("log")).expect("the log reads");
+  assert_eq!(log.lines().next(), Some(work.display().to_string().as_str()), "{log}");
+  assert!(log.contains("hi"), "{log}");
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_remote_cmd_longer_than_the_launch_timeout_registers_and_watches_its_end() {
+  let sandbox = Sandbox::new();
+  stub_ssh_running_locally(&sandbox);
+  let stub = StubApi::start(registering(sandbox.home.clone()));
+  sandbox.write_config(stub.port);
+
+  // The command runs past the 30 s ssh launch bound. The run must return inside PROCESS_TIMEOUT (20 s), which is
+  // inside that bound: a launch that waits for the command fails here.
+  let run = sandbox.run(&[
+    "--session",
+    "s1",
+    "--max-wait",
+    "120",
+    "--message",
+    "m",
+    "--cmd",
+    "sleep 32; echo done",
+    "--host",
+    "remote.example.com",
+  ]);
+
+  assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+  let out: Value = serde_json::from_str(&run.stdout).expect("stdout is JSON");
+  let _group = GroupGuard(pid_of(&out));
+  // The watched PID is the started command's wrapper, which is still running when the registration returns.
+  assert!(kill(Pid::from_raw(pid_of(&out)), None).is_ok(), "the started wrapper is not running");
+  let remote_dir = sandbox.root.path().join("charliebot_runs").join(out["launch_id"].as_str().expect("text"));
+  let _cleanup = RemoteRunDir(remote_dir.clone());
+  let bodies = stub.bodies();
+  assert_eq!(bodies[0]["watch_targets"][0]["exit_file"], out["exit_file"]);
+  // The watch's exit file reports the command's end: its code, and its output in the log.
+  assert_eq!(wait_for_exit_code_within(&remote_dir.join("exit"), Duration::from_secs(60)), "0");
+  assert!(fs::read_to_string(remote_dir.join("log")).expect("the log reads").contains("done"));
 }

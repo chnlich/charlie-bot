@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use charliebot_core::config::{CONFIG_D_DIR_NAME, CharlieBotConfig};
+use charliebot_core::config::{CONFIG_D_DIR_NAME, CRON_D_DIR_NAME, CharlieBotConfig};
 use charliebot_core::home::state_dir;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::Registry;
@@ -51,9 +51,6 @@ static NEXT_SNAPSHOT_GENERATION: AtomicU64 = AtomicU64::new(1);
 static CRON_FILE_READS: OnceLock<Mutex<HashMap<PathBuf, usize>>> = OnceLock::new();
 #[cfg(test)]
 static PROMPT_FILE_READS: OnceLock<Mutex<HashMap<PathBuf, usize>>> = OnceLock::new();
-
-/// The directory under `config.d` that holds the cron jobs, one YAML file per job.
-pub const CRON_D_DIR_NAME: &str = "cron.d";
 
 /// The cron task directory under one profile home.
 pub fn cron_dir_for_home(home: &Path) -> PathBuf {

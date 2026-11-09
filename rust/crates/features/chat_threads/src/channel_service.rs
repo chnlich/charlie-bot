@@ -1,16 +1,20 @@
-//! The chat-channel entrypoint service: one gateway listener task plus
-//! the boot backfill task. A channel's crate keeps its own service wiring and its configuration gate; the task
-//! bookkeeping lives here.
+//! The shared service of the chat channels: the entrypoint tasks (one gateway listener task plus the boot backfill
+//! task) and the answer a refused thread entry gets on the internal routes. A channel's crate keeps its own service
+//! wiring, configuration gate and route paths; the task bookkeeping and the answer shape live here.
 
 use std::sync::{Arc, Mutex};
 
+use axum::http::StatusCode;
+use axum::response::Response;
+use charliebot_compat::responses;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::wiring::ServiceContext;
 use futures_util::future::BoxFuture;
+use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
 use crate::backfill::run_backfill;
-use crate::thread_entry::spawn_logged;
+use crate::thread_entry::{ThreadDetail, ThreadReplyError, spawn_logged};
 
 /// The listener surface a chat channel hands the entrypoint service (`ChannelListener`).
 pub trait ChannelListener: Send + Sync + 'static {
@@ -76,5 +80,25 @@ async fn cancel_and_wait(task: Option<JoinHandle<()>>) -> anyhow::Result<()> {
     Ok(()) => Ok(()),
     Err(error) if error.is_cancelled() => Ok(()),
     Err(error) => Err(error.into()),
+  }
+}
+
+/// The answer of an internal channel route: the readback with 200, a refusal with its status and `{"detail": ...}`,
+/// or the unhandled failure's 500. The Discord and Feishu routes both return [`ThreadReplyError`] and answer this
+/// shape, so it lives beside the error's owner; the Slack routes keep their own answer, whose 500 carries the
+/// refusal's detail as JSON instead of logging it.
+pub fn reply_response(result: Result<Value, ThreadReplyError>) -> Response {
+  match result {
+    Ok(body) => responses::json(StatusCode::OK, &body),
+    Err(error) if error.status == StatusCode::INTERNAL_SERVER_ERROR => {
+      responses::internal_error("RuntimeError", error.to_string())
+    }
+    Err(ThreadReplyError { status, detail }) => {
+      let detail = match detail {
+        ThreadDetail::Text(text) => Value::String(text),
+        ThreadDetail::Structured(value) => value,
+      };
+      responses::json(status, &json!({"detail": detail}))
+    }
   }
 }

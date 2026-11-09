@@ -107,7 +107,7 @@ test('tool output pre and raw backend block wrap through rendering.js', () => {
     role: 'assistant', content: '', tools: [{ name: 'Bash', input: {}, output: out }],
   }, 'sess-1');
   assert.match(html, /<span class="wc2ch">\u4e2d<\/span>/);
-  assert.match(html, /whitespace-pre-wrap break-all/);
+  assert.match(html, /whitespace-pre-wrap break-words/);
   assert.equal((html.match(/<span class="wc2ch">/g) || []).length, 2);
   const preOut = /<pre class="mt-1[^>]*>([\s\S]*?)<\/pre>/.exec(html)[1];
   assert.equal(textContent(preOut), out);

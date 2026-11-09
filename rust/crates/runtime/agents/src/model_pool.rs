@@ -12,14 +12,15 @@
 //! memory, one per pool id.
 
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use anyhow::anyhow;
-use charliebot_core::config::{CharlieBotConfig, PoolBilling, PoolConfig, PoolMember, PoolRule};
+use charliebot_core::config::{BackendOption, CharlieBotConfig, PoolBilling, PoolConfig, PoolMember, PoolRule};
 use charliebot_core::{event_types, metadata_slot};
 use charliebot_registry::backend::MemberReading;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::{Registry, RegistryError};
+use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use serde_json::{Map, Value, json};
 
@@ -80,6 +81,104 @@ impl<'a> Selection<'a> {
 /// The load counts of a selection that reads none.
 static NO_LOADS: LazyLock<HashMap<String, usize>> = LazyLock::new(HashMap::new);
 
+/// The one selection every caller makes: the process-wide owners a member pick reads, plus the store whose active
+/// sessions order a priority pool when the caller has one.
+///
+/// A caller with a [`FeatureContext`] builds one with [`Selector::from_features`], so a priority pool orders its
+/// subscription tier by the active sessions each member holds. A caller that holds only the process-wide owners (a CLI
+/// one-shot call) builds one with [`Selector::new`], and reads the pool's configured order.
+pub struct Selector<'a> {
+  cfg: &'a CharlieBotConfig,
+  registry: &'a Registry,
+  availability: Arc<BackendAvailability>,
+  positions: Arc<RotationPositions>,
+  store: Option<&'a Store>,
+}
+
+impl<'a> Selector<'a> {
+  /// A selection over the given owners that reads no session load counts.
+  pub fn new(
+    cfg: &'a CharlieBotConfig,
+    registry: &'a Registry,
+    availability: Arc<BackendAvailability>,
+    positions: Arc<RotationPositions>,
+  ) -> Self {
+    Self { cfg, registry, availability, positions, store: None }
+  }
+
+  /// The same selection, ordering a priority pool by the active sessions `store` records for each member.
+  pub fn with_store(mut self, store: &'a Store) -> Self {
+    self.store = Some(store);
+    self
+  }
+
+  /// The selection over the owners a server process holds in its startup state.
+  pub fn from_features(features: &'a FeatureContext, cfg: &'a CharlieBotConfig) -> anyhow::Result<Self> {
+    Ok(Self {
+      cfg,
+      registry: &features.registry,
+      availability: backend_availability::backend_availability(features)?,
+      positions: features.startup.require::<RotationPositions>()?,
+      store: Some(&features.store),
+    })
+  }
+
+  /// The option a call on `pool_id` runs on, or `None` when no member is selectable. A rotate pool's position moves
+  /// past the selected member.
+  pub fn select(&self, pool_id: &str, excluded: &[String]) -> anyhow::Result<Option<BackendOption>> {
+    let pool = pool_by_id(self.cfg, pool_id)?;
+    let loads = self.loads(&pool)?;
+    let selection = Selection::new(self.cfg, self.registry, &self.availability, &pool, excluded, UtcDateTime::now())
+      .with_loads(&loads);
+    Ok(self.option(self.positions.select(&selection)?))
+  }
+
+  /// The option the next call on `pool_id` would run on, without moving a rotate pool's position.
+  pub fn peek(&self, pool_id: &str, excluded: &[String]) -> anyhow::Result<Option<BackendOption>> {
+    let pool = pool_by_id(self.cfg, pool_id)?;
+    let loads = self.loads(&pool)?;
+    let selection = Selection::new(self.cfg, self.registry, &self.availability, &pool, excluded, UtcDateTime::now())
+      .with_loads(&loads);
+    Ok(self.option(self.positions.peek(&selection)?))
+  }
+
+  /// The first selectable option in the router's ordered `backends`, without moving any rotation position. A retired
+  /// ordered route keeps resolving through this call; a new router answer names one id.
+  pub fn ordered(&self, backends: &[String], excluded: &[String]) -> anyhow::Result<Option<BackendOption>> {
+    let pool = ordered_pool(backends);
+    let mut position = 0;
+    let selection = Selection::new(self.cfg, self.registry, &self.availability, &pool, excluded, UtcDateTime::now());
+    Ok(self.option(select(&selection, Some(&mut position))?))
+  }
+
+  /// The error that ends a call when no member of `pool_id` is selectable: one line per member.
+  pub fn exhausted_message(&self, pool_id: &str) -> anyhow::Result<String> {
+    let pool = pool_by_id(self.cfg, pool_id)?;
+    all_exhausted_message(self.cfg, self.registry, &self.availability, &pool)
+  }
+
+  /// Whether the `backends.options` id `backend_id` can run now.
+  pub fn option_available(&self, backend_id: &str, excluded: &[String]) -> anyhow::Result<bool> {
+    let member = PoolMember { backend: backend_id.to_string() };
+    Ok(candidate(self.cfg, self.registry, &self.availability, &member, excluded, UtcDateTime::now())?.is_some())
+  }
+
+  /// The option a selected member names. Every member is checked against `backends.options` at selection.
+  fn option(&self, member: Option<PoolMember>) -> Option<BackendOption> {
+    member.map(|member| {
+      self.cfg.get_backend_option(&member.backend).expect("a pool selection returns a backends.options id").clone()
+    })
+  }
+
+  /// The counts a priority pool orders by, or none for a rotate pool and for a selector without a store.
+  fn loads(&self, pool: &ModelPool) -> anyhow::Result<HashMap<String, usize>> {
+    match (pool.rule, self.store) {
+      (PoolRule::Priority, Some(store)) => member_loads_in(store, pool),
+      _ => Ok(HashMap::new()),
+    }
+  }
+}
+
 impl ModelPool {
   /// The pool a `backends.pools` entry configures.
   pub fn from_config(pool: &PoolConfig) -> Self {
@@ -106,7 +205,7 @@ pub(crate) fn ordered_pool(backends: &[String]) -> ModelPool {
   ModelPool {
     id: ROUTE_POOL_ID.to_string(),
     rule: PoolRule::Rotate,
-    members: backends.iter().map(|backend| PoolMember { backend: backend.clone(), billing: None }).collect(),
+    members: backends.iter().map(|backend| PoolMember { backend: backend.clone() }).collect(),
   }
 }
 
@@ -218,7 +317,7 @@ fn select_priority(
 
   let subscriptions = candidates
     .iter()
-    .filter(|candidate| candidate.member.billing == Some(PoolBilling::Subscription))
+    .filter(|candidate| member_billing(cfg, &candidate.member) == Some(PoolBilling::Subscription))
     .collect::<Vec<_>>();
   if !subscriptions.is_empty() {
     let under_line = subscriptions
@@ -241,7 +340,7 @@ fn select_priority(
   Ok(
     candidates
       .iter()
-      .find(|candidate| candidate.member.billing == Some(PoolBilling::Payg))
+      .find(|candidate| member_billing(cfg, &candidate.member) == Some(PoolBilling::Payg))
       .map(|candidate| candidate.member.clone()),
   )
 }
@@ -512,22 +611,23 @@ fn decide_keep_or_switch(
   let current_member = selection.pool.member(current).expect("the current member is in the pool");
   let current_reading = member_reading(selection.cfg, selection.registry, &current_member.backend, selection.now)?;
   let selected_reading = member_reading(selection.cfg, selection.registry, &selected.backend, selection.now)?;
-  let (reason, recovers_at) =
-    if current_member.billing == Some(PoolBilling::Payg) && selected.billing == Some(PoolBilling::Subscription) {
-      (event_types::QUOTA_REASON_SUBSCRIPTION_RESET, None)
-    } else if current_reading.as_ref().is_some_and(|reading| reading.exhausted) {
-      // The reading says the member has no capacity left; the turn start leaves it, as an out record would.
-      let reset = current_reading.as_ref().and_then(MemberReading::earliest_reset).map(format_minutes);
-      (event_types::QUOTA_REASON_QUOTA_ERROR, reset)
-    } else if near_exhaustion(current_reading.as_ref())
-      && selected.billing == Some(PoolBilling::Subscription)
-      && !near_exhaustion(selected_reading.as_ref())
-    {
-      let reset = current_reading.as_ref().and_then(MemberReading::earliest_reset).map(format_minutes);
-      (event_types::QUOTA_REASON_NEAR_EXHAUSTION, reset)
-    } else {
-      return Ok(TurnDecision::Keep(current.to_string()));
-    };
+  let (reason, recovers_at) = if member_billing(selection.cfg, current_member) == Some(PoolBilling::Payg)
+    && member_billing(selection.cfg, &selected) == Some(PoolBilling::Subscription)
+  {
+    (event_types::QUOTA_REASON_SUBSCRIPTION_RESET, None)
+  } else if current_reading.as_ref().is_some_and(|reading| reading.exhausted) {
+    // The reading says the member has no capacity left; the turn start leaves it, as an out record would.
+    let reset = current_reading.as_ref().and_then(MemberReading::earliest_reset).map(format_minutes);
+    (event_types::QUOTA_REASON_QUOTA_ERROR, reset)
+  } else if near_exhaustion(current_reading.as_ref())
+    && member_billing(selection.cfg, &selected) == Some(PoolBilling::Subscription)
+    && !near_exhaustion(selected_reading.as_ref())
+  {
+    let reset = current_reading.as_ref().and_then(MemberReading::earliest_reset).map(format_minutes);
+    (event_types::QUOTA_REASON_NEAR_EXHAUSTION, reset)
+  } else {
+    return Ok(TurnDecision::Keep(current.to_string()));
+  };
   Ok(TurnDecision::Move {
     member: selected.backend.clone(),
     change: Some(MemberChange::at_turn_start(
@@ -566,8 +666,8 @@ fn exhausted_message(features: &FeatureContext, cfg: &CharlieBotConfig, pool: &M
   all_exhausted_message(cfg, &features.registry, &availability, pool)
 }
 
-/// The error that ends a turn when no member of the pool is selectable: one line per member, in config order. A
-/// member's line names its billing when the pool has billing, the reason it is out and when it recovers.
+/// The error that ends a turn when no member of the pool is selectable: one line per member, in config order. On a
+/// priority pool a member's line names its billing, the reason it is out and when it recovers.
 pub fn all_exhausted_message(
   cfg: &CharlieBotConfig,
   registry: &Registry,
@@ -591,10 +691,18 @@ pub fn all_exhausted_message(
         _ => "not selectable".to_string(),
       },
     };
-    let label = member.billing.map_or(String::new(), |billing| format!(" ({})", billing_label(billing)));
+    let label = match (pool.rule, member_billing(cfg, member)) {
+      (PoolRule::Priority, Some(billing)) => format!(" ({})", billing_label(billing)),
+      _ => String::new(),
+    };
     lines.push(format!("- {}{label}: {state}", member.backend));
   }
   Ok(format!("pool '{}' has no selectable member:\n{}", pool.id, lines.join("\n")))
+}
+
+/// The billing of the `backends.options` entry a member names: the option owns it, so every pool reads it there.
+fn member_billing(cfg: &CharlieBotConfig, member: &PoolMember) -> Option<PoolBilling> {
+  cfg.get_backend_option(&member.backend).and_then(|option| option.billing)
 }
 
 fn billing_label(billing: PoolBilling) -> &'static str {
@@ -631,8 +739,13 @@ fn format_minutes(datetime: UtcDateTime) -> String {
 /// The active sessions each member of `pool` holds: the counts a priority pool's subscription tier is ordered by. A
 /// rotate pool keeps its configured order, so it reads no count.
 pub fn member_loads(features: &FeatureContext, pool: &ModelPool) -> anyhow::Result<HashMap<String, usize>> {
+  member_loads_in(&features.store, pool)
+}
+
+/// The same counts, read from `store` alone, for a caller that holds no [`FeatureContext`].
+pub fn member_loads_in(store: &Store, pool: &ModelPool) -> anyhow::Result<HashMap<String, usize>> {
   match pool.rule {
-    PoolRule::Priority => Ok(features.store.active_session_string_metadata_counts(&pool.id, POOL_MEMBER_FIELD)?),
+    PoolRule::Priority => Ok(store.active_session_string_metadata_counts(&pool.id, POOL_MEMBER_FIELD)?),
     PoolRule::Rotate => Ok(HashMap::new()),
   }
 }
@@ -734,23 +847,17 @@ mod tests {
   const CONFIG: &str = "\
 backends:
   options:
-    - {id: chatgpt, label: ChatGPT, type: synthetic, model: model-gpt}
-    - {id: claude-sub, label: Claude, type: synthetic, model: model-claude}
-    - {id: near, label: Near, type: synthetic, model: model-near}
-    - {id: spent, label: Spent, type: synthetic, model: model-spent}
-    - {id: devin, label: Devin, type: synthetic, model: model-devin}
-    - {id: payg-a, label: Payg A, type: synthetic, model: model-payg}
+    - {id: chatgpt, label: ChatGPT, type: synthetic, model: model-gpt, billing: subscription}
+    - {id: claude-sub, label: Claude, type: synthetic, model: model-claude, billing: subscription}
+    - {id: near, label: Near, type: synthetic, model: model-near, billing: subscription}
+    - {id: spent, label: Spent, type: synthetic, model: model-spent, billing: subscription}
+    - {id: devin, label: Devin, type: synthetic, model: model-devin, billing: subscription}
+    - {id: payg-a, label: Payg A, type: synthetic, model: model-payg, billing: payg}
   pools:
     - id: auto
       label: Auto
       rule: priority
-      members:
-        - {backend: chatgpt, billing: subscription}
-        - {backend: claude-sub, billing: subscription}
-        - {backend: near, billing: subscription}
-        - {backend: spent, billing: subscription}
-        - {backend: devin, billing: subscription}
-        - {backend: payg-a, billing: payg}
+      members: [chatgpt, claude-sub, near, spent, devin, payg-a]
     - id: light
       label: Light
       rule: rotate
@@ -761,21 +868,16 @@ backends:
   const ROTATION_CONFIG: &str = "\
 backends:
   options:
-    - {id: member-a, label: Member A, type: synthetic, model: model-a}
-    - {id: member-b, label: Member B, type: synthetic, model: model-b}
-    - {id: member-c, label: Member C, type: synthetic, model: model-c}
-    - {id: member-d, label: Member D, type: synthetic, model: model-d}
-    - {id: member-e, label: Member E, type: synthetic, model: model-e}
+    - {id: member-a, label: Member A, type: synthetic, model: model-a, billing: subscription}
+    - {id: member-b, label: Member B, type: synthetic, model: model-b, billing: subscription}
+    - {id: member-c, label: Member C, type: synthetic, model: model-c, billing: subscription}
+    - {id: member-d, label: Member D, type: synthetic, model: model-d, billing: subscription}
+    - {id: member-e, label: Member E, type: synthetic, model: model-e, billing: subscription}
   pools:
     - id: auto
       label: Auto
       rule: priority
-      members:
-        - {backend: member-a, billing: subscription}
-        - {backend: member-b, billing: subscription}
-        - {backend: member-c, billing: subscription}
-        - {backend: member-d, billing: subscription}
-        - {backend: member-e, billing: subscription}
+      members: [member-a, member-b, member-c, member-d, member-e]
 ";
 
   fn fixture() -> (tempfile::TempDir, Arc<FeatureContext>) {
@@ -858,6 +960,7 @@ backends:
     positions(features).select(&selection).unwrap().map(|member| member.backend)
   }
 
+  /// The priority pool picks subscription members first, and the pay-as-you-go member only as the last resort.
   #[tokio::test]
   async fn subscription_tiers_precede_pay_as_you_go() {
     let (_home, features) = fixture();

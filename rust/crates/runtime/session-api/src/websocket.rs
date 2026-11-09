@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,6 +19,10 @@ use crate::route_support::blocking_store;
 
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(30);
 const CATCHUP_SLICE_EVENTS: usize = 400;
+
+/// The subscription number of the replay a handshake opens: a socket's own first replay is its
+/// session's subscription 0, and every client `subscribe` frame takes the page's next number.
+const HANDSHAKE_SUBSCRIPTION: u64 = 0;
 
 pub(crate) fn session_websocket(
   features: Arc<FeatureContext>,
@@ -81,10 +84,11 @@ async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String,
 
   let mut socket = features.store.register_socket();
   let store = Arc::clone(&features.store);
+  let mut sidebar_subscription = store.subscribe(streaming::SIDEBAR_CHANNEL);
   let load_store = Arc::clone(&store);
   let load_session_id = session_id.clone();
-  let (mut session_subscription, mut sidebar_subscription, catchup_result) =
-    subscribe_before_load(&store, &session_id, || async move {
+  let (mut session_subscription, catchup_result) = store
+    .subscribe_session_before_load(&session_id, || async move {
       let meta = load_store.get_session(&load_session_id).await?;
       Ok::<_, StoreError>(prepare_catchup(load_store, load_session_id, cursor, meta).await)
     })
@@ -110,7 +114,8 @@ async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String,
     }
     Ok(Ok(catchup)) => {
       let sent = send_catchup_frames(&mut sender, &catchup.frames, &session_id).await;
-      match sender.send(Message::Text(json!({"type": CATCHUP_COMPLETE_FRAME}).to_string().into())).await {
+      let complete = catchup_complete_frame(&session_id, HANDSHAKE_SUBSCRIPTION, catchup.total);
+      match sender.send(Message::Text(complete.to_string().into())).await {
         Ok(()) => {
           replayed_through = Some(catchup.total);
           tracing::debug!(session_id, cursor, total = catchup.total, sent, "session_ws_catchup_sent");
@@ -120,30 +125,11 @@ async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String,
     }
   }
 
-  keepalive(
-    &mut sender,
-    &mut receiver,
-    &mut session_subscription,
-    &mut sidebar_subscription,
-    &mut socket,
-    &session_id,
-    replayed_through,
-  )
-  .await;
-  features.store.unsubscribe(&mut session_subscription);
+  let mut state = SessionSocketState { session_id, session_subscription, replayed_through };
+  keepalive(&mut sender, &mut receiver, &store, &mut state, &mut sidebar_subscription, &mut socket).await;
+  features.store.unsubscribe(&mut state.session_subscription);
   features.store.unsubscribe(&mut sidebar_subscription);
-  tracing::info!(session_id, "session_ws_disconnected");
-}
-
-async fn subscribe_before_load<T, F, Fut>(store: &Store, session_id: &str, load: F) -> (Subscription, Subscription, T)
-where
-  F: FnOnce() -> Fut,
-  Fut: Future<Output = T>,
-{
-  let session_subscription = store.subscribe(&streaming::session_channel(session_id));
-  let sidebar_subscription = store.subscribe(streaming::SIDEBAR_CHANNEL);
-  let loaded = load().await;
-  (session_subscription, sidebar_subscription, loaded)
+  tracing::info!(session_id = %state.session_id, "session_ws_disconnected");
 }
 
 /// The raw value of one key of the handshake query, or `None` when the query has no such key. Repeated
@@ -345,39 +331,214 @@ async fn send_catchup_frames(
   sent
 }
 
+/// One client `subscribe` frame: the session to serve, the event position the page's snapshot was
+/// built from, and the page's subscription number for the request.
+struct SubscribeRequest {
+  session_id: String,
+  cursor: i128,
+  subscription: u64,
+}
+
+/// One client text frame, as far as the socket's loop cares about it.
+enum ClientFrame {
+  /// Not a `subscribe` frame: ignored, as every other client frame is.
+  Other,
+  /// A `subscribe` frame whose fields the server cannot use. `subscription` is the number the frame
+  /// named when that field parsed, so the answer can name it for the page to match.
+  MalformedSubscribe { subscription: Option<u64> },
+  /// A well-formed subscribe request.
+  Subscribe(SubscribeRequest),
+}
+
+/// Parse one client frame. A frame that does not claim to be a `subscribe` is `Other`; one that
+/// claims it and cannot be served is `MalformedSubscribe`.
+fn parse_client_frame(text: &str) -> ClientFrame {
+  let Ok(frame) = serde_json::from_str::<Value>(text) else {
+    return ClientFrame::Other;
+  };
+  if frame.get("type").and_then(Value::as_str) != Some("subscribe") {
+    return ClientFrame::Other;
+  }
+  let subscription = frame.get("subscription").and_then(Value::as_u64);
+  let (Some(session_id), Some(cursor)) =
+    (frame.get("session_id").and_then(Value::as_str), frame.get("cursor").and_then(Value::as_u64))
+  else {
+    return ClientFrame::MalformedSubscribe { subscription };
+  };
+  let Some(subscription) = subscription else {
+    return ClientFrame::MalformedSubscribe { subscription: None };
+  };
+  ClientFrame::Subscribe(SubscribeRequest { session_id: session_id.to_string(), cursor: cursor as i128, subscription })
+}
+
+/// The outcome of one subscribe request's catch-up read.
+enum CatchupLoad {
+  Loaded(Catchup),
+  UnknownSession,
+}
+
+/// The `catchup_complete` frame that ends one replay. It names the session and the subscription the replay served,
+/// and `event_total` is the count the replay itself ends at.
+fn catchup_complete_frame(session_id: &str, subscription: u64, event_total: usize) -> Value {
+  json!({
+    "type": CATCHUP_COMPLETE_FRAME,
+    "session_id": session_id,
+    "subscription": subscription,
+    "event_total": event_total,
+  })
+}
+
+/// Handle one `subscribe` frame in the handshake's order: subscribe the new session before the
+/// read starts, drop the session the socket leaves, answer `subscribed`, replay from the frame's
+/// cursor and close with a `catchup_complete` carrying the read's event total. An unknown session
+/// or a failed read answers `error` and keeps the previous subscription. Returns `false` when a
+/// send failed and the socket must close.
+async fn handle_subscribe(
+  store: &Arc<Store>,
+  sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+  state: &mut SessionSocketState,
+  request: SubscribeRequest,
+) -> bool {
+  let load_store = Arc::clone(store);
+  let load_session_id = request.session_id.clone();
+  let cursor = request.cursor;
+  let (mut new_subscription, loaded) = store
+    .subscribe_session_before_load(&request.session_id, || async move {
+      match load_store.get_session(&load_session_id).await {
+        Err(error) => Err(error),
+        Ok(None) => Ok(CatchupLoad::UnknownSession),
+        Ok(Some(meta)) => {
+          prepare_catchup(load_store, load_session_id, cursor, Some(meta)).await.map(CatchupLoad::Loaded)
+        }
+      }
+    })
+    .await;
+
+  let catchup = match loaded {
+    Ok(CatchupLoad::Loaded(catchup)) => catchup,
+    Ok(CatchupLoad::UnknownSession) => {
+      tracing::info!(
+        session_id = %request.session_id,
+        subscription = request.subscription,
+        "session_ws_subscribe_unknown_session"
+      );
+      store.unsubscribe(&mut new_subscription);
+      return send_subscribe_error(sender, Some(request.subscription)).await;
+    }
+    Err(error) => {
+      tracing::warn!(
+        session_id = %request.session_id,
+        subscription = request.subscription,
+        error = %error,
+        "session_ws_subscribe_failed"
+      );
+      store.unsubscribe(&mut new_subscription);
+      return send_subscribe_error(sender, Some(request.subscription)).await;
+    }
+  };
+
+  // The read is done: the socket drops the session it served, binds the target, and answers before
+  // the replay. Frames the new subscription queued while the read ran follow the replay, and the
+  // dropped subscription discards the frames the left session queued meanwhile.
+  store.unsubscribe(&mut state.session_subscription);
+  state.session_id = request.session_id.clone();
+  state.session_subscription = new_subscription;
+  let subscribed = json!({
+    "type": "subscribed",
+    "session_id": request.session_id,
+    "subscription": request.subscription,
+  });
+  if let Err(error) = sender.send(Message::Text(subscribed.to_string().into())).await {
+    tracing::info!(session_id = %request.session_id, reason = %error, "session_ws_closed");
+    return false;
+  }
+  let sent = send_catchup_frames(sender, &catchup.frames, &request.session_id).await;
+  // The new replay sets the covered range the loop's own frame arm compares against: the
+  // subscription queued the events of the new session while the read ran, and a repeated stream
+  // append would concatenate its text a second time.
+  state.replayed_through = Some(catchup.total);
+  let complete = catchup_complete_frame(&request.session_id, request.subscription, catchup.total);
+  if let Err(error) = sender.send(Message::Text(complete.to_string().into())).await {
+    tracing::info!(session_id = %request.session_id, reason = %error, "session_ws_closed");
+    return false;
+  }
+  tracing::debug!(
+    session_id = %request.session_id,
+    cursor,
+    total = catchup.total,
+    sent,
+    subscription = request.subscription,
+    "session_ws_subscribe_catchup_sent"
+  );
+  true
+}
+
+/// Answer one refused subscribe request, leaving the socket's subscription untouched. A malformed
+/// frame whose subscription number did not parse answers `null` there, because no number it named
+/// can be trusted.
+async fn send_subscribe_error(
+  sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+  subscription: Option<u64>,
+) -> bool {
+  let error = json!({"type": "error", "subscription": subscription});
+  if let Err(send_error) = sender.send(Message::Text(error.to_string().into())).await {
+    tracing::info!(reason = %send_error, "session_ws_closed");
+    return false;
+  }
+  true
+}
+
+/// The session a socket currently serves: its id, its frame subscription and the event total the
+/// last replay ran through, which the frame arm compares live stream frames against.
+struct SessionSocketState {
+  session_id: String,
+  session_subscription: Subscription,
+  replayed_through: Option<usize>,
+}
+
 async fn keepalive(
   sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
   receiver: &mut futures_util::stream::SplitStream<WebSocket>,
-  session_subscription: &mut Subscription,
+  store: &Arc<Store>,
+  state: &mut SessionSocketState,
   sidebar_subscription: &mut Subscription,
   socket: &mut SocketHandle,
-  session_id: &str,
-  replayed_through: Option<usize>,
 ) {
   let keepalive = time::sleep(KEEPALIVE_TIMEOUT);
   tokio::pin!(keepalive);
+  // A subscribe request waits for the select to return: its handling replaces the session
+  // subscription, whose recv future this loop's own arms borrow until the select ends.
+  let mut subscribe_request: Option<SubscribeRequest> = None;
+  let mut malformed_subscribe: Option<Option<u64>> = None;
   loop {
     tokio::select! {
       incoming = receiver.next() => match incoming {
-        Some(Ok(Message::Text(_))) => keepalive.as_mut().reset(time::Instant::now() + KEEPALIVE_TIMEOUT),
+        Some(Ok(Message::Text(text))) => {
+          keepalive.as_mut().reset(time::Instant::now() + KEEPALIVE_TIMEOUT);
+          match parse_client_frame(&text) {
+            ClientFrame::Other => {}
+            ClientFrame::MalformedSubscribe { subscription } => malformed_subscribe = Some(subscription),
+            ClientFrame::Subscribe(request) => subscribe_request = Some(request),
+          }
+        }
         Some(Ok(Message::Close(_))) | None => return,
         Some(Ok(Message::Binary(_))) => {
-          tracing::info!(session_id, reason = "binary frame received", "session_ws_closed");
+          tracing::info!(session_id = %state.session_id, reason = "binary frame received", "session_ws_closed");
           return;
         }
         Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
         Some(Err(error)) => {
-          tracing::info!(session_id, reason = %error, "session_ws_closed");
+          tracing::info!(session_id = %state.session_id, reason = %error, "session_ws_closed");
           return;
         }
       },
-      frame = session_subscription.recv() => match frame {
+      frame = state.session_subscription.recv() => match frame {
         Some(frame) => {
-          if covered_by_replay(&frame, replayed_through) {
+          if covered_by_replay(&frame, state.replayed_through) {
             continue;
           }
           if let Err(error) = sender.send(Message::Text(frame.into())).await {
-            tracing::info!(session_id, reason = %error, "session_ws_closed");
+            tracing::info!(session_id = %state.session_id, reason = %error, "session_ws_closed");
             return;
           }
         }
@@ -385,7 +546,7 @@ async fn keepalive(
       },
       frame = sidebar_subscription.recv() => match frame {
         Some(frame) => if let Err(error) = sender.send(Message::Text(frame.into())).await {
-          tracing::info!(session_id, reason = %error, "session_ws_closed");
+          tracing::info!(session_id = %state.session_id, reason = %error, "session_ws_closed");
           return;
         },
         None => unreachable!("the store keeps a subscriber's sender until this socket unsubscribes"),
@@ -402,11 +563,23 @@ async fn keepalive(
       _ = &mut keepalive => {
         let ping = json!({"type": "ping"}).to_string();
         if let Err(error) = sender.send(Message::Text(ping.into())).await {
-          tracing::info!(session_id, reason = %error, "session_ws_closed");
+          tracing::info!(session_id = %state.session_id, reason = %error, "session_ws_closed");
           return;
         }
         keepalive.as_mut().reset(time::Instant::now() + KEEPALIVE_TIMEOUT);
       }
+    }
+    // A malformed request is refused like an unknown session: an `error` frame that names the
+    // request's subscription when it parsed, with the socket's subscription left as it was.
+    if let Some(subscription) = malformed_subscribe.take()
+      && !send_subscribe_error(sender, subscription).await
+    {
+      return;
+    }
+    if let Some(request) = subscribe_request.take()
+      && !handle_subscribe(store, sender, state, request).await
+    {
+      return;
     }
   }
 }
@@ -449,6 +622,7 @@ mod tests {
   use charliebot_registry::{FeatureContext, Registry, StartupState, WebSocketRequest};
   use charliebot_store::metadata::{HAS_RUNNING_TASKS, SessionMetadata, TaskProfile};
   use charliebot_store::run_records::RunRecord;
+  use futures_util::FutureExt;
   use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
   use tokio::net::{TcpListener, TcpStream};
   use tokio::time::{self, Duration};
@@ -710,19 +884,21 @@ mod tests {
     let (_home, features) = test_context();
     write_session(&features, "synthetic", TaskProfile::Manager, 0);
     let store = Arc::clone(&features.store);
-    let (mut session, mut sidebar, events) = subscribe_before_load(&store, "synthetic", || async {
-      store.broadcast_only("synthetic", json!({"type": "session_renamed", "name": "Synthetic"})).await.unwrap();
-      store
-        .broadcast_sidebar(
-          "synthetic",
-          "unread_changed",
-          serde_json::Map::from_iter([("has_unread".to_string(), json!(true))]),
-        )
-        .await
-        .unwrap();
-      store.load_chat_events_sync("synthetic").unwrap()
-    })
-    .await;
+    let mut sidebar = store.subscribe(streaming::SIDEBAR_CHANNEL);
+    let (mut session, events) = store
+      .subscribe_session_before_load("synthetic", || async {
+        store.broadcast_only("synthetic", json!({"type": "session_renamed", "name": "Synthetic"})).await.unwrap();
+        store
+          .broadcast_sidebar(
+            "synthetic",
+            "unread_changed",
+            serde_json::Map::from_iter([("has_unread".to_string(), json!(true))]),
+          )
+          .await
+          .unwrap();
+        store.load_chat_events_sync("synthetic").unwrap()
+      })
+      .await;
     assert!(events.is_empty());
     assert_eq!(serde_json::from_str::<Value>(&session.recv().await.unwrap()).unwrap()["type"], "session_renamed");
     assert_eq!(serde_json::from_str::<Value>(&sidebar.recv().await.unwrap()).unwrap()["type"], "unread_changed");
@@ -1025,6 +1201,191 @@ mod tests {
     assert_eq!(receive_json(&mut client).await["sequence"], 1);
     server.abort();
     let _ = server.await;
+  }
+
+  /// The handshake's `catchup_complete` names the session it replayed, the handshake's own
+  /// subscription 0 and the read's event total.
+  #[tokio::test]
+  async fn the_handshake_catchup_complete_carries_the_session_subscription_and_event_total() {
+    let (_home, features) = test_context();
+    seed_manager_session(&features, "synthetic", 0).await;
+    let (address, server) = start_server(Arc::clone(&features)).await;
+    let mut client = connect(address, "synthetic", "cursor=999999").await;
+    let complete = receive_json(&mut client).await;
+    assert_eq!(complete["type"], "catchup_complete");
+    assert_eq!(complete["session_id"], "synthetic");
+    assert_eq!(complete["subscription"], 0);
+    assert_eq!(complete["event_total"], 3);
+    server.abort();
+    let _ = server.await;
+  }
+
+  /// A subscribe frame answers `subscribed` before the replay and closes with a fielded
+  /// `catchup_complete`. The socket then serves the target: a live event reaches it once, the
+  /// session it left reaches it no more.
+  #[tokio::test]
+  async fn a_subscribe_answers_subscribed_before_the_replay_and_completes_with_its_fields() {
+    let (_home, features) = test_context();
+    seed_manager_session(&features, "left", 0).await;
+    seed_manager_session(&features, "target", 0).await;
+    let (address, server) = start_server(Arc::clone(&features)).await;
+    let mut client = connect(address, "left", "cursor=999999").await;
+    receive_catchup_complete(&mut client).await;
+
+    send_client_frame(&mut client, 1, br#"{"type":"subscribe","session_id":"target","cursor":1,"subscription":7}"#)
+      .await;
+    let subscribed = receive_json(&mut client).await;
+    assert_eq!(subscribed["type"], "subscribed", "the answer precedes the replay");
+    assert_eq!(subscribed["session_id"], "target");
+    assert_eq!(subscribed["subscription"], 7);
+    let first = receive_json(&mut client).await;
+    assert_eq!(first["type"], "task_created");
+    assert_eq!(first["event_index"], 2);
+    let second = receive_json(&mut client).await;
+    assert_eq!(second["type"], "stream");
+    let complete = receive_json(&mut client).await;
+    assert_eq!(complete["type"], "catchup_complete");
+    assert_eq!(complete["session_id"], "target");
+    assert_eq!(complete["subscription"], 7);
+    assert_eq!(complete["event_total"], 3);
+
+    // The socket serves the target: its live events arrive, the left session's never do.
+    features.store.persist_and_broadcast("target", json!({"type": "task_created", "content": "live"})).await.unwrap();
+    let live = receive_json(&mut client).await;
+    assert_eq!(live["content"], "live");
+    features
+      .store
+      .broadcast(&streaming::session_channel("left"), json!({"type": "stream", "sequence": 1}))
+      .await
+      .unwrap();
+    features.store.persist_and_broadcast("target", json!({"type": "task_created", "content": "second"})).await.unwrap();
+    let next = time::timeout(Duration::from_secs(1), receive_json(&mut client)).await.unwrap();
+    assert_eq!(next["content"], "second", "the left session's late frame never reaches the socket");
+    server.abort();
+    let _ = server.await;
+  }
+
+  /// An unknown session's subscribe answers `error` with the request's subscription number and
+  /// leaves the previous subscription serving the socket.
+  #[tokio::test]
+  async fn an_unknown_sessions_subscribe_answers_error_and_keeps_the_old_subscription() {
+    let (_home, features) = test_context();
+    write_session(&features, "synthetic", TaskProfile::Manager, 0);
+    let (address, server) = start_server(Arc::clone(&features)).await;
+    let mut client = connect(address, "synthetic", "cursor=999999").await;
+    receive_catchup_complete(&mut client).await;
+
+    send_client_frame(
+      &mut client,
+      1,
+      br#"{"type":"subscribe","session_id":"no-such-session","cursor":0,"subscription":3}"#,
+    )
+    .await;
+    let error = receive_json(&mut client).await;
+    assert_eq!(error["type"], "error");
+    assert_eq!(error["subscription"], 3);
+
+    features
+      .store
+      .broadcast(&streaming::session_channel("synthetic"), json!({"type": "stream", "sequence": 1}))
+      .await
+      .unwrap();
+    let frame = time::timeout(Duration::from_secs(1), receive_json(&mut client)).await.unwrap();
+    assert_eq!(frame["sequence"], 1, "the handshake subscription still serves the socket");
+    server.abort();
+    let _ = server.await;
+  }
+
+  /// A malformed subscribe frame answers `error` and leaves the previous subscription serving the
+  /// socket, like an unknown session. A frame that names no parseable subscription answers `null`.
+  #[tokio::test]
+  async fn a_malformed_subscribe_answers_error_and_keeps_the_old_subscription() {
+    let (_home, features) = test_context();
+    write_session(&features, "synthetic", TaskProfile::Manager, 0);
+    let (address, server) = start_server(Arc::clone(&features)).await;
+    let mut client = connect(address, "synthetic", "cursor=999999").await;
+    receive_catchup_complete(&mut client).await;
+
+    send_client_frame(&mut client, 1, br#"{"type":"subscribe","session_id":7,"cursor":0,"subscription":5}"#).await;
+    let error = receive_json(&mut client).await;
+    assert_eq!(error["type"], "error");
+    assert_eq!(error["subscription"], 5, "the answer names the request's subscription");
+
+    send_client_frame(&mut client, 1, br#"{"type":"subscribe","session_id":"synthetic"}"#).await;
+    let error = receive_json(&mut client).await;
+    assert_eq!(error["type"], "error");
+    assert!(error["subscription"].is_null(), "a frame naming no subscription answers null");
+
+    features
+      .store
+      .broadcast(&streaming::session_channel("synthetic"), json!({"type": "stream", "sequence": 1}))
+      .await
+      .unwrap();
+    let frame = time::timeout(Duration::from_secs(1), receive_json(&mut client)).await.unwrap();
+    assert_eq!(frame["sequence"], 1, "the handshake subscription still serves the socket");
+    server.abort();
+    let _ = server.await;
+  }
+
+  /// An event appended before the subscription reaches the replay alone: the event lock orders
+  /// the append-broadcast pair against the subscription's creation, so the frame is queued to no
+  /// subscriber and delivered once.
+  #[tokio::test]
+  async fn an_event_appended_before_the_subscription_reaches_the_replay_alone() {
+    let (_home, features) = test_context();
+    write_session(&features, "synthetic", TaskProfile::Manager, 0);
+    features
+      .store
+      .persist_and_broadcast("synthetic", json!({"type": "task_created", "content": "before"}))
+      .await
+      .unwrap();
+    let store = Arc::clone(&features.store);
+    let load_store = Arc::clone(&store);
+    let (mut subscription, events) = store
+      .subscribe_session_before_load("synthetic", || async { load_store.load_chat_events_sync("synthetic").unwrap() })
+      .await;
+    assert_eq!(events.len(), 1);
+    // The append and its broadcast finished before the subscription existed, so nothing targets it
+    // afterwards. One poll reads the queue and proves it empty without spending the time budget.
+    assert!(
+      subscription.recv().now_or_never().is_none(),
+      "the subscription carries no copy of the event the replay delivers"
+    );
+  }
+
+  /// An event appended while the catch-up read runs reaches the subscription alone: the read
+  /// holds the session's event lock, so the append-broadcast pair waits for it and its event is
+  /// absent from the read's snapshot.
+  #[tokio::test]
+  async fn an_event_appended_while_the_catchup_read_runs_reaches_the_subscription_alone() {
+    let (_home, features) = test_context();
+    write_session(&features, "synthetic", TaskProfile::Manager, 0);
+    let store = Arc::clone(&features.store);
+    let load_store = Arc::clone(&store);
+    let (mut subscription, loaded) = store
+      .subscribe_session_before_load("synthetic", || async {
+        let append_store = Arc::clone(&load_store);
+        let events = load_store.load_chat_events_sync("synthetic").unwrap();
+        let append = tokio::spawn(async move {
+          append_store
+            .persist_and_broadcast("synthetic", json!({"type": "task_created", "content": "mid-flight"}))
+            .await
+            .unwrap();
+        });
+        (events, append)
+      })
+      .await;
+    let (events, append) = loaded;
+    append.await.unwrap();
+    assert!(events.is_empty(), "the read's snapshot predates the append it blocked");
+    let frame = time::timeout(Duration::from_millis(500), subscription.recv()).await.unwrap().unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&frame).unwrap()["content"], "mid-flight");
+    // The append finished before the first frame was read, and its broadcast copies the frame into
+    // the queue before returning, so a duplicate would already be here. One poll proves there is none.
+    assert!(
+      subscription.recv().now_or_never().is_none(),
+      "the subscription delivers the blocked append once, never twice"
+    );
   }
 
   /// A handshake whose `asset_version` differs from the server's current static asset version closes

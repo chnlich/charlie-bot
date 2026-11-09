@@ -1012,7 +1012,9 @@ test('createSession switches open chat through SPA state without full reload', a
 
   context.renderSessionView = (data) => { rendered = data; };
   context.history.pushState = (_state, _title, url) => { pushedUrl = url; };
-  context.connectWS = () => { connected = true; };
+  // The switch seam: the created session rides the open socket's subscribe instead of a
+  // reconnect.
+  context.requestSessionSubscription = () => { connected = true; };
 
   await context.createSession();
 

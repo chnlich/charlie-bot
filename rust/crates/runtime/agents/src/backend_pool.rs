@@ -73,15 +73,8 @@ pub const BACKEND_TEMPORARY_UNAVAILABLE_PATTERNS: &[&str] = &[
   "no session progress for",
 ];
 
-/// The session metadata slot that records whether the backend pool selected a worker's backend.
+/// The session metadata slot that records the route a delegation keeps.
 pub const METADATA_OWNER: &str = "backend_pool";
-
-/// The session metadata field that records whether the pool chose the backend, held in the `backend_pool` slot.
-pub const BACKEND_FROM_POOL_FIELD: &str = "backend_from_pool";
-
-/// The session metadata field that records whether an Auto session's current member chose the backend, so a quota end
-/// on it moves to the next Auto member and not to the pool.
-pub const BACKEND_FROM_AUTO_FIELD: &str = "backend_from_auto";
 
 /// The route a request keeps on its session: the backend ids the router named, and the router's explanation.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -162,89 +155,14 @@ impl BackendPool {
     Arc::clone(&self.availability)
   }
 
+  /// One selection over the process-wide owners this pool holds. A caller that also holds a store chains
+  /// [`model_pool::Selector::with_store`], so a priority pool orders its members by session load.
+  pub fn selector<'a>(&'a self, cfg: &'a CharlieBotConfig) -> model_pool::Selector<'a> {
+    model_pool::Selector::new(cfg, &self.registry, Arc::clone(&self.availability), Arc::clone(&self.positions))
+  }
+
   fn out_until(&self, member: &str) -> Option<OffsetDateTime> {
     self.availability.out_until(member)
-  }
-
-  /// Select the member a call on the `backends.pools` entry `pool_id` runs on, or `None` when no member is selectable.
-  /// The pool's rule picks the member; a rotate pool moves its position past it.
-  pub fn select(
-    &self,
-    cfg: &CharlieBotConfig,
-    caller: &str,
-    pool_id: &str,
-    exclude: &[String],
-  ) -> anyhow::Result<Option<BackendOption>> {
-    let pool = model_pool::pool_by_id(cfg, pool_id)?;
-    let selection =
-      model_pool::Selection::new(cfg, &self.registry, &self.availability, &pool, exclude, UtcDateTime::now());
-    let selected = self.positions.select(&selection)?;
-    let Some(member) = selected else {
-      let mut excluded = exclude.to_vec();
-      excluded.sort();
-      tracing::warn!(
-        target: "charliebot_agents",
-        caller,
-        pool = pool_id,
-        excluded = ?excluded,
-        "backend_pool_exhausted"
-      );
-      return Ok(None);
-    };
-    tracing::info!(
-      target: "charliebot_agents",
-      caller,
-      pool = pool_id,
-      member = %member.backend,
-      "backend_pool_selected"
-    );
-    let option = cfg.get_backend_option(&member.backend).expect("the selected pool member is a backends.options id");
-    Ok(Some(option.clone()))
-  }
-
-  /// The member `select` would pick on `pool_id` now, without moving the rotation position. The cron host gate reads it
-  /// before a fire, so the gate judges the member the fire then selects.
-  pub fn peek(
-    &self,
-    cfg: &CharlieBotConfig,
-    pool_id: &str,
-    exclude: &[String],
-  ) -> anyhow::Result<Option<BackendOption>> {
-    let pool = model_pool::pool_by_id(cfg, pool_id)?;
-    let selection =
-      model_pool::Selection::new(cfg, &self.registry, &self.availability, &pool, exclude, UtcDateTime::now());
-    let peeked = self.positions.peek(&selection)?;
-    Ok(peeked.map(|member| {
-      cfg.get_backend_option(&member.backend).expect("the selected pool member is a backends.options id").clone()
-    }))
-  }
-
-  /// The line a caller reports when `select` found no member of the pool `pool_id`: one line per member.
-  pub fn exhausted_message(&self, cfg: &CharlieBotConfig, pool_id: &str) -> anyhow::Result<String> {
-    let pool = model_pool::pool_by_id(cfg, pool_id)?;
-    model_pool::all_exhausted_message(cfg, &self.registry, &self.availability, &pool)
-  }
-
-  /// Select the first available member in a fixed router order without moving any rotation position.
-  pub fn pick_ordered(
-    &self,
-    cfg: &CharlieBotConfig,
-    caller: &str,
-    backends: &[String],
-    exclude: &[String],
-  ) -> anyhow::Result<Option<BackendOption>> {
-    let pool = model_pool::ordered_pool(backends);
-    let mut position = 0;
-    let selection =
-      model_pool::Selection::new(cfg, &self.registry, &self.availability, &pool, exclude, UtcDateTime::now());
-    let selected = model_pool::select(&selection, Some(&mut position))?;
-    let Some(member) = selected else {
-      tracing::warn!(target: "charliebot_agents", caller, backends = ?backends, excluded = ?exclude, "backend_pool_route_exhausted");
-      return Ok(None);
-    };
-    tracing::info!(target: "charliebot_agents", caller, member = %member.backend, source = "route", "backend_pool_selected");
-    let option = cfg.get_backend_option(&member.backend).expect("the selected route member is a backends.options id");
-    Ok(Some(option.clone()))
   }
 
   /// Ask `backends.routing.command` for one request's answer. `session_backend` is the delegating session's backend id,
@@ -280,11 +198,19 @@ impl BackendPool {
       anyhow::bail!("{caller}: a routed answer names exactly one backend id, got {}", backends.len());
     };
     let backend = backend.clone();
-    if cfg.backends.pool(&backend).is_some() || self.pick_ordered(cfg, caller, &backends, &[])?.is_some() {
+    if cfg.backends.pool(&backend).is_some() || self.decide_option_available(cfg, &backend)? {
       return Ok(RoutedRequest { route: BackendRoute { backends, reason }, target: RouteTarget::Backend(backend) });
     }
     let reason = format!("{reason}; {backend} cooling; ran on the default path");
     Ok(RoutedRequest { route: BackendRoute { backends, reason }, target: RouteTarget::NotRouted })
+  }
+
+  /// Whether the one `backends.options` id a routed answer names can run now.
+  fn decide_option_available(&self, cfg: &CharlieBotConfig, backend_id: &str) -> anyhow::Result<bool> {
+    if cfg.get_backend_option(backend_id).is_none() {
+      return Ok(false);
+    }
+    self.selector(cfg).option_available(backend_id, &[])
   }
 
   /// Run the router command on `payload` and parse its answer against the candidate ids it was offered.
@@ -375,7 +301,7 @@ pub fn one_shot_members<'a>(
     let next = match target {
       None => return None,
       Some(CallTarget::Session) => Err(anyhow::anyhow!("backends.calls.{caller} cannot name the session")),
-      Some(CallTarget::Backend(id)) if cfg.backends.pool(id).is_some() => pool.select(cfg, caller, id, &tried),
+      Some(CallTarget::Backend(id)) if cfg.backends.pool(id).is_some() => pool.selector(cfg).select(id, &tried),
       Some(CallTarget::Backend(id)) => cfg
         .get_backend_option(id)
         .cloned()
@@ -403,10 +329,37 @@ pub fn one_shot_members<'a>(
   })
 }
 
-/// Return whether an error string contains a known quota error substring.
+/// Return whether an error string contains a known quota error substring. A bare status code matches only as a whole
+/// token: a request id carries the same digits, and a request error that names one must fail fast.
 pub fn is_quota_error(text: &str) -> bool {
   let lowered = text.to_lowercase();
-  QUOTA_ERROR_PATTERNS.iter().any(|pattern| lowered.contains(pattern))
+  QUOTA_ERROR_PATTERNS.iter().any(|pattern| {
+    if pattern.bytes().all(|byte| byte.is_ascii_digit()) {
+      contains_token(&lowered, pattern)
+    } else {
+      lowered.contains(pattern)
+    }
+  })
+}
+
+/// Whether `token` occurs in `text` with no letter, digit or underscore on either side.
+fn contains_token(text: &str, token: &str) -> bool {
+  let is_word = |character: char| character.is_alphanumeric() || character == '_';
+  text.match_indices(token).any(|(start, _)| {
+    !text[..start].chars().next_back().is_some_and(is_word)
+      && !text[start + token.len()..].chars().next().is_some_and(is_word)
+  })
+}
+
+/// Return whether an error text marks a spent quota rather than a temporary failure. This is the one verdict that
+/// manager turns and worker runs share: a quota substring matches and no temporary-failure substring does.
+pub fn is_spent_quota_error(text: &str) -> bool {
+  is_quota_error(text) && !is_temporary_unavailable_error(text)
+}
+
+/// Return whether a Claude Code `result` event's text marks a spent quota. The caller has checked `is_error`.
+pub fn is_spent_quota_result(event: &Value) -> bool {
+  event.get("result").map(text_repr::value_str).is_some_and(|text| is_spent_quota_error(&text))
 }
 
 /// Return whether an error string contains a temporary backend failure substring.
@@ -453,46 +406,19 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
       owner: METADATA_OWNER,
       on: MetadataFile::Session,
       after: None,
-      fields: vec![
-        SlotField { name: BACKEND_FROM_POOL_FIELD, default: serde_json::json!(false) },
-        SlotField { name: BACKEND_FROM_AUTO_FIELD, default: serde_json::json!(false) },
-        SlotField { name: "route", default: Value::Null },
-      ],
+      fields: vec![SlotField { name: "route", default: Value::Null }],
     },
     validate_backend_pool_fields,
   )
 }
 
 fn validate_backend_pool_fields(values: &mut Map<String, Value>) -> Option<String> {
-  for field in [BACKEND_FROM_POOL_FIELD, BACKEND_FROM_AUTO_FIELD] {
-    if let Some(error) = coerce_boolean_field(values, field) {
-      return Some(error);
-    }
-  }
   if let Some(route) = values.get("route")
     && !route.is_null()
     && serde_json::from_value::<BackendRoute>(route.clone()).is_err()
   {
     return Some("route must be null or contain backends: list[str] and reason: str".to_string());
   }
-  None
-}
-
-/// Store a present boolean field as a JSON boolean, or name the field when its value is not one.
-fn coerce_boolean_field(values: &mut Map<String, Value>, field: &str) -> Option<String> {
-  let value = values.get_mut(field)?;
-  let boolean = match value {
-    Value::Bool(value) => *value,
-    Value::Number(value) if value.as_i64() == Some(0) || value.as_f64() == Some(0.0) => false,
-    Value::Number(value) if value.as_i64() == Some(1) || value.as_f64() == Some(1.0) => true,
-    Value::String(value) => match value.to_ascii_lowercase().as_str() {
-      "1" | "true" | "t" | "yes" | "y" | "on" => true,
-      "0" | "false" | "f" | "no" | "n" | "off" => false,
-      _ => return Some(format!("{field} must be a boolean")),
-    },
-    _ => return Some(format!("{field} must be a boolean")),
-  };
-  *value = Value::Bool(boolean);
   None
 }
 
@@ -633,6 +559,7 @@ mod tests {
         label: id.to_string(),
         model: "synthetic-model".to_string(),
         prompt_overlay: None,
+        billing: None,
         backend_type: "codex".to_string(),
         type_fields: Mapping::new(),
       })
@@ -641,7 +568,7 @@ mod tests {
       id: POOL.to_string(),
       label: "Light".to_string(),
       rule: PoolRule::Rotate,
-      members: members.iter().map(|member| PoolMember { backend: (*member).to_string(), billing: None }).collect(),
+      members: members.iter().map(|member| PoolMember { backend: (*member).to_string() }).collect(),
     }];
     CharlieBotConfig {
       charliebot_home: PathBuf::from("/synthetic/home"),
@@ -673,9 +600,9 @@ mod tests {
     }
   }
 
-  fn select_id(pool: &BackendPool, cfg: &CharlieBotConfig, caller: &str, exclude: &[&str]) -> Option<String> {
+  fn select_id(pool: &BackendPool, cfg: &CharlieBotConfig, _caller: &str, exclude: &[&str]) -> Option<String> {
     let excluded = exclude.iter().map(|member| (*member).to_string()).collect::<Vec<_>>();
-    pool.select(cfg, caller, POOL, &excluded).unwrap().map(|option| option.id)
+    pool.selector(cfg).select(POOL, &excluded).unwrap().map(|option| option.id)
   }
 
   /// A pool whose owner holds no record and never persists one: the selection tests never record.
@@ -811,7 +738,7 @@ mod tests {
     let cfg = config(&["a", "b"]);
     let pool = pool_at(home.path());
     record(&pool, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
-    let message = pool.exhausted_message(&cfg, POOL).unwrap();
+    let message = pool.selector(&cfg).exhausted_message(POOL).unwrap();
     assert!(message.starts_with("pool 'light' has no selectable member:\n"), "{message}");
     assert!(message.contains("\n- a: ") && message.contains("recovers at 2030-01-02T03:04"), "{message}");
     assert!(message.contains("(synthetic quota error)"), "{message}");
@@ -834,41 +761,41 @@ mod tests {
   fn peek_names_the_member_select_would_pick_without_moving_the_rotation() {
     let cfg = config(&["a", "b", "c"]);
     let pool = pool();
-    assert_eq!(pool.peek(&cfg, POOL, &[]).unwrap().map(|option| option.id), Some("a".to_string()));
-    assert_eq!(pool.peek(&cfg, POOL, &[]).unwrap().map(|option| option.id), Some("a".to_string()));
+    assert_eq!(pool.selector(&cfg).peek(POOL, &[]).unwrap().map(|option| option.id), Some("a".to_string()));
+    assert_eq!(pool.selector(&cfg).peek(POOL, &[]).unwrap().map(|option| option.id), Some("a".to_string()));
     assert_eq!(select_id(&pool, &cfg, "test", &[]), Some("a".to_string()));
-    assert_eq!(pool.peek(&cfg, POOL, &[]).unwrap().map(|option| option.id), Some("b".to_string()));
+    assert_eq!(pool.selector(&cfg).peek(POOL, &[]).unwrap().map(|option| option.id), Some("b".to_string()));
   }
 
   #[test]
-  fn pick_ordered_takes_the_first_available_route_member() {
+  fn a_route_order_takes_the_first_available_member() {
     let cfg = config(&["a", "b", "c"]);
-    let selected = pool().pick_ordered(&cfg, "test", &["b".to_string(), "a".to_string()], &[]).unwrap();
+    let selected = pool().selector(&cfg).ordered(&["b".to_string(), "a".to_string()], &[]).unwrap();
     assert_eq!(selected.map(|option| option.id), Some("b".to_string()));
   }
 
   #[test]
-  fn pick_ordered_skips_out_and_excluded_members() {
+  fn a_route_order_skips_out_and_excluded_members() {
     let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a", "b", "c"]);
     let pool = pool_at(home.path());
     record(&pool, "b", None);
     assert_eq!(
-      pool.pick_ordered(&cfg, "test", &["b".to_string(), "a".to_string()], &[]).unwrap().map(|option| option.id),
+      pool.selector(&cfg).ordered(&["b".to_string(), "a".to_string()], &[]).unwrap().map(|option| option.id),
       Some("a".to_string())
     );
-    assert_eq!(pool.pick_ordered(&cfg, "test", &["b".to_string(), "a".to_string()], &["a".to_string()]).unwrap(), None);
+    assert_eq!(pool.selector(&cfg).ordered(&["b".to_string(), "a".to_string()], &["a".to_string()]).unwrap(), None);
   }
 
   #[test]
-  fn pick_ordered_shares_the_owner_state_with_selection() {
+  fn a_route_order_shares_the_owner_state_with_selection() {
     let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a", "b"]);
     let pool = pool_at(home.path());
     record(&pool, "a", None);
     assert_eq!(select_id(&pool, &cfg, "test", &[]), Some("b".to_string()));
     assert_eq!(
-      pool.pick_ordered(&cfg, "test", &["a".to_string(), "b".to_string()], &[]).unwrap().map(|option| option.id),
+      pool.selector(&cfg).ordered(&["a".to_string(), "b".to_string()], &[]).unwrap().map(|option| option.id),
       Some("b".to_string())
     );
   }
@@ -885,15 +812,32 @@ mod tests {
     ] {
       assert!(is_quota_error(text), "{text}");
     }
-    for text in ["syntax error in the diff", "connection reset by peer"] {
+    for text in [
+      "syntax error in the diff",
+      "connection reset by peer",
+      // A request id whose hex digits contain 429 is not a status code.
+      "Error code: 400 - invalid request (request_id: 0b429c7d-1e2f-4a5b-8c9d-0e1f2a3b4c5d)",
+      "Error code: 400 - invalid request (request id req_429ab)",
+    ] {
       assert!(!is_quota_error(text), "{text}");
     }
   }
 
   #[test]
+  fn a_spent_quota_text_is_one_verdict_and_a_temporary_text_is_not() {
+    let aigw_402 = "API Error: 402 litellm.BadRequestError: OpenAIException - Insufficient Balance";
+    assert!(is_spent_quota_error(aigw_402));
+    assert!(!is_spent_quota_error("500 Internal Server Error: quota exhausted"));
+    assert!(!is_spent_quota_error("Error code: 400 - invalid request"));
+    let result = json!({"type": "result", "is_error": true, "api_error_status": 402, "result": aigw_402});
+    assert!(is_spent_quota_result(&result));
+    assert!(!is_spent_quota_result(&json!({"type": "result", "is_error": true, "result": null})));
+  }
+
+  #[test]
   fn selecting_an_unknown_pool_id_fails() {
     let cfg = config(&["a"]);
-    assert!(pool().select(&cfg, "test", "missing", &[]).is_err());
+    assert!(pool().selector(&cfg).select("missing", &[]).is_err());
   }
 
   #[test]

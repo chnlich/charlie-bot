@@ -3,7 +3,8 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use charliebot_agents::backend_pool::BackendPool;
+use charliebot_agents::backend_pool::BackendRoute;
+use charliebot_agents::model_pool::Selector;
 use charliebot_core::config::{CallClass, CallTarget, CharlieBotConfig};
 use charliebot_core::event_types::MESSAGE_CONTENT_POINTER;
 use charliebot_store::run_records::visit_events_from_end;
@@ -89,19 +90,33 @@ pub fn worker_error_from_events_log(events: &[Value]) -> Option<String> {
   })
 }
 
+/// The worker-side facts that shape one reviewer selection: the worker session's route, its backend and model, and the
+/// backends the worker session used or its reviewers already tried.
+pub struct ReviewScope<'a> {
+  pub route: Option<&'a BackendRoute>,
+  pub worker_backend: &'a str,
+  pub worker_model: Option<&'a str>,
+  pub tried_backends: &'a [String],
+  pub used_backends: &'a HashSet<String>,
+}
+
 /// Select the reviewer, verify checker, or cold reader that the call class `class` runs on. `backends.calls` names its
 /// target: a pool selects a member the worker's backend and the used or tried backends do not hold; a model runs as
-/// written; `session`, or no key, runs on the worker's own backend. A pool with no selectable member falls back to the
-/// worker's backend unless that backend was already tried, which ends the selection with `None`.
+/// written; `session`, or no key, runs on the worker's own backend, or on the worker session's route. A pool with no
+/// selectable member falls back to the worker's backend unless that backend was already tried, which ends the
+/// selection with `None`.
+///
+/// `scope.route` is the worker session's recorded route. A review whose `backends.calls.review` is unset or `session`
+/// runs on the route's pool, or on the route's ids in order, and falls back to the worker's backend when the route has
+/// no member left. A route never overrides a `backends.calls.review` backend target: that target alone decides the
+/// reviewer when the key is set.
 pub fn select_reviewer_backend(
   cfg: &CharlieBotConfig,
-  pool: &BackendPool,
+  selector: &Selector<'_>,
   class: CallClass,
-  worker_backend: &str,
-  worker_model: Option<&str>,
-  tried_backends: &[String],
-  used_backends: &HashSet<String>,
+  scope: ReviewScope<'_>,
 ) -> anyhow::Result<Option<ReviewerBackendSelection>> {
+  let ReviewScope { route, worker_backend, worker_model, tried_backends, used_backends } = scope;
   let caller = class.key();
   let worker_fallback = || {
     let mut tried = tried_backends.to_vec();
@@ -112,9 +127,24 @@ pub fn select_reviewer_backend(
   excluded.extend(used_backends.iter().cloned());
   excluded.extend(tried_backends.iter().cloned());
   match cfg.backends.calls.get(class) {
-    None | Some(CallTarget::Session) => return Ok(worker_fallback()),
+    None | Some(CallTarget::Session) => {
+      let Some(route) = route.filter(|route| !route.backends.is_empty()) else {
+        return Ok(worker_fallback());
+      };
+      // A route that names a pool leaves the member to that pool; a route of options ids is ordered by its ids. A route
+      // with no member left falls back to the worker's backend, as a review with no route does.
+      let picked = match route.backends.iter().find(|backend| cfg.backends.pool(backend).is_some()) {
+        Some(route_pool_id) => selector.select(route_pool_id, &excluded)?,
+        None => selector.ordered(&route.backends, &excluded)?,
+      };
+      let Some(option) = picked else {
+        return Ok(worker_fallback());
+      };
+      let model = option.required_model("route member").map_err(anyhow::Error::msg)?;
+      return Ok(Some((option.id, Some(model), tried_backends.to_vec())));
+    }
     Some(CallTarget::Backend(target)) if cfg.backends.pool(target).is_some() => {
-      if let Some(option) = pool.select(cfg, caller, target, &excluded)? {
+      if let Some(option) = selector.select(target, &excluded)? {
         let model = option.required_model("pool member").map_err(anyhow::Error::msg)?;
         let mut tried = tried_backends.to_vec();
         tried.push(option.id.clone());

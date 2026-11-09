@@ -1,15 +1,18 @@
 //! The `devin` backend type: the Devin CLI in print mode, run headless with every tool approved. The CLI prints the
 //! final answer on stdout and writes the turn's trajectory to an export file, which the runner reads once the process
-//! has exited. The CLI logs its usage only into CharlieBot's own run logs, so the usage source has no reader.
+//! has exited. Token usage comes from CharlieBot's run logs; subscription quota reads use the Devin status endpoint.
 
 mod devin_cli;
 mod export;
 mod factory;
 mod options;
+mod usage_quota;
 
 use std::sync::Arc;
 
+use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::cli_base::CliHost;
+use charliebot_core::home;
 use charliebot_registry::backend::{BackendTraits, BackendTypeRegistration, ResumeStyle};
 use charliebot_registry::usage::UsageSource;
 use charliebot_registry::{Registry, RegistryError, registration_step};
@@ -27,6 +30,15 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 
 /// [`register`] over an explicit host.
 pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), RegistryError> {
+  let profile_home = registration_step(PACKAGE, home::charliebot_home_dir().map_err(anyhow::Error::new))?;
+  let availability = registration_step(PACKAGE, BackendAvailability::load(&profile_home))?;
+  let state = Arc::new(usage_quota::DevinQuotaState::default());
+  let account = Arc::new(usage_quota::DevinQuotaAccount::new(
+    Arc::clone(&state),
+    host.home.join(".local/share/devin/credentials.toml"),
+    host.clone(),
+    Arc::new(availability),
+  ));
   registry.backend_type(BackendTypeRegistration {
     type_name: "devin",
     traits: BackendTraits {
@@ -43,11 +55,12 @@ pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), 
     translate_fallback: false,
   })?;
   registry.option_schema("devin", options::SCHEMA)?;
+  registry.member_reading("devin", usage_quota::DevinUsageSource::member_reading(Arc::clone(&state)))?;
   registry.usage_source(UsageSource {
     name: USAGE_SOURCE,
     id_prefixes: &["devin-"],
     run_logs_only: true,
-    implementation: None,
+    implementation: Some(Arc::new(usage_quota::DevinUsageSource::new(account))),
   })?;
   registry.attribute_backend_type("devin", USAGE_SOURCE)
 }

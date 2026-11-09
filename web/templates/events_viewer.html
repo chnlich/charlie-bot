@@ -93,6 +93,7 @@
         <span class="events-download-label">Download JSONL</span>
       </a>
       <span id="event-count" class="text-xs text-slate-400"></span>
+      {% set defer_concurrency_badge_poll = true %}
       {% include 'partials/concurrency_badge.html' %}
     </header>
 

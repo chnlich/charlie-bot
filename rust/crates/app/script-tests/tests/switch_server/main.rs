@@ -8,6 +8,8 @@ mod cleanup;
 mod delegation;
 mod disk;
 mod probe;
+#[path = "../common/release_lock.rs"]
+mod release_lock;
 mod world;
 
 use std::fs::{self, OpenOptions};
@@ -17,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use charliebot_core::logline;
 use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
@@ -25,6 +27,7 @@ use nix::errno::Errno;
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use regex::Regex;
+use release_lock::LockHolder;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use wait_timeout::ChildExt;
@@ -422,6 +425,71 @@ fn test_preflight_refusal_exits_1_and_changes_nothing_dirty_clone() {
 #[ignore = "integration"]
 fn test_preflight_refusal_exits_1_and_changes_nothing_launcher_preflight() {
   preflight_refusal_exits_1_and_changes_nothing("launcher-preflight");
+}
+
+// ---- the host release lock ----------------------------------------------------------------------------------------
+
+#[test]
+#[ignore = "integration"]
+fn test_a_switch_that_finds_the_release_lock_held_refuses_at_once_and_names_the_holder() {
+  let world = World::new();
+  let commit = world.rust_sha.clone();
+  let mut holder =
+    LockHolder::start(&world.clone.join("scripts/release/lock.sh"), &world.env, "switch-server.sh", &commit);
+  let started = Instant::now();
+
+  let run = world.switch(&["rust", &commit]);
+
+  let elapsed = started.elapsed();
+  assert_eq!(run.code, 1, "{}", world.report(&run));
+  assert!(elapsed < Duration::from_secs(2), "the refusal took {elapsed:?}: {}", world.report(&run));
+  assert!(run.stdout.contains("script=switch-server.sh"), "{}", world.report(&run));
+  assert!(run.stdout.contains(&format!("commit={commit}")), "{}", world.report(&run));
+  assert!(run.stdout.contains(&format!("pid={}", holder.pid())), "{}", world.report(&run));
+  assert!(run.stdout.contains("started="), "{}", world.report(&run));
+
+  // A holder that dies leaves the lock free: the next switch gets past it and fails later, in its preflight. The
+  // second switch starts in a later second, so its log is not the file the refusal's log shares a name with.
+  holder.kill();
+  assert!(holder.record().exists(), "the killed holder left no stale record");
+  thread::sleep(Duration::from_secs(1));
+  let run = world.switch(&["rust", &commit]);
+  assert!(!run.stdout.contains("is held"), "the stale record blocked the next switch: {}", world.report(&run));
+  assert!(
+    run.stdout.contains("expected one server listening"),
+    "the switch did not get past the lock: {}",
+    world.report(&run)
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_switch_the_release_flow_started_does_not_deadlock_on_its_callers_lock() {
+  let world = World::new();
+  let commit = world.rust_sha.clone();
+  // The caller takes the lock the way release.sh does and hands to the switch on the inherited descriptor, as the
+  // rehearsal's switches run under the release's own.
+  let body = format!(
+    "source \"{0}/scripts/release/lock.sh\" && release_lock_take release.sh \"$1\" \
+     && exec bash \"{1}\" rust \"$1\"",
+    world.clone.display(),
+    world.switch_script().display()
+  );
+  let mut command = harness::command("bash", &world.env);
+  command.args(["-c", body.as_str(), "bash", &commit]);
+  let run = harness::run(&mut command);
+
+  assert!(
+    run.stdout.contains("the release flow holds the host release lock"),
+    "the switch did not run on its caller's lock: {}",
+    run.describe()
+  );
+  assert!(!run.stdout.contains("is held"), "the switch deadlocked on its caller's lock: {}", run.describe());
+  assert!(
+    run.stdout.contains("expected one server listening"),
+    "the switch did not get past its caller's lock: {}",
+    run.describe()
+  );
 }
 
 // ---- preflight: the configuration check reads the target's own commit -------------------------------------------

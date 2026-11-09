@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -183,4 +185,170 @@ fn the_local_work_guard_starts_on_a_home_without_a_runner_section() {
 
   let output = run_server(&home, &["--check-config"], true, &server_bin_dir);
   assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+/// The live host config's backends in the released form: every pool names option ids, and the billing of a member
+/// sits on its `backends.options` entry.
+const LIVE_BACKENDS: &str = r#"backends:
+  routing:
+    command: [charliebot, router]
+  pools:
+  - id: auto
+    label: Auto
+    rule: priority
+    members: [claude-opus-5, devin-swe2-flash, claude-code-gemini-4-argon, codex-gpt-sol, claude-code-glm53-flash]
+  - id: light
+    label: Light
+    rule: rotate
+    members: [claude-code-deepseek-flash, claude-haiku, claude-code-glm53-flash]
+  - id: implement
+    label: Implement
+    rule: rotate
+    members: [claude-code-deepseek-flash, claude-code-glm53-flash, claude-haiku]
+  - id: review
+    label: Review
+    rule: rotate
+    members: [claude-code-kimi-k3.1-pro, claude-code-glm53, claude-code-gemini-4-argon]
+  - id: verify
+    label: Verify
+    rule: rotate
+    members: [claude-code-gemini-3.8-flash, claude-code-deepseek-flash, claude-code-glm53-flash]
+  - id: cold-read
+    label: Cold read
+    rule: rotate
+    members: [claude-haiku, claude-code-gemini-3.8-flash, claude-code-deepseek-flash]
+  calls:
+    worker: implement
+    improve: implement
+    verify: verify
+    review: review
+    cold_read: cold-read
+    probe: cold-read
+    autoname: light
+    triage: light
+    thread: auto
+    new_session: claude-opus-5
+  options:
+    - {id: claude-opus-5, label: Opus 5, type: cc-claude, model: claude-opus-5-5, billing: subscription}
+    - {id: devin-swe2-flash, label: Devin SWE 2 Flash, type: devin, model: swe-2-flash, billing: subscription}
+    - {id: claude-code-gemini-4-argon, label: Gemini 4 Argon, type: cc-claude, model: gemini-4-argon, billing: payg}
+    - {id: codex-gpt-sol, label: GPT Sol, type: codex, model: gpt-sol, billing: payg}
+    - {id: claude-code-glm53-flash, label: GLM 5.3 Flash, type: cc-claude, model: glm-5.3-flash, billing: payg}
+    - {id: claude-code-deepseek-flash, label: DeepSeek Flash, type: cc-claude, model: deepseek-flash}
+    - {id: claude-haiku, label: Haiku, type: cc-claude, model: claude-haiku-5-5}
+    - {id: claude-code-kimi-k3.1-pro, label: Kimi K3.1 Pro, type: cc-claude, model: kimi-k3.1-pro}
+    - {id: claude-code-glm53, label: GLM 5.3, type: cc-claude, model: glm-5.3}
+    - {id: claude-code-gemini-3.8-flash, label: Gemini 3.8 Flash, type: cc-claude, model: gemini-3.8-flash}
+"#;
+
+#[test]
+#[ignore = "integration"]
+fn the_live_option_form_passes_check_config_on_this_release() {
+  let temporary = tempfile::tempdir().unwrap();
+  let home = temporary.path().join("home");
+  let server_bin_dir = prepare_server_bin_dir(temporary.path(), true);
+  fs::create_dir_all(home.join("config.d/approval.d")).unwrap();
+  fs::write(home.join("config.d/approval.d/policy.yaml"), approval_policy_table()).unwrap();
+  fs::write(home.join("credentials.yaml"), "").unwrap();
+  fs::write(home.join("config.yaml"), LIVE_BACKENDS).unwrap();
+
+  let output = run_server(&home, &["--check-config"], true, &server_bin_dir);
+  assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
+  assert_eq!(output.stdout, b"config ok\n");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_mapping_pool_member_fails_check_config_through_the_ordinary_member_error() {
+  let temporary = tempfile::tempdir().unwrap();
+  let home = temporary.path().join("home");
+  let server_bin_dir = prepare_server_bin_dir(temporary.path(), true);
+  fs::create_dir_all(home.join("config.d/approval.d")).unwrap();
+  fs::write(home.join("config.d/approval.d/policy.yaml"), approval_policy_table()).unwrap();
+  fs::write(home.join("credentials.yaml"), "").unwrap();
+  fs::write(
+    home.join("config.yaml"),
+    "backends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: \
+     claude-fable-5-1\n      billing: subscription\n  pools:\n    - id: auto\n      label: Auto\n      rule: \
+     priority\n      members:\n      - {backend: claude-synthetic, billing: subscription}\n",
+  )
+  .unwrap();
+
+  let output = run_server(&home, &["--check-config"], true, &server_bin_dir);
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert_eq!(output.status.code(), Some(1), "{stderr}");
+  // One line: the ordinary members-list error, with no second case named for the mapping form.
+  let lines: Vec<&str> = stderr.trim_end().lines().collect();
+  assert_eq!(lines.len(), 1, "{stderr}");
+  assert!(
+    lines[0].contains("backends.pools[0].members[0]")
+      && lines[0].contains("a pool member is a backends.options id, got a mapping"),
+    "{stderr}"
+  );
+}
+
+/// A check-config command whose launch path, `argv[0]`, the test chooses.
+fn release_server_command(server: &Path, argv0: &OsStr, temporary: &Path) -> Command {
+  let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+  let mut command = Command::new(server);
+  command.arg0(argv0);
+  command
+    .args(["--check-config"])
+    .current_dir(&repo_root)
+    .env_clear()
+    .env("PATH", "/usr/bin:/bin")
+    .env("HOME", temporary)
+    .env("CHARLIEBOT_HOME", temporary.join("home"))
+    .env("CHARLIEBOT_REPO_ROOT", &repo_root);
+  command
+}
+
+/// The server takes its agent PATH entry from the launch path, `argv[0]`, not from the symlink-resolved executable:
+/// started through the `current` link, a later release switch moves the entry to the release that serves. The launch
+/// directory is what the agent environment checks, and a bare command name determines no launch path: the server
+/// refuses with the named input instead of falling back to the resolved path.
+#[test]
+#[ignore = "integration"]
+fn check_config_runs_through_a_release_link_and_takes_the_agent_path_entry_from_argv0() {
+  let temporary = tempfile::tempdir().unwrap();
+  let home = temporary.path().join("home");
+  fs::create_dir_all(home.join("config.d/approval.d")).unwrap();
+  fs::write(home.join("config.d/approval.d/policy.yaml"), approval_policy_table()).unwrap();
+  fs::write(home.join("credentials.yaml"), "").unwrap();
+  fs::write(
+    home.join("config.yaml"),
+    "backends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n",
+  )
+  .unwrap();
+  let releases = temporary.path().join("releases");
+  let release = releases.join("0e876cb17");
+  fs::create_dir_all(&release).unwrap();
+  let server = release.join("charliebot-server");
+  copy_file(Path::new(env!("CARGO_BIN_EXE_charliebot-server")), &server);
+  write_fake_cli(&release);
+  let current = releases.join("current");
+  std::os::unix::fs::symlink(&release, &current).unwrap();
+
+  let output =
+    release_server_command(&server, current.join("charliebot-server").as_os_str(), temporary.path()).output().unwrap();
+  assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
+  assert_eq!(output.stdout, b"config ok\n");
+
+  // Without a CLI in the release, the refusal names the path through the link: the launch directory, not the
+  // resolved release directory, is what the agent environment checks.
+  fs::remove_file(release.join("charliebot")).unwrap();
+  let output =
+    release_server_command(&server, current.join("charliebot-server").as_os_str(), temporary.path()).output().unwrap();
+  assert_eq!(output.status.code(), Some(1));
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  let through_link = current.join("charliebot");
+  let resolved = release.join("charliebot");
+  assert!(stderr.contains(&through_link.display().to_string()), "{stderr}");
+  assert!(!stderr.contains(&resolved.display().to_string()), "{stderr}");
+
+  let output = release_server_command(&server, OsStr::new("charliebot-server"), temporary.path()).output().unwrap();
+  assert_eq!(output.status.code(), Some(1));
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(stderr.contains("cannot determine the server launch path"), "{stderr}");
+  assert!(stderr.contains("charliebot-server"), "{stderr}");
 }

@@ -396,6 +396,7 @@ dependencies = [
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
+ "futures-util",
  "regex",
  "serde_json",
  "serde_yaml",
@@ -770,15 +771,20 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "charliebot-agents",
+ "charliebot-cli-common",
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
+ "futures-util",
  "regex",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "serde_yaml",
  "tempfile",
+ "time",
  "tokio",
+ "toml",
 ]
 
 [[package]]
@@ -1145,6 +1151,7 @@ dependencies = [
  "charliebot-agents",
  "charliebot-anthropic-compatible",
  "charliebot-claude-code",
+ "charliebot-cli-common",
  "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",

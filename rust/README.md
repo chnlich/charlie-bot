@@ -9,10 +9,19 @@ log. It holds the home writer fence, so no second server process serves the same
 Build the server through `dev/remote-run/cargo-slot.sh` from `rust/`. The build host keeps the output, so the agent host
 builds nothing locally.
 
-CI (`.github/workflows/ci.yml`) runs two Rust jobs on `ubuntu-24.04`, whose glibc 2.39 matches the live host. `release-build`
-runs `cargo build --release --locked -p charliebot-server` on every pull request and push. On a push to `main` it uploads
-the artifact `charliebot-server-<full commit sha>`, which holds `charliebot-server` and `sha256sums.txt` and is kept for 30
-days. It builds no tests, so the binary is a plain release build. `rust-test` runs `cargo test --locked` with Rust 1.99.0.
+CI (`.github/workflows/ci.yml`) runs the Rust jobs on `ubuntu-24.04`, whose glibc 2.39 matches the live host; the exact
+commands live only in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). What each job guards:
+
+- `release-build` builds `charliebot-server` and `charliebot` in release mode without tests, so the binary stays a plain
+  release build. A push to `main` uploads both binaries and their `sha256sums.txt` as the artifact
+  `charliebot-server-<full commit sha>`, kept for 30 days; a manual run keeps its binaries for 1 day.
+- `rust-test` runs the Rust suite through `cargo nextest` with Rust 1.99.0, then fails a unit test whose alone time went
+  over the 0.1 s gate, and fails when any doc-test runs (doc-tests carry no per-test time, so one that runs dodges the
+  gate).
+- `rust-lint` runs clippy over all targets with warnings as errors, and the formatter check.
+
+The other CI jobs — the PR-contract check and the frontend suite, which runs the no-Python guard — run in the same
+workflow; the integration suites run from `.github/workflows/integration.yml`.
 
 ## Run
 
@@ -60,7 +69,8 @@ adds `error`.
 ## Test
 
 - Run every compile and test through `dev/remote-run/`: `run.sh` for any command, `cargo-slot.sh` for Cargo.
-- The Rust suite is `cargo test --workspace --locked` from `rust/`.
+- The Rust suite is `cargo test --workspace --locked` from `rust/`; CI runs the same suite through
+  `cargo nextest run --locked --profile ci`.
 - The frontend JavaScript tests are `node --test` from `web/`, as CI does.
 - The agent environment on the agent host refuses the toolchains that `dev/remote-run/README.md` lists.
 - When the runner exits 86 or 87, end the run and report the blocker with the link it prints.
@@ -141,64 +151,93 @@ roots copy.
 
 ## Layout
 
+One line per crate; a crate with a README links to it, and the README carries the detail.
+
 ```
 rust/
   Cargo.toml                      workspace: every crate under `crates/`
   fixtures/golden/                the expected outputs the compat and ssh tests compare with
-  crates/infra/core/src/
-    config.rs                     config.yaml: typed sections, legacy and unknown key refusals
-    credentials.rs                credentials.yaml
-    hot_reload.rs                 reload a file when its (mtime, size) moves
-    home.rs, paths.rs             CHARLIEBOT_HOME, expanduser, realpath
-    fence.rs, fsutil.rs           the home writer fence and its identity record
-    run_token.rs                  signed run tokens
-    logging.rs, timefmt.rs        JSON log lines, the stored time formats
-    text_repr.rs                  repr, str and JSON renderings
-    printable_table.rs            the non-printable character ranges
-    ssh.rs                        the batch-mode ssh argv and its 0700 control directory
-  crates/infra/compat/src/   the compatibility pieces the server and later crates share
-    json.rs                       orjson and Starlette JSON bytes, floats included
-    validation.rs                 FastAPI's 422 bodies and pydantic's lax parsing of query and path values
-    jinja.rs                      minijinja environment with Jinja2's tojson and urlencode, autoescape on
-    mimetypes.rs, mimetypes_table.rs  content types
-    static_files.rs               StaticFiles answers: ranges, conditional requests, content types
-    responses.rs, headers.rs      response builders and the latin-1 header text
-    routing.rs                    method refusals: GET-only, GET and HEAD, POST-only, and Starlette's `allow` list
-    http_client.rs                outbound client: HTTPS_PROXY, NO_PROXY and SSL_CERT_FILE over rustls
-  crates/infra/shell-harness/src/lib.rs
-                                  the shell-script test harness: the stub sandbox, the command runner and spawn
-  crates/runtime/registry/src/
-    registry.rs                   the Registry: one ledger per hook kind, duplicate refusals, package order
-    wiring.rs, pages.rs, turn.rs, sidebar.rs, usage.rs, sequence.rs
-                                  the typed registration methods of each hook kind
-    backend.rs                    backend types, traits, lifecycles, child env, reading limits, usage resolvers
-    lifespan.rs                   the startup and shutdown steps around the crash-recovery task
-    context.rs                    FeatureContext and the typed startup state
-    store_hooks.rs                the store's hook traits, answered by the registered lifecycles and controllers
-    templating.rs                 the page engine: Jinja2-compatible rendering with minijinja and `render_page`
-  crates/app/packages/src/lib.rs
-                                  the composition root both binaries share: the runtime and package lists, one entry
-                                  per package
-  crates/app/server/src/
-    main.rs                       startup, lifespan, bind, graceful shutdown
-    app.rs                        the middleware stack and the feature routers
-    packages/                     the server's registry, re-exported from `charliebot-packages`, and its tests
-    routes/mod.rs                 the one list of route families, 405 and 404/307 answers
-    routes/{pages,system,static_mounts,websockets}.rs
-    auth.rs, cookies.rs           the access-key gate
-    gzip.rs                       transport gzip
-    request_log.rs, request_path.rs
-    templating.rs                 Jinja2-compatible page rendering with minijinja
-    home_init.rs, buildinfo.rs, state.rs
-  crates/app/script-tests/
-                                  the stand-in servers (src/bin) and the switch-server tests (tests/switch_server/)
-  crates/app/switch-helper/
-                                  the switch script's home, run-record and API-answer reads (`charliebot switch-helper`)
+  crates/
 ```
+
+`crates/app/` — the two binaries and their composition:
+
+- [`cli`](crates/app/cli/README.md) — the `charliebot` dispatcher, one file per subcommand under `src/commands/`
+- `mock-home` — the synthetic session home: `generate` writes it, `check` reads a served copy back against its manifest
+- [`packages`](crates/app/packages/README.md) — the composition root both binaries share: the runtime registrations and the package list, in registration order
+- `script-tests` — the stand-in servers (`src/bin`) and the switch-server tests (`tests/switch_server/`)
+- `server` — `charliebot-server`: startup, the middleware stack, the route families, graceful shutdown
+- `structure` — the structure tests: name ownership, the environment rule, private statics, file-kind ownership
+- `switch-helper` — the reads `scripts/switch-server.sh` performs on the home, the run records and the API answers (`charliebot switch-helper`)
+
+`crates/backends/` — one crate per LLM CLI backend:
+
+- [`anthropic_compatible`](crates/backends/anthropic_compatible/README.md) — Claude Code against a configured Anthropic-compatible endpoint
+- [`antigravity`](crates/backends/antigravity/README.md) — the `agy --print` backend, read from its JSON envelope once the process exits
+- [`charlie_code`](crates/backends/charlie_code/README.md) — the CharlieCode CLI against an OpenAI-compatible endpoint
+- [`claude_code`](crates/backends/claude_code/README.md) — the cc-claude backend: option, lifecycle, environment, event translation, and the Claude Code usage source
+- [`codex`](crates/backends/codex/README.md) — the codex backend type, its usage resolver and the Codex quota accounts
+- [`devin`](crates/backends/devin/README.md) — the Devin CLI in print mode, run headless with every tool approved
+- [`gemini`](crates/backends/gemini/README.md) — the gemini CLI in stream-json mode, and the legacy credential keys
+- [`openai_compatible`](crates/backends/openai_compatible/README.md) — the `cc-openai-compatible` backend and the Anthropic Messages proxy its calls go through
+- [`opencode`](crates/backends/opencode/README.md) — the opencode backend's shared server, session backend and usage source
+
+`crates/features/` — one crate per product feature:
+
+- `approval` — the approval day view: the page at `GET /approval` and its day API
+- `artifacts` — the session plan registry with its routes and verbs, the publish config, and the `artifact`/`publish` CLI
+- `backup` — the scheduled home backup, pruned by a tiered retention policy
+- `chat_threads` — the Slack/Discord/Feishu thread sessions and their turn contribution
+- `code_server` — the code-server config section, the open route and the template global
+- [`cron`](crates/features/cron/README.md) — scheduled tasks in `config.d/cron.d`: loading, scheduling, manual runs and sequence recovery
+- `diag` — the write-only client timing telemetry route
+- `diff_view` — the `/diff` page and the `/api/git` routes it calls
+- `discord` — the Discord gateway service, internal routes and thread reply verbs
+- `disk_sweep` — the task-worktree and scratch-directory cleanup
+- `drafts` — the approval card of a message or publication in the operator's name, and the operator-only send route
+- `explain` — the explain button's routes and their background generation
+- `failure_triage` — the failure-triage scan: failed runs and error logs grouped by signature, judged in code and by one model one-shot
+- `feishu` — the Feishu long-connection service, internal routes and thread verbs
+- `files` — the file server at `/absolute_filepath/{path}`
+- `github` — the `charliebot github` command group, its draft-target validation and the draft sender
+- `host_auth` — the host login panel at `/host-auth` and its browser-login page
+- [`improve`](crates/features/improve/README.md) — the improve loop: `charliebot improve start` runs an iterative worker loop on the task tree as one sequence
+- `memory` — the labeled-entry memory store's server half and its turn contribution
+- `run_log_compaction` — the cron handler that stores a finished run's log files as `.zst` once a day old
+- `slack` — the Slack Socket Mode summon listener, thread reply routes and turn hooks
+- `taste` — the user's choice precedents: the append-only store, the `taste` CLI and the turn contribution
+- `terminal` — the `/ws/terminal` route and its per-profile tmux and PTY relay
+- `trace` — the Perfetto trace viewer and the merged-trace cache
+- `usage` — the quota panel, the usage ledger capture, the token usage page and the cold-storage sweep
+- `voice` — voice input: the live preview relay, the online upload transcription and the turn contribution
+- `web_reply` — the internal routes behind `charliebot web` and the page's web-reply surface
+- [`web_search`](crates/features/web_search/README.md) — the MCP web-search endpoint at `POST /api/web-search/mcp`
+
+`crates/infra/` — the pieces every other crate builds on:
+
+- `cli-common` — the shared subcommand plumbing: argument parsing, session resolution, the internal-API client and the exit codes
+- `compat` — the request and response pieces every crate shares: JSON bodies, validation errors, routing and static files
+- [`core`](crates/infra/core/README.md) — the foundation: profile home, configuration, credentials, the home writer fence, log lines and run tokens
+- [`html`](crates/infra/html/README.md) — the HTML tokenizer, character references and page-open fold primitives
+- `improve-sandbox` — the sandbox that runs one improve round's command under a write-only Landlock boundary
+- `shell-harness` — the harness that runs the repository's shell scripts for real, against stub commands
+
+`crates/runtime/` — the machinery a session runs on:
+
+- [`agents`](crates/runtime/agents/README.md) — agent process transport, backend launch planning and environment setup
+- `registry` — the plug-in seam: the `Registry` every feature and backend crate fills through its `register`
+- `session-api` — the session listing routes and the shared listing helpers
+- [`store`](crates/runtime/store/README.md) — the single writer for session metadata and chat event logs
+- [`tasks`](crates/runtime/tasks/README.md) — manager turns and task execution: delegation, worker runs, the worktree lifecycle and review
+- [`triggers`](crates/runtime/triggers/README.md) — delayed and watched triggers that admit scheduled task inputs
+- `usage` — the session's usage projection: backend resolver precedence, event-fold tiers and context state
+- `user_text_checks` — the shared checks for user-facing page and reply text
 
 ## Behavior notes
 
-- Transport gzip uses zlib at level 1; the compressed bytes and their `content-length` are the zlib output.
+- Transport gzip compresses a response body with gzip at level 1, and the compressed bytes and their `content-length`
+  are the gzip output. A body a memo serves on every repeat request is compressed once at level 6 and served from the
+  memo.
 - Logs use the `logline` grammar, with UTC time and a source-location column. The server adds
   `graceful_shutdown_timeout_exceeded`, `server_failed` and the startup failure events in
   `crates/app/server/src/main.rs`.

@@ -22,13 +22,12 @@
         "chars": 10,
         "chunks": 1,
         "over_budget": false,
-        "answers": null,
         "attachments": []
       }
     }
   ],
   "expect": {
-    "stdout": "{\"posted\": true, \"text\": \"the answer\", \"operator_only_note\": null, \"chars\": 10, \"chunks\": 1, \"over_budget\": false, \"answers\": null, \"attachments\": []}\n",
+    "stdout": "{\"posted\": true, \"text\": \"the answer\", \"operator_only_note\": null, \"chars\": 10, \"chunks\": 1, \"over_budget\": false, \"attachments\": []}\n",
     "stderr": "",
     "exit": 0,
     "requests": [

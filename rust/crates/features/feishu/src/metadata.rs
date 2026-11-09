@@ -5,6 +5,8 @@ use charliebot_store::metadata::SessionMetadata;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::fields::{CHAT_ID, ROOT_ID, TENANT_KEY, THREAD_ID};
+
 /// The session-metadata field holding the Feishu thread a session was summoned from.
 pub const FEISHU_ORIGIN: &str = "feishu_origin";
 /// The session-metadata field holding the Feishu id the session's turn has read up to.
@@ -40,11 +42,11 @@ pub fn valid_origin(value: &mut Value) -> bool {
     return true;
   }
   let Some(object) = value.as_object_mut() else { return false };
-  let required = ["tenant_key", "chat_id", "root_id"];
+  let required = [TENANT_KEY, CHAT_ID, ROOT_ID];
   let valid = required.iter().all(|name| object.get(*name).is_some_and(Value::is_string))
-    && object.get("thread_id").is_none_or(|thread_id| thread_id.is_null() || thread_id.is_string());
+    && object.get(THREAD_ID).is_none_or(|thread_id| thread_id.is_null() || thread_id.is_string());
   if valid {
-    object.retain(|name, _| required.contains(&name.as_str()) || name == "thread_id");
+    object.retain(|name, _| required.contains(&name.as_str()) || name == THREAD_ID);
   }
   valid
 }

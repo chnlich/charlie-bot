@@ -1,12 +1,25 @@
 .provider-pill { flex: 0 0 auto; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+.provider-devin { background: #713f12; color: #fde68a; }
+.provider-opencode { background: #164e63; color: #67e8f9; }
+.provider-antigravity { background: #581c87; color: #d8b4fe; }
 @media (max-width: 768px) {
   #ext-usage-strip [data-field$="-reset"] { display: none; }  /* hide verbose reset timestamps */
   #ext-usage-strip .w-24 { width: 4rem; }  /* shrink bars from w-24 (6rem) to 4rem */
+  /* The collapsed summary wraps onto a second line instead of running past the
+     phone's edge, where the strip's scroll area leaves the last accounts off
+     screen. Both lines stay clear of the collapse chip through the row's 44px
+     right padding, and the row's 44px min-height holds both lines, so the
+     strip grows no taller. */
+  #ext-usage-strip [data-field="summary"] { flex-wrap: wrap; row-gap: 2px; column-gap: 8px; }
+  /* Each account opens with its provider pill, so a separator dot at a line end
+     only reads as a stray glyph. */
+  #ext-usage-strip [data-field="summary"] > span.text-slate-400 { display: none; }
 }
 /* Account rows are single-line flex and can exceed a narrow viewport, and body is
    overflow:hidden — without a scroll container here the row tail is clipped and
-   unreachable. nowrap keeps each row on that one line: a hyphenated account name
-   otherwise splits mid-word, leaving its percentage on a second line. */
+   unreachable. nowrap keeps each account row on that one line: a hyphenated
+   account name otherwise splits mid-word, leaving its percentage on a second
+   line. The collapsed summary is the exception, wrapped on phones above. */
 #ext-usage-strip { overflow-x: auto; white-space: nowrap; }
 /* Quota-strip collapse chip: floats over the strip's top-right corner from a
    position:relative wrapper, so the strip's horizontal scrolling never drags

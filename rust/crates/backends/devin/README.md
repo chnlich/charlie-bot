@@ -34,10 +34,19 @@ after that summary. The export drops the compacted steps and their `metrics`, so
 tokens spent before the compaction.
 
 A nonzero exit fails the turn with Devin's stderr. When that stderr carries `"cognition.ai/retryable": true` and
-states `reset in N seconds`, `retry_after` returns N seconds, and the manager turn or worker run reruns the input on
-devin after the reset, within the limits of the `backend_retry` module in `charliebot-tasks`. A missing export,
+states `reset in N seconds`, `retry_after` returns the duration and its calculated absolute time. The daily-limit form
+`reset in H hours M minutes (at <date> UTC)` preserves the stated absolute time for the manager or worker's cooling
+record even when the reset is beyond `backend_retry`'s automatic-wait limit. The wait limit decides whether the run
+retries; it does not change the cooling time. A missing export,
 one without `session_id`, one with neither a `user` step nor a compaction summary, or one whose current-turn agent
 step has no `metrics` fails the turn and names the export path.
+
+## Subscription quota
+
+The usage panel reads Devin's daily and weekly plan quota from `GetUserStatus`. The quota poll also reads the CLI's
+model catalog; its `Free` marker excludes those models from a plan member reading without keeping a model-name list in
+this crate. Member selection reads only the state those panel reads last stored. Each panel emit reads Devin member
+cooling from the shared backend-availability record, so a failed or not-yet-successful quota fetch does not hide it.
 
 ## Where the field names live
 

@@ -269,6 +269,45 @@ test('renderExtUsage shows business/unlimited Codex state with no quota bars', (
   assert.equal(_field(codexRow, '7d-bar'), null, 'no invented 7d bar');
 });
 
+test('renderExtUsage uses provider window names and renders member cooling state through an account error', () => {
+  const { context, strip } = loadExtUsageScript();
+  const reset = '2026-11-08T00:01:00Z';
+
+  context.renderExtUsage({
+    providers: {
+      'devin:main': {
+        provider: 'devin',
+        provider_label: 'Devin',
+        account: 'main',
+        error: 'quota source unavailable',
+        status_rows: [{ name: 'member', state: 'cooling', resets_at: reset }],
+      },
+      'opencode:main': {
+        provider: 'opencode',
+        provider_label: 'OpenCode Go',
+        account: 'main',
+        fetched_at: _iso(-1 * MINUTE),
+        windows: [
+          { window_minutes: 300, window_name: '5 小时', utilization: 8, resets_at: _iso(HOUR) },
+          { window_minutes: 10080, window_name: '每周', utilization: 25, resets_at: _iso(DAY) },
+          { window_name: '每月', utilization: 97, resets_at: _iso(14 * DAY) },
+        ],
+      },
+    },
+  });
+
+  const coolingRow = _rowByKey(strip, 'devin:main:status:0');
+  assert.equal(coolingRow.getAttribute('data-state'), 'cooling');
+  assert.equal(coolingRow.getAttribute('data-resets-at'), reset);
+  assert.ok(_field(coolingRow, 'member-name'));
+  assert.ok(_field(coolingRow, 'member-state'));
+
+  const opencodeRow = _rowByKey(strip, 'opencode:main');
+  for (const name of ['5 小时', '每周', '每月']) {
+    assert.ok(_walk(opencodeRow, _byAttr('data-window-name', name)), 'window name is preserved in the row');
+  }
+});
+
 // Metered credits: the payload's credits reading (unlimited=false + balance)
 // replaces the no-cap marker on an empty-windows row and reports itself in the
 // collapsed summary as "cr <balance>". The real wire balance is a fractional
@@ -918,4 +957,14 @@ test('renderExtUsage marks a pool account that needs a new login with its direct
   assert.equal(_field(flagged, 'login-required').textContent, 're-login needed: ~/.claude-ext-2');
   const healthy = _rowByKey(strip, 'claude:main');
   assert.equal(_field(healthy, 'login-required'), null, 'a healthy account carries no login note');
+});
+
+test('a quota group error is shown beside the retained reading', () => {
+  const { context, strip } = loadExtUsageScript();
+  context.renderExtUsage({ providers: { 'antigravity:main': {
+    provider: 'antigravity', provider_label: 'Antigravity', account: 'main', windows: [],
+    status_rows: [{ name: 'Antigravity', state: 'error', message: 'model matched no quota group' }],
+  } } });
+  const row = _rowByKey(strip, 'antigravity:main:status:0');
+  assert.equal(_field(row, 'member-state').textContent, 'model matched no quota group');
 });

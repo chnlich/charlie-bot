@@ -1,0 +1,25 @@
+{
+  "argv": [
+    "web",
+    "reply",
+    "--file",
+    "{root}/reply.md",
+    "--session",
+    "abc",
+    "--answers",
+    "u1"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "reply.md": "the answer"
+  },
+  "responses": [],
+  "parser_generated": true,
+  "expect": {
+    "stdout": "",
+    "stderr": "",
+    "exit": 2,
+    "requests": []
+  }
+}

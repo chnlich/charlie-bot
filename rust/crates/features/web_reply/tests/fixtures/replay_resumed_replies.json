@@ -1,0 +1,138 @@
+{
+  "r1": {
+    "source": "session 36b5683d, run ea115263: a release restart resumed the turn after both messages arrived",
+    "session_id": "36b5683d-3341-5992-9b71-15ab55c7ea65",
+    "run": {
+      "id": "ea115263-bd6c-5b59-b1b6-10986d3054c2",
+      "session_id": "36b5683d-3341-5992-9b71-15ab55c7ea65",
+      "kind": "manager_turn",
+      "input_event_ids": [
+        "37ded4e3-fd5b-5633-8a17-43a8894691dd",
+        "16181ca1-1e7e-5664-9694-9c5a661082f4"
+      ],
+      "started_at": "2026-11-02T08:20:54.838607Z",
+      "ended_at": "2026-11-02T08:27:30.579415Z"
+    },
+    "events": [
+      {
+        "id": "37ded4e3-fd5b-5633-8a17-43a8894691dd",
+        "type": "user",
+        "timestamp": "2026-11-02T08:20:54.578131+00:00",
+        "actor": "user",
+        "content": "Is there a separate config pool for the strong model?"
+      },
+      {
+        "id": "16181ca1-1e7e-5664-9694-9c5a661082f4",
+        "type": "user",
+        "timestamp": "2026-11-02T08:22:22.926386+00:00",
+        "actor": "user",
+        "content": "This is really a backend-choice question.\n\nCould a prompt decide what each model does?"
+      },
+      {
+        "id": "7d7bff62-9919-4163-a8c2-ca435e27917f",
+        "type": "input_delivered",
+        "timestamp": "2026-11-02T08:22:23.103374+00:00",
+        "input_event_id": "16181ca1-1e7e-5664-9694-9c5a661082f4",
+        "run_id": "ea115263-bd6c-5b59-b1b6-10986d3054c2"
+      },
+      {
+        "id": "d134f789-d69e-58f8-8ff7-d8e2d04f631e",
+        "type": "web_reply",
+        "timestamp": "2026-11-02T08:26:53.912428+00:00",
+        "content": "Both questions are answered on the explain page.",
+        "web_reply": {
+          "chars": 45
+        }
+      },
+      {
+        "id": "6023c256-2092-4da9-be51-6c548964a7bb",
+        "type": "master_done",
+        "timestamp": "2026-11-02T08:27:30.573570+00:00",
+        "run_id": "ea115263-bd6c-5b59-b1b6-10986d3054c2",
+        "input_event_ids": [],
+        "exit_code": 0
+      }
+    ],
+    "expect": {
+      "receipt_times": [
+        "2026-11-02T08:20:54.838607Z",
+        "2026-11-02T08:22:23.103374Z"
+      ],
+      "answered": [true, true],
+      "nudges": 0
+    }
+  },
+  "r2": {
+    "source": "session 7ed1ba3e: run d0575399 was stopped, run a2b77a63 answered at 02:13:53",
+    "session_id": "7ed1ba3e-209c-531f-9c44-194abc5a846d",
+    "runs": [
+      {
+        "id": "d0575399-b32a-570d-825f-a51461bde163",
+        "session_id": "7ed1ba3e-209c-531f-9c44-194abc5a846d",
+        "kind": "manager_turn",
+        "input_event_ids": ["70bc9630-25b2-54a7-bd34-f097462893ff"],
+        "started_at": "2026-11-02T02:11:03.105499Z",
+        "ended_at": "2026-11-02T02:11:14.055783Z"
+      },
+      {
+        "id": "a2b77a63-538a-5e0e-9f21-d256c0402e7d",
+        "session_id": "7ed1ba3e-209c-531f-9c44-194abc5a846d",
+        "kind": "manager_turn",
+        "input_event_ids": ["a8223322-6c39-5604-b98e-066e041a20b9"],
+        "started_at": "2026-11-02T02:12:47.701365Z",
+        "ended_at": "2026-11-02T02:18:50.365680Z"
+      }
+    ],
+    "events": [
+      {
+        "id": "70bc9630-25b2-54a7-bd34-f097462893ff",
+        "type": "user",
+        "timestamp": "2026-11-02T02:11:02.876651+00:00",
+        "actor": "user",
+        "content": "This article also mentions taste. Can we borrow from it?"
+      },
+      {
+        "id": "b45a64fa-d3ca-47f1-b4f4-d4104c4296d4",
+        "type": "master_done",
+        "timestamp": "2026-11-02T02:11:14.058237+00:00",
+        "input_event_ids": ["70bc9630-25b2-54a7-bd34-f097462893ff"]
+      },
+      {
+        "id": "a8223322-6c39-5604-b98e-066e041a20b9",
+        "type": "user",
+        "timestamp": "2026-11-02T02:12:47.449370+00:00",
+        "actor": "user",
+        "content": "Artifact comments: keep the first action item and drop the second."
+      },
+      {
+        "id": "51f14a6b-72d3-54ed-b492-67cb415bede2",
+        "type": "web_reply",
+        "timestamp": "2026-11-02T02:13:53.451815+00:00",
+        "content": "Handled both comments.",
+        "web_reply": {
+          "chars": 21
+        }
+      },
+      {
+        "id": "ac2cc03c-9850-46c8-866b-d253c8bb9bdb",
+        "type": "master_done",
+        "timestamp": "2026-11-02T02:18:50.356729+00:00",
+        "run_id": "a2b77a63-538a-5e0e-9f21-d256c0402e7d",
+        "input_event_ids": [],
+        "exit_code": 0
+      }
+    ],
+    "expect": {
+      "receipt_times": [
+        "2026-11-02T02:11:03.105499Z",
+        "2026-11-02T02:12:47.701365Z"
+      ],
+      "answered": [true, true],
+      "received": [
+        "70bc9630-25b2-54a7-bd34-f097462893ff",
+        "a8223322-6c39-5604-b98e-066e041a20b9"
+      ],
+      "nudges_for": "a2b77a63-538a-5e0e-9f21-d256c0402e7d"
+    }
+  }
+}

@@ -16,6 +16,7 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Map, json};
 
 use crate::api::{CHECK_PATH, DOWNLOAD_PATH, READ_PATH, REPLY_PATH};
+use crate::fields::MESSAGE_ID;
 use crate::user_token::{self, Endpoints};
 
 #[derive(Parser)]
@@ -171,7 +172,7 @@ fn download(args: &DownloadArgs) -> Result<(), CliExit> {
     DOWNLOAD_PATH,
     json!({
       (SESSION_ID): session_id,
-      "message_id": args.message_id,
+      (MESSAGE_ID): args.message_id,
       "file_key": args.file_key,
       "kind": args.kind,
       "output": output,

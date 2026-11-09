@@ -3,15 +3,24 @@
 #
 #   scripts/release.sh <full main commit>
 #
+# The host release lock: one lock file per host, outside the repository, named once by scripts/release/lock.sh. This
+# script takes it before its first stage and holds it to its exit, so two releases of one host run one at a time and
+# two trials cannot race for one trial port. A caller that finds the lock held exits 2 at once and prints the
+# holder's record — script, commit, pid and start time — read from beside the lock; a holder that died left the lock
+# free, because the lock is `flock` on an open descriptor. The switch this release hands over to takes the lock in
+# its turn, and the rehearsal's switches run under this script's descriptor instead of taking their own.
+#
 # Exit codes:
 #   2  the preflight refused and wrote nothing: the argument is not a full 40-character sha on origin/main, the
-#      release directory already exists, gh is not authenticated for this repository, or CI has no successful push
-#      run of both Rust jobs for the commit.
+#      release directory already exists, gh is not authenticated for this repository, CI has no successful push
+#      run of both Rust jobs for the commit, or another release holds the host release lock.
 #   1  a stage failed; the stage name and its log path are printed, and nothing is installed.
 #   0  the release is installed; the switch command is printed.
 #
 # The stages run in order:
-#   download   gh downloads the charliebot-server-<commit> artifact, and sha256sum -c passes on both binaries;
+#   download   gh downloads the charliebot-server-<commit> artifact into a temporary directory outside the log
+#              directory, sha256sum -c passes on both binaries, and the log directory keeps a copy of the artifact's
+#              sha256sums.txt;
 #   units      scripts/install-slice-units.sh installs the commit's slice units and reloads the user manager, so the
 #              trial and the rehearsal run against the units the release runs with. A release that stops after this
 #              stage leaves the new units installed while the live server keeps running; the restore step is in that
@@ -23,6 +32,10 @@
 #
 # The release directory holds charliebot-server and charliebot from the same CI build, release.log with each stage's
 # verdict, and sha256sums.txt over both binaries and the log. It does not change the current link.
+#
+# The log directory holds each stage's text log and a copy of the artifact's sha256sums.txt, and holds no binary: the
+# binaries stay in the temporary directory, which every exit of the script removes, a failed stage and an interrupt
+# included, and can be re-downloaded from CI for 30 days.
 #
 # Environment: CHARLIEBOT_RELEASES_DIR (default $HOME/charliebot-releases); CHARLIEBOT_RELEASE_LOG_DIR (default
 # $HOME/charliebot-release-logs; stage logs and evidence live here, outside the repository and the release directory,
@@ -40,6 +53,9 @@ readonly REHEARSAL_CMD="${CHARLIEBOT_RELEASE_REHEARSAL:-$REPO_ROOT/scripts/relea
 readonly SLICE_INSTALL="$REPO_ROOT/scripts/install-slice-units.sh"
 readonly ARTIFACT_NAME_PREFIX="charliebot-server-"
 
+# The host release lock, defined once in scripts/release/lock.sh.
+. "$SCRIPT_DIR/release/lock.sh"
+
 usage() {
   echo "usage: release.sh <full main commit>" >&2
   exit 2
@@ -53,6 +69,24 @@ refuse() {
 [ $# -eq 1 ] || usage
 COMMIT=$1
 [[ $COMMIT =~ ^[0-9a-f]{40}$ ]] || refuse "$COMMIT is not a full 40-character commit sha"
+
+# The lock covers every stage from here to the exit, and the preflight too, so a second release stops before it
+# races this one for a trial port.
+release_lock_take release.sh "$COMMIT" || exit 2
+# cleanup: the one EXIT handler. It removes the lock's holder record on every exit, and the artifact's temporary
+# directory once the download stage has made it: success, a refusal, a failed stage and an interrupt.
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
+  release_lock_release
+  if [ -n "${ARTIFACT_DIR:-}" ]; then
+    rm -rf -- "$ARTIFACT_DIR"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 command -v gh > /dev/null 2>&1 || refuse "gh is not on PATH"
 gh auth status > /dev/null 2>&1 || refuse "gh is not authenticated"
@@ -89,8 +123,13 @@ RUN_ID="$(ci_run_id)" || refuse "CI has no successful push run of release-build 
 RUN_DIR="$LOG_ROOT/${COMMIT}-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p -m 700 "$RUN_DIR" || refuse "cannot create the log directory $RUN_DIR"
 readonly RUN_DIR
-readonly ARTIFACT_DIR="$RUN_DIR/artifact"
 export CHARLIEBOT_RELEASE_RUN_DIR="$RUN_DIR"
+
+# The downloaded artifact lives outside the log directory, and every exit of the script removes it: success, a failed
+# stage, and an interrupt.
+ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/charliebot-release-artifact-${COMMIT}.XXXXXXXXXX")" \
+  || refuse "cannot create the artifact temporary directory"
+readonly ARTIFACT_DIR
 
 STAGE_LINES=()
 
@@ -110,18 +149,20 @@ run_stage() {
 }
 
 stage_download() {
-  mkdir -p "$ARTIFACT_DIR" || return 1
   gh run download "$RUN_ID" --repo "$REPO_SLUG" --name "${ARTIFACT_NAME_PREFIX}${COMMIT}" --dir "$ARTIFACT_DIR" \
     || return 1
-  (cd "$ARTIFACT_DIR" && sha256sum -c sha256sums.txt)
+  (cd "$ARTIFACT_DIR" && sha256sum -c sha256sums.txt) || return 1
+  # The log directory keeps the checksums and no binary: the binaries re-download from CI for 30 days.
+  cp "$ARTIFACT_DIR/sha256sums.txt" "$RUN_DIR/sha256sums.txt"
 }
 
 stage_units() {
   "$SLICE_INSTALL" "$REPO_ROOT" "$COMMIT"
 }
 
+# stage_trial: the trial starts servers that outlive a killed release, so it runs without the lock's descriptor.
 stage_trial() {
-  "$TRIAL_CMD" "$COMMIT" "$ARTIFACT_DIR/charliebot-server"
+  ( release_lock_detach; exec "$TRIAL_CMD" "$COMMIT" "$ARTIFACT_DIR/charliebot-server" )
 }
 
 stage_rehearsal() {

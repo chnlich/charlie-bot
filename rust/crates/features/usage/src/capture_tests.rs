@@ -299,6 +299,11 @@ fn option(id: &str, backend_type: &str, model: &str) -> String {
   format!("    - id: {id}\n      label: {id}\n      type: {backend_type}\n      model: {model}\n")
 }
 
+/// An option that carries its account's billing, the field a priority pool's member reads.
+fn billed_option(id: &str, backend_type: &str, model: &str, billing: &str) -> String {
+  format!("{}      billing: {billing}\n", option(id, backend_type, model))
+}
+
 fn write_thread(
   home: &Path,
   session: &str,
@@ -1204,6 +1209,43 @@ fn capture_runs_clc_run_is_native_with_the_cached_split() {
   let row = row(&rows, "charlie-bot", "GLM-5.3-Flash");
   assert_eq!((row.calls, row.in_fresh.int(), row.cache_read.int(), row.output.int()), (1, 60, 40, 5));
   assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 0); // the unchanged run file is skipped
+}
+
+#[test]
+fn capture_runs_attributes_a_pool_sessions_runs_to_the_members_they_ran_on() {
+  // A pool-id child keeps the pool id as its session backend, and each run records the member it ran on. The ledger
+  // attributes each run to that member, never to the pool id.
+  let dir = tempfile::tempdir().unwrap();
+  let home = dir.path().join("home");
+  fs::create_dir_all(&home).unwrap();
+  fs::write(
+    home.join("config.yaml"),
+    format!(
+      "backends:\n  options:\n{}{}  pools:\n    - {{id: auto, label: Auto, rule: priority, members: [member-a, member-b]}}\n",
+      billed_option("member-a", "charlie-code", "openai/zai-org/GLM-5.3-Flash", "subscription"),
+      billed_option("member-b", "charlie-code", "openai/zai-org/GLM-5.3-Flash", "subscription"),
+    ),
+  )
+  .unwrap();
+  let schema = ConfigSchema { backend_types: vec!["charlie-code"], ..ConfigSchema::default() };
+  let config = config::load_config(&home, &schema).unwrap();
+  let mut registry = Registry::new();
+  registry.register_package("usage-fixture", register_sources).unwrap();
+  let result =
+    b"{\"type\": \"result\", \"usage\": {\"input_tokens\": 100, \"cached_tokens\": 40, \"output_tokens\": 5}}\n";
+  write_run(&home, "s1", "r1", "member-a", Some("openai/zai-org/GLM-5.3-Flash"), None, result);
+  write_run(&home, "s1", "r2", "member-b", Some("openai/zai-org/GLM-5.3-Flash"), None, result);
+
+  let mut ledger = UsageLedger::in_memory().unwrap();
+  assert_eq!(count_of(&capture_round(&mut ledger, &config, &registry), "charlie-bot"), 2);
+  let rows = page_rows(&mut ledger);
+  let recorded = row(&rows, "charlie-bot", "GLM-5.3-Flash");
+  assert_eq!(recorded.calls, 2);
+  assert_eq!(
+    recorded.accounts.iter().map(|account| account.name.as_str()).collect::<Vec<_>>(),
+    ["member-a", "member-b"],
+    "each run belongs to the member it ran on"
+  );
 }
 
 #[test]

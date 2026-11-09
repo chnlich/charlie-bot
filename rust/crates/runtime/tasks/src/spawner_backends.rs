@@ -48,18 +48,6 @@ impl SubagentRole {
       Self::Improve => CallClass::Improve,
     }
   }
-
-  /// The caller name a log line gives this role's pool selection.
-  fn caller(self) -> &'static str {
-    match self {
-      Self::Task(TaskType::Implement) => "implement",
-      Self::Task(TaskType::QuickEdit) => "quick-edit",
-      Self::Task(TaskType::ScriptRun) => "script-run",
-      Self::Task(TaskType::Verify) => "verify",
-      Self::Task(TaskType::ColdRead) => "cold_read",
-      Self::Improve => "improve",
-    }
-  }
 }
 
 /// Return the refusal core when a session pins a backend id absent from `config.yaml`.
@@ -153,18 +141,6 @@ pub fn session_backend_id(cfg: &CharlieBotConfig, session_meta: &SessionMetadata
   resolve_session_default_backend_model(cfg, session_meta).map(|(backend_id, _)| backend_id)
 }
 
-/// Which rule chose a subagent's backend. A pool pick and an inherited pool member fail over through different owners,
-/// so the caller records which one ran the child.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BackendSource {
-  /// The request named the backend, or the session's own backend runs it.
-  Direct,
-  /// The `backends.calls` target of the role named a pool, and the pool chose the backend.
-  Pool,
-  /// The session's backend is a pool and its current member runs the child.
-  PoolMember,
-}
-
 /// The backends of one delegation: the child session's backend and the backend its work run launches on. A pool keeps
 /// its id on the child session, and the work run names the member the pool selected, so the run never names a pool.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -175,19 +151,6 @@ pub struct SubagentBackend {
   pub run_backend: String,
   /// The model the work run records.
   pub model: Option<String>,
-  /// The rule that chose the backend.
-  pub source: BackendSource,
-}
-
-/// The backend of a run that the pool `pool_id` chose: the child keeps `pool_id`, and the run names `member`.
-pub fn pool_chosen_backend(pool_id: &str, member: &BackendOption) -> anyhow::Result<SubagentBackend> {
-  let model = member.required_model("pool member").map_err(value_error)?;
-  Ok(SubagentBackend {
-    session_backend: pool_id.to_string(),
-    run_backend: member.id.clone(),
-    model: Some(model),
-    source: BackendSource::Pool,
-  })
 }
 
 /// The backend of a verify or cold-read run that `backends.calls` selected: `backend` is the member the class's pool chose,
@@ -201,16 +164,51 @@ pub fn class_selected_backend(
   let pool_id = class_pool.filter(|pool_id| {
     cfg.backends.pool(pool_id).is_some_and(|pool| pool.members.iter().any(|member| member.backend == backend))
   });
-  let source = if class_pool.is_some() { BackendSource::Pool } else { BackendSource::Direct };
   SubagentBackend {
     session_backend: pool_id.map_or_else(|| backend.clone(), str::to_string),
     run_backend: backend,
     model,
-    source,
   }
 }
 
-/// Resolve a delegation's backend and the rule that chose it (`spawner_backends.resolve_requested_subagent_backend_model`).
+/// The ids a verify or cold-read selection leaves out: the member the initiating session runs on now, which is its own
+/// backend when that backend is a concrete model.
+fn verify_exclusion(cfg: &CharlieBotConfig, meta: &SessionMetadata, role: SubagentRole) -> anyhow::Result<Vec<String>> {
+  match role.call_class() {
+    CallClass::Verify | CallClass::ColdRead => Ok(vec![session_current_member(cfg, meta)?]),
+    _ => Ok(Vec::new()),
+  }
+}
+
+/// The ids a verify or cold-read child leaves out at every member selection, its quota switches included: the member
+/// the initiating session (the session its `task_parent_id` names) runs on now. Empty for every other task type.
+pub async fn switch_exclusions(
+  cfg: &CharlieBotConfig,
+  store: &Store,
+  meta: &SessionMetadata,
+) -> anyhow::Result<Vec<String>> {
+  let verify_or_cold_read = meta
+    .task
+    .as_ref()
+    .and_then(|task| task.task_type)
+    .is_some_and(|kind| matches!(kind, TaskType::Verify | TaskType::ColdRead));
+  if !verify_or_cold_read {
+    return Ok(Vec::new());
+  }
+  let Some(parent_id) = meta.task_parent_id.as_deref() else { return Ok(Vec::new()) };
+  let parent = store.require_session(parent_id).await?;
+  Ok(vec![session_current_member(cfg, &parent)?])
+}
+
+/// The backend id the session runs on now: its `pool_member` for a pool-id session, else its own backend.
+pub(crate) fn session_current_member(cfg: &CharlieBotConfig, meta: &SessionMetadata) -> anyhow::Result<String> {
+  resolve_session_default_backend_model(cfg, meta).map(|(backend_id, _)| backend_id)
+}
+
+/// Resolve a delegation's backend: the requested id, its call class's target, or the session's own default.
+///
+/// A `backends.pools` id, whether requested or named by `backends.calls`, selects its member now and keeps the pool id on
+/// the child session. A verify or cold read leaves the initiating session's current member out of every selection.
 pub async fn resolve_requested_subagent_backend_model(
   cfg: &CharlieBotConfig,
   store: &Store,
@@ -223,15 +221,22 @@ pub async fn resolve_requested_subagent_backend_model(
     StoreError::NotFound(_) => value_error(format!("session '{session_id}' not found")),
     error => anyhow::Error::new(error),
   })?;
+  let excluded = verify_exclusion(cfg, &meta, role)?;
+  let selector = pool.selector(cfg).with_store(store);
   if let Some(backend_id) = requested_backend {
     if backend_id.is_empty() {
       return Err(value_error("requested backend is required"));
     }
     if cfg.backends.pool(backend_id).is_some() {
-      let Some(member) = pool.select(cfg, role.caller(), backend_id, &[])? else {
-        return Err(value_error(pool.exhausted_message(cfg, backend_id)?));
+      let Some(member) = selector.select(backend_id, &excluded)? else {
+        return Err(value_error(selector.exhausted_message(backend_id)?));
       };
-      return pool_chosen_backend(backend_id, &member);
+      let model = member.required_model("pool member").map_err(value_error)?;
+      return Ok(SubagentBackend {
+        session_backend: backend_id.to_string(),
+        run_backend: member.id,
+        model: Some(model),
+      });
     }
     let option = cfg
       .get_backend_option(backend_id)
@@ -241,16 +246,16 @@ pub async fn resolve_requested_subagent_backend_model(
       session_backend: option.id.clone(),
       run_backend: option.id.clone(),
       model: Some(model),
-      source: BackendSource::Direct,
     });
   }
   match cfg.backends.calls.get(role.call_class()) {
     None | Some(CallTarget::Session) => {}
     Some(CallTarget::Backend(target)) if cfg.backends.pool(target).is_some() => {
-      let Some(member) = pool.select(cfg, role.caller(), target, &[])? else {
-        return Err(value_error(pool.exhausted_message(cfg, target)?));
+      let Some(member) = selector.select(target, &excluded)? else {
+        return Err(value_error(selector.exhausted_message(target)?));
       };
-      return pool_chosen_backend(target, &member);
+      let model = member.required_model("pool member").map_err(value_error)?;
+      return Ok(SubagentBackend { session_backend: target.clone(), run_backend: member.id, model: Some(model) });
     }
     Some(CallTarget::Backend(target)) => {
       let option = cfg
@@ -261,14 +266,20 @@ pub async fn resolve_requested_subagent_backend_model(
         session_backend: option.id.clone(),
         run_backend: option.id.clone(),
         model: Some(model),
-        source: BackendSource::Direct,
       });
     }
   }
+  // The session's own backend serves the child. A pool id stays the child's backend, and the child picks its member,
+  // so the child's quota failover moves inside the same pool.
+  if cfg.backends.pool(&meta.backend).is_some() {
+    let Some(member) = selector.select(&meta.backend, &excluded)? else {
+      return Err(value_error(selector.exhausted_message(&meta.backend)?));
+    };
+    let model = member.required_model("pool member").map_err(value_error)?;
+    return Ok(SubagentBackend { session_backend: meta.backend.clone(), run_backend: member.id, model: Some(model) });
+  }
   let (backend_id, model) = resolve_session_default_backend_model(cfg, &meta)?;
-  let source =
-    if cfg.backends.pool(&meta.backend).is_some() { BackendSource::PoolMember } else { BackendSource::Direct };
-  Ok(SubagentBackend { session_backend: backend_id.clone(), run_backend: backend_id, model, source })
+  Ok(SubagentBackend { session_backend: backend_id.clone(), run_backend: backend_id, model })
 }
 
 /// Resolve a verify or cold-read checker for the call class `class`, excluding the session's current backend.
@@ -282,14 +293,18 @@ pub async fn select_verify_backend(
 ) -> anyhow::Result<Option<(String, Option<String>, Vec<String>)>> {
   let meta = store.require_session(session_id).await?;
   let (session_backend, session_model) = resolve_session_default_backend_model(cfg, &meta)?;
+  let selector = pool.selector(cfg).with_store(store);
   crate::review::select_reviewer_backend(
     cfg,
-    pool,
+    &selector,
     class,
-    &session_backend,
-    session_model.as_deref(),
-    tried_backends,
-    &HashSet::new(),
+    crate::review::ReviewScope {
+      route: None,
+      worker_backend: &session_backend,
+      worker_model: session_model.as_deref(),
+      tried_backends,
+      used_backends: &HashSet::new(),
+    },
   )
 }
 
@@ -393,7 +408,6 @@ mod tests {
     assert_eq!(subagent.session_backend, POOL_ID, "the child keeps the pool id");
     assert_eq!(subagent.run_backend, "synthetic", "the run names the member the pool selected");
     assert_eq!(subagent.model.as_deref(), Some("model-1"));
-    assert_eq!(subagent.source, BackendSource::Pool);
   }
 
   fn pool_config() -> CharlieBotConfig {
@@ -402,10 +416,10 @@ mod tests {
       id: POOL_ID.to_string(),
       label: "Auto".to_string(),
       rule: charliebot_core::config::PoolRule::Priority,
-      members: vec![charliebot_core::config::PoolMember {
-        backend: "synthetic".to_string(),
-        billing: Some(charliebot_core::config::PoolBilling::Subscription),
-      }],
+      members: vec![charliebot_core::config::PoolMember { backend: "synthetic".to_string() }],
+    });
+    cfg.backends.options.iter_mut().for_each(|option| {
+      option.billing = Some(charliebot_core::config::PoolBilling::Subscription);
     });
     cfg
   }
@@ -452,6 +466,7 @@ mod tests {
           label: "synthetic".to_string(),
           model: "model-1".to_string(),
           prompt_overlay: Some("none".to_string()),
+          billing: None,
           backend_type: "synthetic".to_string(),
           type_fields: Default::default(),
         }],

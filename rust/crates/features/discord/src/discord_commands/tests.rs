@@ -231,6 +231,36 @@ async fn read_does_not_flag_a_summon_a_master_done_names() {
   );
 }
 
+/// A summon a restart-resumed turn received is answered history even though its `master_done` carries no input ids:
+/// the run record's receipts retire it, so it is not pending.
+#[tokio::test]
+async fn read_does_not_flag_a_summon_a_resumed_turn_received() {
+  let home = Home::new_without_thread_runtime(true).await;
+  thread_messages(&home, &[Msg::new(1, "the question"), Msg::new(2, "a later follow up")]);
+  let session_id = make_session(&home, Some(snowflake(1))).await;
+  let summon = home.append(&session_id, summon_event(&snowflake(1))).await;
+  let summon_id = summon["id"].as_str().expect("an appended event carries its id");
+  let started = summon["timestamp"].as_str().expect("an appended event carries its timestamp");
+  home.launch_run(&session_id, "resumed-run", &[summon_id], started);
+  home
+    .append(
+      &session_id,
+      json!({
+        "type": event_types::MASTER_DONE,
+        "run_id": "resumed-run",
+        "exit_code": 0,
+        "still_thinking": false,
+        "input_event_ids": [],
+      }),
+    )
+    .await;
+
+  let result = read_thread(&bot(&home), &session_id, None, 2).await.unwrap();
+
+  assert_eq!(ids(&result), [snowflake(2)]);
+  assert_eq!(fields(&result, "summon"), [json!(false)]);
+}
+
 /// A summon the boot backfill marked lost never gets a master_done, so the marker alone must retire it: no flag, and
 /// the window start stays with the unread instead of dragging back to the dead mention on every later read.
 #[tokio::test]

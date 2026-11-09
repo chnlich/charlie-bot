@@ -426,6 +426,7 @@ fn rust_case(case: &Case, home: &Path, registry: &Registry, checkout: &RepoRoot)
     label: "Golden".to_string(),
     model: "golden-model".to_string(),
     prompt_overlay: case.overlay.map(String::from),
+    billing: None,
     backend_type: "codex".to_string(),
     type_fields: serde_yaml::Mapping::new(),
   };

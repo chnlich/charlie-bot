@@ -19,6 +19,26 @@ pub(crate) fn optional_text(params: &Params, name: &str) -> Option<String> {
   params.get(name).cloned()
 }
 
+/// A required `Literal[...]` parameter.
+pub(crate) fn one_of(
+  params: &Params,
+  name: &str,
+  choices: &'static [&'static str],
+) -> Result<&'static str, FieldError> {
+  match params.get(name) {
+    Some(value) => validation::parse_literal(Source::Query, name, value, choices).map_err(|error| *error),
+    None => Err(validation::missing(Source::Query, name)),
+  }
+}
+
+/// An `int` parameter, at least `ge`.
+pub(crate) fn uint(params: &Params, name: &str, ge: i64) -> Result<i64, FieldError> {
+  match params.get(name) {
+    Some(text) => validation::parse_int(Source::Query, name, text, Some(ge), None).map_err(|error| *error),
+    None => Err(validation::missing(Source::Query, name)),
+  }
+}
+
 /// A `Literal[...]` parameter with its default when absent.
 pub(crate) fn literal(
   params: &Params,

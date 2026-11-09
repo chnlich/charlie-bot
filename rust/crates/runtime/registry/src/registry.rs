@@ -28,6 +28,7 @@ use tokio::io::AsyncWrite;
 use tokio::sync::watch;
 
 use crate::draft::DraftPlatformFactory;
+pub use crate::member::{MemberReading, MemberWindow};
 use crate::route_claims::RouteClaims;
 use crate::sequence::{SequenceBinding, SequenceController};
 use crate::sidebar::SidebarContribution;
@@ -587,35 +588,6 @@ pub type ReadingLimitsFn = fn(RunKind) -> ContextLimits;
 /// A reading kind's limits from one backend option (`register_backend_reading_limits`).
 pub type BackendReadingLimitsFn = fn(&BackendOption, RunKind) -> ContextLimits;
 
-/// One quota window of a member's reading, with its utilization in `0..=1`, its length when the backend states one,
-/// and the reset the backend states for it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct MemberWindow {
-  pub utilization: f64,
-  pub window_minutes: Option<i64>,
-  pub resets_at: Option<UtcDateTime>,
-}
-
-/// One backend member's quota reading: the windows the backend reports, the weekly window's reset, and the two
-/// decisions the reading's provider derives from them.
-#[derive(Clone, Debug, PartialEq)]
-pub struct MemberReading {
-  pub windows: Vec<MemberWindow>,
-  /// The reset of the member's weekly (longest) window, when the provider reports one.
-  pub weekly_resets_at: Option<UtcDateTime>,
-  /// Every healthy login or window sits at or above the 90% line and the earliest reset is beyond the horizon.
-  pub near_exhaustion: bool,
-  /// The member has no capacity left: no healthy login with headroom, or a window at 100%.
-  pub exhausted: bool,
-}
-
-impl MemberReading {
-  /// The earliest reset any window states.
-  pub fn earliest_reset(&self) -> Option<UtcDateTime> {
-    self.windows.iter().filter_map(|window| window.resets_at).min()
-  }
-}
-
 /// The reader of one backend option's quota state now, or `None` when the backend exposes no reading
 /// (`register_member_reading`). A member with no reading counts as under the 90% line until its first quota error.
 pub type MemberReadingFn =
@@ -711,9 +683,17 @@ pub const AGENTS_INSTRUCTIONS_FILE_NAME: &str = "AGENTS.md";
 pub const CLAUDE_INSTRUCTIONS_FILE_NAME: &str = "CLAUDE.md";
 
 /// The per-process pieces of the backend template method. The runner in `charliebot-agents` drives them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetryAfter {
+  /// The minimum duration before a retry may start.
+  pub after: Duration,
+  /// The absolute reset stated by the backend, or calculated from its relative reset text.
+  pub resets_at: time::OffsetDateTime,
+}
+
 pub trait AgentBackend: Send {
-  /// The reset duration stated by a retryable backend error, or `None` when it has no supported retry reset.
-  fn retry_after(&self, _error_text: &str) -> Option<Duration> {
+  /// The reset stated by a retryable backend error, or `None` when it has no supported reset form.
+  fn retry_after(&self, _error_text: &str) -> Option<RetryAfter> {
     None
   }
 
@@ -1722,6 +1702,12 @@ pub trait TurnContribution: Send + Sync {
     None
   }
 
+  /// The line a manager reset note carries for `meta`: the session's status Goal when it stores one. An unreadable
+  /// status fails the turn.
+  fn status_goal_line(&self, _meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
+    Ok(None)
+  }
+
   /// Chat renderers by event type. A type that two contributions render fails the registration.
   fn event_renderers(&self) -> Vec<(&'static str, EventRenderer)> {
     Vec::new()
@@ -1795,6 +1781,18 @@ impl Registry {
       .filter_map(|contribution| contribution.input_preamble(meta, input_event))
       .collect();
     (!preambles.is_empty()).then(|| preambles.join("\n"))
+  }
+
+  /// The status Goal line of `meta`: the lines that the contributions give, one line each, in registration order;
+  /// `None` when no contribution gives one. A contribution that cannot read the status fails the call.
+  pub fn status_goal_line(&self, meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
+    let mut lines: Vec<String> = Vec::new();
+    for contribution in self.turn_contributions.values() {
+      if let Some(line) = contribution.status_goal_line(meta)? {
+        lines.push(line);
+      }
+    }
+    Ok((!lines.is_empty()).then(|| lines.join("\n")))
   }
 
   /// True when a registered contribution marks the turn-end unread flag for `meta` itself.

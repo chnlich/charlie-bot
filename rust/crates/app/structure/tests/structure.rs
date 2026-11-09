@@ -841,11 +841,6 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::run_records::STDOUT_LOG_NAME`.",
   },
   OwnerRow {
-    name: "backend_from_pool",
-    owner: "runtime/agents",
-    hint: "Use `charliebot_agents::backend_pool::BACKEND_FROM_POOL_FIELD`.",
-  },
-  OwnerRow {
     name: "AGENTS.md",
     owner: "runtime/registry",
     hint: "Use `charliebot_registry::backend::AGENTS_INSTRUCTIONS_FILE_NAME`.",
@@ -887,6 +882,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_core::config::CREDENTIALS_FILENAME`.",
   },
   OwnerRow { name: "config.d", owner: "infra/core", hint: "Use `charliebot_core::config::CONFIG_D_DIR_NAME`." },
+  OwnerRow { name: "cron.d", owner: "infra/core", hint: "Use `charliebot_core::config::CRON_D_DIR_NAME`." },
   OwnerRow { name: "configs", owner: "infra/core", hint: "Use `charliebot_core::repo_root::CONFIGS_DIR_NAME`." },
   OwnerRow { name: "sessions", owner: "infra/core", hint: "Use `charliebot_core::config::sessions_dir_in`." },
   OwnerRow { name: ".charliebot", owner: "infra/core", hint: "Use `charliebot_core::home::DEFAULT_HOME_DIR_NAME`." },
@@ -1038,6 +1034,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     name: "parent_session_id",
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::PARENT_SESSION_ID`.",
+  },
+  OwnerRow {
+    name: "successor_session_id",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::SUCCESSOR_SESSION_ID`.",
   },
   OwnerRow {
     name: "has_pending_trigger",

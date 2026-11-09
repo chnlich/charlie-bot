@@ -26,7 +26,7 @@ use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::layout;
 use crate::metadata::{
   CC_SESSION_STARTED_AT, HAS_UNREAD, KEEP_WORKTREE_FIELD, MetadataReadError, NATIVE_BACKEND, ROUND_RATINGS,
-  RoundRating, SessionMetadata, SessionStatus, UtcDateTime, WORK_STATE,
+  RoundRating, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, UtcDateTime, WORK_STATE,
 };
 use crate::projection::MessageProjection;
 use crate::run_facts::RunFactsMemo;
@@ -1353,7 +1353,7 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         "schedule_project",
         "schedule_allow_failure",
         "parent_session_id",
-        "successor_session_id",
+        SUCCESSOR_SESSION_ID,
         "schema_version",
         "task_parent_id",
         "profile",

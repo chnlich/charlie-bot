@@ -31,7 +31,9 @@ mod routes;
 mod state;
 mod store_setup;
 
+use std::ffi::OsStr;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -491,17 +493,48 @@ struct StateParts {
 }
 
 /// The checkout, read once, and the agent environment built from the process environment. The process environment
-/// itself keeps the operator's values. Any error names the input it concerns.
+/// itself keeps the operator's values. The agent PATH's server entry is the launch directory: the path through which
+/// the launcher started the server, so after a release switch the entry still resolves to the release that serves.
+/// Any error names the input it concerns.
 fn replace_environment() -> Result<(RepoRoot, AgentBaseEnvironment), String> {
   let repo_root = RepoRoot::new(std::env::var_os(REPO_ROOT_ENV)).map_err(|error| error.to_string())?;
-  let server_executable =
-    std::env::current_exe().map_err(|error| format!("cannot resolve charliebot-server path: {error}"))?;
-  let server_bin_dir = server_executable
-    .parent()
-    .ok_or_else(|| format!("charliebot-server path has no parent: {}", server_executable.display()))?;
-  let agent_base = agent_environment::agent_base_environment(server_bin_dir, &gh_wrapper::dir_under(repo_root.path()))
+  let server_bin_dir = launch_bin_dir()?;
+  let agent_base = agent_environment::agent_base_environment(&server_bin_dir, &gh_wrapper::dir_under(repo_root.path()))
     .map_err(|error| format!("{error:#}"))?;
   Ok((repo_root, agent_base))
+}
+
+/// The directory of the path through which the server binary was launched, from `argv[0]`. Linux resolves
+/// `current_exe()` through symlinks, so a server started through `~/charliebot-releases/current` would pin the agent
+/// PATH to one release directory, and a run the server reattaches after a switch would keep calling the old release's
+/// CLI. `argv[0]` keeps the launch path, so the entry follows the `current` link across switches.
+fn launch_bin_dir() -> Result<PathBuf, String> {
+  let argv0 =
+    std::env::args_os().next().ok_or("cannot determine the server launch path: the process has no argv[0]")?;
+  let cwd = std::env::current_dir().map_err(|error| format!("cannot read the current directory: {error}"))?;
+  launch_bin_dir_from(&argv0, &cwd)
+}
+
+/// The launch directory from one `argv[0]` against one current directory. A path with a directory part names the
+/// launch; a bare command name does not, and resolving it another way would fall back to the symlink-resolved
+/// executable path, so it stops the start with the named input. A relative launch path joins the current directory
+/// without resolving links, and `components` drops its `.` entries, so the directory reads as the launch directory.
+fn launch_bin_dir_from(argv0: &OsStr, cwd: &Path) -> Result<PathBuf, String> {
+  let launch_path = Path::new(argv0);
+  let joined = if launch_path.is_absolute() {
+    launch_path.to_path_buf()
+  } else if launch_path.components().count() > 1 {
+    cwd.join(launch_path)
+  } else {
+    return Err(format!(
+      "cannot determine the server launch path: argv[0] {argv0:?} names no directory; start charliebot-server by its path"
+    ));
+  };
+  let absolute: PathBuf = joined.components().map(|component| component.as_os_str()).collect();
+  absolute
+    .parent()
+    .map(Path::to_path_buf)
+    .ok_or_else(|| format!("the server launch path {argv0:?} names no parent directory"))
 }
 
 /// The home's loaded files, checked against the checkout; any error names the input it concerns.
@@ -577,10 +610,13 @@ impl StopSignal {
 #[cfg(test)]
 mod tests {
   use std::fmt;
-  use std::path::Path;
+  use std::fs;
+  use std::os::unix::fs::PermissionsExt;
+  use std::path::{Path, PathBuf};
   use std::sync::{Arc, Mutex};
 
   use charliebot_core::test_support::EventSink;
+  use charliebot_registry::backend::Env;
   use charliebot_registry::wiring::{Phase, Service, ServiceContext};
   use futures_util::future::BoxFuture;
   use tracing::Event;
@@ -709,6 +745,86 @@ mod tests {
         StopAction::ReturnStatus(1),
       ]
     );
+  }
+
+  fn write_executable(path: &Path) {
+    fs::write(path, "test fixture; this file is not run\n").unwrap();
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
+  }
+
+  /// The release layout the launcher starts: one release directory with the two binaries, and the `current` link a
+  /// switch moves. Returns the release directory the link resolves to and the link itself.
+  fn release_layout(root: &Path) -> (PathBuf, PathBuf) {
+    let release = root.join("releases/0e876cb17");
+    fs::create_dir_all(&release).unwrap();
+    write_executable(&release.join("charliebot-server"));
+    write_executable(&release.join("charliebot"));
+    let current = root.join("releases/current");
+    std::os::unix::fs::symlink(&release, &current).unwrap();
+    (release, current)
+  }
+
+  /// A wrapper directory with an executable stub script, as `require_installed` expects it.
+  fn gh_wrapper_dir_under(root: &Path) -> PathBuf {
+    let directory = root.join("gh-wrapper");
+    fs::create_dir_all(&directory).unwrap();
+    write_executable(&directory.join("gh"));
+    directory
+  }
+
+  /// The server started through the `current` link gives agents the link's directory on PATH, so a later switch moves
+  /// the entry to the release that serves. The resolved release directory stays off PATH.
+  #[test]
+  fn a_launch_through_the_release_link_gives_agents_the_link_directory_on_path() {
+    let root = tempfile::tempdir().unwrap();
+    let (release, current) = release_layout(root.path());
+    let gh_wrapper_dir = gh_wrapper_dir_under(root.path());
+    let cwd = root.path().join("cwd");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let launch_dir =
+      launch_bin_dir_from(OsStr::new(current.join("charliebot-server").to_str().unwrap()), &cwd).unwrap();
+    assert_eq!(launch_dir, current);
+
+    let inherited = Env::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
+    let rewritten =
+      charliebot_agents::agent_environment::agent_environment(&inherited, &launch_dir, &gh_wrapper_dir).unwrap();
+    let entries: Vec<_> = std::env::split_paths(OsStr::new(&rewritten.values["PATH"])).collect();
+    assert_eq!(entries[0], gh_wrapper_dir);
+    assert_eq!(entries[1], current);
+    assert!(!entries.contains(&release), "the resolved release directory must not reach agent PATH");
+  }
+
+  /// A relative launch path with a directory part joins the current directory, and the link survives the join.
+  #[test]
+  fn a_relative_launch_path_joins_the_current_directory_without_resolving_links() {
+    let root = tempfile::tempdir().unwrap();
+    let (_, current) = release_layout(root.path());
+    let cwd = root.path().join("cwd");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let from_cwd = launch_bin_dir_from(
+      OsStr::new(current.strip_prefix(root.path()).unwrap().join("charliebot-server").to_str().unwrap()),
+      &cwd,
+    )
+    .unwrap();
+    assert_eq!(from_cwd, cwd.join("releases/current"));
+
+    let in_cwd = launch_bin_dir_from(OsStr::new("./charliebot-server"), &cwd).unwrap();
+    assert_eq!(in_cwd, cwd);
+  }
+
+  /// A bare command name determines no launch path: the error names the input instead of falling back to the
+  /// symlink-resolved executable path.
+  #[test]
+  fn a_bare_command_name_is_an_error_that_names_the_input() {
+    let root = tempfile::tempdir().unwrap();
+    for bare in ["charliebot-server", ""] {
+      let error = launch_bin_dir_from(OsStr::new(bare), root.path()).unwrap_err();
+      assert!(error.contains("argv[0]") && error.contains(bare), "{error}");
+    }
   }
 
   /// How long the test service's stop takes, in milliseconds.

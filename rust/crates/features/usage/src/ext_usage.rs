@@ -101,7 +101,7 @@ impl Panel {
 
   /// The entries as one emit shows them at `now`: each account's expiry marks judged on a copy, plus its provider's
   /// display label. Nothing is written back into the cache.
-  pub fn annotated(&self, now: UtcDateTime) -> Map<String, Value> {
+  pub fn annotated(&self, now: UtcDateTime) -> anyhow::Result<Map<String, Value>> {
     let state = self.lock();
     state
       .cached
@@ -109,9 +109,9 @@ impl Panel {
       .map(|(key, entry)| {
         let account = state.accounts.get(key).expect("every cached key has its round's account");
         let entry = entry.as_object().expect("a cache entry is an object");
-        let mut marked = account.mark_expired(entry, now);
+        let mut marked = account.mark_expired(entry, now)?;
         marked.insert(PANEL_PROVIDER_LABEL.to_string(), Value::String(account.provider_label().to_string()));
-        (key.clone(), Value::Object(marked))
+        Ok((key.clone(), Value::Object(marked)))
       })
       .collect()
   }
@@ -157,7 +157,7 @@ async fn poll_round(panel: &Panel, host: &dyn PollHost) -> anyhow::Result<()> {
       }
     };
     panel.record_fetch(account.as_ref(), reading);
-    host.broadcast_sidebar(json!({"type": "ext_usage", "providers": panel.annotated(host.now())})).await?;
+    host.broadcast_sidebar(json!({"type": "ext_usage", "providers": panel.annotated(host.now())?})).await?;
     tracing::info!(providers = ?panel.cache_keys(), "ext_usage_fetched");
     tokio::time::sleep(EXT_USAGE_ROUND_GAP).await;
   }
@@ -209,7 +209,7 @@ mod tests {
       Box::pin(async move { outcome.map_err(anyhow::Error::msg) })
     }
 
-    fn mark_expired(&self, entry: &Map<String, Value>, now: UtcDateTime) -> Map<String, Value> {
+    fn mark_expired(&self, entry: &Map<String, Value>, now: UtcDateTime) -> anyhow::Result<Map<String, Value>> {
       let mut marked = entry.clone();
       if let Some(Value::Array(windows)) = marked.get_mut(PANEL_WINDOWS) {
         for window in windows {
@@ -219,7 +219,7 @@ mod tests {
           }
         }
       }
-      marked
+      Ok(marked)
     }
   }
 
@@ -443,7 +443,7 @@ mod tests {
     run_until(&mut poll, start, Duration::from_secs(150)).await;
     assert_eq!(host.derivations(), 3);
     assert!(host.frames().is_empty());
-    assert!(panel.annotated(UtcDateTime::now()).is_empty());
+    assert!(panel.annotated(UtcDateTime::now()).unwrap().is_empty());
   }
 
   #[tokio::test(start_paused = true)]

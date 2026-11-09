@@ -25,6 +25,8 @@ pub const CREDENTIALS_FILENAME: &str = "credentials.yaml";
 pub const SESSIONS_DIR_NAME: &str = "sessions";
 /// The profile home's directory of configuration fragments, one YAML file per job or section.
 pub const CONFIG_D_DIR_NAME: &str = "config.d";
+/// The `config.d` subdirectory that holds the scheduled job files, one YAML file per job.
+pub const CRON_D_DIR_NAME: &str = "cron.d";
 
 /// A legacy-key value under this prefix names a `credentials.yaml` key path (`CREDENTIALS_PREFIX`).
 pub const CREDENTIALS_PREFIX: &str = "credentials: ";
@@ -49,8 +51,8 @@ pub const PROXY_URL_KEY: &str = "proxy_url";
 /// every request it sends. The option schemas import this name instead of each spelling it.
 pub const EXTRA_BODY_KEY: &str = "extra_body";
 
-/// Retired keys under `backends:`, replaced by `backends.pools`.
-const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default"];
+/// Retired keys under `backends:`, replaced by `backends.pools` and `backends.calls`.
+const RETIRED_BACKENDS_KEYS: &[&str] = &["preference", "worker_default", "auto", "pool"];
 
 /// The top-level names `CharlieBotConfig` declares as fields.
 const FIELD_NAMES: &[&str] =
@@ -319,6 +321,9 @@ pub struct BackendOption {
   pub label: String,
   pub model: String,
   pub prompt_overlay: Option<String>,
+  /// How the model's account is paid for: `billing: subscription | payg`. A priority pool's member needs it; every pool
+  /// that names this option reads it here.
+  pub billing: Option<PoolBilling>,
   /// The registered backend type, one of [`ConfigSchema::backend_types`].
   pub backend_type: String,
   /// The type-specific keys, raw until the backend package parses them.
@@ -360,7 +365,7 @@ pub enum PoolRule {
   Rotate,
 }
 
-/// How a priority pool's member is paid for: `billing: subscription | payg`.
+/// How a `backends.options` entry is paid for: `billing: subscription | payg`.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum PoolBilling {
@@ -370,12 +375,21 @@ pub enum PoolBilling {
   Payg,
 }
 
-/// One member of a pool: a `backends.options` id, and for a priority pool how it is paid for.
+impl PoolBilling {
+  /// The value the config writes for this billing.
+  pub const fn key(self) -> &'static str {
+    match self {
+      PoolBilling::Subscription => "subscription",
+      PoolBilling::Payg => "payg",
+    }
+  }
+}
+
+/// One member of a pool: the `backends.options` id it names. A pool's rule does not change the member's shape; its
+/// billing is the option's ([`BackendOption::billing`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PoolMember {
   pub backend: String,
-  /// `Some` on a priority pool's member; `None` on a rotate pool's member, whose order alone decides.
-  pub billing: Option<PoolBilling>,
 }
 
 /// One `backends.pools[]` entry: a named set of members and the rule that picks one of them for a call.
@@ -661,8 +675,8 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
       .collect();
     if !retired.is_empty() {
       return Err(ConfigError(format!(
-        "{config_path_text} still uses retired keys ({}); list the rotation members as a rotate pool under \
-         backends.pools instead, in rotation order (each id must name a backends.options entry)",
+        "{config_path_text} still uses retired keys ({}); declare each set as a backends.pools entry (id, label, \
+         rule, members) and name each call class in backends.calls",
         retired.join(", ")
       )));
     }
@@ -848,12 +862,6 @@ fn parse_backends(
     }
   };
   for key in mapping.keys() {
-    if matches!(key.as_str(), Some("pool" | "auto")) {
-      return Err(ConfigError(format!(
-        "{config_path}: backends.auto and backends.pool are retired; declare each set as a backends.pools entry (id, \
-         label, rule, members) and name each call class in backends.calls"
-      )));
-    }
     if !matches!(key.as_str(), Some("routing" | "options" | "pools" | "calls")) {
       let shown = key.as_str().map_or_else(|| yaml_key_repr(key), str::to_string);
       return Err(ConfigError(format!("{config_path}: invalid config key backends.{shown}: unknown field")));
@@ -881,8 +889,7 @@ fn parse_backends(
   Ok(BackendsConfig { routing, options, pools, calls })
 }
 
-/// The `backends.pools` list, each entry's shape read by its `rule`: a rotate member is an option id; a priority
-/// member is a `{backend, billing}` mapping.
+/// The `backends.pools` list. Each member is a `backends.options` id under either rule.
 fn parse_pools(config_path: &str, value: Option<&Value>) -> Result<Vec<PoolConfig>, ConfigError> {
   let Some(value) = value else {
     return Ok(Vec::new());
@@ -896,7 +903,7 @@ fn parse_pools(config_path: &str, value: Option<&Value>) -> Result<Vec<PoolConfi
   entries.iter().enumerate().map(|(index, entry)| parse_pool(config_path, index, entry)).collect()
 }
 
-/// One `backends.pools[]` entry. The rule decides how its members parse, so the entry parses in two steps.
+/// One `backends.pools[]` entry: its id, label and rule, and its members as option ids.
 fn parse_pool(config_path: &str, index: usize, entry: &Value) -> Result<PoolConfig, ConfigError> {
   #[derive(Deserialize)]
   #[serde(deny_unknown_fields)]
@@ -906,41 +913,27 @@ fn parse_pool(config_path: &str, index: usize, entry: &Value) -> Result<PoolConf
     rule: PoolRule,
     members: Vec<Value>,
   }
-  #[derive(Deserialize)]
-  #[serde(deny_unknown_fields)]
-  struct PriorityMember {
-    backend: String,
-    billing: PoolBilling,
-  }
 
   let location = format!("backends.pools[{index}]");
   let PoolEntry { id, label, rule, members } = deserialize_at(config_path, &location, entry.clone())?;
   let members = members
     .iter()
     .enumerate()
-    .map(|(member_index, member)| {
-      let member_location = format!("{location}.members[{member_index}]");
-      match rule {
-        PoolRule::Rotate => match member.as_str() {
-          Some(backend) => Ok(PoolMember { backend: backend.to_string(), billing: None }),
-          None => Err(ConfigError(format!(
-            "{config_path}: invalid config key {member_location}: a rotate pool's member is a backends.options id, \
-             got {}",
-            yaml_value_kind(member)
-          ))),
-        },
-        PoolRule::Priority => {
-          let PriorityMember { backend, billing } = deserialize_at(config_path, &member_location, member.clone())?;
-          Ok(PoolMember { backend, billing: Some(billing) })
-        }
-      }
+    .map(|(member_index, member)| match member.as_str() {
+      Some(backend) => Ok(PoolMember { backend: backend.to_string() }),
+      None => Err(ConfigError(format!(
+        "{config_path}: invalid config key {location}.members[{member_index}]: a pool member is a backends.options id, \
+         got {}",
+        yaml_value_kind(member)
+      ))),
     })
     .collect::<Result<Vec<_>, _>>()?;
   Ok(PoolConfig { id, label, rule, members })
 }
 
-/// Refuse pools that break the id rules or name a member that is not a `backends.options` id. Options ids, pool ids
-/// and the word `session` share one namespace, so each id is unique across them. The error names the entry.
+/// Refuse pools that break the id rules, name a member that is not a `backends.options` id, or name a billingless
+/// option on a priority pool. Options ids, pool ids and the word `session` share one namespace, so each id is unique
+/// across them. The error names the entry.
 fn check_pools(config_path: &str, pools: &[PoolConfig], options: &[BackendOption]) -> Result<(), ConfigError> {
   let mut names = HashSet::new();
   for (index, option) in options.iter().enumerate() {
@@ -978,10 +971,17 @@ fn check_pools(config_path: &str, pools: &[PoolConfig], options: &[BackendOption
           member.backend
         )));
       }
-      if !options.iter().any(|option| option.id == member.backend) {
+      let Some(option) = options.iter().find(|option| option.id == member.backend) else {
         return Err(ConfigError(format!(
           "{member_location}: backend '{}' is not a backends.options id",
           member.backend
+        )));
+      };
+      if pool.rule == PoolRule::Priority && option.billing.is_none() {
+        return Err(ConfigError(format!(
+          "{member_location}: backend '{}' has no billing; priority pool '{}' needs billing: subscription or payg on \
+           its backends.options entry",
+          member.backend, pool.id
         )));
       }
       if pool.rule == PoolRule::Priority && !seen.insert(member.backend.as_str()) {
@@ -1089,12 +1089,16 @@ fn parse_option(
   let model = optional_text("model")?
     .ok_or_else(|| ConfigError(format!("{location}: backend '{id}' (type '{backend_type}') requires 'model'")))?;
   let prompt_overlay = optional_text("prompt_overlay")?;
+  let billing: Option<PoolBilling> = match entry.get("billing") {
+    None | Some(Value::Null) => None,
+    Some(value) => Some(deserialize_at(config_path, &format!("backends.options[{index}].billing"), value.clone())?),
+  };
   let type_fields: Mapping = entry
     .iter()
-    .filter(|(key, _)| !matches!(key.as_str(), Some("id" | "label" | "model" | "prompt_overlay" | "type")))
+    .filter(|(key, _)| !matches!(key.as_str(), Some("id" | "label" | "model" | "prompt_overlay" | "billing" | "type")))
     .map(|(key, value)| (key.clone(), value.clone()))
     .collect();
-  Ok(BackendOption { id, label, model, prompt_overlay, backend_type, type_fields })
+  Ok(BackendOption { id, label, model, prompt_overlay, billing, backend_type, type_fields })
 }
 
 /// A YAML mapping key as its repr prints the value loaded for it.
@@ -1245,6 +1249,7 @@ mod tests {
       label: "OpenCode".to_string(),
       model: String::new(),
       prompt_overlay: None,
+      billing: None,
       backend_type: "opencode".to_string(),
       type_fields: Mapping::new(),
     };
@@ -1369,6 +1374,16 @@ mod tests {
     "    - {id: b, label: B, type: codex, model: m}\n",
   );
 
+  const TWO_BILLED_OPTIONS: &str = concat!(
+    "backends:\n  options:\n",
+    "    - {id: a, label: A, type: codex, model: m, billing: subscription}\n",
+    "    - {id: b, label: B, type: codex, model: m, billing: payg}\n",
+  );
+
+  fn billing_of(cfg: &CharlieBotConfig, id: &str) -> Option<PoolBilling> {
+    cfg.get_backend_option(id).and_then(|option| option.billing)
+  }
+
   #[test]
   fn the_retired_keys_fail_loading_naming_the_pools_form() {
     let home = home_with(&format!("{TWO_OPTIONS}  pool: [a]\n"));
@@ -1392,11 +1407,10 @@ mod tests {
   fn the_named_form_parses_pools_rules_and_call_targets() {
     let home = home_with(
       &[
-        TWO_OPTIONS,
+        TWO_BILLED_OPTIONS,
         concat!(
           "  pools:\n",
-          "    - {id: auto, label: Auto, rule: priority, members: [{backend: a, billing: subscription}, \
-           {backend: b, billing: payg}]}\n",
+          "    - {id: auto, label: Auto, rule: priority, members: [a, b]}\n",
           "    - {id: light, label: Light, rule: rotate, members: [b, a, b]}\n",
           "  calls:\n",
           "    worker: session\n",
@@ -1409,7 +1423,10 @@ mod tests {
     );
     let cfg = load(&home).unwrap();
     assert_eq!(cfg.backends.pools.iter().map(|pool| pool.id.as_str()).collect::<Vec<_>>(), ["auto", "light"]);
+    assert_eq!(member_ids(cfg.backends.pool("auto").unwrap()), ["a", "b"]);
     assert_eq!(member_ids(cfg.backends.pool("light").unwrap()), ["b", "a", "b"]);
+    assert_eq!(billing_of(&cfg, "a"), Some(PoolBilling::Subscription));
+    assert_eq!(billing_of(&cfg, "b"), Some(PoolBilling::Payg));
     assert_eq!(cfg.backends.calls.get(CallClass::Worker), Some(&CallTarget::Session));
     assert_eq!(cfg.backends.calls.get(CallClass::Verify), Some(&CallTarget::Backend("light".to_string())));
     assert_eq!(cfg.backends.calls.get(CallClass::NewSession), Some(&CallTarget::Backend("a".to_string())));
@@ -1420,10 +1437,10 @@ mod tests {
   fn a_pool_member_that_is_a_pool_id_fails_loading() {
     let home = home_with(
       &[
-        TWO_OPTIONS,
+        TWO_BILLED_OPTIONS,
         concat!(
           "  pools:\n",
-          "    - {id: auto, label: Auto, rule: priority, members: [{backend: a, billing: payg}]}\n",
+          "    - {id: auto, label: Auto, rule: priority, members: [a]}\n",
           "    - {id: light, label: Light, rule: rotate, members: [auto]}\n",
         ),
       ]
@@ -1432,6 +1449,20 @@ mod tests {
     let error = load(&home).unwrap_err().to_string();
     assert!(
       error.contains("backends.pools[1].members[0]: 'auto' is a pool; a pool member must be a backends.options id"),
+      "{error}"
+    );
+  }
+
+  #[test]
+  fn a_priority_member_whose_option_has_no_billing_fails_naming_the_pool_and_option() {
+    let home =
+      home_with(&format!("{TWO_OPTIONS}  pools:\n    - {{id: auto, label: Auto, rule: priority, members: [a]}}\n"));
+    let error = load(&home).unwrap_err().to_string();
+    assert!(
+      error.contains(
+        "backends.pools[0].members[0]: backend 'a' has no billing; priority pool 'auto' needs billing: subscription or \
+         payg"
+      ),
       "{error}"
     );
   }
@@ -1455,39 +1486,50 @@ mod tests {
 
   #[test]
   fn each_malformed_pool_entry_refuses_by_name() {
-    for (fragment, expected) in [
-      ("  pools:\n    - {id: p, label: P, rule: weekly, members: [a]}\n", "backends.pools[0].rule: unknown variant"),
+    for (options, fragment, expected) in [
       (
-        "  pools:\n    - {id: p, label: P, rule: priority, members: [{backend: a}]}\n",
-        "backends.pools[0].members[0]: missing field `billing`",
+        TWO_OPTIONS,
+        "  pools:\n    - {id: p, label: P, rule: weekly, members: [a]}\n",
+        "backends.pools[0].rule: unknown variant",
       ),
       (
-        "  pools:\n    - {id: p, label: P, rule: priority, members: [a]}\n",
-        "backends.pools[0].members[0]: invalid type",
+        TWO_OPTIONS,
+        "  pools:\n    - {id: p, label: P, rule: priority, members: [{backend: a, billing: payg}]}\n",
+        "backends.pools[0].members[0]: a pool member is a backends.options id, got a mapping",
       ),
       (
-        "  pools:\n    - {id: p, label: P, rule: rotate, members: [{backend: a, billing: payg}]}\n",
-        "backends.pools[0].members[0]: a rotate pool's member is a backends.options id",
+        TWO_OPTIONS,
+        "  pools:\n    - {id: p, label: P, rule: rotate, members: []}\n",
+        "backends.pools[0].members lists no member",
       ),
-      ("  pools:\n    - {id: p, label: P, rule: rotate, members: []}\n", "backends.pools[0].members lists no member"),
       (
-        "  pools:\n    - {id: p, label: P, rule: priority, members: [{backend: a, billing: payg}, \
-         {backend: a, billing: subscription}]}\n",
+        TWO_BILLED_OPTIONS,
+        "  pools:\n    - {id: p, label: P, rule: priority, members: [a, a]}\n",
         "backends.pools[0].members[1]: backend 'a' appears twice",
       ),
       (
+        TWO_OPTIONS,
         "  pools:\n    - {id: p, label: P, rule: rotate, members: [ghost]}\n",
         "backends.pools[0].members[0]: backend 'ghost' is not a backends.options id",
       ),
-      ("  pools:\n    - {id: a, label: P, rule: rotate, members: [a]}\n", "id 'a' is already a backends.options id"),
-      ("  pools:\n    - {id: session, label: P, rule: rotate, members: [a]}\n", "id 'session' is reserved"),
       (
+        TWO_OPTIONS,
+        "  pools:\n    - {id: a, label: P, rule: rotate, members: [a]}\n",
+        "id 'a' is already a backends.options id",
+      ),
+      (
+        TWO_OPTIONS,
+        "  pools:\n    - {id: session, label: P, rule: rotate, members: [a]}\n",
+        "id 'session' is reserved",
+      ),
+      (
+        TWO_OPTIONS,
         "  pools:\n    - {id: p, label: P, rule: rotate, members: [a]}\n    - {id: p, label: P, \
          rule: rotate, members: [a]}\n",
         "backends.pools[1]: id 'p' is already another pool id",
       ),
     ] {
-      let error = load(&home_with(&format!("{TWO_OPTIONS}{fragment}"))).unwrap_err().to_string();
+      let error = load(&home_with(&format!("{options}{fragment}"))).unwrap_err().to_string();
       assert!(error.contains(expected), "{expected}: {error}");
     }
   }

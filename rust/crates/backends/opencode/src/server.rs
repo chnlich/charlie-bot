@@ -29,6 +29,7 @@ use uuid::Uuid;
 
 use super::opencode_limits;
 use super::options::model_overrides_config;
+use super::protocol;
 use super::relay::{self, ServerRecord, TurnRecord};
 use charliebot_agents::cli_base::apply_proxy_env;
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
@@ -1361,7 +1362,7 @@ impl OpenCodeServer {
 
   fn dispatch(self: &Arc<Self>, event: Value) {
     let event_type = event.get("type").and_then(Value::as_str).unwrap_or_default();
-    if event_type == "server.connected" {
+    if event_type == protocol::SERVER_CONNECTED {
       let state = self.state.lock().expect("opencode server state mutex is not poisoned");
       if let Some(connected) = &state.connected_tx {
         let _ = connected.send(true);
@@ -1372,7 +1373,7 @@ impl OpenCodeServer {
     let Some(session_id) = session_id else {
       return;
     };
-    if event_type == "session.execution.interrupted" {
+    if event_type == protocol::EXECUTION_INTERRUPTED {
       self.settle_one(&session_id);
     }
     let turn = self.state.lock().expect("opencode server state mutex is not poisoned").turns.get(&session_id).cloned();
@@ -1381,7 +1382,7 @@ impl OpenCodeServer {
         #[cfg(test)]
         turn.push(TurnEvent::Event(event));
       }
-    } else if event_type == "session.execution.started" {
+    } else if event_type == protocol::EXECUTION_STARTED {
       tracing::warn!(target: "charliebot_agents", session_id, "opencode_unclaimed_execution_interrupted");
       let server = Arc::clone(self);
       self.track(tokio::spawn(async move {
@@ -1656,7 +1657,7 @@ async fn read_events(
         let line = line.strip_suffix(b"\r").unwrap_or(line);
         if let Some(data) = line.strip_prefix(b"data:") {
           let event = serde_json::from_slice::<Value>(data)?;
-          if event.get("type").and_then(Value::as_str) == Some("server.connected") {
+          if event.get("type").and_then(Value::as_str) == Some(protocol::SERVER_CONNECTED) {
             let _ = connected.send(true);
           }
           if let Some(server) = server.upgrade() {

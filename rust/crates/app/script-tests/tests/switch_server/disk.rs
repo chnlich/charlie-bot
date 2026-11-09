@@ -5,6 +5,7 @@
 //! accounting from the world's fake cgroup and proc roots, so no test depends on the live disk.
 
 use std::fs;
+use std::path::PathBuf;
 
 use super::world::{self, World};
 
@@ -30,21 +31,31 @@ fn sequence_sampler(world: &World, rates: &[u64]) -> String {
   )
 }
 
+/// Stub that records every walk of the read tables in the file `walks`: the gate's quiet path must take no walk.
+fn walk_probe(world: &World) -> (PathBuf, String) {
+  let walks = world.root().join("walks");
+  let stub = format!(
+    r#"session_rbytes_table() {{ printf 'walk\n' >> {walks}; }}
+process_io_table() {{ printf 'walk\n' >> {walks}; }}
+"#,
+    walks = world::quote(&walks),
+  );
+  (walks, stub)
+}
+
 #[test]
 #[ignore = "integration"]
 fn test_disk_preflight_proceeds_at_once_on_a_quiet_disk() {
   let world = World::new();
-  let run = world.stubbed_preflight_with(
-    &format!("rust {}", world.rust_sha),
-    "rust",
-    &world.rust_sha,
-    "disk_read_rate_mb() { echo 3; }\n",
-  );
+  let (walks, probe) = walk_probe(&world);
+  let prepend = format!("{probe}disk_read_rate_mb() {{ echo 3; }}\n");
+  let run = world.stubbed_preflight_with(&format!("rust {}", world.rust_sha), "rust", &world.rust_sha, &prepend);
 
   assert_eq!(run.code, 0, "{}", world.report(&run));
   let quiet = "root disk read 3 MB/s over 0s, at or below 40 MB/s; proceeding";
   assert!(run.stdout.contains(quiet), "{}", world.report(&run));
   assert!(!run.stdout.contains("waiting for the root disk"), "{}", world.report(&run));
+  assert!(!walks.exists(), "{}", world.report(&run));
   assert!(run.stdout.contains("preflight passed:"), "{}", world.report(&run));
 }
 
@@ -52,18 +63,17 @@ fn test_disk_preflight_proceeds_at_once_on_a_quiet_disk() {
 #[ignore = "integration"]
 fn test_disk_preflight_proceeds_after_a_busy_disk_falls_under_the_threshold() {
   let world = World::new();
-  let run = world.stubbed_preflight_with(
-    &format!("rust {}", world.rust_sha),
-    "rust",
-    &world.rust_sha,
-    &sequence_sampler(&world, &[100, 5]),
-  );
+  let (walks, probe) = walk_probe(&world);
+  let prepend = format!("{probe}{}", sequence_sampler(&world, &[100, 5]));
+  let run = world.stubbed_preflight_with(&format!("rust {}", world.rust_sha), "rust", &world.rust_sha, &prepend);
 
   assert_eq!(run.code, 0, "{}", world.report(&run));
   let waiting = "waiting for the root disk: 100 MB/s read over 0s, above 40 MB/s; up to 5s";
   assert!(run.stdout.contains(waiting), "{}", world.report(&run));
   let quiet = "root disk read 5 MB/s over 0s, at or below 40 MB/s; proceeding";
   assert!(run.stdout.contains(quiet), "{}", world.report(&run));
+  assert!(!run.stdout.contains("heaviest"), "{}", world.report(&run));
+  assert!(!walks.exists(), "{}", world.report(&run));
   assert!(run.stdout.contains("preflight passed:"), "{}", world.report(&run));
 }
 
@@ -75,14 +85,21 @@ fn test_disk_preflight_times_out_and_names_the_heaviest_cgroup_and_process() {
   world.write_process(1234, "grep", 5000);
   let io_stat = world.cgroups.join("charliebot-sess-aaaa/io.stat");
   let process_io = world.proc.join("1234/io");
-  // The sampler advances both counters while it runs, so the last sample sees a delta for each.
+  // The report's window is the gate's last sample, taken after the walks, so the sampler advances both counters on
+  // every call: the window's after snapshot sees one more increment than its before snapshot.
+  let counter = world.root().join("disk-samples");
   let sampler = format!(
     r#"disk_read_rate_mb() {{
-  printf '8:0 rbytes=2000 wbytes=0 rios=2 wios=0 dbytes=0 dios=0\n' > {io_stat}
-  printf 'read_bytes: 9000\n' > {process_io}
+  local n=0
+  [ -f {counter} ] && n=$(cat {counter})
+  n=$((n + 1))
+  echo "$n" > {counter}
+  printf '8:0 rbytes=%d wbytes=0 rios=2 wios=0 dbytes=0 dios=0\n' $((2000 + 1000 * n)) > {io_stat}
+  printf 'read_bytes: %d\n' $((5000 + 4000 * n)) > {process_io}
   echo 100
 }}
 "#,
+    counter = world::quote(&counter),
     io_stat = world::quote(&io_stat),
     process_io = world::quote(&process_io),
   );
@@ -97,6 +114,8 @@ fn test_disk_preflight_times_out_and_names_the_heaviest_cgroup_and_process() {
   assert!(logged.contains("cgroup charliebot-sess-aaaa 1000 bytes (io.stat)"), "{logged}");
   assert!(logged.contains("process 1234 (grep) 4000 bytes"), "{logged}");
   assert!(!logged.contains("stopping the old server"), "{logged}");
+  // The report sampled one window of its own after the wait ran out.
+  assert_eq!(fs::read_to_string(&counter).expect("the sample count").trim(), "2", "{logged}");
 }
 
 #[test]
@@ -183,7 +202,9 @@ fn test_root_disk_resolves_a_partition_numbered_above_nine_to_its_own_disk() {
   );
 }
 
-/// A process that starts inside the last sample read its bytes inside that sample, so the timeout report names it.
+/// A process that starts inside the report's sample window read its bytes inside that window, so the timeout report
+/// names it. The window is the gate's last sample, taken after the timeout, so the sampler starts the process on its
+/// second call.
 #[test]
 #[ignore = "integration"]
 fn test_disk_preflight_names_a_process_that_started_inside_the_last_sample() {
@@ -191,14 +212,22 @@ fn test_disk_preflight_names_a_process_that_started_inside_the_last_sample() {
   // A process that was already running gives the before snapshot a baseline, as every real host has.
   world.write_process(1000, "bash", 100);
   let process = world.proc.join("5555");
+  let counter = world.root().join("disk-samples");
   let sampler = format!(
     r#"disk_read_rate_mb() {{
-  mkdir -p {process}
-  printf 'rg\n' > {comm}
-  printf 'read_bytes: 6000\n' > {io}
+  local n=0
+  [ -f {counter} ] && n=$(cat {counter})
+  n=$((n + 1))
+  echo "$n" > {counter}
+  if [ "$n" -ge 2 ]; then
+    mkdir -p {process}
+    printf 'rg\n' > {comm}
+    printf 'read_bytes: 6000\n' > {io}
+  fi
   echo 100
 }}
 "#,
+    counter = world::quote(&counter),
     process = world::quote(&process),
     comm = world::quote(&process.join("comm")),
     io = world::quote(&process.join("io")),

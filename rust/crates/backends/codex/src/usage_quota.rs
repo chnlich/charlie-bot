@@ -14,11 +14,11 @@ use std::sync::{Arc, LazyLock, Mutex};
 use anyhow::{Context, bail};
 use charliebot_core::str_methods;
 use charliebot_core::timefmt::{self, utc_now_iso};
-use charliebot_registry::backend::{MemberReading, MemberWindow};
+use charliebot_registry::backend::MemberReading;
 use charliebot_registry::usage::{
-  DEFAULT_ACCOUNT_LABEL, NEAR_EXHAUSTION_RESET_HORIZON, PANEL_FETCHED_AT, PANEL_PLAN_TYPE, PANEL_PROVIDER,
-  PANEL_RESETS_AT, PANEL_UTILIZATION, PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT,
-  WARNING_UTILIZATION, WEEKLY_WINDOW_MINUTES, as_utilization, mark_expired_windows,
+  DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PLAN_TYPE, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION,
+  PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UNKNOWN_LIMIT_SHAPE_EVENT, as_utilization, mark_expired_windows,
+  member_reading_from_windows,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -31,6 +31,7 @@ use time::{Duration, OffsetDateTime, UtcOffset};
 use super::pricing;
 use super::rollout::{self, token_count_payload, walk_files};
 use super::text::{empty_object, object_or_empty, splitlines, truthy};
+use super::usage_fields;
 use charliebot_agents::usage_time::utc_isoformat;
 
 const PROVIDER: &str = "codex";
@@ -91,12 +92,12 @@ impl QuotaAccount for CodexQuotaAccount {
     Box::pin(async move { inner.fetch().await })
   }
 
-  fn mark_expired(&self, entry: &Map<String, Value>, now: UtcDateTime) -> Map<String, Value> {
+  fn mark_expired(&self, entry: &Map<String, Value>, now: UtcDateTime) -> anyhow::Result<Map<String, Value>> {
     let sampled = text_of(entry, "token_count_observed_at")
       .and_then(parse_iso_utc)
       .or_else(|| text_of(entry, PANEL_FETCHED_AT).and_then(parse_iso_utc))
       .map(UtcDateTime::from);
-    mark_expired_windows(entry, sampled, now)
+    Ok(mark_expired_windows(entry, sampled, now))
   }
 }
 
@@ -296,37 +297,9 @@ pub fn member_reading(sessions_dir: &Path, now: UtcDateTime) -> anyhow::Result<O
   let NewestPlanEvent::Event(event) = newest_plan_event(&paths, now.into_inner())? else { return Ok(None) };
   let payload = object_or_empty(&event, "payload")?;
   let rate_limits = object_or_empty(payload, "rate_limits")?;
-  let windows = codex_windows(rate_limits, DEFAULT_ACCOUNT_LABEL)?
-    .into_iter()
-    .filter_map(|window| {
-      let utilization = window.get(PANEL_UTILIZATION).and_then(Value::as_f64)? / 100.0;
-      let window_minutes = window.get(PANEL_WINDOW_MINUTES).and_then(Value::as_i64);
-      let resets_at = window
-        .get(PANEL_RESETS_AT)
-        .and_then(Value::as_str)
-        .filter(|text| !text.is_empty())
-        .and_then(parse_iso_utc)
-        .map(UtcDateTime::from);
-      Some(MemberWindow { utilization, window_minutes, resets_at })
-    })
-    .collect::<Vec<_>>();
-  if windows.is_empty() {
-    return Ok(None);
-  }
-  let max_utilization = windows.iter().map(|window| window.utilization).reduce(f64::max).unwrap_or_default();
-  let earliest_reset = windows.iter().filter_map(|window| window.resets_at).min();
-  let weekly_resets_at = windows
-    .iter()
-    .filter(|window| window.window_minutes == Some(WEEKLY_WINDOW_MINUTES) && window.resets_at.is_some())
-    .max_by(|left, right| left.utilization.total_cmp(&right.utilization))
-    .and_then(|window| window.resets_at);
-  Ok(Some(MemberReading {
-    near_exhaustion: max_utilization >= WARNING_UTILIZATION
-      && earliest_reset.is_some_and(|reset| reset.into_inner() > now.into_inner() + NEAR_EXHAUSTION_RESET_HORIZON),
-    exhausted: max_utilization >= 1.0,
-    weekly_resets_at,
-    windows,
-  }))
+  let windows = codex_windows(rate_limits, DEFAULT_ACCOUNT_LABEL)?;
+  let sampled = UtcDateTime::from(parse_codex_timestamp(event.get("timestamp"))?);
+  member_reading_from_windows(&windows, sampled, now)
 }
 
 fn unix_seconds(instant: OffsetDateTime) -> f64 {
@@ -676,16 +649,16 @@ fn spend_row(line: &str, current_model: &mut String) -> anyhow::Result<Option<Sp
     Some(Value::Object(info)) => info,
     Some(other) => bail!("info must be an object, got {other}"),
   };
-  let last = match info.get("last_token_usage") {
+  let last = match info.get(usage_fields::LAST_TOKEN_USAGE) {
     None => return Ok(None),
     Some(value) if !truthy(value) => return Ok(None),
     Some(Value::Object(last)) => last,
     Some(other) => bail!("last_token_usage must be an object, got {other}"),
   };
   let usage = SpendUsage {
-    input: integer_field(last, "input_tokens")?,
-    cached: integer_field(last, "cached_input_tokens")?,
-    output: integer_field(last, "output_tokens")?,
+    input: integer_field(last, usage_fields::INPUT_TOKENS)?,
+    cached: integer_field(last, usage_fields::CACHED_INPUT_TOKENS)?,
+    output: integer_field(last, usage_fields::OUTPUT_TOKENS)?,
   };
   let observed = parse_codex_timestamp(event.get("timestamp"))?;
   Ok(Some((observed, current_model.clone(), usage)))
@@ -741,6 +714,7 @@ impl SpendMemo {
 #[cfg(test)]
 mod tests {
   use crate::rollout::CODEX_SESSIONS_DIR_NAME;
+  use charliebot_registry::usage::WEEKLY_WINDOW_MINUTES;
 
   use super::*;
 
@@ -808,6 +782,29 @@ mod tests {
     write_rollout(&sessions, &plan_event((100.0, 300, epoch("2026-10-18T17:00:00Z")), (95.0, weekly.0, weekly.1)));
     let reading = member_reading(&sessions, now).unwrap().expect("the rollout carries a plan reading");
     assert!(reading.exhausted, "a window at 100% has no headroom left");
+  }
+
+  #[test]
+  fn member_reading_uses_each_windows_own_reset() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join(CODEX_SESSIONS_DIR_NAME);
+    let now = UtcDateTime::parse("2026-10-18T12:00:00Z").unwrap();
+    write_rollout(
+      &sessions,
+      &plan_event(
+        (10.0, 300, epoch("2026-10-18T12:20:00Z")),
+        (97.0, WEEKLY_WINDOW_MINUTES, epoch("2026-10-25T12:00:00Z")),
+      ),
+    );
+    assert!(member_reading(&sessions, now).unwrap().unwrap().near_exhaustion);
+    write_rollout(
+      &sessions,
+      &plan_event(
+        (100.0, 300, epoch("2026-10-18T11:58:00Z")),
+        (10.0, WEEKLY_WINDOW_MINUTES, epoch("2026-10-25T12:00:00Z")),
+      ),
+    );
+    assert!(!member_reading(&sessions, now).unwrap().unwrap().exhausted);
   }
 
   #[test]

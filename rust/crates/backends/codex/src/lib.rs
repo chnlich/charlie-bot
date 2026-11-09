@@ -10,6 +10,7 @@ pub mod resolver;
 mod rollout;
 mod text;
 mod translate;
+mod usage_fields;
 pub mod usage_logs;
 pub mod usage_quota;
 mod usage_sweep;

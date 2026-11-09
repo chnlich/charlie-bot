@@ -5,6 +5,8 @@
 //! test builds a throwaway git repository, release root and log root in a sandbox, so nothing touches
 //! ~/charliebot-releases or the live home.
 
+#[path = "../common/release_lock.rs"]
+mod release_lock;
 mod world;
 
 use std::fs;
@@ -12,8 +14,10 @@ use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use charliebot_shell_harness::{self as harness, Env, Run, Sandbox, write_executable};
+use release_lock::LockHolder;
 use serde_json::json;
 use sha2::Digest as _;
 use world::World;
@@ -133,6 +137,74 @@ fn preflight_refuses_a_commit_without_both_rust_jobs_green(case: &str) {
   assert!(run.stderr.contains("CI has no successful push run"), "{}", run.describe());
 }
 
+// ---- the host release lock -----------------------------------------------------------------------------------------
+
+#[test]
+#[ignore = "integration"]
+fn test_a_release_that_finds_the_host_lock_held_refuses_at_once_and_names_the_holder() {
+  let world = World::new();
+  let holder = LockHolder::start(&world.repo.join("scripts/release/lock.sh"), &world.env, "release.sh", &world.on_main);
+  let started = Instant::now();
+
+  let run = world.release(&world.on_main);
+
+  let elapsed = started.elapsed();
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(elapsed < Duration::from_secs(2), "the refusal took {elapsed:?}: {}", run.describe());
+  assert!(run.stderr.contains("script=release.sh"), "{}", run.describe());
+  assert!(run.stderr.contains(&format!("commit={}", world.on_main)), "{}", run.describe());
+  assert!(run.stderr.contains(&format!("pid={}", holder.pid())), "{}", run.describe());
+  assert!(run.stderr.contains("started="), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_holder_that_is_killed_leaves_the_lock_free_for_the_next_release() {
+  let world = World::new();
+  let mut holder =
+    LockHolder::start(&world.repo.join("scripts/release/lock.sh"), &world.env, "release.sh", &world.on_main);
+  holder.kill();
+  assert!(holder.record().exists(), "the killed holder left no stale record");
+
+  let run = world.release(&world.on_main);
+
+  // The stale record does not block: the release runs every stage and installs.
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.releases.join(&world.on_main).join("release.log").exists(), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_trial_server_that_outlives_a_killed_release_does_not_keep_the_host_lock() {
+  let mut world = World::new();
+  let server_pid = world.sandbox.root().join("trial-server.pid");
+  let stage = world.bin().join("trial-outlives");
+  // A trial whose server outlives the stage, as trial.sh's server does, and that then kills the release running it.
+  write_executable(
+    &stage,
+    format!(
+      "#!/usr/bin/env bash\nsleep 300 < /dev/null > /dev/null 2>&1 &\necho $! > '{}'\nkill -9 \"$PPID\"\n",
+      server_pid.display()
+    ),
+  );
+  world.env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), stage.display().to_string());
+
+  let killed = world.release(&world.on_main);
+  assert_ne!(killed.code, 0, "{}", killed.describe());
+  let server: i32 = fs::read_to_string(&server_pid).expect("the trial's server pid").trim().parse().expect("a pid");
+
+  let mut command = harness::command("bash", &world.env);
+  command
+    .args(["-c", "source \"$1\" && release_lock_take probe.sh \"$2\"", "bash"])
+    .arg(world.repo.join("scripts/release/lock.sh"))
+    .arg(&world.on_main);
+  let probe = harness::run(&mut command);
+  // Stop the stranded server before the assertion, so a failure leaves nothing running.
+  nix::sys::signal::kill(nix::unistd::Pid::from_raw(server), nix::sys::signal::Signal::SIGKILL)
+    .expect("stop the trial's server");
+  assert_eq!(probe.code, 0, "the server kept the lock after the release died: {}", probe.describe());
+}
+
 // ---- a failed stage: exit 1, the stage named, nothing installed -----------------------------------------------------
 
 #[test]
@@ -166,6 +238,132 @@ fn test_a_failed_download_stage_exits_1_and_installs_nothing() {
   assert_eq!(run.code, 1, "{}", run.describe());
   assert!(run.stderr.contains("stage download failed"), "{}", run.describe());
   assert!(!world.releases.join(&world.on_main).exists(), "{}", run.describe());
+}
+
+// ---- the downloaded artifact: a temporary directory the log directory never holds ------------------------------------
+
+/// Stub trial and rehearsal stages that read the downloaded binary and directory out of the artifact temporary
+/// directory and refuse anything else, recording what they read in the file this returns.
+fn stub_stages_that_record_the_downloaded_binary(world: &mut World) -> PathBuf {
+  world.sandbox.stub(
+    "record-trial",
+    r#"case "$2" in
+  "$TMPDIR"/charliebot-release-artifact-*/charliebot-server) ;;
+  *) printf 'trial got %s, not the downloaded server binary\n' "$2" >&2; exit 1 ;;
+esac
+[ -x "$2" ] || { printf 'trial: the downloaded server binary is not executable\n' >&2; exit 1; }
+printf 'trial read the downloaded server binary from the temporary directory\n' >> "$STAGE_CALLS"
+"#,
+  );
+  world.sandbox.stub(
+    "record-rehearsal",
+    r#"case "$2" in
+  "$TMPDIR"/charliebot-release-artifact-*) ;;
+  *) printf 'rehearsal got %s, not the downloaded directory\n' "$2" >&2; exit 1 ;;
+esac
+for name in charliebot charliebot-server sha256sums.txt; do
+  [ -f "$2/$name" ] || { printf 'rehearsal: %s missing from the downloaded directory\n' "$name" >&2; exit 1; }
+done
+printf 'rehearsal read the downloaded directory\n' >> "$STAGE_CALLS"
+"#,
+  );
+  let calls = world.sandbox.root().join("stage-calls.log");
+  world.env.insert("STAGE_CALLS".to_string(), calls.display().to_string());
+  world.env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), world.bin().join("record-trial").display().to_string());
+  world
+    .env
+    .insert("CHARLIEBOT_RELEASE_REHEARSAL".to_string(), world.bin().join("record-rehearsal").display().to_string());
+  calls
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_passing_run_keeps_no_binary_in_the_log_directory_and_removes_the_artifact_directory() {
+  let mut world = World::new();
+  let calls = stub_stages_that_record_the_downloaded_binary(&mut world);
+
+  let run = world.release(&world.on_main);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  // The trial read the downloaded server binary and the rehearsal the downloaded directory, both out of the artifact
+  // temporary directory.
+  assert_eq!(
+    fs::read_to_string(&calls).expect("the stage calls"),
+    "trial read the downloaded server binary from the temporary directory\n\
+     rehearsal read the downloaded directory\n",
+    "{}",
+    run.describe()
+  );
+  // The log directory keeps the stage logs and the artifact's checksums, and no binary.
+  let names = world.log_names();
+  for name in ["download.log", "units.log", "trial.log", "rehearsal.log", "install.log", "sha256sums.txt"] {
+    assert!(names.contains(&name.to_string()), "the log directory lacks {name}: {names:?}");
+  }
+  for name in ["charliebot", "charliebot-server", "artifact"] {
+    assert!(!names.contains(&name.to_string()), "the log directory holds {name}: {names:?}");
+  }
+  let copied = fs::read_to_string(world.stage_log("sha256sums.txt")).expect("the copied checksums");
+  assert_eq!(copied, fs::read_to_string(world.artifact.join("sha256sums.txt")).expect("the artifact checksums"));
+  // The artifact temporary directory is gone.
+  assert!(
+    world.artifact_temp_entries().is_empty(),
+    "the temporary directory stayed: {:?}",
+    world.artifact_temp_entries()
+  );
+  // The release directory still holds both installed binaries.
+  assert!(world.releases.join(&world.on_main).join("charliebot-server").is_file(), "{}", run.describe());
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_stage_that_fails_after_the_download_leaves_no_binary_and_no_artifact_directory() {
+  let mut world = World::new();
+  world.env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), world.bin().join("stage-fail").display().to_string());
+
+  let run = world.release(&world.on_main);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stderr.contains("stage trial failed"), "{}", run.describe());
+  let names = world.log_names();
+  assert!(names.contains(&"sha256sums.txt".to_string()), "the download's checksums did not stay: {names:?}");
+  assert!(names.contains(&"trial.log".to_string()), "the failed stage's log did not stay: {names:?}");
+  for name in ["charliebot", "charliebot-server", "artifact"] {
+    assert!(!names.contains(&name.to_string()), "the log directory holds {name}: {names:?}");
+  }
+  assert!(!world.releases.join(&world.on_main).exists(), "{}", run.describe());
+  assert!(
+    world.artifact_temp_entries().is_empty(),
+    "the temporary directory stayed: {:?}",
+    world.artifact_temp_entries()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_an_interrupt_during_a_stage_removes_the_artifact_directory() {
+  let mut world = World::new();
+  // The trial stage SIGTERMs the release script itself, as an interrupt does: the script must still remove the
+  // artifact temporary directory.
+  world.sandbox.stub("kill-release", "kill -TERM \"$PPID\"\n");
+  world.env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), world.bin().join("kill-release").display().to_string());
+
+  let run = world.release(&world.on_main);
+
+  assert_eq!(run.code, 143, "{}", run.describe());
+  assert!(!world.releases.join(&world.on_main).exists(), "{}", run.describe());
+  assert!(
+    world.artifact_temp_entries().is_empty(),
+    "the temporary directory stayed: {:?}",
+    world.artifact_temp_entries()
+  );
+  let names = world.log_names();
+  assert!(names.contains(&"trial.log".to_string()), "the interrupted stage's log did not stay: {names:?}");
+  for name in ["rehearsal.log", "install.log"] {
+    assert!(!names.contains(&name.to_string()), "the script ran past the interrupt: {names:?}");
+  }
+  for name in ["charliebot", "charliebot-server", "artifact"] {
+    assert!(!names.contains(&name.to_string()), "the log directory holds {name}: {names:?}");
+  }
 }
 
 // ---- a passing run: both binaries installed, current left alone -----------------------------------------------------
@@ -513,6 +711,7 @@ fn rehearsal_source(sandbox: &Sandbox) -> (PathBuf, String, String) {
   for relative in [
     "scripts/release/switch-rehearsal.sh",
     "scripts/release/standin-approval-policy.yaml",
+    "scripts/release/lock.sh",
     "scripts/switch-server.sh",
     "scripts/install-slice-units.sh",
   ] {

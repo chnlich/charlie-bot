@@ -14,6 +14,7 @@ mod inlined_literal;
 mod inlined_script;
 mod inlined_style;
 pub mod lifespan;
+mod member;
 pub mod midturn_delivery;
 pub mod pages;
 pub mod registry;
@@ -31,6 +32,6 @@ pub mod usage;
 mod watch;
 pub mod wiring;
 
-pub use context::{FeatureContext, RunningTurnInputs, StartupState, StartupStop, StateError};
+pub use context::{FeatureContext, StartupState, StartupStop, StateError};
 pub use registry::{RegisterFn, Registry, RegistryError, registration_step};
 pub use wiring::{WebSocketHandler, WebSocketMatch, WebSocketRequest};

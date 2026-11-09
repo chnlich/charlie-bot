@@ -17,7 +17,7 @@ use charliebot_core::config::BackendOption;
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::store_hooks::store_hooks;
-use charliebot_registry::{FeatureContext, RunningTurnInputs, StartupState};
+use charliebot_registry::{FeatureContext, StartupState};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::{CreateTask, Store, TaskCaller};
 use charliebot_tasks::completion::TaskCompletion;
@@ -90,6 +90,7 @@ impl Home {
       label: "Synthetic Slack".to_string(),
       model: "synthetic-model".to_string(),
       prompt_overlay: None,
+      billing: None,
       backend_type: "synthetic".to_string(),
       type_fields: Default::default(),
     });
@@ -109,7 +110,6 @@ impl Home {
       Box::new(move || load_credentials(&credential_home)),
     ));
     let startup = StartupState::default();
-    startup.insert(RunningTurnInputs::new(|_| Vec::new())).expect("running inputs insert once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
 
     let executor = Arc::new(RecordingExecutor::default());

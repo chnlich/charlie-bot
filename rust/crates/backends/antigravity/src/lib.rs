@@ -1,9 +1,11 @@
 //! The `antigravity` backend type: `agy --print`, whose JSON envelope the runner reads once
-//! the process has exited. The CLI logs its usage only into CharlieBot's own run logs, so its usage source has no reader.
+//! the process has exited. Token usage comes from CharlieBot's own run logs; quota-panel readings come from the CLI's
+//! `/usage` command.
 
 mod antigravity_cli;
 pub mod factory;
 mod options;
+mod usage_quota;
 
 use std::sync::Arc;
 
@@ -26,6 +28,8 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 
 /// [`register`] over an explicit host.
 pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), RegistryError> {
+  let state = Arc::new(usage_quota::AntigravityQuotaState::default());
+  let account = Arc::new(usage_quota::AntigravityQuotaAccount::new(host.clone(), Arc::clone(&state)));
   registry.backend_type(BackendTypeRegistration {
     type_name: "antigravity",
     traits: BackendTraits {
@@ -42,11 +46,12 @@ pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), 
     translate_fallback: false,
   })?;
   registry.option_schema("antigravity", options::SCHEMA)?;
+  registry.member_reading("antigravity", usage_quota::AntigravityQuotaState::member_reading(Arc::clone(&state)))?;
   registry.usage_source(UsageSource {
     name: USAGE_SOURCE,
     id_prefixes: &["antigravity-", "agy-"],
     run_logs_only: true,
-    implementation: None,
+    implementation: Some(Arc::new(usage_quota::AntigravityUsageSource::new(account))),
   })?;
   registry.attribute_backend_type("antigravity", USAGE_SOURCE)
 }

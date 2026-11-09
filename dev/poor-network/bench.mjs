@@ -5,7 +5,7 @@
 //
 //   node bench.mjs --side before|after --out <file.json> --mock-home <dir> --mock-home-bin <path> \
 //     --reply-dir <dir> --assets <dir> --commit <text> [--repetitions N] \
-//     [--scenarios background,held,reset,stream,starred,threads]
+//     [--scenarios background,held,reset,stream,starred,threads] [--open-cpu-rate RATE]
 //
 // Exit: 0 when the scenarios were measured (the verdicts are in the JSON and the table); 1 when a measurement failed.
 
@@ -74,6 +74,7 @@ function parseArgs(argv) {
     repetitions: REPETITIONS,
     scenarios: DEFAULT_SCENARIOS.join(','),
     openConditions: OPEN_CONDITIONS.join(','),
+    openCpuRate: undefined,
   };
   const flags = {
     '--side': 'side',
@@ -86,6 +87,7 @@ function parseArgs(argv) {
     '--repetitions': 'repetitions',
     '--scenarios': 'scenarios',
     '--open-conditions': 'openConditions',
+    '--open-cpu-rate': 'openCpuRate',
   };
   for (let index = 0; index < argv.length; index += 2) {
     const key = flags[argv[index]];
@@ -103,6 +105,12 @@ function parseArgs(argv) {
     throw new Error(`--side must be before or after, got ${args.side}`);
   }
   args.repetitions = Number(args.repetitions);
+  if (args.openCpuRate !== undefined) {
+    args.openCpuRate = Number(args.openCpuRate);
+    if (!(args.openCpuRate >= 1)) {
+      throw new Error(`--open-cpu-rate must be a number of at least 1, got ${args.openCpuRate}`);
+    }
+  }
   const named = new Set(args.scenarios.split(','));
   for (const name of named) {
     if (!(name in SCENARIOS) && name !== OPEN_SCENARIO) {
@@ -358,7 +366,7 @@ async function main() {
     }
     for (const name of args.scenarios) {
       if (name === OPEN_SCENARIO) {
-        await openScenario(ctx, args.repetitions, openResult, args.openConditions);
+        await openScenario(ctx, args.repetitions, openResult, args.openConditions, args.openCpuRate ?? null);
         continue;
       }
       for (let repetition = 1; repetition <= args.repetitions; repetition++) {

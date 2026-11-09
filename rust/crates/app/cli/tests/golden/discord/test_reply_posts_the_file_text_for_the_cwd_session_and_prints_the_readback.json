@@ -22,7 +22,6 @@
         "chars": 10,
         "chunks": 1,
         "over_budget": false,
-        "answers": "summon-1",
         "attachments": [
           "answer.html"
         ]
@@ -30,7 +29,7 @@
     }
   ],
   "expect": {
-    "stdout": "{\"posted\": true, \"text\": \"the answer\", \"operator_only_note\": null, \"chars\": 10, \"chunks\": 1, \"over_budget\": false, \"answers\": \"summon-1\", \"attachments\": [\"answer.html\"]}\n",
+    "stdout": "{\"posted\": true, \"text\": \"the answer\", \"operator_only_note\": null, \"chars\": 10, \"chunks\": 1, \"over_budget\": false, \"attachments\": [\"answer.html\"]}\n",
     "stderr": "",
     "exit": 0,
     "requests": [

@@ -296,6 +296,7 @@ fn devin_option() -> BackendOption {
     label: "Devin".to_string(),
     model: "swe-2-test".to_string(),
     prompt_overlay: None,
+    billing: None,
     backend_type: "devin".to_string(),
     type_fields: Mapping::new(),
   }
@@ -428,6 +429,7 @@ fn backend_option_for(id: &str, backend_type: &str, script: String, one_shot_res
     id: id.to_string(),
     label: "Fake".to_string(),
     prompt_overlay: None,
+    billing: None,
     model: "fake-model".to_string(),
     backend_type: backend_type.to_string(),
     type_fields,
@@ -730,6 +732,7 @@ fn normalize_event(event: &Value) -> Value {
     fields.remove(key);
   }
   if fields.get("type").and_then(Value::as_str) == Some("master_done") {
+    fields.remove("run_id");
     for key in ["total_ms", "spawn_to_first_event_ms", "first_assistant_ms", "thinking_seconds"] {
       if fields.contains_key(key) {
         fields.insert(key.to_string(), json!("<elapsed>"));
@@ -1457,18 +1460,17 @@ async fn retry_record_reuses_the_request_and_preserves_the_manager_input_batch()
 
 #[tokio::test]
 #[ignore = "integration"]
-async fn exported_queue_reads_fail_when_startup_has_no_master_queue() -> anyhow::Result<()> {
+async fn the_session_busy_read_fails_when_startup_has_no_master_queue() -> anyhow::Result<()> {
   let home = tempfile::tempdir()?;
   let registry = registry();
   let (_cfg, features) = config_with_features(home.path(), None, registry, false)?;
-  assert!(master_queue::queued_user_event_ids(&features, "synthetic-session").is_err());
-  assert!(master_queue::running_user_event_ids(&features, "synthetic-session").is_err());
+  assert!(master_queue::session_is_busy(&features, "synthetic-session").is_err());
   Ok(())
 }
 
 #[tokio::test]
 #[ignore = "integration"]
-async fn queue_serializes_enqueues_and_exposes_running_and_queued_event_ids() -> anyhow::Result<()> {
+async fn queue_serializes_enqueues_and_reports_the_session_busy() -> anyhow::Result<()> {
   let temp = tempfile::tempdir()?;
   let registry = registry();
   let assistant = json!({"type":"assistant","message":{"content":[{"type":"text","text":"synthetic answer"}]}});
@@ -1497,15 +1499,8 @@ async fn queue_serializes_enqueues_and_exposes_running_and_queued_event_ids() ->
     "first-input".to_string(),
     option.clone(),
   ));
-  tokio::time::timeout(std::time::Duration::from_secs(2), async {
-    loop {
-      if master_queue::running_user_event_ids(&features, &meta.id)? == ["first-input"] {
-        break anyhow::Ok(());
-      }
-      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-  })
-  .await??;
+  wait_until_busy(&features, &meta.id).await?;
+  assert!(features.store.busy_since(&meta.id).is_some());
 
   let second_callbacks = callbacks(Arc::clone(&features), Arc::new(Mutex::new(Vec::new())));
   let second = tokio::spawn(run_turn(
@@ -1516,33 +1511,28 @@ async fn queue_serializes_enqueues_and_exposes_running_and_queued_event_ids() ->
     "second-input".to_string(),
     option,
   ));
-  let expected = std::collections::HashSet::from(["first-input".to_string(), "second-input".to_string()]);
-  tokio::time::timeout(std::time::Duration::from_secs(2), async {
-    loop {
-      if master_queue::queued_user_event_ids(&features, &meta.id)? == expected {
-        break anyhow::Ok(());
-      }
-      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-  })
-  .await??;
-  assert_eq!(master_queue::running_user_event_ids(&features, &meta.id)?, ["first-input"]);
-  assert!(features.store.busy_since(&meta.id).is_some());
+  // The second enqueue joins the busy interval the first opened; there is no queue-depth reader to wait on.
+  tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+  assert!(master_queue::session_is_busy(&features, &meta.id)?, "the queued turn keeps the session busy");
   first.await??;
-  tokio::time::timeout(std::time::Duration::from_secs(2), async {
-    loop {
-      if master_queue::running_user_event_ids(&features, &meta.id)? == ["second-input"] {
-        break anyhow::Ok(());
-      }
-      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-  })
-  .await??;
   second.await??;
   queue.shutdown().await?;
   assert!(features.store.busy_since(&meta.id).is_none());
-  assert!(master_queue::queued_user_event_ids(&features, &meta.id)?.is_empty());
+  assert!(!master_queue::session_is_busy(&features, &meta.id)?, "the drained queue leaves the session idle");
   Ok(())
+}
+
+/// Wait until the master queue reports the session busy, or fail the test after two seconds.
+async fn wait_until_busy(features: &Arc<charliebot_registry::FeatureContext>, session_id: &str) -> anyhow::Result<()> {
+  tokio::time::timeout(std::time::Duration::from_secs(2), async {
+    loop {
+      if master_queue::session_is_busy(features, session_id)? {
+        break anyhow::Ok(());
+      }
+      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+  })
+  .await?
 }
 
 #[tokio::test]
@@ -1595,15 +1585,7 @@ async fn translation_failure_reports_the_turn_and_keeps_the_session_consumer_ali
     failing_option,
     first_spawn,
   ));
-  tokio::time::timeout(std::time::Duration::from_secs(2), async {
-    loop {
-      if master_queue::running_user_event_ids(&features, &meta.id)? == ["failing-input"] {
-        break anyhow::Ok(());
-      }
-      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-  })
-  .await??;
+  wait_until_busy(&features, &meta.id).await?;
 
   let second = tokio::spawn(run_turn(
     Arc::clone(&queue),
@@ -1613,16 +1595,8 @@ async fn translation_failure_reports_the_turn_and_keeps_the_session_consumer_ali
     "next-input".to_string(),
     next_option,
   ));
-  let expected = std::collections::HashSet::from(["failing-input".to_string(), "next-input".to_string()]);
-  tokio::time::timeout(std::time::Duration::from_secs(2), async {
-    loop {
-      if master_queue::queued_user_event_ids(&features, &meta.id)? == expected {
-        break anyhow::Ok(());
-      }
-      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-  })
-  .await??;
+  // The second enqueue joins the busy interval the first opened; there is no queue-depth reader to wait on.
+  tokio::time::sleep(std::time::Duration::from_millis(50)).await;
   std::fs::write(gate, b"release")?;
   tokio::time::timeout(std::time::Duration::from_secs(5), first)
     .await

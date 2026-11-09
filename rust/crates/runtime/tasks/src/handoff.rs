@@ -11,7 +11,7 @@ use charliebot_core::event_types;
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::layout;
-use charliebot_store::metadata::SessionMetadata;
+use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::run_records::{self, RAW_LOG_NAME, RUN_EVENTS_NAME, RunRecord};
 use serde_json::Value;
 
@@ -53,15 +53,16 @@ pub struct Handoff {
 /// Build the switch note and summary for a retry that continues `source`'s run.
 ///
 /// `reason` names why the retry starts a fresh conversation; `goal` is the task's goal. The note always names the
-/// session chat log, its archives and the failed run's directory as absolute paths. A summary that cannot be
-/// assembled leaves a line in the note and an `unavailable` value for the switch record, and the retry proceeds.
+/// session chat log, its archives and the failed run's directory as absolute paths. A manager's note also carries the
+/// session's status Goal, and an unreadable status fails the retry. A summary that cannot be assembled leaves a line
+/// in the note and an `unavailable` value for the switch record, and the retry proceeds.
 pub fn handoff(
   features: &FeatureContext,
   meta: &SessionMetadata,
   source: HandoffSource<'_>,
   reason: &str,
   goal: &str,
-) -> Handoff {
+) -> anyhow::Result<Handoff> {
   let previous = source.run();
   let session_dir = features.store.session_dir(&meta.id);
   let chat_log = layout::chat_events_path(&session_dir);
@@ -80,10 +81,14 @@ pub fn handoff(
       (format!("Handoff summary {SUMMARY_UNAVAILABLE}: {reason}"), format!("{SUMMARY_UNAVAILABLE}: {reason}"))
     }
   };
-  Handoff {
-    note: format!("{}\n\n{summary_text}", session_anchors::switch_reset_note(reason, goal, &context)),
-    summary: summary_value,
-  }
+  let note = match meta.profile {
+    TaskProfile::Manager => {
+      let status_goal = features.registry.status_goal_line(meta)?;
+      session_anchors::manager_switch_reset_note(&meta.id, reason, goal, status_goal.as_deref(), &context)
+    }
+    TaskProfile::Worker => session_anchors::worker_switch_reset_note(reason, goal, &context),
+  };
+  Ok(Handoff { note: format!("{note}\n\n{summary_text}"), summary: summary_value })
 }
 
 /// Assemble the four summary parts, or fail with the reason the previous run's events could not be read.

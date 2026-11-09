@@ -4,10 +4,10 @@
 //!
 //! The five kinds and their fields follow plan section 4.1 of the poor-network line: `switch`
 //! carries the switch phases plus the bootstrap's Resource Timing, `send` one message send's
-//! click-to-response and click-to-echo waits, `socket` one disconnect episode from the disconnect
-//! through the reconnect and its catch-up, `page_load` the document's Navigation Timing with the
-//! open case, the first chat render and catch-up, and the page's render-blocking and same-origin
-//! resource timings, and `traffic` one tab's per-minute received bytes by endpoint.
+//! click-to-response and click-to-echo waits, `socket` a disconnect episode and one record per
+//! subscription's catch-up, `page_load` the document's Navigation Timing with the open case, the
+//! first chat render and catch-up, and the page's render-blocking and same-origin resource timings,
+//! and `traffic` one tab's per-minute received bytes by endpoint.
 
 use std::sync::Arc;
 
@@ -53,7 +53,7 @@ const SEND_KIND: &[&str] = &["send"];
 const SOCKET_KIND: &[&str] = &["socket"];
 const PAGE_LOAD_KIND: &[&str] = &["page_load"];
 const TRAFFIC_KIND: &[&str] = &["traffic"];
-const SOCKET_CAUSES: &[&str] = &["switch", "network"];
+const SOCKET_CAUSES: &[&str] = &["network"];
 const PAGE_LOAD_CAUSES: &[&str] = &["open", "bootstrap_failure", "stale_asset"];
 const OPEN_CASES: &[&str] = &["A", "B", "C"];
 const CONTENT_SOURCES: &[&str] = &["network", "stored"];
@@ -100,16 +100,21 @@ const SEND_FIELDS: &[Field] = &[
 ];
 const SEND_BODY: BodyModel = BodyModel::required(SEND_FIELDS).forbid_extra();
 
-/// The socket body: one disconnect episode, from the disconnect through the reconnect to the
-/// replay's `catchup_complete`. An episode the page leaves before its replay finished sends nulls
-/// for the reconnect and catch-up fields.
+/// The socket body, in two flavors. A disconnect episode runs from the disconnect through the
+/// reconnect to the replay's `catchup_complete`; an episode the page leaves before its replay
+/// finished sends nulls for the reconnect and catch-up fields. A subscription record reports one
+/// replay's completion — the subscription number, the session it served and its bytes — and sends
+/// nulls for the disconnect fields. The only close cause left is `network`: a switch keeps the
+/// socket and rides a subscribe frame instead of closing it.
 const SOCKET_FIELDS: &[Field] = &[
   Field::required("kind", FieldType::Literal(SOCKET_KIND)),
-  Field::required("disconnect_at", FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
-  Field::required("cause", FieldType::Literal(SOCKET_CAUSES)),
+  Field::optional("disconnect_at", FieldType::NullableString).max_length(MAX_TIMESTAMP_CHARS),
+  Field::optional("cause", FieldType::NullableLiteral(SOCKET_CAUSES)),
   Field::optional("close_code", FieldType::NullableInteger).ge(Bound::Int(0)),
   Field::optional("reconnect_at", FieldType::NullableString).max_length(MAX_TIMESTAMP_CHARS),
   Field::optional("reconnect_count", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::optional("subscription", FieldType::NullableInteger).ge(Bound::Int(0)),
+  Field::optional("session_id", FieldType::NullableString).max_length(MAX_TIMESTAMP_CHARS),
   Field::optional("catchup_at", FieldType::NullableString).max_length(MAX_TIMESTAMP_CHARS),
   Field::optional("catchup_bytes", FieldType::NullableInteger).ge(Bound::Int(0)),
   Field::required(request_body::CLIENT_TS, FieldType::String).max_length(MAX_TIMESTAMP_CHARS),
@@ -325,11 +330,13 @@ fn log_send(values: &Map<String, Value>, forwarded_for: &str) {
 fn log_socket(values: &Map<String, Value>, forwarded_for: &str) {
   tracing::info!(
     kind = "socket",
-    disconnect_at = %text_field(values, "disconnect_at"),
-    cause = %text_field(values, "cause"),
+    disconnect_at = %LogValue::of(optional_text_field_ref(values, "disconnect_at")),
+    cause = %LogValue::of(optional_text_field_ref(values, "cause")),
     close_code = %LogValue::of_int(integer_field(values, "close_code")),
     reconnect_at = %LogValue::of(optional_text_field_ref(values, "reconnect_at")),
     reconnect_count = %LogValue::of_int(integer_field(values, "reconnect_count")),
+    subscription = %LogValue::of_int(integer_field(values, "subscription")),
+    session_id = %LogValue::of(optional_text_field_ref(values, "session_id")),
     catchup_at = %LogValue::of(optional_text_field_ref(values, "catchup_at")),
     catchup_bytes = %LogValue::of_int(integer_field(values, "catchup_bytes")),
     client_ts = %text_field(values, request_body::CLIENT_TS),
@@ -583,6 +590,13 @@ mod tests {
     assert_eq!(loc(&errors[0]), ["body", "cause"]);
     assert!(matches!(errors[0].kind, Kind::Literal(_)));
 
+    // A switch no longer closes the socket — it rides a subscribe frame — so the close cause is
+    // refused with the rest.
+    let mut socket = base_body("socket");
+    socket["cause"] = json!("switch");
+    let errors = validate_event(socket).expect_err("the switch close cause is retired");
+    assert_eq!(loc(&errors[0]), ["body", "cause"]);
+
     let mut page_load = base_body("page_load");
     page_load["cause"] = json!("crash");
     let errors = validate_event(page_load).expect_err("the page load cause is unknown");
@@ -733,10 +747,48 @@ mod tests {
     assert_eq!(field(&event, "close_code"), "1006");
     assert_eq!(field(&event, "reconnect_at"), "2026-02-13T09:59:02Z");
     assert_eq!(field(&event, "reconnect_count"), "1");
+    assert_eq!(field(&event, "subscription"), "null", "the episode flavor names no subscription");
+    assert_eq!(field(&event, "session_id"), "null");
     assert_eq!(field(&event, "catchup_at"), "2026-02-13T09:59:03Z");
     assert_eq!(field(&event, "catchup_bytes"), "80860");
     assert_eq!(field(&event, "client_ts"), "2026-02-13T09:59:03Z");
     assert_eq!(field(&event, "forwarded_for"), "100.64.0.8");
+  }
+
+  #[test]
+  fn a_subscription_catchup_logs_one_socket_line_without_disconnect_fields() {
+    let event = logged_event(json!({
+      "kind": "socket",
+      "subscription": 3,
+      "session_id": "session-b",
+      "catchup_at": "2026-02-13T10:00:01Z",
+      "catchup_bytes": 2048,
+      "client_ts": "2026-02-13T10:00:01Z",
+    }));
+    assert_eq!(field(&event, "kind"), "socket");
+    assert_eq!(field(&event, "disconnect_at"), "null", "a subscription record reports no disconnect");
+    assert_eq!(field(&event, "cause"), "null");
+    assert_eq!(field(&event, "reconnect_at"), "null");
+    assert_eq!(field(&event, "subscription"), "3");
+    assert_eq!(field(&event, "session_id"), "session-b");
+    assert_eq!(field(&event, "catchup_bytes"), "2048");
+  }
+
+  #[test]
+  fn a_socket_episode_missing_its_disconnect_fields_still_validates() {
+    let event = logged_event(json!({
+      "kind": "socket",
+      "disconnect_at": "2026-02-13T09:59:00Z",
+      "cause": "network",
+      "close_code": 1006,
+      "reconnect_at": null,
+      "reconnect_count": null,
+      "catchup_at": null,
+      "catchup_bytes": null,
+      "client_ts": "2026-02-13T09:59:00Z",
+    }));
+    assert_eq!(field(&event, "reconnect_at"), "null");
+    assert_eq!(field(&event, "catchup_bytes"), "null");
   }
 
   #[test]

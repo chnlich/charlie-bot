@@ -802,6 +802,7 @@ async fn a_finished_manager_turn_persists_its_observation_before_master_done_and
     label: "Synthetic backend".to_string(),
     model: "synthetic-model".to_string(),
     prompt_overlay: None,
+    billing: None,
     backend_type: "synthetic".to_string(),
     type_fields: serde_yaml::Mapping::new(),
   };

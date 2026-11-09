@@ -3,6 +3,9 @@
 
 use charliebot_chat_threads::thread_entry::{IdOrdering, LINKED_PAGES_LINE, ThreadPlatform};
 
+use crate::fields::{CHAT_ID, MENTION_ID, ROOT_ID};
+use crate::package::NAME;
+
 /// The command the reply-format contract names for posting a reply.
 pub const REPLY_COMMAND: &str = "charliebot feishu reply";
 /// The per-message character limit, which is also the chunking target. Feishu caps a text body at 150 KB.
@@ -14,7 +17,7 @@ pub const FOLLOW_TRIGGER_PREFIX: &str = "feishu-thread-follow";
 
 /// The Feishu platform as the shared contract reads it.
 pub const FEISHU: ThreadPlatform = ThreadPlatform {
-  name: "feishu",
+  name: NAME,
   display_name: "Feishu",
   reply_event_type: crate::event_types::FEISHU_REPLY,
   reply_command: REPLY_COMMAND,
@@ -26,8 +29,8 @@ pub const FEISHU: ThreadPlatform = ThreadPlatform {
   origin_field: crate::metadata::FEISHU_ORIGIN,
   watermark_field: crate::metadata::FEISHU_WATERMARK_ID,
   id_label: "id",
-  mention_key: "mention_id",
-  block_keys: &["chat_id", "root_id", "mention_id"],
+  mention_key: MENTION_ID,
+  block_keys: &[CHAT_ID, ROOT_ID, MENTION_ID],
   summon_line: "飞书 线程召唤",
 };
 

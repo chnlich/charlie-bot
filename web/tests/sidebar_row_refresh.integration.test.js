@@ -156,9 +156,9 @@ function row(id, overrides = {}) {
 }
 
 // A worker whose task closed is archived by the server, and the page learns it from the task_tree_changed frame
-// broadcast for it. A session switch closes the page's socket for the target's bootstrap, so the broadcast in that
-// window reaches no page, and the socket replays none on reopen: the painted row stayed until the next full load.
-test('a row archived while a switch has the socket closed leaves the list when it reopens', async () => {
+// broadcast for it. Only a network close closes the page's socket now, so the reopen path is the network one; the
+// switch's own window serves the sidebar frames through its frame drop.
+test('a row archived while the socket was closed leaves the list when it reopens', async () => {
   const page = buildPage();
   const manager = row('b', {profile: 'manager', updated_at: '2026-04-02T10:00:00Z'});
   const worker = row('w', {profile: 'worker', task_parent_id: 'b', updated_at: '2026-04-02T09:00:00Z'});
@@ -169,9 +169,9 @@ test('a row archived while a switch has the socket closed leaves the list when i
   page.socket().emitOpen();
   assert.equal(page.fullListCount(), 0, "a page load's first socket reloads nothing");
 
-  // The switch: its teardown closes the socket, and its reconnect lands after the bootstrap.
-  vm.runInContext('disconnectWS()', page.context);
-  vm.runInContext('connectWS()', page.context);
+  // The network close, and the reopen its backoff lands.
+  page.socket().emitClose({code: 1006});
+  page.runTimers();
   page.socket().emitOpen();
   assert.equal(page.fullListCount(), 1, 'the reopen reloads the list the gap could have changed');
 
@@ -180,6 +180,27 @@ test('a row archived while a switch has the socket closed leaves the list when i
       .forEach((request) => request.respond([manager]));
   await flush();
   assert.doesNotMatch(page.nav.innerHTML, /id="session-w"/, 'the archived row left the list');
+});
+
+test('a task_tree_changed frame inside a switch window still refreshes its row', async () => {
+  const page = buildPage();
+  const manager = row('b', {profile: 'manager', updated_at: '2026-04-02T10:00:00Z'});
+  const worker = row('w', {profile: 'worker', task_parent_id: 'b', updated_at: '2026-04-02T09:00:00Z'});
+  page.context.renderSessionList([manager, worker], 'all');
+  page.connect();
+  page.socket().emitOpen();
+
+  // The switch's click holds the frames of the session it left; the sidebar frames name their own
+  // session and keep flowing, so the archived worker's broadcast still reaches the row refresh.
+  vm.runInContext('holdSessionFrames("c")', page.context);
+  page.frame({type: 'message', message: {role: 'user', content: 'left session frame', event_index: 9}});
+  page.frame({type: 'task_tree_changed', session_id: 'w'});
+  assert.deepEqual(page.rowUrls(), ['/api/sessions/?compact=1&ids=w'],
+      'the switch window dropped the session frame and served the sidebar frame');
+  page.requests.filter((request) => request.url.includes('&ids='))
+      .forEach((request) => request.respond({sessions: {}, gone: ['w']}));
+  await flush();
+  assert.doesNotMatch(page.nav.innerHTML, /id="session-w"/, 'the archived row left the list mid-switch');
 });
 
 test('a row id dropped from the queue on another view still leaves on the return to the Workspace', async () => {
@@ -275,11 +296,6 @@ test('every reopen that follows a close reloads the list once', async () => {
   page.runTimers();
   page.socket().emitOpen();
   assert.equal(page.fullListCount(), 1, 'the reopened socket reloads the list');
-
-  vm.runInContext('disconnectWS()', page.context);
-  page.connect();
-  page.socket().emitOpen();
-  assert.equal(page.fullListCount(), 2, 'the switch-driven reopen reloads the list the closed socket missed');
 });
 
 test('a stale-page close reloads a hidden tab once it is visible', () => {

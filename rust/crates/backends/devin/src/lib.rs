@@ -32,6 +32,15 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), RegistryError> {
   let profile_home = registration_step(PACKAGE, home::charliebot_home_dir().map_err(anyhow::Error::new))?;
   let availability = registration_step(PACKAGE, BackendAvailability::load(&profile_home))?;
+  register_over(registry, host, availability)
+}
+
+/// The registration over an explicit host and availability record (`register_with_host` reads both from the profile).
+fn register_over(
+  registry: &mut Registry,
+  host: CliHost,
+  availability: BackendAvailability,
+) -> Result<(), RegistryError> {
   let state = Arc::new(usage_quota::DevinQuotaState::default());
   let account = Arc::new(usage_quota::DevinQuotaAccount::new(
     Arc::clone(&state),
@@ -63,4 +72,51 @@ pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), 
     implementation: Some(Arc::new(usage_quota::DevinUsageSource::new(account))),
   })?;
   registry.attribute_backend_type("devin", USAGE_SOURCE)
+}
+
+#[cfg(test)]
+mod tests {
+  use std::fs;
+  use std::path::{Path, PathBuf};
+
+  use super::*;
+
+  /// The Devin registration over a synthetic host and profile home. Neither path holds a file, so the availability
+  /// record is empty.
+  fn register_synthetic(registry: &mut Registry) -> Result<(), RegistryError> {
+    let host = CliHost { path: String::new(), home: PathBuf::from("/synthetic/home") };
+    let availability = BackendAvailability::load(Path::new("/synthetic/charliebot")).unwrap();
+    register_over(registry, host, availability)
+  }
+
+  #[test]
+  fn quota_account_is_listed_only_when_an_option_draws_on_devin() {
+    let root = tempfile::tempdir().unwrap();
+    let mut registry = Registry::new();
+    registry.register_package(PACKAGE, register_synthetic).unwrap();
+
+    let without = root.path().join("without");
+    fs::create_dir_all(&without).unwrap();
+    let cfg = registry.load_config(&without).unwrap();
+    assert!(registry.quota_accounts(&cfg).unwrap().is_empty());
+
+    let with = root.path().join("with");
+    fs::create_dir_all(&with).unwrap();
+    fs::write(
+      with.join("config.yaml"),
+      concat!(
+        "backends:\n",
+        "  options:\n",
+        "    - id: dv\n",
+        "      label: Devin\n",
+        "      type: devin\n",
+        "      model: devin-model\n",
+      ),
+    )
+    .unwrap();
+    let cfg = registry.load_config(&with).unwrap();
+    let accounts = registry.quota_accounts(&cfg).unwrap();
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0].provider(), "devin");
+  }
 }

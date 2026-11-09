@@ -1,7 +1,7 @@
 //! The registry value and the typed contracts whose registrations it owns.
 
 use std::any::{Any, TypeId, type_name};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -1943,11 +1943,21 @@ impl Registry {
     }
   }
 
-  /// The quota accounts of every source that declares `quota_accounts`, in source registration order. The first source
-  /// error stops the call.
+  /// The quota accounts of every source that declares `quota_accounts` and that a configured backend option draws on,
+  /// in source registration order. Every option counts, hidden or not, since a hidden option still runs through its
+  /// pool. The first source error stops the call.
   pub fn quota_accounts(&self, cfg: &CharlieBotConfig) -> anyhow::Result<Vec<Arc<dyn QuotaAccount>>> {
+    let mut drawn = BTreeSet::new();
+    for option in &cfg.backends.options {
+      if let Some(source) = self.usage_source_for(&option.backend_type)? {
+        drawn.insert(source.name);
+      }
+    }
     let mut accounts = Vec::new();
     for source in self.usage_sources.values() {
+      if !drawn.contains(source.name) {
+        continue;
+      }
       let Some(implementation) = source.implementation.as_ref() else {
         continue;
       };
@@ -2133,6 +2143,19 @@ mod usage_tests {
     }
   }
 
+  /// A configured option of `backend_type`. The gate reads only its type, so the other fields stay empty.
+  fn option_of_type(backend_type: &str) -> BackendOption {
+    BackendOption {
+      id: backend_type.to_string(),
+      label: backend_type.to_string(),
+      model: String::new(),
+      prompt_overlay: None,
+      billing: None,
+      backend_type: backend_type.to_string(),
+      type_fields: serde_yaml::Mapping::new(),
+    }
+  }
+
   #[test]
   fn quota_accounts_returns_the_first_source_error() {
     let first_calls = Arc::new(AtomicUsize::new(0));
@@ -2143,8 +2166,11 @@ mod usage_tests {
       .insert("first-package", "first", source("first", Some("first source failed"), first_calls.clone()))
       .unwrap();
     registry.usage_sources.insert("second-package", "second", source("second", None, second_calls.clone())).unwrap();
+    registry.usage_attributions.insert("first-package", "first-type", "first").unwrap();
+    registry.usage_attributions.insert("second-package", "second-type", "second").unwrap();
     let home = tempfile::tempdir().unwrap();
-    let cfg = registry.load_config(home.path()).unwrap();
+    let mut cfg = registry.load_config(home.path()).unwrap();
+    cfg.backends.options = vec![option_of_type("first-type"), option_of_type("second-type")];
 
     let error = registry.quota_accounts(&cfg).err().unwrap();
 

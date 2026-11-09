@@ -430,8 +430,11 @@ function buildTurnRowFromSpec(spec) {
   row.appendChild(turnRowField('turn-row-tag turn-row-tag-' + label.toLowerCase(), label));
   const title = turnRowTitleFromText(spec.headRole, spec.headText);
   row.appendChild(turnRowField('turn-row-title', title));
-  row.appendChild(turnRowField('turn-row-conclusion',
-      spec.conclusionText != null ? turnFirstLine(spec.conclusionText) : ''));
+  // A turn with no conclusion drops the column instead of leaving it empty, so
+  // the title keeps the width its text needs (styles.css).
+  const conclusion = spec.conclusionText != null ? turnFirstLine(spec.conclusionText) : '';
+  row.classList.toggle('turn-row-no-conclusion', conclusion === '');
+  row.appendChild(turnRowField('turn-row-conclusion', conclusion));
 
   const meta = document.createElement('span');
   meta.className = 'turn-row-meta';

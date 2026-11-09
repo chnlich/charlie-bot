@@ -76,6 +76,10 @@
   font-size: 0.75rem; transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 .turn-row:hover { background: rgba(30, 41, 59, 0.85); border-color: rgba(148, 163, 184, 0.45); color: #cbd5e1; }
+/* A row with no conclusion gives that column's width back to the title, rather
+   than truncating the title beside an empty column. */
+.turn-row-no-conclusion { grid-template-columns: auto minmax(0, 1fr) auto; }
+.turn-row-no-conclusion .turn-row-conclusion { display: none; }
 .turn-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .turn-row-tag {
   font-size: 0.625rem; font-weight: 700; letter-spacing: 0.03em;

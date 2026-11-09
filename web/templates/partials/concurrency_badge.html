@@ -5,10 +5,14 @@
     browser and artifact pages) carry neither the bar nor this fragment. The counting belongs to
     rust/crates/runtime/session-api/src/concurrency.rs; the script at the end of this fragment only displays it.
 
-    A page whose document is the whole load sets `defer_concurrency_badge_poll` before including this fragment. Its
-    badge paints from the markup above and starts the poll after the document, so the poller's bytes stay off the
-    page's critical path. A page that already carries the app's bootstrap script (index.html) keeps the script inline,
-    where it costs a small share of a document that is large anyway. -#}
+    Every page sets `defer_concurrency_badge_poll` before including this fragment. Its badge paints from the markup
+    above and starts the poll after the document, so the poller's bytes stay off the page's critical path; the page's
+    own handlers call `ConcurrencyBadge` through optional chaining, so they tolerate the script arriving late.
+
+    A copy inside a `<template>` is inert markup: its scripts never run, so it would carry the poller's bytes to the
+    page and do nothing with them. The includer sets `concurrency_badge_markup_only` for that copy, which leaves the
+    script out and keeps the markup and the stylesheet the client-side rebuild clones. The stylesheet stays because
+    the rebuild assigns the clone to the page's `main`, discarding the header that carried the other copy's rules. -#}
 <div class="cb-slot">
   <div class="cb-anchor">
     <button id="concurrency-badge" class="cb-badge" type="button" data-running="0"
@@ -103,7 +107,8 @@
   .cb-status { margin: 8px 0 0; opacity: .7 }
   .cb-empty { margin: 0; padding: 56px 0; text-align: center; opacity: .7 }
 </style>
-{% if defer_concurrency_badge_poll %}<script>
+{% if concurrency_badge_markup_only %}{# The template copy keeps the markup and leaves the script out: a cloned
+   script never runs, while the cloned stylesheet applies once the rebuild assigns it to `main`. #}{% elif defer_concurrency_badge_poll %}<script>
   // The badge paints from its markup; the poll starts once the document has parsed.
   document.addEventListener('DOMContentLoaded', function () {
     const script = document.createElement('script');

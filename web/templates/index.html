@@ -1,4 +1,5 @@
 {% include 'partials/prologue.html' %}
+  {% set defer_concurrency_badge_poll = true %}
   <title>{% if active_session %}{{ active_session.name }} · CharlieBot@{{ hostname }}{% else %}CharlieBot@{{ hostname }}{% endif %}</title>
   <script>window.SESSIONS_ROOT = {{ sessions_root|tojson }};</script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -295,7 +296,9 @@
        session is deleted client-side. It stays outside <main> because the
        rebuild assigns main.innerHTML. -->
   <template id="welcome-view">
+  {% set concurrency_badge_markup_only = true %}
   {% include 'partials/welcome_view.html' %}
+  {% set concurrency_badge_markup_only = false %}
   </template>
 
   <!-- ==================== RENAME INPUT (floating) ==================== -->

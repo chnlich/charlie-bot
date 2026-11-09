@@ -541,7 +541,7 @@ function _refreshResetTimers() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+function startExtUsage() {
   // Evaluate the collapsed default exactly once: a recorded preference wins;
   // a missing or invalid one folds the strip to its summary line at every
   // width. The default is never written back to storage.
@@ -568,4 +568,12 @@ document.addEventListener('DOMContentLoaded', () => {
       .then(data => renderExtUsage(data))
       .catch(err => console.warn('ext-usage poll failed:', err));
   }, 600000);
-});
+}
+
+// The page fetches this module after the document, so the strip starts as soon as the module lands: at the document's
+// DOMContentLoaded when it is still parsing, and at once when that event has already fired.
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', startExtUsage, {once: true});
+} else {
+  startExtUsage();
+}

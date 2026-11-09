@@ -6,6 +6,10 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config::ConfigError;
 use charliebot_core::credentials;
 
+use crate::slack_client::{
+  AUTH_TEST, CONVERSATIONS_HISTORY, CONVERSATIONS_LIST, CONVERSATIONS_REPLIES, SEARCH_MESSAGES, USERS_LIST,
+};
+
 /// Which Slack token a request authenticates with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
@@ -34,14 +38,8 @@ pub fn token(home: &Path, kind: TokenKind) -> Result<String, ConfigError> {
 /// The Slack Web API methods the user token may call through the CLI: the six read methods agents
 /// use today. The user token is read-only in this CLI; a message in the user's own name goes through
 /// `charliebot slack draft` and a bot post through `--token bot`.
-pub const USER_READ_METHODS: [&str; 6] = [
-  "auth.test",
-  "users.list",
-  "conversations.list",
-  "conversations.history",
-  "conversations.replies",
-  "search.messages",
-];
+pub const USER_READ_METHODS: [&str; 6] =
+  [AUTH_TEST, USERS_LIST, CONVERSATIONS_LIST, CONVERSATIONS_HISTORY, CONVERSATIONS_REPLIES, SEARCH_MESSAGES];
 
 /// The host that serves a Slack message file's `url_private` and `url_private_download`.
 pub const FILE_HOST: &str = "files.slack.com";

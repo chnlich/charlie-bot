@@ -12,9 +12,24 @@ use http::Method;
 use reqwest::{RequestBuilder, Response};
 use serde_json::{Value, json};
 
-const API_BASE: &str = "https://slack.com/api/";
+pub(crate) const API_BASE: &str = "https://slack.com/api/";
 // The shared HTTP client's timeout; every Web API call takes it.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+
+// The Slack Web API method names. A call site and the user-token allow-list read the name from here, so a renamed
+// method reaches the call, the call's error text and the allow-list together.
+pub(crate) const AUTH_TEST: &str = "auth.test";
+pub(crate) const APPS_CONNECTIONS_OPEN: &str = "apps.connections.open";
+pub(crate) const CHAT_POST_MESSAGE: &str = "chat.postMessage";
+pub(crate) const CONVERSATIONS_HISTORY: &str = "conversations.history";
+pub(crate) const CONVERSATIONS_INFO: &str = "conversations.info";
+pub(crate) const CONVERSATIONS_LIST: &str = "conversations.list";
+pub(crate) const CONVERSATIONS_OPEN: &str = "conversations.open";
+pub(crate) const CONVERSATIONS_REPLIES: &str = "conversations.replies";
+pub(crate) const REACTIONS_ADD: &str = "reactions.add";
+pub(crate) const REACTIONS_REMOVE: &str = "reactions.remove";
+pub(crate) const SEARCH_MESSAGES: &str = "search.messages";
+pub(crate) const USERS_LIST: &str = "users.list";
 
 /// The Slack Web API wrapper.
 pub struct SlackClient {
@@ -48,15 +63,15 @@ impl SlackClient {
   /// POST `apps.connections.open` and return the Socket Mode URL.
   pub(crate) async fn open_connection(&self) -> Result<String> {
     let payload = checked_payload(
-      self.request(Method::POST, "apps.connections.open", &self.app_token).send().await?,
-      "apps.connections.open",
+      self.request(Method::POST, APPS_CONNECTIONS_OPEN, &self.app_token).send().await?,
+      APPS_CONNECTIONS_OPEN,
     )
     .await?;
     payload
       .get("url")
       .and_then(Value::as_str)
       .map(str::to_string)
-      .context("apps.connections.open response has no string url")
+      .context(format!("{APPS_CONNECTIONS_OPEN} response has no string url"))
   }
 
   /// POST one thread reply and return Slack's response payload.
@@ -67,8 +82,8 @@ impl SlackClient {
       "thread_ts": thread_ts,
       "metadata": {"event_type": "charliebot_post", "event_payload": {"key": post_key}},
     });
-    let response = self.json_request("chat.postMessage", &self.bot_token, body)?.send().await?;
-    checked_payload(response, "chat.postMessage").await
+    let response = self.json_request(CHAT_POST_MESSAGE, &self.bot_token, body)?.send().await?;
+    checked_payload(response, CHAT_POST_MESSAGE).await
   }
 
   /// POST one bot DM and return the message timestamp.
@@ -77,8 +92,8 @@ impl SlackClient {
       "channel": channel,
       "text": text,
     });
-    let response = self.json_request("chat.postMessage", &self.bot_token, body)?.send().await?;
-    let payload = checked_payload(response, "chat.postMessage").await?;
+    let response = self.json_request(CHAT_POST_MESSAGE, &self.bot_token, body)?.send().await?;
+    let payload = checked_payload(response, CHAT_POST_MESSAGE).await?;
     let ts = payload
       .get("ts")
       .or_else(|| payload.pointer("/message/ts"))
@@ -90,26 +105,26 @@ impl SlackClient {
 
   /// Read the authenticated bot identity used to recognize its metadata-keyed posts.
   pub(crate) async fn auth_test(&self) -> Result<Value> {
-    let response = self.request(Method::POST, "auth.test", &self.bot_token).send().await?;
-    checked_payload(response, "auth.test").await
+    let response = self.request(Method::POST, AUTH_TEST, &self.bot_token).send().await?;
+    checked_payload(response, AUTH_TEST).await
   }
 
   /// Add the summon's `eyes` reaction.
   pub(crate) async fn add_reaction(&self, channel: &str, name: &str, ts: &str) -> Result<Value> {
     let body = json!({"channel": channel, "name": name, "timestamp": ts});
-    let response = self.json_request("reactions.add", &self.bot_token, body)?.send().await?;
-    checked_payload(response, "reactions.add").await
+    let response = self.json_request(REACTIONS_ADD, &self.bot_token, body)?.send().await?;
+    checked_payload(response, REACTIONS_ADD).await
   }
 
   /// Remove the summon reaction; `no_reaction` already means the desired state.
   pub(crate) async fn remove_reaction(&self, channel: &str, name: &str, ts: &str) -> Result<Value> {
     let body = json!({"channel": channel, "name": name, "timestamp": ts});
-    let response = self.json_request("reactions.remove", &self.bot_token, body)?.send().await?;
+    let response = self.json_request(REACTIONS_REMOVE, &self.bot_token, body)?.send().await?;
     let payload = response_json(response).await?;
     if !payload.get("ok").is_some_and(text_repr::is_truthy)
       && payload.get("error").and_then(Value::as_str) != Some("no_reaction")
     {
-      bail!("reactions.remove failed: {}", text_repr::value_str(&payload));
+      bail!("{REACTIONS_REMOVE} failed: {}", text_repr::value_str(&payload));
     }
     Ok(payload)
   }
@@ -119,7 +134,7 @@ impl SlackClient {
     let mut messages = Vec::new();
     let mut cursor = None;
     loop {
-      let mut url = reqwest::Url::parse(&format!("{}conversations.replies", self.api_base))?;
+      let mut url = reqwest::Url::parse(&format!("{}{CONVERSATIONS_REPLIES}", self.api_base))?;
       {
         let mut query = url.query_pairs_mut();
         query
@@ -132,12 +147,12 @@ impl SlackClient {
         }
       }
       let response = self.request_url(Method::GET, url.as_str(), &self.bot_token).send().await?;
-      let payload = checked_payload(response, "conversations.replies").await?;
+      let payload = checked_payload(response, CONVERSATIONS_REPLIES).await?;
       messages.extend(
         payload
           .get("messages")
           .and_then(Value::as_array)
-          .context("conversations.replies response has no messages list")?
+          .context(format!("{CONVERSATIONS_REPLIES} response has no messages list"))?
           .iter()
           .cloned(),
       );
@@ -178,7 +193,7 @@ impl SlackClient {
   }
 
   async fn resolve_channel_name(&self, channel_id: &str) -> Result<Option<String>> {
-    let mut url = reqwest::Url::parse(&format!("{}conversations.info", self.api_base))?;
+    let mut url = reqwest::Url::parse(&format!("{}{CONVERSATIONS_INFO}", self.api_base))?;
     url.query_pairs_mut().append_pair("channel", channel_id);
     let response = self.request_url(Method::GET, url.as_str(), &self.bot_token).send().await?;
     let payload = response_json(response).await?;
@@ -194,7 +209,7 @@ impl SlackClient {
       .get("channel")
       .and_then(Value::as_object)
       .and_then(|channel| channel.get("name"))
-      .context("conversations.info response has no channel.name")?;
+      .context(format!("{CONVERSATIONS_INFO} response has no channel.name"))?;
     Ok((!name.is_null()).then(|| text_repr::value_str(name)))
   }
 

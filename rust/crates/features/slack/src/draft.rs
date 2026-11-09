@@ -13,8 +13,8 @@ use http::header;
 use serde_json::{Value, json};
 
 use crate::draft_target;
+use crate::slack_client::{API_BASE, AUTH_TEST, CHAT_POST_MESSAGE, CONVERSATIONS_OPEN};
 
-const API_BASE: &str = "https://slack.com/api/";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The Slack platform's sender, built for one send from the live credentials.
@@ -43,24 +43,24 @@ impl SlackDraftSender {
   ///
   /// `auth.test` runs first, so a missing or refused user-token scope fails before a DM is opened or a message posts.
   pub async fn send(&self, target: &Value, body: &str) -> Result<DraftSent, DraftSendFailure> {
-    let auth = self.post("auth.test", json!({})).await?;
+    let auth = self.post(AUTH_TEST, json!({})).await?;
     let sender = auth
       .get("user_id")
       .and_then(Value::as_str)
       .filter(|user| !user.is_empty())
-      .ok_or_else(|| DraftSendFailure::rejected("auth.test: no user_id"))?
+      .ok_or_else(|| DraftSendFailure::rejected(format!("{AUTH_TEST}: no user_id")))?
       .to_string();
     let channel = self.channel(target).await?;
     let mut payload = json!({"channel": channel, "text": body});
     if let Some(thread) = target.get("thread").and_then(Value::as_str) {
       payload["thread_ts"] = json!(thread);
     }
-    let posted = self.post("chat.postMessage", payload).await?;
+    let posted = self.post(CHAT_POST_MESSAGE, payload).await?;
     let ts = posted
       .get("ts")
       .and_then(Value::as_str)
       .filter(|ts| !ts.is_empty())
-      .ok_or_else(|| DraftSendFailure::rejected("chat.postMessage: no ts"))?;
+      .ok_or_else(|| DraftSendFailure::rejected(format!("{CHAT_POST_MESSAGE}: no ts")))?;
     let url = format!("https://slack.com/archives/{channel}/p{}", ts.replace('.', ""));
     Ok(DraftSent { sender, url })
   }
@@ -81,13 +81,13 @@ impl SlackDraftSender {
     if users.is_empty() {
       return Err(DraftSendFailure::rejected("the Slack target names no channel and no users"));
     }
-    let opened = self.post("conversations.open", json!({"users": users.join(",")})).await?;
+    let opened = self.post(CONVERSATIONS_OPEN, json!({"users": users.join(",")})).await?;
     opened
       .pointer("/channel/id")
       .and_then(Value::as_str)
       .filter(|channel| !channel.is_empty())
       .map(str::to_string)
-      .ok_or_else(|| DraftSendFailure::rejected("conversations.open: no channel id"))
+      .ok_or_else(|| DraftSendFailure::rejected(format!("{CONVERSATIONS_OPEN}: no channel id")))
   }
 
   async fn post(&self, method: &str, payload: Value) -> Result<Value, DraftSendFailure> {

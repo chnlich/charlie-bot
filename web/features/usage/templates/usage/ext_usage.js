@@ -324,21 +324,21 @@ function _buildStatusRow(key, providerData, field, text) {
   return {row: row, buckets: [], asOfEl: null};
 }
 
-function _buildMemberStatusRows(key, providerData) {
+// The status rows a provider's entry carries under its row. Antigravity sends one
+// error row, whose message names a configured model that matched no quota group.
+function _buildStatusRows(key, providerData) {
   if (!Array.isArray(providerData.status_rows)) return [];
   return providerData.status_rows.map((status, index) => {
     const row = _el('div', 'flex items-center gap-1.5 pl-4 text-slate-300');
     row.setAttribute('data-key', key + ':status:' + index);
     row.setAttribute('data-state', status.state);
-    if (status.resets_at) row.setAttribute('data-resets-at', status.resets_at);
     const label = _el('span', 'text-slate-200 font-medium');
     label.setAttribute('data-field', 'member-name');
     label.textContent = status.name;
     row.appendChild(label);
     const note = _el('span', 'text-slate-400');
     note.setAttribute('data-field', 'member-state');
-    note.textContent = status.state === 'cooling' ? 'cooling until ' + status.resets_at :
-      status.state === 'error' ? status.message : 'available';
+    note.textContent = status.message;
     row.appendChild(note);
     return row;
   });
@@ -512,7 +512,7 @@ function renderExtUsage(data) {
   for (const [key, providerData] of Object.entries(providers)) {
     const built = _buildRow(key, providerData);
     nodes.push(built.row);
-    nodes.push(..._buildMemberStatusRows(key, providerData));
+    nodes.push(..._buildStatusRows(key, providerData));
     if (built.buckets.length > 0 || built.asOfEl) {
       rows.push({providerData: providerData, buckets: built.buckets, asOfEl: built.asOfEl});
     }

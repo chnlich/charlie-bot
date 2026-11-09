@@ -16,8 +16,9 @@
 //!   else the repo's `prompts/<scope_doc>`; the red line and the reply format always come from the repo.
 //! - Pure helpers: `follow_wake_label`, `follow_floor`, `chunk_text`, `event_by_id`, `summon_of`, `newest_thread_input`,
 //!   `replied`, `nudged`, `noticed`, `lost_summons`, `unread_after`.
-//! - Round side: `post_with_retry`, `ack_clear`, `unread_messages`, `assert_thread_fresh` (the reply gate),
-//!   `post_reply`, `ack_messages`, `audit_round`, `deliver_done`, `backfill_lost_summons`.
+//! - Round side: `load_chat_events`, `pending_summon_mention_ids`, `post_with_retry`, `ack_clear`, `unread_messages`,
+//!   `assert_thread_fresh` (the reply gate), `post_reply`, `ack_messages`, `audit_round`, `deliver_done`,
+//!   `backfill_lost_summons`.
 //! - Summon and follow side: `Summon` (the arguments of `accept_summon`), `accept_summon`, `consume_mention`,
 //!   `ensure_group`, `armed_follow_triggers`, `cancel_armed_follow_triggers`, `arm_follow_trigger`,
 //!   `revive_and_arm_follow`, `follow_message`, `backfill_followed_threads`.
@@ -28,6 +29,7 @@
 //! `charliebot_tasks::master_trigger::trigger_master`. Background work (the round wake, the ack, the nudge)
 //! runs as `spawn_logged` tasks, which log a failure as `background_task_failed`.
 
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::future::Future;
@@ -596,6 +598,45 @@ pub fn lost_summons<E: ThreadEventData>(
     })
     .map(|event| event.event_value().clone())
     .collect()
+}
+
+/// The mention ids of the session's pending summons for `platform`. A summon is pending while its event carries the
+/// platform's block without `nudge_of`, no finished turn received its id, no lost-summon backfill marker names it, and
+/// it has a mention. `read_mention` reads one platform's mention value as its id.
+pub fn pending_summon_mention_ids<E: Borrow<ChatEvent>>(
+  platform: &ThreadPlatform,
+  store: &Store,
+  session_id: &str,
+  events: &[E],
+  read_mention: impl Fn(&CompactValue) -> anyhow::Result<String>,
+) -> anyhow::Result<HashSet<String>> {
+  let backfill_key = platform.backfill_key();
+  let received = reply_order::received_by_finished_turns(store, session_id, events)?;
+  let mut marked: HashSet<String> = HashSet::new();
+  for event in events {
+    let event: &ChatEvent = event.borrow();
+    if let Some(marker) = event.get(&backfill_key) {
+      marked.extend(marker.get(event_types::INPUT_EVENT_ID).and_then(CompactValue::as_str).map(str::to_string));
+    }
+  }
+  let mut pending = HashSet::new();
+  for event in events {
+    let event: &ChatEvent = event.borrow();
+    let Some(block) = event.get(platform.name).filter(|block| block.is_object()) else {
+      continue;
+    };
+    if event.get("type").and_then(CompactValue::as_str) != Some(event_types::AGENT_MESSAGE) {
+      continue;
+    }
+    let id = event["id"].as_str().expect("a chat event carries a string id");
+    if block.get(event_types::NUDGE_OF).is_some() || received.contains(id) || marked.contains(id) {
+      continue;
+    }
+    if let Some(mention) = block.get(platform.mention_key).filter(|mention| !mention.is_null()) {
+      pending.insert(read_mention(mention)?);
+    }
+  }
+  Ok(pending)
 }
 
 /// The eligible messages whose id sorts strictly above `watermark` under `id_key`; a None watermark passes every
@@ -1813,8 +1854,8 @@ pub fn operator_only_note(links: &[String]) -> Option<String> {
   Some(format!("Application-route links stay as written; the operator alone can open them: {}", links.join(", ")))
 }
 
-/// The sessions' chat events in log order, read on a worker thread.
-async fn load_chat_events(
+/// The session's chat events in log order, read on a worker thread as one shared snapshot.
+pub async fn load_chat_events(
   features: &FeatureContext,
   session_id: &str,
 ) -> Result<Arc<Vec<SharedChatEvent>>, ThreadReplyError> {

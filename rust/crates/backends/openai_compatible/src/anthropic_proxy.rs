@@ -110,8 +110,7 @@ async fn forward(features: &FeatureContext, backend_id: &str, body: Body) -> Res
 
   let body = to_bytes(body, usize::MAX).await.map_err(|error| unhandled("ClientDisconnect", error.to_string()))?;
   let anthropic_payload = value_ops::loads_bytes(&body)?;
-  let gemini_stream_rules =
-    translate::gemini_stream_rules(&fields.api_base).map_err(|error| unhandled("ValueError", error))?;
+  let rules = translate::stream_rules(&fields.api_base).map_err(|error| unhandled("ValueError", error))?;
   let openai_payload = translate::anthropic_to_openai_chat_request(&anthropic_payload, &option.model)?;
   let upstream_url = format!("{}/chat/completions", fields.api_base.trim_end_matches('/'));
   let authorization = match fields.credential.as_deref().filter(|section| !section.is_empty()) {
@@ -141,7 +140,7 @@ async fn forward(features: &FeatureContext, backend_id: &str, body: Body) -> Res
   }
 
   if openai_payload.get("stream").and_then(Value::as_bool) == Some(true) {
-    return Ok(stream_response(upstream, &option.model, gemini_stream_rules));
+    return Ok(stream_response(upstream, &option.model, rules));
   }
   let answer = upstream.bytes().await.map_err(upstream_failure)?;
   let upstream_json = value_ops::loads_bytes(&answer).map_err(answer_refusal)?;
@@ -167,8 +166,8 @@ async fn upstream_error(upstream: reqwest::Response) -> Refusal {
 }
 
 /// The streamed answer: the start event first, then the translated events as the upstream's lines arrive.
-fn stream_response(upstream: reqwest::Response, model: &str, gemini_stream_rules: bool) -> Response {
-  let translator = OpenAiChatStream::new(model, gemini_stream_rules);
+fn stream_response(upstream: reqwest::Response, model: &str, rules: translate::StreamRules) -> Response {
+  let translator = OpenAiChatStream::new(model, rules);
   let mut relay = Relay {
     upstream,
     framer: LineFramer::default(),

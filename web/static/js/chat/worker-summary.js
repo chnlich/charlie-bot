@@ -22,8 +22,13 @@
 // request with its time and origin (read from the request id's prefix).
 // ---------------------------------------------------------------------------
 
-const card = document.createElement('div');
-card.className = 'worker-summary w-full rounded-xl border border-slate-700 bg-slate-800/70 px-4 py-3 space-y-3 text-sm';
+// The page's document carries a loader in this file's place, and the loader
+// inserts its own node while this module travels. Adopting that node keeps the
+// card the For-you list already shows in place; the tests load this module
+// alone, where no loader node exists.
+const loader = globalThis.Chat.__workerSummaryLoader;
+const card = loader ? loader.card : document.createElement('div');
+if (!loader) card.className = 'worker-summary w-full rounded-xl border border-slate-700 bg-slate-800/70 px-4 py-3 space-y-3 text-sm';
 let currentSummary = null;
 // The JSON of the summary the card shows: a poll bringing the same JSON
 // leaves the card as the reader has it.
@@ -261,7 +266,19 @@ function workerSummaryCard() {
   return currentSummary ? card : null;
 }
 
-Chat.ForYou.registerSummaryCardRenderer(workerSummaryCard);
+// The loader registered its stand-in renderer before this module landed, so
+// the module replaces it. The tests load this module alone, where nothing
+// registered yet.
+if (loader) Chat.ForYou.replaceSummaryCardRenderer(workerSummaryCard);
+else Chat.ForYou.registerSummaryCardRenderer(workerSummaryCard);
 Chat.wire({applyWorkerSummary, mountWorkerSummary, workerSummaryCard, toggleWorkerSummaryFold}, {});
+
+// A session render or poll can carry its summary before this module lands; the
+// loader kept it, and the card paints it now.
+if (loader) {
+  const queued = loader.take();
+  if (queued.mount) mountWorkerSummary(queued.summary);
+  else applyWorkerSummary(queued.summary);
+}
 
 })();

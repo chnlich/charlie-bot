@@ -58,6 +58,13 @@ function registerSummaryCardRenderer(renderer) {
   summaryCardRenderer = renderer;
 }
 
+// The page's document carries a loader that registers its own stand-in renderer
+// before the card module lands; the module replaces it here.
+function replaceSummaryCardRenderer(renderer) {
+  if (typeof renderer !== 'function') throw new Error('Worker summary card renderer must be a function');
+  summaryCardRenderer = renderer;
+}
+
 function summaryCard() {
   if (!summaryCardRenderer) throw new Error('Worker summary card renderer is not registered');
   return summaryCardRenderer();
@@ -208,6 +215,7 @@ const ForYou = {
   roundButtonRows,
   isWorker,
   registerSummaryCardRenderer,
+  replaceSummaryCardRenderer,
   summaryCard,
   buildEmptyLine,
   isWebSession,

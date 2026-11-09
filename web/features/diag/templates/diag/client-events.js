@@ -225,18 +225,30 @@
     reportIfReady();
   }
 
-  // The newest message of the page's session is the last message of the embedded bootstrap, and its element
-  // carries its id. The time the element first reaches the DOM is the newest message on screen.
+  // The newest message of the page's session is the last message of the first screen the page renders, and its
+  // element carries its id. The embedded bootstrap names it here; the offline shell's first screen arrives later, so
+  // renderSessionView announces its newest message (charliebot:first-screen-rendered). The time the element first
+  // reaches the DOM is the newest message on screen.
   function watchNewestMessage() {
     const messages = SESSION_BOOTSTRAP === null ? [] : SESSION_BOOTSTRAP.messages;
-    if (messages.length === 0) return;
-    const selector = '[data-message-id="' + CSS.escape(String(messages[messages.length - 1].id)) + '"]';
-    const observer = new MutationObserver(() => {
-      if (document.querySelector(selector) === null) return;
-      newestMessageMs = performance.now();
-      observer.disconnect();
+    if (messages.length > 0) watchMessageElement(messages[messages.length - 1].id);
+    document.addEventListener('charliebot:first-screen-rendered', (event) => {
+      const id = event.detail ? event.detail.newestMessageId : null;
+      if (id !== null && id !== undefined) watchMessageElement(id);
     });
+  }
+
+  function watchMessageElement(id) {
+    if (newestMessageMs !== null) return;
+    const selector = '[data-message-id="' + CSS.escape(String(id)) + '"]';
+    const record = () => {
+      if (document.querySelector(selector) === null) return;
+      if (newestMessageMs === null) newestMessageMs = performance.now();
+      observer.disconnect();
+    };
+    const observer = new MutationObserver(record);
     observer.observe(document, {childList: true, subtree: true});
+    record();
   }
 
   // The URLs the page's markup names as stylesheets and as scripts without async or defer. A script that a

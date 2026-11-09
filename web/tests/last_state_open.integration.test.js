@@ -118,6 +118,20 @@ test('a stored first screen paints its messages before the sidebar list refresh 
   assert.ok(paintedAt < refreshedAt, 'the messages paint before the list refresh is requested');
 });
 
+test('the first screen\'s render announces its newest message for the page\'s own timing', async () => {
+  const {h, page} = buildOpenHarness();
+  const announced = [];
+  h.context.document.addEventListener('charliebot:first-screen-rendered', (event) => announced.push(event.detail));
+  const body = bootstrapPayload('session-b', 0, false);
+  body.messages = [{id: 9, role: 'assistant', content: 'newest', event_index: 5}];
+
+  await openFromCopy(h, page, 'session-b', body);
+
+  assert.equal(announced.length, 1);
+  assert.equal(announced[0].sessionId, 'session-b');
+  assert.equal(announced[0].newestMessageId, 9);
+});
+
 test('a stored copy shows the mark until catch-up and the list refresh land, then posts the read', async () => {
   const {h, page} = buildOpenHarness();
   await openFromCopy(h, page, 'session-b', bootstrapPayload('session-b', 0, false));

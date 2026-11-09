@@ -1206,8 +1206,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     // Right edge of everything the artifact itself renders. Every element we did not
-    // inject is measured, and nothing is filtered by position. scrollWidth is never
-    // read, so out-of-flow panels, tables wider than their container and
+    // inject is measured, and nothing is filtered by position. Nothing reads
+    // scrollWidth, so out-of-flow panels, tables wider than their container and
     // display:contents subtrees are all covered.
     function measureContentRight() {
       var rightmost = 0, seen = false;
@@ -1261,7 +1261,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       }
       // Width only. The bar's height depends on its own content, so its top -- and
       // therefore this column's bottom -- can only be read after the bar is filled.
-      // setColumnBottom() does that, and the caller runs it once routing is done.
+      // The function setColumnBottom() does that, and the caller runs it once routing
+      // is done.
       dock.style.left = columnLeft + 'px';
       dock.style.right = 'auto';
       dock.style.width = w + 'px';

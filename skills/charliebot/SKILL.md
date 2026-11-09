@@ -283,13 +283,14 @@ One Claude login carries a five-hour and a weekly window, so a long master turn 
 - The launcher `tee` keeps the server log open on fd 3 after cleanup unlinks its path.
 - Read an unlinked log through `/proc/<tee-pid>/fd/3`.
 - The server reloads prompt documents on each master run (`read_source_file` in `rust/crates/runtime/tasks/src/prompts/sources.rs` reads each file fresh). Static assets under `web/static` load on the next page load.
-- Each release is one commit on main. `scripts/release.sh <commit>` installs the server and CLI that CI built for that commit.
+- Each release is one commit on main. `scripts/release.sh <commit>` downloads the artifact CI built for that commit, checks its sha256 and installs the release directory and its slice units. It runs no trial and no rehearsal: the checks live on the switch.
 - A change is live when the commit of the live release contains it. This holds for server code and for files in the runtime checkout.
   `scripts/switch-server.sh rust <commit>` switches the live release in these steps:
-  - it stops the live server;
-  - it moves the runtime checkout to the release commit with `git reset --keep`, forward or back;
-  - it points `current` at the new release;
-  - it starts the live server from the new release.
+  - the checks that need no model run first, while the old server still serves: artifact sha256, slice units, both releases' `--check-config` on the live home, the slice controllers, the run and improve-loop blockers, and the disk-read gate;
+  - it stops the live server, moves the runtime checkout to the release commit with `git reset --keep`, forward or back, points `current` at the new release, installs that commit's slice units and starts it; release-to-live ends at `server_ready`;
+  - it reads back every recorded live run, then probes a turn and checks a delegation on the live home.
+- A model-side failure of the probe or the delegation (a gateway 5xx, a rate limit, a model-call error) gets one retry; a second one keeps the new release serving and exits 6.
+- Any other check failure switches back over the forward path's own steps with the previous release, without the disk gate: the previous release's `--check-config` runs on the live home before the new release stops, and an old release that refuses the home leaves the new release serving (exit 5).
 
 ## Backend Choice
 

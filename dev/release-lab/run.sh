@@ -13,9 +13,18 @@
 #
 # The stand-in production server is the mock home that scripts/release/startup-lab.sh generate writes (seed 1, a live
 # process for each live run), served by the --from release from a tmux pane on the lab's own socket and port. The flow's
-# scripts run against it through environment overrides, the way scripts/release/switch-rehearsal.sh runs its switches:
-# CHARLIEBOT_HOME, CHARLIEBOT_RELEASES_DIR, CHARLIEBOT_RELEASE_LOG_DIR, CHARLIEBOT_LOG_DIR and CHARLIEBOT_TMUX_SOCKET
-# name the lab's own paths, and CHARLIEBOT_TRIAL_LIVE_URL points the trial's live-server probe at the stand-in.
+# scripts run against it through environment overrides: CHARLIEBOT_HOME, CHARLIEBOT_RELEASES_DIR,
+# CHARLIEBOT_RELEASE_LOG_DIR, CHARLIEBOT_LOG_DIR and CHARLIEBOT_TMUX_SOCKET name the lab's own paths.
+#
+# The lab runs either shape of the flow. A --flow-ref whose release.sh runs a trial and a rehearsal gets those two stage
+# scripts from it, with the lab's override applied, and CHARLIEBOT_TRIAL_LIVE_URL pointing the trial's live-server probe
+# at the stand-in; a --flow-ref whose release.sh runs neither gets neither stage script. The JSON line's model_stages
+# says which shape ran, and its probe_s and delegation_s time the two checks that need a model.
+#
+# The JSON line's stages: download, units, install, then the switch's preflight_s, gate_s, stop_s, start_s, and
+# after server_ready the probe_s and delegation_s. downtime_s is the port's unserved span, from stopping the old server
+# to the last start reaching ready; a switch back serves the port again at its own start. release_to_live_s runs from
+# the release's start to that same ready.
 #
 # The lab never reads or writes a live CharlieBot home, release root or tmux server, and it copies no real session
 # directory: every home under it is generated or a copy of the generated seed. The model key reaches only the lab's
@@ -48,7 +57,7 @@ REAL_GH=$(command -v gh 2> /dev/null || true)
 ORIGINAL_ARGS=("$@")
 
 usage() {
-  sed -n '2,43p' "$SELF" | sed 's/^# \{0,1\}//'
+  awk 'NR > 1 && /^set -/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$SELF"
 }
 
 log() { printf '%s release-lab: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
@@ -338,17 +347,25 @@ lab_stage_copy() {
   fi
 }
 
-# reset_flow_checkout: the flow checkout at --flow-ref, clean in its tracked files, with the lab's two stage-script
-# copies beside the flow's own, each the flow-ref's stage script with the lab's override applied. The copies are
-# untracked, so the switch's clean-clone check still passes. SWITCH_SCRIPT is the switch the run times: the flow-ref's own
-# file when it carries the lab's mark lines, otherwise the lab checkout's copy of it.
+# reset_flow_checkout: the flow checkout at --flow-ref, clean in its tracked files. A flow ref whose release.sh runs the
+# trial and the rehearsal gets the lab's two stage-script copies beside the flow's own, each the flow-ref's stage script
+# with the lab's override applied; a flow ref without them gets no copies, and a stale one from an earlier run is
+# removed. The copies are untracked, so the switch's clean-clone check still passes. FLOW_MODEL_STAGES says which shape
+# this flow has. SWITCH_SCRIPT is the switch the run times: the flow-ref's own file when it carries the lab's mark
+# lines, otherwise the lab checkout's copy of it.
 reset_flow_checkout() {
   git -C "$FLOW" fetch --quiet origin || fail "the flow checkout fetches $ORIGIN"
   git -C "$FLOW" reset --hard --quiet "$FLOW_REF" || fail "the flow checkout moves to $FLOW_REF"
-  lab_stage_copy scripts/release/trial.sh scripts/release/trial-lab.sh CHARLIEBOT_TRIAL_LIVE_URL \
-    "$REPO_TREE/dev/release-lab/overrides/trial.patch"
-  lab_stage_copy scripts/release/switch-rehearsal.sh scripts/release/rehearsal-lab.sh CHARLIEBOT_REHEARSAL_PORT_MIN \
-    "$REPO_TREE/dev/release-lab/overrides/switch-rehearsal.patch"
+  FLOW_MODEL_STAGES=0
+  if grep -q 'CHARLIEBOT_RELEASE_TRIAL' "$FLOW/scripts/release.sh"; then
+    FLOW_MODEL_STAGES=1
+    lab_stage_copy scripts/release/trial.sh scripts/release/trial-lab.sh CHARLIEBOT_TRIAL_LIVE_URL \
+      "$REPO_TREE/dev/release-lab/overrides/trial.patch"
+    lab_stage_copy scripts/release/switch-rehearsal.sh scripts/release/rehearsal-lab.sh CHARLIEBOT_REHEARSAL_PORT_MIN \
+      "$REPO_TREE/dev/release-lab/overrides/switch-rehearsal.patch"
+  else
+    rm -f "$FLOW/scripts/release/trial-lab.sh" "$FLOW/scripts/release/rehearsal-lab.sh"
+  fi
   SWITCH_SCRIPT="$FLOW/scripts/switch-server.sh"
   if ! grep -q 'lab_mark gate_start' "$SWITCH_SCRIPT"; then
     # A flow-ref older than the lab's marks still needs its switch timed. The lab's copy must be that release's file plus
@@ -543,8 +560,8 @@ stop_readers() {
 # ---- one flow run ----------------------------------------------------------------------------------------------------
 
 # flow_vars: the environment the flow's scripts read. Every path is the lab's; the live-server probe points at the
-# stand-in; the trial and rehearsal commands are the lab's copies, which differ from the flow's only in overrides whose
-# defaults keep production behavior.
+# stand-in; a flow with the trial and rehearsal stages runs the lab's copies of them, which differ from the flow's only
+# in overrides whose defaults keep production behavior.
 flow_vars() {
   export CHARLIEBOT_HOME="$STANDIN"
   export CHARLIEBOT_RELEASES_DIR="$RELEASES"
@@ -554,8 +571,12 @@ flow_vars() {
   export CHARLIEBOT_REPO_ROOT="$FLOW"
   export CHARLIEBOT_SYSTEMD_USER_DIR="$UNIT_DIR"
   export CHARLIEBOT_TRIAL_LIVE_URL="http://127.0.0.1:$PORT"
-  export CHARLIEBOT_RELEASE_TRIAL="$FLOW/scripts/release/trial-lab.sh"
-  export CHARLIEBOT_RELEASE_REHEARSAL="$FLOW/scripts/release/rehearsal-lab.sh"
+  if [ "$FLOW_MODEL_STAGES" = 1 ]; then
+    export CHARLIEBOT_RELEASE_TRIAL="$FLOW/scripts/release/trial-lab.sh"
+    export CHARLIEBOT_RELEASE_REHEARSAL="$FLOW/scripts/release/rehearsal-lab.sh"
+  else
+    unset CHARLIEBOT_RELEASE_TRIAL CHARLIEBOT_RELEASE_REHEARSAL
+  fi
   export TRIAL_PORT_MIN=${RELEASE_LAB_TRIAL_PORT_MIN:-18820}
   export TRIAL_PORT_MAX=${RELEASE_LAB_TRIAL_PORT_MAX:-18839}
   export CHARLIEBOT_REHEARSAL_PORT_MIN=${RELEASE_LAB_REHEARSAL_PORT_MIN:-18840}
@@ -575,6 +596,18 @@ stage_seconds() {
   elapsed_s "$since" "$end"
 }
 
+# log_end FILE SINCE_MS: the epoch milliseconds of a stage log's last write, or SINCE_MS when the flow ran no such
+# stage. A flow without the trial and rehearsal has no log for them, and the stages after them start where the one
+# before them ended.
+log_end() {
+  local file=$1 since=$2 end
+  if [ -f "$file" ] && end=$(date -r "$file" +%s%3N 2> /dev/null); then
+    printf '%s' "$end"
+  else
+    printf '%s' "$since"
+  fi
+}
+
 # newest_release_run: the run directory release.sh created, under the lab's log root.
 newest_release_run() { ls -1dt "$REL_LOGS"/*/ 2> /dev/null | head -1; }
 
@@ -590,13 +623,24 @@ release_start_ms() {
 
 # mark_value MARKS NAME: the epoch milliseconds of one lab mark in the switch log.
 mark_value() { awk -v name="$2" '$1 == name { print $2; exit }' <<< "$1"; }
+mark_value_last() { awk -v name="$2" '$1 == name { value = $2 } END { print value }' <<< "$1"; }
+
+# check_seconds LOG CHECK: the seconds of the check's last logged step. A check logs its elapsed seconds from its own
+# start at each step, and a check the switch retried once logs the retry's, so the last figure is the check's time. A
+# check the switch never reached logs none.
+check_seconds() {
+  local log=$1 check=$2
+  [ -f "$log" ] || return 0
+  sed -n "s/.* switch: $check: .* elapsed=\([0-9][0-9]*\)s\$/\1/p" "$log" | tail -1
+}
 
 run_one_flow() {
   local run=$1 start_ms load1 proc_entries rel_start sw_start sw_rc switch_log switch_pid run_dir
   # Every stage field prints, so each starts empty: a run that stops before the switch has no switch stage to time.
   local download_s='' units_s='' trial_s='' rehearsal_s='' install_s='' preflight_s='' gate_s='' stop_s='' start_s=''
   local ready_in_ms read_bytes release_to_live_s release_stamp_ms live_runs reattached verdict switch_exit
-  local gate_waits marks gate_start gate_end pre_preflight preflight_after_gate a b server_log_before readers_started
+  local gate_waits marks gate_start gate_end pre_preflight preflight_after_gate a probe_s delegation_s downtime_s
+  local server_log_before readers_started
 
   start_ms=$(ms_now)
   load1=$(cut -d' ' -f1 /proc/loadavg)
@@ -615,8 +659,9 @@ run_one_flow() {
     standin_stop
     [ "$KEEP" = 1 ] || rm -rf "$STANDIN"
     LAST_VERDICT=start_failed
-    printf '{"kind":"flow","run":%s,"from":"%s","to":"%s","flow_ref":"%s","download_s":null,"units_s":null,"trial_s":null,"rehearsal_s":null,"install_s":null,"preflight_s":null,"gate_s":null,"stop_s":null,"start_s":null,"ready_in_ms":null,"read_bytes":null,"release_to_live_s":null,"live_runs":null,"reattached":null,"verdict":"start_failed","switch_exit":null,"load1":%s,"proc_entries":%s,"readers":%s,"gate_wait_samples":null,"download_source":"lab"}\n' \
-      "$run" "$FROM" "$TO" "$FLOW_REF" "$load1" "$proc_entries" "$READERS"
+    printf '{"kind":"flow","run":%s,"from":"%s","to":"%s","flow_ref":"%s","model_stages":%s,"download_s":null,"units_s":null,"trial_s":null,"rehearsal_s":null,"install_s":null,"preflight_s":null,"gate_s":null,"stop_s":null,"start_s":null,"probe_s":null,"delegation_s":null,"downtime_s":null,"ready_in_ms":null,"read_bytes":null,"release_to_live_s":null,"live_runs":null,"reattached":null,"verdict":"start_failed","switch_exit":null,"load1":%s,"proc_entries":%s,"readers":%s,"gate_wait_samples":null,"download_source":"lab"}\n' \
+      "$run" "$FROM" "$TO" "$FLOW_REF" "$(json_bool "$([ "$FLOW_MODEL_STAGES" = 1 ] && echo true || echo false)")" \
+      "$load1" "$proc_entries" "$READERS"
     return 1
   fi
 
@@ -626,28 +671,30 @@ run_one_flow() {
   run_dir=$(newest_release_run)
 
   download_s=$(stage_seconds "$run_dir/download.log" "$rel_start")
-  a=$(date -r "$run_dir/download.log" +%s%3N 2> /dev/null || printf '%s' "$rel_start")
+  a=$(log_end "$run_dir/download.log" "$rel_start")
   units_s=$(stage_seconds "$run_dir/units.log" "$a")
-  b=$(date -r "$run_dir/units.log" +%s%3N 2> /dev/null || printf '%s' "$a")
-  trial_s=$(stage_seconds "$run_dir/trial.log" "$b")
-  a=$(date -r "$run_dir/trial.log" +%s%3N 2> /dev/null || printf '%s' "$b")
+  a=$(log_end "$run_dir/units.log" "$a")
+  trial_s=$(stage_seconds "$run_dir/trial.log" "$a")
+  a=$(log_end "$run_dir/trial.log" "$a")
   rehearsal_s=$(stage_seconds "$run_dir/rehearsal.log" "$a")
-  b=$(date -r "$run_dir/rehearsal.log" +%s%3N 2> /dev/null || printf '%s' "$a")
-  install_s=$(stage_seconds "$run_dir/install.log" "$b")
+  a=$(log_end "$run_dir/rehearsal.log" "$a")
+  install_s=$(stage_seconds "$run_dir/install.log" "$a")
 
   if ((rel_rc != 0)); then
     log "run $run: release.sh exited $rel_rc; see $RUN_DIR/release.out"
     standin_stop
     [ "$KEEP" = 1 ] || rm -rf "$STANDIN"
     LAST_VERDICT=flow_stopped
-    printf '{"kind":"flow","run":%s,"from":"%s","to":"%s","flow_ref":"%s","download_s":%s,"units_s":%s,"trial_s":%s,"rehearsal_s":%s,"install_s":%s,"preflight_s":null,"gate_s":null,"stop_s":null,"start_s":null,"ready_in_ms":null,"read_bytes":null,"release_to_live_s":null,"live_runs":null,"reattached":null,"verdict":"flow_stopped","switch_exit":null,"load1":%s,"proc_entries":%s,"readers":%s,"gate_wait_samples":null,"download_source":"lab"}\n' \
-      "$run" "$FROM" "$TO" "$FLOW_REF" "$(json_num "$download_s")" "$(json_num "$units_s")" "$(json_num "$trial_s")" \
+    printf '{"kind":"flow","run":%s,"from":"%s","to":"%s","flow_ref":"%s","model_stages":%s,"download_s":%s,"units_s":%s,"trial_s":%s,"rehearsal_s":%s,"install_s":%s,"preflight_s":null,"gate_s":null,"stop_s":null,"start_s":null,"probe_s":null,"delegation_s":null,"downtime_s":null,"ready_in_ms":null,"read_bytes":null,"release_to_live_s":null,"live_runs":null,"reattached":null,"verdict":"flow_stopped","switch_exit":null,"load1":%s,"proc_entries":%s,"readers":%s,"gate_wait_samples":null,"download_source":"lab"}\n' \
+      "$run" "$FROM" "$TO" "$FLOW_REF" "$(json_bool "$([ "$FLOW_MODEL_STAGES" = 1 ] && echo true || echo false)")" \
+      "$(json_num "$download_s")" "$(json_num "$units_s")" "$(json_num "$trial_s")" \
       "$(json_num "$rehearsal_s")" "$(json_num "$install_s")" "$load1" "$proc_entries" "$READERS"
     return 1
   fi
 
-  # The rehearsal leaves the old release's units installed. The flow checkout sits at the flow-ref commit, so the
-  # launcher's preflight must compare it with the same commit's units, as a live host compares the live release's.
+  # A flow whose release ran a rehearsal leaves the old release's units installed. The flow checkout sits at the
+  # flow-ref commit, so the launcher's preflight must compare it with the same commit's units, as a live host compares
+  # the live release's. A flow without the rehearsal stage re-installs the same units here.
   install_flow_units
 
   server_log_before=$(readlink "$SERVER_LOGS/server-latest.log" 2> /dev/null || true)
@@ -700,6 +747,12 @@ run_one_flow() {
   fi
   gate_waits=0
   [ -n "$switch_log" ] && [ -f "$switch_log" ] && gate_waits=$(grep -c 'waiting for the root disk' "$switch_log" || true)
+  # The checks that need a model run after server_ready, so their times are the release path's own stages no longer.
+  probe_s=$(check_seconds "${switch_log:-/nonexistent}" probe)
+  delegation_s=$(check_seconds "${switch_log:-/nonexistent}" delegation)
+  # Downtime is the port's unserved span: from stopping the old server to the last start the switch made reaching ready.
+  # A switch back makes two starts, and the port is served again at the second one.
+  downtime_s=$(elapsed_s "$(mark_value "$marks" stop_start)" "$(mark_value_last "$marks" start_end)")
 
   # The stand-in's server writes a log of its own; only a log the switch created carries the new server's reading.
   ready_in_ms=
@@ -720,14 +773,15 @@ run_one_flow() {
   if [ -n "$switch_log" ] && [ -f "$switch_log" ]; then
     if grep -qE 'readback: run [0-9a-zA-Z_-]+ (was not adopted|died during the switch)' "$switch_log"; then
       reattached=false
-    elif ((sw_rc == 0)) || grep -qE 'probe: (first output|created)' "$switch_log"; then
+    elif ((sw_rc == 0 || sw_rc == 2)); then
+      # The forward switch and the switch back both read back every recorded run before any model check ran.
       reattached=true
     fi
   fi
   case ${sw_rc:-} in
     0) verdict=live ;;
     2) verdict=switched_back ;;
-    3 | 4 | 5) verdict=kept_reported ;;
+    3 | 4 | 5 | 6) verdict=kept_reported ;;
     *) verdict=switch_failed ;;
   esac
 
@@ -736,10 +790,12 @@ run_one_flow() {
   else
     rm -rf "$STANDIN"
   fi
-  printf '{"kind":"flow","run":%s,"from":"%s","to":"%s","flow_ref":"%s","download_s":%s,"units_s":%s,"trial_s":%s,"rehearsal_s":%s,"install_s":%s,"preflight_s":%s,"gate_s":%s,"stop_s":%s,"start_s":%s,"ready_in_ms":%s,"read_bytes":%s,"release_to_live_s":%s,"live_runs":%s,"reattached":%s,"verdict":"%s","switch_exit":%s,"load1":%s,"proc_entries":%s,"readers":%s,"gate_wait_samples":%s,"download_source":"lab"}\n' \
-    "$run" "$FROM" "$TO" "$FLOW_REF" "$(json_num "$download_s")" "$(json_num "$units_s")" "$(json_num "$trial_s")" \
+  printf '{"kind":"flow","run":%s,"from":"%s","to":"%s","flow_ref":"%s","model_stages":%s,"download_s":%s,"units_s":%s,"trial_s":%s,"rehearsal_s":%s,"install_s":%s,"preflight_s":%s,"gate_s":%s,"stop_s":%s,"start_s":%s,"probe_s":%s,"delegation_s":%s,"downtime_s":%s,"ready_in_ms":%s,"read_bytes":%s,"release_to_live_s":%s,"live_runs":%s,"reattached":%s,"verdict":"%s","switch_exit":%s,"load1":%s,"proc_entries":%s,"readers":%s,"gate_wait_samples":%s,"download_source":"lab"}\n' \
+    "$run" "$FROM" "$TO" "$FLOW_REF" "$(json_bool "$([ "$FLOW_MODEL_STAGES" = 1 ] && echo true || echo false)")" \
+    "$(json_num "$download_s")" "$(json_num "$units_s")" "$(json_num "$trial_s")" \
     "$(json_num "$rehearsal_s")" "$(json_num "$install_s")" "$(json_num "$preflight_s")" "$(json_num "$gate_s")" \
-    "$(json_num "$stop_s")" "$(json_num "$start_s")" "$(json_num "$ready_in_ms")" "$(json_num "$read_bytes")" \
+    "$(json_num "$stop_s")" "$(json_num "$start_s")" "$(json_num "$probe_s")" "$(json_num "$delegation_s")" \
+    "$(json_num "$downtime_s")" "$(json_num "$ready_in_ms")" "$(json_num "$read_bytes")" \
     "$(json_num "$release_to_live_s")" "$(json_num "$live_runs")" "$(json_bool "$reattached")" "$verdict" \
     "$(json_num "$switch_exit")" "$load1" "$proc_entries" "$READERS" "$gate_waits"
   LAST_VERDICT=$verdict

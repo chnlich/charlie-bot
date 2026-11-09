@@ -6,6 +6,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
+use charliebot_core::event_types;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 

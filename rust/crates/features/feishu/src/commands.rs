@@ -10,11 +10,7 @@ use std::sync::Arc;
 use anyhow::{Context, bail};
 use axum::http::StatusCode;
 use charliebot_chat_threads::thread_entry::{self, IdOrdering, ThreadAdapter, ThreadMessage, ThreadReplyError};
-use charliebot_core::event_types;
 use charliebot_core::paths;
-use charliebot_store::ChatEvent;
-use charliebot_store::compact::CompactValue;
-use charliebot_store::reply_order;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -55,49 +51,13 @@ fn message_view(message: &ThreadMessage, unread: bool, summon: bool, allowed: &B
   })
 }
 
-/// The composite ids of the session's pending summons. A summon is pending while its event carries the feishu block
-/// without `nudge_of` and has a mention id. Neither a finished turn's receipt nor a lost-summon backfill marker may
-/// name its id either.
-fn pending_summon_mention_ids(
-  store: &charliebot_store::Store,
-  session_id: &str,
-  events: &[ChatEvent],
-) -> anyhow::Result<HashSet<String>> {
-  let backfill_key = FEISHU.backfill_key();
-  let received = reply_order::received_by_finished_turns(store, session_id, events)?;
-  let mut marked: HashSet<String> = HashSet::new();
-  for event in events {
-    if let Some(marker) = event.get(&backfill_key) {
-      marked.extend(marker.get(event_types::INPUT_EVENT_ID).and_then(CompactValue::as_str).map(str::to_string));
-    }
-  }
-  let mut pending = HashSet::new();
-  for event in events {
-    let Some(block) = event.get(FEISHU.name).filter(|block| block.is_object()) else {
-      continue;
-    };
-    if event.get("type").and_then(CompactValue::as_str) != Some(event_types::AGENT_MESSAGE) {
-      continue;
-    }
-    let id = event["id"].as_str().expect("a chat event carries a string id");
-    if block.get(event_types::NUDGE_OF).is_some() || received.contains(id) || marked.contains(id) {
-      continue;
-    }
-    if let Some(mention) = block.get(FEISHU.mention_key).filter(|mention| !mention.is_null()) {
-      pending.insert(mention.as_str().context("a summon's mention id is not a string")?.to_string());
-    }
-  }
-  Ok(pending)
-}
-
-/// The session's chat events in log order, read on the blocking pool.
-async fn load_chat_events(bot: &Bot, session_id: &str) -> Result<Vec<ChatEvent>, ThreadReplyError> {
-  let store = Arc::clone(&bot.features.store);
-  let session_id = session_id.to_string();
-  let events = tokio::task::spawn_blocking(move || store.load_chat_events_sync(&session_id))
-    .await
-    .map_err(ThreadReplyError::failure)?;
-  Ok(events?)
+/// The session's pending summons' composite mention ids. A mention is a string id; any other value fails the read.
+async fn pending_summon_ids(bot: &Bot, session_id: &str) -> Result<HashSet<String>, ThreadReplyError> {
+  let events = thread_entry::load_chat_events(&bot.features, session_id).await?;
+  thread_entry::pending_summon_mention_ids(&FEISHU, &bot.features.store, session_id, &events, |mention| {
+    mention.as_str().context("a summon's mention id is not a string").map(str::to_string)
+  })
+  .map_err(ThreadReplyError::failure)
 }
 
 /// The read of the session's topic, which acks the unread messages the window returns. The window starts at the
@@ -120,8 +80,7 @@ pub async fn read_thread(bot: &Bot, session_id: &str, limit: usize) -> Result<Va
   if let Some(root) = &root {
     require_thread_message_group(root, &origin.chat_id)?;
   }
-  let pending = pending_summon_mention_ids(&bot.features.store, session_id, &load_chat_events(bot, session_id).await?)
-    .map_err(ThreadReplyError::failure)?;
+  let pending = pending_summon_ids(bot, session_id).await?;
   let unread_ids: HashSet<String> = thread_entry::unread_after(
     &thread_messages,
     |message| message.eligible,
@@ -200,8 +159,7 @@ pub async fn read_chat(
     }
     page_token = page.next_page_token;
   };
-  let pending = pending_summon_mention_ids(&bot.features.store, session_id, &load_chat_events(bot, session_id).await?)
-    .map_err(ThreadReplyError::failure)?;
+  let pending = pending_summon_ids(bot, session_id).await?;
   let mut output = json!({
     "messages": messages
       .iter()
@@ -283,8 +241,7 @@ pub async fn read_topic(
   if messages.is_empty() {
     return Err(ThreadReplyError::refused(StatusCode::NOT_FOUND, "the topic has no message in this session's group"));
   }
-  let pending = pending_summon_mention_ids(&bot.features.store, session_id, &load_chat_events(bot, session_id).await?)
-    .map_err(ThreadReplyError::failure)?;
+  let pending = pending_summon_ids(bot, session_id).await?;
   let mut output = json!({
     "messages": messages
       .iter()

@@ -1662,6 +1662,8 @@ pub const SCOPE_SUBTREE: &str = "subtree";
 pub const SCOPE_NODE: &str = "node";
 /// A [`PromptSource::scope`] value: a taste index segment.
 pub const SCOPE_TASTE: &str = "taste";
+/// A [`PromptSource::scope`] value: the task record block of the session itself.
+pub const SCOPE_TASK: &str = "task";
 
 /// A [`RuleSegment::delivery`] value: the block's full text.
 pub const DELIVERY_FULL: &str = "full";

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use charliebot_core::run_kind::RunKind;
 use charliebot_core::text_repr::str_repr;
-use charliebot_registry::turn::{DELIVERY_FULL, SCOPE_BASE, SCOPE_NODE, SCOPE_SUBTREE};
+use charliebot_registry::turn::{DELIVERY_FULL, SCOPE_BASE, SCOPE_NODE, SCOPE_SUBTREE, SCOPE_TASK};
 use charliebot_store::control_events::sha256_hex;
 use charliebot_store::metadata::{SessionMetadata, TaskSpec, TaskType, requester_words_heading_line};
 
@@ -20,6 +20,9 @@ use crate::{cold_read, review_text};
 
 /// The base sections every managed contract starts from (`prompts/task_base.md`).
 const COMMON_SECTIONS: [&str; 4] = ["coding_principles", "skills_discovery", "profile_home", "remote_scratch"];
+
+/// The `source_ref` of the task record block: the session metadata's `task` field.
+const TASK_RECORD_SOURCE_REF: &str = "metadata.json#task";
 
 /// The base sections of a worker contract. Workers carry the text-writing rule here; managers carry it as a subsection
 /// of `prompts/master.md` instead.
@@ -90,7 +93,26 @@ pub fn build_segments(
   segments.extend(env.registry.instruction_segments(meta, kind, env.cfg, env.checkout)?);
   let bodies_dir = env.cfg.charliebot_home.join(PROMPT_BODIES_DIR);
   segments.extend(local_rule_segments(&bodies_dir, inputs.chain, inputs.node_ref, &meta.id)?);
+  segments.extend(task_record_segment(meta));
   Ok((segments, overlay_error))
+}
+
+/// The session's own task record as the instructions' last block (`task_record_segment`). A record
+/// whose goal, acceptance and context refs are all empty contributes nothing.
+fn task_record_segment(meta: &SessionMetadata) -> Vec<RuleSegment> {
+  let Some(task) = meta.task.as_ref() else { return Vec::new() };
+  let Some(text) = super::task_block::render_task_block(task) else {
+    return Vec::new();
+  };
+  vec![RuleSegment {
+    text,
+    sources: vec![PromptSource {
+      scope: SCOPE_TASK.to_string(),
+      source_ref: TASK_RECORD_SOURCE_REF.to_string(),
+      source_session_id: Some(meta.id.clone()),
+    }],
+    delivery: DELIVERY_FULL.to_string(),
+  }]
 }
 
 /// The path of the host supplement under the home.

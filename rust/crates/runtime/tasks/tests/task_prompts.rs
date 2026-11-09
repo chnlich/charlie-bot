@@ -715,3 +715,40 @@ async fn a_worker_prompt_carries_no_approval_policy_table() {
     "the worker prompt carries no approval policy table"
   );
 }
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn the_task_record_is_the_snapshot_block_of_the_session_itself() {
+  let harness = Harness::new();
+  let tree = harness.tree().await;
+
+  let snapshot = harness.snapshot_for(&tree.worker1, "work").await;
+
+  let record = snapshot.blocks.last().expect("the snapshot has blocks");
+  assert_eq!(record.sources.len(), 1, "{:?}", record.sources);
+  let source = &record.sources[0];
+  assert_eq!(source.scope, "task");
+  assert_eq!(source.source_ref, "metadata.json#task");
+  assert_eq!(source.source_session_id.as_deref(), Some(tree.worker1.as_str()));
+  assert_eq!(record.text, "# Task record\n\nworker goal");
+  assert!(snapshot.instructions_text().contains("# Task record\n\nworker goal"));
+  assert!(
+    !snapshot.instructions_text().contains("sibling goal"),
+    "another node's task record never reaches this session's instructions"
+  );
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_session_without_a_task_record_carries_no_task_block() {
+  let harness = Harness::new();
+  let tree = harness.tree().await;
+
+  for (session_id, kind) in [(&tree.root, "manager_turn"), (&tree.worker1, "work")] {
+    let snapshot = harness.snapshot_for(session_id, kind).await;
+    assert!(
+      snapshot.blocks.iter().all(|block| !block.text.starts_with("# Task record")),
+      "{session_id} carries no task record block"
+    );
+  }
+}

@@ -5,10 +5,11 @@
 //! 1. the common execution rules, the run-kind rules, the host supplement and the model overlay;
 //! 2. the segments of the registered turn contributions, in registration order;
 //! 3. each subtree rule from the root down to the node itself;
-//! 4. the node's own node rule.
+//! 4. the node's own node rule;
+//! 5. the session's own task record (`render_task_block`).
 //!
 //! Text that repeats is emitted once, at its first position, and each source of every repeat is merged there.
-//! Goals, inputs, bindings and worktree facts are not managed instructions: the launch renders them separately.
+//! Inputs, bindings and worktree facts are not managed instructions: the launch renders them separately.
 //!
 //! `prompt_hash` covers the blocks (text, sources, delivery and body ref). `char_count` measures the joined text the
 //! backend receives. A cold-read run is the one exception: its managed instructions are one block, the cold-reader
@@ -19,6 +20,7 @@ mod render;
 mod run_context;
 mod snapshot;
 mod sources;
+mod task_block;
 
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
@@ -38,6 +40,7 @@ pub use render::{
 pub use run_context::{ContextReadError, read_run_context};
 pub use snapshot::{PromptBlock, PromptSnapshot, assemble_snapshot};
 pub use sources::{ChainLink, OverlayError, RuleInputs, build_segments, prompt_task_type, read_local_rule_body};
+pub use task_block::render_task_block;
 
 /// The snapshot file a run directory holds (`SNAPSHOT_FILENAME`).
 pub const SNAPSHOT_FILENAME: &str = "prompt_snapshot.json";

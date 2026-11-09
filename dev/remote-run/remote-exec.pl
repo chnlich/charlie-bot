@@ -5,7 +5,8 @@
 # the CPython version the local project pins, and the command. On the build host it prepares the
 # command's world and then runs it. Preparation, in order:
 #
-# - a short TMPDIR under /tmp, so tmux socket paths stay under the 108-byte sun_path limit;
+# - a short TMPDIR on the /dev/shm tmpfs, so tmux socket paths stay under the 108-byte sun_path
+#   limit and a test's fsync does not wait on the build host's disk;
 # - node_modules, when the tree has a package lockfile and no node_modules;
 # - a rust-toolchain.toml's channel with its components and targets, and its targets otherwise;
 # - the environment: the runner's cargo, uv, and node, then ~/.local/go/bin and ~/.pixi/bin;
@@ -31,9 +32,13 @@ my $SLOT_WARN_AFTER_SECONDS = 5.0;
 my $SLOT_COUNT = 4;
 my $SCCACHE_CACHE_SIZE = '50G';
 my $CARGO_BUILD_JOBS = '4';
-# <pid>-<start ticks> stays under 17 bytes for pid_max 327680 and a 10-digit tick count, so
-# /tmp/<prefix><pid>-<start> stays under the 25-byte budget the tmux socket path leaves for TMPDIR.
-my $TEMP_PREFIX = 'rr-';
+# TMPDIR lives on a tmpfs, where fsync returns at once. On a disk each fsync waits for the drive's flush, and a
+# test that commits a SQLite database dozens of times then runs past the 0.1 s unit-test limit.
+# The name is <prefix><pid>-<start ticks> in hex: at most 16 bytes for pid_max 327680 and a start below 2^36
+# ticks. The path then stays within the 25 bytes that the release trial's tmux socket path leaves for TMPDIR
+# under a 6-digit uid.
+my $TEMP_ROOT = '/dev/shm/';
+my $TEMP_PREFIX = 'r';
 
 my $PR_SET_PDEATHSIG = 1;
 my $PR_SET_CHILD_SUBREAPER = 36;
@@ -211,18 +216,18 @@ sub temp_dir_in_use {
 }
 
 sub remove_stale_temp_dirs {
-  for my $entry (glob '/tmp/' . "$TEMP_PREFIX*") {
+  for my $entry (glob "$TEMP_ROOT$TEMP_PREFIX*") {
     next unless -d $entry && -o $entry;
-    my ($owner_pid, $owner_start) = $entry =~ m{\A/tmp/\Q$TEMP_PREFIX\E([0-9]+)-([0-9]+)\z} or next;
-    my $start_ticks = process_start_ticks($owner_pid);
-    next if defined $start_ticks && $start_ticks == $owner_start;
+    my ($owner_pid, $owner_start) = $entry =~ m{\A\Q$TEMP_ROOT$TEMP_PREFIX\E([0-9a-f]+)-([0-9a-f]+)\z} or next;
+    my $start_ticks = process_start_ticks(hex $owner_pid);
+    next if defined $start_ticks && sprintf('%x', $start_ticks) eq $owner_start;
     next if temp_dir_in_use($entry);
     rmtree $entry;    # A concurrent remote-exec may have removed it first.
   }
 }
 
 sub create_temp_dir {
-  my $path = '/tmp/' . $TEMP_PREFIX . $$ . '-' . process_start_ticks($$);
+  my $path = sprintf '%s%s%x-%x', $TEMP_ROOT, $TEMP_PREFIX, $$, process_start_ticks($$);
   fail(2, "cannot create the command's temp directory $path: $!") unless mkdir $path, 0700;
   return $path;
 }

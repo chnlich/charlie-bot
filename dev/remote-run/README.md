@@ -76,7 +76,8 @@ caches, and `remote-exec.pl`.
 5. The remote preparation, before the command:
    - a synthetic git commit with an `origin/main` ref in the synced tree, refreshed after every
      upload, so tests that read git history pass;
-   - a short `TMPDIR` under `/tmp`, so tmux socket paths stay under the 108-byte `sun_path` limit;
+   - a short `TMPDIR` on the `/dev/shm` tmpfs, so tmux socket paths stay under the 108-byte
+     `sun_path` limit and a test's fsync does not wait on the build host's disk;
    - `node_modules`, when the tree has a `package-lock.json` and no `node_modules`;
    - a `rust-toolchain.toml`'s channel with its components and targets when the channel is
      missing, and its targets otherwise;
@@ -90,8 +91,8 @@ caches, and `remote-exec.pl`.
 `remote-exec.pl` makes itself a child subreaper on the build host, so daemons the command starts,
 tmux servers included, are adopted instead of reparented away. It stops every descendant when the
 command ends: SIGTERM, SIGKILL two seconds later, and a stop after eight seconds that names what
-outlived it. Its TMPDIR directories under `/tmp` carry the owning process id and start time, and
-a later run reclaims the ones no process holds.
+outlived it. Its TMPDIR directories under `/dev/shm` carry the owning process id and start time,
+and a later run reclaims the ones no process holds.
 
 ## Exit codes
 

@@ -2,9 +2,9 @@
 //! run, and stops with exit 2 while the host is unset. It starts every run with a connectivity check whose Tailscale
 //! login link exits 86, whose other failures and its time limit exit 87, and whose stop text names the `/host-auth`
 //! page; after the check, the command's exit code comes back unchanged, 255 included. `dev/remote-run/remote-exec.pl`
-//! runs a payload with a short TMPDIR under /tmp, passes the command's exit code through, and stops the descendants the
-//! command leaves behind. The local work guard's refusal names the same host and prints in full while the host is
-//! unset.
+//! runs a payload with a short TMPDIR on the /dev/shm tmpfs, passes the command's exit code through, and stops the
+//! descendants the command leaves behind. The local work guard's refusal names the same host and prints in full while
+//! the host is unset.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -377,7 +377,7 @@ fn a_command_gets_a_short_tmpdir_and_its_own_exit_code() {
   let payload = payload(".", "", &["sh", "-c", "printf '%s' \"$TMPDIR\"; exit 42"]);
   let run = run_remote_exec(&env, &payload);
   assert_eq!(run.code, 42, "{}", run.describe());
-  assert!(run.stdout.starts_with("/tmp/rr-"), "{}", run.describe());
+  assert!(run.stdout.starts_with("/dev/shm/r"), "{}", run.describe());
   assert!(run.stdout.len() <= 25, "{}", run.describe());
 }
 

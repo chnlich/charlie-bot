@@ -143,6 +143,7 @@ function buildAppContext() {
   const noop = (name) => () => { calls.push(name); };
   const context = {
     document,
+    registerOfflineShell() {},
     SESSION_ID: 'session-a',
     SESSION_BOOTSTRAP: null,
     THINKING_SINCE: null,

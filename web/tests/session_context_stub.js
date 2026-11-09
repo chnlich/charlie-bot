@@ -15,6 +15,13 @@ const CRON_JS = readPackageStatic('features', 'cron', 'cron.js');
 // sidebar module, so the harnesses run it before those too.
 const VIEW_REQUESTS_JS = readStatic('view-requests.js');
 
+// The right-hand panels' offline mark, as config.js builds it.
+const OFFLINE_PANEL_MARK_HTML = '<span class="inline-flex text-amber-400" title="断网，联网后加载" role="img" ' +
+        'aria-label="断网，联网后加载"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<path d="M7 18h10a4 4 0 0 0 .9-7.9A6 6 0 0 0 6.3 9.2 4.5 4.5 0 0 0 7 18z"/>' +
+        '<line x1="3" y1="3" x2="21" y2="21"/></svg></span>';
+
 function baseSessionContext(overrides = {}) {
   const elements = overrides.elements || new Map();
   const localStorageData = new Map(Object.entries(overrides.localStorageItems || {}));
@@ -139,6 +146,7 @@ function baseSessionContext(overrides = {}) {
     NOT_CURRENT_LABEL: '不是最新',
     NO_LOCAL_COPY_LABEL: '没有本机副本',
     OFFLINE_PANEL_LABEL: '断网，联网后加载',
+    OFFLINE_PANEL_MARK: OFFLINE_PANEL_MARK_HTML,
     crypto: {randomUUID: () => 'archive-request-id'},
     PROGRESS_BAR_FILL_CLASS: 'h-full rounded-full transition-all duration-300',
     saveDraftNow: () => {},
@@ -402,6 +410,7 @@ function buildUsageElements() {
 }
 
 module.exports = {
+  OFFLINE_PANEL_MARK: OFFLINE_PANEL_MARK_HTML,
   baseSessionContext,
   buildSidebarIndicatorContext,
   createChatSidebarContext,

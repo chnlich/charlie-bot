@@ -711,7 +711,6 @@ test('offline, the status panel shows the offline label and asks the server for 
 
   rig.context.openSessionStatusPanel({id: 'session-c', profile: 'worker'}, []);
 
-  const texts = rig.panel.children.map((child) => child.textContent);
-  assert.ok(texts.includes(rig.context.OFFLINE_PANEL_LABEL), texts.join(' | '));
+  assert.equal(rig.panel.innerHTML, rig.context.OFFLINE_PANEL_MARK);
   assert.deepEqual(rig.statusGets, [], 'no status request goes out while offline');
 });

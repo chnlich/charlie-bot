@@ -175,7 +175,7 @@
     if (!tray) return;
     if (pageIsOffline()) {
       tray.classList.remove('hidden');
-      tray.textContent = OFFLINE_PANEL_LABEL;
+      tray.innerHTML = OFFLINE_PANEL_MARK;
       return;
     }
     if (!trayTriggers.length) {

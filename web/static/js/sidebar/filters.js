@@ -242,6 +242,12 @@ function pageScreen() {
 
 function restoreSidebarFromUrl() {
   renderSidebarFilterPills();
+  if (INITIAL_SESSIONS === null) {
+    // The shell carries no rows: the list is the listing route's, from a stored copy or the network.
+    const urlShellFilter = new URLSearchParams(location.search).get('filter');
+    switchSidebarFilter(getRestorableSidebarFilters().includes(urlShellFilter) ? urlShellFilter : 'all');
+    return;
+  }
   const initialSessions = Sidebar.expandSessionColumns(INITIAL_SESSIONS);
   Sidebar.resyncSessionUnread(initialSessions);
   const params = new URLSearchParams(location.search);

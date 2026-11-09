@@ -345,7 +345,7 @@
     const view = document.getElementById(VIEW_ID);
     if (view) {
       clearChildren(view);
-      if (pageIsOffline()) view.appendChild(textSpan('text-slate-400', OFFLINE_PANEL_LABEL));
+      if (pageIsOffline()) view.innerHTML = OFFLINE_PANEL_MARK;
       else if (panelSessionId) statusPanelBody(view);
     }
     renderWaitingBadge();

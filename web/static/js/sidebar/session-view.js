@@ -1177,7 +1177,7 @@ function paintUsageOffline() {
   document.getElementById('usage-cost').classList.add('hidden');
   const text = document.getElementById('usage-text');
   text.classList.remove('hidden');
-  text.textContent = OFFLINE_PANEL_LABEL;
+  text.innerHTML = OFFLINE_PANEL_MARK;
 }
 
 function renderUsageFromData(usage) {

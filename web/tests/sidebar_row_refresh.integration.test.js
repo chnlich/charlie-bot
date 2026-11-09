@@ -80,6 +80,7 @@ function buildPage({painted = [], filter = 'all'} = {}) {
       });
     }),
     location: {href: '', protocol: 'http:', host: 'localhost', search: '', reload: () => { page.reloads += 1; }},
+    reloadAfterDroppingShell: () => { page.reloads += 1; },
     localStorage: {getItem: () => null, setItem() {}, removeItem() {}},
     sessionStorage: {
       getItem: (key) => page.storage.get(key) ?? null,

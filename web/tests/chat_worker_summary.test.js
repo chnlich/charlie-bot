@@ -357,3 +357,81 @@ test('a run_end separator reads its duration for 0 seconds and no duration for n
   assert.match(separator(0), />run ended &middot; 0s</);
   assert.match(separator(null), />run ended</);
 });
+
+// The page's document carries a loader in the module's place (web/templates/js/chat/worker-summary.js).
+// The loader stands a card node in the For-you list until the module lands; the module adopts that node
+// and paints the summary a render or poll carried before it arrived. These cases run the loader first and
+// then the module in the same context, the order the page meets them.
+function loadThroughDocument({worker = false} = {}) {
+  const rendering = loadChatRendering();
+  const loaded = [];
+  const context = {
+    document: {
+      createElement(tag) { return mkEl(tag); },
+      getElementById() { return null; },
+    },
+    Date: FakeDate,
+    SESSION_ID: 'sess-1',
+    SESSION_BOOTSTRAP: {session: {profile: worker ? 'worker' : 'web'}},
+    loadPageScripts(key, paths) {
+      loaded.push({key, paths});
+      return new Promise(() => {});
+    },
+    console: {error: (message) => loaded.push({error: message})},
+    escapeHtml: (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;'),
+    escapeHtmlAttr: (s) => String(s).replace(/"/g, '&quot;'),
+    formatBubbleTime: (iso) => 'T(' + iso + ')',
+    toolNameChipHtml: (name) => '<toolchip>' + name + '</toolchip>',
+    Chat: {
+      ForYou: {
+        registerSummaryCardRenderer(renderer) { this.summaryCard = renderer; },
+        replaceSummaryCardRenderer(renderer) { this.summaryCard = renderer; },
+      },
+      formatRunDuration: rendering.Chat.formatRunDuration,
+      isLongPassage: rendering.Chat.isLongPassage,
+      toolInputSummary: (name, input) => ({text: 'input of ' + name + ':' + input.command, limit: 0}),
+      evidenceLinkHtml: (label, href) => (href ? '<a>' + label + '</a>' : '<span>' + label + '</span>'),
+      evidenceHref: (ref) => (ref ? '/evidence/' + encodeURIComponent(ref) : ''),
+      deliveryLinksHtml: () => '<a>Diff</a>',
+    },
+  };
+  context.Chat.wire = function(globals, chatOnly) { Object.assign(this, globals, chatOnly || {}); };
+  context.globalThis = context;
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'templates/js/chat/worker-summary.js'), 'utf8'),
+    context, {filename: 'templates/js/chat/worker-summary.js'});
+  const land = () => vm.runInContext(read('worker-summary.js'), context, {filename: 'worker-summary.js'});
+  return {context, loaded, land};
+}
+
+test('a web session never fetches the card and shows no card node', () => {
+  const {context, loaded} = loadThroughDocument();
+  assert.deepEqual(Array.from(loaded), []);
+  assert.equal(context.Chat.workerSummaryCard(), null);
+  context.Chat.applyWorkerSummary(null);
+  assert.deepEqual(Array.from(loaded), [], 'no summary means no worker session, so no download');
+  assert.equal(context.Chat.workerSummaryCard(), null);
+});
+
+test('a worker session starts the download while the document parses', () => {
+  const {loaded} = loadThroughDocument({worker: true});
+  assert.equal(loaded.length, 1);
+  assert.equal(loaded[0].key, 'chat-worker-summary');
+  assert.equal(loaded[0].paths.length, 1);
+  assert.equal(loaded[0].paths[0], '/static/js/chat/worker-summary.js');
+});
+
+test('the module adopts the loader card and paints the summary it queued', () => {
+  const {context, land} = loadThroughDocument({worker: true});
+  const summary = {task_state: 'open', runs: [], closing: {work: null, review: null}, links: {}};
+
+  // The session render feeds the summary before the module arrives: the loader stands its node in the list.
+  context.Chat.mountWorkerSummary(summary);
+  const stood = context.Chat.workerSummaryCard();
+  assert.match(stood.className, /worker-summary/);
+  assert.equal(stood.innerHTML, '');
+
+  land();
+  assert.equal(context.Chat.workerSummaryCard(), stood, 'the module fills the node the list already holds');
+  assert.match(stood.innerHTML, /Open|Running/);
+});

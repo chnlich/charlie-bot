@@ -23,7 +23,7 @@ use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events;
 use charliebot_store::metadata::{
   BASE_BRANCH_FIELD, ColdReadSpec, KEEP_WORKTREE_FIELD, PARENT_SESSION_ID, REPO_PATH_FIELD, SessionMetadata,
-  TaskProfile, TaskSpec, TaskType,
+  TASK_TYPE_FIELD, TaskProfile, TaskSpec, TaskType,
 };
 use charliebot_store::run_records::RunOutcomeKind;
 use charliebot_store::{CreateTask, StoreError, TaskCaller};
@@ -66,11 +66,11 @@ pub const SESSION_MESSAGE_PATH: &str = "/api/internal/session-message";
 pub const SESSION_MESSAGE_TARGET_SESSION_ID_FIELD: &str = "target_session_id";
 
 /// The delegate request's field names. The route validates against them and the CLI builds the body from them, so each
-/// name is spelled once, here. `keep_worktree`, `repo_path` and `base_branch` name the stored task record too, so
-/// `charliebot_store::metadata` defines them.
+/// name is spelled once, here. `keep_worktree`, `repo_path`, `base_branch` and `task_type` name the stored task
+/// record too, so `charliebot_store::metadata` defines them.
 pub const DELEGATE_SESSION_ID_FIELD: &str = "session_id";
 pub const DELEGATE_DESCRIPTION_FIELD: &str = "description";
-pub const DELEGATE_TASK_TYPE_FIELD: &str = "task_type";
+pub const DELEGATE_TASK_TYPE_FIELD: &str = TASK_TYPE_FIELD;
 pub const DELEGATE_REPO_PATH_FIELD: &str = REPO_PATH_FIELD;
 pub const DELEGATE_BASE_BRANCH_FIELD: &str = BASE_BRANCH_FIELD;
 pub const DELEGATE_TASK_SPEC_FILE_FIELD: &str = "task_spec_file";

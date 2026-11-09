@@ -1132,6 +1132,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::BASE_BRANCH_FIELD`.",
   },
+  OwnerRow { name: "task_type", owner: "runtime/store", hint: "Use `charliebot_store::metadata::TASK_TYPE_FIELD`." },
   OwnerRow {
     name: "worktree_path",
     owner: "runtime/store",

@@ -95,6 +95,9 @@ pub const REPO_PATH_FIELD: &str = "repo_path";
 /// The branch a task, its plan and its run record branch from. The delegate request, the improve request, the plan
 /// request and the run record carry the same name, so it is spelled once, here.
 pub const BASE_BRANCH_FIELD: &str = "base_branch";
+/// The task-spec field holding a task's kind. The delegate request, the session write request and the stored task
+/// record carry the same name, so it is spelled once, here.
+pub const TASK_TYPE_FIELD: &str = "task_type";
 /// The response field holding a session's display name. The approval day view's rows and the voice recordings page's
 /// rows carry the same name, so it is spelled once, here.
 pub const SESSION_NAME_FIELD: &str = "session_name";

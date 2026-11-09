@@ -20,8 +20,8 @@ use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{
-  BASE_BRANCH_FIELD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SessionMetadata, TaskApprover, TaskProfile, TaskSpec,
-  TaskType, WORK_STATE,
+  BASE_BRANCH_FIELD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SessionMetadata, TASK_TYPE_FIELD, TaskApprover, TaskProfile,
+  TaskSpec, TaskType, WORK_STATE,
 };
 use charliebot_store::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, PatchTask, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreResult,
@@ -54,7 +54,7 @@ const TASK_SPEC_FIELDS: &[Field] = &[
   Field::optional("context_refs", FieldType::StringList),
   Field::optional(REPO_PATH_FIELD, FieldType::NullableString),
   Field::optional(BASE_BRANCH_FIELD, FieldType::NullableString),
-  Field::optional("task_type", FieldType::NullableEnum(TASK_TYPE_CHOICES)),
+  Field::optional(TASK_TYPE_FIELD, FieldType::NullableEnum(TASK_TYPE_CHOICES)),
   Field::optional(KEEP_WORKTREE_FIELD, FieldType::Boolean),
   Field::optional(
     "cold_read",
@@ -149,7 +149,7 @@ where
 
 /// `TaskSpec._cold_read_matches_task_type`: a cold-read task carries `cold_read`, and no other task does.
 fn cold_read_matches_task_type(task: &Map<String, Value>) -> Option<String> {
-  let task_type = task.get("task_type").and_then(Value::as_str);
+  let task_type = task.get(TASK_TYPE_FIELD).and_then(Value::as_str);
   let has_cold_read = task.get("cold_read").is_some_and(|value| !value.is_null());
   if task_type == Some(TaskType::ColdRead.as_str()) {
     return (!has_cold_read).then(|| "a cold-read task requires cold_read".to_string());

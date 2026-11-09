@@ -514,7 +514,11 @@ fn child_workers(args: &[String]) -> Result<i32, String> {
       id if !id.is_empty() => id,
       _ => directory.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
     };
-    rows.push(vec![id, or_default(task.get("task_type")), or_default(task.get(metadata::REPO_PATH_FIELD))]);
+    rows.push(vec![
+      id,
+      or_default(task.get(metadata::TASK_TYPE_FIELD)),
+      or_default(task.get(metadata::REPO_PATH_FIELD)),
+    ]);
   }
   for row in &rows {
     emit_nul(row)?;

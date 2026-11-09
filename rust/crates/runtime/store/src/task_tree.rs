@@ -184,8 +184,8 @@ struct RecordFact<'a> {
 /// The `task_record_changed` fact of one record write on `session_id`.
 fn task_record_changed_event(actor: &str, session_id: &str, fact: RecordFact<'_>) -> Value {
   let content = match &fact.basis_text {
-    Some(line) => format!("任务说明已更新 · 依据：{line}"),
-    None => "任务说明已更新".to_string(),
+    Some(line) => format!("Task record updated · basis: {line}"),
+    None => "Task record updated".to_string(),
   };
   control_events::build_control_event(
     event_types::TASK_RECORD_CHANGED,
@@ -3932,7 +3932,7 @@ pub(crate) mod tests {
     assert!(fact["before_sha256"].is_string());
     assert!(fact["after_sha256"].is_string());
     assert_ne!(fact["before_sha256"], fact["after_sha256"]);
-    assert_eq!(fact["content"].as_str(), Some("任务说明已更新"));
+    assert_eq!(fact["content"].as_str(), Some("Task record updated"));
   }
 
   #[tokio::test]
@@ -4070,7 +4070,7 @@ pub(crate) mod tests {
     assert_eq!(fact["actor"].as_str(), Some("agent"));
     assert_eq!(fact["caller_session_id"].as_str(), Some(manager.id.as_str()));
     assert_eq!(fact["basis"], json!({"session_id": manager.id, "event_id": basis_id}));
-    assert_eq!(fact["content"].as_str(), Some("任务说明已更新 · 依据：raise the cap to ten"));
+    assert_eq!(fact["content"].as_str(), Some("Task record updated · basis: raise the cap to ten"));
 
     // Without a basis, or with a basis that is no user message of the caller: 422.
     for basis in [None, Some("not-an-event".to_string())] {

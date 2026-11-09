@@ -474,7 +474,7 @@ test('a task_record_changed message re-reads the goal from the status GET', asyn
   const before = rig.statusGets.length;
 
   rig.page.goal = 'Raised the cap to ten';
-  rig.context.observeTaskRecordMessages([{role: 'system', kind: 'task_record_changed', content: '任务说明已更新'}]);
+  rig.context.observeTaskRecordMessages([{role: 'system', kind: 'task_record_changed', content: 'Task record updated'}]);
   await settled();
 
   assert.equal(rig.statusGets.length, before + 1, 'the panel re-fetched');

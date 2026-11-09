@@ -133,7 +133,7 @@ test('a task_record_changed message refreshes the open dialog from the effective
       : block),
   };
   await h.context.observeTaskContextMessages([
-    {role: 'system', kind: 'task_record_changed', content: '任务说明已更新'},
+    {role: 'system', kind: 'task_record_changed', content: 'Task record updated'},
   ]);
 
   assert.equal(h.calls.length, 4, 'the event re-fetched session detail and effective prompt');

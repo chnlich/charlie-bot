@@ -184,7 +184,9 @@
         color: #0f172a; white-space: pre-line; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
       }
       .${PREFIX}-item-controls { display: flex; flex-direction: column; gap: 4px; }
-      .${PREFIX}-item-controls button { padding: 3px 6px; font-size: 10px; }
+      /* The tray's per-comment Edit and Remove controls take the 24 px pointer floor. At 10 px text
+         and 3 px padding they draw 19 px tall on their own, under the floor WCAG 2.5.8 sets. */
+      .${PREFIX}-item-controls button { padding: 3px 6px; font-size: 10px; min-height: 24px; }
       .${PREFIX}-edit { min-height: 58px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important; }
       .${PREFIX}-reason { display: none; padding: 6px 7px; border-radius: 6px; background: #fef2f2; color: #b91c1c; }
       .${PREFIX}-toast {

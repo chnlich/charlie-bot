@@ -14,6 +14,7 @@ use std::sync::Arc;
 use charliebot_registry::backend::{BackendLifecycle, BackendTraits, BackendTypeRegistration, ResumeStyle};
 use charliebot_registry::{Registry, RegistryError};
 
+use charliebot_claude_code::USAGE_SOURCE;
 use charliebot_claude_code::claude_lifecycle::ClaudeCliLifecycle;
 
 /// The package label the composition list registers this backend's package under.
@@ -38,5 +39,5 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     translate_fallback: false,
   })?;
   registry.option_schema("cc-openai-compatible", options::SCHEMA)?;
-  registry.attribute_backend_type("cc-openai-compatible", "Claude Code")
+  registry.attribute_backend_type("cc-openai-compatible", USAGE_SOURCE)
 }

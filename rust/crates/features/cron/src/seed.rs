@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::home_init;
 use charliebot_core::repo_root::CONFIGS_DIR_NAME;
 use serde_json::Value;
 
@@ -58,18 +59,18 @@ pub fn seed_default_cron_tasks(
     let (name, _) = split_entry(entry)?;
     let path = loader::cron_path(cfg, &name);
     if path.exists() {
-      report.push(SeedReport { name, status: "exists" });
+      report.push(SeedReport { name, status: home_init::SEED_EXISTS });
       continue;
     }
     if dry_run {
-      report.push(SeedReport { name, status: "would-create" });
+      report.push(SeedReport { name, status: home_init::SEED_WOULD_CREATE });
       continue;
     }
     let (_, body) = split_entry(entry)?;
     // Persist the pointer unchanged: the pointed file owns the prompt body,
     // and this host file carries only its path.
     loader::write_task_file(&path, &body).map_err(|error| format!("{}: {error}", path.display()))?;
-    report.push(SeedReport { name, status: "created" });
+    report.push(SeedReport { name, status: home_init::SEED_CREATED });
   }
   Ok(report)
 }

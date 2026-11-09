@@ -296,6 +296,7 @@ fn chat_page(
     "initial_sessions_json": INITIAL_SESSIONS_PLACEHOLDER,
     "session_bootstrap_json": SESSION_BOOTSTRAP_PLACEHOLDER,
     "active_session": active_session,
+    "shell": shell,
     "pending_draft": pending_draft,
     "event_count": event_count,
     "backend_options": cfg.backends.options

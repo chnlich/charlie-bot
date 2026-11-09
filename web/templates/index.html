@@ -153,8 +153,10 @@
 
     <!-- ==================== MAIN AREA ==================== -->
     <main class="flex-1 flex flex-col min-w-0">
-      {% if active_session %}
-
+      {% if active_session or shell %}
+      <!-- The shell (`?session=` with an empty value, the document the offline shell's worker stores) renders
+           this column with no session in it: the open path fills the name, the events link and the input area in
+           from the first screen it fetches (session-view.js). -->
       <!-- Tab bar -->
       <header class="flex items-center border-b border-slate-700 bg-slate-800/50 px-4">
         <button class="hamburger-btn p-2 -ml-2 mr-1 rounded-lg hover:bg-slate-700 transition-colors" onclick="toggleMobileSidebar()" title="Menu">
@@ -163,7 +165,7 @@
         <div class="flex-1 min-w-0 py-3 cursor-pointer hover:text-blue-300 transition-colors"
              onclick="startRename(event, SESSION_ID)" title="Click to rename">
           <h2 class="text-sm font-semibold truncate"
-              id="header-session-name">{{ active_session.name }}</h2>
+              id="header-session-name">{{ active_session.name if active_session else '' }}</h2>
         </div>
         <!-- Backend badge -->
         <span id="backend-badge" class="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300 border border-slate-600 whitespace-nowrap" title="Session backend">{{ active_backend_label or active_backend }}</span>
@@ -182,7 +184,7 @@
                 onclick="compactContext()"
                 class="ml-2 text-xs px-2 py-1 rounded border border-slate-600 text-slate-300 hover:bg-slate-700 transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
                 {% set compact = backend_compact.get(active_backend_type) %}{% if not (compact and compact.manual) %}disabled{% endif %}>Compact</button>
-        <a href="/sessions/{{ active_session.id }}/events"
+        <a href="{{ '/sessions/' ~ active_session.id ~ '/events' if active_session else '#' }}"
            class="border border-slate-600 rounded text-slate-400 hover:bg-slate-700
                   hover:text-slate-200 transition-colors ml-2 mr-2"
            title="View JSONL events">
@@ -256,7 +258,7 @@
         <div id="pending-triggers-tray" class="hidden px-4 pt-3"></div>
 
         <!-- Input (a worker node takes no messages). -->
-        <div id="input-area" class="border-t border-slate-700 p-4 {% if active_session.profile == 'worker' %}hidden{% endif %}">
+        <div id="input-area" class="border-t border-slate-700 p-4 {% if active_session and active_session.profile == 'worker' %}hidden{% endif %}">
           <!-- The last send did not reach the server; its text is back in the composer (chat/input.js). -->
           <div id="pending-send-note" class="hidden text-xs text-amber-400 mb-2"></div>
           <!-- Uploaded file chips -->

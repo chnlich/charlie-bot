@@ -634,6 +634,33 @@ export function viewBackgroundRep(filter) {
   };
 }
 
+// What the held rep's tab saw, for a timeout's message: who answered each clicked session's first screen (the
+// page's record carries the worker flag, the stored-at mark and the byte count), whether the worker controls the
+// page, when the last switch rendered against the restore, and the frames since the restore.
+async function heldTabEvidence(tab, clicks, restoreAt, shownAt) {
+  const bootstraps = [...tab.requests.values()]
+    .filter((request) => clicks.some((target) => request.url.endsWith(`/api/sessions/${target.id}/bootstrap`)))
+    .map((request) => ({
+      session: /\/api\/sessions\/([^/]+)\//.exec(request.url)?.[1]?.slice(0, 8),
+      startedMsFromRestore: request.startAt - restoreAt,
+      finishedMsFromRestore: request.finishAt === null ? null : request.finishAt - restoreAt,
+      status: request.status,
+      wireStatus: request.wireStatus,
+      fromServiceWorker: request.fromServiceWorker,
+      storedAt: request.storedAt,
+      bytes: request.bytes,
+      failed: request.failed,
+    }));
+  const controller = await tab.hasWorkerController().catch((error) => `unknown: ${error.message}`);
+  return JSON.stringify({
+    shownMsFromRestore: shownAt - restoreAt,
+    controller,
+    bootstraps,
+    frameTypes: tab.frameBreakdown(restoreAt - 2000, Infinity),
+    sockets: tab.sockets.map((entry) => ({ atMsFromRestore: entry.at - restoreAt, url: entry.url.slice(-40) })),
+  });
+}
+
 // Scenario 4: a 30 s held blackout with five switch clicks inside it.
 export async function heldBlackoutRep(ctx) {
   const { api, sessions } = ctx;
@@ -665,7 +692,9 @@ export async function heldBlackoutRep(ctx) {
       () => catchupFrameFor(tab, last.id, restoreAt),
       SHOW_TIMEOUT_MS,
       `catchup_complete for ${last.id}`,
-    );
+    ).catch(async (caught) => {
+      throw new Error(`${caught.message}; the tab: ${await heldTabEvidence(tab, clicks, restoreAt, shownAt)}`);
+    });
     const catchupAt = catchup.at;
     // A socket the page opened for the target after the restore. Today's page opens one; fix F's kept socket names the
     // session in its catch-up instead, so none is expected and the recovery is timed from the render.

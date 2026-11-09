@@ -97,15 +97,15 @@ backends:
   #  - id: human-communication
   #    label: Human communication
   #    rule: priority
-  #    members: [claude-fable, claude-opus]
+  #    members: [claude-opus, claude-fable]
   #  - id: cheap
   #    label: Cheap
   #    rule: rotate
-  #    members: [claude-sonnet, codex-luna]
+  #    members: [claude-haiku, claude-sonnet, codex-luna]
   #  - id: fast
   #    label: Fast
   #    rule: rotate
-  #    members: [claude-sonnet, devin-swe2]
+  #    members: [claude-haiku, claude-sonnet]
   # Calls: each key names an option id, a pool id, or `session`. A key left out keeps the call's default, given
   # below. [session] marks the keys that accept `session`, the backend of the session that starts the call; for those,
   # a left-out key behaves the same as `session`. A backend that a request names, or a router answer
@@ -183,6 +183,12 @@ backends:
       label: "CC · Sonnet 5"
       type: cc-claude
       model: claude-sonnet-5
+      billing: subscription
+      effort: xhigh
+    - id: claude-haiku
+      label: "CC · Haiku 5.5"
+      type: cc-claude
+      model: claude-haiku-5-5
       billing: subscription
       effort: xhigh
 

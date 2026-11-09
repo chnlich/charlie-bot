@@ -1570,7 +1570,7 @@ mod tests {
   #[ignore = "integration"]
   fn the_example_rules_file_loads_with_the_loader() {
     let example = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../configs/router.example.yaml"));
-    let rules = load_rules(example, &["light".to_string()]).unwrap();
+    let rules = load_rules(example, &["cheap".to_string()]).unwrap();
 
     assert_eq!(rules.roles["implement"], ["routine", "context"]);
     assert_eq!(rules.roles.len(), 3);

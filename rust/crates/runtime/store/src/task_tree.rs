@@ -87,16 +87,48 @@ pub enum TaskCaller {
 
 /// The task fields of one PATCH body. A `None` field is absent from the body and changes nothing; `Some(None)` is an
 /// explicit null, which clears the field where the model allows it. `name` has no explicit null: a `None` name
-/// changes nothing.
+/// changes nothing. A `task` write merges: only the keys its body names change, and `Some(None)` clears the record.
 #[derive(Clone, Debug, Default)]
 pub struct PatchTask {
   pub name: Option<String>,
   pub task_parent_id: Option<Option<String>>,
   pub profile: Option<Option<TaskProfile>>,
-  pub task: Option<Option<TaskSpec>>,
+  pub task: Option<Option<TaskRecordWrite>>,
   pub subtree_prompt: Option<Option<String>>,
   pub node_prompt: Option<Option<String>>,
   pub approver: Option<TaskApprover>,
+  /// The event id a task-record write names as its basis. A session writing its own record must
+  /// name one user message of its own chat; the other callers may omit it.
+  pub basis_event_id: Option<String>,
+}
+
+/// One task-record write: the values the body carries and the keys it names, in body order.
+#[derive(Clone, Debug)]
+pub struct TaskRecordWrite {
+  pub spec: TaskSpec,
+  pub keys: Vec<String>,
+}
+
+/// The three record fields a run-token write may change: the goal, the acceptance and the context refs.
+const AGENT_RECORD_KEYS: [&str; 3] = ["goal", "acceptance", "context_refs"];
+
+impl TaskRecordWrite {
+  /// Whether every key the body names is one of the three record fields. Only such a write is
+  /// exempt from the structural-runners 409 and open to a run token.
+  pub fn record_only(&self) -> bool {
+    self.keys.iter().all(|key| AGENT_RECORD_KEYS.contains(&key.as_str()))
+  }
+
+  /// The keys the write lands on the record, in body order, each once.
+  fn fields(&self) -> Vec<String> {
+    let mut fields = Vec::new();
+    for key in &self.keys {
+      if !fields.contains(key) {
+        fields.push(key.clone());
+      }
+    }
+    fields
+  }
 }
 
 impl PatchTask {
@@ -109,6 +141,67 @@ impl PatchTask {
       || self.node_prompt.is_some();
     !other_fields && self.task_parent_id.is_some() != self.approver.is_some()
   }
+
+  /// Whether the body writes only the task record, with no other field: the change a run token may
+  /// make to a task at or below its own.
+  fn sets_task_record_only(&self) -> bool {
+    self.task.is_some()
+      && self.name.is_none()
+      && self.task_parent_id.is_none()
+      && self.profile.is_none()
+      && self.subtree_prompt.is_none()
+      && self.node_prompt.is_none()
+      && self.approver.is_none()
+  }
+}
+
+/// The SHA-256 of a task record's three fields, the digest the `task_record_changed` fact carries
+/// before and after a write.
+fn task_record_digest(task: &TaskSpec) -> String {
+  let payload = json!({"goal": task.goal, "acceptance": task.acceptance, "context_refs": task.context_refs});
+  control_events::sha256_hex(&payload.to_string())
+}
+
+/// The refusal for a session writing its own task record without a basis, or with a basis that is
+/// not one of its own user messages.
+const TASK_RECORD_BASIS_REQUIRED: &str =
+  "writing this session's own task record requires --basis: the event id of the user message you are carrying out";
+
+/// The most characters the task-record fact's basis text keeps from the basis message's first line.
+const BASIS_TEXT_MAX_CHARS: usize = 200;
+
+/// The `task_record_changed` fact of one record write on `session_id`. `basis` names the caller
+/// message the write carries out and `basis_text` its first line, `fields` the keys the write
+/// changed, and the digests the record's three fields before and after.
+fn task_record_changed_event(
+  actor: &str,
+  session_id: &str,
+  caller_session_id: Option<&str>,
+  basis: Option<Value>,
+  basis_text: Option<String>,
+  fields: &[String],
+  before: Option<String>,
+  after: Option<String>,
+) -> Value {
+  let content = match &basis_text {
+    Some(line) => format!("任务说明已更新 · 依据：{line}"),
+    None => "任务说明已更新".to_string(),
+  };
+  control_events::build_control_event(
+    event_types::TASK_RECORD_CHANGED,
+    actor,
+    session_id,
+    None,
+    None,
+    [
+      ("content".to_string(), json!(content)),
+      ("caller_session_id".to_string(), json!(caller_session_id)),
+      ("basis".to_string(), basis.unwrap_or(Value::Null)),
+      ("fields".to_string(), json!(fields)),
+      ("before_sha256".to_string(), json!(before)),
+      ("after_sha256".to_string(), json!(after)),
+    ],
+  )
 }
 
 /// The structural guards that the task dispatcher answers for a node (`TaskTreeManager.pending_input_blockers` and
@@ -1705,11 +1798,14 @@ impl Store {
 
   /// Apply one PATCH of a task node with its structural guards (`TaskTreeManager.patch_task`).
   ///
-  /// The operator may change every field. An agent may only reparent within its own subtree, with a body that sets
-  /// `task_parent_id` alone; the move keeps each moved session's subtree rules (`task_reparent`). Under the control
-  /// lock the guards of every node that the change moves or restructures are collected before any write, so a refusal
-  /// writes nothing. The field write is a fresh read-modify-write, so a rename that landed meanwhile is kept. Each
-  /// prompt scope then swaps its reference and lands its fact. A changed parent leaves one `task_reparented` fact.
+  /// The operator may change every field. An agent may reparent within its own subtree with a body that sets
+  /// `task_parent_id` alone (the move keeps each moved session's subtree rules, `task_reparent`), or write the task
+  /// record of a task at or below its own: a child's record with an optional basis, its own record only with a basis
+  /// that names one of the caller session's user messages. Under the control lock the guards of every node that the
+  /// change moves or restructures are collected before any write, so a refusal writes nothing. A record-only write is
+  /// never structural, so it lands while runs are in flight. The field write is a fresh read-modify-write, so a
+  /// rename that landed meanwhile is kept. Each prompt scope then swaps its reference and lands its fact. A changed
+  /// parent leaves one `task_reparented` fact; a changed record leaves one `task_record_changed` fact.
   pub async fn patch_task(
     &self,
     session_id: &str,
@@ -1717,9 +1813,14 @@ impl Store {
     caller: TaskCaller,
     guards: &dyn StructuralBlockers,
   ) -> StoreResult<SessionMetadata> {
+    let agent_record_write = matches!(&caller, TaskCaller::Agent { .. })
+      && patch.sets_task_record_only()
+      && matches!(patch.task, Some(Some(_)));
     let caller_session_id = match &caller {
       TaskCaller::Operator => None,
-      TaskCaller::Agent { session_id: caller_task } if patch.sets_only_agent_fields() => Some(caller_task.clone()),
+      TaskCaller::Agent { session_id: caller_task }
+        if patch.sets_only_agent_fields() || agent_record_write =>
+        Some(caller_task.clone()),
       _ => return Err(StoreError::forbidden("task metadata mutations require operator credentials")),
     };
     let guard = self.control_lock().await;
@@ -1727,17 +1828,38 @@ impl Store {
     self.invalidate_tree_index();
     let index = self.tree_index()?;
     let meta = self.load_task_meta(session_id).await?;
-    let PatchTask { name, task_parent_id, profile, task, subtree_prompt, node_prompt, approver } = patch;
+    let PatchTask { name, task_parent_id, profile, task: record_write, subtree_prompt, node_prompt, approver, basis_event_id } =
+      patch;
     if let Some(caller_task) = caller_session_id.as_deref() {
-      // An approver change keeps the task's parent, so the same subtree scope decides it.
-      let new_parent = match &task_parent_id {
-        Some(parent) => parent.as_deref(),
-        None => meta.task_parent_id.as_deref(),
-      };
-      task_reparent::check_agent_scope(&index, &self.cfg.charliebot_home, caller_task, session_id, new_parent)?;
+      if agent_record_write {
+        // The three record fields are the widest a run token writes; checking needs no store state.
+        let record_only =
+          record_write.as_ref().and_then(|write| write.as_ref()).is_some_and(|write| write.record_only());
+        if !record_only {
+          return Err(StoreError::forbidden("task metadata mutations require operator credentials"));
+        }
+        if caller_task == session_id {
+          self.check_own_task_record_basis(caller_task, basis_event_id.as_deref())?;
+        } else if !task_below_caller(&index, caller_task, session_id)? {
+          return Err(StoreError::forbidden(task_reparent::AGENT_REPARENT_SCOPE_REFUSAL));
+        }
+      }
+      if !agent_record_write {
+        // An approver change keeps the task's parent, so the same subtree scope decides it.
+        let new_parent = match &task_parent_id {
+          Some(parent) => parent.as_deref(),
+          None => meta.task_parent_id.as_deref(),
+        };
+        task_reparent::check_agent_scope(&index, &self.cfg.charliebot_home, caller_task, session_id, new_parent)?;
+      }
     }
+    let record_only = matches!(record_write.as_ref(), Some(Some(write)) if write.record_only());
     let prompt_changed = subtree_prompt.is_some() || node_prompt.is_some();
-    let structural = task.is_some() || profile.is_some() || task_parent_id.is_some();
+    let structural = match &record_write {
+      Some(Some(_)) => !record_only,
+      Some(None) => true,
+      None => profile.is_some() || task_parent_id.is_some(),
+    };
     let mut blockers = if structural { self.structural_blockers(session_id, guards)? } else { Vec::new() };
     let children = index.children.get(&Some(session_id.to_string())).map_or(0, Vec::len);
     if profile == Some(Some(TaskProfile::Worker)) && meta.profile != TaskProfile::Worker && children > 0 {
@@ -1777,6 +1899,13 @@ impl Store {
       self.ensure_prompt_changed_fact_locked(&guard, session_id, &meta, PromptScope::Subtree).await?;
     }
     let carried_ref = carried.as_ref().map(|rule| rule.reference.clone());
+    let record_before = meta.task.as_ref().map(task_record_digest);
+    let record_changed = record_write.is_some();
+    let record_fields = match &record_write {
+      Some(Some(write)) => write.fields(),
+      Some(None) => vec!["task".to_string()],
+      None => Vec::new(),
+    };
     let moved = self
       .mutate_fresh(session_id, false, true, move |meta| {
         if let Some(name) = name {
@@ -1785,10 +1914,42 @@ impl Store {
         if let Some(Some(profile)) = profile {
           meta.profile = profile;
         }
-        if let Some(task) = task {
-          // A task body carries no approver, so the replaced record keeps the approver it had.
-          let approver = meta.task.as_ref().map_or(TaskApprover::User, |current| current.approver);
-          meta.task = task.map(|task| TaskSpec { approver, ..task });
+        match record_write {
+          // A record write merges: the keys the body names change, and the record keeps the
+          // approver it had — a task body carries no approver.
+          Some(Some(write)) => {
+            let TaskSpec {
+              goal,
+              acceptance,
+              context_refs,
+              repo_path,
+              base_branch,
+              task_type,
+              keep_worktree,
+              cold_read,
+              ..
+            } = write.spec;
+            let mut next = meta.task.take().unwrap_or_default();
+            for key in &write.keys {
+              match key.as_str() {
+                "goal" => next.goal = goal.clone(),
+                "acceptance" => next.acceptance = acceptance.clone(),
+                "context_refs" => next.context_refs = context_refs.clone(),
+                "repo_path" => next.repo_path = repo_path.clone(),
+                "base_branch" => next.base_branch = base_branch.clone(),
+                "task_type" => next.task_type = task_type,
+                "keep_worktree" => next.keep_worktree = keep_worktree,
+                "cold_read" => next.cold_read = cold_read.clone(),
+                _ => {}
+              }
+            }
+            if next.task_type == Some(TaskType::ColdRead) && next.cold_read.is_none() {
+              return Err(StoreError::invalid("a cold-read task requires cold_read"));
+            }
+            meta.task = Some(next);
+          }
+          Some(None) => meta.task = None,
+          None => {}
         }
         if let Some(approver) = approver {
           meta.task.get_or_insert_with(TaskSpec::default).approver = approver;
@@ -1805,6 +1966,35 @@ impl Store {
       })
       .await?
       .ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
+    if record_changed {
+      let after = moved.task.as_ref().map(task_record_digest);
+      // A record write carries its basis: the caller's message it names. An operator is the write's
+      // authority itself, so its write names none.
+      let basis_pair = caller_session_id
+        .as_deref()
+        .zip(basis_event_id.as_deref().filter(|event_id| !event_id.is_empty()))
+        .map(|(caller_task, event_id)| (caller_task.to_string(), event_id.to_string()));
+      let basis_text = match basis_pair.as_ref() {
+        Some((basis_session, event_id)) => match self.basis_message_first_line(basis_session, event_id) {
+          Ok(line) => line,
+          Err(error) => {
+            return Err(StoreError::Failure(format!("reading the task-record write's basis message: {error}")));
+          }
+        },
+        None => None,
+      };
+      let event = task_record_changed_event(
+        caller_actor(&caller),
+        session_id,
+        caller_session_id.as_deref(),
+        basis_pair.as_ref().map(|(session_id, event_id)| json!({"session_id": session_id, "event_id": event_id})),
+        basis_text,
+        &record_fields,
+        record_before,
+        after,
+      );
+      self.append_control_fact(&guard, session_id, event).await?;
+    }
     self.invalidate_tree_index();
     if carried.is_some() {
       self.ensure_prompt_changed_fact_locked(&guard, session_id, &moved, PromptScope::Subtree).await?;
@@ -1831,6 +2021,40 @@ impl Store {
     let event_type = if prompt_changed { event_types::PROMPT_CHANGED } else { "task_updated" };
     self.notify_task_tree_changed(session_id, Some(event_type)).await;
     self.read_metadata_fresh(session_id)?.ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))
+  }
+
+  /// The basis a session's own task-record write needs: the event id of one of the caller session's
+  /// user messages. A missing basis, or one that names no user message of `caller_task`, is a 422.
+  fn check_own_task_record_basis(&self, caller_task: &str, basis: Option<&str>) -> StoreResult<()> {
+    let Some(event_id) = basis else {
+      return Err(StoreError::unprocessable(TASK_RECORD_BASIS_REQUIRED));
+    };
+    let is_user_message = self.load_chat_events_sync(caller_task)?.iter().any(|event| {
+      event.get("id").and_then(CompactValue::as_str) == Some(event_id)
+        && event.get("type").and_then(CompactValue::as_str) == Some(event_types::USER)
+    });
+    if is_user_message {
+      Ok(())
+    } else {
+      Err(StoreError::unprocessable(format!(
+        "the basis event {event_id} is not a user message of session {caller_task}"
+      )))
+    }
+  }
+
+  /// The first line of the chat event `event_id` of `session_id`, for the task-record fact's basis
+  /// text. An event with no textual content contributes none.
+  fn basis_message_first_line(&self, session_id: &str, event_id: &str) -> StoreResult<Option<String>> {
+    let line = self
+      .load_chat_events_sync(session_id)?
+      .iter()
+      .find(|event| event.get("id").and_then(CompactValue::as_str) == Some(event_id))
+      .and_then(|event| event.get("content").and_then(CompactValue::as_str))
+      .and_then(|content| content.lines().next())
+      .map(str::trim)
+      .filter(|line| !line.is_empty())
+      .map(|line| line.chars().take(BASIS_TEXT_MAX_CHARS).collect::<String>());
+    Ok(line)
   }
 
   /// Swap one prompt scope's reference and land its fact. An interrupted earlier edit (metadata ahead of its fact) is
@@ -3617,6 +3841,258 @@ pub(crate) mod tests {
     fn undelivered_report_blockers(&self, _session_id: &str) -> StoreResult<Vec<String>> {
       Ok(Vec::new())
     }
+  }
+
+  /// The task record of a create request: a goal, an acceptance line and a context ref, plus a repo.
+  fn record_task(goal: &str) -> TaskSpec {
+    TaskSpec {
+      goal: goal.to_string(),
+      acceptance: vec!["A1 holds".to_string()],
+      context_refs: vec!["docs/plan.md".to_string()],
+      repo_path: Some("/tmp/repo".to_string()),
+      ..TaskSpec::default()
+    }
+  }
+
+  fn record_write(pairs: &[(&str, Value)]) -> Option<Option<TaskRecordWrite>> {
+    let mut spec = TaskSpec::default();
+    let mut keys = Vec::new();
+    for (key, value) in pairs {
+      keys.push((*key).to_string());
+      match *key {
+        "goal" => spec.goal = value.as_str().expect("goal text").to_string(),
+        "acceptance" => spec.acceptance = serde_json::from_value(value.clone()).unwrap(),
+        "context_refs" => spec.context_refs = serde_json::from_value(value.clone()).unwrap(),
+        "repo_path" => spec.repo_path = serde_json::from_value(value.clone()).unwrap(),
+        other => panic!("unsupported test key {other}"),
+      }
+    }
+    Some(Some(TaskRecordWrite { spec, keys }))
+  }
+
+  fn record_fact(store: &Store, session_id: &str) -> Value {
+    store
+      .load_chat_events_sync(session_id)
+      .unwrap()
+      .into_iter()
+      .find(|event| event["type"].as_str() == Some(event_types::TASK_RECORD_CHANGED))
+      .expect("the record fact is written")
+      .to_value()
+  }
+
+  #[tokio::test]
+  async fn patch_task_merges_the_record_keys_the_body_names_and_lands_its_fact() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = store
+      .create_task(
+        CreateTask {
+          request_id: "record-node".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: Some(record_task("old goal")),
+          name: Some("Record node".to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::Operator,
+        Map::new(),
+      )
+      .await
+      .unwrap();
+    let guards = StubGuards::default();
+
+    let merged = PatchTask { task: record_write(&[("acceptance", json!(["A2 holds"]))]), ..Default::default() };
+    store.patch_task(&node.id, merged, TaskCaller::Operator, &guards).await.unwrap();
+
+    let after = store.read_metadata_fresh(&node.id).unwrap().unwrap();
+    let task = after.task.as_ref().expect("the record survives a merge");
+    assert_eq!(task.goal, "old goal", "a key the body leaves out stays");
+    assert_eq!(task.acceptance, vec!["A2 holds".to_string()]);
+    assert_eq!(task.context_refs, vec!["docs/plan.md".to_string()]);
+    assert_eq!(task.repo_path.as_deref(), Some("/tmp/repo"));
+    let fact = record_fact(&store, &node.id);
+    assert_eq!(fact["actor"].as_str(), Some("user"));
+    assert!(fact["caller_session_id"].is_null());
+    assert!(fact["basis"].is_null());
+    assert_eq!(fact["fields"], json!(["acceptance"]));
+    assert!(fact["before_sha256"].is_string());
+    assert!(fact["after_sha256"].is_string());
+    assert_ne!(fact["before_sha256"], fact["after_sha256"]);
+    assert_eq!(fact["content"].as_str(), Some("任务说明已更新"));
+  }
+
+  #[tokio::test]
+  async fn a_record_only_write_lands_while_a_run_is_in_flight_and_a_structural_one_does_not() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = store
+      .create_task(
+        CreateTask {
+          request_id: "running-node".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: Some(record_task("goal")),
+          name: Some("Running node".to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::Operator,
+        Map::new(),
+      )
+      .await
+      .unwrap();
+    let guard = store.control_lock().await;
+    store.register_run_locked(&guard, &node.id, queued_run(&node.id, "r-1"), None).await.unwrap();
+    drop(guard);
+    let blocker = format!("{} has an unprocessed input", node.id);
+    let guards = StubGuards { pending: HashMap::from([(node.id.clone(), vec![blocker.clone()])]) };
+
+    let record = PatchTask { task: record_write(&[("goal", json!("new goal"))]), ..Default::default() };
+    store.patch_task(&node.id, record, TaskCaller::Operator, &guards).await.unwrap();
+    assert_eq!(store.read_metadata_fresh(&node.id).unwrap().unwrap().task.as_ref().unwrap().goal, "new goal");
+
+    let run_blocker = "run r-1 is queued (pending dispatch)".to_string();
+    let mut expected = vec![blocker.clone(), run_blocker];
+    expected.sort();
+    for patch in [
+      PatchTask { task: record_write(&[("repo_path", json!("/tmp/other"))]), ..Default::default() },
+      PatchTask { task: Some(None), ..Default::default() },
+    ] {
+      let error = store.patch_task(&node.id, patch, TaskCaller::Operator, &guards).await.unwrap_err();
+      assert_eq!(error.status_code(), Some(409));
+      assert_eq!(error.blockers(), Some(expected.as_slice()));
+    }
+    assert_eq!(store.read_metadata_fresh(&node.id).unwrap().unwrap().task.as_ref().unwrap().repo_path.as_deref(), Some("/tmp/repo"));
+  }
+
+  /// The run-token record writes: a child's record with the basis optional, the caller's own record
+  /// only behind a basis that names one of its user messages, and never a task outside its scope.
+  #[tokio::test]
+  async fn a_run_token_writes_records_at_and_below_its_own_task() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let manager = store
+      .create_task(
+        CreateTask {
+          request_id: "record-manager".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: Some(record_task("manager goal")),
+          name: Some("Record manager".to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::Operator,
+        Map::new(),
+      )
+      .await
+      .unwrap();
+    let child = store
+      .create_task(
+        CreateTask {
+          request_id: "record-child".to_string(),
+          task_parent_id: Some(manager.id.clone()),
+          profile: TaskProfile::Manager,
+          task: Some(record_task("child goal")),
+          name: Some("Record child".to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::Operator,
+        Map::new(),
+      )
+      .await
+      .unwrap();
+    let outside = store
+      .create_task(
+        CreateTask {
+          request_id: "record-outside".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: Some(record_task("outside goal")),
+          name: Some("Record outside".to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::Operator,
+        Map::new(),
+      )
+      .await
+      .unwrap();
+    store
+      .persist_and_broadcast(&manager.id, json!({"type": event_types::USER, "content": "raise the cap to ten"}))
+      .await
+      .unwrap();
+    let basis_id = store
+      .load_chat_events_sync(&manager.id)
+      .unwrap()
+      .into_iter()
+      .find(|event| event["type"].as_str() == Some(event_types::USER))
+      .map(|event| event["id"].as_str().expect("the event id").to_string())
+      .expect("the user message");
+    let caller = TaskCaller::Agent { session_id: manager.id.clone() };
+    let guards = StubGuards::default();
+    let write_own = |basis: Option<String>| PatchTask {
+      task: record_write(&[("goal", json!("own goal"))]),
+      basis_event_id: basis,
+      ..Default::default()
+    };
+
+    // The child's record: a parent write carries no basis.
+    store
+      .patch_task(&child.id, write_own(None), caller.clone(), &guards)
+      .await
+      .unwrap();
+    assert_eq!(store.read_metadata_fresh(&child.id).unwrap().unwrap().task.unwrap().goal, "own goal");
+
+    // The caller's own record: the basis names the user message, and the fact says so.
+    store.patch_task(&manager.id, write_own(Some(basis_id.clone())), caller.clone(), &guards).await.unwrap();
+    assert_eq!(store.read_metadata_fresh(&manager.id).unwrap().unwrap().task.unwrap().goal, "own goal");
+    let fact = record_fact(&store, &manager.id);
+    assert_eq!(fact["actor"].as_str(), Some("agent"));
+    assert_eq!(fact["caller_session_id"].as_str(), Some(manager.id.as_str()));
+    assert_eq!(fact["basis"], json!({"session_id": manager.id, "event_id": basis_id}));
+    assert_eq!(
+      fact["content"].as_str(),
+      Some("任务说明已更新 · 依据：raise the cap to ten")
+    );
+
+    // Without a basis, or with a basis that is no user message of the caller: 422.
+    for basis in [None, Some("not-an-event".to_string())] {
+      let error = store.patch_task(&manager.id, write_own(basis), caller.clone(), &guards).await.unwrap_err();
+      assert_eq!(error.status_code(), Some(422), "{error}");
+    }
+
+    // Another task's record and a write past the three record fields: the operator-credentials refusal.
+    let outside_write = PatchTask {
+      task: record_write(&[("goal", json!("outside goal"))]),
+      basis_event_id: Some(basis_id),
+      ..Default::default()
+    };
+    let error = store.patch_task(&outside.id, outside_write, caller.clone(), &guards).await.unwrap_err();
+    assert_eq!(error.status_code(), Some(403));
+
+    let structural = PatchTask {
+      task: record_write(&[("goal", json!("x")), ("repo_path", json!("/tmp/other"))]),
+      basis_event_id: Some("irrelevant".to_string()),
+      ..Default::default()
+    };
+    let error = store.patch_task(&child.id, structural, caller.clone(), &guards).await.unwrap_err();
+    assert_eq!(error.status_code(), Some(403));
+
+    // An explicit null clears the record, an operator-only structural write.
+    let error = store
+      .patch_task(&child.id, PatchTask { task: Some(None), ..Default::default() }, caller, &guards)
+      .await
+      .unwrap_err();
+    assert_eq!(error.status_code(), Some(403));
+    assert!(store.read_metadata_fresh(&child.id).unwrap().unwrap().task.is_some());
   }
 
   fn prompt_facts(store: &Store, session_id: &str) -> Vec<ChatEvent> {

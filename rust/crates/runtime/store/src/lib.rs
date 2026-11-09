@@ -72,8 +72,8 @@ pub use streaming::{SIDEBAR_CHANNEL, STREAM_COALESCE_INTERVAL, StreamingManager,
 pub use task_reparent::{AGENT_REPARENT_SCOPE_REFUSAL, CALLER_SESSION_ID_FIELD};
 pub use task_tree::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, NodeFacts, PatchTask, PromptScope, StructuralBlockers,
-  TASK_CREATE_REQUEST_ID_REQUIRED, TaskCaller, TaskFacts, TaskState, TaskTreeActivity, TaskTreePage, TaskTreeRow,
-  TaskTreeSnapshot, is_read_only_exempt,
+  TASK_CREATE_REQUEST_ID_REQUIRED, TaskCaller, TaskFacts, TaskRecordWrite, TaskState, TaskTreeActivity, TaskTreePage,
+  TaskTreeRow, TaskTreeSnapshot, is_read_only_exempt,
 };
 
 use std::fmt;
@@ -94,6 +94,8 @@ pub enum StoreError {
   Invalid(String),
   /// A refused caller identity or role: `TaskForbiddenError` and `DelegationBlockedError` (403).
   Forbidden(String),
+  /// A semantically refused write: the request is well formed but the stored state rejects it (422).
+  Unprocessable(String),
   /// Machine input to the archived node with this session id: `TaskArchivedError` (409). Its detail is the sentence
   /// alone, so it carries no blocker list.
   Archived(String),
@@ -122,6 +124,11 @@ impl StoreError {
     Self::Forbidden(detail.into())
   }
 
+  /// Construct a client-visible refusal of a well-formed write the stored state rejects.
+  pub fn unprocessable(detail: impl Into<String>) -> Self {
+    Self::Unprocessable(detail.into())
+  }
+
   /// Construct the refusal for machine input to the archived node `session_id`.
   pub fn archived(session_id: impl Into<String>) -> Self {
     Self::Archived(session_id.into())
@@ -139,6 +146,7 @@ impl StoreError {
       Self::NotFound(_) => Some(404),
       Self::Invalid(_) => Some(400),
       Self::Forbidden(_) => Some(403),
+      Self::Unprocessable(_) => Some(422),
       Self::Archived(_) | Self::Conflict(_) => Some(409),
     }
   }
@@ -155,9 +163,11 @@ impl StoreError {
 impl fmt::Display for StoreError {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self {
-      Self::Failure(message) | Self::NotFound(message) | Self::Invalid(message) | Self::Forbidden(message) => {
-        f.write_str(message)
-      }
+      Self::Failure(message)
+      | Self::NotFound(message)
+      | Self::Invalid(message)
+      | Self::Forbidden(message)
+      | Self::Unprocessable(message) => f.write_str(message),
       Self::Archived(session_id) => write!(f, "task {session_id} is archived"),
       Self::Conflict(blockers) => f.write_str(&blockers.join("; ")),
     }

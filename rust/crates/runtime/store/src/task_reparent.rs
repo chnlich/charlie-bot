@@ -145,7 +145,7 @@ mod tests {
   use super::*;
   use crate::metadata::{SessionMetadata, TaskProfile, TaskSpec};
   use crate::task_tree::tests::{archive_node, create_node, make_store, queued_run};
-  use crate::{PatchTask, Store, StructuralBlockers, TaskCaller};
+  use crate::{PatchTask, Store, StructuralBlockers, TaskCaller, TaskRecordWrite};
 
   const OPERATOR_REFUSAL: &str = "task metadata mutations require operator credentials";
 
@@ -365,7 +365,11 @@ mod tests {
     let bodies = [
       PatchTask { task_parent_id: parent.clone(), name: Some("renamed".to_string()), ..Default::default() },
       PatchTask { task_parent_id: parent.clone(), profile: Some(Some(TaskProfile::Manager)), ..Default::default() },
-      PatchTask { task_parent_id: parent.clone(), task: Some(Some(TaskSpec::default())), ..Default::default() },
+      PatchTask {
+        task_parent_id: parent.clone(),
+        task: Some(Some(TaskRecordWrite { spec: TaskSpec::default(), keys: vec!["goal".to_string()] })),
+        ..Default::default()
+      },
       PatchTask {
         task_parent_id: parent.clone(),
         subtree_prompt: Some(Some("rule\n".to_string())),

@@ -24,7 +24,7 @@ use charliebot_store::metadata::{
 };
 use charliebot_store::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, PatchTask, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreResult,
-  TASK_CREATE_REQUEST_ID_REQUIRED, TaskCaller,
+  TASK_CREATE_REQUEST_ID_REQUIRED, TaskCaller, TaskRecordWrite,
 };
 use charliebot_tasks::dispatch;
 use charliebot_tasks::routes::{COLD_READ_FIELDS, COLD_READ_SPEC_CLASS_NAME};
@@ -85,6 +85,7 @@ const PATCH_FIELDS: &[Field] = &[
   Field::optional("subtree_prompt", FieldType::NullableString),
   Field::optional("node_prompt", FieldType::NullableString),
   Field::optional("approver", FieldType::Literal(APPROVER_CHOICES)),
+  Field::optional("basis_event_id", FieldType::NullableString),
 ];
 const PATCH_SESSION: BodyModel = BodyModel::required(PATCH_FIELDS).forbid_extra();
 
@@ -131,6 +132,8 @@ struct PatchFields {
   node_prompt: Option<Option<String>>,
   #[serde(default)]
   approver: Option<TaskApprover>,
+  #[serde(default)]
+  basis_event_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -428,18 +431,26 @@ async fn patch(
 ) -> Result<Value, Response> {
   let values = validated_object(body, &PATCH_SESSION)?;
   let name_only = values.keys().all(|key| key == "name");
+  // The keys the task object names, in body order: a task write merges, so the store needs to know
+  // which keys the body carries, not only the values it deserializes into.
+  let task_keys = values.get("task").and_then(Value::as_object).map(|task| task.keys().cloned().collect::<Vec<_>>());
   let fields: PatchFields = typed(values)?;
   if name_only {
     return rename(features, session_id, fields.name).await;
   }
+  let write =
+    fields.task.map(|task| task.map(|spec| TaskRecordWrite { spec, keys: task_keys.unwrap_or_default() }));
   let patch = PatchTask {
     name: fields.name,
     task_parent_id: fields.task_parent_id,
     profile: fields.profile,
-    task: fields.task,
+    task: write,
     subtree_prompt: fields.subtree_prompt,
     node_prompt: fields.node_prompt,
     approver: fields.approver,
+    // The basis is an agent caller's field: an operator write is its own authority, so the
+    // operator's basis names nothing.
+    basis_event_id: fields.basis_event_id.filter(|_| caller.claims().is_some()),
   };
   let guards =
     dispatch::dispatcher(features).map_err(|error| responses::internal_error("RuntimeError", error.to_string()))?;
@@ -989,24 +1000,75 @@ mod tests {
     assert!(events.iter().any(|event| event["type"].as_str() == Some(event_types::PROMPT_CHANGED)));
   }
 
+  /// A run token writes only the three record fields of one task. A write past them, and one that
+  /// mixes the record with another field, stay the operator's.
   #[tokio::test]
   async fn task_field_patch_refuses_an_agent_caller() {
     let (_home, features) = feature_context();
     install_dispatcher(&features);
-    let body = RequestBody::Json(json!({"task": {"goal": "Synthetic task"}}));
+    let node = create_node(&features.store, "agent-task", None, TaskProfile::Manager).await;
     let caller = CallerIdentity::Agent {
       claims: RunTokenClaims {
-        session_id: "agent-task".to_string(),
+        session_id: node.id.clone(),
+        run_id: "agent-run".to_string(),
+        agent: "synthetic".to_string(),
+      },
+    };
+    for body in [
+      RequestBody::Json(json!({"task": {"goal": "Synthetic task", "repo_path": "/tmp/repo"}})),
+      RequestBody::Json(json!({"task": {"goal": "Synthetic task"}, "approver": "user"})),
+      RequestBody::Json(json!({"task": null})),
+    ] {
+      let response = patch(&features, &node.id, &caller, &body).await.unwrap_err();
+      let (status, detail) = answer(response).await;
+
+      assert_eq!(status, StatusCode::FORBIDDEN);
+      assert_eq!(detail, json!({"detail": "task metadata mutations require operator credentials"}));
+    }
+  }
+
+  /// The route wires a run-token record write through: its own record lands behind a basis that
+  /// names one of its user messages, and the changed task's chat log carries the fact.
+  #[tokio::test(flavor = "current_thread")]
+  async fn a_run_token_writes_its_own_task_record_behind_a_user_message_basis() {
+    let (_home, features) = feature_context();
+    install_dispatcher(&features);
+    let node = create_node(&features.store, "own-record", None, TaskProfile::Manager).await;
+    features
+      .store
+      .persist_and_broadcast(&node.id, json!({"type": "user", "content": "raise the cap to ten"}))
+      .await
+      .expect("the user message appends");
+    let basis_id = features
+      .store
+      .load_chat_events_sync(&node.id)
+      .expect("the chat log reads")
+      .into_iter()
+      .find(|event| event["type"].as_str() == Some("user"))
+      .map(|event| event["id"].as_str().expect("the event id").to_string())
+      .expect("the user message");
+    let caller = CallerIdentity::Agent {
+      claims: RunTokenClaims {
+        session_id: node.id.clone(),
         run_id: "agent-run".to_string(),
         agent: "synthetic".to_string(),
       },
     };
 
-    let response = patch(&features, "agent-task", &caller, &body).await.unwrap_err();
-    let (status, detail) = answer(response).await;
+    let body = RequestBody::Json(json!({"task": {"goal": "own goal"}, "basis_event_id": basis_id}));
+    let detail = patch(&features, &node.id, &caller, &body).await.expect("the write lands");
 
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(detail, json!({"detail": "task metadata mutations require operator credentials"}));
+    assert_eq!(detail["task"]["goal"], json!("own goal"));
+    let fact = features
+      .store
+      .load_chat_events_sync(&node.id)
+      .expect("the chat log reads")
+      .into_iter()
+      .find(|event| event["type"].as_str() == Some(charliebot_core::event_types::TASK_RECORD_CHANGED))
+      .expect("the record fact");
+    assert_eq!(fact["actor"].as_str(), Some("agent"));
+    assert_eq!(fact["basis"]["event_id"].as_str(), Some(basis_id.as_str()));
+    assert_eq!(fact.to_value()["fields"], json!(["goal"]));
   }
 
   /// A run token resolves through `resolve_caller` to the agent path: a move inside the caller's subtree lands with the

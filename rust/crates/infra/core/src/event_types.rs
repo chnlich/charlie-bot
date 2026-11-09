@@ -88,6 +88,8 @@ pub const TASK_CLOSED: &str = "task_closed";
 pub const TASK_REOPENED: &str = "task_reopened";
 /// A task moved to another parent. The moved task's chat events carry it; the chat renders nothing for it.
 pub const TASK_REPARENTED: &str = "task_reparented";
+/// A task's record changed. The changed task's chat events carry it with the write's basis.
+pub const TASK_RECORD_CHANGED: &str = "task_record_changed";
 pub const RUN_STOP_REQUESTED: &str = "run_stop_requested";
 pub const RUN_FINISHED: &str = "run_finished";
 pub const RUN_LAUNCH_WITHHELD: &str = "run_launch_withheld";

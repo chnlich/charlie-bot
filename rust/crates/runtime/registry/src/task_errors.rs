@@ -14,6 +14,9 @@ pub fn task_http_error(error: StoreError) -> Response {
     StoreError::Invalid(_) => responses::json(StatusCode::BAD_REQUEST, &serde_json::json!({ "detail": message })),
     StoreError::NotFound(_) => responses::json(StatusCode::NOT_FOUND, &serde_json::json!({ "detail": message })),
     StoreError::Forbidden(_) => responses::json(StatusCode::FORBIDDEN, &serde_json::json!({ "detail": message })),
+    StoreError::Unprocessable(_) => {
+      responses::json(StatusCode::UNPROCESSABLE_ENTITY, &serde_json::json!({ "detail": message }))
+    }
     StoreError::Conflict(blockers) => responses::json(
       StatusCode::CONFLICT,
       &serde_json::json!({ "detail": { "message": message, "blockers": blockers } }),

@@ -864,6 +864,10 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
         .unwrap_or_else(|| json!(""));
       json!({"role": "system", "content": format!("Task reopened: {}", event_str(&reason)).trim_end()})
     }
+    event_types::TASK_RECORD_CHANGED => {
+      let content = event.field("content").filter(|value| is_truthy(*value)).map(event_str).unwrap_or_default();
+      json!({"role": "system", "content": content})
+    }
     event_types::TASK_INPUT_ACKNOWLEDGED => render_task_input_acknowledged(event)?,
     _ => return Ok(None),
   };

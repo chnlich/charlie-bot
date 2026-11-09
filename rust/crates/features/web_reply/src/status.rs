@@ -673,7 +673,8 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
 /// records one web_status_confirmed event and cold reads nothing.
 pub async fn confirm_status(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_web_session(features, session_id).await?;
-  let status = stored_status(&meta)?.unwrap_or(WebStatus { now: None, waiting: Vec::new(), updated_at: UtcDateTime::now() });
+  let status =
+    stored_status(&meta)?.unwrap_or(WebStatus { now: None, waiting: Vec::new(), updated_at: UtcDateTime::now() });
   let scan_context = reply::file_link_scan_context(features, session_id)?;
   require_current_plan_links(features, &effective_waiting(&status), &scan_context)?;
   features
@@ -773,8 +774,7 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
   let meta = reply::require_web_session(features, session_id).await?;
   let stored = stored_status(&meta)?;
   // The Goal is the task record's, read-only here: the status no longer stores one.
-  let task_goal =
-    meta.task.as_ref().map(|task| task.goal.as_str()).filter(|goal| !goal.trim().is_empty());
+  let task_goal = meta.task.as_ref().map(|task| task.goal.as_str()).filter(|goal| !goal.trim().is_empty());
   let tree = tree_read_reply(&features.store, {
     let session_id = session_id.to_string();
     move |store| read_status_tree(store, &session_id)
@@ -1287,6 +1287,47 @@ mod tests {
     let notices: Vec<Value> =
       drain(&mut root_page).await.into_iter().filter(|frame| frame["type"] == SUBTREE_NOTICE_TYPE).collect();
     assert!(notices.is_empty(), "the root has no ancestor page to notify");
+  }
+
+  /// The status read's Goal is the task record's, read-only: it is present with no stored status,
+  /// and the stored payload carries none.
+  #[tokio::test]
+  async fn the_status_read_carries_the_task_record_goal_read_only() {
+    let home = Home::new();
+    let created = home
+      .features
+      .store
+      .create_task(
+        charliebot_store::CreateTask {
+          request_id: "goal-read".to_string(),
+          task_parent_id: None,
+          profile: charliebot_store::metadata::TaskProfile::Manager,
+          task: Some(charliebot_store::metadata::TaskSpec {
+            goal: "Deliver the release".to_string(),
+            acceptance: vec!["A1 holds".to_string()],
+            ..Default::default()
+          }),
+          name: Some("Goal read".to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        charliebot_store::TaskCaller::System,
+        Map::new(),
+      )
+      .await
+      .expect("the task node is created");
+    let sid = created.id;
+
+    let before = read_status(&home.features, &sid).await.expect("the read answers");
+    assert_eq!(before["goal"], json!("Deliver the release"));
+    assert!(before["web_status"].is_null());
+
+    set_status(&home.features, &sid, r#"{"now": "Running"}"#).await.expect("the set stores");
+    let body = read_status(&home.features, &sid).await.expect("the read answers");
+    assert_eq!(body["goal"], json!("Deliver the release"));
+    assert!(body["web_status"].get("goal").is_none(), "{}", body["web_status"]);
+    assert_eq!(body["web_status"]["now"], json!("Running"));
   }
 
   #[tokio::test]

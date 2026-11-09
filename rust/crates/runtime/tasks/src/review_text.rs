@@ -88,11 +88,7 @@ pub fn review_landing_target(base_branch: &str) -> String {
 /// The review prompt's context lines: the later messages when the worker got any, the worker summary
 /// when one was extracted, and the delegator's hint (`review_context_lines`). The spec is the Task
 /// record block of the reviewer's own instructions.
-pub fn review_context_lines(
-  later_messages: &str,
-  worker_summary: Option<&str>,
-  delegator_hint: &str,
-) -> Vec<String> {
+pub fn review_context_lines(later_messages: &str, worker_summary: Option<&str>, delegator_hint: &str) -> Vec<String> {
   let mut lines = Vec::new();
   if !later_messages.is_empty() {
     lines.push(later_messages.to_string());

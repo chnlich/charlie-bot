@@ -50,7 +50,9 @@ fn manager_reset_note(session_id: &str, reason: &str, context: Option<&str>) -> 
 
 #[cfg(test)]
 mod tests {
-  use super::{backend_switch_reset_reason, manager_context_reset_note, manager_switch_reset_note, worker_switch_reset_note};
+  use super::{
+    backend_switch_reset_reason, manager_context_reset_note, manager_switch_reset_note, worker_switch_reset_note,
+  };
 
   #[test]
   fn backend_switch_reason_names_both_backends() {
@@ -81,9 +83,9 @@ mod tests {
   #[test]
   fn the_manager_switch_note_keeps_the_context_paths() {
     let note = manager_switch_reset_note(SESSION_ID, "synthetic reason", "at /synthetic/log");
-    assert!(note.contains(
-      "the split of your task included.\nat /synthetic/log\nState lives in `charliebot web status show`"
-    ));
+    assert!(
+      note.contains("the split of your task included.\nat /synthetic/log\nState lives in `charliebot web status show`")
+    );
     assert!(!note.contains("data/chat_events.jsonl"));
   }
 

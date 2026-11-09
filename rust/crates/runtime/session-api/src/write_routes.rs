@@ -438,8 +438,7 @@ async fn patch(
   if name_only {
     return rename(features, session_id, fields.name).await;
   }
-  let write =
-    fields.task.map(|task| task.map(|spec| TaskRecordWrite { spec, keys: task_keys.unwrap_or_default() }));
+  let write = fields.task.map(|task| task.map(|spec| TaskRecordWrite { spec, keys: task_keys.unwrap_or_default() }));
   let patch = PatchTask {
     name: fields.name,
     task_parent_id: fields.task_parent_id,

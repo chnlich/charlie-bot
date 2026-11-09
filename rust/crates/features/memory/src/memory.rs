@@ -469,7 +469,11 @@ fn normalized_name(name: &str) -> String {
 
 /// The selection's segments: the full text sorted by [`entry_order_key`], then the usage line when
 /// the audience is the worker's.
-fn selection_from_parts(audience: &'static str, repo_basename: Option<String>, mut full: Vec<&Entry>) -> MemorySelection {
+fn selection_from_parts(
+  audience: &'static str,
+  repo_basename: Option<String>,
+  mut full: Vec<&Entry>,
+) -> MemorySelection {
   full.sort_by(|a, b| entry_order_key(a).cmp(&entry_order_key(b)));
   let mut segments = Vec::new();
   if !full.is_empty() {

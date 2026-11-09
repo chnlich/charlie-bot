@@ -170,20 +170,20 @@ const TASK_RECORD_BASIS_REQUIRED: &str =
 /// The most characters the task-record fact's basis text keeps from the basis message's first line.
 const BASIS_TEXT_MAX_CHARS: usize = 200;
 
-/// The `task_record_changed` fact of one record write on `session_id`. `basis` names the caller
-/// message the write carries out and `basis_text` its first line, `fields` the keys the write
-/// changed, and the digests the record's three fields before and after.
-fn task_record_changed_event(
-  actor: &str,
-  session_id: &str,
-  caller_session_id: Option<&str>,
+/// What one record write carries into its fact: the caller session, the basis message and its
+/// first line, the changed keys, and the record digest before and after.
+struct RecordFact<'a> {
+  caller_session_id: Option<&'a str>,
   basis: Option<Value>,
   basis_text: Option<String>,
-  fields: &[String],
+  fields: &'a [String],
   before: Option<String>,
   after: Option<String>,
-) -> Value {
-  let content = match &basis_text {
+}
+
+/// The `task_record_changed` fact of one record write on `session_id`.
+fn task_record_changed_event(actor: &str, session_id: &str, fact: RecordFact<'_>) -> Value {
+  let content = match &fact.basis_text {
     Some(line) => format!("任务说明已更新 · 依据：{line}"),
     None => "任务说明已更新".to_string(),
   };
@@ -195,11 +195,11 @@ fn task_record_changed_event(
     None,
     [
       ("content".to_string(), json!(content)),
-      ("caller_session_id".to_string(), json!(caller_session_id)),
-      ("basis".to_string(), basis.unwrap_or(Value::Null)),
-      ("fields".to_string(), json!(fields)),
-      ("before_sha256".to_string(), json!(before)),
-      ("after_sha256".to_string(), json!(after)),
+      ("caller_session_id".to_string(), json!(fact.caller_session_id)),
+      ("basis".to_string(), fact.basis.unwrap_or(Value::Null)),
+      ("fields".to_string(), json!(fact.fields)),
+      ("before_sha256".to_string(), json!(fact.before)),
+      ("after_sha256".to_string(), json!(fact.after)),
     ],
   )
 }
@@ -1818,9 +1818,9 @@ impl Store {
       && matches!(patch.task, Some(Some(_)));
     let caller_session_id = match &caller {
       TaskCaller::Operator => None,
-      TaskCaller::Agent { session_id: caller_task }
-        if patch.sets_only_agent_fields() || agent_record_write =>
-        Some(caller_task.clone()),
+      TaskCaller::Agent { session_id: caller_task } if patch.sets_only_agent_fields() || agent_record_write => {
+        Some(caller_task.clone())
+      }
       _ => return Err(StoreError::forbidden("task metadata mutations require operator credentials")),
     };
     let guard = self.control_lock().await;
@@ -1828,8 +1828,16 @@ impl Store {
     self.invalidate_tree_index();
     let index = self.tree_index()?;
     let meta = self.load_task_meta(session_id).await?;
-    let PatchTask { name, task_parent_id, profile, task: record_write, subtree_prompt, node_prompt, approver, basis_event_id } =
-      patch;
+    let PatchTask {
+      name,
+      task_parent_id,
+      profile,
+      task: record_write,
+      subtree_prompt,
+      node_prompt,
+      approver,
+      basis_event_id,
+    } = patch;
     if let Some(caller_task) = caller_session_id.as_deref() {
       if agent_record_write {
         // The three record fields are the widest a run token writes; checking needs no store state.
@@ -1986,12 +1994,16 @@ impl Store {
       let event = task_record_changed_event(
         caller_actor(&caller),
         session_id,
-        caller_session_id.as_deref(),
-        basis_pair.as_ref().map(|(session_id, event_id)| json!({"session_id": session_id, "event_id": event_id})),
-        basis_text,
-        &record_fields,
-        record_before,
-        after,
+        RecordFact {
+          caller_session_id: caller_session_id.as_deref(),
+          basis: basis_pair
+            .as_ref()
+            .map(|(session_id, event_id)| json!({"session_id": session_id, "event_id": event_id})),
+          basis_text,
+          fields: &record_fields,
+          before: record_before,
+          after,
+        },
       );
       self.append_control_fact(&guard, session_id, event).await?;
     }
@@ -3965,7 +3977,10 @@ pub(crate) mod tests {
       assert_eq!(error.status_code(), Some(409));
       assert_eq!(error.blockers(), Some(expected.as_slice()));
     }
-    assert_eq!(store.read_metadata_fresh(&node.id).unwrap().unwrap().task.as_ref().unwrap().repo_path.as_deref(), Some("/tmp/repo"));
+    assert_eq!(
+      store.read_metadata_fresh(&node.id).unwrap().unwrap().task.as_ref().unwrap().repo_path.as_deref(),
+      Some("/tmp/repo")
+    );
   }
 
   /// The run-token record writes: a child's record with the basis optional, the caller's own record
@@ -4045,10 +4060,7 @@ pub(crate) mod tests {
     };
 
     // The child's record: a parent write carries no basis.
-    store
-      .patch_task(&child.id, write_own(None), caller.clone(), &guards)
-      .await
-      .unwrap();
+    store.patch_task(&child.id, write_own(None), caller.clone(), &guards).await.unwrap();
     assert_eq!(store.read_metadata_fresh(&child.id).unwrap().unwrap().task.unwrap().goal, "own goal");
 
     // The caller's own record: the basis names the user message, and the fact says so.
@@ -4058,10 +4070,7 @@ pub(crate) mod tests {
     assert_eq!(fact["actor"].as_str(), Some("agent"));
     assert_eq!(fact["caller_session_id"].as_str(), Some(manager.id.as_str()));
     assert_eq!(fact["basis"], json!({"session_id": manager.id, "event_id": basis_id}));
-    assert_eq!(
-      fact["content"].as_str(),
-      Some("任务说明已更新 · 依据：raise the cap to ten")
-    );
+    assert_eq!(fact["content"].as_str(), Some("任务说明已更新 · 依据：raise the cap to ten"));
 
     // Without a basis, or with a basis that is no user message of the caller: 422.
     for basis in [None, Some("not-an-event".to_string())] {

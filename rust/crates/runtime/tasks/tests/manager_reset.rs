@@ -11,7 +11,11 @@ use charliebot_tasks::test_support::recovery_support::{BACKEND_ID, Stack, result
 use serde_json::json;
 
 fn manager_task() -> TaskSpec {
-  TaskSpec { goal: "Deliver the synthetic release".to_string(), task_type: Some(TaskType::Implement), ..TaskSpec::default() }
+  TaskSpec {
+    goal: "Deliver the synthetic release".to_string(),
+    task_type: Some(TaskType::Implement),
+    ..TaskSpec::default()
+  }
 }
 
 /// Hold a native id whose recorded prompt hash no longer matches, so the next turn starts a fresh native conversation.

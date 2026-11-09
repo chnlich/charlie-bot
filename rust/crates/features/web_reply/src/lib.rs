@@ -62,14 +62,13 @@ fn normalize_web_status(value: &mut Value) -> bool {
   // The Goal left the status: a stored status that still carries the retired key reads and drops it,
   // the way the retired context-work flag reads.
   status.retain(|name, _| ["now", "waiting", "updated_at"].contains(&name.as_str()));
-  for name in ["now"] {
-    if status.get(name).is_some_and(|field| {
-      !field.is_null() && (!field.is_string() || field.as_str().is_some_and(|text| text.trim().is_empty()))
-    }) {
-      return false;
-    }
-    status.entry(name.to_string()).or_insert(Value::Null);
+  let name = "now";
+  if status.get(name).is_some_and(|field| {
+    !field.is_null() && (!field.is_string() || field.as_str().is_some_and(|text| text.trim().is_empty()))
+  }) {
+    return false;
   }
+  status.entry(name.to_string()).or_insert(Value::Null);
   let waiting = status.entry("waiting".to_string()).or_insert_with(|| json!([]));
   let Some(items) = waiting.as_array_mut() else { return false };
   for item in items {

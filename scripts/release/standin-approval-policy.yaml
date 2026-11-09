@@ -1,5 +1,5 @@
-# The stand-in approval policy table of the release trial's home and the switch rehearsal's home. The release under test
-# refuses a home without config.d/approval.d/policy.yaml; trial.sh and switch-rehearsal.sh copy this file there.
+# The stand-in approval policy table of a synthetic home, such as the release lab's and the serve trial's. A release
+# refuses a home without config.d/approval.d/policy.yaml; those homes copy this file there.
 # This is a fixture: a live home keeps its own table.
 consequence_tests:
   - {id: irreversible, rank: 1, text: "Deletes data with no backup, or sends what cannot be recalled."}

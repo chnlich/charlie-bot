@@ -1,8 +1,8 @@
 //! The release's test world: one throwaway repository, release root, log root, stub directory and artifact fixture
 //! under a sandbox of stub commands. Each test builds its own, so nothing touches ~/charliebot-releases or the live
-//! home. A stub `gh` answers the authentication, repository, run and artifact queries from files beside it, and
-//! CHARLIEBOT_RELEASE_TRIAL and CHARLIEBOT_RELEASE_REHEARSAL name stub stage commands, so the preflight refusals and
-//! the stage verdicts run without downloading a binary or starting a server.
+//! home. A stub `gh` answers the authentication, repository, run and artifact queries from files beside it, and a stub
+//! `systemctl` keeps the user manager untouched, so the preflight refusals and the stage verdicts run without
+//! downloading a real binary.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -103,9 +103,6 @@ impl World {
     let gh = sandbox.bin().join("gh");
     harness::copy_file(&stub_file("gh"), &gh);
     fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).expect("make the gh stub executable");
-    for (name, code) in [("stage-ok", 0), ("stage-fail", 3)] {
-      sandbox.stub(name, &format!("exit {code}\n"));
-    }
     fs::create_dir(releases.join("prior")).expect("the prior release");
     symlink("prior", releases.join("current")).expect("the current link");
 
@@ -113,8 +110,6 @@ impl World {
     env.insert("CHARLIEBOT_RELEASE_LOG_DIR".to_string(), logs.display().to_string());
     // The host release lock lives under the sandbox, never beside the user's home.
     env.insert("CHARLIEBOT_RELEASE_LOCK".to_string(), sandbox.root().join("release.lock").display().to_string());
-    env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), sandbox.bin().join("stage-ok").display().to_string());
-    env.insert("CHARLIEBOT_RELEASE_REHEARSAL".to_string(), sandbox.bin().join("stage-ok").display().to_string());
 
     let world = Self { sandbox, repo, releases, logs, artifact, tmp, on_main, off_main, env };
     world.write_gh(&world.gh_defaults());

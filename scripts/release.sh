@@ -4,11 +4,10 @@
 #   scripts/release.sh <full main commit>
 #
 # The host release lock: one lock file per host, outside the repository, named once by scripts/release/lock.sh. This
-# script takes it before its first stage and holds it to its exit, so two releases of one host run one at a time and
-# two trials cannot race for one trial port. A caller that finds the lock held exits 2 at once and prints the
-# holder's record — script, commit, pid and start time — read from beside the lock; a holder that died left the lock
-# free, because the lock is `flock` on an open descriptor. The switch this release hands over to takes the lock in
-# its turn, and the rehearsal's switches run under this script's descriptor instead of taking their own.
+# script takes it before its first stage and holds it to its exit, so two releases of one host run one at a time. A
+# caller that finds the lock held exits 2 at once and prints the holder's record — script, commit, pid and start
+# time — read from beside the lock; a holder that died left the lock free, because the lock is `flock` on an open
+# descriptor. The switch this release hands over to takes the lock in its turn.
 #
 # Exit codes:
 #   2  the preflight refused and wrote nothing: the argument is not a full 40-character sha on origin/main, the
@@ -22,13 +21,15 @@
 #              directory, sha256sum -c passes on both binaries, and the log directory keeps a copy of the artifact's
 #              sha256sums.txt;
 #   units      scripts/install-slice-units.sh installs the commit's slice units and reloads the user manager, so the
-#              trial and the rehearsal run against the units the release runs with. A release that stops after this
+#              server the switch starts runs against the units the release ships. A release that stops after this
 #              stage leaves the new units installed while the live server keeps running; the restore step is in that
 #              script's header;
-#   trial      scripts/release/trial.sh runs the trial on the downloaded binary;
-#   rehearsal  scripts/release/switch-rehearsal.sh switches an isolated checkout from the release that current
-#              selects to this one and back;
 #   install    the release directory is built under a temporary name and renamed to <commit>.
+#
+# The release checks live on the switch, not here: scripts/switch-server.sh runs every check that needs no model
+# before it stops the old server, and reads the new server back, probes a turn and checks a delegation once it is
+# ready. A release therefore ends when the binaries are installed, and a bad release is proven on the production home
+# after the switch, which switches back when the failure is the server's.
 #
 # The release directory holds charliebot-server and charliebot from the same CI build, release.log with each stage's
 # verdict, and sha256sums.txt over both binaries and the log. It does not change the current link.
@@ -39,8 +40,7 @@
 #
 # Environment: CHARLIEBOT_RELEASES_DIR (default $HOME/charliebot-releases); CHARLIEBOT_RELEASE_LOG_DIR (default
 # $HOME/charliebot-release-logs; stage logs and evidence live here, outside the repository and the release directory,
-# and are kept after a failure); CHARLIEBOT_RELEASE_TRIAL and CHARLIEBOT_RELEASE_REHEARSAL replace the trial and
-# rehearsal stage commands.
+# and are kept after a failure).
 set -uo pipefail
 umask 077
 
@@ -48,8 +48,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
 readonly LOG_ROOT="${CHARLIEBOT_RELEASE_LOG_DIR:-$HOME/charliebot-release-logs}"
-readonly TRIAL_CMD="${CHARLIEBOT_RELEASE_TRIAL:-$REPO_ROOT/scripts/release/trial.sh}"
-readonly REHEARSAL_CMD="${CHARLIEBOT_RELEASE_REHEARSAL:-$REPO_ROOT/scripts/release/switch-rehearsal.sh}"
 readonly SLICE_INSTALL="$REPO_ROOT/scripts/install-slice-units.sh"
 readonly ARTIFACT_NAME_PREFIX="charliebot-server-"
 
@@ -160,15 +158,6 @@ stage_units() {
   "$SLICE_INSTALL" "$REPO_ROOT" "$COMMIT"
 }
 
-# stage_trial: the trial starts servers that outlive a killed release, so it runs without the lock's descriptor.
-stage_trial() {
-  ( release_lock_detach; exec "$TRIAL_CMD" "$COMMIT" "$ARTIFACT_DIR/charliebot-server" )
-}
-
-stage_rehearsal() {
-  "$REHEARSAL_CMD" "$COMMIT" "$ARTIFACT_DIR"
-}
-
 # stage_install: build the release directory under a temporary name, then rename it to the commit.
 stage_install() {
   local tmp="$RELEASES_DIR/.$COMMIT.$$" line
@@ -201,8 +190,6 @@ stage_install() {
 
 run_stage download stage_download
 run_stage units stage_units
-run_stage trial stage_trial
-run_stage rehearsal stage_rehearsal
 run_stage install stage_install
 
 echo "release: installed $RELEASES_DIR/$COMMIT"

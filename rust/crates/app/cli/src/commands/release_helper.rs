@@ -1,9 +1,9 @@
 //! The release scripts' helper verbs: `charliebot release-helper <name>`.
 //!
-//! `scripts/release/trial.sh` and `scripts/release/switch-rehearsal.sh` call these verbs from the `charliebot` binary.
+//! `scripts/release/trial.sh` calls these verbs from the `charliebot` binary.
 //! Each verb keeps its arguments and its exit code. `assistant-reply` prints the form that answered the word; the other
 //! verbs keep their output format.
-//! Both scripts run the `charliebot` of the release under test, so a release's checks and the server they check come
+//! The script runs the `charliebot` of the release under test, so a release's checks and the server they check come
 //! from one commit.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -810,7 +810,7 @@ fn created_cgroups(args: &[String]) -> Result<i32, String> {
   Ok(0)
 }
 
-// ---- the log check the trial and the rehearsal share ----------------------------------------------------------------
+// ---- the log check a release's stage scripts read --------------------------------------------------------------------
 
 fn session_cgroup_names(sessions: &str) -> Result<BTreeSet<String>, String> {
   let root = Path::new(sessions);
@@ -870,7 +870,7 @@ fn sweep_check(args: &[String]) -> Result<i32, String> {
   Ok(if foreign.is_empty() { 0 } else { 1 })
 }
 
-// ---- the rehearsal's checks -----------------------------------------------------------------------------------------
+// ---- the reads a release's stage scripts make of its own process tree ------------------------------------------------
 
 fn event(args: &[String]) -> Result<i32, String> {
   let [log, wanted] = arguments::<2>(args, "event")?;
@@ -952,7 +952,7 @@ fn cgroup_pids(path: &Path) -> Result<Vec<u32>, String> {
   text.split_whitespace().map(|pid| pid.parse().map_err(|error| format!("{pid}: {error}"))).collect()
 }
 
-/// Removes one rehearsal session cgroup; processes in it are signalled only when they name the tree.
+/// Removes one session cgroup; processes in it are signalled only when they name the tree.
 fn cgroup_clean(args: &[String]) -> Result<i32, String> {
   let [path, tree] = arguments::<2>(args, "cgroup-clean")?;
   let directory = Path::new(path);
@@ -992,8 +992,8 @@ fn live_config_document(config_path: &str) -> Result<Value, String> {
   config::yaml_to_json(&document)
 }
 
-/// The first `backends.options` entry whose `api_base` is set: the operator's own model endpoint, which the trial and
-/// the rehearsal run against. The entry's `credential` names the `credentials.yaml` section that holds the endpoint's
+/// The first `backends.options` entry whose `api_base` is set: the operator's own model endpoint, which the trial runs
+/// against. The entry's `credential` names the `credentials.yaml` section that holds the endpoint's
 /// key; an endpoint that needs no client-side key has none.
 fn backend_choice(document: &Value) -> Option<(String, Option<String>)> {
   let options = document.get("backends").and_then(|backends| backends.get("options")).and_then(Value::as_array)?;
@@ -1016,8 +1016,8 @@ fn backend_option_lines(document: &Value) -> Result<Option<[String; 4]>, String>
   Ok(Some([api_base, credential.unwrap_or_default(), cpu.to_string(), io.to_string()]))
 }
 
-/// Prints `backend_option_lines` for a live config. The trial and the rehearsal read these lines into their configs,
-/// so both carry the live entry and the live weight switches the same way.
+/// Prints `backend_option_lines` for a live config. The trial reads these lines into its config, so it carries the live
+/// entry and the live weight switches the same way.
 fn backend_option(args: &[String]) -> Result<i32, String> {
   let [path] = arguments::<1>(args, "backend-option")?;
   match backend_option_lines(&live_config_document(path)?)? {

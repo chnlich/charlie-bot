@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use anyhow::{Context, anyhow, bail};
 use charliebot_agents::cli_base::CliHost;
@@ -58,27 +58,25 @@ impl AntigravityQuotaAccount {
       .collect();
     models.sort();
     models.dedup();
-    self.state.current.lock().expect("the Antigravity quota state is not poisoned").configured_models = models;
+    self.state.lock().configured_models = models;
   }
 
   async fn fetch_round(&self) -> anyhow::Result<Option<Map<String, Value>>> {
-    let models =
-      self.state.current.lock().expect("the Antigravity quota state is not poisoned").configured_models.clone();
+    let models = self.state.lock().configured_models.clone();
     if models.is_empty() {
       return Ok(None);
     }
     let result = self.fetch_usage(&models).await;
     match result {
       Ok((entry, readings)) => {
-        let mut current = self.state.current.lock().expect("the Antigravity quota state is not poisoned");
+        let mut current = self.state.lock();
         current.panel_entry = Some(entry.clone());
         current.readings = readings;
         current.last_error.clear();
         Ok(Some(entry))
       }
       Err(error) => {
-        self.state.current.lock().expect("the Antigravity quota state is not poisoned").last_error =
-          format!("{error:#}");
+        self.state.lock().last_error = format!("{error:#}");
         Err(error)
       }
     }
@@ -105,7 +103,7 @@ impl AntigravityQuotaAccount {
   fn mark_expired(&self, entry: &Map<String, Value>, now: UtcDateTime) -> anyhow::Result<Map<String, Value>> {
     let sampled = entry.get(PANEL_FETCHED_AT).and_then(Value::as_str).map(UtcDateTime::parse).transpose()?;
     let mut marked = mark_expired_windows(entry, sampled, now);
-    let state = self.state.current.lock().expect("the Antigravity quota state is not poisoned");
+    let state = self.state.lock();
     if state.last_error.starts_with("Antigravity model ") && !entry.contains_key("error") {
       marked.insert(
         PANEL_STATUS_ROWS.to_string(),
@@ -130,7 +128,7 @@ impl QuotaAccount for AntigravityQuotaAccount {
   }
 
   fn last_error(&self) -> String {
-    self.state.current.lock().expect("the Antigravity quota state is not poisoned").last_error.clone()
+    self.state.lock().last_error.clone()
   }
 
   fn fetch<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<Option<Map<String, Value>>>> {
@@ -143,6 +141,10 @@ impl QuotaAccount for AntigravityQuotaAccount {
 }
 
 impl AntigravityQuotaState {
+  fn lock(&self) -> MutexGuard<'_, QuotaState> {
+    self.current.lock().expect("the Antigravity quota state is not poisoned")
+  }
+
   /// The Auto member reader backed only by the last successful `/usage` response.
   pub fn member_reading(state: Arc<Self>) -> MemberReadingFn {
     Arc::new(move |_cfg, option, now| read_member(&state, option, now))
@@ -167,15 +169,7 @@ impl UsageSourceImpl for AntigravityUsageSource {
 
   fn quota_accounts(&self, cfg: &CharlieBotConfig) -> anyhow::Result<Vec<Arc<dyn QuotaAccount>>> {
     self.account.set_models(cfg);
-    if self
-      .account
-      .state
-      .current
-      .lock()
-      .expect("the Antigravity quota state is not poisoned")
-      .configured_models
-      .is_empty()
-    {
+    if self.account.state.lock().configured_models.is_empty() {
       return Ok(Vec::new());
     }
     Ok(vec![Arc::clone(&self.account) as Arc<dyn QuotaAccount>])
@@ -190,7 +184,7 @@ fn read_member(
   if option.billing != Some(PoolBilling::Subscription) {
     return Ok(None);
   }
-  let current = state.current.lock().expect("the Antigravity quota state is not poisoned");
+  let current = state.lock();
   let Some(windows) = current.readings.get(&option.model) else { return Ok(None) };
   let sampled = current
     .panel_entry
@@ -388,7 +382,7 @@ mod tests {
   #[test]
   fn a_group_matching_error_is_visible_with_the_previous_reading() {
     let state = Arc::new(AntigravityQuotaState::default());
-    state.current.lock().unwrap().last_error = "Antigravity model \"unknown\" matched no quota group".into();
+    state.lock().last_error = "Antigravity model \"unknown\" matched no quota group".into();
     let host = CliHost { path: String::new(), home: std::path::PathBuf::new() };
     let account = AntigravityQuotaAccount::new(host, state);
     let entry = Map::from_iter([(PANEL_WINDOWS.to_string(), json!([]))]);

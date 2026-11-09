@@ -1,17 +1,18 @@
 # Release lab
 
 The release lab runs CharlieBot's release flow against a stand-in production server and prints one JSON line per run.
-It measures the flow from the start of `scripts/release.sh` to the `server_ready` of the server the switch starts, so a
-change to the flow, the start or the disk gate can be compared on one machine before it reaches a live host.
+It measures the flow from the start of `scripts/release.sh` to the `server_ready` of the server the switch starts, and
+times the two checks that need a model after it, so a change to the flow, the start, the disk gate or the post-ready
+checks can be compared on one machine before it reaches a live host.
 
 ## The stand-in production server
 
 The stand-in home is the task-tree mock home that `scripts/release/startup-lab.sh generate` writes (seed 1, a live
 process for each live run), so no real session directory is copied. The `--from` release serves it from a tmux pane on
-the lab's own socket and port, and the flow's scripts address it through environment overrides, as
-`scripts/release/switch-rehearsal.sh` addresses its own home: `CHARLIEBOT_HOME`, `CHARLIEBOT_RELEASES_DIR`,
-`CHARLIEBOT_RELEASE_LOG_DIR`, `CHARLIEBOT_LOG_DIR` and `CHARLIEBOT_TMUX_SOCKET`. The trial's live-server probe reads
-`127.0.0.1:18498` unless `CHARLIEBOT_TRIAL_LIVE_URL` names another server; the lab sets it to the stand-in.
+the lab's own socket and port, and the flow's scripts address it through environment overrides: `CHARLIEBOT_HOME`,
+`CHARLIEBOT_RELEASES_DIR`, `CHARLIEBOT_RELEASE_LOG_DIR`, `CHARLIEBOT_LOG_DIR` and `CHARLIEBOT_TMUX_SOCKET`. A flow ref
+that still runs the trial probes the live server at `127.0.0.1:18498` unless `CHARLIEBOT_TRIAL_LIVE_URL` names another
+server; the lab sets it to the stand-in.
 
 Everything the lab writes lives under `RELEASE_LAB_DIR`. The lab never reads or writes a live CharlieBot home, release
 root or tmux server, and it opens no port another host's server uses.
@@ -61,10 +62,12 @@ dev/release-lab/run.sh --teardown
 ```
 
 `--from` is the release the stand-in serves, `--to` the release the flow ships and `--flow-ref` the commit whose
-`release.sh` and stage scripts run. The trial and rehearsal are the flow-ref's own scripts. A flow-ref that predates the
-lab's overrides runs a copy beside the flow's own scripts (`trial-lab.sh` and `rehearsal-lab.sh`) with the override patch
-in `dev/release-lab/overrides/` applied to it. The patch must apply, or the run stops, so the copy differs from its
-flow-ref by the override alone.
+`release.sh` and stage scripts run. The lab runs either shape of the flow, and the line's `model_stages` says which one
+ran. A `--flow-ref` whose `release.sh` runs the trial and the rehearsal runs that ref's own copies of them, staged beside
+the flow's scripts as `trial-lab.sh` and `rehearsal-lab.sh` with the override patch in `dev/release-lab/overrides/`
+applied when the ref predates the lab's marker; the patch must apply, or the run stops, so a copy differs from its
+flow-ref by the override alone. A `--flow-ref` whose `release.sh` runs neither stage gets neither copy, and the run
+removes a stale one an earlier leg left behind: untracked files survive the checkout's `git reset --hard`.
 
 The switch is timed from mark lines that `switch-server.sh` logs only when `CHARLIEBOT_SWITCH_LAB_MARKS` is 1. A
 `--flow-ref` whose own file carries them runs that file; an older one runs the lab's copy in `scripts/lab-switch/`, with
@@ -72,11 +75,15 @@ the flow's slice-unit install beside it because the switch re-executes itself by
 unless it is that release's file plus the mark lines and nothing else.
 
 Each flow attempt prints one JSON line with the stages' seconds (`download_s`, `units_s`, `trial_s`, `rehearsal_s`,
-`install_s`, `preflight_s`, `gate_s`, `stop_s`, `start_s`), `ready_in_ms`, `read_bytes`, `release_to_live_s`,
-`live_runs`, `reattached`, `verdict` (`live`, `switched_back`, `kept_reported`, `flow_stopped`, `start_failed` or
-`switch_failed`), the host's one-minute load at the start and the host's `/proc` entry count at the start
-(`proc_entries`, which the gate's read-table walks cost scales with). `flow_stopped` and `start_failed` attempts are
-retried until `--runs` runs reached the switch, up to `--runs + 2` attempts.
+`install_s`, `preflight_s`, `gate_s`, `stop_s`, `start_s`, and after `server_ready` `probe_s` and `delegation_s`), the
+`downtime_s` the port spent unserved, `ready_in_ms`, `read_bytes`, `release_to_live_s` (to the ready, so the model
+checks are no part of it), `live_runs`, `reattached`, `switch_exit`, `verdict` (`live`, `switched_back`,
+`kept_reported`, `flow_stopped`, `start_failed` or `switch_failed`), the host's one-minute load at the start and the
+host's `/proc` entry count at the start (`proc_entries`, which the gate's read-table walks cost scales with).
+`kept_reported` is the switch's exits 3 to 6, where the new release keeps serving: a switch back that failed, a
+recorded run that died, an old release that refused the home, and a model-side check that failed twice. `reattached` is
+the switch's readback verdict, so a `switched_back` run records it as the switch back read them. `flow_stopped` and
+`start_failed` attempts are retried until `--runs` runs reached the switch, up to `--runs + 2` attempts.
 
 `--mode starts` prints one line per cold start of `--to` on the seed home: `ready_in_ms`, `read_bytes` and the reader
 count. Its readers start when the trial creates the server log and stop at `server_ready`.

@@ -283,10 +283,10 @@ const GLOBALS = {
 };
 Chat.wire(GLOBALS, {});
 
-// The page fetches this module after its document, so the rounds it decorates are usually rendered by the time it
-// lands: their button groups were built before the registration above and carry no explain button. Add the button
-// to each rendered group, paint its state, and read the statuses of the session the page shows when its
-// session-data-load event has already fired.
+// The page fetches this module after its document, so the rounds it decorates are usually rendered by the
+// time it lands. Their button groups were built before the registration above, so they carry no explain
+// button. Add the button to each rendered group and paint its state. Read the statuses of the session the
+// page shows when its session-data-load event has already fired.
 if (document.readyState !== 'loading') {
   if (SESSION_ID) {
     document.querySelectorAll('.round-buttons[data-round-event-index]').forEach((group) => {

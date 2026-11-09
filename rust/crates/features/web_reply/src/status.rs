@@ -1,5 +1,6 @@
-//! A web session's status: the Goal, Now and Waiting on you items
-//! that `charliebot web status` sets and reads. A set stores the items its JSON object names, records one `web_status`
+//! A web session's status: the Now and Waiting on you items
+//! that `charliebot web status` sets and reads. The Goal is the task record's, which the status read carries
+//! read-only. A set stores the items its JSON object names, records one `web_status`
 //! event and tells every ancestor page. A set refuses a Waiting on you item until a cold read of it is recorded; the
 //! read tiers the item against the approval policy table, and with the table's refusal switch on a set refuses an
 //! item tiered t1 or t2. A read lists the open descendants whose status holds Waiting on you items and the open
@@ -36,13 +37,13 @@ pub const OWNER: &str = WEB_REPLY;
 /// The metadata field that holds the status, under the owner.
 const STATUS_FIELD: &str = WEB_STATUS;
 
-/// The status items in the order a set lists them and the status line names them.
-const ITEMS: [&str; 3] = ["goal", "now", "waiting"];
+/// The status items in the order a set lists them and the status line names them. The Goal is no
+/// longer one of them: it lives in the task record.
+const ITEMS: [&str; 2] = ["now", "waiting"];
 
 /// The label of each item in the event's content.
 fn label(item: &str) -> &'static str {
   match item {
-    "goal" => "Goal",
     "now" => "Now",
     _ => "Waiting on you",
   }
@@ -68,21 +69,19 @@ const NOT_A_DATETIME: &str = "Input should be a valid datetime";
 /// The message a since_exact field that is not a boolean raises.
 const NOT_A_BOOLEAN: &str = "Input should be a valid boolean";
 
-/// The session status: Goal, Now and Waiting on you, and the time the last set stored them.
+/// The session status: Now and Waiting on you, and the time the last set stored them.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WebStatus {
-  goal: Option<String>,
   now: Option<String>,
   waiting: Vec<WaitingItem>,
   #[serde(default = "UtcDateTime::now")]
   updated_at: UtcDateTime,
 }
 
-/// The validated `StatusPatch`. An item the object leaves out is `None`; an item it names is `Some`, and a null goal
-/// or now is `Some(None)`, which clears the stored value.
+/// The validated `StatusPatch`. An item the object leaves out is `None`; an item it names is `Some`, and a null now
+/// is `Some(None)`, which clears the stored value.
 #[derive(Debug)]
 pub struct StatusPatch {
-  goal: Option<Option<String>>,
   now: Option<Option<String>>,
   waiting: Option<Vec<WaitingItem>>,
 }
@@ -91,9 +90,6 @@ impl StatusPatch {
   /// The items the patch names, in `ITEMS` order.
   fn named(&self) -> Vec<&'static str> {
     let mut named = Vec::new();
-    if self.goal.is_some() {
-      named.push("goal");
-    }
     if self.now.is_some() {
       named.push("now");
     }
@@ -117,25 +113,6 @@ fn stored_status(meta: &SessionMetadata) -> Result<Option<WebStatus>, WebReplyEr
     Some(value) => Ok(Some(serde_json::from_value(value.clone()).map_err(|error| {
       WebReplyError::Failed(anyhow::anyhow!("session {} holds an unreadable web status: {error}", meta.id))
     })?)),
-  }
-}
-
-/// The line a manager reset note carries for the session's stored status Goal, or `None` when it stores none. An
-/// unreadable status is the failure this package raises for it.
-pub fn manager_reset_status_goal_line(meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
-  let status = stored_status(meta).map_err(status_failure)?;
-  Ok(
-    status
-      .and_then(|status| status.goal)
-      .map(|goal| format!("This session's status Goal, as this session last set it, is: {goal}")),
-  )
-}
-
-/// The status error as the failure a caller outside this package reports.
-fn status_failure(error: WebReplyError) -> anyhow::Error {
-  match error {
-    WebReplyError::Refused { detail, .. } => anyhow::anyhow!("{detail}"),
-    WebReplyError::Failed(error) => error,
   }
 }
 
@@ -163,10 +140,16 @@ pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
   let Value::Object(fields) = raw else {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Status file is not a JSON object"));
   };
+  // The Goal left the status: it is the task record's goal, which only a task-record write changes.
+  if fields.contains_key("goal") {
+    return Err(WebReplyError::refused(
+      StatusCode::UNPROCESSABLE_ENTITY,
+      "Goal lives in the task record: write it with `charliebot session task-record`",
+    ));
+  }
   refuse_server_fields(&fields)?;
   let mut problems = Vec::new();
   // The fields validate in declaration order, each with its nested errors, then the object's extra keys.
-  let goal = fields.get("goal").map(|value| nullable_text(value, "goal", &mut problems));
   let now = fields.get("now").map(|value| nullable_text(value, "now", &mut problems));
   let waiting = fields.get("waiting").map(|value| waiting_items(value, &mut problems));
   for key in fields.keys().filter(|key| !ITEMS.contains(&key.as_str())) {
@@ -179,11 +162,11 @@ pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
       format!("Status file is invalid: {}", summary.join("; ")),
     ));
   }
-  let patch = StatusPatch { goal, now, waiting };
+  let patch = StatusPatch { now, waiting };
   if patch.named().is_empty() {
     return Err(WebReplyError::refused(
       StatusCode::UNPROCESSABLE_ENTITY,
-      "Status file names no item: give goal, now or waiting",
+      "Status file names no item: give now or waiting",
     ));
   }
   Ok(patch)
@@ -572,10 +555,10 @@ fn nested_loc(prefix: &str, field: &str) -> String {
   if prefix.is_empty() { field.to_string() } else { format!("{prefix}.{field}") }
 }
 
-/// The texts of a patch that the file-link scanner reads, in its order: goal, now, then each waiting item's text,
+/// The texts of a patch that the file-link scanner reads, in its order: now, then each waiting item's text,
 /// context and link.
 fn scanned_texts(patch: &StatusPatch) -> Vec<&str> {
-  let mut texts: Vec<&str> = patch.goal.iter().chain(patch.now.iter()).flatten().map(String::as_str).collect();
+  let mut texts: Vec<&str> = patch.now.iter().flatten().map(String::as_str).collect();
   for item in patch.waiting.iter().flatten() {
     texts.push(item.text.as_str());
     texts.extend([item.context.as_deref(), item.link.as_deref()].into_iter().flatten());
@@ -594,8 +577,7 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   reply::refuse_dead_links(scanned_texts(&patch), &scan_context)?;
   require_waiting_context(patch.waiting.as_deref().unwrap_or_default())?;
   let stored = stored_status(&meta)?;
-  let base =
-    stored.clone().unwrap_or(WebStatus { goal: None, now: None, waiting: Vec::new(), updated_at: UtcDateTime::now() });
+  let base = stored.clone().unwrap_or(WebStatus { now: None, waiting: Vec::new(), updated_at: UtcDateTime::now() });
   let stored_waiting = effective_waiting(&base);
   let prospective = patch.waiting.clone().unwrap_or_else(|| stored_waiting.clone());
   let mut links = if prospective.is_empty() {
@@ -648,10 +630,7 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   };
   let mut status = base;
   let changed = patch.named();
-  let StatusPatch { goal, now: now_item, waiting: _ } = patch;
-  if let Some(goal) = goal {
-    status.goal = goal;
-  }
+  let StatusPatch { now: now_item, waiting: _ } = patch;
   if let Some(now_item) = now_item {
     status.now = now_item;
   }
@@ -694,12 +673,7 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
 /// records one web_status_confirmed event and cold reads nothing.
 pub async fn confirm_status(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_web_session(features, session_id).await?;
-  let status = stored_status(&meta)?.unwrap_or(WebStatus {
-    goal: None,
-    now: None,
-    waiting: Vec::new(),
-    updated_at: UtcDateTime::now(),
-  });
+  let status = stored_status(&meta)?.unwrap_or(WebStatus { now: None, waiting: Vec::new(), updated_at: UtcDateTime::now() });
   let scan_context = reply::file_link_scan_context(features, session_id)?;
   require_current_plan_links(features, &effective_waiting(&status), &scan_context)?;
   features
@@ -798,6 +772,9 @@ fn derived_payload(item: &OpenWaitingItem) -> Value {
 pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_web_session(features, session_id).await?;
   let stored = stored_status(&meta)?;
+  // The Goal is the task record's, read-only here: the status no longer stores one.
+  let task_goal =
+    meta.task.as_ref().map(|task| task.goal.as_str()).filter(|goal| !goal.trim().is_empty());
   let tree = tree_read_reply(&features.store, {
     let session_id = session_id.to_string();
     move |store| read_status_tree(store, &session_id)
@@ -843,6 +820,7 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
   children.sort_by_key(|(updated_at, _)| std::cmp::Reverse(*updated_at));
   Ok(json!({
     "session_id": session_id,
+    "goal": task_goal,
     (WEB_STATUS): stored.as_ref().map(status_payload),
     "derived_waiting": derived.iter().map(derived_payload).collect::<Vec<_>>(),
     "descendants": rows.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
@@ -1116,16 +1094,11 @@ mod tests {
     let sid = home.manager("session", None).await;
     check_waiting_item(&home, &sid, "Pick a layout").await;
 
-    let first = set_status(
-      &home.features,
-      &sid,
-      &json!({"goal": "Ship the panel", "waiting": [waiting_item("Pick a layout")]}).to_string(),
-    )
-    .await
-    .expect("the first set stores");
+    let first = set_status(&home.features, &sid, &json!({"waiting": [waiting_item("Pick a layout")]}).to_string())
+      .await
+      .expect("the first set stores");
     let second = set_status(&home.features, &sid, VALID_SET).await.expect("the second set stores");
 
-    assert_eq!(second["goal"], json!("Ship the panel"));
     assert_eq!(second["now"], json!("Running"));
     assert_eq!(
       without_item_times(&second["waiting"]),
@@ -1145,25 +1118,27 @@ mod tests {
     let events = status_events(&home, &sid);
     assert_eq!(
       events.iter().map(|event| event["web_status_changed"].clone()).collect::<Vec<_>>(),
-      vec![json!(["goal", "waiting"]), json!(["now"]),]
+      vec![json!(["waiting"]), json!(["now"]),]
     );
     assert_eq!(events[1]["content"], json!("Status updated: Now"));
     assert_eq!(events[1][WEB_STATUS], without_budget(&second));
     assert!(events[1][WEB_STATUS].get("now_chars").is_none());
   }
 
+  /// The Goal left the status: any set that names it is refused with the pointer to the task-record
+  /// write, and nothing is stored or recorded.
   #[tokio::test]
-  async fn a_null_goal_clears_the_goal_and_keeps_the_other_items() {
+  async fn a_set_that_names_the_goal_is_refused_with_a_pointer_to_the_task_record() {
     let home = Home::new();
     let sid = home.manager("session", None).await;
-    set_status(&home.features, &sid, r#"{"goal": "Ship the panel", "now": "Running"}"#).await.expect("the set stores");
 
-    let stored_status = set_status(&home.features, &sid, r#"{"goal": null}"#).await.expect("the clear stores");
-
-    assert_eq!((&stored_status["goal"], &stored_status["now"]), (&Value::Null, &json!("Running")));
-    assert_eq!(stored_status["now_chars"], json!(7));
-    assert_eq!(stored_status["now_over_budget"], json!(false));
-    assert_eq!(status_events(&home, &sid).last().expect("two events")["web_status_changed"], json!(["goal"]));
+    for text in [r#"{"goal": "Ship the panel"}"#, r#"{"goal": null, "now": "Running"}"#, r#"{"goal": null}"#] {
+      let error = set_status(&home.features, &sid, text).await.expect_err("the set is refused");
+      let detail = detail(error);
+      assert_eq!(detail, "Goal lives in the task record: write it with `charliebot session task-record`", "{text}");
+      assert_eq!(stored(&home, &sid).await, Value::Null, "{text}");
+      assert!(status_events(&home, &sid).is_empty(), "{text}");
+    }
   }
 
   #[tokio::test]
@@ -1190,7 +1165,7 @@ mod tests {
     let home = Home::new();
     let sid = home.manager("session", None).await;
 
-    let response = set_status(&home.features, &sid, r#"{"goal": "Ship"}"#).await.expect("the set stores");
+    let response = set_status(&home.features, &sid, r#"{"waiting": []}"#).await.expect("the set stores");
 
     assert_eq!(response["now_chars"], json!(0));
     assert_eq!(response["now_over_budget"], json!(false));
@@ -1234,9 +1209,8 @@ mod tests {
       ("not json", "Status file is not JSON: Expecting value"),
       (r#"{"now": "a""#, "Status file is not JSON: Expecting ',' delimiter"),
       ("[1, 2]", "Status file is not a JSON object"),
-      ("{}", "Status file names no item: give goal, now or waiting"),
+      ("{}", "Status file names no item: give now or waiting"),
       (r#"{"colour": "red"}"#, "Status file is invalid: colour: Extra inputs are not permitted"),
-      (r#"{"goal": " "}"#, "Status file is invalid: goal: Value error, must not be blank"),
       (r#"{"now": true}"#, "Status file is invalid: now: Input should be a valid string"),
       (r#"{"waiting": "x"}"#, "Status file is invalid: waiting: Input should be a valid list"),
       (
@@ -1258,14 +1232,26 @@ mod tests {
         "Status file is invalid: remaining: Extra inputs are not permitted",
       ),
       (
-        r#"{"colour": 1, "goal": 5, "waiting": [{"text": 5, "zzz": 1}]}"#,
-        "Status file is invalid: goal: Input should be a valid string; waiting.0.text: Input should be a valid string; waiting.0.zzz: Extra inputs are not permitted; colour: Extra inputs are not permitted",
+        r#"{"colour": 1, "waiting": [{"text": 5, "zzz": 1}]}"#,
+        "Status file is invalid: waiting.0.text: Input should be a valid string; waiting.0.zzz: Extra inputs are not permitted; colour: Extra inputs are not permitted",
       ),
-      (r#"{"goal": 123456789012345678901234567890}"#, "Status file is invalid: goal: Input should be a valid string"),
     ];
     for (text, expected) in cases {
       let error = parse_patch(text).expect_err("the status file is refused");
       assert_eq!(detail(error), expected, "text {text}");
+    }
+  }
+
+  /// A goal key refuses before the fields validate, whatever else the file carries.
+  #[test]
+  fn a_goal_key_refuses_with_the_task_record_pointer() {
+    for text in [r#"{"goal": "Ship"}"#, r#"{"goal": 5}"#, r#"{"goal": null}"#] {
+      let error = parse_patch(text).expect_err("the goal key is refused");
+      assert_eq!(
+        detail(error),
+        "Goal lives in the task record: write it with `charliebot session task-record`",
+        "text {text}"
+      );
     }
   }
 
@@ -1316,7 +1302,6 @@ mod tests {
     {
       let updated_at = UtcDateTime::parse(updated_at).unwrap();
       let status = WebStatus {
-        goal: None,
         now: None,
         waiting: vec![WaitingItem {
           text: "decision".to_string(),
@@ -1429,7 +1414,7 @@ mod tests {
     let empty = home.child(&root, "empty").await;
     let closed = home.child(&root, "closed").await;
     let archived = home.child(&root, "archived").await;
-    set_status(&home.features, &empty, r#"{"goal": "No Now"}"#).await.expect("the empty child sets");
+    set_status(&home.features, &empty, r#"{"waiting": []}"#).await.expect("the empty child sets");
     set_status(&home.features, &closed, r#"{"now": "Closed step"}"#).await.expect("the closed child sets");
     set_status(&home.features, &archived, r#"{"now": "Archived step"}"#).await.expect("the archived child sets");
     archive_task(&home.features, &closed).await;
@@ -1577,7 +1562,7 @@ mod tests {
   #[tokio::test]
   async fn dead_links_in_every_status_field_refuse_before_any_cold_read_or_write() {
     for (endpoint, uri) in [("set", "/api/internal/web/status"), ("unread", "/api/internal/web/status/unread")] {
-      for field in ["goal", "now", "waiting_text", "waiting_context", "waiting_link"] {
+      for field in ["now", "waiting_text", "waiting_context", "waiting_link"] {
         let home = Home::new();
         let sid = home.manager("session", None).await;
         let port = home.features.config.get().expect("the config loads").server.port;
@@ -1599,7 +1584,6 @@ mod tests {
           "link": null,
         });
         let (patch, detail) = match field {
-          "goal" => (json!({"goal": format!("Review {local_link}")}), local_detail),
           "now" => (json!({"now": format!("Review {local_link}")}), local_detail),
           "waiting_text" => {
             item["text"] = json!(format!("Review {local_link}"));

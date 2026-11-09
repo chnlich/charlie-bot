@@ -91,6 +91,8 @@ Your conclusion rests on the user's decisions. Before you conclude, search the u
 
 <!-- section: task -->
 ## Task
+Carry out the task in your Task record.
+
 {{description}}
 <!-- section: iteration_reports -->
 ## Iteration Reports

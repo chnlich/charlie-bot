@@ -78,7 +78,7 @@ struct SessionArgs {
 
 #[derive(Args)]
 struct StatusSetArgs {
-  /// JSON object with any of goal, now, waiting; prints cold reads and exits 3 before storing; - reads stdin
+  /// JSON object with any of now, waiting; prints cold reads and exits 3 before storing; - reads stdin
   #[arg(long)]
   file: String,
   /// Session ID (optional; taken from the CHARLIEBOT_SESSION_ID the server writes into the master environment)
@@ -224,11 +224,12 @@ fn status_show(args: &SessionArgs) -> Result<(), CliExit> {
 /// open child.
 fn render_status(result: &Value) -> Result<String, CliExit> {
   let mut lines: Vec<String> = Vec::new();
+  // The Goal is the task record's, which the read carries read-only.
+  lines.push(format!("Goal: {}", or_not_set(field(result, "goal")?)));
   let status = field(result, event_types::WEB_STATUS)?;
   if status.is_null() {
     lines.push("No status yet".to_string());
   } else {
-    lines.push(format!("Goal: {}", or_not_set(field(status, "goal")?)));
     lines.push(format!(
       "Now: {} (updated {})",
       or_not_set(field(status, "now")?),
@@ -351,19 +352,22 @@ mod tests {
 
   use super::render_status;
 
-  /// A GET result for a status that carries `status` and no descendant, child or derived rows.
-  fn status_result(status: serde_json::Value) -> serde_json::Value {
-    json!({"web_status": status, "descendants": [], "children": [], "derived_waiting": []})
+  /// A GET result for a status that carries `status` and no descendant, child or derived rows. The
+  /// Goal rides the result's top level, read from the task record.
+  fn status_result(goal: serde_json::Value, status: serde_json::Value) -> serde_json::Value {
+    json!({"goal": goal, "web_status": status, "descendants": [], "children": [], "derived_waiting": []})
   }
 
   #[test]
-  fn a_status_prints_goal_now_and_the_waiting_items_in_order() {
-    let result = status_result(json!({
-      "goal": "Ship the panel",
-      "now": "Reviewing",
-      "waiting": [],
-      "updated_at": "2026-11-02T03:10:00Z",
-    }));
+  fn a_status_prints_the_task_record_goal_now_and_the_waiting_items_in_order() {
+    let result = status_result(
+      json!("Ship the panel"),
+      json!({
+        "now": "Reviewing",
+        "waiting": [],
+        "updated_at": "2026-11-02T03:10:00Z",
+      }),
+    );
 
     let text = render_status(&result).expect("the status renders");
 
@@ -371,5 +375,12 @@ mod tests {
       text.lines().collect::<Vec<_>>(),
       vec!["Goal: Ship the panel", "Now: Reviewing (updated 2026-11-02T03:10:00Z)", "Waiting on you: Nothing"]
     );
+  }
+
+  #[test]
+  fn a_session_without_a_stored_status_still_prints_the_task_record_goal() {
+    let text = render_status(&status_result(json!("Ship the panel"), json!(null))).expect("the status renders");
+
+    assert_eq!(text.lines().collect::<Vec<_>>(), vec!["Goal: Ship the panel", "No status yet"]);
   }
 }

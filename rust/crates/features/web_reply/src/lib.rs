@@ -59,8 +59,10 @@ fn normalize_web_status(value: &mut Value) -> bool {
     return true;
   }
   let Some(status) = value.as_object_mut() else { return false };
-  status.retain(|name, _| ["goal", "now", "waiting", "updated_at"].contains(&name.as_str()));
-  for name in ["goal", "now"] {
+  // The Goal left the status: a stored status that still carries the retired key reads and drops it,
+  // the way the retired context-work flag reads.
+  status.retain(|name, _| ["now", "waiting", "updated_at"].contains(&name.as_str()));
+  for name in ["now"] {
     if status.get(name).is_some_and(|field| {
       !field.is_null() && (!field.is_string() || field.as_str().is_some_and(|text| text.trim().is_empty()))
     }) {

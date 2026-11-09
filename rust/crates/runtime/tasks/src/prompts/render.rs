@@ -91,25 +91,24 @@ pub fn review_task_context(
   .join("\n\n")
 }
 
-/// The repo-less review run's context: the spec, the later messages when the work claimed input after it, the work
-/// report's paths, and the note that there is no git to read (`repo_less_review_task_context`).
+/// The repo-less review run's context: the later messages when the work claimed input after the
+/// first, the work report's paths, and the note that there is no git to read
+/// (`repo_less_review_task_context`). The spec is the Task record block of the reviewer's instructions.
 pub fn repo_less_review_task_context(
   chat_log_path: &Path,
   worker_log_path: &Path,
-  spec_text: &str,
   later_messages: &str,
   work_report: Option<&str>,
 ) -> String {
   let report = work_report
     .filter(|report| !report.trim().is_empty())
     .unwrap_or("(the work Run left no final report; judge the paths the task names)");
-  let later = if later_messages.is_empty() { String::new() } else { format!("\n\n{later_messages}") };
+  let later = if later_messages.is_empty() { String::new() } else { format!("{later_messages}\n\n") };
   format!(
     "## Context\n\
 This task changed host paths directly; it has no repository, so there is no diff to read and\n\
 nothing to merge or push. Review the CURRENT state of the paths the work report lists.\n\n\
-### Task spec (acceptance tests included)\n{spec_text}{later}\n\n\
-### Work report (every created, modified and deleted path, and each acceptance test's result)\n{report}\n\n\
+{later}### Work report (every created, modified and deleted path, and each acceptance test's result)\n{report}\n\n\
 {}",
     review_text::review_log_pointer(chat_log_path, worker_log_path)
   )

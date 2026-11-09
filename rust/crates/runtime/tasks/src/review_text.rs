@@ -7,9 +7,6 @@
 
 use std::path::Path;
 
-use anyhow::bail;
-use charliebot_store::metadata::TaskSpec;
-
 const ROLE_TEXT: &str = "## Code Review\n\
 You are reviewing another worker's code changes.\n\
 - The repository guide is the repository's `CLAUDE.md` or `AGENTS.md` file and its `.claude/rules/` files.\n\
@@ -20,15 +17,15 @@ You are reviewing another worker's code changes.\n\
 const CHECKLIST_INTRO: &str = "IMPORTANT: Make minimal changes. Prefer approving the worker's code as-is. \
 Only fix clear bugs, correctness issues, or scope violations. \
 Do not refactor, restyle, or improve code that is functionally correct.\n\n\
-The Context section carries the task spec. When the spec has a `## Source Files` section, read every path \
-it lists before judging the diff. Apply the spec's `## Reviewer Checklist`. For control-flow or \
-state-machine tasks, verify the implementation against `## Required Behavior`; do not rely only \
-on tests.\n\n\
+The Task record block of your instructions is the spec: the goal, the acceptance and the context refs. When \
+the goal carries a `## Source Files` section, read every path it lists before judging the diff. Apply the \
+spec's `## Reviewer Checklist`. For control-flow or state-machine tasks, verify the implementation against \
+`## Required Behavior`; do not rely only on tests.\n\n\
 The Later Messages section holds each message that the worker received\n\
-after the task spec, in claim order.\n\
-When a later message changes the task spec, judge the work against the later\n\
+after its first input, in claim order.\n\
+When a later message changes the task, judge the work against the later\n\
 message.\n\
-When the task spec and a skill disagree, follow the task spec.";
+When the task and a skill disagree, follow the task.";
 
 const SCOPE_CHECK: &str = "**Scope check**: Flag any changes NOT requested in the task — extra flags, altered defaults,\n   \
 new parameters, behavioral changes. Workers must only do what was asked.";
@@ -88,30 +85,15 @@ pub fn review_landing_target(base_branch: &str) -> String {
   format!("origin/{}", review_published_branch(base_branch))
 }
 
-/// The spec a review judges the work against: the goal, then the acceptance tests (`review_spec_text`). A task with
-/// an empty goal has nothing to judge against, so it fails.
-pub fn review_spec_text(task: &TaskSpec) -> anyhow::Result<String> {
-  if task.goal.trim().is_empty() {
-    bail!("review has no task spec: the task record's goal is empty");
-  }
-  let mut parts = vec![task.goal.clone()];
-  if !task.acceptance.is_empty() {
-    let mut section = vec!["## Acceptance Tests".to_string()];
-    section.extend(task.acceptance.iter().map(|item| format!("- {item}")));
-    parts.push(section.join("\n"));
-  }
-  Ok(parts.join("\n\n"))
-}
-
-/// The review prompt's context lines: the spec, the later messages when the worker got any, the worker summary when
-/// one was extracted, and the delegator's hint (`review_context_lines`).
+/// The review prompt's context lines: the later messages when the worker got any, the worker summary
+/// when one was extracted, and the delegator's hint (`review_context_lines`). The spec is the Task
+/// record block of the reviewer's own instructions.
 pub fn review_context_lines(
-  spec_text: &str,
   later_messages: &str,
   worker_summary: Option<&str>,
   delegator_hint: &str,
 ) -> Vec<String> {
-  let mut lines = vec![format!("**Task spec:**\n{spec_text}")];
+  let mut lines = Vec::new();
   if !later_messages.is_empty() {
     lines.push(later_messages.to_string());
   }

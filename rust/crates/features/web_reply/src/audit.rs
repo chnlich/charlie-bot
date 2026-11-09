@@ -29,7 +29,7 @@ use crate::reply;
 
 /// The status instruction that ends a status reminder.
 const STATUS_SENTENCES: &str = concat!(
-  "Run `charliebot web status set` when Goal, Now or Waiting on you differs from the state that turn read back. ",
+  "Run `charliebot web status set` when Now or Waiting on you differs from the state that turn read back. ",
   "Otherwise run `charliebot web status confirm`. The panel then shows the state the last turn read back."
 );
 

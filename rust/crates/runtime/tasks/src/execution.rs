@@ -674,26 +674,16 @@ impl TaskExecutionAdapter {
     );
     let mut prompt = content;
     if let Some((previous, reason)) = auto_switch_source(&self.features, meta, run, option)? {
-      let goal = wake_meta.task.as_ref().map_or(wake_meta.name.as_str(), |task| task.goal.as_str());
-      let handoff = crate::handoff::handoff(
-        &self.features,
-        &wake_meta,
-        crate::handoff::HandoffSource::ManagerRun { run: &previous },
-        &reason,
-        goal,
-      )?;
+      let handoff =
+        crate::handoff::handoff(&self.features, &wake_meta, crate::handoff::HandoffSource::ManagerRun { run: &previous }, &reason)?;
       prompt = format!("{}\n\n{prompt}", handoff.note);
     } else if fresh_native && wake_meta.cc_session_id.is_some() {
       let reason = match wake_meta.native_backend.as_deref().filter(|backend| !backend.is_empty() && *backend != option.id) {
         Some(previous) => session_anchors::backend_switch_reset_reason(previous, &option.id),
         None => "this task's managed instructions or sources changed since the previous turn, so this turn starts a fresh native conversation".to_string(),
       };
-      let goal = wake_meta.task.as_ref().map_or(wake_meta.name.as_str(), |task| task.goal.as_str());
-      let status_goal = self.features.registry.status_goal_line(&wake_meta)?;
-      prompt = format!(
-        "{}\n\n{prompt}",
-        session_anchors::manager_context_reset_note(&wake_meta.id, &reason, goal, status_goal.as_deref())
-      );
+      prompt =
+        format!("{}\n\n{prompt}", session_anchors::manager_context_reset_note(&wake_meta.id, &reason));
     }
     self.persist_launch_text(session_id, run_id, &prompt)?;
     tracing::info!(
@@ -841,23 +831,15 @@ impl TaskExecutionAdapter {
       } else {
         "this task's managed instructions or sources changed since the previous run, so this run starts a fresh native conversation".to_string()
       };
-      let goal = meta.task.as_ref().map_or(meta.name.as_str(), |task| task.goal.as_str());
-      let handoff = crate::handoff::handoff(
-        &self.features,
-        meta,
-        crate::handoff::HandoffSource::WorkerRun { run: previous },
-        &reason,
-        goal,
-      )?;
+      let handoff =
+        crate::handoff::handoff(&self.features, meta, crate::handoff::HandoffSource::WorkerRun { run: previous }, &reason)?;
       prompt = format!("{}\n\n{prompt}", handoff.note);
     } else if let Some((previous, from)) = worker_failover_source(&self.features, meta, run, option)? {
-      let goal = meta.task.as_ref().map_or(meta.name.as_str(), |task| task.goal.as_str());
       let handoff = crate::handoff::handoff(
         &self.features,
         meta,
         crate::handoff::HandoffSource::WorkerRun { run: &previous },
         &format!("this task switched from backend {from} to {} after {from} spent its quota", option.id),
-        goal,
       )?;
       prompt = format!("{}\n\n{prompt}", handoff.note);
     }
@@ -1192,18 +1174,11 @@ impl TaskExecutionAdapter {
       work_run.id
     );
     let meta = self.features.store.load_meta(session_id).await?;
-    anyhow::ensure!(
-      meta.as_ref().is_some_and(|meta| meta.task.is_some()),
-      "review of work run {} needs its node's task record for the spec",
-      work_run.id
-    );
-    let meta = meta.expect("the task record was checked above");
-    let spec = review_text::review_spec_text(meta.task.as_ref().expect("the task record was checked above"))?;
+    let meta = meta.as_ref().ok_or_else(|| anyhow!("task {session_id} vanished while its review context was built"))?;
     let worker_log_path = self.features.store.run_dir(session_id, &work_run.id).join(run_records::RUN_EVENTS_NAME);
     let worker_summary = review::extract_review_context(session_id, &work_run.id, &worker_log_path).await;
     let context_lines = review_text::review_context_lines(
-      &spec,
-      &self.later_messages_section(&meta, work_run, history).await?,
+      &self.later_messages_section(meta, work_run, history).await?,
       worker_summary.as_deref(),
       &format!("(work run {})", work_run.id),
     );
@@ -1224,32 +1199,26 @@ impl TaskExecutionAdapter {
     history: &ChatEventHistory,
   ) -> anyhow::Result<String> {
     let meta = self.features.store.load_meta(session_id).await?;
-    anyhow::ensure!(
-      meta.as_ref().is_some_and(|meta| meta.task.is_some()),
-      "review of work run {} needs its node's task record for the spec",
-      work_run.id
-    );
-    let meta = meta.expect("the task record was checked above");
-    let spec = review_text::review_spec_text(meta.task.as_ref().expect("the task record was checked above"))?;
+    let meta = meta.as_ref().ok_or_else(|| anyhow!("task {session_id} vanished while its review context was built"))?;
     let worker_log_path = self.features.store.run_dir(session_id, &work_run.id).join(run_records::RUN_EVENTS_NAME);
     let worker_summary = review::extract_review_context(session_id, &work_run.id, &worker_log_path).await;
     Ok(prompts::repo_less_review_task_context(
       &self.features.store.chat_events_path(session_id),
       &worker_log_path,
-      &spec,
-      &self.later_messages_section(&meta, work_run, history).await?,
+      &self.later_messages_section(meta, work_run, history).await?,
       worker_summary.as_deref(),
     ))
   }
 
+  /// The worker launch's task body: the input batch, or nothing when the run claims no input — the
+  /// task record block in the instructions carries the task, and the template's fixed line stays the
+  /// turn's input.
   async fn work_description(
     &self,
     meta: &SessionMetadata,
     run: &RunRecord,
     history: &ChatEventHistory,
   ) -> anyhow::Result<String> {
-    let spec_text =
-      meta.task.as_ref().map(|task| task.goal.as_str()).filter(|goal| !goal.trim().is_empty()).unwrap_or_default();
     let ids = run.input_event_ids.iter().cloned().collect::<HashSet<_>>();
     let batch = history
       .iter()
@@ -1258,12 +1227,7 @@ impl TaskExecutionAdapter {
       .collect::<Vec<_>>();
     let provenance = if batch.is_empty() { Map::new() } else { self.dispatch.child_report_provenances(&batch).await? };
     let (content, _) = compose_input_prompt(&self.features, meta, &batch, &provenance)?;
-    let description =
-      [spec_text, content.as_str()].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n\n");
-    if description.trim().is_empty() {
-      anyhow::bail!("run {} has no task spec and no input; nothing to execute", run.id);
-    }
-    Ok(description)
+    Ok(content)
   }
 
   async fn build_work_context(

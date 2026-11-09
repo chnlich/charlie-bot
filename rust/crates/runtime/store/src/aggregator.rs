@@ -866,7 +866,7 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
     }
     event_types::TASK_RECORD_CHANGED => {
       let content = event.field("content").filter(|value| is_truthy(*value)).map(event_str).unwrap_or_default();
-      json!({"role": "system", "content": content})
+      json!({"role": "system", "kind": event_types::TASK_RECORD_CHANGED, "content": content})
     }
     event_types::TASK_INPUT_ACKNOWLEDGED => render_task_input_acknowledged(event)?,
     _ => return Ok(None),

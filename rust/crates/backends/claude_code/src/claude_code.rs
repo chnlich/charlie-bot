@@ -20,7 +20,7 @@ use charliebot_agents::cli_base::{CapturedEvents, SKIP_PERMISSIONS_FLAG};
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::kill::{exit_code, kill_process_group};
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
-use charliebot_core::event_types;
+use charliebot_core::event_types::{self, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, READ_TOOL, WRITE_TOOL};
 use charliebot_core::headers::AUTHORIZATION;
 use charliebot_core::run_token;
 use charliebot_core::subagent::AGENT_TOOL;
@@ -426,7 +426,7 @@ async fn run_one_shot_process(
 
 /// The `--disallowed-tools` value of a text one-shot: every file tool, a shell, and the subagent tool.
 fn one_shot_disallowed_tools() -> String {
-  ["Bash", "Read", "Write", "Edit", "Glob", "Grep", AGENT_TOOL].join(",")
+  ["Bash", READ_TOOL, WRITE_TOOL, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, AGENT_TOOL].join(",")
 }
 
 /// The argv of a `claude -p` text one-shot: no session persistence, tools disabled, and the caller's model flags.

@@ -1230,6 +1230,17 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::metadata::SESSION_NAME_FIELD`; the approval day view's rows and the voice recordings \
            page's rows both carry a session's display name under it.",
   },
+  OwnerRow { name: "Read", owner: "infra/core", hint: "Use `charliebot_core::event_types::READ_TOOL`." },
+  OwnerRow { name: "Write", owner: "infra/core", hint: "Use `charliebot_core::event_types::WRITE_TOOL`." },
+  OwnerRow { name: "Edit", owner: "infra/core", hint: "Use `charliebot_core::event_types::EDIT_TOOL`." },
+  OwnerRow { name: "MultiEdit", owner: "infra/core", hint: "Use `charliebot_core::event_types::MULTI_EDIT_TOOL`." },
+  OwnerRow {
+    name: "NotebookEdit",
+    owner: "infra/core",
+    hint: "Use `charliebot_core::event_types::NOTEBOOK_EDIT_TOOL`.",
+  },
+  OwnerRow { name: "Glob", owner: "infra/core", hint: "Use `charliebot_core::event_types::GLOB_TOOL`." },
+  OwnerRow { name: "Grep", owner: "infra/core", hint: "Use `charliebot_core::event_types::GREP_TOOL`." },
 ];
 
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one

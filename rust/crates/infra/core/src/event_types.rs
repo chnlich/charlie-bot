@@ -1,4 +1,4 @@
-//! Canonical event wire names shared by event writers and readers.
+//! Canonical event and tool wire names shared by event writers and readers.
 
 pub const ASSISTANT: &str = "assistant";
 pub const USER: &str = "user";
@@ -16,6 +16,23 @@ pub const TOOL_NAME: &str = "tool_name";
 pub const PARENT_TOOL_USE_ID: &str = "parent_tool_use_id";
 /// The `input` key of a file tool call: the path a `Read`, `Edit` or `Write` tool names.
 pub const TOOL_INPUT_FILE_PATH: &str = "file_path";
+/// The Claude Code tool that reads a file. The read-budget hook counts its `file.content` and a read-only one-shot
+/// disallows it.
+pub const READ_TOOL: &str = "Read";
+/// The Claude Code tool that writes a whole file. Its output echoes the written content, which the model never
+/// reads, so the read-budget hook counts nothing for it.
+pub const WRITE_TOOL: &str = "Write";
+/// The Claude Code tool that replaces a string in a file. Its input names the file through `TOOL_INPUT_FILE_PATH`.
+pub const EDIT_TOOL: &str = "Edit";
+/// The Claude Code tool that applies several string replacements in one call. Its output echoes the written
+/// content, like `WRITE_TOOL`.
+pub const MULTI_EDIT_TOOL: &str = "MultiEdit";
+/// The Claude Code tool that edits a notebook. Its output echoes the written content, like `WRITE_TOOL`.
+pub const NOTEBOOK_EDIT_TOOL: &str = "NotebookEdit";
+/// The Claude Code tool that lists files matching a pattern.
+pub const GLOB_TOOL: &str = "Glob";
+/// The Claude Code tool that searches file contents for a pattern.
+pub const GREP_TOOL: &str = "Grep";
 /// The JSON pointer to the content blocks of an event's message: the array a `user` or `assistant` event carries.
 pub const MESSAGE_CONTENT_POINTER: &str = "/message/content";
 /// The committed message's flag that the page already holds its content from the stream frames, so the message frame

@@ -19,7 +19,7 @@ use std::time::Duration;
 use charliebot_cli_common::route;
 use charliebot_cli_common::skew;
 use charliebot_core::config::{CONFIG_FILENAME, CREDENTIALS_FILENAME, sessions_dir_in};
-use charliebot_core::event_types;
+use charliebot_core::event_types::{self, READ_TOOL};
 use charliebot_core::headers::AUTHORIZATION;
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
 use charliebot_core::logging;
@@ -525,7 +525,7 @@ fn first_command_lines(kind: &str) -> io::Result<Vec<u8>> {
     "none" => return Ok(Vec::new()),
     "ok" => ("Bash", false),
     "failed" => ("Bash", true),
-    "not-command" => ("Read", false),
+    "not-command" => (READ_TOOL, false),
     other => return Err(io::Error::other(format!("no first command kind {other:?}"))),
   };
   let call = json!({"type": "assistant", "message": {"content": [

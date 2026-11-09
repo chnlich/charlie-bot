@@ -9,6 +9,9 @@ const { bootstrapPayload, buildSidebarFilterElements, buildSwitchFlowHarness, ma
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
+// A network answer: no stored-copy header (view-requests.js isStoredResponse reads it).
+const NO_STORED_COPY = {get: () => null};
+
 // ---------------------------------------------------------------------------
 // Switch flow: the POST lands only on the winning generation's landed render,
 // through the shared switch-flow harness in session_context_stub.js.
@@ -31,15 +34,15 @@ function buildHarness() {
     fetch: (h, url, opts = {}) => {
       if (url.includes('/read') && opts.method === 'POST') {
         h.readPosts.push(url);
-        return Promise.resolve({ok: true, json: async () => ({})});
+        return Promise.resolve({ok: true, headers: NO_STORED_COPY, json: async () => ({})});
       }
       const boot = url.match(/\/api\/sessions\/([^/]+)\/bootstrap/);
       if (boot) {
         const gate = h.pendingBootstraps[boot[1]];
         if (gate) return gate.promise;
-        return Promise.resolve({ok: true, status: 200, json: async () => BOOTSTRAP[boot[1]]});
+        return Promise.resolve({ok: true, headers: NO_STORED_COPY, status: 200, json: async () => BOOTSTRAP[boot[1]]});
       }
-      return Promise.resolve({ok: true, status: 200, json: async () => ({})});
+      return Promise.resolve({ok: true, headers: NO_STORED_COPY, status: 200, json: async () => ({})});
     },
   });
 }
@@ -49,14 +52,17 @@ function buildHarness() {
 function parkBootstrap(h, sessionId) {
   const gate = {};
   gate.promise = new Promise((resolve) => { gate.resolve = resolve; });
-  gate.keep = () => gate.resolve({ok: true, status: 200, json: async () => BOOTSTRAP[sessionId]});
+  gate.keep = () => gate.resolve({
+    ok: true, headers: NO_STORED_COPY, status: 200, json: async () => BOOTSTRAP[sessionId]});
   return gate;
 }
 
-test('a completed switch posts /read for the switched-to session once', async () => {
+test('a completed switch posts /read for the switched-to session once, after its catch-up', async () => {
   const h = buildHarness();
 
   await h.context.switchSession('session-b');
+  assert.deepEqual(h.readPosts, [], 'the read waits for the socket catch-up');
+  h.context.onSocketCatchupComplete(0);
 
   assert.deepEqual(h.readPosts, ['/api/sessions/session-b/read?page_dot=false']);
   assert.equal(h.context.ownUnread('session-b'), false, 'the local unread clear stays');
@@ -68,7 +74,8 @@ test('a superseded switch generation never posts /read', async () => {
   h.pendingBootstraps['session-b'] = parkBootstrap(h, 'session-b');
 
   const superseded = h.context.switchSession('session-b'); // parks on B's bootstrap
-  await h.context.switchSession('session-c');              // wins: renders and posts
+  await h.context.switchSession('session-c');              // wins: renders
+  h.context.onSocketCatchupComplete(0);                    // C catches up and posts
   h.pendingBootstraps['session-b'].keep();                 // B lands after; generation check drops it
   await superseded;
 

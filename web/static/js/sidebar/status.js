@@ -459,23 +459,11 @@ function refreshTreeIndicators() {
   });
 }
 
-// "Read" means rendered: the read paths call this after the session's content
-// painted (app.js's initial render, switchSession's winning generation, a
-// reply the displayed view rendered). The local fact clears first, stamped so
-// an older reply is refused, and the row repaints. The server-side flag clears
-// only through the POST; a bare data fetch never clears it. Fire-and-forget: a
-// lost POST leaves the server flag set, and the next reply that carries it
-// paints the dot again, or reads it again on the displayed session.
-//
-// pageDot is the dot the row showed when the person opened the session, and
-// the server logs it beside its own flag (unread_dot_diverged on a mismatch).
-// It is null for a read whose row shows no dot by design: the page load (the
-// server renders the open row read) and a reply in the displayed session.
-function markSessionRead(sessionId, pageDot) {
-  recordUnreadFact(sessionId, false);
-  refreshSessionIndicator(sessionId);
-  const query = pageDot === null ? '' : '?page_dot=' + pageDot;
-  fetch('/api/sessions/' + sessionId + '/read' + query, {method: 'POST'}).catch((err) => {
+// The session's server-side unread flag clears only through this POST, which the open's catch-up fires once the page
+// is current (sidebar/last-state.js finishCatchUp). A bare data fetch never clears it. Fire-and-forget: a lost POST
+// leaves the dot up until the next open, so no retry or state mutation lives here.
+function markSessionRead(sessionId) {
+  fetch('/api/sessions/' + sessionId + '/read', {method: 'POST'}).catch((err) => {
     console.error('markSessionRead failed:', err);
   });
 }

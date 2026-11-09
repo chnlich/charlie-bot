@@ -3,6 +3,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const { escapeHtml } = require('./escape_html_stub');
+const { createElement } = require('./dom_element_stub');
 
 const { readPackageStatic, readStatic } = require('./read_static');
 
@@ -172,6 +173,11 @@ class DOMParser {
   }
 }
 
+// A label constant config.js declares. Read on use, so only the tests that paint the label depend on it.
+function configLabel(name) {
+  return new RegExp(`^const ${name} = '([^']*)';`, 'm').exec(readStatic('config.js'))[1];
+}
+
 function loadPlanPanelScript(opts = {}) {
   const noop = () => {};
   const document = opts.document || {
@@ -193,13 +199,15 @@ function loadPlanPanelScript(opts = {}) {
     AbortSignal,
     console: {error: noop, log: noop, warn: noop},
     document,
-    window: {SESSIONS_ROOT: opts.sessionsRoot || SESSIONS_ROOT},
+    window: {addEventListener() {}, SESSIONS_ROOT: opts.sessionsRoot || SESSIONS_ROOT},
+    navigator: opts.navigator || {onLine: true},
     localStorage: {getItem: () => null, setItem: noop},
     fetch: opts.fetch || (async () => {
       throw new Error('fetch should not run during script load');
     }),
     DOMParser,
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
+    get OFFLINE_PANEL_LABEL() { return configLabel('OFFLINE_PANEL_LABEL'); },
     // The core entries the panel registers with at load; web/tests/page_registries.test.js covers them.
     registerTab: noop,
     registerWsConnectHandler: noop,
@@ -213,6 +221,25 @@ function loadPlanPanelScript(opts = {}) {
   const planPanel = vm.runInContext('planPanel', context);
   return {context, planPanel};
 }
+
+test('offline, the plan panel shows the offline label in place of its plans', () => {
+  const elements = new Map(['tab-plans', 'plan-toolbar', 'plan-empty-state', 'plan-viewer', 'plan-offline-label']
+      .map((id) => [id, createElement({id})]));
+  const document = {
+    readyState: 'loading',
+    addEventListener() {},
+    getElementById: (id) => elements.get(id) || null,
+  };
+  const {planPanel} = loadPlanPanelScript({document, navigator: {onLine: false}});
+
+  planPanel.render();
+
+  const label = elements.get('plan-offline-label');
+  assert.equal(label.textContent, configLabel('OFFLINE_PANEL_LABEL'));
+  assert.equal(label.style.display, '');
+  assert.equal(elements.get('plan-viewer').style.display, 'none');
+  assert.equal(elements.get('plan-empty-state').style.display, 'none');
+});
 
 // ---------------------------------------------------------------------------
 // selectDefaultLineage

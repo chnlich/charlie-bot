@@ -12,7 +12,7 @@
 // resize handle is not an interaction that can wait: the reader may drag it
 // before any control call, and app.js initializes its wiring at load. The
 // separator line's Clone to here and Elon-e buttons paint on the first render,
-// to which a sidebar click never comes back; the module's copy used to register
+// to which a sidebar click never comes back. The module's copy used to register
 // them at load, and core loads before every package, so these two lead the line.
 function initSidebarResize() {
   const sidebar = document.getElementById('sidebar');

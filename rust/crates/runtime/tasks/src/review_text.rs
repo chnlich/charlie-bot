@@ -7,6 +7,9 @@
 
 use std::path::Path;
 
+use anyhow::{anyhow, bail};
+use charliebot_store::metadata::TaskSpec;
+
 const ROLE_TEXT: &str = "## Code Review\n\
 You are reviewing another worker's code changes.\n\
 - The repository guide is the repository's `CLAUDE.md` or `AGENTS.md` file and its `.claude/rules/` files.\n\
@@ -85,9 +88,20 @@ pub fn review_landing_target(base_branch: &str) -> String {
   format!("origin/{}", review_published_branch(base_branch))
 }
 
+/// The task record a review judges the work against. The reviewer reads the goal and the acceptance in the
+/// Task record block of its own instructions, so a review needs the record with a goal; a task with an empty
+/// goal has nothing to judge against, so the review fails.
+pub fn require_review_goal(task: Option<&TaskSpec>, work_run_id: &str) -> anyhow::Result<()> {
+  let task =
+    task.ok_or_else(|| anyhow!("review of work run {work_run_id} needs its node's task record for the spec"))?;
+  if task.goal.trim().is_empty() {
+    bail!("review has no task spec: the task record's goal is empty");
+  }
+  Ok(())
+}
+
 /// The review prompt's context lines: the later messages when the worker got any, the worker summary
-/// when one was extracted, and the delegator's hint (`review_context_lines`). The spec is the Task
-/// record block of the reviewer's own instructions.
+/// when one was extracted, and the delegator's hint (`review_context_lines`).
 pub fn review_context_lines(later_messages: &str, worker_summary: Option<&str>, delegator_hint: &str) -> Vec<String> {
   let mut lines = Vec::new();
   if !later_messages.is_empty() {

@@ -1182,6 +1182,7 @@ impl TaskExecutionAdapter {
     );
     let meta = self.features.store.load_meta(session_id).await?;
     let meta = meta.as_ref().ok_or_else(|| anyhow!("task {session_id} vanished while its review context was built"))?;
+    review_text::require_review_goal(meta.task.as_ref(), &work_run.id)?;
     let worker_log_path = self.features.store.run_dir(session_id, &work_run.id).join(run_records::RUN_EVENTS_NAME);
     let worker_summary = review::extract_review_context(session_id, &work_run.id, &worker_log_path).await;
     let context_lines = review_text::review_context_lines(
@@ -1207,6 +1208,7 @@ impl TaskExecutionAdapter {
   ) -> anyhow::Result<String> {
     let meta = self.features.store.load_meta(session_id).await?;
     let meta = meta.as_ref().ok_or_else(|| anyhow!("task {session_id} vanished while its review context was built"))?;
+    review_text::require_review_goal(meta.task.as_ref(), &work_run.id)?;
     let worker_log_path = self.features.store.run_dir(session_id, &work_run.id).join(run_records::RUN_EVENTS_NAME);
     let worker_summary = review::extract_review_context(session_id, &work_run.id, &worker_log_path).await;
     Ok(prompts::repo_less_review_task_context(

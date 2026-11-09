@@ -305,7 +305,7 @@ the validated checkout root held in typed startup state.
 - `review_text::review_numbered_steps`
 - `review_text::review_published_branch`
 - `review_text::review_landing_target`
-- `review_text::review_spec_text`
+- `review_text::require_review_goal`
 - `review_text::review_context_lines`
 - `review_text::review_log_pointer`
 - `review_text::review_git_venue`

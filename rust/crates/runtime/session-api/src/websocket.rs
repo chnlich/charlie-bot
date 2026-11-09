@@ -622,6 +622,7 @@ mod tests {
   use charliebot_registry::{FeatureContext, Registry, StartupState, WebSocketRequest};
   use charliebot_store::metadata::{HAS_RUNNING_TASKS, SessionMetadata, TaskProfile};
   use charliebot_store::run_records::RunRecord;
+  use futures_util::FutureExt;
   use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
   use tokio::net::{TcpListener, TcpStream};
   use tokio::time::{self, Duration};
@@ -1344,9 +1345,10 @@ mod tests {
       .subscribe_session_before_load("synthetic", || async { load_store.load_chat_events_sync("synthetic").unwrap() })
       .await;
     assert_eq!(events.len(), 1);
-    // A copied event sits in the channel at once, so the window stays short of the 0.1 s unit-test budget.
+    // The append and its broadcast finished before the subscription existed, so nothing targets it
+    // afterwards. One poll reads the queue and proves it empty without spending the time budget.
     assert!(
-      time::timeout(Duration::from_millis(50), subscription.recv()).await.is_err(),
+      subscription.recv().now_or_never().is_none(),
       "the subscription carries no copy of the event the replay delivers"
     );
   }
@@ -1378,9 +1380,10 @@ mod tests {
     assert!(events.is_empty(), "the read's snapshot predates the append it blocked");
     let frame = time::timeout(Duration::from_millis(500), subscription.recv()).await.unwrap().unwrap();
     assert_eq!(serde_json::from_str::<Value>(&frame).unwrap()["content"], "mid-flight");
-    // A second delivery sits in the channel at once, so the window stays short of the 0.1 s unit-test budget.
+    // The append finished before the first frame was read, and its broadcast copies the frame into
+    // the queue before returning, so a duplicate would already be here. One poll proves there is none.
     assert!(
-      time::timeout(Duration::from_millis(50), subscription.recv()).await.is_err(),
+      subscription.recv().now_or_never().is_none(),
       "the subscription delivers the blocked append once, never twice"
     );
   }

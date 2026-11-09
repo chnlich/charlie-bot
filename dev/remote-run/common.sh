@@ -16,6 +16,8 @@ REMOTE_RUN_CONFIG_VALUE=''
 # environment does not set them.
 REMOTE_RUN_HOST=''
 REMOTE_RUN_REMOTE_BASE=''
+# The file name of this checkout's remote-exec.pl on the build host, set by remote_run_refresh_remote_exec.
+REMOTE_RUN_EXEC_NAME=''
 # The connectivity check's time limit in seconds. Tailscale's check mode otherwise waits 30
 # minutes in silence; the limit turns that wait into a reported blocker.
 REMOTE_RUN_CONNECT_TIMEOUT=${REMOTE_RUN_CONNECT_TIMEOUT:-60}
@@ -69,7 +71,7 @@ remote_run_base_path() {
 
 remote_run_local_preflight() {
   local tool
-  for tool in ssh rsync git base64 perl timeout mktemp; do
+  for tool in ssh rsync git base64 sha256sum perl timeout mktemp; do
     if ! command -v "$tool" >/dev/null 2>&1; then
       printf 'preflight: required local tool %s is missing\n' "$tool" >&2
       return 2
@@ -219,14 +221,14 @@ remote_run_stream() {
 remote_run_toolchain_preflight() {
   local status base
   base=$(remote_run_base_path)
-  if remote_run_capture "set -e; base=\"$base\"; export CARGO_HOME=\"\$base/cargo\" RUSTUP_HOME=\"\$base/rustup\" UV_PYTHON_INSTALL_DIR=\"\$base/python\" UV_CACHE_DIR=\"\$base/cache/uv\" PATH=\"\$base/node/bin:\$base/bin:\$base/cargo/bin:\$HOME/.local/bin:\$PATH\"; for tool in node npm cargo rustc rsync git flock nice perl; do command -v \"\$tool\" >/dev/null || { echo \"missing build host tool: \$tool\" >&2; exit 2; }; done; test -x \"\$base/node/bin/node\"; test -x \"\$base/bin/uv\"; test -x \"\$base/cargo/bin/rustc\"; test -d \"\$base/rustup/toolchains\"; test -d \"\$base/python\"; test -d \"\$base/slots\"; test -f \"\$base/remote-exec.pl\""; then
+  if remote_run_capture "set -e; base=\"$base\"; export CARGO_HOME=\"\$base/cargo\" RUSTUP_HOME=\"\$base/rustup\" UV_PYTHON_INSTALL_DIR=\"\$base/python\" UV_CACHE_DIR=\"\$base/cache/uv\" PATH=\"\$base/node/bin:\$base/bin:\$base/cargo/bin:\$HOME/.local/bin:\$PATH\"; for tool in node npm cargo rustc rsync git flock nice perl; do command -v \"\$tool\" >/dev/null || { echo \"missing build host tool: \$tool\" >&2; exit 2; }; done; test -x \"\$base/node/bin/node\"; test -x \"\$base/bin/uv\"; test -x \"\$base/cargo/bin/rustc\"; test -d \"\$base/rustup/toolchains\"; test -d \"\$base/python\"; test -d \"\$base/slots\""; then
     :
   else
     status=$?
     if (( status == REMOTE_RUN_TAILSCALE_STATUS )); then
       return "$status"
     fi
-    printf 'preflight: the build host needs node, npm, cargo, uv, rsync, git, flock, nice, perl, rustc, and remote-exec.pl; run setup.sh\n' >&2
+    printf 'preflight: the build host needs node, npm, cargo, uv, rsync, git, flock, nice, perl, and rustc; run setup.sh\n' >&2
     if [[ -n "$REMOTE_RUN_OUTPUT" ]]; then
       printf '%s\n' "$REMOTE_RUN_OUTPUT" >&2
     fi
@@ -309,13 +311,17 @@ remote_run_rsync_capture() {
   return "$status"
 }
 
-# The remote-exec.pl that runs the command is this checkout's copy: sync it to the remote base on
-# every run, so a branch's runner changes take effect without a setup pass.
+# The remote-exec.pl that runs the command is this checkout's copy. Every run syncs it to the remote base
+# under a name that carries its content hash, and the command runs that file. A run from another checkout
+# writes its copy under its own name. Concurrent runs therefore never swap each other's copy, and a branch's
+# runner change takes effect for that branch without a setup pass.
 remote_run_refresh_remote_exec() {
-  local status
+  local status digest
+  digest=$(sha256sum "$REMOTE_RUN_SCRIPT_DIR/remote-exec.pl")
+  REMOTE_RUN_EXEC_NAME="remote-exec-${digest:0:16}.pl"
   if remote_run_rsync_capture --archive --checksum --rsh "$REMOTE_RUN_RSYNC_RSH" \
     "$REMOTE_RUN_SCRIPT_DIR/remote-exec.pl" \
-    "$REMOTE_RUN_HOST:~/$REMOTE_RUN_REMOTE_BASE/remote-exec.pl"; then
+    "$REMOTE_RUN_HOST:~/$REMOTE_RUN_REMOTE_BASE/$REMOTE_RUN_EXEC_NAME"; then
     :
   else
     status=$?
@@ -336,6 +342,6 @@ remote_run_remote_payload() {
 remote_run_remote_command() {
   local payload=$1
   # The base travels in the command: ssh does not forward the local environment.
-  printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/remote-exec.pl" "%s"' \
-    "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$payload"
+  printf 'REMOTE_RUN_REMOTE_BASE="%s" exec "%s/%s" "%s"' \
+    "$REMOTE_RUN_REMOTE_BASE" "$(remote_run_base_path)" "$REMOTE_RUN_EXEC_NAME" "$payload"
 }

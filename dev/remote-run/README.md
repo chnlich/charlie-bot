@@ -58,7 +58,8 @@ The build host's state layout, under its `$HOME` and the remote base: `trees/<tr
 synced trees, `tree-owners/` for the local root each tree belongs to, `slots/` for the four build
 slot locks, `slot-waits.log` for the slot wait record, `cargo/` and `rustup/` for the toolchain,
 `bin/` for uv and sccache, `node/` for Node, `python/` and `cache/` for the uv and sccache
-caches, and `remote-exec.pl`.
+caches, and one `remote-exec-<hash>.pl` for each `remote-exec.pl` content a run has synced. A run
+executes the copy named for its own checkout's content hash.
 
 ## What one run does
 

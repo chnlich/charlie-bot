@@ -215,7 +215,10 @@ fn a_passing_check_leaves_a_remote_255_unchanged() {
   let run = run_runner(&env, &project, &["echo", "remote"]);
   assert_eq!(run.code, 255, "{}", run.describe());
   let log = ssh_log(&sandbox);
-  assert!(log.contains("remote-exec.pl"), "the remote command never ran: {log}");
+  assert!(
+    log.lines().any(|line| line.contains(" exec ") && line.contains("/remote-exec-")),
+    "the remote command never ran this checkout's remote-exec copy: {log}"
+  );
   assert!(log.lines().any(|line| line.contains(HOST) && line.ends_with(" true")), "the check named no host: {log}");
 }
 

@@ -47,6 +47,11 @@ pub const FENCE_RECORD_JSON: JsonStyle =
 pub const RUN_TOKEN_PAYLOAD_JSON: JsonStyle =
   JsonStyle { ensure_ascii: true, sort_keys: true, item_separator: ",", key_separator: ":", indent: None };
 
+/// The compact ASCII style: `,` and `:` separators, and every character outside `' '..='~'` escaped. The launch
+/// record and the proxy's translated events write it.
+pub const COMPACT_ASCII_JSON: JsonStyle =
+  JsonStyle { ensure_ascii: true, sort_keys: false, item_separator: ",", key_separator: ":", indent: None };
+
 /// The shortest round-trip decimal digits of a finite, nonzero magnitude and the exponent of the first digit.
 ///
 /// Among the shortest candidates, the one nearest the exact value wins, and an exact tie

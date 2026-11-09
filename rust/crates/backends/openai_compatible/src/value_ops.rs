@@ -3,13 +3,11 @@
 //! `charliebot_core::json_loads` produced, and each error carries the text the route reports.
 
 use charliebot_core::json_loads::{self, LoadError};
-use charliebot_core::text_repr::{JsonStyle, is_truthy, type_name};
+use charliebot_core::text_repr::{is_truthy, type_name};
 use serde_json::{Map, Value};
 
-/// Compact JSON with ASCII output: `,` and `:` separators, and every character outside the range from space to `~`
-/// escaped.
-pub const COMPACT_ASCII_JSON: JsonStyle =
-  JsonStyle { ensure_ascii: true, sort_keys: false, item_separator: ",", key_separator: ":", indent: None };
+/// The proxy's event style: the compact ASCII JSON from its one owner in `charliebot_core::text_repr`.
+pub use charliebot_core::text_repr::COMPACT_ASCII_JSON;
 
 /// The fault a translation raises. A value error is answered with a status and its text; any other fault is
 /// unhandled, which answers 500 and names its kind.

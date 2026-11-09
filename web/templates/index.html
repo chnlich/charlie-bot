@@ -2,11 +2,10 @@
   {% set defer_concurrency_badge_poll = true %}
   <title>{% if active_session %}{{ active_session.name }} · CharlieBot@{{ hostname }}{% else %}CharlieBot@{{ hostname }}{% endif %}</title>
   <script>window.SESSIONS_ROOT = {{ sessions_root|tojson }};</script>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="/static/vendor/marked-15.0.12.min.js"></script>
+  <link href="/static/vendor/fira-code-v27.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/vendor/highlight-github-dark-11.9.0.min.css">
+  <script src="/static/vendor/highlight-11.9.0.min.js"></script>
   {# KaTeX is not here: markdown-renderer.js downloads it at the first message that carries math. #}
   <style>{% include 'css/styles.css' %}</style>
   {% for part in page_parts('head') %}{% include part %}{% endfor %}

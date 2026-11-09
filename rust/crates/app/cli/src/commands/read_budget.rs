@@ -34,7 +34,9 @@ use charliebot_claude_code::claude_launch;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
-use charliebot_core::event_types::{self, TOOL_INPUT_FILE_PATH};
+use charliebot_core::event_types::{
+  self, EDIT_TOOL, MULTI_EDIT_TOOL, NOTEBOOK_EDIT_TOOL, READ_TOOL, TOOL_INPUT_FILE_PATH, WRITE_TOOL,
+};
 use charliebot_core::home;
 use charliebot_core::subagent::SUBAGENT_TOOL_NAMES;
 use charliebot_store::layout;
@@ -52,10 +54,10 @@ const LOCK_FILE_NAME: &str = "read_budget.lock";
 
 /// The tools whose successful output Claude Code replaces through `updatedToolOutput` (tested on
 /// Claude Code 2.1.319). Any other tool's over-budget output passes whole and carries the notice.
-const WITHHOLDABLE_TOOLS: [&str; 2] = ["Bash", "Read"];
+const WITHHOLDABLE_TOOLS: [&str; 2] = ["Bash", READ_TOOL];
 
 /// The tools whose `tool_response` echoes written content the model never reads, so they count 0.
-const WRITING_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
+const WRITING_TOOLS: [&str; 4] = [WRITE_TOOL, EDIT_TOOL, MULTI_EDIT_TOOL, NOTEBOOK_EDIT_TOOL];
 
 /// Claude Code's persisted-output preview holds at most this many characters of the output ("first
 /// 2KB"), cut back to the last line end when that line end lies past the preview's halfway mark.
@@ -303,7 +305,7 @@ fn read_back_exemption(
   tool_input: &Map<String, Value>,
   state: &BudgetState,
 ) -> Option<Option<String>> {
-  if tool_name != "Read" {
+  if tool_name != READ_TOOL {
     return None;
   }
   let path = tool_input.get(TOOL_INPUT_FILE_PATH).and_then(Value::as_str)?;
@@ -352,7 +354,7 @@ fn exempt_class(tool_name: &str, tool_input: &Map<String, Value>) -> Option<Stri
   let class = match tool_name {
     name if SUBAGENT_TOOL_NAMES.contains(&name) => Some("child_conclusion"),
     "Skill" => Some("rule_skill"),
-    "Read" => tool_input.get(TOOL_INPUT_FILE_PATH).and_then(Value::as_str).and_then(path_class),
+    READ_TOOL => tool_input.get(TOOL_INPUT_FILE_PATH).and_then(Value::as_str).and_then(path_class),
     "Bash" => tool_input.get("command").and_then(Value::as_str).and_then(bash_class),
     _ => None,
   };
@@ -415,7 +417,7 @@ fn result_chars(tool_name: &str, response: &Map<String, Value>) -> usize {
       None => stdout.chars().count() + stderr,
     };
   }
-  if tool_name == "Read" {
+  if tool_name == READ_TOOL {
     return match response.get("type").and_then(Value::as_str).unwrap_or("") {
       "text" => {
         response.get("file").and_then(|file| file.get("content")).and_then(Value::as_str).unwrap_or("").chars().count()

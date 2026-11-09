@@ -1,7 +1,7 @@
 //! The synthetic prose, markdown, code and tool traffic that events draw from. Every sentence is written for this crate.
 //! A run composes the block and output-line pools once, so an event costs one random choice per block.
 
-use charliebot_core::event_types::TOOL_INPUT_FILE_PATH;
+use charliebot_core::event_types::{EDIT_TOOL, GLOB_TOOL, GREP_TOOL, READ_TOOL, TOOL_INPUT_FILE_PATH};
 use serde_json::{Value, json};
 
 use crate::rng::Rng;
@@ -108,7 +108,7 @@ const CODE_SNIPPETS: &[(&str, &str)] = &[
   ("sql", "SELECT id, name FROM sessions WHERE status = 'active' ORDER BY updated_at DESC LIMIT 40;"),
 ];
 
-const TOOL_NAMES: &[&str] = &["Read", "Bash", "Grep", "Edit", "Glob"];
+const TOOL_NAMES: &[&str] = &[READ_TOOL, "Bash", GREP_TOOL, EDIT_TOOL, GLOB_TOOL];
 
 /// The composed pools of one run. Events pick from them, so the pools hold the text's whole variety.
 pub struct SyntheticText {
@@ -173,17 +173,17 @@ pub fn tool_call(rng: &mut Rng) -> (&'static str, Value) {
   let name = *rng.choose(TOOL_NAMES);
   let module = format!("module_{:02}", rng.range(1, 40));
   let input = match name {
-    "Read" => json!({TOOL_INPUT_FILE_PATH: format!("src/{module}/handler.rs")}),
+    READ_TOOL => json!({TOOL_INPUT_FILE_PATH: format!("src/{module}/handler.rs")}),
     "Bash" => json!({"command": format!("cargo test -p {module} --locked")}),
-    "Grep" => json!({"pattern": "TODO|FIXME", "path": format!("src/{module}")}),
-    "Edit" => {
+    GREP_TOOL => json!({"pattern": "TODO|FIXME", "path": format!("src/{module}")}),
+    EDIT_TOOL => {
       json!({
         TOOL_INPUT_FILE_PATH: format!("src/{module}/config.rs"),
         "old_string": "retry: 3",
         "new_string": "retry: 5"
       })
     }
-    "Glob" => json!({"pattern": format!("src/{module}/**/*.rs")}),
+    GLOB_TOOL => json!({"pattern": format!("src/{module}/**/*.rs")}),
     other => unreachable!("tool names are drawn from TOOL_NAMES, not {other}"),
   };
   (name, input)

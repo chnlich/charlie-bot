@@ -20,7 +20,7 @@ use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::draft::{DraftContext, DraftPlatform, DraftSendFailure, DraftSent};
 use charliebot_store::SESSION_NOT_FOUND_DETAIL;
-use charliebot_store::control_events::sha256_hex;
+use charliebot_store::control_events::{ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER, sha256_hex};
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Value, json};
 
@@ -196,7 +196,7 @@ async fn record_sent(
   let event = json!({
     "type": event_types::DRAFT_SENT,
     "content": format!("Draft {} sent by {}: {}", draft.draft_id, sent.sender, sent.url),
-    "actor": "system",
+    "actor": ACTOR_SYSTEM,
     log::DRAFT_ID: draft.draft_id,
     log::SHA256: draft.sha256,
     log::SENDER: sent.sender,
@@ -227,7 +227,7 @@ async fn record_failed(
 ) -> charliebot_store::StoreResult<()> {
   let event = json!({
     "type": event_types::DRAFT_FAILED,
-    "actor": "system",
+    "actor": ACTOR_SYSTEM,
     log::DRAFT_ID: draft_id,
     log::ERROR: failure.detail,
     log::OUTCOME: failure.outcome.as_str(),
@@ -248,7 +248,7 @@ fn platform(features: &FeatureContext, name: &str) -> Result<Arc<dyn DraftPlatfo
 }
 
 fn actor(caller: &CallerIdentity) -> &'static str {
-  if caller.is_operator() { "user" } else { "agent" }
+  if caller.is_operator() { ACTOR_USER } else { ACTOR_AGENT }
 }
 
 fn internal(detail: String) -> Response {

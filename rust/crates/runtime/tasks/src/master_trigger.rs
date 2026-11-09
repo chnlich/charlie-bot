@@ -2,6 +2,7 @@
 
 use charliebot_core::event_types;
 use charliebot_registry::context::FeatureContext;
+use charliebot_store::control_events::ACTOR_AGENT;
 use charliebot_store::metadata::SessionStatus;
 use charliebot_store::{StoreError, StoreResult};
 use serde_json::{Map, Value};
@@ -28,7 +29,7 @@ impl<'a> TriggerMasterRequest<'a> {
       summary,
       input_id: None,
       event_type: event_types::AGENT_MESSAGE,
-      actor: "agent",
+      actor: ACTOR_AGENT,
       from_session: None,
       from_session_name: None,
       pull_back: true,

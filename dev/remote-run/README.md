@@ -6,7 +6,7 @@ command there, and copies the results back to the original directory.
 ## Invoke
 
 `setup.sh` installs the build host's state once: uv, Rust 1.99.0 with clippy and rustfmt, sccache,
-Node 20 with npm, four build slots, and `remote-exec.pl`. It runs from a project directory; a
+Node 24 with npm, four build slots, and `remote-exec.pl`. It runs from a project directory; a
 project with `pyproject.toml` needs its `.venv` present, because setup installs the CPython patch
 release it pins. A directory without a Python project gets none.
 

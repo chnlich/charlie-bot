@@ -32,8 +32,10 @@ uv_release=0.13.1
 uv_checksum=9041c73c99fdc5892cf128140beb354eca9231d502068cc36e6cb53a8e59ad14
 sccache_release=0.18.0
 sccache_checksum=2b3284d5da3b46a47dc4229e75bb7b88ac4aa99c8d754fb7d2f84997e5a4354a
-node_release=20.19.0
-node_checksum=618e4294602b78e97118a39050116b70d088b16197cd3819bba1fc18b473dfc4
+# The node runner of the 0.1 s unit-test gate (dev/check-unit-test-time.mjs) reruns each test from the JUnit
+# testcase's file attribute, which this release's reporter writes and Node 20's omits.
+node_release=24.22.2
+node_checksum=95c264150aceb7f3437a29fd6984924f5f8d1511ea3cbd6c508b83f6c555dae2
 
 remote_setup=$(cat <<'REMOTE'
 set -euo pipefail
@@ -127,7 +129,14 @@ if [[ "$node_version_line" != 'v__NODE_RELEASE__' ]]; then
     curl --proto '=https' --tlsv1.2 -fsSL "$node_url" -o "$node_archive"
   fi
   printf '%s  %s\n' '__NODE_CHECKSUM__' "$node_archive" | sha256sum --check --status
-  tar -xzf "$node_archive" --strip-components=1 -C "$base/node"
+  # A release unpacked over another mixes the two npm module trees, and npm then fails to load. The release
+  # unpacks into a fresh directory that replaces the old one.
+  rm -rf -- "$base/node.new" "$base/node.old"
+  install -d -m 700 "$base/node.new"
+  tar -xzf "$node_archive" --strip-components=1 -C "$base/node.new"
+  mv -- "$base/node" "$base/node.old"
+  mv -- "$base/node.new" "$base/node"
+  rm -rf -- "$base/node.old"
   node_version_line=$("$node" --version)
   if [[ "$node_version_line" != 'v__NODE_RELEASE__' ]]; then
     printf 'setup: expected Node v__NODE_RELEASE__ on the build host, got %s\n' "$node_version_line" >&2

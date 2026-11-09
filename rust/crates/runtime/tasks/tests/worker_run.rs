@@ -474,6 +474,18 @@ fn snapshot_of(record: &RunRecord) -> anyhow::Result<Value> {
   Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?)
 }
 
+/// The text of a snapshot's blocks whose source is the task record (scope `task`).
+fn task_record_text(snapshot: &Value) -> String {
+  snapshot["blocks"]
+    .as_array()
+    .into_iter()
+    .flatten()
+    .filter(|block| block["sources"].as_array().into_iter().flatten().any(|source| source["scope"] == "task"))
+    .filter_map(|block| block["text"].as_str())
+    .collect::<Vec<_>>()
+    .join("\n\n")
+}
+
 /// The `source_ref` of every source in a snapshot's blocks.
 fn snapshot_source_refs(snapshot: &Value) -> Vec<String> {
   snapshot["blocks"]
@@ -486,8 +498,8 @@ fn snapshot_source_refs(snapshot: &Value) -> Vec<String> {
 }
 
 /// A script-run work launch and a verify launch ride the same assembler with their own contracts. The work launch
-/// carries the worker contract, the goal and the input in its launch text, and a repository sandbox; the verify launch
-/// carries the verify contract only.
+/// carries the worker contract, the input and a repository sandbox in its launch text, and the goal in the Task record
+/// block of its instructions; the verify launch carries the verify contract only.
 #[tokio::test]
 #[ignore = "integration"]
 async fn worker_run_kinds_deliver_snapshot_bytes_and_task_context() -> anyhow::Result<()> {
@@ -534,7 +546,9 @@ async fn worker_run_kinds_deliver_snapshot_bytes_and_task_context() -> anyhow::R
   assert!(refs.iter().any(|source| source == "prompts/worker.md"), "{refs:?}");
   assert!(!refs.iter().any(|source| source == "prompts/task_manager.md"), "{refs:?}");
   let launch_text = std::fs::read_to_string(stack.store().run_dir(&worker.id, &run).join("launch_prompt.md"))?;
-  assert!(launch_text.contains("ship it"), "the goal is in the launch text");
+  let task_text = task_record_text(&snapshot);
+  assert!(task_text.contains("ship it"), "{task_text}");
+  assert!(!launch_text.contains("ship it"), "the goal is not re-sent in the launch text");
   assert!(launch_text.contains("do the thing"), "the input is in the launch text");
   assert!(launch_text.contains("isolated sandbox"), "the script-run bindings context is in the launch text");
   assert!(!launch_text.contains("This is a script-run task"), "that rule is managed, not launch text");

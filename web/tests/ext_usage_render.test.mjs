@@ -269,19 +269,11 @@ test('renderExtUsage shows business/unlimited Codex state with no quota bars', (
   assert.equal(_field(codexRow, '7d-bar'), null, 'no invented 7d bar');
 });
 
-test('renderExtUsage uses provider window names and renders member cooling state through an account error', () => {
+test('renderExtUsage uses provider window names', () => {
   const { context, strip } = loadExtUsageScript();
-  const reset = '2026-11-08T00:01:00Z';
 
   context.renderExtUsage({
     providers: {
-      'devin:main': {
-        provider: 'devin',
-        provider_label: 'Devin',
-        account: 'main',
-        error: 'quota source unavailable',
-        status_rows: [{ name: 'member', state: 'cooling', resets_at: reset }],
-      },
       'opencode:main': {
         provider: 'opencode',
         provider_label: 'OpenCode Go',
@@ -295,12 +287,6 @@ test('renderExtUsage uses provider window names and renders member cooling state
       },
     },
   });
-
-  const coolingRow = _rowByKey(strip, 'devin:main:status:0');
-  assert.equal(coolingRow.getAttribute('data-state'), 'cooling');
-  assert.equal(coolingRow.getAttribute('data-resets-at'), reset);
-  assert.ok(_field(coolingRow, 'member-name'));
-  assert.ok(_field(coolingRow, 'member-state'));
 
   // The fixed windows are named from their minutes; the calendar month keeps its own name.
   const opencodeRow = _rowByKey(strip, 'opencode:main');

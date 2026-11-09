@@ -201,7 +201,9 @@ function setChatView(view) {
   const engine = Chat.activeTurnEngineFor(document.getElementById('messages'));
   if (!engine) throw new Error('No turn engine is mounted for the chat view');
   // Status rides on the message view the engine already mounts, so a selection
-  // of it never remounts the list.
+  // of it never remounts the list. The panel's code travels after the document
+  // and the selection is its first need.
+  if (view === STATUS) Chat.loadStatusPanel?.();
   applyChatView(SESSION_ID, view === STATUS ? engine.view : view, view === STATUS, engine);
 }
 

@@ -23,9 +23,8 @@
   const TRAY_ID = 'pending-triggers-tray';
   const CANCEL_REVERT_MS = 3000;
   // The pending-trigger bell's body: the sidebar's bell (sidebar/status.js)
-  // renders the same glyph, so the two surfaces of one fact read as one
-  // signal. Wired chatOnly for the sidebar's bell.
-  const PENDING_TRIGGER_BELL_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0a3 3 0 01-6 0"/>';
+  // renders the same glyph, so shared.js owns the one copy both surfaces read.
+  const PENDING_TRIGGER_BELL_SVG_PATH = Chat.PENDING_TRIGGER_BELL_SVG_PATH;
   const CHEVRON_DOWN_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>';
   const CHEVRON_UP_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/>';
   const X_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>';
@@ -325,8 +324,6 @@
     togglePendingTriggersTray,
     expandPendingTriggersTray,
     trayCancelClick,
-  }, {
-    PENDING_TRIGGER_BELL_SVG_PATH,
-  });
+  }, {});
 
 })();

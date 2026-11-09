@@ -1,5 +1,4 @@
-//! The release entry point (scripts/release.sh) and the scripts it runs, for real, against a stub gh and stub stage
-//! commands.
+//! The release entry point (scripts/release.sh), for real, against a stub gh and a sandboxed user manager.
 //!
 //! Every parametrized case is its own test. Each
 //! test builds a throwaway git repository, release root and log root in a sandbox, so nothing touches
@@ -16,10 +15,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use charliebot_shell_harness::{self as harness, Env, Run, Sandbox, write_executable};
+use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
 use release_lock::LockHolder;
 use serde_json::json;
-use sha2::Digest as _;
 use world::World;
 
 // ---- preflight refusals: exit 2 and nothing written ----------------------------------------------------------------
@@ -136,7 +134,6 @@ fn preflight_refuses_a_commit_without_both_rust_jobs_green(case: &str) {
   world.assert_refused_and_wrote_nothing(&run);
   assert!(run.stderr.contains("CI has no successful push run"), "{}", run.describe());
 }
-
 // ---- the host release lock -----------------------------------------------------------------------------------------
 
 #[test]
@@ -172,54 +169,21 @@ fn test_a_holder_that_is_killed_leaves_the_lock_free_for_the_next_release() {
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(world.releases.join(&world.on_main).join("release.log").exists(), "{}", run.describe());
 }
-
-#[test]
-#[ignore = "integration"]
-fn test_a_trial_server_that_outlives_a_killed_release_does_not_keep_the_host_lock() {
-  let mut world = World::new();
-  let server_pid = world.sandbox.root().join("trial-server.pid");
-  let stage = world.bin().join("trial-outlives");
-  // A trial whose server outlives the stage, as trial.sh's server does, and that then kills the release running it.
-  write_executable(
-    &stage,
-    format!(
-      "#!/usr/bin/env bash\nsleep 300 < /dev/null > /dev/null 2>&1 &\necho $! > '{}'\nkill -9 \"$PPID\"\n",
-      server_pid.display()
-    ),
-  );
-  world.env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), stage.display().to_string());
-
-  let killed = world.release(&world.on_main);
-  assert_ne!(killed.code, 0, "{}", killed.describe());
-  let server: i32 = fs::read_to_string(&server_pid).expect("the trial's server pid").trim().parse().expect("a pid");
-
-  let mut command = harness::command("bash", &world.env);
-  command
-    .args(["-c", "source \"$1\" && release_lock_take probe.sh \"$2\"", "bash"])
-    .arg(world.repo.join("scripts/release/lock.sh"))
-    .arg(&world.on_main);
-  let probe = harness::run(&mut command);
-  // Stop the stranded server before the assertion, so a failure leaves nothing running.
-  nix::sys::signal::kill(nix::unistd::Pid::from_raw(server), nix::sys::signal::Signal::SIGKILL)
-    .expect("stop the trial's server");
-  assert_eq!(probe.code, 0, "the server kept the lock after the release died: {}", probe.describe());
-}
-
 // ---- a failed stage: exit 1, the stage named, nothing installed -----------------------------------------------------
 
 #[test]
 #[ignore = "integration"]
 fn test_a_failed_stage_exits_1_names_the_stage_and_installs_nothing() {
-  let mut world = World::new();
-  let stage_fail = world.bin().join("stage-fail").display().to_string();
-  world.env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), stage_fail);
+  let world = World::new();
+  // The units stage reloads the user manager; a refused reload fails it.
+  world.sandbox.stub("systemctl", "exit 1\n");
 
   let run = world.release(&world.on_main);
 
   assert_eq!(run.code, 1, "{}", run.describe());
-  assert!(run.stderr.contains("stage trial failed"), "{}", run.describe());
-  let log = world.stage_log("trial.log");
-  assert!(run.stderr.contains(&format!("stage trial failed: {}", log.display())), "{}", run.describe());
+  assert!(run.stderr.contains("stage units failed"), "{}", run.describe());
+  let log = world.stage_log("units.log");
+  assert!(run.stderr.contains(&format!("stage units failed: {}", log.display())), "{}", run.describe());
   assert!(!world.releases.join(&world.on_main).exists(), "{}", run.describe());
   assert!(!world.has_temporary_release(), "{}", run.describe());
   assert_eq!(world.current_link(), PathBuf::from("prior"));
@@ -242,61 +206,17 @@ fn test_a_failed_download_stage_exits_1_and_installs_nothing() {
 
 // ---- the downloaded artifact: a temporary directory the log directory never holds ------------------------------------
 
-/// Stub trial and rehearsal stages that read the downloaded binary and directory out of the artifact temporary
-/// directory and refuse anything else, recording what they read in the file this returns.
-fn stub_stages_that_record_the_downloaded_binary(world: &mut World) -> PathBuf {
-  world.sandbox.stub(
-    "record-trial",
-    r#"case "$2" in
-  "$TMPDIR"/charliebot-release-artifact-*/charliebot-server) ;;
-  *) printf 'trial got %s, not the downloaded server binary\n' "$2" >&2; exit 1 ;;
-esac
-[ -x "$2" ] || { printf 'trial: the downloaded server binary is not executable\n' >&2; exit 1; }
-printf 'trial read the downloaded server binary from the temporary directory\n' >> "$STAGE_CALLS"
-"#,
-  );
-  world.sandbox.stub(
-    "record-rehearsal",
-    r#"case "$2" in
-  "$TMPDIR"/charliebot-release-artifact-*) ;;
-  *) printf 'rehearsal got %s, not the downloaded directory\n' "$2" >&2; exit 1 ;;
-esac
-for name in charliebot charliebot-server sha256sums.txt; do
-  [ -f "$2/$name" ] || { printf 'rehearsal: %s missing from the downloaded directory\n' "$name" >&2; exit 1; }
-done
-printf 'rehearsal read the downloaded directory\n' >> "$STAGE_CALLS"
-"#,
-  );
-  let calls = world.sandbox.root().join("stage-calls.log");
-  world.env.insert("STAGE_CALLS".to_string(), calls.display().to_string());
-  world.env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), world.bin().join("record-trial").display().to_string());
-  world
-    .env
-    .insert("CHARLIEBOT_RELEASE_REHEARSAL".to_string(), world.bin().join("record-rehearsal").display().to_string());
-  calls
-}
-
 #[test]
 #[ignore = "integration"]
 fn test_a_passing_run_keeps_no_binary_in_the_log_directory_and_removes_the_artifact_directory() {
-  let mut world = World::new();
-  let calls = stub_stages_that_record_the_downloaded_binary(&mut world);
+  let world = World::new();
 
   let run = world.release(&world.on_main);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  // The trial read the downloaded server binary and the rehearsal the downloaded directory, both out of the artifact
-  // temporary directory.
-  assert_eq!(
-    fs::read_to_string(&calls).expect("the stage calls"),
-    "trial read the downloaded server binary from the temporary directory\n\
-     rehearsal read the downloaded directory\n",
-    "{}",
-    run.describe()
-  );
   // The log directory keeps the stage logs and the artifact's checksums, and no binary.
   let names = world.log_names();
-  for name in ["download.log", "units.log", "trial.log", "rehearsal.log", "install.log", "sha256sums.txt"] {
+  for name in ["download.log", "units.log", "install.log", "sha256sums.txt"] {
     assert!(names.contains(&name.to_string()), "the log directory lacks {name}: {names:?}");
   }
   for name in ["charliebot", "charliebot-server", "artifact"] {
@@ -317,16 +237,16 @@ fn test_a_passing_run_keeps_no_binary_in_the_log_directory_and_removes_the_artif
 #[test]
 #[ignore = "integration"]
 fn test_a_stage_that_fails_after_the_download_leaves_no_binary_and_no_artifact_directory() {
-  let mut world = World::new();
-  world.env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), world.bin().join("stage-fail").display().to_string());
+  let world = World::new();
+  world.sandbox.stub("systemctl", "exit 1\n");
 
   let run = world.release(&world.on_main);
 
   assert_eq!(run.code, 1, "{}", run.describe());
-  assert!(run.stderr.contains("stage trial failed"), "{}", run.describe());
+  assert!(run.stderr.contains("stage units failed"), "{}", run.describe());
   let names = world.log_names();
   assert!(names.contains(&"sha256sums.txt".to_string()), "the download's checksums did not stay: {names:?}");
-  assert!(names.contains(&"trial.log".to_string()), "the failed stage's log did not stay: {names:?}");
+  assert!(names.contains(&"units.log".to_string()), "the failed stage's log did not stay: {names:?}");
   for name in ["charliebot", "charliebot-server", "artifact"] {
     assert!(!names.contains(&name.to_string()), "the log directory holds {name}: {names:?}");
   }
@@ -341,11 +261,16 @@ fn test_a_stage_that_fails_after_the_download_leaves_no_binary_and_no_artifact_d
 #[test]
 #[ignore = "integration"]
 fn test_an_interrupt_during_a_stage_removes_the_artifact_directory() {
-  let mut world = World::new();
-  // The trial stage SIGTERMs the release script itself, as an interrupt does: the script must still remove the
-  // artifact temporary directory.
-  world.sandbox.stub("kill-release", "kill -TERM \"$PPID\"\n");
-  world.env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), world.bin().join("kill-release").display().to_string());
+  let world = World::new();
+  // The units stage's reload SIGTERMs the release script itself, as an interrupt does: the script must still remove the
+  // artifact temporary directory. The stub's parent is the slice-unit install script, whose parent is the release.
+  world.sandbox.stub(
+    "systemctl",
+    r#"ppid() { awk '/^PPid:/ { print $2 }' "/proc/$1/status"; }
+kill -TERM "$(ppid "$PPID")"
+exit 1
+"#,
+  );
 
   let run = world.release(&world.on_main);
 
@@ -357,11 +282,8 @@ fn test_an_interrupt_during_a_stage_removes_the_artifact_directory() {
     world.artifact_temp_entries()
   );
   let names = world.log_names();
-  assert!(names.contains(&"trial.log".to_string()), "the interrupted stage's log did not stay: {names:?}");
-  for name in ["rehearsal.log", "install.log"] {
-    assert!(!names.contains(&name.to_string()), "the script ran past the interrupt: {names:?}");
-  }
-  for name in ["charliebot", "charliebot-server", "artifact"] {
+  assert!(names.contains(&"units.log".to_string()), "the interrupted stage's log did not stay: {names:?}");
+  for name in ["install.log", "charliebot", "charliebot-server", "artifact"] {
     assert!(!names.contains(&name.to_string()), "the log directory holds {name}: {names:?}");
   }
 }
@@ -393,33 +315,47 @@ fn test_a_passing_run_installs_both_binaries_and_leaves_current() {
   let check = harness::run(&mut command);
   assert_eq!(check.code, 0, "{}", check.describe());
   let release_log = fs::read_to_string(release.join("release.log")).expect("the release log");
-  for stage in ["download", "trial", "rehearsal", "install"] {
+  for stage in ["download", "units", "install"] {
     assert!(release_log.contains(&format!("stage={stage} verdict=pass")), "{release_log}");
   }
+  assert!(!release_log.contains("stage=trial"), "the release ran a trial: {release_log}");
+  assert!(!release_log.contains("stage=rehearsal"), "the release ran a rehearsal: {release_log}");
   assert_eq!(world.current_link(), PathBuf::from("prior"));
   assert!(run.stdout.contains(&format!("scripts/switch-server.sh rust {}", world.on_main)), "{}", run.describe());
 }
 
 #[test]
 #[ignore = "integration"]
-fn test_a_release_installs_the_commits_units_before_its_trial_and_its_rehearsal() {
-  let mut world = World::new();
-  world.sandbox.stub("record-trial", "printf 'trial\\n' >> \"$UNIT_CALLS\"\n");
-  world.sandbox.stub("record-rehearsal", "printf 'rehearsal\\n' >> \"$UNIT_CALLS\"\n");
-  world.env.insert("CHARLIEBOT_RELEASE_TRIAL".to_string(), world.bin().join("record-trial").display().to_string());
-  world
-    .env
-    .insert("CHARLIEBOT_RELEASE_REHEARSAL".to_string(), world.bin().join("record-rehearsal").display().to_string());
+fn test_a_release_installs_the_commits_slice_units_before_it_installs_the_release() {
+  let world = World::new();
 
   let run = world.release(&world.on_main);
 
   assert_eq!(run.code, 0, "{}", run.describe());
   let calls = recorded_calls(&world.sandbox.root().join("unit-calls.log"));
-  assert_eq!(calls, "--user daemon-reload\ntrial\nrehearsal\n", "{}", run.describe());
+  assert_eq!(calls, "--user daemon-reload\n", "{}", run.describe());
   let installed =
     fs::read_to_string(world.sandbox.root().join("user-units/charliebot-agents.slice")).expect("the installed unit");
   let committed = committed_text(&world.env, &world.repo, &world.on_main, "scripts/systemd/charliebot-agents.slice");
   assert_eq!(installed, committed);
+  let release_log = fs::read_to_string(world.releases.join(&world.on_main).join("release.log")).expect("the log");
+  let units_at = release_log.find("stage=units verdict=pass").expect("the units stage");
+  let install_at = release_log.find("stage=install verdict=pass").expect("the install stage");
+  assert!(units_at < install_at, "the install ran before the units: {release_log}");
+}
+
+/// The calls a stub recorded, one line per invocation; a stub that never ran left no file.
+fn recorded_calls(calls: &Path) -> String {
+  fs::read_to_string(calls).unwrap_or_default()
+}
+
+/// The text of one file as `commit` stores it.
+fn committed_text(env: &Env, cwd: &Path, commit: &str, path: &str) -> String {
+  let mut command = harness::command("git", env);
+  command.arg("-C").arg(cwd).arg("show").arg(format!("{commit}:{path}"));
+  let run = harness::run(&mut command);
+  assert_eq!(run.code, 0, "{}", run.describe());
+  run.stdout
 }
 
 // ---- the moved helpers' own checks ----------------------------------------------------------------------------------
@@ -488,604 +424,11 @@ fn test_release_helper_self_test_passes() {
     run.describe()
   );
 }
+// ---- trial --serve: the seeded home, the tmux server and the tmux socket limit ----------------------------------------
 
-#[test]
-#[ignore = "integration"]
-fn test_trial_refuses_a_server_binary_whose_cli_lacks_release_helper() {
-  let sandbox = Sandbox::new();
-  let release = sandbox.dir("release");
-  let server = release.join("charliebot-server");
-  write_executable(&server, "#!/usr/bin/env bash\nexit 0\n");
-  let cli = release.join("charliebot");
-  write_executable(&cli, "#!/usr/bin/env bash\nexit 2\n");
-  let commit = "abcdef0123456789abcdef0123456789abcdef01";
-  let tree = PathBuf::from(format!("/tmp/charliebot-release-trial-{commit}"));
-  let mut env = sandbox.env();
-  env.insert("CHARLIEBOT_HOME".to_string(), sandbox.dir("home").display().to_string());
-
-  let mut command = harness::command("bash", &env);
-  command.arg(harness::repo_root().join("scripts/release/trial.sh")).arg(commit).arg(&server);
-  let run = harness::run(&mut command);
-
-  assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(run.stderr.contains("release-helper"), "{}", run.describe());
-  assert!(!tree.exists(), "the refusal started the trial tree {}", tree.display());
-}
-
-#[test]
-#[ignore = "integration"]
-fn test_rehearsal_refuses_a_new_release_without_a_release_helper_cli() {
-  let sandbox = Sandbox::new();
-  let releases = sandbox.dir("releases");
-  let logs = sandbox.root().join("logs");
-  let release = sandbox.dir("new-release");
-  write_executable(&release.join("charliebot"), "#!/usr/bin/env bash\nexit 2\n");
-  let mut env = sandbox.env();
-  env.insert("CHARLIEBOT_HOME".to_string(), sandbox.dir("home").display().to_string());
-  env.insert("CHARLIEBOT_RELEASES_DIR".to_string(), releases.display().to_string());
-  env.insert("CHARLIEBOT_RELEASE_LOG_DIR".to_string(), logs.display().to_string());
-
-  let mut command = harness::command("bash", &env);
-  command.arg(harness::repo_root().join("scripts/release/switch-rehearsal.sh")).arg("a".repeat(40)).arg(&release);
-  let run = harness::run(&mut command);
-
-  assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(run.stderr.contains("release-helper"), "{}", run.describe());
-  assert!(!logs.exists(), "the refusal wrote {}", logs.display());
-}
-
-#[test]
-#[ignore = "integration"]
-fn test_rehearsal_usage_refuses_a_missing_argument() {
-  let sandbox = Sandbox::new();
-  let mut command = harness::command("bash", &sandbox.env());
-  command.arg(harness::repo_root().join("scripts/release/switch-rehearsal.sh")).arg("a".repeat(40));
-
-  let run = harness::run(&mut command);
-
-  assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(run.stderr.contains("usage: switch-rehearsal.sh <new commit> <new release dir>"), "{}", run.describe());
-}
-
-// ---- the trial and rehearsal preflights read the live model endpoint ------------------------------------------------
-
-/// The live endpoint the test's config names: loopback, with no key of its own. No operator host reaches a fixture.
-const LIVE_API_BASE: &str = "http://127.0.0.1:9/v1";
-
-/// The `credentials.yaml` section the live endpoint names when it needs the live key.
-const LIVE_CREDENTIAL: &str = "deploy-endpoint";
-
-/// A live home holding one `backends.options` entry with an `api_base`, and no other key: the live config's key set, so
-/// the guard switch and the runner section are absent. With `credential`, the entry names that section of the live
-/// credentials file and the file holds its `api_key`; without it, the credentials file holds no backend section.
-fn live_home(sandbox: &Sandbox, credential: bool) -> PathBuf {
-  let home = sandbox.dir("live-home");
-  let mut config = format!(
-    "backends:\n  options:\n    - id: deploy-endpoint\n      label: Test endpoint\n      type: charlie-code\n      \
-     model: openai/test-model\n      api_base: {LIVE_API_BASE}\n"
-  );
-  let mut credentials = String::new();
-  if credential {
-    config.push_str(&format!("      credential: {LIVE_CREDENTIAL}\n"));
-    credentials.push_str(&format!("{LIVE_CREDENTIAL}:\n  api_key: not-a-real-key\n"));
-  }
-  credentials.push_str(&format!("charliebot:\n  access_key: {}\n", "0".repeat(64)));
-  fs::write(home.join("config.yaml"), config).expect("the live config");
-  fs::write(home.join("credentials.yaml"), credentials).expect("the live credentials");
-  home
-}
-
-/// A live home whose only backend entry sets no `api_base`.
-fn live_home_without_an_endpoint(sandbox: &Sandbox) -> PathBuf {
-  let home = sandbox.dir("live-home");
-  fs::write(
-    home.join("config.yaml"),
-    "backends:\n  options:\n    - id: subscription\n      label: Test subscription\n      type: charlie-code\n      \
-     model: openai/test-model\n",
-  )
-  .expect("the live config");
-  fs::write(home.join("credentials.yaml"), format!("charliebot:\n  access_key: {}\n", "0".repeat(64)))
-    .expect("the live credentials");
-  home
-}
-
-/// The environment both preflights read: a sandboxed home, log root and evidence root.
-fn live_env(sandbox: &Sandbox, home: &Path) -> Env {
-  let mut env = sandbox.env();
-  env.insert("CHARLIEBOT_HOME".to_string(), home.display().to_string());
-  env.insert("CHARLIEBOT_RELEASE_LOG_DIR".to_string(), sandbox.root().join("logs").display().to_string());
-  env.insert("CHARLIEBOT_RELEASE_RUN_DIR".to_string(), sandbox.root().join("evidence").display().to_string());
-  env
-}
-
-/// Writes the release's `charliebot` as a shim over the built CLI and returns the file it records each call in.
-/// `free-port` fails, so a preflight stops after the endpoint read instead of starting a session server.
-fn write_cli_shim(directory: &Path) -> PathBuf {
-  let real = harness::built_binary("charliebot");
-  let calls = directory.join("cli-calls.log");
-  let body = format!(
-    "#!/usr/bin/env bash\n\
-     # The release's CLI under test: the built CLI answers every verb, and free-port refuses so the preflight stops\n\
-     # after the endpoint read instead of starting a server. Every call is recorded for the test.\n\
-     printf '%s\\n' \"$*\" >> \"{calls}\"\n\
-     if [ \"$1 $2\" = \"release-helper free-port\" ]; then exit 1; fi\n\
-     exec \"{real}\" \"$@\"\n",
-    calls = calls.display(),
-    real = real.display(),
-  );
-  let cli = directory.join("charliebot");
-  write_executable(&cli, body);
-  calls
-}
-
-/// The calls the shim recorded, one line per invocation; a shim that never ran left no file.
-fn recorded_calls(calls: &Path) -> String {
-  fs::read_to_string(calls).unwrap_or_default()
-}
-
-/// Runs the trial preflight for `home` against `release`.
-fn trial_preflight(sandbox: &Sandbox, home: &Path, release: &Path) -> Run {
-  let env = live_env(sandbox, home);
-  let commit = git(&env, &harness::repo_root(), &["rev-parse", "HEAD"]);
-  let mut command = harness::command("bash", &env);
-  command.arg(harness::repo_root().join("scripts/release/trial.sh")).arg(commit).arg(release.join("charliebot-server"));
-  harness::run(&mut command)
-}
-
-/// A release directory holding the CLI shim and a `charliebot-server` of `server_body`, with the checksums the
-/// rehearsal verifies. Returns the file the shim records each call in.
-fn write_release(directory: &Path, server_body: &str) -> PathBuf {
-  let calls = write_cli_shim(directory);
-  write_executable(&directory.join("charliebot-server"), server_body);
-  let mut checksums = String::new();
-  for name in ["charliebot", "charliebot-server"] {
-    let bytes = fs::read(directory.join(name)).expect("a release file");
-    checksums.push_str(&format!("{:x}  {name}\n", sha2::Sha256::digest(bytes)));
-  }
-  fs::write(directory.join("sha256sums.txt"), checksums).expect("the release checksums");
-  calls
-}
-
-/// A `charliebot-server` stub that accepts any home: the stand-in for a release whose configuration check passes.
-const ACCEPTING_SERVER: &str = "exit 0\n";
-
-/// The refusal a server prints when its config model lacks a key the home carries: the shape the old release printed
-/// for the rehearsal home's guard switch.
-const REFUSING_SERVER: &str =
-  "printf 'charliebot-server: unknown config key server.enable_local_work_guard: unknown field\\n' >&2\nexit 1\n";
-
-/// The file the rehearsal fixture's new commit adds.
-const FIXTURE_NEW_FILE: &str = "rehearsal-fixture";
-
-/// A `charliebot-server` whose configuration check needs a file only its own commit adds: the shape of the agent gh
-/// wrapper check, which refused a checkout at the old commit.
-fn server_needing_the_new_file() -> String {
-  format!(
-    r#"if [ ! -f "$CHARLIEBOT_REPO_ROOT/{FIXTURE_NEW_FILE}" ]; then
-  echo "charliebot-server: the agent gh wrapper must exist at $CHARLIEBOT_REPO_ROOT/{FIXTURE_NEW_FILE}" >&2
-  exit 1
-fi
-"#
-  )
-}
-
-/// A `charliebot-server` that refuses a checkout carrying the new commit's file: the old release's check reads the
-/// checkout at its own commit.
-fn server_needing_the_old_checkout() -> String {
-  format!(
-    r#"if [ -f "$CHARLIEBOT_REPO_ROOT/{FIXTURE_NEW_FILE}" ]; then
-  echo "charliebot-server: the old release read a checkout at the new commit" >&2
-  exit 1
-fi
-"#
-  )
-}
-
-/// The rehearsal script under test, in this repository.
-fn rehearsal_script() -> PathBuf {
-  harness::repo_root().join("scripts/release/switch-rehearsal.sh")
-}
-
-/// Commits for a rehearsal that stops before its git setup reads them: the preflight refuses first, so the values only
-/// have to be full shas.
-fn unused_commits() -> (String, String) {
-  ("1".repeat(40), "2".repeat(40))
-}
-
-/// The fixture repository's commit identity: the sandbox carries no git user configuration.
-const FIXTURE_IDENTITY: [&str; 4] = ["-c", "user.name=Rehearsal fixture", "-c", "user.email=fixture@example.invalid"];
-
-/// A `git` call in the fixture repository, under [`FIXTURE_IDENTITY`].
-fn fixture_git(env: &Env, cwd: &Path, args: &[&str]) -> String {
-  let mut all = FIXTURE_IDENTITY.to_vec();
-  all.extend_from_slice(args);
-  git(env, cwd, &all)
-}
-
-/// The rehearsal's source: a copy of its script and of the files the script reads before its first server start, in a
-/// throwaway repository whose origin/main holds two commits. A build host's synced tree can hold one synthetic commit
-/// only, and the rehearsal requires both of its commits on the origin/main it fetches. Returns the script path and the
-/// commits `(old, new)`.
-fn rehearsal_source(sandbox: &Sandbox) -> (PathBuf, String, String) {
-  let source = sandbox.dir("source-repo");
-  for relative in [
-    "scripts/release/switch-rehearsal.sh",
-    "scripts/release/standin-approval-policy.yaml",
-    "scripts/release/lock.sh",
-    "scripts/switch-server.sh",
-    "scripts/install-slice-units.sh",
-  ] {
-    let destination = source.join(relative);
-    fs::create_dir_all(destination.parent().expect("the file has a directory")).expect("the source directory");
-    fs::copy(harness::repo_root().join(relative), &destination).expect("the rehearsal source file");
-  }
-  let env = sandbox.env();
-  fixture_git(&env, &source, &["init", "-q", "-b", "main"]);
-  fixture_git(&env, &source, &["add", "-A"]);
-  fixture_git(&env, &source, &["commit", "-q", "-m", "the old release"]);
-  let old_commit = fixture_git(&env, &source, &["rev-parse", "HEAD"]);
-  fs::write(source.join("rehearsal-fixture"), "the new release's tree\n").expect("the fixture marker");
-  fixture_git(&env, &source, &["add", "-A"]);
-  fixture_git(&env, &source, &["commit", "-q", "-m", "the new release"]);
-  let new_commit = fixture_git(&env, &source, &["rev-parse", "HEAD"]);
-  fixture_git(&env, &source, &["update-ref", "refs/remotes/origin/main", &new_commit]);
-  (source.join("scripts/release/switch-rehearsal.sh"), old_commit, new_commit)
-}
-
-/// Runs the rehearsal preflight for `home` and `new_release` from `script`, with `current` selecting an old release
-/// whose `charliebot-server` is `old_server_body`, at the `(old, new)` commits the source names.
-fn rehearsal_preflight(
-  sandbox: &Sandbox,
-  home: &Path,
-  new_release: &Path,
-  old_server_body: &str,
-  script: &Path,
-  (old_commit, new_commit): (String, String),
-) -> Run {
-  let releases = sandbox.dir("releases");
-  let mut env = live_env(sandbox, home);
-  let old_release = releases.join(&old_commit);
-  fs::create_dir(&old_release).expect("the old release");
-  write_release(&old_release, old_server_body);
-  symlink(&old_commit, releases.join("current")).expect("the current link");
-  env.insert("CHARLIEBOT_RELEASES_DIR".to_string(), releases.display().to_string());
-  let mut command = harness::command("bash", &env);
-  command.arg(script).arg(&new_commit).arg(new_release);
-  harness::run(&mut command)
-}
-
-/// A trial release directory: the CLI shim beside a link to the built server binary, which `ldd` resolves.
-fn write_trial_release(sandbox: &Sandbox) -> (PathBuf, PathBuf) {
-  let release = sandbox.dir("release");
-  let calls = write_cli_shim(&release);
-  symlink(harness::built_binary("charliebot-server"), release.join("charliebot-server")).expect("the server link");
-  (release, calls)
-}
-
-#[test]
-#[ignore = "integration"]
-fn test_trial_preflight_accepts_a_live_endpoint_without_a_credential() {
-  let sandbox = Sandbox::new();
-  sandbox.stub("charlie-code", "exit 0\n");
-  let home = live_home(&sandbox, false);
-  let (release, calls) = write_trial_release(&sandbox);
-
-  let run = trial_preflight(&sandbox, &home, &release);
-
-  assert_eq!(run.code, 2, "{}", run.describe());
-  let calls = recorded_calls(&calls);
-  assert!(calls.contains("release-helper backend-option"), "the preflight did not read the live endpoint: {calls}");
-  assert!(!calls.contains("credential-key"), "an endpoint without a credential must not read the live key: {calls}");
-  assert!(!run.stderr.contains("backends.options entry with api_base"), "{}", run.describe());
-  assert!(!run.stderr.contains("api_key"), "{}", run.describe());
-  // The read succeeded: the preflight went on to the checks after it. Session cgroups are unavailable on some hosts,
-  // and the free-port check follows them.
-  assert!(
-    run.stderr.contains("a free 127.0.0.1 port exists in 18650-18669")
-      || run.stderr.contains("agents' slice cgroup directory is writable"),
-    "the preflight stopped before the endpoint read: {}",
-    run.describe()
-  );
-}
-
-#[test]
-#[ignore = "integration"]
-fn test_trial_preflight_reads_the_live_key_when_the_endpoint_names_a_credential() {
-  let sandbox = Sandbox::new();
-  sandbox.stub("charlie-code", "exit 0\n");
-  let home = live_home(&sandbox, true);
-  let (release, calls) = write_trial_release(&sandbox);
-
-  let run = trial_preflight(&sandbox, &home, &release);
-
-  assert_eq!(run.code, 2, "{}", run.describe());
-  let calls = recorded_calls(&calls);
-  assert!(
-    calls.contains(&format!("credential-key {}", home.join("credentials.yaml").display())),
-    "the preflight did not read the named credential section: {calls}"
-  );
-  assert!(!run.stderr.contains("backends.options entry with api_base"), "{}", run.describe());
-  assert!(!run.stderr.contains("the live credentials file holds api_key"), "{}", run.describe());
-}
-
-/// The trial runs that pick a port of the trial range run one at a time: each one picks a free port, so two runs could
+/// The serve runs that pick a port of the trial range run one at a time: each one picks a free port, so two runs could
 /// pick the same one.
 static TRIAL_RUNS: Mutex<()> = Mutex::new(());
-
-/// The text of one file as `commit` stores it.
-fn committed_text(env: &Env, cwd: &Path, commit: &str, path: &str) -> String {
-  let mut command = harness::command("git", env);
-  command.arg("-C").arg(cwd).arg("show").arg(format!("{commit}:{path}"));
-  let run = harness::run(&mut command);
-  assert_eq!(run.code, 0, "{}", run.describe());
-  run.stdout
-}
-
-#[test]
-#[ignore = "integration"]
-fn test_trial_installs_the_commits_units_and_reloads_before_its_server_starts() {
-  let sandbox = Sandbox::new();
-  sandbox.stub("charlie-code", "exit 0\n");
-  sandbox.stub("systemctl", "printf '%s\\n' \"$*\" >> \"$UNIT_CALLS\"\n");
-  let uid = u32::from(nix::unistd::getuid());
-  let cgroup_root = sandbox.dir("cgroup-root");
-  fs::create_dir_all(
-    cgroup_root
-      .join(format!("user.slice/user-{uid}.slice/user@{uid}.service/charliebot.slice/charliebot-agents.slice")),
-  )
-  .expect("the agents slice");
-  let units = sandbox.dir("user-units");
-  let calls = sandbox.root().join("unit-calls.log");
-  let home = live_home(&sandbox, false);
-  let release = sandbox.dir("release");
-  symlink(harness::built_binary("charliebot"), release.join("charliebot")).expect("the CLI link");
-  // A server that exits at once: the run stops at its startup check, which follows the install.
-  symlink("/bin/true", release.join("charliebot-server")).expect("the server link");
-
-  let mut env = live_env(&sandbox, &home);
-  env.insert("UNIT_CALLS".to_string(), calls.display().to_string());
-  env.insert("CHARLIEBOT_SYSTEMD_USER_DIR".to_string(), units.display().to_string());
-  env.insert("CHARLIEBOT_TRIAL_CGROUP_ROOT".to_string(), cgroup_root.display().to_string());
-  let _serial = TRIAL_RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-  let commit = git(&env, &harness::repo_root(), &["rev-parse", "HEAD"]);
-  let mut command = harness::command("bash", &env);
-  command
-    .arg(harness::repo_root().join("scripts/release/trial.sh"))
-    .arg(&commit)
-    .arg(release.join("charliebot-server"));
-  let run = harness::run(&mut command);
-
-  assert_eq!(run.code, 1, "{}", run.describe());
-  let installed = fs::read_to_string(units.join("charliebot-agents.slice")).expect("the installed unit");
-  assert_eq!(
-    installed,
-    committed_text(&env, &harness::repo_root(), &commit, "scripts/systemd/charliebot-agents.slice")
-  );
-  assert_eq!(recorded_calls(&calls), "--user daemon-reload\n", "{}", run.describe());
-  let installed_at = run.stdout.find("install-slice-units:").expect("the install reported");
-  let startup_at = run.stdout.find("Startup").expect("the trial reported its startup");
-  assert!(installed_at < startup_at, "the install ran after the startup check: {}", run.describe());
-}
-
-#[test]
-#[ignore = "integration"]
-fn test_trial_preflight_refuses_a_live_config_without_an_api_base_entry() {
-  let sandbox = Sandbox::new();
-  sandbox.stub("charlie-code", "exit 0\n");
-  let home = live_home_without_an_endpoint(&sandbox);
-  let (release, calls) = write_trial_release(&sandbox);
-
-  let run = trial_preflight(&sandbox, &home, &release);
-
-  assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(run.stderr.contains("the live config has a backends.options entry with api_base"), "{}", run.describe());
-  let calls = recorded_calls(&calls);
-  assert!(calls.contains("release-helper backend-option"), "the preflight did not read the live config: {calls}");
-  assert!(!calls.contains("free-port"), "the preflight continued past a config with no endpoint: {calls}");
-}
-
-#[test]
-#[ignore = "integration"]
-fn test_trial_preflight_accepts_a_live_config_with_only_the_endpoint_key_set() {
-  let sandbox = Sandbox::new();
-  sandbox.stub("charlie-code", "exit 0\n");
-  let home = live_home(&sandbox, false);
-  let (release, calls) = write_trial_release(&sandbox);
-
-  let run = trial_preflight(&sandbox, &home, &release);
-
-  // free-port still refuses, so nothing starts. The live config has no guard switch and no runner section, and the
-  // switch reads as its default, so every check before free-port passes.
-  assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(
-    run.stderr.contains("a free 127.0.0.1 port exists in 18650-18669")
-      || run.stderr.contains("agents' slice cgroup directory is writable"),
-    "the preflight did not stop at the port or cgroup check: {}",
-    run.describe()
-  );
-  let calls = recorded_calls(&calls);
-  assert!(
-    calls.contains("config get server.enable_local_work_guard"),
-    "the preflight did not read the switch: {calls}"
-  );
-}
-
-#[test]
-#[ignore = "integration"]
-fn test_rehearsal_preflight_accepts_a_live_endpoint_without_a_credential() {
-  let sandbox = Sandbox::new();
-  let home = live_home(&sandbox, false);
-  let new_release = sandbox.dir("new-release");
-  let calls = write_release(&new_release, ACCEPTING_SERVER);
-
-  let run = rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, &rehearsal_script(), unused_commits());
-
-  assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(run.stderr.contains("a free 127.0.0.1 port exists in 18600-18699"), "{}", run.describe());
-  let calls = recorded_calls(&calls);
-  assert!(calls.contains("release-helper backend-option"), "the preflight did not read the live endpoint: {calls}");
-  assert!(!calls.contains("credential-key"), "an endpoint without a credential must not read the live key: {calls}");
-  assert!(!run.stderr.contains("backends.options entry with api_base"), "{}", run.describe());
-  assert!(!run.stderr.contains("api_key"), "{}", run.describe());
-}
-
-#[test]
-#[ignore = "integration"]
-fn test_rehearsal_preflight_reads_the_live_key_when_the_endpoint_names_a_credential() {
-  let sandbox = Sandbox::new();
-  let home = live_home(&sandbox, true);
-  let new_release = sandbox.dir("new-release");
-  let calls = write_release(&new_release, ACCEPTING_SERVER);
-
-  let run = rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, &rehearsal_script(), unused_commits());
-
-  assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(run.stderr.contains("a free 127.0.0.1 port exists in 18600-18699"), "{}", run.describe());
-  let calls = recorded_calls(&calls);
-  assert!(
-    calls.contains(&format!("credential-key {}", home.join("credentials.yaml").display())),
-    "the preflight did not read the named credential section: {calls}"
-  );
-  assert!(!run.stderr.contains("the live credentials file holds api_key"), "{}", run.describe());
-}
-
-#[test]
-#[ignore = "integration"]
-fn test_rehearsal_redacts_the_backend_key_from_saved_evidence() {
-  let sandbox = Sandbox::new();
-  let home = live_home(&sandbox, true);
-  let new_release = sandbox.dir("new-release");
-  write_release(&new_release, ACCEPTING_SERVER);
-  allow_free_port(&new_release);
-  sandbox.stub(
-    "git",
-    "tree=${4%/origin.git}\nprintf 'key not-a-real-key\n' > \"$tree/logs/server_test.log\"\n\
-     ln -s server_test.log \"$tree/logs/server-latest.log\"\n\
-     mkdir -p \"$tree/home/.charliebot/sessions/test/data\"\n\
-     printf 'key not-a-real-key\n' > \"$tree/home/.charliebot/sessions/test/data/chat_events.jsonl\"\nexit 1\n",
-  );
-
-  let run = rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, &rehearsal_script(), unused_commits());
-
-  assert_eq!(run.code, 2, "{}", run.describe());
-  let logs = sandbox.root().join("logs");
-  let evidence = fs::read_dir(logs).unwrap().next().unwrap().unwrap().path();
-  for path in ["logs/server_test.log", "rehearsal-home/sessions/test/data/chat_events.jsonl"] {
-    assert_eq!(fs::read_to_string(evidence.join(path)).unwrap(), "key [redacted]\n");
-  }
-}
-
-// ---- the config check before the first server start ------------------------------------------------------------------
-
-/// A tmux stub whose private server never starts: a rehearsal that reaches tmux stops there in seconds, so a script
-/// without the config check fails fast instead of waiting out a server that never reaches server_ready.
-const TMUX_STOP: &str = "exit 1\n";
-
-/// Removes the shim's free-port refusal, so the preflight picks a real port and the rehearsal runs past it, and
-/// rewrites the checksums the rehearsal verifies for the changed CLI.
-fn allow_free_port(release: &Path) {
-  let cli = release.join("charliebot");
-  let body =
-    fs::read_to_string(&cli).unwrap().replace("if [ \"$1 $2\" = \"release-helper free-port\" ]; then exit 1; fi\n", "");
-  fs::write(&cli, body).unwrap();
-  let mut checksums = String::new();
-  for name in ["charliebot", "charliebot-server"] {
-    checksums.push_str(&format!("{:x}  {name}\n", sha2::Sha256::digest(fs::read(release.join(name)).unwrap())));
-  }
-  fs::write(release.join("sha256sums.txt"), checksums).unwrap();
-}
-
-#[test]
-#[ignore = "integration"]
-fn test_rehearsal_config_check_stops_at_a_key_the_old_release_refuses_and_names_it() {
-  let sandbox = Sandbox::new();
-  sandbox.stub("tmux", TMUX_STOP);
-  let home = live_home(&sandbox, false);
-  let new_release = sandbox.dir("new-release");
-  write_release(&new_release, ACCEPTING_SERVER);
-  allow_free_port(&new_release);
-  let (script, old_commit, new_commit) = rehearsal_source(&sandbox);
-
-  let run =
-    rehearsal_preflight(&sandbox, &home, &new_release, REFUSING_SERVER, &script, (old_commit.clone(), new_commit));
-
-  assert_eq!(run.code, 1, "{}", run.describe());
-  assert!(
-    run.stderr.contains(&format!("the release {old_commit} refused the rehearsal home's config")),
-    "{}",
-    run.describe()
-  );
-  assert!(
-    run.stderr.contains("server.enable_local_work_guard"),
-    "the report does not name the refused key: {}",
-    run.describe()
-  );
-  assert!(!run.stderr.contains("start the private tmux server"), "the rehearsal passed the check: {}", run.describe());
-}
-
-#[test]
-#[ignore = "integration"]
-fn test_rehearsal_config_check_reads_each_releases_own_checkout() {
-  let sandbox = Sandbox::new();
-  sandbox.stub("tmux", TMUX_STOP);
-  let home = live_home(&sandbox, false);
-  let new_release = sandbox.dir("new-release");
-  write_release(&new_release, &server_needing_the_new_file());
-  allow_free_port(&new_release);
-  let (script, old_commit, new_commit) = rehearsal_source(&sandbox);
-
-  // The fixture's new commit adds rehearsal-fixture. The new release's check needs it, and the old release's check
-  // refuses a checkout that carries it, so each check must read a checkout at its own commit.
-  let run = rehearsal_preflight(
-    &sandbox,
-    &home,
-    &new_release,
-    &server_needing_the_old_checkout(),
-    &script,
-    (old_commit.clone(), new_commit.clone()),
-  );
-
-  assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(run.stderr.contains(&format!("CONFIG old: {old_commit} accepts")), "{}", run.describe());
-  assert!(run.stderr.contains(&format!("CONFIG new: {new_commit} accepts")), "{}", run.describe());
-  assert!(
-    run.stderr.contains("start the private tmux server"),
-    "the rehearsal stopped before tmux: {}",
-    run.describe()
-  );
-}
-
-#[test]
-#[ignore = "integration"]
-fn test_the_rehearsal_home_the_script_writes_passes_the_built_server_check() {
-  let sandbox = Sandbox::new();
-  let rendered_home = sandbox.dir("rendered-home");
-  let home_path = rendered_home.display().to_string();
-  sandbox.stub("tmux", &format!("rm -rf '{home_path}'\ncp -a \"$CHARLIEBOT_HOME\" '{home_path}'\n{TMUX_STOP}"));
-  let home = live_home(&sandbox, false);
-  let new_release = sandbox.dir("new-release");
-  write_release(&new_release, ACCEPTING_SERVER);
-  allow_free_port(&new_release);
-  let (script, old_commit, new_commit) = rehearsal_source(&sandbox);
-
-  let run = rehearsal_preflight(&sandbox, &home, &new_release, ACCEPTING_SERVER, &script, (old_commit, new_commit));
-
-  // Both stub servers accept, so the rehearsal stops at the tmux stub with the home rendered.
-  assert_eq!(run.code, 2, "{}", run.describe());
-  assert!(run.stderr.contains("start the private tmux server"), "{}", run.describe());
-  let config = fs::read_to_string(rendered_home.join("config.yaml")).expect("the rendered config");
-  assert!(!config.contains("enable_local_work_guard"), "{config}");
-  let mut env = sandbox.env();
-  env.insert("CHARLIEBOT_HOME".to_string(), rendered_home.display().to_string());
-  env.insert("CHARLIEBOT_REPO_ROOT".to_string(), harness::repo_root().display().to_string());
-  let mut command = harness::command(harness::built_binary("charliebot-server"), &env);
-  command.arg("--check-config");
-  let check = harness::run(&mut command);
-  assert_eq!(check.code, 0, "{}", check.describe());
-  assert!(check.stdout.contains("config ok"), "{}", check.describe());
-}
-
-// ---- trial --serve: the seeded home, the tmux server and the tmux socket limit ----------------------------------------
 
 /// One serve trial's inputs: a throwaway repository whose origin/main names its commit, the server and the CLI beside
 /// each other, a live home with one backend option, and a stub charlie-code. The trial's tree and evidence stay under

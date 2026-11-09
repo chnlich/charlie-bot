@@ -261,8 +261,19 @@ export class Tab {
       return 'expanded';
     })()`);
     if (step === 'unreachable') {
+      const sidebar = await this.evaluate(`(() => {
+        const rows = Array.from(document.querySelectorAll('#session-list a.session-row'));
+        const toggles = Array.from(document.querySelectorAll('.session-group-limit-toggle'));
+        return {
+          rows: rows.length,
+          rowIds: rows.map((row) => decodeURIComponent((row.href.match(/session=([^&]+)/) ?? [])[1] ?? '')).slice(0, 40),
+          toggles: toggles.map((toggle) => toggle.dataset.sgroupLimitToggleKey),
+          filter: window.currentFilter ?? null,
+          listHtmlLength: (document.getElementById('session-list')?.innerHTML ?? '').length,
+        };
+      })()`);
       throw new Error(`no sidebar row for session ${session.id} on ${this.name}, and its group ` +
-        `${JSON.stringify(session.group)} shows no Show all toggle`);
+        `${JSON.stringify(session.group)} shows no Show all toggle; the sidebar: ${JSON.stringify(sidebar)}`);
     }
     if (step === 'painted') {
       return false;

@@ -223,8 +223,10 @@ export async function launchBrowser({ binary, proxyPort, userDataDir, logPath, t
   const args = [
     ...CHROME_FLAGS,
     `--user-data-dir=${userDataDir}`,
-    `--ignore-certificate-errors-spki-list=${trustedSpki}`,
-    `--proxy-server=http://127.0.0.1:${proxyPort}`,
+    // A caller without a proxy and a pin reaches the server directly: the put-back probe does, and so does
+    // any check that measures the page rather than the link.
+    ...(trustedSpki ? [`--ignore-certificate-errors-spki-list=${trustedSpki}`] : []),
+    ...(proxyPort ? [`--proxy-server=http://127.0.0.1:${proxyPort}`] : []),
     '--remote-debugging-pipe',
     'about:blank',
   ];

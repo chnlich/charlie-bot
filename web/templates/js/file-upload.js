@@ -11,10 +11,10 @@
 // The first attachment action fetches the module: the Attach button's pick, a
 // pasted image, or an input-work window. Until it lands, the work that trigger
 // started stays here, held: the send gate refuses while a file waits to be
-// uploaded or an input-work window is open, and the send button shows it, so a
+// uploaded or an input-work window is open. The send button shows it, so a
 // message cannot leave without its attachment or during a transcription. Each
 // wired name is a function declaration, so the module's own declaration
-// replaces this one when it runs, and the held work moves to the module in the
+// replaces this one when it runs. The held work moves to the module in the
 // same turn the download lands.
 (function() {
   const SOURCE = '/static/js/file-upload.js';

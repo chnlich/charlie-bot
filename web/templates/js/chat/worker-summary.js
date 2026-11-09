@@ -7,11 +7,11 @@
 // document carries: the loader's search path reads web/templates before
 // web/static, and the page includes the same name.
 //
-// The card's node lives here until the module adopts it: the For-you list asks
-// workerSummaryCard for a node while the module may still be travelling, so
-// this node stands in the list and the module fills the node already on the
-// page. A summary that arrives before the module does is kept, and the module
-// paints it on arrival.
+// The card's node lives here until the module adopts it. The For-you list asks
+// workerSummaryCard for a node while the module may still be travelling. This
+// node stands in the list, and the module fills the node already on the page.
+// A summary that arrives before the module does is kept, and the module paints
+// it on arrival.
 (function() {
   const Chat = globalThis.Chat;
   const SOURCE = '/static/js/chat/worker-summary.js';

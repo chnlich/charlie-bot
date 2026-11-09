@@ -24,9 +24,9 @@ pub const ROWS_FILENAME: &str = "rows.jsonl";
 /// The lock file guarding id assignment and appends.
 const LOCK_FILENAME: &str = "rows.lock";
 
-/// The index header, verbatim. Each line states one rule the reading agent follows. It names no domain, count or date,
-/// so the segment's bytes change only when the set of active domains changes; a changed segment starts a fresh native
-/// conversation for every open manager, because the segment enters the hashed prompt blocks.
+/// The index header, verbatim. Each line states one rule the reading agent follows. It names no domain, count or
+/// date, so the segment's bytes change only when the set of active domains changes. A changed segment starts a
+/// fresh native conversation for every open manager, because the segment enters the hashed prompt blocks.
 pub const INDEX_HEADER: &str = "Taste index: the user's choice precedents. Full rows: `charliebot taste query --domain <domain>`.\n\
 Before you recommend an option to the user or make a choice yourself in a listed domain, read that domain's rows.\n\
 Follow a row whose situation matches, and name its id beside the recommendation or in the digest entry.\n\
@@ -528,8 +528,9 @@ pub fn mark_value(mark: &Mark) -> Value {
 ///
 /// The call refuses a row whose source reference, comment item and `chosen` repeat an existing row, naming that
 /// row, and a row whose `supersedes` names no existing row. Two comment items of one source event are separate
-/// decisions, so their rows both land even when they choose the same text; an item number never equals an absent
-/// one, so a row that now records its item can land beside an older row of the same event that records none.
+/// decisions, so their rows both land even when they choose the same text. An item number never equals an
+/// absent one, so a row that now records its item can land beside an older row of the same event that records
+/// none.
 pub fn add_row(taste_dir: &Path, value: &Value) -> anyhow::Result<String> {
   let mut row = parse_input_row(value)?;
   ensure_dir(taste_dir)?;

@@ -31,12 +31,6 @@ pub fn default_memory_gitignore() -> String {
   format!("{STAGING_DIRNAME}/\n")
 }
 
-/// The header line of every selection's index (`INDEX_HEADER`).
-pub const INDEX_HEADER: &str = concat!(
-  "# Memory index — full text via `charliebot memory query --topic <topic>` ",
-  "(topic = segment before \"/\", e.g. `--topic integrations`)",
-);
-
 /// The usage line that ends a worker selection (`WORKER_USAGE_LINE`).
 pub const WORKER_USAGE_LINE: &str = concat!(
   "On-demand knowledge: `charliebot memory query --topic <topic>` (full text) or `--index` ",
@@ -419,11 +413,6 @@ pub fn full_text(entry: &Entry) -> String {
   if body.starts_with("# ") { body.to_string() } else { format!("# {}\n\n{body}", entry.title) }
 }
 
-/// The index line of one entry: `<topic>/<slug> · <title>`.
-fn index_line(entry: &Entry) -> String {
-  format!("{} · {}", entry.id(), entry.title)
-}
-
 /// Whether the entry's audience header names `audience`. An entry without an audience
 /// header admits nobody.
 pub fn audience_allows(entry: &Entry, audience: &str) -> bool {
@@ -440,42 +429,37 @@ pub fn resident_topic_names(store: &Store) -> BTreeSet<&str> {
   store.topics.values().filter(|topic| topic.resident).map(|topic| topic.name.as_str()).collect()
 }
 
-/// The master selection: the full text of entries in resident topics, then the index lines of the other master
-/// entries. `None` when the audience has no entry.
+/// The master selection: the full text of the entries in resident topics. The other master entries
+/// serve through `charliebot memory query`, and the task record's Context refs name the topics a
+/// task uses. `None` when no resident entry serves the audience.
 pub fn select_master_memory(memory_dir: &Path) -> anyhow::Result<Option<MemorySelection>> {
   let store = load_store(memory_dir)?;
   let residents = resident_topic_names(&store);
-  let mut full = Vec::new();
-  let mut index = Vec::new();
-  for entry in store.entries.iter().filter(|entry| audience_allows(entry, "master")) {
-    if entry.topic.as_deref().is_some_and(|topic| residents.contains(topic)) {
-      full.push(entry);
-    } else {
-      index.push(entry);
-    }
-  }
-  if full.is_empty() && index.is_empty() {
+  let full: Vec<&Entry> = store
+    .entries
+    .iter()
+    .filter(|entry| audience_allows(entry, "master"))
+    .filter(|entry| entry.topic.as_deref().is_some_and(|topic| residents.contains(topic)))
+    .collect();
+  if full.is_empty() {
     return Ok(None);
   }
-  Ok(Some(selection_from_parts("master", None, full, index, None)))
+  Ok(Some(selection_from_parts("master", None, full)))
 }
 
-/// The worker selection for `repo_basename`: the full text of worker entries whose topic matches that repo, then the
-/// index lines of the other worker entries, then the usage line. A topic matches a repo when their normalized names are
-/// equal, so the topic `charliebot` serves the repo `charlie-bot`.
+/// The worker selection for `repo_basename`: the full text of worker entries whose topic matches
+/// that repo, then the usage line as its own segment. A topic matches a repo when their normalized
+/// names are equal, so the topic `charliebot` serves the repo `charlie-bot`.
 pub fn select_worker_memory(memory_dir: &Path, repo_basename: &str) -> anyhow::Result<MemorySelection> {
   let store = load_store(memory_dir)?;
   let repo_name = normalized_name(repo_basename);
-  let mut full = Vec::new();
-  let mut index = Vec::new();
-  for entry in store.entries.iter().filter(|entry| audience_allows(entry, "worker")) {
-    if entry.topic.as_deref().is_some_and(|topic| normalized_name(topic) == repo_name) {
-      full.push(entry);
-    } else {
-      index.push(entry);
-    }
-  }
-  Ok(selection_from_parts("worker", Some(repo_basename.to_string()), full, index, Some(WORKER_USAGE_LINE)))
+  let full: Vec<&Entry> = store
+    .entries
+    .iter()
+    .filter(|entry| audience_allows(entry, "worker"))
+    .filter(|entry| entry.topic.as_deref().is_some_and(|topic| normalized_name(topic) == repo_name))
+    .collect();
+  Ok(selection_from_parts("worker", Some(repo_basename.to_string()), full))
 }
 
 /// A topic or repo name in the form that topic matching compares: lowercase, with `-` and `_` removed.
@@ -483,16 +467,10 @@ fn normalized_name(name: &str) -> String {
   name.chars().filter(|c| !matches!(c, '-' | '_')).flat_map(char::to_lowercase).collect()
 }
 
-/// The selection's segments, full then index, each sorted by [`entry_order_key`].
-fn selection_from_parts(
-  audience: &'static str,
-  repo_basename: Option<String>,
-  mut full: Vec<&Entry>,
-  mut index: Vec<&Entry>,
-  usage_line: Option<&'static str>,
-) -> MemorySelection {
+/// The selection's segments: the full text sorted by [`entry_order_key`], then the usage line when
+/// the audience is the worker's.
+fn selection_from_parts(audience: &'static str, repo_basename: Option<String>, mut full: Vec<&Entry>) -> MemorySelection {
   full.sort_by(|a, b| entry_order_key(a).cmp(&entry_order_key(b)));
-  index.sort_by(|a, b| entry_order_key(a).cmp(&entry_order_key(b)));
   let mut segments = Vec::new();
   if !full.is_empty() {
     let texts: Vec<String> = full.iter().map(|entry| full_text(entry)).collect();
@@ -510,28 +488,9 @@ fn selection_from_parts(
         .collect(),
     });
   }
-  if !index.is_empty() {
-    let mut lines = vec![INDEX_HEADER.to_string()];
-    lines.extend(index.iter().map(|entry| index_line(entry)));
-    segments.push(MemorySegment {
-      delivery: DELIVERY_INDEX,
-      text: lines.join("\n"),
-      sources: index
-        .iter()
-        .map(|entry| MemoryEntrySource {
-          source_ref: format!("memory:{}", entry.id()),
-          delivery: DELIVERY_INDEX,
-          text: index_line(entry),
-        })
-        .collect(),
-    });
-  }
+  let usage_line = (audience == "worker").then_some(WORKER_USAGE_LINE);
   if let Some(usage) = usage_line {
-    match segments.last_mut() {
-      // The usage line rides the index segment; a selection with no index entries gets a usage-only one.
-      Some(last) if last.delivery == DELIVERY_INDEX => last.text = format!("{}\n\n{usage}", last.text),
-      _ => segments.push(MemorySegment { delivery: DELIVERY_INDEX, text: usage.to_string(), sources: Vec::new() }),
-    }
+    segments.push(MemorySegment { delivery: DELIVERY_INDEX, text: usage.to_string(), sources: Vec::new() });
   }
   let text = (!segments.is_empty()).then(|| {
     let texts: Vec<&str> = segments.iter().map(|segment| segment.text.as_str()).collect();
@@ -726,7 +685,7 @@ mod tests {
 
   #[test]
   #[ignore = "integration"]
-  fn residents_take_full_text_and_the_rest_of_the_master_audience_takes_index_lines() {
+  fn the_master_selection_takes_the_resident_full_text_and_no_index() {
     let dir = tempfile::tempdir().unwrap();
     write_files(dir.path(), &[("topics", "profile resident\nbeta\n")]);
     write_files(dir.path(), &[("entries/profile/dark-mode.md", MASTER_ENTRY)]);
@@ -740,11 +699,21 @@ mod tests {
     );
     let selection = select_master_memory(dir.path()).unwrap().unwrap();
     let deliveries: Vec<&str> = selection.segments.iter().map(|segment| segment.delivery).collect();
-    assert_eq!(deliveries, ["full", "index"]);
+    assert_eq!(deliveries, ["full"], "{deliveries:?}");
     assert_eq!(selection.segments[0].sources[0].source_ref, "memory:profile/dark-mode");
     assert_eq!(selection.segments[0].text, "# Dark Mode\n\nbody");
-    assert_eq!(selection.segments[1].sources[0].source_ref, "memory:beta/master-note");
-    assert_eq!(selection.segments[1].sources[0].text, "beta/master-note · M");
+  }
+
+  #[test]
+  #[ignore = "integration"]
+  fn a_master_selection_without_resident_entries_is_none() {
+    let dir = tempfile::tempdir().unwrap();
+    write_files(dir.path(), &[("topics", "beta\n")]);
+    write_files(
+      dir.path(),
+      &[("entries/beta/master-note.md", "---\nscope: host\ntopic: beta\naudience: master\ntitle: M\n---\nmaster\n")],
+    );
+    assert!(select_master_memory(dir.path()).unwrap().is_none());
   }
 
   #[test]
@@ -761,11 +730,17 @@ mod tests {
       )],
     );
     let selection = select_worker_memory(dir.path(), "gamma-service").unwrap();
-    assert_eq!(selection.segments[0].delivery, "full");
+    let deliveries: Vec<&str> = selection.segments.iter().map(|segment| segment.delivery).collect();
+    assert_eq!(deliveries, ["full", "index"], "{deliveries:?}");
     assert_eq!(selection.segments[0].sources[0].source_ref, "memory:gamma-service/build");
-    assert_eq!(selection.segments[1].delivery, "index");
-    assert_eq!(selection.segments[1].sources[0].source_ref, "memory:profile/dark-mode");
+    assert_eq!(selection.segments[1].text, WORKER_USAGE_LINE);
     assert_eq!(selection.usage_line, Some(WORKER_USAGE_LINE));
+    let others: Vec<&str> = selection
+      .segments
+      .iter()
+      .flat_map(|segment| segment.sources.iter().map(|source| source.source_ref.as_str()))
+      .collect();
+    assert!(!others.iter().any(|ref_path| ref_path.contains("dark-mode")), "no index of the other entries: {others:?}");
 
     // The repo `charlie-bot` takes the topic `charliebot`: the names match once `-` is removed.
     write_files(dir.path(), &[("topics", "profile resident\ngamma-service\ncharliebot\n")]);

@@ -7,6 +7,7 @@
 
 use charliebot_core::event_types::TOOL_INPUT_FILE_PATH;
 use charliebot_core::str_methods::take_chars;
+use charliebot_core::subagent::SUBAGENT_TOOL_NAMES;
 use serde_json::{Value, json};
 
 use crate::{StoreError, StoreResult};
@@ -14,8 +15,6 @@ use crate::{StoreError, StoreResult};
 /// Maximum string length sent for one tool preview field, and for a subagent prompt.
 pub const TOOL_PREVIEW_CHARS: usize = 500;
 const TOOL_INPUT_DEAD_FIELD_CHARS: usize = 60;
-/// Tool names that start a subagent: the Claude Code CLI names the subagent tool Agent, and Task before that.
-const SUBAGENT_TOOL_NAMES: &[&str] = &["Agent", "Task"];
 
 /// The status a subagent shows in its card.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

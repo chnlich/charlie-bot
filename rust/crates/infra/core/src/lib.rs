@@ -33,6 +33,7 @@ pub mod run_token;
 pub mod sequence_diff;
 pub mod ssh;
 pub mod str_methods;
+pub mod subagent;
 pub mod tempdir;
 #[cfg(feature = "test-support")]
 pub mod test_support;

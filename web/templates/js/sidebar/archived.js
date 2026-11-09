@@ -5,8 +5,8 @@
 // it only after choosing that filter; the Workspace, Later and Threads views take
 // the one-shot listing instead. The view's module stays at
 // web/static/js/sidebar/archived.js, which the static route serves and the page
-// tests read; this file is what the document carries, because the loader's search
-// path reads web/templates before web/static and the page includes the same name.
+// tests read. This file is what the document carries: the loader's search path
+// reads web/templates before web/static, and the page includes the same name.
 //
 // Each wired entry forwards to the module and starts its download on the first
 // call, which is the filter's selection. The module's own Sidebar.wire then
@@ -14,7 +14,7 @@
 // arrives while the download runs waits for it, and the calls keep their order.
 //
 // A filter selected while the download runs leaves the queued loadArchivedView
-// stale: it must not clear the list the newer filter painted, so it does nothing
+// stale. It must not clear the list the newer filter painted, so it does nothing
 // unless Archive is still the current filter when the module arrives. A failed
 // download is logged, as the composer's voice loader logs its own, and the next
 // selection tries again because loadPageScripts drops a failed entry.

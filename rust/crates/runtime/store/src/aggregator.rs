@@ -444,7 +444,7 @@ impl MessageAggregator {
     for streamed in ["content", "thinking", "tools"] {
       object.remove(streamed);
     }
-    object.insert("content_streamed".to_string(), json!(true));
+    object.insert(event_types::MESSAGE_CONTENT_STREAMED.to_string(), json!(true));
     message
   }
 

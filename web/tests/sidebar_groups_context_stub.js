@@ -34,6 +34,9 @@ function loadGroups() {
     BACKEND_POOLS,
     SESSION_ID: 'other-session',
     console: {error: () => {}},
+    // A package script the page fetched after its document reads readyState; no paint is on screen in this harness,
+    // so the repaint such a script asks for has no last paint to re-render.
+    document: {readyState: 'complete', getElementById: () => null},
     localStorage: {getItem: () => null, setItem: () => {}},
     escapeHtml: escapeHtmlText,
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
@@ -60,7 +63,11 @@ function loadGroups() {
 function loadGroupsWithCron() {
   const context = loadGroups();
   context.registerWorkspaceBadge = () => {};
+  // The load sequence runs while the document parses; a real page fetches this module after the document, and the
+  // late-load path (repaint of the painted rows, re-read of the Workspace badges) has its own tests.
+  context.document.readyState = 'loading';
   vm.runInContext(CRON_JS, context, {filename: 'cron.js'});
+  context.document.readyState = 'complete';
   return context;
 }
 

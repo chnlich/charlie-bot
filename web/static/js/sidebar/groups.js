@@ -344,9 +344,23 @@ let lastGroupedRenderArgs = null;
 function paintWorkspaceBadges(workspaceBadges) {
   if (currentFilter !== 'all' || searchListPainted) return;
   if (!lastGroupedRenderArgs || lastGroupedRenderArgs.filter !== 'all') return;
+  lastListPaint = {sessions: lastGroupedRenderArgs.sessions, filter: 'all',
+    options: {workspaceBadges, listing: lastGroupedRenderArgs.listing}};
   renderGroupedSessionList(lastGroupedRenderArgs.sessions, 'all',
     {workspaceBadges, listing: lastGroupedRenderArgs.listing});
 }
+// A module the page fetched after its document registers a row decoration (a badge, a line, a menu item) after the
+// list painted, so the paint it missed leaves the rows it decorates bare. It asks for this repaint, which paints the
+// last paint's own arguments again: no list refetch, and an empty or search paint is redrawn as itself rather than
+// replaced by the rows an earlier paint left behind.
+let lastListPaint = null;
+
+function repaintRenderedRows() {
+  if (!lastListPaint) return;
+  const {sessions, filter, options} = lastListPaint;
+  renderSessionList(sessions, filter, options);
+}
+
 // Whether the last renderSessionList call painted the search overlay. The
 // search flow never assigns currentFilter, so this marker — not the filter
 // state — is what tells the delete path a flat search list is on screen.
@@ -881,6 +895,7 @@ function expandSessionColumns(columns) {
 }
 
 function renderSessionList(sessions, filter, options = {}) {
+  lastListPaint = {sessions, filter, options};
   searchListPainted = (filter === 'search');
   // The grouped paints (Workspace and Later) nest rows and record their tree
   // shape themselves; a flat paint shows each row's own facts.
@@ -975,6 +990,7 @@ const GLOBALS = {
   renderEmptyNote,
   renderSearchNote,
   paintWorkspaceBadges,
+  repaintRenderedRows,
   resetGroupLimitState,
   toggleSessionGroupLimit,
   toggleSessionGroup,

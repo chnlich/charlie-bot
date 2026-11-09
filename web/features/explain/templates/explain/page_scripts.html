@@ -1,1 +1,6 @@
-  <script>{% include 'explain/explain.js' %}</script>
+  <script>
+    // The explain button decorates each round and its panel opens under it on a click, so nothing here is needed for
+    // the first screen: the page fetches the module after its document, and the module repaints the rounds already
+    // rendered when it lands.
+    loadPageScripts('explain', ['/static/features/explain/explain.js']);
+  </script>

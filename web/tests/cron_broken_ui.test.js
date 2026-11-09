@@ -61,15 +61,20 @@ function loadGroups() {
 
 // cron.js is an IIFE over the sidebar's registration entries; the sandbox
 // records what it registers, so each test drives a part the way core does.
-function loadCron(fetch) {
+function loadCron(fetch, readyState = 'complete') {
   const elements = {};
   const registered = {
     workspaceBadges: [], rowBadges: [], rowLines: [], menuItems: [], groupMenuItems: [], previewLimitExemptions: [],
   };
+  const repaints = [];
   const context = {
-    Sidebar: {wire(globals, sidebarOnly) { Object.assign(this, globals, sidebarOnly || {}); }},
+    Sidebar: {
+      wire(globals, sidebarOnly) { Object.assign(this, globals, sidebarOnly || {}); },
+      repaintRenderedRows() { repaints.push('rows'); },
+      refreshWorkspaceBadges() { repaints.push('badges'); },
+    },
     console: {error: () => {}},
-    document: {getElementById: (id) => elements[id] || (elements[id] = makeEl())},
+    document: {readyState, getElementById: (id) => elements[id] || (elements[id] = makeEl())},
     escapeHtml: escapeHtmlText,
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
     JSON_HEADERS: {'Content-Type': 'application/json'},
@@ -86,7 +91,7 @@ function loadCron(fetch) {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(CRON_JS, context, {filename: 'cron.js'});
-  return {context, elements, registered};
+  return {context, elements, registered, repaints};
 }
 
 // A fetch that answers every request with *tasks* and records each request.
@@ -231,4 +236,17 @@ test('New scheduled task creates a manager node in the group, then opens the add
   assert.ok(!elements['cron-modal'].classList.contains('hidden'));
   await context.Sidebar.saveCronTask();
   assert.equal(JSON.parse(requests[0].opts.body).session_id, 'n1');
+});
+
+// The page fetches cron.js after its document, so the sidebar's rows are painted before the schedule badge and line
+// register. The module repaints those rows when it lands; a module that lands while the page still parses leaves the
+// paint to the page, which runs after every registration.
+test('a cron module fetched after the document repaints the rows and re-reads the Workspace badges', () => {
+  const {repaints} = loadCron(tasksFetch([]));
+  assert.deepEqual(repaints, ['rows', 'badges']);
+});
+
+test('a cron module that lands while the page still parses repaints nothing', () => {
+  const {repaints} = loadCron(tasksFetch([]), 'loading');
+  assert.equal(repaints.length, 0);
 });

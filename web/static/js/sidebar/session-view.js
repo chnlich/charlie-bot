@@ -903,6 +903,14 @@ function renderSessionView(data) {
   if (!turnEngine) renderMessagesIntoContainer(container, messages, session.id);
   Chat.ForYou.applySessionChatView(session, turnEngine ? view : Chat.ForYou.EVERYTHING, turnEngine);
 
+  // The page's own timing names the newest message of the first screen it renders (diag/client-events.js). The
+  // embedded bootstrap names it at load; the offline shell embeds none, so this announcement carries it instead.
+  if (messages.length > 0) {
+    document.dispatchEvent(new CustomEvent('charliebot:first-screen-rendered', {
+      detail: {sessionId: session.id, newestMessageId: messages[messages.length - 1].id ?? null},
+    }));
+  }
+
   if (sessionHasMore) {
     // The mount's own projection may have started the first page already.
     const sentinel = ensureSentinel(container, sessionLoadingMore ? 'loading' : 'idle');

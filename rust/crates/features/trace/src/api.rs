@@ -10,6 +10,7 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header, reques
 use axum::response::Response;
 use charliebot_compat::file_urls::FILE_SERVER_MOUNT;
 use charliebot_compat::mimetypes::MimeTypes;
+use charliebot_compat::mimetypes_table::APPLICATION_GZIP;
 use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, static_files, validation};
 use charliebot_registry::FeatureContext;
@@ -168,7 +169,7 @@ fn serve_cached_trace(cache_path: &Path, headers: &HeaderMap) -> Response {
   let mut response =
     static_files::serve(&served, MIME_TYPES.get_or_init(MimeTypes::load), &format!("/{name}"), &Method::GET, headers);
   if response.status() == StatusCode::OK || response.status() == StatusCode::PARTIAL_CONTENT {
-    response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/gzip"));
+    response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(APPLICATION_GZIP));
   }
   response
 }

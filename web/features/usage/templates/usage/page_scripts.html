@@ -1,6 +1,6 @@
   <script>
-    // The external-usage strip is a sidebar poller, not first-paint content: the page fetches its module after the
-    // document instead of carrying its bytes. The module starts itself once it lands, so the poll begins as soon as
-    // the link delivers it.
+    // The external-usage strip is a sidebar poller, not first-paint content, so the page fetches its module here
+    // instead of carrying its bytes. The module's own readyState guard starts the poll as soon as it lands, whether
+    // that is before or after DOMContentLoaded.
     loadPageScripts('ext-usage', ['/static/features/usage/ext_usage.js']);
   </script>

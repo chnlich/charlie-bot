@@ -46,6 +46,8 @@ pub fn backend(
 
 #[cfg(test)]
 mod tests {
+  use serde_json::Map;
+
   use super::*;
 
   #[test]
@@ -54,15 +56,70 @@ mod tests {
     let message = |result: anyhow::Result<AnthropicEndpointBackend>| format!("{:#}", result.err().unwrap());
     let limits = SessionCgroupConfig::disabled();
     assert!(
-      message(backend("", "key", "model", false, None, 8000, LaunchArgs::default(), limits.clone()))
-        .contains("requires proxy_base_url")
+      message(backend(
+        "",
+        "key",
+        "model",
+        false,
+        None,
+        8000,
+        LaunchArgs {
+          extra_flags: Vec::new(),
+          buffer_limit: None,
+          instructions_content: None,
+          instructions_file: None,
+          resume_session_id: None,
+          log_dir: None,
+          cgroup_session_id: None,
+          backend_kwargs: Map::new(),
+        },
+        limits.clone(),
+      ))
+      .contains("requires proxy_base_url")
     );
     assert!(
-      message(backend(url, "", "model", false, None, 8000, LaunchArgs::default(), limits.clone()))
-        .contains("auth_token")
+      message(backend(
+        url,
+        "",
+        "model",
+        false,
+        None,
+        8000,
+        LaunchArgs {
+          extra_flags: Vec::new(),
+          buffer_limit: None,
+          instructions_content: None,
+          instructions_file: None,
+          resume_session_id: None,
+          log_dir: None,
+          cgroup_session_id: None,
+          backend_kwargs: Map::new(),
+        },
+        limits.clone(),
+      ))
+      .contains("auth_token")
     );
     assert!(
-      message(backend(url, "key", "", false, None, 8000, LaunchArgs::default(), limits)).contains("requires a model")
+      message(backend(
+        url,
+        "key",
+        "",
+        false,
+        None,
+        8000,
+        LaunchArgs {
+          extra_flags: Vec::new(),
+          buffer_limit: None,
+          instructions_content: None,
+          instructions_file: None,
+          resume_session_id: None,
+          log_dir: None,
+          cgroup_session_id: None,
+          backend_kwargs: Map::new(),
+        },
+        limits,
+      ))
+      .contains("requires a model")
     );
   }
 
@@ -75,7 +132,16 @@ mod tests {
       false,
       None,
       8000,
-      LaunchArgs::default(),
+      LaunchArgs {
+        extra_flags: Vec::new(),
+        buffer_limit: None,
+        instructions_content: None,
+        instructions_file: None,
+        resume_session_id: None,
+        log_dir: None,
+        cgroup_session_id: None,
+        backend_kwargs: Map::new(),
+      },
       SessionCgroupConfig::disabled(),
     )
     .unwrap();

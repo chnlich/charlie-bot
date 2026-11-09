@@ -235,17 +235,18 @@ test('the no-session view closes the socket and receives no session frames', () 
   assert.equal(h.FakeWebSocket.instances.length, 2, 'the next open opens its own socket');
 });
 
-test('a bootstrap that completed before the socket opened needs no subscribe', () => {
+test('a page with no socket opens one for its first subscribe', () => {
   const h = buildContext('session-a');
   h.context.SESSION_ID = 'session-b';
 
-  // The switch's bootstrap completed while no socket was open: the request waits, and the
-  // reconnect's handshake replays the same session from the same cursor.
+  // The offline shell's boot runs with no session to name, so nothing connects a socket before the
+  // open path queues its subscribe. The subscribe opens the socket itself: the handshake replays
+  // the same session from the same cursor the bootstrap seeded.
   h.context.holdSessionFrames('session-b');
   h.context.eventCursor = 6;
   h.context.requestSessionSubscription('session-b', 6, {from_session: 'session-a', generation: 1});
 
-  h.context.connectWS();
+  assert.equal(h.FakeWebSocket.instances.length, 1, 'the subscribe opened the page’s socket');
   const socket = lastSocket(h);
   assert.match(socket.url, /\/ws\/sessions\/session-b\?cursor=6/, 'the handshake carries the bootstrap cursor');
   socket.emitOpen();

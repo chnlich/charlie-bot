@@ -169,7 +169,10 @@ function requestSessionSubscription(sessionId, cursor, report) {
     generation: report ? report.generation : 0,
   };
   if (ws && wsOpen) sendPendingSubscribe();
-  // Otherwise the socket still in its handshake sends it once open.
+  else if (!ws) connectWS();
+  // Otherwise the socket still in its handshake sends it once open. A page the offline shell served
+  // opens its socket here: its boot ran with no session to name, so nothing connected one before the
+  // open path queued this subscribe.
 }
 
 function sendPendingSubscribe() {

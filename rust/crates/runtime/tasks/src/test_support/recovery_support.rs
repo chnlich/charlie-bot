@@ -60,7 +60,7 @@ use charliebot_registry::sequence::{
   QuotaFailure, SequenceBinding, SequenceCompletion, SequenceController, SequenceTree,
 };
 use charliebot_store::ChatEvent;
-use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, TASK_TYPE_FIELD, TaskProfile, TaskSpec, UtcDateTime};
 use charliebot_store::run_records;
 use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
 use charliebot_store::{
@@ -1060,7 +1060,7 @@ pub fn cold_read_body(session_id: &str, page: &Path) -> Value {
   json!({
     "session_id": session_id,
     "description": format!("cold read of {}", page.display()),
-    "task_type": "cold-read",
+    (TASK_TYPE_FIELD): "cold-read",
     "cold_read": {"page_path": page.display().to_string(), "genre": "sitrep", "trigger": "where are we?"},
   })
 }

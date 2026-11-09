@@ -45,7 +45,7 @@ pub fn find_local_task_child(
     None => description.is_empty(),
     Some(_) => false,
   };
-  let recorded_task_type = match task.get("task_type") {
+  let recorded_task_type = match task.get(crate::metadata::TASK_TYPE_FIELD) {
     None | Some(Value::Null) => None,
     Some(Value::String(task_type)) => Some(task_type.as_str()),
     Some(_) => return None,

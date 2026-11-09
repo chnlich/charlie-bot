@@ -21,7 +21,7 @@
     input::placeholder, textarea::placeholder { color: #64748b; }
     /* diff2html draws a header above every file's diff: the file's name, its ADDED/MODIFIED tag and
        a Viewed box that collapses that file. The row above the panel already shows the name and the
-       status, and its toggle collapses the panel and drops the rendered diff, so the library header
+       status, and its toggle collapses the panel and drops the rendered diff. So the library header
        repeats what the user has just read and spends a row of screen space per open file. Hiding it
        keeps the file's identity on the row above and hands the row to the diff content. */
     .d2h-file-header { display: none; }
@@ -29,7 +29,7 @@
        extend it. The 24 px box gives the page's only way back to chat the pointer floor its buttons
        keep; the concurrency badge keeps the header at its height. */
     .back-link { min-height: 24px; }
-    /* A phone cannot hold a file row on one line, so it becomes a grid: the status, the file name and
+    /* A phone cannot hold a file row on one line, so it becomes a grid. The status, the file name and
        the counts share the first line, and a path with a directory puts it on the second line under
        the name. A file at the repository root has no second line to draw, so its row keeps one line
        where the old two-line grid spent a line on the counts alone. The name wraps rather than being

@@ -75,6 +75,8 @@ enum SessionCommand {
   Reparent(ReparentArgs),
   /// Set who approves a task: `user` holds its self-archive until the user opens the session, `parent` closes it at run end
   SetApprover(SetApproverArgs),
+  /// Write a task's record (goal, acceptance, context refs); this session's when the task id is left out
+  TaskRecord(TaskRecordArgs),
   /// Relay a message to another session as an agent_message
   Send(SendArgs),
   /// Print one session's chat messages as plain text, oldest first (for rg)
@@ -199,6 +201,19 @@ struct SetApproverArgs {
 }
 
 #[derive(Args)]
+struct TaskRecordArgs {
+  /// Task id (optional; defaults to this session's id)
+  session_id: Option<String>,
+  /// Path to the task-record JSON (goal, acceptance, context_refs); - reads stdin
+  #[arg(long)]
+  file: String,
+  /// The event id of the user message this write carries out; writing this session's own record
+  /// requires one
+  #[arg(long)]
+  basis: Option<String>,
+}
+
+#[derive(Args)]
 struct SendArgs {
   /// Target session id
   target: String,
@@ -248,6 +263,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     SessionCommand::Cancel(args) => cancel(&args),
     SessionCommand::Reparent(args) => reparent(&args),
     SessionCommand::SetApprover(args) => set_approver(&args),
+    SessionCommand::TaskRecord(args) => task_record(&args),
     SessionCommand::Send(args) => send(&args),
     SessionCommand::Dialog(args) => dialog(&args),
   }
@@ -452,6 +468,29 @@ fn set_approver(args: &SetApproverArgs) -> Result<(), CliExit> {
   let result = client::patch(
     &route::fill(session_routes::SESSION_PATH, &[args.session_id.as_str()]),
     json!({ "approver": args.approver }),
+    None,
+    &[],
+  )?;
+  json_out::print_result(&result);
+  Ok(())
+}
+
+fn task_record(args: &TaskRecordArgs) -> Result<(), CliExit> {
+  let session_id = resolve::resolve_from_env(args.session_id.as_deref())?;
+  let text = files::read_reply_text(&args.file)?;
+  let record: Value = serde_json::from_str(&text)
+    .map_err(|error| CliExit::error(format!("the task record file is not JSON: {error}")))?;
+  if !record.is_object() {
+    return Err(CliExit::error("the task record file must hold a JSON object"));
+  }
+  let mut payload = Map::new();
+  payload.insert("task".to_string(), record);
+  if let Some(basis) = &args.basis {
+    payload.insert("basis_event_id".to_string(), json!(basis));
+  }
+  let result = client::patch(
+    &route::fill(session_routes::SESSION_PATH, &[session_id.as_str()]),
+    Value::Object(payload),
     None,
     &[],
   )?;

@@ -15,6 +15,7 @@
       "status": 200,
       "body": {
         "session_id": "abc",
+        "goal": null,
         "web_status": null,
         "descendants": [],
         "children": [
@@ -30,7 +31,7 @@
     }
   ],
   "expect": {
-    "stdout": "No status yet\n\nChild sessions' Now:\nNow child (d7645e8f): Running the sweep (updated 2026-10-16T21:05:00+00:00)\n",
+    "stdout": "Goal: (not set)\nNo status yet\n\nChild sessions' Now:\nNow child (d7645e8f): Running the sweep (updated 2026-10-16T21:05:00+00:00)\n",
     "stderr": "",
     "exit": 0,
     "requests": [

@@ -15,8 +15,8 @@
       "status": 200,
       "body": {
         "session_id": "abc",
+        "goal": "Ship",
         "web_status": {
-          "goal": "Ship",
           "now": "Testing",
           "waiting": [
             {

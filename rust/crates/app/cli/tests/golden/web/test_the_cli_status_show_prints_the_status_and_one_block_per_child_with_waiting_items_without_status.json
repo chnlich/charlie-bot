@@ -15,6 +15,7 @@
       "status": 200,
       "body": {
         "session_id": "abc",
+        "goal": null,
         "web_status": null,
         "descendants": [
           {
@@ -38,7 +39,7 @@
     }
   ],
   "expect": {
-    "stdout": "No status yet\n\nPanel child (d7645e8f)\n- Answer plan 5 (/x)\n  since: 2026-10-16T18:00:00Z\n  since_exact: false\n  context: The plan needs review. Options are approve or revise; revise is recommended.\n",
+    "stdout": "Goal: (not set)\nNo status yet\n\nPanel child (d7645e8f)\n- Answer plan 5 (/x)\n  since: 2026-10-16T18:00:00Z\n  since_exact: false\n  context: The plan needs review. Options are approve or revise; revise is recommended.\n",
     "stderr": "",
     "exit": 0,
     "requests": [

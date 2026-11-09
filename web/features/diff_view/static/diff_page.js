@@ -70,7 +70,7 @@
       .cbdx-gap-row > td { padding: 0; background: #f8fafc; border-top: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0; }
       .cbdx-gap-cell { display: flex; align-items: center; gap: 6px; padding: 2px 8px; white-space: nowrap; }
       /* A side-by-side pane scrolls its own table sideways when a line is wider than the pane, so the table
-         can stand wider than the window. The gap strip belongs to the visible pane, not to the table: the
+         can stand wider than the window. The gap strip belongs to the visible pane, not to the table. The
          controls stick to the pane's left edge and the count to its right, or a wide line would push them
          past the edge and hide them. */
       .cbdx-gap-controls { position: sticky; left: 0; display: flex; align-items: center; gap: 6px; }

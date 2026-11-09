@@ -7,7 +7,7 @@ use charliebot_registry::templating::Templating;
 use charliebot_registry::{FeatureContext, WebSocketRequest};
 use charliebot_store::aggregator::MessageAggregator;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
-use charliebot_store::streaming::{self, SocketHandle, Subscription};
+use charliebot_store::streaming::{self, APPEND, LENGTH, SocketHandle, Subscription, THINKING_APPEND, THINKING_LENGTH};
 use charliebot_store::{RAW_EVENTS_REPLACED_BY_DELTAS, SharedChatEvent, Store, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use futures_util::{SinkExt, StreamExt};
@@ -300,13 +300,13 @@ fn draft_stream_frame(draft: &Value) -> Value {
   });
   let content = draft.get("content").and_then(Value::as_str).unwrap_or_default();
   if !content.is_empty() {
-    frame["append"] = json!(content);
-    frame["length"] = json!(content.encode_utf16().count());
+    frame[APPEND] = json!(content);
+    frame[LENGTH] = json!(content.encode_utf16().count());
   }
   let thinking = draft.get("thinking").and_then(Value::as_str).unwrap_or_default();
   if !thinking.is_empty() {
-    frame["thinking_append"] = json!(thinking);
-    frame["thinking_length"] = json!(thinking.encode_utf16().count());
+    frame[THINKING_APPEND] = json!(thinking);
+    frame[THINKING_LENGTH] = json!(thinking.encode_utf16().count());
   }
   if let Some(tools) = draft.get("tools") {
     frame["tools"] = tools.clone();

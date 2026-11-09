@@ -1,3 +1,6 @@
+//! The live stream: one broadcast channel per session view, the trailing window that merges a burst of stream frames
+//! into one, and the field names a stream frame carries.
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -13,6 +16,20 @@ pub const SIDEBAR_CHANNEL: &str = "sidebar";
 
 /// The trailing stream-delta window.
 pub const STREAM_COALESCE_INTERVAL: Duration = Duration::from_millis(200);
+
+/// The stream frame field holding the answer text added since the previous frame. The aggregator writes it, the
+/// window merges it, and a page that missed the live frames builds it into its catch-up frame.
+pub const APPEND: &str = "append";
+
+/// The stream frame field holding the answer's UTF-16 length after the frame, so a page can tell a replayed append
+/// from new text.
+pub const LENGTH: &str = "length";
+
+/// The stream frame field holding the thinking text added since the previous frame.
+pub const THINKING_APPEND: &str = "thinking_append";
+
+/// The stream frame field holding the thinking's UTF-16 length after the frame.
+pub const THINKING_LENGTH: &str = "thinking_length";
 
 const PREVIEW_HIDING_TYPES: &[&str] = &["message", event_types::ASSISTANT_ERROR, "error"];
 
@@ -263,7 +280,7 @@ fn merge_stream_frames(mut previous: Value, next: Value) -> Value {
   let Some(next_object) = next.as_object() else { return next };
   let Some(previous_object) = previous.as_object_mut() else { return next };
   for (key, value) in next_object {
-    let text_key = matches!(key.as_str(), "append" | "thinking_append");
+    let text_key = matches!(key.as_str(), APPEND | THINKING_APPEND);
     let merged = match (text_key, previous_object.get(key).and_then(Value::as_str), value.as_str()) {
       (true, Some(have), Some(more)) => Some(format!("{have}{more}")),
       _ => None,

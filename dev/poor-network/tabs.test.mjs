@@ -100,3 +100,40 @@ test('the tab records a request the host\'s network change dropped, and leaves o
   assert.equal(tab.networkChanged.length, 1, 'only the network-change error names the host\'s doing');
   assert.equal(tab.networkChanged[0].url, 'https://front.test/?session=s');
 });
+
+test('the tab records whether a request\'s answer came from the worker\'s stored copy', () => {
+  const tab = new Tab('open', { evaluate: async () => null });
+  const pattern = /\/api\/sessions\/s1\/bootstrap$/;
+  tab.handle({
+    method: 'Network.requestWillBeSent',
+    params: { requestId: 'copy', request: { url: 'https://front.test/api/sessions/s1/bootstrap' } },
+  });
+  tab.handle({
+    method: 'Network.responseReceived',
+    params: {
+      requestId: 'copy',
+      response: {
+        status: 200,
+        fromServiceWorker: true,
+        headers: {'x-charliebot-stored-at': '2026-11-09T00:00:00Z'},
+      },
+    },
+  });
+  tab.handle({method: 'Network.loadingFinished', params: {requestId: 'copy', encodedDataLength: 0}});
+  const answered = tab.lastRequest(pattern);
+  assert.equal(answered.storedAt, '2026-11-09T00:00:00Z', 'the worker\'s stored-at header is found by any casing');
+  assert.equal(answered.fromServiceWorker, true);
+  assert.equal(tab.bytesOf(pattern, 0, Infinity), 0, 'a copy crosses no bytes the page counts');
+
+  tab.handle({
+    method: 'Network.requestWillBeSent',
+    params: { requestId: 'network', request: { url: 'https://front.test/api/sessions/s1/bootstrap' } },
+  });
+  tab.handle({
+    method: 'Network.responseReceived',
+    params: { requestId: 'network', response: { status: 200, fromServiceWorker: false, headers: {ETag: '"x"'}} },
+  });
+  tab.handle({method: 'Network.loadingFinished', params: {requestId: 'network', encodedDataLength: 900}});
+  assert.equal(tab.lastRequest(pattern).storedAt, null, 'a network answer carries no stored-at header');
+  assert.equal(tab.bytesOf(pattern, 0, Infinity), 900);
+});

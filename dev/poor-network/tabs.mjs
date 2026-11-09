@@ -10,6 +10,17 @@ const POLL_MS = 25;
 const ACCESS_KEY_NAME = 'charliebot_access_key';
 // The wait for a row that a group's "Show all" fetches: the full listing crosses the link beside the background load.
 const ROW_PAINT_TIMEOUT_MS = 180000;
+// The header the offline shell worker stamps on a first screen it answered from its stored copy
+// (web/static/js/view-requests.js).
+const STORED_AT_HEADER = 'x-charliebot-stored-at';
+
+// One header of a CDP response, by name, case-insensitively: the browser reports a server's own casing.
+function responseHeader(headers, name) {
+  for (const [key, value] of Object.entries(headers || {})) {
+    if (key.toLowerCase() === name) return value;
+  }
+  return null;
+}
 
 // A page expression for the session's row anchor in the sidebar list, or undefined when the list has no such row.
 function sessionRowExpression(sessionId) {
@@ -364,6 +375,24 @@ export class Tab {
     return bytes;
   }
 
+  // The last request whose URL matches `pattern`, with the answer the browser recorded for it: `bytes` is the
+  // page's own encoded-data count, `storedAt` the offline shell worker's stored-at header (null when the network
+  // answered), and `fromServiceWorker` whether the worker served it. Null before any such request finishes.
+  lastRequest(pattern) {
+    let last = null;
+    for (const request of this.requests.values()) {
+      if (!pattern.test(request.url)) continue;
+      if (last === null || (request.finishAt ?? -Infinity) >= (last.finishAt ?? -Infinity)) last = request;
+    }
+    return last;
+  }
+
+  // Whether the offline shell worker controls this page: its answers reach the page without the page's own network
+  // events counting their bytes.
+  async hasWorkerController() {
+    return await this.evaluate('navigator.serviceWorker ? navigator.serviceWorker.controller !== null : false') === true;
+  }
+
   // How often each request path went out in [from, to], for the requests whose URL matches
   // `pattern`. The path is the URL without its query, so a repeated download of one endpoint
   // shows as a count above one.
@@ -392,12 +421,18 @@ export class Tab {
           status: null,
           wireStatus: null,
           failed: null,
+          fromServiceWorker: false,
+          storedAt: null,
         });
         return;
       }
       case 'Network.responseReceived': {
         const request = this.requests.get(message.params.requestId);
-        if (request) request.status = message.params.response.status;
+        if (request) {
+          request.status = message.params.response.status;
+          request.fromServiceWorker = message.params.response.fromServiceWorker === true;
+          request.storedAt = responseHeader(message.params.response.headers, STORED_AT_HEADER);
+        }
         return;
       }
       case 'Network.responseReceivedExtraInfo': {

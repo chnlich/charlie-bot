@@ -618,9 +618,26 @@ export async function heldBlackoutRep(ctx) {
     // A socket the page opened for the target after the restore. Today's page opens one; fix F's kept socket names the
     // session in its catch-up instead, so none is expected and the recovery is timed from the render.
     const socket = tab.sockets.filter((entry) => entry.at >= restoreAt && entry.url.includes(last.id)).pop() ?? null;
-    const lastBytes = tab.bytesOf(new RegExp(`/api/sessions/${last.id}/bootstrap$`), 0, Infinity);
-    if (lastBytes === 0) {
-      throw new Error(`no bootstrap bytes recorded for the last switch to ${last.id}`);
+    const lastBootstrap = new RegExp(`/api/sessions/${last.id}/bootstrap$`);
+    const lastBytes = tab.bytesOf(lastBootstrap, 0, Infinity);
+    const lastAnswer = tab.lastRequest(lastBootstrap);
+    // The last switch's floor: what its first screen had to cross the link. A stored copy crosses nothing, so its
+    // floor is 0. With the offline shell's worker controlling the page, the page's own network events carry no bytes
+    // for a bootstrap the worker answers — a copy needs none, and a network answer reaches the page through the
+    // worker's fetch, whose bytes the page's counter never sees — so the server's wire size stands in for the bytes
+    // the counter would have seen without a worker.
+    let lastFloorBytes = lastBytes;
+    let lastAnswerSource = 'network';
+    if (lastAnswer !== null && lastAnswer.storedAt !== null) {
+      lastFloorBytes = 0;
+      lastAnswerSource = 'stored';
+    } else if (lastBytes === 0) {
+      if (!await tab.hasWorkerController()) {
+        throw new Error(`no bootstrap bytes recorded for the last switch to ${last.id}: ` +
+          `${JSON.stringify(lastAnswer)}`);
+      }
+      lastFloorBytes = (await api.bootstrapWireBytes(last.id)).wireBytes;
+      lastAnswerSource = 'worker';
     }
     // An abort reaches the server only when the link returns, so each superseded bootstrap's
     // response was written in full during the blackout: its size on the wire, read from the
@@ -636,8 +653,11 @@ export async function heldBlackoutRep(ctx) {
       shownMs: shownAt - restoreAt,
       catchupMs: catchupAt - restoreAt,
       socketMs: socket === null ? null : socket.at - restoreAt,
-      lastFloorMs: floorMs(lastBytes),
+      lastFloorMs: floorMs(lastFloorBytes),
+      lastFloorBytes,
       lastBootstrapBytes: lastBytes,
+      // Who answered the last switch's first screen: the network, the page's stored copy, or the worker's own fetch.
+      lastAnswerSource,
       supersededServerBytes,
       blackoutProxyBytes: proxy.counters(),
     };

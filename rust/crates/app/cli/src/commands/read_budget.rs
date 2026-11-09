@@ -212,7 +212,7 @@ fn session_start(event: &Value, run_dir: &Path) -> Result<Option<Value>, CliExit
 /// One tool result: count it, and decide whether the model reads it whole, a notice, or nothing.
 fn tool_result(event: &Value, run_dir: &Path) -> Result<Option<Value>, CliExit> {
   let hook_event = event_name(event)?;
-  let failure = hook_event == "PostToolUseFailure";
+  let failure = hook_event == claude_launch::POST_TOOL_USE_FAILURE_HOOK_EVENT;
   let tool_name = event
     .get(event_types::TOOL_NAME)
     .and_then(Value::as_str)

@@ -597,6 +597,13 @@ test('expand down and expand up fill the top gap in line order with both sides\'
   const revealedNew = page.output.children[0].children[1].querySelectorAll('.d2h-file-side-diff')[1]
     .querySelector('table').querySelectorAll('tr')[1];
   assert.equal(revealedNew.children[1].querySelector('.d2h-code-line-ctn').textContent, 'head text 1');
+  // The gap shrank to the one-click size, so its strip draws one direction button and drops the taller
+  // three-button height from both panes' cells.
+  assert.equal(gapCount(page, 0).textContent, '20 hidden lines');
+  const cells = [stripRows(page)[0], lastStripRows(page)[0]]
+    .map((row) => row.querySelector('.cbdx-gap-cell').classList);
+  assert.deepEqual(cells.map((cls) => [cls.contains('cbdx-gap-stack'), cls.contains('cbdx-gap-stack-three')]),
+    [[true, false], [true, false]]);
 });
 
 test('the between-hunk and bottom gaps expand toward their own edges', async () => {

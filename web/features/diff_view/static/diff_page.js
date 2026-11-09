@@ -474,7 +474,10 @@
       controls.append(...directionButtons, fileButton);
       const first = gap.cells[0];
       const last = gap.cells[gap.cells.length - 1];
-      gap.cells.forEach((cell) => { cell.innerHTML = ''; });
+      gap.cells.forEach((cell) => {
+        cell.innerHTML = '';
+        cell.classList.remove('cbdx-gap-stack', 'cbdx-gap-stack-three');
+      });
       first.append(controls);
       if (last === first) {
         first.append(count, error);

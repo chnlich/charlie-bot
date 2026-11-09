@@ -23,6 +23,7 @@ use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spa
 use charliebot_core::event_types;
 use charliebot_core::headers::AUTHORIZATION;
 use charliebot_core::run_token;
+use charliebot_core::subagent::AGENT_TOOL;
 use charliebot_core::text_repr::is_truthy;
 use charliebot_core::web_search::{MCP_PATH, MCP_SERVER_NAME, TOOL_NAME};
 
@@ -39,8 +40,6 @@ pub const MCP_CONFIG_FLAG: &str = "--mcp-config";
 pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "claude_code_wrote_claude_md";
 pub const EXCLUDE_DYNAMIC_SECTIONS_FLAG: &str = "--exclude-dynamic-system-prompt-sections";
 const SYNTHETIC_MODEL: &str = "<synthetic>";
-const AGENT_TOOL: &str = "Agent";
-const ONE_SHOT_DISALLOWED_TOOLS: &str = "Bash,Read,Write,Edit,Glob,Grep,Agent";
 
 /// The run kinds that receive Claude Code's `Agent` tool when subagents are enabled are the manager turn, work runs
 /// and improve iterations. Work runs are implement, quick-edit, script-run, verify, cold read and unstepped cron
@@ -425,6 +424,11 @@ async fn run_one_shot_process(
   Ok(String::from_utf8(output.stdout)?.trim().to_string())
 }
 
+/// The `--disallowed-tools` value of a text one-shot: every file tool, a shell, and the subagent tool.
+fn one_shot_disallowed_tools() -> String {
+  ["Bash", "Read", "Write", "Edit", "Glob", "Grep", AGENT_TOOL].join(",")
+}
+
 /// The argv of a `claude -p` text one-shot: no session persistence, tools disabled, and the caller's model flags.
 fn one_shot_argv(model_args: &[String], system: &str) -> Vec<String> {
   let mut command = vec![
@@ -439,7 +443,7 @@ fn one_shot_argv(model_args: &[String], system: &str) -> Vec<String> {
     "--system-prompt".to_string(),
     system.to_string(),
     DISALLOWED_TOOLS_FLAG.to_string(),
-    ONE_SHOT_DISALLOWED_TOOLS.to_string(),
+    one_shot_disallowed_tools(),
   ]);
   command
 }
@@ -1177,6 +1181,7 @@ mod tests {
   #[test]
   fn cli_native_one_shot_uses_text_mode_and_no_session_persistence() {
     let command = one_shot_argv(&["--model".to_string(), "claude-fable-5-1".to_string()], "system");
+    let disallowed = one_shot_disallowed_tools();
     assert_eq!(
       command,
       [
@@ -1190,7 +1195,7 @@ mod tests {
         "--system-prompt",
         "system",
         "--disallowed-tools",
-        ONE_SHOT_DISALLOWED_TOOLS
+        disallowed.as_str()
       ]
     );
   }
@@ -1230,6 +1235,7 @@ mod tests {
         ),
       ]
     );
+    let disallowed = one_shot_disallowed_tools();
     assert_eq!(
       one_shot_argv(&[], "system"),
       [
@@ -1241,7 +1247,7 @@ mod tests {
         "--system-prompt",
         "system",
         "--disallowed-tools",
-        ONE_SHOT_DISALLOWED_TOOLS
+        disallowed.as_str()
       ]
     );
   }
@@ -1293,7 +1299,7 @@ mod tests {
       format!("{},{}", headless_disallowed_tools(RunKind::Work, false), TOOL_NAME)
     );
     let one_shot = backend.one_shot_command("system");
-    assert_eq!(disallowed_tools_value(&one_shot), format!("{},{}", ONE_SHOT_DISALLOWED_TOOLS, TOOL_NAME));
+    assert_eq!(disallowed_tools_value(&one_shot), format!("{},{}", one_shot_disallowed_tools(), TOOL_NAME));
   }
 
   #[test]

@@ -64,7 +64,10 @@ function scriptPathOf(src) {
 // template name, which is not a core script and stays out of the graph, as before.
 function scriptNodes(html) {
   const found = [];
-  for (const m of html.matchAll(/<script\s+src="\/static\/([^"?]+)/g)) found.push([m.index, scriptPathOf(m[1])]);
+  // Third-party files under static/vendor/ (the blocking CDN copies, self-hosted) stay out of the frontend graph.
+  for (const m of html.matchAll(/<script\s+src="\/static\/([^"?]+)/g)) {
+    if (!m[1].startsWith('vendor/')) found.push([m.index, scriptPathOf(m[1])]);
+  }
   for (const m of html.matchAll(/<script>\s*\{%\s*include\s+'js\/([^']+)'\s*%\}\s*<\/script>/g)) {
     found.push([m.index, `web/static/js/${m[1]}`]);
   }

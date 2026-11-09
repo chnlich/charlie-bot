@@ -16,10 +16,8 @@ use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::git::TRASH_DIR_NAME;
 use charliebot_core::timefmt;
-use charliebot_registry::usage::{
-  CategoryResult, SWEEP_DIR_SCAN_FAILED_EVENT, SWEEP_FILE_DELETE_FAILED_EVENT, SWEEP_FILE_STAT_FAILED_EVENT,
-  SourceSweep, SweepScope,
-};
+use charliebot_registry::usage::{SWEEP_DIR_SCAN_FAILED_EVENT, SourceSweep, SweepScope};
+use charliebot_registry::usage_sweep::SweepCounter;
 use regex::Regex;
 use walkdir::WalkDir;
 
@@ -187,58 +185,19 @@ fn sorted_children(root: &Path) -> io::Result<Vec<PathBuf>> {
   Ok(children)
 }
 
-/// The count of directories and the freed bytes of the category. A transcript directory's files add bytes, and the
-/// directory adds one count (`SweepCounter` with `count=False` for each file).
-#[derive(Default)]
-struct Counter {
-  count: u64,
-  bytes: u64,
-}
-
-impl Counter {
-  /// Deletes one file, or only counts it in a dry run, and adds its bytes. A file that cannot be statted or removed is
-  /// logged and skipped.
-  fn delete_file(&mut self, path: &Path, dry_run: bool) {
-    let size = match fs::metadata(path) {
-      Ok(metadata) => metadata.len(),
-      Err(error) => {
-        tracing::warn!(
-          target: "charliebot_agents",
-          path = %path.display(),
-          error = %error,
-          "{}",
-          SWEEP_FILE_STAT_FAILED_EVENT
-        );
-        return;
-      }
-    };
-    if !dry_run && let Err(error) = fs::remove_file(path) {
-      tracing::warn!(
-        target: "charliebot_agents",
-        path = %path.display(),
-        error = %error,
-        "{}",
-        SWEEP_FILE_DELETE_FAILED_EVENT
-      );
-      return;
-    }
-    self.bytes += size;
+/// Deletes a transcript directory file by file, then its skeleton, and counts it once. A dry run only counts it.
+fn delete_project_dir(counter: &mut SweepCounter, path: &Path, dry_run: bool) {
+  for file in project_files(path) {
+    counter.delete_file(&file, dry_run, false);
   }
-
-  /// Deletes a transcript directory file by file, then its skeleton, and counts it once. A dry run only counts it.
-  fn delete_project_dir(&mut self, path: &Path, dry_run: bool) {
-    for file in project_files(path) {
-      self.delete_file(&file, dry_run);
-    }
-    if dry_run {
-      self.count += 1;
-      return;
-    }
-    match fs::remove_dir_all(path) {
-      Ok(()) => self.count += 1,
-      Err(error) => {
-        tracing::warn!(target: "charliebot_agents", path = %path.display(), error = %error, "storage_cool_dir_delete_failed");
-      }
+  if dry_run {
+    counter.count_one();
+    return;
+  }
+  match fs::remove_dir_all(path) {
+    Ok(()) => counter.count_one(),
+    Err(error) => {
+      tracing::warn!(target: "charliebot_agents", path = %path.display(), error = %error, "storage_cool_dir_delete_failed");
     }
   }
 }
@@ -249,7 +208,7 @@ impl Counter {
 /// gone is an orphan, deleted once idle past the window; a session directory that still exists keeps its transcripts.
 /// A worktree-encoded directory follows the orphan rule once its worktree is gone. A scoped run touches only the
 /// scoped session's directories.
-fn sweep_transcripts(host: &ClaudeHost, scope: &SweepScope, counter: &mut Counter) -> anyhow::Result<()> {
+fn sweep_transcripts(host: &ClaudeHost, scope: &SweepScope, counter: &mut SweepCounter) -> anyhow::Result<()> {
   let cfg = scope.cfg.as_ref();
   let worktree_prefix = format!("{}-", claude_project_dir_name(Path::new(&cfg.paths.worktree_dir)));
   let live_worktrees = if scope.session_id.is_none() { live_worktree_dir_names(cfg)? } else { HashSet::new() };
@@ -263,7 +222,7 @@ fn sweep_transcripts(host: &ClaudeHost, scope: &SweepScope, counter: &mut Counte
         // The session still exists: only the cold rule decides.
         Some(owner) => {
           if owner.cold {
-            counter.delete_project_dir(&entry, scope.dry_run);
+            delete_project_dir(counter, &entry, scope.dry_run);
           }
         }
         // An unreadable session metadata file is not proof that the session was deleted. Only a missing session
@@ -271,7 +230,7 @@ fn sweep_transcripts(host: &ClaudeHost, scope: &SweepScope, counter: &mut Counte
         None if cfg.sessions_dir().join(&encoded).is_dir() => {}
         // No metadata references the session any more: an orphan past the window.
         None if scope.session_id.is_none() && idle_past_window(&entry, scope) => {
-          counter.delete_project_dir(&entry, scope.dry_run);
+          delete_project_dir(counter, &entry, scope.dry_run);
         }
         None => {}
       },
@@ -282,7 +241,7 @@ fn sweep_transcripts(host: &ClaudeHost, scope: &SweepScope, counter: &mut Counte
           && !live_worktrees.contains(&name)
           && idle_past_window(&entry, scope) =>
       {
-        counter.delete_project_dir(&entry, scope.dry_run);
+        delete_project_dir(counter, &entry, scope.dry_run);
       }
       None => {}
     }
@@ -292,12 +251,9 @@ fn sweep_transcripts(host: &ClaudeHost, scope: &SweepScope, counter: &mut Counte
 
 /// Claude Code's part of the sweep: one `claude-transcripts` category, counted in directories.
 pub fn sweep(host: &ClaudeHost, scope: &SweepScope) -> anyhow::Result<SourceSweep> {
-  let mut counter = Counter::default();
+  let mut counter = SweepCounter::default();
   sweep_transcripts(host, scope, &mut counter)?;
-  Ok(SourceSweep {
-    categories: vec![CategoryResult { name: CATEGORY, unit: UNIT, count: counter.count, bytes: counter.bytes }],
-    freelist: None,
-  })
+  Ok(SourceSweep { categories: vec![counter.category(CATEGORY, UNIT)], freelist: None })
 }
 
 #[cfg(test)]

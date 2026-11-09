@@ -20,6 +20,7 @@ use charliebot_tasks::completion::TaskCompletion;
 use serde_json::{Map, Value, json};
 
 use crate::api;
+use crate::route_support::Query;
 
 const RENAME_GROUP_FIELDS: &[Field] =
   &[Field::required("old_name", FieldType::String), Field::required("new_name", FieldType::String)];
@@ -79,12 +80,34 @@ async fn delete_group(State(features): State<Arc<FeatureContext>>, request: Requ
   }
 }
 
+/// The query parameter a click's read carries: whether the page showed the session's unread dot.
+const PAGE_DOT: &str = "page_dot";
+
 async fn mark_session_read(
   State(features): State<Arc<FeatureContext>>,
   AxumPath(session_id): AxumPath<String>,
+  request: Request<Body>,
 ) -> Response {
-  if let Err(error) = features.store.require_session(&session_id).await {
-    return task_http_error(error);
+  let query = Query::new(&request);
+  let page_dot = match query.get(PAGE_DOT) {
+    None => None,
+    Some(_) => match query.parse_bool(PAGE_DOT, false) {
+      Ok(page_dot) => Some(page_dot),
+      Err(response) => return *response,
+    },
+  };
+  let before = match features.store.require_session(&session_id).await {
+    Ok(meta) => meta,
+    Err(error) => return task_http_error(error),
+  };
+  // The page's dot and the flag the server held before this read describe the same fact. A mismatch means the
+  // page's unread state had diverged from the server's.
+  if let Some(page_dot) = page_dot {
+    if page_dot == before.has_unread {
+      tracing::info!(session = %session_id, page_dot, server_unread = before.has_unread, "session_read_compared");
+    } else {
+      tracing::warn!(session = %session_id, page_dot, server_unread = before.has_unread, "unread_dot_diverged");
+    }
   }
   let completion = match features.startup.require::<TaskCompletion>() {
     Ok(completion) => completion,
@@ -402,6 +425,22 @@ mod tests {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["has_unread"], false);
     assert!(tokio::time::timeout(std::time::Duration::from_millis(1), sidebar.recv()).await.is_err());
+    // A click's read names the dot the page showed: a dot over a read session is the diverged page state.
+    let read_with_dot = |page_dot: &str| format!("/api/sessions/{SESSION_ID}/read?page_dot={page_dot}");
+    let (status, _) = send(&router, Method::POST, &read_with_dot("false"), None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(&router, Method::POST, &read_with_dot("true"), None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let read_logs: Vec<String> = messages
+      .lock()
+      .unwrap()
+      .iter()
+      .filter(|message| message.starts_with("session_read") || message.starts_with("unread_dot"))
+      .cloned()
+      .collect();
+    assert_eq!(read_logs, ["session_read_compared", "unread_dot_diverged"]);
+    let (status, _) = send(&router, Method::POST, &read_with_dot("maybe"), None, None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 
     let (status, body) = send(&router, Method::POST, &format!("/api/sessions/{SESSION_ID}/star"), None, None).await;
     assert_eq!(status, StatusCode::OK);

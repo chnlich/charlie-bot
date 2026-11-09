@@ -628,7 +628,7 @@
     row.className = 'border border-slate-200 rounded mb-2 overflow-hidden';
 
     // Desktop: one line of chevron, status, counts, then the path. A phone lays the row out as the diff page's
-    // `.diff-file-row` grid: the name and the counts share its first line, and a path with a directory puts it on the
+    // `.diff-file-row` grid. The name and the counts share its first line. A path with a directory puts it on the
     // second line, so a file at the repository root keeps one line.
     const header = document.createElement('button');
     header.type = 'button';

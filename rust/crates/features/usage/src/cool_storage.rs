@@ -17,7 +17,10 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths::realpath;
 use charliebot_core::str_methods;
 use charliebot_core::text_repr;
-use charliebot_registry::usage::{CategoryResult, SessionFacts, SweepScope};
+use charliebot_registry::usage::{
+  CategoryResult, SWEEP_DIR_SCAN_FAILED_EVENT, SWEEP_FILE_DELETE_FAILED_EVENT, SWEEP_FILE_STAT_FAILED_EVENT,
+  SessionFacts, SweepScope,
+};
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{UtcDateTime, read_metadata};
 use charliebot_store::run_identity::SESSION_METADATA_NAME;
@@ -283,7 +286,7 @@ fn sorted_scan(root: &Path) -> Option<Vec<PathBuf>> {
       Some(entries)
     }
     Err(error) => {
-      tracing::warn!(dir = %root.display(), error = %error, "storage_cool_dir_scan_failed");
+      tracing::warn!(dir = %root.display(), error = %error, "{}", SWEEP_DIR_SCAN_FAILED_EVENT);
       None
     }
   }
@@ -317,12 +320,12 @@ impl TransportCounter {
     let size = match fs::metadata(path) {
       Ok(metadata) => metadata.len(),
       Err(error) => {
-        tracing::warn!(path = %path.display(), error = %error, "storage_cool_file_stat_failed");
+        tracing::warn!(path = %path.display(), error = %error, "{}", SWEEP_FILE_STAT_FAILED_EVENT);
         return;
       }
     };
     if let Err(error) = fs::remove_file(path) {
-      tracing::warn!(path = %path.display(), error = %error, "storage_cool_file_delete_failed");
+      tracing::warn!(path = %path.display(), error = %error, "{}", SWEEP_FILE_DELETE_FAILED_EVENT);
       return;
     }
     self.count += 1;

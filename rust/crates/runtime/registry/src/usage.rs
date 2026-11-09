@@ -56,6 +56,13 @@ pub const SNAPSHOT_READING_KIND: &str = "snapshot";
 /// matches this one name.
 pub const UNKNOWN_LIMIT_SHAPE_EVENT: &str = "ext_usage_unknown_limit_shape";
 
+/// The log event a cold-storage sweep source emits when it cannot list one of its directories.
+pub const SWEEP_DIR_SCAN_FAILED_EVENT: &str = "storage_cool_dir_scan_failed";
+/// The log event a sweep source emits when it cannot read one file's metadata.
+pub const SWEEP_FILE_STAT_FAILED_EVENT: &str = "storage_cool_file_stat_failed";
+/// The log event a sweep source emits when it cannot remove one file.
+pub const SWEEP_FILE_DELETE_FAILED_EVENT: &str = "storage_cool_file_delete_failed";
+
 /// The utilization a source reports for a window: a percentage, or `None` when the value is absent or not a number.
 pub fn as_utilization(value: Option<&Value>) -> Option<f64> {
   match value {

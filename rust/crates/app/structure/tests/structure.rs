@@ -847,6 +847,21 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_tasks::master_run::MASTER_CC_RESUMING_EVENT`.",
   },
   OwnerRow {
+    name: "storage_cool_dir_scan_failed",
+    owner: "runtime/registry",
+    hint: "Use `charliebot_registry::usage::SWEEP_DIR_SCAN_FAILED_EVENT`.",
+  },
+  OwnerRow {
+    name: "storage_cool_file_stat_failed",
+    owner: "runtime/registry",
+    hint: "Use `charliebot_registry::usage::SWEEP_FILE_STAT_FAILED_EVENT`.",
+  },
+  OwnerRow {
+    name: "storage_cool_file_delete_failed",
+    owner: "runtime/registry",
+    hint: "Use `charliebot_registry::usage::SWEEP_FILE_DELETE_FAILED_EVENT`.",
+  },
+  OwnerRow {
     name: "stdout.log",
     owner: "runtime/store",
     hint: "Use `charliebot_store::run_records::STDOUT_LOG_NAME`.",

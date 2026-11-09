@@ -8,7 +8,10 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use charliebot_core::timefmt;
-use charliebot_registry::usage::{CategoryResult, FreelistResult, SourceSweep, SweepScope};
+use charliebot_registry::usage::{
+  CategoryResult, FreelistResult, SWEEP_DIR_SCAN_FAILED_EVENT, SWEEP_FILE_DELETE_FAILED_EVENT,
+  SWEEP_FILE_STAT_FAILED_EVENT, SourceSweep, SweepScope,
+};
 use regex::Regex;
 
 use super::rollout::{is_rollout_file, rollout_thread_id, walk_files};
@@ -38,7 +41,8 @@ pub fn sweep(codex_home: &Path, scope: &SweepScope) -> anyhow::Result<SourceSwee
         target: "charliebot_agents",
         dir = %sessions.display(),
         error = %error,
-        "storage_cool_dir_scan_failed"
+        "{}",
+        SWEEP_DIR_SCAN_FAILED_EVENT
       ),
     }
   }
@@ -77,7 +81,8 @@ fn sweep_rollout(
         target: "charliebot_agents",
         path = %path.display(),
         error = %error,
-        "storage_cool_file_stat_failed"
+        "{}",
+        SWEEP_FILE_STAT_FAILED_EVENT
       ),
     }
     return;
@@ -109,7 +114,8 @@ impl Counter {
           target: "charliebot_agents",
           path = %path.display(),
           error = %error,
-          "storage_cool_file_stat_failed"
+          "{}",
+          SWEEP_FILE_STAT_FAILED_EVENT
         );
         return;
       }
@@ -119,7 +125,8 @@ impl Counter {
         target: "charliebot_agents",
         path = %path.display(),
         error = %error,
-        "storage_cool_file_delete_failed"
+        "{}",
+        SWEEP_FILE_DELETE_FAILED_EVENT
       );
       return;
     }

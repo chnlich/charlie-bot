@@ -182,6 +182,8 @@ pub struct Registry {
   pub(crate) host_probes: Ledger<HostProbeFn>,
   /// The one fork-assertion runner of a page, which `features/artifacts` registers.
   pub(crate) fork_assertions: Ledger<ForkAssertionsFn>,
+  /// The one runner that DMs a user, which `features/slack` registers.
+  pub(crate) user_dm: Ledger<UserDmFn>,
   /// The lifecycle of a backend type that registered none: one process per run.
   pub(crate) default_lifecycle: Arc<dyn BackendLifecycle>,
   pub(crate) default_lifecycle_name: &'static str,
@@ -235,6 +237,7 @@ impl Registry {
       host_logins,
       host_probes,
       fork_assertions,
+      user_dm,
       default_lifecycle: _,
       default_lifecycle_name,
       pre_recovery_steps,
@@ -295,6 +298,7 @@ impl Registry {
     append_ledger_inventory(&mut inventory, host_logins);
     append_ledger_inventory(&mut inventory, host_probes);
     append_ledger_inventory(&mut inventory, fork_assertions);
+    append_ledger_inventory(&mut inventory, user_dm);
     inventory.push(format!("default_lifecycle\t-\t{default_lifecycle_name}"));
     append_ledger_inventory(&mut inventory, pre_recovery_steps);
     append_ledger_inventory(&mut inventory, recovery_steps);
@@ -573,6 +577,9 @@ pub type HostProbeFn = for<'a> fn(&'a FeatureContext, &'a str) -> BoxFuture<'a, 
 /// The runner of one page's fork assertions, each failure as `(assertion name, detail)`. `None` means the page's file
 /// name carries no genre prefix, so no assertion set applies to it.
 pub type ForkAssertionsFn = fn(page: &Path, home: &Path) -> anyhow::Result<Option<Vec<(String, String)>>>;
+
+/// The sender of a DM to a user (`slack.user_dm`).
+pub type UserDmFn = for<'a> fn(&'a FeatureContext, &'a str, &'a str) -> BoxFuture<'a, anyhow::Result<String>>;
 
 /// The context limits of one reading kind. `declared_window` is `None` when the reading carries the window itself;
 /// `compact_reserve` is `None` when the compaction point is unknown.
@@ -1510,6 +1517,17 @@ impl Registry {
       .next()
       .copied()
       .ok_or_else(|| anyhow::anyhow!("no package registers the fork assertions"))
+  }
+
+  /// The registration of the user DM hook.
+  pub fn user_dm(&mut self, dm: UserDmFn) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    self.user_dm.insert_single(package, "user_dm", dm)
+  }
+
+  /// The registered user DM sender; fails when no package registers one.
+  pub fn user_dm_sender(&self) -> anyhow::Result<UserDmFn> {
+    self.user_dm.values().next().copied().ok_or_else(|| anyhow::anyhow!("no package registers the user DM sender"))
   }
 
   /// The registration of a file view (`wiring.register_file_view`).

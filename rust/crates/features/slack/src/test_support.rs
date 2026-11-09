@@ -316,7 +316,7 @@ async fn post_message(State(state): State<Arc<FakeState>>, Json(body): Json<Valu
       .into_response();
   }
   message["ok"] = json!(true);
-  Json(json!({"ok": true, "message": message})).into_response()
+  Json(json!({"ok": true, "message": message, "ts": ts})).into_response()
 }
 
 async fn reaction(State(state): State<Arc<FakeState>>, request: Request<Body>) -> Response {

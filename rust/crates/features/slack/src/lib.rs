@@ -18,8 +18,9 @@ mod turn_contribution;
 use std::sync::Arc;
 
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField, valid_origin};
-use charliebot_registry::{Registry, RegistryError};
+use charliebot_registry::{FeatureContext, Registry, RegistryError};
 use charliebot_store::metadata::SUCCESSOR_SESSION_ID;
+use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 use service::SlackService;
 use turn_contribution::SlackTurnContribution;
@@ -43,7 +44,19 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     validate_session_fields,
   )?;
   registry.thread_origin_field("slack_origin")?;
-  registry.turn_contribution("slack", Arc::new(SlackTurnContribution))
+  registry.turn_contribution("slack", Arc::new(SlackTurnContribution))?;
+  registry.user_dm(post_user_dm)
+}
+
+fn post_user_dm<'a>(
+  features: &'a FeatureContext,
+  user: &'a str,
+  text: &'a str,
+) -> BoxFuture<'a, anyhow::Result<String>> {
+  Box::pin(async move {
+    let client = slack_client::SlackClient::from_features(features)?;
+    client.post_dm(user, text).await
+  })
 }
 
 fn validate_session_fields(values: &mut Map<String, Value>) -> Option<String> {

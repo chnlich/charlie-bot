@@ -64,6 +64,7 @@ impl Registry {
       host_logins: crate::registry::Ledger::new("host login reader"),
       host_probes: crate::registry::Ledger::new("host probe"),
       fork_assertions: crate::registry::Ledger::new("fork assertions"),
+      user_dm: crate::registry::Ledger::new("user dm"),
       default_lifecycle: Arc::new(DefaultLifecycle),
       default_lifecycle_name: type_name::<DefaultLifecycle>(),
       pre_recovery_steps: crate::registry::Ledger::new("pre-recovery step"),

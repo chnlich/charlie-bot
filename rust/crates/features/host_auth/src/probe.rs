@@ -62,12 +62,6 @@ pub fn build_detail(returncode: i32, output: &str) -> String {
   parts.join("\n").chars().take(DETAIL_MAX_CHARS).collect()
 }
 
-/// `probe_host`: probe `alias` with the standing timeout. The result is `(returncode, output)`.
-pub async fn probe_host(alias: String) -> io::Result<(i32, String)> {
-  let argv = ssh::ssh_cmd(&alias, &["true"])?;
-  run_probe(&argv, PROBE_TIMEOUT).await
-}
-
 /// `probe_host_fresh`: probe `alias` over a new connection, as the remote launcher's preflight does, so the verdict is
 /// the one a launch gets. The standing poller's reused connection can answer for a login the preflight must renew.
 pub async fn probe_host_fresh(alias: String) -> io::Result<(i32, String)> {

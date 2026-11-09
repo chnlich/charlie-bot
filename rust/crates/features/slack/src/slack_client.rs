@@ -29,10 +29,14 @@ impl SlackClient {
   /// Build the process client from the current feature credentials.
   pub fn from_features(features: &FeatureContext) -> Result<Self> {
     let credentials = features.credentials.get().context("load Slack credentials")?;
+    let app_token = credentials
+      .get("slack", "app_token")
+      .map(charliebot_core::credentials::CredentialValue::value_str)
+      .unwrap_or_default();
     Ok(Self::with_client(
       http_client::client(&Settings::from_env())?,
       credentials.require("slack", "bot_token")?,
-      credentials.require("slack", "app_token")?,
+      app_token,
       API_BASE.to_string(),
     ))
   }
@@ -65,6 +69,23 @@ impl SlackClient {
     });
     let response = self.json_request("chat.postMessage", &self.bot_token, body)?.send().await?;
     checked_payload(response, "chat.postMessage").await
+  }
+
+  /// POST one bot DM and return the message timestamp.
+  pub(crate) async fn post_dm(&self, channel: &str, text: &str) -> Result<String> {
+    let body = json!({
+      "channel": channel,
+      "text": text,
+    });
+    let response = self.json_request("chat.postMessage", &self.bot_token, body)?.send().await?;
+    let payload = checked_payload(response, "chat.postMessage").await?;
+    let ts = payload
+      .get("ts")
+      .or_else(|| payload.pointer("/message/ts"))
+      .and_then(Value::as_str)
+      .unwrap_or_default()
+      .to_string();
+    Ok(ts)
   }
 
   /// Read the authenticated bot identity used to recognize its metadata-keyed posts.
@@ -207,4 +228,21 @@ async fn response_json(response: Response) -> Result<Value> {
   let response = response.error_for_status()?;
   let bytes = response.bytes().await?;
   serde_json::from_slice(&bytes).context("Slack Web API response is not JSON")
+}
+
+#[cfg(test)]
+mod tests {
+  use crate::test_support::FakeApi;
+
+  #[tokio::test]
+  async fn post_dm_sends_chat_post_message_with_channel_and_text() {
+    let api = FakeApi::start(&[]).await;
+    let ts = api.client.post_dm("U_TEST_USER", "Approval needed").await.expect("DM sends");
+    assert!(!ts.is_empty());
+    let calls = api.calls();
+    let post_call =
+      calls.iter().find(|(m, p, _)| m == "POST" && p == "/api/chat.postMessage").expect("postMessage called");
+    assert_eq!(post_call.2["channel"], "U_TEST_USER");
+    assert_eq!(post_call.2["text"], "Approval needed");
+  }
 }

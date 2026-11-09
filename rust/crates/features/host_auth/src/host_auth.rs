@@ -18,13 +18,13 @@ use serde_json::{Map, Value, json};
 use time::{Duration, OffsetDateTime};
 use tokio::sync::{Semaphore, SemaphorePermit};
 
-use crate::probe::{STATUS_NEEDS_OKTA, STATUS_OK, awaits_approval, build_detail, classify, probe_host};
+use crate::probe::{STATUS_NEEDS_OKTA, STATUS_OK, awaits_approval, build_detail, classify, probe_host_fresh};
 use crate::ssh_config;
 use crate::timestamps::{self, isoformat};
 
-/// The standing probe period. A held host is probed at 12 times this period.
-pub const PROBE_INTERVAL_SEC: i64 = 1800;
-pub const BLOCKED_BACKOFF_SEC: i64 = 12 * PROBE_INTERVAL_SEC;
+/// The standing probe period. A held host is probed at its own backoff period.
+pub const PROBE_INTERVAL_SEC: i64 = 1620;
+pub const BLOCKED_BACKOFF_SEC: i64 = 21600;
 /// The trust-cache lifetime the estimate counts from a renewal.
 pub const TRUST_CACHE_TTL_SEC: i64 = 7 * 86400;
 
@@ -128,6 +128,7 @@ pub fn apply_probe_result(entry: &mut Map<String, Value>, status: &str, detail: 
   entry.insert("last_probe_at".to_string(), json!(probed));
   if status == STATUS_OK {
     entry.insert("last_ok_at".to_string(), json!(probed));
+    entry.remove("dm_status");
   }
   if previous.as_deref() != Some(status) {
     entry.insert("last_change_at".to_string(), json!(probed));
@@ -170,7 +171,7 @@ pub fn host_entries(state: &State) -> anyhow::Result<Vec<&Map<String, Value>>> {
   hosts.iter().map(|entry| entry.as_object().context("a host entry is not an object")).collect()
 }
 
-fn alias_of(entry: &Map<String, Value>) -> anyhow::Result<&str> {
+pub fn alias_of(entry: &Map<String, Value>) -> anyhow::Result<&str> {
   entry.get("alias").and_then(Value::as_str).context("a host entry has no string alias")
 }
 
@@ -306,7 +307,7 @@ impl Drop for ProbeClaim<'_> {
 
 /// `run_round`: probe the hosts that are due (every host when `force`), then publish the state.
 pub async fn run_round(force: bool, state_path: &Path, config_path: &Path) -> anyhow::Result<State> {
-  run_round_with(force, state_path, config_path, probe_host).await
+  run_round_with(force, state_path, config_path, probe_host_fresh).await
 }
 
 /// [`run_round`] with the probe as a parameter, so the round can be driven without ssh.
@@ -315,9 +316,23 @@ where
   P: Fn(String) -> F,
   F: Future<Output = io::Result<(i32, String)>>,
 {
+  run_round_with_now(force, state_path, config_path, timestamps::utc_now(), probe).await
+}
+
+/// [`run_round_with`] with an explicit clock, for paused-clock verification.
+pub async fn run_round_with_now<P, F>(
+  force: bool,
+  state_path: &Path,
+  config_path: &Path,
+  now: OffsetDateTime,
+  probe: P,
+) -> anyhow::Result<State>
+where
+  P: Fn(String) -> F,
+  F: Future<Output = io::Result<(i32, String)>>,
+{
   let mut state = load_state(state_path);
   let host_list = read_config_hosts(config_path)?;
-  let now = timestamps::utc_now();
   let due = due_indices(&state, &host_list, force, now)?;
   if due.is_empty() {
     merge_hosts(&mut state, &host_list)?;
@@ -332,7 +347,7 @@ where
     .into_iter()
     .collect::<io::Result<Vec<_>>>()?;
   merge_hosts(&mut claim.state, &host_list)?;
-  let moment = timestamps::utc_now();
+  let moment = now;
   let probed = isoformat(moment);
   for (&index, (returncode, output)) in due.iter().zip(&results) {
     let entry = host_entry_mut(&mut claim.state, index)?;
@@ -425,6 +440,25 @@ mod tests {
   }
 
   #[test]
+  fn ok_deletes_dm_status_and_non_ok_leaves_it() {
+    let mut item = entry(
+      "login-a",
+      "login-a.example.internal",
+      &[("status", json!(STATUS_NEEDS_INTERACTIVE_AUTH)), ("dm_status", json!("needs-interactive-auth"))],
+    );
+    apply_probe_result(&mut item, STATUS_OK, "exit 0", "2026-09-15T08:00:00+00:00");
+    assert_eq!(item.get("dm_status"), None);
+
+    let mut awaiting = entry(
+      "login-b",
+      "login-b.example.internal",
+      &[("status", json!(STATUS_NEEDS_OKTA)), ("dm_status", json!("needs-okta"))],
+    );
+    apply_probe_result(&mut awaiting, STATUS_NEEDS_INTERACTIVE_AUTH, "check required", "2026-09-15T08:00:00+00:00");
+    assert_eq!(awaiting["dm_status"], json!("needs-okta"));
+  }
+
+  #[test]
   fn a_held_host_backs_off_twelve_times_the_standing_period() {
     assert_eq!(BLOCKED_BACKOFF_SEC, 21600);
     let now = at("2026-09-15T08:00:00+00:00");
@@ -462,7 +496,7 @@ mod tests {
     let dir = tempfile::tempdir().expect("a temporary home");
     let path = dir.path().join("nested").join(STATE_FILENAME);
     save_state(&empty_state(), &path).expect("the state is written");
-    let expected = "{\n  \"probed_at\": null,\n  \"probe_running\": false,\n  \"interval_sec\": 1800,\n  \
+    let expected = "{\n  \"probed_at\": null,\n  \"probe_running\": false,\n  \"interval_sec\": 1620,\n  \
                     \"ttl_sec\": 604800,\n  \"hosts\": []\n}\n";
     assert_eq!(fs::read_to_string(&path).expect("the state reads back"), expected);
   }
@@ -519,7 +553,7 @@ mod tests {
     assert_eq!(hosts[0]["status"], json!(STATUS_NEEDS_OKTA));
     assert_eq!(hosts[1]["status"], json!(STATUS_UNREACHABLE));
     assert_eq!(state["probe_running"], json!(false));
-    assert_eq!(state["interval_sec"], json!(1800));
+    assert_eq!(state["interval_sec"], json!(1620));
     assert_eq!(state["ttl_sec"], json!(604800));
     let published = load_state(&state_path);
     let aliases: Vec<&str> =

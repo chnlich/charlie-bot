@@ -26,12 +26,16 @@ pub struct BrowserLoginConfig {
   pub readback_command: Vec<String>,
 }
 
-/// The `host_auth:` section: the host-auth panel's browser logins.
+/// The `host_auth:` section: the host-auth panel's browser logins and Slack DM notification settings.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostAuthConfig {
   #[serde(default)]
   pub browser_logins: Vec<BrowserLoginConfig>,
+  #[serde(default)]
+  pub enable_slack_dm: bool,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub slack_dm_user: Option<String>,
 }
 
 /// The names a start route accepts, one URL segment without separators.
@@ -57,6 +61,15 @@ fn parse_section(raw: &serde_yaml::Value) -> Result<SectionValue, String> {
 /// The entry checks of `BrowserLoginConfig`: the name pattern, the command lengths, the pattern compile, and the
 /// unique names of `HostAuthConfig`.
 fn validate(settings: &HostAuthConfig) -> Result<(), String> {
+  if settings.enable_slack_dm {
+    let empty_user = match &settings.slack_dm_user {
+      None => true,
+      Some(user) => user.trim().is_empty(),
+    };
+    if empty_user {
+      return Err("slack_dm_user: must be set when enable_slack_dm is true".to_string());
+    }
+  }
   let name_pattern = Regex::new(NAME_PATTERN).expect("the built-in name pattern compiles");
   let mut seen = HashSet::new();
   for (index, login) in settings.browser_logins.iter().enumerate() {
@@ -116,18 +129,20 @@ browser_logins:
 
   #[test]
   fn a_bad_name_a_bad_pattern_and_a_repeated_name_are_refused() {
-    let bad_name = HostAuthConfig { browser_logins: vec![login("AWS SSO", "https://\\S*")] };
+    let bad_name = HostAuthConfig { browser_logins: vec![login("AWS SSO", "https://\\S*")], ..Default::default() };
     assert_eq!(
       validate(&bad_name).expect_err("the name pattern refuses upper case and spaces"),
       "browser_logins[0].name: must match ^[a-z0-9-]+$"
     );
-    let bad_pattern = HostAuthConfig { browser_logins: vec![login("aws-sso", "https://[")] };
+    let bad_pattern = HostAuthConfig { browser_logins: vec![login("aws-sso", "https://[")], ..Default::default() };
     assert!(
       validate(&bad_pattern).expect_err("the approval-url pattern must compile").contains("is not a valid regular"),
       "the error names the invalid pattern"
     );
-    let repeated =
-      HostAuthConfig { browser_logins: vec![login("aws-sso", "https://\\S*"), login("aws-sso", "https://\\S*")] };
+    let repeated = HostAuthConfig {
+      browser_logins: vec![login("aws-sso", "https://\\S*"), login("aws-sso", "https://\\S*")],
+      ..Default::default()
+    };
     assert_eq!(
       validate(&repeated).expect_err("two logins share one name"),
       "browser_logins[1].name: name 'aws-sso' is used by more than one login"
@@ -138,15 +153,46 @@ browser_logins:
   fn an_empty_command_is_refused() {
     let mut empty = login("aws-sso", "https://\\S*");
     empty.login_command = Vec::new();
-    assert!(validate(&HostAuthConfig { browser_logins: vec![empty] }).is_err(), "a login needs a command");
+    assert!(
+      validate(&HostAuthConfig { browser_logins: vec![empty], ..Default::default() }).is_err(),
+      "a login needs a command"
+    );
   }
 
   #[test]
   fn the_section_dumps_its_settings() {
-    let settings = HostAuthConfig { browser_logins: vec![login("aws-sso", "https://\\S*")] };
+    let settings = HostAuthConfig {
+      browser_logins: vec![login("aws-sso", "https://\\S*")],
+      enable_slack_dm: true,
+      slack_dm_user: Some("U_SYNTHETIC".to_string()),
+    };
     let raw = Arc::new(settings) as SectionValue;
     let dumped = dump_section(&raw).expect("the section dumps");
     assert_eq!(dumped["browser_logins"][0]["name"], serde_json::json!("aws-sso"));
     assert_eq!(dumped["browser_logins"][0]["label"], serde_json::json!("AWS SSO"));
+    assert_eq!(dumped["enable_slack_dm"], serde_json::json!(true));
+    assert_eq!(dumped["slack_dm_user"], serde_json::json!("U_SYNTHETIC"));
+  }
+
+  #[test]
+  fn slack_dm_user_is_required_when_enable_slack_dm_is_true() {
+    let missing_user = HostAuthConfig { browser_logins: Vec::new(), enable_slack_dm: true, slack_dm_user: None };
+    let error = validate(&missing_user).expect_err("missing user is refused");
+    assert!(error.contains("slack_dm_user"), "error message names slack_dm_user: {error}");
+
+    let empty_user =
+      HostAuthConfig { browser_logins: Vec::new(), enable_slack_dm: true, slack_dm_user: Some("   ".to_string()) };
+    let error = validate(&empty_user).expect_err("empty user is refused");
+    assert!(error.contains("slack_dm_user"), "error message names slack_dm_user: {error}");
+
+    let valid = HostAuthConfig {
+      browser_logins: Vec::new(),
+      enable_slack_dm: true,
+      slack_dm_user: Some("U_PLACEHOLDER".to_string()),
+    };
+    validate(&valid).expect("valid user is accepted");
+
+    let disabled = HostAuthConfig { browser_logins: Vec::new(), enable_slack_dm: false, slack_dm_user: None };
+    validate(&disabled).expect("disabled switch needs no user");
   }
 }

@@ -15,10 +15,23 @@ use super::value_ops::{
 /// One Anthropic stream event: its name, and the data object the SSE frame carries after `type`.
 pub type Event = (&'static str, Value);
 
-/// Whether `api_base` names the Google Gemini endpoint that uses Gemini stream rules.
-pub fn gemini_stream_rules(api_base: &str) -> Result<bool, String> {
+/// The rules an upstream's chat stream follows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StreamRules {
+  /// The Google Gemini endpoint's rules.
+  Gemini,
+  /// An OpenAI-compatible endpoint's rules.
+  OpenAi,
+}
+
+/// The stream rules `api_base` uses: the Gemini rules for Google's Gemini endpoint, the OpenAI rules otherwise.
+pub fn stream_rules(api_base: &str) -> Result<StreamRules, String> {
   let url = reqwest::Url::parse(api_base).map_err(|error| error.to_string())?;
-  Ok(url.host_str() == Some("generativelanguage.googleapis.com"))
+  Ok(if url.host_str() == Some("generativelanguage.googleapis.com") {
+    StreamRules::Gemini
+  } else {
+    StreamRules::OpenAi
+  })
 }
 
 /// The OpenAI chat completions body for an Anthropic Messages request, with the model set to `upstream_model`.
@@ -382,7 +395,7 @@ struct StreamToolCall {
 pub struct OpenAiChatStream {
   message_id: String,
   model: String,
-  gemini_stream_rules: bool,
+  rules: StreamRules,
   next_index: u64,
   text_index: Option<u64>,
   /// The open tool blocks in opening order, each with the call index the upstream gave it.
@@ -392,11 +405,11 @@ pub struct OpenAiChatStream {
 }
 
 impl OpenAiChatStream {
-  pub fn new(model: &str, gemini_stream_rules: bool) -> Self {
+  pub fn new(model: &str, rules: StreamRules) -> Self {
     Self {
       message_id: new_message_id(),
       model: model.to_string(),
-      gemini_stream_rules,
+      rules,
       next_index: 0,
       text_index: None,
       tool_calls: Vec::new(),
@@ -537,7 +550,7 @@ impl OpenAiChatStream {
   /// unless Gemini stream rules defer the opening until `extra_content` arrives; earlier arguments stay buffered.
   fn tool_delta(&mut self, tool_call: &Value, events: &mut Vec<Event>) -> ValueResult<()> {
     let call_index = match get(tool_call, "index")? {
-      None | Some(Value::Null) if self.gemini_stream_rules => json!(0),
+      None | Some(Value::Null) if self.rules == StreamRules::Gemini => json!(0),
       None | Some(Value::Null) => return value_error("streaming tool_call missing index"),
       Some(index) => index.clone(),
     };
@@ -582,7 +595,7 @@ impl OpenAiChatStream {
       }
       call.extra_content = Some(extra_content.clone());
     }
-    if extra_content.is_some() || !self.gemini_stream_rules {
+    if extra_content.is_some() || self.rules == StreamRules::OpenAi {
       self.start_tool_block(position, events);
     }
     if let Some(arguments) = get(&function, "arguments")?.filter(|arguments| !arguments.is_null()) {
@@ -624,7 +637,7 @@ mod tests {
 
   #[test]
   fn an_unhashable_call_index_is_a_type_error() {
-    let mut stream = OpenAiChatStream::new("model", false);
+    let mut stream = OpenAiChatStream::new("model", StreamRules::OpenAi);
     let chunk = json!({"choices": [{"delta": {"tool_calls": [{"index": [0], "id": "c", "function": {"name": "n"}}]}}]});
     assert_eq!(
       stream.events_for_chunk(&chunk).unwrap_err(),
@@ -711,7 +724,7 @@ mod tests {
 
   #[test]
   fn the_stream_translator_emits_text_and_tool_events_with_the_stop_reason() {
-    let mut stream = OpenAiChatStream::new("deepseek-v4-pro", false);
+    let mut stream = OpenAiChatStream::new("deepseek-v4-pro", StreamRules::OpenAi);
     let mut events = stream.start_events();
     events.extend(stream.events_for_chunk(&json!({"choices": [{"delta": {"content": "Checking"}}]})).unwrap());
     events.extend(
@@ -765,7 +778,7 @@ mod tests {
 
   #[test]
   fn test_stream_tool_call_without_index_is_rejected() {
-    let mut stream = OpenAiChatStream::new("openai-model", false);
+    let mut stream = OpenAiChatStream::new("openai-model", StreamRules::OpenAi);
     let result = stream.events_for_chunk(&json!({
       "choices": [{"delta": {"tool_calls": [{"id": "call-1", "function": {"name": "Bash", "arguments": "{}"}}]}}],
     }));
@@ -774,7 +787,7 @@ mod tests {
 
   #[test]
   fn test_stream_tool_call_without_index_uses_zero_for_idless_continuations() {
-    let mut stream = OpenAiChatStream::new("gemini-model", true);
+    let mut stream = OpenAiChatStream::new("gemini-model", StreamRules::Gemini);
     let mut events = Vec::new();
     let first = stream.events_for_chunk(&json!({
       "choices": [{"delta": {"tool_calls": [{"id": "call-1", "function": {"name": "Bash", "arguments": "{"}}]}}],
@@ -857,14 +870,14 @@ mod tests {
   }
 
   #[test]
-  fn gemini_stream_rules_follow_the_google_gemini_host() {
-    assert!(gemini_stream_rules("https://generativelanguage.googleapis.com/v1beta/openai/").unwrap());
-    assert!(!gemini_stream_rules("https://openai.example/v1").unwrap());
+  fn stream_rules_follow_the_google_gemini_host() {
+    assert_eq!(stream_rules("https://generativelanguage.googleapis.com/v1beta/openai/").unwrap(), StreamRules::Gemini);
+    assert_eq!(stream_rules("https://openai.example/v1").unwrap(), StreamRules::OpenAi);
   }
 
   #[test]
   fn test_stream_tool_signatures_round_trip_for_calls_sharing_an_index() {
-    let mut stream = OpenAiChatStream::new("gemini-model", true);
+    let mut stream = OpenAiChatStream::new("gemini-model", StreamRules::Gemini);
     let mut events = stream.start_events();
     events.extend(
       stream
@@ -998,7 +1011,7 @@ mod tests {
 
   #[test]
   fn test_gemini_stream_index_less_delta_with_signature_yields_one_tool_block() {
-    let mut stream = OpenAiChatStream::new("gemini-model", true);
+    let mut stream = OpenAiChatStream::new("gemini-model", StreamRules::Gemini);
     let result = stream.events_for_chunk(&json!({
       "choices": [{"delta": {"tool_calls": [{
         "extra_content": {"google": {"thought_signature": "EqMDCqAD..."}},
@@ -1038,7 +1051,7 @@ mod tests {
 
   #[test]
   fn test_gemini_stream_two_index_less_calls_split_by_id() {
-    let mut stream = OpenAiChatStream::new("gemini-model", true);
+    let mut stream = OpenAiChatStream::new("gemini-model", StreamRules::Gemini);
     let chunks = [
       json!({"choices": [{"delta": {"tool_calls": [{
         "id": "call-a",

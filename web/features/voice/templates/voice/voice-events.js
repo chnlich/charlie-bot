@@ -2,8 +2,9 @@
 //
 // The recording module is a static file, and the first use of the mic, the
 // caret or the composer's ⋯ entry loads it (loadVoiceInput below). What a page
-// load must already show stays here: the badge of a dictated message, the
-// mic's backend tooltip, and the ⋯ menu entry phones use to pick a backend.
+// load must already show stays here. That covers the badge of a dictated
+// message, the mic's backend tooltip, and the ⋯ menu entry phones use to pick
+// a backend.
 const VOICE_INPUT_MODE = 'voice';
 // Where the caret's choice lives; the server default backs an unknown or
 // unavailable stored id.

@@ -19,12 +19,12 @@
        this rule wins the cascade, and it reaches the form fields and the comment boxes
        diff_comments.js builds. */
     input::placeholder, textarea::placeholder { color: #64748b; }
-    /* diff2html's .d2h-file-name-wrapper keeps width:100%, so at phone width it fills the whole header.
-       The per-file Viewed control then starts past the right edge: its 74 px box began at 362 px on a
-       390 px page. Letting the wrapper shrink keeps the control inside; the name still ellipsizes to
-       the room that is left. */
-    .d2h-file-name-wrapper { width: auto; flex: 1 1 auto; min-width: 0; }
-    .d2h-file-name { min-width: 0; }
+    /* diff2html draws a header above every file's diff: the file's name, its ADDED/MODIFIED tag and
+       a Viewed box that collapses that file. The row above the panel already shows the name and the
+       status, and its toggle collapses the panel and drops the rendered diff, so the library header
+       repeats what the user has just read and spends a row of screen space per open file. Hiding it
+       keeps the file's identity on the row above and hands the row to the diff content. */
+    .d2h-file-header { display: none; }
     /* The Back link's 16 px icon and 14 px text draw a 20 px box, and the header's padding does not
        extend it. The 24 px box gives the page's only way back to chat the pointer floor its buttons
        keep; the concurrency badge keeps the header at its height. */

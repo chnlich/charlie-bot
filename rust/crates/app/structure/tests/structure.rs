@@ -1194,6 +1194,7 @@ const OWNER_TABLE: &[OwnerRow] = &[
     owner: "runtime/tasks",
     hint: "Use `charliebot_tasks::routes::COLD_READ_SPEC_CLASS_NAME`.",
   },
+  OwnerRow { name: "application/gzip", owner: "infra/compat", hint: MIME_HINT },
   OwnerRow { name: "application/msword", owner: "infra/compat", hint: MIME_HINT },
   OwnerRow { name: "application/pdf", owner: "infra/compat", hint: MIME_HINT },
   OwnerRow { name: "application/vnd.ms-powerpoint", owner: "infra/compat", hint: MIME_HINT },

@@ -474,7 +474,6 @@ impl Dispatcher {
       let guard = self.store.control_lock().await;
       self.store.record_finish_locked(&guard, session_id, run_id, outcome).await?
     };
-    note_run_liveness(&self.store, session_id, &run, false).await;
     let terminal = self.store.node_state(session_id)?.runs.terminal_outcome(run_id)?;
     if terminal == Some(RunOutcomeKind::Success) {
       match self.run_completion.after_run_finished(session_id, run_id).await {
@@ -891,26 +890,22 @@ impl SequenceDispatch for Dispatcher {
   }
 }
 
-/// Record or clear the worker busy interval associated with one run.
-pub async fn note_run_liveness(store: &Store, session_id: &str, run: &RunRecord, launched: bool) {
-  let result = note_run_liveness_inner(store, session_id, run, launched).await;
+/// Open the busy interval of a worker run at its recorded start. The launch and the re-attach of a worker run both call
+/// it. The run's terminal fact closes the interval (`Store::record_finish_locked`).
+pub async fn note_run_liveness(store: &Store, session_id: &str, run: &RunRecord) {
+  let result = note_run_liveness_inner(store, session_id, run).await;
   if let Err(error) = result {
     tracing::error!(
       target: "charliebot_tasks",
       session_id,
       run_id = %run.id,
-      launched,
       error = %error,
       "run_liveness_notify_failed"
     );
   }
 }
 
-async fn note_run_liveness_inner(store: &Store, session_id: &str, run: &RunRecord, launched: bool) -> StoreResult<()> {
-  if !launched {
-    store.clear_run_busy(session_id, &run.id);
-    return Ok(());
-  }
+async fn note_run_liveness_inner(store: &Store, session_id: &str, run: &RunRecord) -> StoreResult<()> {
   if let Some(backend) = run.backend.as_deref() {
     store.note_run_backend(session_id, backend);
   }

@@ -1418,7 +1418,7 @@ async fn resume_run_checked(
   let meta =
     store.load_meta(session_id).await?.ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
   let ended_at = if is_alive() {
-    dispatch::note_run_liveness(store, session_id, &run, true).await;
+    dispatch::note_run_liveness(store, session_id, &run).await;
     None
   } else {
     // The drain rule: the process ended unseen, so its end time is the raw log's last write.

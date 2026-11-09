@@ -1029,6 +1029,8 @@ impl Store {
       ],
     );
     self.append_control_fact(guard, session_id, event).await?;
+    // The terminal fact ends the run's busy interval whichever path wrote it: a stop, a finish or a recovery.
+    self.clear_run_busy(session_id, run_id);
     run.ended_at = Some(outcome.ended_at.unwrap_or_else(UtcDateTime::now));
     run.exit_code = outcome.exit_code;
     run.input_event_ids = input_event_ids;

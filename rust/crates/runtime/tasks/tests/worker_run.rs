@@ -988,6 +988,33 @@ async fn unpooled_fresh_worker_launch_carries_no_account_on_a_non_claude_backend
   Ok(())
 }
 
+/// A launched worker run holds its busy interval from its recorded start while its process is alive, and the terminal
+/// fact closes the interval. The sidebar paints that interval as the row's spinner.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_launched_worker_run_holds_its_busy_interval_until_it_finishes() -> anyhow::Result<()> {
+  let gate_dir = tempfile::tempdir()?;
+  let gate = gate_dir.path().join("release");
+  let script = format!("while [ ! -e '{}' ]; do sleep 0.05; done; {}", gate.display(), result_script("done"));
+  let scripts = Scripts::new(vec![script]);
+  let stack = scripted_stack(&scripts).await?;
+  let worker = stack.node("w", None, TaskProfile::Worker, Some(spec("ship it", Some(TaskType::QuickEdit)))).await?;
+  register_run(&stack, work_run(&worker.id, "run-work", None), "ship it").await?;
+  assert_eq!(stack.store().busy_since(&worker.id), None, "no interval opens before the launch");
+
+  stack.adapter.launch(&worker.id, "run-work")?;
+  // The process waits at the gate, so the run stays alive for every assertion until the gate opens.
+  settle_until(|| Ok(stack.store().busy_since(&worker.id).is_some())).await?;
+  let run = stack.store().read_run_sync(&worker.id, "run-work")?.expect("the launched run is registered");
+  assert!(run.pid.is_some() && run.ended_at.is_none(), "the process is launched and the run has not ended");
+  assert_eq!(stack.store().busy_since(&worker.id), run.started_at, "the interval opens at the recorded start");
+
+  std::fs::write(&gate, "")?;
+  assert_eq!(stack.wait_terminal(&worker.id, "run-work").await?, RunOutcomeKind::Success);
+  assert_eq!(stack.store().busy_since(&worker.id), None, "the finish closes the interval");
+  Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Quota failover over the backend pool
 // ---------------------------------------------------------------------------

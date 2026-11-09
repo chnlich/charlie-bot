@@ -519,7 +519,7 @@ async fn trigger_master_dispatches_an_existing_stable_input_once() {
 }
 
 #[tokio::test]
-async fn dispatch_without_executor_returns_reason_and_liveness_clears_run() {
+async fn dispatch_without_executor_returns_reason_and_liveness_opens_run() {
   let harness = Harness::new();
   let worker = harness.create_task("worker", None, TaskProfile::Worker, "Worker").await;
   harness.dispatcher.admit_input(&worker.id, event_types::USER, "work", "user", json!({})).await.unwrap();
@@ -528,14 +528,8 @@ async fn dispatch_without_executor_returns_reason_and_liveness_clears_run() {
   assert_eq!(decision["reason"], "execution adapters register in the next stage");
   let mut run = new_run(&worker.id, "run-live");
   run.started_at = Some(charliebot_store::metadata::UtcDateTime::parse("2026-01-02T00:00:00Z").unwrap());
-  note_run_liveness(&harness.store, &worker.id, &run, true).await;
+  note_run_liveness(&harness.store, &worker.id, &run).await;
   assert_eq!(harness.store.busy_since(&worker.id), run.started_at);
-  note_run_liveness(&harness.store, &worker.id, &run, false).await;
-  assert_eq!(harness.store.busy_since(&worker.id), None);
-
-  run.started_at = None;
-  note_run_liveness(&harness.store, &worker.id, &run, true).await;
-  assert!(harness.store.busy_since(&worker.id).is_some());
 }
 
 #[tokio::test]

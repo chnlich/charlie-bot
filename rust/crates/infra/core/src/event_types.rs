@@ -18,6 +18,9 @@ pub const PARENT_TOOL_USE_ID: &str = "parent_tool_use_id";
 pub const TOOL_INPUT_FILE_PATH: &str = "file_path";
 /// The JSON pointer to the content blocks of an event's message: the array a `user` or `assistant` event carries.
 pub const MESSAGE_CONTENT_POINTER: &str = "/message/content";
+/// The committed message's flag that the page already holds its content from the stream frames, so the message frame
+/// carries none of it.
+pub const MESSAGE_CONTENT_STREAMED: &str = "content_streamed";
 pub const MASTER_DONE: &str = "master_done";
 pub const ASSISTANT_ERROR: &str = "assistant_error";
 pub const QUOTA_EXHAUSTED: &str = "quota_exhausted";

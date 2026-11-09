@@ -834,7 +834,7 @@ mod tests {
           if message["role"] != "assistant" {
             continue;
           }
-          if message["content_streamed"] == true {
+          if message[charliebot_core::event_types::MESSAGE_CONTENT_STREAMED] == true {
             turns.push(draft.clone());
           } else {
             turns.push(message["content"].as_str().unwrap_or_default().to_string());
@@ -1099,7 +1099,9 @@ mod tests {
           {
             streamed.push_str(append);
           }
-          if frame["type"] == "message" && frame["message"]["content_streamed"] == true {
+          if frame["type"] == "message"
+            && frame["message"][charliebot_core::event_types::MESSAGE_CONTENT_STREAMED] == true
+          {
             // The commit names the draft the page streamed and carries no second copy of its text.
             assert_eq!(streamed, "The synthetic stream trigger was handled.");
             assert!(frame["message"].get("content").is_none());

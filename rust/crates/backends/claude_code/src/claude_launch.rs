@@ -22,6 +22,10 @@ pub const FAST_MODE_SETTINGS_KEY: &str = "fastMode";
 /// The PreToolUse hook event: the backend registers `charliebot wait-guard` and `charliebot scan-guard` under it, and
 /// the CLI's answer must name it.
 pub const PRE_TOOL_USE_HOOK_EVENT: &str = "PreToolUse";
+/// The PostToolUse hook event: the backend registers `charliebot read-budget` under it, and the CLI's answer names it.
+pub const POST_TOOL_USE_HOOK_EVENT: &str = "PostToolUse";
+/// The PostToolUseFailure hook event: the backend registers `charliebot read-budget` under it too.
+pub const POST_TOOL_USE_FAILURE_HOOK_EVENT: &str = "PostToolUseFailure";
 /// The SessionStart hook event: the backend registers `charliebot compaction-context` under it, and the CLI's answer
 /// names it.
 pub const SESSION_START_HOOK_EVENT: &str = "SessionStart";
@@ -99,23 +103,63 @@ fn add_pre_tool_use_hooks(settings: &mut Map<String, Value>, guards: PreToolUseG
     .insert(PRE_TOOL_USE_HOOK_EVENT.to_string(), json!([{"matcher": "Bash", "hooks": hooks}]));
 }
 
-/// The one settings object every headless Claude process receives for its run kind.
-pub fn headless_claude_settings(run_kind: RunKind, session_id: Option<&str>) -> anyhow::Result<Map<String, Value>> {
-  headless_claude_settings_for(run_kind, session_id, Some(pre_tool_use_guards(run_kind)))
+/// The read-budget hook entry: one command that checks this run's counted total on every tool
+/// result and on a compaction.
+fn read_budget_hook(session_id: &str, run_id: &str) -> Value {
+  let command = format!("charliebot read-budget --session {} --run {}", shlex_quote(session_id), shlex_quote(run_id));
+  json!({"type": "command", "command": command})
 }
 
-/// Headless settings for compaction, which runs with no PreToolUse guard.
+/// The read-budget hook entries a manager turn's guarded settings carry: every tool result's
+/// PostToolUse and PostToolUseFailure, and the SessionStart a compaction fires, whose event resets
+/// the counted total.
+fn add_read_budget_hooks(settings: &mut Map<String, Value>, session_id: &str, run_id: &str) {
+  let hook = read_budget_hook(session_id, run_id);
+  let entries = [
+    (POST_TOOL_USE_HOOK_EVENT, json!([{"matcher": "*", "hooks": [hook]}])),
+    (POST_TOOL_USE_FAILURE_HOOK_EVENT, json!([{"matcher": "*", "hooks": [hook]}])),
+  ];
+  let event_hooks = settings.entry("hooks".to_string()).or_insert_with(|| Value::Object(Map::new()));
+  {
+    let hooks = event_hooks.as_object_mut().expect("Claude hook settings are an object");
+    for (event, entry) in entries {
+      hooks.insert(event.to_string(), entry);
+    }
+  }
+  // The compaction-context hooks are already in the SessionStart array; the read-budget entry joins
+  // them, so one compaction resets the counted total beside the skill re-attachment.
+  let hooks = event_hooks.as_object_mut().expect("Claude hook settings are an object");
+  let session_start = hooks
+    .entry(SESSION_START_HOOK_EVENT.to_string())
+    .or_insert_with(|| Value::Array(Vec::new()))
+    .as_array_mut()
+    .expect("SessionStart hook entries are an array");
+  session_start.push(json!({"matcher": "compact", "hooks": [hook]}));
+}
+
+/// The one settings object every headless Claude process receives for its run kind. A manager turn
+/// passes its run id, which the read-budget hook entries need.
+pub fn headless_claude_settings(
+  run_kind: RunKind,
+  session_id: Option<&str>,
+  run_id: Option<&str>,
+) -> anyhow::Result<Map<String, Value>> {
+  headless_claude_settings_for(run_kind, session_id, Some(pre_tool_use_guards(run_kind)), run_id)
+}
+
+/// Headless settings for compaction, which runs with no PreToolUse guard and no read-budget hook.
 pub fn headless_claude_settings_without_guards(
   run_kind: RunKind,
   session_id: Option<&str>,
 ) -> anyhow::Result<Map<String, Value>> {
-  headless_claude_settings_for(run_kind, session_id, None)
+  headless_claude_settings_for(run_kind, session_id, None, None)
 }
 
 fn headless_claude_settings_for(
   run_kind: RunKind,
   session_id: Option<&str>,
   guards: Option<PreToolUseGuards>,
+  run_id: Option<&str>,
 ) -> anyhow::Result<Map<String, Value>> {
   let mut settings = Map::new();
   settings.insert(DISABLE_CONNECTOR_SETTINGS_KEY.to_string(), Value::Bool(true));
@@ -133,6 +177,13 @@ fn headless_claude_settings_for(
   }
   if let Some(guards) = guards {
     add_pre_tool_use_hooks(&mut settings, guards);
+    if run_kind == RunKind::ManagerTurn {
+      let Some(run_id) = run_id.filter(|value| !value.is_empty()) else {
+        anyhow::bail!("manager_turn Claude settings require a CharlieBot run id for the read-budget hook");
+      };
+      let session_id = session_id.expect("manager_turn settings checked the session id above");
+      add_read_budget_hooks(&mut settings, session_id, run_id);
+    }
   }
   Ok(settings)
 }

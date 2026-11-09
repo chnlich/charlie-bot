@@ -223,6 +223,8 @@ pub struct ClaudeCodeBackend {
   instructions_file: Option<PathBuf>,
   midturn_delivery: bool,
   midturn_run_id: Option<String>,
+  /// The CharlieBot run id of this manager turn; the read-budget hook entries name it.
+  run_id: Option<String>,
 }
 
 impl ClaudeCodeBackend {
@@ -261,6 +263,12 @@ impl ClaudeCodeBackend {
       Some(_) => bail!("midturn_run_id must be a string"),
     }
     .filter(|value| !value.is_empty());
+    let run_id = match launch.backend_kwargs.get("run_id") {
+      None | Some(Value::Null) => None,
+      Some(Value::String(value)) => Some(value.clone()),
+      Some(_) => bail!("backend_kwargs.run_id must be a string"),
+    }
+    .filter(|value| !value.is_empty());
     let use_pre_tool_use_guards = match launch.backend_kwargs.get("use_pre_tool_use_guards") {
       None => true,
       Some(Value::Bool(value)) => *value,
@@ -282,6 +290,7 @@ impl ClaudeCodeBackend {
       instructions_file: launch.instructions_file,
       midturn_delivery,
       midturn_run_id,
+      run_id,
     })
   }
 
@@ -299,7 +308,11 @@ impl ClaudeCodeBackend {
       command.extend(["--effort".to_string(), effort.clone()]);
     }
     let mut settings = match self.use_pre_tool_use_guards {
-      true => claude_launch::headless_claude_settings(self.run_kind, self.cgroup_session_id.as_deref())?,
+      true => claude_launch::headless_claude_settings(
+        self.run_kind,
+        self.cgroup_session_id.as_deref(),
+        self.run_id.as_deref(),
+      )?,
       false => {
         claude_launch::headless_claude_settings_without_guards(self.run_kind, self.cgroup_session_id.as_deref())?
       }
@@ -840,7 +853,7 @@ mod tests {
   }
 
   #[test]
-  fn manager_turn_settings_install_six_compaction_context_slots() {
+  fn manager_turn_settings_install_six_compaction_context_slots_and_the_read_budget_hooks() {
     let backend = ClaudeCodeBackend::from_launch(
       None,
       None,
@@ -849,7 +862,10 @@ mod tests {
       false,
       None,
       LaunchArgs {
-        backend_kwargs: serde_json::json!({"run_kind": "manager_turn"}).as_object().unwrap().clone(),
+        backend_kwargs: serde_json::json!({"run_kind": "manager_turn", "run_id": "manager-run"})
+          .as_object()
+          .unwrap()
+          .clone(),
         cgroup_session_id: Some("manager-session".to_string()),
         ..LaunchArgs::default()
       },
@@ -866,16 +882,21 @@ mod tests {
       without_hooks,
       serde_json::json!({"disableClaudeAiConnectors": true, "syncClaudeAiSkills": false}).as_object().unwrap().clone()
     );
-    let [session_start] = settings["hooks"]["SessionStart"].as_array().unwrap().as_slice() else {
-      panic!("one SessionStart entry");
+    let [compaction, read_budget] = settings["hooks"]["SessionStart"].as_array().unwrap().as_slice() else {
+      panic!("the compaction-context entry and the read-budget entry");
     };
-    assert_eq!(session_start["matcher"], "compact");
-    let hooks = session_start["hooks"].as_array().unwrap();
+    assert_eq!(compaction["matcher"], "compact");
+    let hooks = compaction["hooks"].as_array().unwrap();
     assert!(hooks.iter().all(|hook| hook["type"] == "command"));
     let commands: Vec<&str> = hooks.iter().map(|hook| hook["command"].as_str().unwrap()).collect();
     let expected: Vec<String> =
       (1..=6).map(|slot| format!("charliebot compaction-context --session manager-session --slot {slot}")).collect();
     assert_eq!(commands, expected);
+    let read_budget_command = "charliebot read-budget --session manager-session --run manager-run";
+    assert_eq!(
+      read_budget,
+      &serde_json::json!({"matcher": "compact", "hooks": [{"type": "command", "command": read_budget_command}]})
+    );
     assert_eq!(
       settings["hooks"]["PreToolUse"],
       serde_json::json!([{
@@ -886,6 +907,17 @@ mod tests {
         ]
       }])
     );
+    let per_result =
+      serde_json::json!([{"matcher": "*", "hooks": [{"type": "command", "command": read_budget_command}]}]);
+    assert_eq!(&settings["hooks"]["PostToolUse"], &per_result);
+    assert_eq!(&settings["hooks"]["PostToolUseFailure"], &per_result);
+  }
+
+  #[test]
+  fn manager_turn_settings_require_the_charliebot_run_id() {
+    let error =
+      claude_launch::headless_claude_settings(RunKind::ManagerTurn, Some("manager-session"), None).unwrap_err();
+    assert!(error.to_string().contains("require a CharlieBot run id"), "{error}");
   }
 
   #[test]
@@ -898,14 +930,15 @@ mod tests {
       ]
     }]);
     for run_kind in [RunKind::ManagerTurn, RunKind::Work, RunKind::Review, RunKind::Iteration] {
-      let settings = claude_launch::headless_claude_settings(run_kind, Some("manager-session")).unwrap();
+      let settings =
+        claude_launch::headless_claude_settings(run_kind, Some("manager-session"), Some("manager-run")).unwrap();
       assert_eq!(settings["hooks"]["PreToolUse"], both, "{run_kind:?}");
     }
     let scan_only = serde_json::json!([{
       "matcher": "Bash",
       "hooks": [{"type": "command", "command": "charliebot scan-guard"}]
     }]);
-    let settings = claude_launch::headless_claude_settings(RunKind::ScheduledStep, None).unwrap();
+    let settings = claude_launch::headless_claude_settings(RunKind::ScheduledStep, None, None).unwrap();
     assert_eq!(settings["hooks"]["PreToolUse"], scan_only);
     let settings = claude_launch::headless_claude_settings_without_guards(RunKind::ScheduledStep, None).unwrap();
     assert!(settings.get("hooks").is_none());

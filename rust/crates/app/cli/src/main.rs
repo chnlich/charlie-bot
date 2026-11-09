@@ -1,6 +1,6 @@
 //! The `charliebot` CLI dispatcher.
 //!
-//! The vocabulary is the 29 subcommands with callers. No argument, `-h` or `--help` prints the
+//! The vocabulary is the 30 subcommands with callers. No argument, `-h` or `--help` prints the
 //! usage block and exits 0; an unknown name exits 2; a vocabulary name with no dispatch arm prints
 //! the not-ported JSON error and exits 1.
 
@@ -17,7 +17,7 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted: every registered command with a
 /// caller. A caller-less name is an unknown name here.
-const COMMANDS: [&str; 29] = [
+const COMMANDS: [&str; 30] = [
   "artifact",
   "compaction-context",
   "config",
@@ -35,6 +35,7 @@ const COMMANDS: [&str; 29] = [
   "plan",
   "preflight-charlie-code",
   "publish",
+  "read-budget",
   "release-helper",
   "router",
   "scan-guard",
@@ -120,6 +121,7 @@ fn run_subcommand(
     "plan" => charliebot_artifacts::cli::plan::main(args, host),
     "preflight-charlie-code" => commands::preflight_charlie_code::main(args),
     "publish" => charliebot_artifacts::cli::publish::main(args, host),
+    "read-budget" => commands::read_budget::main(args),
     "release-helper" => commands::release_helper::main(args),
     "router" => {
       commands::router::main(args);

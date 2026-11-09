@@ -46,23 +46,38 @@ impl ClaudeCliLifecycle {
   }
 
   fn launch(&self, ctx: &LaunchContext, resume_id: Option<String>) -> anyhow::Result<Launch> {
-    let mut backend_kwargs = Map::new();
-    backend_kwargs.insert("run_kind".to_string(), json!(ctx.run_kind));
-    if ctx.kind == LaunchKind::Turn {
-      backend_kwargs.insert(
-        "extra_flags".to_string(),
-        Value::Array(vec![Value::String(EXCLUDE_DYNAMIC_SECTIONS_FLAG.to_string())]),
-      );
-      midturn_delivery::insert_launch_kwargs(&mut backend_kwargs, ctx)?;
+    let backend_kwargs = launch_kwargs(ctx, true)?;
+    Ok(Launch { backend_kwargs, resume_id, prompt: None, account_label: None, private: None })
+  }
+}
+
+/// The launch arguments one Claude process receives: its run kind, the manager turn's flags, and,
+/// for a manager turn, the run id that its read-budget hook entries name — a relayed process
+/// continues the same run.
+fn launch_kwargs(ctx: &LaunchContext, first_process: bool) -> anyhow::Result<Map<String, Value>> {
+  let mut kwargs = Map::new();
+  kwargs.insert("run_kind".to_string(), json!(ctx.run_kind));
+  if ctx.kind == LaunchKind::Turn {
+    kwargs
+      .insert("extra_flags".to_string(), Value::Array(vec![Value::String(EXCLUDE_DYNAMIC_SECTIONS_FLAG.to_string())]));
+    midturn_delivery::insert_launch_kwargs(&mut kwargs, ctx)?;
+    if ctx.run_kind == RunKind::ManagerTurn {
+      let Some(run_id) = ctx.run_id.as_deref().filter(|value| !value.is_empty()) else {
+        anyhow::bail!("manager turn Claude launch requires a CharlieBot run id for the read-budget hook");
+      };
+      kwargs.insert("run_id".to_string(), Value::String(run_id.to_string()));
     }
-    if ctx.kind == LaunchKind::Task
+  } else if ctx.kind == LaunchKind::Task {
+    if first_process
       && ctx.held_native_id.is_none()
       && let Some(native_id) = ctx.preassigned_native_id.as_deref()
     {
-      backend_kwargs.insert("claude_session_id".to_string(), Value::String(native_id.to_string()));
+      kwargs.insert("claude_session_id".to_string(), Value::String(native_id.to_string()));
     }
-    Ok(Launch { backend_kwargs, resume_id, prompt: None, account_label: None, private: None })
+  } else {
+    anyhow::bail!("unknown launch kind {:?}", ctx.kind);
   }
+  Ok(kwargs)
 }
 
 impl BackendLifecycle for ClaudeCliLifecycle {
@@ -131,25 +146,7 @@ impl ClaudeCodeLifecycle {
   }
 
   fn launch_args(ctx: &LaunchContext, first_process: bool) -> anyhow::Result<Map<String, Value>> {
-    let mut kwargs = Map::new();
-    kwargs.insert("run_kind".to_string(), json!(ctx.run_kind));
-    if ctx.kind == LaunchKind::Turn {
-      kwargs.insert(
-        "extra_flags".to_string(),
-        Value::Array(vec![Value::String(EXCLUDE_DYNAMIC_SECTIONS_FLAG.to_string())]),
-      );
-      midturn_delivery::insert_launch_kwargs(&mut kwargs, ctx)?;
-    } else if ctx.kind == LaunchKind::Task {
-      if first_process
-        && ctx.held_native_id.is_none()
-        && let Some(native_id) = ctx.preassigned_native_id.as_deref()
-      {
-        kwargs.insert("claude_session_id".to_string(), Value::String(native_id.to_string()));
-      }
-    } else {
-      anyhow::bail!("unknown launch kind {:?}", ctx.kind);
-    }
-    Ok(kwargs)
+    launch_kwargs(ctx, first_process)
   }
 
   fn pooled_launch(
@@ -614,6 +611,7 @@ mod tests {
       "run_kind": "manager_turn",
       "midturn_delivery": true,
       "midturn_run_id": "11111111-2222-3333-4444-555555555555",
+      "run_id": "11111111-2222-3333-4444-555555555555",
     });
 
     let fresh_ctx = context(cfg, LaunchKind::Turn, None, None, Some(Arc::new(Vec::new)));

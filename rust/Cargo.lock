@@ -1285,7 +1285,6 @@ dependencies = [
  "sha1",
  "sha2",
  "uuid",
- "wait-timeout",
 ]
 
 [[package]]

@@ -40,4 +40,3 @@ nix.workspace = true
 sha1.workspace = true
 sha2.workspace = true
 uuid.workspace = true
-wait-timeout.workspace = true

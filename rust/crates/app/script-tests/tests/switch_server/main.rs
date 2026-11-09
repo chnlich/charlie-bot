@@ -30,7 +30,6 @@ use regex::Regex;
 use release_lock::LockHolder;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use wait_timeout::ChildExt;
 use world::{
   SESSION, World, fake_charliebot, fake_pane_server, install_release, pid_start, quote, replace_charliebot, sha1_hex,
   stop, wait_until, write_behavior,
@@ -1129,16 +1128,6 @@ impl Pane {
       Duration::from_secs(10),
     );
     children_of(&self.env, self.pid())[0]
-  }
-
-  #[allow(dead_code)]
-  fn wait_exit(&mut self, timeout: Duration) -> i32 {
-    let status = self
-      .shell
-      .wait_timeout(timeout)
-      .expect("wait for the pane shell")
-      .unwrap_or_else(|| panic!("the pane shell ran past {timeout:?}"));
-    status.code().expect("the pane shell's exit code")
   }
 }
 

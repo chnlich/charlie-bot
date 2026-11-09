@@ -25,6 +25,19 @@
        repeats what the user has just read and spends a row of screen space per open file. Hiding it
        keeps the file's identity on the row above and hands the row to the diff content. */
     .d2h-file-header { display: none; }
+    /* diff2html paints each hunk header and every line number at rgba(0, 0, 0, 0.3): 2.10:1 on
+       the hunk's #f8fafd row and 2.11:1 on the white context rows, under the 4.5:1 floor for
+       their 13 px text. The reader needs the header to know which lines a hunk covers and the
+       numbers to name a line. #475569 draws 7.25:1 on the hunk row and 7.58:1 on white, and it
+       stays above 6:1 on the added and removed rows' tints. A hunk header owns .d2h-info in both
+       layouts; line numbers are .d2h-code-linenumber when line-by-line and
+       .d2h-code-side-linenumber when side-by-side, and their .line-num1 and .line-num2 spans
+       take the cell's tone. */
+    .d2h-wrapper .d2h-info,
+    .d2h-wrapper .d2h-code-linenumber,
+    .d2h-wrapper .d2h-code-side-linenumber,
+    .d2h-wrapper .line-num1,
+    .d2h-wrapper .line-num2 { color: #475569; }
     /* The Back link's 16 px icon and 14 px text draw a 20 px box, and the header's padding does not
        extend it. The 24 px box gives the page's only way back to chat the pointer floor its buttons
        keep; the concurrency badge keeps the header at its height. */

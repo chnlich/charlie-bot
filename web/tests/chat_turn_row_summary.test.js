@@ -42,6 +42,28 @@ test('emphasis markers are dropped', () => {
   assert.equal(conclusion, 'release checklist: 这里的锁粒度太粗。');
 });
 
+test('inline code keeps its text, so underscores in a file name survive', () => {
+  const { conclusion } = rowFields('', 'see `__init__.py` now');
+  assert.equal(conclusion, 'see __init__.py now');
+});
+
+test('table cells carry their own inline cleanup', () => {
+  const { conclusion } = rowFields(
+      '', '| 项目 | 状态 | 说明 |\n| --- | --- | --- |\n| **done** | [doc](https://example.test/y) | plain |');
+  assert.equal(conclusion, 'done · doc · plain');
+});
+
+test('a delimiter-shaped data row after the delimiter row is data', () => {
+  const { conclusion } = rowFields('', '| 项目 |\n| --- |\n| - |\n| second |');
+  assert.equal(conclusion, '-');
+});
+
+test('a data-less table does not swallow the next table\'s header', () => {
+  const { conclusion } = rowFields(
+      '', '| 项目 |\n| --- |\n\n| x | y |\n| --- | --- |\n| data | row |');
+  assert.equal(conclusion, 'data · row');
+});
+
 test('a plain line and the existing heading and link cleanup stay unchanged', () => {
   assert.equal(rowFields('', 'plain words').conclusion, 'plain words');
   assert.equal(rowFields('', '## 标题').conclusion, '标题');

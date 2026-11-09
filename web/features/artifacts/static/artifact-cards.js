@@ -1,4 +1,12 @@
 
+// ---------------------------------------------------------------------------
+// Artifact cards — a message's artifact-page link renders as a compact card.
+//
+// The chat page's document carries a forward post-processor in place of this file, so a transcript that links no
+// artifact page never fetches it. The first rendered message that names one loads it from
+// /static/features/artifacts/artifact-cards.js; the module then registers its own post-processor, its file link
+// family and the iframe resize listener, which serve every message rendered after it.
+// ---------------------------------------------------------------------------
 (function() {
   const Chat = globalThis.Chat;
   const resolveFileServerUrl = Chat.resolveFileServerUrl;

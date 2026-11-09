@@ -69,23 +69,26 @@
     style.textContent = `
       .cbdx-gap-row > td { padding: 0; background: #f8fafc; border-top: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0; }
       .cbdx-gap-cell { display: flex; align-items: center; gap: 6px; padding: 2px 8px; white-space: nowrap; }
+      /* A side-by-side pane scrolls its own table sideways when a line is wider than the pane, so the table
+         can stand wider than the window. The gap strip belongs to the visible pane, not to the table: the
+         controls stick to the pane's left edge and the count to its right, or a wide line would push them
+         past the edge and hide them. */
+      .cbdx-gap-controls { position: sticky; left: 0; display: flex; align-items: center; gap: 6px; }
       .cbdx-expand { display: inline-flex; align-items: center; min-height: 24px; border: 1px solid #cbd5e1;
         border-radius: 6px; padding: 2px 8px; background: white; color: #334155; font: 12px system-ui, sans-serif;
         cursor: pointer; }
       .cbdx-expand:hover { border-color: #2563eb; color: #2563eb; }
       .cbdx-expand:disabled { cursor: not-allowed; opacity: .55; }
-      .cbdx-whole { margin-left: auto; }
       .cbdx-gap-count { color: #64748b; font-size: 11px; }
       /* A side-by-side gap's last strip carries the count alone. Its 24 px minimum height matches the control
          strip's buttons, so both panes' strip rows keep one height and the lines under them stay level. */
-      .cbdx-gap-count-end { display: inline-flex; align-items: center; min-height: 24px; margin-left: auto; }
+      .cbdx-gap-count-end { display: inline-flex; align-items: center; min-height: 24px; margin-left: auto;
+        position: sticky; right: 0; }
       .cbdx-gap-error { color: #b91c1c; font-size: 12px; }
-      /* A phone's line-by-line table can stand wider than the screen, where a right-aligned control would
-         sit past the visible edge. Below the page's phone breakpoint the strip keeps its controls together
-         at the left. A strip too wide for the screen wraps onto a second line rather than hide one. */
+      /* A phone's line-by-line table can stand wider than the screen too. The strip keeps its controls and
+         count together at the left there, and a strip too wide for the screen wraps rather than hide one. */
       @media (max-width: 768px) {
         .cbdx-gap-cell { flex-wrap: wrap; }
-        .cbdx-whole { margin-left: 0; }
       }
     `;
     document.head.appendChild(style);
@@ -453,10 +456,13 @@
       count.textContent = `${size} hidden ${size === 1 ? 'line' : 'lines'}`;
       const error = document.createElement('span');
       error.className = 'cbdx-gap-error';
+      const controls = document.createElement('div');
+      controls.className = 'cbdx-gap-controls';
+      controls.append(...directionButtons, fileButton);
       const first = gap.cells[0];
       const last = gap.cells[gap.cells.length - 1];
       gap.cells.forEach((cell) => { cell.innerHTML = ''; });
-      first.append(...directionButtons, fileButton);
+      first.append(controls);
       if (last === first) {
         first.append(count, error);
       } else {

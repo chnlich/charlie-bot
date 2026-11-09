@@ -2,11 +2,13 @@
 //!
 //! Checks: every crate sits in a group, and each dependency follows its group's directions. A runtime crate
 //! depends only on its own layer or a lower one, and no crate has a module cycle. A name that two crates must agree
-//! on is spelled only in its owner. Each check returns its failures, and a `#[test]` asserts the list is empty.
+//! on is spelled only in its owner. The product UI check finds the strings a browser shows that hold a Han, kana or
+//! Hangul letter. Each check returns its failures, and a `#[test]` asserts the list is empty.
 //!
 //! The rules live beside the data each check reads: `group_of_dir` and `allowed_groups` hold the group mapping and
 //! the directions. `RUNTIME_LAYERS` holds the layer order, `module_outgoing` the module-graph edges, `OWNER_TABLE`
-//! and `SPELLING_CLASSES` the owned names and name classes, `FORMAT_TABLE` the file-kind writers.
+//! and `SPELLING_CLASSES` the owned names and name classes, `FORMAT_TABLE` the file-kind writers, and
+//! `UI_TEXT_EXEMPTIONS` the files whose Han, kana or Hangul letters a model or a user reads.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -86,6 +88,8 @@ struct Module {
   idents: BTreeSet<String>,
   /// The string literals of the module's production code; empty for a test module.
   literals: Vec<Literal>,
+  /// The `include_str!` calls of the module's production code; empty for a test module.
+  embeds: Vec<Embed>,
   /// The production functions of the module's own items; empty for a test module.
   functions: Vec<FunctionRecord>,
   /// The production statics of the module's own items and macro invocations; empty for a test module.
@@ -101,6 +105,12 @@ struct Literal {
   path_arg: bool,
   /// The literal is the argument of `.strip_prefix(..)` or `.starts_with(..)`, a prefix that claims routes.
   prefix_arg: bool,
+}
+
+/// One `include_str!` call: the path it names, relative to the file that holds the call, and the call's line.
+struct Embed {
+  path: String,
+  line: usize,
 }
 
 struct UseRecord {
@@ -260,7 +270,7 @@ impl Builder<'_> {
     for item in items {
       collector.visit_item(item);
     }
-    let literals = if test { Vec::new() } else { production_literals(items) };
+    let (literals, embeds) = if test { (Vec::new(), Vec::new()) } else { production_literals(items) };
     let functions = if test { Vec::new() } else { production_functions(items) };
     let (statics, environment_uses) = if test { (Vec::new(), Vec::new()) } else { production_global_state(items) };
     let child_mods = collector.child_mods;
@@ -278,6 +288,7 @@ impl Builder<'_> {
         macro_paths: collector.macro_paths,
         idents: collector.idents,
         literals,
+        embeds,
         functions,
         statics,
         environment_uses,
@@ -1942,6 +1953,265 @@ fn production_global_state(items: &[Item]) -> (Vec<StaticRecord>, Vec<Environmen
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// The product UI language.
+//
+// Three surfaces carry text to a browser: the tracked files under `web/`, the Rust production string literals, and the
+// files that production code embeds with `include_str!`. A line of a surface that holds a Han, kana or Hangul letter
+// fails, unless its file is in `UI_TEXT_EXEMPTIONS`.
+
+/// The ranges a product UI string must not hold: hiragana and katakana, the CJK ideographs (extension A, the unified
+/// block and the compatibility block), and Hangul syllables. CJK punctuation lies outside them.
+const UI_TEXT_RANGES: [(char, char); 5] = [
+  ('\u{3040}', '\u{30ff}'),
+  ('\u{3400}', '\u{4dbf}'),
+  ('\u{4e00}', '\u{9fff}'),
+  ('\u{ac00}', '\u{d7af}'),
+  ('\u{f900}', '\u{faff}'),
+];
+
+/// The Integration selection file, and the filter text of the entries that run this check.
+const INTEGRATION_PATHS: &str = "dev/integration-paths.toml";
+const STRUCTURE_BINARY: &str = "binary_id(charliebot-structure::structure)";
+
+/// A file the product-UI check skips, with the reason it holds such letters.
+struct UiTextExemption {
+  file: &'static str,
+  reason: &'static str,
+}
+
+/// The files whose Han, kana or Hangul letters are text that a model or a user reads, not product UI text. Each row
+/// names that reader. Product UI text never qualifies: a product string with such a letter is translated instead. A
+/// row whose file holds no such letter fails, so the table lists only live exemptions.
+const UI_TEXT_EXEMPTIONS: &[UiTextExemption] = &[
+  UiTextExemption {
+    file: "rust/crates/app/mock-home/src/text.rs",
+    reason: "The demo home's sample conversation, which a user reads as chat content.",
+  },
+  UiTextExemption {
+    file: "rust/crates/features/artifacts/src/artifact_check.rs",
+    reason: "Patterns that parse the Chinese plan pages a model writes, and the Chinese numerals in them.",
+  },
+  UiTextExemption {
+    file: "rust/crates/features/slack/src/thread_contract.rs",
+    reason: "The Slack thread contract a model reads on each turn; its Chinese text is the instruction.",
+  },
+  UiTextExemption {
+    file: "rust/crates/features/feishu/src/thread_contract.rs",
+    reason: "The Feishu thread contract a model reads on each turn; its Chinese text is the instruction.",
+  },
+  UiTextExemption {
+    file: "rust/crates/features/discord/src/thread_contract.rs",
+    reason: "The Discord thread contract a model reads on each turn; its Chinese text is the instruction.",
+  },
+  UiTextExemption {
+    file: "rust/crates/features/web_reply/src/reply.rs",
+    reason: "The Han-character pattern that detects Chinese in reply text a user or a model writes.",
+  },
+  UiTextExemption {
+    file: "rust/crates/features/taste/src/store.rs",
+    reason: "The default reason stored for a taste row, which a model reads back; no browser shows it.",
+  },
+];
+
+/// One line of a surface that holds a Han, kana or Hangul letter.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct UiHit {
+  file: String,
+  line: usize,
+  text: String,
+}
+
+/// The files one surface read, and the lines of them that hold a letter from `UI_TEXT_RANGES`.
+struct UiSurface {
+  name: &'static str,
+  files_read: usize,
+  hits: Vec<UiHit>,
+}
+
+/// A file that production code embeds with `include_str!`, and the call that names it.
+struct EmbeddedFile {
+  file: String,
+  declared_at: String,
+}
+
+fn is_ui_text(character: char) -> bool {
+  UI_TEXT_RANGES.iter().any(|&(low, high)| (low..=high).contains(&character))
+}
+
+/// The lines of `text` that hold a letter from `UI_TEXT_RANGES`, each with its 1-based number.
+fn ui_text_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
+  text.lines().enumerate().filter(|(_, line)| line.chars().any(is_ui_text)).map(|(index, line)| (index + 1, line))
+}
+
+/// The hits of one tracked text file, read as UTF-8.
+fn text_file_hits(repo: &Path, file: &str) -> Vec<UiHit> {
+  let path = repo.join(file);
+  let text = fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {} as UTF-8 text: {error}", path.display()));
+  ui_text_lines(&text)
+    .map(|(line, text)| UiHit { file: file.to_string(), line, text: text.trim().to_string() })
+    .collect()
+}
+
+/// The web surface: every tracked file under `web/` except the tests under `web/tests/`.
+fn web_surface(repo: &Path) -> UiSurface {
+  let output = Command::new("git")
+    .arg("-C")
+    .arg(repo)
+    .args(["ls-files", "-z", "--", "web"])
+    .output()
+    .unwrap_or_else(|error| panic!("cannot run git ls-files in {}: {error}", repo.display()));
+  assert!(
+    output.status.success(),
+    "git ls-files in {} failed: {}",
+    repo.display(),
+    String::from_utf8_lossy(&output.stderr)
+  );
+  let mut surface = UiSurface { name: "web", files_read: 0, hits: Vec::new() };
+  for file in output.stdout.split(|byte| *byte == 0).filter(|file| !file.is_empty()) {
+    let file = std::str::from_utf8(file).expect("a tracked path is UTF-8");
+    if file.starts_with("web/tests/") {
+      continue;
+    }
+    surface.files_read += 1;
+    surface.hits.extend(text_file_hits(repo, file));
+  }
+  surface
+}
+
+/// The Rust surface: the string literals of every module's production code. It also returns the files those modules
+/// embed with `include_str!`, which the embedded surface reads.
+fn rust_surface(repo: &Path, workspace: &Workspace) -> (UiSurface, Vec<EmbeddedFile>) {
+  let mut surface = UiSurface { name: "rust", files_read: 0, hits: Vec::new() };
+  let mut read = BTreeSet::new();
+  let mut embedded = BTreeMap::new();
+  for krate in &workspace.crates {
+    for target in &krate.targets {
+      for module in target.modules.values() {
+        let file = rel(repo, &module.file);
+        if !module.literals.is_empty() {
+          read.insert(file.clone());
+        }
+        for literal in &module.literals {
+          for (_, line) in ui_text_lines(&literal.value) {
+            surface.hits.push(UiHit { file: file.clone(), line: literal.line, text: line.trim().to_string() });
+          }
+        }
+        let directory = module.file.parent().expect("a source file has a parent directory");
+        for embed in &module.embeds {
+          let embedded_file = rel(repo, &normalize(&directory.join(&embed.path)));
+          embedded.entry(embedded_file).or_insert_with(|| format!("{file}:{}", embed.line));
+        }
+      }
+    }
+  }
+  surface.files_read = read.len();
+  surface.hits.sort();
+  surface.hits.dedup();
+  let embedded = embedded.into_iter().map(|(file, declared_at)| EmbeddedFile { file, declared_at }).collect();
+  (surface, embedded)
+}
+
+/// The embedded surface: the files that production code embeds with `include_str!`.
+fn embedded_surface(repo: &Path, embedded: &[EmbeddedFile]) -> UiSurface {
+  let mut surface = UiSurface { name: "embedded", files_read: embedded.len(), hits: Vec::new() };
+  for file in embedded {
+    surface.hits.extend(text_file_hits(repo, &file.file));
+  }
+  surface
+}
+
+/// The path globs of the Integration entries whose `rust` filter selects the structure test binary.
+fn structure_selection(repo: &Path) -> Vec<String> {
+  let path = repo.join(INTEGRATION_PATHS);
+  let text = fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+  let document: toml::Table = toml::from_str(&text).unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+  let entries = document
+    .get("entry")
+    .and_then(toml::Value::as_array)
+    .unwrap_or_else(|| panic!("{} holds no [[entry]] tables", path.display()));
+  let mut globs = Vec::new();
+  for entry in entries {
+    let entry = entry.as_table().expect("an [[entry]] is a table");
+    let filter = entry.get("rust").and_then(toml::Value::as_str).unwrap_or("");
+    if !filter.contains(STRUCTURE_BINARY) {
+      continue;
+    }
+    let paths = entry.get("paths").and_then(toml::Value::as_array).expect("an entry holds paths");
+    globs.extend(paths.iter().map(|glob| glob.as_str().expect("a path glob is a string").to_string()));
+  }
+  globs
+}
+
+/// Whether one of `globs` selects `file`. A `*` stays within one path component, and a `**` crosses them.
+fn selects(globs: &[String], file: &str) -> bool {
+  let options = glob::MatchOptions { require_literal_separator: true, ..glob::MatchOptions::new() };
+  globs.iter().any(|glob| glob::Pattern::new(glob).expect("a path glob parses").matches_with(file, options))
+}
+
+/// The product-UI failures: a surface that read no file, an embedded file outside `selection`, an exemption whose
+/// file holds no such letter, and each flagged line outside `exemptions`.
+fn judge_product_ui(
+  surfaces: &[UiSurface],
+  embedded: &[EmbeddedFile],
+  selection: &[String],
+  exemptions: &[UiTextExemption],
+) -> Vec<String> {
+  let mut failures = Vec::new();
+  if selection.is_empty() {
+    failures.push(format!("no Integration entry in {INTEGRATION_PATHS} selects {STRUCTURE_BINARY}"));
+  }
+  for surface in surfaces {
+    if surface.files_read == 0 {
+      failures.push(format!("the {} surface read no files, so its scan proves nothing", surface.name));
+    }
+  }
+  for file in embedded {
+    if !selects(selection, &file.file) {
+      failures.push(format!(
+        "{} (embedded at {}) is outside the structure check's Integration selection; add its path to the entry in \
+         {INTEGRATION_PATHS} that selects {STRUCTURE_BINARY}",
+        file.file, file.declared_at
+      ));
+    }
+  }
+  let hit_files: BTreeSet<&str> =
+    surfaces.iter().flat_map(|surface| surface.hits.iter().map(|hit| hit.file.as_str())).collect();
+  for exemption in exemptions {
+    if !hit_files.contains(exemption.file) {
+      failures.push(format!(
+        "the exemption for {} ({}) names no line with a Han, kana or Hangul letter; delete its row",
+        exemption.file, exemption.reason
+      ));
+    }
+  }
+  // A line can hold several flagged strings, and each one is listed on the line's row.
+  let exempt = |file: &str| exemptions.iter().any(|exemption| exemption.file == file);
+  let mut flagged: BTreeMap<(&str, usize), BTreeSet<&str>> = BTreeMap::new();
+  for hit in surfaces.iter().flat_map(|surface| &surface.hits).filter(|hit| !exempt(&hit.file)) {
+    flagged.entry((hit.file.as_str(), hit.line)).or_default().insert(hit.text.as_str());
+  }
+  if !flagged.is_empty() {
+    let rows: Vec<String> = flagged
+      .iter()
+      .map(|((file, line), texts)| format!("{file}:{line}: {}", texts.iter().copied().collect::<Vec<_>>().join(" | ")))
+      .collect();
+    failures.push(format!(
+      "{} lines outside the exemption table carry Han, kana or Hangul letters\n{}",
+      rows.len(),
+      rows.join("\n")
+    ));
+  }
+  failures
+}
+
+/// The product-UI failures of the repository at `repo`, whose Rust crates are in `workspace`.
+fn product_ui_failures(repo: &Path, workspace: &Workspace) -> Vec<String> {
+  let (rust, embedded) = rust_surface(repo, workspace);
+  let surfaces = [web_surface(repo), rust, embedded_surface(repo, &embedded)];
+  judge_product_ui(&surfaces, &embedded, &structure_selection(repo), UI_TEXT_EXEMPTIONS)
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // The real workspace.
 
 fn real_workspace() -> &'static Workspace {
@@ -2018,6 +2288,14 @@ fn every_file_kind_is_read_and_written_by_its_owner() {
 #[ignore = "integration"]
 fn no_global_state_outside_its_owner() {
   let failures = global_state_failures(real_workspace());
+  assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+#[ignore = "integration"]
+fn product_ui_strings_hold_no_han_kana_or_hangul() {
+  let repo = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("the repository root");
+  let failures = product_ui_failures(repo, real_workspace());
   assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -2744,6 +3022,59 @@ fn test_write() {
   );
 }
 
+#[test]
+fn the_product_ui_rule_finds_each_break() {
+  // A line with a Han letter is reported with its number. A line of CJK punctuation alone is not.
+  let text = "let a = 1;\nlet b = \"每日\";\nsee 「quoted」。\n";
+  assert_eq!(ui_text_lines(text).collect::<Vec<_>>(), vec![(2, "let b = \"每日\";")]);
+
+  let selection = ["web/**".to_string(), "rust/crates/**/*.rs".to_string()];
+  let embedded = [
+    EmbeddedFile {
+      file: "rust/crates/a/src/page.html".to_string(),
+      declared_at: "rust/crates/a/src/lib.rs:3".to_string(),
+    },
+    EmbeddedFile {
+      file: "rust/crates/a/src/part.rs".to_string(),
+      declared_at: "rust/crates/a/src/lib.rs:4".to_string(),
+    },
+  ];
+  let hit = |file: &str, line| UiHit { file: file.to_string(), line, text: "\"每日\"".to_string() };
+  let exemption = UiTextExemption { file: "rust/crates/b/src/text.rs", reason: "synthetic" };
+  let surfaces = [
+    UiSurface { name: "web", files_read: 1, hits: Vec::new() },
+    UiSurface {
+      name: "rust",
+      files_read: 2,
+      hits: vec![hit("rust/crates/a/src/lib.rs", 2), hit("rust/crates/b/src/text.rs", 5)],
+    },
+    UiSurface { name: "embedded", files_read: 1, hits: Vec::new() },
+  ];
+
+  let failures = judge_product_ui(&surfaces, &embedded, &selection, &[exemption]);
+
+  // The embedded page is outside the selection, the part is inside it, the Han line in lib.rs is flagged, the
+  // exempt hit passes, and the exemption holds a live hit.
+  assert_eq!(failures.len(), 2, "{}", failures.join("\n"));
+  assert!(failures[0].starts_with("rust/crates/a/src/page.html (embedded at rust/crates/a/src/lib.rs:3)"));
+  assert_eq!(
+    failures[1],
+    "1 lines outside the exemption table carry Han, kana or Hangul letters\nrust/crates/a/src/lib.rs:2: \"每日\""
+  );
+
+  // An empty surface and an exemption with no hit each fail.
+  let surfaces = [UiSurface { name: "web", files_read: 0, hits: Vec::new() }];
+  let failures = judge_product_ui(
+    &surfaces,
+    &[],
+    &selection,
+    &[UiTextExemption { file: "rust/crates/c/src/x.rs", reason: "synthetic" }],
+  );
+  assert_eq!(failures.len(), 2, "{}", failures.join("\n"));
+  assert!(failures[0].contains("the web surface read no files"));
+  assert!(failures[1].contains("rust/crates/c/src/x.rs"));
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Parsing helpers.
 
@@ -2986,23 +3317,24 @@ fn path_attr(attrs: &[Attribute]) -> Option<(String, usize)> {
   None
 }
 
-/// The string literals of a module's production items. Each `#[cfg(test)]` item is skipped, and an inline module is
-/// read in its own scope, so the visitor does not enter it.
+/// The string literals and `include_str!` calls of a module's production items. Each `#[cfg(test)]` item is skipped,
+/// and an inline module is read in its own scope, so the visitor does not enter it.
 #[derive(Default)]
 struct LiteralCollector {
   literals: Vec<Literal>,
+  embeds: Vec<Embed>,
   /// The start positions of the literals that are the argument of `.join(..)`, `Path::new(..)` or `PathBuf::from(..)`.
   path_args: BTreeSet<(usize, usize)>,
   /// The start positions of the literals that are the argument of `.strip_prefix(..)` or `.starts_with(..)`.
   prefix_args: BTreeSet<(usize, usize)>,
 }
 
-fn production_literals(items: &[Item]) -> Vec<Literal> {
+fn production_literals(items: &[Item]) -> (Vec<Literal>, Vec<Embed>) {
   let mut collector = LiteralCollector::default();
   for item in items {
     collector.visit_item(item);
   }
-  collector.literals
+  (collector.literals, collector.embeds)
 }
 
 /// The start positions of the string literals among `args`.
@@ -3084,6 +3416,10 @@ impl<'ast> Visit<'ast> for LiteralCollector {
   fn visit_macro(&mut self, node: &'ast syn::Macro) {
     // Syn does not parse a macro call's tokens, so their literals are read from the tokens.
     collect_token_literals(node.tokens.clone(), &mut self.literals);
+    if node.path.segments.last().is_some_and(|segment| segment.ident == "include_str") {
+      let path: LitStr = syn::parse2(node.tokens.clone()).expect("include_str! takes one string literal");
+      self.embeds.push(Embed { path: path.value(), line: path.span().start().line });
+    }
   }
 
   fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {

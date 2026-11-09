@@ -2,9 +2,17 @@
 paths = ["docs/**"]
 none = true
 
-# The structure checks read the whole workspace: every crate's manifest and source file.
+# The structure checks read the whole workspace: every crate's manifest and source file. The product UI language check
+# also reads web/ and each file that production code embeds with include_str!, so those paths select it too.
 [[entry]]
-paths = ["rust/crates/**/Cargo.toml", "rust/crates/**/*.rs"]
+paths = [
+  "rust/crates/**/Cargo.toml",
+  "rust/crates/**/*.rs",
+  "web/**",
+  "rust/crates/app/server/src/login_page.html",
+  "rust/crates/infra/html/src/html5_entities.json",
+  "prompts/failure_triage_judge.md",
+]
 rust = "binary_id(charliebot-structure::structure)"
 
 # The script tests run these binaries without a Cargo dependency on them.

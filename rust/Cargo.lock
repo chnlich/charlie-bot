@@ -1423,10 +1423,12 @@ dependencies = [
 name = "charliebot-structure"
 version = "0.1.0"
 dependencies = [
+ "glob",
  "proc-macro2",
  "serde_json",
  "syn 2.0.119",
  "tempfile",
+ "toml",
 ]
 
 [[package]]

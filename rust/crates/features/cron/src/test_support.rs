@@ -241,8 +241,9 @@ fn register_test_handler(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.scheduled_handler("synthetic_handler", |_features| Box::pin(async { Ok("synthetic result".to_string()) }))
 }
 
-/// The goal of a task whose rounds stay running until the test ends them. The synthetic backend holds a launch that
-/// carries this text open with `sleep`; every other launch prints a result and exits.
+/// The goal of a task whose rounds stay running until the test ends them. The goal rides the system prompt's Task
+/// record block, so the synthetic backend holds a launch whose instructions carry this text open with `sleep`; every
+/// other launch prints a result and exits.
 pub const HELD_ROUND_GOAL: &str = "Synthetic held round";
 
 struct TestBackendFactory;
@@ -252,13 +253,16 @@ impl BackendFactory for TestBackendFactory {
     &self,
     _option: Option<&BackendOption>,
     _cfg: &charliebot_core::config::CharlieBotConfig,
-    _launch: LaunchArgs,
+    launch: LaunchArgs,
   ) -> anyhow::Result<Box<dyn AgentBackend>> {
-    Ok(Box::new(TestBackend))
+    let held = launch.instructions_content.as_deref().is_some_and(|content| content.contains(HELD_ROUND_GOAL));
+    Ok(Box::new(TestBackend { held }))
   }
 }
 
-struct TestBackend;
+struct TestBackend {
+  held: bool,
+}
 
 impl AgentBackend for TestBackend {
   fn instructions_target(&self) -> Option<(&'static str, &'static str)> {
@@ -269,8 +273,8 @@ impl AgentBackend for TestBackend {
     Ok(())
   }
 
-  fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
-    if prompt.contains(HELD_ROUND_GOAL) {
+  fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
+    if self.held {
       return Ok(vec!["/bin/sh".to_string(), "-c".to_string(), "exec sleep 600".to_string()]);
     }
     Ok(vec![

@@ -1774,6 +1774,21 @@ mod tests {
     .unwrap()
   }
 
+  /// The text of the run's managed blocks whose source is the task record (scope `task`), read from its prompt
+  /// snapshot. The goal reaches the worker through that block of the system prompt, not through the launch text.
+  fn task_record_block(run: &RunRecord) -> String {
+    let path = run.prompt_snapshot_ref.as_deref().expect("a launched run records its prompt snapshot");
+    let snapshot: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    snapshot["blocks"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .filter(|block| block["sources"].as_array().unwrap().iter().any(|source| source["scope"] == "task"))
+      .filter_map(|block| block["text"].as_str())
+      .collect::<Vec<_>>()
+      .join("\n\n")
+  }
+
   async fn assert_repo_fire_prepares_a_worktree(scheduled: bool) {
     let _git_lock = GIT_PROGRAM_LOCK.lock().await;
     let git = FakeGit::install();
@@ -1796,7 +1811,8 @@ mod tests {
     assert!(branch_name.starts_with("charliebot/task-"), "{branch_name}");
     let launch = launch_text(&features, &leaf_id, &run);
     assert!(launch.contains(&worktree_path), "{launch}");
-    assert!(launch.contains("Synthetic scheduled work"), "{launch}");
+    let task_block = task_record_block(&run);
+    assert!(task_block.contains("Synthetic scheduled work"), "{task_block}");
     let requested_worktree = Path::new(&configured_worktree_dir).join(git_worktree_dir_name(branch_name));
     let launch_calls = [
       "-c protocol.version=0 ls-remote --symref origin".to_string(),
@@ -2016,8 +2032,9 @@ mod tests {
     assert_eq!(run.worktree_path, None);
     assert_eq!(run.branch_name, None);
     let worktree_dir = features.config.get().unwrap().paths.worktree_dir.clone();
+    let task_block = task_record_block(&run);
+    assert!(task_block.contains("Synthetic scheduled work"), "{task_block}");
     let launch = launch_text(&features, &leaf_id, &run);
-    assert!(launch.contains("Synthetic scheduled work"), "{launch}");
     assert!(!launch.contains(&worktree_dir), "{launch}");
   }
 

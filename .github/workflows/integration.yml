@@ -52,9 +52,9 @@ jobs:
 
       - name: Install cargo-nextest
         if: steps.selection.outputs.rust_filter != ''
-        run: |
-          curl -LsSf https://get.nexte.st/0.9.150/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
-          cargo nextest --version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: dev/install-cargo-nextest.sh
 
       - name: Find Google Chrome
         if: steps.selection.outputs.rust_filter != ''

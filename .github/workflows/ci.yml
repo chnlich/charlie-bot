@@ -156,9 +156,9 @@ jobs:
       # attribute; `cargo test` cannot report per-test times on stable Rust. Pinned to one version,
       # installed from the prebuilt binary so the install takes seconds and stays reproducible.
       - name: Install cargo-nextest
-        run: |
-          curl -LsSf https://get.nexte.st/0.9.150/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
-          cargo nextest --version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: dev/install-cargo-nextest.sh
 
       - name: Test
         working-directory: rust

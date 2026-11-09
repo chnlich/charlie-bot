@@ -13,7 +13,8 @@ const { loadSidebarStatusContext } = require('./sidebar_status_context_stub');
 const { FakeElement } = require('./fake_dom');
 const { createElement } = require('./dom_element_stub');
 
-function makeDocument(elements) {
+function makeDocument(elements, renderedRequestIds) {
+  const listeners = new Map();
   return {
     getElementById(id) {
       if (elements.has(id)) return elements.get(id);
@@ -29,10 +30,30 @@ function makeDocument(elements) {
     createElement(tag) {
       return new FakeElement(tag);
     },
-    querySelector() {
-      return null;
+    // Only the rendered-bubble lookup by request id finds an element; any other selector finds none.
+    querySelector(selector) {
+      const match = /^\[data-request-id="([^"]+)"\]$/.exec(selector);
+      return match && renderedRequestIds.has(match[1]) ? {} : null;
     },
-    dispatchEvent: () => true,
+    addEventListener(type, handler) {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push(handler);
+    },
+    dispatchEvent(event) {
+      for (const handler of listeners.get(event.type) || []) handler(event);
+      return true;
+    },
+  };
+}
+
+// The browser's localStorage, as far as the composer's pending-send record uses it.
+function makeStorage() {
+  const items = new Map();
+  return {
+    items,
+    getItem: (key) => (items.has(key) ? items.get(key) : null),
+    setItem: (key, value) => { items.set(key, String(value)); },
+    removeItem: (key) => { items.delete(key); },
   };
 }
 
@@ -45,11 +66,16 @@ function fakeHeaderButton() {
   };
 }
 
-function loadChatContext(elements) {
+function loadChatContext(elements, {storage = makeStorage(), renderedRequestIds = new Set()} = {}) {
   let requestSequence = 0;
   const context = {
     CustomEvent,
-    document: makeDocument(elements),
+    document: makeDocument(elements, renderedRequestIds),
+    localStorage: storage,
+    // config.js and tabs.js are not loaded here: their draft writer, composer resize and note label stand in.
+    saveDraft: () => {},
+    autoResize: () => {},
+    PENDING_SEND_NOTE_LABEL: 'NOTE',
     console: { error: () => {}, log: () => {} },
     marked: { parse: (v) => String(v || '') },
     fixNestedFences: (v) => String(v || ''),
@@ -363,4 +389,170 @@ test('no failure notice element is ever synthesized by the client, for success, 
   context._commitMessage({ role: 'separator', id: 's4' });
 
   assert.doesNotMatch(container.innerHTML, /compact-failed-notice/);
+});
+
+// ---------------------------------------------------------------------------
+// 3c. A send the tab closed before the server took it comes back to the composer, never sent again by itself.
+// ---------------------------------------------------------------------------
+const PENDING_SEND_KEY = 'charliebot-pending-send-session-a';
+
+// A post the server has not answered yet; `answer` settles it for the test.
+function unansweredPost(calls) {
+  let settle;
+  const answered = new Promise((resolve) => { settle = resolve; });
+  return {
+    fetch: (url, opts) => {
+      calls.push({url, opts});
+      return answered;
+    },
+    answer: (response) => settle(response),
+  };
+}
+
+function composerHarness({storage, text = '', renderedRequestIds}) {
+  const input = createElement({id: 'msg-input'});
+  input.value = text;
+  input.style = {};
+  // index.html renders the note hidden; a catch-up that finds nothing to say leaves it so.
+  const note = new FakeElement('DIV');
+  note.classList.add('hidden');
+  const elements = new Map([
+    ['messages', new FakeElement('DIV')],
+    ['msg-input', input],
+    ['pending-send-note', note],
+  ]);
+  const context = loadChatContext(elements, {storage, renderedRequestIds});
+  context.DRAFT_KEY = null;
+  context.startThinking = () => {};
+  context.stopThinking = () => {};
+  return {context, input, note};
+}
+
+function dispatchPageCurrent(context, sessionId = 'session-a') {
+  context.document.dispatchEvent(new CustomEvent('charliebot:page-current', {detail: {sessionId}}));
+}
+
+test('a send holds its text and request id in the browser until the server takes it', async () => {
+  const storage = makeStorage();
+  const calls = [];
+  const post = unansweredPost(calls);
+  const {context} = composerHarness({storage, text: 'hello', renderedRequestIds: new Set()});
+  context.fetch = post.fetch;
+
+  const sent = context.sendMessage();
+  assert.deepEqual(JSON.parse(storage.items.get(PENDING_SEND_KEY)), {request_id: 'request-1', content: 'hello'});
+
+  post.answer({ok: true, status: 202, json: async () => ({})});
+  await sent;
+  assert.equal(storage.items.has(PENDING_SEND_KEY), false);
+});
+
+test('a catch-up while the send is still in flight leaves the composer and the record alone', () => {
+  const storage = makeStorage();
+  const post = unansweredPost([]);
+  const {context, input} = composerHarness({storage, text: 'hello', renderedRequestIds: new Set()});
+  context.fetch = post.fetch;
+
+  context.sendMessage();
+  dispatchPageCurrent(context);
+
+  assert.equal(input.value, '');
+  assert.equal(storage.items.has(PENDING_SEND_KEY), true);
+});
+
+test('a closed tab whose message the catch-up lacks puts the text back and shows the note', () => {
+  const storage = makeStorage();
+  const {context} = composerHarness({storage, text: 'hello', renderedRequestIds: new Set()});
+  context.fetch = unansweredPost([]).fetch;
+  context.sendMessage();
+
+  const reloaded = composerHarness({storage, renderedRequestIds: new Set()});
+  dispatchPageCurrent(reloaded.context);
+
+  assert.equal(reloaded.input.value, 'hello');
+  assert.equal(reloaded.note.classList.contains('hidden'), false);
+  assert.equal(storage.items.has(PENDING_SEND_KEY), true);
+});
+
+test('a closed tab whose message the catch-up holds clears the record and puts nothing back', () => {
+  const storage = makeStorage();
+  const {context} = composerHarness({storage, text: 'hello', renderedRequestIds: new Set()});
+  context.fetch = unansweredPost([]).fetch;
+  context.sendMessage();
+
+  const reloaded = composerHarness({storage, renderedRequestIds: new Set(['request-1'])});
+  dispatchPageCurrent(reloaded.context);
+
+  assert.equal(reloaded.input.value, '');
+  assert.equal(reloaded.note.classList.contains('hidden'), true);
+  assert.equal(storage.items.has(PENDING_SEND_KEY), false);
+});
+
+test('a put-back text resends under its first request id', async () => {
+  const storage = makeStorage();
+  const {context} = composerHarness({storage, text: 'hello', renderedRequestIds: new Set()});
+  context.fetch = unansweredPost([]).fetch;
+  context.sendMessage();
+
+  const reloaded = composerHarness({storage, renderedRequestIds: new Set()});
+  reloaded.context.crypto.randomUUID = () => 'fresh-request';
+  dispatchPageCurrent(reloaded.context);
+
+  const calls = [];
+  const post = unansweredPost(calls);
+  reloaded.context.fetch = post.fetch;
+  const sent = reloaded.context.sendMessage();
+  post.answer({ok: true, status: 202, json: async () => ({})});
+  await sent;
+  assert.equal(JSON.parse(calls[0].opts.body).request_id, 'request-1');
+  assert.equal(JSON.parse(calls[0].opts.body).content, 'hello');
+  assert.equal(reloaded.note.classList.contains('hidden'), true);
+  assert.equal(storage.items.has(PENDING_SEND_KEY), false);
+});
+
+test('a switch to another session hides the put-back note', () => {
+  const storage = makeStorage();
+  const {context} = composerHarness({storage, text: 'hello', renderedRequestIds: new Set()});
+  context.fetch = unansweredPost([]).fetch;
+  context.sendMessage();
+
+  const reloaded = composerHarness({storage, renderedRequestIds: new Set()});
+  dispatchPageCurrent(reloaded.context);
+  assert.equal(reloaded.note.classList.contains('hidden'), false);
+
+  reloaded.context.document.dispatchEvent(new CustomEvent('charliebot:active-session-changed', {detail: {}}));
+  assert.equal(reloaded.note.classList.contains('hidden'), true);
+});
+
+test('text other than the put-back one is sent under a new request id', async () => {
+  const storage = makeStorage();
+  const {context} = composerHarness({storage, text: 'hello', renderedRequestIds: new Set()});
+  context.fetch = unansweredPost([]).fetch;
+  context.sendMessage();
+
+  const reloaded = composerHarness({storage, text: 'another', renderedRequestIds: new Set()});
+  reloaded.context.crypto.randomUUID = () => 'fresh-request';
+  const calls = [];
+  const post = unansweredPost(calls);
+  reloaded.context.fetch = post.fetch;
+  const sent = reloaded.context.sendMessage();
+  post.answer({ok: true, status: 202, json: async () => ({})});
+  await sent;
+  assert.equal(JSON.parse(calls[0].opts.body).request_id, 'fresh-request');
+});
+
+test('a put-back text goes in front of text the composer already holds, and nothing is sent', () => {
+  const storage = makeStorage();
+  const {context} = composerHarness({storage, text: 'hello', renderedRequestIds: new Set()});
+  context.fetch = unansweredPost([]).fetch;
+  context.sendMessage();
+
+  const reloaded = composerHarness({storage, text: 'later', renderedRequestIds: new Set()});
+  const calls = [];
+  reloaded.context.fetch = (url, opts) => { calls.push({url, opts}); return new Promise(() => {}); };
+  dispatchPageCurrent(reloaded.context);
+
+  assert.equal(reloaded.input.value, 'hello\nlater');
+  assert.equal(calls.length, 0);
+  assert.equal(storage.items.has(PENDING_SEND_KEY), true);
 });

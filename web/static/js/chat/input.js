@@ -74,17 +74,75 @@ function waitForSendRetry(delay) {
   return new Promise((resolve) => setTimeout(resolve, delay));
 }
 
+// ---------------------------------------------------------------------------
+// The pending send: the text and request id of a message the page sent and has not seen accepted
+// ---------------------------------------------------------------------------
+// A send writes its text and request id to this browser before the post, and removes them once the server
+// accepts or refuses the message. A tab closed in between leaves them. When the session's catch-up completes
+// (charliebot:page-current), the messages the page holds decide: one that carries the request id was accepted,
+// and the record goes. Otherwise the text returns to the composer and the note says the last send did not go.
+// The request id stays, so a send of the same text reuses it and the server answers with the message it already
+// holds.
+const PENDING_SEND_KEY_PREFIX = 'charliebot-pending-send-';
+
+function pendingSendKey(sessionId) {
+  return PENDING_SEND_KEY_PREFIX + sessionId;
+}
+
+function readPendingSend(sessionId) {
+  const raw = localStorage.getItem(pendingSendKey(sessionId));
+  return raw === null ? null : JSON.parse(raw);
+}
+
+function recordPendingSend(sessionId, requestId, content) {
+  localStorage.setItem(pendingSendKey(sessionId), JSON.stringify({request_id: requestId, content}));
+}
+
+function clearPendingSend(sessionId, requestId) {
+  const pending = readPendingSend(sessionId);
+  if (pending === null || pending.request_id !== requestId) return;
+  localStorage.removeItem(pendingSendKey(sessionId));
+  setPendingSendNote(false);
+}
+
+function setPendingSendNote(on) {
+  const note = document.getElementById('pending-send-note');
+  if (!note) return;
+  note.textContent = on ? PENDING_SEND_NOTE_LABEL : '';
+  note.classList.toggle('hidden', !on);
+}
+
+function reconcilePendingSend(sessionId) {
+  const pending = readPendingSend(sessionId);
+  if (pending === null || pendingUserRequestIds.has(pending.request_id)) return;
+  if (document.querySelector('[data-request-id="' + pending.request_id + '"]') !== null) {
+    localStorage.removeItem(pendingSendKey(sessionId));
+    return;
+  }
+  // The text goes in front of whatever the composer holds, so no typed text is overwritten. Nothing is sent.
+  const input = document.getElementById('msg-input');
+  input.value = input.value === '' ? pending.content : pending.content + '\n' + input.value;
+  autoResize(input);
+  saveDraft();
+  setPendingSendNote(true);
+}
+
+document.addEventListener('charliebot:page-current', (event) => reconcilePendingSend(event.detail.sessionId));
+document.addEventListener('charliebot:active-session-changed', () => setPendingSendNote(false));
+
 // Resolves true when the server accepted the message and false when it refused it with a 4xx.
 // The session is the one the message was typed in: a retry after a view switch still lands there.
 async function submitUserMessage(sessionId, content, extra, requestId, optimisticMessage) {
   try {
     const response = await postChatMessageWithRetry(sessionId, content, extra, requestId);
     setMessageDeliveryStatus(optimisticMessage, 'Sent');
+    clearPendingSend(sessionId, requestId);
     if (response.dispatch_error) appendMessage('system', response.dispatch_error);
     return true;
   } catch (error) {
     if (!(error.status >= 400 && error.status < 500)) throw error;
     pendingUserRequestIds.delete(requestId);
+    clearPendingSend(sessionId, requestId);
     setMessageDeliveryStatus(optimisticMessage, 'Failed');
     appendMessage('system', 'Failed to send message');
     return false;
@@ -103,7 +161,16 @@ async function sendMessage() {
   clearSentUploadedFiles(uploadedFilesForPayload.map((file) => file.id));
 
   const inputMode = composerInputMode;
-  const requestId = crypto.randomUUID();
+  // A text that returned to the composer after a closed tab keeps its request id: the server then answers with
+  // the message it already holds, if the first post landed.
+  const returned = content ? readPendingSend(target.id) : null;
+  const requestId = returned !== null && returned.content === content ? returned.request_id : crypto.randomUUID();
+  // The id is in flight from the press: a catch-up that lands before the bound action runs must not put the text
+  // back into the composer the user has just sent it from.
+  if (content) {
+    recordPendingSend(target.id, requestId, content);
+    pendingUserRequestIds.add(requestId);
+  }
   reportSendStep('click', requestId);
 
   // The send belongs to the session the page displays at press: the composer

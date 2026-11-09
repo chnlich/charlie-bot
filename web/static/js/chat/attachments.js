@@ -136,7 +136,8 @@ function renderUserMessageBubble(content, inputMode, timestamp, uploadedFiles, r
     : '';
   const textHtml = normalized.content ? renderUserTextHtml(normalized.content) : '';
   const attachmentsHtml = renderUserAttachments(normalized.uploadedFiles, Boolean(textHtml));
-  return `<div class="max-w-[75%] overflow-hidden bg-blue-600 rounded-2xl rounded-br-md px-4 py-2.5 text-sm">`
+  const requestAttr = requestId ? ' data-request-id="' + escapeHtmlAttr(requestId) + '"' : '';
+  return `<div${requestAttr} class="max-w-[75%] overflow-hidden bg-blue-600 rounded-2xl rounded-br-md px-4 py-2.5 text-sm">`
     + (inputModeBadges.has(inputMode)
       ? '<span class="text-xs text-blue-200 block mb-1">' + inputModeBadges.get(inputMode) + '</span>'
       : '')

@@ -3,6 +3,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const { escapeHtml } = require('./escape_html_stub');
+const { OFFLINE_PANEL_MARK } = require('./session_context_stub');
 const { createElement } = require('./dom_element_stub');
 
 const { readPackageStatic, readStatic } = require('./read_static');
@@ -208,6 +209,7 @@ function loadPlanPanelScript(opts = {}) {
     DOMParser,
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
     get OFFLINE_PANEL_LABEL() { return configLabel('OFFLINE_PANEL_LABEL'); },
+    OFFLINE_PANEL_MARK,
     // The core entries the panel registers with at load; web/tests/page_registries.test.js covers them.
     registerTab: noop,
     registerWsConnectHandler: noop,
@@ -235,7 +237,8 @@ test('offline, the plan panel shows the offline label in place of its plans', ()
   planPanel.render();
 
   const label = elements.get('plan-offline-label');
-  assert.equal(label.textContent, configLabel('OFFLINE_PANEL_LABEL'));
+  assert.match(label.innerHTML, new RegExp('aria-label="' + configLabel('OFFLINE_PANEL_LABEL') + '"'),
+      'the mark is named by the label');
   assert.equal(label.style.display, '');
   assert.equal(elements.get('plan-viewer').style.display, 'none');
   assert.equal(elements.get('plan-empty-state').style.display, 'none');

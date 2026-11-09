@@ -33,6 +33,8 @@ function buildHarness(clock) {
     Date: {now: () => clock.now},
     sessionStorage,
     location: {protocol: 'http:', host: 'localhost:8000', reload: () => reloaded.push(clock.now)},
+    // The stored shell's drop (offline-shell.js) reloads at once on a page with no worker.
+    reloadAfterDroppingShell: () => reloaded.push(clock.now),
     setTimeout: (fn, ms) => {
       timers.push({fn, ms});
       return timers.length;

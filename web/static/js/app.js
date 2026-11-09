@@ -8,10 +8,21 @@ document.addEventListener('DOMContentLoaded', () => {
   initAuth();
   initSidebarResize();
   updateRelativeTimes();
+  registerOfflineShell();
 
   if (SESSION_ID && !SESSION_BOOTSTRAP) {
     initPage();
     openSession(SESSION_ID, null).then(() => restoreSidebarFromUrl());
+    return;
+  }
+
+  // The shell names no session; its URL does. The open requests that session's first screen before the sidebar
+  // list, which the shell fetches on its own (restoreSidebarFromUrl).
+  const shellSessionId = SESSION_ID === null ? new URLSearchParams(location.search).get('session') : null;
+  if (shellSessionId) {
+    initPage();
+    openSession(shellSessionId, null);
+    restoreSidebarFromUrl();
     return;
   }
 

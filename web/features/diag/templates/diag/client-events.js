@@ -307,10 +307,8 @@
       newest_message_ms: roundOrNull(newestMessageMs),
       current_ms: roundOrNull(catchupMs),
       open_case: OpenedSessions.openCase(),
-      // Stored copies (task 2) are the only other source; until then a session page loads from the network.
-      content_source: SESSION_ID === null ? null : 'network',
-      // The service worker (task 2) makes this true; until then no page has an offline shell.
-      offline_shell: false,
+      content_source: openContentSource(),
+      offline_shell: offlineShellPresent(),
       render_blocking: renderBlockingRows(),
       same_origin: sameOriginRows(navigation),
     });

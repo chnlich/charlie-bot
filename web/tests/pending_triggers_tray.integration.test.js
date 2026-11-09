@@ -507,7 +507,7 @@ test('offline, the tray shows the offline label and sends no trigger request; ba
   windowListeners.get('offline')();
 
   assert.equal(tray.classList.contains('hidden'), false);
-  assert.equal(tray.textContent, context.OFFLINE_PANEL_LABEL);
+  assert.equal(tray.innerHTML, context.OFFLINE_PANEL_MARK);
   assert.deepEqual(calls, [], 'no trigger request goes out while offline');
 
   context.navigator = {userAgent: 'TestAgent/1.0', onLine: true};

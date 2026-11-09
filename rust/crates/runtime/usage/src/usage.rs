@@ -210,7 +210,7 @@ impl UsageFold {
     }
   }
 
-  /// Writes the session cost into a usage object: the total, and the error when a native reading fell.
+  /// The session cost written into a usage object: the total, and the error when a native reading fell.
   fn attach_cost(&self, usage: &mut Map<String, Value>) {
     usage.insert(event_types::RESULT_TOTAL_COST_USD.to_string(), json!(self.cost()));
     if let Some(error) = &self.cost_error {
@@ -399,8 +399,8 @@ impl SessionUsage {
     Ok((fold.resolve(&self.registry, event_count, usage_run_kind(meta), backend_option)?, fold))
   }
 
-  /// Logs a session's cost error the first time this owner folds it. A memo rebuild folds the same events again, so the
-  /// memo entry cannot record that the log was written.
+  /// The log of a session's cost error, written the first time this owner folds it. A memo rebuild folds the same
+  /// events again, so the memo entry cannot record that the log was written.
   fn log_cost_error_once(&self, session_id: &str, fold: &UsageFold) {
     let Some(error) = fold.cost_error.as_deref() else {
       return;

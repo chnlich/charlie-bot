@@ -73,6 +73,11 @@ const SIDEBAR_PROBE_SOURCE = `(() => {
   requestAnimationFrame(sample);
 })()`;
 
+// The error Chrome reports on the requests it drops when the host's network changes: a veth interface added or
+// removed beside the browser closes every connection and fails the requests in flight, a document cut mid-body
+// included. A load failure with this error says what the host did, not what the page did.
+export const NETWORK_CHANGED_ERROR = 'net::ERR_NETWORK_CHANGED';
+
 export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -123,6 +128,9 @@ export class Tab {
   // without bound: what the page said about its own sockets and failures.
   consoleLines = [];
   pageErrors = [];
+  // Every request the host's network change dropped: {at, url}. A document among them means the measurement
+  // recorded the host's behaviour, not the page's.
+  networkChanged = [];
   // The URLs whose 200 bodies the tab keeps, as `request.body` text: a request's body reads after it finishes. A
   // request that finished before keepBodies has no `body`.
   #bodyPattern = null;
@@ -412,6 +420,9 @@ export class Tab {
         const request = this.requests.get(message.params.requestId);
         if (request) {
           request.failed = message.params.errorText;
+          if (message.params.errorText === NETWORK_CHANGED_ERROR) {
+            this.networkChanged.push({ at, url: request.url });
+          }
         }
         return;
       }

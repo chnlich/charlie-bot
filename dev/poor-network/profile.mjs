@@ -129,6 +129,9 @@ export const OPEN = Object.freeze({
   capMs: 240000,
   // An offline navigation that has not shown the page within this time is recorded as not reached.
   offlineSettleMs: 5000,
+  // A repetition the host's network change spoiled is rerun at most this many times; one that still meets the
+  // interference at the bound fails the run.
+  interferenceReruns: 3,
 });
 
 // Chao's devices, from the live server log's page loads (2026-11-06 03:40Z to 08:40Z). A page load's CPU tail is its

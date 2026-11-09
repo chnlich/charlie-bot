@@ -15,7 +15,7 @@ import { cdnRoutes } from './cdn.mjs';
 import { LINK, OPEN, LIVE_CPU_TAIL } from './profile.mjs';
 import { ShapingProxy } from './proxy.mjs';
 import { percentile } from './report.mjs';
-import { Tabs, sleep } from './tabs.mjs';
+import { NETWORK_CHANGED_ERROR, Tabs, sleep } from './tabs.mjs';
 
 const CONDITIONS = ['link', 'held', 'reset', 'flaps', 'offline'];
 const CASES = ['A', 'B', 'C'];
@@ -46,6 +46,67 @@ export function cpuRateFrom(liveTailMs, referenceTailMs) {
     throw new Error(`the reference CPU tail is ${referenceTailMs} ms; the rate cannot be derived from it`);
   }
   return Math.max(1, Math.round((liveTailMs / referenceTailMs) * 100) / 100);
+}
+
+// The CPU record of an open run: the rate the invocation's cells run at — the shared rate when the invocation
+// passes one, so the sides of one `--side both` run compare at one CPU speed — beside the inputs. `derivedRate` is
+// what this side's own reference tail gives, so a side that ran at the other side's rate shows the gap.
+export function openCpuRecord(sharedCpuRate, referenceTails) {
+  const referenceTail = median(referenceTails);
+  const derivedRate = cpuRateFrom(LIVE_CPU_TAIL.medianMs, referenceTail);
+  return {
+    rate: sharedCpuRate ?? derivedRate,
+    derivedRate,
+    rateSource: sharedCpuRate === null ? "this side's reference cell" : "the before side's reference cell",
+    liveTailMs: LIVE_CPU_TAIL.medianMs,
+    liveDevice: LIVE_CPU_TAIL.device,
+    liveLoads: LIVE_CPU_TAIL.loads,
+    referenceTailMedianMs: referenceTail,
+    referenceTails,
+  };
+}
+
+// The cause a repetition names when the host's network changed under it, or null when the repetition is a page
+// result. Chrome drops every connection when the host's interfaces change and fails the requests in flight with
+// `net::ERR_NETWORK_CHANGED`, a document cut mid-body included; such a repetition measures the host, not the page.
+export function hostInterference(rep) {
+  if (rep.networkChanged.length > 0) {
+    const named = rep.networkChanged.slice(0, 3).map((failure) => {
+      const url = new URL(failure.url);
+      return (url.pathname + url.search).slice(0, 60);
+    });
+    const rest = rep.networkChanged.length - named.length;
+    return `Chrome dropped ${rep.networkChanged.length} request(s) on a host network change ` +
+      `(${named.join(', ')}${rest > 0 ? `, ${rest} more` : ''})`;
+  }
+  if (rep.navigationError === NETWORK_CHANGED_ERROR) {
+    return `the navigation failed with ${NETWORK_CHANGED_ERROR}`;
+  }
+  return null;
+}
+
+// One cell's repetitions. A repetition the host's network change spoiled is rerun — at most
+// OPEN.interferenceReruns times, and each rerun recorded — because it never counts as the page's result; any other
+// failure is the rep's record, as before. A repetition that still meets the interference at the bound fails the run.
+export async function runRepetitions(measure, repetitions) {
+  const results = [];
+  for (let repetition = 1; repetition <= repetitions; repetition++) {
+    const reruns = [];
+    let rep = await measure(repetition);
+    let interference = hostInterference(rep);
+    while (interference !== null && reruns.length < OPEN.interferenceReruns) {
+      reruns.push({ reranAt: new Date().toISOString(), cause: interference });
+      process.stderr.write(`[open] host interference, rerunning (${reruns.length}/${OPEN.interferenceReruns}): ` +
+        `${interference}\n`);
+      rep = await measure(repetition);
+      interference = hostInterference(rep);
+    }
+    if (interference !== null) {
+      throw new Error(`the repetition still met host interference after ${reruns.length} reruns: ${interference}`);
+    }
+    results.push({ ...rep, interferenceReruns: reruns });
+  }
+  return results;
 }
 
 // The resets of the repeated drops: the link is up for upSeconds, then down for downSeconds, until totalSeconds.
@@ -308,6 +369,7 @@ async function measureOnce(ctx, cell, repetition) {
     return {
       rep: repetition,
       navigationError,
+      networkChanged: tab.networkChanged,
       newestMs: newestWall === null ? null : newestWall - timeOrigin,
       catchupMs: catchup === null || timeOrigin === null ? null : catchup.at - timeOrigin,
       sockets: tab.sockets.length,
@@ -342,38 +404,35 @@ function loadWall(state) {
 }
 
 async function runCell(ctx, cell, repetitions) {
-  const results = [];
-  for (let repetition = 1; repetition <= repetitions; repetition++) {
+  const results = await runRepetitions(async (repetition) => {
     process.stderr.write(`[open] ${cell.id} repetition ${repetition}/${repetitions}\n`);
     // The trials that run beside a repetition share the host with it; the watch names them, as the other scenarios
     // do for their repetitions.
     const from = ctx.trials.mark();
     const rep = await measureOnce(ctx, cell, repetition);
-    const otherTrials = ctx.trials.since(from);
-    results.push({ ...rep, startedAt: new Date(from).toISOString(), finishedAt: new Date().toISOString(), otherTrials });
-  }
+    return {
+      ...rep,
+      startedAt: new Date(from).toISOString(),
+      finishedAt: new Date().toISOString(),
+      otherTrials: ctx.trials.since(from),
+    };
+  }, repetitions);
   return { ...cell, reps: results };
 }
 
 // The open scenario. Fills `result`, the object the JSON keeps, cell by cell: a failure part-way leaves the cells
 // measured so far in the side's JSON, as the per-repetition scenarios leave their repetitions. Returns `result`.
 // The reference cell always runs: the CPU rate is derived from it. `conditions` selects the other cells.
-export async function openScenario(ctx, repetitions, result, conditions = OPEN_CONDITIONS) {
+// `sharedCpuRate`, when the invocation passes one, is the rate the before side derived, which this side's cells
+// then run at.
+export async function openScenario(ctx, repetitions, result, conditions = OPEN_CONDITIONS, sharedCpuRate = null) {
   ctx.releases = 0;
   result.releases = 0;
   result.cells = [];
   const warm = { A: await buildWarm(ctx, 'A'), B: await buildWarm(ctx, 'B'), C: await buildWarm(ctx, 'C') };
   const reference = await runCell(ctx, { ...REFERENCE, warmDir: warm[REFERENCE.case] }, repetitions);
-  const referenceTail = median(reference.reps.map((rep) => rep.tailMs));
-  const cpuRate = cpuRateFrom(LIVE_CPU_TAIL.medianMs, referenceTail);
-  result.cpu = {
-    rate: cpuRate,
-    liveTailMs: LIVE_CPU_TAIL.medianMs,
-    liveDevice: LIVE_CPU_TAIL.device,
-    liveLoads: LIVE_CPU_TAIL.loads,
-    referenceTailMedianMs: referenceTail,
-    referenceTails: reference.reps.map((rep) => rep.tailMs),
-  };
+  result.cpu = openCpuRecord(sharedCpuRate, reference.reps.map((rep) => rep.tailMs));
+  const cpuRate = result.cpu.rate;
   result.reference = reference;
 
   for (const condition of CONDITIONS.filter((name) => conditions.includes(name))) {

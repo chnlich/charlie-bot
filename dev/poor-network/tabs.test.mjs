@@ -83,3 +83,20 @@ test('a row that is neither painted nor behind its group\'s toggle fails the ste
   await assert.rejects(page.tab.showRow({ id: 'row-9', group: 'other' }), /no sidebar row for session row-9/);
   assert.equal(page.toggles, 0);
 });
+
+test('the tab records a request the host\'s network change dropped, and leaves other failures out', () => {
+  const tab = new Tab('open', { evaluate: async () => null });
+  const request = (requestId, url) => ({
+    method: 'Network.requestWillBeSent',
+    params: { requestId, request: { url } },
+  });
+  const failure = (requestId, errorText) => ({ method: 'Network.loadingFailed', params: { requestId, errorText } });
+  tab.handle(request('doc', 'https://front.test/?session=s'));
+  tab.handle(request('poll', 'https://front.test/api/concurrency/now'));
+  tab.handle(failure('doc', 'net::ERR_NETWORK_CHANGED'));
+  tab.handle(failure('poll', 'net::ERR_CONNECTION_RESET'));
+  assert.equal(tab.requests.get('doc').failed, 'net::ERR_NETWORK_CHANGED');
+  assert.equal(tab.requests.get('poll').failed, 'net::ERR_CONNECTION_RESET');
+  assert.equal(tab.networkChanged.length, 1, 'only the network-change error names the host\'s doing');
+  assert.equal(tab.networkChanged[0].url, 'https://front.test/?session=s');
+});

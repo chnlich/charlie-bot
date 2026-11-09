@@ -277,6 +277,22 @@ times faster than the modeled link (a 340 KB document at 2.5 s). The other devic
 `stale_asset` load), so it gives no rate. The reference cell's tail median, measured at rate 1 on the same kind of load
 (A, cache-warm, the link), gives the rate: `max(1, live tail / reference tail)`. The run prints both inputs.
 
+The rate models the live device's CPU tail against the bench's reference tail on the same kind of load. Today the
+document size difference is part of it: the live document is about 340 KB against the bench mock home's 151,545 B, so
+the live tail carries more parsing than the reference tail does, and the ratio absorbs the difference. Both sides of
+one `--side both` run at one rate: the before side's reference cell derives it, and the after side runs its cells at
+that rate, so the sides' numbers compare at one CPU speed. Both JSONs record it as `open.cpu.rate`; the after side
+also records `open.cpu.derivedRate`, the rate its own reference tail would have given, so the host's drift between
+the sides stays readable.
+
+**Host interference.** A start or stop of a Docker container on the host adds or removes a veth interface, and Chrome
+treats the machine's network as changed: it drops every connection and fails the requests in flight with
+`net::ERR_NETWORK_CHANGED`, a document cut mid-body included (the b401 runs' netlogs, 2026-11-08). A repetition whose
+tab records that error is host interference, not the page's result: the cell reruns it, at most
+`OPEN.interferenceReruns` times, and a repetition that still meets the error at the bound fails the run. Each rerun
+is recorded in the repetition's `interferenceReruns` with its cause, so no interfered repetition enters a median.
+Every other load failure stays the repetition's record, as before.
+
 **Measured per repetition.** Times are ms from the page's time origin (navigation start): `newest_message_ms` is when the
 first screen's last message is in the chat, named by its `data-message-id` — the page's own `newest_message_ms`
 definition (`web/features/diag/templates/diag/client-events.js`); a text marker goes stale, because the scenarios before
@@ -286,8 +302,9 @@ that moment, and `bytes_after_load` the bytes in the 30 s after the load event; 
 25 ms. `dcl_ms`, `response_end_ms` and `tail_ms` come from the page's Navigation Timing, and `mark` is whether the
 not-current mark was in the document at any sample. Each repetition also names what the tab and the page saw:
 `sockets` (the WebSocket opens), `frames` and `frame_types` (the socket frames by type), `requests` (the requests),
-`ws_state` (the client's own socket state), and the last console lines and page errors, so a missing time can be read
-against what the page reported.
+`ws_state` (the client's own socket state), the last console lines and page errors, the requests the host's network
+change dropped (`network_changed`, empty on a clean repetition), and the interference reruns, so a missing time can be
+read against what the page reported.
 
 **The mark's DOM contract (task 3 implements it).** A page marks a stored copy as not current with the attribute
 `data-freshness="not-current"` on one element of its document. The bench watches for that element and reports the
@@ -342,7 +359,8 @@ them when a change touches this directory. To reproduce them through the remote 
 ```sh
 dev/remote-run/run.sh node --test dev/poor-network/proxy.integration.test.mjs dev/poor-network/report.test.mjs \
   dev/poor-network/front.integration.test.mjs dev/poor-network/chrome.test.mjs \
-  dev/poor-network/scenarios.test.mjs dev/poor-network/tabs.test.mjs dev/poor-network/lock.test.mjs
+  dev/poor-network/scenarios.test.mjs dev/poor-network/tabs.test.mjs dev/poor-network/open.test.mjs \
+  dev/poor-network/lock.test.mjs
 ```
 
 They check the relay's tunnel transfer time at the link, its stop on SIGTERM, and its refusal of a target without a
@@ -357,6 +375,8 @@ counting against synthetic poll records of both answer shapes: the baseline's wh
 `{token, rows, gone}`.
 The tab tests check the switch's row handling against a stub sidebar that keeps rows back: a row absent from the
 document or hidden in it is clicked only after its group's Show all paints it, and a row that no toggle reaches fails
-the step.
+the step. The open tests check the CPU rate's sharing (a shared rate stands, beside the one the side's own reference
+derives) and the host interference (a dropped request or a failed navigation names the interference; any other load
+failure stays the repetition's own record; a repetition the host spoiled is rerun, bounded, and its reruns recorded).
 The lock tests check that one concurrent side attempt holds the bench lock and the next waits for it, and that the
 bench code names the lock path only in `lock.sh`.

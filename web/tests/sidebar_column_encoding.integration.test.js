@@ -13,6 +13,9 @@ const test = require('node:test');
 
 const {buildSidebarIndicatorContext, makeSessionMeta} = require('./session_context_stub');
 
+// A network answer: no stored-copy header (view-requests.js isStoredResponse reads it).
+const NO_STORED_COPY = {get: () => null};
+
 const UUID = 'e870f19c-96c6-40e7-8da7-71f02b2622e3';
 const UUID_CELL = Buffer.from(UUID.replace(/-/g, ''), 'hex').toString('base64url');
 
@@ -95,7 +98,7 @@ test('the Workspace fetch asks for the compact listing and paints its rows', asy
   context.fetch = async (url) => {
     urls.push(url);
     return {
-      ok: true,
+      ok: true, headers: NO_STORED_COPY,
       json: async () => ({
         $encoded: {id: 'uuid-b64', updated_at: 'delta'},
         backend: ['mock-backend'],
@@ -117,7 +120,7 @@ test('the Workspace fetch asks for the compact listing and paints its rows', asy
 
 test('a filter that answers with a row array paints the same list', async () => {
   const {context, nav} = buildSidebarIndicatorContext(['x']);
-  context.fetch = async () => ({ok: true, json: async () => [makeSessionMeta(UUID)]});
+  context.fetch = async () => ({ok: true, headers: NO_STORED_COPY, json: async () => [makeSessionMeta(UUID)]});
 
   context.Sidebar.switchSidebarFilter('all');
   await flush();

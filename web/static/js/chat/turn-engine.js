@@ -1643,6 +1643,9 @@
 
     // ---- ingest: live stream --------------------------------------------------
     appendMessage(msg, forceScroll) {
+      // A replayed frame of a message the engine already holds (the copy's first screen, then the socket's catch-up)
+      // is dropped, so the message renders once.
+      if (msg.id != null && msg.id !== '' && this.entries.some((entry) => entry.msg.id === msg.id)) return;
       if (msg.id == null || msg.id === '') {
         msg = Object.assign({}, msg, {
           id: 'client:' + String(this.sessionId) + ':' + (++this.liveMessageSequence),

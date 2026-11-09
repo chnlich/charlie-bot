@@ -430,11 +430,9 @@ function refreshTreeIndicators() {
   });
 }
 
-// "Read" means rendered: the session's server-side unread flag clears only
-// through this POST, which the render paths fire after content painted
-// (app.js's initial render, switchSession's winning generation). A bare data
-// fetch never clears it. Fire-and-forget: a lost POST leaves the dot up until
-// the next render reposts, so no retry or state mutation lives here.
+// The session's server-side unread flag clears only through this POST, which the open's catch-up fires once the page
+// is current (sidebar/last-state.js finishCatchUp). A bare data fetch never clears it. Fire-and-forget: a lost POST
+// leaves the dot up until the next open, so no retry or state mutation lives here.
 function markSessionRead(sessionId) {
   fetch('/api/sessions/' + sessionId + '/read', {method: 'POST'}).catch((err) => {
     console.error('markSessionRead failed:', err);

@@ -140,9 +140,11 @@
     socketEpisode.reconnect_count = event.detail.attempts;
   });
 
+  // The page is current once its catch-up ends and any stored copy's mark has cleared (sidebar/last-state.js).
+  document.addEventListener('charliebot:page-current', () => markCatchup());
+
   document.addEventListener('charliebot:client-socket-catchup', (event) => {
     const detail = event.detail;
-    markCatchup();
     postClientEvent('socket', {
       disconnect_at: null,
       cause: null,

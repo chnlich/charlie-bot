@@ -45,8 +45,8 @@ step has no `metrics` fails the turn and names the export path.
 
 The usage panel reads Devin's daily and weekly plan quota from `GetUserStatus`. The quota poll also reads the CLI's
 model catalog; its `Free` marker excludes those models from a plan member reading without keeping a model-name list in
-this crate. Member selection reads only the state those panel reads last stored. Each panel emit reads Devin member
-cooling from the shared backend-availability record, so a failed or not-yet-successful quota fetch does not hide it.
+this crate. Member selection reads only the state those panel reads last stored. The panel carries the plan's windows
+only; a member's cooling lives in the shared backend-availability record that the pool reads for selection.
 
 ## Where the field names live
 

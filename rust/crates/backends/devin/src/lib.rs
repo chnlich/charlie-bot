@@ -10,9 +10,7 @@ mod usage_quota;
 
 use std::sync::Arc;
 
-use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::cli_base::CliHost;
-use charliebot_core::home;
 use charliebot_registry::backend::{BackendTraits, BackendTypeRegistration, ResumeStyle};
 use charliebot_registry::usage::UsageSource;
 use charliebot_registry::{Registry, RegistryError, registration_step};
@@ -30,23 +28,11 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
 
 /// [`register`] over an explicit host.
 pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), RegistryError> {
-  let profile_home = registration_step(PACKAGE, home::charliebot_home_dir().map_err(anyhow::Error::new))?;
-  let availability = registration_step(PACKAGE, BackendAvailability::load(&profile_home))?;
-  register_over(registry, host, availability)
-}
-
-/// The registration over an explicit host and availability record (`register_with_host` reads both from the profile).
-fn register_over(
-  registry: &mut Registry,
-  host: CliHost,
-  availability: BackendAvailability,
-) -> Result<(), RegistryError> {
   let state = Arc::new(usage_quota::DevinQuotaState::default());
   let account = Arc::new(usage_quota::DevinQuotaAccount::new(
     Arc::clone(&state),
     host.home.join(".local/share/devin/credentials.toml"),
     host.clone(),
-    Arc::new(availability),
   ));
   registry.backend_type(BackendTypeRegistration {
     type_name: "devin",
@@ -77,16 +63,14 @@ fn register_over(
 #[cfg(test)]
 mod tests {
   use std::fs;
-  use std::path::{Path, PathBuf};
+  use std::path::PathBuf;
 
   use super::*;
 
-  /// The Devin registration over a synthetic host and profile home. Neither path holds a file, so the availability
-  /// record is empty.
+  /// The Devin registration over a synthetic host. The host path holds no credentials file.
   fn register_synthetic(registry: &mut Registry) -> Result<(), RegistryError> {
     let host = CliHost { path: String::new(), home: PathBuf::from("/synthetic/home") };
-    let availability = BackendAvailability::load(Path::new("/synthetic/charliebot")).unwrap();
-    register_over(registry, host, availability)
+    register_with_host(registry, host)
   }
 
   #[test]

@@ -7,13 +7,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
-use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_core::config::{BackendOption, CharlieBotConfig, PoolBilling};
 use charliebot_registry::backend::{MemberReading, MemberReadingFn};
 use charliebot_registry::usage::{
-  DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PLAN_TYPE, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_STATUS_ROWS,
-  PANEL_UTILIZATION, PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UsageOps, UsageSourceImpl,
-  WEEKLY_WINDOW_MINUTES, mark_expired_windows, member_reading_from_windows,
+  DEFAULT_ACCOUNT_LABEL, PANEL_FETCHED_AT, PANEL_PLAN_TYPE, PANEL_PROVIDER, PANEL_RESETS_AT, PANEL_UTILIZATION,
+  PANEL_WINDOW_MINUTES, PANEL_WINDOWS, QuotaAccount, UsageOps, UsageSourceImpl, WEEKLY_WINDOW_MINUTES,
+  mark_expired_windows, member_reading_from_windows,
 };
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
@@ -40,13 +39,6 @@ struct QuotaState {
   last_error: String,
   reading: Option<Map<String, Value>>,
   free_models: HashSet<String>,
-  members: Vec<MemberStatus>,
-}
-
-#[derive(Clone)]
-struct MemberStatus {
-  id: String,
-  label: String,
 }
 
 /// The Devin CLI's plan account.
@@ -54,7 +46,6 @@ pub struct DevinQuotaAccount {
   state: Arc<DevinQuotaState>,
   credentials_path: PathBuf,
   host: charliebot_agents::cli_base::CliHost,
-  availability: Arc<BackendAvailability>,
 }
 
 impl DevinQuotaAccount {
@@ -62,20 +53,8 @@ impl DevinQuotaAccount {
     state: Arc<DevinQuotaState>,
     credentials_path: PathBuf,
     host: charliebot_agents::cli_base::CliHost,
-    availability: Arc<BackendAvailability>,
   ) -> Self {
-    Self { state, credentials_path, host, availability }
-  }
-
-  fn set_members(&self, cfg: &CharlieBotConfig) {
-    let members = cfg
-      .backends
-      .options
-      .iter()
-      .filter(|option| option.backend_type == "devin" && option.billing == Some(PoolBilling::Subscription))
-      .map(|option| MemberStatus { id: option.id.clone(), label: option.label.clone() })
-      .collect();
-    self.state.current.lock().expect("the Devin quota state is not poisoned").members = members;
+    Self { state, credentials_path, host }
   }
 
   async fn fetch_round(&self) -> anyhow::Result<Option<Map<String, Value>>> {
@@ -144,29 +123,9 @@ impl DevinQuotaAccount {
     Ok((entry, free_models))
   }
 
-  fn status_rows(&self, now: UtcDateTime) -> anyhow::Result<Vec<Value>> {
-    let members = self.state.current.lock().expect("the Devin quota state is not poisoned").members.clone();
-    members
-      .into_iter()
-      .map(|member| {
-        let active = self.availability.try_row(&member.id)?.filter(|row| row.out_until > now);
-        Ok(match active {
-          Some(row) => json!({
-            "name": member.label,
-            "state": "cooling",
-            "resets_at": row.out_until.to_str(),
-          }),
-          None => json!({"name": member.label, "state": "available"}),
-        })
-      })
-      .collect()
-  }
-
   fn mark_expired(&self, entry: &Map<String, Value>, now: UtcDateTime) -> anyhow::Result<Map<String, Value>> {
     let sampled = entry.get(PANEL_FETCHED_AT).and_then(Value::as_str).map(UtcDateTime::parse).transpose()?;
-    let mut marked = mark_expired_windows(entry, sampled, now);
-    marked.insert(PANEL_STATUS_ROWS.to_string(), Value::Array(self.status_rows(now)?));
-    Ok(marked)
+    Ok(mark_expired_windows(entry, sampled, now))
   }
 }
 
@@ -216,8 +175,7 @@ impl UsageSourceImpl for DevinUsageSource {
     UsageOps { quota_accounts: true, ..UsageOps::default() }
   }
 
-  fn quota_accounts(&self, cfg: &CharlieBotConfig) -> anyhow::Result<Vec<Arc<dyn QuotaAccount>>> {
-    self.account.set_members(cfg);
+  fn quota_accounts(&self, _cfg: &CharlieBotConfig) -> anyhow::Result<Vec<Arc<dyn QuotaAccount>>> {
     Ok(vec![Arc::clone(&self.account) as Arc<dyn QuotaAccount>])
   }
 }
@@ -345,7 +303,7 @@ fn model_key(model: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-  use charliebot_registry::usage::PANEL_WINDOW_NAME;
+  use charliebot_registry::usage::{PANEL_STATUS_ROWS, PANEL_WINDOW_NAME};
   use serde_json::json;
 
   use super::*;
@@ -391,18 +349,11 @@ mod tests {
   }
 
   #[test]
-  fn the_panel_status_reads_the_cooling_record_for_success_error_and_pending_entries() {
+  fn the_panel_entry_carries_no_member_rows_in_any_state() {
     let root = tempfile::tempdir().unwrap();
-    let availability = Arc::new(BackendAvailability::load(root.path()).unwrap());
-    let reset = UtcDateTime::parse("2026-11-08T00:01:00Z").unwrap();
-    availability
-      .record("member", Some(reset), charliebot_agents::backend_availability::REASON_QUOTA_ERROR, "quota rejected")
-      .unwrap();
     let state = Arc::new(DevinQuotaState::default());
-    state.current.lock().unwrap().members =
-      vec![MemberStatus { id: "member".to_string(), label: "SWE-2 Max".to_string() }];
     let host = charliebot_agents::cli_base::CliHost { path: String::new(), home: root.path().to_path_buf() };
-    let account = DevinQuotaAccount::new(Arc::clone(&state), root.path().join("credentials"), host, availability);
+    let account = DevinQuotaAccount::new(state, root.path().join("credentials"), host);
     let sampled = UtcDateTime::parse("2026-11-07T08:19:00Z").unwrap();
     let mut success = Map::new();
     success.insert(PANEL_FETCHED_AT.to_string(), Value::String(sampled.to_str()));
@@ -412,10 +363,40 @@ mod tests {
 
     for entry in [&success, &error, &pending] {
       let marked = account.mark_expired(entry, sampled).unwrap();
-      let row = &marked[PANEL_STATUS_ROWS][0];
-      assert_eq!(row["name"], "SWE-2 Max");
-      assert_eq!(row["state"], "cooling");
-      assert_eq!(row["resets_at"], "2026-11-08T00:01:00Z");
+      assert!(!marked.contains_key(PANEL_STATUS_ROWS), "{marked:?}");
     }
+  }
+
+  #[test]
+  fn an_exhausted_member_reads_as_exhausted_until_its_window_resets() {
+    let state = DevinQuotaState::default();
+    let sampled = "2026-11-07T08:19:00Z";
+    state.current.lock().unwrap().reading = Some(Map::from_iter([
+      (PANEL_FETCHED_AT.to_string(), json!(sampled)),
+      (
+        PANEL_WINDOWS.to_string(),
+        json!([{
+          PANEL_WINDOW_MINUTES: 1440,
+          PANEL_UTILIZATION: 100.0,
+          PANEL_RESETS_AT: "2026-11-08T00:01:00Z",
+        }]),
+      ),
+    ]));
+    let option = BackendOption {
+      id: "dv".to_string(),
+      label: "Devin".to_string(),
+      model: "devin-model".to_string(),
+      prompt_overlay: None,
+      billing: Some(PoolBilling::Subscription),
+      backend_type: "devin".to_string(),
+      type_fields: serde_yaml::Mapping::new(),
+      visible: true,
+    };
+
+    let reading = read_member(&state, &option, UtcDateTime::parse(sampled).unwrap())
+      .unwrap()
+      .expect("a successful Devin reading is a member reading");
+
+    assert!(reading.exhausted);
   }
 }

@@ -7,6 +7,7 @@ use std::ffi::OsString;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::home;
+use charliebot_core::home_init;
 use charliebot_core::repo_root;
 use clap::{CommandFactory, FromArgMatches, Parser};
 
@@ -74,16 +75,16 @@ fn provision_home(
   ];
   let existed_before: Vec<bool> = home_items.iter().map(|(_, _, path)| path.exists()).collect();
   if !dry_run {
-    charliebot_core::home_init::init_charliebot_home(cfg, repo)
+    home_init::init_charliebot_home(cfg, repo)
       .map_err(|error| format!("{}: {error}", cfg.charliebot_home.display()))?;
   }
   for ((_, label, path), existed) in home_items.iter().zip(existed_before) {
     let status = if dry_run {
-      if path.exists() { "exists" } else { "would-create" }
+      if path.exists() { home_init::SEED_EXISTS } else { home_init::SEED_WOULD_CREATE }
     } else if existed {
-      "exists"
+      home_init::SEED_EXISTS
     } else {
-      "created"
+      home_init::SEED_CREATED
     };
     println!("  home {label}: {status}");
   }

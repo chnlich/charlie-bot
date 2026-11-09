@@ -13,6 +13,13 @@ use crate::str_methods::universal_newlines;
 /// The default `config.yaml` for a checkout without the template.
 const DEFAULT_CONFIG_YAML: &str = "paths:\n  workspace_dirs:\n  - ~/workspace\n  worktree_dir: ~/worktrees\n";
 
+/// The status a seed reports for an item that already exists.
+pub const SEED_EXISTS: &str = "exists";
+/// The status a dry-run seed reports for an item it would create.
+pub const SEED_WOULD_CREATE: &str = "would-create";
+/// The status a seed reports for an item this run created.
+pub const SEED_CREATED: &str = "created";
+
 /// Create the home, `sessions/` and `config.d/`; seed `config.yaml` and `credentials.yaml` (mode 0600)
 /// from the checkout's `configs/` templates when missing.
 pub fn init_charliebot_home(cfg: &CharlieBotConfig, repo_root: &Path) -> io::Result<()> {

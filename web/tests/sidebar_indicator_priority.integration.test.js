@@ -13,7 +13,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { buildSidebarIndicatorContext, makeSessionMeta } = require('./session_context_stub');
+const { buildSidebarIndicatorContext, makeSessionMeta, paintListReply } = require('./session_context_stub');
 const { createFakeWebSocketClass } = require('./fake_websocket');
 const { loadWebsocketModules } = require('./websocket_context_stub');
 
@@ -57,7 +57,7 @@ test('an expanded parent keeps the gear: expansion never changes the icon', () =
 
 test('icons are identical before and after expand and collapse', () => {
   const {context, shown} = buildSidebarIndicatorContext(['p', 'c', 'g']);
-  context.renderSessionList([
+  paintListReply(context, [
     row('p', null),
     row('c', 'p', {profile: 'manager', has_unread: true}),
     row('g', 'c', {has_running_tasks: true}),
@@ -80,7 +80,7 @@ test('icons are identical before and after expand and collapse', () => {
 
 test('a parent’s own dot shows beside the stand-in gear and outranks the subtree mark', () => {
   const {context, shown} = buildSidebarIndicatorContext(['p', 'a', 'b']);
-  context.renderSessionList([
+  paintListReply(context, [
     row('p', null, {has_unread: true}),
     row('a', 'p', {has_running_tasks: true}),
     row('b', 'p', {profile: 'manager', has_unread: true}),
@@ -98,7 +98,7 @@ test('a parent’s own dot shows beside the stand-in gear and outranks the subtr
 
 test('an unread child manager gives the parent the subtree mark, not the dot, collapsed and expanded', () => {
   const {context, nav, shown} = buildSidebarIndicatorContext(['p', 'c']);
-  context.renderSessionList([row('p', null), row('c', 'p', {profile: 'manager', has_unread: true})], 'all');
+  paintListReply(context, [row('p', null), row('c', 'p', {profile: 'manager', has_unread: true})], 'all');
 
   assert.deepEqual(shown('p'), {...IDLE_ICONS, subtreeMark: true});
   // The child's own dot renders at paint; only parent rows get a post-paint pass.
@@ -115,7 +115,7 @@ test('an unread child manager gives the parent the subtree mark, not the dot, co
 
 test('a running child and an unread sibling light the gear and the subtree mark together', () => {
   const {context, shown} = buildSidebarIndicatorContext(['p', 'a', 'b']);
-  context.renderSessionList([
+  paintListReply(context, [
     row('p', null),
     row('a', 'p', {has_running_tasks: true}),
     row('b', 'p', {profile: 'manager', has_unread: true}),
@@ -132,7 +132,7 @@ test('a running child and an unread sibling light the gear and the subtree mark 
 
 test('the row’s own dot outranks the subtree mark', () => {
   const {context, shown} = buildSidebarIndicatorContext(['p', 'c']);
-  context.renderSessionList([
+  paintListReply(context, [
     row('p', null, {has_unread: true}), row('c', 'p', {profile: 'manager', has_unread: true}),
   ], 'all');
   assert.deepEqual(shown('p'), {...IDLE_ICONS, dot: true},
@@ -147,7 +147,7 @@ test('the row’s own dot outranks the subtree mark', () => {
 
 test('opening an unread child clears every ancestor’s mark in the same paint', () => {
   const {context, shown} = buildSidebarIndicatorContext(['root', 'mid', 'leaf']);
-  context.renderSessionList([
+  paintListReply(context, [
     row('root', null),
     row('mid', 'root', {profile: 'manager', has_unread: true}),
     row('leaf', 'mid'),
@@ -506,7 +506,7 @@ test('a childless legacy row keeps main’s behavior: its own state and unread f
   const {context, nav, shown} = buildSidebarIndicatorContext(['solo']);
   // profile null: a legacy session. Its own running state (running worker
   // threads) stays the legacy delegated-work gear, byte for byte.
-  context.renderSessionList([row('solo', null, {profile: null, has_unread: true})], 'all');
+  paintListReply(context, [row('solo', null, {profile: null, has_unread: true})], 'all');
   // The paint itself renders the dot visible; no post-paint pass touches a childless row.
   const dotClass = nav.innerHTML.match(/<span id="unread-solo"[^>]*class="([^"]*)"/)[1];
   assert.equal(/\bhidden\b/.test(dotClass), false);
@@ -525,7 +525,7 @@ test('a task-tree row’s own running Run paints the spinner, not the gear', () 
   // profile manager: a task-tree node. Its own live Run (has_running_tasks
   // from the task-tree derivation) is its own work: the spinner, whatever the
   // row's profile — the gear is a stand-in's icon, never an own one.
-  context.renderSessionList([row('root', null, {has_running_tasks: true, has_unread: true})], 'all');
+  paintListReply(context, [row('root', null, {has_running_tasks: true, has_unread: true})], 'all');
   const spinnerClass = nav.innerHTML.match(/<svg id="spinner-root"[^>]*class="([^"]*)"/)[1];
   const gearClass = nav.innerHTML.match(/<svg id="worker-indicator-root"[^>]*class="([^"]*)"/)[1];
   const dotClass = nav.innerHTML.match(/<span id="unread-root"[^>]*class="([^"]*)"/)[1];
@@ -573,7 +573,7 @@ test('no state paints an alert-indicator element; a failed child reads idle', ()
   // A failed Run's work verdict is idle, since the derivation emits only
   // running and waiting. No render path emits the retired alert element in any
   // state: the paint, the poll seam, and the stand-in all agree.
-  context.renderSessionList([row('w', null, {work_state: 'idle', has_unread: true})], 'all');
+  paintListReply(context, [row('w', null, {work_state: 'idle', has_unread: true})], 'all');
   assert.equal(/alert-indicator-/.test(nav.innerHTML), false,
       'no render path emits an alert-indicator element');
   const dotClass = nav.innerHTML.match(/<span id="unread-w"[^>]*class="([^"]*)"/)[1];
@@ -596,7 +596,7 @@ test('no state paints an alert-indicator element; a failed child reads idle', ()
 
 test('a task-tree row’s own waiting (queued) paints the muted clock beside its unread dot', () => {
   const {context, nav, shown} = buildSidebarIndicatorContext(['w']);
-  context.renderSessionList([row('w', null, {work_state: 'waiting', has_unread: true})], 'all');
+  paintListReply(context, [row('w', null, {work_state: 'waiting', has_unread: true})], 'all');
   const clockClass = nav.innerHTML.match(/<svg id="waiting-indicator-w"[^>]*class="([^"]*)"/)[1];
   assert.equal(/\bhidden\b/.test(clockClass), false, 'own waiting paints the clock at paint');
   const dotClass = nav.innerHTML.match(/<span id="unread-w"[^>]*class="([^"]*)"/)[1];

@@ -95,6 +95,7 @@ function switchSidebarFilter(filter) {
   // Fetch sessions for this filter
   const registeredFilter = getSidebarFilter(filter);
   if (!registeredFilter) throw new Error('Unknown sidebar filter: ' + filter);
+  const requestSeq = factSeqAtRequest();
   if (filter === 'all') {
     // The Workspace badges and the session list load in parallel, so badges
     // and list paint together in the one render call.
@@ -105,7 +106,8 @@ function switchSidebarFilter(filter) {
       }),
       loadWorkspaceBadges(),
     ])
-      .then(([payload, workspaceBadges]) => renderSessionList(listingRows(payload), filter, {workspaceBadges}))
+      .then(([payload, workspaceBadges]) => renderSessionList(listingRows(payload, requestSeq), filter,
+          {workspaceBadges}))
       .catch(err => console.error('Filter fetch failed:', err));
     return;
   }
@@ -114,14 +116,17 @@ function switchSidebarFilter(filter) {
       if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
       return res.json();
     })
-    .then(payload => renderSessionList(listingRows(payload), filter))
+    .then(payload => renderSessionList(listingRows(payload, requestSeq), filter))
     .catch(err => console.error('Filter fetch failed:', err));
 }
 
 // A listing's rows: the Workspace fetch answers with the page's column form, which expandSessionColumns restores,
-// and a filter that answers with a row array needs no expansion.
-function listingRows(payload) {
-  return Array.isArray(payload) ? payload : Sidebar.expandSessionColumns(payload);
+// and a filter that answers with a row array needs no expansion. The rows' unread facts land through the reply gate
+// at the fetch's requestSeq, before the list paints from the facts.
+function listingRows(payload, requestSeq) {
+  const rows = Array.isArray(payload) ? payload : Sidebar.expandSessionColumns(payload);
+  applyUnreadReply(rows, requestSeq);
+  return rows;
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +164,7 @@ function drainRowRefresh() {
   const batch = Array.from(pendingRowIds).slice(0, ROW_REFRESH_BATCH);
   batch.forEach(id => pendingRowIds.delete(id));
   rowRefreshInFlight = true;
+  const requestSeq = factSeqAtRequest();
   fetch(rowRefreshUrl(filter, batch))
     .then(res => {
       if (!res.ok) throw new Error(`Row refresh failed: ${res.status}`);
@@ -167,7 +173,7 @@ function drainRowRefresh() {
     .then(payload => {
       // A view the reader left while the fetch was in flight takes no rows: its own load paints it.
       if (sidebarRowsRefreshable() && currentFilter === filter) {
-        mergeRowsIntoRenderedList(Sidebar.expandSessionColumns(payload.sessions), payload.gone);
+        mergeRowsIntoRenderedList(listingRows(payload.sessions, requestSeq), payload.gone);
       }
     })
     .catch(err => console.error('Row refresh failed:', err))
@@ -210,8 +216,8 @@ function pageScreen() {
 
 function restoreSidebarFromUrl() {
   renderSidebarFilterPills();
-  const initialSessions = Sidebar.expandSessionColumns(INITIAL_SESSIONS);
-  Sidebar.resyncSessionUnread(initialSessions);
+  // The server rendered the page's rows before this page applied any fact.
+  const initialSessions = listingRows(INITIAL_SESSIONS, 0);
   const params = new URLSearchParams(location.search);
   const urlFilter = params.get('filter');
   const urlQuery = params.get('q');
@@ -267,13 +273,14 @@ function handleSidebarSearch(query) {
       searchPending = true;
     }
     searchDebounceTimer = setTimeout(() => {
+      const requestSeq = factSeqAtRequest();
       fetch('/api/sessions/search?q=' + encodeURIComponent(text))
         .then(res => res.json())
         .then(sessions => {
           if (generation !== searchGeneration) return;
           shownSearchQuery = text;
           searchPending = false;
-          renderSessionList(sessions, 'search');
+          renderSessionList(listingRows(sessions, requestSeq), 'search');
         })
         .catch(err => {
           if (generation !== searchGeneration) return;

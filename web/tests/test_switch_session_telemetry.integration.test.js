@@ -112,7 +112,7 @@ function buildSwitchHarness() {
       if (knobs.failTelemetry) throw new Error('telemetry down');
       return {ok: true, status: 200, json: async () => ({ok: true})};
     }
-    const readMatch = url.match(/\/api\/sessions\/([^/]+)\/read$/);
+    const readMatch = url.match(/\/api\/sessions\/([^/]+)\/read(?:\?page_dot=(?:true|false))?$/);
     if (readMatch && opts.method === 'POST') {
       readPosts.push(readMatch[1]);
       return {ok: true, status: 200, json: async () => ({})};

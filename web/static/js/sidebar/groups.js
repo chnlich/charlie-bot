@@ -101,6 +101,7 @@ function loadFullListing(key) {
     button.textContent = 'Loading…';
     button.disabled = true;
   }
+  const requestSeq = factSeqAtRequest();
   fetch('/api/sessions/?compact=1')
     .then(res => {
       if (!res.ok) throw new Error(`Listing fetch failed: ${res.status}`);
@@ -109,7 +110,9 @@ function loadFullListing(key) {
     .then(payload => {
       // A view the reader left while the fetch was in flight takes no rows: its own load paints it.
       if (currentFilter !== 'all' || searchListPainted) return;
-      renderSessionList(Sidebar.expandSessionColumns(payload), 'all',
+      const sessions = Sidebar.expandSessionColumns(payload);
+      applyUnreadReply(sessions, requestSeq);
+      renderSessionList(sessions, 'all',
         {workspaceBadges: lastGroupedRenderArgs ? lastGroupedRenderArgs.workspaceBadges : ''});
     })
     .catch(err => {
@@ -332,12 +335,6 @@ function renderSearchNote(text) {
   if (nav) nav.innerHTML = renderEmptyNote(text);
 }
 
-// Every sidebar render path rebuilds rows in place from a session list, so the
-// unread map must be refolded from that same list or unread badges go stale.
-function resyncSessionUnread(sessions) {
-  sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
-}
-
 let lastGroupedRenderArgs = null;
 
 // The Workspace badges' async repaint: the first paint never waits for the
@@ -477,7 +474,6 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     </div>`;
   }
   nav.innerHTML = (options.workspaceBadges || '') + html;
-  resyncSessionUnread(sessions);
   // Parent rows take their collapsed-subtree stand-ins now that the rows exist.
   if (typeof Sidebar.refreshTreeIndicators === 'function') Sidebar.refreshTreeIndicators();
   updateRelativeTimes();
@@ -913,7 +909,6 @@ function renderSessionList(sessions, filter, options = {}) {
     ? renderEmptyNote('Showing the newest 200 matches — narrow the search.')
     : '';
   nav.innerHTML = sessions.map(s => renderSessionItem(s, filter)).join('') + truncationHint;
-  resyncSessionUnread(sessions);
   updateRelativeTimes();
 }
 
@@ -994,7 +989,6 @@ const SIDEBAR_ONLY = {
   filterPillClass,
   starButtonOnclick,
   removeSessionFromRenderedList,
-  resyncSessionUnread,
   buildSessionTree,
   renderSessionTree,
   isTreeNodeExpanded,

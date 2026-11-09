@@ -45,7 +45,6 @@ function loadGroups() {
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
     SESSION_ID: 'other-session',
     currentFilter: 'all',
-    sessionUnread: {},
     updateRelativeTimes: () => {},
     relativeTime: () => '',
     formatBubbleTime: () => '',

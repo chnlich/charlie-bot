@@ -89,14 +89,12 @@ registerWsConnectHandler(() => {
 registerWsMessageHandler('web_status_subtree', () => refreshSessionStatusPanel(), {advancesCursor: false});
 
 // Sidebar unread indicator. Broadcasts are socket-ordered and always apply
-// (they stamp the newest fact, so any in-flight poll or tree-page reply
-// captured earlier is refused by the shared gate). The unread marks read the
-// facts only, for both row kinds: the dot shows beside any activity icon,
-// and the flag survives every paint.
+// (they stamp the newest fact, so any in-flight poll or row-list reply
+// captured earlier is refused by the shared gate). A reply in the displayed
+// session is read through recordUnreadFact. The row and its ancestors repaint
+// from the shared facts.
 registerWsMessageHandler('unread_changed', (ev) => {
   recordUnreadFact(ev.session_id, ev.has_unread);
-  if (ev.session_id === SESSION_ID) return;
-  // The row and its collapsed ancestors repaint from the shared facts.
   refreshSessionIndicator(ev.session_id);
 }, {advancesCursor: false, sidebar: true});
 

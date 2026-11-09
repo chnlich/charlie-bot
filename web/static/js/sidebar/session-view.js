@@ -749,14 +749,12 @@ async function switchSession(sessionId) {
     throw err;
   }
 
-  // Mark switched-to session as read (WS was closed so broadcast is lost);
-  // stamped through the shared seam so any in-flight older reply is refused.
-  // The server-side flag clears only now, on the winning generation's landed
-  // render — superseded generations and render errors returned above.
-  recordUnreadFact(sessionId, false);
-  // The same paint clears the opened row's dot and every ancestor's subtree mark.
-  refreshSessionIndicator(sessionId);
-  markSessionRead(sessionId);
+  // The switched-to session is read now, on the winning generation's landed
+  // render: superseded generations and render errors returned above. The local
+  // clear is stamped, so a list or status reply captured before it is refused.
+  // The read reports the dot the row showed, which the server checks against
+  // its own flag.
+  markSessionRead(sessionId, ownUnread(sessionId));
 
   // The open socket takes the target's subscription from the bootstrap's event position: the
   // server answers `subscribed`, replays from the cursor and closes with `catchup_complete`.

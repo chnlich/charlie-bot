@@ -12,7 +12,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { createElement } = require('./dom_element_stub');
-const { buildSidebarIndicatorContext: buildCoreSidebarContext, loadCronPackage, makeSessionMeta } =
+const { buildSidebarIndicatorContext: buildCoreSidebarContext, loadCronPackage, makeSessionMeta, paintListReply } =
   require('./session_context_stub');
 
 // A bound node's schedule lines, clock badge and schedule menu items come from
@@ -893,7 +893,7 @@ test('a grouped paint records the tree maps, refreshes tree indicators, and keep
 
 test('a collapsed bound row\u2019s gear and subtree mark survive expand and collapse', () => {
   const {context, shown} = buildSidebarIndicatorContext(['cron1', 'cron2', 'leaf1', 'leaf2']);
-  context.renderSessionList([
+  paintListReply(context, [
     boundNode('cron1', 10),
     worker('leaf1', 'cron1', 9, {has_running_tasks: true}),
     boundNode('cron2', 8),

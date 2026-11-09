@@ -29,9 +29,6 @@
     expose(Object.keys(globals));
   }
 
-  // Server-reported unread state per session, so the unread dot can be
-  // restored after the spinner hides.
-  exposeState('sessionUnread', {});
   exposeState('switching', false);
   exposeState('currentFilter', 'all');
   exposeState('statusPollMs', 3000);

@@ -437,7 +437,8 @@ test('restoreSidebarFromUrl renders initial all sessions through grouped rendere
       name: 'Grouped session',
       group: 'Work',
       updated_at: '2026-04-02T04:00:00Z',
-      has_unread: true,
+      // The page renders the open session's row read.
+      has_unread: false,
       has_running_tasks: false,
       has_pending_trigger: true,
       pending_trigger_count: 1,
@@ -1085,7 +1086,7 @@ test('archiveSession removes the row inline and switches to the next rendered se
         },
       };
     }
-    if (url === '/api/sessions/session-b/read') {
+    if (url === '/api/sessions/session-b/read?page_dot=false') {
       assert.equal(opts.method, 'POST');
       return {ok: true, async json() { return {}; }};
     }
@@ -1100,7 +1101,7 @@ test('archiveSession removes the row inline and switches to the next rendered se
   assert.deepEqual(requests.map((req) => req.url), [
     '/api/sessions/session-a/archive',
     '/api/sessions/session-b/bootstrap',
-    '/api/sessions/session-b/read',  // the landed switch marks the new session read post-render
+    '/api/sessions/session-b/read?page_dot=false',  // the landed switch marks the new session read post-render
   ]);
   assert.equal(rowA.removed, true);
   assert.equal(context.location.href, '');

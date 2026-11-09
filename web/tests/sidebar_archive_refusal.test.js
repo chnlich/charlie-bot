@@ -30,6 +30,8 @@ function buildContext({fetchImpl, showToastImpl, archivedForgetSessionImpl = () 
     switchSession: async () => {},
     renderNoActiveSessionView: () => {},
     archivedForgetSession: archivedForgetSessionImpl,
+    // status.js's removal seam: a removed row's unread fact leaves with it.
+    forgetUnreadFact: () => {},
     switchSidebarFilter: () => {},
     document: {
       getElementById: () => null,
@@ -40,7 +42,7 @@ function buildContext({fetchImpl, showToastImpl, archivedForgetSessionImpl = () 
   context.globalThis = context;
   vm.createContext(context);
   // namespace.js first, as on the page: it supplies Sidebar.wire and the
-  // currentFilter/sessionUnread state the actions module reads.
+  // currentFilter state the actions module reads.
   vm.runInContext(readStatic('sidebar/namespace.js'), context, {filename: 'namespace.js'});
   // Of the modules the page loads between namespace and session-actions, the
   // archive path touches one helper: Sidebar.removeSessionFromRenderedList.

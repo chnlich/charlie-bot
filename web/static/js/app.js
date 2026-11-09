@@ -11,11 +11,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // and SPA switches share the same renderer without a duplicate /view fetch.
   if (SESSION_ID && SESSION_BOOTSTRAP) {
     renderSessionView(SESSION_BOOTSTRAP);
-    recordUnreadFact(SESSION_ID, false);
-    // The same paint clears the opened row's dot and every ancestor's subtree mark.
-    refreshSessionIndicator(SESSION_ID);
-    // "Read" means rendered: a render throw above skips this POST.
-    markSessionRead(SESSION_ID);
+    // "Read" means rendered: a render throw above skips the read.
+    markSessionRead(SESSION_ID, null);
   }
 
   // Belt-and-suspenders: helper already formats these; catch anything Jinja still emits.

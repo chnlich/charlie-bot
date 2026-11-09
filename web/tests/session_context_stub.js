@@ -379,6 +379,14 @@ function buildSidebarIndicatorContext(ids) {
   return {context, nav, shown};
 }
 
+// A fetched row list landing on the page: its unread facts apply through the
+// reply gate at the request's sequence, then the list paints from the facts.
+// The page's fetch paths (filters.js listingRows) do the same two steps.
+function paintListReply(context, rows, filter) {
+  context.applyUnreadReply(rows, context.factSeqAtRequest());
+  context.renderSessionList(rows, filter);
+}
+
 // Map keys are the element ids renderUsageFromData looks up in
 // web/static/js/sidebar/session-view.js; an id rename on either side breaks the lookup.
 function buildUsageElements() {
@@ -402,6 +410,7 @@ function buildUsageElements() {
 module.exports = {
   baseSessionContext,
   buildSidebarIndicatorContext,
+  paintListReply,
   createChatSidebarContext,
   standInForUsageJs,
   loadCronPackage,

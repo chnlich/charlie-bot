@@ -174,16 +174,24 @@ function getSessionIndicatorState(status) {
 // ---------------------------------------------------------------------------
 // sessionUnread and ownIndicatorState hold the client's applied facts per
 // session. The facts land through four channels: the unread_changed and
-// running_changed broadcasts, the list paints (the task tree's row fetches
-// included), and the scoped status poll. A reply can carry a snapshot older
-// than a fact this client already applied — a poll issued before the flip, a
-// reply the link delayed past a newer frame. Every applied fact is stamped
-// with a per-session sequence in its domain, the unread mark or the activity
+// running_changed broadcasts, the fetched row lists (the page's own rows, a
+// filter's list, the row refresh, the full listing and the search answer),
+// and the scoped status poll. A reply can carry a snapshot older than a fact
+// this client already applied — a poll issued before the flip, a row fetch
+// answered before the read POST landed. Every applied fact is stamped with a
+// per-session sequence in its domain, the unread mark or the activity
 // indicator. A reply captured before the domain's newest stamp is refused in
 // that domain, so a late reply can neither erase a newer unread fact nor
 // revert a newer indicator state, a running_changed frame included.
-// Broadcasts and paints are ordered by their channels and always apply;
-// applying one stamps it, so any reply captured earlier is refused.
+// Broadcasts are ordered by their channel and always apply; applying one
+// stamps it, so any reply captured earlier is refused.
+//
+// The unread mark has this one owner: every row paints its dot and subtree
+// mark from sessionUnread, and only the functions below write it. A list paint
+// that reuses rows the page already holds (the Workspace badge repaint, the
+// row refresh's merge, the inline delete) reads the facts and applies none, so
+// a held row's has_unread cannot bring back a dot a newer fact cleared.
+const sessionUnread = {};
 let factSeq = 0;
 const factSeqByDomain = {unread: {}, indicator: {}};
 
@@ -195,9 +203,31 @@ function replyIsCurrent(domain, sessionId, requestSeq) {
   return requestSeq >= (factSeqByDomain[domain][sessionId] || 0);
 }
 
+// The open view renders the displayed session's replies live, so its unread
+// fact does not stand: the page reads it once the tab is visible. A switch in
+// flight is leaving the session, so a reply that lands then stays unread on
+// the row the switch leaves behind.
 function recordUnreadFact(sessionId, hasUnread) {
   sessionUnread[sessionId] = !!hasUnread;
   stampFactSeq('unread', sessionId);
+  if (hasUnread && sessionId === SESSION_ID) deferWhileHidden('displayed-session-read', readDisplayedSession);
+}
+
+function readDisplayedSession() {
+  if (SESSION_ID && !switching && ownUnread(SESSION_ID)) markSessionRead(SESSION_ID, null);
+}
+
+// The unread facts of one fetched row list, captured at requestSeq
+// (factSeqAtRequest before the fetch). Call it before the list paints.
+function applyUnreadReply(rows, requestSeq) {
+  rows.forEach(row => {
+    if (replyIsCurrent('unread', row.id, requestSeq)) recordUnreadFact(row.id, row.has_unread);
+  });
+}
+
+// A removed row's fact leaves with it.
+function forgetUnreadFact(sessionId) {
+  delete sessionUnread[sessionId];
 }
 
 function factSeqAtRequest() {
@@ -268,7 +298,7 @@ function renderSessionIndicators(session) {
   return `<svg id="spinner-${session.id}" title="${escapeHtmlAttr(SPINNER_TITLE)}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}"${spinnerPhaseDelay()} fill="none" viewBox="0 0 24 24">${SPINNER_SVG_INNER}</svg>
     <svg id="worker-indicator-${session.id}" title="${escapeHtmlAttr(GEAR_TITLE)}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">${gearSvgContent()}</svg>
     <svg id="waiting-indicator-${session.id}" title="${escapeHtmlAttr(CLOCK_TITLE)}" class="w-3.5 h-3.5 text-slate-500 flex-shrink-0 ${indicatorState === 'waiting' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">${CLOCK_SVG_PATH}</svg>
-    <span id="unread-${session.id}" data-has-unread="${session.has_unread ? 1 : 0}" title="${escapeHtmlAttr(UNREAD_TITLE)}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${session.has_unread ? '' : 'hidden'}"></span>
+    <span id="unread-${session.id}" title="${escapeHtmlAttr(UNREAD_TITLE)}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${ownUnread(session.id) ? '' : 'hidden'}"></span>
     <span id="subtree-unread-${session.id}" title="${escapeHtmlAttr(SUBTREE_UNREAD_TITLE)}" class="w-2 h-2 rounded-full border border-yellow-400 flex-shrink-0 hidden"></span>`;
 }
 
@@ -406,9 +436,8 @@ function paintSessionIndicator(sid) {
 }
 
 // Repaint one row and every ancestor whose gear or subtree mark may have
-// changed. The read paths (app.js's initial render, switchSession's winning
-// generation) call this right after recordUnreadFact(id, false), so the opened
-// row's dot and every ancestor's subtree mark clear in one paint.
+// changed. markSessionRead calls this right after it clears the fact, so the
+// opened row's dot and every ancestor's subtree mark clear in one paint.
 function refreshSessionIndicator(sid) {
   paintSessionIndicator(sid);
   for (let parent = treeParentId(sid); parent; parent = treeParentId(parent)) {
@@ -430,13 +459,23 @@ function refreshTreeIndicators() {
   });
 }
 
-// "Read" means rendered: the session's server-side unread flag clears only
-// through this POST, which the render paths fire after content painted
-// (app.js's initial render, switchSession's winning generation). A bare data
-// fetch never clears it. Fire-and-forget: a lost POST leaves the dot up until
-// the next render reposts, so no retry or state mutation lives here.
-function markSessionRead(sessionId) {
-  fetch('/api/sessions/' + sessionId + '/read', {method: 'POST'}).catch((err) => {
+// "Read" means rendered: the read paths call this after the session's content
+// painted (app.js's initial render, switchSession's winning generation, a
+// reply the displayed view rendered). The local fact clears first, stamped so
+// an older reply is refused, and the row repaints. The server-side flag clears
+// only through the POST; a bare data fetch never clears it. Fire-and-forget: a
+// lost POST leaves the server flag set, and the next reply that carries it
+// paints the dot again, or reads it again on the displayed session.
+//
+// pageDot is the dot the row showed when the person opened the session, and
+// the server logs it beside its own flag (unread_dot_diverged on a mismatch).
+// It is null for a read whose row shows no dot by design: the page load (the
+// server renders the open row read) and a reply in the displayed session.
+function markSessionRead(sessionId, pageDot) {
+  recordUnreadFact(sessionId, false);
+  refreshSessionIndicator(sessionId);
+  const query = pageDot === null ? '' : '?page_dot=' + pageDot;
+  fetch('/api/sessions/' + sessionId + '/read' + query, {method: 'POST'}).catch((err) => {
     console.error('markSessionRead failed:', err);
   });
 }
@@ -585,6 +624,8 @@ const API = {
   getSessionIndicatorState,
   renderSessionIndicators,
   recordUnreadFact,
+  applyUnreadReply,
+  forgetUnreadFact,
   factSeqAtRequest,
   replyIsCurrent,
   renderPendingTriggerIndicator,

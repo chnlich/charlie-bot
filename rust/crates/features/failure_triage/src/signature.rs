@@ -183,7 +183,7 @@ const PATTERNS: [CausePattern; 18] = [
   CausePattern { expression: r"no cron task file under .* names session_id", shape: MatchShape::Fragment },
   CausePattern { expression: r"No module named '([^']+)'", shape: MatchShape::Fragment },
   CausePattern { expression: r"failed to load skill \S+: missing YAML frontmatter", shape: MatchShape::Fragment },
-  CausePattern { expression: "内存上限触发", shape: MatchShape::Fragment },
+  CausePattern { expression: "session memory limit reached", shape: MatchShape::Fragment },
   CausePattern { expression: r"RateLimitError:.*", shape: MatchShape::WholeText },
   CausePattern {
     expression: r"(?i)(service may be temporarily overloaded|overloaded_error|502|503)",
@@ -493,7 +493,7 @@ fn pattern_may_match(index: usize, text: &str, folded: &str) -> bool {
     1 => text.contains("no cron task file under ") && text.contains(" names session_id"),
     2 => text.contains("No module named '"),
     3 => text.contains("failed to load skill ") && text.contains(": missing YAML frontmatter"),
-    4 => text.contains("内存上限触发"),
+    4 => text.contains("session memory limit reached"),
     5 => text.contains("RateLimitError:"),
     6 => contains_any(&["service may be temporarily overloaded", "overloaded_error", "502", "503"]),
     7 => contains_any(&[

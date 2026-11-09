@@ -859,7 +859,9 @@ async fn manager_retries_devin_rate_limit_and_resumes_the_stored_native_session(
     .filter(|event| event["type"] == event_types::SYSTEM && event["subtype"] == event_types::COMMAND_PROGRESS)
     .collect::<Vec<_>>();
   assert_eq!(notices.len(), 1);
-  assert!(notices[0]["content"].as_str().unwrap().contains("devin 限流，22 秒后自动重试（第 1/3 次）"));
+  assert!(
+    notices[0]["content"].as_str().unwrap().contains("devin rate limited, retrying automatically in 22 s (retry 1/3)")
+  );
   assert!(values.iter().any(|event| event["type"] == event_types::MASTER_DONE));
   assert!(!values.iter().any(|event| event["type"] == event_types::ASSISTANT_ERROR));
   for call in [1, 2] {
@@ -894,7 +896,7 @@ async fn manager_stops_after_three_automatic_retries_and_shows_the_original_erro
     .find(|event| event["type"] == event_types::ASSISTANT_ERROR)
     .context("the exhausted manager turn reports its error")?;
   assert!(error["content"].as_str().unwrap().contains("reset in 22 seconds"));
-  assert!(error["content"].as_str().unwrap().contains("已自动重试 3 次"));
+  assert!(error["content"].as_str().unwrap().contains("automatic retries ran out after 3 attempts"));
   assert_eq!(std::fs::read_to_string(fake_bin.join("call-count"))?.trim(), "4");
   Ok(())
 }

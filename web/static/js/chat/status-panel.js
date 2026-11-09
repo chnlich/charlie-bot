@@ -167,7 +167,7 @@
     if (!item.since) return null;
     const hours = Math.floor(Math.max(0, Date.now() - Date.parse(item.since)) / HOUR_MS);
     const value = hours >= 24 ? Math.floor(hours / 24) + 'd' : hours + 'h';
-    return (item.since_exact === false ? '至少 ' : '') + value;
+    return (item.since_exact === false ? 'at least ' : '') + value;
   }
 
   function waitedAgeSpan(item) {

@@ -1314,7 +1314,7 @@ mod tests {
     request.cgroup_config.memory_max_mb = 64;
     let outcome = runner.run(request).await.unwrap();
     assert_eq!(outcome.exit_code, Some(-libc::SIGKILL));
-    assert!(outcome.cgroup_exit_report.as_deref().unwrap().contains("session 内存上限触发"));
+    assert!(outcome.cgroup_exit_report.as_deref().unwrap().contains("session memory limit reached"));
   }
 
   /// Waits until the runner holds the spawned child, failing after 30 s.

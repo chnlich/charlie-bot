@@ -34,7 +34,7 @@ const FEISHU_NS: Uuid = Uuid::from_u128(0x5b1e0c2a_7f4d_4a7e_9d3b_6c8f1a2e4d70);
 /// The reaction the bot lights on a summon: Feishu's `OnIt` emoji, which means "received".
 pub const ACK_EMOJI: &str = "OnIt";
 /// The label prefix of a session created from a Feishu summon; the chat id follows it.
-const SESSION_LABEL: &str = "飞书 · ";
+const SESSION_LABEL: &str = "Feishu · ";
 
 /// The deterministic session id of the Feishu thread a summon names (`summon_session_id`). Its key is known before the
 /// thread exists, because the summon's own message id stands in for the root until the first reply.

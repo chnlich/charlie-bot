@@ -22,12 +22,15 @@ pub(crate) fn is_quota_end(message: &str, quota_exhausted: Option<bool>) -> bool
 
 /// The error text an input shows after its automatic retries ran out: the original text and a note that they ran.
 pub(crate) fn exhausted_message(message: &str) -> String {
-  format!("{message}\n\n（已自动重试 {MAX_AUTOMATIC_RETRIES} 次）")
+  format!("{message}\n\n(automatic retries ran out after {MAX_AUTOMATIC_RETRIES} attempts)")
 }
 
 /// The session notice of one automatic retry: the backend, the reset it waits out and the retry's number.
 pub(crate) fn retry_notice(backend: &str, reset: Duration, attempt: usize) -> String {
-  format!("{backend} 限流，{} 秒后自动重试（第 {attempt}/{MAX_AUTOMATIC_RETRIES} 次）", reset.as_secs())
+  format!(
+    "{backend} rate limited, retrying automatically in {} s (retry {attempt}/{MAX_AUTOMATIC_RETRIES})",
+    reset.as_secs()
+  )
 }
 
 #[cfg(test)]

@@ -471,7 +471,7 @@ test('waiting ages show for own items and for descendant items in the Status vie
   }});
   selectStatus(rig);
   assert.equal(viewWaitingItems(rig.panel)[0].querySelector('[data-waiting-age]').textContent, '6h');
-  assert.equal(viewChildItems(rig.panel)[0].querySelector('[data-waiting-age]').textContent, '至少 3d');
+  assert.equal(viewChildItems(rig.panel)[0].querySelector('[data-waiting-age]').textContent, 'at least 3d');
 });
 
 test('a live web_status message redraws the badge and the shown Status view', async () => {

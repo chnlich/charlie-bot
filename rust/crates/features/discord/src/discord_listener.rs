@@ -35,7 +35,7 @@ const ACK_EMOJI: &str = "👀";
 const INTENTS: u64 = (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
-const DM_NOTICE: &str = "请在服务器频道里 @ 我。";
+const DM_NOTICE: &str = "Mention me in a server channel.";
 const THREAD_NAME_CHARS: usize = 80;
 const STOP_CLOSE_CODES: &[(u16, &str)] = &[
   (4004, "authentication failed"),

@@ -1328,7 +1328,7 @@ async fn a_devin_worker_reports_the_rate_limit_after_three_retries() -> anyhow::
   assert!(remaining > TimeDuration::seconds(10) && remaining < TimeDuration::minutes(5), "{remaining}");
   let message = quota.to_string();
   assert!(message.contains("reset in 22 seconds"), "{message}");
-  assert!(message.contains("已自动重试 3 次"), "{message}");
+  assert!(message.contains("automatic retries ran out after 3 attempts"), "{message}");
   assert_eq!(devin_call_count(&fake_bin)?, "4");
   Ok(())
 }
@@ -1351,7 +1351,7 @@ async fn a_devin_worker_keeps_a_reset_over_the_wait_limit_for_the_cooldown() -> 
   let quota = error.downcast_ref::<QuotaExhaustedError>().expect("the run failure keeps its quota error");
   let remaining = quota.resets_at.expect("the parsed reset reaches the cooldown") - started;
   assert!(remaining > TimeDuration::minutes(9) && remaining < TimeDuration::minutes(11), "{remaining}");
-  assert!(!quota.to_string().contains("已自动重试"), "{quota}");
+  assert!(!quota.to_string().contains("automatic retries ran out"), "{quota}");
   assert_eq!(devin_call_count(&fake_bin)?, "1");
   Ok(())
 }

@@ -88,7 +88,8 @@ const FOLLOW_CHAIN_CAP_SECONDS: i64 = 300;
 /// The house timezone of session display names.
 const HOUSE_TIMEZONE: Tz = chrono_tz::America::Los_Angeles;
 /// The notice a lost summon's thread receives.
-const LOST_SUMMON_NOTICE: &str = "上一次召唤在服务重启时丢失了，没有被处理。需要的话请重新 @ 我一次。";
+const LOST_SUMMON_NOTICE: &str = "The last summon was lost when the server restarted and was not handled. Mention me \
+  again if you still need an answer.";
 /// The notice a thread receives when neither its round nor its nudge round replied.
 const NO_REPLY_NOTICE: &str = "No reply was posted for this mention; the details are in the session log. \
   Mention me again for a thread answer.";
@@ -1276,7 +1277,8 @@ pub async fn backfill_lost_summons(
         let mut fields = Map::new();
         fields.insert(platform.backfill_key(), json!({event_types::INPUT_EVENT_ID: summon_id}));
         let content = format!(
-          "这条 {} 召唤在服务重启时还排在队列里，没有任何轮次回答它；已在对应线程里说明。",
+          "This {} summon was still queued when the server restarted, and no round answered it; the thread has the \
+           details.",
           platform.display_name
         );
         persist_request_event(features, &meta.id, &request_id, event_types::ASSISTANT_ERROR, &content, fields).await?;

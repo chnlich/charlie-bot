@@ -29,7 +29,7 @@ use crate::run_support::{
   subprocess_buffer_bytes,
 };
 
-const NOTICE: &str = "[模型未输出正文，以下为其思考内容]";
+const NOTICE: &str = "[The model wrote no answer text; its thinking follows.]";
 const POST_RESULT_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// The finish-extras key saying an Auto session's manager turn ended on a quota error.

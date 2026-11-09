@@ -217,10 +217,15 @@ pub fn classify_cgroup_exit(
   };
   if after.0 > before.0 {
     Some(format!(
-      "session 内存上限触发（上限 {memory_max_mb} MB），重任务请走集群三入口：gpuq＝集群任务队列提交，ssh gate＝用 ssh 在远端跑把关测试，远端启动＝charliebot 在远端启动长任务的命令"
+      "session memory limit reached (limit {memory_max_mb} MB); heavy jobs go through the cluster's three entry \
+       points: gpuq (submit to the cluster task queue), ssh gate (run the gate tests on a remote host over ssh), \
+       remote start (the charliebot command that starts a long job on a remote host)"
     ))
   } else if after.1 > before.1 {
-    Some(format!("进程因内存不足被内核结束（agent 组或整机内存用满；session 内存上限 {memory_max_mb} MB 未触发）"))
+    Some(format!(
+      "process was killed by the kernel for lack of memory (agent group or machine memory full; \
+       session memory limit {memory_max_mb} MB not reached)"
+    ))
   } else {
     None
   }
@@ -623,7 +628,7 @@ mod tests {
   #[test]
   fn classify_cap_kill_on_max_growth() {
     let message = classify_cgroup_exit(Some(-9), Some((0, 0)), Some((1, 0)), 12288).unwrap();
-    assert!(message.contains("session 内存上限触发"));
+    assert!(message.contains("session memory limit reached"));
     assert!(message.contains("12288"));
     assert!(message.contains("gpuq"));
   }
@@ -633,7 +638,10 @@ mod tests {
     let message = classify_cgroup_exit(Some(-9), Some((0, 0)), Some((0, 1)), 12288);
     assert_eq!(
       message.as_deref(),
-      Some("进程因内存不足被内核结束（agent 组或整机内存用满；session 内存上限 12288 MB 未触发）")
+      Some(
+        "process was killed by the kernel for lack of memory (agent group or machine memory full; \
+         session memory limit 12288 MB not reached)"
+      )
     );
   }
 

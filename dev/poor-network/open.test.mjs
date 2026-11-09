@@ -57,16 +57,21 @@ test('a spoiled repetition is rerun, and its rerun is recorded with its cause', 
   assert.equal(reps[0].newestMs, 20000, 'the rerun\'s record, not the spoiled one, is kept');
 });
 
-test('the rerun bound fails the run when the host keeps changing', async () => {
+test('the rerun bound fails the run and keeps every rerun in the repetition record', async () => {
   let calls = 0;
+  const reps = [];
   await assert.rejects(
     runRepetitions(async () => {
       calls += 1;
       return repOf({ networkChanged: [{ at: calls, url: DOC_URL }] });
-    }, 1),
+    }, 1, reps),
     /host interference/,
   );
   assert.equal(calls, 1 + OPEN.interferenceReruns, 'the first measurement plus the bounded reruns');
+  assert.equal(reps.length, 1);
+  assert.equal(reps[0].interferenceReruns.length, OPEN.interferenceReruns);
+  assert.match(reps[0].hostInterference, /network change/);
+  assert.equal(reps[0].networkChanged.length, 1, 'the final spoiled attempt is recorded, not counted as a page result');
 });
 
 test('a repetition that fails any other way is not rerun', async () => {

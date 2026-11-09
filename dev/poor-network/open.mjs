@@ -88,8 +88,7 @@ export function hostInterference(rep) {
 // One cell's repetitions. A repetition the host's network change spoiled is rerun — at most
 // OPEN.interferenceReruns times, and each rerun recorded — because it never counts as the page's result; any other
 // failure is the rep's record, as before. A repetition that still meets the interference at the bound fails the run.
-export async function runRepetitions(measure, repetitions) {
-  const results = [];
+export async function runRepetitions(measure, repetitions, results = []) {
   for (let repetition = 1; repetition <= repetitions; repetition++) {
     const reruns = [];
     let rep = await measure(repetition);
@@ -102,6 +101,8 @@ export async function runRepetitions(measure, repetitions) {
       interference = hostInterference(rep);
     }
     if (interference !== null) {
+      // Keep the failed repetition and every rerun in the side's JSON; the failed run never formats its medians.
+      results.push({ ...rep, interferenceReruns: reruns, hostInterference: interference });
       throw new Error(`the repetition still met host interference after ${reruns.length} reruns: ${interference}`);
     }
     results.push({ ...rep, interferenceReruns: reruns });
@@ -404,7 +405,8 @@ function loadWall(state) {
 }
 
 async function runCell(ctx, cell, repetitions) {
-  const results = await runRepetitions(async (repetition) => {
+  cell.reps = [];
+  await runRepetitions(async (repetition) => {
     process.stderr.write(`[open] ${cell.id} repetition ${repetition}/${repetitions}\n`);
     // The trials that run beside a repetition share the host with it; the watch names them, as the other scenarios
     // do for their repetitions.
@@ -416,8 +418,8 @@ async function runCell(ctx, cell, repetitions) {
       finishedAt: new Date().toISOString(),
       otherTrials: ctx.trials.since(from),
     };
-  }, repetitions);
-  return { ...cell, reps: results };
+  }, repetitions, cell.reps);
+  return cell;
 }
 
 // The open scenario. Fills `result`, the object the JSON keeps, cell by cell: a failure part-way leaves the cells
@@ -430,23 +432,26 @@ export async function openScenario(ctx, repetitions, result, conditions = OPEN_C
   result.releases = 0;
   result.cells = [];
   const warm = { A: await buildWarm(ctx, 'A'), B: await buildWarm(ctx, 'B'), C: await buildWarm(ctx, 'C') };
-  const reference = await runCell(ctx, { ...REFERENCE, warmDir: warm[REFERENCE.case] }, repetitions);
+  const reference = { ...REFERENCE, warmDir: warm[REFERENCE.case] };
+  result.reference = reference;
+  await runCell(ctx, reference, repetitions);
   result.cpu = openCpuRecord(sharedCpuRate, reference.reps.map((rep) => rep.tailMs));
   const cpuRate = result.cpu.rate;
-  result.reference = reference;
 
   for (const condition of CONDITIONS.filter((name) => conditions.includes(name))) {
     for (const caseName of CASES) {
-      result.cells.push(await runCell(ctx, {
+      const cell = {
         id: `${caseName} ${condition}`, case: caseName, condition, rate: cpuRate, warmDir: warm[caseName],
-      }, repetitions));
+      };
+      result.cells.push(cell);
+      await runCell(ctx, cell, repetitions);
     }
   }
   for (const caseName of conditions.includes('release') ? CASES : []) {
     const warmDir = await buildWarm(ctx, caseName);
-    result.cells.push(await runCell(ctx, {
-      id: `${caseName} release`, case: caseName, condition: 'release', rate: cpuRate, warmDir,
-    }, repetitions));
+    const cell = { id: `${caseName} release`, case: caseName, condition: 'release', rate: cpuRate, warmDir };
+    result.cells.push(cell);
+    await runCell(ctx, cell, repetitions);
   }
   result.releases = ctx.releases;
   return result;

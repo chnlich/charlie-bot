@@ -163,9 +163,10 @@ const planPanel = (() => {
 
   // The address shape every plan-page URL this panel builds shares: the
   // /absolute_filepath URL, then the ?diff= query ahead of the fragment (see
-  // encodeDiffFile), then the #cbsession= fragment. withPanelMarker appends
-  // `&cbpanel=1` inside the fragment, the marker artifact-comments.js's
-  // framed guard reads. urlKind names the caller in the SESSIONS_ROOT error.
+  // encodeDiffFile), then the #cbsession= fragment. The withPanelMarker flag
+  // appends `&cbpanel=1` inside the fragment; the framed guard in
+  // artifact-comments.js reads that marker. The urlKind parameter names the
+  // caller in the SESSIONS_ROOT error.
   function _planPageUrl(file, sessionId, sessionsRoot, diffFile, urlKind, withPanelMarker) {
     var url = _filesUrl(file, sessionId, sessionsRoot, urlKind);
     if (diffFile) url += '?diff=' + encodeDiffFile(diffFile);
@@ -461,7 +462,7 @@ const planPanel = (() => {
   }
 
   // Second writer of the cached registry, complementing _commitRegistry: this
-  // one only *clears*, and it never writes _loadedSessionId—leaving the
+  // one only *clears*, and it never writes _loadedSessionId. Leaving the
   // session mismatch in place is what makes the next onTabShown retry.
   function _resetForSessionChange() {
     _registry = {plans: []};

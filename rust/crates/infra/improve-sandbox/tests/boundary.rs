@@ -26,7 +26,9 @@ fn remove_tmp_directories(direction: &str) {
 #[ignore = "integration"]
 #[test]
 fn a_write_inside_the_allow_list_succeeds_and_one_outside_fails_with_a_permission_error() {
-  let home = tempfile::tempdir().expect("the scratch HOME");
+  // The canary must sit outside the allow-list. The allow-list opens all of /dev/shm, where a build host's TMPDIR can
+  // live, and leaves /tmp closed outside the direction's own two directories.
+  let home = tempfile::tempdir_in("/tmp").expect("the scratch HOME");
   // A direction of this process only, so the `/tmp` directories that the program creates are this test's own.
   let direction = format!("probe{}", std::process::id());
   fs::create_dir_all(home.path().join("canary-outside")).expect("the canary directory");

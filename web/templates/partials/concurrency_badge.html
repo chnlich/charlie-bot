@@ -1,11 +1,11 @@
 {#- The concurrency badge: how many agents run right now, and the chart of that number over time.
 
     One fragment, included once by every app page: inside the page's top bar where it has one, and as a direct child
-    of <body> where it has none (the `body > .cb-slot` rules then paint that bar). The file-served pages (the file
+    of <body> where it has none. The `body > .cb-slot` rules then paint that bar. The file-served pages (the file
     browser and artifact pages) carry neither the bar nor this fragment. The counting belongs to
     rust/crates/runtime/session-api/src/concurrency.rs; the script at the end of this fragment only displays it.
 
-    A page whose document is the whole load sets `defer_concurrency_badge_poll` before including this fragment: its
+    A page whose document is the whole load sets `defer_concurrency_badge_poll` before including this fragment. Its
     badge paints from the markup above and starts the poll after the document, so the poller's bytes stay off the
     page's critical path. A page that already carries the app's bootstrap script (index.html) keeps the script inline,
     where it costs a small share of a document that is large anyway. -#}
@@ -39,7 +39,7 @@
   body > .cb-slot { justify-content: flex-end; margin-left: 0; padding: 8px 24px;
     border-bottom: 1px solid rgba(128, 138, 152, .28); background: rgba(255, 255, 255, .55) }
   /* On a phone the body padding is the page's content gutter — 14 px on home and token usage, 24 px on approval
-     and host auth — and the page content fills the body's content box. The bar then keeps only its vertical
+     and host auth. The page content fills the body's content box. The bar then keeps only its vertical
      padding, so the badge ends on the same edge as the content below it instead of a further 24 px inside. */
   @media (max-width: 760px) { body > .cb-slot { padding-left: 0; padding-right: 0 } }
   @media (prefers-color-scheme: dark) {
@@ -80,8 +80,8 @@
   .cb-title { font-size: 13px; font-weight: 600; margin-right: auto }
   .cb-ranges { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: rgba(128, 138, 152, .16) }
   /* Each range takes a 24 px tall box: the chips draw 22.4 px with 30.8-34 px between centres, so one
-     fingertip on a phone covers two of them. The box carries the height and the 8 px inline padding stays,
-     so every chip keeps its width, the group grows 1.6 px, and the header row keeps its one line. */
+     fingertip on a phone covers two of them. The box carries the height and the 8 px inline padding stays.
+     The result: every chip keeps its width, the group grows 1.6 px, and the header row keeps its one line. */
   .cb-range { display: inline-flex; align-items: center; min-height: 24px; padding: 0 8px; border: 0;
     border-radius: 5px; background: transparent; color: inherit; font: inherit; font-size: 11.5px; cursor: pointer }
   .cb-range[aria-pressed="true"] { background: #2563eb; color: #ffffff }

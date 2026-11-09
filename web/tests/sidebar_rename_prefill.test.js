@@ -4,6 +4,8 @@
 // stale render-time name. The groups.js vm harness is shared:
 // web/tests/sidebar_groups_context_stub.js.
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
@@ -131,4 +133,34 @@ test('a chat-header click opens the field on the header name line, not on the se
   assert.equal(dom.input.value, 'header name');
   assert.equal(dom.input.style.width, '400px', 'the field took the row width instead of the header name line');
   assert.equal(dom.input.style.height, '28px');
+});
+
+// The page's document carries a loader in place of modals.js, because the module loads on the first sidebar
+// control. The separator line's Clone and Elon-e buttons paint on the first transcript render, which a later
+// sidebar click never repaints, so the loader registers them at load.
+test('the page loader registers the separator buttons before the first transcript render', () => {
+  const rendered = [];
+  const context = {
+    Sidebar: {},
+    Chat: {
+      CLONE_SVG: '<svg id="clone"></svg>',
+      registerSeparatorButton(render) { rendered.push(render); },
+    },
+    loadPageScripts() { throw new Error('the loader must not fetch at load'); },
+    document: {getElementById: () => null},
+    localStorage: {getItem: () => null, setItem() {}},
+    console: {error() {}},
+    globalThis: null,
+  };
+  context.globalThis = context;
+  vm.createContext(context);
+  vm.runInContext(NAMESPACE_JS, context, {filename: 'namespace.js'});
+  const loader = fs.readFileSync(
+    path.join(__dirname, '..', 'templates', 'js', 'sidebar', 'modals.js'), 'utf8');
+  vm.runInContext(loader, context, {filename: 'templates/js/sidebar/modals.js'});
+
+  assert.equal(rendered.length, 1, 'the loader registers no separator buttons');
+  const html = rendered[0]('session-a', 3);
+  assert.match(html, /onclick="forkSession\('session-a', 3\)"/);
+  assert.match(html, /onclick="eloneSession\('session-a', 3\)"/);
 });

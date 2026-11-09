@@ -52,6 +52,10 @@ pub const LAST_RUN_STATUS: &str = "last_run_status";
 /// The cron slot's fields, in registration order. The cron feature registers them, and the store reads them when it
 /// rebinds a scheduled binding.
 pub const CRON_SLOT_FIELDS: [&str; 4] = [SCHEDULED_TASK, LAST_SCHEDULED_RUN, LAST_RUN_STATUS, LAST_SCHEDULED_CRON];
+/// The session-metadata field holding the backend's native session id, which the next turn resumes. The store writes
+/// it, the registry's anchor reconciler names it in its correction warning, and the cold-storage sweep reads it from
+/// the raw metadata, so it is spelled once, here.
+pub const CC_SESSION_ID_FIELD: &str = "cc_session_id";
 /// The session-metadata field holding the instant the session's native Claude Code conversation started.
 pub const CC_SESSION_STARTED_AT: &str = "cc_session_started_at";
 /// The session-metadata field holding the backend that ran the session's native conversation. The turn's finish
@@ -716,7 +720,7 @@ impl SessionMetadata {
     }
     push(&mut declared, "created_at", &self.created_at);
     push(&mut declared, "updated_at", &self.updated_at);
-    push(&mut declared, "cc_session_id", &self.cc_session_id);
+    push(&mut declared, CC_SESSION_ID_FIELD, &self.cc_session_id);
     push(&mut declared, CC_SESSION_STARTED_AT, &self.cc_session_started_at);
     push(&mut declared, "backend", &self.backend);
     if !exclude_transient {

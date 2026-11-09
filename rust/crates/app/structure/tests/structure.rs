@@ -1037,6 +1037,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::metadata::LAST_RUN_STATUS`.",
   },
   OwnerRow {
+    name: "cc_session_id",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::CC_SESSION_ID_FIELD`.",
+  },
+  OwnerRow {
     name: "cc_session_started_at",
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::CC_SESSION_STARTED_AT`.",

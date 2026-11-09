@@ -221,16 +221,22 @@ async fn a_quota_end_continues_the_turn_on_the_next_member_with_the_switch_note(
   assert!(prompt.contains(&archives.display().to_string()), "{prompt}");
   assert!(prompt.contains(&failed_run_dir.display().to_string()), "{prompt}");
   assert!(prompt.contains("pool 'auto' switched from member-a to member-b"), "{prompt}");
-  // A manager's retry carries the manager note: the task record's goal, the orientation order and the sort.
-  assert!(prompt.contains("The task record's goal is: Auto session"), "{prompt}");
-  assert!(
-    prompt.contains("get oriented from your session status, then your child tasks, then the last two turns"),
-    "{prompt}"
-  );
-  assert!(prompt.contains(&format!("Run `charliebot session tree --root {}`", session.id)), "{prompt}");
-  assert!(prompt.contains("Then sort the parts of your task"), "{prompt}");
+  // A manager's retry carries the reset note: the previous-rules sentence and where the state lives. The note and the
+  // handoff name no goal; the session has no task record, so its system prompt has no Task record block either.
+  assert!(prompt.contains("Your earlier turns ran under the previous rules."), "{prompt}");
+  assert!(prompt.contains(&format!("`charliebot session tree --root {}`", session.id)), "{prompt}");
+  assert!(!prompt.contains("The task record's goal is:"), "{prompt}");
+  let snapshot: Value = serde_json::from_slice(&std::fs::read(
+    stack.store().run_dir(&session.id, &retry.id).join("prompt_snapshot.json"),
+  )?)?;
+  let task_blocks = snapshot["blocks"]
+    .as_array()
+    .expect("the retry's snapshot has blocks")
+    .iter()
+    .filter(|block| block["sources"].as_array().into_iter().flatten().any(|source| source["scope"] == "task"))
+    .count();
+  assert_eq!(task_blocks, 0, "a session without a task record has no Task record block");
   assert!(prompt.contains("Handoff summary:"), "{prompt}");
-  assert!(prompt.contains("goal: Auto session"), "{prompt}");
   assert!(prompt.contains("done (1):"), "{prompt}");
   assert!(prompt.contains("- $ Read "), "{prompt}");
   assert!(prompt.contains("in progress: $ Bash cargo test -p cron (no result yet)"), "{prompt}");

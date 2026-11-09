@@ -315,14 +315,63 @@ function messageSourceText(el) {
   return renderedNodeText(el);
 }
 
+// The markdown a one-line field cannot show is dropped from a text run: a heading's #, a list
+// marker, a link's target, emphasis markers and the backticks around inline code. Inline code
+// keeps its own text, so `__init__.py` keeps its underscores.
+function stripInlineMarkdown(sample) {
+  return sample
+    .replace(/^(?:#{1,6}|[-*+>]|\d+[.)])\s+/, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .split(/(`[^`]*`)/)
+    .map((part) => (part.length > 1 && part.startsWith('`') && part.endsWith('`')
+      ? part.slice(1, -1)
+      : part.replace(/\*\*|__/g, '').replace(/`/g, '')))
+    .join('')
+    .trim();
+}
+
+// A table row read as text: its cells, each with its own inline markdown dropped.
+function tableRowText(line) {
+  return line.split('|').slice(1, -1)
+    .map((cell) => stripInlineMarkdown(cell))
+    .filter((cell) => cell)
+    .join(' · ');
+}
+
+// The one-line field drops the markdown it cannot show: a heading's #, a list marker, a link's
+// target, inline code's backticks and emphasis markers. A fenced block contributes its first code
+// line, not the fence's language tag. A table contributes its first data row's cells, not the
+// header or the delimiter row.
 function turnFirstLine(text) {
   const lines = String(text).split('\n');
+  let inFence = false;
+  // 'none' outside a table, 'header' after its header row, 'data' from its delimiter row on.
+  let tableRow = 'none';
   for (const raw of lines) {
-    const line = raw.replace(/^\s*(?:#{1,6}|[-*+>]|\d+[.)])\s+/, '')
-      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-      .replace(/`/g, '')
-      .trim();
-    if (line) return line;
+    const line = raw.trim();
+    if (!line) {
+      tableRow = 'none';
+      continue;
+    }
+    if (/^(?:`{3,}|~{3,})/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) return line;
+    if (line.startsWith('|') && line.endsWith('|')) {
+      if (tableRow === 'none') {
+        tableRow = 'header';
+        continue;
+      }
+      if (tableRow === 'header') {
+        tableRow = 'data';
+        if (/^\|[\s:|-]+\|$/.test(line)) continue;
+      }
+      return tableRowText(line);
+    }
+    tableRow = 'none';
+    const cleaned = stripInlineMarkdown(line);
+    if (cleaned) return cleaned;
   }
   return '';
 }

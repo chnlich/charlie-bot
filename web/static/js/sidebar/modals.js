@@ -205,6 +205,7 @@ const TASK_CONTEXT_MUTED = 'text-slate-400';
 const TASK_CONTEXT_NONE = `<span class="${TASK_CONTEXT_MUTED}">(none)</span>`;
 
 let taskContextModalSession = null;
+let taskContextModalRequest = 0;
 
 // The preview's task block: the one whose sources name the task scope.
 function taskScopeBlock(preview) {
@@ -287,7 +288,10 @@ async function fetchJsonOrDetail(url) {
 // and no fallback layout, and a session without a profile is not a task node
 // yet, so its body says so in place of a preview request the server refuses.
 async function loadTaskContextModal(sessionId) {
+  const request = ++taskContextModalRequest;
+  const isCurrent = () => taskContextModalRequest === request && taskContextModalSession === sessionId;
   const detail = await fetchJsonOrDetail('/api/sessions/' + sessionId);
+  if (!isCurrent()) return;
   if (!detail.ok) {
     setTaskContextModalBody(sessionId, taskContextNoteHtml('Session unavailable: ' + detail.detail));
     return;
@@ -305,6 +309,7 @@ async function loadTaskContextModal(sessionId) {
   }
   setTaskContextModalBody(sessionId, taskContextNoteHtml('Loading…'));
   const preview = await fetchJsonOrDetail('/api/sessions/' + sessionId + '/effective-prompt');
+  if (!isCurrent()) return;
   if (!preview.ok) {
     setTaskContextModalBody(sessionId, taskContextNoteHtml('Task & context unavailable: ' + preview.detail));
     return;
@@ -314,6 +319,22 @@ async function loadTaskContextModal(sessionId) {
     ? taskContextTaskBlockHtml(block)
     : taskContextNoteHtml('(no task record: the goal, acceptance and context refs are all empty)');
   setTaskContextModalBody(sessionId, taskHtml + taskContextPromptHtml(preview.data));
+}
+
+// A task-record change while the dialog is open: fetch the same effective prompt
+// that renders the system-prompt block, and ignore any older request that lands later.
+function observeTaskContextMessages(messages) {
+  const sessionId = taskContextModalSession;
+  if (!sessionId || !messages.some((msg) => msg.role === 'system' && msg.kind === 'task_record_changed')) return;
+  const loading = loadTaskContextModal(sessionId);
+  const request = taskContextModalRequest;
+  return loading.catch((err) => taskContextFailed(sessionId, request, err));
+}
+
+function taskContextFailed(sessionId, request, err) {
+  if (taskContextModalSession !== sessionId || taskContextModalRequest !== request) return;
+  console.error('Task & context failed:', err);
+  setTaskContextModalBody(sessionId, taskContextNoteHtml('Task & context failed: ' + err.message));
 }
 
 function openTaskContextModal(sessionId) {
@@ -327,10 +348,9 @@ function openTaskContextModal(sessionId) {
     overlay.classList.remove('hidden');
     overlay.classList.add('flex');
   }
-  return loadTaskContextModal(sessionId).catch((err) => {
-    console.error('Task & context failed:', err);
-    setTaskContextModalBody(sessionId, taskContextNoteHtml('Task & context failed: ' + err.message));
-  });
+  const loading = loadTaskContextModal(sessionId);
+  const request = taskContextModalRequest;
+  return loading.catch((err) => taskContextFailed(sessionId, request, err));
 }
 
 function closeTaskContextModal() {
@@ -340,6 +360,7 @@ function closeTaskContextModal() {
     overlay.classList.remove('flex');
   }
   taskContextModalSession = null;
+  taskContextModalRequest++;
 }
 
 // The session row's double-click (groups.js).
@@ -354,6 +375,7 @@ const GLOBALS = {
   submitSessionActionModal,
   forkSession,
   eloneSession,
+  observeTaskContextMessages,
   openTaskContextModal,
   closeTaskContextModal,
 };

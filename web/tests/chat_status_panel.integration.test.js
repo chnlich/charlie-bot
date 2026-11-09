@@ -452,8 +452,9 @@ test('a session with no status shows its task-record Goal and "No status yet", w
   rig.page.descendants = descendantRows(1);
   await openSession(rig, {web_status: null});
   selectStatus(rig);
-  assert.deepEqual(viewKinds(rig.panel), ['goal', 'children']);
+  assert.deepEqual(viewKinds(rig.panel), ['goal', 'none', 'children']);
   assert.equal(viewRow(rig.panel, 'goal').children[1].textContent, TASK_GOAL);
+  assert.equal(viewRow(rig.panel, 'none').textContent, 'No status yet');
 });
 
 test('a session with neither a status nor a task record shows "No status yet"', async () => {

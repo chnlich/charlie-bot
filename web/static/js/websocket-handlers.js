@@ -36,6 +36,9 @@ function _commitMessage(msg) {
   appendMessageObject(msg, SESSION_ID, false);
   observeWebStatusMessages([msg]);
   observeTaskRecordMessages([msg]);
+  if (typeof Sidebar !== 'undefined' && Sidebar.observeTaskContextMessages) {
+    Sidebar.observeTaskContextMessages([msg]);
+  }
 }
 
 // Session rename can arrive at any time

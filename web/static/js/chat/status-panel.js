@@ -348,7 +348,11 @@
       el.appendChild(none);
     } else {
       el.appendChild(goalRow(panelGoal));
-      if (panelStatus) {
+      if (!panelStatus) {
+        const none = statusRow('none');
+        none.appendChild(textSpan('text-slate-400', 'No status yet'));
+        el.appendChild(none);
+      } else {
         el.appendChild(nowRow(panelStatus));
         const waiting = statusRow('waiting');
         waiting.appendChild(labelSpan('Waiting on you'));

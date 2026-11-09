@@ -115,6 +115,32 @@ test('opening the dialog renders the task block through the prose pipeline and o
   assert.doesNotMatch(html, /Launch overlay unavailable|\(none\)/);
 });
 
+test('a task_record_changed message refreshes the open dialog from the effective prompt', async () => {
+  let preview = PREVIEW;
+  const h = buildHarness({
+    '/api/sessions/s1': jsonResponse(200, DETAIL),
+    '/api/sessions/s1/effective-prompt': () => jsonResponse(200, preview),
+  });
+
+  await h.context.openTaskContextModal('s1');
+  assert.match(h.body.innerHTML, /Migrate users to the new schema/);
+
+  const updatedText = '# Task record\n\nRaise the cap to ten';
+  preview = {
+    ...PREVIEW,
+    blocks: PREVIEW.blocks.map((block) => block.sources.some((source) => source.scope === 'task')
+      ? {...block, text: updatedText}
+      : block),
+  };
+  await h.context.observeTaskContextMessages([
+    {role: 'system', kind: 'task_record_changed', content: '任务说明已更新'},
+  ]);
+
+  assert.equal(h.calls.length, 4, 'the event re-fetched session detail and effective prompt');
+  assert.match(h.body.innerHTML, /Raise the cap to ten/);
+  assert.doesNotMatch(h.body.innerHTML, /Migrate users to the new schema/);
+});
+
 test('a preview without a task-scope block shows the empty-record note; an overlay error is named', async () => {
   const preview = {
     ...PREVIEW,

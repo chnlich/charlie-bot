@@ -257,6 +257,8 @@
 
         <!-- Input (a worker node takes no messages). -->
         <div id="input-area" class="border-t border-slate-700 p-4 {% if active_session.profile == 'worker' %}hidden{% endif %}">
+          <!-- The last send did not reach the server; its text is back in the composer (chat/input.js). -->
+          <div id="pending-send-note" class="hidden text-xs text-amber-400 mb-2"></div>
           <!-- Uploaded file chips -->
           <div id="file-chips" class="hidden flex flex-wrap gap-1 mb-2"></div>
           <input type="file" id="file-input" multiple class="hidden" onchange="handleFiles(this)">

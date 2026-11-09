@@ -372,7 +372,6 @@ function loadThroughDocument({worker = false} = {}) {
     },
     Date: FakeDate,
     SESSION_ID: 'sess-1',
-    SESSION_BOOTSTRAP: {session: {profile: worker ? 'worker' : 'web'}},
     loadPageScripts(key, paths) {
       loaded.push({key, paths});
       return new Promise(() => {});
@@ -398,6 +397,13 @@ function loadThroughDocument({worker = false} = {}) {
   context.Chat.wire = function(globals, chatOnly) { Object.assign(this, globals, chatOnly || {}); };
   context.globalThis = context;
   vm.createContext(context);
+  // The page declares SESSION_BOOTSTRAP with a top-level const, so the loader
+  // must read a bare reference: a globalThis property would let a wrong read
+  // pass here and miss the real page.
+  const profile = worker ? 'worker' : 'web';
+  vm.runInContext('const SESSION_BOOTSTRAP = ' + JSON.stringify({session: {profile}}) + ';',
+    context, {filename: 'index.html'});
+  assert.equal(context.SESSION_BOOTSTRAP, undefined, 'a top-level const is no globalThis property');
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'templates/js/chat/worker-summary.js'), 'utf8'),
     context, {filename: 'templates/js/chat/worker-summary.js'});
   const land = () => vm.runInContext(read('worker-summary.js'), context, {filename: 'worker-summary.js'});

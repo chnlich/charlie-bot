@@ -89,14 +89,23 @@ backends:
   # session or call moves on to the next selectable member. With none left, the turn or call fails with a list of
   # every member and its state.
   pools: []
-  #  - id: primary
-  #    label: Primary
+  # Example pools, grouped by capability: each pool serves the calls that need its kind of model, and the calls table
+  # below names it. Each pool's purpose:
+  #   human-communication (rule: priority): the strongest models, for replies a person reads.
+  #   cheap (rule: rotate): low-cost models, for long agent tasks.
+  #   fast (rule: rotate): low-cost models that answer quickly, for short calls a command or a session waits on.
+  #  - id: human-communication
+  #    label: Human communication
   #    rule: priority
-  #    members: [claude-opus, claude-sonnet, claude-fable]
-  #  - id: light
-  #    label: Light
+  #    members: [claude-fable, claude-opus]
+  #  - id: cheap
+  #    label: Cheap
   #    rule: rotate
-  #    members: [claude-sonnet, claude-opus]
+  #    members: [claude-sonnet, codex-luna]
+  #  - id: fast
+  #    label: Fast
+  #    rule: rotate
+  #    members: [claude-sonnet, devin-swe2]
   # Calls: each key names an option id, a pool id, or `session`. A key left out keeps the call's default, given
   # below. [session] marks the keys that accept `session`, the backend of the session that starts the call; for those,
   # a left-out key behaves the same as `session`. A backend that a request names, or a router answer
@@ -113,10 +122,18 @@ backends:
   #                target, else the first backends.options entry
   #   new_session  the backend a session or scheduled task takes when its request names none; left out: the first
   #                backends.options entry
+  # The example sends long agent work to cheap, short waits to fast, replies to human-communication, and new sessions
+  # to one strong option.
   # calls:
-  #   worker: primary
-  #   review: light
-  #   thread: light
+  #   worker: cheap
+  #   improve: cheap
+  #   verify: fast
+  #   review: cheap
+  #   cold_read: fast
+  #   probe: fast
+  #   autoname: fast
+  #   triage: fast
+  #   thread: human-communication
   #   new_session: claude-opus
   # Backends available for model switching. Editing the list REPLACES it — to
   # add a codex backend, append an entry such as:

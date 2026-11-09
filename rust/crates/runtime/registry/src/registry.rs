@@ -2153,6 +2153,7 @@ mod usage_tests {
       billing: None,
       backend_type: backend_type.to_string(),
       type_fields: serde_yaml::Mapping::new(),
+      visible: true,
     }
   }
 

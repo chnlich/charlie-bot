@@ -439,8 +439,8 @@
 
     // The strip's controls, drawn once for the gap: both directions for a gap that outlives one click, the gap
     // itself otherwise, and the whole file. A side-by-side file carries one strip row per pane to hold the two
-    // sides' lines level, and the gap is one region with one set of controls, so the first strip draws the
-    // buttons and the last carries the count. A single-table file draws both in its one strip.
+    // sides' lines level. The gap is one region with one set of controls, so the first strip draws the buttons
+    // and the last carries the count. A single-table file draws both in its one strip.
     function renderStripContent(gap) {
       const size = gap.newHi - gap.newLo + 1;
       const directionButtons = size <= EXPAND_STEP

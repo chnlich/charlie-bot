@@ -1,6 +1,6 @@
 //! The Feishu fields of a session.
 
-use anyhow::Context;
+use charliebot_registry::thread_origin;
 use charliebot_store::metadata::SessionMetadata;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -26,10 +26,7 @@ pub struct FeishuOrigin {
 /// The session's Feishu origin, or `None` when the field is absent or null
 /// (`fields_of(meta, "feishu").feishu_origin`). A stored value that is not a Feishu origin fails.
 pub fn feishu_origin(meta: &SessionMetadata) -> anyhow::Result<Option<FeishuOrigin>> {
-  match meta.extra.get(FEISHU_ORIGIN) {
-    None | Some(Value::Null) => Ok(None),
-    Some(value) => FeishuOrigin::deserialize(value).map(Some).context("feishu_origin is not a Feishu origin"),
-  }
+  thread_origin::read_origin(meta, FEISHU_ORIGIN, "a Feishu origin")
 }
 
 /// The `feishu_origin` slot validator: it checks the value in place. The value is null, or an object whose

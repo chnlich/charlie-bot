@@ -18,7 +18,23 @@ const EXPLAIN_SPINNER_SVG = '<svg class="w-3.5 h-3.5 animate-spin" fill="none" v
   + '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>'
   + '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>';
 const EXPLAIN_TITLE = 'Explain this round with a chosen model';
-const EXPLAIN_STATE_COLORS = {none: 'text-slate-500', pending: 'text-amber-400', ready: 'text-amber-400', error: 'text-red-400'};
+
+// Every button state with the color class and icon it paints. The server and the
+// status map can name only these states, so a value outside the table breaches
+// the contract and the lookup throws instead of painting a fallback.
+const EXPLAIN_STATE_VISUALS = {
+  none: {color: 'text-slate-500', icon: EXPLAIN_BULB_SVG},
+  pending: {color: 'text-amber-400', icon: EXPLAIN_SPINNER_SVG},
+  ready: {color: 'text-amber-400', icon: EXPLAIN_BULB_SVG},
+  error: {color: 'text-red-400', icon: EXPLAIN_BULB_SVG},
+};
+
+function explainStateVisual(state) {
+  if (!Object.hasOwn(EXPLAIN_STATE_VISUALS, state)) {
+    throw new Error('unknown explain state: ' + state);
+  }
+  return EXPLAIN_STATE_VISUALS[state];
+}
 
 // The persisted truth of this session's explain entries, as the /explain/status
 // summary shape ({upto: {state, backend, generated_at}}). Read at render time by
@@ -40,20 +56,22 @@ function explainButtonState(eventIndex) {
 }
 
 function applyExplainButtonVisual(btn, state) {
+  const visual = explainStateVisual(state);
   btn.dataset.explainState = state;
   btn.classList.remove('text-slate-500', 'text-amber-400', 'text-red-400');
-  btn.classList.add(EXPLAIN_STATE_COLORS[state] || EXPLAIN_STATE_COLORS.none);
-  btn.innerHTML = state === 'pending' ? EXPLAIN_SPINNER_SVG : EXPLAIN_BULB_SVG;
+  btn.classList.add(visual.color);
+  btn.innerHTML = visual.icon;
 }
 
 function renderExplainButton(sessionId, eventIndex) {
   const state = explainButtonState(eventIndex);
+  const visual = explainStateVisual(state);
   const sessionArg = escapeJsSingleQuoted(sessionId);
   return '<button type="button" data-explain-state="' + state + '"'
     + ' onclick="explainSession(\'' + sessionArg + '\', ' + eventIndex + ')"'
-    + ' class="explain-toggle p-0.5 ' + (EXPLAIN_STATE_COLORS[state] || EXPLAIN_STATE_COLORS.none) + '"'
+    + ' class="explain-toggle p-0.5 ' + visual.color + '"'
     + ' title="' + EXPLAIN_TITLE + '">'
-    + (state === 'pending' ? EXPLAIN_SPINNER_SVG : EXPLAIN_BULB_SVG)
+    + visual.icon
     + '</button>';
 }
 
@@ -178,14 +196,22 @@ function explainHeader(entry, pending) {
 }
 
 function renderExplainEntry(body, entry) {
-  const pending = entry.state === 'pending';
-  let html = '<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1">' + explainHeader(entry, pending) + '</div>';
-  if (pending) {
-    html += '<div class="text-slate-500 text-xs">Generating explanation…</div>';
-  } else if (entry.state === 'error') {
-    html += '<div class="text-red-400 text-xs whitespace-pre-wrap">' + escapeHtml(entry.error || 'Explanation failed') + '</div>';
-  } else {
-    html += mdDiv(entry.answer);
+  const state = entry.state;
+  let html = '<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1">'
+    + explainHeader(entry, state === 'pending') + '</div>';
+  switch (state) {
+    case 'pending':
+      html += '<div class="text-slate-500 text-xs">Generating explanation…</div>';
+      break;
+    case 'ready':
+      html += mdDiv(entry.answer);
+      break;
+    case 'error':
+      html += '<div class="text-red-400 text-xs whitespace-pre-wrap">'
+        + escapeHtml(entry.error || 'Explanation failed') + '</div>';
+      break;
+    default:
+      throw new Error('unknown explain state: ' + state);
   }
   body.classList.remove('text-slate-500', 'text-xs');
   body.innerHTML = html;

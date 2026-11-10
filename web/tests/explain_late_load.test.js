@@ -14,6 +14,8 @@ function load({readyState = 'complete', sessionId = 'sid-1'} = {}) {
   const inserted = [];
   const repainted = [];
   const statusFetches = [];
+  const wsHandlers = new Map();
+  let separatorButton = null;
   const group = {
     dataset: {roundEventIndex: '7'},
     querySelector: () => null,
@@ -25,7 +27,7 @@ function load({readyState = 'complete', sessionId = 'sid-1'} = {}) {
     Chat: {
       escapeHtmlAttr: (value) => String(value == null ? '' : value),
       escapeJsSingleQuoted: (value) => String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'"),
-      registerSeparatorButton() {},
+      registerSeparatorButton: (render) => { separatorButton = render; },
       registerSeparatorPanel: () => ({}),
       repaintRoundButtons: (root) => repainted.push(root),
       wire: (globals, chatOnly) => Object.assign(context, globals, chatOnly || {}),
@@ -33,11 +35,12 @@ function load({readyState = 'complete', sessionId = 'sid-1'} = {}) {
     document: {
       readyState,
       addEventListener() {},
+      querySelector: () => null,
       // The rendered round group is what a parsed document holds; a parsing one holds only its button groups' absence.
       querySelectorAll: (selector) => (readyState !== 'loading' && selector === '.round-buttons[data-round-event-index]'
         ? [group] : []),
     },
-    registerWsMessageHandler() {},
+    registerWsMessageHandler: (type, handler) => { wsHandlers.set(type, handler); },
     viewRequestSignal: () => undefined,
     fetch: async (url) => {
       statusFetches.push(url);
@@ -49,7 +52,7 @@ function load({readyState = 'complete', sessionId = 'sid-1'} = {}) {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(EXPLAIN_JS, context, {filename: 'explain.js'});
-  return {inserted, repainted, statusFetches};
+  return {inserted, repainted, statusFetches, wsHandlers, separatorButton};
 }
 
 test('a module that lands on a parsed document adds its button to the rendered rounds', () => {
@@ -71,4 +74,11 @@ test('a module that lands while the document still parses leaves both to the pag
   assert.equal(inserted.length, 0);
   assert.equal(repainted.length, 0);
   assert.equal(statusFetches.length, 0);
+});
+
+test('a state outside the state table throws instead of painting a fallback', () => {
+  const {wsHandlers, separatorButton} = load();
+  // `constructor` is an inherited property name, so a bare table lookup would answer it.
+  wsHandlers.get('explain_status')({upto: 7, state: 'constructor', backend: 'test'});
+  assert.throws(() => separatorButton('sid-1', 7), /unknown explain state: constructor/);
 });

@@ -29,7 +29,10 @@ body.dark .cb-panel { border-color: #334155; background: #1e293b; color: #e2e8f0
 .cb-chart .cb-line { fill: none; stroke: #2563eb; stroke-width: 1.5; stroke-linejoin: round }
 .cb-chart .cb-area { fill: #2563eb; fill-opacity: .16; stroke: none }
 .cb-chart .cb-grid { stroke: rgba(128, 138, 152, .4); stroke-width: 1 }
-.cb-chart .cb-axis { fill: currentColor; fill-opacity: .6; font-size: 10px }
+/* The axis labels name the chart's range and its scale. At 0.6 the ink blends to rgb(118, 124, 131),
+   4.23:1 on the light panel, under the 4.5:1 floor for 10 px text. At 0.7 it reads 5.82:1 there,
+   6.59:1 on the chat page's dark panel and 8.12:1 on the standalone pages' dark panel. */
+.cb-chart .cb-axis { fill: currentColor; fill-opacity: .7; font-size: 10px }
 .cb-chart .cb-cursor { stroke: #2563eb; stroke-width: 1; stroke-dasharray: 3 3 }
 .cb-chart .cb-dot-mark { fill: #2563eb }
 .cb-ptip { position: absolute; z-index: 60; padding: 3px 7px; border-radius: 6px; background: #1b2430;

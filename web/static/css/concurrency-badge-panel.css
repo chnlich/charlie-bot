@@ -1,0 +1,38 @@
+/* The concurrency badge's open panel: the chart, its ranges and its dismiss control.
+ *
+ * The badge loads this sheet on the panel's first open, so a page whose badge is never opened carries neither these
+ * rules nor their bytes. The badge at rest is concurrency-badge.css, which every page inlines with the fragment.
+ */
+.cb-panel { position: absolute; top: calc(100% + 6px); right: 0; z-index: 50; width: 420px; max-width: 92vw;
+  padding: 12px 14px 14px; border-radius: 10px; border: 1px solid #d9dfe6; background: #ffffff; color: #1b2430;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, .18); font-size: 12.5px; text-align: left }
+@media (prefers-color-scheme: dark) {
+  .cb-panel { border-color: #38383a; background: #1a1a19; color: #f2f2ef }
+}
+body.dark .cb-panel { border-color: #334155; background: #1e293b; color: #e2e8f0 }
+.cb-head { display: flex; align-items: center; gap: 8px }
+.cb-title { font-size: 13px; font-weight: 600; margin-right: auto }
+.cb-ranges { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: rgba(128, 138, 152, .16) }
+/* Each range takes a 24 px tall box: the chips draw 22.4 px with 30.8-34 px between centres, so one
+   fingertip on a phone covers two of them. The box carries the height and the 8 px inline padding stays.
+   The result: every chip keeps its width, the group grows 1.6 px, and the header row keeps its one line. */
+.cb-range { display: inline-flex; align-items: center; min-height: 24px; padding: 0 8px; border: 0;
+  border-radius: 5px; background: transparent; color: inherit; font: inherit; font-size: 11.5px; cursor: pointer }
+.cb-range[aria-pressed="true"] { background: #2563eb; color: #ffffff }
+/* The 24 px box gives the panel's one dismiss control the same fingertip target as the range chips beside it. */
+.cb-close { width: 24px; height: 24px; border: 0; border-radius: 5px; background: transparent; color: inherit;
+  font-size: 16px; line-height: 1; cursor: pointer; opacity: .65 }
+.cb-close:hover { opacity: 1 }
+.cb-peak { margin: 8px 0 0; font-weight: 600; font-variant-numeric: tabular-nums }
+.cb-chart { position: relative; margin-top: 6px; min-height: 150px }
+.cb-chart svg { display: block; overflow: visible }
+.cb-chart .cb-line { fill: none; stroke: #2563eb; stroke-width: 1.5; stroke-linejoin: round }
+.cb-chart .cb-area { fill: #2563eb; fill-opacity: .16; stroke: none }
+.cb-chart .cb-grid { stroke: rgba(128, 138, 152, .4); stroke-width: 1 }
+.cb-chart .cb-axis { fill: currentColor; fill-opacity: .6; font-size: 10px }
+.cb-chart .cb-cursor { stroke: #2563eb; stroke-width: 1; stroke-dasharray: 3 3 }
+.cb-chart .cb-dot-mark { fill: #2563eb }
+.cb-ptip { position: absolute; z-index: 60; padding: 3px 7px; border-radius: 6px; background: #1b2430;
+  color: #ffffff; font-size: 11px; white-space: nowrap; pointer-events: none; transform: translate(-50%, -130%) }
+.cb-status { margin: 8px 0 0; opacity: .7 }
+.cb-empty { margin: 0; padding: 56px 0; text-align: center; opacity: .7 }

@@ -102,3 +102,141 @@ test('the badge keeps one request in flight, and a refresh during it queues exac
   await flush();
   assert.equal(page.requests.length, 2, 'nothing else queued, so no third request');
 });
+
+// ---------------------------------------------------------------------------
+// The open panel's stylesheet: the page's document carries the badge at rest,
+// and the module fetches the panel's rules on the panel's first open.
+// ---------------------------------------------------------------------------
+const PANEL_STYLES = '/static/css/concurrency-badge-panel.css?v=v1';
+
+function loadBadgeWithPanel() {
+  const listeners = new Map();
+  const links = [];
+  const errors = [];
+  const badge = {
+    dataset: {panelStyles: PANEL_STYLES},
+    attributes: {},
+    setAttribute(name, value) { this.attributes[name] = value; },
+  };
+  const panel = {
+    hidden: true,
+    style: {},
+    offsetParent: null,
+    getBoundingClientRect: () => ({left: 0, width: 0}),
+  };
+  const tip = {hidden: true, textContent: '3 manager turns · 1 worker run'};
+  const document = {
+    hidden: false,
+    visibilityState: 'visible',
+    readyState: 'complete',
+    head: {appendChild(link) { links.push(link); }},
+    addEventListener(type, fn) {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push(fn);
+    },
+    getElementById: (id) => (
+      {'concurrency-badge': badge, 'concurrency-panel': panel, 'concurrency-tip': tip}[id] || null),
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    createElement: () => ({removed: false, remove() { this.removed = true; }}),
+  };
+  class Element {}
+  const context = {
+    document,
+    Element,
+    console: {error(...args) { errors.push(args.join(' ')); }, warn() {}, log() {}},
+    window: {addEventListener() {}, setInterval: () => 0, clearInterval() {}, setTimeout: () => 0, innerWidth: 1024},
+    setTimeout: () => 0,
+    clearTimeout() {},
+    fetch: () => Promise.resolve({ok: true, json: async () => ({points: []})}),
+    Date,
+    Math,
+    Number,
+    String,
+    Array,
+    Object,
+    JSON,
+  };
+  context.globalThis = context;
+  vm.createContext(context);
+  vm.runInContext(BADGE_JS, context, {filename: 'concurrency-badge.js'});
+  // One delegated event whose target matches one selector of the handlers.
+  const dispatch = (type, selector) => {
+    const target = new Element();
+    target.closest = (name) => (name === selector ? target : null);
+    (listeners.get(type) || []).forEach((fn) => fn({target}));
+  };
+  const click = (selector) => dispatch('click', selector);
+  const hover = (selector) => dispatch('mouseover', selector);
+  return {badge, panel, tip, links, errors, click, hover};
+}
+
+test('the panel shows only once its stylesheet has loaded, and one link serves every open', async () => {
+  const page = loadBadgeWithPanel();
+  page.click('#concurrency-badge');
+  await flush();
+  assert.deepEqual(page.links.map((link) => link.href), [PANEL_STYLES]);
+  assert.equal(page.panel.hidden, true, 'the panel waits for the rules it paints with');
+
+  page.links[0].onload();
+  await flush();
+  assert.equal(page.panel.hidden, false);
+  assert.equal(page.badge.attributes['aria-expanded'], 'true');
+
+  page.click('#concurrency-close');
+  assert.equal(page.panel.hidden, true);
+  page.click('#concurrency-badge');
+  await flush();
+  assert.equal(page.links.length, 1, 'the second open reuses the loaded stylesheet');
+});
+
+test('a panel stylesheet that fails still opens the panel, and the next open retries', async () => {
+  const page = loadBadgeWithPanel();
+  page.click('#concurrency-badge');
+  await flush();
+  page.links[0].onerror();
+  await flush();
+  assert.equal(page.panel.hidden, false, 'the panel stays readable without its rules');
+  assert.equal(page.links[0].removed, true, 'the failed link leaves the page');
+  assert.match(page.errors[0], /concurrency badge: the badge panel stylesheet did not load/);
+
+  page.click('#concurrency-close');
+  page.click('#concurrency-badge');
+  await flush();
+  assert.deepEqual(page.links.map((link) => link.href), [PANEL_STYLES, PANEL_STYLES],
+    'a failed link is dropped, so the next open asks again');
+});
+
+test('closing the panel while its stylesheet travels cancels that open', async () => {
+  const page = loadBadgeWithPanel();
+  page.click('#concurrency-badge');
+  await flush();
+  page.click('#concurrency-close');
+  page.links[0].onload();
+  await flush();
+  assert.equal(page.panel.hidden, true, 'the closed panel does not reopen when the sheet lands');
+});
+
+test('a second badge click while the sheet travels closes the badge instead of opening it', async () => {
+  const page = loadBadgeWithPanel();
+  page.click('#concurrency-badge');
+  await flush();
+  page.click('#concurrency-badge');
+  page.links[0].onload();
+  await flush();
+  assert.equal(page.panel.hidden, true, 'the second click toggled the badge shut');
+  assert.notEqual(page.badge.attributes['aria-expanded'], 'true');
+});
+
+test('a hover during the wait leaves the tooltip hidden once the panel opens', async () => {
+  const page = loadBadgeWithPanel();
+  page.click('#concurrency-badge');
+  await flush();
+  page.hover('#concurrency-badge');
+  assert.equal(page.tip.hidden, false, 'the hover tip paints while the panel is not up yet');
+
+  page.links[0].onload();
+  await flush();
+  assert.equal(page.panel.hidden, false);
+  assert.equal(page.tip.hidden, true, 'the open panel hides the tip it would paint over');
+});

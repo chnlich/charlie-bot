@@ -1,0 +1,41 @@
+/* The concurrency badge at rest: the badge itself, its live dot and its hover tip.
+ *
+ * A page inlines this sheet once per copy of the fragment (the live copy and the template copy the rebuild clones),
+ * and the template loader strips these comments from the inline form. The open panel's rules travel as their own
+ * stylesheet, concurrency-badge-panel.css, which the badge loads on its first open.
+ */
+.cb-slot { position: relative; display: flex; align-items: center; margin-left: auto; flex: 0 0 auto }
+/* A page with no top bar: the fragment's own slot is the bar. */
+body > .cb-slot { justify-content: flex-end; margin-left: 0; padding: 8px 24px;
+  border-bottom: 1px solid rgba(128, 138, 152, .28); background: rgba(255, 255, 255, .55) }
+/* On a phone the body padding is the page's content gutter — 14 px on home and token usage, 24 px on approval
+   and host auth. The page content fills the body's content box. The bar then keeps only its vertical
+   padding, so the badge ends on the same edge as the content below it instead of a further 24 px inside. */
+@media (max-width: 760px) { body > .cb-slot { padding-left: 0; padding-right: 0 } }
+@media (prefers-color-scheme: dark) {
+  body > .cb-slot { background: rgba(18, 18, 19, .55); border-bottom-color: rgba(128, 138, 152, .3) }
+}
+body.dark > .cb-slot { background: rgba(15, 23, 42, .55); border-bottom-color: rgba(148, 163, 184, .25) }
+.cb-anchor { position: relative; display: flex; align-items: center }
+.cb-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid rgba(128, 138, 152, .45); background: rgba(128, 138, 152, .12); color: inherit;
+  font: inherit; font-size: 12px; font-weight: 600; line-height: 1.4; white-space: nowrap; cursor: pointer }
+.cb-badge:hover { background: rgba(128, 138, 152, .22) }
+/* The open badge's accent draws on the badge's own tinted fill, not on the page behind it.
+   There #2563eb reads 4.41:1 at rest and 3.97:1 while hovered, under the 4.5:1 floor for 12 px text.
+   Blue-700 #1d4ed8 reads 5.71:1 and 5.14:1, and the blue-500 ring keeps 3.97:1, above the 3:1 border floor.
+   A dark page takes blue-300 #93c5fd (8.74:1, 7.49:1 hovered) and a blue-400 #60a5fa ring.
+   The two dark blocks carry identical declarations, and :where() keeps the media rule at zero specificity
+   so an explicit data-theme choice wins, as in partials/standalone_base_styles.html. */
+:root { --cb-open-fg: #1d4ed8; --cb-open-ring: #2563eb }
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) { --cb-open-fg: #93c5fd; --cb-open-ring: #60a5fa }
+}
+:root[data-theme="dark"] { --cb-open-fg: #93c5fd; --cb-open-ring: #60a5fa }
+body.dark { --cb-open-fg: #93c5fd; --cb-open-ring: #60a5fa }
+.cb-badge[aria-expanded="true"] { border-color: var(--cb-open-ring); color: var(--cb-open-fg) }
+.cb-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: #22c55e }
+.cb-badge[data-running="0"] .cb-dot { background: #94a3b8 }
+.cb-tip { position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; padding: 4px 8px;
+  border-radius: 6px; background: #1b2430; color: #ffffff; font-size: 11.5px; white-space: nowrap;
+  pointer-events: none }

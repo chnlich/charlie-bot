@@ -142,7 +142,7 @@ async function steadyWarmProfile(ctx, label, sessionIds) {
     await tab.ready();
     await tabs.show(tab);
     await tabs.waitIdle(SETTLE_TIMEOUT_MS);
-    await waitForWarm(tab, OPEN.warmTimeoutMs);
+    await waitForWarm(tab, OPEN.warmTimeoutMs, {required: ctx.side === 'after'});
     // The second open boots through the stored shell, so the worker controls the page from its start
     // and the first screens the fetches below bring home are stored as they pass. It runs in a fresh
     // tab: the first page's requests that a navigation would interrupt are records no settle can close.
@@ -848,7 +848,18 @@ export async function toolStreamRep(ctx) {
       if (!Array.isArray(payload.tools)) continue;
       const from = typeof payload.tools_from === 'number' ? payload.tools_from : 0;
       if (from > held.length) {
-        throw new Error(`stream frame tools_from ${from} is past the ${held.length} held tool rows`);
+        const seen = tab.framesBetween(sentAt, finished.at).map((frame) => {
+          let parsed = null;
+          try { parsed = JSON.parse(frame.text); } catch { /* a frame the parser cannot read */ }
+          return {
+            msFromSend: frame.at - sentAt,
+            type: frame.type,
+            toolsFrom: parsed && typeof parsed.tools_from === 'number' ? parsed.tools_from : null,
+            toolCount: parsed && Array.isArray(parsed.tools) ? parsed.tools.length : null,
+          };
+        }).filter((entry) => entry.type === 'stream' || entry.toolsFrom !== null).slice(0, 20);
+        throw new Error(`stream frame tools_from ${from} is past the ${held.length} held tool rows; ` +
+          `the stream frames since the send: ${JSON.stringify(seen)}`);
       }
       held = held.slice(0, from).concat(payload.tools);
       toolRowBytes += Buffer.byteLength(JSON.stringify(payload.tools));

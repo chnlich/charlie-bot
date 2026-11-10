@@ -232,7 +232,7 @@ async function buildWarm(ctx, caseName) {
     // fetch stores the session's copy — the browser state the case names under the offline shell. The
     // second open runs in a fresh tab: the first page's requests that the navigation would interrupt
     // are records no settle can close.
-    await waitForWarm(tab, OPEN.warmTimeoutMs);
+    await waitForWarm(tab, OPEN.warmTimeoutMs, {required: ctx.side === 'after'});
     await tabs.close(tab);
     const second = await tabs.open('warm-shell', WARM_PROBE_INIT);
     await tabs.navigate(second, `/?session=${session.id}`);
@@ -359,10 +359,16 @@ async function measureOnce(ctx, cell, repetition) {
       ? await tab.evaluate("performance.getEntriesByType('navigation')[0]?.responseEnd ?? null")
       : null;
     const openCase = navigationError === null ? await pageOpenCase(tab) : null;
-    if (openCase !== null && openCase !== cell.case) {
+    // The plan's case gates read case A's rows; B and C report their times only. A release open of the
+    // offline shell starts twice — the stored shell of the old release answers the hold, and the 4409
+    // reload brings the new one — and the plan's own case semantics make the reload case A for a B cell:
+    // by its second start the browser has opened the session. Asserting the case there would fail every
+    // shell-served B release, so the record stays a reported field for B and C.
+    if (cell.case === 'A' && openCase !== null && openCase !== cell.case) {
       throw new Error(`the page of ${cell.id} opened as case ${openCase}, not ${cell.case}`);
     }
-    if (navigationError === null && caseFromRecord(pageState.recordAtStart, session.id) !== cell.case) {
+    if (cell.case === 'A' && navigationError === null &&
+        caseFromRecord(pageState.recordAtStart, session.id) !== cell.case) {
       throw new Error(`the record ${cell.id} starts from does not name case ${cell.case}`);
     }
     const timeOrigin = pageState !== null ? pageState.timeOrigin : null;

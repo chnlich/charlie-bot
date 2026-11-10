@@ -147,6 +147,14 @@ function warmTab({ reported, registered }) {
         if (reported !== null) return true;
         return Promise.resolve(!registered);
       }
+      if (expression.includes(`'serviceWorker' in navigator`)) {
+        return {
+          supported: true,
+          registration: registered ? {scope: 'https://front.test/', active: true} : null,
+          controller: registered,
+          href: 'https://front.test/?session=s1',
+        };
+      }
       return reported;
     },
   };
@@ -160,6 +168,14 @@ test('the warm wait closes on the page report and lets a stored warm through', a
 test('the warm wait closes on a client with no registration, which predates the offline shell', async () => {
   const tab = warmTab({ reported: null, registered: false });
   await waitForWarm(tab, 1000);
+});
+
+test('a side that requires the warm fails when no registration reports one', async () => {
+  const tab = warmTab({ reported: null, registered: false });
+  await assert.rejects(
+    waitForWarm(tab, 1000, {required: true}),
+    /the offline shell warm never reported/,
+  );
 });
 
 test('the warm wait fails the run on a warm that reports a failure', async () => {

@@ -126,7 +126,7 @@ function fetchFilterListing(filter, {networkOnly}) {
 
 function keepCurrentUnread(row, requestSeq) {
   if (replyIsCurrent('unread', row.id, requestSeq)) return row;
-  return Object.assign({}, row, {has_unread: sessionUnread[row.id]});
+  return Object.assign({}, row, {has_unread: Sidebar.ownUnread(row.id)});
 }
 
 function paintListing({rows, stored}, filter, options = {}) {

@@ -140,7 +140,7 @@ export const WARM_PROBE_INIT = 'window.__pnWarm = null;' +
 // Waits for the warm's outcome, or for the absence of any registration on a client that predates the
 // offline shell: either closes the wait. A warm that failed throws, so a profile without a stored shell
 // never reaches a measured cell.
-export async function waitForWarm(tab, timeoutMs) {
+export async function waitForWarm(tab, timeoutMs, {required = false} = {}) {
   await waitFor(
       () => tab.evaluate(
           'window.__pnWarm !== null ? true : navigator.serviceWorker.getRegistration()' +
@@ -149,9 +149,11 @@ export async function waitForWarm(tab, timeoutMs) {
       'the offline shell warm to settle');
   const warm = await tab.evaluate('window.__pnWarm');
   if (warm === null) {
-    // A page without a service worker at all warms nothing: a client this old keeps the page it has. Any
-    // other silence is a broken warm — the worker never registered or never answered — and the profiles it
-    // would have stored are missing, so a later cell measures a browser without the shell.
+    // A page without a service worker at all warms nothing: a client this old keeps the page it has, which
+    // is a tree without the feature. Any other silence on a side that carries the shell is a broken warm —
+    // the worker never registered or never answered — and the profiles it would have stored are missing, so
+    // a later cell measures a browser without the shell.
+    if (!required) return;
     const state = await tab.evaluate(`(async () => ({
       supported: 'serviceWorker' in navigator,
       registration: 'serviceWorker' in navigator
@@ -161,6 +163,8 @@ export async function waitForWarm(tab, timeoutMs) {
       controller: navigator.serviceWorker ? navigator.serviceWorker.controller !== null : false,
       href: location.href,
     }))()`);
+    // The side that carries the offline shell must warm; a tree without the feature registers no worker
+    // and warms nothing, which is the before side's legitimate shape.
     if (state.supported) {
       throw new Error(`the offline shell warm never reported: ${JSON.stringify(state)}`);
     }
@@ -279,6 +283,7 @@ export class Tab {
       return 'expanded';
     })()`);
     if (step === 'unreachable') {
+      // The dump is best effort: a caller whose document cannot answer it still names the missing row.
       const sidebar = await this.evaluate(`(() => {
         const rows = Array.from(document.querySelectorAll('#session-list a.session-row'));
         const toggles = Array.from(document.querySelectorAll('.session-group-limit-toggle'));
@@ -286,11 +291,11 @@ export class Tab {
           rows: rows.length,
           rowIds: rows.map((row) => decodeURIComponent((row.href.match(/session=([^&]+)/) ?? [])[1] ?? '')).slice(0, 40),
           toggles: toggles.map((toggle) => toggle.dataset.sgroupLimitToggleKey),
-          filter: window.currentFilter ?? null,
+          filter: typeof currentFilter === 'undefined' ? null : currentFilter,
           listHtml: (document.getElementById('session-list')?.innerHTML ?? '').slice(0, 200),
           initialSessionsType: typeof INITIAL_SESSIONS,
         };
-      })()`);
+      })()`).catch((error) => `unreadable: ${error.message}`);
       throw new Error(`no sidebar row for session ${session.id} on ${this.name}, and its group ` +
         `${JSON.stringify(session.group)} shows no Show all toggle; the sidebar: ${JSON.stringify(sidebar)}; ` +
         `the console: ${JSON.stringify(this.consoleLines.slice(-8))}; ` +

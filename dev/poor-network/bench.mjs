@@ -318,6 +318,7 @@ async function main() {
   // Every failure after this point still writes the side's JSON, with status failed and the error.
   const ctx = {
     api,
+    side: args.side,
     sessions: null,
     view: null,
     assets: new Map(),

@@ -486,10 +486,7 @@ mod tests {
   fn a_slash_after_a_value_divides_and_a_slash_after_an_operator_opens_a_regex() {
     assert_eq!(without_comments("let c = a / b; // gone"), "let c=a/b;");
     assert_eq!(without_comments("let r = return_value / 2; // gone"), "let r=return_value/2;");
-    assert_eq!(
-      without_comments("function f() { return /x/.test(y); } // gone"),
-      "function f(){return/x/.test(y);}"
-    );
+    assert_eq!(without_comments("function f() { return /x/.test(y); } // gone"), "function f(){return/x/.test(y);}");
   }
 
   #[test]

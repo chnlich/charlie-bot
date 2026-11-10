@@ -18,6 +18,8 @@ use charliebot_agents::cli_base::{
 };
 use charliebot_agents::event_builders::{make_error_event, make_result_event, make_text_event};
 
+use super::envelope;
+
 /// The stderr line that `agy` prints when its turn outlives `--print-timeout`.
 static PRINT_TIMEOUT_RE: LazyLock<Regex> = LazyLock::new(|| {
   Regex::new(r"\[agy\] print timeout after (\S+) with turn in progress").expect("the print-timeout pattern is valid")
@@ -102,7 +104,7 @@ impl AntigravityBackend {
 
     // The envelope is the only machine-readable source of the conversation id and the usage, so stdout that is not an
     // envelope breaches the contract.
-    let Some(envelope) = parse_envelope(stdout_text) else {
+    let Some(envelope) = envelope::parse(stdout_text) else {
       let preview: String = stdout_text.chars().take(NON_ENVELOPE_PREVIEW_CHARS).collect();
       return finished(
         vec![make_error_event(&format!("agy exited 0 with non-envelope stdout: {preview}"))],
@@ -117,7 +119,7 @@ impl AntigravityBackend {
       return finished(vec![make_error_event(&message)], 1, None);
     }
 
-    if envelope.status != "SUCCESS" {
+    if envelope.status != envelope::SUCCESS {
       let message = ["error", "response"]
         .iter()
         .filter_map(|key| envelope.fields.get(*key))
@@ -199,26 +201,9 @@ impl AgentBackend for AntigravityBackend {
   }
 }
 
-/// An `agy` JSON envelope: an object whose `status` is a string. The other fields stay in `fields`.
-struct Envelope {
-  status: String,
-  fields: Map<String, Value>,
-}
-
-/// `_parse_envelope`: the stdout as an envelope, or `None` when it is not one.
-fn parse_envelope(stdout: &str) -> Option<Envelope> {
-  match serde_json::from_str::<Value>(stdout) {
-    Ok(Value::Object(mut fields)) => match fields.remove("status") {
-      Some(Value::String(status)) => Some(Envelope { status, fields }),
-      _ => None,
-    },
-    _ => None,
-  }
-}
-
 /// The message of a nonzero exit: the envelope's error when it names one, else the stdout, else the exit code.
 fn nonzero_exit_message(stdout_text: &str, exit_code: i32) -> String {
-  let envelope_error = parse_envelope(stdout_text)
+  let envelope_error = envelope::parse(stdout_text)
     .and_then(|envelope| envelope.fields.get("error").and_then(Value::as_str).map(str::to_string));
   match envelope_error {
     Some(error) => format!("agy exited {exit_code}: {error}"),

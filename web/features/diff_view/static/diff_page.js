@@ -690,7 +690,8 @@
 
     // Desktop: one line of chevron, status, counts, then the path. A phone lays the row out as the diff page's
     // `.diff-file-row` grid. The name and the counts share its first line. A path with a directory puts it on the
-    // second line, so a file at the repository root keeps one line.
+    // second line, and a move's source label takes the line after those, so a root-level file keeps one line
+    // unless it is a move.
     const header = document.createElement('button');
     header.type = 'button';
     header.className =

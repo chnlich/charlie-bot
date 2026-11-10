@@ -35,8 +35,8 @@ use serde_json::{Value, json};
 /// One hook part holds at most this many characters.
 const MAX_PART_CHARS: usize = 9000;
 
-/// The hook accepts slots 1..=6, and the split yields at most six parts.
-const MAX_PARTS: usize = 6;
+/// The split yields at most one part per slot the SessionStart hook installs.
+const MAX_PARTS: usize = claude_launch::COMPACTION_CONTEXT_SLOTS;
 
 #[derive(Parser)]
 #[command(name = "compaction-context", about = "Restore skills read by a Claude manager session after compaction")]
@@ -44,7 +44,7 @@ struct CompactionContextCli {
   /// CharlieBot session id
   #[arg(long)]
   session: String,
-  /// Part number from 1 to 6
+  /// Part number, from 1 to the installed slot count
   #[arg(long, value_parser = clap::value_parser!(i64).range(1..=MAX_PARTS as i64))]
   slot: i64,
 }

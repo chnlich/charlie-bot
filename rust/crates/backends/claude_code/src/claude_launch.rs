@@ -30,6 +30,10 @@ pub const POST_TOOL_USE_FAILURE_HOOK_EVENT: &str = "PostToolUseFailure";
 /// names it.
 pub const SESSION_START_HOOK_EVENT: &str = "SessionStart";
 
+/// The number of `charliebot compaction-context` slots the SessionStart hook installs, one command per slot. The
+/// command accepts these slots and splits the re-attached text into at most as many parts, so it reads this count.
+pub const COMPACTION_CONTEXT_SLOTS: usize = 6;
+
 pub const HEADLESS_FORWARDED_ENV: [&str; 4] =
   [AUTOCOMPACT_PCT_OVERRIDE_ENV, MAX_CONTEXT_TOKENS_ENV, AUTO_COMPACT_WINDOW_ENV, SIMPLE_SYSTEM_PROMPT_ENV];
 
@@ -57,7 +61,7 @@ fn shlex_quote(value: &str) -> String {
 
 /// The SessionStart hook that restores a manager session's read skills after compaction.
 pub fn compaction_context_hook_settings(session_id: &str) -> Map<String, Value> {
-  let hooks: Vec<Value> = (1..=6)
+  let hooks: Vec<Value> = (1..=COMPACTION_CONTEXT_SLOTS)
     .map(|slot| {
       json!({
         "type": "command",

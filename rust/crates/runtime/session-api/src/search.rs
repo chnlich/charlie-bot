@@ -464,18 +464,22 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
   search_sessions_with_limit(store, query, memos, SEARCH_RESULT_LIMIT)
 }
 
-/// The body a repeat of `query` over `corpus` already holds, when every check its memo makes holds without reading a
-/// file, and `None` when the answer needs a signature read or a scan.
+/// A repeat answer: the rows its match holds and the body rendered for the request's generation.
+pub(crate) type RepeatAnswer = (Vec<Arc<SessionMetadata>>, Arc<Vec<u8>>);
+
+/// The rows and body a repeat of `query` over `corpus` already holds, when every check its memo makes holds without
+/// reading a file, and `None` when the answer needs a signature read or a scan.
 ///
-/// A body this returns is the body a rebuild would render: the match it comes from passed the same corpus-identity
-/// and verification checks [`search_sessions`] makes before it answers a repeat from the memo. The route calls this
-/// on the request's own thread, because the blocking pool exists for the file reads a fresh query and a lapsed check
-/// need, and this path makes none.
+/// The body this returns is the body a rebuild would render: the match it comes from passed the same corpus-identity
+/// and verification checks [`search_sessions`] makes before it answers a repeat from the memo. The rows come with it
+/// because a route that answers from a memo still counts its sidebar read, which is what starts the periodic sweep for
+/// an edit made outside the server. The route calls this on the request's own thread, because the blocking pool exists
+/// for the file reads a fresh query and a lapsed check need, and this path makes none.
 pub(crate) fn repeat_answer(
   query: &str,
   corpus: &Arc<Vec<Arc<SessionMetadata>>>,
   generation: u64,
-) -> Option<Arc<Vec<u8>>> {
+) -> Option<RepeatAnswer> {
   repeat_answer_with_memos(query, corpus, generation, &SEARCH_MEMOS)
 }
 
@@ -484,7 +488,7 @@ fn repeat_answer_with_memos(
   corpus: &Arc<Vec<Arc<SessionMetadata>>>,
   generation: u64,
   memos: &Mutex<SearchMemos>,
-) -> Option<Arc<Vec<u8>>> {
+) -> Option<RepeatAnswer> {
   if query.trim().is_empty() {
     return None;
   }
@@ -497,7 +501,7 @@ fn repeat_answer_with_memos(
   if !Arc::ptr_eq(&cached.corpus, corpus) || !cached.verification_holds(sweep_interval) {
     return None;
   }
-  cached.body(generation)
+  Some((cached.rows.clone(), cached.body(generation)?))
 }
 
 fn search_sessions_with_limit(
@@ -1827,10 +1831,13 @@ mod tests {
     first.source.expect("a fresh query names the match it built").remember_body(7, Arc::new(b"needle body".to_vec()));
     let (corpus, _) = store.load_session_metas_snapshot_versioned(None).unwrap();
 
+    let (rows, body) = super::repeat_answer_with_memos("needle", &corpus, 7, &memos)
+      .expect("the repeat answer serves the body its match built for the generation the request read");
+    assert_eq!(body.to_vec(), b"needle body".to_vec());
     assert_eq!(
-      super::repeat_answer_with_memos("needle", &corpus, 7, &memos).map(|body| body.to_vec()),
-      Some(b"needle body".to_vec()),
-      "the repeat answer serves the body its match built for the generation the request read"
+      rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(),
+      ["content"],
+      "the rows come with the body, so the route can count its sidebar read"
     );
     assert!(
       super::repeat_answer_with_memos("needle", &corpus, 8, &memos).is_none(),

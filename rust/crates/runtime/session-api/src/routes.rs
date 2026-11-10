@@ -641,8 +641,13 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
   // in memory, and the checks that answer it read no file. A fresh query, or one whose check has lapsed, takes the
   // blocking path below, which reads the files the answer depends on.
   if let Some(corpus) = features.store.cached_session_metas_snapshot()
-    && let Some(body) = search::repeat_answer(&q, &corpus, generation)
+    && let Some((rows, body)) = search::repeat_answer(&q, &corpus, generation)
   {
+    // The body resolved its sidebar fields when it was rendered, but the read still counts: the periodic self-heal
+    // sweep a memoized answer starts is what catches an edit made outside the server.
+    if let Err(error) = sidebar::count_memoized_read(&features.store, &features.registry, &rows) {
+      return store_error(error);
+    }
     return gzip_response(&request, (*body).clone(), &SEARCH_GZIP_MEMO);
   }
   let (answer, derived) = match blocking_store(move || {

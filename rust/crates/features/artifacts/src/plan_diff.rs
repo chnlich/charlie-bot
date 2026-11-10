@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 
 use charliebot_core::sequence_diff::{Opcode, OpcodeTag, opcodes};
 use charliebot_core::str_methods;
-use charliebot_html::{EventKind, StreamEvent, escape, parse_with, unescape};
+use charliebot_html::{EscapeContext, EventKind, StreamEvent, escape, parse_with, unescape};
 use regex::Regex;
 
 /// The parser's void-element set, which the artifact check reads through this module.
@@ -689,7 +689,7 @@ fn add_attr(
     return Ok(());
   }
   let addition = match value {
-    Some(value) => format!(" {name}=\"{}\"", escape(value, true)),
+    Some(value) => format!(" {name}=\"{}\"", escape(value, EscapeContext::QuotedAttribute)),
     None => format!(" {name}"),
   };
   add_insertion(insertions, start + attr_insert_offset(raw), addition);
@@ -871,7 +871,7 @@ fn ghost_markup(parser: &Parser, leaf: &Leaf, base_source: &str) -> String {
       base_source[end..].chars().take_while(|character| str_methods::is_whitespace(*character)).collect::<String>()
     })
     .unwrap_or_default();
-  let data = escape(&format!("{text}{trailing}"), true);
+  let data = escape(&format!("{text}{trailing}"), EscapeContext::QuotedAttribute);
   if node.tag == "tr" {
     let cells = node
       .children
@@ -968,7 +968,7 @@ fn render_leaf_changes(
         let offset =
           (if position < new_leaves.len() { parser.nodes[target].start } else { parser.nodes[target].end_end })
             .ok_or_else(|| "cannot anchor a deleted text leaf".to_owned())?;
-        let data = escape(&leaf_text(old_parser, old_leaf), true);
+        let data = escape(&leaf_text(old_parser, old_leaf), EscapeContext::QuotedAttribute);
         add_insertion(insertions, offset, format!("<span class=\"cbd-del\" data-del=\"{data}\"></span>"));
         details.extend(ancestor_details(parser, target));
       }
@@ -1014,7 +1014,8 @@ fn render_leaf_changes(
       let old_text =
         token_text(old_parser, old_leaf, &old_tokens, opcode.a_start, opcode.a_end, opcode.b_start == opcode.b_end);
       if !old_text.is_empty() {
-        let deletion = format!("<span class=\"cbd-del\" data-del=\"{}\"></span>", escape(&old_text, true));
+        let deletion =
+          format!("<span class=\"cbd-del\" data-del=\"{}\"></span>", escape(&old_text, EscapeContext::QuotedAttribute));
         add_insertion(insertions, anchor_offset(&new_tokens, opcode.b_start, parser, new_leaf)?, deletion);
       }
       for (start, end) in raw_bounds(parser, &new_tokens, opcode.b_start, opcode.b_end, new_leaf) {
@@ -1083,7 +1084,10 @@ fn append_style_and_header(source: &str) -> Result<String, String> {
   } else {
     source.len()
   };
-  let header = format!("<div class=\"cbd-header\" data-cbd-header=\"{}\"></div>", escape(HEADER_TEXT, true));
+  let header = format!(
+    "<div class=\"cbd-header\" data-cbd-header=\"{}\"></div>",
+    escape(HEADER_TEXT, EscapeContext::QuotedAttribute)
+  );
   add_insertion(&mut insertions, offset, header);
   Ok(splice(source, &insertions))
 }

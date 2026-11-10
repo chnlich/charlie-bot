@@ -20,6 +20,7 @@ use charliebot_core::event_types;
 use charliebot_core::logline;
 use charliebot_core::pacific;
 use charliebot_core::run_kind::RunKind;
+use charliebot_core::timefmt;
 use charliebot_registry::backend::Env;
 use charliebot_store::CompactValue;
 use charliebot_store::chat_events::{self, LineRule};
@@ -30,7 +31,6 @@ use charliebot_store::run_records::{
 };
 use jiff::Timestamp;
 use jiff::civil;
-use jiff::tz::TimeZone;
 use regex::Regex;
 
 use crate::signature::{
@@ -492,7 +492,7 @@ fn parse_log_line(line: &str) -> Option<LogRecord> {
     });
   }
   let (instant, rest) = parse_text_stamp(trimmed)?;
-  let canonical = format!("{}{rest}", canonical_stamp(instant));
+  let canonical = format!("{}{rest}", timefmt::log_timestamp_of(instant));
   let row = logline::parse(&canonical)?;
   let message = log_message(&row);
   Some(LogRecord { instant, level: logline::level(&canonical)?, event: row.event, message, line: trimmed.to_string() })
@@ -518,20 +518,6 @@ fn parse_text_stamp(line: &str) -> Option<(Timestamp, &str)> {
     zone.to_zoned(local).ok()?.timestamp()
   };
   Some((instant, &line[whole.end()..]))
-}
-
-fn canonical_stamp(instant: Timestamp) -> String {
-  let moment = instant.to_zoned(TimeZone::UTC).datetime();
-  format!(
-    "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}Z",
-    moment.year(),
-    moment.month(),
-    moment.day(),
-    moment.hour(),
-    moment.minute(),
-    moment.second(),
-    moment.subsec_nanosecond() / 1_000_000
-  )
 }
 
 /// The repository's log directory must exist before a scan reads it.

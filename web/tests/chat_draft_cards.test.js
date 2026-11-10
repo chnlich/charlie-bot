@@ -6,11 +6,15 @@
 // failure tells the operator to check the target before resending.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
 const {loadChatRendering} = require('./chat_rendering_context_stub');
 const {readPackageStatic} = require('./read_static');
+
+const LOADER = path.join(__dirname, '..', 'templates', 'drafts', 'draft-cards.js');
 
 function loadDraftCards() {
   const context = loadChatRendering();
@@ -187,4 +191,72 @@ test('the outcome lines carry the marker the card update reads', () => {
   assert.ok(sent.includes('data-sender="U0SYNTHETIC"'));
   assert.ok(failed.includes('data-draft-failed="d7"'));
   assert.ok(failed.includes('data-outcome="rejected"'));
+});
+
+test('the page part loads the module on the first draft and fills the placeholder in place', () => {
+  const context = loadChatRendering();
+  const loads = [];
+  context.loadPageScripts = (key, sources) => {
+    loads.push({key, sources});
+    return Promise.resolve();
+  };
+  vm.runInContext(fs.readFileSync(LOADER, 'utf8'), context, {filename: 'drafts/draft-cards.js'});
+
+  const placeholder = context.renderMessage(draftMessage('first body'), 'sess-1');
+  assert.match(placeholder, /id="draft-pending-0"/, 'a draft message renders the placeholder');
+  assert.equal(loads.length, 1, 'the first draft starts the download');
+  assert.equal(loads[0].sources.length, 1, 'the download asks for the one module');
+  assert.equal(loads[0].sources[0], '/static/features/drafts/draft-cards.js');
+
+  context.renderMessage(draftMessage('second body'), 'sess-1');
+  assert.equal(loads.length, 1, 'a later draft joins the same download');
+
+  const nodes = new Map();
+  context.document.getElementById = (id) => {
+    if (!nodes.has(id)) nodes.set(id, {outerHTML: ''});
+    return nodes.get(id);
+  };
+  context.document.querySelectorAll = () => [];
+  vm.runInContext(readPackageStatic('features', 'drafts', 'draft-cards.js'), context, {filename: 'drafts/draft-cards.js'});
+
+  assert.match(nodes.get('draft-pending-0').outerHTML, /data-draft-id="d7"/, 'the first placeholder holds a card');
+  assert.match(nodes.get('draft-pending-1').outerHTML, /data-draft-id="d7"/, 'the second placeholder holds a card');
+  const after = context.renderMessage(draftMessage('third body'), 'sess-1');
+  assert.match(after, /data-draft-id="d7"/, 'a later draft renders through the module at once');
+});
+
+test('a placeholder the turn engine holds is replaced through the engine', () => {
+  const context = loadChatRendering();
+  context.loadPageScripts = () => Promise.resolve();
+  vm.runInContext(fs.readFileSync(LOADER, 'utf8'), context, {filename: 'drafts/draft-cards.js'});
+
+  const msg = Object.assign(draftMessage('engine body'), {id: 'legacy:7'});
+  assert.match(context.renderMessage(msg, 'sess-1'), /id="draft-pending-0"/, 'the draft renders the placeholder');
+
+  const container = {};
+  const engine = {
+    alive: true,
+    entries: [{msg, node: {placeholder: true}}],
+    replaced: null,
+    reprojected: null,
+    replaceMessage(message) {
+      this.replaced = message;
+      this.entries[0].node = {card: true};
+    },
+    reproject(reason) {
+      this.reprojected = reason;
+    },
+  };
+  context.Chat.turnEngines.set(container, engine);
+  context.document.getElementById = (id) => {
+    if (id === 'messages') return container;
+    if (id === 'draft-pending-0') throw new Error('the engine entry must be replaced through the engine');
+    return null;
+  };
+  context.document.querySelectorAll = () => [];
+  vm.runInContext(readPackageStatic('features', 'drafts', 'draft-cards.js'), context, {filename: 'drafts/draft-cards.js'});
+
+  assert.equal(engine.replaced, msg, 'the engine renders the entry it holds again');
+  assert.equal(engine.reprojected, 'replace', 'the list is rebuilt so the cached node is the card');
+  assert.equal(engine.entries[0].node.card, true);
 });

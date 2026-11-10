@@ -25,9 +25,20 @@
     .badge-ping      { background: #1e293b; color: #94a3b8; }
     .badge-default   { background: #1e293b; color: #94a3b8; }
 
-    .event-row { border-bottom: 1px solid #1e293b; }
+    /* The row contains its body's margins, so the JSON's bottom gap sits above the divider. */
+    .event-row { display: flow-root; border-bottom: 1px solid #1e293b; }
     .event-row:last-child { border-bottom: none; }
-    .event-row:hover { background: #0f172a; }
+    /* A row opens its event's JSON, so its first line is a button: slate-850 lifts it from the page's slate-900
+       under the pointer, the caret at its end turns a quarter while the body is open, and the focus ring marks
+       where the keyboard stands. The caret keeps the slate-400 tone of the row's other secondary text. */
+    .event-row-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 16px;
+      border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+    .event-row-head:hover { background: #172033; }
+    .event-row-head:focus-visible { outline: 2px solid #3b82f6; outline-offset: -2px; }
+    .event-caret { color: #94a3b8; font-size: 10px; line-height: 1; transition: transform .15s; }
+    .event-row-head[aria-expanded="true"] .event-caret { transform: rotate(90deg); }
+    /* The event's JSON aligns under the type badge: 56 px from the row's left edge, 16 px from its right. */
+    .event-row .json-body { margin: 8px 16px 10px 56px; }
 
     /* A token too long for the line breaks anywhere, so hashes, paths and base64 stay inside the
        page; ordinary words keep their shape and the line breaks at the spaces between them. */
@@ -243,7 +254,7 @@
 
       events.forEach((ev, idx) => {
         const row = document.createElement('div');
-        row.className = 'event-row px-4 py-2.5 cursor-pointer';
+        row.className = 'event-row';
         row.dataset.idx = idx;
 
         const type = ev.type || 'unknown';
@@ -252,21 +263,25 @@
         const summary = previewText(ev);
 
         row.innerHTML = `
-          <div class="flex items-center gap-2 min-w-0">
+          <button type="button" class="event-row-head" aria-expanded="${expandAll}">
             <span class="text-xs font-mono text-slate-400 w-8 flex-shrink-0 text-right">${idx + 1}</span>
             <span class="text-xs px-1.5 py-0.5 rounded font-mono flex-shrink-0 ${badgeCls}">${escapeHtml(type)}</span>
             ${time ? `<span class="text-xs text-slate-400 flex-shrink-0 font-mono">${timeText(time)}</span>` : ''}
-            <span class="event-preview text-xs text-slate-400 truncate"></span>
-          </div>
-          <div class="json-body ${expandAll ? '' : 'hidden'} mt-2 ml-10">
+            <span class="event-preview flex-1 min-w-0 text-xs text-slate-400 truncate"></span>
+            <span class="event-caret flex-shrink-0" aria-hidden="true">▶</span>
+          </button>
+          <div class="json-body ${expandAll ? '' : 'hidden'}">
             <pre class="text-xs bg-slate-800 rounded p-3 overflow-x-auto leading-5">${syntaxHighlight(ev)}</pre>
           </div>`;
         // A preview is a tool's input or output, so it enters the row as text and never as markup.
         row.querySelector('.event-preview').textContent = summary;
 
-        row.addEventListener('click', () => {
+        const head = row.querySelector('.event-row-head');
+        head.addEventListener('click', () => {
           const body = row.querySelector('.json-body');
-          body.classList.toggle('hidden');
+          const open = head.getAttribute('aria-expanded') !== 'true';
+          head.setAttribute('aria-expanded', String(open));
+          body.classList.toggle('hidden', !open);
         });
 
         list.appendChild(row);
@@ -292,6 +307,9 @@
     }
 
     function applyExpandAll() {
+      document.querySelectorAll('.event-row-head').forEach(head => {
+        head.setAttribute('aria-expanded', String(expandAll));
+      });
       document.querySelectorAll('.json-body').forEach(el => {
         if (expandAll) {
           el.classList.remove('hidden');

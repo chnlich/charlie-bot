@@ -202,6 +202,14 @@ async function showGroupSelector(sessionId, currentGroup) {
   }).join('');
 
   overlay.innerHTML = `
+    <style>
+      /* The New group name field draws its boundary at the 3:1 control floor on its slate-700 fill:
+         #94a3b8 reads 4.04:1 there (slate-500 reads 2.18:1) and 5.71:1 on the slate-800 dialog; the
+         #c084fc focus tone reads 3.92:1 on the fill, where purple-500 reads 2.62:1. The rule travels
+         with this dialog's own markup, so it needs no rebuilt Tailwind sheet. */
+      #new-group-input { border-color: #94a3b8 }
+      #new-group-input:focus { border-color: #c084fc }
+    </style>
     <div class="${MODAL_DIALOG_CLASS}"
          onclick="event.stopPropagation()">
       <p class="text-sm text-slate-300 mb-3 font-semibold">Set Group</p>
@@ -211,7 +219,7 @@ async function showGroupSelector(sessionId, currentGroup) {
       </div>
       <div class="flex gap-2">
         <input id="new-group-input" type="text" placeholder="New group name..."
-               class="flex-1 bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-purple-500">
+               class="flex-1 bg-slate-700 border rounded-lg px-3 py-1.5 text-sm text-slate-200 focus:outline-none">
         <button id="new-group-btn" class="px-3 py-1.5 text-sm rounded-lg bg-purple-600 hover:bg-purple-500 text-white transition-colors">Add</button>
       </div>
     </div>`;

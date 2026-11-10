@@ -21,8 +21,6 @@ Read, create, update, and search issues in Linear using the Linear GraphQL API.
 It reads the request body from stdin, or from the file that `--file <path>` names.
 The body is a JSON object with a string `query` and an optional `variables` object.
 
-Send the viewer query through a quoted heredoc on stdin. This keeps the JSON body out of shell arguments.
-
 ```sh
 charliebot linear request <<'JSON'
 {"query":"query { viewer { id name email } }"}
@@ -193,22 +191,8 @@ query($teamId: String!) {
 - **Issue writes:** A root session shows the draft and gets user confirmation before creating or updating issues.
   A sub session follows External System Writes in `~/workspace/charlie-bot/prompts/master.md`.
 - **Feishu for documentation:** Create a Feishu document for a Linear issue when the user asks for one or when the issue's detail is meant for colleagues to read; otherwise the detail stays in the issue's session artifacts rather than in Linear comments or long descriptions. When a doc exists, each Linear issue maps to **one** Feishu document, subsequent updates append to the same Feishu doc never a new one, the Feishu doc title matches the Linear issue title, and the Feishu doc URL is linked in the Linear issue description.
-- **Default Feishu doc sharing:** When creating the Feishu doc associated with a Linear issue, set its public permission to tenant-internal readable via `PATCH https://open.feishu.cn/open-apis/drive/v1/permissions/{document_id}/public?type=docx` with `{"link_share_entity":"tenant_readable"}` after the user explicitly approves that permission write. Do not widen to `tenant_editable` unless the user explicitly asks, and do not enable external public access by default.
+- **Default Feishu doc sharing:** When creating the Feishu doc associated with a Linear issue, set its public permission following the policy in the Feishu skill (skills/feishu/SKILL.md) after the user explicitly approves that permission write.
 - **Permission-write approval:** Any Feishu permission change for an associated Feishu doc, including the default `tenant_readable` setup for a new doc, still requires explicit user approval before sending the Feishu permission write.
-
-## Workflow
-
-1. Send each request through `charliebot linear request` (API Reference above).
-2. If team context is needed, call `teams` query first to resolve team IDs
-3. Use `searchIssues` for text lookups and `issues` with filters for structured queries
-4. For creating/updating issues, resolve team and user IDs first
-5. Always format output clearly — show identifier, title, state, assignee, and priority
-6. Follow the issue-write rule above before creating or updating issues
-7. **When adding detailed content to an issue:**
-   a. Create a Feishu doc only when the user asks for one or when the detail is meant for colleagues to read; otherwise leave the detail in the issue's session artifacts
-   b. Check if the issue description already contains a Feishu doc URL — if so, append new content to that existing doc
-   c. If no Feishu doc exists yet and one is warranted, get the user's approval for the Feishu document creation and permission write, create one with the same title as the Linear issue, set its public permission via `PATCH https://open.feishu.cn/open-apis/drive/v1/permissions/{document_id}/public?type=docx` and `{"link_share_entity":"tenant_readable"}`, then update the Linear issue description to include the Feishu doc URL
-   d. When a doc exists, all detailed notes, investigation logs, and updates go into the Feishu doc; Linear issue stays concise (see Content conventions)
 
 ## Content conventions
 

@@ -1,11 +1,9 @@
 ---
 name: pytorch-gpu-training
-description: This skill should be used when training or debugging PyTorch on GPUs with FSDP2, DTensor, distributed checkpoint (DCP) saves, torch.compile and regional compile boundaries, selective activation checkpointing (SAC), AMP non-finite checks, foreach optimizer paths, profiler traces and kernel-to-launch correlation, sync-free training steps, B200 kernel measurement, or torch C++ extension builds.
+description: Use when training or debugging PyTorch on GPUs.
 ---
 
 # PyTorch GPU training
-
-Static principles for distributed PyTorch training and GPU kernel measurement. Each section names the behavior and the working practice.
 
 ## FSDP2
 

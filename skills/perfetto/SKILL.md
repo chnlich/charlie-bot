@@ -64,8 +64,4 @@ file link.
 
 ## Rules
 
-1. `?dir=` is for **cross-rank merging only**. Multiple time-window traces of the same rank belong in
-   separate links, one URL per window, rather than bundled in one `?dir=`
-2. Before using `?dir=`, confirm the directory holds at most one trace per rank for a single time
-   window; otherwise narrow it with `&pattern=` or switch to explicit `?trace=` params
-3. Only JSON traces can be merged; a protobuf trace shows only the first file
+- Only JSON traces can be merged; a protobuf trace shows only the first file.

@@ -58,9 +58,6 @@ Redirects are not followed: a 3xx answer exits 1 with its status, so an unexpect
 
 A host holds one or more Google accounts. Each account has a short name, unique on the host.
 
-- The `google` section of `$CHARLIEBOT_HOME/credentials.yaml` holds the OAuth client and the default account.
-- Each added account has its own section, `google_account_<name>`.
-- An added account section may carry its own `client_id` and `client_secret`.
 - `charliebot google list` prints each account's name, mark, status, owner and description.
 - `charliebot google list --check` adds each account's email address; a pending account keeps its row with an empty address.
 - The mark is `default` for the default account and `primary` for the primary account of another person.
@@ -76,15 +73,7 @@ Choose the account before each Google API call:
 - When the asker owns no account, stop, and say that this host holds no Google account of the asker.
 - In a Discord thread, give email addresses of the asker's accounts only.
 - When the request words match no account, stop and show the account list.
-- Name the account in each reply that carries Google data.
-- When the request names no account, also name in the reply the accounts not checked.
-- Name the target account in each write draft that waits for take off.
-
-Send each request for the chosen account:
-
-    charliebot google request <METHOD> <URL> --account <name>
-
-For the default account, omit `--account`.
+- Name the account behind any Google data you show, including unchecked accounts and the write draft.
 
 ## Add or Re-Authorize an Account
 

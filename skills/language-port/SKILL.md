@@ -50,7 +50,7 @@ These rules keep the speed of the libraries that the old version calls.
 
 ## The old main line during the port
 
-- During the parallel phase, merge the old main line into the port branch once a day.
+- During the parallel phase, merge the old main line into the port branch so the final catch-up stays one small merge.
 - When a merge turns a parity row red, give that row to the line that owns its module.
   The back-ports then run in the parallel lines, and the serial tail keeps one small catch-up.
 - From the final catch-up to the switch, pause the scheduled jobs that change the main line.
@@ -62,14 +62,10 @@ These rules keep the speed of the libraries that the old version calls.
 
 ## Task size and specs
 
-- Give one port task at most about 25 test cases of the old version.
-- In each port spec, list the old tests that the task ports.
-- Add an acceptance line that finds each listed test by name in the new suite.
+- Size each port task so it lands in one pass, and list the old tests that the task ports.
 - In each port spec, list the private interfaces and modules that the ported code calls.
   A small task with a complete list lands in one pass; a missing case or interface costs a second dispatch.
-- In a merge spec, list the changes on both sides first.
-- Then state which side each directory takes.
-  The reviewer then judges the merge against a rule that cannot contradict itself.
+- In a merge spec, state the resolution of each two-sided change.
 - Put into the spec each decision that the review can raise.
   A blocked review takes no answer, so an open decision costs a new dispatch.
 

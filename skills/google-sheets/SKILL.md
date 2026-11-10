@@ -86,11 +86,3 @@ Common request types: `addSheet`, `deleteSheet`, `updateSheetProperties`, `merge
 ## Bootstrap / Re-Authorization
 
 Choose an account in the **Accounts** section and follow **Add or Re-Authorize an Account** in the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
-
-## Workflow
-
-1. Choose the account that matches the request using the **Accounts** section in the **google-oauth** skill.
-2. Send each request with `charliebot google request <METHOD> <URL> [--json <body>] --account <name>`. Omit `--account` for the default account.
-3. For reads, call `spreadsheets.get` for metadata or `spreadsheets.values.get` for cell data.
-4. For writes, show the exact planned content first and wait for explicit `take off` approval.
-5. After approval, create, write, append, or batch update via Sheets API. After a successful create, return `https://docs.google.com/spreadsheets/d/{spreadsheetId}/edit`.

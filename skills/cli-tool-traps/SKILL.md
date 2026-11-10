@@ -1,11 +1,9 @@
 ---
 name: cli-tool-traps
-description: This skill should be used when working with the gh GitHub CLI (pull request edits, search, CI checks, merge conflicts), kubectl logs with a label selector, or Tailscale SSH sessions and remote process checks.
+description: Use when working with gh, kubectl logs, or Tailscale SSH.
 ---
 
 # CLI tool traps
-
-Everyday CLIs have quiet failure modes. Each section names the trap and the working alternative.
 
 ## gh: pull requests
 

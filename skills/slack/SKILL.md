@@ -1,6 +1,6 @@
 ---
 name: slack
-description: This skill should be used when the user asks to read Slack messages, search Slack conversations, look up Slack users, check DMs, or interact with the Slack workspace in any way.
+description: Use when the user asks to read Slack messages, search Slack conversations, look up Slack users, check DMs, or interact with the Slack workspace.
 version: 1.0.0
 ---
 
@@ -22,8 +22,6 @@ Read messages, search conversations, and look up users in the configured Slack w
 - Post with `slack.bot_token`.
 - `slack.bot_token` carries `files:write` and not `files:read`.
 - A message in Chao's name goes through `charliebot slack draft`.
-- Grant missing runtime scopes to the app.
-- Follow the standing approval rules for outbound messages.
 
 ## API Reference
 
@@ -108,16 +106,7 @@ The command admits only Slack's file host. It uses `slack.user_token` by default
 
 ## Important Workarounds
 
-- Do NOT use `conversations.open` — it requires `im:write` scope which is not available. Instead, list DM conversations with `conversations.list?types=im` and find the channel by user ID.
-- Do NOT use `conversations.join` or any write endpoints — only read scopes are available.
+- List DM conversations with `conversations.list?types=im` and find the channel by user ID (conversations.open requires `im:write` scope).
 
 - Resolve a private channel by ID because channel listings can omit it while its history remains readable.
 - The bot-token listing shows exactly which private channels allow posting; public channels accept posts without bot membership.
-
-## Workflow
-
-1. Send each read through `charliebot slack request` (it uses `slack.user_token` by default)
-2. If looking up a user, call `users.list` first to resolve the user ID
-3. If reading DMs, call `conversations.list?types=im` to find the DM channel ID by matching the user ID
-4. Call `conversations.history` to fetch messages
-5. Use `jq` to parse JSON responses for readability — format output with timestamps, sender names, and message text

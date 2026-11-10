@@ -49,7 +49,7 @@ ln -sf ~/.local/share/claude/versions/<VERSION> ~/.local/bin/claude
 
 ### Install a specific older version (< ~2.1.80, Node-based)
 
-Recent versions (≥ ~2.1.80) are standalone ELF binaries. Older versions are Node.js packages and need a wrapper. Requires Node ≥ 18.
+Requires Node ≥ 18.
 
 ```bash
 # 1. Download & extract
@@ -103,4 +103,3 @@ npm view @anthropic-ai/claude-code versions --json | tail -20
 
 - Switching versions does NOT affect the currently running Claude session — only new invocations.
 - The two methods can coexist but `$PATH` order determines which `claude` binary wins.
-- When using npm method, ensure the active Node version is ≥ 18 (e.g. via nvm).

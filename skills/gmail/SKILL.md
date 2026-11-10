@@ -65,22 +65,3 @@ charliebot google request GET "https://gmail.googleapis.com/gmail/v1/users/me/la
 ## Bootstrap / Re-Authorization
 
 Choose an account in the **Accounts** section and follow **Add or Re-Authorize an Account** in the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
-
-## Workflow
-
-1. Choose the account that matches the request using the **Accounts** section in the **google-oauth** skill.
-2. Send each request with `charliebot google request GET <URL> --account <name>`. Omit `--account` for the default account.
-3. Search or list messages using Gmail search syntax (`q=` parameter).
-4. Fetch full message content and decode the body.
-5. Present extracted text to the user.
-
-## Common Gmail Search Queries
-
-- `from:someone@example.com` — from a specific sender
-- `to:someone@example.com` — to a specific recipient
-- `subject:keyword` — subject contains keyword
-- `is:unread` — unread messages
-- `newer_than:2d` — messages from the last 2 days
-- `has:attachment` — messages with attachments
-- `label:LABEL_NAME` — messages with a specific label
-- Combine with spaces (AND) or `OR`: `from:a@b.com subject:invoice`

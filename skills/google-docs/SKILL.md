@@ -1,6 +1,6 @@
 ---
 name: google-docs
-description: This skill should be used when the user asks to read, create, or edit Google Docs documents, or manage document content through the Google Docs and Drive APIs. This skill should also be used when the user asks to import a PPTX deck into Google Slides.
+description: Use when the user asks to read, create, or edit Google Docs documents, or import a PPTX deck into Google Slides.
 version: 1.1.0
 ---
 
@@ -92,7 +92,6 @@ After inserting text, use `updateParagraphStyle` and `updateTextStyle` in the sa
 ```
 
 **Practical tips:**
-- Indices refer to the document state *after* all preceding requests in the same batch. Insert text first, then style it in the same `batchUpdate` call.
 - Use `fields` to specify which style properties to update (e.g. `"bold"`, `"namedStyleType"`, `"bold,italic"`). Omitting `fields` clears unset properties.
 - To find the correct index range for inserted text: if you insert N characters at index I, the text occupies `[I, I+N)`.
 
@@ -104,7 +103,7 @@ After inserting text, use `updateParagraphStyle` and `updateTextStyle` in the sa
   - create a Google Doc with `mimeType: application/vnd.google-apps.document` and `parents: ["FOLDER_ID"]`
   - move an existing doc with `files.update(addParents=..., removeParents=...)`
 
-Use `google.docs_default_folder_id` only for the default account, and use Drive API placement only after the write plan is approved.
+Use Drive API placement only after the write plan is approved.
 For another account, create the document in that account's Drive root and state the location in the write draft.
 
 ## Import a PPTX as Google Slides
@@ -120,11 +119,3 @@ Upload a PPTX with conversion to Google Slides, then check these known effects:
 ## Bootstrap / Re-Authorization
 
 Choose an account in the **Accounts** section and follow **Add or Re-Authorize an Account** in the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
-
-## Workflow
-
-1. Choose the account that matches the request using the **Accounts** section in the **google-oauth** skill.
-2. Send each request with `charliebot google request <METHOD> <URL> [--json <body>] --account <name>`. Omit `--account` for the default account.
-3. For reads, call `documents.get` and convert paragraph text runs to plain text when you only need readable content.
-4. For writes, show the exact planned content first and wait for explicit `take off` approval.
-5. After approval, create or update via Docs API, and use Drive API only when folder placement or moving is required. After a successful create, return `https://docs.google.com/document/d/{documentId}/edit`.

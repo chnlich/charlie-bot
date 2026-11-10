@@ -64,8 +64,8 @@
       .diff-file-row:not(:has(.diff-file-dir)) .diff-file-rename { grid-row: 2; }
       .diff-file-row:has(.diff-file-dir) .diff-file-chevron,
       .diff-file-row:has(.diff-file-dir) .diff-file-badge { grid-row: span 2; }
-      .diff-file-row:has(.diff-file-rename) .diff-file-chevron,
-      .diff-file-row:has(.diff-file-rename) .diff-file-badge { grid-row: span 3; }
+      .diff-file-row:has(.diff-file-dir):has(.diff-file-rename) .diff-file-chevron,
+      .diff-file-row:has(.diff-file-dir):has(.diff-file-rename) .diff-file-badge { grid-row: span 3; }
     }
   </style>
 </head>

@@ -16,7 +16,8 @@ use crate::inlined_literal::{char_len, escape_end, string_end};
 /// two values, and `1px 2px` would read as one. A whitespace run beside a brace, a semicolon or a comma leaves
 /// nothing: those bytes end the token before them and start the one after, so `a { color: red }` becomes
 /// `a{color: red}`. Any other run separates two selectors or two values and stays as one space. A quoted string
-/// keeps its text, and so does an unquoted `url()`, which the browser takes whole. CSS has no line comment.
+/// keeps its text, and so does an unquoted `url()`, which the browser takes whole, and an escape keeps the character
+/// it covers. CSS has no line comment.
 pub fn without_comments(source: &str) -> String {
   let bytes = source.as_bytes();
   let mut out = String::with_capacity(source.len());
@@ -46,6 +47,7 @@ pub fn without_comments(source: &str) -> String {
     let end = match bytes[i] {
       b'"' | b'\'' => string_end(source, i),
       b'u' | b'U' if opens_url(bytes, i) => url_end(source, i + 3),
+      b'\\' => escape_end(source, i),
       _ => i + char_len(&source[i..]),
     };
     out.push_str(&source[i..end]);
@@ -198,6 +200,13 @@ mod tests {
     assert_eq!(without_comments("a{ {b:c} }"), "a{ {b:c}}");
     assert_eq!(without_comments("a{/* note */{b:c}}"), "a{/**/{b:c}}");
     assert_eq!(without_comments("@media (hover: none){ #a{color:red} }"), "@media (hover: none){ #a{color:red}}");
+  }
+
+  #[test]
+  fn an_escape_keeps_the_whitespace_it_covers() {
+    assert_eq!(without_comments(".foo\\ { color: red }"), ".foo\\ {color: red}");
+    assert_eq!(without_comments(".a\\  .b{color:red}"), ".a\\  .b{color:red}");
+    assert_eq!(without_comments(".a{content:\"x\\ \"}"), ".a{content:\"x\\ \"}");
   }
 
   #[test]

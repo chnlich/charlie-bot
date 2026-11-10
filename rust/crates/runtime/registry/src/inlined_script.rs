@@ -55,7 +55,9 @@ pub fn without_comments(source: &str) -> String {
       let end = source[i + 2..].find("*/").map_or(bytes.len(), |end| i + 2 + end + 2);
       if spans_lines(&bytes[i..end]) {
         out.push('\n');
-      } else if needs_space(out.as_bytes().last().copied(), bytes.get(end).copied()) {
+      } else if continues_html_markup(&out, bytes.get(end).copied())
+        || needs_space(out.as_bytes().last().copied(), bytes.get(end).copied())
+      {
         out.push(' ');
       }
       i = end;
@@ -66,6 +68,11 @@ pub fn without_comments(source: &str) -> String {
         Some(end) => {
           clear_control(&mut stack);
           copy(&mut out, source, i, end);
+          // A regex literal's flags take the name characters after it, so the space that keeps the next name a token
+          // of its own leaves here rather than in the whitespace run's own handling.
+          if name_follows_space(source, end) {
+            out.push(' ');
+          }
           expect_expression = false;
           i = end;
         }
@@ -194,10 +201,36 @@ fn copy_whitespace(out: &mut String, source: &str, start: usize) -> usize {
   }
   if line_terminator {
     out.push('\n');
-  } else if needs_space(out.as_bytes().last().copied(), bytes.get(end).copied()) {
+  } else if continues_html_markup(out, bytes.get(end).copied())
+    || needs_space(out.as_bytes().last().copied(), bytes.get(end).copied())
+  {
     out.push(' ');
   }
   end
+}
+
+/// Whether the copy so far ends an HTML construct that `next` would continue, so a space must stand between them.
+///
+/// An HTML parser ends the script element at the first `</script` it reads, and reads `<!--` inside one as a comment,
+/// so neither sequence may be assembled from two tokens. The whitespace of such a pair stays.
+fn continues_html_markup(out: &str, next: Option<u8>) -> bool {
+  match next {
+    Some(b'-') => out.ends_with("<!"),
+    Some(next) => is_name_byte(next) && out.ends_with("</"),
+    None => false,
+  }
+}
+
+/// Whether a run of spaces and tabs at `start` is followed by a name byte.
+///
+/// A regex literal's flags continue over exactly those bytes, so a name after such a run would join them.
+fn name_follows_space(source: &str, start: usize) -> bool {
+  let bytes = source.as_bytes();
+  let mut end = start;
+  while matches!(bytes.get(end), Some(b' ' | b'\t' | b'\x0c')) {
+    end += 1;
+  }
+  end > start && bytes.get(end).copied().is_some_and(is_name_byte)
 }
 
 /// Whether the bytes `prev` and `next` need a space between them to stay two tokens.
@@ -213,15 +246,16 @@ fn needs_space(prev: Option<u8>, next: Option<u8>) -> bool {
   merges_into_one_token(prev, next) || (is_name_byte(prev) && is_name_byte(next))
 }
 
-/// Whether `prev` followed by `next` reads as one token when the space between them leaves.
+/// Whether `prev` followed by `next` reads as one token, or one markup sequence, when the space between them leaves.
 ///
-/// The last three pairs are not JavaScript's: the inline copy is also the template engine's source, so a `{` beside
-/// a second `{`, a `%` or a `#` would open `{{`, `{%` or `{#` where the source had two tokens.
+/// The `{` pairs are not JavaScript's: the inline copy is also the template engine's source, so a `{` beside a second
+/// `{`, a `%` or a `#` would open `{{`, `{%` or `{#` where the source had two tokens. `<` before `/` opens an HTML end
+/// tag where the script text is markup.
 fn merges_into_one_token(prev: u8, next: u8) -> bool {
   if prev == next && matches!(prev, b'+' | b'-' | b'*' | b'/' | b'&' | b'|' | b'<' | b'>' | b'=' | b'!' | b'?') {
     return true;
   }
-  matches!((prev, next), (b'/', b'*') | (b'<', b'!') | (b'-', b'>') | (b'?', b'.') | (b'.', b'.'))
+  matches!((prev, next), (b'/', b'*') | (b'<', b'!') | (b'<', b'/') | (b'-', b'>') | (b'?', b'.') | (b'.', b'.'))
     || (prev.is_ascii_digit() && next == b'.')
     || matches!((prev, next), (b'{', b'{') | (b'{', b'%') | (b'{', b'#'))
 }
@@ -407,6 +441,15 @@ mod tests {
     assert_eq!(without_comments("function f() { { return 1; } }"), "function f(){ {return 1;}}");
     assert_eq!(without_comments("a{/* note */{b}}"), "a{ {b}}");
     assert_eq!(without_comments("class A { #x; }"), "class A{ #x;}");
+  }
+
+  #[test]
+  fn a_space_stays_where_its_removal_would_change_a_regex_or_the_markup() {
+    assert_eq!(without_comments("let ok = /x/ instanceof RegExp; // gone"), "let ok=/x/ instanceof RegExp;");
+    assert_eq!(without_comments("if (/x/ in m) f();"), "if(/x/ in m)f();");
+    assert_eq!(without_comments("a < /x/.source"), "a< /x/.source");
+    assert_eq!(without_comments("a</ script> b"), "a</ script>b");
+    assert_eq!(without_comments("a<!/* note */-b"), "a<! -b");
   }
 
   #[test]

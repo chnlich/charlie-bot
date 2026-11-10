@@ -18,5 +18,5 @@ Check exactly the scope the task spec declares. A spec that declares neither sco
   `scenario:` — the counterexample you built, or the strongest you tried and why it failed, stated as a scenario rather than a restatement of the plan
   `anchor:` — where in the plan
 A boundary section 1 states explicitly is correct-as-scoped. When the spec quotes the originating request, also report `gap-goal:` for an outcome it asks that section 1 neither claims nor scopes out.
-Use reasonable allowed local and network reads through already-available tools, commands, connectivity, and credentials when checking evidence, including web search/fetch, read-only API queries, and read-only SSH commands. The boundary remains semantic read-only behavior, not a transport or HTTP-method allowlist. Refuse and report any check that would mutate local or external state instead of executing it, including operations that create, update, delete, trigger, submit, upload, or send messages, as well as file edits, Git writes, and job submissions.
-Report a missing or unreadable plan artifact or canonical template, a missing required in-scope source anchor, or any in-scope canonical-rule deviation as `mismatch`. Preserve `unverifiable` only when reasonable allowed local or network reads cannot access the evidence, or verification would require state mutation. Network access alone never makes a claim `unverifiable`.
+Report a missing or unreadable plan artifact or canonical template, a missing required in-scope source anchor,
+or any in-scope canonical-rule deviation as `mismatch`.

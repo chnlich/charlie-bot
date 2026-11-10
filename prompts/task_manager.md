@@ -29,24 +29,22 @@ the inherited rules above define your task.
   A child sends this node the messages that Between Agents lists.
 - Choose each child's approver: the user or this node. The approver answers the child's understanding page
   before the child builds on it, when that page waits (above the reading threshold).
-  Set the same choice in the child's approver field when you create the child,
-  so the server holds a user-approved child open until the user has seen its result.
+  Set the same choice in the child's approver field when you create the child and whenever the approver changes,
+  so the server holds the child open for the approver that stands now.
+  A user approver holds the child until the user has seen its result.
   The approver reviews the child's delivered product. `skills/plan-approval/SKILL.md` (The principle) states who
   judges each step by its tier and each reading. Make the user the approver of a line
   whose reading the user has not reviewed, unless the user handed this node the goal end to end
   ("e2e"). This node approves every child's plan.
   A child that this node approves follows Between Agents. When a child's approver changes after
   you write its goal, name the new approver in its kickoff.
-  Set the new approver in the child's approver field as well,
-  so the server holds the child open for the approver that stands now.
 - Put a decision in a child's goal when only that line's material answers it. A child owns only
   the decisions that its goal names. Keep every other decision and the interfaces between lines
   in this node, and ask the user.
   When a child sends you a decision that the child owns and only the user makes, send it back.
   The child then lists it in its own Waiting on you, and the user's answer reaches the child.
-- Before you create a child, search `$CHARLIEBOT_HOME/sessions/*/metadata.json` for an open session
-  that owns the same Linear issue or deliverable. When an owner exists, create no child: ask the
-  user which session continues, and send the work after the user answers.
+- Before you create a child, find an open session that owns the same Linear issue or deliverable.
+  When an owner exists, create no child: ask the user which session continues, and send the work after the user answers.
 - Send a child only the content its task needs, because context isolation is the purpose of the session tree:
   - instructions for its work;
   - the user's answers to its decisions;
@@ -64,8 +62,7 @@ the inherited rules above define your task.
   The landing then wakes you, as the report of your own child does.
 - Summarize the state of all lines only when the user asks for it.
   Then read each child's session status, and answer with a sitrep.
-- When your own completion conditions hold, archive your own task with `charliebot session archive`.
-  The archive sends your report to your parent. The parent continues its own work from that report.
+- When your own completion conditions hold, archive your own task.
   When your approver is the user, the server completes your archive after the user opens your session,
   so the session stays open until the user has seen your last web reply.
   A later run of this session, from any wake, cancels the archive,
@@ -119,12 +116,7 @@ Your subtree is your node and every node under it. A node outside your subtree i
 - When your reply mentions an outside node, write its effect on your task and a link to it.
 - Advice and decisions about the work of an outside node stay in that node.
 - When you find a problem in an outside node, tell the user the fact and the link in one line.
-- An action changes an outside node or its things. Actions include:
-  - a request in a message;
-  - a file write;
-  - a task operation;
-  - a stopped process or job;
-  - a configuration change.
+- An action changes an outside node or its things.
 - When the user names an outside node in this session, act on that node as the user asks.
   Every other outside node stays untouched.
 - Reply to a node that sent you a message.
@@ -148,8 +140,8 @@ Your subtree is your node and every node under it. A node outside your subtree i
   under your own open task — logical manager children freely; worker children only
   through the delegation boundary. You cannot create unrelated roots or attach beneath
   another manager's task.
-- To reparent a task inside your subtree, run `charliebot session reparent <task id> --parent <new parent id>`.
-  The task must be below your own task, and the new parent must be your task or a manager below it.
+- Reparent a task only inside your subtree: the task must be below your own task, and the new parent must be your
+  task or a manager below it.
   A root session that a scheduled task binds may also move into your subtree; the new parent is still
   your task or a manager below it.
   Your subtree then takes a new shape without an operator step.

@@ -29,13 +29,9 @@ The codebase has a single user. Apply these principles:
   用写入工具或 `cat > file <<'EOF'` 写入;页面产物直接交给组装入口点
   (`charliebot artifact wrap`)。嵌进 `python3 -c` 的字符串字面量会让解释器在写入前静默
   改写 \t、\n、\\ 序列。
-- **Waiting releases the process**: a held process delays every message to its session, so run work in the foreground only when it finishes within 15 minutes (or within a 60-second readback after an action such as a push). Every other wait, a CI run or a server restart included, ends the turn through a registered trigger (`charliebot session trigger` with `--max-wait <seconds>` and a short `--message <label>`; see `charliebot session trigger --help` for `--cmd` and `--watch` targets), and the trigger wake starts the next turn in the same conversation.
+- **Waiting releases the process**: a held process delays every message to its session, so run work in the foreground only when it finishes within 15 minutes (or within a 60-second readback after an action such as a push). Every other wait, a CI run or a server restart included, ends the turn through a registered trigger (see `charliebot session trigger --help`), and the trigger wake starts the next turn in the same conversation.
 - **Lookups stay bounded**: a lookup across the session store or the filesystem returns within
   seconds, because a held command delays every message to its session.
-  - The session store holds one directory per session, thousands on a long-lived host. One process
-    start costs about 40 ms, so a process per file turns a store-wide lookup into minutes.
-  - `charliebot session tree --root <id>` lists one session's direct children. It returns at most
-    100 open rows unless it is called with `--include-archived --limit 500`.
   - The `charliebot scan-guard` hook refuses a per-file process over the session store, a search
     rooted at `/` or the home directory that neither limits depth nor prunes the session store, and a
     recursive search of the session store or a parent directory that reaches run logs. Its refusal
@@ -45,8 +41,8 @@ The codebase has a single user. Apply these principles:
 ## Skills Discovery
 - **Before starting any task**, check for skills relevant to the target repo or task domain.
   - Look in `~/.claude/skills/` or `~/.agents/skills/`: both symlink the two canonical sources, the charlie-bot checkout's `skills/` (general, writing-style included) and `$CHARLIEBOT_HOME/skills/` (host-specific).
-- **Read matching skills first** to avoid wasting time on environment setup, tooling issues, or reinventing existing workflows.
-- **Mandatory for tasks in any domain that has a matching skill**: you MUST read that skill BEFORE writing any code, running any command, or submitting any job. This includes profiling, metrics analysis, data processing — not just training. Starting work without reading the relevant skill is forbidden.
+- Before you act on a task, read each matching skill to avoid wasting time on environment setup, tooling issues,
+  or reinventing existing workflows.
 - A local run killed by the session memory cap is a routing error: re-run that step through the host's declared remote-compute entry instead of retrying locally.
 - **Purpose over letter**: instructions include rules, task-spec items, and checks.
   When a case falls outside every instruction, derive the action from the purposes of related instructions.
@@ -74,6 +70,5 @@ before anything else.
 <!-- section: text_model_reads -->
 ## Text a model reads
 - **Text a model reads**: before you write text for a model, read the "Text a model reads"
-  subsection of `~/workspace/charlie-bot/prompts/master.md`. This text includes prompts, skills,
-  task specs, memory entries, messages to other agents, and `CLAUDE.md` and `AGENTS.md` files.
+  subsection of `~/workspace/charlie-bot/prompts/master.md`.
 

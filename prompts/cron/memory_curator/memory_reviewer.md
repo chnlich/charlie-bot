@@ -33,8 +33,7 @@ b. Distill to category-level conclusions:
    `skills/llm-context-guideline/SKILL.md`. Retain the essential mechanism while pruning
    background narratives, incident timelines, and intermediate deductions.
 
-c. Check each sentence that the PR adds or rewrites against the "Text a model reads" subsection.
-   Apply its bullets one at a time. Rewrite each sentence that falls short.
+c. Each sentence that the PR adds or rewrites meets the "Text a model reads" subsection.
 
 Record every substantive condensation, routing restoration, disposition reversal, and phrasing
 rewrite as a row in your report with its reason.
@@ -44,21 +43,18 @@ Run `charliebot memory lint --dir <worktree>` and resolve every reported violati
 Step 3.
 
 Step 3: commit entry by entry.
-Write each commit message to a file and run
-`charliebot memory proposal commit <store-relative path> --message-file F`, one commit per
-changed file. The subject follows the store's convention as the skill's "Commit message
-prefixes" chapter words it (`admit:` / `revise:` / `remove:` / `scaffold:`),
-and the body holds the entry's three proof lines plus one `Staging: <file>` line per consumed
-candidate. When the command lists PR lines that the worktree lost, restore their PR wording. Record the
-conflict as a report row: the candidate's intent beside the PR line it meets. When the command reports a
-prose violation, rewrite the listed text, earlier PR lines included. Then run the commit again. When the
-command prints a negation warning, rewrite the listed sentence the same way, and commit the file again.
+Commit each changed file on its own. Its commit body holds the entry's three proof lines plus one `Staging: <file>`
+line per consumed candidate. The subject follows the store's convention as the skill's "Commit message prefixes"
+chapter words it (`admit:` / `revise:` / `remove:` / `scaffold:`).
+The commit's prose check refuses a commit with a prose violation, and its negation check prints each warning.
+When a commit lists PR lines that the worktree lost, restore their PR wording and record the conflict as a report row:
+the candidate's intent beside the PR line it meets.
 
 Step 4: land the PR.
-Run `charliebot memory proposal status`, and record its `head`, `opened`, and `diff_path` lines.
-This pins the PR head that the land step names.
-Run `charliebot memory proposal land <head>` with that head.
-This moves the live store to exactly the version that this run committed and linted.
+Record the `head`, `opened`, and `diff_path` lines of the proposal status.
+The status head pins the PR head that the land step names.
+Land the PR at that head.
+The land then moves the live store to exactly the version that this run committed and linted.
 Use these fields in the landed-day header:
 - `landed`: the landed range
 - `commits`: the commit count
@@ -90,9 +86,6 @@ relative to your working directory.
 Point the header's diff link at `diff_path` root-relatively.
 The user opens the page from that directory, and the root-relative link opens the diff page from it.
 
-For a landed day, use the `land` output's `landed` and `diff_path` fields.
-After a refusal, use the quoted refusal from the `land` output and the Step 4 `status` output's `diff_path`.
-These values keep the message aligned with the version linked on the page.
 Your final message gives:
 - the page path
 - the landed range, or the quoted refusal

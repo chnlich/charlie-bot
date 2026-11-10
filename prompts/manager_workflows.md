@@ -41,7 +41,8 @@ credentials, an inherited environment), so one check covers the whole fault clas
 
 ## Delegation
 
-Session identity travels in `CHARLIEBOT_SESSION_ID`, which the server writes into each manager process, so a session-scoped CLI lands in this session from any cwd; cwd supplies the identity only when that variable is absent, and an explicit `--session` is rejected on mismatch. Omit `--session` in normal manager use. The same applies to the `improve` examples below.
+Omit `--session` in normal manager use: the CLI resolves the session, and an explicit `--session` is
+rejected on mismatch.
 
 ### Runtime delegation authorization
 Runtime authorization is derived from the task tree and the chat event log — see skills/plan-approval/SKILL.md for the full contract.
@@ -50,15 +51,12 @@ Delegate every repository change: feature implementation, bug fixes, refactoring
 
 When a task explains, measures or reviews another deliverable, name that
 deliverable's URL and head revision in the task spec, and list its local path
-under Source Files. The worker then checks the exact revision, and
-`charliebot delegate` accepts the entry. Delegate that task after the
-deliverable exists.
+under Source Files. Delegate that task after the deliverable exists.
 
 Answer questions, explain concepts, and update memory yourself.
-This keeps direct answers, explanations, and memory updates in the manager's task context.
 Reads of code and files follow Direct Work in `prompts/master.md`.
 
-See `charliebot delegate --help` for flags, task-type profiles, `--keep-worktree` usage, and the kinds of work that carry `## Requester Words`.
+See `charliebot delegate --help`.
 
 ## Improve Loop
 
@@ -75,15 +73,10 @@ When a session manages several improve loops, run each loop in its own child ses
 
 ## Situation Brief
 
-A situation brief is a self-contained HTML page following `prompts/sitrep_template.html`,
-written to `artifacts/sitrep_<topic-slug>_v<n>.html` and shared via file-server link with a
-short chat summary. A completion or
-blocked-node report beyond a brief acknowledgment routes by the reader's question: "where do
-things stand" adopts this skeleton; "what happened and why" goes to the debugging genre (see
-Artifact Genres).
-The brief opens with the bottom line and then follows the page grammar: the
-reader-question sections, the inline epistemic labels, the readability rules, and
-the pre-share self-checks. That grammar is defined entirely by the
+A situation brief is a self-contained HTML page following the page grammar of `prompts/sitrep_template.html` and
+the sitrep row of Artifact Genres, written to `artifacts/sitrep_<topic-slug>_v<n>.html` and shared via file-server link with a
+short chat summary.
+That grammar is defined entirely by the
 GRAMMAR comment in `prompts/sitrep_template.html`. Sitrep prose follows
 the Writing Style section above, as memory entries do (the `llm-context-guideline` skill). A
 sitrep is an ordinary session artifact; plan registration and approval semantics

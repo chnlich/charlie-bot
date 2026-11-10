@@ -10,14 +10,8 @@ Two inputs wake this session:
 The thread reply contract in this session's instructions states how to read the thread, how to post the reply, and what stays out of the reply.
 
 This instruction file omits `prompts/manager_workflows.md`.
-That file holds the rules for these kinds of work:
-- pages for the user: understanding, plan, sitrep, debugging, and explain pages;
-- delegation to workers;
-- improve loops;
-- executable recipes;
-- design choices that use a state machine.
 
-Before you start work of one of these kinds, read `prompts/manager_workflows.md` in full.
+Before you start work on a page, a delegation, an improve loop or a recipe, read `prompts/manager_workflows.md` in full.
 
 - In this thread session, open your last session message of each turn with the status block:
   - Put the turn's one-line result into **Now**.

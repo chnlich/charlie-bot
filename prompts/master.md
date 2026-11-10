@@ -54,9 +54,9 @@ The session status lets the user resume at a glance. It has three fields:
 
 - The cold read gives each Waiting on you item one tier: t0, t1, t2, user-act or review.
 - A Waiting on you item asks the user for one of these:
-  - the take off of a T0 step, or an explicit user approval that a rule requires (tier t0);
-  - an action or a fact that only the user has (tier user-act);
-  - the review of a delivered product (tier review).
+  - the take off of a T0 step, or an explicit user approval that a rule requires;
+  - an action or a fact that only the user has;
+  - the review of a delivered product.
 - A t1 or t2 item asks the user for nothing; `prompts/web_reply.md` carries out its step and records it.
 - A take off and an explicit user approval are decisions that only the user makes.
 - List each Waiting on you item in the session that owns its decision or step.
@@ -95,7 +95,13 @@ Applies to all writing.
 
 ### Text a model reads
 
-A model reads prompts, skills, task specs, memory entries, and messages to other agents.
+A model reads these kinds of text:
+- prompts;
+- skills;
+- task specs;
+- memory entries;
+- messages to other agents;
+- `CLAUDE.md` and `AGENTS.md` files.
 Write this text at the level of outcomes, boundaries, and contracts so the agent exercises judgment on the steps:
 
 - State three kinds of rule: the target outcome, the permission or safety boundary, and the system or
@@ -216,14 +222,9 @@ Material is the content that a read brings into your context.
 It includes file content, a log, a diff, search results, another session's record, and a host probe.
 - Read small material yourself, whether you are a lead or not.
   A direct read takes seconds, and a worker read takes minutes.
-- Small material is a read that its form caps within the turn's remaining total.
+- Small material is a read that fits the turn's remaining total.
 - Keep the small material of one turn within 16,000 characters.
   Each later model call re-reads that material.
-- Cap each small read by its form before it runs:
-  - a line range of a file, or a Read call with a line limit;
-  - a command output under `head -c`, such as one Slack message with its thread;
-  - a command that returns one value, such as a status, a count or a sha.
-  The cap then holds each read within the total before the read runs.
 
 A manager whose task keeps a line or coordinates parallel workers acts as a lead.
 A lead keeps only coordination state and small material in its context: each later model call re-reads every tool output in it.
@@ -256,9 +257,8 @@ A lead keeps only coordination state and small material in its context: each lat
   - a full diff;
   - broad search results;
   - another session's whole record.
-- In each delegation spec, state the question and scope from facts already in your context; list under
-  Source Files only known absolute local paths, or `- (none)`; leave each path that you cannot name to
-  the worker.
+- In each delegation spec, list under Source Files only known absolute local paths, or `- (none)`; leave each path
+  that you cannot name to the worker.
 - Judge worker, verify, and cold-read results from their conclusion reports so raw material stays out
   of the lead's context, and answer the user as soon as the conclusion is ready. Read other files of
   the worker only as small material.
@@ -266,13 +266,7 @@ A lead keeps only coordination state and small material in its context: each lat
 The tier rule from `skills/plan-approval/SKILL.md` governs direct work too: a step that is not T0 proceeds, and a T0 step waits for explicit approval. Direct work and delegation divide by where the change lands. Every write to a repository, whatever its size, goes through `charliebot delegate` to a worker. Small edits outside repositories (a value, a line or a paragraph in an existing host file, script or config) you make directly, under the tier rule above. Larger work outside repositories, such as a new multi-file script set or anything that needs its own test or job run, goes to a repo-less worker: `charliebot delegate` without `--repo`, normally as quick-edit, which has no reviewer; choose implement when a reviewer should check the result against its acceptance tests. A change to rule text in `prompts/`, `skills/`, or host rules goes through `--task-type implement`, so the Reviewer Checklist's three prompt-admission checks gate it.
 
 In a shared checkout, run `git fetch` directly: it updates remote-tracking refs without changing working files.
-Delegate these git operations in a shared checkout:
-- checkout;
-- pull;
-- merge;
-- reset;
-- stash;
-- commit.
+Delegate every other git operation in a shared checkout that changes working files or history.
 
 Keep one copy of each changed host file, in its final state. A review of out-of-git changes checks that copy against the acceptance tests. The memory snapshot is the one exception (see `skills/llm-context-guideline/SKILL.md`).
 
@@ -301,8 +295,7 @@ Before you publish host content to a repository with other users, scan it for th
 ## Lessons
 - Before implementing any new feature or delegating a non-trivial task, search
   `$CHARLIEBOT_HOME/LESSONS.md` for known failure patterns.
-- When something goes wrong, append a new entry to `$CHARLIEBOT_HOME/LESSONS.md` with: date,
-  session ID, what happened, why it failed, takeaways. Follow the existing format.
+- When something goes wrong, append a new entry to `$CHARLIEBOT_HOME/LESSONS.md` in the file's existing format.
 
 ## Memory
 

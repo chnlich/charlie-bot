@@ -12,11 +12,11 @@ This skill is for the **master CC** (orchestrator). It guides construction of th
 
 When writing the `--goal-file` content for an improve loop:
 
-1. **Start with skills to read** — first line should be `Read skills: improve-worker, <domain-skill>, <infra-skill>, ...`. List all relevant skills explicitly. Always include `improve-worker`. Workers won't know which skills exist unless told.
+1. **Name worker skills** — list `improve-worker` and each relevant domain or infrastructure skill in the goal.
 2. **Order goals by importance** — list goals from most important to least important, numbered (1), (2), (3)... Workers may not reach later goals if earlier ones consume all iterations.
 3. **State goals, not methods** — say "close the performance gap" not "try fusing kernel X with Y". Workers decide their own approach.
 4. **Include reference numbers** — target and rough gap size, so workers can judge whether a change matters. Don't paste a precise measured baseline: the A/B protocol re-measures it every iteration, so a hard-coded number just goes stale.
-5. **"Zero progress is acceptable"** — always include this. Prevents workers from shipping bad changes just to report something.
+5. **Zero-progress outcome** — `improve-worker` defines the acceptable no-change outcome.
 6. **Point at existing working scripts** — if a benchmark/training script
    already exists and works, say "base your work on `<path>`, do not write
    from scratch". Otherwise workers reinvent the wrapper and re-hit known
@@ -25,15 +25,17 @@ When writing the `--goal-file` content for an improve loop:
 
 ## Master Discipline During Loop Execution
 
-Each judged iteration delivers one child report to the manager, and the delivery wakes the master. The report summary starts with the header `[Improve loop <loop id> · iteration <i>/<total>] report_valid=<true|false>`; when the iteration is invalid the header continues with `[invalid: <reason>]`, and it always carries `tip=<sha>`, `commits_added=<n>` and `report=<path>` before the closing `Audit per the improve-goal skill.` and the iteration summary. `report_valid`, `tip` and the report path are read from that header.
-
-The header is the wake's index, not the audit input. The audit reads the report file at the header's `report` path itself and checks it against the live goal: its verdict is present, the goal-declared KPI readings are present, and the work direction is consistent with the goals' priority order. The delivered summary is never the audit input.
+Each judged iteration delivers one child report to the manager and wakes it. Use the delivered header only to locate the
+report; audit that report against the live goal, checking its verdict, declared KPI readings, and consistency with goal
+priority.
 
 Drift signals are `report_valid=false` in the header, or a failing semantic audit.
 
-When a drift signal is present, the master may edit `goal.md` without waiting for the user, but only in two allowed shapes: appending constraints to a `## Steering appendix` section at the end of `goal.md` (created on first use), or reordering the existing numbered goals. No other byte of `goal.md` may change; KPI numbers, acceptance lines, the iteration count, and the merge-back setting therefore sit in the immutable region by construction.
-
-Every such edit is quoted as a full diff in the master's chat report. If the user reverts `goal.md`, the edit is undone and takes effect starting the next iteration.
+When `report_valid=false` or the semantic audit fails, the master may edit `goal.md` without waiting for the user
+only by adding constraints to an end `## Steering appendix` (created on first use) or by reordering existing goals.
+Keep every other byte unchanged, including KPI numbers, acceptance lines, iteration count, and merge-back setting.
+Quote the full diff in the master's chat report. If the user reverts `goal.md`, undo the edit; it takes effect starting
+the next iteration.
 
 Stopping or cancelling the loop still requires explicit user approval. Without a drift signal, no edit.
 

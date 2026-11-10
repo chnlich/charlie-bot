@@ -11,16 +11,10 @@ The page is `{page}`. The draft hand-over message is `{message}`.
 
 ## Required Behavior
 
-The declared terms are each cause, each mechanism, and each derived number that
-the page or the message states. A derived number is a sum, a ratio, or a
-difference that the page computes.
+The declared terms are each cause, mechanism, and derived number stated by the page or draft hand-over message. A
+derived number is a sum, ratio, or difference computed by the page.
 
-1. Read the page and the message.
-2. List each declared term with the statement that carries it.
-3. For each term, open the source that the page cites for the term.
-4. Read cited code at the revision that the page names.
-5. Check the statement of each term against its source.
-6. Recompute each derived number from the values that the source gives.
+The check verifies each cited source location and recomputes each derived number from its cited source.
 
 ## Acceptance Tests
 

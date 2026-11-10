@@ -151,11 +151,10 @@ An understanding page lists the divergences of a request that admits several rea
   Each such decision then waits for the user's answer in the child's session.
 - Before each T0 step, ask the user for a take off that names the step.
 - A pre take off names lines and steps ahead of time. It holds until those lines deliver.
-- Before you ask a take off, state the goal, the blast radius, and how to undo the step. A deletion also lists
-  each path and its size, and a rule or code change that other nodes follow goes to each such manager.
-- Re-read each number the ask cites, and attach each result so the user approves a step that already works.
-- Explain the ask with a diagram or a worked example, and list the alternatives with their consequences, so
-  the user judges it at one read.
+- Before a take off, state the goal, blast radius, and undo plan.
+- For a deletion, list each path and its size. Send each rule or code change that other nodes follow to their managers.
+- Recheck every cited number and attach its result so the user can approve a step that already works.
+- Give the user a diagram or worked example and list the alternatives with their consequences in one read.
 - When work under a Linear ticket lands, draft one English comment for that ticket.
   The comment states the landed design, the resolved choices and the commit.
   A root session asks for its take off in the completion report. A sub session follows the master prompt's External
@@ -165,15 +164,9 @@ An understanding page lists the divergences of a request that admits several rea
 
 ## Verify
 
-- Follow this fixed order:
-  1. Draft the plan.
-  2. Run the assertions.
-  3. Register the plan with `charliebot plan present`.
-  4. Run one Improve round: answer the plan page's Improve prompt
-     (web/features/artifacts/static/artifact-comments.js) yourself.
-  5. Start verify round 1 and the cold read in the same turn.
-  6. Complete the revision under the rules below.
-  7. Approve the plan with `charliebot plan approve`, and send the user its link.
+- Draft and assert the plan, register it with `charliebot plan present`, complete one Improve round, then verify and
+  cold-read it in the same turn. Finish the revision under the rules below, then approve it with
+  `charliebot plan approve` and send the user its link.
 - Verify is a read-only repo-less delegation on a registered plan. It checks fidelity — claims against evidence —
   and adequacy: whether the design, assumed accurate and implemented, entails what section 1 claims. Adequacy reads
   section 1 as the goal statement only; scope boundaries, thresholds, and exemptions stated in Context, section 3,
@@ -183,8 +176,8 @@ An understanding page lists the divergences of a request that admits several rea
   (prompts/manager_workflows.md, Design section), and checks each rule change against the three prompt-admission
   checks in `prompts/master.md` ("Text a model reads"). A step that names no requirement, or a rule change that
   fails a check, is a finding.
-- Treat the initial plan as the first revision, and the versions between triggers as one revision. User feedback or
-  a design change outside a findings fold starts a new revision; keep verify and cold-read folds in the current one.
+- The initial plan is revision one; versions between triggers share a revision. User feedback or a design change outside
+  a findings fold starts a new revision; keep verify and cold-read folds in the current revision.
 - Run verify round 1 on each revision, as full for a lineage's first revision. For a later revision declare delta or
   full, and declare full when the structure changes; a delta spec quotes its terms from `charliebot plan diff`.
   Verify an undeclared scope as full.

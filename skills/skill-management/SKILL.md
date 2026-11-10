@@ -14,6 +14,10 @@ description: >
 | `<charlie-bot-repo>/skills/` | General (shared across hosts) | Integration skills, self-knowledge |
 | `$CHARLIEBOT_HOME/skills/` | Host-specific (per-machine) | Domain skills tied to local repos/hardware |
 
+Shared and host-specific skills both sync into `~/.claude/skills/`.
+`$CHARLIEBOT_HOME` holds host-specific skills, sessions, config, and credentials.
+Claude Code auto-loads skills with `user-invocable: false` when they are relevant to the task.
+
 ## CLI Tool Skill Directories
 
 | CLI Tool | User Skills Path | Shared Standard | Notes |
@@ -36,7 +40,8 @@ Four sync targets cover all five CLIs:
 
 OpenCode and charlie-code need **no** target: both auto-scan `~/.claude/skills/` and `~/.agents/skills/`, already populated above.
 
-Every real sync ends with a Claude discovery check (skipped under `-n` and when `claude` is not on PATH): `sync-skills.sh` starts `claude` once with an empty `CLAUDE_CONFIG_DIR` from the `$CHARLIEBOT_HOME/sessions` cwd — not logged in, zero API calls — and reads K, the project count on the last `Loaded N unique skills (... project: K ...)` line of its debug log, against N, the symlink count in target 4. It prints `Claude discovery: K/N` and exits 1 when the line is missing or K differs from N.
+Outside `-n` runs and when `claude` is on `PATH`, a real sync fails if Claude reports no discovery count or its count
+differs from target 4's symlink count.
 
 ## Sync Rules
 
@@ -53,11 +58,8 @@ Repo-level shared files (`<charlie-bot-repo>/skills/**`, `<charlie-bot-repo>/pro
 
 Repo-level skills must also stay free of session-specific debug artifacts: dated transcripts (`observed in D4`, `2026-05-04 run`), internal task IDs, specific bug strings (`bytes-vs-str + train_ranges API mismatches`), or any phrasing that reads like a LESSONS.md entry. Workers loading shared skills cannot see `$CHARLIEBOT_HOME/LESSONS.md` and have no context for those references. Keep shared skills as static principles; only promote a finding into a shared skill once the debug is closed and the lesson rewrites cleanly as a generic rule.
 
-A local pre-commit hook enforces this boundary. One-time setup per clone:
-
-    git config --local core.hooksPath dev/git-hooks
-
-Additional host-specific blocklist patterns (real names, internal project names, tenant identifiers, etc.) live at `$CHARLIEBOT_HOME/skills_leak_patterns.local.txt` — one regex per line, NEVER committed to this repo. The host patterns scan every tracked file, including decompressed gzip files. The hooks scan staged files, commit messages, and commit identities.
+`dev/git-hooks/pre-commit` checks staged files for host-specific identifiers.
+Edit profile-home files in place; never stage, commit, or push them, even when `$CHARLIEBOT_HOME` is a git repository.
 
 ## Person-Identifying Session Content Boundary
 
@@ -79,6 +81,9 @@ All CLIs require `SKILL.md` (exact name, case-sensitive) as the entry point file
 ## Updating Existing Skills
 
 When new lessons surface and a skill needs an update, follow these rules:
+
+Before a subagent returns or a reviewer merges, the master skims its context or transcript for recurring pain points.
+When a pattern is confirmed, update the relevant skill.
 
 - **Reorganize, don't append.** If related content already lives in the skill, edit the existing section in place rather than tacking on a new paragraph. Skills must stay concise so they remain scannable; growing them by accretion (one new bullet per session) defeats the purpose. Re-read the whole skill first, then propose the smallest diff that captures the new lesson.
 - **Ask before modifying any local skill.** Surface the intended edit to the user before writing it — never silently mutate a skill file, even when "just adding a clarifying line".

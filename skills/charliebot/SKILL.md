@@ -25,9 +25,11 @@ Source code: the server and the `charliebot` CLI are `rust/crates/`.
 
 ### Merge-back failover
 
-A blocked landing (base moved, CI failed, checks not started, rebase conflict) keeps the work branch, the PR and the worktree. Recover with `charliebot land --task <task session id>` from the kept worktree — never by a hand push. On `rebase-conflict`, resolve the conflict (or delegate the resolution) and run the command again.
+A blocked landing after a moved base, failed or unstarted checks, or a rebase conflict keeps the work branch, PR, and
+worktree. Recover from the kept worktree with `charliebot land --task <task session id>`; resolve a rebase conflict and
+retry. Never hand-push.
 
-The server's delivery check reads the task's `landing.json`: when the gate applies, a commit that reached the base branch without a record in state `landed` blocks the delivery as "landed without the CI gate".
+When the CI gate applies, delivery blocks a base-branch commit without a `landing.json` record in state `landed`.
 
 Keep the runtime checkout (the clone the server runs from) at its current commit. The live server and its agents then use the files of the live release.
 The live server and its agents read these files from the checkout:
@@ -38,16 +40,10 @@ The live server and its agents read these files from the checkout:
 
 Only a release switch or the rollback in README.md (Quick start) moves the checkout.
 
-Rolling back to a release before `7dc5363f1` needs the environment that release runs on: at the target commit, run
-`uv sync --frozen` in the runtime clone, then `export CHARLIEBOT_VENV_BIN="$REPO_ROOT/.venv/bin"` (`REPO_ROOT` is the
-clone) before the switch. `7dc5363f1` and later need neither.
-
 Base each new delegation on `origin/<branch>`, because the local branch can lag origin. To read another revision, use `git show <rev>:<path>` or a worktree of your own.
 
 Before relying on local ancestry to verify a landed commit, check whether the clone is shallow.
 Before deploying through the runtime checkout, pause scheduled jobs that read repo content through it.
-
-**Before a subagent returns / reviewer merges**, the master should skim the subagent's context / transcript for recurring pain points (repeated errors, wrong-path attempts, env/venv pitfalls, protocol misuse). If such patterns appear, update the relevant SKILL.md so future workers don't rediscover the same lesson. This is standing user preference, not per-session.
 
 **Skill-doc update timing**: only promote a finding to a SKILL.md after the underlying debug is fully resolved. Tentative observations (e.g. "per-channel score looks ~1.34× baseline, pending 7-fold confirmation") belong in `$CHARLIEBOT_HOME/LESSONS.md` or the session transcript, not in a skill. Skills are confirmed conventions readers can act on without re-deriving.
 
@@ -74,14 +70,9 @@ When a worker hits a failure on a command that touches real data — `cp -r`, `m
 
 When you find a failure mode that master CC can recover from after-the-fact (e.g. SIGTERM-stranded local commit on an unpushed branch — master can cherry-pick from the local task branch), do NOT add a prescriptive "always do X immediately" rule to the delegation prompt boilerplate. The delegation prompt is for task content, not for offloading reliability work that belongs in the master loop. Fix the master-side recovery path; leave delegation prompts focused on the deliverable.
 
-### Don't include unverified test code snippets in delegation prompts
+### Include verified code in delegation prompts
 
-When writing a delegation that asks the worker to add a unit test or run a verification command, do NOT paste a code snippet you haven't run yourself. Workers copy delegation prompts verbatim, so any typo in the snippet (wrong API name, wrong type assertion, missing import) becomes the worker's debug task. Observed pattern: master spends 30 seconds writing a "helpful" assertion, worker spends 5 minutes figuring out it was wrong.
-
-Better practice — choose one of:
-- Verify the snippet locally before pasting (cheapest if the env is convenient)
-- Describe the test conceptually ("assert per_channel_chosen[0] equals an independent argsort of channel 0's predictions") and let the worker write the actual code
-- Reference an existing test that does something similar and ask the worker to mirror its style
+Include code in a task spec only after verifying it. Otherwise describe the check or point to existing prior art.
 
 ### Don't include improve-loop revert semantics in delegate prompts
 
@@ -89,7 +80,9 @@ Never include revert/keep-only-report decision rules in delegate prompts — tho
 
 ### Delegation spec hard format
 
-All six `##`-level headings are required (`## Goal / Source Files / Required Behavior / Acceptance Tests / Reviewer Checklist / Out of Scope`); `#`-level headings are rejected. `## Source Files` takes only existing absolute paths or `-` (new files created by a patch go in a side note instead). The verify task type requires `--keep-worktree` and does not accept `--repo`. Run `charliebot` subcommands inside the session dir, where a relative artifact path resolves and the session-dir check accepts it; session identity itself comes from the server-written environment.
+Delegation specs require `## Goal`, `## Source Files`, `## Required Behavior`, `## Acceptance Tests`,
+`## Reviewer Checklist`, and `## Out of Scope`. List existing absolute paths or `- (none)` under `Source Files`.
+Put patch-created files in a side note.
 
 Specs must not forbid test edits: tests asserting removed behavior get updated or deleted with it.
 
@@ -103,8 +96,7 @@ A spec for one of the kinds of work listed under Requester Words in `charliebot 
 - The `goal` field contains the Markdown task text.
 - Workers receive that text in their launch prompt.
 - Edit a running worker's run copy with a JSON parser because the worker reads only that file.
-- Count reads with `grep -c task_spec <run-dir>/agent.raw.ndjson` after an edit. A finished run stores that log as `agent.raw.ndjson.zst`, whose decompressed content is the same text.
-- Stop the worker and delegate again when the count is zero or does not increase.
+- A finished run stores its log as `agent.raw.ndjson.zst`; the decompressed content is unchanged.
 - Later work runs and review runs read the spec from the worker session task record in `metadata.json`.
 - Editing one run copy changes that run only.
 - Delegate again to amend a worker that resumes after a trigger.
@@ -114,11 +106,13 @@ A spec for one of the kinds of work listed under Requester Words in `charliebot 
 
 ### Validate spec-embedded tests and patches outside the repo first
 
-Validate both red and green states before writing a test or patch into a spec. `git archive HEAD | tar -x -C /tmp/<scratch>` yields a clean snapshot of tracked files only; edit and run tests there, then confirm the produced patch applies with `git apply --check` on a second clean snapshot.
+Validate the test's red and green states and the patch's applicability in an isolated copy outside the repository
+before adding either to a task spec.
 
 ### Output-capped backends: attach verified code
 
-Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below the advertised `limit.output` (~32k real vs 131072 advertised) and spend that budget on reasoning; splitting into smaller tasks leaves the cap in place. Strongest recipe for implementation delegations: store the verified unified diff as a file; hardcode the spec's first line to direct the worker to skip planning and make its first tool call a shell command; Step 1 = `git apply <patch>`, with verbatim EDIT blocks only as a fallback for apply failure. Delegate mechanical diff/comparison tasks to a master-run script instead — the output cap is absent there. Diagnosis entry: the task Run's `sessions/<id>/data/runs/<run>/events.jsonl` `result` + `usage`. Cost: the master writes the code and the worker only lands and verifies it — the completion report flags this deviation.
+Some backends cap output below their advertised limit, so splitting a task does not remove the cap. For implementation
+delegations to those backends, attach the verified patch file so the worker can apply code directly.
 
 ---
 
@@ -154,13 +148,14 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
   - Exclude backends registered with `restart_reattach=False` and improve-loop controllers from restart reattachment.
 - For CLC run end conditions, resuming an errored session, context reset, landing a CLC change, or running its reviewer, read the charlie-code `README.md`.
 - **Long-running remote command**:
-  1. `charliebot session trigger --cmd '...' --host H --cwd P --max-wait N --message "..."` — starts the command on H and registers its wake in one step. Stdout prints one JSON object: `trigger_id`, `fire_at` and the launch record (`launch_id`, `host`, `pid`, `log`, `exit_file`), also written to `<session>/launches/<launch_id>/metadata.json`. Exit 3 means the ssh start failed and nothing was registered; exit 2 means the registration was rejected and the started process was killed.
-  2. After the registration prints its result, end the turn.
-  3. On wake (trigger fired): the wake message carries the exit code and the log path; pull the log if needed. The remote files sit under `$HOME/charliebot_runs/<launch_id>/` (`log`, `exit`); `ssh H 'rm -rf "$HOME/charliebot_runs/<launch_id>"'` cleans up remote staging.
-
-  In normal master usage, do not pass `--session`; the server-written environment supplies it and mismatches with an explicit `--session` are rejected. Existing explicit `--session` still works for old callers.
-
-  Constraints: the command inside `--cmd` must not outlive the wrapper. A command that starts jobs with `&` must end with `wait`. Each `--cmd` start registers its own trigger. For parallel jobs under one wake, run them all in one `--cmd` that ends with `wait`; for SLURM jobs, pass every job to one `--watch` (the next bullet). The wrapper log captures stdout/stderr only — if the cmd internally redirects output to its own log path (e.g. `/storage/...`), that file is the source of truth and the wrapper log will be near-empty. For sub-2-minute commands, just `ssh host 'cmd'` synchronously instead — the launch+trigger overhead is not worth it.
+  `charliebot session trigger --cmd '...' --host HOST --cwd DIR --max-wait N --message "..."` starts a command and
+  registers a wake.
+  `--host` selects its host; `--cwd` names its working directory, and both require `--cmd`. The `--cmd` and `--watch`
+  forms are mutually exclusive. `--max-wait` bounds the wait.
+  SSH start failure exits 3 without registration; registration rejection exits 2 and kills the started command.
+  Registration prints one JSON object with `trigger_id`, `fire_at`, and the launch record (`launch_id`, `host`, `pid`,
+  `log`, `exit_file`); the wake carries the exit status and log path.
+  Normal master calls use the server's session; explicit mismatches in `--session` are rejected.
 
 - **One trigger watches many targets — a single trigger covers every parallel job.** When master is waiting on N parallel runs, pass all targets to one `charliebot session trigger --watch <spec> <spec> ...` where each spec self-describes its kind (`PID`, `host:pid`, `slurm:jobid`, `host:slurm:jobid`) and kinds may be freely mixed. The trigger fires when ALL listed targets have finished or `--max-wait` elapses. Spawning N triggers wastes the trigger machinery and produces N wake-ups for one logical event. The per-session pending-trigger cap and the sixth registration's exit-2 behavior are contract in `prompts/master.md`, section Delayed Triggers.
 
@@ -168,25 +163,20 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 
 ## Task Reparent
 
-A manager reshapes its own subtree with `charliebot session reparent <task id> --parent <new parent id>`.
-The command sends `PATCH /api/sessions/{task id}` with the one field `task_parent_id`.
+`charliebot session reparent <task id> --parent <new parent id>` patches `/api/sessions/{task id}` with only
+`task_parent_id`.
 
-- A run-token caller reparents a task from below its own task to its own task or a manager below it.
-  A root session that the current cron configuration binds may also move under the caller's task or a manager below it.
-  The server answers every other target with 403.
-- A run-token PATCH that changes more than `task_parent_id` gets the operator-credentials refusal.
-  Profiles, task records and rules stay with the operator.
-- The structural refusals of an operator reparent apply to an agent reparent unchanged (409).
-- A reparent keeps the effective prompt (the managed instructions a run receives) of each moved session word for word.
-  When the reparent drops one subtree rule from above the task, the server puts that rule on the moved task.
-  This carry needs a moved task without its own subtree rule.
-  The server refuses (409) a reparent that adds a subtree rule or drops a rule it cannot carry.
-  The user alone sets the rules that a session reads.
-- A carried rule changes the prompt hash, so the next turn of each moved manager session starts a fresh native conversation.
-- Each reparent appends a `task_reparented` fact to the moved task's chat events.
-  The fact names the actor (`agent` or `user`) and the calling session.
-- To find who reparented a task, run `jq -c 'select(.type=="task_reparented")' $CHARLIEBOT_HOME/sessions/<task id>/data/chat_events.jsonl`.
-  The moved task's own history then answers the question.
+- A run-token caller may move a task below itself to itself or a descendant manager. A root session bound by the current
+  cron configuration may also move under the caller's task or a descendant manager; other targets return 403.
+- A run-token PATCH may change only `task_parent_id`; other fields require operator credentials.
+- Profiles, task records, and rules stay with the operator.
+- Structural refusals for operator reparents also apply to agent reparents and return 409.
+- Reparenting preserves each moved session's effective prompt word for word. It carries a dropped ancestor subtree rule
+  only when the moved task has no own rule; it refuses added rules and dropped rules it cannot carry.
+- The user alone sets the rules that a session reads.
+- A carried rule changes the prompt hash, so each moved manager's next turn starts a fresh native conversation.
+- Every reparent appends a `task_reparented` fact to the moved task's chat events with the actor (`agent` or `user`) and
+  calling session.
 
 ---
 
@@ -280,17 +270,11 @@ One Claude login carries a five-hour and a weekly window, so a long master turn 
 ### Server Logs and Reloads
 
 - Server stdout logs are the only source for HTTP route-use events.
-- The launcher `tee` keeps the server log open on fd 3 after cleanup unlinks its path.
-- Read an unlinked log through `/proc/<tee-pid>/fd/3`.
 - The server reloads prompt documents on each master run (`read_source_file` in `rust/crates/runtime/tasks/src/prompts/sources.rs` reads each file fresh). Static assets under `web/static` load on the next page load.
 - Each release is one commit on main. `scripts/release.sh <commit>` downloads the artifact CI built for that commit, checks its sha256 and installs the release directory and its slice units, then deletes the version directories beyond the ten most recently installed and the one `current` names. It runs no trial and no rehearsal: the checks live on the switch.
 - A change is live when the commit of the live release contains it. This holds for server code and for files in the runtime checkout.
-  `scripts/switch-server.sh rust <commit>` switches the live release in these steps:
-  - the checks that need no model run first, while the old server still serves: artifact sha256, slice units, both releases' `--check-config` on the live home, the slice controllers, the run and improve-loop blockers, and the disk-read gate;
-  - it stops the live server, moves the runtime checkout to the release commit with `git reset --keep`, forward or back, points `current` at the new release, installs that commit's slice units and starts it; release-to-live ends at `server_ready`;
-  - it reads back every recorded live run, then probes a turn and checks a delegation on the live home.
-- A model-side failure of the probe or the delegation (a gateway 5xx, a rate limit, a model-call error) gets one retry; a second one keeps the new release serving and exits 6.
-- Any other check failure switches back over the forward path's own steps with the previous release, without the disk gate: the previous release's `--check-config` runs on the live home before the new release stops, and an old release that refuses the home leaves the new release serving (exit 5).
+  Use `scripts/switch-server.sh rust <commit>` to switch the live Rust release.
+  The script owns its preflight and checks.
 
 ## Backend Choice
 
@@ -313,20 +297,6 @@ One Claude login carries a five-hour and a weekly window, so a long master turn 
 ## Web Terminal
 
 The web terminal keeps tmux mouse mode on: tmux-side selection preserves logical lines across soft wraps, while xterm.js native selection under tmux breaks at screen width (tmux repaints line-by-line via CUP), so handing selection to the browser is a net loss. tmux OSC 52 handles payloads of hundreds of KB.
-
----
-
-## Skills System
-
-Shared skills live in `<charlie-bot-repo>/skills/`; host-specific skills live in
-`$CHARLIEBOT_HOME/skills/`. Both sync into `~/.claude/skills/`.
-Skills with `user-invocable: false` are auto-loaded by CC when contextually relevant.
-
-`$CHARLIEBOT_HOME/` holds host-specific state (skills, sessions, config, credentials).
-On some hosts it may happen to be a local git repo, but its contents are NOT meant to
-be committed or pushed — workers must edit files in place and must never `git add` them
-to a `$CHARLIEBOT_HOME` repo if one exists. Cross-host shared skills go in
-`<charlie-bot-repo>/skills/` instead.
 
 ---
 
@@ -383,14 +353,6 @@ Compressed archive backups (not git) stored at `${CHARLIEBOT_HOME}_backup`, tier
 
 ---
 
-## Improvement Decisions (Feb 2026)
-
-**Not needed (single-user):** SQLite (JSON preferred), worker retry/backoff, worker resource limits, rate limiting.
-**Done:** session full-text search, error handling consistency, session rewind.
-**Deferred:** metrics/observability, multi-repo dashboard, semantic search.
-
----
-
 ## Diff Comment Batches
 
 A message beginning `[Diff comments · <repo> · <base>..<head> @ <sha>]` is a batch of line-anchored review comments on that diff. Numbered entries cite `file:line` on the stated side at the stated head SHA, and `[suggestion]` entries contain literal replacement code.
@@ -401,13 +363,7 @@ Treat the head branch as the working branch and turn the batch into one delegati
 
 Submit with `sbatch --parsable` (prints only the job id), then watch it. The remote form is the primary one — submit over ssh on a cluster login host and watch with `HOST:slurm:`; the trigger server does not need slurm installed for the remote form, since `sacct` runs on the cluster over ssh:
 
-```bash
-JOBID=$(ssh neptune sbatch --parsable -o ~/slurm_logs/%x-%j.out -e ~/slurm_logs/%x-%j.err train.sbatch)
-charliebot session trigger --max-wait 86400 --watch neptune:slurm:"$JOBID" --message "train done"
-# Local form (the trigger-server host itself runs slurm):
-# JOBID=$(sbatch --parsable -o ~/slurm_logs/%x-%j.out -e ~/slurm_logs/%x-%j.err train.sbatch)
-# charliebot session trigger --max-wait 86400 --watch slurm:"$JOBID" --message "train done"
-```
+Remote watch specs use `HOST:slurm:JOBID`; local specs use `slurm:JOBID`.
 
 Caveats:
 - Give every `sbatch` command absolute output and error paths with the home prefix expanded.
@@ -448,15 +404,6 @@ The fired message is prefixed with the reason; per-target detail is in the suffi
 ## General Principle
 
 **If you don't understand how a feature works, read the source code** in `rust/crates/`. Key server files:
-
-| Feature | Source file |
-|---------|------------|
-| Improve loop | `rust/crates/features/improve/src/command.rs` |
-| Spawner + review | `rust/crates/runtime/tasks/src/spawner_backends.rs`, `rust/crates/runtime/tasks/src/spawner_prompt.rs` |
-| Scheduler | `rust/crates/features/cron/src/scheduler.rs` |
-| Delayed triggers | `rust/crates/runtime/triggers/src/triggers.rs` |
-| Sessions | `rust/crates/runtime/store/src/session_events.rs` and the other `session_*.rs` blocks in the store crate |
-| Config | `rust/crates/infra/core/src/config.rs` |
 
 **A one-shot call dispatches to the per-backend CLI-native overrides.** `one_shot_text` resolves to the claude, codex, and opencode overrides. These overrides run tool-less, and the claude override also disallows Read.
 In a one-shot that needs file or tool access, bind the base `AgentBackend.one_shot_text` explicitly for every backend. This keeps the tool access that the overrides lack. `rust/crates/features/explain/src/explain.rs` binds it through `agent_one_shot_text`.

@@ -31,8 +31,7 @@ implementing; master includes them as constraints in task specs.
   internals and build or setup files. Expose a deliberate interface.
 - Group related state and behavior into a class or methods instead of
   scattered free functions; wrap external helpers behind a small in-house API.
-- Prefer an enum over a bare boolean for categorical or internal state.
-  Reserve `0 = UNKNOWN` and start real values at `1`.
+- Prefer an enum when a value has more than two states.
 - Store computed or derivable values on demand.
 - Pass every value explicitly at each call and construction site, structure fields included:
   neither add a default that lets a site omit what it passes, nor drop an explicit argument to lean on a default;
@@ -49,10 +48,10 @@ implementing; master includes them as constraints in task specs.
 - A private vocabulary (a coined term, a symbol, a fitted quantity) has one home: the module docstring states the
   notation, the equations, and a glossary once, and every other comment uses those names and points there.
   A term that appears nowhere in that home is replaced by the ordinary word.
-- Write for a reader who is not a native speaker and did not attend the design discussion: one idea per
-  sentence, ordinary words over metaphor, and a formula in place of a paragraph that paraphrases one.
-  As a working ceiling, a sentence stays under thirty words and a docstring under fifteen lines; a
-  configuration key's comment says what the operator changes and what they will see, in five lines.
+- Write for readers who are not native speakers and did not attend the design discussion.
+  Keep one idea per sentence and prefer ordinary words to metaphor.
+  Use a formula when it states the relation more clearly.
+  A configuration key's comment states what the operator changes and what they will see.
 - Everything about the change, its motive included, lives in the commit message and the PR, which blame reaches
   from any line; a comment that narrates a change duplicates them and goes stale at the next one.
 - Examples in code name a shape, never a run: job numbers, ticket codenames, and hostnames date the comment

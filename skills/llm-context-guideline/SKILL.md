@@ -56,31 +56,18 @@ State each fact at the category level in its most concise form, bounded to one t
 core conclusion, keeping narrative deduction and case histories in session records. Phrase each
 line by the `## Phrasing for model context` rule above.
 
-Every admit and every revise carries three proof lines in the PR page and its commit body, each
-headed by the question it answers; a question that finds no answer is the signal to rethink
-whether the entry belongs in the store at all, and such a candidate is rejected:
+Admit or revise an entry only when it changes future action, belongs in the store, and states its facts concisely.
+Reject a candidate that fails any of these tests.
 
-- **"When will this be used again, and what will it change?"** (the Action line): the concrete
-  future action this entry changes, named as work that recurs or is already planned in a named
-  project or stack.
-- **"Why is the store the cheapest home?"** (the Home line): answered by checking the others:
-  repo-scoped knowledge lives in that repo's own CLAUDE.md or docs; charlie-bot behavior lives
-  in the master prompt, a skill, config, or the source; incidents and event history live in
-  `LESSONS.md`; run results, live state, and receipts live in the run dir or owning session; a
-  project's experiment verdicts live in its tracker (Linear).
-  A project-scoped finding lives under that project's topic or its repo docs; a cluster or host
-  entry holds only what binds every project there. The Home line also names the reader and the
-  delivery path that reaches them at the moment the entry changes their action, and the named
-  path is one the reader already travels.
-  Residency is the costliest slot, full text in every master spawn: process rules governing every
-  session hold it; domain conventions live with their domain. When the natural home is obstructed,
-  fix the obstruction or take another tracked path inside that home; another home's content stays
-  in that home.
-- **"Is this the most concise expression?"** (the Brevity line): the curator trims the
-  presented text (the new body, or the whole entry after a merge) to the Entry form brevity
-  bar before presenting, and the answer names what the trim removed, or states the body's
-  line count when the draft already sat at the bar.
-  When the trim removes a line that another home owns, the Brevity line names that home.
+- Describe the recurring or planned work in a named project or stack that the entry changes.
+- Compare the store with the natural homes: repo knowledge in repo docs; CharlieBot behavior in prompts, skills,
+  config, or source; incidents in `LESSONS.md`; run results, live state, and receipts in run or session records; and
+  experiment verdicts in the tracker. Keep project knowledge with its project, and cluster or host facts only when
+  they bind every project there.
+  Name the reader and an existing delivery path that reaches them when the entry changes their action. Keep domain
+  conventions with their domain and session-wide rules in resident topics, since resident entries enter every master
+  spawn in full. When a natural home is blocked, fix the obstruction or use a tracked path inside that home.
+- Trim the entry before presenting it. Name the canonical home when trimming moves a fact that another home owns.
 
 A candidate's text is a claim: verify its figures against the live system before presenting them.
 A revise re-verifies the surviving claims of the entry it edits.
@@ -138,21 +125,15 @@ content. Timeless phrasing: state the standing reality. Dates, session ids, comm
 quoted rulings, event history, and case enumerations belong in `LESSONS.md`.
 Skip decision-attribution labels (`（用户定）`, `（用户裁定）`). Every entry stands by the curation
 flow that admitted it, so the label carries no information.
-Say each fact once. Write entry prose in English. Keep each line at 120 columns or fewer. Line
-width is terminal display width: a character whose `east_asian_width` is W or F counts two columns,
-so one Chinese character counts two. Keep code, paths, identifiers, and commands verbatim. When
-a semicolon joins two clauses, write them as two sentences. Entry prose follows the Writing Style
-section of prompts/master.md, its "Text a model reads" subsection included. Apply the admission
-test line by line as well as entry by entry.
-A user ruling stated with exceptions encodes as the criterion the exceptions reveal, not as a flat default with carve-outs; when no criterion is recoverable, present the cases to the user instead of flattening them.
-Keep each line whose removal changes what a capable model does.
-Brevity is part of the admission bar. Lead with the action, and keep its purpose sentence.
-Keep the mechanism that the action needs to be understood.
-Session reports and run dirs hold the receipts, verification notes, and secondary effects.
-Hold the rule text of a bullet to three lines or fewer; its purpose sentence rides outside this count.
-Hold the rule text of an entry body to 12 lines or fewer; purpose sentences ride outside this count.
-Adding a purpose sentence therefore leaves the rule text as it is.
-When an edit leaves a body over 12 lines, trim the whole entry by the same test.
+State each fact once in English, and preserve code, paths, identifiers, and commands verbatim.
+Follow the Writing Style section of `prompts/master.md`, including "Text a model reads". Apply the admission test to
+each line and to the entry as a whole.
+When a ruling's exceptions reveal its criterion, state that criterion; ask the user when none can be recovered.
+Keep each line that changes what a capable model does. Lead with the action, and retain its purpose and needed
+mechanism.
+Keep receipts, verification notes, and secondary effects in session reports and run directories.
+`rust/crates/features/memory/src/cli/proposal_check.rs` enforces 120 display columns per line and 12 lines per entry
+body.
 A measured figure lives in its canonical source (run dir, canon table, ticket); an entry states
 the rule and points there.
 Environment composition and version facts (package pins, toolchain and interpreter versions,

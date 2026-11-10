@@ -7,7 +7,8 @@
 # and scope, and checks that every switched-on session-weight switch (server.enable_session_cpu_weight,
 # server.enable_session_io_weight, read through the release's `charliebot switch-helper`) has its controller in the
 # agents slice's cgroup.controllers. The check runs before the install below, so the target's units must already be
-# installed: scripts/release.sh installs them ahead of its install stage. It refuses a clone with local changes
+# installed: scripts/release.sh installs them ahead of its install stage. The no-model preflight checks finish while
+# the old server still serves. It refuses a clone with local changes
 # and a target commit that a fetch does not bring. Its scan refuses a restart while an improve loop's controller still
 # runs in the server: the loop's active lock is present and the server pid its state names is live, whatever status the
 # state file holds — `charliebot improve stop` writes `stopped` while the current iteration keeps running. Its last

@@ -4,13 +4,9 @@ Style for commit messages and pull request descriptions.
 
 ## Order
 
-- Write a commit message body in three parts, in this order: why, evidence, how.
-- Write a PR description in four sections, each under its own heading, in this order:
-  1. Why
-  2. How it works
-  3. Evidence
-  4. How the diff reads
-- In a commit message, the how part follows the rules of the How the diff reads section.
+- Commit messages convey why the change exists, how it works, and the evidence.
+- PR descriptions convey why, how the changed system runs, the evidence, and how the diff reads.
+- Organize both so a reviewer can find that information quickly.
 
 ## Why
 

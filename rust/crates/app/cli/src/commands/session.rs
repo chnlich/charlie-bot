@@ -79,6 +79,8 @@ enum SessionCommand {
   Send(SendArgs),
   /// Print one session's chat messages as plain text, oldest first (for rg)
   Dialog(DialogArgs),
+  /// Print a child session's conclusion text
+  Conclusion(ConclusionArgs),
 }
 
 #[derive(Args)]
@@ -221,6 +223,19 @@ struct DialogArgs {
   /// Print only the last N complete turns plus the turn in progress
   #[arg(long)]
   turns: Option<i64>,
+  /// Print only real user messages and platform summons
+  #[arg(long = "from", value_parser = ["user"])]
+  from: Option<String>,
+}
+
+#[derive(Args)]
+struct ConclusionArgs {
+  /// Child session id
+  #[arg(long)]
+  session: String,
+  /// Run id (optional; default is the newest ended run with a conclusion)
+  #[arg(long)]
+  run: Option<String>,
 }
 
 /// Parse the session arguments and run one verb. Parser errors print and exit on their own: help
@@ -250,6 +265,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     SessionCommand::SetApprover(args) => set_approver(&args),
     SessionCommand::Send(args) => send(&args),
     SessionCommand::Dialog(args) => dialog(&args),
+    SessionCommand::Conclusion(args) => conclusion(&args),
   }
 }
 
@@ -669,6 +685,9 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
         printed += 1;
         continue;
       }
+      if args.from.as_deref() == Some("user") && !is_user_or_summon(message) {
+        continue;
+      }
       let Some(block) = format_message_block(message) else { continue };
       // The header's anchor is re-taken while the first block's event index is None.
       if first.as_ref().is_none_or(|(_, _, event_index)| event_index.is_null()) {
@@ -742,6 +761,115 @@ fn format_message_block(message: &Value) -> Option<String> {
     format!("$ {name} {}", charliebot_tasks::tool_line::tool_input_first_line(tool))
   }));
   Some(lines.join("\n"))
+}
+
+fn is_user_or_summon(message: &Value) -> bool {
+  let mut event = message.clone();
+  if !event.is_object() {
+    return false;
+  }
+  if event.get("type").is_none()
+    && let Some(role) = event.get("role")
+  {
+    event["type"] = role.clone();
+  }
+  event_types::is_real_user_message(&event) || event_types::is_platform_summon(&event)
+}
+
+fn conclusion(args: &ConclusionArgs) -> Result<(), CliExit> {
+  let home = home_dir()?;
+  let text = conclusion_in_home(&home, args)?;
+  print_conclusion(&text);
+  Ok(())
+}
+
+fn conclusion_in_home(home: &Path, args: &ConclusionArgs) -> Result<String, CliExit> {
+  let session_dir = config::sessions_dir_in(home).join(&args.session);
+  if !session_dir.is_dir() {
+    return Err(CliExit::usage(format!("session {} does not exist", args.session)));
+  }
+  let runs_dir = layout::runs_dir(&session_dir);
+  if let Some(run_id) = &args.run {
+    let run_dir = runs_dir.join(run_id);
+    if !run_dir.is_dir() {
+      return Err(CliExit::usage(format!("run {run_id} does not exist in session {}", args.session)));
+    }
+    if let Some(text) = extract_run_conclusion(&run_dir)? {
+      return Ok(text);
+    }
+    return Err(CliExit::usage(format!("no conclusion found for run {run_id} in session {}", args.session)));
+  }
+
+  let entries = match std::fs::read_dir(&runs_dir) {
+    Ok(entries) => entries,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+      return Err(CliExit::usage(format!("no runs found in session {}", args.session)));
+    }
+    Err(error) => return Err(CliExit::error(format!("reading {}: {error}", runs_dir.display()))),
+  };
+
+  let mut ended_runs: Vec<(charliebot_store::run_records::RunRecord, std::path::PathBuf)> = Vec::new();
+  for entry in entries {
+    let entry = entry.map_err(|error| CliExit::error(format!("reading {}: {error}", runs_dir.display())))?;
+    let path = entry.path();
+    if !path.is_dir() {
+      continue;
+    }
+    let metadata_path = path.join(charliebot_store::run_records::RUN_METADATA_NAME);
+    if let Ok(record) = charliebot_store::run_records::read_run_record_file(&metadata_path)
+      && record.ended_at.is_some()
+    {
+      ended_runs.push((record, path));
+    }
+  }
+
+  ended_runs.sort_by(|a, b| {
+    let key_a = (a.0.started_at.unwrap_or_else(charliebot_store::metadata::UtcDateTime::now), &a.0.id);
+    let key_b = (b.0.started_at.unwrap_or_else(charliebot_store::metadata::UtcDateTime::now), &b.0.id);
+    key_b.cmp(&key_a)
+  });
+
+  for (_record, run_dir) in ended_runs {
+    if let Some(text) = extract_run_conclusion(&run_dir)? {
+      return Ok(text);
+    }
+  }
+
+  Err(CliExit::usage(format!("no ended run with a conclusion found in session {}", args.session)))
+}
+
+fn extract_run_conclusion(run_dir: &Path) -> Result<Option<String>, CliExit> {
+  let report = run_dir.join("report.md");
+  if report.is_file() {
+    let content = std::fs::read_to_string(&report)
+      .map_err(|error| CliExit::error(format!("reading {}: {error}", report.display())))?;
+    if !content.trim().is_empty() {
+      return Ok(Some(content));
+    }
+  }
+
+  let findings = run_dir.join("findings.md");
+  if findings.is_file() {
+    let content = std::fs::read_to_string(&findings)
+      .map_err(|error| CliExit::error(format!("reading {}: {error}", findings.display())))?;
+    if !content.trim().is_empty() {
+      return Ok(Some(content));
+    }
+  }
+
+  let events_path = run_dir.join(charliebot_store::run_records::RUN_EVENTS_NAME);
+  match charliebot_tasks::review::read_worker_summary_file(&events_path) {
+    Ok(Some(text)) if !text.trim().is_empty() => Ok(Some(text)),
+    Ok(_) => Ok(None),
+    Err(error) => Err(CliExit::error(format!("reading {}: {error}", events_path.display()))),
+  }
+}
+
+fn print_conclusion(text: &str) {
+  print!("{text}");
+  if !text.ends_with('\n') {
+    println!();
+  }
 }
 
 #[cfg(test)]
@@ -838,5 +966,186 @@ mod tests {
     let readback = find_local_task_close(home.path(), TASK_ID, REQUEST_ID);
 
     assert!(readback.is_err(), "an unknown approver must not pick either answer: {readback:?}");
+  }
+
+  #[test]
+  fn session_conclusion_four_fixtures_report_result_assistant_and_none() {
+    let home = tempfile::tempdir().expect("a temp home");
+    let child_id = "child-session-001";
+    let session_dir = config::sessions_dir_in(home.path()).join(child_id);
+    fs::create_dir_all(layout::runs_dir(&session_dir)).expect("runs dir");
+
+    // Fixture 1: run with report.md
+    let run1 = layout::runs_dir(&session_dir).join("run-1");
+    fs::create_dir_all(&run1).unwrap();
+    fs::write(
+      run1.join(charliebot_store::run_records::RUN_METADATA_NAME),
+      json!({ "id": "run-1", "session_id": child_id, "ended_at": "2026-11-10T01:00:00Z" }).to_string(),
+    )
+    .unwrap();
+    fs::write(run1.join("report.md"), "# Report 1\nWorker finished.").unwrap();
+
+    let res = conclusion_in_home(
+      home.path(),
+      &ConclusionArgs { session: child_id.to_string(), run: Some("run-1".to_string()) },
+    )
+    .unwrap();
+    assert_eq!(res, "# Report 1\nWorker finished.");
+
+    // Fixture 2: run with result event only
+    let run2 = layout::runs_dir(&session_dir).join("run-2");
+    fs::create_dir_all(&run2).unwrap();
+    fs::write(
+      run2.join(charliebot_store::run_records::RUN_METADATA_NAME),
+      json!({ "id": "run-2", "session_id": child_id, "ended_at": "2026-11-10T02:00:00Z" }).to_string(),
+    )
+    .unwrap();
+    fs::write(
+      run2.join(charliebot_store::run_records::RUN_EVENTS_NAME),
+      json!({ "type": "result", "result": "Conclusion from result event" }).to_string() + "\n",
+    )
+    .unwrap();
+
+    let res = conclusion_in_home(
+      home.path(),
+      &ConclusionArgs { session: child_id.to_string(), run: Some("run-2".to_string()) },
+    )
+    .unwrap();
+    assert_eq!(res, "Conclusion from result event");
+
+    // Fixture 3: run with assistant text only (codex logs)
+    let run3 = layout::runs_dir(&session_dir).join("run-3");
+    fs::create_dir_all(&run3).unwrap();
+    fs::write(
+      run3.join(charliebot_store::run_records::RUN_METADATA_NAME),
+      json!({ "id": "run-3", "session_id": child_id, "ended_at": "2026-11-10T03:00:00Z" }).to_string(),
+    )
+    .unwrap();
+    fs::write(
+      run3.join(charliebot_store::run_records::RUN_EVENTS_NAME),
+      json!({
+        "type": "assistant",
+        "message": {
+          "content": [
+            {"type": "text", "text": "Assistant summary text from codex"}
+          ]
+        }
+      })
+      .to_string()
+        + "\n",
+    )
+    .unwrap();
+
+    let res = conclusion_in_home(
+      home.path(),
+      &ConclusionArgs { session: child_id.to_string(), run: Some("run-3".to_string()) },
+    )
+    .unwrap();
+    assert_eq!(res, "Assistant summary text from codex");
+
+    // Without --run, child session picks the newest ended run (run-3)
+    let newest = conclusion_in_home(home.path(), &ConclusionArgs { session: child_id.to_string(), run: None }).unwrap();
+    assert_eq!(newest, "Assistant summary text from codex");
+
+    // Fixture 4: run with none of the three -> exits 2
+    let run4 = layout::runs_dir(&session_dir).join("run-4");
+    fs::create_dir_all(&run4).unwrap();
+    fs::write(
+      run4.join(charliebot_store::run_records::RUN_METADATA_NAME),
+      json!({ "id": "run-4", "session_id": child_id, "ended_at": "2026-11-10T04:00:00Z" }).to_string(),
+    )
+    .unwrap();
+    fs::write(
+      run4.join(charliebot_store::run_records::RUN_EVENTS_NAME),
+      json!({ "type": "tool_use", "name": "Bash" }).to_string() + "\n",
+    )
+    .unwrap();
+
+    let err = conclusion_in_home(
+      home.path(),
+      &ConclusionArgs { session: child_id.to_string(), run: Some("run-4".to_string()) },
+    )
+    .unwrap_err();
+    assert_eq!(err.code, 2);
+
+    // Empty session with no conclusions -> exits 2
+    let empty_session = "empty-session";
+    let empty_dir = config::sessions_dir_in(home.path()).join(empty_session);
+    fs::create_dir_all(layout::runs_dir(&empty_dir)).unwrap();
+    let err2 =
+      conclusion_in_home(home.path(), &ConclusionArgs { session: empty_session.to_string(), run: None }).unwrap_err();
+    assert_eq!(err2.code, 2);
+  }
+
+  #[test]
+  fn session_conclusion_succeeds_when_charliebot_session_id_names_parent() {
+    let home = tempfile::tempdir().expect("a temp home");
+    let child_id = "child-worker-session-id";
+    let parent_id = "parent-manager-session-id";
+    let session_dir = config::sessions_dir_in(home.path()).join(child_id);
+    let run_dir = layout::runs_dir(&session_dir).join("run-child");
+    fs::create_dir_all(&run_dir).unwrap();
+    fs::write(
+      run_dir.join(charliebot_store::run_records::RUN_METADATA_NAME),
+      json!({ "id": "run-child", "session_id": child_id, "ended_at": "2026-11-10T01:00:00Z" }).to_string(),
+    )
+    .unwrap();
+    fs::write(run_dir.join("report.md"), "Task completed successfully").unwrap();
+
+    // Verify resolve_session_id with parent env and child arg rejects with mismatch error
+    let sources = resolve::SessionSources {
+      arg_session: Some(child_id),
+      env_session: Some(parent_id),
+      cwd: home.path(),
+      sessions_dir: &config::sessions_dir_in(home.path()),
+    };
+    let resolve_err = resolve::resolve_session_id(sources).unwrap_err();
+    assert_eq!(resolve_err.code, 2);
+    assert!(resolve_err.body["error"].as_str().unwrap().contains(parent_id));
+
+    // session conclusion bypasses resolve_from_env and succeeds
+    let res = conclusion_in_home(home.path(), &ConclusionArgs { session: child_id.to_string(), run: None }).unwrap();
+    assert_eq!(res, "Task completed successfully");
+  }
+
+  #[test]
+  fn is_user_or_summon_matches_real_user_and_platform_summons() {
+    // Real user messages
+    assert!(is_user_or_summon(&json!({"type": "user", "content": "hello"})));
+    assert!(is_user_or_summon(&json!({"role": "user", "content": "hello"})));
+
+    // Tool-result echoes in user role are NOT real user messages
+    assert!(!is_user_or_summon(&json!({
+      "type": "user",
+      "content": [{"type": "tool_result", "tool_use_id": "toolu_1"}]
+    })));
+
+    // Assistant and tool messages are NOT user messages
+    assert!(!is_user_or_summon(&json!({"type": "assistant", "role": "assistant", "content": "I did it"})));
+    assert!(!is_user_or_summon(&json!({"type": "tool", "role": "tool", "content": "output"})));
+
+    // Platform summons
+    assert!(is_user_or_summon(&json!({
+      "type": "agent_message",
+      "content": "summon text",
+      "slack": {"event_id": "Ev123"}
+    })));
+    assert!(is_user_or_summon(&json!({
+      "type": "agent_message",
+      "content": "discord summon",
+      "discord": {"channel_id": "ch1"}
+    })));
+    assert!(is_user_or_summon(&json!({
+      "type": "agent_message",
+      "content": "feishu summon",
+      "feishu": {"message_id": "om_123"}
+    })));
+
+    // Platform nudge is NOT a summon
+    assert!(!is_user_or_summon(&json!({
+      "type": "agent_message",
+      "content": "nudge",
+      "slack": {"event_id": "Ev123", "nudge_of": "parent_msg"}
+    })));
   }
 }

@@ -3,6 +3,7 @@
 //! `/usage` command.
 
 mod antigravity_cli;
+mod envelope;
 pub mod factory;
 mod options;
 mod usage_quota;

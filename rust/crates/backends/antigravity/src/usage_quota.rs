@@ -18,6 +18,7 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::process::Command;
 
+use super::envelope;
 use super::options::TYPE_NAME;
 
 const PROVIDER: &str = "antigravity";
@@ -200,9 +201,8 @@ fn read_member(
 }
 
 fn parse_usage(response: &Value, models: &[String], fetched_at: UtcDateTime) -> anyhow::Result<ParsedUsage> {
-  let status =
-    response.get("status").and_then(Value::as_str).ok_or_else(|| anyhow!("Antigravity response has no status"))?;
-  if status != "SUCCESS" {
+  let status = envelope::status(response).ok_or_else(|| anyhow!("Antigravity response has no status"))?;
+  if status != envelope::SUCCESS {
     bail!("Antigravity usage status is {status}");
   }
   let groups = response

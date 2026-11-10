@@ -565,7 +565,7 @@ fn resolve_token(tok: &str, base: Option<&str>) -> Option<String> {
   let mut s = tok.to_string();
   for (var, val) in [
     ("${CHARLIEBOT_HOME}", cb_home.as_str()),
-    ("$CHARLIEBOT_HOME", cb_home.as_str()),
+    (home::DISPLAY_HOME, cb_home.as_str()),
     ("${HOME}", home.as_str()),
     ("$HOME", home.as_str()),
   ] {

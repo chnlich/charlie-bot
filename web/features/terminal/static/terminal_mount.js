@@ -19,9 +19,9 @@ globalThis.createTerminal = function(container) {
     fontSize: 13,
     fontFamily: '"Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
     theme: {background: '#000000', foreground: '#e2e8f0'},
-    // Terminal text is 13px, so it takes the 4.5:1 floor. xterm's minimumContrastRatio lifts
-    // any foreground below it; the shell's black-on-green status line measures 3.58:1 in the
-    // default palette.
+    // Terminal text is 13px, so it takes the 4.5:1 floor. xterm's minimumContrastRatio lifts a
+    // non-dim cell's foreground to that floor; the shell's black-on-green status line measures
+    // 3.58:1 in the default palette. xterm gives a dim cell half the ratio by design.
     minimumContrastRatio: 4.5,
     scrollback: 50000,
     convertEol: false,

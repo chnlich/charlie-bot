@@ -108,14 +108,26 @@ async function answerCopy(event, request) {
   const copy = networkOnly ? undefined : await cache.match(request.url);
   const settled = observe(fetch(request));
   if (!copy) {
-    const answer = await settled;
+    let answer = await settled;
+    if (!answer.error && answer.response.status === 304) {
+      // The browser's HTTP cache held the entry and the revalidation matched, but a request the worker
+      // answers carries no cached body the page could read. One more fetch, past the cache and without
+      // the conditional header, brings the body.
+      const headers = new Headers(request.headers);
+      headers.delete('If-None-Match');
+      answer = await observe(fetch(request.url, {headers, cache: 'no-store'}));
+    }
     if (answer.error) throw answer.error;
     event.waitUntil(afterNetworkAnswer(request, answer));
     return answer.response;
   }
   const answered = await Promise.race([settled, waitCap(WAIT_CAP_MS)]);
   event.waitUntil(settled.then((answer) => afterNetworkAnswer(request, answer)));
-  if (answered.response && answered.response.status < 500) return answered.response;
+  // A 304 names no body: the network's state matches what the browser's HTTP cache held, which is what
+  // the stored copy carries. The page reads the copy.
+  if (answered.response && answered.response.status < 500 && answered.response.status !== 304) {
+    return answered.response;
+  }
   return copy;
 }
 

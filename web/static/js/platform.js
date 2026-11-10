@@ -6,11 +6,19 @@ const platform = (function() {
   const isTouchDevice = /Android|iPhone|iPad/i.test(ua) || 'ontouchstart' in window;
   const _callbacks = [];
 
+  // The layout modes, one member per value `_mode` returns. Every return and
+  // comparison names a member, so this object is the one home of these values.
+  const PLATFORM_MODE = {
+    COVER: 'cover',
+    MOBILE: 'mobile',
+    DESKTOP: 'desktop',
+  };
+
   function _mode() {
     const w = window.innerWidth;
-    if (w <= 320) return 'cover';   // Z Fold 5 cover screen ~280px
-    if (w <= 768) return 'mobile';  // Z Fold 5 unfolded ~717px, phones
-    return 'desktop';
+    if (w <= 320) return PLATFORM_MODE.COVER;   // Z Fold 5 cover screen ~280px
+    if (w <= 768) return PLATFORM_MODE.MOBILE;  // Z Fold 5 unfolded ~717px, phones
+    return PLATFORM_MODE.DESKTOP;
   }
 
   let _currentMode = _mode();
@@ -42,7 +50,7 @@ const platform = (function() {
 
   return {
     /** true on phones / tablets / foldables (any non-desktop) */
-    get isMobile() { return _currentMode !== 'desktop'; },
+    get isMobile() { return _currentMode !== PLATFORM_MODE.DESKTOP; },
 
     /** Register callback: fn(newMode, prevMode) */
     onChange(fn) { _callbacks.push(fn); },

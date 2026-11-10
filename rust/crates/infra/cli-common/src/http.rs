@@ -7,17 +7,7 @@ use tokio::runtime::{Builder, Runtime};
 
 use crate::wire::{Method, TransportError, WireRequest, WireResponse};
 
-/// reqwest's workspace feature set ships no default rustls crypto provider; the CLI's
-/// `http://localhost` base URLs never negotiate TLS, but the client builder refuses to build
-/// without one installed. Failure to install can only mean another provider is already installed,
-/// which serves the same purpose.
-/// Make a rustls crypto provider available to reqwest clients.
-pub fn ensure_crypto_provider() {
-  static INSTALLED: OnceLock<()> = OnceLock::new();
-  INSTALLED.get_or_init(|| {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-  });
-}
+pub use charliebot_compat::http_client::ensure_crypto_provider;
 
 /// One request over the real HTTP client.
 pub fn send_http(request: &WireRequest) -> Result<WireResponse, TransportError> {

@@ -35,7 +35,8 @@
      The subtitle already prints the ledger time, and the all-time card its call
      count, so only this pair needs a fold. The button keeps the chip's shape;
      opened, its chips take the row under the chip row and the fold's chevron
-     turns. */
+     turns. The fold's body follows the generated chip in the markup, so opening
+     it leaves that chip beside the button instead of pushing it down. */
   .detBtn { line-height:inherit; cursor:pointer }
   /* The keyboard ring uses the page's accent, as the approval page's folded rows
      do. Enter and Space then give the chip the same visible focus the rest of the
@@ -133,11 +134,11 @@
   <div class="meta">
     {% if ctx.rows %}<span class="mtag">window &middot; {{ window[0] }} &rarr; {{ window[1] }} {{ zone }}</span>{% endif %}
     <button class="mtag detBtn" type="button" aria-expanded="false" aria-controls="usage-details">Details</button>
+    <span class="mtag">generated &middot; {{ generated }}</span>
     <span class="detBody" id="usage-details" hidden>
       <span class="mtag">sources &middot; {{ ctx.usage_sources|join(' / ') }} local logs</span>
       <span class="mtag">scope &middot; one model = one row (merged across sources and subscriptions)</span>
     </span>
-    <span class="mtag">generated &middot; {{ generated }}</span>
   </div>
 
   {% if not ctx.rows %}

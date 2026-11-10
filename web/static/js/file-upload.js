@@ -5,6 +5,14 @@ let uploadedFiles = []; // Array of {id, filename, path, size, status, error}
 let uploadsInFlight = 0;
 let nextUploadId = 1;
 
+// The chip statuses: every value `file.status` takes. The upload path writes
+// one of these, and each chip site reads a status by its name here.
+const FILE_STATUS = {
+  UPLOADING: 'uploading',
+  FAILED: 'failed',
+  UPLOADED: 'uploaded',
+};
+
 // The send button's lock is a count, not a flag. Attachment uploads count in
 // uploadsInFlight. A package that fills the input asynchronously opens an
 // input-work window through inputWorkStarted and closes it through
@@ -40,7 +48,7 @@ function getUploadedFileById(id) {
 }
 
 function getUploadedFilesForPayload() {
-  return uploadedFiles.filter((file) => file.status === 'uploaded');
+  return uploadedFiles.filter((file) => file.status === FILE_STATUS.UPLOADED);
 }
 
 // The chat-message send path posts entries validated against UploadedFileRef
@@ -64,11 +72,11 @@ function clearSentUploadedFiles(ids) {
 // throws instead of painting a success mark.
 function renderFileChipIcon(file) {
   switch (file.status) {
-    case 'uploading':
+    case FILE_STATUS.UPLOADING:
       return '<span class="file-chip-icon file-chip-icon--spinner" aria-hidden="true"></span>';
-    case 'failed':
+    case FILE_STATUS.FAILED:
       return '<span class="file-chip-icon" aria-hidden="true">&#x26A0;</span>';
-    case 'uploaded':
+    case FILE_STATUS.UPLOADED:
       return '<span class="file-chip-icon" aria-hidden="true">&#x2713;</span>';
     default:
       throw new Error('Unknown file status: ' + file.status);
@@ -78,10 +86,10 @@ function renderFileChipIcon(file) {
 // One chip's remove button: an in-flight upload has none, and a failed or uploaded file can be removed.
 function renderFileChipRemoveButton(file) {
   switch (file.status) {
-    case 'uploading':
+    case FILE_STATUS.UPLOADING:
       return '';
-    case 'failed':
-    case 'uploaded':
+    case FILE_STATUS.FAILED:
+    case FILE_STATUS.UPLOADED:
       return `<button onclick="removeFile(${file.id})" title="Remove">&#x2715;</button>`;
     default:
       throw new Error('Unknown file status: ' + file.status);
@@ -91,10 +99,10 @@ function renderFileChipRemoveButton(file) {
 // One chip's state label: only a failed upload carries one.
 function renderFileChipStatusLabel(file) {
   switch (file.status) {
-    case 'uploading':
-    case 'uploaded':
+    case FILE_STATUS.UPLOADING:
+    case FILE_STATUS.UPLOADED:
       return '';
-    case 'failed':
+    case FILE_STATUS.FAILED:
       return '<span class="file-chip-state">Failed</span>';
     default:
       throw new Error('Unknown file status: ' + file.status);
@@ -117,7 +125,7 @@ async function uploadFile(file) {
     filename: file.name,
     path: '',
     size: file.size,
-    status: 'uploading',
+    status: FILE_STATUS.UPLOADING,
     error: '',
   };
   uploadedFiles.push(item);
@@ -146,7 +154,7 @@ async function uploadFileToSession(sessionId, file, item) {
       const errorText = String(err.detail || res.status);
       const chip = getUploadedFileById(item.id);
       if (chip && sessionId === SESSION_ID) {
-        chip.status = 'failed';
+        chip.status = FILE_STATUS.FAILED;
         chip.error = errorText;
         renderFileChips();
       }
@@ -160,14 +168,14 @@ async function uploadFileToSession(sessionId, file, item) {
     chip.filename = data.filename;
     chip.path = data.path;
     chip.size = data.size;
-    chip.status = 'uploaded';
+    chip.status = FILE_STATUS.UPLOADED;
     chip.error = '';
     renderFileChips();
   } catch (err) {
     console.error('Upload failed:', err);
     const chip = getUploadedFileById(item.id);
     if (chip && sessionId === SESSION_ID) {
-      chip.status = 'failed';
+      chip.status = FILE_STATUS.FAILED;
       chip.error = err.message;
       renderFileChips();
     }

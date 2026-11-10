@@ -441,10 +441,11 @@ async fn implement_work_harness_keeps_the_reviewer_stop_line() {
   };
   let leaf = harness.node("w-implement", Some(&tree.low), TaskProfile::Worker, Some(implement), "WI").await;
   let snapshot = harness.snapshot_for(&leaf.id, "work").await;
-  assert!(
-    worker_block(&snapshot)
-      .contains("STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.")
-  );
+  assert!(worker_block(&snapshot).contains(concat!(
+    "STOP here. Do NOT rebase, push, or remove the worktree. ",
+    "A reviewer lands your work through `charliebot land`, ",
+    "which moves the base branch only after CI passed on the landed sha."
+  )));
 }
 
 /// The joined task_base and worker blocks are separate segments; the workflow contract lives in the worker block.

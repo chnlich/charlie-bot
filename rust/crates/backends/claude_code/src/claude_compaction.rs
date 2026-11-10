@@ -11,6 +11,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{
   EDIT_TOOL, GLOB_TOOL, GREP_TOOL, MODEL_USAGE, NOTEBOOK_EDIT_TOOL, READ_TOOL, SKILL_TOOL, WRITE_TOOL,
 };
+use charliebot_core::subagent::AGENT_TOOL;
 use charliebot_core::text_repr::is_truthy;
 use charliebot_core::web_search::TOOL_NAME;
 use charliebot_registry::backend::{EmitFn, Env};
@@ -53,7 +54,7 @@ fn extra_compaction_tools() -> String {
     SKILL_TOOL,
     "ToolSearch",
     "KillShell",
-    "Agent",
+    AGENT_TOOL,
   ]
   .join(",")
 }

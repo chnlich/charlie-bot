@@ -124,6 +124,7 @@ function loadBadgeWithPanel() {
     offsetParent: null,
     getBoundingClientRect: () => ({left: 0, width: 0}),
   };
+  const tip = {hidden: true, textContent: '3 manager turns · 1 worker run'};
   const document = {
     hidden: false,
     visibilityState: 'visible',
@@ -133,10 +134,11 @@ function loadBadgeWithPanel() {
       if (!listeners.has(type)) listeners.set(type, []);
       listeners.get(type).push(fn);
     },
-    getElementById: (id) => ({'concurrency-badge': badge, 'concurrency-panel': panel}[id] || null),
+    getElementById: (id) => (
+      {'concurrency-badge': badge, 'concurrency-panel': panel, 'concurrency-tip': tip}[id] || null),
     querySelector: () => null,
     querySelectorAll: () => [],
-    createElement: () => ({}),
+    createElement: () => ({removed: false, remove() { this.removed = true; }}),
   };
   class Element {}
   const context = {
@@ -158,13 +160,15 @@ function loadBadgeWithPanel() {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(BADGE_JS, context, {filename: 'concurrency-badge.js'});
-  // A delegated click whose target matches one selector of the handlers.
-  const click = (selector) => {
+  // One delegated event whose target matches one selector of the handlers.
+  const dispatch = (type, selector) => {
     const target = new Element();
     target.closest = (name) => (name === selector ? target : null);
-    (listeners.get('click') || []).forEach((fn) => fn({target}));
+    (listeners.get(type) || []).forEach((fn) => fn({target}));
   };
-  return {badge, panel, links, errors, click};
+  const click = (selector) => dispatch('click', selector);
+  const hover = (selector) => dispatch('mouseover', selector);
+  return {badge, panel, tip, links, errors, click, hover};
 }
 
 test('the panel shows only once its stylesheet has loaded, and one link serves every open', async () => {
@@ -193,6 +197,7 @@ test('a panel stylesheet that fails still opens the panel, and the next open ret
   page.links[0].onerror();
   await flush();
   assert.equal(page.panel.hidden, false, 'the panel stays readable without its rules');
+  assert.equal(page.links[0].removed, true, 'the failed link leaves the page');
   assert.match(page.errors[0], /concurrency badge: the badge panel stylesheet did not load/);
 
   page.click('#concurrency-close');
@@ -210,4 +215,28 @@ test('closing the panel while its stylesheet travels cancels that open', async (
   page.links[0].onload();
   await flush();
   assert.equal(page.panel.hidden, true, 'the closed panel does not reopen when the sheet lands');
+});
+
+test('a second badge click while the sheet travels closes the badge instead of opening it', async () => {
+  const page = loadBadgeWithPanel();
+  page.click('#concurrency-badge');
+  await flush();
+  page.click('#concurrency-badge');
+  page.links[0].onload();
+  await flush();
+  assert.equal(page.panel.hidden, true, 'the second click toggled the badge shut');
+  assert.notEqual(page.badge.attributes['aria-expanded'], 'true');
+});
+
+test('a hover during the wait leaves the tooltip hidden once the panel opens', async () => {
+  const page = loadBadgeWithPanel();
+  page.click('#concurrency-badge');
+  await flush();
+  page.hover('#concurrency-badge');
+  assert.equal(page.tip.hidden, false, 'the hover tip paints while the panel is not up yet');
+
+  page.links[0].onload();
+  await flush();
+  assert.equal(page.panel.hidden, false);
+  assert.equal(page.tip.hidden, true, 'the open panel hides the tip it would paint over');
 });

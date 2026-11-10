@@ -344,6 +344,141 @@ fn test_a_release_installs_the_commits_slice_units_before_it_installs_the_releas
   assert!(units_at < install_at, "the install ran before the units: {release_log}");
 }
 
+// ---- the prune: the newest installs and the live version stay, every other version goes -----------------------
+
+/// The install time of fixture version `index`, in Unix seconds. Index 1 is the newest install and index 10 the oldest,
+/// so name order runs against install order.
+fn installed_at(index: u64) -> u64 {
+  1_700_000_000 + (11 - index) * 86_400
+}
+
+/// The commit name of fixture version `index`: a full sha, distinct for each index.
+fn fixture_commit(index: u64) -> String {
+  format!("{index:040x}")
+}
+
+/// Makes the ten fixture versions, each installed before the release under test.
+fn ten_fixture_versions(world: &World) {
+  for index in 1..=10 {
+    world.version_dir(&fixture_commit(index), installed_at(index));
+  }
+}
+
+/// The names under `releases` that are full commit shas: the version directories.
+fn version_names(releases: &Path) -> Vec<String> {
+  fs::read_dir(releases)
+    .expect("the release root")
+    .map(|entry| entry.expect("a release entry").file_name().into_string().expect("a name"))
+    .filter(|name| name.len() == 40 && name.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    .collect()
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_release_keeps_the_ten_newest_installs_deletes_the_oldest_and_logs_the_deletion() {
+  let world = World::new();
+  ten_fixture_versions(&world);
+  // Entries that are not version directories: a file, and a leftover of an earlier install's temporary directory.
+  fs::write(world.releases.join("notes.txt"), "not a version\n").expect("a non-version file");
+  let leftover = world.releases.join(format!(".{}.4242", world.on_main));
+  fs::create_dir(&leftover).expect("a leftover temporary directory");
+
+  let run = world.release(&world.on_main);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  for index in 1..=9 {
+    assert!(world.releases.join(fixture_commit(index)).is_dir(), "version {index} was deleted: {}", run.describe());
+  }
+  let oldest = world.releases.join(fixture_commit(10));
+  assert!(!oldest.exists(), "the oldest install stayed: {}", run.describe());
+  assert!(world.releases.join(&world.on_main).is_dir(), "{}", run.describe());
+  assert!(world.releases.join("notes.txt").is_file(), "{}", run.describe());
+  assert!(leftover.is_dir(), "{}", run.describe());
+  assert_eq!(world.current_link(), PathBuf::from("prior"));
+  let prune_log = fs::read_to_string(world.stage_log("prune.log")).expect("the prune log");
+  assert!(prune_log.contains(&format!("deleted {}", oldest.display())), "{prune_log}");
+  assert_eq!(prune_log.matches("deleted").count(), 1, "{prune_log}");
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_failed_release_deletes_no_version_directory() {
+  let world = World::new();
+  ten_fixture_versions(&world);
+  // The units stage fails before the install, so the prune never runs.
+  world.sandbox.stub("systemctl", "exit 1\n");
+
+  let run = world.release(&world.on_main);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(run.stderr.contains("stage units failed"), "{}", run.describe());
+  for index in 1..=10 {
+    assert!(world.releases.join(fixture_commit(index)).is_dir(), "version {index} was deleted: {}", run.describe());
+  }
+  assert!(!world.log_names().contains(&"prune.log".to_string()), "the prune ran after a failed release");
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_release_that_leaves_exactly_ten_versions_deletes_none() {
+  let world = World::new();
+  for index in 1..=9 {
+    world.version_dir(&fixture_commit(index), installed_at(index));
+  }
+
+  let run = world.release(&world.on_main);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(version_names(&world.releases).len(), 10, "{}", run.describe());
+  let prune_log = fs::read_to_string(world.stage_log("prune.log")).expect("the prune log");
+  assert!(prune_log.is_empty(), "{prune_log}");
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_current_target_outside_the_ten_newest_installs_stays_and_eleven_remain() {
+  let world = World::new();
+  ten_fixture_versions(&world);
+  // The oldest install is the live version, so it is outside the newest ten and the prune keeps it.
+  world.point_current_at(&fixture_commit(10));
+
+  let run = world.release(&world.on_main);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(version_names(&world.releases).len(), 11, "{}", run.describe());
+  assert!(world.releases.join(fixture_commit(10)).is_dir(), "the live version was deleted: {}", run.describe());
+  assert_eq!(world.current_link(), PathBuf::from(fixture_commit(10)));
+  let prune_log = fs::read_to_string(world.stage_log("prune.log")).expect("the prune log");
+  assert!(prune_log.is_empty(), "{prune_log}");
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_a_re_released_old_commit_counts_as_the_newest_install() {
+  let world = World::new();
+  ten_fixture_versions(&world);
+  // The commit is dated 2001 and has no release directory, as after a prune deleted it. A prune that sorted by commit
+  // date would delete it first; its install time is now, so it stays.
+  let mut env = world.env.clone();
+  env.insert("GIT_AUTHOR_DATE".to_string(), "2001-02-03T04:05:06Z".to_string());
+  env.insert("GIT_COMMITTER_DATE".to_string(), "2001-02-03T04:05:06Z".to_string());
+  git(&env, &world.repo, &["commit", "-q", "--allow-empty", "-m", "an old commit"]);
+  let old = git(&env, &world.repo, &["rev-parse", "HEAD"]);
+  git(&world.env, &world.repo, &["update-ref", "refs/remotes/origin/main", &old]);
+  let mut behavior = world.gh_defaults();
+  behavior.runs = json!([{"databaseId": 7, "event": "push", "headSha": old, "conclusion": "success"}]).to_string();
+  world.write_gh(&behavior);
+
+  let run = world.release(&old);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(world.releases.join(&old).is_dir(), "the re-released commit was deleted: {}", run.describe());
+  assert!(!world.releases.join(fixture_commit(10)).exists(), "{}", run.describe());
+  for index in 1..=9 {
+    assert!(world.releases.join(fixture_commit(index)).is_dir(), "version {index} was deleted: {}", run.describe());
+  }
+}
+
 /// The calls a stub recorded, one line per invocation; a stub that never ran left no file.
 fn recorded_calls(calls: &Path) -> String {
   fs::read_to_string(calls).unwrap_or_default()

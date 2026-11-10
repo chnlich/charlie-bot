@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, UNIX_EPOCH};
 
 use charliebot_shell_harness::{self as harness, Env, Run, Sandbox};
 use serde_json::json;
@@ -216,6 +217,24 @@ impl World {
     fs::read_dir(&self.releases)
       .expect("the release root")
       .any(|entry| entry.expect("a release entry").file_name().to_string_lossy().starts_with(&prefix))
+  }
+
+  /// Makes a version directory named `commit` whose install time is `installed_at`, in Unix seconds. The prune reads
+  /// the install time from the directory's mtime, so the fixture sets it.
+  pub fn version_dir(&self, commit: &str, installed_at: u64) -> PathBuf {
+    let dir = self.releases.join(commit);
+    fs::create_dir(&dir).expect("a version directory");
+    let time = UNIX_EPOCH + Duration::from_secs(installed_at);
+    fs::File::open(&dir)
+      .and_then(|handle| handle.set_times(fs::FileTimes::new().set_modified(time)))
+      .expect("the version directory's install time");
+    dir
+  }
+
+  /// Points `current` at `target`, a name under the release root.
+  pub fn point_current_at(&self, target: &str) {
+    fs::remove_file(self.releases.join("current")).expect("the current link");
+    symlink(target, self.releases.join("current")).expect("the current link");
   }
 }
 

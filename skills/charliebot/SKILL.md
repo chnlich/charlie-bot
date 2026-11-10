@@ -283,7 +283,7 @@ One Claude login carries a five-hour and a weekly window, so a long master turn 
 - The launcher `tee` keeps the server log open on fd 3 after cleanup unlinks its path.
 - Read an unlinked log through `/proc/<tee-pid>/fd/3`.
 - The server reloads prompt documents on each master run (`read_source_file` in `rust/crates/runtime/tasks/src/prompts/sources.rs` reads each file fresh). Static assets under `web/static` load on the next page load.
-- Each release is one commit on main. `scripts/release.sh <commit>` downloads the artifact CI built for that commit, checks its sha256 and installs the release directory and its slice units. It runs no trial and no rehearsal: the checks live on the switch.
+- Each release is one commit on main. `scripts/release.sh <commit>` downloads the artifact CI built for that commit, checks its sha256 and installs the release directory and its slice units, then deletes the version directories beyond the ten most recently installed and the one `current` names. It runs no trial and no rehearsal: the checks live on the switch.
 - A change is live when the commit of the live release contains it. This holds for server code and for files in the runtime checkout.
   `scripts/switch-server.sh rust <commit>` switches the live release in these steps:
   - the checks that need no model run first, while the old server still serves: artifact sha256, slice units, both releases' `--check-config` on the live home, the slice controllers, the run and improve-loop blockers, and the disk-read gate;

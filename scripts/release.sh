@@ -13,7 +13,8 @@
 #   2  the preflight refused and wrote nothing: the argument is not a full 40-character sha on origin/main, the
 #      release directory already exists, gh is not authenticated for this repository, CI has no successful push
 #      run of both Rust jobs for the commit, or another release holds the host release lock.
-#   1  a stage failed; the stage name and its log path are printed, and nothing is installed.
+#   1  a stage failed; the stage name and its log path are printed. A download, units or install failure installs
+#      nothing. A prune failure leaves the new release installed, and the prune log names the directory it failed on.
 #   0  the release is installed; the switch command is printed.
 #
 # The stages run in order:
@@ -24,7 +25,11 @@
 #              server the switch starts runs against the units the release ships. A release that stops after this
 #              stage leaves the new units installed while the live server keeps running; the restore step is in that
 #              script's header;
-#   install    the release directory is built under a temporary name and renamed to <commit>.
+#   install    the release directory is built under a temporary name and renamed to <commit>;
+#   prune      keeps the KEPT_VERSIONS most recently installed version directories, the one just installed among
+#              them, and the one `current` names; deletes the other version directories and prints each deletion to
+#              the prune log. A deleted version re-releases with `scripts/release.sh <commit>` while CI keeps its
+#              artifact for 30 days.
 #
 # The release checks live on the switch, not here: scripts/switch-server.sh runs every check that needs no model
 # before it stops the old server, and reads the new server back, probes a turn and checks a delegation once it is
@@ -50,6 +55,8 @@ readonly RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
 readonly LOG_ROOT="${CHARLIEBOT_RELEASE_LOG_DIR:-$HOME/charliebot-release-logs}"
 readonly SLICE_INSTALL="$REPO_ROOT/scripts/install-slice-units.sh"
 readonly ARTIFACT_NAME_PREFIX="charliebot-server-"
+# The version directories the prune keeps, the one just installed included. The `current` target is kept beyond them.
+readonly KEPT_VERSIONS=10
 
 # The host release lock, defined once in scripts/release/lock.sh.
 . "$SCRIPT_DIR/release/lock.sh"
@@ -188,9 +195,44 @@ stage_install() {
   fi
 }
 
+# version_listing: one "<install time> <commit>" line per version directory, newest install first. A version
+# directory is a real directory named by a full commit sha. Its install time is its mtime: stage_install writes the
+# directory's last entry before it renames the directory into place, and nothing writes into a release directory
+# after that.
+version_listing() {
+  local dir name time
+  for dir in "$RELEASES_DIR"/*; do
+    name=${dir##*/}
+    [[ $name =~ ^[0-9a-f]{40}$ ]] || continue
+    [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+    time="$(stat -c '%.9Y' "$dir")" || return 1
+    printf '%s %s\n' "$time" "$name"
+  done | sort -rn
+}
+
+# stage_prune: deletes each version directory beyond the KEPT_VERSIONS newest installs, unless `current` names it. The
+# release just installed is kept outright, so its place in the install-time order does not decide whether it stays.
+stage_prune() {
+  local live="" listing name rank=0
+  if [ -L "$RELEASES_DIR/current" ]; then
+    live="$(readlink "$RELEASES_DIR/current")" || return 1
+    live=${live##*/}
+  fi
+  listing="$(version_listing)" || return 1
+  while IFS=' ' read -r _ name; do
+    [ "$name" = "$COMMIT" ] && continue
+    rank=$((rank + 1))
+    [ "$rank" -lt "$KEPT_VERSIONS" ] && continue
+    [ "$name" = "$live" ] && continue
+    rm -rf -- "$RELEASES_DIR/$name" || return 1
+    echo "release: deleted $RELEASES_DIR/$name"
+  done <<< "$listing"
+}
+
 run_stage download stage_download
 run_stage units stage_units
 run_stage install stage_install
+run_stage prune stage_prune
 
 echo "release: installed $RELEASES_DIR/$COMMIT"
 echo "release: switch with: scripts/switch-server.sh rust $COMMIT"

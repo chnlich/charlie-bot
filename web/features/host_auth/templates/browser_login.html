@@ -6,7 +6,8 @@
   .sub { color:var(--mut); margin:0 0 16px; font-size:13.5px; max-width:82ch }
   .login { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:14px 18px; margin:0 0 16px;
     display:grid; grid-template-columns:minmax(0,1fr); column-gap:10px; align-items:center }
-  .login h2 { margin:0 0 10px; padding-bottom:0; border-bottom:0 }
+  .login h2 { display:block; margin:0 0 10px; padding-bottom:0; border-bottom:0 }
+  .login h2 .badge { display:inline-block; vertical-align:middle; margin-left:8px; font-weight:400; white-space:nowrap }
   .login form { margin:0 }
   /* The label takes --panel, the surface ink. The dark theme's accent is a light blue, where white
      text renders 2.49:1, and --panel reads 7.0:1 on it. */
@@ -33,22 +34,10 @@
 <body>
 {% set defer_concurrency_badge_poll = true %}
 {% include 'partials/concurrency_badge.html' %}
-{% macro readback_row(exit_code, output) -%}
-<div class="status"><span class="badge">exit {{ exit_code }}</span><pre>{{ output }}</pre></div>
-{%- endmacro %}
-<div class="wrap">
-  <h1>Browser logins</h1>
-  <p class="sub">Each button starts one login and opens its approval page in a new tab, so the device code is created
-  when it can be approved.</p>
-
-  {% if not logins %}
-  <p class="sub">No browser logins are configured. Add entries under <code>host_auth.browser_logins</code> in
-  config.yaml.</p>
-  {% endif %}
-
-  {% for login in logins %}
+{% macro login_card(login) -%}
+  {% set exit_code = login.readback.exit if login.readback else (login.last.readback_exit if login.last and login.last.readback_exit is not none else none) %}
   <section class="login">
-    <h2>{{ login.label }}</h2>
+    <h2>{{ login.label }}{% if exit_code is not none %}<span class="badge">exit {{ exit_code }}</span>{% endif %}</h2>
 
     {% if login.live %}
     <div class="state">
@@ -66,14 +55,13 @@
       <div class="at">Finished {{ login.last.finished_at }}</div>
       {% if login.last.last_line %}<pre>{{ login.last.last_line }}</pre>{% endif %}
       {% if login.last.readback_output is not none %}
-      {% set last_exit = login.last.readback_exit if login.last.readback_exit is not none else "none" %}
-      {{ readback_row(last_exit, login.last.readback_output) }}
+      <div class="status"><pre>{{ login.last.readback_output }}</pre></div>
       {% endif %}
     </div>
     {% endif %}
 
     {% if login.readback %}
-    <div class="state">{{ readback_row(login.readback.exit, login.readback.output) }}</div>
+    <div class="state"><div class="status"><pre>{{ login.readback.output }}</pre></div></div>
     {% endif %}
 
     <form method="post" action="/api/host-auth/logins/{{ login.name }}/start" target="_blank">
@@ -81,7 +69,19 @@
     </form>
     <p class="foot">The page shows the attempt in progress, or the last attempt that ended.</p>
   </section>
-  {% endfor %}
+  {%- endmacro %}
+<div class="wrap">
+  <h1>Browser logins</h1>
+  <p class="sub">Each button starts one login and opens its approval page in a new tab, so the device code is created
+  when it can be approved.</p>
+
+  {% if not logins %}
+  <p class="sub">No browser logins are configured. Add entries under <code>host_auth.browser_logins</code> in
+  config.yaml.</p>
+  {% endif %}
+
+  {% for login in logins if not login.readback or login.readback.exit != 0 %}{{ login_card(login) }}{% endfor %}
+  {% for login in logins if login.readback and login.readback.exit == 0 %}{{ login_card(login) }}{% endfor %}
 </div>
 <script>
   for (const form of document.querySelectorAll('form[target="_blank"]')) {

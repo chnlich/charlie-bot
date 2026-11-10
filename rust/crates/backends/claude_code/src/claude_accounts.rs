@@ -29,9 +29,8 @@ pub const GUARD_REFUSAL_MARKER: &str = "refusing to overwrite newer transcript";
 pub const PROBE_TAIL_BYTES: u64 = 16 * 1024;
 
 const REJECTED_WITHOUT_RESET: Duration = Duration::hours(1);
-const RESET_BONUS_SCALE: f64 = 0.10;
-const RESET_BONUS_HORIZON: f64 = 24.0 * 3600.0;
-const RESET_BONUS_MIN_HEADROOM: f64 = 0.10;
+const SCORE_HOURS_FLOOR: f64 = 0.5;
+const SCORE_SCALE_HOURS: f64 = 168.0;
 const SCORE_TIE: f64 = 0.02;
 const STAGING_SUFFIX: &str = ".staging";
 
@@ -413,16 +412,27 @@ pub fn select(
   let scores = contenders
     .into_iter()
     .map(|(account, remaining)| {
-      let score = remaining + reset_bonus(state, &account.label, model, moment, remaining);
-      (account, remaining, score)
+      let weekly_resets_at =
+        login_reading(state, &account.label, model, Some(moment)).and_then(|reading| reading.weekly_resets_at);
+      let hours_to_reset = match weekly_resets_at {
+        Some(reset) if reset > moment => {
+          let hours = (reset.into_inner() - moment.into_inner()).as_seconds_f64() / 3600.0;
+          hours.max(SCORE_HOURS_FLOOR)
+        }
+        _ => SCORE_SCALE_HOURS,
+      };
+      let score = remaining * SCORE_SCALE_HOURS / hours_to_reset;
+      (account, score, hours_to_reset)
     })
     .collect::<Vec<_>>();
-  let best = scores.iter().map(|(_, _, score)| *score).reduce(f64::max).expect("contenders is non-empty");
+  let leader = scores.iter().max_by(|left, right| left.1.total_cmp(&right.1)).expect("contenders is non-empty");
+  let leader_score = leader.1;
+  let leader_hours = leader.2;
   let readings = state.readings.lock().expect("Claude account state is not poisoned");
   Ok(
     scores
       .into_iter()
-      .filter(|(_, _, score)| best - score <= SCORE_TIE)
+      .filter(|(_, score, _)| (leader_score - score) * (leader_hours / SCORE_SCALE_HOURS) <= SCORE_TIE)
       .min_by_key(|(account, _, _)| {
         readings.event.get(&account.label).map_or(i128::MIN, |reading| reading.at.into_inner().unix_timestamp_nanos())
       })
@@ -438,44 +448,6 @@ pub fn cool_destination(
   now: Option<UtcDateTime>,
 ) -> anyhow::Result<Option<claude_config::ClaudeAccount>> {
   select(state, cfg, model, &HashSet::new(), None, now, account_pool, 1.0 - WARNING_UTILIZATION)
-}
-
-fn reset_bonus(
-  state: &ClaudeAccountState,
-  label: &str,
-  model: Option<&str>,
-  moment: UtcDateTime,
-  remaining: f64,
-) -> f64 {
-  if remaining <= RESET_BONUS_MIN_HEADROOM {
-    return 0.0;
-  }
-  let Some(reset) = time_to_reset(state, label, model, moment) else {
-    return 0.0;
-  };
-  let seconds = (reset.into_inner() - moment.into_inner()).as_seconds_f64();
-  if !(0.0..RESET_BONUS_HORIZON).contains(&seconds) {
-    return 0.0;
-  }
-  RESET_BONUS_SCALE * (1.0 - seconds / RESET_BONUS_HORIZON)
-}
-
-fn time_to_reset(
-  state: &ClaudeAccountState,
-  label: &str,
-  model: Option<&str>,
-  now: UtcDateTime,
-) -> Option<UtcDateTime> {
-  let readings = state.readings.lock().expect("Claude account state is not poisoned");
-  let panel = readings.panel.get(label)?;
-  let limiting = live_windows(panel, model, now)
-    .into_iter()
-    .filter_map(|window| window.get(usage::PANEL_UTILIZATION).and_then(Value::as_f64).map(|value| (value, window)))
-    .max_by(|left, right| match left.0.total_cmp(&right.0) {
-      std::cmp::Ordering::Equal => std::cmp::Ordering::Greater,
-      ordering => ordering,
-    })?;
-  limiting.1.get(usage::PANEL_RESETS_AT).and_then(Value::as_str).and_then(|value| UtcDateTime::parse(value).ok())
 }
 
 /// One login's per-window reading: its utilization, the limiting window's reset, its weekly window's reset, and every
@@ -1204,5 +1176,111 @@ mod tests {
     assert!(error.starts_with(GUARD_REFUSAL_MARKER));
     assert!(error.contains("mtime 2023-11-14T22:13:20+00:00"));
     assert_eq!(fs::read_to_string(destination_file).unwrap(), "newer transcript");
+  }
+
+  #[test]
+  fn less_headroom_with_reset_hours_away_beats_more_headroom_with_far_reset() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    add_credentials(&a);
+    add_credentials(&b);
+    let cfg = config(&home, &[("a", &a), ("b", &b)]);
+    let state = ClaudeAccountState::new();
+    let now = timestamp("2025-01-01T12:00:00Z");
+    // "a": 30% headroom (70% utilization), reset in 2 hours -> score = 0.30 * 168 / 2 = 25.2
+    observe_usage_panel(&state, "a", &panel_window(70.0, WEEKLY_WINDOW_MINUTES, "2025-01-01T14:00:00Z"));
+    // "b": 70% headroom (30% utilization), reset in 100 hours -> score = 0.70 * 168 / 100 = 1.176
+    observe_usage_panel(&state, "b", &panel_window(30.0, WEEKLY_WINDOW_MINUTES, "2025-01-05T16:00:00Z"));
+    let chosen = select(&state, &cfg, None, &HashSet::new(), None, Some(now), None, 0.0).unwrap().unwrap();
+    assert_eq!(chosen.label, "a");
+  }
+
+  #[test]
+  fn reset_minutes_away_scores_on_half_hour_floor_with_no_division_by_zero() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    add_credentials(&a);
+    add_credentials(&b);
+    let cfg = config(&home, &[("a", &a), ("b", &b)]);
+    let state = ClaudeAccountState::new();
+    let now = timestamp("2025-01-01T12:00:00Z");
+    // "a": 40% headroom (60% utilization), reset in 6 minutes (0.1 h) -> clamped to 0.5 h floor -> score = 0.40 * 168 / 0.5 = 134.4
+    observe_usage_panel(&state, "a", &panel_window(60.0, WEEKLY_WINDOW_MINUTES, "2025-01-01T12:06:00Z"));
+    // "b": 50% headroom (50% utilization), reset in 1 hour -> score = 0.50 * 168 / 1.0 = 84.0
+    observe_usage_panel(&state, "b", &panel_window(50.0, WEEKLY_WINDOW_MINUTES, "2025-01-01T13:00:00Z"));
+    let chosen = select(&state, &cfg, None, &HashSet::new(), None, Some(now), None, 0.0).unwrap().unwrap();
+    assert_eq!(chosen.label, "a");
+  }
+
+  #[test]
+  fn login_with_no_weekly_reading_scores_by_headroom_and_stays_selectable() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    add_credentials(&a);
+    add_credentials(&b);
+    let cfg = config(&home, &[("a", &a), ("b", &b)]);
+    let state = ClaudeAccountState::new();
+    let now = timestamp("2025-01-01T12:00:00Z");
+    // "a" has 50% headroom (50% utilization) via 5-hour rate limit event, NO weekly reading -> counts 168 h -> score = 0.50
+    observe_rate_limit(&state, "a", &window(0.50), Some(now));
+    // "b" has 40% headroom (60% utilization), reset in 168 hours -> score = 0.40
+    observe_usage_panel(&state, "b", &panel_window(60.0, WEEKLY_WINDOW_MINUTES, "2025-01-08T12:00:00Z"));
+    let chosen = select(&state, &cfg, None, &HashSet::new(), None, Some(now), None, 0.0).unwrap().unwrap();
+    assert_eq!(chosen.label, "a");
+  }
+
+  #[test]
+  fn login_whose_reset_passed_scores_as_fresh_week_not_on_floor() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    add_credentials(&a);
+    add_credentials(&b);
+    let cfg = config(&home, &[("a", &a), ("b", &b)]);
+    let state = ClaudeAccountState::new();
+    let now = timestamp("2025-01-01T12:00:00Z");
+    // "a": reset passed 1 hour ago -> counts 168 h, NOT floor (0.5 h). Score = 0.50 * 168 / 168 = 0.50.
+    observe_usage_panel(&state, "a", &panel_window(50.0, WEEKLY_WINDOW_MINUTES, "2025-01-01T11:00:00Z"));
+    // "b": 60% headroom, reset in 100 hours -> score = 0.60 * 168 / 100 = 1.008.
+    observe_usage_panel(&state, "b", &panel_window(40.0, WEEKLY_WINDOW_MINUTES, "2025-01-05T16:00:00Z"));
+    // If "a" had scored on 0.5 h floor, score would be 168.0 and "a" would win. Because it scores as fresh week (168 h), "b" wins.
+    let chosen = select(&state, &cfg, None, &HashSet::new(), None, Some(now), None, 0.0).unwrap().unwrap();
+    assert_eq!(chosen.label, "b");
+  }
+
+  #[test]
+  fn two_logins_equally_far_from_reset_with_headroom_within_tie_band_fall_back_to_lru() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    add_credentials(&a);
+    add_credentials(&b);
+    let cfg = config(&home, &[("a", &a), ("b", &b)]);
+    let state = ClaudeAccountState::new();
+    let now = timestamp("2025-01-01T12:00:00Z");
+    let weekly = "2025-01-02T12:00:00Z"; // 24 hours away
+    // "a": 50% headroom (50% utilization). Score = 0.50 * 168 / 24 = 3.50.
+    observe_usage_panel(&state, "a", &panel_window(50.0, WEEKLY_WINDOW_MINUTES, weekly));
+    // "b": 51% headroom (49% utilization). Score = 0.51 * 168 / 24 = 3.57.
+    observe_usage_panel(&state, "b", &panel_window(49.0, WEEKLY_WINDOW_MINUTES, weekly));
+    // Difference is (3.57 - 3.50) * (24 / 168) = 0.01 <= SCORE_TIE (0.02), so they tie.
+    // "a" was used earlier (LRU), "b" was used later.
+    observe_rate_limit(&state, "a", &window(0.50), Some(timestamp("2025-01-01T10:00:00Z")));
+    observe_rate_limit(&state, "b", &window(0.49), Some(timestamp("2025-01-01T11:00:00Z")));
+    let chosen = select(&state, &cfg, None, &HashSet::new(), None, Some(now), None, 0.0).unwrap().unwrap();
+    assert_eq!(chosen.label, "a");
   }
 }

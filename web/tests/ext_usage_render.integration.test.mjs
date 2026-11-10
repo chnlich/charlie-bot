@@ -353,7 +353,7 @@ const EXPANDED_CSS_RULE = '#ext-usage-strip:not(.collapsed) [data-field="summary
 
 function _readUsageCss() {
   return fs.readFileSync(
-      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../features/usage/templates/usage/usage.css'), 'utf8');
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../features/usage/static/usage.css'), 'utf8');
 }
 
 // The in-memory boolean, the stored preference, the strip class, row

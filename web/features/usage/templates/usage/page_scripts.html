@@ -1,6 +1,9 @@
   <script>
-    // The external-usage strip is a sidebar poller, not first-paint content, so the page fetches its module here
-    // instead of carrying its bytes. The module's own readyState guard starts the poll as soon as it lands, whether
-    // that is before or after DOMContentLoaded.
-    loadPageScripts('ext-usage', ['/static/features/usage/ext_usage.js']);
+    // The external-usage strip is a sidebar poller, not first-paint content, so the page fetches its stylesheet and
+    // its module here instead of carrying their bytes. The module's own readyState guard starts the poll as soon as
+    // it lands, whether that is before or after DOMContentLoaded. The stylesheet comes first so the strip is painted
+    // when it appears; a stylesheet that fails still lets the strip load.
+    loadPageStyles('ext-usage', ['/static/features/usage/usage.css'])
+      .catch((error) => console.error('external usage: ' + error.message))
+      .then(() => loadPageScripts('ext-usage', ['/static/features/usage/ext_usage.js']));
   </script>

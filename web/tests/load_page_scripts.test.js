@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// loadPageScripts (utils.js): the feature scripts a page loads on first use.
+// loadPageScripts and loadPageStyles (utils.js): the feature scripts and stylesheets a page loads on first use.
 // One promise per key, and a retry after a failed file starts at that file,
 // because a script that already ran must not run twice: its registrations
 // (controls, separator buttons) would be duplicates.
@@ -48,4 +48,25 @@ test('a failed page-script load retries from the failed file, never re-running a
     'the retry asks for the failed file only');
   appended[2].onload();
   await second;
+});
+
+test('a featured stylesheet loads once per key, and a failed link retries', async () => {
+  const {context, appended} = buildContext();
+
+  const first = context.loadPageStyles('feature', ['/a.css']);
+  const joined = context.loadPageStyles('feature', ['/a.css']);
+  await settle();
+  assert.equal(appended.length, 1, 'the second need joins the first load');
+  assert.equal(appended[0].rel, 'stylesheet');
+  assert.equal(appended[0].href, '/a.css?v=v1');
+  appended[0].onerror();
+  await assert.rejects(first, /the page stylesheet did not load: \/a\.css/);
+  await assert.rejects(joined, /the page stylesheet did not load: \/a\.css/);
+
+  const retry = context.loadPageStyles('feature', ['/a.css']);
+  await settle();
+  assert.deepEqual(appended.map((link) => link.href), ['/a.css?v=v1', '/a.css?v=v1'],
+    'a stylesheet re-inserted after a failure costs nothing');
+  appended[1].onload();
+  await retry;
 });

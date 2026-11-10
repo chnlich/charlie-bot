@@ -2,9 +2,12 @@
     // The Plans panel's script registers the tab and owns the plan registry the chat's artifact cards read. A reader
     // who never opens Plans never needs it, so its tab button loads the script on the first click and the switch then
     // finds the tab registered. An artifact card that meets a plan link before the panel has loaded calls the same
-    // loader, so the registry its card reads is present.
+    // loader, so the registry its card reads is present. The panel draws from the artifact card's stylesheet, which
+    // that loader fetches before this script.
     globalThis.loadPlansPanel = function() {
-      return loadPageScripts('artifacts-plans', ['/static/features/artifacts/plan-panel.js']);
+      return loadArtifactStyles().then(function() {
+        return loadPageScripts('artifacts-plans', ['/static/features/artifacts/plan-panel.js']);
+      });
     };
     globalThis.openPlansTab = function() {
       loadPlansPanel().then(() => switchTab('chat-plans')).catch((error) => console.error(error));

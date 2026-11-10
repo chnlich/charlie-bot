@@ -22,8 +22,9 @@ function messageRoot({hrefs = [], text = ''} = {}) {
   };
 }
 
-function buildContext({moduleLoaded = false, loadFails = false} = {}) {
+function buildContext({moduleLoaded = false, loadFails = false, styleFails = false} = {}) {
   const loads = [];
+  const styleLoads = [];
   const fileLinkLoads = [];
   const processors = [];
   const embedded = [];
@@ -33,6 +34,12 @@ function buildContext({moduleLoaded = false, loadFails = false} = {}) {
     // The chat page's file-link loader: the artifact module reads the helpers the module installs.
     loadFileLinks() {
       fileLinkLoads.push(loads.length);
+      return Promise.resolve();
+    },
+    // The stylesheet that paints a card travels with the module, never with the document.
+    loadPageStyles(key, paths) {
+      styleLoads.push({key, paths});
+      if (styleFails) return Promise.reject(new Error('the page stylesheet did not load: ' + paths[0]));
       return Promise.resolve();
     },
     loadPageScripts(key, paths) {
@@ -51,16 +58,17 @@ function buildContext({moduleLoaded = false, loadFails = false} = {}) {
   vm.createContext(context);
   vm.runInContext(LOADER_JS, context, {filename: 'artifact-cards.js'});
   assert.equal(processors.length, 1, 'the loader registers one post-processor');
-  return {context, loads, fileLinkLoads, processors, embedded, errors};
+  return {context, loads, styleLoads, fileLinkLoads, processors, embedded, errors};
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 test('a message that names no artifact page fetches nothing', async () => {
-  const {loads, fileLinkLoads, processors, embedded} = buildContext();
+  const {loads, styleLoads, fileLinkLoads, processors, embedded} = buildContext();
   processors[0](messageRoot({text: 'plain prose with no link'}));
   await settle();
   assert.deepEqual(loads, []);
+  assert.deepEqual(styleLoads, [], 'the card stylesheet stays out of a page with no card');
   assert.deepEqual(fileLinkLoads, [], 'the file-link module is not fetched either');
   assert.deepEqual(embedded, []);
 });
@@ -80,10 +88,12 @@ test('an anchor that links a non-HTML artifact path names no artifact page', asy
 });
 
 test('a message whose anchor links an artifact page loads the module, then names the message for its card', async () => {
-  const {loads, fileLinkLoads, processors, embedded} = buildContext();
+  const {loads, styleLoads, fileLinkLoads, processors, embedded} = buildContext();
   const root = messageRoot({hrefs: ['/absolute_filepath/home/x/artifacts/plan.html']});
   processors[0](root);
   await settle();
+  assert.deepEqual(styleLoads.map((load) => load.key), ['artifacts']);
+  assert.equal(styleLoads[0].paths[0], '/static/features/artifacts/artifacts.css');
   assert.deepEqual(fileLinkLoads, [0], 'the file-link module loads first, so its helpers exist for the card module');
   assert.deepEqual(loads.map((load) => load.key), ['artifacts-cards']);
   assert.equal(loads[0].paths[0], '/static/features/artifacts/artifact-cards.js');
@@ -112,4 +122,15 @@ test('a failed load reports its error and leaves the next message to try again',
   await settle();
   assert.equal(loads.length, 1);
   assert.match(errors[0], /^artifact cards: .*the page script did not load/);
+});
+
+test('a stylesheet that fails leaves the card readable, so the module still loads', async () => {
+  const {loads, styleLoads, embedded, processors, errors} = buildContext({styleFails: true});
+  const root = messageRoot({hrefs: ['/artifacts/plan.html']});
+  processors[0](root);
+  await settle();
+  assert.equal(styleLoads.length, 1);
+  assert.match(errors[0], /^artifact cards: .*the page stylesheet did not load/);
+  assert.deepEqual(loads.map((load) => load.key), ['artifacts-cards']);
+  assert.deepEqual(embedded, [root]);
 });

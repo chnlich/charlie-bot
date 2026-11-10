@@ -124,9 +124,17 @@ where
   F: FnMut(StreamEvent),
 {
   let mut parser = Parser::new(source, convert_charrefs, handler);
-  let remaining = parser.goahead(false, 0)?;
-  parser.goahead(true, remaining)?;
+  let remaining = parser.goahead(Pass::Feed, 0)?;
+  parser.goahead(Pass::Close, remaining)?;
   Ok(())
+}
+
+/// Which pass over the source `goahead` runs: a feed pass stops at input it cannot complete, and the close pass
+/// treats that input as final.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pass {
+  Feed,
+  Close,
 }
 
 /// How the content being tokenized treats a character reference such as `&amp;`.
@@ -171,7 +179,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
     }
   }
 
-  fn goahead(&mut self, end: bool, mut i: usize) -> Result<usize, ParseError> {
+  fn goahead(&mut self, pass: Pass, mut i: usize) -> Result<usize, ParseError> {
     let n = self.source.len();
     while i < n {
       let next = if self.convert_charrefs && self.cdata_elem.is_none() {
@@ -214,7 +222,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
           self.parse_pi(i)
         } else if self.source[i..].starts_with("<!") {
           self.parse_html_declaration(i)
-        } else if self.source[i..].chars().count() > 1 || end {
+        } else if self.source[i..].chars().count() > 1 || pass == Pass::Close {
           self.emit_data("<", i);
           Some(i + 1)
         } else {
@@ -222,7 +230,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
         };
 
         let Some(k) = result else {
-          if !end {
+          if pass == Pass::Feed {
             break;
           }
           let tail = &self.source[i..];
@@ -267,7 +275,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
           continue;
         }
         if incomplete_character_reference(self.source, i) {
-          if end {
+          if pass == Pass::Close {
             self.emit(EventKind::CharacterReference, json!([&self.source[i + 2..]]), i, None);
             i = n;
             break;
@@ -287,7 +295,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
           continue;
         }
         if incomplete_reference(self.source, i) {
-          if end {
+          if pass == Pass::Close {
             self.emit(EventKind::EntityReference, json!([&self.source[i + 1..]]), i, None);
             i = n;
             break;
@@ -305,7 +313,7 @@ impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
       }
     }
 
-    if end && i < n {
+    if pass == Pass::Close && i < n {
       self.emit_data_span(i, n);
       i = n;
     }

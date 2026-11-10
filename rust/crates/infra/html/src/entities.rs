@@ -5,13 +5,21 @@ static HTML5_ENTITIES: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
   serde_json::from_str(include_str!("html5_entities.json")).expect("generated HTML5 entity table is valid JSON")
 });
 
-/// The escaped text: ampersands and angle brackets, plus both quote characters when `quote` is set.
-/// `quote` selects between the quoted-attribute and the text entity sets; `/` is never escaped.
-pub fn escape(input: &str, quote: bool) -> String {
-  if quote {
-    html_escape::encode_quoted_attribute(input).into_owned()
-  } else {
-    html_escape::encode_text(input).into_owned()
+/// Which HTML context escaped text lands in: element text, or a quoted attribute value.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum EscapeContext {
+  /// Element text: ampersands and angle brackets escape.
+  Text,
+  /// A quoted attribute value: both quote characters escape as well.
+  QuotedAttribute,
+}
+
+/// The escaped text: ampersands and angle brackets, plus both quote characters in a quoted attribute value.
+/// `/` is never escaped.
+pub fn escape(input: &str, context: EscapeContext) -> String {
+  match context {
+    EscapeContext::Text => html_escape::encode_text(input).into_owned(),
+    EscapeContext::QuotedAttribute => html_escape::encode_quoted_attribute(input).into_owned(),
   }
 }
 
@@ -219,13 +227,13 @@ fn attribute_reference(input: &str, amp: usize) -> Option<(usize, String)> {
 
 #[cfg(test)]
 mod tests {
-  use super::{escape, unescape_attribute};
+  use super::{EscapeContext, escape, unescape_attribute};
 
   #[test]
   fn escape_leaves_slashes_as_html_escape_does() {
-    // A diff path is full of slashes, and the escape leaves them as they are under either quote setting.
-    assert_eq!(escape("src/app/a.py", true), "src/app/a.py");
-    assert_eq!(escape("src/app/a.py", false), "src/app/a.py");
+    // A diff path is full of slashes, and the escape leaves them as they are in either context.
+    assert_eq!(escape("src/app/a.py", EscapeContext::QuotedAttribute), "src/app/a.py");
+    assert_eq!(escape("src/app/a.py", EscapeContext::Text), "src/app/a.py");
   }
 
   #[test]

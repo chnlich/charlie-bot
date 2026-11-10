@@ -50,11 +50,11 @@ function dateClockMDHM(date) {
 // ---------------------------------------------------------------------------
 // Feature scripts a page loads on first use
 // ---------------------------------------------------------------------------
-// A page carries most of its scripts in its document, but a feature the reader may never open carries its scripts as
-// files under /static and loads them from the click that first needs it. The page's own bytes are then the price of
-// the features the reader sees. One promise per key: a second click while the files travel joins the first load, and
-// a failed load drops its entry so the next click tries again. The retry starts at the file that failed, because a
-// file that already ran must not run twice: its registrations would be duplicates.
+// A page carries most of its scripts in its document. A feature the reader may never open carries its scripts as
+// files under /static instead, and loads them from the click that first needs it. The page's own bytes are then the
+// price of the features the reader sees. One promise per key: a second click while the files travel joins the first
+// load, and a failed load drops its entry so the next click tries again. The retry starts at the file that failed,
+// because a file that already ran must not run twice: its registrations would be duplicates.
 const pageScriptLoads = new Map();
 const pageScriptProgress = new Map();
 
@@ -86,8 +86,8 @@ function loadPageScripts(key, paths) {
 // ---------------------------------------------------------------------------
 // A stylesheet in the page's document costs every reader the bytes of a feature they may never open, exactly as its
 // scripts would. A feature whose scripts a page loads on first use therefore loads its stylesheet the same way. One
-// promise per key, and a failed load drops its entry so the next need tries again; a stylesheet re-inserted after a
-// failure costs nothing, because the rules it carries apply once however many links name it.
+// promise per key, and a failed load drops its entry so the next need tries again. A stylesheet re-inserted after a
+// failure costs nothing, because the rules it carries apply once, however many links name it.
 const pageStyleLoads = new Map();
 
 function loadPageStyles(key, paths) {

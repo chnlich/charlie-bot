@@ -637,6 +637,14 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
   // Read the generation before the rows, so a state change during this request leaves the body this request keeps
   // stamped with a generation no later request serves.
   let generation = sidebar_state::derived_generation();
+  // A repeat query whose listing memo and file check still hold answers on this thread: the corpus and the body are
+  // in memory, and the checks that answer it read no file. A fresh query, or one whose check has lapsed, takes the
+  // blocking path below, which reads the files the answer depends on.
+  if let Some(corpus) = features.store.cached_session_metas_snapshot()
+    && let Some(body) = search::repeat_answer(&q, &corpus, generation)
+  {
+    return gzip_response(&request, (*body).clone(), &SEARCH_GZIP_MEMO);
+  }
   let (answer, derived) = match blocking_store(move || {
     let answer = search::search_sessions(&store, &q)?;
     let derived = sidebar::resolve_sidebar_state(&store, &registry, &answer.rows, true, true, false, false)?;

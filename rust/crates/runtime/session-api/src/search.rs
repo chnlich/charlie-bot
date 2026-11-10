@@ -464,6 +464,42 @@ fn search_sessions_with_memos(store: &Store, query: &str, memos: &Mutex<SearchMe
   search_sessions_with_limit(store, query, memos, SEARCH_RESULT_LIMIT)
 }
 
+/// The body a repeat of `query` over `corpus` already holds, when every check its memo makes holds without reading a
+/// file, and `None` when the answer needs a signature read or a scan.
+///
+/// A body this returns is the body a rebuild would render: the match it comes from passed the same corpus-identity
+/// and verification checks [`search_sessions`] makes before it answers a repeat from the memo. The route calls this
+/// on the request's own thread, because the blocking pool exists for the file reads a fresh query and a lapsed check
+/// need, and this path makes none.
+pub(crate) fn repeat_answer(
+  query: &str,
+  corpus: &Arc<Vec<Arc<SessionMetadata>>>,
+  generation: u64,
+) -> Option<Arc<Vec<u8>>> {
+  repeat_answer_with_memos(query, corpus, generation, &SEARCH_MEMOS)
+}
+
+fn repeat_answer_with_memos(
+  query: &str,
+  corpus: &Arc<Vec<Arc<SessionMetadata>>>,
+  generation: u64,
+  memos: &Mutex<SearchMemos>,
+) -> Option<Arc<Vec<u8>>> {
+  if query.trim().is_empty() {
+    return None;
+  }
+  let needle = query.to_lowercase();
+  let (cached, sweep_interval) = {
+    let mut guard = memos.lock().expect("session search memo mutex is not poisoned");
+    let sweep_interval = guard.sweep_interval;
+    (guard.cached_match(&needle)?, sweep_interval)
+  };
+  if !Arc::ptr_eq(&cached.corpus, corpus) || !cached.verification_holds(sweep_interval) {
+    return None;
+  }
+  cached.body(generation)
+}
+
 fn search_sessions_with_limit(
   store: &Store,
   query: &str,
@@ -1771,6 +1807,52 @@ mod tests {
 
     let rows = search_sessions(&store, "äpfel").unwrap().rows;
     assert_eq!(rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(), ["carrier"]);
+  }
+
+  /// The request-thread repeat answer serves a body only while the corpus the match was taken from, the file check
+  /// behind it and the derived-state generation all still hold: any one that moved sends the request to the blocking
+  /// path, which reads the files the answer depends on.
+  #[test]
+  fn a_repeat_answer_serves_only_the_corpus_check_and_generation_its_body_holds_for() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_session(&store, "content", "content session", SessionStatus::Active, "2026-08-01T12:00:00Z");
+    let path = store.chat_events_path("content");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "a needle for the repeat answer").unwrap();
+    let memos =
+      Mutex::new(super::SearchMemos { sweep_interval: std::time::Duration::from_secs(3600), ..Default::default() });
+
+    let first = super::search_sessions_with_memos(&store, "needle", &memos).unwrap();
+    first.source.expect("a fresh query names the match it built").remember_body(7, Arc::new(b"needle body".to_vec()));
+    let (corpus, _) = store.load_session_metas_snapshot_versioned(None).unwrap();
+
+    assert_eq!(
+      super::repeat_answer_with_memos("needle", &corpus, 7, &memos).map(|body| body.to_vec()),
+      Some(b"needle body".to_vec()),
+      "the repeat answer serves the body its match built for the generation the request read"
+    );
+    assert!(
+      super::repeat_answer_with_memos("needle", &corpus, 8, &memos).is_none(),
+      "a moved derived-state generation takes the blocking path"
+    );
+    assert!(
+      super::repeat_answer_with_memos("other", &corpus, 7, &memos).is_none(),
+      "a query the memo does not hold takes the blocking path"
+    );
+    assert!(
+      super::repeat_answer_with_memos("needle", &Arc::new(Vec::new()), 7, &memos).is_none(),
+      "a corpus the match was not taken from takes the blocking path"
+    );
+    assert!(
+      super::repeat_answer_with_memos("  ", &corpus, 7, &memos).is_none(),
+      "a blank query lists sessions and takes the blocking path"
+    );
+    memos.lock().unwrap().sweep_interval = std::time::Duration::ZERO;
+    assert!(
+      super::repeat_answer_with_memos("needle", &corpus, 7, &memos).is_none(),
+      "a lapsed file check takes the blocking path, which reads the watched signatures"
+    );
   }
 
   #[test]

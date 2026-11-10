@@ -904,6 +904,14 @@ function registerMessageRoleRenderer(role, render) {
   messageRoleRenderers.set(role, render);
 }
 
+// Set a role's renderer, replacing the one a deferred module's loader put in place. A module that a page fetches
+// after a placeholder took its role calls this when it lands, so the role renders through the module from then on.
+function replaceMessageRoleRenderer(role, render) {
+  if (typeof role !== 'string' || role === '') throw new Error('Invalid message role registration');
+  if (typeof render !== 'function') throw new Error('Invalid message role renderer');
+  messageRoleRenderers.set(role, render);
+}
+
 function renderMessage(msg, sessionId) {
   const roleRenderer = messageRoleRenderers.get(msg.role);
   if (roleRenderer) return roleRenderer(msg, sessionId);
@@ -1179,6 +1187,7 @@ const GLOBALS = {
 const CHAT_ONLY = {
   registerMessagePostProcessor,
   registerMessageRoleRenderer,
+  replaceMessageRoleRenderer,
   registerSeparatorButton,
   buildRoundButtonGroup,
   repaintRoundButtons,

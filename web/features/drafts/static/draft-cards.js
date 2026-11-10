@@ -175,11 +175,37 @@
     }
   }
 
-  Chat.registerMessageRoleRenderer('draft', (msg, sessionId) => draftCardHtml(msg, sessionId));
-  Chat.registerMessageRoleRenderer('draft_sent', draftSentLineHtml);
-  Chat.registerMessageRoleRenderer('draft_failed', draftFailedLineHtml);
+  // The page part's loader registers a placeholder for each of these roles and
+  // starts this download from the first draft message. Replacing keeps a
+  // re-render of the placeholder's root on the card path once this file lands.
+  Chat.replaceMessageRoleRenderer('draft', (msg, sessionId) => draftCardHtml(msg, sessionId));
+  Chat.replaceMessageRoleRenderer('draft_sent', draftSentLineHtml);
+  Chat.replaceMessageRoleRenderer('draft_failed', draftFailedLineHtml);
   Chat.registerMessagePostProcessor(applyDraftUpdates);
   Chat.wire(
       {sendDraft},
       {draftCardHtml, draftSentLineHtml, draftFailedLineHtml, applyDraftState, applyDraftUpdates, stateLineHtml});
+
+  // Every draft message the loader stood in for before this file landed. The
+  // placeholder element is replaced in place; one this page cannot reach is
+  // rendered again by the page's view poll, which now takes the card path.
+  function fillPlaceholders(entries) {
+    let missed = false;
+    for (const entry of entries) {
+      const node = document.getElementById(entry.id);
+      if (!node) {
+        missed = true;
+        continue;
+      }
+      if (entry.msg.role === 'draft') node.outerHTML = draftCardHtml(entry.msg, entry.sessionId);
+      else if (entry.msg.role === 'draft_sent') node.outerHTML = draftSentLineHtml(entry.msg);
+      else node.outerHTML = draftFailedLineHtml(entry.msg);
+    }
+    entries.length = 0;
+    Chat.postProcessRenderedMessages(document);
+    if (missed && typeof globalThis.pollActiveSessionView === 'function') globalThis.pollActiveSessionView();
+  }
+
+  const pending = Chat.__draftCardsPending || [];
+  if (pending.length) fillPlaceholders(pending);
 })();

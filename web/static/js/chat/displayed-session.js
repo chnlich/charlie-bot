@@ -89,6 +89,7 @@ function abandonHeldComposerActions(sessionId) {
   heldComposerActions = heldComposerActions.filter((held) => held.sessionId !== sessionId);
   due.forEach((held) => {
     if (held.kind === 'message') held.run();
-    else held.drop();
+    else if (held.kind === 'interrupt') held.drop();
+    else throw new Error('Unknown composer action kind: ' + held.kind);
   });
 }

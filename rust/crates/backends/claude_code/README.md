@@ -22,7 +22,7 @@ disallow `Agent`, and the setup check reads the work-run list with the switch on
 | `ClaudeCodeBackend`, `ClaudeCodeBackend::build_command`, and its `AgentBackend` methods |
 | `HEADLESS_DISALLOWED_TOOLS`, `DISALLOWED_TOOLS_FLAG`, `INSTRUCTIONS_WRITTEN_EVENT` |
 | `claude_config::{ClaudeCodeConfig, enable_subagents, parse_claude_code, dump_claude_code}` |
-| `claude_child_env`, `headless_claude_env`, `claude_reading_limits`, `claude_reading_limits_from`, and `out_of_family_served_models` |
+| `claude_child_env`, `claude_reading_limits`, `claude_reading_limits_from`, and `out_of_family_served_models` |
 | `claude_launch::{AUTO_COMPACT_WINDOW_ENV, AUTOCOMPACT_PCT_OVERRIDE_ENV, MAX_CONTEXT_TOKENS_ENV, SIMPLE_SYSTEM_PROMPT_ENV, AUTO_COMPACT_DEFAULT, COMPACT_OUTPUT_RESERVE, COMPACT_CONTEXT_RESERVE, DISABLE_CONNECTOR_SETTINGS_KEY, FAST_MODE_SETTINGS_KEY, HEADLESS_FORWARDED_ENV, headless_claude_env}` |
 | `claude_lifecycle::EXCLUDE_DYNAMIC_SECTIONS_FLAG`, `ClaudeCliLifecycle`, `ClaudeCodeLifecycle`, `ClaudeCodeLifecycle::new`, and `Default` |
 | `event_types::CLAUDE_ACCOUNT_LOGIN_REQUIRED` |

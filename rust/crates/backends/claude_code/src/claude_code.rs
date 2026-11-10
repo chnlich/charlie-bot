@@ -106,11 +106,6 @@ pub fn claude_child_env(env: &mut Env) {
   env.insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".to_string(), "1".to_string());
 }
 
-/// Build the inherited environment variables for a headless Claude process.
-pub fn headless_claude_env(run_kind: RunKind, source: &Env) -> Env {
-  claude_launch::headless_claude_env(run_kind, source)
-}
-
 /// Return Claude's declared window and the reserve used to derive its compact point.
 pub fn claude_reading_limits(run_kind: RunKind) -> ContextLimits {
   let mut source = Env::new();
@@ -124,7 +119,7 @@ pub fn claude_reading_limits(run_kind: RunKind) -> ContextLimits {
 
 /// Return Claude's reading limits for a supplied host environment.
 pub fn claude_reading_limits_from(run_kind: RunKind, source: &Env) -> ContextLimits {
-  let env = headless_claude_env(run_kind, source);
+  let env = claude_launch::headless_claude_env(run_kind, source);
   let raw_window =
     env.get(claude_launch::AUTO_COMPACT_WINDOW_ENV).expect("headless environment always carries the compact window");
   let window = match parse_positive_integer(raw_window) {
@@ -342,7 +337,7 @@ impl ClaudeCodeBackend {
   }
 
   fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
-    let headless = headless_claude_env(self.run_kind, &env);
+    let headless = claude_launch::headless_claude_env(self.run_kind, &env);
     let mut env = without_gateway_env(&env);
     env.extend(headless);
     if let Some(config_dir) = &self.claude_config_dir {
@@ -1148,7 +1143,7 @@ mod tests {
       (claude_launch::AUTO_COMPACT_WINDOW_ENV.to_string(), "300000".to_string()),
       ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE".to_string(), "0.7".to_string()),
     ]);
-    let result = headless_claude_env(RunKind::Work, &source);
+    let result = claude_launch::headless_claude_env(RunKind::Work, &source);
     assert_eq!(result["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1");
     assert_eq!(result["BASH_DEFAULT_TIMEOUT_MS"], "900000");
     assert_eq!(result["BASH_MAX_TIMEOUT_MS"], "900000");

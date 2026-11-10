@@ -95,7 +95,7 @@
 
   // The panel's first frame carries its rules: the stylesheet arrives before the panel shows, so its width, position
   // and chart never paint unstyled. A stylesheet that fails still opens the panel, which stays readable without it. A
-  // close while the sheet travels cancels the open that asked for it, and a second click cancels it too: the badge
+  // close while the sheet travels cancels the open that asked for it, and a second click cancels it too. The badge
   // toggles from its first click even when the sheet is still on its way.
   let openRequest = 0;
   let openPending = false;
@@ -260,7 +260,7 @@
     const plotBottom = height - 18;
     const maximum = points.reduce((most, point) => Math.max(most, point.running), 0);
     // The scale keeps a nonzero height for a series that is all zero. A nonzero maximum draws its gridline
-    // above the zero line and carries the axis label; an all-zero series draws only the zero line, and the
+    // above the zero line and carries the axis label. An all-zero series draws only the zero line, and the
     // label sits on that line, where the flat series lies.
     const scale = Math.max(1, maximum);
     const step = points.length > 1 ? (width - 2) / (points.length - 1) : 0;

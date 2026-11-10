@@ -19,6 +19,12 @@
        this rule wins the cascade, and it reaches the form fields and the comment boxes
        diff_comments.js builds. */
     input::placeholder, textarea::placeholder { color: #64748b; }
+    /* A form field's border is the only mark of its box: the field's white fill sits on the form bar's
+       #f8fafc at 1.05:1. slate-300, the utility's tone, draws 1.48:1 on the fill and 1.42:1 on the bar,
+       under the 3:1 floor WCAG 1.4.11 sets for a UI component boundary. slate-500 draws 4.76:1 and
+       4.55:1, above the floor and the tone the file row's expand mark keeps. The :not(:focus) keeps
+       the blue focus border the field's focus utility paints. */
+    #diff-form input:not(:focus), #diff-form select:not(:focus) { border-color: #64748b; }
     /* diff2html draws a header above every file's diff: the file's name, its ADDED/MODIFIED tag and
        a Viewed box that collapses that file. The row above the panel already shows the name and the
        status, and its toggle collapses the panel and drops the rendered diff. So the library header

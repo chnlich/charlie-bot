@@ -22,24 +22,23 @@
     <a href="#" id="open-new-tab">Open in new tab</a>
   </div>
 
-  <div id="status">
-    {% if is_merge %}
-      Merging {{ merge_count }} {{ "trace" if merge_count == 1 else "traces" }} on the server… 0s
-    {% elif is_direct_pass %}
-      Preparing a single trace on the server… 0s
-    {% else %}
-      Downloading trace…
-    {% endif %}
-  </div>
+  {% if is_merge %}
+    {% set phase = "Merging " ~ merge_count ~ " " ~ ("trace" if merge_count == 1 else "traces") ~ " on the server" %}
+  {% elif is_direct_pass %}
+    {% set phase = "Preparing a single trace on the server" %}
+  {% else %}
+    {% set phase = "" %}
+  {% endif %}
+  {% set status_text = (phase ~ "… 0s") if phase else "Downloading trace…" %}
+  <div id="status">{{ status_text }}</div>
   <iframe id="perfetto-iframe" allow="cross-origin-isolated"></iframe>
 
   <script>
     const PERFETTO_UI = 'https://ui.perfetto.dev';
     const traceUrl = {{ trace_url | tojson }};
     const traceTitle = {{ title | tojson }};
-    const mergeCount = {{ merge_count | tojson }};
-    const isMerge = {{ is_merge | tojson }};
-    const isDirectPass = {{ is_direct_pass | tojson }};
+    const phase = {{ phase | tojson }};
+    const statusText = {{ status_text | tojson }};
 
     const statusEl = document.getElementById('status');
     const iframeEl = document.getElementById('perfetto-iframe');
@@ -60,11 +59,9 @@
     }
 
     async function fetchTrace() {
-      if (isMerge || isDirectPass) {
-        const traceLabel = mergeCount === 1 ? 'trace' : `${mergeCount} traces`;
-        const phase = isMerge ? `Merging ${traceLabel} on the server` : 'Preparing a single trace on the server';
+      updateStatus(statusText);
+      if (phase) {
         const started = Date.now();
-        updateStatus(`${phase}… 0s`);
         const tick = setInterval(() => {
           updateStatus(`${phase}… ${Math.floor((Date.now() - started) / 1000)}s`);
         }, 1000);
@@ -75,7 +72,6 @@
           clearInterval(tick);
         }
       }
-      updateStatus('Downloading trace…');
       return downloadTrace();
     }
 

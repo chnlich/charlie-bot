@@ -823,11 +823,8 @@ fn conclusion_in_home(home: &Path, args: &ConclusionArgs) -> Result<String, CliE
     }
   }
 
-  ended_runs.sort_by(|a, b| {
-    let key_a = (a.0.started_at.unwrap_or_else(charliebot_store::metadata::UtcDateTime::now), &a.0.id);
-    let key_b = (b.0.started_at.unwrap_or_else(charliebot_store::metadata::UtcDateTime::now), &b.0.id);
-    key_b.cmp(&key_a)
-  });
+  // The store's canonical run order, newest first.
+  ended_runs.sort_by_key(|(record, _)| std::cmp::Reverse(charliebot_store::run_records::run_sort_key(record)));
 
   for (_record, run_dir) in ended_runs {
     if let Some(text) = extract_run_conclusion(&run_dir)? {
@@ -980,7 +977,8 @@ mod tests {
     fs::create_dir_all(&run1).unwrap();
     fs::write(
       run1.join(charliebot_store::run_records::RUN_METADATA_NAME),
-      json!({ "id": "run-1", "session_id": child_id, "ended_at": "2026-11-10T01:00:00Z" }).to_string(),
+      json!({ "id": "run-1", "session_id": child_id, "started_at": "2026-11-10T03:00:00Z", "ended_at": "2026-11-10T03:30:00Z" })
+        .to_string(),
     )
     .unwrap();
     fs::write(run1.join("report.md"), "# Report 1\nWorker finished.").unwrap();
@@ -997,7 +995,8 @@ mod tests {
     fs::create_dir_all(&run2).unwrap();
     fs::write(
       run2.join(charliebot_store::run_records::RUN_METADATA_NAME),
-      json!({ "id": "run-2", "session_id": child_id, "ended_at": "2026-11-10T02:00:00Z" }).to_string(),
+      json!({ "id": "run-2", "session_id": child_id, "started_at": "2026-11-10T01:00:00Z", "ended_at": "2026-11-10T01:30:00Z" })
+        .to_string(),
     )
     .unwrap();
     fs::write(
@@ -1018,7 +1017,8 @@ mod tests {
     fs::create_dir_all(&run3).unwrap();
     fs::write(
       run3.join(charliebot_store::run_records::RUN_METADATA_NAME),
-      json!({ "id": "run-3", "session_id": child_id, "ended_at": "2026-11-10T03:00:00Z" }).to_string(),
+      json!({ "id": "run-3", "session_id": child_id, "started_at": "2026-11-10T02:00:00Z", "ended_at": "2026-11-10T02:30:00Z" })
+        .to_string(),
     )
     .unwrap();
     fs::write(
@@ -1043,9 +1043,10 @@ mod tests {
     .unwrap();
     assert_eq!(res, "Assistant summary text from codex");
 
-    // Without --run, child session picks the newest ended run (run-3)
+    // Without --run, the newest ended run by start time with a conclusion is run-1, not run-3, which is
+    // the newest by id.
     let newest = conclusion_in_home(home.path(), &ConclusionArgs { session: child_id.to_string(), run: None }).unwrap();
-    assert_eq!(newest, "Assistant summary text from codex");
+    assert_eq!(newest, "# Report 1\nWorker finished.");
 
     // Fixture 4: run with none of the three -> exits 2
     let run4 = layout::runs_dir(&session_dir).join("run-4");

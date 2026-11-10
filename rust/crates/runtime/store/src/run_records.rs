@@ -529,7 +529,8 @@ struct RunCursor {
   d: Option<Value>,
 }
 
-fn run_sort_key(run: &RunRecord) -> (UtcDateTime, String) {
+/// The canonical run order, `(started_at, id)`; a run without a start time sorts as the earliest.
+pub fn run_sort_key(run: &RunRecord) -> (UtcDateTime, String) {
   let started_at = run
     .started_at
     .unwrap_or_else(|| UtcDateTime::parse("0001-01-01T00:00:00Z").expect("the minimum datetime is valid"));

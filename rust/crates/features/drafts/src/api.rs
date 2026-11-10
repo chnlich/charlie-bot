@@ -82,7 +82,7 @@ async fn register(State(features): State<Arc<FeatureContext>>, request: Request<
   let requested_target = fields.get(log::TARGET).cloned().expect("a validated target is an object");
   match features.store.get_session(&session_id).await {
     Ok(Some(_)) => {}
-    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({"detail": SESSION_NOT_FOUND_DETAIL})),
+    Ok(None) => return responses::http_exception_with_detail(StatusCode::NOT_FOUND, SESSION_NOT_FOUND_DETAIL),
     Err(error) => return internal(error.to_string()),
   }
   let platform = match platform(&features, &platform_name) {
@@ -91,10 +91,10 @@ async fn register(State(features): State<Arc<FeatureContext>>, request: Request<
   };
   let target = match platform.validate_target(&requested_target) {
     Ok(target) => target,
-    Err(detail) => return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({"detail": detail})),
+    Err(detail) => return responses::http_exception_with_detail(StatusCode::UNPROCESSABLE_ENTITY, &detail),
   };
   if text.trim().is_empty() {
-    return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({"detail": "draft body is empty"}));
+    return responses::http_exception_with_detail(StatusCode::UNPROCESSABLE_ENTITY, "draft body is empty");
   }
   let target_label = platform.target_label(&target);
   let sha256 = sha256_hex(&text);
@@ -130,7 +130,7 @@ async fn send(
   let (parts, _stream) = request.into_parts();
   match features.store.get_session(&session_id).await {
     Ok(Some(_)) => {}
-    Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({"detail": SESSION_NOT_FOUND_DETAIL})),
+    Ok(None) => return responses::http_exception_with_detail(StatusCode::NOT_FOUND, SESSION_NOT_FOUND_DETAIL),
     Err(error) => return internal(error.to_string()),
   }
   // Only the operator's own click reaches this route. An agent run credential gets 403 before anything is read.
@@ -139,7 +139,10 @@ async fn send(
     Err(response) => return response,
   };
   if !caller.is_operator() {
-    return responses::json(StatusCode::FORBIDDEN, &json!({"detail": "sending a draft requires operator credentials"}));
+    return responses::http_exception_with_detail(
+      StatusCode::FORBIDDEN,
+      "sending a draft requires operator credentials",
+    );
   }
   let _guard = lock::acquire(&session_id, &draft_id).await;
   let events = match features.store.load_all_facts_view_sync(&session_id) {
@@ -149,18 +152,21 @@ async fn send(
   let draft = match log::sendability(events.iter(), &draft_id) {
     Sendability::Sendable(draft) => draft,
     Sendability::Missing => {
-      return responses::json(
+      return responses::http_exception_with_detail(
         StatusCode::NOT_FOUND,
-        &json!({"detail": format!("draft {draft_id} is not registered in session {session_id}")}),
+        &format!("draft {draft_id} is not registered in session {session_id}"),
       );
     }
     Sendability::AlreadySent => {
-      return responses::json(StatusCode::CONFLICT, &json!({"detail": format!("draft {draft_id} was already sent")}));
+      return responses::http_exception_with_detail(
+        StatusCode::CONFLICT,
+        &format!("draft {draft_id} was already sent"),
+      );
     }
     Sendability::Replaced => {
-      return responses::json(
+      return responses::http_exception_with_detail(
         StatusCode::CONFLICT,
-        &json!({"detail": format!("draft {draft_id} was replaced by a later draft")}),
+        &format!("draft {draft_id} was replaced by a later draft"),
       );
     }
   };
@@ -238,9 +244,9 @@ async fn record_failed(
 
 fn platform(features: &FeatureContext, name: &str) -> Result<Arc<dyn DraftPlatform>, Box<Response>> {
   let Some(factory) = features.registry.draft_platform_factory(name) else {
-    return Err(Box::new(responses::json(
+    return Err(Box::new(responses::http_exception_with_detail(
       StatusCode::UNPROCESSABLE_ENTITY,
-      &json!({"detail": format!("no draft platform is registered as {name}")}),
+      &format!("no draft platform is registered as {name}"),
     )));
   };
   let context = DraftContext::new(Arc::clone(&features.config), Arc::clone(&features.credentials));

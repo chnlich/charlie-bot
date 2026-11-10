@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use charliebot_improve_sandbox::direction_paths;
 
 /// The Landlock system call numbers. The kernel assigns the same numbers on every Linux architecture.
 const SYS_LANDLOCK_CREATE_RULESET: libc::c_long = 444;
@@ -83,27 +84,6 @@ fn check(ret: i64, what: &str) -> Result<i64> {
 fn is_direction(name: &str) -> bool {
   let mut chars = name.chars();
   matches!(chars.next(), Some('a'..='z')) && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-}
-
-/// The writable paths of one direction, and the writable paths that every direction shares.
-fn direction_paths(home: &Path, direction: &str) -> (Vec<PathBuf>, Vec<PathBuf>) {
-  let round = home.join("improve").join(direction);
-  let round_paths = vec![
-    round.join("charlie-bot"),
-    round.join("evidence"),
-    round.join("clc-sessions"),
-    PathBuf::from(format!("/tmp/improve-{direction}")),
-    PathBuf::from(format!("/tmp/improve-{direction}-tmp")),
-    home.join(".cache/improve-target").join(direction),
-  ];
-  let shared_paths = vec![
-    home.join("improve/mock-home"),
-    home.join(".cargo/registry"),
-    home.join(".cargo/git"),
-    home.join(".cargo/.package-cache"),
-    home.join(".claude-improve"),
-  ];
-  (round_paths, shared_paths)
 }
 
 /// The direction and the command after `--`. The command must name a program.

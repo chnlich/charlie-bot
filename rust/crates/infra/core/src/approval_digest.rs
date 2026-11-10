@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use crate::approval_policy;
 use crate::pacific;
 use crate::paths;
-use crate::text_repr::{JsonStyle, json_dumps};
+use crate::text_repr::{ONE_LINE_JSON, json_dumps};
 
 /// The digest's record store, next to the other host-level state records
 /// (`DIGEST_RELATIVE_PATH`).
@@ -23,10 +23,6 @@ pub const DIGEST_RELATIVE_PATH: &str = "state/digest_entries.jsonl";
 
 /// The pseudo-policy a T2 decision records under (`T2_POLICY`).
 pub const T2_POLICY: &str = "t2";
-
-/// One NDJSON record line, with non-ASCII passed through and the default separators.
-const RECORD_JSON: JsonStyle =
-  JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
 /// One digest record: a T1 policy use or a T2 decision, what was done, and how to undo it
 /// (`DigestEntry`).
@@ -189,7 +185,7 @@ fn append(home: &Path, entry: &DigestEntry) -> Result<(), DigestError> {
   if let Some(parent) = store.parent() {
     fs::create_dir_all(parent).map_err(|error| DigestError(format!("{}: {error}", paths::display(parent))))?;
   }
-  let mut line = json_dumps(&record_of(entry), &RECORD_JSON);
+  let mut line = json_dumps(&record_of(entry), &ONE_LINE_JSON);
   line.push('\n');
   {
     use std::io::Write;

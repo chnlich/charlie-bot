@@ -21,7 +21,7 @@ use time::Month;
 
 use crate::hot_reload::Fingerprint;
 use crate::paths;
-use crate::text_repr::{JsonStyle, json_dumps};
+use crate::text_repr::{ONE_LINE_JSON, json_dumps};
 use crate::timefmt;
 
 /// The table's path under the CharlieBot home (`TABLE_RELATIVE_PATH`). It sits in a `config.d/` subdirectory,
@@ -68,10 +68,6 @@ pub const CHANGES_RELATIVE_PATH: &str = "state/policy_table_changes.jsonl";
 
 /// The file that holds the last recorded table content, the baseline the change records diff against.
 pub const RECORDED_RELATIVE_PATH: &str = "state/policy_table_recorded.yaml";
-
-/// One NDJSON record line, with non-ASCII passed through and the default separators.
-const RECORD_JSON: JsonStyle =
-  JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
 /// One consequence test: a T0 criterion with its sort rank and its text (`ConsequenceTest`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -333,7 +329,7 @@ pub fn record_if_changed(home: &Path, loaded: &LoadedTable) -> Result<bool, Poli
   if let Some(parent) = store.parent() {
     fs::create_dir_all(parent).map_err(|error| PolicyError(format!("{}: {error}", paths::display(parent))))?;
   }
-  let mut line = json_dumps(&record, &RECORD_JSON);
+  let mut line = json_dumps(&record, &ONE_LINE_JSON);
   line.push('\n');
   {
     use std::io::Write;

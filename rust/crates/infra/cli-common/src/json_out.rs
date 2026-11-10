@@ -1,11 +1,7 @@
 //! The one home of the CLI's JSON encoding.
 
-use charliebot_core::text_repr::{self, JsonStyle};
+use charliebot_core::text_repr::{self, JsonStyle, ONE_LINE_JSON};
 use serde_json::Value;
-
-/// One line, `", "` between items, with non-ASCII passed through.
-const ONE_LINE: JsonStyle =
-  JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
 /// The rendered `value`: non-ASCII characters kept as written, insertion order, one line when
 /// `indent` is `None` else an indent block.
@@ -13,7 +9,7 @@ const ONE_LINE: JsonStyle =
 /// The result ends with a trailing newline.
 pub fn render(value: &Value, indent: Option<usize>) -> String {
   let style = match indent {
-    None => ONE_LINE,
+    None => ONE_LINE_JSON,
     Some(width) => {
       JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(width) }
     }

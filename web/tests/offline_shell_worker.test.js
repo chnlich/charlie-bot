@@ -177,6 +177,36 @@ test('a warm whose shell fetch fails reports the failure', async () => {
   assert.match(channel.replies[0].error, /503/);
 });
 
+test('a warm whose shell fetch answers 401 reports no stored shell without an error', async () => {
+  const h = harness();
+  h.state.network = async () => new Response('unauthorized', {status: 401});
+  const cache = await h.caches.api.open('last-state-v1');
+  await cache.put(BOOTSTRAP_URL, firstScreen('private copy'));
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'warm'}, ports: [channel.port2]}).waits);
+  assert.equal(channel.replies.length, 1);
+  assert.equal(channel.replies[0].stored, false);
+  assert.equal('error' in channel.replies[0], false);
+  assert.equal(await cache.match(BOOTSTRAP_URL), undefined, 'a 401 drops the stored first screen');
+});
+
+test('a shell file 401 clears copies without storing an incomplete shell', async () => {
+  const h = harness();
+  const html = '<link href="/static/css/private.css" rel="stylesheet">';
+  h.state.network = async (req) => (req.url === SHELL_URL
+    ? new Response(html, {status: 200})
+    : new Response('unauthorized', {status: 401}));
+  const cache = await h.caches.api.open('last-state-v1');
+  await cache.put(BOOTSTRAP_URL, firstScreen('private copy'));
+  const channel = messageChannel();
+  await Promise.all(h.fire('message', {data: {type: 'warm'}, ports: [channel.port2]}).waits);
+  assert.equal(channel.replies.length, 1);
+  assert.equal(channel.replies[0].stored, false);
+  assert.equal('error' in channel.replies[0], false);
+  assert.equal(await cache.match(SHELL_KEY), undefined, 'the shell is stored after its files');
+  assert.equal(await cache.match(BOOTSTRAP_URL), undefined, 'the 401 drops the stored first screen');
+});
+
 test('the retired form answers no message', async () => {
   const h = harness({enabled: false});
   h.state.network = async () => new Response('unexpected', {status: 200});
@@ -369,15 +399,87 @@ test('a full store evicts the session opened longest ago and then stores the new
   assert.ok(keys.includes(BOOTSTRAP_URL), 'the new first screen is stored');
 });
 
-test('a drop-shell message removes the stored shell and replies on its port', async () => {
+test('a refresh replaces the stored shell after storing its versioned files', async () => {
   const h = harness();
   const store = await h.caches.api.open('last-state-v1');
-  await store.put(SHELL_KEY, new Response('shell'));
-  let replied = false;
-  const port = {postMessage: () => { replied = true; }};
-  await Promise.all(h.fire('message', {data: {type: 'drop-shell'}, ports: [port]}).waits);
-  assert.equal(replied, true);
+  await store.put(SHELL_KEY, new Response('<html>old</html>'));
+  const html = '<script src="/static/js/app.js?v=2"></script>';
+  h.state.network = async (req) => (req.url === SHELL_URL
+    ? new Response(html, {status: 200})
+    : new Response('new app', {status: 200, headers: {ETag: '"app-v2"'}}));
+  const channel = messageChannel();
+
+  await Promise.all(h.fire('message', {
+    data: {type: 'warm', refresh: true}, ports: [channel.port2],
+  }).waits);
+
+  assert.equal(channel.replies.length, 1);
+  assert.equal(channel.replies[0].stored, true);
+  assert.equal(await (await store.match(SHELL_KEY)).text(), html);
+  const files = await h.caches.api.open('last-state-files');
+  assert.equal(await (await files.match(ORIGIN + '/static/js/app.js?v=2')).text(), 'new app');
+});
+
+test('a failed shell refresh leaves the stored shell available to navigation', async () => {
+  const h = harness();
+  const store = await h.caches.api.open('last-state-v1');
+  await store.put(SHELL_KEY, new Response('<html>current</html>'));
+  h.state.network = async (req) => (req.url === SHELL_URL
+    ? new Response('<link href="/static/css/new.css?v=2" rel="stylesheet">', {status: 200})
+    : new Response('busy', {status: 503}));
+  const channel = messageChannel();
+
+  await Promise.all(h.fire('message', {
+    data: {type: 'warm', refresh: true}, ports: [channel.port2],
+  }).waits);
+
+  assert.equal(channel.replies.length, 1);
+  assert.equal(channel.replies[0].stored, false);
+  assert.match(channel.replies[0].error, /new\.css.*503/);
+  const nav = await answer(h, request(SHELL_URL, {mode: 'navigate'}));
+  assert.equal(await nav.response.text(), '<html>current</html>');
+});
+
+test('a 401 during refresh clears stored copies and the old shell', async () => {
+  const h = harness();
+  const store = await h.caches.api.open('last-state-v1');
+  await store.put(SHELL_KEY, new Response('<html>old</html>'));
+  await store.put(BOOTSTRAP_URL, firstScreen('private copy'));
+  h.state.network = async () => new Response('unauthorized', {status: 401});
+  const channel = messageChannel();
+
+  await Promise.all(h.fire('message', {
+    data: {type: 'warm', refresh: true}, ports: [channel.port2],
+  }).waits);
+
+  assert.equal(channel.replies.length, 1);
+  assert.equal(channel.replies[0].stored, false);
+  assert.equal(channel.replies[0].unauthorized, true);
+  assert.equal('error' in channel.replies[0], false);
   assert.equal(await store.match(SHELL_KEY), undefined);
+  assert.equal(await store.match(BOOTSTRAP_URL), undefined);
+});
+
+test('a shell file 401 during refresh clears stored copies and the old shell', async () => {
+  const h = harness();
+  const store = await h.caches.api.open('last-state-v1');
+  await store.put(SHELL_KEY, new Response('<html>old</html>'));
+  await store.put(BOOTSTRAP_URL, firstScreen('private copy'));
+  h.state.network = async (req) => (req.url === SHELL_URL
+    ? new Response('<link href="/static/css/private.css?v=2" rel="stylesheet">', {status: 200})
+    : new Response('unauthorized', {status: 401}));
+  const channel = messageChannel();
+
+  await Promise.all(h.fire('message', {
+    data: {type: 'warm', refresh: true}, ports: [channel.port2],
+  }).waits);
+
+  assert.equal(channel.replies.length, 1);
+  assert.equal(channel.replies[0].stored, false);
+  assert.equal(channel.replies[0].unauthorized, true);
+  assert.equal('error' in channel.replies[0], false);
+  assert.equal(await store.match(SHELL_KEY), undefined);
+  assert.equal(await store.match(BOOTSTRAP_URL), undefined);
 });
 
 test('a release drops the stores of older releases and keeps its own and the files store', async () => {

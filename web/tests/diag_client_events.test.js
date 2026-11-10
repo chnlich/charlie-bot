@@ -630,7 +630,7 @@ function buildTransportHarness() {
     wsUrlWithToken: (path) => path,
     setTimeout: (fn, ms) => { timers.push({fn, ms}); return timers.length; },
     clearTimeout: () => {},
-    reloadAfterDroppingShell: () => {},
+    reloadAfterRefreshingShell: () => {},
     document: {
       getElementById: () => null,
       dispatchEvent: (event) => {

@@ -142,7 +142,7 @@ function finishCatchUp(open) {
   catchUp = null;
   setNotCurrent(false);
   document.dispatchEvent(new CustomEvent('charliebot:page-current', {detail: {sessionId: open.sessionId}}));
-  if (open.readPending) markSessionRead(open.sessionId);
+  if (open.readPending) markSessionRead(open.sessionId, null);
 }
 
 // The socket's events reach the owner here: websocket.js dispatches them for the current socket only. A stored

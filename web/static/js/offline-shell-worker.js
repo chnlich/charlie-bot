@@ -232,27 +232,33 @@ function shellStaticRefs(html) {
 }
 
 // Fetches the shell and the files it names, stores them, and drops the stored files it no longer names.
-// A shell this release already stored stays: the fetch it needs happens once per release, on the first
-// open after it (the cache name carries the version), and once more after a 4409 drops the shell.
-async function warmShell() {
+// A refresh leaves the current shell in place until the replacement and its files are ready.
+async function warmShell(refresh = false) {
   const cache = await caches.open(COPY_CACHE);
-  if (await cache.match(SHELL_KEY)) return;
+  if (!refresh && await cache.match(SHELL_KEY)) return {stored: true};
   const response = await fetch('/?session=', {cache: 'no-store', credentials: 'same-origin'});
   if (response.status === 401) {
+    if (refresh) await dropShell();
     await dropCopies();
-    return;
+    return refresh ? {stored: false, unauthorized: true} : {stored: false};
   }
   if (!response.ok) throw new Error('shell fetch failed: ' + response.status);
   const html = await response.text();
-  await cache.put(SHELL_KEY, new Response(html, {headers: {'Content-Type': 'text/html; charset=utf-8'}}));
   const refs = shellStaticRefs(html);
   const files = await caches.open(FILE_CACHE);
+  const fetchedFiles = [];
   for (const ref of refs) {
     if (await files.match(ref)) continue;
     const file = await fetch(ref, {credentials: 'same-origin'});
+    if (file.status === 401) {
+      if (refresh) await dropShell();
+      await dropCopies();
+      return refresh ? {stored: false, unauthorized: true} : {stored: false};
+    }
     if (!file.ok) throw new Error('shell file fetch failed: ' + ref + ' ' + file.status);
-    if (file.headers.get('ETag')) await files.put(ref, file);
+    if (file.headers.get('ETag')) fetchedFiles.push([ref, file]);
   }
+  for (const [ref, file] of fetchedFiles) await files.put(ref, file);
   for (const request of await files.keys()) {
     const path = new URL(request.url).pathname + new URL(request.url).search;
     if (!refs.includes(path)) await files.delete(request);
@@ -260,10 +266,11 @@ async function warmShell() {
   const index = await readIndex(cache);
   index.files = refs;
   await writeIndex(cache, index);
+  await cache.put(SHELL_KEY, new Response(html, {headers: {'Content-Type': 'text/html; charset=utf-8'}}));
+  return {stored: true};
 }
 
-// The page's own stored shell goes before its reload after a 4409 close: the reload then reads the
-// current release's page from the network.
+// Called only after a refresh answers 401, so navigation reaches the server instead of using stale HTML.
 async function dropShell() {
   const cache = await caches.open(COPY_CACHE);
   await cache.delete(SHELL_KEY);
@@ -273,11 +280,9 @@ self.addEventListener('message', (event) => {
   const data = event.data || {};
   if (!WORKER_CONFIG.enabled) return;
   if (data.type === 'warm') {
-    event.waitUntil(warmShell().then(
-        () => replyTo(event, {stored: true}),
+    event.waitUntil(warmShell(data.refresh === true).then(
+        (result) => replyTo(event, result),
         (error) => replyTo(event, {stored: false, error: String(error)})));
-  } else if (data.type === 'drop-shell') {
-    event.waitUntil(dropShell().then(() => replyTo(event, {done: true})));
   } else if (data.type === 'drop-copies') {
     event.waitUntil(dropCopies());
   } else {

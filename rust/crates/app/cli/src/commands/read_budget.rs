@@ -63,40 +63,25 @@ const WRITING_TOOLS: [&str; 4] = [WRITE_TOOL, EDIT_TOOL, MULTI_EDIT_TOOL, NOTEBO
 /// 2KB"), cut back to the last line end when that line end lies past the preview's halfway mark.
 const PERSISTED_PREVIEW_CHARS: usize = 2000;
 
-/// The withhold notice that replaces a withheld output's text; `{size}` is the result's character
-/// count and `{left}` the budget the turn has left.
-const WITHHOLD_NOTICE: &str = "Output withheld: {size} characters exceed the {left} characters left in this turn's 16,000-character \
-  small-material budget (Direct Work, prompts/master.md). The call already ran; only its output is withheld. \
-  To read this material, hand the read to a subagent (the `Agent` tool) or to a repo-less worker with \
-  `--task-type script-run`. To read part of it yourself, rerun the read capped within {left} characters. \
-  Read a child's conclusion from the report.md in its run directory and a plan from its page under \
-  artifacts/: the budget does not count those paths.";
-
-/// The over-budget notice that rides with an unwithholdable over-budget output; `{total}` is the
-/// run's counted total after this result.
-const OVER_BUDGET_NOTICE: &str = "This turn's material totals {total} characters, over the 16,000-character small-material budget of Direct \
-  Work (prompts/master.md). Each later model call re-reads this material. When you act as a lead, hand each \
-  further read of material to a subagent (the `Agent` tool) or to a repo-less worker with \
-  `--task-type script-run`.";
-
 /// The paths of rule and skill material, whose reads Direct Work keeps outside the budget.
 const RULE_PATH: &str = r"(/skills/|(^|[\s:/])prompts/|SKILL\.md|LESSONS\.md|CLAUDE\.md|AGENTS\.md|\.claude/rules/)";
 
 /// The approval objects under a session's artifacts directory.
 const APPROVAL_PATH: &str = r"/artifacts/(plan|understanding)_[^/\s]*\.html";
 
-/// A child's conclusion: a run directory's report or findings file, or the query a report reader runs.
-const CHILD_REPORT: &str = r#"/data/runs/[^/\s]+/(report|findings)\.md|select\(\.type ?== ?\\?"result\\?"\)"#;
+/// A child's conclusion: a run directory's report or findings file.
+const CHILD_REPORT: &str = r"/data/runs/[^/\s]+/(report|findings)\.md";
 
 /// CharlieBot's own coordination surface: session status and tree, child and wake records,
 /// delegation and trigger receipts, plans, digest, decisions (taste, memory), page checks.
 /// `charliebot session dialog` reads another session's record, and the integration subcommands read
-/// outside material, so both count. The session arm excludes `dialog` by its captured subcommand
-/// word, because the fast regular-expression engine holds no lookahead.
+/// outside material, so both count. The session arm excludes `dialog` and `conclusion` by their
+/// captured subcommand words.
 const COORDINATION_CMD: &str =
   r"\bcharliebot\s+(delegate|worker|plan|digest|taste|memory|web|artifact|publish|improve)\b";
 const SESSION_CMD: &str = r"\bcharliebot\s+session\s+([\w-]+)";
 const SESSION_DIALOG: &str = "dialog";
+const SESSION_CONCLUSION: &str = "conclusion";
 
 /// The shell readers whose presence in a Bash command keeps a rule-path read counted: their output
 /// is a selection of the material, not the material itself.
@@ -114,6 +99,12 @@ struct ReadBudgetCli {
   /// CharlieBot run id of this manager turn
   #[arg(long)]
   run: String,
+  /// This run's Claude process carries the Agent tool
+  #[arg(long)]
+  agent_tool: bool,
+  /// The delegation gate check_task_authorization passes for this session
+  #[arg(long)]
+  can_delegate: bool,
 }
 
 /// The run's budget state. `counted` is this turn segment's counted total; `notices` counts the
@@ -160,10 +151,16 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     .join(layout::RUNS_DIR_NAME)
     .join(&cli.run);
   let mut output = std::io::stdout().lock();
-  run(&mut std::io::stdin().lock(), &run_dir, &mut output)
+  run(&mut std::io::stdin().lock(), &run_dir, cli.agent_tool, cli.can_delegate, &mut output)
 }
 
-fn run<R: Read, W: Write>(input: &mut R, run_dir: &Path, output: &mut W) -> Result<(), CliExit> {
+fn run<R: Read, W: Write>(
+  input: &mut R,
+  run_dir: &Path,
+  agent_tool: bool,
+  can_delegate: bool,
+  output: &mut W,
+) -> Result<(), CliExit> {
   let mut input_text = String::new();
   input
     .read_to_string(&mut input_text)
@@ -176,7 +173,7 @@ fn run<R: Read, W: Write>(input: &mut R, run_dir: &Path, output: &mut W) -> Resu
   let decision = match event_name(&event)? {
     claude_launch::SESSION_START_HOOK_EVENT => session_start(&event, run_dir)?,
     claude_launch::POST_TOOL_USE_HOOK_EVENT | claude_launch::POST_TOOL_USE_FAILURE_HOOK_EVENT => {
-      tool_result(&event, run_dir)?
+      tool_result(&event, run_dir, agent_tool, can_delegate)?
     }
     // The settings register only the three events above; anything else reads nothing.
     _ => None,
@@ -213,7 +210,7 @@ fn session_start(event: &Value, run_dir: &Path) -> Result<Option<Value>, CliExit
 }
 
 /// One tool result: count it, and decide whether the model reads it whole, a notice, or nothing.
-fn tool_result(event: &Value, run_dir: &Path) -> Result<Option<Value>, CliExit> {
+fn tool_result(event: &Value, run_dir: &Path, agent_tool: bool, can_delegate: bool) -> Result<Option<Value>, CliExit> {
   let hook_event = event_name(event)?;
   let failure = hook_event == claude_launch::POST_TOOL_USE_FAILURE_HOOK_EVENT;
   let tool_name = event
@@ -228,6 +225,7 @@ fn tool_result(event: &Value, run_dir: &Path) -> Result<Option<Value>, CliExit> 
     .get(event_types::TOOL_USE_ID)
     .and_then(Value::as_str)
     .ok_or_else(|| CliExit::usage(format!("{hook_event} hook input must include a string tool_use_id")))?;
+  let cwd = event.get("cwd").and_then(Value::as_str);
   let response = if failure {
     let error = event
       .get("error")
@@ -245,10 +243,10 @@ fn tool_result(event: &Value, run_dir: &Path) -> Result<Option<Value>, CliExit> 
   update_state(run_dir, |state| {
     let persisted_path = persisted_output_path(tool_name, response);
     if let Some(path) = &persisted_path {
-      state.persisted.push(PersistedOutput { path: path.clone(), exempt: exempt_class(tool_name, tool_input) });
+      state.persisted.push(PersistedOutput { path: path.clone(), exempt: exempt_class(tool_name, tool_input, cwd) });
     }
     let exempt =
-      read_back_exemption(tool_name, tool_input, state).unwrap_or_else(|| exempt_class(tool_name, tool_input));
+      read_back_exemption(tool_name, tool_input, state).unwrap_or_else(|| exempt_class(tool_name, tool_input, cwd));
     if exempt.is_some() {
       return;
     }
@@ -268,12 +266,12 @@ fn tool_result(event: &Value, run_dir: &Path) -> Result<Option<Value>, CliExit> 
           tool_name: tool_name.to_string(),
           chars: size,
         });
-        let notice = withhold_notice(size, BUDGET_CHARS.saturating_sub(state.counted));
+        let notice = withhold_notice(size, BUDGET_CHARS.saturating_sub(state.counted), agent_tool, can_delegate);
         decision = Some(withhold_decision(tool_name, response, &notice));
         return;
       }
       state.notices += 1;
-      let notice = over_budget_notice(state.counted + size);
+      let notice = over_budget_notice(state.counted + size, agent_tool, can_delegate);
       decision = Some(notice_decision(hook_event, &notice));
     }
     state.counted += size;
@@ -341,57 +339,291 @@ fn notice_decision(hook_event: &str, notice: &str) -> Value {
   })
 }
 
-fn withhold_notice(size: usize, left: usize) -> String {
-  WITHHOLD_NOTICE.replace("{size}", &size.to_string()).replace("{left}", &left.to_string())
+fn withhold_notice(size: usize, left: usize, agent_tool: bool, can_delegate: bool) -> String {
+  let handoff = match (agent_tool, can_delegate) {
+    (true, true) => {
+      "To read all of it, hand the read to a subagent (the `Agent` tool) or to a repo-less worker with `--task-type script-run`."
+    }
+    (true, false) => "To read all of it, hand the read to a subagent (the `Agent` tool).",
+    (false, true) => "To read all of it, hand the read to a repo-less worker with `--task-type script-run`.",
+    (false, false) => "The runtime refuses a worker handoff on this line, so read large material in capped parts.",
+  };
+  format!(
+    "Output withheld: {size} characters exceed the {left} characters left in this turn's 16,000-character \
+    small-material budget (Direct Work, prompts/master.md). The call already ran; only its output is withheld. \
+    To read part of it yourself, rerun the read capped within {left} characters. {handoff}\n\
+    The budget does not count these reads of decision material:\n\
+    - a child's conclusion, through `charliebot session conclusion --session <child id>`;\n\
+    - the user's words, through `charliebot session dialog --from user`;\n\
+    - a plan or understanding page through its file under artifacts/, and a rule or skill file read whole."
+  )
 }
 
-fn over_budget_notice(total: usize) -> String {
-  OVER_BUDGET_NOTICE.replace("{total}", &total.to_string())
+fn over_budget_notice(total: usize, agent_tool: bool, can_delegate: bool) -> String {
+  let handoff = match (agent_tool, can_delegate) {
+    (true, true) => {
+      " When you act as a lead, hand each further read of large material to a subagent (the `Agent` tool) or to a repo-less worker with `--task-type script-run`."
+    }
+    (true, false) => {
+      " When you act as a lead, hand each further read of large material to a subagent (the `Agent` tool)."
+    }
+    (false, true) => {
+      " When you act as a lead, hand each further read of large material to a repo-less worker with `--task-type script-run`."
+    }
+    (false, false) => "",
+  };
+  format!(
+    "This turn's material totals {total} characters, over the 16,000-character small-material budget of Direct \
+    Work (prompts/master.md). Each later model call re-reads this material. Cap each further read by its form.{handoff}"
+  )
 }
 
 /// The Direct Work item a tool call reads, or `None` when its output counts toward the budget.
-fn exempt_class(tool_name: &str, tool_input: &Map<String, Value>) -> Option<String> {
+fn exempt_class(tool_name: &str, tool_input: &Map<String, Value>, cwd: Option<&str>) -> Option<String> {
   let class = match tool_name {
     name if SUBAGENT_TOOL_NAMES.contains(&name) => Some("child_conclusion"),
     SKILL_TOOL => Some("rule_skill"),
-    READ_TOOL => tool_input.get(TOOL_INPUT_FILE_PATH).and_then(Value::as_str).and_then(path_class),
-    "Bash" => tool_input.get("command").and_then(Value::as_str).and_then(bash_class),
+    READ_TOOL => tool_input.get(TOOL_INPUT_FILE_PATH).and_then(Value::as_str).and_then(|p| path_class(p, cwd)),
+    "Bash" => tool_input.get("command").and_then(Value::as_str).and_then(|c| bash_class(c, cwd)),
     _ => None,
   };
   class.map(str::to_string)
 }
 
-fn path_class(path: &str) -> Option<&'static str> {
-  child_report_pattern()
-    .is_match(path)
-    .then_some("child_conclusion")
-    .or_else(|| rule_path_pattern().is_match(path).then_some("rule_skill"))
-    .or_else(|| approval_path_pattern().is_match(path).then_some("approval_object"))
+fn path_class(path: &str, cwd: Option<&str>) -> Option<&'static str> {
+  if child_report_pattern().is_match(path) {
+    return Some("child_conclusion");
+  }
+  if rule_path_pattern().is_match(path) {
+    return Some("rule_skill");
+  }
+  if approval_path_pattern().is_match(path) {
+    return Some("approval_object");
+  }
+  let resolved = resolve_token(path, cwd)?;
+  if report_resolved_pattern().is_match(&resolved) {
+    return Some("child_conclusion");
+  }
+  if approval_resolved_pattern().is_match(&resolved) {
+    return Some("approval_object");
+  }
+  None
 }
 
-fn bash_class(command: &str) -> Option<&'static str> {
-  status_decision(command)
-    .then_some("status_decision")
-    .or_else(|| child_report_pattern().is_match(command).then_some("child_conclusion"))
-    .or_else(|| {
-      rule_path_pattern()
-        .is_match(command)
-        .then_some(!shell_reader_pattern().is_match(command))
-        .filter(|readable| *readable)
-        .map(|_| "rule_skill")
-    })
-    .or_else(|| approval_path_pattern().is_match(command).then_some("approval_object"))
+fn bash_class(command: &str, cwd: Option<&str>) -> Option<&'static str> {
+  if is_standalone_conclusion(command, cwd) {
+    return Some("child_conclusion");
+  }
+  if is_standalone_user_dialog(command, cwd) {
+    return Some("user_words");
+  }
+  if status_decision(command) {
+    return Some("status_decision");
+  }
+  if child_report_pattern().is_match(command) {
+    return Some("child_conclusion");
+  }
+  if rule_path_pattern().is_match(command) && !shell_reader_pattern().is_match(command) {
+    return Some("rule_skill");
+  }
+  if approval_path_pattern().is_match(command) {
+    return Some("approval_object");
+  }
+  let names = resolved_names(command, cwd);
+  if let Some(candidate) = resolved_class(&names) {
+    let existing_paths = named_existing_paths(command, cwd);
+    if existing_paths.iter().all(|p| is_decision_path(p)) {
+      return Some(candidate);
+    }
+  }
+  None
 }
 
 /// Whether the command is one of CharlieBot's coordination commands: any of the coordination verbs,
-/// or a `charliebot session` subcommand that is not `dialog`.
+/// or a `charliebot session` subcommand that is not `dialog` or `conclusion`.
 fn status_decision(command: &str) -> bool {
   if coordination_cmd_pattern().is_match(command) {
     return true;
   }
-  session_cmd_pattern()
-    .captures_iter(command)
-    .any(|captures| captures.get(1).is_some_and(|word| word.as_str() != SESSION_DIALOG))
+  session_cmd_pattern().captures_iter(command).any(|captures| {
+    captures.get(1).is_some_and(|word| word.as_str() != SESSION_DIALOG && word.as_str() != SESSION_CONCLUSION)
+  })
+}
+
+fn is_standalone_conclusion(command: &str, cwd: Option<&str>) -> bool {
+  if command.contains(';') || command.contains("&&") || command.contains("||") || command.contains('\n') {
+    return false;
+  }
+  let stages: Vec<&str> = command.split('|').map(str::trim).collect();
+  if stages.is_empty() {
+    return false;
+  }
+  let words: Vec<&str> = stages[0].split_whitespace().collect();
+  if words.len() < 3 || words[0] != "charliebot" || words[1] != "session" || words[2] != "conclusion" {
+    return false;
+  }
+  validate_pipeline_filters(&stages[1..], cwd)
+}
+
+fn is_standalone_user_dialog(command: &str, cwd: Option<&str>) -> bool {
+  if command.contains(';') || command.contains("&&") || command.contains("||") || command.contains('\n') {
+    return false;
+  }
+  let stages: Vec<&str> = command.split('|').map(str::trim).collect();
+  if stages.is_empty() {
+    return false;
+  }
+  let words: Vec<&str> = stages[0].split_whitespace().collect();
+  if words.len() < 3 || words[0] != "charliebot" || words[1] != "session" || words[2] != "dialog" {
+    return false;
+  }
+  let has_from_user = words.windows(2).any(|w| w[0] == "--from" && w[1] == "user") || words.contains(&"--from=user");
+  if !has_from_user {
+    return false;
+  }
+  validate_pipeline_filters(&stages[1..], cwd)
+}
+
+fn validate_pipeline_filters(stages: &[&str], cwd: Option<&str>) -> bool {
+  const ALLOWED_FILTERS: [&str; 7] = ["head", "tail", "grep", "rg", "sed", "cut", "wc"];
+  for stage in stages {
+    let tokens: Vec<&str> = stage.split_whitespace().collect();
+    if tokens.is_empty() {
+      return false;
+    }
+    if !ALLOWED_FILTERS.contains(&tokens[0]) {
+      return false;
+    }
+    for arg in &tokens[1..] {
+      let trimmed = arg.trim_matches(['\'', '"', '`']);
+      if trimmed.starts_with('-') {
+        continue;
+      }
+      if let Some(resolved) = resolve_token(trimmed, cwd)
+        && resolved != "/"
+        && Path::new(&resolved).exists()
+      {
+        return false;
+      }
+    }
+  }
+  true
+}
+
+fn posix_normpath(path: &str) -> String {
+  if path.is_empty() {
+    return ".".to_string();
+  }
+  let initial_slashes = if path.starts_with("//") && !path.starts_with("///") {
+    2
+  } else if path.starts_with('/') {
+    1
+  } else {
+    0
+  };
+  let mut parts: Vec<&str> = Vec::new();
+  for part in path.split('/') {
+    if part.is_empty() || part == "." {
+      continue;
+    }
+    if part != ".." || (initial_slashes == 0 && parts.is_empty()) || parts.last() == Some(&"..") {
+      parts.push(part);
+    } else {
+      parts.pop();
+    }
+  }
+  let normalized = format!("{}{}", "/".repeat(initial_slashes), parts.join("/"));
+  if normalized.is_empty() { ".".to_string() } else { normalized }
+}
+
+fn resolve_token(tok: &str, base: Option<&str>) -> Option<String> {
+  let home = std::env::var("HOME").unwrap_or_default();
+  let cb_home = std::env::var("CHARLIEBOT_HOME").unwrap_or_default();
+  let mut s = tok.to_string();
+  for (var, val) in [
+    ("${CHARLIEBOT_HOME}", cb_home.as_str()),
+    ("$CHARLIEBOT_HOME", cb_home.as_str()),
+    ("${HOME}", home.as_str()),
+    ("$HOME", home.as_str()),
+  ] {
+    if s.starts_with(var) {
+      s = format!("{}{}", val, &s[var.len()..]);
+    }
+  }
+  if s.starts_with("~/") {
+    s = format!("{}{}", home, &s[1..]);
+  }
+  if s.contains('$') {
+    return None;
+  }
+  if !s.starts_with('/') {
+    let base = base?;
+    s = format!("{base}/{s}");
+  }
+  Some(posix_normpath(&s))
+}
+
+fn is_decision_path(path: &str) -> bool {
+  approval_resolved_pattern().is_match(path)
+    || report_resolved_pattern().is_match(path)
+    || rule_path_pattern().is_match(path)
+}
+
+fn resolved_names(command: &str, cwd: Option<&str>) -> Vec<String> {
+  let mut base = cwd.map(str::to_string);
+  let mut out = Vec::new();
+  for seg in segment_split_pattern().split(command) {
+    if let Some(captures) = cd_pattern().captures(seg)
+      && let Some(target) = captures.get(1)
+    {
+      let nb = resolve_token(target.as_str(), base.as_deref());
+      base = nb;
+      continue;
+    }
+    for m in token_split_pattern().find_iter(seg) {
+      let tok = m.as_str();
+      if named_pattern().is_match(tok)
+        && let Some(r) = resolve_token(tok, base.as_deref())
+      {
+        out.push(r);
+      }
+    }
+  }
+  out
+}
+
+fn named_existing_paths(command: &str, cwd: Option<&str>) -> Vec<String> {
+  let mut base = cwd.map(str::to_string);
+  let mut out = Vec::new();
+  for seg in segment_split_pattern().split(command) {
+    if let Some(captures) = cd_pattern().captures(seg)
+      && let Some(target) = captures.get(1)
+    {
+      let nb = resolve_token(target.as_str(), base.as_deref());
+      base = nb;
+      continue;
+    }
+    for m in token_split_pattern().find_iter(seg) {
+      let tok = m.as_str();
+      if let Some(r) = resolve_token(tok, base.as_deref())
+        && r != "/"
+        && Path::new(&r).exists()
+      {
+        out.push(r);
+      }
+    }
+  }
+  out
+}
+
+fn resolved_class(paths: &[String]) -> Option<&'static str> {
+  if paths.iter().any(|p| report_resolved_pattern().is_match(p)) {
+    return Some("child_conclusion");
+  }
+  if paths.iter().any(|p| approval_resolved_pattern().is_match(p)) {
+    return Some("approval_object");
+  }
+  None
 }
 
 /// The text of one successful tool result that the hook adds to the counted total. Bash reads its
@@ -554,6 +786,12 @@ hook_pattern!(child_report_pattern, CHILD_REPORT);
 hook_pattern!(coordination_cmd_pattern, COORDINATION_CMD);
 hook_pattern!(session_cmd_pattern, SESSION_CMD);
 hook_pattern!(shell_reader_pattern, SHELL_READERS);
+hook_pattern!(approval_resolved_pattern, r"/artifacts/(plan|understanding)_[^/]*\.html$");
+hook_pattern!(report_resolved_pattern, r"/data/runs/[^/]+/(report|findings)\.md$");
+hook_pattern!(named_pattern, r"((plan|understanding)_[^/]*\.html$|(report|findings)\.md$)");
+hook_pattern!(cd_pattern, r"^\s*cd\s+([^\s]+)\s*$");
+hook_pattern!(segment_split_pattern, r"&&|\|\||;|\n|\|");
+hook_pattern!(token_split_pattern, r#"[^\s'"'`|;&<>()=,]+"#);
 
 #[cfg(test)]
 mod tests {
@@ -598,8 +836,23 @@ mod tests {
   }
 
   fn run_event(home: &RunHome, event: &Value) -> (Result<(), CliExit>, Vec<u8>) {
+    run_event_with_flags(home, event, false, false)
+  }
+
+  fn run_event_with_flags(
+    home: &RunHome,
+    event: &Value,
+    agent_tool: bool,
+    can_delegate: bool,
+  ) -> (Result<(), CliExit>, Vec<u8>) {
     let mut output = Vec::new();
-    let result = run(&mut Cursor::new(serde_json::to_string(event).unwrap().into_bytes()), &home.run_dir, &mut output);
+    let result = run(
+      &mut Cursor::new(serde_json::to_string(event).unwrap().into_bytes()),
+      &home.run_dir,
+      agent_tool,
+      can_delegate,
+      &mut output,
+    );
     (result, output)
   }
 
@@ -607,6 +860,17 @@ mod tests {
     json!({
       "hook_event_name": "PostToolUse",
       "tool_name": "Bash",
+      "tool_input": {"command": command.into()},
+      "tool_use_id": "toolu_01",
+      "tool_response": {"stdout": stdout.into(), "stderr": "", "interrupted": false, "isImage": false, "noOutputExpected": false}
+    })
+  }
+
+  fn bash_event_with_cwd(command: impl Into<String>, stdout: impl Into<String>, cwd: &str) -> Value {
+    json!({
+      "hook_event_name": "PostToolUse",
+      "tool_name": "Bash",
+      "cwd": cwd,
       "tool_input": {"command": command.into()},
       "tool_use_id": "toolu_01",
       "tool_response": {"stdout": stdout.into(), "stderr": "", "interrupted": false, "isImage": false, "noOutputExpected": false}
@@ -623,13 +887,24 @@ mod tests {
     })
   }
 
+  fn read_event_with_cwd(file_path: &str, content: &str, cwd: &str) -> Value {
+    json!({
+      "hook_event_name": "PostToolUse",
+      "tool_name": "Read",
+      "cwd": cwd,
+      "tool_input": {"file_path": file_path},
+      "tool_use_id": "toolu_02",
+      "tool_response": {"type": "text", "file": {"filePath": file_path, "content": content}}
+    })
+  }
+
   fn decision_of(output: &[u8]) -> Value {
     serde_json::from_slice(output).unwrap()
   }
 
   /// The withheld notice, sized so the tests read the withheld size and the remaining budget back.
   fn withhold_text(size: usize, left: usize) -> String {
-    withhold_notice(size, left)
+    withhold_notice(size, left, false, false)
   }
 
   #[test]
@@ -769,7 +1044,7 @@ mod tests {
           "tool_response": {"stdout": stdout, "stderr": "", "interrupted": false, "isImage": false, "noOutputExpected": false}
         });
         let mut output = Vec::new();
-        run(&mut Cursor::new(serde_json::to_string(&event).unwrap().into_bytes()), &run_dir, &mut output).unwrap();
+        run(&mut Cursor::new(serde_json::to_string(&event).unwrap().into_bytes()), &run_dir, false, false, &mut output).unwrap();
         output
       }));
     }
@@ -823,13 +1098,14 @@ mod tests {
     ];
     for (event, run_dir, needle) in cases {
       let mut output = Vec::new();
-      let error = run(&mut Cursor::new(event.to_string().into_bytes()), &run_dir, &mut output).unwrap_err();
+      let error =
+        run(&mut Cursor::new(event.to_string().into_bytes()), &run_dir, false, false, &mut output).unwrap_err();
       assert_eq!(error.code, 2, "{needle}");
       assert!(error.body["error"].as_str().unwrap().contains(needle), "{error:?}");
       assert!(output.is_empty());
     }
     let mut output = Vec::new();
-    let error = run(&mut Cursor::new(b"not json".to_vec()), &home.run_dir, &mut output).unwrap_err();
+    let error = run(&mut Cursor::new(b"not json".to_vec()), &home.run_dir, false, false, &mut output).unwrap_err();
     assert_eq!(error.code, 2);
     assert!(error.body["error"].as_str().unwrap().starts_with("invalid hook JSON:"));
   }
@@ -963,7 +1239,7 @@ mod tests {
     ];
     for (tool_name, tool_input, expected) in cases {
       let input = tool_input.as_object().unwrap().clone();
-      assert_eq!(exempt_class(tool_name, &input).as_deref(), expected, "{tool_name} {tool_input}");
+      assert_eq!(exempt_class(tool_name, &input, None).as_deref(), expected, "{tool_name} {tool_input}");
     }
   }
 
@@ -1008,5 +1284,194 @@ mod tests {
     assert_eq!(persisted_size_text(36_791), "35.9KB");
     assert_eq!(persisted_size_text(115_815), "113.1KB");
     assert_eq!(persisted_size_text(2_000), "2KB");
+  }
+
+  #[test]
+  fn notice_variants_match_section_4_1_word_for_word() {
+    let size = 20_000;
+    let left = 1_000;
+    let total = 20_000;
+
+    // Variant 1: Neither flag
+    let v1_withhold = withhold_notice(size, left, false, false);
+    let expected_v1_withhold = "\
+Output withheld: 20000 characters exceed the 1000 characters left in this turn's 16,000-character small-material budget (Direct Work, prompts/master.md). The call already ran; only its output is withheld. To read part of it yourself, rerun the read capped within 1000 characters. The runtime refuses a worker handoff on this line, so read large material in capped parts.
+The budget does not count these reads of decision material:
+- a child's conclusion, through `charliebot session conclusion --session <child id>`;
+- the user's words, through `charliebot session dialog --from user`;
+- a plan or understanding page through its file under artifacts/, and a rule or skill file read whole.";
+    assert_eq!(v1_withhold, expected_v1_withhold);
+
+    let v1_over_budget = over_budget_notice(total, false, false);
+    let expected_v1_over_budget = "\
+This turn's material totals 20000 characters, over the 16,000-character small-material budget of Direct Work (prompts/master.md). Each later model call re-reads this material. Cap each further read by its form.";
+    assert_eq!(v1_over_budget, expected_v1_over_budget);
+
+    // Variant 2: Only --can-delegate
+    let v2_withhold = withhold_notice(size, left, false, true);
+    let expected_v2_withhold = "\
+Output withheld: 20000 characters exceed the 1000 characters left in this turn's 16,000-character small-material budget (Direct Work, prompts/master.md). The call already ran; only its output is withheld. To read part of it yourself, rerun the read capped within 1000 characters. To read all of it, hand the read to a repo-less worker with `--task-type script-run`.
+The budget does not count these reads of decision material:
+- a child's conclusion, through `charliebot session conclusion --session <child id>`;
+- the user's words, through `charliebot session dialog --from user`;
+- a plan or understanding page through its file under artifacts/, and a rule or skill file read whole.";
+    assert_eq!(v2_withhold, expected_v2_withhold);
+
+    let v2_over_budget = over_budget_notice(total, false, true);
+    let expected_v2_over_budget = "\
+This turn's material totals 20000 characters, over the 16,000-character small-material budget of Direct Work (prompts/master.md). Each later model call re-reads this material. Cap each further read by its form. When you act as a lead, hand each further read of large material to a repo-less worker with `--task-type script-run`.";
+    assert_eq!(v2_over_budget, expected_v2_over_budget);
+
+    // Variant 3: Both flags (--agent-tool and --can-delegate)
+    let v3_withhold = withhold_notice(size, left, true, true);
+    let expected_v3_withhold = "\
+Output withheld: 20000 characters exceed the 1000 characters left in this turn's 16,000-character small-material budget (Direct Work, prompts/master.md). The call already ran; only its output is withheld. To read part of it yourself, rerun the read capped within 1000 characters. To read all of it, hand the read to a subagent (the `Agent` tool) or to a repo-less worker with `--task-type script-run`.
+The budget does not count these reads of decision material:
+- a child's conclusion, through `charliebot session conclusion --session <child id>`;
+- the user's words, through `charliebot session dialog --from user`;
+- a plan or understanding page through its file under artifacts/, and a rule or skill file read whole.";
+    assert_eq!(v3_withhold, expected_v3_withhold);
+
+    let v3_over_budget = over_budget_notice(total, true, true);
+    let expected_v3_over_budget = "\
+This turn's material totals 20000 characters, over the 16,000-character small-material budget of Direct Work (prompts/master.md). Each later model call re-reads this material. Cap each further read by its form. When you act as a lead, hand each further read of large material to a subagent (the `Agent` tool) or to a repo-less worker with `--task-type script-run`.";
+    assert_eq!(v3_over_budget, expected_v3_over_budget);
+
+    // Bonus: Only --agent-tool
+    let v4_withhold = withhold_notice(size, left, true, false);
+    assert!(v4_withhold.contains("To read all of it, hand the read to a subagent (the `Agent` tool)."));
+    let v4_over_budget = over_budget_notice(total, true, false);
+    assert!(
+      v4_over_budget
+        .contains("When you act as a lead, hand each further read of large material to a subagent (the `Agent` tool).")
+    );
+  }
+
+  #[test]
+  fn path_forms_and_mixed_commands_match_section_4_2() {
+    let temp_session = tempfile::tempdir().unwrap();
+    let session_path = temp_session.path();
+    let artifacts_dir = session_path.join("artifacts");
+    std::fs::create_dir_all(&artifacts_dir).unwrap();
+    let plan_file = artifacts_dir.join("plan_x.html");
+    std::fs::write(&plan_file, "plan content").unwrap();
+    let und_file = artifacts_dir.join("understanding_x.html");
+    std::fs::write(&und_file, "understanding content").unwrap();
+    let specs_dir = session_path.join("specs");
+    std::fs::create_dir_all(&specs_dir).unwrap();
+
+    let cwd_str = session_path.to_str().unwrap();
+
+    // 1. Relative path `sed -n 1,9p artifacts/plan_x.html` (cwd is session dir) is exempt
+    assert_eq!(bash_class("sed -n 1,9p artifacts/plan_x.html", Some(cwd_str)), Some("approval_object"));
+
+    // 2. `cd /x/artifacts && cat plan_y.html` (cwd in other place) is exempt
+    assert_eq!(bash_class("cd /x/artifacts && cat plan_y.html", Some("/other/cwd")), Some("approval_object"));
+
+    // 3. `cat tmp/plan_v1.html` is counted (tmp is not artifacts/)
+    assert_eq!(bash_class("cat tmp/plan_v1.html", Some(cwd_str)), None);
+
+    // 4. `cat $d/report.md` is counted (unexpanded variable)
+    assert_eq!(bash_class("cat $d/report.md", Some(cwd_str)), None);
+
+    // 5. `cd /s/data/runs/r && cat report.md` is exempt
+    assert_eq!(bash_class("cd /s/data/runs/r && cat report.md", Some(cwd_str)), Some("child_conclusion"));
+
+    // 6. `wc -c artifacts/understanding_x.html; ls specs` (specs exists on disk) is counted
+    assert_eq!(bash_class("wc -c artifacts/understanding_x.html; ls specs", Some(cwd_str)), None);
+
+    // 7. `charliebot session conclusion --session s` is exempt
+    assert_eq!(bash_class("charliebot session conclusion --session s", Some(cwd_str)), Some("child_conclusion"));
+
+    // 8. `charliebot session conclusion --session s | head -c 3000` is exempt
+    assert_eq!(
+      bash_class("charliebot session conclusion --session s | head -c 3000", Some(cwd_str)),
+      Some("child_conclusion")
+    );
+
+    // 9. `charliebot session conclusion --session s; cat events.jsonl` is counted
+    assert_eq!(bash_class("charliebot session conclusion --session s; cat events.jsonl", Some(cwd_str)), None);
+
+    // 10. `jq select(.type=="result")` is counted (old exemption deleted)
+    assert_eq!(
+      bash_class(
+        r#"jq -r 'select(.type=="result") | .result' /home/sessions/s/data/runs/r/events.jsonl"#,
+        Some(cwd_str)
+      ),
+      None
+    );
+
+    // 11. `charliebot session dialog --from user` is exempt
+    assert_eq!(bash_class("charliebot session dialog --from user", Some(cwd_str)), Some("user_words"));
+    assert_eq!(bash_class("charliebot session dialog s --from user | head -n 20", Some(cwd_str)), Some("user_words"));
+
+    // 12. `charliebot session dialog --turns 5` is counted
+    assert_eq!(bash_class("charliebot session dialog --turns 5", Some(cwd_str)), None);
+  }
+
+  #[test]
+  fn replay_fixtures_match_table_in_section_4_2() {
+    let temp_session = tempfile::tempdir().unwrap();
+    let session_path = temp_session.path();
+    let artifacts_dir = session_path.join("artifacts");
+    std::fs::create_dir_all(&artifacts_dir).unwrap();
+    let plan_02 = artifacts_dir.join("plan_02_v4.html");
+    std::fs::write(&plan_02, "plan content").unwrap();
+    let und_file = artifacts_dir.join("understanding_reset_aware_lb_v1.html");
+    std::fs::write(&und_file, "understanding content").unwrap();
+
+    let specs_dir = session_path.join("specs").join("v6");
+    std::fs::create_dir_all(&specs_dir).unwrap();
+
+    let cwd_str = session_path.to_str().unwrap();
+
+    // R10: f3286173
+    // `sed -n '249,269p;331,354p' artifacts/plan_02_v4.html | head -c 12000`
+    let r10_cmd = "sed -n '249,269p;331,354p' artifacts/plan_02_v4.html | head -c 12000";
+    assert_eq!(bash_class(r10_cmd, Some(cwd_str)), Some("approval_object"));
+
+    // R55: 5d3fbd02 raw material
+    let r55_cmd =
+      "ls ~/scripts/20261109_quota_reset_replay/; wc -c ~/scripts/report.md; grep -n '^#' ~/scripts/report.md";
+    assert_eq!(bash_class(r55_cmd, Some(cwd_str)), None);
+
+    // 0ad72837: mixed command with existing specs/v6
+    let cmd_0ad72837 = "wc -c artifacts/understanding_reset_aware_lb_v1.html; ls specs/v6; grep -c LESSONS LESSONS.md";
+    assert_eq!(bash_class(cmd_0ad72837, Some(cwd_str)), None);
+
+    // Full hook event execution for R10, R55, and 0ad72837
+    let home = RunHome::new();
+    home.seed_counted(12_226); // 16,000 - 3,774 left
+
+    // R10 passes without being counted because it is exempt (approval_object)
+    let (res, out) =
+      run_event_with_flags(&home, &bash_event_with_cwd(r10_cmd, "x".repeat(4_610), cwd_str), false, true);
+    res.unwrap();
+    assert!(out.is_empty(), "R10 is exempt and passes unwithheld");
+    assert_eq!(home.state().counted, 12_226);
+
+    // R55: counted was 12,439 in replay, 1,487 fits within budget (12,439 + 1,487 = 13,926 <= 16,000)
+    home.seed_counted(12_439);
+    let (res, out) =
+      run_event_with_flags(&home, &bash_event_with_cwd(r55_cmd, "x".repeat(1_487), cwd_str), false, true);
+    res.unwrap();
+    assert!(out.is_empty(), "R55 fits within budget and passes unwithheld");
+    assert_eq!(home.state().counted, 13_926);
+
+    // 0ad72837: 3,433 characters exceed remaining budget (left: 2,208) -> withheld
+    home.seed_counted(13_792); // 16,000 - 2,208 left
+    let (res, out) =
+      run_event_with_flags(&home, &bash_event_with_cwd(cmd_0ad72837, "x".repeat(3_433), cwd_str), false, true);
+    res.unwrap();
+    let decision = decision_of(&out);
+    let replaced = decision["hookSpecificOutput"]["updatedToolOutput"]["stdout"].as_str().unwrap();
+    assert_eq!(replaced, withhold_notice(3_433, 2_208, false, true));
+    assert_eq!(home.state().counted, 13_792);
+
+    // Read tool with relative artifacts path
+    let rel_read = read_event_with_cwd("artifacts/plan_x.html", &"x".repeat(20_000), cwd_str);
+    let (res, out) = run_event_with_flags(&home, &rel_read, false, false);
+    res.unwrap();
+    assert!(out.is_empty(), "relative Read of approval object is exempt");
   }
 }

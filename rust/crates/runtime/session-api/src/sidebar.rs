@@ -1,13 +1,16 @@
 //! Sidebar status derived from trigger files, feature contributions, and the task tree.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+use charliebot_core::memo::BoundedMemo;
 use charliebot_core::timefmt;
 use charliebot_registry::Registry;
 use charliebot_store::layout;
@@ -41,8 +44,19 @@ const SIDEBAR_SWEEP_MIN_INTERVAL: Duration = Duration::from_secs(10);
 /// the corpus size divided by this slice, times the interval, to be rechecked again.
 const SIDEBAR_SWEEP_SLICE: usize = 1024;
 
-/// The index into the active corpus where the next self-heal sweep starts.
-static SIDEBAR_SWEEP_CURSOR: AtomicUsize = AtomicUsize::new(0);
+/// How many corpora keep their sweep rotation.
+///
+/// A process polls a few large corpora, and an evicted entry only restarts that corpus's rotation.
+const SIDEBAR_SWEEP_CURSOR_ENTRIES: usize = 16;
+
+/// The next corpus index each corpus's rotation starts at, keyed by the corpus's own ids.
+///
+/// The cursor belongs to the corpus: one shared cursor would skip rows when two corpora of related lengths are
+/// polled in turn, because each corpus would apply the other corpus's advance modulo its own length and repeat the
+/// same offsets. A corpus is named by what it holds, so a caller that builds an equal corpus per request keeps its
+/// rotation instead of restarting at the first row.
+static SIDEBAR_SWEEP_CURSORS: LazyLock<Mutex<BoundedMemo<(usize, u64), usize>>> =
+  LazyLock::new(|| Mutex::new(BoundedMemo::new(SIDEBAR_SWEEP_CURSOR_ENTRIES)));
 
 /// The start time of the last self-heal sweep this process ran.
 static SIDEBAR_SWEEP_LAST_START: Mutex<Option<Instant>> = Mutex::new(None);
@@ -271,18 +285,24 @@ fn schedule_sidebar_sweep(
   Ok(())
 }
 
-/// The slice of `sessions` one sweep rechecks: up to [`SIDEBAR_SWEEP_SLICE`] rows from where the last sweep stopped,
-/// wrapping around the end.
+/// The slice of `sessions` one sweep rechecks: up to [`SIDEBAR_SWEEP_SLICE`] rows from where this corpus's last
+/// sweep stopped, wrapping around the end.
 ///
-/// A corpus no larger than one slice is rechecked whole. The cursor advances by the slice's length, so consecutive
-/// sweeps cover disjoint slices until the corpus ends and the next one wraps; a change in the corpus size only moves
-/// the rotation's start.
+/// A corpus no larger than one slice is rechecked whole. The corpus's cursor advances by the slice's length, so its
+/// consecutive sweeps cover disjoint slices until the corpus ends and the next one wraps; a change in the corpus
+/// names a new corpus, whose rotation starts at its first row.
 fn sweep_slice(sessions: &[Arc<SessionMetadata>]) -> Vec<Arc<SessionMetadata>> {
   let len = sessions.len();
   if len <= SIDEBAR_SWEEP_SLICE {
     return sessions.to_vec();
   }
-  let start = SIDEBAR_SWEEP_CURSOR.fetch_add(SIDEBAR_SWEEP_SLICE, Ordering::Relaxed) % len;
+  let key = sweep_corpus_key(sessions);
+  let start = {
+    let mut cursors = SIDEBAR_SWEEP_CURSORS.lock().expect("the sweep cursor mutex is not poisoned");
+    let start = cursors.get(&key).unwrap_or(0) % len;
+    cursors.store(key, start + SIDEBAR_SWEEP_SLICE);
+    start
+  };
   let end = start + SIDEBAR_SWEEP_SLICE;
   let mut slice = Vec::with_capacity(SIDEBAR_SWEEP_SLICE);
   slice.extend_from_slice(&sessions[start..end.min(len)]);
@@ -290,6 +310,15 @@ fn sweep_slice(sessions: &[Arc<SessionMetadata>]) -> Vec<Arc<SessionMetadata>> {
     slice.extend_from_slice(&sessions[..end - len]);
   }
   slice
+}
+
+/// The identity of one sweep corpus: its length and a digest of its ids in order.
+fn sweep_corpus_key(sessions: &[Arc<SessionMetadata>]) -> (usize, u64) {
+  let mut hasher = DefaultHasher::new();
+  for meta in sessions {
+    meta.id.hash(&mut hasher);
+  }
+  (sessions.len(), hasher.finish())
 }
 
 fn probe_session(store: &Store, registry: &Registry, session_id: &str) -> StoreResult<Map<String, Value>> {
@@ -404,19 +433,22 @@ mod tests {
     assert!(should_probe_synchronously(false, false, false, false), "a missing snapshot is built synchronously");
   }
 
-  #[test]
-  fn a_sweep_covers_the_corpus_in_disjoint_slices_and_wraps() {
-    // The cursor is process state, so the test starts each read from a known offset.
-    SIDEBAR_SWEEP_CURSOR.store(0, Ordering::Relaxed);
-    let rows: Vec<Arc<SessionMetadata>> = (0..SIDEBAR_SWEEP_SLICE + 100)
+  /// A sweep corpus of `len` rows whose ids carry `prefix`, so two corpora of one length name different cursors.
+  fn sweep_corpus(prefix: &str, len: usize) -> Vec<Arc<SessionMetadata>> {
+    (0..len)
       .map(|index| {
         Arc::new(SessionMetadata::new(
-          format!("session-{index}"),
+          format!("{prefix}-{index}"),
           "session",
           charliebot_store::metadata::TaskProfile::Manager,
         ))
       })
-      .collect();
+      .collect()
+  }
+
+  #[test]
+  fn a_sweep_covers_the_corpus_in_disjoint_slices_and_wraps() {
+    let rows = sweep_corpus("wrap", SIDEBAR_SWEEP_SLICE + 100);
     let first = sweep_slice(&rows);
     let second = sweep_slice(&rows);
     assert_eq!(first.len(), SIDEBAR_SWEEP_SLICE);
@@ -427,8 +459,23 @@ mod tests {
       Arc::ptr_eq(&second[rows.len() - SIDEBAR_SWEEP_SLICE], &rows[0]),
       "a slice past the corpus end wraps to its start"
     );
-    SIDEBAR_SWEEP_CURSOR.store(0, Ordering::Relaxed);
     assert_eq!(sweep_slice(&rows[..10]).len(), 10, "a corpus no larger than one slice is rechecked whole");
+  }
+
+  #[test]
+  fn a_sweep_rotates_each_corpus_on_its_own_cursor() {
+    // Two corpora of one length, polled in turn: a shared cursor would park each on the other's offsets, and the
+    // other half of every corpus would never be rechecked.
+    let left = sweep_corpus("left", SIDEBAR_SWEEP_SLICE * 2);
+    let right = sweep_corpus("right", SIDEBAR_SWEEP_SLICE * 2);
+    let left_first = sweep_slice(&left);
+    let right_first = sweep_slice(&right);
+    let left_second = sweep_slice(&left);
+    let right_second = sweep_slice(&right);
+    assert!(Arc::ptr_eq(&left_first[0], &left[0]));
+    assert!(Arc::ptr_eq(&left_second[0], &left[SIDEBAR_SWEEP_SLICE]), "a corpus continues its own rotation");
+    assert!(Arc::ptr_eq(&right_first[0], &right[0]), "another corpus keeps its own cursor");
+    assert!(Arc::ptr_eq(&right_second[0], &right[SIDEBAR_SWEEP_SLICE]));
   }
 
   #[test]

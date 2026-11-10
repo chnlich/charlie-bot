@@ -6,6 +6,14 @@
 
 use serde_json::{Value, json};
 
+/// The target object's field names. The CLI builds the object, the event carries it, and the HTTP request reads it,
+/// so every site names the field through these constants.
+const REPO: &str = "repo";
+const NUMBER: &str = "number";
+const TITLE: &str = "title";
+const HEAD: &str = "head";
+const BASE: &str = "base";
+
 /// One GitHub target: a comment on a pull request or issue, or a new draft pull request.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Target {
@@ -23,13 +31,13 @@ impl Target {
     let Some(object) = target.as_object() else {
       return Err("the GitHub target must be an object".to_string());
     };
-    let number = object.get("number");
-    let allowed: &[&str] = if number.is_some() { &["repo", "number"] } else { &["repo", "title", "head", "base"] };
+    let number = object.get(NUMBER);
+    let allowed: &[&str] = if number.is_some() { &[REPO, NUMBER] } else { &[REPO, TITLE, HEAD, BASE] };
     if let Some(unknown) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
       return Err(format!("the GitHub target has no field {unknown}"));
     }
     let repo = object
-      .get("repo")
+      .get(REPO)
       .and_then(Value::as_str)
       .filter(|repo| valid_repo(repo))
       .ok_or_else(|| "target.repo must name owner/repository".to_string())?
@@ -42,19 +50,19 @@ impl Target {
       return Ok(Target::Comment { repo, number });
     }
     let title = object
-      .get("title")
+      .get(TITLE)
       .and_then(Value::as_str)
       .filter(|title| !title.trim().is_empty())
       .ok_or_else(|| "target.title must be a non-empty pull-request title".to_string())?
       .to_string();
     let head = object
-      .get("head")
+      .get(HEAD)
       .and_then(Value::as_str)
       .filter(|head| valid_branch(head))
       .ok_or_else(|| "target.head must be a pull-request branch".to_string())?
       .to_string();
     let base = object
-      .get("base")
+      .get(BASE)
       .and_then(Value::as_str)
       .filter(|base| valid_branch(base))
       .ok_or_else(|| "target.base must be a pull-request branch".to_string())?
@@ -64,20 +72,20 @@ impl Target {
 
   /// The comment target for `repo` and `number`, validated as an object that carries `number` alone.
   pub fn comment(repo: &str, number: u64) -> Result<Target, String> {
-    Self::parse(&json!({"repo": repo, "number": number}))
+    Self::parse(&json!({(REPO): repo, (NUMBER): number}))
   }
 
   /// The draft pull-request target for these parts, validated as an object that carries `title`, `head` and `base`.
   pub fn draft_pull_request(repo: &str, title: &str, head: &str, base: &str) -> Result<Target, String> {
-    Self::parse(&json!({"repo": repo, "title": title, "head": head, "base": base}))
+    Self::parse(&json!({(REPO): repo, (TITLE): title, (HEAD): head, (BASE): base}))
   }
 
   /// The canonical `Value` the event carries.
   pub fn to_value(&self) -> Value {
     match self {
-      Target::Comment { repo, number } => json!({"repo": repo, "number": number}),
+      Target::Comment { repo, number } => json!({(REPO): repo, (NUMBER): number}),
       Target::DraftPullRequest { repo, title, head, base } => {
-        json!({"repo": repo, "title": title, "head": head, "base": base})
+        json!({(REPO): repo, (TITLE): title, (HEAD): head, (BASE): base})
       }
     }
   }
@@ -98,7 +106,7 @@ impl Target {
       Target::Comment { repo, number } => (format!("repos/{repo}/issues/{number}/comments"), json!({"body": body})),
       Target::DraftPullRequest { repo, title, head, base } => (
         format!("repos/{repo}/pulls"),
-        json!({"title": title, "head": head, "base": base, "body": body, "draft": true}),
+        json!({(TITLE): title, (HEAD): head, (BASE): base, "body": body, "draft": true}),
       ),
     }
   }

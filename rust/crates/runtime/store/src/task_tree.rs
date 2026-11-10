@@ -2904,7 +2904,7 @@ fn default_task_name(task: &TaskSpec, profile: TaskProfile) -> Option<String> {
   let selected = content.or_else(|| lines.first().copied().map(strip_heading))?;
   let selected = selected.trim();
   if selected.is_empty() {
-    return Some(format!("New {} task", profile_name(profile)));
+    return Some(format!("New {} task", profile.as_str()));
   }
   Some(selected.chars().take(80).collect())
 }
@@ -2921,13 +2921,6 @@ fn is_markdown_heading(line: &str) -> bool {
 fn strip_heading(line: &str) -> &str {
   let trimmed = line.trim_start();
   trimmed.trim_start_matches('#').trim_start()
-}
-
-fn profile_name(profile: TaskProfile) -> &'static str {
-  match profile {
-    TaskProfile::Manager => "manager",
-    TaskProfile::Worker => "worker",
-  }
 }
 
 fn count_session_dirs(sessions_dir: &Path) -> StoreResult<i64> {

@@ -28,7 +28,7 @@ use charliebot_core::run_token::SESSION_ID_ENV;
 use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_session_api::api as session_routes;
 use charliebot_store::chat_events::{self, LineRule};
-use charliebot_store::metadata::{ARCHIVE_OFFSET, UtcDateTime, read_session_metadata};
+use charliebot_store::metadata::{ARCHIVE_OFFSET, TaskProfile, UtcDateTime, read_session_metadata};
 use charliebot_store::{CALLER_SESSION_ID_FIELD, control_events, layout};
 use charliebot_tasks::completion::{CLOSED_EVENT_ID_FIELD, STOPPED_RUNS_FIELD, pending_archive_answer};
 use charliebot_tasks::routes as task_routes;
@@ -98,7 +98,7 @@ struct CreateArgs {
   #[arg(long)]
   parent: Option<String>,
   /// Task profile (v2 task create)
-  #[arg(long, value_parser = ["manager", "worker"])]
+  #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(TaskProfile::NAMES))]
   profile: Option<String>,
   /// Path to the task object JSON (v2 task create)
   #[arg(long)]

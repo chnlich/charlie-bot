@@ -369,7 +369,7 @@ impl TaskExecutionAdapter {
         return Err(
           StoreError::invalid(format!(
             "run {run_id} (profile={}, kind={}) has no executable adapter",
-            profile_name(meta.profile),
+            meta.profile.as_str(),
             run.kind.as_str()
           ))
           .into(),
@@ -3129,13 +3129,6 @@ fn outcome_text(outcome: RunOutcomeKind) -> String {
     RunOutcomeKind::Interrupted => "interrupted",
   }
   .to_string()
-}
-
-fn profile_name(profile: TaskProfile) -> &'static str {
-  match profile {
-    TaskProfile::Manager => "manager",
-    TaskProfile::Worker => "worker",
-  }
 }
 
 /// Build the task execution runtime before recovery begins.

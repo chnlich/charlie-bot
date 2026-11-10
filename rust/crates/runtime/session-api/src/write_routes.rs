@@ -37,7 +37,6 @@ use crate::detail::response_metadata;
 use crate::route_support::store_error;
 
 const LOG_TARGET: &str = "charliebot_session_api";
-const PROFILE_CHOICES: &[&str] = &["manager", "worker"];
 const APPROVER_CHOICES: &[&str] = &["user", "parent"];
 const TASK_TYPE_CHOICES: &[&str] = TaskType::NAMES;
 const PROFILE_REQUIRED: &str = "profile must be 'manager' or 'worker'";
@@ -70,7 +69,7 @@ const CREATE_FIELDS: &[Field] = &[
   Field::optional("session_id", FieldType::NullableString),
   Field::optional("request_id", FieldType::NullableString),
   Field::optional("task_parent_id", FieldType::NullableString),
-  Field::optional("profile", FieldType::NullableLiteral(PROFILE_CHOICES)),
+  Field::optional("profile", FieldType::NullableLiteral(TaskProfile::NAMES)),
   Field::optional("task", FieldType::NullableModel { class_name: "TaskSpec", model: &TASK_SPEC }),
   Field::optional("group", FieldType::NullableString),
   Field::optional("approver", FieldType::Literal(APPROVER_CHOICES)),
@@ -81,7 +80,7 @@ const CREATE_SESSION: BodyModel = BodyModel::required(CREATE_FIELDS);
 const PATCH_FIELDS: &[Field] = &[
   Field::optional("name", FieldType::NullableString),
   Field::optional("task_parent_id", FieldType::NullableString),
-  Field::optional("profile", FieldType::NullableLiteral(PROFILE_CHOICES)),
+  Field::optional("profile", FieldType::NullableLiteral(TaskProfile::NAMES)),
   Field::optional("task", FieldType::NullableModel { class_name: "TaskSpec", model: &TASK_SPEC }),
   Field::optional("subtree_prompt", FieldType::NullableString),
   Field::optional("node_prompt", FieldType::NullableString),
@@ -267,7 +266,7 @@ async fn create(
       target: LOG_TARGET,
       session_id = %meta.id,
       task_parent_id = ?task_parent_id,
-      profile = profile_name(profile),
+      profile = profile.as_str(),
       "{}", event_types::TASK_CREATED
     );
     return Ok(meta);
@@ -578,13 +577,6 @@ fn task_caller(caller: &CallerIdentity) -> TaskCaller {
   match caller.claims() {
     Some(claims) => TaskCaller::Agent { session_id: claims.session_id.clone() },
     None => TaskCaller::Operator,
-  }
-}
-
-fn profile_name(profile: TaskProfile) -> &'static str {
-  match profile {
-    TaskProfile::Manager => "manager",
-    TaskProfile::Worker => "worker",
   }
 }
 

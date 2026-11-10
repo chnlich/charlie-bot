@@ -1432,7 +1432,7 @@ async fn resume_run_checked(
     return Ok(false);
   }
   if meta.profile != TaskProfile::Manager || run.kind != RunKind::ManagerTurn {
-    bail!("run {run_id} (profile={}, kind={}) has no resume adapter", profile_name(meta.profile), run.kind.as_str());
+    bail!("run {run_id} (profile={}, kind={}) has no resume adapter", meta.profile.as_str(), run.kind.as_str());
   }
   let receiver = enqueue_manager_resume(adapter, &meta, &run, &option, is_alive, ended_at).await?;
   track_manager_follow(adapter, session_id, run_id, receiver);
@@ -1744,13 +1744,6 @@ fn outcome_name(outcome: RunOutcomeKind) -> &'static str {
     RunOutcomeKind::Success => "success",
     RunOutcomeKind::Failed => "failed",
     RunOutcomeKind::Interrupted => "interrupted",
-  }
-}
-
-fn profile_name(profile: TaskProfile) -> &'static str {
-  match profile {
-    TaskProfile::Manager => "manager",
-    TaskProfile::Worker => "worker",
   }
 }
 

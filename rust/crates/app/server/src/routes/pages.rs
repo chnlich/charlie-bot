@@ -17,7 +17,7 @@ use charliebot_compat::routing::get_only;
 use charliebot_core::config::{CharlieBotConfig, HomeService};
 use charliebot_core::paths;
 use charliebot_registry::Registry;
-use charliebot_registry::templating::{self, Templating};
+use charliebot_registry::templating::{self, STATIC_ASSET_VERSION_KEY, Templating};
 use charliebot_session_api::api as session_routes;
 use charliebot_session_api::{detail, listing};
 use charliebot_store::{StoreError, StoreResult};
@@ -434,12 +434,12 @@ fn render_page_blocking(
       let asset_version = templating.static_asset_version().map_err(|error| failure("OSError", error))?;
       object.insert("sessions_root".to_string(), Value::String(paths::display(&cfg.sessions_dir())));
       object.insert("version".to_string(), Value::String(templating.git_version().to_string()));
-      object.insert("static_asset_version".to_string(), Value::String(asset_version));
+      object.insert(STATIC_ASSET_VERSION_KEY.to_string(), Value::String(asset_version));
       object.insert("auth_enabled".to_string(), Value::Bool(*auth_enabled));
     }
     PageRuntime::Home | PageRuntime::Events => {
       let asset_version = templating.static_asset_version().map_err(|error| failure("OSError", error))?;
-      object.insert("static_asset_version".to_string(), Value::String(asset_version));
+      object.insert(STATIC_ASSET_VERSION_KEY.to_string(), Value::String(asset_version));
     }
   }
   let template_html = templating

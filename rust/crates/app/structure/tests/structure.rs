@@ -1242,6 +1242,12 @@ const OWNER_TABLE: &[OwnerRow] = &[
            public, and the template engine inlines a stylesheet from it.",
   },
   OwnerRow {
+    name: "static_asset_version",
+    owner: "runtime/registry",
+    hint: "Use `charliebot_registry::templating::STATIC_ASSET_VERSION_KEY`; every page context inserts its version \
+           under it.",
+  },
+  OwnerRow {
     name: "session_name",
     owner: "runtime/store",
     hint: "Use `charliebot_store::metadata::SESSION_NAME_FIELD`; the approval day view's rows and the voice recordings \

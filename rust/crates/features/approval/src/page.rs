@@ -10,7 +10,7 @@ use axum::http::request::Parts;
 use axum::response::Response;
 use charliebot_compat::{responses, routing};
 use charliebot_registry::FeatureContext;
-use charliebot_registry::templating::Templating;
+use charliebot_registry::templating::{STATIC_ASSET_VERSION_KEY, Templating};
 use jiff::{Span, civil::Date};
 use serde_json::json;
 
@@ -61,7 +61,7 @@ fn render(features: &FeatureContext, view: DayView, request: &Parts) -> Result<R
   // The concurrency badge's script is the page's only static asset, so it carries the version that busts its cache.
   let asset_version = templating.static_asset_version().map_err(|error| ("OSError".to_string(), error.to_string()))?;
   let context = json!({
-    "static_asset_version": asset_version,
+    (STATIC_ASSET_VERSION_KEY): asset_version,
     "ctx": {
       "date": date_text,
       "previous": previous.to_string(),

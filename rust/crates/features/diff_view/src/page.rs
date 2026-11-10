@@ -9,7 +9,7 @@ use axum::response::Response;
 use charliebot_compat::responses;
 use charliebot_compat::routing::get_only;
 use charliebot_registry::FeatureContext;
-use charliebot_registry::templating::Templating;
+use charliebot_registry::templating::{STATIC_ASSET_VERSION_KEY, Templating};
 use serde_json::json;
 
 /// The page's router, with the feature context as its state.
@@ -35,7 +35,7 @@ async fn diff_viewer(State(features): State<Arc<FeatureContext>>, parts: Parts) 
     Ok(hostname) => hostname,
     Err(response) => return response,
   };
-  let context = json!({"hostname": hostname, "static_asset_version": static_asset_version});
+  let context = json!({"hostname": hostname, (STATIC_ASSET_VERSION_KEY): static_asset_version});
   match templating.render_page(&features, "diff.html", &context, &parts) {
     Ok(response) => response,
     Err(error) => responses::internal_error(error.kind(), error.to_string()),

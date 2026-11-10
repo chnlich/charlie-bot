@@ -15,7 +15,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::Registry;
-use charliebot_registry::templating::Templating;
+use charliebot_registry::templating::{STATIC_ASSET_VERSION_KEY, Templating};
 use charliebot_registry::usage::UsageSource;
 use http::request::Parts;
 use jiff::Timestamp;
@@ -197,7 +197,7 @@ fn render_html(
 ) -> Result<String, PageFailure> {
   let mut context = token_usage_context(read, &features.registry)?;
   if let Some(object) = context.as_object_mut() {
-    object.insert("static_asset_version".to_string(), Value::String(asset_version.to_string()));
+    object.insert(STATIC_ASSET_VERSION_KEY.to_string(), Value::String(asset_version.to_string()));
   }
   let templating =
     features.startup.require::<Templating>().map_err(|error| PageFailure::new("RuntimeError", error.to_string()))?;

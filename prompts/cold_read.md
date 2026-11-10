@@ -11,7 +11,8 @@ stated mix)? (3) What does the page ask of the reader, if anything? When the pag
 reader to choose, list each VISIBLE TEXT option with its name, action and consequence. When
 an option appears only in the page source, write FOLDED for it. When the options differ in
 what the reader sees and an option shows neither a drawn demo nor a stated reason, write
-NO DEMO for it.
+NO DEMO for it. A demo shows read-back data where it is at hand; any other demo data is
+labeled as sample data.
 The reader then answers each choice from what the page shows at open. (4) In which numbered
 section did you first become clear on what the problem is? (5) Name up to five points you
 had to re-read to follow the page.

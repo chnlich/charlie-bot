@@ -74,7 +74,7 @@
 <div class="wrap">
   <header>
     <h1>Why the review wall kept showing stale frames: the render cache stamped copies four minutes ahead</h1>
-    <p class="sub">Cause confirmed by replay: re-exports made within about four minutes of a sync never reached the review wall, because the render node stamped cached copies with its own clock, which ran four minutes fast, and the fetcher then judged every later re-export as not newer than the cache. Why the clock ran fast (the clock-sync service stopped after Sunday's re-image) stays a moderate-confidence hypothesis. Example debug body with invented data; replace this header and the sections below with the topic's own content.</p>
+    <p class="sub">Cause confirmed by replay: re-exports made within about four minutes of a sync never reached the review wall, because the render node stamped cached copies with its own clock, which ran four minutes fast, and the fetcher then judged every later re-export as not newer than the cache. Why the clock ran fast (the clock-sync service stopped after Sunday's re-image) stays a moderate-confidence hypothesis. Example debug body with invented data.</p>
     <div class="meta">
       <span class="mtag">system · fictional review wall (template example)</span>
       <span class="mtag">window · fictional, Sunday 18:00 to Tuesday 09:47</span>
@@ -86,28 +86,18 @@
 <!--
       USAGE — build each debug page as artifacts/debug_<topic-slug>_v<n>.html in the session dir.
       Reuse this file's <head> and <style> verbatim; replace the <main> content following the
-      grammar below. Each generated page is self-contained: a reader with no
-      prior conversation or project background understands it on its own,
-      first read. The generated page's language follows the
-      user's artifact-language preference; this template stays English.
+      grammar below.
 
       Shared blocks: reuse plan_template.html's block kit where useful, including p, ul/li, ol/li,
       blockquote, pre, table, td, div.callout, div.flow, div.fork with its folded explainer, and
       div.meta > span.mtag chips.
 
-      GRAMMAR — canonical debug page grammar and the only definition of its section semantics.
-      A debug page answers the reader's question "what happened, and why": observed behavior
-      contradicted expectation, and the page's conclusion is a causal explanation. Sections are
-      ordered by cause, so the reader meets the phenomenon before the mechanism that must exist
-      to explain it, then the causal chain, then the evidence behind the chain, then what the
-      explanation changes. The header's p.sub carries the bottom line (the causal conclusion plus
+      The header's p.sub carries the bottom line (the causal conclusion plus
       its epistemic state, in one or two sentences), so the reader can stop after the header. Then
       come five sections in a fixed order and numbering; any section may shrink to one sentence.
 
       1 "What did they hit?": the phenomenon in the reader's words, one checkable observation.
       2 "How does this normally work?": minimal mechanism model; structure diagram for spatial claims.
-         The read-before rule for data graphics lives in the dataviz skill by name; read it
-         before drafting the diagram.
       3 "Why did it happen?": causal chain end to end, one hand-checkable worked example.
       4 "Evidence and boundaries": separate confirmed facts from open hypotheses, with span.tag.fact and
          span.tag.hyp (semantics: prompts/sitrep_template.html's GRAMMAR, their canonical home), and state
@@ -115,9 +105,8 @@
       5 "What does it mean for us, and what happens next?": impact and decisions as forks; "Nothing waits on you." is valid.
          Fork grammar: plan_template.html's block kit, section 5.
 
-      Readability rules, head and style: referenced from prompts/sitrep_template.html (single canonical home).
+      Readability rules: referenced from prompts/sitrep_template.html (single canonical home).
 
-      Pre-share: Run the Cold-Read Gate of the file-server skill with --genre debug.
 -->
 
     <section class="plan-section">
@@ -208,8 +197,6 @@
         <p class="trade">Tradeoff: the "cached at" reading moves from the stamp into the fetch log.</p>
       </div>
     </section>
-
-    <div class="foot"><p>Template example body: every name, path, and timestamp on this page is invented, and no line of it comes from a real session. Replace the header and all five sections with the topic's own content per the GRAMMAR above.</p></div>
   </main>
 </div>
 </body>

@@ -208,6 +208,7 @@ it does.
 ## Naming
 
 Give each plan, phase, task, and report a name that states what it is by content, so the name alone distinguishes it.
+A name referenced outside its artifact must be self-describing.
 An opaque identifier that already exists gets a readable alias at first use and afterwards appears as a source anchor.
 In chat replies and pages that the user reads in the CharlieBot UI, write each session id as a link:
 `[<readable alias> · <first 8 characters>](<CharlieBot URL>/?session=<full session id>)`.

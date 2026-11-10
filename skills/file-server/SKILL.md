@@ -89,6 +89,9 @@ Generated HTML artifacts (reports, plans, dashboards) must satisfy:
 - Full document with doctype, html, body tags.
 - Self-contained: inline CSS/JS. External resources from `cdn.jsdelivr.net` or
   `unpkg.com` only.
+- Self-explanatory: a reader with no prior conversation or project background understands the page
+  on its own, first read. The page's language follows the user's artifact-language preference; the
+  templates stay English.
 - Sandboxing: chat embeds render via srcdoc + sandbox attribute (no access to parent
   window, cookies, or storage). The plan panel viewer runs same-origin without sandbox
   because its in-frame comment tray requires same-origin; plan artifact content is
@@ -100,6 +103,7 @@ Generated HTML artifacts (reports, plans, dashboards) must satisfy:
 
 Pages of every genre pass the cold-read gate.
 The gate has two parts: the genre's mechanical assertions and one cold read.
+The PII scan keeps paths in workspace form and names people by role.
 
 A waiting page (`prompts/web_reply.md`, Form) has the genre `waiting`.
 

@@ -91,11 +91,7 @@
       belong to the source: cite them by path, so the plan stays right when the code moves. Keep content
       in semantic blocks so inline comments can anchor to useful units.
 
-      Write for a project reviewer who knows general engineering and ML and the established CharlieBot
-      concepts, and explain only a term the plan newly introduces, an opaque internal codename, or a word a
-      reader from another team would not know (the Vocabulary rule in prompts/master.md's Writing Style
-      section). Name each phase and run with a self-describing slug per prompts/master.md's Naming section,
-      so anything referenced outside the artifact goes by its slug. Code identifiers locate an explanation;
+      Code identifiers locate an explanation;
       the explanation itself stays in prose.
 
       Header: show the title, a one-line summary, and meta chips naming where the plan applies and what it builds on.
@@ -114,35 +110,20 @@
       4. Detailed Design — two read layers:
          4.1 Schema: the persisted data structures (fields, types, meaning) and the request/response of
                     externally consumed APIs and CLI commands. Present each definition as the concrete
-                    artifact itself: a pre block, a field table, or an inline signature. A definition of a
-                    few lines stays visible; a longer one folds into a details-layer whose summary names
-                    the thing defined. A plan with no persisted structures and no API change keeps 4.1 as
-                    a one-line declaration saying so.
+                    artifact itself: important definitions stay visible, and the rest fold into a
+                    details-layer whose summary names the thing defined. A plan with no persisted
+                    structures and no API change keeps 4.1 as a one-line declaration saying so.
          4.2 Design Details: the internal mechanisms, algorithms, concurrency, compatibility, acceptance
                     criteria, and verification approach, organized by subsystem or data flow.
       5. Trade-offs — numbered choices the user must judge, rendered as div.fork blocks. An open item contains
                     the question (p.q with span.fn number), recommendation (p.rec), and one-line tradeoff
                     (p.trade). When a question asks the reader to choose, list each option as one li outside
-                    every details-layer. This lets the reader see every choice without opening a fold.
-                    Open each option li with its name in 「」, then its action and its consequence.
-                    The reader then matches each choice to the name that the recommendation uses.
-                    For a yes/no question, list 「做」 and 「不做」 as the two options.
-                    Each answer then states its consequence, so the reader does not infer it.
+                    every details-layer.
+                    Open each option li with its name in 「」.
                     Write the recommendation (p.rec) with one option name in 「」.
-                    The fork-options check then matches that name against the option lines.
-                    When the options of a fork differ in what the reader sees, follow the text of each option li
-                    with a div.demo that draws that option's result in the page, outside every details-layer.
-                    Such differences include:
-                      - a web UI or a page layout;
-                      - a report or a message;
-                      - command output.
-                    The reader then compares the options by how they look.
-                    Fill a demo with read-back data where it is at hand.
-                    Label any other data in a demo as sample data.
-                    When a still picture cannot show an option's difference, such as motion or timing, give that
-                    option a p.no-demo line that states the reason.
-                    The fork-demos check holds every option of a fork whose option lines carry a demo or a reason
-                    to one of the two.
+                    When the options of a fork differ in what the reader sees, each option line carries, outside
+                    every details-layer, a div.demo that draws that option's result or a p.no-demo line that
+                    states the reason a still picture cannot show the difference.
                     Every open item also carries a folded explainer, a details.details-layer block
                     collapsed by default, so the reader can verify the recommendation from the block alone while
                     the decision surface stays short: it retells the decision from scratch, glosses per the
@@ -151,44 +132,27 @@
                     (p.resolved); never record rejected alternatives. When nothing needs judging, keep one line
                     stating there are no open trade-offs.
                     A mechanism that outlives the task and that the request did not name enters the plan as an
-                    open Trade-off: the question names the existing mechanism it would replace, the folded
-                    explainer states the concrete gap that existing mechanism leaves open, and the
-                    recommendation keeps the existing mechanism whenever that gap is empty.
-      6. Other Details — a collapsed details.details-layer. Use one li per autonomous implementation decision,
-                    with a one-line rationale in span.m.
+                    open Trade-off.
+      6. Other Details — a collapsed list of the autonomous decisions, each with its reason.
 
       Shrink rule: depth scales with complexity. Any section may shrink to a sentence. 4.2 Design Details and
                     6. Other Details may be empty and omitted entirely. Section order and numbering never change.
       Page budget: the page as it opens is the complete decision surface, aimed at a 2000 px height at the
-                    probe's 1280 px render width. Registration accepts any height; the assertions report the
-                    height against that target.
-                    The decision-critical content stays visible: the header, sections 1 and 3, 4.1's short
-                    definitions, each Trade-off's question, option lines, recommendation, and trade lines, and
-                    every comparison table, acceptance criterion, or option the decision needs.
+                    probe's 1280 px render width; registration accepts any height and the assertions report
+                    the height against that target.
+                    The open page holds the important points and the folds hold the detail.
                     Shrink or split a plan whose minimum alone overflows.
-                    Depth is welcome in a details-layer block, whose content has no length limit: diagrams,
-                    worked examples, and full evidence. When headroom runs short, prune by whole units
-                    (redundant adjectives, transition filler, non-core background) and move optional deep
-                    background and long evidence into folds; word-by-word micro-shaving across sentences
-                    is excluded.
-                    The stylesheet is copied verbatim from the template (USAGE).
-                    Both page kinds run the Cold-Read Gate of the file-server skill.
+                    When headroom runs short, delete the least important, fold the less important, and keep the
+                    important visible.
       Foot: use div.foot for the interaction rules. Reply by Trade-off number to override a recommendation or
                     resolution; unmentioned items accept the recommendation. Any Other Details entry the user
                     asks to control is promoted and then joins the approval object.
                     The parent node or the root line approves this plan after its Improve round and verify.
                     Reply at any time to change it, or ask to stop the line.
       Source anchors: every current-reality claim carries a checkable source. Use path:line for code facts, a URL
-                    for external material, and a reproducible one-line command for runtime facts. Keep local paths
-                    and commands as plain text; only URLs are links. Render anchors as span.src
-                    (&lt;span class=&quot;src&quot;&gt;...&lt;/span&gt;). Current-reality claims should be concentrated in Context.
-                    Restate any conclusion imported from an earlier plan, run, comment, or review in the current
-                    plan and anchor it directly to stable, checkable evidence. Session-local identifiers cannot
-                    carry meaning for the reader, and source anchors support rather than replace the explanation.
-      Versions: each version's body is the complete current design and carries no revision marks;
-                    the reason a version differs from its predecessor rides on the version record's
-                    note, recorded at amend time, and the reader gets the differences from the diff
-                    view (charliebot plan diff).
+                    for external material, and a reproducible one-line command for runtime facts. Restate any
+                    conclusion imported from an earlier plan, run, comment, or review in the current plan and
+                    anchor it directly to stable, checkable evidence.
       Shared blocks: p, ul/li, ol/li, blockquote, pre, table, and td are comment-friendly text blocks;
       div.callout highlights a note (.warn for amber); div.flow with span.b and span.ar sketches a data flow;
       div.meta > span.mtag gives small metadata chips near the top of a plan.

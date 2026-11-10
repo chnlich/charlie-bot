@@ -97,7 +97,7 @@
 <div class="wrap">
   <header>
     <h1>Why the tint ramp still took 47 minutes to build<span class="status">EXPLAIN · example</span></h1>
-    <p class="sub">Example explain body with invented data; replace this header and the sections below with the topic's own content.</p>
+    <p class="sub">Example explain body with invented data.</p>
     <div class="meta">
       <span class="mtag">system · fictional photon farm (template example)</span>
       <span class="mtag">trigger · "we bucket the tone radius into sixteen bins, so why did the ramp compile for 47 minutes?"</span>
@@ -109,23 +109,13 @@
       USAGE — build each explain page as artifacts/explain_<topic-slug>_v<n>.html in the session dir.
       Copy this file, replace the example body, write artifacts/explain_<topic-slug>_v<n>.html.
       Reuse this file's <head> and <style> verbatim; replace the <main> content following the
-      grammar below. Each generated page is self-contained: a reader with no
-      prior conversation or project background understands it on its own,
-      first read. The generated page's language follows the
-      exchange it joins; this template stays English.
-
-      Shared blocks: reuse plan_template.html's block kit where useful, including p, ul/li, ol/li,
-      blockquote, pre, table, td, div.callout, div.flow, div.triad, div.varb, and div.meta > span.mtag chips.
+      grammar below.
 
       GRAMMAR: section semantics. Headings are content names: each states what its section does before the
       body is read.
 
-      Opening triad (unnumbered, first screen): "You know X" (the reader's stated model, in their words) /
-      "You observe Y" (the contradicting observation, labeled) / "The missing link is Z" (one sentence). The
-      contradiction is on screen before anything else. When the reader states no contradiction, use the rows
-      "You know", "You ask" and "Short answer". Wrap each triad row's post-label content in a &lt;div&gt;:
-      .triad .row is a flex container, and bare text interleaved with inline elements (&lt;code&gt;, &lt;b&gt;,
-      &lt;span class="tag"&gt;) splits into multiple anonymous flex items that shrink into broken narrow columns.
+      Opening triad (unnumbered, first screen): a div.triad shows what the reader believes or asks and the
+      one-sentence answer.
 
       1 affirm: where the reader's model is right and the exact step where it stops, with evidence.
       2 mechanism: the missing mechanism, why before what. Split it into div.step blocks, each with a
@@ -141,8 +131,6 @@
       Foot: the exchange closes when the reader confirms the question is answered, and a renewed miss signal
         revises this page in place.
 
-      Self-checks before sharing: Run the Cold-Read Gate of the file-server skill with --genre explain; the
-      PII scan (paths in workspace form, people by role).
 -->
 
     <section class="plan-section">
@@ -248,7 +236,6 @@ S_bucket = bin_radius(max_radius)   # returns a Python constant
 
     <section class="plan-section">
       <h2><span class="n">5</span> What stays open, and where a new anomaly goes<span class="slot">boundaries</span></h2>
-      <p class="muted">Epistemic labels ride inline at each claim's first occurrence; only what stays open is listed here.</p>
       <ul>
         <li><span class="tag hyp">Open</span> The offset-set driver's exact split line is unlocated; it needs a debug capture, routing back to the debugging genre.</li>
         <li><span class="tag hyp">Open</span> Attribution for the tensor-band variance is inferred, not confirmed.</li>

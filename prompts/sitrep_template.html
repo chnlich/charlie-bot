@@ -74,7 +74,7 @@
 <div class="wrap">
   <header>
     <h1>Optimize a data-loading hot path</h1>
-    <p class="sub">The batched loader is merged and complete: a full day now builds in 2 seconds instead of 61, with no accuracy change. The only exposure is whether the speedup holds on the slower second host. Example sitrep body; replace this header and the sections below with the topic's own content.</p>
+    <p class="sub">The batched loader is merged and complete: a full day now builds in 2 seconds instead of 61, with no accuracy change. The only exposure is whether the speedup holds on the slower second host.</p>
     <div class="meta">
       <span class="mtag">repo · charlie-bot</span>
       <span class="mtag">scope · data loading</span>
@@ -86,20 +86,7 @@
 <!--
       USAGE — build each brief as artifacts/sitrep_<topic-slug>_v<n>.html in the session dir.
       Reuse this file's <head> and <style> verbatim; replace the <main> content following the
-      grammar below. Each generated page is self-contained: a reader with no
-      prior conversation or project background understands it on its own,
-      first read. The generated page's language follows the
-      user's artifact-language preference; this template stays English.
-
-      Pre-share self-checks, applied to the finished page:
-      1. Terms follow the Vocabulary rule (prompts/master.md); every count carries its gloss at first occurrence.
-      2. Every fact label carries a source anchor.
-      3. Every name distinguishes its bearer by content alone.
-      4. Run the Cold-Read Gate of the file-server skill with --genre sitrep.
-
-      Shared blocks: reuse plan_template.html's block kit where useful, including p, ul/li, ol/li,
-      blockquote, pre, table, td, div.callout, div.flow, div.fork with its folded explainer, and
-      div.meta > span.mtag chips.
+      grammar below.
 
       GRAMMAR — canonical sitrep page grammar and the only definition of its section semantics.
       The header's p.sub carries the bottom line: where things stand plus the immediate risk, in
@@ -116,12 +103,9 @@
          requirement's name carries its meaning for the reader in the reader's own words.
       3. "What was verified?" — deliverables and acceptance evidence, and, for a reported run,
          what that run changed and what it held fixed; every claim carries a span.src anchor.
-      4. "Risks & open questions" — one h3 per topic, the whole story of a topic told in one
-         place. Epistemic status is an inline label, not a section: a fact label (span.tag.fact)
-         requires a source anchor; an open-hypothesis label (span.tag.hyp) carries a confidence
-         level (high / moderate / low) and the observation that would decide it; a verified
-         hypothesis is restated as a fact with one clause noting it was confirmed; a refuted one
-         gets one sentence. An incident topic may add a brief timeline inside its own block.
+      4. "Risks & open questions" — a fact label (span.tag.fact) requires a source anchor; an
+         open-hypothesis label (span.tag.hyp) carries a confidence level (high / moderate / low)
+         and the observation that would decide it.
       5. "What happens next?" — the schedule, in-flight work, and the recommended order.
 
       Five readability rules, one line each:
@@ -137,10 +121,6 @@
         (prompts/master.md, Naming section).
       - density: one fact per sentence; table cells hold short enumerable facts, with explanation
         in the surrounding prose.
-
-      Sitrep prose follows the Writing Style section of prompts/master.md (Explaining to the
-      user), exactly as memory entries do (skills/llm-context-guideline/SKILL.md). The page is
-      an ordinary session artifact; plan semantics stay with plans.
     -->
 
     <section class="plan-section">

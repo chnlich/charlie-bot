@@ -188,8 +188,8 @@
 
   // Every draft message the loader stood in for before this file landed. The
   // turn engine owns the message nodes and keeps each entry's node, so a
-  // message the engine holds is replaced through the engine: it renders the
-  // entry again with this file's renderer and rebuilds the list, and its
+  // message the engine holds is replaced through the engine. The engine renders
+  // the entry again with this file's renderer and rebuilds the list, and its
   // cached node becomes the card. A message no engine holds sits in a plain
   // container, where the placeholder element is replaced in place.
   function fillPlaceholders(entries) {

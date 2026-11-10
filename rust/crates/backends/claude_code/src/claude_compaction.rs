@@ -8,8 +8,11 @@ use std::time::Duration as StdDuration;
 
 use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::event_types::MODEL_USAGE;
+use charliebot_core::event_types::{
+  EDIT_TOOL, GLOB_TOOL, GREP_TOOL, MODEL_USAGE, NOTEBOOK_EDIT_TOOL, READ_TOOL, SKILL_TOOL, WRITE_TOOL,
+};
 use charliebot_core::text_repr::is_truthy;
+use charliebot_core::web_search::TOOL_NAME;
 use charliebot_registry::backend::{EmitFn, Env};
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::run_records::RunKind;
@@ -34,8 +37,26 @@ const COMPACT_PROMPT: &[u8] = b"/compact\n";
 const BOUNDARY_MARKER: &str = "\"compact_boundary\"";
 const COST_STATE_MARKER: &str = "\"cost-state\"";
 const USAGE_COUNTERS: [&str; 4] = ["inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens"];
-const EXTRA_COMPACTION_TOOLS: &str =
-  "Bash,Read,Write,Edit,NotebookEdit,Glob,Grep,WebSearch,WebFetch,Skill,ToolSearch,KillShell,Agent";
+
+/// The tools the compaction command disallows in addition to `HEADLESS_DISALLOWED_TOOLS`.
+fn extra_compaction_tools() -> String {
+  [
+    "Bash",
+    READ_TOOL,
+    WRITE_TOOL,
+    EDIT_TOOL,
+    NOTEBOOK_EDIT_TOOL,
+    GLOB_TOOL,
+    GREP_TOOL,
+    TOOL_NAME,
+    "WebFetch",
+    SKILL_TOOL,
+    "ToolSearch",
+    "KillShell",
+    "Agent",
+  ]
+  .join(",")
+}
 
 pub use charliebot_registry::backend::{CompactionOutcome, CompactionRun};
 
@@ -173,7 +194,7 @@ pub fn compaction_command(session_id: &str, charliebot_session_id: &str) -> Vec<
     "--output-format".to_string(),
     "json".to_string(),
     DISALLOWED_TOOLS_FLAG.to_string(),
-    format!("{},{}", HEADLESS_DISALLOWED_TOOLS, EXTRA_COMPACTION_TOOLS),
+    format!("{},{}", HEADLESS_DISALLOWED_TOOLS, extra_compaction_tools()),
     "--settings".to_string(),
     Value::Object(settings).to_string(),
   ]

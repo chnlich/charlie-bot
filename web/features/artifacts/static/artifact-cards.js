@@ -119,7 +119,9 @@ function loadHtmlArtifactSavedSize(filePath) {
     var height = (typeof parsed.height === 'number' && parsed.height > 0) ? parsed.height : 0;
     var width = (typeof parsed.width === 'number' && parsed.width > 0) ? parsed.width : 0;
     if (height || width) return {height: height, width: width};
-  } catch (e) {}
+  } catch (e) {
+    console.warn('HTML artifact size could not be read', filePath, e);
+  }
   return null;
 }
 
@@ -136,7 +138,9 @@ function saveHtmlArtifactSavedSize(filePath, size) {
   if (!key) return;
   try {
     localStorage.setItem(key, JSON.stringify(size));
-  } catch (e) {}
+  } catch (e) {
+    console.warn('HTML artifact size could not be saved', filePath, e);
+  }
 }
 
 // Inner markup of an expanded card: the live iframe plus its toolbar, resize

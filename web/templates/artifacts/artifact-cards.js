@@ -11,8 +11,17 @@
 //
 // The module reads the file-link helpers (Chat.resolveFileServerUrl and the file-server prefixes), and the chat page
 // carries a loader in their place, so the file-link module loads first and its helpers exist when this module runs.
+//
+// The stylesheet that paints the card travels with the module for the same reason: only a message that names an
+// artifact page draws one. The Plans panel draws from the same sheet, so its loader calls this one first.
+globalThis.loadArtifactStyles = function() {
+  return loadPageStyles('artifacts', ['/static/features/artifacts/artifacts.css'])
+    // A stylesheet that fails leaves the card readable and the module worth loading.
+    .catch((error) => console.error('artifact cards: ' + error.message));
+};
+
 globalThis.loadArtifactCards = function() {
-  return loadFileLinks().then(function() {
+  return loadArtifactStyles().then(loadFileLinks).then(function() {
     return loadPageScripts('artifacts-cards', ['/static/features/artifacts/artifact-cards.js']);
   });
 };

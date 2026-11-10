@@ -80,3 +80,29 @@ function loadPageScripts(key, paths) {
   }
   return pageScriptLoads.get(key);
 }
+
+// ---------------------------------------------------------------------------
+// Feature stylesheets a page loads with the scripts they style
+// ---------------------------------------------------------------------------
+// A stylesheet in the page's document costs every reader the bytes of a feature they may never open, exactly as its
+// scripts would. A feature whose scripts a page loads on first use therefore loads its stylesheet the same way. One
+// promise per key, and a failed load drops its entry so the next need tries again; a stylesheet re-inserted after a
+// failure costs nothing, because the rules it carries apply once however many links name it.
+const pageStyleLoads = new Map();
+
+function loadPageStyles(key, paths) {
+  if (!pageStyleLoads.has(key)) {
+    const loadOne = (path) => new Promise((resolve, reject) => {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = path + '?v=' + encodeURIComponent(STATIC_ASSET_VERSION);
+      link.onload = () => resolve();
+      link.onerror = () => reject(new Error('the page stylesheet did not load: ' + path));
+      document.head.appendChild(link);
+    });
+    const loading = paths.reduce((previous, path) => previous.then(() => loadOne(path)), Promise.resolve());
+    pageStyleLoads.set(key, loading);
+    loading.catch(() => pageStyleLoads.delete(key));
+  }
+  return pageStyleLoads.get(key);
+}

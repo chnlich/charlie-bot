@@ -187,23 +187,37 @@
       {draftCardHtml, draftSentLineHtml, draftFailedLineHtml, applyDraftState, applyDraftUpdates, stateLineHtml});
 
   // Every draft message the loader stood in for before this file landed. The
-  // placeholder element is replaced in place; one this page cannot reach is
-  // rendered again by the page's view poll, which now takes the card path.
+  // turn engine owns the message nodes and keeps each entry's node, so a
+  // message the engine holds is replaced through the engine: it renders the
+  // entry again with this file's renderer and rebuilds the list, and its
+  // cached node becomes the card. A message no engine holds sits in a plain
+  // container, where the placeholder element is replaced in place.
   function fillPlaceholders(entries) {
-    let missed = false;
     for (const entry of entries) {
-      const node = document.getElementById(entry.id);
-      if (!node) {
-        missed = true;
-        continue;
-      }
-      if (entry.msg.role === 'draft') node.outerHTML = draftCardHtml(entry.msg, entry.sessionId);
-      else if (entry.msg.role === 'draft_sent') node.outerHTML = draftSentLineHtml(entry.msg);
-      else node.outerHTML = draftFailedLineHtml(entry.msg);
+      if (!replaceInEngine(entry)) replaceInDocument(entry);
     }
     entries.length = 0;
     Chat.postProcessRenderedMessages(document);
-    if (missed && typeof globalThis.pollActiveSessionView === 'function') globalThis.pollActiveSessionView();
+  }
+
+  function replaceInEngine(entry) {
+    const container = document.getElementById('messages');
+    const engine = container && Chat.activeTurnEngineFor ? Chat.activeTurnEngineFor(container) : null;
+    if (!engine || entry.msg.id == null) return false;
+    if (!engine.entries.some((candidate) => candidate.msg && candidate.msg.id === entry.msg.id)) return false;
+    engine.replaceMessage(entry.msg);
+    // replaceMessage rebuilds the list for Everything; the For-you view needs
+    // the reproject itself, and a second one is a no-op for Everything.
+    engine.reproject('replace');
+    return true;
+  }
+
+  function replaceInDocument(entry) {
+    const node = document.getElementById(entry.id);
+    if (!node) return;
+    if (entry.msg.role === 'draft') node.outerHTML = draftCardHtml(entry.msg, entry.sessionId);
+    else if (entry.msg.role === 'draft_sent') node.outerHTML = draftSentLineHtml(entry.msg);
+    else node.outerHTML = draftFailedLineHtml(entry.msg);
   }
 
   const pending = Chat.__draftCardsPending || [];

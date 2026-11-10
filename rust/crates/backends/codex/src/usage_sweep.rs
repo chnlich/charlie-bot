@@ -9,14 +9,14 @@ use std::sync::LazyLock;
 
 use charliebot_core::timefmt;
 use charliebot_registry::usage::{
-  FreelistResult, SWEEP_DIR_SCAN_FAILED_EVENT, SWEEP_FILE_STAT_FAILED_EVENT, SourceSweep, SweepScope,
+  CODEX_ROLLOUTS_CATEGORY, FreelistResult, SWEEP_DIR_SCAN_FAILED_EVENT, SWEEP_FILE_STAT_FAILED_EVENT, SourceSweep,
+  SweepScope,
 };
 use charliebot_registry::usage_sweep::SweepCounter;
 use regex::Regex;
 
 use super::rollout::{is_rollout_file, rollout_thread_id, walk_files};
 
-const CATEGORY: &str = "codex-rollouts";
 const UNIT: &str = "files";
 
 static SESSION_ID: LazyLock<Regex> = LazyLock::new(|| {
@@ -46,7 +46,10 @@ pub fn sweep(codex_home: &Path, scope: &SweepScope) -> anyhow::Result<SourceSwee
       ),
     }
   }
-  Ok(SourceSweep { categories: vec![counter.category(CATEGORY, UNIT)], freelist: None::<FreelistResult> })
+  Ok(SourceSweep {
+    categories: vec![counter.category(CODEX_ROLLOUTS_CATEGORY, UNIT)],
+    freelist: None::<FreelistResult>,
+  })
 }
 
 /// Applies the sweep rule to one rollout. A scoped run deletes only the named session's own record, and only when it is

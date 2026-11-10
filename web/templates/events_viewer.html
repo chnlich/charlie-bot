@@ -50,6 +50,12 @@
        6.34:1 and 5.71:1 on those backgrounds, above the 4.5:1 floor for 12px text. The type
        badges keep their own colours, with every one of them at or above that floor. */
 
+    /* The type filter's border-slate-700 outline draws rgb(51, 65, 85), 1.72:1 on the slate-900 bar and
+       under the 3:1 boundary floor WCAG 1.4.11 sets for a control. Its slate-800 fill differs from the
+       bar by 1.22:1, so the outline is the only mark of the box. slate-500 draws 3.75:1 on the bar and
+       3.07:1 on the fill, the tone the diff page's fields draw; the blue focus border still wins. */
+    #type-filter:not(:focus) { border-color: #64748b; }
+
     /* A phone cannot fit these two rows at their desktop width. The header gives
        the title a row of its own so a whole session name shows, and keeps the
        icon-only download action and the count on its first row. The divider that

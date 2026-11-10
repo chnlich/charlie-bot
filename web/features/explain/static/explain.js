@@ -30,9 +30,10 @@ const EXPLAIN_STATE_VISUALS = {
 };
 
 function explainStateVisual(state) {
-  const visual = EXPLAIN_STATE_VISUALS[state];
-  if (!visual) throw new Error('unknown explain state: ' + state);
-  return visual;
+  if (!Object.hasOwn(EXPLAIN_STATE_VISUALS, state)) {
+    throw new Error('unknown explain state: ' + state);
+  }
+  return EXPLAIN_STATE_VISUALS[state];
 }
 
 // The persisted truth of this session's explain entries, as the /explain/status

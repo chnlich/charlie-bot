@@ -29,9 +29,11 @@ pub const GUARD_REFUSAL_MARKER: &str = "refusing to overwrite newer transcript";
 pub const PROBE_TAIL_BYTES: u64 = 16 * 1024;
 
 const REJECTED_WITHOUT_RESET: Duration = Duration::hours(1);
-const RESET_BONUS_SCALE: f64 = 0.10;
-const RESET_BONUS_HORIZON: f64 = 24.0 * 3600.0;
-const RESET_BONUS_MIN_HEADROOM: f64 = 0.10;
+/// The shortest hours-to-reset a score divides by, so a login minutes from its weekly reset stays finite.
+const SCORE_HOURS_FLOOR: f64 = 0.5;
+/// The weekly window's hours: it scales a score, and a login without a future weekly reset counts this many hours.
+const SCORE_SCALE_HOURS: f64 = 168.0;
+/// The per-hour headroom band that ties contenders, in units of `SCORE_SCALE_HOURS`: 0.02 × 168 score points.
 const SCORE_TIE: f64 = 0.02;
 const STAGING_SUFFIX: &str = ".staging";
 
@@ -413,18 +415,29 @@ pub fn select(
   let scores = contenders
     .into_iter()
     .map(|(account, remaining)| {
-      let score = remaining + reset_bonus(state, &account.label, model, moment, remaining);
+      let weekly_resets_at =
+        login_reading(state, &account.label, model, Some(moment)).and_then(|reading| reading.weekly_resets_at);
+      let hours_to_reset = match weekly_resets_at {
+        Some(reset) if reset > moment => {
+          let hours = (reset.into_inner() - moment.into_inner()).as_seconds_f64() / 3600.0;
+          hours.max(SCORE_HOURS_FLOOR)
+        }
+        _ => SCORE_SCALE_HOURS,
+      };
+      let score = remaining * SCORE_SCALE_HOURS / hours_to_reset;
       (account, remaining, score)
     })
     .collect::<Vec<_>>();
   let best = scores.iter().map(|(_, _, score)| *score).reduce(f64::max).expect("contenders is non-empty");
   let readings = state.readings.lock().expect("Claude account state is not poisoned");
+  let read_at =
+    |label: &str| readings.event.get(label).map_or(i128::MIN, |reading| reading.at.into_inner().unix_timestamp_nanos());
   Ok(
     scores
       .into_iter()
-      .filter(|(_, _, score)| best - score <= SCORE_TIE)
-      .min_by_key(|(account, _, _)| {
-        readings.event.get(&account.label).map_or(i128::MIN, |reading| reading.at.into_inner().unix_timestamp_nanos())
+      .filter(|(_, _, score)| (best - score) / SCORE_SCALE_HOURS <= SCORE_TIE)
+      .min_by(|(left, left_remaining, _), (right, right_remaining, _)| {
+        right_remaining.total_cmp(left_remaining).then(read_at(&left.label).cmp(&read_at(&right.label)))
       })
       .map(|(account, _, _)| account),
   )
@@ -438,44 +451,6 @@ pub fn cool_destination(
   now: Option<UtcDateTime>,
 ) -> anyhow::Result<Option<claude_config::ClaudeAccount>> {
   select(state, cfg, model, &HashSet::new(), None, now, account_pool, 1.0 - WARNING_UTILIZATION)
-}
-
-fn reset_bonus(
-  state: &ClaudeAccountState,
-  label: &str,
-  model: Option<&str>,
-  moment: UtcDateTime,
-  remaining: f64,
-) -> f64 {
-  if remaining <= RESET_BONUS_MIN_HEADROOM {
-    return 0.0;
-  }
-  let Some(reset) = time_to_reset(state, label, model, moment) else {
-    return 0.0;
-  };
-  let seconds = (reset.into_inner() - moment.into_inner()).as_seconds_f64();
-  if !(0.0..RESET_BONUS_HORIZON).contains(&seconds) {
-    return 0.0;
-  }
-  RESET_BONUS_SCALE * (1.0 - seconds / RESET_BONUS_HORIZON)
-}
-
-fn time_to_reset(
-  state: &ClaudeAccountState,
-  label: &str,
-  model: Option<&str>,
-  now: UtcDateTime,
-) -> Option<UtcDateTime> {
-  let readings = state.readings.lock().expect("Claude account state is not poisoned");
-  let panel = readings.panel.get(label)?;
-  let limiting = live_windows(panel, model, now)
-    .into_iter()
-    .filter_map(|window| window.get(usage::PANEL_UTILIZATION).and_then(Value::as_f64).map(|value| (value, window)))
-    .max_by(|left, right| match left.0.total_cmp(&right.0) {
-      std::cmp::Ordering::Equal => std::cmp::Ordering::Greater,
-      ordering => ordering,
-    })?;
-  limiting.1.get(usage::PANEL_RESETS_AT).and_then(Value::as_str).and_then(|value| UtcDateTime::parse(value).ok())
 }
 
 /// One login's per-window reading: its utilization, the limiting window's reset, its weekly window's reset, and every
@@ -1204,5 +1179,124 @@ mod tests {
     assert!(error.starts_with(GUARD_REFUSAL_MARKER));
     assert!(error.contains("mtime 2023-11-14T22:13:20+00:00"));
     assert_eq!(fs::read_to_string(destination_file).unwrap(), "newer transcript");
+  }
+
+  /// A pool of freshly credentialed logins in the given order, with its config and an empty account state.
+  fn pool_fixture(labels: &[&str]) -> (tempfile::TempDir, CharlieBotConfig, ClaudeAccountState) {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let dirs = labels.iter().map(|label| (*label, root.path().join(label))).collect::<Vec<_>>();
+    for (_, dir) in &dirs {
+      add_credentials(dir);
+    }
+    let entries = dirs.iter().map(|(label, dir)| (*label, dir.as_path())).collect::<Vec<_>>();
+    let cfg = config(&home, &entries);
+    (root, cfg, ClaudeAccountState::new())
+  }
+
+  fn select_now(state: &ClaudeAccountState, cfg: &CharlieBotConfig, now: UtcDateTime) -> String {
+    select(state, cfg, None, &HashSet::new(), None, Some(now), None, 0.0).unwrap().unwrap().label
+  }
+
+  #[test]
+  fn less_headroom_with_reset_hours_away_beats_more_headroom_with_far_reset() {
+    let (_root, cfg, state) = pool_fixture(&["a", "b"]);
+    let now = timestamp("2025-01-01T12:00:00Z");
+    // "a": 30% headroom, reset in 2 hours -> 0.30 * 168 / 2 = 25.2.
+    observe_usage_panel(&state, "a", &panel_window(70.0, WEEKLY_WINDOW_MINUTES, "2025-01-01T14:00:00Z"));
+    // "b": 70% headroom, reset in 100 hours -> 0.70 * 168 / 100 = 1.176.
+    observe_usage_panel(&state, "b", &panel_window(30.0, WEEKLY_WINDOW_MINUTES, "2025-01-05T16:00:00Z"));
+    assert_eq!(select_now(&state, &cfg, now), "a");
+  }
+
+  #[test]
+  fn reset_minutes_away_scores_on_the_half_hour_floor() {
+    let (_root, cfg, state) = pool_fixture(&["a", "b"]);
+    let now = timestamp("2025-01-01T12:00:00Z");
+    // "a": 15% headroom, reset in 6 minutes -> floored to 0.5 h -> 0.15 * 168 / 0.5 = 50.4.
+    // Without the floor its 0.1 h gives 252 and it wins instead.
+    observe_usage_panel(&state, "a", &panel_window(85.0, WEEKLY_WINDOW_MINUTES, "2025-01-01T12:06:00Z"));
+    // "b": 70% headroom, reset in 2 hours -> 0.70 * 168 / 2 = 58.8.
+    observe_usage_panel(&state, "b", &panel_window(30.0, WEEKLY_WINDOW_MINUTES, "2025-01-01T14:00:00Z"));
+    assert_eq!(select_now(&state, &cfg, now), "b");
+  }
+
+  #[test]
+  fn a_login_without_a_weekly_reading_counts_168_hours() {
+    let now = timestamp("2025-01-01T12:00:00Z");
+    {
+      // "x" has no weekly reading, so its 30% headroom scores 0.30 over 168 h; "y" has 50% headroom at 10 h
+      // and scores 8.4. Without the 168 h value "x" would score at the 0.5 h floor (100.8) and win.
+      let (_root, cfg, state) = pool_fixture(&["x", "y"]);
+      observe_rate_limit(&state, "x", &window(0.70), Some(now));
+      observe_usage_panel(&state, "y", &panel_window(50.0, WEEKLY_WINDOW_MINUTES, "2025-01-01T22:00:00Z"));
+      assert_eq!(select_now(&state, &cfg, now), "y");
+    }
+    {
+      // "x" (30% over 168 h) and "z" (20% over 168 h) tie; "x" carries the most headroom.
+      let (_root, cfg, state) = pool_fixture(&["x", "z"]);
+      observe_rate_limit(&state, "x", &window(0.70), Some(now));
+      observe_usage_panel(&state, "z", &panel_window(80.0, WEEKLY_WINDOW_MINUTES, "2025-01-08T12:00:00Z"));
+      assert_eq!(select_now(&state, &cfg, now), "x");
+    }
+  }
+
+  #[test]
+  fn a_weekly_reset_that_already_passed_counts_as_a_fresh_week_not_the_floor() {
+    let (_root, cfg, state) = pool_fixture(&["a", "b"]);
+    let now = timestamp("2025-01-01T12:00:00Z");
+    // "a": reset passed an hour ago -> counts 168 h, not the 0.5 h floor. 0.50 * 168 / 168 = 0.50.
+    observe_usage_panel(&state, "a", &panel_window(50.0, WEEKLY_WINDOW_MINUTES, "2025-01-01T11:00:00Z"));
+    // "b": 60% headroom, reset in 100 hours -> 0.60 * 168 / 100 = 1.008, so "b" wins. On the floor "a" would
+    // score 168 and win.
+    observe_usage_panel(&state, "b", &panel_window(40.0, WEEKLY_WINDOW_MINUTES, "2025-01-05T16:00:00Z"));
+    assert_eq!(select_now(&state, &cfg, now), "b");
+  }
+
+  #[test]
+  fn the_most_headroom_wins_the_tie_even_when_read_more_recently() {
+    let (_root, cfg, state) = pool_fixture(&["a", "b"]);
+    let now = timestamp("2025-01-01T12:00:00Z");
+    let weekly = "2025-01-02T12:00:00Z"; // 24 hours away
+    // "a": 50% headroom -> 0.50 * 168 / 24 = 3.50. "b": 51% headroom -> 3.57.
+    observe_usage_panel(&state, "a", &panel_window(50.0, WEEKLY_WINDOW_MINUTES, weekly));
+    observe_usage_panel(&state, "b", &panel_window(49.0, WEEKLY_WINDOW_MINUTES, weekly));
+    // The scores differ by 0.01 per hour, inside the 0.02 band; "b" was read more recently and still wins.
+    observe_rate_limit(&state, "a", &window(0.50), Some(timestamp("2025-01-01T10:00:00Z")));
+    observe_rate_limit(&state, "b", &window(0.49), Some(timestamp("2025-01-01T11:00:00Z")));
+    assert_eq!(select_now(&state, &cfg, now), "b");
+  }
+
+  #[test]
+  fn equal_headroom_in_the_tie_band_falls_back_to_the_least_recently_read_login() {
+    let (_root, cfg, state) = pool_fixture(&["a", "b"]);
+    let now = timestamp("2025-01-01T12:00:00Z");
+    let weekly = "2025-01-02T12:00:00Z";
+    observe_usage_panel(&state, "a", &panel_window(50.0, WEEKLY_WINDOW_MINUTES, weekly));
+    observe_usage_panel(&state, "b", &panel_window(50.0, WEEKLY_WINDOW_MINUTES, weekly));
+    observe_rate_limit(&state, "a", &window(0.50), Some(timestamp("2025-01-01T10:00:00Z")));
+    observe_rate_limit(&state, "b", &window(0.50), Some(timestamp("2025-01-01T11:00:00Z")));
+    assert_eq!(select_now(&state, &cfg, now), "a");
+  }
+
+  #[test]
+  fn the_tie_band_separates_or_joins_logins_by_their_hourly_headroom() {
+    let now = timestamp("2025-01-01T12:00:00Z");
+    {
+      // "a": 30% at 10 h -> 0.030/h. "b": 40% at 50 h -> 0.008/h. 0.022 apart, outside the band, so "a" wins.
+      let (_root, cfg, state) = pool_fixture(&["a", "b"]);
+      observe_usage_panel(&state, "a", &panel_window(70.0, WEEKLY_WINDOW_MINUTES, "2025-01-01T22:00:00Z"));
+      observe_usage_panel(&state, "b", &panel_window(60.0, WEEKLY_WINDOW_MINUTES, "2025-01-03T14:00:00Z"));
+      assert_eq!(select_now(&state, &cfg, now), "a");
+    }
+    {
+      // "a": 30% at 10 h -> 0.030/h. "b": 40% at 25 h -> 0.016/h. 0.014 apart, inside the band, so the most
+      // headroom ("b") wins.
+      let (_root, cfg, state) = pool_fixture(&["a", "b"]);
+      observe_usage_panel(&state, "a", &panel_window(70.0, WEEKLY_WINDOW_MINUTES, "2025-01-01T22:00:00Z"));
+      observe_usage_panel(&state, "b", &panel_window(60.0, WEEKLY_WINDOW_MINUTES, "2025-01-02T13:00:00Z"));
+      assert_eq!(select_now(&state, &cfg, now), "b");
+    }
   }
 }

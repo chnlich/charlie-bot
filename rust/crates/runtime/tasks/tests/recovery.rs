@@ -49,6 +49,11 @@ use recovery_support::{
 use serde_json::{Map, Value, json};
 use tower::ServiceExt;
 
+/// The bound every wait in this file uses. The integration runner shares its CPUs with the build and the other
+/// selected tests, so a state that takes milliseconds locally can take seconds there; a wait reaches this bound only
+/// when the state never arrives, and a wait that reaches it names the state it awaited.
+const TEST_DEADLINE: Duration = Duration::from_secs(120);
+
 /// The stop request a node that closed before its queued run settles it with (`closed_task_stop_request_id`).
 fn closed_task_stop(run_id: &str) -> String {
   format!("closed-task:{run_id}")
@@ -667,9 +672,9 @@ fn server_runtime() -> anyhow::Result<tokio::runtime::Runtime> {
 /// under load, and a launch released first runs on to its spawn, which loses the cut.
 fn release_after_let_go(hold: &'static Hold, adapter: TaskExecutionAdapter) -> JoinHandle<()> {
   std::thread::spawn(move || {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + TEST_DEADLINE;
     while !adapter.launches_let_go_for_test() {
-      assert!(Instant::now() < deadline, "the let-go did not begin within thirty seconds");
+      assert!(Instant::now() < deadline, "the let-go did not begin before the test deadline");
       std::thread::sleep(Duration::from_millis(1));
     }
     hold.release();
@@ -720,9 +725,9 @@ fn stop_server(runtime: tokio::runtime::Runtime, stack: &Stack, hold: &'static H
 /// park waiting for the runtime's shared driver, so a `tokio::time::sleep` in the block-on future never wakes. The
 /// poll here needs no timer, and the launch task runs on a worker, so blocking this thread does not stop it.
 fn wait_entered(hold: &'static Hold) -> anyhow::Result<()> {
-  let deadline = Instant::now() + Duration::from_secs(10);
+  let deadline = Instant::now() + TEST_DEADLINE;
   while !hold.entered() {
-    anyhow::ensure!(Instant::now() < deadline, "the hold was not entered within ten seconds");
+    anyhow::ensure!(Instant::now() < deadline, "the hold was not entered before the test deadline");
     std::thread::sleep(Duration::from_millis(20));
   }
   Ok(())
@@ -1132,7 +1137,7 @@ async fn run_ending_entry(
 
 /// Wait for the re-attached process to end, and fail when the end handling leaves it running.
 fn wait_for_child(child: &mut std::process::Child) -> anyhow::Result<()> {
-  let deadline = Instant::now() + Duration::from_secs(10);
+  let deadline = Instant::now() + TEST_DEADLINE;
   loop {
     if child.try_wait()?.is_some() {
       return Ok(());
@@ -1451,7 +1456,7 @@ async fn wait_for_run(
   session_id: &str,
   run_id: &str,
 ) -> anyhow::Result<RunOutcomeKind> {
-  let deadline = std::time::Instant::now() + Duration::from_secs(10);
+  let deadline = std::time::Instant::now() + TEST_DEADLINE;
   let mut tracked = false;
   loop {
     let run = stack.store().read_run_sync(session_id, run_id)?.context("run record exists while waiting")?;
@@ -1462,7 +1467,7 @@ async fn wait_for_run(
     if let Some(outcome) = run_records::terminal_outcome(&stack.run_events(session_id)?, run_id)? {
       return Ok(outcome);
     }
-    anyhow::ensure!(std::time::Instant::now() < deadline, "run {run_id} did not finish within ten seconds");
+    anyhow::ensure!(std::time::Instant::now() < deadline, "run {run_id} did not finish before the test deadline");
     tokio::time::sleep(Duration::from_millis(20)).await;
   }
 }
@@ -2227,7 +2232,7 @@ fn stop_requests(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Resul
 /// Wait until every run of the manager has a terminal fact: the turns that the child reports woke have ended, so the
 /// test's stack drops with no process of its own in flight.
 async fn settle_manager(stack: &Stack, manager_id: &str) -> anyhow::Result<()> {
-  let deadline = std::time::Instant::now() + Duration::from_secs(10);
+  let deadline = std::time::Instant::now() + TEST_DEADLINE;
   loop {
     let events = stack.run_events(manager_id)?;
     let mut open = false;
@@ -2582,7 +2587,7 @@ async fn startup_closes_a_loop_whose_stop_requested_iteration_ended() -> anyhow:
 
 /// Wait until a child process exits and reap it. The stop's signal lands during the boot pass, so the exit follows.
 async fn wait_for_exit(child: &mut std::process::Child) -> anyhow::Result<()> {
-  let deadline = std::time::Instant::now() + Duration::from_secs(10);
+  let deadline = std::time::Instant::now() + TEST_DEADLINE;
   while child.try_wait()?.is_none() {
     anyhow::ensure!(std::time::Instant::now() < deadline, "the stopped process did not exit");
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -2748,11 +2753,11 @@ fn enospc_text() -> String {
   std::io::Error::from_raw_os_error(libc::ENOSPC).to_string()
 }
 
-/// Poll until `condition` holds, failing after ten seconds.
+/// Poll until `condition` holds, failing at the file's deadline.
 async fn settle_until(mut condition: impl FnMut() -> anyhow::Result<bool>) -> anyhow::Result<()> {
-  let deadline = std::time::Instant::now() + Duration::from_secs(10);
+  let deadline = std::time::Instant::now() + TEST_DEADLINE;
   while !condition()? {
-    anyhow::ensure!(std::time::Instant::now() < deadline, "the condition did not hold within ten seconds");
+    anyhow::ensure!(std::time::Instant::now() < deadline, "the condition did not hold before the test deadline");
     tokio::time::sleep(Duration::from_millis(20)).await;
   }
   Ok(())
@@ -2966,7 +2971,7 @@ fn a_resumed_manager_turn_nudges_the_message_no_reply_answered() -> anyhow::Resu
     // The agent exits after its result, as a real one does.
     std::fs::write(&release_file, "")?;
 
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + TEST_DEADLINE;
     let (done, nudge) = loop {
       let events = next.store().load_chat_events_sync(&manager_id)?;
       let done = events

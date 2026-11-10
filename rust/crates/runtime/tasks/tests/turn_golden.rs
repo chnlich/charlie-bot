@@ -51,6 +51,10 @@ use tokio::sync::oneshot;
 use tower::ServiceExt;
 
 const CASE_COUNT: usize = 12;
+/// The bound every wait in this file uses. The integration runner shares its CPUs with the build and the other
+/// selected tests, so a state that takes milliseconds locally can take seconds there; a wait reaches this bound only
+/// when the state never arrives, and a wait that reaches it names the state it awaited.
+const TEST_DEADLINE: Duration = Duration::from_secs(120);
 const GOLDEN_FIXTURE: &str = include_str!("fixtures/turn_golden.json");
 const FAKE_DEVIN: &str = include_str!("../../../backends/devin/tests/fixtures/fake_devin.sh");
 const DEVIN_EXPORT: &str = include_str!("../../../backends/devin/tests/fixtures/export.json");
@@ -991,7 +995,7 @@ async fn dispatcher_launches_manager_turns_with_registered_identity_and_serializ
     [first_input["id"].as_str().context("first input has no id")?.to_string()]
   );
 
-  tokio::time::timeout(Duration::from_secs(5), async {
+  tokio::time::timeout(TEST_DEADLINE, async {
     while !first_started.exists() {
       tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -1015,7 +1019,7 @@ async fn dispatcher_launches_manager_turns_with_registered_identity_and_serializ
   assert_eq!(waiting_decision["launch"], false);
   std::fs::write(&release_first, b"continue")?;
 
-  tokio::time::timeout(Duration::from_secs(8), async {
+  tokio::time::timeout(TEST_DEADLINE, async {
     loop {
       let facts = features.store.load_all_facts(&meta.id)?;
       let finished = facts
@@ -1109,7 +1113,7 @@ async fn cancel_gated_manager_runs_through_route(chat_cancel: bool) -> anyhow::R
     assert_eq!(decision["launch"], true, "iteration {iteration} did not launch");
     let run_id = decision["run_id"].as_str().context("manager dispatch did not return its run id")?.to_string();
     let started = control_dir.join(format!("started-{iteration}"));
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(TEST_DEADLINE, async {
       while !started.exists() {
         tokio::time::sleep(Duration::from_millis(10)).await;
       }
@@ -1147,7 +1151,7 @@ async fn cancel_gated_manager_runs_through_route(chat_cancel: bool) -> anyhow::R
       assert_eq!(serde_json::from_slice::<Value>(&body)?["stop_requested"], true);
     }
 
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(TEST_DEADLINE, async {
       loop {
         let facts = features.store.load_all_facts(SESSION_ID)?;
         // The two writes are not ordered. The master queue persists MASTER_DONE when the CC round ends, and the stop
@@ -1170,7 +1174,7 @@ async fn cancel_gated_manager_runs_through_route(chat_cancel: bool) -> anyhow::R
   }
 
   drop(guard);
-  tokio::time::timeout(Duration::from_secs(10), async {
+  tokio::time::timeout(TEST_DEADLINE, async {
     loop {
       if !has_process_for_home_and_session(&home, SESSION_ID)? {
         break anyhow::Ok(());
@@ -1528,9 +1532,9 @@ async fn queue_serializes_enqueues_and_reports_the_session_busy() -> anyhow::Res
   Ok(())
 }
 
-/// Wait until the master queue reports the session busy, or fail the test after two seconds.
+/// Wait until the master queue reports the session busy, or fail at the file's deadline.
 async fn wait_until_busy(features: &Arc<charliebot_registry::FeatureContext>, session_id: &str) -> anyhow::Result<()> {
-  tokio::time::timeout(std::time::Duration::from_secs(2), async {
+  tokio::time::timeout(TEST_DEADLINE, async {
     loop {
       if master_queue::session_is_busy(features, session_id)? {
         break anyhow::Ok(());
@@ -1538,7 +1542,8 @@ async fn wait_until_busy(features: &Arc<charliebot_registry::FeatureContext>, se
       tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
   })
-  .await?
+  .await
+  .context("the master queue never reported the session busy")?
 }
 
 #[tokio::test]
@@ -1604,10 +1609,8 @@ async fn translation_failure_reports_the_turn_and_keeps_the_session_consumer_ali
   // The second enqueue joins the busy interval the first opened; there is no queue-depth reader to wait on.
   tokio::time::sleep(std::time::Duration::from_millis(50)).await;
   std::fs::write(gate, b"release")?;
-  tokio::time::timeout(std::time::Duration::from_secs(5), first)
-    .await
-    .context("translator failure left the first turn blocked")???;
-  tokio::time::timeout(std::time::Duration::from_secs(5), second)
+  tokio::time::timeout(TEST_DEADLINE, first).await.context("translator failure left the first turn blocked")???;
+  tokio::time::timeout(TEST_DEADLINE, second)
     .await
     .context("the session consumer did not process the queued turn")???;
   queue.shutdown().await?;
@@ -1757,7 +1760,7 @@ async fn after_round_names_default_session_and_reuses_group_case() -> anyhow::Re
     queue.session_callbacks(Arc::clone(&features), Arc::new(|_session_id| Ok((false, "".to_string()))));
   run_turn(Arc::clone(&queue), Arc::clone(&cfg), meta.clone(), session_callbacks, "naming-input".to_string(), option)
     .await?;
-  tokio::time::timeout(std::time::Duration::from_secs(2), async {
+  tokio::time::timeout(TEST_DEADLINE, async {
     loop {
       let current = features.store.get_session(&meta.id).await?.context("naming session disappeared")?;
       if current.name == "7: Synthetic planning" && current.group.as_deref() == Some("Engineering") {
@@ -1766,7 +1769,8 @@ async fn after_round_names_default_session_and_reuses_group_case() -> anyhow::Re
       tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
   })
-  .await??;
+  .await
+  .context("the session naming did not land before the test deadline")??;
   queue.shutdown().await?;
   Ok(())
 }
@@ -1867,7 +1871,7 @@ async fn shutdown_detaches_covered_turns_and_terminates_uncovered_turns() -> any
           .await
       }
     });
-    tokio::time::timeout(std::time::Duration::from_secs(30), spawned_receiver)
+    tokio::time::timeout(TEST_DEADLINE, spawned_receiver)
       .await
       .context("scripted manager process did not spawn")?
       .context("manager process spawn signal was dropped")?;
@@ -1981,7 +1985,7 @@ async fn assert_task_run_shutdown_shape(backend_type: &str, expected_unread: boo
   let task = tokio::spawn(async move { adapter.execute_run(&task_session, run_id).await });
   // Record the group as soon as the launch callback persists the pid. A failure to reach the script's gate must still
   // leave the drop guard able to kill the process.
-  let pid = tokio::time::timeout(Duration::from_secs(5), async {
+  let pid = tokio::time::timeout(TEST_DEADLINE, async {
     loop {
       if let Some(pid) = features.store.read_run_sync(&meta.id, run_id)?.and_then(|run| run.pid) {
         break anyhow::Ok(pid);
@@ -1992,7 +1996,7 @@ async fn assert_task_run_shutdown_shape(backend_type: &str, expected_unread: boo
   .await
   .context("task manager agent's pid was not persisted")??;
   groups.track(pid);
-  let started_result = tokio::time::timeout(Duration::from_secs(5), async {
+  let started_result = tokio::time::timeout(TEST_DEADLINE, async {
     while !started.exists() {
       tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -2003,7 +2007,7 @@ async fn assert_task_run_shutdown_shape(backend_type: &str, expected_unread: boo
     let _ = task.await;
     anyhow::bail!("task manager agent did not reach its shutdown gate");
   }
-  tokio::time::timeout(Duration::from_secs(5), async {
+  tokio::time::timeout(TEST_DEADLINE, async {
     loop {
       if features.store.load_chat_events_sync(&meta.id)?.iter().any(|event| {
         event.get("type").and_then(charliebot_store::compact::CompactValue::as_str) == Some(event_types::ASSISTANT)
@@ -2030,7 +2034,7 @@ async fn assert_task_run_shutdown_shape(backend_type: &str, expected_unread: boo
   let has_unread = features.store.load_meta(&meta.id).await?.context("shutdown task metadata disappeared")?.has_unread;
   std::fs::write(&release, "continue")?;
   if alive {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(TEST_DEADLINE, async {
       while !exited.exists() {
         tokio::time::sleep(Duration::from_millis(10)).await;
       }

@@ -25,6 +25,11 @@ const QUOTA_ERROR: &str = "API Error: 402 Insufficient Balance";
 /// The id of the priority pool that the Auto sessions of these tests run on.
 const AUTO_POOL_ID: &str = "auto";
 
+/// The bound every wait in this file uses. The integration runner shares its CPUs with the build and the other
+/// selected tests, so a state that takes milliseconds locally can take seconds there; a wait reaches this bound only
+/// when the state never arrives, and a wait that reaches it names the state it awaited.
+const TEST_DEADLINE: Duration = Duration::from_secs(120);
+
 /// A scripted option billed as a subscription, the billing the Auto pool's members have.
 fn subscription(id: &str, script: &str) -> BackendOption {
   BackendOption { billing: Some(PoolBilling::Subscription), ..script_option(id, script) }
@@ -120,7 +125,7 @@ fn quota_failovers(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<Value>
 
 /// Wait until every registered run has a terminal fact.
 async fn settle(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<RunRecord>> {
-  let deadline = Instant::now() + Duration::from_secs(30);
+  let deadline = Instant::now() + TEST_DEADLINE;
   loop {
     let events = stack.run_events(session_id)?;
     let runs = stack.run_records(session_id)?;
@@ -144,7 +149,7 @@ async fn settle(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<RunRecord
 /// The launch text is the last fact the caller asserts, so this wait ends when the retry starts rather than when
 /// it finishes.
 async fn wait_for_retry_launch(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<RunRecord>> {
-  let deadline = Instant::now() + Duration::from_secs(30);
+  let deadline = Instant::now() + TEST_DEADLINE;
   loop {
     let runs = stack.run_records(session_id)?;
     if let Some(retry) = runs.iter().find(|run| run.retry_of_run_id.is_some()) {
@@ -495,7 +500,7 @@ async fn a_refused_launch_with_quota_exhausted_switches_the_turn() -> anyhow::Re
 
 /// Wait for the session's first run to be registered.
 async fn wait_for_run(stack: &Stack, session_id: &str) -> anyhow::Result<RunRecord> {
-  let deadline = Instant::now() + Duration::from_secs(30);
+  let deadline = Instant::now() + TEST_DEADLINE;
   loop {
     if let Some(run) = stack.run_records(session_id)?.into_iter().next() {
       return Ok(run);

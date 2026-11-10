@@ -44,6 +44,11 @@ use time::{Duration as TimeDuration, OffsetDateTime};
 /// The id of the priority pool that the Auto sessions of the failover tests run on.
 const AUTO_POOL_ID: &str = "auto";
 
+/// The bound every wait in this file uses. The integration runner shares its CPUs with the build and the other
+/// selected tests, so a state that takes milliseconds locally can take seconds there; a wait reaches this bound only
+/// when the state never arrives, and a wait that reaches it names the state it awaited.
+const TEST_DEADLINE: Duration = Duration::from_secs(120);
+
 /// The members of the pool `pool_id`, in config order.
 fn member_ids<'a>(cfg: &'a charliebot_core::config::CharlieBotConfig, pool_id: &str) -> Vec<&'a str> {
   cfg
@@ -1294,7 +1299,7 @@ async fn a_routed_pool_work_run_reviews_on_another_member() -> anyhow::Result<()
 
 /// The review run that work run `work_run_id` registers, once it registers.
 async fn wait_for_review_of(stack: &Stack, session_id: &str, work_run_id: &str) -> anyhow::Result<RunRecord> {
-  let deadline = std::time::Instant::now() + Duration::from_secs(10);
+  let deadline = std::time::Instant::now() + TEST_DEADLINE;
   loop {
     let review = stack
       .run_records(session_id)?

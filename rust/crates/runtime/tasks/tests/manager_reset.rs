@@ -15,6 +15,11 @@ use serde_json::json;
 const STATUS_GOAL: &str = "ship the synthetic release";
 const TASK_GOAL: &str = "Deliver the synthetic release";
 
+/// The bound every wait in this file uses. The integration runner shares its CPUs with the build and the other
+/// selected tests, so a state that takes milliseconds locally can take seconds there; a wait reaches this bound only
+/// when the state never arrives, and a wait that reaches it names the state it awaited.
+const TEST_DEADLINE: Duration = Duration::from_secs(120);
+
 /// A turn contribution that stands in for web_reply: a manager session's status Goal line.
 struct SyntheticStatusGoal;
 
@@ -56,7 +61,7 @@ fn hold_stale_native_anchor(stack: &Stack, session_id: &str) -> anyhow::Result<(
 
 /// The id and launch text of the turn's manager run, once the run has written it.
 async fn wait_for_launch_text(stack: &Stack, session_id: &str) -> anyhow::Result<(String, String)> {
-  let deadline = Instant::now() + Duration::from_secs(30);
+  let deadline = Instant::now() + TEST_DEADLINE;
   loop {
     for run in stack.run_records(session_id)? {
       let path = stack.store().run_dir(session_id, &run.id).join(LAUNCH_TEXT_FILENAME);

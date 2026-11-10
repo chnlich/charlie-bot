@@ -28,6 +28,11 @@ use serde_json::{Value, json};
 
 const ACCESS_KEY: &str = "synthetic-access-key";
 
+/// The bound every wait in this file uses. The integration runner shares its CPUs with the build and the other
+/// selected tests, so a state that takes milliseconds locally can take seconds there; a wait reaches this bound only
+/// when the state never arrives, and a wait that reaches it names the state it awaited.
+const TEST_DEADLINE: Duration = Duration::from_secs(120);
+
 /// A pool whose availability owner reads the empty state of a fresh home and persists to it.
 fn test_pool() -> BackendPool {
   let home = tempfile::tempdir().unwrap();
@@ -120,7 +125,7 @@ async fn wait_for_new_run(
   existing_ids: &HashSet<String>,
   kind: RunKind,
 ) -> anyhow::Result<RunRecord> {
-  let deadline = Instant::now() + Duration::from_secs(10);
+  let deadline = Instant::now() + TEST_DEADLINE;
   loop {
     if let Some(run) =
       stack.run_records(session_id)?.into_iter().find(|run| run.kind == kind && !existing_ids.contains(&run.id))
@@ -174,7 +179,7 @@ async fn wait_for_run(
   session_id: &str,
   run_id: &str,
 ) -> anyhow::Result<RunOutcomeKind> {
-  let deadline = Instant::now() + Duration::from_secs(30);
+  let deadline = Instant::now() + TEST_DEADLINE;
   let mut tracked = false;
   loop {
     let run = stack.store().read_run_sync(session_id, run_id)?.context("the run record exists")?;
@@ -195,7 +200,7 @@ async fn wait_for_run(
 /// without `started_at` ahead of every launched run.
 async fn wait_for_review(stack: &Stack, session_id: &str, work_run_id: &str) -> anyhow::Result<RunRecord> {
   let first_attempt = control_events::stable_run_id(session_id, &format!("review:{work_run_id}:1"));
-  let deadline = Instant::now() + Duration::from_secs(10);
+  let deadline = Instant::now() + TEST_DEADLINE;
   loop {
     if let Some(run) = stack.store().read_run_sync(session_id, &first_attempt)? {
       return Ok(run);
@@ -206,7 +211,7 @@ async fn wait_for_review(stack: &Stack, session_id: &str, work_run_id: &str) -> 
 }
 
 async fn wait_for_task_state(stack: &Stack, session_id: &str, expected: &str) -> anyhow::Result<()> {
-  let deadline = Instant::now() + Duration::from_secs(10);
+  let deadline = Instant::now() + TEST_DEADLINE;
   loop {
     if stack.store().task_state(session_id)? == expected {
       return Ok(());
@@ -217,10 +222,24 @@ async fn wait_for_task_state(stack: &Stack, session_id: &str, expected: &str) ->
 }
 
 async fn wait_for_worktree_removed(path: &Path) -> anyhow::Result<()> {
-  let deadline = Instant::now() + Duration::from_secs(10);
+  let deadline = Instant::now() + TEST_DEADLINE;
   while path.exists() {
     anyhow::ensure!(Instant::now() < deadline, "delivered task worktree {} was not removed", path.display());
     tokio::time::sleep(Duration::from_millis(20)).await;
+  }
+  Ok(())
+}
+
+/// A scripted agent's gate marker appears when the agent starts; *awaited* names it in the timeout error.
+async fn wait_for_file(path: &Path, awaited: &str) -> anyhow::Result<()> {
+  let deadline = Instant::now() + TEST_DEADLINE;
+  while !path.exists() {
+    anyhow::ensure!(
+      Instant::now() < deadline,
+      "{awaited} did not appear at {} before the test deadline",
+      path.display()
+    );
+    tokio::time::sleep(Duration::from_millis(10)).await;
   }
   Ok(())
 }
@@ -231,7 +250,7 @@ async fn wait_for_run_kind(
   session_id: &str,
   kind: RunKind,
 ) -> anyhow::Result<RunRecord> {
-  let deadline = Instant::now() + Duration::from_secs(10);
+  let deadline = Instant::now() + TEST_DEADLINE;
   loop {
     if let Some(run) = stack.run_records(session_id)?.into_iter().find(|run| run.kind == kind) {
       let _ = wait_for_run(stack, guard, session_id, &run.id).await?;
@@ -270,17 +289,18 @@ fn child_reports(stack: &Stack, parent_id: &str) -> anyhow::Result<Vec<Value>> {
 /// The parent's child reports, polled until *count* arrive: the report dispatches after the run's
 /// terminal fact, so reading it right after `wait_for_run` races under load.
 async fn wait_for_child_reports(stack: &Stack, parent_id: &str, count: usize) -> anyhow::Result<Vec<Value>> {
-  tokio::time::timeout(Duration::from_secs(10), async {
-    loop {
-      let reports = child_reports(stack, parent_id)?;
-      if reports.len() >= count {
-        return Ok(reports);
-      }
-      tokio::time::sleep(Duration::from_millis(10)).await;
+  let deadline = Instant::now() + TEST_DEADLINE;
+  loop {
+    let reports = child_reports(stack, parent_id)?;
+    if reports.len() >= count {
+      return Ok(reports);
     }
-  })
-  .await
-  .map_err(|_| anyhow::anyhow!("timed out waiting for {count} child reports to reach {parent_id}"))?
+    anyhow::ensure!(
+      Instant::now() < deadline,
+      "{count} child reports did not reach {parent_id} before the test deadline"
+    );
+    tokio::time::sleep(Duration::from_millis(10)).await;
+  }
 }
 
 async fn queue_and_launch_work(stack: &Stack, session_id: &str, run_id: &str, task_spec: &str) -> anyhow::Result<()> {
@@ -959,14 +979,7 @@ async fn review_ending_on_a_spent_quota_moves_to_the_next_reviewer() -> anyhow::
   let pool = charliebot_agents::backend_pool::backend_pool(&stack.features)?;
   assert!(pool.availability().out_until("fake2").is_some(), "the reviewer that spent its quota cools");
 
-  let retry = loop {
-    if let Some(review) =
-      stack.run_records(&worker.id)?.into_iter().find(|run| run.kind == RunKind::Review && run.id != first_review.id)
-    {
-      break review;
-    }
-    tokio::time::sleep(Duration::from_millis(20)).await;
-  };
+  let retry = wait_for_new_run(&stack, &worker.id, &HashSet::from([first_review.id.clone()]), RunKind::Review).await?;
   assert_eq!(retry.backend.as_deref(), Some("fake3"));
   assert_eq!(retry.review_of_run_id.as_deref(), Some("run-work"));
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &retry.id).await?, RunOutcomeKind::Success);
@@ -1020,20 +1033,8 @@ async fn failed_review_with_a_queued_retry_reports_nothing_and_stays_open() -> a
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
   let first_review = wait_for_review(&stack, &worker.id, "run-work").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &first_review.id).await?, RunOutcomeKind::Failed);
-  let retry = loop {
-    if let Some(review) =
-      stack.run_records(&worker.id)?.into_iter().find(|run| run.kind == RunKind::Review && run.id != first_review.id)
-    {
-      break review;
-    }
-    tokio::time::sleep(Duration::from_millis(20)).await;
-  };
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  let retry = wait_for_new_run(&stack, &worker.id, &HashSet::from([first_review.id.clone()]), RunKind::Review).await?;
+  wait_for_file(&control.path().join("started"), "the retry review's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, &retry.id)?.and_then(|run| run.pid) {
     guard.track(pid);
   }
@@ -1070,12 +1071,7 @@ async fn input_during_review_pauses_landing_and_continues_review() -> anyhow::Re
   let first_review = wait_for_review(&stack, &worker.id, "run-work").await?;
   assert_eq!(first_review.backend.as_deref(), Some("fake2"));
   assert_eq!(first_review.model.as_deref(), Some("fake2-model"));
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-1").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  wait_for_file(&control.path().join("started-1"), "the first gated run's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, &first_review.id)?.and_then(|run| run.pid) {
     guard.track(pid);
   }
@@ -1100,20 +1096,9 @@ async fn input_during_review_pauses_landing_and_continues_review() -> anyhow::Re
   assert_eq!(stack.store().task_state(&worker.id)?, "open");
   assert!(child_reports(&stack, &manager.id)?.is_empty());
 
-  let second_review = loop {
-    if let Some(run) =
-      stack.run_records(&worker.id)?.into_iter().find(|run| run.kind == RunKind::Review && run.id != first_review.id)
-    {
-      break run;
-    }
-    tokio::time::sleep(Duration::from_millis(20)).await;
-  };
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-2").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  let second_review =
+    wait_for_new_run(&stack, &worker.id, &HashSet::from([first_review.id.clone()]), RunKind::Review).await?;
+  wait_for_file(&control.path().join("started-2"), "the gated continuation run's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, &second_review.id)?.and_then(|run| run.pid) {
     guard.track(pid);
   }
@@ -1126,7 +1111,7 @@ async fn input_during_review_pauses_landing_and_continues_review() -> anyhow::Re
   stack.dispatch.set_executor(None);
   fs::write(control.path().join("release-2"), "release")?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &second_review.id).await?, RunOutcomeKind::Success);
-  let deadline = Instant::now() + Duration::from_secs(15);
+  let deadline = Instant::now() + TEST_DEADLINE;
   loop {
     let reports = child_reports(&stack, &manager.id)?;
     if reports.iter().any(|report| report["summary"].as_str().unwrap_or_default().contains("review"))
@@ -1163,12 +1148,7 @@ async fn input_during_work_pauses_and_continues_the_node_backend_conversation() 
     stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_task("add marker", None))).await?;
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-work", "add marker").await?;
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-1").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  wait_for_file(&control.path().join("started-1"), "the first gated run's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, "run-work")?.and_then(|run| run.pid) {
     guard.track(pid);
   }
@@ -1180,12 +1160,7 @@ async fn input_during_work_pauses_and_continues_the_node_backend_conversation() 
 
   let continuation =
     wait_for_new_run(&stack, &worker.id, &HashSet::from(["run-work".to_string()]), RunKind::Work).await?;
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-2").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  wait_for_file(&control.path().join("started-2"), "the gated continuation run's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, &continuation.id)?.and_then(|run| run.pid) {
     guard.track(pid);
   }
@@ -1226,12 +1201,7 @@ async fn changed_prompt_hash_at_work_continuation_starts_a_fresh_context() -> an
     .await?;
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-work", "add marker").await?;
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-1").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  wait_for_file(&control.path().join("started-1"), "the first gated run's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, "run-work")?.and_then(|run| run.pid) {
     guard.track(pid);
   }
@@ -1250,12 +1220,7 @@ async fn changed_prompt_hash_at_work_continuation_starts_a_fresh_context() -> an
 
   let continuation =
     wait_for_new_run(&stack, &worker.id, &HashSet::from(["run-work".to_string()]), RunKind::Work).await?;
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-2").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  wait_for_file(&control.path().join("started-2"), "the gated continuation run's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, &continuation.id)?.and_then(|run| run.pid) {
     guard.track(pid);
   }
@@ -1303,12 +1268,7 @@ async fn work_continuation_without_native_id_starts_a_fresh_context() -> anyhow:
     stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_task("add marker", None))).await?;
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-work", "add marker").await?;
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-1").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  wait_for_file(&control.path().join("started-1"), "the first gated run's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, "run-work")?.and_then(|run| run.pid) {
     guard.track(pid);
   }
@@ -1320,12 +1280,7 @@ async fn work_continuation_without_native_id_starts_a_fresh_context() -> anyhow:
 
   let continuation =
     wait_for_new_run(&stack, &worker.id, &HashSet::from(["run-work".to_string()]), RunKind::Work).await?;
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-2").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  wait_for_file(&control.path().join("started-2"), "the gated continuation run's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, &continuation.id)?.and_then(|run| run.pid) {
     guard.track(pid);
   }
@@ -1360,12 +1315,7 @@ async fn implement_work_with_pending_trigger_pauses_then_continues_and_delivers(
   fs::write(pending_trigger_path(&stack, &worker.id), r#"{"status":"pending","fire_at":"2030-01-01T00:00:00Z"}"#)?;
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-work", "add marker").await?;
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-1").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  wait_for_file(&control.path().join("started-1"), "the first gated run's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, "run-work")?.and_then(|run| run.pid) {
     guard.track(pid);
   }
@@ -1393,12 +1343,7 @@ async fn implement_work_with_pending_trigger_pauses_then_continues_and_delivers(
   stack.dispatch.dispatch_pending(&worker.id).await?;
   let continuation =
     wait_for_new_run(&stack, &worker.id, &HashSet::from(["run-work".to_string()]), RunKind::Work).await?;
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-2").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  wait_for_file(&control.path().join("started-2"), "the gated continuation run's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, &continuation.id)?.and_then(|run| run.pid) {
     guard.track(pid);
   }
@@ -1457,12 +1402,7 @@ async fn quick_edit_with_pending_trigger_defers_completion_until_continuation() 
   fs::write(pending_trigger_path(&stack, &worker.id), r#"{"status":"pending","fire_at":"2030-01-01T00:00:00Z"}"#)?;
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-edit", "edit the marker").await?;
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-1").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  wait_for_file(&control.path().join("started-1"), "the first gated run's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, "run-edit")?.and_then(|run| run.pid) {
     guard.track(pid);
   }
@@ -1492,12 +1432,7 @@ async fn quick_edit_with_pending_trigger_defers_completion_until_continuation() 
   stack.dispatch.dispatch_pending(&worker.id).await?;
   let continuation =
     wait_for_new_run(&stack, &worker.id, &HashSet::from(["run-edit".to_string()]), RunKind::Work).await?;
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-2").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  wait_for_file(&control.path().join("started-2"), "the gated continuation run's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, &continuation.id)?.and_then(|run| run.pid) {
     guard.track(pid);
   }
@@ -1773,12 +1708,7 @@ async fn review_with_pending_trigger_pauses_merge_and_continues_the_review() -> 
   queue_and_launch_work(&stack, &worker.id, "run-work", "add marker").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
   let first_review = wait_for_review(&stack, &worker.id, "run-work").await?;
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-1").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  wait_for_file(&control.path().join("started-1"), "the first gated run's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, &first_review.id)?.and_then(|run| run.pid) {
     guard.track(pid);
   }
@@ -1819,12 +1749,7 @@ async fn review_with_pending_trigger_pauses_merge_and_continues_the_review() -> 
   assert_eq!(second_review.backend.as_deref(), Some("fake2"));
   assert_eq!(second_review.model.as_deref(), Some("fake2-model"));
   assert_eq!(second_review.input_event_ids, [trigger["id"].as_str().context("fired trigger has an id")?]);
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-2").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  wait_for_file(&control.path().join("started-2"), "the gated continuation run's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, &second_review.id)?.and_then(|run| run.pid) {
     guard.track(pid);
   }
@@ -1864,12 +1789,7 @@ async fn failed_review_continuation_reports_failure_to_parent() -> anyhow::Resul
   git(&worktree, &["add", "-A"])?;
   git(&worktree, &["commit", "-m", "the work"])?;
   let first_review = wait_for_review(&stack, &worker.id, "run-work").await?;
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-1").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  wait_for_file(&control.path().join("started-1"), "the first gated run's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, &first_review.id)?.and_then(|run| run.pid) {
     guard.track(pid);
   }
@@ -1928,12 +1848,7 @@ async fn review_continuation_fails_when_its_backend_is_removed() -> anyhow::Resu
   queue_and_launch_work(&stack, &worker.id, "run-work", "write a report").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
   let first_review = wait_for_review(&stack, &worker.id, "run-work").await?;
-  tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-1").exists() {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-  })
-  .await?;
+  wait_for_file(&control.path().join("started-1"), "the first gated run's start marker").await?;
   if let Some(pid) = stack.store().read_run_sync(&worker.id, &first_review.id)?.and_then(|run| run.pid) {
     guard.track(pid);
   }

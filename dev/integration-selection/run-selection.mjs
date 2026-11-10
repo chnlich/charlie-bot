@@ -28,6 +28,9 @@ function main() {
       eventName === 'push' ? 'push to main' : 'workflow_dispatch on main',
       mapping.trackedFiles,
     );
+  } else if (eventName === 'pull_request' && process.env.GITHUB_HEAD_REF?.startsWith('charliebot/task-')) {
+    // An implement landing PR runs the full suite: its head sha is what CI gates the base branch on.
+    selection = selectAllIntegrationTests('implement landing PR', mapping.trackedFiles);
   } else if (eventName === 'pull_request' || eventName === 'workflow_dispatch') {
     const head = eventName === 'pull_request' ? pullRequestHead() : requiredEnvironment('GITHUB_SHA');
     const changedFiles = changedFilesFromMain(head);

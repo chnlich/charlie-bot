@@ -44,6 +44,8 @@ const STYLE_CHECK: &str = "Style: Google Style, 2-space indent, 120-col (only fl
 
 const COMMIT_STEP: &str = "10. Before the rebase, commit every change you keep and restore tool-generated files with `git restore <path>`; untracked files stay in place.";
 
+const LAND_STEP: &str = "11. Run `charliebot land` and act on its JSON state: `landed` and `landed-no-ci` complete the delivery; `waiting` ends the run, and the trigger the command registered wakes it; on `ci-failed`, fix only the failures this diff causes and run the command again; report every other state as blocked and leave the base branch untouched. A run that a trigger wake resumes runs this command before anything else.";
+
 /// The reviewer contract's stable rules: the managed instruction block of a review Run (`review_rules_text`).
 pub fn review_rules_text() -> String {
   let checklist = format!("## Review Checklist\n{CHECKLIST_INTRO}\n\n");
@@ -70,10 +72,7 @@ pub fn review_numbered_steps(branch_name: &str, wt_path: &str, base_branch: &str
     format!("8. {STYLE_CHECK}"),
     "9. If you find issues, fix them and commit with descriptive messages.".to_string(),
     COMMIT_STEP.to_string(),
-    format!("11. Fetch the latest base branch: `git fetch origin {published}`"),
-    format!("12. Rebase onto the remote base: `git rebase {landing}`"),
-    format!("13. Push to remote base branch from the worktree: `git push origin HEAD:{published}`"),
-    format!("14. Verify: `git log --oneline -1 HEAD` and `git log --oneline -1 {landing}` must show the same commit."),
+    LAND_STEP.to_string(),
   ]
   .join("\n")
 }
@@ -158,17 +157,12 @@ mod tests {
       format!("8. {STYLE_CHECK}"),
       "9. If you find issues, fix them and commit with descriptive messages.".to_string(),
       COMMIT_STEP.to_string(),
-      format!("11. Fetch the latest base branch: `git fetch origin {published}`"),
-      format!("12. Rebase onto the remote base: `git rebase {landing}`"),
-      format!("13. Push to remote base branch from the worktree: `git push origin HEAD:{published}`"),
-      format!(
-        "14. Verify: `git log --oneline -1 HEAD` and `git log --oneline -1 {landing}` must show the same commit."
-      ),
+      LAND_STEP.to_string(),
     ]
   }
 
   #[test]
-  fn numbered_steps_are_fourteen_and_only_step_ten_is_rewritten() {
+  fn numbered_steps_are_eleven_and_steps_ten_and_eleven_are_constants() {
     let rendered = review_numbered_steps("task-1", "/wt", "origin/main");
     assert_eq!(rendered, expected_steps().join("\n"));
   }

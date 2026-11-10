@@ -279,7 +279,7 @@ fn send_source_group(command: clap::Command) -> clap::Command {
   command
 }
 
-fn home_dir() -> Result<std::path::PathBuf, CliExit> {
+pub(crate) fn home_dir() -> Result<std::path::PathBuf, CliExit> {
   charliebot_core::home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))
 }
 

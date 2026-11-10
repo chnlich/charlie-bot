@@ -20,14 +20,14 @@ Source code: the server and the `charliebot` CLI are `rust/crates/`.
 1. Worker runs in isolated git worktree (`~/worktrees/`)
 2. Branch naming: `charliebot/task-{timestamp}-{id}`
 3. On worker success → reviewer auto-spawned (may use a different member of the pool that `backends.calls.review` names)
-4. Reviewer: checks diff, fixes issues, rebases onto the remote base, pushes `HEAD:{base_branch}` (git rejects a non-fast-forward push)
-5. On push → master agent gets summary
+4. Reviewer: checks diff, fixes issues, then lands with `charliebot land` — it rebases onto the remote base, pushes the task branch with `--force-with-lease`, keeps one draft PR, and pushes `<sha>:<base>` only after every expected workflow ran green on that sha (`landed` and `landed-no-ci` exit 0; every other state names the blocker)
+5. On landing → master agent gets summary
 
 ### Merge-back failover
 
-If the reviewer's push fails (base moved), the work branch and worktree are kept. Rebase and push from the kept worktree yourself (mechanical, no re-delegate). On a genuine conflict, stop and surface it to the user or delegate the resolution.
+A blocked landing (base moved, CI failed, checks not started, rebase conflict) keeps the work branch, the PR and the worktree. Recover with `charliebot land --task <task session id>` from the kept worktree — never by a hand push. On `rebase-conflict`, resolve the conflict (or delegate the resolution) and run the command again.
 
-Reviewer merge-back is a prompt-level instruction with no server-side backstop. After every implement delivery, compare `git rev-parse <branch> origin/<branch>`. When origin lacks the delivered commit, push it from the kept worktree.
+The server's delivery check reads the task's `landing.json`: when the gate applies, a commit that reached the base branch without a record in state `landed` blocks the delivery as "landed without the CI gate".
 
 Keep the runtime checkout (the clone the server runs from) at its current commit. The live server and its agents then use the files of the live release.
 The live server and its agents read these files from the checkout:

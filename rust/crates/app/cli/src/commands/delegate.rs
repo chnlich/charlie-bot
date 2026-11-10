@@ -41,7 +41,7 @@ const DELEGATE_EPILOG: &str = r#"Task spec (--task-spec-file), six sections:
 
 Task types (--task-type):
 
-  implement (default): worker commits; a reviewer rebases, ff-merges, pushes to the remote base branch.
+  implement (default): worker commits; a reviewer lands through `charliebot land` (CI gates the base-branch push).
   quick-edit: worker commits; no reviewer; the master merges and pushes; for trivial repo ops (cherry-picks, branch pushes, single-line or doc-only edits).
   script-run: the worktree (repo-less: the Run directory) is a sandbox to run scripts, submit jobs, or query state; the worker must not modify tracked files or commit; no reviewer, no merge.
   verify: a repo-less read-only plan verifier; no worktree, reviewer, or merge.

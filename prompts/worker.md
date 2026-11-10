@@ -42,7 +42,7 @@ Follow these steps exactly:
    docs or UI text.
 
 <!-- section: workflow_implement -->
-STOP here. Do NOT rebase, merge, or remove the worktree. A reviewer will handle that.
+STOP here. Do NOT rebase, push, or remove the worktree. A reviewer lands your work through `charliebot land`, which moves the base branch only after CI passed on the landed sha.
 <!-- section: workflow_no_reviewer -->
 No reviewer run follows this run. This removes the delegated reviewer only.
 A review that the task spec's own protocol names still runs before the landing, and its verdict gates the landing.

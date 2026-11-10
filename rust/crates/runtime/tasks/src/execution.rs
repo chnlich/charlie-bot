@@ -1922,7 +1922,7 @@ impl TaskExecutionAdapter {
     }
     result_refs.push(format!("review:{}", run.id));
     let evidence = if work_run.repo_path.as_deref().is_some_and(|repo_path| !repo_path.is_empty()) {
-      let (landing, reason) = self.landing_for_work(&work_run).await;
+      let (landing, reason) = self.landing_for_work(session_id, &work_run).await;
       let Some((branch, commit, repo_path)) = landing else {
         // A review that stopped before its push states its verdict in its closing words; the report quotes them.
         let events_log = self.features.store.run_dir(session_id, &run.id).join(run_records::RUN_EVENTS_NAME);
@@ -1947,13 +1947,33 @@ impl TaskExecutionAdapter {
         return Ok(());
       };
       result_refs.push(format!("landed:{branch}@{commit}"));
+      // The delivery summary carries the landing record's evidence: the draft PR and the CI page
+      // that gated the push, or the no-CI note of a repository whose base declares no pull_request
+      // workflow.
+      let landing_record =
+        crate::land::read_landing_record(&self.features.store.session_dir(session_id)).ok().flatten();
+      let mut summary = format!(
+        "work run {} delivered after review {} landed {} on {branch}",
+        work_run.id,
+        run.id,
+        commit.chars().take(12).collect::<String>()
+      );
+      if let Some(record) = &landing_record {
+        match record.state.as_str() {
+          crate::land::STATE_LANDED => {
+            if let Some(pr_url) = &record.pr_url {
+              result_refs.push(format!("pr:{pr_url}"));
+              result_refs.push(format!("ci:{pr_url}/checks"));
+            }
+          }
+          crate::land::STATE_LANDED_NO_CI => {
+            summary.push_str(" (no CI: the repository declares no pull_request workflow)");
+          }
+          _ => {}
+        }
+      }
       crate::completion::CompletionEvidence {
-        summary: format!(
-          "work run {} delivered after review {} landed {} on {branch}",
-          work_run.id,
-          run.id,
-          commit.chars().take(12).collect::<String>()
-        ),
+        summary,
         result_refs,
         run_ids: vec![work_run.id.clone()],
         review_run_ids: vec![run.id.clone()],
@@ -1994,7 +2014,11 @@ impl TaskExecutionAdapter {
     Ok(())
   }
 
-  async fn landing_for_work(&self, work_run: &RunRecord) -> (Option<(String, String, String)>, String) {
+  async fn landing_for_work(
+    &self,
+    session_id: &str,
+    work_run: &RunRecord,
+  ) -> (Option<(String, String, String)>, String) {
     let (Some(repo_path), Some(branch_name), Some(base_branch)) =
       (work_run.repo_path.as_deref(), work_run.branch_name.as_deref(), work_run.base_branch.as_deref())
     else {
@@ -2007,6 +2031,17 @@ impl TaskExecutionAdapter {
     let (landed, reason) = git::git_verify_commit_landed(Path::new(repo_path), &target, &commit).await;
     if !landed {
       return (None, reason);
+    }
+    match crate::land::landed_without_gate_blocker(
+      Path::new(repo_path),
+      base_branch,
+      &self.features.store.session_dir(session_id),
+    )
+    .await
+    {
+      Ok(Some(blocker)) => return (None, blocker),
+      Ok(None) => {}
+      Err(error) => return (None, format!("the landing gate check failed: {error:#}")),
     }
     (Some((target, commit, repo_path.to_string())), String::new())
   }

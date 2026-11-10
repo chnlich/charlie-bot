@@ -10,6 +10,7 @@ pub mod event_text;
 pub mod execution;
 pub mod git;
 pub mod handoff;
+pub mod land;
 pub mod master_queue;
 pub mod master_run;
 pub mod master_state;

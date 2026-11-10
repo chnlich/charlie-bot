@@ -16,7 +16,7 @@ use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::git::TRASH_DIR_NAME;
 use charliebot_core::timefmt;
-use charliebot_registry::usage::{SWEEP_DIR_SCAN_FAILED_EVENT, SourceSweep, SweepScope};
+use charliebot_registry::usage::{CLAUDE_TRANSCRIPTS_CATEGORY, SWEEP_DIR_SCAN_FAILED_EVENT, SourceSweep, SweepScope};
 use charliebot_registry::usage_sweep::SweepCounter;
 use regex::Regex;
 use walkdir::WalkDir;
@@ -24,7 +24,6 @@ use walkdir::WalkDir;
 use super::claude_config::AccountsConfig;
 use super::login_dirs::ClaudeHost;
 
-const CATEGORY: &str = "claude-transcripts";
 const UNIT: &str = "dirs";
 
 /// Every cwd CharlieBot hands a claude process is the session directory or one inside it, so the encoded name carries
@@ -253,7 +252,7 @@ fn sweep_transcripts(host: &ClaudeHost, scope: &SweepScope, counter: &mut SweepC
 pub fn sweep(host: &ClaudeHost, scope: &SweepScope) -> anyhow::Result<SourceSweep> {
   let mut counter = SweepCounter::default();
   sweep_transcripts(host, scope, &mut counter)?;
-  Ok(SourceSweep { categories: vec![counter.category(CATEGORY, UNIT)], freelist: None })
+  Ok(SourceSweep { categories: vec![counter.category(CLAUDE_TRANSCRIPTS_CATEGORY, UNIT)], freelist: None })
 }
 
 #[cfg(test)]

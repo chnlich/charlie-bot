@@ -862,6 +862,16 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_registry::usage::SWEEP_FILE_DELETE_FAILED_EVENT`.",
   },
   OwnerRow {
+    name: "claude-transcripts",
+    owner: "runtime/registry",
+    hint: "Use `charliebot_registry::usage::CLAUDE_TRANSCRIPTS_CATEGORY`.",
+  },
+  OwnerRow {
+    name: "codex-rollouts",
+    owner: "runtime/registry",
+    hint: "Use `charliebot_registry::usage::CODEX_ROLLOUTS_CATEGORY`.",
+  },
+  OwnerRow {
     name: "stdout.log",
     owner: "runtime/store",
     hint: "Use `charliebot_store::run_records::STDOUT_LOG_NAME`.",

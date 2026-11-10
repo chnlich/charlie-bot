@@ -63,6 +63,12 @@ pub const SWEEP_FILE_STAT_FAILED_EVENT: &str = "storage_cool_file_stat_failed";
 /// The log event a sweep source emits when it cannot remove one file.
 pub const SWEEP_FILE_DELETE_FAILED_EVENT: &str = "storage_cool_file_delete_failed";
 
+/// The cold-storage sweep category a source reports for Claude Code's transcript directories. The usage package looks
+/// the category up by this name when it logs the sweep.
+pub const CLAUDE_TRANSCRIPTS_CATEGORY: &str = "claude-transcripts";
+/// The cold-storage sweep category a source reports for Codex's rollout files.
+pub const CODEX_ROLLOUTS_CATEGORY: &str = "codex-rollouts";
+
 /// The utilization a source reports for a window: a percentage, or `None` when the value is absent or not a number.
 pub fn as_utilization(value: Option<&Value>) -> Option<f64> {
   match value {

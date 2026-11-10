@@ -18,8 +18,8 @@ use charliebot_core::paths::realpath;
 use charliebot_core::str_methods;
 use charliebot_core::text_repr;
 use charliebot_registry::usage::{
-  CategoryResult, SWEEP_DIR_SCAN_FAILED_EVENT, SWEEP_FILE_DELETE_FAILED_EVENT, SWEEP_FILE_STAT_FAILED_EVENT,
-  SessionFacts, SweepScope,
+  CLAUDE_TRANSCRIPTS_CATEGORY, CODEX_ROLLOUTS_CATEGORY, CategoryResult, SWEEP_DIR_SCAN_FAILED_EVENT,
+  SWEEP_FILE_DELETE_FAILED_EVENT, SWEEP_FILE_STAT_FAILED_EVENT, SessionFacts, SweepScope,
 };
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{CC_SESSION_ID_FIELD, UtcDateTime, read_metadata};
@@ -100,8 +100,8 @@ pub fn run_cool_sweep(
     session_id = ?scope.session_id,
     total_bytes = total_bytes(&categories),
     raw_transport = count_of(&categories, "raw-transport"),
-    claude_transcripts = count_of(&categories, "claude-transcripts"),
-    codex_rollouts = count_of(&categories, "codex-rollouts"),
+    claude_transcripts = count_of(&categories, CLAUDE_TRANSCRIPTS_CATEGORY),
+    codex_rollouts = count_of(&categories, CODEX_ROLLOUTS_CATEGORY),
     "storage_cool_sweep_done"
   );
   Ok(categories)

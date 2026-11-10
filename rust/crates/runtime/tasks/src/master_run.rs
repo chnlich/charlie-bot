@@ -17,6 +17,7 @@ use charliebot_registry::backend::{
   ContextStateFn as TurnContextStateFn, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch,
 };
 use charliebot_registry::context::FeatureContext;
+use charliebot_store::StoreError;
 use charliebot_store::metadata::{NATIVE_BACKEND, SessionMetadata, UtcDateTime};
 use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_LOG_NAME};
 use futures_util::future::BoxFuture;
@@ -377,7 +378,12 @@ fn turn_launch_context(
   let callbacks = item.callbacks.clone();
   let base_env = agent_environment::spawn_base_environment(&callbacks.features)?;
   let session_id = item.session_metadata().id;
-  let can_delegate = item.callbacks.features.store.check_task_authorization(&session_id).is_ok();
+  // The gate's refusal is the answer `false`; any other store failure fails the launch.
+  let can_delegate = match item.callbacks.features.store.check_task_authorization(&session_id) {
+    Ok(_) => true,
+    Err(StoreError::Forbidden(_)) => false,
+    Err(error) => return Err(error.into()),
+  };
   let running_session_id = session_id.clone();
   let shared_metadata = Arc::clone(&item.session_meta);
   let running_tracking = Arc::clone(&tracking);

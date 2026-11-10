@@ -1362,10 +1362,21 @@ mod synthetic_repo_tests {
     repo
   }
 
+  /// Commits with the identity passed on the command line: a clone has no `user.*` config of its own,
+  /// and a CI runner has no identity git can auto-detect.
   fn commit(repo: &Path, file: &str, content: &str) {
     fs::write(repo.join(file), content).expect("the file is written");
     assert!(Command::new("git").arg("-C").arg(repo).args(["add", "."]).status().unwrap().success());
-    assert!(Command::new("git").arg("-C").arg(repo).args(["commit", "-q", "-m", file]).status().unwrap().success());
+    assert!(
+      Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.test"])
+        .args(["commit", "-q", "-m", file])
+        .status()
+        .unwrap()
+        .success()
+    );
   }
 
   fn head(repo: &Path) -> String {

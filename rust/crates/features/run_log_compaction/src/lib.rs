@@ -1,6 +1,6 @@
 //! The `run_log_compaction` cron handler: a finished run's log files become `.zst` once its end is a day old.
 
-pub mod compaction;
+mod compaction;
 
 use std::sync::Arc;
 

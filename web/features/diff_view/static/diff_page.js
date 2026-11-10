@@ -44,11 +44,12 @@
 
   function show(el) { el.classList.remove('hidden'); el.classList.add('flex'); }
   function hide(el) { el.classList.add('hidden'); el.classList.remove('flex'); }
-  function setError(msg) {
+  function setError(msg, title) {
     errorEl.textContent = msg;
+    errorEl.title = title || '';
     errorEl.classList.remove('hidden');
   }
-  function clearError() { errorEl.classList.add('hidden'); errorEl.textContent = ''; }
+  function clearError() { errorEl.classList.add('hidden'); errorEl.textContent = ''; errorEl.title = ''; }
   function clearOutput() {
     outputEl.innerHTML = '';
     emptyEl.classList.add('hidden');
@@ -58,6 +59,24 @@
   function responseDetail(data, status) {
     const detail = (data && (data.detail?.message || data.detail)) || `HTTP ${status}`;
     return typeof detail === 'string' ? detail : JSON.stringify(detail);
+  }
+
+  // git answers an unresolvable ref with `fatal: ambiguous argument '<ref>^{commit}': unknown revision or path not
+  // in the working tree.` and then the shell syntax that separates paths from revisions. This form has a Base and a
+  // Head field and no shell, so the box names the field the ref came from; git's line stays as the box's title.
+  const UNRESOLVED_REF =
+    /fatal: ambiguous argument '(.+?)\^\{commit\}': unknown revision or path not in the working tree\./;
+
+  function refField(ref, params) {
+    if (params && ref === params.base) return 'Base';
+    if (params && ref === params.head) return 'Head';
+    return 'Ref';
+  }
+
+  function detailMessage(detail, params) {
+    const match = UNRESOLVED_REF.exec(detail);
+    if (!match) return detail;
+    return `${refField(match[1], params)} '${match[1]}' is not a commit in this repository.`;
   }
 
   // The expand strips render inside diff2html's tables, so their look comes from a style block here.
@@ -313,7 +332,7 @@
     const resp = await fetch(`/api/git/diff/file?${qs.toString()}`);
     const data = await resp.json();
     if (!resp.ok) {
-      throw new Error(responseDetail(data, resp.status));
+      throw new Error(detailMessage(responseDetail(data, resp.status), params));
     }
     return data;
   }
@@ -328,7 +347,7 @@
     const resp = await fetch(`/api/git/diff/lines?${qs.toString()}`);
     const data = await resp.json();
     if (!resp.ok) {
-      throw new Error(responseDetail(data, resp.status));
+      throw new Error(detailMessage(responseDetail(data, resp.status), params));
     }
     return data;
   }
@@ -774,7 +793,8 @@
     if (token !== comparisonToken) return;
 
     if (!resp.ok) {
-      setError(responseDetail(data, resp.status));
+      const detail = responseDetail(data, resp.status);
+      setError(detailMessage(detail, params), detail);
       return;
     }
 

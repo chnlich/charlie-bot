@@ -262,9 +262,10 @@ const FILE_DIFF_ANSWER = {
 
 // Loads diff_page.js into a vm context with the given URL query and API answers. Returns the page's handles.
 // phone sets the media query the page reads for its starting format. fileDiff answers /api/git/diff/file and
-// lines answers /api/git/diff/lines; tree is the diff2html DOM the Diff2HtmlUI stub renders on expand.
-function loadDiffPage({search = '', repos = [], manifest = null, phone = false, fileDiff = null, lines = null,
-  tree = null} = {}) {
+// lines answers /api/git/diff/lines; tree is the diff2html DOM the Diff2HtmlUI stub renders on expand. A
+// manifestFailure answers /api/git/diff/files with `{status, body}` instead of the manifest.
+function loadDiffPage({search = '', repos = [], manifest = null, manifestFailure = null, phone = false,
+  fileDiff = null, lines = null, tree = null} = {}) {
   const elements = new Map();
   for (const [id, spec] of Object.entries(PAGE_ELEMENTS)) {
     const element = Object.assign(new FakeNode(), spec);
@@ -302,6 +303,9 @@ function loadDiffPage({search = '', repos = [], manifest = null, phone = false, 
     fetch: async (url) => {
       fetches.push(url);
       const path = url.split('?')[0];
+      if (path === '/api/git/diff/files' && manifestFailure !== null) {
+        return {ok: false, status: manifestFailure.status, async json() { return manifestFailure.body; }};
+      }
       if (path === '/api/git/diff/file' && fileDiff !== null) {
         return {ok: true, status: 200, async json() { return fileDiff; }};
       }
@@ -460,6 +464,47 @@ test('a comparison writes its totals above the list and leaves the form status l
   assert.ok(range.textContent.startsWith('main...feature'));
   assert.equal(elements.get('status').textContent, 'preparing code-server…');
   assert.equal(elements.get('diff-output').children.length, 2);
+});
+
+test('an unresolved ref reads in the form\'s words and keeps git\'s line as the title', async () => {
+  const baseDetail = "fatal: ambiguous argument 'no-such-base^{commit}': unknown revision or path not in the "
+    + "working tree. Use '--' to separate paths from revisions, like this: 'git <command> [<revision>...] -- "
+    + "[<file>...]'";
+  const base = loadDiffPage({
+    search: '?repo=/work/alpha&base=no-such-base&head=feature',
+    repos: [{label: 'alpha', path: '/work/alpha'}],
+    manifestFailure: {status: 500, body: {detail: baseDetail}},
+  });
+  await settle();
+  const baseError = base.elements.get('error');
+  assert.equal(baseError.classList.contains('hidden'), false);
+  assert.equal(baseError.textContent, "Base 'no-such-base' is not a commit in this repository.");
+  assert.equal(baseError.title, baseDetail);
+
+  const headDetail = "fatal: ambiguous argument 'no-such-head^{commit}': unknown revision or path not in the "
+    + 'working tree.';
+  const head = loadDiffPage({
+    search: '?repo=/work/alpha&base=main&head=no-such-head',
+    repos: [{label: 'alpha', path: '/work/alpha'}],
+    manifestFailure: {status: 500, body: {detail: headDetail}},
+  });
+  await settle();
+  const headError = head.elements.get('error');
+  assert.equal(headError.textContent, "Head 'no-such-head' is not a commit in this repository.");
+  assert.equal(headError.title, headDetail);
+});
+
+test('another failure keeps the server\'s detail in the box and as its title', async () => {
+  const {elements} = loadDiffPage({
+    search: '?repo=/work/plain&base=main&head=feature',
+    repos: [{label: 'plain', path: '/work/plain'}],
+    manifestFailure: {status: 400, body: {detail: 'Not a git repo: /work/plain'}},
+  });
+  await settle();
+
+  const error = elements.get('error');
+  assert.equal(error.textContent, 'Not a git repo: /work/plain');
+  assert.equal(error.title, 'Not a git repo: /work/plain');
 });
 
 test('a file row keeps the directory apart from the file name, with the full path as its title', async () => {

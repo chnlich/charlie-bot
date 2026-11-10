@@ -8,8 +8,13 @@
 // The forward answers every rendered message until the module arrives: it names an artifact page itself, and the
 // first message that names one loads the module from there. The module registers its own post-processor when it
 // loads, and this forward then does nothing, so no message is processed twice.
+//
+// The module reads the file-link helpers (Chat.resolveFileServerUrl and the file-server prefixes), and the chat page
+// carries a loader in their place, so the file-link module loads first and its helpers exist when this module runs.
 globalThis.loadArtifactCards = function() {
-  return loadPageScripts('artifacts-cards', ['/static/features/artifacts/artifact-cards.js']);
+  return loadFileLinks().then(function() {
+    return loadPageScripts('artifacts-cards', ['/static/features/artifacts/artifact-cards.js']);
+  });
 };
 
 // An artifact page is an artifacts/<name>.html path, in an anchor's href or in the message's text. A message that

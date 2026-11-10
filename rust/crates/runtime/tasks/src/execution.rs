@@ -1950,8 +1950,7 @@ impl TaskExecutionAdapter {
       // The delivery summary carries the landing record's evidence: the draft PR and the CI page
       // that gated the push, or the no-CI note of a repository whose base declares no pull_request
       // workflow.
-      let landing_record =
-        crate::land::read_landing_record(&self.features.store.session_dir(session_id)).ok().flatten();
+      let landing_record = crate::land::read_landing_record(&self.features.store.session_dir(session_id))?;
       let mut summary = format!(
         "work run {} delivered after review {} landed {} on {branch}",
         work_run.id,

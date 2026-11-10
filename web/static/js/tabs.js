@@ -2,9 +2,9 @@
 // Tabs
 // ---------------------------------------------------------------------------
 // Each tab registers its id, its layout and its callbacks. showsChat keeps the
-// chat column beside the tab's panel; fullScreenOnMobile hides the chat column
-// on a phone; keepOnSessionSwitch keeps the tab open when the user opens
-// another session; onShow and onHide run on every switch, after the chat
+// chat column beside the tab's panel. fullScreenOnMobile hides the chat column
+// on a phone. keepOnSessionSwitch keeps the tab open when the user opens
+// another session. onShow and onHide run on every switch, after the chat
 // column is laid out. A package registers its tab when its script loads, and
 // its tab button (id btn-<id>) is one of its page parts.
 const registeredTabs = new Map();

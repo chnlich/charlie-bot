@@ -22,6 +22,7 @@ use std::process::{ExitStatus, Output};
 use std::thread;
 
 use charliebot_core::cgroup::{PROCS_FILE_NAME, SESSION_CGROUP_OOM_SCORE_ADJ};
+use charliebot_core::paths::DEFAULT_PATH;
 use nix::sys::signal::Signal;
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
@@ -340,7 +341,8 @@ impl PreparedSpawn {
     let exec_paths = if program.contains(&b'/') {
       vec![c_string(program)?]
     } else {
-      let path = spec.env.get(OsStr::new("PATH")).map(|value| value.as_os_str().as_bytes()).unwrap_or(b"/bin:/usr/bin");
+      let path =
+        spec.env.get(OsStr::new("PATH")).map(|value| value.as_os_str().as_bytes()).unwrap_or(DEFAULT_PATH.as_bytes());
       path
         .split(|byte| *byte == b':')
         .map(|directory| {

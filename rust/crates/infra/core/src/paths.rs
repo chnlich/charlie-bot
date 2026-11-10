@@ -1,4 +1,4 @@
-//! Path resolution: `expanduser` and the non-strict `realpath`.
+//! Path resolution: `expanduser`, the non-strict `realpath`, and the `PATH` a process without one searches.
 //!
 //! The home resolution, the fence's containment check and the static-file containment check all
 //! compare paths these two functions produce. Those checks therefore follow POSIX path resolution step
@@ -8,6 +8,9 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
+
+/// The search path a process without a `PATH` variable uses: the glibc default executable path.
+pub const DEFAULT_PATH: &str = "/bin:/usr/bin";
 
 /// `expanduser`: `~` and `~user` prefixes become the home directory; other paths pass through.
 ///

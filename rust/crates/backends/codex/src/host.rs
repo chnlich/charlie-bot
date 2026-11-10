@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
+use charliebot_core::paths::DEFAULT_PATH;
 
 /// The process environment the codex package reads: PATH to find the codex binary, and HOME for `~/.local/bin` and
 /// `~/.codex`. The user-local bin directory is [`charliebot_agents::cli_base::user_local_bin`] of this home.
@@ -13,12 +14,12 @@ pub struct CodexHost {
 }
 
 impl CodexHost {
-  /// The host of the running server. PATH defaults to `/bin:/usr/bin` when unset; HOME must be set.
+  /// The host of the running server. PATH defaults to [`DEFAULT_PATH`] when unset; HOME must be set.
   pub fn from_process() -> anyhow::Result<Self> {
     let home = std::env::var("HOME").context("HOME must be set for the codex package")?;
     let path = match std::env::var("PATH") {
       Ok(path) => path,
-      Err(std::env::VarError::NotPresent) => "/bin:/usr/bin".to_string(),
+      Err(std::env::VarError::NotPresent) => DEFAULT_PATH.to_string(),
       Err(error) => return Err(error).context("PATH must be valid Unicode for the codex package"),
     };
     Ok(Self { path, home: PathBuf::from(home) })

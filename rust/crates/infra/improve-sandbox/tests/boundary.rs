@@ -4,7 +4,6 @@
 //! as passing.
 
 use std::fs;
-use std::path::Path;
 use std::process::Command;
 
 /// The kernel release and the active security modules, so a failure names the kernel it ran on.
@@ -16,8 +15,8 @@ fn kernel_summary() -> String {
 
 /// Removes the two `/tmp` directories that the program creates for `direction`, when they exist.
 fn remove_tmp_directories(direction: &str) {
-  for dir in [format!("/tmp/improve-{direction}"), format!("/tmp/improve-{direction}-tmp")] {
-    if Path::new(&dir).exists() {
+  for dir in charliebot_improve_sandbox::tmp_directories(direction) {
+    if dir.exists() {
       fs::remove_dir_all(&dir).expect("the test's own /tmp directory");
     }
   }

@@ -1,46 +1,27 @@
 //! The Feishu long-connection service and its configuration gate.
 
-use charliebot_chat_threads::channel_service::ChannelService;
+use charliebot_chat_threads::channel_service::{ChannelService, ChatChannel};
 use charliebot_core::credentials::{CredentialValue, Credentials};
-use charliebot_registry::wiring::{Phase, Service, ServiceContext};
-use futures_util::future::BoxFuture;
+use charliebot_registry::FeatureContext;
 
 use crate::config::FeishuConfig;
 use crate::listener::FeishuListener;
 use crate::package::NAME;
 
 /// The Feishu long connection and boot backfill, started when the app's credentials and an owner are configured.
-pub(crate) struct FeishuService {
-  entrypoint: ChannelService<FeishuListener>,
-}
+pub(crate) type FeishuService = ChannelService<FeishuListener>;
 
-impl Default for FeishuService {
-  fn default() -> Self {
-    Self { entrypoint: ChannelService::new(NAME, FeishuListener) }
-  }
-}
+impl ChatChannel for FeishuListener {
+  const NAME: &'static str = crate::package::NAME;
 
-impl Service for FeishuService {
-  fn name(&self) -> &'static str {
-    NAME
+  fn listener() -> Self {
+    FeishuListener
   }
 
-  fn phase(&self) -> Phase {
-    Phase::Ready
-  }
-
-  fn start<'a>(&'a self, ctx: ServiceContext) -> BoxFuture<'a, anyhow::Result<()>> {
-    Box::pin(async move {
-      let config = ctx.features.config.get()?;
-      let credentials = ctx.features.credentials.get()?;
-      let feishu = config.section::<FeishuConfig>(NAME);
-      self.entrypoint.start(ctx, configured(feishu, &credentials));
-      Ok(())
-    })
-  }
-
-  fn stop<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<()>> {
-    Box::pin(async move { self.entrypoint.stop().await })
+  fn allows(features: &FeatureContext) -> anyhow::Result<bool> {
+    let config = features.config.get()?;
+    let credentials = features.credentials.get()?;
+    Ok(configured(config.section::<FeishuConfig>(NAME), &credentials))
   }
 }
 

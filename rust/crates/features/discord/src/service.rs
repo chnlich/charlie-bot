@@ -1,50 +1,32 @@
 //! The Discord gateway service and its configuration gate.
 
-use charliebot_chat_threads::channel_service::ChannelService;
+use charliebot_chat_threads::channel_service::{ChannelService, ChatChannel};
 use charliebot_core::credentials::{CredentialValue, Credentials};
-use charliebot_registry::wiring::{Phase, Service, ServiceContext};
-use futures_util::future::BoxFuture;
+use charliebot_registry::FeatureContext;
 
 use crate::config::DiscordConfig;
 use crate::discord_listener::DiscordListener;
 
 /// Starts the Discord gateway and boot backfill when the bot token and an allowed user are configured.
-pub(crate) struct DiscordService {
-  entrypoint: ChannelService<DiscordListener>,
-}
+pub(crate) type DiscordService = ChannelService<DiscordListener>;
 
-impl Default for DiscordService {
-  fn default() -> Self {
-    Self { entrypoint: ChannelService::new("discord", DiscordListener) }
-  }
-}
+impl ChatChannel for DiscordListener {
+  const NAME: &'static str = "discord";
 
-impl Service for DiscordService {
-  fn name(&self) -> &'static str {
-    "discord"
+  fn listener() -> Self {
+    DiscordListener
   }
 
-  fn phase(&self) -> Phase {
-    Phase::Ready
-  }
-
-  fn start<'a>(&'a self, ctx: ServiceContext) -> BoxFuture<'a, anyhow::Result<()>> {
-    Box::pin(async move {
-      let config = ctx.features.config.get()?;
-      let credentials = ctx.features.credentials.get()?;
-      let discord = config.section::<DiscordConfig>("discord");
-      self.entrypoint.start(ctx, configured(discord, &credentials));
-      Ok(())
-    })
-  }
-
-  fn stop<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<()>> {
-    Box::pin(async move { self.entrypoint.stop().await })
+  fn allows(features: &FeatureContext) -> anyhow::Result<bool> {
+    let config = features.config.get()?;
+    let credentials = features.credentials.get()?;
+    Ok(configured(config.section::<DiscordConfig>(Self::NAME), &credentials))
   }
 }
 
 fn configured(config: &DiscordConfig, credentials: &Credentials) -> bool {
-  credentials.get("discord", "bot_token").is_some_and(CredentialValue::is_truthy) && !config.allowed_users.is_empty()
+  credentials.get(DiscordListener::NAME, "bot_token").is_some_and(CredentialValue::is_truthy)
+    && !config.allowed_users.is_empty()
 }
 
 #[cfg(test)]

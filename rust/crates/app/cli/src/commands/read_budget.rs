@@ -35,7 +35,7 @@ use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config;
 use charliebot_core::event_types::{
-  self, EDIT_TOOL, MULTI_EDIT_TOOL, NOTEBOOK_EDIT_TOOL, READ_TOOL, TOOL_INPUT_FILE_PATH, WRITE_TOOL,
+  self, EDIT_TOOL, MULTI_EDIT_TOOL, NOTEBOOK_EDIT_TOOL, READ_TOOL, SKILL_TOOL, TOOL_INPUT_FILE_PATH, WRITE_TOOL,
 };
 use charliebot_core::home;
 use charliebot_core::subagent::SUBAGENT_TOOL_NAMES;
@@ -353,7 +353,7 @@ fn over_budget_notice(total: usize) -> String {
 fn exempt_class(tool_name: &str, tool_input: &Map<String, Value>) -> Option<String> {
   let class = match tool_name {
     name if SUBAGENT_TOOL_NAMES.contains(&name) => Some("child_conclusion"),
-    "Skill" => Some("rule_skill"),
+    SKILL_TOOL => Some("rule_skill"),
     READ_TOOL => tool_input.get(TOOL_INPUT_FILE_PATH).and_then(Value::as_str).and_then(path_class),
     "Bash" => tool_input.get("command").and_then(Value::as_str).and_then(bash_class),
     _ => None,

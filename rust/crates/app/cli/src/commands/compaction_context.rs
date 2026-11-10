@@ -20,7 +20,7 @@ use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_core::config;
-use charliebot_core::event_types::{READ_TOOL, TOOL_INPUT_FILE_PATH};
+use charliebot_core::event_types::{READ_TOOL, SKILL_TOOL, TOOL_INPUT_FILE_PATH};
 use charliebot_core::home;
 use charliebot_core::paths;
 use charliebot_core::regex_classes::compile_regex;
@@ -187,7 +187,7 @@ fn timestamp(event: &Value) -> Result<i64, String> {
 fn reads_from_tool(block: &serde_json::Map<String, Value>) -> Vec<(String, Option<String>, Option<PathBuf>)> {
   let Some(tool_input) = block.get("input").and_then(Value::as_object) else { return Vec::new() };
   match block.get("name").and_then(Value::as_str) {
-    Some("Skill") => {
+    Some(SKILL_TOOL) => {
       let skill = or_value(tool_input.get("skill"), tool_input.get("skill_name"));
       match skill {
         Some(Value::String(skill_name)) if !skill_name.is_empty() => vec![(skill_name.clone(), None, None)],

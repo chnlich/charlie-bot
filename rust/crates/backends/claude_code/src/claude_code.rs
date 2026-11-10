@@ -20,7 +20,7 @@ use charliebot_agents::cli_base::{CapturedEvents, SKIP_PERMISSIONS_FLAG};
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::kill::{exit_code, kill_process_group};
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
-use charliebot_core::event_types::{self, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, READ_TOOL, WRITE_TOOL};
+use charliebot_core::event_types::{self, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, READ_TOOL, SKILL_TOOL, WRITE_TOOL};
 use charliebot_core::headers::AUTHORIZATION;
 use charliebot_core::run_token;
 use charliebot_core::subagent::AGENT_TOOL;
@@ -53,7 +53,7 @@ fn receives_agent_tool(run_kind: RunKind) -> bool {
 fn headless_disallowed_tools(run_kind: RunKind, enable_subagents: bool) -> String {
   let mut tools = vec![HEADLESS_DISALLOWED_TOOLS];
   match run_kind {
-    RunKind::Review => tools.push("Skill"),
+    RunKind::Review => tools.push(SKILL_TOOL),
     RunKind::ManagerTurn | RunKind::Work | RunKind::Iteration | RunKind::ScheduledStep => tools.push("ReportFindings"),
   }
   if !(enable_subagents && receives_agent_tool(run_kind)) {

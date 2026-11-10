@@ -111,6 +111,22 @@ impl Store {
     self.load_session_metas_snapshot_versioned(status)
   }
 
+  /// The metadata corpus the listing memo already holds, when every condition the next read checks still holds.
+  ///
+  /// `None` means the next read would walk the sessions directory and its metadata files, so a caller that must not
+  /// wait on a file read takes the same blocking path that read needs. [`Self::load_session_metas_snapshot_versioned`]
+  /// answers the conditions this checks with the very corpus it returns, so a caller that finds `Some` here reads
+  /// what that call would have returned.
+  pub fn cached_session_metas_snapshot(&self) -> Option<Arc<Vec<Arc<SessionMetadata>>>> {
+    let signature = stat_signature(&self.cfg.sessions_dir())?;
+    let memo = self.listings_memo.lock().expect("listings memo mutex is not poisoned");
+    let hit = memo.get(&None)?;
+    let fresh = hit.revision == self.listings_revision.load(Ordering::Acquire)
+      && hit.at.elapsed() < LISTINGS_SWEEP_INTERVAL
+      && hit.root == signature;
+    fresh.then(|| Arc::clone(&hit.rows))
+  }
+
   /// Read the immutable metadata corpus and its generation without cloning its rows.
   ///
   /// Search holds the same listing snapshot across its query memo and borrows only the matching rows while the

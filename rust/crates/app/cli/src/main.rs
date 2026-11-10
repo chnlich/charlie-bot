@@ -1,6 +1,6 @@
 //! The `charliebot` CLI dispatcher.
 //!
-//! The vocabulary is the 30 subcommands with callers. No argument, `-h` or `--help` prints the
+//! The vocabulary is the 31 subcommands with callers. No argument, `-h` or `--help` prints the
 //! usage block and exits 0; an unknown name exits 2; a vocabulary name with no dispatch arm prints
 //! the not-ported JSON error and exits 1.
 
@@ -17,8 +17,9 @@ use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted: every registered command with a
 /// caller. A caller-less name is an unknown name here.
-const COMMANDS: [&str; 30] = [
+const COMMANDS: [&str; 31] = [
   "artifact",
+  "backup",
   "compaction-context",
   "config",
   "delegate",
@@ -105,6 +106,7 @@ fn run_subcommand(
 ) -> Result<(), charliebot_cli_common::exit::CliExit> {
   match subcommand {
     "artifact" => charliebot_artifacts::cli::artifact::main(args, host),
+    "backup" => commands::backup::main(args, host),
     "compaction-context" => commands::compaction_context::main(args),
     "config" => commands::config::main(args),
     "delegate" => commands::delegate::main(args),

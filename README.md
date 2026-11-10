@@ -80,7 +80,7 @@ flowchart TB
 
 ### Operations
 
-- Scheduled home backup with tiered retention
+- Scheduled home backup to the configured restic repository, with tiered retention
 - Disk sweep: finished task worktrees and scratch directories are archived and removed
 - Run-log compaction: run logs past an age are stored compressed in place
 
@@ -172,6 +172,7 @@ release. By workflow:
 
 - `charliebot triage` — scan a window of failed runs and error logs for grouped failure signatures
 - `charliebot gc-trash` — inspect and purge quarantined worktree trash
+- `charliebot backup restore` — restore one snapshot of the profile home into an empty directory
 
 `charliebot --help` lists every subcommand the binary carries, including the internal hooks and
 script helpers this page leaves out.

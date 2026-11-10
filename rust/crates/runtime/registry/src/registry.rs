@@ -184,6 +184,8 @@ pub struct Registry {
   pub(crate) fork_assertions: Ledger<ForkAssertionsFn>,
   /// The one runner that DMs a user, which `features/slack` registers.
   pub(crate) user_dm: Ledger<UserDmFn>,
+  /// The one runner that DMs the host owner, which `features/slack` registers.
+  pub(crate) owner_dm: Ledger<OwnerDmFn>,
   /// The lifecycle of a backend type that registered none: one process per run.
   pub(crate) default_lifecycle: Arc<dyn BackendLifecycle>,
   pub(crate) default_lifecycle_name: &'static str,
@@ -238,6 +240,7 @@ impl Registry {
       host_probes,
       fork_assertions,
       user_dm,
+      owner_dm,
       default_lifecycle: _,
       default_lifecycle_name,
       pre_recovery_steps,
@@ -299,6 +302,7 @@ impl Registry {
     append_ledger_inventory(&mut inventory, host_probes);
     append_ledger_inventory(&mut inventory, fork_assertions);
     append_ledger_inventory(&mut inventory, user_dm);
+    append_ledger_inventory(&mut inventory, owner_dm);
     inventory.push(format!("default_lifecycle\t-\t{default_lifecycle_name}"));
     append_ledger_inventory(&mut inventory, pre_recovery_steps);
     append_ledger_inventory(&mut inventory, recovery_steps);
@@ -580,6 +584,9 @@ pub type ForkAssertionsFn = fn(page: &Path, home: &Path) -> anyhow::Result<Optio
 
 /// The sender of a DM to a user (`slack.user_dm`).
 pub type UserDmFn = for<'a> fn(&'a FeatureContext, &'a str, &'a str) -> BoxFuture<'a, anyhow::Result<String>>;
+
+/// The sender of a DM to the host owner (`slack.owner_dm`).
+pub type OwnerDmFn = for<'a> fn(&'a FeatureContext, &'a str) -> BoxFuture<'a, anyhow::Result<String>>;
 
 /// The context limits of one reading kind. `declared_window` is `None` when the reading carries the window itself;
 /// `compact_reserve` is `None` when the compaction point is unknown.
@@ -1528,6 +1535,17 @@ impl Registry {
   /// The registered user DM sender; fails when no package registers one.
   pub fn user_dm_sender(&self) -> anyhow::Result<UserDmFn> {
     self.user_dm.values().next().copied().ok_or_else(|| anyhow::anyhow!("no package registers the user DM sender"))
+  }
+
+  /// The registration of the host-owner DM hook.
+  pub fn owner_dm(&mut self, dm: OwnerDmFn) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    self.owner_dm.insert_single(package, "owner_dm", dm)
+  }
+
+  /// The registered host-owner DM sender; fails when no package registers one.
+  pub fn owner_dm_sender(&self) -> anyhow::Result<OwnerDmFn> {
+    self.owner_dm.values().next().copied().ok_or_else(|| anyhow::anyhow!("no package registers the owner DM sender"))
   }
 
   /// The registration of a file view (`wiring.register_file_view`).

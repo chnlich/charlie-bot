@@ -17,6 +17,7 @@ mod turn_contribution;
 
 use std::sync::Arc;
 
+use anyhow::Context;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField, valid_origin};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 use charliebot_store::metadata::SUCCESSOR_SESSION_ID;
@@ -45,7 +46,8 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   )?;
   registry.thread_origin_field("slack_origin")?;
   registry.turn_contribution("slack", Arc::new(SlackTurnContribution))?;
-  registry.user_dm(post_user_dm)
+  registry.user_dm(post_user_dm)?;
+  registry.owner_dm(post_owner_dm)
 }
 
 fn post_user_dm<'a>(
@@ -56,6 +58,22 @@ fn post_user_dm<'a>(
   Box::pin(async move {
     let client = slack_client::SlackClient::from_features(features)?;
     client.post_dm(user, text).await
+  })
+}
+
+/// The host owner is the first id in `slack.allowed_user_ids`; a host that serves several people lists only the owner
+/// there.
+fn post_owner_dm<'a>(features: &'a FeatureContext, text: &'a str) -> BoxFuture<'a, anyhow::Result<String>> {
+  Box::pin(async move {
+    let cfg = features.config.get()?;
+    let owner = cfg
+      .section::<config::SlackConfig>(config::NAME)
+      .allowed_user_ids
+      .first()
+      .cloned()
+      .context("the slack section names no allowed user to DM")?;
+    let client = slack_client::SlackClient::from_features(features)?;
+    client.post_dm(&owner, text).await
   })
 }
 

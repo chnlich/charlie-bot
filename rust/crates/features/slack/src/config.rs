@@ -20,9 +20,12 @@ pub(crate) struct SlackConfig {
   pub allowed_user_ids: Vec<String>,
 }
 
+/// The name of the registered `slack:` config section.
+pub(crate) const NAME: &str = "slack";
+
 /// The registered `slack:` config section.
 pub(crate) fn section() -> ConfigSection {
-  ConfigSection { key: "slack", legacy_keys: LEGACY_KEYS, parse: parse_section, dump: dump_section }
+  ConfigSection { key: NAME, legacy_keys: LEGACY_KEYS, parse: parse_section, dump: dump_section }
 }
 
 /// Render the section as its model dumps it (`charliebot config get slack`).

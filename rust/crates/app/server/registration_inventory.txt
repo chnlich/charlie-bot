@@ -89,6 +89,7 @@ config check	features.voice	check_default_backend
 config check	backends.claude_code	check_claude_pools
 config section	features.user_text_checks	user_text_checks
 config section	features.artifacts	publish
+config section	features.backup	backup
 config section	features.code_server	code_server
 config section	features.slack	slack
 config section	features.discord	discord
@@ -208,6 +209,7 @@ host login reader	features.host_auth	host_logins
 host probe	features.host_auth	host_probe
 fork assertions	features.artifacts	fork_assertions
 user dm	features.slack	user_dm
+owner dm	features.slack	owner_dm
 default_lifecycle	-	charliebot_registry::backend::DefaultLifecycle
 pre-recovery step	runtime.agents	session_cgroups
 pre-recovery step	runtime.agents	backend_pool

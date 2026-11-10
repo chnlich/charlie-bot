@@ -12,11 +12,11 @@ use crate::files;
 use crate::json_out;
 use crate::resolve;
 
-/// The smallest page size a read accepts.
+/// The smallest page size a read accepts: the CLI flag's range and the internal read route's bound.
 pub const READ_LIMIT_MIN: i64 = 1;
-/// The largest page size a read accepts.
+/// The largest page size a read accepts: the CLI flag's range and the internal read route's bound.
 pub const READ_LIMIT_MAX: i64 = 100;
-/// The page size a read takes when `--limit` is absent.
+/// The page size a read takes when the caller names none: the CLI flag's default and the route's fallback.
 pub const READ_LIMIT_DEFAULT: i64 = 50;
 
 /// The reply verb's arguments: the file that holds the text, and the session.

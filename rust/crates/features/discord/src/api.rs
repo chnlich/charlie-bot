@@ -10,6 +10,7 @@ use axum::extract::State;
 use axum::http::Request;
 use axum::response::Response;
 use charliebot_chat_threads::channel_service::reply_response;
+use charliebot_cli_common::channel_verb::{READ_LIMIT_DEFAULT, READ_LIMIT_MAX, READ_LIMIT_MIN};
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, text_field};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
@@ -22,9 +23,6 @@ use crate::discord_client::BASE_URL;
 use crate::discord_commands;
 use crate::discord_listener::{self, Bot};
 
-/// `DiscordReadRequest.limit`'s default: 50, bounded to 1..=100.
-const DEFAULT_READ_LIMIT: u64 = 50;
-
 /// `DiscordReplyRequest`: the calling session's id and the reply text.
 const REPLY_FIELDS: &[Field] =
   &[Field::required("session_id", FieldType::String), Field::required("text", FieldType::String)];
@@ -34,7 +32,7 @@ const REPLY_BODY: BodyModel = BodyModel::required(REPLY_FIELDS).forbid_extra();
 const READ_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),
   Field::optional("url", FieldType::NullableString),
-  Field::optional("limit", FieldType::Integer).ge(Bound::Int(1)).le(Bound::Int(100)),
+  Field::optional("limit", FieldType::Integer).ge(Bound::Int(READ_LIMIT_MIN)).le(Bound::Int(READ_LIMIT_MAX)),
 ];
 const READ_BODY: BodyModel = BodyModel::required(READ_FIELDS).forbid_extra();
 
@@ -121,7 +119,7 @@ async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
   };
   let session_id = text_field(&fields, "session_id");
   let url = fields.get("url").and_then(Value::as_str).map(str::to_string);
-  let limit = fields.get("limit").and_then(Value::as_u64).unwrap_or(DEFAULT_READ_LIMIT) as usize;
+  let limit = fields.get("limit").and_then(Value::as_u64).unwrap_or(READ_LIMIT_DEFAULT as u64) as usize;
   reply_response(discord_commands::read_thread(&bot, &session_id, url.as_deref(), limit).await)
 }
 

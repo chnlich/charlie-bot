@@ -11,6 +11,7 @@ use axum::http::Request;
 use axum::response::Response;
 use charliebot_chat_threads::channel_service::reply_response;
 use charliebot_chat_threads::thread_entry::ThreadReplyError;
+use charliebot_cli_common::channel_verb::{READ_LIMIT_DEFAULT, READ_LIMIT_MAX, READ_LIMIT_MIN};
 use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, text_field};
 use charliebot_compat::responses;
@@ -26,9 +27,6 @@ use crate::client::BASE_URL;
 use crate::commands;
 use crate::fields::MESSAGE_ID;
 
-/// The read request's default window size: 50, bounded to 1..=100.
-const DEFAULT_READ_LIMIT: u64 = 50;
-
 /// The download kinds the Open API resource endpoint takes.
 const DOWNLOAD_KINDS: &[&str] = &["image", "file"];
 
@@ -40,7 +38,7 @@ const REPLY_BODY: BodyModel = BodyModel::required(REPLY_FIELDS).forbid_extra();
 /// The read request's fields: the calling session, window size, and optional read mode parameters.
 const READ_FIELDS: &[Field] = &[
   Field::required(SESSION_ID, FieldType::String),
-  Field::optional("limit", FieldType::Integer).ge(Bound::Int(1)).le(Bound::Int(100)),
+  Field::optional("limit", FieldType::Integer).ge(Bound::Int(READ_LIMIT_MIN)).le(Bound::Int(READ_LIMIT_MAX)),
   Field::optional("mode", FieldType::Literal(&["chat", "topic"])),
   Field::optional("topic_id", FieldType::String),
   Field::optional("page", FieldType::String),
@@ -143,7 +141,7 @@ async fn post_read(State(bot): State<Bot>, request: Request<Body>) -> Response {
     Err(response) => return *response,
   };
   let session_id = text_field(&fields, SESSION_ID);
-  let limit = fields.get("limit").and_then(Value::as_u64).unwrap_or(DEFAULT_READ_LIMIT) as usize;
+  let limit = fields.get("limit").and_then(Value::as_u64).unwrap_or(READ_LIMIT_DEFAULT as u64) as usize;
   let mode = fields.get("mode").and_then(Value::as_str);
   let topic_id = fields.get("topic_id").and_then(Value::as_str);
   let page = fields.get("page").and_then(Value::as_str);

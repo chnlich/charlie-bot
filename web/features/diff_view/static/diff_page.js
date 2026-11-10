@@ -690,7 +690,8 @@
 
     // Desktop: one line of chevron, status, counts, then the path. A phone lays the row out as the diff page's
     // `.diff-file-row` grid. The name and the counts share its first line. A path with a directory puts it on the
-    // second line, so a file at the repository root keeps one line.
+    // second line, and a move's source label takes the line after those, so a root-level file keeps one line
+    // unless it is a move.
     const header = document.createElement('button');
     header.type = 'button';
     header.className =
@@ -728,6 +729,15 @@
     name.textContent = file.path.slice(slash + 1);
     name.className = 'diff-file-name shrink-0 font-semibold text-slate-900';
     pathEl.append(name);
+    // A move's row names the path it came from. The diff's own file header carries that pair, and the page
+    // hides that header, so without this line the source path appears nowhere on the page.
+    if (file.old_path) {
+      const source = document.createElement('span');
+      source.className = 'diff-file-rename';
+      source.textContent = `${file.status === 'C' ? 'copied' : 'renamed'} from ${file.old_path}`;
+      source.title = source.textContent;
+      pathEl.append(source);
+    }
 
     header.append(chevron, badge, counts, pathEl);
 

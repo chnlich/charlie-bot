@@ -42,11 +42,17 @@
        extend it. The 24 px box gives the page's only way back to chat the pointer floor its buttons
        keep; the concurrency badge keeps the header at its height. */
     .back-link { min-height: 24px; }
+    /* A move's row names the file the move came from. The diff's own file header carries that pair, and the
+       page hides that header, so the row's source label is the only place the path appears. On a wide row the
+       label follows the new path; the phone block below gives it the line under the path. */
+    .diff-file-rename { margin-left: .5rem; color: #64748b; font-size: .75rem; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     /* A phone cannot hold a file row on one line, so it becomes a grid. The status, the file name and
        the counts share the first line, and a path with a directory puts it on the second line under
        the name. A file at the repository root has no second line to draw. Its row keeps one line,
        where the old two-line grid spent a line on the counts alone. The name wraps rather than being
        cut off, and the counts keep their fixed pair so the figures stay in one column of the list.
+       A move's source label takes the line under the path, or under the name when no directory is shown.
        The same rule as Tailwind's max-sm, the width the row's utilities use. */
     @media not all and (min-width: 640px) {
       .diff-file-row { display: grid; column-gap: 0.75rem; row-gap: 0.125rem;
@@ -54,8 +60,12 @@
       .diff-file-name { grid-column: 3; grid-row: 1; white-space: normal; word-break: break-all; }
       .diff-file-counts { grid-column: 4; grid-row: 1; }
       .diff-file-dir { grid-column: 3 / span 2; grid-row: 2; }
+      .diff-file-rename { grid-column: 3 / span 2; grid-row: 3; margin-left: 0; }
+      .diff-file-row:not(:has(.diff-file-dir)) .diff-file-rename { grid-row: 2; }
       .diff-file-row:has(.diff-file-dir) .diff-file-chevron,
       .diff-file-row:has(.diff-file-dir) .diff-file-badge { grid-row: span 2; }
+      .diff-file-row:has(.diff-file-dir):has(.diff-file-rename) .diff-file-chevron,
+      .diff-file-row:has(.diff-file-dir):has(.diff-file-rename) .diff-file-badge { grid-row: span 3; }
     }
   </style>
 </head>

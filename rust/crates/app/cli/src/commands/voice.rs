@@ -5,11 +5,11 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use charliebot_agents::cli_host::LazyHost;
-use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::http;
 use charliebot_core::{credentials, home};
-use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "voice", subcommand_required = true, arg_required_else_help = true)]
@@ -32,13 +32,7 @@ struct TranscribeArgs {
 
 /// Run the `voice` subcommand.
 pub fn main(args: &[OsString], lazy_host: &LazyHost) -> Result<(), CliExit> {
-  let command = with_infer_long_args(VoiceCli::command());
-  let argv = std::iter::once(OsString::from("charliebot voice")).chain(args.iter().cloned());
-  let matches = match command.try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let cli = VoiceCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
+  let cli: VoiceCli = cli_args::parse("charliebot voice", args);
   match cli.command {
     VoiceCommand::Transcribe(args) => transcribe(&args.file, lazy_host),
   }

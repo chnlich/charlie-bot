@@ -5,10 +5,10 @@
 
 use std::ffi::OsString;
 
-use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::{draft as draft_register, files};
-use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use serde_json::Value;
 
 use crate::target;
@@ -53,13 +53,7 @@ struct DraftArgs {
 
 /// The GitHub arguments, parsed and run as one verb. Parser errors print and exit on their own (help 0, usage error 2).
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
-  let command = with_infer_long_args(GithubCli::command());
-  let argv = std::iter::once(OsString::from("charliebot github")).chain(args.iter().cloned());
-  let matches = match command.try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let cli = GithubCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
+  let cli: GithubCli = cli_args::parse("charliebot github", args);
   match cli.command {
     GithubCommand::Draft(args) => draft(&args),
   }

@@ -1,14 +1,14 @@
 use std::ffi::OsString;
 use std::time::Duration;
 
-use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::base_url;
 use charliebot_cli_common::exit::{self, CliExit};
 use charliebot_cli_common::headers;
 use charliebot_cli_common::http;
 use charliebot_core::config::CREDENTIALS_FILENAME;
 use charliebot_core::home;
-use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use serde_json::json;
 
 #[derive(Parser)]
@@ -30,13 +30,7 @@ struct ProbeArgs {
 
 /// Run the `files` subcommand.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
-  let command = with_infer_long_args(FilesCli::command());
-  let argv = std::iter::once(OsString::from("charliebot files")).chain(args.iter().cloned());
-  let matches = match command.try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let cli = FilesCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
+  let cli: FilesCli = cli_args::parse("charliebot files", args);
   match cli.command {
     FilesCommand::Probe(args) => {
       println!("{}", probe(&args.link)?);

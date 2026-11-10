@@ -13,13 +13,13 @@
 use std::ffi::OsString;
 use std::path::Path;
 
-use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::resolve;
 use charliebot_core::approval_digest;
 use charliebot_core::home;
 use charliebot_core::timefmt;
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "digest", about = "Record an approval digest entry")]
@@ -56,13 +56,7 @@ enum DigestVerb {
 /// Parse the digest arguments and run one verb. Parser errors print and exit on their own: help
 /// exits 0, a usage error exits 2.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
-  let command = with_infer_long_args(DigestCli::command());
-  let argv = std::iter::once(OsString::from("charliebot digest")).chain(args.iter().cloned());
-  let matches = match command.try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let cli = DigestCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
+  let cli: DigestCli = cli_args::parse("charliebot digest", args);
   match cli.verb {
     DigestVerb::Add { policy, step, undo, scope_check, link, session } => {
       let session = resolve::resolve_from_env(session.as_deref())?;

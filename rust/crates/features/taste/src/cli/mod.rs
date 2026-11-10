@@ -4,10 +4,10 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::{config, home};
-use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -87,13 +87,7 @@ pub fn main<F>(args: &[OsString], read_plans: F) -> Result<(), CliExit>
 where
   F: Fn(&Path) -> anyhow::Result<Option<Vec<Value>>>,
 {
-  let command = with_infer_long_args(TasteCli::command());
-  let argv = std::iter::once(OsString::from("charliebot taste")).chain(args.iter().cloned());
-  let matches = match command.try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let cli = TasteCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
+  let cli: TasteCli = cli_args::parse("charliebot taste", args);
   match cli.command {
     TasteCommand::Add(args) => add(&args),
     TasteCommand::Mark(args) => mark(&args),

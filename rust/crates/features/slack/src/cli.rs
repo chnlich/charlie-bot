@@ -13,7 +13,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::channel_verb::{ReplyArgs, post_reply};
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
@@ -21,7 +21,7 @@ use charliebot_cli_common::json_out;
 use charliebot_cli_common::request::{self, RequestArgs};
 use charliebot_cli_common::{draft as draft_register, files, resolve};
 use charliebot_core::{config, home, paths};
-use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
 
 use crate::download;
@@ -102,13 +102,7 @@ struct DraftArgs {
 /// Parse the Slack arguments and run one verb. Parser errors print and exit on their own (argparse-compatible: help 0,
 /// usage error 2).
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
-  let command = with_infer_long_args(SlackCli::command());
-  let argv = std::iter::once(OsString::from("charliebot slack")).chain(args.iter().cloned());
-  let matches = match command.try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let cli = SlackCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
+  let cli: SlackCli = cli_args::parse("charliebot slack", args);
   match cli.command {
     SlackCommand::Reply(args) => reply(&args),
     SlackCommand::Ack(args) => ack(&args),

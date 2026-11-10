@@ -66,6 +66,7 @@ fn launch_kwargs(ctx: &LaunchContext, first_process: bool) -> anyhow::Result<Map
         anyhow::bail!("manager turn Claude launch requires a CharlieBot run id for the read-budget hook");
       };
       kwargs.insert("run_id".to_string(), Value::String(run_id.to_string()));
+      kwargs.insert("can_delegate".to_string(), Value::Bool(ctx.can_delegate));
     }
   } else if ctx.kind == LaunchKind::Task {
     if first_process
@@ -551,6 +552,7 @@ mod tests {
       context_state,
       running_turns,
       run_id: Some("11111111-2222-3333-4444-555555555555".to_string()),
+      can_delegate: false,
     }
   }
 
@@ -612,6 +614,7 @@ mod tests {
       "midturn_delivery": true,
       "midturn_run_id": "11111111-2222-3333-4444-555555555555",
       "run_id": "11111111-2222-3333-4444-555555555555",
+      "can_delegate": false,
     });
 
     let fresh_ctx = context(cfg, LaunchKind::Turn, None, None, Some(Arc::new(Vec::new)));

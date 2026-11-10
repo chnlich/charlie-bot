@@ -377,6 +377,7 @@ fn turn_launch_context(
   let callbacks = item.callbacks.clone();
   let base_env = agent_environment::spawn_base_environment(&callbacks.features)?;
   let session_id = item.session_metadata().id;
+  let can_delegate = item.callbacks.features.store.check_task_authorization(&session_id).is_ok();
   let running_session_id = session_id.clone();
   let shared_metadata = Arc::clone(&item.session_meta);
   let running_tracking = Arc::clone(&tracking);
@@ -418,6 +419,7 @@ fn turn_launch_context(
     context_state,
     running_turns: Some(Arc::new(move || running_tracking.running_turns_except(&running_session_id))),
     run_id: Some(item.task_run.run_id.clone()),
+    can_delegate,
   })
 }
 

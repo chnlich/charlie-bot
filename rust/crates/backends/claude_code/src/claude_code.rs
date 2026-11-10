@@ -225,6 +225,7 @@ pub struct ClaudeCodeBackend {
   midturn_run_id: Option<String>,
   /// The CharlieBot run id of this manager turn; the read-budget hook entries name it.
   run_id: Option<String>,
+  can_delegate: bool,
 }
 
 impl ClaudeCodeBackend {
@@ -269,6 +270,11 @@ impl ClaudeCodeBackend {
       Some(_) => bail!("backend_kwargs.run_id must be a string"),
     }
     .filter(|value| !value.is_empty());
+    let can_delegate = match launch.backend_kwargs.get("can_delegate") {
+      None | Some(Value::Null) => false,
+      Some(Value::Bool(value)) => *value,
+      Some(_) => bail!("backend_kwargs.can_delegate must be a boolean"),
+    };
     let use_pre_tool_use_guards = match launch.backend_kwargs.get("use_pre_tool_use_guards") {
       None => true,
       Some(Value::Bool(value)) => *value,
@@ -291,6 +297,7 @@ impl ClaudeCodeBackend {
       midturn_delivery,
       midturn_run_id,
       run_id,
+      can_delegate,
     })
   }
 
@@ -307,11 +314,14 @@ impl ClaudeCodeBackend {
     if let Some(effort) = &self.effort {
       command.extend(["--effort".to_string(), effort.clone()]);
     }
+    let agent_tool = self.enable_subagents && receives_agent_tool(self.run_kind);
     let mut settings = match self.use_pre_tool_use_guards {
       true => claude_launch::headless_claude_settings(
         self.run_kind,
         self.cgroup_session_id.as_deref(),
         self.run_id.as_deref(),
+        agent_tool,
+        self.can_delegate,
       )?,
       false => {
         claude_launch::headless_claude_settings_without_guards(self.run_kind, self.cgroup_session_id.as_deref())?
@@ -864,10 +874,10 @@ mod tests {
       None,
       None,
       false,
-      false,
+      true,
       None,
       LaunchArgs {
-        backend_kwargs: serde_json::json!({"run_kind": "manager_turn", "run_id": "manager-run"})
+        backend_kwargs: serde_json::json!({"run_kind": "manager_turn", "run_id": "manager-run", "can_delegate": true})
           .as_object()
           .unwrap()
           .clone(),
@@ -897,7 +907,8 @@ mod tests {
     let expected: Vec<String> =
       (1..=6).map(|slot| format!("charliebot compaction-context --session manager-session --slot {slot}")).collect();
     assert_eq!(commands, expected);
-    let read_budget_command = "charliebot read-budget --session manager-session --run manager-run";
+    let read_budget_command =
+      "charliebot read-budget --session manager-session --run manager-run --agent-tool --can-delegate";
     assert_eq!(
       read_budget,
       &serde_json::json!({"matcher": "compact", "hooks": [{"type": "command", "command": read_budget_command}]})
@@ -921,7 +932,8 @@ mod tests {
   #[test]
   fn manager_turn_settings_require_the_charliebot_run_id() {
     let error =
-      claude_launch::headless_claude_settings(RunKind::ManagerTurn, Some("manager-session"), None).unwrap_err();
+      claude_launch::headless_claude_settings(RunKind::ManagerTurn, Some("manager-session"), None, false, false)
+        .unwrap_err();
     assert!(error.to_string().contains("require a CharlieBot run id"), "{error}");
   }
 
@@ -936,14 +948,15 @@ mod tests {
     }]);
     for run_kind in [RunKind::ManagerTurn, RunKind::Work, RunKind::Review, RunKind::Iteration] {
       let settings =
-        claude_launch::headless_claude_settings(run_kind, Some("manager-session"), Some("manager-run")).unwrap();
+        claude_launch::headless_claude_settings(run_kind, Some("manager-session"), Some("manager-run"), false, false)
+          .unwrap();
       assert_eq!(settings["hooks"]["PreToolUse"], both, "{run_kind:?}");
     }
     let scan_only = serde_json::json!([{
       "matcher": "Bash",
       "hooks": [{"type": "command", "command": "charliebot scan-guard"}]
     }]);
-    let settings = claude_launch::headless_claude_settings(RunKind::ScheduledStep, None, None).unwrap();
+    let settings = claude_launch::headless_claude_settings(RunKind::ScheduledStep, None, None, false, false).unwrap();
     assert_eq!(settings["hooks"]["PreToolUse"], scan_only);
     let settings = claude_launch::headless_claude_settings_without_guards(RunKind::ScheduledStep, None).unwrap();
     assert!(settings.get("hooks").is_none());

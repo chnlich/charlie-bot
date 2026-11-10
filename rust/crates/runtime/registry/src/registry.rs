@@ -886,6 +886,8 @@ pub struct LaunchContext {
   pub running_turns: Option<RunningTurnsFn>,
   /// The task-tree Run id, when the turn belongs to a Run (`backend_lifecycle.LaunchContext.run_id`).
   pub run_id: Option<String>,
+  /// Whether the delegation gate allows task delegation on this turn.
+  pub can_delegate: bool,
 }
 
 /// The plan for one process of a run: the factory arguments, the conversation to resume, and after a relay the

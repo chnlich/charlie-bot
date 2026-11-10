@@ -481,6 +481,7 @@ impl Worker {
       }),
       running_turns: None,
       run_id: None,
+      can_delegate: false,
     })
   }
 

@@ -419,6 +419,7 @@ mod tests {
       context_state,
       running_turns: Some(running_turns),
       run_id: None,
+      can_delegate: false,
     }
   }
 

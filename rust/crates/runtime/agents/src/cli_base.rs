@@ -5,6 +5,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
+use charliebot_core::paths::DEFAULT_PATH;
 use charliebot_core::proxy_env::{HTTP_PROXY, HTTPS_PROXY, NO_PROXY};
 use charliebot_registry::backend::{Env, FinalStdoutOutcome, Translate};
 use serde_json::{Map, Value};
@@ -48,7 +49,7 @@ impl CliHost {
     let home = std::env::var_os("HOME").context("HOME must be set for the CLI backend types")?;
     let path = match std::env::var("PATH") {
       Ok(path) => path,
-      Err(std::env::VarError::NotPresent) => "/bin:/usr/bin".to_string(),
+      Err(std::env::VarError::NotPresent) => DEFAULT_PATH.to_string(),
       Err(error) => return Err(error).context("PATH must be valid Unicode for the CLI backend types"),
     };
     Ok(Self { path, home: PathBuf::from(home) })

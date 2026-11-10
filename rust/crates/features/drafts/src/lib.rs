@@ -5,10 +5,10 @@
 //! A platform's target validation and sender live in that platform's own feature module and reach this package only
 //! through the [`charliebot_registry::draft::DraftPlatform`] trait. A new platform adds only its own module.
 
-pub mod api;
-pub mod card;
-pub mod lock;
-pub mod log;
+mod api;
+mod card;
+mod lock;
+mod log;
 mod turn_contribution;
 
 #[cfg(test)]

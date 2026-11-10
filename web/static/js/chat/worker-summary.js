@@ -35,6 +35,14 @@ let currentSummary = null;
 let currentSummaryJson = 'null';
 // The closing roles ('work', 'review') whose Show all fold the reader opened.
 const openFolds = new Set();
+// The task and run states the server's worker summary sends. Every comparison
+// and default names a member, so this object is the one home of these values.
+const WORKER_STATE = {
+  OPEN: 'open',
+  COMPLETED: 'completed',
+  RUNNING: 'running',
+  QUEUED: 'queued',
+};
 
 // The whole seconds since an ISO time, in the Run duration words.
 function elapsedText(startedAt) {
@@ -74,13 +82,13 @@ function toolCallWords(count) {
 // is open. A live run reads Running/Queued; any other open run reads its own
 // terminal state.
 function statusOf(summary) {
-  const state = String(summary.task_state || 'open');
+  const state = String(summary.task_state || WORKER_STATE.OPEN);
   const runs = summary.runs || [];
   const newest = runs.length ? runs[runs.length - 1] : null;
-  if (state === 'completed') return {label: 'Delivered', dot: 'bg-green-500'};
-  if (state !== 'open') return {label: 'Task ' + state, dot: 'bg-slate-500'};
-  if (newest && newest.state === 'running') return {label: 'Running', dot: 'bg-blue-500 animate-pulse-dot'};
-  if (newest && newest.state === 'queued') return {label: 'Queued', dot: 'bg-amber-400'};
+  if (state === WORKER_STATE.COMPLETED) return {label: 'Delivered', dot: 'bg-green-500'};
+  if (state !== WORKER_STATE.OPEN) return {label: 'Task ' + state, dot: 'bg-slate-500'};
+  if (newest && newest.state === WORKER_STATE.RUNNING) return {label: 'Running', dot: 'bg-blue-500 animate-pulse-dot'};
+  if (newest && newest.state === WORKER_STATE.QUEUED) return {label: 'Queued', dot: 'bg-amber-400'};
   if (newest) return {label: 'Run ' + String(newest.state || ''), dot: 'bg-slate-500'};
   return {label: 'Open', dot: 'bg-slate-500'};
 }
@@ -90,7 +98,7 @@ function statusOf(summary) {
 function runRowHtml(row, activeStartedAt) {
   const state = String(row.state || '');
   let duration = '';
-  if (state === 'running' && activeStartedAt) {
+  if (state === WORKER_STATE.RUNNING && activeStartedAt) {
     duration = escapeHtml(elapsedText(activeStartedAt));
   } else if (row.started_at && row.ended_at) {
     const seconds = Math.floor((new Date(row.ended_at) - new Date(row.started_at)) / 1000);
@@ -197,7 +205,7 @@ function landedHtml(summary) {
 // The status line's time: the close time once the task is closed, the live
 // Run's elapsed time while it runs.
 function statusTimeHtml(summary) {
-  if (summary.task_state !== 'open') {
+  if (summary.task_state !== WORKER_STATE.OPEN) {
     return '<span class="text-xs text-slate-400 whitespace-nowrap" title="' + escapeHtmlAttr(String(summary.closed_at))
       + '">' + escapeHtml('Ended ' + formatBubbleTime(summary.closed_at)) + '</span>';
   }

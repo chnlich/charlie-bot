@@ -44,6 +44,8 @@ function loadPage() {
       });
     },
     console: {error: (message) => errors.push(message)},
+    URL,
+    window: {location: {href: 'http://app.test/', origin: 'http://app.test'}},
     Chat: {},
   };
   context.globalThis = context;
@@ -85,9 +87,25 @@ test('a message whose anchor is a same-origin path starts the download', () => {
 test('a message whose anchor is a fragment, a query or another origin asks for nothing', () => {
   const rig = loadPage();
   rig.context.Chat.markFileLinks(messageRoot([
-    prose({hrefs: ['#section', '?tab=1', 'https://example.invalid/x']}),
+    prose({hrefs: ['#section', '?tab=1', 'https://example.invalid/x', '//other.invalid/x']}),
   ]));
-  assert.deepEqual(rig.downloadCalls, []);
+  assert.deepEqual(rig.downloadCalls, [], 'another origin\'s anchor is another server\'s file');
+});
+
+test('a message whose text names another origin\'s file-server path asks for nothing', () => {
+  const rig = loadPage();
+  rig.context.Chat.markFileLinks(messageRoot([
+    prose({text: 'https://other.invalid/absolute_filepath/home/x/report.txt'}),
+  ]));
+  assert.deepEqual(rig.downloadCalls, [], 'the scanner leaves another origin\'s URL as written');
+});
+
+test('a message whose text names this page\'s file server by its full URL starts the download', () => {
+  const rig = loadPage();
+  rig.context.Chat.markFileLinks(messageRoot([
+    prose({text: 'http://app.test/absolute_filepath/home/x/report.txt'}),
+  ]));
+  assert.equal(rig.downloadCalls.length, 1, 'the scanner resolves the full URL to this page\'s origin');
 });
 
 test('the streaming bubble asks for nothing', () => {
@@ -110,6 +128,14 @@ test('the roots that asked are marked when the module lands, and later calls go 
   rig.context.Chat.markFileLinks(second);
   assert.deepEqual(rig.marked, [first, second], 'a later call reaches the module even with no file path');
   assert.equal(rig.downloadCalls.length, 1, 'the module is fetched once');
+});
+
+test('a failed download rejects the load, so a caller that needs the module\'s helpers stops', async () => {
+  const rig = loadPage();
+  const loading = rig.context.loadFileLinks();
+  rig.rejectLoad(new Error('offline'));
+  await assert.rejects(loading, /offline/);
+  assert.match(rig.errors[0], /did not load/);
 });
 
 test('a failed download is reported and the next need retries', async () => {

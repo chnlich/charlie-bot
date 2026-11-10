@@ -17,6 +17,11 @@
   h2 .n { display:inline-flex; width:22px; height:22px; border-radius:6px; background:var(--acc); color:var(--panel);
     font-size:12px; font-weight:700; align-items:center; justify-content:center; margin-right:8px }
   h2 .hint { margin-left:auto; font-size:11.5px; font-weight:400; color:var(--mut) }
+  /* The digest heading folds the day's record. The whole heading is the pointer target, and its hint carries the
+     keyboard target and the expanded state. */
+  h2.digest-heading { cursor:pointer }
+  h2.digest-heading .hint { cursor:pointer }
+  h2.digest-heading .hint:focus-visible { outline:2px solid var(--acc); outline-offset:2px }
   p { margin:8px 0 }
   ul { list-style:none; margin:8px 0 0; padding:0 }
   li { margin:6px 0; padding:9px 12px; background:var(--panel); border:1px solid var(--bd); border-radius:9px }
@@ -67,6 +72,13 @@
 <body>
 {% set defer_concurrency_badge_poll = true %}
 {% include 'partials/concurrency_badge.html' %}
+{# Today's login sheet carries every open user-act item, so today's queue leaves those rows to it. A past day's
+   queue keeps them, as every other day's view does. #}
+{% if ctx.is_today %}
+{% set queue_rows = ctx.queue | rejectattr('tier', 'eq', 'user-act') | list %}
+{% else %}
+{% set queue_rows = ctx.queue %}
+{% endif %}
 <div class="wrap">
 <h1>Approvals</h1>
 <p class="sub">One Pacific day of the tiered approval.</p>
@@ -77,17 +89,36 @@
     <a href="/approval?date={{ ctx.next }}">{{ ctx.next }} &rarr;</a>
   </div>
   <span class="mtag">PT day &middot; {{ ctx.date }}</span>
-  <span class="mtag">Queue &middot; {{ ctx.queue|length }}</span>
+  <span class="mtag">Queue &middot; {{ queue_rows|length }}</span>
   <span class="mtag">Login actions &middot; {{ ctx.login_sheet|length }}</span>
   <span class="mtag">Digest &middot; {{ ctx.digest|length }}</span>
 </div>
 
-<h2><span class="n">1</span>Queue</h2>
-{% if not ctx.queue %}
+<h2><span class="n">1</span>Login sheet</h2>
+{% if not ctx.login_sheet %}
+<p class="none">No actions that only you can do on <span class="day">{{ ctx.date }}</span>.</p>
+{% else %}
+<ul>
+  {% for item in ctx.login_sheet %}
+  <li>
+    <div class="row1">
+      <span class="tag tier">user-act</span>
+      <span class="age">{{ item.age }}</span>
+      <span class="text">{{ item.text }}</span>
+      <span class="openlink">{% if item.link %}<a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">Open page</a> &middot; {% endif %}<a href="/?session={{ item.session_id }}">{{ item.session_name }}</a></span>
+    </div>
+    {% if item.context %}<p class="ctx">{{ item.context }}</p>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+<h2><span class="n">2</span>Queue</h2>
+{% if not queue_rows %}
 <p class="none">No open Waiting on you items.</p>
 {% else %}
 <ul class="queue">
-  {% for item in ctx.queue %}
+  {% for item in queue_rows %}
   <li{% if item.context %} data-fold="1"{% endif %}>
     <div class="row1">
       {% if item.tier == 't0' %}
@@ -108,30 +139,11 @@
 </ul>
 {% endif %}
 
-<h2><span class="n">2</span>Login sheet</h2>
-{% if not ctx.login_sheet %}
-<p class="none">No actions that only you can do on <span class="day">{{ ctx.date }}</span>.</p>
-{% else %}
-<ul>
-  {% for item in ctx.login_sheet %}
-  <li>
-    <div class="row1">
-      <span class="tag tier">user-act</span>
-      <span class="age">{{ item.age }}</span>
-      <span class="text">{{ item.text }}</span>
-      <span class="openlink">{% if item.link %}<a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">Open page</a> &middot; {% endif %}<a href="/?session={{ item.session_id }}">{{ item.session_name }}</a></span>
-    </div>
-    {% if item.context %}<p class="ctx">{{ item.context }}</p>{% endif %}
-  </li>
-  {% endfor %}
-</ul>
-{% endif %}
-
-<h2><span class="n">3</span>Digest<span class="hint">Silence accepts the step.</span></h2>
+<h2 class="digest-heading"><span class="n">3</span>Digest<span class="hint" role="button" tabindex="0" aria-expanded="false" aria-controls="approval-digest-content">Silence accepts the step.</span></h2>
 {% if not ctx.digest %}
-<p class="none">No digest entries and no policy table changes on <span class="day">{{ ctx.date }}</span>.</p>
+<p class="none" id="approval-digest-content">No digest entries and no policy table changes on <span class="day">{{ ctx.date }}</span>.</p>
 {% else %}
-<ul>
+<ul id="approval-digest-content">
   {% for item in ctx.digest %}
   {% if item.type == 'digest_entry' %}
   <li>
@@ -178,6 +190,25 @@
       }
     });
   }
+
+  // The Digest section starts folded. A click on its heading, or Enter or Space on the heading's hint, shows or
+  // hides the day's record; the hint carries the expanded state.
+  const digestHeading = document.querySelector('h2.digest-heading');
+  const digestHint = digestHeading.querySelector('.hint');
+  const digestContent = document.getElementById('approval-digest-content');
+  digestContent.hidden = true;
+  const toggleDigest = () => {
+    const open = digestContent.hidden;
+    digestContent.hidden = !open;
+    digestHint.setAttribute('aria-expanded', String(open));
+  };
+  digestHeading.addEventListener('click', toggleDigest);
+  digestHint.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      toggleDigest();
+    }
+  });
 </script>
 {% if ctx.is_today %}
 <script>

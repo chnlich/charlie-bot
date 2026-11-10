@@ -49,6 +49,7 @@ test('createTerminal mounts one Terminal with the shared options', () => {
     fontSize: 13,
     fontFamily: '"Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
     theme: {background: '#000000', foreground: '#e2e8f0'},
+    minimumContrastRatio: 4.5,
     scrollback: 50000,
     convertEol: false,
     allowProposedApi: true,

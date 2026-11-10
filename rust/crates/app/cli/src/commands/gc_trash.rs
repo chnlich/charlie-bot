@@ -14,6 +14,7 @@ use charliebot_agents::cli_host::LazyHost;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::git::TRASH_DIR_NAME;
+use charliebot_core::human_size::format_size;
 use charliebot_core::paths;
 use charliebot_core::text_repr::format_f;
 use clap::{CommandFactory, FromArgMatches, Parser};
@@ -153,18 +154,6 @@ fn purge(entries: &[TrashEntry]) -> bool {
     }
   }
   failed
-}
-
-/// A size as `"5 B"`, `"2.0 KB"`, and upward with one decimal above bytes.
-fn format_size(size: u64) -> String {
-  let mut size = size as f64;
-  for unit in ["B", "KB", "MB", "GB", "TB"] {
-    if size < 1024.0 {
-      return if unit == "B" { format!("{} {unit}", size as u64) } else { format!("{} {unit}", format_f(size, 1)) };
-    }
-    size /= 1024.0;
-  }
-  format!("{} PB", format_f(size, 1))
 }
 
 fn unix_seconds(moment: SystemTime) -> f64 {

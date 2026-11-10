@@ -1078,10 +1078,9 @@ mod tests {
   }
 
   #[test]
-  fn session_conclusion_succeeds_when_charliebot_session_id_names_parent() {
+  fn session_conclusion_reads_a_child_run_without_a_caller_session() {
     let home = tempfile::tempdir().expect("a temp home");
     let child_id = "child-worker-session-id";
-    let parent_id = "parent-manager-session-id";
     let session_dir = config::sessions_dir_in(home.path()).join(child_id);
     let run_dir = layout::runs_dir(&session_dir).join("run-child");
     fs::create_dir_all(&run_dir).unwrap();
@@ -1092,18 +1091,6 @@ mod tests {
     .unwrap();
     fs::write(run_dir.join("report.md"), "Task completed successfully").unwrap();
 
-    // Verify resolve_session_id with parent env and child arg rejects with mismatch error
-    let sources = resolve::SessionSources {
-      arg_session: Some(child_id),
-      env_session: Some(parent_id),
-      cwd: home.path(),
-      sessions_dir: &config::sessions_dir_in(home.path()),
-    };
-    let resolve_err = resolve::resolve_session_id(sources).unwrap_err();
-    assert_eq!(resolve_err.code, 2);
-    assert!(resolve_err.body["error"].as_str().unwrap().contains(parent_id));
-
-    // session conclusion bypasses resolve_from_env and succeeds
     let res = conclusion_in_home(home.path(), &ConclusionArgs { session: child_id.to_string(), run: None }).unwrap();
     assert_eq!(res, "Task completed successfully");
   }

@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "session",
+    "dialog",
+    "--session",
+    "child-session"
+  ],
+  "cwd": "{root}/home/sessions/manager-session",
+  "env": {
+    "CHARLIEBOT_SESSION_ID": "manager-session"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"session id mismatch: --session=child-session CHARLIEBOT_SESSION_ID=manager-session; refusing to use an ambiguous session\"}\n",
+    "exit": 2,
+    "requests": []
+  }
+}

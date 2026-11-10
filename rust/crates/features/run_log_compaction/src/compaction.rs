@@ -1,11 +1,12 @@
 //! The compaction of a finished run's log files to zstd.
 //!
 //! A run whose record holds an end at least [`PLAIN_RETENTION`] old has each of its log files stored as `<name>.zst`.
-//! The handler writes the compressed file, decompresses it and compares it byte for byte with the plain file, and only
-//! then removes the plain file. A run without a recorded end is left alone, and a second pass finds nothing to do.
+//! The handler writes the compressed file without thinking-token progress events, decompresses it and compares it byte
+//! for byte with the plain file after those events are removed, and only then removes the plain file. A run without a
+//! recorded end is left alone, and a second pass finds nothing to do.
 
 use std::fs::{self, File};
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
@@ -146,7 +147,7 @@ fn holds_compressed_log(run_dir: &Path) -> anyhow::Result<bool> {
 enum Compaction {
   /// The plain file became its compressed form.
   Compacted,
-  /// The file was already stored compressed, or no longer exists.
+  /// A compressed sibling already exists, or the plain file no longer exists.
   Skipped,
 }
 
@@ -158,6 +159,9 @@ fn compress_file(plain: &Path) -> anyhow::Result<Compaction> {
     return Ok(Compaction::Skipped);
   }
   let compressed = run_logs::compressed_path(plain);
+  if compressed.is_file() {
+    return Ok(Compaction::Skipped);
+  }
   if let Err(cause) = write_compressed(plain, &compressed) {
     remove_partial(&compressed);
     return Err(cause);
@@ -178,10 +182,10 @@ fn verify_or_remove(plain: &Path, compressed: &Path) -> anyhow::Result<()> {
   }
 }
 
-/// The compressed write of `plain` into `compressed`, synced to disk.
+/// The compressed write of `plain` without thinking-token progress events, synced to disk.
 fn write_compressed(plain: &Path, compressed: &Path) -> anyhow::Result<()> {
   let input = File::open(plain).with_context(|| format!("opening {}", plain.display()))?;
-  let mut input = BufReader::new(input);
+  let mut input = FilteredLines::new(BufReader::new(input));
   let output = File::create(compressed).with_context(|| format!("creating {}", compressed.display()))?;
   let mut encoder = zstd::stream::write::Encoder::new(BufWriter::new(output), COMPRESSION_LEVEL)
     .with_context(|| format!("starting the zstd frame for {}", compressed.display()))?;
@@ -193,10 +197,10 @@ fn write_compressed(plain: &Path, compressed: &Path) -> anyhow::Result<()> {
   Ok(())
 }
 
-/// The compressed file's decompressed bytes equal the plain file's, byte for byte.
+/// The compressed file's decompressed bytes equal the plain file after thinking-token progress events are removed.
 fn verify_equal(plain: &Path, compressed: &Path) -> anyhow::Result<()> {
   let expected_file = File::open(plain).with_context(|| format!("opening {}", plain.display()))?;
-  let mut expected = BufReader::new(expected_file);
+  let mut expected = FilteredLines::new(BufReader::new(expected_file));
   let decoder = File::open(compressed).with_context(|| format!("opening {}", compressed.display()))?;
   let mut actual = zstd::stream::read::Decoder::new(BufReader::new(decoder))
     .with_context(|| format!("reading the zstd frame of {}", compressed.display()))?;
@@ -213,6 +217,47 @@ fn verify_equal(plain: &Path, compressed: &Path) -> anyhow::Result<()> {
     if expected_len == 0 {
       return Ok(());
     }
+  }
+}
+
+/// A buffered log reader that omits only Claude Code thinking-token progress lines.
+struct FilteredLines<R> {
+  input: R,
+  line: Vec<u8>,
+  offset: usize,
+}
+
+impl<R> FilteredLines<R> {
+  fn new(input: R) -> Self {
+    Self { input, line: Vec::new(), offset: 0 }
+  }
+}
+
+impl<R: BufRead> Read for FilteredLines<R> {
+  fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+    if output.is_empty() {
+      return Ok(0);
+    }
+    loop {
+      if self.offset < self.line.len() {
+        break;
+      }
+      self.line.clear();
+      self.offset = 0;
+      if self.input.read_until(b'\n', &mut self.line)? == 0 {
+        return Ok(0);
+      }
+      let is_thinking_tokens = run_logs::is_thinking_tokens_line(&self.line);
+      if is_thinking_tokens {
+        self.line.clear();
+        continue;
+      }
+      break;
+    }
+    let count = output.len().min(self.line.len() - self.offset);
+    output[..count].copy_from_slice(&self.line[self.offset..self.offset + count]);
+    self.offset += count;
+    Ok(count)
   }
 }
 
@@ -287,9 +332,21 @@ mod tests {
       record["ended_at"] = json!(ended_at);
     }
     fs::write(run.join(RUN_METADATA_NAME), serde_json::to_string(&record).unwrap()).unwrap();
-    fs::write(run.join(RUN_EVENTS_NAME), b"{\"type\": \"result\"}\n").unwrap();
-    fs::write(run.join(RAW_LOG_NAME), b"{\"type\": \"user\"}\n{\"type\": \"assistant\"}\n").unwrap();
-    fs::write(run.join(format!("{RAW_LOG_NAME}.1")), b"{\"rotated\": true}\n").unwrap();
+    fs::write(
+      run.join(RUN_EVENTS_NAME),
+      b"{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens\":1}\n{ \"type\" : \"result\" }\r\n",
+    )
+    .unwrap();
+    fs::write(
+      run.join(RAW_LOG_NAME),
+      b"{\"type\":\"user\"}\n{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens\":2}\n{\"type\":\"assistant\"}\n",
+    )
+    .unwrap();
+    fs::write(
+      run.join(format!("{RAW_LOG_NAME}.1")),
+      b"not json \r\n{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens\":3}\n{\"type\":\"system\",\"subtype\":\"other\"}\n",
+    )
+    .unwrap();
     run
   }
 
@@ -303,11 +360,15 @@ mod tests {
     let run = session_with_run(dir.path(), "run-1", Some("2026-11-05T12:00:00Z"));
     let report = compact(dir.path(), now()).unwrap();
     assert_eq!(report.compacted, 3, "the event log, the raw log and the rotated raw log");
-    for name in log_names() {
+    for (name, expected) in [
+      (RUN_EVENTS_NAME.to_string(), b"{ \"type\" : \"result\" }\r\n".as_slice()),
+      (RAW_LOG_NAME.to_string(), b"{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n".as_slice()),
+      (format!("{RAW_LOG_NAME}.1"), b"not json \r\n{\"type\":\"system\",\"subtype\":\"other\"}\n".as_slice()),
+    ] {
       assert!(!run.join(&name).exists(), "{name} is removed once its content is stored compressed");
       let compressed = run.join(format!("{name}{COMPRESSED_SUFFIX}"));
       let bytes = fs::read(&compressed).unwrap_or_else(|error| panic!("{compressed:?}: {error}"));
-      assert!(!zstd::stream::decode_all(bytes.as_slice()).unwrap().is_empty());
+      assert_eq!(zstd::stream::decode_all(bytes.as_slice()).unwrap(), expected, "{name}");
     }
   }
 
@@ -362,5 +423,38 @@ mod tests {
     fs::write(&compressed, zstd::stream::encode_all(content.as_slice(), 3).unwrap()).unwrap();
     verify_or_remove(&plain, &compressed).expect("equal content passes");
     assert!(compressed.is_file());
+  }
+
+  #[test]
+  fn a_compressed_log_without_thinking_token_lines_passes_the_filtered_match_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let plain = dir.path().join(RAW_LOG_NAME);
+    fs::write(
+      &plain,
+      b"{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens\":1}\n{\"type\":\"assistant\"}\n",
+    )
+    .unwrap();
+    let compressed = run_logs::compressed_path(&plain);
+    fs::write(&compressed, zstd::stream::encode_all(b"{\"type\":\"assistant\"}\n".as_slice(), 3).unwrap()).unwrap();
+
+    verify_or_remove(&plain, &compressed).expect("the filtered plain log matches the compressed content");
+
+    assert!(plain.is_file(), "a successful match check leaves deletion to the compaction caller");
+    assert!(compressed.is_file());
+  }
+
+  #[test]
+  fn an_existing_compressed_sibling_stays_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let plain = dir.path().join(RUN_EVENTS_NAME);
+    fs::write(&plain, b"{\"type\":\"result\"}\n").unwrap();
+    let compressed = run_logs::compressed_path(&plain);
+    let bytes = zstd::stream::encode_all(b"older compressed content\n".as_slice(), 3).unwrap();
+    fs::write(&compressed, &bytes).unwrap();
+
+    assert!(matches!(compress_file(&plain).unwrap(), Compaction::Skipped));
+
+    assert!(plain.is_file());
+    assert_eq!(fs::read(compressed).unwrap(), bytes);
   }
 }

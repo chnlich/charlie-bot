@@ -34,9 +34,9 @@ use charliebot_core::timefmt;
 use charliebot_registry::backend::{
   BackendLifecycle, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch, RetryAfter,
 };
-use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
 use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_LOG_NAME, event_line};
+use charliebot_store::{Store, run_logs};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
@@ -827,7 +827,7 @@ impl RunSink {
   /// Appends one event line (`Worker._append_event_line`).
   fn append(&self, event: &Value) -> anyhow::Result<()> {
     let mut file = self.file.lock().expect("events log mutex is not poisoned");
-    file.write_all(&event_line(event)).with_context(|| format!("appending to events log {}", self.path.display()))
+    append_run_event(&mut file, &self.path, event)
   }
 
   /// Appends one event line and syncs its data before returning, as the durable chat append does.
@@ -862,6 +862,13 @@ impl RunSink {
   fn context_tokens(&self) -> Option<i64> {
     *self.context_tokens.lock().expect("context tokens mutex is not poisoned")
   }
+}
+
+fn append_run_event(file: &mut File, path: &Path, event: &Value) -> anyhow::Result<()> {
+  if run_logs::is_thinking_tokens_event(event) {
+    return Ok(());
+  }
+  file.write_all(&event_line(event)).with_context(|| format!("appending to events log {}", path.display()))
 }
 
 /// Processes one event of a run's process. The watch folds the event, a quota or rate-limit rejection ends the run,
@@ -1063,5 +1070,29 @@ impl Worker {
   ) -> anyhow::Result<bool> {
     let sink = self.open_sink()?;
     handle_event(&sink, event, watch, None).await
+  }
+}
+
+#[cfg(test)]
+mod run_log_tests {
+  use super::*;
+
+  #[test]
+  fn run_event_writer_omits_only_thinking_token_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("events.jsonl");
+    let mut file = File::create(&path).unwrap();
+    let thinking = json!({"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 1});
+    let assistant = json!({"type": "assistant", "subtype": "thinking_tokens"});
+    let other_system = json!({"type": "system", "subtype": "compact_boundary"});
+
+    append_run_event(&mut file, &path, &thinking).unwrap();
+    append_run_event(&mut file, &path, &assistant).unwrap();
+    append_run_event(&mut file, &path, &other_system).unwrap();
+
+    let mut expected = event_line(&assistant);
+    expected.extend(event_line(&other_system));
+    assert_eq!(fs::read(path).unwrap(), expected);
+    assert_eq!(thinking["subtype"], "thinking_tokens", "the stored-line filter does not mutate forwarded events");
   }
 }

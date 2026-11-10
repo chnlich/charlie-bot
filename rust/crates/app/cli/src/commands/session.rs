@@ -872,6 +872,7 @@ fn print_conclusion(text: &str) {
 #[cfg(test)]
 mod tests {
   use std::fs;
+  use std::path::Path;
 
   use charliebot_tasks::completion::PENDING_UNTIL_USER_VIEW;
   use tempfile::TempDir;
@@ -905,6 +906,41 @@ mod tests {
 
   fn close_requested() -> Value {
     json!({"type": event_types::TASK_CLOSE_REQUESTED, "id": "close-request-1", "request_id": REQUEST_ID})
+  }
+
+  fn home_with_run_log(chat_events: &[Value], run_events: &[Value]) -> TempDir {
+    let home = home_with_session(&metadata("user"), chat_events);
+    let session_dir = config::sessions_dir_in(home.path()).join(TASK_ID);
+    let run_dir = layout::runs_dir(&session_dir).join("run-1");
+    fs::create_dir_all(&run_dir).unwrap();
+    let lines = run_events.iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+    fs::write(run_dir.join(charliebot_store::run_logs::RUN_EVENTS_NAME), lines + "\n").unwrap();
+    home
+  }
+
+  fn conversation_outputs(home: &Path) -> (Vec<Value>, String) {
+    let session_dir = config::sessions_dir_in(home).join(TASK_ID);
+    let events = fs::read_to_string(layout::chat_events_path(&session_dir))
+      .unwrap()
+      .lines()
+      .map(|line| serde_json::from_str::<Value>(line).unwrap())
+      .collect::<Vec<_>>();
+    let mut aggregator = charliebot_store::MessageAggregator::new(0, false);
+    let mut messages = Vec::new();
+    for event in &events {
+      for frame in aggregator.feed(event).unwrap() {
+        if frame.get("type").and_then(Value::as_str) == Some("message") {
+          messages.push(frame["message"].clone());
+        }
+      }
+    }
+    for frame in aggregator.flush_pending() {
+      if frame.get("type").and_then(Value::as_str) == Some("message") {
+        messages.push(frame["message"].clone());
+      }
+    }
+    let dialog = messages.iter().filter_map(format_message_block).collect::<Vec<_>>().join("\n\n");
+    (messages, dialog)
   }
 
   #[test]
@@ -963,6 +999,37 @@ mod tests {
     let readback = find_local_task_close(home.path(), TASK_ID, REQUEST_ID);
 
     assert!(readback.is_err(), "an unknown approver must not pick either answer: {readback:?}");
+  }
+
+  #[test]
+  fn thinking_token_run_log_lines_do_not_change_web_conversation_or_session_dialog() {
+    let chat_events = [
+      json!({"type": "user", "id": "user-1", "timestamp": "2026-11-10T12:00:00Z", "content": "Question"}),
+      json!({
+        "type": "assistant",
+        "id": "assistant-1",
+        "timestamp": "2026-11-10T12:00:01Z",
+        "message": {"content": [{"type": "text", "text": "Answer"}]}
+      }),
+      json!({"type": "master_done", "id": "done-1", "timestamp": "2026-11-10T12:00:02Z"}),
+    ];
+    let thinking = json!({"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 1});
+    let result = json!({"type": "result", "result": "Answer"});
+    let with_thinking = home_with_run_log(&chat_events, &[thinking, result.clone()]);
+    let without_thinking = home_with_run_log(&chat_events, &[result]);
+
+    let with_log =
+      fs::read(config::sessions_dir_in(with_thinking.path()).join(TASK_ID).join("data/runs/run-1/events.jsonl"))
+        .unwrap();
+    let without_log =
+      fs::read(config::sessions_dir_in(without_thinking.path()).join(TASK_ID).join("data/runs/run-1/events.jsonl"))
+        .unwrap();
+    assert_ne!(with_log, without_log, "the run-log variants differ");
+
+    let with_outputs = conversation_outputs(with_thinking.path());
+    let without_outputs = conversation_outputs(without_thinking.path());
+    assert_eq!(with_outputs.0, without_outputs.0, "the web conversation messages are unchanged");
+    assert_eq!(with_outputs.1, without_outputs.1, "the session dialog text is unchanged");
   }
 
   #[test]

@@ -10,6 +10,7 @@ use std::io::{self, BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use charliebot_core::fsutil::{self, FileBytes};
+use serde_json::Value;
 
 /// The backend process output of a run, before any rotation suffix.
 pub const RAW_LOG_NAME: &str = "agent.raw.ndjson";
@@ -19,6 +20,17 @@ pub const RUN_EVENTS_NAME: &str = "events.jsonl";
 
 /// The suffix of a compressed run log: `events.jsonl` is stored as `events.jsonl.zst`.
 pub const COMPRESSED_SUFFIX: &str = ".zst";
+
+/// Whether `event` is a Claude Code thinking-token progress event.
+pub fn is_thinking_tokens_event(event: &Value) -> bool {
+  event.get("type").and_then(Value::as_str) == Some("system")
+    && event.get("subtype").and_then(Value::as_str) == Some("thinking_tokens")
+}
+
+/// Whether `line` is a valid JSON event line recognized by [`is_thinking_tokens_event`]. Malformed lines return false.
+pub fn is_thinking_tokens_line(line: &[u8]) -> bool {
+  serde_json::from_slice::<Value>(line).is_ok_and(|event| is_thinking_tokens_event(&event))
+}
 
 /// One of the log files a run directory holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -253,6 +265,21 @@ mod tests {
     }
     for name in ["agent.raw.cursor", "agent.stderr.log", "agent.raw.ndjson.x", "events.jsonl.bak", "metadata.json"] {
       assert!(!is_run_log_name(name), "{name} is not a run log");
+    }
+  }
+
+  #[test]
+  fn recognizes_only_system_thinking_token_events() {
+    assert!(is_thinking_tokens_event(&serde_json::json!({"type": "system", "subtype": "thinking_tokens"})));
+    assert!(is_thinking_tokens_line(br#"{"type":"system","subtype":"thinking_tokens"}"#));
+    assert!(!is_thinking_tokens_line(b"not json"));
+    for event in [
+      serde_json::json!({"type": "assistant", "subtype": "thinking_tokens"}),
+      serde_json::json!({"type": "system", "subtype": "other"}),
+      serde_json::json!({"type": "system", "subtype": 1}),
+      serde_json::json!({"subtype": "thinking_tokens"}),
+    ] {
+      assert!(!is_thinking_tokens_event(&event), "{event}");
     }
   }
 }

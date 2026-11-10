@@ -107,11 +107,12 @@ impl LandState {
   }
 
   /// `landed` and `landed-no-ci` exit 0; every other state carries its own code, so the caller can
-  /// branch on the exit code alone. 2 stays the CLI's usage-error code.
+  /// branch on the exit code alone. 1 is the CLI's error code and 2 its usage-error code: a failed
+  /// call that printed no state exits 1, and `waiting` must not read as that.
   pub fn exit_code(self) -> i32 {
     match self {
       Self::Landed | Self::LandedNoCi => 0,
-      Self::Waiting => 1,
+      Self::Waiting => 8,
       Self::RebaseConflict => 3,
       Self::CiFailed => 4,
       Self::CiNotStarted => 5,
@@ -326,7 +327,7 @@ pub async fn land(home: &Path, task_session_id: &str) -> anyhow::Result<LandingR
 
     push_task_branch(&ctx, &ctx.branch_name).await?;
     let (pr_url, pr_number) = ensure_draft_pr(&ctx, &ctx.repo, published).await?;
-    let expected = expected_workflow_paths(&workflow_files_at(&ctx.worktree, &sha).await?);
+    let expected = expected_workflow_paths(&workflow_files_at(&ctx.worktree, &sha).await?)?;
     let evaluation = read_ci_state(&ctx.worktree, &ctx.repo, &sha).await?;
     let elapsed = match &head_pushed_at {
       Some(pushed_at) => elapsed_secs(pushed_at)?,
@@ -456,8 +457,8 @@ enum RebaseStep {
   Conflict,
 }
 
-/// The task branch push: a plain create when origin lacks the branch, `--force-with-lease`
-/// against the fetched tracking ref when it exists, so a rebase never clobbers another push.
+/// The task branch push under `--force-with-lease`: the lease is the fetched tracking ref when origin
+/// already has the branch, and an absent ref when it does not, so a rebase never clobbers another push.
 async fn push_task_branch(ctx: &TaskLanding, branch: &str) -> anyhow::Result<()> {
   let (ok, out, _) = git::git_stdout(
     &ctx.worktree,
@@ -469,24 +470,20 @@ async fn push_task_branch(ctx: &TaskLanding, branch: &str) -> anyhow::Result<()>
   if !ok {
     anyhow::bail!("git ls-remote origin {branch} failed: {out}");
   }
-  let published = !out.trim().is_empty();
-  let (ok, _, err) = if published {
+  if !out.trim().is_empty() {
     let (fetched, _, fetch_err) =
       git::git_stdout(&ctx.worktree, &["fetch", "origin", branch], GIT_WRITE_TIMEOUT, "git fetch task branch").await;
     if !fetched {
       anyhow::bail!("git fetch origin {branch} failed: {fetch_err}");
     }
-    git::git_stdout(
-      &ctx.worktree,
-      &["push", "--force-with-lease", "origin", branch],
-      GIT_PUSH_TIMEOUT,
-      "git push task branch",
-    )
-    .await
-  } else {
-    git::git_stdout(&ctx.worktree, &["push", "--force", "origin", branch], GIT_PUSH_TIMEOUT, "git push new task branch")
-      .await
-  };
+  }
+  let (ok, _, err) = git::git_stdout(
+    &ctx.worktree,
+    &["push", "--force-with-lease", "origin", branch],
+    GIT_PUSH_TIMEOUT,
+    "git push task branch",
+  )
+  .await;
   if !ok {
     anyhow::bail!("pushing task branch {branch} failed: {err}");
   }
@@ -521,11 +518,12 @@ async fn gate_applicability(repo_path: &Path, published_base: &str) -> anyhow::R
     return Ok(GateApplicability::NotApplicable);
   }
   let workflows = workflow_files_at(repo_path, &format!("origin/{published_base}")).await?;
-  if workflows.iter().any(|(_, content)| has_pull_request_trigger(content)) {
-    Ok(GateApplicability::Applies)
-  } else {
-    Ok(GateApplicability::NotApplicable)
+  for (path, content) in &workflows {
+    if pull_request_trigger_of(path, content)?.is_some() {
+      return Ok(GateApplicability::Applies);
+    }
   }
+  Ok(GateApplicability::NotApplicable)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -613,25 +611,25 @@ fn pull_request_trigger(workflow: &serde_yaml::Value) -> Option<bool> {
   }
 }
 
-fn has_pull_request_trigger(content: &str) -> bool {
-  serde_yaml::from_str::<serde_yaml::Value>(content)
-    .ok()
-    .and_then(|doc| pull_request_trigger(&doc).is_some().then_some(()))
-    .is_some()
+/// One workflow file's `pull_request` trigger (`pull_request_trigger`). A file that does not parse is an
+/// error: a broken workflow must not drop out of the gate as if it declared no CI.
+fn pull_request_trigger_of(path: &str, content: &str) -> anyhow::Result<Option<bool>> {
+  let doc = serde_yaml::from_str::<serde_yaml::Value>(content)
+    .map_err(|error| anyhow::anyhow!("{path} is not valid YAML: {error}"))?;
+  Ok(pull_request_trigger(&doc))
 }
 
 /// The expected set: the workflows declared with a `pull_request` trigger and no path or branch
 /// filter. A filtered workflow counts once it registers, so it is not expected to register.
-pub fn expected_workflow_paths(workflows: &[(String, String)]) -> Vec<String> {
+pub fn expected_workflow_paths(workflows: &[(String, String)]) -> anyhow::Result<Vec<String>> {
   let mut expected = Vec::new();
   for (path, content) in workflows {
-    let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(content) else { continue };
-    if pull_request_trigger(&doc) == Some(false) {
+    if pull_request_trigger_of(path, content)? == Some(false) {
       expected.push(path.clone());
     }
   }
   expected.sort();
-  expected
+  Ok(expected)
 }
 
 /// The GitHub-facing CI state of one head sha, read fresh from the check runs, commit statuses and
@@ -724,13 +722,15 @@ pub fn judge_ci(
   if let Some(list) = statuses.as_array() {
     for status in list {
       let Some(state) = string_field(status, "state") else { continue };
-      if !matches!(state.as_str(), "success" | "expected" | "neutral") {
-        failing.push(CheckRow {
+      match state.as_str() {
+        "success" | "expected" | "neutral" => {}
+        "pending" => incomplete = true,
+        _ => failing.push(CheckRow {
           name: string_field(status, "context").unwrap_or_default(),
           conclusion: Some(state),
           url: string_field(status, "target_url"),
           completed_at: None,
-        });
+        }),
       }
     }
   }
@@ -947,8 +947,9 @@ async fn ensure_draft_pr(ctx: &TaskLanding, repo: &str, published_base: &str) ->
     ],
   )
   .await;
-  if created.is_err() {
-    // A concurrent creation or a just-opened PR: re-read before failing.
+  if let Err(error) = &created {
+    // A concurrent creation or a just-opened PR: log the refusal, then re-read before failing.
+    tracing::info!(target: "charliebot_tasks", branch = %ctx.branch_name, error = %error, "land_pr_create_refused");
     tokio::time::sleep(Duration::from_secs(2)).await;
   }
   let pr =
@@ -1094,13 +1095,30 @@ mod tests {
       workflow(".github/workflows/triage.yml", "name: Triage\non: [push, workflow_dispatch]\njobs: {}\n"),
       workflow(".github/workflows/legacy.yml", "name: Legacy\ntriggers: [push]\njobs: {}\n"),
     ];
-    assert_eq!(expected_workflow_paths(&workflows), vec![".github/workflows/ci.yml".to_string()]);
-    for (_, content) in &workflows[..2] {
-      assert!(has_pull_request_trigger(content));
+    assert_eq!(expected_workflow_paths(&workflows).unwrap(), vec![".github/workflows/ci.yml".to_string()]);
+    // A filtered pull_request trigger still declares the trigger; a workflow without one does not.
+    for (path, content) in &workflows[..2] {
+      assert!(pull_request_trigger_of(path, content).unwrap().is_some());
     }
-    for (_, content) in &workflows[2..] {
-      assert!(!has_pull_request_trigger(content));
+    for (path, content) in &workflows[2..] {
+      assert!(pull_request_trigger_of(path, content).unwrap().is_none());
     }
+  }
+
+  #[test]
+  fn a_workflow_that_does_not_parse_fails_the_gate_instead_of_dropping_out() {
+    let broken = [workflow(".github/workflows/ci.yml", "on: [pull_request\n")];
+    assert!(expected_workflow_paths(&broken).is_err());
+    assert!(pull_request_trigger_of(".github/workflows/ci.yml", "on: [pull_request\n").is_err());
+  }
+
+  #[test]
+  fn a_pending_commit_status_waits_instead_of_failing_the_sha() {
+    let expected = [".github/workflows/ci.yml".to_string()];
+    let runs = json!([run(".github/workflows/ci.yml", "completed", Some("success"))]);
+    let statuses = json!([{ "context": "coverage", "state": "pending" }]);
+    assert_eq!(judge_ci(&expected, &runs, &json!([]), &statuses, 60), CiVerdict::Waiting);
+    assert_eq!(judge_ci(&expected, &runs, &json!([]), &statuses, TIMEOUT_SECS + 1), CiVerdict::Timeout);
   }
 
   #[test]
@@ -1189,7 +1207,7 @@ mod tests {
     let states = [
       (STATE_LANDED, 0),
       (STATE_LANDED_NO_CI, 0),
-      (STATE_WAITING, 1),
+      (STATE_WAITING, 8),
       (STATE_REBASE_CONFLICT, 3),
       (STATE_CI_FAILED, 4),
       (STATE_CI_NOT_STARTED, 5),

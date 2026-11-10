@@ -697,9 +697,11 @@
     header.className =
       'diff-file-row w-full flex items-center gap-3 px-3 py-2 bg-slate-50 hover:bg-slate-100 text-left';
 
+    // The mark turns a quarter when the row opens, so it carries the file's open state. slate-500 draws 4.55:1
+    // on the row's slate-50 and 4.34:1 on its hover tone, over the 3:1 floor a graphical mark keeps.
     const chevron = document.createElement('span');
     chevron.textContent = '▶';
-    chevron.className = 'diff-file-chevron text-slate-400 text-xs shrink-0 transition-transform';
+    chevron.className = 'diff-file-chevron text-slate-500 text-xs shrink-0 transition-transform';
 
     const badge = statusBadge(file.status);
     badge.classList.add('diff-file-badge');

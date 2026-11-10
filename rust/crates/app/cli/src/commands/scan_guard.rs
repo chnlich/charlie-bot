@@ -23,6 +23,7 @@ use charliebot_core::config::SESSIONS_DIR_NAME;
 use charliebot_core::event_types;
 use charliebot_core::home::{CHARLIEBOT_HOME_ENV, DEFAULT_HOME_DIR_NAME};
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
+use charliebot_core::str_methods;
 use charliebot_store::layout::DATA_DIR_NAME;
 use charliebot_store::run_logs::COMPRESSED_SUFFIX;
 use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME, STDERR_LOG_NAME};
@@ -421,7 +422,7 @@ fn is_reader_segment(segment: &str) -> bool {
 /// command.
 fn is_option_or_count(word: &str) -> bool {
   if let Some(name) = word.strip_prefix("--").or_else(|| word.strip_prefix('-')) {
-    return !name.is_empty() && name.chars().all(|character| character.is_alphanumeric() || character == '_');
+    return !name.is_empty() && name.chars().all(str_methods::is_word_char);
   }
   let digits = word.strip_suffix(['s', 'm', 'h', 'd']).unwrap_or(word);
   !digits.is_empty() && digits.chars().all(|character| character.is_ascii_digit())

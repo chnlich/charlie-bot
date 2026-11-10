@@ -119,6 +119,14 @@ pub fn is_alphanumeric(character: char) -> bool {
   ALPHANUMERIC.is_match(character.encode_utf8(&mut buffer))
 }
 
+/// Whether `character` continues a word: a Unicode alphanumeric or `_`.
+///
+/// This composes Rust's `char::is_alphanumeric`, not the `is_alphanumeric` above: the two accept different sets in
+/// the Other_Alphabetic category, and a word boundary keeps the Rust set.
+pub fn is_word_char(character: char) -> bool {
+  character.is_alphanumeric() || character == '_'
+}
+
 pub fn is_digit(character: char) -> bool {
   let code_point = character as u32;
   DIGIT_RANGES.iter().any(|&(start, end)| (start..=end).contains(&code_point))

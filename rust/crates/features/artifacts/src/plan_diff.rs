@@ -263,10 +263,6 @@ fn is_void_tag(tag: &str) -> bool {
   VOID_TAGS.contains(&tag)
 }
 
-fn is_word_char(character: char) -> bool {
-  character.is_alphanumeric() || character == '_'
-}
-
 fn is_cjk(character: char) -> bool {
   CJK_RANGES.iter().any(|(start, end)| (*start..=*end).contains(&(character as u32)))
 }
@@ -588,7 +584,7 @@ fn preceding_boundary(raw: &str, index: usize) -> bool {
   raw[..index]
     .chars()
     .next_back()
-    .is_none_or(|character| !is_word_char(character) && character != ':' && character != '-')
+    .is_none_or(|character| !str_methods::is_word_char(character) && character != ':' && character != '-')
 }
 
 fn find_class_attr(raw: &str, quoted: bool) -> Option<(usize, usize, String)> {

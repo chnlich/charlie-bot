@@ -253,6 +253,7 @@ mod tests {
     let login = write_script(dir.path(), &format!("{prefix}-login"), &format!("printf '%s\\n' '{LINK}'\n"));
     let failing = write_script(dir.path(), &format!("{prefix}-failing"), "echo starting; exit 3\n");
     let readback = write_script(dir.path(), &format!("{prefix}-readback"), "echo valid\n");
+    let failing_readback = write_script(dir.path(), &format!("{prefix}-failing-readback"), "echo failed\nexit 1\n");
     let config = format!(
       "\
 host_auth:
@@ -266,7 +267,7 @@ host_auth:
       label: Failing SSO
       login_command: [{failing}]
       approval_url_pattern: 'https://device\\.sso\\S*'
-      readback_command: [{readback}]
+      readback_command: [{failing_readback}]
 "
     );
     fs::write(dir.path().join(CONFIG_FILENAME), config).expect("the config writes");
@@ -367,6 +368,19 @@ host_auth:
     assert!(body.contains("Failing SSO"), "every configured login gets a row");
     assert!(body.contains("exit 0"), "the page-load readback's exit shows");
     assert!(body.contains("valid"), "the page-load readback's output shows");
+    assert!(body.contains("exit 1"), "the failing login's readback exit shows");
+    assert!(body.contains("failed"), "the failing login's readback output shows");
+    assert!(
+      body.contains("<h2>AWS SSO<span class=\"badge\">exit 0</span></h2>"),
+      "the exit mark sits in the card title row"
+    );
+    assert!(
+      body.contains("<h2>Failing SSO<span class=\"badge\">exit 1</span></h2>"),
+      "the failing exit mark sits in the card title row"
+    );
+    let pos_failing = body.find("Failing SSO").expect("failing card is present");
+    let pos_ok = body.find("AWS SSO").expect("healthy card is present");
+    assert!(pos_failing < pos_ok, "failed login card comes first");
     let start_path = format!("/api/host-auth/logins/{}/start", home.ok_name);
     assert!(body.contains(&start_path), "each row's form posts to its login's start route");
   }

@@ -40,6 +40,7 @@ use charliebot_core::event_types::{
 use charliebot_core::home;
 use charliebot_core::subagent::SUBAGENT_TOOL_NAMES;
 use charliebot_store::layout;
+use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -420,6 +421,10 @@ fn bash_class(command: &str, cwd: Option<&str>) -> Option<&'static str> {
   if status_decision(command) {
     return Some("status_decision");
   }
+  // A run log is never a decision read: a command that names one counts, whatever else it names.
+  if names_run_log(command) {
+    return None;
+  }
   if child_report_pattern().is_match(command) {
     return Some("child_conclusion");
   }
@@ -450,8 +455,22 @@ fn status_decision(command: &str) -> bool {
   })
 }
 
+/// Whether the command has shell syntax beyond one CharlieBot command piped into filters: a list or
+/// background operator (`;`, `&`, `||`), a newline, a redirection in (`<`), or a subshell or substitution
+/// (`(`, `)`, a backtick). Each one can run a second read beside the exempt one.
+fn has_shell_control(command: &str) -> bool {
+  command.contains(['&', ';', '<', '(', ')', '`', '\n']) || command.contains("||")
+}
+
+/// Whether the command names a run log, `events.jsonl` or `agent.raw.ndjson`. Quotes and backslashes go
+/// first, as the shell would remove them, so `ev""ents.jsonl` names one too.
+fn names_run_log(command: &str) -> bool {
+  let words: String = command.chars().filter(|c| !matches!(c, '\'' | '"' | '\\')).collect();
+  words.contains(RUN_EVENTS_NAME) || words.contains(RAW_LOG_NAME)
+}
+
 fn is_standalone_conclusion(command: &str, cwd: Option<&str>) -> bool {
-  if command.contains(';') || command.contains("&&") || command.contains("||") || command.contains('\n') {
+  if has_shell_control(command) {
     return false;
   }
   let stages: Vec<&str> = command.split('|').map(str::trim).collect();
@@ -466,7 +485,7 @@ fn is_standalone_conclusion(command: &str, cwd: Option<&str>) -> bool {
 }
 
 fn is_standalone_user_dialog(command: &str, cwd: Option<&str>) -> bool {
-  if command.contains(';') || command.contains("&&") || command.contains("||") || command.contains('\n') {
+  if has_shell_control(command) {
     return false;
   }
   let stages: Vec<&str> = command.split('|').map(str::trim).collect();
@@ -498,6 +517,10 @@ fn validate_pipeline_filters(stages: &[&str], cwd: Option<&str>) -> bool {
       let trimmed = arg.trim_matches(['\'', '"', '`']);
       if trimmed.starts_with('-') {
         continue;
+      }
+      // A glob, a brace or a variable names files the hook cannot list, so the filter's read counts.
+      if trimmed.contains(['*', '?', '[', '{', '$']) {
+        return false;
       }
       if let Some(resolved) = resolve_token(trimmed, cwd)
         && resolved != "/"
@@ -1407,6 +1430,40 @@ This turn's material totals 20000 characters, over the 16,000-character small-ma
 
     // 12. `charliebot session dialog --turns 5` is counted
     assert_eq!(bash_class("charliebot session dialog --turns 5", Some(cwd_str)), None);
+  }
+
+  #[test]
+  fn a_command_that_reads_beyond_the_named_read_counts() {
+    let temp_session = tempfile::tempdir().unwrap();
+    let session_path = temp_session.path();
+    let artifacts_dir = session_path.join("artifacts");
+    std::fs::create_dir_all(&artifacts_dir).unwrap();
+    std::fs::write(artifacts_dir.join("plan_x.html"), "plan content").unwrap();
+    let cwd_str = session_path.to_str().unwrap();
+
+    // A background list, a substitution, a redirection in: each runs a second read beside the exempt one.
+    assert_eq!(bash_class("charliebot session conclusion --session s & cat /abs/data/x.md", Some(cwd_str)), None);
+    assert_eq!(bash_class("charliebot session conclusion --session \"$(cat /abs/x)\"", Some(cwd_str)), None);
+    assert_eq!(
+      bash_class("charliebot session dialog --from user | head -c 100 </abs/events.jsonl", Some(cwd_str)),
+      None
+    );
+    // A glob in a filter's file argument names files the hook cannot check.
+    assert_eq!(
+      bash_class("charliebot session dialog --from user | head /abs/data/runs/*/events.jsonl", Some(cwd_str)),
+      None
+    );
+    // A run log named beside a decision read, a child report or a rule file counts whole, glob or not.
+    assert_eq!(bash_class("cat artifacts/plan_x.html; cat /abs/data/runs/*/events.jsonl", Some(cwd_str)), None);
+    assert_eq!(bash_class("cat /abs/data/runs/r/report.md; cat /abs/data/runs/r/events.jsonl", Some(cwd_str)), None);
+    assert_eq!(bash_class("cat /repo/CLAUDE.md; cat /abs/data/runs/r/agent.raw.ndjson", Some(cwd_str)), None);
+    assert_eq!(bash_class("cat artifacts/plan_x.html; cat ev\"\"ents.jsonl", Some(cwd_str)), None);
+    // The plain forms still exempt.
+    assert_eq!(
+      bash_class("charliebot session conclusion --session s | head -c 3000", Some(cwd_str)),
+      Some("child_conclusion")
+    );
+    assert_eq!(bash_class("cat artifacts/plan_x.html", Some(cwd_str)), Some("approval_object"));
   }
 
   #[test]

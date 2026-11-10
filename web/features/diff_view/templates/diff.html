@@ -44,6 +44,18 @@
     .d2h-wrapper .d2h-code-side-linenumber,
     .d2h-wrapper .line-num1,
     .d2h-wrapper .line-num2 { color: #475569; }
+    /* The CDN theme paints a keyword and a type at #d73a49 and a comment at #6a737d. Those tones read
+       4.57:1 and 4.82:1 on a white context row, but the rows a hunk adds, removes or changes sit on a
+       tint that lowers the pair. At 13 px the keyword falls to 4.23:1 on an added row, 3.78:1 on the
+       changed row of the line-by-line layout, 3.91:1 on a removed row and 4.09:1 on the changed row of
+       the side-by-side layout, and the comment to 4.45:1 on an added row, all under the 4.5:1 floor.
+       The keyword and the type carry the code's structure and the comment carries its prose, so a
+       tinted row takes the theme's darker tones: #b31d28 reads 6.22:1, 5.55:1, 5.74:1 and 6.02:1 on
+       those four tints, and #586069 keeps the comment at 5.90:1, 5.27:1, 5.45:1 and 5.71:1. A context
+       row keeps the theme's own pair. */
+    .d2h-ins .hljs-keyword, .d2h-ins .hljs-type,
+    .d2h-del .hljs-keyword, .d2h-del .hljs-type { color: #b31d28; }
+    .d2h-ins .hljs-comment, .d2h-del .hljs-comment { color: #586069; }
     /* The Back link's 16 px icon and 14 px text draw a 20 px box, and the header's padding does not
        extend it. The 24 px box gives the page's only way back to chat the pointer floor its buttons
        keep; the concurrency badge keeps the header at its height. */

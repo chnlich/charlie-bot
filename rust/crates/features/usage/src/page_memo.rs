@@ -1,7 +1,7 @@
 //! The token usage page's memo: the last finished body, kept while the ledger and the page's inputs hold their value.
 //!
 //! A page view reads every row of the ledger's page snapshot, renders the document and deflates it, and the ledger
-//! moves only when a capture commits. The memo keeps the finished body and the ledger version it was built at, so a
+//! moves only when a capture commits. The memo keeps the finished body and the ledger version it was built at. A
 //! repeat view pays one version check instead of the read, the render and the deflate.
 
 use std::fs;
@@ -71,9 +71,9 @@ pub struct PageMemo {
 
 impl PageMemo {
   /// The page body for `inputs`: the memo's body while the ledger still holds the version it was built at and every
-  /// input holds its value, otherwise the body `build` renders.
+  /// input holds its value. Otherwise it is the body `build` renders.
   ///
-  /// The version is read before the body is built: a capture that commits while the body builds leaves the older
+  /// The version is read before the body is built. A capture that commits while the body builds leaves the older
   /// version in the memo, so the next view rebuilds rather than serving rows the ledger has moved past.
   pub fn body<E: From<anyhow::Error>>(
     &mut self,

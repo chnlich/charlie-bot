@@ -728,6 +728,15 @@
     name.textContent = file.path.slice(slash + 1);
     name.className = 'diff-file-name shrink-0 font-semibold text-slate-900';
     pathEl.append(name);
+    // A move's row names the path it came from. The diff's own file header carries that pair, and the page
+    // hides that header, so without this line the source path appears nowhere on the page.
+    if (file.old_path) {
+      const source = document.createElement('span');
+      source.className = 'diff-file-rename';
+      source.textContent = `${file.status === 'C' ? 'copied' : 'renamed'} from ${file.old_path}`;
+      source.title = source.textContent;
+      pathEl.append(source);
+    }
 
     header.append(chevron, badge, counts, pathEl);
 

@@ -525,6 +525,31 @@ test('a file row keeps the directory apart from the file name, with the full pat
   assert.deepEqual(topPath.children.map((node) => node.textContent), ['README.md']);
 });
 
+test('a move row names the path the move came from', async () => {
+  const {elements} = loadDiffPage({
+    search: '?repo=/work/alpha&base=main&head=feature',
+    repos: [{label: 'alpha', path: '/work/alpha'}],
+    manifest: {
+      ...MANIFEST,
+      files: [
+        {path: 'lib/counter.py', status: 'R', additions: 4, deletions: 0, old_path: 'lib/old_name.py'},
+        {path: 'added_copy.py', status: 'C', additions: 2, deletions: 0, old_path: 'lib/app.py'},
+      ],
+    },
+  });
+  await settle();
+
+  const [renamed, copied] = elements.get('diff-output').children.map((row) => row.children[0]);
+  const renamedPath = renamed.children[3];
+  assert.deepEqual(renamedPath.children.map((node) => node.textContent),
+    ['lib/', 'counter.py', 'renamed from lib/old_name.py']);
+  assert.equal(renamedPath.children[2].title, 'renamed from lib/old_name.py');
+
+  const copiedPath = copied.children[3];
+  assert.deepEqual(copiedPath.children.map((node) => node.textContent),
+    ['added_copy.py', 'copied from lib/app.py']);
+});
+
 test('a phone starts line-by-line, a wider window side-by-side, and the URL names its own format', async () => {
   const phone = loadDiffPage({phone: true});
   await settle();

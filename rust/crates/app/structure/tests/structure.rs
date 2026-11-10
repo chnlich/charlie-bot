@@ -1380,9 +1380,9 @@ fn production_sites(workspace: &Workspace) -> Vec<Site> {
 
 /// Whether a site spells `name`. A name with `.`, `_` or `/` matches a literal whose `/`-separated segments hold the
 /// name's segments in sequence. A name holding an uppercase letter is a protocol identifier, so only a literal equal to
-/// it matches. A plain word matches only in a path form: an argument of `.join(..)`, `Path::new(..)` or
-/// `PathBuf::from(..)` equal to it, or a segment of a relative path literal. A literal that holds `/api/` is a route
-/// path, which its router owns, so it spells no name in any form.
+/// it matches, and so is a lowercase hyphenated name. A plain word matches only in a path form: an argument of
+/// `.join(..)`, `Path::new(..)` or `PathBuf::from(..)` equal to it, or a segment of a relative path literal. A literal
+/// that holds `/api/` is a route path, which its router owns, so it spells no name in any form.
 fn spells(site: &Site, name: &str) -> bool {
   if site.value.contains("/api/") {
     return false;
@@ -1392,7 +1392,7 @@ fn spells(site: &Site, name: &str) -> bool {
     let segments: Vec<&str> = site.value.split('/').collect();
     return segments.windows(wanted.len()).any(|window| window == wanted.as_slice());
   }
-  if name.bytes().any(|byte| byte.is_ascii_uppercase()) {
+  if name.bytes().any(|byte| byte.is_ascii_uppercase()) || name.contains('-') {
     return site.value == name;
   }
   let relative = site.value.contains('/') && !site.value.starts_with('/') && !site.value.contains("://");
@@ -2921,6 +2921,42 @@ fn a_camel_case_owner_name_matches_an_exact_literal_only() {
     vec![
       "PreToolUse: owner infra/owner; spelled outside it at:\n  crates/features/writer/src/lib.rs:2\n\
        Use `owner_crate::HOOK_EVENT`."
+        .to_string()
+    ],
+    "the owner rule fails the exact literal and passes the longer one"
+  );
+}
+
+/// A lowercase hyphenated name on a synthetic workspace. The writer crate fails on a literal equal to the name, and
+/// passes on a longer literal that only holds it as a prefix, because the name matches no path segment.
+#[test]
+#[ignore = "integration"]
+fn a_hyphenated_owner_name_matches_an_exact_literal_only() {
+  let dir = tempfile::tempdir().expect("create a temporary directory");
+  let root = dir.path();
+  write_tree(
+    root,
+    &[
+      ("Cargo.toml", workspace_manifest(&["crates/infra/owner", "crates/features/writer"])),
+      ("crates/infra/owner/Cargo.toml", crate_manifest("owner-crate", &[], &[])),
+      ("crates/infra/owner/src/lib.rs", "pub const CATEGORY: &str = \"claude-transcripts\";\n".to_string()),
+      ("crates/features/writer/Cargo.toml", crate_manifest("writer", &[], &[])),
+      (
+        "crates/features/writer/src/lib.rs",
+        "pub fn category() -> &'static str {\n  \"claude-transcripts\"\n}\n\n\
+         pub fn longer_name() -> &'static str {\n  \"claude-transcripts-old\"\n}\n"
+          .to_string(),
+      ),
+    ],
+  );
+  let workspace = load_workspace(root);
+  let rows = [OwnerRow { name: "claude-transcripts", owner: "infra/owner", hint: "Use `owner_crate::CATEGORY`." }];
+
+  assert_eq!(
+    owner_failures(&workspace, &rows, &[]),
+    vec![
+      "claude-transcripts: owner infra/owner; spelled outside it at:\n  crates/features/writer/src/lib.rs:2\n\
+       Use `owner_crate::CATEGORY`."
         .to_string()
     ],
     "the owner rule fails the exact literal and passes the longer one"

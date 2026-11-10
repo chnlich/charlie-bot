@@ -1,9 +1,8 @@
 //! The Slack fields of a session.
 
-use anyhow::Context;
+use charliebot_registry::thread_origin;
 use charliebot_store::metadata::SessionMetadata;
 use serde::Deserialize;
-use serde_json::Value;
 
 /// The Slack thread a session was summoned from. It is set at creation and never changes.
 #[derive(Clone, Debug, Deserialize)]
@@ -16,8 +15,5 @@ pub struct SlackOrigin {
 /// The session's Slack origin, or `None` when the field is absent or null (`fields_of(meta, "slack").slack_origin`).
 /// A stored value that is not a Slack origin fails.
 pub fn slack_origin(meta: &SessionMetadata) -> anyhow::Result<Option<SlackOrigin>> {
-  match meta.extra.get("slack_origin") {
-    None | Some(Value::Null) => Ok(None),
-    Some(value) => SlackOrigin::deserialize(value).map(Some).context("slack_origin is not a Slack origin"),
-  }
+  thread_origin::read_origin(meta, "slack_origin", "a Slack origin")
 }

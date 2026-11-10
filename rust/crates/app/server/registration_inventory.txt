@@ -114,6 +114,7 @@ diff root	features.memory	memory
 template global	features.code_server	code_server_enabled
 template global	features.voice	voice_backends
 template global	features.voice	voice_default_backend
+home_cards	-	Approvals
 home_cards	-	Host login authorization
 home_cards	-	Diff viewer
 home_cards	-	Token usage by model

@@ -167,7 +167,7 @@ impl AntigravityUsageSource {
 
 impl UsageSourceImpl for AntigravityUsageSource {
   fn ops(&self) -> UsageOps {
-    UsageOps { quota_accounts: true, ..UsageOps::default() }
+    UsageOps { logs: false, read: false, live_cli_sessions: false, quota_accounts: true, sweep: false }
   }
 
   fn quota_accounts(&self, cfg: &CharlieBotConfig) -> anyhow::Result<Vec<Arc<dyn QuotaAccount>>> {

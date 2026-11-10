@@ -824,8 +824,8 @@ fn conclusion_in_home(home: &Path, args: &ConclusionArgs) -> Result<String, CliE
   }
 
   ended_runs.sort_by(|a, b| {
-    let key_a = (a.0.started_at.unwrap_or_else(charliebot_store::metadata::UtcDateTime::now), &a.0.id);
-    let key_b = (b.0.started_at.unwrap_or_else(charliebot_store::metadata::UtcDateTime::now), &b.0.id);
+    let key_a = (a.0.ended_at, a.0.started_at, &a.0.id);
+    let key_b = (b.0.ended_at, b.0.started_at, &b.0.id);
     key_b.cmp(&key_a)
   });
 

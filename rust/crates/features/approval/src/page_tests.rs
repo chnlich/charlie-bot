@@ -92,7 +92,7 @@ async fn the_page_renders_the_day_s_three_lists_and_moves_between_days() {
   assert!(body.contains("/approval?date=2026-10-29"), "{body}");
   assert!(body.contains("/approval?date=2026-10-31"), "{body}");
 
-  // The queue lists every open item whatever the day; the login sheet and the digest are the day's.
+  // A past day's queue lists every open item; the login sheet and the digest are the day's.
   let (_, other) = render(&home, "/approval?date=2026-01-01").await;
   assert!(other.contains("Delete the backup volume"), "{other}");
   assert!(!other.contains("Chose the layout."), "{other}");
@@ -102,6 +102,69 @@ async fn the_page_renders_the_day_s_three_lists_and_moves_between_days() {
     other.contains("No digest entries and no policy table changes on <span class=\"day\">2026-01-01</span>."),
     "{other}"
   );
+}
+
+/// The three section bodies in rendered order: the login sheet, the queue, the digest. Each split names the
+/// section's badge, so the helper also holds the order and the numbering.
+fn sections(body: &str) -> (&str, &str, &str) {
+  let rest = body.split_once("<h2><span class=\"n\">1</span>").expect("the first section renders").1;
+  let (login_sheet, rest) = rest.split_once("<h2><span class=\"n\">2</span>").expect("the second section renders");
+  let (queue, digest) =
+    rest.split_once("<h2 class=\"digest-heading\"><span class=\"n\">3</span>").expect("the third section renders");
+  (login_sheet, queue, digest)
+}
+
+/// The count the Queue chip shows.
+fn queue_chip(body: &str) -> usize {
+  let count = body
+    .split_once("Queue &middot; ")
+    .expect("the Queue chip renders")
+    .1
+    .split('<')
+    .next()
+    .expect("the chip holds a count");
+  count.trim().parse().expect("the Queue chip holds a number")
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn today_s_queue_defers_user_act_rows_to_the_login_sheet_and_a_past_day_keeps_them() {
+  let (home, _session) = seeded_home().await;
+  let now: Timestamp = "2026-10-30T17:00:00Z".parse().expect("the fixed clock parses");
+  let today: Date = "2026-10-30".parse().expect("the fixed day parses");
+  let past: Date = "2026-10-29".parse().expect("the fixed past day parses");
+
+  let (status, body) = render_at(&home, Some(today), now).await;
+  assert_eq!(status, 200, "{body}");
+  let (login_sheet, queue, _digest) = sections(&body);
+  // The user-act item is one row, and today it sits in the login sheet rather than the queue.
+  assert!(login_sheet.contains("Log into the console"), "{body}");
+  assert!(!queue.contains("Log into the console"), "{body}");
+  assert!(queue.contains("Delete the backup volume"), "{body}");
+
+  // A past day's queue lists the same item, as it did before this change.
+  let (status, body) = render_at(&home, Some(past), now).await;
+  assert_eq!(status, 200, "{body}");
+  let (_login_sheet, queue, _digest) = sections(&body);
+  assert!(queue.contains("Log into the console"), "{body}");
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn the_queue_chip_counts_the_rows_the_queue_lists() {
+  let (home, _session) = seeded_home().await;
+  let now: Timestamp = "2026-10-30T17:00:00Z".parse().expect("the fixed clock parses");
+  let today: Date = "2026-10-30".parse().expect("the fixed day parses");
+  let past: Date = "2026-10-29".parse().expect("the fixed past day parses");
+
+  for (date, expected) in [(Some(today), 1), (Some(past), 2)] {
+    let (status, body) = render_at(&home, date, now).await;
+    assert_eq!(status, 200, "{body}");
+    let (_login_sheet, queue, _digest) = sections(&body);
+    let rows = queue.matches("<li").count();
+    assert_eq!(rows, expected, "{body}");
+    assert_eq!(queue_chip(&body), rows, "{body}");
+  }
 }
 
 #[tokio::test]
@@ -146,8 +209,15 @@ async fn a_queue_row_and_a_login_sheet_row_show_their_age() {
   assert_eq!(status, 200, "{body}");
   // The T0 item started exactly three days before the clock, so its one queue row reads 3 d ago.
   assert_eq!(body.matches("3 d ago").count(), 1, "{body}");
-  // The user-act item started five hours before the clock; the queue and today's login sheet each show its age.
-  assert_eq!(body.matches("5 h ago").count(), 2, "{body}");
+  // The user-act item started five hours before the clock. Today it sits in the login sheet only.
+  assert_eq!(body.matches("5 h ago").count(), 1, "{body}");
+
+  // A past day's view reads the same item in the queue and in that day's login sheet.
+  let later: Timestamp = "2026-11-03T17:00:00Z".parse().expect("the fixed clock parses");
+  let (status, body) = render_at(&home, Some(today), later).await;
+  assert_eq!(status, 200, "{body}");
+  assert_eq!(body.matches("4 d ago").count(), 1, "{body}");
+  assert_eq!(body.matches("1 d ago").count(), 2, "{body}");
 }
 
 #[tokio::test]

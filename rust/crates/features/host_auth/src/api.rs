@@ -13,7 +13,7 @@ use axum::response::Response;
 use charliebot_compat::responses;
 use charliebot_compat::routing::{get_only, post_only};
 use charliebot_registry::FeatureContext;
-use charliebot_registry::templating::Templating;
+use charliebot_registry::templating::{STATIC_ASSET_VERSION_KEY, Templating};
 use futures_util::future::join_all;
 use http::{StatusCode, header};
 use serde_json::{Value, json};
@@ -136,7 +136,7 @@ async fn browser_logins_page(State(features): State<Arc<FeatureContext>>, reques
     Err(error) => return responses::internal_error("OSError", error.to_string()),
   };
   if let Some(object) = context.as_object_mut() {
-    object.insert("static_asset_version".to_string(), Value::String(asset_version));
+    object.insert(STATIC_ASSET_VERSION_KEY.to_string(), Value::String(asset_version));
   }
   match templating.render_page(&features, LOGIN_TEMPLATE, &context, &request) {
     Ok(response) => response,

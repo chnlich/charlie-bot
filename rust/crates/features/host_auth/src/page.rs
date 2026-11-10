@@ -4,7 +4,7 @@ use anyhow::Context;
 use axum::response::Response;
 use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
-use charliebot_registry::templating::Templating;
+use charliebot_registry::templating::{STATIC_ASSET_VERSION_KEY, Templating};
 use http::request::Parts;
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
@@ -30,7 +30,7 @@ pub fn render(
   // The concurrency badge's script is the page's only static asset, so it carries the version that busts its cache.
   let asset_version = templating.static_asset_version().map_err(|error| ("OSError".to_string(), error.to_string()))?;
   if let Some(object) = context.as_object_mut() {
-    object.insert("static_asset_version".to_string(), Value::String(asset_version));
+    object.insert(STATIC_ASSET_VERSION_KEY.to_string(), Value::String(asset_version));
   }
   templating
     .render_page(features, TEMPLATE, &context, request)

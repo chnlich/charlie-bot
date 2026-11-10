@@ -43,6 +43,10 @@ use crate::{inlined_script, inlined_style};
 /// A zero-argument template global: the name and the value the call returns.
 pub type TemplateGlobal = (&'static str, Value);
 
+/// The template context key that carries [`Templating::static_asset_version`]. A page context that serves a static
+/// asset inserts the version under it, and the page's template reads it to bust that asset's cache.
+pub const STATIC_ASSET_VERSION_KEY: &str = "static_asset_version";
+
 /// One served source file: its path as a URL path, `mtime_ns` and size.
 type SourceStat = (String, i64, u64);
 

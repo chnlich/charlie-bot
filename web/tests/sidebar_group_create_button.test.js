@@ -152,6 +152,11 @@ test('a control click before the interaction scripts arrive loads the group once
   const requests = [];
   const forwarded = [];
   let settle;
+  const styleRequests = [];
+  context.loadPageStyles = (key, paths) => {
+    styleRequests.push([key, Array.from(paths)]);
+    return Promise.resolve();
+  };
   context.loadPageScripts = (key, paths) => {
     requests.push([key, Array.from(paths)]);
     return new Promise((resolve) => { settle = resolve; });
@@ -164,6 +169,9 @@ test('a control click before the interaction scripts arrive loads the group once
   assert.equal(requests.length, 0, 'the loader fetches nothing until a control call');
 
   const pending = context.sidebarControl('openSessionRowMenu', {id: 'gear'}, 's1');
+  assert.deepEqual(styleRequests, [['sidebar-interactions', ['/static/css/sidebar-interactions.css']]],
+    'the group carries its stylesheet');
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(requests.length, 1, 'the first call starts one download');
   assert.equal(requests[0][0], 'sidebar-interactions');
   assert.deepEqual(requests[0][1], [
@@ -173,7 +181,9 @@ test('a control click before the interaction scripts arrive loads the group once
 
   // A second click while the group downloads joins the first load.
   const second = context.sidebarControl('openSessionRowMenu', {id: 'gear2'}, 's2');
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(requests.length, 1);
+  assert.deepEqual(styleRequests.length, 1);
 
   // The module's own registration arrives with the download and takes the dispatch.
   context.registerSidebarControl('openSessionRowMenu', (...args) => { forwarded.push(args); });
@@ -186,6 +196,7 @@ test('a control click before the interaction scripts arrive loads the group once
 test('a deferred handler reads the currentTarget the click was made with', async () => {
   const {context} = buildContext();
   let settle;
+  context.loadPageStyles = () => Promise.resolve();
   context.loadPageScripts = () => new Promise((resolve) => { settle = resolve; });
   const loader = fs.readFileSync(
     path.join(__dirname, '..', 'templates', 'js', 'sidebar', 'row-menu.js'), 'utf8');
@@ -197,6 +208,7 @@ test('a deferred handler reads the currentTarget the click was made with', async
   const pending = context.startRename(event, 's1');
   // The browser clears currentTarget when the dispatch ends, before the group arrives.
   event.currentTarget = null;
+  await new Promise((resolve) => setImmediate(resolve));
   context.Sidebar.startRename = (e, id) => { seen.push([e.currentTarget, id]); };
   settle();
   await pending;

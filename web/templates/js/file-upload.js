@@ -34,7 +34,9 @@
   // will not arrive.
   function load() {
     if (loading === null) {
-      loading = loadPageScripts('file-upload', [SOURCE]);
+      loading = loadPageStyles('file-upload', ['/static/css/file-upload.css'])
+        .catch((error) => console.error(error.message))
+        .then(() => loadPageScripts('file-upload', [SOURCE]));
       loading.then(
         () => { ready = true; },
         (error) => {

@@ -28,7 +28,9 @@
   // A failed download drops the memo, so the next summary retries.
   function load() {
     if (loading === null) {
-      loading = loadPageScripts('chat-worker-summary', [SOURCE]);
+      loading = loadPageStyles('chat-worker-summary', ['/static/css/worker-summary.css'])
+        .catch((error) => console.error(error.message))
+        .then(() => loadPageScripts('chat-worker-summary', [SOURCE]));
       loading.catch((error) => {
         loading = null;
         console.error('the worker summary card did not load: ' + error.message);

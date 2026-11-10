@@ -1,0 +1,8 @@
+/* The pending-triggers tray in the chat column (chat/triggers-tray.js). The
+   page loads this sheet with the tray module on a session's first pending
+   trigger or bell click, so a session with no pending trigger pays neither the
+   rules nor their bytes. */
+/* Pending triggers tray (chat column, chat/triggers-tray.js): dashed amber
+   border and the --watch spellings' mono face, per the reviewed mockup. */
+.tray-border { border: 1px dashed rgba(245, 158, 11, .55); }
+.tray-mono { font-family: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }

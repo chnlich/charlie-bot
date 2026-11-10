@@ -28,7 +28,9 @@
   // retries. The page keeps its message view, and the tray section stays empty.
   function load() {
     if (loading === null) {
-      loading = loadPageScripts('chat-triggers-tray', [SOURCE]);
+      loading = loadPageStyles('chat-triggers-tray', ['/static/css/triggers-tray.css'])
+        .catch((error) => console.error(error.message))
+        .then(() => loadPageScripts('chat-triggers-tray', [SOURCE]));
       loading.then(() => {
         const session = openedSession;
         // A bell for another session marks the tray to open expanded once the

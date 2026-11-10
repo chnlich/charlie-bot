@@ -36,8 +36,12 @@ function updateVoiceMicTitle() {
 
 // One promise per key: a second click while the module travels joins the first
 // load. The recording module registers the caret's menu and the run handlers.
+// The overlay's rules come first, so the overlay is styled when it appears; a
+// stylesheet that fails still lets the module load.
 function loadVoiceInput() {
-  return loadPageScripts('voice', ['/static/features/voice/voice-input.js']);
+  return loadPageStyles('voice', ['/static/features/voice/voice-overlay.css'])
+    .catch((error) => console.error(error.message))
+    .then(() => loadPageScripts('voice', ['/static/features/voice/voice-input.js']));
 }
 
 function openVoiceInput() {

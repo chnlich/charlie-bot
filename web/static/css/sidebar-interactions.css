@@ -1,0 +1,29 @@
+/* The sidebar interactions' surfaces: the row settings popover and the rename
+   field. The page loads this sheet with the interaction scripts
+   (web/static/js/sidebar/namespace.js, loadSidebarInteractions) on the first
+   control call, so a reader who clicks no row control pays neither the rules
+   nor their bytes. */
+/* The rename field (sidebar/modals.js) is fixed over the row being edited. On a
+   phone that row sits in the fixed drawer (z-index 100), so the field takes the
+   row menu's z-index to paint above the drawer instead of behind it. */
+#rename-input { z-index: 150; }
+/* Sidebar row settings popover (sidebar/row-menu.js): the one shared menu,
+   appended to document.body and fixed-positioned under its anchor. */
+.row-menu {
+  position: fixed; z-index: 150; min-width: 10rem;
+  background: #1e293b; border: 1px solid #475569; border-radius: 0.5rem;
+  padding: 0.25rem; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+.row-menu-item {
+  display: block; width: 100%; text-align: left;
+  padding: 0.375rem 0.75rem; font-size: 0.875rem; color: #e2e8f0;
+  background: transparent; border: none; border-radius: 0.375rem; cursor: pointer;
+}
+.row-menu-item:hover { background: #334155; }
+.row-menu-item-danger { color: #f87171; }
+.row-menu-item-danger:hover { background: rgba(239, 68, 68, 0.15); }
+.row-menu-sep { height: 1px; margin: 0.25rem 0; background: #475569; }
+/* Touch targets: whole-item 44px rows, matching the sidebar's other touch rules. */
+@media (hover: none) {
+  .row-menu-item { min-height: 44px; }
+}

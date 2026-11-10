@@ -1,0 +1,20 @@
+/* The voice input overlay and its backend menu, drawn by voice-input.js once the
+   reader's first mic or caret use loads that module. The page fetches this sheet
+   with the module (voice-events.js, loadVoiceInput), so a reader who never
+   dictates pays neither the rules nor their bytes. The caret's split-control
+   rules stay in the inlined voice.css: the mic and its caret are drawn at first
+   paint. */
+/* Voice input overlay: client-side level bar + timer above the message input.
+   The bar/fill/hint elements are built by voice-input.js's ensureVoiceOverlay. */
+.voice-level-bar { height: 0.375rem; margin-bottom: 0.25rem; border-radius: 9999px; background: #1e293b; overflow: hidden; }
+.voice-level-fill { height: 100%; width: 0%; border-radius: 9999px; background: #4ade80; transition: width 0.12s linear; }
+.voice-meta { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }
+.voice-timer { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.75rem; color: #94a3b8; }
+.voice-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The caret's backend menu takes the width of its longest row: an unavailable row names the config key the host
+   must provide. A fixed 16 rem box would cut that key off at both widths. On a phone the screen margin caps the
+   menu, where the row wraps instead of losing its end. */
+#voice-backend-menu { width: max-content; max-width: 92vw; }
+#voice-backend-menu .voice-menu-label { min-width: 0; overflow-wrap: anywhere; }
+

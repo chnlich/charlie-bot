@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Builds the two committed Tailwind stylesheets via the Tailwind CLI:
-#   web/static/css/tailwind.css         the app pages, from web/tailwind.config.js
+# Builds the three committed Tailwind stylesheets via the Tailwind CLI:
+#   web/static/css/tailwind.css         the app page, from web/tailwind.config.js
+#   web/static/css/diff-tailwind.css    the diff viewer, from web/tailwind.diff.config.js
 #   web/static/css/events-tailwind.css  the events viewer, from web/tailwind.events.config.js
 # Idempotent: safe to rerun any time the templates/JS class usage changes.
 set -euo pipefail
@@ -40,4 +41,5 @@ build_sheet() {
 }
 
 build_sheet tailwind.config.js static/css/tailwind.css
+build_sheet tailwind.diff.config.js static/css/diff-tailwind.css
 build_sheet tailwind.events.config.js static/css/events-tailwind.css

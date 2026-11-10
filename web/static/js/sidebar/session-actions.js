@@ -201,6 +201,8 @@ async function showGroupSelector(sessionId, currentGroup) {
     return `<button data-group="${escapeHtmlAttr(g)}" class="w-full text-left px-3 py-2 rounded-lg text-sm border transition-colors ${activeClass}">${escapeHtml(g)}</button>`;
   }).join('');
 
+  // The Remove group row keeps the group rows' slate-300 label: slate-400 reads 4.04:1 on the
+  // row's slate-700 fill, under the 4.5:1 floor for its 14px text; slate-300 reads 6.97:1.
   overlay.innerHTML = `
     <style>
       /* The New group name field draws its boundary at the 3:1 control floor on its slate-700 fill:
@@ -214,7 +216,7 @@ async function showGroupSelector(sessionId, currentGroup) {
          onclick="event.stopPropagation()">
       <p class="text-sm text-slate-300 mb-3 font-semibold">Set Group</p>
       <div class="flex flex-col gap-1.5 mb-3 max-h-48 overflow-y-auto">
-        ${currentGroup ? `<button data-group="" class="w-full text-left px-3 py-2 rounded-lg text-sm bg-slate-700 hover:bg-red-600/20 hover:text-red-300 text-slate-400 transition-colors">Remove group</button>` : ''}
+        ${currentGroup ? `<button data-group="" class="w-full text-left px-3 py-2 rounded-lg text-sm bg-slate-700 hover:bg-red-600/20 hover:text-red-300 text-slate-300 transition-colors">Remove group</button>` : ''}
         ${groupButtons}
       </div>
       <div class="flex gap-2">

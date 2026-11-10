@@ -51,7 +51,6 @@ const SACCT_POLL_INTERVAL_SECONDS: u64 = 30;
 const REMOTE_SACCT_UNREACHABLE_GRACE_SECONDS: u64 = 900;
 const DORMANCY_CHECK_SECONDS: u64 = 60;
 const SSH_OVERALL_TIMEOUT_SECONDS: u64 = 60;
-const MAX_TRIGGER_MESSAGE_CHARS: usize = 200;
 
 /// The answer one remote `kill -0` probe gives about a watched pid.
 ///
@@ -172,6 +171,10 @@ pub const WATCH_TARGETS_FIELD: &str = "watch_targets";
 /// The session trigger body field that holds the wait before the wake fires. The body model reads it and so does
 /// the `session trigger` command, so neither crate spells the name on its own.
 pub const DELAY_SECONDS_FIELD: &str = "delay_seconds";
+
+/// The longest `message` a scheduled-trigger registration accepts, counted in characters. The `session trigger`
+/// command checks `--message` against the same limit, so neither crate spells it on its own.
+pub const MAX_TRIGGER_MESSAGE_CHARS: usize = 200;
 
 const SCHEDULE_TRIGGER_BODY_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),

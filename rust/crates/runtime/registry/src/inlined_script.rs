@@ -2,21 +2,22 @@
 //!
 //! A page inlines its scripts so the first paint waits for no second request. The same source files carry the
 //! comments that explain them to an editor, and a browser runs those as nothing. They also carry the indentation
-//! that shows their nesting, and a browser reads that as nothing. On the mock home's chat page, both sit in the
-//! scripts and the stylesheets. Leaving both out of the inline copy saves 67 KB of the page's 700 KB and 13 KB
-//! of its 164 KB gzip form. The strip is textual and keeps every other byte. That includes a `//` or `/*` that a
-//! string, a template literal or a regular expression holds. It also keeps the indentation inside a template
-//! literal, which is part of the text it builds.
+//! that shows their nesting, and the spaces between tokens, which the parser folds away. On the mock home's chat
+//! page, those sit in the scripts and the stylesheets. Leaving them out of the inline copy saves 67 KB of the page's
+//! 700 KB and 13 KB of its 164 KB gzip form, and the token spaces take another 2 KB off that form. The strip is
+//! textual and keeps every other byte. That includes a `//` or `/*` that a string, a template literal or a regular
+//! expression holds. It also keeps the whitespace inside a template literal, which is part of the text it builds.
 
 use crate::inlined_literal::{char_len, escape_end, string_end};
 
-/// The JavaScript `source` with its comments and its code indentation removed.
+/// The JavaScript `source` with its comments and its insignificant whitespace removed.
 ///
 /// A line comment loses its text and keeps the newline that ends it. A block comment becomes one newline when it
-/// spans lines and one space otherwise, so a comment between two tokens still separates them. A line's leading
-/// spaces and tabs carry no meaning between tokens and the newline before them already ends the line, so the inline
-/// copy leaves them out. The scanner follows the literals that can hold comment text. A quoted string ends at its
-/// quote or its line's end, a template literal at its backtick, and a regex literal at its closing slash.
+/// spans lines and, otherwise, the space [`needs_space`] asks for between the bytes around it. A whitespace run
+/// becomes one newline when it holds a line terminator, and [`needs_space`]'s space or nothing when it does not, so
+/// a blank line and a line's indentation leave no byte and no two tokens join. The scanner follows the literals that
+/// can hold comment text or whitespace. A quoted string ends at its quote or its line's end, a template literal at
+/// its backtick, and a regex literal at its closing slash.
 pub fn without_comments(source: &str) -> String {
   let bytes = source.as_bytes();
   let mut out = String::with_capacity(source.len());
@@ -52,7 +53,13 @@ pub fn without_comments(source: &str) -> String {
     }
     if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
       let end = source[i + 2..].find("*/").map_or(bytes.len(), |end| i + 2 + end + 2);
-      out.push(if spans_lines(&bytes[i..end]) { '\n' } else { ' ' });
+      if spans_lines(&bytes[i..end]) {
+        out.push('\n');
+      } else if continues_html_markup(&out, bytes.get(end).copied())
+        || needs_space(out.as_bytes().last().copied(), bytes.get(end).copied())
+      {
+        out.push(' ');
+      }
       i = end;
       continue;
     }
@@ -61,6 +68,11 @@ pub fn without_comments(source: &str) -> String {
         Some(end) => {
           clear_control(&mut stack);
           copy(&mut out, source, i, end);
+          // A regex literal's flags take the name characters after it, so the space that keeps the next name a token
+          // of its own leaves here rather than in the whitespace run's own handling.
+          if name_follows_space(source, end) {
+            out.push(' ');
+          }
           expect_expression = false;
           i = end;
         }
@@ -157,14 +169,7 @@ pub fn without_comments(source: &str) -> String {
         i += 1;
       }
       byte if byte.is_ascii_whitespace() => {
-        // A line's leading spaces and tabs separate no tokens: the newline that precedes them already ends the
-        // line. Every other whitespace byte is kept, including the newline itself.
-        if matches!(byte, b' ' | b'\t') && out.as_bytes().last() == Some(&b'\n') {
-          i += 1;
-          continue;
-        }
-        copy(&mut out, source, i, i + 1);
-        i += 1;
+        i = copy_whitespace(&mut out, source, i);
       }
       _ => {
         clear_control(&mut stack);
@@ -175,6 +180,89 @@ pub fn without_comments(source: &str) -> String {
     }
   }
   out
+}
+
+/// The shortest form of the whitespace run at `start`, and the index after it.
+///
+/// A run that holds a line terminator becomes one newline: the blank line after it and the indentation of the next
+/// line separate no tokens, and the newline the automatic semicolons need is still there. A run of spaces and tabs
+/// becomes one space where the bytes on either side would otherwise run together, and nothing otherwise.
+fn copy_whitespace(out: &mut String, source: &str, start: usize) -> usize {
+  let bytes = source.as_bytes();
+  let mut end = start;
+  let mut line_terminator = false;
+  while let Some(&byte) = bytes.get(end) {
+    match byte {
+      b'\n' | b'\r' => line_terminator = true,
+      b' ' | b'\t' | b'\x0c' => {}
+      _ => break,
+    }
+    end += 1;
+  }
+  if line_terminator {
+    out.push('\n');
+  } else if continues_html_markup(out, bytes.get(end).copied())
+    || needs_space(out.as_bytes().last().copied(), bytes.get(end).copied())
+  {
+    out.push(' ');
+  }
+  end
+}
+
+/// Whether the copy so far ends an HTML construct that `next` would continue, so a space must stand between them.
+///
+/// An HTML parser ends the script element at the first `</script` it reads, and reads `<!--` inside one as a comment,
+/// so neither sequence may be assembled from two tokens. The whitespace of such a pair stays.
+fn continues_html_markup(out: &str, next: Option<u8>) -> bool {
+  match next {
+    Some(b'-') => out.ends_with("<!"),
+    Some(next) => is_name_byte(next) && out.ends_with("</"),
+    None => false,
+  }
+}
+
+/// Whether a run of spaces and tabs at `start` is followed by a name byte.
+///
+/// A regex literal's flags continue over exactly those bytes, so a name after such a run would join them.
+fn name_follows_space(source: &str, start: usize) -> bool {
+  let bytes = source.as_bytes();
+  let mut end = start;
+  while matches!(bytes.get(end), Some(b' ' | b'\t' | b'\x0c')) {
+    end += 1;
+  }
+  end > start && bytes.get(end).copied().is_some_and(is_name_byte)
+}
+
+/// Whether the bytes `prev` and `next` need a space between them to stay two tokens.
+///
+/// A token that a name, a number or a literal continues takes everything the parser reads of it, so two such bytes
+/// run into one token without the space: `return x` must not become `returnx`. Every other pair is two tokens with
+/// or without it, except the pairs that are one token when joined (`+` `+`, `/` `*`, `<` `!`, `?` `.`) and the
+/// number whose `.` would join its integer part (`1 .5`).
+fn needs_space(prev: Option<u8>, next: Option<u8>) -> bool {
+  let (Some(prev), Some(next)) = (prev, next) else {
+    return false;
+  };
+  merges_into_one_token(prev, next) || (is_name_byte(prev) && is_name_byte(next))
+}
+
+/// Whether `prev` followed by `next` reads as one token, or one markup sequence, when the space between them leaves.
+///
+/// The `{` pairs are not JavaScript's: the inline copy is also the template engine's source, so a `{` beside a second
+/// `{`, a `%` or a `#` would open `{{`, `{%` or `{#` where the source had two tokens. `<` before `/` opens an HTML end
+/// tag where the script text is markup.
+fn merges_into_one_token(prev: u8, next: u8) -> bool {
+  if prev == next && matches!(prev, b'+' | b'-' | b'*' | b'/' | b'&' | b'|' | b'<' | b'>' | b'=' | b'!' | b'?') {
+    return true;
+  }
+  matches!((prev, next), (b'/', b'*') | (b'<', b'!') | (b'<', b'/') | (b'-', b'>') | (b'?', b'.') | (b'.', b'.'))
+    || (prev.is_ascii_digit() && next == b'.')
+    || matches!((prev, next), (b'{', b'{') | (b'{', b'%') | (b'{', b'#'))
+}
+
+/// Whether `byte` continues a name, a number or a literal, or holds one on its own.
+fn is_name_byte(byte: u8) -> bool {
+  byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$' | b'\\') || byte >= 0x80
 }
 
 /// Where the scanner is: JavaScript code, or a template literal's text.
@@ -315,96 +403,137 @@ mod tests {
 
   #[test]
   fn code_indentation_is_dropped_and_template_text_keeps_its_own() {
-    assert_eq!(without_comments("let a = 1;\n    let b = 2;\n"), "let a = 1;\nlet b = 2;\n");
-    assert_eq!(without_comments("let s = `\n  indented text\n`;"), "let s = `\n  indented text\n`;");
-    assert_eq!(without_comments("let s = `${a}\n  ${b}`;"), "let s = `${a}\n  ${b}`;");
-    assert_eq!(without_comments("let s = `${a +\n    b}`;"), "let s = `${a +\nb}`;");
+    assert_eq!(without_comments("let a = 1;\n    let b = 2;\n"), "let a=1;\nlet b=2;\n");
+    assert_eq!(without_comments("let s = `\n  indented text\n`;"), "let s=`\n  indented text\n`;");
+    assert_eq!(without_comments("let s = `${a}\n  ${b}`;"), "let s=`${a}\n  ${b}`;");
+    assert_eq!(without_comments("let s = `${a +\n    b}`;"), "let s=`${a+\nb}`;");
+  }
+
+  #[test]
+  fn a_line_terminator_run_keeps_one_newline() {
+    assert_eq!(without_comments("a();\n\n\nb();"), "a();\nb();");
+    assert_eq!(without_comments("a();\n   \n\t\nb();"), "a();\nb();");
+    assert_eq!(without_comments("a();\r\n\r\nb();"), "a();\nb();");
+  }
+
+  #[test]
+  fn token_spaces_leave_where_the_tokens_stay_apart() {
+    assert_eq!(without_comments("x = -1;"), "x=-1;");
+    assert_eq!(without_comments("if (x) { y(); }"), "if(x){y();}");
+    assert_eq!(without_comments("return x"), "return x");
+    assert_eq!(without_comments("typeof x"), "typeof x");
+    assert_eq!(without_comments("x = typeof y;"), "x=typeof y;");
+    assert_eq!(without_comments("a ? .5 : b"), "a? .5:b");
+    assert_eq!(without_comments("a++ + b"), "a++ +b");
+  }
+
+  #[test]
+  fn token_spaces_stay_where_the_tokens_would_merge() {
+    assert_eq!(without_comments("a + +b"), "a+ +b");
+    assert_eq!(without_comments("a - -b"), "a- -b");
+    assert_eq!(without_comments("a / /re/"), "a/ /re/");
+    assert_eq!(without_comments("a < !--b"), "a< !--b");
+    assert_eq!(without_comments("1 .5"), "1 .5");
+  }
+
+  #[test]
+  fn a_space_stays_where_its_removal_would_open_a_template_tag() {
+    assert_eq!(without_comments("function f() { { return 1; } }"), "function f(){ {return 1;}}");
+    assert_eq!(without_comments("a{/* note */{b}}"), "a{ {b}}");
+    assert_eq!(without_comments("class A { #x; }"), "class A{ #x;}");
+  }
+
+  #[test]
+  fn a_space_stays_where_its_removal_would_change_a_regex_or_the_markup() {
+    assert_eq!(without_comments("let ok = /x/ instanceof RegExp; // gone"), "let ok=/x/ instanceof RegExp;");
+    assert_eq!(without_comments("if (/x/ in m) f();"), "if(/x/ in m)f();");
+    assert_eq!(without_comments("a < /x/.source"), "a< /x/.source");
+    assert_eq!(without_comments("a</ script> b"), "a</ script>b");
+    assert_eq!(without_comments("a<!/* note */-b"), "a<! -b");
   }
 
   #[test]
   fn line_comments_leave_the_code_and_keep_their_newline() {
-    assert_eq!(without_comments("let a = 1; // one\nlet b = 2;\n"), "let a = 1; \nlet b = 2;\n");
+    assert_eq!(without_comments("let a = 1; // one\nlet b = 2;\n"), "let a=1;\nlet b=2;\n");
     assert_eq!(without_comments("// only a comment"), "");
-    assert_eq!(without_comments("a(); // trailing"), "a(); ");
+    assert_eq!(without_comments("a(); // trailing"), "a();");
   }
 
   #[test]
   fn block_comments_keep_the_tokens_apart() {
-    assert_eq!(without_comments("let a = 1;/* note */let b = 2;"), "let a = 1; let b = 2;");
-    assert_eq!(without_comments("let a = 1;/* one\ntwo */let b = 2;"), "let a = 1;\nlet b = 2;");
-    assert_eq!(without_comments("/** a doc comment */function f() {}"), " function f() {}");
+    assert_eq!(without_comments("let a = 1;/* note */let b = 2;"), "let a=1;let b=2;");
+    assert_eq!(without_comments("let a = 1;/* one\ntwo */let b = 2;"), "let a=1;\nlet b=2;");
+    assert_eq!(without_comments("/** a doc comment */function f() {}"), "function f(){}");
+    assert_eq!(without_comments("a/* note */b"), "a b");
   }
 
   #[test]
   fn a_comment_marker_inside_a_string_is_text() {
     assert_eq!(
       without_comments(r#"let url = "https://example.com/a"; // gone"#),
-      r#"let url = "https://example.com/a"; "#
+      r#"let url="https://example.com/a";"#
     );
-    assert_eq!(without_comments(r#"let s = '/* not a comment */';"#), r#"let s = '/* not a comment */';"#);
-    assert_eq!(without_comments("let s = 'a // b';"), "let s = 'a // b';");
+    assert_eq!(without_comments(r#"let s = '/* not a comment */';"#), r#"let s='/* not a comment */';"#);
+    assert_eq!(without_comments("let s = 'a // b';"), "let s='a // b';");
   }
 
   #[test]
   fn a_comment_marker_inside_a_template_literal_is_text() {
-    assert_eq!(without_comments("let s = `a // b`; // gone"), "let s = `a // b`; ");
-    assert_eq!(without_comments("let s = `a /* b */ c`;"), "let s = `a /* b */ c`;");
-    assert_eq!(without_comments("let s = `\\` // still text`;"), "let s = `\\` // still text`;");
+    assert_eq!(without_comments("let s = `a // b`; // gone"), "let s=`a // b`;");
+    assert_eq!(without_comments("let s = `a /* b */ c`;"), "let s=`a /* b */ c`;");
+    assert_eq!(without_comments("let s = `\\` // still text`;"), "let s=`\\` // still text`;");
   }
 
   #[test]
   fn a_template_literal_expression_is_code() {
-    assert_eq!(without_comments("let s = `a ${b /* gone */ + c}`;"), "let s = `a ${b   + c}`;");
-    assert_eq!(without_comments("let s = `${`inner // text`}`;"), "let s = `${`inner // text`}`;");
+    assert_eq!(without_comments("let s = `a ${b /* gone */ + c}`;"), "let s=`a ${b+c}`;");
+    assert_eq!(without_comments("let s = `${`inner // text`}`;"), "let s=`${`inner // text`}`;");
   }
 
   #[test]
   fn a_comment_marker_inside_a_regex_is_text() {
-    assert_eq!(without_comments("let r = /[//]/; // gone"), "let r = /[//]/; ");
-    assert_eq!(without_comments("let r = /a\\/\\/b/g; // gone"), "let r = /a\\/\\/b/g; ");
+    assert_eq!(without_comments("let r = /[//]/; // gone"), "let r=/[//]/;");
+    assert_eq!(without_comments("let r = /a\\/\\/b/g; // gone"), "let r=/a\\/\\/b/g;");
   }
 
   #[test]
   fn a_slash_after_a_control_statements_paren_opens_a_regex() {
-    assert_eq!(without_comments("if (ready) /[//]/.test(value); // gone"), "if (ready) /[//]/.test(value); ");
-    assert_eq!(without_comments("while (a) /x/.test(b);"), "while (a) /x/.test(b);");
+    assert_eq!(without_comments("if (ready) /[//]/.test(value); // gone"), "if(ready)/[//]/.test(value);");
+    assert_eq!(without_comments("while (a) /x/.test(b);"), "while(a)/x/.test(b);");
   }
 
   #[test]
   fn a_slash_after_another_paren_divides() {
-    assert_eq!(without_comments("let c = (a) / b; // gone"), "let c = (a) / b; ");
+    assert_eq!(without_comments("let c = (a) / b; // gone"), "let c=(a)/b;");
   }
 
   #[test]
   fn a_template_escape_of_a_multibyte_character_is_kept() {
-    assert_eq!(without_comments("let s = `\\é // text`; // gone"), "let s = `\\é // text`; ");
+    assert_eq!(without_comments("let s = `\\é // text`; // gone"), "let s=`\\é // text`;");
   }
 
   #[test]
   fn a_string_continued_over_a_line_keeps_its_text() {
-    assert_eq!(without_comments("let s = \"one\\\r\n  // two\"; // gone"), "let s = \"one\\\r\n  // two\"; ");
-    assert_eq!(without_comments("let s = 'one\\\n  // two'; // gone"), "let s = 'one\\\n  // two'; ");
-    assert_eq!(without_comments("let s = '\\é /* kept */'; // gone"), "let s = '\\é /* kept */'; ");
+    assert_eq!(without_comments("let s = \"one\\\r\n  // two\"; // gone"), "let s=\"one\\\r\n  // two\";");
+    assert_eq!(without_comments("let s = 'one\\\n  // two'; // gone"), "let s='one\\\n  // two';");
+    assert_eq!(without_comments("let s = '\\é /* kept */'; // gone"), "let s='\\é /* kept */';");
   }
 
   #[test]
   fn a_line_comment_ends_at_any_line_terminator() {
-    assert_eq!(without_comments("// note\rcount += 1;"), "\rcount += 1;");
-    assert_eq!(without_comments("// note\u{2028}count += 1;"), "\u{2028}count += 1;");
+    assert_eq!(without_comments("// note\rcount += 1;"), "\ncount+=1;");
+    assert_eq!(without_comments("// note\u{2028}count += 1;"), "\u{2028}count+=1;");
   }
 
   #[test]
   fn a_slash_after_a_value_divides_and_a_slash_after_an_operator_opens_a_regex() {
-    assert_eq!(without_comments("let c = a / b; // gone"), "let c = a / b; ");
-    assert_eq!(without_comments("let r = return_value / 2; // gone"), "let r = return_value / 2; ");
-    assert_eq!(
-      without_comments("function f() { return /x/.test(y); } // gone"),
-      "function f() { return /x/.test(y); } "
-    );
+    assert_eq!(without_comments("let c = a / b; // gone"), "let c=a/b;");
+    assert_eq!(without_comments("let r = return_value / 2; // gone"), "let r=return_value/2;");
+    assert_eq!(without_comments("function f() { return /x/.test(y); } // gone"), "function f(){return/x/.test(y);}");
   }
 
   #[test]
   fn a_line_comment_ending_the_source_needs_no_newline() {
-    assert_eq!(without_comments("a(); // end"), "a(); ");
+    assert_eq!(without_comments("a(); // end"), "a();");
   }
 }

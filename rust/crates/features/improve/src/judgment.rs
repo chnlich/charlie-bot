@@ -5,6 +5,7 @@ use std::path::Path;
 use anyhow::Context;
 use charliebot_agents::backend_pool::QUOTA_ERROR_PATTERNS;
 use charliebot_core::event_types::{ASSISTANT, ASSISTANT_ERROR, ERROR, RATE_LIMIT_EVENT, RATE_LIMIT_INFO, RESULT};
+use charliebot_core::str_methods;
 use charliebot_core::text_repr::{DEFAULT_JSON, value_str};
 use charliebot_store::run_records::NewestFirstEvents;
 use regex::Regex;
@@ -40,11 +41,7 @@ pub fn commits_section_first_none(text: &str) -> bool {
 
 /// A leading `none` followed by a non-word character or the end.
 fn starts_with_word_none(text: &str) -> bool {
-  text.strip_prefix("none").is_some_and(|rest| rest.chars().next().is_none_or(|next| !is_word_char(next)))
-}
-
-fn is_word_char(character: char) -> bool {
-  character.is_alphanumeric() || character == '_'
+  text.strip_prefix("none").is_some_and(|rest| rest.chars().next().is_none_or(|next| !str_methods::is_word_char(next)))
 }
 
 /// The outcome of one iteration report check. An `Invalid` report carries the fixed reason code its summary and log

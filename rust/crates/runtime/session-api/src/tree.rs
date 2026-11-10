@@ -31,7 +31,6 @@ struct SessionRow<'a> {
 struct TreePage<'a> {
   items: Vec<SessionRow<'a>>,
   next_cursor: Option<String>,
-  tree_revision: &'a str,
 }
 
 #[derive(Deserialize)]
@@ -80,7 +79,7 @@ pub(crate) fn tree_page(
   }
   let next_cursor =
     if page.has_more { last.map(|(created_at, id)| encode_cursor(&revision, created_at, &id)) } else { None };
-  let page = TreePage { items, next_cursor, tree_revision: &revision };
+  let page = TreePage { items, next_cursor };
   Ok(serde_json::to_vec(&page).expect("a task-tree page serializes into a buffer"))
 }
 

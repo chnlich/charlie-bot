@@ -298,7 +298,7 @@ impl UserTextChecks {
         violations.push(TextViolation::new(
           SESSION_LINKED,
           matched.snippet,
-          page_block_text(page, text.block).or_else(|| Some(display_block(&text.text))),
+          violation_block(page, text.block, &text.text),
         ));
       }
     }
@@ -316,7 +316,7 @@ impl UserTextChecks {
         violations.push(TextViolation::new(
           SESSION_LINKED,
           matched.snippet,
-          page_block_text(page, code.block).or_else(|| Some(display_block(&code.text))),
+          violation_block(page, code.block, &code.text),
         ));
       }
     }
@@ -359,7 +359,7 @@ impl UserTextChecks {
         violations.push(TextViolation::new(
           LINK_RENDERABLE,
           link.href.clone(),
-          page_block_text(page, link.block).or_else(|| Some(display_block(&link.label))),
+          violation_block(page, link.block, &link.label),
         ));
       }
     }
@@ -470,8 +470,9 @@ fn display_block(block: &str) -> String {
   block.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn page_block_text(page: &PageScan, block: Option<usize>) -> Option<String> {
-  block.map(|index| display_block(&page.blocks[index]))
+/// The violation's reported block: the text of the block that holds it, or the display form of `fallback`.
+fn violation_block(page: &PageScan, block: Option<usize>, fallback: &str) -> Option<String> {
+  block.map(|index| display_block(&page.blocks[index])).or_else(|| Some(display_block(fallback)))
 }
 
 fn markdown_links(text: &str) -> anyhow::Result<Vec<MarkdownLink>> {

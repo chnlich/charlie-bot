@@ -51,7 +51,7 @@ impl OpenCodeQuotaAccount {
     let access = task::spawn_blocking(move || read_access_token(&db))
       .await
       .context("the OpenCode credential read task failed")??;
-    charliebot_cli_common::http::ensure_crypto_provider();
+    charliebot_compat::http_client::ensure_crypto_provider();
     let client = reqwest::Client::builder()
       .timeout(Duration::from_secs(30))
       .build()

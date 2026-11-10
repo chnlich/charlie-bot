@@ -615,10 +615,10 @@ dependencies = [
 name = "charliebot-cli-common"
 version = "0.1.0"
 dependencies = [
+ "charliebot-compat",
  "charliebot-core",
  "clap",
  "reqwest 0.13.5",
- "rustls",
  "serde_json",
  "serde_path_to_error",
  "serde_yaml",
@@ -773,7 +773,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "charliebot-agents",
- "charliebot-cli-common",
+ "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
@@ -1153,7 +1153,6 @@ dependencies = [
  "charliebot-agents",
  "charliebot-anthropic-compatible",
  "charliebot-claude-code",
- "charliebot-cli-common",
  "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",

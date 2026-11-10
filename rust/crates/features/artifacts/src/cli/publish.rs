@@ -9,6 +9,7 @@ use charliebot_agents::cli_host::{CliHost, LazyHost};
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::paths;
+use charliebot_core::str_methods;
 use charliebot_core::text_repr;
 use clap::{CommandFactory, FromArgMatches, Parser};
 use serde::Deserialize;
@@ -188,7 +189,7 @@ fn publish_through_command(artifact: &Path, command: &[String], lane_options: &[
     let code = done.status.code().unwrap_or_else(|| -done.status.signal().unwrap_or(1));
     return Err(CliExit::error(format!("publish.command exited {code}; stderr: {stderr}")));
   }
-  let lines = split_lines(&stdout);
+  let lines = str_methods::splitlines(&stdout);
   if lines.len() != 1 || !URL_PREFIXES.iter().any(|prefix| lines[0].starts_with(prefix)) {
     return Err(CliExit::error(format!(
       "publish.command exited 0 without exactly one http(s) URL line on stdout; stderr: {stderr}"
@@ -203,29 +204,6 @@ fn os_error_text(error: &io::Error, path: &str) -> String {
     Some(code) => format!("[Errno {code}] {}: {path}", nix::errno::Errno::from_raw(code).desc()),
     None => format!("{error}: {path}"),
   }
-}
-
-fn split_lines(text: &str) -> Vec<&str> {
-  let mut lines = Vec::new();
-  let mut start = 0;
-  let mut chars = text.char_indices().peekable();
-  while let Some((index, character)) = chars.next() {
-    if matches!(
-      character,
-      '\n' | '\r' | '\u{000b}' | '\u{000c}' | '\u{001c}'..='\u{001e}' | '\u{0085}' | '\u{2028}' | '\u{2029}'
-    ) {
-      lines.push(&text[start..index]);
-      start = index + character.len_utf8();
-      if character == '\r' && chars.peek().is_some_and(|(_, next)| *next == '\n') {
-        let (next_index, next) = chars.next().expect("peeked at LF after CR");
-        start = next_index + next.len_utf8();
-      }
-    }
-  }
-  if start < text.len() {
-    lines.push(&text[start..]);
-  }
-  lines
 }
 
 #[cfg(unix)]

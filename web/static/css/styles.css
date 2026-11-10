@@ -191,6 +191,11 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* The chat page's field placeholders read in the slate-400 tone. Their placeholder-slate-500 class draws
    3.07:1 on the slate-800 field, under the 4.5:1 floor for text this size; slate-400 renders 5.71:1. */
 #auth-key-input::placeholder, #sidebar-search::placeholder, #msg-input::placeholder { color: #94a3b8; }
+/* The chat page's fields carry the 3:1 boundary floor the diff page's fields meet. Their border-slate-600
+   outline draws rgb(71, 85, 105): 2.15:1 on the sidebar and 2.36:1 on the page, and the field's slate-800
+   fill differs from both surfaces by 1.11:1 and 1.22:1, so the outline is the only mark of the box.
+   slate-500 draws 3.42:1 and 3.07:1; the blue focus border still wins over this resting color. */
+#new-session-backend:not(:focus), #sidebar-search:not(:focus), #msg-input:not(:focus) { border-color: #64748b; }
 /* The Set Group dialog's field sits on a slate-700 fill. slate-500 renders 2.18:1 there and slate-400
    4.04:1, both under the 4.5:1 floor for the 14 px hint; slate-300 renders 6.97:1. */
 #new-group-input::placeholder { color: #cbd5e1; }

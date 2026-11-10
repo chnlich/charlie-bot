@@ -14,12 +14,12 @@ use std::time::Duration;
 
 use charliebot_agents::cli_base::CliHost;
 use charliebot_charlie_code::flags;
-use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config::BackendOption;
 use charliebot_core::home;
 use charliebot_registry::backend::{BackendFactory, Env, LaunchArgs};
-use clap::{CommandFactory, FromArgMatches, Parser};
+use clap::Parser;
 use serde_json::Value;
 use wait_timeout::ChildExt;
 
@@ -44,13 +44,7 @@ struct PreflightCli {
 /// Parse the arguments and run the checks. Parser errors print and exit on their own
 /// (help exits 0, a usage error exits 2); the launcher script gates its own usage exit 2.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
-  let command = with_infer_long_args(PreflightCli::command());
-  let argv = std::iter::once(OsString::from("charliebot preflight-charlie-code")).chain(args.iter().cloned());
-  let matches = match command.try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let cli = PreflightCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
+  let cli: PreflightCli = cli_args::parse("charliebot preflight-charlie-code", args);
   if let Err(line) = preflight(&cli.backend_id) {
     eprintln!("{line}");
     std::process::exit(1);

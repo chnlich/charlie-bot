@@ -7,13 +7,13 @@ use std::ffi::OsString;
 use std::sync::Arc;
 
 use charliebot_agents::cli_host::LazyHost;
-use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_core::home;
 use charliebot_failure_triage::{BackendJudge, JudgeBackends, ScanOptions, log_dir_from_environment, preflight, scan};
-use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "triage", subcommand_required = true, arg_required_else_help = true)]
@@ -43,13 +43,7 @@ struct ScanArgs {
 
 /// Run the `triage` subcommand.
 pub fn main(args: &[OsString], lazy_host: &LazyHost) -> Result<(), CliExit> {
-  let command = with_infer_long_args(TriageCli::command());
-  let argv = std::iter::once(OsString::from("charliebot triage")).chain(args.iter().cloned());
-  let matches = match command.try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let cli = TriageCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
+  let cli: TriageCli = cli_args::parse("charliebot triage", args);
   match cli.command {
     TriageCommand::Scan(args) => scan_command(args, lazy_host),
   }
@@ -96,6 +90,9 @@ fn scan_command(args: ScanArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
 
 #[cfg(test)]
 mod tests {
+  use charliebot_cli_common::args::with_infer_long_args;
+  use clap::CommandFactory;
+
   use super::*;
 
   fn matches(args: &[&str]) -> Result<clap::ArgMatches, clap::Error> {

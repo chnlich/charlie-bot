@@ -11,13 +11,13 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use charliebot_agents::cli_host::LazyHost;
-use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::git::TRASH_DIR_NAME;
 use charliebot_core::human_size::format_size;
 use charliebot_core::paths;
 use charliebot_core::text_repr::format_f;
-use clap::{CommandFactory, FromArgMatches, Parser};
+use clap::Parser;
 
 #[derive(Parser)]
 #[command(name = "gc-trash", about = "List or purge the CharlieBot worktree quarantine trash")]
@@ -37,13 +37,7 @@ struct TrashEntry {
 /// Parse the arguments and run one sweep. Parser errors print and exit on their own: help exits 0,
 /// a usage error exits 2.
 pub fn main(args: &[OsString], lazy_host: &LazyHost) -> Result<(), CliExit> {
-  let command = with_infer_long_args(GcTrashCli::command());
-  let argv = std::iter::once(OsString::from("charliebot gc-trash")).chain(args.iter().cloned());
-  let matches = match command.try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let cli = GcTrashCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
+  let cli: GcTrashCli = cli_args::parse("charliebot gc-trash", args);
   let host = lazy_host.get().map_err(|error| CliExit::error(format!("{error:#}")))?;
   let worktree_dir = paths::expanduser(&host.cfg.paths.worktree_dir);
   run(&PathBuf::from(worktree_dir).join(TRASH_DIR_NAME), cli.yes)

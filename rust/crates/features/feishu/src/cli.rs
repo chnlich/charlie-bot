@@ -4,7 +4,7 @@
 
 use std::ffi::OsString;
 
-use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::channel_verb::{READ_LIMIT_DEFAULT, ReplyArgs, post_check, post_read, post_reply};
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
@@ -12,7 +12,7 @@ use charliebot_cli_common::fields::SESSION_ID;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::request::{self, RequestArgs};
 use charliebot_cli_common::resolve;
-use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use serde_json::{Map, json};
 
 use crate::api::{CHECK_PATH, DOWNLOAD_PATH, READ_PATH, REPLY_PATH};
@@ -102,13 +102,7 @@ struct ExchangeCodeArgs {
 /// The Feishu argument parse, then the run of one verb. Parser errors print and exit on their own
 /// (argparse-compatible: help 0, usage error 2).
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
-  let command = with_infer_long_args(FeishuCli::command());
-  let argv = std::iter::once(OsString::from("charliebot feishu")).chain(args.iter().cloned());
-  let matches = match command.try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let cli = FeishuCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
+  let cli: FeishuCli = cli_args::parse("charliebot feishu", args);
   match cli.command {
     FeishuCommand::Reply(args) => reply(&args),
     FeishuCommand::Read(args) => read(&args),

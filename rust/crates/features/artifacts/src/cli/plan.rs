@@ -8,14 +8,14 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use charliebot_agents::cli_host::LazyHost;
-use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_core::paths;
 use charliebot_store::metadata::BASE_BRANCH_FIELD;
-use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
 
 use crate::plan_diff;
@@ -152,13 +152,7 @@ struct ListArgs {
 /// Parse the plan arguments and run one verb. Parser errors print and exit on their own (argparse-compatible:
 /// help 0, usage error 2).
 pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
-  let command = with_infer_long_args(PlanCli::command());
-  let argv = std::iter::once(OsString::from("charliebot plan")).chain(args.iter().cloned());
-  let matches = match command.try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let cli = PlanCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
+  let cli: PlanCli = cli_args::parse("charliebot plan", args);
   let (session, verb) = match cli.command {
     PlanCommand::Present(args) => (args.session.clone(), Verb::Present(args)),
     PlanCommand::Amend(args) => (args.session.clone(), Verb::Amend(args)),

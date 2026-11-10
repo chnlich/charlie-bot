@@ -7,7 +7,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::run_token::RUN_TOKEN_ENV;
@@ -16,7 +16,7 @@ use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::metadata::MetadataReadError;
 use charliebot_store::run_records::RunRecord;
 use charliebot_store::{layout, metadata, run_identity};
-use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
@@ -85,13 +85,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   if args.first().and_then(|arg| arg.to_str()) == Some("proposal") {
     return proposal::main(&args[1..]);
   }
-  let command = with_infer_long_args(MemoryCli::command());
-  let argv = std::iter::once(OsString::from("charliebot memory")).chain(args.iter().cloned());
-  let matches = match command.try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let cli = MemoryCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
+  let cli: MemoryCli = cli_args::parse("charliebot memory", args);
   match cli.command {
     MemoryCommand::Query(args) => query(&args),
     MemoryCommand::Add(args) => add(&args),

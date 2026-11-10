@@ -4,10 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::{home, paths, str_methods, text_repr};
-use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 use super::proposal_check;
 use super::store;
@@ -69,13 +69,7 @@ type ProposalResult<T> = Result<T, ProposalError>;
 
 /// Parse the proposal arguments and run one local store operation.
 pub(super) fn main(args: &[OsString]) -> Result<(), CliExit> {
-  let command = with_infer_long_args(ProposalCli::command());
-  let argv = std::iter::once(OsString::from("charliebot memory proposal")).chain(args.iter().cloned());
-  let matches = match command.try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let cli = ProposalCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
+  let cli: ProposalCli = cli_args::parse("charliebot memory proposal", args);
 
   let home_dir = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
   let memory_dir = home_dir.join("memory");

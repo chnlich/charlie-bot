@@ -10,7 +10,7 @@ use std::ffi::OsString;
 use std::future::Future;
 
 use charliebot_agents::cli_host::{CliHost, LazyHost};
-use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::args as cli_args;
 use charliebot_cli_common::channel_verb::post_reply;
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
@@ -23,7 +23,7 @@ use charliebot_core::event_types;
 use charliebot_core::str_methods::splitlines;
 use charliebot_core::text_repr;
 use charliebot_tasks::cold_read;
-use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use serde_json::{Map, Value, json};
 
 #[derive(Parser)]
@@ -89,13 +89,7 @@ struct StatusSetArgs {
 /// Parse the web arguments and run one verb. Parser errors print and exit on their own (argparse-compatible: help 0,
 /// usage error 2).
 pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
-  let command = with_infer_long_args(WebCli::command());
-  let argv = std::iter::once(OsString::from("charliebot web")).chain(args.iter().cloned());
-  let matches = match command.try_get_matches_from(argv) {
-    Ok(matches) => matches,
-    Err(error) => error.exit(),
-  };
-  let cli = WebCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
+  let cli: WebCli = cli_args::parse("charliebot web", args);
   match cli.command {
     WebCommand::Reply(args) => reply(&args),
     WebCommand::Dialog(args) => dialog(&args),

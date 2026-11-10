@@ -39,6 +39,10 @@ pub const STARLETTE_JSON: JsonStyle =
 pub const DEFAULT_JSON: JsonStyle =
   JsonStyle { ensure_ascii: true, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
+/// One line with non-ASCII characters passed through and the default separators.
+pub const ONE_LINE_JSON: JsonStyle =
+  JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
+
 /// The home writer fence identity record: indent 2 and sorted keys.
 pub const FENCE_RECORD_JSON: JsonStyle =
   JsonStyle { ensure_ascii: true, sort_keys: true, item_separator: ",", key_separator: ": ", indent: Some(2) };

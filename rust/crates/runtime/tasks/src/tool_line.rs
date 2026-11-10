@@ -1,11 +1,7 @@
 //! The one-line form of a chat tool call, shared by `charliebot session dialog` and the handoff summary.
 
-use charliebot_core::text_repr::{self, JsonStyle};
+use charliebot_core::text_repr::{self, ONE_LINE_JSON};
 use serde_json::Value;
-
-/// The rendering style of a tool input: raw UTF-8, `, ` between items, `: ` after keys, no indent.
-const TOOL_INPUT_JSON: JsonStyle =
-  JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
 /// One tool call's natural one-line form: Bash carries its command, every other tool a compact JSON rendering of
 /// the input; only the first line survives.
@@ -15,7 +11,7 @@ pub fn tool_input_first_line(tool: &Value) -> String {
       let is_bash = matches!(tool.get("name").and_then(Value::as_str), Some("Bash") | Some("bash"));
       match (is_bash, input.get("command")) {
         (true, Some(Value::String(command))) => command.clone(),
-        _ => text_repr::json_dumps(&Value::Object(input.clone()), &TOOL_INPUT_JSON),
+        _ => text_repr::json_dumps(&Value::Object(input.clone()), &ONE_LINE_JSON),
       }
     }
     Some(Value::String(text)) => text.clone(),

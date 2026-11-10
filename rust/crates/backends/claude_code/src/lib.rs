@@ -30,7 +30,7 @@ pub use backend::{
   EXCLUDE_DYNAMIC_SECTIONS_FLAG, GATEWAY_AUTH_TOKEN_ENV, GATEWAY_BASE_URL_ENV, GATEWAY_CUSTOM_HEADERS_ENV,
   GATEWAY_ENDPOINT_ENV_NAMES, GATEWAY_EXTRA_BODY_ENV, HEADLESS_DISALLOWED_TOOLS, INSTRUCTIONS_WRITTEN_EVENT,
   base_disallowed_tools, claude_child_env, claude_model_env, claude_reading_limits, claude_reading_limits_from,
-  headless_claude_env, out_of_family_served_models, without_gateway_env,
+  out_of_family_served_models, without_gateway_env,
 };
 pub use login_dirs::ClaudeHost;
 pub use usage_logs::USAGE_SOURCE;

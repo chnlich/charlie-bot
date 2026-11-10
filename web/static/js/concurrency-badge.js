@@ -1,10 +1,12 @@
 // The concurrency badge: how many agents run right now, and the chart of that number over time.
 //
 // One template fragment (web/templates/partials/concurrency_badge.html) includes this script in every app page's
-// document, so the whole feature is one script and the page makes no separate request for it. The server owns the
-// counting (rust/crates/runtime/session-api/src/concurrency.rs): this module only displays /api/concurrency/now and
-// /api/concurrency/history. Listeners are delegated from the document, because the page may replace its content — a
-// session switch back to the welcome view replaces <main> — without reloading this script.
+// document, so the badge itself costs the page no separate request. The open panel's stylesheet is the one request:
+// its rules style the chart and the ranges, nothing the badge paints at rest, so the module fetches them on the
+// panel's first open. The server owns the counting (rust/crates/runtime/session-api/src/concurrency.rs): this module
+// only displays /api/concurrency/now and /api/concurrency/history. Listeners are delegated from the document, because
+// the page may replace its content — a session switch back to the welcome view replaces <main> — without reloading
+// this script.
 (function () {
   if (globalThis.ConcurrencyBadge) return;
 
@@ -66,20 +68,55 @@
     if (tip) tip.hidden = true;
   }
 
+  // The open panel's rules travel as a stylesheet on the first open: a reader whose badge is never opened never pays
+  // for the chart's rules. One link per page, and a failed load drops it so the next open tries again.
+  let panelStyles = null;
+  function loadPanelStyles() {
+    if (!panelStyles) {
+      const badge = byId('concurrency-badge');
+      const href = badge && badge.dataset ? badge.dataset.panelStyles : '';
+      if (!href) return Promise.reject(new Error('the badge names no panel stylesheet'));
+      panelStyles = new Promise((resolve, reject) => {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = href;
+        link.onload = () => resolve();
+        link.onerror = () => reject(new Error('the badge panel stylesheet did not load: ' + href));
+        document.head.appendChild(link);
+      });
+      panelStyles.catch(() => { panelStyles = null; });
+    }
+    return panelStyles;
+  }
+
+  // The panel's first frame carries its rules: the stylesheet arrives before the panel shows, so its width, position
+  // and chart never paint unstyled. A stylesheet that fails still opens the panel, which stays readable without it. A
+  // close while the sheet travels cancels the open that asked for it.
+  let openRequest = 0;
   function setPanelOpen(open) {
     const badge = byId('concurrency-badge');
     const panel = byId('concurrency-panel');
     if (!badge || !panel) return;
-    if (panel.hidden === !open) return;
-    panel.hidden = !open;
-    badge.setAttribute('aria-expanded', open ? 'true' : 'false');
-    if (open) {
-      hideHoverTip();
-      keepPanelInViewport();
-      loadHistory();
-    } else {
+    if (!open) {
+      openRequest += 1;
+      if (panel.hidden) return;
+      panel.hidden = true;
+      badge.setAttribute('aria-expanded', 'false');
       hidePointTip();
+      return;
     }
+    if (!panel.hidden) return;
+    const request = ++openRequest;
+    hideHoverTip();
+    loadPanelStyles()
+      .catch((error) => console.error('concurrency badge: ' + error.message))
+      .then(() => {
+        if (request !== openRequest) return;
+        panel.hidden = false;
+        badge.setAttribute('aria-expanded', 'true');
+        keepPanelInViewport();
+        loadHistory();
+      });
   }
 
   // The panel right-aligns to the badge, and on a phone that puts its left edge past the viewport.

@@ -11,11 +11,18 @@
 
     A copy inside a `<template>` is inert markup: its scripts never run, so it would carry the poller's bytes to the
     page and do nothing with them. The includer sets `concurrency_badge_markup_only` for that copy, which leaves the
-    script out and keeps the markup and the stylesheet the client-side rebuild clones. The stylesheet stays because
-    the rebuild assigns the clone to the page's `main`, discarding the header that carried the other copy's rules. -#}
+    script out and keeps the markup and the at-rest stylesheet the client-side rebuild clones. The stylesheet stays
+    because the rebuild assigns the clone to the page's `main`, discarding the header that carried the other copy's
+    rules.
+
+    The stylesheet has two parts. `css/concurrency-badge.css` styles the badge at rest, is inlined here, and travels
+    with both copies. The open panel's rules live in `concurrency-badge-panel.css`, named by the `data-panel-styles`
+    attribute above and fetched on the panel's first open: a reader whose badge is never opened pays for neither the
+    chart's rules nor their bytes. -#}
 <div class="cb-slot">
   <div class="cb-anchor">
     <button id="concurrency-badge" class="cb-badge" type="button" data-running="0"
+            data-panel-styles="/static/css/concurrency-badge-panel.css?v={{ static_asset_version|urlencode }}"
             aria-haspopup="dialog" aria-expanded="false" aria-controls="concurrency-panel"
             aria-label="0 running">
       <span class="cb-dot" aria-hidden="true"></span><span id="concurrency-count">0 running</span>
@@ -37,76 +44,7 @@
     </div>
   </div>
 </div>
-<style>
-  .cb-slot { position: relative; display: flex; align-items: center; margin-left: auto; flex: 0 0 auto }
-  /* A page with no top bar: the fragment's own slot is the bar. */
-  body > .cb-slot { justify-content: flex-end; margin-left: 0; padding: 8px 24px;
-    border-bottom: 1px solid rgba(128, 138, 152, .28); background: rgba(255, 255, 255, .55) }
-  /* On a phone the body padding is the page's content gutter — 14 px on home and token usage, 24 px on approval
-     and host auth. The page content fills the body's content box. The bar then keeps only its vertical
-     padding, so the badge ends on the same edge as the content below it instead of a further 24 px inside. */
-  @media (max-width: 760px) { body > .cb-slot { padding-left: 0; padding-right: 0 } }
-  @media (prefers-color-scheme: dark) {
-    body > .cb-slot { background: rgba(18, 18, 19, .55); border-bottom-color: rgba(128, 138, 152, .3) }
-  }
-  body.dark > .cb-slot { background: rgba(15, 23, 42, .55); border-bottom-color: rgba(148, 163, 184, .25) }
-  .cb-anchor { position: relative; display: flex; align-items: center }
-  .cb-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
-    border: 1px solid rgba(128, 138, 152, .45); background: rgba(128, 138, 152, .12); color: inherit;
-    font: inherit; font-size: 12px; font-weight: 600; line-height: 1.4; white-space: nowrap; cursor: pointer }
-  .cb-badge:hover { background: rgba(128, 138, 152, .22) }
-  /* The open badge's accent draws on the badge's own tinted fill, not on the page behind it.
-     There #2563eb reads 4.41:1 at rest and 3.97:1 while hovered, under the 4.5:1 floor for 12 px text.
-     Blue-700 #1d4ed8 reads 5.71:1 and 5.14:1, and the blue-500 ring keeps 3.97:1, above the 3:1 border floor.
-     A dark page takes blue-300 #93c5fd (8.74:1, 7.49:1 hovered) and a blue-400 #60a5fa ring.
-     The two dark blocks carry identical declarations, and :where() keeps the media rule at zero specificity
-     so an explicit data-theme choice wins, as in partials/standalone_base_styles.html. */
-  :root { --cb-open-fg: #1d4ed8; --cb-open-ring: #2563eb }
-  @media (prefers-color-scheme: dark) {
-    :root:where(:not([data-theme="light"])) { --cb-open-fg: #93c5fd; --cb-open-ring: #60a5fa }
-  }
-  :root[data-theme="dark"] { --cb-open-fg: #93c5fd; --cb-open-ring: #60a5fa }
-  body.dark { --cb-open-fg: #93c5fd; --cb-open-ring: #60a5fa }
-  .cb-badge[aria-expanded="true"] { border-color: var(--cb-open-ring); color: var(--cb-open-fg) }
-  .cb-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: #22c55e }
-  .cb-badge[data-running="0"] .cb-dot { background: #94a3b8 }
-  .cb-tip { position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; padding: 4px 8px;
-    border-radius: 6px; background: #1b2430; color: #ffffff; font-size: 11.5px; white-space: nowrap;
-    pointer-events: none }
-  .cb-panel { position: absolute; top: calc(100% + 6px); right: 0; z-index: 50; width: 420px; max-width: 92vw;
-    padding: 12px 14px 14px; border-radius: 10px; border: 1px solid #d9dfe6; background: #ffffff; color: #1b2430;
-    box-shadow: 0 12px 32px rgba(15, 23, 42, .18); font-size: 12.5px; text-align: left }
-  @media (prefers-color-scheme: dark) {
-    .cb-panel { border-color: #38383a; background: #1a1a19; color: #f2f2ef }
-  }
-  body.dark .cb-panel { border-color: #334155; background: #1e293b; color: #e2e8f0 }
-  .cb-head { display: flex; align-items: center; gap: 8px }
-  .cb-title { font-size: 13px; font-weight: 600; margin-right: auto }
-  .cb-ranges { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: rgba(128, 138, 152, .16) }
-  /* Each range takes a 24 px tall box: the chips draw 22.4 px with 30.8-34 px between centres, so one
-     fingertip on a phone covers two of them. The box carries the height and the 8 px inline padding stays.
-     The result: every chip keeps its width, the group grows 1.6 px, and the header row keeps its one line. */
-  .cb-range { display: inline-flex; align-items: center; min-height: 24px; padding: 0 8px; border: 0;
-    border-radius: 5px; background: transparent; color: inherit; font: inherit; font-size: 11.5px; cursor: pointer }
-  .cb-range[aria-pressed="true"] { background: #2563eb; color: #ffffff }
-  /* The 24 px box gives the panel's one dismiss control the same fingertip target as the range chips beside it. */
-  .cb-close { width: 24px; height: 24px; border: 0; border-radius: 5px; background: transparent; color: inherit;
-    font-size: 16px; line-height: 1; cursor: pointer; opacity: .65 }
-  .cb-close:hover { opacity: 1 }
-  .cb-peak { margin: 8px 0 0; font-weight: 600; font-variant-numeric: tabular-nums }
-  .cb-chart { position: relative; margin-top: 6px; min-height: 150px }
-  .cb-chart svg { display: block; overflow: visible }
-  .cb-chart .cb-line { fill: none; stroke: #2563eb; stroke-width: 1.5; stroke-linejoin: round }
-  .cb-chart .cb-area { fill: #2563eb; fill-opacity: .16; stroke: none }
-  .cb-chart .cb-grid { stroke: rgba(128, 138, 152, .4); stroke-width: 1 }
-  .cb-chart .cb-axis { fill: currentColor; fill-opacity: .6; font-size: 10px }
-  .cb-chart .cb-cursor { stroke: #2563eb; stroke-width: 1; stroke-dasharray: 3 3 }
-  .cb-chart .cb-dot-mark { fill: #2563eb }
-  .cb-ptip { position: absolute; z-index: 60; padding: 3px 7px; border-radius: 6px; background: #1b2430;
-    color: #ffffff; font-size: 11px; white-space: nowrap; pointer-events: none; transform: translate(-50%, -130%) }
-  .cb-status { margin: 8px 0 0; opacity: .7 }
-  .cb-empty { margin: 0; padding: 56px 0; text-align: center; opacity: .7 }
-</style>
+<style>{% include 'css/concurrency-badge.css' %}</style>
 {% if concurrency_badge_markup_only %}{# The template copy keeps the markup and leaves the script out: a cloned
    script never runs, while the cloned stylesheet applies once the rebuild assigns it to `main`. #}{% elif defer_concurrency_badge_poll %}<script>
   // The badge paints from its markup; the poll starts once the document has parsed.

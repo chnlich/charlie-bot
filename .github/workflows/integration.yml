@@ -43,6 +43,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends jq ripgrep tmux
 
+      - name: Install restic
+        if: steps.selection.outputs.rust_filter != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: dev/install-restic.sh
+
       - name: Cache cargo
         if: steps.selection.outputs.rust_filter != ''
         uses: Swatinem/rust-cache@v2

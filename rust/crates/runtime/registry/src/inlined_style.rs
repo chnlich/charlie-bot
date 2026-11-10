@@ -2,18 +2,21 @@
 //!
 //! A page inlines its stylesheets so the first paint waits for no second request. The same source files carry the
 //! comments that explain them to an editor, and a browser reads none of them. On the mock home's chat page those
-//! comments are 20 KB of the 91 KB of stylesheet text and 8 KB of the document's 164 KB gzip form. The strip is
+//! comments are 20 KB of the 91 KB of stylesheet text and 8 KB of the document's 164 KB gzip form. The same sheets
+//! carry the whitespace around a brace, a semicolon and a comma, which separates no tokens either. The strip is
 //! textual and keeps every other byte, including a `/*` that a string or an unquoted `url()` holds.
 
 use crate::inlined_literal::{char_len, escape_end, string_end};
 
-/// The CSS `source` with its comments removed.
+/// The CSS `source` with its comments and its delimiter whitespace removed.
 ///
 /// A comment's bytes leave the text, and no byte stands in for them where the tokens on either side stay apart
 /// without one. So `.a/**/.b` is the compound selector `.a.b`, and `}/* note */b` is a rule followed by a rule.
 /// Where the bytes on either side would run together instead, a bare `/**/` keeps them two tokens: `1px/**/2px` is
-/// two values, and `1px 2px` would read as one. A quoted string keeps its text, and so does an unquoted `url()`,
-/// which the browser takes whole. CSS has no line comment.
+/// two values, and `1px 2px` would read as one. A whitespace run beside a brace, a semicolon or a comma leaves
+/// nothing: those bytes end the token before them and start the one after, so `a { color: red }` becomes
+/// `a{color: red}`. Any other run separates two selectors or two values and stays as one space. A quoted string
+/// keeps its text, and so does an unquoted `url()`, which the browser takes whole. CSS has no line comment.
 pub fn without_comments(source: &str) -> String {
   let bytes = source.as_bytes();
   let mut out = String::with_capacity(source.len());
@@ -21,8 +24,21 @@ pub fn without_comments(source: &str) -> String {
   while i < bytes.len() {
     if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
       let end = comment_end(source, i);
-      if needs_boundary(out.as_bytes().last().copied(), bytes.get(end).copied()) {
+      let prev = out.as_bytes().last().copied();
+      let next = bytes.get(end).copied();
+      if needs_boundary(prev, next) || opens_template_tag(prev, next) {
         out.push_str("/**/");
+      }
+      i = end;
+      continue;
+    }
+    if bytes[i].is_ascii_whitespace() {
+      let mut end = i + 1;
+      while bytes.get(end).is_some_and(u8::is_ascii_whitespace) {
+        end += 1;
+      }
+      if needs_separating_space(out.as_bytes().last().copied(), bytes.get(end).copied()) {
+        out.push(' ');
       }
       i = end;
       continue;
@@ -36,6 +52,30 @@ pub fn without_comments(source: &str) -> String {
     i = end;
   }
   out
+}
+
+/// Whether a whitespace run between `prev` and `next` separates two tokens.
+///
+/// A brace, a semicolon and a comma end the token before them and start the one after, so a run beside one of them
+/// separates nothing. Every other run is the descendant combinator of two selectors or the gap between two values,
+/// and stays as one space. A space that keeps `{{`, `{%` and `{#` apart stays as well: the inline copy is also the
+/// template engine's source, and those bytes open a tag where the source had two tokens.
+fn needs_separating_space(prev: Option<u8>, next: Option<u8>) -> bool {
+  if opens_template_tag(prev, next) {
+    return true;
+  }
+  let (Some(prev), Some(next)) = (prev, next) else {
+    return false;
+  };
+  !matches!(prev, b'{' | b'}' | b';' | b',') && !matches!(next, b'{' | b'}' | b';' | b',')
+}
+
+/// Whether `prev` followed by `next` opens a template tag: `{{`, `{%` or `{#`.
+fn opens_template_tag(prev: Option<u8>, next: Option<u8>) -> bool {
+  let (Some(prev), Some(next)) = (prev, next) else {
+    return false;
+  };
+  matches!((prev, next), (b'{', b'{') | (b'{', b'%') | (b'{', b'#'))
 }
 
 /// The index just past the comment that starts at `start`: its `*/`, or the source's end when it never closes.
@@ -139,8 +179,30 @@ mod tests {
   }
 
   #[test]
+  fn whitespace_beside_a_delimiter_leaves_and_value_whitespace_stays() {
+    assert_eq!(without_comments(".a{color:red}\n  .b{margin:0}"), ".a{color:red}.b{margin:0}");
+    assert_eq!(without_comments(".a { margin: 0 auto; }"), ".a{margin: 0 auto;}");
+    assert_eq!(without_comments(".a , .b{color:red}"), ".a,.b{color:red}");
+    assert_eq!(without_comments(".a .b{color:red}"), ".a .b{color:red}");
+    assert_eq!(without_comments(".a:hover .b{color:red}"), ".a:hover .b{color:red}");
+    assert_eq!(
+      without_comments("@media (min-width: 100px) and (max-width: 200px) { .a { color: red } }"),
+      "@media (min-width: 100px) and (max-width: 200px){.a{color: red}}"
+    );
+    assert_eq!(without_comments("a{content: \" \"}"), "a{content: \" \"}");
+    assert_eq!(without_comments("a{background:url( 'x y.png' )}"), "a{background:url( 'x y.png' )}");
+  }
+
+  #[test]
+  fn a_space_stays_where_its_removal_would_open_a_template_tag() {
+    assert_eq!(without_comments("a{ {b:c} }"), "a{ {b:c}}");
+    assert_eq!(without_comments("a{/* note */{b:c}}"), "a{/**/{b:c}}");
+    assert_eq!(without_comments("@media (hover: none){ #a{color:red} }"), "@media (hover: none){ #a{color:red}}");
+  }
+
+  #[test]
   fn every_other_byte_is_kept() {
-    assert_eq!(without_comments(".a{color:red}\n  .b{margin:0}"), ".a{color:red}\n  .b{margin:0}");
     assert_eq!(without_comments(".a{content:\"é\"}"), ".a{content:\"é\"}");
+    assert_eq!(without_comments(".a{color:red}"), ".a{color:red}");
   }
 }

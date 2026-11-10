@@ -862,7 +862,7 @@ mod tests {
   /// A script also loses the code indentation that shows its nesting. The string literals either source holds keep
   /// their bytes.
   #[tokio::test]
-  async fn an_inlined_script_or_stylesheet_travels_without_its_comments() {
+  async fn an_inlined_script_or_stylesheet_travels_without_its_comments_and_folded_whitespace() {
     let root = tempfile::tempdir().unwrap();
     let templates = root.path().join("web").join("templates");
     let scripts = root.path().join("web").join("static").join("js");
@@ -885,7 +885,7 @@ mod tests {
 
     let response = templating.render_page(&features, "scripted.html", &json!({}), &parts).unwrap();
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    assert_eq!(body, "<script>\nlet url = 'https://example.com'; </script><style>\n.chat{display:flex}</style>");
+    assert_eq!(body, "<script>\nlet url='https://example.com';</script><style>.chat{display:flex}</style>");
   }
 
   /// A repeat render answers from the compiled environment, and a template edited on disk moves the source list so

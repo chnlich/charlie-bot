@@ -1,0 +1,49 @@
+/* The composer's attachment chips.
+   The upload module draws each chip it holds (file-upload.js), and the page
+   loads this sheet with that module on the composer's first attachment action,
+   so a reader who never attaches a file pays neither the rules nor their bytes. */
+/* File upload chips */
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  background: #1e293b;
+  border: 1px solid #475569;
+  color: #94a3b8;
+  border-radius: 9999px;
+  padding: 0.2rem 0.65rem;
+  font-size: 0.75rem;
+  max-width: 220px;
+}
+.file-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The chip's one control: a 24 px box clears WCAG 2.5.8's pointer floor, and the chip's own text
+   tone #94a3b8 reads 5.71:1 on the #1e293b chip, above the 4.5:1 floor for this 12 px glyph. The
+   box is the chip's tallest child, so the chip takes the box's height plus its own 0.2 rem padding
+   and 1 px border on each side. */
+.file-chip button { display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; background: transparent; border: none; cursor: pointer;
+  color: #94a3b8; padding: 0; line-height: 1; flex-shrink: 0; }
+.file-chip button:hover { color: #e2e8f0; }
+.file-chip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.9rem;
+  height: 0.9rem;
+  flex-shrink: 0;
+  font-size: 0.7rem;
+}
+.file-chip-icon--spinner {
+  border: 2px solid rgba(148, 163, 184, 0.3);
+  border-top-color: #cbd5e1;
+  border-radius: 9999px;
+  animation: file-chip-spin 0.8s linear infinite;
+}
+.file-chip-state { color: #fca5a5; font-size: 0.7rem; flex-shrink: 0; }
+.file-chip--uploading { border-color: rgba(96, 165, 250, 0.45); color: #dbeafe; }
+.file-chip--uploaded { border-color: rgba(74, 222, 128, 0.4); color: #dcfce7; }
+.file-chip--failed { border-color: rgba(248, 113, 113, 0.45); color: #fecaca; }
+@keyframes file-chip-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

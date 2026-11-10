@@ -16,12 +16,17 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 function loadPage() {
   const downloadCalls = [];
+  const styleCalls = [];
   const replayed = [];
   const errors = [];
   let resolveLoad = null;
   let rejectLoad = null;
   const context = {
     SESSION_ID: 'sess-1',
+    loadPageStyles(key, paths) {
+      styleCalls.push({key, paths});
+      return Promise.resolve();
+    },
     loadPageScripts(key, paths) {
       downloadCalls.push({key, paths});
       return new Promise((resolve, reject) => {
@@ -53,7 +58,7 @@ function loadPage() {
     context.Chat.expandPendingTriggersTray = context.expandPendingTriggersTray;
   };
   return {
-    context, downloadCalls, replayed, errors, land,
+    context, downloadCalls, styleCalls, replayed, errors, land,
     resolveLoad: () => resolveLoad(),
     rejectLoad: (error) => rejectLoad(error),
   };
@@ -75,11 +80,15 @@ test('another session\'s pending count asks for nothing until it opens', () => {
   assert.deepEqual(Array.from(rig.downloadCalls), []);
 });
 
-test('the first nonzero count for the open session starts one download', () => {
+test('the first nonzero count for the open session starts one download', async () => {
   const rig = loadPage();
   rig.context.renderPendingTriggersTray('sess-1');
   rig.context.setSessionPendingTriggerTrayStatus('sess-1', status(2));
   rig.context.setSessionPendingTriggerTrayStatus('sess-1', status(2));
+  await flush();
+  assert.equal(rig.styleCalls.length, 1, 'the tray stylesheet comes with the module');
+  assert.equal(rig.styleCalls[0].key, 'chat-triggers-tray');
+  assert.deepEqual(Array.from(rig.styleCalls[0].paths), ['/static/css/triggers-tray.css']);
   assert.equal(rig.downloadCalls.length, 1);
   assert.equal(rig.downloadCalls[0].key, 'chat-triggers-tray');
   assert.deepEqual(Array.from(rig.downloadCalls[0].paths), ['/static/js/chat/triggers-tray.js']);
@@ -89,6 +98,7 @@ test('the open session is rendered when the module lands', async () => {
   const rig = loadPage();
   rig.context.renderPendingTriggersTray('sess-1');
   rig.context.setSessionPendingTriggerTrayStatus('sess-1', status(2));
+  await flush();
   rig.land();
   rig.resolveLoad();
   await flush();
@@ -99,6 +109,7 @@ test('a bell for the open session expands in place after the render', async () =
   const rig = loadPage();
   rig.context.renderPendingTriggersTray('sess-1');
   assert.equal(rig.context.expandPendingTriggersTray('sess-1'), true, 'the open session answers in place');
+  await flush();
   rig.land();
   rig.resolveLoad();
   await flush();
@@ -113,6 +124,7 @@ test('a bell for another session switches there and expands on that open', async
   rig.context.renderPendingTriggersTray('sess-1');
   assert.equal(rig.context.expandPendingTriggersTray('sess-2'), false, 'the caller switches session first');
   rig.context.renderPendingTriggersTray('sess-2');
+  await flush();
   rig.land();
   rig.resolveLoad();
   await flush();
@@ -126,9 +138,11 @@ test('a failed download is reported and the next count retries', async () => {
   const rig = loadPage();
   rig.context.renderPendingTriggersTray('sess-1');
   rig.context.setSessionPendingTriggerTrayStatus('sess-1', status(1));
+  await flush();
   rig.rejectLoad(new Error('offline'));
   await flush();
   assert.match(rig.errors[0], /did not load/);
   rig.context.setSessionPendingTriggerTrayStatus('sess-1', status(2));
+  await flush();
   assert.equal(rig.downloadCalls.length, 2, 'the next nonzero count retries the download');
 });

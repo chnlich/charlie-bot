@@ -80,8 +80,9 @@ function buildHarness({stored = null, defaultBackend = 'batch', backends = BACKE
     Chat: {registerInputMode() {}},
     VOICE_BACKENDS: backends,
     VOICE_DEFAULT_BACKEND: defaultBackend,
-    // The page's loader: the harness has already run the recording module, so
+    // The page's loaders: the harness has already run the recording module, so
     // a lazy click resolves without fetching.
+    loadPageStyles: () => Promise.resolve(),
     loadPageScripts: () => Promise.resolve(),
     autoResize() {},
     saveDraft() {},
@@ -170,7 +171,8 @@ test('the ⋯ menu entry opens the same backend menu and a tap picks a backend',
   menu.classList.add('hidden');
   overflow.classList.add('show');
   entry.onclick();
-  await Promise.resolve(); // the entry loads the recording module before opening
+  // The entry loads the overlay stylesheet and then the recording module before opening.
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.ok(!menu.classList.contains('hidden'));
   assert.ok(!overflow.classList.contains('show'));

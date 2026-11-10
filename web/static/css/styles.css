@@ -223,51 +223,6 @@ body.resizing { cursor: col-resize; user-select: none; }
   color: #dbeafe;
 }
 .message-attachment span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* File upload chips */
-.file-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
-  background: #1e293b;
-  border: 1px solid #475569;
-  color: #94a3b8;
-  border-radius: 9999px;
-  padding: 0.2rem 0.65rem;
-  font-size: 0.75rem;
-  max-width: 220px;
-}
-.file-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The chip's one control: a 24 px box clears WCAG 2.5.8's pointer floor, and the chip's own text
-   tone #94a3b8 reads 5.71:1 on the #1e293b chip, above the 4.5:1 floor for this 12 px glyph. The
-   box is the chip's tallest child, so the chip takes the box's height plus its own 0.2 rem padding
-   and 1 px border on each side. */
-.file-chip button { display: inline-flex; align-items: center; justify-content: center;
-  width: 24px; height: 24px; background: transparent; border: none; cursor: pointer;
-  color: #94a3b8; padding: 0; line-height: 1; flex-shrink: 0; }
-.file-chip button:hover { color: #e2e8f0; }
-.file-chip-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 0.9rem;
-  height: 0.9rem;
-  flex-shrink: 0;
-  font-size: 0.7rem;
-}
-.file-chip-icon--spinner {
-  border: 2px solid rgba(148, 163, 184, 0.3);
-  border-top-color: #cbd5e1;
-  border-radius: 9999px;
-  animation: file-chip-spin 0.8s linear infinite;
-}
-.file-chip-state { color: #fca5a5; font-size: 0.7rem; flex-shrink: 0; }
-.file-chip--uploading { border-color: rgba(96, 165, 250, 0.45); color: #dbeafe; }
-.file-chip--uploaded { border-color: rgba(74, 222, 128, 0.4); color: #dcfce7; }
-.file-chip--failed { border-color: rgba(248, 113, 113, 0.45); color: #fecaca; }
-@keyframes file-chip-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
 .overflow-toggle { display: none; }
 .input-buttons { position: relative; }
 .sidebar-overlay { display: none; }
@@ -351,10 +306,6 @@ main > header > a[title="View JSONL events"] {
    nth-last-of-type keeps non-button trailing spans (the archived tree's
    active tag) out of the count. */
 .session-row { position: relative; }
-/* The rename field (sidebar/modals.js) is fixed over the row being edited. On a
-   phone that row sits in the fixed drawer (z-index 100), so the field takes the
-   row menu's z-index to paint above the drawer instead of behind it. */
-#rename-input { z-index: 150; }
 .session-row > button { position: absolute; right: 12px; pointer-events: none; }
 /* Pointer floor: a row action draws a 14px glyph in p-1's 8px, a 22px box. A named group
    header's two actions draw a 12px glyph in p-0.5's 4px, a 16px box. Both sit under the 24px
@@ -477,10 +428,6 @@ body { overscroll-behavior: none; }
   #session-list a { min-height: 44px; }
   .filter-pill { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; }
 }
-/* Pending triggers tray (chat column, chat/triggers-tray.js): dashed amber
-   border and the --watch spellings' mono face, per the reviewed mockup. */
-.tray-border { border: 1px dashed rgba(245, 158, 11, .55); }
-.tray-mono { font-family: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 /* Child report card (rendering.js, child_report): a folded card clamps a long
    report to three lines and hides its refs; data-folded="false" shows all of it. */
 .child-report[data-folded="true"] .child-report-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
@@ -495,31 +442,3 @@ body { overscroll-behavior: none; }
 .user-msg-more { display: none; margin-top: 0.4rem; padding: 0.2rem 0.7rem; font-size: 0.72rem; font-weight: 600; color: #eff6ff; background: rgba(15, 23, 42, 0.28); border: 1px solid rgba(191, 219, 254, 0.45); border-radius: 9999px; cursor: pointer; }
 .user-msg-fold[data-folded="true"][data-overflows="true"] .user-msg-more { display: block; }
 .user-msg-more:hover { background: rgba(15, 23, 42, 0.5); }
-/* Worker summary card folds (chat/worker-summary.js): a closing passage clamps
-   to three lines the way the child-report card does; data-folded="false" shows
-   all of it. */
-.worker-summary-fold[data-folded="true"] .worker-summary-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
-.worker-summary-fold[data-folded="true"] .worker-summary-less,
-.worker-summary-fold[data-folded="false"] .worker-summary-more { display: none; }
-.worker-summary-toggle { display: block; margin-top: 0.25rem; font-size: 0.75rem; color: rgba(148, 163, 184, 0.85); }
-.worker-summary-toggle:hover { color: #e2e8f0; text-decoration: underline; }
-/* Sidebar row settings popover (sidebar/row-menu.js): the one shared menu,
-   appended to document.body and fixed-positioned under its anchor. */
-.row-menu {
-  position: fixed; z-index: 150; min-width: 10rem;
-  background: #1e293b; border: 1px solid #475569; border-radius: 0.5rem;
-  padding: 0.25rem; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-}
-.row-menu-item {
-  display: block; width: 100%; text-align: left;
-  padding: 0.375rem 0.75rem; font-size: 0.875rem; color: #e2e8f0;
-  background: transparent; border: none; border-radius: 0.375rem; cursor: pointer;
-}
-.row-menu-item:hover { background: #334155; }
-.row-menu-item-danger { color: #f87171; }
-.row-menu-item-danger:hover { background: rgba(239, 68, 68, 0.15); }
-.row-menu-sep { height: 1px; margin: 0.25rem 0; background: #475569; }
-/* Touch targets: whole-item 44px rows, matching the sidebar's other touch rules. */
-@media (hover: none) {
-  .row-menu-item { min-height: 44px; }
-}

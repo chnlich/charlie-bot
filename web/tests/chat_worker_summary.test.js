@@ -372,6 +372,9 @@ function loadThroughDocument({worker = false} = {}) {
     },
     Date: FakeDate,
     SESSION_ID: 'sess-1',
+    loadPageStyles() {
+      return Promise.resolve();
+    },
     loadPageScripts(key, paths) {
       loaded.push({key, paths});
       return new Promise(() => {});
@@ -419,8 +422,9 @@ test('a web session never fetches the card and shows no card node', () => {
   assert.equal(context.Chat.workerSummaryCard(), null);
 });
 
-test('a worker session starts the download while the document parses', () => {
+test('a worker session starts the download while the document parses', async () => {
   const {loaded} = loadThroughDocument({worker: true});
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(loaded.length, 1);
   assert.equal(loaded[0].key, 'chat-worker-summary');
   assert.equal(loaded[0].paths.length, 1);

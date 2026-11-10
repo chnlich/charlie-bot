@@ -54,6 +54,9 @@ function loadPage() {
     PAGE_HOSTNAME: 'host',
     FormData: class { append() {} },
     fetch: () => new Promise(() => {}),
+    loadPageStyles(key, paths) {
+      return Promise.resolve();
+    },
     loadPageScripts(key, paths) {
       calls.push({key, paths});
       return new Promise((resolve, reject) => {
@@ -88,10 +91,11 @@ function pasteEvent(items) {
   return event;
 }
 
-test('the first attachment action starts the module download', () => {
+test('the first attachment action starts the module download', async () => {
   const rig = loadPage();
   assert.deepEqual(Array.from(rig.calls), [], 'the document loads no upload code');
   rig.context.handleFiles({files: []});
+  await flush();
   assert.equal(rig.calls.length, 1);
   assert.equal(rig.calls[0].key, 'file-upload');
   assert.equal(rig.calls[0].paths.length, 1);
@@ -116,6 +120,7 @@ test('a picked file holds the send gate until the module lands and its upload st
   assert.match(rig.toasts[0].message, /attachment upload/);
   assert.equal(rig.attributes.has('disabled'), true, 'the send button shows the wait');
 
+  await flush();
   rig.land();
   rig.resolveLoad();
   await flush();
@@ -131,6 +136,7 @@ test('an input-work window holds the gate from before the module lands, and a se
   rig.context.inputWorkSettled('Transcribing the recording');
   assert.equal(rig.context.blockIfUploadsInFlight(), false);
 
+  await flush();
   rig.land();
   rig.resolveLoad();
   await flush();
@@ -140,6 +146,7 @@ test('an input-work window holds the gate from before the module lands, and a se
 test('an input-work window still open when the module lands moves into the module', async () => {
   const rig = loadPage();
   rig.context.inputWorkStarted('Transcribing the recording');
+  await flush();
   rig.land();
   rig.resolveLoad();
   await flush();
@@ -156,11 +163,12 @@ test('a plain-text paste neither downloads the module nor cancels the paste', ()
   assert.deepEqual(Array.from(rig.calls), [], 'text alone is no attachment action');
 });
 
-test('an image paste cancels the paste and starts the download while it travels', () => {
+test('an image paste cancels the paste and starts the download while it travels', async () => {
   const rig = loadPage();
   const event = pasteEvent([{kind: 'file', type: 'image/png', getAsFile: () => ({})}]);
   rig.input.listeners.get('paste')(event);
   assert.equal(event.prevented, true, 'the cancel runs while the event dispatches');
+  await flush();
   assert.equal(rig.calls.length, 1);
   assert.equal(rig.context.blockIfUploadsInFlight(), true, 'the screenshot waits behind the gate');
 });
@@ -169,11 +177,13 @@ test('a failed download releases the held work and the next trigger retries', as
   const rig = loadPage();
   rig.context.handleFiles({files: [{name: 'a.txt'}]});
   assert.equal(rig.context.blockIfUploadsInFlight(), true);
+  await flush();
   rig.rejectLoad(new Error('offline'));
   await flush();
   assert.equal(rig.context.blockIfUploadsInFlight(), false, 'a module that will not arrive must not lock the composer');
   assert.match(rig.errors[0], /did not load/);
   rig.context.handleFiles({files: []});
+  await flush();
   assert.equal(rig.calls.length, 2, 'the next action retries the download');
 });
 

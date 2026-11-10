@@ -118,7 +118,9 @@
 
   function loadSidebarInteractions() {
     if (interactionLoad === null) {
-      const loading = loadPageScripts('sidebar-interactions', INTERACTION_SCRIPTS);
+      const loading = loadPageStyles('sidebar-interactions', ['/static/css/sidebar-interactions.css'])
+        .catch((error) => console.error(error.message))
+        .then(() => loadPageScripts('sidebar-interactions', INTERACTION_SCRIPTS));
       interactionLoad = loading;
       // A failed download clears the memo so the next click retries; the caller logs the failure.
       loading.catch(() => { if (interactionLoad === loading) interactionLoad = null; });

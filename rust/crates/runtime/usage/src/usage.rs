@@ -206,7 +206,7 @@ impl UsageFold {
         // Rounding to four places rounds the exact binary value, as {:.4} does and scaling by 10_000 does not.
         Some(format!("{:.4}", total).parse().expect("a formatted float parses back"))
       }
-      _ => None,
+      CostTotal::Unreported | CostTotal::Unknown | CostTotal::Known(_) => None,
     }
   }
 

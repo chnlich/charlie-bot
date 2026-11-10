@@ -33,6 +33,8 @@ pub const NOTEBOOK_EDIT_TOOL: &str = "NotebookEdit";
 pub const GLOB_TOOL: &str = "Glob";
 /// The Claude Code tool that searches file contents for a pattern.
 pub const GREP_TOOL: &str = "Grep";
+/// The Claude Code tool that loads a skill's instructions by name.
+pub const SKILL_TOOL: &str = "Skill";
 /// The JSON pointer to the content blocks of an event's message: the array a `user` or `assistant` event carries.
 pub const MESSAGE_CONTENT_POINTER: &str = "/message/content";
 /// The committed message's flag that the page already holds its content from the stream frames, so the message frame

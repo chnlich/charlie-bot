@@ -10,7 +10,7 @@ This crate owns the process transport below the agent backends and the launch ma
 - `cgroup::system_cgroup_base_dir`, `session_cgroup_name`, `session_cgroup_path`
 - `cgroup::ensure_session_cgroup`, `read_memory_events`, `classify_cgroup_exit`, `prepare_session_cgroup` (async; the class walk runs on a blocking thread)
 - `cgroup::move_process_to_cgroup` (writes `cgroup.procs` and `/proc/<pid>/oom_score_adj`)
-- `cgroup::cleanup_session_cgroup`, `sweep_stale_session_cgroups`, `log_session_cgroup_startup`
+- `cgroup::sweep_stale_session_cgroups`, `log_session_cgroup_startup`
 - `cursor::read_raw_cursor`, `CURSOR_FIELD_BYTES`
 - `cursor::RawCursorWriter`, `RawCursorWriter::new`, `write`, and `close`
 - `follow::DEFAULT_BUFFER_LIMIT`, `TAIL_POLL_INTERVAL`, `SilenceCallback`, `FollowSummary`, and its fields

@@ -269,11 +269,6 @@ fn attach_pid(cgroup_dir: &Path, pid: u32) -> io::Result<()> {
   open_hierarchy(cgroup_dir)?.root().attach(pid)
 }
 
-/// Remove an empty session cgroup; a populated or unavailable directory is retained.
-pub fn cleanup_session_cgroup(base_dir: &Path, session_id: &str) -> bool {
-  charliebot_core::cgroup::cleanup_session_cgroup(base_dir, session_id)
-}
-
 /// Remove each empty cgroup named for a session of `sessions_dir` and retain a populated one with a warning. Other
 /// entries under `base_dir`, and the cgroups of other homes, stay.
 pub fn sweep_stale_session_cgroups(base_dir: &Path, sessions_dir: &Path) -> io::Result<usize> {
@@ -663,7 +658,7 @@ mod tests {
     ] {
       fs::remove_file(path.join(name)).unwrap();
     }
-    assert!(cleanup_session_cgroup(root.path(), SESSION_ID));
+    assert!(charliebot_core::cgroup::cleanup_session_cgroup(root.path(), SESSION_ID));
     assert!(!path.exists());
   }
 

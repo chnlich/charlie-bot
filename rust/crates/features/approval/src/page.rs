@@ -18,8 +18,8 @@ use super::day::{self, DayError, DayView};
 
 const TEMPLATE: &str = "approval_day.html";
 
-/// The page route's path.
-const PAGE_PATH: &str = "/approval";
+/// The page route's path, which the home card also links.
+pub(crate) const PAGE_PATH: &str = "/approval";
 
 /// The router of the page's one route. The feature context is the route's state.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {

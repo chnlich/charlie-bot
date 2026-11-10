@@ -49,7 +49,9 @@ impl GeminiTranslator {
             let error = event.get("error").cloned().unwrap_or_else(|| json!({}));
             events.push(make_tool_result_event(tool_id, &error_message(&error)?));
           }
-          _ => {}
+          // A pending tool call has no result yet, so it emits no event.
+          "pending" => {}
+          other => bail!("gemini tool_result status must be \"success\", \"error\" or \"pending\", got {other:?}"),
         }
         Ok(events)
       }
@@ -84,7 +86,7 @@ impl GeminiTranslator {
   }
 
   /// A user message is dropped without a flush. An assistant message joins the buffer, and a message without `delta`
-  /// flushes it. Any other role falls through to the unhandled flush.
+  /// flushes it. A system message only flushes the buffer, and any other role is an error.
   fn message(&mut self, event: &Map<String, Value>) -> anyhow::Result<Vec<Value>> {
     match str_field(event, "role", "")? {
       "user" => Ok(Vec::new()),
@@ -95,7 +97,10 @@ impl GeminiTranslator {
         }
         Ok(self.flush())
       }
-      _ => Ok(self.flush()),
+      "system" => Ok(self.flush()),
+      other => {
+        bail!("gemini message role must be \"user\", \"assistant\" or \"system\", got {other:?}")
+      }
     }
   }
 
@@ -183,6 +188,41 @@ mod tests {
       translator.translate_event(&json!({"type": "tool_use", "tool_name": "Read", "parameters": {}})).unwrap();
     assert_eq!(events[0], json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hel"}]}}));
     assert_eq!(events[1]["name"], "Read");
+  }
+
+  #[test]
+  fn a_tool_result_with_an_unknown_status_is_an_error() {
+    let mut translator = GeminiTranslator::new();
+    let error = translator
+      .translate_event(&json!({"type": "tool_result", "status": "cancelled", "tool_id": "Bash"}))
+      .unwrap_err();
+    assert!(error.to_string().contains("cancelled"), "{error}");
+  }
+
+  #[test]
+  fn a_message_with_an_unknown_role_is_an_error() {
+    let mut translator = GeminiTranslator::new();
+    let error =
+      translator.translate_event(&json!({"type": "message", "role": "tool", "content": "ignored"})).unwrap_err();
+    assert!(error.to_string().contains("tool"), "{error}");
+  }
+
+  #[test]
+  fn a_pending_tool_result_emits_no_event() {
+    let mut translator = GeminiTranslator::new();
+    let events =
+      translator.translate_event(&json!({"type": "tool_result", "status": "pending", "tool_id": "Bash"})).unwrap();
+    assert!(events.is_empty());
+  }
+
+  #[test]
+  fn a_system_message_flushes_the_buffer() {
+    let mut translator = GeminiTranslator::new();
+    translator
+      .translate_event(&json!({"type": "message", "role": "assistant", "content": "Hel", "delta": true}))
+      .unwrap();
+    let events = translator.translate_event(&json!({"type": "message", "role": "system", "content": "line"})).unwrap();
+    assert_eq!(events, vec![json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hel"}]}})]);
   }
 
   #[test]

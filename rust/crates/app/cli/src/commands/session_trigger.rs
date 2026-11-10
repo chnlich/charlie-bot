@@ -28,9 +28,6 @@ use crate::launcher::{self, Launch, LaunchError};
 
 const ENDPOINT: &str = triggers::SCHEDULE_TRIGGER_PATH;
 
-/// The short-label limit on `--message`.
-const MAX_TRIGGER_MESSAGE_CHARS: usize = 200;
-
 /// Exit code for a refused or unverified registration: the usage-error code, as the 422 mapping uses.
 const EXIT_VERIFY_REJECTED: i32 = 2;
 
@@ -192,7 +189,10 @@ pub fn command() -> Command {
           .required(true)
           .value_parser(parse_message)
           .overrides_with("message")
-          .help(format!("Short label naming which watch fired, at most {MAX_TRIGGER_MESSAGE_CHARS} characters")),
+          .help(format!(
+            "Short label naming which watch fired, at most {} characters",
+            triggers::MAX_TRIGGER_MESSAGE_CHARS
+          )),
       )
       .arg(
         Arg::new("watch")
@@ -435,9 +435,10 @@ fn parse_max_wait(text: &str) -> Result<i64, String> {
 /// `--message` is a short label: `_validate_message` counts characters, not bytes.
 fn parse_message(value: &str) -> Result<String, String> {
   let count = value.chars().count();
-  if count > MAX_TRIGGER_MESSAGE_CHARS {
+  if count > triggers::MAX_TRIGGER_MESSAGE_CHARS {
     return Err(format!(
-      "--message must be a short label at most {MAX_TRIGGER_MESSAGE_CHARS} characters (got {count})"
+      "--message must be a short label at most {} characters (got {count})",
+      triggers::MAX_TRIGGER_MESSAGE_CHARS
     ));
   }
   Ok(value.to_string())
@@ -509,7 +510,7 @@ mod tests {
 
   #[test]
   fn message_limit_counts_characters() {
-    assert!(parse_message(&"中".repeat(MAX_TRIGGER_MESSAGE_CHARS)).is_ok());
-    assert!(parse_message(&"中".repeat(MAX_TRIGGER_MESSAGE_CHARS + 1)).is_err());
+    assert!(parse_message(&"中".repeat(triggers::MAX_TRIGGER_MESSAGE_CHARS)).is_ok());
+    assert!(parse_message(&"中".repeat(triggers::MAX_TRIGGER_MESSAGE_CHARS + 1)).is_err());
   }
 }

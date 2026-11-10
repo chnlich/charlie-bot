@@ -288,6 +288,30 @@ test('a 401 drops every stored copy and reaches the page, and an offline page wi
   await assert.rejects(answer(h, request(BOOTSTRAP_URL)), TypeError, 'the copy is gone, so the page sees the failure');
 });
 
+test('a revalidating 304 gives the stored copy: it names no body the page could read', async () => {
+  const h = harness();
+  h.state.network = async () => firstScreen('one');
+  await answer(h, request(BOOTSTRAP_URL));
+
+  // The browser's HTTP cache revalidates against the worker's own subrequest, and the 304 lands inside
+  // the wait cap. The copy carries the state that etag names.
+  h.state.network = async () => new Response(null, {status: 304, headers: {ETag: '"s1"'}});
+  const revalidated = await answer(h, request(BOOTSTRAP_URL));
+  assert.equal((await revalidated.response.json()).body, 'one', 'the copy answers the bodyless 304');
+  assert.notEqual(revalidated.response.headers.get(STORED_AT), null, 'the answer is the stored copy');
+});
+
+test('a 304 with no copy is fetched again past the HTTP cache, and the body reaches the page', async () => {
+  const h = harness();
+  h.state.network = async (req, init) => (init && init.cache === 'no-store'
+    ? firstScreen('fresh')
+    : new Response(null, {status: 304}));
+  const result = await answer(h, request(BOOTSTRAP_URL, {headers: {'If-None-Match': '"s1"'}}));
+  assert.equal((await result.response.json()).body, 'fresh', 'the re-fetch brings the body');
+  assert.equal(h.state.calls.length, 2, 'the 304 re-fetched once');
+  assert.equal(h.state.calls[1].init.cache, 'no-store', 'the re-fetch bypasses the HTTP cache');
+});
+
 test('a network-only request reads no copy and waits for the network', async () => {
   const h = harness();
   h.state.network = async () => firstScreen('one');

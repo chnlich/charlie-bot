@@ -148,7 +148,25 @@ export async function waitForWarm(tab, timeoutMs) {
       timeoutMs,
       'the offline shell warm to settle');
   const warm = await tab.evaluate('window.__pnWarm');
-  if (warm !== null && warm.stored === false) {
+  if (warm === null) {
+    // A page without a service worker at all warms nothing: a client this old keeps the page it has. Any
+    // other silence is a broken warm — the worker never registered or never answered — and the profiles it
+    // would have stored are missing, so a later cell measures a browser without the shell.
+    const state = await tab.evaluate(`(async () => ({
+      supported: 'serviceWorker' in navigator,
+      registration: 'serviceWorker' in navigator
+        ? await navigator.serviceWorker.getRegistration().then((registration) => registration
+          ? {scope: registration.scope, active: Boolean(registration.active)} : null)
+        : null,
+      controller: navigator.serviceWorker ? navigator.serviceWorker.controller !== null : false,
+      href: location.href,
+    }))()`);
+    if (state.supported) {
+      throw new Error(`the offline shell warm never reported: ${JSON.stringify(state)}`);
+    }
+    return;
+  }
+  if (warm.stored === false) {
     throw new Error('the offline shell warm failed: ' + (warm.error ?? 'no stored shell'));
   }
 }
@@ -269,11 +287,14 @@ export class Tab {
           rowIds: rows.map((row) => decodeURIComponent((row.href.match(/session=([^&]+)/) ?? [])[1] ?? '')).slice(0, 40),
           toggles: toggles.map((toggle) => toggle.dataset.sgroupLimitToggleKey),
           filter: window.currentFilter ?? null,
-          listHtmlLength: (document.getElementById('session-list')?.innerHTML ?? '').length,
+          listHtml: (document.getElementById('session-list')?.innerHTML ?? '').slice(0, 200),
+          initialSessionsType: typeof INITIAL_SESSIONS,
         };
       })()`);
       throw new Error(`no sidebar row for session ${session.id} on ${this.name}, and its group ` +
-        `${JSON.stringify(session.group)} shows no Show all toggle; the sidebar: ${JSON.stringify(sidebar)}`);
+        `${JSON.stringify(session.group)} shows no Show all toggle; the sidebar: ${JSON.stringify(sidebar)}; ` +
+        `the console: ${JSON.stringify(this.consoleLines.slice(-8))}; ` +
+        `the page errors: ${JSON.stringify(this.pageErrors.slice(-8))}`);
     }
     if (step === 'painted') {
       return false;

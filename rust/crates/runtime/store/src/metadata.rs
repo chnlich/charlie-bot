@@ -199,6 +199,19 @@ pub enum TaskProfile {
   Worker,
 }
 
+impl TaskProfile {
+  /// The wire spellings of every task profile, which a request schema accepts as choices.
+  pub const NAMES: &[&str] = &["manager", "worker"];
+
+  /// The wire spelling persisted in a session's metadata and accepted by a create request.
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Manager => "manager",
+      Self::Worker => "worker",
+    }
+  }
+}
+
 /// Task type persisted in `TaskSpec`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]

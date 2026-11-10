@@ -926,10 +926,7 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
         id: id.clone(),
         name: text::title(&mut rng),
         status: "active",
-        profile: match session.profile {
-          TaskProfile::Manager => "manager",
-          TaskProfile::Worker => "worker",
-        },
+        profile: session.profile.as_str(),
         backend: "mock-backend",
         created_at: session::stamp(session.started_at),
         updated_at: session::stamp(session.modified_at),

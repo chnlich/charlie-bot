@@ -3,6 +3,8 @@
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use time::OffsetDateTime;
 use time::format_description::{self, BorrowedFormatItem};
 use time::macros::format_description;
@@ -61,16 +63,22 @@ pub fn http_date(unix_seconds: i64) -> String {
 
 /// The log line's time: UTC to the millisecond, `YYYY-MM-DD HH:MM:SS.mmmZ`, the stamp `logline` reads.
 pub fn log_timestamp() -> String {
-  let moment = OffsetDateTime::from(SystemTime::now());
+  log_timestamp_of(Timestamp::now())
+}
+
+/// [`log_timestamp`] of `instant`: the one place the stamp's shape is written, so a reader that rebuilds a log line
+/// spells it the same as the writer.
+pub fn log_timestamp_of(instant: Timestamp) -> String {
+  let moment = instant.to_zoned(TimeZone::UTC).datetime();
   format!(
     "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}Z",
     moment.year(),
-    u8::from(moment.month()),
+    moment.month(),
     moment.day(),
     moment.hour(),
     moment.minute(),
     moment.second(),
-    moment.millisecond()
+    moment.subsec_nanosecond() / 1_000_000
   )
 }
 
@@ -97,6 +105,12 @@ pub fn unix_seconds(instant: SystemTime) -> i64 {
 mod tests {
   use super::*;
   use std::time::Duration;
+
+  #[test]
+  fn log_timestamp_of_writes_utc_to_the_millisecond() {
+    let instant: Timestamp = "2025-10-18T07:15:40.685829Z".parse().unwrap();
+    assert_eq!(log_timestamp_of(instant), "2025-10-18 07:15:40.685Z");
+  }
 
   #[test]
   fn iso_drops_a_zero_fraction_like_isoformat() {

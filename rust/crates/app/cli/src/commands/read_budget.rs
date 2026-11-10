@@ -561,7 +561,7 @@ fn posix_normpath(path: &str) -> String {
 
 fn resolve_token(tok: &str, base: Option<&str>) -> Option<String> {
   let home = std::env::var("HOME").unwrap_or_default();
-  let cb_home = std::env::var("CHARLIEBOT_HOME").unwrap_or_default();
+  let cb_home = std::env::var(home::CHARLIEBOT_HOME_ENV).unwrap_or_default();
   let mut s = tok.to_string();
   for (var, val) in [
     ("${CHARLIEBOT_HOME}", cb_home.as_str()),

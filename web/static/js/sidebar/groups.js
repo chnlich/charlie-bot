@@ -302,9 +302,9 @@ function sessionRowActiveClass(isActive) {
 // session-row class is the plain-CSS hook styles.css's hover reveal keys on
 // (positioning context for the row's out-of-flow action buttons).
 // A title the row rule shortened (sessionRowTitle) carries its full name in
-// data-full-name, the way the row menu's Settings button carries its row facts:
-// the rename field and the opening notice read it off the anchor at click time,
-// and every other row's text is already the full name.
+// data-full-name, the way the row menu's Settings button carries its row facts.
+// The rename field and the opening notice read it off the anchor at click
+// time, and every other row's text is already the full name.
 function renderSessionRowShell(s, {filter, title, activeClass, options, indicators, line, actions}) {
   const extraClass = options.extraClass ? ' ' + options.extraClass : '';
   const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
@@ -355,9 +355,9 @@ function paintWorkspaceBadges(workspaceBadges) {
     {workspaceBadges, listing: lastGroupedRenderArgs.listing});
 }
 // A module the page fetched after its document registers a row decoration (a badge, a line, a menu item) after the
-// list painted, so the paint it missed leaves the rows it decorates bare. It asks for this repaint, which paints the
-// last paint's own arguments again: no list refetch, and an empty or search paint is redrawn as itself rather than
-// replaced by the rows an earlier paint left behind.
+// list painted. The paint it missed leaves the rows it decorates bare. It asks for this repaint, which paints the
+// last paint's own arguments again. That means no list refetch: an empty or search paint is redrawn as itself,
+// rather than replaced by the rows an earlier paint left behind.
 let lastListPaint = null;
 
 function repaintRenderedRows() {

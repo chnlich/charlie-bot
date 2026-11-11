@@ -86,7 +86,7 @@ impl CharlieCodeBackend {
     })
   }
 
-  /// The child env: the user-local bin on PATH, the injected key, and the proxy edit (`_prepare_env`).
+  /// The child env: the user-local bin on PATH, the injected key, and the proxy variables.
   fn child_env(&self, mut env: Env) -> Env {
     prepend_path_dir(&mut env, &self.user_local_bin);
     if let Some(api_key) = &self.api_key {
@@ -98,8 +98,8 @@ impl CharlieCodeBackend {
     env
   }
 
-  /// The command (`_build_command`). It first writes the bare prompt to `task.md`, which the flags name, so the
-  /// prompt carries no system frame.
+  /// The command. It first writes the bare prompt to `task.md`, which the flags name, so the prompt carries no
+  /// system frame.
   fn argv(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
     let transport_dir =
       self.transport_dir.as_ref().context("charlie-code backend: prepare_transport must run before build_command")?;
@@ -142,7 +142,7 @@ impl CharlieCodeBackend {
     Ok(command)
   }
 
-  /// The upload gate of `run`. An image ref on an endpoint with `image_input: false` refuses the run, and nothing is
+  /// The upload gate of one run. An image ref on an endpoint with `image_input: false` refuses the run, and nothing is
   /// sent. Otherwise the image refs become `--image` flags. Non-image refs stay in the task text.
   fn accept(&mut self, uploaded_files: &[Value]) -> anyhow::Result<()> {
     let mut image_refs = Vec::new();
@@ -204,7 +204,7 @@ impl AgentBackend for CharlieCodeBackend {
   }
 }
 
-/// An upload ref's string field, or "" when the ref lacks it (`ref.get(key, "")`).
+/// An upload ref's string field, or "" when the ref lacks it.
 fn ref_text<'a>(reference: &'a Value, key: &str) -> anyhow::Result<&'a str> {
   let Some(fields) = reference.as_object() else {
     bail!("upload ref must be a JSON object, got {reference}");

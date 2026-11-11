@@ -12,8 +12,8 @@ const TIMEOUT_SECONDS: &str = "timeout_seconds";
 const TOP_P: &str = "top_p";
 const TEMPERATURE: &str = "temperature";
 
-/// The `charlie-code` option's type-specific fields in `CharlieCodeBackend`'s declaration order, each with the value
-/// the backend takes when an entry omits it. `from_fields` accepts exactly these keys, and `charliebot config get
+/// The `charlie-code` option's type-specific fields in [`CharlieCodeOption`]'s declaration order, each with the value
+/// the option holds when an entry omits it. `from_fields` accepts exactly these keys, and `charliebot config get
 /// backends` renders them.
 pub const SCHEMA: &[OptionField] = &[
   OptionField::field(API_BASE_KEY, OptionFieldDefault::Null),

@@ -41,6 +41,9 @@ use tokio::task::{AbortHandle, JoinHandle};
 const SESSION_REQUEST: &str = "improve-port-manager";
 const TEST_BACKEND_TYPE: &str = "improve_port_script";
 const QUOTA_RESET: &str = "2999-01-01T00:00:00Z";
+/// Write-class git limit for the loop tests. The test hook's 300 ms cap times out a `git worktree add` that a loaded
+/// host delays, and the loop then fails before its first run; this limit lets the add finish.
+const LOOP_GIT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 static QUOTA_REJECTED_HOMES: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 static GIT_OVERRIDE_LOCK: LazyLock<AsyncMutex<()>> = LazyLock::new(|| AsyncMutex::new(()));
@@ -131,11 +134,13 @@ struct LoopHarness {
   wakes: Arc<Mutex<Vec<String>>>,
   process_guard: process_guard::ProcessGroupGuard,
   _git_override_guard: AsyncMutexGuard<'static, ()>,
+  _write_timeout: charliebot_tasks::git::GitWriteTimeoutOverride,
 }
 
 impl LoopHarness {
   async fn new(pool_ids: &[&str], extra_ids: &[&str], scripts: Vec<String>) -> anyhow::Result<LoopHarness> {
     let git_override_guard = GIT_OVERRIDE_LOCK.lock().await;
+    let write_timeout = charliebot_tasks::git::override_git_write_timeout(LOOP_GIT_WRITE_TIMEOUT);
     let scripts = Scripts::new(scripts);
     let mut option_ids = if pool_ids.is_empty() { vec!["fake"] } else { pool_ids.to_vec() };
     for id in extra_ids {
@@ -209,6 +214,7 @@ impl LoopHarness {
       wakes,
       process_guard: process_guard::ProcessGroupGuard::new(),
       _git_override_guard: git_override_guard,
+      _write_timeout: write_timeout,
     })
   }
 
@@ -859,6 +865,7 @@ async fn a_best_effort_branch_push_failure_is_reported_without_merge_back() {
 #[ignore = "integration"]
 async fn an_improve_request_naming_a_pool_launches_on_its_member() -> anyhow::Result<()> {
   let _git_override = GIT_OVERRIDE_LOCK.lock().await;
+  let _write_timeout = charliebot_tasks::git::override_git_write_timeout(LOOP_GIT_WRITE_TIMEOUT);
   let scripts = Scripts::new(vec![recovery_support::result_script("iteration done")]);
   let options = ["member-a", "member-b"].iter().map(|id| scripts.option(id, TEST_BACKEND_TYPE)).collect();
   let stack = Stack::start_with_package(

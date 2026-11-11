@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
+use charliebot_agents::usage_time::timestamp_of;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{
   USAGE_CACHE_CREATION_INPUT_TOKENS, USAGE_CACHE_READ_INPUT_TOKENS, USAGE_INPUT_TOKENS, USAGE_OUTPUT_TOKENS,
@@ -218,14 +219,6 @@ fn usage_key(message: &Map<String, Value>, line: &Map<String, Value>) -> String 
   match candidates.into_iter().flatten().find(|value| is_truthy(value)) {
     Some(value) => value_str(value),
     None => line.get("uuid").map_or_else(|| "None".to_string(), value_str),
-  }
-}
-
-/// The line's `timestamp` as text, or the empty string when the field is missing or falsy.
-fn timestamp_of(line: &Map<String, Value>) -> String {
-  match line.get("timestamp") {
-    Some(timestamp) if is_truthy(timestamp) => value_str(timestamp),
-    _ => String::new(),
   }
 }
 

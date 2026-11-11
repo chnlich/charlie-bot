@@ -1,4 +1,4 @@
-//! The prompt-inspection routes: the next-start preview of a task and the stored context of one past run.
+//! The prompt-inspection route: the next-start preview of a task.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,20 +22,18 @@ use crate::route_support::store_error;
 /// `EMPTY_BACKENDS_OPTIONS_REFUSAL`: a preview refuses a config with no backend.
 const EMPTY_BACKENDS_OPTIONS_REFUSAL: &str = "session backend resolution requires a configured backends.options entry";
 
-/// The two prompt routes below `/api/sessions`.
+/// The prompt route below `/api/sessions`.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route("/api/sessions/{session_id}/effective-prompt", get_only(effective_prompt))
-    .route("/api/sessions/{session_id}/runs/{run_id}/context", get_only(run_context))
     .with_state(Arc::clone(features))
 }
 
-/// Whether a path falls under one of the two prompt routes, for the trailing-slash redirect.
+/// Whether a path falls under the prompt route, for the trailing-slash redirect.
 pub(crate) fn matches(path: &str) -> bool {
   let segments: Vec<&str> = path.split('/').collect();
   match segments.as_slice() {
     ["", "api", "sessions", session_id, "effective-prompt"] => !session_id.is_empty(),
-    ["", "api", "sessions", session_id, "runs", run_id, "context"] => !session_id.is_empty() && !run_id.is_empty(),
     _ => false,
   }
 }
@@ -124,23 +122,6 @@ async fn effective_prompt(
   };
   payload.as_object_mut().expect("the preview envelope is an object").extend(snapshot);
   responses::json(StatusCode::OK, &payload)
-}
-
-/// `GET /api/sessions/{session_id}/runs/{run_id}/context`: one historical run's stored snapshot and its evidence.
-async fn run_context(
-  State(features): State<Arc<FeatureContext>>,
-  Path((session_id, run_id)): Path<(String, String)>,
-) -> Response {
-  if let Err(error) = features.store.require_session(&session_id).await {
-    return store_error(error);
-  }
-  match prompts::read_run_context(&features.store, &session_id, &run_id) {
-    Ok(payload) => responses::json(StatusCode::OK, &payload),
-    Err(error) => {
-      let status = StatusCode::from_u16(error.status).expect("a context read error carries an HTTP status");
-      detail(status, error.detail)
-    }
-  }
 }
 
 /// The run kinds: the manager kinds and the worker kinds make up the literal together.

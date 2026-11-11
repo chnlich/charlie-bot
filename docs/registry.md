@@ -20,12 +20,14 @@ Rules that hold for every hook kind:
 registration order:
 
 ```rust
-pub const PACKAGES: &[(&str, RegisterFn)] = &[
+const PACKAGES: &[(&str, RegisterFn)] = &[
   ("features.artifacts", charliebot_artifacts::register),
   ("features.backup", charliebot_backup::register),
   // ...
 ];
 ```
+
+The list is crate-private; `registry()` is the crate's only `pub` item.
 
 Before `PACKAGES`, `RUNTIME` registers hooks owned by the runtime itself. Its first entry is
 `("runtime.agents", charliebot_agents::register_runtime)`. It installs `agent_environment` and then

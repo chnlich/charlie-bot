@@ -21,7 +21,9 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const root = process.argv[2];
-const sucraseDist = path.join(root, 'web', 'node_modules', 'sucrase', 'dist');
+// Absolute so a relative repo root (`.`) still resolves the requires: a bare `web/...` specifier
+// goes through the node_modules lookup and fails.
+const sucraseDist = path.resolve(root, 'web', 'node_modules', 'sucrase', 'dist');
 const {parse} = require(path.join(sucraseDist, 'parser'));
 const {TokenType: tt} = require(path.join(sucraseDist, 'parser/tokenizer/types'));
 const {IdentifierRole} = require(path.join(sucraseDist, 'parser/tokenizer'));
@@ -31,10 +33,16 @@ const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 // Registered packages in registration order: "features.cron" -> "features/cron". The table
 // lives in the server's package registry (rust/crates/app/packages/src/lib.rs), which is also
-// the order the served page assembles its package part templates in.
-const registry = read('rust/crates/app/packages/src/lib.rs');
-const packagesBlock = registry.match(/pub const PACKAGES[^=]*=\s*&\[([\s\S]*?)\n\];/)[1];
-const packages = [...packagesBlock.matchAll(/"(features|backends)\.([A-Za-z0-9_]+)"/g)].map((m) => `${m[1]}/${m[2]}`);
+// the order the served page assembles its package part templates in. The table is crate-private
+// (`const PACKAGES`; `registry()` is the crate's only `pub` item), so the read admits an optional
+// leading `pub ` but still anchors to the whole table.
+const PACKAGES_TABLE_PATH = 'rust/crates/app/packages/src/lib.rs';
+const registry = read(PACKAGES_TABLE_PATH);
+const packagesMatch = registry.match(/(?:pub )?const PACKAGES[^=]*=\s*&\[([\s\S]*?)\n\];/);
+if (packagesMatch === null) {
+  throw new Error(`frontend_structure_graph: no PACKAGES table found in ${PACKAGES_TABLE_PATH}`);
+}
+const packages = [...packagesMatch[1].matchAll(/"(features|backends)\.([A-Za-z0-9_]+)"/g)].map((m) => `${m[1]}/${m[2]}`);
 
 // The page part templates of one package: page_*.html files under its templates directory, in
 // walk order.

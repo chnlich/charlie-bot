@@ -217,12 +217,12 @@ enum Scheme {
 }
 
 impl Scheme {
-  /// The scheme `url` names; a URL that names any other scheme is an error.
-  fn from_url(url: &reqwest::Url) -> Result<Self, Error> {
+  /// The scheme `url` names; any other scheme is an error, reported against `original`.
+  fn from_url(url: &reqwest::Url, original: &str) -> Result<Self, Error> {
     match url.scheme() {
       "ws" => Ok(Scheme::Ws),
       "wss" => Ok(Scheme::Wss),
-      _ => Err(Error::InvalidUri(url.to_string(), "scheme isn't ws or wss".to_string())),
+      _ => Err(Error::InvalidUri(original.to_string(), "scheme isn't ws or wss".to_string())),
     }
   }
 
@@ -243,7 +243,7 @@ impl Scheme {
 /// The handshake omits `User-Agent` and offers no `permessage-deflate`.
 pub async fn connect(url: &str, options: &Options, settings: &Settings) -> Result<(Sender, Receiver), Error> {
   let target = reqwest::Url::parse(url).map_err(|error| Error::InvalidUri(url.to_string(), error.to_string()))?;
-  let scheme = Scheme::from_url(&target)?;
+  let scheme = Scheme::from_url(&target, url)?;
   let host = target
     .host_str()
     .ok_or_else(|| Error::InvalidUri(url.to_string(), "hostname isn't provided".to_string()))?
@@ -1129,11 +1129,16 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_url_of_another_scheme_is_rejected_without_connecting() {
-    match connect("http://example.invalid/socket", &WEBSOCKETS_16_DEFAULTS, &Settings::default()).await {
-      Err(Error::InvalidUri(_, _)) => {}
-      Ok(_) => panic!("an http URL is not a WebSocket target"),
-      Err(other) => panic!("unexpected error: {other}"),
+  async fn a_url_of_another_scheme_is_rejected_before_its_host_and_port_are_read() {
+    for url in ["http://example.invalid/socket", "mailto:user@example.com", "foo://example.com"] {
+      match connect(url, &WEBSOCKETS_16_DEFAULTS, &Settings::default()).await {
+        Err(Error::InvalidUri(reported, message)) => {
+          assert_eq!(reported, url);
+          assert!(message.contains("scheme"), "{url}: {message}");
+        }
+        Ok(_) => panic!("{url} is not a WebSocket target"),
+        Err(other) => panic!("unexpected error: {other}"),
+      }
     }
   }
 }

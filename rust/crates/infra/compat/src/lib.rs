@@ -13,6 +13,7 @@ pub mod jinja;
 pub mod json;
 pub mod mimetypes;
 pub mod mimetypes_table;
+pub mod providers;
 pub mod request_body;
 pub mod responses;
 pub mod routing;

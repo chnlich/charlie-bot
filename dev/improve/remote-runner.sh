@@ -203,13 +203,13 @@ commits_landed() {
   return 0
 }
 
-# Whether origin/main has held the branch's version of every path the branch changes since the
-# merge base.
+# Print the committed paths of one worktree branch whose version origin/main's history does not hold,
+# since the merge base. inflight-files.sh applies the same rule to this repository's worktrees.
 #
-# A squash merge lands the branch's content in one commit. A later change may move the path on, but
-# the landed version stays in origin/main's history, so a path that never held the branch's version
-# carries the branch's own change.
-versions_landed() {
+# A squash merge lands the branch's content in one commit. A later change may move a path on, but the
+# landed version stays in origin/main's history, so a path whose branch version never appears there
+# carries the branch's own change. The branch's version of a path is its blob, or its deletion.
+list_unlanded_paths() {
   local root=$1
   local main_ref=$2
   local merge_base=$3
@@ -233,39 +233,21 @@ versions_landed() {
     "$merge_base..$main_ref" -- "${paths[@]}" | grep '^:')
   for entry in "${branch_versions[@]}"; do
     if [[ -z ${main_versions[$entry]:-} ]]; then
-      return 1
+      printf '%s\n' "${entry%%$'\t'*}"
     fi
   done
-  return 0
-}
-
-# Whether a branch carries a change that origin/main does not already contain.
-#
-# The branch has landed when its commits or its versions are on origin/main. Both checks read the
-# fetched ref, so a stale fetch would make merged work look live; this is why the fetch comes
-# before any branch is compared.
-branch_is_in_flight() {
-  local root=$1
-  local main_ref=$2
-  local merge_base=$3
-  local branch=$4
-  if commits_landed "$root" "$main_ref" "$merge_base" "$branch" ||
-    versions_landed "$root" "$main_ref" "$merge_base" "$branch"; then
-    return 1
-  fi
-  return 0
 }
 
 # The other directions' clones are standalone repositories on this host, so the list that the
 # launcher computed there cannot see their work, and two directions pick topics in rust/. Every
 # file that those clones change therefore joins the round's list before the clone check: each
-# branch's committed work when origin/main does not already contain it, plus the uncommitted and
-# untracked paths of the checkout. The directions start in a burst after a release, so two runners
-# read one clone at once, and a clone's own origin/main is a ref its owner fetches too: this runner
-# fetches into the ref its direction owns, writes no shared FETCH_HEAD, and compares against that
-# ref, so the clones' refs/remotes/origin/main stay with their owners. A branch without a merge
-# base is skipped with a note. The runner's own checkout is no direction's clone and contributes
-# nothing.
+# committed path whose branch version origin/main's history does not hold, for a branch whose commits
+# do not all land, plus the uncommitted and untracked paths of the checkout. The directions start in a
+# burst after a release, so two runners read one clone at once, and a clone's own origin/main is a ref
+# its owner fetches too: this runner fetches into the ref its direction owns, writes no shared
+# FETCH_HEAD, and compares against that ref, so the clones' refs/remotes/origin/main stay with their
+# owners. A branch without a merge base is skipped with a note. The runner's own checkout is no
+# direction's clone and contributes nothing.
 other_inflight_files() {
   local clone other branch merge_base main_ref origin_url
   main_ref="refs/improve/inflight/$direction"
@@ -281,8 +263,8 @@ other_inflight_files() {
       +refs/heads/main:"$main_ref" || fail 1 "cannot fetch origin/main in $clone"
     while IFS= read -r branch; do
       if merge_base=$(git -C "$clone" merge-base "$main_ref" "$branch" 2>/dev/null); then
-        if branch_is_in_flight "$clone" "$main_ref" "$merge_base" "$branch"; then
-          git -C "$clone" diff --name-only --no-renames "$merge_base" "$branch" || :
+        if ! commits_landed "$clone" "$main_ref" "$merge_base" "$branch"; then
+          list_unlanded_paths "$clone" "$main_ref" "$merge_base" "$branch"
         fi
       else
         printf 'improve runner: skip branch %s in %s: no merge base with origin/main\n' "$branch" "$clone" >&2

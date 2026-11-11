@@ -914,6 +914,38 @@ fn an_other_directions_clone_is_read_after_its_origin_main_is_fetched() {
 
 #[test]
 #[ignore = "integration"]
+fn an_other_directions_branch_names_only_the_paths_whose_versions_did_not_land() {
+  let world = World::new();
+  let clone = world.other_direction_clone("ux");
+  // The topic adds two files and deletes `base.md`, which origin/main never drops.
+  world.git(&clone, &["switch", "-q", "-c", "improve/ux/partial"]);
+  fs::write(clone.join("landed.md"), "landed\n").expect("the landed topic's file");
+  fs::write(clone.join("unlanded.md"), "unlanded\n").expect("the unlanded topic's file");
+  fs::remove_file(clone.join("base.md")).expect("remove the base file");
+  world.git(&clone, &["add", "-A"]);
+  world.git(&clone, &["commit", "-q", "-m", "synthetic partial topic"]);
+  // origin/main receives the topic's version of `landed.md`, then moves the same path on.
+  let origin = world.other_direction_origin("ux").display().to_string();
+  let landing = world.sandbox.dir("landing/ux");
+  world.git(&world.sandbox.dir("landing"), &["clone", "-q", &origin, "ux"]);
+  fs::write(landing.join("landed.md"), "landed\n").expect("the landed version");
+  world.git(&landing, &["add", "-A"]);
+  world.git(&landing, &["commit", "-q", "-m", "land the partial topic's file"]);
+  fs::write(landing.join("landed.md"), "landed\nand moved on\n").expect("the later change");
+  world.git(&landing, &["commit", "-q", "-am", "move the landed file on"]);
+  world.git(&landing, &["push", "-q", "origin", "main"]);
+
+  let run = world.run(&world.env());
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
+  let mut listed: Vec<&str> = list.lines().collect();
+  listed.sort_unstable();
+  assert_eq!(listed, ["base.md", "unlanded.md"], "the in-flight list is not the ux clone's unlanded paths:\n{list}");
+}
+
+#[test]
+#[ignore = "integration"]
 fn an_other_directions_clone_whose_fetch_fails_stops_the_round_with_exit_1() {
   let world = World::new();
   let clone = world.other_direction_clone("ux");

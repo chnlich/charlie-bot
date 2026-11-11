@@ -116,12 +116,34 @@
   function installStyles() {
     const style = document.createElement('style');
     style.textContent = `
+      /* A diff line's only control is the line comment button in its number cell, and a touch
+         screen reveals it by a tap. The 24 px pointer floor sets the button's box, and the number
+         cell takes the line's height so that box fills one row: the buttons of two neighbouring
+         lines meet at their edges, so a press belongs to the line it covers. A 21 px line box draws
+         the 24 px row. The number column widens by the box's own width, so a four-digit number keeps
+         its whole text beside it: 4em to 5.4em side by side, and 7.5em to 8.85em with 1.7em of
+         left padding line by line, the code's left padding following in both. Diff2html lays each
+         side of the side-by-side view out as a table of its own, so these widths reach every diff
+         table, and both sides stay level line by line. */
+      .d2h-diff-table .d2h-code-line,
+      .d2h-diff-table .d2h-code-side-line { line-height: 21px; }
+      .d2h-diff-table .d2h-code-side-line { padding-left: 5.9em; padding-right: 4.5em;
+        width: calc(100% - 10.4em); }
+      .d2h-diff-table .d2h-code-side-linenumber { width: 5.4em; }
+      .d2h-diff-table .d2h-code-line { padding-left: 9.35em; padding-right: 8em;
+        width: calc(100% - 17.35em); }
+      .d2h-diff-table .d2h-code-linenumber { width: 8.85em; padding-left: 1.7em; }
+      .${PREFIX}-line > .d2h-code-linenumber,
+      .${PREFIX}-line > .d2h-code-side-linenumber { height: 24px; }
       .${PREFIX}-add {
         position: absolute; left: 2px; top: 50%; transform: translateY(-50%); z-index: 2;
-        width: 18px; height: 18px; border: 0; border-radius: 4px; padding: 0;
-        background: #2563eb; color: white; font: bold 14px/18px system-ui, sans-serif;
+        width: 24px; height: 24px; border: 0; border-radius: 5px; padding: 0;
+        background: #2563eb; color: white; font: bold 14px/24px system-ui, sans-serif;
         cursor: pointer; opacity: 0; transition: opacity .1s;
       }
+      /* The box fills its cell's height and the cell clips its overflow, so the focus ring draws
+         inside the box: white on the blue fill reads 4.83:1. */
+      .${PREFIX}-add:focus-visible { outline: 2px solid #fff; outline-offset: -3px; }
       .${PREFIX}-line:hover .${PREFIX}-add, .${PREFIX}-add:focus { opacity: 1; }
       .${PREFIX}-marked > td { box-shadow: inset 3px 0 #2563eb; }
       .${PREFIX}-selected > td { background: #dbeafe !important; }

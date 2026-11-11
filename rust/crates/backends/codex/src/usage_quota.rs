@@ -290,8 +290,9 @@ fn newest_plan_event(paths: &[PathBuf], now: OffsetDateTime) -> anyhow::Result<N
   Ok(NewestPlanEvent::Event(event))
 }
 
-/// The Auto set's reading of a Codex member: the newest plan-pool `token_count` event's primary and secondary
-/// windows, its weekly window's reset, and the near-exhaustion and exhaustion decisions those windows state.
+/// The Auto set's reading of a Codex member. It holds the newest plan-pool `token_count` event's primary and
+/// secondary windows, its weekly window's reset, and the near-exhaustion and exhaustion decisions those windows
+/// state.
 pub fn member_reading(sessions_dir: &Path, now: UtcDateTime) -> anyhow::Result<Option<MemberReading>> {
   let paths = list_rollout_files(sessions_dir)?;
   let NewestPlanEvent::Event(event) = newest_plan_event(&paths, now.into_inner())? else { return Ok(None) };

@@ -141,3 +141,15 @@ test('the committed mapping selects the client-readback test when the readback s
   assert.equal(selection.all, false);
   assert.deepEqual(selection.nodeFiles, ['web/tests/client_readback.integration.test.mjs']);
 });
+
+test('the committed mapping selects the plan-panel test when the plan template changes', () => {
+  const parsed = mapping(
+    readFileSync(COMMITTED_MAPPING, 'utf8'),
+    [],
+    ['web/tests/plan_panel.integration.test.js'],
+  );
+  const selection = selectIntegrationTests(['prompts/plan_template.html'], parsed);
+
+  assert.equal(selection.all, false);
+  assert.deepEqual(selection.nodeFiles, ['web/tests/plan_panel.integration.test.js']);
+});

@@ -5,20 +5,27 @@
   :root {
     --up-fg:#187f37; --up-bg:#dafbe1; --up-bd:#9cd6ac;
     --down-fg:#b42318; --down-bg:#ffebe9; --down-bd:#efb0a9;
+    --card-bd:#7b8694;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) {
       --up-fg:#4ac26b; --up-bg:#12261e; --up-bd:#1d6339;
       --down-fg:#f47067; --down-bg:#2d1715; --down-bd:#7d362f;
+      --card-bd:#6b6b66;
     }
   }
   :root[data-theme="dark"] {
     --up-fg:#4ac26b; --up-bg:#12261e; --up-bd:#1d6339;
     --down-fg:#f47067; --down-bg:#2d1715; --down-bd:#7d362f;
+    --card-bd:#6b6b66;
   }
   .sub { color:var(--mut); margin:0 0 22px; font-size:13.5px; max-width:82ch }
   .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:14px }
-  .card { display:flex; flex-direction:column; gap:5px; background:var(--panel); border:1px solid var(--bd);
+  /* The card is the link, and a phone has no hover to reveal that, so its boundary is the only mark of the target.
+     --bd draws 1.34:1 on the card's white fill and 1.23:1 on the page background, under the 3:1 floor WCAG 1.4.11
+     sets for a component. --card-bd draws 3.70:1 and 3.38:1, and in the dark theme 3.25:1 and 3.49:1. The hover
+     accent still wins. */
+  .card { display:flex; flex-direction:column; gap:5px; background:var(--panel); border:1px solid var(--card-bd);
     border-radius:12px; padding:14px 16px; color:var(--tx); text-decoration:none }
   .card:hover { border-color:var(--acc); text-decoration:none }
   .card .head { display:flex; align-items:center; justify-content:space-between; gap:8px }

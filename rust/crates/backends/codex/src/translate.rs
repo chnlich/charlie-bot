@@ -382,7 +382,7 @@ fn todo_marker(todo: &Map<String, Value>) -> &'static str {
   }
 }
 
-/// An item-level error is a non-fatal notice the turn continues past, so it becomes a `system` event and stays out of
+/// An item-level error is a non-fatal notice the turn continues past. It becomes a `system` event and stays out of
 /// the run's failure-cause selection, which reads only `error` events. A top-level `error` or `turn.failed` is a turn
 /// failure and keeps its `error` event.
 fn error_item(event: &Map<String, Value>, item: &Map<String, Value>) -> Vec<Value> {

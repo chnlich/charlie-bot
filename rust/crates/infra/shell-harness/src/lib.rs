@@ -24,16 +24,13 @@ pub type Env = BTreeMap<String, String>;
 /// How long one `run` may take before the test fails.
 pub const RUN_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// The agents' slice's `MemoryMax=80%`, the limit the committed unit file declares.
-const AGENTS_MEMORY_PERCENT: u64 = 80;
-
 const SYSTEMCTL: &str = r#"case "$*" in
   *charliebot-agents.slice*)
     echo "ActiveState=${SYSTEMCTL_ACTIVE_STATE:-active}"
     echo "MemoryMax=${SYSTEMCTL_MEMORY_MAX:-{memory_max}}"
-    echo "MemorySwapMax=${SYSTEMCTL_MEMORY_SWAP_MAX:-0}"
-    echo "CPUWeight=${SYSTEMCTL_CPU_WEIGHT:-100}"
-    echo "IOWeight=${SYSTEMCTL_IO_WEIGHT:-100}"
+    echo "MemorySwapMax=${SYSTEMCTL_MEMORY_SWAP_MAX:-{memory_swap_max}}"
+    echo "CPUWeight=${SYSTEMCTL_CPU_WEIGHT:-{cpu_weight}}"
+    echo "IOWeight=${SYSTEMCTL_IO_WEIGHT:-{io_weight}}"
     ;;
   *)
     exit 1
@@ -148,12 +145,25 @@ impl Sandbox {
     env
   }
 
-  /// The `systemctl` and `systemd-run` stubs the launcher calls. The agents' slice reports the limits and
-  /// the weights its committed unit file declares, and the systemd-run stub records each scope it starts (see
-  /// `scope_records`).
+  /// The `systemctl` and `systemd-run` stubs the launcher calls. The agents' slice reports the settings of the
+  /// unit file that owns them, and the systemd-run stub records each scope it starts (see `scope_records`).
   pub fn install_systemd_stubs(&self) {
-    let memory_max = memtotal_percent_bytes(AGENTS_MEMORY_PERCENT);
-    self.stub("systemctl", &SYSTEMCTL.replace("{memory_max}", &memory_max.to_string()));
+    let path = repo_root().join("scripts/systemd/charliebot-agents.slice");
+    let unit = fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let memory_max =
+      unit_setting(&unit, "MemoryMax").unwrap_or_else(|| panic!("{} declares no MemoryMax", path.display()));
+    let percent = memory_max
+      .strip_suffix('%')
+      .and_then(|percent| percent.parse::<u64>().ok())
+      .unwrap_or_else(|| panic!("{} declares MemoryMax={memory_max}, which is not a percentage", path.display()));
+    let setting =
+      |key: &str| unit_setting(&unit, key).unwrap_or_else(|| panic!("{} declares no {key}", path.display()));
+    let systemctl = SYSTEMCTL
+      .replace("{memory_max}", &memtotal_percent_bytes(percent).to_string())
+      .replace("{memory_swap_max}", setting("MemorySwapMax"))
+      .replace("{cpu_weight}", setting("CPUWeight"))
+      .replace("{io_weight}", setting("IOWeight"));
+    self.stub("systemctl", &systemctl);
     self.stub("systemd-run", SYSTEMD_RUN);
   }
 
@@ -289,6 +299,12 @@ fn read_text(reader: &mut impl Read) -> String {
 fn exit_code(status: ExitStatus) -> i32 {
   // A command that a signal ended reports 128 plus the signal number, as a shell does.
   status.code().unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
+}
+
+/// One setting's value from a unit file: the last assignment wins, as it does in systemd.
+fn unit_setting<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+  let prefix = format!("{key}=");
+  text.lines().filter_map(|line| line.strip_prefix(prefix.as_str())).next_back()
 }
 
 /// A percentage of host memory in bytes, computed the way systemd rounds it: down to a whole 4096-byte page, where a

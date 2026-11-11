@@ -33,6 +33,10 @@
     table.data td { border-bottom:1px solid var(--bd) }
     table.data td::before { content:attr(data-l); display:block; min-width:118px; color:var(--mut);
       font-size:11.5px; text-transform:uppercase; letter-spacing:.4px; margin-bottom:2px }
+    /* The block layout gives every cell the card's width, so the Session row drops the table column's
+       220 px cap: the name and id show whole, and the row's divider meets the card's edge like the
+       other rows'. */
+    table.data td.sess { max-width:none }
   }
 </style>
 </head>

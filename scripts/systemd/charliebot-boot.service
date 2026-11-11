@@ -1,0 +1,49 @@
+[Unit]
+Description=Start the CharlieBot server in a pane of the default tmux server
+Wants=charliebot-agents.slice
+After=charliebot-agents.slice
+
+# The boot start. It does nothing when a server already listens on the home's port or when the tmux session
+# "charliebot" exists. Otherwise it runs the launcher's preflight and the release's --check-config, creates the session
+# on the default tmux server and types the launcher into its pane, the same pane shape scripts/switch-server.sh
+# restarts. The pane's login shell outlives the server, and the tmux server outlives this unit.
+#
+# A listener counts only when ss shows its process, as the switch's listener check does: tailscaled's serve listeners
+# on the same port are root-owned and show none, so they do not read as a running server.
+#
+# @REPO_ROOT@ is the runtime clone. scripts/install-slice-units.sh replaces it with the checkout the install runs
+# from, so run the install from the runtime clone. The script reads only scripts/start-server.sh of that clone, which
+# the clone holds at its live commit, so the unit needs no file that a later commit adds.
+#
+# CHARLIEBOT_BOOT_LAUNCH_ARGS, read from the unit's environment, adds arguments to the launcher typed into the pane.
+# It exists so the acceptance test can type --preflight instead of starting a second server; it is unset in production.
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# A stop signals only the main process, the script, which has exited once the unit is up. The tmux server and its
+# panes are not in that process, so they keep running after a stop or a disable.
+KillMode=process
+ExecStart=/bin/bash -c 'set -eu; \
+  clone=@REPO_ROOT@; \
+  session=charliebot; \
+  home="$${CHARLIEBOT_HOME:-$$HOME/.charliebot}"; \
+  releases="$${CHARLIEBOT_RELEASES_DIR:-$$HOME/charliebot-releases}"; \
+  logs="$${CHARLIEBOT_LOG_DIR:-/tmp/charliebot-logs}"; \
+  config="$$(CHARLIEBOT_HOME="$$home" "$$releases/current/charliebot" switch-helper home-helper config "$$home")"; \
+  port="$$(sed -n 1p <<<"$$config")"; \
+  if [ -n "$$(ss -Hltnp "sport = :$$port" | awk '/pid=/')" ]; then \
+    echo "boot start: port $$port has a listener; nothing started"; exit 0; \
+  fi; \
+  if tmux has-session -t "=$$session" 2>/dev/null; then \
+    echo "boot start: tmux session $$session exists; nothing started"; exit 0; \
+  fi; \
+  "$$clone/scripts/start-server.sh" --preflight; \
+  CHARLIEBOT_HOME="$$home" CHARLIEBOT_REPO_ROOT="$$clone" "$$releases/current/charliebot-server" --check-config; \
+  pane="$$(tmux new-session -d -P -F '#{pane_id}' -s "$$session" -c "$$clone")"; \
+  launch="cd $$clone && env CHARLIEBOT_HOME=$$home CHARLIEBOT_RELEASES_DIR=$$releases CHARLIEBOT_LOG_DIR=$$logs"; \
+  launch="$$launch ./scripts/start-server.sh $${CHARLIEBOT_BOOT_LAUNCH_ARGS:-}"; \
+  tmux send-keys -t "$$pane" C-u "$$launch" Enter; \
+  echo "boot start: launched in tmux session $$session; server log $$logs/server-latest.log"'
+
+[Install]
+WantedBy=default.target

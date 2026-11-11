@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # CharlieBot server launcher — tees server logs to /tmp so they persist on disk.
-# Start/stop stays manual: runs in the foreground, Ctrl-C to stop.
+# Start/stop stays manual: runs in the foreground, Ctrl-C to stop. When the boot unit
+# (scripts/systemd/charliebot-boot.service) is enabled, it types this launcher into a tmux pane at boot.
 # The current link in the release root selects the Rust release; without it the launcher refuses to start.
 #
 # Each server start has a timestamp-and-PID scope so earlier runs can keep their processes.

@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use axum::response::Response;
 use charliebot_compat::responses;
+use charliebot_core::git::object_exists_args;
 use http::StatusCode;
 use serde_json::json;
 
@@ -73,7 +74,7 @@ pub(crate) async fn run(
 /// probe is `git cat-file -e`'s exit status.
 pub(crate) async fn show_bytes(repo: &Path, revision: &str, path: &str) -> Result<Option<Vec<u8>>, Response> {
   let spec = format!("{revision}:{path}");
-  let probe = run_raw(repo, &["cat-file", "-e", &spec], READ_TIMEOUT).await?;
+  let probe = run_raw(repo, &object_exists_args(&spec), READ_TIMEOUT).await?;
   if !probe.ok {
     return Ok(None);
   }

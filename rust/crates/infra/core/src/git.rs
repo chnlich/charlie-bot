@@ -1,5 +1,5 @@
-//! Git facts the server shares: the reads it makes in the repository root, and the name of the quarantine
-//! directory beside the worktrees.
+//! Git facts the server shares: the reads it makes in the repository root, the arguments of the object-existence
+//! probe, and the name of the quarantine directory beside the worktrees.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -50,11 +50,25 @@ pub fn head_sha(repo_root: &Path, timeout: Duration) -> Option<String> {
   run(repo_root, &["rev-parse", "--short", "HEAD"], timeout)
 }
 
+/// The arguments that probe whether the object `spec` names exists: `git cat-file -e <spec>`.
+///
+/// The probe prints nothing and answers in its exit status: 0 when the object is there, 1 when it is missing, and
+/// another code when the probe itself failed. A caller reads that status, so [`run`], which folds a non-zero status
+/// and empty stdout into `None`, cannot answer the probe.
+pub fn object_exists_args(spec: &str) -> [&str; 3] {
+  ["cat-file", "-e", spec]
+}
+
 #[cfg(test)]
 mod tests {
   use std::process::Command;
 
   use super::*;
+
+  #[test]
+  fn the_object_probe_is_cat_file_with_the_existence_flag() {
+    assert_eq!(object_exists_args("HEAD^{commit}"), ["cat-file", "-e", "HEAD^{commit}"]);
+  }
 
   /// A repository with one empty commit, made by the git CLI that the server runs.
   fn repo_with_one_commit() -> tempfile::TempDir {

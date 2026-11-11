@@ -139,6 +139,13 @@
    anchoring fights its spacer corrections, and its scroll corrections must
    not chain to the page. */
 #messages { overflow-anchor: none; overscroll-behavior: contain; }
+/* The view switcher's bottom edge is the list's clip edge: #messages is its own scroll container, so a scrolled
+   conversation is cut through a line of glyphs exactly at the row's bottom. The row carries pt-3 and no bottom
+   padding, so the half-drawn line starts exactly at the For you / Everything / Status labels' bottom edge: at
+   390 px and 1440 px the two touch with no gap, and the switcher reads as drawn over the text. A bottom padding
+   of the same 12 px the row already holds above the labels keeps the clipped line clear of them.
+   No row, strip or control is added; the labels keep their place. */
+#chat-view-toggle { padding-bottom: 0.75rem; }
 .turn-collapse:hover { color: #cbd5e1; }
 /* A round's controls — clone, Elon-e, explain, the two ratings and Collapse — draw a 14 px glyph in a
    2 px pad. That is an 18 px box, under the 24 px pointer floor. Each takes a 24 px box with its glyph

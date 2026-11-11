@@ -209,6 +209,32 @@ impl Stream for Receiver {
   }
 }
 
+/// The target URL's scheme: `ws` reaches the host in plain text, `wss` wraps the connection in TLS.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scheme {
+  Ws,
+  Wss,
+}
+
+impl Scheme {
+  /// The scheme `url` names; any other scheme is an error, reported against `original`.
+  fn from_url(url: &reqwest::Url, original: &str) -> Result<Self, Error> {
+    match url.scheme() {
+      "ws" => Ok(Scheme::Ws),
+      "wss" => Ok(Scheme::Wss),
+      _ => Err(Error::InvalidUri(original.to_string(), "scheme isn't ws or wss".to_string())),
+    }
+  }
+
+  /// The port this scheme uses when the URL names none.
+  fn default_port(self) -> u16 {
+    match self {
+      Scheme::Ws => 80,
+      Scheme::Wss => 443,
+    }
+  }
+}
+
 /// Connect and complete the WebSocket opening handshake.
 ///
 /// The open timeout covers TCP connect, an optional HTTP CONNECT tunnel, TLS, and the WebSocket handshake. `ws`
@@ -217,9 +243,7 @@ impl Stream for Receiver {
 /// The handshake omits `User-Agent` and offers no `permessage-deflate`.
 pub async fn connect(url: &str, options: &Options, settings: &Settings) -> Result<(Sender, Receiver), Error> {
   let target = reqwest::Url::parse(url).map_err(|error| Error::InvalidUri(url.to_string(), error.to_string()))?;
-  if target.scheme() != "ws" && target.scheme() != "wss" {
-    return Err(Error::InvalidUri(url.to_string(), "scheme isn't ws or wss".to_string()));
-  }
+  let scheme = Scheme::from_url(&target, url)?;
   let host = target
     .host_str()
     .ok_or_else(|| Error::InvalidUri(url.to_string(), "hostname isn't provided".to_string()))?
@@ -227,14 +251,14 @@ pub async fn connect(url: &str, options: &Options, settings: &Settings) -> Resul
   let port = target
     .port_or_known_default()
     .ok_or_else(|| Error::InvalidUri(url.to_string(), "port isn't provided".to_string()))?;
-  let proxy = if target.scheme() == "wss" {
+  let proxy = if scheme == Scheme::Wss {
     crate::transport::proxy_settings(settings)
       .map_err(|error| Error::Settings(error.to_string()))?
       .filter(|proxy| proxy.should_proxy_wss_host(&host, port))
   } else {
     None
   };
-  let open = connect_opening_handshake(target, host, port, proxy, options.max_size, settings);
+  let open = connect_opening_handshake(target, host, port, proxy, options.max_size, settings, scheme);
   let (socket, _) = match options.open_timeout {
     Some(open_timeout) => timeout(open_timeout, open).await.map_err(|_| Error::OpenTimeout)??,
     None => open.await?,
@@ -260,8 +284,9 @@ async fn connect_opening_handshake(
   proxy: Option<crate::transport::ProxySettings>,
   max_size: Option<usize>,
   settings: &Settings,
+  scheme: Scheme,
 ) -> Result<(WebSocket, http::Response<Option<Vec<u8>>>), Error> {
-  let tls = if target.scheme() == "wss" || proxy.as_ref().is_some_and(|proxy| proxy.url.scheme() == "https") {
+  let tls = if scheme == Scheme::Wss || proxy.as_ref().is_some_and(|proxy| proxy.url.scheme() == "https") {
     Some(TlsConnector::from(Arc::new(
       crate::transport::tls_config(settings.cert_file.as_deref())
         .map_err(|error| Error::Settings(error.to_string()))?,
@@ -270,8 +295,8 @@ async fn connect_opening_handshake(
     None
   };
   let stream = match proxy {
-    Some(proxy) => connect_via_proxy(proxy, &target, &host, port, tls.as_ref()).await?,
-    None => connect_direct(&host, port, target.scheme() == "wss", tls.as_ref()).await?,
+    Some(proxy) => connect_via_proxy(proxy, &host, port, tls.as_ref(), scheme).await?,
+    None => connect_direct(&host, port, scheme, tls.as_ref()).await?,
   };
   let request = target
     .as_str()
@@ -286,24 +311,25 @@ async fn connect_opening_handshake(
 async fn connect_direct(
   host: &str,
   port: u16,
-  secure: bool,
+  scheme: Scheme,
   tls: Option<&TlsConnector>,
 ) -> Result<Box<dyn AsyncIo>, Error> {
   let stream = TcpStream::connect((unbracket(host), port)).await.map_err(|error| Error::Io(error.to_string()))?;
-  if secure {
-    let connector = tls.expect("secure WebSocket URLs have a TLS connector");
-    tls_connect(connector, host, Box::new(stream)).await
-  } else {
-    Ok(Box::new(stream))
+  match scheme {
+    Scheme::Ws => Ok(Box::new(stream)),
+    Scheme::Wss => {
+      let connector = tls.expect("wss URLs have a TLS connector");
+      tls_connect(connector, host, Box::new(stream)).await
+    }
   }
 }
 
 async fn connect_via_proxy(
   proxy: crate::transport::ProxySettings,
-  target: &reqwest::Url,
   host: &str,
   port: u16,
   tls: Option<&TlsConnector>,
+  scheme: Scheme,
 ) -> Result<Box<dyn AsyncIo>, Error> {
   let proxy_url = &proxy.url;
   let proxy_host = proxy_url
@@ -334,7 +360,7 @@ async fn connect_via_proxy(
   } else {
     Box::new(stream)
   };
-  connect_tunnel(&mut stream, proxy_url, host, port, target.scheme() == "wss").await?;
+  connect_tunnel(&mut stream, proxy_url, host, port, scheme).await?;
   tls_connect(tls.expect("wss proxy tunnels have a TLS connector"), host, stream).await
 }
 
@@ -343,10 +369,10 @@ async fn connect_tunnel(
   proxy: &reqwest::Url,
   host: &str,
   port: u16,
-  secure: bool,
+  scheme: Scheme,
 ) -> Result<(), Error> {
   let authority = authority(host, port);
-  let default_port = if secure { 443 } else { 80 };
+  let default_port = scheme.default_port();
   let host_header = if port == default_port { authority_host(host) } else { authority.clone() };
   let mut request = format!("CONNECT {authority} HTTP/1.1\r\nHost: {host_header}\r\n");
   if !proxy.username().is_empty() {
@@ -1100,5 +1126,19 @@ mod tests {
     };
     assert_eq!(error.to_string(), "timed out during opening handshake");
     server.await.expect("stalled peer finishes");
+  }
+
+  #[tokio::test]
+  async fn a_url_of_another_scheme_is_rejected_before_its_host_and_port_are_read() {
+    for url in ["http://example.invalid/socket", "mailto:user@example.com", "foo://example.com"] {
+      match connect(url, &WEBSOCKETS_16_DEFAULTS, &Settings::default()).await {
+        Err(Error::InvalidUri(reported, message)) => {
+          assert_eq!(reported, url);
+          assert!(message.contains("scheme"), "{url}: {message}");
+        }
+        Ok(_) => panic!("{url} is not a WebSocket target"),
+        Err(other) => panic!("unexpected error: {other}"),
+      }
+    }
   }
 }

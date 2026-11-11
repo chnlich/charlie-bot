@@ -7,9 +7,9 @@
 # changes, and the committed and uncommitted files of each worktree branch. A
 # committed path is claimed only while the branch's version of it — its blob, or
 # its deletion — is missing from origin/main's history since the merge base, so
-# a branch whose commits all landed, and a branch whose version of a path
-# origin/main has held, name no committed file. A branch whose name starts with
-# the own prefix is skipped, because its work belongs to the caller.
+# a branch whose commits all landed names no committed file, and a path whose
+# branch version origin/main has held is not named. A branch whose name starts
+# with the own prefix is skipped, because its work belongs to the caller.
 #
 # The branch state is read only after origin/main is fetched, because a stale
 # origin/main would make merged work look live. The launches that read this list

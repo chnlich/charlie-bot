@@ -265,8 +265,7 @@ mod tests {
   }
 
   fn test_lock() -> &'static tokio::sync::Mutex<()> {
-    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    crate::test_support::round_slot_lock()
   }
 
   fn test_user_dm<'a>(

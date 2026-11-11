@@ -642,6 +642,7 @@ mod tests {
 
   #[tokio::test(start_paused = true)]
   async fn a_gate_write_waits_for_the_round_that_holds_the_slot() {
+    let _lock = crate::test_support::round_slot_lock().lock().await;
     let dir = tempfile::tempdir().expect("a temporary home");
     let config = dir.path().join("ssh_config");
     fs::write(&config, LOGIN_CONFIG).expect("the config writes");

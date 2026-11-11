@@ -19,6 +19,20 @@ use std::sync::Arc;
 use charliebot_registry::pages::HomeCard;
 use charliebot_registry::{Registry, RegistryError};
 
+/// The lock every test takes before it claims or holds the process-wide round slot.
+///
+/// `poller_round_with` skips a round whose slot another test holds, so an unlocked holder makes an unrelated
+/// test's round vanish. The tests that would otherwise collide share this lock.
+#[cfg(test)]
+pub(crate) mod test_support {
+  use std::sync::LazyLock;
+
+  pub(crate) fn round_slot_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(tokio::sync::Mutex::default);
+    &LOCK
+  }
+}
+
 /// `register`: the config section, the router, the `host_auth` service in phase Ready, the host readers the cron gate
 /// and the Waiting on you read use, then the home card.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {

@@ -353,7 +353,7 @@ test('descendant items group by session with the id cut to eight characters and 
   assert.equal(link[0].href, '/?session=' + CHILD_ID, 'the item links to its child session page');
 });
 
-test('the panel collapses its user-act items, own and descendant, into one login-sheet line', async () => {
+test('the panel counts its user-act items, own and descendant, in one line that opens the same scope', async () => {
   const rig = panelRig();
   rig.page.descendants = [{
     session_id: CHILD_ID,
@@ -377,14 +377,16 @@ test('the panel collapses its user-act items, own and descendant, into one login
     ],
   }});
   selectStatus(rig);
-  // The one line covers own and descendant items and links to the day's login sheet.
-  const sheet = viewRow(rig.panel, 'login-sheet');
-  assert.ok(sheet, 'the login-sheet line shows when user-act items exist');
-  const text = allElements(sheet).find((el) => el.textContent === '3 actions that only you can do today');
+  // The one line covers own and descendant items. Its link opens today's approval page for this session, and the
+  // page's section lists the same three items the count names.
+  const actions = viewRow(rig.panel, 'actions-only-you-can-do');
+  assert.ok(actions, 'the actions-only-you-can-do line shows when user-act items exist');
+  const text = allElements(actions).find((el) => el.textContent === '3 actions only you can do today');
   assert.ok(text, 'the line counts both sessions\' items, an item judged earlier included');
-  const link = allElements(sheet).filter((el) => el.tagName === 'A');
+  const link = allElements(actions).filter((el) => el.tagName === 'A');
   assert.deepEqual(link.map((el) => el.href),
-    ['/approval?date=' + new Intl.DateTimeFormat('en-CA', {timeZone: 'America/Los_Angeles'}).format(new Date())]);
+    ['/approval?date=' + new Intl.DateTimeFormat('en-CA', {timeZone: 'America/Los_Angeles'}).format(new Date()) +
+      '&session=session-a']);
   // The user-act items stay out of the item rows; the child group whose items
   // all moved shows no header.
   assert.deepEqual(viewWaitingItems(rig.panel).map((el) => el.textContent.includes('Approve the deploy')), [true]);
@@ -395,7 +397,7 @@ test('the panel collapses its user-act items, own and descendant, into one login
   assert.equal(rig.badge.textContent, '1');
 });
 
-test('a derived user-act item the server holds counts in the login-sheet line and stays out of the item rows', async () => {
+test('a derived user-act item the server holds counts in the actions-only-you-can-do line and stays out of the item rows', async () => {
   const rig = panelRig();
   rig.page.derived_waiting = [{
     session_id: OTHER_CHILD_ID,
@@ -408,19 +410,19 @@ test('a derived user-act item the server holds counts in the login-sheet line an
   }];
   await openSession(rig, {web_status: STATUS});
   selectStatus(rig);
-  const sheet = viewRow(rig.panel, 'login-sheet');
-  assert.ok(sheet, 'the derived user-act item shows in the login-sheet line');
-  assert.ok(allElements(sheet).find((el) => el.textContent === '1 action that only you can do today'));
+  const actions = viewRow(rig.panel, 'actions-only-you-can-do');
+  assert.ok(actions, 'the derived user-act item shows in the actions-only-you-can-do line');
+  assert.ok(allElements(actions).find((el) => el.textContent === '1 action only you can do today'));
   assert.equal(viewWaitingItems(rig.panel).some((el) => el.textContent.includes('Approve the ssh login')), false);
   // The badge counts only the session's stored waiting items.
   assert.equal(rig.badge.textContent, '2');
 });
 
-test('without user-act items the Status view shows no login-sheet line', async () => {
+test('without user-act items the Status view shows no actions-only-you-can-do line', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: STATUS});
   selectStatus(rig);
-  assert.equal(viewRow(rig.panel, 'login-sheet'), undefined);
+  assert.equal(viewRow(rig.panel, 'actions-only-you-can-do'), undefined);
   assert.deepEqual(viewKinds(rig.panel), ['goal', 'now', 'waiting']);
 });
 

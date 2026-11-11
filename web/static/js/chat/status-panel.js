@@ -211,7 +211,7 @@
     return el;
   }
 
-  // ---- Login sheet ---------------------------------------------------------
+  // ---- Actions only you can do ---------------------------------------------
 
   // A user-act item: an action that only the user's own hands can do. The
   // cold read writes the tier; items stored before the tier existed carry
@@ -220,8 +220,8 @@
     return item.tier === 'user-act';
   }
 
-  // The panel's user-act items: this session's own, every descendant's, and the derived ones the server holds for
-  // this session's tree.
+  // The panel's user-act items: this session's own, every open descendant's, and the derived ones the server holds for
+  // this session's tree. The server's descendant rows hold only open descendants.
   function userActItems() {
     const own = panelStatus ? panelStatus.waiting.filter(isUserAct) : [];
     const descendant = panelDescendants.flatMap((child) => child.waiting.filter(isUserAct));
@@ -233,24 +233,25 @@
     return new Intl.DateTimeFormat('en-CA', {timeZone: 'America/Los_Angeles'}).format(new Date());
   }
 
-  // The one login-sheet line (plan 4 v2 task W3) carries the panel's user-act
-  // items, own and descendant. It links to the day's login sheet on the
-  // approval page. No items, no row.
-  function loginSheetRow() {
+  // The one actions-only-you-can-do line counts the panel's user-act items,
+  // own and descendant. Its link opens today's approval page scoped to this
+  // session, which lists the same items. No items, no row. The panel body
+  // renders only while panelSessionId is set, so the link always names it.
+  function actionsOnlyYouCanDoRow() {
     const items = userActItems();
     if (!items.length) return null;
-    const row = statusRow('login-sheet');
-    row.appendChild(labelSpan('Login sheet'));
+    const row = statusRow('actions-only-you-can-do');
+    row.appendChild(labelSpan('Actions only you can do'));
     const value = document.createElement('div');
     value.className = 'min-w-0 break-words text-amber-200';
     const line = document.createElement('div');
     line.className = 'flex gap-2';
     line.appendChild(textSpan('min-w-0',
-      items.length + ' action' + (items.length === 1 ? '' : 's') + ' that only you can do today'));
+      items.length + ' action' + (items.length === 1 ? '' : 's') + ' only you can do today'));
     const a = document.createElement('a');
     a.className = 'shrink-0 whitespace-nowrap text-blue-400 hover:text-blue-300';
-    a.href = '/approval?date=' + pacificToday();
-    a.textContent = 'Open the login sheet ›';
+    a.href = '/approval?date=' + pacificToday() + '&session=' + encodeURIComponent(panelSessionId);
+    a.textContent = 'Open actions only you can do ›';
     line.appendChild(a);
     value.appendChild(line);
     row.appendChild(value);
@@ -261,7 +262,7 @@
 
   // The descendants' items, grouped by session: one header per session, its
   // items under it with their contexts folded. A session whose items all
-  // moved to the login sheet shows no group.
+  // moved to actions only you can do shows no group.
   function childrenRow() {
     const row = statusRow('children');
     row.appendChild(labelSpan('In child sessions'));
@@ -332,8 +333,8 @@
       waiting.appendChild(column);
       el.appendChild(waiting);
     }
-    const sheet = loginSheetRow();
-    if (sheet) el.appendChild(sheet);
+    const actions = actionsOnlyYouCanDoRow();
+    if (actions) el.appendChild(actions);
     if (panelDescendants.length) el.appendChild(childrenRow());
     if (panelChildren.length) el.appendChild(childrenNowRow());
   }
@@ -351,7 +352,7 @@
   }
 
   // The toggle option's waiting count holds this session's own Waiting on you
-  // items only, less the ones the login-sheet line carries. A child session's
+  // items only, less the ones the actions-only-you-can-do line carries. A child session's
   // waiting items show in the Status view's child rows. Hidden at 0 and when
   // the page shows no web session.
   function renderWaitingBadge() {

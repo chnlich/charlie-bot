@@ -94,4 +94,3 @@ mod tests {
     assert_eq!(compressed, again, "equal input deflates to equal bytes");
   }
 }
-

@@ -222,7 +222,7 @@ The gate judges the chain alone; its definitions live in rust/crates/runtime/sto
   - a browser login;
   - an approval in another system;
   - information that only the user holds.
-  List each user-act step as one Waiting on you item. The approval page gathers these items into the day's login sheet.
+  List each user-act step as one Waiting on you item. The approval page gathers these items into the day's actions only you can do.
 - A rule that names the user's explicit approval for a step stays in force; such a step is T0 under the
   rule-named test.
 - Hold work that builds on a waiting understanding page, T1 and T2 work included.

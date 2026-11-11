@@ -167,7 +167,7 @@ async fn the_queue_orders_t0_by_rule_rank_then_review_then_the_rest() {
 }
 
 #[tokio::test]
-async fn today_s_login_sheet_holds_every_open_user_act_item() {
+async fn today_s_actions_only_you_can_do_holds_every_open_user_act_item() {
   let home = Home::new();
   let session = home.manager("Alpha").await;
   let today = day_of(Timestamp::now()).expect("today reads");
@@ -191,13 +191,17 @@ async fn today_s_login_sheet_holds_every_open_user_act_item() {
   let (status, body) = home.send(Method::GET, &format!("/api/approval/day?date={today}")).await;
 
   assert_eq!(status, 200, "{body}");
-  let texts =
-    body["login_sheet"].as_array().unwrap().iter().map(|row| row["text"].as_str().unwrap()).collect::<Vec<_>>();
+  let texts = body["actions_only_you_can_do"]
+    .as_array()
+    .unwrap()
+    .iter()
+    .map(|row| row["text"].as_str().unwrap())
+    .collect::<Vec<_>>();
   assert_eq!(texts, ["Log into the console", "Log into the admin console"]);
 }
 
 #[tokio::test]
-async fn a_past_day_s_login_sheet_holds_that_day_s_user_act_items() {
+async fn a_past_day_s_actions_only_you_can_do_holds_that_day_s_user_act_items() {
   let home = Home::new();
   let session = home.manager("Alpha").await;
   let today = day_of(Timestamp::now()).expect("today reads");
@@ -219,9 +223,76 @@ async fn a_past_day_s_login_sheet_holds_that_day_s_user_act_items() {
   let (status, body) = home.send(Method::GET, &format!("/api/approval/day?date={earlier}")).await;
 
   assert_eq!(status, 200, "{body}");
-  let texts =
-    body["login_sheet"].as_array().unwrap().iter().map(|row| row["text"].as_str().unwrap()).collect::<Vec<_>>();
+  let texts = body["actions_only_you_can_do"]
+    .as_array()
+    .unwrap()
+    .iter()
+    .map(|row| row["text"].as_str().unwrap())
+    .collect::<Vec<_>>();
   assert_eq!(texts, ["Log into the console"]);
+}
+
+/// The texts of a day body's actions only you can do, sorted, since the reader orders sessions by listing.
+fn action_texts(body: &Value) -> Vec<&str> {
+  let mut texts: Vec<&str> =
+    body["actions_only_you_can_do"].as_array().unwrap().iter().map(|row| row["text"].as_str().unwrap()).collect();
+  texts.sort();
+  texts
+}
+
+#[tokio::test]
+async fn a_session_scope_lists_its_tree_s_user_act_items_and_the_host_lists_all() {
+  let home = Home::new();
+  let root = home.manager("Alpha").await;
+  let child = home.child(&root, "Beta").await;
+  let grandchild = home.child(&child, "Gamma").await;
+  let unrelated = home.manager("Delta").await;
+  let today = day_of(Timestamp::now()).expect("today reads");
+  let stamp = pt_noon(today);
+  home
+    .set_web_status(
+      &root,
+      json!({
+        "now": "Running",
+        "waiting": [
+          item("Log into the console", json!("user-act"), json!(null), &stamp),
+          item("Approve the deploy", json!("t0"), json!("money"), &stamp),
+        ],
+        "updated_at": stamp,
+      }),
+    )
+    .await;
+  home
+    .set_web_status(
+      &grandchild,
+      json!({
+        "now": "Running",
+        "waiting": [item("Log into the admin console", json!("user-act"), json!(null), &stamp)],
+        "updated_at": stamp,
+      }),
+    )
+    .await;
+  home
+    .set_web_status(
+      &unrelated,
+      json!({
+        "now": "Running",
+        "waiting": [item("Log into the other console", json!("user-act"), json!(null), &stamp)],
+        "updated_at": stamp,
+      }),
+    )
+    .await;
+
+  let (status, body) = home.send(Method::GET, &format!("/api/approval/day?date={today}&session={root}")).await;
+  assert_eq!(status, 200, "{body}");
+  assert_eq!(action_texts(&body), ["Log into the admin console", "Log into the console"]);
+
+  let (status, body) = home.send(Method::GET, &format!("/api/approval/day?date={today}")).await;
+  assert_eq!(status, 200, "{body}");
+  assert_eq!(action_texts(&body), ["Log into the admin console", "Log into the console", "Log into the other console"]);
+
+  let (status, body) = home.send(Method::GET, &format!("/api/approval/day?date={today}&session=no-such-session")).await;
+  assert_eq!(status, 404, "{body}");
 }
 
 #[tokio::test]
@@ -303,7 +374,7 @@ async fn a_day_with_no_records_shows_empty_lists() {
 
   assert_eq!(status, 200, "{body}");
   assert_eq!(body["queue"], json!([]));
-  assert_eq!(body["login_sheet"], json!([]));
+  assert_eq!(body["actions_only_you_can_do"], json!([]));
   assert_eq!(body["digest"], json!([]));
 }
 

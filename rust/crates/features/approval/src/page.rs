@@ -1,5 +1,6 @@
-//! The approval page: one Pacific day's queue, login sheet and digest, served at `GET /approval`. The view
-//! moves between days through the `date` query, which an absent value answers with today.
+//! The approval page: one Pacific day's queue, the actions only you can do, and the digest, served at `GET /approval`.
+//! The view moves between days through the `date` query, which an absent value answers with today. An optional
+//! `session` query limits the actions only you can do to that session and its open descendants.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -37,7 +38,8 @@ async fn approval_page(State(features): State<Arc<FeatureContext>>, request: Par
     Ok(date) => date,
     Err(error) => return refused_answer(error),
   };
-  let view = match day::approval_day_view(&features, date).await {
+  let session = session_param(&request);
+  let view = match day::approval_day_view(&features, date, session.as_deref()).await {
     Ok(view) => view,
     Err(error) => return refused_answer(error),
   };
@@ -64,11 +66,12 @@ fn render(features: &FeatureContext, view: DayView, request: &Parts) -> Result<R
     (STATIC_ASSET_VERSION_KEY): asset_version,
     "ctx": {
       "date": date_text,
+      "session": view.session,
       "previous": previous.to_string(),
       "next": next.to_string(),
       "is_today": view.date == view.today,
       (day::QUEUE): view.body[day::QUEUE],
-      (day::LOGIN_SHEET): view.body[day::LOGIN_SHEET],
+      (day::ACTIONS_ONLY_YOU_CAN_DO): view.body[day::ACTIONS_ONLY_YOU_CAN_DO],
       (day::DIGEST): view.body[day::DIGEST],
     },
   });
@@ -92,18 +95,27 @@ fn internal_error(kind: &str, detail: String) -> Response {
 /// The `date` query's value, `None` when the query names no date. A value that is not a `YYYY-MM-DD` date is a
 /// refusal, as the API refuses.
 fn date_param(request: &Parts) -> Result<Option<Date>, DayError> {
+  match query_pairs(request).get("date").map(String::as_str) {
+    None => Ok(None),
+    Some(text) => day::parse_date_param(text).map(Some),
+  }
+}
+
+/// The `session` query's value, `None` when the query names no session.
+fn session_param(request: &Parts) -> Option<String> {
+  query_pairs(request).remove("session").filter(|s| !s.is_empty())
+}
+
+/// The request's query as name-value pairs; a name that repeats keeps its last value.
+fn query_pairs(request: &Parts) -> HashMap<String, String> {
   let query = request.uri.query().unwrap_or_default();
-  let pairs: HashMap<String, String> = query
+  query
     .split('&')
     .filter_map(|pair| {
       let (name, value) = pair.split_once('=')?;
       Some((name.to_string(), value.to_string()))
     })
-    .collect();
-  match pairs.get("date").map(String::as_str) {
-    None => Ok(None),
-    Some(text) => day::parse_date_param(text).map(Some),
-  }
+    .collect()
 }
 
 #[cfg(test)]

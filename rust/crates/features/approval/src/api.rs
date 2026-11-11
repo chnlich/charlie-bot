@@ -1,4 +1,5 @@
-//! The day JSON route: one PT day's queue, login sheet and digest, served at `GET /api/approval/day`.
+//! The day JSON route: one PT day's queue, the actions only you can do, and the digest, served at
+//! `GET /api/approval/day`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,8 +27,9 @@ pub fn matches(path: &str) -> bool {
   path == DAY_PATH
 }
 
-/// The day route: the day view for one `date` query, where an absent date answers today's Pacific day. It answers
-/// `GET /api/approval/day?date=YYYY-MM-DD`.
+/// The day route: the day view for one `date` query, where an absent date answers today's Pacific day. An optional
+/// `session` query limits the actions only you can do to that session and its open descendants. It answers
+/// `GET /api/approval/day?date=YYYY-MM-DD&session=SESSION_ID`.
 async fn day_api(
   State(features): State<Arc<FeatureContext>>,
   Query(query): Query<HashMap<String, String>>,
@@ -39,7 +41,8 @@ async fn day_api(
       Err(error) => return answer(Err(error)),
     },
   };
-  answer(day::approval_day(&features, date).await)
+  let session = query.get("session").map(String::as_str).filter(|s| !s.is_empty());
+  answer(day::approval_day(&features, date, session).await)
 }
 
 /// A handler's answer: the body with 200, a refusal with its status and detail, or the unhandled-exception 500.

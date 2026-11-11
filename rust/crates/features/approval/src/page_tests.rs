@@ -65,7 +65,7 @@ async fn render(home: &Home, uri: &str) -> (http::StatusCode, String) {
 
 /// The page rendered from a view read at `now`, so the age test asserts against a fixed clock.
 async fn render_at(home: &Home, date: Option<Date>, now: Timestamp) -> (http::StatusCode, String) {
-  let view = crate::day::approval_day_view_at(&home.features, date, now).await.expect("the view reads");
+  let view = crate::day::approval_day_view_at(&home.features, date, None, now).await.expect("the view reads");
   let (parts, _) =
     Request::builder().method(Method::GET).uri("/approval").body(()).expect("the request builds").into_parts();
   let response = super::render(&home.features, view, &parts).expect("the page renders");
@@ -92,26 +92,27 @@ async fn the_page_renders_the_day_s_three_lists_and_moves_between_days() {
   assert!(body.contains("/approval?date=2026-10-29"), "{body}");
   assert!(body.contains("/approval?date=2026-10-31"), "{body}");
 
-  // A past day's queue lists every open item; the login sheet and the digest are the day's.
+  // A past day's queue lists every open item; the actions only you can do and the digest are the day's.
   let (_, other) = render(&home, "/approval?date=2026-01-01").await;
   assert!(other.contains("Delete the backup volume"), "{other}");
   assert!(!other.contains("Chose the layout."), "{other}");
   // The day sits in a span that refuses a line break, so a phone never splits 2026-01-01.
-  assert!(other.contains("No actions that only you can do on <span class=\"day\">2026-01-01</span>."), "{other}");
+  assert!(other.contains("No actions only you can do on <span class=\"day\">2026-01-01</span>."), "{other}");
   assert!(
     other.contains("No digest entries and no policy table changes on <span class=\"day\">2026-01-01</span>."),
     "{other}"
   );
 }
 
-/// The three section bodies in rendered order: the login sheet, the queue, the digest. Each split names the
+/// The three section bodies in rendered order: the actions only you can do, the queue, the digest. Each split names the
 /// section's badge, so the helper also holds the order and the numbering.
 fn sections(body: &str) -> (&str, &str, &str) {
   let rest = body.split_once("<h2><span class=\"n\">1</span>").expect("the first section renders").1;
-  let (login_sheet, rest) = rest.split_once("<h2><span class=\"n\">2</span>").expect("the second section renders");
+  let (actions_only_you_can_do, rest) =
+    rest.split_once("<h2><span class=\"n\">2</span>").expect("the second section renders");
   let (queue, digest) =
     rest.split_once("<h2 class=\"digest-heading\"><span class=\"n\">3</span>").expect("the third section renders");
-  (login_sheet, queue, digest)
+  (actions_only_you_can_do, queue, digest)
 }
 
 /// The count the Queue chip shows.
@@ -128,7 +129,7 @@ fn queue_chip(body: &str) -> usize {
 
 #[tokio::test]
 #[ignore = "integration"]
-async fn today_s_queue_defers_user_act_rows_to_the_login_sheet_and_a_past_day_keeps_them() {
+async fn today_s_queue_defers_user_act_rows_to_the_actions_only_you_can_do_and_a_past_day_keeps_them() {
   let (home, _session) = seeded_home().await;
   let now: Timestamp = "2026-10-30T17:00:00Z".parse().expect("the fixed clock parses");
   let today: Date = "2026-10-30".parse().expect("the fixed day parses");
@@ -136,16 +137,16 @@ async fn today_s_queue_defers_user_act_rows_to_the_login_sheet_and_a_past_day_ke
 
   let (status, body) = render_at(&home, Some(today), now).await;
   assert_eq!(status, 200, "{body}");
-  let (login_sheet, queue, _digest) = sections(&body);
-  // The user-act item is one row, and today it sits in the login sheet rather than the queue.
-  assert!(login_sheet.contains("Log into the console"), "{body}");
+  let (actions_only_you_can_do, queue, _digest) = sections(&body);
+  // The user-act item is one row, and today it sits in the actions only you can do rather than the queue.
+  assert!(actions_only_you_can_do.contains("Log into the console"), "{body}");
   assert!(!queue.contains("Log into the console"), "{body}");
   assert!(queue.contains("Delete the backup volume"), "{body}");
 
   // A past day's queue lists the same item, as it did before this change.
   let (status, body) = render_at(&home, Some(past), now).await;
   assert_eq!(status, 200, "{body}");
-  let (_login_sheet, queue, _digest) = sections(&body);
+  let (_actions_only_you_can_do, queue, _digest) = sections(&body);
   assert!(queue.contains("Log into the console"), "{body}");
 }
 
@@ -160,7 +161,7 @@ async fn the_queue_chip_counts_the_rows_the_queue_lists() {
   for (date, expected) in [(Some(today), 1), (Some(past), 2)] {
     let (status, body) = render_at(&home, date, now).await;
     assert_eq!(status, 200, "{body}");
-    let (_login_sheet, queue, _digest) = sections(&body);
+    let (_actions_only_you_can_do, queue, _digest) = sections(&body);
     let rows = queue.matches("<li").count();
     assert_eq!(rows, expected, "{body}");
     assert_eq!(queue_chip(&body), rows, "{body}");
@@ -180,7 +181,7 @@ async fn a_mistyped_date_refuses_before_any_read() {
 
 #[tokio::test]
 #[ignore = "integration"]
-async fn a_queue_row_and_a_login_sheet_row_show_their_age() {
+async fn a_queue_row_and_an_actions_only_you_can_do_row_show_their_age() {
   let home = Home::new();
   let session = home.manager("Alpha").await;
   home
@@ -209,10 +210,10 @@ async fn a_queue_row_and_a_login_sheet_row_show_their_age() {
   assert_eq!(status, 200, "{body}");
   // The T0 item started exactly three days before the clock, so its one queue row reads 3 d ago.
   assert_eq!(body.matches("3 d ago").count(), 1, "{body}");
-  // The user-act item started five hours before the clock. Today it sits in the login sheet only.
+  // The user-act item started five hours before the clock. Today it is listed among the actions only you can do.
   assert_eq!(body.matches("5 h ago").count(), 1, "{body}");
 
-  // A past day's view reads the same item in the queue and in that day's login sheet.
+  // A past day's view reads the same item in the queue and in that day's actions only you can do.
   let later: Timestamp = "2026-11-03T17:00:00Z".parse().expect("the fixed clock parses");
   let (status, body) = render_at(&home, Some(today), later).await;
   assert_eq!(status, 200, "{body}");

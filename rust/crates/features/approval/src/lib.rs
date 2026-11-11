@@ -1,5 +1,6 @@
 //! The approval day view feature (`web/features/approval`): the page at `GET /approval` and the route the page
-//! reads, `GET /api/approval/day`. Both cover one Pacific day's ranked T0 queue, login sheet and digest.
+//! reads, `GET /api/approval/day`. Both cover one Pacific day's ranked T0 queue, the actions only you can do, and the
+//! digest.
 
 mod api;
 mod day;
@@ -17,7 +18,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.home_card(HomeCard {
     name: "Approvals",
     url: page::PAGE_PATH,
-    description: "One Pacific day of the tiered approval: the Waiting on you queue, the login sheet and the digest.",
+    description: "One Pacific day of the tiered approval: the queue, the actions only you can do, and the digest.",
   })
 }
 

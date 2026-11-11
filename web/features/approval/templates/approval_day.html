@@ -72,8 +72,8 @@
 <body>
 {% set defer_concurrency_badge_poll = true %}
 {% include 'partials/concurrency_badge.html' %}
-{# Today's login sheet carries every open user-act item, so today's queue leaves those rows to it. A past day's
-   queue keeps them, as every other day's view does. #}
+{# Today's actions only you can do carry every open user-act item, so today's queue leaves those rows to them. A past
+   day's queue keeps them, as every other day's view does. #}
 {% if ctx.is_today %}
 {% set queue_rows = ctx.queue | rejectattr('tier', 'eq', 'user-act') | list %}
 {% else %}
@@ -83,23 +83,24 @@
 <h1>Approvals</h1>
 <p class="sub">One Pacific day of the tiered approval.</p>
 <div class="meta">
+  {% set scope = '&session=' ~ ctx.session if ctx.session else '' %}
   <div class="nav">
-    <a href="/approval?date={{ ctx.previous }}">&larr; {{ ctx.previous }}</a>
-    <a href="/approval">Today</a>
-    <a href="/approval?date={{ ctx.next }}">{{ ctx.next }} &rarr;</a>
+    <a href="/approval?date={{ ctx.previous }}{{ scope }}">&larr; {{ ctx.previous }}</a>
+    <a href="/approval{{ '?session=' ~ ctx.session if ctx.session else '' }}">Today</a>
+    <a href="/approval?date={{ ctx.next }}{{ scope }}">{{ ctx.next }} &rarr;</a>
   </div>
   <span class="mtag">PT day &middot; {{ ctx.date }}</span>
   <span class="mtag">Queue &middot; {{ queue_rows|length }}</span>
-  <span class="mtag">Login actions &middot; {{ ctx.login_sheet|length }}</span>
+  <span class="mtag">Actions only you can do &middot; {{ ctx.actions_only_you_can_do|length }}</span>
   <span class="mtag">Digest &middot; {{ ctx.digest|length }}</span>
 </div>
 
-<h2><span class="n">1</span>Login sheet</h2>
-{% if not ctx.login_sheet %}
-<p class="none">No actions that only you can do on <span class="day">{{ ctx.date }}</span>.</p>
+<h2><span class="n">1</span>Actions only you can do</h2>
+{% if not ctx.actions_only_you_can_do %}
+<p class="none">No actions only you can do on <span class="day">{{ ctx.date }}</span>.</p>
 {% else %}
 <ul>
-  {% for item in ctx.login_sheet %}
+  {% for item in ctx.actions_only_you_can_do %}
   <li>
     <div class="row1">
       <span class="tag tier">user-act</span>

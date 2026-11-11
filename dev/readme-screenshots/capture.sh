@@ -518,7 +518,7 @@ NAME_TITLES=('release notes draft' 'session list paging' 'backup and restore' 'd
   'scheduler timeout audit' 'metrics panel' 'trace merge cache' 'worktree sweep'
   'cron seed refresh' 'trigger backlog' 'sidebar grouping' 'draft card lock'
   'usage ledger sweep' 'voice preview relay' 'terminal resize' 'plan diff view'
-  'memory lint pass' 'taste index build' 'digest day view' 'login sheet poll')
+  'memory lint pass' 'taste index build' 'digest day view' 'actions only you can do poll')
 
 # A name is non-ASCII when a byte above 0x7f appears; the test runs in the C locale, where bytes are characters.
 is_ascii() {

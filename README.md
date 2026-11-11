@@ -43,7 +43,7 @@ flowchart TB
 ### Approvals and oversight
 
 - Approval policy table: consequence tests tier each step; a T0 step becomes a Waiting on you item that holds the work until you act
-- Daily digest: T1 policy uses and T2 decisions are recorded with their undo, served per Pacific day on the approval page (`/approval`) with the queue and the login sheet
+- Daily digest: T1 policy uses and T2 decisions are recorded with their undo, served per Pacific day on the approval page (`/approval`) with the queue and the actions only you can do
 - Draft cards: a message or publication in your name waits on an approval card only you can send
 - Failure triage: `charliebot triage scan` groups a time window of failed runs and error logs by signature and prints one verdict per signature
 
@@ -101,7 +101,7 @@ flowchart TB
 <p align="center">
   <img src="docs/assets/readme/ui-approval-desktop.png" alt="Approval day page" width="880">
 </p>
-<p align="center"><i>Desktop: the approval page for one Pacific day — the ranked queue, the login sheet, and the digest, each entry with its undo.</i></p>
+<p align="center"><i>Desktop: the approval page for one Pacific day — the ranked queue, the actions only you can do, and the digest, each entry with its undo.</i></p>
 <p align="center">
   <img src="docs/assets/readme/ui-chat-mobile.png" alt="Mobile chat view" width="320">
 </p>

@@ -96,9 +96,18 @@ impl Home {
 
   /// A root manager session named `name`, created as the operator creates one.
   pub async fn manager(&self, name: &str) -> String {
+    self.create_manager(None, name).await
+  }
+
+  /// A manager session named `name` under `parent`, created as the operator creates one.
+  pub async fn child(&self, parent: &str, name: &str) -> String {
+    self.create_manager(Some(parent), name).await
+  }
+
+  async fn create_manager(&self, parent: Option<&str>, name: &str) -> String {
     let request = CreateTask {
-      request_id: format!("root-{name}"),
-      task_parent_id: None,
+      request_id: format!("manager-{name}"),
+      task_parent_id: parent.map(str::to_string),
       profile: TaskProfile::Manager,
       task: None,
       name: Some(name.to_string()),

@@ -1,13 +1,19 @@
-//! The approval day view: one Pacific day's ranked T0 queue, login sheet and digest.
+//! The approval day view: one Pacific day's ranked T0 queue, the actions only you can do, and the digest.
 //!
 //! The queue holds every open Waiting on you item across sessions, so every open item appears once. The T0 items
 //! come first, ranked by the rank of their rule's consequence test in the approval policy table. An
 //! `out-of-scope:<id>` rule ranks with the chao-name test. Then come the review
-//! items, then the items tiered t1 or t2 and the items without a tier. Equal ranks keep arrival order. The login
-//! sheet holds today's every open user-act item, an item judged on an earlier day included, because the panels list
-//! those items only through this sheet. A past day's sheet holds the items whose start time falls in it. The digest
-//! holds the day's digest entries and the day's `policy_table_changed` records, each with its undo: an entry's
-//! `undo` field, a change record's diff.
+//! items, then the items tiered t1 or t2 and the items without a tier. Equal ranks keep arrival order.
+//!
+//! Actions only you can do hold every open user-act item of the day, an item judged on an earlier day included,
+//! because the status panels count those items through this list. A past day's list holds the items whose start time
+//! falls in that day. A session scope limits the list to the session and its open descendants, the holders the
+//! status panel counts.
+//!
+//! The digest holds the day's digest entries and the day's `policy_table_changed` records, each with its undo: an
+//! entry's `undo` field, a change record's diff.
+
+use std::collections::HashSet;
 
 use axum::http::StatusCode;
 use charliebot_core::approval_digest;
@@ -44,29 +50,39 @@ pub fn parse_date_param(text: &str) -> Result<Date, DayError> {
 /// The key of the day body's ranked queue: the open items, T0 first.
 pub const QUEUE: &str = "queue";
 
-/// The key of the day body's login sheet: the day's open user-act items.
-pub const LOGIN_SHEET: &str = "login_sheet";
+/// The key of the day body's actions only you can do: the day's open user-act items.
+pub const ACTIONS_ONLY_YOU_CAN_DO: &str = "actions_only_you_can_do";
 
 /// The key of the day body's digest: the day's digest entries and change records.
 pub const DIGEST: &str = "digest";
 
-/// A day view: the Pacific day it renders, the Pacific day it read as today, and the JSON the API answers. The page
-/// uses `today` to refresh only today's view when its tab becomes visible again.
+/// A day view: the Pacific day it renders, the Pacific day it read as today, the optional session scope, and the JSON
+/// the API answers. The page uses `today` to refresh only today's view when its tab becomes visible again.
 pub struct DayView {
   pub date: Date,
   pub today: Date,
+  pub session: Option<String>,
   pub body: Value,
 }
 
-/// The day view as the API answers it. A `None` date is today's Pacific day. The table read
+/// The day view as the API answers it. A `None` date is today's Pacific day. A `None` session lists the user-act items
+/// host-wide; a `Some` session limits them to that session and its open descendants. The table read
 /// is a server-side read, so a changed table records its change before the view lists it.
-pub async fn approval_day(features: &FeatureContext, date: Option<Date>) -> Result<Value, DayError> {
-  Ok(approval_day_view(features, date).await?.body)
+pub async fn approval_day(
+  features: &FeatureContext,
+  date: Option<Date>,
+  session: Option<&str>,
+) -> Result<Value, DayError> {
+  Ok(approval_day_view(features, date, session).await?.body)
 }
 
 /// The day view the page renders. A `None` date is today's Pacific day.
-pub(crate) async fn approval_day_view(features: &FeatureContext, date: Option<Date>) -> Result<DayView, DayError> {
-  approval_day_view_at(features, date, Timestamp::now()).await
+pub(crate) async fn approval_day_view(
+  features: &FeatureContext,
+  date: Option<Date>,
+  session: Option<&str>,
+) -> Result<DayView, DayError> {
+  approval_day_view_at(features, date, session, Timestamp::now()).await
 }
 
 /// The day view read at one clock: `now` dates the ages and decides today's Pacific day, so the page's rows and its
@@ -74,6 +90,7 @@ pub(crate) async fn approval_day_view(features: &FeatureContext, date: Option<Da
 pub(crate) async fn approval_day_view_at(
   features: &FeatureContext,
   date: Option<Date>,
+  session: Option<&str>,
   now: Timestamp,
 ) -> Result<DayView, DayError> {
   let today = pacific::day_of(now).map_err(|error| DayError::Failed(error.into()))?;
@@ -84,15 +101,16 @@ pub(crate) async fn approval_day_view_at(
   let reader = features.registry.open_waiting_items_reader().map_err(DayError::Failed)?;
   let rows = reader(features).await.map_err(DayError::Failed)?;
   let queue = queue_rows(&rows, &loaded.table, now);
-  let login_sheet = login_sheet_rows(&rows, date, today, now)?;
+  let holders = session.map(|session_id| session_holders(features, session_id)).transpose()?;
+  let actions_only_you_can_do = actions_only_you_can_do_rows(&rows, holders.as_ref(), date, today, now)?;
   let digest = digest_rows(&home, date)?;
   let body = json!({
     "date": date_text(date),
     (QUEUE): queue,
-    (LOGIN_SHEET): login_sheet,
+    (ACTIONS_ONLY_YOU_CAN_DO): actions_only_you_can_do,
     (DIGEST): digest,
   });
-  Ok(DayView { date, today, body })
+  Ok(DayView { date, today, session: session.map(ToString::to_string), body })
 }
 
 /// One open item's row, with the session that holds it and how long ago it started.
@@ -171,12 +189,34 @@ fn queue_rows(rows: &[OpenWaitingRow], table: &approval_policy::ApprovalPolicyTa
     .collect()
 }
 
-/// The login sheet: today's holds every open user-act item, whatever day judged it, because the panels list those
-/// items only through this sheet. A past day's holds the items whose start time falls in it.
-fn login_sheet_rows(rows: &[OpenWaitingRow], date: Date, today: Date, now: Timestamp) -> Result<Vec<Value>, DayError> {
-  let mut sheet = Vec::new();
+/// The holders a session scope lists: the session and its open descendants. A session the store does not hold is a
+/// refusal that names it.
+fn session_holders(features: &FeatureContext, session_id: &str) -> Result<HashSet<String>, DayError> {
+  let descendants = features.store.open_descendants(session_id).map_err(|error| match error {
+    charliebot_store::StoreError::NotFound(msg) => DayError::Refused(StatusCode::NOT_FOUND, msg),
+    other => DayError::Failed(other.into()),
+  })?;
+  let mut holders = HashSet::from([session_id.to_string()]);
+  holders.extend(descendants.into_iter().map(|meta| meta.id));
+  Ok(holders)
+}
+
+/// The actions only you can do of one day: today's list holds every open user-act item, whatever day judged it, and a
+/// past day's list holds the items whose start time falls in that day. Only the holders' items count when `holders`
+/// is `Some`.
+fn actions_only_you_can_do_rows(
+  rows: &[OpenWaitingRow],
+  holders: Option<&HashSet<String>>,
+  date: Date,
+  today: Date,
+  now: Timestamp,
+) -> Result<Vec<Value>, DayError> {
+  let mut items = Vec::new();
   for row in rows {
     if row.tier.as_deref() != Some(approval_policy::TIER_USER_ACT) {
+      continue;
+    }
+    if holders.is_some_and(|holders| !holders.contains(&row.session_id)) {
       continue;
     }
     if date != today {
@@ -185,9 +225,9 @@ fn login_sheet_rows(rows: &[OpenWaitingRow], date: Date, today: Date, now: Times
         continue;
       }
     }
-    sheet.push(row_json(row, now));
+    items.push(row_json(row, now));
   }
-  Ok(sheet)
+  Ok(items)
 }
 
 /// The day's digest: the day's digest entries and the day's `policy_table_changed` records, one list in arrival

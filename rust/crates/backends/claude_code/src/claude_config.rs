@@ -7,20 +7,32 @@ use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 
+/// One Claude Code login that a session can run under.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaudeAccount {
+  /// The account's name. `accounts.claude_pools` lists members by label, and a session's account selection names one.
   pub label: String,
+  /// The account's Claude config directory, `~` expanded. The account can log in while this directory's
+  /// `.credentials.json` holds a `claudeAiOauth.accessToken`.
   pub config_dir: String,
 }
 
+/// The compaction thresholds of a master session, in context tokens: a reading at or above a threshold starts that
+/// compaction.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaudeCompactionConfig {
+  /// The relay compaction's threshold. A fable master relay turn at or above it compacts its transcript before the
+  /// turn runs.
   #[serde(default = "default_relay_tokens", deserialize_with = "positive_tokens")]
   pub relay_tokens: u64,
+  /// The cold-cache compaction's threshold. A resumed fable master session at or above it compacts when its cache
+  /// expired, one hour after the last request.
   #[serde(default = "default_expired_cache_tokens", deserialize_with = "positive_tokens")]
   pub expired_cache_tokens: u64,
+  /// The idle compaction's threshold. An idle master session at or above it compacts about 54 minutes after its
+  /// last turn.
   #[serde(default = "default_idle_tokens", deserialize_with = "positive_tokens")]
   pub idle_tokens: u64,
 }
@@ -58,13 +70,18 @@ where
   Ok(value)
 }
 
+/// The `accounts:` config section: the Claude Code logins and pools a `cc-claude` backend option draws from.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountsConfig {
+  /// The accounts a host runs Claude Code under. A non-empty list gives every `cc-claude` option a pool of accounts
+  /// to choose from.
   #[serde(default)]
   pub claude: Vec<ClaudeAccount>,
+  /// The named pools: each key lists the account labels it holds. A `cc-claude` option's `account_pool` picks one.
   #[serde(default)]
   pub claude_pools: BTreeMap<String, Vec<String>>,
+  /// The master session's compaction thresholds; a key the host omits takes the struct's default.
   #[serde(default)]
   pub claude_compaction: ClaudeCompactionConfig,
 }

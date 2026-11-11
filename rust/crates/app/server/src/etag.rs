@@ -5,6 +5,9 @@
 //! from the body, and a body a handler answers from a memo on every request keeps the tag of its first hash, so such a
 //! repeat request does not pay the hash again. The gzip layer, outside this one, memoizes the compressed body of each
 //! tag, which is the same identity a client's cache uses.
+//!
+//! A handler that answers its own `ETag` has named the body's version, so the layer keeps that tag and skips the hash.
+//! The tag makes the same promise either way: two bodies share it only when they are the same body.
 
 use std::collections::VecDeque;
 use std::sync::{LazyLock, Mutex};
@@ -32,18 +35,26 @@ pub async fn layer(request: Request, next: Next) -> Response {
     return response;
   }
   let (mut parts, body) = response.into_parts();
-  let bytes = match to_bytes(body, MAX_BODY_BYTES).await {
-    Ok(bytes) => bytes,
-    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  // A handler that names its body's version has already paid for that identity, and its body may be cheaper to name
+  // than to hash. The supplied tag answers `If-None-Match` like a hashed one.
+  let (tag_value, body) = match parts.headers.get(header::ETAG).cloned() {
+    Some(tag) => (tag, body),
+    None => {
+      let bytes = match to_bytes(body, MAX_BODY_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+      };
+      let tag = TAG_MEMO.lock().expect("the tag memo mutex is not poisoned").tag(&bytes);
+      (tag, Body::from(bytes))
+    }
   };
-  let tag_value = TAG_MEMO.lock().expect("the tag memo mutex is not poisoned").tag(&bytes);
-  let tag = tag_value.to_str().expect("a quoted hex entity tag is a valid header value");
+  let tag = tag_value.to_str().expect("an entity tag is visible ASCII");
   parts.headers.insert(header::ETAG, tag_value.clone());
   parts.headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
   if names(&if_none_match, tag) {
     return not_modified(tag_value, &parts.headers);
   }
-  Response::from_parts(parts, Body::from(bytes))
+  Response::from_parts(parts, body)
 }
 
 fn is_json(headers: &HeaderMap) -> bool {
@@ -132,8 +143,9 @@ fn same_body(held: &Bytes, current: &Bytes) -> bool {
 static TAG_MEMO: LazyLock<Mutex<TagMemo>> = LazyLock::new(|| Mutex::new(TagMemo::default()));
 
 /// Whether an `If-None-Match` value names `tag`: a list of entity tags, or `*`. The comparison is weak, as RFC 9110
-/// specifies for this header, so a `W/` prefix does not change the match.
+/// specifies for this header, so a `W/` prefix on either side does not change the match.
 fn names(if_none_match: &str, tag: &str) -> bool {
+  let tag = tag.trim().trim_start_matches("W/");
   if_none_match.trim() == "*"
     || if_none_match.split(',').any(|candidate| candidate.trim().trim_start_matches("W/") == tag)
 }
@@ -241,6 +253,58 @@ mod tests {
     assert_eq!(status, StatusCode::OK);
     assert!(!headers.contains_key(header::ETAG));
     assert!(!headers.contains_key(header::CACHE_CONTROL));
+  }
+
+  #[tokio::test]
+  async fn a_handler_that_names_its_body_keeps_its_tag_and_revalidates_with_it() {
+    let app = Router::new()
+      .route(
+        "/api/named",
+        get(|| async {
+          Response::builder()
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ETAG, "\"handler-1\"")
+            .body(Body::from(r#"{"n":1}"#))
+            .expect("a JSON response builds")
+        }),
+      )
+      .layer(middleware::from_fn(layer));
+    let (status, headers, body) = get_with(&app, "/api/named", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::ETAG], "\"handler-1\"", "the handler's own tag stays");
+    assert_eq!(headers[header::CACHE_CONTROL], "no-cache");
+    assert_eq!(body, br#"{"n":1}"#);
+
+    let (status, headers, body) = get_with(&app, "/api/named", Some("\"handler-1\"")).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED, "a client that names the handler's tag revalidates");
+    assert_eq!(headers[header::ETAG], "\"handler-1\"");
+    assert!(body.is_empty());
+  }
+
+  #[tokio::test]
+  async fn a_weak_tag_matches_a_weak_or_strong_client_candidate() {
+    let app = Router::new()
+      .route(
+        "/api/weak",
+        get(|| async {
+          Response::builder()
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ETAG, "W/\"weak-1\"")
+            .body(Body::from(r#"{"n":1}"#))
+            .expect("a JSON response builds")
+        }),
+      )
+      .layer(middleware::from_fn(layer));
+    for candidate in ["W/\"weak-1\"", "\"weak-1\""] {
+      let (status, headers, body) = get_with(&app, "/api/weak", Some(candidate)).await;
+      assert_eq!(
+        status,
+        StatusCode::NOT_MODIFIED,
+        "the weak comparison ignores the prefix on either side: {candidate}"
+      );
+      assert_eq!(headers[header::ETAG], "W/\"weak-1\"", "the stored tag comes back unchanged");
+      assert!(body.is_empty());
+    }
   }
 
   #[test]

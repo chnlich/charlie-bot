@@ -412,18 +412,25 @@ struct RecordsMemo {
   sessions_dir: PathBuf,
   sessions_mtime: Option<SystemTime>,
   records_generation: u64,
-  records: Arc<Vec<(String, RunRecord)>>,
+  records: RunRecords,
 }
 
 static RECORDS_MEMO: LazyLock<Mutex<Option<RecordsMemo>>> = LazyLock::new(|| Mutex::new(None));
 
-/// Every session's run records, from the scan this process last made when its key still holds.
-fn all_run_records(store: &Store) -> StoreResult<Arc<Vec<(String, RunRecord)>>> {
+/// A home's run records, shared by every request the memo answers.
+type RunRecords = Arc<Vec<(String, RunRecord)>>;
+
+/// One record scan's result: the records and the generation they answer under.
+type RecordScan = (RunRecords, u64);
+
+/// Every session's run records and the generation they answer under, from the scan this process last made when its
+/// key still holds.
+fn all_run_records(store: &Store) -> StoreResult<RecordScan> {
   let mut memo = RECORDS_MEMO.lock().expect("the run-record memo mutex is not poisoned");
   scan_records(&mut memo, store)
 }
 
-fn scan_records(memo: &mut Option<RecordsMemo>, store: &Store) -> StoreResult<Arc<Vec<(String, RunRecord)>>> {
+fn scan_records(memo: &mut Option<RecordsMemo>, store: &Store) -> StoreResult<RecordScan> {
   let sessions_dir = store.config().sessions_dir();
   let sessions_mtime = sessions_directory_mtime(&sessions_dir)?;
   // The generation is read before the scan, so a write that lands during it leaves a stale key behind.
@@ -434,11 +441,12 @@ fn scan_records(memo: &mut Option<RecordsMemo>, store: &Store) -> StoreResult<Ar
       && entry.sessions_dir == sessions_dir
   });
   if holds {
-    return Ok(Arc::clone(&memo.as_ref().expect("the memo holds a scan").records));
+    let entry = memo.as_ref().expect("the memo holds a scan");
+    return Ok((Arc::clone(&entry.records), entry.records_generation));
   }
   let records = Arc::new(store.list_all_run_records_sync()?);
   *memo = Some(RecordsMemo { sessions_dir, sessions_mtime, records_generation, records: Arc::clone(&records) });
-  Ok(records)
+  Ok((records, records_generation))
 }
 
 /// The sessions directory's mtime, or `None` when it does not exist.
@@ -456,9 +464,9 @@ fn sessions_directory_mtime(sessions_dir: &Path) -> StoreResult<Option<SystemTim
   }
 }
 
-/// The series of one range, read from every run record.
-pub(crate) fn history_series(store: &Store, range: &'static str, now: UtcDateTime) -> StoreResult<History> {
-  let records = all_run_records(store)?;
+/// The series of one range, read from every run record, and the record generation the series was built from.
+pub(crate) fn history_series(store: &Store, range: &'static str, now: UtcDateTime) -> StoreResult<(History, u64)> {
+  let (records, generation) = all_run_records(store)?;
   let now = now.into_inner();
   let first_record_at = records.iter().filter_map(|(_, record)| record.started_at).min().map(UtcDateTime::into_inner);
   let from =
@@ -475,7 +483,7 @@ pub(crate) fn history_series(store: &Store, range: &'static str, now: UtcDateTim
       });
     }
   }
-  Ok(History {
+  let history = History {
     range,
     from,
     to: now,
@@ -483,7 +491,8 @@ pub(crate) fn history_series(store: &Store, range: &'static str, now: UtcDateTim
     first_record_at,
     peak: peak.filter(|peak| peak.running > 0),
     points: buckets.into_iter().map(|bucket| bucket.point).collect(),
-  })
+  };
+  Ok((history, generation))
 }
 
 /// One merged span per session and channel: a session with several overlapping runs covers its span once.
@@ -616,21 +625,43 @@ fn requested_range(request: &Request<Body>) -> Result<&'static str, Box<Response
   })
 }
 
+/// The history response.
+///
+/// Every body names its request's `to` instant, so the route answers a fresh series on every request and the transport
+/// hashes one that it never serves twice. The handler names the body's version instead, from the two inputs whose change
+/// moves it: the record generation the series was built from and that instant. Naming those is cheaper than hashing the
+/// 2,016 points.
 async fn history(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let range = match requested_range(&request) {
     Ok(range) => range,
     Err(response) => return *response,
   };
   let store = Arc::clone(&features.store);
-  match blocking_store(move || history_series(&store, range, UtcDateTime::now()).map(History::into_body)).await {
-    Ok(body) => Response::builder()
+  match blocking_store(move || {
+    let now = UtcDateTime::now();
+    let (history, generation) = history_series(&store, range, now)?;
+    let tag = history_tag(generation, now);
+    Ok((history.into_body(), tag))
+  })
+  .await
+  {
+    Ok((body, tag)) => Response::builder()
       .status(StatusCode::OK)
       .header(header::CONTENT_TYPE, "application/json")
       .header(header::CONTENT_LENGTH, body.len())
+      .header(header::ETAG, tag)
       .body(Body::from(body))
       .expect("the history response builds"),
     Err(error) => store_error(error),
   }
+}
+
+/// The entity tag of a history body: the record generation the series was built from and the instant its window ends.
+///
+/// The generation names the run records the series counted, and the instant places the window. Two bodies therefore
+/// share the tag only when they counted the same records over the same window.
+fn history_tag(generation: u64, now: UtcDateTime) -> String {
+  format!("\"{generation:x}-{:x}\"", now.into_inner().unix_timestamp_nanos())
 }
 
 #[cfg(test)]
@@ -925,7 +956,7 @@ mod tests {
         Request::builder().uri(format!("/api/concurrency/history?range={range}")).body(Body::empty()).unwrap();
       assert_eq!(requested_range(&request).unwrap(), range);
       assert_eq!(bucket_seconds(range), bucket);
-      let series = history_series(&features.store, range, UtcDateTime::now()).unwrap();
+      let (series, _) = history_series(&features.store, range, UtcDateTime::now()).unwrap();
       assert_eq!(series.range, range);
       assert_eq!(series.bucket_seconds, bucket);
       assert_eq!(series.first_record_at, None, "an empty home holds no run record");
@@ -935,7 +966,9 @@ mod tests {
 
     let default = Request::builder().uri(HISTORY_PATH).body(Body::empty()).unwrap();
     assert_eq!(requested_range(&default).unwrap(), "7d");
-    let body = crate::test_support::answer(history(State(Arc::clone(&features)), default).await).await.1;
+    let response = history(State(Arc::clone(&features)), default).await;
+    assert!(response.headers().contains_key(header::ETAG), "the route names its body's version");
+    let body = crate::test_support::answer(response).await.1;
     assert_eq!(body["range"], "7d", "a request that names no range reads the last seven days");
     assert_eq!(body["bucket_seconds"], 300);
     assert_eq!(body["first_record_at"], Value::Null, "an empty home holds no run record");
@@ -968,6 +1001,20 @@ mod tests {
     }
   }
 
+  /// The tag names the generation and the instant, so either one moving gives the body a new tag.
+  #[test]
+  fn the_history_tag_moves_with_each_input_that_moves_the_body() {
+    let instant = at("2026-11-01T07:00:00Z");
+    let tag = history_tag(7, UtcDateTime::from(instant));
+    assert_eq!(tag, history_tag(7, UtcDateTime::from(instant)), "the same inputs name the same body");
+    assert_ne!(tag, history_tag(8, UtcDateTime::from(instant)), "a record write moves the generation");
+    assert_ne!(
+      tag,
+      history_tag(7, UtcDateTime::from(instant + Duration::seconds(1))),
+      "the window follows the instant"
+    );
+  }
+
   /// A run record written to the home reaches the series, at the instant it started.
   #[tokio::test]
   async fn the_history_reads_the_run_records_of_the_home() {
@@ -975,7 +1022,7 @@ mod tests {
     let worker = test_support::create_node(&features.store, "history-worker", None, TaskProfile::Worker).await;
     write_running_run(&features.store, &worker.id, "work");
 
-    let series = history_series(&features.store, "24h", UtcDateTime::now()).unwrap();
+    let (series, _) = history_series(&features.store, "24h", UtcDateTime::now()).unwrap();
     let peak = series.peak.expect("the running worker reaches a peak");
     assert_eq!((peak.running, peak.manager, peak.worker), (1, 0, 1));
     assert_eq!(series.first_record_at, Some(peak.at));
@@ -986,12 +1033,13 @@ mod tests {
   async fn a_records_memo_reuses_its_scan_until_a_session_directory_moves() {
     let (_home, features) = test_support::feature_context();
     let mut memo = None;
-    let first = scan_records(&mut memo, &features.store).unwrap();
-    let repeat = scan_records(&mut memo, &features.store).unwrap();
+    let (first, first_generation) = scan_records(&mut memo, &features.store).unwrap();
+    let (repeat, repeat_generation) = scan_records(&mut memo, &features.store).unwrap();
     assert!(Arc::ptr_eq(&first, &repeat), "an unchanged home takes the scan it already made");
+    assert_eq!(first_generation, repeat_generation, "the repeat names the generation it was scanned under");
 
     test_support::create_node(&features.store, "memo-new-session", None, TaskProfile::Manager).await;
-    let after = scan_records(&mut memo, &features.store).unwrap();
+    let (after, _) = scan_records(&mut memo, &features.store).unwrap();
     assert!(!Arc::ptr_eq(&repeat, &after), "a session directory added moves the sessions directory's mtime");
   }
 }

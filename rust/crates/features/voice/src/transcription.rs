@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
+use charliebot_compat::providers;
 use charliebot_compat::ws_client::{self, Message, Options, Sender, WEBSOCKETS_16_DEFAULTS};
 use charliebot_core::credentials::{Credentials, REDACTED};
 use charliebot_core::str_methods;
@@ -15,13 +16,17 @@ use tokio::task::JoinHandle;
 use crate::audio::{AudioQueue, SAMPLE_RATE};
 
 const GEMINI_MODEL: &str = "models/gemini-3.5-transcribe-live";
-const GEMINI_ENDPOINT: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 const MUSE_MODEL: &str = "muse-voice-transcribe-1.0";
 const MUSE_ENDPOINT: &str = "wss://api.meta.ai/v1/asr/realtime";
 const WS_CLIENT_CLOSE_TIMEOUT: Duration = Duration::from_millis(1_000);
 const GEMINI_OPEN_TIMEOUT: Duration = Duration::from_secs(15);
 const MUSE_LEAD_CAP_SECONDS: f64 = 4.0;
 const AUDIO_BYTES_PER_SECOND: f64 = SAMPLE_RATE as f64 * 2.0;
+
+/// The Muse live-transcription WebSocket endpoint.
+fn muse_live_websocket() -> String {
+  MUSE_ENDPOINT.to_string()
+}
 
 #[derive(Debug)]
 pub(crate) enum TranscriptionError {
@@ -67,7 +72,8 @@ pub(crate) struct BackendSpec {
   pub(crate) credential: (&'static str, &'static str),
   pub(crate) live_partials: bool,
   kind: BackendKind,
-  endpoint: &'static str,
+  /// The WebSocket endpoint the backend connects to.
+  endpoint: fn() -> String,
 }
 
 pub(crate) const BACKENDS: &[BackendSpec] = &[
@@ -77,7 +83,7 @@ pub(crate) const BACKENDS: &[BackendSpec] = &[
     credential: ("gemini", "api_key"),
     live_partials: true,
     kind: BackendKind::Gemini,
-    endpoint: GEMINI_ENDPOINT,
+    endpoint: providers::gemini_live_transcription_websocket,
   },
   BackendSpec {
     id: "muse",
@@ -85,7 +91,7 @@ pub(crate) const BACKENDS: &[BackendSpec] = &[
     credential: ("meta", "model_api_key"),
     live_partials: true,
     kind: BackendKind::Muse,
-    endpoint: MUSE_ENDPOINT,
+    endpoint: muse_live_websocket,
   },
 ];
 
@@ -153,7 +159,7 @@ impl Backend {
     Ok(Self {
       spec,
       token: credential_token(credentials, spec),
-      endpoint: spec.endpoint.to_string(),
+      endpoint: (spec.endpoint)(),
       clock: Arc::new(EventLoopClock),
       #[cfg(test)]
       muse_audio_bytes_per_second: AUDIO_BYTES_PER_SECOND,

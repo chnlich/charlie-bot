@@ -3,10 +3,9 @@
 use std::sync::Arc;
 
 use charliebot_compat::http_client;
+use charliebot_compat::providers;
 use charliebot_core::credentials::Credentials;
 use charliebot_core::hot_reload::HotReload;
-
-use crate::search;
 
 /// The endpoint's state: the profile's credentials, the Google base URL and the outbound client.
 ///
@@ -21,7 +20,7 @@ pub struct WebSearch {
 
 impl WebSearch {
   pub(crate) fn new(credentials: Arc<HotReload<Credentials>>) -> Self {
-    Self { credentials, endpoint: search::GEMINI_ENDPOINT.to_string(), client: None }
+    Self { credentials, endpoint: providers::gemini_rest_base(), client: None }
   }
 
   #[cfg(test)]

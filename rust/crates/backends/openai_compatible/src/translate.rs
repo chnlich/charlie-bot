@@ -2,6 +2,7 @@
 //! to an Anthropic message, and the OpenAI chat stream to Anthropic's events. Each keeps the golden fixture's
 //! operation order, so a request raises the first failure it records.
 
+use charliebot_compat::providers;
 use charliebot_core::event_types;
 use charliebot_core::text_repr::{self, is_truthy, type_name};
 use serde_json::{Map, Value, json};
@@ -27,11 +28,7 @@ pub enum StreamRules {
 /// The stream rules `api_base` uses: the Gemini rules for Google's Gemini endpoint, the OpenAI rules otherwise.
 pub fn stream_rules(api_base: &str) -> Result<StreamRules, String> {
   let url = reqwest::Url::parse(api_base).map_err(|error| error.to_string())?;
-  Ok(if url.host_str() == Some("generativelanguage.googleapis.com") {
-    StreamRules::Gemini
-  } else {
-    StreamRules::OpenAi
-  })
+  Ok(if url.host_str() == Some(providers::GEMINI_HOST) { StreamRules::Gemini } else { StreamRules::OpenAi })
 }
 
 /// The OpenAI chat completions body for an Anthropic Messages request, with the model set to `upstream_model`.
@@ -871,7 +868,8 @@ mod tests {
 
   #[test]
   fn stream_rules_follow_the_google_gemini_host() {
-    assert_eq!(stream_rules("https://generativelanguage.googleapis.com/v1beta/openai/").unwrap(), StreamRules::Gemini);
+    let gemini = format!("https://{}/v1beta/openai/", charliebot_compat::providers::GEMINI_HOST);
+    assert_eq!(stream_rules(&gemini).unwrap(), StreamRules::Gemini);
     assert_eq!(stream_rules("https://openai.example/v1").unwrap(), StreamRules::OpenAi);
   }
 

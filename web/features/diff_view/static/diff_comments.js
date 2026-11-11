@@ -116,10 +116,20 @@
   function installStyles() {
     const style = document.createElement('style');
     style.textContent = `
+      /* A diff line's only control is the line comment button in its number cell, and a touch
+         screen reveals it by a tap. The 24 px pointer floor sets the button's box, and the number
+         cell takes the line's height so that box fills one row: the buttons of two neighbouring
+         lines meet at their edges, so a press belongs to the line it covers. A 21 px line box draws
+         the 24 px row. Diff2html lays each side of the side-by-side view out as a table of its own,
+         so the height reaches every diff table, and both sides stay level line by line. */
+      .d2h-diff-table .d2h-code-line,
+      .d2h-diff-table .d2h-code-side-line { line-height: 21px; }
+      .${PREFIX}-line > .d2h-code-linenumber,
+      .${PREFIX}-line > .d2h-code-side-linenumber { height: 24px; }
       .${PREFIX}-add {
         position: absolute; left: 2px; top: 50%; transform: translateY(-50%); z-index: 2;
-        width: 18px; height: 18px; border: 0; border-radius: 4px; padding: 0;
-        background: #2563eb; color: white; font: bold 14px/18px system-ui, sans-serif;
+        width: 24px; height: 24px; border: 0; border-radius: 5px; padding: 0;
+        background: #2563eb; color: white; font: bold 14px/24px system-ui, sans-serif;
         cursor: pointer; opacity: 0; transition: opacity .1s;
       }
       .${PREFIX}-line:hover .${PREFIX}-add, .${PREFIX}-add:focus { opacity: 1; }

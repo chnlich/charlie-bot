@@ -14,6 +14,7 @@ charliebot-registry.workspace = true
 charliebot-store.workspace = true
 futures-util.workspace = true
 minijinja.workspace = true
+nix.workspace = true
 percent-encoding.workspace = true
 rubato.workspace = true
 serde.workspace = true
@@ -29,4 +30,5 @@ unsafe-libopus.workspace = true
 charliebot-core = { workspace = true, features = ["test-support"] }
 sha2.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite.workspace = true

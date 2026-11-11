@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use charliebot_core::git::object_exists_args;
 use charliebot_core::text_repr;
 use ignore::WalkBuilder;
 use tokio::process::Command;
@@ -438,7 +439,7 @@ pub async fn resolve_base_branch(
   if is_full_sha(raw) {
     let (ok, _, err) = git_stdout(
       repo_path,
-      &["cat-file", "-e", &format!("{raw}^{{commit}}")],
+      &object_exists_args(&format!("{raw}^{{commit}}")),
       SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
       "git cat-file",
     )
@@ -1071,7 +1072,7 @@ pub async fn git_verify_commit_landed(repo_path: &Path, branch: &str, commit: &s
   }
   let commit_object = format!("{commit}^{{commit}}");
   let checks: [(&str, Vec<&str>); 2] = [
-    ("existence", vec!["cat-file", "-e", commit_object.as_str()]),
+    ("existence", object_exists_args(&commit_object).to_vec()),
     ("ancestry", vec!["merge-base", "--is-ancestor", commit, branch]),
   ];
   for (label, args) in checks {

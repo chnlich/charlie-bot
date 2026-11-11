@@ -355,11 +355,12 @@ fn stem_shape(stem: &str) -> Option<(&str, &str)> {
   (stamp_shaped && valid_run_id(run_id)).then_some((stamp, run_id))
 }
 
-/// Whether one session's `voice` directory exists, looked up relative to the open sessions directory.
+/// Whether one session holds a `voice` entry, looked up relative to the open sessions directory.
 ///
-/// The lookup walks the session's own name under the descriptor instead of the whole sessions path, which a scan
-/// would otherwise walk again for every session of the home.
-fn voice_dir_exists(sessions: &fs::File, session_id: &str) -> io::Result<bool> {
+/// The probe answers for the path, not for its kind: the scan's `read_dir` is what rejects an entry that is not a
+/// directory. The lookup walks the session's own name under the descriptor instead of the whole sessions path, which
+/// a scan would otherwise walk again for every session of the home.
+fn voice_entry_exists(sessions: &fs::File, session_id: &str) -> io::Result<bool> {
   match fstatat(sessions, &Path::new(session_id).join("voice"), AtFlags::empty()) {
     Ok(_) => Ok(true),
     Err(Errno::ENOENT) => Ok(false),
@@ -393,7 +394,7 @@ pub(crate) fn list_recordings(cfg: &CharlieBotConfig, limit: usize) -> io::Resul
     let session_id = name.to_str().ok_or_else(|| {
       io::Error::other(format!("sessions directory holds a non-UTF-8 name {}", name.to_string_lossy()))
     })?;
-    if !voice_dir_exists(&sessions_root, session_id)? {
+    if !voice_entry_exists(&sessions_root, session_id)? {
       continue;
     }
     let voice_dir = session.path().join("voice");

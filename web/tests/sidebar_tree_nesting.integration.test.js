@@ -625,10 +625,10 @@ test('openSessionRowMenu builds the item list from the button\u2019s data attrib
     return [...items].map((item) => item.label);
   };
 
-  // A root manager, unbound: all four items, each core item's onSelect wired
-  // to its old direct button's call. (Move to group opens the group selector
-  // modal, outside this harness's reach; the browser harness covers it.
-  // cron_broken_ui.test.js drives the schedule items.)
+  // A root manager, unbound: all four items; each core item's onSelect calls
+  // its action. (Move to group opens the group selector modal, outside this
+  // harness's reach; the browser harness covers it. cron_broken_ui.test.js
+  // drives the schedule items.)
   assert.deepEqual(open({currentGroup: 'Work', profile: 'manager'}, 'r1'),
     ['Rename', 'Move to group\u2026', 'Task & context', 'Add schedule\u2026']);
   items[0].onSelect(click);

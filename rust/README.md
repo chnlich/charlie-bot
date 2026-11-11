@@ -236,7 +236,7 @@ rust/
 ## Behavior notes
 
 - Transport gzip compresses a response body with gzip at level 1, and the compressed bytes and their `content-length`
-  are the gzip output. A body a memo serves on every repeat request is compressed once at level 6 and served from the
+  are the gzip output. A body a memo serves on every repeat request is compressed once at level 9 and served from the
   memo.
 - Logs use the `logline` grammar, with UTC time and a source-location column. The server adds
   `graceful_shutdown_timeout_exceeded`, `server_failed` and the startup failure events in

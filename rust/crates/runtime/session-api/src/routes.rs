@@ -83,7 +83,7 @@ impl Hash for ListingOverlay {
 ///
 /// A repeat request shares both allocations instead of copying the body. The response hands the ETag layer the same
 /// `Bytes` every time, so its tag memo answers the repeat without hashing the body again. The memo keeps the body,
-/// so its compressed form is paid once per version and takes the smaller level-6 form a kept body uses.
+/// so its compressed form is paid once per version and takes the smaller level-9 form a kept body uses.
 struct StatusBody {
   plain: Bytes,
   gzip: OnceLock<Bytes>,

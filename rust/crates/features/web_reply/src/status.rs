@@ -784,13 +784,18 @@ fn derived_payload(item: &OpenWaitingItem) -> Value {
 
 /// The session's status, waiting items of open descendants and Now items of open children, newest
 /// first. A descendant needs waiting items; a child needs a Now value. The derived items the session holds ride
-/// beside the stored ones, under `derived_waiting`.
+/// beside the stored ones, under `derived_waiting`. The session's own task state rides under `own_task_state`: the
+/// approval page lists a closed session's stored items nowhere, so a count that opens the page leaves them out.
 pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_web_session(features, session_id).await?;
   let stored = stored_status(&meta)?;
-  let tree = tree_read_reply(&features.store, {
+  let (tree, own_task_state) = tree_read_reply(&features.store, {
     let session_id = session_id.to_string();
-    move |store| read_status_tree(store, &session_id)
+    move |store| {
+      let tree = read_status_tree(store, &session_id)?;
+      let own_task_state = store.task_state(&session_id)?;
+      Ok((tree, own_task_state))
+    }
   })
   .await?;
   let mut holders = HashSet::from([session_id.to_string()]);
@@ -833,6 +838,7 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
   children.sort_by_key(|(updated_at, _)| std::cmp::Reverse(*updated_at));
   Ok(json!({
     "session_id": session_id,
+    "own_task_state": own_task_state,
     (WEB_STATUS): stored.as_ref().map(status_payload),
     "derived_waiting": derived.iter().map(derived_payload).collect::<Vec<_>>(),
     "descendants": rows.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
@@ -1385,6 +1391,21 @@ mod tests {
     let body = read_status(&home.features, &root).await.expect("the read answers");
 
     assert!(body["descendants"].as_array().unwrap().is_empty());
+  }
+
+  #[tokio::test]
+  async fn the_status_read_names_the_session_s_own_task_state() {
+    let home = Home::status_only();
+    let root = home.manager("root", None).await;
+
+    let body = read_status(&home.features, &root).await.expect("the read answers");
+    assert_eq!(body["own_task_state"], json!("open"));
+
+    // A closed task's stored items appear on the approval page nowhere, and the count that opens the page leaves
+    // them out through this field.
+    archive_task(&home.features, &root).await;
+    let body = read_status(&home.features, &root).await.expect("the read answers");
+    assert_eq!(body["own_task_state"], json!("archived"));
   }
 
   #[tokio::test]

@@ -99,7 +99,7 @@ function panelRig() {
     ['status-waiting-count', badge], ['btn-chat', chatButton],
     ['scroll-to-bottom', scrollButton], ['input-area', inputArea],
   ]);
-  const page = {web_status: null, descendants: [], children: [], derived_waiting: []};
+  const page = {own_task_state: 'open', web_status: null, descendants: [], children: [], derived_waiting: []};
   const statusGets = [];
   const {context} = baseSessionContext();
   const layout = {mode: 'desktop', callbacks: []};
@@ -122,8 +122,8 @@ function panelRig() {
       statusGets.push(url);
       const sessionId = url.slice(url.indexOf('session_id=') + 'session_id='.length);
       return {ok: true, status: 200, json: async () => ({
-        session_id: sessionId, web_status: page.web_status, descendants: page.descendants, children: page.children,
-        derived_waiting: page.derived_waiting,
+        session_id: sessionId, own_task_state: page.own_task_state, web_status: page.web_status,
+        descendants: page.descendants, children: page.children, derived_waiting: page.derived_waiting,
       })};
     }
     return {ok: true, status: 200, json: async () => []};
@@ -395,6 +395,31 @@ test('the panel counts its user-act items, own and descendant, in one line that 
     ['Child one · ' + CHILD_ID.slice(0, 8)]);
   // The badge counts what the panel shows, so the user-act item stays out of it.
   assert.equal(rig.badge.textContent, '1');
+});
+
+test('a closed own task leaves its stored user-act items out of the count and keeps the descendants\'', async () => {
+  const rig = panelRig();
+  rig.page.own_task_state = 'archived';
+  rig.page.descendants = [{
+    session_id: CHILD_ID,
+    name: 'Child one',
+    updated_at: '2026-10-16T20:30:00Z',
+    waiting: [{text: 'Log into the release console', link: null, tier: 'user-act'}],
+  }];
+  await openSession(rig, {web_status: {
+    ...STATUS,
+    waiting: [{text: 'Log into the admin console', link: null, tier: 'user-act'}],
+  }});
+  selectStatus(rig);
+  // The approval page lists a closed session's stored items nowhere, so the
+  // count covers the descendants' item alone and still opens the scope.
+  const actions = viewRow(rig.panel, 'actions-only-you-can-do');
+  assert.ok(actions, 'the descendants\' item keeps the line showing');
+  assert.ok(allElements(actions).find((el) => el.textContent === '1 action only you can do today'));
+  const link = allElements(actions).filter((el) => el.tagName === 'A');
+  assert.deepEqual(link.map((el) => el.href),
+    ['/approval?date=' + new Intl.DateTimeFormat('en-CA', {timeZone: 'America/Los_Angeles'}).format(new Date()) +
+      '&session=session-a']);
 });
 
 test('a derived user-act item the server holds counts in the actions-only-you-can-do line and stays out of the item rows', async () => {

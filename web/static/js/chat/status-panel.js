@@ -27,6 +27,11 @@
   // panelSessionId means the page shows none of the surfaces.
   let panelSessionId = null;
   let panelStatus = null;
+  // The panel session's task is open. The approval page lists a closed
+  // session's stored items nowhere, so the actions line counts them no more.
+  // True until the status read says otherwise, so an open session, the usual
+  // case, draws no wrong first frame.
+  let panelOwnOpen = true;
   let panelDescendants = [];
   let panelChildren = [];
   let panelDerived = [];
@@ -220,10 +225,11 @@
     return item.tier === 'user-act';
   }
 
-  // The panel's user-act items: this session's own, every open descendant's, and the derived ones the server holds for
-  // this session's tree. The server's descendant rows hold only open descendants.
+  // The panel's user-act items: this session's own while its task is open, every open descendant's, and the derived
+  // ones the server holds for this session's tree. The server's descendant rows hold only open descendants, and the
+  // approval page lists a closed session's own stored items nowhere, so a closed session's own items stay out.
   function userActItems() {
-    const own = panelStatus ? panelStatus.waiting.filter(isUserAct) : [];
+    const own = panelOwnOpen && panelStatus ? panelStatus.waiting.filter(isUserAct) : [];
     const descendant = panelDescendants.flatMap((child) => child.waiting.filter(isUserAct));
     return own.concat(descendant, panelDerived.filter(isUserAct));
   }
@@ -392,6 +398,7 @@
     if (body.web_status && (!panelStatus || Date.parse(body.web_status.updated_at) >= Date.parse(panelStatus.updated_at))) {
       panelStatus = body.web_status;
     }
+    panelOwnOpen = body.own_task_state === 'open';
     panelDescendants = body.descendants;
     panelChildren = body.children;
     panelDerived = body.derived_waiting;
@@ -409,6 +416,7 @@
     }
     panelSessionId = session.id;
     panelStatus = session.web_status || null;
+    panelOwnOpen = true;
     panelDescendants = [];
     panelChildren = [];
     panelDerived = [];
@@ -420,6 +428,7 @@
   function clearSessionStatusPanel() {
     panelSessionId = null;
     panelStatus = null;
+    panelOwnOpen = true;
     panelDescendants = [];
     panelChildren = [];
     panelDerived = [];

@@ -188,11 +188,27 @@ mod tests {
   }
 
   fn move_under(parent: Option<&SessionMetadata>) -> PatchTask {
-    PatchTask { task_parent_id: Some(parent.map(|meta| meta.id.clone())), ..Default::default() }
+    PatchTask {
+      name: None,
+      task_parent_id: Some(parent.map(|meta| meta.id.clone())),
+      profile: None,
+      task: None,
+      subtree_prompt: None,
+      node_prompt: None,
+      approver: None,
+    }
   }
 
   async fn set_subtree_rule(store: &Store, task: &SessionMetadata, body: &str) -> String {
-    let edit = PatchTask { subtree_prompt: Some(Some(body.to_string())), ..Default::default() };
+    let edit = PatchTask {
+      name: None,
+      task_parent_id: None,
+      profile: None,
+      task: None,
+      subtree_prompt: Some(Some(body.to_string())),
+      node_prompt: None,
+      approver: None,
+    };
     store.patch_task(&task.id, edit, TaskCaller::Operator, &NoGuards).await.unwrap().subtree_prompt_ref.unwrap()
   }
 
@@ -272,7 +288,15 @@ mod tests {
       assert_eq!(moved_state(&store, &task.id), before);
     }
 
-    let ghost = PatchTask { task_parent_id: Some(Some("ghost".to_string())), ..Default::default() };
+    let ghost = PatchTask {
+      name: None,
+      task_parent_id: Some(Some("ghost".to_string())),
+      profile: None,
+      task: None,
+      subtree_prompt: None,
+      node_prompt: None,
+      approver: None,
+    };
     let error = store.patch_task(&tree.g.id, ghost, agent(&tree.caller), &NoGuards).await.unwrap_err();
     assert_eq!(error.status_code(), Some(404));
   }
@@ -363,16 +387,60 @@ mod tests {
     let parent = Some(Some(tree.b.id.clone()));
 
     let bodies = [
-      PatchTask { task_parent_id: parent.clone(), name: Some("renamed".to_string()), ..Default::default() },
-      PatchTask { task_parent_id: parent.clone(), profile: Some(Some(TaskProfile::Manager)), ..Default::default() },
-      PatchTask { task_parent_id: parent.clone(), task: Some(Some(TaskSpec::default())), ..Default::default() },
       PatchTask {
+        name: Some("renamed".to_string()),
         task_parent_id: parent.clone(),
-        subtree_prompt: Some(Some("rule\n".to_string())),
-        ..Default::default()
+        profile: None,
+        task: None,
+        subtree_prompt: None,
+        node_prompt: None,
+        approver: None,
       },
-      PatchTask { task_parent_id: parent.clone(), node_prompt: Some(None), ..Default::default() },
-      PatchTask { name: Some("renamed".to_string()), ..Default::default() },
+      PatchTask {
+        name: None,
+        task_parent_id: parent.clone(),
+        profile: Some(Some(TaskProfile::Manager)),
+        task: None,
+        subtree_prompt: None,
+        node_prompt: None,
+        approver: None,
+      },
+      PatchTask {
+        name: None,
+        task_parent_id: parent.clone(),
+        profile: None,
+        task: Some(Some(TaskSpec::default())),
+        subtree_prompt: None,
+        node_prompt: None,
+        approver: None,
+      },
+      PatchTask {
+        name: None,
+        task_parent_id: parent.clone(),
+        profile: None,
+        task: None,
+        subtree_prompt: Some(Some("rule\n".to_string())),
+        node_prompt: None,
+        approver: None,
+      },
+      PatchTask {
+        name: None,
+        task_parent_id: parent.clone(),
+        profile: None,
+        task: None,
+        subtree_prompt: None,
+        node_prompt: Some(None),
+        approver: None,
+      },
+      PatchTask {
+        name: Some("renamed".to_string()),
+        task_parent_id: None,
+        profile: None,
+        task: None,
+        subtree_prompt: None,
+        node_prompt: None,
+        approver: None,
+      },
     ];
     for patch in bodies {
       let error = store.patch_task(&tree.g.id, patch, agent(&tree.caller), &NoGuards).await.unwrap_err();

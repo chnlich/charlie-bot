@@ -304,7 +304,7 @@ fn exit_code(status: ExitStatus) -> i32 {
 /// One setting's value from a unit file: the last assignment wins, as it does in systemd.
 fn unit_setting<'a>(text: &'a str, key: &str) -> Option<&'a str> {
   let prefix = format!("{key}=");
-  text.lines().filter_map(|line| line.strip_prefix(prefix.as_str())).last()
+  text.lines().filter_map(|line| line.strip_prefix(prefix.as_str())).next_back()
 }
 
 /// A percentage of host memory in bytes, computed the way systemd rounds it: down to a whole 4096-byte page, where a

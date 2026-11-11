@@ -8,6 +8,7 @@ use std::fs;
 use std::path::Path;
 
 use charliebot_core::event_types;
+use charliebot_core::json_loads::hex4;
 use memchr::memmem;
 
 use crate::layout;
@@ -139,14 +140,6 @@ fn type_value(rest: &[u8], value: &mut [u8; MAX_EVENT_TYPE_LEN]) -> Option<usize
     index += 1;
   }
   None
-}
-
-/// The value of four hex digits, or `None` when one of them is not a hex digit.
-fn hex4(digits: &[u8]) -> Option<u32> {
-  digits.iter().try_fold(0, |value, digit| {
-    let digit = (*digit as char).to_digit(16)?;
-    Some(value * 16 + digit)
-  })
 }
 
 /// The bytes before the first byte that is not JSON structural whitespace.

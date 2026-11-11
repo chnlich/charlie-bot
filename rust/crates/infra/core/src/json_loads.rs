@@ -170,9 +170,11 @@ fn format_error(message: &str, text: &[u32], pos: usize) -> String {
   format!("{message}: line {line} column {column} (char {pos})")
 }
 
-fn hex4(digits: &[u32]) -> Option<u32> {
+/// The value of a `\uXXXX` escape's hex digits, folded most significant first, or `None` when one is not a hex digit.
+/// A scanner holding bytes and one holding code points read the same digits here.
+pub fn hex4<T: Copy + Into<u32>>(digits: &[T]) -> Option<u32> {
   digits.iter().try_fold(0u32, |code, &digit| {
-    let value = char::from_u32(digit)?.to_digit(16)?;
+    let value = char::from_u32(digit.into())?.to_digit(16)?;
     Some((code << 4) | value)
   })
 }
@@ -623,6 +625,15 @@ mod tests {
     assert_eq!(message(b"\"\\u12\""), "Invalid \\uXXXX escape: line 1 column 3 (char 2)");
     assert_eq!(message(b"\"\\u0041"), "Unterminated string starting at: line 1 column 1 (char 0)");
     assert_eq!(message(b"[1,\n2,\n]"), "Illegal trailing comma before end of array: line 2 column 2 (char 5)");
+  }
+
+  #[test]
+  fn a_hex_escape_reads_both_digit_cases_from_bytes_and_code_points() {
+    assert_eq!(hex4(b"0041"), Some(0x41));
+    assert_eq!(hex4(b"00ff"), Some(0xff));
+    assert_eq!(hex4(b"00fg"), None);
+    let code_points: [u32; 4] = [0x30, 0x30, 0x34, 0x31];
+    assert_eq!(hex4(&code_points), Some(0x41));
   }
 
   #[test]

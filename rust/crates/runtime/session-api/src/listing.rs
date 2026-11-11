@@ -1051,7 +1051,7 @@ const KEPT_FALSY_FIELDS: [&str; 2] = ["name", SCHEDULE_ENABLED];
 /// 7,160-session mock home a row keeps 10 of its 49 fields. The client reads a missing field as undefined, which
 /// every falsy test (a condition, `||`, `!!`, `|| 0`) treats like null, false or zero, so an omitted field changes no
 /// decision it takes. The sidebar text falls from 9.2 MB to 2.0 MB, and the page body from 695 KB to 577 KB
-/// compressed at gzip level 6.
+/// compressed.
 fn drop_falsy_fields(value: &mut Value) {
   let object = value.as_object_mut().expect("a session metadata value is an object");
   object.retain(|field, value| KEPT_FALSY_FIELDS.contains(&field.as_str()) || !is_falsy(value));

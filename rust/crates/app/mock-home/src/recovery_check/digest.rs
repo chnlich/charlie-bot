@@ -11,6 +11,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
+use charliebot_core::event_types::{SERVER_READY_EVENT, STARTUP_SEGMENT_EVENT};
 use charliebot_core::home::{
   BOOT_RECOVERY_FILE_NAME, BOOT_SKIP_PROOF_FILE_NAME, BOOT_TRIGGER_INDEX_FILE_NAME, state_rel_path,
 };
@@ -38,7 +39,7 @@ static LINE: LazyLock<Regex> =
 static FIELD: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(r#"(\w+)=('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|\S+)"#).expect("log field regex"));
 /// Lines that carry only timing, or that each build words differently by design.
-const DROP_EVENTS: [&str; 3] = ["startup_segment", "task_tree_recovery_phases", "server_ready"];
+const DROP_EVENTS: [&str; 3] = [STARTUP_SEGMENT_EVENT, "task_tree_recovery_phases", SERVER_READY_EVENT];
 /// The startup-only files that are line-oriented rather than one JSON document: the boot's skip proof (a header line,
 /// then one row per skipped node; `charliebot_tasks::skip_proof` owns its form), the boot's trigger index (a header
 /// line, then one row per trigger file a boot proved not pending; `charliebot_triggers::trigger_index` owns its form)

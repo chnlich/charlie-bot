@@ -44,7 +44,7 @@ use charliebot_agents::local_work_guard;
 use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_core::fence::{self, FenceError};
 use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
-use charliebot_core::{config, home, logging, paths};
+use charliebot_core::{config, event_types, home, logging, paths};
 use charliebot_registry::lifespan::{CloseTimings, Lifespan, StartupOutcome, StepTiming};
 use charliebot_registry::startup_timing::StartupClock;
 use charliebot_registry::templating::Templating;
@@ -325,8 +325,10 @@ async fn run(repo_root: RepoRoot, agent_base: AgentBaseEnvironment) -> ExitCode 
   let storage_reads = charliebot_core::proc_identity::read_self_storage_reads();
   let ready_in_ms = clock.segment("ready");
   match storage_reads {
-    Some((read_bytes, read_ops)) => tracing::info!(ready_in_ms, read_bytes, read_ops, "server_ready"),
-    None => tracing::info!(ready_in_ms, "server_ready"),
+    Some((read_bytes, read_ops)) => {
+      tracing::info!(ready_in_ms, read_bytes, read_ops, "{}", event_types::SERVER_READY_EVENT)
+    }
+    None => tracing::info!(ready_in_ms, "{}", event_types::SERVER_READY_EVENT),
   }
 
   let listener = match bind(&cfg.server.host, cfg.server.port).await {

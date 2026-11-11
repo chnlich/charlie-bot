@@ -224,6 +224,8 @@ mod tests {
   use super::*;
 
   const LINK: &str = "https://device.sso.us-east-1.amazonaws.com/?user_code=7f3c9d21";
+  /// The link a pty login's fake command prints, once its user code is appended.
+  const ROUTER_LINK: &str = "https://example.invalid/activate?user_code=ABCD-EFGH";
 
   fn repo_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("the crate lies under the repo")
@@ -237,23 +239,38 @@ mod tests {
     path.to_str().expect("the temp path is UTF-8").to_string()
   }
 
-  /// A home whose `host_auth:` section names two logins: one whose command prints the approval link and one whose
-  /// command fails after a line of output. The names carry the test's prefix, so parallel tests share no record.
+  /// A home whose `host_auth:` section names three logins: one whose command prints the approval link, one whose
+  /// command fails after a line of output, and one renewing `host1` under a pseudo-terminal. The names carry the
+  /// test's prefix, so parallel tests share no record.
   struct Home {
     _dir: TempDir,
     router: Router,
+    features: Arc<FeatureContext>,
     ok_name: String,
     failing_name: String,
+    router_name: String,
   }
 
   fn home(prefix: &str, templating: bool) -> Home {
     let dir = tempfile::tempdir().expect("temporary directory exists");
     let ok_name = format!("{prefix}-aws-sso");
     let failing_name = format!("{prefix}-failing-sso");
+    let router_name = format!("{prefix}-router-host1");
     let login = write_script(dir.path(), &format!("{prefix}-login"), &format!("printf '%s\\n' '{LINK}'\n"));
     let failing = write_script(dir.path(), &format!("{prefix}-failing"), "echo starting; exit 3\n");
     let readback = write_script(dir.path(), &format!("{prefix}-readback"), "echo valid\n");
     let failing_readback = write_script(dir.path(), &format!("{prefix}-failing-readback"), "echo failed\nexit 1\n");
+    // The login router's flow: a link with no code, the code on its own line, then an Enter prompt with no newline.
+    // The script ends approved only when the newline it reads from its terminal is the one the driver wrote.
+    let router_login = write_script(
+      dir.path(),
+      &format!("{prefix}-router-login"),
+      r#"printf 'Open: https://example.invalid/activate\n'
+printf 'Code: ABCD-EFGH\n'
+printf 'Press Enter after approval: '
+if read -r answer < /dev/tty; then :; else exit 7; fi
+"#,
+    );
     let config = format!(
       "\
 host_auth:
@@ -268,6 +285,15 @@ host_auth:
       login_command: [{failing}]
       approval_url_pattern: 'https://device\\.sso\\S*'
       readback_command: [{failing_readback}]
+    - name: {router_name}
+      label: host1 login router
+      host: host1
+      login_command: [{router_login}]
+      approval_url_pattern: 'https://example\\.invalid/activate\\S*'
+      readback_command: [{readback}]
+      use_pty: true
+      enter_after_pattern: 'Press Enter after approval'
+      user_code_pattern: 'Code:\\s*(\\S+)'
 "
     );
     fs::write(dir.path().join(CONFIG_FILENAME), config).expect("the config writes");
@@ -304,7 +330,7 @@ host_auth:
         .expect("the templating inserts once");
     }
     let router = routes(&features);
-    Home { _dir: dir, router, ok_name, failing_name }
+    Home { _dir: dir, router, features, ok_name, failing_name, router_name }
   }
 
   /// One route call: its status, headers and body text.
@@ -383,6 +409,79 @@ host_auth:
     assert!(pos_failing < pos_ok, "failed login card comes first");
     let start_path = format!("/api/host-auth/logins/{}/start", home.ok_name);
     assert!(body.contains(&start_path), "each row's form posts to its login's start route");
+  }
+
+  /// The outcome the login's attempt ended with, once it ends.
+  async fn ended_outcome(name: &str) -> browser_login::Outcome {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+      if let Some(snapshot) = browser_login::last_attempt(name) {
+        return snapshot.outcome.expect("a recorded attempt holds its outcome");
+      }
+      assert!(tokio::time::Instant::now() < deadline, "the attempt did not end in time");
+      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+  }
+
+  /// The rendered `/host-auth` page for the given `(alias, status)` rows.
+  async fn page_body(home: &Home, rows: &[(&str, &str)]) -> String {
+    let mut state = host_auth::empty_state();
+    let hosts = rows
+      .iter()
+      .map(|(alias, status)| {
+        json!({
+          "alias": alias,
+          "hostname": format!("{alias}.example.internal"),
+          "status": status,
+          "detail": "",
+          "last_probe_at": "2026-09-15T07:30:00+00:00",
+          "last_change_at": null,
+          "last_ok_at": null,
+          "enrolled_observed_at": null,
+        })
+      })
+      .collect();
+    state.insert("hosts".to_string(), Value::Array(hosts));
+    let request = Request::builder().uri("/host-auth").body(()).expect("the request builds").into_parts().0;
+    let response = page::render(&home.features, &state, timestamps::utc_now(), &request).expect("the page renders");
+    let body = to_bytes(response.into_body(), usize::MAX).await.expect("the body reads");
+    String::from_utf8_lossy(&body).into_owned()
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_pty_login_answers_the_enter_prompt_and_the_start_route_redirects_to_the_code_link() {
+    let home = home("pty", false);
+    let path = format!("/api/host-auth/logins/{}/start", home.router_name);
+    let (status, headers, body) = call(home.router, Method::POST, &path).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(
+      headers.get(header::LOCATION),
+      Some(&header::HeaderValue::from_str(ROUTER_LINK).expect("the link is header-safe"))
+    );
+    assert_eq!(body, "", "the redirect carries an empty body");
+    assert_eq!(ended_outcome(&home.router_name).await, browser_login::Outcome::Approved);
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn the_page_offers_the_renewal_login_to_a_router_rejected_row_and_names_a_missing_one() {
+    let home = home("page-rows", true);
+    let form = format!("action=\"/api/host-auth/logins/{}/start\"", home.router_name);
+
+    let mapped = page_body(&home, &[("host1", "router-rejected")]).await;
+    assert!(mapped.contains(&form), "a router-rejected row with a mapped login offers its start route");
+    assert!(mapped.contains("Needs renewal"), "the state is labelled as needing renewal");
+    assert!(!mapped.contains("No renewal login is configured"));
+
+    let unmapped = page_body(&home, &[("host2", "router-rejected")]).await;
+    assert!(unmapped.contains("No renewal login is configured for this host"));
+    assert!(!unmapped.contains(&form), "a row with no mapped login shows no start form");
+
+    let unreachable = page_body(&home, &[("host2", "unreachable")]).await;
+    assert!(!unreachable.contains(&form), "an unreachable row takes no renewal login");
+    assert!(!unreachable.contains("No renewal login is configured"));
+    assert!(unreachable.contains("Nothing to renew"), "an unreachable row keeps its current next step");
   }
 
   #[tokio::test]

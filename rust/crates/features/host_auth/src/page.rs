@@ -1,5 +1,7 @@
 //! The standing page: the template context built from the state and rendered through the shared template handle.
 
+use std::collections::HashMap;
+
 use anyhow::Context;
 use axum::response::Response;
 use charliebot_core::text_repr;
@@ -9,8 +11,11 @@ use http::request::Parts;
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 
+use crate::config::{BrowserLoginConfig, HostAuthConfig};
 use crate::host_auth::{self, BLOCKED_BACKOFF_SEC, PROBE_INTERVAL_SEC, State, TRUST_CACHE_TTL_SEC};
-use crate::probe::{STATUS_NEEDS_INTERACTIVE_AUTH, STATUS_NEEDS_OKTA, STATUS_OK, STATUS_UNREACHABLE};
+use crate::probe::{
+  STATUS_NEEDS_INTERACTIVE_AUTH, STATUS_NEEDS_OKTA, STATUS_OK, STATUS_ROUTER_REJECTED, STATUS_UNREACHABLE,
+};
 use crate::timestamps::{self, LocalFormat};
 
 const TEMPLATE: &str = "host_auth.html";
@@ -24,7 +29,9 @@ pub fn render(
   now: OffsetDateTime,
   request: &Parts,
 ) -> Result<Response, (String, String)> {
-  let mut context = context(state, now).map_err(|error| ("Exception".to_string(), error.to_string()))?;
+  let cfg = features.config.get().map_err(|error| ("RuntimeError".to_string(), error.to_string()))?;
+  let logins = &cfg.section::<HostAuthConfig>("host_auth").browser_logins;
+  let mut context = context(state, now, logins).map_err(|error| ("Exception".to_string(), error.to_string()))?;
   let templating =
     features.startup.require::<Templating>().map_err(|error| ("RuntimeError".to_string(), error.to_string()))?;
   // The concurrency badge's script is the page's only static asset, so it carries the version that busts its cache.
@@ -38,10 +45,13 @@ pub fn render(
 }
 
 /// The template context of `host_auth_page`.
-fn context(state: &State, now: OffsetDateTime) -> anyhow::Result<Value> {
+fn context(state: &State, now: OffsetDateTime, logins: &[BrowserLoginConfig]) -> anyhow::Result<Value> {
+  // Config validation refuses two logins naming one host, so this map holds one renewal per row.
+  let renewals: HashMap<&str, &str> =
+    logins.iter().filter_map(|login| login.host.as_deref().map(|host| (host, login.name.as_str()))).collect();
   let rows = host_auth::host_entries(state)?
     .into_iter()
-    .map(|entry| page_row(entry, now))
+    .map(|entry| page_row(entry, now, &renewals))
     .collect::<anyhow::Result<Vec<_>>>()?;
   let summary = summary(state, now)?;
   let last_probe = timestamps::local_timestamp(host_auth::opt_str(state, "probed_at")?, LocalFormat::DateZone)?;
@@ -58,7 +68,7 @@ fn context(state: &State, now: OffsetDateTime) -> anyhow::Result<Value> {
 
 /// One row for one state entry, with the deadline column's mode resolved. The column counts only for a
 /// host that answers and carries a baseline; a passed deadline stops counting and keeps its baseline.
-fn page_row(entry: &Map<String, Value>, now: OffsetDateTime) -> anyhow::Result<Value> {
+fn page_row(entry: &Map<String, Value>, now: OffsetDateTime, renewals: &HashMap<&str, &str>) -> anyhow::Result<Value> {
   let alias = entry.get("alias").and_then(Value::as_str).context("a host entry has no string alias")?;
   let status = entry.get("status").and_then(Value::as_str).with_context(|| format!("host {alias} has no status"))?;
   let (status_label, status_class) = status_presentation(status)?;
@@ -76,6 +86,7 @@ fn page_row(entry: &Map<String, Value>, now: OffsetDateTime) -> anyhow::Result<V
     "status_class": status_class,
     "detail_lines": detail.split('\n').collect::<Vec<_>>(),
     "renew_cmd": format!("ssh {alias} true"),
+    "renew_login": if status == STATUS_ROUTER_REJECTED { renewals.get(alias).copied() } else { None },
     "has_url": detail.contains("http"),
     "baseline": baseline_text,
     "last_probe": last_probe,
@@ -111,6 +122,7 @@ fn status_presentation(status: &str) -> anyhow::Result<(&'static str, &'static s
     STATUS_OK => Ok(("Direct", "ok")),
     STATUS_NEEDS_OKTA => Ok(("Needs Okta", "okta")),
     STATUS_NEEDS_INTERACTIVE_AUTH => Ok(("Needs interactive auth", "iact")),
+    STATUS_ROUTER_REJECTED => Ok(("Needs renewal", "iact")),
     STATUS_UNREACHABLE => Ok(("Unreachable", "down")),
     other => anyhow::bail!("no status label for {other:?}"),
   }
@@ -209,7 +221,7 @@ mod tests {
     let rows = host_auth::host_entries(&state)
       .expect("the hosts read")
       .into_iter()
-      .map(|entry| page_row(entry, now).expect("the row builds"))
+      .map(|entry| page_row(entry, now, &HashMap::new()).expect("the row builds"))
       .collect::<Vec<_>>();
     let kinds: Vec<&str> = rows.iter().map(|row| row["deadline_kind"].as_str().expect("a kind")).collect();
     assert_eq!(kinds, ["counting", "expired", "no_baseline", "pending_okta"]);
@@ -236,9 +248,35 @@ mod tests {
     let state =
       state_with(json!([host("login-held", STATUS_NEEDS_OKTA, json!({"detail": "Okta verification required"}))]));
     let now = timestamps::parse("2026-09-15T08:00:00+00:00").expect("the stamp parses");
-    let page = context(&state, now).expect("the context builds");
+    let page = context(&state, now, &[]).expect("the context builds");
     assert_eq!(page["hosts"][0]["alias"], json!("login-held"));
     assert_eq!(page["hosts"][0]["detail_lines"], json!(["Okta verification required"]));
     assert_eq!(page["hosts"][0]["deadline_kind"], json!("pending_okta"));
+  }
+
+  #[test]
+  fn a_router_rejected_row_names_the_login_that_renews_it() {
+    let now = timestamps::parse("2026-09-15T08:00:00+00:00").expect("the stamp parses");
+    let state = state_with(json!([
+      host("host1", STATUS_ROUTER_REJECTED, json!({})),
+      host("host2", STATUS_ROUTER_REJECTED, json!({})),
+      host("host3", STATUS_UNREACHABLE, json!({})),
+    ]));
+    let login = BrowserLoginConfig {
+      name: "router-host1".to_string(),
+      label: "host1 login router".to_string(),
+      host: Some("host1".to_string()),
+      login_command: vec!["/usr/bin/ssh".to_string()],
+      approval_url_pattern: r"https://\S*".to_string(),
+      readback_command: vec!["/usr/bin/true".to_string()],
+      use_pty: true,
+      enter_after_pattern: None,
+      user_code_pattern: None,
+    };
+    let page = context(&state, now, &[login]).expect("the context builds");
+    assert_eq!(page["hosts"][0]["status_label"], json!("Needs renewal"));
+    assert_eq!(page["hosts"][0]["renew_login"], json!("router-host1"));
+    assert_eq!(page["hosts"][1]["renew_login"], Value::Null, "a router-rejected row without a login names none");
+    assert_eq!(page["hosts"][2]["renew_login"], Value::Null, "another state takes no renewal login");
   }
 }

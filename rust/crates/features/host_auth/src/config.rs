@@ -18,12 +18,26 @@ pub struct BrowserLoginConfig {
   pub name: String,
   /// The text the page shows for this login.
   pub label: String,
-  /// The login command as argv. It runs without a shell and reads stdin from /dev/null.
+  /// The `/host-auth` row this login renews, named by its ssh alias. At most one login renews one row.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub host: Option<String>,
+  /// The login command as argv. It runs without a shell.
   pub login_command: Vec<String>,
-  /// A regex. Its first match in the login output is the approval link, kept exactly as matched.
+  /// A regex. Its first match in the login output is the approval link, kept as matched and then given the user code.
   pub approval_url_pattern: String,
   /// The argv of a check that exits 0 while the login is valid. Its output shows on the page.
   pub readback_command: Vec<String>,
+  /// Run `login_command` under a pseudo-terminal in a new session, so ssh reads keyboard-interactive answers from
+  /// `/dev/tty` on that terminal rather than on the server's own terminal.
+  #[serde(default)]
+  pub use_pty: bool,
+  /// A regex. Its first match in the login output writes one newline to the terminal. Requires `use_pty`.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub enter_after_pattern: Option<String>,
+  /// A regex whose first capture group is the user code. The code is appended to the approval link as the
+  /// `user_code` query parameter, which the login card shows.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub user_code_pattern: Option<String>,
 }
 
 /// The `host_auth:` section: the host-auth panel's browser logins and Slack DM notification settings.
@@ -72,6 +86,7 @@ fn validate(settings: &HostAuthConfig) -> Result<(), String> {
   }
   let name_pattern = Regex::new(NAME_PATTERN).expect("the built-in name pattern compiles");
   let mut seen = HashSet::new();
+  let mut renewed_hosts = HashSet::new();
   for (index, login) in settings.browser_logins.iter().enumerate() {
     if !name_pattern.is_match(&login.name) {
       return Err(format!("browser_logins[{index}].name: must match {NAME_PATTERN}"));
@@ -88,6 +103,37 @@ fn validate(settings: &HostAuthConfig) -> Result<(), String> {
     if !seen.insert(login.name.as_str()) {
       return Err(format!("browser_logins[{index}].name: name '{}' is used by more than one login", login.name));
     }
+    if let Some(host) = &login.host {
+      if host.trim().is_empty() {
+        return Err(format!("browser_logins[{index}].host: must name an ssh alias"));
+      }
+      if !renewed_hosts.insert(host.as_str()) {
+        return Err(format!("browser_logins[{index}].host: host '{host}' is renewed by more than one login"));
+      }
+    }
+    if let Some(pattern) = &login.enter_after_pattern {
+      if !login.use_pty {
+        return Err(format!(
+          "browser_logins[{index}].enter_after_pattern: needs use_pty, because a pipe has no terminal to write to"
+        ));
+      }
+      if let Err(error) = Regex::new(pattern) {
+        return Err(format!("browser_logins[{index}].enter_after_pattern: is not a valid regular expression: {error}"));
+      }
+    }
+    if let Some(pattern) = &login.user_code_pattern {
+      match Regex::new(pattern) {
+        Err(error) => {
+          return Err(format!("browser_logins[{index}].user_code_pattern: is not a valid regular expression: {error}"));
+        }
+        Ok(user_code_pattern) if user_code_pattern.captures_len() < 2 => {
+          return Err(format!(
+            "browser_logins[{index}].user_code_pattern: needs a capture group that holds the user code"
+          ));
+        }
+        Ok(_) => {}
+      }
+    }
   }
   Ok(())
 }
@@ -100,9 +146,13 @@ mod tests {
     BrowserLoginConfig {
       name: name.to_string(),
       label: "AWS SSO".to_string(),
+      host: None,
       login_command: vec!["/usr/bin/aws".to_string(), "sso".to_string()],
       approval_url_pattern: pattern.to_string(),
       readback_command: vec!["/usr/bin/true".to_string()],
+      use_pty: false,
+      enter_after_pattern: None,
+      user_code_pattern: None,
     }
   }
 
@@ -157,6 +207,95 @@ browser_logins:
       validate(&HostAuthConfig { browser_logins: vec![empty], ..Default::default() }).is_err(),
       "a login needs a command"
     );
+  }
+
+  #[test]
+  fn the_new_fields_default_to_the_existing_behavior() {
+    let raw = serde_yaml::from_str::<serde_yaml::Value>(
+      "\
+browser_logins:
+  - name: sso-login
+    label: Existing login entry
+    login_command: [/usr/bin/python3, /opt/login.py]
+    approval_url_pattern: 'https://example\\.invalid/login'
+    readback_command: [/usr/bin/python3, /opt/readback.py]
+",
+    )
+    .expect("the section parses");
+    let settings: HostAuthConfig = serde_yaml::from_value(raw).expect("the settings deserialize");
+    validate(&settings).expect("an entry without the new fields validates");
+    let login = &settings.browser_logins[0];
+    assert_eq!(login.host, None);
+    assert!(!login.use_pty, "a login without use_pty keeps the pipe the existing entries use");
+    assert_eq!(login.enter_after_pattern, None);
+    assert_eq!(login.user_code_pattern, None);
+  }
+
+  #[test]
+  fn a_host_is_renewed_by_at_most_one_login() {
+    let mut first = login("router-host1", "https://\\S*");
+    first.host = Some("host1".to_string());
+    let mut second = login("router-host1-again", "https://\\S*");
+    second.host = Some("host1".to_string());
+    assert_eq!(
+      validate(&HostAuthConfig { browser_logins: vec![first, second], ..Default::default() })
+        .expect_err("two logins name one host"),
+      "browser_logins[1].host: host 'host1' is renewed by more than one login"
+    );
+
+    let mut blank = login("router-host1", "https://\\S*");
+    blank.host = Some("  ".to_string());
+    assert!(
+      validate(&HostAuthConfig { browser_logins: vec![blank], ..Default::default() })
+        .expect_err("a blank host is refused")
+        .contains("must name an ssh alias")
+    );
+  }
+
+  #[test]
+  fn an_enter_pattern_needs_a_terminal_and_every_new_pattern_compiles() {
+    let mut no_pty = login("router-host1", "https://\\S*");
+    no_pty.enter_after_pattern = Some("Press Enter after approval".to_string());
+    assert_eq!(
+      validate(&HostAuthConfig { browser_logins: vec![no_pty], ..Default::default() })
+        .expect_err("an enter pattern needs use_pty"),
+      "browser_logins[0].enter_after_pattern: needs use_pty, because a pipe has no terminal to write to"
+    );
+
+    let mut bad_enter = login("router-host1", "https://\\S*");
+    bad_enter.use_pty = true;
+    bad_enter.enter_after_pattern = Some("Press Enter [".to_string());
+    assert!(
+      validate(&HostAuthConfig { browser_logins: vec![bad_enter], ..Default::default() })
+        .expect_err("the enter pattern must compile")
+        .contains("enter_after_pattern: is not a valid regular expression")
+    );
+
+    let mut bad_code = login("router-host1", "https://\\S*");
+    bad_code.user_code_pattern = Some("Code: (".to_string());
+    assert!(
+      validate(&HostAuthConfig { browser_logins: vec![bad_code], ..Default::default() })
+        .expect_err("the user-code pattern must compile")
+        .contains("user_code_pattern: is not a valid regular expression")
+    );
+  }
+
+  #[test]
+  fn a_user_code_pattern_needs_a_capture_group() {
+    let mut no_group = login("router-host1", "https://\\S*");
+    no_group.user_code_pattern = Some("Code:\\s*\\S+".to_string());
+    assert!(
+      validate(&HostAuthConfig { browser_logins: vec![no_group], ..Default::default() })
+        .expect_err("a pattern without a capture group holds no user code")
+        .contains("needs a capture group")
+    );
+
+    let mut pty_login = login("router-host1", "https://\\S*");
+    pty_login.use_pty = true;
+    pty_login.user_code_pattern = Some("Code:\\s*(\\S+)".to_string());
+    pty_login.enter_after_pattern = Some("Press Enter after approval".to_string());
+    validate(&HostAuthConfig { browser_logins: vec![pty_login], ..Default::default() })
+      .expect("a pty login with both patterns validates");
   }
 
   #[test]

@@ -52,6 +52,7 @@
     padding:1px 6px; background:var(--warn-tint); color:var(--warn-soft); border:1px solid var(--warn-line) }
   .det { font-family:var(--mono); font-size:11.5px; color:var(--mut); word-break:break-all }
   .next { margin-top:5px; font-size:12.5px; color:var(--tx) }
+  .next form { margin:8px 0 0 }
   .cap { color:var(--mut); font-size:12.5px; max-width:86ch; margin:12px 0 0 }
   /* The Browser logins sentence leads into the summary panel, so it keeps the page's 16 px block
      gap below it. The other .cap paragraphs caption the block above them and take a top margin only. */
@@ -140,6 +141,17 @@
             {% elif h.status == "needs-interactive-auth" %}
             {% if h.has_url %}Open that link, approve, then press <b>Probe now</b>.{% else %}Approve the check this
             host asks for, then press <b>Probe now</b>.{% endif %}
+            {% elif h.status == "router-rejected" %}
+            {% if h.renew_login %}
+            This host's key was rejected by its login router. Starting the renewal login opens its approval page in
+            a new tab; approve there, then press <b>Probe now</b>.
+            <form method="post" action="/api/host-auth/logins/{{ h.renew_login }}/start" target="_blank">
+              <button class="btn" type="submit">Renew</button>
+            </form>
+            {% else %}
+            This host's key was rejected by its login router. No renewal login is configured for this host in
+            <code>host_auth.browser_logins</code>.
+            {% endif %}
             {% else %}
             Nothing to renew: the host answered nothing, so its authorization state is unknown.
             {% endif %}
@@ -161,6 +173,7 @@
     <span class="k"><i class="dot" style="background:var(--ok)"></i>Direct: ssh answered, exit 0</span>
     <span class="k"><i class="dot" style="background:var(--bad)"></i>Needs Okta: renew the public key enrollment</span>
     <span class="k"><i class="dot" style="background:var(--warn)"></i>Needs interactive auth: a human check in a browser or terminal</span>
+    <span class="k"><i class="dot" style="background:var(--warn)"></i>Needs renewal: the login router rejected this host's key</span>
     <span class="k"><i class="dot" style="background:var(--off)"></i>Unreachable: no usable answer</span>
   </div>
   {% else %}

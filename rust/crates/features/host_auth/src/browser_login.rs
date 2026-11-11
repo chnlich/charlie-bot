@@ -10,17 +10,25 @@
 //!
 //! Only [`start_login`] starts a login command. The page runs readback commands alone. Records live in memory, in
 //! the two module maps: one live attempt per login name, and the last attempt that ended for it.
+//!
+//! A login with `use_pty` runs its command under a pseudo-terminal in a new session, so a keyboard-interactive
+//! prompt reaches that terminal rather than the server's. Such a login may name an `enter_after_pattern`, which
+//! writes one newline to the terminal on its first match, and a `user_code_pattern`, whose first capture group is
+//! appended to the approval link as `user_code=`.
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::ExitStatusExt;
+use std::pin::Pin;
 use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use regex::Regex;
-use tokio::io::BufReader;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+use tokio::io::unix::AsyncFd;
+use tokio::io::{AsyncRead, AsyncReadExt, Interest, ReadBuf};
 use tokio::process::{Child, ChildStdout};
 use tokio::sync::watch;
 
@@ -130,6 +138,7 @@ struct AttemptCore {
   /// Resolves to the approval link, or fails with the 502 body. Every click of this start awaits it.
   link: watch::Sender<LinkState>,
   approval_url_matcher: Regex,
+  user_code_matcher: Option<Regex>,
 }
 
 impl AttemptCore {
@@ -149,6 +158,10 @@ impl AttemptCore {
       link,
       approval_url_matcher: Regex::new(&login.approval_url_pattern)
         .expect("the config validated the approval-url pattern"),
+      user_code_matcher: login
+        .user_code_pattern
+        .as_deref()
+        .map(|pattern| Regex::new(pattern).expect("the config validated the user-code pattern")),
     }
   }
 
@@ -321,9 +334,9 @@ async fn drive(core: Arc<Mutex<AttemptCore>>) {
 
 /// Spawn the login, read its output for the approval link, and hold the attempt to its outcome.
 async fn run_attempt(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
-  let login_command = core.lock().expect("the attempt record lock is never poisoned").login.login_command.clone();
-  let mut child = match spawn(&login_command) {
-    Ok(child) => child,
+  let login = core.lock().expect("the attempt record lock is never poisoned").login.clone();
+  let (mut child, mut output) = match spawn_login(&login) {
+    Ok(spawned) => spawned,
     // An executable that is missing or not runnable.
     Err(error) => {
       fail_start(core, format!("could not start the login command: {error}"));
@@ -331,16 +344,9 @@ async fn run_attempt(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
     }
   };
   record_child(core, child.id());
-  let login = core.lock().expect("the attempt record lock is never poisoned").login.name.clone();
-  tracing::info!(login = %login, "browser_login_started");
+  tracing::info!(login = %login.name, "browser_login_started");
 
-  let mut stdout = BufReader::new(child.stdout.take().expect("the login child pipes its merged output"));
-  let link =
-    match tokio::time::timeout(Duration::from_secs(START_TIMEOUT_SEC), read_until_link(core, &mut stdout)).await {
-      Ok(reading) => reading?,
-      Err(_elapsed) => None,
-    };
-  let Some(link) = link else {
+  let Some(link) = read_until_link(core, &mut output).await? else {
     child.start_kill().expect("a spawned child that has not been reaped takes the kill");
     let login_exit = exit_code(child.wait().await?);
     let body = {
@@ -359,33 +365,64 @@ async fn run_attempt(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
     // A click already waiting on this watch is the click that started the attempt.
     let _ = state.link.send(LinkState::Link(link));
   }
-  let login = core.lock().expect("the attempt record lock is never poisoned").login.name.clone();
-  tracing::info!(login = %login, "browser_login_link_found");
-  hold(core, &mut child, &mut stdout).await
+  let name = core.lock().expect("the attempt record lock is never poisoned").login.name.clone();
+  tracing::info!(login = %name, "browser_login_link_found");
+  hold(core, &mut child, &mut output).await
 }
 
-/// The approval link from the first matching output line; `None` when the output ends first.
-async fn read_until_link(
-  core: &Arc<Mutex<AttemptCore>>,
-  stdout: &mut BufReader<ChildStdout>,
-) -> io::Result<Option<String>> {
-  while let Some(line) = read_line(core, stdout).await? {
-    let matched = { core.lock().expect("the attempt record lock is never poisoned").approval_url_matcher.find(&line) };
-    if let Some(matched) = matched {
-      return Ok(Some(matched.as_str().to_string()));
+/// The approval link from the first matching output line, with the login's user code appended when its
+/// `user_code_pattern` matches; `None` when no link prints within the start timeout.
+///
+/// Once a link prints, the wait continues only for a user code the pattern has yet to capture, and the timeout then
+/// answers the link it already has. The enter prompt is answered as the output arrives, in either wait.
+async fn read_until_link(core: &Arc<Mutex<AttemptCore>>, output: &mut LoginReader) -> io::Result<Option<String>> {
+  let deadline = tokio::time::Instant::now() + Duration::from_secs(START_TIMEOUT_SEC);
+  let mut link: Option<String> = None;
+  loop {
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    let next = match tokio::time::timeout(remaining, read_line(core, output)).await {
+      Ok(next) => next?,
+      Err(_elapsed) => break,
+    };
+    let Some(line) = next else { break };
+    if link.is_none() {
+      let matched = {
+        let state = core.lock().expect("the attempt record lock is never poisoned");
+        state.approval_url_matcher.find(&line).map(|matched| matched.as_str().to_string())
+      };
+      link = matched;
+    }
+    if link.is_some() {
+      let user_code = user_code_in(core, &output.seen_text());
+      let needs_user_code = core.lock().expect("the attempt record lock is never poisoned").user_code_matcher.is_some();
+      if !needs_user_code || user_code.is_some() {
+        return Ok(link.map(|link| with_user_code(link, user_code.as_deref())));
+      }
     }
   }
-  Ok(None)
+  let user_code = user_code_in(core, &output.seen_text());
+  Ok(link.map(|link| with_user_code(link, user_code.as_deref())))
+}
+
+/// The user code the login's `user_code_pattern` captures from `text`; `None` when the pattern is unset or the
+/// text holds no match.
+fn user_code_in(core: &Arc<Mutex<AttemptCore>>, text: &str) -> Option<String> {
+  let state = core.lock().expect("the attempt record lock is never poisoned");
+  let matcher = state.user_code_matcher.as_ref()?;
+  matcher.captures(text)?.get(1).map(|group| group.as_str().to_string())
+}
+
+/// The approval link with the user code as the `user_code` query parameter that the login card reads.
+fn with_user_code(link: String, user_code: Option<&str>) -> String {
+  let Some(user_code) = user_code else { return link };
+  let separator = if link.contains('?') { '&' } else { '?' };
+  format!("{link}{separator}user_code={user_code}")
 }
 
 /// Read the login's output to its end and wait for it to exit, within the hold limit; then read back.
-async fn hold(
-  core: &Arc<Mutex<AttemptCore>>,
-  child: &mut Child,
-  stdout: &mut BufReader<ChildStdout>,
-) -> io::Result<()> {
+async fn hold(core: &Arc<Mutex<AttemptCore>>, child: &mut Child, output: &mut LoginReader) -> io::Result<()> {
   let login_exit =
-    match tokio::time::timeout(Duration::from_secs(HOLD_LIMIT_SEC), drain_and_wait(core, child, stdout)).await {
+    match tokio::time::timeout(Duration::from_secs(HOLD_LIMIT_SEC), drain_and_wait(core, child, output)).await {
       Ok(waited) => waited?,
       Err(_elapsed) => {
         child.start_kill().expect("a spawned child that has not been reaped takes the kill");
@@ -419,9 +456,9 @@ async fn hold(
 async fn drain_and_wait(
   core: &Arc<Mutex<AttemptCore>>,
   child: &mut Child,
-  stdout: &mut BufReader<ChildStdout>,
+  output: &mut LoginReader,
 ) -> io::Result<i32> {
-  while read_line(core, stdout).await?.is_some() {}
+  while read_line(core, output).await?.is_some() {}
   Ok(exit_code(child.wait().await?))
 }
 
@@ -454,13 +491,8 @@ async fn read_back(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
 }
 
 /// The next output line, appended to the attempt's tail; `None` once the output has ended.
-async fn read_line(core: &Arc<Mutex<AttemptCore>>, stdout: &mut BufReader<ChildStdout>) -> io::Result<Option<String>> {
-  let mut raw = Vec::new();
-  if stdout.read_until(b'\n', &mut raw).await? == 0 {
-    return Ok(None);
-  }
-  // `decode("utf-8", errors="replace").rstrip("\r\n")`.
-  let line = String::from_utf8_lossy(&raw).trim_end_matches(['\r', '\n']).to_string();
+async fn read_line(core: &Arc<Mutex<AttemptCore>>, output: &mut LoginReader) -> io::Result<Option<String>> {
+  let Some(line) = output.next_line().await? else { return Ok(None) };
   {
     let mut state = core.lock().expect("the attempt record lock is never poisoned");
     state.output.push_back(line.clone());
@@ -487,6 +519,244 @@ fn spawn(argv: &[String]) -> io::Result<Child> {
     });
   }
   command.spawn()
+}
+
+/// Start the login command. `use_pty` runs it under a pseudo-terminal in a new session; every other entry keeps
+/// stdin on /dev/null with stdout and stderr merged on a pipe.
+fn spawn_login(login: &BrowserLoginConfig) -> io::Result<(Child, LoginReader)> {
+  let enter_after = login.enter_after_pattern.as_deref();
+  if login.use_pty {
+    let (child, master) = spawn_pty(&login.login_command)?;
+    Ok((child, LoginReader::new(OutputSource::Pty(master), enter_after)))
+  } else {
+    let mut child = spawn(&login.login_command)?;
+    let stdout = child.stdout.take().expect("the login child pipes its merged output");
+    Ok((child, LoginReader::new(OutputSource::Pipe(stdout), enter_after)))
+  }
+}
+
+/// The login's output as whole lines, and the enter prompt the login waits on.
+struct LoginReader {
+  source: OutputSource,
+  enter_after: Option<Regex>,
+  /// The written newline is the only one this attempt sends, however often the pattern matches.
+  entered: bool,
+  /// Bytes read but not yet returned as a line.
+  pending: Vec<u8>,
+  /// The recent bytes, decoded for a pattern that can match a prompt with no trailing newline.
+  seen: Vec<u8>,
+}
+
+/// The most output bytes a pattern is matched against. A prompt is short, so older output adds no match.
+const SEEN_KEEP_BYTES: usize = 8192;
+
+impl LoginReader {
+  fn new(source: OutputSource, enter_after: Option<&str>) -> Self {
+    LoginReader {
+      source,
+      enter_after: enter_after.map(|pattern| Regex::new(pattern).expect("the config validated the enter pattern")),
+      entered: false,
+      pending: Vec::new(),
+      seen: Vec::new(),
+    }
+  }
+
+  /// The next output line; the line in progress is returned as the last line when the output ends. Each chunk read
+  /// also answers the enter prompt, which ssh prints without a trailing newline.
+  async fn next_line(&mut self) -> io::Result<Option<String>> {
+    loop {
+      if let Some(position) = self.pending.iter().position(|byte| *byte == b'\n') {
+        let line: Vec<u8> = self.pending.drain(..=position).collect();
+        return Ok(Some(text_of(&line)));
+      }
+      let mut chunk = [0u8; 4096];
+      let read = self.source.read(&mut chunk).await?;
+      if read == 0 {
+        return Ok((!self.pending.is_empty()).then(|| text_of(&std::mem::take(&mut self.pending))));
+      }
+      self.pending.extend_from_slice(&chunk[..read]);
+      self.seen.extend_from_slice(&chunk[..read]);
+      if self.seen.len() > SEEN_KEEP_BYTES {
+        let excess = self.seen.len() - SEEN_KEEP_BYTES;
+        self.seen.drain(..excess);
+      }
+      self.answer_enter_prompt().await?;
+    }
+  }
+
+  /// Write one newline to the terminal when the output first matches the enter pattern.
+  async fn answer_enter_prompt(&mut self) -> io::Result<()> {
+    let Some(pattern) = &self.enter_after else { return Ok(()) };
+    if self.entered || !pattern.is_match(&String::from_utf8_lossy(&self.seen)) {
+      return Ok(());
+    }
+    self.entered = true;
+    self.source.write_terminal(b"\n").await
+  }
+
+  /// The bytes seen so far, decoded, so a pattern can match a prompt that never ends its line.
+  fn seen_text(&self) -> String {
+    String::from_utf8_lossy(&self.seen).into_owned()
+  }
+}
+
+/// The login child's output: a pipe for a login without `use_pty`, or the master side of its pseudo-terminal.
+enum OutputSource {
+  Pipe(ChildStdout),
+  Pty(Arc<PtyMaster>),
+}
+
+impl OutputSource {
+  /// Write *bytes* to the login's terminal. A pipe carries no terminal, and validation makes
+  /// `enter_after_pattern` require `use_pty`, so no entry asks a pipe to answer.
+  async fn write_terminal(&self, bytes: &[u8]) -> io::Result<()> {
+    match self {
+      OutputSource::Pipe(_) => Ok(()),
+      OutputSource::Pty(master) => master.write_terminal(bytes).await,
+    }
+  }
+}
+
+impl AsyncRead for OutputSource {
+  fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+    match self.get_mut() {
+      OutputSource::Pipe(stdout) => Pin::new(stdout).poll_read(cx, buf),
+      OutputSource::Pty(master) => master.poll_read_terminal(cx, buf),
+    }
+  }
+}
+
+/// The master side of a pseudo-terminal, read for the login's output and written to answer its prompt.
+struct PtyMaster {
+  fd: AsyncFd<OwnedFd>,
+}
+
+impl PtyMaster {
+  /// Take the master, whose reads and writes the async wrapper drives without blocking.
+  fn new(fd: OwnedFd) -> io::Result<Arc<PtyMaster>> {
+    let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
+    if flags == -1 {
+      return Err(io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+      return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the owned descriptor stays open and unchanged inside the `AsyncFd` until the login ends.
+    let fd = unsafe { AsyncFd::register_with_interest(fd, Interest::READABLE | Interest::WRITABLE) }
+      .map_err(|error| error.into_parts().1)?;
+    Ok(Arc::new(PtyMaster { fd }))
+  }
+
+  fn poll_read_terminal(&self, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+    loop {
+      let mut ready = match self.fd.poll_read_ready(cx) {
+        Poll::Ready(Ok(ready)) => ready,
+        Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+        Poll::Pending => return Poll::Pending,
+      };
+      let outcome = {
+        let unfilled = buf.initialize_unfilled();
+        ready.try_io(|inner| read_bytes(inner.get_ref().as_raw_fd(), unfilled))
+      };
+      match outcome {
+        Ok(Ok(read)) => {
+          buf.advance(read);
+          return Poll::Ready(Ok(()));
+        }
+        // A master read answers EIO once no process holds the slave: the login's output has ended.
+        Ok(Err(error)) if error.raw_os_error() == Some(libc::EIO) => return Poll::Ready(Ok(())),
+        Ok(Err(error)) => return Poll::Ready(Err(error)),
+        Err(_would_block) => {}
+      }
+    }
+  }
+
+  async fn write_terminal(&self, bytes: &[u8]) -> io::Result<()> {
+    let mut written = 0;
+    while written < bytes.len() {
+      let mut ready = self.fd.writable().await?;
+      let rest = &bytes[written..];
+      match ready.try_io(|inner| write_bytes(inner.get_ref().as_raw_fd(), rest)) {
+        Ok(Ok(count)) => written += count,
+        Ok(Err(error)) => return Err(error),
+        Err(_would_block) => {}
+      }
+    }
+    Ok(())
+  }
+}
+
+/// Start *argv* under a pseudo-terminal of its own session, so ssh reads keyboard-interactive answers from
+/// `/dev/tty` on that terminal instead of on the server's own.
+fn spawn_pty(argv: &[String]) -> io::Result<(Child, Arc<PtyMaster>)> {
+  let (program, arguments) = argv.split_first().expect("the config requires a non-empty command");
+  let (master, slave) = open_pty()?;
+  let master = PtyMaster::new(master)?;
+  let mut command = tokio::process::Command::new(program);
+  command
+    .args(arguments)
+    .stdin(Stdio::from(slave.try_clone()?))
+    .stdout(Stdio::from(slave.try_clone()?))
+    .stderr(Stdio::from(slave));
+  // SAFETY: `setsid` and `ioctl` are async-signal-safe, and the closure runs between fork and exec with nothing
+  // else to touch. The child's standard descriptors are the terminal by the time this runs.
+  unsafe {
+    command.pre_exec(|| {
+      if libc::setsid() == -1 {
+        return Err(io::Error::last_os_error());
+      }
+      if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0) == -1 {
+        return Err(io::Error::last_os_error());
+      }
+      Ok(())
+    });
+  }
+  let child = command.spawn()?;
+  // The child holds its own copies of the slave; the parent's close with this command, so a master read ends at
+  // the child's exit.
+  Ok((child, master))
+}
+
+/// A pseudo-terminal: the master side and the slave the login child owns.
+///
+/// Both carry close-on-exec: an unrelated fork of this process may hold the descriptors until it execs, and a copy
+/// of the slave that survived an exec would keep a master read from ending at the login's exit.
+fn open_pty() -> io::Result<(OwnedFd, OwnedFd)> {
+  let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) };
+  if master == -1 {
+    return Err(io::Error::last_os_error());
+  }
+  // SAFETY: the descriptor is newly opened and no other owner holds it.
+  let master = unsafe { OwnedFd::from_raw_fd(master) };
+  if unsafe { libc::grantpt(master.as_raw_fd()) } == -1 || unsafe { libc::unlockpt(master.as_raw_fd()) } == -1 {
+    return Err(io::Error::last_os_error());
+  }
+  let mut name: [libc::c_char; 128] = [0; 128];
+  if unsafe { libc::ptsname_r(master.as_raw_fd(), name.as_mut_ptr(), name.len()) } != 0 {
+    return Err(io::Error::last_os_error());
+  }
+  // SAFETY: `ptsname_r` wrote a NUL-terminated path into `name`.
+  let slave = unsafe { libc::open(name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) };
+  if slave == -1 {
+    return Err(io::Error::last_os_error());
+  }
+  // SAFETY: the descriptor is newly opened and no other owner holds it.
+  Ok((master, unsafe { OwnedFd::from_raw_fd(slave) }))
+}
+
+fn read_bytes(fd: libc::c_int, buffer: &mut [u8]) -> io::Result<usize> {
+  let read = unsafe { libc::read(fd, buffer.as_mut_ptr().cast(), buffer.len()) };
+  if read < 0 { Err(io::Error::last_os_error()) } else { Ok(read as usize) }
+}
+
+fn write_bytes(fd: libc::c_int, bytes: &[u8]) -> io::Result<usize> {
+  let written = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
+  if written < 0 { Err(io::Error::last_os_error()) } else { Ok(written as usize) }
+}
+
+/// One output line decoded, with its line ending removed.
+fn text_of(bytes: &[u8]) -> String {
+  String::from_utf8_lossy(bytes).trim_end_matches(['\r', '\n']).to_string()
 }
 
 /// Wait for a captured child: `(exit code, output)`. Past the limit it is killed, and its output
@@ -616,9 +886,13 @@ mod tests {
         login: BrowserLoginConfig {
           name: name.to_string(),
           label: "AWS SSO".to_string(),
+          host: None,
           login_command: vec![login_script],
           approval_url_pattern: r"https://device\.sso\S*".to_string(),
           readback_command: vec![readback_script],
+          use_pty: false,
+          enter_after_pattern: None,
+          user_code_pattern: None,
         },
       }
     }
@@ -645,6 +919,20 @@ mod tests {
     assert_eq!(user_code_of(LINK), "7f3c9d21");
     assert_eq!(user_code_of("https://view.awsapps.com/start#/device?user_code=abc123&x=1"), "abc123");
     assert_eq!(user_code_of("https://device.sso/no-code-here"), "");
+  }
+
+  #[test]
+  fn the_user_code_becomes_the_query_parameter_the_login_card_reads() {
+    let plain = "https://example.invalid/activate";
+    assert_eq!(
+      with_user_code(plain.to_string(), Some("ABCD-EFGH")),
+      "https://example.invalid/activate?user_code=ABCD-EFGH"
+    );
+    assert_eq!(
+      with_user_code("https://example.invalid/activate?x=1".to_string(), Some("ABCD-EFGH")),
+      "https://example.invalid/activate?x=1&user_code=ABCD-EFGH"
+    );
+    assert_eq!(with_user_code(plain.to_string(), None), plain, "a login without a code keeps its link");
   }
 
   #[test]

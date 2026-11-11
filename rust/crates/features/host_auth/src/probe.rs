@@ -18,11 +18,15 @@ pub const DETAIL_MAX_CHARS: usize = 200;
 pub const STATUS_OK: &str = "ok";
 pub const STATUS_NEEDS_OKTA: &str = "needs-okta";
 pub const STATUS_NEEDS_INTERACTIVE_AUTH: &str = "needs-interactive-auth";
+pub const STATUS_ROUTER_REJECTED: &str = "router-rejected";
 pub const STATUS_UNREACHABLE: &str = "unreachable";
 
 /// Output markers that name a hold. They are matched before any return code: a held host's prompt waits until the
 /// probe timeout kills it, so the return code of a held probe says nothing.
 const OKTA_MARKERS: [&str; 2] = ["Okta verification required", "activate?user_code="];
+/// The login router's refusal of a key it has not registered or has let expire. BatchMode never answers the
+/// router's keyboard-interactive challenge, so ssh exits 255 with this line and nothing else names the cause.
+const ROUTER_REJECTION_MARKER: &str = "Permission denied (keyboard-interactive)";
 const INTERACTIVE_MARKERS: [&str; 3] =
   ["requires an additional check", "To authenticate, visit:", "Host key verification failed"];
 const URL_MARKER: &str = "http";
@@ -31,6 +35,9 @@ const URL_MARKER: &str = "http";
 pub fn classify(returncode: i32, output: &str) -> &'static str {
   if OKTA_MARKERS.iter().any(|marker| output.contains(marker)) {
     return STATUS_NEEDS_OKTA;
+  }
+  if output.contains(ROUTER_REJECTION_MARKER) {
+    return STATUS_ROUTER_REJECTED;
   }
   if returncode == 0 {
     return STATUS_OK;
@@ -119,6 +126,10 @@ mod tests {
       STATUS_NEEDS_INTERACTIVE_AUTH
     );
     assert_eq!(classify(255, "Host key verification failed."), STATUS_NEEDS_INTERACTIVE_AUTH);
+    assert_eq!(
+      classify(255, "someone@login-a.example.internal: Permission denied (keyboard-interactive)."),
+      STATUS_ROUTER_REJECTED
+    );
     assert_eq!(classify(255, "ssh: connect to host port 22: Connection timed out"), STATUS_UNREACHABLE);
     assert_eq!(classify(124, "ssh: connect to host port 22: Connection timed out"), STATUS_UNREACHABLE);
   }

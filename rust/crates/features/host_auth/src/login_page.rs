@@ -102,9 +102,13 @@ mod tests {
     BrowserLoginConfig {
       name: "aws-sso".to_string(),
       label: "AWS SSO".to_string(),
+      host: None,
       login_command: vec!["/usr/bin/aws".to_string(), "sso".to_string()],
       approval_url_pattern: r"https://device\.sso\S*".to_string(),
       readback_command: vec!["/usr/bin/true".to_string()],
+      use_pty: false,
+      enter_after_pattern: None,
+      user_code_pattern: None,
     }
   }
 

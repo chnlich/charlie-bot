@@ -328,7 +328,7 @@ pub async fn run_assertions(
     artifact,
     config.headless_chrome_bin.clone(),
     repo_root,
-    config.section::<UserTextChecksConfig>("user_text_checks").clone(),
+    config.section::<UserTextChecksConfig>(user_text_checks::CONFIG_SECTION).clone(),
     config.charliebot_home.clone(),
     only,
   )
@@ -2393,7 +2393,7 @@ mod tests {
         &page,
         chrome.to_str().unwrap(),
         &repo_root(),
-        config.section::<UserTextChecksConfig>("user_text_checks"),
+        config.section::<UserTextChecksConfig>(user_text_checks::CONFIG_SECTION),
         home.path(),
         None,
       )

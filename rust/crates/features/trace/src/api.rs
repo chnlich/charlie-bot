@@ -12,10 +12,10 @@ use charliebot_compat::file_urls::FILE_SERVER_MOUNT;
 use charliebot_compat::mimetypes::MimeTypes;
 use charliebot_compat::mimetypes_table::APPLICATION_GZIP;
 use charliebot_compat::routing::get_only;
+use charliebot_compat::urlquote::encode_pairs;
 use charliebot_compat::{responses, static_files, validation};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::templating::Templating;
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::{Value, json};
 
 use crate::merge::{self, BuildFailure, BuildMode};
@@ -23,7 +23,6 @@ use crate::merge::{self, BuildFailure, BuildMode};
 const VIEWER_PATH: &str = "/perfetto";
 const MERGED_PATH: &str = "/perfetto/merged";
 const DEFAULT_PATTERN: &str = "*.json";
-const QUOTE_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~');
 
 static MIME_TYPES: OnceLock<MimeTypes> = OnceLock::new();
 
@@ -85,7 +84,7 @@ async fn perfetto_viewer(State(features): State<std::sync::Arc<FeatureContext>>,
     if let Some(slim) = slim {
       pairs.push(("slim".to_string(), if slim { "True" } else { "False" }.to_string()));
     }
-    format!("{MERGED_PATH}?{}", urlencode(&pairs))
+    format!("{MERGED_PATH}?{}", encode_pairs(&pairs))
   } else {
     if inputs.len() > 1 {
       warn = Some("⚠ Remote or non-JSON traces cannot be merged, showing first trace only".to_string());
@@ -284,14 +283,6 @@ fn last_value<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
   pairs.iter().rev().find(|(name, _)| name == key).map(|(_, value)| value.as_str())
 }
 
-fn urlencode(pairs: &[(String, String)]) -> String {
-  pairs.iter().map(|(key, value)| format!("{}={}", quote_plus(key), quote_plus(value))).collect::<Vec<_>>().join("&")
-}
-
-fn quote_plus(value: &str) -> String {
-  value.split(' ').map(|part| utf8_percent_encode(part, QUOTE_SET).to_string()).collect::<Vec<_>>().join("+")
-}
-
 enum GlobToken {
   Star,
   Any,
@@ -432,7 +423,6 @@ mod tests {
       vec!["one", "two words"]
     );
     assert_eq!(last_value(&query, "slim"), Some("yes"));
-    assert_eq!(quote_plus("a b/é~"), "a+b%2F%C3%A9~");
     assert!(GlobMatcher::new("trace_rank[0-9].json").is_match("trace_rank2.json"));
     assert!(GlobMatcher::new("*.json").is_match("trace.json"));
     assert!(!GlobMatcher::new("*.json").is_match("trace.JSON"));

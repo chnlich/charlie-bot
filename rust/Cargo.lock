@@ -1539,7 +1539,6 @@ dependencies = [
  "futures-util",
  "libc",
  "memchr",
- "percent-encoding",
  "serde",
  "serde_json",
  "sha2",

@@ -567,8 +567,8 @@ pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Resul
         problems.push(format!("{}: {entry} names unknown backend '{backend}'", path.display()));
       }
     }
-    // Identical option ids are refused here, where the config tells an option from a pool: two steps on one pool
-    // take different members, so only options that resolve to the same type and model conflict.
+    // Identical option ids are refused here, where the config tells an option from a pool. Two steps on one pool take
+    // different members, so only options that resolve to the same type and model conflict.
     match crate::steps::distinct_backend_conflict(&task, cfg) {
       Ok(Some(conflict)) => problems.push(format!("{}: {conflict}", path.display())),
       Ok(None) => {}

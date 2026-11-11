@@ -1811,7 +1811,7 @@ mod tests {
   }
 
   /// Test ①: a fire on a pool runs on the member the pool selects for the child, not the member the bound session
-  /// recorded, and the child keeps the pool id as its backend and records the selected member.
+  /// recorded. The child keeps the pool id as its backend and records the selected member.
   #[tokio::test]
   #[ignore = "integration"]
   async fn a_pool_fire_runs_on_the_member_the_pool_selects() {

@@ -273,8 +273,7 @@ test('the archived Settings menu: root moves groups then deletes; a child only d
   };
   const click = {preventDefault() {}, stopPropagation() {}};
 
-  // A root archived row: Move to group…, a separator, then the danger
-  // delete -- the menu keeps the old direct buttons' condition and styling.
+  // A root archived row: Move to group…, a separator, then the danger delete.
   const root = open('root');
   assert.deepEqual(root.filter((item) => !item.separator).map((item) => item.label),
     ['Move to group\u2026', 'Delete permanently']);

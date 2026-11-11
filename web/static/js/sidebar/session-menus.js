@@ -10,9 +10,9 @@
 
 // The normal row's Settings menu: openRowMenu (row-menu.js) draws, places and
 // closes the popover; this builds its items from the Settings button's data
-// attributes. Each item keeps the condition of its old direct button. A
-// task-tree child moves with its parent (no group move), and a legacy row has
-// no task record behind Task & context. The registered items follow
+// attributes. An item appears only where its action applies. A task-tree child
+// moves with its parent, so it has no group move. A legacy row has no task
+// record behind Task & context. The registered items follow
 // (registerSessionMenuItems).
 function desktopSessionMenuItems(attrs, sessionId) {
   const items = [{label: 'Rename', onSelect: (event) => startRename(event, sessionId)}];
@@ -62,11 +62,10 @@ function openSessionRowMenu(anchor, sessionId) {
   openRowMenu(anchor, items);
 }
 
-// The archived row's Settings menu: each item keeps its old direct button's
-// condition. A task-tree child moves with its parent (no group move), and
-// the delete keeps its red danger styling. Touch leads with the star toggle
-// and Unarchive (the direct buttons a touch row hides); a child's menu keeps
-// the separator around the group move's absence.
+// The archived row's Settings menu: an item appears only where its action
+// applies. A task-tree child moves with its parent, so it has no group move.
+// The delete carries its red danger styling. Touch leads with the star toggle
+// and Unarchive (the direct buttons a touch row hides).
 function openArchivedRowMenu(anchor, sessionId) {
   const attrs = anchor.dataset;
   const touch = window.matchMedia('(hover: none)').matches;
@@ -91,9 +90,8 @@ function openArchivedRowMenu(anchor, sessionId) {
 }
 
 // The named group header's Settings menu: the gear reads the group name off
-// its own data attribute at click time (no module-level state). Each item
-// keeps its old direct button's call. The registered items lead the menu
-// (registerGroupMenuItem).
+// its own data attribute at click time (no module-level state). The registered
+// items lead the menu (registerGroupMenuItem).
 function openGroupHeaderMenu(anchor) {
   const groupName = anchor.dataset.groupName;
   openRowMenu(anchor, [

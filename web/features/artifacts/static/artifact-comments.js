@@ -34,25 +34,32 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var COL_MIN = 240;
     var NO_SESSION_MESSAGE = 'Cannot parse session id from this artifact URL.';
     var SECTION_SELECTOR = 'section';
-    // Each shortcut owns a `kind`, which doubles as its dedup key and as the
-    // persisted draft discriminator. Manual block comments keep kind 'block';
-    // adding a button here needs no other change.
+    // The kind of one comment entry, which doubles as its dedup key and as the
+    // persisted draft discriminator. A manual block comment has the BLOCK kind;
+    // each shortcut below has its own.
+    var ENTRY_KIND = {
+      BLOCK: 'block',
+      IMPROVE: 'improve',
+      SHORTEN: 'shorten',
+      VERIFY: 'verify',
+    };
+    // Adding a button here needs no other change: the entry's kind is its own.
     var SHORTCUTS = [
       {
-        kind: 'improve',
+        kind: ENTRY_KIND.IMPROVE,
         label: 'Improve',
         prompt: 'Keep this page\'s goal and resolved choices fixed; raise doubts about them as ' +
           'questions. Think from scratch for a better implementation: compare each candidate ' +
           'with the current design, adopt one that wins, otherwise keep the current design.',
       },
       {
-        kind: 'shorten',
+        kind: ENTRY_KIND.SHORTEN,
         label: 'Shorten',
         prompt: 'This plan is too long. Rewrite it to state the key points concretely; ' +
           'delete anything that is not a key point or demote it into the Other Details list.',
       },
       {
-        kind: 'verify',
+        kind: ENTRY_KIND.VERIFY,
         label: 'Verify',
         prompt: 'Delegate a fresh verify worker for this plan and report its findings.',
       },
@@ -158,7 +165,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     }
 
     function normalizeKind(kind) {
-      return isShortcutKind(kind) ? kind : 'block';
+      return isShortcutKind(kind) ? kind : ENTRY_KIND.BLOCK;
     }
 
     function serializeDraft(entries) {
@@ -851,7 +858,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         return;
       }
       pending.push({
-        kind: 'block',
+        kind: ENTRY_KIND.BLOCK,
         el: block,
         quote: cleanText(block, 400),
         context: contextFor(block),
@@ -1383,10 +1390,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     function removeEntry(idx) {
       if (idx < 0 || idx >= pending.length) return;
       var removed = pending.splice(idx, 1)[0];
-      if (removed.kind === 'block' && removed.el) {
+      if (removed.kind === ENTRY_KIND.BLOCK && removed.el) {
         var stillMarked = false;
         for (var i = 0; i < pending.length; i++) {
-          if (pending[i].kind === 'block' && pending[i].el === removed.el) { stillMarked = true; break; }
+          if (pending[i].kind === ENTRY_KIND.BLOCK && pending[i].el === removed.el) { stillMarked = true; break; }
         }
         if (!stillMarked) removed.el.classList.remove(GLOBAL_PREFIX + '-marked');
       }
@@ -1398,7 +1405,9 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // off, queue empty, draft gone, tray repainted.
     function resetPending() {
       for (var i = 0; i < pending.length; i++) {
-        if (pending[i].kind === 'block' && pending[i].el) pending[i].el.classList.remove(GLOBAL_PREFIX + '-marked');
+        if (pending[i].kind === ENTRY_KIND.BLOCK && pending[i].el) {
+          pending[i].el.classList.remove(GLOBAL_PREFIX + '-marked');
+        }
       }
       pending = [];
       clearDraft(artifactPath);
@@ -1412,8 +1421,8 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       ordered.sort(function(a, b) {
         // Shortcut entries lead the batch; among themselves the sort is stable,
         // so they keep click order. Block comments follow in document order.
-        var aShortcut = a.kind !== 'block';
-        var bShortcut = b.kind !== 'block';
+        var aShortcut = a.kind !== ENTRY_KIND.BLOCK;
+        var bShortcut = b.kind !== ENTRY_KIND.BLOCK;
         if (aShortcut && !bShortcut) return -1;
         if (!aShortcut && bShortcut) return 1;
         if (aShortcut && bShortcut) return 0;

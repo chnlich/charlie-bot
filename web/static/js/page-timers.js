@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
 // Page timers — every recurring poll/tick on the page goes through this
 // registry so a hidden tab does no periodic work at all. Timers keep their
-// registration while hidden; the interval itself is torn down and recreated on
-// the next visibilitychange, and resume handlers run first so the page shows a
+// registration while hidden. The interval itself is torn down and recreated on
+// the next visibilitychange. Resume handlers run first so the page shows a
 // fresh snapshot before the normal cadences restart.
 // ---------------------------------------------------------------------------
 const pageTimers = new Map();

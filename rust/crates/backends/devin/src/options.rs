@@ -8,13 +8,7 @@ pub const SCHEMA: &[OptionField] = &[];
 
 /// The option check for a type with no fields: an empty option is accepted and any other key is refused.
 pub fn option_model(fields: &Mapping) -> Result<(), String> {
-  match fields.keys().next() {
-    None => Ok(()),
-    Some(key) => match key.as_str() {
-      Some(name) => Err(format!("unknown devin option field {name:?}")),
-      None => Err(format!("devin option key must be a string: {key:?}")),
-    },
-  }
+  charliebot_registry::option_model::no_fields(fields, "devin")
 }
 
 #[cfg(test)]

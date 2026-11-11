@@ -9,8 +9,9 @@ use axum::response::Response;
 use charliebot_compat::responses;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::context::FeatureContext;
+use charliebot_registry::task_errors::store_error;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
-use charliebot_store::{CreateTask, StoreError, TaskCaller};
+use charliebot_store::{CreateTask, TaskCaller};
 use serde_json::{Map, json};
 
 use crate::config::{self, ScheduledTaskConfig};
@@ -113,15 +114,4 @@ async fn require_within_caller(
 
 fn forbidden(rule: &str) -> Response {
   responses::fast_json(StatusCode::FORBIDDEN, &json!({"detail": rule}))
-}
-
-/// The store error as a JSON response: the status the error carries, else the internal error response.
-fn store_error(error: StoreError) -> Response {
-  match error.status_code() {
-    Some(code) => responses::fast_json(
-      StatusCode::from_u16(code).expect("the store reports HTTP status codes"),
-      &json!({"detail": error.to_string()}),
-    ),
-    None => responses::internal_error("RuntimeError", error.to_string()),
-  }
 }

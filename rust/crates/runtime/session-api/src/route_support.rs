@@ -2,11 +2,13 @@
 //! query string, and the store-error response.
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::Request;
 use axum::response::Response;
-use charliebot_compat::{responses, validation};
+use charliebot_compat::validation;
 use charliebot_store::{StoreError, StoreResult};
-use serde_json::json;
+
+/// The store error as its route's JSON response; `charliebot_registry::task_errors` owns the mapping.
+pub(crate) use charliebot_registry::task_errors::store_error;
 
 /// Run a handler's store work on the blocking pool, so a slow read holds no async worker.
 pub(crate) async fn blocking_store<T, F>(work: F) -> StoreResult<T>
@@ -15,15 +17,6 @@ where
   F: FnOnce() -> StoreResult<T> + Send + 'static,
 {
   tokio::task::spawn_blocking(work).await.map_err(|error| StoreError::new(error.to_string()))?
-}
-
-/// The store error as the route's JSON response: the mapped status when the error carries one, else the
-/// internal error response, which reports `RuntimeError`.
-pub(crate) fn store_error(error: StoreError) -> Response {
-  if let Some(status) = error.status_code().and_then(|code| StatusCode::from_u16(code).ok()) {
-    return responses::json(status, &json!({"detail": error.to_string()}));
-  }
-  responses::internal_error("RuntimeError", error.to_string())
 }
 
 pub(crate) struct Query {

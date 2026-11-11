@@ -1,4 +1,4 @@
-//! The shared HTTP answers for task-domain errors returned by route helpers.
+//! The shared HTTP answers for store errors returned by route helpers.
 
 use axum::http::StatusCode;
 use axum::response::Response;
@@ -21,6 +21,15 @@ pub fn task_http_error(error: StoreError) -> Response {
   }
 }
 
+/// The store error as its route's JSON response: the status the error carries, with its message as the detail, else
+/// the internal error response, which reports `RuntimeError`.
+pub fn store_error(error: StoreError) -> Response {
+  match error.status_code().and_then(|code| StatusCode::from_u16(code).ok()) {
+    Some(status) => responses::http_exception_with_detail(status, &error.to_string()),
+    None => responses::internal_error("RuntimeError", error.to_string()),
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use axum::body::to_bytes;
@@ -30,7 +39,7 @@ mod tests {
   use charliebot_store::StoreError;
   use serde_json::{Value, json};
 
-  use super::task_http_error;
+  use super::{store_error, task_http_error};
 
   async fn assert_json(response: Response, status: StatusCode, expected: Value) {
     assert_eq!(response.status(), status);
@@ -106,6 +115,37 @@ mod tests {
   #[tokio::test]
   async fn failures_use_the_unhandled_exception_response() {
     let response = task_http_error(StoreError::Failure("synthetic store failure".into()));
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let failure = response.extensions().get::<Failure>().unwrap();
+    assert_eq!(failure.kind, "RuntimeError");
+    assert_eq!(failure.detail, "synthetic store failure");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(body.as_ref(), b"Internal Server Error");
+  }
+
+  #[tokio::test]
+  async fn store_error_reports_the_carried_status_with_its_message() {
+    assert_json(
+      store_error(StoreError::NotFound("session is missing".into())),
+      StatusCode::NOT_FOUND,
+      json!({ "detail": "session is missing" }),
+    )
+    .await;
+  }
+
+  #[tokio::test]
+  async fn store_error_keeps_a_conflict_message_as_the_detail() {
+    assert_json(
+      store_error(StoreError::Conflict(vec!["first blocker".into(), "second blocker".into()])),
+      StatusCode::CONFLICT,
+      json!({ "detail": "first blocker; second blocker" }),
+    )
+    .await;
+  }
+
+  #[tokio::test]
+  async fn store_error_treats_a_statusless_failure_as_the_unhandled_exception() {
+    let response = store_error(StoreError::Failure("synthetic store failure".into()));
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let failure = response.extensions().get::<Failure>().unwrap();
     assert_eq!(failure.kind, "RuntimeError");

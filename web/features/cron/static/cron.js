@@ -200,6 +200,15 @@ function renderScheduledBadge(s) {
   return `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtmlAttr(s.schedule_task)}">${CLOCK_SVG_BODY}</svg>`;
 }
 
+// The `last_run_status` values the scheduler stores for a schedule's last firing; the cron crate's
+// field validation accepts exactly these four.
+const LAST_RUN_STATUS = {
+  RUNNING: 'running',
+  SUCCESS: 'success',
+  FAILED: 'failed',
+  SKIPPED: 'skipped',
+};
+
 // A bound node's schedule lines, in every view: the next run (or Disabled),
 // then the truncated cron · timezone line, then the Last line from the firing
 // bookkeeping. One markup home for every view's row.
@@ -208,13 +217,13 @@ function renderSessionScheduleLine(s) {
   let html = `<span class="block text-xs ${disabled ? 'text-slate-500' : 'text-blue-300'}">${disabled ? 'Disabled' : 'Next: ' + relativeTime(s.schedule_next_run)}</span>`
     + `<span class="block truncate text-xs text-slate-500" title="${escapeHtmlAttr(s.schedule_cron)} (${escapeHtmlAttr(s.schedule_timezone || '')})">${escapeHtml(s.schedule_cron)} · ${escapeHtml(s.schedule_timezone || '')}</span>`;
   if (s.last_run_status) {
-    const lastClass = s.last_run_status === 'success' ? 'text-green-400'
-      : s.last_run_status === 'running' ? 'text-yellow-400'
-        : s.last_run_status === 'skipped' ? 'text-slate-400' : (s.schedule_allow_failure ? 'text-amber-400' : 'text-red-400');
+    const lastClass = s.last_run_status === LAST_RUN_STATUS.SUCCESS ? 'text-green-400'
+      : s.last_run_status === LAST_RUN_STATUS.RUNNING ? 'text-yellow-400'
+        : s.last_run_status === LAST_RUN_STATUS.SKIPPED ? 'text-slate-400' : (s.schedule_allow_failure ? 'text-amber-400' : 'text-red-400');
     // The Last line truncates with an ellipsis like the cron line above it,
     // and stays one line tall on the touch drawer too. Its full text sits in
     // the title attribute.
-    const lastText = `Last: ${s.last_run_status}${s.last_scheduled_run ? ', ' + formatBubbleTime(s.last_scheduled_run) : ''}${s.last_run_status === 'failed' && s.schedule_allow_failure ? ' (review needed)' : ''}`;
+    const lastText = `Last: ${s.last_run_status}${s.last_scheduled_run ? ', ' + formatBubbleTime(s.last_scheduled_run) : ''}${s.last_run_status === LAST_RUN_STATUS.FAILED && s.schedule_allow_failure ? ' (review needed)' : ''}`;
     html += `<span class="block truncate text-xs ${lastClass}" title="${escapeHtmlAttr(lastText)}">${escapeHtml(lastText)}</span>`;
   }
   return html;

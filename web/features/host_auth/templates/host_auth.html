@@ -58,8 +58,13 @@
   .cap.lead { margin:12px 0 16px }
   /* The Browser logins link is the sentence's only pointer target, and its 14 px text box is under
      the page's 24 px floor. Vertical padding on an inline box grows the hit area to 24 px without
-     moving the line box, so every other box keeps its position. */
-  .cap a { padding:5px 0 }
+     moving the line box, so every other box keeps its position. The link takes the page's accent, as
+     the approvals day nav and the recordings session links do: an unstyled link paints the browser's
+     own tones instead, rgb(0, 0, 238) in the light theme and rgb(158, 158, 255) in the dark one, and
+     the visited tone is the browser's too. The UA underline stays, so the link is marked by more than
+     its colour; --acc draws 5.38:1 on the light page and 7.53:1 on the dark one, above the 4.5:1
+     floor for this 12.5 px text. */
+  .cap a { color:var(--acc); padding:5px 0 }
   .legend { display:flex; flex-wrap:wrap; gap:18px; margin:14px 0 0; font-size:12.5px; color:var(--mut) }
   .legend .k { display:inline-flex; align-items:center; gap:7px }
 </style>

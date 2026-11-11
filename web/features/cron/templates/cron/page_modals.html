@@ -5,6 +5,14 @@
   {% set form_label_class = 'block text-xs text-slate-400 mb-1' %}
   {% set cron_field_class = 'w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200' %}
   <div id="cron-modal" class="diff-modal-overlay hidden">
+    <style>
+      /* The editor's text and select fields draw their boundary at the 3:1 control floor on the dialog's
+         slate-800 paint: the field fill and the dialog are the same color, so the outline is the only mark
+         of the box, and border-slate-600 draws 1.93:1 there. #94a3b8 draws 5.71:1. The rule travels in
+         this dialog's own markup, so it needs no rebuilt Tailwind sheet. */
+      #cron-modal input[type="text"],
+      #cron-modal select { border-color: #94a3b8; }
+    </style>
     <div class="diff-modal" style="width: 90vw; max-width: 900px; height: 85vh;">
       <div class="diff-modal-header">
         <span class="text-sm font-semibold text-slate-200" id="cron-modal-title">Edit Scheduled Task</span>

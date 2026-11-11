@@ -8,8 +8,7 @@ package added here reaches both and the two lists cannot drift.
 
 | Rust item | Role |
 | --- | --- |
-| `RUNTIME` | the server's runtime registrations, which run before the package list |
-| `PACKAGES` | the server's package list, one entry per package |
 | `registry` | the composition root both binaries share |
 
+The two lists, `RUNTIME` and `PACKAGES`, are internal to this crate; `registry` reads both.
 The list belongs to this crate: a package added to the server is added here.

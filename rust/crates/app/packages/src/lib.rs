@@ -11,7 +11,7 @@
 use charliebot_registry::{RegisterFn, Registry, RegistryError};
 
 /// Runtime registrations run before the package list, matching the server's pre-recovery ordering.
-pub const RUNTIME: &[(&str, RegisterFn)] = &[
+const RUNTIME: &[(&str, RegisterFn)] = &[
   ("runtime.agents", charliebot_agents::register_runtime),
   ("runtime.usage", charliebot_usage::register),
   ("runtime.session_api", charliebot_session_api::register),
@@ -20,7 +20,7 @@ pub const RUNTIME: &[(&str, RegisterFn)] = &[
 ];
 
 /// The listed packages in registration order.
-pub const PACKAGES: &[(&str, RegisterFn)] = &[
+const PACKAGES: &[(&str, RegisterFn)] = &[
   ("features.user_text_checks", charliebot_user_text_checks::register),
   ("features.artifacts", charliebot_artifacts::register),
   ("features.backup", charliebot_backup::register),

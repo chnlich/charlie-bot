@@ -17,6 +17,9 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_store::{layout, metadata};
+use nix::errno::Errno;
+use nix::fcntl::AtFlags;
+use nix::sys::stat::fstatat;
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde_json::{Map, Value, json};
 
@@ -352,6 +355,18 @@ fn stem_shape(stem: &str) -> Option<(&str, &str)> {
   (stamp_shaped && valid_run_id(run_id)).then_some((stamp, run_id))
 }
 
+/// Whether one session's `voice` directory exists, looked up relative to the open sessions directory.
+///
+/// The lookup walks the session's own name under the descriptor instead of the whole sessions path, which a scan
+/// would otherwise walk again for every session of the home.
+fn voice_dir_exists(sessions: &fs::File, session_id: &str) -> io::Result<bool> {
+  match fstatat(sessions, &Path::new(session_id).join("voice"), AtFlags::empty()) {
+    Ok(_) => Ok(true),
+    Err(Errno::ENOENT) => Ok(false),
+    Err(error) => Err(io::Error::from_raw_os_error(error as i32)),
+  }
+}
+
 /// The most recent recordings across every session directory, newest first, one row per run.
 ///
 /// The scan reads each session's `voice/` directory once; a session without one is skipped, and any other read
@@ -365,6 +380,7 @@ pub(crate) fn list_recordings(cfg: &CharlieBotConfig, limit: usize) -> io::Resul
     Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
     Err(error) => return Err(error),
   };
+  let sessions_root = fs::File::open(&sessions_dir)?;
   for session in sessions {
     let session = session?;
     // The store reads its sessions as the directory entries of the sessions directory (`list_all_run_records_sync`
@@ -373,9 +389,13 @@ pub(crate) fn list_recordings(cfg: &CharlieBotConfig, limit: usize) -> io::Resul
     if !session.file_type()?.is_dir() {
       continue;
     }
-    let session_id = session.file_name().into_string().map_err(|name| {
+    let name = session.file_name();
+    let session_id = name.to_str().ok_or_else(|| {
       io::Error::other(format!("sessions directory holds a non-UTF-8 name {}", name.to_string_lossy()))
     })?;
+    if !voice_dir_exists(&sessions_root, session_id)? {
+      continue;
+    }
     let voice_dir = session.path().join("voice");
     let entries = match fs::read_dir(&voice_dir) {
       Ok(entries) => entries,
@@ -393,7 +413,7 @@ pub(crate) fn list_recordings(cfg: &CharlieBotConfig, limit: usize) -> io::Resul
           voice_dir.join(&name).display()
         )));
       };
-      stems.push((stamp.to_string(), session_id.clone(), stem.to_string()));
+      stems.push((stamp.to_string(), session_id.to_string(), stem.to_string()));
     }
   }
   stems.sort_unstable_by(|a, b| {

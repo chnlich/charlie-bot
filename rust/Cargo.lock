@@ -1650,6 +1650,7 @@ dependencies = [
  "charliebot-store",
  "futures-util",
  "minijinja",
+ "nix",
  "percent-encoding",
  "rubato",
  "serde",

@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# A GitHub stand-in for the `charliebot land` process tests, answering the gh calls the landing makes.
+#
+# Each PR is a directory $GH_STUB_STATE/prs/<number> holding its head branch, its state and its closing
+# comment. A PR reads MERGED once the tip of its head branch on the bare origin at $GH_STUB_ORIGIN is an
+# ancestor of main, the way GitHub marks a PR merged when its head sha reaches the base branch. Every
+# workflow run and check run reads green. When $GH_STUB_STATE/advance-main holds a sha, the first
+# workflow-run read moves origin's main there, so main moves between the branch push and the base push.
+# Every call is appended to $GH_STUB_STATE/calls.
+set -euo pipefail
+shopt -s nullglob
+
+state_dir=$GH_STUB_STATE
+origin=$GH_STUB_ORIGIN
+printf '%s\n' "$*" >>"$state_dir/calls"
+
+pr_head() {
+  git --git-dir="$origin" rev-parse "refs/heads/$(cat "$state_dir/prs/$1/branch")"
+}
+
+pr_state() {
+  local number=$1
+  if [[ $(cat "$state_dir/prs/$number/state") == OPEN ]] &&
+    git --git-dir="$origin" merge-base --is-ancestor "$(pr_head "$number")" refs/heads/main; then
+    echo MERGED >"$state_dir/prs/$number/state"
+  fi
+  cat "$state_dir/prs/$number/state"
+}
+
+group=$1
+action=$2
+shift 2
+positional=()
+declare -A option=()
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --draft)
+      shift
+      ;;
+    --*)
+      option[${1#--}]=$2
+      shift 2
+      ;;
+    *)
+      positional+=("$1")
+      shift
+      ;;
+  esac
+done
+
+case "$group $action" in
+  'pr list')
+    printf '['
+    separator=
+    for dir in "$state_dir"/prs/*; do
+      number=${dir##*/}
+      if [[ $(cat "$dir/branch") == "${option[head]}" && $(pr_state "$number") == OPEN ]]; then
+        printf '%s{"number":%s,"headRefOid":"%s"}' "$separator" "$number" "$(pr_head "$number")"
+        separator=,
+      fi
+    done
+    printf ']\n'
+    ;;
+  'pr view')
+    found=
+    for dir in "$state_dir"/prs/*; do
+      if [[ $(cat "$dir/branch") == "${positional[0]}" ]]; then
+        found=${dir##*/}
+      fi
+    done
+    if [[ -z $found ]]; then
+      printf 'no pull requests found for branch "%s"\n' "${positional[0]}" >&2
+      exit 1
+    fi
+    printf '{"number":%s,"url":"https://github.test/pull/%s","state":"%s"}\n' "$found" "$found" "$(pr_state "$found")"
+    ;;
+  'pr create')
+    existing=("$state_dir"/prs/*)
+    number=$((${#existing[@]} + 1))
+    mkdir -p "$state_dir/prs/$number"
+    printf '%s' "${option[head]}" >"$state_dir/prs/$number/branch"
+    echo OPEN >"$state_dir/prs/$number/state"
+    printf 'https://github.test/pull/%s\n' "$number"
+    ;;
+  'pr close')
+    number=${positional[0]}
+    if [[ $(pr_state "$number") == MERGED ]]; then
+      printf "Pull request #%s can't be closed because it was already merged\n" "$number" >&2
+      exit 1
+    fi
+    echo CLOSED >"$state_dir/prs/$number/state"
+    printf '%s' "${option[comment]}" >"$state_dir/prs/$number/comment"
+    ;;
+  api\ repos/*/actions/runs\?head_sha=*)
+    if [[ -f $state_dir/advance-main ]]; then
+      git --git-dir="$origin" update-ref refs/heads/main "$(cat "$state_dir/advance-main")"
+      rm "$state_dir/advance-main"
+    fi
+    printf '{"workflow_runs":[{"name":"CI","path":".github/workflows/ci.yml","event":"pull_request","status":"completed","conclusion":"success"}]}\n'
+    ;;
+  api\ repos/*/commits/*/check-runs\?per_page=100)
+    printf '{"check_runs":[{"name":"rust-test","conclusion":"success","completed_at":"2026-11-11T00:00:00Z","html_url":"https://github.test/checks/1"}]}\n'
+    ;;
+  api\ repos/*/commits/*/status)
+    printf '{"statuses":[]}\n'
+    ;;
+  *)
+    printf 'the gh stub has no answer for: gh %s %s\n' "$group" "$action" >&2
+    exit 1
+    ;;
+esac

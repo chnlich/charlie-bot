@@ -15,8 +15,8 @@ use clap::{Arg, Command};
 
 use crate::commands::session::home_dir;
 
-const ABOUT: &str = "Land an implement task: rebase, push the task branch, keep one draft PR, and move the \
-     base branch only after CI passed on the head sha";
+const ABOUT: &str = "Land an implement task: rebase, push the task branch, keep one draft PR, move the base \
+     branch only after CI passed on the head sha, and leave no PR of the task branch open";
 
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let command = with_infer_long_args(Command::new("land").about(ABOUT).arg(

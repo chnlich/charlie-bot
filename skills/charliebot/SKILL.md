@@ -20,7 +20,7 @@ Source code: the server and the `charliebot` CLI are `rust/crates/`.
 1. Worker runs in isolated git worktree (`~/worktrees/`)
 2. Branch naming: `charliebot/task-{timestamp}-{id}`
 3. On worker success → reviewer auto-spawned (may use a different member of the pool that `backends.calls.review` names)
-4. Reviewer: checks diff, fixes issues, then lands with `charliebot land` — it rebases onto the remote base, pushes the task branch with `--force-with-lease`, keeps one draft PR, and pushes `<sha>:<base>` only after every expected workflow ran green on that sha (`landed` and `landed-no-ci` exit 0; every other state names the blocker)
+4. Reviewer: checks diff, fixes issues, then lands with `charliebot land` — it rebases onto the remote base, pushes the task branch with `--force-with-lease`, keeps one draft PR, and pushes `<sha>:<base>` only after every expected workflow ran green on that sha (`landed` and `landed-no-ci` exit 0 and leave the task branch's PR merged or closed; every other state names the blocker)
 5. On landing → master agent gets summary
 
 ### Merge-back failover

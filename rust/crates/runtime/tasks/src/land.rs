@@ -13,6 +13,10 @@
 //! timeout — run per head sha from the time that sha was pushed to the task branch, so a rebase
 //! starts both again and a busy main costs `rebase_retries`, never a timeout. Main is never pushed
 //! on any state other than a pass, and no state falls back to a direct push.
+//!
+//! A push that moves the base branch, gated or not, leaves no open PR of the task branch behind:
+//! the call reads the branch's PRs back after the push and closes each one GitHub has not marked
+//! merged, so `landed` and `landed-no-ci` both mean the PR reads merged or closed.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -38,6 +42,10 @@ pub const NOT_STARTED_SECS: i64 = 600;
 pub const TIMEOUT_SECS: i64 = 5400;
 /// Rebase rounds one landing call allows before it refuses to keep racing main.
 const MAX_LANDING_ROUNDS: usize = 5;
+/// GitHub marks a PR merged about a second after its head sha reaches the base branch; a landing
+/// waits this long for that mark on a PR whose head is the landed sha before it closes the PR.
+const PR_MERGE_WAIT: Duration = Duration::from_secs(30);
+const PR_MERGE_POLL: Duration = Duration::from_secs(2);
 
 pub const STATE_LANDED: &str = "landed";
 pub const STATE_LANDED_NO_CI: &str = "landed-no-ci";
@@ -290,8 +298,8 @@ pub async fn land(home: &Path, task_session_id: &str) -> anyhow::Result<LandingR
         "git push",
       )
       .await;
-      let record = if ok {
-        LandingRecord {
+      if ok {
+        let record = LandingRecord {
           state: STATE_LANDED_NO_CI.to_string(),
           repo: ctx.repo.clone(),
           base: published.to_string(),
@@ -302,8 +310,10 @@ pub async fn land(home: &Path, task_session_id: &str) -> anyhow::Result<LandingR
           ci_passed_at: None,
           pushed_at: Some(now_rfc3339()),
           rebase_retries: retries,
-        }
-      } else if push_rejection_kind(&err) == PushRejection::RepositoryRules {
+        };
+        return record_landed(&ctx, published, record).await;
+      }
+      let record = if push_rejection_kind(&err) == PushRejection::RepositoryRules {
         LandingRecord {
           state: STATE_PR_MERGE_REQUIRED.to_string(),
           repo: ctx.repo.clone(),
@@ -356,9 +366,11 @@ pub async fn land(home: &Path, task_session_id: &str) -> anyhow::Result<LandingR
           "git push",
         )
         .await;
-        let record = if ok {
-          LandingRecord { state: STATE_LANDED.to_string(), pushed_at: Some(now_rfc3339()), ..base_record }
-        } else if push_rejection_kind(&err) == PushRejection::RepositoryRules {
+        if ok {
+          let record = LandingRecord { state: STATE_LANDED.to_string(), pushed_at: Some(now_rfc3339()), ..base_record };
+          return record_landed(&ctx, published, record).await;
+        }
+        let record = if push_rejection_kind(&err) == PushRejection::RepositoryRules {
           LandingRecord { state: STATE_PR_MERGE_REQUIRED.to_string(), ..base_record }
         } else {
           // Main moved while the checks ran: the next round rebases, and both clocks restart.
@@ -460,17 +472,7 @@ enum RebaseStep {
 /// The task branch push under `--force-with-lease`: the lease is the fetched tracking ref when origin
 /// already has the branch, and an absent ref when it does not, so a rebase never clobbers another push.
 async fn push_task_branch(ctx: &TaskLanding, branch: &str) -> anyhow::Result<()> {
-  let (ok, out, _) = git::git_stdout(
-    &ctx.worktree,
-    &["ls-remote", "origin", &format!("refs/heads/{branch}")],
-    GIT_READ_TIMEOUT,
-    "git ls-remote",
-  )
-  .await;
-  if !ok {
-    anyhow::bail!("git ls-remote origin {branch} failed: {out}");
-  }
-  if !out.trim().is_empty() {
+  if origin_has_branch(ctx, branch).await? {
     let (fetched, _, fetch_err) =
       git::git_stdout(&ctx.worktree, &["fetch", "origin", branch], GIT_WRITE_TIMEOUT, "git fetch task branch").await;
     if !fetched {
@@ -488,6 +490,20 @@ async fn push_task_branch(ctx: &TaskLanding, branch: &str) -> anyhow::Result<()>
     anyhow::bail!("pushing task branch {branch} failed: {err}");
   }
   Ok(())
+}
+
+async fn origin_has_branch(ctx: &TaskLanding, branch: &str) -> anyhow::Result<bool> {
+  let (ok, out, err) = git::git_stdout(
+    &ctx.worktree,
+    &["ls-remote", "origin", &format!("refs/heads/{branch}")],
+    GIT_READ_TIMEOUT,
+    "git ls-remote",
+  )
+  .await;
+  if !ok {
+    anyhow::bail!("git ls-remote origin {branch} failed: {err}");
+  }
+  Ok(!out.trim().is_empty())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -840,6 +856,11 @@ fn write_landing_record(session_dir: &Path, record: &LandingRecord) -> anyhow::R
 }
 
 async fn gh_json(workdir: &Path, args: &[&str]) -> anyhow::Result<Value> {
+  let stdout = gh_stdout(workdir, args).await?;
+  serde_json::from_slice(&stdout).map_err(|error| anyhow::anyhow!("gh {} printed no JSON: {error}", args.join(" ")))
+}
+
+async fn gh_stdout(workdir: &Path, args: &[&str]) -> anyhow::Result<Vec<u8>> {
   let mut command = tokio::process::Command::new("gh");
   command
     .args(args)
@@ -856,8 +877,7 @@ async fn gh_json(workdir: &Path, args: &[&str]) -> anyhow::Result<Value> {
   if !output.status.success() {
     anyhow::bail!("gh {} failed: {}", args.join(" "), String::from_utf8_lossy(&output.stderr).trim());
   }
-  serde_json::from_slice(&output.stdout)
-    .map_err(|error| anyhow::anyhow!("gh {} printed no JSON: {error}", args.join(" ")))
+  Ok(output.stdout)
 }
 
 /// The wake the waiting state registers: one `charliebot session trigger --cmd` per head sha whose
@@ -962,6 +982,85 @@ fn pr_url_and_number(pr: &Value) -> anyhow::Result<(String, i64)> {
   let number =
     pr.get("number").and_then(Value::as_i64).ok_or_else(|| anyhow::anyhow!("gh pr view printed no number"))?;
   Ok((url, number))
+}
+
+/// Write the record of a landing whose push moved the base branch to `record.sha`, then close what
+/// GitHub left open of the task branch's PRs. The record comes first: the base branch holds the sha
+/// whatever the PR step meets, and the delivery check reads that record.
+async fn record_landed(ctx: &TaskLanding, published: &str, record: LandingRecord) -> anyhow::Result<LandingRecord> {
+  write_landing_record(&ctx.session_dir, &record)?;
+  close_task_prs(ctx, published, &record.sha).await.map_err(|error| {
+    anyhow::anyhow!("{published} holds {} and landing.json reads {}, but {error:#}", record.sha, record.state)
+  })?;
+  Ok(record)
+}
+
+/// One open PR of the task branch.
+struct OpenPr {
+  number: i64,
+  head_sha: String,
+}
+
+/// Leave no open PR of the task branch once the base branch holds *sha*.
+///
+/// GitHub marks a PR merged when its head sha reaches the base branch. The gated path pushes the
+/// task branch at *sha* before the base push, so its PR merges on GitHub's side, and the call waits
+/// `PR_MERGE_WAIT` for that mark. The ungated path never pushes the task branch, so a PR opened on
+/// it keeps an older head; after a rebase that head holds a patch-equivalent copy of the landed
+/// commits under another sha, and GitHub never marks the PR merged. Each PR still open is closed
+/// with a comment naming the landed sha. GitHub's own merge mark can overtake a close and refuse
+/// it, so the read-back after the closes is the verdict. A task branch absent from origin has no
+/// open PR, because GitHub closes a PR whose head branch is deleted, so that landing calls no `gh`.
+async fn close_task_prs(ctx: &TaskLanding, published: &str, sha: &str) -> anyhow::Result<()> {
+  if !origin_has_branch(ctx, &ctx.branch_name).await? {
+    return Ok(());
+  }
+  let deadline = tokio::time::Instant::now() + PR_MERGE_WAIT;
+  let mut open = open_task_prs(ctx).await?;
+  while open.iter().any(|pr| pr.head_sha == sha) && tokio::time::Instant::now() < deadline {
+    tokio::time::sleep(PR_MERGE_POLL).await;
+    open = open_task_prs(ctx).await?;
+  }
+  let comment = format!("Landed on `{published}` as {sha} by `charliebot land`.");
+  let mut refusals = Vec::new();
+  for pr in &open {
+    let number = pr.number.to_string();
+    let closed = gh_stdout(&ctx.worktree, &["pr", "close", &number, "--repo", &ctx.repo, "--comment", &comment]).await;
+    if let Err(error) = closed {
+      // GitHub can mark the PR merged while the close runs, which refuses the close; the read-back decides.
+      refusals.push(format!("#{number}: {error:#}"));
+    }
+  }
+  let left = open_task_prs(ctx).await?;
+  if !left.is_empty() {
+    let numbers = left.iter().map(|pr| format!("#{}", pr.number)).collect::<Vec<_>>().join(", ");
+    anyhow::bail!("PR {numbers} of {} still reads open after the close ({})", ctx.branch_name, refusals.join("; "));
+  }
+  for refusal in &refusals {
+    tracing::info!(target: "charliebot_tasks", branch = %ctx.branch_name, refusal = %refusal, "land_pr_close_refused");
+  }
+  Ok(())
+}
+
+async fn open_task_prs(ctx: &TaskLanding) -> anyhow::Result<Vec<OpenPr>> {
+  let listed = gh_json(
+    &ctx.worktree,
+    &["pr", "list", "--repo", &ctx.repo, "--head", &ctx.branch_name, "--state", "open", "--json", "number,headRefOid"],
+  )
+  .await?;
+  let rows = listed.as_array().ok_or_else(|| anyhow::anyhow!("gh pr list printed no array"))?;
+  rows
+    .iter()
+    .map(|row| {
+      let number = row
+        .get("number")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| anyhow::anyhow!("gh pr list printed a PR without a number"))?;
+      let head_sha = string_field(row, "headRefOid")
+        .ok_or_else(|| anyhow::anyhow!("gh pr list printed PR #{number} without a head sha"))?;
+      Ok(OpenPr { number, head_sha })
+    })
+    .collect()
 }
 
 #[cfg(test)]

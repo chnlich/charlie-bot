@@ -146,7 +146,7 @@ fn context_reading_int(field: &str, value: Option<&Value>) -> Option<i64> {
   }
 }
 
-/// A key the event must carry, whose value is an integer or null (`event[key]`).
+/// A key the event must carry, whose value is an integer or null.
 fn nullable_int(event: &Map<String, Value>, key: &str) -> anyhow::Result<Option<i64>> {
   match event.get(key) {
     None => bail!("charlie-code compact event lacks {key}"),
@@ -157,7 +157,7 @@ fn nullable_int(event: &Map<String, Value>, key: &str) -> anyhow::Result<Option<
   }
 }
 
-/// A key the event must carry, whose value is a number (`event[key]`).
+/// A key the event must carry, whose value is a number.
 fn required_number(event: &Map<String, Value>, key: &str) -> anyhow::Result<f64> {
   match event.get(key) {
     None => bail!("charlie-code event lacks {key}"),

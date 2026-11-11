@@ -13,7 +13,7 @@ path = "src/main.rs"
 axum.workspace = true
 bytes.workspace = true
 charliebot-compat.workspace = true
-charliebot-agents = { path = "../../runtime/agents" }
+charliebot-agents.workspace = true
 charliebot-cli-common.workspace = true
 charliebot-core.workspace = true
 charliebot-opencode.workspace = true

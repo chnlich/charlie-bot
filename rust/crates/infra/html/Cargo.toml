@@ -11,7 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 charliebot-core.workspace = true
-fancy-regex = "0.16"
+fancy-regex.workspace = true
 html-escape.workspace = true
 serde.workspace = true
 serde_json.workspace = true

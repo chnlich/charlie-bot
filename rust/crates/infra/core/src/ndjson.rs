@@ -1,10 +1,26 @@
-//! One line of a newline-delimited JSON stream, under the skip contract the backend stdout and the run raw log
-//! share.
+//! One line of a newline-delimited JSON stream, under the skip contract the backend stdout, the run raw log and the
+//! chat event log share.
 //!
 //! A blank line is not an event, and a producer can write bytes that are not UTF-8. A reader that skips a line
 //! reports it under its own event name, so the decode returns the failure and leaves the logging to the caller.
 
+use std::borrow::Cow;
+
 use serde_json::Value;
+
+/// The text of one NDJSON line under the skip contract: `None` for a blank line, and invalid UTF-8 repaired with
+/// U+FFFD so a line a producer wrote in a broken encoding still reads.
+pub fn line_text(raw: &[u8]) -> Option<Cow<'_, str>> {
+  if raw.iter().all(u8::is_ascii_whitespace) {
+    return None;
+  }
+  // `from_utf8` validates word-at-a-time, and `from_utf8_lossy` walks byte by byte even over valid text. A valid line,
+  // which a lossy decode returns unchanged, takes the fast check.
+  match std::str::from_utf8(raw) {
+    Ok(text) => Some(Cow::Borrowed(text)),
+    Err(_) => Some(Cow::Owned(String::from_utf8_lossy(raw).into_owned())),
+  }
+}
 
 /// Decode one NDJSON line under the skip contract.
 ///
@@ -12,16 +28,7 @@ use serde_json::Value;
 /// event name. A line whose bytes are not UTF-8 is repaired with U+FFFD before the parse, so a line a producer wrote
 /// in a broken encoding still reaches the event stream.
 pub fn parse_line(raw: &[u8]) -> Option<Result<Value, serde_json::Error>> {
-  if raw.is_empty() || raw.iter().all(u8::is_ascii_whitespace) {
-    return None;
-  }
-  match serde_json::from_slice(raw) {
-    Ok(value) => Some(Ok(value)),
-    Err(error) => match std::str::from_utf8(raw) {
-      Ok(_) => Some(Err(error)),
-      Err(_) => Some(serde_json::from_str(&String::from_utf8_lossy(raw))),
-    },
-  }
+  line_text(raw).map(|text| serde_json::from_str(&text))
 }
 
 /// Skip the spaces and tabs at the start of `bytes`.
@@ -73,5 +80,12 @@ mod tests {
   fn invalid_utf8_is_repaired_before_the_parse() {
     assert_eq!(value(b"{\"text\": \"ok\xff\"}"), json!({"text": "ok\u{fffd}"}));
     assert!(parse_line(b"\xff").is_some_and(|result| result.is_err()));
+  }
+
+  #[test]
+  fn the_line_text_skips_a_blank_line_and_repairs_invalid_utf8() {
+    assert_eq!(line_text(b""), None);
+    assert_eq!(line_text(b" \t\r\n"), None);
+    assert_eq!(line_text(b"{\"text\": \"ok\xff\"}").as_deref(), Some("{\"text\": \"ok\u{fffd}\"}"));
   }
 }

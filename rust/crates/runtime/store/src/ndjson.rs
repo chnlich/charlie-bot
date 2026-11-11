@@ -22,12 +22,12 @@ const APPEND_JSON: JsonStyle =
 /// through the visitor in `compact`. That visitor produces the same value a `serde_json::Value`
 /// round trip would have.
 pub(crate) fn parse_line_compact(raw: &[u8]) -> Option<CompactValue> {
-  parse_line(raw, |text| serde_json::from_str(text).ok())
+  parse_text_line(raw, |text| serde_json::from_str(text).ok())
 }
 
 /// [`parse_line_compact`] with the object keys taken from one file's `keys`.
 pub(crate) fn parse_file_line(raw: &[u8], keys: &ParseKeys) -> Option<CompactValue> {
-  parse_line(raw, |text| parse_file_text(text, keys))
+  parse_text_line(raw, |text| parse_file_text(text, keys))
 }
 
 /// One line's text parsed with the object keys taken from one file's `keys`; `None` for malformed JSON.
@@ -39,20 +39,13 @@ pub(crate) fn parse_file_text(text: &str, keys: &ParseKeys) -> Option<CompactVal
   Some(value)
 }
 
-/// The skip contract of one line: a blank line is `None`, and `parse` reads the line's text, with invalid UTF-8 replaced
-/// by U+FFFD.
-pub(crate) fn parse_line(raw: &[u8], parse: impl Fn(&str) -> Option<CompactValue>) -> Option<CompactValue> {
-  if raw.iter().all(u8::is_ascii_whitespace) {
-    return None;
-  }
+/// One line's compact value: the skip contract [`charliebot_core::ndjson::line_text`] owns, then `parse` on the line's
+/// text.
+pub(crate) fn parse_text_line(raw: &[u8], parse: impl Fn(&str) -> Option<CompactValue>) -> Option<CompactValue> {
+  let text = charliebot_core::ndjson::line_text(raw)?;
   #[cfg(test)]
   LINE_PARSES.with(|count| count.set(count.get() + 1));
-  // `from_utf8` validates word-at-a-time, and `from_utf8_lossy` walks byte by byte even over valid text. A valid line,
-  // which a lossy decode returns unchanged, takes the fast check.
-  match std::str::from_utf8(raw) {
-    Ok(text) => parse(text),
-    Err(_) => parse(&String::from_utf8_lossy(raw)),
-  }
+  parse(&text)
 }
 
 // How many lines this thread's parser attempted, a test-only count that proves a reader parses each

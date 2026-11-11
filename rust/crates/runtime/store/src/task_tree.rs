@@ -1025,6 +1025,28 @@ impl Store {
     descendant_ids_until(&index, session_id, &mut is_archived, should_stop)
   }
 
+  /// Return the open descendants of a session in depth-first order: each one reads its metadata, has an open task
+  /// state, and is neither archived nor under an archived ancestor. The status panel and the approval scope count
+  /// these sessions' Waiting on you items.
+  pub fn open_descendants(&self, session_id: &str) -> StoreResult<Vec<SessionMetadata>> {
+    let archived = self.derived_archived_ids()?;
+    let archived: HashSet<&str> = archived.iter().map(String::as_str).collect();
+    let mut open = Vec::new();
+    for descendant_id in self.descendant_ids(session_id)? {
+      let Some(meta) = self.get_session_cached_or_read_sync(&descendant_id)? else {
+        continue;
+      };
+      if meta.status == SessionStatus::Archived || archived.contains(descendant_id.as_str()) {
+        continue;
+      }
+      if self.task_state(&descendant_id)? != "open" {
+        continue;
+      }
+      open.push(meta);
+    }
+    Ok(open)
+  }
+
   /// Return every task node whose effective archive state is inherited or fact-derived.
   ///
   /// The list belongs to the shared task index. A reader that only compares or filters it shares the index's

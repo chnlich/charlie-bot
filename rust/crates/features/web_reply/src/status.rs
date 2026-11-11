@@ -729,21 +729,11 @@ struct StatusTree {
 ///
 /// A session deleted since the task-tree index was read is absent, so it answers no row.
 fn read_status_tree(store: &Store, session_id: &str) -> Result<StatusTree, WebReplyError> {
-  let archived = store.derived_archived_ids()?;
-  let archived: HashSet<&str> = archived.iter().map(String::as_str).collect();
   let children = store.child_ids(session_id)?;
   let mut open = Vec::new();
   let mut statuses = Vec::new();
-  for descendant_id in store.descendant_ids(session_id)? {
-    let Some(meta) = store.get_session_cached_or_read_sync(&descendant_id)? else {
-      continue;
-    };
-    if meta.status == SessionStatus::Archived || archived.contains(descendant_id.as_str()) {
-      continue;
-    }
-    if store.task_state(&descendant_id)? != "open" {
-      continue;
-    }
+  for meta in store.open_descendants(session_id)? {
+    let descendant_id = meta.id.clone();
     if let Some(status) = stored_status(&meta)? {
       statuses.push((descendant_id.clone(), meta, status));
     }

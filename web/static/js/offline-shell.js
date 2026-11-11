@@ -1,9 +1,9 @@
 // ---------------------------------------------------------------------------
 // Offline shell: the page's side of the service worker (offline-shell-worker.js)
 // ---------------------------------------------------------------------------
-// The page registers the worker, asks it to store the shell once the page has loaded, refreshes the stored
-// shell before a 4409 reload, and drops the stored copies on a 401. A browser without service workers
-// keeps the page it always had.
+// The page registers the worker once its catch-up completes and asks it to store the shell then, refreshes
+// the stored shell before a 4409 reload, reports the catch-up's end to the worker, and drops the stored
+// copies on a 401. A browser without service workers keeps the page it always had.
 
 const OFFLINE_SHELL_WORKER_PATH = '/offline-shell-worker.js';
 
@@ -29,20 +29,34 @@ function registerOfflineShell() {
     reportWarm({supported: false});
     return;
   }
+  // The page's open owns the link until its catch-up completes: the worker script this registration
+  // fetches and the shell warm-up are the offline shell's own bytes, so both wait for the page-current
+  // event (sidebar/last-state.js). A worker registered then controls the next navigation in its scope,
+  // which keeps its first open's paint the page's own.
+  document.addEventListener('charliebot:page-current', warmOfflineShell, {once: true});
+}
+
+function warmOfflineShell() {
   navigator.serviceWorker.register(OFFLINE_SHELL_WORKER_PATH, {scope: '/?session='})
     .catch((err) => console.error('offline shell worker registration failed:', err));
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.ready.then((registration) => {
-      if (!registration.active) {
-        reportWarm({supported: false});
-        return;
-      }
-      const channel = new MessageChannel();
-      channel.port1.onmessage = (event) => reportWarm(event.data ?? {});
-      registration.active.postMessage({type: 'warm'}, [channel.port2]);
-    }, (err) => reportWarm({error: String(err)}));
-  });
+  navigator.serviceWorker.ready.then((registration) => {
+    if (!registration.active) {
+      reportWarm({supported: false});
+      return;
+    }
+    const channel = new MessageChannel();
+    channel.port1.onmessage = (event) => reportWarm(event.data ?? {});
+    registration.active.postMessage({type: 'warm'}, [channel.port2]);
+  }, (err) => reportWarm({error: String(err)}));
 }
+
+// The page reports its catch-up complete (sidebar/last-state.js): no request of the open is on the link
+// any more, so the worker refreshes the copies this open read from (offline-shell-worker.js).
+function reportCatchupComplete() {
+  withOfflineShellWorker((worker) => worker.postMessage({type: 'catchup-complete'}));
+}
+
+document.addEventListener('charliebot:page-current', () => reportCatchupComplete());
 
 // Runs `action` with the worker that holds this page, when one is registered and active.
 function withOfflineShellWorker(action) {

@@ -99,16 +99,18 @@ async function answerFile(request) {
   return fetch(request);
 }
 
-// A first screen or a sidebar list. Without a stored copy the network answers, uncapped. With one, the
-// network answers if it gives a 200 within the wait cap; a network error, a 5xx or the cap's end gives the
-// copy, and the network's answer still updates the copy in the background.
+// A first screen or a sidebar list. Without a stored copy the network answers, uncapped. With one, a
+// network 200 within the wait cap answers the page directly and replaces the copy in the background;
+// otherwise the copy answers at the cap's end and the network fetch for that request is aborted there:
+// the page has its answer, so the link goes to the requests the page itself still needs for this open.
+// The aborted fetch's refresh waits for the page's catchup-complete message, which reports the open's
+// catch-up done; the copy is refreshed then, when the link is the feature's own.
 async function answerCopy(event, request) {
   const cache = await caches.open(COPY_CACHE);
   const networkOnly = request.headers.get(NETWORK_ONLY_HEADER) === '1';
   const copy = networkOnly ? undefined : await cache.match(request.url);
-  const settled = observe(fetch(request));
   if (!copy) {
-    let answer = await settled;
+    let answer = await observe(fetch(request));
     if (!answer.error && answer.response.status === 304) {
       // The browser's HTTP cache held the entry and the revalidation matched, but a request the worker
       // answers carries no cached body the page could read. One more fetch, past the cache and without
@@ -121,13 +123,17 @@ async function answerCopy(event, request) {
     event.waitUntil(afterNetworkAnswer(request, answer));
     return answer.response;
   }
+  const controller = new AbortController();
+  const settled = observe(fetch(request, {signal: controller.signal}));
   const answered = await Promise.race([settled, waitCap(WAIT_CAP_MS)]);
-  event.waitUntil(settled.then((answer) => afterNetworkAnswer(request, answer)));
   // A 304 names no body: the network's state matches what the browser's HTTP cache held, which is what
   // the stored copy carries. The page reads the copy.
   if (answered.response && answered.response.status < 500 && answered.response.status !== 304) {
+    event.waitUntil(settled.then((answer) => afterNetworkAnswer(request, answer)));
     return answered.response;
   }
+  controller.abort();
+  queueCopyRefresh(request.url);
   return copy;
 }
 
@@ -149,8 +155,36 @@ async function afterNetworkAnswer(request, answer) {
   if (answer.response.status === 401) {
     await dropCopies();
   } else if (answer.stored) {
-    await storeCopy(request, answer.stored);
+    await storeCopy(request.url, answer.stored);
   }
+}
+
+// The copies the opens answered from, whose network refresh waits for the page's catch-up to complete.
+// The page reports that with the catchup-complete message (offline-shell.js); the refresh then shares
+// the link with nothing the page still needs.
+const refreshQueue = new Set();
+
+function queueCopyRefresh(url) {
+  refreshQueue.add(url);
+}
+
+// Refreshes the queued copies from the network and drops every copy on a 401. An answer that carries no
+// body (a 304) or fails leaves its copy as it is; an error also keeps the queue, so the copies the page
+// read while offline are refreshed after the next catch-up.
+async function refreshCopies() {
+  for (const url of refreshQueue) {
+    const cache = await caches.open(COPY_CACHE);
+    if (await cache.match(url) === undefined) continue;
+    const answer = await observe(fetch(url, {credentials: 'same-origin'}));
+    if (answer.error) return;
+    if (answer.response.status === 401) {
+      refreshQueue.clear();
+      await dropCopies();
+      return;
+    }
+    if (answer.stored) await storeCopy(url, answer.stored);
+  }
+  refreshQueue.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -162,17 +196,16 @@ function sessionIdOf(url) {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-async function storeCopy(request, response) {
-  const url = new URL(request.url);
+async function storeCopy(url, response) {
   const body = await response.arrayBuffer();
-  const sessionId = sessionIdOf(url);
+  const sessionId = sessionIdOf(new URL(url));
   const cache = await caches.open(COPY_CACHE);
   for (;;) {
     const headers = new Headers(response.headers);
     headers.set(STORED_AT_HEADER, new Date().toISOString());
     const entry = new Response(body, {status: response.status, statusText: response.statusText, headers});
     try {
-      await cache.put(request.url, entry);
+      await cache.put(url, entry);
       break;
     } catch (error) {
       if (error.name !== 'QuotaExceededError') throw error;
@@ -283,6 +316,8 @@ self.addEventListener('message', (event) => {
     event.waitUntil(warmShell(data.refresh === true).then(
         (result) => replyTo(event, result),
         (error) => replyTo(event, {stored: false, error: String(error)})));
+  } else if (data.type === 'catchup-complete') {
+    event.waitUntil(refreshCopies());
   } else if (data.type === 'drop-copies') {
     event.waitUntil(dropCopies());
   } else {

@@ -4,7 +4,7 @@
 //!
 //! Public API:
 //! - `ThreadPlatform`: the per-platform facts; `notice_key`, `backfill_key` and `ack_event_type`
-//!   derive the marker keys from `name`.
+//!   derive the marker keys from `name`, and `platform_line` opens every platform's contract part.
 //! - `IdOrdering` (`ThreadPlatform::id_key`): text order for Slack ts strings, integer order for Discord snowflakes,
 //!   and millisecond-then-id order for Feishu's `<create_time ms>-<message id>` composites.
 //! - `ThreadMessage` and `ThreadAdapter`: the message the round side reads, and the
@@ -165,6 +165,14 @@ impl ThreadPlatform {
   /// Wire type of the platform's persisted ack audit record (`ack_event_type`).
   pub fn ack_event_type(&self) -> String {
     format!("{}_ack", self.name)
+  }
+
+  /// The platform line every platform's contract part opens with (`platform_line`).
+  pub fn platform_line(&self) -> String {
+    format!(
+      "Platform: {}. Reply command: `{} --file <path>`. Per-message limit: {} characters. {LINKED_PAGES_LINE}",
+      self.display_name, self.reply_command, self.max_post_chars
+    )
   }
 }
 

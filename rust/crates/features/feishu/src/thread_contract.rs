@@ -1,7 +1,7 @@
-//! The Feishu part of the thread reply contract: the platform line and the read sentences. The shared contract joins it
-//! with the common docs.
+//! The Feishu part of the thread reply contract: the read sentences. The shared contract supplies the platform line
+//! and joins the part with the common docs.
 
-use charliebot_chat_threads::thread_entry::{IdOrdering, LINKED_PAGES_LINE, ThreadPlatform};
+use charliebot_chat_threads::thread_entry::{IdOrdering, ThreadPlatform};
 
 use crate::fields::{CHAT_ID, MENTION_ID, ROOT_ID};
 use crate::package::NAME;
@@ -43,14 +43,6 @@ pub fn thread_contract_part() -> String {
      读回里 `summon: true` 的消息就是本轮要回答的召唤。\n\
      跟帖唤醒（`{FOLLOW_TRIGGER_PREFIX} floor=<id>`）：用 `{READ_COMMAND}` 读话题里的新消息\
      （本次返回的未读消息随之记为已读，本轮沉默也要先读）。",
-    platform_line()
-  )
-}
-
-/// The platform line every Feishu contract part opens with.
-fn platform_line() -> String {
-  format!(
-    "Platform: Feishu. Reply command: `{REPLY_COMMAND} --file <path>`. \
-     Per-message limit: {MAX_POST_CHARS} characters. {LINKED_PAGES_LINE}"
+    FEISHU.platform_line()
   )
 }

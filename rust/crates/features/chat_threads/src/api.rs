@@ -1,5 +1,6 @@
 //! `GET /api/sessions/chat-threads`: the sidebar Threads view's list.
 
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 use axum::Router;
@@ -11,13 +12,21 @@ use charliebot_compat::responses;
 use charliebot_compat::routing::get_only;
 use charliebot_registry::FeatureContext;
 use charliebot_session_api::listing::{self, SessionsListMemos};
-use serde_json::json;
+use charliebot_store::sidebar_state::DerivedSidebarMap;
+use serde_json::{Map, Value, json};
 
 use crate::sidebar::THREADS_VIEW;
 
 /// The render memos of this route alone, held for the server's lifetime, so the Workspace list's memos never serve
 /// the Threads body.
 static CHAT_THREADS_MEMOS: LazyLock<SessionsListMemos> = LazyLock::new(SessionsListMemos::default);
+
+/// The overlay an empty Threads view answers with. No row reads it, and one shared allocation keeps the listing
+/// memo's source comparison a hit across the view's polls.
+static EMPTY_DERIVED: LazyLock<Arc<DerivedSidebarMap>> = LazyLock::new(|| Arc::new(DerivedSidebarMap::new()));
+
+/// The controller fields an empty Threads view answers with, shared as [`EMPTY_DERIVED`] is.
+static EMPTY_SEQUENCE_FIELDS: LazyLock<HashMap<String, Map<String, Value>>> = LazyLock::new(HashMap::new);
 
 /// The route table, built with the shared feature context.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
@@ -30,23 +39,56 @@ pub(crate) fn matches(path: &str) -> bool {
 }
 
 /// The active corpus's rows that the `threads` view holds, newest first. The Workspace list is the complement over the
-/// same corpus.
+/// same corpus; a view that holds no row answers without building that corpus.
 ///
 /// With `ids`, the route answers those named rows alone, as the sidebar's row refresh: the ids the view no longer holds
 /// come back in `gone`, and the rest in the compact column form the full list's rows take.
 async fn list_chat_threads(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
-  let listing::ListingCorpus { mut rows, derived, sequence_fields } =
-    match listing::active_listing_corpus(&features.store, &features.registry) {
-      Ok(corpus) => corpus,
-      Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
-    };
   let views = match features.store.view_subtree_roots() {
     Ok(views) => views,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
   let threads = views.get(THREADS_VIEW);
-  rows.retain(|row| threads.is_some_and(|members| members.contains_key(&row.id)));
   let query_ids = listing::row_refresh_ids(&request);
+  // An empty Threads view holds no row, so no row's state feeds the answer. The Workspace corpus would be built,
+  // polled and copied only for the view to discard every row, so the empty view answers from its own emptiness.
+  if threads.is_none_or(HashMap::is_empty) {
+    if let Some(ids) = query_ids {
+      if ids.is_empty() {
+        return responses::json(
+          StatusCode::UNPROCESSABLE_ENTITY,
+          &json!({"detail": "ids must name at least one session"}),
+        );
+      }
+      let text = match listing::row_refresh_text_for(
+        &features.store,
+        &[],
+        &EMPTY_DERIVED,
+        &EMPTY_SEQUENCE_FIELDS,
+        &ids,
+        listing::LISTING_PROJECTION,
+      ) {
+        Ok(text) => text,
+        Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+      };
+      return responses::fast_json_rendered(StatusCode::OK, text.into_bytes());
+    }
+    return listing::sessions_list_response(
+      &request,
+      &features.store,
+      &[],
+      None,
+      &EMPTY_DERIVED,
+      &EMPTY_SEQUENCE_FIELDS,
+      &CHAT_THREADS_MEMOS,
+    );
+  }
+  let listing::ListingCorpus { mut rows, derived, sequence_fields } =
+    match listing::active_listing_corpus(&features.store, &features.registry) {
+      Ok(corpus) => corpus,
+      Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+    };
+  rows.retain(|row| threads.is_some_and(|members| members.contains_key(&row.id)));
   if let Some(ids) = query_ids {
     if ids.is_empty() {
       return responses::json(
@@ -249,6 +291,24 @@ mod tests {
 
   fn keys(row: &Value) -> HashSet<String> {
     row.as_object().expect("a row is an object").keys().cloned().collect()
+  }
+
+  #[tokio::test]
+  async fn an_empty_threads_view_lists_no_row_and_names_every_requested_id_gone() {
+    let server = Server::new(&SERVER);
+    // A session without a thread origin leaves the Threads view empty while the store still holds a corpus.
+    let slots = server.features.registry.metadata_slots();
+    let plain = session("plain-only", TaskProfile::Manager, None);
+    write_session(&server.features.store, &slots, &plain);
+    let app = server.app();
+
+    let rows = json_list(send(&app, get_request("/api/sessions/chat-threads", false)).await).await;
+    assert!(rows.is_empty(), "an empty Threads view lists no row");
+
+    let response = send(&app, get_request(&format!("/api/sessions/chat-threads?ids={}", plain.id), false)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let value: Value = serde_json::from_slice(&bytes(response).await).expect("the row refresh is JSON");
+    assert_eq!(value["gone"], json!([plain.id]), "a row outside the empty view comes back gone");
   }
 
   #[tokio::test]

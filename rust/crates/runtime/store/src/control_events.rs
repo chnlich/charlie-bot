@@ -13,6 +13,9 @@ pub const ACTOR_USER: &str = "user";
 pub const ACTOR_AGENT: &str = "agent";
 pub const ACTOR_SYSTEM: &str = "system";
 
+/// The field of a run record and a task-created event that carries the hash of the task spec.
+pub const TASK_SPEC_HASH_FIELD: &str = "task_spec_hash";
+
 /// Fields that belong to the request-event header or its shared task-input payload.
 pub const REQUEST_EVENT_CORE_FIELDS: &[&str] = &[
   "id",
@@ -199,7 +202,7 @@ pub fn build_task_created_event(
     [
       ("request_id".to_string(), Value::String(request_id.to_string())),
       ("task_parent_id".to_string(), task_parent_id.map_or(Value::Null, |value| Value::String(value.to_string()))),
-      ("task_spec_hash".to_string(), task_spec_hash.map_or(Value::Null, |value| Value::String(value.to_string()))),
+      (TASK_SPEC_HASH_FIELD.to_string(), task_spec_hash.map_or(Value::Null, |value| Value::String(value.to_string()))),
     ],
   )
 }

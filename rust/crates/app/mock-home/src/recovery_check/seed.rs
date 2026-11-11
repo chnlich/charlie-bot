@@ -8,6 +8,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use charliebot_core::event_types::{INPUT_EVENT_IDS, RUN_FINISHED, TASK_CLOSED, TASK_CREATED};
+use charliebot_store::control_events::TASK_SPEC_HASH_FIELD;
 use charliebot_store::layout;
 use charliebot_store::metadata::{
   BASE_BRANCH_FIELD, HAS_UNREAD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, TASK_TYPE_FIELD,
@@ -185,7 +186,7 @@ fn run_record(run: RunRecord) -> Value {
     "session_id": run.session_id,
     "kind": run.kind,
     (INPUT_EVENT_IDS): run.inputs,
-    "task_spec_hash": null,
+    (TASK_SPEC_HASH_FIELD): null,
     "task_spec_ref": null,
     (OBSERVATION_PROMPT_SNAPSHOT_REF): null,
     "retry_of_run_id": null,
@@ -249,7 +250,11 @@ pub fn seed(sessions: &Path, live_runs: &Path) -> Result<()> {
       &session_id,
       &stamp(index, 0),
       actor,
-      json!({"request_id": uid(&format!("{label}/request")), "task_parent_id": null, "task_spec_hash": null}),
+      json!({
+        "request_id": uid(&format!("{label}/request")),
+        "task_parent_id": null,
+        (TASK_SPEC_HASH_FIELD): null
+      }),
     )];
     let runs_dir = layout::runs_dir(&session_dir);
     let (run_id, kind) = match case.profile {

@@ -57,6 +57,24 @@ const VOICE_RELAY_FINAL_BUDGET_PER_SECOND_MS = 20;
 // WebSocket readyState OPEN: relay chunks go out only on an open socket; the
 // chunks captured before that ride the open event's replay.
 const VOICE_WS_OPEN = 1;
+// The states `run.phase` takes. A live recording enters the stop state when it
+// ends with no final; an upload that fails enters the retry state with its
+// buffer kept. Every read and write of the phase names a member here.
+const VOICE_RUN_PHASE = {
+  IDLE: 'idle',
+  RECORDING: 'recording',
+  STOP: 'stop',
+  UPLOADING: 'uploading',
+  DECODING: 'decoding',
+  RETRY: 'retry',
+};
+// The states the voice button shows: amber while the engine arms, red once
+// sound arrives, and slate for the idle button between runs.
+const VOICE_BUTTON_STATE = {
+  STARTING: 'starting',
+  RECORDING: 'recording',
+  IDLE: 'idle',
+};
 
 const VOICE_HINT_LISTENING = 'Listening...';
 const VOICE_HINT_WAITING = 'Waiting for microphone signal...';
@@ -273,9 +291,9 @@ async function toggleVoice() {
   // upload into a retry, and a stopped live recording into the upload. A stop
   // is idempotent: the recording flag clears before the first await.
   if (run.recording) await stopRecording(run);
-  else if (run.phase === 'uploading' || run.phase === 'decoding') cancelVoiceUpload(run);
-  else if (run.phase === 'retry') startUpload(run);
-  else if (run.phase === 'stop') {
+  else if (run.phase === VOICE_RUN_PHASE.UPLOADING || run.phase === VOICE_RUN_PHASE.DECODING) cancelVoiceUpload(run);
+  else if (run.phase === VOICE_RUN_PHASE.RETRY) startUpload(run);
+  else if (run.phase === VOICE_RUN_PHASE.STOP) {
     // The stop state's one click: the relay closes first, so a final still in
     // flight cannot land beside or after the upload's transcript. The form
     // keeps the live backend id; the server transcribes with that backend.
@@ -301,7 +319,7 @@ function newVoiceRun(sessionId, backend) {
     recording: false,
     stopping: false,
     signalReady: false,
-    phase: 'idle',
+    phase: VOICE_RUN_PHASE.IDLE,
     pcmChunks: [],
     totalSamples: 0,
     level: 0,
@@ -351,7 +369,7 @@ async function startRecording() {
   // Amber from the click on: the mic is not delivering sound yet, so the
   // user must not speak. Red is the speak cue and lights at the first
   // chunk with a non-zero sample.
-  setVoiceButtonState('starting');
+  setVoiceButtonState(VOICE_BUTTON_STATE.STARTING);
   updateVoiceCaret();
   if (run.backend.livePartials) openVoiceRelay(run);
   run.ui = ensureVoiceOverlay();
@@ -425,7 +443,7 @@ async function startRecording() {
     run.sourceNode.connect(run.workletNode);
 
     run.recording = true;
-    run.phase = 'recording';
+    run.phase = VOICE_RUN_PHASE.RECORDING;
     // Both startup steps are done; the button now waits for the first chunk.
     run.startup.reached = 'no_frames';
     updateVoiceLeaveGuard();
@@ -687,7 +705,7 @@ function handleVoiceWorkletMessage(run, event) {
         run.signalReady = true;
         run.startup.firstSoundMs = voiceStartupElapsed(run);
         run.startup.reached = 'ready';
-        setVoiceButtonState('recording');
+        setVoiceButtonState(VOICE_BUTTON_STATE.RECORDING);
         showVoiceHint(run, voiceReadyHint(run));
         break;
       }
@@ -719,7 +737,7 @@ async function stopRecording(run) {
   // A click stop and the 5-minute auto-stop both report here, before the flush
   // adds its tail to the recorded counts.
   sendVoiceStartup(run, 'stop');
-  setVoiceButtonState('idle');
+  setVoiceButtonState(VOICE_BUTTON_STATE.IDLE);
   updateVoiceLeaveGuard();
   try {
     // The worklet drains its buffered tail into the local buffer — and, live,
@@ -779,7 +797,7 @@ function finishWithRelayFinal(run, finalText) {
 // the run through finishWithRelayFinal instead. The phase also keeps the leave
 // guard engaged: the recording exists only in this browser until the click.
 function enterVoiceStopState(run) {
-  run.phase = 'stop';
+  run.phase = VOICE_RUN_PHASE.STOP;
   updateVoiceLeaveGuard();
   showVoiceHint(run, run.relayFailure !== null
       ? voiceRelayFailureHint(run, run.relayFailure)
@@ -791,7 +809,7 @@ async function startUpload(run) {
   // here is the upload waiting for the enumeration, never the reverse.
   const devices = await run.devicesPromise;
   if (activeVoiceRun !== run) return;
-  run.phase = 'uploading';
+  run.phase = VOICE_RUN_PHASE.UPLOADING;
   run.uploadTimedOut = false;
   run.requestInFlight = true;
   // The transcription window (upload + decode) opens here: it counts toward
@@ -814,7 +832,7 @@ async function startUpload(run) {
     onSent: () => {
       if (activeVoiceRun !== run) return;
       clearVoiceUploadTimer(run);
-      run.phase = 'decoding';
+      run.phase = VOICE_RUN_PHASE.DECODING;
       showVoiceHint(run, VOICE_HINT_DECODING);
     },
   }).then((text) => {
@@ -833,7 +851,7 @@ function failVoiceUpload(run, err) {
   // The window closes with the failure; a retry re-enters startUpload and
   // opens a fresh one.
   inputWorkSettled(VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE);
-  run.phase = 'retry'; // the buffer stays; the next click re-uploads it
+  run.phase = VOICE_RUN_PHASE.RETRY; // the buffer stays; the next click re-uploads it
   updateVoiceLeaveGuard();
   const message = run.uploadTimedOut ? 'Voice upload timed out' : err.message;
   console.warn('Voice upload failed:', err);
@@ -1025,7 +1043,7 @@ function handleVoiceRelayMessage(run, event) {
       settleVoiceRelayWait(run, message.text);
       return;
     }
-    if (run.phase === 'stop') finishWithRelayFinal(run, message.text);
+    if (run.phase === VOICE_RUN_PHASE.STOP) finishWithRelayFinal(run, message.text);
     return;
   }
   if (message.type === 'error') {
@@ -1219,7 +1237,7 @@ function onVoiceLeaveGuard(event) {
 
 function updateVoiceLeaveGuard() {
   const busy = activeVoiceRun && (activeVoiceRun.recording || activeVoiceRun.stopping ||
-      activeVoiceRun.requestInFlight || activeVoiceRun.phase === 'stop');
+      activeVoiceRun.requestInFlight || activeVoiceRun.phase === VOICE_RUN_PHASE.STOP);
   if (busy && !voiceLeaveGuardInstalled) {
     window.addEventListener('beforeunload', onVoiceLeaveGuard);
     voiceLeaveGuardInstalled = true;
@@ -1237,7 +1255,7 @@ function resetVoiceState() {
   const run = activeVoiceRun;
   activeVoiceRun = null;
   if (run) abortVoiceRun(run);
-  setVoiceButtonState('idle');
+  setVoiceButtonState(VOICE_BUTTON_STATE.IDLE);
   removeVoiceOverlay();
   updateVoiceLeaveGuard();
   updateVoiceCaret();
@@ -1255,7 +1273,7 @@ function releaseVoiceRun(run) {
   abortVoiceRun(run);
   if (activeVoiceRun === run) activeVoiceRun = null;
   clearVoiceUploadTimer(run);
-  setVoiceButtonState('idle');
+  setVoiceButtonState(VOICE_BUTTON_STATE.IDLE);
   removeVoiceOverlay();
   updateVoiceLeaveGuard();
   updateVoiceCaret();
@@ -1314,8 +1332,8 @@ function setVoiceButtonState(state) {
   const btn = document.getElementById('voice-btn');
   if (!btn) return;
   btn.classList.remove('bg-slate-800', 'border-slate-600', 'bg-amber-600', 'border-amber-500', 'bg-red-600', 'border-red-500');
-  if (state === 'starting') btn.classList.add('bg-amber-600', 'border-amber-500');
-  else if (state === 'recording') btn.classList.add('bg-red-600', 'border-red-500');
+  if (state === VOICE_BUTTON_STATE.STARTING) btn.classList.add('bg-amber-600', 'border-amber-500');
+  else if (state === VOICE_BUTTON_STATE.RECORDING) btn.classList.add('bg-red-600', 'border-red-500');
   else btn.classList.add('bg-slate-800', 'border-slate-600');
 }
 

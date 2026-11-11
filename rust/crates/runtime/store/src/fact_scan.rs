@@ -434,7 +434,7 @@ fn log_large_scan(path: &Path, log_bytes: u64, read_bytes: u64, checkpoint_bytes
 /// One line as the scan keeps it: the full event, a chat-content line's stand-in, or `None` where a full read skips the
 /// line.
 fn scan_line(raw: &[u8], keys: &ParseKeys) -> Option<CompactValue> {
-  ndjson::parse_line(raw, |text| {
+  ndjson::parse_text_line(raw, |text| {
     let mut deserializer = serde_json::Deserializer::from_str(text);
     let head = HeadSeed.deserialize(&mut deserializer).ok()?;
     deserializer.end().ok()?;

@@ -14,6 +14,8 @@
 
 use std::time::{Duration, Instant};
 
+use charliebot_core::event_types;
+
 /// The clock of one server start. The server starts it where `ready_in_ms` begins and passes it down the startup path.
 pub struct StartupClock {
   started: Instant,
@@ -31,7 +33,7 @@ impl StartupClock {
     let at_ms = round_ms(self.started.elapsed());
     let elapsed_ms = at_ms - self.last_at_ms;
     self.last_at_ms = at_ms;
-    tracing::info!(segment = name, elapsed_ms, at_ms, "startup_segment");
+    tracing::info!(segment = name, elapsed_ms, at_ms, "{}", event_types::STARTUP_SEGMENT_EVENT);
     at_ms
   }
 }

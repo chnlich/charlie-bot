@@ -1,4 +1,4 @@
-//! Canonical event and tool wire names shared by event writers and readers.
+//! Canonical wire names for events, tools and log lines, shared by their writers and readers.
 
 pub const ASSISTANT: &str = "assistant";
 pub const USER: &str = "user";
@@ -173,6 +173,13 @@ pub const TOTAL_COST_ERROR: &str = "total_cost_error";
 pub const MODEL_USAGE: &str = "modelUsage";
 /// The result event's context snapshot: the model, its context limit and the token counts at the result.
 pub const CONTEXT_SNAPSHOT: &str = "context_snapshot";
+
+/// The server's ready log event: the startup path logs it once the ready-phase services have started, and the
+/// recovery check's digest drops it as a timing-only line.
+pub const SERVER_READY_EVENT: &str = "server_ready";
+/// One startup segment's log event: the startup clock logs one per segment, and the recovery check's digest drops it
+/// as a timing-only line.
+pub const STARTUP_SEGMENT_EVENT: &str = "startup_segment";
 
 /// Field reads shared by `serde_json::Value` and the store's compact parsed events, so the
 /// event-type helpers and the message aggregator read either form in place.

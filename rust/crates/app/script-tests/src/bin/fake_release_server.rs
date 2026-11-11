@@ -166,7 +166,7 @@ fn serve() -> io::Result<()> {
   }
   recovery_logs(&home, behavior.adopt)?;
   let listener = TcpListener::bind(("127.0.0.1", port))?;
-  log("server_ready", json!({"ready_in_ms": 1}));
+  log(event_types::SERVER_READY_EVENT, json!({"ready_in_ms": 1}));
   let server = Arc::new(Server { dir, home, key, behavior, state: Mutex::new(State::default()) });
   for stream in listener.incoming() {
     let stream = stream?;

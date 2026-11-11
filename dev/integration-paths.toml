@@ -88,6 +88,17 @@ node = ["web/tests/*.integration.test.*"]
 paths = ["dev/poor-network/**"]
 node = ["dev/poor-network/*.integration.test.*"]
 
+# web/tests/frontend_structure.integration.test.js runs web/tests/frontend_structure_graph.js, which reads the
+# server's package registry to learn the package load order.
+[[entry]]
+paths = ["rust/crates/app/packages/src/lib.rs"]
+node = ["web/tests/frontend_structure.integration.test.js"]
+
+# web/tests/client_readback.integration.test.mjs runs the committed readback script on fixture logs.
+[[entry]]
+paths = ["dev/client-readback/readback.mjs"]
+node = ["web/tests/client_readback.integration.test.mjs"]
+
 [[entry]]
 paths = [".gitignore", "dev/check-unit-test-time.mjs"]
 none = true

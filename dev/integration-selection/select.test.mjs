@@ -1,10 +1,18 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   parseIntegrationPaths,
   renderSelectionSummary,
   selectIntegrationTests,
 } from './select.mjs';
+
+const COMMITTED_MAPPING = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../integration-paths.toml',
+);
 
 function mapping(source, cratePackages = [], trackedFiles = []) {
   return { ...parseIntegrationPaths(source), cratePackages, trackedFiles };
@@ -105,4 +113,31 @@ test('invalid nextest filters fail with their mapping entry', () => {
     () => mapping('[[entry]]\npaths = ["scripts/**"]\nrust = "rdeps("\n'),
     /entry 1 .*invalid rust filter/,
   );
+});
+
+// The committed mapping must select the node integration test that reads each changed file. The cases read
+// dev/integration-paths.toml itself, so a mapping entry a new reader needs cannot go missing silently.
+
+test('the committed mapping selects the structure test when the package registry changes', () => {
+  const parsed = mapping(
+    readFileSync(COMMITTED_MAPPING, 'utf8'),
+    [{ path: 'rust/crates/app/packages', name: 'charliebot-packages' }],
+    ['web/tests/frontend_structure.integration.test.js'],
+  );
+  const selection = selectIntegrationTests(['rust/crates/app/packages/src/lib.rs'], parsed);
+
+  assert.equal(selection.all, false);
+  assert.deepEqual(selection.nodeFiles, ['web/tests/frontend_structure.integration.test.js']);
+});
+
+test('the committed mapping selects the client-readback test when the readback script changes', () => {
+  const parsed = mapping(
+    readFileSync(COMMITTED_MAPPING, 'utf8'),
+    [],
+    ['web/tests/client_readback.integration.test.mjs'],
+  );
+  const selection = selectIntegrationTests(['dev/client-readback/readback.mjs'], parsed);
+
+  assert.equal(selection.all, false);
+  assert.deepEqual(selection.nodeFiles, ['web/tests/client_readback.integration.test.mjs']);
 });

@@ -25,7 +25,8 @@ pub const LINK_RENDERABLE: &str = "link-renderable";
 /// The three checks, in the order each entry point reports them.
 pub const CHECK_NAMES: [&str; 3] = [TRACKER_ID_NEARBY, SESSION_LINKED, LINK_RENDERABLE];
 
-const CONFIG_SECTION: &str = "user_text_checks";
+/// The key of the config section this package registers and its callers look up.
+pub const CONFIG_SECTION: &str = "user_text_checks";
 const TRACKER_FIX: &str = "write the Linear id right next to the internal id";
 const TRACKER_PURPOSE: &str = "This lets the reader identify the work item.";
 const SESSION_FIX: &str =

@@ -977,6 +977,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_core::cgroup::SESSION_CGROUP_SWEEP_REMOVED_EVENT`.",
   },
   OwnerRow { name: "extra_body", owner: "infra/core", hint: "Use `charliebot_core::config::EXTRA_BODY_KEY`." },
+  OwnerRow {
+    name: "user_text_checks",
+    owner: "runtime/user_text_checks",
+    hint: "Use `charliebot_user_text_checks::CONFIG_SECTION`.",
+  },
   OwnerRow { name: "HTTP_PROXY", owner: "infra/core", hint: "Use `charliebot_core::proxy_env::HTTP_PROXY`." },
   OwnerRow { name: "HTTPS_PROXY", owner: "infra/core", hint: "Use `charliebot_core::proxy_env::HTTPS_PROXY`." },
   OwnerRow { name: "NO_PROXY", owner: "infra/core", hint: "Use `charliebot_core::proxy_env::NO_PROXY`." },

@@ -335,8 +335,10 @@ pub async fn post_web_reply_with_request_id(
   let file_scan_context = file_link_scan_context(features, session_id)?;
   refuse_dead_links([text], &file_scan_context)?;
   let config = features.config.get().map_err(|error| WebReplyError::Failed(error.into()))?;
-  let checks =
-    UserTextChecks::new(config.section::<UserTextChecksConfig>("user_text_checks"), &config.charliebot_home)?;
+  let checks = UserTextChecks::new(
+    config.section::<UserTextChecksConfig>(user_text_checks::CONFIG_SECTION),
+    &config.charliebot_home,
+  )?;
   let violations = checks.check_reply(text, &file_scan_context)?;
   if !violations.is_empty() {
     return Err(WebReplyError::refused(

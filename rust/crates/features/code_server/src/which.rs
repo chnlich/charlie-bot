@@ -1,11 +1,10 @@
-//! The executable a command names, found by searching the search path.
+//! The executable a command names, found by searching the search path. An unset `PATH` searches the core default.
 
-/// The search path used when `PATH` is unset: the glibc default executable path.
-const CS_PATH: &str = "/bin:/usr/bin";
+use charliebot_core::paths::DEFAULT_PATH;
 
 /// The path of the executable `command` names, or `None`. `search_path` is `PATH`'s value.
 pub(crate) fn which(command: &str, search_path: Option<&str>) -> anyhow::Result<Option<String>> {
-  let search_path = search_path.unwrap_or(CS_PATH);
+  let search_path = search_path.unwrap_or(DEFAULT_PATH);
   let cwd = std::env::current_dir()?;
   match which::which_in(command, Some(search_path), cwd) {
     Ok(path) => Ok(Some(path.to_string_lossy().into_owned())),

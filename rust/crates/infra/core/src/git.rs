@@ -52,9 +52,10 @@ pub fn head_sha(repo_root: &Path, timeout: Duration) -> Option<String> {
 
 /// The arguments that probe whether the object `spec` names exists: `git cat-file -e <spec>`.
 ///
-/// The probe prints nothing and answers in its exit status: 0 when the object is there, 1 when it is missing, and
-/// another code when the probe itself failed. A caller reads that status, so [`run`], which folds a non-zero status
-/// and empty stdout into `None`, cannot answer the probe.
+/// The probe prints nothing and answers in its exit status: 0 when the object is there, 1 when a well-formed name
+/// matches no object, and 128 when git cannot resolve the spec, as for `<revision>:<path>` whose path is absent at
+/// that revision. A caller reads that status, so [`run`], which folds a non-zero status and empty stdout into
+/// `None`, cannot answer the probe.
 pub fn object_exists_args(spec: &str) -> [&str; 3] {
   ["cat-file", "-e", spec]
 }

@@ -4,11 +4,12 @@
 #   dev/improve/inflight-files.sh <own branch prefix>
 #
 # Print one repository-relative path per line: the files each open pull request
-# changes, and the committed and uncommitted files of each worktree branch that
-# is in flight. A branch is in flight when origin/main does not already contain
-# its work; a branch whose pull request was squash-merged and closed has landed,
-# so it names no committed file. A branch whose name starts with the own prefix
-# is skipped, because its work belongs to the caller.
+# changes, and the committed and uncommitted files of each worktree branch. A
+# committed path is claimed only while the branch's version of it — its blob, or
+# its deletion — is missing from origin/main's history since the merge base, so
+# a branch whose commits all landed, and a branch whose version of a path
+# origin/main has held, name no committed file. A branch whose name starts with
+# the own prefix is skipped, because its work belongs to the caller.
 #
 # The branch state is read only after origin/main is fetched, because a stale
 # origin/main would make merged work look live. The launches that read this list
@@ -108,13 +109,16 @@ commits_landed() {
   return 0
 }
 
-# Whether origin/main has held the branch's version of every path the branch
-# changes since the merge base.
+# Print the committed paths of one worktree branch whose version origin/main's
+# history does not hold, since the merge base.
 #
 # A squash merge lands the branch's content in one commit. A later change may
-# move the path on, but the landed version stays in origin/main's history, so
-# a path that never held the branch's version carries the branch's own change.
-versions_landed() {
+# move a path on, but the landed version stays in origin/main's history, so a
+# path whose branch version never appears there carries the branch's own
+# change. The branch's version of a path is its blob, or its deletion. Both
+# sides read the fetched ref, so a stale fetch would make merged work look
+# live; this is why the fetch above comes first.
+list_unlanded_paths() {
   local root=$1
   local main_ref=$2
   local merge_base=$3
@@ -138,35 +142,18 @@ versions_landed() {
     "$merge_base..$main_ref" -- "${paths[@]}" | grep '^:')
   for entry in "${branch_versions[@]}"; do
     if [[ -z ${main_versions[$entry]:-} ]]; then
-      return 1
+      printf '%s\n' "${entry%%$'\t'*}"
     fi
   done
-  return 0
-}
-
-# Whether a branch carries a change that origin/main does not already contain.
-#
-# The branch has landed when its commits or its versions are on origin/main.
-# Both checks read the fetched ref, so a stale fetch would make merged work look
-# live; this is why the fetch above comes first.
-branch_is_in_flight() {
-  local root=$1
-  local main_ref=$2
-  local merge_base=$3
-  local branch=$4
-  if commits_landed "$root" "$main_ref" "$merge_base" "$branch" ||
-    versions_landed "$root" "$main_ref" "$merge_base" "$branch"; then
-    return 1
-  fi
-  return 0
 }
 
 # Print the committed and uncommitted paths of one worktree branch.
 #
-# The merge base with origin/main bounds the branch's own work, and the branch
-# contributes that work only when it is in flight. The uncommitted paths come
-# from the worktree directory, which a stale entry may not have, and they are
-# live whatever origin/main holds.
+# The merge base with origin/main bounds the branch's own work. A branch whose
+# commits all landed claims no committed path; otherwise each committed path is
+# claimed only while its branch version is missing from origin/main's history.
+# The uncommitted paths come from the worktree directory, which a stale entry
+# may not have, and they are live whatever origin/main holds.
 list_worktree_branch() {
   local worktree=$1
   local branch=$2
@@ -178,8 +165,8 @@ list_worktree_branch() {
     printf 'skip branch %s: no merge base with origin/main\n' "$branch" >&2
     return
   fi
-  if branch_is_in_flight "$main_root" "$main_ref" "$merge_base" "$branch"; then
-    git -C "$main_root" diff --name-only --no-renames "$merge_base" "$branch"
+  if ! commits_landed "$main_root" "$main_ref" "$merge_base" "$branch"; then
+    list_unlanded_paths "$main_root" "$main_ref" "$merge_base" "$branch"
   fi
   if [[ -d $worktree ]]; then
     git -C "$worktree" diff --name-only HEAD

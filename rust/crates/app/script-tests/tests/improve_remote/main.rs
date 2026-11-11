@@ -815,6 +815,48 @@ fn an_unlanded_branch_names_its_file_even_when_origin_main_has_changed_it() {
 
 #[test]
 #[ignore = "integration"]
+fn a_worktree_branch_names_only_the_paths_whose_versions_did_not_land() {
+  let world = World::new();
+  // The base carries the two files the branch deletes, so each deletion has a version that origin/main may or may
+  // not hold: main drops `together.md` too, and keeps `base.md`.
+  fs::write(world.repo.join("base.md"), "base\n").expect("the base file");
+  fs::write(world.repo.join("together.md"), "together\n").expect("the together file");
+  world.git(&world.repo, &["add", "-A"]);
+  world.git(&world.repo, &["commit", "-q", "-m", "add the deletable files"]);
+  world.git(&world.repo, &["branch", "charliebot/partial"]);
+  let checkout = world.sandbox.root().join("partial-checkout");
+  world.git(&world.repo, &["worktree", "add", "-q", &checkout.display().to_string(), "charliebot/partial"]);
+  // The branch changes four paths: two additions, one deletion whose version lands, one whose version never lands.
+  fs::write(checkout.join("landed.md"), "landed\n").expect("the landed topic's file");
+  fs::write(checkout.join("unlanded.md"), "unlanded\n").expect("the unlanded topic's file");
+  fs::remove_file(checkout.join("base.md")).expect("remove the base file");
+  fs::remove_file(checkout.join("together.md")).expect("remove the together file");
+  world.git(&checkout, &["add", "-A"]);
+  world.git(&checkout, &["commit", "-q", "-m", "synthetic partial topic"]);
+  // origin/main receives the branch's version of `landed.md`, then moves the same path on, and drops `together.md`.
+  // The launcher's tracking ref still points behind all of it, so only the script's fetch sees it.
+  fs::write(world.repo.join("landed.md"), "landed\n").expect("the landed version");
+  world.git(&world.repo, &["add", "-A"]);
+  world.git(&world.repo, &["commit", "-q", "-m", "land the partial topic's file"]);
+  fs::write(world.repo.join("landed.md"), "landed\nand moved on\n").expect("the later change");
+  world.git(&world.repo, &["commit", "-q", "-am", "move the landed file on"]);
+  fs::remove_file(world.repo.join("together.md")).expect("remove the together file on main");
+  world.git(&world.repo, &["commit", "-q", "-am", "drop the file the branch drops too"]);
+  world.git(&world.repo, &["push", "-q", "origin", "main"]);
+  world.git(&world.repo, &["update-ref", "refs/remotes/origin/main", &world.commit]);
+  world.git(&world.repo, &["reset", "-q", "--hard", &world.commit]);
+
+  let run = world.run(&world.env());
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
+  let mut listed: Vec<&str> = list.lines().collect();
+  listed.sort_unstable();
+  assert_eq!(listed, ["base.md", "unlanded.md"], "the in-flight list is not the branch's unlanded paths:\n{list}");
+}
+
+#[test]
+#[ignore = "integration"]
 fn a_rebased_branch_whose_resolved_copy_differs_names_nothing() {
   let world = World::new();
   // A leftover branch of a round that a rebase landed, checked out in its worktree as the host leaves it.

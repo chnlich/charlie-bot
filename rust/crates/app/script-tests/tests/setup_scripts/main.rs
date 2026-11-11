@@ -91,6 +91,10 @@ fn install_units_installs_the_commits_units_with_the_repo_path_and_reloads_the_u
   git(&["init", "-q", "-b", "main"]);
   fs::create_dir_all(repo.join("scripts/systemd")).expect("the unit directory");
   fs::write(repo.join("scripts/systemd/charliebot-agents.slice"), COMMITTED_SLICE).expect("the committed unit");
+  git(&["add", "scripts"]);
+  git(&["commit", "-q", "-m", "the slice units"]);
+  let old_commit = git(&["rev-parse", "HEAD"]);
+
   fs::write(repo.join("scripts/systemd/charliebot-boot.service"), COMMITTED_SERVICE).expect("the committed service");
   git(&["add", "scripts"]);
   git(&["commit", "-q", "-m", "the units"]);
@@ -112,7 +116,13 @@ fn install_units_installs_the_commits_units_with_the_repo_path_and_reloads_the_u
     fs::read_to_string(unit_dir.join("charliebot-boot.service")).expect("the installed service"),
     COMMITTED_SERVICE.replace("@REPO_ROOT@", &repo.display().to_string())
   );
-  assert_eq!(recorded(&calls), ["--user daemon-reload"]);
+
+  // A release predating service units still installs its slices successfully.
+  let mut command = harness::command("bash", &env);
+  command.arg(harness::repo_root().join("scripts/install-slice-units.sh")).arg(&repo).arg(&old_commit);
+  let old_run = harness::run(&mut command);
+  assert_eq!(old_run.code, 0, "{}", old_run.describe());
+  assert_eq!(recorded(&calls), ["--user daemon-reload", "--user daemon-reload"]);
 }
 
 #[test]

@@ -36,7 +36,10 @@ UNIT_DIR="${CHARLIEBOT_SYSTEMD_USER_DIR:-$HOME/.config/systemd/user}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 git -C "$REPO" archive --format=tar "$COMMIT" scripts/systemd | tar -x -C "$WORK"
-units=("$WORK"/scripts/systemd/*.slice "$WORK"/scripts/systemd/*.service)
+units=("$WORK"/scripts/systemd/*.slice)
+shopt -s nullglob
+units+=("$WORK"/scripts/systemd/*.service)
+shopt -u nullglob
 sed -i "s|@REPO_ROOT@|$REPO|g" "${units[@]}"
 install -d "$UNIT_DIR"
 install -m 0644 "${units[@]}" "$UNIT_DIR/"

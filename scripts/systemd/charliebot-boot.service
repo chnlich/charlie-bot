@@ -22,10 +22,13 @@ Type=oneshot
 RemainAfterExit=yes
 # A stop signals only the main process, the script, which has exited once the unit is up. The tmux server and its
 # panes are not in that process, so they keep running after a stop or a disable.
+# Clear an imported TMUX client address so tmux uses the default socket; TMUX_TMPDIR can select a private test socket.
 KillMode=process
-ExecStart=/bin/bash -c 'set -eu; \
+ExecStart=/bin/bash -c 'set -euo pipefail; \
   clone=@REPO_ROOT@; \
   session=charliebot; \
+  unset TMUX; \
+  TMUX_TMPDIR="$${TMUX_TMPDIR:-/tmp}"; export TMUX_TMPDIR; \
   home="$${CHARLIEBOT_HOME:-$$HOME/.charliebot}"; \
   releases="$${CHARLIEBOT_RELEASES_DIR:-$$HOME/charliebot-releases}"; \
   logs="$${CHARLIEBOT_LOG_DIR:-/tmp/charliebot-logs}"; \

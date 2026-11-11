@@ -55,14 +55,15 @@ fn recorded(record: &Path) -> Vec<String> {
   fs::read_to_string(record).unwrap_or_default().lines().map(String::from).collect()
 }
 
-// ---- the slice-unit install: the commit's units, read from the commit object ----------------------------------------
+// ---- the unit install: the commit's units, read from the commit object ----------------------------------------------
 
 const COMMITTED_SLICE: &str = "[Slice]\nCPUWeight=100\n";
 const CHECKOUT_SLICE: &str = "[Slice]\nCPUWeight=1\n";
+const COMMITTED_SERVICE: &str = "[Service]\nExecStart=/bin/true @REPO_ROOT@/scripts/start-server.sh\n";
 
 #[test]
 #[ignore = "integration"]
-fn install_slice_units_installs_the_commits_units_and_reloads_the_user_manager() {
+fn install_units_installs_the_commits_units_with_the_repo_path_and_reloads_the_user_manager() {
   let sandbox = Sandbox::new();
   let repo = sandbox.dir("repo");
   let unit_dir = sandbox.dir("unit-dir");
@@ -90,6 +91,7 @@ fn install_slice_units_installs_the_commits_units_and_reloads_the_user_manager()
   git(&["init", "-q", "-b", "main"]);
   fs::create_dir_all(repo.join("scripts/systemd")).expect("the unit directory");
   fs::write(repo.join("scripts/systemd/charliebot-agents.slice"), COMMITTED_SLICE).expect("the committed unit");
+  fs::write(repo.join("scripts/systemd/charliebot-boot.service"), COMMITTED_SERVICE).expect("the committed service");
   git(&["add", "scripts"]);
   git(&["commit", "-q", "-m", "the units"]);
   let commit = git(&["rev-parse", "HEAD"]);
@@ -104,6 +106,11 @@ fn install_slice_units_installs_the_commits_units_and_reloads_the_user_manager()
   assert_eq!(
     fs::read_to_string(unit_dir.join("charliebot-agents.slice")).expect("the installed unit"),
     COMMITTED_SLICE
+  );
+  // The service names the install's checkout where the commit names @REPO_ROOT@.
+  assert_eq!(
+    fs::read_to_string(unit_dir.join("charliebot-boot.service")).expect("the installed service"),
+    COMMITTED_SERVICE.replace("@REPO_ROOT@", &repo.display().to_string())
   );
   assert_eq!(recorded(&calls), ["--user daemon-reload"]);
 }

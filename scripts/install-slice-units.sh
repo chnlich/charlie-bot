@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# Install one commit's slice units into the user manager's unit directory, then reload the user manager.
+# Install one commit's user units into the user manager's unit directory, then reload the user manager.
 #
 #   scripts/install-slice-units.sh <repo> <commit>
 #
-# The units are the commit's scripts/systemd/*.slice, read from the commit object, so the checkout that runs this
-# script can sit at another release. The unit directory is CHARLIEBOT_SYSTEMD_USER_DIR, default
-# $HOME/.config/systemd/user. This script is the one place that writes slice units into that directory:
+# The units are the commit's scripts/systemd/*.slice and *.service, read from the commit object, so the checkout that
+# runs this script can sit at another release. The unit directory is CHARLIEBOT_SYSTEMD_USER_DIR, default
+# $HOME/.config/systemd/user. This script is the one place that writes user units into that directory:
 # scripts/setup.sh, scripts/switch-server.sh and scripts/release.sh call it. The switch calls the copy beside its own
 # script, so the call still finds this script after the checkout moves to a commit that predates it.
+#
+# Each installed unit has @REPO_ROOT@ replaced by <repo>. The boot start unit (charliebot-boot.service) names the
+# runtime clone that way, so run the install from that clone: the path is derived here, not stored in the repo.
+# This script only copies the boot unit; enabling it is a separate step:
+#   systemctl --user enable charliebot-boot.service
 #
 # The reload applies the slice properties to the running agents slice without restarting it. A controller that a unit
 # adds (cpu for CPUWeight, io for IOWeight) joins the slice's cgroup.controllers that way.
@@ -31,8 +36,9 @@ UNIT_DIR="${CHARLIEBOT_SYSTEMD_USER_DIR:-$HOME/.config/systemd/user}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 git -C "$REPO" archive --format=tar "$COMMIT" scripts/systemd | tar -x -C "$WORK"
-units=("$WORK"/scripts/systemd/*.slice)
+units=("$WORK"/scripts/systemd/*.slice "$WORK"/scripts/systemd/*.service)
+sed -i "s|@REPO_ROOT@|$REPO|g" "${units[@]}"
 install -d "$UNIT_DIR"
 install -m 0644 "${units[@]}" "$UNIT_DIR/"
-echo "install-slice-units: installed ${#units[@]} slice unit(s) of $COMMIT into $UNIT_DIR; reloading the user manager"
+echo "install-slice-units: installed ${#units[@]} unit(s) of $COMMIT into $UNIT_DIR; reloading the user manager"
 systemctl --user daemon-reload

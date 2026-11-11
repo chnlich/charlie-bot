@@ -1,41 +1,26 @@
-//! The process identity the switch reads from `/proc`: a recorded `(pid, pid start)` names one process instance, and
-//! the boot time bounds a run's recorded start.
+//! The process identity the switch reads: a recorded `(pid, pid start)` names one process instance, and the boot time
+//! bounds a run's recorded start. The `/proc` reads come from `charliebot_core::proc_identity`, the owner of process
+//! identity, so no second reader of the same fields lives here.
 
-use std::fs;
-
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result};
+use charliebot_core::proc_identity::{read_host_boot_time, read_pid_stat};
 use chrono::DateTime;
-
-/// Field 22 of `/proc/<pid>/stat` (the start time) and the state field. `None` once the process is gone.
-fn stat(pid: u32) -> Option<(String, String)> {
-  let text = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-  let mut fields = text.rsplit_once(')')?.1.split_whitespace();
-  let state = fields.next()?.to_string();
-  let start = fields.nth(18)?.to_string();
-  Some((state, start))
-}
 
 /// Whether `(pid, pid_start)` still names one live process instance. A zombie has ended: its argv is gone and nothing
 /// can follow it, so it never counts.
 pub fn instance(pid: u32, pid_start: &str) -> bool {
-  matches!(stat(pid), Some((state, start)) if start == pid_start && state != "Z")
+  matches!(read_pid_stat(pid), Some(stat) if stat.pid_start == pid_start && stat.state != "Z")
 }
 
 /// Whether a pid still names a live process, for a recorded pid that carries no start time. A zombie has ended: its
 /// argv is gone and nothing can follow it, so it never counts.
 pub fn alive(pid: u32) -> bool {
-  matches!(stat(pid), Some((state, _)) if state != "Z")
+  matches!(read_pid_stat(pid), Some(stat) if stat.state != "Z")
 }
 
-/// The kernel's boot time in seconds since the epoch, from `/proc/stat`.
+/// The kernel's boot time in seconds since the epoch.
 pub fn boot_time() -> Result<i64> {
-  let text = fs::read_to_string("/proc/stat").context("read /proc/stat")?;
-  text
-    .lines()
-    .find_map(|line| line.strip_prefix("btime "))
-    .and_then(|rest| rest.split_whitespace().next())
-    .and_then(|seconds| seconds.parse().ok())
-    .ok_or_else(|| anyhow!("/proc/stat has no btime line"))
+  Ok(read_host_boot_time().context("read the host boot time")?.unix_timestamp())
 }
 
 /// Whether the run's recorded start is after this boot. A start at the boot second's fraction counts as after it.
@@ -53,10 +38,10 @@ mod tests {
   fn a_started_process_instance_is_alive_and_a_wrong_start_is_not() {
     let mut child = std::process::Command::new("sleep").arg("30").spawn().expect("spawn sleep");
     let pid = child.id();
-    let (state, start) = stat(pid).expect("the child's stat");
-    assert_ne!(state, "Z");
-    assert!(instance(pid, &start));
-    assert!(!instance(pid, &format!("{start}0")));
+    let stat = read_pid_stat(pid).expect("the child's stat");
+    assert_ne!(stat.state, "Z");
+    assert!(instance(pid, &stat.pid_start));
+    assert!(!instance(pid, &format!("{}0", stat.pid_start)));
     child.kill().expect("kill sleep");
     child.wait().expect("reap sleep");
   }

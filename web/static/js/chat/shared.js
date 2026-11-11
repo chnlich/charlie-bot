@@ -181,12 +181,16 @@ function toolInputSummary(toolName, input) {
   return {text: typeof first === 'object' ? JSON.stringify(first) : String(first), limit: 60};
 }
 
+// A transcript time names the day and the clock time the reader acts on, in the
+// reader's own zone: the shape the sidebar's session rows print (utils.js
+// relativeTime). A reader wondering when a message landed reads the minute; the
+// seconds field and the zone name are needless precision on every bubble, so the
+// events viewer carries the exact instant instead.
 function formatBubbleTime(isoStr) {
   if (!isoStr) return '';
   const d = new Date(isoStr);
   return d.toLocaleString('en-US', {
-    month: 'short', day: 'numeric',
-    hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short'
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true
   });
 }
 

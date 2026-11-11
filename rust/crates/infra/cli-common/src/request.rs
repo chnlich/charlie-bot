@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use charliebot_core::credentials::REDACTED;
-use charliebot_core::headers::AUTHORIZATION;
+use charliebot_core::headers::{AUTHORIZATION, bearer_value};
 use clap::Args;
 use serde_json::json;
 
@@ -114,7 +114,7 @@ impl Request {
 
   /// The request with the credential's bearer header. Nothing else carries the token out of the process.
   pub fn bearer(self, token: &str) -> Request {
-    self.header(AUTHORIZATION, format!("Bearer {token}"))
+    self.header(AUTHORIZATION, bearer_value(token))
   }
 }
 

@@ -1,7 +1,7 @@
 //! The `Authorization` and caller-session headers on internal-API calls.
 
 use charliebot_core::credentials;
-use charliebot_core::headers::AUTHORIZATION;
+use charliebot_core::headers::{AUTHORIZATION, bearer_value};
 use charliebot_core::home;
 use charliebot_core::run_token::{CALLER_SESSION_HEADER, RUN_TOKEN_ENV, SESSION_ID_ENV};
 
@@ -25,7 +25,7 @@ pub fn internal_api_auth_headers() -> Result<Vec<(String, String)>, CliExit> {
   };
   match bearer {
     Some(bearer) => {
-      let mut headers = vec![(AUTHORIZATION.to_string(), format!("Bearer {bearer}"))];
+      let mut headers = vec![(AUTHORIZATION.to_string(), bearer_value(&bearer))];
       if let Some(session_id) = caller_session() {
         headers.push((CALLER_SESSION_HEADER.to_string(), session_id));
       }

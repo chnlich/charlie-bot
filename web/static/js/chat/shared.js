@@ -183,9 +183,9 @@ function toolInputSummary(toolName, input) {
 
 // A transcript time names the day and the clock time the reader acts on, in the
 // reader's own zone: the shape the sidebar's session rows print (utils.js
-// relativeTime). Seconds and the zone name are the same on every message of a
-// transcript, so they stay out of the line under each bubble; the events viewer
-// keeps the exact instant.
+// relativeTime). A reader wondering when a message landed reads the minute; the
+// seconds field and the zone name are needless precision on every bubble, so the
+// events viewer carries the exact instant instead.
 function formatBubbleTime(isoStr) {
   if (!isoStr) return '';
   const d = new Date(isoStr);

@@ -9,6 +9,7 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
+use charliebot_core::headers::bearer_value;
 use http::{Method, StatusCode, header};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -144,7 +145,7 @@ impl FeishuClient {
     }
     let mut request = self.http.request(method, url).timeout(REQUEST_TIMEOUT);
     if let Some(token) = bearer {
-      request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+      request = request.header(header::AUTHORIZATION, bearer_value(token));
     }
     if let Some(body) = body {
       request =

@@ -16,6 +16,7 @@ use bstr::ByteSlice;
 use charliebot_compat::http_client;
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
+use charliebot_core::headers::bearer_value;
 use charliebot_core::text_repr;
 use charliebot_registry::FeatureContext;
 use futures_util::stream::{self, Stream};
@@ -120,7 +121,7 @@ async fn forward(features: &FeatureContext, backend_id: &str, body: Body) -> Res
         features.credentials.get().map_err(|error| detail(StatusCode::BAD_REQUEST, error.to_string()))?;
       let key =
         credentials.require(section, "api_key").map_err(|error| detail(StatusCode::BAD_REQUEST, error.to_string()))?;
-      Some(format!("Bearer {key}"))
+      Some(bearer_value(&key))
     }
   };
 

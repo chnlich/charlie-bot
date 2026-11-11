@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
+use crate::headers::BEARER_PREFIX;
 use crate::text_repr;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -115,7 +116,7 @@ pub fn verify_run_token(token: &str, signing_key: &str) -> Result<RunTokenClaims
 /// The bearer credential of an `Authorization` header value, or `""`.
 pub fn bearer_from_authorization(header_value: Option<&str>) -> &str {
   match header_value {
-    Some(value) => value.strip_prefix("Bearer ").unwrap_or(""),
+    Some(value) => value.strip_prefix(BEARER_PREFIX).unwrap_or(""),
     None => "",
   }
 }

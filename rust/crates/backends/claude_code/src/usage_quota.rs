@@ -20,6 +20,7 @@ use anyhow::{Context, bail};
 use backon::{BackoffBuilder, ExponentialBuilder};
 use charliebot_compat::http_client::{self, Settings};
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::headers::bearer_value;
 use charliebot_core::text_repr::is_truthy;
 use charliebot_core::timefmt::utc_now_iso;
 use charliebot_registry::usage::{
@@ -273,7 +274,7 @@ impl ClaudeQuotaAccount {
       .http
       .client
       .get(&self.http.usage_url)
-      .header(AUTHORIZATION, format!("Bearer {access_token}"))
+      .header(AUTHORIZATION, bearer_value(access_token))
       .header("anthropic-beta", ANTHROPIC_BETA)
       .header(USER_AGENT, user_agent)
       .timeout(HTTP_OAUTH_TIMEOUT)

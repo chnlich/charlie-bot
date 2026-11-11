@@ -1,4 +1,13 @@
       {% if code_server_enabled() %}
+      <style>
+        /* The button's white 14 px label draws 5.48:1 on its emerald-700 fill and 3.77:1 under the
+           emerald-600 hover, under the 4.5:1 floor for text that size. The emerald-800 fill carries
+           the same label at 7.68:1 at rest, and its emerald-700 hover keeps 5.48:1. The utility
+           classes stay as the tokens the diff sheet is built from; the id selectors outrank them and
+           decide both states. */
+        #open-codeserver { background-color: #065f46; }
+        #open-codeserver:hover { background-color: #047857; }
+      </style>
       <button id="open-codeserver" type="button"
               class="px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium transition-colors">
         Open in code-server

@@ -19,12 +19,16 @@ use tokio::net::TcpListener;
 use tower::ServiceExt;
 
 use super::endpoint::WebSearch;
+use super::search::SEARCH_MODEL;
 use super::{matches, mcp};
 
 const API_KEY_HEADER: &str = "x-goog-api-key";
 const CREDENTIALS: &str = "gemini:\n  api_key: synthetic-gemini-key\n";
+
 /// The path Google serves `generateContent` on; the model name carries a colon, which axum's router cannot spell.
-const GENERATE_PATH: &str = "/v1beta/models/gemini-3.8-flash:generateContent";
+fn generate_path() -> String {
+  format!("/v1beta/models/{SEARCH_MODEL}:generateContent")
+}
 
 /// One request the fake Google endpoint received.
 struct Recorded {
@@ -61,7 +65,7 @@ async fn generate(
   headers: HeaderMap,
   body: axum::body::Bytes,
 ) -> Response {
-  if method != Method::POST || uri.path() != GENERATE_PATH {
+  if method != Method::POST || uri.path() != generate_path() {
     return (StatusCode::NOT_FOUND, "the fake Google endpoint has no such route").into_response();
   }
   let Ok(body) = serde_json::from_slice::<Value>(&body) else {
@@ -212,7 +216,7 @@ async fn tools_call_answers_with_the_answer_the_queries_and_the_real_source_urls
 
   let requests = fake.requests.lock().expect("the request list is not poisoned");
   let request = requests.first().expect("the fake Google endpoint received the search");
-  assert_eq!(request.path, GENERATE_PATH, "the request names the search model");
+  assert_eq!(request.path, generate_path(), "the request names the search model");
   assert_eq!(request.api_key.as_deref(), Some("synthetic-gemini-key"));
   assert_eq!(request.body["tools"], json!([{"google_search": {}}]));
   assert_eq!(request.body["contents"][0]["parts"][0]["text"], "prefix-dev pixi latest release");

@@ -1,8 +1,9 @@
 //! The OpenCode event stream's protocol: the event types this crate reads and writes, and the environment variables
-//! that name the connection-record directory and the identity of the process that started a relay.
+//! that point the opencode child at its directories and configuration and that name a relay's connection record and
+//! identity.
 //!
-//! The backend translates the stream, the server dispatches it, and the relay records it. One module owns the names,
-//! so a change reaches all three.
+//! The backend translates the stream, the server dispatches it, the relay records it, and the test harness reads the
+//! child's environment. One module owns the names, so a change reaches all four.
 
 /// The event the server emits once its stream carries events. The server holds a turn until it arrives.
 pub const SERVER_CONNECTED: &str = "server.connected";
@@ -38,3 +39,19 @@ pub const PARENT_PID_VAR: &str = "CHARLIEBOT_OPENCODE_PARENT_PID";
 /// The environment variable that carries the start time of the process that started a relay. The backend sets it on
 /// the relay process, and the test relay subprocess reads it.
 pub const PARENT_START_VAR: &str = "CHARLIEBOT_OPENCODE_PARENT_START";
+
+/// The environment variable that names the data directory of the opencode child. The backend sets it on a one-shot
+/// run, and the server sets it on the shared server.
+pub const XDG_DATA_HOME_VAR: &str = "XDG_DATA_HOME";
+
+/// The environment variable that names the state directory of the opencode child. The backend sets it on a one-shot
+/// run, and the server sets it on the shared server.
+pub const XDG_STATE_HOME_VAR: &str = "XDG_STATE_HOME";
+
+/// The environment variable that names the cache directory of the opencode child. The backend sets it on a one-shot
+/// run, and the server sets it on the shared server.
+pub const XDG_CACHE_HOME_VAR: &str = "XDG_CACHE_HOME";
+
+/// The environment variable that carries the opencode configuration as JSON text. The backend sets it on a one-shot
+/// run from the run's context, and the server sets it on the shared server from the recorded options.
+pub const CONFIG_CONTENT_VAR: &str = "OPENCODE_CONFIG_CONTENT";

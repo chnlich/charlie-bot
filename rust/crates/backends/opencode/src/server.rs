@@ -817,11 +817,12 @@ impl OpenCodeServer {
     env.remove(RUN_TOKEN_ENV);
     env.remove(SESSION_ID_ENV);
     env.extend(self.pool()?.host.extra_env.clone());
-    env.insert("XDG_DATA_HOME".to_string(), host.data_dir().display().to_string());
-    env.insert("XDG_STATE_HOME".to_string(), host.state_dir().display().to_string());
-    env.insert("XDG_CACHE_HOME".to_string(), host.cache_dir().display().to_string());
+    env.insert(protocol::XDG_DATA_HOME_VAR.to_string(), host.data_dir().display().to_string());
+    env.insert(protocol::XDG_STATE_HOME_VAR.to_string(), host.state_dir().display().to_string());
+    env.insert(protocol::XDG_CACHE_HOME_VAR.to_string(), host.cache_dir().display().to_string());
     env.insert("OPENCODE_SERVER_PASSWORD".to_string(), password.to_string());
-    env.insert("OPENCODE_CONFIG_CONTENT".to_string(), headless_config(&self.pool()?.recorded_options())?.to_string());
+    env
+      .insert(protocol::CONFIG_CONTENT_VAR.to_string(), headless_config(&self.pool()?.recorded_options())?.to_string());
     env.insert("OPENCODE_DISABLE_FFF".to_string(), "1".to_string());
     if let Some(proxy_url) = &self.proxy_url {
       apply_proxy_env(&mut env, proxy_url);

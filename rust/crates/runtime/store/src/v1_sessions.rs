@@ -12,8 +12,8 @@ use charliebot_core::parallel_walk;
 use crate::metadata::MetadataReadError;
 use crate::v1_session_conversion::{CONVERSION_SCRIPT, V1_SESSION_CONVERSION_GUIDANCE};
 
-/// Count session directories whose metadata has no non-null `profile` field. The directories are read in parallel; the
-/// first unreadable one in directory order fails the count.
+/// The count of session directories whose metadata has no non-null `profile` field. The directories are read in
+/// parallel; the first unreadable one in directory order fails the count.
 pub fn count_v1_sessions(sessions_dir: &Path) -> Result<usize, String> {
   if !sessions_dir.is_dir() {
     return Ok(0);
@@ -51,7 +51,7 @@ fn is_v1_session(session_dir: &Path) -> Result<bool, String> {
   Ok(object.get("profile").is_none_or(Value::is_null))
 }
 
-/// Refuse startup when the home contains sessions that would disappear from v2 listings.
+/// The startup refusal when the home contains sessions that would disappear from v2 listings.
 pub fn require_no_v1_sessions(cfg: &CharlieBotConfig) -> Result<(), String> {
   let count = count_v1_sessions(&cfg.sessions_dir())?;
   if count == 0 {

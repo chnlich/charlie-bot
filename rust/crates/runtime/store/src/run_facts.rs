@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::event_types::SharedChatEvent;
 
-/// Run terminal outcomes, stop requests and withheld launches folded from one node history.
+/// The terminal outcomes, stop requests and withheld launches folded from one node history.
 ///
 /// Recovery and dispatch read the same outcome and stop-request maps as the bounded run-facts memo.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

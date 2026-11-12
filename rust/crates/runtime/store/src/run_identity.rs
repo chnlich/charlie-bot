@@ -1,4 +1,4 @@
-//! Refuse run tokens that do not identify a registered, launched, active run.
+//! The refusal for run tokens that do not identify a registered, launched, active run.
 
 use std::path::Path;
 
@@ -21,7 +21,7 @@ pub struct RunIdentity {
   pub pid_start: Option<String>,
 }
 
-/// Return the refusal detail for a run that cannot authorize an agent caller.
+/// The refusal detail for a run that cannot authorize an agent caller.
 pub fn run_identity_refusal(run: Option<&RunRecord>, events: &[Value]) -> Option<&'static str> {
   let Some(run) = run else { return Some(RUN_IDENTITY_UNKNOWN_DETAIL) };
   if events.iter().any(|event| {
@@ -36,7 +36,7 @@ pub fn run_identity_refusal(run: Option<&RunRecord>, events: &[Value]) -> Option
   None
 }
 
-/// Read only `id`, `pid` and `pid_start` from a run record file.
+/// The `id`, `pid` and `pid_start` fields read from a run record file.
 pub fn read_run_identity_sync(path: &Path) -> StoreResult<Option<RunIdentity>> {
   if !path.is_file() {
     return Ok(None);
@@ -66,7 +66,7 @@ pub fn read_run_identity_sync(path: &Path) -> StoreResult<Option<RunIdentity>> {
 }
 
 impl Store {
-  /// Return why a run token fails the caller identity check.
+  /// The reason a run token fails the caller identity check.
   pub fn run_identity_refusal(&self, session_id: &str, run_id: &str) -> StoreResult<Option<&'static str>> {
     let run = self.read_run_sync(session_id, run_id)?;
     let Some(run) = run.as_ref() else {

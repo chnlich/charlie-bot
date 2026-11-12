@@ -17,7 +17,7 @@ pub struct MessageProvenance {
   pub from_session_name: String,
 }
 
-/// Build the persisted event for a scheduled-trigger self-wake.
+/// The persisted event for a scheduled-trigger self-wake.
 pub fn build_scheduled_trigger_event(content: &str) -> ChatEvent {
   json!({
     "type": event_types::SCHEDULED_TRIGGER,
@@ -27,7 +27,7 @@ pub fn build_scheduled_trigger_event(content: &str) -> ChatEvent {
   .into()
 }
 
-/// Build a persisted event for a message relayed from another session.
+/// The persisted event for a message relayed from another session.
 pub fn build_agent_message_event(text: &str, provenance: MessageProvenance) -> ChatEvent {
   json!({
     "type": "agent_message",
@@ -39,7 +39,7 @@ pub fn build_agent_message_event(text: &str, provenance: MessageProvenance) -> C
   .into()
 }
 
-/// Return the chat-event ids answered by one master_done event.
+/// The chat-event ids answered by one master_done event.
 pub fn master_done_input_event_ids<T: charliebot_core::event_types::EventFields>(event: &T) -> Vec<String> {
   if let Some(ids) = event.field(event_types::INPUT_EVENT_IDS) {
     return ids.string_items().into_iter().map(str::to_string).collect();
@@ -53,37 +53,37 @@ pub fn master_done_input_event_ids<T: charliebot_core::event_types::EventFields>
 }
 
 impl Store {
-  /// Build an agent-relay event for the target session's event log.
+  /// The agent-relay event for the target session's event log.
   pub fn build_agent_message_event(&self, _session_id: &str, text: &str, provenance: MessageProvenance) -> ChatEvent {
     build_agent_message_event(text, provenance)
   }
 
-  /// Return the global input-event ids answered by a master_done event.
+  /// The global input-event ids answered by a master_done event.
   pub fn master_done_input_event_ids<T: charliebot_core::event_types::EventFields>(&self, event: &T) -> Vec<String> {
     master_done_input_event_ids(event)
   }
 
-  /// Convert events with this store's feature renderers.
+  /// The messages rendered from `events` with this store's feature renderers.
   pub fn events_to_messages(&self, events: &[ChatEvent]) -> StoreResult<Vec<Value>> {
     projection::events_to_messages(events, 0, self.event_renderers.clone())
   }
 
-  /// Convert a shared event-cache slice without copying event payloads.
+  /// The messages rendered from a shared event-cache slice without copying event payloads.
   pub fn events_to_messages_shared(&self, events: &[SharedChatEvent]) -> StoreResult<Vec<Value>> {
     projection::events_to_messages(events, 0, self.event_renderers.clone())
   }
 
-  /// Convert events with this store's feature renderers in the global event-index space.
+  /// The messages rendered from `events` in the global event-index space with this store's feature renderers.
   pub fn events_to_messages_at(&self, events: &[ChatEvent], event_index_offset: usize) -> StoreResult<Vec<Value>> {
     projection::events_to_messages(events, event_index_offset, self.event_renderers.clone())
   }
 
-  /// Convert events with this store's feature renderers and preserve a live draft.
+  /// The message view rendered from `events` with this store's feature renderers, with the live draft preserved.
   pub fn events_to_view(&self, events: &[ChatEvent]) -> StoreResult<(Vec<Value>, Option<Value>)> {
     projection::events_to_view(events, 0, self.event_renderers.clone())
   }
 
-  /// Convert events to a message view with the supplied global event-index offset.
+  /// The message view rendered from `events` at the supplied global event-index offset.
   pub fn events_to_view_at(
     &self,
     events: &[ChatEvent],
@@ -92,7 +92,7 @@ impl Store {
     projection::events_to_view(events, event_index_offset, self.event_renderers.clone())
   }
 
-  /// Build a message projection over derived events with this store's feature renderers.
+  /// The message projection over `events`, built with this store's feature renderers.
   pub fn build_message_projection(
     &self,
     events: &[SharedChatEvent],
@@ -101,7 +101,7 @@ impl Store {
     MessageProjection::new(events, event_index_offset, self.event_renderers.clone())
   }
 
-  /// Return one session or an error carrying the route's 404 detail.
+  /// The session named `session_id`, or the error carrying the route's 404 detail.
   pub async fn require_session(&self, session_id: &str) -> StoreResult<SessionMetadata> {
     self.get_session(session_id).await?.ok_or_else(|| crate::StoreError::not_found(SESSION_NOT_FOUND_DETAIL))
   }

@@ -17,7 +17,7 @@ pub struct NormalizedUserMessage {
   pub uploaded_files: Vec<Value>,
 }
 
-/// Normalize a persisted user event for the chat renderer.
+/// A persisted user event, normalized for the chat renderer.
 pub fn normalize_user_message_event<E: EventFields>(event: &E) -> StoreResult<NormalizedUserMessage> {
   let files = serialize_uploaded_files(event.field(event_types::UPLOADED_FILES))?;
   if !files.is_empty() {
@@ -32,7 +32,7 @@ pub fn normalize_user_message_event<E: EventFields>(event: &E) -> StoreResult<No
   Ok(NormalizedUserMessage { content: json!(content), uploaded_files })
 }
 
-/// Convert supported upload payloads into JSON objects.
+/// The supported upload payloads as JSON objects.
 pub fn serialize_uploaded_files<E: EventFields>(files: Option<&E>) -> StoreResult<Vec<Value>> {
   let Some(files) = files else { return Ok(Vec::new()) };
   if !event_types::is_truthy(files) {
@@ -53,7 +53,7 @@ pub fn serialize_uploaded_files<E: EventFields>(files: Option<&E>) -> StoreResul
     .collect()
 }
 
-/// Split the final legacy attachment footer from user-visible text.
+/// The user-visible text and the footer's files, split at the final legacy attachment footer.
 pub fn strip_attached_files_block(content: &str) -> (String, Vec<Value>) {
   let Some((body, attachments)) = content.rsplit_once(ATTACHED_FILES_MARKER) else {
     return (content.to_string(), Vec::new());
@@ -70,7 +70,7 @@ pub fn strip_attached_files_block(content: &str) -> (String, Vec<Value>) {
   (body.to_string(), files)
 }
 
-/// Add the attachment instruction block to the text sent to the agent.
+/// The text sent to the agent with the attachment instruction block added.
 pub fn build_agent_input_content(content: &str, uploaded_files: &[Value]) -> String {
   let paths: Vec<&str> = uploaded_files
     .iter()
@@ -93,8 +93,8 @@ pub fn build_agent_input_content(content: &str, uploaded_files: &[Value]) -> Str
   }
 }
 
-/// Move ordinary user inputs to the end of each completed attached-run interval. Each event is returned by
-/// reference with its source index, so the projection reads the cached events in place.
+/// The events with ordinary user inputs moved to the end of each completed attached-run interval. Each event is
+/// returned by reference with its source index, so the projection reads the cached events in place.
 pub fn stable_history_projection<'a, E: EventFields>(events: &[&'a E]) -> StoreResult<Vec<(usize, &'a E)>> {
   let (complete_intervals, _) = interval_scan(events.iter().copied());
   let mut deferred_indices = HashSet::new();
@@ -133,7 +133,7 @@ pub fn stable_history_projection<'a, E: EventFields>(events: &[&'a E]) -> StoreR
   Ok(projected)
 }
 
-/// Return the length of the event prefix whose projected order cannot change after an append.
+/// The length of the event prefix whose projected order cannot change after an append.
 pub fn stable_closed_prefix_len<'a, E: EventFields + 'a>(events: impl IntoIterator<Item = &'a E>) -> usize {
   interval_scan(events).1
 }

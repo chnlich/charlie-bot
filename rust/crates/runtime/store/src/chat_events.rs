@@ -51,7 +51,7 @@ pub struct LogLine {
 }
 
 impl LogLine {
-  /// Decode the line as one JSON value. A value that is not an object is for the caller to refuse or skip.
+  /// The line decoded as one JSON value. A value that is not an object is for the caller to refuse or skip.
   pub fn decode(&self) -> Result<Value, serde_json::Error> {
     decode_line(self.text.as_bytes())
   }
@@ -121,7 +121,7 @@ pub fn read_lines(path: &Path, rule: LineRule) -> Result<LogLines, LogReadError>
   }
 }
 
-/// Split a whole file's text under a rule that reads the file whole.
+/// The lines of a whole file's text, split under a rule that reads the file whole.
 fn split_whole(text: &str, rule: LineRule) -> Vec<String> {
   match rule {
     LineRule::Lines | LineRule::LossyLines => text.lines().map(str::to_string).collect(),
@@ -186,13 +186,13 @@ pub fn session_log_paths(session_dir: &Path) -> io::Result<Vec<PathBuf>> {
   Ok(paths)
 }
 
-/// Append one chat event as a line and sync it to disk. The file and its directory are created when absent.
+/// One chat event appended as a line and synced to disk. The file and its directory are created when absent.
 pub fn append_event(path: &Path, event: &Value) -> StoreResult<()> {
   ndjson::append(path, event)
 }
 
-/// Walk the chat-events log at `path` in file order and return the first value that `find` maps out of an event. The
-/// read stops at the line that matches. A missing file has no events, a blank or unparsable line is skipped, and a line
+/// The first value that `find` maps out of an event, walking the chat-events log at `path` in file order. The read
+/// stops at the line that matches. A missing file has no events, a blank or unparsable line is skipped, and a line
 /// that parses to something other than a JSON object fails the read.
 pub fn find_in_log<T>(path: &Path, find: impl FnMut(&Value) -> Option<T>) -> StoreResult<Option<T>> {
   let file = match File::open(path) {
@@ -245,7 +245,7 @@ mod tests {
 
   use super::{LineRule, LogLine, LogReadError, decode_line, find_in_lines, is_chat_events_archive};
 
-  /// Counts the bytes a reader consumes, so the test can prove the walk stops at the matching line.
+  /// A reader that counts the bytes it consumes, so the test can prove the walk stops at the matching line.
   struct CountingBufRead<R> {
     inner: R,
     consumed: usize,

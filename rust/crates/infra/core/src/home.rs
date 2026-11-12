@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 
 use crate::{paths, text_repr};
 
+pub mod startup_rows;
+
 pub const CHARLIEBOT_HOME_ENV: &str = "CHARLIEBOT_HOME";
 
 /// The default home's directory name under the user's home, used when `CHARLIEBOT_HOME` is unset.

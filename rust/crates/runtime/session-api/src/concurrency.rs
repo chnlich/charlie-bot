@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::SystemTime;
 
@@ -17,6 +18,7 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::response::Response;
+use bytes::Bytes;
 use charliebot_compat::compression::{MINIMUM_DEFLATE_BYTES, gzip_level_four};
 use charliebot_compat::headers::header_text;
 use charliebot_compat::responses;
@@ -467,13 +469,32 @@ fn sessions_directory_mtime(sessions_dir: &Path) -> StoreResult<Option<SystemTim
 }
 
 /// The series of one range, read from every run record, and the record generation the series was built from.
+#[cfg(test)]
 pub(crate) fn history_series(store: &Store, range: &'static str, now: UtcDateTime) -> StoreResult<(History, u64)> {
   let (records, generation) = all_run_records(store)?;
+  Ok((series_of(records.as_slice(), range, now), generation))
+}
+
+/// The instant the bucket that holds `at` ends: the one multiple of `step` after it.
+///
+/// Buckets stand on the Unix epoch's multiples of their width, so every instant inside one bucket reads one grid.
+fn bucket_end(at: OffsetDateTime, step: i64) -> OffsetDateTime {
+  let unix = at.unix_timestamp();
+  OffsetDateTime::from_unix_timestamp(unix.div_euclid(step) * step + step).expect("a Unix instant is in range")
+}
+
+/// The series of `records` for one range, ending at the bucket that holds `now`.
+///
+/// The last point is the bucket holding `now`, and every point stands on a bucket boundary. A run that is still open
+/// ends at `now`, so the last point's value is the maximum over the part of its bucket that has elapsed.
+fn series_of(records: &[(String, RunRecord)], range: &'static str, now: UtcDateTime) -> History {
   let now = now.into_inner();
+  let step = bucket_seconds(range);
+  let to = bucket_end(now, step);
   let first_record_at = records.iter().filter_map(|(_, record)| record.started_at).min().map(UtcDateTime::into_inner);
   let from =
-    lookback_seconds(range).map_or_else(|| first_record_at.unwrap_or(now), |seconds| now - Duration::seconds(seconds));
-  let buckets = bucket_peaks(&merged_spans(records.as_slice(), now), from, now, bucket_seconds(range));
+    lookback_seconds(range).map_or_else(|| first_record_at.unwrap_or(to), |seconds| to - Duration::seconds(seconds));
+  let buckets = bucket_peaks(&merged_spans(records, now), from, to, step);
   let mut peak: Option<Peak> = None;
   for bucket in &buckets {
     if peak.is_none_or(|best| bucket.point.running > best.running) {
@@ -485,16 +506,15 @@ pub(crate) fn history_series(store: &Store, range: &'static str, now: UtcDateTim
       });
     }
   }
-  let history = History {
+  History {
     range,
     from,
-    to: now,
-    bucket_seconds: bucket_seconds(range),
+    to,
+    bucket_seconds: step,
     first_record_at,
     peak: peak.filter(|peak| peak.running > 0),
     points: buckets.into_iter().map(|bucket| bucket.point).collect(),
-  };
-  Ok((history, generation))
+  }
 }
 
 /// One merged span per session and channel: a session with several overlapping runs covers its span once.
@@ -627,12 +647,33 @@ fn requested_range(request: &Request<Body>) -> Result<&'static str, Box<Response
   })
 }
 
-/// The history response.
+/// The body that last bucket built, with the inputs whose identities still name it.
 ///
-/// Every body names its request's `to` instant, so the route answers a fresh series on every request and the transport
-/// hashes one that it never serves twice. The handler names the body's version instead, from the two inputs whose change
-/// moves it: the record generation the series was built from and that instant. Naming those is cheaper than hashing the
-/// 2,016 points.
+/// A body's points stand on the buckets' fixed boundaries, so every request inside one bucket builds the same body
+/// from the same run records. The entry holds that body and, once a gzip client asks, its compressed form. A request
+/// the entry answers takes its `Bytes` without a sweep, a body build or a deflate. The records' identity is part of
+/// the key, because a run record written outside the store moves the record set without moving the record generation.
+struct HistoryMemo {
+  range: &'static str,
+  records: RunRecords,
+  to: OffsetDateTime,
+  tag: String,
+  body: Bytes,
+  gzip: Option<Bytes>,
+}
+
+static HISTORY_MEMO: LazyLock<Mutex<Option<HistoryMemo>>> = LazyLock::new(|| Mutex::new(None));
+
+/// The number of history bodies this process has built.
+///
+/// A rebuilt body takes the next number, and its tag names it. A record set can move without the record generation
+/// moving, so a tag that named the generation would let two different bodies share it.
+static HISTORY_BUILDS: AtomicU64 = AtomicU64::new(0);
+
+/// The history response, answered from the bucket's memo when its inputs still hold.
+///
+/// The body's version is the build number of the memo entry that holds it. The gzip form is built on the first
+/// request that accepts gzip, so a client that names none never pays for it.
 async fn history(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let range = match requested_range(&request) {
     Ok(range) => range,
@@ -640,15 +681,8 @@ async fn history(State(features): State<Arc<FeatureContext>>, request: Request<B
   };
   let gzip = accepts_gzip(request.headers());
   let store = Arc::clone(&features.store);
-  match blocking_store(move || {
-    let now = UtcDateTime::now();
-    let (history, generation) = history_series(&store, range, now)?;
-    let tag = history_tag(generation, now);
-    Ok((history.into_body(), tag))
-  })
-  .await
-  {
-    Ok((body, tag)) => history_response(body, tag, gzip),
+  match blocking_store(move || history_answer(&store, range, UtcDateTime::now(), gzip)).await {
+    Ok((body, compressed, tag)) => history_response(body, compressed, tag),
     Err(error) => store_error(error),
   }
 }
@@ -658,37 +692,56 @@ fn accepts_gzip(headers: &HeaderMap) -> bool {
   header_text(headers, &header::ACCEPT_ENCODING).contains("gzip")
 }
 
-/// The history response, with its own gzip form when the client accepts one.
+/// The body, its gzip form when a gzip client asks, and the tag one history request answers with.
 ///
-/// The series ends at each request's own instant, so the version this body answers under never repeats and the
-/// transport's gzip memo, keyed by the ETag, can never serve it twice. The transport would still pay its level-9
-/// deflate of a version no repeat request reads; compressing the body here keeps that cost out of the request. A body
-/// too small to deflate stays plain, as the transport's own rule has it.
-fn history_response(body: Vec<u8>, tag: String, gzip: bool) -> Response {
+/// A request inside the bucket the entry holds answers the body it already built; a new bucket or a moved record set
+/// builds the series and takes the next build number for its tag.
+fn history_answer(
+  store: &Store,
+  range: &'static str,
+  now: UtcDateTime,
+  gzip: bool,
+) -> StoreResult<(Bytes, Option<Bytes>, String)> {
+  let (records, _) = all_run_records(store)?;
+  let to = bucket_end(now.into_inner(), bucket_seconds(range));
+  let mut memo = HISTORY_MEMO.lock().expect("the history memo mutex is not poisoned");
+  let holds =
+    memo.as_ref().is_some_and(|entry| entry.range == range && entry.to == to && Arc::ptr_eq(&entry.records, &records));
+  if !holds {
+    let body = Bytes::from(series_of(records.as_slice(), range, now).into_body());
+    let build = HISTORY_BUILDS.fetch_add(1, Ordering::Relaxed) + 1;
+    *memo = Some(HistoryMemo { range, records, to, tag: format!("\"{range}-{build:x}\""), body, gzip: None });
+  }
+  let entry = memo.as_mut().expect("the memo holds the entry this request built or found");
+  if gzip && entry.gzip.is_none() && entry.body.len() >= MINIMUM_DEFLATE_BYTES {
+    entry.gzip = Some(Bytes::from(gzip_level_four(&entry.body)));
+  }
+  let compressed = if gzip { entry.gzip.clone() } else { None };
+  Ok((entry.body.clone(), compressed, entry.tag.clone()))
+}
+
+/// The history response, carrying the gzip form when the handler built one for a client that accepts gzip.
+///
+/// A body too small to deflate stays plain, as the transport's own rule has it.
+fn history_response(body: Bytes, compressed: Option<Bytes>, tag: String) -> Response {
   let mut builder = Response::builder()
     .status(StatusCode::OK)
     .header(header::CONTENT_TYPE, "application/json")
     .header(header::ETAG, tag);
-  let served = if gzip && body.len() >= MINIMUM_DEFLATE_BYTES {
-    let compressed = gzip_level_four(&body);
-    builder = builder
-      .header(header::CONTENT_ENCODING, "gzip")
-      .header(header::VARY, "Accept-Encoding")
-      .header(header::CONTENT_LENGTH, compressed.len());
-    Body::from(compressed)
-  } else {
-    builder = builder.header(header::CONTENT_LENGTH, body.len());
-    Body::from(body)
+  let served = match compressed {
+    Some(compressed) => {
+      builder = builder
+        .header(header::CONTENT_ENCODING, "gzip")
+        .header(header::VARY, "Accept-Encoding")
+        .header(header::CONTENT_LENGTH, compressed.len());
+      compressed
+    }
+    None => {
+      builder = builder.header(header::CONTENT_LENGTH, body.len());
+      body
+    }
   };
-  builder.body(served).expect("the history response builds")
-}
-
-/// The entity tag of a history body: the record generation the series was built from and the instant its window ends.
-///
-/// The generation names the run records the series counted, and the instant places the window. Two bodies therefore
-/// share the tag only when they counted the same records over the same window.
-fn history_tag(generation: u64, now: UtcDateTime) -> String {
-  format!("\"{generation:x}-{:x}\"", now.into_inner().unix_timestamp_nanos())
+  builder.body(Body::from(served)).expect("the history response builds")
 }
 
 #[cfg(test)]
@@ -1061,18 +1114,36 @@ mod tests {
     }
   }
 
-  /// The tag names the generation and the instant, so either one moving gives the body a new tag.
-  #[test]
-  fn the_history_tag_moves_with_each_input_that_moves_the_body() {
-    let instant = at("2026-11-01T07:00:00Z");
-    let tag = history_tag(7, UtcDateTime::from(instant));
-    assert_eq!(tag, history_tag(7, UtcDateTime::from(instant)), "the same inputs name the same body");
-    assert_ne!(tag, history_tag(8, UtcDateTime::from(instant)), "a record write moves the generation");
-    assert_ne!(
-      tag,
-      history_tag(7, UtcDateTime::from(instant + Duration::seconds(1))),
-      "the window follows the instant"
-    );
+  /// The series' points stand on the bucket grid, and its window ends at the bucket that holds the request.
+  #[tokio::test]
+  async fn the_history_series_ends_at_the_bucket_that_holds_the_instant() {
+    let (_home, features) = test_support::feature_context();
+    let now = at("2026-11-01T12:02:17.5Z");
+    let (series, _) = history_series(&features.store, "7d", UtcDateTime::from(now)).unwrap();
+    assert_eq!(series.to, at("2026-11-01T12:05:00Z"), "the window ends at the current bucket's end");
+    assert_eq!(series.from, series.to - Duration::seconds(7 * 24 * 60 * 60));
+    assert_eq!(series.points.len(), 2016);
+    assert_eq!(series.points[0].at, series.from, "the first point stands at the window's start");
+    assert_eq!(series.points[2015].at, series.to - Duration::seconds(300));
+    assert!(series.points.iter().all(|point| (point.at - series.from).whole_seconds() % 300 == 0));
+  }
+
+  /// A repeat request inside one bucket answers the body it built, and a moved record set builds a new one.
+  #[tokio::test]
+  async fn a_repeat_request_in_one_bucket_answers_its_body() {
+    let (_home, features) = test_support::feature_context();
+    let now = UtcDateTime::now();
+    let (first, first_gzip, first_tag) = history_answer(&features.store, "7d", now, false).unwrap();
+    let (repeat, repeat_gzip, repeat_tag) = history_answer(&features.store, "7d", now, false).unwrap();
+    assert_eq!(first, repeat, "the bucket answers the body it built");
+    assert_eq!(first_tag, repeat_tag);
+    assert!(first_gzip.is_none() && repeat_gzip.is_none(), "a client that names no gzip reads no gzip form");
+
+    let worker = test_support::create_node(&features.store, "history-memo-worker", None, TaskProfile::Worker).await;
+    write_running_run(&features.store, &worker.id, "work");
+    let (moved, _, moved_tag) = history_answer(&features.store, "7d", UtcDateTime::now(), false).unwrap();
+    assert_ne!(moved_tag, first_tag, "a moved record set moves the body's version");
+    assert_ne!(moved, first, "the new record reaches the series");
   }
 
   /// A run record written to the home reaches the series, at the instant it started.

@@ -1330,6 +1330,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
+ "bytes",
  "charliebot-agents",
  "charliebot-compat",
  "charliebot-core",

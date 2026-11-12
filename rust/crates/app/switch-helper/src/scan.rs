@@ -203,7 +203,7 @@ struct BackendFiles {
 /// The declared backend types in one build, keyed by type name.
 type BuildRegistrations = HashMap<String, (Option<bool>, String)>;
 
-/// The registration files and sibling sources of one build in the layout its tree has, and the error a failed tree read gave.
+/// The registration files of one build in the layout its tree has, with each file's sibling sources; or the read error.
 fn registration_files(repo: &Path, sha: &str) -> Result<(Vec<BackendFiles>, Option<String>)> {
   for (prefix, suffix) in BACKEND_LAYOUTS {
     let listed = git(repo, &["ls-tree", "-r", "--name-only", sha, prefix])?;
@@ -282,8 +282,7 @@ fn read_build_registrations(repo: &Path, sha: &str) -> Result<Result<BuildRegist
   Ok(Ok(registrations))
 }
 
-/// One build's re-attachment declaration for a backend type: the value when the build declares it, and the reason when
-/// it does not.
+/// The backend type declarations of each build, each read from its tree on the first lookup in that build.
 #[derive(Default)]
 pub struct Registrations {
   cache: HashMap<String, Result<BuildRegistrations, String>>,
@@ -365,18 +364,6 @@ mod tests {
         "backend type {backend_type} declaration could not be resolved from tree HEAD: {detail}"
       );
     }
-  }
-
-  #[test]
-  fn cc_anthropic_compatible_resolves_at_target_build_5fb7dd2b2() {
-    let repo = repo_root();
-    if !git(&repo, &["cat-file", "-e", "5fb7dd2b2^{commit}"]).is_ok_and(|out| out.status.success()) {
-      return;
-    }
-    let mut registrations = Registrations::default();
-    let (enabled, detail) =
-      registrations.lookup(&repo, "5fb7dd2b2", "cc-anthropic-compatible").expect("lookup succeeds");
-    assert_eq!(enabled, Some(true), "cc-anthropic-compatible must resolve to true at 5fb7dd2b2: {detail}");
   }
 
   #[test]

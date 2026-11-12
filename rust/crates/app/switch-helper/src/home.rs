@@ -34,7 +34,6 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     Some("scan") => scan::scan(rest),
     Some("alive") => alive(rest),
     Some("outcome") => outcome(rest),
-    Some("reattach") => reattach(rest),
     _ => Err(CliExit::usage(USAGE)),
   }
 }
@@ -86,7 +85,8 @@ fn alive(args: &[OsString]) -> Result<(), CliExit> {
   Ok(())
 }
 
-/// `reattach REPO SHA BACKEND_TYPE`: prints the resolved restart_reattach value (`true` or `false`) and the source path.
+/// `reattach REPO SHA BACKEND_TYPE`: prints the resolved restart_reattach value (`true` or `false`) and the source
+/// path.
 pub(crate) fn reattach(args: &[OsString]) -> Result<(), CliExit> {
   let [repo, sha, backend_type] = exact::<3>(args)?;
   let (enabled, detail) = scan::read_registration(Path::new(&repo), &sha, &backend_type).map_err(failed)?;

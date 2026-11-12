@@ -2,8 +2,8 @@
 //!
 //! The event fires once the response body has been sent or dropped. Its fields are `method`, the decoded
 //! `path` without the query string (the terminal WebSocket carries its credential there), `status`,
-//! `duration_ms`, `client` and `forwarded_for`; a failed request adds `error`, the failure's kind.
-//! `client` is the TCP peer address; `forwarded_for` is the first `X-Forwarded-For` address, which the
+//! `duration_ms`, `client` and `forwarded_for`. A failed request adds `error`, the failure's kind.
+//! `client` is the TCP peer address. `forwarded_for` is the first `X-Forwarded-For` address, which the
 //! Tailscale Serve proxy sets to the browser's address, and `-` when the request reaches the server directly.
 //! The layer sits outside the auth gate, so the gate's refusals are logged too.
 
@@ -170,7 +170,7 @@ mod tests {
   }
 
   /// The layer over one route, under the path layer the real app puts above it, with the connect info a
-  /// Tailscale Serve proxy presents: the TCP peer is the proxy on the loopback interface.
+  /// Tailscale Serve proxy presents. The TCP peer is the proxy on the loopback interface.
   fn app() -> axum::Router {
     axum::Router::new()
       .route("/probe", get(|| async { "ok" }))

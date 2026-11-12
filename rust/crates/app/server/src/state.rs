@@ -1,5 +1,6 @@
-//! What every request handler reads: the feature context (the profile's live config and credentials, the store, the
-//! registry, the startup state with the template engine), the build identity and the static mounts.
+//! What every request handler reads: the feature context, the build identity and the static mounts. The context
+//! carries the profile's live config and credentials, the store, the registry and the startup state with the
+//! template engine.
 
 use std::path::Path;
 use std::sync::Arc;

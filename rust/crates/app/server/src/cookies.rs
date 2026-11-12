@@ -1,7 +1,7 @@
 //! Reading one cookie's value from a `Cookie` header.
 //!
 //! The auth gate reads the access-key cookie through this parser, whose rules decide which headers
-//! carry the cookie at all: a malformed segment ends parsing, a reserved attribute before any cookie
+//! carry the cookie at all. A malformed segment ends parsing, a reserved attribute before any cookie
 //! or a value-less non-flag attribute discards the whole header, and an illegal cookie name is an
 //! error. Each of those outcomes means "no cookie" to the gate, so this module returns the value
 //! only when the jar holds it.

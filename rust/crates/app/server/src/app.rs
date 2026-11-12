@@ -1,8 +1,8 @@
 //! The application: the route families under the server's middleware stack.
 //!
-//! Outermost first: the decoded-path rewrite (so routing sees the decoded path), the WebSocket gate
-//! (the protocol switch, outside every HTTP middleware), the request log, the panic catcher,
-//! the auth gate, transport gzip, the JSON entity tags, then the router.
+//! Outermost first: the decoded-path rewrite (so routing sees the decoded path) and the WebSocket gate
+//! (the protocol switch, outside every HTTP middleware). Then come the request log, the panic catcher,
+//! the auth gate, transport gzip, the JSON entity tags, and the router.
 
 use std::any::Any;
 use std::sync::Arc;

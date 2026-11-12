@@ -600,7 +600,7 @@ fn listing_ids(rows: &[SessionMetadata]) -> Vec<String> {
   rows.iter().map(|row| row.id.clone()).collect()
 }
 
-/// A real user message lifts the node it was sent to, forward only; its ancestors keep their places, and a message to
+/// A real user message lifts the node it was sent to, forward only; its ancestors keep their places. A message to
 /// an archived node reopens the chain and lifts only the reopened target.
 #[tokio::test]
 async fn user_admission_lifts_only_the_target_node() {

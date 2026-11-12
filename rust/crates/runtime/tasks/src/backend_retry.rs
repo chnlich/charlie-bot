@@ -1,5 +1,6 @@
-//! The limits a manager turn and a worker run apply before they wait out a reset that their backend states
-//! (`AgentBackend::retry_after`) and rerun the same input on the same backend.
+//! The limits a manager turn and a worker run apply before they wait out a reset.
+//! Their backend states that reset through `AgentBackend::retry_after`, and they rerun the same input on the same
+//! backend.
 
 use std::time::Duration;
 

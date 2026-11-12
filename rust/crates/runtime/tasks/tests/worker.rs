@@ -742,7 +742,7 @@ async fn test_worker_warning_relay_lands_strictly_below_the_line_in_the_tie_band
 
 //
 // The reading of the target is raised between the gate and the move. Here a subscriber on
-// the thread channel raises it when the safe point's `user` frame is broadcast: the watch has already observed that
+// the thread channel raises it when the safe point's `user` frame is broadcast. The watch has already observed that
 // event (the gate), and the move reads the pool only after the process has exited.
 #[tokio::test]
 #[ignore = "integration"]
@@ -1307,7 +1307,7 @@ async fn a_devin_worker_retries_the_stated_rate_limit_reset_in_place() -> anyhow
 }
 
 /// After the initial run and its three retries all hit the rate limit, the worker error carries the original text
-/// with the retry note, and the reset the error stated.
+/// with the retry note. It also carries the reset the error stated.
 #[tokio::test(start_paused = true)]
 #[ignore = "integration"]
 async fn a_devin_worker_reports_the_rate_limit_after_three_retries() -> anyhow::Result<()> {
@@ -1333,8 +1333,8 @@ async fn a_devin_worker_reports_the_rate_limit_after_three_retries() -> anyhow::
   Ok(())
 }
 
-/// A reset beyond the five-minute wait limit is not waited out, but it still reaches the error's `resets_at`, so the
-/// pool cools at the reset the backend stated rather than the thirty-minute default.
+/// A reset beyond the five-minute wait limit is not waited out, but it still reaches the error's `resets_at`. The
+/// pool therefore cools at the reset the backend stated rather than the thirty-minute default.
 #[tokio::test(start_paused = true)]
 #[ignore = "integration"]
 async fn a_devin_worker_keeps_a_reset_over_the_wait_limit_for_the_cooldown() -> anyhow::Result<()> {

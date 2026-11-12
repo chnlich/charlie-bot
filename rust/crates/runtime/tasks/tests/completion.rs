@@ -2028,8 +2028,8 @@ async fn closing_a_task_starts_the_session_browser_sweep() {
   bystander.wait().unwrap();
 }
 
-/// Starts each launched run as the production launch does: it registers the run record and leaves the run live, so a
-/// wake leaves a run that is newer than the run it woke.
+/// Starts each launched run as the production launch does: it registers the run record and leaves the run live. A
+/// wake therefore leaves a run that is newer than the run it woke.
 struct RunStartingExecutor {
   store: Arc<charliebot_store::Store>,
   next_run: AtomicUsize,
@@ -2102,7 +2102,7 @@ async fn archive_from_run(h: &CompletionHarness, session_id: &str, run_id: &str,
 #[tokio::test]
 #[ignore = "integration"]
 async fn user_approved_archive_waits_for_the_view_and_closes_when_the_view_clears_has_unread() {
-  // The turn's web reply set has_unread, so the archive holds: the run end neither closes it nor sends a blocked
+  // The turn's web reply set has_unread, so the archive holds. The run end neither closes it nor sends a blocked
   // notice, and the view that clears the flag completes it and reports to the parent.
   let h = CompletionHarness::new();
   let parent = h.base.create_task("parent", None, TaskProfile::Manager, "Parent").await;

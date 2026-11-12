@@ -124,7 +124,7 @@ impl<'de> Deserialize<'de> for ReplayLine {
 /// Read non-initial replay uuids from every raw transport leg of this Run (`_echoed_input_ids`).
 ///
 /// A uuid the delivery wrote as a bound process's first line (`charliebot_registry::midturn_delivery::is_first_line`)
-/// names the initial or continuation prompt, not a pending web input, so it stays out of the set.
+/// names the initial or continuation prompt, not a pending web input. It therefore stays out of the set.
 fn echoed_input_ids(transport_dir: &Path, run_id: &str) -> anyhow::Result<HashSet<String>> {
   if !transport_dir.is_dir() {
     // `run_dir.glob` over an absent transport directory matches nothing.
@@ -183,11 +183,11 @@ pub trait ClaimEchoedInputs: Send + Sync {
   ) -> BoxFuture<'a, anyhow::Result<Vec<String>>>;
 }
 
-/// The input ids mid-turn delivery handed one Run: the replay record in its raw log that the finish claim reads,
-/// whether or not the Run's durable claim already names them.
+/// The input ids mid-turn delivery handed one Run. They come from the replay record in its raw log that the finish
+/// claim reads, whether or not the Run's durable claim already names them.
 ///
 /// The scan parses every raw line of the Run, so it rides a blocking thread like the round-notice projection of the
-/// same files: on the async runtime's worker threads it would freeze every concurrent request and WebSocket at turn
+/// same files. On the async runtime's worker threads it would freeze every concurrent request and WebSocket at turn
 /// end (`b03c38579`).
 pub async fn delivered_input_ids(transport_dir: &Path, run_id: &str) -> anyhow::Result<HashSet<String>> {
   let scan_run_id = run_id.to_string();
@@ -218,7 +218,7 @@ pub async fn claim_finish_inputs(
 /// Build the fresh raw-log translator used to follow or reconcile one Run (`midturn_delivery.fresh_translate`).
 ///
 /// Stateful translates require one instance per scan. A gated web manager turn's replay lines need the gated backend's
-/// translator, so the launch carries the stream-json arguments its lifecycle returns; a build failure degrades to the
+/// translator, so the launch carries the stream-json arguments its lifecycle returns. A build failure degrades to the
 /// raw claude shape the same way the worker side's reconcile translate does — never a crash of the follow.
 pub fn fresh_translate(
   features: &FeatureContext,

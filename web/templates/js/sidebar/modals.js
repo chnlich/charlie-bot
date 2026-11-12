@@ -14,11 +14,23 @@
 // separator line's Clone to here and Elon-e buttons paint on the first render,
 // to which a sidebar click never comes back. The module's copy used to register
 // them at load, and core loads before every package, so these two lead the line.
+// The filter strip's four pills end 294 px from the sidebar's left edge. With
+// the strip's 12 px right padding, the sidebar needs 306 px for them. The New
+// Session label stops clipping just above 283 px. Below those widths the
+// Archive pill paints over the chat column and the label reads "N…", so a drag
+// and a restored width both stop at 310 px.
+const MIN_SIDEBAR_WIDTH = 310;
+const MAX_SIDEBAR_WIDTH = 600;
+
+function sidebarWidth(width) {
+  return Math.min(Math.max(width, MIN_SIDEBAR_WIDTH), MAX_SIDEBAR_WIDTH);
+}
+
 function initSidebarResize() {
   const sidebar = document.getElementById('sidebar');
   const handle = document.getElementById('resize-handle');
-  const saved = localStorage.getItem('sidebar-width');
-  if (saved) sidebar.style.width = saved + 'px';
+  const saved = Number.parseInt(localStorage.getItem('sidebar-width'), 10);
+  if (Number.isFinite(saved)) sidebar.style.width = sidebarWidth(saved) + 'px';
 
   let startX, startW;
   handle.addEventListener('mousedown', (e) => {
@@ -29,8 +41,7 @@ function initSidebarResize() {
     document.body.classList.add('resizing');
 
     function onMove(e) {
-      const w = Math.min(Math.max(startW + e.clientX - startX, 200), 600);
-      sidebar.style.width = w + 'px';
+      sidebar.style.width = sidebarWidth(startW + e.clientX - startX) + 'px';
     }
     function onUp() {
       handle.classList.remove('active');

@@ -34,3 +34,10 @@ scheduled_tasks:
     timezone: local
     project: CharlieBot
     handler: cool_storage
+  - name: proactive-daily
+    cron: "0 7 * * *"
+    project: CharlieBot
+    prompt_file: prompts/cron/proactive_daily/prompt.md
+    # No mode: each firing runs one worker under the standing session, which the
+    # first firing creates in the CharlieBot group. No timezone, session_id or
+    # backend: the defaults apply.

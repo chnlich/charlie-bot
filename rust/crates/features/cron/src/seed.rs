@@ -143,7 +143,11 @@ mod tests {
     let defaults = fs::read_to_string(checkout.join("configs/cron.default.yaml")).expect("the committed defaults");
     fs::create_dir_all(repo.path().join("configs")).expect("create the configs directory");
     fs::write(repo.path().join("configs/cron.default.yaml"), defaults).expect("write the defaults");
-    for prompt in ["prompts/cron/memory_curator/memory_selector.md", "prompts/cron/memory_curator/memory_reviewer.md"] {
+    for prompt in [
+      "prompts/cron/memory_curator/memory_selector.md",
+      "prompts/cron/memory_curator/memory_reviewer.md",
+      "prompts/cron/proactive_daily/prompt.md",
+    ] {
       let path = repo.path().join(prompt);
       fs::create_dir_all(path.parent().expect("the prompt directory")).expect("create the prompt directory");
       fs::write(path, "Synthetic prompt\n").expect("write the prompt");
@@ -165,7 +169,7 @@ mod tests {
     let report = seed_default_cron_tasks(&cfg, repo.path(), false).expect("the first seed");
     assert_eq!(
       report.iter().map(|item| (item.name.as_str(), item.status)).collect::<Vec<_>>(),
-      [("memory-curator", "created"), ("storage-cool", "created")]
+      [("memory-curator", "created"), ("storage-cool", "created"), ("proactive-daily", "created")]
     );
     let curator = loader::cron_path(&cfg, "memory-curator");
     let body = fs::read_to_string(&curator).expect("the seeded host file");
@@ -174,7 +178,7 @@ mod tests {
     assert!(body.contains("prompt_file: prompts/cron/memory_curator/memory_selector.md"), "{body}");
     // The seeded body carries the entry's `project`, so the scheduler binds the
     // task's session into that group.
-    for name in ["memory-curator", "storage-cool"] {
+    for name in ["memory-curator", "storage-cool", "proactive-daily"] {
       let path = loader::cron_path(&cfg, name);
       let body = fs::read_to_string(&path).expect("the seeded host file");
       assert!(body.contains("project: CharlieBot"), "the seeded {name} carries the default entry's project: {body}");
@@ -183,7 +187,7 @@ mod tests {
     let report = seed_default_cron_tasks(&cfg, repo.path(), false).expect("the second seed");
     assert_eq!(
       report.iter().map(|item| (item.name.as_str(), item.status)).collect::<Vec<_>>(),
-      [("memory-curator", "exists"), ("storage-cool", "exists")]
+      [("memory-curator", "exists"), ("storage-cool", "exists"), ("proactive-daily", "exists")]
     );
   }
 
@@ -197,7 +201,7 @@ mod tests {
     let report = seed_default_cron_tasks(&cfg, repo.path(), true).expect("the dry run");
     assert_eq!(
       report.iter().map(|item| (item.name.as_str(), item.status)).collect::<Vec<_>>(),
-      [("memory-curator", "would-create"), ("storage-cool", "would-create")]
+      [("memory-curator", "would-create"), ("storage-cool", "would-create"), ("proactive-daily", "would-create")]
     );
     assert!(!loader::cron_dir(&cfg).exists(), "the dry run created no cron.d directory");
   }

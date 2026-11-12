@@ -5,6 +5,7 @@ configured Anthropic-compatible endpoint.
 
 ## Public API
 
-| Rust item |
-| --- |
-| `charliebot_anthropic_compatible::register` (private `factory`, `options`, `usage`) |
+| Rust item | What it provides |
+| --- | --- |
+| `charliebot_anthropic_compatible::{TYPE_NAME, register}` | The backend type name and its registration. |
+| `charliebot_anthropic_compatible::{factory, options}` | The factory and option fields (`usage` stays private). |

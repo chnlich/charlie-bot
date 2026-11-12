@@ -4,6 +4,8 @@ pub mod factory;
 pub mod options;
 mod usage;
 
+pub use options::TYPE_NAME;
+
 use std::sync::Arc;
 
 use charliebot_registry::backend::{BackendLifecycle, BackendTraits, BackendTypeRegistration, ResumeStyle};
@@ -14,8 +16,6 @@ use charliebot_claude_code::claude_lifecycle::ClaudeCliLifecycle;
 
 /// The package label the composition list registers this backend's package under.
 pub const PACKAGE: &str = "backends.anthropic_compatible";
-
-const TYPE_NAME: &str = "cc-anthropic-compatible";
 
 /// The `cc-anthropic-compatible` type's registration: its backend type, option schema, reading limits, host alias and
 /// usage attribution.

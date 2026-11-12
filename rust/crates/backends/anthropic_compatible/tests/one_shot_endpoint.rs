@@ -59,6 +59,7 @@ async fn one_shot_text_omits_effort_when_the_entry_has_none() {
 
 /// The backend the Anthropic-compatible factory builds from these type fields.
 fn endpoint_backend(type_fields: &str) -> Box<dyn AgentBackend> {
+  use charliebot_anthropic_compatible::TYPE_NAME;
   use charliebot_anthropic_compatible::factory::AnthropicCompatibleFactory;
   use charliebot_core::config::BackendOption;
   use charliebot_registry::Registry;
@@ -70,7 +71,7 @@ fn endpoint_backend(type_fields: &str) -> Box<dyn AgentBackend> {
     model: "synthetic/model-1".to_string(),
     prompt_overlay: None,
     billing: None,
-    backend_type: "cc-anthropic-compatible".to_string(),
+    backend_type: TYPE_NAME.to_string(),
     type_fields: serde_yaml::from_str(type_fields).unwrap(),
     visible: true,
   };

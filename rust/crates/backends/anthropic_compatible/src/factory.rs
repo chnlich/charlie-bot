@@ -6,7 +6,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::credentials;
 use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 
-use super::options::CcAnthropicCompatibleOption;
+use super::options::{CcAnthropicCompatibleOption, TYPE_NAME};
 use charliebot_claude_code::AnthropicEndpointBackend;
 use charliebot_claude_code::factory::{launch_config_dir, launch_with_kwargs};
 
@@ -23,7 +23,7 @@ impl BackendFactory for AnthropicCompatibleFactory {
     launch: LaunchArgs,
   ) -> anyhow::Result<Box<dyn AgentBackend>> {
     let Some(option) = option else {
-      bail!("cc-anthropic-compatible has no translate fallback: it builds only from its backend option");
+      bail!("{TYPE_NAME} has no translate fallback: it builds only from its backend option");
     };
     let fields = CcAnthropicCompatibleOption::from_fields(&option.type_fields).map_err(anyhow::Error::msg)?;
     let auth_token = match fields.credential.as_deref() {
@@ -68,7 +68,7 @@ mod tests {
       model: "synthetic-model".to_string(),
       prompt_overlay: None,
       billing: None,
-      backend_type: "cc-anthropic-compatible".to_string(),
+      backend_type: TYPE_NAME.to_string(),
       type_fields: serde_yaml::from_str(type_fields).unwrap(),
       visible: true,
     }

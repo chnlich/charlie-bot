@@ -716,13 +716,26 @@ fn the_other_directions_clone_adds_its_files_to_the_rounds_in_flight_list() {
   let world = World::new();
   // A standalone clone of another direction, like the host worker's five clones on the remote host.
   let clone = world.other_direction_clone("ux");
-  // The committed change rides a topic branch, as a round's branch does.
+  // A file whose removal main lands after the topic branch's base, as a rename's old name does.
+  fs::write(clone.join("dropped.md"), "old\n").expect("the dropped fixture file");
+  world.git(&clone, &["add", "-A"]);
+  world.git(&clone, &["commit", "-q", "-m", "add the dropped file"]);
+  // The committed change rides a topic branch, as a round's branch does, and it touches the old
+  // path beside the live one.
   world.git(&clone, &["switch", "-q", "-c", "improve/ux/topic"]);
   fs::write(clone.join("committed.md"), "topic\n").expect("the committed fixture file");
+  fs::write(clone.join("dropped.md"), "topic\n").expect("the dropped path's topic change");
   world.git(&clone, &["add", "-A"]);
   world.git(&clone, &["commit", "-q", "-m", "synthetic topic"]);
+  // main deletes the old path, as a rename's landing does.
+  world.git(&clone, &["switch", "-q", "main"]);
+  world.git(&clone, &["rm", "-q", "dropped.md"]);
+  world.git(&clone, &["commit", "-q", "-m", "drop the old name"]);
+  world.git(&clone, &["push", "-q", "origin", "main"]);
+  world.git(&clone, &["switch", "-q", "improve/ux/topic"]);
   // The uncommitted change sits in the checkout; the untracked file has no git entry at all.
   fs::write(clone.join("base.md"), "changed\n").expect("the uncommitted change");
+  fs::write(clone.join("dropped.md"), "uncommitted\n").expect("the dropped path's uncommitted change");
   fs::write(clone.join("untracked.md"), "new\n").expect("the untracked file");
 
   let run = world.run(&world.env());
@@ -735,6 +748,10 @@ fn the_other_directions_clone_adds_its_files_to_the_rounds_in_flight_list() {
       "the in-flight list misses the {changed} change of the ux clone:\n{list}"
     );
   }
+  assert!(
+    !list.lines().any(|line| line == "dropped.md"),
+    "the in-flight list names the path whose removal main landed:\n{list}"
+  );
 }
 
 #[test]
@@ -1075,6 +1092,8 @@ fn two_runners_that_need_the_same_missing_commit_build_it_once_and_both_use_it()
     let launch = world.remote_home.join("improve/launch").join(&launch_id);
     fs::create_dir_all(&launch).expect("the launch directory");
     harness::copy_file(&harness::repo_root().join("dev/improve/remote-runner.sh"), &launch.join("remote-runner.sh"));
+    // The launcher sends the rule script beside the runner, so the runner's clone scan sources it.
+    harness::copy_file(&harness::repo_root().join("dev/improve/inflight-files.sh"), &launch.join("inflight-files.sh"));
     for name in ["args", "env", "paths"] {
       fs::write(launch.join(name), "").expect(name);
     }
@@ -1216,4 +1235,80 @@ fn a_locked_origin_main_ref_does_not_stop_the_launchers_in_flight_list() {
     assert!(run.stdout.lines().any(|line| line == listed), "the in-flight list misses {listed}:\n{}", run.describe());
   }
   assert!(!fetch_head.exists(), "the launcher's in-flight list wrote the shared FETCH_HEAD");
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_path_whose_removal_main_landed_is_not_named_by_the_in_flight_list() {
+  let world = World::new();
+  // Two tracked files on main, as a live repository's paths are.
+  fs::write(world.repo.join("old.md"), "old\n").expect("the old path's file");
+  fs::write(world.repo.join("live.md"), "live\n").expect("the live path's file");
+  world.git(&world.repo, &["add", "-A"]);
+  world.git(&world.repo, &["commit", "-q", "-m", "add the fixture files"]);
+  // A worktree branch that changes both paths, as a live line's checkout is.
+  let checkout = world.sandbox.root().join("renamed-checkout");
+  world.git(&world.repo, &["worktree", "add", "-q", &checkout.display().to_string(), "-b", "charliebot/renamed"]);
+  fs::write(checkout.join("old.md"), "topic\n").expect("the old path's topic change");
+  fs::write(checkout.join("live.md"), "topic\n").expect("the live path's topic change");
+  world.git(&checkout, &["add", "-A"]);
+  world.git(&checkout, &["commit", "-q", "-m", "synthetic rename topic"]);
+  // main deletes the old path after the branch's base, as a rename's landing does.
+  world.git(&world.repo, &["rm", "-q", "old.md"]);
+  world.git(&world.repo, &["commit", "-q", "-m", "drop the old name"]);
+  world.git(&world.repo, &["push", "-q", "origin", "main"]);
+  // The worktree directory still carries the old path's uncommitted change, beside a live one and
+  // an untracked file. An open pull request holds its own path.
+  fs::write(checkout.join("old.md"), "uncommitted\n").expect("the old path's uncommitted change");
+  fs::write(checkout.join("live.md"), "uncommitted\n").expect("the live path's uncommitted change");
+  fs::write(checkout.join("fresh.md"), "untracked\n").expect("the untracked file");
+  let pull_requests = world.sandbox.root().join("open-pull-requests.tsv");
+  fs::write(&pull_requests, "13\tcharliebot/task-open\tpr-only.md\n").expect("the open pull requests");
+  let mut env = world.env();
+  env.insert("FAKE_GH_PRS".to_string(), pull_requests.display().to_string());
+
+  let mut command = harness::command("bash", &env);
+  command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg("improve/perf/");
+  let run = harness::run(&mut command);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  // The old path carries only landed work: main's own deletion. The live path's unlanded branch
+  // version, its uncommitted change, the untracked file and the open pull request's file stay.
+  let mut listed: Vec<&str> = run.stdout.lines().collect();
+  listed.sort_unstable();
+  assert_eq!(
+    listed,
+    ["fresh.md", "live.md", "pr-only.md"],
+    "the in-flight list does not follow the landed-removal rule:\n{}",
+    run.describe()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_branch_landed_by_a_squash_merge_names_no_committed_file() {
+  let world = World::new();
+  // A branch whose one commit reaches main through a squash merge: main's commit carries the
+  // branch's content under a retitled subject, so neither git cherry's patch id nor the subject
+  // finds the landing, and the blob rule must.
+  world.git(&world.repo, &["switch", "-q", "-c", "charliebot/squashed"]);
+  fs::write(world.repo.join("topic.md"), "topic\n").expect("the topic's file");
+  world.git(&world.repo, &["add", "-A"]);
+  world.git(&world.repo, &["commit", "-q", "-m", "synthetic topic"]);
+  world.git(&world.repo, &["switch", "-q", "main"]);
+  fs::write(world.repo.join("topic.md"), "topic\n").expect("the squash commit's content");
+  world.git(&world.repo, &["add", "-A"]);
+  world.git(&world.repo, &["commit", "-q", "-m", "synthetic topic, retitled (#12)"]);
+  world.git(&world.repo, &["push", "-q", "origin", "main"]);
+
+  let mut command = harness::command("bash", &world.env());
+  command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg("improve/perf/");
+  let run = harness::run(&mut command);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(
+    !run.stdout.lines().any(|line| line == "topic.md"),
+    "the in-flight list names the squash-merged branch's file:\n{}",
+    run.describe()
+  );
 }

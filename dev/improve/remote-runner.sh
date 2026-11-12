@@ -180,75 +180,21 @@ rewrite_command() {
   REWRITTEN=("${rewritten[@]}")
 }
 
-# Whether every commit of the branch is on origin/main, by patch or by subject.
-#
-# A rebase lands each commit unchanged, and git cherry finds it by patch. A rebase that resolved a
-# conflict changes the patch but keeps the subject, so a commit whose subject origin/main has since
-# the merge base also counts. inflight-files.sh reads this repository's worktrees by the same rules.
-commits_landed() {
-  local root=$1
-  local main_ref=$2
-  local merge_base=$3
-  local branch=$4
-  local sign sha subject
-  local -A main_subjects=()
-  while IFS= read -r subject; do
-    main_subjects["$subject"]=1
-  done < <(git -C "$root" log --format=%s "$merge_base..$main_ref")
-  while read -r sign sha subject; do
-    if [[ $sign == + && -z ${main_subjects[$subject]:-} ]]; then
-      return 1
-    fi
-  done < <(git -C "$root" cherry -v "$main_ref" "$branch")
-  return 0
-}
-
-# Print the committed paths of one worktree branch whose version origin/main's history does not hold,
-# since the merge base. inflight-files.sh applies the same rule to this repository's worktrees.
-#
-# A squash merge lands the branch's content in one commit. A later change may move a path on, but the
-# landed version stays in origin/main's history, so a path whose branch version never appears there
-# carries the branch's own change. The branch's version of a path is its blob, or its deletion.
-list_unlanded_paths() {
-  local root=$1
-  local main_ref=$2
-  local merge_base=$3
-  local branch=$4
-  local meta path version entry
-  local -A main_versions=()
-  local -a paths=()
-  local -a branch_versions=()
-  while IFS=$'\t' read -r meta path; do
-    read -r _ _ _ version _ <<<"$meta"
-    paths+=("$path")
-    branch_versions+=("$path"$'\t'"$version")
-  done < <(git -C "$root" diff --raw --no-renames --no-abbrev "$merge_base" "$branch")
-  if [[ ${#paths[@]} -eq 0 ]]; then
-    return 0
-  fi
-  while IFS=$'\t' read -r meta path; do
-    read -r _ _ _ version _ <<<"$meta"
-    main_versions["$path"$'\t'"$version"]=1
-  done < <(git --literal-pathspecs -C "$root" log --format= --raw --no-renames --no-abbrev \
-    "$merge_base..$main_ref" -- "${paths[@]}" | grep '^:')
-  for entry in "${branch_versions[@]}"; do
-    if [[ -z ${main_versions[$entry]:-} ]]; then
-      printf '%s\n' "${entry%%$'\t'*}"
-    fi
-  done
-}
-
-# The other directions' clones are standalone repositories on this host, so the list that the
+# The other directions' clones are standalone repositories on this host, so the list that the# The other directions' clones are standalone repositories on this host, so the list that the
 # launcher computed there cannot see their work, and two directions pick topics in rust/. Every
 # file that those clones change therefore joins the round's list before the clone check: each
 # committed path whose branch version origin/main's history does not hold, for a branch whose commits
-# do not all land, plus the uncommitted and untracked paths of the checkout. The directions start in a
+# do not all land, plus the uncommitted and untracked paths of the checkout — each side under the
+# same landed-version and landed-removal rules the sourced functions carry. The directions start in a
 # burst after a release, so two runners read one clone at once, and a clone's own origin/main is a ref
 # its owner fetches too: this runner fetches into the ref its direction owns, writes no shared
 # FETCH_HEAD, and compares against that ref, so the clones' refs/remotes/origin/main stay with their
 # owners. A branch without a merge base is skipped with a note. The runner's own checkout is no
 # direction's clone and contributes nothing.
 other_inflight_files() {
+  # The rule is inflight-files.sh's alone: the launch directory carries the copy the launcher's
+  # list was made with, and sourcing it defines the rule functions this scan calls.
+  source "$LAUNCH_DIR/inflight-files.sh"
   local clone other branch merge_base main_ref origin_url
   main_ref="refs/improve/inflight/$direction"
   for clone in "$HOME_DIR"/improve/*/charlie-bot; do
@@ -270,8 +216,7 @@ other_inflight_files() {
         printf 'improve runner: skip branch %s in %s: no merge base with origin/main\n' "$branch" "$clone" >&2
       fi
     done < <(git -C "$clone" for-each-ref --format='%(refname:short)' refs/heads/)
-    git -C "$clone" diff --name-only HEAD 2>/dev/null || :
-    git -C "$clone" ls-files --others --exclude-standard 2>/dev/null || :
+    list_worktree_directory_paths "$clone" "$main_ref" "$clone"
   done
 }
 

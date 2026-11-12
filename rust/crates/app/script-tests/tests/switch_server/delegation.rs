@@ -1,6 +1,6 @@
 //! The switch's delegation check (delegation_check of scripts/switch-server.sh), run for real against a stand-in
 //! server that answers the delegate, task and archive routes with the behavior each test gives. The check runs on
-//! the test's runtime clone, so the worktree the server makes is a real worktree of it, and each test can hold the
+//! the test's runtime clone, so the worktree the server makes is a real worktree of it. Each test can then hold the
 //! check to leaving no worktree and no branch behind. The delegation wait and the probe cancel wait are one second.
 
 use std::fs;
@@ -281,7 +281,7 @@ fn test_switch_keeps_the_new_release_and_exits_6_when_the_probe_fails_on_the_mod
 #[test]
 #[ignore = "integration"]
 fn test_switch_switches_back_when_the_probe_run_fails_on_the_server_side() {
-  // The probe run ends failed with no error text, and then with a spawn error: no model service is named, so the
+  // The probe run ends failed with no error text, and then with a spawn error. No model service is named, so the
   // switch treats the failure as the server's and switches back on the first attempt.
   let mut world = World::new();
   let run = switch_to_new_release(
@@ -303,7 +303,7 @@ fn test_switch_switches_back_when_the_probe_run_fails_on_the_server_side() {
 #[test]
 #[ignore = "integration"]
 fn test_switch_reads_with_the_current_release_when_the_target_lacks_a_read() {
-  // A release built between the switch-helper group and run-first-command still works as a switch's target: its
+  // A release built between the switch-helper group and run-first-command still works as a switch's target. Its
   // binary carries the group but not that read, so the switch reads with the binary of the release current names.
   let mut world = World::new();
   let band = format!(

@@ -1,7 +1,7 @@
 //! The switch's disk preflight (scripts/switch-server.sh): the bounded wait for a quiet root disk, the error that
 //! names the heaviest readers, and the per-session read records around a switch.
 //!
-//! The tests inject the disk-rate sampler by replacing `disk_read_rate_mb`, and they read their cgroup and process
+//! The tests inject the disk-rate sampler by replacing `disk_read_rate_mb`. They read their cgroup and process
 //! accounting from the world's fake cgroup and proc roots, so no test depends on the live disk.
 
 use std::fs;
@@ -85,8 +85,8 @@ fn test_disk_preflight_times_out_and_names_the_heaviest_cgroup_and_process() {
   world.write_process(1234, "grep", 5000);
   let io_stat = world.cgroups.join("charliebot-sess-aaaa/io.stat");
   let process_io = world.proc.join("1234/io");
-  // The report's window is the gate's last sample, taken after the walks, so the sampler advances both counters on
-  // every call: the window's after snapshot sees one more increment than its before snapshot.
+  // The report's window is the gate's last sample, taken after the walks. The sampler therefore advances both
+  // counters on every call: the window's after snapshot sees one more increment than its before snapshot.
   let counter = world.root().join("disk-samples");
   let sampler = format!(
     r#"disk_read_rate_mb() {{

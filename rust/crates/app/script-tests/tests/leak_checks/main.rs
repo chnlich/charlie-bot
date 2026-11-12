@@ -423,7 +423,7 @@ fn leak_repo(sandbox: &Sandbox) -> (PathBuf, Env) {
 }
 
 /// A repository to commit to whose `core.hooksPath` is an absolute path into a second checkout that holds the
-/// leak tools and the hooks; the repository itself has no `dev/` directory.
+/// leak tools and the hooks. The repository itself has no `dev/` directory.
 fn cross_checkout_repo(sandbox: &Sandbox) -> (PathBuf, Env) {
   let hooks_checkout = sandbox.dir("hooks-checkout");
   copy_leak_tools(&hooks_checkout);

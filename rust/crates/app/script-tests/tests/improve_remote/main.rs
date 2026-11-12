@@ -1317,15 +1317,13 @@ fn a_branch_landed_by_a_squash_merge_names_no_committed_file() {
 fn write_run_record(world: &World, run_id: &str, worktree: &std::path::Path, ended: Option<&str>) {
   let run_dir = world.profile_home.join(format!("sessions/{SESSION_ID}/data/runs/{run_id}"));
   fs::create_dir_all(&run_dir).expect("the run record directory");
-  let ended_value = ended.map(|value| format!("\"{value}\"")).unwrap_or_else(|| "null".to_string());
-  fs::write(
-    run_dir.join("metadata.json"),
-    format!(
-      "{{\n  \"id\": \"{run_id}\",\n  \"worktree_path\": \"{}\",\n  \"started_at\": \"2026-11-10T01:00:00.000000Z\",\n  \"ended_at\": {ended_value}\n}}\n",
-      worktree.display()
-    ),
-  )
-  .expect("the run record");
+  let record = serde_json::json!({
+    "id": run_id,
+    "worktree_path": worktree.display().to_string(),
+    "started_at": "2026-11-10T01:00:00.000000Z",
+    "ended_at": ended,
+  });
+  fs::write(run_dir.join("metadata.json"), format!("{record:#}\n")).expect("the run record");
 }
 
 /// One worktree on a branch whose commit has landed, holding an uncommitted change, a staged
@@ -1466,6 +1464,29 @@ fn a_process_in_a_landed_worktree_keeps_its_uncommitted_paths_named() {
   assert!(
     run.stdout.lines().any(|line| line == "topic.md"),
     "the in-flight list drops the worked-in worktree's uncommitted path:\n{}",
+    run.describe()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn an_unreadable_run_record_stops_the_list_with_an_error() {
+  use std::os::unix::fs::PermissionsExt;
+  let world = World::new();
+  let checkout = landed_worktree_with_uncommitted_state(&world, "unreadable-record");
+  let run_id = "11111111-0000-0000-0000-000000000005";
+  write_run_record(&world, run_id, &checkout, Some("2026-11-10T02:00:00.000000Z"));
+  let record = world.profile_home.join(format!("sessions/{SESSION_ID}/data/runs/{run_id}/metadata.json"));
+  fs::set_permissions(&record, fs::Permissions::from_mode(0o000)).expect("the unreadable run record");
+  assert!(fs::File::open(&record).is_err(), "the test needs a run record this user cannot read");
+
+  let run = run_inflight_list(&world);
+
+  // A record skipped as unreadable could be the newest one, so the list must stop rather than read the older record.
+  assert_ne!(run.code, 0, "{}", run.describe());
+  assert!(
+    run.stderr.contains(&format!("{} is unreadable", record.display())),
+    "the in-flight list does not name the unreadable run record:\n{}",
     run.describe()
   );
 }

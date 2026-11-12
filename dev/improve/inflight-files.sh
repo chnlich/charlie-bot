@@ -175,8 +175,8 @@ list_worktree_directory_paths() {
 # Print whether a process runs in one worktree: `yes` when a process's working directory is the
 # worktree or a path inside it, `no` when none does, `unreadable` when the process table cannot
 # be read. The process table owns the process condition. A process of another user hides its
-# working directory from this read, and such a directory cannot be this worktree's, so an
-# unreadable entry is skipped.
+# working directory from this read, so such a process is not seen: the rounds and task runs that
+# hold these worktrees run as the same user, and an unreadable entry is skipped on that account.
 worktree_process_state() {
   local worktree=$1
   local proc target
@@ -218,7 +218,7 @@ declare -A run_closed_state=()
 declare -A run_newest_started=()
 
 read_run_records() {
-  local candidate record worktree started ended
+  local candidate record worktree started ended unreadable
   local -a patterns=() records=()
   if (( $# == 0 )); then
     return 0
@@ -229,6 +229,17 @@ read_run_records() {
   fi
   if [[ ! -d $CHARLIEBOT_HOME/sessions ]]; then
     printf 'cannot read the run-record condition: %s/sessions is missing\n' "$CHARLIEBOT_HOME" >&2
+    exit 1
+  fi
+  # grep skips a record it cannot open without a status the pipeline reports, and the newest record may
+  # be that one, so an unreadable record or an unlistable directory stops the read here.
+  unreadable=$(find "$CHARLIEBOT_HOME/sessions" -mindepth 5 -maxdepth 5 -type f -name metadata.json ! -readable \
+    -print -quit) || {
+    printf 'cannot read the run-record condition: %s/sessions cannot be listed\n' "$CHARLIEBOT_HOME" >&2
+    exit 1
+  }
+  if [[ -n $unreadable ]]; then
+    printf 'cannot read the run-record condition: %s is unreadable\n' "$unreadable" >&2
     exit 1
   fi
   for candidate in "$@"; do

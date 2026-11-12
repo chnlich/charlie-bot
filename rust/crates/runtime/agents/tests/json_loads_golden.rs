@@ -14,8 +14,8 @@ use serde_json::{Value, value::RawValue};
 const GOLDEN_FIXTURE: &str = include_str!("fixtures/json_loads_golden.json");
 
 /// The messages a JSON decode raises, in the C scanner's wording. The decoder's two `repr` forms, `Invalid
-/// \escape: <repr>` and `Invalid control character <repr> at`, are raised only by the pure scanner, which the
-/// decode path does not use, so no input reaches them.
+/// \escape: <repr>` and `Invalid control character <repr> at`, are raised only by the pure scanner. The decode path
+/// does not use that scanner, so no input reaches them.
 const REQUIRED_MESSAGES: [&str; 12] = [
   "Expecting value",
   "Expecting property name enclosed in double quotes",

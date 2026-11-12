@@ -108,7 +108,7 @@ pub fn build_child_env(
   values
 }
 
-/// Adds the per-run overlay to a child environment. Each name replaces its value, except PATH: an overlay PATH entry
+/// Adds the per-run overlay to a child environment. Each name replaces its value, except PATH. An overlay PATH entry
 /// that the child lacks goes first, so the entries that the package edits put in front keep their order.
 fn apply_overlay(values: &mut Env, overlay: &Env) {
   for (name, value) in overlay {

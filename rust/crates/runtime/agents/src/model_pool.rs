@@ -3,12 +3,12 @@
 //!
 //! A pool names `backends.options` ids and a rule. A priority pool picks its best selectable member; a rotate pool
 //! picks the first selectable member after its rotation position. Both rules skip a member the caller excludes, that
-//! [`BackendAvailability`] holds out, or whose usage reading says it is exhausted, so a member one pool recorded out is
+//! [`BackendAvailability`] holds out, or whose usage reading says it is exhausted. A member one pool recorded out is
 //! skipped by every pool that names it. A session whose backend is a pool id runs each turn on the member this module
 //! picks, and records that member in its `pool_member` slot.
 //!
 //! Terms: a *member* is a `backends.options` id that a pool names; *out* is the "out until" record that
-//! [`BackendAvailability`] keeps per member; a *position* is a rotate pool's place in its member list, kept in process
+//! [`BackendAvailability`] keeps per member. A *position* is a rotate pool's place in its member list, kept in process
 //! memory, one per pool id.
 
 use std::collections::HashMap;
@@ -45,7 +45,7 @@ pub struct ModelPool {
 }
 
 /// What one selection reads: the config, the registry whose usage readings it consults, the availability owner, the
-/// pool, the ids the caller excludes, the moment it reads at, and the active sessions each member holds.
+/// pool, the ids the caller excludes, and the moment it reads at. It also reads the active sessions each member holds.
 pub struct Selection<'a> {
   cfg: &'a CharlieBotConfig,
   registry: &'a Registry,
@@ -249,7 +249,7 @@ impl RotationPositions {
 ///
 /// A selectable member is one `excluded` does not name, that is not out per [`BackendAvailability`], and whose usage
 /// reading does not say it is exhausted. A member whose backend type exposes no reading is selectable. A
-/// [`PoolRule::Priority`] pool orders its selectable members; a [`PoolRule::Rotate`] pool walks from `position` in
+/// [`PoolRule::Priority`] pool orders its selectable members. A [`PoolRule::Rotate`] pool walks from `position` in
 /// member order and advances `position` past the member it selects, so `position` is required for a rotate pool.
 pub(crate) fn select(selection: &Selection<'_>, position: Option<&mut usize>) -> anyhow::Result<Option<PoolMember>> {
   let Selection { cfg, registry, availability, pool, excluded, now, member_loads } = *selection;
@@ -484,9 +484,9 @@ enum TurnDecision {
 /// A session whose backend is not a pool id is left alone. A session with no recorded member, or whose member is out,
 /// gets a fresh selection; the first assignment records the member without a change event. A rotate pool's session
 /// otherwise keeps its member until the member is out or its reading is exhausted. A priority pool's session keeps its
-/// member unless it is on pay-as-you-go and a subscription is selectable (a subscription reset), or it is near
-/// exhaustion and an under-line subscription is selectable. When no member is selectable the turn ends with the error
-/// that lists every member.
+/// member unless it is on pay-as-you-go and a subscription is selectable (a subscription reset). It also switches when
+/// it is near exhaustion and an under-line subscription is selectable. When no member is selectable the turn ends
+/// with the error that lists every member.
 pub async fn start_turn(
   features: &FeatureContext,
   cfg: &CharlieBotConfig,

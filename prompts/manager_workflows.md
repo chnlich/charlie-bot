@@ -24,8 +24,22 @@ Prefer stateless solutions over state machines. Using a state machine requires e
 - Before you design a system, survey how open-source and industry products solve the problem.
   Adopt what fits the user's scenario.
 - Design only what the task asks.
+- When the user states a method, build that method in its simplest form.
+  A method is the user's stated way to build the work, including what it starts from, what it carries, and the path
+  it takes.
+- A plan may add a feature on top of the user's stated method.
+  Each addition names the requirement that the user stated for it.
 - Before you add a name, setting or mechanism, reuse an existing one that serves.
-- Each added option, safeguard or limit names the requirement that the user stated for it.
+  When you reuse an existing record, field set or interface, carry into the new path only the parts that the user's
+  stated method names.
+- A departure from the user's stated method is a replacement of the method or a change to what it starts from, to
+  what it carries, or to the path it takes.
+  It appears on the understanding page as a divergence that quotes the user's method and names the departure and its
+  reason.
+  The user answers it at any reading threshold.
+  The departure is a decision that only the user makes.
+  Work follows the user's stated method until that answer.
+  Work on the departure starts after it.
 
 ## Executable Recipes
 

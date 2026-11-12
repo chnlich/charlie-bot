@@ -77,6 +77,8 @@ An understanding page lists the divergences of a request that admits several rea
 - Below the reading threshold, the line proceeds on the recommended reading.
   Its delivery lists each divergence with the reply that selects the other reading, and the digest records
   the reading as T2.
+- A departure from the user's stated method is a divergence that follows the Design rules in
+  `prompts/manager_workflows.md` for its wait and for who answers it.
 - While the page waits, continue read-only research.
   The plan that follows then starts from read evidence.
 - When the approver is the user and the page waits, list the page as one Waiting on you item that names this rule.

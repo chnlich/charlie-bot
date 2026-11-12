@@ -12,7 +12,7 @@ use charliebot_store::run_records::{self, RunKind};
 use charliebot_store::{CreateTask, RunRecord, TaskCaller};
 use charliebot_tasks::handoff;
 use charliebot_tasks::master_queue::PersistAndBroadcastFn;
-use charliebot_tasks::master_run::{FINISH_ERROR_MESSAGE, FINISH_QUOTA_EXHAUSTED};
+use charliebot_tasks::master_run::{FINISH_ERROR_MESSAGE, FINISH_FAILURE_REASON, FINISH_QUOTA_EXHAUSTED};
 use charliebot_tasks::prompts::LAUNCH_TEXT_FILENAME;
 use charliebot_tasks::test_support::recovery_support::{BACKEND_TYPE, Stack, script_option, synthetic_run};
 use serde_json::{Map, Value, json};
@@ -527,6 +527,7 @@ async fn a_refused_launch_with_quota_exhausted_switches_the_turn() -> anyhow::Re
   let extras = Map::from_iter([
     (FINISH_QUOTA_EXHAUSTED.to_string(), json!(true)),
     (FINISH_ERROR_MESSAGE.to_string(), json!("Claude account pool has no available account")),
+    (FINISH_FAILURE_REASON.to_string(), json!(backend_availability::REASON_QUOTA_ERROR)),
   ]);
   recorder(Some("native".to_string()), 1, extras, json!({"type": "master_done"})).await?;
   let runs = settle(&stack, &session.id).await?;

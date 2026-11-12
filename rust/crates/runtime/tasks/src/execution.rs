@@ -2738,16 +2738,10 @@ impl TaskExecutionAdapter {
 }
 
 /// The member failure an Auto session's manager turn ended on, read from the finish extras. The recorder writes the
-/// reason a refused launch carried; an older extra without one is classified from its text.
+/// availability reason the shared classification chose, beside the message it classified.
 fn auto_quota_failure(extras: &Map<String, Value>) -> Option<QuotaFailure> {
   let message = extras.get(master_run::FINISH_ERROR_MESSAGE).and_then(Value::as_str)?.to_string();
-  let reason = match extras.get(master_run::FINISH_FAILURE_REASON).and_then(Value::as_str) {
-    Some(reason) => reason.to_string(),
-    None => {
-      let quota_exhausted = extras.get(master_run::FINISH_QUOTA_EXHAUSTED).and_then(Value::as_bool);
-      backend_pool::classify_member_failure(&message, quota_exhausted).availability_reason()?.to_string()
-    }
-  };
+  let reason = extras.get(master_run::FINISH_FAILURE_REASON).and_then(Value::as_str)?.to_string();
   let resets_at = extras
     .get(master_run::FINISH_QUOTA_RESETS_AT)
     .and_then(Value::as_str)

@@ -1,8 +1,8 @@
 //! Usage's startup check: every `backends.options` id attributes to its type's
-//! usage source. The usage page attributes a charlie-bot row's account ids to the CLI that ran the call: a registered
-//! id through its config type, an id that left the config through the id prefix its source registers. An id outside
-//! every registered prefix would fail the page once it leaves the config, so the server refuses such an option at
-//! start.
+//! usage source. The usage page attributes a charlie-bot row's account ids to the CLI that ran the call. A registered
+//! id attributes through its config type, and an id that left the config through the id prefix its source registers. An
+//! id outside every registered prefix would fail the page once it leaves the config, so the server refuses such an
+//! option at start.
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::{paths, text_repr};

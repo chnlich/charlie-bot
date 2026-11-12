@@ -179,8 +179,8 @@ fn merge_group(
 }
 
 /// The card name an account counts under, and whether it is a fallback. A row of another source
-/// keeps its own source. A charlie-bot row's account is a backend id, which attributes to the CLI that ran the call,
-/// and that CLI's card marks the account a fallback unless the card reads only CharlieBot's own logs.
+/// keeps its own source. A charlie-bot row's account is a backend id, which attributes to the CLI that ran the call.
+/// That CLI's card marks the account a fallback unless the card reads only CharlieBot's own logs.
 pub(crate) fn account_source(
   row: &LedgerRow,
   account: &str,

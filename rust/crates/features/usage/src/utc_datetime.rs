@@ -7,8 +7,8 @@
 //! `±HHMM` or `±HH:MM`, with optional seconds. Hour 24 at zero minutes is the next day's midnight.
 //!
 //! Three parts of the ISO grammar this parser refuses: ISO week dates, a stray final character after
-//! the seconds, and a fraction of a second in an offset, which `UtcOffset` cannot hold. Text that uses one reads as None,
-//! so its session is not cold and keeps its files.
+//! the seconds, and a fraction of a second in an offset. `UtcOffset` cannot hold that fraction. Text that uses one
+//! reads as None, so its session is not cold and keeps its files.
 
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
 
@@ -54,7 +54,7 @@ fn calendar_date(text: &[u8]) -> Option<Date> {
   Date::from_calendar_date(i32::try_from(year).ok()?, month, u8::try_from(day).ok()?).ok()
 }
 
-/// The clock fields of a time, and the offset it names: the offset starts at the first `-`, else the first `+`, else
+/// The clock fields of a time, and the offset it names. The offset starts at the first `-`, else the first `+`, else
 /// at the `Z` that must end the text.
 fn time_and_offset(text: &[u8]) -> Option<(ClockFields, Option<UtcOffset>)> {
   let marker = b"-+Z".iter().find_map(|sign| text.iter().position(|byte| byte == sign));

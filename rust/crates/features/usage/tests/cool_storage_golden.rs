@@ -135,7 +135,7 @@ fn encoded_path(path: &Path) -> String {
   path.to_string_lossy().replace(['/', '.', '_'], "-")
 }
 
-/// One sweep over the tree, run in this process as the retired `cool-storage-sweep` binary ran it: the environment names
+/// One sweep over the tree, run in this process as the retired `cool-storage-sweep` binary ran it. The environment names
 /// the tree's home, CharlieBot home and Claude config, and the registry reads the same stores. Returns the summary
 /// line, or the `Error:` line that the binary printed when the sweep refused.
 fn sweep(root: &Path) -> Result<String, String> {

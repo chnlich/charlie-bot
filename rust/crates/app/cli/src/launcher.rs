@@ -25,7 +25,7 @@ use time::macros::format_description;
 /// The remote side of one launch stages its log, exit file and PID file under this directory, named by launch id.
 ///
 /// `$HOME` is expanded by the remote shell. The launch reads the expanded home back, so the launch record and the
-/// watch targets hold absolute paths. The directory sits under the home, not `/tmp`: a login pod's `/tmp` is local
+/// watch targets hold absolute paths. The directory sits under the home, not `/tmp`. A login pod's `/tmp` is local
 /// disk that a pod restart drops, and its home is an export that survives the restart.
 pub const REMOTE_RUNS_DIR: &str = "$HOME/charliebot_runs";
 

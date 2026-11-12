@@ -109,8 +109,8 @@ fn the_runner_calls_each_step_in_registration_order_and_writes_the_scratch_home_
   assert!(lines.iter().any(|line| line.starts_with("    - storage-cool | cron=30 4 * * * | tz=")));
 }
 
-/// A repo whose default cron entry points at a missing prompt file fails the run before anything is written,
-/// in the dry run and the real run alike (`seed_default_cron_tasks` validates every entry before writing).
+/// A repo whose default cron entry points at a missing prompt file fails the run before anything is written, in the
+/// dry run and the real run alike. `seed_default_cron_tasks` validates every entry before writing.
 #[test]
 #[ignore = "integration"]
 fn an_unreadable_default_prompt_fails_the_setup_before_any_write() {

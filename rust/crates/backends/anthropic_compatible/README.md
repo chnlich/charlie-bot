@@ -8,4 +8,4 @@ configured Anthropic-compatible endpoint.
 | Rust item | What it provides |
 | --- | --- |
 | `charliebot_anthropic_compatible::{TYPE_NAME, register}` | The backend type name and its registration. |
-| `charliebot_anthropic_compatible::{factory, options}` | The backend factory and the option fields (`usage` stays private). |
+| `charliebot_anthropic_compatible::{factory, options}` | The factory and option fields (`usage` stays private). |

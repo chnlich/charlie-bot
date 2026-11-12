@@ -371,12 +371,8 @@ async fn switch(
     .binding_for(session_id)
     .map_err(|error| responses::internal_error("RuntimeError", error.to_string()))?;
   let dedicated = binding.as_ref().is_some_and(|binding| binding.dedicated_backend());
-  // A pool has no continuation domain, so a dedicated lock refuses it as it refuses any other domain-less target.
-  let lock_refuses = if cfg.backends.pool(&target).is_some() {
-    dedicated
-  } else {
-    dedicated && !same_continuation_domain(&effective, &target, &cfg, &features.registry).map_err(store_error)?
-  };
+  let lock_refuses =
+    dedicated && !same_continuation_domain(&effective, &target, &cfg, &features.registry).map_err(store_error)?;
   if lock_refuses {
     let binding = binding.expect("a lock refusal requires the session's dedicated binding");
     return Err(store_error(StoreError::invalid(binding.backend_lock_detail(&target))));
@@ -534,17 +530,36 @@ pub(crate) fn resolve_requested_backend(
   Ok(fallback_backend.to_string())
 }
 
-/// `backend_types.same_continuation_domain`: false when either id is not a configured option.
-fn same_continuation_domain(
+/// `backend_types.same_continuation_domain` over member sets: each id expands to its members (a pool's members, a
+/// model the set of itself) and the judgment passes only when every member shares one continuation domain, so a
+/// model and the pool holding it alone get the same verdict. A member without a configured option passes nothing,
+/// as an unconfigured id did.
+pub(crate) fn same_continuation_domain(
   current: &str,
   target: &str,
   cfg: &CharlieBotConfig,
   registry: &Registry,
 ) -> StoreResult<bool> {
-  let (Some(current), Some(target)) = (cfg.get_backend_option(current), cfg.get_backend_option(target)) else {
-    return Ok(false);
-  };
-  Ok(continuation_domain(current, cfg, registry)? == continuation_domain(target, cfg, registry)?)
+  let members = continuation_members(current, cfg).into_iter().chain(continuation_members(target, cfg));
+  let mut shared: Option<String> = None;
+  for member in members {
+    let Some(option) = cfg.get_backend_option(member) else { return Ok(false) };
+    let domain = continuation_domain(option, cfg, registry)?;
+    match &shared {
+      Some(one) if one != &domain => return Ok(false),
+      Some(_) => {}
+      None => shared = Some(domain),
+    }
+  }
+  Ok(true)
+}
+
+/// The members a backend id expands to for the switch lock: a pool's member ids, or the id itself.
+fn continuation_members<'a>(id: &'a str, cfg: &'a CharlieBotConfig) -> Vec<&'a str> {
+  match cfg.backends.pool(id) {
+    Some(pool) => pool.members.iter().map(|member| member.backend.as_str()).collect(),
+    None => vec![id],
+  }
 }
 
 fn continuation_domain(option: &BackendOption, cfg: &CharlieBotConfig, registry: &Registry) -> StoreResult<String> {
@@ -1263,5 +1278,80 @@ backends:
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(detail, json!({"detail": "backend 'auto' is locked by the session API test sequence"}));
     assert_eq!(features.store.read_metadata_fresh(&node.id).unwrap().unwrap().backend, "synthetic-a");
+  }
+
+  /// The switch-lock config: the `twin` options share one continuation domain (`TwinLifecycle`), the `synthetic`
+  /// option keeps its own, and the pools mix the two kinds.
+  const LOCK_DOMAIN_CONFIG: &str = "\
+backends:
+  options:
+    - {id: twin-a, label: Twin A, type: twin, model: model-a}
+    - {id: twin-b, label: Twin B, type: twin, model: model-b}
+    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-c}
+  pools:
+    - {id: twins, label: Twins, rule: rotate, members: [twin-a, twin-b]}
+    - {id: mixed, label: Mixed, rule: rotate, members: [twin-a, synthetic-a]}
+    - {id: twin-b-only, label: Twin B only, rule: rotate, members: [twin-b]}
+    - {id: synthetic-a-only, label: A only, rule: rotate, members: [synthetic-a]}
+";
+
+  /// The node the test fixture binds (`sequence-locked-node`), on the model `backend`.
+  async fn locked_node(features: &Arc<FeatureContext>, backend: &str) -> SessionMetadata {
+    let request = CreateTask {
+      request_id: "sequence-locked-node".to_string(),
+      task_parent_id: None,
+      profile: TaskProfile::Manager,
+      task: None,
+      name: Some("Locked node".to_string()),
+      backend: Some(backend.to_string()),
+      group: None,
+      session_id: Some("sequence-locked-node".to_string()),
+    };
+    features.store.create_task(request, TaskCaller::System, Map::new()).await.expect("the locked node")
+  }
+
+  async fn switch_to(features: &Arc<FeatureContext>, session_id: &str, target: &str) -> (StatusCode, Value) {
+    let (headers, body) = json_request(json!({"backend": target}));
+    answer(switch_backend(State(Arc::clone(features)), AxumPath(session_id.to_string()), headers, body).await).await
+  }
+
+  #[tokio::test]
+  async fn a_dedicated_lock_judges_a_pool_target_by_its_member_set() {
+    let (_home, features) = feature_context_with_config(LOCK_DOMAIN_CONFIG);
+    let node = locked_node(&features, "twin-a").await;
+
+    let (status, _) = switch_to(&features, &node.id, "twins").await;
+    assert_eq!(status, StatusCode::OK, "every member of the target pool shares the node's domain");
+    assert_eq!(features.store.read_metadata_fresh(&node.id).unwrap().unwrap().backend, "twins");
+  }
+
+  #[tokio::test]
+  async fn a_dedicated_lock_refuses_a_pool_with_a_foreign_domain_member() {
+    let (_home, features) = feature_context_with_config(LOCK_DOMAIN_CONFIG);
+    let node = locked_node(&features, "twin-a").await;
+
+    let (status, detail) = switch_to(&features, &node.id, "mixed").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{detail}");
+    assert_eq!(detail, json!({"detail": "backend 'mixed' is locked by the session API test sequence"}));
+    assert_eq!(features.store.read_metadata_fresh(&node.id).unwrap().unwrap().backend, "twin-a");
+  }
+
+  /// A model and the pool holding it alone expand to the same member set, so the lock rules them the same way:
+  /// the foreign-domain model and its singleton pool both refuse, the same-domain model and its singleton pool
+  /// both pass.
+  #[tokio::test]
+  async fn a_model_and_the_pool_holding_it_alone_get_the_same_lock_verdict() {
+    let (_home, features) = feature_context_with_config(LOCK_DOMAIN_CONFIG);
+    let node = locked_node(&features, "twin-a").await;
+
+    for target in ["synthetic-a", "synthetic-a-only"] {
+      let (status, _) = switch_to(&features, &node.id, target).await;
+      assert_eq!(status, StatusCode::BAD_REQUEST, "{target}");
+      assert_eq!(features.store.read_metadata_fresh(&node.id).unwrap().unwrap().backend, "twin-a");
+    }
+    let (model_status, _) = switch_to(&features, &node.id, "twin-b").await;
+    assert_eq!(model_status, StatusCode::OK);
+    let (pool_status, _) = switch_to(&features, &node.id, "twin-b-only").await;
+    assert_eq!(pool_status, StatusCode::OK);
   }
 }

@@ -961,35 +961,32 @@ fn active_backend_payload(
     .binding_for(&meta.id)
     .map_err(|error| StoreError::new(error.to_string()))?
     .is_some_and(|binding| binding.dedicated_backend());
-  let switchable = if cfg.backends.pool(&active_backend).is_some() {
-    // The switch route refuses an option from a pool session under a dedicated lock: `same_continuation_domain` has no
-    // domain for a pool. The list follows the same rule; each pool stays listed, since the route takes its own id as a
-    // no-op.
-    let mut switchable: Vec<String> =
-      if dedicated { Vec::new() } else { cfg.backends.options.iter().map(|option| option.id.clone()).collect() };
+  let known_active = cfg.backends.pool(&active_backend).is_some() || active_option.is_some();
+  let switchable = if !known_active {
+    Vec::new()
+  } else if dedicated {
+    // The switch route's lock judges a target by its member set (`same_continuation_domain`), and the menu lists
+    // what it would pass. The route takes the active id as a no-op, so it stays listed.
+    let mut switchable = Vec::new();
+    for id in cfg
+      .backends
+      .options
+      .iter()
+      .map(|option| option.id.as_str())
+      .chain(cfg.backends.pools.iter().map(|pool| pool.id.as_str()))
+    {
+      if id == active_backend
+        || crate::write_routes::same_continuation_domain(&active_backend, id, cfg, registry)
+          .map_err(|error| StoreError::new(error.to_string()))?
+      {
+        switchable.push(id.to_string());
+      }
+    }
+    switchable
+  } else {
+    let mut switchable: Vec<String> = cfg.backends.options.iter().map(|option| option.id.clone()).collect();
     switchable.extend(cfg.backends.pools.iter().map(|pool| pool.id.clone()));
     switchable
-  } else if let Some(active_option) = active_option {
-    if dedicated {
-      let active_lifecycle =
-        registry.lifecycle_for(&active_option.backend_type).map_err(|error| StoreError::new(error.to_string()))?;
-      let active_domain = active_lifecycle.continuation_domain(active_option, cfg);
-      let mut switchable = Vec::new();
-      for option in &cfg.backends.options {
-        let lifecycle =
-          registry.lifecycle_for(&option.backend_type).map_err(|error| StoreError::new(error.to_string()))?;
-        if lifecycle.continuation_domain(option, cfg) == active_domain {
-          switchable.push(option.id.clone());
-        }
-      }
-      switchable
-    } else {
-      let mut switchable: Vec<String> = cfg.backends.options.iter().map(|option| option.id.clone()).collect();
-      switchable.extend(cfg.backends.pools.iter().map(|pool| pool.id.clone()));
-      switchable
-    }
-  } else {
-    Vec::new()
   };
   // The pickers list only the config's visible entries; the session's own active entry stays exempt, so the
   // header menu still shows it as the current value.
@@ -1147,7 +1144,9 @@ mod tests {
   use charliebot_store::{CreateTask, TaskCaller};
 
   use super::*;
-  use crate::test_support::{create_node, feature_context, feature_context_with_auto};
+  use crate::test_support::{
+    answer, create_node, feature_context, feature_context_with_auto, feature_context_with_config, json_request,
+  };
 
   const AUTO_CONFIG: &str = "\
 backends:
@@ -1396,6 +1395,70 @@ backends:
 
     let backend = active_backend_payload(&features.store, &meta, &cfg, &features.registry).expect("the backend reads");
     assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "synthetic-b"]));
+  }
+
+  /// The menu's lock config: `twin` options share one domain (`TwinLifecycle`), the `synthetic` option keeps its
+  /// own, and the pools mix the two kinds.
+  const LOCK_DOMAIN_CONFIG: &str = "\
+backends:
+  options:
+    - {id: twin-a, label: Twin A, type: twin, model: model-a}
+    - {id: twin-b, label: Twin B, type: twin, model: model-b}
+    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-c}
+  pools:
+    - {id: twins, label: Twins, rule: rotate, members: [twin-a, twin-b]}
+    - {id: mixed, label: Mixed, rule: rotate, members: [twin-a, synthetic-a]}
+    - {id: twin-b-only, label: Twin B only, rule: rotate, members: [twin-b]}
+    - {id: synthetic-a-only, label: A only, rule: rotate, members: [synthetic-a]}
+";
+
+  /// The menu lists what the locked switch route would pass: for every configured id the two reach the same
+  /// verdict, because the menu asks the route's `same_continuation_domain`.
+  #[tokio::test]
+  async fn the_switch_menu_matches_the_locked_route_for_every_configured_id() {
+    let (_home, features) = feature_context_with_config(LOCK_DOMAIN_CONFIG);
+    let request = CreateTask {
+      request_id: "sequence-locked-node".to_string(),
+      task_parent_id: None,
+      profile: TaskProfile::Manager,
+      task: None,
+      name: Some("Locked node".to_string()),
+      backend: Some("twin-a".to_string()),
+      group: None,
+      session_id: Some("sequence-locked-node".to_string()),
+    };
+    let node = features.store.create_task(request, TaskCaller::System, Map::new()).await.expect("the locked node");
+    let cfg = features.config.get().expect("the test config loads");
+
+    let backend = active_backend_payload(&features.store, &node, &cfg, &features.registry).expect("the backend reads");
+    assert_eq!(backend["switchable_backends"], json!(["twin-a", "twin-b", "twins", "twin-b-only"]));
+
+    for id in ["twin-a", "twin-b", "twins", "twin-b-only", "mixed", "synthetic-a", "synthetic-a-only"] {
+      let (headers, body) = json_request(json!({"backend": id}));
+      let (status, _refusal) = answer(
+        crate::write_routes::switch_backend(State(Arc::clone(&features)), AxumPath(node.id.clone()), headers, body)
+          .await,
+      )
+      .await;
+      let route_allows = status == StatusCode::OK;
+      let menu_lists =
+        backend["switchable_backends"].as_array().expect("the menu is a list").iter().any(|listed| listed == id);
+      assert_eq!(
+        menu_lists, route_allows,
+        "id {id}: route answered {status}, menu lists {:?}",
+        backend["switchable_backends"]
+      );
+      if menu_lists {
+        // An allowed switch moved the node; put it back, so the next id judges against `twin-a` again.
+        let (headers, body) = json_request(json!({"backend": "twin-a"}));
+        let (status, detail) = answer(
+          crate::write_routes::switch_backend(State(Arc::clone(&features)), AxumPath(node.id.clone()), headers, body)
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{detail}");
+      }
+    }
   }
 
   fn run(id: &str, inputs: &[&str], pid: Option<u32>) -> RunRecord {

@@ -15,7 +15,7 @@ use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_registry::backend::{
-  AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, LaunchArgs, ResumeStyle,
+  AgentBackend, BackendFactory, BackendLifecycle, BackendTraits, BackendTypeRegistration, LaunchArgs, ResumeStyle,
 };
 use charliebot_registry::sequence::{
   QuotaFailure, RestoreOutcome, SequenceBinding, SequenceCompletion, SequenceController, SequenceTree,
@@ -30,6 +30,16 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 
 struct TestBackendFactory;
+
+/// The lifecycle the switch-lock tests use: every `twin` option continues the same conversation domain, the way
+/// cc-claude options share the login pool's domain.
+struct TwinLifecycle;
+
+impl BackendLifecycle for TwinLifecycle {
+  fn continuation_domain(&self, _option: &BackendOption, _cfg: &CharlieBotConfig) -> String {
+    "twin-domain".to_string()
+  }
+}
 
 struct TestSequenceBinding;
 
@@ -146,6 +156,21 @@ fn register_test_backend(registry: &mut Registry) -> Result<(), charliebot_regis
     translate_fallback: false,
   })?;
   registry.sequence_controller("session_api_test", Arc::new(TestSequenceController))?;
+  registry.backend_type(BackendTypeRegistration {
+    type_name: "twin",
+    traits: BackendTraits {
+      resume: ResumeStyle::CliFlag,
+      restart_reattach: false,
+      preassigned_session_id: false,
+      family_prefix: None,
+      manual_compact: false,
+      compact_hint: None,
+    },
+    option_model: |_| Ok(()),
+    factory: Arc::new(TestBackendFactory),
+    lifecycle: Some(Arc::new(TwinLifecycle)),
+    translate_fallback: false,
+  })?;
   registry.metadata_slot_with_validator(
     MetadataSlot {
       owner: "session_api_test",

@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 
 use memmap2::Mmap;
 
-/// Write `text` to `path` through a uniquely named sibling `.<name>.<uuid hex>.tmp` swapped in by
+/// `path` written with `text` through a uniquely named sibling `.<name>.<uuid hex>.tmp` swapped in by
 /// `rename`. A reader then sees the old content or the new, never a partial write. The sibling is
 /// removed when any step before the swap fails.
 pub fn atomic_write_text(path: &Path, text: &str) -> std::io::Result<()> {

@@ -18,7 +18,7 @@ pub fn control_dir() -> PathBuf {
   PathBuf::from(paths::expanduser("~")).join(".ssh").join("controlmasters")
 }
 
-/// Create `dir` with mode 0700 when it is absent. Its parents get the default mode,
+/// `dir` created with mode 0700 when it is absent. Its parents get the default mode,
 /// and an existing directory at `dir` is kept as it is.
 pub fn ensure_control_dir(dir: &Path) -> io::Result<()> {
   if let Some(parent) = dir.parent() {

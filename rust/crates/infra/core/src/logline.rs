@@ -85,7 +85,7 @@ pub fn needs_quotes(text: &str) -> bool {
   text.is_empty() || text.chars().any(|c| c.is_whitespace() || c.is_control() || matches!(c, '=' | '\'' | '"'))
 }
 
-/// Reads a line in either form. A JSON line is an object with an `event` key, and a text line follows the grammar.
+/// A line read in either form. A JSON line is an object with an `event` key, and a text line follows the grammar.
 /// Any other line gives `None`, and a reader skips it.
 pub fn parse(line: &str) -> Option<Row> {
   let line = line.trim();

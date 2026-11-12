@@ -18,21 +18,21 @@ pub fn read_pid_stat(pid: u32) -> Option<ProcessStat> {
   Some(ProcessStat { pid_start: stat.starttime.to_string(), state: stat.state.to_string() })
 }
 
-/// Read the host boot time from `/proc/stat`'s `btime` line.
+/// The host boot time from `/proc/stat`'s `btime` line.
 pub fn read_host_boot_time() -> io::Result<OffsetDateTime> {
   let seconds = i64::try_from(KernelStats::current().map_err(io::Error::other)?.btime)
     .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
   OffsetDateTime::from_unix_timestamp(seconds).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
-/// Read this process's storage reads from `/proc/self/io`: the bytes fetched from the storage layer (`read_bytes`)
+/// This process's storage reads from `/proc/self/io`: the bytes fetched from the storage layer (`read_bytes`)
 /// and the read syscalls (`syscr`). `None` when the kernel does not expose the file.
 pub fn read_self_storage_reads() -> Option<(u64, u64)> {
   let io = Process::myself().ok()?.io().ok()?;
   Some((io.read_bytes, io.syscr))
 }
 
-/// Check the recorded process id, start tick, non-zombie state, and current boot interval.
+/// Whether the recorded process id, start tick, non-zombie state, and current boot interval match a live process.
 pub fn is_run_alive(
   pid: Option<u32>,
   pid_start: Option<&str>,

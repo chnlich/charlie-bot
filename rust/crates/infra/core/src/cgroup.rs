@@ -112,13 +112,13 @@ impl Drop for TestBaseDirGuard {
   }
 }
 
-/// Return this user's delegated systemd service directory, which holds the session slices.
+/// This user's delegated systemd service directory, which holds the session slices.
 pub fn system_cgroup_base_dir() -> PathBuf {
   let uid = unsafe { libc::getuid() };
   PathBuf::from(format!("/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service"))
 }
 
-/// Return the cgroup directory systemd gives the user slice `unit` under `base_dir`.
+/// The cgroup directory systemd gives the user slice `unit` under `base_dir`.
 ///
 /// systemd nests a slice inside the slice each dash prefix of its name names (`a-b.slice` lives in
 /// `a.slice/a-b.slice`). So the agents' leaf slice sits inside `charliebot.slice`, not beside it.
@@ -132,23 +132,23 @@ pub fn user_slice_dir(base_dir: &Path, unit: &str) -> PathBuf {
   dir
 }
 
-/// Return the directory of the agents' leaf slice under `base_dir`, which holds every session cgroup.
+/// The directory of the agents' leaf slice under `base_dir`, which holds every session cgroup.
 pub fn agents_slice_dir(base_dir: &Path) -> PathBuf {
   user_slice_dir(base_dir, AGENTS_SLICE)
 }
 
-/// Return every directory a session cgroup may live under: the agents' slice and the retired slice.
+/// Every directory a session cgroup may live under: the agents' slice and the retired slice.
 pub fn session_slice_dirs(base_dir: &Path) -> [PathBuf; 2] {
   [agents_slice_dir(base_dir), user_slice_dir(base_dir, RETIRED_APP_SLICE)]
 }
 
-/// Return the cgroup directory name for one session.
+/// The cgroup directory name for one session.
 pub fn session_cgroup_name(session_id: &str) -> String {
   let prefix: String = session_id.chars().take(8).collect();
   format!("{SESSION_CGROUP_PREFIX}{prefix}")
 }
 
-/// Join a session cgroup name to its base directory.
+/// The path of a session cgroup under `base_dir`.
 pub fn session_cgroup_path(base_dir: &Path, session_id: &str) -> PathBuf {
   base_dir.join(session_cgroup_name(session_id))
 }

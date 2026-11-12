@@ -20,8 +20,8 @@ pub const SEED_WOULD_CREATE: &str = "would-create";
 /// The status a seed reports for an item this run created.
 pub const SEED_CREATED: &str = "created";
 
-/// Create the home, `sessions/` and `config.d/`; seed `config.yaml` and `credentials.yaml` (mode 0600)
-/// from the checkout's `configs/` templates when missing.
+/// The provisioned home: `sessions/` and `config.d/` created, and `config.yaml` and `credentials.yaml` (mode 0600)
+/// seeded from the checkout's `configs/` templates when missing.
 pub fn init_charliebot_home(cfg: &CharlieBotConfig, repo_root: &Path) -> io::Result<()> {
   for directory in [cfg.charliebot_home.clone(), cfg.sessions_dir(), cfg.config_d_dir()] {
     fs::create_dir_all(&directory)?;

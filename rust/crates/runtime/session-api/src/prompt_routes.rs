@@ -129,3 +129,78 @@ fn is_run_kind(kind: &str) -> bool {
 fn detail(status: StatusCode, text: impl Into<String>) -> Response {
   responses::json(status, &json!({"detail": text.into()}))
 }
+
+#[cfg(test)]
+mod tests {
+  use std::collections::HashMap;
+
+  use charliebot_agents::backend_availability::{self, BackendAvailability};
+  use charliebot_agents::model_pool::RotationPositions;
+  use charliebot_store::{CreateTask, TaskCaller};
+  use serde_json::Map;
+
+  use super::*;
+  use crate::test_support::{answer, feature_context_with_auto};
+
+  /// A model `synthetic-a` and the rotate pool `auto` whose only member it is.
+  const CONFIG: &str = "\
+backends:
+  options:
+    - {id: synthetic-a, label: Synthetic A, type: synthetic, model: model-a}
+  pools:
+    - id: auto
+      label: Auto
+      rule: rotate
+      members: [synthetic-a]
+";
+
+  /// The preview route as the web client calls it.
+  async fn preview(features: &Arc<FeatureContext>, session_id: &str) -> (StatusCode, Value) {
+    answer(effective_prompt(State(Arc::clone(features)), Path(session_id.to_string()), Query(HashMap::new())).await)
+      .await
+  }
+
+  /// Entrance #9 of the plan's entry-consistency item: a cooling model and the pool over it preview the same
+  /// exhaustion, so the preview keeps no pool-or-model branch of its own.
+  #[tokio::test]
+  async fn a_cooling_model_and_its_singleton_pool_preview_the_same_exhaustion() {
+    let (home, features) = feature_context_with_auto(CONFIG);
+    features.startup.insert(BackendAvailability::load(home.path()).unwrap()).unwrap();
+    features.startup.insert(RotationPositions::default()).unwrap();
+    let mut session_ids = Vec::new();
+    for (request_id, backend) in [("preview-model", "synthetic-a"), ("preview-pool", "auto")] {
+      let created = features
+        .store
+        .create_task(
+          CreateTask {
+            request_id: request_id.to_string(),
+            task_parent_id: None,
+            profile: TaskProfile::Manager,
+            task: None,
+            name: Some(request_id.to_string()),
+            backend: Some(backend.to_string()),
+            group: None,
+            session_id: None,
+          },
+          TaskCaller::System,
+          Map::new(),
+        )
+        .await
+        .unwrap();
+      session_ids.push(created.id);
+    }
+    backend_availability::backend_availability(&features)
+      .unwrap()
+      .record("synthetic-a", None, backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
+      .unwrap();
+
+    let (model_status, model) = preview(&features, &session_ids[0]).await;
+    let (pool_status, pool) = preview(&features, &session_ids[1]).await;
+    assert_eq!(model_status, StatusCode::BAD_REQUEST, "{model}");
+    assert_eq!(pool_status, StatusCode::BAD_REQUEST, "{pool}");
+    for body in [&model, &pool] {
+      let detail = body["detail"].as_str().unwrap_or_default();
+      assert!(detail.contains("- synthetic-a: quota_error"), "{detail}");
+    }
+  }
+}

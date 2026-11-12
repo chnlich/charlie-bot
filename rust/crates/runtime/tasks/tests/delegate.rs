@@ -655,7 +655,11 @@ async fn verify_unknown_explicit_backend_returns_400() -> anyhow::Result<()> {
   let body = with_backend(verify_body(&manager.id), "nonexistent");
   let (status, response) = post_delegate(&routes::routes(&stack.features), body).await?;
   assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
-  assert!(text(&response, "detail")?.contains("nonexistent"), "{response}");
+  assert_eq!(
+    text(&response, "detail")?,
+    "backend 'nonexistent' is not a backends.options or backends.pools id; valid ids: ['codex-o3', 'kimi-k2.5', \
+     'opus', 'pool']"
+  );
   assert!(scripts.builds().is_empty());
   Ok(())
 }

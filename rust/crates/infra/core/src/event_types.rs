@@ -88,6 +88,10 @@ pub const TASK_NOTIFICATION: &str = "task_notification";
 pub const COMPACT_METADATA: &str = "compact_metadata";
 pub const COMPACT_PRE_TOKENS: &str = "pre_tokens";
 pub const COMPACT_POST_TOKENS: &str = "post_tokens";
+/// The `system` event's `status` subtype field naming how a compaction ended; a failed compaction carries `failed`.
+pub const COMPACT_RESULT: &str = "compact_result";
+/// The `system` event's `status` subtype field carrying a failed compaction's error text.
+pub const COMPACT_ERROR: &str = "compact_error";
 pub const CONTEXT_READING: &str = "context_reading";
 pub const CONTEXT_TOKENS: &str = "context_tokens";
 pub const CONTEXT_FULL: &str = "context_full";

@@ -411,7 +411,7 @@ pub fn parse_reply_findings(answer: &str) -> anyhow::Result<Vec<String>> {
         index + 1,
         answer
       );
-      answers[index] = Some(rest.trim().trim_start_matches(':').trim_start_matches('.').trim().to_string());
+      answers[index] = Some(rest.trim().trim_start_matches([':', '：', '.']).trim().to_string());
       active = Some(index);
     } else if let Some(index) = active
       && !trimmed.is_empty()
@@ -911,7 +911,7 @@ BBBB
 
   #[test]
   fn reply_findings_parser_accepts_chinese_answer_labels() {
-    for answer in ["（1）none\n（2）none", "1、none\n2、none"] {
+    for answer in ["（1）none\n（2）none", "（1）：none\n（2）：none", "1、none\n2、none"] {
       assert!(parse_reply_findings(answer).unwrap().is_empty(), "{answer}");
     }
   }

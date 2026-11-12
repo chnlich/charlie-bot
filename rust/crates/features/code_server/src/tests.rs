@@ -12,7 +12,7 @@ use charliebot_registry::Registry;
 use charliebot_shell_harness::write_executable;
 use serde_json::{Value, json};
 
-use crate::api::{executable, open_code_server};
+use crate::api::{executable, open_code_server, reads_working_directory, resolve_executable};
 use crate::config::CodeServerConfig;
 use crate::register;
 
@@ -170,4 +170,37 @@ fn the_bin_setting_names_the_executable_and_an_unset_one_searches_the_path() {
     dir.path(),
   );
   assert_eq!(executable(missing.section::<CodeServerConfig>("code_server")).unwrap(), None);
+}
+
+/// A resolution that joins onto the working directory is not memoized, so it must never take the memo's key.
+#[test]
+fn only_a_resolution_free_of_the_working_directory_is_memoized() {
+  assert!(!reads_working_directory(None, Some("/usr/local/bin:/usr/bin:/bin")));
+  assert!(!reads_working_directory(Some("code-server"), Some("/usr/bin")));
+  assert!(!reads_working_directory(Some("/opt/code-server/bin/code-server"), Some("/usr/bin")));
+  assert!(reads_working_directory(Some("tools/code-server"), Some("/usr/bin")));
+  assert!(reads_working_directory(None, Some("/usr/bin:tools")));
+  assert!(reads_working_directory(None, Some("/usr/bin:")));
+}
+
+/// A bare name's answer follows the search path it is resolved against, so a memo keyed on the setting alone would
+/// answer the wrong host's resolution.
+#[test]
+fn a_bare_name_is_resolved_against_the_search_path_it_names() {
+  let dir = tempfile::tempdir().expect("a temp dir");
+  let found = dir.path().join("found");
+  let absent = dir.path().join("absent");
+  fs::create_dir(&found).expect("the directory exists");
+  fs::create_dir(&absent).expect("the directory exists");
+  let binary = found.join("code-server");
+  write_executable(&binary, "#!/bin/sh\nexit 0\n");
+
+  let found_path = found.as_os_str();
+  let absent_path = absent.as_os_str();
+  assert_eq!(
+    resolve_executable(Some("code-server"), Some(found_path)).unwrap(),
+    Some(binary.to_str().unwrap().to_string())
+  );
+  assert_eq!(resolve_executable(Some("code-server"), Some(absent_path)).unwrap(), None);
+  assert_eq!(resolve_executable(None, Some(found_path)).unwrap(), Some(binary.to_str().unwrap().to_string()));
 }

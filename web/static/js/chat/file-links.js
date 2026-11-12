@@ -71,7 +71,8 @@ function resolveFileServerUrl(href) {
 var MISSING_FILE_MARKER_TEXT = '\u26A0 missing';
 var MISSING_FILE_MARKER_TITLE = 'The file server found nothing at this path';
 // Both recognition patterns cut a text run at the same boundaries, so the tail class is one
-// definition shared by both. It ends the run at whitespace, at the closers markdown and prose
+// definition shared by both. URL_TAIL_CLASS holds the class; each pattern appends its own
+// quantifier. It ends the run at whitespace, at the closers markdown and prose
 // put after a URL, and at everything outside printable ASCII. A chat URL is a maximal
 // printable-ASCII run [\x21-\x7E]+, so a glued CJK character, full-width mark or emoji is
 // prose, not the tail of the link. \x7F-\uFFFF also covers astral characters, whose UTF-16
@@ -79,7 +80,9 @@ var MISSING_FILE_MARKER_TITLE = 'The file server found nothing at this path';
 // cuts bare URLs at the same boundary — two copies of one definition, kept in sync by the
 // comments in both files. The modules load independently, so sharing a constant would couple
 // their load order.
-var URL_TAIL_SOURCE = '[^\\s\\)\\]"\'`<>\\x7F-\\uFFFF]+';
+var URL_TAIL_CLASS = '[^\\s\\)\\]"\'`<>\\x7F-\\uFFFF]';
+// A live link carries one or more tail characters. A retired link may end at its prefix, so it takes zero or more.
+var URL_TAIL_SOURCE = URL_TAIL_CLASS + '+';
 // A run naming a path under the prefix, with or without a scheme and host in front.
 var FILE_SERVER_LINK_SOURCE =
   '(?:https?:\\/\\/[^\\s]+?)?' + FILE_SERVER_PREFIX_GROUP + '\\/' + URL_TAIL_SOURCE;
@@ -303,10 +306,10 @@ function markFileLinks(root) {
   });
 }
 
-// The tail class of a link run, for a family's textSource.
+// The tail run of a link, for a family's textSource.
 var FILE_LINK_TAIL_SOURCE = URL_TAIL_SOURCE;
 var RETIRED_FILE_SERVER_LINK_SOURCE =
-  'https?:\\/\\/[^\\s]+?\\/(?:files|file)\\/[^\\s\\)\\]"\'`<>\\x7F-\\uFFFF]*';
+  'https?:\\/\\/[^\\s]+?\\/(?:files|file)\\/' + URL_TAIL_CLASS + '*';
 
 const CHAT_ONLY = {
   markFileLinks,

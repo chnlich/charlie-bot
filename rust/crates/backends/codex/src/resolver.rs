@@ -62,12 +62,12 @@ impl CodexSessionHost for UsageHost {
   }
 }
 
-/// Construct the resolver for one usage owner from the registered codex home and server values.
+/// The resolver of one usage owner, over the registered codex home and the server values.
 pub fn usage_resolver(codex_home: PathBuf, host: &UsageResolverHost) -> Arc<dyn UsageResolver> {
   Arc::new(CodexUsageResolver::new(codex_home, Arc::new(UsageHost::new(host))))
 }
 
-/// Reads one session's context from its codex rollout.
+/// The resolver of one session's context, read from its codex rollout.
 pub struct CodexUsageResolver {
   codex_home: PathBuf,
   host: Arc<dyn CodexSessionHost>,

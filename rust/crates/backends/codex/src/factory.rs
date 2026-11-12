@@ -11,7 +11,7 @@ use super::backend::CodexBackend;
 use super::host::CodexHost;
 use super::options;
 
-/// Builds one codex backend per launch, resolving the codex binary from the package's host.
+/// The factory of one codex backend per launch, with the codex binary resolved from the package's host.
 pub struct CodexFactory {
   host: CodexHost,
 }

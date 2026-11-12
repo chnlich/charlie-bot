@@ -77,3 +77,12 @@ test('a row marks itself when it has no conclusion for the column to show', () =
   assert.equal(rowFields('a title', null).row.classList.contains('turn-row-no-conclusion'), true);
   assert.equal(rowFields('a title', 'the conclusion').row.classList.contains('turn-row-no-conclusion'), false);
 });
+
+// The row is a button, and a phone has no hover to show it: the row ends in
+// the decorative caret styles.css draws, so the reader sees it opens.
+test('a row ends in the disclosure caret that assistive technology skips', () => {
+  const { row } = rowFields('a title', '');
+  const caret = row.children[row.children.length - 1];
+  assert.equal(caret.className, 'turn-row-caret');
+  assert.equal(caret.getAttribute('aria-hidden'), 'true');
+});

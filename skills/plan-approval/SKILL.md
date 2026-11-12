@@ -214,6 +214,12 @@ Its definitions live in `rust/crates/runtime/store/src/task_tree.rs` (`check_tas
 ## Execution
 
 - Classify each step by Action Boundaries in `prompts/master.md` and the host's resident memory entries before it runs.
+- When established practice answers a choice, follow that practice and carry the choice out as a step of the work.
+  Established practice is the current production state or an earlier change of the same kind.
+- When a step departs from established practice, name that practice in the step's Waiting on you item or in the
+  session reply or report.
+- When another node's message asks you to put a choice to the user, check the choice against established practice first.
+  When the practice answers the choice, reply to that node with the practice.
 - When a high-consequence step waits for a take off, list it as one Waiting on you item, and continue independent
   work in the same turn.
 - Carry out reversible steps and design choices directly, and state how to undo each external or repository change

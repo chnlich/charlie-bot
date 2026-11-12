@@ -184,9 +184,9 @@ impl Dispatcher {
         restore_announcements = announcements;
       }
       // A real user message is the one input that reorders the sidebar. It lifts only the node it was sent to, to
-      // the event's time, and never backward: rows order by updated_at, so that node moves to the front of its
+      // the event's time, and never backward. Rows order by updated_at, so that node moves to the front of its
       // siblings while its parent and ancestors keep their places. The lift stays after the archived-chain restore
-      // above, so a message to an archived node lifts the reopened node, and before the append below, whose
+      // above, so a message to an archived node lifts the reopened node. It also stays before the append below, whose
       // task_tree_changed broadcast makes the browser refetch the list that must read the lifted value.
       if event_type == event_types::USER {
         self.lift_user_message_node(session_id, &event).await?;
@@ -750,9 +750,9 @@ impl Dispatcher {
   /// One recipient's answer to whether its history holds one report event id.
   ///
   /// The folded id index covers the same archived and live events as the history view, and the node's fold is shared
-  /// with the rest of the boot pass, so a checked id costs a hash lookup instead of a walk over the recipient's whole
-  /// history. A history whose task fold failed has no index; its events are scanned unparsed instead, which is the
-  /// only reading available for it.
+  /// with the rest of the boot pass. A checked id therefore costs a hash lookup instead of a walk over the recipient's
+  /// whole history. A history whose task fold failed has no index; its events are scanned unparsed instead, which is
+  /// the only reading available for it.
   fn delivered_report_history(&self, recipient: &str) -> StoreResult<DeliveredReportHistory> {
     let facts = self.store.node_facts(recipient)?;
     if facts.task().is_ok() {
@@ -1374,7 +1374,7 @@ mod tests {
         .await
         .unwrap();
     }
-    // Fold neither side before the first scan: it folds the child and the recipient once each, and every close event
+    // Fold neither side before the first scan. It folds the child and the recipient once each, and every close event
     // then asks the recipient's id index instead of walking its event history.
     let dispatcher = dispatcher(&features);
     let before = features.store.history_work();

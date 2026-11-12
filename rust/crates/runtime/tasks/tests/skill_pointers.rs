@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 
 /// A reference is `skills/<name>/<rest>`. The rest stops at the first character a repo path cannot contain
-/// (whitespace, quote, paren, backtick), so the markdown punctuation around a reference never joins the path; a
+/// (whitespace, quote, paren, backtick), so the markdown punctuation around a reference never joins the path. A
 /// trailing sentence period rides inside the rest and is stripped below.
 const REFERENCE: &str = r"skills/(?P<name>[A-Za-z0-9_-]+)/(?P<rest>[A-Za-z0-9_./-]+)";
 

@@ -385,7 +385,7 @@ impl MasterQueue {
   }
 
   /// Retire the session's consumer and clear its busy interval, in one section under the queue mutex with no await.
-  /// The caller holds the mutex across its empty-queue check, so an enqueue cannot interleave: it either finds the
+  /// The caller holds the mutex across its empty-queue check, so an enqueue cannot interleave. It either finds the
   /// queue non-empty and extends this consumer, or finds no consumer and starts one that marks busy again.
   fn retire_locked(
     state: &mut QueueState,

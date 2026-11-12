@@ -101,13 +101,13 @@ pub struct ReviewScope<'a> {
 }
 
 /// Select the reviewer, verify checker, or cold reader that the call class `class` runs on. `backends.calls` names its
-/// target: a pool selects a member the worker's backend and the used or tried backends do not hold; a model runs as
+/// target: a pool selects a member the worker's backend and the used or tried backends do not hold. A model runs as
 /// written; `session`, or no key, runs on the worker's own backend, or on the worker session's route. A pool with no
 /// selectable member falls back to the worker's backend unless that backend was already tried, which ends the
 /// selection with `None`.
 ///
 /// `scope.route` is the worker session's recorded route. A review whose `backends.calls.review` is unset or `session`
-/// runs on the route's pool, or on the route's ids in order, and falls back to the worker's backend when the route has
+/// runs on the route's pool, or on the route's ids in order. It falls back to the worker's backend when the route has
 /// no member left. A route never overrides a `backends.calls.review` backend target: that target alone decides the
 /// reviewer when the key is set.
 pub fn select_reviewer_backend(

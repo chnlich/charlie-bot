@@ -69,7 +69,7 @@ pub fn read_run_context(store: &Store, session_id: &str, run_id: &str) -> Result
 }
 
 /// A stored log reference as the file an agent can open: the plain or compressed log the compaction left, or the
-/// stored reference itself when neither file exists, so a missing log still reads as the path the record names.
+/// stored reference itself when neither file exists. A missing log still reads as the path the record names.
 fn resolved_ref(reference: Option<&str>) -> Value {
   match reference.filter(|reference| !reference.is_empty()) {
     Some(reference) => match run_logs::existing_path(Path::new(reference)) {

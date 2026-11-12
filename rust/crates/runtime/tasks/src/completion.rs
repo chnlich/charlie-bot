@@ -462,7 +462,7 @@ impl TaskCompletion {
   // Archive
   // ------------------------------------------------------------------
 
-  /// Archive one task: an operator closes its subtree; an agent closes its own task through its active Run, or as a
+  /// Archive one task. An operator closes its subtree. An agent closes its own task through its active Run, or as a
   /// manager archives a task of its subtree, or another task with `non_child`.
   pub async fn archive_task(
     &self,
@@ -894,7 +894,7 @@ impl TaskCompletion {
     evidence: &CompletionEvidence,
   ) -> StoreResult<Vec<String>> {
     // Mid-turn delivery names every input it handed the live Run in the run's raw log, and the finish claim reads the
-    // same record: the request excludes those ids whether or not the run's durable claim carries them yet.
+    // same record. The request excludes those ids whether or not the run's durable claim carries them yet.
     let transport_dir = self.store().run_dir(session_id, &run.id);
     let mut excluded_inputs = run.input_event_ids.iter().cloned().collect::<HashSet<_>>();
     excluded_inputs.extend(
@@ -2014,8 +2014,8 @@ impl TaskCompletion {
     if let Some(replay) = self.replay_close_request(session_id, &effective_request_id)? {
       return Ok(replay);
     }
-    // A task that is already not open cannot close again. The refusal needs no blocker check, and that check's first
-    // use of the task index reads every session of the home; a boot replay of a closed task's run must not pay it.
+    // A task that is already not open cannot close again. The refusal needs no blocker check. That check's first
+    // use of the task index reads every session of the home, so a boot replay of a closed task's run must not pay it.
     if facts.task_state != "open" {
       return Err(StoreError::conflict(vec![format!("task {session_id} is no longer open")]));
     }
@@ -2180,8 +2180,8 @@ fn evidence_from_close_request(request: &Value) -> StoreResult<CompletionEvidenc
 /// The archive answer's `pending` text for a session that waits for the user's view.
 pub const PENDING_UNTIL_USER_VIEW: &str = "closes when the user opens this session";
 
-/// Whether the session's close waits for the user's view now: its approver is the user, it is not a chat thread session
-/// (whose replies the user reads in the thread, never on the web), and its last reply is unread.
+/// Whether the session's close waits for the user's view now. Its approver is the user, and it is not a chat thread
+/// session (whose replies the user reads in the thread, never on the web). Its last reply is unread.
 fn waits_for_user_view(meta: &SessionMetadata) -> bool {
   let approver = meta.task.as_ref().map_or(TaskApprover::User, |task| task.approver);
   approver == TaskApprover::User && !charliebot_registry::thread_origin::is_thread_session(meta) && meta.has_unread
@@ -2259,7 +2259,7 @@ mod tests {
   }
 
   /// A close-request replay answers from the node's facts as a scan of the raw history answers, a repeated event id
-  /// and the lines before a clone start included, and it reads no log while the facts are sealed.
+  /// and the lines before a clone start included. It reads no log while the facts are sealed.
   #[tokio::test]
   async fn a_close_request_replay_answers_from_the_facts_as_the_raw_history_does() {
     let home = tempfile::tempdir().unwrap();

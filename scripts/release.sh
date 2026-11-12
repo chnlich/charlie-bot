@@ -11,8 +11,8 @@
 #
 # Exit codes:
 #   2  the preflight refused and wrote nothing: the argument is not a full 40-character sha on origin/main, the
-#      release directory already exists, gh is not authenticated for this repository, CI has no successful push
-#      run of both Rust jobs for the commit, or another release holds the host release lock.
+#      release directory already exists, the user manager does not answer, gh is not authenticated for this repository,
+#      CI has no successful push run of both Rust jobs for the commit, or another release holds the host release lock.
 #   1  a stage failed; the stage name and its log path are printed. A download, units or install failure installs
 #      nothing. A prune failure leaves the new release installed, and the prune log names the directory it failed on.
 #   0  the release is installed; the switch command is printed.
@@ -54,6 +54,7 @@ readonly REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
 readonly LOG_ROOT="${CHARLIEBOT_RELEASE_LOG_DIR:-$HOME/charliebot-release-logs}"
 readonly SLICE_INSTALL="$REPO_ROOT/scripts/install-slice-units.sh"
+readonly SYSTEMD_USER="$REPO_ROOT/scripts/systemd-user.sh"
 readonly ARTIFACT_NAME_PREFIX="charliebot-server-"
 # The version directories the prune keeps, the one just installed included. The `current` target is kept beyond them.
 readonly KEPT_VERSIONS=10
@@ -92,6 +93,9 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# Check the user manager before downloading or installing anything. The wrapper probes the manager itself.
+"$SYSTEMD_USER" --check || refuse "the user manager did not answer"
 
 command -v gh > /dev/null 2>&1 || refuse "gh is not on PATH"
 gh auth status > /dev/null 2>&1 || refuse "gh is not authenticated"

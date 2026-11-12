@@ -55,8 +55,8 @@ pub fn agent_environment(
   values.insert(gh_wrapper::WRAPPER_PATH_VAR.to_string(), gh_wrapper_dir.join("gh").to_string_lossy().into_owned());
   // Chrome asks systemd over the session bus to move itself into its own scope. With the bus disabled it cannot, so a
   // browser stays in the cgroup of the process that started it. An agent's browser stays in the session cgroup, and
-  // the server's renderer stays in the server's cgroup. `systemctl --user` and `systemd-run --user` reach systemd
-  // over its private socket and keep working.
+  // the server's renderer stays in the server's cgroup. On systemd 255, `systemctl --user` honors
+  // `DBUS_SESSION_BUS_ADDRESS=disabled:`, fails to connect, and does not fall back to `$XDG_RUNTIME_DIR/systemd/private`.
   values.insert("DBUS_SESSION_BUS_ADDRESS".to_string(), "disabled:".to_string());
   values.entry("PYDANTIC_DISABLE_PLUGINS".to_string()).or_insert_with(|| "__all__".to_string());
   Ok(AgentBaseEnvironment { values })

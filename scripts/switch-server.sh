@@ -3,11 +3,12 @@
 #
 #   scripts/switch-server.sh rust <full main commit> [--pane PANE]
 #
-# The preflight checks the release, the clone, the runs and the config, then asks start-server.sh to test its slices
-# and scope, and checks that every switched-on session-weight switch (server.enable_session_cpu_weight,
-# server.enable_session_io_weight, read through the release's `charliebot switch-helper`) has its controller in the
-# agents slice's cgroup.controllers. The check runs before the install below, so the target's units must already be
-# installed: scripts/release.sh installs them ahead of its install stage. The no-model preflight checks finish while
+# The preflight checks the release, clone, runs and config, confirms the user manager answers, then asks
+# start-server.sh to test its slices and scope, and checks that every switched-on session-weight switch
+# (server.enable_session_cpu_weight, server.enable_session_io_weight, read through the release's `charliebot
+# switch-helper`) has its controller in the agents slice's cgroup.controllers. The check runs before the install
+# below, so the target's units must already be installed: scripts/release.sh installs them ahead of its install
+# stage. The no-model preflight checks finish while
 # the old server still serves. It refuses a clone with local changes
 # and a target commit that a fetch does not bring. Its scan refuses a restart while an improve loop's controller still
 # runs in the server: the loop's active lock is present and the server pid its state names is live, whatever status the
@@ -124,6 +125,7 @@ export CHARLIEBOT_REPO_ROOT="$REPO_ROOT"
 # The slice-unit install this switch calls. switch_forward points this at a copy outside the checkout, because the
 # clone moves to a switch-back target whose checkout may predate the owner.
 SLICE_INSTALL="$SCRIPT_DIR/install-slice-units.sh"
+SYSTEMD_USER="$SCRIPT_DIR/systemd-user.sh"
 HOME_DIR="${CHARLIEBOT_HOME:-$HOME/.charliebot}"
 RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
 LOG_DIR="${CHARLIEBOT_LOG_DIR:-/tmp/charliebot-logs}"
@@ -1378,6 +1380,7 @@ preflight() {
   [ -d "$RELEASE_DIR" ] || fail "no release $TARGET_SHA in $RELEASES_DIR"
   (cd "$RELEASE_DIR" && sha256sum -c sha256sums.txt) || fail "$RELEASE_DIR does not match its sha256sums.txt"
   helper_binary   # exits 2 when neither release carries the subcommand, before anything changes
+  "$SYSTEMD_USER" --check || fail "the user manager did not answer"
   OLD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
   [ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)" ] \
     || fail "runtime clone $REPO_ROOT has local changes"
@@ -1550,6 +1553,7 @@ switch_forward() {
   # The clone moves to each install's target first, and a switch-back target may predate the owner in its checkout, so
   # every install below runs from a copy outside the checkout.
   cp "$SLICE_INSTALL" "$WORK/install-slice-units.sh" || die "copy the slice-unit install to $WORK"
+  cp "$SYSTEMD_USER" "$WORK/systemd-user.sh" || die "copy the user-manager wrapper to $WORK"
   SLICE_INSTALL="$WORK/install-slice-units.sh"
   scan_home || die "cannot read the run records in $HOME_DIR"
   [ -z "$BLOCKERS" ] || die "live work appeared after the preflight: ${BLOCKERS//$'\n'/; }"

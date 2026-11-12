@@ -33,6 +33,7 @@ pub struct World {
   /// The stage logs' root. A preflight refusal leaves it absent.
   pub logs: PathBuf,
   pub artifact: PathBuf,
+  pub runtime: PathBuf,
   /// The temporary directory the script creates its artifact directory in: this world's TMPDIR, so one test's scan
   /// never sees another test's directories.
   pub tmp: PathBuf,
@@ -62,6 +63,7 @@ impl World {
     let releases = sandbox.dir("releases");
     let logs = sandbox.root().join("logs");
     let artifact = sandbox.dir("artifact");
+    let runtime = sandbox.dir("runtime");
     let home = sandbox.dir("home");
     harness::copy_file(&harness::repo_root().join("scripts/release.sh"), &scripts.join("release.sh"));
     // release.sh sources the host release lock from beside itself.
@@ -72,6 +74,7 @@ impl World {
       &harness::repo_root().join("scripts/install-slice-units.sh"),
       &scripts.join("install-slice-units.sh"),
     );
+    harness::copy_file(&harness::repo_root().join("scripts/systemd-user.sh"), &scripts.join("systemd-user.sh"));
     let systemd = scripts.join("systemd");
     fs::create_dir_all(&systemd).expect("the unit directory");
     for unit in fs::read_dir(harness::repo_root().join("scripts/systemd")).expect("the unit files") {
@@ -80,13 +83,15 @@ impl World {
     }
     fs::write(repo.join("README.md"), "release test\n").expect("the README");
     // The user manager is never touched: its reload lands in the unit-calls log beside the sandbox.
-    sandbox.stub("systemctl", "printf '%s\\n' \"$*\" >> \"$UNIT_CALLS\"\n");
+    sandbox.stub("systemctl", "printf '%s\\t%s\\n' \"${DBUS_SESSION_BUS_ADDRESS-}\" \"$*\" >> \"$UNIT_CALLS\"\n");
 
     let mut env = sandbox.env();
     let tmp = sandbox.dir("tmp");
     env.insert("TMPDIR".to_string(), tmp.display().to_string());
     env.insert("UNIT_CALLS".to_string(), sandbox.root().join("unit-calls.log").display().to_string());
     env.insert("CHARLIEBOT_SYSTEMD_USER_DIR".to_string(), sandbox.dir("user-units").display().to_string());
+    env.insert("XDG_RUNTIME_DIR".to_string(), runtime.display().to_string());
+    env.insert("DBUS_SESSION_BUS_ADDRESS".to_string(), "disabled:".to_string());
     for (name, value) in GIT_IDENTITY {
       env.insert(name.to_string(), value.to_string());
     }
@@ -112,7 +117,7 @@ impl World {
     // The host release lock lives under the sandbox, never beside the user's home.
     env.insert("CHARLIEBOT_RELEASE_LOCK".to_string(), sandbox.root().join("release.lock").display().to_string());
 
-    let world = Self { sandbox, repo, releases, logs, artifact, tmp, on_main, off_main, env };
+    let world = Self { sandbox, repo, releases, logs, artifact, runtime, tmp, on_main, off_main, env };
     world.write_gh(&world.gh_defaults());
     world
   }

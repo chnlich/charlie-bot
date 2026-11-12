@@ -426,6 +426,12 @@ fn test_preflight_refusal_exits_1_and_changes_nothing_launcher_preflight() {
   preflight_refusal_exits_1_and_changes_nothing("launcher-preflight");
 }
 
+#[test]
+#[ignore = "integration"]
+fn test_preflight_refuses_an_unreachable_user_manager_before_stopping_the_server() {
+  preflight_refusal_exits_1_and_changes_nothing("user-manager");
+}
+
 // ---- the host release lock ----------------------------------------------------------------------------------------
 
 #[test]
@@ -752,6 +758,7 @@ fn preflight_refusal_exits_1_and_changes_nothing(case: &str) {
       world.env.insert("SYSTEMD_RUN_REFUSE_ALL".to_string(), "1".to_string());
       world.start_release();
     }
+    "user-manager" => world.sandbox.stub("systemctl", "exit 1\n"),
     other => panic!("no preflight case named {other}"),
   }
 
@@ -769,6 +776,18 @@ fn preflight_refusal_exits_1_and_changes_nothing(case: &str) {
   if case == "launcher-preflight" {
     let output = format!("{}{}", run.stdout, run.stderr);
     assert!(output.contains("launcher preflight"), "{}", world.report(&run));
+  }
+  if case == "user-manager" {
+    let output = format!("{}{}", run.stdout, run.stderr);
+    let runtime = world.sandbox.root().join("runtime");
+    let bus_address = format!("DBUS_SESSION_BUS_ADDRESS=unix:path={}/bus", runtime.display());
+    assert!(output.contains(&bus_address), "{}", world.report(&run));
+    assert!(world.systemctl_records().is_empty(), "the switch reloaded units: {}", world.report(&run));
+    assert!(
+      !world.user_units().join("charliebot-agents.slice").exists(),
+      "the switch installed units: {}",
+      world.report(&run)
+    );
   }
   if let Some(pid) = controller {
     let status = if case == "improve-loop-stopped" { "stopped" } else { "running" };

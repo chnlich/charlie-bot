@@ -41,6 +41,8 @@ fn script_environment(sandbox: &Sandbox, releases: &Path, record: &Path, fake_ho
   env.insert("RECORD".to_string(), record.display().to_string());
   env.insert("FAKE_HOME".to_string(), fake_home.display().to_string());
   env.insert("HOME".to_string(), sandbox.dir("sandbox-home").display().to_string());
+  env.insert("XDG_RUNTIME_DIR".to_string(), sandbox.dir("runtime").display().to_string());
+  env.insert("DBUS_SESSION_BUS_ADDRESS".to_string(), "disabled:".to_string());
   env.insert("PATH".to_string(), format!("{}:/usr/local/bin:/usr/bin:/bin", sandbox.bin().display()));
   env
 }
@@ -68,10 +70,13 @@ fn install_units_installs_the_commits_units_with_the_repo_path_and_reloads_the_u
   let repo = sandbox.dir("repo");
   let unit_dir = sandbox.dir("unit-dir");
   let calls = sandbox.root().join("systemctl.calls");
+  let runtime = sandbox.dir("runtime");
   sandbox.stub("systemctl", "printf '%s\\n' \"$*\" >> \"$SYSTEMCTL_CALLS\"\n");
   let mut env = sandbox.env();
   env.insert("SYSTEMCTL_CALLS".to_string(), calls.display().to_string());
   env.insert("CHARLIEBOT_SYSTEMD_USER_DIR".to_string(), unit_dir.display().to_string());
+  env.insert("XDG_RUNTIME_DIR".to_string(), runtime.display().to_string());
+  env.insert("DBUS_SESSION_BUS_ADDRESS".to_string(), "disabled:".to_string());
   for (name, value) in [
     ("GIT_CONFIG_GLOBAL", "/dev/null"),
     ("GIT_AUTHOR_NAME", "setup-test"),
@@ -131,6 +136,7 @@ fn the_rewritten_shell_entry_points_parse() {
   for script in [
     "scripts/setup.sh",
     "scripts/install-slice-units.sh",
+    "scripts/systemd-user.sh",
     "scripts/preflight-charlie-code.sh",
     "scripts/sync-skills.sh",
     "dev/check-skills-host-leak.sh",

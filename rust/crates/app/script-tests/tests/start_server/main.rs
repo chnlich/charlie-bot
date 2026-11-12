@@ -492,8 +492,10 @@ fn assert_shell_entry_point_parses(script: &str) {
 fn stash_launcher(sandbox: &Sandbox) -> PathBuf {
   let scripts = sandbox.dir("scripts");
   let systemd = sandbox.dir("scripts/systemd");
+  sandbox.dir("scripts/runtime");
   let launcher = scripts.join("start-server.sh");
   harness::copy_file(&harness::repo_root().join("scripts/start-server.sh"), &launcher);
+  harness::copy_file(&harness::repo_root().join("scripts/systemd-user.sh"), &scripts.join("systemd-user.sh"));
   for unit in UNIT_FILES {
     harness::copy_file(&harness::repo_root().join("scripts/systemd").join(unit), &systemd.join(unit));
   }
@@ -501,13 +503,24 @@ fn stash_launcher(sandbox: &Sandbox) -> PathBuf {
 }
 
 fn run_preflight(launcher: &Path, env: &Env) -> Run {
-  let mut command = harness::command("bash", env);
+  let mut env = env.clone();
+  env.insert(
+    "XDG_RUNTIME_DIR".to_string(),
+    launcher.parent().expect("the scripts directory").join("runtime").display().to_string(),
+  );
+  env.insert("DBUS_SESSION_BUS_ADDRESS".to_string(), "disabled:".to_string());
+  let mut command = harness::command("bash", &env);
   command.args(["-c", "source \"$1\"; preflight_slices", "bash"]).arg(launcher);
   harness::run(&mut command)
 }
 
 fn run_launcher_preflight(launcher: &Path, log_dir: &Path, env: &Env) -> Run {
   let mut env = env.clone();
+  env.insert(
+    "XDG_RUNTIME_DIR".to_string(),
+    launcher.parent().expect("the scripts directory").join("runtime").display().to_string(),
+  );
+  env.insert("DBUS_SESSION_BUS_ADDRESS".to_string(), "disabled:".to_string());
   env.insert("CHARLIEBOT_LOG_DIR".to_string(), log_dir.display().to_string());
   let mut command = harness::command("bash", &env);
   command.arg(launcher).arg("--preflight");
@@ -517,10 +530,13 @@ fn run_launcher_preflight(launcher: &Path, log_dir: &Path, env: &Env) -> Run {
 fn launcher_environment(sandbox: &Sandbox, releases: &Path) -> (Env, PathBuf) {
   let log_dir = sandbox.root().join("logs");
   let uv_record = sandbox.root().join("uv-record.json");
+  let runtime = sandbox.dir("runtime");
   let mut env = sandbox.env();
   env.insert("CHARLIEBOT_LOG_DIR".to_string(), log_dir.display().to_string());
   env.insert("CHARLIEBOT_RELEASES_DIR".to_string(), releases.display().to_string());
   env.insert("FAKE_RECORD".to_string(), uv_record.display().to_string());
+  env.insert("XDG_RUNTIME_DIR".to_string(), runtime.display().to_string());
+  env.insert("DBUS_SESSION_BUS_ADDRESS".to_string(), "disabled:".to_string());
   (env, log_dir)
 }
 

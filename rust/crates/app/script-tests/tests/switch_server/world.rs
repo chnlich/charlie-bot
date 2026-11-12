@@ -47,9 +47,12 @@ fn world_agents_slice(cgroups: &Path) -> PathBuf {
   cgroups.join(format!("user.slice/user-{uid}.slice/user@{uid}.service/charliebot.slice/charliebot-agents.slice"))
 }
 
-/// The switch world's `systemctl`: the harness stub's show answers plus the `daemon-reload` the slice-unit install
-/// runs, which lands one line in the record file beside the stub.
+/// The switch world's `systemctl`: the manager preflight, the harness stub's show answers and the `daemon-reload` the
+/// slice-unit install runs, which lands one line in the record file beside the stub.
 const SWITCH_SYSTEMCTL: &str = r#"case "$*" in
+  *show-environment*)
+    exit 0
+    ;;
   *daemon-reload*)
     printf 'daemon-reload\n' >> "${BASH_SOURCE[0]%/*}/systemctl.records"
     exit 0
@@ -114,6 +117,7 @@ impl World {
     fs::create_dir_all(home.join("sessions")).expect("the home's sessions directory");
     let releases = sandbox.dir("releases");
     let logs = sandbox.dir("logs");
+    let runtime = sandbox.dir("runtime");
     let diskstats = sandbox.dir("disk").join("diskstats");
     let mountinfo = sandbox.dir("disk").join("mountinfo");
     let cgroups = sandbox.dir("cgroups");
@@ -129,6 +133,7 @@ impl World {
     copy_repo_file("scripts/start-server.sh", &scripts.join("start-server.sh"));
     copy_repo_file("scripts/switch-server.sh", &scripts.join("switch-server.sh"));
     copy_repo_file("scripts/install-slice-units.sh", &scripts.join("install-slice-units.sh"));
+    copy_repo_file("scripts/systemd-user.sh", &scripts.join("systemd-user.sh"));
     // The switch sources the host release lock from beside itself.
     fs::create_dir(scripts.join("release")).expect("the release scripts directory");
     copy_repo_file("scripts/release/lock.sh", &scripts.join("release/lock.sh"));
@@ -226,6 +231,8 @@ impl World {
     env.insert("CHARLIEBOT_RELEASE_LOCK".to_string(), sandbox.root().join("release.lock").display().to_string());
     // The slice units install into the sandbox, never into the user running the tests.
     env.insert("CHARLIEBOT_SYSTEMD_USER_DIR".to_string(), sandbox.dir("user-units").display().to_string());
+    env.insert("XDG_RUNTIME_DIR".to_string(), runtime.display().to_string());
+    env.insert("DBUS_SESSION_BUS_ADDRESS".to_string(), "disabled:".to_string());
     // A long TMPDIR puts the sandbox's private TMUX_TMPDIR past the 108-byte unix socket path limit.
     env.insert("TMUX_TMPDIR".to_string(), "/tmp".to_string());
     let socket = format!("switch-test-{}", &Uuid::new_v4().simple().to_string()[..8]);

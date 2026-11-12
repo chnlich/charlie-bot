@@ -19,7 +19,8 @@ UNIT_DIR="$SCRIPT_DIR/systemd"
 run_in_scope() {
   local unit_name="$1"
   shift
-  systemd-run --user --scope --unit="$unit_name" --slice=charliebot.slice -p MemorySwapMax=0 -- "$@"
+  "$SCRIPT_DIR/systemd-user.sh" systemd-run --scope --unit="$unit_name" --slice=charliebot.slice \
+    -p MemorySwapMax=0 -- "$@"
 }
 
 # One setting's value from a unit file: the last assignment wins in systemd, so the last
@@ -93,7 +94,10 @@ preflight_slices() {
       rc=1
       continue
     fi
-    if ! shown="$(systemctl --user show "$unit" -p ActiveState -p MemoryMax -p MemorySwapMax -p CPUWeight -p IOWeight)"; then
+    if ! shown="$(
+      "$SCRIPT_DIR/systemd-user.sh" systemctl show "$unit" \
+        -p ActiveState -p MemoryMax -p MemorySwapMax -p CPUWeight -p IOWeight
+    )"; then
       echo "preflight: systemctl --user show $unit failed" >&2
       rc=1
       continue

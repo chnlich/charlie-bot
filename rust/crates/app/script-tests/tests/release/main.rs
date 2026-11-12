@@ -35,6 +35,33 @@ fn test_preflight_refuses_an_argument_that_is_not_a_full_sha() {
 
 #[test]
 #[ignore = "integration"]
+fn test_preflight_refuses_when_the_user_manager_does_not_answer_and_names_the_bus_address() {
+  let world = World::new();
+  world
+    .sandbox
+    .stub("systemctl", "printf '%s\\t%s\\n' \"$DBUS_SESSION_BUS_ADDRESS\" \"$*\" >> \"$UNIT_CALLS\"; exit 1\n");
+
+  let run = world.release(&world.on_main);
+
+  assert_eq!(run.code, 2, "{}", run.describe());
+  assert!(
+    run.stderr.contains(&format!("DBUS_SESSION_BUS_ADDRESS=unix:path={}/bus", world.runtime.display())),
+    "{}",
+    run.describe()
+  );
+  assert_eq!(
+    recorded_calls(&world.sandbox.root().join("unit-calls.log")),
+    format!("unix:path={}/bus\t--user show-environment\n", world.runtime.display()),
+    "{}",
+    run.describe()
+  );
+  assert!(!world.releases.join(&world.on_main).exists(), "{}", run.describe());
+  assert!(!world.logs.exists(), "the refusal wrote {}", world.logs.display());
+  assert!(!world.sandbox.root().join("user-units/charliebot-agents.slice").exists(), "the preflight installed a unit");
+}
+
+#[test]
+#[ignore = "integration"]
 fn test_preflight_refuses_a_commit_that_is_not_on_origin_main() {
   let world = World::new();
 
@@ -176,7 +203,7 @@ fn test_a_holder_that_is_killed_leaves_the_lock_free_for_the_next_release() {
 fn test_a_failed_stage_exits_1_names_the_stage_and_installs_nothing() {
   let world = World::new();
   // The units stage reloads the user manager; a refused reload fails it.
-  world.sandbox.stub("systemctl", "exit 1\n");
+  world.sandbox.stub("systemctl", r#"case "$*" in *show-environment*) exit 0 ;; *) exit 1 ;; esac"#);
 
   let run = world.release(&world.on_main);
 
@@ -238,7 +265,7 @@ fn test_a_passing_run_keeps_no_binary_in_the_log_directory_and_removes_the_artif
 #[ignore = "integration"]
 fn test_a_stage_that_fails_after_the_download_leaves_no_binary_and_no_artifact_directory() {
   let world = World::new();
-  world.sandbox.stub("systemctl", "exit 1\n");
+  world.sandbox.stub("systemctl", r#"case "$*" in *show-environment*) exit 0 ;; *) exit 1 ;; esac"#);
 
   let run = world.release(&world.on_main);
 
@@ -266,7 +293,8 @@ fn test_an_interrupt_during_a_stage_removes_the_artifact_directory() {
   // artifact temporary directory. The stub's parent is the slice-unit install script, whose parent is the release.
   world.sandbox.stub(
     "systemctl",
-    r#"ppid() { awk '/^PPid:/ { print $2 }' "/proc/$1/status"; }
+    r#"case "$*" in *show-environment*) exit 0 ;; esac
+ppid() { awk '/^PPid:/ { print $2 }' "/proc/$1/status"; }
 kill -TERM "$(ppid "$PPID")"
 exit 1
 "#,
@@ -333,7 +361,16 @@ fn test_a_release_installs_the_commits_slice_units_before_it_installs_the_releas
 
   assert_eq!(run.code, 0, "{}", run.describe());
   let calls = recorded_calls(&world.sandbox.root().join("unit-calls.log"));
-  assert_eq!(calls, "--user daemon-reload\n", "{}", run.describe());
+  assert_eq!(
+    calls,
+    format!(
+      "unix:path={}/bus\t--user show-environment\nunix:path={}/bus\t--user daemon-reload\n",
+      world.runtime.display(),
+      world.runtime.display()
+    ),
+    "{}",
+    run.describe()
+  );
   let installed =
     fs::read_to_string(world.sandbox.root().join("user-units/charliebot-agents.slice")).expect("the installed unit");
   let committed = committed_text(&world.env, &world.repo, &world.on_main, "scripts/systemd/charliebot-agents.slice");
@@ -406,7 +443,7 @@ fn test_a_failed_release_deletes_no_version_directory() {
   let world = World::new();
   ten_fixture_versions(&world);
   // The units stage fails before the install, so the prune never runs.
-  world.sandbox.stub("systemctl", "exit 1\n");
+  world.sandbox.stub("systemctl", r#"case "$*" in *show-environment*) exit 0 ;; *) exit 1 ;; esac"#);
 
   let run = world.release(&world.on_main);
 

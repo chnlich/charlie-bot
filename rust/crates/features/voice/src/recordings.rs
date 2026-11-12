@@ -6,10 +6,12 @@
 //! suffix. The `.json` beside the WAV holds the run's three parts. Each part is updated only by its writer
 //! through [`with_run_stem`], which serializes the writes per stem and replaces the file atomically.
 //!
-//! [`list_recordings`] scans every session's `voice/` directory for stems and answers the newest rows first, with
-//! the duration and the levels read from each row's WAV at request time.
+//! [`list_recordings`] answers the newest rows first, with the duration and the levels read from each row's WAV at
+//! request time. Each request reads the sessions directory and the `voice/` directory of every session the session
+//! index names. The first request of a home builds that index with one probe per session, and [`with_run_stem`]
+//! names its session in the index, so a recording this server stores appears on the next request.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -37,6 +39,52 @@ fn run_lock(voice_dir: &Path, run_id: &str) -> Arc<Mutex<()>> {
   static LOCKS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
   let mut locks = LOCKS.lock().expect("the run lock registry is not poisoned");
   locks.entry(format!("{}\0{run_id}", voice_dir.display())).or_default().clone()
+}
+
+/// The session ids that hold a `voice/` directory, per sessions directory.
+///
+/// The first list request of a home builds the set with one probe per session; later requests read only the
+/// sessions it names. [`with_run_stem`] names its session under the same lock, so a recording this server stores
+/// appears on the next request. No other process writes a voice directory, so the set names every session the list
+/// can answer.
+static VOICE_SESSIONS: LazyLock<Mutex<HashMap<PathBuf, BTreeSet<String>>>> =
+  LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The session ids that hold a `voice/` directory under *sessions_dir*, built by one probe per session when the
+/// index for that directory is not there yet.
+fn voice_sessions(sessions_dir: &Path, sessions_root: &fs::File) -> io::Result<BTreeSet<String>> {
+  let mut index = VOICE_SESSIONS.lock().expect("the voice session index is not poisoned");
+  if let Some(sessions) = index.get(sessions_dir) {
+    return Ok(sessions.clone());
+  }
+  let mut sessions = BTreeSet::new();
+  for session in fs::read_dir(sessions_dir)? {
+    let session = session?;
+    // The store reads its sessions as the directory entries of the sessions directory (`list_all_run_records_sync`
+    // in run_records.rs), so the files at its root, such as `.counter`, are store metadata. Like that scan, this
+    // reads `DirEntry::file_type`, which does not follow a symlink.
+    if !session.file_type()?.is_dir() {
+      continue;
+    }
+    let name = session.file_name();
+    let session_id = name.to_str().ok_or_else(|| {
+      io::Error::other(format!("sessions directory holds a non-UTF-8 name {}", name.to_string_lossy()))
+    })?;
+    if voice_entry_exists(sessions_root, session_id)? {
+      sessions.insert(session_id.to_string());
+    }
+  }
+  index.insert(sessions_dir.to_path_buf(), sessions.clone());
+  Ok(sessions)
+}
+
+/// Records that *session_id* holds a `voice/` directory under *sessions_dir*. An index that is not built yet stays
+/// unbuilt, because the scan that builds it finds the directory too.
+fn note_voice_session(sessions_dir: &Path, session_id: &str) {
+  let mut index = VOICE_SESSIONS.lock().expect("the voice session index is not poisoned");
+  if let Some(sessions) = index.get_mut(sessions_dir) {
+    sessions.insert(session_id.to_string());
+  }
 }
 
 /// The stem of one run's files: the existing stem for `run_id`, or a fresh one this call creates.
@@ -98,11 +146,13 @@ pub(crate) fn with_run_stem<T>(
       format!("run id {} is not eight lowercase hex characters", text_lossy(run_id)),
     ));
   }
-  let voice_dir = cfg.sessions_dir().join(session_id).join("voice");
+  let sessions_dir = cfg.sessions_dir();
+  let voice_dir = sessions_dir.join(session_id).join("voice");
   let lock = run_lock(&voice_dir, run_id);
   let _held = lock.lock().expect("the run lock is not poisoned");
   let stem = resolve_stem(&voice_dir, run_id)?;
   fs::create_dir_all(&voice_dir)?;
+  note_voice_session(&sessions_dir, session_id);
   write(&stem)
 }
 
@@ -370,8 +420,9 @@ fn voice_entry_exists(sessions: &fs::File, session_id: &str) -> io::Result<bool>
 
 /// The most recent recordings across every session directory, newest first, one row per run.
 ///
-/// The scan reads each session's `voice/` directory once; a session without one is skipped, and any other read
-/// failure fails the request. The duration and the levels of each row come from its WAV at request time.
+/// Each request reads the sessions directory, then the `voice/` directory of every session the session index
+/// names; a session without one is skipped, and any other read failure fails the request. The duration and the
+/// levels of each row come from its WAV at request time.
 pub(crate) fn list_recordings(cfg: &CharlieBotConfig, limit: usize) -> io::Result<Vec<Value>> {
   let sessions_dir = cfg.sessions_dir();
   let mut stems: Vec<(String, String, String)> = Vec::new();
@@ -382,11 +433,9 @@ pub(crate) fn list_recordings(cfg: &CharlieBotConfig, limit: usize) -> io::Resul
     Err(error) => return Err(error),
   };
   let sessions_root = fs::File::open(&sessions_dir)?;
+  let with_voice = voice_sessions(&sessions_dir, &sessions_root)?;
   for session in sessions {
     let session = session?;
-    // The store reads its sessions as the directory entries of the sessions directory (`list_all_run_records_sync`
-    // in run_records.rs), so the files at its root, such as `.counter`, are store metadata. Like that scan, this
-    // reads `DirEntry::file_type`, which does not follow a symlink.
     if !session.file_type()?.is_dir() {
       continue;
     }
@@ -394,7 +443,7 @@ pub(crate) fn list_recordings(cfg: &CharlieBotConfig, limit: usize) -> io::Resul
     let session_id = name.to_str().ok_or_else(|| {
       io::Error::other(format!("sessions directory holds a non-UTF-8 name {}", name.to_string_lossy()))
     })?;
-    if !voice_entry_exists(&sessions_root, session_id)? {
+    if !with_voice.contains(session_id) {
       continue;
     }
     let voice_dir = session.path().join("voice");
@@ -810,6 +859,21 @@ mod tests {
     let rows = list_recordings(&config, DEFAULT_LIST_LIMIT).expect("the list answers");
     assert_eq!(rows.len(), 3);
     assert_eq!(rows[2]["stem"], older_stem);
+  }
+
+  #[test]
+  fn a_recording_stored_after_a_list_appears_on_the_next_list() {
+    let home = tempfile::tempdir().expect("make an isolated home");
+    let config = synthetic_config(home.path());
+    fs::create_dir_all(config.sessions_dir()).expect("create the sessions directory");
+    assert!(list_recordings(&config, DEFAULT_LIST_LIMIT).expect("an empty store lists nothing").is_empty());
+    let id = run_id(7);
+    store_upload_audio(&config, "synthetic-session", &id, &[1, 2], Some("gemini"), None).expect("the upload stores");
+
+    let rows = list_recordings(&config, DEFAULT_LIST_LIMIT).expect("the list answers");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["session_id"], "synthetic-session");
   }
 
   #[test]

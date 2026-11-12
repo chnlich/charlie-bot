@@ -2074,6 +2074,14 @@ const UI_TEXT_EXEMPTIONS: &[UiTextExemption] = &[
     reason: "The Han-character pattern that detects Chinese in reply text a user or a model writes.",
   },
   UiTextExemption {
+    file: "rust/crates/runtime/tasks/src/cold_read.rs",
+    reason: "Accepted clean verdicts a model writes for Chinese cold reads; no browser shows these parser tokens.",
+  },
+  UiTextExemption {
+    file: "rust/crates/runtime/user_text_checks/src/lib.rs",
+    reason: "Rule-defined terms a user may write in a reply; the checker reports them to the agent, not the browser.",
+  },
+  UiTextExemption {
     file: "rust/crates/features/taste/src/store.rs",
     reason: "The default reason stored for a taste row, which a model reads back; no browser shows it.",
   },

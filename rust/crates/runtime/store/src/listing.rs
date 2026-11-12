@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
@@ -57,6 +57,68 @@ pub struct ArchivedPage {
 
 /// How long a memoized listing answers before the next call walks the sessions again (`_LISTINGS_SWEEP_INTERVAL`).
 const LISTINGS_SWEEP_INTERVAL: Duration = Duration::from_secs(10);
+
+/// One filtered listing kept while the sorted corpus and the derived-archive set that shaped it still hold.
+///
+/// The filtered rows follow only from those two inputs: a write through the store replaces the corpus, and an
+/// external edit moves it on the next sweep, while a tree-index refresh replaces the derived-archive set.
+struct CachedFilteredListing {
+  /// The store by its address. A server holds one store for its lifetime, and an address a later store reuses
+  /// cannot answer from the entry: that store's corpus and derived set are different allocations.
+  store: usize,
+  status: Option<SessionStatus>,
+  starred: Option<bool>,
+  sorted: Arc<Vec<Arc<SessionMetadata>>>,
+  derived: Arc<Vec<String>>,
+  rows: Arc<Vec<Arc<SessionMetadata>>>,
+}
+
+/// The (status, starred) listings kept at once.
+const FILTERED_LISTING_MEMO_LIMIT: usize = 4;
+
+/// The kept listings, read by every request thread. The entry names its store, so a process that holds more
+/// than one store keeps their listings apart rather than answering one from the other's rows.
+static FILTERED_LISTING_MEMO: Mutex<Vec<CachedFilteredListing>> = Mutex::new(Vec::new());
+
+/// The kept rows of `status` and `starred` while `sorted` and `derived` are the inputs they were built from.
+fn filtered_listing_memo_hit(
+  store: &Store,
+  status: Option<SessionStatus>,
+  starred: Option<bool>,
+  sorted: &Arc<Vec<Arc<SessionMetadata>>>,
+  derived: &Arc<Vec<String>>,
+) -> Option<Arc<Vec<Arc<SessionMetadata>>>> {
+  let address = std::ptr::from_ref(store) as usize;
+  let memo = FILTERED_LISTING_MEMO.lock().expect("the filtered listing memo mutex is not poisoned");
+  memo
+    .iter()
+    .find(|entry| {
+      entry.store == address
+        && entry.status == status
+        && entry.starred == starred
+        && Arc::ptr_eq(&entry.sorted, sorted)
+        && Arc::ptr_eq(&entry.derived, derived)
+    })
+    .map(|entry| Arc::clone(&entry.rows))
+}
+
+/// Keeps `rows` as the listing of `status` and `starred` for the inputs they were built from.
+fn remember_filtered_listing(
+  store: &Store,
+  status: Option<SessionStatus>,
+  starred: Option<bool>,
+  sorted: Arc<Vec<Arc<SessionMetadata>>>,
+  derived: Arc<Vec<String>>,
+  rows: Arc<Vec<Arc<SessionMetadata>>>,
+) {
+  let address = std::ptr::from_ref(store) as usize;
+  let mut memo = FILTERED_LISTING_MEMO.lock().expect("the filtered listing memo mutex is not poisoned");
+  memo.retain(|entry| entry.store != address || entry.status != status || entry.starred != starred);
+  memo.push(CachedFilteredListing { store: address, status, starred, sorted, derived, rows });
+  if memo.len() > FILTERED_LISTING_MEMO_LIMIT {
+    memo.remove(0);
+  }
+}
 
 impl Store {
   /// Count active sessions by a backend's string metadata field, from the store's indexed metadata.
@@ -284,6 +346,11 @@ impl Store {
   }
 
   /// List the rows of one listing without asking the sequence controllers for their row fields.
+  ///
+  /// A listing filtered only by the metadata is kept while the corpus and the derived-archive set that shaped it
+  /// hold. The sidebar's starred status poll and its starred view ask for the same rows on every poll, and the
+  /// corpus filter is the poll's whole cost. A listing with a scheduled filter is not kept: sequence ownership can
+  /// move without moving either input.
   pub fn list_session_rows(
     &self,
     status: Option<SessionStatus>,
@@ -292,7 +359,12 @@ impl Store {
   ) -> StoreResult<Vec<Arc<SessionMetadata>>> {
     let (snapshot, _) = self.load_session_metas_snapshot_versioned(status)?;
     let sorted = self.sorted_corpus(status, snapshot);
-    let mut rows = self.apply_derived_archive_shared(sorted.as_slice(), status)?;
+    let derived = self.derived_archived_ids()?;
+    let kept = scheduled.is_none() && status != Some(SessionStatus::Archived);
+    if kept && let Some(rows) = filtered_listing_memo_hit(self, status, starred, &sorted, &derived) {
+      return Ok(rows.as_ref().clone());
+    }
+    let mut rows = self.apply_derived_archive_shared(sorted.as_slice(), &derived, status)?;
     rows.retain(|meta| {
       starred.is_none_or(|value| meta.starred == value)
         && scheduled.is_none_or(|value| self.sequence_listing.owns_session(meta) == value)
@@ -301,6 +373,9 @@ impl Store {
     // archive for, so only that status sorts again.
     if status == Some(SessionStatus::Archived) {
       rows.sort_by_key(|row| std::cmp::Reverse(row.updated_at));
+    }
+    if kept {
+      remember_filtered_listing(self, status, starred, sorted, derived, Arc::new(rows.clone()));
     }
     Ok(rows)
   }
@@ -504,18 +579,19 @@ impl Store {
   fn apply_derived_archive_shared(
     &self,
     snapshot: &[Arc<SessionMetadata>],
+    derived_ids: &[String],
     status: Option<SessionStatus>,
   ) -> StoreResult<Vec<Arc<SessionMetadata>>> {
-    let derived: HashSet<String> = self.derived_archived_ids()?.iter().cloned().collect();
+    let derived: HashSet<&str> = derived_ids.iter().map(String::as_str).collect();
     if derived.is_empty() {
       return Ok(snapshot.iter().map(Arc::clone).collect());
     }
     if status == Some(SessionStatus::Active) {
-      return Ok(snapshot.iter().filter(|meta| !derived.contains(&meta.id)).map(Arc::clone).collect());
+      return Ok(snapshot.iter().filter(|meta| !derived.contains(meta.id.as_str())).map(Arc::clone).collect());
     }
     let mut rows = Vec::with_capacity(snapshot.len() + if status.is_none() { derived.len() } else { 0 });
     for meta in snapshot {
-      if derived.contains(&meta.id) {
+      if derived.contains(meta.id.as_str()) {
         let mut copy = meta.as_ref().clone();
         copy.status = SessionStatus::Archived;
         rows.push(Arc::new(copy));
@@ -525,7 +601,7 @@ impl Store {
     }
     if status == Some(SessionStatus::Archived) {
       for mut meta in self.load_session_metas(Some(SessionStatus::Active))? {
-        if derived.contains(&meta.id) {
+        if derived.contains(meta.id.as_str()) {
           meta.status = SessionStatus::Archived;
           rows.push(Arc::new(meta));
         }
@@ -795,6 +871,24 @@ mod tests {
     alpha.updated_at = UtcDateTime::parse("2025-02-03T00:00:00Z").unwrap();
     store.save_metadata_locked(&mut alpha, false).unwrap();
     assert_eq!(ids(&store), ["alpha", "beta"], "a store write refreshes the corpus the order memo keys on");
+  }
+
+  /// A kept starred listing answers the store's current rows: a write that stars a session reaches the next
+  /// starred listing rather than the rows of the previous filter.
+  #[tokio::test]
+  async fn a_starred_listing_sees_a_write_that_stars_a_session() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_metadata(&store, "alpha", SessionStatus::Active, "2025-02-01T00:00:00Z", None);
+    let starred_ids = |store: &Store| -> Vec<String> {
+      store.list_session_rows(None, Some(true), None).unwrap().iter().map(|row| row.id.clone()).collect()
+    };
+    assert!(starred_ids(&store).is_empty());
+
+    let mut alpha = store.get_session("alpha").await.unwrap().unwrap();
+    alpha.starred = true;
+    store.save_metadata_locked(&mut alpha, false).unwrap();
+    assert_eq!(starred_ids(&store), ["alpha"], "a store write refreshes the rows the starred filter names");
   }
 
   /// A memo hit serves its memoized rows read-only, so a listing clones no metadata. The corpus must hand out

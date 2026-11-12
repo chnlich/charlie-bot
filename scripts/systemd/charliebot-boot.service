@@ -34,7 +34,7 @@ ExecStart=/bin/bash -c 'set -euo pipefail; \
   logs="$${CHARLIEBOT_LOG_DIR:-/tmp/charliebot-logs}"; \
   config="$$(CHARLIEBOT_HOME="$$home" "$$releases/current/charliebot" switch-helper home-helper config "$$home")"; \
   port="$$(sed -n 1p <<<"$$config")"; \
-  if [ -n "$$(ss -Hltnp "sport = :$$port" | awk '/pid=/')" ]; then \
+  if [ -n "$$(ss -Hltnp "sport = :$$port" | awk \'/pid=/\')" ]; then \
     echo "boot start: port $$port has a listener; nothing started"; exit 0; \
   fi; \
   if tmux has-session -t "=$$session" 2>/dev/null; then \
@@ -42,7 +42,7 @@ ExecStart=/bin/bash -c 'set -euo pipefail; \
   fi; \
   "$$clone/scripts/start-server.sh" --preflight; \
   CHARLIEBOT_HOME="$$home" CHARLIEBOT_REPO_ROOT="$$clone" "$$releases/current/charliebot-server" --check-config; \
-  pane="$$(tmux new-session -d -P -F '#{pane_id}' -s "$$session" -c "$$clone")"; \
+  pane="$$(tmux new-session -d -P -F \'#{pane_id}\' -s "$$session" -c "$$clone")"; \
   launch="cd $$clone && env CHARLIEBOT_HOME=$$home CHARLIEBOT_RELEASES_DIR=$$releases CHARLIEBOT_LOG_DIR=$$logs"; \
   launch="$$launch ./scripts/start-server.sh $${CHARLIEBOT_BOOT_LAUNCH_ARGS:-}"; \
   tmux send-keys -t "$$pane" C-u "$$launch" Enter; \

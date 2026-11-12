@@ -144,6 +144,125 @@ fn the_rewritten_shell_entry_points_parse() {
   }
 }
 
+/// Parse an `ExecStart=` directive from a systemd unit using systemd command-line quoting rules.
+fn systemd_exec_start_args(unit_text: &str) -> Vec<String> {
+  let mut in_exec = false;
+  let mut raw = String::new();
+  for line in unit_text.lines() {
+    if !in_exec {
+      if let Some(rest) = line.strip_prefix("ExecStart=") {
+        in_exec = true;
+        let trimmed = rest.strip_suffix('\\').unwrap_or(rest);
+        raw.push_str(trimmed);
+        if !rest.ends_with('\\') {
+          break;
+        }
+      }
+    } else {
+      let trimmed = line.strip_suffix('\\').unwrap_or(line);
+      raw.push(' ');
+      raw.push_str(trimmed.trim_start());
+      if !line.ends_with('\\') {
+        break;
+      }
+    }
+  }
+
+  let mut words = Vec::new();
+  let chars: Vec<char> = raw.chars().collect();
+  let mut i = 0;
+  while i < chars.len() {
+    while i < chars.len() && (chars[i] == ' ' || chars[i] == '\t') {
+      i += 1;
+    }
+    if i >= chars.len() {
+      break;
+    }
+    let mut word = String::new();
+    let mut quote: Option<char> = None;
+    while i < chars.len() {
+      let c = chars[i];
+      match quote {
+        None => {
+          if c == ' ' || c == '\t' {
+            break;
+          } else if c == '\'' || c == '"' {
+            quote = Some(c);
+            i += 1;
+          } else if c == '\\' && i + 1 < chars.len() {
+            i += 1;
+            word.push(chars[i]);
+            i += 1;
+          } else if c == '$' && i + 1 < chars.len() && chars[i + 1] == '$' {
+            word.push('$');
+            i += 2;
+          } else {
+            word.push(c);
+            i += 1;
+          }
+        }
+        Some('\'') => {
+          if c == '\'' {
+            quote = None;
+            i += 1;
+          } else if c == '\\' && i + 1 < chars.len() && (chars[i + 1] == '\'' || chars[i + 1] == '\\') {
+            word.push(chars[i + 1]);
+            i += 2;
+          } else if c == '$' && i + 1 < chars.len() && chars[i + 1] == '$' {
+            word.push('$');
+            i += 2;
+          } else {
+            word.push(c);
+            i += 1;
+          }
+        }
+        Some('"') => {
+          if c == '"' {
+            quote = None;
+            i += 1;
+          } else if c == '\\' && i + 1 < chars.len() {
+            let next = chars[i + 1];
+            match next {
+              '"' | '\\' => word.push(next),
+              'n' => word.push('\n'),
+              't' => word.push('\t'),
+              's' => word.push(' '),
+              _ => word.push(next),
+            }
+            i += 2;
+          } else if c == '$' && i + 1 < chars.len() && chars[i + 1] == '$' {
+            word.push('$');
+            i += 2;
+          } else {
+            word.push(c);
+            i += 1;
+          }
+        }
+        _ => unreachable!(),
+      }
+    }
+    words.push(word);
+  }
+  words
+}
+
+#[test]
+#[ignore = "integration"]
+fn the_boot_service_exec_start_command_parses_through_systemd() {
+  let unit_path = harness::repo_root().join("scripts/systemd/charliebot-boot.service");
+  let unit_text = fs::read_to_string(&unit_path).expect("the boot service unit");
+  let args = systemd_exec_start_args(&unit_text);
+  assert_eq!(args.first().map(String::as_str), Some("/bin/bash"));
+  assert_eq!(args.get(1).map(String::as_str), Some("-c"));
+  let script = args.get(2).expect("the script argument to bash -c");
+
+  let sandbox = Sandbox::new();
+  let mut command = harness::command("bash", &sandbox.env());
+  command.args(["-n", "-c", script]);
+  let run = harness::run(&mut command);
+  assert_eq!(run.code, 0, "boot start command failed to parse: {}", run.describe());
+}
+
 #[test]
 #[ignore = "integration"]
 fn a_script_without_a_current_release_exits_1_and_names_the_path() {

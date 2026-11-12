@@ -170,7 +170,7 @@ async fn read_succeeds_when_a_message_lands_after_the_full_read() {
 }
 
 /// The summon step marked the mention read, so the window would start at the later unread message and hide the
-/// question; the readback starts at the pending summon's mention instead and flags it `summon: true`.
+/// question. The readback starts at the pending summon's mention instead and flags it `summon: true`.
 #[tokio::test]
 async fn read_flags_the_pending_summon_and_starts_the_window_at_it() {
   let home = Home::new_without_thread_runtime(true).await;
@@ -262,7 +262,7 @@ async fn read_does_not_flag_a_summon_a_resumed_turn_received() {
   assert_eq!(fields(&result, "summon"), [json!(false)]);
 }
 
-/// A summon the boot backfill marked lost never gets a master_done, so the marker alone must retire it: no flag, and
+/// A summon the boot backfill marked lost never gets a master_done, so the marker alone must retire it. No flag, and
 /// the window start stays with the unread instead of dragging back to the dead mention on every later read.
 #[tokio::test]
 async fn read_does_not_flag_a_summon_a_backfill_marker_names() {

@@ -216,8 +216,8 @@ impl DiscordClient {
     Self { http, base_url, token: bot_token }
   }
 
-  /// One Discord REST call: sent with the bot headers, retried at most `MAX_429_RETRIES` times after a 429 wait, and
-  /// answered with the decoded JSON body (None when a 2xx answer has none). Any other non-2xx answer fails with a
+  /// One Discord REST call, sent with the bot headers. It retries at most `MAX_429_RETRIES` times after a 429 wait,
+  /// and answers with the decoded JSON body (None when a 2xx answer has none). Any other non-2xx answer fails with a
   /// `DiscordAPIError`.
   async fn request(
     &self,

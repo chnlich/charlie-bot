@@ -36,11 +36,12 @@ use crate::{listing, worker_transcript};
 
 const BOOTSTRAP_MESSAGE_LIMIT: usize = 40;
 /// The wire budget of the bootstrap's first screen. The payload trims its message tail until its
-/// gzip fits the budget, so a switch's own transfer sets its time on a slow link; the messages the
+/// gzip fits the budget, so a switch's own transfer sets its time on a slow link. The messages the
 /// budget drops reach the page through the scroll-up paging the tail's cursor already feeds.
 const FIRST_SCREEN_WIRE_BUDGET_BYTES: usize = 10 * 1024;
 /// The response header carrying the wire bytes the payload would take without the trim: the size a
-/// realistic switch target's content has to reach, and what the trim saved on this answer.
+/// realistic switch target's content has to reach. The header also states what the trim saved on
+/// this answer.
 pub const BOOTSTRAP_UNTRIMMED_BYTES_HEADER: &str = "x-bootstrap-untrimmed-bytes";
 const FILE_GZIP_MEMO_LIMIT: usize = 2;
 /// The most lines one events window may ask for.
@@ -84,8 +85,8 @@ pub struct BootstrapPayload {
 ///
 /// The payload renders the session's message tail trimmed to [`FIRST_SCREEN_WIRE_BUDGET_BYTES`] on
 /// the wire, so the switch's own transfer sets its time on a slow link. The trim drops the tail's
-/// oldest whole turns and moves the paging cursor onto the first kept one, so the dropped history
-/// still reaches the page through the scroll-up paging and the newest turn — its user message
+/// oldest whole turns and moves the paging cursor onto the first kept one. The dropped history
+/// still reaches the page through scroll-up paging, and the newest turn — its user message
 /// included — always renders on the first screen.
 pub fn build_bootstrap_payload(
   store: &Store,
@@ -96,7 +97,7 @@ pub fn build_bootstrap_payload(
   let response_meta = response_metadata(store, meta)?;
   let mut worker_summary = None;
   // The tail the payload renders, oldest first, with the ordinal of its first slot in the space
-  // the session's older pages read: a message ordinal in the projection branches, an event index
+  // the session's older pages read. A message ordinal in the projection branches, an event index
   // in the archived branch, whose events fold to messages one to many.
   enum Tail {
     Slots { messages: Vec<Value>, start: usize, projection: Arc<MessageProjection> },
@@ -126,7 +127,7 @@ pub fn build_bootstrap_payload(
     (Tail::Events { events, start: oldest }, pending_draft, archive_offset + total_count)
   };
 
-  // The payload's fields that no trim step changes, built once; each step clones them and inserts
+  // The payload's fields that no trim step changes, built once. Each step clones them and inserts
   // the tail it keeps, so a trim of the largest tail costs its turns' serializations alone.
   let mut base = Map::new();
   base.insert("session".to_string(), listing::metadata_value(store, &response_meta)?);
@@ -153,10 +154,10 @@ pub fn build_bootstrap_payload(
     payload.insert("has_more".to_string(), Value::Bool(start > 0));
     Ok(Value::Object(payload))
   };
-  // The next turn start a trim step may drop to, in the tail's own indexes (the `drop` a `build` step takes), so a
-  // step keeps every kept turn whole and never cuts the newest turn: the projection branches read the projection's
-  // separator ordinals, which are history ordinals, and the archived branch falls back to the events behind the
-  // fold's turn separators (master_done, run_end).
+  // The next turn start a trim step may drop to, in the tail's own indexes (the `drop` a `build` step takes).
+  // A step therefore keeps every kept turn whole and never cuts the newest turn. The projection branches read
+  // the projection's separator ordinals, which are history ordinals; the archived branch falls back to the
+  // events behind the fold's turn separators (master_done, run_end).
   let next_drop = |drop: usize| -> Option<usize> {
     match &tail {
       Tail::Slots { start, projection, .. } => {
@@ -183,8 +184,8 @@ pub fn build_bootstrap_payload(
 /// bytes the untrimmed payload takes.
 ///
 /// The trim drops one whole turn per step and stops at the turn boundary when the newest turn
-/// alone exceeds the budget: it is the first screen, and the served size then exceeds the budget
-/// with the untrimmed size naming it in the response header. Each step serializes and gzips one
+/// alone exceeds the budget. That turn is the first screen, and the served size then exceeds the
+/// budget, with the untrimmed size naming it in the response header. Each step serializes and gzips one
 /// payload, well under a millisecond of a level-one gzip at these sizes, and the step count is the
 /// number of dropped turns.
 fn fit_first_screen_payload(
@@ -263,7 +264,7 @@ type BodyMemoEntry = (PageBootstrapKey, Bytes, Option<Bytes>, usize);
 /// The body carries the session's message tail: the largest session's is about a hundred megabytes, and building and
 /// serializing it takes about two hundred milliseconds. A repeat request whose payload inputs still hold their value
 /// serves the bytes already built. The key is the page bootstrap's, so a page and this route memoize the same payload
-/// under the same inputs; one entry holds one session, as the page's memo does.
+/// under the same inputs. One entry holds one session, as the page's memo does.
 #[derive(Default)]
 struct BootstrapBodyMemo {
   entry: Mutex<Option<BodyMemoEntry>>,
@@ -733,11 +734,11 @@ async fn events_jsonl(
 }
 
 /// The last `tail` lines of the events file that end at or before byte `before` (the file end when `before` is
-/// `None`), and the byte offset where the window starts.
+/// `None`). The tuple also names the byte offset where the window starts.
 ///
 /// A `before` that lands inside a line snaps down to the previous line boundary, so every returned byte belongs to
-/// whole lines. The scan reads backwards from the end of the window and stops once `tail` line breaks lie behind it,
-/// so a window of a few hundred lines costs a few reads instead of a read of the whole file.
+/// whole lines. The scan reads backwards from the end of the window and stops once `tail` line breaks lie behind it.
+/// A window of a few hundred lines therefore costs a few reads instead of a read of the whole file.
 fn events_window(path: &Path, size: u64, tail: usize, before: Option<u64>) -> StoreResult<(Bytes, u64)> {
   let mut file = fs::File::open(path).map_err(|error| path_error(path, error))?;
   let mut end = before.map_or(size, |offset| offset.min(size));
@@ -1277,7 +1278,7 @@ backends:
     assert_eq!(backend["switchable_backends"], json!(["synthetic-a", "auto"]));
   }
 
-  /// A session whose active backend is a hidden entry still shows it: the hidden active stays in the
+  /// A session whose active backend is a hidden entry still shows it. The hidden active stays in the
   /// list as the current value, while the other hidden entries stay out.
   #[tokio::test]
   async fn a_session_on_a_hidden_option_still_shows_it_as_its_current_value() {
@@ -1441,8 +1442,8 @@ backends:
     axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("bootstrap body").to_vec()
   }
 
-  /// The bootstrap's body memo: a repeat serves the body it built until an event moves the projection, and the first
-  /// gzip answer deflates that body once while later ones reuse the stored gzip.
+  /// The bootstrap's body memo: a repeat serves the body it built until an event moves the projection. The first
+  /// gzip answer deflates that body once, while later ones reuse the stored gzip.
   #[tokio::test]
   async fn a_repeat_bootstrap_serves_its_body_until_an_event_moves_the_projection() {
     let (_home, features) = feature_context();
@@ -1520,8 +1521,8 @@ backends:
     assert_ne!(after.text.as_str(), first.text.as_str(), "a new event rebuilds the text");
   }
 
-  /// Deterministic incompressible-ish text: a fixed LCG over a 62-character alphabet, so the gzip
-  /// of one slot is a real share of its raw size and the fixture's wire tracks its raw bytes.
+  /// Deterministic incompressible-ish text: a fixed LCG over a 62-character alphabet. The gzip of one
+  /// slot is then a real share of its raw size, so the fixture's wire tracks its raw bytes.
   fn fixture_text(seed: u64, length: usize) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -1580,9 +1581,9 @@ backends:
     assert!(untrimmed > FIRST_SCREEN_WIRE_BUDGET_BYTES);
   }
 
-  /// A tail over the budget trims through the route's payload: whole turns only, so the newest
-  /// turn's user message stays on the first screen and the paging cursor moves onto the first kept
-  /// turn, where the scroll-up paging picks the dropped history up.
+  /// A tail over the budget trims through the route's payload, whole turns only. The newest turn's
+  /// user message stays on the first screen, and the paging cursor moves onto the first kept turn,
+  /// where scroll-up paging picks the dropped history up.
   #[tokio::test]
   async fn a_bootstrap_over_the_first_screen_budget_trims_whole_turns_and_keeps_the_newest_marker() {
     let (_home, features) = feature_context();
@@ -1640,9 +1641,9 @@ backends:
     store.append_chat_event(session_id, json!({"type": "master_done"})).await.unwrap();
   }
 
-  /// A tail that starts past the history's first slot trims in its own indexes: the kept slots are the tail's last
+  /// A tail that starts past the history's first slot trims in its own indexes. The kept slots are the tail's last
   /// whole turns, and the paging cursor is the absolute ordinal of the first kept slot. The turns take 3, 3, 2, 2
-  /// slots in turn, and the tail starts at slot 6, which is 6 modulo the 10-slot period: a trim that walked the
+  /// slots in turn, and the tail starts at slot 6, which is 6 modulo the 10-slot period. A trim that walked the
   /// history's turn starts as the tail's own indexes would then land between turns at every step.
   #[tokio::test]
   async fn a_first_screen_trim_past_the_history_start_keeps_whole_turns_at_absolute_ordinals() {

@@ -167,11 +167,11 @@ fn validate_test_session_fields(values: &mut Map<String, Value>) -> Option<Strin
 /// The process-wide gate over the sidebar state that this crate's tests share.
 ///
 /// The sidebar snapshots, their generation, the poll counters and the two corpus memos of `listing.rs` live for the
-/// whole process, and every metadata write and sidebar probe any test makes moves them. A test that compares two
-/// reads against one corpus they built only holds while no other test of this binary runs beside it, so every
-/// fixture whose tests can move that state holds one gate permit for as long as its feature context lives: the
-/// store-backed tests of the crate run one at a time. A new fixture whose tests write sessions or read the sidebar
-/// must hold the gate too, or its test shares its read window with the movers again.
+/// whole process. Every metadata write and sidebar probe any test makes moves them. A test that compares two
+/// reads against one corpus they built only holds while no other test of this binary runs beside it. Each fixture
+/// whose tests can move that state therefore holds one gate permit for as long as its feature context lives. The
+/// store-backed tests of the crate then run one at a time. A new fixture whose tests write sessions or read the
+/// sidebar must hold the gate too, or its test shares its read window with the movers again.
 static SIDEBAR_GATE: LazyLock<SidebarGate> = LazyLock::new(SidebarGate::default);
 
 /// The gate itself: one holder at a time, re-entered by a thread that builds a second fixture while it holds one.
@@ -221,7 +221,7 @@ pub(crate) fn hold_sidebar_gate() -> SidebarGatePermit {
 
 /// A test home that holds one sidebar gate permit for as long as the test keeps it.
 ///
-/// The permit rides with the home and not with the feature context because the context can leak: the dispatcher
+/// The permit rides with the home and not with the feature context because the context can leak. The dispatcher
 /// hooks a test installs hold it through the startup state, which never lets it go.
 pub(crate) struct GatedHome {
   home: tempfile::TempDir,

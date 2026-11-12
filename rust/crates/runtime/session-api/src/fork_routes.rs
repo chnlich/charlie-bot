@@ -177,7 +177,8 @@ async fn elone_session(
 }
 
 /// The successor as its spawn returned it. The answer is the in-memory model, which holds every session slot
-/// field at its default and has no live-run fields, so the response is the spawn's metadata with those defaults.
+/// field at its default and has no live-run fields. The response is therefore the spawn's metadata with
+/// those defaults.
 fn spawn_response(features: &FeatureContext, meta: &SessionMetadata) -> Response {
   let value = features.store.session_metadata_value(meta);
   responses::json(StatusCode::OK, &value)
@@ -401,7 +402,7 @@ mod tests {
   }
 
   /// Acceptance ①: `fork` with a pool id keeps the pool id on the successor and launches its bootstrap run on the
-  /// member the pool selects; the run records the member.
+  /// member the pool selects. The run records the member.
   #[tokio::test]
   #[ignore = "integration"]
   async fn fork_naming_a_pool_keeps_the_pool_and_launches_on_its_member() -> anyhow::Result<()> {

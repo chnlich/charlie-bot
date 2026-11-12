@@ -1,9 +1,9 @@
 //! Row deltas for the sidebar's status poll.
 //!
-//! A status poll answers the rows whose state changed since the answer a page already holds, so a poll that follows a
-//! task-tree change carries one row instead of every row. The page passes back the `token` of its last answer; the
-//! token names a sequence of published states and this process's epoch. A token from another epoch (a server restart)
-//! or none at all asks for the whole set.
+//! A status poll answers the rows whose state changed since the answer a page already holds. A poll that
+//! follows a task-tree change therefore carries one row instead of every row. The page passes back the `token`
+//! of its last answer; the token names a sequence of published states and this process's epoch. A token from
+//! another epoch (a server restart) or none at all asks for the whole set.
 //!
 //! A row's version is the sequence at which its payload last changed, or at which it entered a filter's set. A row
 //! that leaves a filter's set gets a version too, under that filter's name, so a page that held it drops it. The first
@@ -55,8 +55,8 @@ impl Snapshot {
   /// Publish this request's row payloads, record the filter's set, and answer the rows that moved after `since`.
   ///
   /// `members` is the filter's own sorted row set, and `ids` the request's, which adds the sessions the page names
-  /// beyond the filter. Membership follows `members` alone: two pages on the same filter name different extra sessions
-  /// (each one's open chat), and a set that took the extras in would make those rows enter and leave on every
+  /// beyond the filter. Membership follows `members` alone. Two pages on the same filter name different extra sessions
+  /// (each one's open chat). A set that took the extras in would make those rows enter and leave on every
   /// alternating poll. `payloads` holds one payload per id in `ids`, in the same order. A `since` that names no state
   /// this process published, or one older than the retained horizon, asks for every row.
   pub fn answer(
@@ -127,7 +127,7 @@ impl Snapshot {
   }
 }
 
-/// Answer one status poll against the shared snapshot: `filter` names the set whose membership is tracked, `members`
+/// Answer one status poll against the shared snapshot. `filter` names the set whose membership is tracked, `members`
 /// that set, `ids` the request's sorted row set, and `payloads` one serialized row state per id.
 pub fn record(
   filter: Option<&str>,

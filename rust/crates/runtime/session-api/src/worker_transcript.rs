@@ -671,7 +671,7 @@ mod tests {
   }
 
   /// The transcript a worker session projects from its run logs is the same before and after the compaction stores
-  /// those logs compressed: the reader resolves the plain or the `.zst` file and yields the same content.
+  /// those logs compressed. The reader resolves the plain or the `.zst` file and yields the same content.
   #[tokio::test]
   async fn a_compressed_run_log_projects_the_same_transcript() {
     let (_home, features, session_id) = worker_context(&format!("compressed-{}", uuid::Uuid::new_v4())).await;
@@ -794,9 +794,9 @@ mod tests {
     assert_eq!(bootstrap.value["worker_summary"], summary.clone());
   }
 
-  /// The rebuild parses each run log once for its whole byte count: the counter moves by the log
-  /// sizes on the first build, by nothing on an unchanged memo hit, and by the grown log only after
-  /// an append moves that log's signature.
+  /// The rebuild parses each run log once for its whole byte count. The counter moves by the log sizes
+  /// on the first build, and by nothing on an unchanged memo hit. It moves by the grown log only after
+  /// an append changes that log's signature.
   #[tokio::test]
   async fn a_transcript_rebuild_parses_each_run_log_once_for_its_bytes() {
     let (_home, features, session_id) = worker_context(&format!("run-bytes-{}", uuid::Uuid::new_v4())).await;
@@ -997,7 +997,7 @@ mod tests {
     let entry = load_worker_transcript(store, &session_id).unwrap();
     assert_eq!(delivery_timestamp(&entry), "2026-10-17T09:00:14Z");
 
-    // A fresh build of the same run files, bypassing the memo: the memo is process-wide, and clearing it would
+    // A fresh build of the same run files, bypassing the memo. The memo is process-wide, and clearing it would
     // drop the entries of the tests that run beside this one.
     let signature = worker_signature(store, &session_id).unwrap();
     let rebuilt = build_worker_transcript(store, &session_id, signature).unwrap();

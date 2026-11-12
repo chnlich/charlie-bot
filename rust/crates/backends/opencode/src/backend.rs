@@ -314,7 +314,7 @@ impl ServeTurn for OpenCodeTurn {
     let parent = relay::parent_identity()?;
     let parent_start = parent.pid_start.context("OpenCode relay parent pid has no start time")?;
     let mut env = Env::from([
-      ("CHARLIEBOT_OPENCODE_RELAY_DIRECTORY".to_string(), run_directory.display().to_string()),
+      (protocol::RELAY_DIRECTORY_VAR.to_string(), run_directory.display().to_string()),
       (
         protocol::SERVER_DIRECTORY_VAR.to_string(),
         self
@@ -326,8 +326,8 @@ impl ServeTurn for OpenCodeTurn {
           .display()
           .to_string(),
       ),
-      ("CHARLIEBOT_OPENCODE_PARENT_PID".to_string(), parent.pid.to_string()),
-      ("CHARLIEBOT_OPENCODE_PARENT_START".to_string(), parent_start.clone()),
+      (protocol::PARENT_PID_VAR.to_string(), parent.pid.to_string()),
+      (protocol::PARENT_START_VAR.to_string(), parent_start.clone()),
     ]);
     #[cfg(test)]
     let args = vec!["--exact".into(), "test_backend::relay_subprocess_entry".into(), "--ignored".into()];

@@ -19,6 +19,7 @@ use tokio::task::JoinHandle;
 
 use super::backend::{OpenCodeFactory, extract_model_limit, image_file_attachments};
 use super::opencode_limits;
+use super::protocol;
 use super::server;
 use super::server::{OpenCodeHost, OpenCodeServer, OpenCodeServerPool, ServerTimeouts};
 use super::{OpenCodeBackend, OpenCodeOption, OpenCodeTranslator};
@@ -74,9 +75,8 @@ fn adoption_option_with_context_limit(context_limit: u64) -> BackendOption {
 #[test]
 #[ignore = "launched as the OpenCode run identity process by the relay tests"]
 fn relay_subprocess_entry() {
-  let args =
-    ["CHARLIEBOT_OPENCODE_RELAY_DIRECTORY", "CHARLIEBOT_OPENCODE_PARENT_PID", "CHARLIEBOT_OPENCODE_PARENT_START"]
-      .map(|key| std::env::var_os(key).expect("relay process environment contains its identity"));
+  let args = [protocol::RELAY_DIRECTORY_VAR, protocol::PARENT_PID_VAR, protocol::PARENT_START_VAR]
+    .map(|key| std::env::var_os(key).expect("relay process environment contains its identity"));
   super::relay::run_args(&args).expect("OpenCode relay subprocess completed");
 }
 
@@ -1199,10 +1199,10 @@ fn a_restart_before_the_turn_record_exists_fails_with_a_specific_error_event() {
   let executable = std::env::current_exe().unwrap();
   let status = Command::new(executable)
     .args(["--exact", "test_backend::relay_subprocess_entry", "--ignored"])
-    .env("CHARLIEBOT_OPENCODE_RELAY_DIRECTORY", &run_directory)
-    .env("CHARLIEBOT_OPENCODE_PARENT_PID", "2147483647")
-    .env("CHARLIEBOT_OPENCODE_PARENT_START", "no-such-process")
-    .env("CHARLIEBOT_OPENCODE_SERVER_DIRECTORY", harness.host.profile_home.join("opencode/servers"))
+    .env(protocol::RELAY_DIRECTORY_VAR, &run_directory)
+    .env(protocol::PARENT_PID_VAR, "2147483647")
+    .env(protocol::PARENT_START_VAR, "no-such-process")
+    .env(protocol::SERVER_DIRECTORY_VAR, harness.host.profile_home.join("opencode/servers"))
     .status()
     .unwrap();
   assert!(status.success());

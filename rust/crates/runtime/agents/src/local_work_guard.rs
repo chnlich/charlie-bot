@@ -25,7 +25,7 @@ struct LocalWorkGuard {
   dir: PathBuf,
 }
 
-/// Reads the guard switch of `server`, for the checkout at `repo_root`. The server calls this once, before any agent
+/// The guard switch of `server` read for the checkout at `repo_root`. The server calls this once, before any agent
 /// run; an error stops the start.
 pub fn configure(repo_root: &Path, server: &ServerConfig) -> Result<(), String> {
   let guard = LocalWorkGuard::from_server(repo_root, server)?;
@@ -74,7 +74,7 @@ impl LocalWorkGuard {
   }
 }
 
-/// Puts `entry` before the variable's current value, joined with `separator`.
+/// The new value of `name`: `entry` before the variable's current value, joined with `separator`.
 fn prepend(env: &mut Env, name: &str, separator: &str, entry: &str) {
   let value = match env.get(name) {
     Some(current) if !current.is_empty() => format!("{entry}{separator}{current}"),

@@ -11,7 +11,7 @@ pub struct ProcessIdentity {
   pub pid_start: Option<String>,
 }
 
-/// Read a spawned process's start tick immediately before notifying its owner.
+/// The start tick of a spawned process, read immediately before its owner is notified.
 pub fn pin_process_identity(pid: u32) -> ProcessIdentity {
   let pid_start = charliebot_core::proc_identity::read_pid_stat(pid).map(|stat| stat.pid_start);
   ProcessIdentity { pid, pid_start }

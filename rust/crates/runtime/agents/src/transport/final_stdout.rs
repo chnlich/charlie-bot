@@ -40,7 +40,7 @@ struct CaptureContext {
   command: Vec<OsString>,
 }
 
-/// Run the agent synchronously before the server runtime or environment initialization starts.
+/// A synchronous agent run that finishes before the server runtime or environment initialization starts.
 pub fn supervise(args: &[OsString]) -> anyhow::Result<()> {
   let [directory] = args else {
     bail!("final-stdout supervisor needs a run directory");
@@ -104,7 +104,8 @@ pub fn prepare(
   Ok(wrapped)
 }
 
-/// Convert completed capture files to a durable event log. The cached outcome preserves guard and exit semantics.
+/// The durable event log materialized from the completed capture files. The cached outcome preserves guard and exit
+/// semantics.
 pub fn materialize(
   backend: &mut dyn AgentBackend,
   directory: &Path,
@@ -138,7 +139,7 @@ pub fn materialize(
   Ok(outcome)
 }
 
-/// Wait for a captured process and prepare the raw log before recovery follows its persisted cursor.
+/// The wait for a captured process and the preparation of the raw log, before recovery follows its persisted cursor.
 pub async fn recover(
   registry: std::sync::Arc<Registry>,
   option: Option<&BackendOption>,

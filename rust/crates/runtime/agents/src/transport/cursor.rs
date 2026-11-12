@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 pub const CURSOR_FIELD_BYTES: usize = 20;
 
-/// Read a consumed byte offset; a missing or malformed file requests replay from zero.
+/// The consumed byte offset; a missing or malformed file reads as zero, which requests replay.
 pub fn read_raw_cursor(path: &Path) -> u64 {
   fs::read_to_string(path).ok().and_then(|contents| contents.trim().parse().ok()).unwrap_or(0)
 }
@@ -20,12 +20,12 @@ pub struct RawCursorWriter {
 }
 
 impl RawCursorWriter {
-  /// Create a held-descriptor writer for `path`.
+  /// A writer for `path` whose descriptor opens at the first write and stays held.
   pub fn new(path: impl Into<PathBuf>) -> Self {
     Self { path: path.into(), file: None }
   }
 
-  /// Write a zero-padded decimal at byte offset zero without truncating the file.
+  /// The write of a zero-padded decimal at byte offset zero, without truncating the file.
   pub fn write(&mut self, offset: u64) -> io::Result<()> {
     if self.file.is_none() {
       if let Some(parent) = self.path.parent() {
@@ -41,7 +41,7 @@ impl RawCursorWriter {
     Ok(())
   }
 
-  /// Close the held cursor descriptor.
+  /// The close of the held cursor descriptor.
   pub fn close(&mut self) -> io::Result<()> {
     let Some(file) = self.file.take() else {
       return Ok(());

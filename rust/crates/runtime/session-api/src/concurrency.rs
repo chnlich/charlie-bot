@@ -11,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::body::Body;
@@ -670,6 +670,15 @@ static HISTORY_MEMO: LazyLock<Mutex<Option<HistoryMemo>>> = LazyLock::new(|| Mut
 /// moving, so a tag that named the generation would let two different bodies share it.
 static HISTORY_BUILDS: AtomicU64 = AtomicU64::new(0);
 
+/// This process's identity in a history tag: its id and the instant the first tag was built.
+///
+/// A restarted server starts its build numbers again, so the tag names this value too. Without it, a client holding
+/// an older process's tag would read the first body of the new process as unchanged.
+static HISTORY_PROCESS: LazyLock<String> = LazyLock::new(|| {
+  let start = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_nanos());
+  format!("{:x}-{start:x}", std::process::id())
+});
+
 /// The history response, answered from the bucket's memo when its inputs still hold.
 ///
 /// The body's version is the build number of the memo entry that holds it. The gzip form is built on the first
@@ -710,7 +719,8 @@ fn history_answer(
   if !holds {
     let body = Bytes::from(series_of(records.as_slice(), range, now).into_body());
     let build = HISTORY_BUILDS.fetch_add(1, Ordering::Relaxed) + 1;
-    *memo = Some(HistoryMemo { range, records, to, tag: format!("\"{range}-{build:x}\""), body, gzip: None });
+    let tag = format!("\"{range}-{}-{build:x}\"", HISTORY_PROCESS.as_str());
+    *memo = Some(HistoryMemo { range, records, to, tag, body, gzip: None });
   }
   let entry = memo.as_mut().expect("the memo holds the entry this request built or found");
   if gzip && entry.gzip.is_none() && entry.body.len() >= MINIMUM_DEFLATE_BYTES {

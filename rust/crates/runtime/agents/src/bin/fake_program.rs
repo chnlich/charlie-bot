@@ -25,13 +25,13 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Step {
-  /// Writes the arguments after argv[0] to the file, one per line.
+  /// The arguments after argv[0], written to the file one per line.
   RecordArgv(PathBuf),
-  /// Writes the child environment to the file, one `NAME=VALUE` per line.
+  /// The child environment, written to the file one `NAME=VALUE` per line.
   RecordEnv(PathBuf),
-  /// Writes all of stdin to the file.
+  /// All of stdin, written to the file.
   RecordStdin(PathBuf),
-  /// Appends the text to the file, creating the file when absent.
+  /// The text, appended to the file, created when absent.
   Append {
     path: PathBuf,
     text: String,

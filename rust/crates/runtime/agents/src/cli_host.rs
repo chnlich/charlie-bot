@@ -36,7 +36,7 @@ pub struct LazyHost {
 }
 
 impl LazyHost {
-  /// Create a lazy host value from the CLI composition root's factory.
+  /// A lazy host value over the CLI composition root's factory.
   pub fn new(factory: CliHostFactory) -> LazyHost {
     LazyHost { factory, host: OnceCell::new() }
   }

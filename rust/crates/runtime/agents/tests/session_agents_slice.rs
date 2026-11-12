@@ -45,7 +45,7 @@ fn reset_session_cgroup_stand_in(base: &Path) -> PathBuf {
   directory
 }
 
-/// Spawn one child of the child session and return its pid and the `oom_score_adj` it runs with.
+/// The pid of one spawned child of the child session, with the `oom_score_adj` it runs with.
 async fn spawn_child_session(config: &SessionCgroupConfig) -> (u32, String) {
   let spec =
     SpawnSpec::new("/bin/sleep", vec!["5".into()], None, HashMap::new(), Some(CHILD_ID.to_string()), config.clone());

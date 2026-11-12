@@ -4,7 +4,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-/// Move nonempty raw output and its stderr peer to the first free numbered suffix.
+/// The nonempty raw output and its stderr peer, moved to the first free numbered suffix.
 pub fn rotate_stale_transport(
   log_dir: &Path,
   raw_path: &Path,

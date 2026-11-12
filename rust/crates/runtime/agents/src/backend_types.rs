@@ -13,7 +13,7 @@ pub struct BuiltBackend {
   pub registry: std::sync::Arc<Registry>,
 }
 
-/// Build the registered backend for option and retain its launch arguments for the runner.
+/// The built backend for `option`, with the launch arguments the runner reuses.
 pub fn build_backend(
   registry: std::sync::Arc<Registry>,
   option: &BackendOption,
@@ -24,7 +24,7 @@ pub fn build_backend(
   Ok(BuiltBackend { backend, backend_type: option.backend_type.clone(), launch, registry })
 }
 
-/// Build the registered translate fallback without a backend option.
+/// The built translate fallback, which needs no backend option.
 pub fn build_translate_fallback(
   registry: std::sync::Arc<Registry>,
   cfg: &CharlieBotConfig,

@@ -18,7 +18,7 @@ pub struct TypeLineFilter {
 }
 
 impl TypeLineFilter {
-  /// Keep the named event types while parsing every line the prefix cannot classify.
+  /// A filter for the named event types; every line the prefix cannot classify passes.
   pub fn new(types: impl IntoIterator<Item = impl Into<String>>) -> Self {
     Self { keep_types: types.into_iter().map(Into::into).collect() }
   }
@@ -47,12 +47,12 @@ impl TypeLineFilter {
   }
 }
 
-/// Parse raw NDJSON lines, skipping blank and malformed lines.
+/// The events parsed from raw NDJSON lines; blank and malformed lines are dropped.
 pub fn parse_raw_lines(raw_bytes: &[u8]) -> Vec<Value> {
   raw_bytes.split(|byte| *byte == b'\n').filter_map(spawn::parse_raw_line).collect()
 }
 
-/// Parse the raw-log prefix ending at a cursor byte offset.
+/// The events parsed from the raw-log prefix ending at a cursor byte offset.
 pub fn raw_events_before_cursor(raw_path: &Path, cursor: u64) -> anyhow::Result<Vec<Value>> {
   if cursor == 0 {
     return Ok(Vec::new());
@@ -68,7 +68,7 @@ pub fn raw_events_before_cursor(raw_path: &Path, cursor: u64) -> anyhow::Result<
   Ok(parse_raw_lines(&raw_bytes[..cursor]))
 }
 
-/// Apply a stateful raw-event translator to each accepted event in file order.
+/// One translation pass over each accepted event in file order, through a stateful translator.
 pub fn project_raw_events<T>(events: impl IntoIterator<Item = Value>, mut translate: T) -> anyhow::Result<Vec<Value>>
 where
   T: FnMut(Value) -> anyhow::Result<Vec<Value>>,
@@ -80,7 +80,7 @@ where
   Ok(projected)
 }
 
-/// Read, parse, and project the raw file; a line filter skips only provable type mismatches.
+/// The projected events of the raw file; a line filter skips only provable type mismatches.
 pub fn project_raw_file<T>(
   raw_path: &Path,
   mut translate: T,
@@ -99,7 +99,7 @@ where
   project_raw_events(events, &mut translate)
 }
 
-/// Return the raw log's final modification time in UTC.
+/// The raw log's final modification time in UTC.
 pub fn raw_completion_time(raw_path: &Path) -> Option<OffsetDateTime> {
   let completion_path = super::final_stdout::completion_path(raw_path.parent()?);
   let raw_path = if raw_path.file_name()? == charliebot_store::run_records::RAW_LOG_NAME {
@@ -111,7 +111,7 @@ pub fn raw_completion_time(raw_path: &Path) -> Option<OffsetDateTime> {
   Some(OffsetDateTime::from(modified))
 }
 
-/// Return zero for a successful last result and minus one when it is absent or failed.
+/// The exit code of the last result: zero when it succeeded, minus one when it is absent or failed.
 pub fn result_exit_code(events: &[Value]) -> i32 {
   let result = events.iter().rev().find(|event| event.get("type").and_then(Value::as_str) == Some("result"));
   let Some(result) = result else {
@@ -124,7 +124,7 @@ pub fn result_exit_code(events: &[Value]) -> i32 {
   if subtype_success && error_absent { 0 } else { -1 }
 }
 
-/// Scan a raw log that may be missing and return its events, last result, and exit code.
+/// The events, last result and exit code of a raw log that may be missing.
 pub fn scan_result_exit<T>(raw_path: &Path, translate: T) -> anyhow::Result<(Vec<Value>, Option<Value>, i32)>
 where
   T: FnMut(Value) -> anyhow::Result<Vec<Value>>,

@@ -13,7 +13,7 @@ use crate::backend_types::BuiltBackend;
 use crate::launch_loop::ChildEnvPolicy;
 use crate::runner::{AgentRunner, RunRequest};
 
-/// Run a built backend with `base_env` in a temporary working directory and collect its assistant text.
+/// The assistant text of one run of a built backend with `base_env` in a temporary working directory.
 pub async fn agent_one_shot_text(
   mut built: BuiltBackend,
   base_env: &charliebot_registry::backend::Env,

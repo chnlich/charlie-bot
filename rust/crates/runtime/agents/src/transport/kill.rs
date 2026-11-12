@@ -39,7 +39,7 @@ pub fn kill_process_group(pid: u32, sig: Signal) -> bool {
   }
 }
 
-/// Send SIGTERM and escalate only when the caller's liveness proof still holds after five seconds.
+/// A SIGTERM followed by escalation only when the caller's liveness proof still holds after five seconds.
 pub async fn kill_group_escalating<F>(pid: u32, mut is_alive: F)
 where
   F: FnMut() -> bool,
@@ -83,7 +83,7 @@ where
   result
 }
 
-/// Convert an exit status to an integer, with a negative signal number for a signal death.
+/// The integer form of an exit status, with a negative signal number for a signal death.
 pub fn exit_code(status: std::process::ExitStatus) -> i32 {
   use std::os::unix::process::ExitStatusExt;
 

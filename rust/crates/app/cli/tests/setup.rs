@@ -72,6 +72,7 @@ fn the_runner_calls_each_step_in_registration_order_with_the_dry_run_flag() {
   assert_eq!(home_statuses(&lines), ["exists", "would-create", "would-create", "would-create", "would-create"]);
   assert!(lines.contains(&"  cron memory-curator: would-create"), "{}", run.stdout);
   assert!(lines.contains(&"  cron storage-cool: would-create"), "{}", run.stdout);
+  assert!(lines.contains(&"  cron proactive-daily: would-create"), "{}", run.stdout);
   // No host cron file exists yet, so the effective task list is empty.
   assert!(lines.contains(&"  effective scheduled tasks:") && lines.contains(&"    (none)"), "{}", run.stdout);
 }
@@ -97,8 +98,10 @@ fn the_runner_calls_each_step_in_registration_order_and_writes_the_scratch_home_
   // The cron seed created one host file per default entry, and the same run lists them as effective tasks.
   assert!(home.join("config.d/cron.d/memory-curator.yaml").is_file());
   assert!(home.join("config.d/cron.d/storage-cool.yaml").is_file());
+  assert!(home.join("config.d/cron.d/proactive-daily.yaml").is_file());
   assert!(lines.contains(&"  cron memory-curator: created"), "{}", run.stdout);
   assert!(lines.contains(&"  cron storage-cool: created"), "{}", run.stdout);
+  assert!(lines.contains(&"  cron proactive-daily: created"), "{}", run.stdout);
   let effective =
     lines.iter().position(|line| *line == "  effective scheduled tasks:").expect("the effective task list");
   let curator = lines[effective..]
@@ -107,6 +110,7 @@ fn the_runner_calls_each_step_in_registration_order_and_writes_the_scratch_home_
     .expect("memory-curator is listed");
   assert!(curator.contains("| backend="), "{curator}");
   assert!(lines.iter().any(|line| line.starts_with("    - storage-cool | cron=30 4 * * * | tz=")));
+  assert!(lines.iter().any(|line| line.starts_with("    - proactive-daily | cron=0 7 * * * | tz=")));
 }
 
 /// A repo whose default cron entry points at a missing prompt file fails the run before anything is written, in the
@@ -148,6 +152,7 @@ fn the_seeded_host_files_match_the_recorded_bytes() {
   for (name, expected) in [
     ("memory-curator", include_str!("fixtures/setup_seed/memory-curator_golden.yaml")),
     ("storage-cool", include_str!("fixtures/setup_seed/storage-cool_golden.yaml")),
+    ("proactive-daily", include_str!("fixtures/setup_seed/proactive-daily_golden.yaml")),
   ] {
     let seeded = std::fs::read_to_string(home.join("config.d/cron.d").join(format!("{name}.yaml")))
       .unwrap_or_else(|error| panic!("read the seeded {name}: {error}"));

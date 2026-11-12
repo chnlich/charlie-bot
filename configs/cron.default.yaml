@@ -34,3 +34,7 @@ scheduled_tasks:
     timezone: local
     project: CharlieBot
     handler: cool_storage
+  - name: proactive-daily
+    cron: "0 7 * * *"
+    project: CharlieBot
+    prompt_file: prompts/cron/proactive_daily/prompt.md

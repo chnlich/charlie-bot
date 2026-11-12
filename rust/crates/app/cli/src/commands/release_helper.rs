@@ -1631,7 +1631,10 @@ mod tests {
 
   /// An assistant text row, as a session's chat events hold a model's text block.
   fn assistant_text_row(text: &str) -> Value {
-    json!({"type": event_types::ASSISTANT, "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}})
+    json!({
+      "type": event_types::ASSISTANT,
+      "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}
+    })
   }
 
   /// A posted web reply row, as the manager's chat events hold it.

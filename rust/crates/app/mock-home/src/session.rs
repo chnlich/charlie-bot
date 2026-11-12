@@ -96,7 +96,11 @@ fn next_event(rng: &mut Rng, text: &SyntheticText, timestamp: &str, budget: u64)
     let count = if budget > LONG_EVENT_BUDGET { rng.range(4, 40) } else { rng.range(1, 4) };
     let blocks: Vec<&str> = (0..count).map(|_| text.block(rng)).collect();
     let body = blocks.join("\n\n");
-    return json!({"type": event_types::ASSISTANT, "message": {"content": [{"type": "text", "text": body}]}, "timestamp": timestamp});
+    return json!({
+      "type": event_types::ASSISTANT,
+      "message": {"content": [{"type": "text", "text": body}]},
+      "timestamp": timestamp
+    });
   }
   if kind < 0.8 {
     let (tool_name, tool_input) = text::tool_call(rng);
@@ -112,7 +116,12 @@ fn next_event(rng: &mut Rng, text: &SyntheticText, timestamp: &str, budget: u64)
   let lines = if budget > LONG_EVENT_BUDGET { rng.range(1, 40) } else { rng.range(1, 4) };
   let tool_use_id = text::tool_id(rng);
   let content = text.tool_output(rng, lines);
-  let result = json!({"type": event_types::TOOL_RESULT, event_types::TOOL_USE_ID: tool_use_id, "content": content, "is_error": false});
+  let result = json!({
+    "type": event_types::TOOL_RESULT,
+    event_types::TOOL_USE_ID: tool_use_id,
+    "content": content,
+    "is_error": false
+  });
   json!({"type": event_types::USER, "message": {"content": [result]}, "timestamp": timestamp})
 }
 

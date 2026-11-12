@@ -24,8 +24,8 @@ use nix::fcntl::AtFlags;
 use nix::sys::stat::fstatat;
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde_json::{Map, Value, json};
+use time::OffsetDateTime;
 
-use crate::archive;
 use crate::wav;
 
 /// The run id the browser makes at the click: eight lowercase hex characters.
@@ -125,10 +125,21 @@ fn resolve_stem(voice_dir: &Path, run_id: &str) -> io::Result<PathBuf> {
   }
 }
 
+/// The timestamp prefix of a recording stem: UTC to the millisecond, then `Z`, in the format
+/// `datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H%M%S.%f")[:-3] + "Z"`.
+fn voice_stem_format() -> Vec<time::format_description::FormatItem<'static>> {
+  time::macros::format_description!("[year]-[month]-[day]T[hour][minute][second].[subsecond digits:3]Z").to_vec()
+}
+
+/// The current UTC stamp, the prefix a fresh recording stem carries.
+fn stamp_prefix() -> String {
+  OffsetDateTime::now_utc().format(&voice_stem_format()).expect("the stem format renders")
+}
+
 /// The stem of a run whose first file this call writes: the current UTC stamp and the run id, the existing stem
 /// format whose suffix is the run id.
 fn run_stem_now(run_id: &str) -> String {
-  archive::stamp_prefix() + &format!("_{run_id}")
+  stamp_prefix() + &format!("_{run_id}")
 }
 
 /// The write path for one run's stem, which runs `write` after resolving the stem. The run id is validated before
@@ -220,7 +231,7 @@ fn audio_part(kind: &str, backend: Option<&str>, devices: Option<&Value>) -> Val
 fn write_run_wav(stem: &Path, pcm_bytes: &[u8]) -> io::Result<()> {
   let wav = with_kind(stem, "wav");
   let partial = with_kind(stem, "wav.partial");
-  archive::write_wav(&partial, pcm_bytes)?;
+  wav::write(&partial, pcm_bytes)?;
   fs::rename(&partial, &wav)
 }
 
@@ -597,6 +608,20 @@ mod tests {
   }
 
   #[test]
+  fn the_stamp_prefix_matches_the_stem_shape() {
+    let stamp = stamp_prefix();
+    // `strftime("%Y-%m-%dT%H%M%S.%f")[:-3] + "Z"`: 4-digit year, dashes, `T`, six digits, millisecond fraction, `Z`.
+    assert_eq!(stamp.len(), 22, "the stamp is YYYY-MM-DDTHHMMSS.mmmZ: {stamp}");
+    let bytes = stamp.as_bytes();
+    for (index, expected) in [(4, b'-'), (7, b'-'), (10, b'T'), (17, b'.'), (21, b'Z')] {
+      assert_eq!(bytes[index], expected, "stamp {stamp}");
+    }
+    for (start, end) in [(0usize, 4), (5, 7), (8, 10), (11, 13), (13, 15), (15, 17), (18, 21)] {
+      assert!(bytes[start..end].iter().all(u8::is_ascii_digit), "stamp {stamp}");
+    }
+  }
+
+  #[test]
   fn run_ids_beyond_eight_lowercase_hex_are_invalid() {
     assert!(valid_run_id("0a1b2c3d"));
     assert!(valid_run_id("ffffffff"));
@@ -837,7 +862,7 @@ mod tests {
     for (session, stem) in [("session-a", old_stem), ("session-b", new_stem), ("session-a", older_stem)] {
       let voice = voice_dir(&config, session);
       fs::create_dir_all(&voice).expect("create the voice directory");
-      archive::write_wav(&voice.join(format!("{stem}.wav")), &[1, 2]).expect("write a synthetic wav");
+      wav::write(&voice.join(format!("{stem}.wav")), &[1, 2]).expect("write a synthetic wav");
     }
     let rows = list_recordings(&config, 2).expect("the list answers");
     assert_eq!(rows.len(), 2);
@@ -855,7 +880,7 @@ mod tests {
     let config = synthetic_config(home.path());
     let voice = voice_dir(&config, "earlier-session");
     fs::create_dir_all(&voice).expect("create the voice directory");
-    archive::write_wav(&voice.join("2026-11-01T100000.000Z_000000aa.wav"), &[1, 2]).expect("write a synthetic wav");
+    wav::write(&voice.join("2026-11-01T100000.000Z_000000aa.wav"), &[1, 2]).expect("write a synthetic wav");
     let id = run_id(8);
     store_upload_audio(&config, "new-session", &id, &[1, 2], Some("gemini"), None).expect("the upload stores");
 
@@ -899,7 +924,7 @@ mod tests {
     fs::write(sessions.join("session_aliases.json"), "{}").expect("write the store's alias map");
     let voice = voice_dir(&config, "synthetic-session");
     fs::create_dir_all(&voice).expect("create the voice directory");
-    archive::write_wav(&voice.join("2026-11-01T100000.000Z_000000aa.wav"), &[1, 2]).expect("write a synthetic wav");
+    wav::write(&voice.join("2026-11-01T100000.000Z_000000aa.wav"), &[1, 2]).expect("write a synthetic wav");
 
     let rows = list_recordings(&config, DEFAULT_LIST_LIMIT).expect("the store's root files are not sessions");
 
@@ -933,7 +958,7 @@ mod tests {
       let sample = if index % 2 == 0 { i16::MAX } else { i16::MIN };
       pcm.extend_from_slice(&sample.to_le_bytes());
     }
-    archive::write_wav(&voice.join("2026-11-01T100000.000Z_000000dd.wav"), &pcm).expect("write a synthetic wav");
+    wav::write(&voice.join("2026-11-01T100000.000Z_000000dd.wav"), &pcm).expect("write a synthetic wav");
     fs::write(voice.join("2026-11-01T100000.000Z_000000dd.txt"), "old words").expect("write a synthetic transcript");
     fs::write(voice.join("2026-11-01T100000.000Z_000000ee.txt"), "a lone transcript names no row")
       .expect("write an orphan transcript");
@@ -962,7 +987,7 @@ mod tests {
     let config = synthetic_config(home.path());
     let voice = voice_dir(&config, "synthetic-session");
     fs::create_dir_all(&voice).expect("create the voice directory");
-    archive::write_wav(&voice.join("2026-11-01T100000.000Z_000000ff.wav"), &[0_u8; 3200]).expect("write silence");
+    wav::write(&voice.join("2026-11-01T100000.000Z_000000ff.wav"), &[0_u8; 3200]).expect("write silence");
 
     let rows = list_recordings(&config, DEFAULT_LIST_LIMIT).expect("the list answers");
 
@@ -1072,7 +1097,7 @@ mod tests {
     pcm.extend(std::iter::repeat_n(0_i16.to_le_bytes(), 15_999).flatten());
     let directory = tempfile::tempdir().expect("make a scratch directory");
     let path = directory.path().join("synthetic.wav");
-    archive::write_wav(&path, &pcm).expect("write a synthetic wav");
+    wav::write(&path, &pcm).expect("write a synthetic wav");
     let (duration, silence, peak, rms) =
       wav_levels(&fs::read(path).expect("read the synthetic wav")).expect("measures");
     assert_eq!(duration, 1.0);

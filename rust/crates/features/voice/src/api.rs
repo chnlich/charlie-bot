@@ -721,7 +721,7 @@ mod tests {
   fn wav_body(samples: usize) -> Vec<u8> {
     let directory = tempfile::tempdir().expect("make a scratch directory");
     let path = directory.path().join("recording.wav");
-    crate::archive::write_wav(&path, &vec![0_u8; samples * 2]).expect("write a synthetic WAV");
+    crate::wav::write(&path, &vec![0_u8; samples * 2]).expect("write a synthetic WAV");
     std::fs::read(path).expect("read the synthetic WAV")
   }
 

@@ -11,9 +11,10 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
+use charliebot_core::config::SESSIONS_DIR_NAME;
 use charliebot_core::event_types::{SERVER_READY_EVENT, STARTUP_SEGMENT_EVENT};
 use charliebot_core::home::{
-  BOOT_RECOVERY_FILE_NAME, BOOT_SKIP_PROOF_FILE_NAME, BOOT_TRIGGER_INDEX_FILE_NAME, state_rel_path,
+  BOOT_RECOVERY_FILE_NAME, BOOT_SKIP_PROOF_FILE_NAME, BOOT_TRIGGER_INDEX_FILE_NAME, STATE_DIR_NAME, state_rel_path,
 };
 use charliebot_store::layout;
 use regex::{Captures, NoExpand, Regex};
@@ -145,7 +146,7 @@ fn body_lines(rel: &str, data: &[u8], names: &mut Names) -> Result<Vec<String>> 
 /// The seed's copy of a trial home file: a session file, the boot marker, or a line-oriented startup file.
 fn seed_path(seed: &Path, rel: &str) -> Option<std::path::PathBuf> {
   match rel.split_once('/') {
-    Some(("sessions", rest)) => Some(seed.join(rest)),
+    Some((SESSIONS_DIR_NAME, rest)) => Some(seed.join(rest)),
     _ if rel == state_rel_path(BOOT_RECOVERY_FILE_NAME) => Some(seed.join(BOOT_RECOVERY_FILE_NAME)),
     _ if rel == state_rel_path(BOOT_SKIP_PROOF_FILE_NAME) => Some(seed.join(BOOT_SKIP_PROOF_FILE_NAME)),
     _ if rel == state_rel_path(BOOT_TRIGGER_INDEX_FILE_NAME) => Some(seed.join(BOOT_TRIGGER_INDEX_FILE_NAME)),
@@ -187,7 +188,7 @@ pub fn files(seed: &Path, home: &Path, stamp: &Path, lab: &Path) -> Result<Strin
   let session_ids = dir_names(seed)?;
   let paths = lab_paths(lab);
   let mut changed = Vec::new();
-  for top in ["sessions", "state"] {
+  for top in [SESSIONS_DIR_NAME, STATE_DIR_NAME] {
     for entry in WalkDir::new(home.join(top)) {
       let entry = entry?;
       if !entry.file_type().is_dir() && entry.path().symlink_metadata()?.modified()? > since {
@@ -200,7 +201,7 @@ pub fn files(seed: &Path, home: &Path, stamp: &Path, lab: &Path) -> Result<Strin
   for rel in changed {
     let data = fs::read(home.join(&rel)).with_context(|| format!("cannot read {rel}"))?;
     let known = match rel.split('/').collect::<Vec<_>>()[..] {
-      ["sessions", session_id, ..] => {
+      [SESSIONS_DIR_NAME, session_id, ..] => {
         if !known_by_session.contains_key(session_id) {
           known_by_session.insert(session_id.to_string(), session_known(seed, session_id, &session_ids)?);
         }
@@ -331,14 +332,14 @@ mod tests {
 
     let digest_of = |fresh: &str, pid: u32| {
       let home = lab.path().join(format!("home-{pid}"));
-      let data = home.join("sessions").join(session).join("data");
+      let data = home.join(SESSIONS_DIR_NAME).join(session).join("data");
       fs::create_dir_all(&data).expect("home dirs");
-      fs::create_dir_all(home.join("state")).expect("state dir");
+      fs::create_dir_all(home.join(STATE_DIR_NAME)).expect("state dir");
       let appended = format!(r#"{{"id":"{fresh}","type":"run_finished","run_id":"{run}","elapsed_ms":{pid}}}"#);
       fs::write(data.join("chat_events.jsonl"), format!("{log_line}\n{appended}\n")).expect("trial log");
       let meta =
         format!(r#"{{"status":"paused","pid":{pid},"name":"n","updated_at":"2026-11-03T0{}:00:00Z"}}"#, pid % 10);
-      fs::write(home.join("sessions").join(session).join("metadata.json"), meta).expect("trial meta");
+      fs::write(home.join(SESSIONS_DIR_NAME).join(session).join("metadata.json"), meta).expect("trial meta");
       files(&seed, &home, &stamp, lab.path()).expect("files digest")
     };
     let first = digest_of("33333333-3333-4333-8333-333333333333", 101);

@@ -7,8 +7,8 @@
 //! through [`with_run_stem`], which serializes the writes per stem and replaces the file atomically.
 //!
 //! [`list_recordings`] answers the newest rows first, with the duration and the levels read from each row's WAV at
-//! request time. Each request reads the sessions directory and the `voice/` directory of every session the session
-//! index names. The first request of a home builds that index with one probe per session, and [`with_run_stem`]
+//! request time. Each request reads the `voice/` directory of every session the session index names, and walks no
+//! other session. The first request of a home builds that index with one probe per session, and [`with_run_stem`]
 //! names its session in the index, so a recording this server stores appears on the next request.
 
 use std::collections::{BTreeSet, HashMap};
@@ -420,33 +420,21 @@ fn voice_entry_exists(sessions: &fs::File, session_id: &str) -> io::Result<bool>
 
 /// The most recent recordings across every session directory, newest first, one row per run.
 ///
-/// Each request reads the sessions directory, then the `voice/` directory of every session the session index
-/// names; a session without one is skipped, and any other read failure fails the request. The duration and the
-/// levels of each row come from its WAV at request time.
+/// Each request reads the `voice/` directory of the sessions the session index names, so a request enumerates no
+/// session that holds no recording; a session without one is skipped, and any other read failure fails the
+/// request. The duration and the levels of each row come from its WAV at request time.
 pub(crate) fn list_recordings(cfg: &CharlieBotConfig, limit: usize) -> io::Result<Vec<Value>> {
   let sessions_dir = cfg.sessions_dir();
   let mut stems: Vec<(String, String, String)> = Vec::new();
   // The store owns the "no sessions directory is an empty store" convention, and so does this list.
-  let sessions = match fs::read_dir(&sessions_dir) {
+  let sessions_root = match fs::File::open(&sessions_dir) {
     Ok(sessions) => sessions,
     Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
     Err(error) => return Err(error),
   };
-  let sessions_root = fs::File::open(&sessions_dir)?;
   let with_voice = voice_sessions(&sessions_dir, &sessions_root)?;
-  for session in sessions {
-    let session = session?;
-    if !session.file_type()?.is_dir() {
-      continue;
-    }
-    let name = session.file_name();
-    let session_id = name.to_str().ok_or_else(|| {
-      io::Error::other(format!("sessions directory holds a non-UTF-8 name {}", name.to_string_lossy()))
-    })?;
-    if !with_voice.contains(session_id) {
-      continue;
-    }
-    let voice_dir = session.path().join("voice");
+  for session_id in &with_voice {
+    let voice_dir = sessions_dir.join(session_id).join("voice");
     let entries = match fs::read_dir(&voice_dir) {
       Ok(entries) => entries,
       Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
@@ -463,7 +451,7 @@ pub(crate) fn list_recordings(cfg: &CharlieBotConfig, limit: usize) -> io::Resul
           voice_dir.join(&name).display()
         )));
       };
-      stems.push((stamp.to_string(), session_id.to_string(), stem.to_string()));
+      stems.push((stamp.to_string(), session_id.clone(), stem.to_string()));
     }
   }
   stems.sort_unstable_by(|a, b| {

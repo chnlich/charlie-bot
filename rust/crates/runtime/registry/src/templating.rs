@@ -29,6 +29,8 @@ use axum::response::Response;
 use charliebot_compat::compression::{MINIMUM_DEFLATE_BYTES, gzip_memoized_body};
 use charliebot_compat::headers::header_text;
 use charliebot_compat::{jinja, responses};
+use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::credentials::Credentials;
 use charliebot_core::{git, text_repr, timefmt};
 use ignore::WalkBuilder;
 use minijinja::{Environment, Error, ErrorKind, Value};
@@ -37,10 +39,14 @@ use sha1::{Digest, Sha1};
 
 use crate::context::FeatureContext;
 use crate::pages::{self, STATIC_URL_PREFIX, package_directory};
+use crate::registry::TemplateGlobalScope;
 use crate::watch::TreeWatch;
 use crate::{inlined_script, inlined_style};
 
 /// A zero-argument template global: the name and the value the call returns.
+///
+/// The engine evaluates a live global at every render. A global registered stable reads only the config and the
+/// credentials, and the engine reuses its value until either file moves ([`Templating::globals`]).
 pub type TemplateGlobal = (&'static str, Value);
 
 /// The template context key that carries [`Templating::static_asset_version`]. A page context that serves a static
@@ -73,6 +79,8 @@ pub struct Templating {
   render_cache: Mutex<Option<RenderCache>>,
   /// The page text one render built and the inputs it built from.
   render_memo: Mutex<Option<RenderMemo>>,
+  /// The stable globals one config and credentials version produced.
+  globals_memo: Mutex<Option<StableGlobalsMemo>>,
   /// The compressed forms of the last eight page bodies deflated, the oldest first.
   page_gzips: Mutex<Vec<PageGzip>>,
   /// The watch whose revision says whether the template and static trees moved.
@@ -112,12 +120,29 @@ struct RenderCache {
 /// The render is deterministic in the template sources, the globals and the context, so a repeat request whose
 /// inputs compare equal serves this text and skips the engine. A moved tree moves the revision, and a moved context
 /// or global compares unequal, so both render again.
+///
+/// The context and the request are held apart: the template sees one object carrying both, but a repeat request
+/// compares the caller's context by reference and the request value on its own, so it pays neither the context copy
+/// nor the request insert. The text is an `Arc` because a page body runs to hundreds of kilobytes, and the caller
+/// keeps the handle rather than a copy.
 struct RenderMemo {
   revision: u64,
   name: String,
   globals: Vec<TemplateGlobal>,
   context: serde_json::Value,
-  html: String,
+  request: serde_json::Value,
+  html: Arc<String>,
+}
+
+/// The stable globals one config and credentials version produced, by name.
+///
+/// Both hot reloads hand out a new `Arc` when their file moves, so the memo keeps a version's values while both
+/// pointers hold. A live global is not here: its value may move without either file, so the engine evaluates it at
+/// every render.
+struct StableGlobalsMemo {
+  config: Arc<CharlieBotConfig>,
+  credentials: Arc<Credentials>,
+  values: Arc<HashMap<&'static str, Value>>,
 }
 
 /// One page's finished body and its compressed form.
@@ -155,6 +180,7 @@ impl Templating {
       sources: Mutex::new(None),
       render_cache: Mutex::new(None),
       render_memo: Mutex::new(None),
+      globals_memo: Mutex::new(None),
       page_gzips: Mutex::new(Vec::new()),
       watch: TreeWatch::new(&trees),
     }
@@ -308,7 +334,7 @@ impl Templating {
     substitutions: &[(&str, &str)],
   ) -> Result<String, RenderError> {
     let html = self.render_page_template(features, name, context, request)?;
-    substitute_placeholders(name, html, substitutions)
+    substitute_placeholders(name, (*html).clone(), substitutions)
   }
 
   /// The render of a page with its placeholders still in place, for a caller that keeps the finished page while its
@@ -319,17 +345,9 @@ impl Templating {
     name: &str,
     context: &serde_json::Value,
     request: &Parts,
-  ) -> Result<String, RenderError> {
-    let globals = features
-      .registry
-      .template_globals()
-      .map(|(global_name, global)| global(features).map(|value| (global_name, value)).map_err(RenderError::Global))
-      .collect::<Result<Vec<_>, _>>()?;
-    let mut context = context.clone();
-    context
-      .as_object_mut()
-      .expect("a page context is a JSON object")
-      .insert("request".to_string(), request_context(request));
+  ) -> Result<Arc<String>, RenderError> {
+    let globals = self.globals(features)?;
+    let request = request_context(request);
     let revision = self.watch.revision();
     {
       let memo = self.render_memo.lock().expect("the render memo mutex is not poisoned");
@@ -337,15 +355,71 @@ impl Templating {
         && entry.revision == revision
         && entry.name == name
         && entry.globals == globals
-        && entry.context == context
+        && entry.context == *context
+        && entry.request == request
       {
-        return Ok(entry.html.clone());
+        return Ok(Arc::clone(&entry.html));
       }
     }
-    let html = self.render(name, &context, globals.clone(), revision)?;
-    *self.render_memo.lock().expect("the render memo mutex is not poisoned") =
-      Some(RenderMemo { revision, name: name.to_string(), globals, context, html: html.clone() });
+    let mut render_context = context.clone();
+    render_context
+      .as_object_mut()
+      .expect("a page context is a JSON object")
+      .insert("request".to_string(), request.clone());
+    let html = Arc::new(self.render(name, &render_context, globals.clone(), revision)?);
+    *self.render_memo.lock().expect("the render memo mutex is not poisoned") = Some(RenderMemo {
+      revision,
+      name: name.to_string(),
+      globals,
+      context: context.clone(),
+      request,
+      html: Arc::clone(&html),
+    });
     Ok(html)
+  }
+
+  /// The registered template globals of the feature context's current config and credentials.
+  ///
+  /// A stable global is evaluated once per config and credentials version and served from the memo until either
+  /// file moves; a live global is evaluated here at every render. Both hot reloads hand out a new `Arc` when their
+  /// file moves, so a reload still reaches every template.
+  fn globals(&self, features: &FeatureContext) -> Result<Vec<TemplateGlobal>, RenderError> {
+    let config = features.config.get().map_err(|error| RenderError::Global(error.to_string()))?;
+    let credentials = features.credentials.get().map_err(|error| RenderError::Global(error.to_string()))?;
+    let stable = {
+      let memo = self.globals_memo.lock().expect("the globals memo mutex is not poisoned");
+      memo
+        .as_ref()
+        .filter(|entry| Arc::ptr_eq(&entry.config, &config) && Arc::ptr_eq(&entry.credentials, &credentials))
+        .map(|entry| Arc::clone(&entry.values))
+    };
+    let stable = match stable {
+      Some(values) => values,
+      None => {
+        let mut values = HashMap::new();
+        for (global_name, global) in features.registry.template_globals() {
+          if global.scope == TemplateGlobalScope::Stable {
+            let value = (global.function)(features).map_err(RenderError::Global)?;
+            values.insert(global_name, value);
+          }
+        }
+        let values = Arc::new(values);
+        *self.globals_memo.lock().expect("the globals memo mutex is not poisoned") =
+          Some(StableGlobalsMemo { config, credentials, values: Arc::clone(&values) });
+        values
+      }
+    };
+    let mut globals = Vec::new();
+    for (global_name, global) in features.registry.template_globals() {
+      let value = match global.scope {
+        TemplateGlobalScope::Stable => {
+          stable.get(global_name).cloned().expect("every stable global was evaluated into the memo")
+        }
+        TemplateGlobalScope::Live => (global.function)(features).map_err(RenderError::Global)?,
+      };
+      globals.push((global_name, value));
+    }
+    Ok(globals)
   }
 
   /// The render of template `name` with `context` and the zero-argument `globals`, at watch revision `revision`.
@@ -757,6 +831,26 @@ mod tests {
     registry.template_global("notes_label", notes_label)
   }
 
+  static GLOBAL_EVALUATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+  fn counted_label(_features: &FeatureContext) -> Result<Value, String> {
+    Ok(Value::from(GLOBAL_EVALUATIONS.fetch_add(1, Ordering::SeqCst)))
+  }
+
+  fn register_counted(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.template_global_stable("counted_label", counted_label)
+  }
+
+  static LIVE_EVALUATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+  fn live_label(_features: &FeatureContext) -> Result<Value, String> {
+    Ok(Value::from(LIVE_EVALUATIONS.fetch_add(1, Ordering::SeqCst)))
+  }
+
+  fn register_live(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.template_global("live_label", live_label)
+  }
+
   #[tokio::test]
   async fn render_page_renders_a_package_template_with_request_and_a_global() {
     let root = tempfile::tempdir().unwrap();
@@ -914,6 +1008,59 @@ mod tests {
     assert_eq!(render(&templating, &features, &parts).await, "synthetic-label one");
     fs::write(templates.join("repeat.html"), "{{ notes_label() }} two, longer").unwrap();
     assert_eq!(render(&templating, &features, &parts).await, "synthetic-label two, longer");
+  }
+
+  /// A stable global reads only the config and the credentials, so the engine evaluates it once per config version.
+  /// A repeat render of the same page serves the text and the globals the last render built; a config change
+  /// evaluates the globals again.
+  #[tokio::test]
+  async fn a_stable_template_global_is_evaluated_once_per_config_version() {
+    let root = tempfile::tempdir().unwrap();
+    let templates = package_directory(root.path(), "features.notes").join("templates");
+    fs::create_dir_all(&templates).unwrap();
+    fs::write(templates.join("counted.html"), "{{ counted_label() }}").unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("features.notes", register_counted).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), Arc::new(registry));
+    features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
+    let (parts, _) = Request::builder().method("GET").uri("/counted").body(()).unwrap().into_parts();
+    let templating = features.startup.require::<Templating>().unwrap();
+    let base = GLOBAL_EVALUATIONS.load(Ordering::SeqCst);
+
+    let first = templating.render_page_template(&features, "counted.html", &json!({}), &parts).unwrap();
+    let again = templating.render_page_template(&features, "counted.html", &json!({}), &parts).unwrap();
+    assert_eq!(first.as_str(), base.to_string());
+    assert!(Arc::ptr_eq(&first, &again), "the repeat serves the text the last render built");
+    assert_eq!(GLOBAL_EVALUATIONS.load(Ordering::SeqCst) - base, 1, "the repeat reused the globals");
+
+    fs::write(home.path().join("config.yaml"), "{}\n").unwrap();
+    let moved = templating.render_page_template(&features, "counted.html", &json!({}), &parts).unwrap();
+    assert_eq!(moved.as_str(), (base + 1).to_string(), "a moved config evaluates the globals again");
+    assert_eq!(GLOBAL_EVALUATIONS.load(Ordering::SeqCst) - base, 2);
+  }
+
+  /// A live global may read state the config does not carry, so the engine evaluates it at every render.
+  #[tokio::test]
+  async fn a_live_template_global_is_evaluated_at_every_render() {
+    let root = tempfile::tempdir().unwrap();
+    let templates = package_directory(root.path(), "features.notes").join("templates");
+    fs::create_dir_all(&templates).unwrap();
+    fs::write(templates.join("live.html"), "{{ live_label() }}").unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("features.notes", register_live).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let features = features_over(home.path(), Arc::new(registry));
+    features.startup.insert(Templating::new(root.path(), features.registry.page_packages())).unwrap();
+    let (parts, _) = Request::builder().method("GET").uri("/live").body(()).unwrap().into_parts();
+    let templating = features.startup.require::<Templating>().unwrap();
+    let base = LIVE_EVALUATIONS.load(Ordering::SeqCst);
+
+    let first = templating.render_page_template(&features, "live.html", &json!({}), &parts).unwrap();
+    let second = templating.render_page_template(&features, "live.html", &json!({}), &parts).unwrap();
+    assert_eq!(first.as_str(), base.to_string());
+    assert_eq!(second.as_str(), (base + 1).to_string(), "the repeat rendered the freshly evaluated value");
+    assert_eq!(LIVE_EVALUATIONS.load(Ordering::SeqCst) - base, 2);
   }
 
   /// A page body at or above the transport's minimum travels compressed when the client asked for gzip. The next

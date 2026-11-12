@@ -94,7 +94,7 @@ struct PageBodyMemo {
 
 struct PageBodyEntry {
   name: &'static str,
-  template_html: String,
+  template_html: Arc<String>,
   sidebar_text: Option<Arc<String>>,
   bootstrap_text: Option<Arc<String>>,
   body: Bytes,
@@ -115,7 +115,7 @@ impl PageBodyMemo {
   fn body(
     &mut self,
     name: &'static str,
-    template_html: &str,
+    template_html: &Arc<String>,
     substitutions: &[(&str, &str)],
     sidebar_text: Option<&Arc<String>>,
     bootstrap_text: Option<&Arc<String>>,
@@ -123,18 +123,18 @@ impl PageBodyMemo {
   ) -> Result<(Bytes, Option<Bytes>), Failure> {
     let held = self.entries.iter().position(|entry| {
       entry.name == name
-        && entry.template_html == template_html
+        && (Arc::ptr_eq(&entry.template_html, template_html) || entry.template_html.as_str() == template_html.as_str())
         && same_text(entry.sidebar_text.as_ref(), sidebar_text)
         && same_text(entry.bootstrap_text.as_ref(), bootstrap_text)
     });
     let index = match held {
       Some(index) => index,
       None => {
-        let html = templating::substitute_placeholders(name, template_html.to_string(), substitutions)
+        let html = templating::substitute_placeholders(name, template_html.as_str().to_string(), substitutions)
           .map_err(|error| failure(error.kind(), error))?;
         let entry = PageBodyEntry {
           name,
-          template_html: template_html.to_string(),
+          template_html: Arc::clone(template_html),
           sidebar_text: sidebar_text.cloned(),
           bootstrap_text: bootstrap_text.cloned(),
           body: Bytes::from(html),
@@ -449,7 +449,7 @@ fn render_page_blocking(
 /// The finished body of a page, with its compressed form when a gzip client asked for it.
 fn page_body(
   name: &'static str,
-  template_html: &str,
+  template_html: &Arc<String>,
   runtime: &PageRuntime,
   accepts_gzip: bool,
 ) -> Result<(Bytes, Option<Bytes>), Failure> {
@@ -699,7 +699,7 @@ mod tests {
     let mut memo = PageBodyMemo::default();
     let sidebar = Arc::new("x".repeat(4096));
     let bootstrap = Arc::new("{\"messages\":[]}".to_string());
-    let template = index_template();
+    let template = Arc::new(index_template());
     let (first, gzip) = memo
       .body(
         "index.html",
@@ -745,9 +745,10 @@ mod tests {
     let sidebar = Arc::new("[]".to_string());
     let bootstrap = Arc::new("null".to_string());
     let substitutions = substitutions(sidebar.as_str(), bootstrap.as_str());
-    let (first, _) =
-      memo.body("index.html", &index_template(), &substitutions, Some(&sidebar), Some(&bootstrap), false).unwrap();
-    let edited = format!("{} // edited on disk", index_template());
+    let (first, _) = memo
+      .body("index.html", &Arc::new(index_template()), &substitutions, Some(&sidebar), Some(&bootstrap), false)
+      .unwrap();
+    let edited = Arc::new(format!("{} // edited on disk", index_template()));
     let (second, _) =
       memo.body("index.html", &edited, &substitutions, Some(&sidebar), Some(&bootstrap), false).unwrap();
     assert_ne!(first, second, "a template edited on disk never matches the memo");
@@ -759,12 +760,15 @@ mod tests {
     // A page's body is keyed by its name as well as its rendered template: rendering the home page between two
     // events viewer requests leaves the viewer's body in the memo, and a returning request serves it again.
     let mut memo = PageBodyMemo::default();
-    let (home, _) = memo.body("home.html", "<p>home</p>", &[], None, None, false).unwrap();
-    let (events, _) = memo.body("events_viewer.html", "<p>events</p>", &[], None, None, false).unwrap();
-    let (home_again, _) = memo.body("home.html", "<p>home</p>", &[], None, None, false).unwrap();
+    let home_template: Arc<String> = Arc::new("<p>home</p>".to_string());
+    let events_template: Arc<String> = Arc::new("<p>events</p>".to_string());
+    let (home, _) = memo.body("home.html", &home_template, &[], None, None, false).unwrap();
+    let (events, _) = memo.body("events_viewer.html", &events_template, &[], None, None, false).unwrap();
+    let (home_again, _) = memo.body("home.html", &home_template, &[], None, None, false).unwrap();
     assert_eq!(home_again.as_ptr(), home.as_ptr(), "the home page keeps its body beside another page's");
     assert_eq!(events, "<p>events</p>");
-    let (events_changed, _) = memo.body("events_viewer.html", "<p>other session</p>", &[], None, None, false).unwrap();
+    let changed: Arc<String> = Arc::new("<p>other session</p>".to_string());
+    let (events_changed, _) = memo.body("events_viewer.html", &changed, &[], None, None, false).unwrap();
     assert_eq!(events_changed, "<p>other session</p>", "a changed context rebuilds that page's body");
   }
 

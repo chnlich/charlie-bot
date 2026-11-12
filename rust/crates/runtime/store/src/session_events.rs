@@ -210,21 +210,21 @@ impl Store {
       return Ok(None);
     }
     let subtype = event.get("subtype").and_then(Value::as_str);
-    if subtype == Some("compact_boundary") {
-      let metadata = event.get("compact_metadata").cloned().unwrap_or_else(|| json!({}));
+    if subtype == Some(event_types::COMPACT_BOUNDARY) {
+      let metadata = event.get(event_types::COMPACT_METADATA).cloned().unwrap_or_else(|| json!({}));
       let metadata = metadata.as_object().ok_or_else(|| StoreError::new("compact_metadata must be an object"))?;
       let trigger = metadata.get("trigger").cloned().unwrap_or_else(|| json!("unknown"));
       tracing::info!(
         session_id,
         trigger = ?trigger,
-        pre_tokens = ?metadata.get("pre_tokens"),
-        post_tokens = ?metadata.get("post_tokens"),
+        pre_tokens = ?metadata.get(event_types::COMPACT_PRE_TOKENS),
+        post_tokens = ?metadata.get(event_types::COMPACT_POST_TOKENS),
         "cc_context_compacted"
       );
       return self
         .persist_and_broadcast(
           session_id,
-          json!({"type": event_types::CONTEXT_COMPACTED, "trigger": trigger, "compact_metadata": metadata}),
+          json!({"type": event_types::CONTEXT_COMPACTED, "trigger": trigger, event_types::COMPACT_METADATA: metadata}),
         )
         .await
         .map(Some);

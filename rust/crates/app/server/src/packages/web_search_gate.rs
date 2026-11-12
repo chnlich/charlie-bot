@@ -1,4 +1,4 @@
-//! The access gate in front of the web search MCP endpoint: the router registers under the server's gate, so a
+//! The access gate in front of the web search MCP endpoint. The router registers under the server's gate, so a
 //! request without the access key or a valid run token gets the JSON 401.
 
 use std::sync::Arc;

@@ -3,7 +3,7 @@
 //! Percent-decoding reads the raw path as UTF-8 with replacement characters, and routes match
 //! against that decoded text, so `/api/auth/%73tatus` is `/api/auth/status`. The outermost
 //! layer records the decoded path as a [`RoutePath`] extension and rewrites the URI so axum's router
-//! matches the same text: the decoded path re-encoded with only the bytes a URI path cannot carry.
+//! matches the same text. It re-encodes the decoded path with only the bytes a URI path cannot carry.
 
 use axum::extract::Request;
 use axum::middleware::Next;

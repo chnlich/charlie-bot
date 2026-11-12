@@ -82,7 +82,7 @@ pub(crate) fn planned_home(sessions: usize, seed: u64) -> (Rng, SyntheticText, V
 }
 
 pub(crate) fn final_event(final_text: &str, timestamp: &str) -> Value {
-  json!({"type": "user", "content": final_text, "timestamp": timestamp})
+  json!({"type": event_types::USER, "content": final_text, "timestamp": timestamp})
 }
 
 /// One random event. Above `LONG_EVENT_BUDGET` bytes left, its content is longer.
@@ -90,36 +90,35 @@ fn next_event(rng: &mut Rng, text: &SyntheticText, timestamp: &str, budget: u64)
   let kind = rng.unit();
   if kind < 0.12 {
     let content = text::paragraph(rng);
-    return json!({"type": "user", "content": content, "timestamp": timestamp});
+    return json!({"type": event_types::USER, "content": content, "timestamp": timestamp});
   }
   if kind < 0.52 {
     let count = if budget > LONG_EVENT_BUDGET { rng.range(4, 40) } else { rng.range(1, 4) };
     let blocks: Vec<&str> = (0..count).map(|_| text.block(rng)).collect();
     let body = blocks.join("\n\n");
-    return json!({"type": "assistant", "message": {"content": [{"type": "text", "text": body}]}, "timestamp": timestamp});
+    return json!({"type": event_types::ASSISTANT, "message": {"content": [{"type": "text", "text": body}]}, "timestamp": timestamp});
   }
   if kind < 0.8 {
     let (tool_name, tool_input) = text::tool_call(rng);
     let id = text::tool_id(rng);
-    let tool_use = json!({"type": "tool_use", "id": id, "name": tool_name, "input": tool_input});
+    let tool_use = json!({"type": event_types::TOOL_USE, "id": id, "name": tool_name, "input": tool_input});
     let content = if rng.unit() < 0.5 {
       vec![json!({"type": "text", "text": text::phrase(rng)}), tool_use]
     } else {
       vec![tool_use]
     };
-    return json!({"type": "assistant", "message": {"content": content}, "timestamp": timestamp});
+    return json!({"type": event_types::ASSISTANT, "message": {"content": content}, "timestamp": timestamp});
   }
   let lines = if budget > LONG_EVENT_BUDGET { rng.range(1, 40) } else { rng.range(1, 4) };
   let tool_use_id = text::tool_id(rng);
   let content = text.tool_output(rng, lines);
-  let result =
-    json!({"type": "tool_result", event_types::TOOL_USE_ID: tool_use_id, "content": content, "is_error": false});
-  json!({"type": "user", "message": {"content": [result]}, "timestamp": timestamp})
+  let result = json!({"type": event_types::TOOL_RESULT, event_types::TOOL_USE_ID: tool_use_id, "content": content, "is_error": false});
+  json!({"type": event_types::USER, "message": {"content": [result]}, "timestamp": timestamp})
 }
 
 /// Whether `event` starts a turn: a plain user message, not a tool result.
 fn opens_turn(event: &Value) -> bool {
-  event.get("type").and_then(Value::as_str) == Some("user") && event.get("content").is_some()
+  event.get("type").and_then(Value::as_str) == Some(event_types::USER) && event.get("content").is_some()
 }
 
 /// One turn separator in the production `master_done` shape that the renderer turns into a separator message.

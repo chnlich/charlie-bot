@@ -7,6 +7,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use charliebot_core::event_types;
 use charliebot_store::{layout, metadata, run_records};
 use chrono::{NaiveDateTime, TimeDelta};
 use serde_json::{Value, json};
@@ -87,7 +88,8 @@ const VIEW_ITEMS_MAX: u64 = 28;
 
 /// One user message whose line takes exactly `room` bytes, or `None` when `room` cannot hold an empty one.
 fn filler_event(room: u64, timestamp: &str) -> Option<Value> {
-  let empty = run_records::event_line(&json!({"type": "user", "content": "", "timestamp": timestamp})).len() as u64;
+  let empty =
+    run_records::event_line(&json!({"type": event_types::USER, "content": "", "timestamp": timestamp})).len() as u64;
   if room < empty {
     return None;
   }
@@ -95,7 +97,7 @@ fn filler_event(room: u64, timestamp: &str) -> Option<Value> {
   let source = text::filler_source();
   let repeated = source.repeat(room as usize / source.len() + 1);
   let content = &repeated[..(room - empty) as usize];
-  Some(json!({"type": "user", "content": content, "timestamp": timestamp}))
+  Some(json!({"type": event_types::USER, "content": content, "timestamp": timestamp}))
 }
 
 /// Writes events into one log of exactly `target` bytes, ending with one final user message.

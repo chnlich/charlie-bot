@@ -1291,7 +1291,7 @@ fn self_test(args: &[String]) -> Result<i32, String> {
   println!("PASS self-test frame signature uses only top-level event_index");
 
   let events = vec![
-    json!({"id": "user-1", "type": "user"}),
+    json!({"id": "user-1", "type": event_types::USER}),
     json!({"id": "nudge-1", "type": "agent_message", (event_types::WEB_REPLY): {(event_types::NUDGE_OF): "user-1"}}),
   ];
   let runs = vec![
@@ -1315,7 +1315,7 @@ fn self_test(args: &[String]) -> Result<i32, String> {
   println!("PASS self-test check 2 rejects two runs for one user message");
 
   let events = vec![
-    json!({"id": "user-1", "type": "user"}),
+    json!({"id": "user-1", "type": event_types::USER}),
     json!({"id": "reminder-1", "type": "agent_message", (event_types::WEB_STATUS_REMINDER): "reminder-a"}),
     json!({"id": "reminder-2", "type": "agent_message", (event_types::WEB_STATUS_REMINDER): "reminder-b"}),
   ];
@@ -1342,7 +1342,7 @@ fn self_test(args: &[String]) -> Result<i32, String> {
   }
   println!("PASS self-test check 5 rejects two status reminder runs for one turn");
 
-  let events = vec![json!({"id": "user-1", "type": "user",
+  let events = vec![json!({"id": "user-1", "type": event_types::USER,
     (event_types::WEB_REPLY): {(event_types::NUDGE_OF): "user-1"}, (event_types::WEB_STATUS_REMINDER): "reminder-a"})];
   let runs = vec![json!({"id": "run-user", "state": "success", (event_types::INPUT_EVENT_IDS): ["user-1"]})];
   for mode in ["check2", "check5"] {
@@ -1631,7 +1631,7 @@ mod tests {
 
   /// An assistant text row, as a session's chat events hold a model's text block.
   fn assistant_text_row(text: &str) -> Value {
-    json!({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}})
+    json!({"type": event_types::ASSISTANT, "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}})
   }
 
   /// A posted web reply row, as the manager's chat events hold it.

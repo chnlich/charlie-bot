@@ -31,7 +31,7 @@ impl<K: Clone + Eq + Hash> BodyMemo<K> {
     self.bodies.get(key).cloned()
   }
 
-  /// Stores `body` under `key`, or drops it when it is longer than the memo's cap. Storing a key the memo already
+  /// The storage of `body` under `key`, which drops a body longer than the memo's cap. Storing a key the memo already
   /// holds replaces its body and keeps the key's place in the insertion order.
   pub fn store(&mut self, key: K, body: Bytes) {
     if body.len() > self.max_body_bytes {

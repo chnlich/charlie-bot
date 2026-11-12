@@ -124,7 +124,7 @@ struct SplitUrl {
   fragment: String,
 }
 
-/// Splits a link into scheme, network location, path, query and fragment. A bracketed network location that is
+/// The split of a link into scheme, network location, path, query and fragment. A bracketed network location that is
 /// malformed fails with the splitter's error message.
 fn split_url(link: &str) -> Result<SplitUrl, String> {
   let cleaned: String =
@@ -167,7 +167,7 @@ fn has_url_scheme(link: &str) -> bool {
   link.split_once("://").is_some_and(|(scheme, _)| is_url_scheme(scheme))
 }
 
-/// Validate square-bracketed hosts while splitting the authority.
+/// The validation of square-bracketed hosts while splitting the authority.
 fn validate_bracketed_netloc(netloc: &str) -> Result<(), String> {
   let has_open_bracket = netloc.contains('[');
   let has_close_bracket = netloc.contains(']');
@@ -206,7 +206,7 @@ fn valid_bracketed_host(hostname: &str) -> bool {
   !address.is_empty() && address.parse::<Ipv6Addr>().is_ok()
 }
 
-/// Decode `%XX` bytes and replace invalid UTF-8 lossily.
+/// The lossy decode of `%XX` bytes, which replaces invalid UTF-8.
 fn percent_decode_lossy(value: &str) -> String {
   percent_decode_str(value).decode_utf8_lossy().into_owned()
 }
@@ -517,7 +517,7 @@ pub fn is_file(path: &Path) -> io::Result<bool> {
   Ok(stat_path(path)?.is_some_and(|metadata| metadata.is_file()))
 }
 
-/// Finds the file links in `text` and classifies each one's form and liveness (`scan_file_links`). URLs with a scheme
+/// The file links in `text`, each classified by form and liveness. URLs with a scheme
 /// are found anywhere in the text; Markdown targets can also name a local path.
 pub fn scan_file_links(text: &str, context: Option<&ScanContext>) -> io::Result<Vec<FileLink>> {
   let mut findings = Vec::new();
@@ -527,7 +527,7 @@ pub fn scan_file_links(text: &str, context: Option<&ScanContext>) -> io::Result<
   Ok(findings)
 }
 
-/// Finds URL and Markdown link targets in text without classifying the targets as host files.
+/// The URL and Markdown link targets in `text`, found without classifying them as host files.
 pub fn scan_link_targets(text: &str) -> Vec<LinkTarget> {
   let candidates = candidates(text);
   candidates
@@ -635,7 +635,7 @@ mod tests {
     context
   }
 
-  /// Writes a one-line page at `path`, creating its parent directories.
+  /// The write of a one-line page at `path`, creating its parent directories.
   fn write_page(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, "page").unwrap();

@@ -106,7 +106,7 @@ pub struct FormBody {
 }
 
 impl FormBody {
-  /// Validate this form in field declaration order.
+  /// The validation of this form in field declaration order.
   pub fn validate(&self, model: &FormModel) -> Result<(), Box<Response>> {
     let mut errors = Vec::new();
     for field in model.fields {
@@ -129,7 +129,7 @@ impl FormBody {
     if errors.is_empty() { Ok(()) } else { Err(Box::new(validation::response(&errors))) }
   }
 
-  /// Return the last file value for `name`.
+  /// The last file value for `name`.
   pub fn file(&self, name: &str) -> Option<&UploadedFile> {
     match self.value(name)? {
       PartValue::File(file) => Some(file),
@@ -137,7 +137,7 @@ impl FormBody {
     }
   }
 
-  /// Return the last text value for `name`.
+  /// The last text value for `name`.
   pub fn form(&self, name: &str) -> Option<&str> {
     match self.value(name)? {
       PartValue::File(_) => None,
@@ -150,7 +150,7 @@ impl FormBody {
   }
 }
 
-/// Read a form request before dependencies, returning an empty form for other content types.
+/// The form of a request, read before dependencies, empty for other content types.
 pub async fn read(headers: &HeaderMap, body: Body) -> Result<FormBody, Box<Response>> {
   let Some(content_type) = headers.get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok()) else {
     return Ok(FormBody::default());
@@ -167,7 +167,7 @@ pub async fn read(headers: &HeaderMap, body: Body) -> Result<FormBody, Box<Respo
   }
 }
 
-/// Read a urlencoded body: each name and value is latin-1 decoded, then percent-decoded, with `+` as a space.
+/// The form of a urlencoded body: each name and value is latin-1 decoded, then percent-decoded, with `+` as a space.
 async fn read_urlencoded(body: Body) -> Result<FormBody, Box<Response>> {
   let mut bytes = Vec::new();
   let mut stream = body.into_data_stream();
@@ -182,7 +182,7 @@ async fn read_urlencoded(body: Body) -> Result<FormBody, Box<Response>> {
   Ok(form)
 }
 
-/// Split a urlencoded body into raw name and value pairs. Both `&` and `;` separate fields, and repeated separators are
+/// The raw name and value pairs of a urlencoded body. Both `&` and `;` separate fields, and repeated separators are
 /// skipped. A name ends at the first `=` before the next separator. A value ends at the next separator, where `&` is
 /// looked for before `;`. A bare name is kept only when a separator follows it, because a field finishes at the end of
 /// the body only once its value has started.
@@ -224,7 +224,7 @@ fn next_position(positions: &[usize], from: usize) -> Option<usize> {
   positions.get(positions.partition_point(|position| *position < from)).copied()
 }
 
-/// Decode a name or value: each byte is a latin-1 character, and the characters
+/// The decoded name or value: each byte is a latin-1 character, and the characters
 /// are percent-decoded, with `+` as a space. Escapes in a run of ASCII characters decode as UTF-8 with
 /// replacement characters, and every other character stays as it is.
 fn unquote_plus(bytes: &[u8]) -> String {
@@ -328,7 +328,7 @@ mod tests {
   }
 }
 
-/// Decode a string: an unknown codec or an invalid sequence falls back to
+/// The decoded string: an unknown codec or an invalid sequence falls back to
 /// latin-1, which never fails. Only the codecs that need no table are known here, so any other charset also falls back
 /// to latin-1.
 fn user_safe_decode(bytes: &[u8], charset: &str) -> String {
@@ -342,7 +342,7 @@ fn user_safe_decode(bytes: &[u8], charset: &str) -> String {
   decoded.unwrap_or_else(|| latin1(bytes))
 }
 
-/// Normalize a codec name before its alias lookup. Letters and
+/// The normalized codec name for its alias lookup. Letters and
 /// digits and dots are kept in lower case, and each run of other characters becomes one underscore between names.
 fn normalize_codec_name(name: &str) -> String {
   let mut normalized = String::new();
@@ -371,7 +371,7 @@ fn latin1_bytes(value: &str) -> Vec<u8> {
   value.chars().map(|character| character as u32 as u8).collect()
 }
 
-/// Parse an options header: a value without a
+/// The media type and parameters of an options header: a value without a
 /// semicolon is lowered, and otherwise the first segment is the media type as written. A parameter with a value has
 /// its name lowered, and a later parameter with the same name wins.
 fn parse_options_header(value: &str) -> (String, Vec<(String, String)>) {
@@ -398,7 +398,7 @@ fn parse_options_header(value: &str) -> (String, Vec<(String, String)>) {
   (media_type, params)
 }
 
-/// Split a header value at the semicolons outside quoted strings: a semicolon separates
+/// The segments of a header value, split at the semicolons outside quoted strings: a semicolon separates
 /// when the quotes before it, not counting escaped quotes, are balanced.
 fn split_parameters(value: &str) -> Vec<&str> {
   let mut segments = Vec::new();
@@ -420,7 +420,7 @@ fn split_parameters(value: &str) -> Vec<&str> {
   segments
 }
 
-/// Unquote a header value. A quoted value loses its quotes, with `\\` read as `\`
+/// The unquoting of a header value. A quoted value loses its quotes, with `\\` read as `\`
 /// before `\"` is read as `"`. An angle-bracketed value loses its brackets.
 fn unquote_header_value(value: &str) -> String {
   if value.len() > 1 && value.starts_with('"') && value.ends_with('"') {
@@ -432,7 +432,7 @@ fn unquote_header_value(value: &str) -> String {
   value.to_string()
 }
 
-/// Return the value of the last parameter named `key`.
+/// The value of the last parameter named `key`.
 fn last_param(params: &[(String, String)], key: &str) -> Option<String> {
   params.iter().rev().find(|(name, _)| name == key).map(|(_, value)| value.clone())
 }
@@ -667,7 +667,7 @@ impl MultipartMachine {
     }
   }
 
-  /// Match part data against the boundary, byte for byte. A byte that starts a
+  /// The match of one part-data byte against the boundary. A byte that starts a
   /// potential boundary is withheld in `match_len` until the match fails or a part boundary confirms.
   fn part_data_byte(&mut self, byte: u8) -> Result<(), Box<Response>> {
     if self.match_len == 0 {
@@ -764,7 +764,7 @@ impl MultipartMachine {
     Ok(())
   }
 
-  /// Close the part being read.
+  /// The end of the part being read.
   fn end_part(&mut self) -> Result<(), Box<Response>> {
     let name = self.part_name.take().unwrap_or_default();
     match std::mem::replace(&mut self.sink, Sink::None) {
@@ -789,7 +789,7 @@ fn is_token_byte(byte: u8) -> bool {
     )
 }
 
-/// Read a multipart body with the multipart state machine.
+/// The form of a multipart body, read through the multipart state machine.
 async fn read_multipart(boundary: &str, charset: &str, body: Body) -> Result<FormBody, Box<Response>> {
   let mut machine = MultipartMachine::new(boundary, charset);
   let mut stream = body.into_data_stream();

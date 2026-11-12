@@ -40,7 +40,7 @@ pub enum RequestBody {
   Raw(Bytes),
 }
 
-/// Read the request body with the strict content-type rule: raw bytes unless the type is JSON, which the JSON
+/// The request body under the strict content-type rule: raw bytes unless the type is JSON, which the JSON
 /// loader decodes.
 ///
 /// A route reads the body before resolving dependencies, then validates the model after them with
@@ -286,13 +286,13 @@ impl BodyModel {
     self.fields.iter().any(|field| field.name == name)
   }
 
-  /// Refuse undeclared keys, as `extra="forbid"` does.
+  /// The model that refuses undeclared keys, as `extra="forbid"` does.
   pub const fn forbid_extra(mut self) -> Self {
     self.extra = ExtraKeys::Forbid;
     self
   }
 
-  /// Run `check` on the validated values once every field passes.
+  /// The model with `check` run on the validated values once every field passes.
   pub const fn checked(mut self, check: ModelCheck) -> Self {
     self.check = Some(check);
     self
@@ -300,7 +300,7 @@ impl BodyModel {
 }
 
 impl RequestBody {
-  /// Validate this body against a model and return its declared fields, or the ordered errors for it.
+  /// The validated fields of this body against a model, or the ordered errors for it.
   ///
   /// Errors come in field declaration order, then forbidden extra keys in input order. A number reports the first
   /// violated bound in the order `le`, `ge`, `gt`; a list reports `max_length` before its items and `min_length`
@@ -321,12 +321,12 @@ impl RequestBody {
     }
   }
 
-  /// Validate this body against a model: its declared fields, or the 422 response.
+  /// The validated fields of this body against a model, or the 422 response.
   pub fn validate(&self, model: &BodyModel) -> Result<Option<Value>, Box<Response>> {
     self.check(model).map_err(|errors| Box::new(validation::response(&errors)))
   }
 
-  /// Validate this body against a required model: its declared fields, or the 422 response.
+  /// The declared fields of this body against a required model, or the 422 response.
   pub fn declared_fields(&self, model: &BodyModel) -> Result<Map<String, Value>, Box<Response>> {
     match self.validate(model)? {
       Some(Value::Object(fields)) => Ok(fields),

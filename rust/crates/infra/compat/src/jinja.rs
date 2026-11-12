@@ -43,7 +43,7 @@ pub fn environment(
   environment
 }
 
-/// Load a template by name: the first search directory holding the name wins; a `..`
+/// The text of a template loaded by name: the first search directory holding the name wins; a `..`
 /// segment names no template. The text is read as UTF-8 with universal newlines.
 fn load_template(directories: &[PathBuf], name: &str) -> Result<Option<String>, Error> {
   let mut pieces = Vec::new();
@@ -190,7 +190,7 @@ fn query_pair(key: &Value, value: &Value) -> Result<String, Error> {
   Ok(format!("{}={}", query_quote(&value_str(key)?), query_quote(&value_str(value)?)))
 }
 
-/// Quote a query-string side: no safe characters, then `%20` as `+`.
+/// The quoting of one query-string side: no safe characters, then `%20` as `+`.
 fn query_quote(text: &str) -> String {
   quote(text, &QUERY_QUOTE).replace("%20", "+")
 }

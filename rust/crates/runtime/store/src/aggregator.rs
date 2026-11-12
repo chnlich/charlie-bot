@@ -770,6 +770,15 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
         Some(event_types::QUOTA_REASON_SUBSCRIPTION_RESET) => {
           format!("Subscription quota reset: switched {from_backend} → {to_backend}")
         }
+        Some(event_types::QUOTA_REASON_ACCESS_REFUSED) => {
+          format!("Access refused on {from_backend}: switched to {to_backend}")
+        }
+        Some(event_types::QUOTA_REASON_TIMEOUT) => {
+          format!("Timeout on {from_backend}: switched to {to_backend}")
+        }
+        Some(event_types::QUOTA_REASON_ITERATION_FAILURE) => {
+          format!("Iteration failed on {from_backend}: switched to {to_backend}")
+        }
         Some(event_types::QUOTA_REASON_QUOTA_ERROR) | None => {
           format!("Quota exhausted on {from_backend}: switched to {to_backend}")
         }
@@ -1977,6 +1986,31 @@ mod tests {
         "timestamp": null,
       })
     );
+  }
+
+  #[test]
+  fn a_switch_recorded_for_a_refusal_or_a_timeout_names_its_own_reason() {
+    for (reason, head) in [
+      (event_types::QUOTA_REASON_ACCESS_REFUSED, "Access refused on fake: switched to strong"),
+      (event_types::QUOTA_REASON_TIMEOUT, "Timeout on fake: switched to strong"),
+      (event_types::QUOTA_REASON_ITERATION_FAILURE, "Iteration failed on fake: switched to strong"),
+    ] {
+      let mut aggregator = MessageAggregator::new(0, true);
+      let deltas = aggregator
+        .feed(&json!({
+          "type": "quota_failover",
+          "from": "fake",
+          "to": "strong",
+          "reason": reason,
+          "recovers_at": "2030-01-02T03:04+00:00",
+        }))
+        .unwrap();
+      assert_eq!(
+        deltas[0]["message"]["content"],
+        format!("{head}; fake recovers at 2030-01-02T03:04+00:00"),
+        "{reason}"
+      );
+    }
   }
 
   #[test]

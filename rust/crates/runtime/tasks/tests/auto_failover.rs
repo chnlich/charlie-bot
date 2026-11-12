@@ -69,6 +69,14 @@ fn quota_error_result() -> Value {
   json!({"type":"result","subtype":"error","is_error":true,"result":QUOTA_ERROR})
 }
 
+/// The model-access refusal the fifth review run of the cron-dropdown task ended on.
+const ACCESS_REFUSED: &str = "Failed to authenticate. API Error: 401 Not allowed to access model due to tags \
+                               configuration. Passed model=deepseek-flash and tags=['deepseek']";
+
+fn access_refused_result() -> Value {
+  json!({"type":"result","subtype":"error","is_error":true,"api_error_status":401,"result":ACCESS_REFUSED})
+}
+
 fn success_script() -> String {
   scripted_process(
     &[
@@ -279,6 +287,42 @@ async fn a_failed_summary_keeps_the_paths_and_reports_the_reason() -> anyhow::Re
     prompt.contains("Handoff summary unavailable: synthetic assembly failure"),
     "the note states the same reason as the switch record: {prompt}"
   );
+  Ok(())
+}
+
+/// A refusal mid-turn continues on the next member the way a quota end does, records the member with the refusal
+/// reason, and hands the retry a note that names the refusal.
+#[tokio::test]
+#[ignore = "integration"]
+async fn an_access_refused_turn_continues_on_the_next_member_with_the_refusal_reason() -> anyhow::Result<()> {
+  let mut failing = quota_events();
+  failing.push(access_refused_result());
+  let stack = auto_stack(&scripted_process(&failing, 1), &success_script()).await?;
+  let session = auto_session(&stack, "auto-access-refused").await?;
+  dispatch_turn(&stack, &session.id).await?;
+  let runs = wait_for_retry_launch(&stack, &session.id).await?;
+
+  assert_eq!(runs.len(), 2, "the turn continued as one retry run: {runs:?}");
+  let original = original_run(&runs);
+  let retry = retry_of(&runs, original);
+  assert_eq!(retry.backend.as_deref(), Some(MEMBER_B));
+
+  let switches = quota_failovers(&stack, &session.id)?;
+  assert_eq!(switches.len(), 1, "{switches:?}");
+  assert_eq!(switches[0]["from"], MEMBER_A);
+  assert_eq!(switches[0]["to"], MEMBER_B);
+  assert_eq!(switches[0]["reason"], event_types::QUOTA_REASON_ACCESS_REFUSED);
+
+  let availability = backend_availability::backend_availability(&stack.features)?;
+  let row = availability.row(MEMBER_A).expect("the refused member is recorded out");
+  assert_eq!(row.reason, backend_availability::REASON_ACCESS_REFUSED);
+  let remaining = row.out_until.into_inner() - UtcDateTime::now().into_inner();
+  assert!(remaining > time::Duration::minutes(29) && remaining <= backend_availability::DEFAULT_COOLDOWN);
+
+  let prompt = std::fs::read_to_string(stack.store().run_dir(&session.id, &retry.id).join(LAUNCH_TEXT_FILENAME))?;
+  assert!(prompt.contains("pool 'auto' switched from member-a to member-b"), "{prompt}");
+  assert!(prompt.contains("the member refused access"), "{prompt}");
+  assert!(!prompt.contains("the member's quota is spent"), "{prompt}");
   Ok(())
 }
 

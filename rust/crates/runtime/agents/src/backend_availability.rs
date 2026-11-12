@@ -17,17 +17,56 @@ use nix::fcntl::{Flock, FlockArg};
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime, UtcOffset};
 
-/// The cooling a quota error that states no reset time records.
+/// The cooling a member failure that states no reset time records.
 pub const DEFAULT_COOLDOWN: Duration = Duration::minutes(30);
 
 /// The reason of a record whose backend reported a spent quota.
 pub const REASON_QUOTA_ERROR: &str = charliebot_core::event_types::QUOTA_REASON_QUOTA_ERROR;
 
+/// The reason of a record whose backend refused authentication or model access.
+pub const REASON_ACCESS_REFUSED: &str = charliebot_core::event_types::QUOTA_REASON_ACCESS_REFUSED;
+
 /// The reason of a record that holds a backend out after a call it could not finish in time.
-pub const REASON_TIMEOUT: &str = "timeout";
+pub const REASON_TIMEOUT: &str = charliebot_core::event_types::QUOTA_REASON_TIMEOUT;
 
 /// The reason of a record that holds a pool member out after an iteration failed for a reason other than its quota.
-pub const REASON_ITERATION_FAILURE: &str = "iteration_failure";
+pub const REASON_ITERATION_FAILURE: &str = charliebot_core::event_types::QUOTA_REASON_ITERATION_FAILURE;
+
+/// Every reason a record carries. A switch record names one of them, and the readers of a switch accept any.
+pub const RECORDED_REASONS: &[&str] =
+  &[REASON_QUOTA_ERROR, REASON_ACCESS_REFUSED, REASON_TIMEOUT, REASON_ITERATION_FAILURE];
+
+/// Whether `reason` is one this owner records on a row.
+pub fn is_recorded_reason(reason: &str) -> bool {
+  RECORDED_REASONS.contains(&reason)
+}
+
+/// Why the member a switch left is out, as the switch note states it.
+pub fn switch_cause(reason: &str) -> &'static str {
+  match reason {
+    REASON_QUOTA_ERROR => "the member's quota is spent",
+    REASON_ACCESS_REFUSED => "the member refused access",
+    REASON_TIMEOUT => "the member timed out",
+    REASON_ITERATION_FAILURE => "the member's iteration failed",
+    _ => "the member is unavailable",
+  }
+}
+
+/// When the member a switch left recovers, as the switch note states it.
+pub fn switch_recovery_label(reason: &str) -> &'static str {
+  if reason == REASON_QUOTA_ERROR { "resets at" } else { "recovers at" }
+}
+
+/// Why a retry run's handoff note says its earlier backend left, in the form "after {from} …".
+pub fn switch_after_reason(reason: &str) -> &'static str {
+  match reason {
+    REASON_QUOTA_ERROR => "spent its quota",
+    REASON_ACCESS_REFUSED => "refused access",
+    REASON_TIMEOUT => "timed out",
+    REASON_ITERATION_FAILURE => "failed its iteration",
+    _ => "became unavailable",
+  }
+}
 
 const LOCK_SUFFIX: &str = ".lock";
 
@@ -36,7 +75,7 @@ const LOCK_SUFFIX: &str = ".lock";
 pub struct AvailabilityRow {
   /// The instant the option becomes selectable again.
   pub out_until: UtcDateTime,
-  /// Why the option is out: [`REASON_QUOTA_ERROR`], [`REASON_TIMEOUT`], [`REASON_ITERATION_FAILURE`].
+  /// Why the option is out: one of [`RECORDED_REASONS`].
   pub reason: String,
   /// The error text the record came from.
   pub detail: String,

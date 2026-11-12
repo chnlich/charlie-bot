@@ -46,7 +46,6 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::auto_switch::{self, MemberSwitch};
-use crate::backend_retry;
 use crate::cold_read::{self, ColdReadOutcome};
 use crate::dispatch::{DispatchExecutor, Dispatcher, RunFinishedCompletion, note_run_liveness};
 use crate::git;
@@ -842,11 +841,19 @@ impl TaskExecutionAdapter {
       )?;
       prompt = format!("{}\n\n{prompt}", handoff.note);
     } else if let Some((previous, from)) = worker_failover_source(&self.features, meta, run, option)? {
+      let reason = backend_availability::backend_availability(&self.features)?
+        .row(&from)
+        .map(|row| row.reason)
+        .unwrap_or_default();
       let handoff = crate::handoff::handoff(
         &self.features,
         meta,
         crate::handoff::HandoffSource::WorkerRun { run: &previous },
-        &format!("this task switched from backend {from} to {} after {from} spent its quota", option.id),
+        &format!(
+          "this task switched from backend {from} to {} after {from} {}",
+          option.id,
+          backend_availability::switch_after_reason(&reason)
+        ),
       )?;
       prompt = format!("{}\n\n{prompt}", handoff.note);
     }
@@ -959,8 +966,8 @@ impl TaskExecutionAdapter {
     self.after_worker_run(meta, &fresh, &durable).await
   }
 
-  /// Record the error that ended a worker run: a refused launch keeps its own event, a spent quota enters the failure
-  /// map that decides the failover, and every other error is logged.
+  /// Record the error that ended a worker run. A refused launch keeps its own event, and a member failure the shared
+  /// classification records enters the failure map that decides the failover. Every other error is logged.
   async fn record_worker_error(
     &self,
     meta: &SessionMetadata,
@@ -971,8 +978,10 @@ impl TaskExecutionAdapter {
     let run_id = run.id.as_str();
     if let Some(refusal) = error.downcast_ref::<LaunchRefused>() {
       tracing::warn!(target: "charliebot_tasks", session_id, run_id, error = %refusal.message, quota_exhausted = refusal.quota_exhausted, "task_run_launch_refused");
-      if refusal.quota_exhausted {
-        let failure = QuotaFailure { resets_at: refusal.resets_at, message: refusal.message.clone() };
+      let failure = backend_pool::classify_member_failure(&refusal.message, Some(refusal.quota_exhausted));
+      if let Some(reason) = failure.availability_reason() {
+        let failure =
+          QuotaFailure { resets_at: refusal.resets_at, message: refusal.message.clone(), reason: reason.to_string() };
         self
           .quota_failures
           .lock()
@@ -988,7 +997,8 @@ impl TaskExecutionAdapter {
         .transpose()?
         .map(|value| UtcDateTime::parse(&value))
         .transpose()?;
-      let failure = QuotaFailure { resets_at, message: quota.to_string() };
+      let reason = quota.failure().availability_reason().expect("a run-ending member failure records a reason");
+      let failure = QuotaFailure { resets_at, message: quota.to_string(), reason: reason.to_string() };
       self
         .quota_failures
         .lock()
@@ -1542,7 +1552,11 @@ impl TaskExecutionAdapter {
 
   #[cfg(feature = "test-hooks")]
   pub fn record_quota_failure_for_test(&self, session_id: &str, run_id: &str, resets_at: Option<UtcDateTime>) {
-    let failure = QuotaFailure { resets_at, message: "synthetic quota error".to_string() };
+    let failure = QuotaFailure {
+      resets_at,
+      message: "synthetic quota error".to_string(),
+      reason: backend_availability::REASON_QUOTA_ERROR.to_string(),
+    };
     self
       .quota_failures
       .lock()
@@ -1578,11 +1592,12 @@ impl TaskExecutionAdapter {
     }
 
     let quota_failure = self.take_quota_failure(session_id, &run.id);
-    // Any run that ended on a member's spent quota records that member out, whether a pool chose it or the request
-    // named it: one out record is shared by every pool that lists the member.
+    // Any run that ended on a member failure records that member out with the shared classification's reason. That
+    // holds whether a pool chose the member or the request named it: one out record is shared by every pool that
+    // lists it.
     if let (Some(failure), Some(backend)) = (quota_failure.as_ref(), run.backend.as_deref()) {
       let availability = backend_availability::backend_availability(&self.features)?;
-      availability.record(backend, failure.resets_at, backend_availability::REASON_QUOTA_ERROR, &failure.message)?;
+      availability.record(backend, failure.resets_at, &failure.reason, &failure.message)?;
     }
 
     if run.kind == RunKind::Review {
@@ -2426,7 +2441,7 @@ impl TaskExecutionAdapter {
       .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, &meta.id)))?;
     if let Some(backend) = run.backend.as_deref().filter(|backend| !backend.is_empty()) {
       let availability = backend_availability::backend_availability(&self.features)?;
-      availability.record(backend, failure.resets_at, backend_availability::REASON_QUOTA_ERROR, &failure.message)?;
+      availability.record(backend, failure.resets_at, &failure.reason, &failure.message)?;
     }
     if self.features.config.get()?.backends.pool(&meta.backend).is_none() {
       return Ok(());
@@ -2722,18 +2737,17 @@ impl TaskExecutionAdapter {
   }
 }
 
-/// The quota failure an Auto session's manager turn ended on, read from the finish extras.
+/// The member failure an Auto session's manager turn ended on, read from the finish extras through the shared
+/// classification.
 fn auto_quota_failure(extras: &Map<String, Value>) -> Option<QuotaFailure> {
   let message = extras.get(master_run::FINISH_ERROR_MESSAGE).and_then(Value::as_str)?.to_string();
   let quota_exhausted = extras.get(master_run::FINISH_QUOTA_EXHAUSTED).and_then(Value::as_bool);
-  if !backend_retry::is_quota_end(&message, quota_exhausted) {
-    return None;
-  }
+  let reason = backend_pool::classify_member_failure(&message, quota_exhausted).availability_reason()?;
   let resets_at = extras
     .get(master_run::FINISH_QUOTA_RESETS_AT)
     .and_then(Value::as_str)
     .and_then(|text| UtcDateTime::parse(text).ok());
-  Some(QuotaFailure { resets_at, message })
+  Some(QuotaFailure { resets_at, message, reason: reason.to_string() })
 }
 
 /// The failed run an Auto switch retry continues, with the reason its fresh conversation starts, when this run is a
@@ -2755,20 +2769,27 @@ fn auto_switch_source(
   }
   let switched = features.store.load_chat_events_sync(&meta.id)?.iter().rev().any(|event| {
     event.get("type").and_then(CompactValue::as_str) == Some(event_types::QUOTA_FAILOVER)
-      && event.get(event_types::QUOTA_FAILOVER_REASON).and_then(CompactValue::as_str)
-        == Some(event_types::QUOTA_REASON_QUOTA_ERROR)
+      && event
+        .get(event_types::QUOTA_FAILOVER_REASON)
+        .and_then(CompactValue::as_str)
+        .is_some_and(backend_availability::is_recorded_reason)
       && event.get("from").and_then(CompactValue::as_str) == Some(from.as_str())
       && event.get("to").and_then(CompactValue::as_str) == Some(option.id.as_str())
   });
   if !switched {
     return Ok(None);
   }
-  let recovers_at = backend_availability::backend_availability(features)?.out_until_minutes(&from).unwrap_or_default();
+  let availability = backend_availability::backend_availability(features)?;
+  let recovers_at = availability.out_until_minutes(&from).unwrap_or_default();
+  let reason = availability.row(&from).map(|row| row.reason).unwrap_or_default();
   Ok(Some((
     previous,
     format!(
-      "pool '{}' switched from {from} to {}: the member's quota is spent, resets at {recovers_at}",
-      meta.backend, option.id
+      "pool '{}' switched from {from} to {}: {}, {} {recovers_at}",
+      meta.backend,
+      option.id,
+      backend_availability::switch_cause(&reason),
+      backend_availability::switch_recovery_label(&reason)
     ),
   )))
 }
@@ -3029,8 +3050,10 @@ fn worker_failover_source(
   }
   let switched = features.store.load_chat_events_sync(&meta.id)?.iter().rev().any(|event| {
     event.get("type").and_then(CompactValue::as_str) == Some(event_types::QUOTA_FAILOVER)
-      && event.get(event_types::QUOTA_FAILOVER_REASON).and_then(CompactValue::as_str)
-        == Some(event_types::QUOTA_REASON_QUOTA_ERROR)
+      && event
+        .get(event_types::QUOTA_FAILOVER_REASON)
+        .and_then(CompactValue::as_str)
+        .is_some_and(backend_availability::is_recorded_reason)
       && event.get("from").and_then(CompactValue::as_str) == Some(from.as_str())
       && event.get("to").and_then(CompactValue::as_str) == Some(option.id.as_str())
   });

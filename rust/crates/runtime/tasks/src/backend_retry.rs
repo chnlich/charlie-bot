@@ -16,9 +16,10 @@ pub(crate) fn waits(retries: usize, reset: Duration) -> bool {
 }
 
 /// Whether a turn's error text and launch verdict mark a spent quota. A refused launch carries its own verdict; any
-/// other error counts only when its text marks a spent quota (`backend_pool::is_spent_quota_error`).
+/// other error counts only when the shared member-failure classification sorts it as a quota failure.
 pub(crate) fn is_quota_end(message: &str, quota_exhausted: Option<bool>) -> bool {
-  quota_exhausted == Some(true) || charliebot_agents::backend_pool::is_spent_quota_error(message)
+  charliebot_agents::backend_pool::classify_member_failure(message, quota_exhausted)
+    == charliebot_agents::backend_pool::MemberFailure::Quota
 }
 
 /// The error text an input shows after its automatic retries ran out: the original text and a note that they ran.

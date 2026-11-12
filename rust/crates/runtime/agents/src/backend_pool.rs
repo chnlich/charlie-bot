@@ -73,6 +73,34 @@ pub const BACKEND_TEMPORARY_UNAVAILABLE_PATTERNS: &[&str] = &[
   "no session progress for",
 ];
 
+/// Error substrings that mark a member refusing access: Claude Code's authentication-failure marker and the
+/// gateway's model-access refusal.
+pub const ACCESS_REFUSED_PATTERNS: &[&str] = &["failed to authenticate", "not allowed to access model"];
+
+/// How one member failure sorts: a spent quota, a refusal of authentication or model access, or anything else.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemberFailure {
+  Quota,
+  AccessRefused,
+  Other,
+}
+
+impl MemberFailure {
+  /// The availability reason this failure records, or `None` when it records the member nowhere.
+  pub fn availability_reason(self) -> Option<&'static str> {
+    match self {
+      Self::Quota => Some(crate::backend_availability::REASON_QUOTA_ERROR),
+      Self::AccessRefused => Some(crate::backend_availability::REASON_ACCESS_REFUSED),
+      Self::Other => None,
+    }
+  }
+
+  /// Whether this failure records the member out of every pool that lists it.
+  pub fn records_out(self) -> bool {
+    self.availability_reason().is_some()
+  }
+}
+
 /// The session metadata slot that records the route a delegation keeps.
 pub const METADATA_OWNER: &str = "backend_pool";
 
@@ -355,6 +383,29 @@ fn contains_token(text: &str, token: &str) -> bool {
 /// manager turns and worker runs share: a quota substring matches and no temporary-failure substring does.
 pub fn is_spent_quota_error(text: &str) -> bool {
   is_quota_error(text) && !is_temporary_unavailable_error(text)
+}
+
+/// Sort one member failure from a launch verdict and its text. A stated quota verdict decides first; then a spent
+/// quota text; then a refusal of authentication or model access; anything else is other. Every record site uses this
+/// one sort, so a refusal no longer lands in the quota reason.
+pub fn classify_member_failure(text: &str, quota_exhausted: Option<bool>) -> MemberFailure {
+  if quota_exhausted == Some(true) || is_spent_quota_error(text) {
+    MemberFailure::Quota
+  } else if is_access_refused_error(text) {
+    MemberFailure::AccessRefused
+  } else {
+    MemberFailure::Other
+  }
+}
+
+/// Return whether an error text marks an authentication or model-access refusal. A `401` or `403` status counts only
+/// inside an `API Error` line and as a whole token, so `400 Bad Request` and the digits in a request id never match.
+pub fn is_access_refused_error(text: &str) -> bool {
+  let lowered = text.to_lowercase();
+  ACCESS_REFUSED_PATTERNS.iter().any(|pattern| lowered.contains(pattern))
+    || lowered
+      .lines()
+      .any(|line| line.contains("api error") && (contains_token(line, "401") || contains_token(line, "403")))
 }
 
 /// Return whether a Claude Code `result` event's text marks a spent quota. The caller has checked `is_error`.
@@ -735,6 +786,27 @@ mod tests {
   }
 
   #[test]
+  fn a_refused_member_is_skipped_by_select_and_peek_and_listed_with_its_reason() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg = config(&["a", "b"]);
+    let pool = pool_at(home.path());
+    pool
+      .availability()
+      .record("a", None, backend_availability::REASON_ACCESS_REFUSED, "Failed to authenticate")
+      .unwrap();
+    assert_eq!(select_id(&pool, &cfg, "test", &[]), Some("b".to_string()));
+    assert_eq!(pool.selector(&cfg).peek(POOL, &[]).unwrap().map(|option| option.id), Some("b".to_string()));
+
+    pool
+      .availability()
+      .record("b", None, backend_availability::REASON_ACCESS_REFUSED, "Failed to authenticate")
+      .unwrap();
+    let message = pool.selector(&cfg).exhausted_message(POOL).unwrap();
+    assert!(message.contains("- a: access_refused, recovers at "), "{message}");
+    assert!(message.contains("- b: access_refused, recovers at "), "{message}");
+  }
+
+  #[test]
   fn exhausted_message_lists_each_member_and_why_it_is_out() {
     let home = tempfile::tempdir().unwrap();
     let cfg = config(&["a", "b"]);
@@ -834,6 +906,44 @@ mod tests {
     let result = json!({"type": "result", "is_error": true, "api_error_status": 402, "result": aigw_402});
     assert!(is_spent_quota_result(&result));
     assert!(!is_spent_quota_result(&json!({"type": "result", "is_error": true, "result": null})));
+  }
+
+  #[test]
+  fn a_refusal_text_is_its_own_member_failure_and_a_request_error_is_not() {
+    // The text of the review run that ended on the aigw gateway's model-access refusal.
+    let refused = "Failed to authenticate. API Error: 401 Not allowed to access model due to tags configuration. \
+                   Passed model=deepseek-flash and tags=['deepseek']";
+    assert_eq!(classify_member_failure(refused, None), MemberFailure::AccessRefused);
+    assert_eq!(
+      classify_member_failure("API Error: 403 Forbidden: model access denied", None),
+      MemberFailure::AccessRefused
+    );
+    assert_eq!(classify_member_failure("Failed to authenticate", None), MemberFailure::AccessRefused);
+
+    for text in [
+      "400 Bad Request",
+      "API Error: 400 Bad Request",
+      "Error code: 400 - invalid request (request_id: 0b401c7d-1e2f-4a5b-8c9d-0e1f2a3b4c5d)",
+      "Error code: 400 - invalid request (request id req_401ab)",
+      "Error code: 403 - forbidden by the proxy",
+    ] {
+      assert_eq!(classify_member_failure(text, None), MemberFailure::Other, "{text}");
+    }
+  }
+
+  #[test]
+  fn the_shared_classification_keeps_each_member_failure_it_met_before() {
+    assert_eq!(classify_member_failure("API Error: 402 Insufficient Balance", None), MemberFailure::Quota);
+    assert_eq!(
+      classify_member_failure("Claude account pool has no available account", Some(true)),
+      MemberFailure::Quota
+    );
+    assert_eq!(classify_member_failure("500 Internal Server Error: quota exhausted", None), MemberFailure::Other);
+    assert_eq!(classify_member_failure("at capacity", Some(false)), MemberFailure::Other);
+    assert_eq!(classify_member_failure("the build broke", None), MemberFailure::Other);
+    assert_eq!(MemberFailure::Quota.availability_reason(), Some(backend_availability::REASON_QUOTA_ERROR));
+    assert_eq!(MemberFailure::AccessRefused.availability_reason(), Some(backend_availability::REASON_ACCESS_REFUSED));
+    assert_eq!(MemberFailure::Other.availability_reason(), None);
   }
 
   #[test]

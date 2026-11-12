@@ -379,9 +379,9 @@ pub struct MemberChange {
   pub from: String,
   /// The member the session now runs on.
   pub to: String,
-  /// Why the member changed: [`event_types::QUOTA_REASON_QUOTA_ERROR`],
-  /// [`event_types::QUOTA_REASON_NEAR_EXHAUSTION`], [`event_types::QUOTA_REASON_SUBSCRIPTION_RESET`].
-  pub reason: &'static str,
+  /// Why the member changed: one of [`backend_availability::RECORDED_REASONS`], or a reading's own
+  /// near-exhaustion or subscription-reset reason.
+  pub reason: String,
   /// The moment the member left recovers, in the minute-resolution event format.
   pub recovers_at: Option<String>,
   /// The handoff summary state of a change made mid-turn; a turn-start change carries none.
@@ -390,7 +390,7 @@ pub struct MemberChange {
 
 impl MemberChange {
   /// A turn-start change, which builds no retry and so carries no handoff summary.
-  fn at_turn_start(pool: &str, from: String, to: String, reason: &'static str, recovers_at: Option<String>) -> Self {
+  fn at_turn_start(pool: &str, from: String, to: String, reason: String, recovers_at: Option<String>) -> Self {
     Self { pool: pool.to_string(), from, to, reason, recovers_at, summary: None }
   }
 
@@ -582,11 +582,18 @@ fn decide_fresh(
         Some(until) => Some(until),
         None => reading_reset(selection.cfg, selection.registry, from, selection.now)?,
       };
+      // The row's own reason moves to the switch record as it is, so a member an earlier refusal or timeout recorded
+      // does not show up as a quota change. A member the reading alone left keeps the quota reason.
+      let reason = selection
+        .availability
+        .row(from)
+        .map(|row| row.reason)
+        .unwrap_or_else(|| event_types::QUOTA_REASON_QUOTA_ERROR.to_string());
       Some(MemberChange::at_turn_start(
         &selection.pool.id,
         from.to_string(),
         selected.backend.clone(),
-        event_types::QUOTA_REASON_QUOTA_ERROR,
+        reason,
         recovers_at,
       ))
     }
@@ -614,17 +621,17 @@ fn decide_keep_or_switch(
   let (reason, recovers_at) = if member_billing(selection.cfg, current_member) == Some(PoolBilling::Payg)
     && member_billing(selection.cfg, &selected) == Some(PoolBilling::Subscription)
   {
-    (event_types::QUOTA_REASON_SUBSCRIPTION_RESET, None)
+    (event_types::QUOTA_REASON_SUBSCRIPTION_RESET.to_string(), None)
   } else if current_reading.as_ref().is_some_and(|reading| reading.exhausted) {
     // The reading says the member has no capacity left; the turn start leaves it, as an out record would.
     let reset = current_reading.as_ref().and_then(MemberReading::earliest_reset).map(format_minutes);
-    (event_types::QUOTA_REASON_QUOTA_ERROR, reset)
+    (event_types::QUOTA_REASON_QUOTA_ERROR.to_string(), reset)
   } else if near_exhaustion(current_reading.as_ref())
     && member_billing(selection.cfg, &selected) == Some(PoolBilling::Subscription)
     && !near_exhaustion(selected_reading.as_ref())
   {
     let reset = current_reading.as_ref().and_then(MemberReading::earliest_reset).map(format_minutes);
-    (event_types::QUOTA_REASON_NEAR_EXHAUSTION, reset)
+    (event_types::QUOTA_REASON_NEAR_EXHAUSTION.to_string(), reset)
   } else {
     return Ok(TurnDecision::Keep(current.to_string()));
   };
@@ -1144,6 +1151,24 @@ backends:
     assert_eq!(event["reason"], "quota_error");
     assert_eq!(event["set"], "auto", "the set names the pool that switched");
     assert_eq!(meta.extra(POOL_MEMBER_FIELD), Some(&json!("claude-sub")));
+  }
+
+  #[tokio::test]
+  async fn turn_start_writes_the_recorded_refusal_reason_as_it_is() {
+    let (_home, features) = fixture();
+    let cfg = loaded_cfg(&features);
+    let mut meta = pool_session(&features, "pool-refused-member", "auto").await;
+    start_turn(&features, &cfg, &mut meta).await.unwrap();
+    availability(&features)
+      .record("chatgpt", None, backend_availability::REASON_ACCESS_REFUSED, "Failed to authenticate")
+      .unwrap();
+
+    let change = changed(start_turn(&features, &cfg, &mut meta).await.unwrap());
+    assert_eq!((change.from.as_str(), change.to.as_str()), ("chatgpt", "claude-sub"));
+    assert_eq!(change.reason, event_types::QUOTA_REASON_ACCESS_REFUSED);
+    assert!(change.recovers_at.is_some());
+    assert_eq!(change.event()["reason"], "access_refused");
+    assert_eq!(change.event()["set"], "auto");
   }
 
   #[tokio::test]

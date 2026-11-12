@@ -148,6 +148,12 @@ pub const QUOTA_SUMMARY_OK: &str = "ok";
 pub const QUOTA_SUMMARY_UNAVAILABLE: &str = "unavailable";
 /// The reason of a change forced by a spent quota.
 pub const QUOTA_REASON_QUOTA_ERROR: &str = "quota_error";
+/// The reason of a change forced by a member that refused authentication or model access.
+pub const QUOTA_REASON_ACCESS_REFUSED: &str = "access_refused";
+/// The reason of a change away from a member whose call outlived its time cap.
+pub const QUOTA_REASON_TIMEOUT: &str = "timeout";
+/// The reason of a change away from a pool member whose iteration failed for a reason other than its quota.
+pub const QUOTA_REASON_ITERATION_FAILURE: &str = "iteration_failure";
 /// The reason of a turn-start change away from a member near exhaustion.
 pub const QUOTA_REASON_NEAR_EXHAUSTION: &str = "near_exhaustion";
 /// The reason of a turn-start change back to a subscription that reset.

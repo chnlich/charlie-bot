@@ -603,6 +603,26 @@ async fn a_textual_quota_error_without_an_adapter_failure_records_the_iteration_
 
 #[tokio::test]
 #[ignore = "integration"]
+async fn a_refused_iteration_is_recorded_with_the_refusal_reason() -> anyhow::Result<()> {
+  let refused = json!({
+    "type": "result",
+    "subtype": "error",
+    "is_error": true,
+    "api_error_status": 401,
+    "result": "Failed to authenticate. API Error: 401 Not allowed to access model due to tags configuration.",
+  });
+  let harness = LoopHarness::new(&["fake"], &[], vec![event_script(&refused, 1)]).await?;
+
+  harness.finish_loop(harness.start_loop(3)).await;
+
+  let path = charliebot_core::home::backend_availability_path(&harness.stack.cfg.charliebot_home);
+  let state: Value = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+  assert_eq!(state["fake"]["reason"], "access_refused", "{state}");
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
 async fn replaying_an_iteration_report_is_idempotent() -> anyhow::Result<()> {
   let harness = LoopHarness::new(&[], &[], vec![recovery_support::result_script("first words")]).await?;
 

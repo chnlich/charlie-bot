@@ -62,6 +62,8 @@ const NO_OUTPUT_REPORT_THRESHOLD: Duration = Duration::from_secs(2 * 60 * 60);
 const STDERR_LOG_CHARS: usize = 500;
 /// The quota message of an error event that carries none.
 const QUOTA_MESSAGE_FALLBACK: &str = "Quota exhausted";
+/// The failure message of an error event that carries none.
+const REFUSED_MESSAGE_FALLBACK: &str = "Access refused";
 /// The failover message of an error event that carries none.
 const TEMPORARY_MESSAGE_FALLBACK: &str = "Backend temporarily unavailable";
 
@@ -70,18 +72,37 @@ pub type SessionEventFn = Arc<dyn Fn(Value) -> BoxFuture<'static, anyhow::Result
 /// Receives the task node after its process spawns, with `pid` and `pid_start` set (`Worker._on_spawn`).
 pub type SpawnedFn = Arc<dyn Fn(ThreadMetadata) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
 
-/// The run's backend reported a spent quota. `resets_at` is when the quota returns, `None` when the backend names no
-/// time.
+/// The run's backend failed in a way that records its member out: a spent quota or a refusal of authentication or
+/// model access. `resets_at` is when the member recovers, `None` when the backend names no time.
 #[derive(Debug)]
 pub struct QuotaExhaustedError {
   message: String,
   pub resets_at: Option<OffsetDateTime>,
   retry_after: Option<RetryAfter>,
+  failure: backend_pool::MemberFailure,
 }
 
 impl QuotaExhaustedError {
   pub fn new(message: impl Into<String>, resets_at: Option<OffsetDateTime>) -> Self {
-    Self { message: message.into(), resets_at, retry_after: None }
+    Self::with_failure(message, resets_at, backend_pool::MemberFailure::Quota)
+  }
+
+  /// The error of a member that refused authentication or model access.
+  pub fn refused(message: impl Into<String>) -> Self {
+    Self::with_failure(message, None, backend_pool::MemberFailure::AccessRefused)
+  }
+
+  pub(crate) fn with_failure(
+    message: impl Into<String>,
+    resets_at: Option<OffsetDateTime>,
+    failure: backend_pool::MemberFailure,
+  ) -> Self {
+    Self { message: message.into(), resets_at, retry_after: None, failure }
+  }
+
+  /// How the shared classification sorts this failure.
+  pub fn failure(&self) -> backend_pool::MemberFailure {
+    self.failure
   }
 }
 
@@ -761,6 +782,10 @@ impl RunProcess for WorkerProcess<'_> {
         let result = self.worker.run_process(&self.sink, &self.env, launch, watch.as_deref_mut(), relays).await;
         let Err(error) = result else { return result };
         let Some(quota) = error.downcast_ref::<QuotaExhaustedError>() else { return Err(error) };
+        // Only a spent quota waits on its stated reset on this member; a refusal never retries where it was refused.
+        if quota.failure() != backend_pool::MemberFailure::Quota {
+          return Err(error);
+        }
         let Some(retry) = quota.retry_after else { return Err(error) };
         if backend_retry::waits(self.automatic_retries, retry.after) {
           self.automatic_retries += 1;
@@ -948,15 +973,31 @@ async fn handle_event<W: LaunchWatch + ?Sized>(
     return Err(QuotaExhaustedError::new(text, None).into());
   }
 
-  // Only an errored Claude Code result is classified here: a temporary failure by its status and then its text, or a
-  // spent quota by its text. Both end the run as a quota failure, so the member is recorded out and the run fails over.
-  if event_type == ET::RESULT
-    && event.get("is_error") == Some(&Value::Bool(true))
-    && (backend_pool::is_temporary_unavailable_result(&event) || backend_pool::is_spent_quota_result(&event))
+  // A refused model access ends the run as a member failure. The quota patterns ran first, so a quota text keeps its
+  // verdict; the refusal's own text becomes the row's detail.
+  if event_type == ET::ERROR
+    && (backend_pool::is_access_refused_error(&message) || backend_pool::is_access_refused_error(&content))
   {
-    let text = text_repr::value_str(event.get("result").context("an errored result carries its result text")?);
     sink.append(&event)?;
-    return Err(QuotaExhaustedError::new(text, None).into());
+    let text = text_repr::value_str(event.get("message").or_else(|| event.get("content")).unwrap_or(&Value::Null));
+    let text = if text.is_empty() { REFUSED_MESSAGE_FALLBACK.to_string() } else { text };
+    return Err(QuotaExhaustedError::refused(text).into());
+  }
+
+  // Only an errored Claude Code result is classified here, by the shared member-failure sort. A temporary failure
+  // keeps today's quota-class failover. A spent quota or a refusal ends the run as its own class, and anything else
+  // is an ordinary error event that falls through.
+  if event_type == ET::RESULT && event.get("is_error") == Some(&Value::Bool(true)) {
+    let text = text_repr::value_str(event.get("result").context("an errored result carries its result text")?);
+    let failure = if backend_pool::is_temporary_unavailable_result(&event) {
+      backend_pool::MemberFailure::Quota
+    } else {
+      backend_pool::classify_member_failure(&text, None)
+    };
+    if failure != backend_pool::MemberFailure::Other {
+      sink.append(&event)?;
+      return Err(QuotaExhaustedError::with_failure(text, None, failure).into());
+    }
   }
 
   sink.append(&event)?;

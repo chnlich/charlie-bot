@@ -1148,7 +1148,11 @@ mod tests {
     let firing = "2026-10-21T03:00:00-07:00";
     let failed =
       register_step_run(&tree, &leaf.id, &task, firing, 0, "member-a", Some("member-a-model"), None).await.unwrap();
-    let quota = QuotaFailure { resets_at: None, message: "API Error: 402 Insufficient Balance".to_string() };
+    let quota = QuotaFailure {
+      resets_at: None,
+      message: "API Error: 402 Insufficient Balance".to_string(),
+      reason: charliebot_agents::backend_availability::REASON_QUOTA_ERROR.to_string(),
+    };
 
     let state = switch_failed_step(&features, &leaf.id, &failed, &quota, &tree, &task).await.unwrap();
     assert_eq!(state, Some(BoundaryState::Running), "the chain waits on the rerun");

@@ -470,15 +470,18 @@ async fn run_loop(
     if outcome != "success" {
       let (blocker_reason, failed_summary) = iteration_blocker(tree, spec.child_id, &run.id, iteration, &outcome)?;
       let quota_failure = adapter.take_quota_failure(spec.child_id, &run.id);
-      if let Some(reason) = blocker_reason {
-        if state.backend.as_deref().is_some_and(|id| cfg.backends.pool(id).is_some()) {
-          let pool_id = state.backend.as_deref().expect("a pool loop records its pool id");
-          let (resets_at, cooling_reason, message) = match &quota_failure {
-            Some(failure) => (failure.resets_at, backend_availability::REASON_QUOTA_ERROR, failure.message.clone()),
+      if let Some(pool_id) = state.backend.as_deref().filter(|id| cfg.backends.pool(id).is_some()) {
+        // The adapter's member failure records its member even when the transcript names no blocker text; a
+        // refusal's transcript names none.
+        let member_failure =
+          quota_failure.as_ref().filter(|failure| backend_availability::is_recorded_reason(&failure.reason));
+        if let Some(reason) = blocker_reason.clone().or_else(|| member_failure.map(|failure| failure.message.clone())) {
+          let (resets_at, cooling_reason, message) = match member_failure {
+            Some(failure) => (failure.resets_at, failure.reason.as_str(), failure.message.clone()),
             None => (None, backend_availability::REASON_ITERATION_FAILURE, reason.clone()),
           };
           pool.availability().record(&iteration_backend, resets_at, cooling_reason, &message)?;
-          if quota_failure.is_some() && run.pid.is_none() && iteration < spec.iterations {
+          if member_failure.is_some() && run.pid.is_none() && iteration < spec.iterations {
             match pool.selector(cfg).select(pool_id, &[])? {
               Some(member) => next_pool_member = Some(member),
               None => {
@@ -487,18 +490,18 @@ async fn run_loop(
               }
             }
           }
-        } else {
-          tracing::warn!(
-            target: "charliebot_improve",
-            session = spec.session_id,
-            loop_id = spec.loop_id,
-            iteration,
-            reason = reason.as_str(),
-            "improve_sequence_blocked"
-          );
-          progress.blocked = Some((iteration, reason, failed_summary));
-          break;
         }
+      } else if let Some(reason) = blocker_reason {
+        tracing::warn!(
+          target: "charliebot_improve",
+          session = spec.session_id,
+          loop_id = spec.loop_id,
+          iteration,
+          reason = reason.as_str(),
+          "improve_sequence_blocked"
+        );
+        progress.blocked = Some((iteration, reason, failed_summary));
+        break;
       }
     }
 

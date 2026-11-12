@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use axum::http::StatusCode;
 use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool;
@@ -2679,6 +2680,58 @@ async fn request_id_with_status_digits_does_not_fail_over() -> anyhow::Result<()
       .await?;
   assert_no_member_cooled(&error)?;
   assert_no_failover(&error).await
+}
+
+// The review run's model-access refusal: the member cools with the refusal reason, and the run continues on the next
+// member with the same input and a note that names the refusal.
+#[tokio::test]
+#[ignore = "integration"]
+async fn an_access_refused_run_fails_over_to_the_next_member() -> anyhow::Result<()> {
+  let refused = "Failed to authenticate. API Error: 401 Not allowed to access model due to tags configuration. \
+                 Passed model=deepseek-flash and tags=['deepseek']";
+  let error = launch_error_event_worker(&[claude_error_result(json!(401), refused)], true).await?;
+  let stack = &error.stack;
+  assert_eq!(error.outcome, RunOutcomeKind::Failed);
+  let retry = wait_for_retry(stack, &error.worker_id, &error.failed.id)
+    .await?
+    .context("the refusal fails the run over to the next member")?;
+  assert_eq!(stack.wait_terminal(&error.worker_id, &retry.id).await?, RunOutcomeKind::Failed);
+  settle_until(|| Ok(stack.child_reports(&error.manager_id)?.len() == 1)).await?;
+
+  let first = error.first_backend.as_str();
+  let pool = backend_pool::backend_pool(&stack.features)?;
+  let row = pool.availability().row(first).context("the refused member is recorded out")?;
+  assert_eq!(row.reason, backend_availability::REASON_ACCESS_REFUSED);
+  let remaining = row.out_until.into_inner() - OffsetDateTime::now_utc();
+  assert!(
+    remaining > TimeDuration::minutes(29) && remaining <= backend_availability::DEFAULT_COOLDOWN,
+    "{remaining:?}"
+  );
+  assert_eq!(retry.backend.as_deref(), Some("fake2"), "the next member runs the retry");
+  assert_eq!(retry.input_event_ids, error.failed.input_event_ids, "the retry reuses the failed run's input");
+  let switches = quota_failover_events(stack, &error.worker_id)?;
+  assert_eq!(switches.len(), 1, "{switches:?}");
+  assert_eq!(switches[0]["reason"], event_types::QUOTA_REASON_ACCESS_REFUSED);
+  assert_eq!(switches[0]["from"].as_str(), Some(first));
+  assert_eq!(switches[0]["to"], "fake2");
+  let launch = std::fs::read_to_string(stack.store().run_dir(&error.worker_id, &retry.id).join(LAUNCH_TEXT_FILENAME))?;
+  assert!(
+    launch.contains(&format!("this task switched from backend {first} to fake2 after {first} refused access")),
+    "{launch}"
+  );
+  settle_node(stack, &error.worker_id).await?;
+  settle_node(stack, &error.manager_id).await?;
+  // Only the retry's own failure can end the task: the refusal left it open for the retry.
+  let closes = stack
+    .run_events(&error.worker_id)?
+    .iter()
+    .map(|event| event.to_value())
+    .filter(|event| event["type"] == event_types::TASK_CLOSED)
+    .collect::<Vec<_>>();
+  for event in &closes {
+    assert_eq!(event["run_ids"], json!([retry.id.clone()]), "the refusal itself did not end the task: {event}");
+  }
+  Ok(())
 }
 
 #[tokio::test]

@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use anyhow::Context;
 use charliebot_agents::agent_environment;
-use charliebot_agents::backend_availability;
 use charliebot_agents::backend_pool::{self, BackendPool};
 use charliebot_agents::backend_types;
 use charliebot_core::config::{BackendOption, CallClass, CharlieBotConfig};
@@ -144,10 +143,10 @@ where
         return Ok(Some((name, group)));
       }
       Err(error) => {
-        tracing::warn!(target: "charliebot_tasks", session_id, error = %error, "autonamer_failed");
-        if backend_pool::is_quota_error(&error.to_string()) {
-          let detail = error.to_string();
-          pool.availability().record(&backend_id, None, backend_availability::REASON_QUOTA_ERROR, &detail)?;
+        let detail = error.to_string();
+        tracing::warn!(target: "charliebot_tasks", session_id, error = %detail, "autonamer_failed");
+        if let Some(reason) = backend_pool::classify_member_failure(&detail, None).availability_reason() {
+          pool.availability().record(&backend_id, None, reason, &detail)?;
         }
       }
     }
@@ -393,6 +392,35 @@ mod tests {
     );
     assert_eq!(fuzzy_match_group("rust", &["Rust".to_string(), "Research".to_string()]), "Rust");
     assert_eq!(parse_name_and_group("[]"), (None, None));
+  }
+
+  #[tokio::test]
+  async fn a_refused_light_backend_is_recorded_with_the_refusal_reason_before_the_next_attempt() {
+    let cfg = light_cfg(["light-a", "light-b"], None);
+    let home = tempfile::tempdir().unwrap();
+    let pool = test_pool(home.path());
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let generated = generate_from_light_backends(&cfg, "session-a", Arc::clone(&pool), |option| {
+      let calls = Arc::clone(&calls);
+      async move {
+        calls.lock().expect("scripted call log lock is not poisoned").push(option.id.clone());
+        if option.id == "light-a" {
+          Err(anyhow::anyhow!(
+            "Failed to authenticate. API Error: 401 Not allowed to access model due to tags configuration."
+          ))
+        } else {
+          Ok(r#"{"name":"Synthetic title","group":"Research"}"#.to_string())
+        }
+      }
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(*calls.lock().unwrap(), ["light-a".to_string(), "light-b".to_string()]);
+    assert_eq!(generated, Some(("Synthetic title".to_string(), Some("Research".to_string()))));
+    let row = pool.availability().row("light-a").expect("the refused backend is recorded out");
+    assert_eq!(row.reason, charliebot_agents::backend_availability::REASON_ACCESS_REFUSED);
+    assert_eq!(pool.selector(&cfg).select(ROTATION_POOL_ID, &[]).unwrap().unwrap().id, "light-b");
   }
 
   #[tokio::test]

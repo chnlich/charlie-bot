@@ -205,15 +205,7 @@ pub async fn judge_signature(backends: &JudgeBackends<'_>, input: &JudgeInput) -
       Ok(judgement) => return Ok(judgement),
       Err(JudgeError::Assertion(message)) => return Err(JudgeError::Assertion(message)),
       Err(error) => {
-        if matches!(error, JudgeError::Timeout(_)) {
-          let until = UtcDateTime::now().into_inner() + JUDGE_COOLDOWN;
-          let detail = error.to_string();
-          backends
-            .pool
-            .availability()
-            .record(&option.id, Some(UtcDateTime::from(until)), backend_availability::REASON_TIMEOUT, &detail)
-            .map_err(|error| JudgeError::Call(format!("{error:#}")))?;
-        }
+        record_member_failure(backends, &option.id, &error)?;
         last_error = Some(error);
       }
     }
@@ -231,6 +223,31 @@ pub async fn judge_signature(backends: &JudgeBackends<'_>, input: &JudgeInput) -
     Some(_) => "backends.calls.triage names no selectable member".to_string(),
   };
   Err(JudgeError::Call(reason))
+}
+
+/// Record one failed judge attempt against the member that failed it. A timeout is the judge's own reason; a quota
+/// or an access refusal is the shared classification's reason. A response or contract failure records nothing: it is
+/// not a member failure.
+fn record_member_failure(backends: &JudgeBackends<'_>, backend_id: &str, error: &JudgeError) -> Result<(), JudgeError> {
+  let (resets_at, reason) = match error {
+    JudgeError::Timeout(_) => {
+      (Some(UtcDateTime::now().into_inner() + JUDGE_COOLDOWN), backend_availability::REASON_TIMEOUT)
+    }
+    JudgeError::Call(_) => {
+      let Some(reason) = backend_pool::classify_member_failure(&error.to_string(), None).availability_reason() else {
+        return Ok(());
+      };
+      (None, reason)
+    }
+    JudgeError::Response(_) | JudgeError::Assertion(_) => return Ok(()),
+  };
+  let detail = error.to_string();
+  backends
+    .pool
+    .availability()
+    .record(backend_id, resets_at.map(UtcDateTime::from), reason, &detail)
+    .map_err(|error| JudgeError::Call(format!("{error:#}")))?;
+  Ok(())
 }
 
 /// One backend's attempt: build it, run its native one-shot, and read the answer.
@@ -339,7 +356,10 @@ fn strip_fences(text: &str) -> &str {
 mod tests {
   use std::path::Path;
 
-  use charliebot_registry::backend::{AgentBackend, Translate, TransportKind};
+  use charliebot_registry::RegistryError;
+  use charliebot_registry::backend::{
+    AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, ResumeStyle, Translate, TransportKind,
+  };
   use futures_util::future::BoxFuture;
   use serde_json::Value;
 
@@ -536,6 +556,59 @@ mod tests {
     assert!(error.contains("backend alpha"), "{error}");
   }
 
+  #[tokio::test]
+  async fn a_refused_judge_member_moves_to_the_next_member_that_answers() {
+    let config = config_with_pool(&["alpha", "beta"]);
+    let env = env();
+    let home = tempfile::tempdir().unwrap();
+    let pool = test_pool(home.path());
+    let mut registry = Registry::new();
+    registry.register_package("test.judge", register_scripted).unwrap();
+    let backends = JudgeBackends {
+      cfg: &config,
+      registry: Arc::new(registry),
+      base_env: &env,
+      pool: Arc::clone(&pool),
+      timeout: JUDGE_TIMEOUT,
+    };
+
+    let judgement = judge_signature(&backends, &judge_input()).await.unwrap();
+
+    assert_eq!(judgement.verdict, Verdict::RealBug, "the next member answers after the refusal");
+    let row = pool.availability().row("alpha").expect("the refused member is recorded out");
+    assert_eq!(row.reason, backend_availability::REASON_ACCESS_REFUSED);
+  }
+
+  #[tokio::test]
+  async fn a_refused_judge_member_is_recorded_with_the_refusal_reason() {
+    let config = config_with_pool(&["alpha", "beta"]);
+    let env = env();
+    let home = tempfile::tempdir().unwrap();
+    let pool = test_pool(home.path());
+    let backends = JudgeBackends {
+      cfg: &config,
+      registry: Arc::new(Registry::new()),
+      base_env: &env,
+      pool: Arc::clone(&pool),
+      timeout: JUDGE_TIMEOUT,
+    };
+
+    record_member_failure(
+      &backends,
+      "alpha",
+      &JudgeError::Call("backend alpha: API Error: 401 Not allowed to access model".to_string()),
+    )
+    .unwrap();
+
+    let row = pool.availability().row("alpha").expect("the refused member is recorded out");
+    assert_eq!(row.reason, backend_availability::REASON_ACCESS_REFUSED);
+    assert_eq!(
+      pool.selector(&config).select("light", &[]).unwrap().unwrap().id,
+      "beta",
+      "the next judge attempt skips the refused member"
+    );
+  }
+
   #[test]
   fn a_member_cooling_in_the_shared_pool_is_skipped() {
     let config = config_with_pool(&["alpha", "beta"]);
@@ -564,6 +637,7 @@ mod tests {
 
   struct ScriptedBackend {
     answer: Option<String>,
+    error: Option<String>,
     delay: Option<Duration>,
   }
 
@@ -603,13 +677,20 @@ mod tests {
       _system: &'a str,
       _timeout: Option<Duration>,
     ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
-      let answer = self.answer.clone()?;
+      if self.answer.is_none() && self.error.is_none() {
+        return None;
+      }
+      let answer = self.answer.clone();
+      let error = self.error.clone();
       let delay = self.delay;
       Some(Box::pin(async move {
         if let Some(delay) = delay {
           tokio::time::sleep(delay).await;
         }
-        Ok(answer)
+        match error {
+          Some(error) => Err(anyhow::anyhow!(error)),
+          None => Ok(answer.expect("a scripted answer or error is set")),
+        }
       }))
     }
   }
@@ -624,11 +705,59 @@ mod tests {
 
   fn built(answer: Option<&str>, delay: Option<Duration>) -> BuiltBackend {
     BuiltBackend {
-      backend: Box::new(ScriptedBackend { answer: answer.map(str::to_string), delay }),
+      backend: Box::new(ScriptedBackend { answer: answer.map(str::to_string), error: None, delay }),
       backend_type: "synthetic".to_string(),
       launch: LaunchArgs::default(),
       registry: Arc::new(Registry::new()),
     }
+  }
+
+  /// Builds one judge backend per option: `alpha` refuses access, and `beta` answers a real-bug judgement.
+  struct JudgeFactory;
+
+  impl BackendFactory for JudgeFactory {
+    fn build(
+      &self,
+      option: Option<&BackendOption>,
+      _cfg: &CharlieBotConfig,
+      _launch: LaunchArgs,
+    ) -> anyhow::Result<Box<dyn AgentBackend>> {
+      let id = option.expect("the judge builds a configured backend").id.clone();
+      if id == "alpha" {
+        return Ok(Box::new(ScriptedBackend {
+          answer: None,
+          error: Some(
+            "Failed to authenticate. API Error: 401 Not allowed to access model due to tags configuration.".to_string(),
+          ),
+          delay: None,
+        }));
+      }
+      Ok(Box::new(ScriptedBackend {
+        answer: Some(
+          r#"{"why":"it is a real bug","verdict":"real_bug","lessons_ref":null,"fix_scope":"code"}"#.to_string(),
+        ),
+        error: None,
+        delay: None,
+      }))
+    }
+  }
+
+  fn register_scripted(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.backend_type(BackendTypeRegistration {
+      type_name: "synthetic",
+      traits: BackendTraits {
+        resume: ResumeStyle::NativeId,
+        restart_reattach: false,
+        preassigned_session_id: false,
+        family_prefix: None,
+        manual_compact: false,
+        compact_hint: None,
+      },
+      option_model: |_| Ok(()),
+      factory: Arc::new(JudgeFactory),
+      lifecycle: None,
+      translate_fallback: false,
+    })
   }
 
   fn env() -> Env {

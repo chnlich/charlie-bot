@@ -9,8 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::bail;
-use charliebot_agents::backend_availability;
-use charliebot_agents::backend_pool::{self, is_quota_error};
+use charliebot_agents::backend_pool;
 use charliebot_agents::cli_host::CliHost;
 use charliebot_agents::{backend_types, one_shot_text};
 use charliebot_core::config::CallClass;
@@ -476,9 +475,9 @@ pub async fn run_probe(host: &CliHost, prompt: &str, system_prompt: &str) -> any
       }
       Err(error) => {
         let message = format!("{error:#}");
-        if is_quota_error(&message) {
+        if let Some(reason) = backend_pool::classify_member_failure(&message, None).availability_reason() {
           let availability = host.pool.availability();
-          availability.record(&option.id, None, backend_availability::REASON_QUOTA_ERROR, &message)?;
+          availability.record(&option.id, None, reason, &message)?;
         }
         attempts.push((option.id, format!("{error_type}: {message}")));
       }
@@ -585,7 +584,8 @@ mod tests {
     }
   }
 
-  /// Builds one failing backend per option: `alpha` fails with an empty message, `beta` with `kaput`.
+  /// Builds one failing backend per option: a `failing-probe` option fails with the option's message, and a
+  /// `refused-probe` option fails with the gateway's model-access refusal.
   struct FailingFactory;
 
   impl BackendFactory for FailingFactory {
@@ -595,8 +595,14 @@ mod tests {
       _cfg: &CharlieBotConfig,
       _launch: LaunchArgs,
     ) -> anyhow::Result<Box<dyn AgentBackend>> {
-      let id = option.expect("the probe builds a configured backend").id.clone();
-      let message = if id == "alpha" { String::new() } else { "kaput".to_string() };
+      let option = option.expect("the probe builds a configured backend");
+      let message = if option.backend_type == REFUSED_PROBE_TYPE {
+        "Failed to authenticate. API Error: 401 Not allowed to access model due to tags configuration.".to_string()
+      } else if option.id == "alpha" {
+        String::new()
+      } else {
+        "kaput".to_string()
+      };
       Ok(Box::new(FailingBackend { message }))
     }
   }
@@ -616,8 +622,26 @@ mod tests {
       factory: Arc::new(FailingFactory),
       lifecycle: None,
       translate_fallback: false,
+    })?;
+    registry.backend_type(BackendTypeRegistration {
+      type_name: REFUSED_PROBE_TYPE,
+      traits: BackendTraits {
+        resume: ResumeStyle::NativeId,
+        restart_reattach: false,
+        preassigned_session_id: false,
+        family_prefix: None,
+        manual_compact: false,
+        compact_hint: None,
+      },
+      option_model: |_| Ok(()),
+      factory: Arc::new(FailingFactory),
+      lifecycle: None,
+      translate_fallback: false,
     })
   }
+
+  /// The backend type whose one-shot answers with the review run's model-access refusal.
+  const REFUSED_PROBE_TYPE: &str = "refused-probe";
 
   fn probe_cfg(ids: [&str; 2]) -> CharlieBotConfig {
     let options = ids
@@ -893,6 +917,48 @@ BBBB
       probe.attempts,
       [("alpha".to_string(), "RuntimeError: ".to_string()), ("beta".to_string(), "RuntimeError: kaput".to_string())]
     );
+    assert_eq!(probe.backend_id, None);
+    assert_eq!(probe.answer, None);
+  }
+
+  #[tokio::test]
+  async fn test_probe_records_a_refused_member_with_the_refusal_reason() {
+    let mut registry = Registry::new();
+    registry.register_package("tests.cold_read", register_failing).unwrap();
+    let registry = Arc::new(registry);
+    let home = tempfile::tempdir().unwrap();
+    let mut cfg = probe_cfg(["alpha", "beta"]);
+    for option in &mut cfg.backends.options {
+      option.backend_type = REFUSED_PROBE_TYPE.to_string();
+    }
+    let pool = std::sync::Arc::new(charliebot_agents::backend_pool::BackendPool::new(
+      std::sync::Arc::new(charliebot_agents::backend_availability::BackendAvailability::load(home.path()).unwrap()),
+      Arc::clone(&registry),
+      Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
+    ));
+    let host = CliHost {
+      cfg,
+      registry,
+      repo_root: PathBuf::from("/synthetic/repo"),
+      base_env: charliebot_agents::agent_environment::AgentBaseEnvironment {
+        values: Env::from([
+          ("PATH".to_string(), "/synthetic/gh-wrapper:/bin:/usr/bin".to_string()),
+          (charliebot_agents::gh_wrapper::WRAPPER_PATH_VAR.to_string(), "/synthetic/gh-wrapper/gh".to_string()),
+        ]),
+      },
+      pool: std::sync::Arc::clone(&pool),
+    };
+
+    let probe = run_probe(&host, "prompt", "system").await.unwrap();
+
+    assert_eq!(
+      probe.attempts.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+      ["alpha", "beta"],
+      "the probe tries every member after a refusal"
+    );
+    assert!(probe.attempts.iter().all(|(_, error)| error.contains("Failed to authenticate")));
+    let row = pool.availability().row("alpha").expect("the refused member is recorded out");
+    assert_eq!(row.reason, charliebot_agents::backend_availability::REASON_ACCESS_REFUSED);
     assert_eq!(probe.backend_id, None);
     assert_eq!(probe.answer, None);
   }

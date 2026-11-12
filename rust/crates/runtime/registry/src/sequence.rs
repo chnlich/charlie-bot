@@ -20,11 +20,13 @@ use charliebot_store::compact::CompactValue;
 
 use crate::startup_stop::StartupStop;
 
-/// One run's spent quota: the reset the backend stated, if any, and the error text the availability owner records.
+/// One run's member failure: the reset the backend stated, if any, the error text the availability owner records, and
+/// the reason the shared failure classification gave it.
 #[derive(Clone, Debug)]
 pub struct QuotaFailure {
   pub resets_at: Option<UtcDateTime>,
   pub message: String,
+  pub reason: String,
 }
 
 /// A node's binding to a sequence (`sequence_controllers.SequenceBinding`). A scheduled task's binding is the loaded

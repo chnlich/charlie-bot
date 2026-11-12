@@ -97,7 +97,7 @@ const GOLDEN_CASE_TESTS: &[&str] = &[
   "test_improve_stop_cli_exits_1_without_a_running_loop",
   "test_cli_unknown_genre_is_usage_error",
   "test_background_flag_is_a_usage_error",
-  "test_cli_assertions_only_fails_when_the_height_cannot_be_measured",
+  "test_cli_assertions_only_reports_when_the_height_cannot_be_measured",
   "test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers",
   "test_cli_in_a_manager_session_delegates_the_cold_read",
   "test_cli_in_a_manager_session_exits_1_when_the_server_refuses",

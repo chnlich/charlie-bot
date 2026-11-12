@@ -943,20 +943,20 @@ fn check_page_height(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutco
     if !chrome_bin.exists() {
       format!("not measured: configured headless_chrome_bin path does not exist: {}", chrome_bin.display())
     } else {
-      match measure_page_height(&chrome_bin, context.artifact) {
-        Ok(Ok(height)) if height > PAGE_HEIGHT_TARGET => {
+      match measure_page_height(&chrome_bin, context.artifact)? {
+        Ok(height) if height > PAGE_HEIGHT_TARGET => {
           format!("{height} px: {} px over the {PAGE_HEIGHT_TARGET} px target", height - PAGE_HEIGHT_TARGET)
         }
-        Ok(Ok(height)) => format!("{height} px (target {PAGE_HEIGHT_TARGET})"),
-        Ok(Err(message)) => format!("not measured: {message}"),
-        Err(error) => format!("not measured: {error:#}"),
+        Ok(height) => format!("{height} px (target {PAGE_HEIGHT_TARGET})"),
+        Err(message) => format!("not measured: {message}"),
       }
     }
   };
   Ok(vec![outcome(PAGE_HEIGHT, true, detail)])
 }
 
-/// Renderer, probe setup, and cleanup failures are returned for the page-height report without gating the page.
+/// The inner error is a renderer failure; the check reports it as an informational outcome. Any other error,
+/// such as a probe that cannot be written, propagates and fails the check run.
 fn measure_page_height(chrome_bin: &Path, artifact: &Path) -> anyhow::Result<Result<i32, String>> {
   let probe = artifact
     .parent()

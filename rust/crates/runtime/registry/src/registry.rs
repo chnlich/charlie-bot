@@ -144,7 +144,7 @@ pub struct Registry {
   /// registered sections and the keys registered on their own.
   pub(crate) config_legacy_keys: Ledger<&'static str>,
   pub(crate) diff_roots: Ledger<DiffRootFn>,
-  pub(crate) template_globals: Ledger<TemplateGlobalFn>,
+  pub(crate) template_globals: Ledger<TemplateGlobalRegistration>,
   pub(crate) home_cards: Vec<HomeCard>,
   pub(crate) scheduled_handlers: Ledger<ScheduledHandlerFn>,
   pub(crate) metadata_slots: Vec<MetadataSlot>,
@@ -1619,6 +1619,23 @@ impl Registry {
 /// the live config and credentials through the feature context. An `Err` fails the render with its message.
 pub type TemplateGlobalFn = fn(&FeatureContext) -> Result<minijinja::Value, String>;
 
+/// How long a template global's value holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TemplateGlobalScope {
+  /// The value reads other live state, such as the search path or the checkout, so the engine evaluates it at every
+  /// render.
+  Live,
+  /// The value depends only on the config and the credentials, so the engine reuses it until either file moves.
+  Stable,
+}
+
+/// One registered template global: the function and how long its value holds.
+#[derive(Clone, Copy)]
+pub struct TemplateGlobalRegistration {
+  pub function: TemplateGlobalFn,
+  pub scope: TemplateGlobalScope,
+}
+
 /// One `/home` page card (`page_render.register_home_card`). Cards list in registration order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HomeCard {
@@ -1628,10 +1645,27 @@ pub struct HomeCard {
 }
 
 impl Registry {
-  /// The registration of a template global (`page_render.register_template_global`).
+  /// The registration of a template global whose value depends only on the config and the credentials
+  /// (`page_render.register_template_global` with `stable=True`). The engine evaluates it at the next render and
+  /// reuses that value until either file moves.
+  pub fn template_global_stable(&mut self, name: &'static str, global: TemplateGlobalFn) -> Result<(), RegistryError> {
+    self.register_global(name, global, TemplateGlobalScope::Stable)
+  }
+
+  /// The registration of a template global (`page_render.register_template_global`). The engine evaluates it at
+  /// every render, so its value may follow any live state the feature context reaches.
   pub fn template_global(&mut self, name: &'static str, global: TemplateGlobalFn) -> Result<(), RegistryError> {
+    self.register_global(name, global, TemplateGlobalScope::Live)
+  }
+
+  fn register_global(
+    &mut self,
+    name: &'static str,
+    global: TemplateGlobalFn,
+    scope: TemplateGlobalScope,
+  ) -> Result<(), RegistryError> {
     let package = self.owner()?;
-    self.template_globals.insert(package, name, global)
+    self.template_globals.insert(package, name, TemplateGlobalRegistration { function: global, scope })
   }
 
   /// The registration of a home-page card (`page_render.register_home_card`).
@@ -1647,7 +1681,7 @@ impl Registry {
   }
 
   /// The template globals with their names, in registration order.
-  pub fn template_globals(&self) -> impl Iterator<Item = (&'static str, TemplateGlobalFn)> + '_ {
+  pub fn template_globals(&self) -> impl Iterator<Item = (&'static str, TemplateGlobalRegistration)> + '_ {
     self.template_globals.pairs().map(|(name, global)| (name, *global))
   }
 

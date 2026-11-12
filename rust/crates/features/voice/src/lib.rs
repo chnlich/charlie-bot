@@ -33,8 +33,8 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(api::routes, api::matches)?;
   registry.websocket("/ws/voice/*", relay::handler)?;
   registry.turn_contribution("voice", Arc::new(VoiceTurnContribution))?;
-  registry.template_global("voice_backends", config::voice_backends)?;
-  registry.template_global("voice_default_backend", config::voice_default_backend)?;
+  registry.template_global_stable("voice_backends", config::voice_backends)?;
+  registry.template_global_stable("voice_default_backend", config::voice_default_backend)?;
   registry.config_section(config::section())?;
   registry.config_check("check_default_backend", config::check_default_backend)?;
   registry.home_card(HomeCard {

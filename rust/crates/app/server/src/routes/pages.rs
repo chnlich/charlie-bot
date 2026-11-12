@@ -404,7 +404,7 @@ fn worker_script(state: &Arc<AppState>, request: &Parts) -> Result<Response, Fai
   let body = templating
     .render_page_template(&state.features, "offline-shell-worker.js", &context, request)
     .map_err(|error| failure(error.kind(), error))?;
-  let mut response = Response::new(Body::from(body));
+  let mut response = Response::new(Body::from((*body).clone()));
   response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/javascript; charset=utf-8"));
   response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
   Ok(response)

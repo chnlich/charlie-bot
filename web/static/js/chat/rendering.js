@@ -446,6 +446,13 @@ function buildTurnRowFromSpec(spec) {
   meta.appendChild(time);
   row.appendChild(meta);
 
+  // A folded turn is a button, and a phone has no hover or title tooltip to show it: the row ends
+  // in the disclosure caret the fold bar and the events rows carry, so a reader sees it opens. The
+  // row hides while the turn is open, so the caret always shows the closed state.
+  const caret = turnRowField('turn-row-caret', '▶');
+  caret.setAttribute('aria-hidden', 'true');
+  row.appendChild(caret);
+
   return row;
 }
 

@@ -5128,8 +5128,6 @@ pub(crate) mod tests {
   fn task_spec_hash_matches_canonical_text() {
     let implement = TaskSpec {
       goal: "Ship the é change".to_string(),
-      acceptance: vec!["tests pass".to_string()],
-      context_refs: vec!["docs/a.md".to_string()],
       repo_path: Some("/home/synthetic/repo".to_string()),
       base_branch: Some("main".to_string()),
       task_type: Some(TaskType::Implement),
@@ -5140,20 +5138,31 @@ pub(crate) mod tests {
     let text = serde_json::to_string(&implement).unwrap();
     assert_eq!(
       text,
-      r#"{"goal":"Ship the é change","acceptance":["tests pass"],"context_refs":["docs/a.md"],"repo_path":"/home/synthetic/repo","base_branch":"main","task_type":"implement","keep_worktree":true,"cold_read":null}"#
+      concat!(
+        r#"{"goal":"Ship the é change","repo_path":"/home/synthetic/repo","#,
+        r#""base_branch":"main","task_type":"implement","keep_worktree":true,"cold_read":null}"#
+      )
     );
-    assert_eq!(task_spec_hash(&implement).unwrap(), "c5ddb0177e12fd9b6e51707f3c41a0285c830bff33280ac66ebd0121cdd3a7c1");
+    assert_eq!(task_spec_hash(&implement).unwrap(), "e7fbf6373f6bd68ec36edba7afc6737364e61cea3e41a40e14d2c8aa8d745891");
 
     let verify = TaskSpec { goal: "check".to_string(), task_type: Some(TaskType::Verify), ..TaskSpec::default() };
     assert_eq!(
       serde_json::to_string(&verify).unwrap(),
-      r#"{"goal":"check","acceptance":[],"context_refs":[],"repo_path":null,"base_branch":null,"task_type":"verify","keep_worktree":false,"cold_read":null}"#
+      concat!(
+        r#"{"goal":"check","repo_path":null,"base_branch":null,"#,
+        r#""task_type":"verify","keep_worktree":false,"cold_read":null}"#
+      )
     );
-    assert_eq!(task_spec_hash(&verify).unwrap(), "9e765c73c0cf10b2fbaef99cb808d77a04b4451cc5924cdaa17b7ddf4c6f106b");
+    assert_eq!(task_spec_hash(&verify).unwrap(), "c82e3d1be5c5baed6963893dae49d1ab7dec73a8863b95bb343f679f135ac8e6");
 
-    // A record written while the context-work flag existed still reads, and the read drops the retired key.
-    let written_with_flag = r#"{"goal":"check","acceptance":[],"context_refs":[],"repo_path":null,"base_branch":null,"task_type":"verify","keep_worktree":false,"cold_read":null,"context_work":true}"#;
-    assert_eq!(serde_json::from_str::<TaskSpec>(written_with_flag).unwrap(), verify);
+    // A record written while the retired keys existed still reads, and the read drops them: the next save omits them.
+    let written_with_retired_keys = concat!(
+      r#"{"goal":"check","acceptance":["tests pass"],"context_refs":["docs/a.md"],"repo_path":null,"#,
+      r#""base_branch":null,"task_type":"verify","keep_worktree":false,"cold_read":null,"context_work":true}"#
+    );
+    let read = serde_json::from_str::<TaskSpec>(written_with_retired_keys).unwrap();
+    assert_eq!(read, verify);
+    assert_eq!(serde_json::to_string(&read).unwrap(), serde_json::to_string(&verify).unwrap());
   }
 }
 

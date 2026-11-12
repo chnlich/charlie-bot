@@ -1102,8 +1102,6 @@ mod tests {
           profile: TaskProfile::Worker,
           task: Some(TaskSpec {
             goal: "synthetic scheduled steps".to_string(),
-            acceptance: Vec::new(),
-            context_refs: Vec::new(),
             repo_path: None,
             base_branch: None,
             task_type: None,
@@ -1220,8 +1218,6 @@ mod tests {
           profile: TaskProfile::Worker,
           task: Some(TaskSpec {
             goal: "synthetic scheduled steps".to_string(),
-            acceptance: Vec::new(),
-            context_refs: Vec::new(),
             repo_path: None,
             base_branch: None,
             task_type: None,

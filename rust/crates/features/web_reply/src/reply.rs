@@ -22,7 +22,7 @@ use charliebot_registry::{FeatureContext, StateError};
 #[cfg(test)]
 use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
-use charliebot_store::metadata::SessionMetadata;
+use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::reply_order::{self, Receipt};
 use charliebot_store::{SESSION_NOT_FOUND_DETAIL, SharedChatEvent, Store, StoreError};
 use charliebot_user_text_checks::{self as user_text_checks, UserTextChecks, UserTextChecksConfig};
@@ -128,6 +128,22 @@ impl From<anyhow::Error> for WebReplyError {
 /// True for a manager session that no Slack or Discord thread owns.
 pub fn is_web_session(meta: &SessionMetadata) -> bool {
   charliebot_tasks::midturn_delivery::is_web_session(meta)
+}
+
+/// The manager session named by `session_id`, web or thread: 404 for an unknown session, 409 for a worker.
+pub async fn require_manager_session(
+  features: &FeatureContext,
+  session_id: &str,
+) -> Result<SessionMetadata, WebReplyError> {
+  let meta = features
+    .store
+    .get_session(session_id)
+    .await?
+    .ok_or_else(|| WebReplyError::refused(StatusCode::NOT_FOUND, SESSION_NOT_FOUND_DETAIL))?;
+  if meta.profile != TaskProfile::Manager {
+    return Err(WebReplyError::refused(StatusCode::CONFLICT, "Session is not a manager: it is a worker"));
+  }
+  Ok(meta)
 }
 
 /// The web session named by `session_id`: 404 for an unknown session, 409 for a thread

@@ -52,16 +52,15 @@ pub struct Handoff {
 
 /// Build the switch note and summary for a retry that continues `source`'s run.
 ///
-/// `reason` names why the retry starts a fresh conversation; `goal` is the task's goal. The note always names the
-/// session chat log, its archives and the failed run's directory as absolute paths. A manager's note also carries the
-/// session's status Goal, and an unreadable status fails the retry. A summary that cannot be assembled leaves a line
-/// in the note and an `unavailable` value for the switch record, and the retry proceeds.
+/// `reason` names why the retry starts a fresh conversation. The note always names the session chat log, its archives
+/// and the failed run's directory as absolute paths. A worker's note and summary name the task's goal; a manager's
+/// Goals reach it through its prompt, so its note and summary name none. A summary that cannot be assembled leaves a
+/// line in the note and an `unavailable` value for the switch record, and the retry proceeds.
 pub fn handoff(
   features: &FeatureContext,
   meta: &SessionMetadata,
   source: HandoffSource<'_>,
   reason: &str,
-  goal: &str,
 ) -> anyhow::Result<Handoff> {
   let previous = source.run();
   let session_dir = features.store.session_dir(&meta.id);
@@ -75,33 +74,31 @@ pub fn handoff(
     archives.display(),
     run_dir.display(),
   );
-  let (summary_text, summary_value) = match summary(features, meta, &source, goal) {
+  let (summary_text, summary_value) = match summary(features, meta, &source) {
     Ok(text) => (text, SUMMARY_OK.to_string()),
     Err(reason) => {
       (format!("Handoff summary {SUMMARY_UNAVAILABLE}: {reason}"), format!("{SUMMARY_UNAVAILABLE}: {reason}"))
     }
   };
   let note = match meta.profile {
-    TaskProfile::Manager => {
-      let status_goal = features.registry.status_goal_line(meta)?;
-      session_anchors::manager_switch_reset_note(&meta.id, reason, goal, status_goal.as_deref(), &context)
-    }
-    TaskProfile::Worker => session_anchors::worker_switch_reset_note(reason, goal, &context),
+    TaskProfile::Manager => session_anchors::manager_switch_reset_note(&meta.id, reason, &context),
+    TaskProfile::Worker => session_anchors::worker_switch_reset_note(reason, task_goal(meta), &context),
   };
   Ok(Handoff { note: format!("{note}\n\n{summary_text}"), summary: summary_value })
 }
 
+/// The task goal a worker's note and summary name: its task record's goal, or its session name when it has no record.
+fn task_goal(meta: &SessionMetadata) -> &str {
+  meta.task.as_ref().map_or(meta.name.as_str(), |task| task.goal.as_str())
+}
+
 /// Assemble the four summary parts, or fail with the reason the previous run's events could not be read.
-fn summary(
-  features: &FeatureContext,
-  meta: &SessionMetadata,
-  source: &HandoffSource<'_>,
-  goal: &str,
-) -> Result<String, String> {
+fn summary(features: &FeatureContext, meta: &SessionMetadata, source: &HandoffSource<'_>) -> Result<String, String> {
   if let Some(reason) = forced_summary_failure(&source.run().id) {
     return Err(reason);
   }
   let events = previous_events(features, meta, source)?;
+  let goal = (meta.profile == TaskProfile::Worker).then(|| task_goal(meta));
   Ok(RunWork::collect(&events).render(goal))
 }
 
@@ -230,7 +227,8 @@ impl RunWork {
     }
   }
 
-  fn render(&self, goal: &str) -> String {
+  /// The four summary parts. The goal line is present when `goal` is.
+  fn render(&self, goal: Option<&str>) -> String {
     let done = self
       .steps
       .iter()
@@ -243,7 +241,8 @@ impl RunWork {
       |(step, _)| format!("{} (no result yet)", truncate(step)),
     );
     let files = if self.files.is_empty() { "none".to_string() } else { self.files.join(", ") };
-    let mut text = format!("Handoff summary:\ngoal: {}\ndone ({}):", truncate(goal), done.len());
+    let goal_line = goal.map(|goal| format!("goal: {}\n", truncate(goal))).unwrap_or_default();
+    let mut text = format!("Handoff summary:\n{goal_line}done ({}):", done.len());
     if done.is_empty() {
       text.push_str(" none");
     }
@@ -333,13 +332,23 @@ mod tests {
       json!({"type": "tool_use", "name": "Read", "input": {"file_path": "/synthetic/a.rs"}}),
     ];
 
-    let text = RunWork::collect(&events).render("fix the failing test");
+    let text = RunWork::collect(&events).render(Some("fix the failing test"));
 
     assert_eq!(
       text,
       "Handoff summary:\ngoal: fix the failing test\ndone (1):\n- $ Bash cargo test\nin progress: $ Read \
        {\"file_path\": \"/synthetic/a.rs\"} (no result yet)\nfiles: /synthetic/a.rs"
     );
+  }
+
+  #[test]
+  fn the_summary_without_a_goal_names_none() {
+    let events = vec![json!({"type": "tool_use", "name": "Bash", "input": {"command": "cargo test"}})];
+
+    let text = RunWork::collect(&events).render(None);
+
+    assert!(text.starts_with("Handoff summary:\ndone (0):"), "{text}");
+    assert!(!text.contains("goal:"), "{text}");
   }
 
   #[test]
@@ -355,7 +364,7 @@ mod tests {
       ]}}),
     ];
 
-    let text = RunWork::collect(&events).render("read both");
+    let text = RunWork::collect(&events).render(Some("read both"));
 
     assert!(text.contains("done (1):\n- $ Read {\"file_path\": \"/synthetic/b.rs\"}"), "{text}");
     assert!(text.contains("in progress: $ Read {\"file_path\": \"/synthetic/a.rs\"} (no result yet)"), "{text}");

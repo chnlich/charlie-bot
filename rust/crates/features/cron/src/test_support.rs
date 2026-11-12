@@ -549,8 +549,6 @@ async fn task_manager(
           profile: TaskProfile::Manager,
           task: Some(TaskSpec {
             goal: "Synthetic cron manager".to_string(),
-            acceptance: Vec::new(),
-            context_refs: Vec::new(),
             repo_path: None,
             base_branch: None,
             task_type: None,

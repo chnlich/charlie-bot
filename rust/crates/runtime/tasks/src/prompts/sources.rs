@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use charliebot_core::run_kind::RunKind;
 use charliebot_core::text_repr::str_repr;
-use charliebot_registry::turn::{DELIVERY_FULL, SCOPE_BASE, SCOPE_NODE, SCOPE_SUBTREE};
+use charliebot_registry::turn::{DELIVERY_FULL, SCOPE_BASE, SCOPE_GOAL, SCOPE_NODE, SCOPE_SUBTREE};
 use charliebot_store::control_events::sha256_hex;
 use charliebot_store::metadata::{SessionMetadata, TaskSpec, TaskType, requester_words_heading_line};
 
@@ -43,12 +43,23 @@ pub struct ChainLink {
   pub subtree_ref: Option<String>,
 }
 
-/// The launch-time inputs of one assembly pass: the overlay name, the captured chain, and this node's node rule ref.
+/// The status Goals of a session and its parent, captured with the chain. `None` means the session has not set one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionGoals {
+  /// The nearest parent session's status Goal.
+  pub parent: Option<String>,
+  /// This session's status Goal.
+  pub own: Option<String>,
+}
+
+/// The launch-time inputs of one assembly pass: the overlay name, the captured chain, this node's node rule ref, and
+/// the status Goals the chain captured.
 #[derive(Clone, Copy, Debug)]
 pub struct RuleInputs<'a> {
   pub overlay: Option<&'a str>,
   pub chain: &'a [ChainLink],
   pub node_ref: Option<&'a str>,
+  pub goals: &'a SessionGoals,
 }
 
 /// A declared model overlay that could not be read. The launch raises an alert with [`Self::class_name`] and
@@ -100,7 +111,44 @@ pub fn build_segments(
   segments.extend(env.registry.instruction_segments(meta, kind, env.cfg, env.checkout)?);
   let bodies_dir = env.cfg.charliebot_home.join(PROMPT_BODIES_DIR);
   segments.extend(local_rule_segments(&bodies_dir, inputs.chain, inputs.node_ref, &meta.id)?);
+  segments.extend(goal_segment(kind, meta, inputs));
   Ok((segments, overlay_error))
+}
+
+/// The Goal block that ends a manager or worker prompt. A session with a parent carries the parent's line first; a
+/// manager then carries its own line. A line reads `not set` for a side with no status Goal. A worker has no own line,
+/// and a root session has no parent line.
+fn goal_segment(kind: &str, meta: &SessionMetadata, inputs: &RuleInputs<'_>) -> Option<RuleSegment> {
+  let mut lines = Vec::new();
+  let mut sources = Vec::new();
+  // The chain runs from the root down to this session, so the link before the last one is the nearest parent.
+  if inputs.chain.len() >= 2 {
+    let parent = &inputs.chain[inputs.chain.len() - 2];
+    lines.push(goal_line("Parent session's Goal", inputs.goals.parent.as_deref()));
+    sources.push(goal_source(&parent.session_id));
+  }
+  if MANAGER_KINDS.contains(&kind) {
+    lines.push(goal_line("This session's Goal", inputs.goals.own.as_deref()));
+    sources.push(goal_source(&meta.id));
+  }
+  if lines.is_empty() {
+    return None;
+  }
+  Some(RuleSegment { text: lines.join("\n"), sources, delivery: DELIVERY_FULL.to_string() })
+}
+
+/// One Goal line: its label, then the Goal text or `not set`.
+fn goal_line(label: &str, goal: Option<&str>) -> String {
+  format!("{label}: {}", goal.unwrap_or("not set"))
+}
+
+/// The source of a Goal line: the status field of the session that holds the Goal.
+fn goal_source(session_id: &str) -> PromptSource {
+  PromptSource {
+    scope: SCOPE_GOAL.to_string(),
+    source_ref: "metadata.json#web_status.goal".to_string(),
+    source_session_id: Some(session_id.to_string()),
+  }
 }
 
 /// The path of the host supplement under the home.
@@ -273,5 +321,89 @@ fn local_source(scope: &str, reference: &str, owner: &str) -> PromptSource {
     scope: scope.to_string(),
     source_ref: format!("{PROMPT_BODIES_DIR}/{reference}.md"),
     source_session_id: Some(owner.to_string()),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use charliebot_store::metadata::TaskProfile;
+
+  use super::*;
+
+  fn link(session_id: &str) -> ChainLink {
+    ChainLink { session_id: session_id.to_string(), subtree_ref: None }
+  }
+
+  fn session(id: &str) -> SessionMetadata {
+    SessionMetadata::new(id, id, TaskProfile::Manager)
+  }
+
+  /// The goal block a launch of `kind` assembles for `meta` over `chain`, with the Goals `parent` and `own` hold.
+  fn goal_of(kind: &str, meta: &SessionMetadata, chain: &[ChainLink], goals: &SessionGoals) -> Option<RuleSegment> {
+    goal_segment(kind, meta, &RuleInputs { overlay: None, chain, node_ref: None, goals })
+  }
+
+  fn text_of(kind: &str, meta: &SessionMetadata, chain: &[ChainLink], goals: &SessionGoals) -> Option<String> {
+    goal_of(kind, meta, chain, goals).map(|segment| segment.text)
+  }
+
+  fn goals(parent: Option<&str>, own: Option<&str>) -> SessionGoals {
+    SessionGoals { parent: parent.map(String::from), own: own.map(String::from) }
+  }
+
+  #[test]
+  fn a_root_manager_carries_its_own_goal_line_only() {
+    let root = session("root");
+    let chain = [link("root")];
+
+    assert_eq!(
+      text_of("manager_turn", &root, &chain, &goals(None, Some("ship it"))).as_deref(),
+      Some("This session's Goal: ship it")
+    );
+    assert_eq!(
+      text_of("manager_turn", &root, &chain, &goals(None, None)).as_deref(),
+      Some("This session's Goal: not set")
+    );
+  }
+
+  #[test]
+  fn a_child_manager_carries_the_parent_line_then_its_own_line() {
+    let child = session("mid");
+    let chain = [link("root"), link("mid")];
+
+    assert_eq!(
+      text_of("manager_turn", &child, &chain, &goals(Some("ship it"), Some("the middle"))).as_deref(),
+      Some("Parent session's Goal: ship it\nThis session's Goal: the middle")
+    );
+    assert_eq!(
+      text_of("manager_turn", &child, &chain, &goals(None, None)).as_deref(),
+      Some("Parent session's Goal: not set\nThis session's Goal: not set")
+    );
+  }
+
+  #[test]
+  fn a_worker_carries_the_parent_line_only() {
+    let worker = SessionMetadata::new("worker", "worker", TaskProfile::Worker);
+    let chain = [link("root"), link("mid"), link("worker")];
+
+    assert_eq!(
+      text_of("work", &worker, &chain, &goals(Some("ship it"), None)).as_deref(),
+      Some("Parent session's Goal: ship it")
+    );
+    assert_eq!(
+      text_of("review", &worker, &chain, &goals(None, None)).as_deref(),
+      Some("Parent session's Goal: not set")
+    );
+  }
+
+  #[test]
+  fn each_line_names_its_session_as_the_source() {
+    let child = session("mid");
+    let chain = [link("root"), link("mid")];
+
+    let segment = goal_of("manager_turn", &child, &chain, &goals(Some("ship it"), None)).expect("a goal block");
+    let owners: Vec<Option<&str>> = segment.sources.iter().map(|source| source.source_session_id.as_deref()).collect();
+    assert_eq!(owners, [Some("root"), Some("mid")]);
+    assert!(segment.sources.iter().all(|source| source.scope == SCOPE_GOAL));
   }
 }

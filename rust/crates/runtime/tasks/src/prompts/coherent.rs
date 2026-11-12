@@ -1,8 +1,9 @@
 //! The launch-time coherent snapshot over the task tree.
 //!
-//! The ancestor chain and the refs are captured under the control lock. The templates, the supplements, the overlay and
-//! the memory are read outside it. Before a pass settles, the chain is captured again and the sources are assembled
-//! again; any change starts another pass, and a source that keeps moving fails the launch.
+//! The ancestor chain, the refs and the status Goals of the session and its parent are captured under the control lock.
+//! The templates, the supplements, the overlay and the memory are read outside it. Before a pass settles, the view is
+//! captured again and the sources are assembled again; any change starts another pass, and a source that keeps moving
+//! fails the launch.
 
 use anyhow::{Context, anyhow};
 use charliebot_core::RepoRoot;
@@ -13,8 +14,8 @@ use charliebot_store::{ControlGuard, Store};
 use std::sync::Arc;
 
 use super::{
-  COHERENCE_PASSES, ChainLink, OverlayError, PromptEnv, PromptSnapshot, RuleInputs, TaskPromptError, assemble_snapshot,
-  build_segments,
+  COHERENCE_PASSES, ChainLink, OverlayError, PromptEnv, PromptSnapshot, RuleInputs, SessionGoals, TaskPromptError,
+  assemble_snapshot, build_segments,
 };
 
 /// The coherent snapshot of one launch: the snapshot, the overlay read error (if any), and whether the overlay is
@@ -29,6 +30,14 @@ struct LaunchPromptEnv {
   cfg: Arc<CharlieBotConfig>,
   registry: Arc<Registry>,
   checkout: Arc<RepoRoot>,
+}
+
+/// What one pass captures under the control lock: the ancestor chain, this node's node rule ref, and the status Goals.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CapturedView {
+  chain: Vec<ChainLink>,
+  node_ref: Option<String>,
+  goals: SessionGoals,
 }
 
 /// The three-state overlay judgment of a launch: `(overlay name or None, declared)`. An undeclared overlay is
@@ -61,17 +70,42 @@ pub async fn capture_prompt_chain(
   Ok((chain, meta.node_prompt_ref.clone()))
 }
 
-/// Reloads `session_id` and captures its chain inside one control-lock hold, so the chain and the body built from the
-/// returned metadata come from the same view. A task that vanished mid-assembly fails.
+/// The status Goals of `meta` and of its nearest parent. The caller holds the control lock. A parent that stores an
+/// unreadable status fails the capture, as the registry's hook reports it.
+pub async fn capture_session_goals(
+  store: &Store,
+  registry: &Registry,
+  meta: &SessionMetadata,
+) -> anyhow::Result<SessionGoals> {
+  let parent = match store.ancestor_ids(&meta.id)?.first() {
+    Some(parent_id) => {
+      let parent =
+        store.load_meta(parent_id).await?.ok_or_else(|| anyhow!("task {parent_id} vanished during prompt assembly"))?;
+      registry.status_goal(&parent)?
+    }
+    None => None,
+  };
+  Ok(SessionGoals { parent, own: registry.status_goal(meta)? })
+}
+
+/// Reloads `session_id` and captures its view inside one control-lock hold, so the view and the body built from the
+/// returned metadata come from the same tree. A task that vanished mid-assembly fails.
 async fn capture_under_control_lock(
   store: &Store,
+  registry: &Registry,
   session_id: &str,
-) -> anyhow::Result<(Vec<ChainLink>, Option<String>, SessionMetadata)> {
+) -> anyhow::Result<(CapturedView, SessionMetadata)> {
   let guard = store.control_lock().await;
   let fresh =
     store.load_meta(session_id).await?.ok_or_else(|| anyhow!("task {session_id} vanished during prompt assembly"))?;
   let (chain, node_ref) = capture_prompt_chain(store, &guard, &fresh).await?;
-  Ok((chain, node_ref, fresh))
+  let goals = capture_session_goals(store, registry, &fresh).await?;
+  Ok((CapturedView { chain, node_ref, goals }, fresh))
+}
+
+/// The assembly inputs of one captured view under the launch's overlay.
+fn view_inputs<'a>(view: &'a CapturedView, overlay: Option<&'a str>) -> RuleInputs<'a> {
+  RuleInputs { overlay, chain: &view.chain, node_ref: view.node_ref.as_deref(), goals: &view.goals }
 }
 
 /// The coherent snapshot for one run kind of `meta` under `option` (`assemble_coherent_snapshot`). A snapshot whose
@@ -85,8 +119,8 @@ pub async fn assemble_coherent_snapshot(
 ) -> anyhow::Result<CoherentSnapshot> {
   let (overlay, declared) = resolve_launch_overlay(option);
   for _ in 0..COHERENCE_PASSES {
-    let (chain, node_ref, fresh) = capture_under_control_lock(store, &meta.id).await?;
-    let inputs = RuleInputs { overlay: overlay.as_deref(), chain: &chain, node_ref: node_ref.as_deref() };
+    let (view, fresh) = capture_under_control_lock(store, env.registry, &meta.id).await?;
+    let inputs = view_inputs(&view, overlay.as_deref());
     let (built, overlay_error) = build_segments(env, &fresh, kind, &inputs)?;
     let candidate = assemble_snapshot(&built);
     // The mutable-source recheck: assemble again, and any difference means no coherent view existed yet.
@@ -94,9 +128,9 @@ pub async fn assemble_coherent_snapshot(
     if candidate != assemble_snapshot(&rebuilt) {
       continue;
     }
-    let (chain_again, node_ref_again, _) = capture_under_control_lock(store, &meta.id).await?;
-    if (&chain_again, &node_ref_again) != (&chain, &node_ref) {
-      // A rule or an ancestor moved: rebuild from the new view.
+    let (view_again, _) = capture_under_control_lock(store, env.registry, &meta.id).await?;
+    if view_again != view {
+      // A rule, an ancestor or a Goal moved: rebuild from the new view.
       continue;
     }
     return Ok(CoherentSnapshot {
@@ -128,17 +162,17 @@ pub async fn assemble_coherent_snapshot_for_launch(
   let (overlay, declared) = resolve_launch_overlay(option);
   let env = LaunchPromptEnv { cfg, registry, checkout };
   for _ in 0..COHERENCE_PASSES {
-    let (chain, node_ref, fresh) = capture_under_control_lock(store, &meta.id).await?;
+    let (view, fresh) = capture_under_control_lock(store, &env.registry, &meta.id).await?;
     let (built, overlay_error) =
-      build_segments_off_thread(&env, fresh.clone(), kind, overlay.as_deref(), chain.clone(), node_ref.clone()).await?;
+      build_segments_off_thread(&env, fresh.clone(), kind, overlay.as_deref(), view.clone()).await?;
     let candidate = assemble_snapshot(&built);
     let (rebuilt, overlay_error_again) =
-      build_segments_off_thread(&env, fresh, kind, overlay.as_deref(), chain.clone(), node_ref.clone()).await?;
+      build_segments_off_thread(&env, fresh, kind, overlay.as_deref(), view.clone()).await?;
     if candidate != assemble_snapshot(&rebuilt) {
       continue;
     }
-    let (chain_again, node_ref_again, _) = capture_under_control_lock(store, &meta.id).await?;
-    if (&chain_again, &node_ref_again) != (&chain, &node_ref) {
+    let (view_again, _) = capture_under_control_lock(store, &env.registry, &meta.id).await?;
+    if view_again != view {
       continue;
     }
     return Ok(CoherentSnapshot {
@@ -161,8 +195,7 @@ async fn build_segments_off_thread(
   meta: SessionMetadata,
   kind: &str,
   overlay: Option<&str>,
-  chain: Vec<ChainLink>,
-  node_ref: Option<String>,
+  view: CapturedView,
 ) -> anyhow::Result<(Vec<super::RuleSegment>, Option<OverlayError>)> {
   let cfg = Arc::clone(&env.cfg);
   let registry = Arc::clone(&env.registry);
@@ -171,8 +204,7 @@ async fn build_segments_off_thread(
   let overlay = overlay.map(str::to_string);
   tokio::task::spawn_blocking(move || {
     let env = PromptEnv { cfg: &cfg, registry: &registry, checkout: &checkout };
-    let inputs = RuleInputs { overlay: overlay.as_deref(), chain: &chain, node_ref: node_ref.as_deref() };
-    build_segments(&env, &meta, &kind, &inputs)
+    build_segments(&env, &meta, &kind, &view_inputs(&view, overlay.as_deref()))
   })
   .await
   .map_err(anyhow::Error::new)

@@ -15,7 +15,7 @@ use charliebot_registry::turn::TurnContribution;
 use charliebot_store::control_events::sha256_hex;
 use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskProfile, TaskSpec, TaskType};
 use charliebot_tasks::prompts::{
-  ChainLink, OverlayError, PromptBlock, PromptEnv, PromptSnapshot, PromptSource, RuleInputs, RuleSegment,
+  ChainLink, OverlayError, PromptBlock, PromptEnv, PromptSnapshot, PromptSource, RuleInputs, RuleSegment, SessionGoals,
   assemble_snapshot, build_segments, resolve_launch_overlay,
 };
 use serde_json::{Value, json};
@@ -441,7 +441,12 @@ fn rust_case(case: &Case, home: &Path, registry: &Registry, checkout: &RepoRoot)
     })
     .collect();
   let node_ref = case.node_body.map(|name| sha256_hex(text_of(case.bodies, name)));
-  let inputs = RuleInputs { overlay: overlay.as_deref(), chain: &chain, node_ref: node_ref.as_deref() };
+  let inputs = RuleInputs {
+    overlay: overlay.as_deref(),
+    chain: &chain,
+    node_ref: node_ref.as_deref(),
+    goals: &SessionGoals::default(),
+  };
   let env = PromptEnv { cfg: &cfg, registry, checkout };
   let (segments, overlay_error): (Vec<RuleSegment>, Option<OverlayError>) =
     build_segments(&env, &meta, case.kind, &inputs).expect("the matrix assembles");

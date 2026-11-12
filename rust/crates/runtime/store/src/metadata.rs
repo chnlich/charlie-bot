@@ -8,7 +8,7 @@ use anyhow::Context as _;
 use charliebot_core::json_loads;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot};
 use charliebot_core::text_repr::{self, JsonStyle};
-use serde::de::{MapAccess, Visitor};
+use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
@@ -386,10 +386,6 @@ pub struct TaskSpec {
   #[serde(default)]
   pub goal: String,
   #[serde(default)]
-  pub acceptance: Vec<String>,
-  #[serde(default)]
-  pub context_refs: Vec<String>,
-  #[serde(default)]
   pub repo_path: Option<String>,
   #[serde(default)]
   pub base_branch: Option<String>,
@@ -414,10 +410,6 @@ impl<'de> Deserialize<'de> for TaskSpec {
       #[serde(default)]
       goal: String,
       #[serde(default)]
-      acceptance: Vec<String>,
-      #[serde(default)]
-      context_refs: Vec<String>,
-      #[serde(default)]
       repo_path: Option<String>,
       #[serde(default)]
       base_branch: Option<String>,
@@ -433,6 +425,12 @@ impl<'de> Deserialize<'de> for TaskSpec {
       // accepts it and drops it.
       #[serde(default, rename = "context_work")]
       _retired_context_work: Option<bool>,
+      // The retired acceptance and context-refs lists. Their Goal text replaced them; the read accepts
+      // them and drops them, so the next save omits them.
+      #[serde(default, rename = "acceptance")]
+      _retired_acceptance: Option<IgnoredAny>,
+      #[serde(default, rename = "context_refs")]
+      _retired_context_refs: Option<IgnoredAny>,
     }
     let fields = Fields::deserialize(deserializer)?;
     if fields.task_type == Some(TaskType::ColdRead) && fields.cold_read.is_none() {
@@ -444,8 +442,6 @@ impl<'de> Deserialize<'de> for TaskSpec {
     }
     Ok(Self {
       goal: fields.goal,
-      acceptance: fields.acceptance,
-      context_refs: fields.context_refs,
       repo_path: fields.repo_path,
       base_branch: fields.base_branch,
       task_type: fields.task_type,

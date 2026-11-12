@@ -51,8 +51,7 @@ pub async fn switch_member(
     member.id,
     recovers_at.clone().unwrap_or_default()
   );
-  let goal = session.task.as_ref().map_or(session.name.as_str(), |task| task.goal.as_str());
-  let handoff = handoff::handoff(features, session, source, &reason, goal)?;
+  let handoff = handoff::handoff(features, session, source, &reason)?;
   let change = MemberChange {
     pool: pool_id.to_string(),
     from: from.to_string(),

@@ -120,15 +120,11 @@ fn stored_status(meta: &SessionMetadata) -> Result<Option<WebStatus>, WebReplyEr
   }
 }
 
-/// The line a manager reset note carries for the session's stored status Goal, or `None` when it stores none. An
-/// unreadable status is the failure this package raises for it.
-pub fn manager_reset_status_goal_line(meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
+/// The status Goal text the session stores, or `None` before it sets one. An unreadable status is the failure this
+/// package raises for it.
+pub fn stored_goal(meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
   let status = stored_status(meta).map_err(status_failure)?;
-  Ok(
-    status
-      .and_then(|status| status.goal)
-      .map(|goal| format!("This session's status Goal, as this session last set it, is: {goal}")),
-  )
+  Ok(status.and_then(|status| status.goal))
 }
 
 /// The status error as the failure a caller outside this package reports.
@@ -586,11 +582,18 @@ fn scanned_texts(patch: &StatusPatch) -> Vec<&str> {
 /// Store the items the JSON `text` names, record one `web_status` event and notify the ancestors. Waiting items need
 /// a non-blank context and a matching cold-read digest, whose tier and rule the stored item carries; with the
 /// approval policy table's refusal switch on, an item tiered t1 or t2 refuses the set. A stale plan link refuses the
-/// set before the cold read. The return adds the Now length; a refusal stores and records nothing.
+/// set before the cold read. A thread session's set names the goal alone; one that names Now or Waiting on you is
+/// refused. The return adds the Now length; a refusal stores and records nothing.
 pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
   let scan_context = reply::file_link_scan_context(features, session_id)?;
-  let meta = reply::require_web_session(features, session_id).await?;
+  let meta = reply::require_manager_session(features, session_id).await?;
   let patch = parse_patch(text)?;
+  if !reply::is_web_session(&meta) && patch.named() != ["goal"] {
+    return Err(WebReplyError::refused(
+      StatusCode::CONFLICT,
+      "Session is a thread session: only its goal can be set; now and waiting on you stay in the thread status block",
+    ));
+  }
   reply::refuse_dead_links(scanned_texts(&patch), &scan_context)?;
   require_waiting_context(patch.waiting.as_deref().unwrap_or_default())?;
   let stored = stored_status(&meta)?;
@@ -1924,6 +1927,31 @@ mod tests {
     assert_eq!(stored(&home, &sid).await, Value::Null);
     assert!(status_events(&home, &sid).is_empty());
     assert_eq!(home.events(&sid).iter().filter(|event| event["type"] == WEB_ASK_CHECK).count(), 1);
+  }
+
+  /// A thread manager stores its Goal alone, and the stored Goal is the one the Goal hook reads. A set that names Now
+  /// or Waiting on you is refused, and stores nothing.
+  #[tokio::test]
+  async fn a_thread_manager_sets_its_goal_alone() {
+    let home = Home::new();
+    let thread = home
+      .manager(
+        "thread",
+        Some(("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"}))),
+      )
+      .await;
+
+    set_status(&home.features, &thread, r#"{"goal": "Ship the thread reply"}"#)
+      .await
+      .expect("the goal-only set stores");
+    let meta = home.meta(&thread).await;
+    assert_eq!(stored_goal(&meta).unwrap().as_deref(), Some("Ship the thread reply"));
+
+    for text in [r#"{"now": "Running"}"#, r#"{"goal": "Renamed", "now": "Running"}"#] {
+      let error = set_status(&home.features, &thread, text).await.expect_err("the set is refused");
+      assert!(matches!(error, WebReplyError::Refused { status: StatusCode::CONFLICT, .. }), "{text}");
+    }
+    assert_eq!(stored_goal(&home.meta(&thread).await).unwrap().as_deref(), Some("Ship the thread reply"));
   }
 
   #[tokio::test]

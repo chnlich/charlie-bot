@@ -674,13 +674,11 @@ impl TaskExecutionAdapter {
     );
     let mut prompt = content;
     if let Some((previous, reason)) = auto_switch_source(&self.features, meta, run, option)? {
-      let goal = wake_meta.task.as_ref().map_or(wake_meta.name.as_str(), |task| task.goal.as_str());
       let handoff = crate::handoff::handoff(
         &self.features,
         &wake_meta,
         crate::handoff::HandoffSource::ManagerRun { run: &previous },
         &reason,
-        goal,
       )?;
       prompt = format!("{}\n\n{prompt}", handoff.note);
     } else if fresh_native && wake_meta.cc_session_id.is_some() {
@@ -688,12 +686,7 @@ impl TaskExecutionAdapter {
         Some(previous) => session_anchors::backend_switch_reset_reason(previous, &option.id),
         None => "this task's managed instructions or sources changed since the previous turn, so this turn starts a fresh native conversation".to_string(),
       };
-      let goal = wake_meta.task.as_ref().map_or(wake_meta.name.as_str(), |task| task.goal.as_str());
-      let status_goal = self.features.registry.status_goal_line(&wake_meta)?;
-      prompt = format!(
-        "{}\n\n{prompt}",
-        session_anchors::manager_context_reset_note(&wake_meta.id, &reason, goal, status_goal.as_deref())
-      );
+      prompt = format!("{}\n\n{prompt}", session_anchors::manager_context_reset_note(&wake_meta.id, &reason));
     }
     self.persist_launch_text(session_id, run_id, &prompt)?;
     tracing::info!(
@@ -841,23 +834,19 @@ impl TaskExecutionAdapter {
       } else {
         "this task's managed instructions or sources changed since the previous run, so this run starts a fresh native conversation".to_string()
       };
-      let goal = meta.task.as_ref().map_or(meta.name.as_str(), |task| task.goal.as_str());
       let handoff = crate::handoff::handoff(
         &self.features,
         meta,
         crate::handoff::HandoffSource::WorkerRun { run: previous },
         &reason,
-        goal,
       )?;
       prompt = format!("{}\n\n{prompt}", handoff.note);
     } else if let Some((previous, from)) = worker_failover_source(&self.features, meta, run, option)? {
-      let goal = meta.task.as_ref().map_or(meta.name.as_str(), |task| task.goal.as_str());
       let handoff = crate::handoff::handoff(
         &self.features,
         meta,
         crate::handoff::HandoffSource::WorkerRun { run: &previous },
         &format!("this task switched from backend {from} to {} after {from} spent its quota", option.id),
-        goal,
       )?;
       prompt = format!("{}\n\n{prompt}", handoff.note);
     }

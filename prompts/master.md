@@ -48,7 +48,8 @@ If execution is blocked, report the blocker and the next step needed to continue
 The user returns to each session after a gap.
 The session status lets the user resume at a glance. It has three fields:
 
-- **Goal**: the session's current overall goal, in one sentence.
+- **Goal**: the session's one goal, in one sentence that states its boundary, and its completion conditions when it
+  has any. When your parent wrote the approver and the boundary in your first message, the Goal keeps them.
 - **Now**: the latest state read back, what remains before the next milestone, and the job or trigger it waits on.
 - **Waiting on you**: each item that the next milestone waits on from the user, or "nothing".
 

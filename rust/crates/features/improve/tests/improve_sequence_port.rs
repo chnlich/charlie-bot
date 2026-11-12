@@ -160,8 +160,6 @@ impl LoopHarness {
         TaskProfile::Manager,
         Some(TaskSpec {
           goal: "synthetic manager".to_string(),
-          acceptance: Vec::new(),
-          context_refs: Vec::new(),
           repo_path: None,
           base_branch: None,
           task_type: None,
@@ -883,8 +881,6 @@ async fn an_improve_request_naming_a_pool_launches_on_its_member() -> anyhow::Re
       TaskProfile::Manager,
       Some(TaskSpec {
         goal: "synthetic manager".to_string(),
-        acceptance: Vec::new(),
-        context_refs: Vec::new(),
         repo_path: None,
         base_branch: None,
         task_type: None,

@@ -87,19 +87,13 @@ pub fn review_landing_target(base_branch: &str) -> String {
   format!("origin/{}", review_published_branch(base_branch))
 }
 
-/// The spec a review judges the work against: the goal, then the acceptance tests (`review_spec_text`). A task with
-/// an empty goal has nothing to judge against, so it fails.
+/// The spec a review judges the work against: the task record's goal. A task with an empty goal has nothing to judge
+/// against, so it fails.
 pub fn review_spec_text(task: &TaskSpec) -> anyhow::Result<String> {
   if task.goal.trim().is_empty() {
     bail!("review has no task spec: the task record's goal is empty");
   }
-  let mut parts = vec![task.goal.clone()];
-  if !task.acceptance.is_empty() {
-    let mut section = vec!["## Acceptance Tests".to_string()];
-    section.extend(task.acceptance.iter().map(|item| format!("- {item}")));
-    parts.push(section.join("\n"));
-  }
-  Ok(parts.join("\n\n"))
+  Ok(task.goal.clone())
 }
 
 /// The review prompt's context lines: the spec, the later messages when the worker got any, the worker summary when

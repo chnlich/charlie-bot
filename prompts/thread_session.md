@@ -18,6 +18,8 @@ Before you start work on a page, a delegation, an improve loop or a recipe, read
   - Write the labels **Goal**, **Now** and **Waiting on you** in English in every chat language.
   - The status block is a markdown list with one line for each field of the session status.
   - Make the **Goal** line the first line of the message.
+  - Write the **Goal** line word for word as the Goal that `charliebot web status set` stores for this session.
+  - When this session's Goal is not set or changes in the turn, store the Goal with `charliebot web status set`.
   - Start each field's line with `- `.
   - The chat renderer and the acceptance checks find the block by its labels.
   - Put an optional offer or a non-blocking approval in the body, after the status block.

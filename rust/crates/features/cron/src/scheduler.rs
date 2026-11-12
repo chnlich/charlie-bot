@@ -451,8 +451,6 @@ impl CronScheduler {
           profile: TaskProfile::Worker,
           task: Some(TaskSpec {
             goal,
-            acceptance: Vec::new(),
-            context_refs: Vec::new(),
             repo_path: task.repo.clone(),
             base_branch: None,
             task_type: None,

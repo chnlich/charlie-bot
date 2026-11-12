@@ -890,8 +890,6 @@ async fn delegate_a_task_spec_into_the_same_node_run_and_spec_bytes() {
 
   let spec = TaskSpec {
     goal: "## Goal\n\nShip the synthetic change.\n\nKeep the public API.".to_string(),
-    acceptance: vec!["the synthetic tests pass".to_string()],
-    context_refs: vec!["docs/synthetic.md".to_string()],
     repo_path: Some("/home/synthetic/repo".to_string()),
     base_branch: Some("main".to_string()),
     task_type: Some(TaskType::Implement),

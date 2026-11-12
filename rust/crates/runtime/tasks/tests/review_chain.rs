@@ -616,8 +616,7 @@ async fn repo_review_context_carries_the_delegated_spec() -> anyhow::Result<()> 
   set_access_key(&stack)?;
   stack.dispatch.set_executor(None);
   let spec = TaskSpec {
-    goal: "rename the config key".to_string(),
-    acceptance: vec!["the legacy key still loads".to_string()],
+    goal: "rename the config key; the legacy key still loads".to_string(),
     repo_path: Some(repo.repo.to_string_lossy().into_owned()),
     base_branch: Some("main".to_string()),
     task_type: Some(TaskType::Implement),

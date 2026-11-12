@@ -15,7 +15,7 @@ use charliebot_core::config::{
   BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
 use charliebot_registry::Registry;
-use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, UtcDateTime};
+use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::{
   AccountLabelKeeper, AnchorFieldReconciler, CreateTask, EmptyRuntimeEventHooks, PatchTask, RunRecord,
   SequenceArchiveHook, SequenceBindingMover, SequenceListingFields, Store, StoreHookFuture, StoreHooks, StoreResult,
@@ -23,7 +23,8 @@ use charliebot_store::{
 };
 use charliebot_tasks::prompts::{
   CoherentSnapshot, PromptEnv, PromptSnapshot, RuleInputs, SNAPSHOT_FILENAME, assemble_coherent_snapshot,
-  assemble_snapshot, build_segments, capture_prompt_chain, prompt_task_type, read_run_context, resolve_launch_overlay,
+  assemble_snapshot, build_segments, capture_prompt_chain, capture_session_goals, prompt_task_type, read_run_context,
+  resolve_launch_overlay,
 };
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
@@ -176,7 +177,8 @@ impl Harness {
     fs::create_dir_all(table.parent().expect("the table path has a parent")).expect("config.d");
     fs::write(&table, APPROVAL_POLICY_TABLE).expect("the approval policy table writes");
     let cfg = config(home.path());
-    let registry = Registry::new();
+    let mut registry = Registry::new();
+    registry.register_package("charliebot.web_reply", charliebot_web_reply::register).expect("web_reply registers");
     let hooks = StoreHooks {
       account_labels: Some(Arc::new(NoHooks)),
       anchor_reconciler: Some(Arc::new(NoHooks)),
@@ -257,13 +259,25 @@ impl Harness {
     self.reopen_store();
   }
 
-  /// The snapshot a launch of `kind` for `session_id` would assemble, with the chain captured under the lock.
+  /// Stores the session's status Goal the way `charliebot web status set` does, then reopens the store so the next
+  /// read sees it.
+  async fn set_goal(&mut self, session_id: &str, goal: &str) {
+    let mut meta = self.store.load_meta(session_id).await.expect("metadata reads").expect("the node exists");
+    meta.set_extra("web_status", json!({"goal": goal, "now": null, "waiting": []}));
+    fs::write(self.store.metadata_path(session_id), meta.to_json_string(&self.registry.metadata_slots(), true))
+      .expect("metadata writes");
+    self.reopen_store();
+  }
+
+  /// The snapshot a launch of `kind` for `session_id` would assemble, with the chain and the Goals captured under the
+  /// lock.
   async fn snapshot_for(&self, session_id: &str, kind: &str) -> PromptSnapshot {
     let guard = self.store.control_lock().await;
     let meta = self.store.load_meta(session_id).await.expect("metadata reads").expect("the node exists");
     let (chain, node_ref) = capture_prompt_chain(&self.store, &guard, &meta).await.expect("chain captures");
+    let goals = capture_session_goals(&self.store, &self.registry, &meta).await.expect("goals capture");
     drop(guard);
-    let inputs = RuleInputs { overlay: None, chain: &chain, node_ref: node_ref.as_deref() };
+    let inputs = RuleInputs { overlay: None, chain: &chain, node_ref: node_ref.as_deref(), goals: &goals };
     let (segments, _overlay_error) = build_segments(&self.env(), &meta, kind, &inputs).expect("segments build");
     assemble_snapshot(&segments)
   }
@@ -308,8 +322,12 @@ async fn manager_template_is_identical_at_every_depth_with_no_pm_load() {
     assert!(has_ref(snapshot, "prompts/task_base.md"));
     assert!(!snapshot.instructions_text().contains("PM identity"));
   }
-  assert_eq!(built[1].blocks, built[0].blocks);
-  assert_eq!(built[2].blocks, built[0].blocks);
+  // Every block before the goal block is the same at every depth. The goal block names each session's own Goal, and a
+  // child also names its parent's, so it differs by depth.
+  let template_len = built[0].blocks.len() - 1;
+  assert_eq!(built[1].blocks[..template_len], built[0].blocks[..template_len]);
+  assert_eq!(built[2].blocks[..template_len], built[0].blocks[..template_len]);
+  assert_ne!(built[1].blocks.last(), built[0].blocks.last());
 }
 
 #[tokio::test]
@@ -519,7 +537,8 @@ impl StructuralBlockers for NoGuards {
 }
 
 /// An agent reparent keeps each moved session's instructions word for word. The move of `moved` drops the rule of
-/// `holder`, which the store carries onto `moved`; the move of `wanderer` drops no rule and keeps the hash too.
+/// `holder`, which the store carries onto `moved`; the move of `wanderer` drops no rule, and its hash moves only with
+/// the parent that its goal block cites.
 #[tokio::test]
 #[ignore = "integration"]
 async fn an_agent_reparent_keeps_each_moved_prompt_word_for_word() {
@@ -554,7 +573,10 @@ async fn an_agent_reparent_keeps_each_moved_prompt_word_for_word() {
   let wanderer_before = harness.snapshot_for(&wanderer.id, "manager_turn").await;
   harness.store.patch_task(&wanderer.id, move_under(&spare), agent(), &NoGuards).await.expect("the plain move lands");
   let wanderer_after = harness.snapshot_for(&wanderer.id, "manager_turn").await;
-  assert_eq!(wanderer_after.prompt_hash(), wanderer_before.prompt_hash());
+  // Both parents hold no Goal, so the words stay. The goal block cites its parent session, and the hash covers sources,
+  // so the new parent starts a fresh native conversation.
+  assert_eq!(wanderer_after.instructions_text(), wanderer_before.instructions_text());
+  assert_ne!(wanderer_after.prompt_hash(), wanderer_before.prompt_hash());
 }
 
 #[tokio::test]
@@ -715,4 +737,72 @@ async fn a_worker_prompt_carries_no_approval_policy_table() {
     snapshot.blocks.iter().all(|block| !block.text.contains("Approval policy table")),
     "the worker prompt carries no approval policy table"
   );
+}
+
+/// The goal block of a snapshot: the last block, when it carries a goal source.
+fn goal_block_text(snapshot: &PromptSnapshot) -> Option<String> {
+  let last = snapshot.blocks.last()?;
+  last.sources.iter().any(|source| source.scope == "goal").then(|| last.text.clone())
+}
+
+fn cold_read_task() -> TaskSpec {
+  TaskSpec {
+    goal: "read the synthetic page".to_string(),
+    task_type: Some(TaskType::ColdRead),
+    cold_read: Some(ColdReadSpec {
+      page_path: "/synthetic/page.html".to_string(),
+      genre: "synthetic".to_string(),
+      trigger: "synthetic trigger".to_string(),
+    }),
+    ..TaskSpec::default()
+  }
+}
+
+/// The goal block closes each role's prompt with the Goals that role reads, `not set` where a side has none; the cold
+/// reader carries none; and a Goal change starts a new prompt hash in every prompt that names it.
+#[tokio::test]
+#[ignore = "integration"]
+async fn the_goal_block_closes_each_role_prompt_with_the_goals_it_names() {
+  let mut harness = Harness::new();
+  let tree = harness.tree().await;
+  let cold = harness.node("cold", Some(&tree.low), TaskProfile::Worker, Some(cold_read_task()), "Cold").await;
+  harness.set_goal(&tree.root, "Root goal").await;
+  harness.set_goal(&tree.mid, "Mid goal").await;
+
+  assert_eq!(
+    goal_block_text(&harness.snapshot_for(&tree.root, "manager_turn").await).as_deref(),
+    Some("This session's Goal: Root goal"),
+    "the root has no parent line"
+  );
+  assert_eq!(
+    goal_block_text(&harness.snapshot_for(&tree.mid, "manager_turn").await).as_deref(),
+    Some("Parent session's Goal: Root goal\nThis session's Goal: Mid goal")
+  );
+  assert_eq!(
+    goal_block_text(&harness.snapshot_for(&tree.low, "manager_turn").await).as_deref(),
+    Some("Parent session's Goal: Mid goal\nThis session's Goal: not set"),
+    "the low manager has set no Goal"
+  );
+  assert_eq!(
+    goal_block_text(&harness.snapshot_for(&tree.worker1, "work").await).as_deref(),
+    Some("Parent session's Goal: not set"),
+    "a worker carries its parent's line only"
+  );
+  let cold_snapshot = harness.snapshot_for(&cold.id, "work").await;
+  assert!(goal_block_text(&cold_snapshot).is_none(), "a cold reader carries no goal block");
+  assert!(cold_snapshot.blocks.iter().all(|block| block.sources.iter().all(|source| source.scope != "goal")));
+
+  let root_before = harness.snapshot_for(&tree.root, "manager_turn").await.prompt_hash();
+  let mid_before = harness.snapshot_for(&tree.mid, "manager_turn").await.prompt_hash();
+  let low_before = harness.snapshot_for(&tree.low, "manager_turn").await.prompt_hash();
+  let worker_before = harness.snapshot_for(&tree.worker1, "work").await.prompt_hash();
+
+  harness.set_goal(&tree.mid, "Mid goal, revised").await;
+  assert_ne!(harness.snapshot_for(&tree.mid, "manager_turn").await.prompt_hash(), mid_before, "own Goal");
+  assert_ne!(harness.snapshot_for(&tree.low, "manager_turn").await.prompt_hash(), low_before, "parent Goal");
+  assert_eq!(harness.snapshot_for(&tree.root, "manager_turn").await.prompt_hash(), root_before, "unrelated Goal");
+  assert_eq!(harness.snapshot_for(&tree.worker1, "work").await.prompt_hash(), worker_before, "unrelated Goal");
+
+  harness.set_goal(&tree.low, "Low goal").await;
+  assert_ne!(harness.snapshot_for(&tree.worker1, "work").await.prompt_hash(), worker_before, "worker's parent Goal");
 }

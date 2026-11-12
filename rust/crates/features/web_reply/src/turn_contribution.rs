@@ -17,7 +17,7 @@ use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{
   DELIVERY_FULL, EventRenderer, PromptSource, RuleSegment, SCOPE_BASE, TurnContribution,
 };
-use charliebot_store::metadata::SessionMetadata;
+use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 
@@ -77,12 +77,12 @@ impl TurnContribution for WebReplyTurnContribution {
     reply::is_web_session(meta).then(|| "[User message]".to_string())
   }
 
-  /// The status Goal line a manager reset note carries, for a web session that stores a Goal.
-  fn status_goal_line(&self, meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
-    if !reply::is_web_session(meta) {
+  /// The status Goal of a manager session, web or thread. A worker stores no status.
+  fn status_goal(&self, meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
+    if meta.profile != TaskProfile::Manager {
       return Ok(None);
     }
-    status::manager_reset_status_goal_line(meta)
+    status::stored_goal(meta)
   }
 
   fn event_renderers(&self) -> Vec<(&'static str, EventRenderer)> {
@@ -257,9 +257,10 @@ mod tests {
     assert!(error.to_string().starts_with("read "), "{error}");
   }
 
-  /// The reset-note hook gives the status Goal line only for a web manager session that stores a Goal.
+  /// The status Goal hook answers for a manager session, web or thread, that stores a Goal. A worker, or a manager
+  /// without a stored Goal, has none to give.
   #[test]
-  fn the_status_goal_line_needs_a_web_manager_session_with_a_stored_goal() {
+  fn the_status_goal_is_the_stored_goal_of_any_manager_session() {
     charliebot_registry::thread_origin::register_origin_field("slack_origin");
     let contribution = WebReplyTurnContribution;
     let with_goal = manager(json!({"web_status": {"goal": "ship the release", "waiting": []}}));
@@ -270,23 +271,20 @@ mod tests {
       "web_status": {"goal": "ship the release", "waiting": []},
     }));
 
-    assert_eq!(
-      contribution.status_goal_line(&with_goal).unwrap(),
-      Some("This session's status Goal, as this session last set it, is: ship the release".to_string())
-    );
-    assert_eq!(contribution.status_goal_line(&manager(json!({}))).unwrap(), None);
-    assert_eq!(contribution.status_goal_line(&without_goal).unwrap(), None);
-    assert_eq!(contribution.status_goal_line(&worker).unwrap(), None);
-    assert_eq!(contribution.status_goal_line(&slack_thread).unwrap(), None);
+    assert_eq!(contribution.status_goal(&with_goal).unwrap(), Some("ship the release".to_string()));
+    assert_eq!(contribution.status_goal(&manager(json!({}))).unwrap(), None);
+    assert_eq!(contribution.status_goal(&without_goal).unwrap(), None);
+    assert_eq!(contribution.status_goal(&worker).unwrap(), None);
+    assert_eq!(contribution.status_goal(&slack_thread).unwrap(), Some("ship the release".to_string()));
   }
 
-  /// An unreadable stored status fails the hook instead of silently leaving the line out.
+  /// An unreadable stored status fails the hook instead of silently leaving the Goal out.
   #[test]
-  fn an_unreadable_status_fails_the_status_goal_line() {
+  fn an_unreadable_status_fails_the_status_goal() {
     let contribution = WebReplyTurnContribution;
     let unreadable = manager(json!({"web_status": {"goal": 7, "waiting": []}}));
 
-    let error = contribution.status_goal_line(&unreadable).unwrap_err();
+    let error = contribution.status_goal(&unreadable).unwrap_err();
 
     assert!(error.to_string().starts_with("session synthetic-session holds an unreadable web status"), "{error}");
   }

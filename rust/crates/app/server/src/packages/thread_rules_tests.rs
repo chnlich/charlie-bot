@@ -11,7 +11,7 @@ use charliebot_core::config::{
   BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
-use charliebot_tasks::prompts::{PromptEnv, RuleInputs, build_segments};
+use charliebot_tasks::prompts::{PromptEnv, RuleInputs, SessionGoals, build_segments};
 use serde_json::json;
 
 use super::registry;
@@ -103,7 +103,7 @@ fn manager_turn_text(meta: &SessionMetadata) -> String {
   std::fs::write(&table, APPROVAL_POLICY_TABLE).expect("the approval policy table writes");
   let cfg = config(home.path());
   let env = PromptEnv { cfg: &cfg, registry: &registry, checkout: &checkout };
-  let inputs = RuleInputs { overlay: None, chain: &[], node_ref: None };
+  let inputs = RuleInputs { overlay: None, chain: &[], node_ref: None, goals: &SessionGoals::default() };
   let (segments, _overlay_error) =
     build_segments(&env, meta, "manager_turn", &inputs).expect("the manager turn assembles from the checkout");
   segments.iter().map(|segment| segment.text.as_str()).collect::<Vec<&str>>().join("\n")

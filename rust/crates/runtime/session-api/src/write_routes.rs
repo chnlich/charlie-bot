@@ -46,7 +46,8 @@ const APPROVER_NEEDS_TASK: &str = "approver is a field of the task record: send 
 /// `models.ColdReadSpec`, which the store's `ColdReadSpec` deserializes. The create route accepts it as optional.
 const COLD_READ_SPEC: BodyModel = BodyModel::optional(COLD_READ_FIELDS).forbid_extra();
 
-/// `models.TaskSpec`. Its model check is `_cold_read_matches_task_type`.
+/// `models.TaskSpec`. Its model check is `_cold_read_matches_task_type`. The retired acceptance and context-refs lists
+/// stay accepted: the record read drops them, so a request that still names them does not fail.
 const TASK_SPEC_FIELDS: &[Field] = &[
   Field::optional("goal", FieldType::String),
   Field::optional("acceptance", FieldType::StringList),
@@ -1146,6 +1147,29 @@ mod tests {
     }));
     let (status, _) = answer(create_session(State(features.clone()), headers, body).await).await;
     assert!(status.is_client_error(), "an approver needs a task record: {status}");
+  }
+
+  /// A create request that still names the retired acceptance and context-refs lists is accepted. The record keeps the
+  /// goal, and the saved metadata holds neither list.
+  #[tokio::test]
+  async fn a_create_request_with_the_retired_task_lists_stores_the_goal_alone() {
+    let (_home, features) = feature_context();
+    install_dispatcher(&features);
+    let manager = create_node(&features.store, "manager", None, TaskProfile::Manager).await;
+    let (headers, body) = json_request(json!({
+      "request_id": "retired-lists-child",
+      "task_parent_id": manager.id,
+      "profile": "manager",
+      "task": {"goal": "deliver the page", "acceptance": ["the page renders"], "context_refs": ["docs/page.md"]},
+    }));
+    let (status, created) = answer(create_session(State(features.clone()), headers, body).await).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let id = created["id"].as_str().expect("created id");
+    let task = features.store.read_metadata_fresh(id).expect("created task reads").expect("created task exists").task;
+    assert_eq!(task.expect("created task record exists").goal, "deliver the page");
+    let saved = std::fs::read_to_string(features.store.metadata_path(id)).expect("metadata is saved");
+    assert!(!saved.contains("acceptance") && !saved.contains("context_refs"), "{saved}");
   }
 
   #[tokio::test]

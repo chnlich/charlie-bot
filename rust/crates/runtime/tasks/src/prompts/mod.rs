@@ -5,10 +5,11 @@
 //! 1. the common execution rules, the run-kind rules, the host supplement and the model overlay;
 //! 2. the segments of the registered turn contributions, in registration order;
 //! 3. each subtree rule from the root down to the node itself;
-//! 4. the node's own node rule.
+//! 4. the node's own node rule;
+//! 5. the goal block: the parent session's status Goal, then the session's own (`goal_segment`).
 //!
 //! Text that repeats is emitted once, at its first position, and each source of every repeat is merged there.
-//! Goals, inputs, bindings and worktree facts are not managed instructions: the launch renders them separately.
+//! Inputs, bindings and worktree facts are not managed instructions: the launch renders them separately.
 //!
 //! `prompt_hash` covers the blocks (text, sources, delivery and body ref). `char_count` measures the joined text the
 //! backend receives. A cold-read run is the one exception: its managed instructions are one block, the cold-reader
@@ -29,7 +30,7 @@ pub use crate::spawner_prompt::reviewer_run_follows;
 pub use charliebot_registry::turn::{PromptSource, RuleSegment};
 pub use coherent::{
   CoherentSnapshot, assemble_coherent_snapshot, assemble_coherent_snapshot_for_launch, capture_prompt_chain,
-  resolve_launch_overlay,
+  capture_session_goals, resolve_launch_overlay,
 };
 pub use render::{
   binding_intro, render_session_info, render_task_body, render_worktree_bindings, render_worktree_persistence,
@@ -37,7 +38,9 @@ pub use render::{
 };
 pub use run_context::{ContextReadError, read_run_context};
 pub use snapshot::{PromptBlock, PromptSnapshot, assemble_snapshot};
-pub use sources::{ChainLink, OverlayError, RuleInputs, build_segments, prompt_task_type, read_local_rule_body};
+pub use sources::{
+  ChainLink, OverlayError, RuleInputs, SessionGoals, build_segments, prompt_task_type, read_local_rule_body,
+};
 
 /// The snapshot file a run directory holds (`SNAPSHOT_FILENAME`).
 pub const SNAPSHOT_FILENAME: &str = "prompt_snapshot.json";

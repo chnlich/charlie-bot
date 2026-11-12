@@ -795,7 +795,6 @@ fn task_spec(profile: TaskProfile, task_type: Option<TaskType>, rng: &mut Rng) -
     TaskProfile::Manager => TaskSpec { goal: text::phrase(rng).to_string(), ..TaskSpec::default() },
     TaskProfile::Worker => TaskSpec {
       goal: text::phrase(rng).to_string(),
-      acceptance: vec![text::phrase(rng).to_string()],
       repo_path: Some(LAB_REPO.to_string()),
       base_branch: Some("main".to_string()),
       task_type,

@@ -115,8 +115,6 @@ pub async fn create_improve_child(
     profile: TaskProfile::Worker,
     task: Some(TaskSpec {
       goal: goal.to_string(),
-      acceptance: Vec::new(),
-      context_refs: Vec::new(),
       repo_path: repo_path.map(str::to_string),
       base_branch: base_branch.map(str::to_string),
       task_type: None,

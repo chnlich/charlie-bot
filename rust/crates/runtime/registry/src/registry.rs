@@ -1686,6 +1686,8 @@ pub const SCOPE_SUBTREE: &str = "subtree";
 pub const SCOPE_NODE: &str = "node";
 /// A [`PromptSource::scope`] value: a taste index segment.
 pub const SCOPE_TASTE: &str = "taste";
+/// A [`PromptSource::scope`] value: a session's status Goal, read into the goal block of a manager or worker prompt.
+pub const SCOPE_GOAL: &str = "goal";
 
 /// A [`RuleSegment::delivery`] value: the block's full text.
 pub const DELIVERY_FULL: &str = "full";
@@ -1744,9 +1746,8 @@ pub trait TurnContribution: Send + Sync {
     None
   }
 
-  /// The line a manager reset note carries for `meta`: the session's status Goal when it stores one. An unreadable
-  /// status fails the turn.
-  fn status_goal_line(&self, _meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
+  /// The status Goal text `meta` stores, or `None` when it stores none. An unreadable status fails the launch.
+  fn status_goal(&self, _meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
     Ok(None)
   }
 
@@ -1825,16 +1826,20 @@ impl Registry {
     (!preambles.is_empty()).then(|| preambles.join("\n"))
   }
 
-  /// The status Goal line of `meta`: the lines that the contributions give, one line each, in registration order;
-  /// `None` when no contribution gives one. A contribution that cannot read the status fails the call.
-  pub fn status_goal_line(&self, meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
-    let mut lines: Vec<String> = Vec::new();
+  /// The status Goal text of `meta`, or `None` when it stores none. One contribution owns the status, so two that
+  /// answer fail the call. A contribution that cannot read the status fails the call too.
+  pub fn status_goal(&self, meta: &SessionMetadata) -> anyhow::Result<Option<String>> {
+    let mut answers = Vec::new();
     for contribution in self.turn_contributions.values() {
-      if let Some(line) = contribution.status_goal_line(meta)? {
-        lines.push(line);
+      if let Some(goal) = contribution.status_goal(meta)? {
+        answers.push(goal);
       }
     }
-    Ok((!lines.is_empty()).then(|| lines.join("\n")))
+    match answers.len() {
+      0 => Ok(None),
+      1 => Ok(answers.pop()),
+      _ => bail!("status Goal: more than one turn contribution answers for session {}", meta.id),
+    }
   }
 
   /// True when a registered contribution marks the turn-end unread flag for `meta` itself.

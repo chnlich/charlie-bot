@@ -277,8 +277,6 @@ fn chat_page(
     cfg.backends.pools.iter().map(|pool| json!({"id": pool.id, "label": pool.label})).collect::<Vec<_>>();
   let picker_entries =
     cfg.backends.picker_entries().into_iter().map(|(id, label)| json!({"id": id, "label": label})).collect::<Vec<_>>();
-  let picker_options =
-    cfg.backends.picker_options().into_iter().map(|(id, label)| json!({"id": id, "label": label})).collect::<Vec<_>>();
   let active_pool_member = active_session.get("pool_member").cloned().unwrap_or(Value::Null);
   let active_backend_label = active_backend_label(&cfg, active_backend, &active_pool_member);
   let backend_compact = compact_facts(&cfg, &state.features.registry)?;
@@ -294,7 +292,6 @@ fn chat_page(
       .collect::<Vec<_>>(),
     "backend_pools": backend_pools,
     "picker_entries": picker_entries,
-    "picker_options": picker_options,
     "active_pool_member": active_pool_member,
     "backend_compact": Value::Object(backend_compact),
     "default_backend_id": default_backend_id,

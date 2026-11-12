@@ -1,3 +1,4 @@
+  {% from 'partials/close_button.html' import close_button %}
   {# The scheduled-task modal's literals: form_label_class for its labels,
      cron_field_class for its input/select fields. Each literal stays a
      complete token run: Tailwind extracts class candidates from source text,
@@ -41,8 +42,8 @@
             <label class="{{ form_label_class }}">Backend</label>
             <select id="cron-backend" class="{{ cron_field_class }}">
               <option value="">Inherit / default</option>
-              {% for opt in picker_options %}
-              <option value="{{ opt.id }}">{{ opt.label }}</option>
+              {% for entry in picker_entries %}
+              <option value="{{ entry.id }}">{{ entry.label }}</option>
               {% endfor %}
             </select>
           </div>

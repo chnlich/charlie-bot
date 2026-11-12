@@ -7,6 +7,8 @@ pub mod config;
 mod firing;
 mod host_gate;
 mod loader;
+#[cfg(test)]
+mod page_tests;
 mod scheduler;
 pub mod seed;
 mod sequence_controller;

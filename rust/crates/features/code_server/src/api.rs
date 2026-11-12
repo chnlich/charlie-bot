@@ -194,17 +194,14 @@ pub(crate) fn executable(section: &CodeServerConfig) -> anyhow::Result<Option<St
 /// How long a resolved executable answers the next caller.
 ///
 /// The `code_server_enabled` template global is evaluated at every page render, and the search of `PATH` costs a
-/// metadata read per directory. The answer follows the setting, `PATH` and the working directory here, and an
-/// install or removal under a `PATH` directory is the one change none of the three names, so the entry expires and
-/// the next caller searches again.
+/// metadata read per directory. The answer follows the setting and `PATH`, and an install or removal under a `PATH`
+/// directory is the one change neither names, so the entry expires and the next caller searches again.
 const EXECUTABLE_TTL: Duration = Duration::from_secs(5);
 
-/// One resolution of the executable, with the inputs that produced it. The search reads the working directory for
-/// a `bin` that carries a directory part and for a relative `PATH` entry, so the entry holds it too.
+/// One resolution of the executable, with the inputs that produced it.
 struct ExecutableMemo {
   setting: Option<String>,
   search_path: Option<String>,
-  working_directory: PathBuf,
   executable: Option<String>,
   resolved_at: Instant,
 }
@@ -212,17 +209,21 @@ struct ExecutableMemo {
 static EXECUTABLE_MEMO: LazyLock<Mutex<Option<ExecutableMemo>>> = LazyLock::new(|| Mutex::new(None));
 
 /// The executable `setting` names (a bare name searches `search_path`; `~` in a name with a directory part is already
-/// expanded by the caller), from the memo while the setting, `search_path` and the working directory still hold and
-/// the entry is younger than [`EXECUTABLE_TTL`].
+/// expanded by the caller), from the memo while the setting and `search_path` still hold and the entry is younger
+/// than [`EXECUTABLE_TTL`].
+///
+/// A resolution that reads the working directory is not memoized: the search joins a relative `bin` and a relative
+/// `PATH` entry onto it, and the memo names neither, so those callers search every time as they did before.
 pub(crate) fn resolve_executable(setting: Option<&str>, search_path: Option<&OsStr>) -> anyhow::Result<Option<String>> {
   let search_path = search_path.map(|path| path.to_string_lossy().into_owned());
-  let working_directory = std::env::current_dir()?;
+  if reads_working_directory(setting, search_path.as_deref()) {
+    return which(setting.unwrap_or("code-server"), search_path.as_deref());
+  }
   {
     let memo = EXECUTABLE_MEMO.lock().expect("the executable memo mutex is not poisoned");
     if let Some(memo) = memo.as_ref()
       && memo.setting.as_deref() == setting
       && memo.search_path == search_path
-      && memo.working_directory == working_directory
       && memo.resolved_at.elapsed() < EXECUTABLE_TTL
     {
       return Ok(memo.executable.clone());
@@ -232,11 +233,22 @@ pub(crate) fn resolve_executable(setting: Option<&str>, search_path: Option<&OsS
   *EXECUTABLE_MEMO.lock().expect("the executable memo mutex is not poisoned") = Some(ExecutableMemo {
     setting: setting.map(str::to_string),
     search_path,
-    working_directory,
     executable: executable.clone(),
     resolved_at: Instant::now(),
   });
   Ok(executable)
+}
+
+/// Whether the search for `setting` under `search_path` resolves through the working directory: a `bin` that names a
+/// relative path, or a `PATH` with a relative entry (an empty one names the working directory).
+pub(crate) fn reads_working_directory(setting: Option<&str>, search_path: Option<&str>) -> bool {
+  if let Some(bin) = setting
+    && Path::new(bin).is_relative()
+    && bin.contains(std::path::MAIN_SEPARATOR)
+  {
+    return true;
+  }
+  search_path.is_some_and(|path| path.split(':').any(|entry| Path::new(entry).is_relative()))
 }
 
 /// The folder, resolved, when it is a directory under a workspace directory or

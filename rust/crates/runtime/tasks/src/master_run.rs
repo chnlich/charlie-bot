@@ -15,7 +15,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::{
   ContextStateFn as TurnContextStateFn, EXTRA_FLAGS_BACKEND_KWARG, Env, Launch, LaunchArgs, LaunchContext, LaunchKind,
-  LaunchWatch,
+  LaunchWatch, MemberFailure,
 };
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::StoreError;
@@ -40,6 +40,8 @@ pub const FINISH_QUOTA_EXHAUSTED: &str = event_types::QUOTA_EXHAUSTED;
 pub const FINISH_ERROR_MESSAGE: &str = "error_message";
 /// The finish-extras key carrying the reset a retryable quota error stated, for an Auto session.
 pub const FINISH_QUOTA_RESETS_AT: &str = "quota_resets_at";
+/// The finish-extras key carrying the availability reason the shared classification recorded, for an Auto session.
+pub const FINISH_FAILURE_REASON: &str = "failure_reason";
 
 /// The log event a recovered manager turn logs when it resumes a session's recorded Claude Code run. The
 /// release-switch script tests' fake server emits the same line, so both read the name here.
@@ -883,15 +885,17 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
   .await;
   let mut exit_code = 1;
   let mut error_msg = None;
-  let mut quota_exhausted = None;
+  let mut failure = None;
+  let mut refusal_resets_at = None;
   if let Err(error) = launches {
     if error.downcast_ref::<TurnCancelled>().is_some() {
       let covered = cancelled.lock().expect("cancel state mutex is not poisoned").unwrap_or(false);
       tracing::warn!(target: "charliebot_tasks", session = %session_id, action = if covered { "let_go" } else { "terminate" }, "master_cc_cancelled");
     } else if let Some(refusal) = error.downcast_ref::<charliebot_registry::backend::LaunchRefused>() {
-      tracing::error!(target: "charliebot_tasks", session = %session_id, error = %refusal, quota_exhausted = refusal.quota_exhausted, "master_cc_launch_refused");
+      tracing::error!(target: "charliebot_tasks", session = %session_id, error = %refusal, failure = ?refusal.failure, "master_cc_launch_refused");
       error_msg = Some(refusal.to_string());
-      quota_exhausted = Some(refusal.quota_exhausted);
+      failure = Some(refusal.failure);
+      refusal_resets_at = refusal.resets_at.map(UtcDateTime::into_inner);
     } else {
       tracing::error!(target: "charliebot_tasks", session = %session_id, error = %error, "master_cc_crashed");
       error_msg = Some(error.to_string());
@@ -914,9 +918,15 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
   if relays > 0 {
     finish_extras.insert("account_relays".to_string(), json!(relays));
   }
-  add_auto_failure_extras(error_msg.as_deref(), quota_exhausted, process.quota_resets_at, &mut finish_extras);
+  add_auto_failure_extras(
+    error_msg.as_deref(),
+    failure,
+    refusal_resets_at.or(process.quota_resets_at),
+    &mut finish_extras,
+  );
   // An Auto session's quota end is continued on its next member, so this turn posts no "Agent error" of its own.
   if !is_pool_member_failure_end(&process.item.cfg, &metadata, &finish_extras) {
+    let quota_exhausted = failure.map(|failure| failure == MemberFailure::Quota);
     report_turn_error_and_salvage(&tracker, process.item, error_msg.as_deref(), quota_exhausted).await?;
   }
   let was_cancelled = cancelled.lock().expect("cancel state mutex is not poisoned").is_some();
@@ -937,24 +947,25 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
 }
 
 /// Record a run's member failure in the finish extras. The finish recorder writes the member's "out until" row from
-/// them and, for a pool session, switches the turn to its next member. The shared classification decides whether the
-/// turn ended on a member failure at all; a turn that ends for any other reason records nothing. A concrete session's
-/// extras reach no switch, and its turn still posts the error.
+/// them and, for a pool session, switches the turn to its next member. `failure` is the classification a refused
+/// launch carried; another error's text decides it. A turn that ends for any other reason records nothing. A concrete
+/// session's extras reach no switch, and its turn still posts the error.
 fn add_auto_failure_extras(
   error_msg: Option<&str>,
-  quota_exhausted: Option<bool>,
+  failure: Option<MemberFailure>,
   resets_at: Option<time::OffsetDateTime>,
   extras: &mut Map<String, Value>,
 ) {
   let Some(message) = error_msg else { return };
   // One decision rule serves this suppression and the finish recorder's switch.
-  let failure = charliebot_agents::backend_pool::classify_member_failure(message, quota_exhausted);
+  let failure = failure.unwrap_or_else(|| charliebot_agents::backend_pool::classify_member_failure(message, None));
   if !failure.records_out() {
     return;
   }
-  let quota = crate::backend_retry::is_quota_end(message, quota_exhausted);
+  let quota = crate::backend_retry::is_quota_end(message, Some(failure == MemberFailure::Quota));
   extras.insert(FINISH_QUOTA_EXHAUSTED.to_string(), json!(quota));
   extras.insert(FINISH_ERROR_MESSAGE.to_string(), json!(message));
+  extras.insert(FINISH_FAILURE_REASON.to_string(), json!(failure.availability_reason()));
   if let Some(reset) = resets_at {
     extras.insert(FINISH_QUOTA_RESETS_AT.to_string(), json!(UtcDateTime::from(reset).to_str()));
   }

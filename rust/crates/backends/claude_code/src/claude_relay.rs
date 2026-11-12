@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{MESSAGE_CONTENT_POINTER, RATE_LIMIT_EVENT, RATE_LIMIT_INFO};
-use charliebot_registry::backend::{LaunchRefused, LaunchWatch as LaunchWatchTrait};
+use charliebot_registry::backend::{LaunchRefused, LaunchWatch as LaunchWatchTrait, MemberFailure};
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Value, json};
 use time::Duration;
@@ -224,7 +224,7 @@ pub fn relay_cap_refusal(
   let exhausted = decision != LOGIN_FAILED && !has_cool_destination;
   Ok(Some(LaunchRefused {
     message: relay_limit_message(state, cfg, account_pool)?,
-    quota_exhausted: exhausted,
+    failure: if exhausted { MemberFailure::Quota } else { MemberFailure::Other },
     resets_at: if exhausted { claude_accounts::earliest_reset(state, cfg, None, account_pool)? } else { None },
   }))
 }
@@ -400,7 +400,7 @@ mod tests {
       relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), MAX_RELAYS_PER_TURN, RELAY_REJECTED, None)
         .unwrap()
         .expect("the cap refuses a rejected relay");
-    assert!(!refused_below_line.quota_exhausted);
+    assert_eq!(refused_below_line.failure, MemberFailure::Other);
     assert_eq!(refused_below_line.resets_at, None);
 
     // With every login at or above the line, a quota decision refuses with the mark and the stated reset.
@@ -408,14 +408,14 @@ mod tests {
     let refusal = relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), MAX_RELAYS_PER_TURN, RELAY_WARNING, None)
       .unwrap()
       .expect("the cap refuses with no login below the line");
-    assert!(refusal.quota_exhausted);
+    assert_eq!(refusal.failure, MemberFailure::Quota);
     assert_eq!(refusal.resets_at.map(|value| value.to_str()).as_deref(), Some("2030-01-01T00:00:00Z"));
 
     let auth_failure =
       relay_cap_refusal(&state, &cfg, Some("claude-fable-5-1"), MAX_RELAYS_PER_TURN, LOGIN_FAILED, None)
         .unwrap()
         .expect("the cap refuses an auth failure too");
-    assert!(!auth_failure.quota_exhausted);
+    assert_eq!(auth_failure.failure, MemberFailure::Other);
     assert_eq!(auth_failure.resets_at, None);
   }
 

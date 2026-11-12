@@ -15,6 +15,7 @@ mod inlined_script;
 mod inlined_style;
 pub mod lifespan;
 mod member;
+pub mod member_failure;
 pub mod midturn_delivery;
 pub mod option_model;
 pub mod pages;

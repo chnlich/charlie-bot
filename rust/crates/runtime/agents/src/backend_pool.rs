@@ -77,29 +77,7 @@ pub const BACKEND_TEMPORARY_UNAVAILABLE_PATTERNS: &[&str] = &[
 /// gateway's model-access refusal.
 pub const ACCESS_REFUSED_PATTERNS: &[&str] = &["failed to authenticate", "not allowed to access model"];
 
-/// How one member failure sorts: a spent quota, a refusal of authentication or model access, or anything else.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MemberFailure {
-  Quota,
-  AccessRefused,
-  Other,
-}
-
-impl MemberFailure {
-  /// The availability reason this failure records, or `None` when it records the member nowhere.
-  pub fn availability_reason(self) -> Option<&'static str> {
-    match self {
-      Self::Quota => Some(crate::backend_availability::REASON_QUOTA_ERROR),
-      Self::AccessRefused => Some(crate::backend_availability::REASON_ACCESS_REFUSED),
-      Self::Other => None,
-    }
-  }
-
-  /// Whether this failure records the member out of every pool that lists it.
-  pub fn records_out(self) -> bool {
-    self.availability_reason().is_some()
-  }
-}
+pub use charliebot_registry::backend::MemberFailure;
 
 /// The session metadata slot that records the route a delegation keeps.
 pub const METADATA_OWNER: &str = "backend_pool";

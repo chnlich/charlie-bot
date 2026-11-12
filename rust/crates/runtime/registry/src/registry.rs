@@ -29,6 +29,7 @@ use tokio::sync::watch;
 
 use crate::draft::DraftPlatformFactory;
 pub use crate::member::{MemberReading, MemberWindow};
+use crate::member_failure::MemberFailure;
 use crate::route_claims::RouteClaims;
 use crate::sequence::{SequenceBinding, SequenceController};
 use crate::sidebar::SidebarContribution;
@@ -765,12 +766,12 @@ pub trait AgentBackend: Send {
   }
 }
 
-/// A launch refused by the backend: the run ends with `message`. `quota_exhausted` says a spent quota caused it, and
-/// `resets_at` names when that quota returns, when the backend says.
+/// A launch refused by the backend: the run ends with `message`. `failure` is the shared sort of the member
+/// failure, and `resets_at` names when the member runs again, when the backend says.
 #[derive(Clone, Debug)]
 pub struct LaunchRefused {
   pub message: String,
-  pub quota_exhausted: bool,
+  pub failure: MemberFailure,
   pub resets_at: Option<UtcDateTime>,
 }
 

@@ -9,7 +9,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::{
   BackendLifecycle, EXTRA_FLAGS_BACKEND_KWARG, IdleArmContext, Launch, LaunchContext, LaunchKind, LaunchRefused,
-  LaunchWatch,
+  LaunchWatch, MemberFailure,
 };
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
 use charliebot_store::run_records::RunKind;
@@ -87,8 +87,8 @@ fn launch_kwargs(ctx: &LaunchContext, first_process: bool) -> anyhow::Result<Map
 impl BackendLifecycle for ClaudeCliLifecycle {
   fn place<'a>(&'a self, ctx: &'a LaunchContext) -> BoxFuture<'a, Result<Launch, LaunchRefused>> {
     Box::pin(async move {
-      let resume_id = self.checked_resume_id(ctx).map_err(|error| refused(error, false, None))?;
-      self.launch(ctx, resume_id).map_err(|error| refused(error, false, None))
+      let resume_id = self.checked_resume_id(ctx).map_err(|error| refused(error, MemberFailure::Other, None))?;
+      self.launch(ctx, resume_id).map_err(|error| refused(error, MemberFailure::Other, None))
     })
   }
 
@@ -184,16 +184,16 @@ impl ClaudeCodeLifecycle {
     let meta = ctx.session_meta.lock().expect("launch metadata mutex is not poisoned").clone();
     let previous_label = claude_metadata::account_of(&meta);
     let current = claude_accounts::account_by_label(&ctx.cfg, previous_label.as_deref())
-      .map_err(|error| refused(error, false, None))?;
+      .map_err(|error| refused(error, MemberFailure::Other, None))?;
     if let Some(account) = current.as_ref()
       && !claude_accounts::transcript_matches(Path::new(&account.config_dir), session_id)
-        .map_err(|error| refused(error, false, None))?
+        .map_err(|error| refused(error, MemberFailure::Other, None))?
         .is_empty()
     {
       return Ok(Some(session_id.to_string()));
     }
-    let found =
-      claude_accounts::find_transcript_account(&ctx.cfg, session_id).map_err(|error| refused(error, false, None))?;
+    let found = claude_accounts::find_transcript_account(&ctx.cfg, session_id)
+      .map_err(|error| refused(error, MemberFailure::Other, None))?;
     if let Some(found) = found {
       tracing::info!(
         target: "charliebot_agents",
@@ -217,7 +217,7 @@ impl ClaudeCodeLifecycle {
       cc_session_id = session_id,
       config_dir = current.as_ref().map(|account| account.config_dir.as_str()),
       pool = ?claude_accounts::pool(&ctx.cfg)
-        .map_err(|error| refused(error, false, None))?
+        .map_err(|error| refused(error, MemberFailure::Other, None))?
         .iter()
         .map(|account| account.label.as_str())
         .collect::<Vec<_>>(),
@@ -233,11 +233,11 @@ impl ClaudeCodeLifecycle {
   async fn place_task(&self, ctx: &LaunchContext) -> Result<Launch, LaunchRefused> {
     let account_pool = claude_accounts::option_pool(&ctx.option);
     if let Some(session_id) = ctx.held_native_id.as_deref().filter(|value| !value.is_empty()) {
-      let holder =
-        claude_accounts::find_transcript_account(&ctx.cfg, session_id).map_err(|error| refused(error, false, None))?;
+      let holder = claude_accounts::find_transcript_account(&ctx.cfg, session_id)
+        .map_err(|error| refused(error, MemberFailure::Other, None))?;
       let Some(holder) = holder else {
         let labels = claude_accounts::pool(&ctx.cfg)
-          .map_err(|error| refused(error, false, None))?
+          .map_err(|error| refused(error, MemberFailure::Other, None))?
           .into_iter()
           .map(|account| account.label)
           .collect::<Vec<_>>();
@@ -246,13 +246,13 @@ impl ClaudeCodeLifecycle {
             "the held conversation {session_id} has no transcript on any pool login ({})",
             labels.join(", ")
           ),
-          quota_exhausted: false,
+          failure: MemberFailure::Other,
           resets_at: None,
         });
       };
       return self
         .pooled_launch(ctx, holder, Some(session_id.to_string()), None, 0)
-        .map_err(|error| refused(error, false, None));
+        .map_err(|error| refused(error, MemberFailure::Other, None));
     }
     let account = claude_accounts::select(
       &self.state,
@@ -264,15 +264,16 @@ impl ClaudeCodeLifecycle {
       account_pool.as_deref(),
       0.0,
     )
-    .map_err(|error| refused(error, false, None))?;
+    .map_err(|error| refused(error, MemberFailure::Other, None))?;
     let Some(account) = account else {
       let message = claude_relay::pool_exhausted_message(&self.state, &ctx.cfg, None, account_pool.as_deref())
-        .map_err(|error| refused(error, false, None))?;
-      let resets_at = claude_accounts::earliest_reset(&self.state, &ctx.cfg, None, account_pool.as_deref())
-        .map_err(|error| refused(error, false, None))?;
-      return Err(LaunchRefused { message, quota_exhausted: true, resets_at });
+        .map_err(|error| refused(error, MemberFailure::Other, None))?;
+      let no_login =
+        claude_accounts::no_usable_login(&self.state, &ctx.cfg, Some(&ctx.option.model), None, account_pool.as_deref())
+          .map_err(|error| refused(error, MemberFailure::Other, None))?;
+      return Err(LaunchRefused { message, failure: no_login.failure, resets_at: no_login.recovers_at });
     };
-    self.pooled_launch(ctx, account, None, None, 0).map_err(|error| refused(error, false, None))
+    self.pooled_launch(ctx, account, None, None, 0).map_err(|error| refused(error, MemberFailure::Other, None))
   }
 }
 
@@ -294,7 +295,7 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
         claude_idle_compaction::IdleCompaction::shared()
           .settle_for_turn(&session_id)
           .await
-          .map_err(|error| refused(error, false, None))?;
+          .map_err(|error| refused(error, MemberFailure::Other, None))?;
       }
       if !claude_accounts::is_pooled(&ctx.option, &ctx.cfg) {
         return self.no_pool.place(ctx).await;
@@ -303,12 +304,14 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
         LaunchKind::Turn => {
           let resume_id = self.pooled_resume_id(ctx).await?;
           let (context_tokens, last_request_at) =
-            (ctx.context_state)().await.map_err(|error| refused(error, false, None))?;
+            (ctx.context_state)().await.map_err(|error| refused(error, MemberFailure::Other, None))?;
           let account =
             master_cc_relay::place_turn(&self.state, ctx, resume_id.as_deref(), context_tokens, last_request_at, None)
               .await?;
           let resume_id = if ctx.held_native_id.is_some() { self.pooled_resume_id(ctx).await? } else { resume_id };
-          self.pooled_launch(ctx, account, resume_id, None, 0).map_err(|error| refused(error, false, None))
+          self
+            .pooled_launch(ctx, account, resume_id, None, 0)
+            .map_err(|error| refused(error, MemberFailure::Other, None))
         }
         LaunchKind::Task => self.place_task(ctx).await,
       }
@@ -358,19 +361,19 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
     Box::pin(async move {
       let pooled = Self::pooled_state(launch).ok_or_else(|| LaunchRefused {
         message: "Claude relay launch has no account state".to_string(),
-        quota_exhausted: false,
+        failure: MemberFailure::Other,
         resets_at: None,
       })?;
       let decision = pooled.decision.lock().expect("Claude relay decision is not poisoned").clone();
       let decision = decision.ok_or_else(|| LaunchRefused {
         message: "Claude relay watch requested a move without a decision".to_string(),
-        quota_exhausted: false,
+        failure: MemberFailure::Other,
         resets_at: None,
       })?;
       if decision == claude_relay::LOGIN_FAILED {
         master_cc_relay::report_login_failure(&self.state, ctx, &pooled.account)
           .await
-          .map_err(|error| refused(error, false, None))?;
+          .map_err(|error| refused(error, MemberFailure::Other, None))?;
       }
       let account_pool = claude_accounts::option_pool(&ctx.option);
       if let Some(cap_refusal) = claude_relay::relay_cap_refusal(
@@ -381,7 +384,7 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
         &decision,
         account_pool.as_deref(),
       )
-      .map_err(|error| refused(error, false, None))?
+      .map_err(|error| refused(error, MemberFailure::Other, None))?
       {
         return Err(cap_refusal);
       }
@@ -389,7 +392,9 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
       let account =
         master_cc_relay::prepare_relay(&self.state, ctx, &pooled.account, native_id, Some(&decision), relays).await?;
       if ctx.kind == LaunchKind::Turn {
-        (ctx.record_account)(account.label.clone()).await.map_err(|error| refused(error, false, None))?;
+        (ctx.record_account)(account.label.clone())
+          .await
+          .map_err(|error| refused(error, MemberFailure::Other, None))?;
       }
       self
         .pooled_launch(
@@ -399,7 +404,7 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
           Some(claude_relay::CONTINUATION_PROMPT.to_string()),
           relays,
         )
-        .map_err(|error| refused(error, false, None))
+        .map_err(|error| refused(error, MemberFailure::Other, None))
     })
   }
 
@@ -460,10 +465,10 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
 
 fn refused(
   error: impl std::fmt::Display,
-  quota_exhausted: bool,
+  failure: MemberFailure,
   resets_at: Option<charliebot_store::metadata::UtcDateTime>,
 ) -> LaunchRefused {
-  LaunchRefused { message: error.to_string(), quota_exhausted, resets_at }
+  LaunchRefused { message: error.to_string(), failure, resets_at }
 }
 
 #[cfg(test)]
@@ -812,5 +817,35 @@ mod tests {
       assert!(!command.iter().any(|value| value == "--input-format"), "{field}: {command:?}");
       assert!(!command.iter().any(|value| value == "--replay-user-messages"), "{field}: {command:?}");
     }
+  }
+
+  /// A worker whose pool has no usable login refuses the launch as an access refusal, and names the earliest
+  /// authentication-failure disable end rather than a quota reset.
+  #[tokio::test]
+  async fn a_task_with_no_usable_login_carries_the_refusal_and_the_earliest_recovery() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    account_credentials(&a);
+    account_credentials(&b);
+    let cfg = config(&home, &[("a", &a), ("b", &b)]);
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let failed = UtcDateTime::now();
+    claude_accounts::record_auth_failure(&state, "a", Some(failed));
+    claude_accounts::record_auth_failure(&state, "b", Some(failed));
+    let lifecycle = ClaudeCodeLifecycle::with_state(Arc::clone(&state));
+    let ctx = context(cfg, LaunchKind::Task, None, None, None);
+
+    let refused = match lifecycle.place(&ctx).await {
+      Err(refused) => refused,
+      Ok(_) => panic!("no login can take the run"),
+    };
+
+    assert_eq!(refused.failure, MemberFailure::AccessRefused);
+    assert_eq!(
+      refused.resets_at,
+      Some(UtcDateTime::from(failed.into_inner() + claude_accounts::AUTH_FAILURE_COOLDOWN))
+    );
   }
 }

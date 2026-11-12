@@ -3,6 +3,7 @@
 use std::any::type_name;
 use std::sync::Arc;
 
+pub use crate::member_failure::MemberFailure;
 pub use crate::registry::{
   AGENTS_INSTRUCTIONS_FILE_NAME, AgentBackend, BackendFactory, BackendLifecycle, BackendReadingLimitsFn, BackendTraits,
   BackendTypeRegistration, CLAUDE_INSTRUCTIONS_FILE_NAME, ChildEnvFn, CompactionOutcome, CompactionRun,

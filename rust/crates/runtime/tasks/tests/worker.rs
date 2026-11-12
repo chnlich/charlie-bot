@@ -616,7 +616,7 @@ async fn test_worker_raises_pool_exhausted_when_no_account_is_left() -> anyhow::
   let error = refusal(task_worker.run().await.expect_err("the run is refused"));
 
   assert!(error.message.contains("earliest reset"), "{}", error.message);
-  assert!(error.quota_exhausted);
+  assert_eq!(error.failure, charliebot_registry::backend::MemberFailure::Quota);
   Ok(())
 }
 
@@ -680,7 +680,11 @@ async fn test_worker_stops_after_the_relay_limit() -> anyhow::Result<()> {
   let error = refusal(task_worker.run().await.expect_err("the run is refused"));
 
   assert!(error.message.contains("relay limit"), "{}", error.message);
-  assert!(error.quota_exhausted, "every login is rejected, so the pool is exhausted at the cap");
+  assert_eq!(
+    error.failure,
+    charliebot_registry::backend::MemberFailure::Quota,
+    "every login is rejected, so the pool is exhausted at the cap"
+  );
   assert!(error.resets_at.is_some(), "the exhausted pool names the earliest reset its rejections stated");
   assert_eq!(scripts.builds().len(), 1 + claude_relay::MAX_RELAYS_PER_TURN);
   assert_eq!(task_worker.account_relays(), claude_relay::MAX_RELAYS_PER_TURN);
@@ -818,7 +822,7 @@ async fn test_worker_relay_limit_names_each_unavailable_account() -> anyhow::Res
   let error = refusal(task_worker.run().await.expect_err("the run is refused"));
 
   let message = error.message.clone();
-  assert!(!error.quota_exhausted);
+  assert_eq!(error.failure, charliebot_registry::backend::MemberFailure::Other);
   assert!(message.starts_with("Claude account relay limit reached (3 relays in one run; "), "{message}");
   assert!(message.ends_with("this run did not complete."), "{message}");
   for label in ["main", "a", "b", "c"] {

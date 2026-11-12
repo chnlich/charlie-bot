@@ -12,7 +12,7 @@ use charliebot_core::repo_root::RepoRoot;
 use charliebot_improve::{command, landing, register, sequence};
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{
-  BackendLifecycle, BackendTraits, Launch, LaunchContext, LaunchRefused, ResumeStyle,
+  BackendLifecycle, BackendTraits, Launch, LaunchContext, LaunchRefused, MemberFailure, ResumeStyle,
 };
 use charliebot_registry::sequence::SequenceTree;
 use charliebot_store::StoreResult;
@@ -80,7 +80,7 @@ impl BackendLifecycle for QuotaOnceLifecycle {
       {
         return Err(LaunchRefused {
           message: "Claude account pool exhausted; earliest reset 2999-01-01 00:00 UTC".to_string(),
-          quota_exhausted: true,
+          failure: MemberFailure::Quota,
           resets_at: Some(UtcDateTime::parse(QUOTA_RESET).expect("the fixed reset time parses")),
         });
       }

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use super::{claude_accounts, claude_compaction, claude_config, claude_metadata, claude_relay};
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_registry::backend::{LaunchContext, LaunchKind, LaunchRefused, RunningTurnsFn};
+use charliebot_registry::backend::{LaunchContext, LaunchKind, LaunchRefused, MemberFailure, RunningTurnsFn};
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 
 pub const GUARD_REFUSED_NEWER_TRANSCRIPT: &str = "guard_refused_newer_transcript";
@@ -154,8 +154,9 @@ where
   F: Future<Output = ()> + Send,
 {
   let pool_choice = state.pool_choice.lock().await;
-  probe_reconcile_label(ctx, resume_id).await.map_err(|error| refusal(error, false, None))?;
-  let running_turns = read_running_turns(ctx.running_turns.as_ref()).map_err(|error| refusal(error, false, None))?;
+  probe_reconcile_label(ctx, resume_id).await.map_err(|error| refusal(error, MemberFailure::Other, None))?;
+  let running_turns =
+    read_running_turns(ctx.running_turns.as_ref()).map_err(|error| refusal(error, MemberFailure::Other, None))?;
   after_running_turns.await;
   let meta = session_metadata(ctx);
   let account_pool = claude_accounts::option_pool(&ctx.option);
@@ -169,16 +170,17 @@ where
     account_pool.as_deref(),
     &running_turns,
   )
-  .map_err(|error| refusal(error, false, None))?;
+  .map_err(|error| refusal(error, MemberFailure::Other, None))?;
   let Some(chosen) = chosen else {
     let message = claude_relay::pool_exhausted_message(state, &ctx.cfg, now, account_pool.as_deref())
-      .map_err(|error| refusal(error, false, None))?;
-    let resets_at = claude_accounts::earliest_reset(state, &ctx.cfg, now, account_pool.as_deref())
-      .map_err(|error| refusal(error, false, None))?;
-    return Err(LaunchRefused { message, quota_exhausted: true, resets_at });
+      .map_err(|error| refusal(error, MemberFailure::Other, None))?;
+    let no_login =
+      claude_accounts::no_usable_login(state, &ctx.cfg, Some(&ctx.option.model), now, account_pool.as_deref())
+        .map_err(|error| refusal(error, MemberFailure::Other, None))?;
+    return Err(LaunchRefused { message, failure: no_login.failure, resets_at: no_login.recovers_at });
   };
   let previous = claude_accounts::account_by_label(&ctx.cfg, claude_metadata::account_of(&meta).as_deref())
-    .map_err(|error| refusal(error, false, None))?;
+    .map_err(|error| refusal(error, MemberFailure::Other, None))?;
   let account_changed = previous.as_ref().is_none_or(|previous| previous.label != chosen.label);
   if account_changed {
     if let (Some(resume_id), Some(previous)) = (resume_id.filter(|id| !id.is_empty()), previous.as_ref())
@@ -188,13 +190,13 @@ where
       if !claude_accounts::is_newer_transcript_refusal(&error) {
         return Err(LaunchRefused {
           message: format!("Claude account switch failed: {error}"),
-          quota_exhausted: false,
+          failure: MemberFailure::Other,
           resets_at: None,
         });
       }
       adopt_transcript_holder(ctx, Some(resume_id), &chosen, Some(&previous.label), GUARD_REFUSED_NEWER_TRANSCRIPT)
         .await
-        .map_err(|error| refusal(error, false, None))?;
+        .map_err(|error| refusal(error, MemberFailure::Other, None))?;
     }
     claude_metadata::set_account(
       &mut ctx.session_meta.lock().expect("launch metadata mutex is not poisoned"),
@@ -211,9 +213,9 @@ where
   }
   drop(pool_choice);
   if account_changed {
-    (ctx.record_account)(chosen.label.clone()).await.map_err(|error| refusal(error, false, None))?;
+    (ctx.record_account)(chosen.label.clone()).await.map_err(|error| refusal(error, MemberFailure::Other, None))?;
   }
-  report_empty_credentials(state, ctx).await.map_err(|error| refusal(error, false, None))?;
+  report_empty_credentials(state, ctx).await.map_err(|error| refusal(error, MemberFailure::Other, None))?;
   if resume_id.is_some_and(|id| !id.is_empty())
     && cold
     && claude_compaction::expired_cache_compaction_wanted(
@@ -232,7 +234,7 @@ where
       context_tokens,
     )
     .await
-    .map_err(|error| refusal(error, false, None))?;
+    .map_err(|error| refusal(error, MemberFailure::Other, None))?;
   }
   Ok(chosen)
 }
@@ -291,22 +293,24 @@ pub async fn prepare_relay(
     None,
     account_pool.as_deref(),
   )
-  .map_err(|error| refusal(error, false, None))?;
+  .map_err(|error| refusal(error, MemberFailure::Other, None))?;
   let Some(next) = movement.account else {
     let message = movement.error.expect("failed account move has an error");
     if let Some(holder) = movement.refused_holder.filter(|_| ctx.kind == LaunchKind::Turn) {
       adopt_transcript_holder(ctx, session_id, &holder, Some(&current.label), GUARD_REFUSED_NEWER_TRANSCRIPT)
         .await
-        .map_err(|error| refusal(error, false, None))?;
+        .map_err(|error| refusal(error, MemberFailure::Other, None))?;
       return Ok(holder);
     }
-    let resets_at = if movement.pool_exhausted {
-      claude_accounts::earliest_reset(state, &ctx.cfg, None, account_pool.as_deref())
-        .map_err(|error| refusal(error, false, None))?
+    let (failure, resets_at) = if movement.pool_exhausted {
+      let no_login =
+        claude_accounts::no_usable_login(state, &ctx.cfg, Some(&ctx.option.model), None, account_pool.as_deref())
+          .map_err(|error| refusal(error, MemberFailure::Other, None))?;
+      (no_login.failure, no_login.recovers_at)
     } else {
-      None
+      (MemberFailure::Other, None)
     };
-    return Err(LaunchRefused { message, quota_exhausted: movement.pool_exhausted, resets_at });
+    return Err(LaunchRefused { message, failure, resets_at });
   };
   if ctx.kind == LaunchKind::Turn {
     claude_metadata::set_account(
@@ -336,20 +340,20 @@ pub async fn prepare_relay(
       "worker_account_relay"
     ),
   }
-  let (context_tokens, _) = (ctx.context_state)().await.map_err(|error| refusal(error, false, None))?;
+  let (context_tokens, _) = (ctx.context_state)().await.map_err(|error| refusal(error, MemberFailure::Other, None))?;
   if ctx.kind == LaunchKind::Turn
     && claude_compaction::relay_compaction_wanted(&ctx.cfg, Some(&ctx.option.model), context_tokens)
   {
     let session_id = session_id.expect("a successful relay has a session id");
     compact_session_transcript(ctx, session_id, &next, "relay", context_tokens)
       .await
-      .map_err(|error| refusal(error, false, None))?;
+      .map_err(|error| refusal(error, MemberFailure::Other, None))?;
   }
   Ok(next)
 }
 
-fn refusal(error: anyhow::Error, quota_exhausted: bool, resets_at: Option<UtcDateTime>) -> LaunchRefused {
-  LaunchRefused { message: error.to_string(), quota_exhausted, resets_at }
+fn refusal(error: anyhow::Error, failure: MemberFailure, resets_at: Option<UtcDateTime>) -> LaunchRefused {
+  LaunchRefused { message: error.to_string(), failure, resets_at }
 }
 
 pub type ClaudeAccountStateRef = Arc<claude_accounts::ClaudeAccountState>;
@@ -639,5 +643,57 @@ mod tests {
       .unwrap();
     assert_eq!(claude_metadata::account_of(&session_metadata(&ctx)).as_deref(), Some("b"));
     assert_eq!(*account_calls.lock().unwrap(), [true, false]);
+  }
+
+  /// Every login of the pool under its authentication-failure disable refuses the turn as an access refusal, and the
+  /// refusal names the earliest disable end rather than a quota reset.
+  #[tokio::test]
+  async fn a_turn_with_no_usable_login_carries_the_refusal_and_the_earliest_recovery() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    account_credentials(&a);
+    account_credentials(&b);
+    let cfg = config(&home, &[("a", &a), ("b", &b)]);
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let first = UtcDateTime::parse("2025-01-01T12:00:00Z").unwrap();
+    claude_accounts::record_auth_failure(&state, "a", Some(first));
+    claude_accounts::record_auth_failure(&state, "b", Some(UtcDateTime::parse("2025-01-01T12:05:00Z").unwrap()));
+    let ctx = context(cfg, "turn", None, None, Arc::new(Vec::new), record_account());
+
+    let refused =
+      place_turn(&state, &ctx, None, None, None, Some(first)).await.expect_err("no login can take the turn");
+
+    assert_eq!(refused.failure, MemberFailure::AccessRefused);
+    assert_eq!(refused.resets_at, Some(UtcDateTime::parse("2025-01-01T12:15:00Z").unwrap()));
+  }
+
+  /// A relay whose next login is under its failure disable refuses with the same classification and recovery time.
+  #[tokio::test]
+  async fn a_relay_with_no_usable_login_carries_the_refusal_and_the_earliest_recovery() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    account_credentials(&a);
+    account_credentials(&b);
+    let cfg = config(&home, &[("a", &a), ("b", &b)]);
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let failed = UtcDateTime::now();
+    claude_accounts::record_auth_failure(&state, "a", Some(failed));
+    claude_accounts::record_auth_failure(&state, "b", Some(failed));
+    let current = claude_accounts::account_by_label(&cfg, Some("a")).unwrap().unwrap();
+    let ctx = context(cfg, "turn", Some("a"), None, Arc::new(Vec::new), record_account());
+
+    let refused = prepare_relay(&state, &ctx, &current, Some("session-id"), None, 0)
+      .await
+      .expect_err("no login can take the relay");
+
+    assert_eq!(refused.failure, MemberFailure::AccessRefused);
+    assert_eq!(
+      refused.resets_at,
+      Some(UtcDateTime::from(failed.into_inner() + claude_accounts::AUTH_FAILURE_COOLDOWN))
+    );
   }
 }

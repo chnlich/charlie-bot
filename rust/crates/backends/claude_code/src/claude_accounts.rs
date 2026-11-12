@@ -12,7 +12,7 @@ use std::time::UNIX_EPOCH;
 use anyhow::{Context, anyhow};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::text_repr::is_truthy;
-use charliebot_registry::backend::{MemberReading, MemberWindow};
+use charliebot_registry::backend::{MemberFailure, MemberReading, MemberWindow};
 use charliebot_registry::usage::{self, WEEKLY_WINDOW_MINUTES};
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::Value;
@@ -587,6 +587,71 @@ pub fn earliest_reset(
       .filter_map(|(_, reading)| reading.rejected_until.filter(|reset| *reset > moment))
       .min(),
   )
+}
+
+/// Why a pool has no login it can launch, and when its earliest login can run again.
+pub struct NoUsableLogin {
+  /// The shared sort of the refusal: a spent quota when any login is out for quota, else an access refusal.
+  pub failure: MemberFailure,
+  /// The earliest instant a login of the pool can run again, or `None` when no login states one.
+  pub recovers_at: Option<UtcDateTime>,
+}
+
+/// Why the pool has no login to launch, and when its earliest login can run again.
+///
+/// A login without credentials runs as soon as credentials are written, so it recovers now. A login under its
+/// authentication-failure disable recovers when the disable ends. A login out for quota recovers at the reset its
+/// rejection stated, when it stated one. When no login is out for quota, the refusal is an access refusal.
+pub fn no_usable_login(
+  state: &ClaudeAccountState,
+  cfg: &CharlieBotConfig,
+  model: Option<&str>,
+  now: Option<UtcDateTime>,
+  account_pool: Option<&str>,
+) -> anyhow::Result<NoUsableLogin> {
+  let moment = now_or(now);
+  let mut out_for_quota = false;
+  let mut recovers_at: Option<UtcDateTime> = None;
+  for account in pool_accounts(cfg, account_pool)? {
+    let (quota, recovery) = login_unavailability(state, &account, model, moment);
+    out_for_quota |= quota;
+    if let Some(time) = recovery {
+      recovers_at = Some(recovers_at.map_or(time, |earliest| earliest.min(time)));
+    }
+  }
+  let failure = if out_for_quota { MemberFailure::Quota } else { MemberFailure::AccessRefused };
+  Ok(NoUsableLogin { failure, recovers_at })
+}
+
+/// When one login can run again, and whether a spent quota is what holds it out.
+fn login_unavailability(
+  state: &ClaudeAccountState,
+  account: &claude_config::ClaudeAccount,
+  model: Option<&str>,
+  now: UtcDateTime,
+) -> (bool, Option<UtcDateTime>) {
+  if !credentials_present(account) {
+    return (false, Some(now));
+  }
+  let failed =
+    state.readings.lock().expect("Claude account state is not poisoned").auth_failures.get(&account.label).copied();
+  if let Some(failed) = failed
+    && now.into_inner() - failed.into_inner() < AUTH_FAILURE_COOLDOWN
+  {
+    return (false, Some(add_duration(failed, AUTH_FAILURE_COOLDOWN)));
+  }
+  if headroom(state, &account.label, model, Some(now)) <= 0.0 {
+    let reset = state
+      .readings
+      .lock()
+      .expect("Claude account state is not poisoned")
+      .event
+      .get(&account.label)
+      .and_then(|reading| reading.rejected_until)
+      .filter(|reset| *reset > now);
+    return (true, reset);
+  }
+  (false, Some(now))
 }
 
 pub fn unavailable_detail(
@@ -1298,5 +1363,53 @@ mod tests {
       observe_usage_panel(&state, "b", &panel_window(60.0, WEEKLY_WINDOW_MINUTES, "2025-01-02T13:00:00Z"));
       assert_eq!(select_now(&state, &cfg, now), "b");
     }
+  }
+
+  #[test]
+  fn no_usable_login_names_the_refusal_cause_and_the_earliest_recovery() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    add_credentials(&a);
+    add_credentials(&b);
+    let cfg = config(&home, &[("a", &a), ("b", &b)]);
+    let now = timestamp("2025-01-01T12:00:00Z");
+
+    // Every login under its authentication-failure disable is a refusal, recovering at the earliest disable end.
+    let state = ClaudeAccountState::new();
+    record_auth_failure(&state, "a", Some(now));
+    record_auth_failure(&state, "b", Some(timestamp("2025-01-01T12:05:00Z")));
+    let answer = no_usable_login(&state, &cfg, Some("claude-fable-5-1"), Some(now), None).unwrap();
+    assert_eq!(answer.failure, MemberFailure::AccessRefused);
+    assert_eq!(answer.recovers_at, Some(timestamp("2025-01-01T12:15:00Z")));
+
+    // A login without credentials recovers as soon as credentials are written, so the record expires at once.
+    let missing = root.path().join("missing");
+    let cfg = config(&home, &[("a", &missing)]);
+    let state = ClaudeAccountState::new();
+    let answer = no_usable_login(&state, &cfg, Some("claude-fable-5-1"), Some(now), None).unwrap();
+    assert_eq!(answer.failure, MemberFailure::AccessRefused);
+    assert_eq!(answer.recovers_at, Some(now));
+
+    // A login out for quota keeps the quota class, and its stated reset is the earliest recovery time.
+    let cfg = config(&home, &[("a", &a), ("b", &b)]);
+    let state = ClaudeAccountState::new();
+    let reset = now.into_inner() + Duration::minutes(5);
+    observe_rate_limit(
+      &state,
+      "a",
+      &json!({
+        "unifiedWindows": {"five_hour": {"utilization": 1.0}},
+        "status": "rejected",
+        "resetsAt": reset.unix_timestamp() as f64,
+      }),
+      Some(now),
+    );
+    record_auth_failure(&state, "b", Some(now));
+    let answer = no_usable_login(&state, &cfg, Some("claude-fable-5-1"), Some(now), None).unwrap();
+    assert_eq!(answer.failure, MemberFailure::Quota);
+    assert_eq!(answer.recovers_at, Some(UtcDateTime::from(reset)));
   }
 }

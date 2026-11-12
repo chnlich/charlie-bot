@@ -977,9 +977,8 @@ impl TaskExecutionAdapter {
     let session_id = meta.id.as_str();
     let run_id = run.id.as_str();
     if let Some(refusal) = error.downcast_ref::<LaunchRefused>() {
-      tracing::warn!(target: "charliebot_tasks", session_id, run_id, error = %refusal.message, quota_exhausted = refusal.quota_exhausted, "task_run_launch_refused");
-      let failure = backend_pool::classify_member_failure(&refusal.message, Some(refusal.quota_exhausted));
-      if let Some(reason) = failure.availability_reason() {
+      tracing::warn!(target: "charliebot_tasks", session_id, run_id, error = %refusal.message, failure = ?refusal.failure, "task_run_launch_refused");
+      if let Some(reason) = refusal.failure.availability_reason() {
         let failure =
           QuotaFailure { resets_at: refusal.resets_at, message: refusal.message.clone(), reason: reason.to_string() };
         self
@@ -988,7 +987,8 @@ impl TaskExecutionAdapter {
           .expect("worker quota failure map is not poisoned")
           .insert((session_id.to_string(), run_id.to_string()), failure);
       }
-      self.record_launch_error_event(session_id, run_id, &refusal.message, Some(refusal.quota_exhausted)).await?;
+      let quota = Some(refusal.failure == backend_pool::MemberFailure::Quota);
+      self.record_launch_error_event(session_id, run_id, &refusal.message, quota).await?;
     } else if let Some(quota) = error.downcast_ref::<worker::QuotaExhaustedError>() {
       tracing::warn!(target: "charliebot_tasks", session_id, run_id, error = %quota, "task_run_quota_exhausted");
       let resets_at = quota
@@ -2737,17 +2737,22 @@ impl TaskExecutionAdapter {
   }
 }
 
-/// The member failure an Auto session's manager turn ended on, read from the finish extras through the shared
-/// classification.
+/// The member failure an Auto session's manager turn ended on, read from the finish extras. The recorder writes the
+/// reason a refused launch carried; an older extra without one is classified from its text.
 fn auto_quota_failure(extras: &Map<String, Value>) -> Option<QuotaFailure> {
   let message = extras.get(master_run::FINISH_ERROR_MESSAGE).and_then(Value::as_str)?.to_string();
-  let quota_exhausted = extras.get(master_run::FINISH_QUOTA_EXHAUSTED).and_then(Value::as_bool);
-  let reason = backend_pool::classify_member_failure(&message, quota_exhausted).availability_reason()?;
+  let reason = match extras.get(master_run::FINISH_FAILURE_REASON).and_then(Value::as_str) {
+    Some(reason) => reason.to_string(),
+    None => {
+      let quota_exhausted = extras.get(master_run::FINISH_QUOTA_EXHAUSTED).and_then(Value::as_bool);
+      backend_pool::classify_member_failure(&message, quota_exhausted).availability_reason()?.to_string()
+    }
+  };
   let resets_at = extras
     .get(master_run::FINISH_QUOTA_RESETS_AT)
     .and_then(Value::as_str)
     .and_then(|text| UtcDateTime::parse(text).ok());
-  Some(QuotaFailure { resets_at, message, reason: reason.to_string() })
+  Some(QuotaFailure { resets_at, message, reason })
 }
 
 /// The failed run an Auto switch retry continues, with the reason its fresh conversation starts, when this run is a

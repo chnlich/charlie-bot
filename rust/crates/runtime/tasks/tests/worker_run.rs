@@ -36,7 +36,8 @@ use charliebot_tasks::{cold_read, handoff, routes, spawner_backends, task_sessio
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
   BACKEND_ID, BACKEND_TYPE, ROTATION_POOL_ID, Scripts, Stack, TOKEN_FIELD, cold_read_body, init_repo_with_origin,
-  last_child_report, post_delegate, result_script, settle_until, synthetic_git, synthetic_run, write_sitrep,
+  last_child_report, post_delegate, result_script, scripted_type, settle_until, synthetic_git, synthetic_run,
+  write_sitrep,
 };
 use serde_json::{Map, Value, json};
 use serde_yaml::Mapping;
@@ -2731,6 +2732,224 @@ async fn an_access_refused_run_fails_over_to_the_next_member() -> anyhow::Result
   for event in &closes {
     assert_eq!(event["run_ids"], json!([retry.id.clone()]), "the refusal itself did not end the task: {event}");
   }
+  Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// A launch refused by the Claude login layer
+// ---------------------------------------------------------------------------
+
+/// The recovery time the refused launch of these tests states.
+const REFUSED_RECOVERY: &str = "2999-01-02T03:04:05Z";
+
+/// A backend type whose every launch refuses, as the Claude login layer does when no login is usable.
+struct RefusedLaunchLifecycle {
+  failure: charliebot_registry::backend::MemberFailure,
+  resets_at: Option<UtcDateTime>,
+}
+
+impl charliebot_registry::backend::BackendLifecycle for RefusedLaunchLifecycle {
+  fn place<'a>(
+    &'a self,
+    _ctx: &'a charliebot_registry::backend::LaunchContext,
+  ) -> futures_util::future::BoxFuture<
+    'a,
+    anyhow::Result<charliebot_registry::backend::Launch, charliebot_registry::backend::LaunchRefused>,
+  > {
+    Box::pin(async move {
+      Err(charliebot_registry::backend::LaunchRefused {
+        message: "Claude account pool has no available account (main: auth-failure cooldown until 10:15 UTC); this \
+                  run did not complete."
+          .to_string(),
+        failure: self.failure,
+        resets_at: self.resets_at,
+      })
+    })
+  }
+}
+
+fn refused_traits() -> charliebot_registry::backend::BackendTraits {
+  charliebot_registry::backend::BackendTraits {
+    resume: charliebot_registry::backend::ResumeStyle::CliFlag,
+    restart_reattach: false,
+    preassigned_session_id: false,
+    family_prefix: None,
+    manual_compact: false,
+    compact_hint: None,
+  }
+}
+
+/// Register the refusing types: an authentication failure with a stated recovery, a missing login recovering at once,
+/// and a quota refusal with a stated reset.
+fn register_refused_launch(registry: &mut Registry) -> Result<(), charliebot_registry::RegistryError> {
+  let fixed = UtcDateTime::parse(REFUSED_RECOVERY).expect("the fixed recovery time parses");
+  for (type_name, failure, resets_at) in [
+    ("refused-launch", charliebot_registry::backend::MemberFailure::AccessRefused, Some(fixed)),
+    (
+      "refused-missing-credentials",
+      charliebot_registry::backend::MemberFailure::AccessRefused,
+      Some(UtcDateTime::now()),
+    ),
+    ("refused-quota", charliebot_registry::backend::MemberFailure::Quota, Some(fixed)),
+  ] {
+    let lifecycle: Arc<dyn charliebot_registry::backend::BackendLifecycle> =
+      Arc::new(RefusedLaunchLifecycle { failure, resets_at });
+    registry.backend_type(scripted_type(type_name, refused_traits(), Some(lifecycle)))?;
+  }
+  Ok(())
+}
+
+/// The option of one of the refusing types.
+fn refused_option(id: &str) -> BackendOption {
+  BackendOption {
+    id: id.to_string(),
+    label: id.to_string(),
+    model: format!("{id}-model"),
+    prompt_overlay: None,
+    billing: None,
+    backend_type: id.to_string(),
+    type_fields: Mapping::new(),
+    visible: true,
+  }
+}
+
+/// Drive one manager turn on `backend` to its refused end.
+async fn refused_manager_turn(backend: &str) -> anyhow::Result<Stack> {
+  let stack = Stack::start_with_package(
+    vec![refused_option(backend)],
+    Vec::new(),
+    ("test.refused_launch", register_refused_launch),
+  )
+  .await?;
+  stack.write_access_key()?;
+  let manager = stack
+    .store()
+    .create_task(
+      CreateTask {
+        request_id: "refused-manager".to_string(),
+        task_parent_id: None,
+        profile: TaskProfile::Manager,
+        task: None,
+        name: Some("Refused manager".to_string()),
+        backend: Some(backend.to_string()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  stack.dispatch.admit_input(&manager.id, event_types::USER, "continue", "user", json!({})).await?;
+  let run = launched_run_id(&stack.dispatch.dispatch_pending(&manager.id).await?)?;
+  assert_eq!(stack.wait_terminal(&manager.id, &run).await?, RunOutcomeKind::Failed);
+  settle_node(&stack, &manager.id).await?;
+  Ok(stack)
+}
+
+/// Drive one implement worker run on `backend` to its refused end.
+async fn refused_worker_run(backend: &str) -> anyhow::Result<Stack> {
+  let scripts = Scripts::new(vec![result_script("manager noted")]);
+  let stack = Stack::start_with_package(
+    vec![refused_option(backend), scripts.option(BACKEND_ID, BACKEND_TYPE)],
+    Vec::new(),
+    ("test.refused_launch", register_refused_launch),
+  )
+  .await?;
+  stack.write_access_key()?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let root = tempfile::tempdir()?;
+  let (repo, worktree) = (root.path().join("repo"), root.path().join("worktree"));
+  std::fs::create_dir(&repo)?;
+  std::fs::create_dir(&worktree)?;
+  let task = TaskSpec {
+    goal: "implement the requested change".to_string(),
+    repo_path: Some(repo.display().to_string()),
+    base_branch: Some("main".to_string()),
+    task_type: Some(TaskType::Implement),
+    keep_worktree: true,
+    ..TaskSpec::default()
+  };
+  let worker = stack
+    .store()
+    .create_task(
+      CreateTask {
+        request_id: "refused-worker".to_string(),
+        task_parent_id: Some(manager.id.clone()),
+        profile: TaskProfile::Worker,
+        task: Some(task),
+        name: None,
+        backend: Some(backend.to_string()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  let admitted =
+    stack.dispatch.admit_input(&worker.id, event_types::USER, "implement this input batch", "user", json!({})).await?;
+  let record = RunRecord {
+    backend: Some(backend.to_string()),
+    model: Some(format!("{backend}-model")),
+    repo_path: Some(repo.display().to_string()),
+    base_branch: Some("main".to_string()),
+    branch_name: Some("charliebot/task-test".to_string()),
+    worktree_path: Some(worktree.display().to_string()),
+    input_event_ids: vec![admitted["id"].as_str().expect("an admitted input has an id").to_string()],
+    ..synthetic_run(&worker.id, "run-initial", RunKind::Work)
+  };
+  register_run(&stack, record, "implement the requested change").await?;
+  stack.adapter.launch(&worker.id, "run-initial")?;
+  assert_eq!(stack.wait_terminal(&worker.id, "run-initial").await?, RunOutcomeKind::Failed);
+  settle_node(&stack, &worker.id).await?;
+  settle_node(&stack, &manager.id).await?;
+  Ok(stack)
+}
+
+/// A manager turn whose logins all failed authentication records the member as an access refusal that recovers at the
+/// earliest login disable end, not the 30-minute quota cooldown.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_manager_turn_refused_by_its_logins_records_the_earliest_login_recovery() -> anyhow::Result<()> {
+  let stack = refused_manager_turn("refused-launch").await?;
+  let row = backend_availability(&stack.features)?.row("refused-launch").expect("the refused member is recorded");
+  assert_eq!(row.reason, backend_availability::REASON_ACCESS_REFUSED);
+  assert_eq!(row.out_until.to_str(), REFUSED_RECOVERY);
+  Ok(())
+}
+
+/// A worker whose logins all failed authentication records the same access refusal and earliest recovery.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_worker_refused_by_its_logins_records_the_earliest_login_recovery() -> anyhow::Result<()> {
+  let stack = refused_worker_run("refused-launch").await?;
+  let row = backend_availability(&stack.features)?.row("refused-launch").expect("the refused member is recorded");
+  assert_eq!(row.reason, backend_availability::REASON_ACCESS_REFUSED);
+  assert_eq!(row.out_until.to_str(), REFUSED_RECOVERY);
+  Ok(())
+}
+
+/// Logins without credentials can recover as soon as credentials are written, so the recorded row expires at once.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_worker_refused_for_missing_credentials_records_a_row_that_expires_at_once() -> anyhow::Result<()> {
+  let stack = refused_worker_run("refused-missing-credentials").await?;
+  let row =
+    backend_availability(&stack.features)?.row("refused-missing-credentials").expect("the refused member is recorded");
+  assert_eq!(row.reason, backend_availability::REASON_ACCESS_REFUSED);
+  let remaining = row.out_until.into_inner() - OffsetDateTime::now_utc();
+  assert!(remaining < TimeDuration::minutes(1), "the row expires at once instead of after a cooldown: {remaining:?}");
+  Ok(())
+}
+
+/// Quota exhaustion of every login keeps the quota reason and its stated reset.
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_worker_refused_for_quota_records_the_quota_reason_and_reset() -> anyhow::Result<()> {
+  let stack = refused_worker_run("refused-quota").await?;
+  let row = backend_availability(&stack.features)?.row("refused-quota").expect("the refused member is recorded");
+  assert_eq!(row.reason, backend_availability::REASON_QUOTA_ERROR);
+  assert_eq!(row.out_until.to_str(), REFUSED_RECOVERY);
   Ok(())
 }
 

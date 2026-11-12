@@ -1,7 +1,7 @@
 //! The usage page's calendar. Every date and stamp the page prints is in America/Los_Angeles, whatever zone the server
-//! runs in, and the last week is the Pacific calendar week before the one `now` falls in: [Monday 00:00, next Monday
-//! 00:00) in that zone, which is 169 hours when the clocks change inside it. Core's `pacific` owns the zone and the
-//! Pacific day of a stamp.
+//! runs in. The last week is the Pacific calendar week before the one `now` falls in: [Monday 00:00, next Monday
+//! 00:00) in that zone. That week is 169 hours when the clocks change inside it. Core's `pacific` owns the zone and
+//! the Pacific day of a stamp.
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};

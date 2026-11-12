@@ -41,8 +41,8 @@ fn recorded_capture_matches_rows_and_all_ledger_tables() {
     .unwrap();
   assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
   let rust_capture: Value = serde_json::from_slice(&output.stdout).unwrap();
-  // The stamps and native starts name Pacific days here and UTC days in the recorded output, so this parity checks
-  // the counts and the attribution; the stamps are pinned by the ledger and page tests.
+  // The stamps and native starts name Pacific days here and UTC days in the recorded output. This parity therefore
+  // checks the counts and the attribution; the ledger and page tests pin the stamps.
   assert_eq!(without_stamps(&rust_capture["rows"]), without_stamps(&fixture["python_capture"]["rows"]));
 
   let rust_snapshot = snapshot(&home, &ledger);

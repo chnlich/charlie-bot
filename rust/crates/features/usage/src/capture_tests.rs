@@ -564,8 +564,8 @@ fn capture_without_a_registered_source_raises() {
 }
 
 // The capture cases, in the recorded order. The Claude, Codex and opencode cases run on the
-// CliStub stand-ins, so their values are the records the stand-ins yield; the readers that parse those logs live in
-// the agents crate.
+// CliStub stand-ins, so their values are the records the stand-ins yield. The readers that parse those logs live
+// in the agents crate.
 
 #[test]
 fn capture_usage_rows_are_absolutely_correct() {
@@ -665,8 +665,8 @@ fn a_rewritten_file_reads_whole() {
 #[test]
 fn backend_page_source_attributes_by_type_prefix_and_master_account() {
   // The attribution reads a registered id's config type first (the type wins over the id's prefix), an off-config
-  // id's type prefix next, and the master-run account as CLC through its clc- prefix. The gemini type has no usage
-  // source in this fixture; the agents crate registers the Antigravity and kimi types.
+  // id's type prefix next. The master-run account then reads as CLC through its clc- prefix. The gemini type has
+  // no usage source in this fixture; the agents crate registers the Antigravity and kimi types.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let options = [
@@ -708,7 +708,7 @@ fn a_retired_id_names_its_row_by_the_prefix_its_source_registers() {
 
 #[test]
 fn charliebot_thread_row_takes_the_recorded_model_first() {
-  // A thread's row names the model its metadata recorded even when config maps its id to a later version; a thread
+  // A thread's row names the model its metadata recorded even when config maps its id to a later version. A thread
   // without a recorded model takes the config model, and a retired id without one takes the id minus its prefix.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
@@ -826,7 +826,7 @@ fn second_capture_without_changes_writes_nothing() {
 #[test]
 fn appended_line_is_captured_and_second_dir_replay_counts_once() {
   // An appended record reaches the ledger on the next capture (the file rewrites whole: its captured records
-  // re-upsert beside the new one), and a message id replayed into a second file is captured yet still counted once.
+  // re-upsert beside the new one). A message id replayed into a second file is captured yet still counted once.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = claude_fixture(&home);
@@ -875,8 +875,8 @@ fn codex_p2_signature_rereads_the_unchanged_rollout_once() {
 
 #[test]
 fn charliebot_capture_rows() {
-  // CLC threads plus a CLC master capture give the ledger one row per model: the recorded model naming the first
-  // thread's row, the config model and the master's context model merging into the second. An unchanged corpus's
+  // CLC threads plus a CLC master capture give the ledger one row per model. The recorded model names the first
+  // thread's row; the config model and the master's context model merge into the second. An unchanged corpus's
   // second capture writes nothing.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
@@ -931,8 +931,8 @@ fn charliebot_capture_rows() {
 
 #[test]
 fn charliebot_codex_thread_counts_its_cached_reads_once() {
-  // A codex-type thread result's input_tokens already includes its cached reads, so in_fresh keeps only the uncached
-  // part and the reads land in cache_read, counted once rather than once per column.
+  // A codex-type thread result's input_tokens already includes its cached reads. So in_fresh keeps only the uncached
+  // part, and the reads land in cache_read, counted once rather than once per column.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture_with(&home, &option("codex-gpt", "codex", "openai/gpt-5"));
@@ -952,7 +952,7 @@ fn charliebot_codex_thread_counts_its_cached_reads_once() {
 
 #[test]
 fn charliebot_clc_thread_lands_whole_in_unsplit() {
-  // A CLC thread result's usage logs no cache fields, so the hit/miss split is unknowable: the whole input counts in
+  // A CLC thread result's usage logs no cache fields, so the hit/miss split is unknowable. The whole input counts in
   // in_unsplit instead of reading as a fresh miss in in_fresh.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
@@ -1047,8 +1047,8 @@ fn charliebot_master_counts_its_cached_reads_once() {
 
 #[test]
 fn charliebot_codex_thread_is_skipped_while_a_rollout_of_it_exists() {
-  // The Codex rule: a codex-type thread any of whose session ids names a rollout still on disk contributes nothing;
-  // the rollout's own native rows are the usage, and a partly pruned multi-session thread must not count twice. A
+  // The Codex rule: a codex-type thread any of whose session ids names a rollout still on disk contributes nothing.
+  // The rollout's own native rows are the usage, and a partly pruned multi-session thread must not count twice. A
   // thread none of whose ids has a rollout counts as a fallback row. Deleting the rollout afterwards changes no row.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
@@ -1085,7 +1085,7 @@ fn charliebot_codex_thread_is_skipped_while_a_rollout_of_it_exists() {
 #[test]
 fn charliebot_fallback_rows_count_until_the_cli_log_is_captured() {
   // A codex-type thread with no rollout anywhere and a claude-type thread with no Claude transcript are counted as
-  // fallback rows; capturing the Claude transcript whose session id the thread names retires that row, while the
+  // fallback rows. Capturing the Claude transcript whose session id the thread names retires that row, while the
   // codex thread's row stays.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
@@ -1120,9 +1120,9 @@ fn charliebot_fallback_rows_count_until_the_cli_log_is_captured() {
 
 #[test]
 fn charliebot_capture_skips_unkeyable_threads() {
-  // A codex-type thread with no session ids (nothing to key the any-match exclusion on) and a thread whose backend id
-  // neither the registry nor a type prefix can classify contribute no records; both files are still recorded as
-  // captured so they are never re-parsed.
+  // A codex-type thread with no session ids contributes no records: nothing keys the any-match exclusion. A thread
+  // whose backend id neither the registry nor a type prefix can classify also contributes none. Both files are still
+  // recorded as captured so they are never re-parsed.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture_with(&home, &option("codex-gpt", "codex", "openai/gpt-5"));
@@ -1146,7 +1146,7 @@ fn charliebot_capture_skips_unkeyable_threads() {
 #[test]
 fn charliebot_capture_reparses_a_file_the_bare_signature_recorded() {
   // A thread file the older parser recorded under the bare stat pair re-parses once and rewrites its rows onto the
-  // same record ids; a file whose p2 signature the ledger holds is skipped.
+  // same record ids. A file whose p2 signature the ledger holds is skipped.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) =
@@ -1189,7 +1189,7 @@ fn charliebot_capture_reparses_a_file_the_bare_signature_recorded() {
 #[test]
 fn capture_runs_clc_run_is_native_with_the_cached_split() {
   // A CLC run records natively on the model its metadata names, its cached reads split out of the result's one input
-  // field, and an unchanged run file is never re-parsed: a re-parse would count its record again.
+  // field. An unchanged run file is never re-parsed: a re-parse would count its record again.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) =
@@ -1250,9 +1250,9 @@ fn capture_runs_attributes_a_pool_sessions_runs_to_the_members_they_ran_on() {
 
 #[test]
 fn capture_runs_cc_claude_fallback_retires_when_the_transcript_is_captured() {
-  // A cc-claude run is a fallback row keyed on the session ids its metadata and its raw stream's init line carry,
-  // counted until the Claude transcript whose session one of those ids names is captured; either id source retires
-  // the run.
+  // A cc-claude run is a fallback row keyed on the session ids its metadata and its raw stream's init line carry.
+  // It is counted until the Claude transcript whose session one of those ids names is captured. Either id source
+  // retires the run.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture_with(&home, &option("claude-opus-5", "cc-claude", "anthropic/claude-opus-5-5"));
@@ -1311,7 +1311,7 @@ fn capture_runs_cc_claude_fallback_retires_when_the_transcript_is_captured() {
 #[test]
 fn capture_runs_codex_sums_turns_and_retires_on_the_captured_rollout() {
   // A codex run sums its turn.completed lines into one fallback row keyed on the codex session id its metadata
-  // carries; capturing the rollout whose session id matches retires it, and a run with no turn.completed line
+  // carries. Capturing the rollout whose session id matches retires it, and a run with no turn.completed line
   // contributes no record at all.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
@@ -1429,7 +1429,7 @@ fn capture_runs_second_capture_skips_by_stat_and_recaptures_an_append() {
 #[test]
 fn capture_usage_covers_every_source_and_zeroes_on_the_second_round() {
   // One call over Claude, Codex, opencode and a charlie-bot sessions dir writes each source's records and reports the
-  // per-source counts; a second call over the unchanged corpus writes all zeros. CLC has no log of its own, so only
+  // per-source counts. A second call over the unchanged corpus writes all zeros. CLC has no log of its own, so only
   // the charlie-bot label reports its records.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
@@ -1523,7 +1523,7 @@ fn a_finished_capture_stamps_last_capture_at_and_a_failed_one_does_not() {
 #[test]
 fn capture_runs_opencode_run_is_a_fallback_through_the_claude_envelope_keys() {
   // Every backend whose source is neither run-logs-only nor under the Codex rule reads its run's trailing result
-  // through the Claude envelope keys: an opencode-type run is a fallback row that retires once the opencode session
+  // through the Claude envelope keys. An opencode-type run is a fallback row that retires once the opencode session
   // its metadata names is captured.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
@@ -1556,8 +1556,8 @@ fn capture_runs_opencode_run_is_a_fallback_through_the_claude_envelope_keys() {
 
 #[test]
 fn a_capture_commits_once_and_a_failed_one_keeps_its_finished_files() {
-  // No file of a capture is visible to another connection until the capture ends, the stamp lands in the same commit,
-  // and a capture that raises still commits the files it finished (without the stamp).
+  // No file of a capture is visible to another connection until the capture ends, and the stamp lands in the same
+  // commit. A capture that raises still commits the files it finished (without the stamp).
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");
   let (config, registry) = fixture(&home);
@@ -2151,8 +2151,8 @@ fn malformed_master_model_shapes_capture_the_recorded_rows() {
 
 const TS_A: &str = "2026-01-10T08:00:00+00:00";
 
-/// Compressing a finished run's raw log keeps the ledger's totals: the capture keys the ledger by the plain path and
-/// signs it from the file that holds the bytes, so it re-reads the decompressed content into the same rows.
+/// Compressing a finished run's raw log keeps the ledger's totals. The capture keys the ledger by the plain path and
+/// signs it from the file that holds the bytes. It then re-reads the decompressed content into the same rows.
 #[test]
 fn a_compressed_run_log_keeps_the_same_usage_totals() {
   let dir = tempfile::tempdir().unwrap();

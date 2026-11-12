@@ -1056,7 +1056,7 @@ fn group_counts(rows: Vec<GroupRow>) -> Vec<(GroupKey, i64, [i64; 5])> {
 
 /// The last Pacific week before 2026-11-03 is [2026-10-26T07:00Z, 2026-11-02T08:00Z), 169 hours across the fall change.
 /// The fixture puts stamps on both edges, a counted fallback, and a fallback that a native record retires after the
-/// aggregate is backfilled, so the trigger path is covered as well as the backfill.
+/// aggregate is backfilled. The trigger path is then covered as well as the backfill.
 #[test]
 fn aggregate_week_matches_the_direct_window_query_group_by_group() {
   let dir = tempfile::tempdir().unwrap();
@@ -1121,7 +1121,7 @@ fn aggregate_week_matches_the_direct_window_query_group_by_group() {
   );
 }
 
-/// A row whose stamp names no date still counts, and it bounds no window, so one malformed capture cannot fail the page
+/// A row whose stamp names no date still counts, and it bounds no window. So one malformed capture cannot fail the page
 /// for as long as the ledger keeps the row. The aggregate path agrees with the table.
 #[test]
 fn a_stamp_without_a_date_counts_but_bounds_no_window() {

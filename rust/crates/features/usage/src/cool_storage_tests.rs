@@ -1,6 +1,6 @@
 //! The cold-sweep cases. Each test runs the sweep over a temporary tree whose
-//! Claude, Codex and opencode stores are registered through their own `register_with_host`, so the sources' sweeps are
-//! the ones the real run uses.
+//! Claude, Codex and opencode stores are registered through their own `register_with_host`. Those stores' sweeps are
+//! then the ones the real run uses.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -83,8 +83,8 @@ fn register_test_sources(registry: &mut Registry) -> Result<(), RegistryError> {
   })
 }
 
-/// A synthetic home under a temporary tree: `charlie/` is the CharlieBot home, `home/` is HOME (Codex's `.codex` and
-/// Claude's `.claude` sit under it), and `claude-config/` is the Claude config directory.
+/// A synthetic home under a temporary tree. `charlie/` is the CharlieBot home. `home/` is HOME, and Codex's `.codex`
+/// and Claude's `.claude` sit under it. `claude-config/` is the Claude config directory.
 struct Fixture {
   tree: tempfile::TempDir,
   cfg: Arc<CharlieBotConfig>,
@@ -539,7 +539,7 @@ fn cc_session_id_reads_each_truthy_value_as_str() {
 fn unreadable_or_malformed_session_metadata_skips_that_session() {
   const SID_MALFORMED: &str = "cccccccc-dddd-4eee-8fff-000000000000";
   let fixture = Fixture::new();
-  // A metadata path that is a directory cannot be read, and a file that is not JSON does not parse: each session is
+  // A metadata path that is a directory cannot be read, and a file that is not JSON does not parse. Each session is
   // skipped, and the run goes on to the cold session beside them.
   fs::create_dir_all(fixture.sessions().join(SID_DEAD).join("metadata.json"))
     .expect("a directory at the metadata path");

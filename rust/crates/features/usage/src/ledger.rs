@@ -27,8 +27,8 @@ pub struct LedgerAccount {
   pub total: Count,
 }
 
-/// What one render of the usage page reads, every part from one read transaction: the all-time rows and the native
-/// starts, the last Pacific week and the week before it, and the last capture.
+/// What one render of the usage page reads, every part from one read transaction. It holds the all-time rows and the
+/// native starts, the last Pacific week and the week before it, and the last capture.
 pub struct PageSnapshot {
   pub rows: Vec<LedgerRow>,
   pub native_starts: BTreeMap<String, String>,
@@ -485,7 +485,7 @@ impl UsageLedger {
   }
 
   /// A week from the aggregate: the days `[first UTC day, last UTC day)` of the aggregate, minus the slice of the first
-  /// day before the week starts, plus the slice of the last day before the week ends. Every group of the aggregate is
+  /// day before the week starts. Add the slice of the last day before the week ends. Every group of the aggregate is
   /// visited, so a group that only the last day's slice reaches is counted too.
   fn agg_week_rows(&self, week: Week) -> anyhow::Result<Vec<GroupRow>> {
     let first_day = Week::utc_day(week.start);

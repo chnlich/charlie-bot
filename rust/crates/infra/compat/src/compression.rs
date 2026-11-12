@@ -1,10 +1,10 @@
 //! The request path's one-shot gzip deflators.
 //!
 //! A response pays the deflate once per body it builds; a memo serves the repeats. The level-1
-//! deflator covers every body that is compressed per response, and its byte count is one counter.
-//! A body too large for the level-1 search to find its long matches takes the level-4 form instead.
-//! The level-9 deflator covers a body a memo keeps and serves on every repeat, where the smaller
-//! output reaches every repeat request and is worth a slower one-time deflate.
+//! deflator covers the per-response bodies of ordinary size, and its byte count is one counter. A
+//! per-response body too large for its short hash chain to find the long matches takes the level-4
+//! form instead. The level-9 deflator covers a body a memo keeps and serves on every repeat, where
+//! the smaller output reaches every repeat request and is worth a slower one-time deflate.
 
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};

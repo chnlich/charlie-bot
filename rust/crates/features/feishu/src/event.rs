@@ -7,7 +7,7 @@
 use anyhow::{Context, bail};
 use serde_json::Value;
 
-use crate::fields::{CHAT_ID, CREATE_TIME, MESSAGE_ID, ROOT_ID, TENANT_KEY, THREAD_ID};
+use crate::fields::{CHAT_ID, CREATE_TIME, MESSAGE_ID, ROOT_ID, SENDER, SENDER_TYPE, TENANT_KEY, THREAD_ID};
 
 /// The event type this module parses.
 pub const RECEIVE_EVENT: &str = "im.message.receive_v1";
@@ -71,8 +71,8 @@ pub fn classify(event: &Value, bot_open_id: &str) -> anyhow::Result<Inbound> {
     return Ok(Inbound::Drop(Drop::OtherEvent));
   }
   let body = event.get("event").context("the event has no event object")?;
-  let sender = body.get("sender").context("the event has no sender")?;
-  if text_at(sender, &["sender_type"])? != "user" {
+  let sender = body.get(SENDER).context("the event has no sender")?;
+  if text_at(sender, &[SENDER_TYPE])? != "user" {
     return Ok(Inbound::Drop(Drop::NotUser));
   }
   let sender_open_id = text_at(sender, &["sender_id", "open_id"])?;

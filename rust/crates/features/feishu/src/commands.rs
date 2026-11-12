@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use crate::adapter::{Bot, FeishuThreadAdapter, api_failure, message_id_of, thread_message};
 use crate::client::{FeishuClient, PAGE_SIZE};
 use crate::config::FeishuConfig;
-use crate::fields::{CHAT_ID, MESSAGE_ID, ROOT_ID, THREAD_ID};
+use crate::fields::{CHAT_ID, MESSAGE_ID, MESSAGE_TYPE, ROOT_ID, THREAD_ID};
 use crate::metadata::FeishuOrigin;
 use crate::package::NAME;
 use crate::thread_contract::FEISHU;
@@ -40,7 +40,7 @@ fn message_view(message: &ThreadMessage, unread: bool, summon: bool, allowed: &B
   json!({
     "id": message.id,
     (MESSAGE_ID): field(MESSAGE_ID),
-    "message_type": field("message_type"),
+    (MESSAGE_TYPE): field(MESSAGE_TYPE),
     (THREAD_ID): field(THREAD_ID),
     "author_id": author_id,
     "person": message.user.as_deref().and_then(|user| allowed.get(user)),

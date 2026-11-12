@@ -14,6 +14,12 @@ pub const ROOT_ID: &str = "root_id";
 pub const THREAD_ID: &str = "thread_id";
 /// A message's own id (`om_…`).
 pub const MESSAGE_ID: &str = "message_id";
+/// The sender block of a message, in the inbound event and the message list.
+pub const SENDER: &str = "sender";
+/// The sender's kind inside the sender block: `user` for a person, `app` for the bot.
+pub const SENDER_TYPE: &str = "sender_type";
+/// A thread message's type, carried in its metadata from the message list's `msg_type` to the readback.
+pub const MESSAGE_TYPE: &str = "message_type";
 /// The summon block's id of the message that mentions the bot.
 pub const MENTION_ID: &str = "mention_id";
 /// A message's creation time, in milliseconds as Feishu writes it.

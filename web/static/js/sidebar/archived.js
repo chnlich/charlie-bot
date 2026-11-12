@@ -49,6 +49,15 @@ function archivedTotalCount() {
 
 function renderArchivedPills() {
   if (!archivedState.pillsEl) return;
+  // An empty archive has no group to filter, so the strip would carry one All pill counting
+  // zero above the note that already says the archive is empty. The note takes the strip's
+  // place, and the strip returns with the first archived row.
+  const total = archivedTotalCount();
+  archivedState.pillsEl.classList.toggle('hidden', total === 0);
+  if (total === 0) {
+    archivedState.pillsEl.innerHTML = '';
+    return;
+  }
   // The count keeps the 4.5:1 text floor on both pill states. Slate-400 reads about 5.3:1
   // inside the active pill's blue-600/20 fill and about 6.3:1 on the slate-850 sidebar.
   // Slate-500 reads about 2.8:1 inside the active fill.
@@ -57,7 +66,7 @@ function renderArchivedPills() {
     return `<button type="button"${dataAttr} onclick="${onclickExpr}" class="${cls}">${escapeHtml(label)} `
       + `<span class="text-slate-400">${total}</span></button>`;
   };
-  const parts = [pill('setArchivedGroupFilter(null)', '', 'All', archivedTotalCount(), archivedState.group === null)];
+  const parts = [pill('setArchivedGroupFilter(null)', '', 'All', total, archivedState.group === null)];
   for (const g of archivedState.groups) {
     const value = g.group === null ? '' : g.group;
     parts.push(pill(

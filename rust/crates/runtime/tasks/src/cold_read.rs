@@ -401,11 +401,16 @@ pub fn parse_reply_findings(answer: &str) -> anyhow::Result<Vec<String>> {
   let mut active = None;
   for line in answer.lines() {
     let trimmed = line.trim();
-    let labelled = [("(1)", 0), ("1.", 0), ("(2)", 1), ("2.", 1)]
+    let labelled = [("(1)", 0), ("1.", 0), ("（1）", 0), ("1、", 0), ("(2)", 1), ("2.", 1), ("（2）", 1), ("2、", 1)]
       .into_iter()
       .find_map(|(label, index)| trimmed.strip_prefix(label).map(|rest| (index, rest)));
     if let Some((index, rest)) = labelled {
-      anyhow::ensure!(answers[index].is_none(), "cold-read reply answer repeats question {}", index + 1);
+      anyhow::ensure!(
+        answers[index].is_none(),
+        "cold-read reply answer repeats question {}; raw answer:\n{}",
+        index + 1,
+        answer
+      );
       answers[index] = Some(rest.trim().trim_start_matches(':').trim_start_matches('.').trim().to_string());
       active = Some(index);
     } else if let Some(index) = active
@@ -416,7 +421,10 @@ pub fn parse_reply_findings(answer: &str) -> anyhow::Result<Vec<String>> {
       text.push_str(trimmed);
     }
   }
-  anyhow::ensure!(answers.iter().all(Option::is_some), "cold-read reply answer must answer questions (1) and (2)");
+  anyhow::ensure!(
+    answers.iter().all(Option::is_some),
+    "cold-read reply answer must answer questions (1) and (2); raw answer:\n{answer}"
+  );
 
   let mut findings = Vec::new();
   for answer in answers.into_iter().flatten() {
@@ -429,8 +437,10 @@ pub fn parse_reply_findings(answer: &str) -> anyhow::Result<Vec<String>> {
 }
 
 fn is_none_verdict(text: &str) -> bool {
-  let lower = text.to_ascii_lowercase();
-  lower == "none" || lower == "no" || text == "无" || text == "没有" || lower == "none."
+  let end = text.find(['.', '!', '?', '。', '！', '？']).unwrap_or(text.len());
+  let verdict = text[..end].trim();
+  let lower = verdict.to_ascii_lowercase();
+  lower == "none" || lower == "no" || verdict == "无" || verdict == "没有"
 }
 
 /// The outcome of one light-backend probe: the failed attempts in order, then the answering backend and its verbatim
@@ -900,8 +910,46 @@ BBBB
   }
 
   #[test]
+  fn reply_findings_parser_accepts_chinese_answer_labels() {
+    for answer in ["（1）none\n（2）none", "1、none\n2、none"] {
+      assert!(parse_reply_findings(answer).unwrap().is_empty(), "{answer}");
+    }
+  }
+
+  #[test]
+  fn reply_findings_parser_ignores_explanations_after_chinese_none_verdicts() {
+    let clean_answers = [
+      "None. There are no bare identifiers.",
+      "No. There are no unfamiliar terms.",
+      "无。这条回复里没有 commit、session id ... 不构成裸标识符。",
+      "没有。会话标识 dcbc00f8 已与可读名称「主动工作」并列并带链接，其余未出现裸标识符。",
+    ];
+
+    for answer in clean_answers {
+      let response = format!("(1) {answer}\n(2) none");
+      assert!(parse_reply_findings(&response).unwrap().is_empty(), "{response}");
+    }
+  }
+
+  #[test]
+  fn reply_findings_parser_keeps_a_finding_when_a_later_sentence_says_none() {
+    let answer = r#"(1) 有三个：一是 "session" stands bare. None.
+(2) none"#;
+
+    assert_eq!(parse_reply_findings(answer).unwrap(), [r#"有三个：一是 "session" stands bare. None"#]);
+  }
+
+  #[test]
   fn reply_findings_parser_rejects_an_incomplete_answer() {
     assert!(parse_reply_findings("(1) none").is_err());
     assert!(parse_reply_findings("No findings.").is_err());
+  }
+
+  #[test]
+  fn reply_findings_parser_reports_an_unlabelled_answer() {
+    let answer = "无。这条回复里没有 commit、session id ... 不构成裸标识符。";
+    let error = parse_reply_findings(answer).unwrap_err().to_string();
+
+    assert!(error.contains(answer), "{error}");
   }
 }

@@ -64,6 +64,10 @@ pub const NATIVE_BACKEND: &str = "native_backend";
 /// The session-metadata field holding the session's work state: `idle`, `waiting` or `running`. The session routes
 /// import this name instead of each spelling it.
 pub const WORK_STATE: &str = "work_state";
+/// The session-metadata field holding the document's schema version: `2` for every session a current server writes.
+/// The store's declared-field lists, the session listing's page-row field drop and the mock home's session seed carry
+/// the same name, so it is spelled once, here.
+pub const SCHEMA_VERSION_FIELD: &str = "schema_version";
 /// The session-metadata field saying whether the session has output the user has not read.
 pub const HAS_UNREAD: &str = "has_unread";
 /// The session-metadata field saying whether the session has a run in flight. The session routes, the sidebar state
@@ -694,7 +698,7 @@ impl SessionMetadata {
     if let Some(object) = value.as_object()
       && (object.get("profile").is_none_or(Value::is_null)
         || object
-          .get("schema_version")
+          .get(SCHEMA_VERSION_FIELD)
           .is_some_and(|version| version.as_i64() != Some(2) && version.as_f64() != Some(2.0)))
     {
       let location = path.map_or_else(String::new, |path| format!("{path}: "));
@@ -745,7 +749,7 @@ impl SessionMetadata {
     }
     push(&mut declared, PARENT_SESSION_ID, &self.parent_session_id);
     push(&mut declared, SUCCESSOR_SESSION_ID, &self.successor_session_id);
-    push(&mut declared, "schema_version", &self.schema_version);
+    push(&mut declared, SCHEMA_VERSION_FIELD, &self.schema_version);
     push(&mut declared, "task_parent_id", &self.task_parent_id);
     push(&mut declared, "profile", &self.profile);
     push(&mut declared, "task", &self.task);

@@ -824,6 +824,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
     hint: "Use `charliebot_store::run_records::RUN_EVENTS_NAME`.",
   },
   OwnerRow { name: "threads", owner: "runtime/store", hint: "Use `charliebot_store::layout::threads_dir`." },
+  OwnerRow {
+    name: "schema_version",
+    owner: "runtime/store",
+    hint: "Use `charliebot_store::metadata::SCHEMA_VERSION_FIELD`.",
+  },
   OwnerRow { name: "master_runs", owner: "runtime/store", hint: "Use `charliebot_store::layout::master_runs_dir`." },
   OwnerRow { name: "archives", owner: "runtime/store", hint: "Use `charliebot_store::layout::archives_dir`." },
   OwnerRow {

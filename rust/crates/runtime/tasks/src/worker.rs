@@ -974,8 +974,10 @@ async fn handle_event<W: LaunchWatch + ?Sized>(
   }
 
   // A refused model access ends the run as a member failure. The quota patterns ran first, so a quota text keeps its
-  // verdict; the refusal's own text becomes the row's detail.
+  // verdict; the refusal's own text becomes the row's detail. A login watch owns the refusal of its login: it relays
+  // the turn to the next login when the process exits, so a watched run does not end here.
   if event_type == ET::ERROR
+    && !watched
     && (backend_pool::is_access_refused_error(&message) || backend_pool::is_access_refused_error(&content))
   {
     sink.append(&event)?;
@@ -994,7 +996,8 @@ async fn handle_event<W: LaunchWatch + ?Sized>(
     } else {
       backend_pool::classify_member_failure(&text, None)
     };
-    if failure != backend_pool::MemberFailure::Other {
+    let owned_by_watch = watched && failure == backend_pool::MemberFailure::AccessRefused;
+    if failure != backend_pool::MemberFailure::Other && !owned_by_watch {
       sink.append(&event)?;
       return Err(QuotaExhaustedError::with_failure(text, None, failure).into());
     }

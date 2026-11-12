@@ -862,6 +862,28 @@ async fn test_worker_login_failure_marks_the_account_and_notifies_the_session() 
   Ok(())
 }
 
+#[tokio::test]
+#[ignore = "integration"]
+async fn test_worker_login_refusal_result_relays_to_the_next_login() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  make_transcript(&root.claude("main"), CC_ID)?;
+  let state = Arc::new(ClaudeAccountState::new());
+  let failed = "Failed to authenticate. API Error: 401 Not allowed to access model due to tags configuration.";
+  let refused = json!({"type": ET::RESULT, "subtype": "error", "is_error": true, "result": failed});
+  let scripts = Scripts::new(vec![exits(&[assistant_text(failed), refused], 1), exits(&[result()], 0)]);
+  let config = pooled_config(&root, &["main", "ext-1"], &[], &scripts.token)?;
+  let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
+  let task_worker = setup.worker(setup.spec(&root, Some(POOLED), Some(CC_ID))?)?;
+
+  assert_eq!(task_worker.run().await?, 0, "the login relay runs the turn on the next login");
+
+  assert_eq!(scripts.builds().len(), 2);
+  assert_eq!(account_label(&scripts.builds()[1]), Some("ext-1"));
+  let main = setup.cfg.section::<claude_config::AccountsConfig>("accounts").claude[0].clone();
+  assert!(!claude_accounts::healthy(&state, &main, None));
+  Ok(())
+}
+
 //
 // There is no spy on `compact_with_sonnet`, so the test checks the event log instead: a run whose
 // prompt crosses the compaction thresholds persists no compaction event.

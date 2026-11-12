@@ -42,6 +42,7 @@ use crate::judgment::{
   WORKTREE_CREATE_ERROR_PREFIX,
 };
 use crate::landing;
+use crate::wire;
 
 /// The sequence kind every iteration Run carries.
 pub const SEQUENCE_KIND: &str = "improve";
@@ -561,7 +562,7 @@ async fn run_loop(
     payload.insert("reason".to_string(), json!(reason));
     payload.insert("blocked_summary".to_string(), json!(take_chars(summary, 500)));
   }
-  payload.insert("work_branch".to_string(), json!(work_branch));
+  payload.insert(wire::WORK_BRANCH.to_string(), json!(work_branch));
   payload.insert(BASE_BRANCH_FIELD.to_string(), json!(base_branch));
   if let Some(merge) = merge_result {
     payload.insert("merge_result".to_string(), merge);
@@ -705,7 +706,7 @@ async fn broadcast_iteration_progress(
         "status": status,
         "summary": take_chars(&judgment.summary, 200),
         "report_path": judgment.report_path.to_string_lossy(),
-        "child_session_id": spec.child_id,
+        (wire::CHILD_SESSION_ID): spec.child_id,
         "run_id": run_id,
       }),
     )

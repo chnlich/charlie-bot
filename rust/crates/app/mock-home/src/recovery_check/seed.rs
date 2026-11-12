@@ -11,7 +11,7 @@ use charliebot_core::event_types::{INPUT_EVENT_IDS, RUN_FINISHED, TASK_CLOSED, T
 use charliebot_store::control_events::TASK_SPEC_HASH_FIELD;
 use charliebot_store::layout;
 use charliebot_store::metadata::{
-  BASE_BRANCH_FIELD, HAS_UNREAD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, TASK_TYPE_FIELD,
+  BASE_BRANCH_FIELD, HAS_UNREAD, KEEP_WORKTREE_FIELD, REPO_PATH_FIELD, SCHEMA_VERSION_FIELD, TASK_TYPE_FIELD,
 };
 use charliebot_store::run_records::{
   OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_MODEL,
@@ -151,7 +151,7 @@ fn session_meta(session_id: &str, case: &Case, index: usize) -> Value {
     "backend": BACKEND,
     "created_at": format!("{}.000000Z", stamp(index, 0)),
     "updated_at": format!("{}.000000Z", stamp(index, 9)),
-    "schema_version": 2,
+    (SCHEMA_VERSION_FIELD): 2,
     (HAS_UNREAD): false,
     "starred": false,
     "task_parent_id": null,

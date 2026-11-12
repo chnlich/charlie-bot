@@ -12,8 +12,8 @@ use charliebot_registry::Registry;
 use charliebot_registry::thread_origin::is_thread_session;
 use charliebot_store::metadata::{
   HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS, HAS_UNREAD, NEXT_TRIGGER_AT, PENDING_TRIGGER_COUNT, ROUND_RATINGS,
-  SCHEDULE_ENABLED, SCHEDULE_FIELDS, SCHEDULE_TASK, SessionMetadata, SessionStatus, TaskProfile, UtcDateTime,
-  WORK_STATE,
+  SCHEDULE_ENABLED, SCHEDULE_FIELDS, SCHEDULE_TASK, SCHEMA_VERSION_FIELD, SessionMetadata, SessionStatus, TaskProfile,
+  UtcDateTime, WORK_STATE,
 };
 use charliebot_store::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
 use charliebot_store::{SharedSubtreeRoots, Store, StoreResult};
@@ -1064,7 +1064,7 @@ fn drop_falsy_fields(value: &mut Value) {
 /// field: the tree listing orders and pages by `created_at` on the server, and `schema_version` is the store's own
 /// compatibility marker. On the 7,160-session mock home the two fields are 365,160 bytes of the page's 2,347,241-byte
 /// sidebar text.
-const UNREAD_PAGE_FIELDS: [&str; 2] = ["created_at", "schema_version"];
+const UNREAD_PAGE_FIELDS: [&str; 2] = ["created_at", SCHEMA_VERSION_FIELD];
 
 /// Leave out the fields no page client reads, and an empty `round_ratings`.
 ///

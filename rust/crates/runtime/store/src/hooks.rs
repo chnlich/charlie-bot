@@ -11,7 +11,7 @@ use crate::metadata::SessionMetadata;
 
 /// A feature renderer for one persisted event type.
 pub trait EventRenderer: Send + Sync {
-  /// Return the rendered message, or no message when the event has no message.
+  /// The rendered message, or none when the event carries no message.
   fn render(&self, event: &Value) -> StoreResult<Option<Value>>;
 }
 
@@ -34,19 +34,19 @@ pub struct AfterTurnWork {
 
 /// Feature-owned event renderers and runtime-state notifications.
 pub trait RuntimeEventHooks: Send + Sync {
-  /// Return feature event renderers in registration order.
+  /// The feature event renderers in registration order.
   fn event_renderers(&self) -> StoreResult<Vec<(String, Arc<dyn EventRenderer>)>>;
 
-  /// Return each contribution's work for one completed turn.
+  /// Each contribution's work for one completed turn.
   fn after_turn(&self, meta: SessionMetadata, event: Value, cfg: CharlieBotConfig) -> Vec<AfterTurnWork>;
 
-  /// Mark the session's derived sidebar state dirty.
+  /// The session's derived sidebar state, marked dirty.
   fn mark_sidebar_dirty(&self, session_id: &str);
 
-  /// Drop feature-owned state for the session.
+  /// Feature-owned state for the session, dropped.
   fn drop_session_runtime_state(&self, session_id: &str);
 
-  /// Copy each feature's files from a parent session directory into the fork's directory.
+  /// Each feature's files, copied from the parent session directory into the fork's directory.
   fn copy_on_fork(&self, parent_dir: &Path, child_dir: &Path) -> StoreResult<()>;
 }
 

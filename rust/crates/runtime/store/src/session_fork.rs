@@ -41,7 +41,8 @@ const REFERENCE_LINE_WS: &[u8] = b" \t\r\n\x0b\x0c";
 /// The dispatcher's share of an elone: it redelivers the close reports that one node still owes
 /// (`TaskTreeManager._redeliver_subtree_close_reports`). The dispatcher implements it, and the elone receives it.
 pub trait CloseReportRedelivery: Send + Sync {
-  /// Redeliver the close reports `session_id` owes its recipients. The caller holds the control lock through `guard`.
+  /// The redelivery of the close reports `session_id` owes its recipients. The caller holds the control lock through
+  /// `guard`.
   fn redeliver_close_reports_locked<'a>(
     &'a self,
     guard: &'a ControlGuard,
@@ -51,7 +52,7 @@ pub trait CloseReportRedelivery: Send + Sync {
 
 /// The completion owner's archive write for a replaced elone source.
 pub trait ReplacedSourceArchive: Send + Sync {
-  /// Archive `source_id` after the elone successor is published and its children are moved.
+  /// The archive of `source_id` after the elone successor is published and its children are moved.
   fn archive_replaced_source_locked<'a>(
     &'a self,
     store: &'a Store,
@@ -395,7 +396,7 @@ fn copy_reference_file(out: &mut impl Write, source: &Path, take: usize) -> Stor
   Ok((raw, appended))
 }
 
-/// Copy one raw frame when its content is a non-blank `{}` object, folding a CR before the write.
+/// A copy of one raw frame whose content is a non-blank `{}` object, with a CR folded before the write.
 fn copy_reference_line(out: &mut impl Write, line: &[u8]) -> StoreResult<bool> {
   let content = line.strip_suffix(b"\r").unwrap_or(line);
   let Some(first) = content.iter().position(|byte| !REFERENCE_LINE_WS.contains(byte)) else { return Ok(false) };
@@ -531,7 +532,7 @@ mod tests {
       .collect()
   }
 
-  /// Write one archived close fact, as the completion owner's archive writes it.
+  /// One archived close fact, written as the completion owner's archive writes it.
   async fn archive_task(store: &Store, session_id: &str) {
     let guard = store.control_lock().await;
     let event = archived_close_event(session_id, "elone-test-archive", ACTOR_USER, "archived by the user", &[], None);

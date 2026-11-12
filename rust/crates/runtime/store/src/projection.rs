@@ -8,6 +8,7 @@ use serde_json::Value;
 use crate::aggregator::MessageAggregator;
 use crate::event_types::{ChatEvent, SharedChatEvent};
 use crate::hooks::EventRenderer;
+use crate::lock::lock;
 use crate::message_events;
 use crate::{StoreError, StoreResult};
 
@@ -100,22 +101,22 @@ impl MessageProjection {
   /// Return the cached serialized body for one page. The body is shared: a request hands the cached bytes to its
   /// response by refcount, so a page of any size costs no copy per request.
   pub fn cached_page_body(&self, before: usize, limit: usize) -> Option<Bytes> {
-    self.page_bodies.lock().expect("page body cache mutex is not poisoned").get(&(before, limit))
+    lock(&self.page_bodies, "page body cache mutex").get(&(before, limit))
   }
 
   /// Cache the serialized body for one page.
   pub fn store_page_body(&self, before: usize, limit: usize, body: Bytes) {
-    self.page_bodies.lock().expect("page body cache mutex is not poisoned").store((before, limit), body);
+    lock(&self.page_bodies, "page body cache mutex").store((before, limit), body);
   }
 
   /// Return the cached gzip body for one page.
   pub fn cached_page_body_gzip(&self, before: usize, limit: usize) -> Option<Bytes> {
-    self.page_body_gzips.lock().expect("gzip page body cache mutex is not poisoned").get(&(before, limit))
+    lock(&self.page_body_gzips, "gzip page body cache mutex").get(&(before, limit))
   }
 
   /// Cache the gzip body for one page.
   pub fn store_page_body_gzip(&self, before: usize, limit: usize, body: Bytes) {
-    self.page_body_gzips.lock().expect("gzip page body cache mutex is not poisoned").store((before, limit), body);
+    lock(&self.page_body_gzips, "gzip page body cache mutex").store((before, limit), body);
   }
 
   /// Return event indexes of separator messages in committed-history ordinal space.

@@ -162,3 +162,8 @@ rust = "package(charliebot-devin)"
 [[entry]]
 paths = ["rust/crates/backends/antigravity/tests/fixtures/final_stdout_agy.sh"]
 rust = "package(charliebot-antigravity)"
+
+# The release switch preflight scan checks every registered backend's reattach declaration across backend crates.
+[[entry]]
+paths = ["rust/crates/backends/**", "rust/crates/app/switch-helper/**"]
+rust = "package(charliebot-switch-helper)"

@@ -29,6 +29,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
       Ok(())
     }
     "home-helper" => home::main(rest),
+    "reattach" => home::reattach(rest),
     "json-field" => api::json_field(rest),
     "newest-run-fields" => api::newest_run_fields(rest),
     // A no-match exits 1 in both cases, but only a bad call prints a diagnostic; the switch calls this helper on a

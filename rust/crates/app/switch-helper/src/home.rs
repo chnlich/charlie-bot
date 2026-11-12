@@ -34,6 +34,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     Some("scan") => scan::scan(rest),
     Some("alive") => alive(rest),
     Some("outcome") => outcome(rest),
+    Some("reattach") => reattach(rest),
     _ => Err(CliExit::usage(USAGE)),
   }
 }
@@ -83,6 +84,19 @@ fn alive(args: &[OsString]) -> Result<(), CliExit> {
   let running = pid.parse::<u32>().is_ok_and(|pid| process::instance(pid, &pid_start));
   println!("{}", if running { "alive" } else { "ended" });
   Ok(())
+}
+
+/// `reattach REPO SHA BACKEND_TYPE`: prints the resolved restart_reattach value (`true` or `false`) and the source path.
+pub(crate) fn reattach(args: &[OsString]) -> Result<(), CliExit> {
+  let [repo, sha, backend_type] = exact::<3>(args)?;
+  let (enabled, detail) = scan::read_registration(Path::new(&repo), &sha, &backend_type).map_err(failed)?;
+  match enabled {
+    Some(value) => {
+      println!("{value} ({detail})");
+      Ok(())
+    }
+    None => Err(CliExit::error(detail)),
+  }
 }
 
 /// `outcome HOME SESSION RUN`: the outcome of the last `run_finished` fact for the run, from the session's archive

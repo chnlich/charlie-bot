@@ -34,7 +34,7 @@ const BACKEND_LAYOUTS: [(&str, &str); 3] = [
 
 /// One registration in a backend module: its type name (a string or a const) and its trait block.
 static REGISTRATION: LazyLock<Regex> = LazyLock::new(|| {
-  Regex::new(r#"(?s)type_name:\s*(?P<name>"[^"]+"|[A-Z_]+)\s*,\s*traits:\s*BackendTraits\s*\{(?P<body>.*?)\}"#)
+  Regex::new(r#"(?s)type_name:\s*(?P<name>"[^"]+"|[A-Za-z0-9_:]+)\s*,\s*traits:\s*BackendTraits\s*\{(?P<body>.*?)\}"#)
     .expect("the registration pattern")
 });
 
@@ -194,74 +194,121 @@ fn git(repo: &Path, args: &[&str]) -> Result<Output> {
   Command::new("git").arg("-C").arg(repo).args(args).output().with_context(|| format!("run git {args:?}"))
 }
 
-/// The registration files of one build in the layout its tree has, and the error a failed tree read gave.
-fn registration_files(repo: &Path, sha: &str) -> Result<(Vec<String>, Option<String>)> {
+/// The registration file and other Rust source files of one backend module or crate.
+struct BackendFiles {
+  registration: String,
+  siblings: Vec<String>,
+}
+
+/// The declared backend types in one build, keyed by type name.
+type BuildRegistrations = HashMap<String, (Option<bool>, String)>;
+
+/// The registration files and sibling sources of one build in the layout its tree has, and the error a failed tree read gave.
+fn registration_files(repo: &Path, sha: &str) -> Result<(Vec<BackendFiles>, Option<String>)> {
   for (prefix, suffix) in BACKEND_LAYOUTS {
     let listed = git(repo, &["ls-tree", "-r", "--name-only", sha, prefix])?;
     if !listed.status.success() {
       let stderr = String::from_utf8_lossy(&listed.stderr);
       return Ok((Vec::new(), Some(format!("cannot inspect build {sha}: {}", stderr.trim()))));
     }
-    let paths: Vec<String> = String::from_utf8_lossy(&listed.stdout)
+    let all_files: Vec<String> = String::from_utf8_lossy(&listed.stdout)
       .lines()
-      .filter(|path| path.ends_with(suffix))
+      .filter(|line| line.ends_with(".rs"))
       .map(str::to_string)
       .collect();
-    if !paths.is_empty() {
-      return Ok((paths, None));
+    let reg_paths: Vec<String> = all_files.iter().filter(|path| path.ends_with(suffix)).cloned().collect();
+    if !reg_paths.is_empty() {
+      let backends = reg_paths
+        .into_iter()
+        .map(|registration| {
+          let crate_prefix = format!("{}/", registration.strip_suffix(suffix).expect("ends with suffix"));
+          let siblings = all_files
+            .iter()
+            .filter(|path| path.starts_with(&crate_prefix) && *path != &registration)
+            .cloned()
+            .collect();
+          BackendFiles { registration, siblings }
+        })
+        .collect();
+      return Ok((backends, None));
     }
   }
   Ok((Vec::new(), None))
 }
 
+/// Reads every backend type registration in build `sha` without checking out or changing its source tree.
+fn read_build_registrations(repo: &Path, sha: &str) -> Result<Result<BuildRegistrations, String>> {
+  let (backends, error) = registration_files(repo, sha)?;
+  if let Some(error) = error {
+    return Ok(Err(error));
+  }
+  let mut registrations = HashMap::new();
+  for backend in backends {
+    let shown = git(repo, &["show", &format!("{sha}:{}", backend.registration)])?;
+    if !shown.status.success() {
+      let stderr = String::from_utf8_lossy(&shown.stderr);
+      return Ok(Err(format!("cannot read {} from build {sha}: {}", backend.registration, stderr.trim())));
+    }
+    let source = String::from_utf8_lossy(&shown.stdout);
+    for capture in REGISTRATION.captures_iter(&source) {
+      let name = &capture["name"];
+      let declared = match declared_name(&source, name) {
+        Some(name) => Some(name),
+        None => {
+          let mut found = None;
+          for sibling in &backend.siblings {
+            let shown_sibling = git(repo, &["show", &format!("{sha}:{sibling}")])?;
+            if shown_sibling.status.success() {
+              let sibling_source = String::from_utf8_lossy(&shown_sibling.stdout);
+              if let Some(name) = declared_name(&sibling_source, name) {
+                found = Some(name);
+                break;
+              }
+            }
+          }
+          found
+        }
+      };
+      let Some(declared) = declared else {
+        continue;
+      };
+      let reattach = match REATTACH.captures(&capture["body"]) {
+        Some(enabled) => (Some(&enabled[1] == "true"), backend.registration.clone()),
+        None => (None, format!("{} in build {sha} has no restart_reattach value", backend.registration)),
+      };
+      registrations.insert(declared, reattach);
+    }
+  }
+  Ok(Ok(registrations))
+}
+
 /// One build's re-attachment declaration for a backend type: the value when the build declares it, and the reason when
 /// it does not.
 #[derive(Default)]
-struct Registrations {
-  cache: HashMap<(String, String), (Option<bool>, String)>,
+pub struct Registrations {
+  cache: HashMap<String, Result<BuildRegistrations, String>>,
 }
 
 impl Registrations {
-  /// The declaration of `backend_type` in build `sha`, read from that build's tree once per build and type.
-  fn lookup(&mut self, repo: &Path, sha: &str, backend_type: &str) -> Result<(Option<bool>, String)> {
-    let key = (sha.to_string(), backend_type.to_string());
-    if let Some(hit) = self.cache.get(&key) {
-      return Ok(hit.clone());
+  /// The declaration of `backend_type` in build `sha`, read from that build's tree once per build.
+  pub fn lookup(&mut self, repo: &Path, sha: &str, backend_type: &str) -> Result<(Option<bool>, String)> {
+    if !self.cache.contains_key(sha) {
+      let build = read_build_registrations(repo, sha)?;
+      self.cache.insert(sha.to_string(), build);
     }
-    let result = read_registration(repo, sha, backend_type)?;
-    self.cache.insert(key, result.clone());
-    Ok(result)
+    match self.cache.get(sha).expect("entry inserted") {
+      Ok(registrations) => match registrations.get(backend_type) {
+        Some(found) => Ok(found.clone()),
+        None => Ok((None, format!("build {sha} has no registration for backend type {backend_type}"))),
+      },
+      Err(error) => Ok((None, error.clone())),
+    }
   }
 }
 
 /// Read one build's registration without checking out or changing its source tree.
-fn read_registration(repo: &Path, sha: &str, backend_type: &str) -> Result<(Option<bool>, String)> {
-  let (paths, error) = registration_files(repo, sha)?;
-  if let Some(error) = error {
-    return Ok((None, error));
-  }
-  for path in paths {
-    let shown = git(repo, &["show", &format!("{sha}:{path}")])?;
-    if !shown.status.success() {
-      let stderr = String::from_utf8_lossy(&shown.stderr);
-      return Ok((None, format!("cannot read {path} from build {sha}: {}", stderr.trim())));
-    }
-    let source = String::from_utf8_lossy(&shown.stdout);
-    for registration in REGISTRATION.captures_iter(&source) {
-      let name = &registration["name"];
-      let Some(declared) = declared_name(&source, name) else {
-        continue;
-      };
-      if declared != backend_type {
-        continue;
-      }
-      return Ok(match REATTACH.captures(&registration["body"]) {
-        Some(enabled) => (Some(&enabled[1] == "true"), path),
-        None => (None, format!("{path} in build {sha} has no restart_reattach value")),
-      });
-    }
-  }
-  Ok((None, format!("build {sha} has no registration for backend type {backend_type}")))
+pub fn read_registration(repo: &Path, sha: &str, backend_type: &str) -> Result<(Option<bool>, String)> {
+  Registrations::default().lookup(repo, sha, backend_type)
 }
 
 /// The type name a registration spells: a quoted string as written, or the value of the const it names.
@@ -269,7 +316,9 @@ fn declared_name(source: &str, name: &str) -> Option<String> {
   if let Some(quoted) = name.strip_prefix('"') {
     return Some(quoted.strip_suffix('"')?.to_string());
   }
-  let constant = Regex::new(&format!(r#"const\s+{}\s*:\s*&str\s*=\s*"([^"]+)""#, regex::escape(name))).ok()?;
+  let ident = name.rsplit("::").next().unwrap_or(name);
+  let constant =
+    Regex::new(&format!(r#"const\s+{}\s*:\s*&(?:'static\s+)?str\s*=\s*"([^"]+)""#, regex::escape(ident))).ok()?;
   Some(constant.captures(source)?.get(1)?.as_str().to_string())
 }
 
@@ -277,12 +326,21 @@ fn declared_name(source: &str, name: &str) -> Option<String> {
 mod tests {
   use super::*;
 
+  fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+      .ancestors()
+      .find(|dir| dir.join(".git").exists() || dir.join("AGENTS.md").is_file())
+      .expect("the repository root")
+      .to_path_buf()
+  }
+
   #[test]
   fn a_quoted_and_a_const_type_name_are_read() {
     let source = "pub const TYPE_NAME: &str = \"codex\";\nregister(TypeRegistration { type_name: TYPE_NAME, \
                   traits: BackendTraits { restart_reattach: true, }, });";
     assert_eq!(declared_name(source, "TYPE_NAME").as_deref(), Some("codex"));
     assert_eq!(declared_name(source, "\"opencode\"").as_deref(), Some("opencode"));
+    assert_eq!(declared_name(source, "options::TYPE_NAME").as_deref(), Some("codex"));
   }
 
   #[test]
@@ -291,5 +349,45 @@ mod tests {
     let registration = REGISTRATION.captures(source).expect("the registration");
     assert_eq!(&registration["name"], "\"antigravity\"");
     assert_eq!(&REATTACH.captures(&registration["body"]).expect("the value")[1], "false");
+  }
+
+  #[test]
+  fn every_registered_backend_type_resolves_in_current_tree() {
+    let repo = repo_root();
+    let registry = charliebot_packages::registry().expect("the registry loads");
+    let types = registry.config_schema().backend_types;
+    assert!(!types.is_empty(), "expected registered backend types");
+    let mut registrations = Registrations::default();
+    for backend_type in types {
+      let (enabled, detail) = registrations.lookup(&repo, "HEAD", backend_type).expect("lookup succeeds");
+      assert!(
+        enabled.is_some(),
+        "backend type {backend_type} declaration could not be resolved from tree HEAD: {detail}"
+      );
+    }
+  }
+
+  #[test]
+  fn cc_anthropic_compatible_resolves_at_target_build_5fb7dd2b2() {
+    let repo = repo_root();
+    if !git(&repo, &["cat-file", "-e", "5fb7dd2b2^{commit}"]).is_ok_and(|out| out.status.success()) {
+      return;
+    }
+    let mut registrations = Registrations::default();
+    let (enabled, detail) =
+      registrations.lookup(&repo, "5fb7dd2b2", "cc-anthropic-compatible").expect("lookup succeeds");
+    assert_eq!(enabled, Some(true), "cc-anthropic-compatible must resolve to true at 5fb7dd2b2: {detail}");
+  }
+
+  #[test]
+  fn genuinely_missing_backend_type_fails_closed() {
+    let repo = repo_root();
+    let mut registrations = Registrations::default();
+    let (enabled, detail) = registrations.lookup(&repo, "HEAD", "nonexistent-backend-type").expect("lookup succeeds");
+    assert_eq!(enabled, None);
+    assert!(
+      detail.contains("has no registration for backend type nonexistent-backend-type"),
+      "unexpected detail: {detail}"
+    );
   }
 }

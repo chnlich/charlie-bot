@@ -153,3 +153,27 @@ test('the committed mapping selects the plan-panel test when the plan template c
   assert.equal(selection.all, false);
   assert.deepEqual(selection.nodeFiles, ['web/tests/plan_panel.integration.test.js']);
 });
+
+test('the committed mapping selects the switch-helper test when backends or switch-helper change', () => {
+  const parsed = mapping(
+    readFileSync(COMMITTED_MAPPING, 'utf8'),
+    [
+      { path: 'rust/crates/backends/anthropic_compatible', name: 'charliebot-anthropic-compatible' },
+      { path: 'rust/crates/app/switch-helper', name: 'charliebot-switch-helper' },
+    ],
+    [],
+  );
+  const backendSelection = selectIntegrationTests(
+    ['rust/crates/backends/anthropic_compatible/src/options.rs'],
+    parsed,
+  );
+  assert.equal(backendSelection.all, false);
+  assert.ok(backendSelection.rustFilter.includes('package(charliebot-switch-helper)'));
+
+  const helperSelection = selectIntegrationTests(
+    ['rust/crates/app/switch-helper/src/scan.rs'],
+    parsed,
+  );
+  assert.equal(helperSelection.all, false);
+  assert.ok(helperSelection.rustFilter.includes('package(charliebot-switch-helper)'));
+});

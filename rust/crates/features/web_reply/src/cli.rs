@@ -11,7 +11,6 @@ use std::future::Future;
 
 use charliebot_agents::cli_host::{CliHost, LazyHost};
 use charliebot_cli_common::args as cli_args;
-use charliebot_cli_common::channel_verb::post_reply;
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::files;
@@ -91,7 +90,7 @@ struct StatusSetArgs {
 pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
   let cli: WebCli = cli_args::parse("charliebot web", args);
   match cli.command {
-    WebCommand::Reply(args) => reply(&args),
+    WebCommand::Reply(args) => reply(&args, host),
     WebCommand::Dialog(args) => dialog(&args),
     WebCommand::Status { command } => match command {
       StatusCommand::Set(args) => status_set(&args, host),
@@ -101,12 +100,84 @@ pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
   }
 }
 
-fn reply(args: &ReplyArgs) -> Result<(), CliExit> {
-  let mut extra = Map::new();
-  if let Some(reason) = &args.keep_language {
-    extra.insert("keep_language".to_string(), json!(reason));
+fn reply(args: &ReplyArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
+  let session_id = resolve::resolve_from_env(args.session.as_deref())?;
+  let text = files::read_reply_text(&args.file)?;
+  let request = json!({ "session_id": &session_id, "text": &text });
+  let unread_result = client::post("/api/internal/web/reply/unread", request, None, &[])?;
+  let unread = unread_result.get("unread").and_then(Value::as_bool).unwrap_or(true);
+
+  if unread {
+    let code_findings: Vec<String> = unread_result
+      .get("code_findings")
+      .and_then(Value::as_array)
+      .map(|arr| arr.iter().filter_map(Value::as_str).map(str::to_string).collect())
+      .unwrap_or_default();
+
+    let findings = if !code_findings.is_empty() {
+      client::post(
+        "/api/internal/web/reply-check",
+        json!({
+          "session_id": &session_id,
+          "text": &text,
+          "backend": "code-assertions",
+          "findings": &code_findings,
+        }),
+        None,
+        &[],
+      )?;
+      code_findings
+    } else {
+      let host = lazy_host.get().map_err(anyhow_exit)?;
+      let (system_prompt, questions) = cold_read::load_reply_texts(&host.repo_root).map_err(anyhow_exit)?;
+      let probe_prompt = cold_read::reply_probe_input(&text, &questions);
+      let probe = block_on(cold_read::run_probe(host, &probe_prompt, &system_prompt))?.map_err(anyhow_exit)?;
+      let Some(backend) = probe.backend_id else {
+        for (backend, error) in &probe.attempts {
+          eprintln!("attempt {backend} failed: {error}");
+        }
+        if probe.attempts.is_empty() {
+          eprintln!("No light backend was available for this reply.");
+        }
+        std::process::exit(1);
+      };
+      let answer = probe.answer.expect("a successful reply probe has the answering backend's response");
+      let model_findings = cold_read::parse_reply_findings(&answer);
+      if !model_findings.is_empty() {
+        client::post(
+          "/api/internal/web/reply-check",
+          json!({
+            "session_id": &session_id,
+            "text": &text,
+            "backend": &backend,
+            "findings": &model_findings,
+            "answer": &answer,
+          }),
+          None,
+          &[],
+        )?;
+      }
+      model_findings
+    };
+
+    if !findings.is_empty() {
+      for finding in &findings {
+        println!("FAIL: {finding}");
+      }
+      println!("Nothing was posted.");
+      std::process::exit(3);
+    }
   }
-  post_reply("/api/internal/web/reply", args.session.as_deref(), &args.file, Some(extra))
+
+  let mut payload = Map::new();
+  payload.insert("session_id".to_string(), json!(session_id));
+  payload.insert("text".to_string(), json!(text));
+  if let Some(reason) = &args.keep_language {
+    payload.insert("keep_language".to_string(), json!(reason));
+  }
+  let readback = client::post("/api/internal/web/reply", Value::Object(payload), None, &[])?;
+  print!("{}", json_out::render(&readback, None));
+  Ok(())
 }
 
 fn dialog(args: &SessionArgs) -> Result<(), CliExit> {

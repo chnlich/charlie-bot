@@ -87,6 +87,8 @@ The For-you view shows your web replies and hides the rest of your turn output.
 
 - Write the web reply text to a file.
 - Then run `charliebot web reply --file <path>`.
+- The command cold-reads each web reply before recording it.
+- When a reply fails the cold read, the command returns the findings and stores nothing; the second submission of that reply posts, and its remaining findings are recorded.
 - The command records the web reply in the session. It prints a readback with the character count.
 - The readback sets `over_budget` for a reply over 500 characters.
 - When the readback sets `over_budget`, keep the posted reply as the answer of this turn.

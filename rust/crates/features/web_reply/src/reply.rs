@@ -12,7 +12,9 @@ use anyhow::Context;
 use axum::http::StatusCode;
 use charliebot_compat::file_urls;
 use charliebot_core::event_types::EventFields;
-use charliebot_core::event_types::{AGENT_MESSAGE, INPUT_EVENT_ID, NUDGE_OF, USER, WEB_REPLY, WEB_REPLY_NOTICE};
+use charliebot_core::event_types::{
+  AGENT_MESSAGE, INPUT_EVENT_ID, NUDGE_OF, USER, WEB_REPLY, WEB_REPLY_CHECK, WEB_REPLY_NOTICE,
+};
 use charliebot_core::paths;
 use charliebot_core::regex_classes::compile_automata_regex;
 use charliebot_core::str_methods;
@@ -310,6 +312,90 @@ fn visible_reply_chars(text: &str) -> anyhow::Result<usize> {
 /// running turn received, replies posted earlier in the turn included. The check holds the text unless `keep_language`,
 /// the agent's reason for posting it as written, is given; the reason is then recorded on the reply. User-text refusals
 /// give a correction and its purpose so the writer can fix the text. A refusal records nothing and marks nothing.
+pub const REPLY_SHA256: &str = "reply_sha256";
+
+/// The SHA-256 that names a web reply text as it stands.
+pub fn reply_sha256(text: &str) -> String {
+  charliebot_store::control_events::sha256_bytes_hex(text.as_bytes())
+}
+
+/// The findings of a recorded `web_reply_check` event for `digest`, if any check has been recorded.
+pub async fn checked_reply_findings(
+  features: &FeatureContext,
+  session_id: &str,
+  digest: &str,
+) -> Result<Option<Vec<String>>, WebReplyError> {
+  let events = load_events(features, session_id).await?;
+  for event in events.iter().rev() {
+    if event.get("type").and_then(CompactValue::as_str) == Some(WEB_REPLY_CHECK)
+      && event.get(REPLY_SHA256).and_then(CompactValue::as_str) == Some(digest)
+    {
+      let findings = event
+        .get("findings")
+        .and_then(CompactValue::as_array)
+        .map(|arr| arr.iter().filter_map(CompactValue::as_str).map(str::to_string).collect())
+        .unwrap_or_default();
+      return Ok(Some(findings));
+    }
+  }
+  Ok(None)
+}
+
+/// Return whether `text` has no matching cold-read check in the session yet, running code assertions if unread.
+pub async fn unread_reply(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
+  require_web_session(features, session_id).await?;
+  if str_methods::strip(text).is_empty() {
+    return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Reply text is empty"));
+  }
+  let digest = reply_sha256(text);
+  if let Some(findings) = checked_reply_findings(features, session_id, &digest).await? {
+    return Ok(json!({ "unread": false, "remaining_findings": findings }));
+  }
+  let file_scan_context = file_link_scan_context(features, session_id)?;
+  refuse_dead_links([text], &file_scan_context)?;
+  let config = features.config.get().map_err(|error| WebReplyError::Failed(error.into()))?;
+  let checks = UserTextChecks::new(
+    config.section::<UserTextChecksConfig>(user_text_checks::CONFIG_SECTION),
+    &config.charliebot_home,
+  )?;
+  let violations = checks.check_reply(text, &file_scan_context)?;
+  let code_findings: Vec<String> = violations
+    .into_iter()
+    .map(|v| match v.check {
+      user_text_checks::COMMIT_NAMED => format!("bare commit hash {} stands without a readable name", v.snippet),
+      user_text_checks::VOCABULARY_RULE_TERM => format!("rule-defined agent-work term '{}'", v.snippet),
+      _ => format!("{}: {}", v.check, v.snippet),
+    })
+    .collect();
+  Ok(json!({ "unread": true, "code_findings": code_findings }))
+}
+
+/// Record one cold read of `text` with its findings.
+pub async fn record_reply_check(
+  features: &FeatureContext,
+  session_id: &str,
+  text: &str,
+  backend: &str,
+  findings: &[String],
+  answer: Option<&str>,
+) -> Result<Value, WebReplyError> {
+  require_web_session(features, session_id).await?;
+  let digest = reply_sha256(text);
+  let mut event = json!({
+    "type": WEB_REPLY_CHECK,
+    "content": "web reply check",
+    REPLY_SHA256: &digest,
+    "backend": backend,
+    "findings": findings,
+  });
+  if let Some(answer) = answer {
+    event["answer"] = json!(answer);
+  }
+  features.store.persist_and_broadcast(session_id, event).await?;
+  tracing::info!(session = %session_id, backend, count = findings.len(), "web_reply_check_recorded");
+  Ok(json!({ REPLY_SHA256: digest }))
+}
+
 #[cfg(test)]
 pub async fn post_web_reply(
   features: &FeatureContext,
@@ -340,12 +426,30 @@ pub async fn post_web_reply_with_request_id(
     &config.charliebot_home,
   )?;
   let violations = checks.check_reply(text, &file_scan_context)?;
-  if !violations.is_empty() {
-    return Err(WebReplyError::refused(
-      StatusCode::UNPROCESSABLE_ENTITY,
-      user_text_checks::reply_refusal_detail(&violations),
-    ));
-  }
+  let digest = reply_sha256(text);
+  let prior_check = checked_reply_findings(features, session_id, &digest).await?;
+  let remaining_findings = if let Some(checked_findings) = prior_check {
+    let mut findings = checked_findings;
+    for v in &violations {
+      let code_finding = match v.check {
+        user_text_checks::COMMIT_NAMED => format!("bare commit hash {} stands without a readable name", v.snippet),
+        user_text_checks::VOCABULARY_RULE_TERM => format!("rule-defined agent-work term '{}'", v.snippet),
+        _ => format!("{}: {}", v.check, v.snippet),
+      };
+      if !findings.contains(&code_finding) {
+        findings.push(code_finding);
+      }
+    }
+    (!findings.is_empty()).then_some(findings)
+  } else {
+    if !violations.is_empty() {
+      return Err(WebReplyError::refused(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        user_text_checks::reply_refusal_detail(&violations),
+      ));
+    }
+    None
+  };
   if keep_language.is_some_and(|reason| str_methods::strip(reason).is_empty()) {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Keep-language reason is empty"));
   }
@@ -376,6 +480,9 @@ pub async fn post_web_reply_with_request_id(
     let mut web_reply = json!({"chars": chars});
     if let Some(reason) = keep_language {
       web_reply["keep_language"] = json!(reason);
+    }
+    if let Some(findings) = &remaining_findings {
+      web_reply["findings"] = json!(findings);
     }
     let mut event = json!({"type": WEB_REPLY, "content": text, WEB_REPLY: web_reply});
     if let Some(request_id) = request_id {

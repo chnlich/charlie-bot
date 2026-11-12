@@ -75,6 +75,7 @@ pub const WEB_STATUS_CONFIRMED: &str = "web_status_confirmed";
 /// web_reply payload key with nudge_of.
 pub const WEB_STATUS_REMINDER: &str = "web_status_reminder";
 pub const WEB_ASK_CHECK: &str = "web_ask_check";
+pub const WEB_REPLY_CHECK: &str = "web_reply_check";
 pub const CONTEXT_COMPACTED: &str = "context_compacted";
 pub const CONTEXT_COMPACT_FAILED: &str = "context_compact_failed";
 pub const RESUME_CONTEXT_DROPPED: &str = "resume_context_dropped";

@@ -1,0 +1,76 @@
+{
+  "argv": [
+    "web",
+    "reply",
+    "--file",
+    "{root}/reply.md",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "env": {
+    "PATH": "{root}/bin",
+    "HOME": "{root}/user",
+    "CHARLIEBOT_REPO_ROOT": "{repo}"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pools:\n    - {id: pool, label: Pool, rule: rotate, members: [claude-light]}\n  calls:\n    worker: pool\n    improve: pool\n    verify: pool\n    review: pool\n    cold_read: pool\n    probe: pool\n    autoname: pool\n    triage: pool\n  options:\n    - id: claude-light\n      label: CC Light\n      type: cc-claude\n      model: claude-light-test\n",
+    "bin/claude": "#!/bin/sh\n/bin/cat > /dev/null\nprintf '%s\\n' '(1) 48838303 stands without a readable name' '(2) none'\n",
+    "reply.md": "运行 48838303 已完成。"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "unread": true,
+        "code_findings": []
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "reply_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "FAIL: 48838303 stands without a readable name\nNothing was posted.\n",
+    "stderr": "",
+    "exit": 3,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/reply/unread",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "运行 48838303 已完成。"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/internal/web/reply-check",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "运行 48838303 已完成。",
+          "backend": "claude-light",
+          "findings": [
+            "48838303 stands without a readable name"
+          ],
+          "answer": "(1) 48838303 stands without a readable name\n(2) none"
+        }
+      }
+    ]
+  }
+}

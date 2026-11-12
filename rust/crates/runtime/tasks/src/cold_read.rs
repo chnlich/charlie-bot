@@ -28,6 +28,10 @@ const SYSTEM_SECTION: &str = "system_prompt";
 const QUESTIONS_SECTION: &str = "questions";
 const ASK_SYSTEM_SECTION: &str = "ask_system_prompt";
 const ASK_QUESTIONS_SECTION: &str = "ask_questions";
+const REPLY_SYSTEM_SECTION: &str = "reply_system_prompt";
+const REPLY_QUESTIONS_SECTION: &str = "reply_questions";
+/// The bounded timeout for one cold read probe attempt.
+pub const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 /// The item JSON an ask probe carries: non-ASCII characters unescaped, two-space indentation.
 const ITEM_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
@@ -372,6 +376,51 @@ pub fn ask_probe_input(
   Ok(pieces.join("\n\n"))
 }
 
+/// The system prompt and the questions one web reply is cold-read with, read fresh from `prompts/cold_read.md`
+/// (`load_reply_texts`).
+pub fn load_reply_texts(repo: &Path) -> anyhow::Result<(String, String)> {
+  let sections = spawner_prompt::load_marker_sections(
+    &repo.join("prompts").join(PROMPT_FILENAME),
+    &[REPLY_SYSTEM_SECTION, REPLY_QUESTIONS_SECTION],
+    "cold-read",
+  )?;
+  Ok((
+    sections[REPLY_SYSTEM_SECTION].trim_end_matches('\n').to_string(),
+    sections[REPLY_QUESTIONS_SECTION].trim_end_matches('\n').to_string(),
+  ))
+}
+
+/// The reply probe's whole input: the reply text followed by the questions (`reply_probe_input`).
+pub fn reply_probe_input(reply_text: &str, questions: &str) -> String {
+  format!("{reply_text}\n\n{questions}")
+}
+
+/// The findings parsed from a cold-read answer of a web reply (`parse_reply_findings`).
+pub fn parse_reply_findings(answer: &str) -> Vec<String> {
+  let mut findings = Vec::new();
+  for line in answer.lines() {
+    let trimmed = line.trim();
+    let content = trimmed
+      .strip_prefix("(1)")
+      .or_else(|| trimmed.strip_prefix("(2)"))
+      .or_else(|| trimmed.strip_prefix("1."))
+      .or_else(|| trimmed.strip_prefix("2."));
+    if let Some(rest) = content {
+      let cleaned = rest.trim().trim_start_matches(':').trim_start_matches('.').trim();
+      let without_trailing = cleaned.trim_end_matches('.').trim();
+      if !without_trailing.is_empty() && !is_none_verdict(without_trailing) {
+        findings.push(without_trailing.to_string());
+      }
+    }
+  }
+  findings
+}
+
+fn is_none_verdict(text: &str) -> bool {
+  let lower = text.to_ascii_lowercase();
+  lower == "none" || lower == "no" || text == "无" || text == "没有" || lower == "none."
+}
+
 /// The outcome of one light-backend probe: the failed attempts in order, then the answering backend and its verbatim
 /// answer when one answers.
 pub struct LightProbe {
@@ -380,8 +429,9 @@ pub struct LightProbe {
   pub answer: Option<String>,
 }
 
-/// `run_probe`: sends `prompt` to each member of the `backends.calls.probe` target in turn, with no timeout. A backend
-/// that fails is recorded and the next member tried; a quota failure cools that member. Fails when the key is unset.
+/// `run_probe`: sends `prompt` to each member of the `backends.calls.probe` target in turn, bounded by `PROBE_TIMEOUT`.
+/// A backend that fails is recorded and the next member tried; a quota failure cools that member. Fails when the key is
+/// unset.
 pub async fn run_probe(host: &CliHost, prompt: &str, system_prompt: &str) -> anyhow::Result<LightProbe> {
   let target = host.cfg.backends.calls.get(CallClass::Probe);
   if target.is_none() {
@@ -392,7 +442,10 @@ pub async fn run_probe(host: &CliHost, prompt: &str, system_prompt: &str) -> any
     let option = option?;
     let (error_type, outcome) =
       match backend_types::build_backend(Arc::clone(&host.registry), &option, &host.cfg, LaunchArgs::default()) {
-        Ok(built) => ("RuntimeError", one_shot_text(built, &host.base_env.values, prompt, system_prompt, None).await),
+        Ok(built) => (
+          "RuntimeError",
+          one_shot_text(built, &host.base_env.values, prompt, system_prompt, Some(PROBE_TIMEOUT)).await,
+        ),
         Err(error) => ("ValueError", Err(error)),
       };
     match outcome {
@@ -820,5 +873,17 @@ BBBB
     );
     assert_eq!(probe.backend_id, None);
     assert_eq!(probe.answer, None);
+  }
+
+  #[test]
+  fn reply_findings_parser_extracts_findings_and_ignores_none_answers() {
+    let clean = "(1) none\n(2) none";
+    assert!(parse_reply_findings(clean).is_empty());
+
+    let with_findings = "(1) 0a1c1ef stands without a name.\n(2) 「读回」is a rule-defined agent term.";
+    assert_eq!(
+      parse_reply_findings(with_findings),
+      vec!["0a1c1ef stands without a name", "「读回」is a rule-defined agent term"]
+    );
   }
 }

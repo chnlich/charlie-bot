@@ -118,6 +118,8 @@ fn normalize_web_status(value: &mut Value) -> bool {
 fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route("/api/internal/web/reply", post_only(api::post_reply))
+    .route("/api/internal/web/reply/unread", post_only(api::post_reply_unread))
+    .route("/api/internal/web/reply-check", post_only(api::post_reply_check))
     .route("/api/internal/web/dialog", get_only(api::get_dialog))
     .route("/api/internal/web/status", refuse_other_methods(post(api::post_status).get(api::get_status), "POST"))
     .route("/api/internal/web/status/confirm", post_only(api::post_status_confirm))
@@ -132,6 +134,8 @@ fn matches(path: &str) -> bool {
   matches!(
     path,
     "/api/internal/web/reply"
+      | "/api/internal/web/reply/unread"
+      | "/api/internal/web/reply-check"
       | "/api/internal/web/dialog"
       | "/api/internal/web/status"
       | "/api/internal/web/status/confirm"
@@ -155,6 +159,8 @@ mod tests {
     let routers = registry.routers();
     assert_eq!(routers.len(), 1);
     assert!(routers[0].claims("/api/internal/web/reply"));
+    assert!(routers[0].claims("/api/internal/web/reply/unread"));
+    assert!(routers[0].claims("/api/internal/web/reply-check"));
     assert!(routers[0].claims("/api/internal/web/dialog"));
     assert!(routers[0].claims("/api/internal/web/status"));
     assert!(routers[0].claims("/api/internal/web/status/confirm"));
@@ -264,5 +270,89 @@ mod tests {
     assert_eq!(ask_checks.len(), 1);
     assert_eq!(ask_checks[0]["backend"], "haiku");
     assert_eq!(ask_checks[0]["answer"], "Deploy.\ntier: t0 rule: money");
+  }
+
+  #[tokio::test]
+  async fn the_cold_read_routes_validate_record_and_gate_a_web_reply() {
+    let home = test_support::Home::new();
+    let sid = home.manager("session", None).await;
+
+    // 1. Plain reply posts at first submission
+    let plain_text = "已确认修复完成，测试全部通过。";
+    let (status, body) = home
+      .send(Method::POST, "/api/internal/web/reply/unread", Some(json!({"session_id": sid, "text": plain_text})))
+      .await;
+    assert_eq!((status, body), (StatusCode::OK, json!({"unread": true, "code_findings": []})));
+
+    let (status, body) =
+      home.send(Method::POST, "/api/internal/web/reply", Some(json!({"session_id": sid, "text": plain_text}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["posted"], json!(true));
+
+    // 2. Reply with bare commit hash is sent back with finding naming it, then posts on second submission
+    let bare_hash_text = "已合并 a6799847a 修复状态折叠。";
+    let (status, body) = home
+      .send(Method::POST, "/api/internal/web/reply/unread", Some(json!({"session_id": sid, "text": bare_hash_text})))
+      .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["unread"], json!(true));
+    let code_findings = body["code_findings"].as_array().unwrap();
+    assert_eq!(code_findings.len(), 1);
+    assert!(code_findings[0].as_str().unwrap().contains("a6799847a"));
+
+    // First attempt to post directly without prior check is refused with 422
+    let (status, _) = home
+      .send(Method::POST, "/api/internal/web/reply", Some(json!({"session_id": sid, "text": bare_hash_text})))
+      .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Record check
+    let (status, body) = home
+      .send(
+        Method::POST,
+        "/api/internal/web/reply-check",
+        Some(json!({
+          "session_id": sid,
+          "text": bare_hash_text,
+          "backend": "code-assertions",
+          "findings": code_findings,
+        })),
+      )
+      .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["reply_sha256"].as_str().unwrap().len(), 64);
+
+    // Second call to unread returns unread: false with remaining findings
+    let (status, body) = home
+      .send(Method::POST, "/api/internal/web/reply/unread", Some(json!({"session_id": sid, "text": bare_hash_text})))
+      .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["unread"], json!(false));
+    assert_eq!(body["remaining_findings"].as_array().unwrap().len(), 1);
+
+    // Second submission posts and records remaining findings on the web_reply event
+    let (status, body) = home
+      .send(Method::POST, "/api/internal/web/reply", Some(json!({"session_id": sid, "text": bare_hash_text})))
+      .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["posted"], json!(true));
+
+    let events = home.events(&sid);
+    let last_reply = events.iter().rfind(|e| e["type"] == "web_reply").unwrap();
+    assert_eq!(last_reply["content"], json!(bare_hash_text));
+    let reply_findings = last_reply["web_reply"]["findings"].as_array().unwrap();
+    assert_eq!(reply_findings.len(), 1);
+    assert!(reply_findings[0].as_str().unwrap().contains("a6799847a"));
+
+    // 3. Reply with rule-defined term such as 读回 is flagged
+    let rule_term_text = "把提交和读回要求交给测试。";
+    let (status, body) = home
+      .send(Method::POST, "/api/internal/web/reply/unread", Some(json!({"session_id": sid, "text": rule_term_text})))
+      .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["unread"], json!(true));
+    let code_findings = body["code_findings"].as_array().unwrap();
+    assert_eq!(code_findings.len(), 1);
+    assert!(code_findings[0].as_str().unwrap().contains("读回"));
   }
 }

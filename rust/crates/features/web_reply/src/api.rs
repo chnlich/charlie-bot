@@ -112,6 +112,44 @@ pub async fn post_status_unread(State(features): State<Arc<FeatureContext>>, req
   answer(status::unread_waiting(&features, &model.session_id, &model.text).await)
 }
 
+/// `POST /api/internal/web/reply/unread`: returns whether the reply text has not been cold-read yet.
+pub async fn post_reply_unread(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match request_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  let model = match SessionText::validate(&body) {
+    Ok(model) => model,
+    Err(response) => return *response,
+  };
+  answer(reply::unread_reply(&features, &model.session_id, &model.text).await)
+}
+
+/// `POST /api/internal/web/reply-check`: records a cold read of a web reply.
+pub async fn post_reply_check(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match request_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  let model = match ReplyCheck::validate(&body) {
+    Ok(model) => model,
+    Err(response) => return *response,
+  };
+  answer(
+    reply::record_reply_check(
+      &features,
+      &model.session_id,
+      &model.text,
+      &model.backend,
+      &model.findings,
+      model.answer.as_deref(),
+    )
+    .await,
+  )
+}
+
 /// `POST /api/internal/web/ask-check`: records a cold read of one Waiting on you item.
 pub async fn post_ask_check(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
@@ -190,6 +228,16 @@ const ASK_CHECK_FIELDS: &[Field] = &[
 ];
 const ASK_CHECK_BODY: BodyModel = BodyModel::required(ASK_CHECK_FIELDS).forbid_extra();
 
+/// The fields of `WebReplyCheckRequest` in declaration order.
+const REPLY_CHECK_FIELDS: &[Field] = &[
+  Field::required("session_id", FieldType::String),
+  Field::required("text", FieldType::String),
+  Field::required("backend", FieldType::String),
+  Field::required("findings", FieldType::StringList),
+  Field::optional("answer", FieldType::NullableString),
+];
+const REPLY_CHECK_BODY: BodyModel = BodyModel::required(REPLY_CHECK_FIELDS).forbid_extra();
+
 /// The validated `WebReplyRequest`.
 struct ReplyRequest {
   session_id: String,
@@ -254,6 +302,41 @@ impl AskCheck {
     let backend = text_field(&fields, "backend");
     let answer = text_field(&fields, "answer");
     Ok(Self { session_id, item, backend, answer })
+  }
+}
+
+/// The validated `WebReplyCheckRequest`.
+struct ReplyCheck {
+  session_id: String,
+  text: String,
+  backend: String,
+  findings: Vec<String>,
+  answer: Option<String>,
+}
+
+impl ReplyCheck {
+  /// Validates the body against `REPLY_CHECK_BODY`.
+  fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
+    let mut fields = body.declared_fields(&REPLY_CHECK_BODY)?;
+    let session_id = text_field(&fields, "session_id");
+    let text = text_field(&fields, "text");
+    let backend = text_field(&fields, "backend");
+    let findings = match fields.remove("findings") {
+      Some(Value::Array(items)) => items
+        .into_iter()
+        .map(|item| match item {
+          Value::String(text) => text,
+          _ => unreachable!("a validated findings item is a string"),
+        })
+        .collect(),
+      _ => unreachable!("a validated findings is a list"),
+    };
+    let answer = match fields.remove("answer") {
+      Some(Value::String(answer)) => Some(answer),
+      Some(Value::Null) | None => None,
+      Some(_) => unreachable!("a validated answer is a string or null"),
+    };
+    Ok(Self { session_id, text, backend, findings, answer })
   }
 }
 

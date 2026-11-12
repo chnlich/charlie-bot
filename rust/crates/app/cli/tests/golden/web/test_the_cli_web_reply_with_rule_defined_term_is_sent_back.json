@@ -1,0 +1,71 @@
+{
+  "argv": [
+    "web",
+    "reply",
+    "--file",
+    "{root}/reply.md",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "reply.md": "把提交和读回要求交给测试。"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "unread": true,
+        "code_findings": [
+          "rule-defined agent-work term '读回'"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "reply_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "FAIL: rule-defined agent-work term '读回'\nNothing was posted.\n",
+    "stderr": "",
+    "exit": 3,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/reply/unread",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "把提交和读回要求交给测试。"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/internal/web/reply-check",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "把提交和读回要求交给测试。",
+          "backend": "code-assertions",
+          "findings": [
+            "rule-defined agent-work term '读回'"
+          ]
+        }
+      }
+    ]
+  }
+}

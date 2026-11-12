@@ -213,3 +213,40 @@ fn page_scripts_and_styles_are_not_user_text() {
 
   assert!(checks.check_page(&html).unwrap().is_empty());
 }
+
+#[test]
+fn bare_commit_hash_in_reply_is_flagged() {
+  let (home, checks) = loaded_checks("");
+  let bare_hash = "已合并 a6799847a。";
+  let v = violations(&checks, &home, bare_hash);
+  assert_eq!(count_named(&v, COMMIT_NAMED), 1);
+  assert_eq!(v[0].snippet, "a6799847a");
+
+  let lone_link_label = "快进到 [8d098a8](https://example.com/8d098a8)。";
+  let v2 = violations(&checks, &home, lone_link_label);
+  assert_eq!(count_named(&v2, COMMIT_NAMED), 1);
+  assert_eq!(v2[0].snippet, "8d098a8");
+
+  let named_link = "[修复状态折叠 · a6799847a](https://example.com/a6799847a)";
+  assert_eq!(count_named(&violations(&checks, &home, named_link), COMMIT_NAMED), 0);
+
+  let in_url = "https://github.com/example/repo/commit/a6799847a";
+  assert_eq!(count_named(&violations(&checks, &home, in_url), COMMIT_NAMED), 0);
+
+  let in_fenced = "```\na6799847a\n```";
+  assert_eq!(count_named(&violations(&checks, &home, in_fenced), COMMIT_NAMED), 0);
+}
+
+#[test]
+fn rule_defined_agent_terms_in_reply_are_flagged() {
+  let (home, checks) = loaded_checks("");
+  let text = "合入后我把提交和 xinjiang 读回要求交给主线安装。";
+  let v = violations(&checks, &home, text);
+  assert_eq!(count_named(&v, VOCABULARY_RULE_TERM), 2); // "读回" and "主线"
+  let snippets: Vec<_> = v.iter().filter(|x| x.check == VOCABULARY_RULE_TERM).map(|x| x.snippet.as_str()).collect();
+  assert!(snippets.contains(&"读回"));
+  assert!(snippets.contains(&"主线"));
+
+  let fenced = "```\n读回\n```";
+  assert_eq!(count_named(&violations(&checks, &home, fenced), VOCABULARY_RULE_TERM), 0);
+}

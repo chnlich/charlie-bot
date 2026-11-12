@@ -29,6 +29,7 @@ pub const RAW_EVENTS_REPLACED_BY_DELTAS: &[&str] = &[
   event_types::WEB_STATUS,
   event_types::WEB_STATUS_CONFIRMED,
   event_types::WEB_ASK_CHECK,
+  event_types::WEB_REPLY_CHECK,
 ];
 
 impl Store {

@@ -33,7 +33,7 @@
     "requests": [
       {
         "method": "POST",
-        "path": "/api/internal/web/reply",
+        "path": "/api/internal/web/reply/unread",
         "query": "",
         "headers": {
           "Authorization": null,

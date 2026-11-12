@@ -1,0 +1,69 @@
+{
+  "argv": [
+    "web",
+    "reply",
+    "--file",
+    "{root}/reply.md",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "reply.md": "已合并 a6799847a 修复状态折叠。"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "unread": false,
+        "remaining_findings": [
+          "bare commit hash a6799847a stands without a readable name"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "posted": true,
+        "chars": 17,
+        "over_budget": false
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\"posted\": true, \"chars\": 17, \"over_budget\": false}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/reply/unread",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "已合并 a6799847a 修复状态折叠。"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/internal/web/reply",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "已合并 a6799847a 修复状态折叠。"
+        }
+      }
+    ]
+  }
+}

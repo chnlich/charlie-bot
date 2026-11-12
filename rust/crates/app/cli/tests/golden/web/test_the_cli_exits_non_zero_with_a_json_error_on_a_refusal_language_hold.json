@@ -14,6 +14,12 @@
   },
   "responses": [
     {
+      "status": 200,
+      "body": {
+        "unread": false
+      }
+    },
+    {
       "status": 409,
       "body": {
         "detail": "Language check: the user's last message is in Chinese.\nThis reply has almost no Chinese.\nThe command posted nothing.\nRewrite the reply in Chinese.\nThen post the reply again.\nTo post the reply as written, add --keep-language \"<reason>\" to the command."
@@ -31,6 +37,20 @@
     "stderr": "{\"error\": \"Language check: the user's last message is in Chinese.\\nThis reply has almost no Chinese.\\nThe command posted nothing.\\nRewrite the reply in Chinese.\\nThen post the reply again.\\nTo post the reply as written, add --keep-language \\\"<reason>\\\" to the command.\", \"code\": \"server_error\", \"effect\": \"none\"}\n",
     "exit": 1,
     "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/reply/unread",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "the answer"
+        }
+      },
       {
         "method": "POST",
         "path": "/api/internal/web/reply",

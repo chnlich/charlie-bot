@@ -22,6 +22,10 @@ pub const TRACKER_ID_NEARBY: &str = "tracker-id-nearby";
 pub const SESSION_LINKED: &str = "session-linked";
 /// The renderable-link check name shared by artifact assertions and web-reply refusals.
 pub const LINK_RENDERABLE: &str = "link-renderable";
+/// The commit-hash check name: an identifier must stand beside a readable name that says what it identifies.
+pub const COMMIT_NAMED: &str = "commit-named";
+/// The vocabulary check name: words must be the user's own or everyday words, with rule-defined agent terms kept out.
+pub const VOCABULARY_RULE_TERM: &str = "vocabulary-rule-term";
 /// The three checks, in the order each entry point reports them.
 pub const CHECK_NAMES: [&str; 3] = [TRACKER_ID_NEARBY, SESSION_LINKED, LINK_RENDERABLE];
 
@@ -34,6 +38,10 @@ const SESSION_FIX: &str =
 const SESSION_PURPOSE: &str = "This lets the reader open the correct session.";
 const LINK_FIX: &str = "link an HTML page, or the directory that holds the file";
 const LINK_PURPOSE: &str = "This gives the reader a rendered result.";
+const COMMIT_FIX: &str = "name the commit by what it changes, with its hash in the link";
+const COMMIT_PURPOSE: &str = "This lets the reader know what changed.";
+const VOCABULARY_FIX: &str = "use everyday words instead of rule-defined agent terms";
+const VOCABULARY_PURPOSE: &str = "This keeps agent jargon out of text for the user.";
 const LINEAR_ID_PATTERN: &str = r"[A-Z]{2,}-\d+";
 const SESSION_ID_PATTERN: &str = concat!(
   r"(?<![\p{L}\p{N}_])(?:",
@@ -41,6 +49,7 @@ const SESSION_ID_PATTERN: &str = concat!(
   r"|(?P<short>[0-9a-f]{8}))",
   r"(?![\p{L}\p{N}_])",
 );
+const COMMIT_HASH_PATTERN: &str = r"(?<![\p{L}\p{N}_])(?P<hash>[0-9a-fA-F]{7,40})(?![\p{L}\p{N}_])";
 const MARKDOWN_LINK_PATTERN: &str = concat!(
   r"\[(?P<label>[^\]\n]*)\]\([ \t]*(?:",
   r"<(?P<angle>[^>\n]*)>|(?P<bare>[^)\s]+)",
@@ -51,8 +60,31 @@ static LINEAR_ID_RE: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(LINEAR_ID_PATTERN).expect("the Linear id pattern is valid"));
 static SESSION_ID_RE: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(SESSION_ID_PATTERN).expect("the session id pattern is valid"));
+static COMMIT_HASH_RE: LazyLock<Regex> =
+  LazyLock::new(|| Regex::new(COMMIT_HASH_PATTERN).expect("the commit hash pattern is valid"));
 static MARKDOWN_LINK_RE: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(MARKDOWN_LINK_PATTERN).expect("the Markdown link pattern is valid"));
+
+/// Rule-defined agent terms that must stay out of text for the user (Vocabulary).
+pub const RULE_DEFINED_TERMS: &[&str] = &[
+  "读回",
+  "主线",
+  "子线",
+  "本线",
+  "这条线",
+  "上级会话",
+  "父节点",
+  "子会话",
+  "子节点",
+  "冷读",
+  "分歧",
+  "取舍",
+  "接手",
+  "起飞",
+  "Waiting on you",
+  "审批人",
+  "放行",
+];
 
 const PAGE_BLOCK_TAGS: &[&str] =
   &["p", "li", "tr", "dd", "dt", "h1", "h2", "h3", "h4", "blockquote", "figcaption", "summary", "pre"];
@@ -211,6 +243,8 @@ impl UserTextChecks {
     let mut violations = self.tracker_violations(line_blocks(text))?;
     violations.extend(self.reply_session_violations(text)?);
     violations.extend(self.reply_link_violations(text, file_scan_context)?);
+    violations.extend(self.reply_commit_violations(text)?);
+    violations.extend(self.reply_vocabulary_violations(text)?);
     Ok(violations)
   }
 
@@ -379,6 +413,67 @@ impl UserTextChecks {
     }
     Ok(matches)
   }
+
+  fn reply_commit_violations(&self, text: &str) -> anyhow::Result<Vec<TextViolation>> {
+    let links = markdown_links(text)?;
+    let fenced = fenced_code_ranges(text);
+    let inline_code = inline_code_spans(text, &fenced);
+    let session_matches = self.session_matches(text)?;
+    let mut violations = Vec::new();
+    for captures in COMMIT_HASH_RE.captures_iter(text) {
+      let captures = captures?;
+      let matched = captures.name("hash").expect("the pattern captures hash");
+      let s = matched.as_str();
+      if !s.chars().any(|c| c.is_ascii_digit()) || !s.chars().any(|c| c.is_ascii_alphabetic()) {
+        continue;
+      }
+      let range = matched.range();
+      let before = text[..range.start].chars().next_back();
+      let after = text[range.end..].chars().next();
+      if before == Some('-') || after == Some('-') {
+        continue;
+      }
+      if session_matches.iter().any(|sm| sm.range == range) {
+        continue;
+      }
+      if is_inside(&fenced, &range) || is_url_or_path(text, &range, &links) {
+        continue;
+      }
+      if inline_code.iter().any(|code| {
+        code.content.start <= range.start && range.end <= code.content.end && text[code.content.clone()].trim() != s
+      }) {
+        continue;
+      }
+      if let Some(link) = links.iter().find(|link| link.label.start <= range.start && range.end <= link.label.end) {
+        let label = &text[link.label.clone()];
+        let label_stripped = label.trim().trim_matches('`').trim();
+        if label_stripped != s && label.chars().any(|c| c.is_alphabetic() && !c.is_ascii_hexdigit()) {
+          continue;
+        }
+      }
+      violations.push(TextViolation::new(COMMIT_NAMED, s.to_string(), None));
+    }
+    Ok(violations)
+  }
+
+  fn reply_vocabulary_violations(&self, text: &str) -> anyhow::Result<Vec<TextViolation>> {
+    let fenced = fenced_code_ranges(text);
+    let mut violations = Vec::new();
+    for &term in RULE_DEFINED_TERMS {
+      let mut cursor = 0;
+      while let Some(index) = text[cursor..].find(term) {
+        let start = cursor + index;
+        let end = start + term.len();
+        cursor = end;
+        let range = start..end;
+        if is_inside(&fenced, &range) {
+          continue;
+        }
+        violations.push(TextViolation::new(VOCABULARY_RULE_TERM, term.to_string(), None));
+      }
+    }
+    Ok(violations)
+  }
 }
 
 #[derive(Clone)]
@@ -408,6 +503,8 @@ impl TextViolation {
       TRACKER_ID_NEARBY => (TRACKER_FIX, TRACKER_PURPOSE),
       SESSION_LINKED => (SESSION_FIX, SESSION_PURPOSE),
       LINK_RENDERABLE => (LINK_FIX, LINK_PURPOSE),
+      COMMIT_NAMED => (COMMIT_FIX, COMMIT_PURPOSE),
+      VOCABULARY_RULE_TERM => (VOCABULARY_FIX, VOCABULARY_PURPOSE),
       other => unreachable!("unknown user-text check {other:?}"),
     };
     TextViolation { check, snippet, block, fix, purpose }

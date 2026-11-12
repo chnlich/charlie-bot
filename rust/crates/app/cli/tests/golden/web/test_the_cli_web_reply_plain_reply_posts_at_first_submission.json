@@ -1,0 +1,73 @@
+{
+  "argv": [
+    "web",
+    "reply",
+    "--file",
+    "{root}/reply.md",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "env": {
+    "PATH": "{root}/bin",
+    "HOME": "{root}/user",
+    "CHARLIEBOT_REPO_ROOT": "{repo}"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pools:\n    - {id: pool, label: Pool, rule: rotate, members: [claude-light]}\n  calls:\n    worker: pool\n    improve: pool\n    verify: pool\n    review: pool\n    cold_read: pool\n    probe: pool\n    autoname: pool\n    triage: pool\n  options:\n    - id: claude-light\n      label: CC Light\n      type: cc-claude\n      model: claude-light-test\n",
+    "bin/claude": "#!/bin/sh\n/bin/cat > /dev/null\nprintf '%s\\n' '(1) none' '(2) none'\n",
+    "reply.md": "已确认修复完成，测试全部通过。"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "unread": true,
+        "code_findings": []
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "posted": true,
+        "chars": 15,
+        "over_budget": false
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\"posted\": true, \"chars\": 15, \"over_budget\": false}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/reply/unread",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "已确认修复完成，测试全部通过。"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/internal/web/reply",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "已确认修复完成，测试全部通过。"
+        }
+      }
+    ]
+  }
+}

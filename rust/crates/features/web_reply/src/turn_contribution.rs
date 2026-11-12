@@ -10,7 +10,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_REPLY, WEB_REPLY_NOTICE, WEB_STATUS};
+use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_REPLY, WEB_REPLY_CHECK, WEB_REPLY_NOTICE, WEB_STATUS};
 use charliebot_core::run_kind::RunKind;
 use charliebot_core::str_methods;
 use charliebot_registry::FeatureContext;
@@ -91,6 +91,7 @@ impl TurnContribution for WebReplyTurnContribution {
       (WEB_REPLY_NOTICE, web_reply_notice_message),
       (WEB_STATUS, web_status_message),
       (WEB_ASK_CHECK, web_ask_check_message),
+      (WEB_REPLY_CHECK, web_reply_check_message),
     ]
   }
 
@@ -124,6 +125,11 @@ fn web_status_message(event: &Value) -> Value {
 /// The chat line of a `web_ask_check` event.
 fn web_ask_check_message(event: &Value) -> Value {
   json!({"role": WEB_ASK_CHECK, "content": content(event)})
+}
+
+/// The chat line of a `web_reply_check` event.
+fn web_reply_check_message(event: &Value) -> Value {
+  json!({"role": WEB_REPLY_CHECK, "content": content(event)})
 }
 
 /// The event's `content`, or `""` when the event has none (`event.get("content", "")`).

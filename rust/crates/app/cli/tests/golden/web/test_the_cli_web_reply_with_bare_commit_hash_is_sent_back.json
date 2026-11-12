@@ -1,0 +1,71 @@
+{
+  "argv": [
+    "web",
+    "reply",
+    "--file",
+    "{root}/reply.md",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "reply.md": "已合并 a6799847a 修复状态折叠。"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "unread": true,
+        "code_findings": [
+          "bare commit hash a6799847a stands without a readable name"
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "reply_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "FAIL: bare commit hash a6799847a stands without a readable name\nNothing was posted.\n",
+    "stderr": "",
+    "exit": 3,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/reply/unread",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "已合并 a6799847a 修复状态折叠。"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/internal/web/reply-check",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "已合并 a6799847a 修复状态折叠。",
+          "backend": "code-assertions",
+          "findings": [
+            "bare commit hash a6799847a stands without a readable name"
+          ]
+        }
+      }
+    ]
+  }
+}

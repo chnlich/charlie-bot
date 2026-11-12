@@ -4,7 +4,7 @@
 //! inputs), and each listing reads every run's metadata file. The walk lists each full-pass session once in its
 //! parallel phase and holds the listing; while the hold lasts, run-record reads of that session answer from it. The
 //! store is the only writer of run records during the walk, and each of its run-record writes and session deletions
-//! drops the session's listing first, so every read still returns what the disk holds. The hold ends with the walk.
+//! drops the session's listing first. So every read still returns what the disk holds. The hold ends with the walk.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

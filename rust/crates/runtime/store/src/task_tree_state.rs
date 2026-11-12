@@ -44,11 +44,11 @@ pub struct TaskFacts {
 
 /// Insertion-ordered references to events, indexed by a content hash so the index does not duplicate each event id.
 ///
-/// A checkpoint answers most of an index without parsing it: [`EventIdIndex::from_prefix`] keeps the checkpoint's event
-/// lines and the hash table that points into them, so a membership test costs a binary search and one line's parse. The
-/// whole prefix is parsed only when a reader needs a reference to each event ([`EventIdIndex::values`],
-/// [`EventIdIndex::iter`], [`EventIdIndex::get`] and the `Index` form), so a boot that folds a checkpoint plus a small
-/// appended tail never pays for the covered history.
+/// A checkpoint answers most of an index without parsing it. [`EventIdIndex::from_prefix`] keeps the checkpoint's
+/// event lines and the hash table that points into them, so a membership test costs a binary search and one line's
+/// parse. The whole prefix is parsed only when a reader needs a reference to each event
+/// ([`EventIdIndex::values`], [`EventIdIndex::iter`], [`EventIdIndex::get`] and the `Index` form). A boot that folds a
+/// checkpoint plus a small appended tail never pays for the covered history.
 #[derive(Clone, Debug, Default)]
 pub struct EventIdIndex {
   pub(crate) by_hash: HashMap<u64, EventIdBucket>,
@@ -269,7 +269,7 @@ fn event_id(event: &ChatEvent) -> &str {
 
 /// A stable 64-bit FNV-1a hash of an event id.
 ///
-/// The checkpoint's sorted table stores these values, so the function must not change between builds: a table written
+/// The checkpoint's sorted table stores these values, so the function must not change between builds. A table written
 /// by one build is read by the next, and a hash that moved would make every lookup miss. That is why the index does
 /// not use `DefaultHasher`, whose algorithm Rust does not promise to keep.
 pub(crate) fn event_id_hash(id: &str) -> u64 {

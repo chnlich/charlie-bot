@@ -1,7 +1,6 @@
 //! Voice input: the live preview relay, the online upload transcription and the turn contribution.
 
 mod api;
-mod archive;
 mod audio;
 mod config;
 mod decode;

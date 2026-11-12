@@ -1025,12 +1025,18 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
   let root = oneshot_root()?;
   let mut env = base_env;
   env.extend(host.extra_env.clone());
-  env.insert("XDG_DATA_HOME".to_string(), root.path().join(home::OPENCODE_XDG_DATA_DIR_NAME).display().to_string());
-  env.insert("XDG_STATE_HOME".to_string(), root.path().join(home::OPENCODE_XDG_STATE_DIR_NAME).display().to_string());
-  env.insert("XDG_CACHE_HOME".to_string(), root.path().join("cache").display().to_string());
+  env.insert(
+    protocol::XDG_DATA_HOME_VAR.to_string(),
+    root.path().join(home::OPENCODE_XDG_DATA_DIR_NAME).display().to_string(),
+  );
+  env.insert(
+    protocol::XDG_STATE_HOME_VAR.to_string(),
+    root.path().join(home::OPENCODE_XDG_STATE_DIR_NAME).display().to_string(),
+  );
+  env.insert(protocol::XDG_CACHE_HOME_VAR.to_string(), root.path().join("cache").display().to_string());
   let mut config = json!({"permission": {"*": "deny"}});
   config.as_object_mut().expect("the one-shot config is a JSON object").extend(one_shot_context);
-  env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config.to_string());
+  env.insert(protocol::CONFIG_CONTENT_VAR.to_string(), config.to_string());
   if let Some(proxy_url) = &proxy_url {
     apply_proxy_env(&mut env, proxy_url);
   }

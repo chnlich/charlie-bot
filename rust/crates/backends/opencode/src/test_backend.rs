@@ -638,9 +638,9 @@ fn server_env_drops_the_run_identity_and_points_xdg_at_the_store() {
   let result = harness.server.server_env_from(env, "pw").unwrap();
   assert!(!result.contains_key("CHARLIEBOT_RUN_TOKEN"));
   assert!(!result.contains_key("CHARLIEBOT_SESSION_ID"));
-  assert_eq!(result["XDG_DATA_HOME"], harness.host.data_dir().display().to_string());
-  assert_eq!(result["XDG_STATE_HOME"], harness.host.state_dir().display().to_string());
-  assert_eq!(result["XDG_CACHE_HOME"], harness.host.cache_dir().display().to_string());
+  assert_eq!(result[protocol::XDG_DATA_HOME_VAR], harness.host.data_dir().display().to_string());
+  assert_eq!(result[protocol::XDG_STATE_HOME_VAR], harness.host.state_dir().display().to_string());
+  assert_eq!(result[protocol::XDG_CACHE_HOME_VAR], harness.host.cache_dir().display().to_string());
   assert_eq!(result["OPENCODE_SERVER_PASSWORD"], "pw");
   assert_eq!(result.get("OPENCODE_DISABLE_FFF").map(String::as_str), Some("1"));
   assert_eq!(result["NO_PROXY"], "internal.test");
@@ -1270,9 +1270,10 @@ async fn a_new_settings_snapshot_starts_a_new_serve_while_an_adopted_turn_finish
   let new_pid = new_server.pid().unwrap();
   assert_ne!(new_pid, old_pid);
   let environment = fs::read(format!("/proc/{new_pid}/environ")).unwrap();
+  let config_prefix = format!("{}=", protocol::CONFIG_CONTENT_VAR);
   let config = environment
     .split(|byte| *byte == 0)
-    .find_map(|entry| entry.strip_prefix(b"OPENCODE_CONFIG_CONTENT="))
+    .find_map(|entry| entry.strip_prefix(config_prefix.as_bytes()))
     .expect("the new serve receives its settings snapshot");
   let config: Value = serde_json::from_slice(config).unwrap();
   assert_eq!(config["providers"]["fakeprov"]["models"]["fake-model"]["limit"]["context"], 420_000);
@@ -2054,7 +2055,7 @@ fn config_with(root: &std::path::Path, options: Vec<BackendOption>) -> CharlieBo
 
 /// The `OPENCODE_CONFIG_CONTENT` that the shared server of the harness starts with.
 fn headless_content(harness: &Harness) -> String {
-  harness.server.server_env_from(Env::new(), "pw").unwrap()["OPENCODE_CONFIG_CONTENT"].clone()
+  harness.server.server_env_from(Env::new(), "pw").unwrap()[protocol::CONFIG_CONTENT_VAR].clone()
 }
 
 /// The `OPENCODE_CONFIG_CONTENT` of the newest one-shot run that the fake opencode logged.

@@ -565,7 +565,7 @@ fn capture_without_a_registered_source_raises() {
 
 // The capture cases, in the recorded order. The Claude, Codex and opencode cases run on the
 // CliStub stand-ins, so their values are the records the stand-ins yield. The readers that parse those logs live
-// in the agents crate.
+// in the backend crates.
 
 #[test]
 fn capture_usage_rows_are_absolutely_correct() {
@@ -665,7 +665,7 @@ fn a_rewritten_file_reads_whole() {
 #[test]
 fn backend_page_source_attributes_by_type_prefix_and_master_account() {
   // The attribution reads a registered id's config type first (the type wins over the id's prefix), an off-config
-  // id's type prefix next. The master-run account then reads as CLC through its clc- prefix. The gemini type has
+  // id's type prefix next. The master-run account then attributes as CLC through its clc- prefix. The gemini type has
   // no usage source in this fixture; the agents crate registers the Antigravity and kimi types.
   let dir = tempfile::tempdir().unwrap();
   let home = dir.path().join("home");

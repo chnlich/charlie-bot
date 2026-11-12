@@ -2,8 +2,8 @@
 //!
 //! Every quota cooling record, the backend pool's included, lands here and survives a restart: the state lives in
 //! `$CHARLIEBOT_HOME/state/backend_availability.json`, written atomically, and a startup reads it back. Every process
-//! (the server and each CLI host) reads the file at each call and merges its writes under a file lock, so a record one
-//! process writes is visible to the next read of every other process and no write drops another process's row.
+//! (the server and each CLI host) reads the file at each call and merges its writes under a file lock. A record one
+//! process writes is visible to the next read of every other process. No write drops another process's row.
 
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};

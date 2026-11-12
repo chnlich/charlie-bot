@@ -15,7 +15,8 @@ use charliebot_claude_code::claude_lifecycle::ClaudeCliLifecycle;
 /// The package label the composition list registers this backend's package under.
 pub const PACKAGE: &str = "backends.anthropic_compatible";
 
-const TYPE_NAME: &str = "cc-anthropic-compatible";
+/// The backend type name this crate registers, which its option fields and option errors are keyed by.
+pub const TYPE_NAME: &str = "cc-anthropic-compatible";
 
 /// The `cc-anthropic-compatible` type's registration: its backend type, option schema, reading limits, host alias and
 /// usage attribution.

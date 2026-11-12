@@ -15,8 +15,10 @@ use std::time::SystemTime;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{Request, StatusCode, header};
+use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::response::Response;
+use charliebot_compat::compression::{MINIMUM_DEFLATE_BYTES, gzip_level_four};
+use charliebot_compat::headers::header_text;
 use charliebot_compat::responses;
 use charliebot_compat::routing::get_only;
 use charliebot_registry::{FeatureContext, Registry};
@@ -636,6 +638,7 @@ async fn history(State(features): State<Arc<FeatureContext>>, request: Request<B
     Ok(range) => range,
     Err(response) => return *response,
   };
+  let gzip = accepts_gzip(request.headers());
   let store = Arc::clone(&features.store);
   match blocking_store(move || {
     let now = UtcDateTime::now();
@@ -645,15 +648,39 @@ async fn history(State(features): State<Arc<FeatureContext>>, request: Request<B
   })
   .await
   {
-    Ok((body, tag)) => Response::builder()
-      .status(StatusCode::OK)
-      .header(header::CONTENT_TYPE, "application/json")
-      .header(header::CONTENT_LENGTH, body.len())
-      .header(header::ETAG, tag)
-      .body(Body::from(body))
-      .expect("the history response builds"),
+    Ok((body, tag)) => history_response(body, tag, gzip),
     Err(error) => store_error(error),
   }
+}
+
+/// Whether the request's `Accept-Encoding` asks for a gzip response, the answer the transport gzip gives.
+fn accepts_gzip(headers: &HeaderMap) -> bool {
+  header_text(headers, &header::ACCEPT_ENCODING).contains("gzip")
+}
+
+/// The history response, with its own gzip form when the client accepts one.
+///
+/// The series ends at each request's own instant, so the version this body answers under never repeats and the
+/// transport's gzip memo, keyed by the ETag, can never serve it twice. The transport would still pay its level-9
+/// deflate of a version no repeat request reads; compressing the body here keeps that cost out of the request. A body
+/// too small to deflate stays plain, as the transport's own rule has it.
+fn history_response(body: Vec<u8>, tag: String, gzip: bool) -> Response {
+  let mut builder = Response::builder()
+    .status(StatusCode::OK)
+    .header(header::CONTENT_TYPE, "application/json")
+    .header(header::ETAG, tag);
+  let served = if gzip && body.len() >= MINIMUM_DEFLATE_BYTES {
+    let compressed = gzip_level_four(&body);
+    builder = builder
+      .header(header::CONTENT_ENCODING, "gzip")
+      .header(header::VARY, "Accept-Encoding")
+      .header(header::CONTENT_LENGTH, compressed.len());
+    Body::from(compressed)
+  } else {
+    builder = builder.header(header::CONTENT_LENGTH, body.len());
+    Body::from(body)
+  };
+  builder.body(served).expect("the history response builds")
 }
 
 /// The entity tag of a history body: the record generation the series was built from and the instant its window ends.
@@ -983,6 +1010,39 @@ mod tests {
     for range in ["24h", "7d", "all"] {
       assert!(detail.contains(range), "{range} is one of the listed values: {detail}");
     }
+  }
+
+  /// `/history` answers a gzip client in its own per-response form, and those bytes decompress to the series. The
+  /// transport's memo never serves a body whose version moves with every request, so this route pays no level-9
+  /// deflate of it.
+  #[tokio::test]
+  async fn the_history_route_sends_its_own_gzip_form() {
+    use std::io::Read;
+
+    let (_home, features) = test_support::feature_context();
+    let plain = {
+      let request = Request::builder().uri(HISTORY_PATH).body(Body::empty()).unwrap();
+      let response = history(State(Arc::clone(&features)), request).await;
+      assert!(
+        !response.headers().contains_key(header::CONTENT_ENCODING),
+        "a client that names no gzip reads the plain body"
+      );
+      axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("response body")
+    };
+
+    let request =
+      Request::builder().uri(HISTORY_PATH).header(header::ACCEPT_ENCODING, "gzip").body(Body::empty()).unwrap();
+    let response = history(State(Arc::clone(&features)), request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_ENCODING], "gzip");
+    assert_eq!(response.headers()[header::VARY], "Accept-Encoding");
+    let compressed = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("response body");
+    assert!(compressed.len() < plain.len(), "the gzip form is smaller than the plain body");
+    let mut decoded = Vec::new();
+    flate2::read::GzDecoder::new(&compressed[..]).read_to_end(&mut decoded).expect("the gzip form decodes");
+    let body: Value = serde_json::from_slice(&decoded).expect("the decoded form is JSON");
+    assert_eq!(body["range"], "7d");
+    assert!(body["points"].as_array().expect("points is a list").len() > 1);
   }
 
   /// The route's own stamp text is the store's, fraction and all: the chart's time axis reads these bytes.

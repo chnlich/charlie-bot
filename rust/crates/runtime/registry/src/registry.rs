@@ -635,6 +635,10 @@ pub struct UsageResolverHost {
 /// Constructs a backend type's usage resolver for one usage owner.
 pub type UsageResolverConstructor = Arc<dyn Fn(&UsageResolverHost) -> Arc<dyn UsageResolver> + Send + Sync>;
 
+/// The `backend_kwargs` key that carries a lifecycle's extra CLI flags. The Claude lifecycle writes it, and the task
+/// layer and the Claude factory read it, so they match this name instead of spelling it.
+pub const EXTRA_FLAGS_BACKEND_KWARG: &str = "extra_flags";
+
 /// The keyword arguments the runtime passes to a backend factory: the shared launch arguments and the per-type ones.
 #[derive(Clone, Debug, Default)]
 pub struct LaunchArgs {

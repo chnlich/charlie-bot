@@ -9,7 +9,7 @@ use charliebot_agents::runner::EventFn;
 use charliebot_agents::transport::follow::SilenceCallback;
 use charliebot_agents::transport::spawn;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
-use charliebot_registry::backend::{RecoverySilence, ResumeStyle};
+use charliebot_registry::backend::{EXTRA_FLAGS_BACKEND_KWARG, RecoverySilence, ResumeStyle};
 use charliebot_registry::context::FeatureContext;
 use serde_json::{Map, Value};
 use tokio::sync::{mpsc, oneshot};
@@ -97,7 +97,7 @@ pub(crate) fn silence_callback(silence: RecoverySilence) -> SilenceCallback {
 
 /// The `extra_flags` a lifecycle put into a launch's backend arguments; empty when it put none.
 pub(crate) fn extra_flags_of(backend_kwargs: &Map<String, Value>) -> anyhow::Result<Vec<String>> {
-  let Some(extra_flags) = backend_kwargs.get("extra_flags") else { return Ok(Vec::new()) };
+  let Some(extra_flags) = backend_kwargs.get(EXTRA_FLAGS_BACKEND_KWARG) else { return Ok(Vec::new()) };
   let extra_flags = extra_flags.as_array().context("lifecycle extra_flags must be an array")?;
   extra_flags
     .iter()

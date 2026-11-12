@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::{
-  BackendLifecycle, IdleArmContext, Launch, LaunchContext, LaunchKind, LaunchRefused, LaunchWatch,
+  BackendLifecycle, EXTRA_FLAGS_BACKEND_KWARG, IdleArmContext, Launch, LaunchContext, LaunchKind, LaunchRefused,
+  LaunchWatch,
 };
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
 use charliebot_store::run_records::RunKind;
@@ -58,8 +59,10 @@ fn launch_kwargs(ctx: &LaunchContext, first_process: bool) -> anyhow::Result<Map
   let mut kwargs = Map::new();
   kwargs.insert("run_kind".to_string(), json!(ctx.run_kind));
   if ctx.kind == LaunchKind::Turn {
-    kwargs
-      .insert("extra_flags".to_string(), Value::Array(vec![Value::String(EXCLUDE_DYNAMIC_SECTIONS_FLAG.to_string())]));
+    kwargs.insert(
+      EXTRA_FLAGS_BACKEND_KWARG.to_string(),
+      Value::Array(vec![Value::String(EXCLUDE_DYNAMIC_SECTIONS_FLAG.to_string())]),
+    );
     midturn_delivery::insert_launch_kwargs(&mut kwargs, ctx)?;
     if ctx.run_kind == RunKind::ManagerTurn {
       let Some(run_id) = ctx.run_id.as_deref().filter(|value| !value.is_empty()) else {

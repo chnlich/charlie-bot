@@ -2,7 +2,7 @@
 
 use anyhow::{Context, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
-use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
+use charliebot_registry::backend::{AgentBackend, BackendFactory, EXTRA_FLAGS_BACKEND_KWARG, LaunchArgs};
 
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 
@@ -50,7 +50,7 @@ impl BackendFactory for ClaudeCodeFactory {
 pub fn launch_with_kwargs(launch: LaunchArgs) -> anyhow::Result<LaunchArgs> {
   let mut launch = launch;
   if launch.extra_flags.is_empty()
-    && let Some(value) = launch.backend_kwargs.get("extra_flags").filter(|value| !value.is_null())
+    && let Some(value) = launch.backend_kwargs.get(EXTRA_FLAGS_BACKEND_KWARG).filter(|value| !value.is_null())
   {
     launch.extra_flags = value
       .as_array()

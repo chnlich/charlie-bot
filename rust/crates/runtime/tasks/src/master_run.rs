@@ -14,7 +14,8 @@ use charliebot_agents::transport::{cursor, follow, identity, recovery};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::{
-  ContextStateFn as TurnContextStateFn, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch,
+  ContextStateFn as TurnContextStateFn, EXTRA_FLAGS_BACKEND_KWARG, Env, Launch, LaunchArgs, LaunchContext, LaunchKind,
+  LaunchWatch,
 };
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::StoreError;
@@ -532,7 +533,7 @@ impl RunProcess for TurnProcess<'_> {
         launch_args.backend_kwargs = launch
           .backend_kwargs
           .iter()
-          .filter(|(key, _)| key.as_str() != "extra_flags")
+          .filter(|(key, _)| key.as_str() != EXTRA_FLAGS_BACKEND_KWARG)
           .map(|(key, value)| (key.clone(), value.clone()))
           .collect();
         let built =

@@ -53,7 +53,7 @@ async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String,
     }
   };
 
-  // The page's static asset version rides the handshake too (`web/static/js/websocket.js`): a tab that
+  // The page's static asset version rides the handshake too (`web/static/js/websocket.js`). A tab that
   // stays open across a deploy keeps its old JavaScript, and that JavaScript would keep calling retired
   // routes. A present value that differs from the server's current version closes with 4409 before the
   // subscription starts, so the page reloads to the current code.
@@ -144,7 +144,7 @@ fn raw_cursor(query: &str) -> Option<String> {
 }
 
 /// The server's current static asset version. Reading it walks the served static trees, so it runs on
-/// the blocking pool (`Templating::static_asset_version`); a missing `Templating` startup state and a
+/// the blocking pool (`Templating::static_asset_version`). A missing `Templating` startup state and a
 /// failing walk both come back as the error text.
 async fn current_asset_version(features: &FeatureContext) -> Result<String, String> {
   let templating = features.startup.require::<Templating>().map_err(|error| error.to_string())?;
@@ -235,8 +235,8 @@ async fn replay_events<E: CatchupEvent + Send + Sync>(
   cursor: i128,
   event_index_offset: usize,
 ) -> StoreResult<Vec<Value>> {
-  // The replay sends no stream frames: the draft it ends with goes out as one frame that a page replaces its
-  // own draft with, so a page that joins mid-reply renders the text it missed.
+  // The replay sends no stream frames. The draft it ends with goes out as one frame, and a page replaces its
+  // own draft with it. A page that joins mid-reply therefore renders the text it missed.
   let mut walk = CatchupWalk::new(store.new_message_aggregator(event_index_offset, false), cursor, event_index_offset);
   for start in (0..events.len()).step_by(CATCHUP_SLICE_EVENTS) {
     let end = (start + CATCHUP_SLICE_EVENTS).min(events.len());
@@ -291,7 +291,7 @@ impl CatchupWalk {
 }
 
 /// The whole pending draft as one stream frame that replaces the page's draft: the text, thinking and tool rows
-/// a page needs to render the same draft as a page that received every live frame.
+/// a page needs. Those rows let a page render the same draft as a page that received every live frame.
 fn draft_stream_frame(draft: &Value) -> Value {
   let mut frame = json!({
     "type": "stream",
@@ -389,10 +389,10 @@ fn catchup_complete_frame(session_id: &str, subscription: u64, event_total: usiz
 }
 
 /// Handle one `subscribe` frame in the handshake's order: subscribe the new session before the
-/// read starts, drop the session the socket leaves, answer `subscribed`, replay from the frame's
-/// cursor and close with a `catchup_complete` carrying the read's event total. An unknown session
-/// or a failed read answers `error` and keeps the previous subscription. Returns `false` when a
-/// send failed and the socket must close.
+/// read starts, drop the session the socket leaves, answer `subscribed`. Then replay from the
+/// frame's cursor and close with a `catchup_complete` carrying the read's event total. An unknown
+/// session or a failed read answers `error` and keeps the previous subscription. Returns `false`
+/// when a send failed and the socket must close.
 async fn handle_subscribe(
   store: &Arc<Store>,
   sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
@@ -453,7 +453,7 @@ async fn handle_subscribe(
     return false;
   }
   let sent = send_catchup_frames(sender, &catchup.frames, &request.session_id).await;
-  // The new replay sets the covered range the loop's own frame arm compares against: the
+  // The new replay sets the covered range the loop's own frame arm compares against. The
   // subscription queued the events of the new session while the read ran, and a repeated stream
   // append would concatenate its text a second time.
   state.replayed_through = Some(catchup.total);
@@ -1329,7 +1329,7 @@ mod tests {
     let _ = server.await;
   }
 
-  /// An event appended before the subscription reaches the replay alone: the event lock orders
+  /// An event appended before the subscription reaches the replay alone. The event lock orders
   /// the append-broadcast pair against the subscription's creation, so the frame is queued to no
   /// subscriber and delivered once.
   #[tokio::test]
@@ -1355,7 +1355,7 @@ mod tests {
     );
   }
 
-  /// An event appended while the catch-up read runs reaches the subscription alone: the read
+  /// An event appended while the catch-up read runs reaches the subscription alone. The read
   /// holds the session's event lock, so the append-broadcast pair waits for it and its event is
   /// absent from the read's snapshot.
   #[tokio::test]

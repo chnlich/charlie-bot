@@ -78,21 +78,9 @@ impl CcAnthropicCompatibleOption {
         return Err(format!("{TYPE_NAME} option context_window must be an integer greater than 0"));
       }
     };
-    let credential = match fields.get(CREDENTIAL_KEY) {
-      None | Some(Value::Null) => None,
-      Some(Value::String(credential)) => Some(credential.clone()),
-      Some(_) => return Err(format!("{TYPE_NAME} option credential must be a string or null")),
-    };
-    let effort = match fields.get(EFFORT_KEY) {
-      None | Some(Value::Null) => None,
-      Some(Value::String(effort)) => Some(effort.clone()),
-      Some(_) => return Err(format!("{TYPE_NAME} option effort must be a string or null")),
-    };
-    let cli_binary = match fields.get(CLI_BINARY_KEY) {
-      None | Some(Value::Null) => None,
-      Some(Value::String(cli_binary)) => Some(cli_binary.clone()),
-      Some(_) => return Err(format!("{TYPE_NAME} option cli_binary must be a string or null")),
-    };
+    let credential = optional_string(fields, CREDENTIAL_KEY)?;
+    let effort = optional_string(fields, EFFORT_KEY)?;
+    let cli_binary = optional_string(fields, CLI_BINARY_KEY)?;
     let headers = match fields.get(HEADERS) {
       None => Vec::new(),
       Some(Value::Mapping(headers)) => {
@@ -124,6 +112,15 @@ impl CcAnthropicCompatibleOption {
       }
     };
     Ok(Self { api_base, context_window, credential, effort, cli_binary, headers, extra_body, host_auth_alias })
+  }
+}
+
+/// The field's string value: absent or null means `None`, a string is the value, and any other type is refused.
+fn optional_string(fields: &Mapping, key: &str) -> Result<Option<String>, String> {
+  match fields.get(key) {
+    None | Some(Value::Null) => Ok(None),
+    Some(Value::String(value)) => Ok(Some(value.clone())),
+    Some(_) => Err(format!("{TYPE_NAME} option {key} must be a string or null")),
   }
 }
 

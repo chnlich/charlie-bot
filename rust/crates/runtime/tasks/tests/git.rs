@@ -149,7 +149,6 @@ impl RemoteDefaultRepo {
 }
 
 /// The interception options a fake git script bakes in.
-#[derive(Default)]
 struct FakeGitOptions {
   verb: &'static str,
   hangs: usize,
@@ -334,8 +333,18 @@ async fn merge_base_unexpected_exit_code_raises() {
   let repo = RepoFixture::create();
   commit(&repo.seed, "advance.txt", "advance\n", "advance origin");
   git(&repo.seed, &["push", "origin", "feature"]); // local feature is now behind: the probe runs
-  let _fake =
-    FakeGit::new(&FakeGitOptions { verb: "merge-base --is-ancestor", merge_base_code: Some(2), ..Default::default() });
+  let _fake = FakeGit::new(&FakeGitOptions {
+    verb: "merge-base --is-ancestor",
+    hangs: 0,
+    fails: 0,
+    code: 0,
+    lock_err: "",
+    lock_times: 0,
+    merge_base_code: Some(2),
+    overlap_dir: None,
+    delegate: false,
+    stdout: String::new(),
+  });
 
   let error = git_create_worktree(
     &repo.main_checkout,
@@ -363,10 +372,15 @@ async fn worktree_add_retries_a_transient_config_lock() {
   let expected = git_out(&repo.main_checkout, &["rev-parse", "feature"]);
   let fake = FakeGit::new(&FakeGitOptions {
     verb: "worktree add",
+    hangs: 0,
+    fails: 0,
+    code: 0,
     lock_err: "fatal: could not lock config file .git/config: File exists",
     lock_times: 1,
+    merge_base_code: None,
+    overlap_dir: None,
     delegate: true,
-    ..Default::default()
+    stdout: String::new(),
   });
 
   let wt_path = repo.tmp().join("wt-retry");
@@ -391,9 +405,15 @@ async fn concurrent_worktree_adds_in_one_repo_never_overlap() {
   fs::create_dir(&overlap_dir).expect("overlap directory is created");
   let _fake = FakeGit::new(&FakeGitOptions {
     verb: "worktree add",
+    hangs: 0,
+    fails: 0,
+    code: 0,
+    lock_err: "",
+    lock_times: 0,
+    merge_base_code: None,
     overlap_dir: Some(overlap_dir.clone()),
     delegate: true,
-    ..Default::default()
+    stdout: String::new(),
   });
 
   let paths: Vec<PathBuf> = (0..3).map(|i| repo.tmp().join(format!("wt-parallel-{i}"))).collect();
@@ -423,9 +443,15 @@ async fn worktree_add_persistent_lock_error_raises_after_three_retries() {
   let repo = RepoFixture::create();
   let fake = FakeGit::new(&FakeGitOptions {
     verb: "worktree add",
+    hangs: 0,
+    fails: 0,
+    code: 0,
     lock_err: "fatal: could not lock config file .git/config: File exists",
     lock_times: 99,
-    ..Default::default()
+    merge_base_code: None,
+    overlap_dir: None,
+    delegate: false,
+    stdout: String::new(),
   });
 
   let error =
@@ -449,9 +475,15 @@ async fn worktree_add_non_lock_failure_raises_immediately() {
   let repo = RepoFixture::create();
   let fake = FakeGit::new(&FakeGitOptions {
     verb: "worktree add",
+    hangs: 0,
+    fails: 0,
+    code: 0,
     lock_err: "fatal: invalid reference: nope",
     lock_times: 1,
-    ..Default::default()
+    merge_base_code: None,
+    overlap_dir: None,
+    delegate: false,
+    stdout: String::new(),
   });
   let started = Instant::now();
 
@@ -514,8 +546,14 @@ async fn remote_op_hung_first_attempt_succeeds_on_retry() {
   let fake = FakeGit::new(&FakeGitOptions {
     verb: "ls-remote",
     hangs: 1,
+    fails: 0,
+    code: 0,
+    lock_err: "",
+    lock_times: 0,
+    merge_base_code: None,
+    overlap_dir: None,
+    delegate: false,
     stdout: format!("ref: refs/heads/main\tHEAD\n{sha}\tHEAD\n{sha}\trefs/heads/main\n"),
-    ..Default::default()
   });
   let logs = LogCapture::default();
   let _subscriber = logs.install();
@@ -536,7 +574,18 @@ async fn remote_op_hung_first_attempt_succeeds_on_retry() {
 async fn remote_op_failing_every_attempt_returns_timeout_error() {
   let _guard = GIT_TEST_LOCK.lock().await;
   let dir = tempfile::tempdir().expect("temporary directory is available");
-  let fake = FakeGit::new(&FakeGitOptions { verb: "fetch", hangs: 99, fails: 99, ..Default::default() });
+  let fake = FakeGit::new(&FakeGitOptions {
+    verb: "fetch",
+    hangs: 99,
+    fails: 99,
+    code: 0,
+    lock_err: "",
+    lock_times: 0,
+    merge_base_code: None,
+    overlap_dir: None,
+    delegate: false,
+    stdout: String::new(),
+  });
   let logs = LogCapture::default();
   let _subscriber = logs.install();
 
@@ -561,7 +610,18 @@ async fn remote_op_failing_every_attempt_returns_timeout_error() {
 async fn remote_op_failing_every_attempt_returns_last_stderr() {
   let _guard = GIT_TEST_LOCK.lock().await;
   let dir = tempfile::tempdir().expect("temporary directory is available");
-  let fake = FakeGit::new(&FakeGitOptions { verb: "fetch", fails: 99, code: 128, ..Default::default() });
+  let fake = FakeGit::new(&FakeGitOptions {
+    verb: "fetch",
+    hangs: 0,
+    fails: 99,
+    code: 128,
+    lock_err: "",
+    lock_times: 0,
+    merge_base_code: None,
+    overlap_dir: None,
+    delegate: false,
+    stdout: String::new(),
+  });
   let logs = LogCapture::default();
   let _subscriber = logs.install();
 
@@ -585,7 +645,18 @@ async fn remote_op_failing_every_attempt_returns_last_stderr() {
 async fn worktree_add_keeps_the_write_limit() {
   let _guard = GIT_TEST_LOCK.lock().await;
   let repo = RepoFixture::create();
-  let _fake = FakeGit::new(&FakeGitOptions { verb: "worktree add", hangs: 99, ..Default::default() });
+  let _fake = FakeGit::new(&FakeGitOptions {
+    verb: "worktree add",
+    hangs: 99,
+    fails: 0,
+    code: 0,
+    lock_err: "",
+    lock_times: 0,
+    merge_base_code: None,
+    overlap_dir: None,
+    delegate: false,
+    stdout: String::new(),
+  });
 
   let error =
     git_create_worktree(&repo.main_checkout, "feature", "charliebot/task-limits", &repo.tmp().join("wt-limits"), None)
@@ -600,7 +671,18 @@ async fn worktree_add_keeps_the_write_limit() {
 async fn ls_remote_takes_the_attempt_limit() {
   let _guard = GIT_TEST_LOCK.lock().await;
   let repo = RepoFixture::create();
-  let _fake = FakeGit::new(&FakeGitOptions { verb: "ls-remote", hangs: 99, ..Default::default() });
+  let _fake = FakeGit::new(&FakeGitOptions {
+    verb: "ls-remote",
+    hangs: 99,
+    fails: 0,
+    code: 0,
+    lock_err: "",
+    lock_times: 0,
+    merge_base_code: None,
+    overlap_dir: None,
+    delegate: false,
+    stdout: String::new(),
+  });
 
   let error =
     git_create_worktree(&repo.main_checkout, "feature", "charliebot/task-limits", &repo.tmp().join("wt-limits"), None)
@@ -622,7 +704,18 @@ async fn fetch_takes_the_attempt_limit() {
   let repo = RepoFixture::create();
   commit(&repo.seed, "advance.txt", "advance\n", "advance origin");
   git(&repo.seed, &["push", "origin", "feature"]); // local feature is now behind: the resolution fetches
-  let _fake = FakeGit::new(&FakeGitOptions { verb: "fetch", hangs: 99, ..Default::default() });
+  let _fake = FakeGit::new(&FakeGitOptions {
+    verb: "fetch",
+    hangs: 99,
+    fails: 0,
+    code: 0,
+    lock_err: "",
+    lock_times: 0,
+    merge_base_code: None,
+    overlap_dir: None,
+    delegate: false,
+    stdout: String::new(),
+  });
 
   let error =
     git_create_worktree(&repo.main_checkout, "feature", "charliebot/task-limits", &repo.tmp().join("wt-limits"), None)
@@ -660,10 +753,15 @@ async fn git_worktree_remove_does_not_delete_residue_after_git_failure() {
   fs::write(wt_path.join("scratch.log"), "leftover\n").expect("scratch file is written");
   let _fake = FakeGit::new(&FakeGitOptions {
     verb: "worktree remove",
+    hangs: 0,
+    fails: 0,
+    code: 1,
     lock_err: "not a worktree",
     lock_times: 1,
-    code: 1,
-    ..Default::default()
+    merge_base_code: None,
+    overlap_dir: None,
+    delegate: false,
+    stdout: String::new(),
   });
 
   let removed = remove_worktree(tmp.path(), &wt_path, "charliebot-task-leftover").await.expect("no raise");

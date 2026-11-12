@@ -414,7 +414,8 @@ mod tests {
   }
   use crate::scheduler::CronScheduler;
   use crate::test_support::{
-    child_manager, feature_context, feature_context_with_extra_backends, manager, write_prompted_task,
+    AUTO_POOL_ID, child_manager, feature_context, feature_context_with_auto, feature_context_with_extra_backends,
+    manager, write_prompted_task,
   };
 
   async fn send(router: &axum::Router, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
@@ -606,6 +607,36 @@ mod tests {
     assert_eq!(
       serde_yaml::from_str::<serde_yaml::Value>(&std::fs::read_to_string(path).unwrap()).unwrap()["backend"],
       "synthetic-alt"
+    );
+  }
+
+  #[tokio::test]
+  async fn cron_editor_saves_a_pool_backend_on_the_bound_node() {
+    let (home, features) = feature_context_with_auto(&["synthetic", "synthetic-alt"]);
+    let node = manager(&features, "synthetic-pool-bound-node").await.unwrap();
+    assert_eq!(node.backend, "synthetic");
+    let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
+    std::fs::write(
+      &path,
+      crate::yaml::dump(&json!({
+        "cron": "0 8 * * *",
+        "handler": "synthetic_handler",
+        "session_id": node.id,
+        "backend": "synthetic",
+      }))
+      .unwrap(),
+    )
+    .unwrap();
+
+    let (status, updated) =
+      send(&routes(&features), "PUT", "/api/cron/tasks/synthetic-task", json!({"backend": AUTO_POOL_ID})).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["backend"], AUTO_POOL_ID);
+    assert_eq!(features.store.get_session(&node.id).await.unwrap().unwrap().backend, AUTO_POOL_ID);
+    assert_eq!(
+      serde_yaml::from_str::<serde_yaml::Value>(&std::fs::read_to_string(path).unwrap()).unwrap()["backend"],
+      AUTO_POOL_ID
     );
   }
 

@@ -25,12 +25,15 @@ use crate::event_types::SharedChatEvent;
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::layout;
 use crate::metadata::{
-  BASE_BRANCH_FIELD, CC_SESSION_ID_FIELD, CC_SESSION_STARTED_AT, HAS_UNREAD, KEEP_WORKTREE_FIELD, MetadataReadError,
-  NATIVE_BACKEND, ROUND_RATINGS, RoundRating, SUCCESSOR_SESSION_ID, SessionMetadata, SessionStatus, TASK_TYPE_FIELD,
-  UtcDateTime, WORK_STATE,
+  ARCHIVE_OFFSET, BASE_BRANCH_FIELD, CC_SESSION_ID_FIELD, CC_SESSION_STARTED_AT, HAS_PENDING_TRIGGER, HAS_RUNNING_TASKS,
+  HAS_UNREAD, KEEP_WORKTREE_FIELD, MetadataReadError, NATIVE_BACKEND, NEXT_TRIGGER_AT, PARENT_SESSION_ID,
+  PENDING_TRIGGER_COUNT, REPO_PATH_FIELD, ROUND_RATINGS, RoundRating, SCHEDULE_ALLOW_FAILURE, SCHEDULE_CRON,
+  SCHEDULE_ENABLED, SCHEDULE_NEXT_RUN, SCHEDULE_PROJECT, SCHEDULE_TIMEZONE, SUCCESSOR_SESSION_ID, SessionMetadata,
+  SessionStatus, TASK_TYPE_FIELD, UtcDateTime, WORK_STATE,
 };
 use crate::projection::MessageProjection;
 use crate::run_facts::RunFactsMemo;
+use crate::sidebar_state::HAS_PENDING_PLAN_APPROVAL;
 use crate::streaming::StreamingManager;
 #[cfg(test)]
 use crate::task_tree_state::IdentityHook;
@@ -1333,12 +1336,12 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         "name",
         "status",
         HAS_UNREAD,
-        "has_running_tasks",
+        HAS_RUNNING_TASKS,
         WORK_STATE,
-        "has_pending_trigger",
-        "pending_trigger_count",
-        "next_trigger_at",
-        "has_pending_plan_approval",
+        HAS_PENDING_TRIGGER,
+        PENDING_TRIGGER_COUNT,
+        NEXT_TRIGGER_AT,
+        HAS_PENDING_PLAN_APPROVAL,
         "starred",
         "thinking_since",
         "run_backend",
@@ -1347,13 +1350,13 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         CC_SESSION_ID_FIELD,
         CC_SESSION_STARTED_AT,
         "backend",
-        "schedule_cron",
-        "schedule_enabled",
-        "schedule_next_run",
-        "schedule_timezone",
-        "schedule_project",
-        "schedule_allow_failure",
-        "parent_session_id",
+        SCHEDULE_CRON,
+        SCHEDULE_ENABLED,
+        SCHEDULE_NEXT_RUN,
+        SCHEDULE_TIMEZONE,
+        SCHEDULE_PROJECT,
+        SCHEDULE_ALLOW_FAILURE,
+        PARENT_SESSION_ID,
         SUCCESSOR_SESSION_ID,
         "schema_version",
         "task_parent_id",
@@ -1368,7 +1371,7 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         "native_model",
         ROUND_RATINGS,
         "group",
-        "archive_offset",
+        ARCHIVE_OFFSET,
       ],
       MetadataFile::Thread => &[
         "id",
@@ -1383,7 +1386,7 @@ fn validate_slots(slots: &[MetadataSlot]) -> StoreResult<()> {
         "exit_code",
         "branch_name",
         BASE_BRANCH_FIELD,
-        "repo_path",
+        REPO_PATH_FIELD,
         "worktree_path",
         "context",
         "backend",

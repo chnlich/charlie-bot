@@ -6,6 +6,8 @@ use charliebot_store::metadata::BASE_BRANCH_FIELD;
 use charliebot_tasks::git;
 use serde_json::{Value, json};
 
+use crate::wire;
+
 /// The tip after an iteration and the commits it added over `tip_before`. A failed count leaves the commit count at
 /// zero.
 pub async fn commit_delta(wt_path: &Path, tip_before: &str) -> (String, i64) {
@@ -84,7 +86,7 @@ pub async fn land_work_branch_after_loop(
       merge_result: Some(json!({
         "merged": false,
         "error": push_err,
-        "work_branch": work_branch,
+        (wire::WORK_BRANCH): work_branch,
         (BASE_BRANCH_FIELD): base_branch,
       })),
       end_error: Some(end_error),

@@ -19,6 +19,7 @@ use charliebot_store::layout;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Map, Value, json};
 
+use crate::command;
 use crate::sequence;
 use crate::wire;
 
@@ -171,7 +172,7 @@ fn readback_launch(home: &Path, session_id: &str, goal: &str, plan: Option<&str>
       continue;
     }
     let Ok(loop_id) = name.parse::<i64>() else { continue };
-    match files::read_text_mode(&entry.path().join("goal.md")) {
+    match files::read_text_mode(&entry.path().join(command::GOAL_FILE)) {
       Ok(text) if text == goal => candidates.push(loop_id),
       _ => continue,
     }
@@ -187,9 +188,10 @@ fn readback_launch(home: &Path, session_id: &str, goal: &str, plan: Option<&str>
   response.insert(wire::SESSION_ID.to_string(), json!(session_id));
   response.insert(wire::ITERATIONS.to_string(), json!(iterations));
   response.insert(wire::LOOP_ID.to_string(), json!(loop_id));
-  response.insert(wire::GOAL_PATH.to_string(), json!(loop_dir.join("goal.md").to_string_lossy().into_owned()));
+  response.insert(wire::GOAL_PATH.to_string(), json!(loop_dir.join(command::GOAL_FILE).to_string_lossy().into_owned()));
   if plan.is_some() {
-    response.insert(wire::PLAN_PATH.to_string(), json!(loop_dir.join("plan.md").to_string_lossy().into_owned()));
+    response
+      .insert(wire::PLAN_PATH.to_string(), json!(loop_dir.join(command::PLAN_FILE).to_string_lossy().into_owned()));
   }
   // The v2 sequence's one worker child binds by its stable request id; its presence (and only the
   // matching parent's) proves the v2 admission.

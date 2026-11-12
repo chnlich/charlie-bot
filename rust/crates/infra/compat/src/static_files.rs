@@ -708,10 +708,7 @@ mod tests {
     let plain_response = serve(&served, &MimeTypes::builtin(), "/lib.js", &Method::GET, &HeaderMap::new());
     assert!(plain_response.headers().get(header::CONTENT_ENCODING).is_none());
     assert_ne!(plain_response.headers().get(header::ETAG).unwrap().to_str().unwrap(), br_etag);
-    assert_eq!(
-      &body_of(HeaderMap::new())[..],
-      b"a body long enough for compression to shrink it in wire bytes"
-    );
+    assert_eq!(&body_of(HeaderMap::new())[..], b"a body long enough for compression to shrink it in wire bytes");
 
     // A revalidation of the precompressed form answers 304 only for its own ETag, and a ranged request
     // reads the plain file.

@@ -11,13 +11,13 @@
 #   jev.credential  the credentials.yaml section holding this router's key
 #   instructions    the one question Jev answers
 #   classes         each class of work: `when` is the criterion Jev reads for it, and `run_on` is where
-#                   the work runs: one backends.pools id (the pool selects the member the work runs on),
-#                   or `session` (the delegating session's backend)
+#                   the work runs: `session` (the delegating session's backend), or one backends.options
+#                   or backends.pools id
 #   roles           each role that routes, with the ordered list of class names it chooses among; a
 #                   role this file does not list is not routed. A role with one class needs no Jev call.
 #
-# A `run_on` pool id answers only when the request offers that pool as a candidate. Every pool id must be
-# a backends.pools id of config.yaml; the router refuses the file otherwise.
+# A `run_on` id answers only when the request offers it as a candidate. Every `run_on` id must be a
+# backends.options or backends.pools id of config.yaml; the router refuses the file otherwise.
 
 jev:
   # Placeholder: your gateway's choice endpoint.
@@ -32,7 +32,10 @@ classes:
   context:
     when: A first read of unfamiliar material, a diagnosis of an unexplained failure, an explanation of a mechanism or a cause (an explain or debugging page included), an understanding page, or a design or plan draft (a new plan version that changes the design included).
     run_on: session
+  operations:
+    when: "Directly execute mutating writes against live shared clusters or shared hosts: moving nodes between clusters; modifying Kubernetes or Slurm state (reservations, partitions, cordons, drains); installing software on shared cluster nodes (cluster installs followed by acceptance checks included); or directly running kubectl, helm, or helmfile applies. Exclude GitHub pull request merges, CI/CD rollouts, local CharlieBot releases and restarts, local container/KIND testing, job submissions, and read-only inspections (which remain routine or context)."
+    run_on: claude-opus-5
 roles:
-  implement: [routine, context]
-  quick-edit: [routine, context]
-  script-run: [routine, context]
+  implement: [routine, context, operations]
+  quick-edit: [routine, context, operations]
+  script-run: [routine, context, operations]

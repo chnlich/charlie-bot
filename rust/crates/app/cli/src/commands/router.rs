@@ -1570,11 +1570,15 @@ mod tests {
   #[ignore = "integration"]
   fn the_example_rules_file_loads_with_the_loader() {
     let example = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../configs/router.example.yaml"));
-    let rules = load_rules(example, &["cheap".to_string()]).unwrap();
+    let rules = load_rules(example, &["cheap".to_string(), "claude-opus-5".to_string()]).unwrap();
 
-    assert_eq!(rules.roles["implement"], ["routine", "context"]);
+    assert_eq!(rules.roles["implement"], ["routine", "context", "operations"]);
     assert_eq!(rules.roles.len(), 3);
     assert!(matches!(rules.classes["context"].run_on, RunOn::Session));
+    let RunOn::Backend(operations_backend) = &rules.classes["operations"].run_on else {
+      panic!("operations runs on a backend id");
+    };
+    assert_eq!(operations_backend.as_str(), "claude-opus-5");
   }
 
   #[test]

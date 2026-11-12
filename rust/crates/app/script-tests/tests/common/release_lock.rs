@@ -1,8 +1,8 @@
 //! A holder of the host release lock, for the tests of the scripts that take it.
 //!
-//! The holder takes the lock the way `release_lock_take`'s callers do — through the shared definition, from the copy
-//! beside the script under test — and sleeps while it holds it. Killing it leaves the lock free and its record stale,
-//! which is the state a holder that died leaves.
+//! The holder takes the lock the way `release_lock_take`'s callers do: through the shared definition, from the copy
+//! beside the script under test. It sleeps while it holds the lock. Killing it leaves the lock free and its record
+//! stale, which is the state a holder that died leaves.
 
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};

@@ -103,8 +103,8 @@ impl Drop for HeldTest {
 }
 
 /// Whether every pid in `pids` has ended within `timeout`. A process's command line is empty from the moment it
-/// leaves its address space at exit, while `/proc` reports it as a zombie only later, so a check that waited on a
-/// command-line match alone can pass while [`has_ended`] still sees the process. This waits on `has_ended` itself.
+/// leaves its address space at exit. `/proc` reports the process as a zombie only later, so a check that waited on a
+/// command-line match alone can pass while [`has_ended`] still sees it. This waits on `has_ended` itself.
 pub fn all_ended_within(timeout: Duration, pids: &[u32]) -> bool {
   within(timeout, || pids.iter().all(|pid| has_ended(*pid)))
 }

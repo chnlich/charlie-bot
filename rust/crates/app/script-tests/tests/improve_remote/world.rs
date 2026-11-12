@@ -1,12 +1,12 @@
 //! The improve round's test world: a throwaway repository that holds the launcher, a profile home, a remote home and
-//! the stub commands of both sides, with a local `claude` stub for a cron session's own turn.
+//! the stub commands of both sides. It also holds a local `claude` stub for a cron session's own turn.
 //!
 //! The repository is a real git repository with `origin/main`, so the launcher reads its commit and
 //! `dev/improve/inflight-files.sh` lists this repository's own worktrees only. The stub `ssh` records its arguments
-//! and then runs the remote command locally under `SSH_REMOTE_HOME`, with a clean environment that carries the
-//! `FAKE_` variables the stubs read: a real ssh sends no other variable, so a variable that the launcher fails to
-//! forward is absent on the remote side here too. Like a real ssh, the stub sends its standard input to the remote
-//! command unless `-n` is given, and the remote command may drop what it never reads.
+//! and then runs the remote command locally under `SSH_REMOTE_HOME` with a clean environment. That environment
+//! carries the `FAKE_` variables the stubs read. A real ssh sends no other variable, so a variable that the launcher
+//! fails to forward is absent on the remote side here too. Like a real ssh, the stub sends its standard input to the
+//! remote command unless `-n` is given, and the remote command may drop what it never reads.
 //!
 //! Every path this world hands out is under its own `mkdtemp` sandbox, and the sandbox removes it when it drops. A
 //! test that needs an absent input removes that one fixture path inside the sandbox. No test removes the profile home,

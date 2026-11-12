@@ -1,7 +1,7 @@
 //! The remote runner: `dev/remote-run/run.sh` reads the build host and its state base from `config.yaml` on each
 //! run, and stops with exit 2 while the host is unset. It starts every run with a connectivity check whose Tailscale
-//! login link exits 86, whose other failures and its time limit exit 87, and whose stop text names the `/host-auth`
-//! page; after the check, the command's exit code comes back unchanged, 255 included. `dev/remote-run/remote-exec.pl`
+//! login link exits 86 and whose other failures and time limit exit 87. The check's stop text names the `/host-auth`
+//! page. After the check, the command's exit code comes back unchanged, 255 included. `dev/remote-run/remote-exec.pl`
 //! runs a payload with a short TMPDIR on the /dev/shm tmpfs, passes the command's exit code through, and stops the
 //! descendants the command leaves behind. The local work guard's refusal names the same host and prints in full while
 //! the host is unset.
@@ -35,8 +35,8 @@ const CONFIG: &str = "server:\n  public_url: https://charlie.example.test:18498\
 /// The fake ssh answers the runner's remote queries and plays the cases the connectivity check
 /// must tell apart. Its behavior comes from the environment, one case per variable. With
 /// `FAKE_BUILD_HOME` set, the sweep and marker commands run against a local stand-in for the build
-/// host's `$HOME`, so the sweep state carries from one remote command to the next; the preflight
-/// and the git-commit command return success without state.
+/// host's `$HOME`. The sweep state therefore carries from one remote command to the next. The
+/// preflight and the git-commit command return success without state.
 const FAKE_SSH: &str = r##"
 log="${FAKE_SSH_LOG:?}"
 printf '%s\n' "$*" >>"$log"

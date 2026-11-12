@@ -163,7 +163,7 @@ fn test_probe_archive_bounds_a_slow_run_list_by_its_wait() {
 #[test]
 #[ignore = "integration"]
 fn test_probe_archive_names_the_run_when_its_listing_answers_after_the_wait() {
-  // The wait ends while the run listing that follows the stop request is in flight: the probe reports the settle
+  // The wait ends while the run listing that follows the stop request is in flight. The probe reports the settle
   // timeout with the run it waited for, as the clock check at the top of a pass does.
   let world = World::new();
   let (run, calls) = world.probe_turn(&[

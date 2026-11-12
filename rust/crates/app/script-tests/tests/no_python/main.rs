@@ -1,5 +1,5 @@
-//! The no-Python tree guard: `dev/check-no-python.sh` fails on a tracked .py file, a Python shebang, a line in a
-//! shell script or CI configuration that names python, and a line in prompts, skills or docs that names python. It
+//! The no-Python tree guard: `dev/check-no-python.sh` fails on a tracked .py file, a Python shebang, or a line that
+//! names python. Such a line may sit in a shell script or CI configuration, or in a prompt, skill or doc. The guard
 //! passes a clean tree, prose that names the language with a capital P, and the exempted paths.
 
 use std::path::{Path, PathBuf};

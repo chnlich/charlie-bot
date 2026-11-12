@@ -154,3 +154,7 @@
     flex-basis: 100%;
   }
 }
+/* The action bar exists for the selected plan's actions. The empty state and a
+   plan with no available action leave it childless, and its top border would
+   otherwise draw a hairline across the panel's foot above empty space. */
+#plan-action-bar:empty { display: none; }

@@ -20,12 +20,10 @@ use std::io;
 use std::path::Path;
 
 use charliebot_core::home::boot_skip_proof_path;
-use serde_json::{Value, json};
+use charliebot_core::home::startup_rows;
 
 /// The format version of the proof file. A file of another version serves no node.
 const SKIP_PROOF_VERSION: u64 = 1;
-/// The separator inside one row. Session ids and backend names hold no whitespace other than this separator's bytes.
-const FIELD_SEPARATOR: char = '\t';
 
 /// The identities of the two durable files a node's skip verdict was proven from: its chat-event log and its metadata.
 ///
@@ -117,63 +115,42 @@ impl SkipProof {
 /// Write the proof the pass left, holding one row per skipped node. The file is startup-only, so the write takes no
 /// sync. A write failure leaves the previous proof in place, whose rows the next boot validates by identity anyway.
 pub(crate) fn write(home: &Path, rows: &[SkipProofRow]) -> io::Result<()> {
-  let path = boot_skip_proof_path(home);
-  if let Some(parent) = path.parent() {
-    std::fs::create_dir_all(parent)?;
-  }
-  let mut text = String::with_capacity(rows.len().saturating_mul(96) + 64);
-  text.push_str(&charliebot_core::text_repr::json_dumps(
-    &json!({"version": SKIP_PROOF_VERSION}),
-    &charliebot_core::text_repr::DEFAULT_JSON,
-  ));
-  text.push('\n');
-  for row in rows {
-    text.push_str(&row.session_id);
-    text.push(FIELD_SEPARATOR);
-    text.push_str(&row.source.log_size.to_string());
-    text.push(FIELD_SEPARATOR);
-    text.push_str(&row.source.log_mtime_ns.to_string());
-    text.push(FIELD_SEPARATOR);
-    text.push_str(&row.source.meta_size.to_string());
-    text.push(FIELD_SEPARATOR);
-    text.push_str(&row.source.meta_mtime_ns.to_string());
-    text.push(FIELD_SEPARATOR);
-    if let Some(backend) = row.newest_backend.as_deref() {
-      text.push_str(backend);
-    }
-    text.push('\n');
-  }
-  charliebot_core::fsutil::atomic_write_text(&path, &text)
+  let fields = rows
+    .iter()
+    .map(|row| {
+      vec![
+        row.session_id.clone(),
+        row.source.log_size.to_string(),
+        row.source.log_mtime_ns.to_string(),
+        row.source.meta_size.to_string(),
+        row.source.meta_mtime_ns.to_string(),
+        row.newest_backend.clone().unwrap_or_default(),
+      ]
+    })
+    .collect::<Vec<_>>();
+  startup_rows::write(&boot_skip_proof_path(home), SKIP_PROOF_VERSION, &fields)
 }
 
 /// The rows a proof file holds, or `None` when its header is not this version. A row whose fields do not parse is
 /// dropped: its node then runs its own check instead of being served a verdict nobody recorded.
 fn parse(raw: &[u8]) -> Option<Vec<SkipProofRow>> {
-  let text = std::str::from_utf8(raw).ok()?;
-  let mut lines = text.split('\n');
-  let header: Value = serde_json::from_str(lines.next()?).ok()?;
-  if header.get("version")?.as_u64()? != SKIP_PROOF_VERSION {
-    return None;
-  }
-  let rows = lines.filter(|line| !line.is_empty()).filter_map(parse_row).collect();
-  Some(rows)
+  let rows = startup_rows::parse(raw, SKIP_PROOF_VERSION)?;
+  Some(rows.iter().filter_map(|fields| parse_row(fields)).collect())
 }
 
 /// One row of the proof file, or `None` when a field does not parse.
-fn parse_row(line: &str) -> Option<SkipProofRow> {
-  let mut fields = line.split(FIELD_SEPARATOR);
-  let session_id = fields.next()?.to_string();
-  let source = SkipProofSource {
-    log_size: fields.next()?.parse().ok()?,
-    log_mtime_ns: fields.next()?.parse().ok()?,
-    meta_size: fields.next()?.parse().ok()?,
-    meta_mtime_ns: fields.next()?.parse().ok()?,
-  };
-  let backend = fields.next()?.to_string();
-  if fields.next().is_some() {
+fn parse_row(fields: &[String]) -> Option<SkipProofRow> {
+  let [session_id, log_size, log_mtime_ns, meta_size, meta_mtime_ns, backend] = fields else {
     return None;
-  }
-  Some(SkipProofRow { session_id, source, newest_backend: (!backend.is_empty()).then_some(backend) })
+  };
+  let source = SkipProofSource {
+    log_size: log_size.parse().ok()?,
+    log_mtime_ns: log_mtime_ns.parse().ok()?,
+    meta_size: meta_size.parse().ok()?,
+    meta_mtime_ns: meta_mtime_ns.parse().ok()?,
+  };
+  let newest_backend = (!backend.is_empty()).then(|| backend.clone());
+  Some(SkipProofRow { session_id: session_id.clone(), source, newest_backend })
 }
 
 /// A file's `(size, mtime_ns, is_file)`. The third field lets the one stat of the metadata file answer both the walk's

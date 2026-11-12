@@ -16,12 +16,10 @@ use std::io;
 use std::path::Path;
 
 use charliebot_core::home::boot_trigger_index_path;
-use serde_json::{Value, json};
+use charliebot_core::home::startup_rows;
 
 /// The format version of the index file. A file of another version serves no row.
 const TRIGGER_INDEX_VERSION: u64 = 1;
-/// The separator inside one row. Session ids, file names and numbers hold no tab.
-const FIELD_SEPARATOR: char = '\t';
 
 /// A trigger file's `(size, mtime_ns)`, the identity a row is valid under.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -100,51 +98,37 @@ impl TriggerIndex {
 /// Write the rows this boot proved, replacing the previous index. The boot writes the rows of the files it read and
 /// the rows it served, so a file's row survives while its identity holds and disappears when the file does.
 pub(crate) fn write(home: &Path, rows: &[TriggerIndexRow]) -> io::Result<()> {
-  let path = boot_trigger_index_path(home);
-  if let Some(parent) = path.parent() {
-    std::fs::create_dir_all(parent)?;
-  }
-  let mut text = String::with_capacity(rows.len().saturating_mul(120) + 64);
-  text.push_str(&charliebot_core::text_repr::json_dumps(
-    &json!({"version": TRIGGER_INDEX_VERSION}),
-    &charliebot_core::text_repr::DEFAULT_JSON,
-  ));
-  text.push('\n');
-  for row in rows {
-    text.push_str(&row.session_id);
-    text.push(FIELD_SEPARATOR);
-    text.push_str(&row.file_name);
-    text.push(FIELD_SEPARATOR);
-    text.push_str(&row.identity.size.to_string());
-    text.push(FIELD_SEPARATOR);
-    text.push_str(&row.identity.mtime_ns.to_string());
-    text.push('\n');
-  }
-  charliebot_core::fsutil::atomic_write_text(&path, &text)
+  let fields = rows
+    .iter()
+    .map(|row| {
+      vec![
+        row.session_id.clone(),
+        row.file_name.clone(),
+        row.identity.size.to_string(),
+        row.identity.mtime_ns.to_string(),
+      ]
+    })
+    .collect::<Vec<_>>();
+  startup_rows::write(&boot_trigger_index_path(home), TRIGGER_INDEX_VERSION, &fields)
 }
 
 /// The rows an index file holds, or `None` when its header is not this version. A row whose fields do not parse is
 /// dropped: its file is read, which only costs the read the row would have saved.
 fn parse(raw: &[u8]) -> Option<Vec<TriggerIndexRow>> {
-  let text = std::str::from_utf8(raw).ok()?;
-  let mut lines = text.split('\n');
-  let header: Value = serde_json::from_str(lines.next()?).ok()?;
-  if header.get("version")?.as_u64()? != TRIGGER_INDEX_VERSION {
-    return None;
-  }
-  Some(lines.filter(|line| !line.is_empty()).filter_map(parse_row).collect())
+  let rows = startup_rows::parse(raw, TRIGGER_INDEX_VERSION)?;
+  Some(rows.iter().filter_map(|fields| parse_row(fields)).collect())
 }
 
 /// One row of the index file, or `None` when a field does not parse.
-fn parse_row(line: &str) -> Option<TriggerIndexRow> {
-  let mut fields = line.split(FIELD_SEPARATOR);
-  let session_id = fields.next()?.to_string();
-  let file_name = fields.next()?.to_string();
-  let identity = TriggerFileIdentity { size: fields.next()?.parse().ok()?, mtime_ns: fields.next()?.parse().ok()? };
-  if session_id.is_empty() || file_name.is_empty() || fields.next().is_some() {
+fn parse_row(fields: &[String]) -> Option<TriggerIndexRow> {
+  let [session_id, file_name, size, mtime_ns] = fields else {
+    return None;
+  };
+  if session_id.is_empty() || file_name.is_empty() {
     return None;
   }
-  Some(TriggerIndexRow { session_id, file_name, identity })
+  let identity = TriggerFileIdentity { size: size.parse().ok()?, mtime_ns: mtime_ns.parse().ok()? };
+  Some(TriggerIndexRow { session_id: session_id.clone(), file_name: file_name.clone(), identity })
 }
 
 /// The rows this boot served from the index, and a reset for the test that reads it. A test uses the count to tell a

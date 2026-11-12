@@ -83,11 +83,16 @@ function isSidebarListRequest(url) {
   return url.pathname === '/api/sessions/' && !url.searchParams.has('ids');
 }
 
-// The navigation's shell: the stored one, or the network's full page on the first load (no shell stored yet).
+// The navigation's shell: the stored one, or the network's full page on the first load (no shell stored
+// yet). A worker that just started can match before the cache's disk index has settled, while the same
+// cache answers a moment later, so a miss re-reads twice before it falls back to the network.
 async function answerShell(request) {
   const cache = await caches.open(COPY_CACHE);
-  const shell = await cache.match(SHELL_KEY);
-  if (shell) return shell;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const shell = await cache.match(SHELL_KEY);
+    if (shell) return shell;
+    if (attempt < 2) await waitCap(WAIT_CAP_MS);
+  }
   return fetch(request);
 }
 
@@ -99,42 +104,57 @@ async function answerFile(request) {
   return fetch(request);
 }
 
-// A first screen or a sidebar list. Without a stored copy the network answers, uncapped. With one, a
-// network 200 within the wait cap answers the page directly and replaces the copy in the background;
-// otherwise the copy answers at the cap's end and the network fetch for that request is aborted there:
-// the page has its answer, so the link goes to the requests the page itself still needs for this open.
-// The aborted fetch's refresh waits for the page's catchup-complete message, which reports the open's
-// catch-up done; the copy is refreshed then, when the link is the feature's own.
+// A first screen or a sidebar list. The network answers if it gives a usable 200 within the wait cap;
+// otherwise the stored copy answers and the network fetch for that request is aborted there: the page
+// has its answer, so the link goes to the requests the page itself still needs for this open. The
+// aborted fetch's refresh waits for the page's catchup-complete message, which reports the open's
+// catch-up done; the copy is refreshed then, when the link is the feature's own. Without a stored copy
+// the network answers, uncapped. The copy re-reads at every cap's end: a worker that just started can
+// match before the cache's disk index has settled, and the answer one cap later is the copy after all.
 async function answerCopy(event, request) {
   const cache = await caches.open(COPY_CACHE);
-  const networkOnly = request.headers.get(NETWORK_ONLY_HEADER) === '1';
-  const copy = networkOnly ? undefined : await cache.match(request.url);
-  if (!copy) {
-    let answer = await observe(fetch(request));
-    if (!answer.error && answer.response.status === 304) {
-      // The browser's HTTP cache held the entry and the revalidation matched, but a request the worker
-      // answers carries no cached body the page could read. One more fetch, past the cache and without
-      // the conditional header, brings the body.
-      const headers = new Headers(request.headers);
-      headers.delete('If-None-Match');
-      answer = await observe(fetch(request.url, {headers, cache: 'no-store'}));
-    }
-    if (answer.error) throw answer.error;
-    event.waitUntil(afterNetworkAnswer(request, answer));
-    return answer.response;
+  if (request.headers.get(NETWORK_ONLY_HEADER) === '1') {
+    return networkAnswer(event, request);
   }
   const controller = new AbortController();
-  const settled = observe(fetch(request, {signal: controller.signal}));
-  const answered = await Promise.race([settled, waitCap(WAIT_CAP_MS)]);
-  // A 304 names no body: the network's state matches what the browser's HTTP cache held, which is what
-  // the stored copy carries. The page reads the copy.
-  if (answered.response && answered.response.status < 500 && answered.response.status !== 304) {
-    event.waitUntil(settled.then((answer) => afterNetworkAnswer(request, answer)));
-    return answered.response;
+  let networkSettled = false;
+  const settled = observe(fetch(request, {signal: controller.signal}).finally(() => { networkSettled = true; }));
+  for (;;) {
+    const answered = await Promise.race([settled, waitCap(WAIT_CAP_MS)]);
+    // A 304 names no body: the network's state matches what the browser's HTTP cache held, which is
+    // what the stored copy carries. The page reads the copy.
+    if (answered.response && answered.response.status < 500 && answered.response.status !== 304) {
+      event.waitUntil(settled.then((result) => afterNetworkAnswer(request, result)));
+      return answered.response;
+    }
+    const copy = await cache.match(request.url);
+    if (copy) {
+      controller.abort();
+      queueCopyRefresh(request.url);
+      return copy;
+    }
+    if (networkSettled) {
+      return networkAnswer(event, request, await settled);
+    }
   }
-  controller.abort();
-  queueCopyRefresh(request.url);
-  return copy;
+}
+
+// The abortable fetch of the copy race keeps its controller in answerCopy, where the race can stop it.
+
+// One network answer for a request the worker sends to the network: a bodyless 304 — the browser's HTTP
+// cache held the entry and the revalidation matched, but a request the worker answers carries no cached
+// body the page could read — is fetched once more past the cache and without the conditional header, a
+// 200 is stored in the background, and a 401 drops every copy.
+async function networkAnswer(event, request, settledAnswer = null) {
+  let answer = settledAnswer ?? await observe(fetch(request));
+  if (!answer.error && answer.response.status === 304) {
+    const headers = new Headers(request.headers);
+    headers.delete('If-None-Match');
+    answer = await observe(fetch(request.url, {headers, cache: 'no-store'}));
+  }
+  if (answer.error) throw answer.error;
+  event.waitUntil(afterNetworkAnswer(request, answer));
+  return answer.response;
 }
 
 // The network's answer as the worker sees it: the response, a clone to store when it is a 200 (cloned here,

@@ -33,11 +33,22 @@ function makeCaches() {
   const stores = new Map();
   const keyOf = (input) => new URL(typeof input === 'string' ? input : input.url, ORIGIN).href;
   const api = {
+    // Keys here miss their first match, the way a just-started worker's match can race the cache's disk
+    // index; the worker's settle re-read is what the race tests exercise.
+    firstMatchMisses: new Set(),
     open: async (name) => {
       if (!stores.has(name)) stores.set(name, new Map());
       const entries = stores.get(name);
+      const missed = new Set();
       return {
-        match: async (input) => (entries.has(keyOf(input)) ? entries.get(keyOf(input)).clone() : undefined),
+        match: async (input) => {
+          const key = keyOf(input);
+          if (api.firstMatchMisses.has(key) && !missed.has(key)) {
+            missed.add(key);
+            return undefined;
+          }
+          return entries.has(key) ? entries.get(key).clone() : undefined;
+        },
         put: async (input, response) => {
           if (api.quotaFailures > 0 && name.startsWith('last-state-v')) {
             api.quotaFailures -= 1;
@@ -133,13 +144,17 @@ function firstScreen(body, extra = {}) {
   });
 }
 
-test('the first load reaches the network, and a warm shell then answers the navigation', async () => {
+test('the first load reaches the network, and a warm shell then answers the navigation', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout']});
   const h = harness();
   h.state.network = async (req) => (req.url === SHELL_URL
     ? new Response('<html><body>shell</body></html>', {status: 200, headers: {ETag: '"shell"'}})
     : new Response('unexpected', {status: 500}));
   const nav = request(SHELL_URL, {mode: 'navigate'});
-  const first = await answer(h, nav);
+  const pending = answer(h, nav);
+  await flush();
+  t.mock.timers.tick(2 * WAIT_CAP_MS);
+  const first = await pending;
   assert.equal(await first.response.text(), '<html><body>shell</body></html>', 'the first load is the network page');
 
   const channel = messageChannel();
@@ -150,6 +165,39 @@ test('the first load reaches the network, and a warm shell then answers the navi
   assert.equal(await second.response.text(), '<html><body>shell</body></html>');
   assert.equal(h.state.calls.filter((call) => call.url === SHELL_URL).length, 2,
       'the first load and the warm fetch reached the network; the stored shell answers the second navigation');
+});
+
+test('a shell match that races the cache index settles and answers the stored shell', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const h = harness();
+  const store = await h.caches.api.open('last-state-v1');
+  await store.put(SHELL_KEY, new Response('<html>stored</html>'));
+  h.caches.api.firstMatchMisses.add(SHELL_KEY);
+  h.state.network = async () => {
+    throw new TypeError('the network must not be reached while the stored shell answers');
+  };
+  const pending = answer(h, request(SHELL_URL, {mode: 'navigate'}));
+  await flush();
+  t.mock.timers.tick(WAIT_CAP_MS);
+  const nav = await pending;
+  assert.equal(await nav.response.text(), '<html>stored</html>', 'the stored shell answers the navigation');
+  assert.deepEqual(h.state.calls, [], 'the re-read replaced the network fetch, not the other way round');
+});
+
+test('a navigation with no stored shell fetches the network after the settle', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const h = harness();
+  const network = deferred();
+  h.state.network = () => network.promise.then(() => new Response('<html>network</html>'));
+  const pending = answer(h, request(SHELL_URL, {mode: 'navigate'}));
+  await flush();
+  assert.deepEqual(h.state.calls, [], 'the settle re-reads the cache before it reaches the network');
+  t.mock.timers.tick(2 * WAIT_CAP_MS);
+  await flush();
+  assert.equal(h.state.calls.length, 1, 'the network fetch starts after the settle');
+  network.release();
+  const nav = await pending;
+  assert.equal(await nav.response.text(), '<html>network</html>');
 });
 
 test('a warm that finds the shell stored fetches nothing and reports the shell it has', async () => {
@@ -285,6 +333,31 @@ test('a slow network gives the stored copy at the wait cap, aborts its fetch, an
   await Promise.all(h.fire('message', {data: {type: 'catchup-complete'}}).waits);
   const later = await answer(h, request(BOOTSTRAP_URL));
   assert.equal((await later.response.json()).body, 'two', 'the refreshed copy serves the next open');
+});
+
+test('a copy match that races the cache index answers at the cap, and its fetch is aborted', async (t) => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const h = harness();
+  h.state.network = async () => firstScreen('one');
+  await answer(h, request(BOOTSTRAP_URL));
+  h.caches.api.firstMatchMisses.add(BOOTSTRAP_URL);
+
+  const network = deferred();
+  h.state.network = () => network.promise.then(() => firstScreen('two'));
+  const callsAtHit = h.state.calls.length;
+  const pending = answer(h, request(BOOTSTRAP_URL));
+  await flush();
+  t.mock.timers.tick(WAIT_CAP_MS);
+  const hit = await pending;
+  assert.equal((await hit.response.json()).body, 'one', 'the copy answers at the cap\'s re-read');
+  assert.equal(h.state.calls.length, callsAtHit + 1, 'the network fetch of the hit made no call beyond its own');
+  network.release();
+  await flush();
+  assert.equal(h.state.calls.length, callsAtHit + 1, 'the fetch was aborted, not left running');
+
+  await Promise.all(h.fire('message', {data: {type: 'catchup-complete'}}).waits);
+  const later = await answer(h, request(BOOTSTRAP_URL));
+  assert.equal((await later.response.json()).body, 'two', 'the catch-up refresh replaced the copy');
 });
 
 test('a copy hit answers from the copy when the network fails, and the refresh runs after the catch-up', async (t) => {

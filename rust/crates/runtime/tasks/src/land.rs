@@ -17,6 +17,10 @@
 //! A push that moves the base branch, gated or not, leaves no open PR of the task branch behind:
 //! the call reads the branch's PRs back after the push and closes each one GitHub has not marked
 //! merged, so `landed` and `landed-no-ci` both mean the PR reads merged or closed.
+//!
+//! A rejected push of the base starts another round only when the remote base verifiably advanced
+//! past the pushed commit's base; every other refusal — a hook, a dead transport, a timeout, an
+//! auth error — ends the call at once with git's stderr verbatim.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -253,6 +257,7 @@ pub async fn land(home: &Path, task_session_id: &str) -> anyhow::Result<LandingR
   let prev = read_landing_record(&ctx.session_dir)?;
   let prev = prev.filter(|record| record.state != STATE_LANDED && record.state != STATE_LANDED_NO_CI);
   let mut retries = prev.as_ref().map_or(0, |record| record.rebase_retries);
+  let mut moved_base_tips: Vec<String> = Vec::new();
   let mut first_round = true;
 
   for _round in 0..MAX_LANDING_ROUNDS {
@@ -313,26 +318,30 @@ pub async fn land(home: &Path, task_session_id: &str) -> anyhow::Result<LandingR
         };
         return record_landed(&ctx, published, record).await;
       }
-      let record = if push_rejection_kind(&err) == PushRejection::RepositoryRules {
-        LandingRecord {
-          state: STATE_PR_MERGE_REQUIRED.to_string(),
-          repo: ctx.repo.clone(),
-          base: published.to_string(),
-          sha,
-          pr_url: None,
-          checks: Vec::new(),
-          head_pushed_at,
-          ci_passed_at: None,
-          pushed_at: None,
-          rebase_retries: retries,
+      match judge_push_rejection(&ctx.worktree, published, &sha, &err).await? {
+        PushOutcome::PrMergeRequired => {
+          let record = LandingRecord {
+            state: STATE_PR_MERGE_REQUIRED.to_string(),
+            repo: ctx.repo.clone(),
+            base: published.to_string(),
+            sha,
+            pr_url: None,
+            checks: Vec::new(),
+            head_pushed_at,
+            ci_passed_at: None,
+            pushed_at: None,
+            rebase_retries: retries,
+          };
+          write_landing_record(&ctx.session_dir, &record)?;
+          return Ok(record);
         }
-      } else {
-        // The base moved: the next round rebases onto the new tip and pushes again.
-        tracing::info!(target: "charliebot_tasks", repo = %ctx.repo_path.display(), error = %err, "land_push_rejected_retry");
-        continue;
-      };
-      write_landing_record(&ctx.session_dir, &record)?;
-      return Ok(record);
+        PushOutcome::BaseMoved(tip) => {
+          // The base verifiably moved: the next round rebases onto the new tip and pushes again.
+          tracing::info!(target: "charliebot_tasks", repo = %ctx.repo_path.display(), base_tip = %tip, error = %err, "land_push_rejected_retry");
+          moved_base_tips.push(tip);
+          continue;
+        }
+      }
     }
 
     push_task_branch(&ctx, &ctx.branch_name).await?;
@@ -370,15 +379,19 @@ pub async fn land(home: &Path, task_session_id: &str) -> anyhow::Result<LandingR
           let record = LandingRecord { state: STATE_LANDED.to_string(), pushed_at: Some(now_rfc3339()), ..base_record };
           return record_landed(&ctx, published, record).await;
         }
-        let record = if push_rejection_kind(&err) == PushRejection::RepositoryRules {
-          LandingRecord { state: STATE_PR_MERGE_REQUIRED.to_string(), ..base_record }
-        } else {
-          // Main moved while the checks ran: the next round rebases, and both clocks restart.
-          tracing::info!(target: "charliebot_tasks", repo = %ctx.repo_path.display(), error = %err, "land_main_push_rejected_rebase");
-          continue;
-        };
-        write_landing_record(&ctx.session_dir, &record)?;
-        return Ok(record);
+        match judge_push_rejection(&ctx.worktree, published, &sha, &err).await? {
+          PushOutcome::PrMergeRequired => {
+            let record = base_record.with_state(STATE_PR_MERGE_REQUIRED);
+            write_landing_record(&ctx.session_dir, &record)?;
+            return Ok(record);
+          }
+          PushOutcome::BaseMoved(tip) => {
+            // Main moved while the checks ran: the next round rebases, and both clocks restart.
+            tracing::info!(target: "charliebot_tasks", repo = %ctx.repo_path.display(), base_tip = %tip, error = %err, "land_main_push_rejected_rebase");
+            moved_base_tips.push(tip);
+            continue;
+          }
+        }
       }
       CiVerdict::Failed { .. } => {
         let record = base_record.with_state(STATE_CI_FAILED);
@@ -404,7 +417,8 @@ pub async fn land(home: &Path, task_session_id: &str) -> anyhow::Result<LandingR
     }
   }
   anyhow::bail!(
-    "main kept moving past {MAX_LANDING_ROUNDS} landing rounds; run `charliebot land` again when main settles"
+    "main kept moving past {MAX_LANDING_ROUNDS} landing rounds (the base advanced to {}); run `charliebot land` again when main settles",
+    moved_base_tips.join(", ")
   )
 }
 
@@ -506,21 +520,132 @@ async fn origin_has_branch(ctx: &TaskLanding, branch: &str) -> anyhow::Result<bo
   Ok(!out.trim().is_empty())
 }
 
+/// The verdict of one rejected base push: `PrMergeRequired` keeps the repository-rules record, and
+/// `BaseMoved` — the only outcome that starts another round — names the moved base tip.
+enum PushOutcome {
+  PrMergeRequired,
+  BaseMoved(String),
+}
+
+/// The push-to-base rejection class: repository rules (GH013) answer `pr-merge-required` with the
+/// green PR kept open. `NonFastForward` is git's own report that the pushed sha is not a descendant
+/// of the remote tip; `Refused` covers every other refusal — a local hook's as much as a remote
+/// hook's. Either can report on a base that really moved, so the landing verifies the remote tip
+/// before it retries or reports. `Timeout`, `Transport` and `Auth` come from a remote that could
+/// not answer the push's check at all, so they end the landing at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PushRejection {
   NonFastForward,
   RepositoryRules,
+  Timeout,
+  Transport,
+  Auth,
+  Refused,
 }
 
-/// The push-to-base rejection class: repository rules (GH013) answer `pr-merge-required` with the
-/// green PR kept open; every other rejection means main moved, so the landing rebases again.
+/// stderr fragments git prints when the remote's own check rejects the pushed sha as not a
+/// descendant of its tip.
+const NON_FAST_FORWARD_MARKERS: [&str; 3] = ["non-fast-forward", "fetch first", "stale info"];
+
+/// stderr fragments of a dead or unreachable connection: handshake resets, DNS and TCP failures,
+/// mid-transfer failures, and git's "could not read from remote repository" closer.
+const TRANSPORT_MARKERS: [&str; 14] = [
+  "connection reset",
+  "connection refused",
+  "connection timed out",
+  "operation timed out",
+  "could not resolve hostname",
+  "temporary failure in name resolution",
+  "no route to host",
+  "network is unreachable",
+  "kex_exchange_identification",
+  "could not read from remote repository",
+  "the remote end hung up unexpectedly",
+  "early eof",
+  "rpc failed",
+  "broken pipe",
+];
+
+/// stderr fragments of a refused login: ssh publickey and https credential rejections.
+const AUTH_MARKERS: [&str; 2] = ["permission denied", "authentication failed"];
+
 fn push_rejection_kind(stderr: &str) -> PushRejection {
   let lowered = stderr.to_lowercase();
   if lowered.contains("gh013") || lowered.contains("repository rule") || lowered.contains("rule violations") {
     PushRejection::RepositoryRules
-  } else {
+  } else if NON_FAST_FORWARD_MARKERS.iter().any(|marker| lowered.contains(marker)) {
     PushRejection::NonFastForward
+  } else if lowered.contains("timed out after") {
+    PushRejection::Timeout
+  } else if AUTH_MARKERS.iter().any(|marker| lowered.contains(marker)) {
+    PushRejection::Auth
+  } else if TRANSPORT_MARKERS.iter().any(|marker| lowered.contains(marker)) {
+    PushRejection::Transport
+  } else {
+    PushRejection::Refused
   }
+}
+
+/// The terminal error of a rejected push no round follows: the refusal's class name plus git's
+/// stderr verbatim.
+fn push_failure_text(kind: PushRejection, published: &str, stderr: &str) -> String {
+  let wording = match kind {
+    PushRejection::Timeout => "timed out",
+    PushRejection::Transport => "failed on the transport",
+    PushRejection::Auth => "failed authentication",
+    PushRejection::NonFastForward | PushRejection::Refused => "was refused",
+    PushRejection::RepositoryRules => unreachable!("repository rules keep their own record"),
+  };
+  format!("push to refs/heads/{published} {wording}: {stderr}")
+}
+
+/// Decide one rejected base push: repository rules hand back `PrMergeRequired`; a rejection whose
+/// class can report on a moved base yields `BaseMoved` only when the remote tip really advanced
+/// past the pushed commit's base — the pushed sha is no descendant of the just-fetched tip. Every
+/// other refusal ends the landing here with git's stderr verbatim.
+async fn judge_push_rejection(
+  worktree: &Path,
+  published: &str,
+  sha: &str,
+  stderr: &str,
+) -> anyhow::Result<PushOutcome> {
+  let kind = push_rejection_kind(stderr);
+  match kind {
+    PushRejection::RepositoryRules => return Ok(PushOutcome::PrMergeRequired),
+    PushRejection::Timeout | PushRejection::Transport | PushRejection::Auth => {
+      anyhow::bail!("{}", push_failure_text(kind, published, stderr))
+    }
+    PushRejection::NonFastForward | PushRejection::Refused => {}
+  }
+  match verify_base_moved(worktree, published, sha).await {
+    Ok(Some(tip)) => Ok(PushOutcome::BaseMoved(tip)),
+    Ok(None) => anyhow::bail!("{}", push_failure_text(PushRejection::Refused, published, stderr)),
+    Err(error) => {
+      anyhow::bail!(
+        "push to refs/heads/{published} failed: {stderr}; checking whether {published} moved failed too: {error:#}"
+      )
+    }
+  }
+}
+
+/// Whether the remote base really advanced past the pushed commit's base: re-fetch the base, then
+/// check the pushed sha against the new tip. `Some(tip)` names the moved tip; `None` means the push
+/// still fast-forwards, so the rejection named a refusal of another kind.
+async fn verify_base_moved(worktree: &Path, published: &str, sha: &str) -> anyhow::Result<Option<String>> {
+  fetch_base(worktree, published).await?;
+  let base_ref = format!("origin/{published}");
+  let ancestor =
+    git::git_stdout(worktree, &["merge-base", "--is-ancestor", &base_ref, sha], GIT_READ_TIMEOUT, "git merge-base")
+      .await;
+  match ancestor {
+    (true, _, _) => return Ok(None),
+    (false, _, err) if merge_base_unknown(&err) => {}
+    (false, _, err) => anyhow::bail!("git merge-base --is-ancestor {base_ref} {sha} failed: {err}"),
+  }
+  git::git_rev_parse(worktree, &base_ref)
+    .await
+    .map(Some)
+    .ok_or_else(|| anyhow::anyhow!("{base_ref} does not resolve in {}", worktree.display()))
 }
 
 /// Whether the CI gate applies: the base must be the repository's default branch and that branch
@@ -1284,7 +1409,8 @@ mod tests {
   }
 
   #[test]
-  fn push_rejections_split_repository_rules_from_a_moved_main() {
+  fn push_rejections_split_a_verified_move_from_the_terminal_classes() {
+    // Repository rules keep their pr-merge-required answer.
     assert_eq!(
       push_rejection_kind("remote: error: GH013: Repository rule violations found for refs/heads/main"),
       PushRejection::RepositoryRules
@@ -1293,12 +1419,43 @@ mod tests {
       push_rejection_kind("! [remote rejected] main -> main (repository rules prohibit push)"),
       PushRejection::RepositoryRules
     );
+    // Only git's own report of a stale remote tip classifies as a possible base move.
+    assert_eq!(
+      push_rejection_kind(
+        "To github.com:owner/repo.git\n ! [rejected] abc123 -> main (non-fast-forward)\nerror: failed to push some refs"
+      ),
+      PushRejection::NonFastForward
+    );
     assert_eq!(
       push_rejection_kind(
         "To github.com:owner/repo.git\n ! [rejected] abc123 -> main (fetch first)\nerror: failed to push some refs"
       ),
       PushRejection::NonFastForward
     );
+    // A hook refusal, an SSH reset, a timeout and an auth error each carry their own class.
+    let hook = "pre-push: push to dev is restricted; use merge_to_dev.sh <branch>\n\
+                error: failed to push some refs to 'gitee.com:owner/repo.git'";
+    assert_eq!(push_rejection_kind(hook), PushRejection::Refused);
+    assert_eq!(
+      push_rejection_kind(
+        "kex_exchange_identification: read: Connection reset by peer\nfatal: Could not read from remote repository."
+      ),
+      PushRejection::Transport
+    );
+    assert_eq!(push_rejection_kind("git push timed out after 120.0s"), PushRejection::Timeout);
+    assert_eq!(
+      push_rejection_kind(
+        "git@gitee.com: Permission denied (publickey).\nfatal: Could not read from remote repository."
+      ),
+      PushRejection::Auth
+    );
+    // The terminal error names the class and carries the push's stderr verbatim.
+    let text = push_failure_text(PushRejection::Refused, "dev", hook);
+    assert!(text.contains("was refused"), "{text}");
+    assert!(text.contains(hook), "{text}");
+    assert!(push_failure_text(PushRejection::Transport, "dev", "x").contains("transport"));
+    assert!(push_failure_text(PushRejection::Timeout, "dev", "x").contains("timed out"));
+    assert!(push_failure_text(PushRejection::Auth, "dev", "x").contains("authentication"));
   }
 
   #[test]

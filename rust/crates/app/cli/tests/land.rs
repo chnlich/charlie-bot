@@ -159,9 +159,9 @@ impl Venue {
     fs::read_to_string(self.gh_state.join("calls")).unwrap_or_default()
   }
 
-  /// Run `charliebot land --task` from the task worktree; returns the exit code and the printed landing record.
-  fn land(&self) -> (i32, Value) {
-    let output = Command::new(env!("CARGO_BIN_EXE_charliebot"))
+  /// Run `charliebot land --task` from the task worktree; returns the process output.
+  fn land_output(&self) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_charliebot"))
       .args(["land", "--task", TASK_SESSION])
       .current_dir(&self.worktree)
       .env("CHARLIEBOT_HOME", &self.home)
@@ -172,7 +172,12 @@ impl Venue {
       .env("GIT_CONFIG_GLOBAL", "/dev/null")
       .env("GIT_CONFIG_NOSYSTEM", "1")
       .output()
-      .expect("charliebot land runs");
+      .expect("charliebot land runs")
+  }
+
+  /// Run `charliebot land --task` from the task worktree; returns the exit code and the printed landing record.
+  fn land(&self) -> (i32, Value) {
+    let output = self.land_output();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let record = serde_json::from_str(&stdout).unwrap_or_else(|error| {
       panic!(
@@ -234,4 +239,41 @@ fn a_gated_landing_that_main_overtakes_ends_with_its_pr_merged() {
   assert_eq!(venue.origin_tip(TASK_BRANCH), landed);
   assert_eq!(venue.pr_state(), "MERGED");
   assert!(!venue.gh_calls().contains("pr close"), "a PR GitHub merges is not closed:\n{}", venue.gh_calls());
+}
+
+/// A local pre-push hook that refuses pushes to the base branch — the worktree shares the main
+/// checkout's hooks directory, as a task worktree does. The refusal is not a moved base, so the
+/// landing ends on the first round with the hook's own message.
+#[test]
+#[ignore = "integration"]
+fn a_hook_refused_base_push_fails_on_the_first_round_with_the_hooks_message() {
+  let venue = Venue::new(false);
+  let hook_calls = venue.home.join("pre-push-calls");
+  let hook = venue.repo.join(".git/hooks/pre-push");
+  let script = [
+    "#!/usr/bin/env bash",
+    &format!("echo call >>{}", hook_calls.display()),
+    "while read -r _local_ref _local_sha remote_ref _remote_sha; do",
+    "  if [ \"$remote_ref\" = refs/heads/main ]; then",
+    "    echo 'pre-push: push to main is restricted; use merge_to_main.sh <branch>' >&2",
+    "    exit 1",
+    "  fi",
+    "done",
+  ]
+  .join("\n");
+  fs::write(&hook, script).expect("the pre-push hook is written");
+  fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).expect("the hook is executable");
+
+  let output = venue.land_output();
+
+  assert_eq!(output.status.code(), Some(1));
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  let error = serde_json::from_str::<Value>(&stderr).expect("the failure prints a JSON error")["error"]
+    .as_str()
+    .expect("the error is a string")
+    .to_string();
+  assert!(error.contains("push to main is restricted"), "error: {error}");
+  assert!(!error.contains("kept moving"), "error: {error}");
+  let calls = fs::read_to_string(&hook_calls).expect("the hook recorded the push");
+  assert_eq!(calls.lines().count(), 1, "the hook ran on the landing's only push: {calls}");
 }

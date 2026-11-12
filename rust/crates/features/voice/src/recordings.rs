@@ -862,6 +862,21 @@ mod tests {
   }
 
   #[test]
+  fn a_write_before_the_first_list_still_lists_earlier_recordings() {
+    let home = tempfile::tempdir().expect("make an isolated home");
+    let config = synthetic_config(home.path());
+    let voice = voice_dir(&config, "earlier-session");
+    fs::create_dir_all(&voice).expect("create the voice directory");
+    archive::write_wav(&voice.join("2026-11-01T100000.000Z_000000aa.wav"), &[1, 2]).expect("write a synthetic wav");
+    let id = run_id(8);
+    store_upload_audio(&config, "new-session", &id, &[1, 2], Some("gemini"), None).expect("the upload stores");
+
+    let rows = list_recordings(&config, DEFAULT_LIST_LIMIT).expect("the list answers");
+
+    assert_eq!(rows.len(), 2);
+  }
+
+  #[test]
   fn a_recording_stored_after_a_list_appears_on_the_next_list() {
     let home = tempfile::tempdir().expect("make an isolated home");
     let config = synthetic_config(home.path());

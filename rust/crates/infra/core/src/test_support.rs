@@ -61,7 +61,7 @@ impl Write for LogCapture {
 /// A test's receiver of structured events: the subscriber hands each event on the installing thread to the sink while
 /// it emits, and the sink visits the fields it reads.
 pub trait EventSink {
-  /// Records one event.
+  /// The record of one event.
   fn event(&self, event: &Event<'_>);
 }
 
@@ -143,7 +143,7 @@ standing_policies:
 enable_ask_tier_refusal: false
 ";
 
-/// Writes `text` as the home's approval policy table at [`crate::approval_policy::TABLE_RELATIVE_PATH`].
+/// `text` written as the home's approval policy table at [`crate::approval_policy::TABLE_RELATIVE_PATH`].
 pub fn write_approval_policy_table(home: &Path, text: &str) {
   let path = home.join(crate::approval_policy::TABLE_RELATIVE_PATH);
   fs::create_dir_all(path.parent().expect("the table path has a parent")).expect("config.d");

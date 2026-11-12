@@ -27,7 +27,7 @@ where
     self.entries.get(key).cloned()
   }
 
-  /// Stores `value` under `key` as the most recent entry, then evicts past the limit.
+  /// The storage of `value` under `key` as the most recent entry, and the eviction past the limit.
   pub fn store(&mut self, key: K, value: V) {
     self.entries.put(key, value);
   }

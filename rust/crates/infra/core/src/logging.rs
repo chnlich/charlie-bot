@@ -29,7 +29,7 @@ fn targets_filter() -> Targets {
   Targets::new().with_target("charliebot", Level::INFO).with_default(Level::WARN)
 }
 
-/// Writes each event as one flushed line on stdout.
+/// A layer that writes each event as one flushed line on stdout.
 struct StdoutLines;
 
 impl<S: Subscriber> Layer<S> for StdoutLines {

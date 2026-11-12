@@ -16,7 +16,7 @@ const ACCEPTED_RANDOM_BYTE_LIMIT: u8 = 222;
 const TEST_FILE_ATTEMPTS: usize = 20;
 static TEMPFILE_DIRECTORY_CACHE: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-/// Create a temporary directory with the `mkdtemp` naming and permissions.
+/// A temporary directory with the `mkdtemp` naming and permissions.
 pub fn mkdtemp(prefix: &str) -> io::Result<TempDir> {
   mkdtemp_with(prefix, &tempfile_directory()?, random_suffix)
 }
@@ -27,7 +27,7 @@ pub struct TempDir {
 }
 
 impl TempDir {
-  /// Return the path created by `mkdtemp`.
+  /// The path created by `mkdtemp`.
   pub fn path(&self) -> &Path {
     &self.path
   }

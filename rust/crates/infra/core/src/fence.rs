@@ -81,7 +81,7 @@ pub struct HomeWriterFence {
 }
 
 impl HomeWriterFence {
-  /// Drop the identity record, then the lock (idempotent).
+  /// This fence's release of the identity record, then of the lock (idempotent).
   ///
   /// The record is unlinked while this holder still owns the lock, so a successor that acquires
   /// afterwards cannot have its own record erased by this release.
@@ -108,7 +108,7 @@ impl Drop for HomeWriterFence {
   }
 }
 
-/// Take the home's exclusive writer fence, or refuse with the holder's details.
+/// The home's exclusive writer fence, taken for `purpose` or refused with the holder's details.
 ///
 /// The lock file is created if absent. The identity record is written after the lock is held; a failed
 /// write releases the lock before the error returns, so a half-acquired fence never stays behind.
@@ -198,7 +198,7 @@ pub fn read_fence_holder(home: &Path) -> Option<FenceHolder> {
   })
 }
 
-/// Refuse fence paths that would place or read the exclusion outside the home.
+/// The fence-path check that refuses a path placing or reading the exclusion outside the home.
 fn checked_fence_paths(home: &Path) -> Result<(), FenceError> {
   let state = home.join(STATE_DIR_NAME);
   let state_metadata = state.symlink_metadata();

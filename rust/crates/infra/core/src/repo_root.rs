@@ -39,7 +39,7 @@ impl fmt::Display for RepoRootError {
 impl std::error::Error for RepoRootError {}
 
 impl RepoRoot {
-  /// Validate the optional operating-system value of `REPO_ROOT_ENV`.
+  /// The checkout directory from the optional operating-system value of `REPO_ROOT_ENV`.
   pub fn new(value: Option<OsString>) -> Result<RepoRoot, RepoRootError> {
     let value = value.ok_or(RepoRootError::Missing)?;
     let value = value.into_string().map_err(|_| RepoRootError::NonUnicode)?;
@@ -49,7 +49,7 @@ impl RepoRoot {
     Ok(RepoRoot(PathBuf::from(value)))
   }
 
-  /// Return the validated checkout directory.
+  /// The validated checkout directory.
   pub fn path(&self) -> &Path {
     &self.0
   }

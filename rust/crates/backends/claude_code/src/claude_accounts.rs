@@ -623,7 +623,8 @@ pub fn no_usable_login(
   Ok(NoUsableLogin { failure, recovers_at })
 }
 
-/// When one login can run again, and whether a spent quota is what holds it out.
+/// When one login can run again, and whether a spent quota is what holds it out. A login held out for quota and under
+/// its authentication disable runs again once both have ended.
 fn login_unavailability(
   state: &ClaudeAccountState,
   account: &claude_config::ClaudeAccount,
@@ -635,11 +636,9 @@ fn login_unavailability(
   }
   let failed =
     state.readings.lock().expect("Claude account state is not poisoned").auth_failures.get(&account.label).copied();
-  if let Some(failed) = failed
-    && now.into_inner() - failed.into_inner() < AUTH_FAILURE_COOLDOWN
-  {
-    return (false, Some(add_duration(failed, AUTH_FAILURE_COOLDOWN)));
-  }
+  let disabled_until = failed
+    .filter(|failed| now.into_inner() - failed.into_inner() < AUTH_FAILURE_COOLDOWN)
+    .map(|failed| add_duration(failed, AUTH_FAILURE_COOLDOWN));
   if headroom(state, &account.label, model, Some(now)) <= 0.0 {
     let reset = state
       .readings
@@ -649,9 +648,13 @@ fn login_unavailability(
       .get(&account.label)
       .and_then(|reading| reading.rejected_until)
       .filter(|reset| *reset > now);
-    return (true, reset);
+    let recovers = match disabled_until {
+      Some(disabled) => reset.map(|reset| reset.max(disabled)),
+      None => reset,
+    };
+    return (true, recovers);
   }
-  (false, Some(now))
+  (false, Some(disabled_until.unwrap_or(now)))
 }
 
 pub fn unavailable_detail(
@@ -1408,6 +1411,26 @@ mod tests {
       Some(now),
     );
     record_auth_failure(&state, "b", Some(now));
+    let answer = no_usable_login(&state, &cfg, Some("claude-fable-5-1"), Some(now), None).unwrap();
+    assert_eq!(answer.failure, MemberFailure::Quota);
+    assert_eq!(answer.recovers_at, Some(UtcDateTime::from(reset)));
+
+    // A login both out for quota and under its disable is still a quota refusal, and it recovers when the later of the
+    // two has ended: here the reset, 30 minutes out, outlasts the 15-minute disable.
+    let cfg = config(&home, &[("a", &a)]);
+    let state = ClaudeAccountState::new();
+    let reset = now.into_inner() + Duration::minutes(30);
+    observe_rate_limit(
+      &state,
+      "a",
+      &json!({
+        "unifiedWindows": {"five_hour": {"utilization": 1.0}},
+        "status": "rejected",
+        "resetsAt": reset.unix_timestamp() as f64,
+      }),
+      Some(now),
+    );
+    record_auth_failure(&state, "a", Some(now));
     let answer = no_usable_login(&state, &cfg, Some("claude-fable-5-1"), Some(now), None).unwrap();
     assert_eq!(answer.failure, MemberFailure::Quota);
     assert_eq!(answer.recovers_at, Some(UtcDateTime::from(reset)));

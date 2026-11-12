@@ -16,6 +16,18 @@
 # name starts with the own prefix is skipped, because its work belongs to
 # the caller.
 #
+# A worktree whose branch's commits all landed keeps its uncommitted and
+# untracked paths named only while its task run is live. All three of the
+# branch having landed, no process running in the worktree, and the task run
+# being closed keep those paths off the list. Each condition is read from its
+# owner: the landing from the fetched ref, a process from the process table
+# (/proc), and the run's end from the run records of the profile home
+# ($CHARLIEBOT_HOME), whose newest record naming the worktree decides because
+# a retry records the same worktree path. A condition that cannot be read
+# stops the script with an error naming it, and a worktree no run record names
+# keeps its paths named, because the rule drops a claim only when all three
+# hold.
+#
 # Sourced, the file only defines its rule functions: the improve runner reads
 # the same rule from the copy the launch directory carries. Executed, it prints
 # the list.
@@ -110,6 +122,15 @@ list_unlanded_paths() {
   done
 }
 
+# Print the paths of one checkout's uncommitted and untracked state: the tracked change of the
+# tree and index, and every untracked path. A checkout whose HEAD has no commits yet still
+# lists its untracked paths; its tracked read prints nothing.
+list_dirty_paths() {
+  local worktree=$1
+  git -C "$worktree" diff --name-only HEAD
+  git -C "$worktree" ls-files --others --exclude-standard
+}
+
 # Print the paths of one checkout's uncommitted and untracked state that live
 # work changes: each path whose removal origin/main has landed since the
 # checkout's own merge base with main_ref stays off, because main's own deletion
@@ -128,8 +149,7 @@ list_worktree_directory_paths() {
   local -A landed_removals=()
   while IFS= read -r path; do
     paths+=("$path")
-  done < <(git -C "$worktree" diff --name-only HEAD
-    git -C "$worktree" ls-files --others --exclude-standard)
+  done < <(list_dirty_paths "$worktree")
   if [[ ${#paths[@]} -eq 0 ]]; then
     return 0
   fi
@@ -152,6 +172,100 @@ list_worktree_directory_paths() {
   done
 }
 
+# Print whether a process runs in one worktree: `yes` when a process's working directory is the
+# worktree or a path inside it, `no` when none does, `unreadable` when the process table cannot
+# be read. The process table owns the process condition. A process of another user hides its
+# working directory from this read, and such a directory cannot be this worktree's, so an
+# unreadable entry is skipped.
+worktree_process_state() {
+  local worktree=$1
+  local proc target
+  if [[ ! -d /proc ]]; then
+    printf 'unreadable\n'
+    return 0
+  fi
+  for proc in /proc/[0-9]*/cwd; do
+    [[ -e $proc ]] || continue
+    target=$(readlink "$proc") || continue
+    if [[ $target == "$worktree" || $target == "$worktree"/* ]]; then
+      printf 'yes\n'
+      return 0
+    fi
+  done
+  printf 'no\n'
+}
+
+# One field of a run record's metadata file. The store writes the record as JSON, pretty or on
+# one line, so one line read settles the field; a record without the field prints nothing.
+run_record_field() {
+  local record=$1
+  local field=$2
+  sed -n "s/.*\"$field\": *\"\\([^\"]*\\)\".*/\\1/p" "$record"
+}
+
+# Read the run records that name one of the candidate worktrees, and record per worktree whether
+# its task run is closed: `run_closed_state[worktree]` is 1 when it is. The run record owns the
+# run's lifecycle. The store writes one metadata file per run under the profile home's sessions,
+# and every run that worked in a worktree records its path as its worktree_path; a retry records
+# the same path, so several records can name one worktree, and the newest record decides: the
+# run is closed when that record carries an ended_at. A worktree no record names gets no entry,
+# and its claim stands, because the rule drops a claim only when all three conditions hold.
+#
+# One pass answers every candidate: the grep names the records whose text names a candidate, and
+# the per-record reads settle the three fields. A missing profile home or sessions directory
+# leaves the condition unreadable, and the script stops with an error naming it.
+declare -A run_closed_state=()
+declare -A run_newest_started=()
+
+read_run_records() {
+  local candidate record worktree started ended
+  local -a patterns=() records=()
+  if (( $# == 0 )); then
+    return 0
+  fi
+  if [[ -z ${CHARLIEBOT_HOME:-} ]]; then
+    printf 'cannot read the run-record condition: CHARLIEBOT_HOME is unset\n' >&2
+    exit 1
+  fi
+  if [[ ! -d $CHARLIEBOT_HOME/sessions ]]; then
+    printf 'cannot read the run-record condition: %s/sessions is missing\n' "$CHARLIEBOT_HOME" >&2
+    exit 1
+  fi
+  for candidate in "$@"; do
+    patterns+=(-e "$candidate")
+  done
+  while IFS= read -r record; do
+    records+=("$record")
+  done < <(find "$CHARLIEBOT_HOME/sessions" -mindepth 5 -maxdepth 5 -type f -name metadata.json -print0 |
+    xargs -0 -r grep -lF "${patterns[@]}")
+  for record in "${records[@]}"; do
+    worktree=$(run_record_field "$record" worktree_path) || {
+      printf 'cannot read the run-record condition: %s is unreadable\n' "$record" >&2
+      exit 1
+    }
+    [[ -n $worktree ]] || continue
+    started=$(run_record_field "$record" started_at) || {
+      printf 'cannot read the run-record condition: %s is unreadable\n' "$record" >&2
+      exit 1
+    }
+    ended=$(run_record_field "$record" ended_at) || {
+      printf 'cannot read the run-record condition: %s is unreadable\n' "$record" >&2
+      exit 1
+    }
+    for candidate in "$@"; do
+      [[ $candidate == "$worktree" ]] || continue
+      if [[ -z ${run_newest_started[$candidate]:-} || $started > ${run_newest_started[$candidate]} ]]; then
+        run_newest_started[$candidate]=$started
+        if [[ -n $ended ]]; then
+          run_closed_state[$candidate]=1
+        else
+          unset "run_closed_state[$candidate]"
+        fi
+      fi
+    done
+  done
+}
+
 list_open_pull_requests() {
   local number
   local head
@@ -165,10 +279,23 @@ list_open_pull_requests() {
     done
 }
 
+# Print the committed and uncommitted paths of every worktree branch.
+#
+# The committed side keeps its rule per branch: a branch whose commits all
+# landed names no committed path, and an unlanded branch names each path whose
+# branch version is missing from origin/main's history, with a path whose
+# removal origin/main has landed left off. The worktree directory's
+# uncommitted and untracked paths follow the same landed-removal rule, and a
+# worktree whose branch landed, whose directory no process runs in, and whose
+# task run is closed names none of them; a stale entry may not have the
+# directory at all.
+#
+# The run records are read once for every worktree that passes the other two
+# conditions and holds an uncommitted change, so the store answers one pass
+# per list instead of one pass per worktree.
 list_worktree_branches() {
-  local worktree=
-  local branch=
-  local line
+  local -a worktrees=() branches=() merge_bases=() landed=() candidates=()
+  local worktree= branch= line index merge_base worktree_path
   while IFS= read -r line; do
     case $line in
       worktree\ *)
@@ -180,39 +307,74 @@ list_worktree_branches() {
         ;;
       '')
         if [[ -n $branch ]]; then
-          list_worktree_branch "$worktree" "$branch"
+          worktrees+=("$worktree")
+          branches+=("$branch")
         fi
         ;;
     esac
   done < <(git -C "$main_root" worktree list --porcelain)
-}
 
-# Print the committed and uncommitted paths of one worktree branch.
-#
-# The merge base with origin/main bounds the branch's own work. A branch whose
-# commits all landed claims no committed path; otherwise each committed path is
-# claimed only while its branch version is missing from origin/main's history,
-# and a path whose removal origin/main has landed is not named. The worktree
-# directory's uncommitted and untracked paths are live whatever origin/main
-# holds at the branch's version, except the paths whose removal origin/main has
-# landed; a stale entry may not have the directory at all.
-list_worktree_branch() {
-  local worktree=$1
-  local branch=$2
-  local merge_base
-  if [[ $branch == "$own_prefix"* ]]; then
-    return
-  fi
-  if ! merge_base=$(git -C "$main_root" merge-base "$main_ref" "$branch"); then
-    printf 'skip branch %s: no merge base with origin/main\n' "$branch" >&2
-    return
-  fi
-  if ! commits_landed "$main_root" "$main_ref" "$merge_base" "$branch"; then
-    list_unlanded_paths "$main_root" "$main_ref" "$merge_base" "$branch"
-  fi
-  if [[ -d $worktree ]]; then
-    list_worktree_directory_paths "$main_root" "$main_ref" "$worktree"
-  fi
+  for index in "${!worktrees[@]}"; do
+    worktree=${worktrees[index]}
+    branch=${branches[index]}
+    if [[ $branch == "$own_prefix"* ]]; then
+      landed[index]=own
+      continue
+    fi
+    if ! merge_base=$(git -C "$main_root" merge-base "$main_ref" "$branch"); then
+      printf 'skip branch %s: no merge base with origin/main\n' "$branch" >&2
+      landed[index]=skip
+      continue
+    fi
+    merge_bases[index]=$merge_base
+    if commits_landed "$main_root" "$main_ref" "$merge_base" "$branch"; then
+      landed[index]=yes
+    else
+      landed[index]=no
+    fi
+  done
+
+  # The process condition comes before the run-record read, because a worktree
+  # with a process in it keeps its claim without reading the store.
+  for index in "${!worktrees[@]}"; do
+    if [[ ${landed[index]} != yes ]]; then
+      continue
+    fi
+    worktree=${worktrees[index]}
+    [[ -d $worktree ]] || continue
+    local -a dirty=()
+    while IFS= read -r worktree_path; do
+      dirty+=("$worktree_path")
+    done < <(list_dirty_paths "$worktree")
+    if (( ${#dirty[@]} == 0 )); then
+      continue
+    fi
+    case $(worktree_process_state "$worktree") in
+      no) candidates+=("$worktree") ;;
+      yes) : ;;
+      *)
+        printf 'cannot read the process condition for worktree %s: /proc is missing\n' "$worktree" >&2
+        exit 1
+        ;;
+    esac
+  done
+  read_run_records "${candidates[@]}"
+
+  for index in "${!worktrees[@]}"; do
+    worktree=${worktrees[index]}
+    branch=${branches[index]}
+    case ${landed[index]} in
+      own | skip)
+        continue
+        ;;
+      no)
+        list_unlanded_paths "$main_root" "$main_ref" "${merge_bases[index]}" "$branch"
+        ;;
+    esac
+    if [[ -d $worktree && ${run_closed_state[$worktree]:-0} != 1 ]]; then
+      list_worktree_directory_paths "$main_root" "$main_ref" "$worktree"
+    fi
+  done
 }
 
 # Executed, the script prints the list; sourced, the block above already defined

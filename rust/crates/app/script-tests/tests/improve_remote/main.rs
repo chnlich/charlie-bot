@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use charliebot_shell_harness as harness;
 use sha2::{Digest as _, Sha256};
-use world::{DIRECTION, GATEWAY_TOKEN, World};
+use world::{DIRECTION, GATEWAY_TOKEN, SESSION_ID, World};
 
 /// The prompt the server writes to the launcher's standard input for a plain-text run.
 const PROMPT: &str = "Improve one topic in the performance direction.\nReply with the word OK.\n";
@@ -1309,6 +1309,163 @@ fn a_branch_landed_by_a_squash_merge_names_no_committed_file() {
   assert!(
     !run.stdout.lines().any(|line| line == "topic.md"),
     "the in-flight list names the squash-merged branch's file:\n{}",
+    run.describe()
+  );
+}
+
+/// Writes one run record into the world's profile home, whose `ended_at` is set only when `ended` is.
+fn write_run_record(world: &World, run_id: &str, worktree: &std::path::Path, ended: Option<&str>) {
+  let run_dir = world.profile_home.join(format!("sessions/{SESSION_ID}/data/runs/{run_id}"));
+  fs::create_dir_all(&run_dir).expect("the run record directory");
+  let ended_value = ended.map(|value| format!("\"{value}\"")).unwrap_or_else(|| "null".to_string());
+  fs::write(
+    run_dir.join("metadata.json"),
+    format!(
+      "{{\n  \"id\": \"{run_id}\",\n  \"worktree_path\": \"{}\",\n  \"started_at\": \"2026-11-10T01:00:00.000000Z\",\n  \"ended_at\": {ended_value}\n}}\n",
+      worktree.display()
+    ),
+  )
+  .expect("the run record");
+}
+
+/// One worktree on a branch whose commit has landed, holding an uncommitted change, a staged
+/// change and an untracked file, as a kept task worktree does after its run ended.
+fn landed_worktree_with_uncommitted_state(world: &World, name: &str) -> std::path::PathBuf {
+  let checkout = world.sandbox.root().join(name);
+  world
+    .git(&world.repo, &["worktree", "add", "-q", &checkout.display().to_string(), "-b", &format!("charliebot/{name}")]);
+  fs::write(checkout.join("topic.md"), "topic\n").expect("the topic's file");
+  world.git(&checkout, &["add", "-A"]);
+  world.git(&checkout, &["commit", "-q", "-m", &format!("synthetic {name} topic")]);
+  fs::write(world.repo.join("topic.md"), "topic\n").expect("the squash commit's content");
+  world.git(&world.repo, &["add", "-A"]);
+  world.git(&world.repo, &["commit", "-q", "-m", &format!("synthetic {name} topic, retitled (#9)")]);
+  world.git(&world.repo, &["push", "-q", "origin", "main"]);
+  fs::write(checkout.join("topic.md"), "uncommitted\n").expect("the uncommitted change");
+  fs::write(checkout.join("staged.md"), "staged\n").expect("the staged change");
+  world.git(&checkout, &["add", "staged.md"]);
+  fs::write(checkout.join("untracked.md"), "untracked\n").expect("the untracked file");
+  checkout
+}
+
+/// Runs the in-flight list out of its checkout, as the launcher does.
+fn run_inflight_list(world: &World) -> harness::Run {
+  let mut command = harness::command("bash", &world.env());
+  command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg("improve/perf/");
+  harness::run(&mut command)
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_landed_process_free_worktree_whose_run_closed_names_no_uncommitted_path() {
+  let world = World::new();
+  let checkout = landed_worktree_with_uncommitted_state(&world, "closed-run");
+  // The newest run record naming the worktree carries an ended_at, as a closed task run does.
+  write_run_record(&world, "11111111-0000-0000-0000-000000000001", &checkout, Some("2026-11-10T02:00:00.000000Z"));
+
+  let run = run_inflight_list(&world);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  for listed in ["topic.md", "staged.md", "untracked.md"] {
+    assert!(
+      !run.stdout.lines().any(|line| line == listed),
+      "the in-flight list names the closed run's worktree path {listed}:\n{}",
+      run.describe()
+    );
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn an_open_run_keeps_a_landed_worktrees_uncommitted_paths_named() {
+  let world = World::new();
+  let checkout = landed_worktree_with_uncommitted_state(&world, "open-run");
+  // The newest run record naming the worktree carries no ended_at, as a live task run does.
+  write_run_record(&world, "11111111-0000-0000-0000-000000000002", &checkout, None);
+
+  let run = run_inflight_list(&world);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  for listed in ["topic.md", "staged.md", "untracked.md"] {
+    assert!(
+      run.stdout.lines().any(|line| line == listed),
+      "the in-flight list drops the open run's worktree path {listed}:\n{}",
+      run.describe()
+    );
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn an_unlanded_branch_keeps_its_worktrees_uncommitted_paths_named() {
+  let world = World::new();
+  // The branch holds a commit origin/main does not carry, so its worktree's uncommitted state
+  // stays named even though the run record is closed.
+  let checkout = world.sandbox.root().join("unlanded");
+  world.git(&world.repo, &["worktree", "add", "-q", &checkout.display().to_string(), "-b", "charliebot/unlanded"]);
+  fs::write(checkout.join("topic.md"), "topic\n").expect("the topic's file");
+  world.git(&checkout, &["add", "-A"]);
+  world.git(&checkout, &["commit", "-q", "-m", "synthetic unlanded topic"]);
+  fs::write(checkout.join("dirty.md"), "uncommitted\n").expect("the uncommitted change");
+  write_run_record(&world, "11111111-0000-0000-0000-000000000003", &checkout, Some("2026-11-10T02:00:00.000000Z"));
+
+  let run = run_inflight_list(&world);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(
+    run.stdout.lines().any(|line| line == "dirty.md"),
+    "the in-flight list drops the unlanded branch's worktree path:\n{}",
+    run.describe()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_worktree_no_run_record_names_keeps_its_uncommitted_paths_named() {
+  let world = World::new();
+  // The worktree is not any run's worktree_path, so the run-record condition cannot hold, and
+  // the rule that drops a claim only when all three conditions hold keeps the paths named.
+  let _checkout = landed_worktree_with_uncommitted_state(&world, "no-record");
+
+  let run = run_inflight_list(&world);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  for listed in ["topic.md", "staged.md", "untracked.md"] {
+    assert!(
+      run.stdout.lines().any(|line| line == listed),
+      "the in-flight list drops the unrecorded worktree path {listed}:\n{}",
+      run.describe()
+    );
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_process_in_a_landed_worktree_keeps_its_uncommitted_paths_named() {
+  let world = World::new();
+  let checkout = landed_worktree_with_uncommitted_state(&world, "with-process");
+  // The run is closed, so only the process keeps the claim.
+  write_run_record(&world, "11111111-0000-0000-0000-000000000004", &checkout, Some("2026-11-10T02:00:00.000000Z"));
+  let mut process = std::process::Command::new("bash")
+    .arg("-c")
+    .arg("exec sleep 30")
+    .current_dir(&checkout)
+    .spawn()
+    .expect("the worktree process");
+  let cwd = format!("/proc/{}/cwd", process.id());
+  assert!(
+    wait_until(std::time::Duration::from_secs(5), || { fs::read_link(&cwd).is_ok_and(|target| target == checkout) }),
+    "the worktree process did not enter the worktree"
+  );
+
+  let run = run_inflight_list(&world);
+
+  process.kill().expect("stop the worktree process");
+  process.wait().expect("reap the worktree process");
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert!(
+    run.stdout.lines().any(|line| line == "topic.md"),
+    "the in-flight list drops the worked-in worktree's uncommitted path:\n{}",
     run.describe()
   );
 }

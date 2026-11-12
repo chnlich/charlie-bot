@@ -48,7 +48,7 @@ impl MimeTypes {
     }
   }
 
-  /// Read `mime.types` text: each line names a type then its extensions; `#` starts a comment.
+  /// The types read from `mime.types` text: each line names a type then its extensions; `#` starts a comment.
   fn read_mime_types(&mut self, text: &str) {
     for line in text.lines() {
       let words: Vec<&str> = line.split_whitespace().take_while(|word| !word.starts_with('#')).collect();

@@ -82,7 +82,7 @@ impl ProxySettings {
   }
 }
 
-/// Build the selected proxy configuration once for an outbound client.
+/// The selected proxy configuration, built once for an outbound client.
 pub(crate) fn proxy_settings(settings: &Settings) -> Result<Option<ProxySettings>, ClientError> {
   let Some(raw_url) = settings.https_proxy.as_deref() else {
     return Ok(None);

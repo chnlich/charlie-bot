@@ -21,12 +21,12 @@ pub struct CodexOptions {
   pub model_auto_compact_token_limit: Option<i64>,
 }
 
-/// Validates the codex fields of one backend option at config load (`register_option_model`).
+/// The codex fields of one backend option, validated at config load (`register_option_model`).
 pub fn option_model(fields: &Mapping) -> Result<(), String> {
   parse(fields).map(|_| ())
 }
 
-/// Parses the codex fields. A key that is not a codex field fails.
+/// The codex fields of one option's mapping; a key that is not a codex field fails.
 pub fn parse(fields: &Mapping) -> Result<CodexOptions, String> {
   let mut options = CodexOptions::default();
   for (key, value) in fields {

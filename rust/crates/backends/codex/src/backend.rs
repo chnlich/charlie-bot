@@ -282,7 +282,7 @@ pub fn toml_string_value(text: &str) -> String {
   value
 }
 
-/// Reads the one-shot's stdout to its end. Returns the assistant text, the first structured error and the exit code.
+/// The assistant text, the first structured error and the exit code, read from the one-shot's stdout to its end.
 async fn collect(
   child: &mut AgentChild,
   stdout: AgentPipeReader,
@@ -322,7 +322,7 @@ async fn collect(
   Ok((str_methods::strip(&parts.concat()).to_string(), structured_error, exit_code(status)))
 }
 
-/// Reads the whole stderr so the child never blocks on a full pipe, and keeps its first bytes.
+/// The child's stderr read to its end so it never blocks on a full pipe, and its first bytes kept.
 async fn read_bounded_stderr(mut stderr: AgentPipeReader) -> anyhow::Result<Vec<u8>> {
   let mut captured = Vec::new();
   let mut chunk = [0u8; 8192];

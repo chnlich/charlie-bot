@@ -32,7 +32,7 @@ use factory::CodexFactory;
 /// The package label the composition list registers this backend's package under.
 pub const PACKAGE: &str = "backends.codex";
 
-/// Registers the codex backend type, its usage resolver, its usage source, and the source's attribution.
+/// The registration of the codex backend type, its usage resolver, its usage source, and the source's attribution.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   let host = registration_step(PACKAGE, CodexHost::from_process())?;
   register_with_host(registry, &host)

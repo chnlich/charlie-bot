@@ -100,19 +100,19 @@
       1. Problem / Goal — one or two sentences stating what the plan resolves, plus at most one naming the
                     non-goals; this section is their only home. State the outcome in its own words: explanation
                     and support (the why, the how, the evidence) live in the sections built for them.
-                    Registration enforces a weighted length limit here (CJK counts double, budget 240).
       2. Context — establish the minimum complete mental model before the design: how the relevant system
                     currently works, why the problem occurs, its impact, and the relationships among the
                     components involved. Every current-reality claim carries a checkable source anchor.
+                    Supporting background and extended evidence follow the canonical Length contract.
       3. High Level Solution: the overall mechanism, component relationships, data flow, state ownership,
-                    and the high-level observable contract behavior the user judges the design by. Keep it
-                    short: describe the design; concrete detail belongs in 4.2.
+                    and the high-level observable contract the user judges. Include one figure and one worked example
+                    the reader can check by hand.
+                    Supporting detail belongs in 4.2 and follows the canonical Length contract.
       4. Detailed Design — two read layers:
          4.1 Schema: the persisted data structures (fields, types, meaning) and the request/response of
-                    externally consumed APIs and CLI commands. Present each definition as the concrete
-                    artifact itself: important definitions stay visible, and the rest fold into a
-                    details-layer whose summary names the thing defined. A plan with no persisted
-                    structures and no API change keeps 4.1 as a one-line declaration saying so.
+                    externally consumed APIs and CLI commands. Keep the decision-level contract visible and put
+                    supporting schemas and data tables in folded blocks whose summaries name the thing defined.
+                    A plan with no persisted structures and no API change keeps 4.1 as a one-line declaration saying so.
          4.2 Design Details: the internal mechanisms, algorithms, concurrency, compatibility, acceptance
                     criteria, and verification approach, organized by subsystem or data flow.
       5. Trade-offs — numbered choices the user must judge, rendered as div.fork blocks. An open item contains
@@ -126,7 +126,7 @@
                     states the reason a still picture cannot show the difference.
                     Every open item also carries a folded explainer, a details.details-layer block
                     collapsed by default, so the reader can verify the recommendation from the block alone while
-                    the decision surface stays short: it retells the decision from scratch, glosses per the
+                    the choice and each consequence stay visible: it retells the decision from scratch, glosses per the
                     Vocabulary rule (prompts/master.md), walks the causal chain through one worked example small
                     enough to check by hand, and anchors each fact to its source. A resolved item keeps only the question and resolution
                     (p.resolved); never record rejected alternatives. When nothing needs judging, keep one line
@@ -135,15 +135,9 @@
                     open Trade-off.
       6. Other Details — a collapsed list of the autonomous decisions, each with its reason.
 
-      Shrink rule: depth scales with complexity. Any section may shrink to a sentence. 4.2 Design Details and
-                    6. Other Details may be empty and omitted entirely. Section order and numbering never change.
-      Page budget: the page as it opens is the complete decision surface, aimed at a 2000 px height at the
-                    probe's 1280 px render width; registration accepts any height and the assertions report
-                    the height against that target.
-                    The open page holds the important points and the folds hold the detail.
-                    Shrink or split a plan whose minimum alone overflows.
-                    When headroom runs short, delete the least important, fold the less important, and keep the
-                    important visible.
+      Section use: keep the section order and numbering. Sections 4.2 Design Details and 6. Other Details may be empty
+                    and omitted.
+      Page layers follow the first-draft contract in prompts/master.md under "Explaining to the user" → "Length".
       Foot: use div.foot for the interaction rules. Reply by Trade-off number to override a recommendation or
                     resolution; unmentioned items accept the recommendation. Any Other Details entry the user
                     asks to control is promoted and then joins the approval object.
@@ -182,7 +176,7 @@
     <section class="plan-section">
       <h2><span class="n">4</span> Detailed Design</h2>
 
-      <h3><span class="sn read">4.1</span>Schema<span class="layer">precision-read layer</span></h3>
+      <h3><span class="sn read">4.1</span>Schema</h3>
       <p>Request: <code>charliebot triggers list</code>, no arguments, session resolved from the current working directory. Response: exit 0 with one row per trigger in the columns below, or the literal <code>no triggers</code>.</p>
       <details class="details-layer">
         <summary>Response columns of triggers list</summary>
@@ -196,7 +190,7 @@
         </table>
       </details>
 
-      <h3><span class="sn">4.2</span>Design Details<span class="layer">optional-read layer</span></h3>
+      <h3><span class="sn">4.2</span>Design Details</h3>
       <ul>
         <li><b>CLI integration:</b> register <code>triggers list</code> in the unified command map and reuse cwd-based session resolution.</li>
         <li><b>Read path:</b> ask <code>TriggerManager</code> for records, derive display-only fields, then render aligned plain-text columns; a malformed record surfaces the loader error instead of being skipped.</li>

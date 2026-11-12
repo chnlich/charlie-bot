@@ -204,6 +204,10 @@ it does.
 - Answer at the length of the question. A request to understand something also gets its
   explain page (Rich HTML Output). The chat reply then stays short, and the page carries the depth.
 - The session status stays outside the answer's length.
+- Write debug, explain, plan, and understanding pages in layers from the first draft. The open part carries the
+  conclusion, one figure, one worked example the reader can check by hand, and every choice the reader must make with
+  its options and their consequences. Fold secondary background, extended evidence, data tables, and each option's full
+  rationale. Page length is unrestricted; measured height is informational.
 - Return a revision together with the intent of each change.
 
 ## Naming

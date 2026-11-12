@@ -114,18 +114,18 @@
       GRAMMAR: section semantics. Headings are content names: each states what its section does before the
       body is read.
 
-      Opening triad (unnumbered, first screen): a div.triad shows what the reader believes or asks and the
+      Page layers follow the first-draft contract in prompts/master.md under "Explaining to the user" → "Length".
+
+      Opening triad (unnumbered): a div.triad shows what the reader believes or asks and the
       one-sentence answer.
 
       1 affirm: where the reader's model is right and the exact step where it stops, with evidence.
-      2 mechanism: the missing mechanism, why before what. Split it into div.step blocks, each with a
-        content-name h3, one drawn figure (inline svg or img), and its text. Put every paragraph of the
-        section in a step, except one opening paragraph. A div.flow box strip may sit beside the figure.
-      3 worked example: enumerate every variable dimension the question names, with its real sampled value and
-        its gloss. Give one div.example.e2e block end to end and one div.example.contrast block with a
-        different result, each anchored with a span.src.
+      2 mechanism: the missing mechanism, why before what. Show its central step with one drawn figure and text;
+        put supporting steps and evidence in folded blocks under the canonical Length contract.
+      3 worked example: use the question's real values and explain each variable needed to check the result by hand.
+        Anchor the example with a span.src; put a contrasting result and its supporting evidence in folded blocks.
       4 reconcile: recompute the reader's own number inside the corrected model, so the answer holds on the
-        end-to-end example's numbers.
+        worked example's numbers.
       5 boundaries: epistemic labels (fact / inference / open) ride inline at each claim's first occurrence;
         this section carries what stays open and where a new anomaly routes.
       Foot: the exchange closes when the reader confirms the question is answered, and a renewed miss signal

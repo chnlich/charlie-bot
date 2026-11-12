@@ -88,16 +88,18 @@
       Reuse this file's <head> and <style> verbatim; replace the <main> content following the
       grammar below.
 
+      Page layers follow the first-draft contract in prompts/master.md under "Explaining to the user" → "Length".
+
       Shared blocks: reuse plan_template.html's block kit where useful, including p, ul/li, ol/li,
       blockquote, pre, table, td, div.callout, div.flow, div.fork with its folded explainer, and
       div.meta > span.mtag chips.
 
       The header's p.sub carries the bottom line (the causal conclusion plus
       its epistemic state, in one or two sentences), so the reader can stop after the header. Then
-      come five sections in a fixed order and numbering; any section may shrink to one sentence.
+      come five sections in a fixed order and numbering.
 
       1 "What did they hit?": the phenomenon in the reader's words, one checkable observation.
-      2 "How does this normally work?": minimal mechanism model; structure diagram for spatial claims.
+      2 "How does this normally work?": the core mechanism and one diagram; use a spatial diagram for spatial claims.
       3 "Why did it happen?": causal chain end to end, one hand-checkable worked example.
       4 "Evidence and boundaries": separate confirmed facts from open hypotheses, with span.tag.fact and
          span.tag.hyp (semantics: prompts/sitrep_template.html's GRAMMAR, their canonical home), and state

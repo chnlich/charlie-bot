@@ -114,8 +114,9 @@ Before you share a page or register a plan version, run the assertions:
 
 When an assertion fails, fix the page and run the assertions again.
 Plan registration runs the same assertions.
-The page-height line reports the measured height against the 2000 px target.
-The page-height assertion passes at any height.
+The page-height line reports the measured height against the 2000 px target when available; when it cannot measure,
+the line reports why.
+Page height and measurement availability never block page sharing or plan registration.
 When a gloss puts the page over the target, keep the gloss.
 
 The cold read is one model pass without context. It reads only the page and answers the eight questions in

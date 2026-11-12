@@ -31,7 +31,7 @@ const FACT_ANCHORED: &str = "fact-anchored";
 const REQ_CHIPS: &str = "req-chips";
 const RUN_STATED: &str = "run-stated";
 const RENDER_PATH: &str = "render-path";
-const GOAL_BUDGET: &str = "goal-budget";
+const GOAL_SECTION: &str = "goal-section";
 const PAGE_HEIGHT: &str = "page-height";
 const ORDINAL_NAMED: &str = "ordinal-named";
 const BYTE_INTEGRITY: &str = "byte-integrity";
@@ -42,7 +42,6 @@ const LINK_RENDERABLE: &str = user_text_checks::LINK_RENDERABLE;
 /// The registered genres in the order the parser states them; `waiting` exists only here.
 pub const ARTIFACT_GENRES: [&str; 6] = ["plan", "understanding", "sitrep", "debug", "explain", "waiting"];
 
-const GOAL_WEIGHTED_BUDGET: usize = 240;
 /// The shape and text elements that `explain-figures` counts in an svg figure. A `div.flow` box strip is not a figure.
 const FIGURE_ELEMENT_TAGS: &[&str] = &["rect", "circle", "ellipse", "line", "polyline", "polygon", "path", "text"];
 /// The fewest shape or text elements one svg figure holds.
@@ -146,7 +145,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       FORK_OPTIONS,
       FORK_DEMOS,
       FORK_EXPLAINER,
-      GOAL_BUDGET,
+      GOAL_SECTION,
       PAGE_HEIGHT,
       ORDINAL_NAMED,
       TRACKER_ID_NEARBY,
@@ -262,8 +261,7 @@ pub fn run_fork_assertions(page: &Path, home: &Path) -> anyhow::Result<Option<Ve
   Ok(Some(outcomes))
 }
 
-static GOAL_SECTION_RE: LazyLock<Regex> = LazyLock::new(|| compile_regex(r"(?s)Problem / Goal</h2>(.*?)</section>"));
-static TAG_RE: LazyLock<Regex> = LazyLock::new(|| compile_regex(r"<[^>]+>"));
+static GOAL_SECTION_RE: LazyLock<Regex> = LazyLock::new(|| compile_regex(r"(?s)Problem / Goal</h2>.*?</section>"));
 static ORD: LazyLock<Regex> = LazyLock::new(|| compile_regex(ORDINAL_PATTERN));
 static INTERNAL_UNLESS_QUALIFIED: LazyLock<Regex> = LazyLock::new(|| compile_regex(INTERNAL_UNLESS_QUALIFIED_PATTERN));
 static QUAL: LazyLock<Regex> = LazyLock::new(|| compile_regex(QUAL_PATTERN));
@@ -416,7 +414,7 @@ fn run_assertions_sync_with_user_text(
       REQ_CHIPS => check_req_chips,
       RUN_STATED => check_run_stated,
       RENDER_PATH => check_render_path,
-      GOAL_BUDGET => check_goal_budget,
+      GOAL_SECTION => check_goal_section,
       PAGE_HEIGHT => check_page_height,
       ORDINAL_NAMED => check_ordinal_named,
       other => unreachable!("{other} is an assertion the sets do not name"),
@@ -921,85 +919,44 @@ fn check_fork_explainer(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOu
   Ok(failures)
 }
 
-fn check_goal_budget(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
+fn check_goal_section(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
   let source = fs::read_to_string(context.artifact)
     .with_context(|| format!("could not read artifact {}", context.artifact.display()))?;
-  let Some(captures) = GOAL_SECTION_RE.captures(&source)? else {
+  if !GOAL_SECTION_RE.is_match(&source)? {
     return Ok(vec![outcome(
-      GOAL_BUDGET,
+      GOAL_SECTION,
       false,
       format!(
         "artifact {} has no 'Problem / Goal' section",
         text_repr::str_repr(&context.artifact.file_name().expect("an artifact path has a name").to_string_lossy())
       ),
     )]);
-  };
-  let body = captures.get(1).expect("the goal expression has one capture").as_str();
-  let body = revision_mark_regex("div", "revnote").replace_all(body, "");
-  let body = revision_mark_regex("span", "revbadge").replace_all(&body, "");
-  let body = TAG_RE.replace_all(&body, "");
-  let decoded = unescape(&body);
-  let text = str_methods::collapse_whitespace(&decoded);
-  let weighted = text.chars().count()
-    + text
-      .chars()
-      .filter(|character| matches!(*character as u32, 0x3000..=0x303f | 0x4e00..=0x9fff | 0xff00..=0xffef))
-      .count();
-  if weighted > GOAL_WEIGHTED_BUDGET {
-    Ok(vec![outcome(
-      GOAL_BUDGET,
-      false,
-      format!(
-        "plan goal is {weighted} weighted chars (budget {GOAL_WEIGHTED_BUDGET}): keep the goal and non-goals; demote diagnosis, thresholds, paths, and justifications to Context or 4.1"
-      ),
-    )])
-  } else {
-    Ok(vec![outcome(GOAL_BUDGET, true, format!("{weighted} weighted chars (budget {GOAL_WEIGHTED_BUDGET})"))])
   }
-}
-
-fn revision_mark_regex(tag: &str, class: &str) -> Regex {
-  compile_regex(&format!(
-    r#"(?s)<{tag}\b(?=[^>]*(?<!\S)class\s*=\s*(?:(?:"(?:[^"]*\s)?{class}(?:\s[^"]*)?")|(?:'(?:[^']*\s)?{class}(?:\s[^']*)?')|{class}(?:\s|>)))[^>]*>.*?</{tag}>"#
-  ))
+  Ok(vec![outcome(GOAL_SECTION, true, "Problem / Goal section present")])
 }
 
 fn check_page_height(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
-  if context.chrome_bin.is_empty() {
-    return Ok(vec![outcome(
-      PAGE_HEIGHT,
-      false,
-      "headless_chrome_bin is required for plan registration: set it in the host config.yaml to the absolute path of a headless-chromium-compatible binary",
-    )]);
-  }
-  let chrome_bin = PathBuf::from(context.chrome_bin);
-  if !chrome_bin.exists() {
-    return Ok(vec![outcome(
-      PAGE_HEIGHT,
-      false,
-      format!(
-        "headless_chrome_bin is required for plan registration but the configured path does not exist: {}",
-        chrome_bin.display()
-      ),
-    )]);
-  }
-  let height = match measure_page_height(&chrome_bin, context.artifact)? {
-    Ok(height) => height,
-    Err(message) => return Ok(vec![outcome(PAGE_HEIGHT, false, message)]),
-  };
-  if height > PAGE_HEIGHT_TARGET {
-    Ok(vec![outcome(
-      PAGE_HEIGHT,
-      true,
-      format!("{height} px: {} px over the {PAGE_HEIGHT_TARGET} px target", height - PAGE_HEIGHT_TARGET),
-    )])
+  let detail = if context.chrome_bin.is_empty() {
+    "not measured: headless_chrome_bin is not configured".to_owned()
   } else {
-    Ok(vec![outcome(PAGE_HEIGHT, true, format!("{height} px (target {PAGE_HEIGHT_TARGET})"))])
-  }
+    let chrome_bin = PathBuf::from(context.chrome_bin);
+    if !chrome_bin.exists() {
+      format!("not measured: configured headless_chrome_bin path does not exist: {}", chrome_bin.display())
+    } else {
+      match measure_page_height(&chrome_bin, context.artifact) {
+        Ok(Ok(height)) if height > PAGE_HEIGHT_TARGET => {
+          format!("{height} px: {} px over the {PAGE_HEIGHT_TARGET} px target", height - PAGE_HEIGHT_TARGET)
+        }
+        Ok(Ok(height)) => format!("{height} px (target {PAGE_HEIGHT_TARGET})"),
+        Ok(Err(message)) => format!("not measured: {message}"),
+        Err(error) => format!("not measured: {error:#}"),
+      }
+    }
+  };
+  Ok(vec![outcome(PAGE_HEIGHT, true, detail)])
 }
 
-/// The inner error is a renderer failure; the check reports it as a failed assertion. Any other error,
-/// such as a probe that cannot be written, propagates and fails the check run.
+/// Renderer, probe setup, and cleanup failures are returned for the page-height report without gating the page.
 fn measure_page_height(chrome_bin: &Path, artifact: &Path) -> anyhow::Result<Result<i32, String>> {
   let probe = artifact
     .parent()
@@ -1865,32 +1822,26 @@ mod tests {
 
   #[test]
   #[ignore = "integration"]
-  fn test_page_height_without_a_renderer_fails() {
+  fn test_page_height_without_a_renderer_reports_without_failing() {
     let directory = tempfile::tempdir().unwrap();
     let page = write_page(directory.path(), "plan.html", &plan_page("Ship the fix."));
     let outcomes = run_plan(&page, "");
-    assert_eq!(
-      by_name(&outcomes, PAGE_HEIGHT)[0].detail,
-      "headless_chrome_bin is required for plan registration: set it in the host config.yaml to the absolute path of a headless-chromium-compatible binary"
-    );
-    assert!(!by_name(&outcomes, PAGE_HEIGHT)[0].passed);
+    assert_eq!(by_name(&outcomes, PAGE_HEIGHT)[0].detail, "not measured: headless_chrome_bin is not configured");
+    assert!(by_name(&outcomes, PAGE_HEIGHT)[0].passed);
   }
 
   #[test]
   #[ignore = "integration"]
-  fn test_page_height_with_missing_configured_path_uses_the_detail() {
+  fn test_page_height_with_missing_configured_path_reports_without_failing() {
     let directory = tempfile::tempdir().unwrap();
     let page = write_page(directory.path(), "plan.html", &plan_page("Ship the fix."));
     let chrome = directory.path().join("missing-chrome");
     let outcomes = run_plan(&page, chrome.to_str().unwrap());
     assert_eq!(
       by_name(&outcomes, PAGE_HEIGHT)[0].detail,
-      format!(
-        "headless_chrome_bin is required for plan registration but the configured path does not exist: {}",
-        chrome.display()
-      )
+      format!("not measured: configured headless_chrome_bin path does not exist: {}", chrome.display())
     );
-    assert!(!by_name(&outcomes, PAGE_HEIGHT)[0].passed);
+    assert!(by_name(&outcomes, PAGE_HEIGHT)[0].passed);
   }
 
   #[test]
@@ -1940,7 +1891,8 @@ mod tests {
     let page = write_page(directory.path(), "plan.html", &plan_page("Ship the fix."));
     let chrome = chrome_program(directory.path(), json!([{"stderr": "failure\n"}, {"exit": 1}]));
     let outcomes = run_assertions_sync("plan", &page, chrome.to_str().unwrap(), &repo_root()).unwrap();
-    assert!(!by_name(&outcomes, PAGE_HEIGHT)[0].passed);
+    assert!(by_name(&outcomes, PAGE_HEIGHT)[0].passed);
+    assert!(by_name(&outcomes, PAGE_HEIGHT)[0].detail.starts_with("not measured:"));
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
   }
 
@@ -1992,12 +1944,13 @@ mod tests {
 
   #[test]
   #[ignore = "integration"]
-  fn weighted_goal_counts_code_points_and_str_whitespace() {
+  fn goal_over_the_former_length_limit_has_no_length_assertion() {
     let directory = tempfile::tempdir().unwrap();
     let chrome = stub_chrome(directory.path(), 800);
-    let page = write_page(directory.path(), "plan.html", &plan_page("你\u{001c}好"));
+    let page = write_page(directory.path(), "plan.html", &plan_page(&"x".repeat(241)));
     let outcomes = run_plan(&page, chrome.to_str().unwrap());
-    assert_eq!(by_name(&outcomes, GOAL_BUDGET)[0].detail, "5 weighted chars (budget 240)");
+    assert!(by_name(&outcomes, GOAL_SECTION)[0].passed);
+    assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
   }
 
   #[test]

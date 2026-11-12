@@ -679,14 +679,10 @@ mod tests {
 
   #[tokio::test]
   #[ignore = "integration"]
-  async fn present_rejects_goal_over_budget_with_measured_value() {
+  async fn present_accepts_goal_over_the_former_length_limit() {
     let (_home, features) = plan_session("sess", None);
     write_plan_artifact(&features, "sess", "plan_01.html", &plan_page(&"x".repeat(241)));
-    let error = present_p1(&features, "sess", "artifacts/plan_01.html").await.unwrap_err();
-    assert!(
-      matches!(&error, VerbError::Refused(detail) if detail.contains("241 weighted chars (budget 240)")),
-      "{error:?}"
-    );
+    present_p1(&features, "sess", "artifacts/plan_01.html").await.unwrap();
   }
 
   #[tokio::test]

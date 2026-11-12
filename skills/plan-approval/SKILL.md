@@ -47,9 +47,9 @@ An understanding page lists the divergences of a request that admits several rea
 
 - The page is `artifacts/understanding_<slug>_v<n>.html`, reusing the head and style of
   `prompts/plan_template.html`. Six blocks: goal in one sentence carrying the why one level up; the
-  deliverable through two or three concrete examples; acceptance criteria, each a trigger
-  condition and an observable result in the page's natural language; non-goals; numbered
-  divergences rendered as `div.fork` blocks, each carrying its option lines outside folds
+  deliverable through one concrete worked example and one figure showing the main reading or outcome;
+  acceptance criteria, each a trigger condition and an observable result in the page's natural language; non-goals; numbered
+  divergences rendered as `div.fork` blocks, each carrying its options and their consequences outside folds
   and the fork grammar's folded explainer (block kit section 5, `prompts/plan_template.html`);
   Linear.
 - The Linear block appears only for a repo marked Linear-tracked on the memory entry
@@ -96,9 +96,9 @@ An understanding page lists the divergences of a request that admits several rea
   verifies each cited `path:line` and derived number before the page goes out.
 - The plan carries the understanding page's file path as a header meta chip;
   section 1 states the goal in its own words.
-- The page as it opens obeys the plan template's page budget (the BLOCK KIT comment in
-  `prompts/plan_template.html`); the always-visible minimum here is the goal sentence and
-  each divergence's question, option lines, recommendation, and trade lines.
+- Page layers follow the canonical first-draft contract in `prompts/master.md` under
+  "Explaining to the user" → "Length"; each divergence keeps its question, options, and consequences visible, with
+  its full rationale in the folded explainer.
 
 ## Plan
 
@@ -113,7 +113,8 @@ An understanding page lists the divergences of a request that admits several rea
 - An improve-loop plan follows this same contract; its approval object covers
   repo, goal, iterations, work branch, and merge-back — loop parameters with reasonable
   alternatives (iteration count, merge-back) make natural Trade-offs.
-- Keep the plan short: retain the decision, the necessary scope and the acceptance.
+- Draft the plan to the layering contract in `prompts/master.md` under "Explaining to the user" → "Length"; keep the
+  decision, necessary scope, and acceptance visible.
 - Put operational history in `$CHARLIEBOT_HOME/LESSONS.md`; put supporting detail behind links or folds.
 - A chat reply about a plan answers the question in at most five bullets and gives the page link.
   Detail stays on the page.

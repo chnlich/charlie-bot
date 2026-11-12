@@ -398,14 +398,19 @@ pub fn classify_member_failure(text: &str, quota_exhausted: Option<bool>) -> Mem
   }
 }
 
-/// Return whether an error text marks an authentication or model-access refusal. A `401` or `403` status counts only
-/// inside an `API Error` line and as a whole token, so `400 Bad Request` and the digits in a request id never match.
+/// Return whether an error text marks an authentication or model-access refusal. A `401` or `403` counts only as the
+/// status an `API Error` line states, so `400 Bad Request` and a request id that carries the same digits never match.
 pub fn is_access_refused_error(text: &str) -> bool {
   let lowered = text.to_lowercase();
   ACCESS_REFUSED_PATTERNS.iter().any(|pattern| lowered.contains(pattern))
-    || lowered
-      .lines()
-      .any(|line| line.contains("api error") && (contains_token(line, "401") || contains_token(line, "403")))
+    || lowered.lines().any(|line| matches!(api_error_status(line), Some("401" | "403")))
+}
+
+/// The status code that the first `API Error` on a line states: the first alphanumeric run after the marker.
+fn api_error_status(line: &str) -> Option<&str> {
+  let after = line.split_once("api error")?.1;
+  let status = after.trim_start_matches(|character: char| !character.is_alphanumeric());
+  status.split(|character: char| !character.is_alphanumeric()).next()
 }
 
 /// Return whether a Claude Code `result` event's text marks a spent quota. The caller has checked `is_error`.
@@ -923,6 +928,8 @@ mod tests {
     for text in [
       "400 Bad Request",
       "API Error: 400 Bad Request",
+      "API Error: 400 Bad Request (request_id: 401)",
+      "API Error: 400 Bad Request (request_id: 403-abc)",
       "Error code: 400 - invalid request (request_id: 0b401c7d-1e2f-4a5b-8c9d-0e1f2a3b4c5d)",
       "Error code: 400 - invalid request (request id req_401ab)",
       "Error code: 403 - forbidden by the proxy",

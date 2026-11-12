@@ -1,4 +1,14 @@
-  <style>{% include 'voice/voice.css' %}</style>
+  <style>{% include 'voice/voice.css' %}
+  /* The microphone and its backend caret keep the composer's control floor: their slate-600 boundary
+     draws 2.36:1 on the page's slate-900, under the 3:1 a control's boundary must meet. slate-500 draws
+     3.75:1 there, the same as the message box beside them, and slate-400 keeps the hover step. The mic's
+     run-state classes (border-amber-500 while starting, border-red-500 while recording) keep their own
+     borders; these rules cover the idle state only. */
+  #voice-btn:not(.border-amber-500):not(.border-red-500),
+  #voice-backend-btn { border-color: #64748b; }
+  #voice-btn:hover:not(.border-amber-500):not(.border-red-500),
+  #voice-backend-btn:hover:not(:disabled) { border-color: #94a3b8; }
+  </style>
   <script>
     const VOICE_BACKENDS = [
       {% for backend in voice_backends() %}

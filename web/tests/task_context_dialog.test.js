@@ -64,11 +64,7 @@ function buildHarness(routes) {
 
 const DETAIL = {
   id: 's1', name: 'Auth rework', profile: 'manager',
-  task: {
-    goal: 'Migrate users to the new schema',
-    acceptance: ['Old columns readable for one release', 'pytest green'],
-    context_refs: ['docs/auth.md'],
-  },
+  web_status: {goal: 'Migrate users to the new schema', now: null, waiting: []},
 };
 
 const PREVIEW = {
@@ -101,8 +97,7 @@ test('opening the dialog renders the task record and one row per assembled block
   assert.match(html, /<md>Migrate users to the new schema<\/md>/, 'the goal renders through the prose pipeline');
   assert.doesNotMatch(html, /&lt;md&gt;/);
   assert.match(html, /Migrate users to the new schema/);
-  assert.match(html, /<li>Old columns readable for one release<\/li><li>pytest green<\/li>/);
-  assert.match(html, /<li>docs\/auth\.md<\/li>/);
+  assert.doesNotMatch(html, /Old columns readable|docs\/auth\.md/, 'the retired task fields stay off the dialog');
   assert.match(html, /manager_turn · 1,602 chars/, 'the run kind and the measured total');
   assert.match(html, /base<\/span> prompts\/task_manager\.md[\s\S]*?>full<[\s\S]*?>1,200</);
   assert.match(html, /tooling\/repo-layout<br>[\s\S]*?research\/branch-flow[\s\S]*?>index<[\s\S]*?>340</);
@@ -111,7 +106,7 @@ test('opening the dialog renders the task record and one row per assembled block
 });
 
 test('empty task fields show a visible empty state; an overlay error is named', async () => {
-  const detail = {...DETAIL, task: {goal: '  ', acceptance: [], context_refs: []}};
+  const detail = {...DETAIL, web_status: {goal: '  ', now: null, waiting: []}};
   const preview = {...PREVIEW, blocks: [], char_count: 0, overlay: {declared: true, error: 'FileNotFoundError'}};
   const h = buildHarness({
     '/api/sessions/s1': jsonResponse(200, detail),
@@ -120,7 +115,7 @@ test('empty task fields show a visible empty state; an overlay error is named', 
 
   await h.context.openTaskContextModal('s1');
 
-  assert.equal((h.body.innerHTML.match(/\(none\)/g) || []).length, 3, 'goal, acceptance and context refs');
+  assert.equal((h.body.innerHTML.match(/\(none\)/g) || []).length, 1, 'the goal');
   assert.match(h.body.innerHTML, /manager_turn · 0 chars/);
   assert.match(h.body.innerHTML, /Launch overlay unavailable: FileNotFoundError/);
 });
@@ -134,7 +129,7 @@ test('a session without a profile shows its task record and a not-a-node note, w
 
   assert.deepEqual(h.calls, ['/api/sessions/legacy']);
   assert.equal(h.title.textContent, 'Task & context · Old chat');
-  assert.equal((h.body.innerHTML.match(/\(none\)/g) || []).length, 3);
+  assert.equal((h.body.innerHTML.match(/\(none\)/g) || []).length, 1, 'the goal');
   assert.match(h.body.innerHTML, /Not a task node yet/);
 });
 
@@ -156,7 +151,7 @@ test('a heading-bearing goal renders as prose, never a literal heading marker', 
   const h = buildHarness({
     '/api/sessions/s1': jsonResponse(200, {
       ...DETAIL,
-      task: {goal: '## Goal\n\nSay the phrase', acceptance: [], context_refs: []},
+      web_status: {goal: '## Goal\n\nSay the phrase', now: null, waiting: []},
     }),
     '/api/sessions/s1/effective-prompt': jsonResponse(200, PREVIEW),
   });
@@ -187,7 +182,7 @@ test('task text is escaped, and a preview that lands after close does not repain
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   const h = buildHarness({
-    '/api/sessions/s1': jsonResponse(200, {...DETAIL, task: {goal: '<b>bold</b> & co', acceptance: [], context_refs: []}}),
+    '/api/sessions/s1': jsonResponse(200, {...DETAIL, web_status: {goal: '<b>bold</b> & co', now: null, waiting: []}}),
     '/api/sessions/s1/effective-prompt': () => gate.then(() => jsonResponse(200, PREVIEW)),
   });
 

@@ -15,7 +15,7 @@ use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::metadata::{HAS_UNREAD, RoundRating, THUMBS_DOWN, THUMBS_UP};
-use charliebot_store::{Store, TaskCaller};
+use charliebot_store::{SESSION_NOT_FOUND_DETAIL, Store, TaskCaller};
 use charliebot_tasks::completion::TaskCompletion;
 use serde_json::{Map, Value, json};
 
@@ -247,7 +247,7 @@ fn metadata_response(store: &Store, meta: charliebot_store::metadata::SessionMet
 }
 
 fn session_not_found() -> Response {
-  responses::json(StatusCode::NOT_FOUND, &json!({"detail": "Session not found"}))
+  responses::json(StatusCode::NOT_FOUND, &json!({"detail": SESSION_NOT_FOUND_DETAIL}))
 }
 
 #[cfg(test)]

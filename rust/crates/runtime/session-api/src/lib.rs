@@ -1,6 +1,7 @@
 //! Session listing routes and the shared listing helpers.
 
 pub mod api;
+mod backend_lock;
 mod concurrency;
 pub mod detail;
 mod fork_routes;

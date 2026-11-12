@@ -976,7 +976,7 @@ fn active_backend_payload(
       .chain(cfg.backends.pools.iter().map(|pool| pool.id.as_str()))
     {
       if id == active_backend
-        || crate::write_routes::same_continuation_domain(&active_backend, id, cfg, registry)
+        || crate::backend_lock::same_continuation_domain(&active_backend, id, cfg, registry)
           .map_err(|error| StoreError::new(error.to_string()))?
       {
         switchable.push(id.to_string());

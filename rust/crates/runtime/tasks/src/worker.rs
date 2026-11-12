@@ -32,7 +32,8 @@ use charliebot_core::event_types as ET;
 use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_core::timefmt;
 use charliebot_registry::backend::{
-  BackendLifecycle, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch, RetryAfter,
+  BackendLifecycle, EXTRA_FLAGS_BACKEND_KWARG, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch,
+  RetryAfter,
 };
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
 use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_LOG_NAME, event_line};
@@ -501,7 +502,7 @@ impl Worker {
       let mut backend_kwargs = launch.map(|launch| launch.backend_kwargs.clone()).unwrap_or_default();
       let mut args = base.clone();
       let mut extra_flags = extra_flags_of(&backend_kwargs)?;
-      backend_kwargs.remove("extra_flags");
+      backend_kwargs.remove(EXTRA_FLAGS_BACKEND_KWARG);
       if let Some(resume_id) = launch.and_then(|launch| launch.resume_id.as_deref()).filter(|id| !id.is_empty()) {
         let style = self
           .features

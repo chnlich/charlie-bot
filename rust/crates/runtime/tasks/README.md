@@ -267,7 +267,7 @@ the validated checkout root held in typed startup state.
 - `prompts::COHERENCE_PASSES`
 - `prompts::MAX_AGENT_MESSAGE_WEIGHTED_CHARS`
 - `prompts::HOST_SUPPLEMENT_FILENAME`
-- `prompts::PROMPT_BODIES_DIR`
+- `charliebot_core::home::PROMPT_BODIES_DIR_NAME`
 - `prompts::TaskPromptError`
 - `charliebot_core::RepoRoot`
 - `prompts::PromptEnv`

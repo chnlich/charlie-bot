@@ -5,6 +5,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use charliebot_core::home::PROMPT_BODIES_DIR_NAME;
 use charliebot_core::run_kind::RunKind;
 use charliebot_core::text_repr::str_repr;
 use charliebot_registry::turn::{DELIVERY_FULL, SCOPE_BASE, SCOPE_GOAL, SCOPE_NODE, SCOPE_SUBTREE};
@@ -12,8 +13,8 @@ use charliebot_store::control_events::sha256_hex;
 use charliebot_store::metadata::{SessionMetadata, TaskSpec, TaskType, requester_words_heading_line};
 
 use super::{
-  HOST_SUPPLEMENT_FILENAME, MANAGER_KINDS, MAX_AGENT_MESSAGE_WEIGHTED_CHARS, PROMPT_BODIES_DIR, PromptEnv,
-  PromptSource, RuleSegment, TaskPromptError, WORKER_KINDS,
+  HOST_SUPPLEMENT_FILENAME, MANAGER_KINDS, MAX_AGENT_MESSAGE_WEIGHTED_CHARS, PromptEnv, PromptSource, RuleSegment,
+  TaskPromptError, WORKER_KINDS,
 };
 use crate::spawner_prompt::{self, TextReadError};
 use crate::{cold_read, review_text};
@@ -109,7 +110,7 @@ pub fn build_segments(
   let (overlay_segments, overlay_error) = overlay_rule_segments(repo, inputs.overlay);
   segments.extend(overlay_segments);
   segments.extend(env.registry.instruction_segments(meta, kind, env.cfg, env.checkout)?);
-  let bodies_dir = env.cfg.charliebot_home.join(PROMPT_BODIES_DIR);
+  let bodies_dir = env.cfg.charliebot_home.join(PROMPT_BODIES_DIR_NAME);
   segments.extend(local_rule_segments(&bodies_dir, inputs.chain, inputs.node_ref, &meta.id)?);
   segments.extend(goal_segment(kind, meta, inputs));
   Ok((segments, overlay_error))
@@ -319,7 +320,7 @@ fn base_source(source_ref: &str) -> PromptSource {
 fn local_source(scope: &str, reference: &str, owner: &str) -> PromptSource {
   PromptSource {
     scope: scope.to_string(),
-    source_ref: format!("{PROMPT_BODIES_DIR}/{reference}.md"),
+    source_ref: format!("{PROMPT_BODIES_DIR_NAME}/{reference}.md"),
     source_session_id: Some(owner.to_string()),
   }
 }

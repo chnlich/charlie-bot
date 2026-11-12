@@ -62,8 +62,6 @@ pub const MAX_AGENT_MESSAGE_WEIGHTED_CHARS: usize = 2000;
 
 /// The host supplement under the home (`CharlieBotConfig.claude_md_file`).
 pub const HOST_SUPPLEMENT_FILENAME: &str = "MASTER_AGENT_PROMPT.md";
-/// The immutable rule bodies under the home (`prompt_bodies/<sha256>.md`), the directory `Store::prompt_bodies_dir` names.
-pub const PROMPT_BODIES_DIR: &str = "prompt_bodies";
 
 /// A managed instruction source is unavailable, malformed, or hash-invalid. The message names the source and the
 /// reason. It blocks the launch: the queued run and its inputs stay untouched.

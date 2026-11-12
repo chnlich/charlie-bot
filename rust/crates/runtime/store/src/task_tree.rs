@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Weak};
 use std::time::{Duration, Instant};
 
+use charliebot_core::home::PROMPT_BODIES_DIR_NAME;
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::{event_types, fsutil};
 use regex::Regex;
@@ -470,7 +471,7 @@ impl Store {
 
   /// Return the selected home’s immutable prompt body directory.
   pub fn prompt_bodies_dir(&self) -> PathBuf {
-    self.cfg.charliebot_home.join("prompt_bodies")
+    self.cfg.charliebot_home.join(PROMPT_BODIES_DIR_NAME)
   }
 
   /// Read all durable facts and fold the task lifecycle and input boundary.

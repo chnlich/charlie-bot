@@ -36,6 +36,9 @@ pub const OPENCODE_XDG_DATA_DIR_NAME: &str = "data";
 /// The `state` directory under the OpenCode store, which OpenCode itself lays out as its `XDG_STATE_HOME`.
 pub const OPENCODE_XDG_STATE_DIR_NAME: &str = "state";
 
+/// The directory under the profile home that holds the immutable rule bodies, one `<sha256>.md` per body.
+pub const PROMPT_BODIES_DIR_NAME: &str = "prompt_bodies";
+
 /// A `CHARLIEBOT_HOME` value that names no usable home.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HomeError {

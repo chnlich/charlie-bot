@@ -30,6 +30,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
+flate2.workspace = true
 # The pool session tests register the `pool_member` slot the production server's registry carries.
 charliebot-agents.workspace = true
 charliebot-core = { workspace = true, features = ["test-support"] }

@@ -2,6 +2,7 @@
 //!
 //! A response pays the deflate once per body it builds; a memo serves the repeats. The level-1
 //! deflator covers every body that is compressed per response, and its byte count is one counter.
+//! A body too large for the level-1 search to find its long matches takes the level-4 form instead.
 //! The level-9 deflator covers a body a memo keeps and serves on every repeat, where the smaller
 //! output reaches every repeat request and is worth a slower one-time deflate.
 
@@ -56,6 +57,15 @@ pub const SKIP_MEDIA_PREFIXES: &[&str] = &[
 pub fn gzip_level_one(data: &[u8]) -> Vec<u8> {
   LEVEL_ONE_BYTES_DEFLATED.fetch_add(data.len() as u64, Ordering::Relaxed);
   compress(data, 1)
+}
+
+/// The level-4 gzip form of a large body a response compresses afresh.
+///
+/// Level 1 keeps the fastest deflate, but its short hash chain misses the long matches of a large body built from
+/// near-identical rows, so its output can run well past the level-9 form's. Level 4 recovers that size for a small
+/// fraction of the level-9 cost.
+pub fn gzip_level_four(data: &[u8]) -> Vec<u8> {
+  compress(data, 4)
 }
 
 /// The level-9 gzip form of a body a memo serves on every repeat request.

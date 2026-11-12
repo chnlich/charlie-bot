@@ -1204,6 +1204,72 @@ test('saveCronTask sends backend selector value and null inherit value', async (
   assert.equal(body.prompt, undefined);
 });
 
+test('opening then saving a task keeps its hidden backend, and a picked pool is sent as its id', async () => {
+  const tasks = [
+    {name: 'hidden-model-task', cron: '0 8 * * *', backend: 'claude-hidden', enabled: true},
+    {name: 'hidden-pool-task', cron: '0 9 * * *', backend: 'pool-hidden', enabled: true},
+  ];
+  const requests = [];
+  const elements = new Map([
+    ['cron-modal-title', createElement()],
+    ['cron-name', createElement()],
+    ['cron-expr', createElement()],
+    ['cron-prompt-file', createElement()],
+    ['cron-repo', createElement()],
+    ['cron-backend', createElement({tagName: 'SELECT'})],
+    ['cron-project', createElement()],
+    ['cron-timezone', createElement()],
+    ['cron-enabled', createElement({checked: true})],
+    ['cron-delete-btn', createElement({className: 'hidden'})],
+    ['cron-save-btn', createElement()],
+    ['cron-error-box', createElement({className: 'hidden'})],
+    ['cron-modal', createElement({className: 'hidden'})],
+  ]);
+  // The entries the page renders: the inherit option and the visible picker list.
+  const backendSelect = elements.get('cron-backend');
+  for (const [value, label] of [['', 'inherit'], ['codex-o3', 'codex'], ['pool-visible', 'visible pool']]) {
+    backendSelect.appendChild(createElement({tagName: 'OPTION', value, textContent: label}));
+  }
+  const {context} = buildContext({elements});
+  context.BACKEND_OPTIONS = {'claude-hidden': 'Hidden model', 'codex-o3': 'codex'};
+  context.BACKEND_POOLS = [{id: 'pool-hidden', label: 'Hidden pool'}, {id: 'pool-visible', label: 'visible pool'}];
+  context.document.createElement = (tag) => createElement({tagName: tag.toUpperCase()});
+  context.fetch = async (url, opts = {}) => {
+    requests.push({url, opts});
+    const json = opts.method === 'PUT' ? {} : tasks;
+    return {ok: true, async json() { return json; }, async text() { return ''; }};
+  };
+  context.switchSidebarFilter = () => {};
+  const savedBackend = () => JSON.parse(requests.at(-1).opts.body).backend;
+
+  await context.openCronEditor('hidden-model-task');
+  assert.equal(backendSelect.value, 'claude-hidden');
+  assert.ok(backendSelect.options.some((option) => option.value === 'claude-hidden'));
+  await context.saveCronTask();
+  assert.equal(requests.at(-1).url, '/api/cron/tasks/hidden-model-task');
+  assert.equal(savedBackend(), 'claude-hidden');
+
+  await context.openCronEditor('hidden-pool-task');
+  assert.equal(backendSelect.value, 'pool-hidden');
+  await context.saveCronTask();
+  assert.equal(savedBackend(), 'pool-hidden');
+
+  // The next open drops the previous task's added entry; only the open task's hidden entry stays listed.
+  await context.openCronEditor('hidden-model-task');
+  assert.deepEqual(
+    backendSelect.options.map((option) => option.value),
+    ['', 'codex-o3', 'pool-visible', 'claude-hidden'],
+  );
+
+  backendSelect.value = 'pool-visible';
+  await context.saveCronTask();
+  assert.equal(savedBackend(), 'pool-visible');
+
+  backendSelect.value = '';
+  await context.saveCronTask();
+  assert.equal(savedBackend(), null);
+});
+
 test('forkSession opens the reusable modal with the active backend selected by default', () => {
   const elements = buildSessionActionElements();
   const {context} = buildContext({

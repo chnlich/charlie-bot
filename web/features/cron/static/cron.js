@@ -44,6 +44,33 @@ function applyCronBrokenView(task) {
   }
 }
 
+// The Backend dropdown lists the entries the page renders from the picker list (visible options, then visible pools).
+// A task bound to a hidden option or pool has no entry there, so the editor adds one and selects it. An open-then-save
+// then sends the task's own backend id. The added entry is kept in cronHiddenBackendOption, and the next open removes
+// it. "Inherit / default" stays the only way to send null.
+let cronHiddenBackendOption = null;
+
+function selectCronBackend(backendId) {
+  const select = document.getElementById('cron-backend');
+  if (cronHiddenBackendOption) cronHiddenBackendOption.remove();
+  cronHiddenBackendOption = null;
+  if (backendId && !Array.from(select.options).some((option) => option.value === backendId)) {
+    cronHiddenBackendOption = document.createElement('option');
+    cronHiddenBackendOption.value = backendId;
+    cronHiddenBackendOption.textContent = cronBackendLabel(backendId);
+    select.appendChild(cronHiddenBackendOption);
+  }
+  select.value = backendId || '';
+}
+
+// The label a backend id carries in the full lists, which name every option and pool, hidden ones included. An id in
+// neither list keeps its own id as the label: the save sends it, and the server refuses it with its own message.
+function cronBackendLabel(backendId) {
+  if (Object.hasOwn(BACKEND_OPTIONS, backendId)) return BACKEND_OPTIONS[backendId];
+  const pool = BACKEND_POOLS.find((candidate) => candidate.id === backendId);
+  return pool ? pool.label : backendId;
+}
+
 async function openCronEditor(taskName) {
   cronAddSessionId = null;
   let task;
@@ -69,7 +96,7 @@ async function openCronEditor(taskName) {
   document.getElementById('cron-expr').value = task.cron || '';
   document.getElementById('cron-prompt-file').value = task.prompt_file || '';
   document.getElementById('cron-repo').value = task.repo || '';
-  document.getElementById('cron-backend').value = task.backend || '';
+  selectCronBackend(task.backend);
   document.getElementById('cron-project').value = task.project || '';
   document.getElementById('cron-timezone').value = task.timezone || 'America/Los_Angeles';
   document.getElementById('cron-enabled').checked = task.enabled !== false;
@@ -88,7 +115,7 @@ function openCronAdder(options = {}) {
   document.getElementById('cron-expr').value = '';
   document.getElementById('cron-prompt-file').value = '';
   document.getElementById('cron-repo').value = '';
-  document.getElementById('cron-backend').value = '';
+  selectCronBackend(null);
   document.getElementById('cron-project').value = options.project || '';
   document.getElementById('cron-timezone').value = 'America/Los_Angeles';
   document.getElementById('cron-enabled').checked = true;

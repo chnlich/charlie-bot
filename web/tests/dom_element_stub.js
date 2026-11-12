@@ -76,6 +76,10 @@ function createElement(overrides = {}) {
       const index = this.children.indexOf(child);
       if (index === -1) throw new Error('child not found');
       this.children.splice(index, 1);
+      if (child && child.tagName === 'OPTION') {
+        const optionIndex = this.options.indexOf(child);
+        if (optionIndex !== -1) this.options.splice(optionIndex, 1);
+      }
       if (child) child.parentNode = null;
       return child;
     },

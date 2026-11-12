@@ -180,7 +180,7 @@ rewrite_command() {
   REWRITTEN=("${rewritten[@]}")
 }
 
-# The other directions' clones are standalone repositories on this host, so the list that the# The other directions' clones are standalone repositories on this host, so the list that the
+# The other directions' clones are standalone repositories on this host, so the list that the
 # launcher computed there cannot see their work, and two directions pick topics in rust/. Every
 # file that those clones change therefore joins the round's list before the clone check: each
 # committed path whose branch version origin/main's history does not hold, for a branch whose commits

@@ -45,7 +45,7 @@ impl CandidateSource {
     }
   }
 
-  /// Parse one `--sources` value.
+  /// The source that one `--sources` value names.
   pub fn parse(value: &str) -> Option<Self> {
     match value.trim() {
       "comments" => Some(Self::Comments),
@@ -217,10 +217,11 @@ struct ChatScan {
   ratings: Vec<Rating>,
 }
 
-/// Scan a session's chat log in file order. A line that is not JSON is skipped, as `chat_events::find_in_log` skips
-/// it: an append can tear a line. A JSON value that is not an object fails the scan. A real user message, as
-/// `event_types::is_real_user_message` selects it, and a web reply need the fields a candidate carries, or the scan
-/// fails with the line's location. A tool-result echo is not a real user message and is skipped.
+/// The scan of one session's chat log, in file order. A line that is not JSON is skipped, as
+/// `chat_events::find_in_log` skips it: an append can tear a line. A JSON value that is not an object fails the
+/// scan. A real user message, as `event_types::is_real_user_message` selects it, and a web reply need the fields
+/// a candidate carries, or the scan fails with the line's location. A tool-result echo is not a real user message
+/// and is skipped.
 fn scan_chat_log(session_dir: &Path, ratings: &[Rating]) -> anyhow::Result<ChatScan> {
   let path = layout::chat_events_path(session_dir);
   let lines = match chat_events::read_lines(&path, LineRule::Lines) {
@@ -283,7 +284,7 @@ fn event_time(event: &Value, location: &str) -> anyhow::Result<OffsetDateTime> {
   OffsetDateTime::parse(text, &Rfc3339).with_context(|| format!("{location}: the timestamp {text:?} is not RFC 3339"))
 }
 
-/// Classify one session's user messages and plan notes into candidates.
+/// One session's user messages and plan notes, classified into candidates.
 fn session_candidates<F>(
   session_id: &str,
   session_dir: &Path,

@@ -243,7 +243,7 @@ impl Store {
   }
 }
 
-/// Load the store at `taste_dir`. A missing store file is an empty store; a malformed line fails with its number.
+/// The store at `taste_dir`. A missing store file is an empty store; a malformed line fails with its number.
 pub fn load_store(taste_dir: &Path) -> anyhow::Result<Store> {
   let path = taste_dir.join(ROWS_FILENAME);
   let file = match File::open(&path) {
@@ -272,7 +272,7 @@ pub fn load_store(taste_dir: &Path) -> anyhow::Result<Store> {
   Ok(store)
 }
 
-/// Parse one stored record from its JSON value, validating every field.
+/// One stored record parsed from its JSON value, every field validated.
 pub fn parse_record(value: &Value) -> Result<Record, FieldError> {
   let object = value.as_object().ok_or_else(|| FieldError::new("record", "expected a JSON object"))?;
   match object.get("type").and_then(Value::as_str) {
@@ -283,7 +283,7 @@ pub fn parse_record(value: &Value) -> Result<Record, FieldError> {
   }
 }
 
-/// Parse a row as `taste add` receives it. Its id is absent because the CLI assigns one under the lock, and `type`
+/// A row as `taste add` receives it, parsed. Its id is absent because the CLI assigns one under the lock, and `type`
 /// may be absent because the verb takes only rows.
 fn parse_input_row(value: &Value) -> Result<Row, FieldError> {
   let object = value.as_object().ok_or_else(|| FieldError::new("record", "expected a JSON object"))?;
@@ -300,7 +300,7 @@ fn parse_input_row(value: &Value) -> Result<Row, FieldError> {
   parse_row_body(object)
 }
 
-/// Parse a stored row, whose id the CLI assigned.
+/// A row parsed from its stored object, with the id the CLI assigned.
 fn parse_stored_row(object: &Map<String, Value>) -> Result<Row, FieldError> {
   reject_unknown(object, ROW_FIELDS)?;
   let id = required_string(object, "id")?;
@@ -327,7 +327,7 @@ const ROW_FIELDS: &[&str] = &[
   "supersedes",
 ];
 
-/// Parse a row's content fields. The returned row has no id.
+/// The row parsed from a record's content fields. The returned row has no id.
 fn parse_row_body(object: &Map<String, Value>) -> Result<Row, FieldError> {
   let decided_at = required_string(object, "decided_at")?;
   OffsetDateTime::parse(&decided_at, &Rfc3339)
@@ -478,7 +478,7 @@ fn validate_domain(domain: &str) -> Result<(), FieldError> {
   Ok(())
 }
 
-/// Serialize a row as one JSONL line's value, with fields in the schema's order.
+/// The value of one JSONL line holding a row, with fields in the schema's order.
 pub fn row_value(row: &Row) -> Value {
   let mut source = Map::new();
   source.insert("session_id".to_string(), json!(row.source.session_id));
@@ -508,7 +508,7 @@ pub fn row_value(row: &Row) -> Value {
   Value::Object(value)
 }
 
-/// Serialize a mark as one JSONL line's value.
+/// The value of one JSONL line holding a mark.
 pub fn mark_value(mark: &Mark) -> Value {
   let mut value = Map::new();
   value.insert("type".to_string(), json!("mark"));
@@ -526,7 +526,7 @@ pub fn mark_value(mark: &Mark) -> Value {
   Value::Object(value)
 }
 
-/// Append a row from its JSON value under the store lock, assigning the next `T<n>` id and returning it.
+/// The id assigned to a row appended from its JSON value under the store lock, from the next `T<n>`.
 ///
 /// The call refuses a row whose source reference, comment item and `chosen` repeat an existing row, naming that
 /// row, and a row whose `supersedes` names no existing row. Two comment items of one source event are separate
@@ -555,7 +555,7 @@ pub fn add_row(taste_dir: &Path, value: &Value) -> anyhow::Result<String> {
   Ok(row.id)
 }
 
-/// Append a mark that takes `row_id` out of the active view.
+/// The append of a mark that takes `row_id` out of the active view.
 pub fn add_mark(taste_dir: &Path, row_id: &str, status: MarkStatus) -> anyhow::Result<()> {
   ensure_dir(taste_dir)?;
   let _lock = StoreLock::acquire(taste_dir)?;

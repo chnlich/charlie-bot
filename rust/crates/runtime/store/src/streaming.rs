@@ -362,7 +362,7 @@ mod tests {
   #[tokio::test(start_paused = true)]
   async fn a_hiding_frame_flushes_the_pending_appends_before_it() {
     // A stream frame carries only new text, so a frame that hides the preview must not swallow the appends
-    // broadcast before it: the page builds the message it commits from them.
+    // broadcast before it. The page builds the message it commits from them.
     let manager = StreamingManager::new();
     let mut subscription = manager.subscribe("sidebar");
     manager.broadcast("sidebar", json!({"type": "stream", "sequence": 1})).await.unwrap();

@@ -3,9 +3,9 @@
 //! `serde_json::Value` gives every parsed chat event a fresh `String` per object key inside an
 //! `IndexMap` with hash-table and entry-vector slack. That representation is the measured gap against a plain
 //! `Value` map. This module keeps the JSON semantics: insertion order, the three `serde_json::Number` forms, and
-//! mapping-style access. It stores each object as one exact-fit `Box<[ObjectEntry]>` and shares each distinct key:
-//! across the process for a value built alone ([`intern_key`]), and across one file for a whole-file parse
-//! ([`ParseKeys`]).
+//! mapping-style access. It stores each object as one exact-fit `Box<[ObjectEntry]>` and shares each distinct key.
+//! A key is shared across the process for a value built alone ([`intern_key`]), and across one file for a whole-file
+//! parse ([`ParseKeys`]).
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -130,7 +130,7 @@ impl KeySource for ProcessKeys {
 ///
 /// The keys of the process table are shared by every thread, so threads that parse at once wait on its lock and on the
 /// keys' shared reference counts. A whole-file parse holds only keys of its own and so runs in parallel with others.
-/// Its keys are not in the process table: a key compares by name, so a value holding such a key equals one holding the
+/// Its keys are not in the process table. A key compares by name, so a value holding such a key equals one holding the
 /// process key of the same name.
 #[derive(Default)]
 pub(crate) struct ParseKeys(RefCell<HashMap<Box<str>, Key>>);

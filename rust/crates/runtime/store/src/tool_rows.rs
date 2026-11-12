@@ -1,5 +1,5 @@
-//! The tool rows of the Everything view: the rows of the open draft, the subagents that a row starts, and the
-//! committed drafts that a late subagent event still updates.
+//! The tool rows of the Everything view are the rows of the open draft and the subagents that a row starts. They also
+//! include the committed drafts that a late subagent event still updates.
 //!
 //! Subagent events name their row by tool_use id, so every row keeps its id in memory. A frame shows the id, and
 //! the `subagent` object, only on a row that a subagent hangs under. A row without a subagent renders exactly as

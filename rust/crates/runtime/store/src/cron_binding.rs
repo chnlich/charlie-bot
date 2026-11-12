@@ -1,8 +1,8 @@
 //! The session ids the current cron configuration binds, read from the home's `config.d/cron.d`.
 //!
 //! The reparent scope rule needs one fact of the cron configuration: the sessions its tasks point at. The cron
-//! feature owns the task files — their name rules, field validation and prompt pointers — and the store cannot
-//! depend on a feature crate, so this module decodes each task file the way the loader does and reads only its
+//! feature owns the task files: their name rules, field validation and prompt pointers. The store cannot depend on a
+//! feature crate, so this module decodes each task file the way the loader does and reads only its
 //! `session_id`. The configuration is the binding's single source: no session metadata carries a marker, and a
 //! disabled task keeps its `session_id`, so its binding counts. A file the read or decode rejects binds nothing;
 //! the loader rejects the same file and raises its own broken-file alert for it.

@@ -1,23 +1,23 @@
 //! The startup-only fact checkpoint of one session's history.
 //!
 //! A boot's fact scan folds a session's archived events and then its live log into the node and run facts. The
-//! checkpoint holds that fold: the task facts, the run facts and the newest prompt fact of each scope, beside the
-//! archive files and the byte offset of the live log they cover and two digests of the covered prefix. A later boot
-//! reads those facts and folds only the bytes appended past the offset, so its read cost follows the folded state it
-//! proves and the appended tail, not the history the state covers.
+//! checkpoint holds that fold. The fold holds the task facts, the run facts and the newest prompt fact of each scope.
+//! Beside them sit the archive files, the byte offset of the live log they cover, and two digests of the covered
+//! prefix. A later boot reads those facts and folds only the bytes appended past the offset. Its read cost then
+//! follows the folded state it proves and the appended tail, not the history the state covers.
 //!
 //! The folded facts do not carry the event index, which is one entry per event and most of the covered history. The
-//! checkpoint keeps the events themselves as the scan kept them, one compact line per kept event in log order, and a
-//! sorted `(id hash, line offset)` table over the lines that carry an id. The event index is built from those two
-//! sections only when a reader asks for an event by reference; a membership test costs one binary search and one
-//! line's parse, and a fold of the appended tail compares each of its ids against the table without parsing the rest.
+//! checkpoint keeps the events themselves as the scan kept them, one compact line per kept event in log order. Beside
+//! them sits a sorted `(id hash, line offset)` table over the lines that carry an id. The event index is built from
+//! those two sections only when a reader asks for an event by reference. A membership test costs one binary search and
+//! one line's parse. A fold of the appended tail compares each of its ids against the table without parsing the rest.
 //!
-//! The file is startup-only and is never synced. Every read validates it against its sources before use: the archived
-//! extent, each archive file's name, size and modification time, the live log's length (which must cover the offset),
-//! the line boundary at the offset, and the SHA-256 of the first and last [`WINDOW_BYTES`] of the covered prefix. A
-//! checkpoint that is absent, truncated, torn, stale or written against another log fails that check, and the boot
-//! scans the log whole. That full scan is also the recovery a missing checkpoint gives, so a torn or stale copy costs
-//! a slower boot and nothing else.
+//! The file is startup-only and is never synced. Every read validates it against its sources before use. The sources
+//! are the archived extent, each archive file's name, size and modification time, and the live log's length (which
+//! must cover the offset). They also include the line boundary at the offset and the SHA-256 of the first and last
+//! [`WINDOW_BYTES`] of the covered prefix. A checkpoint that is absent, truncated, torn, stale or written against
+//! another log fails that check, and the boot scans the log whole. That full scan is also the recovery a missing
+//! checkpoint gives, so a torn or stale copy costs a slower boot and nothing else.
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -93,7 +93,7 @@ pub(crate) struct ParsedCheckpoint {
 }
 
 impl FactCheckpoint {
-  /// Whether this checkpoint's facts cover a prefix of `live`: the archived extent and archive files are the ones it
+  /// Whether this checkpoint's facts cover a prefix of `live`. The archived extent and archive files are the ones it
   /// folded, the file still holds its offset bytes, a line ends there, and both prefix windows keep their digests.
   pub(crate) fn covers(&self, live: &[u8], archives: usize, archive_marks: &[ArchiveMark]) -> bool {
     let offset = self.offset as usize;
@@ -105,7 +105,7 @@ impl FactCheckpoint {
       && self.tail_sha == window_sha(live, offset)
   }
 
-  /// The checkpoint a file's bytes hold, with the byte offset where its facts line begins, or `None` when the bytes
+  /// The checkpoint a file's bytes hold, with the byte offset where its facts line begins. It is `None` when the bytes
   /// are not a checkpoint of this version or do not hold the sections their header names.
   pub(crate) fn parse(bytes: &Arc<FileBytes>, decode: LineDecoder) -> Option<ParsedCheckpoint> {
     let header_end = bytes.iter().position(|byte| *byte == b'\n')?;
@@ -254,7 +254,7 @@ impl CheckpointFile {
 }
 
 /// The kept events' lines and the table that points into them. A table entry is the event id's stable hash and the
-/// line's offset in the index section, taken at the event's first occurrence, as the fold inserts an id once.
+/// line's offset in the index section, taken at the event's first occurrence. The fold inserts an id once.
 fn encode_index(kept: &[&SharedChatEvent]) -> (String, Vec<(u64, u32)>) {
   let mut lines = String::new();
   let mut table: Vec<(u64, u32)> = Vec::new();
@@ -299,8 +299,8 @@ pub(crate) fn encode_events<'a>(events: impl IntoIterator<Item = &'a SharedChatE
   text
 }
 
-/// Write the stand-in line for an event that is one: an object holding exactly its string `id` and `type`, in that
-/// order, whose text holds no separator or line break. Returns whether the event was written.
+/// Write the stand-in line for an event that is one. The line is an object holding exactly its string `id` and `type`,
+/// in that order, whose text holds no separator or line break. Returns whether the event was written.
 fn encode_stand_in(event: &SharedChatEvent, line: &mut String) -> bool {
   let crate::compact::CompactValue::Object(entries) = event.as_ref() else {
     return false;

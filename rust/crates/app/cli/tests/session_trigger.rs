@@ -243,14 +243,14 @@ fn wait_bounded(child: &mut Child) -> Option<i32> {
   }
 }
 
-/// A stub `ssh` in the sandbox's bin directory that runs its remote command in this shell: `ssh_cmd` puts five `-o`
-/// option pairs and the host before the command, those eleven arguments are dropped, and the rest is joined with
+/// A stub `ssh` in the sandbox's bin directory that runs its remote command in this shell. `ssh_cmd` puts five `-o`
+/// option pairs and the host before the command, and those eleven arguments are dropped. The rest is joined with
 /// spaces and re-parsed, as ssh hands it to the remote login shell. The wrapper's mkdir, setsid, PID capture and exit
 /// file then run for real, with no network.
 ///
-/// As with ssh, the stub stays up until the command's output closes: the substitution reads both streams to their end,
-/// so a started process that keeps either stream open holds the stub, and so the launch, until that process ends. The
-/// stub's stderr is merged into its stdout, and its exit status is the command's.
+/// As with ssh, the stub stays up until the command's output closes. The substitution reads both streams to their
+/// end, so a started process that keeps either stream open holds the stub, and so the launch, until that process
+/// ends. The stub's stderr is merged into its stdout, and its exit status is the command's.
 fn stub_ssh_running_locally(sandbox: &Sandbox) {
   charliebot_shell_harness::write_executable(
     &sandbox.bin.join("ssh"),
@@ -747,8 +747,8 @@ fn test_launch_remote_end_to_end_localhost() {
 #[test]
 #[ignore = "integration"]
 fn test_launch_remote_wrapper_runs_the_command_under_a_local_stub_ssh() {
-  // The remote path without the network: the wrapper's own shell script runs here, so a syntax or PID-capture slip
-  // in it shows up as a missing exit file or a wrong PID. The `~/` working directory is the stub shell's HOME, which
+  // The remote path without the network: the wrapper's own shell script runs here. A syntax or PID-capture slip in
+  // it shows up as a missing exit file or a wrong PID. The `~/` working directory is the stub shell's HOME, which
   // is the sandbox root.
   let sandbox = Sandbox::new();
   stub_ssh_running_locally(&sandbox);

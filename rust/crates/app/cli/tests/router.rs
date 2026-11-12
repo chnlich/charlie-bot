@@ -1,9 +1,9 @@
-//! End-to-end `charliebot router`: the built binary runs with a temp `CHARLIEBOT_HOME`, real stdin
-//! and a fake Jev on a free loopback port, and its stdout, stderr and exit code are the contract.
+//! End-to-end `charliebot router`: the built binary runs with a temp `CHARLIEBOT_HOME`, real stdin and a fake Jev on a
+//! free loopback port. Its stdout, stderr and exit code are the contract.
 //!
-//! The per-failure details are unit-tested in `src/commands/router.rs`; this target proves the
-//! dispatcher wiring — one success prints only the one-line JSON answer, `--config` reads the file it
-//! names, and one failure prints `router: <message>` on stderr, nothing on stdout, and exits 1.
+//! The per-failure details are unit-tested in `src/commands/router.rs`. This target proves the dispatcher wiring: one
+//! success prints only the one-line JSON answer, and `--config` reads the file it names. One failure prints
+//! `router: <message>` on stderr, nothing on stdout, and exits 1.
 
 use std::collections::VecDeque;
 use std::io::{Read, Write};

@@ -1,5 +1,5 @@
 //! The composed host of the CLI processes that run a backend (`charliebot_agents::cli_host`): the packages the server
-//! registers, so the config loads with every section a real `config.yaml` carries and every backend type exists.
+//! registers. The config loads with every section a real `config.yaml` carries, and every backend type exists.
 //!
 //! The lists come from `charliebot_packages`, the composition root the server binary shares, so the two binaries
 //! cannot drift.
@@ -16,7 +16,7 @@ use charliebot_core::home;
 use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
 
 /// The `CliHostFactory` of this binary: every package registered in server order, the config loaded against that
-/// registry, and the agent environment the server's own builders produce, so an agent spawned from an operator shell
+/// registry, and the agent environment the server's own builders produce. An agent spawned from an operator shell
 /// resolves `gh` to the wrapper.
 pub fn compose() -> anyhow::Result<CliHost> {
   let repo_root = RepoRoot::new(std::env::var_os(REPO_ROOT_ENV))?.path().to_path_buf();

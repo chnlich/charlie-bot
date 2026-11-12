@@ -6,6 +6,8 @@
     --bg:#f3f5f7; --panel:#ffffff; --panel2:#eef1f5; --bd:#d9dfe6;
     --tx:#1b2430; --mut:#5b6774; --mut2:#7b8694; --acc:#1163c0;
     --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    /* The page column: the width .wrap centers, and the edge the badge bar's own content ends on. */
+    --col:1080px;
   }
   /* The two dark blocks must carry identical declarations. An explicit
      data-theme="dark" choice must hold under any prefers-color-scheme, and
@@ -26,7 +28,17 @@
   * { box-sizing:border-box }
   body { margin:0; background:var(--bg); color:var(--tx); padding:26px 24px 40px;
     font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Roboto,Helvetica,Arial,sans-serif; }
-  .wrap { max-width:1080px; margin:0 auto }
+  .wrap { max-width:var(--col); margin:0 auto }
+  /* The concurrency badge's bar spans the window's content box, and the badge ends at its right edge. On a
+     wide window that edge is the window's gutter, --col's margin inside it away from the column the page
+     below draws, so the badge floats beside nothing. The bar takes the column's own margin as its padding
+     there, and on a narrow window both are 0 and the badge sits on the content's edge as before. The
+     partial's sheet sets `body > .cb-slot` from inside the body, after this file, so this rule adds the
+     root element to out-specify it. */
+  html body > .cb-slot {
+    padding-left:max(0px, calc((100% - var(--col)) / 2));
+    padding-right:max(0px, calc((100% - var(--col)) / 2));
+  }
   h1 { font-size:22px; margin:0 0 6px; letter-spacing:-.2px }
   h2 { font-size:15px; margin:30px 0 12px; padding-bottom:6px; border-bottom:1px solid var(--bd);
     display:flex; align-items:center; gap:8px }

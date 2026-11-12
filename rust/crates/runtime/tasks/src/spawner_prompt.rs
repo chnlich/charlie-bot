@@ -130,6 +130,46 @@ pub const WORKFLOW_NO_REVIEWER_SECTION: &str = "workflow_no_reviewer";
 /// The section that holds the iteration report contract the improve loop renders (`ITERATION_REPORTS_SECTION`).
 pub const ITERATION_REPORTS_SECTION: &str = "iteration_reports";
 
+// The marker-section ids of `prompts/task_base.md` and `prompts/worker.md`. `load_worker_prompt_sections` merges the
+// two templates into one section namespace, and `required_worker_sections` lists what that merge must hold, so a
+// reader in `prompts` names a section here.
+
+/// The section that states the coding principles every contract carries (`CODING_PRINCIPLES_SECTION`).
+pub const CODING_PRINCIPLES_SECTION: &str = "coding_principles";
+
+/// The section that states where the skill definitions live (`SKILLS_DISCOVERY_SECTION`).
+pub const SKILLS_DISCOVERY_SECTION: &str = "skills_discovery";
+
+/// The section that names the profile home (`PROFILE_HOME_SECTION`).
+pub const PROFILE_HOME_SECTION: &str = "profile_home";
+
+/// The section that states the remote scratch rule (`REMOTE_SCRATCH_SECTION`).
+pub const REMOTE_SCRATCH_SECTION: &str = "remote_scratch";
+
+/// The section that tells a worker how to write model-read text (`TEXT_MODEL_READS_SECTION`).
+pub const TEXT_MODEL_READS_SECTION: &str = "text_model_reads";
+
+/// The section that names the session (`SESSION_INFO_SECTION`).
+pub const SESSION_INFO_SECTION: &str = "session_info";
+
+/// The section that states a worker's role (`ROLE_SECTION`).
+pub const ROLE_SECTION: &str = "role";
+
+/// The section that opens a run without a worktree (`INTRO_NEW_SECTION`).
+pub const INTRO_NEW_SECTION: &str = "intro_new";
+
+/// The section that opens a retry in a retained worktree (`INTRO_CONTINUATION_SECTION`).
+pub const INTRO_CONTINUATION_SECTION: &str = "intro_continuation";
+
+/// The section that holds the task description (`TASK_SECTION`).
+pub const TASK_SECTION: &str = "task";
+
+/// The section that states the worktree persistence rule (`WORKTREE_PERSISTENCE_SECTION`).
+pub const WORKTREE_PERSISTENCE_SECTION: &str = "worktree_persistence";
+
+/// The section that carries a task's requester words (`USER_DECISIONS_SECTION`).
+pub const USER_DECISIONS_SECTION: &str = "user_decisions";
+
 /// The persistent workflow sections of a task type, bindings section first (`WORKFLOW_PROMPT_SECTION`). Verify and
 /// cold-read tasks have no workflow section.
 pub fn workflow_prompt_sections(task_type: TaskType) -> Option<&'static [&'static str]> {
@@ -197,13 +237,13 @@ fn required_worker_sections() -> Vec<&'static str> {
     .flatten()
     .copied();
   let sections = [
-    "session_info",
-    "coding_principles",
-    "skills_discovery",
-    "remote_scratch",
-    "role",
-    "intro_new",
-    "intro_continuation",
+    SESSION_INFO_SECTION,
+    CODING_PRINCIPLES_SECTION,
+    SKILLS_DISCOVERY_SECTION,
+    REMOTE_SCRATCH_SECTION,
+    ROLE_SECTION,
+    INTRO_NEW_SECTION,
+    INTRO_CONTINUATION_SECTION,
   ]
   .into_iter()
   .chain(workflow)
@@ -212,10 +252,10 @@ fn required_worker_sections() -> Vec<&'static str> {
     REPO_LESS_SOURCE_FILES_SECTION,
     "task_spec_source_files",
     WORKFLOW_NO_REVIEWER_SECTION,
-    "task",
+    TASK_SECTION,
     ITERATION_REPORTS_SECTION,
-    "worktree_persistence",
-    "user_decisions",
+    WORKTREE_PERSISTENCE_SECTION,
+    USER_DECISIONS_SECTION,
     "memory",
   ]);
   let mut seen = HashSet::new();

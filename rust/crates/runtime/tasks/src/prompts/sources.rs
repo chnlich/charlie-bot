@@ -19,12 +19,22 @@ use crate::spawner_prompt::{self, TextReadError};
 use crate::{cold_read, review_text};
 
 /// The base sections every managed contract starts from (`prompts/task_base.md`).
-const COMMON_SECTIONS: [&str; 4] = ["coding_principles", "skills_discovery", "profile_home", "remote_scratch"];
+const COMMON_SECTIONS: [&str; 4] = [
+  spawner_prompt::CODING_PRINCIPLES_SECTION,
+  spawner_prompt::SKILLS_DISCOVERY_SECTION,
+  spawner_prompt::PROFILE_HOME_SECTION,
+  spawner_prompt::REMOTE_SCRATCH_SECTION,
+];
 
 /// The base sections of a worker contract. Workers carry the text-writing rule here; managers carry it as a subsection
 /// of `prompts/master.md` instead.
-const WORKER_BASE_SECTIONS: [&str; 5] =
-  ["coding_principles", "skills_discovery", "profile_home", "remote_scratch", "text_model_reads"];
+const WORKER_BASE_SECTIONS: [&str; 5] = [
+  spawner_prompt::CODING_PRINCIPLES_SECTION,
+  spawner_prompt::SKILLS_DISCOVERY_SECTION,
+  spawner_prompt::PROFILE_HOME_SECTION,
+  spawner_prompt::REMOTE_SCRATCH_SECTION,
+  spawner_prompt::TEXT_MODEL_READS_SECTION,
+];
 
 /// One chain link of the subtree scope: a node from the root down to this node, with its subtree rule ref.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -199,7 +209,7 @@ fn worker_kind_rule_segments(
     let contract = spawner_prompt::substitute_tokens(&contract, &spawner_prompt::verify_contract_tokens(repo)?);
     segments.push(segment(contract, vec![base_source("prompts/verify.md")]));
   } else {
-    let worker = sections_text(repo, "worker.md", &["role"])?;
+    let worker = sections_text(repo, "worker.md", &[spawner_prompt::ROLE_SECTION])?;
     // The repo contract drops the bindings section, which renders per run. A repo-less task selects the repo-less
     // workflow and its source-files rule.
     let repo_less = !task.and_then(|task| task.repo_path.as_deref()).is_some_and(|path| !path.is_empty());
@@ -209,7 +219,7 @@ fn worker_kind_rule_segments(
     // A spec that carries Requester Words also gives its worker the decisions rule; every other worker's contract
     // stays as it was.
     if task.is_some_and(|task| requester_words_heading_line(&task.goal).is_some()) {
-      let decisions = sections_text(repo, "worker.md", &["user_decisions"])?;
+      let decisions = sections_text(repo, "worker.md", &[spawner_prompt::USER_DECISIONS_SECTION])?;
       segments.push(segment(decisions, vec![base_source(spawner_prompt::WORKER_PROMPT_PATH)]));
     }
   }

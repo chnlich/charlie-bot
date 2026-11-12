@@ -15,17 +15,20 @@ use crate::spawner_prompt::{self, Tokens};
 pub fn render_session_info(checkout: &RepoRoot, session_name: &str) -> anyhow::Result<String> {
   let sections = spawner_prompt::load_marker_sections(
     &checkout.path().join(spawner_prompt::WORKER_PROMPT_PATH),
-    &["session_info"],
+    &[spawner_prompt::SESSION_INFO_SECTION],
     spawner_prompt::WORKER_PROMPT_EXTRACTION,
   )?;
-  Ok(sections["session_info"].replace("{{session_name}}", session_name))
+  Ok(sections[spawner_prompt::SESSION_INFO_SECTION].replace("{{session_name}}", session_name))
 }
 
 /// The bindings intro line: a retry that continues the worktree says so (`binding_intro`).
 pub fn binding_intro(checkout: &RepoRoot, run: &RunRecord) -> anyhow::Result<String> {
   let sections = spawner_prompt::load_worker_prompt_sections(checkout.path())?;
-  let key =
-    if run.retry_of_run_id.is_some() && run.worktree_path.is_some() { "intro_continuation" } else { "intro_new" };
+  let key = if run.retry_of_run_id.is_some() && run.worktree_path.is_some() {
+    spawner_prompt::INTRO_CONTINUATION_SECTION
+  } else {
+    spawner_prompt::INTRO_NEW_SECTION
+  };
   Ok(sections[key].trim().to_string())
 }
 
@@ -56,21 +59,21 @@ pub fn render_worktree_bindings(
 pub fn render_task_body(checkout: &RepoRoot, description: &str) -> anyhow::Result<String> {
   let sections = spawner_prompt::load_marker_sections(
     &checkout.path().join(spawner_prompt::WORKER_PROMPT_PATH),
-    &["task"],
+    &[spawner_prompt::TASK_SECTION],
     spawner_prompt::WORKER_PROMPT_EXTRACTION,
   )?;
   let tokens: Tokens = vec![("{{description}}", description.to_string())];
-  Ok(spawner_prompt::substitute_tokens(&sections["task"], &tokens))
+  Ok(spawner_prompt::substitute_tokens(&sections[spawner_prompt::TASK_SECTION], &tokens))
 }
 
 /// The worktree persistence section, as the template states it (`render_worktree_persistence`).
 pub fn render_worktree_persistence(checkout: &RepoRoot) -> anyhow::Result<String> {
   let sections = spawner_prompt::load_marker_sections(
     &checkout.path().join(spawner_prompt::WORKER_PROMPT_PATH),
-    &["worktree_persistence"],
+    &[spawner_prompt::WORKTREE_PERSISTENCE_SECTION],
     spawner_prompt::WORKER_PROMPT_EXTRACTION,
   )?;
-  Ok(sections["worktree_persistence"].clone())
+  Ok(sections[spawner_prompt::WORKTREE_PERSISTENCE_SECTION].clone())
 }
 
 /// The review run's context: the context section, the log pointer, and the run's git steps (`review_task_context`).

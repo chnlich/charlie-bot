@@ -396,24 +396,36 @@ pub fn reply_probe_input(reply_text: &str, questions: &str) -> String {
 }
 
 /// The findings parsed from a cold-read answer of a web reply (`parse_reply_findings`).
-pub fn parse_reply_findings(answer: &str) -> Vec<String> {
-  let mut findings = Vec::new();
+pub fn parse_reply_findings(answer: &str) -> anyhow::Result<Vec<String>> {
+  let mut answers: [Option<String>; 2] = [None, None];
+  let mut active = None;
   for line in answer.lines() {
     let trimmed = line.trim();
-    let content = trimmed
-      .strip_prefix("(1)")
-      .or_else(|| trimmed.strip_prefix("(2)"))
-      .or_else(|| trimmed.strip_prefix("1."))
-      .or_else(|| trimmed.strip_prefix("2."));
-    if let Some(rest) = content {
-      let cleaned = rest.trim().trim_start_matches(':').trim_start_matches('.').trim();
-      let without_trailing = cleaned.trim_end_matches('.').trim();
-      if !without_trailing.is_empty() && !is_none_verdict(without_trailing) {
-        findings.push(without_trailing.to_string());
-      }
+    let labelled = [("(1)", 0), ("1.", 0), ("(2)", 1), ("2.", 1)]
+      .into_iter()
+      .find_map(|(label, index)| trimmed.strip_prefix(label).map(|rest| (index, rest)));
+    if let Some((index, rest)) = labelled {
+      anyhow::ensure!(answers[index].is_none(), "cold-read reply answer repeats question {}", index + 1);
+      answers[index] = Some(rest.trim().trim_start_matches(':').trim_start_matches('.').trim().to_string());
+      active = Some(index);
+    } else if let Some(index) = active
+      && !trimmed.is_empty()
+    {
+      let text = answers[index].as_mut().expect("an active answer was initialized");
+      text.push('\n');
+      text.push_str(trimmed);
     }
   }
-  findings
+  anyhow::ensure!(answers.iter().all(Option::is_some), "cold-read reply answer must answer questions (1) and (2)");
+
+  let mut findings = Vec::new();
+  for answer in answers.into_iter().flatten() {
+    let without_trailing = answer.trim().trim_end_matches('.').trim();
+    if !without_trailing.is_empty() && !is_none_verdict(without_trailing) {
+      findings.push(without_trailing.to_string());
+    }
+  }
+  Ok(findings)
 }
 
 fn is_none_verdict(text: &str) -> bool {
@@ -878,12 +890,18 @@ BBBB
   #[test]
   fn reply_findings_parser_extracts_findings_and_ignores_none_answers() {
     let clean = "(1) none\n(2) none";
-    assert!(parse_reply_findings(clean).is_empty());
+    assert!(parse_reply_findings(clean).unwrap().is_empty());
 
     let with_findings = "(1) 0a1c1ef stands without a name.\n(2) 「读回」is a rule-defined agent term.";
     assert_eq!(
-      parse_reply_findings(with_findings),
+      parse_reply_findings(with_findings).unwrap(),
       vec!["0a1c1ef stands without a name", "「读回」is a rule-defined agent term"]
     );
+  }
+
+  #[test]
+  fn reply_findings_parser_rejects_an_incomplete_answer() {
+    assert!(parse_reply_findings("(1) none").is_err());
+    assert!(parse_reply_findings("No findings.").is_err());
   }
 }

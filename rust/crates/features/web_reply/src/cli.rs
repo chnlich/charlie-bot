@@ -105,14 +105,21 @@ fn reply(args: &ReplyArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
   let text = files::read_reply_text(&args.file)?;
   let request = json!({ "session_id": &session_id, "text": &text });
   let unread_result = client::post("/api/internal/web/reply/unread", request, None, &[])?;
-  let unread = unread_result.get("unread").and_then(Value::as_bool).unwrap_or(true);
+  let unread = unread_result
+    .get("unread")
+    .and_then(Value::as_bool)
+    .ok_or_else(|| CliExit::error("the reply-unread response lacks a boolean unread field"))?;
 
   if unread {
-    let code_findings: Vec<String> = unread_result
-      .get("code_findings")
-      .and_then(Value::as_array)
-      .map(|arr| arr.iter().filter_map(Value::as_str).map(str::to_string).collect())
-      .unwrap_or_default();
+    let code_findings: Vec<String> = list(field(&unread_result, "code_findings")?)?
+      .iter()
+      .map(|finding| {
+        finding
+          .as_str()
+          .map(str::to_owned)
+          .ok_or_else(|| CliExit::error("the reply-unread response carries a non-string code finding"))
+      })
+      .collect::<Result<_, _>>()?;
 
     let findings = if !code_findings.is_empty() {
       client::post(
@@ -142,7 +149,7 @@ fn reply(args: &ReplyArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
         std::process::exit(1);
       };
       let answer = probe.answer.expect("a successful reply probe has the answering backend's response");
-      let model_findings = cold_read::parse_reply_findings(&answer);
+      let model_findings = cold_read::parse_reply_findings(&answer).map_err(anyhow_exit)?;
       if !model_findings.is_empty() {
         client::post(
           "/api/internal/web/reply-check",

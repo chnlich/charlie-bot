@@ -47,6 +47,6 @@ After the five answers, tier the request against the Approval policy table secti
 <!-- section: reply_system_prompt -->
 You are a careful cold reader. Read the message for the user cold.
 <!-- section: reply_questions -->
-You are reading one web reply to a user cold. The piped input is the reply text. You have no other context. Answer two questions in the reply's own language, each in one or two sentences:
+You are reading one web reply to a user cold. The piped input is the reply text. You have no other context. Answer two questions in the reply's own language, each in one or two sentences, beginning with (1) and (2), respectively:
 (1) In text for the user, every identifier (commit hash, session id, run, job, event, version or build string) must stand beside a readable name that says what it identifies. List each bare identifier that stands without a readable name. Write none when there is none.
 (2) In text for the user, words must be the user's own or everyday words, and rule-defined agent-work terms (such as 读回, 主线, 子线, 本线, 这条线, 上级会话, 父节点, 子会话, 子节点, 冷读, 分歧, 取舍, 接手, 起飞, Waiting on you, 审批人, 放行) must stay out. List each rule-defined agent-work term or unfamiliar term that is not explained. Write none when there is none.

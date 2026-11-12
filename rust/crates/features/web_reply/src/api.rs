@@ -37,7 +37,8 @@ pub async fn post_reply(State(features): State<Arc<FeatureContext>>, request: Re
     Ok(identity) => identity,
     Err(response) => return response,
   };
-  let request_id = identity.claims().map(|claims| {
+  let claims = identity.claims();
+  let request_id = claims.map(|claims| {
     charliebot_store::control_events::derived_agent_send_request_id(
       &claims.run_id,
       "web reply",
@@ -45,13 +46,15 @@ pub async fn post_reply(State(features): State<Arc<FeatureContext>>, request: Re
       &model.text,
     )
   });
+  let run_id = claims.map(|claims| claims.run_id.as_str());
   answer(
-    reply::post_web_reply_with_request_id(
+    reply::post_web_reply_with_identity(
       &features,
       &model.session_id,
       &model.text,
       model.keep_language.as_deref(),
       request_id.as_deref(),
+      run_id,
     )
     .await,
   )
@@ -123,7 +126,29 @@ pub async fn post_reply_unread(State(features): State<Arc<FeatureContext>>, requ
     Ok(model) => model,
     Err(response) => return *response,
   };
-  answer(reply::unread_reply(&features, &model.session_id, &model.text).await)
+  let identity = match caller::resolve_caller(&parts.headers, &features) {
+    Ok(identity) => identity,
+    Err(response) => return response,
+  };
+  let claims = identity.claims();
+  let request_id = claims.map(|claims| {
+    charliebot_store::control_events::derived_agent_send_request_id(
+      &claims.run_id,
+      "web reply",
+      &model.session_id,
+      &model.text,
+    )
+  });
+  answer(
+    reply::unread_reply(
+      &features,
+      &model.session_id,
+      &model.text,
+      claims.map(|claims| claims.run_id.as_str()),
+      request_id.as_deref(),
+    )
+    .await,
+  )
 }
 
 /// `POST /api/internal/web/reply-check`: records a cold read of a web reply.
@@ -137,6 +162,10 @@ pub async fn post_reply_check(State(features): State<Arc<FeatureContext>>, reque
     Ok(model) => model,
     Err(response) => return *response,
   };
+  let identity = match caller::resolve_caller(&parts.headers, &features) {
+    Ok(identity) => identity,
+    Err(response) => return response,
+  };
   answer(
     reply::record_reply_check(
       &features,
@@ -145,6 +174,7 @@ pub async fn post_reply_check(State(features): State<Arc<FeatureContext>>, reque
       &model.backend,
       &model.findings,
       model.answer.as_deref(),
+      identity.claims().map(|claims| claims.run_id.as_str()),
     )
     .await,
   )

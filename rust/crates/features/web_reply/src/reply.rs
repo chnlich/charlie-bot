@@ -319,17 +319,25 @@ pub fn reply_sha256(text: &str) -> String {
   charliebot_store::control_events::sha256_bytes_hex(text.as_bytes())
 }
 
-/// The findings of a recorded `web_reply_check` event for `digest`, if any check has been recorded.
+/// The findings of a recorded `web_reply_check` event for this reply attempt, if any check has been recorded.
 pub async fn checked_reply_findings(
   features: &FeatureContext,
   session_id: &str,
   digest: &str,
+  run_id: Option<&str>,
 ) -> Result<Option<Vec<String>>, WebReplyError> {
   let events = load_events(features, session_id).await?;
+  let reply_index = run_id.map(|run_id| run_reply_index(events.iter().map(SharedChatEvent::as_ref), run_id));
   for event in events.iter().rev() {
-    if event.get("type").and_then(CompactValue::as_str) == Some(WEB_REPLY_CHECK)
-      && event.get(REPLY_SHA256).and_then(CompactValue::as_str) == Some(digest)
-    {
+    let matches = match (run_id, reply_index) {
+      (Some(run_id), Some(reply_index)) => {
+        event.get("run_id").and_then(CompactValue::as_str) == Some(run_id)
+          && event.get("reply_index").and_then(CompactValue::as_u64) == Some(reply_index as u64)
+      }
+      (None, None) => event.get(REPLY_SHA256).and_then(CompactValue::as_str) == Some(digest),
+      _ => unreachable!("a reply index is present exactly when a run id is present"),
+    };
+    if event.get("type").and_then(CompactValue::as_str) == Some(WEB_REPLY_CHECK) && matches {
       let findings = event
         .get("findings")
         .and_then(CompactValue::as_array)
@@ -342,13 +350,34 @@ pub async fn checked_reply_findings(
 }
 
 /// Return whether `text` has no matching cold-read check in the session yet, running code assertions if unread.
-pub async fn unread_reply(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
+pub async fn unread_reply(
+  features: &FeatureContext,
+  session_id: &str,
+  text: &str,
+  run_id: Option<&str>,
+  request_id: Option<&str>,
+) -> Result<Value, WebReplyError> {
   require_web_session(features, session_id).await?;
   if str_methods::strip(text).is_empty() {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Reply text is empty"));
   }
+  if let Some(request_id) = request_id {
+    let event_id = charliebot_store::control_events::stable_request_event_id(session_id, request_id);
+    let events = load_events(features, session_id).await?;
+    let existing = charliebot_store::control_events::replay_request_event(
+      events.iter().map(SharedChatEvent::as_ref),
+      &event_id,
+      request_id,
+      WEB_REPLY,
+      text,
+      None,
+    )?;
+    if existing.is_some() {
+      return Ok(json!({ "unread": false, "remaining_findings": [] }));
+    }
+  }
   let digest = reply_sha256(text);
-  if let Some(findings) = checked_reply_findings(features, session_id, &digest).await? {
+  if let Some(findings) = checked_reply_findings(features, session_id, &digest, run_id).await? {
     return Ok(json!({ "unread": false, "remaining_findings": findings }));
   }
   let file_scan_context = file_link_scan_context(features, session_id)?;
@@ -378,9 +407,16 @@ pub async fn record_reply_check(
   backend: &str,
   findings: &[String],
   answer: Option<&str>,
+  run_id: Option<&str>,
 ) -> Result<Value, WebReplyError> {
   require_web_session(features, session_id).await?;
   let digest = reply_sha256(text);
+  let reply_index = if let Some(run_id) = run_id {
+    let events = load_events(features, session_id).await?;
+    Some(run_reply_index(events.iter().map(SharedChatEvent::as_ref), run_id))
+  } else {
+    None
+  };
   let mut event = json!({
     "type": WEB_REPLY_CHECK,
     "content": "web reply check",
@@ -388,12 +424,26 @@ pub async fn record_reply_check(
     "backend": backend,
     "findings": findings,
   });
+  if let (Some(run_id), Some(reply_index)) = (run_id, reply_index) {
+    event["run_id"] = json!(run_id);
+    event["reply_index"] = json!(reply_index);
+  }
   if let Some(answer) = answer {
     event["answer"] = json!(answer);
   }
   features.store.persist_and_broadcast(session_id, event).await?;
   tracing::info!(session = %session_id, backend, count = findings.len(), "web_reply_check_recorded");
   Ok(json!({ REPLY_SHA256: digest }))
+}
+
+/// The number of replies already posted by `run_id`, which identifies the next reply within the run.
+fn run_reply_index<'a, E: EventFields + 'a>(events: impl Iterator<Item = &'a E>, run_id: &str) -> usize {
+  events
+    .filter(|event| {
+      event.field("type").and_then(EventFields::as_str_field) == Some(WEB_REPLY)
+        && event.field("run_id").and_then(EventFields::as_str_field) == Some(run_id)
+    })
+    .count()
 }
 
 #[cfg(test)]
@@ -403,16 +453,17 @@ pub async fn post_web_reply(
   text: &str,
   keep_language: Option<&str>,
 ) -> Result<Value, WebReplyError> {
-  post_web_reply_with_request_id(features, session_id, text, keep_language, None).await
+  post_web_reply_with_identity(features, session_id, text, keep_language, None, None).await
 }
 
-/// Record a web reply for one caller request, replaying the original event when the run retries it.
-pub async fn post_web_reply_with_request_id(
+/// Record a web reply for one caller request, bounding the cold-read send-back to one attempt within that run reply.
+pub async fn post_web_reply_with_identity(
   features: &FeatureContext,
   session_id: &str,
   text: &str,
   keep_language: Option<&str>,
   request_id: Option<&str>,
+  run_id: Option<&str>,
 ) -> Result<Value, WebReplyError> {
   require_web_session(features, session_id).await?;
   if str_methods::strip(text).is_empty() {
@@ -427,7 +478,7 @@ pub async fn post_web_reply_with_request_id(
   )?;
   let violations = checks.check_reply(text, &file_scan_context)?;
   let digest = reply_sha256(text);
-  let prior_check = checked_reply_findings(features, session_id, &digest).await?;
+  let prior_check = checked_reply_findings(features, session_id, &digest, run_id).await?;
   let remaining_findings = if let Some(checked_findings) = prior_check {
     let mut findings = checked_findings;
     for v in &violations {
@@ -488,6 +539,9 @@ pub async fn post_web_reply_with_request_id(
     if let Some(request_id) = request_id {
       event["id"] = json!(charliebot_store::control_events::stable_request_event_id(session_id, request_id));
       event["request_id"] = json!(request_id);
+    }
+    if let Some(run_id) = run_id {
+      event["run_id"] = json!(run_id);
     }
     // Release the shared snapshot before append; the store appends into the cached list.
     // Keeping this Arc alive would make Store::append_chat_event deep-clone the entire event vector through Arc::make_mut.
@@ -649,10 +703,10 @@ mod tests {
     let text = format!("{}[diff]({diff_url})[PR 页]({pr_url})", "x".repeat(200));
     let expected = json!({"posted": true, "chars": 208, "over_budget": false});
 
-    let first = post_web_reply_with_request_id(&home.features, &sid, &text, None, Some("same-reply"))
+    let first = post_web_reply_with_identity(&home.features, &sid, &text, None, Some("same-reply"), None)
       .await
       .expect("the first reply posts");
-    let replay = post_web_reply_with_request_id(&home.features, &sid, &text, None, Some("same-reply"))
+    let replay = post_web_reply_with_identity(&home.features, &sid, &text, None, Some("same-reply"), None)
       .await
       .expect("the retry replays its reply");
 
@@ -663,6 +717,49 @@ mod tests {
     assert_eq!(replies[0].1["chars"], 208);
     let event = home.events(&sid).into_iter().find(|event| event["type"] == WEB_REPLY).unwrap();
     assert_eq!(event["request_id"], "same-reply");
+  }
+
+  #[tokio::test]
+  async fn a_checked_reply_gets_one_sendback_even_after_its_text_changes() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let run_id = "reply-run";
+    let first_text = "已完成部署。";
+    let revised_text = "部署已经完成。";
+    let findings = vec!["deployment name is unclear".to_string()];
+
+    record_reply_check(&home.features, &sid, first_text, "probe", &findings, Some("(1) unclear"), Some(run_id))
+      .await
+      .expect("the failed cold read is recorded");
+    let request_id = "checked-reply";
+    let unread = unread_reply(&home.features, &sid, revised_text, Some(run_id), Some(request_id))
+      .await
+      .expect("the revised submission reads the existing attempt");
+
+    assert_eq!(unread["unread"], json!(false));
+    assert_eq!(unread["remaining_findings"], json!(findings));
+
+    post_web_reply_with_identity(&home.features, &sid, revised_text, None, Some(request_id), Some(run_id))
+      .await
+      .expect("the revised second submission posts");
+    let posted = home.events(&sid).into_iter().find(|event| event["type"] == WEB_REPLY).unwrap();
+    assert_eq!(posted["content"], revised_text);
+    assert_eq!(posted["run_id"], run_id);
+    assert_eq!(posted[WEB_REPLY]["findings"], json!(findings));
+
+    let retry = unread_reply(&home.features, &sid, revised_text, Some(run_id), Some(request_id))
+      .await
+      .expect("an already posted reply does not cold-read again");
+    assert_eq!(retry["unread"], json!(false));
+
+    let next_reply = unread_reply(&home.features, &sid, "修复已经完成。", Some(run_id), None)
+      .await
+      .expect("the next reply starts a new check");
+    assert_eq!(next_reply["unread"], json!(true));
+    let next_run = unread_reply(&home.features, &sid, revised_text, Some("next-run"), None)
+      .await
+      .expect("a later run starts a new check");
+    assert_eq!(next_run["unread"], json!(true));
   }
 
   #[tokio::test]

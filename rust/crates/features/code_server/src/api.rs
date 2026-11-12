@@ -2,11 +2,12 @@
 //! nothing listens on its port, and the template global that shows the diff page's open button.
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::io;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::Router;
@@ -183,13 +184,53 @@ fn spawn(binary: &str, config_path: &Path) -> io::Result<Child> {
   command.spawn()
 }
 
-/// `code_server.bin` (with `~` expanded) when set, else `code-server`.
+/// `code_server.bin` (with `~` expanded) when set, else `code-server`, resolved from [`EXECUTABLE_MEMO`].
 pub(crate) fn executable(section: &CodeServerConfig) -> anyhow::Result<Option<String>> {
-  let search_path = std::env::var_os("PATH").map(|path| path.to_string_lossy().into_owned());
-  match section.bin.as_deref().filter(|bin| !bin.is_empty()) {
-    Some(bin) => which(&paths::expanduser(&config::pathlib_text(bin)), search_path.as_deref()),
-    None => which("code-server", search_path.as_deref()),
+  let setting =
+    section.bin.as_deref().filter(|bin| !bin.is_empty()).map(|bin| paths::expanduser(&config::pathlib_text(bin)));
+  resolve_executable(setting.as_deref(), std::env::var_os("PATH").as_deref())
+}
+
+/// How long a resolved executable answers the next caller.
+///
+/// The `code_server_enabled` template global is evaluated at every page render, and the search of `PATH` costs a
+/// metadata read per directory. The answer follows the setting and `PATH` here, and an install or removal under a
+/// `PATH` directory is the one change neither names, so the entry expires and the next caller searches again.
+const EXECUTABLE_TTL: Duration = Duration::from_secs(5);
+
+/// One resolution of the executable, with the inputs that produced it.
+struct ExecutableMemo {
+  setting: Option<String>,
+  search_path: Option<String>,
+  executable: Option<String>,
+  resolved_at: Instant,
+}
+
+static EXECUTABLE_MEMO: LazyLock<Mutex<Option<ExecutableMemo>>> = LazyLock::new(|| Mutex::new(None));
+
+/// The executable `setting` names (a bare name searches `search_path`; `~` in a name with a directory part is already
+/// expanded by the caller), from the memo while the setting and `search_path` still hold and the entry is younger
+/// than [`EXECUTABLE_TTL`].
+pub(crate) fn resolve_executable(setting: Option<&str>, search_path: Option<&OsStr>) -> anyhow::Result<Option<String>> {
+  let search_path = search_path.map(|path| path.to_string_lossy().into_owned());
+  {
+    let memo = EXECUTABLE_MEMO.lock().expect("the executable memo mutex is not poisoned");
+    if let Some(memo) = memo.as_ref()
+      && memo.setting.as_deref() == setting
+      && memo.search_path == search_path
+      && memo.resolved_at.elapsed() < EXECUTABLE_TTL
+    {
+      return Ok(memo.executable.clone());
+    }
   }
+  let executable = which(setting.unwrap_or("code-server"), search_path.as_deref())?;
+  *EXECUTABLE_MEMO.lock().expect("the executable memo mutex is not poisoned") = Some(ExecutableMemo {
+    setting: setting.map(str::to_string),
+    search_path,
+    executable: executable.clone(),
+    resolved_at: Instant::now(),
+  });
+  Ok(executable)
 }
 
 /// The folder, resolved, when it is a directory under a workspace directory or

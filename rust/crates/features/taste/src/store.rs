@@ -421,14 +421,17 @@ fn parse_options(value: Option<&Value>) -> Result<Vec<String>, FieldError> {
     .collect()
 }
 
+/// One invalid field inside `source`, named with its parent so a reader sees where it sits.
+fn source_error(field: impl std::fmt::Display, detail: impl Into<String>) -> FieldError {
+  FieldError::new(format!("source.{field}"), detail)
+}
+
 fn parse_source(value: Option<&Value>) -> Result<Source, FieldError> {
   let object = value.and_then(Value::as_object).ok_or_else(|| FieldError::new("source", "expected an object"))?;
   reject_unknown(object, &["session_id", "url", "event_id", "plan_version", "comment_item"])
-    .map_err(|error| FieldError::new(format!("source.{}", error.field), error.detail))?;
-  let session_id = required_string(object, "session_id")
-    .map_err(|error| FieldError::new(format!("source.{}", error.field), error.detail))?;
-  let url =
-    required_string(object, "url").map_err(|error| FieldError::new(format!("source.{}", error.field), error.detail))?;
+    .map_err(|error| source_error(&error.field, error.detail))?;
+  let session_id = required_string(object, "session_id").map_err(|error| source_error(&error.field, error.detail))?;
+  let url = required_string(object, "url").map_err(|error| source_error(&error.field, error.detail))?;
   let event_id = optional_reference(object, "event_id")?;
   let plan_version = optional_reference(object, "plan_version")?;
   let comment_item = optional_comment_item(object)?;
@@ -436,10 +439,10 @@ fn parse_source(value: Option<&Value>) -> Result<Source, FieldError> {
     (Some(event_id), None) => SourceRef::Event(event_id),
     (None, Some(plan_version)) => SourceRef::PlanVersion(plan_version),
     (Some(_), Some(_)) => {
-      return Err(FieldError::new("source.event_id", "exactly one of event_id or plan_version belongs in a source"));
+      return Err(source_error("event_id", "exactly one of event_id or plan_version belongs in a source"));
     }
     (None, None) => {
-      return Err(FieldError::new("source.event_id", "a source names event_id or plan_version"));
+      return Err(source_error("event_id", "a source names event_id or plan_version"));
     }
   };
   Ok(Source { session_id, url, reference, comment_item })
@@ -449,19 +452,18 @@ fn optional_reference(object: &Map<String, Value>, field: &str) -> Result<Option
   match object.get(field) {
     None => Ok(None),
     Some(Value::String(text)) if !text.trim().is_empty() => Ok(Some(text.clone())),
-    Some(Value::String(_)) => Err(FieldError::new(format!("source.{field}"), "expected a non-empty string")),
-    Some(_) => Err(FieldError::new(format!("source.{field}"), "expected a string")),
+    Some(Value::String(_)) => Err(source_error(field, "expected a non-empty string")),
+    Some(_) => Err(source_error(field, "expected a string")),
   }
 }
 
 fn optional_comment_item(object: &Map<String, Value>) -> Result<Option<u64>, FieldError> {
   match object.get("comment_item") {
     None | Some(Value::Null) => Ok(None),
-    Some(Value::Number(number)) => number
-      .as_u64()
-      .map(Some)
-      .ok_or_else(|| FieldError::new("source.comment_item", "expected a non-negative whole number")),
-    Some(_) => Err(FieldError::new("source.comment_item", "expected a number")),
+    Some(Value::Number(number)) => {
+      number.as_u64().map(Some).ok_or_else(|| source_error("comment_item", "expected a non-negative whole number"))
+    }
+    Some(_) => Err(source_error("comment_item", "expected a number")),
   }
 }
 

@@ -27,27 +27,14 @@ pub(crate) fn chrome_program(directory: &Path, steps: Value) -> PathBuf {
   let stub = directory.join("stub");
   fs::create_dir(&stub).expect("the stub directory is created");
   let program = stub.join("chrome");
-  symlink(chrome_stub_helper(), &program).expect("the fake links to the helper");
+  symlink(charliebot_shell_harness::built_binary("chrome-stub"), &program).expect("the fake links to the helper");
   fs::write(stub.join("probe.json"), json!({"chrome": steps}).to_string()).expect("the fake's steps are written");
   program
 }
 
-/// The `chrome-stub` helper that cargo builds beside this test binary. Unit tests cannot name it with `CARGO_BIN_EXE_*`,
-/// so the path comes from the target directory.
-fn chrome_stub_helper() -> PathBuf {
-  let exe = std::env::current_exe().expect("the test binary path");
-  exe
-    .ancestors()
-    .skip(1)
-    .map(|directory| directory.join("chrome-stub"))
-    .find(|candidate| candidate.is_file())
-    .expect("cargo builds the chrome-stub helper into the target directory that holds the test binary")
-}
-
-/// The charlie-bot checkout, which holds `prompts/plan_template.html` and the page packages.
-pub(crate) fn repo_root() -> PathBuf {
-  Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("the crate lies under the repository").to_path_buf()
-}
+/// The charlie-bot checkout, which holds `prompts/plan_template.html` and the page packages, from the shell harness
+/// that owns the repository-root lookup.
+pub(crate) use charliebot_shell_harness::repo_root;
 
 /// A plan page that passes every plan assertion except the ones its tests break: the genre template's style block
 /// verbatim, six numbered sections, and a footer, with `goal` as the Problem / Goal body.

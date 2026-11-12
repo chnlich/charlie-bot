@@ -171,6 +171,8 @@ mod tests {
   use std::os::unix::fs::PermissionsExt;
   use std::path::{Path, PathBuf};
 
+  use charliebot_shell_harness::repo_root;
+
   use super::*;
 
   const TEST_KATEX: &str = r#"module.exports = {
@@ -215,14 +217,6 @@ mod tests {
     let path = directory.join("fragment.html");
     fs::write(&path, contents).unwrap();
     path
-  }
-
-  fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-      .ancestors()
-      .nth(4)
-      .expect("artifacts crate is under the repository")
-      .to_path_buf()
   }
 
   #[test]

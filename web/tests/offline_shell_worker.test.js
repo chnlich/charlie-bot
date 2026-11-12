@@ -29,22 +29,32 @@ function deferred() {
 // Lets the worker's pending steps run up to their next timer, the fake clock's cue to advance.
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
+// A settle's re-reads chain through timers the fake clock queues as earlier ones fire, so a test
+// advances the clock one wait cap at a time, flushing between, until its step ran.
+async function settleCaps(t, count) {
+  for (let cap = 0; cap < count; cap++) {
+    t.mock.timers.tick(WAIT_CAP_MS);
+    await flush();
+  }
+}
+
 function makeCaches() {
   const stores = new Map();
   const keyOf = (input) => new URL(typeof input === 'string' ? input : input.url, ORIGIN).href;
   const api = {
-    // Keys here miss their first match, the way a just-started worker's match can race the cache's disk
-    // index; the worker's settle re-read is what the race tests exercise.
+    // Keys here miss their first match, the way a just-started worker's match can race the cache's
+    // disk index; the index settles once per worker, so the first match per key misses and every
+    // later match answers. The settle re-reads are what the race tests exercise.
     firstMatchMisses: new Set(),
+    matched: new Set(),
     open: async (name) => {
       if (!stores.has(name)) stores.set(name, new Map());
       const entries = stores.get(name);
-      const missed = new Set();
       return {
         match: async (input) => {
           const key = keyOf(input);
-          if (api.firstMatchMisses.has(key) && !missed.has(key)) {
-            missed.add(key);
+          if (api.firstMatchMisses.has(key) && !api.matched.has(key)) {
+            api.matched.add(key);
             return undefined;
           }
           return entries.has(key) ? entries.get(key).clone() : undefined;
@@ -153,7 +163,7 @@ test('the first load reaches the network, and a warm shell then answers the navi
   const nav = request(SHELL_URL, {mode: 'navigate'});
   const pending = answer(h, nav);
   await flush();
-  t.mock.timers.tick(2 * WAIT_CAP_MS);
+  await settleCaps(t, 2);
   const first = await pending;
   assert.equal(await first.response.text(), '<html><body>shell</body></html>', 'the first load is the network page');
 
@@ -192,8 +202,7 @@ test('a navigation with no stored shell fetches the network after the settle', a
   const pending = answer(h, request(SHELL_URL, {mode: 'navigate'}));
   await flush();
   assert.deepEqual(h.state.calls, [], 'the settle re-reads the cache before it reaches the network');
-  t.mock.timers.tick(2 * WAIT_CAP_MS);
-  await flush();
+  await settleCaps(t, 2);
   assert.equal(h.state.calls.length, 1, 'the network fetch starts after the settle');
   network.release();
   const nav = await pending;
@@ -343,11 +352,14 @@ test('a copy match that races the cache index answers at the cap, and its fetch 
   h.caches.api.firstMatchMisses.add(BOOTSTRAP_URL);
 
   const network = deferred();
-  h.state.network = () => network.promise.then(() => firstScreen('two'));
+  h.state.network = (req, init) => new Promise((resolve, reject) => {
+    init.signal?.addEventListener('abort', () => reject(new TypeError('This request was aborted')));
+    network.promise.then(() => resolve(firstScreen('two')));
+  });
   const callsAtHit = h.state.calls.length;
   const pending = answer(h, request(BOOTSTRAP_URL));
   await flush();
-  t.mock.timers.tick(WAIT_CAP_MS);
+  await settleCaps(t, 2);
   const hit = await pending;
   assert.equal((await hit.response.json()).body, 'one', 'the copy answers at the cap\'s re-read');
   assert.equal(h.state.calls.length, callsAtHit + 1, 'the network fetch of the hit made no call beyond its own');

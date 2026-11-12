@@ -504,23 +504,14 @@ impl BackendsConfig {
     self.pools.iter().find(|pool| pool.id == id)
   }
 
-  /// The visible `backends.options` entries as their `(id, label)` pairs, in config order: the
-  /// options a picker lists.
-  pub fn picker_options(&self) -> Vec<(String, String)> {
+  /// The entries every web picker lists, as `(id, label)` pairs: the visible `backends.options` in config order,
+  /// then the visible `backends.pools` in config order.
+  pub fn picker_entries(&self) -> Vec<(String, String)> {
     self
       .options
       .iter()
       .filter(|option| option.visible)
       .map(|option| (option.id.clone(), option.label.clone()))
-      .collect()
-  }
-
-  /// The entries every web picker lists: [`Self::picker_options`], then the visible `backends.pools`
-  /// entries, each as its `(id, label)` in config order.
-  pub fn picker_entries(&self) -> Vec<(String, String)> {
-    self
-      .picker_options()
-      .into_iter()
       .chain(self.pools.iter().filter(|pool| pool.visible).map(|pool| (pool.id.clone(), pool.label.clone())))
       .collect()
   }

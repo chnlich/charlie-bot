@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use lru::LruCache;
 use serde_json::{Map, Value};
 
+use crate::lock::lock;
 use crate::metadata::SessionMetadata;
 
 pub const HAS_PENDING_PLAN_APPROVAL: &str = "has_pending_plan_approval";
@@ -95,19 +96,19 @@ fn state() -> &'static Mutex<State> {
 
 /// Flag one session for a fresh sidebar probe.
 pub fn mark_sidebar_dirty(session_id: &str) {
-  let mut state = state().lock().expect("sidebar state mutex is not poisoned");
+  let mut state = lock(state(), "sidebar state mutex");
   state.dirty.insert(session_id.to_string());
   state.derived_generation += 1;
 }
 
 /// Return whether one session needs a fresh sidebar probe.
 pub fn is_dirty(session_id: &str) -> bool {
-  state().lock().expect("sidebar state mutex is not poisoned").dirty.contains(session_id)
+  lock(state(), "sidebar state mutex").dirty.contains(session_id)
 }
 
 /// Discard the selected dirty marks.
 pub fn discard_dirty(session_ids: &[String]) {
-  let mut state = state().lock().expect("sidebar state mutex is not poisoned");
+  let mut state = lock(state(), "sidebar state mutex");
   for session_id in session_ids {
     state.dirty.remove(session_id);
   }
@@ -115,34 +116,34 @@ pub fn discard_dirty(session_ids: &[String]) {
 
 /// Return a copy of one session's probe snapshot, or `None` when it is cold.
 pub fn snapshot_entry(session_id: &str) -> Option<Map<String, Value>> {
-  state().lock().expect("sidebar state mutex is not poisoned").snapshot.get(session_id).cloned()
+  lock(state(), "sidebar state mutex").snapshot.get(session_id).cloned()
 }
 
 /// Store a probe snapshot and bump the derived-state generation.
 pub fn store_snapshot_entry(session_id: &str, entry: Map<String, Value>) {
-  let mut state = state().lock().expect("sidebar state mutex is not poisoned");
+  let mut state = lock(state(), "sidebar state mutex");
   state.derived_generation += 1;
   state.snapshot.insert(session_id.to_string(), entry);
 }
 
 /// Return the current generation of sidebar inputs.
 pub fn derived_generation() -> u64 {
-  state().lock().expect("sidebar state mutex is not poisoned").derived_generation
+  lock(state(), "sidebar state mutex").derived_generation
 }
 
 /// Read a memoized derived map and mark it most recently used.
 pub fn peek_derived_map(key: &DerivedMapKey) -> Option<Arc<DerivedSidebarMap>> {
-  state().lock().expect("sidebar state mutex is not poisoned").derived_maps.get(key).cloned()
+  lock(state(), "sidebar state mutex").derived_maps.get(key).cloned()
 }
 
 /// Store one derived map in the four-entry memo.
 pub fn store_derived_map(key: DerivedMapKey, value: Arc<DerivedSidebarMap>) {
-  state().lock().expect("sidebar state mutex is not poisoned").derived_maps.put(key, value);
+  lock(state(), "sidebar state mutex").derived_maps.put(key, value);
 }
 
 /// Return the task-activity pair in a session snapshot, when present.
 pub fn snapshot_task_activity(session_id: &str) -> Option<(bool, String)> {
-  let state = state().lock().expect("sidebar state mutex is not poisoned");
+  let state = lock(state(), "sidebar state mutex");
   let activity = state.snapshot.get(session_id)?.get(TASK_TREE_ACTIVITY)?;
   let active = activity.get(0)?.as_bool()?;
   let work_state = activity.get(1)?.as_str()?.to_string();
@@ -151,21 +152,17 @@ pub fn snapshot_task_activity(session_id: &str) -> Option<(bool, String)> {
 
 /// Return the last deep-probe signature for one session.
 pub fn probe_signature(session_id: &str) -> Option<Vec<Value>> {
-  state().lock().expect("sidebar state mutex is not poisoned").probe_signatures.get(session_id).cloned()
+  lock(state(), "sidebar state mutex").probe_signatures.get(session_id).cloned()
 }
 
 /// Store the latest deep-probe signature for one session.
 pub fn store_probe_signature(session_id: &str, signature: Vec<Value>) {
-  state()
-    .lock()
-    .expect("sidebar state mutex is not poisoned")
-    .probe_signatures
-    .insert(session_id.to_string(), signature);
+  lock(state(), "sidebar state mutex").probe_signatures.insert(session_id.to_string(), signature);
 }
 
 /// Count a sidebar poll and return whether it must probe every active session.
 pub fn register_poll(force: bool) -> bool {
-  let mut state = state().lock().expect("sidebar state mutex is not poisoned");
+  let mut state = lock(state(), "sidebar state mutex");
   state.poll_count += 1;
   force || state.poll_count.is_multiple_of(FORCE_FULL_EVERY)
 }

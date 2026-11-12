@@ -16,6 +16,7 @@ mod held_run_lists;
 pub mod hooks;
 pub mod layout;
 mod listing;
+mod lock;
 pub mod message_events;
 pub mod message_utils;
 pub mod metadata;

@@ -19,6 +19,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::layout;
+use crate::lock::lock;
 use crate::metadata::UtcDateTime;
 use crate::read_memos::{FileSignature, StatSignatureMemo};
 
@@ -89,7 +90,7 @@ fn iter_trigger_file_stats_at(
 ) -> std::io::Result<Arc<Vec<(PathBuf, Metadata)>>> {
   let key = (triggers_dir.to_path_buf(), dir_stat.mode());
   let signature = FileSignature::from_metadata(dir_stat);
-  if let Some(files) = trigger_walks().lock().expect("trigger walk memo mutex is not poisoned").fresh(&key, signature) {
+  if let Some(files) = lock(trigger_walks(), "trigger walk memo mutex").fresh(&key, signature) {
     return Ok(files);
   }
   let mut entries = fs::read_dir(triggers_dir)?.collect::<std::io::Result<Vec<_>>>()?;
@@ -111,7 +112,7 @@ fn iter_trigger_file_stats_at(
   #[cfg(test)]
   record_trigger_work(triggers_dir, true);
   let files = Arc::new(files);
-  trigger_walks().lock().expect("trigger walk memo mutex is not poisoned").record(key, signature, Arc::clone(&files));
+  lock(trigger_walks(), "trigger walk memo mutex").record(key, signature, Arc::clone(&files));
   Ok(files)
 }
 
@@ -128,8 +129,7 @@ pub fn pending_trigger_state(triggers_dir: impl AsRef<Path>) -> (usize, Option<U
   };
   let dir_signature = FileSignature::from_metadata(&dir_stat);
   let dir_key = triggers_dir.to_path_buf();
-  if let Some((signature, count, next)) =
-    trigger_states().lock().expect("trigger verdict memo mutex is not poisoned").get(&dir_key)
+  if let Some((signature, count, next)) = lock(trigger_states(), "trigger verdict memo mutex").get(&dir_key)
     && signature == dir_signature
   {
     return (count, next);
@@ -146,7 +146,7 @@ pub fn pending_trigger_state(triggers_dir: impl AsRef<Path>) -> (usize, Option<U
   let mut next_trigger = None;
   for (path, metadata) in trigger_files.iter() {
     let signature = FileSignature::from_metadata(metadata);
-    let cached = trigger_meta().lock().expect("trigger metadata memo mutex is not poisoned").fresh(path, signature);
+    let cached = lock(trigger_meta(), "trigger metadata memo mutex").fresh(path, signature);
     let trigger = if let Some(cached) = cached {
       cached
     } else {
@@ -159,11 +159,7 @@ pub fn pending_trigger_state(triggers_dir: impl AsRef<Path>) -> (usize, Option<U
           continue;
         }
       };
-      trigger_meta().lock().expect("trigger metadata memo mutex is not poisoned").record(
-        path.clone(),
-        signature,
-        Arc::clone(&trigger),
-      );
+      lock(trigger_meta(), "trigger metadata memo mutex").record(path.clone(), signature, Arc::clone(&trigger));
       trigger
     };
     if trigger.get("status").and_then(serde_json::Value::as_str) != Some("pending") {
@@ -176,10 +172,7 @@ pub fn pending_trigger_state(triggers_dir: impl AsRef<Path>) -> (usize, Option<U
       next_trigger = Some(next_trigger.map_or(parsed, |current: UtcDateTime| current.min(parsed)));
     }
   }
-  trigger_states()
-    .lock()
-    .expect("trigger verdict memo mutex is not poisoned")
-    .store(dir_key, (dir_signature, pending_count, next_trigger));
+  lock(trigger_states(), "trigger verdict memo mutex").store(dir_key, (dir_signature, pending_count, next_trigger));
   (pending_count, next_trigger)
 }
 

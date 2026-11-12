@@ -19,6 +19,7 @@ use crate::event_state::{
 pub(crate) use crate::event_types::FileIdentity;
 pub use crate::event_types::{ChatEvent, SharedChatEvent};
 use crate::layout;
+use crate::lock::lock;
 use crate::metadata::{SessionMetadata, UtcDateTime};
 use crate::ndjson;
 use crate::read_memos::FileSignature;
@@ -87,7 +88,7 @@ impl Store {
       object.insert("timestamp".to_string(), Value::String(event_timestamp(UtcDateTime::now())));
     }
     let cache_entry = self.events_cache_entry(session_id);
-    let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    let mut cache = lock(&cache_entry, "session event cache mutex");
     let path = self.chat_events_path(session_id);
     #[cfg(any(test, feature = "write-faults"))]
     self.fail_chat_append(session_id, &event, &path)?;
@@ -95,11 +96,7 @@ impl Store {
     let compact = ChatEvent::from_value(&event);
     if let Some(cached) = cache.as_mut() {
       Arc::make_mut(&mut cached.events).push(Arc::new(compact.clone()));
-      self
-        .run_facts_memo
-        .lock()
-        .expect("run facts memo mutex is not poisoned")
-        .refresh_events(&cached.identity, Arc::clone(&cached.events));
+      lock(&self.run_facts_memo, "run facts memo mutex").refresh_events(&cached.identity, Arc::clone(&cached.events));
     }
     Ok(compact)
   }
@@ -128,14 +125,14 @@ impl Store {
   /// Read the cached event list as an immutable shared snapshot.
   pub fn load_chat_events_shared_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<SharedChatEvent>>> {
     let cache_entry = self.events_cache_entry(session_id);
-    let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    let mut cache = lock(&cache_entry, "session event cache mutex");
     self.load_chat_events_shared_locked(session_id, &mut cache)
   }
 
   /// The cached live events and their cache generation, read under one lock so the pair is consistent.
   pub(crate) fn live_events_with_generation(&self, session_id: &str) -> StoreResult<LiveEventSnapshot> {
     let cache_entry = self.events_cache_entry(session_id);
-    let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    let mut cache = lock(&cache_entry, "session event cache mutex");
     let events = self.load_chat_events_shared_locked(session_id, &mut cache)?;
     let cached = cache.as_ref().expect("event cache entry was loaded above");
     Ok((cached.generation, Arc::clone(&cached.identity), events))
@@ -148,7 +145,7 @@ impl Store {
     should_stop: &mut impl FnMut() -> bool,
   ) -> StoreResult<Option<LiveEventSnapshot>> {
     let cache_entry = self.events_cache_entry(session_id);
-    let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    let mut cache = lock(&cache_entry, "session event cache mutex");
     let Some(events) = self.load_chat_events_shared_locked_until(session_id, &mut cache, should_stop)? else {
       return Ok(None);
     };
@@ -162,7 +159,7 @@ impl Store {
   /// appended before the read.
   pub(crate) fn live_history(&self, session_id: &str) -> StoreResult<LiveHistory> {
     let cache_entry = self.events_cache_entry(session_id);
-    let cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    let cache = lock(&cache_entry, "session event cache mutex");
     match cache.as_ref() {
       Some(cached) => {
         #[cfg(test)]
@@ -231,7 +228,7 @@ impl Store {
     covered: usize,
   ) -> StoreResult<ChatEventsDelta> {
     let cache_entry = self.events_cache_entry(session_id);
-    let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    let mut cache = lock(&cache_entry, "session event cache mutex");
     let _snapshot = self.load_chat_events_shared_locked(session_id, &mut cache)?;
     let cached = cache.as_ref().expect("event cache entry was loaded above");
     let start_index =
@@ -247,7 +244,7 @@ impl Store {
   /// Read archived facts and the live events, sharing the live cache when no archive is present.
   pub fn load_all_facts_shared_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<SharedChatEvent>>> {
     let cache_entry = self.events_cache_entry(session_id);
-    let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    let mut cache = lock(&cache_entry, "session event cache mutex");
     let live = self.load_chat_events_shared_locked(session_id, &mut cache)?;
     let archive_offset = self.read_archive_offset(session_id)?;
     if archive_offset == 0 {
@@ -265,7 +262,7 @@ impl Store {
   pub fn load_all_facts_view_sync(&self, session_id: &str) -> StoreResult<ChatEventHistory> {
     self.history_work.event_history_views.fetch_add(1, Ordering::Relaxed);
     let cache_entry = self.events_cache_entry(session_id);
-    let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    let mut cache = lock(&cache_entry, "session event cache mutex");
     let live = self.load_chat_events_shared_locked(session_id, &mut cache)?;
     let archive_offset = self.read_archive_offset(session_id)?;
     let archived =
@@ -293,14 +290,14 @@ impl Store {
     let Some((metadata, signature)) = file_signature(&path)? else { return Ok((Vec::new(), 0, false)) };
     let key = (path.clone(), limit);
     if let Some((events, total, has_more)) =
-      self.event_read_caches.lock().expect("event read cache mutex is not poisoned").tail.fresh(&key, signature)
+      lock(&self.event_read_caches, "event read cache mutex").tail.fresh(&key, signature)
     {
       return Ok((events.as_ref().clone(), total, has_more));
     }
     let total = self.count_chat_event_lines(&path, signature)?;
     let has_more = total > limit;
     if limit == 0 || total == 0 {
-      self.event_read_caches.lock().expect("event read cache mutex is not poisoned").tail.record(
+      lock(&self.event_read_caches, "event read cache mutex").tail.record(
         key,
         signature,
         (Arc::new(Vec::new()), total, has_more),
@@ -312,7 +309,7 @@ impl Store {
     let events: Vec<ChatEvent> = lines.iter().filter_map(|line| ndjson::parse_line_compact(line)).collect();
     let events = Arc::new(events);
     {
-      let mut caches = self.event_read_caches.lock().expect("event read cache mutex is not poisoned");
+      let mut caches = lock(&self.event_read_caches, "event read cache mutex");
       #[cfg(test)]
       {
         caches.tail_bytes_read += bytes_read;
@@ -433,23 +430,19 @@ impl Store {
       }
     };
     let signature = FileSignature::from_metadata(&metadata);
-    if let Some(events) = self
-      .event_read_caches
-      .lock()
-      .expect("event read cache mutex is not poisoned")
-      .archive_events
-      .fresh(&path.to_path_buf(), signature)
+    if let Some(events) =
+      lock(&self.event_read_caches, "event read cache mutex").archive_events.fresh(&path.to_path_buf(), signature)
     {
       return events;
     }
     #[cfg(test)]
     {
-      self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_file_reads += 1;
+      lock(&self.event_read_caches, "event read cache mutex").archive_file_reads += 1;
     }
     match ndjson::read_file_compact(path) {
       Ok(events) => {
         let events = Arc::new(events.into_iter().map(Arc::new).collect());
-        self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_events.record(
+        lock(&self.event_read_caches, "event read cache mutex").archive_events.record(
           path.to_path_buf(),
           signature,
           Arc::clone(&events),
@@ -481,23 +474,19 @@ impl Store {
       }
     };
     let signature = FileSignature::from_metadata(&metadata);
-    if let Some(events) = self
-      .event_read_caches
-      .lock()
-      .expect("event read cache mutex is not poisoned")
-      .archive_events
-      .fresh(&path.to_path_buf(), signature)
+    if let Some(events) =
+      lock(&self.event_read_caches, "event read cache mutex").archive_events.fresh(&path.to_path_buf(), signature)
     {
       return Some(events);
     }
     #[cfg(test)]
     {
-      self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_file_reads += 1;
+      lock(&self.event_read_caches, "event read cache mutex").archive_file_reads += 1;
     }
     match ndjson::read_file_compact_until(path, should_stop) {
       Ok(Some(events)) => {
         let events = Arc::new(events.into_iter().map(Arc::new).collect());
-        self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_events.record(
+        lock(&self.event_read_caches, "event read cache mutex").archive_events.record(
           path.to_path_buf(),
           signature,
           Arc::clone(&events),
@@ -581,7 +570,7 @@ impl Store {
     };
     let size = metadata.len() as usize;
     let inode = metadata.ino();
-    let cached = self.event_read_caches.lock().expect("event read cache mutex is not poisoned").live_ranges.get(&path);
+    let cached = lock(&self.event_read_caches, "event read cache mutex").live_ranges.get(&path);
     if let Some(mut entry) = cached {
       if (entry.mtime_ns != signature.mtime_ns || entry.size != signature.size)
         && entry.inode == inode
@@ -593,7 +582,7 @@ impl Store {
             let suffix = parse_universal_newline_lines(&path, &bytes)?;
             #[cfg(test)]
             {
-              let mut caches = self.event_read_caches.lock().expect("event read cache mutex is not poisoned");
+              let mut caches = lock(&self.event_read_caches, "event read cache mutex");
               caches.live_range_bytes_read += bytes.len();
               caches.live_range_lines_parsed += suffix.len();
             }
@@ -604,12 +593,7 @@ impl Store {
             entry.size = signature.size;
             entry.covered_byte_end += bytes.len();
             entry.ends_on_boundary = bytes.is_empty() || bytes.ends_with(b"\n") || bytes.ends_with(b"\r");
-            self
-              .event_read_caches
-              .lock()
-              .expect("event read cache mutex is not poisoned")
-              .live_ranges
-              .store(path.clone(), entry.clone());
+            lock(&self.event_read_caches, "event read cache mutex").live_ranges.store(path.clone(), entry.clone());
           }
           Err(error) => {
             tracing::debug!(path = %path.display(), error = %error, "live_range_read_failed");
@@ -627,7 +611,7 @@ impl Store {
             let prefix = parse_text_lines(&path, walk.lines)?;
             #[cfg(test)]
             {
-              let mut caches = self.event_read_caches.lock().expect("event read cache mutex is not poisoned");
+              let mut caches = lock(&self.event_read_caches, "event read cache mutex");
               caches.live_range_bytes_read += walk.bytes_read;
               caches.live_range_lines_parsed += prefix.len();
             }
@@ -642,12 +626,7 @@ impl Store {
               ..entry
             };
             let result = Arc::clone(&covered.lines);
-            self
-              .event_read_caches
-              .lock()
-              .expect("event read cache mutex is not poisoned")
-              .live_ranges
-              .store(path.clone(), covered);
+            lock(&self.event_read_caches, "event read cache mutex").live_ranges.store(path.clone(), covered);
             return Ok((result, rel_start));
           }
         }
@@ -663,7 +642,7 @@ impl Store {
           let lines = Arc::new(parse_text_lines(&path, walk.lines)?);
           #[cfg(test)]
           {
-            let mut caches = self.event_read_caches.lock().expect("event read cache mutex is not poisoned");
+            let mut caches = lock(&self.event_read_caches, "event read cache mutex");
             caches.live_range_bytes_read += walk.bytes_read;
             caches.live_range_lines_parsed += lines.len();
           }
@@ -679,7 +658,7 @@ impl Store {
             first_line_index: rel_start,
             covered_byte_start: walk.byte_start,
           };
-          self.event_read_caches.lock().expect("event read cache mutex is not poisoned").live_ranges.store(path, entry);
+          lock(&self.event_read_caches, "event read cache mutex").live_ranges.store(path, entry);
           return Ok((lines, rel_start));
         }
       }
@@ -696,7 +675,7 @@ impl Store {
     let lines = Arc::new(parse_universal_newline_lines(&path, &bytes)?);
     #[cfg(test)]
     {
-      let mut caches = self.event_read_caches.lock().expect("event read cache mutex is not poisoned");
+      let mut caches = lock(&self.event_read_caches, "event read cache mutex");
       caches.live_range_bytes_read += bytes.len();
       caches.live_range_lines_parsed += lines.len();
     }
@@ -711,7 +690,7 @@ impl Store {
       first_line_index: 0,
       covered_byte_start: 0,
     };
-    self.event_read_caches.lock().expect("event read cache mutex is not poisoned").live_ranges.store(path, entry);
+    lock(&self.event_read_caches, "event read cache mutex").live_ranges.store(path, entry);
     Ok((lines, 0))
   }
 
@@ -750,12 +729,8 @@ impl Store {
 
   /// Count physical lines through the 64-entry `(mtime_ns, size)` count memo.
   fn count_chat_event_lines(&self, path: &Path, signature: FileSignature) -> StoreResult<usize> {
-    if let Some(count) = self
-      .event_read_caches
-      .lock()
-      .expect("event read cache mutex is not poisoned")
-      .count
-      .fresh(&path.to_path_buf(), signature)
+    if let Some(count) =
+      lock(&self.event_read_caches, "event read cache mutex").count.fresh(&path.to_path_buf(), signature)
     {
       return Ok(count);
     }
@@ -786,7 +761,7 @@ impl Store {
       total += 1;
     }
     {
-      let mut caches = self.event_read_caches.lock().expect("event read cache mutex is not poisoned");
+      let mut caches = lock(&self.event_read_caches, "event read cache mutex");
       #[cfg(test)]
       {
         caches.count_bytes_read += bytes_read;
@@ -798,9 +773,9 @@ impl Store {
 
   /// Discard the parsed live-log cache after a rewrite.
   pub fn clear_chat_events_cache(&self, session_id: &str) {
-    let cache_entry = self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id).cloned();
+    let cache_entry = lock(&self.events_cache, "event cache mutex").get(session_id).cloned();
     let Some(cache_entry) = cache_entry else { return };
-    let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    let mut cache = lock(&cache_entry, "session event cache mutex");
     *cache = None;
   }
 
@@ -811,11 +786,11 @@ impl Store {
   /// when a fold covers the whole cached list (see [`Store::seal_node_state`]). The run-facts memo keeps the current
   /// event list under its bounded identity key, so a later reload has a new key.
   pub fn evict_recovery_history(&self, session_id: &str) {
-    let cache_entry = self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id).cloned();
+    let cache_entry = lock(&self.events_cache, "event cache mutex").get(session_id).cloned();
     match cache_entry {
       Some(cache_entry) => {
         // The seal runs under the session lock, so no reload or append moves the file between the take and the seal.
-        let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+        let mut cache = lock(&cache_entry, "session event cache mutex");
         let evicted = cache.take().and_then(|cached| match FileIdentity::read(&self.chat_events_path(session_id)) {
           Ok(identity) => {
             identity.map(|identity| (cached.generation, cached.events.len(), identity, Arc::clone(&cached.identity)))
@@ -889,7 +864,7 @@ impl Store {
   ) -> StoreResult<Option<Vec<ChatEvent>>> {
     self.history_work.file_reads.fetch_add(1, Ordering::Relaxed);
     #[cfg(test)]
-    if let Some(hook) = self.event_read_hook.lock().expect("event read hook mutex is not poisoned").clone() {
+    if let Some(hook) = lock(&self.event_read_hook, "event read hook mutex").clone() {
       hook();
     }
     let started = Instant::now();
@@ -915,19 +890,16 @@ impl Store {
 
   /// The number of sessions whose live events are cached, and the number of cached events across them.
   pub fn events_cache_totals(&self) -> (usize, usize) {
-    let entries: Vec<_> =
-      self.events_cache.lock().expect("event cache mutex is not poisoned").values().cloned().collect();
-    entries.iter().fold((0, 0), |(sessions, events), entry| {
-      match entry.lock().expect("session event cache mutex is not poisoned").as_ref() {
-        Some(cached) => (sessions + 1, events + cached.events.len()),
-        None => (sessions, events),
-      }
+    let entries: Vec<_> = lock(&self.events_cache, "event cache mutex").values().cloned().collect();
+    entries.iter().fold((0, 0), |(sessions, events), entry| match lock(entry, "session event cache mutex").as_ref() {
+      Some(cached) => (sessions + 1, events + cached.events.len()),
+      None => (sessions, events),
     })
   }
 
   pub(crate) fn cached_chat_events(&self, session_id: &str) -> Option<Arc<Vec<SharedChatEvent>>> {
-    let cache_entry = self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id).cloned()?;
-    let cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    let cache_entry = lock(&self.events_cache, "event cache mutex").get(session_id).cloned()?;
+    let cache = lock(&cache_entry, "session event cache mutex");
     cache.as_ref().map(|cached| Arc::clone(&cached.events))
   }
 
@@ -1006,7 +978,7 @@ impl Store {
   }
 
   pub(crate) fn read_archive_offset(&self, session_id: &str) -> StoreResult<usize> {
-    if let Some(meta) = self.metadata_cache.lock().expect("metadata cache mutex is not poisoned").get(session_id) {
+    if let Some(meta) = lock(&self.metadata_cache, "metadata cache mutex").get(session_id) {
       return Ok(meta.value.archive_offset.max(0) as usize);
     }
     let meta = match self.read_metadata_fresh(session_id) {
@@ -1033,13 +1005,7 @@ impl Store {
       }
     };
     let signature = FileSignature::from_metadata(&metadata);
-    if let Some(paths) = self
-      .event_read_caches
-      .lock()
-      .expect("event read cache mutex is not poisoned")
-      .archive_paths
-      .fresh(&dir, signature)
-    {
+    if let Some(paths) = lock(&self.event_read_caches, "event read cache mutex").archive_paths.fresh(&dir, signature) {
       return Ok(paths);
     }
     let entries = match fs::read_dir(&dir) {
@@ -1060,14 +1026,10 @@ impl Store {
     paths.sort();
     #[cfg(test)]
     {
-      self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_dir_walks += 1;
+      lock(&self.event_read_caches, "event read cache mutex").archive_dir_walks += 1;
     }
     let paths = Arc::new(paths);
-    self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_paths.record(
-      dir,
-      signature,
-      Arc::clone(&paths),
-    );
+    lock(&self.event_read_caches, "event read cache mutex").archive_paths.record(dir, signature, Arc::clone(&paths));
     Ok(paths)
   }
 
@@ -1077,9 +1039,9 @@ impl Store {
     let path = self.chat_events_path(session_id);
     let generation = self.next_events_cache_generation.fetch_add(1, Ordering::Relaxed);
     #[cfg(test)]
-    let read_hook = self.event_read_hook.lock().expect("event read hook mutex is not poisoned").clone();
+    let read_hook = lock(&self.event_read_hook, "event read hook mutex").clone();
     let (events, read_bytes) = tokio::task::spawn_blocking(move || {
-      let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+      let mut cache = lock(&cache_entry, "session event cache mutex");
       if let Some(cached) = cache.as_ref() {
         return Ok::<_, StoreError>((Arc::clone(&cached.events), None));
       }

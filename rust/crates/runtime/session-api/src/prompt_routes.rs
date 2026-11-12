@@ -160,8 +160,61 @@ backends:
       .await
   }
 
-  /// Entrance #9 of the plan's entry-consistency item: a cooling model and the pool over it preview the same
-  /// exhaustion, so the preview keeps no pool-or-model branch of its own.
+  /// The repo root the prompt assembly reads its templates from.
+  fn repo_root() -> charliebot_core::repo_root::RepoRoot {
+    let checkout = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+      .ancestors()
+      .nth(4)
+      .expect("the repo root is an ancestor")
+      .to_path_buf();
+    charliebot_core::repo_root::RepoRoot::new(Some(checkout.as_os_str().to_os_string())).expect("repo root is valid")
+  }
+
+  /// Entrance #9 of the plan's entry-consistency item, success side: a pool session previews 200 from the member
+  /// the next start runs on, the same 200 the model over it alone gets.
+  #[tokio::test]
+  async fn a_pool_session_previews_200_like_the_model_it_holds() {
+    let (home, features) = feature_context_with_auto(CONFIG);
+    charliebot_core::test_support::write_approval_policy_table(
+      home.path(),
+      charliebot_core::test_support::APPROVAL_POLICY_TABLE,
+    );
+    features.startup.insert(BackendAvailability::load(home.path()).unwrap()).unwrap();
+    features.startup.insert(RotationPositions::default()).unwrap();
+    features.startup.insert(repo_root()).unwrap();
+    let mut session_ids = Vec::new();
+    for (request_id, backend) in [("preview-model-ok", "synthetic-a"), ("preview-pool-ok", "auto")] {
+      let created = features
+        .store
+        .create_task(
+          CreateTask {
+            request_id: request_id.to_string(),
+            task_parent_id: None,
+            profile: TaskProfile::Manager,
+            task: None,
+            name: Some(request_id.to_string()),
+            backend: Some(backend.to_string()),
+            group: None,
+            session_id: None,
+          },
+          TaskCaller::System,
+          Map::new(),
+        )
+        .await
+        .unwrap();
+      session_ids.push(created.id);
+    }
+
+    let (model_status, model) = preview(&features, &session_ids[0]).await;
+    let (pool_status, pool) = preview(&features, &session_ids[1]).await;
+    assert_eq!(model_status, StatusCode::OK, "{model}");
+    assert_eq!(pool_status, StatusCode::OK, "{pool}");
+    assert_eq!(pool["session_id"], session_ids[1]);
+    assert_eq!(pool["mode"], "preview");
+  }
+
+  /// Entrance #9 of the plan's entry-consistency item, exhausted side: a cooling model and the pool over it preview
+  /// the same exhaustion, so the preview keeps no pool-or-model branch of its own.
   #[tokio::test]
   async fn a_cooling_model_and_its_singleton_pool_preview_the_same_exhaustion() {
     let (home, features) = feature_context_with_auto(CONFIG);

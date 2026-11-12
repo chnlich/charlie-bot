@@ -309,3 +309,83 @@ async fn stop_improve(State(features): State<Arc<FeatureContext>>, request: axum
     Err(error) => runtime_error(error),
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use std::path::Path;
+  use std::sync::Arc;
+
+  use charliebot_core::config::{CREDENTIALS_FILENAME, CharlieBotConfig};
+  use charliebot_registry::Registry;
+  use charliebot_registry::backend::{BackendFactory, BackendTraits, BackendTypeRegistration, LaunchArgs, ResumeStyle};
+
+  use super::*;
+
+  /// The factory the test registry never calls: the loop start only reads the config.
+  struct NeverLaunched;
+
+  impl BackendFactory for NeverLaunched {
+    fn build(
+      &self,
+      _option: Option<&charliebot_core::config::BackendOption>,
+      _cfg: &CharlieBotConfig,
+      _launch: LaunchArgs,
+    ) -> anyhow::Result<Box<dyn charliebot_registry::backend::AgentBackend>> {
+      anyhow::bail!("the improve-loop test launches no backend")
+    }
+  }
+
+  /// The config of the acceptance item: one model, the rotate pool over it, and the `calls.improve` target the
+  /// caller names (an empty string leaves the key out).
+  fn pool_config(home: &Path, improve_call: &str) -> CharlieBotConfig {
+    std::fs::write(home.join(CREDENTIALS_FILENAME), "charliebot: {}\n").expect("credentials file");
+    let calls =
+      if improve_call.is_empty() { String::new() } else { format!("  calls:\n    improve: {improve_call}\n") };
+    let config = format!(
+      "backends:\n  options:\n    - {{id: synthetic-a, label: A, type: synthetic, model: model-a}}\n  pools:\n    \
+       - {{id: auto, label: Auto, rule: rotate, members: [synthetic-a]}}\n{calls}"
+    );
+    std::fs::write(home.join("config.yaml"), config).expect("backend config file");
+    let mut registry = Registry::new();
+    registry
+      .register_package("improve_test", |registry| {
+        registry.backend_type(BackendTypeRegistration {
+          type_name: "synthetic",
+          traits: BackendTraits {
+            resume: ResumeStyle::CliFlag,
+            restart_reattach: false,
+            preassigned_session_id: false,
+            family_prefix: None,
+            manual_compact: false,
+            compact_hint: None,
+          },
+          option_model: |_| Ok(()),
+          factory: Arc::new(NeverLaunched),
+          lifecycle: None,
+          translate_fallback: false,
+        })
+      })
+      .expect("the synthetic backend type registers");
+    registry.load_config(home).expect("test config")
+  }
+
+  /// The acceptance item for improve: with `calls.improve` unset or `session`, a pool session keeps the pool id
+  /// for the loop's child, so every iteration selects the pool's member through `Selector`.
+  #[test]
+  fn a_pool_session_starts_the_loop_on_its_pool_id_when_calls_improve_is_unset_or_session() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let mut meta =
+      SessionMetadata::new("pool-session", "Pool session", charliebot_store::metadata::TaskProfile::Manager);
+    meta.backend = "auto".to_string();
+
+    for improve_call in ["", "session"] {
+      let cfg = pool_config(home.path(), improve_call);
+      assert_eq!(
+        loop_backend(&cfg, &meta, None).unwrap(),
+        ("auto".to_string(), None),
+        "calls.improve {improve_call:?}"
+      );
+      assert_eq!(loop_backend(&cfg, &meta, Some("auto")).unwrap(), ("auto".to_string(), None));
+    }
+  }
+}

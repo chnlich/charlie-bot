@@ -162,7 +162,8 @@ it does.
 
 #### Vocabulary
 
-- Prefer the reader's established term over a coined description.
+- Text for the user names each thing with the user's own words or everyday words. Terms that the rules define for agent
+  work (such as node, line, read back, divergence, child session) stay in text between agents.
 - The reader knows general engineering and ML (PyTorch, SLURM, git, GPU architecture), the
   established CharlieBot concepts (CharlieBot, manager, worker, verify, take off, understanding
   page, plan page), and every term the user wrote in the exchange. Explain a concept the page
@@ -190,9 +191,9 @@ it does.
 - Reading code answers for one revision. Choose it from the question's subject
   before reading (the line of the project the question belongs to, which the
   session group names; the revision a run executed; or the branch work lands on),
-  and name the revision read as `<branch>@<sha>` when the answer is about
-  version-specific code; a worktree at hand qualifies only after that check.
-- In a merge or push report, name the branch and link the commit.
+  and name the branch and revision when the answer is about version-specific
+  code; a worktree at hand qualifies only after that check.
+- In a merge or push report, name the branch and the commit.
 - In a review handoff, include a CharlieBot diff-viewer link for the exact range beside the PR link.
 - Use real data or N/A for each value. Keep column names stable. State whether each measured result is good or bad.
 - Name the clickable link of each delivered artifact, page or report in the reply. The reply also states its key
@@ -209,8 +210,9 @@ it does.
 
 Give each plan, phase, task, and report a name that states what it is by content, so the name alone distinguishes it.
 A name referenced outside its artifact must be self-describing.
-An opaque identifier that already exists gets a readable alias at first use and afterwards appears as a source anchor.
-In chat replies and pages that the user reads in the CharlieBot UI, write each session id as a link:
+In text for the user, every identifier (session id, commit, run, job, event, version or build string) stands beside a
+readable name that says what it identifies, and keeps its link. A commit is named by what it changes, and keeps its
+hash in the link. Sessions keep the existing form:
 `[<readable alias> · <first 8 characters>](<CharlieBot URL>/?session=<full session id>)`.
 Take the CharlieBot URL from host memory, as the file-server skill does.
 Sibling variants are named by what differs between them; a document comparing three or more gives every member a

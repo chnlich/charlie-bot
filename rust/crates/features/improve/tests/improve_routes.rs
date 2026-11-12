@@ -170,8 +170,7 @@ async fn start_with_an_unknown_backend_is_a_bad_request_and_reserves_nothing() {
   let (status, body) = post(&features, START, start_body(SESSION, Some("no-such-backend"))).await;
 
   assert_eq!(status, StatusCode::BAD_REQUEST);
-  let detail = body["detail"].as_str().unwrap_or_default();
-  assert!(detail.contains("no-such-backend"), "the refusal names the backend: {body}");
+  assert_eq!(body["detail"], "backend 'no-such-backend' is not a backends.options or backends.pools id; valid ids: []");
   let cfg = features.config.get().expect("the test config");
   assert!(!command::active_lock_path(&cfg, SESSION).exists(), "a refused backend leaves no active lock");
 }

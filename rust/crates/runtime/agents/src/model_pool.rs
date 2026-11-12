@@ -1,5 +1,4 @@
-//! The model pool: the one selection that picks the member a call runs on, under either rule of a `backends.pools`
-//! entry.
+//! The model pool: the one resolver for a backend id, whether it names an option or a configured pool.
 //!
 //! A pool names `backends.options` ids and a rule. A priority pool picks its best selectable member; a rotate pool
 //! picks the first selectable member after its rotation position. Both rules skip a member the caller excludes, that
@@ -31,10 +30,6 @@ pub const OWNER: &str = "model_pool";
 
 /// The session metadata field holding the member a pool session's current turn runs on.
 pub const POOL_MEMBER_FIELD: &str = "pool_member";
-
-/// The id of the ordered pool a router's answer list makes. It names no `backends.pools` entry: the answer's order is
-/// the rotation, and the position it starts from is always the first member.
-pub const ROUTE_POOL_ID: &str = "route";
 
 /// One pool as the selection reads it: its id, its rule and its members in config order.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -123,44 +118,39 @@ impl<'a> Selector<'a> {
     })
   }
 
-  /// The option a call on `pool_id` runs on, or `None` when no member is selectable. A rotate pool's position moves
-  /// past the selected member.
-  pub fn select(&self, pool_id: &str, excluded: &[String]) -> anyhow::Result<Option<BackendOption>> {
-    let pool = pool_by_id(self.cfg, pool_id)?;
+  /// The option a call on `backend_id` runs on, or `None` when no member is selectable. A model id selects itself
+  /// through the same filters as a one-member rotate pool. A selected rotate pool moves past its member.
+  pub fn select(&self, backend_id: &str, excluded: &[String]) -> anyhow::Result<Option<BackendOption>> {
+    let pool = selection_pool_for_id(self.cfg, backend_id)?;
     let loads = self.loads(&pool)?;
     let selection = Selection::new(self.cfg, self.registry, &self.availability, &pool, excluded, UtcDateTime::now())
       .with_loads(&loads);
     Ok(self.option(self.positions.select(&selection)?))
   }
 
-  /// The option the next call on `pool_id` would run on, without moving a rotate pool's position.
-  pub fn peek(&self, pool_id: &str, excluded: &[String]) -> anyhow::Result<Option<BackendOption>> {
-    let pool = pool_by_id(self.cfg, pool_id)?;
+  /// The option the next call on `backend_id` would run on, without moving a rotate pool's position.
+  pub fn peek(&self, backend_id: &str, excluded: &[String]) -> anyhow::Result<Option<BackendOption>> {
+    let pool = selection_pool_for_id(self.cfg, backend_id)?;
     let loads = self.loads(&pool)?;
     let selection = Selection::new(self.cfg, self.registry, &self.availability, &pool, excluded, UtcDateTime::now())
       .with_loads(&loads);
     Ok(self.option(self.positions.peek(&selection)?))
   }
 
-  /// The first selectable option in the router's ordered `backends`, without moving any rotation position. A retired
-  /// ordered route keeps resolving through this call; a new router answer names one id.
+  /// The first selectable option in the router's ordered backend ids. Each id may name a model or pool.
   pub fn ordered(&self, backends: &[String], excluded: &[String]) -> anyhow::Result<Option<BackendOption>> {
-    let pool = ordered_pool(backends);
-    let mut position = 0;
-    let selection = Selection::new(self.cfg, self.registry, &self.availability, &pool, excluded, UtcDateTime::now());
-    Ok(self.option(select(&selection, Some(&mut position))?))
+    for backend_id in backends {
+      if let Some(option) = self.select(backend_id, excluded)? {
+        return Ok(Some(option));
+      }
+    }
+    Ok(None)
   }
 
-  /// The error that ends a call when no member of `pool_id` is selectable: one line per member.
-  pub fn exhausted_message(&self, pool_id: &str) -> anyhow::Result<String> {
-    let pool = pool_by_id(self.cfg, pool_id)?;
+  /// The error that ends a call when no member of `backend_id` is selectable: one line per member.
+  pub fn exhausted_message(&self, backend_id: &str) -> anyhow::Result<String> {
+    let pool = selection_pool_for_id(self.cfg, backend_id)?;
     all_exhausted_message(self.cfg, self.registry, &self.availability, &pool)
-  }
-
-  /// Whether the `backends.options` id `backend_id` can run now.
-  pub fn option_available(&self, backend_id: &str, excluded: &[String]) -> anyhow::Result<bool> {
-    let member = PoolMember { backend: backend_id.to_string() };
-    Ok(candidate(self.cfg, self.registry, &self.availability, &member, excluded, UtcDateTime::now())?.is_some())
   }
 
   /// The option a selected member names. Every member is checked against `backends.options` at selection.
@@ -191,22 +181,14 @@ impl ModelPool {
   }
 }
 
-/// The pool that the `backends.pools` entry `id` configures, or the refusal that names the missing entry.
-pub fn pool_by_id(cfg: &CharlieBotConfig, id: &str) -> anyhow::Result<ModelPool> {
-  cfg
-    .backends
-    .pool(id)
-    .map(ModelPool::from_config)
-    .ok_or_else(|| anyhow!("backend '{id}' names no backends.pools entry and no backends.options id"))
-}
-
-/// A rotate pool over `backends` in the router's order, for an answer list that keeps no position of its own.
-pub(crate) fn ordered_pool(backends: &[String]) -> ModelPool {
-  ModelPool {
-    id: ROUTE_POOL_ID.to_string(),
-    rule: PoolRule::Rotate,
-    members: backends.iter().map(|backend| PoolMember { backend: backend.clone() }).collect(),
+/// The candidate set for a backend id: its configured pool, or the one model it names.
+fn selection_pool_for_id(cfg: &CharlieBotConfig, id: &str) -> anyhow::Result<ModelPool> {
+  cfg.backends.check_backend_id(id).map_err(anyhow::Error::msg)?;
+  if let Some(pool) = cfg.backends.pool(id) {
+    return Ok(ModelPool::from_config(pool));
   }
+  let option = cfg.get_backend_option(id).expect("a valid non-pool backend id names a backends.options entry");
+  Ok(ModelPool { id: id.to_string(), rule: PoolRule::Rotate, members: vec![PoolMember { backend: option.id.clone() }] })
 }
 
 /// The rotation positions of the rotate pools, one per pool id. A position lives in process memory: a restart or a
@@ -481,8 +463,8 @@ enum TurnDecision {
 
 /// Choose the member for a turn that is about to dispatch, record it, and return the change to log.
 ///
-/// A session whose backend is not a pool id is left alone. A session with no recorded member, or whose member is out,
-/// gets a fresh selection; the first assignment records the member without a change event. A rotate pool's session
+/// A model id resolves to itself; a pool session with no recorded member, or whose member is out, gets a fresh
+/// selection. The first assignment records the member without a change event. A rotate pool's session
 /// otherwise keeps its member until the member is out or its reading is exhausted. A priority pool's session keeps its
 /// member unless it is on pay-as-you-go and a subscription is selectable (a subscription reset). It also switches when
 /// it is near exhaustion and an under-line subscription is selectable. When no member is selectable the turn ends
@@ -492,13 +474,12 @@ pub async fn start_turn(
   cfg: &CharlieBotConfig,
   meta: &mut SessionMetadata,
 ) -> anyhow::Result<TurnStart> {
-  if cfg.backends.pool(&meta.backend).is_none() {
-    return Ok(TurnStart::Kept);
-  }
   match decide_turn(features, cfg, meta, true)? {
     TurnDecision::Keep(_) => Ok(TurnStart::Kept),
     TurnDecision::Move { member, change } => {
-      record_member(features, meta, &member).await?;
+      if cfg.backends.pool(&meta.backend).is_some() {
+        record_member(features, meta, &member).await?;
+      }
       Ok(change.map_or(TurnStart::Kept, TurnStart::Changed))
     }
     TurnDecision::Exhausted(message) => Ok(TurnStart::Exhausted(message)),
@@ -507,16 +488,12 @@ pub async fn start_turn(
 
 /// The member a turn of the session runs on, as the turn start decides it, read without recording anything or moving
 /// a rotation position. The cron host gate asks it before a fire, so the gate judges the member the fire then runs on.
-/// `None` for a session whose backend is not a pool id, and when no member is selectable: the turn then ends with the
-/// exhausted error and runs nothing.
+/// `None` when no member is selectable: the turn then ends with the exhausted error and runs nothing.
 pub fn turn_member(
   features: &FeatureContext,
   cfg: &CharlieBotConfig,
   meta: &SessionMetadata,
 ) -> anyhow::Result<Option<String>> {
-  if cfg.backends.pool(&meta.backend).is_none() {
-    return Ok(None);
-  }
   Ok(match decide_turn(features, cfg, meta, false)? {
     TurnDecision::Keep(member) | TurnDecision::Move { member, .. } => Some(member),
     TurnDecision::Exhausted(_) => None,
@@ -531,17 +508,19 @@ fn decide_turn(
   meta: &SessionMetadata,
   advance: bool,
 ) -> anyhow::Result<TurnDecision> {
-  let pool = pool_by_id(cfg, &meta.backend)?;
+  let pool = selection_pool_for_id(cfg, &meta.backend)?;
   let availability = backend_availability::backend_availability(features)?;
   let positions = features.startup.require::<RotationPositions>()?;
   let now = UtcDateTime::now();
   let member_loads = member_loads(features, &pool)?;
   let selection = Selection::new(cfg, &features.registry, &availability, &pool, &[], now).with_loads(&member_loads);
-  let current = meta
-    .extra(POOL_MEMBER_FIELD)
-    .and_then(Value::as_str)
-    .filter(|backend_id| pool.member(backend_id).is_some())
-    .map(str::to_string);
+  let current = cfg.backends.pool(&meta.backend).and_then(|_| {
+    meta
+      .extra(POOL_MEMBER_FIELD)
+      .and_then(Value::as_str)
+      .filter(|backend_id| pool.member(backend_id).is_some())
+      .map(str::to_string)
+  });
 
   if let Some(current) = &current
     && !is_out(&availability, current, now)
@@ -757,23 +736,32 @@ pub fn member_loads_in(store: &Store, pool: &ModelPool) -> anyhow::Result<HashMa
   }
 }
 
-/// The member a session whose backend is a pool id runs on now, for the resolver. Every turn records one before it
-/// runs, so a pool session with no recorded member is a refusal, and a recorded member the pool no longer lists is too.
+/// The member a session runs on now, for the resolver. A model session resolves to its backend id; a pool session
+/// resolves to its recorded member. A pool with no recorded member or a member it no longer lists is a refusal.
 pub fn current_member_id(cfg: &CharlieBotConfig, meta: &SessionMetadata) -> anyhow::Result<String> {
-  let pool = pool_by_id(cfg, &meta.backend)?;
+  let backend_id = if meta.backend.is_empty() {
+    cfg
+      .backends
+      .new_session_backend()
+      .ok_or_else(|| anyhow!("session backend resolution requires a configured backends.options entry"))?
+  } else {
+    meta.backend.clone()
+  };
+  cfg.backends.check_backend_id(&backend_id).map_err(anyhow::Error::msg)?;
+  let Some(pool) = cfg.backends.pool(&backend_id) else { return Ok(backend_id) };
   let member =
     meta.extra(POOL_MEMBER_FIELD).and_then(Value::as_str).filter(|backend_id| !backend_id.is_empty()).ok_or_else(
       || {
         anyhow!(
           "session backend '{}' has no recorded {POOL_MEMBER_FIELD}; turn start records one before every run",
-          pool.id
+          backend_id
         )
       },
     )?;
-  if pool.member(member).is_none() {
+  if pool.members.iter().all(|pool_member| pool_member.backend != member) {
     return Err(anyhow!(
       "session backend '{}' records {POOL_MEMBER_FIELD} '{member}', which config.yaml backends.pools no longer lists",
-      pool.id
+      backend_id
     ));
   }
   Ok(member.to_string())
@@ -869,6 +857,10 @@ backends:
       label: Light
       rule: rotate
       members: [spent, payg-a, chatgpt]
+    - id: chatgpt-only
+      label: ChatGPT only
+      rule: rotate
+      members: [chatgpt]
 ";
 
   /// The priority pool `auto` over five subscriptions, for the tests that count the sessions each member holds.
@@ -961,7 +953,7 @@ backends:
   fn pick(features: &FeatureContext, id: &str, excluded: &[&str]) -> Option<String> {
     let cfg = loaded_cfg(features);
     let excluded = excluded.iter().map(|backend_id| (*backend_id).to_string()).collect::<Vec<_>>();
-    let pool = pool_by_id(&cfg, id).unwrap();
+    let pool = selection_pool_for_id(&cfg, id).unwrap();
     let availability = availability(features);
     let selection = Selection::new(&cfg, &features.registry, &availability, &pool, &excluded, UtcDateTime::now());
     positions(features).select(&selection).unwrap().map(|member| member.backend)
@@ -1069,7 +1061,7 @@ backends:
     let now = UtcDateTime::now();
     let rotate = |features: &FeatureContext, excluded: &[&str]| {
       let excluded = excluded.iter().map(|backend_id| (*backend_id).to_string()).collect::<Vec<_>>();
-      let pool = pool_by_id(&cfg, "light").unwrap();
+      let pool = selection_pool_for_id(&cfg, "light").unwrap();
       let selection = Selection::new(&cfg, &features.registry, &availability, &pool, &excluded, now);
       positions(features).select(&selection).unwrap().map(|member| member.backend)
     };
@@ -1105,7 +1097,7 @@ backends:
     let cfg = loaded_cfg(&features);
     let availability = availability(&features);
     let now = UtcDateTime::now();
-    let light = pool_by_id(&cfg, "light").unwrap();
+    let light = selection_pool_for_id(&cfg, "light").unwrap();
     let selection = Selection::new(&cfg, &features.registry, &availability, &light, &[], now);
     let peeked = positions(&features).peek(&selection).unwrap();
     assert_eq!(peeked.map(|member| member.backend), Some("payg-a".to_string()));
@@ -1293,6 +1285,69 @@ backends:
     meta.set_extra(POOL_MEMBER_FIELD, json!("devin-gone"));
     let error = current_member_id(&cfg, &meta).unwrap_err().to_string();
     assert!(error.contains("'devin-gone'") && error.contains("backends.pools"), "{error}");
+  }
+
+  #[tokio::test]
+  async fn a_model_and_its_one_member_pool_use_the_same_selection_filters() {
+    let (_home, features) = fixture();
+    let cfg = loaded_cfg(&features);
+    let selector = Selector::from_features(&features, &cfg).unwrap();
+
+    let model = selector.peek("chatgpt", &[]).unwrap().map(|option| option.id);
+    let pool = selector.peek("chatgpt-only", &[]).unwrap().map(|option| option.id);
+    assert_eq!(model, pool);
+    assert_eq!(
+      selector.ordered(&["chatgpt".to_string()], &[]).unwrap().map(|option| option.id),
+      selector.ordered(&["chatgpt-only".to_string()], &[]).unwrap().map(|option| option.id)
+    );
+
+    assert!(selector.select("chatgpt", &["chatgpt".to_string()]).unwrap().is_none());
+    assert!(selector.select("chatgpt-only", &["chatgpt".to_string()]).unwrap().is_none());
+
+    availability(&features).record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    assert!(selector.select("chatgpt", &[]).unwrap().is_none());
+    assert!(selector.select("chatgpt-only", &[]).unwrap().is_none());
+    assert!(selector.exhausted_message("chatgpt").unwrap().contains("- chatgpt: quota_error"));
+    assert!(selector.exhausted_message("chatgpt-only").unwrap().contains("- chatgpt: quota_error"));
+  }
+
+  #[tokio::test]
+  async fn a_model_session_resolves_to_itself_without_recording_pool_metadata() {
+    let (_home, features) = fixture();
+    let cfg = loaded_cfg(&features);
+    let meta = pool_session(&features, "model-current-member", "chatgpt").await;
+    let mut singleton_pool_meta = pool_session(&features, "singleton-current-member", "chatgpt-only").await;
+    singleton_pool_meta.set_extra(POOL_MEMBER_FIELD, json!("chatgpt"));
+
+    assert_eq!(current_member_id(&cfg, &meta).unwrap(), "chatgpt");
+    assert_eq!(current_member_id(&cfg, &singleton_pool_meta).unwrap(), "chatgpt");
+    assert_eq!(
+      turn_member(&features, &cfg, &meta).unwrap(),
+      turn_member(&features, &cfg, &singleton_pool_meta).unwrap()
+    );
+    assert!(meta.extra(POOL_MEMBER_FIELD).is_none_or(Value::is_null));
+
+    availability(&features).record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+    assert_eq!(current_member_id(&cfg, &meta).unwrap(), "chatgpt", "current member resolution ignores availability");
+    assert_eq!(current_member_id(&cfg, &singleton_pool_meta).unwrap(), "chatgpt");
+    assert_eq!(turn_member(&features, &cfg, &meta).unwrap(), None);
+    assert_eq!(turn_member(&features, &cfg, &singleton_pool_meta).unwrap(), None);
+    assert!(meta.extra(POOL_MEMBER_FIELD).is_none_or(Value::is_null));
+  }
+
+  #[tokio::test]
+  async fn a_cooling_model_session_refuses_a_turn_without_recording_pool_metadata() {
+    let (_home, features) = fixture();
+    let cfg = loaded_cfg(&features);
+    let mut meta = pool_session(&features, "model-cooling-turn", "chatgpt").await;
+    availability(&features).record("chatgpt", None, backend_availability::REASON_QUOTA_ERROR, "spent").unwrap();
+
+    assert_eq!(turn_member(&features, &cfg, &meta).unwrap(), None);
+    let TurnStart::Exhausted(message) = start_turn(&features, &cfg, &mut meta).await.unwrap() else {
+      panic!("a cooling model must exhaust its one-member selection")
+    };
+    assert!(message.contains("- chatgpt: quota_error"), "{message}");
+    assert!(meta.extra(POOL_MEMBER_FIELD).is_none_or(Value::is_null));
   }
 
   #[tokio::test]

@@ -83,9 +83,6 @@ async fn fire_backend_id(
   cfg: &CharlieBotConfig,
 ) -> anyhow::Result<Option<String>> {
   let configured = effective_backend(task, cfg)?;
-  if cfg.backends.pool(&configured).is_none() {
-    return Ok(Some(configured));
-  }
   let selector = model_pool::Selector::from_features(features, cfg)?;
   Ok(selector.peek(&configured, &[])?.map(|option| option.id))
 }
@@ -162,7 +159,8 @@ mod tests {
   use charliebot_store::metadata::UtcDateTime;
   use serde_json::json;
 
-  use super::derived_waiting_rows;
+  use super::{derived_waiting_rows, fire_backend_id};
+  use crate::config::ScheduledTaskConfig;
   use crate::test_support::{
     archive_task, auto_session, child_manager, feature_context_with_auto_host_backends,
     feature_context_with_host_backends, manager, set_host_login, write_prompted_task,
@@ -186,6 +184,42 @@ mod tests {
       "cron": "0 3 * * *", "mode": "worker", "enabled": enabled,
       "timezone": "UTC", "session_id": session_id, "backend": backend,
     })
+  }
+
+  fn backend_task(backend: &str) -> ScheduledTaskConfig {
+    ScheduledTaskConfig {
+      name: "selection-test".to_string(),
+      cron: "0 3 * * *".to_string(),
+      prompt_file: None,
+      repo: None,
+      backend: Some(backend.to_string()),
+      timezone: "UTC".to_string(),
+      enabled: true,
+      project: None,
+      allow_failure: false,
+      session_id: None,
+      mode: None,
+      prompt: Some("synthetic task".to_string()),
+      handler: None,
+      steps: None,
+    }
+  }
+
+  #[tokio::test]
+  async fn model_and_singleton_pool_fires_peek_the_same_member_and_cooling() {
+    let (_home, features) = feature_context_with_auto_host_backends(&[], &["synthetic"]);
+    let cfg = features.config.get().unwrap();
+    let model = fire_backend_id(&features, &backend_task("synthetic"), &cfg).await.unwrap();
+    let pool = fire_backend_id(&features, &backend_task("auto"), &cfg).await.unwrap();
+    assert_eq!(model, pool);
+    assert_eq!(model.as_deref(), Some("synthetic"));
+
+    backend_availability::backend_availability(&features)
+      .unwrap()
+      .record("synthetic", None, backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
+      .unwrap();
+    assert_eq!(fire_backend_id(&features, &backend_task("synthetic"), &cfg).await.unwrap(), None);
+    assert_eq!(fire_backend_id(&features, &backend_task("auto"), &cfg).await.unwrap(), None);
   }
 
   #[tokio::test]

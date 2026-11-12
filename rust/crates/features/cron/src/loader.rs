@@ -562,9 +562,9 @@ pub fn backend_refs_check(_registry: &Registry, cfg: &CharlieBotConfig) -> Resul
       task.steps.iter().flatten().map(|step| (format!("steps '{}' backend", step.name), step.backend.as_deref())),
     ) {
       if let Some(backend) = backend.filter(|backend| !backend.is_empty())
-        && !crate::config::backend_resolves(cfg, backend)
+        && let Err(error) = cfg.backends.check_backend_id(backend)
       {
-        problems.push(format!("{}: {entry} names unknown backend '{backend}'", path.display()));
+        problems.push(format!("{}: {entry}: {error}", path.display()));
       }
     }
     // Identical option ids are refused here, where the config tells an option from a pool. Two steps on one pool take

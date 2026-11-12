@@ -23,7 +23,7 @@ use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::SESSION_NOT_FOUND_DETAIL;
 use charliebot_store::metadata::SessionMetadata;
 use charliebot_tasks::execution::TaskExecutionAdapter;
-use charliebot_tasks::{recovery, spawner_backends};
+use charliebot_tasks::recovery;
 use serde_json::{Map, Value, json};
 
 use crate::command::{self, ImproveLoopAlreadyRunningError, ImproveState, LoopStatus, Reservation};
@@ -237,33 +237,35 @@ fn bad_request(error: anyhow::Error) -> Response {
   responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() }))
 }
 
-/// The child session's backend for one loop, and its model when the backend is a concrete model.
-///
-/// The requested id (a model or a pool), the `backends.calls.improve` target, or the session's own default decides it. A
-/// pool id stays the child's backend, and each iteration selects the member its run launches on.
+/// The child session's backend id for one loop, and its model when the id names a model. Each iteration selects the
+/// run's model through `Selector`, including when the child keeps a pool id.
 fn loop_backend(
   cfg: &CharlieBotConfig,
   meta: &SessionMetadata,
   requested: Option<&str>,
 ) -> anyhow::Result<(String, Option<String>)> {
-  let concrete = |backend_id: &str| -> anyhow::Result<(String, Option<String>)> {
-    let option = cfg
-      .get_backend_option(backend_id)
-      .ok_or_else(|| anyhow::anyhow!("backend '{backend_id}' is not in backends.options"))?;
-    let model = option.required_model("backend").map_err(anyhow::Error::msg)?;
-    Ok((option.id.clone(), Some(model)))
+  let backend_id = match requested {
+    Some(backend_id) => backend_id.to_string(),
+    None => match cfg.backends.calls.get(CallClass::Improve) {
+      Some(CallTarget::Backend(target)) => target.clone(),
+      None | Some(CallTarget::Session) => {
+        if meta.backend.is_empty() {
+          cfg
+            .backends
+            .new_session_backend()
+            .ok_or_else(|| anyhow::anyhow!("session backend resolution requires a configured backends.options entry"))?
+        } else {
+          meta.backend.clone()
+        }
+      }
+    },
   };
-  if let Some(backend_id) = requested {
-    if cfg.backends.pool(backend_id).is_some() {
-      return Ok((backend_id.to_string(), None));
-    }
-    return concrete(backend_id);
-  }
-  match cfg.backends.calls.get(CallClass::Improve) {
-    Some(CallTarget::Backend(target)) if cfg.backends.pool(target).is_some() => Ok((target.clone(), None)),
-    Some(CallTarget::Backend(target)) => concrete(target),
-    None | Some(CallTarget::Session) => spawner_backends::resolve_session_default_backend_model(cfg, meta),
-  }
+  cfg.backends.check_backend_id(&backend_id).map_err(anyhow::Error::msg)?;
+  let model = cfg
+    .get_backend_option(&backend_id)
+    .map(|option| option.required_model("backend").map_err(anyhow::Error::msg))
+    .transpose()?;
+  Ok((backend_id, model))
 }
 
 /// Fail a freshly reserved loop whose child was refused: the state is marked failed and the active lock cleared.

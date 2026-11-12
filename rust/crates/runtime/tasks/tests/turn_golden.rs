@@ -520,10 +520,11 @@ fn config_with_features_from_config_and_agent_path(
   agent_env.insert(charliebot_agents::launch_loop::SESSION_ID_ENV.to_string(), "stale-session".to_string());
   startup.insert(AgentBaseEnvironment { values: agent_env })?;
   startup.insert(charliebot_agents::backend_availability::BackendAvailability::load(&cfg.charliebot_home)?)?;
+  startup.insert(charliebot_agents::model_pool::RotationPositions::default())?;
   startup.insert(BackendPool::new(
     startup.require::<charliebot_agents::backend_availability::BackendAvailability>()?,
     Arc::clone(&registry),
-    Arc::new(charliebot_agents::model_pool::RotationPositions::default()),
+    startup.require::<charliebot_agents::model_pool::RotationPositions>()?,
   ))?;
   let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
     .ancestors()
@@ -557,7 +558,7 @@ fn config_with_features_from_config_and_agent_path(
 fn session_meta(session_id: &str, session_kind: &str, mode: &str) -> SessionMetadata {
   charliebot_registry::thread_origin::register_origin_field("slack_origin");
   let mut meta = SessionMetadata::new(session_id, "Session 1", TaskProfile::Manager);
-  if mode == "unknown_pin" {
+  if mode == "unknown_id" {
     meta.backend = "deleted-id".to_string();
   } else if mode != "refused" {
     meta.backend = "fake".to_string();
@@ -626,14 +627,14 @@ async fn run_fresh_case(
   index: usize,
   registry: Arc<Registry>,
 ) -> anyhow::Result<(Vec<charliebot_store::ChatEvent>, Vec<String>)> {
-  let configured_option = if case.mode == "unknown_pin" {
+  let configured_option = if case.mode == "unknown_id" {
     Some(backend_option(String::new()))
   } else if case.mode == "refused" {
     None
   } else {
     Some(backend_option(scripted_process(&case.events, case.exit_code, &case.stderr)?))
   };
-  let turn_option = if case.mode == "unknown_pin" { None } else { configured_option.clone() };
+  let turn_option = if case.mode == "unknown_id" { None } else { configured_option.clone() };
   let home = temp.path().join(format!("home-{index}"));
   let slots = registry.metadata_slots();
   let (cfg, features) = config_with_features(&home, configured_option, Arc::clone(&registry), true)?;

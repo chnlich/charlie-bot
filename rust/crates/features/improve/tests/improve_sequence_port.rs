@@ -421,6 +421,67 @@ async fn each_pooled_iteration_run_records_the_selected_backend() -> anyhow::Res
 
 #[tokio::test]
 #[ignore = "integration"]
+async fn a_model_and_singleton_pool_select_the_same_improve_iteration_backend() -> anyhow::Result<()> {
+  let model = LoopHarness::new(&[], &[], vec![recovery_support::result_script("iteration done")]).await?;
+  model.finish_loop(model.start_loop(1)).await;
+  let model_runs = model.stack.run_records(&model.child.id)?;
+  assert_eq!(model_runs.len(), 1);
+  let model_run_backend = model_runs[0].backend.clone();
+  let model_child_backend = model.child.backend.clone();
+  drop(model);
+
+  let singleton_pool =
+    LoopHarness::new(&["fake"], &[], vec![recovery_support::result_script("iteration done")]).await?;
+  singleton_pool.finish_loop(singleton_pool.start_loop(1)).await;
+  let pool_runs = singleton_pool.stack.run_records(&singleton_pool.child.id)?;
+
+  assert_eq!(model_child_backend, "fake");
+  assert_eq!(singleton_pool.child.backend, "pool");
+  assert_eq!(pool_runs.len(), 1);
+  assert_eq!(model_run_backend.as_deref(), Some("fake"));
+  assert_eq!(pool_runs[0].backend, model_run_backend);
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_cooling_model_refuses_an_improve_iteration_with_the_exhaustion_message() -> anyhow::Result<()> {
+  let harness = LoopHarness::new(&[], &[], Vec::new()).await?;
+  charliebot_agents::backend_availability::backend_availability(&harness.stack.features)?.record(
+    "fake",
+    None,
+    charliebot_agents::backend_availability::REASON_QUOTA_ERROR,
+    "synthetic quota error",
+  )?;
+
+  harness.finish_loop(harness.start_loop(1)).await;
+
+  assert!(harness.stack.run_records(&harness.child.id)?.is_empty());
+  let state = command::require_loop_state(&harness.stack.cfg, &harness.manager.id, harness.state.loop_id)?;
+  assert_eq!(state.status, command::LoopStatus::Failed);
+  assert!(state.blocked_reason.as_deref().is_some_and(|reason| reason.contains("- fake: quota_error")), "{state:?}");
+  assert!(harness.scripts.builds().is_empty());
+  drop(harness);
+
+  let pool_harness = LoopHarness::new(&["fake"], &[], Vec::new()).await?;
+  charliebot_agents::backend_availability::backend_availability(&pool_harness.stack.features)?.record(
+    "fake",
+    None,
+    charliebot_agents::backend_availability::REASON_QUOTA_ERROR,
+    "synthetic quota error",
+  )?;
+  pool_harness.finish_loop(pool_harness.start_loop(1)).await;
+  assert!(pool_harness.stack.run_records(&pool_harness.child.id)?.is_empty());
+  let state =
+    command::require_loop_state(&pool_harness.stack.cfg, &pool_harness.manager.id, pool_harness.state.loop_id)?;
+  assert_eq!(state.status, command::LoopStatus::Failed);
+  assert!(state.blocked_reason.as_deref().is_some_and(|reason| reason.contains("- fake: quota_error")), "{state:?}");
+  assert!(pool_harness.scripts.builds().is_empty());
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
 async fn a_launch_quota_failure_cools_the_only_member_with_its_reset() -> anyhow::Result<()> {
   let harness = LoopHarness::new(&["quota"], &[], Vec::new()).await?;
 

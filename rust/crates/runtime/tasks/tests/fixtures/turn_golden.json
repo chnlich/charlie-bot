@@ -552,8 +552,8 @@
       ]
     },
     {
-      "name": "unknown_backend_pin_refusal",
-      "mode": "unknown_pin",
+      "name": "unknown_backend_validity_error",
+      "mode": "unknown_id",
       "session_kind": "web",
       "events": [],
       "exit_code": 0,
@@ -562,7 +562,7 @@
       "persisted": [
         {
           "type": "assistant_error",
-          "content": "Agent error: backend 'deleted-id' is not in config.yaml backends.options \u2014 refusing to substitute 'fake'; this run did not execute."
+          "content": "Agent error: backend 'deleted-id' is not a backends.options or backends.pools id; valid ids: ['fake', 'pool']"
         },
         {
           "type": "master_done",

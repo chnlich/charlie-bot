@@ -50,11 +50,6 @@ impl SubagentRole {
   }
 }
 
-/// Return the refusal core when a session pins a backend id absent from `config.yaml`.
-pub fn unknown_backend_pin_refusal(backend_id: &str, fallback_id: &str) -> String {
-  format!("'{backend_id}' is not in config.yaml backends.options — refusing to substitute '{fallback_id}'")
-}
-
 /// Resolve the exact backend and recorded model on one run.
 pub fn resolve_backend_option(
   cfg: &CharlieBotConfig,
@@ -92,48 +87,33 @@ pub fn worker_pool_id<'a>(cfg: &'a CharlieBotConfig, session_meta: &SessionMetad
     .or_else(|| class_pool_id(cfg, CallClass::Worker))
 }
 
-/// Resolve a session's pinned backend or its configured first backend. A session whose backend is a pool id resolves to
-/// the member turn start recorded in `pool_member`; a missing pool or member is a refusal that names it.
+/// Resolve a session's current backend and model. A pool session resolves to its recorded member; a model session
+/// resolves to its own id.
 pub fn resolve_session_default_backend_model(
   cfg: &CharlieBotConfig,
   session_meta: &SessionMetadata,
 ) -> anyhow::Result<(String, Option<String>)> {
-  let option = if cfg.backends.pool(&session_meta.backend).is_some() {
-    let member = charliebot_agents::model_pool::current_member_id(cfg, session_meta)
-      .map_err(|error| value_error(error.to_string()))?;
-    cfg.get_backend_option(&member).ok_or_else(|| {
-      value_error(format!("'{member}' is not in config.yaml backends.options — the pool member cannot run"))
-    })?
-  } else if !session_meta.backend.is_empty() {
-    let backend_id = session_meta.backend.as_str();
-    match cfg.get_backend_option(backend_id) {
-      Some(option) => option,
-      None if cfg.backends.options.is_empty() => {
-        return Err(value_error("session backend resolution requires a configured backends.options entry"));
-      }
-      None => {
-        let fallback = &cfg.backends.options[0].id;
-        tracing::error!(
-          target: "charliebot_tasks",
-          session_id = %session_meta.id,
-          stored = backend_id,
-          refused_substitute = fallback,
-          "session_backend_unresolved"
-        );
-        return Err(value_error(format!("session backend {}", unknown_backend_pin_refusal(backend_id, fallback))));
-      }
-    }
-  } else {
-    let backend = cfg
-      .backends
-      .new_session_backend()
-      .ok_or_else(|| value_error("session backend resolution requires a configured backends.options entry"))?;
-    cfg.get_backend_option(&backend).ok_or_else(|| {
-      value_error(format!("backends.calls.new_session names '{backend}', which is not a backends.options id"))
-    })?
-  };
+  let backend_id = charliebot_agents::model_pool::current_member_id(cfg, session_meta)
+    .map_err(|error| value_error(error.to_string()))?;
+  let option = cfg
+    .get_backend_option(&backend_id)
+    .ok_or_else(|| value_error(format!("session backend '{backend_id}' resolves to no backends.options entry")))?;
   let model = option.required_model("session backend").map_err(value_error)?;
   Ok((option.id.clone(), Some(model)))
+}
+
+/// The backend id a child inherits from its parent when no call target or explicit id applies.
+fn inherited_backend_id(cfg: &CharlieBotConfig, session_meta: &SessionMetadata) -> anyhow::Result<String> {
+  let backend_id = if session_meta.backend.is_empty() {
+    cfg
+      .backends
+      .new_session_backend()
+      .ok_or_else(|| value_error("session backend resolution requires a configured backends.options entry"))?
+  } else {
+    session_meta.backend.clone()
+  };
+  cfg.backends.check_backend_id(&backend_id).map_err(value_error)?;
+  Ok(backend_id)
 }
 
 /// Resolve the backend id the session's own defaults use for verify's excluded candidate.
@@ -223,63 +203,20 @@ pub async fn resolve_requested_subagent_backend_model(
   })?;
   let excluded = verify_exclusion(cfg, &meta, role)?;
   let selector = pool.selector(cfg).with_store(store);
-  if let Some(backend_id) = requested_backend {
-    if backend_id.is_empty() {
-      return Err(value_error("requested backend is required"));
-    }
-    if cfg.backends.pool(backend_id).is_some() {
-      let Some(member) = selector.select(backend_id, &excluded)? else {
-        return Err(value_error(selector.exhausted_message(backend_id)?));
-      };
-      let model = member.required_model("pool member").map_err(value_error)?;
-      return Ok(SubagentBackend {
-        session_backend: backend_id.to_string(),
-        run_backend: member.id,
-        model: Some(model),
-      });
-    }
-    let option = cfg
-      .get_backend_option(backend_id)
-      .ok_or_else(|| value_error(format!("requested backend '{backend_id}' is not in backends.options")))?;
-    let model = option.required_model("requested backend").map_err(value_error)?;
-    return Ok(SubagentBackend {
-      session_backend: option.id.clone(),
-      run_backend: option.id.clone(),
-      model: Some(model),
-    });
-  }
-  match cfg.backends.calls.get(role.call_class()) {
-    None | Some(CallTarget::Session) => {}
-    Some(CallTarget::Backend(target)) if cfg.backends.pool(target).is_some() => {
-      let Some(member) = selector.select(target, &excluded)? else {
-        return Err(value_error(selector.exhausted_message(target)?));
-      };
-      let model = member.required_model("pool member").map_err(value_error)?;
-      return Ok(SubagentBackend { session_backend: target.clone(), run_backend: member.id, model: Some(model) });
-    }
-    Some(CallTarget::Backend(target)) => {
-      let option = cfg
-        .get_backend_option(target)
-        .ok_or_else(|| value_error(format!("calls target '{target}' is not a backends.options id")))?;
-      let model = option.required_model("calls target").map_err(value_error)?;
-      return Ok(SubagentBackend {
-        session_backend: option.id.clone(),
-        run_backend: option.id.clone(),
-        model: Some(model),
-      });
-    }
-  }
-  // The session's own backend serves the child. A pool id stays the child's backend, and the child picks its member,
-  // so the child's quota failover moves inside the same pool.
-  if cfg.backends.pool(&meta.backend).is_some() {
-    let Some(member) = selector.select(&meta.backend, &excluded)? else {
-      return Err(value_error(selector.exhausted_message(&meta.backend)?));
-    };
-    let model = member.required_model("pool member").map_err(value_error)?;
-    return Ok(SubagentBackend { session_backend: meta.backend.clone(), run_backend: member.id, model: Some(model) });
-  }
-  let (backend_id, model) = resolve_session_default_backend_model(cfg, &meta)?;
-  Ok(SubagentBackend { session_backend: backend_id.clone(), run_backend: backend_id, model })
+  let backend_id = match requested_backend {
+    Some("") => return Err(value_error("requested backend is required")),
+    Some(backend_id) => backend_id.to_string(),
+    None => match cfg.backends.calls.get(role.call_class()) {
+      Some(CallTarget::Backend(target)) => target.clone(),
+      None | Some(CallTarget::Session) => inherited_backend_id(cfg, &meta)?,
+    },
+  };
+  let Some(member) = selector.select(&backend_id, &excluded)? else {
+    return Err(value_error(selector.exhausted_message(&backend_id)?));
+  };
+  let model = member.required_model("backend").map_err(value_error)?;
+  let session_backend = if cfg.backends.pool(&backend_id).is_some() { backend_id } else { member.id.clone() };
+  Ok(SubagentBackend { session_backend, run_backend: member.id, model: Some(model) })
 }
 
 /// Resolve a verify or cold-read checker for the call class `class`, excluding the session's current backend.
@@ -313,10 +250,14 @@ mod tests {
   use super::*;
 
   #[test]
-  fn refusal_names_the_missing_pin_and_rejected_substitute() {
+  fn a_missing_session_backend_uses_the_core_validity_error() {
+    let cfg = test_config();
+    let mut meta = SessionMetadata::new("unknown", "Unknown", charliebot_store::metadata::TaskProfile::Manager);
+    meta.backend = "synthetic-missing".to_string();
+
     assert_eq!(
-      unknown_backend_pin_refusal("synthetic-missing", "synthetic-default"),
-      "'synthetic-missing' is not in config.yaml backends.options — refusing to substitute 'synthetic-default'"
+      resolve_session_default_backend_model(&cfg, &meta).unwrap_err().to_string(),
+      "backend 'synthetic-missing' is not a backends.options or backends.pools id; valid ids: ['synthetic']"
     );
   }
 
@@ -408,6 +349,38 @@ mod tests {
     assert_eq!(subagent.session_backend, POOL_ID, "the child keeps the pool id");
     assert_eq!(subagent.run_backend, "synthetic", "the run names the member the pool selected");
     assert_eq!(subagent.model.as_deref(), Some("model-1"));
+
+    let model_subagent = resolve_requested_subagent_backend_model(
+      &cfg,
+      &store,
+      &session.id,
+      Some("synthetic"),
+      SubagentRole::Improve,
+      &pool,
+    )
+    .await
+    .unwrap();
+    assert_eq!(model_subagent.session_backend, "synthetic");
+    assert_eq!(model_subagent.run_backend, subagent.run_backend);
+
+    pool
+      .availability()
+      .record("synthetic", None, charliebot_agents::backend_availability::REASON_QUOTA_ERROR, "spent")
+      .unwrap();
+    for backend_id in ["synthetic", POOL_ID] {
+      let error = resolve_requested_subagent_backend_model(
+        &cfg,
+        &store,
+        &session.id,
+        Some(backend_id),
+        SubagentRole::Improve,
+        &pool,
+      )
+      .await
+      .unwrap_err()
+      .to_string();
+      assert!(error.contains("no selectable member") && error.contains("quota_error"), "{backend_id}: {error}");
+    }
   }
 
   fn pool_config() -> CharlieBotConfig {

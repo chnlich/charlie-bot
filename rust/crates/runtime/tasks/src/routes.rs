@@ -342,24 +342,30 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
   // path runs when routing is unset or the router gives no answer.
   let named_backend = request.backend.as_deref();
   let mut route = None;
-  let routed = if named_backend.is_none()
+  let routed_backend = if named_backend.is_none()
     && matches!(request.task_type, TaskType::Implement | TaskType::QuickEdit | TaskType::ScriptRun | TaskType::Verify)
     && cfg.backends.routing.is_some()
   {
     // The router reads the delegating session's backend id itself, pool id included: a session answer hands that id to
     // the child, and a pool-id child picks its own member.
     let session_backend = session_meta.backend.clone();
-    // A verify leaves out the model the session runs on now. A pool-id session leaves out no candidate: its pool is a
-    // valid verify target, and the member the session runs on is left out when the member is selected.
-    let avoided = (request.task_type == TaskType::Verify && cfg.backends.pool(&session_backend).is_none())
-      .then_some(session_backend.as_str());
+    // A verify leaves out the model the session runs on now. A pool id stays eligible, and its selected member leaves
+    // that same model out.
+    let avoided = if request.task_type == TaskType::Verify {
+      match crate::spawner_backends::session_current_member(&cfg, &session_meta) {
+        Ok(member) => Some(member),
+        Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
+      }
+    } else {
+      None
+    };
     let candidates = cfg
       .backends
       .options
       .iter()
       .map(|option| option.id.as_str())
       .chain(cfg.backends.pools.iter().map(|pool| pool.id.as_str()))
-      .filter(|id| avoided != Some(*id))
+      .filter(|id| avoided.as_deref() != Some(*id))
       .map(str::to_string)
       .collect::<Vec<_>>();
     let role = request.task_type.as_str();
@@ -381,54 +387,23 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     };
     route = Some(decided.route);
     match decided.target {
-      // The router named a pool: the child keeps the pool id, and the work run launches on the member the pool selects
-      // for it. A pool with no selectable member refuses the delegation here, as the pool's default path does.
-      RouteTarget::Backend(backend_id) if cfg.backends.pool(&backend_id).is_some() => {
-        let selector = pool.selector(&cfg).with_store(&features.store);
-        let excluded = if request.task_type == TaskType::Verify {
-          match crate::spawner_backends::session_current_member(&cfg, &session_meta) {
-            Ok(member) => vec![member],
-            Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
-          }
-        } else {
-          Vec::new()
-        };
-        let member = match selector.select(&backend_id, &excluded) {
-          Ok(member) => member,
-          Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
-        };
-        let Some(member) = member else {
-          let detail = match selector.exhausted_message(&backend_id) {
-            Ok(detail) => detail,
-            Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
-          };
-          return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": detail }));
-        };
-        match member.required_model("pool member") {
-          Ok(model) => {
-            Some(SubagentBackend { session_backend: backend_id, run_backend: member.id, model: Some(model) })
-          }
-          Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
-        }
-      }
-      RouteTarget::Backend(backend_id) => {
-        let Some(option) = cfg.get_backend_option(&backend_id) else {
-          let detail = format!("routed backend '{backend_id}' is not in backends.options");
-          return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": detail }));
-        };
-        Some(SubagentBackend {
-          session_backend: backend_id.clone(),
-          run_backend: backend_id,
-          model: Some(option.model.clone()),
-        })
-      }
+      RouteTarget::Backend(backend_id) => Some(backend_id),
       RouteTarget::NotRouted => None,
     }
   } else {
     None
   };
-  let resolved = if let Some(routed) = routed {
-    Ok(Some(routed))
+  let resolved = if let Some(routed_backend) = routed_backend {
+    crate::spawner_backends::resolve_requested_subagent_backend_model(
+      &cfg,
+      &features.store,
+      &request.session_id,
+      Some(&routed_backend),
+      request.task_type.into(),
+      &pool,
+    )
+    .await
+    .map(Some)
   } else if matches!(request.task_type, TaskType::Verify | TaskType::ColdRead) && named_backend.is_none() {
     let class = if request.task_type == TaskType::Verify { CallClass::Verify } else { CallClass::ColdRead };
     let class_pool = crate::spawner_backends::class_pool_id(&cfg, class).map(str::to_string);

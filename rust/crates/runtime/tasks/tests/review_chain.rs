@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::{BackendPool, BackendRoute};
-use charliebot_core::config::{CallClass, CharlieBotConfig};
+use charliebot_core::config::{CallClass, CallTarget, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::Registry;
 use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType, UtcDateTime};
@@ -601,6 +601,51 @@ async fn exhausted_route_falls_back_to_the_worker_backend() -> anyhow::Result<()
     },
   )?;
   assert_eq!(selection, Some(("fake".to_string(), Some("fake-model".to_string()), vec!["fake".to_string()])));
+  Ok(())
+}
+
+#[tokio::test]
+#[ignore = "integration"]
+async fn a_review_route_model_and_singleton_pool_select_the_same_backend() -> anyhow::Result<()> {
+  let stack = Stack::start_with(
+    vec![script_option("fake", "exit 0"), script_option("fake2", "exit 0")],
+    vec!["fake".to_string()],
+  )
+  .await?;
+  let mut cfg = (*stack.cfg).clone();
+  cfg.backends.calls = [(CallClass::Review, CallTarget::Session)].into_iter().collect();
+  let pool = test_pool();
+  let selector = pool.selector(&cfg);
+  let model_route = BackendRoute { backends: vec!["fake".to_string()], reason: "review route".to_string() };
+  let pool_route = BackendRoute { backends: vec!["pool".to_string()], reason: "review route".to_string() };
+  let used = HashSet::new();
+  let model = review::select_reviewer_backend(
+    &cfg,
+    &selector,
+    CallClass::Review,
+    review::ReviewScope {
+      route: Some(&model_route),
+      worker_backend: "fake2",
+      worker_model: Some("fake2-model"),
+      tried_backends: &[],
+      used_backends: &used,
+    },
+  )?;
+  let pool = review::select_reviewer_backend(
+    &cfg,
+    &selector,
+    CallClass::Review,
+    review::ReviewScope {
+      route: Some(&pool_route),
+      worker_backend: "fake2",
+      worker_model: Some("fake2-model"),
+      tried_backends: &[],
+      used_backends: &used,
+    },
+  )?;
+
+  assert_eq!(model, pool);
+  assert_eq!(model, Some(("fake".to_string(), Some("fake-model".to_string()), Vec::new())));
   Ok(())
 }
 

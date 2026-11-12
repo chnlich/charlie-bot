@@ -127,27 +127,19 @@ pub fn validate_task(task: &ScheduledTaskConfig) -> Result<(), String> {
   Ok(())
 }
 
-/// Whether a cron task backend names a configured `backends.options` id or `backends.pools` id.
-pub(crate) fn backend_resolves(cfg: &CharlieBotConfig, backend: &str) -> bool {
-  cfg.get_backend_option(backend).is_some() || cfg.backends.pool(backend).is_some()
-}
-
-/// Why a cron task backend does not resolve, worded after the backend name the caller prints.
-pub(crate) const UNRESOLVED_BACKEND_REASON: &str = "is not in backends.options or backends.pools";
-
 /// The backend a scheduled task fires on: its own `backend` (an options id or a pool id, returned as written), else the
 /// `backends.calls.new_session` target, else the first configured option.
 pub(crate) fn effective_backend(task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<String> {
   if let Some(backend) = task.backend.as_deref().filter(|backend| !backend.is_empty()) {
-    if !backend_resolves(cfg, backend) {
-      anyhow::bail!("scheduled task backend '{backend}' {UNRESOLVED_BACKEND_REASON}");
-    }
+    cfg.backends.check_backend_id(backend).map_err(anyhow::Error::msg)?;
     return Ok(backend.to_string());
   }
-  cfg
+  let backend = cfg
     .backends
     .new_session_backend()
-    .ok_or_else(|| anyhow::anyhow!("scheduled task backend resolution requires a configured backends.options entry"))
+    .ok_or_else(|| anyhow::anyhow!("scheduled task backend resolution requires a configured backends.options entry"))?;
+  cfg.backends.check_backend_id(&backend).map_err(anyhow::Error::msg)?;
+  Ok(backend)
 }
 
 fn default_timezone() -> String {

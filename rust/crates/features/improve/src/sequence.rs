@@ -413,26 +413,22 @@ async fn run_loop(
     let description = compose_iteration_description(&progress.goal, plan.as_deref(), &progress.previous_summaries);
     let tip_before = git::git_rev_parse(&wt_path, "HEAD").await.unwrap_or_default();
 
-    let (iteration_backend, iteration_model) =
-      match state.backend.as_deref().filter(|id| cfg.backends.pool(id).is_some()) {
-        Some(pool_id) => {
-          let member = match next_pool_member.take() {
-            Some(member) => Some(member),
-            None => pool.selector(cfg).select(pool_id, &[])?,
-          };
-          match member {
-            Some(member) => {
-              let model = member.required_model("pool member").map_err(anyhow::Error::msg)?;
-              (member.id.clone(), Some(model))
-            }
-            None => {
-              progress.blocked = Some((iteration, pool.selector(cfg).exhausted_message(pool_id)?, String::new()));
-              break;
-            }
-          }
-        }
-        None => (state.backend.clone().unwrap_or_default(), state.model.clone()),
-      };
+    let backend_id = state.backend.as_deref().expect("an improve loop records its backend id");
+    let selector = pool.selector(cfg);
+    let member = match next_pool_member.take() {
+      Some(member) => Some(member),
+      None => selector.select(backend_id, &[])?,
+    };
+    let (iteration_backend, iteration_model) = match member {
+      Some(member) => {
+        let model = member.required_model("backend").map_err(anyhow::Error::msg)?;
+        (member.id, Some(model))
+      }
+      None => {
+        progress.blocked = Some((iteration, selector.exhausted_message(backend_id)?, String::new()));
+        break;
+      }
+    };
     let iteration_pool_id = state.backend.as_deref().filter(|id| cfg.backends.pool(id).is_some());
     let base = base_branch.clone();
     let worktree = wt_path.to_string_lossy().into_owned();

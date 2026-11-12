@@ -122,11 +122,10 @@ pub struct RouterAnswer {
 /// Where one routed request runs.
 #[derive(Debug)]
 pub enum RouteTarget {
-  /// The router did not route the request, the router failed, or the one backend it named is out: the caller's default
-  /// path runs it.
+  /// The router did not route the request, the router failed, or the named backend has no selectable member: the
+  /// caller's default path runs it.
   NotRouted,
-  /// The `backends.options` id or the `backends.pools` id the router named. A pool id runs on the member its rule
-  /// picks.
+  /// The id the router named. The delegation selects the member this id resolves to.
   Backend(String),
 }
 
@@ -215,8 +214,7 @@ impl BackendPool {
   }
 
   /// Turn one router answer into the route the request keeps and the place it runs. A routed answer names exactly one
-  /// id. A pool id is the place the request runs: its delegation selects the member the rule picks for the work run. An
-  /// options id runs it unless the member is out, in which case the caller's default path runs it.
+  /// id, which the delegation resolves. An exhausted selection takes the caller's default path.
   pub fn decide(&self, cfg: &CharlieBotConfig, caller: &str, answer: RouterAnswer) -> anyhow::Result<RoutedRequest> {
     let RouterAnswer { routed, backends, reason } = answer;
     if !routed {
@@ -226,19 +224,11 @@ impl BackendPool {
       anyhow::bail!("{caller}: a routed answer names exactly one backend id, got {}", backends.len());
     };
     let backend = backend.clone();
-    if cfg.backends.pool(&backend).is_some() || self.decide_option_available(cfg, &backend)? {
+    if self.selector(cfg).peek(&backend, &[])?.is_some() {
       return Ok(RoutedRequest { route: BackendRoute { backends, reason }, target: RouteTarget::Backend(backend) });
     }
     let reason = format!("{reason}; {backend} cooling; ran on the default path");
     Ok(RoutedRequest { route: BackendRoute { backends, reason }, target: RouteTarget::NotRouted })
-  }
-
-  /// Whether the one `backends.options` id a routed answer names can run now.
-  fn decide_option_available(&self, cfg: &CharlieBotConfig, backend_id: &str) -> anyhow::Result<bool> {
-    if cfg.get_backend_option(backend_id).is_none() {
-      return Ok(false);
-    }
-    self.selector(cfg).option_available(backend_id, &[])
   }
 
   /// Run the router command on `payload` and parse its answer against the candidate ids it was offered.
@@ -311,9 +301,9 @@ impl BackendPool {
   }
 }
 
-/// The members one call of a `backends.calls` class tries, in order. A pool target selects its next member, excluding
-/// the members already tried, so a caller that records a failed member out moves on to the next one. A model target
-/// yields that model once. An unset class yields nothing; the caller decides what an unset class means.
+/// The members one call of a `backends.calls` class tries, in order. Each selected member is excluded on the next pass,
+/// so a caller that records a failed member out moves to the next one. An unset class yields nothing; the caller
+/// decides what an unset class means.
 pub fn one_shot_members<'a>(
   cfg: &'a CharlieBotConfig,
   pool: Arc<BackendPool>,
@@ -326,20 +316,20 @@ pub fn one_shot_members<'a>(
     if done {
       return None;
     }
-    let next = match target {
-      None => return None,
-      Some(CallTarget::Session) => Err(anyhow::anyhow!("backends.calls.{caller} cannot name the session")),
-      Some(CallTarget::Backend(id)) if cfg.backends.pool(id).is_some() => pool.selector(cfg).select(id, &tried),
-      Some(CallTarget::Backend(id)) => cfg
-        .get_backend_option(id)
-        .cloned()
-        .map(Some)
-        .ok_or_else(|| anyhow::anyhow!("backends.calls.{caller} names '{id}', which is not a backends.options id")),
-    };
-    let is_pool = matches!(target, Some(CallTarget::Backend(id)) if cfg.backends.pool(id).is_some());
-    if !is_pool {
-      done = true;
-    }
+    let next = (|| -> anyhow::Result<Option<BackendOption>> {
+      match target {
+        None => Ok(None),
+        Some(CallTarget::Session) => Err(anyhow::anyhow!("backends.calls.{caller} cannot name the session")),
+        Some(CallTarget::Backend(id)) => {
+          let selector = pool.selector(cfg);
+          match selector.select(id, &tried)? {
+            Some(option) => Ok(Some(option)),
+            None if tried.is_empty() => Err(anyhow::anyhow!(selector.exhausted_message(id)?)),
+            None => Ok(None),
+          }
+        }
+      }
+    })();
     match next {
       Ok(Some(option)) => {
         tried.push(option.id.clone());
@@ -956,7 +946,10 @@ mod tests {
   #[test]
   fn selecting_an_unknown_pool_id_fails() {
     let cfg = config(&["a"]);
-    assert!(pool().selector(&cfg).select("missing", &[]).is_err());
+    assert_eq!(
+      pool().selector(&cfg).select("missing", &[]).unwrap_err().to_string(),
+      "backend 'missing' is not a backends.options or backends.pools id; valid ids: ['a', 'b', 'c', 'light']"
+    );
   }
 
   #[test]
@@ -992,6 +985,60 @@ mod tests {
       .unwrap();
     assert!(matches!(cooling.target, RouteTarget::NotRouted), "{:?}", cooling.target);
     assert!(cooling.route.reason.ends_with("b cooling; ran on the default path"), "{}", cooling.route.reason);
+  }
+
+  #[test]
+  fn routed_model_and_singleton_pool_share_availability_filtering() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg = config(&["a"]);
+    let pool = pool_at(home.path());
+    for backend_id in ["a", POOL] {
+      let routed = pool
+        .decide(
+          &cfg,
+          "implement",
+          RouterAnswer { routed: true, backends: vec![backend_id.to_string()], reason: "routine".to_string() },
+        )
+        .unwrap();
+      assert!(
+        matches!(routed.target, RouteTarget::Backend(ref id) if id == backend_id),
+        "{backend_id}: {:?}",
+        routed.target
+      );
+    }
+
+    record(&pool, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
+    for backend_id in ["a", POOL] {
+      let routed = pool
+        .decide(
+          &cfg,
+          "implement",
+          RouterAnswer { routed: true, backends: vec![backend_id.to_string()], reason: "routine".to_string() },
+        )
+        .unwrap();
+      assert!(matches!(routed.target, RouteTarget::NotRouted), "{backend_id}: {:?}", routed.target);
+      assert!(routed.route.reason.contains("cooling"), "{backend_id}: {}", routed.route.reason);
+    }
+  }
+
+  #[test]
+  fn a_model_and_singleton_pool_call_target_share_filtering_and_exhaustion() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg = config(&["a"]);
+    let pool = Arc::new(pool_at(home.path()));
+    for backend_id in ["a", POOL] {
+      let target = CallTarget::Backend(backend_id.to_string());
+      let mut attempts = one_shot_members(&cfg, Arc::clone(&pool), "probe", Some(&target));
+      assert_eq!(attempts.next().unwrap().unwrap().id, "a", "{backend_id}");
+    }
+
+    record(&pool, "a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
+    for backend_id in ["a", POOL] {
+      let target = CallTarget::Backend(backend_id.to_string());
+      let mut attempts = one_shot_members(&cfg, Arc::clone(&pool), "probe", Some(&target));
+      let error = attempts.next().unwrap().unwrap_err().to_string();
+      assert!(error.contains("no selectable member") && error.contains("- a: quota_error"), "{backend_id}: {error}");
+    }
   }
 
   #[test]

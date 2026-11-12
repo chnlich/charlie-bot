@@ -29,7 +29,6 @@ shutdown and re-attachment into server lifespan.
 - `autonamer::maybe_auto_name`
 - `autonamer::is_default_session_name`, `prefix_session_number_if_default`, and `build_groups_clause`
 - `autonamer::parse_name_and_group` and `fuzzy_match_group`
-- `spawner_backends::unknown_backend_pin_refusal`
 - `spawner_backends::resolve_backend_option`
 - `spawner_backends::resolve_session_default_backend_model`
 - `spawner_backends::resolve_requested_subagent_backend_model`, `SubagentRole`, `BackendResolutionValueError`

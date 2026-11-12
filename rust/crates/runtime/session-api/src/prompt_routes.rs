@@ -65,34 +65,30 @@ async fn effective_prompt(
     Ok(cfg) => cfg,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
-  // The preview resolves the backend as a launch does: a task without its own backend takes the new_session target.
-  let option = if meta.backend.is_empty() {
+  let mut preview_meta = meta.clone();
+  if preview_meta.backend.is_empty() {
     let Some(backend) = cfg.backends.new_session_backend() else {
       return detail(StatusCode::BAD_REQUEST, EMPTY_BACKENDS_OPTIONS_REFUSAL);
     };
-    match cfg.get_backend_option(&backend) {
-      Some(option) => option,
-      None => {
-        return detail(
-          StatusCode::BAD_REQUEST,
-          format!("backends.calls.new_session names {backend:?}, which is not a configured backends.options id"),
-        );
-      }
-    }
-  } else {
-    match cfg.get_backend_option(&meta.backend) {
-      Some(option) => option,
-      None => {
-        return detail(
-          StatusCode::BAD_REQUEST,
-          format!(
-            "session backend {} is not configured; update the task backend before previewing",
-            str_repr(&meta.backend)
-          ),
-        );
-      }
-    }
+    preview_meta.backend = backend;
+  }
+  let selector = match charliebot_agents::model_pool::Selector::from_features(&features, &cfg) {
+    Ok(selector) => selector,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
+  let backend_id = match charliebot_agents::model_pool::turn_member(&features, &cfg, &preview_meta) {
+    Ok(Some(backend_id)) => backend_id,
+    Ok(None) => match selector.exhausted_message(&preview_meta.backend) {
+      Ok(message) => return detail(StatusCode::BAD_REQUEST, message),
+      Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+    },
+    Err(error) if cfg.backends.check_backend_id(&preview_meta.backend).is_err() => {
+      return detail(StatusCode::BAD_REQUEST, error.to_string());
+    }
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  };
+  let option =
+    cfg.get_backend_option(&backend_id).expect("the model-pool resolver returns a configured backends.options id");
   let repo_root = match features.startup.require::<RepoRoot>() {
     Ok(repo_root) => repo_root,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),

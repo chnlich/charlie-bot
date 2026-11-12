@@ -806,18 +806,19 @@ pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) 
     Some(option) => option,
     None => {
       let message = if !metadata.backend.is_empty() {
-        let fallback = item.cfg.backends.options.first().map(|option| option.id.as_str()).unwrap_or("(none)");
+        let message = item
+          .cfg
+          .backends
+          .check_backend_id(&metadata.backend)
+          .err()
+          .unwrap_or_else(|| format!("backend '{}' has no selected model option", metadata.backend));
         tracing::error!(
           target: "charliebot_tasks",
           session = %metadata.id,
           requested = %metadata.backend,
-          fallback,
           "master_cc_backend_unresolved"
         );
-        format!(
-          "backend {}; this run did not execute.",
-          crate::spawner_backends::unknown_backend_pin_refusal(&metadata.backend, fallback)
-        )
+        message
       } else {
         tracing::error!(target: "charliebot_tasks", session = %metadata.id, requested = "(none)", "master_cc_backend_unresolved");
         "no backend option was given and this session pins none — refusing to fall back to backends.options[0]; this run did not execute.".to_string()
@@ -971,11 +972,7 @@ fn resolve_resume_option(item: &WorkItem) -> anyhow::Result<BackendOption> {
     return Ok(option.clone());
   }
   let metadata = item.session_metadata();
-  let backend_id = if item.cfg.backends.pool(&metadata.backend).is_some() {
-    charliebot_agents::model_pool::current_member_id(&item.cfg, &metadata)?
-  } else {
-    metadata.backend.clone()
-  };
+  let backend_id = charliebot_agents::model_pool::current_member_id(&item.cfg, &metadata)?;
   item.cfg.get_backend_option(&backend_id).cloned().ok_or_else(|| {
     anyhow!("resumed session '{}' runs on backend '{backend_id}', which backends.options does not list", metadata.id)
   })

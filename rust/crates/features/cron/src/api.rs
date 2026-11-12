@@ -94,12 +94,9 @@ async fn create_task(
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
   if let Some(backend) = values.get("backend").and_then(Value::as_str).filter(|value| !value.is_empty())
-    && !crate::config::backend_resolves(&cfg, backend)
+    && let Err(error) = cfg.backends.check_backend_id(backend)
   {
-    return detail(
-      StatusCode::BAD_REQUEST,
-      format!("backend '{backend}' {}", crate::config::UNRESOLVED_BACKEND_REASON),
-    );
+    return detail(StatusCode::BAD_REQUEST, error);
   }
   let requested_session = values.get("session_id").and_then(Value::as_str).filter(|value| !value.is_empty());
   if let CallerIdentity::Agent { claims } = &caller
@@ -186,12 +183,9 @@ async fn update_task(
   if let Some(backend) = values.get("backend")
     && !backend.is_null()
     && let Some(backend) = backend.as_str().filter(|value| !value.is_empty())
-    && !crate::config::backend_resolves(&cfg, backend)
+    && let Err(error) = cfg.backends.check_backend_id(backend)
   {
-    return detail(
-      StatusCode::BAD_REQUEST,
-      format!("backend '{backend}' {}", crate::config::UNRESOLVED_BACKEND_REASON),
-    );
+    return detail(StatusCode::BAD_REQUEST, error);
   }
   let repo = match features.startup.require::<RepoRoot>() {
     Ok(repo) => repo,
@@ -548,7 +542,10 @@ mod tests {
     .await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(response["detail"], "backend 'missing-backend' is not in backends.options or backends.pools");
+    assert_eq!(
+      response["detail"],
+      "backend 'missing-backend' is not a backends.options or backends.pools id; valid ids: ['pool', 'synthetic']"
+    );
     assert!(!path.exists());
   }
 

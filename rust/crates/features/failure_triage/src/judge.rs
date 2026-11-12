@@ -215,10 +215,10 @@ pub async fn judge_signature(backends: &JudgeBackends<'_>, input: &JudgeInput) -
   }
   let reason = match target {
     None => "backends.calls.triage is unset; name a model or a pool to judge failures".to_string(),
-    Some(CallTarget::Backend(pool_id)) if backends.cfg.backends.pool(pool_id).is_some() => backends
+    Some(CallTarget::Backend(backend_id)) => backends
       .pool
       .selector(backends.cfg)
-      .exhausted_message(pool_id)
+      .exhausted_message(backend_id)
       .map_err(|error| JudgeError::Call(format!("{error:#}")))?,
     Some(_) => "backends.calls.triage names no selectable member".to_string(),
   };

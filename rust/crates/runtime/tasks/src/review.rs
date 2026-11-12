@@ -126,45 +126,35 @@ pub fn select_reviewer_backend(
   let mut excluded = vec![worker_backend.to_string()];
   excluded.extend(used_backends.iter().cloned());
   excluded.extend(tried_backends.iter().cloned());
+  if class == CallClass::Verify
+    && let Some(CallTarget::Backend(target)) = cfg.backends.calls.get(class)
+    && target == worker_backend
+  {
+    anyhow::bail!(
+      "backends.calls.verify names '{target}', the backend of the session that starts the verify; name another model or a pool"
+    );
+  }
   match cfg.backends.calls.get(class) {
     None | Some(CallTarget::Session) => {
       let Some(route) = route.filter(|route| !route.backends.is_empty()) else {
         return Ok(worker_fallback());
       };
-      // A route that names a pool leaves the member to that pool; a route of options ids is ordered by its ids. A route
-      // with no member left falls back to the worker's backend, as a review with no route does.
-      let picked = match route.backends.iter().find(|backend| cfg.backends.pool(backend).is_some()) {
-        Some(route_pool_id) => selector.select(route_pool_id, &excluded)?,
-        None => selector.ordered(&route.backends, &excluded)?,
-      };
+      // The router's ordered ids each pass through the same model-or-pool resolver. A route with no selectable member
+      // falls back to the worker's backend, as a review with no route does.
+      let picked = selector.ordered(&route.backends, &excluded)?;
       let Some(option) = picked else {
         return Ok(worker_fallback());
       };
       let model = option.required_model("route member").map_err(anyhow::Error::msg)?;
       return Ok(Some((option.id, Some(model), tried_backends.to_vec())));
     }
-    Some(CallTarget::Backend(target)) if cfg.backends.pool(target).is_some() => {
+    Some(CallTarget::Backend(target)) => {
       if let Some(option) = selector.select(target, &excluded)? {
-        let model = option.required_model("pool member").map_err(anyhow::Error::msg)?;
+        let model = option.required_model("calls target").map_err(anyhow::Error::msg)?;
         let mut tried = tried_backends.to_vec();
         tried.push(option.id.clone());
         return Ok(Some((option.id, Some(model), tried)));
       }
-    }
-    Some(CallTarget::Backend(target)) => {
-      if class == CallClass::Verify && target == worker_backend {
-        anyhow::bail!(
-          "backends.calls.verify names '{target}', the backend of the session that starts the verify; name another \
-           model or a pool"
-        );
-      }
-      let option = cfg.get_backend_option(target).ok_or_else(|| {
-        anyhow::anyhow!("backends.calls.{caller} names '{target}', which is not a backends.options id")
-      })?;
-      let model = option.required_model("calls target").map_err(anyhow::Error::msg)?;
-      let mut tried = tried_backends.to_vec();
-      tried.push(option.id.clone());
-      return Ok(Some((option.id.clone(), Some(model), tried)));
     }
   }
   if tried_backends.iter().any(|backend| backend == worker_backend) || used_backends.contains(worker_backend) {

@@ -1,9 +1,8 @@
 //! The backend resolution and the next-step judgment of a steps firing.
 //!
-//! A step runs on a `backends.options` id, which runs as written, or on a `backends.pools` id, which selects its member
-//! when the step's run is registered. The sequence controller starts each step with these functions, and the scheduler
-//! reads the next-step judgment to decide whether a round is still in flight. Neither caller is imported by this
-//! module.
+//! A step runs on a backend id, which selects through the shared resolver when its run is registered. The sequence
+//! controller starts each step with these functions, and the scheduler reads the next-step judgment to decide whether a
+//! round is still in flight. Neither caller is imported by this module.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -16,7 +15,7 @@ use crate::config::{ScheduledTaskConfig, StepConfig, effective_backend};
 /// The member a step's run is registered on, or the reason no member is selectable.
 pub(crate) enum StepMember {
   Selected(BackendOption),
-  /// The step's pool has no selectable member; the message lists every member and why it is out.
+  /// The step's backend id has no selectable member; the message lists every member and why it is out.
   Exhausted(String),
 }
 
@@ -32,17 +31,14 @@ pub(crate) fn step_backend_id(
   }
 }
 
-/// The member a step's run is registered on. A `backends.options` id runs as written. A `backends.pools` id selects its
-/// member now, which moves the pool's rotation past it, and `exclude` names the members the selection leaves out.
+/// The member a step's run is registered on. A model id selects itself through the same filters as a one-member pool.
+/// A selected pool moves its rotation past the member, and `exclude` names the members the selection leaves out.
 pub(crate) fn select_step_member(
   features: &FeatureContext,
   cfg: &CharlieBotConfig,
   backend: &str,
   exclude: &[String],
 ) -> anyhow::Result<StepMember> {
-  if cfg.backends.pool(backend).is_none() {
-    return Ok(StepMember::Selected(option_of(cfg, backend)?.clone()));
-  }
   let selector = charliebot_agents::model_pool::Selector::from_features(features, cfg)?;
   match selector.select(backend, exclude)? {
     Some(option) => Ok(StepMember::Selected(option)),
@@ -137,4 +133,37 @@ pub(crate) fn steps_chain_awaits_next_step(
   let passed =
     matches!(facts.terminal_outcome(&last_run.id)?, Some(RunOutcomeKind::Success)) && last_run.exit_code == Some(0);
   Ok(passed && last_position + 1 < steps.len() && distinct_backend_conflict(task, cfg)?.is_none())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::test_support::feature_context;
+  use charliebot_agents::backend_availability;
+
+  #[test]
+  fn a_model_and_its_singleton_pool_share_step_selection_and_cooling() {
+    let (_home, features) = feature_context();
+    let cfg = features.config.get().unwrap();
+    let model = select_step_member(&features, &cfg, "synthetic", &[]).unwrap();
+    let pool = select_step_member(&features, &cfg, "pool", &[]).unwrap();
+    let selected_id = |member| match member {
+      StepMember::Selected(option) => option.id,
+      StepMember::Exhausted(message) => panic!("expected a selectable member, got {message}"),
+    };
+    assert_eq!(selected_id(model), selected_id(pool));
+
+    backend_availability::backend_availability(&features)
+      .unwrap()
+      .record("synthetic", None, backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
+      .unwrap();
+    let model = select_step_member(&features, &cfg, "synthetic", &[]).unwrap();
+    let pool = select_step_member(&features, &cfg, "pool", &[]).unwrap();
+    let exhaustion = |member| match member {
+      StepMember::Exhausted(message) => message,
+      StepMember::Selected(option) => panic!("expected an exhausted selection, got {}", option.id),
+    };
+    assert!(exhaustion(model).contains("- synthetic: quota_error"));
+    assert!(exhaustion(pool).contains("- synthetic: quota_error"));
+  }
 }

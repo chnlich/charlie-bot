@@ -57,27 +57,25 @@ pub async fn post_explain(
   }
 }
 
-/// The option one explain request runs on. A `backends.pools` id selects a member for this call, as a one-shot call
-/// reselects every time; an options id runs as written.
+/// The option one explain request runs on. A model id uses the same selection filters as a one-member pool.
 fn explain_backend(
   features: &FeatureContext,
   cfg: &charliebot_core::config::CharlieBotConfig,
   backend_id: &str,
 ) -> Result<charliebot_core::config::BackendOption, Box<Response>> {
-  if cfg.backends.pool(backend_id).is_some() {
-    let selector = charliebot_agents::model_pool::Selector::from_features(features, cfg)
-      .map_err(|error| Box::new(failure(error)))?;
-    return match selector.select(backend_id, &[]).map_err(|error| Box::new(failure(error)))? {
-      Some(option) => Ok(option),
-      None => {
-        let detail = selector.exhausted_message(backend_id).map_err(|error| Box::new(failure(error)))?;
-        Err(Box::new(responses::json(StatusCode::BAD_REQUEST, &json!({"detail": detail}))))
-      }
-    };
+  cfg
+    .backends
+    .check_backend_id(backend_id)
+    .map_err(|error| Box::new(responses::json(StatusCode::BAD_REQUEST, &json!({"detail": error}))))?;
+  let selector =
+    charliebot_agents::model_pool::Selector::from_features(features, cfg).map_err(|error| Box::new(failure(error)))?;
+  match selector.select(backend_id, &[]).map_err(|error| Box::new(failure(error)))? {
+    Some(option) => Ok(option),
+    None => {
+      let detail = selector.exhausted_message(backend_id).map_err(|error| Box::new(failure(error)))?;
+      Err(Box::new(responses::json(StatusCode::BAD_REQUEST, &json!({"detail": detail}))))
+    }
   }
-  cfg.get_backend_option(backend_id).cloned().ok_or_else(|| {
-    Box::new(responses::json(StatusCode::BAD_REQUEST, &json!({"detail": format!("unknown backend: {backend_id}")})))
-  })
 }
 
 /// `GET /api/sessions/{session_id}/explain?upto=`: the divider's entry, answer and error included.
@@ -181,6 +179,7 @@ mod tests {
   use std::fs;
   use std::time::{Duration, SystemTime};
 
+  use charliebot_agents::backend_availability;
   use charliebot_core::timefmt;
   use tower::ServiceExt;
 
@@ -260,6 +259,12 @@ mod tests {
   #[ignore = "integration"]
   async fn a_post_naming_a_pool_launches_on_the_member_the_pool_selects() {
     let home = Home::with_pool(vec![Start::Script(answer_script("Explained."))]);
+    let cfg = home.features.config.get().unwrap();
+    assert_eq!(
+      explain_backend(&home.features, &cfg, OPTION_ID).unwrap().id,
+      explain_backend(&home.features, &cfg, "auto").unwrap().id,
+      "a model and its one-member pool select the same explain backend"
+    );
     home.create_session("s1");
     home.append_round("s1", Some("The answer.")).await;
     let mut frames = crate::test_support::subscribe(&home.features.store, "s1");
@@ -287,7 +292,35 @@ mod tests {
     let (status, detail) = send(&home.features, "POST", "/api/sessions/s1/explain", Some(&body)).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(detail, json!({"detail": "unknown backend: no-such-backend"}));
+    assert_eq!(
+      detail,
+      json!({
+        "detail": "backend 'no-such-backend' is not a backends.options or backends.pools id; valid ids: ['scripted-explain']"
+      })
+    );
+    assert_eq!(home.factory.builds(), 0);
+  }
+
+  #[tokio::test]
+  async fn a_post_with_a_cooling_model_or_its_singleton_pool_returns_exhaustion_and_starts_nothing() {
+    let home = Home::with_pool(vec![]);
+    home.create_session("s1");
+    home.append_round("s1", Some("The answer.")).await;
+    backend_availability::backend_availability(&home.features)
+      .unwrap()
+      .record(OPTION_ID, None, backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
+      .unwrap();
+    for backend_id in [OPTION_ID, "auto"] {
+      let body = json!({"event_index": 2, "backend": backend_id}).to_string();
+      let (status, detail) = send(&home.features, "POST", "/api/sessions/s1/explain", Some(&body)).await;
+      assert_eq!(status, StatusCode::BAD_REQUEST, "{backend_id}");
+      assert!(
+        detail["detail"]
+          .as_str()
+          .is_some_and(|message| { message.contains("scripted-explain") && message.contains("quota_error") }),
+        "{backend_id}: {detail}"
+      );
+    }
     assert_eq!(home.factory.builds(), 0);
   }
 

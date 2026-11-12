@@ -504,6 +504,22 @@ impl BackendsConfig {
     self.pools.iter().find(|pool| pool.id == id)
   }
 
+  /// Check whether `id` names a configured model or pool; return the canonical refusal for an unknown id.
+  pub fn check_backend_id(&self, id: &str) -> Result<(), String> {
+    if self.options.iter().any(|option| option.id == id) || self.pools.iter().any(|pool| pool.id == id) {
+      return Ok(());
+    }
+    let mut ids = self
+      .options
+      .iter()
+      .map(|option| option.id.as_str())
+      .chain(self.pools.iter().map(|pool| pool.id.as_str()))
+      .collect::<Vec<_>>();
+    ids.sort_unstable();
+    let valid_ids = ids.iter().map(|id| text_repr::str_repr(id)).collect::<Vec<_>>().join(", ");
+    Err(format!("backend '{id}' is not a backends.options or backends.pools id; valid ids: [{valid_ids}]"))
+  }
+
   /// The entries every web picker lists, as `(id, label)` pairs: the visible `backends.options` in config order,
   /// then the visible `backends.pools` in config order.
   pub fn picker_entries(&self) -> Vec<(String, String)> {
@@ -910,8 +926,9 @@ fn parse_backends(
   };
   let pools = parse_pools(config_path, mapping.get("pools"))?;
   check_pools(config_path, &pools, &options)?;
-  let calls = parse_calls(config_path, mapping.get("calls"), &pools, &options)?;
-  Ok(BackendsConfig { routing, options, pools, calls })
+  let mut backends = BackendsConfig { routing, options, pools, calls: CallsConfig::default() };
+  backends.calls = parse_calls(config_path, mapping.get("calls"), &backends)?;
+  Ok(backends)
 }
 
 /// The `backends.pools` list. Each member is a `backends.options` id under either rule.
@@ -1026,8 +1043,7 @@ fn check_pools(config_path: &str, pools: &[PoolConfig], options: &[BackendOption
 fn parse_calls(
   config_path: &str,
   value: Option<&Value>,
-  pools: &[PoolConfig],
-  options: &[BackendOption],
+  backends: &BackendsConfig,
 ) -> Result<CallsConfig, ConfigError> {
   let Some(value) = value else {
     return Ok(CallsConfig::default());
@@ -1061,13 +1077,9 @@ fn parse_calls(
         )));
       }
       CallTarget::Session
-    } else if pools.iter().any(|pool| pool.id == text) || options.iter().any(|option| option.id == text) {
-      CallTarget::Backend(text.to_string())
     } else {
-      return Err(ConfigError(format!(
-        "{config_path}: invalid config key backends.calls.{name}: '{text}' is not a backends.options or backends.pools \
-         id"
-      )));
+      backends.check_backend_id(text).map_err(ConfigError)?;
+      CallTarget::Backend(text.to_string())
     };
     targets.insert(class, target);
   }
@@ -1576,7 +1588,7 @@ voice: {}
     for (fragment, expected) in [
       (
         "  calls:\n    worker: ghost\n",
-        "backends.calls.worker: 'ghost' is not a backends.options or backends.pools id",
+        "backend 'ghost' is not a backends.options or backends.pools id; valid ids: ['a', 'b']",
       ),
       ("  calls:\n    speculate: a\n", "backends.calls.speculate: unknown call class"),
       ("  calls:\n    probe: session\n", "backends.calls.probe: 'session' is allowed only on"),
@@ -1586,6 +1598,23 @@ voice: {}
       let error = load(&home_with(&format!("{TWO_OPTIONS}{fragment}"))).unwrap_err().to_string();
       assert!(error.contains(expected), "{expected}: {error}");
     }
+  }
+
+  #[test]
+  fn backend_id_validity_accepts_models_and_pools_and_returns_one_sorted_error() {
+    let cfg = load(&home_with(&format!(
+      "{TWO_OPTIONS}  pools:\n    - {{id: auto, label: Auto, rule: rotate, members: [b]}}\n"
+    )))
+    .unwrap();
+
+    assert_eq!(cfg.backends.check_backend_id("a"), Ok(()));
+    assert_eq!(cfg.backends.check_backend_id("auto"), Ok(()));
+    assert_eq!(
+      cfg.backends.check_backend_id("missing"),
+      Err(
+        "backend 'missing' is not a backends.options or backends.pools id; valid ids: ['a', 'auto', 'b']".to_string()
+      )
+    );
   }
 
   #[test]

@@ -360,10 +360,7 @@ async fn switch(
 ) -> Result<SessionMetadata, Response> {
   let SwitchFields { backend: target } = typed(validated_object(body, &SWITCH_BACKEND)?)?;
   let cfg = config(features)?;
-  let valid = valid_backend_ids(&cfg);
-  if !valid.contains(&target.as_str()) {
-    return Err(store_error(unknown_backend(&target, &valid)));
-  }
+  cfg.backends.check_backend_id(&target).map_err(StoreError::invalid).map_err(store_error)?;
   let effective = if parent.backend.is_empty() { default_backend_id(&cfg) } else { parent.backend.clone() };
   if target == effective {
     return Ok(parent);
@@ -500,59 +497,41 @@ pub(crate) fn config(features: &FeatureContext) -> Result<Arc<CharlieBotConfig>,
   features.config.get().map_err(|error| responses::internal_error("RuntimeError", error.to_string()))
 }
 
-/// The backend ids a session may take: every `backends.options` id and every `backends.pools` id.
-fn valid_backend_ids(cfg: &CharlieBotConfig) -> Vec<&str> {
-  cfg
-    .backends
-    .options
-    .iter()
-    .map(|option| option.id.as_str())
-    .chain(cfg.backends.pools.iter().map(|pool| pool.id.as_str()))
-    .collect()
-}
-
 /// The backend a session takes when its request names none (`BackendsConfig::new_session_backend`), else `claude`.
 pub(crate) fn default_backend_id(cfg: &CharlieBotConfig) -> String {
   cfg.backends.new_session_backend().unwrap_or_else(|| "claude".to_string())
 }
 
 /// `_resolve_requested_backend`: a configured id, a family-prefix alias (the first option of that type), or, when no
-/// id was given, the fallback backend. The fallback is checked against the configured ids as the requested id is.
+/// id was given, the fallback backend. Check the normalized id through `BackendsConfig`.
 pub(crate) fn resolve_requested_backend(
   requested: Option<&str>,
   cfg: &CharlieBotConfig,
   registry: &Registry,
   fallback_backend: &str,
 ) -> StoreResult<String> {
-  let valid = valid_backend_ids(cfg);
   if let Some(requested) = requested {
-    if valid.contains(&requested) {
-      tracing::info!(target: LOG_TARGET, backend = requested, "using_requested_backend");
-      return Ok(requested.to_string());
-    }
-    let family = registry
-      .type_for_family_prefix(requested)
-      .and_then(|family_type| cfg.backends.options.iter().find(|option| option.backend_type == family_type));
-    if let Some(option) = family {
-      tracing::info!(target: LOG_TARGET, requested, backend = %option.id, "using_requested_backend_family_match");
-      return Ok(option.id.clone());
-    }
-    tracing::warn!(target: LOG_TARGET, requested, valid = ?valid, "invalid_backend_requested");
-    return Err(unknown_backend(requested, &valid));
+    let backend_id = match cfg.backends.check_backend_id(requested) {
+      Ok(()) => requested.to_string(),
+      Err(error) => {
+        let family = registry
+          .type_for_family_prefix(requested)
+          .and_then(|family_type| cfg.backends.options.iter().find(|option| option.backend_type == family_type));
+        let Some(option) = family else {
+          tracing::warn!(target: LOG_TARGET, requested, "invalid_backend_requested");
+          return Err(StoreError::invalid(error));
+        };
+        tracing::info!(target: LOG_TARGET, requested, backend = %option.id, "using_requested_backend_family_match");
+        option.id.clone()
+      }
+    };
+    cfg.backends.check_backend_id(&backend_id).map_err(StoreError::invalid)?;
+    tracing::info!(target: LOG_TARGET, backend = %backend_id, "using_requested_backend");
+    return Ok(backend_id);
   }
-  if !valid.contains(&fallback_backend) {
-    tracing::warn!(target: LOG_TARGET, fallback = fallback_backend, valid = ?valid, "invalid_fallback_backend");
-    return Err(unknown_backend(fallback_backend, &valid));
-  }
+  cfg.backends.check_backend_id(fallback_backend).map_err(StoreError::invalid)?;
   tracing::info!(target: LOG_TARGET, fallback = fallback_backend, "using_fallback_backend");
   Ok(fallback_backend.to_string())
-}
-
-/// `_UNKNOWN_BACKEND_DETAIL`: the 400 for an id that no option answers to, naming the sorted valid ids.
-fn unknown_backend(backend: &str, valid: &[&str]) -> StoreError {
-  let mut sorted = valid.to_vec();
-  sorted.sort_unstable();
-  StoreError::invalid(format!("backend '{backend}' is not a recognized backend id; valid ids: {}", list_repr(&sorted)))
 }
 
 /// `backend_types.same_continuation_domain`: false when either id is not a configured option.
@@ -754,7 +733,10 @@ mod tests {
     let (status, detail) = answer(create_session(State(features.clone()), headers, body).await).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(detail["detail"].as_str().expect("detail text").starts_with("backend 'missing' is not a recognized"));
+    assert_eq!(
+      detail["detail"],
+      "backend 'missing' is not a backends.options or backends.pools id; valid ids: ['synthetic-a', 'synthetic-b']"
+    );
     assert!(!sessions_dir.exists(), "a refused create writes no session");
   }
 
@@ -781,7 +763,7 @@ mod tests {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(
       detail,
-      json!({"detail": "backend 'missing' is not a recognized backend id; valid ids: ['synthetic-a', 'synthetic-b']"})
+      json!({"detail": "backend 'missing' is not a backends.options or backends.pools id; valid ids: ['synthetic-a', 'synthetic-b']"})
     );
 
     let (headers, body) = json_request(json!({}));

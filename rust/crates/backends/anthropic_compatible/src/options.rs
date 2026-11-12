@@ -8,7 +8,8 @@ use charliebot_core::config::{
 use serde_json::{Map, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
 
-use crate::TYPE_NAME;
+/// The backend type name these option fields and their errors are keyed by.
+pub const TYPE_NAME: &str = "cc-anthropic-compatible";
 
 const HEADERS: &str = "headers";
 const HOST_AUTH_ALIAS: &str = "host_auth_alias";

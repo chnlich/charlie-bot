@@ -6,8 +6,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::credentials;
 use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 
-use super::options::CcAnthropicCompatibleOption;
-use crate::TYPE_NAME;
+use super::options::{CcAnthropicCompatibleOption, TYPE_NAME};
 use charliebot_claude_code::AnthropicEndpointBackend;
 use charliebot_claude_code::factory::{launch_config_dir, launch_with_kwargs};
 

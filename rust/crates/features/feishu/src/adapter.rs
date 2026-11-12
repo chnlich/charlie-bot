@@ -23,7 +23,9 @@ use uuid::Uuid;
 use crate::client::{BASE_URL, FeishuAPIError, FeishuClient, Page};
 use crate::config::FeishuConfig;
 use crate::event::{self, Inbound, Message};
-use crate::fields::{CHAT_ID, CREATE_TIME, MENTION_ID, MESSAGE_ID, ROOT_ID, THREAD_ID};
+use crate::fields::{
+  CHAT_ID, CREATE_TIME, MENTION_ID, MESSAGE_ID, MESSAGE_TYPE, ROOT_ID, SENDER, SENDER_TYPE, THREAD_ID,
+};
 use crate::metadata::{FEISHU_ORIGIN, FeishuOrigin};
 use crate::owners;
 use crate::package::NAME;
@@ -172,8 +174,8 @@ pub fn thread_message(item: &Value) -> anyhow::Result<ThreadMessage> {
   };
   let message_id = text_of(item, MESSAGE_ID)?;
   let create_time = text_of(item, CREATE_TIME)?;
-  let sender = item.get("sender").context("a message has no sender")?;
-  let sender_type = text_of(sender, "sender_type")?;
+  let sender = item.get(SENDER).context("a message has no sender")?;
+  let sender_type = text_of(sender, SENDER_TYPE)?;
   let sender_id = text_of(sender, "id")?;
   let thread_id = item
     .get(THREAD_ID)
@@ -197,7 +199,7 @@ pub fn thread_message(item: &Value) -> anyhow::Result<ThreadMessage> {
     created_at: Some(rfc3339_of_millis(&create_time)?),
     metadata: Some(json!({
       (MESSAGE_ID): message_id,
-      "message_type": message_type_of(item)?,
+      (MESSAGE_TYPE): message_type_of(item)?,
       (CHAT_ID): item.get(CHAT_ID).and_then(Value::as_str),
       (THREAD_ID): thread_id,
     })),

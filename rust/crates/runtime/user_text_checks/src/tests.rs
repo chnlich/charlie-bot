@@ -1,6 +1,6 @@
 use std::fs;
+use std::path::Path;
 
-use charliebot_compat::file_urls::ScanContext;
 use charliebot_registry::Registry;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -20,21 +20,16 @@ fn loaded_checks(config_text: &str) -> (TempDir, UserTextChecks) {
   (home, checks)
 }
 
-fn context(home: &TempDir) -> ScanContext {
-  ScanContext {
-    server_port: 12345,
-    charliebot_home: home.path().to_path_buf(),
-    session_dir: home.path().join("sessions/current"),
-    user_home: home.path().to_path_buf(),
-  }
-}
-
 fn add_session(home: &TempDir, id: &str) {
   fs::create_dir(home.path().join("sessions").join(id)).expect("the synthetic session directory exists");
 }
 
-fn violations(checks: &UserTextChecks, home: &TempDir, text: &str) -> Vec<TextViolation> {
-  checks.check_reply(text, &context(home)).expect("the synthetic text checks")
+fn file_server_link(host: &str, path: &Path) -> String {
+  format!("{host}{}{}", file_urls::FILE_SERVER_MOUNT, path.display())
+}
+
+fn violations(checks: &UserTextChecks, _home: &TempDir, text: &str) -> Vec<TextViolation> {
+  checks.check_reply(text).expect("the synthetic text checks")
 }
 
 fn count_named(violations: &[TextViolation], name: &str) -> usize {
@@ -159,44 +154,101 @@ fn ambiguous_short_prefix_is_not_a_session_id() {
 }
 
 #[test]
-fn reply_link_renderable_checks_tsv_and_file_server_markdown_only() {
-  let (home, checks) = loaded_checks("");
-  let context = context(&home);
-  let external_tsv = "[data](https://example.invalid/data.TSV?download=1)";
-  let external_markdown = "[source](https://github.com/example/project/README.MD)";
-  let file_server_markdown = "[source](https://example.invalid/absolute_filepath/tmp/readme.MD?raw=1)";
-
-  assert_eq!(
-    count_named(&checks.check_reply(external_tsv, &context).unwrap(), LINK_RENDERABLE),
-    1,
-    "{:?}",
-    file_urls::scan_link_targets(external_tsv)
-  );
-  assert_eq!(count_named(&checks.check_reply(external_markdown, &context).unwrap(), LINK_RENDERABLE), 0);
-  assert_eq!(count_named(&checks.check_reply(file_server_markdown, &context).unwrap(), LINK_RENDERABLE), 1);
+fn link_app_routes_pass() {
+  for link in ["/?session=abc", "/diff", "/diff/abc", "/api", "/api/status"] {
+    assert_eq!(check_page_link(Some(link)), Ok(PageLinkTarget::ApplicationRoute), "{link}");
+  }
 }
 
 #[test]
-fn page_link_renderable_checks_file_server_markdown_and_tsv_not_external_markdown() {
+fn link_mapped_page_and_missing_target() {
+  let directory = tempfile::tempdir().expect("the linked page directory exists");
+  let page = directory.path().join("page.html");
+  fs::write(&page, "<p>Rendered page</p>").expect("the mapped page writes");
+  let page_link = file_server_link("https://synthetic.invalid", &page);
+  let missing_link = file_server_link("https://synthetic.invalid", &directory.path().join("missing.html"));
+
+  assert_eq!(check_page_link(Some(&page_link)), Ok(PageLinkTarget::HostFile(page)));
+  let missing = check_page_link(Some(&missing_link)).expect_err("a missing mapped page is refused");
+  assert!(missing.contains("missing.html") && missing.contains("No such file"), "{missing}");
+}
+
+#[test]
+fn link_mapped_nonpage_extensions_refused() {
+  let directory = tempfile::tempdir().expect("the linked page directory exists");
+  for extension in ["md", "diff", "patch"] {
+    let path = directory.path().join(format!("report.{extension}"));
+    fs::write(&path, "source text").expect("the mapped non-page file writes");
+    let link = file_server_link("https://chao9950x.tailb4091b.ts.net", &path);
+    let reason = check_page_link(Some(&link)).expect_err("a mapped non-page extension is refused");
+    assert!(reason.contains("non-page file"), "{reason}");
+  }
+}
+
+#[test]
+fn link_retired_prefix_any_host_refused() {
+  for link in ["https://public.example/files/old.html", "http://localhost/file/old.html"] {
+    let reason = check_page_link(Some(link)).expect_err("retired file prefixes are refused on every host");
+    assert!(reason.contains("retired"), "{reason}");
+  }
+}
+
+#[test]
+fn link_external_http_option_a() {
+  for link in [
+    "https://github.com/example/project/README.md",
+    "https://example.invalid/data.tsv",
+    "http://example.invalid/archive.patch",
+  ] {
+    assert_eq!(check_page_link(Some(link)), Ok(PageLinkTarget::External), "{link}");
+  }
+}
+
+#[test]
+fn link_other_forms_refused() {
+  let directory = tempfile::tempdir().expect("the path directory exists");
+  let local = directory.path().join("page.html");
+  fs::write(&local, "<p>Local page</p>").expect("the local page writes");
+  for link in [
+    local.to_str().expect("the test path is UTF-8"),
+    "relative/page.html",
+    "mailto:user@example.invalid",
+    "ftp://example.invalid/page.html",
+    "http://[broken",
+  ] {
+    let reason = check_page_link(Some(link)).expect_err("non-page link forms are refused");
+    assert!(!reason.is_empty(), "{link}");
+  }
+}
+
+#[test]
+fn link_single_renderability_owner() {
+  let directory = tempfile::tempdir().expect("the linked page directory exists");
+  let mut links = Vec::new();
+  for extension in ["md", "diff", "patch"] {
+    let path = directory.path().join(format!("report.{extension}"));
+    fs::write(&path, "source text").expect("the mapped non-page file writes");
+    links.push(file_server_link("https://public.example", &path));
+  }
   let (_, checks) = loaded_checks("");
-  let html = concat!(
-    "<p><a href=\"https://github.com/example/project/README.md\">source</a> ",
-    "<a href=\"/absolute_filepath/tmp/readme.MD?raw=1\">raw</a> ",
-    "<a href=\"https://example.invalid/export.TSV?download=1\">table</a></p>",
-  );
+  let html = links.iter().map(|link| format!("<a href=\"{link}\">source</a>")).collect::<String>();
+  let reply = links.iter().map(|link| format!("[source]({link})")).collect::<Vec<_>>().join(" ");
 
-  let hits = checks.check_page(html).unwrap();
-
-  assert_eq!(count_named(&hits, LINK_RENDERABLE), 2);
-  assert!(hits.iter().all(|hit| hit.block.as_deref() == Some("source raw table")));
+  assert_eq!(count_named(&checks.check_page(&html).unwrap(), LINK_RENDERABLE), links.len());
+  assert_eq!(count_named(&checks.check_reply(&reply).unwrap(), LINK_RENDERABLE), links.len());
 }
 
 #[test]
 fn code_examples_do_not_make_reply_urls_into_links() {
   let (home, checks) = loaded_checks("");
-  let text = "`https://example.invalid/data.tsv`\n```\nhttps://example.invalid/data.tsv\n```\n[table](https://example.invalid/data.tsv)";
+  let directory = tempfile::tempdir().expect("the linked page directory exists");
+  let path = directory.path().join("data.md");
+  fs::write(&path, "source text").expect("the mapped non-page file writes");
+  let link = file_server_link("https://public.example", &path);
+  let text = format!("`{link}`\n```\n{link}\n```\n[table]({link})");
 
-  assert_eq!(count_named(&violations(&checks, &home, text), LINK_RENDERABLE), 1);
+  let findings = violations(&checks, &home, &text);
+  assert_eq!(count_named(&findings, LINK_RENDERABLE), 1, "{findings:?}");
 }
 
 #[test]

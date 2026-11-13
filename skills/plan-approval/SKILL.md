@@ -220,10 +220,7 @@ The gate judges the chain alone; its definitions live in rust/crates/runtime/sto
 - A T2 step is every other step: a design choice on the recommendation, a reading below the reading threshold,
   and a reversible step that reaches other people under no policy.
   It proceeds, and the agent records it with `charliebot digest add --policy t2 --step <text> --undo <text>`.
-- A user-act step is an action that only the user's own hands can do:
-  - a browser login;
-  - an approval in another system;
-  - information that only the user holds.
+- A user-act step is a step the user must perform personally: a browser login, an approval in another system, or supplying information only the user holds. A decision is the user's choice among options; classify the step it authorizes.
   List each user-act step as one Waiting on you item. The approval page gathers these items into the day's actions only you can do.
 - A rule that names the user's explicit approval for a step stays in force; such a step is T0 under the
   rule-named test.

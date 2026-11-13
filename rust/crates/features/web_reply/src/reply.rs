@@ -403,7 +403,7 @@ pub async fn unread_reply(
     config.section::<UserTextChecksConfig>(user_text_checks::CONFIG_SECTION),
     &config.charliebot_home,
   )?;
-  let violations = checks.check_reply(text, &file_scan_context)?;
+  let violations = checks.check_reply(text)?;
   let code_findings: Vec<String> = violations
     .into_iter()
     .map(|v| match v.check {
@@ -492,7 +492,7 @@ pub async fn post_web_reply_with_identity(
     config.section::<UserTextChecksConfig>(user_text_checks::CONFIG_SECTION),
     &config.charliebot_home,
   )?;
-  let violations = checks.check_reply(text, &file_scan_context)?;
+  let violations = checks.check_reply(text)?;
   let digest = reply_sha256(text);
   let prior_check = checked_reply_findings(features, session_id, &digest, run_id).await?;
   let remaining_findings = if let Some(checked_findings) = prior_check {
@@ -844,20 +844,14 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_raw_tsv_link_refuses_a_web_reply() {
+  async fn an_unmapped_external_tsv_link_passes_a_web_reply() {
     let home = Home::new();
     let sid = home.manager("session", None).await;
     let text = "[table](https://example.invalid/export.TSV?download=1)";
 
-    assert_user_text_refusal(
-      &home,
-      &sid,
-      text,
-      "link-renderable",
-      "export.TSV",
-      "link an HTML page, or the directory that holds the file",
-    )
-    .await;
+    let (status, response) = post_reply(&home, &sid, text, None).await;
+
+    assert_eq!(status, StatusCode::OK, "{response}");
   }
 
   #[tokio::test]

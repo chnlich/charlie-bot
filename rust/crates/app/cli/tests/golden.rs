@@ -153,6 +153,8 @@ const GOLDEN_CASE_TESTS: &[&str] = &[
   "test_the_cli_status_set_reads_and_records_each_unread_item_then_exits_three_before_storing",
   "test_the_cli_status_set_prints_each_backend_error_and_records_no_failed_item",
   "test_the_cli_status_confirm_posts_the_session_and_prints_the_stored_status",
+  "recheck_open_stored_rows_only",
+  "recheck_default_is_read_only",
   "test_the_cli_status_show_prints_the_status_and_one_block_per_child_with_waiting_items",
   "test_the_cli_status_show_prints_the_now_of_each_open_child_in_one_block_and_no_block_without_children",
   "test_reply_posts_the_file_text_for_the_cwd_session_and_prints_the_readback",

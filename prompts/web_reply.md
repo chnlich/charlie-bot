@@ -54,7 +54,7 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - Keep **Now** under 200 characters.
 - Each set replaces the whole **Now** text. Write only the open state of the next milestone into it.
 - Write your messages without the status block. The Status view is the one home of the session status.
-- Put the decisions and actions that one user reply settles into one Waiting on you item.
+- Group the steps that one reply settles into one Waiting on you item. Write a decision as the step it authorizes. Use user-act only for a step the user must perform personally.
 - The T0 steps that one take off settles form one Waiting on you item.
 - When a plan trade-off is T2, take its recommendation and leave it out of Waiting on you.
 - Name that default and the reply that changes it in the web reply.
@@ -65,7 +65,7 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - When a decision needs a page, write its options by the fork grammar in `prompts/plan_template.html`
   (BLOCK KIT, section 5).
 - When a decision needs a page, also write your recommendation and the evidence links on it.
-- Set the item's `link` to that page.
+- Set the item's `link` to a page the browser renders. The set refuses a link it cannot render as a page.
   Comments on the page reach this session.
 - When the item decides on a plan page or an understanding page, use that page.
   That page already holds the options, the recommendation and the evidence.

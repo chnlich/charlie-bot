@@ -757,6 +757,28 @@ mod tests {
   }
 
   #[test]
+  fn decision_uses_authorized_step() {
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_path_buf();
+    let (_, questions) = load_ask_texts(&repo).expect("the ask prompt loads");
+    let questions = questions.to_lowercase();
+
+    assert!(questions.contains("decision"), "{questions}");
+    assert!(questions.contains("choice") && questions.contains("repl"), "{questions}");
+    assert!(questions.contains("authoriz") && questions.contains("step"), "{questions}");
+  }
+
+  #[test]
+  fn user_act_requires_hands_on_step() {
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_path_buf();
+    let (_, questions) = load_ask_texts(&repo).expect("the ask prompt loads");
+    let questions = questions.to_lowercase();
+
+    assert!(questions.contains("user-act"), "{questions}");
+    assert!(questions.contains("personally") && questions.contains("perform"), "{questions}");
+    assert!(questions.contains("step"), "{questions}");
+  }
+
+  #[test]
   #[ignore = "integration"]
   fn an_edited_table_reaches_the_next_ask_probe_without_a_prompt_file_change() {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_path_buf();

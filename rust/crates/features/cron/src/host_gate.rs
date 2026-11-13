@@ -149,6 +149,7 @@ fn wait_row(holder_id: String, holder_name: String, login: &HostLogin) -> anyhow
     tier: Some(TIER_USER_ACT.to_string()),
     rule: None,
     since: UtcDateTime::parse(&login.last_change_at)?,
+    is_derived: true,
   })
 }
 

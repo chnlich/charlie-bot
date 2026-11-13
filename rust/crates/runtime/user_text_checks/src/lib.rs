@@ -3,11 +3,11 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use anyhow::{Context as AnyhowContext, anyhow};
-use charliebot_compat::file_urls::{self, FileLinkForm, ScanContext};
+use charliebot_compat::file_urls::{self, FileLinkForm};
 use charliebot_core::config::{ConfigSection, SectionValue, sessions_dir_in};
 use charliebot_html::{EventKind, VOID_TAGS, parse_with};
 use charliebot_registry::{Registry, RegistryError};
@@ -15,6 +15,7 @@ use fancy_regex::Regex;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use serde_yaml::Value as YamlValue;
+use url::Url;
 
 /// The internal-id check name shared by artifact assertions and web-reply refusals.
 pub const TRACKER_ID_NEARBY: &str = "tracker-id-nearby";
@@ -85,6 +86,71 @@ pub const RULE_DEFINED_TERMS: &[&str] = &[
   "审批人",
   "放行",
 ];
+
+/// A page link's route after it passes `check_page_link`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PageLinkTarget {
+  NoLink,
+  ApplicationRoute,
+  External,
+  HostFile(PathBuf),
+}
+
+/// The route a status, reply or rendered page can open as a browser page. An error carries the refusal reason.
+pub fn check_page_link(link: Option<&str>) -> Result<PageLinkTarget, String> {
+  let Some(link) = link else {
+    return Ok(PageLinkTarget::NoLink);
+  };
+  if is_application_route(link) {
+    return Ok(PageLinkTarget::ApplicationRoute);
+  }
+
+  let file_link =
+    file_urls::scan_file_link_target(link, None).map_err(|error| format!("link {link:?} cannot be parsed: {error}"))?;
+  if file_link.as_ref().is_some_and(|file| file.form == FileLinkForm::RetiredPrefix) {
+    return Err(format!("link {link:?} uses a retired file-server prefix"));
+  }
+
+  let url = Url::parse(link).map_err(|error| format!("link {link:?} is not a valid absolute URL: {error}"))?;
+  if !matches!(url.scheme(), "http" | "https") {
+    return Err(format!("link {link:?} uses unsupported scheme {:?}; only http and https URLs render", url.scheme()));
+  }
+
+  let Some(path) =
+    file_urls::host_file(Some(link)).map_err(|error| format!("link {link:?} cannot be parsed: {error}"))?
+  else {
+    return Ok(PageLinkTarget::External);
+  };
+  let metadata =
+    fs::metadata(&path).map_err(|error| format!("mapped link {link:?} cannot read {}: {error}", path.display()))?;
+  if ["md", "diff", "patch"]
+    .iter()
+    .any(|suffix| path.extension().is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case(suffix)))
+  {
+    return Err(format!("mapped link {link:?} targets a non-page file at {}", path.display()));
+  }
+  if metadata.is_file() {
+    fs::File::open(&path).map_err(|error| format!("mapped link {link:?} cannot read {}: {error}", path.display()))?;
+  } else if metadata.is_dir() {
+    for entry in
+      fs::read_dir(&path).map_err(|error| format!("mapped link {link:?} cannot read {}: {error}", path.display()))?
+    {
+      entry.map_err(|error| format!("mapped link {link:?} cannot read {}: {error}", path.display()))?;
+    }
+  } else {
+    return Err(format!("mapped link {link:?} does not name a rendered file or directory at {}", path.display()));
+  }
+  Ok(PageLinkTarget::HostFile(path))
+}
+
+/// Whether a local link names one of the application routes that does not map to a host file.
+fn is_application_route(link: &str) -> bool {
+  if link.starts_with("/?") {
+    return true;
+  }
+  let path = link.split(['?', '#']).next().expect("split always yields the full string");
+  path == "/diff" || path == "/api" || path.starts_with("/diff/") || path.starts_with("/api/")
+}
 
 const PAGE_BLOCK_TAGS: &[&str] =
   &["p", "li", "tr", "dd", "dt", "h1", "h2", "h3", "h4", "blockquote", "figcaption", "summary", "pre"];
@@ -238,11 +304,11 @@ impl UserTextChecks {
     Ok(UserTextChecks { config: config.clone(), sessions: SessionIndex { names } })
   }
 
-  /// The violations in one web reply, found in its one-line blocks and through the file-link resolution context.
-  pub fn check_reply(&self, text: &str, file_scan_context: &ScanContext) -> anyhow::Result<Vec<TextViolation>> {
+  /// The violations in one web reply, found in its one-line blocks and at its link targets.
+  pub fn check_reply(&self, text: &str) -> anyhow::Result<Vec<TextViolation>> {
     let mut violations = self.tracker_violations(line_blocks(text))?;
     violations.extend(self.reply_session_violations(text)?);
-    violations.extend(self.reply_link_violations(text, file_scan_context)?);
+    violations.extend(self.reply_link_violations(text)?);
     violations.extend(self.reply_commit_violations(text)?);
     violations.extend(self.reply_vocabulary_violations(text)?);
     Ok(violations)
@@ -358,22 +424,21 @@ impl UserTextChecks {
     Ok(violations)
   }
 
-  fn reply_link_violations(&self, text: &str, file_scan_context: &ScanContext) -> anyhow::Result<Vec<TextViolation>> {
+  fn reply_link_violations(&self, text: &str) -> anyhow::Result<Vec<TextViolation>> {
     let targets = file_urls::scan_link_targets(text);
-    let files = file_urls::scan_file_links(text, Some(file_scan_context))?;
     let fenced = fenced_code_ranges(text);
     let inline_code = inline_code_spans(text, &fenced);
     let mut violations = Vec::new();
     for target in targets {
       if is_inside(&fenced, &target.span)
-        || inline_code.iter().any(|code| is_inside(std::slice::from_ref(&code.content), &target.span))
+        || inline_code.iter().any(|code| {
+          let closing_delimiters = text.as_bytes()[code.content.end..].iter().take_while(|byte| **byte == b'`').count();
+          code.content.start <= target.span.start && target.span.end <= code.content.end + closing_delimiters
+        })
       {
         continue;
       }
-      let is_tsv = link_path_ends_with(&target.target, ".tsv");
-      let is_server_markdown = link_path_ends_with(&target.target, ".md")
-        && files.iter().any(|file| file.link == target.target && renders_as_page(file.form));
-      if is_tsv || is_server_markdown {
+      if check_page_link(Some(&target.target)).is_err() {
         violations.push(TextViolation::new(
           LINK_RENDERABLE,
           target.target,
@@ -387,10 +452,7 @@ impl UserTextChecks {
   fn page_link_violations(&self, page: &PageScan) -> anyhow::Result<Vec<TextViolation>> {
     let mut violations = Vec::new();
     for link in &page.links {
-      let is_tsv = link_path_ends_with(&link.href, ".tsv");
-      let is_server_markdown = link_path_ends_with(&link.href, ".md")
-        && file_urls::scan_file_link_target(&link.href, None)?.is_some_and(|file| renders_as_page(file.form));
-      if is_tsv || is_server_markdown {
+      if check_page_link(Some(&link.href)).is_err() {
         violations.push(TextViolation::new(
           LINK_RENDERABLE,
           link.href.clone(),
@@ -730,16 +792,6 @@ fn link_path(link: &str) -> &str {
   } else {
     no_query
   }
-}
-
-/// Whether a link's path ends with `suffix`, compared in lower case.
-fn link_path_ends_with(link: &str, suffix: &str) -> bool {
-  link_path(link).to_ascii_lowercase().ends_with(suffix)
-}
-
-/// Whether the server serves a file form as a rendered page.
-fn renders_as_page(form: FileLinkForm) -> bool {
-  matches!(form, FileLinkForm::Canonical | FileLinkForm::RetiredPrefix)
 }
 
 fn parse_page(html: &str) -> anyhow::Result<PageScan> {

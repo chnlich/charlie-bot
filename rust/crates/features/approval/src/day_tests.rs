@@ -10,7 +10,9 @@ use jiff::civil::Date;
 use jiff::{Span, Timestamp};
 use serde_json::{Value, json};
 
-use super::age_text;
+use charliebot_registry::registry::OpenWaitingRow;
+
+use super::{age_text, row_json};
 use crate::test_support::Home;
 
 /// The PT day the seeds fall in: the stamps below name UTC instants whose Pacific day is 2026-10-30 (PDT, UTC-7).
@@ -25,6 +27,47 @@ fn pt_noon(date: Date) -> String {
 
 fn item(text: &str, tier: Value, rule: Value, since: &str) -> Value {
   json!({"text": text, "context": "Why the item waits.", "link": null, "since": since, "since_exact": true, "tier": tier, "rule": rule})
+}
+
+fn open_waiting_row(tier: Option<&str>, is_derived: bool, since: &str) -> OpenWaitingRow {
+  OpenWaitingRow {
+    session_id: "session".to_string(),
+    session_name: "Session".to_string(),
+    text: "Review the step".to_string(),
+    context: None,
+    link: None,
+    tier: tier.map(ToString::to_string),
+    rule: None,
+    since: UtcDateTime::parse(since).expect("the fixture time parses"),
+    is_derived,
+  }
+}
+
+#[test]
+fn needs_recheck_only_marks_untiered_or_over_fourteen_day_stored_rows() {
+  let now: Timestamp = "2026-11-12T00:00:00Z".parse().expect("the fixed time parses");
+  let untiered = row_json(&open_waiting_row(None, false, "2026-11-11T23:00:00Z"), now);
+  let exact_fourteen_days = row_json(&open_waiting_row(Some("t2"), false, "2026-10-29T00:00:00Z"), now);
+  let over_fourteen_days = row_json(&open_waiting_row(Some("t2"), false, "2026-10-28T23:59:59Z"), now);
+  let old_derived = row_json(&open_waiting_row(Some("user-act"), true, "2026-10-01T00:00:00Z"), now);
+
+  assert_eq!(untiered["needs_recheck"], json!(true));
+  assert_eq!(exact_fourteen_days["needs_recheck"], json!(false));
+  assert_eq!(over_fourteen_days["needs_recheck"], json!(true));
+  assert_eq!(old_derived["needs_recheck"], json!(false));
+}
+
+#[test]
+fn stored_t0_t1_and_t2_rows_share_the_decision_display_kind() {
+  let now: Timestamp = "2026-11-12T00:00:00Z".parse().expect("the fixed time parses");
+  for tier in ["t0", "t1", "t2"] {
+    let row = row_json(&open_waiting_row(Some(tier), false, "2026-11-11T23:00:00Z"), now);
+    assert_eq!(row["tier_label"], json!("decision"), "tier {tier}");
+  }
+  assert_eq!(
+    row_json(&open_waiting_row(Some("user-act"), false, "2026-11-11T23:00:00Z"), now)["tier_label"],
+    json!("user-act")
+  );
 }
 
 /// Seeds the two sessions and the digest. Session names order the rows' session fields, not the queue.

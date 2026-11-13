@@ -21,6 +21,7 @@ use charliebot_registry::FeatureContext;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
 use charliebot_store::{Store, session_channel};
+use charliebot_user_text_checks as user_text_checks;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -386,6 +387,30 @@ fn require_waiting_context(items: &[WaitingItem]) -> Result<(), WebReplyError> {
   Ok(())
 }
 
+/// The item indexes and reasons for links the browser cannot render.
+fn page_link_refusals(items: &[WaitingItem]) -> Vec<(usize, String)> {
+  items
+    .iter()
+    .enumerate()
+    .filter_map(|(index, item)| {
+      user_text_checks::check_page_link(item.link.as_deref())
+        .err()
+        .map(|reason| (index, format!("waiting.{index} item {:?} link {:?}: {reason}", item.text, item.link)))
+    })
+    .collect()
+}
+
+/// The details for every page link refused by the status entry.
+fn page_link_refusal_detail(refusals: &[(usize, String)]) -> String {
+  let details = refusals.iter().map(|(_, detail)| detail.clone()).collect::<Vec<_>>();
+  format!("Waiting links must resolve to rendered browser pages; nothing was stored:\n{}", refusal_lines(&details))
+}
+
+/// The refusal details in item order.
+fn refusal_lines(refusals: &[String]) -> String {
+  refusals.iter().map(|detail| format!("- {detail}")).collect::<Vec<_>>().join("\n")
+}
+
 /// The items whose current digest is absent from the read set.
 fn unread_items(items: &[WaitingItem], read_digests: &HashSet<String>) -> Result<Vec<WaitingItem>, WebReplyError> {
   items
@@ -445,6 +470,10 @@ pub async fn unread_waiting(features: &FeatureContext, session_id: &str, text: &
     Some(items) => items.to_vec(),
     None => stored.map(|status| status.waiting).unwrap_or_default(),
   };
+  let page_refusals = page_link_refusals(&prospective);
+  if !page_refusals.is_empty() {
+    return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, page_link_refusal_detail(&page_refusals)));
+  }
   require_current_plan_links(features, &prospective, &scan_context)?;
   let read_digests: HashSet<String> = read_ask_tiers(features, session_id).await?.into_keys().collect();
   let unread = unread_items(items, &read_digests)?;
@@ -568,13 +597,13 @@ fn nested_loc(prefix: &str, field: &str) -> String {
   if prefix.is_empty() { field.to_string() } else { format!("{prefix}.{field}") }
 }
 
-/// The texts of a patch that the file-link scanner reads, in its order: goal, now, then each waiting item's text,
-/// context and link.
+/// The texts the file-link scanner reads, in order: goal, now, then each waiting item's text and context. A structured
+/// Waiting link is checked by the page-link owner.
 fn scanned_texts(patch: &StatusPatch) -> Vec<&str> {
   let mut texts: Vec<&str> = patch.goal.iter().chain(patch.now.iter()).flatten().map(String::as_str).collect();
   for item in patch.waiting.iter().flatten() {
     texts.push(item.text.as_str());
-    texts.extend([item.context.as_deref(), item.link.as_deref()].into_iter().flatten());
+    texts.extend([item.context.as_deref()].into_iter().flatten());
   }
   texts
 }
@@ -601,10 +630,24 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
     stored.clone().unwrap_or(WebStatus { goal: None, now: None, waiting: Vec::new(), updated_at: UtcDateTime::now() });
   let stored_waiting = effective_waiting(&base);
   let prospective = patch.waiting.clone().unwrap_or_else(|| stored_waiting.clone());
-  let mut links = if prospective.is_empty() {
+  let page_refusals = page_link_refusals(&prospective);
+  let mut refusal_details = page_refusals.iter().map(|(_, detail)| detail.clone()).collect::<Vec<_>>();
+  let mut refusal_status =
+    if page_refusals.is_empty() { StatusCode::CONFLICT } else { StatusCode::UNPROCESSABLE_ENTITY };
+  let mut refused = !page_refusals.is_empty();
+  let mut links = if prospective.is_empty() || !page_refusals.is_empty() {
     None
   } else {
-    Some(require_current_plan_links(features, &prospective, &scan_context)?)
+    match require_current_plan_links(features, &prospective, &scan_context) {
+      Ok(links) => Some(links),
+      Err(WebReplyError::Refused { status, detail }) => {
+        refusal_status = status;
+        refusal_details.push(detail);
+        refused = true;
+        None
+      }
+      Err(error @ WebReplyError::Failed(_)) => return Err(error),
+    }
   };
   let mut ask_tiers = HashMap::new();
   if let Some(items) = patch.waiting.as_deref()
@@ -613,32 +656,36 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
     let approval = load_approval_policy(features)?;
     ask_tiers = read_ask_tiers(features, session_id).await?;
     let read_digests: HashSet<String> = ask_tiers.keys().cloned().collect();
-    let unread = unread_items(items, &read_digests)?;
-    if !unread.is_empty() {
-      let names = unread.iter().map(|item| item.text.as_str()).collect::<Vec<_>>().join("; ");
-      return Err(WebReplyError::refused(
-        StatusCode::CONFLICT,
-        format!("Waiting on you items need a cold read: {names}"),
-      ));
-    }
-    if approval.table.enable_ask_tier_refusal {
-      for item in items {
-        let digest = item_sha256(item)?;
-        if let Some((tier, rule)) = ask_tiers.get(&digest)
-          && matches!(tier.as_str(), "t1" | "t2")
-        {
-          return Err(WebReplyError::refused(
-            StatusCode::CONFLICT,
-            format!(
-              "Waiting on you item {:?} is tiered {tier} (rule: {}): carry out the step and record it with \
-               charliebot digest add instead of waiting for approval",
-              item.text,
-              rule.as_deref().unwrap_or("none")
-            ),
-          ));
-        }
+    for (index, item) in items.iter().enumerate() {
+      let digest = match item_sha256(item) {
+        Ok(digest) => digest,
+        Err(_) if page_refusals.iter().any(|(refused_index, _)| *refused_index == index) => continue,
+        Err(error) => return Err(error),
+      };
+      if !read_digests.contains(&digest) {
+        refusal_details.push(format!("Waiting on you item {:?} needs a cold read", item.text));
+        refused = true;
+        continue;
+      }
+      if approval.table.enable_ask_tier_refusal
+        && let Some((tier, rule)) = ask_tiers.get(&digest)
+        && matches!(tier.as_str(), "t1" | "t2")
+      {
+        refusal_details.push(format!(
+          "Waiting on you item {:?} is tiered {tier} (rule: {}): carry out the step and record it with \
+           charliebot digest add instead of waiting for approval",
+          item.text,
+          rule.as_deref().unwrap_or("none")
+        ));
+        refused = true;
       }
     }
+  }
+  if refused {
+    return Err(WebReplyError::refused(
+      refusal_status,
+      format!("Status set refused; nothing was stored:\n{}", refusal_lines(&refusal_details)),
+    ));
   }
   let now = UtcDateTime::now();
   let waiting = match patch.waiting.as_deref() {
@@ -767,6 +814,7 @@ async fn derived_items(
         tier: row.tier,
         rule: row.rule,
         since: row.since,
+        is_derived: true,
       })
       .collect(),
   )
@@ -866,6 +914,7 @@ pub struct OpenWaitingItem {
   pub tier: Option<String>,
   pub rule: Option<String>,
   pub since: UtcDateTime,
+  pub is_derived: bool,
 }
 
 /// The sessions whose stored web status carries waiting items, filtered from one metadata corpus.
@@ -931,6 +980,7 @@ pub async fn open_waiting_items(features: &FeatureContext) -> Result<Vec<OpenWai
         tier: item.tier,
         rule: item.rule,
         since: item.since.expect("effective_waiting fills the start time"),
+        is_derived: false,
       });
     }
   }
@@ -960,6 +1010,7 @@ pub fn open_waiting_rows<'a>(
           tier: row.tier,
           rule: row.rule,
           since: row.since,
+          is_derived: row.is_derived,
         })
         .collect(),
     )
@@ -1560,7 +1611,7 @@ mod tests {
     let item = json!({
       "text": "Review the directory",
       "context": "The directory lists the generated pages. Options are browse or wait; browse is recommended.",
-      "link": format!("{}{}", file_urls::FILE_SERVER_MOUNT, directory.display()),
+      "link": file_link(&directory),
     });
     let (status, _) = home
       .send(
@@ -1605,27 +1656,25 @@ mod tests {
           "Dead file links; nothing was recorded.\n- {local_target}: a local path opens nothing on the web page. \
            Correct link: {local_correct}"
         );
-        let canonical_detail =
-          format!("Dead file links; nothing was recorded.\n- {canonical}: no file exists at {}.", missing.display());
         let mut item = json!({
           "text": "Decide",
           "context": "The choice is ready. Options are keep or change; keep is recommended.",
           "link": null,
         });
-        let (patch, detail) = match field {
-          "goal" => (json!({"goal": format!("Review {local_link}")}), local_detail),
-          "now" => (json!({"now": format!("Review {local_link}")}), local_detail),
+        let (patch, expected_detail) = match field {
+          "goal" => (json!({"goal": format!("Review {local_link}")}), Some(local_detail)),
+          "now" => (json!({"now": format!("Review {local_link}")}), Some(local_detail)),
           "waiting_text" => {
             item["text"] = json!(format!("Review {local_link}"));
-            (json!({"waiting": [item]}), local_detail)
+            (json!({"waiting": [item]}), Some(local_detail))
           }
           "waiting_context" => {
             item["context"] = json!(format!("Review {local_link}"));
-            (json!({"waiting": [item]}), local_detail)
+            (json!({"waiting": [item]}), Some(local_detail))
           }
           _ => {
             item["link"] = json!(canonical);
-            (json!({"waiting": [item]}), canonical_detail)
+            (json!({"waiting": [item]}), None)
           }
         };
         let events_before = home.events(&sid).len();
@@ -1634,7 +1683,16 @@ mod tests {
           home.send(Method::POST, uri, Some(json!({"session_id": sid, "text": patch.to_string()}))).await;
 
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{endpoint} {field}");
-        assert_eq!(response["detail"], json!(detail), "{endpoint} {field}");
+        let detail = response["detail"].as_str().expect("a refusal detail");
+        if let Some(expected_detail) = expected_detail {
+          assert_eq!(detail, expected_detail, "{endpoint} {field}");
+        } else {
+          assert!(detail.contains(&canonical) && detail.contains(&missing.display().to_string()), "{detail}");
+          assert!(detail.contains("mapped link") && detail.contains("No such file or directory"), "{detail}");
+          if endpoint == "set" {
+            assert!(detail.contains("needs a cold read"), "{detail}");
+          }
+        }
         assert_eq!(stored(&home, &sid).await, Value::Null, "{endpoint} {field}");
         assert_eq!(home.events(&sid).len(), events_before, "{endpoint} {field}");
       }
@@ -1797,6 +1855,189 @@ mod tests {
     assert!(detail.contains("tiered t1 (rule: release-restart)"), "{detail}");
     assert!(detail.contains("charliebot digest add"), "{detail}");
     set_status(&home.features, &sid, &json!({"waiting": [t0.clone()]}).to_string()).await.expect("the t0 item stores");
+  }
+
+  #[tokio::test]
+  async fn set_status_returns_all_refusals() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    set_status(&home.features, &sid, r#"{"now": "Running"}"#).await.expect("the baseline status stores");
+    let t1 = waiting_item("Run the covered release");
+    let t2 = waiting_item("Choose the design");
+    let directory = tempfile::tempdir().expect("the page directory exists");
+    let markdown = directory.path().join("source.md");
+    fs::write(&markdown, "source text").expect("the mapped source writes");
+    let bad_link = json!({
+      "text": "Open the markdown source",
+      "context": "The source is available now.",
+      "link": file_link(&markdown),
+    });
+    for (item, answer) in [
+      (&t1, "Inside the policy.\ntier: t1 rule: release-restart"),
+      (&t2, "Choose the design.\ntier: t2 rule: none"),
+      (&bad_link, "The page is available.\ntier: t0 rule: irreversible"),
+    ] {
+      record_ask_check(&home.features, &sid, item, "synthetic-haiku", answer)
+        .await
+        .expect("the item cold read records");
+    }
+    test_support::write_approval_policy_table(
+      &home.root(),
+      &test_support::APPROVAL_POLICY_TABLE.replace("enable_ask_tier_refusal: false", "enable_ask_tier_refusal: true"),
+    );
+    let before = stored(&home, &sid).await;
+    let status_event_count = status_events(&home, &sid).len();
+
+    let error = set_status(&home.features, &sid, &json!({"waiting": [t1, t2, bad_link]}).to_string())
+      .await
+      .expect_err("the set has tier and page-link refusals");
+
+    let detail = match error {
+      WebReplyError::Refused { status, detail } => {
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        detail
+      }
+      other => panic!("expected a refusal, got {other:?}"),
+    };
+    assert!(detail.contains("Run the covered release") && detail.contains("tiered t1"), "{detail}");
+    assert!(detail.contains("Choose the design") && detail.contains("tiered t2"), "{detail}");
+    assert!(
+      detail.contains("waiting.2 item \"Open the markdown source\"") && detail.contains("non-page file"),
+      "{detail}"
+    );
+    assert_eq!(stored(&home, &sid).await, before);
+    assert_eq!(status_events(&home, &sid).len(), status_event_count);
+  }
+
+  #[tokio::test]
+  async fn set_status_full_list_keeps_s1() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let a = waiting_item("A: publish the result");
+    let b = waiting_item("B: choose the design");
+    let c = waiting_item("C: sign in to the console");
+    for item in [&a, &b, &c] {
+      record_ask_check(&home.features, &sid, item, "synthetic-haiku", "The first grade.\ntier: t0 rule: money")
+        .await
+        .expect("the initial grade records");
+    }
+    set_status(&home.features, &sid, &json!({"now": "Running", "waiting": [&a, &b, &c]}).to_string())
+      .await
+      .expect("the original complete list stores");
+    let original = stored(&home, &sid).await;
+    for (item, answer) in [
+      (&a, "The step is t0.\ntier: t0 rule: money"),
+      (&b, "The step is t2.\ntier: t2 rule: none"),
+      (&c, "The user must act.\ntier: user-act rule: none"),
+    ] {
+      record_ask_check(&home.features, &sid, item, "synthetic-haiku", answer).await.expect("the current grade records");
+    }
+    test_support::write_approval_policy_table(
+      &home.root(),
+      &test_support::APPROVAL_POLICY_TABLE.replace("enable_ask_tier_refusal: false", "enable_ask_tier_refusal: true"),
+    );
+    let status_event_count = status_events(&home, &sid).len();
+
+    let error = set_status(&home.features, &sid, &json!({"waiting": [&a, &b, &c]}).to_string())
+      .await
+      .expect_err("the full list has one refused item");
+
+    assert!(matches!(&error, WebReplyError::Refused { status, .. } if *status == StatusCode::CONFLICT));
+    assert!(detail(error).contains("B: choose the design"));
+    assert_eq!(stored(&home, &sid).await, original);
+    assert_eq!(status_events(&home, &sid).len(), status_event_count);
+
+    let updated = set_status(&home.features, &sid, &json!({"waiting": [&a, &c]}).to_string())
+      .await
+      .expect("the handled B item is removed from the current complete list");
+    assert_eq!(
+      without_item_times(&updated["waiting"]),
+      json!([
+        {"text": "A: publish the result", "context": "The decision is active now. Options are continue or stop; continue is recommended.", "link": null, "tier": "t0", "rule": "money"},
+        {"text": "C: sign in to the console", "context": "The decision is active now. Options are continue or stop; continue is recommended.", "link": null, "tier": "user-act", "rule": null},
+      ])
+    );
+  }
+
+  #[tokio::test]
+  async fn set_status_full_list_keeps_s3() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let a = waiting_item("Keep the first action");
+    let b = waiting_item("Repair the page link");
+    for item in [&a, &b] {
+      record_ask_check(&home.features, &sid, item, "synthetic-haiku", "The step is approved.\ntier: t0 rule: money")
+        .await
+        .expect("the original grade records");
+    }
+    set_status(&home.features, &sid, &json!({"now": "Running", "waiting": [&a, &b]}).to_string())
+      .await
+      .expect("the original complete list stores");
+    let original = stored(&home, &sid).await;
+    let status_event_count = status_events(&home, &sid).len();
+    let bad_b = json!({
+      "text": b["text"],
+      "context": b["context"],
+      "link": "relative/missing.html",
+    });
+
+    let error = set_status(&home.features, &sid, &json!({"waiting": [&a, bad_b]}).to_string())
+      .await
+      .expect_err("the bad link refuses the complete list");
+
+    assert!(matches!(&error, WebReplyError::Refused { status, .. } if *status == StatusCode::UNPROCESSABLE_ENTITY));
+    let detail = detail(error);
+    assert!(detail.contains("Repair the page link") && detail.contains("absolute URL"), "{detail}");
+    assert_eq!(stored(&home, &sid).await, original);
+    assert_eq!(status_events(&home, &sid).len(), status_event_count);
+
+    let fixed_b = json!({
+      "text": b["text"],
+      "context": b["context"],
+      "link": "https://example.invalid/page",
+    });
+    record_ask_check(&home.features, &sid, &fixed_b, "synthetic-haiku", "The step is approved.\ntier: t0 rule: money")
+      .await
+      .expect("the corrected link gets a current cold read");
+    let updated = set_status(&home.features, &sid, &json!({"waiting": [&a, &fixed_b]}).to_string())
+      .await
+      .expect("the corrected complete list stores");
+    assert_eq!(
+      updated["waiting"].as_array().unwrap().iter().map(|item| item["text"].as_str().unwrap()).collect::<Vec<_>>(),
+      ["Keep the first action", "Repair the page link"]
+    );
+  }
+
+  #[tokio::test]
+  async fn link_single_renderability_owner() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    set_status(&home.features, &sid, r#"{"now": "Running"}"#).await.expect("the baseline status stores");
+    let directory = tempfile::tempdir().expect("the source directory exists");
+    let source = directory.path().join("changes.diff");
+    fs::write(&source, "diff --git a/a b/a").expect("the source writes");
+    let item = json!({
+      "text": "Review the patch",
+      "context": "The patch is ready.",
+      "link": file_link(&source),
+    });
+    let request = json!({"session_id": sid, "text": json!({"waiting": [item]}).to_string()});
+    let before = stored(&home, &sid).await;
+    let status_event_count = status_events(&home, &sid).len();
+
+    let (unread_status, unread) =
+      home.send(Method::POST, "/api/internal/web/status/unread", Some(request.clone())).await;
+    let (set_status_code, set) = home.send(Method::POST, "/api/internal/web/status", Some(request)).await;
+
+    assert_eq!(unread_status, StatusCode::UNPROCESSABLE_ENTITY, "{unread}");
+    assert_eq!(set_status_code, StatusCode::UNPROCESSABLE_ENTITY, "{set}");
+    let unread_detail = unread["detail"].as_str().expect("the unread refusal has a detail");
+    let set_detail = set["detail"].as_str().expect("the set refusal has a detail");
+    assert!(unread_detail.contains("non-page file") && unread_detail.contains("waiting.0"));
+    assert!(set_detail.contains("non-page file") && set_detail.contains("waiting.0"));
+    assert!(set_detail.contains("needs a cold read"));
+    assert_eq!(stored(&home, &sid).await, before);
+    assert_eq!(status_events(&home, &sid).len(), status_event_count);
   }
 
   #[tokio::test]
@@ -2092,16 +2333,20 @@ mod tests {
           "context": "The plan waits. Options are approve or revise; approve is recommended.",
           "link": null,
         });
-        item[field] = json!(host_link(&v9));
+        let plan_link = if field == "link" { file_link(&v9) } else { host_link(&v9) };
+        item[field] = json!(plan_link);
         let text = json!({"waiting": [item]}).to_string();
 
         let (status, response) = home.send(Method::POST, uri, Some(json!({"session_id": sid, "text": text}))).await;
 
         assert_eq!(status, StatusCode::CONFLICT, "{endpoint} {field}");
         let detail = response["detail"].as_str().expect("a refusal detail");
-        assert!(detail.starts_with("Stale plan links"), "{endpoint} {field}: {detail}");
-        assert!(detail.contains(host_link(&v9).as_str()), "{endpoint} {field}: {detail}");
+        assert!(detail.contains("Stale plan links"), "{endpoint} {field}: {detail}");
+        assert!(detail.contains(plan_link.as_str()), "{endpoint} {field}: {detail}");
         assert!(detail.contains(&v11.display().to_string()), "{endpoint} {field}: {detail}");
+        if endpoint == "set" {
+          assert!(detail.contains("needs a cold read"), "{endpoint} {field}: {detail}");
+        }
         assert_eq!(stored(&home, &sid).await, Value::Null, "{endpoint} {field}");
         assert!(status_events(&home, &sid).is_empty(), "{endpoint} {field}");
         assert!(home.events(&sid).iter().all(|event| event["type"] != WEB_ASK_CHECK), "{endpoint} {field}");
@@ -2125,7 +2370,7 @@ mod tests {
           Value::Null,
         )]),
       );
-      let link = if local_path { v9.display().to_string() } else { host_link(&v9) };
+      let link = if local_path { v9.display().to_string() } else { file_link(&v9) };
       write_stored_status(
         &home,
         &sid,
@@ -2169,14 +2414,14 @@ mod tests {
         json!({"waiting": [{
           "text": "Decide plan 2",
           "context": "The plan is closed. Options are reopen or stop; reopen is recommended.",
-          "link": host_link(&page),
+          "link": file_link(&page),
         }]}),
       )
       .await;
       let payload = if endpoint == "confirm" {
         json!({"session_id": sid})
       } else {
-        json!({"session_id": sid, "text": waiting_with_link("Decide plan 2", json!(host_link(&page)))})
+        json!({"session_id": sid, "text": waiting_with_link("Decide plan 2", json!(file_link(&page)))})
       };
 
       let (status, response) = home.send(Method::POST, uri, Some(payload)).await;
@@ -2197,7 +2442,7 @@ mod tests {
     write_stored_status(
       &home,
       &sid,
-      json!({"waiting": [{"text": "Decide", "context": "The line is active now. Options are continue or stop; continue is recommended.", "link": host_link(&page)}]}),
+      json!({"waiting": [{"text": "Decide", "context": "The line is active now. Options are continue or stop; continue is recommended.", "link": file_link(&page)}]}),
     )
     .await;
 
@@ -2289,7 +2534,7 @@ mod tests {
     let sid = home.manager("session", None).await;
     let page = home.root().join("linked-page.html");
     fs::write(&page, "page").expect("the linked page writes");
-    let link = host_link(&page);
+    let link = file_link(&page);
 
     let first = set_after_reads(&home, &sid, planned_item("Review A", json!(link))).await;
     let second = set_after_reads(&home, &sid, planned_item("Review B", json!(link))).await;
@@ -2308,7 +2553,7 @@ mod tests {
     let v3 = session_artifact(&home, &sid, "plan_03_v3.html");
     write_plans(&home, &sid, json!([plan(3, json!([plan_version(2, "artifacts/plan_03_v2.html")]), Value::Null)]));
 
-    let first = set_after_reads(&home, &sid, planned_item("Decide plan A", json!(host_link(&v2)))).await;
+    let first = set_after_reads(&home, &sid, planned_item("Decide plan A", json!(file_link(&v2)))).await;
     let since = first["waiting"][0]["since"].as_str().expect("a start time").to_string();
     write_plans(
       &home,
@@ -2319,7 +2564,7 @@ mod tests {
         Value::Null,
       )]),
     );
-    let second = set_after_reads(&home, &sid, planned_item("Decide plan B", json!(host_link(&v3)))).await;
+    let second = set_after_reads(&home, &sid, planned_item("Decide plan B", json!(file_link(&v3)))).await;
 
     assert_eq!(second["waiting"][0]["since"], json!(since), "one plan lineage pairs its versions");
   }
@@ -2407,6 +2652,7 @@ mod tests {
       tier: Some("user-act".to_string()),
       rule: None,
       since: UtcDateTime::parse("2026-11-01T21:43:00-07:00").expect("the fixture time parses"),
+      is_derived: true,
     }
   }
 

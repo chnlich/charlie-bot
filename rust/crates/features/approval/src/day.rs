@@ -115,6 +115,14 @@ pub(crate) async fn approval_day_view_at(
 
 /// One open item's row, with the session that holds it and how long ago it started.
 fn row_json(row: &OpenWaitingRow, now: Timestamp) -> Value {
+  let age_seconds = now.as_second() - row.since.into_inner().unix_timestamp();
+  let needs_recheck = !row.is_derived && (row.tier.is_none() || age_seconds > 14 * DAY);
+  let tier_label = match row.tier.as_deref() {
+    Some("t0" | "t1" | "t2") => "decision",
+    Some(approval_policy::TIER_USER_ACT) => "user-act",
+    Some(approval_policy::TIER_REVIEW) => "review",
+    _ => "untiered",
+  };
   json!({
     "session_id": row.session_id,
     (SESSION_NAME_FIELD): row.session_name,
@@ -122,6 +130,8 @@ fn row_json(row: &OpenWaitingRow, now: Timestamp) -> Value {
     "context": row.context,
     "link": row.link,
     "tier": row.tier,
+    "tier_label": tier_label,
+    "needs_recheck": needs_recheck,
     "rule": row.rule,
     "since": row.since.to_str(),
     "age": age_text(row.since, now),

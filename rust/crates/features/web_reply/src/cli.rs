@@ -18,10 +18,12 @@ use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_cli_common::response::field;
 use charliebot_compat::file_urls;
+use charliebot_core::approval_policy;
 use charliebot_core::event_types;
 use charliebot_core::str_methods::splitlines;
 use charliebot_core::text_repr;
 use charliebot_tasks::cold_read;
+use charliebot_user_text_checks::{self as user_text_checks, PageLinkTarget};
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Map, Value, json};
 
@@ -53,6 +55,8 @@ enum StatusCommand {
   Confirm,
   /// Print this session's status and the waiting items of its child sessions
   Show(SessionArgs),
+  /// Re-grade this session's stored Waiting items without writing status or ask-check records
+  Recheck,
 }
 
 #[derive(Args)]
@@ -96,6 +100,7 @@ pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
       StatusCommand::Set(args) => status_set(&args, host),
       StatusCommand::Confirm => status_confirm(),
       StatusCommand::Show(args) => status_show(&args),
+      StatusCommand::Recheck => status_recheck(host),
     },
   }
 }
@@ -251,6 +256,102 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
   }
   println!("Nothing was stored.");
   std::process::exit(3);
+}
+
+/// Re-grade this session's stored Waiting items and print the original tier beside the cold read. This path only
+/// reads the status endpoint and the policy table; it does not record an ask-check or set a status.
+fn status_recheck(lazy_host: &LazyHost) -> Result<(), CliExit> {
+  let session_id = resolve::resolve_from_env(None)?;
+  let result = client::get("/api/internal/web/status", Some(vec![("session_id".to_string(), session_id.clone())]))?;
+  let items = stored_items_for_recheck(&result, &session_id)?;
+  if items.is_empty() {
+    println!("Session: {session_id}\nNo open stored Waiting items to recheck.");
+    return Ok(());
+  }
+
+  let host = lazy_host.get().map_err(anyhow_exit)?;
+  let (system_prompt, questions) = cold_read::load_ask_texts(&host.repo_root).map_err(anyhow_exit)?;
+  let loaded = approval_policy::load(&host.cfg.charliebot_home).map_err(|error| CliExit::error(error.to_string()))?;
+  let policy_section = approval_policy::prompt_section(&loaded.table);
+  let mut rows = Vec::with_capacity(items.len());
+  for item in items {
+    let text = text_repr::value_str(field(&item, "text")?);
+    let stored_tier = item.get("tier").and_then(Value::as_str).unwrap_or("untiered").to_string();
+    let probe_item = json!({
+      "text": field(&item, "text")?,
+      "context": item.get("context").filter(|value| !value.is_null()),
+      "link": item.get("link").filter(|value| !value.is_null()),
+    });
+    let mut linked_page = None;
+    let mut link_refusal = None;
+    match user_text_checks::check_page_link(item.get("link").and_then(Value::as_str)) {
+      Ok(PageLinkTarget::HostFile(path)) => linked_page = Some(files::read_text_mode(&path)?),
+      Ok(PageLinkTarget::NoLink | PageLinkTarget::ApplicationRoute | PageLinkTarget::External) => {}
+      Err(reason) => link_refusal = Some(reason),
+    }
+    let probe_prompt = cold_read::ask_probe_input(&probe_item, linked_page.as_deref(), &policy_section, &questions)
+      .map_err(anyhow_exit)?;
+    let probe = block_on(cold_read::run_probe(host, &probe_prompt, &system_prompt))?.map_err(anyhow_exit)?;
+    let Some(_backend) = probe.backend_id else {
+      for (backend, error) in &probe.attempts {
+        eprintln!("attempt {backend} failed: {error}");
+      }
+      if probe.attempts.is_empty() {
+        eprintln!("No light backend was available for this item.");
+      }
+      std::process::exit(1);
+    };
+    let answer = probe.answer.expect("a successful ask probe has the answering backend's response");
+    let grade =
+      approval_policy::parse_ask_tier(&answer, &loaded.table).map_err(|error| CliExit::error(error.to_string()))?;
+    rows.push((text, stored_tier, grade.tier, grade.rule, link_refusal));
+  }
+
+  println!("Session: {session_id}");
+  for (text, stored_tier, new_tier, rule, link_refusal) in &rows {
+    let rule = rule.as_deref().unwrap_or("none");
+    println!("Item: {text}\nStored tier: {stored_tier}\nNew grade: {new_tier} (rule: {rule})");
+    if let Some(reason) = link_refusal {
+      println!("Link: refused: {reason}");
+    }
+    println!();
+  }
+  let downgraded = rows
+    .iter()
+    .filter(|(_, stored, new, _, _)| {
+      matches!(stored.as_str(), "t0" | "user-act") && matches!(new.as_str(), "t1" | "t2")
+    })
+    .collect::<Vec<_>>();
+  println!("Downgrades from t0 or user-act to t1 or t2:");
+  if downgraded.is_empty() {
+    println!("None");
+  } else {
+    for (text, stored_tier, new_tier, _, _) in downgraded {
+      println!("- {session_id}: {text} ({stored_tier} → {new_tier})");
+    }
+  }
+  Ok(())
+}
+
+/// The current session's stored Waiting items, excluding closed sessions and the derived rows in the status response.
+fn stored_items_for_recheck(result: &Value, session_id: &str) -> Result<Vec<Value>, CliExit> {
+  let response_session = field(result, "session_id")?
+    .as_str()
+    .ok_or_else(|| CliExit::error("the status response carries a non-string session_id"))?;
+  if response_session != session_id {
+    return Err(CliExit::error(format!("the status response names session {response_session}, expected {session_id}")));
+  }
+  let task_state = field(result, "own_task_state")?
+    .as_str()
+    .ok_or_else(|| CliExit::error("the status response carries a non-string own_task_state"))?;
+  if task_state != "open" {
+    return Ok(Vec::new());
+  }
+  let status = field(result, event_types::WEB_STATUS)?;
+  if status.is_null() {
+    return Ok(Vec::new());
+  }
+  Ok(list(field(status, "waiting")?)?.clone())
 }
 
 /// The gate before the cold reads: every unread item's host-served page runs the fork assertions of its genre, taken

@@ -549,6 +549,7 @@ pub struct OpenWaitingRow {
   pub tier: Option<String>,
   pub rule: Option<String>,
   pub since: UtcDateTime,
+  pub is_derived: bool,
 }
 
 /// The reader of every open session's Waiting on you items, the whole home's list (`status.open_waiting_items`).

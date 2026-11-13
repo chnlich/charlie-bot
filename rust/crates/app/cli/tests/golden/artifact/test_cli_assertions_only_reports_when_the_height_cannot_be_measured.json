@@ -15,7 +15,7 @@
   },
   "responses": [],
   "expect": {
-    "stdout": "ok byte-integrity\nok style-verbatim\nok sections-numbered\nok foot-present\nok fork-open-shape\nok fork-options\nok fork-demos\nok fork-explainer\nok goal-section Problem / Goal section present\nok page-height not measured: headless_chrome_bin is not configured\nok ordinal-named 0 external labels named in reach\nok tracker-id-nearby no violations\nok session-linked no violations\nok link-renderable no violations\n",
+    "stdout": "ok byte-integrity\nok style-verbatim\nok sections-numbered\nok schema-dropped\nok foot-present\nok fork-open-shape\nok fork-options\nok fork-demos\nok fork-explainer\nok goal-section Problem / Goal section present\nok page-height not measured: headless_chrome_bin is not configured\nok ordinal-named 0 external labels named in reach\nok tracker-id-nearby no violations\nok session-linked no violations\nok link-renderable no violations\n",
     "stderr": "",
     "exit": 0,
     "requests": []

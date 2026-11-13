@@ -179,19 +179,28 @@ browser_logins:
 
   #[test]
   fn a_bad_name_a_bad_pattern_and_a_repeated_name_are_refused() {
-    let bad_name = HostAuthConfig { browser_logins: vec![login("AWS SSO", "https://\\S*")], ..Default::default() };
+    let bad_name = HostAuthConfig {
+      browser_logins: vec![login("AWS SSO", "https://\\S*")],
+      enable_slack_dm: false,
+      slack_dm_user: None,
+    };
     assert_eq!(
       validate(&bad_name).expect_err("the name pattern refuses upper case and spaces"),
       "browser_logins[0].name: must match ^[a-z0-9-]+$"
     );
-    let bad_pattern = HostAuthConfig { browser_logins: vec![login("aws-sso", "https://[")], ..Default::default() };
+    let bad_pattern = HostAuthConfig {
+      browser_logins: vec![login("aws-sso", "https://[")],
+      enable_slack_dm: false,
+      slack_dm_user: None,
+    };
     assert!(
       validate(&bad_pattern).expect_err("the approval-url pattern must compile").contains("is not a valid regular"),
       "the error names the invalid pattern"
     );
     let repeated = HostAuthConfig {
       browser_logins: vec![login("aws-sso", "https://\\S*"), login("aws-sso", "https://\\S*")],
-      ..Default::default()
+      enable_slack_dm: false,
+      slack_dm_user: None,
     };
     assert_eq!(
       validate(&repeated).expect_err("two logins share one name"),
@@ -204,7 +213,7 @@ browser_logins:
     let mut empty = login("aws-sso", "https://\\S*");
     empty.login_command = Vec::new();
     assert!(
-      validate(&HostAuthConfig { browser_logins: vec![empty], ..Default::default() }).is_err(),
+      validate(&HostAuthConfig { browser_logins: vec![empty], enable_slack_dm: false, slack_dm_user: None }).is_err(),
       "a login needs a command"
     );
   }
@@ -238,7 +247,7 @@ browser_logins:
     let mut second = login("router-host1-again", "https://\\S*");
     second.host = Some("host1".to_string());
     assert_eq!(
-      validate(&HostAuthConfig { browser_logins: vec![first, second], ..Default::default() })
+      validate(&HostAuthConfig { browser_logins: vec![first, second], enable_slack_dm: false, slack_dm_user: None })
         .expect_err("two logins name one host"),
       "browser_logins[1].host: host 'host1' is renewed by more than one login"
     );
@@ -246,7 +255,7 @@ browser_logins:
     let mut blank = login("router-host1", "https://\\S*");
     blank.host = Some("  ".to_string());
     assert!(
-      validate(&HostAuthConfig { browser_logins: vec![blank], ..Default::default() })
+      validate(&HostAuthConfig { browser_logins: vec![blank], enable_slack_dm: false, slack_dm_user: None })
         .expect_err("a blank host is refused")
         .contains("must name an ssh alias")
     );
@@ -257,7 +266,7 @@ browser_logins:
     let mut no_pty = login("router-host1", "https://\\S*");
     no_pty.enter_after_pattern = Some("Press Enter after approval".to_string());
     assert_eq!(
-      validate(&HostAuthConfig { browser_logins: vec![no_pty], ..Default::default() })
+      validate(&HostAuthConfig { browser_logins: vec![no_pty], enable_slack_dm: false, slack_dm_user: None })
         .expect_err("an enter pattern needs use_pty"),
       "browser_logins[0].enter_after_pattern: needs use_pty, because a pipe has no terminal to write to"
     );
@@ -266,7 +275,7 @@ browser_logins:
     bad_enter.use_pty = true;
     bad_enter.enter_after_pattern = Some("Press Enter [".to_string());
     assert!(
-      validate(&HostAuthConfig { browser_logins: vec![bad_enter], ..Default::default() })
+      validate(&HostAuthConfig { browser_logins: vec![bad_enter], enable_slack_dm: false, slack_dm_user: None })
         .expect_err("the enter pattern must compile")
         .contains("enter_after_pattern: is not a valid regular expression")
     );
@@ -274,7 +283,7 @@ browser_logins:
     let mut bad_code = login("router-host1", "https://\\S*");
     bad_code.user_code_pattern = Some("Code: (".to_string());
     assert!(
-      validate(&HostAuthConfig { browser_logins: vec![bad_code], ..Default::default() })
+      validate(&HostAuthConfig { browser_logins: vec![bad_code], enable_slack_dm: false, slack_dm_user: None })
         .expect_err("the user-code pattern must compile")
         .contains("user_code_pattern: is not a valid regular expression")
     );
@@ -285,7 +294,7 @@ browser_logins:
     let mut no_group = login("router-host1", "https://\\S*");
     no_group.user_code_pattern = Some("Code:\\s*\\S+".to_string());
     assert!(
-      validate(&HostAuthConfig { browser_logins: vec![no_group], ..Default::default() })
+      validate(&HostAuthConfig { browser_logins: vec![no_group], enable_slack_dm: false, slack_dm_user: None })
         .expect_err("a pattern without a capture group holds no user code")
         .contains("needs a capture group")
     );
@@ -294,7 +303,7 @@ browser_logins:
     pty_login.use_pty = true;
     pty_login.user_code_pattern = Some("Code:\\s*(\\S+)".to_string());
     pty_login.enter_after_pattern = Some("Press Enter after approval".to_string());
-    validate(&HostAuthConfig { browser_logins: vec![pty_login], ..Default::default() })
+    validate(&HostAuthConfig { browser_logins: vec![pty_login], enable_slack_dm: false, slack_dm_user: None })
       .expect("a pty login with both patterns validates");
   }
 

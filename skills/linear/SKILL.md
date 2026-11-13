@@ -162,6 +162,12 @@ mutation($input: CommentCreateInput!) {
 
 Variables: `{"input": {"issueId": "ISSUE_UUID", "body": "Comment text"}}`
 
+A mutation on an archived issue — one with a non-null `archivedAt` — fails with
+`Entity not found: Issue`, `commentCreate` included, while queries still return
+the issue. Before a write to an issue, read its `archivedAt`; when it is set,
+unarchive (`issueUnarchive`), make the write, then archive it again
+(`issueArchive`) so the issue ends in its original archive state.
+
 ### List Projects
 
 ```graphql

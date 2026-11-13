@@ -12,12 +12,12 @@ use serde_json::{Value, json};
 
 use charliebot_registry::registry::OpenWaitingRow;
 
-use super::{age_text, row_json};
+use super::{actions_only_you_can_do_rows, age_text, row_json};
 use crate::test_support::Home;
 
 /// The PT day the seeds fall in: the stamps below name UTC instants whose Pacific day is 2026-10-30 (PDT, UTC-7).
 const DAY: &str = "2026-10-30";
-/// The previous Pacific day, whose user-act item stays off the day's sheet.
+/// The previous Pacific day, whose items stay off the day's sheet.
 const PREVIOUS_DAY: &str = "2026-10-29";
 
 /// Noon in Pacific time on `date`, as a stored stamp reads.
@@ -26,7 +26,18 @@ fn pt_noon(date: Date) -> String {
 }
 
 fn item(text: &str, tier: Value, rule: Value, since: &str) -> Value {
-  json!({"text": text, "context": "Why the item waits.", "link": null, "since": since, "since_exact": true, "tier": tier, "rule": rule})
+  let executor = if tier == "user-act" { "chao" } else { "agent" };
+  json!({
+    "text": text,
+    "context": "Why the item waits.",
+    "link": null,
+    "since": since,
+    "since_exact": true,
+    "tier": tier,
+    "rule": rule,
+    "executor": executor,
+    "approval_rule_refs": [],
+  })
 }
 
 fn open_waiting_row(tier: Option<&str>, is_derived: bool, since: &str) -> OpenWaitingRow {
@@ -38,23 +49,120 @@ fn open_waiting_row(tier: Option<&str>, is_derived: bool, since: &str) -> OpenWa
     link: None,
     tier: tier.map(ToString::to_string),
     rule: None,
+    executor: None,
+    approval_rule_refs: None,
     since: UtcDateTime::parse(since).expect("the fixture time parses"),
     is_derived,
   }
 }
 
 #[test]
-fn needs_recheck_only_marks_untiered_or_over_fourteen_day_stored_rows() {
+fn needs_recheck_covers_missing_assessment_fields() {
   let now: Timestamp = "2026-11-12T00:00:00Z".parse().expect("the fixed time parses");
   let untiered = row_json(&open_waiting_row(None, false, "2026-11-11T23:00:00Z"), now);
-  let exact_fourteen_days = row_json(&open_waiting_row(Some("t2"), false, "2026-10-29T00:00:00Z"), now);
-  let over_fourteen_days = row_json(&open_waiting_row(Some("t2"), false, "2026-10-28T23:59:59Z"), now);
+  let missing_executor = row_json(&open_waiting_row(Some("t2"), false, "2026-11-11T23:00:00Z"), now);
+  let missing_rule_ref = row_json(
+    &OpenWaitingRow {
+      tier: Some("t0".to_string()),
+      rule: Some("rule-named".to_string()),
+      executor: Some("agent".to_string()),
+      approval_rule_refs: Some(Vec::new()),
+      ..open_waiting_row(Some("t0"), false, "2026-11-11T23:00:00Z")
+    },
+    now,
+  );
+  let complete_rule_assessment = row_json(
+    &OpenWaitingRow {
+      tier: Some("t0".to_string()),
+      rule: Some("rule-named".to_string()),
+      executor: Some("agent".to_string()),
+      approval_rule_refs: Some(vec![charliebot_core::approval_policy::ApprovalRuleRef {
+        session_id: "session".to_string(),
+        scope: "session".to_string(),
+        source_ref: "goal".to_string(),
+        source_session_id: Some("session".to_string()),
+        text: "Only Chao may change the goal.".to_string(),
+      }]),
+      ..open_waiting_row(Some("t0"), false, "2026-11-11T23:00:00Z")
+    },
+    now,
+  );
+  let non_rule_without_refs = row_json(
+    &OpenWaitingRow {
+      tier: Some("t0".to_string()),
+      rule: Some("irreversible".to_string()),
+      executor: Some("agent".to_string()),
+      ..open_waiting_row(Some("t0"), false, "2026-11-11T23:00:00Z")
+    },
+    now,
+  );
+  let exact_fourteen_days = row_json(
+    &OpenWaitingRow {
+      tier: Some("t2".to_string()),
+      executor: Some("agent".to_string()),
+      ..open_waiting_row(Some("t2"), false, "2026-10-29T00:00:00Z")
+    },
+    now,
+  );
+  let over_fourteen_days = row_json(
+    &OpenWaitingRow {
+      tier: Some("t2".to_string()),
+      executor: Some("agent".to_string()),
+      ..open_waiting_row(Some("t2"), false, "2026-10-28T23:59:59Z")
+    },
+    now,
+  );
   let old_derived = row_json(&open_waiting_row(Some("user-act"), true, "2026-10-01T00:00:00Z"), now);
 
   assert_eq!(untiered["needs_recheck"], json!(true));
+  assert_eq!(missing_executor["needs_recheck"], json!(true));
+  assert_eq!(missing_rule_ref["needs_recheck"], json!(true));
+  assert_eq!(complete_rule_assessment["needs_recheck"], json!(false));
+  assert_eq!(non_rule_without_refs["needs_recheck"], json!(false));
   assert_eq!(exact_fourteen_days["needs_recheck"], json!(false));
   assert_eq!(over_fourteen_days["needs_recheck"], json!(true));
   assert_eq!(old_derived["needs_recheck"], json!(false));
+}
+
+#[test]
+fn executor_is_independent_of_tier() {
+  let now: Timestamp = "2026-11-12T00:00:00Z".parse().expect("the fixed time parses");
+  let chao_t0 = OpenWaitingRow {
+    text: "Gmail send".to_string(),
+    tier: Some("t0".to_string()),
+    rule: Some("irreversible".to_string()),
+    executor: Some("chao".to_string()),
+    ..open_waiting_row(Some("t0"), false, "2026-11-11T23:00:00Z")
+  };
+  let agent_t0 = OpenWaitingRow {
+    text: "Agent decision".to_string(),
+    tier: Some("t0".to_string()),
+    rule: Some("authority".to_string()),
+    executor: Some("agent".to_string()),
+    ..open_waiting_row(Some("t0"), false, "2026-11-11T23:00:00Z")
+  };
+  let chao_authority_t0 = OpenWaitingRow {
+    text: "Okta login".to_string(),
+    tier: Some("t0".to_string()),
+    rule: Some("authority".to_string()),
+    executor: Some("chao".to_string()),
+    ..open_waiting_row(Some("t0"), false, "2026-11-11T23:00:00Z")
+  };
+  let user_act = OpenWaitingRow {
+    text: "Provide a fact".to_string(),
+    tier: Some("user-act".to_string()),
+    executor: Some("chao".to_string()),
+    ..open_waiting_row(Some("user-act"), false, "2026-11-11T23:00:00Z")
+  };
+  let rows = [chao_t0, agent_t0, chao_authority_t0, user_act];
+  let today: Date = "2026-11-12".parse().expect("the fixed date parses");
+  let actions = actions_only_you_can_do_rows(&rows, None, today, today, now).expect("the actions read");
+  let action_texts = actions.iter().map(|row| row["text"].as_str().unwrap()).collect::<Vec<_>>();
+  assert_eq!(action_texts, ["Gmail send", "Okta login", "Provide a fact"]);
+  assert_eq!(row_json(&rows[0], now)["tier"], json!("t0"));
+  assert_eq!(row_json(&rows[1], now)["tier"], json!("t0"));
+  assert_eq!(row_json(&rows[2], now)["tier"], json!("t0"));
+  assert_eq!(row_json(&rows[3], now)["tier"], json!("user-act"));
 }
 
 #[test]
@@ -210,7 +318,7 @@ async fn the_queue_orders_t0_by_rule_rank_then_review_then_the_rest() {
 }
 
 #[tokio::test]
-async fn today_s_actions_only_you_can_do_holds_every_open_user_act_item() {
+async fn today_s_actions_only_you_can_do_holds_every_open_chao_executor_item() {
   let home = Home::new();
   let session = home.manager("Alpha").await;
   let today = day_of(Timestamp::now()).expect("today reads");
@@ -244,7 +352,7 @@ async fn today_s_actions_only_you_can_do_holds_every_open_user_act_item() {
 }
 
 #[tokio::test]
-async fn a_past_day_s_actions_only_you_can_do_holds_that_day_s_user_act_items() {
+async fn a_past_day_s_actions_only_you_can_do_holds_that_day_s_chao_executor_items() {
   let home = Home::new();
   let session = home.manager("Alpha").await;
   let today = day_of(Timestamp::now()).expect("today reads");

@@ -72,7 +72,22 @@ fn normalize_web_status(value: &mut Value) -> bool {
   let Some(items) = waiting.as_array_mut() else { return false };
   for item in items {
     let Some(item) = item.as_object_mut() else { return false };
-    if item.keys().any(|name| !["text", "context", "link", "since", "since_exact"].contains(&name.as_str())) {
+    if item.keys().any(|name| {
+      ![
+        "text",
+        "context",
+        "link",
+        "since",
+        "since_exact",
+        "tier",
+        "rule",
+        "executor",
+        "approval_rule_refs",
+        "backend",
+        "raw_tier_line",
+      ]
+      .contains(&name.as_str())
+    }) {
       return false;
     }
     if !item.get("text").and_then(Value::as_str).is_some_and(|text| !text.trim().is_empty()) {
@@ -80,6 +95,19 @@ fn normalize_web_status(value: &mut Value) -> bool {
     }
     if item.get("link").is_some_and(|link| !link.is_null() && !link.is_string()) {
       return false;
+    }
+    for name in ["tier", "rule", "executor", "backend", "raw_tier_line"] {
+      if item.get(name).is_some_and(|field| !field.is_null() && !field.is_string()) {
+        return false;
+      }
+    }
+    if let Some(refs) = item.get("approval_rule_refs") {
+      if refs.is_null() {
+        item.remove("approval_rule_refs");
+      } else if serde_json::from_value::<Vec<charliebot_core::approval_policy::ApprovalRuleRef>>(refs.clone()).is_err()
+      {
+        return false;
+      }
     }
     match item.get("context") {
       None => {}
@@ -122,6 +150,7 @@ fn routes(features: &Arc<FeatureContext>) -> Router {
     .route("/api/internal/web/reply-check", post_only(api::post_reply_check))
     .route("/api/internal/web/dialog", get_only(api::get_dialog))
     .route("/api/internal/web/status", refuse_other_methods(post(api::post_status).get(api::get_status), "POST"))
+    .route("/api/internal/web/approval-rules", get_only(api::get_approval_rules))
     .route("/api/internal/web/status/confirm", post_only(api::post_status_confirm))
     .route("/api/internal/web/status/unread", post_only(api::post_status_unread))
     .route("/api/internal/web/ask-check", post_only(api::post_ask_check))
@@ -138,6 +167,7 @@ fn matches(path: &str) -> bool {
       | "/api/internal/web/reply-check"
       | "/api/internal/web/dialog"
       | "/api/internal/web/status"
+      | "/api/internal/web/approval-rules"
       | "/api/internal/web/status/confirm"
       | "/api/internal/web/status/unread"
       | "/api/internal/web/ask-check"
@@ -163,6 +193,7 @@ mod tests {
     assert!(routers[0].claims("/api/internal/web/reply-check"));
     assert!(routers[0].claims("/api/internal/web/dialog"));
     assert!(routers[0].claims("/api/internal/web/status"));
+    assert!(routers[0].claims("/api/internal/web/approval-rules"));
     assert!(routers[0].claims("/api/internal/web/status/confirm"));
     assert!(routers[0].claims("/api/internal/web/status/unread"));
     assert!(routers[0].claims("/api/internal/web/ask-check"));
@@ -221,7 +252,7 @@ mod tests {
     let (status, body) = home.send(Method::POST, "/api/internal/web/status/unread", Some(unread_body.clone())).await;
     let mut unread_item = item.clone();
     unread_item["rule"] = json!(null);
-    assert_eq!((status, body), (StatusCode::OK, json!({"unread": [unread_item]})));
+    assert_eq!((status, body), (StatusCode::OK, json!({"unread": [unread_item], "stale_assessments": []})));
 
     let (status, body) = home
       .send(
@@ -231,7 +262,7 @@ mod tests {
           "session_id": sid,
           "item": item.clone(),
           "backend": "haiku",
-          "answer": "Deploy.\ntier: t0 rule: money",
+          "answer": "Deploy.\ntier: t0 rule: money executor: agent approval_rule_refs: []",
         })),
       )
       .await;
@@ -239,7 +270,7 @@ mod tests {
     assert_eq!(body["item_sha256"].as_str().unwrap().len(), 64);
 
     let (status, body) = home.send(Method::POST, "/api/internal/web/status/unread", Some(unread_body)).await;
-    assert_eq!((status, body), (StatusCode::OK, json!({"unread": []})));
+    assert_eq!((status, body), (StatusCode::OK, json!({"unread": [], "stale_assessments": []})));
 
     let (status, body) =
       home.send(Method::POST, "/api/internal/web/status", Some(json!({"session_id": sid, "text": status_text}))).await;
@@ -252,6 +283,10 @@ mod tests {
     assert_eq!(stored_item["since_exact"], json!(true));
     assert_eq!(stored_item["tier"], json!("t0"), "a stored item carries its cold read's tier");
     assert_eq!(stored_item["rule"], json!("money"));
+    assert_eq!(stored_item["executor"], json!("agent"));
+    assert_eq!(stored_item["approval_rule_refs"], json!([]));
+    assert_eq!(stored_item["backend"], json!("haiku"));
+    assert_eq!(stored_item["raw_tier_line"], json!("tier: t0 rule: money executor: agent approval_rule_refs: []"));
     assert_eq!(body["now_chars"], json!(0));
     assert_eq!(body["now_over_budget"], json!(false));
 
@@ -269,7 +304,7 @@ mod tests {
     let ask_checks = home.events(&sid).into_iter().filter(|event| event["type"] == "web_ask_check").collect::<Vec<_>>();
     assert_eq!(ask_checks.len(), 1);
     assert_eq!(ask_checks[0]["backend"], "haiku");
-    assert_eq!(ask_checks[0]["answer"], "Deploy.\ntier: t0 rule: money");
+    assert_eq!(ask_checks[0]["answer"], "Deploy.\ntier: t0 rule: money executor: agent approval_rule_refs: []");
   }
 
   #[tokio::test]

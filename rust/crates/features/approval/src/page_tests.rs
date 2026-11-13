@@ -27,7 +27,7 @@ async fn seeded_home() -> (Home, String) {
         "now": "Running",
         "waiting": [
           {"text": "Delete the backup volume", "link": null, "since": "2026-10-30T16:00:00Z", "since_exact": true, "tier": "t0", "rule": "irreversible"},
-          {"text": "Log into the console", "link": null, "since": "2026-10-30T14:00:00Z", "since_exact": true, "tier": "user-act", "rule": null},
+          {"text": "Log into the console", "link": null, "since": "2026-10-30T14:00:00Z", "since_exact": true, "tier": "user-act", "rule": null, "executor": "chao", "approval_rule_refs": []},
         ],
         "updated_at": "2026-10-30T16:30:00Z",
       }),
@@ -191,7 +191,7 @@ async fn a_queue_row_and_an_actions_only_you_can_do_row_show_their_age() {
         "now": "Running",
         "waiting": [
           {"text": "Delete the backup volume", "link": null, "since": "2026-10-30T17:00:00Z", "since_exact": true, "tier": "t0", "rule": "irreversible"},
-          {"text": "Log into the console", "link": null, "since": "2026-11-02T12:00:00Z", "since_exact": true, "tier": "user-act", "rule": null},
+          {"text": "Log into the console", "link": null, "since": "2026-11-02T12:00:00Z", "since_exact": true, "tier": "user-act", "rule": null, "executor": "chao", "approval_rule_refs": []},
         ],
         "updated_at": "2026-11-02T17:00:00Z",
       }),

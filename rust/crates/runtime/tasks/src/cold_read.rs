@@ -12,6 +12,7 @@ use anyhow::bail;
 use charliebot_agents::backend_pool;
 use charliebot_agents::cli_host::CliHost;
 use charliebot_agents::{backend_types, one_shot_text};
+use charliebot_core::approval_policy::ApprovalRuleRef;
 use charliebot_core::config::CallClass;
 use charliebot_core::text_repr::{self, JsonStyle};
 use charliebot_html::{EventKind, folds_at_open, parse_with};
@@ -361,6 +362,7 @@ pub fn ask_policy_section(home: &Path) -> anyhow::Result<String> {
 pub fn ask_probe_input(
   item: &Value,
   linked_page: Option<&str>,
+  session_rules: &[ApprovalRuleRef],
   policy_section: &str,
   questions: &str,
 ) -> anyhow::Result<String> {
@@ -370,6 +372,7 @@ pub fn ask_probe_input(
     pieces.push(source.to_string());
     pieces.push(format!("{VISIBLE_TEXT_HEADER}\n{}", visible_text(&source)?));
   }
+  pieces.push(format!("CURRENT SESSION RULES\n{}", serde_json::to_string(session_rules)?));
   pieces.push(policy_section.to_string());
   pieces.push(questions.to_string());
   Ok(pieces.join("\n\n"))
@@ -454,6 +457,26 @@ pub struct LightProbe {
 /// A backend that fails is recorded and the next member tried; a quota failure cools that member. Fails when the key is
 /// unset.
 pub async fn run_probe(host: &CliHost, prompt: &str, system_prompt: &str) -> anyhow::Result<LightProbe> {
+  run_probe_with_availability(host, prompt, system_prompt, AvailabilityRecording::Record).await
+}
+
+/// Run one probe without writing backend cooldown state (`run_probe_read_only`).
+pub async fn run_probe_read_only(host: &CliHost, prompt: &str, system_prompt: &str) -> anyhow::Result<LightProbe> {
+  run_probe_with_availability(host, prompt, system_prompt, AvailabilityRecording::Skip).await
+}
+
+#[derive(Clone, Copy)]
+enum AvailabilityRecording {
+  Record,
+  Skip,
+}
+
+async fn run_probe_with_availability(
+  host: &CliHost,
+  prompt: &str,
+  system_prompt: &str,
+  availability_recording: AvailabilityRecording,
+) -> anyhow::Result<LightProbe> {
   let target = host.cfg.backends.calls.get(CallClass::Probe);
   if target.is_none() {
     bail!("no probe backend resolvable: backends.calls.probe is unset");
@@ -475,7 +498,9 @@ pub async fn run_probe(host: &CliHost, prompt: &str, system_prompt: &str) -> any
       }
       Err(error) => {
         let message = format!("{error:#}");
-        if let Some(reason) = backend_pool::classify_member_failure(&message, None).availability_reason() {
+        if let Some(reason) = backend_pool::classify_member_failure(&message, None).availability_reason()
+          && matches!(availability_recording, AvailabilityRecording::Record)
+        {
           let availability = host.pool.availability();
           availability.record(&option.id, None, reason, &message)?;
         }
@@ -744,11 +769,11 @@ mod tests {
   #[test]
   fn ask_probe_input_carries_the_linked_pages_visible_text_block_and_the_policy_section() {
     let item = serde_json::json!({"text": "Choose."});
-    let input = ask_probe_input(&item, Some(FOLDED_PAGE), "policy section", "questions").unwrap();
+    let input = ask_probe_input(&item, Some(FOLDED_PAGE), &[], "policy section", "questions").unwrap();
     let (source, rest) = input.split_once(VISIBLE_TEXT_HEADER).expect("the ask probe carries the visible text block");
     assert!(source.contains("Folded body."), "{source}");
     assert!(!rest.contains("Folded body."), "{rest}");
-    let without_page = ask_probe_input(&item, None, "policy section", "questions").unwrap();
+    let without_page = ask_probe_input(&item, None, &[], "policy section", "questions").unwrap();
     assert!(!without_page.contains(VISIBLE_TEXT_HEADER), "{without_page}");
     // The policy section sits between the page and the questions.
     let (before_questions, questions) = without_page.split_once("\n\nquestions").expect("the questions come last");
@@ -802,7 +827,7 @@ enable_ask_tier_refusal: false
 
     let item = serde_json::json!({"text": "Choose."});
     let (_system_prompt, questions) = load_ask_texts(&repo).unwrap();
-    let before = ask_probe_input(&item, None, &ask_policy_section(home.path()).unwrap(), &questions).unwrap();
+    let before = ask_probe_input(&item, None, &[], &ask_policy_section(home.path()).unwrap(), &questions).unwrap();
     fs::write(
       &table,
       TABLE.replace(
@@ -811,7 +836,7 @@ enable_ask_tier_refusal: false
       ),
     )
     .unwrap();
-    let after = ask_probe_input(&item, None, &ask_policy_section(home.path()).unwrap(), &questions).unwrap();
+    let after = ask_probe_input(&item, None, &[], &ask_policy_section(home.path()).unwrap(), &questions).unwrap();
 
     assert!(before.contains("## Approval policy table"), "{before}");
     assert!(!before.contains("release-restart"), "{before}");
@@ -852,7 +877,7 @@ enable_ask_tier_refusal: false
   fn ask_probe_input_omits_an_inline_image_in_the_linked_page() {
     let page = page_with_inline_png(64 * 1024);
     let item = serde_json::json!({"text": "Choose."});
-    let input = ask_probe_input(&item, Some(&page), "policy section", "questions").unwrap();
+    let input = ask_probe_input(&item, Some(&page), &[], "policy section", "questions").unwrap();
     assert!(input.len() < 50 * 1024, "the ask probe input is {} bytes", input.len());
     assert!(input.contains("The monitor line chart"), "{input}");
     assert!(input.contains(INLINE_PNG_PLACEHOLDER), "{input}");

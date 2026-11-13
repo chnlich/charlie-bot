@@ -75,7 +75,9 @@ The session status lets the user resume at a glance. It has three fields:
 - **Now**: the latest state read back, what remains before the next milestone, and the job or trigger it waits on.
 - **Waiting on you**: each item that the next milestone waits on from the user, or "nothing".
 
-- The cold read gives each Waiting on you item one tier: t0, t1, t2, user-act or review.
+- The cold read gives each Waiting on you item one consequence tier: t0, t1, t2, user-act or review.
+- Classify the consequence tier and the person who must perform the step independently.
+- Store the person separately as executor: agent or chao.
 - A Waiting on you item asks the user for one of these:
   - the take off of a T0 step, or an explicit user approval that a rule requires;
   - an action or a fact that only the user has;

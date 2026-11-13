@@ -5,7 +5,7 @@
 //! `out-of-scope:<id>` rule ranks with the chao-name test. Then come the review
 //! items, then the items tiered t1 or t2 and the items without a tier. Equal ranks keep arrival order.
 //!
-//! Actions only you can do hold every open user-act item of the day, an item judged on an earlier day included,
+//! Actions only you can do hold every open Chao-executed item of the day, an item judged on an earlier day included,
 //! because the status panels count those items through this list. A past day's list holds the items whose start time
 //! falls in that day. A session scope limits the list to the session and its open descendants, the holders the
 //! status panel counts.
@@ -50,7 +50,7 @@ pub fn parse_date_param(text: &str) -> Result<Date, DayError> {
 /// The key of the day body's ranked queue: the open items, T0 first.
 pub const QUEUE: &str = "queue";
 
-/// The key of the day body's actions only you can do: the day's open user-act items.
+/// The key of the day body's actions only you can do: the day's open items whose executor is Chao.
 pub const ACTIONS_ONLY_YOU_CAN_DO: &str = "actions_only_you_can_do";
 
 /// The key of the day body's digest: the day's digest entries and change records.
@@ -65,7 +65,7 @@ pub struct DayView {
   pub body: Value,
 }
 
-/// The day view as the API answers it. A `None` date is today's Pacific day. A `None` session lists the user-act items
+/// The day view as the API answers it. A `None` date is today's Pacific day. A `None` session lists the Chao-executed items
 /// host-wide; a `Some` session limits them to that session and its open descendants. The table read
 /// is a server-side read, so a changed table records its change before the view lists it.
 pub async fn approval_day(
@@ -116,7 +116,10 @@ pub(crate) async fn approval_day_view_at(
 /// One open item's row, with the session that holds it and how long ago it started.
 fn row_json(row: &OpenWaitingRow, now: Timestamp) -> Value {
   let age_seconds = now.as_second() - row.since.into_inner().unix_timestamp();
-  let needs_recheck = !row.is_derived && (row.tier.is_none() || age_seconds > 14 * DAY);
+  let missing_approval_rule_ref =
+    row.rule.as_deref() == Some("rule-named") && row.approval_rule_refs.as_ref().is_none_or(Vec::is_empty);
+  let needs_recheck = !row.is_derived
+    && (row.tier.is_none() || row.executor.is_none() || missing_approval_rule_ref || age_seconds > 14 * DAY);
   let tier_label = match row.tier.as_deref() {
     Some("t0" | "t1" | "t2") => "decision",
     Some(approval_policy::TIER_USER_ACT) => "user-act",
@@ -131,6 +134,7 @@ fn row_json(row: &OpenWaitingRow, now: Timestamp) -> Value {
     "link": row.link,
     "tier": row.tier,
     "tier_label": tier_label,
+    "executor": row.executor,
     "needs_recheck": needs_recheck,
     "rule": row.rule,
     "since": row.since.to_str(),
@@ -211,7 +215,7 @@ fn session_holders(features: &FeatureContext, session_id: &str) -> Result<HashSe
   Ok(holders)
 }
 
-/// The actions only you can do of one day: today's list holds every open user-act item, whatever day judged it, and a
+/// The actions only you can do of one day: today's list holds every open Chao-executed item, whatever day judged it, and a
 /// past day's list holds the items whose start time falls in that day. Only the holders' items count when `holders`
 /// is `Some`.
 fn actions_only_you_can_do_rows(
@@ -223,7 +227,7 @@ fn actions_only_you_can_do_rows(
 ) -> Result<Vec<Value>, DayError> {
   let mut items = Vec::new();
   for row in rows {
-    if row.tier.as_deref() != Some(approval_policy::TIER_USER_ACT) {
+    if row.executor.as_deref() != Some(approval_policy::EXECUTOR_CHAO) {
       continue;
     }
     if holders.is_some_and(|holders| !holders.contains(&row.session_id)) {

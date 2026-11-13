@@ -30,7 +30,7 @@ pub use crate::spawner_prompt::reviewer_run_follows;
 pub use charliebot_registry::turn::{PromptSource, RuleSegment};
 pub use coherent::{
   CoherentSnapshot, assemble_coherent_snapshot, assemble_coherent_snapshot_for_launch, capture_prompt_chain,
-  capture_session_goals, resolve_launch_overlay,
+  capture_session_goals, current_session_approval_rule_refs, resolve_launch_overlay,
 };
 pub use render::{
   binding_intro, render_session_info, render_task_body, render_worktree_bindings, render_worktree_persistence,

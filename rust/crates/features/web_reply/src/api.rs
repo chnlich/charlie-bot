@@ -206,6 +206,18 @@ pub async fn get_status(
   answer(status::read_status(&features, &session_id).await)
 }
 
+/// `GET /api/internal/web/approval-rules?session_id=`: the exact rules in the session's next manager prompt.
+pub async fn get_approval_rules(
+  State(features): State<Arc<FeatureContext>>,
+  Query(query): Query<HashMap<String, String>>,
+) -> Response {
+  let session_id = match session_id_param(&query) {
+    Ok(session_id) => session_id,
+    Err(error) => return validation::response(&[*error]),
+  };
+  answer(status::current_approval_rules(&features, &session_id).await)
+}
+
 /// The For-you layer's answer: `{session_id, entries}`, after the session check every web route makes.
 async fn dialog(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
   reply::require_web_session(features, session_id).await?;

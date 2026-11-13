@@ -77,10 +77,10 @@
 <body>
 {% set defer_concurrency_badge_poll = true %}
 {% include 'partials/concurrency_badge.html' %}
-{# Today's actions only you can do carry every open user-act item, so today's queue leaves those rows to them. A past
-   day's queue keeps them, as every other day's view does. #}
+{# Today's actions only you can do carry every item whose executor is Chao, so today's queue leaves those rows to
+   them. A past day's queue keeps them, as every other day's view does. #}
 {% if ctx.is_today %}
-{% set queue_rows = ctx.queue | rejectattr('tier', 'eq', 'user-act') | list %}
+{% set queue_rows = ctx.queue | rejectattr('executor', 'eq', 'chao') | list %}
 {% else %}
 {% set queue_rows = ctx.queue %}
 {% endif %}
@@ -108,7 +108,13 @@
   {% for item in ctx.actions_only_you_can_do %}
   <li>
     <div class="row1">
-      <span class="tag tier">user-act</span>
+      {% if item.tier == 't0' %}
+      <span class="tag t0 decision">T0{% if item.rule %} &middot; {{ item.rule }}{% endif %}</span>
+      {% elif item.tier %}
+      <span class="tag tier">{{ item.tier }}</span>
+      {% else %}
+      <span class="tag tier">untiered</span>
+      {% endif %}
       {% if item.needs_recheck %}<span class="tag tier needs-recheck">Needs re-read</span>{% endif %}
       <span class="age">{{ item.age }}</span>
       <span class="text">{{ item.text }}</span>

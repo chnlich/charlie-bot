@@ -5,6 +5,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use charliebot_core::approval_policy::ApprovalRuleRef;
 use charliebot_core::home::PROMPT_BODIES_DIR_NAME;
 use charliebot_core::run_kind::RunKind;
 use charliebot_core::text_repr::str_repr;
@@ -119,7 +120,7 @@ pub fn build_segments(
 /// The Goal block that ends a manager or worker prompt. A session with a parent carries the parent's line first; a
 /// manager then carries its own line. A line reads `not set` for a side with no status Goal. A worker has no own line,
 /// and a root session has no parent line.
-fn goal_segment(kind: &str, meta: &SessionMetadata, inputs: &RuleInputs<'_>) -> Option<RuleSegment> {
+pub(super) fn goal_segment(kind: &str, meta: &SessionMetadata, inputs: &RuleInputs<'_>) -> Option<RuleSegment> {
   let mut lines = Vec::new();
   let mut sources = Vec::new();
   // The chain runs from the root down to this session, so the link before the last one is the nearest parent.
@@ -211,6 +212,22 @@ fn sections_text(repo: &Path, filename: &str, section_ids: &[&str]) -> anyhow::R
 /// The manager contract at any depth: the shared base, the shared manager rules, the workflow rules file a contribution
 /// names (default `manager_workflows.md`), the manager template, and the host supplement.
 fn manager_rule_segments(env: &PromptEnv<'_>, meta: &SessionMetadata) -> anyhow::Result<Vec<RuleSegment>> {
+  let (mut segments, host) = manager_session_rule_segments(env, meta)?;
+  let approval = charliebot_core::approval_policy::load_and_record(&env.cfg.charliebot_home)?;
+  segments.push(segment(
+    charliebot_core::approval_policy::prompt_section(&approval.table),
+    vec![base_source(charliebot_core::approval_policy::TABLE_RELATIVE_PATH)],
+  ));
+  segments.extend(host);
+  Ok(segments)
+}
+
+/// The manager's session rules before local rules and its Goal: common instructions, workflow, host supplement and
+/// manager contract. The approval table and turn contributions have separate owners.
+pub(super) fn manager_session_rule_segments(
+  env: &PromptEnv<'_>,
+  meta: &SessionMetadata,
+) -> anyhow::Result<(Vec<RuleSegment>, Vec<RuleSegment>)> {
   let repo = env.checkout.path();
   let base = sections_text(repo, "task_base.md", &COMMON_SECTIONS)?;
   let shared =
@@ -220,23 +237,50 @@ fn manager_rule_segments(env: &PromptEnv<'_>, meta: &SessionMetadata) -> anyhow:
     .replace("{{session_id}}", &meta.id);
   let contract = sections_text(repo, "task_manager.md", &["manager_role", "manager_boundaries"])?
     .replace("{{agent_message_limit}}", &MAX_AGENT_MESSAGE_WEIGHTED_CHARS.to_string());
-  // The approval policy table is host configuration read fresh each assembly, so an edit reaches the next prompt.
-  let approval = charliebot_core::approval_policy::load_and_record(&env.cfg.charliebot_home)?;
-  let mut segments = vec![
+  let prefix = vec![
     segment(base, vec![base_source("prompts/task_base.md")]),
     segment(shared, vec![base_source("prompts/master.md")]),
     segment(workflows, vec![base_source(&format!("prompts/{workflows_file}"))]),
     segment(contract, vec![base_source("prompts/task_manager.md")]),
-    segment(
-      charliebot_core::approval_policy::prompt_section(&approval.table),
-      vec![base_source(charliebot_core::approval_policy::TABLE_RELATIVE_PATH)],
-    ),
   ];
-  if let Some(host) = host_supplement(env, meta)? {
+  let host = if let Some(host) = host_supplement(env, meta)? {
     let path = host_supplement_path(env);
-    segments.push(segment(host, vec![base_source(&path.display().to_string())]));
+    vec![segment(host, vec![base_source(&path.display().to_string())])]
+  } else {
+    Vec::new()
+  };
+  Ok((prefix, host))
+}
+
+/// The exact text excerpts a manager run receives, with the session and source that own each excerpt.
+pub(super) fn approval_rule_refs(session_id: &str, segments: &[RuleSegment]) -> Vec<ApprovalRuleRef> {
+  let mut references = Vec::new();
+  for segment in segments {
+    if segment.sources.iter().all(|source| source.scope == SCOPE_GOAL) {
+      for (line, source) in segment.text.lines().zip(&segment.sources) {
+        references.push(ApprovalRuleRef {
+          session_id: session_id.to_string(),
+          scope: source.scope.clone(),
+          source_ref: source.source_ref.clone(),
+          source_session_id: source.source_session_id.clone(),
+          text: line.to_string(),
+        });
+      }
+      continue;
+    }
+    for text in segment.text.split("\n\n").filter(|text| !text.trim().is_empty()) {
+      for source in &segment.sources {
+        references.push(ApprovalRuleRef {
+          session_id: session_id.to_string(),
+          scope: source.scope.clone(),
+          source_ref: source.source_ref.clone(),
+          source_session_id: source.source_session_id.clone(),
+          text: text.to_string(),
+        });
+      }
+    }
   }
-  Ok(segments)
+  references
 }
 
 /// The worker contract: the review rules, the verify contract, or the role and the task's workflow.
@@ -288,7 +332,7 @@ fn overlay_rule_segments(repo: &Path, overlay: Option<&str>) -> (Vec<RuleSegment
 }
 
 /// The subtree rules from the root down to this node, then this node's own node rule. A null ref contributes nothing.
-fn local_rule_segments(
+pub(super) fn local_rule_segments(
   bodies_dir: &Path,
   chain: &[ChainLink],
   node_ref: Option<&str>,

@@ -7,12 +7,15 @@
 
 use anyhow::{Context, anyhow};
 use charliebot_core::RepoRoot;
+use charliebot_core::approval_policy::ApprovalRuleRef;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::home::PROMPT_BODIES_DIR_NAME;
 use charliebot_registry::Registry;
 use charliebot_store::metadata::SessionMetadata;
 use charliebot_store::{ControlGuard, Store};
 use std::sync::Arc;
 
+use super::sources::{approval_rule_refs, manager_session_rule_segments};
 use super::{
   COHERENCE_PASSES, ChainLink, OverlayError, PromptEnv, PromptSnapshot, RuleInputs, SessionGoals, TaskPromptError,
   assemble_snapshot, build_segments,
@@ -146,6 +149,51 @@ pub async fn assemble_coherent_snapshot(
     ))
     .into(),
   )
+}
+
+/// The exact rules a manager session would receive at its next start, without chat history or host-state writes.
+pub async fn current_session_approval_rule_refs(
+  store: &Store,
+  env: &PromptEnv<'_>,
+  meta: &SessionMetadata,
+) -> anyhow::Result<Vec<ApprovalRuleRef>> {
+  for _ in 0..COHERENCE_PASSES {
+    let (view, fresh) = capture_under_control_lock(store, env.registry, &meta.id).await?;
+    let inputs = view_inputs(&view, None);
+    let candidate = approval_rule_segments(env, &fresh, &inputs)?;
+    let rebuilt = approval_rule_segments(env, &fresh, &inputs)?;
+    if candidate != rebuilt {
+      continue;
+    }
+    let (view_again, _) = capture_under_control_lock(store, env.registry, &meta.id).await?;
+    if view_again != view {
+      continue;
+    }
+    return Ok(approval_rule_refs(&fresh.id, &candidate));
+  }
+  Err(
+    TaskPromptError::new(format!(
+      "approval rule sources for task {} did not settle across {COHERENCE_PASSES} coherent-view attempts",
+      meta.id
+    ))
+    .into(),
+  )
+}
+
+/// The manager's current session rules, built from the same source readers as its next prompt.
+fn approval_rule_segments(
+  env: &PromptEnv<'_>,
+  meta: &SessionMetadata,
+  inputs: &RuleInputs<'_>,
+) -> anyhow::Result<Vec<super::RuleSegment>> {
+  let (mut segments, host) = manager_session_rule_segments(env, meta)?;
+  segments.extend(host);
+  let bodies_dir = env.cfg.charliebot_home.join(PROMPT_BODIES_DIR_NAME);
+  segments.extend(super::sources::local_rule_segments(&bodies_dir, inputs.chain, inputs.node_ref, &meta.id)?);
+  if let Some(goal) = super::sources::goal_segment(super::MANAGER_KINDS[0], meta, inputs) {
+    segments.push(goal);
+  }
+  Ok(segments)
 }
 
 /// The launch path's coherent snapshot, offloading each blocking source read to a blocking thread.

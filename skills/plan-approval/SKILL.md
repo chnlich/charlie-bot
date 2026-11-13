@@ -220,10 +220,10 @@ The gate judges the chain alone; its definitions live in rust/crates/runtime/sto
 - A T2 step is every other step: a design choice on the recommendation, a reading below the reading threshold,
   and a reversible step that reaches other people under no policy.
   It proceeds, and the agent records it with `charliebot digest add --policy t2 --step <text> --undo <text>`.
-- A user-act step is a step the user must perform personally: a browser login, an approval in another system, or supplying information only the user holds. A decision is the user's choice among options; classify the step it authorizes.
-  List each user-act step as one Waiting on you item. The approval page gathers these items into the day's actions only you can do.
-- A rule that names the user's explicit approval for a step stays in force; such a step is T0 under the
-  rule-named test.
+- The user-act tier is for a step the user must perform personally: a browser login, an approval in another system, or supplying information only the user holds. A decision is the user's choice among options; classify the step it authorizes.
+- Use executor=chao only when Chao must personally perform an action or provide a fact.
+  List each user-act step as one Waiting on you item. The approval page gathers items with executor=chao into the day's actions only you can do.
+- When an applicable current session rule requires Chao's explicit approval, classify the authorized step as t0 under rule-named and cite that rule.
 - Hold work that builds on a waiting understanding page, T1 and T2 work included.
   The approver's reading check then comes before the build.
 - When reality forces a change that leaves the approval object intact, make it,

@@ -55,7 +55,8 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - Keep **Now** under 200 characters.
 - Each set replaces the whole **Now** text. Write only the open state of the next milestone into it.
 - Write your messages without the status block. The Status view is the one home of the session status.
-- Group the steps that one reply settles into one Waiting on you item. Write a decision as the step it authorizes. Use user-act only for a step the user must perform personally.
+- Group the steps that one reply settles into one Waiting on you item. Write a decision as the step it authorizes.
+- Use executor=chao only when Chao must personally perform an action or provide a fact.
 - The T0 steps that one take off settles form one Waiting on you item.
 - When a plan trade-off is T2, take its recommendation and leave it out of Waiting on you.
 - Name that default and the reply that changes it in the web reply.

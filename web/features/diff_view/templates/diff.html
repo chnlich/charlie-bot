@@ -25,6 +25,12 @@
        4.55:1, above the floor and the tone the file row's expand mark keeps. The :not(:focus) keeps
        the blue focus border the field's focus utility paints. */
     #diff-form input:not(:focus), #diff-form select:not(:focus) { border-color: #64748b; }
+    /* The Compare button's white 14 px label draws 5.17:1 on its blue-600 fill and 3.68:1 under the
+       blue-500 hover, under the 4.5:1 floor for text that size. The blue-700 hover carries the label at
+       6.70:1 and stays darker than the resting fill, so the pointer still reads the state change. The
+       utility classes stay as the tokens the sheet is built from; the id selector outranks them and
+       decides the hover. */
+    #diff-form button[type="submit"]:hover { background-color: #1d4ed8; }
     /* diff2html draws a header above every file's diff: the file's name, its ADDED/MODIFIED tag and
        a Viewed box that collapses that file. The row above the panel already shows the name and the
        status, and its toggle collapses the panel and drops the rendered diff. So the library header

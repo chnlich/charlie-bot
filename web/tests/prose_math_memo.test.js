@@ -171,7 +171,7 @@ test('another math body while the renderer travels asks for nothing new', async 
   assert.equal(w.walks, 2, 'both waiting bodies walked');
 });
 
-test('a failed renderer download lets the next math body retry it', async () => {
+test('a failed renderer download keeps the waiting bodies for the retry', async () => {
   const c = loadRenderer();
   const errors = [];
   c.console = {error: (...args) => errors.push(args.join(' '))};
@@ -184,14 +184,19 @@ test('a failed renderer download lets the next math body retry it', async () => 
       fail = reject;
     });
   });
-  c.renderChatMath(el(c, 'math $a$ end'));
+  const waited = el(c, 'math $a$ end');
+  c.renderChatMath(waited);
   fail(new Error('the page script did not load: katex'));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(errors.length, 1, 'the failure is logged, not swallowed');
+  assert.doesNotMatch(waited.innerHTML, /katex-walked/, 'the body kept its source');
+
   c.renderChatMath(el(c, 'math $b$ end'));
   assert.equal(attempts, 2, 'the next math body retried the download');
-  stubWalk(c);
+  const w = stubWalk(c);
   await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(w.walks, 2, 'the retry walked the body that waited through the failure too');
+  assert.match(waited.innerHTML, /katex-walked/);
 });
 
 test('the LRU cap evicts the least recently walked body', () => {

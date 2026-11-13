@@ -947,14 +947,15 @@ let chatMathLoaders = null;
 // body re-rendered while it waited keeps one entry and walks its newest paint once.
 const chatMathPending = new Set();
 
-// The page's loaders for the two files. A queue that filled before the registration walks as soon as it lands.
+// The page's loaders for a feature's stylesheet and scripts. A queue that filled before the registration walks as
+// soon as it lands.
 function registerChatMathLoader(loadStyles, loadScripts) {
   chatMathLoaders = {loadStyles, loadScripts};
   if (chatMathPending.size) startChatMathDownload();
 }
 
-// One download for every waiting body. A failure drops the entry and the queue — the body keeps its source on screen —
-// so the next math message retries it.
+// One download for every waiting body. A failure drops the entry so the next math message retries it, and keeps the
+// queue: those bodies are still on screen with their source, and the retry walks them.
 function startChatMathDownload() {
   if (chatMathLoad !== null || chatMathLoaders === null || chatMathPending.size === 0) return chatMathLoad;
   chatMathLoad = Promise.all([
@@ -962,7 +963,6 @@ function startChatMathDownload() {
     chatMathLoaders.loadScripts('chat-math', CHAT_MATH_FILES.scripts),
   ]).then(walkChatMathQueue, (error) => {
     chatMathLoad = null;
-    chatMathPending.clear();
     console.error('the math renderer did not load: ' + error.message);
   });
   return chatMathLoad;

@@ -37,8 +37,8 @@ fn create_repo(path: &Path) -> PathBuf {
   git(path, &["config", "user.name", "Disk Sweep Test"]);
   git(path, &["config", "user.email", "disk-sweep@example.test"]);
   // Git detaches a `git maintenance run --auto` after every commit. Its writes into `.git` land after a test has
-  // aged the fixture, so the sweep would see a fresh tree and skip the entry, or a walked `.git` entry could vanish
-  // mid-walk. The fixture must stay quiet while a test asserts on its age.
+  // aged the fixture, so the sweep would see a fresh tree and skip the entry. A walked `.git` entry could also
+  // vanish mid-walk. The fixture must stay quiet while a test asserts on its age.
   git(path, &["config", "maintenance.auto", "false"]);
   git(path, &["config", "gc.auto", "0"]);
   fs::write(path.join("tracked.txt"), b"original\n").unwrap();
@@ -113,7 +113,7 @@ fn row_by_path<'a>(report: &'a super::SweepReport, path: &Path) -> &'a super::Sw
   let row = report.rows.iter().find(|row| row.path == path);
   if row.is_none() {
     // A missing row for a scratch candidate means the sweep found it younger than the cutoff and skipped it without
-    // a row; name the newest entry so a failure points at whatever kept the tree fresh.
+    // a row. Name the newest entry so a failure points at whatever kept the tree fresh.
     let detail = if path.exists() {
       let (newest, freshest) = newest_entry(path);
       format!("its newest entry is {} at {newest:.3}", freshest.display())
@@ -638,7 +638,7 @@ async fn test_scratch_age_and_nested_repository_safety() {
   set_tree_mtime(&detached, old_time);
 
   // The sweep skips a candidate whose newest entry is younger than the cutoff, so the fixture must be quiet while
-  // the sweep reads it; a writer inside a tree would make that entry look fresh.
+  // the sweep reads it. A writer inside a tree would make that entry look fresh.
   for path in [&old_clean, &dirty, &unpushed, &detached] {
     assert_scratch_aged(path, now);
   }

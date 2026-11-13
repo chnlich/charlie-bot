@@ -59,7 +59,7 @@ fn git_output(path: &Path, arguments: &[&str], input: Option<Vec<u8>>) -> Result
 
 fn run_git(path: &Path, arguments: &[&str], input: Option<Vec<u8>>) -> Result<Output> {
   // The sweep handlers already run on the blocking pool of the server runtime, so the async `git` subprocess rides
-  // that runtime; the `block_on` call owns the pipe pump and the deadline.
+  // that runtime. The `block_on` call owns the pipe pump and the deadline.
   tokio::runtime::Handle::current().block_on(async {
     let mut command = tokio::process::Command::new("git");
     command
@@ -217,7 +217,7 @@ mod tests {
   }
 
   /// Every leaf of the nested repository is ignored by the outer one, so `check-ignore` answers 10,000 paths on its
-  /// stdout while it still reads them on stdin: both pipes fill, and the answers must be drained as the paths go in.
+  /// stdout while it still reads them on stdin. Both pipes fill, and the answers must be drained as the paths go in.
   #[tokio::test]
   #[ignore = "integration"]
   async fn check_ignore_answers_a_large_ignored_nested_repository_without_blocking() {

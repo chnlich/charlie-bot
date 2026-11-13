@@ -83,9 +83,9 @@ pub fn gzip_memoized_body(data: &[u8]) -> Vec<u8> {
 
 /// The zstd level of a body a memo serves on every repeat request.
 ///
-/// The memo keeps the output, so the one-time compression buys the smaller bytes for every repeat request. Level 19 is
-/// the slowest level: on the 7,160-session mock home the chat page body falls from 99,974 bytes (gzip level 9) to
-/// 86,817 (13.2%) for about 120 ms of a version's first request.
+/// The memo keeps the output, so the one-time compression buys the smaller bytes for every repeat request. Level 19
+/// trades a slower one-time compression for a smaller body: on the 7,160-session mock home the chat page body falls
+/// from 99,974 bytes (gzip level 9) to 86,817 (13.2%) for about 120 ms of a version's first request.
 pub const ZSTD_MEMOIZED_LEVEL: i32 = 19;
 
 /// The level-19 zstd form of a body a memo serves on every repeat request.

@@ -26,7 +26,6 @@ use percent_encoding::percent_decode_str;
 use serde_json::{Map, Value, json};
 
 use super::family::Family;
-use charliebot_compat::headers::header_text;
 
 use crate::gzip;
 use crate::state::AppState;
@@ -119,32 +118,14 @@ impl PageEncoding {
   /// The encoding a request's `Accept-Encoding` prefers among the forms a page body keeps.
   ///
   /// A form with a higher weight wins, and equal weights take the smaller form. A form the request does not name, or
-  /// names with `q=0`, is not acceptable.
+  /// names with `q=0`, is not acceptable. The transport reads the same weights through [`gzip::accepted_weight`], so a
+  /// client that forbids gzip takes the identity body from both.
   fn for_request(headers: &HeaderMap) -> PageEncoding {
-    let accept = header_text(headers, &header::ACCEPT_ENCODING);
-    let mut zstd = 0.0f32;
-    let mut gzip = 0.0f32;
-    for form in accept.split(',') {
-      let mut parameters = form.split(';');
-      let name = parameters.next().unwrap_or_default().trim().to_ascii_lowercase();
-      let mut weight = 1.0f32;
-      for parameter in parameters {
-        if let Some(value) = parameter.trim().strip_prefix("q=") {
-          weight = value.parse().unwrap_or(0.0);
-        }
-      }
-      match name.as_str() {
-        "zstd" => zstd = weight,
-        "gzip" => gzip = weight,
-        _ => {}
-      }
-    }
-    if zstd > 0.0 && zstd >= gzip {
-      PageEncoding::Zstd
-    } else if gzip > 0.0 {
-      PageEncoding::Gzip
-    } else {
-      PageEncoding::Identity
+    match (gzip::accepted_weight(headers, "zstd"), gzip::accepted_weight(headers, "gzip")) {
+      (Some(zstd), Some(gzip)) if zstd >= gzip => PageEncoding::Zstd,
+      (_, Some(_)) => PageEncoding::Gzip,
+      (Some(_), None) => PageEncoding::Zstd,
+      (None, None) => PageEncoding::Identity,
     }
   }
 
@@ -908,6 +889,19 @@ mod tests {
     assert_eq!(PageEncoding::for_request(&headers("zstd;q=0.5, gzip;q=1")), PageEncoding::Gzip);
     assert_eq!(PageEncoding::for_request(&headers("gzip;q=0, zstd")), PageEncoding::Zstd);
     assert_eq!(PageEncoding::for_request(&headers("gzip;q=0")), PageEncoding::Identity);
+  }
+
+  #[test]
+  fn a_client_that_forbids_gzip_takes_the_identity_page_from_both_layers() {
+    let headers = |value: &'static str| {
+      let mut headers = HeaderMap::new();
+      headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static(value));
+      headers
+    };
+    assert_eq!(PageEncoding::for_request(&headers("gzip;q=0")), PageEncoding::Identity);
+    assert_eq!(gzip::Responder::for_request(&headers("gzip;q=0")), gzip::Responder::Identity);
+    assert_eq!(PageEncoding::for_request(&headers("gzip")), PageEncoding::Gzip);
+    assert_eq!(gzip::Responder::for_request(&headers("gzip")), gzip::Responder::Gzip);
   }
 
   #[tokio::test]

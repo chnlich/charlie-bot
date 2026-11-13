@@ -20,6 +20,24 @@ The codebase has a single user. Apply these principles:
   ownership, consolidate it.
 - **One general mechanism**: serve every backend, tool and field through one general mechanism. A new case then reuses
   that path, so the code keeps one path to test and maintain.
+- **Minimal schema**: a schema is the structure that a design stores or transmits: its records, fields, states,
+  config keys, command flags and API fields. When a design has two or more workable schemas for what it adds or
+  changes, recommend the smallest schema that serves most of the user's stated needs. Schema that the design keeps
+  unchanged, and the stored records that it must still read, stay outside the comparison. A stated need that an
+  existing path in the product already serves counts as served. Compare schemas by schema alone: code size, page
+  length, usage counts, and whether a product is in use on this host stay outside the comparison. Name each stated
+  feature that the recommended schema drops, together with the schema that would add it back:
+  - a plan names them in its Schema section;
+  - a page names them beside its recommendation;
+  - a delivery report names them for each choice that the agent made without asking the user.
+  When the user names a dropped feature in a reply, add that feature back with its schema.
+  Three cases follow their own rule:
+  - a schema that offers the same options as an established external interface that its users already know, one
+    field or flag for each option, counts as the minimal form of that interface, also when the design's own format
+    carries it;
+  - a safety check at a trust boundary stays in the design, and the comparison picks its smallest workable form; an
+    explicit confirmation before an agent acts on a task outside its own scope is such a check;
+  - mechanism complexity, such as fallbacks, retries and multi-layer checks, stays outside this rule.
 - **Repo environment**: use the environment that the repo defines. When a toolchain is missing, escalate it and name
   the defect in the manifest.
 - **Recipes are executable**: submit, deploy, and recovery flows go through the repo's entry

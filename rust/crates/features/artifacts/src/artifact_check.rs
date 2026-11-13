@@ -19,6 +19,7 @@ use crate::headless_render;
 
 const STYLE_VERBATIM: &str = "style-verbatim";
 const SECTIONS_NUMBERED: &str = "sections-numbered";
+const SCHEMA_DROPPED: &str = "schema-dropped";
 const FOOT_PRESENT: &str = "foot-present";
 const EXPLAIN_TRIAD: &str = "explain-triad";
 const EXPLAIN_FIGURES: &str = "explain-figures";
@@ -140,6 +141,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       BYTE_INTEGRITY,
       STYLE_VERBATIM,
       SECTIONS_NUMBERED,
+      SCHEMA_DROPPED,
       FOOT_PRESENT,
       FORK_OPEN_SHAPE,
       FORK_OPTIONS,
@@ -402,6 +404,7 @@ fn run_assertions_sync_with_user_text(
       BYTE_INTEGRITY => check_byte_integrity,
       STYLE_VERBATIM => check_style_verbatim,
       SECTIONS_NUMBERED => check_sections_numbered,
+      SCHEMA_DROPPED => check_schema_dropped,
       FOOT_PRESENT => check_foot_present,
       EXPLAIN_TRIAD => check_explain_triad,
       EXPLAIN_FIGURES => check_explain_figures,
@@ -644,6 +647,70 @@ fn check_sections_numbered(context: &Context<'_>) -> anyhow::Result<Vec<Assertio
     )]);
   }
   Ok(vec![outcome(SECTIONS_NUMBERED, true, "")])
+}
+
+fn check_schema_dropped(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
+  let headings = find(&context.nodes, 0, "h3", &[])
+    .into_iter()
+    .filter(|&heading| {
+      find(&context.nodes, heading, "span", &["sn"])
+        .into_iter()
+        .any(|number| str_methods::collapse_whitespace(&element_text(&context.nodes, number)) == "4.1")
+    })
+    .collect::<Vec<_>>();
+  let heading = match headings.as_slice() {
+    [] => return Ok(vec![outcome(SCHEMA_DROPPED, false, "missing 4.1 Schema heading")]),
+    [heading] => *heading,
+    _ => return Ok(vec![outcome(SCHEMA_DROPPED, false, "more than one 4.1 Schema heading")]),
+  };
+
+  let mut ancestor = context.nodes[heading].parent;
+  let section = loop {
+    let Some(index) = ancestor else {
+      break None;
+    };
+    if context.nodes[index].tag == "section" {
+      break Some(index);
+    }
+    ancestor = context.nodes[index].parent;
+  };
+  let Some(section) = section else {
+    return Ok(vec![outcome(SCHEMA_DROPPED, false, "missing containing section for 4.1 Schema heading")]);
+  };
+
+  let section_nodes = descendants(&context.nodes, section);
+  let heading_position = section_nodes
+    .iter()
+    .position(|&element| element == heading)
+    .expect("the 4.1 Schema heading is inside its containing section");
+  let schema_nodes =
+    section_nodes.iter().skip(heading_position + 1).take_while(|&&element| context.nodes[element].tag != "h3").copied();
+  let dropped = schema_nodes
+    .filter(|&element| context.nodes[element].tag == "p" && context.nodes[element].classes.contains("dropped"))
+    .collect::<Vec<_>>();
+
+  match dropped.as_slice() {
+    [] => Ok(vec![outcome(SCHEMA_DROPPED, false, "missing p.dropped in 4.1 Schema")]),
+    [dropped] => {
+      let mut ancestor = context.nodes[*dropped].parent;
+      while let Some(index) = ancestor {
+        if context.nodes[index].tag == "details" {
+          return Ok(vec![outcome(SCHEMA_DROPPED, false, "p.dropped is inside a fold")]);
+        }
+        ancestor = context.nodes[index].parent;
+      }
+      if element_text(&context.nodes, *dropped).trim().is_empty() {
+        Ok(vec![outcome(SCHEMA_DROPPED, false, "p.dropped is empty")])
+      } else {
+        Ok(vec![outcome(SCHEMA_DROPPED, true, "")])
+      }
+    }
+    _ => Ok(vec![outcome(
+      SCHEMA_DROPPED,
+      false,
+      format!("more than one p.dropped in 4.1 Schema (found {})", dropped.len()),
+    )]),
+  }
 }
 
 fn check_foot_present(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
@@ -1659,6 +1726,59 @@ mod tests {
     outcomes.iter().filter(|outcome| outcome.name == name).collect()
   }
 
+  fn schema_dropped_outcome(source: &str) -> AssertionOutcome {
+    let nodes = parse_dom(source).unwrap();
+    let context = Context { genre: "plan", artifact: Path::new(""), chrome_bin: "", repo_root: Path::new(""), nodes };
+    check_schema_dropped(&context).unwrap().into_iter().next().unwrap()
+  }
+
+  fn schema_dropped_page(content: &str) -> String {
+    format!(
+      "<section><h3><span class=\"sn\">4.1</span> Schema</h3>{content}\
+       <h3><span class=\"sn\">4.2</span> Design Details</h3><p class=\"dropped\">Outside 4.1.</p></section>"
+    )
+  }
+
+  fn assert_schema_dropped_failure(source: &str, detail: &str) {
+    let result = schema_dropped_outcome(source);
+    assert_eq!(result.name, SCHEMA_DROPPED);
+    assert!(!result.passed);
+    assert_eq!(result.detail, detail);
+  }
+
+  #[test]
+  fn schema_dropped_fails_when_missing() {
+    assert_schema_dropped_failure(&schema_dropped_page("<p>Schema body.</p>"), "missing p.dropped in 4.1 Schema");
+  }
+
+  #[test]
+  fn schema_dropped_fails_when_more_than_one() {
+    assert_schema_dropped_failure(
+      &schema_dropped_page("<p class=\"dropped\">First.</p><p class=\"dropped\">Second.</p>"),
+      "more than one p.dropped in 4.1 Schema (found 2)",
+    );
+  }
+
+  #[test]
+  fn schema_dropped_fails_when_inside_a_fold() {
+    assert_schema_dropped_failure(
+      &schema_dropped_page("<details><p class=\"dropped\">Dropped features: none.</p></details>"),
+      "p.dropped is inside a fold",
+    );
+  }
+
+  #[test]
+  fn schema_dropped_fails_when_empty() {
+    assert_schema_dropped_failure(&schema_dropped_page("<p class=\"dropped\">  </p>"), "p.dropped is empty");
+  }
+
+  #[test]
+  fn schema_dropped_accepts_one_nonempty_line_before_the_next_subheading() {
+    let result = schema_dropped_outcome(&schema_dropped_page("<p class=\"dropped\">Dropped features: none.</p>"));
+    assert_eq!(result.name, SCHEMA_DROPPED);
+    assert!(result.passed, "{result:#?}");
+  }
+
   fn stub_chrome(directory: &Path, height: i32) -> PathBuf {
     chrome_program(
       directory,
@@ -1719,11 +1839,10 @@ mod tests {
       };
       let chrome_text = chrome.to_string_lossy().into_owned();
       let outcomes = run_assertions_sync("plan", &page, &chrome_text, &repo_root()).unwrap();
-      // The fixture predates the fork assertions, so those outcomes have no recorded counterpart to compare
-      // with.
+      // The fixture predates the fork and schema-dropped assertions, so those outcomes have no recorded counterpart.
       let actual = outcomes
         .iter()
-        .filter(|outcome| outcome.name != FORK_OPTIONS && outcome.name != FORK_DEMOS)
+        .filter(|outcome| outcome.name != FORK_OPTIONS && outcome.name != FORK_DEMOS && outcome.name != SCHEMA_DROPPED)
         .map(outcome_value)
         .collect::<Vec<_>>();
       let mut expected: Vec<Value> = serde_json::from_value(case["outcomes"].clone()).unwrap();
@@ -1776,7 +1895,7 @@ mod tests {
     let chrome = stub_chrome(directory.path(), 800);
     let page = repo_root().join("prompts/plan_template.html");
     let outcomes = run_plan(&page, chrome.to_str().unwrap());
-    assert_eq!(outcomes.len(), 14);
+    assert_eq!(outcomes.len(), 15);
     assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
   }
 

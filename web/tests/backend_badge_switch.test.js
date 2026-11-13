@@ -39,7 +39,7 @@ function makeDocument(elements) {
   return { getElementById: (id) => elements.get(id) || null };
 }
 
-function loadSessionContext({elements, BACKEND_OPTIONS, BACKEND_POOLS, ACTIVE_POOL_MEMBER, SESSION_ID, fetchImpl}) {
+function loadSessionContext({elements, BACKEND_OPTIONS, BACKEND_POOLS, ACTIVE_POOL_MEMBER, ACTIVE_NATIVE_MODEL, SESSION_ID, fetchImpl}) {
   const context = {
     document: makeDocument(elements),
     console: { error: () => {}, log: () => {} },
@@ -47,6 +47,7 @@ function loadSessionContext({elements, BACKEND_OPTIONS, BACKEND_POOLS, ACTIVE_PO
     BACKEND_OPTIONS: BACKEND_OPTIONS || {},
     BACKEND_POOLS,
     ACTIVE_POOL_MEMBER,
+    ACTIVE_NATIVE_MODEL,
     SESSION_ID: SESSION_ID || 'session-a',
     // config.js's shared literal pair; this harness skips config.js.
     JSON_HEADERS: {'Content-Type': 'application/json'},
@@ -176,6 +177,22 @@ test('an Auto session badge shows the label and the current member', () => {
   context.setActiveBackendId('auto');
   context.updateActiveBackendBadges();
   assert.equal(elements.get('backend-badge').textContent, 'Auto → Opus 5');
+});
+
+test('an Auto session badge names the recorded model after its member', () => {
+  const elements = headerFixtures();
+  const context = loadSessionContext({
+    elements,
+    SESSION_ID: 'session-a',
+    BACKEND_OPTIONS: { 'claude-opus-5': 'Opus 5', 'claude-fable-5': 'Fable 5' },
+    BACKEND_POOLS: [{ id: 'auto', label: 'Auto' }],
+    ACTIVE_POOL_MEMBER: 'claude-opus-5',
+    ACTIVE_NATIVE_MODEL: 'claude-opus-5-5',
+  });
+  context.setSwitchableBackends(['auto']);
+  context.setActiveBackendId('auto');
+  context.updateActiveBackendBadges();
+  assert.equal(elements.get('backend-badge').textContent, 'Auto → Opus 5 · claude-opus-5-5');
 });
 
 test('an Auto session without a recorded member shows the Auto label alone', () => {

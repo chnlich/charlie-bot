@@ -336,7 +336,8 @@ fn chat_page(
   let picker_entries =
     cfg.backends.picker_entries().into_iter().map(|(id, label)| json!({"id": id, "label": label})).collect::<Vec<_>>();
   let active_pool_member = active_session.get("pool_member").cloned().unwrap_or(Value::Null);
-  let active_backend_label = active_backend_label(&cfg, active_backend, &active_pool_member);
+  let active_native_model = active_session.get("native_model").cloned().unwrap_or(Value::Null);
+  let active_backend_label = active_backend_label(&cfg, active_backend, &active_pool_member, &active_native_model);
   let backend_compact = compact_facts(&cfg, &state.features.registry)?;
   let context = json!({
     "initial_sessions_json": INITIAL_SESSIONS_PLACEHOLDER,
@@ -351,6 +352,7 @@ fn chat_page(
     "backend_pools": backend_pools,
     "picker_entries": picker_entries,
     "active_pool_member": active_pool_member,
+    "active_native_model": active_native_model,
     "backend_compact": Value::Object(backend_compact),
     "default_backend_id": default_backend_id,
     (detail::ACTIVE_BACKEND_FIELD): active_backend,
@@ -616,13 +618,22 @@ fn active_backend_id<'a>(cfg: &CharlieBotConfig, session: &'a Value, default_bac
     .unwrap_or(default_backend)
 }
 
-/// The header label of a session's backend: a pool session names the member its current turn runs on.
-fn active_backend_label(cfg: &CharlieBotConfig, active_backend: &str, active_pool_member: &Value) -> String {
+/// The header label of a session's backend: a pool session names the member its current turn runs on,
+/// with the model its records hold.
+fn active_backend_label(
+  cfg: &CharlieBotConfig,
+  active_backend: &str,
+  active_pool_member: &Value,
+  active_native_model: &Value,
+) -> String {
   if let Some(pool) = cfg.backends.pool(active_backend) {
     return match active_pool_member.as_str() {
       Some(member) => {
         let member_label = cfg.get_backend_option(member).map_or(member, |option| option.label.as_str());
-        format!("{} → {member_label}", pool.label)
+        match active_native_model.as_str().filter(|model| !model.is_empty()) {
+          Some(model) => format!("{} → {member_label} · {model}", pool.label),
+          None => format!("{} → {member_label}", pool.label),
+        }
       }
       None => pool.label.clone(),
     };
@@ -731,9 +742,13 @@ mod tests {
   #[test]
   fn the_header_label_names_the_member_a_pool_session_runs_on() {
     let cfg = label_config();
-    assert_eq!(active_backend_label(&cfg, "auto", &json!("claude-opus-5")), "Auto → CC · Opus 5");
-    assert_eq!(active_backend_label(&cfg, "auto", &Value::Null), "Auto");
-    assert_eq!(active_backend_label(&cfg, "claude-opus-5", &Value::Null), "CC · Opus 5");
+    assert_eq!(
+      active_backend_label(&cfg, "auto", &json!("claude-opus-5"), &json!("claude-opus-5-5")),
+      "Auto → CC · Opus 5 · claude-opus-5-5"
+    );
+    assert_eq!(active_backend_label(&cfg, "auto", &json!("claude-opus-5"), &Value::Null), "Auto → CC · Opus 5");
+    assert_eq!(active_backend_label(&cfg, "auto", &Value::Null, &json!("claude-opus-5-5")), "Auto");
+    assert_eq!(active_backend_label(&cfg, "claude-opus-5", &Value::Null, &json!("claude-opus-5-5")), "CC · Opus 5");
   }
 
   #[test]
@@ -751,7 +766,11 @@ mod tests {
   #[test]
   fn a_retired_pool_member_renders_its_raw_id() {
     let cfg = label_config();
-    assert_eq!(active_backend_label(&cfg, "auto", &json!("retired")), "Auto → retired");
+    assert_eq!(
+      active_backend_label(&cfg, "auto", &json!("retired"), &json!("gpt-6-luna")),
+      "Auto → retired · gpt-6-luna"
+    );
+    assert_eq!(active_backend_label(&cfg, "auto", &json!("retired"), &Value::Null), "Auto → retired");
   }
 
   #[test]

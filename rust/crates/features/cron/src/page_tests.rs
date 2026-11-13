@@ -93,6 +93,7 @@ fn the_backend_dropdown_lists_each_visible_option_and_pool_in_picker_order() {
         "backend_pools": [],
         "picker_entries": entries,
         "active_pool_member": Value::Null,
+        "active_native_model": Value::Null,
         "default_backend_id": "claude-visible",
         "active_backend": "claude-visible",
         "active_backend_label": "claude-visible label",

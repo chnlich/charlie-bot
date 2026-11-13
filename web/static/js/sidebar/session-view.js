@@ -70,7 +70,8 @@ function rollbackBackendSelect(badge) {
 }
 
 // The label a backend id shows in the header and the switch menu. The active pool shows the
-// member its current turn runs on: "<pool label> → <member>". Other pools show their label alone.
+// member its current turn runs on with the model the session's records carry:
+// "<pool label> → <member> · <model>". Other pools show their label alone.
 function backendDisplayLabel(backendId) {
   const pool = typeof BACKEND_POOLS !== 'undefined'
     ? BACKEND_POOLS.find((candidate) => candidate.id === backendId)
@@ -79,7 +80,8 @@ function backendDisplayLabel(backendId) {
   const member = backendId === getActiveBackendId() ? globalThis.ACTIVE_POOL_MEMBER : null;
   if (!member) return pool.label;
   const memberLabel = (typeof BACKEND_OPTIONS !== 'undefined' && BACKEND_OPTIONS[member]) || member;
-  return pool.label + ' → ' + memberLabel;
+  const model = globalThis.ACTIVE_NATIVE_MODEL;
+  return pool.label + ' → ' + memberLabel + (model ? ' · ' + model : '');
 }
 
 function updateActiveBackendBadges() {
@@ -367,6 +369,7 @@ async function pollActiveSessionView(opts) {
 
     THINKING_SINCE = data.session.thinking_since || null;
     globalThis.ACTIVE_POOL_MEMBER = data.session.pool_member || null;
+    globalThis.ACTIVE_NATIVE_MODEL = data.session.native_model || null;
     setActiveBackendId(data.active_backend);
     setSwitchableBackends(data.switchable_backends);
     updateActiveBackendBadges();
@@ -808,6 +811,7 @@ function renderSessionView(data) {
   const session = data.session;
   const messages = data.messages || [];
   globalThis.ACTIVE_POOL_MEMBER = session.pool_member || null;
+  globalThis.ACTIVE_NATIVE_MODEL = session.native_model || null;
   setActiveBackendId(data.active_backend);
   setSwitchableBackends(data.switchable_backends);
   setActiveRoundRatings(session.round_ratings || {});

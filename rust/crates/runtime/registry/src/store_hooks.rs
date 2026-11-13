@@ -330,7 +330,7 @@ mod tests {
   #[derive(Default)]
   struct CallLog(Mutex<Vec<String>>);
 
-  /// Fails every after-turn call.
+  /// A contribution whose every after-turn call fails.
   struct FailingContribution;
 
   impl TurnContribution for FailingContribution {
@@ -486,7 +486,7 @@ mod tests {
     }
   }
 
-  /// Accepts every option mapping; the anchor-guard test builds no backend.
+  /// An option checker that accepts every mapping; the anchor-guard test builds no backend.
   fn accept_every_option(_: &serde_yaml::Mapping) -> Result<(), String> {
     Ok(())
   }

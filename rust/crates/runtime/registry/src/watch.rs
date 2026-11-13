@@ -94,7 +94,7 @@ impl TreeWatch {
     self.revision.fetch_add(1, Ordering::AcqRel) + 1
   }
 
-  /// Watch every tree, and the nearest existing directory above each.
+  /// The watch on every tree, and on the nearest existing directory above each.
   fn register(&self, state: &mut WatchState) {
     let trees = state.trees.clone();
     for tree in &trees {
@@ -103,7 +103,8 @@ impl TreeWatch {
     }
   }
 
-  /// Watch the nearest directory above `tree` that exists, so creating, replacing or retargeting `tree` is reported.
+  /// The watch on the nearest existing directory above `tree`, so creating, replacing or retargeting `tree` is
+  /// reported.
   ///
   /// A registered package may name a tree the checkout does not have, and a tree may be a symlink whose target the
   /// next read resolves. In both cases the link or directory that names the tree changes in its parent, which raises
@@ -117,7 +118,7 @@ impl TreeWatch {
     }
   }
 
-  /// Watch `directory` and every directory below it, and the target of every symlink below it.
+  /// The watch on `directory`, every directory below it, and the target of every symlink below it.
   fn add_tree(&self, state: &mut WatchState, directory: &Path) {
     let mut ancestors = Vec::new();
     self.add_tree_below(state, directory, &mut ancestors);
@@ -160,7 +161,7 @@ impl TreeWatch {
     ancestors.pop();
   }
 
-  /// Watch one directory or file, or leave the watch blind when the kernel refuses the watch.
+  /// The watch on one directory or file, which leaves the watch blind when the kernel refuses it.
   fn add_directory(&self, state: &mut WatchState, path: &Path) {
     let Some(descriptor) = state.descriptor.as_ref().map(OwnedFd::as_raw_fd) else { return };
     let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {

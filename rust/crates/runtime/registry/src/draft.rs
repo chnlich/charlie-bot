@@ -80,7 +80,7 @@ pub trait DraftPlatform: Send + Sync {
   /// The platform name its drafts carry.
   fn name(&self) -> &'static str;
 
-  /// Validate one target and return it in canonical form, or an error sentence the caller prints.
+  /// One target in canonical form, or an error sentence the caller prints.
   fn validate_target(&self, target: &Value) -> Result<Value, String>;
 
   /// The target's one-line label for the draft card.

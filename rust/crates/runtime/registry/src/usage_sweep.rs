@@ -17,8 +17,8 @@ pub struct SweepCounter {
 }
 
 impl SweepCounter {
-  /// Deletes one file, or only counts it in a dry run, and adds its bytes. `count` adds one to the category's count. A
-  /// file that cannot be statted or removed is logged and skipped.
+  /// The deletion of one file, or only its counting in a dry run, which adds its bytes. `count` adds one to the
+  /// category's count. A file that cannot be statted or removed is logged and skipped.
   pub fn delete_file(&mut self, path: &Path, dry_run: bool, count: bool) {
     let size = match fs::metadata(path) {
       Ok(metadata) => metadata.len(),
@@ -49,7 +49,8 @@ impl SweepCounter {
     self.bytes += size;
   }
 
-  /// Adds one to the category's count, for a directory-unit source that counts each directory it removes.
+  /// The addition of one to the category's count, for a directory-unit source that counts each directory it
+  /// removes.
   pub fn count_one(&mut self) {
     self.count += 1;
   }

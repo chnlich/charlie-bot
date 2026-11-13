@@ -32,8 +32,8 @@ fn install_release(sandbox: &Sandbox) -> PathBuf {
   releases
 }
 
-/// The test environment: the release root, the recording and the home the stub answers with, a sandbox `HOME`
-/// so no global skill directory is touched, and a system-only PATH that holds no `claude`, so the sync's
+/// The test environment: the release root, the recording and the home the stub answers with. A sandbox `HOME`
+/// leaves every global skill directory untouched, and a system-only PATH holds no `claude`, so the sync's
 /// discovery check skips itself.
 fn script_environment(sandbox: &Sandbox, releases: &Path, record: &Path, fake_home: &Path) -> Env {
   let mut env = sandbox.env();

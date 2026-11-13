@@ -118,8 +118,8 @@ fn test_preflight_refuses_a_commit_without_both_rust_jobs_green_run_failed() {
   preflight_refuses_a_commit_without_both_rust_jobs_green("run-failed");
 }
 
-/// The preflight refuses a commit with no successful push run that has both Rust jobs green: no run of the commit, a
-/// run whose rust-test job failed, and a failed run.
+/// The preflight refuses a commit with no successful push run that has both Rust jobs green. The cases are no run of
+/// the commit, a run whose rust-test job failed, and a failed run.
 fn preflight_refuses_a_commit_without_both_rust_jobs_green(case: &str) {
   let world = World::new();
   let mut behavior = world.gh_defaults();
@@ -558,7 +558,7 @@ fn test_sweep_check_reports_each_removed_name_against_the_home_json_foreign_name
   sweep_check_reports_each_removed_name_against_the_home(JSON_LOG, 1);
 }
 
-/// The sweep check prints the removed names and the foreign ones: a removed name whose session directory is under the
+/// The sweep check prints the removed names and the foreign ones. A removed name whose session directory is under the
 /// home is the server's own, and one with no directory there is foreign, which exits 1.
 fn sweep_check_reports_each_removed_name_against_the_home(log_text: &str, expected_rc: i32) {
   let sandbox = Sandbox::new();
@@ -598,13 +598,13 @@ fn test_release_helper_self_test_passes() {
 }
 // ---- trial --serve: the seeded home, the tmux server and the tmux socket limit ----------------------------------------
 
-/// The serve runs that pick a port of the trial range run one at a time: each one picks a free port, so two runs could
+/// The serve runs that pick a port of the trial range run one at a time. Each one picks a free port, so two runs could
 /// pick the same one.
 static TRIAL_RUNS: Mutex<()> = Mutex::new(());
 
 /// One serve trial's inputs: a throwaway repository whose origin/main names its commit, the server and the CLI beside
-/// each other, a live home with one backend option, and a stub charlie-code. The trial's tree and evidence stay under
-/// the sandbox.
+/// each other, and a live home with one backend option. A stub charlie-code completes the inputs. The trial's tree
+/// and evidence stay under the sandbox.
 struct ServeWorld {
   sandbox: Sandbox,
   repo: PathBuf,

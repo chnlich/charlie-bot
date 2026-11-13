@@ -48,7 +48,7 @@ fn world_agents_slice(cgroups: &Path) -> PathBuf {
 }
 
 /// The switch world's `systemctl`: the manager preflight, the harness stub's show answers and the `daemon-reload` the
-/// slice-unit install runs, which lands one line in the record file beside the stub.
+/// slice-unit install runs. The `daemon-reload` lands one line in the record file beside the stub.
 const SWITCH_SYSTEMCTL: &str = r#"case "$*" in
   *show-environment*)
     exit 0
@@ -188,7 +188,7 @@ impl World {
     git(&git_vars, &clone, &["commit", "-q", "-m", "new release"]);
     let new_sha = git(&git_vars, &clone, &["rev-parse", "HEAD"]);
 
-    // A later build whose checkout predates the slice-unit install owner: a switch back to it must still install its
+    // A later build whose checkout predates the slice-unit install owner. A switch back to it must still install its
     // units, because the owner is gone from that checkout once the clone moves.
     fs::remove_file(clone.join("scripts/install-slice-units.sh")).expect("the install owner to remove");
     git(&git_vars, &clone, &["add", "scripts"]);
@@ -384,7 +384,7 @@ switch_forward
   /// a real worktree of it. Returns the check's result and the requests the server served past the version probe.
   /// The delegation wait and the probe cancel wait are one second.
   pub fn delegation_check(&self, behavior: &[(&str, Value)]) -> (Run, Vec<String>) {
-    // The check runs on a runtime clone, whose HEAD is attached to its branch; the world's clone is left detached at
+    // The check runs on a runtime clone, whose HEAD is attached to its branch. The world's clone is left detached at
     // the old release's commit, so the check puts it on main first.
     self.git(&self.clone, &["checkout", "-q", "main"]);
     let server = self.start_fake_server(behavior);

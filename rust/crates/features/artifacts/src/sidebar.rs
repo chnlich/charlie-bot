@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::bail;
 use charliebot_core::fsutil;
 use charliebot_core::paths;
+use charliebot_core::text_repr::is_truthy;
 use charliebot_registry::sidebar::SidebarContribution;
 use charliebot_store::sidebar_state;
 use serde_json::{Map, Value};
@@ -187,18 +188,6 @@ fn copy2(source: &Path, destination: &Path) -> io::Result<()> {
   let metadata = fs::metadata(source)?;
   let times = FileTimes::new().set_accessed(metadata.accessed()?).set_modified(metadata.modified()?);
   fs::OpenOptions::new().write(true).open(destination)?.set_times(times)
-}
-
-/// The truth value of a JSON value: null, false, zero, and an empty string, list or map are falsy.
-fn is_truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(flag) => *flag,
-    Value::Number(number) => number.as_f64() != Some(0.0),
-    Value::String(text) => !text.is_empty(),
-    Value::Array(items) => !items.is_empty(),
-    Value::Object(members) => !members.is_empty(),
-  }
 }
 
 /// The path with `/` separators.

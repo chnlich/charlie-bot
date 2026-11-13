@@ -1,14 +1,19 @@
   <script>
-    // The terminal's four scripts register its tab and mount xterm. A reader who never opens a terminal never needs
-    // them, so its tab button loads them on the first click and the switch then finds the tab registered. The four
-    // arrive in dependency order: the base64 codec, the clipboard wiring, the shared mount, and the panel that
-    // registers the tab.
+    // The terminal surface, all of it on the first click: xterm and its fit addon give the four modules below their
+    // mount, and a reader who never opens a terminal pays none of these bytes. Its tab button loads them in dependency
+    // order — xterm, the fit addon, the base64 codec, the clipboard wiring, the shared mount, and the panel that
+    // registers the tab — so the switch that follows finds the tab registered.
     globalThis.openTerminalTab = function() {
-      loadPageScripts('terminal', [
-        '/static/features/terminal/terminal_b64.js',
-        '/static/features/terminal/terminal_clipboard.js',
-        '/static/features/terminal/terminal_mount.js',
-        '/static/features/terminal/terminal_panel.js',
+      Promise.all([
+        loadPageStyles('terminal', ['https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css']),
+        loadPageScripts('terminal', [
+          'https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js',
+          'https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js',
+          '/static/features/terminal/terminal_b64.js',
+          '/static/features/terminal/terminal_clipboard.js',
+          '/static/features/terminal/terminal_mount.js',
+          '/static/features/terminal/terminal_panel.js',
+        ]),
       ]).then(() => switchTab('terminal')).catch((error) => console.error(error));
     };
   </script>

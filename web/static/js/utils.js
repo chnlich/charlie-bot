@@ -58,12 +58,19 @@ function dateClockMDHM(date) {
 const pageScriptLoads = new Map();
 const pageScriptProgress = new Map();
 
+// A same-origin file takes the page's asset version, so a release that changes it also changes its URL. A file on
+// another origin names its own version in its path (`xterm@5.3.0`), and a query the CDN does not serve would miss
+// the entry its own pin already keyed, so it keeps the URL its module wrote.
+function pageAssetUrl(path) {
+  return /^https?:\/\//.test(path) ? path : path + '?v=' + encodeURIComponent(STATIC_ASSET_VERSION);
+}
+
 function loadPageScripts(key, paths) {
   if (!pageScriptLoads.has(key)) {
     const start = pageScriptProgress.get(key) || 0;
     const loadOne = (path, index) => new Promise((resolve, reject) => {
       const script = document.createElement('script');
-      script.src = path + '?v=' + encodeURIComponent(STATIC_ASSET_VERSION);
+      script.src = pageAssetUrl(path);
       script.onload = () => {
         pageScriptProgress.set(key, start + index + 1);
         resolve();
@@ -95,7 +102,7 @@ function loadPageStyles(key, paths) {
     const loadOne = (path) => new Promise((resolve, reject) => {
       const link = document.createElement('link');
       link.rel = 'stylesheet';
-      link.href = path + '?v=' + encodeURIComponent(STATIC_ASSET_VERSION);
+      link.href = pageAssetUrl(path);
       link.onload = () => resolve();
       link.onerror = () => reject(new Error('the page stylesheet did not load: ' + path));
       document.head.appendChild(link);
@@ -106,3 +113,7 @@ function loadPageStyles(key, paths) {
   }
   return pageStyleLoads.get(key);
 }
+
+// The chat's math renderer takes these two by registration (markdown-renderer.js owns the walk and the files, and
+// loads before this one). Everything else here is a plain definition the page calls.
+registerChatMathLoader(loadPageStyles, loadPageScripts);

@@ -168,7 +168,9 @@ fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
       i += 1;
     }
     let start = i;
-    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-' || bytes[i] == b'_' || bytes[i] == b':') {
+    while i < bytes.len()
+      && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-' || bytes[i] == b'_' || bytes[i] == b':')
+    {
       i += 1;
     }
     let found = &tag[start..i];

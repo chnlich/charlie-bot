@@ -18,9 +18,10 @@ use crate::gh_wrapper;
 use crate::transport::cgroup;
 
 const ACTIVATION_VARIABLES: [&str; 2] = ["VIRTUAL_ENV", "UV_RUN_RECURSION_DEPTH"];
-/// GitHub credentials and the token command the server process may carry. The wrapper owns the App token, and the
-/// spawn path sets the token command from the live host config (`spawn_base_environment`), so neither an inherited
-/// `GH_TOKEN` nor a stale command reaches an agent. The server's own environment and its non-agent children keep both.
+/// GitHub credentials and the token command the server process may carry. The wrapper owns the App token when the
+/// live host config (`spawn_base_environment`) names a command; with no command it uses the host's stored gh login.
+/// Neither an inherited `GH_TOKEN` nor a stale command reaches an agent. The server's own environment and its
+/// non-agent children keep both.
 const GITHUB_ENVIRONMENT_VARIABLES: [&str; 3] = ["GH_TOKEN", "GITHUB_TOKEN", gh_wrapper::TOKEN_COMMAND_VAR];
 
 /// The server environment after removing its virtualenv activation for agent children.

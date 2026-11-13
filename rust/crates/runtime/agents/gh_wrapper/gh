@@ -1,12 +1,12 @@
 #!/bin/sh
-# gh - CharlieBot agent wrapper: a text-carrying GitHub write to a repository
-# where the agent GitHub App is installed goes out under the App, and every
-# other call passes through as the personal login (plan 1 v3, W3).
+# gh - CharlieBot agent wrapper: when an App token command is configured, a
+# text-carrying GitHub write to a repository where the App is installed goes
+# out under the App. Without that command, calls pass through as the host login.
 #
 # agent_environment (rust/crates/runtime/agents/src/agent_environment.rs) puts
 # this directory first on the PATH of every agent process, and AgentRunner
-# refuses a spawn whose PATH does not resolve gh here. The wrapper classifies
-# the call before it runs anything:
+# refuses a spawn whose PATH does not resolve gh here. With an App token
+# command configured, the wrapper classifies the call before it runs anything:
 #
 #   - Text-carrying writes: pr create, pr edit, pr comment, pr review, issue
 #     create, issue edit, issue comment, pr close and reopen with -c/--comment,
@@ -20,13 +20,15 @@
 #     includes every write whose target is not a repository, such as gist
 #     create and gist edit.
 #
-# gh api graphql is classified by its document instead of its method: a
+# With a token command configured, gh api graphql is classified by its document instead of its method: a
 # document whose operations are all queries passes through unchanged, while a
 # document with a mutation or subscription operation, or one whose operation
 # type cannot be read (an unreadable @file, --input, stdin, two query fields),
 # is refused.
 #
-# For a text-carrying write the target repository is -R/--repo when given,
+# If the token command is unset, every call passes through to the real gh,
+# which uses the host's stored login. For a text-carrying write with a command,
+# the target repository is -R/--repo when given,
 # otherwise the repository gh resolves from the current directory; gh api
 # takes the repos/<owner>/<repo>/ prefix of its path, with {owner} and {repo}
 # expanded as gh expands them. The wrapper then calls the token command named
@@ -43,7 +45,6 @@
 
 set -u
 
-TOKEN_VAR=CHARLIEBOT_GH_APP_TOKEN_CMD
 TOKEN_CMD=${CHARLIEBOT_GH_APP_TOKEN_CMD:-}
 
 # cd must not reroute or print: the self_dir lookup below needs plain chdir
@@ -127,11 +128,16 @@ if [ -z "$real_gh" ]; then
   printf 'gh-wrapper: no real gh found on PATH\n' >&2
   exit 127
 fi
+
 # Belt against a PATH entry whose gh is a symlink onto this script: never exec
 # this script itself.
 if [ "$(cd -- "$(dirname -- "$real_gh")" && pwd -P)" = "$self_dir" ]; then
   printf "gh-wrapper: '%s' is this wrapper, not the real gh; fix PATH\n" "$0" >&2
   exit 127
+fi
+
+if [ -z "$TOKEN_CMD" ]; then
+  exec "$real_gh" "$@"
 fi
 
 # The repository gh itself resolves from the current directory, read through
@@ -726,12 +732,6 @@ esac
 
 if [ "$is_text" -ne 1 ]; then
   exec "$real_gh" "$@"
-fi
-
-if [ -z "$TOKEN_CMD" ]; then
-  printf 'gh-wrapper: the agent GitHub App token command is not configured; set the host config key github.app_token_command, which the server passes to agent processes as %s. Nothing was run.\n' \
-    "$TOKEN_VAR" >&2
-  exit 1
 fi
 
 owner_repo=

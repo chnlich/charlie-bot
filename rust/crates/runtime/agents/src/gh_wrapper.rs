@@ -1,4 +1,4 @@
-//! The agent `gh` wrapper: text-carrying GitHub writes go out under the agent GitHub App.
+//! The agent `gh` wrapper: text-carrying GitHub writes use the App token when configured, otherwise the host login.
 //!
 //! The wrapper script is `rust/crates/runtime/agents/gh_wrapper/gh`, in the directory this module owns.
 //! `agent_environment` puts its directory first on the PATH of every agent process and records the script path in
@@ -6,7 +6,7 @@
 //! (`AgentRunner.run`) calls [`require_gh_wrapper`] once after the backend's own environment edits, moves the wrapper
 //! directory back to the front and refuses a process whose PATH resolves `gh` anywhere else. The script sends each
 //! text-carrying GitHub write to the App through the token command named by [`TOKEN_COMMAND_VAR`] (the host config's
-//! `github.app_token_command`) and passes every other call through as the personal login.
+//! `github.app_token_command`) when configured; otherwise every call passes through as the host's personal login.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -21,8 +21,8 @@ pub const WRAPPER_REPO_DIR: &str = "rust/crates/runtime/agents/gh_wrapper";
 /// environment without it was not built by the server and carries no wrapper contract.
 pub const WRAPPER_PATH_VAR: &str = "CHARLIEBOT_GH_WRAPPER";
 /// The environment variable that names the App token command the wrapper runs. The spawn path sets it from the live
-/// host config's [`CONFIG_KEY`] (`agent_environment::spawn_base_environment`); the wrapper refuses a text-carrying
-/// write without it.
+/// host config's [`CONFIG_KEY`] (`agent_environment::spawn_base_environment`); when unset, the wrapper uses the host
+/// gh login.
 pub const TOKEN_COMMAND_VAR: &str = "CHARLIEBOT_GH_APP_TOKEN_CMD";
 /// The host config key that names the App token command.
 pub const CONFIG_KEY: &str = "github.app_token_command";
@@ -35,7 +35,7 @@ pub fn dir_under(repo_root: &Path) -> PathBuf {
 /// Set or clear the App token command in an agent environment.
 ///
 /// The host config owns the value: `Some(command)` inserts [`TOKEN_COMMAND_VAR`], and `None` or an empty value
-/// removes it, so the wrapper refuses every text-carrying write with an error naming [`CONFIG_KEY`].
+/// removes it, so the wrapper uses the host gh login when no App token command is configured.
 pub fn apply_token_command(values: &mut Env, command: Option<&str>) {
   match command {
     Some(command) if !command.is_empty() => {
@@ -314,6 +314,25 @@ esac
       command.output().expect("the wrapper script runs")
     }
 
+    fn run_agent_gh_without_token_command(&self, args: &[&str], initial_path: &str) -> (std::process::Output, String) {
+      let wrapper = script();
+      let mut environment =
+        env_with(&[(WRAPPER_PATH_VAR, wrapper.display().to_string()), ("PATH", initial_path.to_string())]);
+      require_gh_wrapper(&mut environment).unwrap();
+      let path = environment["PATH"].clone();
+      let agent_gh = resolve_gh(&path).expect("the agent PATH resolves gh");
+      let output = Command::new(agent_gh)
+        .args(args)
+        .current_dir(self.root.path())
+        .envs(&environment)
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove(TOKEN_COMMAND_VAR)
+        .output()
+        .expect("the agent gh wrapper runs");
+      (output, path)
+    }
+
     fn record(&self) -> String {
       fs::read_to_string(&self.record).unwrap_or_default()
     }
@@ -325,6 +344,47 @@ esac
 
   fn stdout_of(output: &std::process::Output) -> String {
     String::from_utf8(output.stdout.clone()).unwrap()
+  }
+
+  /// Claude Code's Haiku environment leaves PATH as built; Codex prepends its local bin. Both go through the same
+  /// runner spawn check before invoking `gh`.
+  #[test]
+  #[ignore = "integration"]
+  fn agent_gh_uses_the_host_login_without_an_app_command_for_haiku_and_codex() {
+    let wrapper_dir = script().parent().unwrap().to_path_buf();
+    for (backend, prepends_local_bin) in [("haiku", false), ("codex", true)] {
+      let stubs = Stubs::start();
+      let initial_path = if prepends_local_bin {
+        format!("{}:{}:/usr/bin:/bin", stubs.bin.display(), wrapper_dir.display())
+      } else {
+        format!("{}:{}:/usr/bin:/bin", wrapper_dir.display(), stubs.bin.display())
+      };
+
+      let (output, path) =
+        stubs.run_agent_gh_without_token_command(&["pr", "create", "-R", "o/r", "--title", "t"], &initial_path);
+
+      assert!(output.status.success(), "{backend}: {}", String::from_utf8_lossy(&output.stderr));
+      let entries: Vec<PathBuf> = std::env::split_paths(&path).collect();
+      assert_eq!(entries[0], wrapper_dir, "{backend}");
+      assert!(stubs.token_record().is_empty(), "{backend}: {}", stubs.token_record());
+      let record = stubs.record();
+      assert!(record.contains("token:\n"), "{backend}: {record}");
+      for arg in ["pr", "create", "-R", "o/r", "--title", "t"] {
+        assert!(record.contains(&format!("argv:{arg}\n")), "{backend}: {record}");
+      }
+    }
+  }
+
+  #[test]
+  #[ignore = "integration"]
+  fn agent_gh_uses_the_configured_app_token_for_text_writes() {
+    let stubs = Stubs::start();
+
+    let output = stubs.run(&["pr", "create", "-R", "o/r", "--title", "t"], &[("TOKEN_EXIT", "0")]);
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(stubs.token_record(), "argv:--write\nargv:o/r\n");
+    assert!(stubs.record().contains("token:stub-app-token\n"), "{}", stubs.record());
   }
 
   /// The text-carrying forms: each one mints the App token for its target and runs gh with `GH_TOKEN` set. The
@@ -614,16 +674,13 @@ esac
 
   #[test]
   #[ignore = "integration"]
-  fn a_text_write_without_the_token_command_is_refused_naming_the_config_key() {
+  fn text_writes_without_the_token_command_use_the_host_login() {
     for args in [vec!["pr", "create", "-R", "o/r"], vec!["api", "-f", "k=v", "repos/o/r/issues"]] {
       let stubs = Stubs::start();
       let output = stubs.run_without_token_command(&args);
 
-      assert_eq!(output.status.code(), Some(1), "{args:?}");
-      let stderr = String::from_utf8_lossy(&output.stderr);
-      assert!(stderr.contains(crate::gh_wrapper::CONFIG_KEY), "{args:?}: {stderr}");
-      assert!(stderr.contains("Nothing was run"), "{args:?}: {stderr}");
-      assert!(stubs.record().is_empty(), "{args:?}: {}", stubs.record());
+      assert!(output.status.success(), "{args:?}: {}", String::from_utf8_lossy(&output.stderr));
+      assert!(stubs.record().contains("token:\n"), "{args:?}: {}", stubs.record());
       assert!(stubs.token_record().is_empty(), "{args:?}");
     }
   }

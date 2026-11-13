@@ -64,7 +64,7 @@ fn resolve_link(argv0: &str) -> PathBuf {
 }
 
 /// Run the remote command an ssh invocation names in a local `sh`, with the fake programs' directory first on its
-/// `PATH`, so the command's `sacct` is the fake of the same name. The held-session tests run their remote scripts
+/// `PATH`. That way the command's `sacct` is the fake of the same name. The held-session tests run their remote scripts
 /// this way, against real local pids, and exit with the script's status. The remote home is the test's own home,
 /// because a probe writes its end recorder and end file beneath `$HOME`; the runner's real home is no test's to use.
 fn run_remote_command(argv: &[String], link: &Path) -> ! {

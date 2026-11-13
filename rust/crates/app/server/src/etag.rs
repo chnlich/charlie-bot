@@ -1,10 +1,15 @@
-//! Entity tags for the JSON API's reads.
+//! Entity tags for the JSON API's reads and for the pages.
 //!
 //! A `GET` under `/api/` that answers `200` with a JSON body carries `ETag: "<hash of the body>"` and
 //! `Cache-Control: no-cache`. A request whose `If-None-Match` names that tag gets `304` with no body. The tag is hashed
 //! from the body, and a body a handler answers from a memo on every request keeps the tag of its first hash, so such a
 //! repeat request does not pay the hash again. The gzip layer, outside this one, memoizes the compressed body of each
 //! tag, which is the same identity a client's cache uses.
+//!
+//! A page marks its own body `no-store`, because a page must never come out of a cache: it names the static asset
+//! version it was built against, and an older body runs an older script. The layer replaces that marker with
+//! `no-cache` and the body's tag, so every navigation still reaches the server — a back/forward-cache restore reloads
+//! from the page prologue — and a body the browser already holds unchanged costs a `304` instead of a transfer.
 //!
 //! A handler that answers its own `ETag` has named the body's version, so the layer keeps that tag and skips the hash.
 //! The tag makes the same promise either way: two bodies share it only when they are the same body.
@@ -18,20 +23,23 @@ use axum::middleware::Next;
 use axum::response::Response;
 use bytes::Bytes;
 use charliebot_compat::headers::header_text;
+use charliebot_compat::mimetypes_table::TEXT_HTML;
 use charliebot_compat::responses;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use sha2::{Digest, Sha256};
 
-/// The largest JSON body the layer reads whole to hash it. Every JSON handler builds its body in memory first, so the
-/// bound stops a runaway body rather than shaping a normal response.
+/// The largest body the layer reads whole to hash it. Every JSON and page handler builds its body in memory first, so
+/// the bound stops a runaway body rather than shaping a normal response.
 const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 /// The middleware as an axum layer.
 pub async fn layer(request: Request, next: Next) -> Response {
-  let conditional = request.method() == Method::GET && request.uri().path().starts_with("/api/");
+  let get = request.method() == Method::GET;
+  let api = request.uri().path().starts_with("/api/");
   let if_none_match = header_text(request.headers(), &header::IF_NONE_MATCH);
   let response = next.run(request).await;
-  if !conditional || response.status() != StatusCode::OK || !is_json(response.headers()) {
+  let taggable = (api && is_json(response.headers())) || is_page(response.headers());
+  if !get || response.status() != StatusCode::OK || !taggable {
     return response;
   }
   let (mut parts, body) = response.into_parts();
@@ -59,6 +67,12 @@ pub async fn layer(request: Request, next: Next) -> Response {
 
 fn is_json(headers: &HeaderMap) -> bool {
   header_text(headers, &header::CONTENT_TYPE).starts_with("application/json")
+}
+
+/// Whether the response is a page: an HTML body the page layer marked `no-store`.
+fn is_page(headers: &HeaderMap) -> bool {
+  header_text(headers, &header::CONTENT_TYPE).starts_with(TEXT_HTML)
+    && header_text(headers, &header::CACHE_CONTROL) == "no-store"
 }
 
 /// The `304` answer to a request whose `If-None-Match` names the body the server holds: the validators, no body. The
@@ -203,6 +217,17 @@ mod tests {
             .expect("an HTML response builds")
         }),
       )
+      .route(
+        "/no-store-page",
+        get(|| async {
+          Response::builder()
+            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+            .header(header::CACHE_CONTROL, "no-store")
+            .header(header::VARY, "Accept-Encoding")
+            .body(Body::from("<p>page</p>"))
+            .expect("an HTML response builds")
+        }),
+      )
       .layer(middleware::from_fn(layer))
   }
 
@@ -253,6 +278,24 @@ mod tests {
     assert_eq!(status, StatusCode::OK);
     assert!(!headers.contains_key(header::ETAG));
     assert!(!headers.contains_key(header::CACHE_CONTROL));
+  }
+
+  #[tokio::test]
+  async fn a_page_marked_no_store_revalidates_and_no_longer_forbids_storing() {
+    let app = app(Arc::new(AtomicUsize::new(0)));
+    let (status, headers, body) = get_with(&app, "/no-store-page", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, b"<p>page</p>");
+    assert_eq!(headers[header::CACHE_CONTROL], "no-cache", "the marker gives way to the body's tag");
+    let tag = headers[header::ETAG].to_str().unwrap().to_string();
+    assert_eq!(tag, entity_tag(&body));
+
+    let (status, headers, body) = get_with(&app, "/no-store-page", Some(&tag)).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+    assert!(body.is_empty());
+    assert_eq!(headers[header::ETAG], tag.as_str());
+    assert_eq!(headers[header::CACHE_CONTROL], "no-cache");
+    assert_eq!(headers[header::VARY], "Accept-Encoding", "the 304 keeps the stored response's representation list");
   }
 
   #[tokio::test]

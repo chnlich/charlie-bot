@@ -4,7 +4,7 @@
   ],
   "expect": {
     "stdout": "",
-    "stderr": "charliebot: unknown subcommand 'disk-sweep'. Available subcommands: artifact, backup, compaction-context, config, delegate, digest, discord, feishu, files, gc-trash, github, google, improve, land, linear, memory, plan, preflight-charlie-code, publish, read-budget, release-helper, router, scan-guard, session, setup, slack, switch-helper, taste, triage, voice, wait-guard, web\n",
+    "stderr": "charliebot: unknown subcommand 'disk-sweep'. Available subcommands: artifact, backup, compaction-context, config, delegate, discord, feishu, files, gc-trash, github, google, improve, land, linear, memory, plan, preflight-charlie-code, publish, read-budget, release-helper, router, scan-guard, session, setup, slack, switch-helper, taste, triage, voice, wait-guard, web\n",
     "exit": 2,
     "requests": []
   }

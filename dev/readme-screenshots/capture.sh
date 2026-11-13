@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Capture the README screenshots: five views of the web UI over fabricated demo data.
+# Capture the README screenshots: four views of the web UI over fabricated demo data.
 #
 #   cd <repository root>
 #   dev/remote-run/run.sh dev/readme-screenshots/capture.sh
@@ -13,10 +13,10 @@
 #   3. start the isolated server through `scripts/release/trial.sh --serve` — the trial's own tree, its
 #      own home and a port from the trial range; the live server's port and home stay untouched — and
 #      hand the served command to this script's --inner mode, which fabricates the plan pages, waiting
-#      items, digest entries and session statuses through the trial server's own API and CLI, then
-#      photographs the five views with the node driver this script writes into its scratch;
-#   4. overwrite docs/assets/readme/ui-chat-desktop.png, ui-status-desktop.png, ui-plans-desktop.png,
-#      ui-approval-desktop.png and ui-chat-mobile.png, and print each file's sha256.
+#      items and session statuses through the trial server's own API and CLI, then
+#      photographs the four views with the node driver this script writes into its scratch;
+#   4. overwrite docs/assets/readme/ui-chat-desktop.png, ui-status-desktop.png, ui-plans-desktop.png
+#      and ui-chat-mobile.png, and print each file's sha256.
 #
 # Viewports: desktop 2100x1560 (the size of the screenshots this replaces); phone 390x844.
 #
@@ -109,7 +109,7 @@ OUT="$REPO_ROOT/docs/assets/readme"
 mkdir -p "$OUT"
 
 # The session the screenshots open is the one with the largest chat record, so the chat view is full;
-# two more carry waiting items so the approval queue holds several rows.
+# two more carry waiting items so the status panel holds several rows.
 MAIN=$(find "$SESSIONS_DIR" -name chat_events.jsonl -printf '%s %h\n' \
   | awk '$1 > max { max = $1; dir = $2 } END { print dir }' | xargs dirname | xargs basename)
 mapfile -t sids < <(ls "$SESSIONS_DIR" | LC_ALL=C sort)
@@ -128,15 +128,13 @@ status_text() { # goal now waiting_json
 }
 
 # Store one session's status. Every Waiting on you item needs a recorded cold read before the server
-# stores it, so each unread item first gets one ask-check whose answer ends with the tier line the
-# approval policy parser reads.
-set_status() { # sid text tier
-  local sid=$1 text=$2 tier=$3 body unread item answer payload
+# stores it, so each unread item first gets one ask-check.
+set_status() { # sid text
+  local sid=$1 text=$2 body unread item answer payload
   body=$(jq -n --arg sid "$sid" --arg text "$text" '{session_id: $sid, text: $text}')
   unread=$(api POST /api/internal/web/status/unread "$body" | jq '.unread')
   while IFS= read -r item; do
-    answer="The item's context reads as its description states, and the approval policy table tiers it.
-tier: $tier rule: none"
+    answer="The item's context reads as its description states."
     payload=$(jq -n --arg sid "$sid" --argjson item "$item" --arg backend "readme-demo" --arg answer "$answer" \
       '{session_id: $sid, item: $item, backend: $backend, answer: $answer}')
     api POST /api/internal/web/ask-check "$payload" >/dev/null
@@ -146,15 +144,15 @@ tier: $tier rule: none"
 set_status "$MAIN" "$(status_text \
   'Land the README refresh: rewritten entry docs, five new screenshots, and the delivery page.' \
   'The reviewer is checking the screenshots and the fact list against main.' \
-  '[{"text": "Approve the delivery page publish", "context": "Publishing puts the page at a URL beyond your devices, so the step waits for you."}]')" t0
+  '[{"text": "Approve the delivery page publish", "context": "Publishing puts the page at a URL beyond your devices, so the step waits for you."}]')"
 set_status "$WAIT_B" "$(status_text \
   'Prepare the release that carries the README refresh.' \
   'The release trial runs on the build host.' \
-  '[{"text": "Confirm the release trial verdict", "context": "The trial log ends in the verdict; the release waits on it."}]')" t0
+  '[{"text": "Confirm the release trial verdict", "context": "The trial log ends in the verdict; the release waits on it."}]')"
 set_status "$WAIT_C" "$(status_text \
   'Keep the daily summary current while the README refresh lands.' \
   "Yesterday's summary went out with the digest attached." \
-  '[{"text": "Read the release trial log", "context": "The log names the stage verdicts; the summary quotes them."}]')" user-act
+  '[{"text": "Read the release trial log", "context": "The log names the stage verdicts; the summary quotes them."}]')"
 
 # Freeze the fabricated timestamps: the Status view renders the stored updated_at and the item
 # ages verbatim, so run-time stamps would age the view while it sits in the repository. The store
@@ -183,18 +181,6 @@ for sid in "$MAIN" "$WAIT_B" "$WAIT_C"; do
   rewrite_json "$SESSIONS_DIR/$sid/data/chat_events.jsonl" -c --arg stamp "$FIXED_STAMP" \
     --arg day_old "$DAY_OLD_STAMP" "$EVENT_PROGRAM"
 done
-
-digest() { # policy step undo scope_check
-  local args=(digest add --session "$MAIN" --policy "$1" --step "$2" --undo "$3")
-  [[ -n ${4:-} ]] && args+=(--scope-check "$4")
-  "$BIN/charliebot" "${args[@]}" >/dev/null
-}
-digest t2 'Landed the README refresh on main' 'Revert the delivery commit on main'
-digest release-restart 'Released the server onto the commit that carries the README refresh' \
-  'Switch the server back to the previous release' \
-  'The scope the release script owns: install the release, switch the server, restart'
-digest t2 'Sent the screenshot review request from your account' \
-  'The message cannot be recalled; post the correction in the same thread'
 
 # The plan page the plans panel shows, and its registry row. The plan CLI's registration runs the
 # plan genre's page-height assertion through the server, whose trial config carries no
@@ -458,14 +444,6 @@ const views = [
     await waitTruthy(page, "(() => { const el = document.querySelector('#tab-plans'); return el && !el.classList.contains('hidden') && el.innerText.trim().length > 40; })()", 'the plans panel');
     await sleep(800);
   }],
-  ['ui-approval-desktop.png', async (page) => {
-    await openUrl(page, \`\${baseUrl}/approval\`);
-    await waitTruthy(page, "document.body && document.body.innerText.includes('Digest')", 'the approval page body');
-    // The day's digest starts folded, and the README caption names its entries and their undos, so the
-    // shot opens the fold when the page carries one.
-    await evaluate(page, "(() => { const h = document.querySelector('h2.digest-heading'); if (h && h.querySelector('.hint[role=button]')) h.click(); })()");
-    await sleep(800);
-  }],
   ['ui-chat-mobile.png', async (page) => {
     await page.send('Emulation.setDeviceMetricsOverride', { ...PHONE, deviceScaleFactor: 1 });
     await openUrl(page, chatUrl);
@@ -541,7 +519,7 @@ README_CAPTURE_TMPDIR="${TMPDIR:-/tmp}" CHARLIEBOT_HOME="$SCRATCH/live-home" \
   -- "$SCRIPT_PATH/capture.sh" --inner "$SCRATCH" "$REPO_ROOT" "$CHROME"
 
 printf '\n'
-for name in ui-chat-desktop ui-status-desktop ui-plans-desktop ui-approval-desktop ui-chat-mobile; do
+for name in ui-chat-desktop ui-status-desktop ui-plans-desktop ui-chat-mobile; do
   file="$REPO_ROOT/docs/assets/readme/$name.png"
   [[ -s $file ]] || { printf 'capture: %s is missing\n' "$file" >&2; exit 1; }
   printf 'wrote docs/assets/readme/%s.png  sha256 %s\n' "$name" "$(sha256sum "$file" | cut -d' ' -f1)"

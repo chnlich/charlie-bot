@@ -1,12 +1,12 @@
-//! The Pacific calendar day: the day the approval digest, the
-//! approval day view and the standing policies' caps and expiries read by. Every approval date is a
-//! America/Los_Angeles calendar day, whatever zone the process runs in.
+//! The Pacific calendar day: the day the usage ledger, the failure triage and the scheduled tasks'
+//! default zone read by. Every house date is an America/Los_Angeles calendar day, whatever zone the
+//! process runs in.
 
 use jiff::Timestamp;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 
-/// The house time zone: the zone every approval day reads in, and the default of a scheduled
+/// The house time zone: the zone every house day reads in, and the default of a scheduled
 /// task that names none.
 pub const ZONE: &str = "America/Los_Angeles";
 

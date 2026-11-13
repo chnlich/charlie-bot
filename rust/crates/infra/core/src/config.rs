@@ -1685,17 +1685,6 @@ voice: {}
   }
 
   #[test]
-  fn the_approval_policy_table_under_config_d_approval_d_is_not_a_stray_config_location() {
-    let home = home_with(VALID);
-    std::fs::create_dir_all(home.path().join("config.d/approval.d")).unwrap();
-    std::fs::write(home.path().join("config.d/approval.d/policy.yaml"), "enable_ask_tier_refusal: false\n").unwrap();
-
-    let cfg = load(&home).expect("the approval policy table is not a stray config file");
-
-    assert_eq!(cfg.server.host, "127.0.0.1");
-  }
-
-  #[test]
   fn a_config_yaml_that_sets_the_home_is_refused() {
     let home = home_with("charliebot_home: /tmp/elsewhere\n");
     let error = load(&home).unwrap_err().to_string();

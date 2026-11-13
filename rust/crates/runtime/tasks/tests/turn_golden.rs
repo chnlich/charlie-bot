@@ -63,19 +63,6 @@ const DEVIN_INCIDENT: &str = r#"Error: Agent error: Reached free model rate limi
   "cognition.ai/retryable": true
 }"#;
 
-/// The approval policy table every golden home starts with; a manager turn's prompt assembly requires one.
-const APPROVAL_POLICY_TABLE: &str = "\
-consequence_tests:
-  - {id: irreversible, rank: 1, text: \"Deletes data with no backup, or sends what cannot be recalled.\"}
-  - {id: chao-name, rank: 2, text: \"A message or publication in Chao's name reaches other people.\"}
-  - {id: money, rank: 3, text: \"Spends money beyond a budget that Chao set.\"}
-  - {id: authority, rank: 4, text: \"Widens what agents may do.\"}
-  - {id: rule-named, rank: 4, text: \"A rule in force names the user's explicit approval for this step.\"}
-  - {id: reading, rank: 5, text: \"Picks a reading for work over about one worker-day.\"}
-standing_policies: []
-enable_ask_tier_refusal: false
-";
-
 mod process_guard;
 use process_guard::ProcessGroupGuard;
 static CANCEL_ROUTE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -489,8 +476,6 @@ fn config_with_features_from_config_and_agent_path(
   agent_path: String,
 ) -> anyhow::Result<(Arc<CharlieBotConfig>, Arc<FeatureContext>)> {
   std::fs::create_dir_all(&cfg.charliebot_home)?;
-  std::fs::create_dir_all(cfg.charliebot_home.join("config.d/approval.d"))?;
-  std::fs::write(cfg.charliebot_home.join("config.d/approval.d/policy.yaml"), APPROVAL_POLICY_TABLE)?;
   let config_value = Arc::clone(&cfg);
   let config_file = cfg.config_file();
   let config_reload =

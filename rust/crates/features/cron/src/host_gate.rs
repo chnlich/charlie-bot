@@ -4,7 +4,7 @@
 //! A task on a `backends.pools` id is judged on the member the pool selects for the fire, read without moving the
 //! pool's rotation. The gate and the fire then agree on the member.
 //! A host that awaits the user's approval holds the fire: the fire records one skip and starts nothing, and no session
-//! wakes. Nothing is stored for the hold. The Waiting on you read derives one user-act item per holder session and host
+//! wakes. Nothing is stored for the hold. The Waiting on you read derives one item per holder session and host
 //! from the host state and the enabled tasks. The item shows while the host awaits approval and is gone once it does
 //! not. Master and handler tasks start no worker, so they probe no host.
 
@@ -12,7 +12,6 @@ use std::collections::HashSet;
 
 use anyhow::Context;
 use charliebot_agents::model_pool;
-use charliebot_core::approval_policy::TIER_USER_ACT;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::registry::{HostLogin, OpenWaitingRow};
@@ -87,7 +86,7 @@ async fn fire_backend_id(
   Ok(selector.peek(&configured, &[])?.map(|option| option.id))
 }
 
-/// One user-act item per holder session and host that awaits approval, for each enabled task on that host whose bound
+/// One Waiting on you item per holder session and host that awaits approval, for each enabled task on that host whose bound
 /// session is open.
 async fn derived_rows(features: &FeatureContext) -> anyhow::Result<Vec<OpenWaitingRow>> {
   let cfg = features.config.get()?;
@@ -146,8 +145,6 @@ fn wait_row(holder_id: String, holder_name: String, login: &HostLogin) -> anyhow
     text: format!("Approve the ssh login to {} on {HOST_AUTH_LINK}", login.alias),
     context: Some(login.detail.lines().next().unwrap_or_default().to_string()),
     link: Some(HOST_AUTH_LINK.to_string()),
-    tier: Some(TIER_USER_ACT.to_string()),
-    rule: None,
     since: UtcDateTime::parse(&login.last_change_at)?,
     is_derived: true,
   })
@@ -246,8 +243,6 @@ mod tests {
     assert_eq!(row.text, "Approve the ssh login to synthetic-login-host on /host-auth");
     assert_eq!(row.context.as_deref(), Some("Synthetic login check"));
     assert_eq!(row.link.as_deref(), Some("/host-auth"));
-    assert_eq!(row.tier.as_deref(), Some("user-act"));
-    assert_eq!(row.rule, None);
     assert_eq!(row.since.to_str(), UtcDateTime::parse(SINCE).unwrap().to_str());
 
     set_host_login(&home, verdict("synthetic-other-host", "needs-okta", SINCE));

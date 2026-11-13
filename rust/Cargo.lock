@@ -406,26 +406,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "charliebot-approval"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "charliebot-compat",
- "charliebot-core",
- "charliebot-registry",
- "charliebot-store",
- "charliebot-web-reply",
- "futures-util",
- "http 1.5.0",
- "jiff",
- "serde_json",
- "tempfile",
- "tokio",
- "tower",
-]
-
-[[package]]
 name = "charliebot-artifacts"
 version = "0.1.0"
 dependencies = [
@@ -1180,7 +1160,6 @@ dependencies = [
  "charliebot-agents",
  "charliebot-anthropic-compatible",
  "charliebot-antigravity",
- "charliebot-approval",
  "charliebot-artifacts",
  "charliebot-backup",
  "charliebot-charlie-code",

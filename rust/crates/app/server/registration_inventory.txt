@@ -19,7 +19,6 @@ page_packages	features.feishu	features.feishu
 page_packages	features.disk_sweep	features.disk_sweep
 page_packages	features.run_log_compaction	features.run_log_compaction
 page_packages	features.web_reply	features.web_reply
-page_packages	features.approval	features.approval
 page_packages	features.host_auth	features.host_auth
 page_packages	features.diff_view	features.diff_view
 page_packages	features.explain	features.explain
@@ -57,8 +56,6 @@ routers	features.slack	features.slack
 routers	features.discord	features.discord
 routers	features.feishu	features.feishu
 routers	features.web_reply	features.web_reply
-routers	features.approval	features.approval
-routers	features.approval	features.approval
 routers	features.host_auth	features.host_auth
 routers	features.diff_view	features.diff_view
 routers	features.diff_view	features.diff_view
@@ -114,7 +111,6 @@ diff root	features.memory	memory
 template global	features.code_server	code_server_enabled
 template global	features.voice	voice_backends
 template global	features.voice	voice_default_backend
-home_cards	-	Approvals
 home_cards	-	Host login authorization
 home_cards	-	Diff viewer
 home_cards	-	Token usage by model
@@ -203,7 +199,6 @@ sequence controller	features.improve	improve
 draft platform	features.slack	slack
 draft platform	features.github	github
 plan registry	features.artifacts	plan_registry
-open waiting items reader	features.web_reply	open_waiting_items
 derived waiting items reader	features.cron	derived_waiting_items
 backend host alias	backends.anthropic_compatible	cc-anthropic-compatible
 host login reader	features.host_auth	host_logins

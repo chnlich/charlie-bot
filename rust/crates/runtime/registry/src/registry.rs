@@ -170,8 +170,6 @@ pub struct Registry {
   pub(crate) draft_platforms: Ledger<DraftPlatformFactory>,
   /// The one reader of a session's plan registry, which `features/artifacts` registers.
   pub(crate) plan_registry: Ledger<PlanRegistryFn>,
-  /// The one reader of every open session's Waiting on you items, which `features/web_reply` registers.
-  pub(crate) open_waiting_items: Ledger<OpenWaitingItemsFn>,
   /// The one reader of the derived Waiting on you items, which `features/cron` registers. Its rows have the open
   /// items' shape, and `features/web_reply` reads them through the registry.
   pub(crate) derived_waiting_items: Ledger<OpenWaitingItemsFn>,
@@ -234,7 +232,6 @@ impl Registry {
       sequence_controllers,
       draft_platforms,
       plan_registry,
-      open_waiting_items,
       derived_waiting_items,
       backend_host_aliases,
       host_logins,
@@ -296,7 +293,6 @@ impl Registry {
     append_ledger_inventory(&mut inventory, sequence_controllers);
     append_ledger_inventory(&mut inventory, draft_platforms);
     append_ledger_inventory(&mut inventory, plan_registry);
-    append_ledger_inventory(&mut inventory, open_waiting_items);
     append_ledger_inventory(&mut inventory, derived_waiting_items);
     append_ledger_inventory(&mut inventory, backend_host_aliases);
     append_ledger_inventory(&mut inventory, host_logins);
@@ -537,8 +533,8 @@ pub type ChildEnvFn = fn(&mut Env);
 /// has none.
 pub type PlanRegistryFn = fn(&Path) -> anyhow::Result<Option<Vec<Value>>>;
 
-/// One open session's Waiting on you item, as `features/web_reply` reports it to the approval view
-/// (`status.OpenWaitingItem`). The registry carries the row between the two features.
+/// One derived Waiting on you item of an open session, as `features/cron` reports it and `features/web_reply` lists
+/// it beside the stored items. The registry carries the row between the two features.
 #[derive(Clone, Debug)]
 pub struct OpenWaitingRow {
   pub session_id: String,
@@ -546,13 +542,11 @@ pub struct OpenWaitingRow {
   pub text: String,
   pub context: Option<String>,
   pub link: Option<String>,
-  pub tier: Option<String>,
-  pub rule: Option<String>,
   pub since: UtcDateTime,
   pub is_derived: bool,
 }
 
-/// The reader of every open session's Waiting on you items, the whole home's list (`status.open_waiting_items`).
+/// The reader of the derived Waiting on you items, the whole home's list (`derived_waiting_items`).
 pub type OpenWaitingItemsFn = for<'a> fn(&'a FeatureContext) -> BoxFuture<'a, anyhow::Result<Vec<OpenWaitingRow>>>;
 
 /// The reader of the host that a backend type's entry logs into, from the entry's type-specific keys. The host is
@@ -1440,23 +1434,6 @@ impl Registry {
   /// The registered plan-registry reader; a server with none fails rather than reading plan links without it.
   pub fn plan_registry_reader(&self) -> anyhow::Result<PlanRegistryFn> {
     self.plan_registry.values().next().copied().ok_or_else(|| anyhow::anyhow!("no package registers the plan registry"))
-  }
-
-  /// The registration of the reader of every open session's Waiting on you items. `approval` reads the day view
-  /// through it.
-  pub fn open_waiting_items(&mut self, read: OpenWaitingItemsFn) -> Result<(), RegistryError> {
-    let package = self.owner()?;
-    self.open_waiting_items.insert_single(package, "open_waiting_items", read)
-  }
-
-  /// The registered open Waiting on you reader; a server with none fails rather than listing no user-act items.
-  pub fn open_waiting_items_reader(&self) -> anyhow::Result<OpenWaitingItemsFn> {
-    self
-      .open_waiting_items
-      .values()
-      .next()
-      .copied()
-      .ok_or_else(|| anyhow::anyhow!("no package registers the open Waiting on you reader"))
   }
 
   /// The registration of the reader of the derived Waiting on you items. `web_reply` lists them beside the

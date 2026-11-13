@@ -37,7 +37,6 @@ const PACKAGES: &[(&str, RegisterFn)] = &[
   ("features.disk_sweep", charliebot_disk_sweep::register),
   ("features.run_log_compaction", charliebot_run_log_compaction::register),
   ("features.web_reply", charliebot_web_reply::register),
-  ("features.approval", charliebot_approval::register),
   ("features.host_auth", charliebot_host_auth::register),
   ("features.diff_view", charliebot_diff_view::register),
   ("features.explain", charliebot_explain::register),

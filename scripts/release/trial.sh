@@ -345,14 +345,6 @@ if [[ -n $TRIAL_CREDENTIAL ]]; then
 fi
 chmod 600 "$TRIAL_CB_HOME/config.yaml"
 
-# The approval policy table is required host configuration, and the trial's synthetic home carries the stand-in table.
-mkdir -p "$TRIAL_CB_HOME/config.d/approval.d"
-if ! cp "$SOURCE_REPO/scripts/release/standin-approval-policy.yaml" \
-  "$TRIAL_CB_HOME/config.d/approval.d/policy.yaml"; then
-  printf 'trial setup failed: copy the stand-in approval policy table\n' >&2
-  exit 1
-fi
-
 if ! git -C "$SOURCE_REPO" archive "$COMMIT" | tar -x -C "$REPO_ROOT"; then
   printf 'trial setup failed: git archive extraction for %s\n' "$COMMIT" >&2
   exit 1

@@ -37,7 +37,11 @@
      opened, its chips take the row under the chip row and the fold's chevron
      turns. The fold's body follows the generated chip in the markup, so opening
      it leaves that chip beside the button instead of pushing it down. */
-  .detBtn { line-height:inherit; cursor:pointer }
+  /* The chevron marks this chip as a fold, but the 1 px outline is the only drawing of the
+     control's extent: --bd draws 1.23:1 on the page's --bg and the --panel2 fill 1.18:1 there,
+     so the box is nearly invisible beside the static chips. --mut draws 5.28:1 on --bg in the
+     light theme and 10.45:1 in the dark one; the fill, text tone, size and chevron stay. */
+  .detBtn { line-height:inherit; cursor:pointer; border-color:var(--mut) }
   /* The keyboard ring uses the page's accent, as the approval page's folded rows
      do. Enter and Space then give the chip the same visible focus the rest of the
      page shows. */

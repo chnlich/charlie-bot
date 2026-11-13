@@ -158,6 +158,13 @@ enum Failover {
   NoMember,
 }
 
+/// What a completed work run's review dispatch could do.
+pub(crate) enum ReviewSpawnOutcome {
+  Pending(String),
+  NotEligible,
+  NoReviewer(String),
+}
+
 /// Whether the let-go has begun, with every launch aborted (`let_go_launches`). Integration tests release a held launch
 /// only after this, so the release never precedes the abort.
 #[cfg(feature = "test-hooks")]
@@ -1614,10 +1621,7 @@ impl TaskExecutionAdapter {
           tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");
           return Ok(());
         }
-        if self.maybe_spawn_review(session_id, run).await?.is_none() {
-          let cfg = self.features.config.get()?;
-          let reason =
-            self.no_member_reason(cfg.as_ref(), spawner_backends::class_pool_id(cfg.as_ref(), CallClass::Review))?;
+        if let ReviewSpawnOutcome::NoReviewer(reason) = self.maybe_spawn_review(session_id, run).await? {
           self
             .report_failure_to_parent(
               session_id,
@@ -1784,15 +1788,15 @@ impl TaskExecutionAdapter {
     &self,
     session_id: &str,
     work_run: &RunRecord,
-  ) -> anyhow::Result<Option<String>> {
+  ) -> anyhow::Result<ReviewSpawnOutcome> {
     let store = &self.features.store;
     let guard = store.control_lock().await;
     if store.task_state(session_id)? != "open" {
-      return Ok(None);
+      return Ok(ReviewSpawnOutcome::NotEligible);
     }
     let events = store.load_all_facts(session_id)?;
     if run_records::terminal_outcome(&events, &work_run.id)? != Some(RunOutcomeKind::Success) {
-      return Ok(None);
+      return Ok(ReviewSpawnOutcome::NotEligible);
     }
     let mut work_run = work_run.clone();
     if let Some(fresh) = store.read_run_sync(session_id, &work_run.id)? {
@@ -1806,12 +1810,12 @@ impl TaskExecutionAdapter {
       .collect::<Vec<_>>();
     for review_run in &existing {
       if run_records::terminal_outcome(&events, &review_run.id)? == Some(RunOutcomeKind::Success) {
-        return Ok(Some(review_run.id.clone()));
+        return Ok(ReviewSpawnOutcome::Pending(review_run.id.clone()));
       }
     }
     for review_run in &existing {
       if run_records::terminal_outcome(&events, &review_run.id)?.is_none() {
-        return Ok(existing.first().map(|run| run.id.clone()));
+        return Ok(ReviewSpawnOutcome::Pending(review_run.id.clone()));
       }
     }
     let tried_backends = existing.iter().filter_map(|run| run.backend.clone()).collect::<Vec<_>>();
@@ -1825,10 +1829,9 @@ impl TaskExecutionAdapter {
       .filter(|value| !value.is_null())
       .map(|value| serde_json::from_value::<backend_pool::BackendRoute>(value.clone()))
       .transpose()?;
-    let Some((backend, model, _tried)) = review::select_reviewer_backend(
+    let (backend, model, _tried) = match review::select_reviewer_backend(
       &cfg,
       &selector,
-      CallClass::Review,
       review::ReviewScope {
         route: route.as_ref(),
         worker_backend: work_run.backend.as_deref().unwrap_or_default(),
@@ -1836,10 +1839,12 @@ impl TaskExecutionAdapter {
         tried_backends: &tried_backends,
         used_backends: &used_backends,
       },
-    )?
-    else {
-      tracing::warn!(target: "charliebot_tasks", session_id, work_run = %work_run.id, "reviewer_backends_exhausted");
-      return Ok(None);
+    )? {
+      review::ReviewerBackendDecision::Selected(selection) => selection,
+      review::ReviewerBackendDecision::Unavailable { reason } => {
+        tracing::warn!(target: "charliebot_tasks", session_id, work_run = %work_run.id, "reviewer_backends_exhausted");
+        return Ok(ReviewSpawnOutcome::NoReviewer(reason));
+      }
     };
     let attempt = existing.len() + 1;
     let run_id = control_events::stable_run_id(session_id, &format!("review:{}:{attempt}", work_run.id));
@@ -1857,7 +1862,7 @@ impl TaskExecutionAdapter {
     store.register_run_locked(&guard, session_id, record, Some(&format!("review of work run {}", work_run.id))).await?;
     drop(guard);
     self.launch(session_id, &run_id)?;
-    Ok(Some(run_id))
+    Ok(ReviewSpawnOutcome::Pending(run_id))
   }
 
   pub(crate) async fn after_review_run(
@@ -1873,25 +1878,28 @@ impl TaskExecutionAdapter {
       .read_run_sync(session_id, run.review_of_run_id.as_deref().unwrap_or_default())?
       .ok_or_else(|| anyhow!("review run {} names no recorded work Run", run.id))?;
     if durable_outcome == "failed" {
-      let retried = self.maybe_spawn_review(session_id, &work_run).await?;
-      if retried.is_none() {
-        let cfg = self.features.config.get()?;
-        let reason =
-          self.no_member_reason(cfg.as_ref(), spawner_backends::class_pool_id(cfg.as_ref(), CallClass::Review))?;
-        self
-          .report_failure_to_parent_with_decider(
-            session_id,
-            &work_run,
-            "blocked",
-            Some(&format!("review of work run {} failed on every configured reviewer backend; {reason}", work_run.id)),
-            Some(run),
-          )
-          .await?;
-      } else if let Some(retried_id) = retried {
-        let events = self.features.store.load_all_facts(session_id)?;
-        if run_records::terminal_outcome(&events, &retried_id)? == Some(RunOutcomeKind::Success) {
-          self.report_failure_to_parent(session_id, run, durable_outcome, None).await?;
+      match self.maybe_spawn_review(session_id, &work_run).await? {
+        ReviewSpawnOutcome::NoReviewer(reason) => {
+          self
+            .report_failure_to_parent_with_decider(
+              session_id,
+              &work_run,
+              "blocked",
+              Some(&format!(
+                "review of work run {} failed and no reviewer backend is selectable; {reason}",
+                work_run.id
+              )),
+              Some(run),
+            )
+            .await?;
         }
+        ReviewSpawnOutcome::Pending(retried_id) => {
+          let events = self.features.store.load_all_facts(session_id)?;
+          if run_records::terminal_outcome(&events, &retried_id)? == Some(RunOutcomeKind::Success) {
+            self.report_failure_to_parent(session_id, run, durable_outcome, None).await?;
+          }
+        }
+        ReviewSpawnOutcome::NotEligible => {}
       }
       return Ok(());
     }
@@ -2066,14 +2074,6 @@ impl TaskExecutionAdapter {
       .lock()
       .expect("worker quota failure map is not poisoned")
       .remove(&(session_id.to_string(), run_id.to_string()))
-  }
-
-  /// The reason a pool-selected call found no member: the pool's members and when each one recovers.
-  pub(crate) fn no_member_reason(&self, cfg: &CharlieBotConfig, pool_id: Option<&str>) -> anyhow::Result<String> {
-    match pool_id {
-      Some(pool_id) => model_pool::Selector::from_features(&self.features, cfg)?.exhausted_message(pool_id),
-      None => Ok("no backends.pools entry serves this call".to_string()),
-    }
   }
 
   /// Whether a run whose member spent its quota can move to a member of another pool. A pool-id session switches in its

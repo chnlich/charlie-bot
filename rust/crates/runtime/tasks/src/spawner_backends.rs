@@ -231,7 +231,7 @@ pub async fn select_verify_backend(
   let meta = store.require_session(session_id).await?;
   let (session_backend, session_model) = resolve_session_default_backend_model(cfg, &meta)?;
   let selector = pool.selector(cfg).with_store(store);
-  crate::review::select_reviewer_backend(
+  crate::review::select_checker_backend(
     cfg,
     &selector,
     class,

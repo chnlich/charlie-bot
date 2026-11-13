@@ -5,13 +5,20 @@ use std::path::Path;
 
 use charliebot_agents::backend_pool::BackendRoute;
 use charliebot_agents::model_pool::Selector;
-use charliebot_core::config::{CallClass, CallTarget, CharlieBotConfig};
+use charliebot_core::config::{BackendOption, CallClass, CallTarget, CharlieBotConfig};
 use charliebot_core::event_types::MESSAGE_CONTENT_POINTER;
 use charliebot_store::run_records::visit_events_from_end;
 use serde_json::Value;
 
 /// A selected backend, its resolved model, and the updated reviewer-attempt list.
 pub type ReviewerBackendSelection = (String, Option<String>, Vec<String>);
+
+/// A review selection or the diagnostic for a target with no remaining selectable backend.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReviewerBackendDecision {
+  Selected(ReviewerBackendSelection),
+  Unavailable { reason: String },
+}
 
 /// Read the worker summary for review, logging two warning events when evidence is unavailable.
 pub async fn extract_review_context(session_id: &str, run_id: &str, worker_log_path: &Path) -> Option<String> {
@@ -100,17 +107,154 @@ pub struct ReviewScope<'a> {
   pub used_backends: &'a HashSet<String>,
 }
 
-/// Select the reviewer, verify checker, or cold reader that the call class `class` runs on. `backends.calls` names its
-/// target: a pool selects a member the worker's backend and the used or tried backends do not hold. A model runs as
-/// written; `session`, or no key, runs on the worker's own backend, or on the worker session's route. A pool with no
-/// selectable member falls back to the worker's backend unless that backend was already tried, which ends the
-/// selection with `None`.
-///
-/// `scope.route` is the worker session's recorded route. A review whose `backends.calls.review` is unset or `session`
-/// runs on the route's pool, or on the route's ids in order. It falls back to the worker's backend when the route has
-/// no member left. A route never overrides a `backends.calls.review` backend target: that target alone decides the
-/// reviewer when the key is set.
+/// Select a reviewer using `backends.calls.review`, or the worker session's route when that call target is unset or
+/// names `session`. Prefer a selectable backend the worker session has not used. If none is available, try the
+/// worker's backend first, then another selectable member already used by the worker session. Never select a backend
+/// that already failed this work run's review. Return a diagnostic when no candidate is selectable.
 pub fn select_reviewer_backend(
+  cfg: &CharlieBotConfig,
+  selector: &Selector<'_>,
+  scope: ReviewScope<'_>,
+) -> anyhow::Result<ReviewerBackendDecision> {
+  let ReviewScope { route, worker_backend, worker_model, tried_backends, used_backends } = scope;
+
+  let target = match cfg.backends.calls.get(CallClass::Review) {
+    Some(CallTarget::Backend(backend)) => Some(ReviewTarget::Backend(backend)),
+    None | Some(CallTarget::Session) => {
+      route.filter(|route| !route.backends.is_empty()).map(|route| ReviewTarget::Route(&route.backends))
+    }
+  };
+  let mut excluded = vec![worker_backend.to_string()];
+  excluded.extend(used_backends.iter().cloned());
+  excluded.extend(tried_backends.iter().cloned());
+
+  if let Some(target) = target
+    && let Some(option) = target.select(selector, &excluded)?
+  {
+    return Ok(ReviewerBackendDecision::Selected(reviewer_selection(
+      option,
+      tried_backends,
+      worker_backend,
+      worker_model,
+    )?));
+  }
+
+  if !tried_backends.iter().any(|backend| backend == worker_backend)
+    && let Some(option) = selector.select(worker_backend, tried_backends)?
+  {
+    return Ok(ReviewerBackendDecision::Selected(reviewer_selection(
+      option,
+      tried_backends,
+      worker_backend,
+      worker_model,
+    )?));
+  }
+
+  if let Some(target) = target
+    && let Some(option) = target.select(selector, tried_backends)?
+  {
+    return Ok(ReviewerBackendDecision::Selected(reviewer_selection(
+      option,
+      tried_backends,
+      worker_backend,
+      worker_model,
+    )?));
+  }
+
+  let reason = reviewer_unavailable_reason(cfg, selector, target, worker_backend, tried_backends)?;
+  Ok(ReviewerBackendDecision::Unavailable { reason })
+}
+
+#[derive(Clone, Copy)]
+enum ReviewTarget<'a> {
+  Backend(&'a str),
+  Route(&'a [String]),
+}
+
+impl ReviewTarget<'_> {
+  fn select(self, selector: &Selector<'_>, excluded: &[String]) -> anyhow::Result<Option<BackendOption>> {
+    match self {
+      Self::Backend(backend) => selector.select(backend, excluded),
+      Self::Route(backends) => selector.ordered(backends, excluded),
+    }
+  }
+
+  fn members(self, cfg: &CharlieBotConfig) -> Vec<String> {
+    let targets = match self {
+      Self::Backend(backend) => vec![backend],
+      Self::Route(backends) => backends.iter().map(String::as_str).collect(),
+    };
+    let mut members = Vec::new();
+    let mut seen = HashSet::new();
+    for target in targets {
+      if let Some(pool) = cfg.backends.pool(target) {
+        for member in &pool.members {
+          if seen.insert(member.backend.as_str()) {
+            members.push(member.backend.clone());
+          }
+        }
+      } else if seen.insert(target) {
+        members.push(target.to_string());
+      }
+    }
+    members
+  }
+}
+
+fn reviewer_selection(
+  option: BackendOption,
+  tried_backends: &[String],
+  worker_backend: &str,
+  worker_model: Option<&str>,
+) -> anyhow::Result<ReviewerBackendSelection> {
+  let configured_model = option.required_model("reviewer backend").map_err(anyhow::Error::msg)?;
+  let model = if option.id == worker_backend {
+    worker_model.map(str::to_string).unwrap_or(configured_model)
+  } else {
+    configured_model
+  };
+  let mut tried = tried_backends.to_vec();
+  tried.push(option.id.clone());
+  Ok((option.id, Some(model), tried))
+}
+
+fn reviewer_unavailable_reason(
+  cfg: &CharlieBotConfig,
+  selector: &Selector<'_>,
+  target: Option<ReviewTarget<'_>>,
+  worker_backend: &str,
+  tried_backends: &[String],
+) -> anyhow::Result<String> {
+  let mut members = target.map_or_else(Vec::new, |target| target.members(cfg));
+  let mut seen = members.iter().cloned().collect::<HashSet<_>>();
+  if seen.insert(worker_backend.to_string()) {
+    members.push(worker_backend.to_string());
+  }
+  let mut lines = Vec::with_capacity(members.len());
+  for backend in members {
+    let state = if tried_backends.iter().any(|tried| tried == &backend) {
+      if backend == worker_backend {
+        "failed reviewer (writer backend)".to_string()
+      } else {
+        "failed reviewer".to_string()
+      }
+    } else {
+      let availability = selector.member_state_reason(&backend)?;
+      if backend == worker_backend && availability == "not selectable" {
+        "writer backend".to_string()
+      } else if backend == worker_backend {
+        format!("writer backend; {availability}")
+      } else {
+        availability
+      }
+    };
+    lines.push(format!("- {backend}: {state}"));
+  }
+  Ok(format!("review target has no selectable backend:\n{}", lines.join("\n")))
+}
+
+/// Select a verify checker or cold reader with the call class's configured exclusions.
+pub fn select_checker_backend(
   cfg: &CharlieBotConfig,
   selector: &Selector<'_>,
   class: CallClass,
@@ -139,8 +283,6 @@ pub fn select_reviewer_backend(
       let Some(route) = route.filter(|route| !route.backends.is_empty()) else {
         return Ok(worker_fallback());
       };
-      // The router's ordered ids each pass through the same model-or-pool resolver. A route with no selectable member
-      // falls back to the worker's backend, as a review with no route does.
       let picked = selector.ordered(&route.backends, &excluded)?;
       let Some(option) = picked else {
         return Ok(worker_fallback());
@@ -171,6 +313,17 @@ pub fn select_reviewer_backend(
   Ok(worker_fallback())
 }
 
+fn assistant_event_text(event: &Value) -> Option<String> {
+  let blocks = event.pointer(MESSAGE_CONTENT_POINTER)?.as_array()?;
+  Some(
+    blocks
+      .iter()
+      .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+      .filter_map(|block| block.get("text").and_then(Value::as_str))
+      .collect(),
+  )
+}
+
 /// Return the newest worker summary directly from the run's events log, parsing only result and assistant events.
 pub fn read_worker_summary_file(worker_log_path: &Path) -> anyhow::Result<Option<String>> {
   let (summary, _) = visit_events_from_end(worker_log_path, &["result", "assistant"], |event| {
@@ -184,15 +337,4 @@ pub(crate) fn read_worker_error_file(worker_log_path: &Path) -> anyhow::Result<O
     worker_error_from_events_log(std::slice::from_ref(&event))
   })?;
   Ok(error)
-}
-
-fn assistant_event_text(event: &Value) -> Option<String> {
-  let blocks = event.pointer(MESSAGE_CONTENT_POINTER)?.as_array()?;
-  Some(
-    blocks
-      .iter()
-      .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
-      .filter_map(|block| block.get("text").and_then(Value::as_str))
-      .collect(),
-  )
 }

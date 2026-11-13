@@ -95,7 +95,7 @@ charlie-bot/
 |------|------|------------------|
 | **Master Agent** | Claude Code session (`rust/crates/runtime/tasks/src/master_run.rs`) | User interaction, high-level planning, delegating coding tasks to Workers, reviewing combined worker+reviewer results. Runs as a persistent Claude Code subprocess with `--resume` support across messages. Can use any configured backend. |
 | **Worker Agent** | Claude Code CLI (`rust/crates/runtime/tasks/src/worker.rs`) | Code analysis, implementation, file editing, git operations, testing. Runs in an isolated git worktree on a dedicated branch. Told NOT to rebase/merge/remove the worktree — a reviewer handles that. |
-| **Review Agent** | Claude Code CLI (same run loop as the Worker, `rust/crates/runtime/tasks/src/review.rs`) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto the remote base, and pushes the branch to the base (git rejects a non-fast-forward push). Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `backends.calls.review`). |
+| **Review Agent** | Claude Code CLI (same run loop as the Worker, `rust/crates/runtime/tasks/src/review.rs`) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto the remote base, and pushes the branch to the base (git rejects a non-fast-forward push). Prefers a selectable backend outside the work and earlier work-run backends, then tries the writer first when no such backend is available. |
 
 **Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` trait (`rust/crates/runtime/registry/src/registry.rs`). Each backend package's `register()` hands the registry a `BackendTypeRegistration` (`registry.backend_type` in `rust/crates/runtime/registry/src/registry.rs`) that carries its type string, option model and factory, and the registry builds each `BackendOption.type` through that factory; config loading parses each `backends.options[]` entry through the option models each backend's `options.rs` holds. Backend selection is configured via `backends.options`, `backends.pools` and `backends.calls` in `config.yaml`.
 
@@ -139,14 +139,14 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
 
 3. **Review** (Phase 2 — Automatic on Worker Success):
    - On successful work-run completion, `maybe_spawn_review` (`rust/crates/runtime/tasks/src/execution.rs`) registers a review Run on the same task and launches it, picking the reviewer backend with `select_reviewer_backend` (`rust/crates/runtime/tasks/src/review.rs`)
-   - The reviewer intentionally uses a **different LLM backend** than the worker (cross-backend review), selected by `backends.calls.review`
+   - The reviewer prefers a selectable backend outside the work and earlier work-run backends, using `backends.calls.review` or the route fallback
    - Reviewer reads session conversation + worker log for context, then:
      - Reviews `git diff base_branch...branch_name`
      - Fixes any issues found, commits fixes
      - Rebases the branch onto the base branch
      - Pushes the rebased branch to the remote base (`git push origin HEAD:{base_branch}`); git rejects a non-fast-forward push
      - Cleans up the worktree
-   - If the reviewer **fails**, it retries with the next untried member of the pool that `backends.calls.review` names (cooling members and the members the worker used are skipped)
+   - If the reviewer **fails**, it retries with the next selectable backend while keeping failed reviewers excluded. If no preferred backend is selectable, it tries the writer first, then another backend already used by the worker session.
 
 4. **Master Trigger on Completion**:
    - After review completes (success or all retries exhausted), the master agent is triggered via `trigger_master()` with a combined summary of worker + reviewer results
@@ -229,12 +229,12 @@ A raw log that stops growing while the process is still alive is what the server
 ### 9.1 Model Fallback
 - Multiple backends configured via `backends.options` in `config.yaml` (see that file for the current list)
 - `backends.calls` names the option or pool that each internal call class runs on (worker, improve, verify, review, cold_read, probe, autoname, triage, thread, new_session); a pool id takes the next selectable member under the pool's rule, and a member whose quota runs out cools until its reset, or 30 minutes when none is named, and a worker interrupted by quota continues on the next member (`rust/crates/runtime/agents/src/backend_pool.rs`)
-- Failed reviewers automatically retry with the next untried backend
+- Failed reviewers stay excluded from retries for the same work run; review is blocked only when no candidate backend is selectable
 
 ### 9.2 Rebase Conflict Handling
 - The Review Agent rebases the worker branch onto the base branch before merging
 - If the rebase fails (conflicts), the reviewer attempts to resolve them as part of its review
-- If unresolvable, the review fails and retries with the next backend
+- If unresolvable, the review fails and retries with the next selectable backend that has not already failed this review
 
 ---
 
@@ -277,7 +277,7 @@ for the other backends) and passes no flag.
 - Master Agent as Claude Code session (`rust/crates/runtime/tasks/src/master_run.rs`) with `--resume` support for persistent conversations. Supports any configured backend via the pluggable `AgentBackend` trait (`rust/crates/runtime/registry/src/registry.rs`)
 - Delegation CLI (`rust/crates/app/cli/src/commands/delegate.rs`) — called by the master to spawn workers via `POST /api/internal/delegate`
 - Worker spawner (`rust/crates/runtime/tasks/src/execution.rs`, `rust/crates/runtime/tasks/src/spawner_prompt.rs`, `rust/crates/runtime/tasks/src/spawner_backends.rs`) — creates isolated git worktrees, builds enriched prompts, spawns workers, and orchestrates the two-phase worker+reviewer pipeline
-- Automatic cross-backend review: on worker success, a Review Agent is spawned using a different LLM backend (configurable via `backends.calls.review`). Failed reviewers retry with the next untried backend
+- Automatic review: on worker success, a Review Agent prefers a selectable backend outside the work and earlier work-run backends (configurable via `backends.calls.review`). It falls back to the writer and then another previously used backend when needed; failed reviewers stay excluded.
 - Master trigger on completion: combined worker+reviewer summary is sent to the master agent via `trigger_master()` for user notification and follow-up decisions
 - Session blocks (`rust/crates/runtime/store/src/session_events.rs` and the other `session_*.rs` blocks), `PlanRegistryManager` (`rust/crates/features/artifacts/src/plans.rs`), `TriggerManager` (`rust/crates/runtime/triggers/src/triggers.rs`), `StreamingManager` (`rust/crates/runtime/store/src/streaming.rs`)
 - `init_charliebot_home()` (`rust/crates/app/server/src/home_init.rs`) — seeds `$CHARLIEBOT_HOME/` on first run with default `config.yaml`

@@ -557,9 +557,9 @@ fn nested_repositories(path: &Path) -> Result<Vec<PathBuf>> {
   Ok(repositories)
 }
 
-/// A walk over the scratch trees: every entry below `path`
-/// (never the root, which the caller lstats itself), symlinked directories listed but not descended, in sorted
-/// order, with inspection errors raised.
+/// A walk over the scratch trees. It yields every entry below `path` in sorted order, and raises inspection
+/// errors. The root is never walked, because the caller lstats it itself; symlinked directories are listed but
+/// not descended.
 fn scratch_walk(path: &Path) -> Result<impl Iterator<Item = Result<DirEntry>>> {
   let walk = WalkDir::new(path).min_depth(1).sort_by_file_name().into_iter();
   Ok(walk.map(|entry| entry.map_err(walk_io_error)))

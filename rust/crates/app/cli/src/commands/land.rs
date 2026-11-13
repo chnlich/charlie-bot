@@ -1,9 +1,11 @@
 //! The `land` verb: the implement landing's thin CLI entry over the tasks crate's gate module.
 //!
-//! `charliebot land` without `--task` serves the task of the current run (the server-written
-//! `CHARLIEBOT_SESSION_ID`); `charliebot land --task <id>` lets a manager recover a blocked
-//! landing. One JSON line goes to stdout with the record `landing.json` also holds, and each
-//! state carries its own exit code (`landed` and `landed-no-ci` exit 0).
+//! `charliebot land` serves the task of the current run: the server writes `CHARLIEBOT_SESSION_ID`
+//! into every run's environment, and the session resolution refuses an explicit `--task` naming a
+//! different session, so only the task's own run can land it. A blocked landing's recovery is a new
+//! implement delegation (skills/charliebot/SKILL.md, "Merge-back failover"). One JSON line goes to
+//! stdout with the record `landing.json` also holds, and each state carries its own exit code
+//! (`landed` and `landed-no-ci` exit 0).
 
 use std::ffi::OsString;
 

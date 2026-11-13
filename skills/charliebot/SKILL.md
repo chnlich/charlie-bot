@@ -25,9 +25,12 @@ Source code: the server and the `charliebot` CLI are `rust/crates/`.
 
 ### Merge-back failover
 
-A blocked landing after a moved base, failed or unstarted checks, or a rebase conflict keeps the work branch, PR, and
-worktree. Recover from the kept worktree with `charliebot land --task <task session id>`; resolve a rebase conflict and
-retry. Never hand-push.
+`charliebot land` binds to the calling run's session: the server writes `CHARLIEBOT_SESSION_ID` into every run's
+environment, and the command refuses a `--task` that names a different session, so only the task's own run — its
+reviewer — lands it. A blocked landing after a moved base, failed or unstarted checks, or a rebase conflict keeps the
+work branch, PR, and worktree. A manager recovers a blocked landing by a new implement delegation that carries the kept
+branch's commits onto the current base; the new task's reviewer lands it, resolving any rebase conflict inside that
+task. Never hand-push.
 
 When the CI gate applies, delivery blocks a base-branch commit without a `landing.json` record in state `landed`.
 

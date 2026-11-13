@@ -2,7 +2,7 @@
 //!
 //! This module is the one owner of the implement landing. Every call re-reads git and GitHub state
 //! and acts on it — no saved intermediate state — so a review run that a trigger wake resumes and a
-//! manager recovery run through `land --task` take the same path. The gate applies when the base is
+//! later run in the task's own session take the same path. The gate applies when the base is
 //! the repository's default branch and that branch declares a workflow with a `pull_request`
 //! trigger; every other landing pushes as today and records `landed-no-ci`.
 //!

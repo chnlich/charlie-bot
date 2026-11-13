@@ -50,8 +50,8 @@ pub fn restic_program() -> anyhow::Result<PathBuf> {
   bail!("restic is not on PATH")
 }
 
-/// Asserts restic on PATH, a readable password file and a reachable repository, and returns the restic executable.
-/// Nothing here writes a snapshot.
+/// The restic executable, after a preflight that asserts restic on PATH, a readable password file and a reachable
+/// repository. Nothing here writes a snapshot.
 pub fn preflight(settings: &ResticSettings) -> anyhow::Result<PathBuf> {
   let program = restic_program()?;
   read_password_file(settings)?;

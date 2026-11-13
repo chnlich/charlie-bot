@@ -56,8 +56,32 @@ const TRANSPORT_GZIP_MINIMUM_SIZE: usize = 1000;
 /// same state answers with the same token.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 enum StatusKey {
-  Listing { derived: ListingOverlay, extra: Vec<String>, generation: u64, since: Option<String> },
-  Ids { filter: Option<String>, members: Vec<String>, ids: Vec<String>, generation: u64, since: Option<String> },
+  Listing {
+    derived: ListingOverlay,
+    extra: Vec<String>,
+    generation: u64,
+    since: Option<String>,
+    answer: StatusAnswer,
+  },
+  Ids {
+    filter: Option<String>,
+    members: Vec<String>,
+    ids: Vec<String>,
+    generation: u64,
+    since: Option<String>,
+    answer: StatusAnswer,
+  },
+}
+
+/// Which rows a status body carries.
+///
+/// `Set` answers every row of the filter's set. `Named` answers the ids the request names, while the filter still
+/// names the set that membership follows: a page that paints its first screen asks for the rows it paints rather than
+/// every row of the home.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+enum StatusAnswer {
+  Set,
+  Named,
 }
 
 /// The listing's derived overlay as a key part. It compares and hashes by address, and it holds the overlay so the
@@ -391,8 +415,10 @@ async fn session_status(State(features): State<Arc<FeatureContext>>, request: Re
 /// whose state moved since the page's last answer.
 ///
 /// A `since` token names the state the page holds; without one, or with a token this process did not publish, the
-/// answer carries every row. The answer is `{"token": <state>, "rows": {<id>: <state>}, "gone": [<id>, ...]}`: the
-/// token to send back, the rows that moved, and the ids that left the filter's set.
+/// answer carries every row. `answer=ids` names the rows the request's `ids` carry and leaves the filter to name the
+/// set membership follows, so a page that paints its first screen downloads the rows it paints. The answer is
+/// `{"token": <state>, "rows": {<id>: <state>}, "gone": [<id>, ...]}`: the token to send back, the rows that moved,
+/// and the ids that left the filter's set.
 fn session_status_response(features: &FeatureContext, request: &Request<Body>) -> Response {
   let query = Query::new(request);
   let filter = query.get("filter");
@@ -411,6 +437,13 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
     Ok(force) => force,
     Err(response) => return *response,
   };
+  let answer = match query.get("answer") {
+    None => StatusAnswer::Set,
+    Some("ids") => StatusAnswer::Named,
+    Some(other) => {
+      return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({"detail": format!("unknown answer: {other}")}));
+    }
+  };
   let since = query.get("since").map(str::to_string);
   // Read the generation before the rows, so a state change during this request leaves the body stamped with a
   // generation no later request serves.
@@ -421,7 +454,13 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
       Ok(corpus) => {
         let overlay = ListingOverlay(corpus.derived);
         page = Some((corpus.rows, overlay.clone()));
-        StatusKey::Listing { derived: overlay, extra: sorted_unique(extra.clone()), generation, since: since.clone() }
+        StatusKey::Listing {
+          derived: overlay,
+          extra: sorted_unique(extra.clone()),
+          generation,
+          since: since.clone(),
+          answer,
+        }
       }
       Err(error) => return store_error(error),
     },
@@ -452,6 +491,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
         ids,
         generation,
         since: since.clone(),
+        answer,
       }
     }
   };
@@ -461,19 +501,29 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
   // so replaces the entry.
   if !force && let Some(body) = get_status_body(&key) {
     let owned;
-    let sessions: &[Arc<SessionMetadata>] = match &page {
-      Some((rows, _)) => rows.as_slice(),
-      None => {
-        let ids = match &key {
-          StatusKey::Ids { ids, .. } => ids,
-          StatusKey::Listing { .. } => unreachable!("a listing poll keeps its page rows"),
-        };
-        match fresh_sessions(features, ids) {
-          Ok(sessions) => {
-            owned = sessions;
-            &owned
+    let sessions: &[Arc<SessionMetadata>] = if answer == StatusAnswer::Named {
+      match fresh_sessions(features, &extra) {
+        Ok(sessions) => {
+          owned = sessions;
+          &owned
+        }
+        Err(error) => return store_error(error),
+      }
+    } else {
+      match &page {
+        Some((rows, _)) => rows.as_slice(),
+        None => {
+          let ids = match &key {
+            StatusKey::Ids { ids, .. } => ids,
+            StatusKey::Listing { .. } => unreachable!("a listing poll keeps its page rows"),
+          };
+          match fresh_sessions(features, ids) {
+            Ok(sessions) => {
+              owned = sessions;
+              &owned
+            }
+            Err(error) => return store_error(error),
           }
-          Err(error) => return store_error(error),
         }
       }
     };
@@ -482,36 +532,54 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
     }
     return status_response(request, &body);
   }
-  let (requested, members) = match &page {
-    Some((rows, _)) => {
-      let members = sorted_unique(rows.iter().map(|row| row.id.clone()).collect());
-      let mut requested = members.clone();
-      requested.extend(extra.iter().cloned());
-      (sorted_unique(requested), members)
+  // A named answer carries the request's rows; the filter's set still rides for membership alone, so a row that
+  // leaves the filter is reported gone. Any other answer carries the whole set.
+  let (requested, members) = if answer == StatusAnswer::Named {
+    let members = match &key {
+      StatusKey::Listing { .. } => page
+        .as_ref()
+        .map(|(rows, _)| sorted_unique(rows.iter().map(|row| row.id.clone()).collect()))
+        .expect("a listing poll keeps its page rows"),
+      StatusKey::Ids { members, .. } => members.clone(),
+    };
+    (sorted_unique(extra.clone()), members)
+  } else {
+    match &page {
+      Some((rows, _)) => {
+        let members = sorted_unique(rows.iter().map(|row| row.id.clone()).collect());
+        let mut requested = members.clone();
+        requested.extend(extra.iter().cloned());
+        (sorted_unique(requested), members)
+      }
+      None => match &key {
+        StatusKey::Ids { ids, members, .. } => (ids.clone(), members.clone()),
+        StatusKey::Listing { .. } => unreachable!("a listing poll keeps its page rows"),
+      },
     }
-    None => match &key {
-      StatusKey::Ids { ids, members, .. } => (ids.clone(), members.clone()),
-      StatusKey::Listing { .. } => unreachable!("a listing poll keeps its page rows"),
-    },
   };
   let sessions = match fresh_sessions(features, &requested) {
     Ok(sessions) => sessions,
     Err(error) => return store_error(error),
   };
   let ids: Vec<String> = sessions.iter().map(|meta| meta.id.clone()).collect();
-  let present: HashSet<&str> = ids.iter().map(String::as_str).collect();
-  let members: Vec<String> = members.into_iter().filter(|id| present.contains(id.as_str())).collect();
+  // A named answer did not read the filter's other rows, so it cannot drop a member whose read failed.
+  let members: Vec<String> = if answer == StatusAnswer::Named {
+    members
+  } else {
+    let present: HashSet<&str> = ids.iter().map(String::as_str).collect();
+    members.into_iter().filter(|id| present.contains(id.as_str())).collect()
+  };
   let derived =
     match sidebar::resolve_sidebar_state(&features.store, &features.registry, &sessions, true, true, true, force) {
       Ok(derived) => derived,
       Err(error) => return store_error(error),
     };
   let payloads = sessions.iter().map(|meta| status_row_payload(features, meta, derived.get(&meta.id))).collect();
-  let answer = status_delta::record(filter, &members, &ids, payloads, since.as_deref());
+  let delta = status_delta::record(filter, &members, &ids, payloads, since.as_deref());
   let body = Arc::new(StatusBody::new(Bytes::from(charliebot_compat::json::fast_json_bytes(&json!({
-    "token": answer.token,
-    "rows": Value::Object(answer.rows),
-    "gone": answer.gone,
+    "token": delta.token,
+    "rows": Value::Object(delta.rows),
+    "gone": delta.gone,
   })))));
   if !force {
     store_status_body(key, Arc::clone(&body));
@@ -894,6 +962,42 @@ mod tests {
     assert_eq!(by_filter["rows"], by_ids["rows"]);
     assert!(by_filter["rows"].get(&first.id).is_some() && by_filter["rows"].get(&second.id).is_some());
     let (code, _) = status("/api/sessions/status?filter=unknown-filter".to_string()).await;
+    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+  }
+
+  /// `answer=ids` answers the rows the request names while the filter still names the set membership follows, so a
+  /// page that paints its first screen does not download every row of the Workspace.
+  #[tokio::test]
+  async fn a_named_status_answer_carries_the_named_rows_alone() {
+    let (_home, features) = crate::test_support::feature_context();
+    let painted = crate::test_support::create_node(&features.store, "named-painted", None, TaskProfile::Manager).await;
+    let other = crate::test_support::create_node(&features.store, "named-other", None, TaskProfile::Manager).await;
+    let status = |uri: String| {
+      let features = Arc::clone(&features);
+      async move {
+        let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        crate::test_support::answer(session_status(State(features), request).await).await
+      }
+    };
+
+    let (code, named) = status(format!("/api/sessions/status?filter=all&answer=ids&ids={}", painted.id)).await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(
+      named["rows"].as_object().expect("rows are an object").keys().collect::<Vec<_>>(),
+      vec![&painted.id],
+      "the answer carries the named row, not every Workspace row"
+    );
+    assert!(named["rows"].get(&other.id).is_none(), "the unnamed Workspace row stays out");
+
+    // The filter still names the set: a session that leaves it is reported gone to a page that carries a token, even
+    // though the page never named that session.
+    let token = named["token"].as_str().expect("a full answer names the state it answers").to_string();
+    let (_, filtered) =
+      status(format!("/api/sessions/status?filter=all&answer=ids&since={token}&ids={}", painted.id)).await;
+    assert_eq!(filtered["gone"], json!([]), "a row still in the filter is not gone");
+    assert!(filtered["rows"].as_object().expect("rows are an object").len() <= 1);
+
+    let (code, _) = status("/api/sessions/status?filter=all&answer=unknown&ids=x".to_string()).await;
     assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
   }
 

@@ -115,12 +115,19 @@ function statusRequestUrls(path, ids, query = '', since = '') {
 // The status poll's URLs. A list the server can scope by filter names the filter, and the sessions the list does not
 // paint (the open chat, a delegate card's child) travel as ids. The archive view and a search answer their own row
 // sets, so they name every session by id.
+//
+// A page whose rows fit one URL names them and asks for `answer=ids`: the server then answers those rows alone while
+// the filter still names the set membership follows. A first poll of a full home otherwise downloads every row of the
+// view, though the page paints only its first screen.
 function sidebarStatusUrls(path, ids, since) {
   if (!sidebarRowsRefreshable()) return statusRequestUrls(path, ids);
+  const query = 'filter=' + encodeURIComponent(currentFilter);
+  const named = ids.length ? statusRequestUrls(path, ids, query, since) : [];
+  if (named.length === 1) return [named[0] + '&answer=ids'];
   const painted = new Set(Array.from(document.querySelectorAll('a[id^="session-"]'),
       el => el.id.slice('session-'.length)));
   const unpainted = ids.filter(sid => !painted.has(sid));
-  return statusRequestUrls(path, unpainted, 'filter=' + encodeURIComponent(currentFilter), since);
+  return statusRequestUrls(path, unpainted, query, since);
 }
 
 // The status answers: the token to send back, the rows that moved, and the ids that left the filter's set.

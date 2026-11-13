@@ -351,12 +351,13 @@ test('a view change and a reconnect after a network loss still load the whole li
       'the reopened socket reloads the starred list');
 });
 
-test('the status poll names the Workspace rows by filter and sends only the sessions the list does not paint', async () => {
+test('the status poll names the rows the page holds, so the answer carries those rows alone', async () => {
   const page = buildPage({painted: ['session-b']});
 
   vm.runInContext('pollSessionStatus()', page.context);
-  assert.deepEqual(page.urlsStarting('/api/sessions/status'), ['/api/sessions/status?filter=all&ids=session-a'],
-      'the open chat is not painted, so it rides in ids; the Workspace rows come by filter');
+  assert.deepEqual(page.urlsStarting('/api/sessions/status'),
+      ['/api/sessions/status?filter=all&ids=session-a,session-b&answer=ids'],
+      'the open chat and the painted row ride in ids; answer=ids asks for those rows alone');
   page.requests.forEach((request) => request.respond({token: 'test-1', rows: {}, gone: []}));
   await flush();
 
@@ -366,13 +367,22 @@ test('the status poll names the Workspace rows by filter and sends only the sess
       'a search names its rows by ids, since its rows are not the Workspace list');
 });
 
+test('a status poll falls back to the filter when the held rows outgrow one URL', async () => {
+  const painted = Array.from({length: 400}, (_, index) => '00000000-0000-0000-0000-' + String(index).padStart(12, '0'));
+  const page = buildPage({painted});
+
+  vm.runInContext('pollSessionStatus()', page.context);
+  assert.deepEqual(page.urlsStarting('/api/sessions/status'), ['/api/sessions/status?filter=all&ids=session-a'],
+      'the filter names the painted rows, and the open chat rides as an id, when naming every held row would split the poll');
+});
+
 test('the status poll sends a stable URL for the same row set and the token of the answer before it', async () => {
   const page = buildPage({painted: ['session-b', 'session-c']});
   const urls = () => page.urlsStarting('/api/sessions/status');
   const rows = {'session-a': {}, 'session-b': {has_running_tasks: true}, 'session-c': {}};
 
   vm.runInContext('pollSessionStatus()', page.context);
-  assert.deepEqual(urls(), ['/api/sessions/status?filter=all&ids=session-a']);
+  assert.deepEqual(urls(), ['/api/sessions/status?filter=all&ids=session-a,session-b,session-c&answer=ids']);
   page.requests.forEach((request) => request.respond({token: 'test-1', rows, gone: []}));
   await flush();
 
@@ -380,6 +390,7 @@ test('the status poll sends a stable URL for the same row set and the token of t
   page.document.querySelectorAll = (selector) => selector === 'a[id^="session-"]'
     ? ['session-c', 'session-b'].map((sid) => ({id: 'session-' + sid})) : [];
   vm.runInContext('pollSessionStatus()', page.context);
-  assert.deepEqual(urls().slice(1), ['/api/sessions/status?filter=all&since=test-1&ids=session-a'],
+  assert.deepEqual(urls().slice(1),
+      ['/api/sessions/status?filter=all&since=test-1&ids=session-a,session-b,session-c&answer=ids'],
       'the same row set revalidates the answer the page holds, with the token it names');
 });

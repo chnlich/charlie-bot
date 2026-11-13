@@ -3,7 +3,7 @@
 //! Usage: `improve-sandbox <direction> -- <command> [args...]`
 //!
 //! The boundary limits writes only: every read stays open. `direction_paths` lists the directories that accept a
-//! write; every other path is denied. The live CharlieBot home, the runtime clone and the host worker's trees
+//! write. Every other path is denied. The live CharlieBot home, the runtime clone and the host worker's trees
 //! therefore stay out of reach. `DEVICE_PATHS` takes a rule for each device that tools write to.
 //!
 //! The program creates each missing allow-list directory, because the rules bind to objects that exist when it
@@ -40,7 +40,7 @@ const ACCESS_FS_TRUNCATE: u64 = 1 << 14;
 /// Every write right: bit 1 and bits 4 to 14 (write, remove and create of each object type, refer, truncate).
 /// Bit 0 (execute) and bits 2 and 3 (read) stay out, so reads are never restricted.
 const WRITE_ACCESS: u64 = 0x7FF2;
-/// The rights that a rule on a regular file can carry; a directory-only right has no meaning there.
+/// The rights that a rule on a regular file can carry. A directory-only right has no meaning there.
 const FILE_ACCESS: u64 = ACCESS_FS_WRITE_FILE | ACCESS_FS_TRUNCATE;
 
 const USAGE: &str = "usage: improve-sandbox <direction> -- <command> [args...]";

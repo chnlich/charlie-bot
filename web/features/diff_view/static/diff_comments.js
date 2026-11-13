@@ -183,7 +183,13 @@
         background: white; color: #0f172a; box-shadow: 0 18px 50px rgba(15, 23, 42, .22);
         font: 12px/1.4 system-ui, sans-serif;
       }
-      .${PREFIX}-tray-header { font-weight: 650; color: #334155; }
+      /* The header names the target session, which the select below also names. A long name
+         stays on this one clamped line: wrapped, it takes more height than the tray has and
+         pushes the list and actions past the tray's overflow clip. */
+      .${PREFIX}-tray-header {
+        font-weight: 650; color: #334155;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
       .${PREFIX}-target { display: flex; flex-direction: column; gap: 4px; }
       .${PREFIX}-target select {
         width: 100%; border: 1px solid #cbd5e1; border-radius: 6px; padding: 5px 7px;
@@ -721,7 +727,9 @@
     const reason = targetReason(target);
     reasonEl.textContent = reason;
     reasonEl.style.display = reason ? 'block' : 'none';
-    sendButton.textContent = target ? `Send to ${target.name}` : 'Send unavailable';
+    // The header and the select name the target, so the button carries the action alone: its
+    // label stays inside the tray whatever the session name's length.
+    sendButton.textContent = 'Send';
     sendButton.disabled = sending || pending.length === 0 || !target;
     clearButton.disabled = sending || pending.length === 0;
     targetSelect.disabled = sending || sessions.length === 0;

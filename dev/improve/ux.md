@@ -25,8 +25,10 @@ Apply the screen-space rule in `AGENTS.md` to each defect you choose.
 
 ## Mock home
 
-The mock home directory is `~/improve/mock-home/<version>/`, where `<version>` is the output of `mock-home version`.
-When that directory is missing, create it with `mock-home generate <mock home directory>`.
+The runner supplies the complete shared mock home before the round starts.
+Its directory is `~/improve/mock-home/<version>/`, where `<version>` is the output of `mock-home version`.
+Read that directory throughout the round.
+The round only reads the shared mock home.
 The fixed data keeps the before and after servers on the same bytes, so the two sides compare like with like.
 
 ## Servers

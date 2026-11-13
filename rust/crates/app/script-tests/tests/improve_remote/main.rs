@@ -405,6 +405,48 @@ fn claudes_exit_code_passes_through() {
 
 #[test]
 #[ignore = "integration"]
+fn the_runner_generates_a_missing_shared_mock_home_before_the_round_starts() {
+  let world = World::new();
+  let mock_home = world.remote_home.join("improve/mock-home").join(world::MOCK_HOME_VERSION);
+  assert!(!mock_home.exists(), "the fixture starts with a shared mock home");
+
+  let run = world.run(&world.env());
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  assert_eq!(
+    fs::read_to_string(&world.mock_home_log).expect("the mock-home calls"),
+    format!("version\ngenerate {}\nround perf\n", mock_home.display()),
+    "the runner did not generate the complete mock home before starting the round"
+  );
+  assert_eq!(
+    fs::read_to_string(mock_home.join("manifest.json")).expect("the generated manifest"),
+    "synthetic complete mock home\n"
+  );
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_mock_home_generation_failure_names_the_cause_and_stops_the_round() {
+  let world = World::new();
+  let mock_home = world.remote_home.join("improve/mock-home").join(world::MOCK_HOME_VERSION);
+  let mut env = world.env();
+  env.insert("FAKE_MOCK_HOME_FAIL".to_string(), "1".to_string());
+
+  let run = world.run(&env);
+
+  assert_eq!(run.code, 1, "{}", run.describe());
+  assert!(stderr(&run).contains("synthetic mock-home generation failure: disk full"), "{}", run.describe());
+  assert!(stderr(&run).contains(&mock_home.display().to_string()), "{}", run.describe());
+  assert!(!world.claude_ran(), "the round started after mock-home generation failed");
+  assert!(
+    fs::read_to_string(&world.systemd_run_log).unwrap_or_default().is_empty(),
+    "the runner started a scope after mock-home generation failed"
+  );
+  assert!(!mock_home.exists(), "the failed generation published a shared mock home");
+}
+
+#[test]
+#[ignore = "integration"]
 fn the_forwarded_variables_reach_the_round_and_the_run_token_and_this_hosts_config_dir_do_not() {
   let world = World::new();
   let run = world.run(&world.env());
@@ -1044,7 +1086,7 @@ fn the_runner_builds_the_round_tools_with_its_own_cargo_home_and_tmpdir_and_the_
 
 #[test]
 #[ignore = "integration"]
-fn two_runners_that_need_the_same_missing_commit_build_it_once_and_both_use_it() {
+fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
   let world = World::new();
   // The commit both rounds need carries a rust/ directory, as the build's `cd` needs, and sits on
   // an origin the runner can clone from.
@@ -1058,6 +1100,7 @@ fn two_runners_that_need_the_same_missing_commit_build_it_once_and_both_use_it()
   world.git(&world.repo, &["clone", "-q", "--bare", ".", &origin_text]);
   let cargo_log = world.sandbox.root().join("cargo-builds.log");
   let cargo_env = world.sandbox.root().join("cargo-env.txt");
+  let mock_home_barrier = world.sandbox.dir("mock-home-barrier");
   fs::write(
     world.remote_home.join("improve/home/credentials.yaml"),
     "synthetic-gateway:\n  api_key: synthetic-token\n",
@@ -1112,6 +1155,13 @@ fn two_runners_that_need_the_same_missing_commit_build_it_once_and_both_use_it()
     env.insert("FAKE_SCOPE_STOPPED".to_string(), world.scope_stopped.display().to_string());
     env.insert("FAKE_CARGO_ENV".to_string(), cargo_env.display().to_string());
     env.insert("FAKE_CARGO_LOG".to_string(), cargo_log.display().to_string());
+    env.insert("FAKE_MOCK_HOME_LOG".to_string(), world.mock_home_log.display().to_string());
+    env.insert("FAKE_MOCK_HOME_FIXTURE".to_string(), world.mock_home_fixture.display().to_string());
+    env.insert(
+      "FAKE_MOCK_HOME_DIR".to_string(),
+      world.remote_home.join("improve/mock-home").join(world::MOCK_HOME_VERSION).display().to_string(),
+    );
+    env.insert("FAKE_CLAUDE_BARRIER".to_string(), mock_home_barrier.display().to_string());
     // The build runs long enough that the second runner arrives while the first one holds the
     // work, as two burst starts do on the host.
     env.insert("FAKE_CARGO_SLEEP".to_string(), "2".to_string());
@@ -1135,6 +1185,16 @@ fn two_runners_that_need_the_same_missing_commit_build_it_once_and_both_use_it()
   for run in &runs {
     assert_eq!(run.code, 0, "{}", run.describe());
   }
+  let mock_home = world.remote_home.join("improve/mock-home").join(world::MOCK_HOME_VERSION);
+  let mock_home_calls = fs::read_to_string(&world.mock_home_log).expect("the mock-home calls");
+  assert_eq!(mock_home_calls.lines().filter(|line| line.starts_with("generate ")).count(), 1, "{mock_home_calls}");
+  assert_eq!(
+    fs::read_to_string(mock_home.join("manifest.json")).expect("the shared mock-home manifest"),
+    "synthetic complete mock home\n"
+  );
+  for direction in [DIRECTION, "ux"] {
+    assert!(mock_home_barrier.join(direction).is_file(), "the {direction} round did not read alongside its peer");
+  }
   let builds = fs::read_to_string(&cargo_log).unwrap_or_default();
   assert_eq!(builds.lines().count(), 1, "the runners built the commit more than once");
   let runner_bin = world.remote_home.join("improve/runner/bin");
@@ -1147,8 +1207,12 @@ fn two_runners_that_need_the_same_missing_commit_build_it_once_and_both_use_it()
     );
   }
   for (direction, run) in std::iter::zip([DIRECTION, "ux"], &runs) {
-    let ran = world.sandbox.dir(&format!("records-{direction}")).join("claude-argv.txt");
+    let records = world.sandbox.dir(&format!("records-{direction}"));
+    let ran = records.join("claude-argv.txt");
     assert!(ran.is_file(), "the {direction} round did not run the tools of the commit:\n{}", run.describe());
+    let env = fs::read_to_string(records.join("claude-env.txt")).expect("the round's environment");
+    let commit_bin = runner_bin.join(&commit).display().to_string();
+    assert!(env.contains(&format!("PATH={commit_bin}:")), "the {direction} round did not pin its tools:\n{env}");
   }
 }
 

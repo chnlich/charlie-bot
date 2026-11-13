@@ -35,6 +35,7 @@ pub const GATEWAY_TOKEN: &str = "synthetic-gateway-token";
 pub const API_KEY: &str = "synthetic-api-key";
 pub const RUN_TOKEN: &str = "synthetic-run-token";
 pub const REMOTE_HOST: &str = "improve.example.ts.net";
+pub const MOCK_HOME_VERSION: &str = "2";
 pub const LOCAL_CONFIG_DIR: &str = "/synthetic/local-claude-config";
 pub const INSTRUCTIONS: &str = "Improve one topic.\n";
 
@@ -78,6 +79,28 @@ fi
 "#;
 
 const CLAUDE: &str = r#"# Fake claude: record the arguments and environment it receives, then exit as the round asks.
+if [[ -n ${IMPROVE_DIRECTION:-} ]]; then
+  if [[ ! -s $FAKE_MOCK_HOME_DIR/manifest.json ]]; then
+    printf 'the shared mock home is missing its manifest before the round starts\n' >&2
+    exit 91
+  fi
+  printf 'round %s\n' "$IMPROVE_DIRECTION" >>"$FAKE_MOCK_HOME_LOG"
+  if [[ -n ${FAKE_CLAUDE_BARRIER:-} ]]; then
+    : >"$FAKE_CLAUDE_BARRIER/$IMPROVE_DIRECTION"
+    for _ in $(seq 1 600); do
+      [[ -e $FAKE_CLAUDE_BARRIER/perf && -e $FAKE_CLAUDE_BARRIER/ux ]] && break
+      sleep 0.1
+    done
+    [[ -e $FAKE_CLAUDE_BARRIER/perf && -e $FAKE_CLAUDE_BARRIER/ux ]] || {
+      printf 'both rounds did not reach the shared mock home barrier\n' >&2
+      exit 92
+    }
+  fi
+  if [[ ! -s $FAKE_MOCK_HOME_DIR/manifest.json ]]; then
+    printf 'the shared mock home changed while the round was running\n' >&2
+    exit 93
+  fi
+fi
 printf '%s\n' "$@" >"$FAKE_CLAUDE_ARGV"
 # The record keeps the gateway variables out of the evidence: a real claude holds its environment in memory only, so
 # the record carries each variable's digest in its place.
@@ -99,6 +122,28 @@ if [[ -n ${FAKE_CLAUDE_WAIT_FOR:-} ]]; then
   done
 fi
 exit "${FAKE_CLAUDE_EXIT:-0}"
+"#;
+
+const MOCK_HOME: &str = r#"# Fake mock-home: record its calls and write a manifest as the completion marker.
+case ${1-} in
+  version)
+    printf 'version\n' >>"$FAKE_MOCK_HOME_LOG"
+    printf '%s\n' '2'
+    ;;
+  generate)
+    printf 'generate %s\n' "$2" >>"$FAKE_MOCK_HOME_LOG"
+    if [[ ${FAKE_MOCK_HOME_FAIL:-0} == 1 ]]; then
+      printf 'synthetic mock-home generation failure: disk full\n' >&2
+      exit 23
+    fi
+    mkdir -p -- "$2"
+    printf 'synthetic complete mock home\n' >"$2/manifest.json"
+    ;;
+  *)
+    printf 'unexpected mock-home command: %s\n' "${1-}" >&2
+    exit 2
+    ;;
+esac
 "#;
 
 const SYSTEMD_RUN: &str = r#"# Fake systemd-run: record the call, then run the command after `--`. An already-loaded unit
@@ -157,7 +202,7 @@ if [[ -n ${FAKE_CARGO_SLEEP:-} ]]; then
 fi
 mkdir -p "$CARGO_TARGET_DIR/release"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$CARGO_TARGET_DIR/release/charliebot"
-printf '#!/usr/bin/env bash\nexit 0\n' >"$CARGO_TARGET_DIR/release/mock-home"
+cp -- "$FAKE_MOCK_HOME_FIXTURE" "$CARGO_TARGET_DIR/release/mock-home"
 # The built improve-sandbox runs the command after `--`, as the real program does.
 printf '#!/usr/bin/env bash\nshift\n[[ ${1-} == -- ]] || exit 1\nshift\nexec "$@"\n' \
   >"$CARGO_TARGET_DIR/release/improve-sandbox"
@@ -218,6 +263,8 @@ pub struct World {
   pub systemctl_log: PathBuf,
   pub systemd_run_log: PathBuf,
   pub scope_stopped: PathBuf,
+  pub mock_home_log: PathBuf,
+  pub mock_home_fixture: PathBuf,
   /// Where the local claude of a cron session's own turn writes its arguments and environment: this
   /// host's records, outside the round's boundary.
   pub node_claude_argv: PathBuf,
@@ -292,6 +339,9 @@ impl World {
     git(&sandbox, &git_env, &clone, &["remote", "add", "origin", "https://example.invalid/someone/charlie-bot.git"]);
     let evidence = round_root.join("evidence");
     fs::create_dir_all(&evidence).expect("the evidence directory");
+    let mock_home_log = sandbox.root().join("mock-home.log");
+    let mock_home_fixture = sandbox.root().join("mock-home-fixture.sh");
+    write_executable(&mock_home_fixture, format!("#!/usr/bin/env bash\n{MOCK_HOME}"));
 
     let remote_bin = sandbox.dir("remote/.local/bin");
     for (name, body) in [
@@ -305,7 +355,7 @@ impl World {
     }
     // The round tools of this commit are already built, so the runner skips its build for them.
     let runner_bin = sandbox.dir("remote/improve/runner/bin");
-    for (name, body) in [("charliebot", "exit 0\n"), ("improve-sandbox", SANDBOX), ("mock-home", "exit 0\n")] {
+    for (name, body) in [("charliebot", "exit 0\n"), ("improve-sandbox", SANDBOX), ("mock-home", MOCK_HOME)] {
       write_executable(&runner_bin.join(format!("{name}-{commit}")), format!("#!/usr/bin/env bash\n{body}"));
     }
 
@@ -318,6 +368,8 @@ impl World {
       systemctl_log: sandbox.root().join("systemctl.log"),
       systemd_run_log: sandbox.root().join("systemd-run.log"),
       scope_stopped: sandbox.root().join("scope-stopped"),
+      mock_home_log,
+      mock_home_fixture,
       node_claude_argv: node_records.join("claude-argv.txt"),
       node_claude_env: node_records.join("claude-env.txt"),
       node_claude_stdin: node_records.join("claude-stdin.txt"),
@@ -371,6 +423,12 @@ impl World {
     env.insert("FAKE_SYSTEMCTL_LOG".to_string(), self.systemctl_log.display().to_string());
     env.insert("FAKE_SYSTEMD_RUN_LOG".to_string(), self.systemd_run_log.display().to_string());
     env.insert("FAKE_SCOPE_STOPPED".to_string(), self.scope_stopped.display().to_string());
+    env.insert("FAKE_MOCK_HOME_LOG".to_string(), self.mock_home_log.display().to_string());
+    env.insert("FAKE_MOCK_HOME_FIXTURE".to_string(), self.mock_home_fixture.display().to_string());
+    env.insert(
+      "FAKE_MOCK_HOME_DIR".to_string(),
+      self.remote_home.join("improve/mock-home").join(MOCK_HOME_VERSION).display().to_string(),
+    );
     env
   }
 

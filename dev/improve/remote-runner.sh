@@ -288,6 +288,7 @@ ensure_cli() {
   local cli="$bin_dir/charliebot-$commit"
   local sandbox="$bin_dir/improve-sandbox-$commit"
   local mock_home="$bin_dir/mock-home-$commit"
+  local commit_bin="$bin_dir/$commit"
   local origin lock_fd
   mkdir -p -- "$RUNNER_ROOT"
   exec {lock_fd}>>"$RUNNER_ROOT/build.lock"
@@ -316,7 +317,45 @@ ensure_cli() {
   ln -sfn -- "charliebot-$commit" "$bin_dir/charliebot"
   ln -sfn -- "improve-sandbox-$commit" "$bin_dir/improve-sandbox"
   ln -sfn -- "mock-home-$commit" "$bin_dir/mock-home"
+  # The per-commit links pin a round's command lookup while another launch updates the shared links.
+  mkdir -p -- "$commit_bin"
+  ln -sfn -- "../charliebot-$commit" "$commit_bin/charliebot"
+  ln -sfn -- "../improve-sandbox-$commit" "$commit_bin/improve-sandbox"
+  ln -sfn -- "../mock-home-$commit" "$commit_bin/mock-home"
   flock -u "$lock_fd"
+}
+
+# mock-home writes manifest.json last and renames its staging directory into place only when the home is complete.
+ensure_mock_home() {
+  local commit=$1
+  local mock_home_bin="$RUNNER_ROOT/bin/mock-home-$commit"
+  local version mock_home_root mock_home_dir lock_fd output
+  if ! version=$("$mock_home_bin" version 2>&1); then
+    fail 1 "cannot read mock-home version from $mock_home_bin: ${version:-mock-home version returned no diagnostic}"
+  fi
+  [[ $version =~ ^[[:alnum:]_.-]+$ && $version != . && $version != .. ]] \
+    || fail 1 "mock-home version is not a directory name: $version"
+  mock_home_root="$HOME_DIR/improve/mock-home"
+  mock_home_dir="$mock_home_root/$version"
+  mkdir -p -- "$mock_home_root" || fail 1 "cannot create the shared mock-home directory: $mock_home_root"
+  exec {lock_fd}>>"$RUNNER_ROOT/mock-home.lock"
+  flock "$lock_fd" || fail 1 "cannot lock the shared mock home: $RUNNER_ROOT/mock-home.lock"
+
+  if [[ -e $mock_home_dir ]]; then
+    [[ -d $mock_home_dir ]] || fail 1 "the shared mock home is not a directory: $mock_home_dir"
+    [[ -s $mock_home_dir/manifest.json ]] \
+      || fail 1 "the shared mock home is incomplete; missing manifest: $mock_home_dir/manifest.json"
+    flock -u "$lock_fd" || fail 1 "cannot unlock the shared mock home: $RUNNER_ROOT/mock-home.lock"
+    return
+  fi
+
+  if ! output=$("$mock_home_bin" generate "$mock_home_dir" 2>&1); then
+    fail 1 "cannot generate the shared mock home $mock_home_dir: ${output:-mock-home generate returned no diagnostic}"
+  fi
+  [[ -s $mock_home_dir/manifest.json ]] \
+    || fail 1 "mock-home generate returned success without a complete manifest: $mock_home_dir/manifest.json"
+  printf '%s\n' "$output"
+  flock -u "$lock_fd" || fail 1 "cannot unlock the shared mock home: $RUNNER_ROOT/mock-home.lock"
 }
 
 # Empty TMPDIR. A killed round leaves large copies there, and this round owns the directory: the
@@ -404,6 +443,7 @@ fi
 cd "$ROUND_ROOT"
 
 ensure_cli "$commit"
+export PATH="$RUNNER_ROOT/bin/$commit:$PATH"
 
 # A failed scope is dead: an OOM kill or another fatal end leaves the unit failed, and systemd-run
 # then refuses the same unit name forever, so the runner clears it before the start.
@@ -433,6 +473,7 @@ elif systemctl --user is-active --quiet "improve-$direction.scope"; then
     printf '%s stopped the stale scope improve-%s.scope: its round is over\n' "$STDERR_PREFIX" "$direction" >&2
   fi
 fi
+ensure_mock_home "$commit"
 # The scope bounds the round's memory: the round and every process it starts, the trial server
 # included, die inside it instead of pushing another owner's build into swap. The scope's stderr
 # is held in a file, so a refused scope can be named, and it is printed once the scope ends.

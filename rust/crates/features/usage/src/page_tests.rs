@@ -116,9 +116,19 @@ async fn page_body(features: &FeatureContext, read: &LedgerRead) -> String {
   String::from_utf8(bytes.to_vec()).expect("the page is UTF-8")
 }
 
+/// The byte index where the value of the page script's `const <name>` statement starts.
+///
+/// The served script travels without the spaces around its `=`, so the marker names the statement and the value
+/// starts after the assignment sign.
+fn const_value_start(body: &str, name: &str) -> usize {
+  let marker = format!("const {name}");
+  let after_name = body.find(&marker).unwrap_or_else(|| panic!("the page carries a {name} payload")) + marker.len();
+  after_name + body[after_name..].find('=').expect("the payload names its value") + 1
+}
+
 /// The rows the page's script feeds its charts and table from.
 fn data_rows(body: &str) -> Vec<Value> {
-  let start = body.find("const DATA = ").expect("the page carries a DATA payload") + "const DATA = ".len();
+  let start = const_value_start(body, "DATA");
   let end = start + body[start..].find(";\n").expect("the payload ends its statement");
   let payload: Value = serde_json::from_str(&body[start..end]).expect("the payload is JSON");
   payload["rows"].as_array().expect("the payload holds rows").clone()
@@ -510,7 +520,7 @@ async fn page_legend_names_the_cli_sources_without_charlie_bot() {
   let features = page_features(home.path(), registry());
   seed_ledger(home.path(), true);
   let body = page_body(&features, &read_page_ledger(&features)).await;
-  let start = body.find("const LEG = ").expect("the page carries a legend") + "const LEG = ".len();
+  let start = const_value_start(&body, "LE");
   let end = start + body[start..].find(']').expect("the legend list closes") + 1;
   let legend: Value = serde_json::from_str(&body[start..end]).expect("the legend is JSON");
   assert_eq!(legend, json!([CC, CODEX, OC, AGY, CLC, "Devin"]));
@@ -529,7 +539,7 @@ async fn cards_follow_registration_order_with_run_log_sources_last() {
   let features = page_features(home.path(), reordered);
   seed_ledger(home.path(), true);
   let body = page_body(&features, &read_page_ledger(&features)).await;
-  let start = body.find("const LEG = ").expect("the page carries a legend") + "const LEG = ".len();
+  let start = const_value_start(&body, "LE");
   let end = start + body[start..].find(']').expect("the legend list closes") + 1;
   let legend: Value = serde_json::from_str(&body[start..end]).expect("the legend is JSON");
   assert_eq!(legend, json!([OC, CC, CODEX, CLC]));

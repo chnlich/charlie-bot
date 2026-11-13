@@ -1,8 +1,10 @@
+{#- The empty-session bar carries the layout's controls: the menu button a phone opens and the
+    running-agents badge. The product name is the sidebar's wordmark on a desktop and the welcome
+    heading below on a phone, so a copy here would repeat a label the screen already shows. -#}
 <header class="flex items-center border-b border-slate-700 bg-slate-800/50 px-4 py-3">
   <button class="hamburger-btn p-2 -ml-2 mr-1 rounded-lg hover:bg-slate-700 transition-colors" onclick="toggleMobileSidebar()" title="Menu">
     <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
   </button>
-  <h2 class="text-sm font-semibold text-slate-400">CharlieBot</h2>
   {% include 'partials/concurrency_badge.html' %}
 </header>
 <div class="flex-1 flex items-center justify-center">

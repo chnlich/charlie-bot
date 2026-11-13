@@ -18,6 +18,7 @@ use charliebot_store::run_logs;
 use charliebot_store::run_records::{
   EventReadError, RUN_EVENTS_NAME, parse_event_line, read_event_values, read_run_metadata,
 };
+use charliebot_tasks::routes as task_routes;
 use serde_json::{Value, json};
 
 use crate::common::{USAGE, exact, exit_with, failed, metadata_read_failure, read_json};
@@ -172,16 +173,17 @@ pub fn delegation_body(args: &[OsString]) -> Result<(), CliExit> {
   Ok(())
 }
 
-/// The delegate request body, in the field order the switch sends.
+/// The delegate request body, in the field order the switch sends. Every field name comes from its owner: the route
+/// that validates the body names the delegate fields, and the store names the task record fields.
 fn delegation_request(session: &str, repo: &str, goal: &str) -> String {
   let body = json!({
-    "session_id": session,
-    "description": goal,
+    (task_routes::DELEGATE_SESSION_ID_FIELD): session,
+    (task_routes::DELEGATE_DESCRIPTION_FIELD): goal,
     (REPO_PATH_FIELD): repo,
     (BASE_BRANCH_FIELD): "main",
     (TASK_TYPE_FIELD): TaskType::ScriptRun.as_str(),
     (KEEP_WORKTREE_FIELD): true,
-    "request_id": format!("switch-delegation:{session}"),
+    (task_routes::DELEGATE_REQUEST_ID_FIELD): format!("switch-delegation:{session}"),
   });
   text_repr::json_dumps(&body, &text_repr::DEFAULT_JSON)
 }

@@ -267,6 +267,18 @@ fn assistant_text(text: &str) -> Value {
   json!({"type": ET::ASSISTANT, "message": {"content": [{"type": "text", "text": text}]}})
 }
 
+/// The synthetic assistant message Claude Code writes when a login is lost: the structured API-error fields the relay
+/// reads, with a 401 status.
+fn lost_login(text: &str) -> Value {
+  json!({
+    "type": ET::ASSISTANT,
+    "message": {"model": "<synthetic>", "content": [{"type": "text", "text": text}]},
+    "error": "authentication_failed",
+    "is_api_error_message": true,
+    "api_error_status": 401,
+  })
+}
+
 fn user_tool_result() -> Value {
   json!({"type": ET::USER, "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}})
 }
@@ -814,7 +826,7 @@ async fn test_worker_relay_limit_names_each_unavailable_account() -> anyhow::Res
   make_transcript(&root.claude("main"), CC_ID)?;
   let state = Arc::new(ClaudeAccountState::new());
   let failed = "Failed to authenticate. Please run /login";
-  let scripts = Scripts::new((0..4).map(|_| exits(&[assistant_text(failed)], 1)).collect());
+  let scripts = Scripts::new((0..4).map(|_| exits(&[lost_login(failed)], 1)).collect());
   let config = pooled_config(&root, &["main", "a", "b", "c"], &[], &scripts.token)?;
   let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
   let task_worker = setup.worker(setup.spec(&root, Some(POOLED), Some(CC_ID))?)?;
@@ -840,7 +852,7 @@ async fn test_worker_login_failure_marks_the_account_and_notifies_the_session() 
   make_transcript(&root.claude("main"), CC_ID)?;
   let state = Arc::new(ClaudeAccountState::new());
   let scripts =
-    Scripts::new(vec![exits(&[assistant_text("Failed to authenticate. Please run /login")], 1), exits(&[result()], 0)]);
+    Scripts::new(vec![exits(&[lost_login("Failed to authenticate. Please run /login")], 1), exits(&[result()], 0)]);
   let config = pooled_config(&root, &["main", "ext-1"], &[], &scripts.token)?;
   let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
   let notices: Arc<Mutex<Vec<Value>>> = Arc::default();
@@ -874,7 +886,7 @@ async fn test_worker_login_refusal_result_relays_to_the_next_login() -> anyhow::
   let state = Arc::new(ClaudeAccountState::new());
   let failed = "Failed to authenticate. API Error: 401 Not allowed to access model due to tags configuration.";
   let refused = json!({"type": ET::RESULT, "subtype": "error", "is_error": true, "result": failed});
-  let scripts = Scripts::new(vec![exits(&[assistant_text(failed), refused], 1), exits(&[result()], 0)]);
+  let scripts = Scripts::new(vec![exits(&[lost_login(failed), refused], 1), exits(&[result()], 0)]);
   let config = pooled_config(&root, &["main", "ext-1"], &[], &scripts.token)?;
   let setup = Setup::new(&root, scripted_registry(&state)?, &config)?;
   let task_worker = setup.worker(setup.spec(&root, Some(POOLED), Some(CC_ID))?)?;

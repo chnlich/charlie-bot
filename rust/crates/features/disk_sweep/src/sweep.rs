@@ -466,8 +466,7 @@ fn scratch_rows(scratch_root: &Path, now: DateTime<Utc>) -> Result<Vec<SweepRow>
   if !scratch_root.is_dir() {
     return Ok(Vec::new());
   }
-  let cutoff = now.timestamp() as f64 + now.timestamp_subsec_nanos() as f64 / 1_000_000_000.0
-    - (SCRATCH_DAYS * 24 * 60 * 60) as f64;
+  let cutoff = scratch_cutoff(now);
   let mut rows = Vec::new();
   for entry in git::sorted_entries(scratch_root)? {
     let path = absolute(&entry.path())?;
@@ -503,14 +502,7 @@ fn scratch_rows(scratch_root: &Path, now: DateTime<Utc>) -> Result<Vec<SweepRow>
     if newest >= cutoff {
       continue;
     }
-    let mut has_unsaved_repo = false;
-    for repo in nested_repositories(&path)? {
-      if git::repo_has_unsaved_changes(&repo)? {
-        has_unsaved_repo = true;
-        break;
-      }
-    }
-    if has_unsaved_repo {
+    if has_unsaved_repository(&path)? {
       row.reason = "has-unsaved-repo".to_string();
       rows.push(row);
       continue;
@@ -556,6 +548,17 @@ fn nested_repositories(path: &Path) -> Result<Vec<PathBuf>> {
     }
   }
   Ok(repositories)
+}
+
+/// Whether any repository below `path` holds a change that a removal would lose: an uncommitted change or a commit
+/// that no remote has.
+fn has_unsaved_repository(path: &Path) -> Result<bool> {
+  for repository in nested_repositories(path)? {
+    if git::repo_has_unsaved_changes(&repository)? {
+      return Ok(true);
+    }
+  }
+  Ok(false)
 }
 
 /// A walk over the scratch trees. It yields every entry below `path` in sorted order, and raises inspection
@@ -682,18 +685,20 @@ fn prepare_apply(mut row: SweepRow, roots: SweepRoots, now: DateTime<Utc>) -> (R
   (result, unreadable)
 }
 
+/// The instant a scratch directory must predate to be swept: [`SCRATCH_DAYS`] before `now`, in seconds since the Unix
+/// epoch.
+fn scratch_cutoff(now: DateTime<Utc>) -> f64 {
+  now.timestamp() as f64 + now.timestamp_subsec_nanos() as f64 / 1_000_000_000.0 - (SCRATCH_DAYS * 24 * 60 * 60) as f64
+}
+
 fn scratch_preflight(row: &mut SweepRow, now: DateTime<Utc>) -> Result<()> {
-  let cutoff = now.timestamp() as f64 + now.timestamp_subsec_nanos() as f64 / 1_000_000_000.0
-    - (SCRATCH_DAYS * 24 * 60 * 60) as f64;
-  if tree_latest_mtime(&row.path)? >= cutoff {
+  if tree_latest_mtime(&row.path)? >= scratch_cutoff(now) {
     mark_skipped(row, "too-young");
     return Ok(());
   }
-  for repo in nested_repositories(&row.path)? {
-    if git::repo_has_unsaved_changes(&repo)? {
-      mark_skipped(row, "has-unsaved-repo");
-      return Ok(());
-    }
+  if has_unsaved_repository(&row.path)? {
+    mark_skipped(row, "has-unsaved-repo");
+    return Ok(());
   }
   Ok(())
 }

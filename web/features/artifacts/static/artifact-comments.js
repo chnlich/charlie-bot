@@ -34,6 +34,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var COL_MIN = 240;
     var NO_SESSION_MESSAGE = 'Cannot parse session id from this artifact URL.';
     var SECTION_SELECTOR = 'section';
+    // Characters of a fork's question text that the locator shows after the fork's
+    // number, so the session can tell which item a commented line belongs to
+    // without opening the page.
+    var QUESTION_HEAD_CHARS = 30;
     // The kind of one comment entry, which doubles as its dedup key and as the
     // persisted draft discriminator. A manual block comment has the BLOCK kind;
     // each shortcut below has its own.
@@ -172,14 +176,31 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       var out = [];
       for (var i = 0; i < entries.length; i++) {
         var entry = entries[i] || {};
+        var quote = String(entry.quote == null ? '' : entry.quote);
         out.push({
           kind: normalizeKind(entry.kind),
-          quote: String(entry.quote == null ? '' : entry.quote),
+          quote: quote,
           context: String(entry.context == null ? '' : entry.context),
           comment: String(entry.comment == null ? '' : entry.comment),
+          occurrence: sameQuoteOccurrence(entry.el, quote),
         });
       }
       return out;
+    }
+
+    // The 0-based index of `el` among the page's rows with the same quote, top to
+    // bottom. The restore re-finds rows by quote alone and takes this index, so a
+    // draft on a repeated line re-anchors to its own row. A detached element reads
+    // as 0, the first row.
+    function sameQuoteOccurrence(el, quote) {
+      if (!el) return 0;
+      var rows = collectCommentableBlocks();
+      var index = 0;
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i] === el) return index;
+        if (cleanText(rows[i], 400) === quote) index++;
+      }
+      return 0;
     }
 
     function deserializeDraft(stored) {
@@ -201,6 +222,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
           quote: String(item.quote == null ? '' : item.quote),
           context: String(item.context == null ? '' : item.context),
           comment: String(item.comment == null ? '' : item.comment),
+          occurrence: item.occurrence == null ? 0 : item.occurrence,
         });
       }
       return out;
@@ -681,10 +703,31 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       return '';
     }
 
+    // The question segment of the locator names the fork (item) a commented line
+    // belongs to: `Q<n> "<question head>"`. It applies to a line inside a
+    // div.fork whose question line (p.q) carries a span.fn number, except the
+    // question line itself — its quote already carries the number.
+    function forkQuestionLabel(block) {
+      var fork = block.closest('.fork');
+      if (!fork) return '';
+      var question = fork.querySelector('.q');
+      if (!question || question === block) return '';
+      var fn = question.querySelector('.fn');
+      var number = fn ? cleanText(fn, 20) : '';
+      if (!number) return '';
+      var head = cleanText(question, 200);
+      if (head.indexOf(number) === 0) head = head.slice(number.length).trim();
+      if (head.length > QUESTION_HEAD_CHARS) head = head.slice(0, QUESTION_HEAD_CHARS) + '\u2026';
+      return 'Q' + number + ' "' + head + '"';
+    }
+
     function contextFor(block) {
       var tag = (block.tagName || '').toLowerCase();
-      if (tag === 'section') return sectionTitle(block) || previousHeading(block);
-      return previousHeading(block) || sectionTitle(block);
+      var heading = tag === 'section' ? sectionTitle(block) || previousHeading(block)
+                                      : previousHeading(block) || sectionTitle(block);
+      var question = forkQuestionLabel(block);
+      if (!question) return heading;
+      return heading ? heading + ' \u203A ' + question : question;
     }
 
     function closePopover() {
@@ -707,18 +750,40 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       error.style.display = 'block';
     }
 
-    function buildCommentEntry(quote, context, comment) {
+    function buildCommentEntry(quote, context, comment, suffix) {
       if (quote === '') {
         return ('\u25B8 ' + context).split('\n').concat(('\u21B3 ' + comment).split('\n'));
       }
-      var quoteLine = context
+      var quoteLines = (context
         ? '\u25B8 ' + context + ' \u203A "' + quote + '"'
-        : '\u25B8 "' + quote + '"';
-      return quoteLine.split('\n').concat(('\u21B3 ' + comment).split('\n'));
+        : '\u25B8 "' + quote + '"').split('\n');
+      // A quote spanning lines keeps its locator shape; the suffix rides the last
+      // quote line, right of the closing quote.
+      quoteLines[quoteLines.length - 1] += suffix || '';
+      return quoteLines.concat(('\u21B3 ' + comment).split('\n'));
     }
 
-    function resolveEntryDraft(entry) {
-      return buildCommentEntry(entry.quote, entry.context, entry.comment);
+    function resolveEntryDraft(entry, suffix) {
+      return buildCommentEntry(entry.quote, entry.context, entry.comment, suffix);
+    }
+
+    // The occurrence suffix still to disambiguate: after the fork label, m rows on
+    // the page share the locator's heading, question segment and quote, and k
+    // counts them top to bottom from 1. One match, or an entry the page no longer
+    // holds, renders no suffix.
+    function occurrenceSuffix(entry) {
+      if (!entry.el) return '';
+      var rows = collectCommentableBlocks();
+      var k = 0;
+      var m = 0;
+      for (var i = 0; i < rows.length; i++) {
+        if (cleanText(rows[i], 400) !== entry.quote) continue;
+        if (contextFor(rows[i]) !== entry.context) continue;
+        m++;
+        if (rows[i] === entry.el) k = m;
+      }
+      if (m < 2 || !k) return '';
+      return ' (' + k + ' of ' + m + ')';
     }
 
     function buildBatchMessage(entries) {
@@ -727,7 +792,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       lines.push('');
       for (var i = 0; i < entries.length; i++) {
         var entry = entries[i];
-        var entryLines = resolveEntryDraft(entry);
+        var entryLines = resolveEntryDraft(entry, occurrenceSuffix(entry));
         lines.push((i + 1) + '. ' + entryLines[0]);
         for (var j = 1; j < entryLines.length; j++) {
           lines.push('   ' + entryLines[j]);
@@ -896,12 +961,17 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         var entry = pending[i];
         if (entry.el) continue;
         if (entry.quote === '') continue;
+        // Rows match by quote alone; the stored occurrence picks which same-quote
+        // row the draft belongs to. An absent or 0 occurrence is the first row.
+        var seen = 0;
         for (var j = 0; j < blocks.length; j++) {
-          if (cleanText(blocks[j], 400) === entry.quote) {
+          if (cleanText(blocks[j], 400) !== entry.quote) continue;
+          if (seen === entry.occurrence) {
             entry.el = blocks[j];
             blocks[j].classList.add(GLOBAL_PREFIX + '-marked');
             break;
           }
+          seen++;
         }
       }
     }

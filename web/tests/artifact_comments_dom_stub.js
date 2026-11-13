@@ -63,7 +63,22 @@ function makeElement() {
       return this.textContent;
     },
     classList: makeClassList(),
-    closest() { return null; },
+    // The fork lookup calls closest('.fork'): one class selector, matched against
+    // this element and every ancestor. Other selector forms (tag lists, comma
+    // groups) stay unanswered, as no script path that the tests drive reads them.
+    closest(selector) {
+      if (typeof selector !== 'string' || !selector.startsWith('.') || selector.includes(',') ||
+          selector.includes(' ')) {
+        return null;
+      }
+      const targetClass = selector.slice(1);
+      let el = this;
+      while (el) {
+        if (String(el.className || '').split(/\s+/).includes(targetClass)) return el;
+        el = el.parentElement;
+      }
+      return null;
+    },
     appendChild(child) {
       const prior = child.parentNode;
       if (prior) {
@@ -72,10 +87,16 @@ function makeElement() {
         const ni = prior.childNodes.indexOf(child);
         if (ni !== -1) prior.childNodes.splice(ni, 1);
       }
-      this.children.push(child);
+      // Real DOM semantics: only element children enter `children`; a text node
+      // lives in `childNodes` alone, and CharacterData has no parentElement.
       this.childNodes.push(child);
+      if (child.nodeType === 1) {
+        this.children.push(child);
+        child.parentElement = this;
+      } else {
+        child.parentElement = null;
+      }
       child.parentNode = this;
-      child.parentElement = this;
       return child;
     },
     replaceChild(next, prev) {
@@ -130,7 +151,9 @@ function makeElement() {
     },
     // The comment layer measures layout at script load: placeColumn ->
     // measureContentRight reads document.body.querySelectorAll('*'). So the
-    // stub must answer the '*' walk, not only class selectors.
+    // stub must answer the '*' walk, not only class selectors. The heading walk
+    // (previousHeading) reads tag lists like 'h1,h2,h3,h4,h5,h6', so tag tokens
+    // match tagName case-insensitively.
     querySelectorAll(selector) {
       const all = [];
       const stack = this.children.slice();
@@ -140,9 +163,30 @@ function makeElement() {
         stack.push(...child.children);
       }
       if (selector === '*') return all;
-      if (!selector.startsWith('.')) return [];
-      const targetClass = selector.slice(1);
-      return all.filter((el) => String(el.className || '').split(/\s+/).includes(targetClass));
+      const tokens = selector.split(',').map((token) => token.trim());
+      return all.filter((el) => tokens.some((token) => {
+        if (token.startsWith('.')) {
+          return String(el.className || '').split(/\s+/).includes(token.slice(1));
+        }
+        return String(el.tagName || '').toUpperCase() === token.toUpperCase();
+      }));
+    },
+    // previousHeading and the send-order sort read document position. The stub
+    // computes it from this element's tree, depth-first: the mask numbers are
+    // Node's DOCUMENT_POSITION_FOLLOWING (4) and PRECEDING (2).
+    compareDocumentPosition(other) {
+      let root = this;
+      while (root.parentElement) root = root.parentElement;
+      const order = [];
+      (function walk(node) {
+        order.push(node);
+        for (const child of node.children) walk(child);
+      })(root);
+      const mine = order.indexOf(this);
+      const theirs = order.indexOf(other);
+      if (theirs > mine) return 4;
+      if (mine > theirs) return 2;
+      return 0;
     },
   };
 }

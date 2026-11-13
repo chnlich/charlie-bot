@@ -7,6 +7,7 @@ const {dockOf, findChildByClass, makeElement, clickElement, flushPromises} =
   require('./artifact_comments_dom_stub');
 
 const {loadArtifactCommentsContext} = require('./artifact_comments_vm_context');
+const {HEADING_11_12, REC_TEXT, Q1_TEXT, makeForkPage} = require('./artifact_fork_fixture');
 const {mulberry32} = require('./mulberry32');
 
 // Source of the script under test, for the assertions that pin constants in it.
@@ -1490,4 +1491,126 @@ test('re-anchor never marks a layer node, even when its text matches a draft quo
   window.__cbcReanchor();
   assert.equal(planted.classList.contains('__cbc-marked'), false,
     'a draft entry never anchors to a node inside the review layer');
+});
+
+// ---------------------------------------------------------------------------
+// The locator names the item: the fork question segment and the (k of m)
+// suffix. The fork fixture mirrors the 11-12 briefing page, where the same rec
+// line in ten forks sent two byte-identical locators to the session.
+// ---------------------------------------------------------------------------
+
+// Records every fetch; the POST body lands in `calls` for the message assertions.
+function capturePostFetch(calls, sessionId) {
+  return async (url, options = {}) => {
+    calls.push({url, method: options.method || 'GET', body: options.body});
+    if (url === '/api/sessions/' + sessionId) {
+      return {ok: true, status: 200, async json() { return {name: 'S'}; }};
+    }
+    if (url === '/api/chat/' + sessionId + '/message') {
+      return {ok: true, status: 202, async json() { return {}; }};
+    }
+    throw new Error('Unexpected fetch: ' + url);
+  };
+}
+
+// Comments on blocks through the real click flow and sends the batch; returns
+// the message content the receiving session stored.
+async function sendCommentsFor(bodyChildren, comments) {
+  const calls = [];
+  const {body, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
+    bodyChildren,
+    serverSessionId: 'session-270',
+    fetch: capturePostFetch(calls, 'session-270'),
+  });
+  for (const {block, text} of comments) {
+    addBlockComment(body, listeners, block, text);
+    await flushPromises(2);
+  }
+  const tray = findChildByClass(dockOf(body), '__cbc-tray');
+  const sendBtn = findChildByClass(findChildByClass(tray, '__cbc-tray-actions'), '__cbc-tray-send');
+  await clickElement(sendBtn);
+  await flushPromises(6);
+  const post = calls.find((call) => call.method === 'POST');
+  assert.ok(post, 'the batch was posted');
+  return JSON.parse(post.body).content;
+}
+
+test('the same rec line in two forks locates its own fork and needs no occurrence suffix', async () => {
+  const page = makeForkPage();
+  const content = await sendCommentsFor(page.children, [
+    {block: page.fork1.rec, text: '做'},
+    {block: page.fork2.rec, text: '不做'},
+  ]);
+  // The two question heads are the 11-12 page's, cut at 30 characters: the
+  // locator alone must tell the session which item each reply belongs to.
+  assert.equal(
+    content,
+    [
+      '[Artifact comments · ' + SESSION_270_PLAN_PATH + '] (2)',
+      '',
+      '1. ▸ ' + HEADING_11_12 + ' › Q1 "要不要处理 Yuesheng 的请求：在 11/12（周四，…" › "' + REC_TEXT + '"',
+      '   ↳ 做',
+      '',
+      '2. ▸ ' + HEADING_11_12 + ' › Q2 "要不要回应 FPT 的 CPU 容量答复：明年前没有容量，之…" › "' + REC_TEXT + '"',
+      '   ↳ 不做',
+    ].join('\n')
+  );
+});
+
+test('two identical lines outside any fork under one heading get the (k of m) suffix', async () => {
+  const heading = makeBlock('已做');
+  heading.tagName = 'H2';
+  const line1 = makeBlock('已记入当日清单');
+  const line2 = makeBlock('已记入当日清单');
+  const content = await sendCommentsFor([heading, line1, line2], [
+    {block: line1, text: 'ok one'},
+    {block: line2, text: 'ok two'},
+  ]);
+  assert.equal(
+    content,
+    [
+      '[Artifact comments · ' + SESSION_270_PLAN_PATH + '] (2)',
+      '',
+      '1. ▸ 已做 › "已记入当日清单" (1 of 2)',
+      '   ↳ ok one',
+      '',
+      '2. ▸ 已做 › "已记入当日清单" (2 of 2)',
+      '   ↳ ok two',
+    ].join('\n')
+  );
+});
+
+test('a comment on the fork question line itself carries no question segment', async () => {
+  const page = makeForkPage();
+  const content = await sendCommentsFor(page.children, [
+    {block: page.fork1.q, text: '问句本身'},
+  ]);
+  assert.equal(
+    content,
+    [
+      '[Artifact comments · ' + SESSION_270_PLAN_PATH + '] (1)',
+      '',
+      '1. ▸ ' + HEADING_11_12 + ' › "1 ' + Q1_TEXT + '"',
+      '   ↳ 问句本身',
+    ].join('\n')
+  );
+  assert.ok(!content.includes('Q1 "'), 'the question line\'s quote already carries its number');
+});
+
+test('a page with no repeated lines keeps the pre-change locator byte for byte', async () => {
+  const heading = makeBlock('Plan');
+  heading.tagName = 'H2';
+  const unique = makeBlock('Draft the coverage map.');
+  const content = await sendCommentsFor([heading, unique], [
+    {block: unique, text: 'note'},
+  ]);
+  assert.equal(
+    content,
+    [
+      '[Artifact comments · ' + SESSION_270_PLAN_PATH + '] (1)',
+      '',
+      '1. ▸ Plan › "Draft the coverage map."',
+      '   ↳ note',
+    ].join('\n')
+  );
 });

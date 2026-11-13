@@ -5,6 +5,7 @@ const {dockOf, findChildByClass, makeElement, clickElement, flushPromises} =
   require('./artifact_comments_dom_stub');
 
 const {loadArtifactCommentsContext} = require('./artifact_comments_vm_context');
+const {REC_TEXT, makeForkPage} = require('./artifact_fork_fixture');
 const {SESSIONS_ROOT} = require('./sessions_root_stub');
 
 const ARTIFACT_PATH = '/absolute_filepath' + SESSIONS_ROOT + '/sess-draft/artifacts/plan.html';
@@ -48,6 +49,7 @@ function loadScript(opts = {}) {
     sessionStorage: storage,
     serverSessionId: 'sess-draft',
     nodePreceding: true,
+    bodyChildren: opts.bodyChildren,
   });
   return {context, window, body, storage};
 }
@@ -63,7 +65,7 @@ test('draftKey uses the cbc-draft: prefix with the artifact abs path', () => {
   assert.equal(window.__cbcDraftKey(undefined), 'cbc-draft:');
 });
 
-test('serializeDraft strips el and keeps kind/quote/context/comment, coercing kind', () => {
+test('serializeDraft strips el and keeps kind/quote/context/comment/occurrence, coercing kind', () => {
   const {window} = loadScript();
   const serialize = window.__cbcSerializeDraft;
   const out = serialize([
@@ -71,13 +73,15 @@ test('serializeDraft strips el and keeps kind/quote/context/comment, coercing ki
     {kind: 'improve', el: null, quote: '', context: 'Imp', comment: 'p'},
     {kind: 'unknown', el: makeElement(), quote: 'q2', context: 'c2', comment: 'cm2'},
   ]);
+  // The elements here are detached and the page has no rows, so every
+  // occurrence reads 0; the same-quote counting is its own test below.
   jsonEqual(out, [
-    {kind: 'block', quote: 'q1', context: 'c1', comment: 'cm1'},
-    {kind: 'improve', quote: '', context: 'Imp', comment: 'p'},
-    {kind: 'block', quote: 'q2', context: 'c2', comment: 'cm2'},
+    {kind: 'block', quote: 'q1', context: 'c1', comment: 'cm1', occurrence: 0},
+    {kind: 'improve', quote: '', context: 'Imp', comment: 'p', occurrence: 0},
+    {kind: 'block', quote: 'q2', context: 'c2', comment: 'cm2', occurrence: 0},
   ]);
   assert.equal('el' in out[0], false, 'el is stripped from serialized entries');
-  assert.deepEqual(Object.keys(out[0]), ['kind', 'quote', 'context', 'comment']);
+  assert.deepEqual(Object.keys(out[0]), ['kind', 'quote', 'context', 'comment', 'occurrence']);
 });
 
 test('deserializeDraft restores entries with el null and coerces fields', () => {
@@ -99,6 +103,16 @@ test('deserializeDraft restores entries with el null and coerces fields', () => 
   assert.equal(out[1].kind, 'improve');
 });
 
+test('deserializeDraft reads a stored occurrence through and an absent one as 0', () => {
+  const {window} = loadScript();
+  const out = window.__cbcDeserializeDraft(JSON.stringify([
+    {kind: 'block', quote: 'q', context: 'c', comment: 'cm', occurrence: 2},
+    {kind: 'block', quote: 'q2', context: 'c2', comment: 'cm2'},
+  ]));
+  assert.equal(out[0].occurrence, 2, 'a stored occurrence survives the restore');
+  assert.equal(out[1].occurrence, 0, 'an absent occurrence reads as 0');
+});
+
 test('deserializeDraft returns empty for null/garbage and filters bad entries', () => {
   const {window} = loadScript();
   const deserialize = window.__cbcDeserializeDraft;
@@ -108,13 +122,13 @@ test('deserializeDraft returns empty for null/garbage and filters bad entries', 
   jsonEqual(deserialize(JSON.stringify(null)), []);
   jsonEqual(deserialize(JSON.stringify('string')), []);
   jsonEqual(deserialize(JSON.stringify([{kind: 'block', quote: 'q'}])), [
-    {kind: 'block', el: null, quote: 'q', context: '', comment: ''},
+    {kind: 'block', el: null, quote: 'q', context: '', comment: '', occurrence: 0},
   ]);
   jsonEqual(
     deserialize(JSON.stringify([{kind: 'block', quote: 'a'}, 'bad', null, {kind: 'improve', comment: 'b'}])),
     [
-      {kind: 'block', el: null, quote: 'a', context: '', comment: ''},
-      {kind: 'improve', el: null, quote: '', context: '', comment: 'b'},
+      {kind: 'block', el: null, quote: 'a', context: '', comment: '', occurrence: 0},
+      {kind: 'improve', el: null, quote: '', context: '', comment: 'b', occurrence: 0},
     ]
   );
 });
@@ -143,6 +157,7 @@ test('save/load/clear round-trip: empty -> save -> restore (el:null) -> clear', 
   assert.equal(restored[0].kind, 'block');
   assert.equal(restored[0].quote, 'q1');
   assert.equal(restored[0].comment, 'cm1');
+  assert.equal(restored[0].occurrence, 0, 'a detached element saves as the first same-quote row');
   assert.equal(restored[1].kind, 'improve');
 
   window.__cbcClearDraft(ARTIFACT_PATH);
@@ -345,4 +360,49 @@ test('send puts shortcut entries ahead of block comments and keeps their order',
   assert.equal(numbered[0], '1. ▸ Verify');
   assert.equal(numbered[1], '2. ▸ Improve');
   assert.equal(numbered[2], '3. ▸ Section 2 › "quoted text"');
+});
+
+// ---------------------------------------------------------------------------
+// occurrence: the draft's own-row index among the page's same-quote rows.
+// The fork fixture mirrors the 11-12 briefing page, where a draft on fork 2's
+// rec line used to re-anchor to fork 1.
+// ---------------------------------------------------------------------------
+
+test('serializeDraft stores the 0-based same-quote occurrence of the anchored row', () => {
+  const page = makeForkPage();
+  const {window} = loadScript({bodyChildren: page.children, fetch: sessionFetch(true)});
+  const serialize = window.__cbcSerializeDraft;
+  const entry = {kind: 'block', el: null, quote: REC_TEXT, context: 'ctx', comment: 'cm'};
+  entry.el = page.fork1.rec;
+  assert.equal(serialize([entry])[0].occurrence, 0, 'the first same-quote row reads 0');
+  entry.el = page.fork2.rec;
+  assert.equal(serialize([entry])[0].occurrence, 1, 'the second same-quote row reads 1');
+  entry.el = null;
+  assert.equal(serialize([entry])[0].occurrence, 0, 'a detached element reads 0');
+});
+
+test('a draft on the second fork\'s repeated line re-anchors to that fork after reload', () => {
+  const page = makeForkPage();
+  const storage = makeStorage();
+  storage.setItem(DRAFT_KEY, JSON.stringify([
+    {kind: 'block', quote: REC_TEXT, context: 'ctx', comment: 'note', occurrence: 1},
+  ]));
+  const {body} = loadScript({storage, bodyChildren: page.children, fetch: sessionFetch(true)});
+  assert.equal(page.fork1.rec.classList.contains('__cbc-marked'), false,
+    'fork 1\'s row stays unmarked');
+  assert.equal(page.fork2.rec.classList.contains('__cbc-marked'), true,
+    'the draft re-anchors to fork 2\'s row, its own');
+});
+
+test('a stored draft without occurrence re-anchors to the first same-quote row', () => {
+  const page = makeForkPage();
+  const storage = makeStorage();
+  storage.setItem(DRAFT_KEY, JSON.stringify([
+    {kind: 'block', quote: REC_TEXT, context: 'ctx', comment: 'note'},
+  ]));
+  const {body} = loadScript({storage, bodyChildren: page.children, fetch: sessionFetch(true)});
+  assert.equal(page.fork1.rec.classList.contains('__cbc-marked'), true,
+    'an absent occurrence is the first same-quote row');
+  assert.equal(page.fork2.rec.classList.contains('__cbc-marked'), false,
+    'no other row is marked');
 });

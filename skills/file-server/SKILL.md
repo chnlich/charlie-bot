@@ -154,7 +154,7 @@ The cold-reader instructions and the eight questions live in `prompts/cold_read.
 
 ### Source Check
 
-A page carries facts that the user acts on when it states:
+The Source Check covers every factual claim the user may rely on, including:
 - a cause;
 - a mechanism;
 - a derived number, a sum, a ratio, or a difference that the page computes;

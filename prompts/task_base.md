@@ -26,7 +26,10 @@ The codebase has a single user. Apply these principles:
   unchanged, and the stored records that it must still read, stay outside the comparison. A stated need that an
   existing path in the product already serves counts as served. Compare schemas by schema alone: code size, page
   length, usage counts, and whether a product is in use on this host stay outside the comparison. Name each stated
-  feature that the recommended schema drops, together with the schema that would add it back:
+  feature that the recommended schema drops, its reason, and the schema that would add it back. State each reason as
+  the fact about the user's needs or the product that makes the drop correct, not the history of the decision. Carry
+  each drop into later versions and later designs only while its reason holds; once it no longer holds, return the
+  feature to the comparison:
   - a plan names them in its Schema section;
   - a page names them beside its recommendation;
   - a delivery report names them for each choice that the agent made without asking the user.

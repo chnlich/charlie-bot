@@ -781,7 +781,7 @@ pub fn out_of_family_served_models(events: &[Value], configured_model: &str) -> 
   let mut served = Vec::new();
   for event in events {
     if event.get(event_types::PARENT_TOOL_USE_ID).is_some_and(is_truthy)
-      || event.get("type").and_then(Value::as_str) != Some("assistant")
+      || event.get("type").and_then(Value::as_str) != Some(event_types::ASSISTANT)
     {
       continue;
     }

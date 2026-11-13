@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::Context;
+use charliebot_core::event_types;
 use charliebot_core::ndjson::trim_horizontal_space;
 use serde_json::Value;
 use serde_json::value::RawValue;
@@ -113,7 +114,7 @@ pub fn raw_completion_time(raw_path: &Path) -> Option<OffsetDateTime> {
 
 /// The exit code of the last result: zero when it succeeded, minus one when it is absent or failed.
 pub fn result_exit_code(events: &[Value]) -> i32 {
-  let result = events.iter().rev().find(|event| event.get("type").and_then(Value::as_str) == Some("result"));
+  let result = events.iter().rev().find(|event| event.get("type").and_then(Value::as_str) == Some(event_types::RESULT));
   let Some(result) = result else {
     return -1;
   };
@@ -134,7 +135,8 @@ where
   } else {
     Vec::new()
   };
-  let result = events.iter().rev().find(|event| event.get("type").and_then(Value::as_str) == Some("result")).cloned();
+  let result =
+    events.iter().rev().find(|event| event.get("type").and_then(Value::as_str) == Some(event_types::RESULT)).cloned();
   let exit_code = match super::final_stdout::read_outcome(raw_path.parent().expect("raw log has a parent"))? {
     Some(outcome) if outcome.guard_error.is_none() => outcome.exit_code,
     Some(_) => -1,

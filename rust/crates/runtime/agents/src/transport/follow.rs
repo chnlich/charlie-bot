@@ -9,6 +9,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
+use charliebot_core::event_types;
 use memchr::memchr_iter;
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -151,10 +152,10 @@ where
                 if clamp_timestamps {
                   clamp_event_timestamp(&mut translated, event_mtime);
                 }
-                let is_result = translated.get("type").and_then(Value::as_str) == Some("result");
+                let is_result = translated.get("type").and_then(Value::as_str) == Some(event_types::RESULT);
                 // A delivered input starts a same-process second turn: its result re-arms the post-result clock.
                 let is_input_delivered =
-                  translated.get("type").and_then(Value::as_str) == Some(charliebot_core::event_types::INPUT_DELIVERED);
+                  translated.get("type").and_then(Value::as_str) == Some(event_types::INPUT_DELIVERED);
                 if let Err(error) = handle_event(translated).await {
                   // A run that ended on this event keeps its line in the checkpointed prefix: the event is durable,
                   // and a replay would append it a second time. The event's error is the run's ending, so a failed
@@ -263,26 +264,22 @@ fn subtract_age(now: Instant, mtime: Option<SystemTime>) -> Instant {
 
 fn track_pending_tool_calls(event: &Value, pending: &mut HashSet<String>) {
   match event.get("type").and_then(Value::as_str) {
-    Some("assistant") => {
-      if let Some(items) =
-        event.pointer(charliebot_core::event_types::MESSAGE_CONTENT_POINTER).and_then(Value::as_array)
-      {
+    Some(event_types::ASSISTANT) => {
+      if let Some(items) = event.pointer(event_types::MESSAGE_CONTENT_POINTER).and_then(Value::as_array) {
         for item in items {
-          if item.get("type").and_then(Value::as_str) == Some("tool_use") {
+          if item.get("type").and_then(Value::as_str) == Some(event_types::TOOL_USE) {
             insert_id(item.get("id"), pending);
           }
         }
       }
     }
-    Some("tool_use") => insert_id(event.get("id"), pending),
-    Some("tool_result") => remove_id(event.get(charliebot_core::event_types::TOOL_USE_ID), pending),
-    Some("user") => {
-      if let Some(items) =
-        event.pointer(charliebot_core::event_types::MESSAGE_CONTENT_POINTER).and_then(Value::as_array)
-      {
+    Some(event_types::TOOL_USE) => insert_id(event.get("id"), pending),
+    Some(event_types::TOOL_RESULT) => remove_id(event.get(event_types::TOOL_USE_ID), pending),
+    Some(event_types::USER) => {
+      if let Some(items) = event.pointer(event_types::MESSAGE_CONTENT_POINTER).and_then(Value::as_array) {
         for item in items {
-          if item.get("type").and_then(Value::as_str) == Some("tool_result") {
-            remove_id(item.get(charliebot_core::event_types::TOOL_USE_ID), pending);
+          if item.get("type").and_then(Value::as_str) == Some(event_types::TOOL_RESULT) {
+            remove_id(item.get(event_types::TOOL_USE_ID), pending);
           }
         }
       }

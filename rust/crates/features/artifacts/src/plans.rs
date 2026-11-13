@@ -13,6 +13,7 @@ use std::str::Utf8Error;
 
 use anyhow::anyhow;
 use charliebot_core::json_loads;
+use charliebot_core::str_methods;
 pub(crate) use charliebot_core::text_repr::type_name;
 use charliebot_core::text_repr::{self, JsonStyle};
 use serde_json::{Map, Value, json};
@@ -239,7 +240,7 @@ pub(crate) fn load_registry(plans_path: &Path) -> Result<Value, LoadFailure> {
 pub(crate) fn decode_registry(bytes: &[u8]) -> Result<Value, LoadFailure> {
   let text = std::str::from_utf8(bytes).map_err(|error| LoadFailure::Caught(utf8_error_text(&error, bytes)))?;
   // The text-mode read translates every line ending to "\n", and the JSON error positions count that text.
-  let text = text.replace("\r\n", "\n").replace('\r', "\n");
+  let text = str_methods::universal_newlines(text);
   json_loads::loads_text(&text).map_err(|error| match error {
     json_loads::LoadError::Value(text) => LoadFailure::Caught(text),
     json_loads::LoadError::Unrepresentable(what) => {

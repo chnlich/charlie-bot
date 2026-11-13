@@ -15,6 +15,7 @@ use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_core::paths;
 use charliebot_core::posix_path;
+use charliebot_core::str_methods;
 use charliebot_store::metadata::BASE_BRANCH_FIELD;
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
@@ -405,7 +406,7 @@ fn read_version_file(session_dir: &Path, version: &Value) -> Result<String, Stri
     return Err(format!("version file not found: {}", paths::display(&path)));
   }
   let text = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
-  Ok(text.replace("\r\n", "\n").replace('\r', "\n"))
+  Ok(str_methods::universal_newlines(&text))
 }
 
 #[cfg(test)]

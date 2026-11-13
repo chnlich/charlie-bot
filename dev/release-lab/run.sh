@@ -215,10 +215,6 @@ EOF
     printf 'charliebot:\n  access_key: %s\n' "$access_key"
   } > "$home/credentials.yaml" || fail "the credentials write: $home/credentials.yaml"
   chmod 600 "$home/credentials.yaml"
-  mkdir -p "$home/config.d/approval.d"
-  cp "$FLOW/scripts/release/standin-approval-policy.yaml" "$home/config.d/approval.d/policy.yaml" \
-    || fail "the stand-in approval policy table copies from $FLOW"
-  chmod 600 "$home/config.d/approval.d/policy.yaml"
 }
 
 # lab_write_gh: the stand-in for gh, which answers release.sh's CI preflight and serves the lab's built artifact as its

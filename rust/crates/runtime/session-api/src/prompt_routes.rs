@@ -175,10 +175,6 @@ backends:
   #[tokio::test]
   async fn a_pool_session_previews_200_like_the_model_it_holds() {
     let (home, features) = feature_context_with_auto(CONFIG);
-    charliebot_core::test_support::write_approval_policy_table(
-      home.path(),
-      charliebot_core::test_support::APPROVAL_POLICY_TABLE,
-    );
     features.startup.insert(BackendAvailability::load(home.path()).unwrap()).unwrap();
     features.startup.insert(RotationPositions::default()).unwrap();
     features.startup.insert(repo_root()).unwrap();

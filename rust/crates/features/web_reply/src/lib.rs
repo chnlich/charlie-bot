@@ -32,7 +32,6 @@ use turn_contribution::WebReplyTurnContribution;
 /// web-reply status field of each session.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(routes, matches)?;
-  registry.open_waiting_items(status::open_waiting_rows)?;
   registry.turn_contribution(event_types::WEB_REPLY, Arc::new(WebReplyTurnContribution))?;
   registry.metadata_slot_with_validator(
     MetadataSlot {
@@ -219,9 +218,7 @@ mod tests {
     let unread_body = json!({"session_id": sid, "text": status_text});
 
     let (status, body) = home.send(Method::POST, "/api/internal/web/status/unread", Some(unread_body.clone())).await;
-    let mut unread_item = item.clone();
-    unread_item["rule"] = json!(null);
-    assert_eq!((status, body), (StatusCode::OK, json!({"unread": [unread_item]})));
+    assert_eq!((status, body), (StatusCode::OK, json!({"unread": [item]})));
 
     let (status, body) = home
       .send(
@@ -231,7 +228,7 @@ mod tests {
           "session_id": sid,
           "item": item.clone(),
           "backend": "haiku",
-          "answer": "Deploy.\ntier: t0 rule: money",
+          "answer": "Deploy.",
         })),
       )
       .await;
@@ -250,8 +247,6 @@ mod tests {
     assert_eq!(stored_item["link"], item["link"]);
     assert!(stored_item.get("since").is_some(), "a stored item carries its start time");
     assert_eq!(stored_item["since_exact"], json!(true));
-    assert_eq!(stored_item["tier"], json!("t0"), "a stored item carries its cold read's tier");
-    assert_eq!(stored_item["rule"], json!("money"));
     assert_eq!(body["now_chars"], json!(0));
     assert_eq!(body["now_over_budget"], json!(false));
 
@@ -269,7 +264,7 @@ mod tests {
     let ask_checks = home.events(&sid).into_iter().filter(|event| event["type"] == "web_ask_check").collect::<Vec<_>>();
     assert_eq!(ask_checks.len(), 1);
     assert_eq!(ask_checks[0]["backend"], "haiku");
-    assert_eq!(ask_checks[0]["answer"], "Deploy.\ntier: t0 rule: money");
+    assert_eq!(ask_checks[0]["answer"], "Deploy.");
   }
 
   #[tokio::test]

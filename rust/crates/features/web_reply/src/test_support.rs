@@ -26,8 +26,6 @@ use tower::ServiceExt;
 
 use crate::reply;
 
-pub use charliebot_core::test_support::{APPROVAL_POLICY_TABLE, write_approval_policy_table};
-
 /// The plan-registry reader the server's artifacts package registers; these tests read the same file the same way.
 pub fn read_plans_fixture(session_dir: &Path) -> anyhow::Result<Option<Vec<Value>>> {
   let path = session_dir.join("plans.json");
@@ -125,7 +123,6 @@ impl Home {
     if matches!(packages, PackageSet::Full) {
       fs::write(dir.path().join(CREDENTIALS_FILENAME), "charliebot:\n  access_key: synthetic-access-key\n")
         .expect("the synthetic access key writes");
-      write_approval_policy_table(dir.path(), APPROVAL_POLICY_TABLE);
     }
     let mut registry = Registry::new();
     if matches!(packages, PackageSet::Full | PackageSet::ReplyOnly) {

@@ -117,10 +117,6 @@ paths = ["web/templates/**", "web/static/**", "web/features/artifacts/**"]
 rust = "package(charliebot-artifacts)"
 
 [[entry]]
-paths = ["web/templates/**", "web/static/**", "web/features/approval/**"]
-rust = "package(charliebot-approval)"
-
-[[entry]]
 paths = ["web/templates/**", "web/static/**", "web/features/host_auth/**"]
 rust = "package(charliebot-host-auth)"
 

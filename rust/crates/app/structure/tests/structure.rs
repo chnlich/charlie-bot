@@ -1261,8 +1261,8 @@ const OWNER_TABLE: &[OwnerRow] = &[
   OwnerRow {
     name: "session_name",
     owner: "runtime/store",
-    hint: "Use `charliebot_store::metadata::SESSION_NAME_FIELD`; the approval day view's rows and the voice recordings \
-           page's rows both carry a session's display name under it.",
+    hint: "Use `charliebot_store::metadata::SESSION_NAME_FIELD`; the voice recordings page's rows carry a session's \
+           display name under it.",
   },
   OwnerRow { name: "Read", owner: "infra/core", hint: "Use `charliebot_core::event_types::READ_TOOL`." },
   OwnerRow { name: "Write", owner: "infra/core", hint: "Use `charliebot_core::event_types::WRITE_TOOL`." },

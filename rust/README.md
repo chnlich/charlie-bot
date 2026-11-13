@@ -184,7 +184,6 @@ rust/
 
 `crates/features/` — one crate per product feature:
 
-- `approval` — the approval day view: the page at `GET /approval` and its day API
 - `artifacts` — the session plan registry with its routes and verbs, the publish config, and the `artifact`/`publish` CLI
 - `backup` — the scheduled home backup, pruned by a tiered retention policy
 - `chat_threads` — the Slack/Discord/Feishu thread sessions and their turn contribution

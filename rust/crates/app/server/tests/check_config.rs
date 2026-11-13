@@ -49,22 +49,6 @@ fn run_server(home: &Path, args: &[&str], include_repo_root: bool, server_bin_di
   server_command(home, args, include_repo_root, server_bin_dir).output().expect("the server process starts")
 }
 
-/// A valid approval policy table: the check-config home carries one, and the check writes nothing into the home.
-fn approval_policy_table() -> String {
-  "\
-consequence_tests:
-  - {id: irreversible, rank: 1, text: \"Deletes data with no backup, or sends what cannot be recalled.\"}
-  - {id: chao-name, rank: 2, text: \"A message or publication in Chao's name reaches other people.\"}
-  - {id: money, rank: 3, text: \"Spends money beyond a budget that Chao set.\"}
-  - {id: authority, rank: 4, text: \"Widens what agents may do.\"}
-  - {id: rule-named, rank: 4, text: \"A rule in force names the user's explicit approval for this step.\"}
-  - {id: reading, rank: 5, text: \"Picks a reading for work over about one worker-day.\"}
-standing_policies: []
-enable_ask_tier_refusal: false
-"
-  .to_string()
-}
-
 fn snapshot_tree(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
   fn visit(root: &Path, directory: &Path, snapshot: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) -> std::io::Result<()> {
     for entry in fs::read_dir(directory)? {
@@ -93,8 +77,6 @@ fn check_config_is_read_only_and_does_not_take_the_home_writer_fence() {
   let home = temporary.path().join("home");
   let server_bin_dir = prepare_server_bin_dir(temporary.path(), false);
   fs::create_dir_all(home.join("state")).unwrap();
-  fs::create_dir_all(home.join("config.d/approval.d")).unwrap();
-  fs::write(home.join("config.d/approval.d/policy.yaml"), approval_policy_table()).unwrap();
   fs::write(
     home.join("config.yaml"),
     "server:\n  enable_local_work_guard: false\nbackends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n",
@@ -175,9 +157,8 @@ fn check_config_is_read_only_and_does_not_take_the_home_writer_fence() {
 fn the_local_work_guard_starts_on_a_home_without_a_runner_section() {
   let temporary = tempfile::tempdir().unwrap();
   let home = temporary.path().join("home");
+  fs::create_dir_all(&home).unwrap();
   let server_bin_dir = prepare_server_bin_dir(temporary.path(), true);
-  fs::create_dir_all(home.join("config.d/approval.d")).unwrap();
-  fs::write(home.join("config.d/approval.d/policy.yaml"), approval_policy_table()).unwrap();
   fs::write(home.join("credentials.yaml"), "").unwrap();
   // The live config's keys: no `remote_run:` section and no guard switch, so the guard runs on its default.
   let backends = "backends:\n  options:\n    - id: claude-synthetic\n      label: Synthetic\n      type: cc-claude\n      model: claude-fable-5-1\n";
@@ -246,9 +227,8 @@ const LIVE_BACKENDS: &str = r#"backends:
 fn the_live_option_form_passes_check_config_on_this_release() {
   let temporary = tempfile::tempdir().unwrap();
   let home = temporary.path().join("home");
+  fs::create_dir_all(&home).unwrap();
   let server_bin_dir = prepare_server_bin_dir(temporary.path(), true);
-  fs::create_dir_all(home.join("config.d/approval.d")).unwrap();
-  fs::write(home.join("config.d/approval.d/policy.yaml"), approval_policy_table()).unwrap();
   fs::write(home.join("credentials.yaml"), "").unwrap();
   fs::write(home.join("config.yaml"), LIVE_BACKENDS).unwrap();
 
@@ -262,9 +242,8 @@ fn the_live_option_form_passes_check_config_on_this_release() {
 fn a_mapping_pool_member_fails_check_config_through_the_ordinary_member_error() {
   let temporary = tempfile::tempdir().unwrap();
   let home = temporary.path().join("home");
+  fs::create_dir_all(&home).unwrap();
   let server_bin_dir = prepare_server_bin_dir(temporary.path(), true);
-  fs::create_dir_all(home.join("config.d/approval.d")).unwrap();
-  fs::write(home.join("config.d/approval.d/policy.yaml"), approval_policy_table()).unwrap();
   fs::write(home.join("credentials.yaml"), "").unwrap();
   fs::write(
     home.join("config.yaml"),
@@ -306,9 +285,8 @@ const VISIBILITY_BACKENDS: &str = r#"backends:
 fn check_config_accepts_the_visibility_field_and_refuses_a_non_boolean() {
   let temporary = tempfile::tempdir().unwrap();
   let home = temporary.path().join("home");
+  fs::create_dir_all(&home).unwrap();
   let server_bin_dir = prepare_server_bin_dir(temporary.path(), true);
-  fs::create_dir_all(home.join("config.d/approval.d")).unwrap();
-  fs::write(home.join("config.d/approval.d/policy.yaml"), approval_policy_table()).unwrap();
   fs::write(home.join("credentials.yaml"), "").unwrap();
 
   fs::write(home.join("config.yaml"), VISIBILITY_BACKENDS).unwrap();
@@ -352,8 +330,7 @@ fn release_server_command(server: &Path, argv0: &OsStr, temporary: &Path) -> Com
 fn check_config_runs_through_a_release_link_and_takes_the_agent_path_entry_from_argv0() {
   let temporary = tempfile::tempdir().unwrap();
   let home = temporary.path().join("home");
-  fs::create_dir_all(home.join("config.d/approval.d")).unwrap();
-  fs::write(home.join("config.d/approval.d/policy.yaml"), approval_policy_table()).unwrap();
+  fs::create_dir_all(&home).unwrap();
   fs::write(home.join("credentials.yaml"), "").unwrap();
   fs::write(
     home.join("config.yaml"),

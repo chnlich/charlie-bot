@@ -23,7 +23,6 @@ mod tests {
   /// The page packages that carry frontend files. The other registered packages ship no template or static
   /// directory, so `package_directory` may resolve them to a path no checkout has.
   const PAGE_PACKAGES_WITH_FRONTEND_FILES: &[&str] = &[
-    "features.approval",
     "features.artifacts",
     "features.chat_threads",
     "features.code_server",

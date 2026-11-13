@@ -15,18 +15,6 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use anyhow::Context;
 
-/// The approval policy table every stack home starts with; a manager turn's prompt assembly requires one.
-const APPROVAL_POLICY_TABLE: &str = "\
-consequence_tests:
-  - {id: irreversible, rank: 1, text: \"Deletes data with no backup, or sends what cannot be recalled.\"}
-  - {id: chao-name, rank: 2, text: \"A message or publication in Chao's name reaches other people.\"}
-  - {id: money, rank: 3, text: \"Spends money beyond a budget that Chao set.\"}
-  - {id: authority, rank: 4, text: \"Widens what agents may do.\"}
-  - {id: rule-named, rank: 4, text: \"A rule in force names the user's explicit approval for this step.\"}
-  - {id: reading, rank: 5, text: \"Picks a reading for work over about one worker-day.\"}
-standing_policies: []
-enable_ask_tier_refusal: false
-";
 use crate::completion::TaskCompletion;
 use crate::dispatch::{Dispatcher, RunFinishedCompletion};
 use crate::execution::TaskExecutionAdapter;
@@ -39,8 +27,8 @@ use charliebot_agents::backend_availability::BackendAvailability;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_agents::model_pool::RotationPositions;
 use charliebot_core::config::{
-  BackendOption, BackendsConfig, CONFIG_D_DIR_NAME, CONFIG_FILENAME, CallClass, CallTarget, CallsConfig,
-  CharlieBotConfig, PathsConfig, PoolConfig, PoolMember, PoolRule, Sections, ServerConfig, TelegramConfig, UiConfig,
+  BackendOption, BackendsConfig, CONFIG_FILENAME, CallClass, CallTarget, CallsConfig, CharlieBotConfig, PathsConfig,
+  PoolConfig, PoolMember, PoolRule, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::event_types;
@@ -716,8 +704,6 @@ impl Stack {
     registry: Arc<Registry>,
     runtime_events: Arc<dyn charliebot_store::RuntimeEventHooks>,
   ) -> anyhow::Result<Stack> {
-    std::fs::create_dir_all(home.path().join(format!("{CONFIG_D_DIR_NAME}/approval.d")))?;
-    std::fs::write(home.path().join(format!("{CONFIG_D_DIR_NAME}/approval.d/policy.yaml")), APPROVAL_POLICY_TABLE)?;
     let cfg = Arc::new(cfg);
     let hooks = Arc::new(TestHooks);
     let store = Store::new(

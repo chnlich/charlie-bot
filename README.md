@@ -5,7 +5,7 @@ job, delegates it to worker agents that each work in an isolated git worktree, a
 checks the result before it lands on the base branch. The whole tree runs on your own machine,
 across pluggable LLM CLI backends, and is operated through a web UI.
 Steps that should not happen silently — publishing, sending in your name, spending money — pass an
-approval policy, and the steps the agent proceeds with on its own are recorded in a daily digest.
+approval, and the steps the agent proceeds with on its own are reported with how to undo them.
 
 ## How it works
 
@@ -14,8 +14,8 @@ and the work it does not do itself it delegates to child sessions — worker age
 isolated git worktrees, and the reviewer that checks their result and pushes it to the base branch
 with a fast-forward-only push. A manager presents its approach as a plan in the plan registry
 before large work starts; plans carry versions and an approval record. What an agent may do on its
-own is tiered against an approval policy table: a step that needs you becomes a Waiting on you
-item, and the steps that did happen under a policy are written to the day's digest.
+own is bounded by two rules: a high-consequence step becomes a Waiting on you item that waits for your take off,
+and a reversible step proceeds with its undo stated in the reply.
 
 ```mermaid
 flowchart TB
@@ -42,8 +42,7 @@ flowchart TB
 
 ### Approvals and oversight
 
-- Approval policy table: consequence tests tier each step; a T0 step becomes a Waiting on you item that holds the work until you act
-- Daily digest: T1 policy uses and T2 decisions are recorded with their undo, served per Pacific day on the approval page (`/approval`) with the queue and the actions only you can do
+- Action boundaries: a high-consequence step becomes a Waiting on you item that holds the work until you take it off; a reversible step proceeds and its reply states how to undo it
 - Draft cards: a message or publication in your name waits on an approval card only you can send
 - Failure triage: `charliebot triage scan` groups a time window of failed runs and error logs by signature and prints one verdict per signature
 
@@ -99,10 +98,6 @@ flowchart TB
 </p>
 <p align="center"><i>Desktop: the plans panel — an approved plan's HTML artifact with its version switcher and resolved trade-offs.</i></p>
 <p align="center">
-  <img src="docs/assets/readme/ui-approval-desktop.png" alt="Approval day page" width="880">
-</p>
-<p align="center"><i>Desktop: the approval page for one Pacific day — the ranked queue, the actions only you can do, and the digest, each entry with its undo.</i></p>
-<p align="center">
   <img src="docs/assets/readme/ui-chat-mobile.png" alt="Mobile chat view" width="320">
 </p>
 <p align="center"><i>Mobile: the same chat in a phone-width layout.</i></p>
@@ -151,7 +146,6 @@ release. By workflow:
 
 **Approvals and knowledge**
 
-- `charliebot digest` — record one T1 policy use or T2 decision in the day's digest
 - `charliebot memory` — query, lint and propose from the memory store; `add` stages a capture
 - `charliebot taste` — add, query, mark and index the user's choice precedents
 

@@ -1,13 +1,11 @@
 //! A web session's status: the Goal, Now and Waiting on you items
 //! that `charliebot web status` sets and reads. A set stores the items its JSON object names, records one `web_status`
-//! event and tells every ancestor page. A set refuses a Waiting on you item until a cold read of it is recorded; the
-//! read tiers the item against the approval policy table, and with the table's refusal switch on a set refuses an
-//! item tiered t1 or t2. A read lists the open descendants whose status holds Waiting on you items and the open
-//! children that hold a Now.
+//! event and tells every ancestor page. A set refuses a Waiting on you item until a cold read of it is recorded. A read
+//! lists the open descendants whose status holds Waiting on you items and the open children that hold a Now.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::Arc;
 
 use axum::http::StatusCode;
 use charliebot_compat::file_urls;
@@ -19,7 +17,7 @@ use charliebot_core::str_methods;
 use charliebot_core::text_repr::{JsonStyle, json_dumps};
 use charliebot_registry::FeatureContext;
 use charliebot_store::compact::CompactValue;
-use charliebot_store::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::{Store, session_channel};
 use charliebot_user_text_checks as user_text_checks;
 use serde::{Deserialize, Serialize};
@@ -63,7 +61,7 @@ const NOW_BUDGET_CHARS: usize = 200;
 const ASK_CHECK_CONTENT: &str = "Cold read of a Waiting on you item";
 const ITEM_SHA256: &str = "item_sha256";
 /// The item fields that only the server writes; a set file carries neither.
-const SERVER_WRITTEN_ITEM_FIELDS: [&str; 4] = ["since", "since_exact", "tier", "rule"];
+const SERVER_WRITTEN_ITEM_FIELDS: [&str; 2] = ["since", "since_exact"];
 /// The message a since field that is not a datetime raises.
 const NOT_A_DATETIME: &str = "Input should be a valid datetime";
 /// The message a since_exact field that is not a boolean raises.
@@ -186,8 +184,8 @@ pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
   Ok(patch)
 }
 
-/// Refuse a set file that names a field only the server writes: a waiting item's `since`, `since_exact`, `tier` and
-/// `rule`. Only a list `waiting` is examined, and only its object items.
+/// Refuse a set file that names a field only the server writes: a waiting item's `since` or `since_exact`. Only a list
+/// `waiting` is examined, and only its object items.
 fn refuse_server_fields(fields: &Map<String, Value>) -> Result<(), WebReplyError> {
   let Some(Value::Array(waiting)) = fields.get("waiting") else {
     return Ok(());
@@ -297,24 +295,6 @@ fn assign_since(
   Ok(result)
 }
 
-/// The items with each one's `tier` and `rule` filled in from the ask-check its digest matches.
-/// An item whose check predates the tier keeps neither field.
-fn assign_tiers(
-  items: Vec<WaitingItem>,
-  ask_tiers: &HashMap<String, (String, Option<String>)>,
-) -> Result<Vec<WaitingItem>, WebReplyError> {
-  items
-    .into_iter()
-    .map(|item| {
-      let digest = item_sha256(&item)?;
-      Ok(match ask_tiers.get(&digest) {
-        Some((tier, rule)) => WaitingItem { tier: Some(tier.clone()), rule: rule.clone(), ..item },
-        None => item,
-      })
-    })
-    .collect()
-}
-
 /// One `WaitingItem` parsed with the `item` model's refusal.
 pub fn parse_item(raw: &Value) -> Result<WaitingItem, WebReplyError> {
   let mut problems = Vec::new();
@@ -347,33 +327,16 @@ fn item_sha256(item: &WaitingItem) -> Result<String, WebReplyError> {
   Ok(charliebot_store::control_events::sha256_bytes_hex(&bytes))
 }
 
-/// The tier and rule each `web_ask_check` event gave its item digest, the latest event per digest winning. A check recorded before the tier existed contributes no entry.
-async fn read_ask_tiers(
-  features: &FeatureContext,
-  session_id: &str,
-) -> Result<HashMap<String, (String, Option<String>)>, WebReplyError> {
+/// The item digests that a `web_ask_check` event recorded, each one a cold read the set may store the item after.
+async fn read_ask_digests(features: &FeatureContext, session_id: &str) -> Result<HashSet<String>, WebReplyError> {
   let events = reply::load_events(features, session_id).await?;
-  let mut tiers = HashMap::new();
-  for event in events.iter().filter(|event| event.get("type").and_then(CompactValue::as_str) == Some(WEB_ASK_CHECK)) {
-    let Some(digest) = event.get(ITEM_SHA256).and_then(CompactValue::as_str) else {
-      continue;
-    };
-    let Some(tier) = event.get("tier").and_then(CompactValue::as_str) else {
-      continue;
-    };
-    let rule = event.get("rule").and_then(CompactValue::as_str).map(str::to_string);
-    tiers.insert(digest.to_string(), (tier.to_string(), rule));
-  }
-  Ok(tiers)
-}
-
-/// The table as the server reads it, with a changed read recording its `policy_table_changed` record.
-fn load_approval_policy(
-  features: &FeatureContext,
-) -> Result<charliebot_core::approval_policy::LoadedTable, WebReplyError> {
-  let config = features.config.get().map_err(|error| WebReplyError::Failed(error.into()))?;
-  charliebot_core::approval_policy::load_and_record(&config.charliebot_home)
-    .map_err(|error| WebReplyError::Failed(error.into()))
+  Ok(
+    events
+      .iter()
+      .filter(|event| event.get("type").and_then(CompactValue::as_str) == Some(WEB_ASK_CHECK))
+      .filter_map(|event| event.get(ITEM_SHA256).and_then(CompactValue::as_str).map(str::to_string))
+      .collect(),
+  )
 }
 
 /// Refuse a waiting item with no non-blank context before its digest is checked.
@@ -423,8 +386,8 @@ fn unread_items(items: &[WaitingItem], read_digests: &HashSet<String>) -> Result
     .collect()
 }
 
-/// Record one cold read of `raw_item` and return its digest. The answer's last line
-/// tiers the item against the approval policy table; an answer without a parsable tier line records nothing.
+/// Record one cold read of `raw_item` and return its digest. The read's answer is the item's readability record; a
+/// blank answer records nothing.
 pub async fn record_ask_check(
   features: &FeatureContext,
   session_id: &str,
@@ -435,9 +398,9 @@ pub async fn record_ask_check(
   reply::require_web_session(features, session_id).await?;
   let item = parse_item(raw_item)?;
   let digest = item_sha256(&item)?;
-  let approval = load_approval_policy(features)?;
-  let tier = charliebot_core::approval_policy::parse_ask_tier(answer, &approval.table)
-    .map_err(|error| WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
+  if answer.trim().is_empty() {
+    return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "the cold-read answer is blank".to_string()));
+  }
   features
     .store
     .persist_and_broadcast(
@@ -448,12 +411,10 @@ pub async fn record_ask_check(
         ITEM_SHA256: &digest,
         "backend": backend,
         "answer": answer,
-        "tier": tier.tier,
-        "rule": tier.rule,
       }),
     )
     .await?;
-  tracing::info!(session = %session_id, backend, tier = %tier.tier, "web_ask_check_recorded");
+  tracing::info!(session = %session_id, backend, "web_ask_check_recorded");
   Ok(json!({ITEM_SHA256: digest}))
 }
 
@@ -475,7 +436,7 @@ pub async fn unread_waiting(features: &FeatureContext, session_id: &str, text: &
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, page_link_refusal_detail(&page_refusals)));
   }
   require_current_plan_links(features, &prospective, &scan_context)?;
-  let read_digests: HashSet<String> = read_ask_tiers(features, session_id).await?.into_keys().collect();
+  let read_digests = read_ask_digests(features, session_id).await?;
   let unread = unread_items(items, &read_digests)?;
   Ok(json!({"unread": unread}))
 }
@@ -564,32 +525,11 @@ fn waiting_item(item: &Value, loc: &str, problems: &mut Vec<Problem>) -> Option<
       None
     }
   };
-  let tier = optional_item_string(fields, "tier", loc, problems);
-  let rule = optional_item_string(fields, "rule", loc, problems);
-  for key in fields
-    .keys()
-    .filter(|key| !matches!(key.as_str(), "text" | "context" | "link" | "since" | "since_exact" | "tier" | "rule"))
+  for key in fields.keys().filter(|key| !matches!(key.as_str(), "text" | "context" | "link" | "since" | "since_exact"))
   {
     problems.push(Problem { loc: nested_loc(loc, key), msg: EXTRA_FORBIDDEN });
   }
-  text.map(|text| WaitingItem { text, context, link, since, since_exact, tier, rule })
-}
-
-/// One server-written string field of a waiting item: absent, null, or a string.
-fn optional_item_string(
-  fields: &Map<String, Value>,
-  name: &str,
-  loc: &str,
-  problems: &mut Vec<Problem>,
-) -> Option<String> {
-  match fields.get(name) {
-    None | Some(Value::Null) => None,
-    Some(Value::String(value)) => Some(value.clone()),
-    Some(_) => {
-      problems.push(Problem { loc: nested_loc(loc, name), msg: NOT_A_STRING });
-      None
-    }
-  }
+  text.map(|text| WaitingItem { text, context, link, since, since_exact })
 }
 
 /// A nested validation location, including the root's empty location.
@@ -609,9 +549,7 @@ fn scanned_texts(patch: &StatusPatch) -> Vec<&str> {
 }
 
 /// Store the items the JSON `text` names, record one `web_status` event and notify the ancestors. Waiting items need
-/// a non-blank context and a matching cold-read digest, whose tier and rule the stored item carries; with the
-/// approval policy table's refusal switch on, an item tiered t1 or t2 refuses the set. A stale plan link refuses the
-/// set before the cold read. A thread session's set names the goal alone; one that names Now or Waiting on you is
+/// a non-blank context and a matching cold-read digest. A stale plan link refuses the set before the cold read. A thread session's set names the goal alone; one that names Now or Waiting on you is
 /// refused. The return adds the Now length; a refusal stores and records nothing.
 pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
   let scan_context = reply::file_link_scan_context(features, session_id)?;
@@ -649,13 +587,10 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
       Err(error @ WebReplyError::Failed(_)) => return Err(error),
     }
   };
-  let mut ask_tiers = HashMap::new();
   if let Some(items) = patch.waiting.as_deref()
     && !items.is_empty()
   {
-    let approval = load_approval_policy(features)?;
-    ask_tiers = read_ask_tiers(features, session_id).await?;
-    let read_digests: HashSet<String> = ask_tiers.keys().cloned().collect();
+    let read_digests = read_ask_digests(features, session_id).await?;
     for (index, item) in items.iter().enumerate() {
       let digest = match item_sha256(item) {
         Ok(digest) => digest,
@@ -664,19 +599,6 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
       };
       if !read_digests.contains(&digest) {
         refusal_details.push(format!("Waiting on you item {:?} needs a cold read", item.text));
-        refused = true;
-        continue;
-      }
-      if approval.table.enable_ask_tier_refusal
-        && let Some((tier, rule)) = ask_tiers.get(&digest)
-        && matches!(tier.as_str(), "t1" | "t2")
-      {
-        refusal_details.push(format!(
-          "Waiting on you item {:?} is tiered {tier} (rule: {}): carry out the step and record it with \
-           charliebot digest add instead of waiting for approval",
-          item.text,
-          rule.as_deref().unwrap_or("none")
-        ));
         refused = true;
       }
     }
@@ -692,7 +614,7 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
     Some([]) => Vec::new(),
     Some(items) => {
       let links = links.as_mut().expect("nonempty waiting items have plan-link validation");
-      assign_tiers(assign_since(items, &stored_waiting, links, now)?, &ask_tiers)?
+      assign_since(items, &stored_waiting, links, now)?
     }
     None => stored_waiting,
   };
@@ -793,8 +715,7 @@ fn read_status_tree(store: &Store, session_id: &str) -> Result<StatusTree, WebRe
 }
 
 /// The derived Waiting on you items that the registry's reader gives: those held by a session in `holders`, or all of
-/// them when `holders` is `None`. The status read and the approval view both list them through this function, and no
-/// stored status holds them.
+/// them when `holders` is `None`. The status read lists them through this function, and no stored status holds them.
 async fn derived_items(
   features: &FeatureContext,
   holders: Option<&HashSet<String>>,
@@ -811,8 +732,6 @@ async fn derived_items(
         text: row.text,
         context: row.context,
         link: row.link,
-        tier: row.tier,
-        rule: row.rule,
         since: row.since,
         is_derived: true,
       })
@@ -827,16 +746,13 @@ fn derived_payload(item: &OpenWaitingItem) -> Value {
     "text": item.text,
     "context": item.context,
     "link": item.link,
-    "tier": item.tier,
-    "rule": item.rule,
     "since": item.since.to_str(),
   })
 }
 
 /// The session's status, waiting items of open descendants and Now items of open children, newest
 /// first. A descendant needs waiting items; a child needs a Now value. The derived items the session holds ride
-/// beside the stored ones, under `derived_waiting`. The session's own task state rides under `own_task_state`: the
-/// approval page lists a closed session's stored items nowhere, so a count that opens the page leaves them out.
+/// beside the stored ones, under `derived_waiting`. The session's own task state rides under `own_task_state`.
 pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_web_session(features, session_id).await?;
   let stored = stored_status(&meta)?;
@@ -902,8 +818,7 @@ fn payload_of(status: &WebStatus) -> Value {
   serde_json::to_value(status).expect("a web status serializes to JSON")
 }
 
-/// One open session's Waiting on you item with the session that holds it. The start time
-/// is resolved, as the status read resolves it.
+/// One derived Waiting on you item with the session that holds it.
 #[derive(Clone, Debug, Serialize)]
 pub struct OpenWaitingItem {
   pub session_id: String,
@@ -911,110 +826,8 @@ pub struct OpenWaitingItem {
   pub text: String,
   pub context: Option<String>,
   pub link: Option<String>,
-  pub tier: Option<String>,
-  pub rule: Option<String>,
   pub since: UtcDateTime,
   pub is_derived: bool,
-}
-
-/// The sessions whose stored web status carries waiting items, filtered from one metadata corpus.
-///
-/// The approval day view asks every session of the home for its status on each load, and the corpus holds one row per
-/// session of the home. The filter runs when the corpus moves and the rows are reused while the same corpus holds; the
-/// memo keeps the corpus it filtered, so a corpus that replaces it holds a different allocation.
-struct WaitingSessions {
-  corpus: Arc<Vec<Arc<SessionMetadata>>>,
-  rows: Arc<Vec<Arc<SessionMetadata>>>,
-}
-
-static WAITING_SESSIONS: LazyLock<Mutex<Option<WaitingSessions>>> = LazyLock::new(|| Mutex::new(None));
-
-/// The corpus rows whose stored status names at least one waiting item, in corpus order.
-fn sessions_with_waiting(
-  metas: &Arc<Vec<Arc<SessionMetadata>>>,
-) -> Result<Arc<Vec<Arc<SessionMetadata>>>, WebReplyError> {
-  {
-    let memo = WAITING_SESSIONS.lock().expect("the waiting sessions mutex is not poisoned");
-    if let Some(entry) = memo.as_ref()
-      && Arc::ptr_eq(&entry.corpus, metas)
-    {
-      return Ok(Arc::clone(&entry.rows));
-    }
-  }
-  let mut rows = Vec::new();
-  for meta in metas.iter() {
-    if stored_status(meta)?.is_some_and(|status| !status.waiting.is_empty()) {
-      rows.push(Arc::clone(meta));
-    }
-  }
-  let rows = Arc::new(rows);
-  *WAITING_SESSIONS.lock().expect("the waiting sessions mutex is not poisoned") =
-    Some(WaitingSessions { corpus: Arc::clone(metas), rows: Arc::clone(&rows) });
-  Ok(rows)
-}
-
-/// Every open session's Waiting on you items, the stored ones in metadata-listing order and then the derived ones. The
-/// approval day view reads the whole home through this, where the status read reads one task tree.
-pub async fn open_waiting_items(features: &FeatureContext) -> Result<Vec<OpenWaitingItem>, WebReplyError> {
-  let archived = derived_archived_ids(&features.store).await?.iter().cloned().collect::<HashSet<_>>();
-  // The read takes the corpus the listing memo holds instead of a copy of it: the approval day view reads this on
-  // every page load, and copying one row per session of the home cost more than the rest of the view together.
-  let (metas, _) = tree_read(&features.store, |store| store.load_session_metas_snapshot_versioned(None)).await?;
-  let waiting = sessions_with_waiting(&metas)?;
-  let mut rows = Vec::new();
-  for meta in waiting.iter() {
-    let status = stored_status(meta)?.expect("the filter kept only sessions whose status carries waiting items");
-    if meta.status == SessionStatus::Archived || archived.contains(&meta.id) {
-      continue;
-    }
-    if task_state(&features.store, &meta.id).await? != "open" {
-      continue;
-    }
-    for item in effective_waiting(&status) {
-      rows.push(OpenWaitingItem {
-        session_id: meta.id.clone(),
-        session_name: meta.name.clone(),
-        text: item.text,
-        context: item.context,
-        link: item.link,
-        tier: item.tier,
-        rule: item.rule,
-        since: item.since.expect("effective_waiting fills the start time"),
-        is_derived: false,
-      });
-    }
-  }
-  rows.extend(derived_items(features, None).await?);
-  Ok(rows)
-}
-
-/// The registry's reader for every open session's Waiting on you items (`charliebot_registry::OpenWaitingItemsFn`), which the
-/// approval view looks up on the registry instead of importing this feature.
-pub fn open_waiting_rows<'a>(
-  features: &'a FeatureContext,
-) -> futures_util::future::BoxFuture<'a, anyhow::Result<Vec<charliebot_registry::registry::OpenWaitingRow>>> {
-  Box::pin(async move {
-    let rows = open_waiting_items(features).await.map_err(|error| match error {
-      WebReplyError::Failed(error) => error,
-      WebReplyError::Refused { status, detail } => anyhow::anyhow!("{status}: {detail}"),
-    })?;
-    Ok(
-      rows
-        .into_iter()
-        .map(|row| charliebot_registry::registry::OpenWaitingRow {
-          session_id: row.session_id,
-          session_name: row.session_name,
-          text: row.text,
-          context: row.context,
-          link: row.link,
-          tier: row.tier,
-          rule: row.rule,
-          since: row.since,
-          is_derived: row.is_derived,
-        })
-        .collect(),
-    )
-  })
 }
 
 /// The task-tree reads run off the runtime's worker threads, never on the async worker.
@@ -1046,15 +859,6 @@ async fn ancestor_ids(store: &Arc<Store>, session_id: &str) -> Result<Vec<String
   tree_read(store, move |store| store.ancestor_ids(&session_id)).await
 }
 
-async fn derived_archived_ids(store: &Arc<Store>) -> Result<Arc<Vec<String>>, WebReplyError> {
-  tree_read(store, |store| store.derived_archived_ids()).await
-}
-
-async fn task_state(store: &Arc<Store>, session_id: &str) -> Result<String, WebReplyError> {
-  let session_id = session_id.to_string();
-  tree_read(store, move |store| store.task_state(&session_id)).await
-}
-
 #[cfg(test)]
 mod tests {
   use std::path::PathBuf;
@@ -1065,7 +869,7 @@ mod tests {
   use serde_json::json;
 
   use super::*;
-  use crate::test_support::{self, Home, set_derived_waiting};
+  use crate::test_support::{Home, set_derived_waiting};
   use charliebot_registry::registry::OpenWaitingRow;
 
   const VALID_SET: &str = r#"{"now": "Running"}"#;
@@ -1123,7 +927,7 @@ mod tests {
       session_id,
       &waiting_item(text),
       "synthetic-haiku",
-      "The options are continue or stop.\ntier: t0 rule: irreversible",
+      "The options are continue or stop.",
     )
     .await
     .expect("the waiting item cold read records");
@@ -1182,9 +986,7 @@ mod tests {
       json!([{
         "text": "Pick a layout",
         "context": "The decision is active now. Options are continue or stop; continue is recommended.",
-        "link": null,
-        "tier": "t0",
-        "rule": "irreversible"
+        "link": null
       }])
     );
     assert_eq!(second["waiting"][0]["since_exact"], json!(true), "a new item starts at the set's time");
@@ -1376,8 +1178,6 @@ mod tests {
           link: None,
           since: None,
           since_exact: None,
-          tier: Some("t0".to_string()),
-          rule: Some("irreversible".to_string()),
         }],
         updated_at,
       };
@@ -1406,9 +1206,7 @@ mod tests {
       json!([{
         "text": "decision",
         "context": "The decision is active now. Options are continue or stop; continue is recommended.",
-        "link": null,
-        "tier": "t0",
-        "rule": "irreversible"
+        "link": null
       }])
     );
   }
@@ -1455,8 +1253,7 @@ mod tests {
     let body = read_status(&home.features, &root).await.expect("the read answers");
     assert_eq!(body["own_task_state"], json!("open"));
 
-    // A closed task's stored items appear on the approval page nowhere, and the count that opens the page leaves
-    // them out through this field.
+    // A closed task's stored items are left out of the status read.
     archive_task(&home.features, &root).await;
     let body = read_status(&home.features, &root).await.expect("the read answers");
     assert_eq!(body["own_task_state"], json!("archived"));
@@ -1621,7 +1418,7 @@ mod tests {
           "session_id": sid,
           "item": item.clone(),
           "backend": "synthetic-haiku",
-          "answer": "(1) Browse. (2) Wait.\ntier: t2 rule: none",
+          "answer": "(1) Browse. (2) Wait.",
         })),
       )
       .await;
@@ -1632,9 +1429,7 @@ mod tests {
       home.send(Method::POST, "/api/internal/web/status", Some(json!({"session_id": sid, "text": text}))).await;
 
     assert_eq!(status, StatusCode::OK);
-    let mut expected = item.clone();
-    expected["tier"] = json!("t2");
-    expected["rule"] = Value::Null;
+    let expected = item.clone();
     assert_eq!(without_item_times(&response["waiting"]), json!([expected.clone()]));
     assert_eq!(without_item_times(&stored(&home, &sid).await["waiting"]), json!([expected]));
   }
@@ -1704,7 +1499,7 @@ mod tests {
     let home = Home::new();
     let sid = home.manager("session", None).await;
     let item = json!({"text": "Pick a layout", "context": "The panel folds context.", "link": null});
-    let answer = "(1) Pick a layout.\n(2) NOT STATED.\ntier: t2 rule: none";
+    let answer = "(1) Pick a layout.\n(2) NOT STATED.";
 
     let response = record_ask_check(&home.features, &sid, &item, "haiku", answer).await.expect("the ask check records");
 
@@ -1719,8 +1514,6 @@ mod tests {
         "item_sha256": checks[0]["item_sha256"],
         "backend": checks[0]["backend"],
         "answer": checks[0]["answer"],
-        "tier": checks[0]["tier"],
-        "rule": checks[0]["rule"],
       }),
       json!({
         "type": WEB_ASK_CHECK,
@@ -1728,8 +1521,6 @@ mod tests {
         "item_sha256": digest,
         "backend": "haiku",
         "answer": answer,
-        "tier": "t2",
-        "rule": Value::Null,
       })
     );
     let events = home.events(&sid);
@@ -1776,85 +1567,19 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn an_ask_check_stores_the_tier_and_rule_each_tier_value_gives() {
-    for (answer, tier, rule) in [
-      ("Tiered against the table.\ntier: t0 rule: irreversible", "t0", Some("irreversible")),
-      (
-        "Outside the cap.\ntier: t0 rule: out-of-scope:shared-repo-landing",
-        "t0",
-        Some("out-of-scope:shared-repo-landing"),
-      ),
-      ("Inside the policy.\ntier: t1 rule: release-restart", "t1", Some("release-restart")),
-      ("The agent decides.\ntier: t2 rule: none", "t2", None),
-      ("Only the user knows.\ntier: user-act rule: none", "user-act", None),
-      ("Review the delivery.\ntier: review rule: none", "review", None),
-    ] {
-      let home = Home::new();
-      let sid = home.manager("session", None).await;
-      let item = waiting_item("Decide");
-
-      record_ask_check(&home.features, &sid, &item, "haiku", answer).await.expect("the ask check records");
-
-      let checks = home.events(&sid).into_iter().filter(|event| event["type"] == WEB_ASK_CHECK).collect::<Vec<_>>();
-      assert_eq!(checks.len(), 1, "{answer}");
-      assert_eq!(checks[0]["tier"], tier, "{answer}");
-      assert_eq!(checks[0]["rule"], rule.map(Value::from).unwrap_or(Value::Null), "{answer}");
-    }
-  }
-
-  #[tokio::test]
-  async fn an_answer_without_a_parsable_tier_line_records_nothing() {
-    for answer in ["", "(1) Decide the sample size.", "tier: t0 rule: irreversible\nthen a trailing note"] {
+  async fn a_blank_cold_read_answer_records_nothing() {
+    for answer in ["", "  \n"] {
       let home = Home::new();
       let sid = home.manager("session", None).await;
       let before = home.events(&sid);
 
       let error = record_ask_check(&home.features, &sid, &waiting_item("Decide"), "haiku", answer)
         .await
-        .expect_err("the answer is refused");
+        .expect_err("the blank answer is refused");
 
       assert!(matches!(error, WebReplyError::Refused { status: StatusCode::UNPROCESSABLE_ENTITY, .. }), "{answer:?}");
-      assert!(detail(error).contains("no parsable tier line"), "{answer:?}");
       assert_eq!(home.events(&sid), before, "{answer:?}");
     }
-  }
-
-  #[tokio::test]
-  async fn the_refusal_switch_refuses_a_t1_item_and_admits_a_t0_one() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let t1 = json!({
-      "text": "Restart the server",
-      "context": "The release is ready now. Options are restart or wait; restart is recommended.",
-    });
-    let t0 = json!({
-      "text": "Publish the page",
-      "context": "The draft is ready now. Options are publish or hold; publish is recommended.",
-    });
-    let t1_answer = "Inside the policy.\ntier: t1 rule: release-restart";
-    let t0_answer = "The table's money test names it.\ntier: t0 rule: money";
-    record_ask_check(&home.features, &sid, &t1, "haiku", t1_answer).await.expect("the t1 cold read records");
-    record_ask_check(&home.features, &sid, &t0, "haiku", t0_answer).await.expect("the t0 cold read records");
-
-    // Record-only mode, the state at release: both items store.
-    let response = set_status(&home.features, &sid, &json!({"waiting": [t1.clone(), t0.clone()]}).to_string())
-      .await
-      .expect("refusal off stores both items");
-    assert_eq!(response["waiting"][0]["tier"], json!("t1"));
-    assert_eq!(response["waiting"][1]["tier"], json!("t0"));
-
-    // The switch on: the t1 item refuses the set with its rule, and the t0 item still stores.
-    test_support::write_approval_policy_table(
-      &home.root(),
-      &test_support::APPROVAL_POLICY_TABLE.replace("enable_ask_tier_refusal: false", "enable_ask_tier_refusal: true"),
-    );
-    let error = set_status(&home.features, &sid, &json!({"waiting": [t1.clone()]}).to_string())
-      .await
-      .expect_err("the t1 item is refused");
-    let detail = detail(error);
-    assert!(detail.contains("tiered t1 (rule: release-restart)"), "{detail}");
-    assert!(detail.contains("charliebot digest add"), "{detail}");
-    set_status(&home.features, &sid, &json!({"waiting": [t0.clone()]}).to_string()).await.expect("the t0 item stores");
   }
 
   #[tokio::test]
@@ -1862,8 +1587,7 @@ mod tests {
     let home = Home::new();
     let sid = home.manager("session", None).await;
     set_status(&home.features, &sid, r#"{"now": "Running"}"#).await.expect("the baseline status stores");
-    let t1 = waiting_item("Run the covered release");
-    let t2 = waiting_item("Choose the design");
+    let uncold_read = waiting_item("Run the covered release");
     let directory = tempfile::tempdir().expect("the page directory exists");
     let markdown = directory.path().join("source.md");
     fs::write(&markdown, "source text").expect("the mapped source writes");
@@ -1872,25 +1596,15 @@ mod tests {
       "context": "The source is available now.",
       "link": file_link(&markdown),
     });
-    for (item, answer) in [
-      (&t1, "Inside the policy.\ntier: t1 rule: release-restart"),
-      (&t2, "Choose the design.\ntier: t2 rule: none"),
-      (&bad_link, "The page is available.\ntier: t0 rule: irreversible"),
-    ] {
-      record_ask_check(&home.features, &sid, item, "synthetic-haiku", answer)
-        .await
-        .expect("the item cold read records");
-    }
-    test_support::write_approval_policy_table(
-      &home.root(),
-      &test_support::APPROVAL_POLICY_TABLE.replace("enable_ask_tier_refusal: false", "enable_ask_tier_refusal: true"),
-    );
+    record_ask_check(&home.features, &sid, &bad_link, "synthetic-haiku", "The page is available.")
+      .await
+      .expect("the item cold read records");
     let before = stored(&home, &sid).await;
     let status_event_count = status_events(&home, &sid).len();
 
-    let error = set_status(&home.features, &sid, &json!({"waiting": [t1, t2, bad_link]}).to_string())
+    let error = set_status(&home.features, &sid, &json!({"waiting": [uncold_read, bad_link]}).to_string())
       .await
-      .expect_err("the set has tier and page-link refusals");
+      .expect_err("the set has cold-read and page-link refusals");
 
     let detail = match error {
       WebReplyError::Refused { status, detail } => {
@@ -1899,64 +1613,13 @@ mod tests {
       }
       other => panic!("expected a refusal, got {other:?}"),
     };
-    assert!(detail.contains("Run the covered release") && detail.contains("tiered t1"), "{detail}");
-    assert!(detail.contains("Choose the design") && detail.contains("tiered t2"), "{detail}");
+    assert!(detail.contains("Run the covered release") && detail.contains("needs a cold read"), "{detail}");
     assert!(
-      detail.contains("waiting.2 item \"Open the markdown source\"") && detail.contains("non-page file"),
+      detail.contains("waiting.1 item \"Open the markdown source\"") && detail.contains("non-page file"),
       "{detail}"
     );
     assert_eq!(stored(&home, &sid).await, before);
     assert_eq!(status_events(&home, &sid).len(), status_event_count);
-  }
-
-  #[tokio::test]
-  async fn set_status_full_list_keeps_s1() {
-    let home = Home::new();
-    let sid = home.manager("session", None).await;
-    let a = waiting_item("A: publish the result");
-    let b = waiting_item("B: choose the design");
-    let c = waiting_item("C: sign in to the console");
-    for item in [&a, &b, &c] {
-      record_ask_check(&home.features, &sid, item, "synthetic-haiku", "The first grade.\ntier: t0 rule: money")
-        .await
-        .expect("the initial grade records");
-    }
-    set_status(&home.features, &sid, &json!({"now": "Running", "waiting": [&a, &b, &c]}).to_string())
-      .await
-      .expect("the original complete list stores");
-    let original = stored(&home, &sid).await;
-    for (item, answer) in [
-      (&a, "The step is t0.\ntier: t0 rule: money"),
-      (&b, "The step is t2.\ntier: t2 rule: none"),
-      (&c, "The user must act.\ntier: user-act rule: none"),
-    ] {
-      record_ask_check(&home.features, &sid, item, "synthetic-haiku", answer).await.expect("the current grade records");
-    }
-    test_support::write_approval_policy_table(
-      &home.root(),
-      &test_support::APPROVAL_POLICY_TABLE.replace("enable_ask_tier_refusal: false", "enable_ask_tier_refusal: true"),
-    );
-    let status_event_count = status_events(&home, &sid).len();
-
-    let error = set_status(&home.features, &sid, &json!({"waiting": [&a, &b, &c]}).to_string())
-      .await
-      .expect_err("the full list has one refused item");
-
-    assert!(matches!(&error, WebReplyError::Refused { status, .. } if *status == StatusCode::CONFLICT));
-    assert!(detail(error).contains("B: choose the design"));
-    assert_eq!(stored(&home, &sid).await, original);
-    assert_eq!(status_events(&home, &sid).len(), status_event_count);
-
-    let updated = set_status(&home.features, &sid, &json!({"waiting": [&a, &c]}).to_string())
-      .await
-      .expect("the handled B item is removed from the current complete list");
-    assert_eq!(
-      without_item_times(&updated["waiting"]),
-      json!([
-        {"text": "A: publish the result", "context": "The decision is active now. Options are continue or stop; continue is recommended.", "link": null, "tier": "t0", "rule": "money"},
-        {"text": "C: sign in to the console", "context": "The decision is active now. Options are continue or stop; continue is recommended.", "link": null, "tier": "user-act", "rule": null},
-      ])
-    );
   }
 
   #[tokio::test]
@@ -1966,7 +1629,7 @@ mod tests {
     let a = waiting_item("Keep the first action");
     let b = waiting_item("Repair the page link");
     for item in [&a, &b] {
-      record_ask_check(&home.features, &sid, item, "synthetic-haiku", "The step is approved.\ntier: t0 rule: money")
+      record_ask_check(&home.features, &sid, item, "synthetic-haiku", "The step is approved.")
         .await
         .expect("the original grade records");
     }
@@ -1996,7 +1659,7 @@ mod tests {
       "context": b["context"],
       "link": "https://example.invalid/page",
     });
-    record_ask_check(&home.features, &sid, &fixed_b, "synthetic-haiku", "The step is approved.\ntier: t0 rule: money")
+    record_ask_check(&home.features, &sid, &fixed_b, "synthetic-haiku", "The step is approved.")
       .await
       .expect("the corrected link gets a current cold read");
     let updated = set_status(&home.features, &sid, &json!({"waiting": [&a, &fixed_b]}).to_string())
@@ -2059,10 +1722,8 @@ mod tests {
       .expect("a status file without waiting items lists nothing");
     assert_eq!(without_waiting, json!({"unread": []}));
     let before = unread_waiting(&home.features, &sid, &text).await.expect("the unread query answers");
-    let mut unread_item = item.clone();
-    unread_item["rule"] = Value::Null;
-    assert_eq!(before, json!({"unread": [unread_item]}));
-    let digest = record_ask_check(&home.features, &sid, &item, "haiku", "1k is recommended.\ntier: t0 rule: money")
+    assert_eq!(before, json!({"unread": [item]}));
+    let digest = record_ask_check(&home.features, &sid, &item, "haiku", "1k is recommended.")
       .await
       .expect("the ask check records");
     assert_eq!(digest["item_sha256"], item_sha256(&parse_item(&item).unwrap()).unwrap());
@@ -2073,7 +1734,7 @@ mod tests {
     fs::write(&page, "second").expect("the status page changes");
     assert_eq!(
       unread_waiting(&home.features, &sid, &text).await.expect("the changed item is unread"),
-      json!({"unread": [unread_item]})
+      json!({"unread": [item]})
     );
     assert_eq!(stored(&home, &sid).await, Value::Null);
     assert!(status_events(&home, &sid).is_empty());
@@ -2125,7 +1786,7 @@ mod tests {
     assert!(matches!(error, WebReplyError::Refused { status: StatusCode::CONFLICT, .. }));
     assert!(status_events(&home, &sid).is_empty());
 
-    record_ask_check(&home.features, &sid, &item, "haiku", "deploy is recommended\ntier: t0 rule: money")
+    record_ask_check(&home.features, &sid, &item, "haiku", "deploy is recommended")
       .await
       .expect("the cold read records");
     let response = set_status(&home.features, &sid, &text).await.expect("the read item stores");
@@ -2135,8 +1796,6 @@ mod tests {
         "text": "Approve the deploy",
         "context": "The release is ready now. Options are deploy or wait; deploy is recommended.",
         "link": null,
-        "tier": "t0",
-        "rule": "money",
       }])
     );
     assert_eq!(stored(&home, &sid).await, without_budget(&response));
@@ -2155,7 +1814,7 @@ mod tests {
       "context": "The release is ready now. Options are deploy or wait; deploy is recommended.",
       "link": file_link(&page),
     });
-    record_ask_check(&home.features, &sid, &item, "haiku", "deploy is recommended\ntier: t0 rule: money")
+    record_ask_check(&home.features, &sid, &item, "haiku", "deploy is recommended")
       .await
       .expect("the cold read records");
     fs::write(&page, "changed page").expect("the status page changes");
@@ -2500,15 +2159,9 @@ mod tests {
   /// Records a cold read of `item`, then stores the one-item status file that names it.
   /// Answers the stored status.
   async fn set_after_reads(home: &Home, session_id: &str, item: Value) -> Value {
-    record_ask_check(
-      &home.features,
-      session_id,
-      &item,
-      "synthetic-haiku",
-      "continue is recommended.\ntier: t2 rule: none",
-    )
-    .await
-    .expect("the item cold read records");
+    record_ask_check(&home.features, session_id, &item, "synthetic-haiku", "continue is recommended.")
+      .await
+      .expect("the item cold read records");
     set_status(&home.features, session_id, &json!({"waiting": [item]}).to_string()).await.expect("the set stores")
   }
 
@@ -2649,8 +2302,6 @@ mod tests {
       text: "Approve the ssh login to synthetic-login-host on /host-auth".to_string(),
       context: Some("Synthetic login check".to_string()),
       link: Some("/host-auth".to_string()),
-      tier: Some("user-act".to_string()),
-      rule: None,
       since: UtcDateTime::parse("2026-11-01T21:43:00-07:00").expect("the fixture time parses"),
       is_derived: true,
     }
@@ -2687,27 +2338,5 @@ mod tests {
     let after = read_status(&home.features, root).await.expect("the status reads after the set");
     assert_eq!(held(&after), [root.to_string(), child.to_string()]);
     assert_eq!(after[WEB_STATUS]["waiting"], json!([]));
-
-    // The approval view lists every open holder's derived item with the stored ones.
-    let rows = open_waiting_items(&home.features).await.expect("the approval rows read");
-    let listed: Vec<&str> = rows.iter().map(|row| row.session_id.as_str()).collect();
-    assert_eq!(listed, [root, child, unrelated]);
-    assert!(rows.iter().all(|row| row.tier.as_deref() == Some("user-act") && row.rule.is_none()));
-  }
-
-  #[tokio::test]
-  async fn a_waiting_item_set_after_an_approval_read_appears_on_the_next_one() {
-    let home = Home::new();
-    let first = home.manager("first", None).await;
-    let second = home.manager("second", None).await;
-    assert!(open_waiting_items(&home.features).await.expect("the empty read lists nothing").is_empty());
-
-    // The set writes metadata, so the corpus the filter ran on moves and the next read filters the new one.
-    set_after_reads(&home, &second, planned_item("Decide", Value::Null)).await;
-
-    let rows = open_waiting_items(&home.features).await.expect("the read after the set lists the item");
-    let listed: Vec<&str> = rows.iter().map(|row| row.session_id.as_str()).collect();
-    assert_eq!(listed, [second.as_str()], "the item the set stored, not the corpus the earlier read filtered");
-    assert_ne!(first, second);
   }
 }

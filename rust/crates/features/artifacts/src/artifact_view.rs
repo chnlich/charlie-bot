@@ -11,6 +11,7 @@ use charliebot_core::text_repr;
 use charliebot_registry::templating::Templating;
 use charliebot_registry::wiring::FileView;
 use charliebot_registry::{FeatureContext, StateError};
+use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use http::{HeaderValue, StatusCode, header};
 
 use crate::plan_diff;
@@ -66,7 +67,18 @@ async fn serve(features: &FeatureContext, request: &Parts, path: &str) -> ViewRe
     read_target_text(target_path).await?
   };
   let (comment_version, artifact_version) = asset_versions(features)?;
-  Ok(Some(html_response(inject_artifact_ui(&html, &session_id, &comment_version, &artifact_version))))
+  let metadata =
+    features.store.get_session(&session_id).await.map_err(|error| internal_error("RuntimeError", error.to_string()))?;
+  // A page can outlive its session metadata; the comment endpoint reports the missing session on send.
+  let comment_session_id = metadata.as_ref().map_or(session_id.as_str(), |meta| comment_target(&session_id, meta));
+  Ok(Some(html_response(inject_artifact_ui(&html, comment_session_id, &comment_version, &artifact_version))))
+}
+
+fn comment_target<'a>(session_id: &'a str, metadata: &'a SessionMetadata) -> &'a str {
+  match metadata.profile {
+    TaskProfile::Worker => metadata.task_parent_id.as_deref().unwrap_or(session_id),
+    TaskProfile::Manager => session_id,
+  }
 }
 
 fn query_value(query: &str, key: &str) -> Option<String> {
@@ -223,6 +235,20 @@ mod tests {
 
   async fn invoke(features: &FeatureContext, path: &str, uri: &str) -> Result<Option<Response>, Box<Response>> {
     ArtifactView.view(features, &request(uri), path).await.map_err(Box::new)
+  }
+
+  #[test]
+  fn comments_target_a_workers_parent_and_a_managers_own_session() {
+    let mut worker = SessionMetadata::new("worker", "Worker", TaskProfile::Worker);
+    worker.task_parent_id = Some("parent".to_string());
+    assert_eq!(comment_target("worker", &worker), "parent");
+
+    let mut manager = SessionMetadata::new("manager", "Manager", TaskProfile::Manager);
+    manager.task_parent_id = Some("parent".to_string());
+    assert_eq!(comment_target("manager", &manager), "manager");
+
+    worker.task_parent_id = None;
+    assert_eq!(comment_target("worker", &worker), "worker");
   }
 
   #[test]

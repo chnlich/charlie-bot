@@ -10,7 +10,7 @@ use serde_json::json;
 use tempfile::tempdir;
 use walkdir::WalkDir;
 
-use super::{SweepAction, SweepRoots, run_sweep};
+use super::{SweepAction, SweepMode, SweepRoots, run_sweep};
 
 fn fixture(base: &Path) -> SweepRoots {
   let roots = SweepRoots {
@@ -101,8 +101,8 @@ fn write_owner(roots: &SweepRoots, owner: Owner<'_>) -> PathBuf {
   run
 }
 
-async fn run(roots: &SweepRoots, apply: bool, now: DateTime<Utc>) -> super::SweepReport {
-  run_sweep(roots.clone(), apply, now).await.unwrap()
+async fn run(roots: &SweepRoots, mode: SweepMode, now: DateTime<Utc>) -> super::SweepReport {
+  run_sweep(roots.clone(), mode, now).await.unwrap()
 }
 
 fn utc(value: &str) -> DateTime<Utc> {
@@ -334,7 +334,7 @@ async fn test_worktree_age_reopen_keep_and_unknown_owner_rules() {
   )
   .unwrap();
 
-  let report = run(&roots, false, now).await;
+  let report = run(&roots, SweepMode::List, now).await;
   assert_eq!(row_by_path(&report, &due).action, SweepAction::Delete);
   assert_eq!(row_by_path(&report, &kept).action, SweepAction::Delete);
   assert_eq!(row_by_path(&report, &reopened).reason, "task-open");
@@ -402,7 +402,7 @@ async fn test_shared_worktree_uses_newest_owner_close_and_any_keep_flag() {
     },
   );
 
-  let report = run(&roots, false, now).await;
+  let report = run(&roots, SweepMode::List, now).await;
   assert!(report.rows.iter().all(|row| row.path != recent));
   assert_eq!(row_by_path(&report, &kept).action, SweepAction::Delete);
 }
@@ -433,7 +433,7 @@ async fn test_apply_archives_worktree_changes_before_removing_it() {
     } else {
       fs::write(worktree.join("new.txt"), b"untracked contents\n").unwrap();
     }
-    let report = run(&roots, true, utc("2026-01-20T00:00:00Z")).await;
+    let report = run(&roots, SweepMode::Apply, utc("2026-01-20T00:00:00Z")).await;
     let row = row_by_path(&report, &worktree);
     let archive = run_dir.join("worktree-changes.tar");
     assert_eq!(row.action, SweepAction::ArchiveDelete);
@@ -491,7 +491,7 @@ async fn test_large_untracked_and_dirty_submodule_worktrees_are_skipped() {
   fs::write(large.join("too-large.bin"), vec![b'x'; 10 * 1024 * 1024 + 1]).unwrap();
   fs::write(dirty.join("deps/lib/tracked.txt"), b"submodule edit\n").unwrap();
 
-  let report = run(&roots, false, utc("2026-01-20T00:00:00Z")).await;
+  let report = run(&roots, SweepMode::List, utc("2026-01-20T00:00:00Z")).await;
   assert_eq!(row_by_path(&report, &large).reason, "large-untracked");
   assert_eq!(row_by_path(&report, &dirty).reason, "dirty-submodule");
   assert!(large.is_dir());
@@ -540,7 +540,7 @@ async fn test_process_cwd_and_cmdline_paths_protect_a_worktree() {
       },
     );
 
-    let report = run(&roots, false, utc("2026-01-20T00:00:00Z")).await;
+    let report = run(&roots, SweepMode::List, utc("2026-01-20T00:00:00Z")).await;
     let row = row_by_path(&report, &worktree);
     assert_eq!(row.reason, "in-use");
     assert_eq!(row.action, SweepAction::Skip);
@@ -593,7 +593,7 @@ async fn test_process_root_exe_fd_and_maps_paths_protect_a_worktree() {
       },
     );
 
-    let report = run(&roots, false, utc("2026-01-20T00:00:00Z")).await;
+    let report = run(&roots, SweepMode::List, utc("2026-01-20T00:00:00Z")).await;
     let row = row_by_path(&report, &worktree);
     assert_eq!(row.reason, "in-use");
     assert_eq!(row.action, SweepAction::Skip);
@@ -643,7 +643,7 @@ async fn test_scratch_age_and_nested_repository_safety() {
     assert_scratch_aged(path, now);
   }
 
-  let report = run(&roots, false, now).await;
+  let report = run(&roots, SweepMode::List, now).await;
   assert_eq!(row_by_path(&report, &old_clean).action, SweepAction::Delete);
   assert_eq!(row_by_path(&report, &dirty).reason, "has-unsaved-repo");
   assert_eq!(row_by_path(&report, &unpushed).reason, "has-unsaved-repo");
@@ -660,7 +660,7 @@ async fn test_scratch_tree_with_unreadable_entries_is_reported_as_skipped() {
   fs::set_permissions(&unreadable, Permissions::from_mode(0o000)).unwrap();
   let _restore_permissions = RestorePermissions(unreadable.clone());
 
-  let report = run(&roots, false, utc("2026-05-20T00:00:00Z")).await;
+  let report = run(&roots, SweepMode::List, utc("2026-05-20T00:00:00Z")).await;
   let row = row_by_path(&report, &unreadable);
   assert_eq!(row.action, SweepAction::Skip);
   assert!(row.reason.starts_with("unreadable-path:"));
@@ -680,7 +680,7 @@ async fn test_scratch_child_that_cannot_be_statted_is_reported_as_unreadable() {
   fs::set_permissions(&listable, Permissions::from_mode(0o600)).unwrap();
   let _restore_permissions = RestorePermissions(listable.clone());
 
-  let report = run(&roots, false, utc("2026-05-20T00:00:00Z")).await;
+  let report = run(&roots, SweepMode::List, utc("2026-05-20T00:00:00Z")).await;
   let row = row_by_path(&report, &partly_unreadable);
   assert_eq!(row.action, SweepAction::Skip);
   assert!(row.reason.starts_with("unreadable-path:"), "reason {}", row.reason);
@@ -708,7 +708,7 @@ async fn test_cli_without_yes_is_read_only_and_reports_a_total() {
   fs::write(worktree.join("tracked.txt"), b"dry-run edit\n").unwrap();
   let before = snapshot_tree(root.path());
 
-  let report = run(&roots, false, utc("2026-01-20T00:00:00Z")).await;
+  let report = run(&roots, SweepMode::List, utc("2026-01-20T00:00:00Z")).await;
   let row = row_by_path(&report, &worktree);
   let fields = row.to_tsv().split('\t').map(str::to_string).collect::<Vec<_>>();
   assert_eq!(fields.len(), 5);

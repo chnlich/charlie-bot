@@ -21,7 +21,7 @@ fn run_handler(context: Arc<FeatureContext>) -> futures_util::future::BoxFuture<
   async move {
     let cfg = context.config.get()?;
     let roots = sweep::SweepRoots::from_config(&cfg);
-    let report = sweep::run_sweep(roots, true, Utc::now()).await?;
+    let report = sweep::run_sweep(roots, sweep::SweepMode::Apply, Utc::now()).await?;
     if !report.failures.is_empty() {
       let failures = report
         .failures

@@ -73,6 +73,13 @@ impl SweepAction {
   }
 }
 
+/// What a sweep does with the rows it selects: `List` reports them, `Apply` removes or archives them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SweepMode {
+  List,
+  Apply,
+}
+
 #[derive(Clone, Debug)]
 pub struct SweepRow {
   pub kind: SweepKind,
@@ -143,13 +150,13 @@ impl SweepReport {
   }
 }
 
-/// One sweep of the supplied roots at the supplied time, listed when `apply` is false and applied when it is true.
-pub async fn run_sweep(roots: SweepRoots, apply: bool, now: DateTime<Utc>) -> Result<SweepReport> {
+/// One sweep of the supplied roots at the supplied time, in the supplied [`SweepMode`].
+pub async fn run_sweep(roots: SweepRoots, mode: SweepMode, now: DateTime<Utc>) -> Result<SweepReport> {
   let scan_roots = roots.clone();
   let scanned = on_blocking(move || scan(scan_roots, now)).await?;
   let mut report = scanned.report;
   let mut unreadable = scanned.unreadable;
-  if apply {
+  if mode == SweepMode::Apply {
     for index in 0..report.rows.len() {
       if report.rows[index].action == SweepAction::Skip {
         continue;

@@ -7,11 +7,11 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
-use axum::http::{HeaderValue, StatusCode, Uri, header, request::Parts};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header, request::Parts};
 use axum::response::Response;
 use bytes::Bytes;
 use charliebot_cli_common::route;
-use charliebot_compat::compression::gzip_memoized_body;
+use charliebot_compat::compression::{gzip_memoized_body, zstd_memoized_body};
 use charliebot_compat::responses::{self, Failure};
 use charliebot_compat::routing::get_only;
 use charliebot_core::config::{CharlieBotConfig, HomeService};
@@ -26,7 +26,9 @@ use percent_encoding::percent_decode_str;
 use serde_json::{Map, Value, json};
 
 use super::family::Family;
-use crate::gzip::{self, Responder};
+use charliebot_compat::headers::header_text;
+
+use crate::gzip;
 use crate::state::AppState;
 
 pub const FAMILY: Family = Family { routes, matches: |_, path| is_page_path(path) };
@@ -99,6 +101,87 @@ struct PageBodyEntry {
   bootstrap_text: Option<Arc<String>>,
   body: Bytes,
   gzip: Option<Bytes>,
+  zstd: Option<Bytes>,
+}
+
+/// The encoding a page body travels in: the smallest form of the body the request names as acceptable.
+///
+/// A client that accepts zstd takes it, because zstd's form of a page is smaller than gzip's; the page's gzip form is
+/// unchanged for every other client.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PageEncoding {
+  Identity,
+  Gzip,
+  Zstd,
+}
+
+impl PageEncoding {
+  /// The encoding a request's `Accept-Encoding` prefers among the forms a page body keeps.
+  ///
+  /// A form with a higher weight wins, and equal weights take the smaller form. A form the request does not name, or
+  /// names with `q=0`, is not acceptable.
+  fn for_request(headers: &HeaderMap) -> PageEncoding {
+    let accept = header_text(headers, &header::ACCEPT_ENCODING);
+    let mut zstd = 0.0f32;
+    let mut gzip = 0.0f32;
+    for form in accept.split(',') {
+      let mut parameters = form.split(';');
+      let name = parameters.next().unwrap_or_default().trim().to_ascii_lowercase();
+      let mut weight = 1.0f32;
+      for parameter in parameters {
+        if let Some(value) = parameter.trim().strip_prefix("q=") {
+          weight = value.parse().unwrap_or(0.0);
+        }
+      }
+      match name.as_str() {
+        "zstd" => zstd = weight,
+        "gzip" => gzip = weight,
+        _ => {}
+      }
+    }
+    if zstd > 0.0 && zstd >= gzip {
+      PageEncoding::Zstd
+    } else if gzip > 0.0 {
+      PageEncoding::Gzip
+    } else {
+      PageEncoding::Identity
+    }
+  }
+
+  /// The `Content-Encoding` this encoding names, for the forms a body travels compressed in.
+  fn content_encoding(self) -> &'static str {
+    match self {
+      PageEncoding::Gzip => "gzip",
+      PageEncoding::Zstd => "zstd",
+      PageEncoding::Identity => unreachable!("an identity page body travels whole"),
+    }
+  }
+}
+
+/// A page body's compressed form and the `Content-Encoding` it names.
+struct PageCompressed {
+  encoding: &'static str,
+  bytes: Bytes,
+}
+
+// One form of the body, built once per body version and kept for every repeat request.
+impl PageBodyEntry {
+  fn encoded(&mut self, encoding: PageEncoding, body: &Bytes) -> Bytes {
+    let slot = match encoding {
+      PageEncoding::Gzip => &mut self.gzip,
+      PageEncoding::Zstd => &mut self.zstd,
+      PageEncoding::Identity => unreachable!("an identity page body travels whole"),
+    };
+    slot
+      .get_or_insert_with(|| {
+        Bytes::from(match encoding {
+          PageEncoding::Gzip => gzip_memoized_body(body),
+          PageEncoding::Zstd => zstd_memoized_body(body),
+          PageEncoding::Identity => unreachable!("an identity page body travels whole"),
+        })
+      })
+      .clone()
+  }
 }
 
 /// Whether an optional substituted text still holds its value: both absent, or the same `Arc`.
@@ -119,8 +202,8 @@ impl PageBodyMemo {
     substitutions: &[(&str, &str)],
     sidebar_text: Option<&Arc<String>>,
     bootstrap_text: Option<&Arc<String>>,
-    accepts_gzip: bool,
-  ) -> Result<(Bytes, Option<Bytes>), Failure> {
+    encoding: PageEncoding,
+  ) -> Result<(Bytes, Option<PageCompressed>), Failure> {
     let held = self.entries.iter().position(|entry| {
       entry.name == name
         && (Arc::ptr_eq(&entry.template_html, template_html) || entry.template_html.as_str() == template_html.as_str())
@@ -139,6 +222,7 @@ impl PageBodyMemo {
           bootstrap_text: bootstrap_text.cloned(),
           body: Bytes::from(html),
           gzip: None,
+          zstd: None,
         };
         match self.entries.iter().position(|entry| entry.name == name) {
           Some(index) => {
@@ -154,19 +238,12 @@ impl PageBodyMemo {
     };
     let entry = self.entries.get_mut(index).expect("the page body entry matched or was built");
     let body = entry.body.clone();
-    let gzip = if accepts_gzip && body.len() >= gzip::MINIMUM_SIZE {
-      Some(match &entry.gzip {
-        Some(compressed) => compressed.clone(),
-        None => {
-          let compressed = Bytes::from(gzip_memoized_body(&body));
-          entry.gzip = Some(compressed.clone());
-          compressed
-        }
-      })
+    let compressed = if encoding != PageEncoding::Identity && body.len() >= gzip::MINIMUM_SIZE {
+      Some(PageCompressed { encoding: encoding.content_encoding(), bytes: entry.encoded(encoding, &body) })
     } else {
       None
     };
-    Ok((body, gzip))
+    Ok((body, compressed))
   }
 }
 
@@ -420,7 +497,7 @@ fn render_page_blocking(
   mut context: Value,
   runtime: PageRuntime,
 ) -> Result<Response, Failure> {
-  let accepts_gzip = Responder::for_request(&request.headers) == Responder::Gzip;
+  let encoding = PageEncoding::for_request(&request.headers);
   let templating =
     state.features.startup.require::<Templating>().expect("run() inserts the Templating before the server binds");
   let hostname = hostname()?;
@@ -442,17 +519,17 @@ fn render_page_blocking(
   let template_html = templating
     .render_page_template(&state.features, name, &context, request)
     .map_err(|error| failure(error.kind(), error))?;
-  let (body, gzip) = page_body(name, &template_html, &runtime, accepts_gzip)?;
-  Ok(page_response(body, gzip))
+  let (body, compressed) = page_body(name, &template_html, &runtime, encoding)?;
+  Ok(page_response(body, compressed))
 }
 
-/// The finished body of a page, with its compressed form when a gzip client asked for it.
+/// The finished body of a page, with its compressed form when the client asked for one.
 fn page_body(
   name: &'static str,
   template_html: &Arc<String>,
   runtime: &PageRuntime,
-  accepts_gzip: bool,
-) -> Result<(Bytes, Option<Bytes>), Failure> {
+  encoding: PageEncoding,
+) -> Result<(Bytes, Option<PageCompressed>), Failure> {
   let (sidebar_text, bootstrap_text) = match runtime {
     PageRuntime::Index { sidebar_text, bootstrap_text, .. } => (Some(sidebar_text), bootstrap_text.as_ref()),
     PageRuntime::Home | PageRuntime::Events => (None, None),
@@ -463,7 +540,7 @@ fn page_body(
     &runtime.substitutions(),
     sidebar_text,
     bootstrap_text,
-    accepts_gzip,
+    encoding,
   )
 }
 
@@ -472,15 +549,15 @@ fn page_body(
 /// For a body at or above the transport's minimum size, the compressed form travels with its own headers here
 /// instead of under the transport gzip; the transport passes a response that already sets `Content-Encoding`
 /// through untouched.
-fn page_response(body: Bytes, gzip: Option<Bytes>) -> Response {
+fn page_response(body: Bytes, compressed: Option<PageCompressed>) -> Response {
   let mut builder = Response::builder().status(StatusCode::OK).header(header::CONTENT_TYPE, "text/html; charset=utf-8");
-  let served = match gzip {
+  let served = match compressed {
     Some(compressed) => {
       builder = builder
-        .header(header::CONTENT_LENGTH, compressed.len())
-        .header(header::CONTENT_ENCODING, "gzip")
+        .header(header::CONTENT_LENGTH, compressed.bytes.len())
+        .header(header::CONTENT_ENCODING, compressed.encoding)
         .header(header::VARY, HeaderValue::from_static("Accept-Encoding"));
-      compressed
+      compressed.bytes
     }
     None => {
       builder = builder.header(header::CONTENT_LENGTH, body.len());
@@ -709,11 +786,11 @@ mod tests {
         &substitutions(sidebar.as_str(), bootstrap.as_str()),
         Some(&sidebar),
         Some(&bootstrap),
-        true,
+        PageEncoding::Gzip,
       )
       .unwrap();
     let gzip = gzip.expect("a gzip client gets a compressed body");
-    assert_eq!(gunzip(&gzip), String::from_utf8(first.to_vec()).unwrap());
+    assert_eq!(gunzip(&gzip.bytes), String::from_utf8(first.to_vec()).unwrap());
     let (again, again_gzip) = memo
       .body(
         "index.html",
@@ -721,11 +798,11 @@ mod tests {
         &substitutions(sidebar.as_str(), bootstrap.as_str()),
         Some(&sidebar),
         Some(&bootstrap),
-        true,
+        PageEncoding::Gzip,
       )
       .unwrap();
     assert_eq!(again.as_ptr(), first.as_ptr(), "a repeat request serves the body the memo kept");
-    assert_eq!(again_gzip.expect("the compressed body was kept"), gzip);
+    assert_eq!(again_gzip.expect("the compressed body was kept").bytes, gzip.bytes);
 
     let new_bootstrap = Arc::new("{\"messages\":[1]}".to_string());
     let (rebuilt, _) = memo
@@ -735,7 +812,7 @@ mod tests {
         &substitutions(sidebar.as_str(), new_bootstrap.as_str()),
         Some(&sidebar),
         Some(&new_bootstrap),
-        false,
+        PageEncoding::Identity,
       )
       .unwrap();
     assert!(rebuilt.ends_with(b"{\"messages\":[1]};"), "a new bootstrap text rebuilds the body");
@@ -748,11 +825,19 @@ mod tests {
     let bootstrap = Arc::new("null".to_string());
     let substitutions = substitutions(sidebar.as_str(), bootstrap.as_str());
     let (first, _) = memo
-      .body("index.html", &Arc::new(index_template()), &substitutions, Some(&sidebar), Some(&bootstrap), false)
+      .body(
+        "index.html",
+        &Arc::new(index_template()),
+        &substitutions,
+        Some(&sidebar),
+        Some(&bootstrap),
+        PageEncoding::Identity,
+      )
       .unwrap();
     let edited = Arc::new(format!("{} // edited on disk", index_template()));
-    let (second, _) =
-      memo.body("index.html", &edited, &substitutions, Some(&sidebar), Some(&bootstrap), false).unwrap();
+    let (second, _) = memo
+      .body("index.html", &edited, &substitutions, Some(&sidebar), Some(&bootstrap), PageEncoding::Identity)
+      .unwrap();
     assert_ne!(first, second, "a template edited on disk never matches the memo");
     assert!(second.ends_with(b"// edited on disk"));
   }
@@ -764,20 +849,22 @@ mod tests {
     let mut memo = PageBodyMemo::default();
     let home_template: Arc<String> = Arc::new("<p>home</p>".to_string());
     let events_template: Arc<String> = Arc::new("<p>events</p>".to_string());
-    let (home, _) = memo.body("home.html", &home_template, &[], None, None, false).unwrap();
-    let (events, _) = memo.body("events_viewer.html", &events_template, &[], None, None, false).unwrap();
-    let (home_again, _) = memo.body("home.html", &home_template, &[], None, None, false).unwrap();
+    let (home, _) = memo.body("home.html", &home_template, &[], None, None, PageEncoding::Identity).unwrap();
+    let (events, _) =
+      memo.body("events_viewer.html", &events_template, &[], None, None, PageEncoding::Identity).unwrap();
+    let (home_again, _) = memo.body("home.html", &home_template, &[], None, None, PageEncoding::Identity).unwrap();
     assert_eq!(home_again.as_ptr(), home.as_ptr(), "the home page keeps its body beside another page's");
     assert_eq!(events, "<p>events</p>");
     let changed: Arc<String> = Arc::new("<p>other session</p>".to_string());
-    let (events_changed, _) = memo.body("events_viewer.html", &changed, &[], None, None, false).unwrap();
+    let (events_changed, _) =
+      memo.body("events_viewer.html", &changed, &[], None, None, PageEncoding::Identity).unwrap();
     assert_eq!(events_changed, "<p>other session</p>", "a changed context rebuilds that page's body");
   }
 
   #[tokio::test]
   async fn a_gzip_client_gets_the_compressed_page_with_the_transport_headers() {
     let html = page_html();
-    let compressed = Bytes::from(gzip_level_one(html.as_bytes()));
+    let compressed = PageCompressed { encoding: "gzip", bytes: Bytes::from(gzip_level_one(html.as_bytes())) };
     let (parts, body) = page_response(Bytes::from(html.clone()), Some(compressed)).into_parts();
     let headers = parts.headers;
     assert_eq!(headers[header::CONTENT_ENCODING], "gzip");
@@ -789,6 +876,54 @@ mod tests {
       compressed.len().to_string()
     );
     assert_eq!(gunzip(&compressed), html);
+  }
+
+  #[tokio::test]
+  async fn a_zstd_client_gets_the_memo_smaller_form_under_its_own_header() {
+    let html = page_html();
+    let compressed = PageCompressed {
+      encoding: "zstd",
+      bytes: Bytes::from(charliebot_compat::compression::zstd_memoized_body(html.as_bytes())),
+    };
+    let (parts, body) = page_response(Bytes::from(html.clone()), Some(compressed)).into_parts();
+    let headers = parts.headers;
+    assert_eq!(headers[header::CONTENT_ENCODING], "zstd");
+    assert_eq!(headers[header::VARY], "Accept-Encoding");
+    let served = body.collect().await.expect("a page body collects").to_bytes();
+    assert_eq!(headers[header::CONTENT_LENGTH].to_str().expect("a length header is text"), served.len().to_string());
+    let decoded = zstd::decode_all(served.as_ref()).expect("a zstd page body decodes");
+    assert_eq!(String::from_utf8(decoded).expect("the page body is UTF-8"), html);
+  }
+
+  #[test]
+  fn the_encoding_follows_the_accept_encoding_weights() {
+    let headers = |value: &'static str| {
+      let mut headers = HeaderMap::new();
+      headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static(value));
+      headers
+    };
+    assert_eq!(PageEncoding::for_request(&headers("")), PageEncoding::Identity);
+    assert_eq!(PageEncoding::for_request(&headers("gzip")), PageEncoding::Gzip);
+    assert_eq!(PageEncoding::for_request(&headers("gzip, deflate, br, zstd")), PageEncoding::Zstd);
+    assert_eq!(PageEncoding::for_request(&headers("zstd;q=0.5, gzip;q=1")), PageEncoding::Gzip);
+    assert_eq!(PageEncoding::for_request(&headers("gzip;q=0, zstd")), PageEncoding::Zstd);
+    assert_eq!(PageEncoding::for_request(&headers("gzip;q=0")), PageEncoding::Identity);
+  }
+
+  #[tokio::test]
+  async fn the_memo_keeps_each_clients_form_of_one_body() {
+    let mut memo = PageBodyMemo::default();
+    let template = Arc::new(page_html());
+    let (plain, none) = memo.body("home.html", &template, &[], None, None, PageEncoding::Identity).unwrap();
+    assert!(none.is_none(), "an identity client gets no compressed form");
+    let (_, gzip) = memo.body("home.html", &template, &[], None, None, PageEncoding::Gzip).unwrap();
+    let (_, zstd) = memo.body("home.html", &template, &[], None, None, PageEncoding::Zstd).unwrap();
+    let gzip = gzip.expect("a gzip client gets the gzip form");
+    let zstd = zstd.expect("a zstd client gets the zstd form");
+    assert_eq!(gzip.encoding, "gzip");
+    assert_eq!(zstd.encoding, "zstd");
+    assert_eq!(gunzip(&gzip.bytes), String::from_utf8(plain.to_vec()).unwrap());
+    assert!(zstd.bytes.len() < gzip.bytes.len(), "the zstd form is smaller than the gzip form");
   }
 
   #[tokio::test]

@@ -686,6 +686,7 @@ dependencies = [
  "tokio-tungstenite",
  "tower",
  "tracing",
+ "zstd",
 ]
 
 [[package]]
@@ -1300,6 +1301,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "zstd",
 ]
 
 [[package]]

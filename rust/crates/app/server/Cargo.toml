@@ -47,3 +47,5 @@ charliebot-shell-harness.workspace = true
 # task type, so this crate's own code does not use the tasks runtime.
 charliebot-tasks.workspace = true
 tempfile.workspace = true
+# The page-encoding test decodes the zstd form the page memo serves.
+zstd.workspace = true

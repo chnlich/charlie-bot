@@ -1277,6 +1277,11 @@ const OWNER_TABLE: &[OwnerRow] = &[
   OwnerRow { name: "Grep", owner: "infra/core", hint: "Use `charliebot_core::event_types::GREP_TOOL`." },
 ];
 
+/// Plain config keys that the path matcher intentionally does not recognize. These must match an exact string literal
+/// outside their owner so a raw field name cannot return unnoticed.
+const EXACT_LITERAL_OWNER_TABLE: &[OwnerRow] =
+  &[OwnerRow { name: "credential", owner: "infra/core", hint: "Use `charliebot_core::config::CREDENTIAL_KEY`." }];
+
 /// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one
 /// of them may be writing that output, so the owner rule cannot tell the two apart, and these stay unprotected.
 const EXTERNAL_EVENT_NAMES: [&str; 16] = [
@@ -1464,18 +1469,12 @@ fn parameters_as_empty(path: &str) -> String {
 }
 
 /// The owner rule's failures: each owner row's name spelled outside its owner, and each spelling class's name spelled
-/// in two or more crates. Both rules read the string literals of each production module; a literal with whitespace is
-/// prose and names nothing.
+/// in two or more crates. Path and segment names use `spells`; plain config keys use exact literal matching. Both rules
+/// read the string literals of each production module; a literal with whitespace is prose and names nothing.
 fn owner_failures(workspace: &Workspace, rows: &[OwnerRow], classes: &[SpellingClass]) -> Vec<String> {
   let sites = production_sites(workspace);
-  let mut failures = Vec::new();
-  for row in rows {
-    let outside: Vec<&Site> = sites.iter().filter(|site| site.krate != row.owner && spells(site, row.name)).collect();
-    if !outside.is_empty() {
-      let heading = format!("{}: owner {}; spelled outside it at:", row.name, row.owner);
-      failures.push(site_failure(&heading, &outside, row.hint));
-    }
-  }
+  let mut failures = owner_row_failures(&sites, rows, spells);
+  failures.extend(owner_row_failures(&sites, EXACT_LITERAL_OWNER_TABLE, matches_exact_literal));
   for class in classes {
     let mut by_name: BTreeMap<String, Vec<&Site>> = BTreeMap::new();
     for site in &sites {
@@ -1492,6 +1491,23 @@ fn owner_failures(workspace: &Workspace, rows: &[OwnerRow], classes: &[SpellingC
     }
   }
   failures
+}
+
+fn owner_row_failures(sites: &[Site], rows: &[OwnerRow], name_matches: fn(&Site, &str) -> bool) -> Vec<String> {
+  let mut failures = Vec::new();
+  for row in rows {
+    let outside: Vec<&Site> =
+      sites.iter().filter(|site| site.krate != row.owner && name_matches(site, row.name)).collect();
+    if !outside.is_empty() {
+      let heading = format!("{}: owner {}; spelled outside it at:", row.name, row.owner);
+      failures.push(site_failure(&heading, &outside, row.hint));
+    }
+  }
+  failures
+}
+
+fn matches_exact_literal(site: &Site, name: &str) -> bool {
+  site.value == name
 }
 
 fn site_failure(heading: &str, sites: &[&Site], hint: &str) -> String {
@@ -2913,6 +2929,40 @@ fn the_event_names_of_event_types_are_protected() {
         .to_string()
     ],
     "the owner rule fails the spelled name with its file:line and hint, and passes the unprotected words"
+  );
+}
+
+/// An exact config-key literal in another crate fails, while a longer identifier that contains the word passes.
+#[test]
+#[ignore = "integration"]
+fn a_plain_config_key_owner_name_matches_an_exact_literal_only() {
+  let dir = tempfile::tempdir().expect("create a temporary directory");
+  let root = dir.path();
+  write_tree(
+    root,
+    &[
+      ("Cargo.toml", workspace_manifest(&["crates/infra/core", "crates/features/writer"])),
+      ("crates/infra/core/Cargo.toml", crate_manifest("core-crate", &[], &[])),
+      ("crates/infra/core/src/lib.rs", "pub const CREDENTIAL_KEY: &str = \"credential\";\n".to_string()),
+      ("crates/features/writer/Cargo.toml", crate_manifest("writer", &[], &[])),
+      (
+        "crates/features/writer/src/lib.rs",
+        "pub fn field() -> &'static str {\n  \"credential\"\n}\n\n\
+         pub fn longer_name() -> &'static str {\n  \"credential_suffix\"\n}\n"
+          .to_string(),
+      ),
+    ],
+  );
+  let workspace = load_workspace(root);
+
+  assert_eq!(
+    owner_failures(&workspace, &[], &[]),
+    vec![
+      "credential: owner infra/core; spelled outside it at:\n  crates/features/writer/src/lib.rs:2\n\
+       Use `charliebot_core::config::CREDENTIAL_KEY`."
+        .to_string()
+    ],
+    "the owner rule catches the exact config key and passes the longer identifier"
   );
 }
 

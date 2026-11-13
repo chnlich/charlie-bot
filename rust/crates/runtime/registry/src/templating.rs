@@ -449,7 +449,8 @@ impl Templating {
     };
     let template = environment.get_template(name).map_err(RenderError::Template)?;
     let html = template.render(Value::from_serialize(context)).map_err(RenderError::Template)?;
-    inline_local_stylesheets(&environment, html)
+    let html = inline_local_stylesheets(&environment, html)?;
+    Ok(crate::inlined_markup::without_comments(&html))
   }
 
   /// The `(rel path, mtime_ns, size)` of every template source under the search directories, sorted, as the walk

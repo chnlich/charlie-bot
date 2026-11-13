@@ -6,6 +6,10 @@
 async function postCommentMessage(sessionId, content) {
   const requestId = crypto.randomUUID();
   let retryDelay = 1000;
+  const waitBeforeRetry = async () => {
+    await new Promise((resolve) => setTimeout(resolve, retryDelay));
+    retryDelay = Math.min(retryDelay * 2, 30000);
+  };
   while (true) {
     let response;
     try {
@@ -16,13 +20,11 @@ async function postCommentMessage(sessionId, content) {
         body: JSON.stringify({content, uploaded_files: [], request_id: requestId}),
       });
     } catch (_error) {
-      await new Promise((resolve) => setTimeout(resolve, retryDelay));
-      retryDelay = Math.min(retryDelay * 2, 30000);
+      await waitBeforeRetry();
       continue;
     }
     if (response.status >= 500) {
-      await new Promise((resolve) => setTimeout(resolve, retryDelay));
-      retryDelay = Math.min(retryDelay * 2, 30000);
+      await waitBeforeRetry();
       continue;
     }
     if (response.status === 401) throw new Error('log in to comment');

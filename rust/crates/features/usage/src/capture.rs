@@ -11,6 +11,7 @@ use charliebot_core::event_types::{
   USAGE_OUTPUT_TOKENS,
 };
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
+use charliebot_core::text_repr::is_truthy;
 use charliebot_core::timefmt;
 use charliebot_registry::Registry;
 use charliebot_registry::usage::{RecordKind, UsageSource, UsageSourceImpl};
@@ -386,7 +387,7 @@ fn master_records(path: &Path, config: &CharlieBotConfig, registry: &Registry) -
     let object = as_object(line, "master event")?;
     if is_type(object, "context") {
       // The last truthy model wins, so a non-string model before a string one is never read as a name.
-      if let Some(named) = object.get("model").filter(|named| !is_falsy(named)) {
+      if let Some(named) = object.get("model").filter(|named| is_truthy(named)) {
         model = Some(named);
       }
     } else if is_type(object, "result") {
@@ -666,7 +667,7 @@ fn usage_counts(usage: &Map<String, Value>) -> anyhow::Result<(Count, Count, Cou
 fn usage_object(value: Option<&Value>) -> anyhow::Result<&Map<String, Value>> {
   match value {
     None => Ok(empty_object()),
-    Some(value) if is_falsy(value) => Ok(empty_object()),
+    Some(value) if !is_truthy(value) => Ok(empty_object()),
     Some(Value::Object(object)) => Ok(object),
     Some(_) => bail!("usage field is not an object"),
   }
@@ -682,7 +683,7 @@ fn empty_object() -> &'static Map<String, Value> {
 fn count(object: &Map<String, Value>, key: &str) -> anyhow::Result<Count> {
   match object.get(key) {
     None => Ok(Count::Int(0)),
-    Some(value) if is_falsy(value) => Ok(Count::Int(0)),
+    Some(value) if !is_truthy(value) => Ok(Count::Int(0)),
     Some(Value::Bool(_)) => Ok(Count::Int(1)),
     Some(Value::Number(number)) => number_count(number).with_context(|| format!("usage count {key}")),
     Some(_) => bail!("usage count {key} is not a number"),
@@ -701,24 +702,12 @@ fn number_count(number: &serde_json::Number) -> anyhow::Result<Count> {
   }
 }
 
-/// The truth test over a JSON value: null, false, zero, and an empty string, list or map are falsy.
-fn is_falsy(value: &Value) -> bool {
-  match value {
-    Value::Null => true,
-    Value::Bool(flag) => !flag,
-    Value::Number(number) => number.as_f64() == Some(0.0),
-    Value::String(text) => text.is_empty(),
-    Value::Array(items) => items.is_empty(),
-    Value::Object(entries) => entries.is_empty(),
-  }
-}
-
 /// The TEXT column's value under `key`: a falsy value is "", a string is itself,
 /// and `true` or a number binds as the INTEGER or REAL that the column stores as text. A list or map fails the bind.
 fn text_value(object: &Map<String, Value>, key: &str) -> anyhow::Result<SqlValue> {
   match object.get(key) {
     None => Ok(SqlValue::Text(String::new())),
-    Some(value) if is_falsy(value) => Ok(SqlValue::Text(String::new())),
+    Some(value) if !is_truthy(value) => Ok(SqlValue::Text(String::new())),
     Some(Value::String(text)) => Ok(SqlValue::Text(text.clone())),
     Some(Value::Bool(_)) => Ok(SqlValue::Integer(1)),
     Some(Value::Number(number)) => Ok(number_count(number).with_context(|| format!("field {key}"))?.into()),
@@ -731,7 +720,7 @@ fn text_value(object: &Map<String, Value>, key: &str) -> anyhow::Result<SqlValue
 fn truthy_string(object: &Map<String, Value>, key: &str) -> anyhow::Result<Option<String>> {
   match object.get(key) {
     None => Ok(None),
-    Some(value) if is_falsy(value) => Ok(None),
+    Some(value) if !is_truthy(value) => Ok(None),
     Some(Value::String(value)) => Ok(Some(value.clone())),
     Some(_) => bail!("field {key} is not a string"),
   }

@@ -29,9 +29,9 @@ const LOCK_FILENAME: &str = "rows.lock";
 /// fresh native conversation for every open manager, because the segment enters the hashed prompt blocks.
 pub const INDEX_HEADER: &str = "Taste index: the user's choice precedents. Full rows: `charliebot taste query --domain <domain>`.\n\
 Before you recommend an option to the user or make a choice yourself in a listed domain, read that domain's rows.\n\
-Follow a row whose situation matches, and name its id beside the recommendation or in the digest entry.\n\
+Follow a row whose situation matches, and name its id beside the recommendation or in the reply.\n\
 When the situation differs, state the difference.\n\
-The approval tier of each step stays as the approval policy table sets it.";
+The approval boundary of each step stays as Action Boundaries in `prompts/master.md` set it.";
 
 /// The reason text of a row whose source states no reason.
 pub const UNSTATED_REASON: &str = "未说明";

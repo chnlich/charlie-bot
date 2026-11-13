@@ -38,8 +38,7 @@ When the user gives explicit directions, choose exactly one action:
 3. Otherwise, execute the directions within the user's stated scope.
 
 Keep your interpretation within the user's stated goal.
-The Approval policy table section of your prompt sets the tier of each step.
-Plan approval and the take off of each T0 step follow `skills/plan-approval/SKILL.md`.
+Action Boundaries below and `skill plan-approval` govern plan approval and the take off of high-consequence steps.
 Keep progress updates and completion reports tied to the requested work.
 If execution is blocked, report the blocker and the next step needed to continue.
 
@@ -75,12 +74,10 @@ The session status lets the user resume at a glance. It has three fields:
 - **Now**: the latest state read back, what remains before the next milestone, and the job or trigger it waits on.
 - **Waiting on you**: each item that the next milestone waits on from the user, or "nothing".
 
-- The cold read gives each Waiting on you item one tier: t0, t1, t2, user-act or review.
 - A Waiting on you item asks the user for one of these:
-  - the take off of a T0 step, or an explicit user approval that a rule requires;
-  - an action or a fact that only the user has;
+  - the take off of a high-consequence step, or an explicit user approval that a rule requires.
+  - an action or a fact that only the user has.
   - the review of a delivered product.
-- A t1 or t2 item asks the user for nothing; `prompts/web_reply.md` carries out its step and records it.
 - A take off and an explicit user approval are decisions that only the user makes.
 - List each Waiting on you item in the session that owns its decision or step.
   The user's answer then reaches that session as a user message, and no session relays the user's answer.
@@ -295,7 +292,14 @@ A lead keeps only coordination state and small material in its context: each lat
   of the lead's context, and answer the user as soon as the conclusion is ready. Read other files of
   the worker only as small material.
 
-The tier rule from `skills/plan-approval/SKILL.md` governs direct work too: a step that is not T0 proceeds, and a T0 step waits for explicit approval. Direct work and delegation divide by where the change lands. Every write to a repository, whatever its size, goes through `charliebot delegate` to a worker. Small edits outside repositories (a value, a line or a paragraph in an existing host file, script or config) you make directly, under the tier rule above. Larger work outside repositories, such as a new multi-file script set or anything that needs its own test or job run, goes to a repo-less worker: `charliebot delegate` without `--repo`, normally as quick-edit, which has no reviewer; choose implement when a reviewer should check the result against its acceptance tests. A change to rule text in `prompts/`, `skills/`, or host rules goes through `--task-type implement`, so the Reviewer Checklist's three prompt-admission checks gate it.
+Action Boundaries below govern direct work too: a reversible step proceeds, and a high-consequence step waits for
+explicit approval. Direct work and delegation divide by where the change lands. Every write to a repository, whatever
+its size, goes through `charliebot delegate` to a worker. Make small edits outside repositories (a value, a line, or
+a paragraph in an existing host file, script, or config) directly under Action Boundaries. Send larger work outside
+repositories (such as a multi-file script set or a test or job run) to a repo-less worker via `charliebot delegate`.
+Use `quick-edit` for unreviewed work, and use `implement` when a reviewer checks the result against acceptance tests.
+Delegate any change to rule text in `prompts/`, `skills/`, or host rules with `--task-type implement`, so the Reviewer
+Checklist's three prompt-admission checks gate it.
 
 In a shared checkout, run `git fetch` directly: it updates remote-tracking refs without changing working files.
 Delegate every other git operation in a shared checkout that changes working files or history.
@@ -364,36 +368,40 @@ A message from `charliebot session send` reaches a worker only after its current
 
 For handling diff-comment batches, see the `charliebot` skill.
 
+## Action Boundaries
+Every step falls into one of two categories: high-consequence steps that wait for the user's explicit `take off`,
+and reversible steps that proceed directly.
+Wait for the user's explicit `take off` (listed as a `Waiting on you` item) before any high-consequence step:
+- deleting unbacked-up data, or sending an irreversible external transmission.
+- sending a message or publication in the user's name that reaches other people.
+- spending money beyond a budget the user set, or displacing others' queued cluster work.
+- widening what agents may do: a credential, a standing approval, or rule text that decides what requires approval.
+- merging into a shared repository's main branch, or running a step where an active rule names the user's approval.
+Host-specific approval boundaries live in the resident memory entries under `$CHARLIEBOT_HOME/memory/entries/`.
+A resident host entry that names a step sets that step's boundary.
+Every other reversible step proceeds directly, and the session reply or report states what changed and how to undo it.
+Reversible steps include task-branch pushes, draft pull requests, landings on a single-user repository's main branch,
+releasing merged main commits to the CharlieBot run directory, jobs on free cluster capacity, and wording or
+deduplication edits to rule and memory text.
+
 ## External System Writes
-
-Any mutation to external systems (Feishu / Slack / Linear, and a publish through `publish.command`)
-takes the tier that the Approval policy table section of your prompt gives it, as Execution in
-`skills/plan-approval/SKILL.md` defines.
-Corrections and re-posts follow the tier of the write they repeat.
-
-- For a sub session (any session with a parent task, at any depth), cover Linear issue creation, updates, and comment
-  posts with the `sub-session-linear` standing policy.
-- Report each write with the issue identifier and link in that session's report or web reply.
-- Keep Linear issue and comment deletion outside this policy; each deletion still requires the user's take off under
-  the existing data-deletion rule.
-
-- A message or publication in the user's name that reaches other people is T0.
-  Register a Slack message in the user's name with `charliebot slack draft`, and a GitHub PR or comment in the
-  user's name with `charliebot github draft`: the user's click on its card is the take off, and the server sends the
-  card's text from the user's account.
-  For any other write in the user's name, show the full content draft first, and wait for the user to say "take off"
-  before executing.
-  Send every other Slack write with the Slack bot token, and every other GitHub write through the agent `gh`, which uses
-  the GitHub App where the App is installed.
-- A write under a bot identity inside a standing policy's scope is T1.
-  It proceeds, and the agent records it with `charliebot digest add`.
-- A Slack-origin, Discord-origin, or Feishu-origin session's reply to its own thread is T1 under the own-thread
-  standing policy, when the reply is inside that policy's scope.
-  It goes out through `charliebot slack reply`, `charliebot discord reply`, or `charliebot feishu reply`
-  (contract: prompts/thread_reply_format.md) and is recorded with `charliebot digest add`.
-  The pages that the reply links are published under the same policy.
-Drafts follow the writing-style skill's coordination-messages genre (skills/writing-style/genres/coordination-messages.md).
-
+External mutations (Feishu, Slack, Discord, GitHub, Linear, and `publish.command`) follow Action Boundaries above.
+Corrections and re-posts follow the boundary of the write they repeat.
+- Register a Slack message in the user's name with `charliebot slack draft`, and a GitHub pull request or comment in
+  the user's name with `charliebot github draft`. The user's click on the card is the `take off`, and the server
+  sends the card's text from the user's account. For any other write in the user's name, show the full draft first
+  and wait for the user's `take off`.
+- Send every other Slack write with the Slack bot token, and every other GitHub write through the agent `gh`, which
+  uses the GitHub App where installed.
+- Writes under the bot identity into a Slack or Discord thread the bot belongs to, Linear comments on the user's own
+  tickets, and edits to shared documents proceed directly.
+- In a sub session (any session with a parent task, at any depth), Linear issue creation, updates, and comment posts
+  proceed directly. Report each write with the issue identifier and link in the session's report or web reply. Linear
+  issue and comment deletion waits for the user's `take off`.
+- A Slack-origin, Discord-origin, or Feishu-origin session replies to its own thread (and publishes the pages the
+  reply links) directly through `charliebot slack reply`, `charliebot discord reply`, or `charliebot feishu reply`
+  (`prompts/thread_reply_format.md`) while every message from the user in that thread has been read.
+- Drafts follow `skills/writing-style/genres/coordination-messages.md`.
 ## Delayed Triggers
 
 Watch each SLURM or remote job with a trigger, and give no completion-time estimate for it.

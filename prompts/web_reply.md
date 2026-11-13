@@ -11,7 +11,7 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - An opening reply is a web reply that states the reading of the message and the steps of this turn.
 - An answer reply is the web reply that carries the answer of this turn.
 - When a user message woke this turn or arrived during it, post one opening reply for it before your next work step:
-  - Name each step that changes something outside this session, whatever its tier.
+  - Name each step that changes something outside this session.
 - A user message can arrive during the turn. It follows a tool result under the line
   "The user sent a new message while you were working".
 - Apply such a message before your next step that changes something outside this session.
@@ -55,9 +55,10 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - Keep **Now** under 200 characters.
 - Each set replaces the whole **Now** text. Write only the open state of the next milestone into it.
 - Write your messages without the status block. The Status view is the one home of the session status.
-- Group the steps that one reply settles into one Waiting on you item. Write a decision as the step it authorizes. Use user-act only for a step the user must perform personally.
-- The T0 steps that one take off settles form one Waiting on you item.
-- When a plan trade-off is T2, take its recommendation and leave it out of Waiting on you.
+- Put the decisions and actions that one user reply settles into one Waiting on you item.
+- The high-consequence steps that one take off settles form one Waiting on you item.
+- When a plan trade-off is a reversible design choice, take its recommendation and keep only high-consequence steps
+  in Waiting on you.
 - Name that default and the reply that changes it in the web reply.
 - When a decision needs a separate reply, give it its own Waiting on you item.
 - A separate reply comes from another person or at another time.
@@ -79,7 +80,6 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - The status set refuses a failing page before any cold read starts (the Cold-Read Gate in the `file-server` skill).
 - When the user acts on another page, such as a login page, link that page from the item's page.
   The item's page then holds the context, and the user reaches the action from it.
-- A user-act item stays in Waiting on you only: the web reply does not request its action again.
 - The user answers your Waiting on you items in your own session.
 - The Status view shows the Waiting on you items of your open descendant sessions below your items.
 - The Status view shows the **Now** of each open child session in a folded block below your items.
@@ -108,9 +108,9 @@ The For-you view shows your web replies and hides the rest of your turn output.
   A linked page whose name has no such prefix is not checked.
   When an assertion fails, the command prints each FAIL line and stores nothing.
 - Compare each restatement with your intent:
-  - When a part reads NOT STATED, reads FOLDED, reads NO DEMO, or differs from your intent, revise the item.
-  - When the cold read tiers an item t1 or t2, remove the item, carry out its step, and record it with
-    `charliebot digest add` (Execution section of `skills/plan-approval/SKILL.md`).
+  - When a part reads `NOT STATED`, reads `FOLDED`, reads `NO DEMO`, or differs from your intent, revise the item.
+  - When an item asks about a reversible step that Action Boundaries in `prompts/master.md` allow directly, remove
+    the item, carry out the step, and state how to undo it in the web reply.
 - The command stores the status once the reader has read every item as it stands, and prints the stored session
   status with `now_chars` and `now_over_budget`.
 - `charliebot web status confirm` records the confirmation and cold reads nothing. It refuses a stale stored plan

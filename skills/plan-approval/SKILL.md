@@ -22,18 +22,15 @@ user-invocable: false
   Its Waiting on you items stay in its own session, so the user answers them there.
 
 ## The principle
-
-The approval policy table sets the tier of each step (Execution section).
-The user takes off each T0 step before it happens.
-The agent tree carries out each T1 and T2 step and records it in the digest (the day's list on the approval page),
-design choices included.
+Action Boundaries in `prompts/master.md` and the host's resident memory entries in `$CHARLIEBOT_HOME/memory` set the
+approval boundary of each step.
+The user takes off each high-consequence step before it runs.
+The agent tree carries out each reversible step and design choice directly, and states what changed and how to undo
+it in the session reply or report.
 The line's approver answers the reading on each understanding page that waits (Understanding section)
-before any work builds on it.
-A misread request then costs one page, not a built version.
+before work builds on it.
 The approver is the user, or the parent node for a child under an e2e handover (`prompts/master.md`, `prompts/task_manager.md`).
-The user usually approved that child's reading already on the parent's understanding page.
-The user also gives each explicit user approval that a rule requires.
-The user reviews the digest and the delivered product.
+The user also gives each explicit user approval that a rule requires, and reviews the delivered product.
 
 **approval object = sections 1 and 3 + 4.1 Schema + resolved Trade-offs + entries
 promoted from Other Details.** Plan approval covers these exact terms. The `BLOCK KIT` comment
@@ -75,13 +72,12 @@ An understanding page lists the divergences of a request that admits several rea
   (8 hours of worker time) or its result reaches other people (the reading threshold).
   This applies to root lines and child lines alike.
 - A page whose approver is the user waits only while no e2e handover covers its reading (`prompts/master.md`).
-- When the page does not wait, the line proceeds on the recommended reading. Its delivery lists each divergence
-  with the reply that selects the other reading. The digest records a reading below the reading threshold as T2.
+- Below the reading threshold, the line proceeds on the recommended reading, and its delivery lists each divergence
+  with the reply that selects the other reading.
 - For a departure from the user's stated method, follow the Design section of `prompts/manager_workflows.md`.
 - While the page waits, continue read-only research.
   The plan that follows then starts from read evidence.
-- When the approver is the user and the page waits, list the page as one Waiting on you item that names this rule.
-  The cold read then tiers the item t0.
+- When the approver is the user and the page waits, list the page as one Waiting on you item.
 - When the approver is the parent node and the page waits, send the page's divergences to the parent (Scope section).
   The parent then answers them from the reading that the user approved for the parent's line.
 - The approver answers the divergences on the page.
@@ -142,16 +138,15 @@ An understanding page lists the divergences of a request that admits several rea
 
 ## Approval
 
-- Carry a line's work to delivery on its reading, except the T0 steps that wait for a take off.
-  The reading is the answered understanding page, or the recommended reading when no page exists.
-- When a design choice is T2, take the recommended option.
-  The line then moves on without a wait, and the report names each alternative.
+- Carry a line's work to delivery on its reading, and pause at high-consequence steps that wait for a take off.
+  The reading is the answered understanding page, or the recommended reading when the task starts directly.
+- For a reversible design choice, take the recommended option and name each alternative in the report.
 - A user message in a running line is feedback.
 - A request to stop, in any wording or language, or a cancel stops the line.
 - The parent node approves a child line's plan. A root line approves its own plan.
 - The parent's approval covers the plan terms other than decisions that only the user makes.
   Each such decision then waits for the user's answer in the child's session.
-- Before each T0 step, ask the user for a take off that names the step.
+- Before each high-consequence step, ask the user for a take off that names the step.
 - A pre take off names lines and steps ahead of time. It holds until those lines deliver.
 - Before a take off, state the goal, blast radius, and undo plan.
 - For a deletion, list each path and its size. Send each rule or code change that other nodes follow to their managers.
@@ -204,41 +199,22 @@ always pass.
 The gate judges the chain alone; its definitions live in rust/crates/runtime/store/src/task_tree.rs (`is_read_only_exempt` and the delegation refusals).
 
 ## Execution
-
-- Classify each step by the approval policy table before it runs.
-  The table, `$CHARLIEBOT_HOME/config.d/approval.d/policy.yaml`, is the one home of the consequence tests and
-  the standing policies. A standing policy is a policy that the user approved once, with its scope, cap and expiry.
-  The server injects the table into your prompt as the Approval policy table section.
-- A T0 step is a consequence step: a step that meets a consequence test, or a step of a standing policy's kind
-  outside that policy's scope or over its cap.
-- A consequence test takes precedence: a step that meets one is T0 even inside a standing policy's scope.
-- When a T0 step waits for a take off, list it as one Waiting on you item, and continue the work that does not
-  depend on it in the same turn.
-- A T1 step is a step inside a standing policy's scope.
-  It proceeds without a take off, and the agent records it with
-  `charliebot digest add --policy <policy id> --step <text> --undo <text> --scope-check <text>`.
-- A T2 step is every other step: a design choice on the recommendation, a reading below the reading threshold,
-  and a reversible step that reaches other people under no policy.
-  It proceeds, and the agent records it with `charliebot digest add --policy t2 --step <text> --undo <text>`.
-- A user-act step is a step the user must perform personally: a browser login, an approval in another system, or supplying information only the user holds. A decision is the user's choice among options; classify the step it authorizes.
-  List each user-act step as one Waiting on you item. The approval page gathers these items into the day's actions only you can do.
-- A rule that names the user's explicit approval for a step stays in force; such a step is T0 under the
-  rule-named test.
-- Hold work that builds on a waiting understanding page, T1 and T2 work included.
-  The approver's reading check then comes before the build.
-- When reality forces a change that leaves the approval object intact, make it,
-  log it as a deviation, and keep going.
-- Between plan approval and the report there is nothing to ask: return to the user
-  only at a checkpoint the plan assigns to the user, at a T0 step that the plan does not approve,
-  or at a blocking failure. Progress updates are fine; requests
-  for permission are not.
+- Classify each step by Action Boundaries in `prompts/master.md` and the host's resident memory entries before it runs.
+- When a high-consequence step waits for a take off, list it as one Waiting on you item, and continue independent
+  work in the same turn.
+- Carry out reversible steps and design choices directly, and state how to undo each external or repository change
+  in the session reply or report.
+- List each action that only the user can perform (a browser login, an approval in another system, or information
+  that only the user holds) as one Waiting on you item.
+- Hold work that builds on a waiting understanding page until the approver answers the page.
+- When reality forces a change that leaves the approval object intact, make it, log it as a deviation, and keep going.
+- Between plan approval and the report, return to the user only at a checkpoint the plan assigns to the user, at an
+  unapproved high-consequence step, or at a blocking failure.
 
 ## Report
 
-- At completion or at a blocking failure, account for every approval-object term:
-  delivered or deviated. Each deviation is a retroactive Trade-off — approved term,
-  what landed, one-line reason — accepted by default or reverted on request; the revert becomes a new delegation.
-- For each reading taken on a page that did not wait and each design choice made on a recommendation, name the
-  alternative and the reply that switches to it.
-- For each delivered T0 step, name the rule that made it T0 and state how to undo it, or state that nothing undoes
-  it. Each T1 and T2 step carries its undo in its digest entry.
+- At completion or at a blocking failure, account for every approval-object term as delivered or deviated.
+  Write each deviation as a retroactive Trade-off (approved term, what landed, and one-line reason), accepted by
+  default or reverted on a new delegation when requested.
+- For each reading below the reading threshold and each design choice made on a recommendation, name the alternative and the reply that switches to it.
+- State how to undo each delivered change.

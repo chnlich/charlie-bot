@@ -31,6 +31,14 @@ pub(crate) const REACTIONS_REMOVE: &str = "reactions.remove";
 pub(crate) const SEARCH_MESSAGES: &str = "search.messages";
 pub(crate) const USERS_LIST: &str = "users.list";
 
+// The Slack Web API field names: the channel a call addresses, the message text, the thread timestamp that makes a
+// post a reply, and the users a conversation opens for. The client and the draft sender both build these bodies, so
+// both read the names from here.
+pub(crate) const CHANNEL: &str = "channel";
+pub(crate) const TEXT: &str = "text";
+pub(crate) const THREAD_TS: &str = "thread_ts";
+pub(crate) const USERS: &str = "users";
+
 /// The Slack Web API wrapper.
 pub struct SlackClient {
   http: reqwest::Client,
@@ -77,9 +85,9 @@ impl SlackClient {
   /// Slack's response payload to a POST of one thread reply.
   pub(crate) async fn post_message(&self, channel: &str, text: &str, thread_ts: &str, post_key: &str) -> Result<Value> {
     let body = json!({
-      "channel": channel,
-      "text": text,
-      "thread_ts": thread_ts,
+      (CHANNEL): channel,
+      (TEXT): text,
+      (THREAD_TS): thread_ts,
       "metadata": {"event_type": "charliebot_post", "event_payload": {"key": post_key}},
     });
     let response = self.json_request(CHAT_POST_MESSAGE, &self.bot_token, body)?.send().await?;
@@ -89,8 +97,8 @@ impl SlackClient {
   /// The message timestamp, from a POST of one bot DM.
   pub(crate) async fn post_dm(&self, channel: &str, text: &str) -> Result<String> {
     let body = json!({
-      "channel": channel,
-      "text": text,
+      (CHANNEL): channel,
+      (TEXT): text,
     });
     let response = self.json_request(CHAT_POST_MESSAGE, &self.bot_token, body)?.send().await?;
     let payload = checked_payload(response, CHAT_POST_MESSAGE).await?;
@@ -111,14 +119,14 @@ impl SlackClient {
 
   /// The summon's `eyes` reaction, added through `reactions.add`.
   pub(crate) async fn add_reaction(&self, channel: &str, name: &str, ts: &str) -> Result<Value> {
-    let body = json!({"channel": channel, "name": name, "timestamp": ts});
+    let body = json!({(CHANNEL): channel, "name": name, "timestamp": ts});
     let response = self.json_request(REACTIONS_ADD, &self.bot_token, body)?.send().await?;
     checked_payload(response, REACTIONS_ADD).await
   }
 
   /// Remove the summon reaction; `no_reaction` already means the desired state.
   pub(crate) async fn remove_reaction(&self, channel: &str, name: &str, ts: &str) -> Result<Value> {
-    let body = json!({"channel": channel, "name": name, "timestamp": ts});
+    let body = json!({(CHANNEL): channel, "name": name, "timestamp": ts});
     let response = self.json_request(REACTIONS_REMOVE, &self.bot_token, body)?.send().await?;
     let payload = response_json(response).await?;
     if !payload.get("ok").is_some_and(text_repr::is_truthy)
@@ -138,7 +146,7 @@ impl SlackClient {
       {
         let mut query = url.query_pairs_mut();
         query
-          .append_pair("channel", channel)
+          .append_pair(CHANNEL, channel)
           .append_pair("ts", thread_ts)
           .append_pair("include_all_metadata", "true")
           .append_pair("limit", "100");
@@ -194,7 +202,7 @@ impl SlackClient {
 
   async fn resolve_channel_name(&self, channel_id: &str) -> Result<Option<String>> {
     let mut url = reqwest::Url::parse(&format!("{}{CONVERSATIONS_INFO}", self.api_base))?;
-    url.query_pairs_mut().append_pair("channel", channel_id);
+    url.query_pairs_mut().append_pair(CHANNEL, channel_id);
     let response = self.request_url(Method::GET, url.as_str(), &self.bot_token).send().await?;
     let payload = response_json(response).await?;
     if !payload.get("ok").is_some_and(text_repr::is_truthy) {
@@ -206,7 +214,7 @@ impl SlackClient {
       return Ok(None);
     }
     let name = payload
-      .get("channel")
+      .get(CHANNEL)
       .and_then(Value::as_object)
       .and_then(|channel| channel.get("name"))
       .context(format!("{CONVERSATIONS_INFO} response has no channel.name"))?;

@@ -1,6 +1,6 @@
 //! `cron.d` file loading, prompt pointers, broken-file alerts and backend startup validation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,6 +47,7 @@ struct CachedSnapshot {
 
 static SNAPSHOTS: OnceLock<Mutex<HashMap<SnapshotKey, CachedSnapshot>>> = OnceLock::new();
 static NEXT_SNAPSHOT_GENERATION: AtomicU64 = AtomicU64::new(1);
+static CRON_ALERT_FINGERPRINT_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(test)]
 static CRON_FILE_READS: OnceLock<Mutex<HashMap<PathBuf, usize>>> = OnceLock::new();
 #[cfg(test)]
@@ -464,39 +465,48 @@ fn repo_root(features: &FeatureContext) -> Arc<RepoRoot> {
 fn fire_error_alert(features: &Arc<FeatureContext>, cfg: &CharlieBotConfig, errors: &[ScheduledTaskError]) {
   let names = errors.iter().map(|error| error.name.clone()).collect::<Vec<_>>();
   let path = state_dir(&cfg.charliebot_home).join("cron_alert_fingerprint.json");
-  let old = match std::fs::read_to_string(&path) {
+  dispatch_alert_if_fingerprint_changed(&path, &names, |message| {
+    if tokio::runtime::Handle::try_current().is_err() {
+      tracing::info!(names = ?names, "cron_alert_skipped_no_event_loop");
+      return false;
+    }
+    let credentials = Arc::clone(&features.credentials);
+    let chat_id = cfg.telegram.chat_id.clone();
+    tokio::spawn(async move {
+      match send_telegram(&credentials, chat_id.as_deref(), &message).await {
+        Ok(()) => tracing::info!("cron_alert_sent"),
+        Err(error) => tracing::error!(error = %error, "cron_alert_send_failed"),
+      }
+    });
+    true
+  });
+}
+
+fn dispatch_alert_if_fingerprint_changed(path: &Path, names: &[String], dispatch: impl FnOnce(String) -> bool) {
+  let _guard = CRON_ALERT_FINGERPRINT_LOCK.lock().expect("cron alert fingerprint mutex is not poisoned");
+  let old = match std::fs::read_to_string(path) {
     Ok(raw) => match serde_json::from_str::<Vec<String>>(&raw) {
-      Ok(names) => names.into_iter().collect::<std::collections::HashSet<_>>(),
+      Ok(names) => names.into_iter().collect::<HashSet<_>>(),
       Err(error) => {
         tracing::warn!(path = %path.display(), error = %error, "cron_alert_state_unparseable");
-        std::collections::HashSet::new()
+        HashSet::new()
       }
     },
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => std::collections::HashSet::new(),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => HashSet::new(),
     Err(error) => {
       tracing::warn!(path = %path.display(), error = %error, "cron_alert_state_unreadable");
-      std::collections::HashSet::new()
+      HashSet::new()
     }
   };
   if old == names.iter().cloned().collect() {
     return;
   }
-  if tokio::runtime::Handle::try_current().is_err() {
-    tracing::info!(names = ?names, "cron_alert_skipped_no_event_loop");
+  if !dispatch(alert_message(names)) {
     return;
   }
-  let message = alert_message(&names);
-  let credentials = Arc::clone(&features.credentials);
-  let chat_id = cfg.telegram.chat_id.clone();
-  tokio::spawn(async move {
-    match send_telegram(&credentials, chat_id.as_deref(), &message).await {
-      Ok(()) => tracing::info!("cron_alert_sent"),
-      Err(error) => tracing::error!(error = %error, "cron_alert_send_failed"),
-    }
-  });
   if let Err(error) = std::fs::create_dir_all(path.parent().expect("state path has a parent")).and_then(|()| {
     charliebot_core::fsutil::atomic_write_text(
-      &path,
+      path,
       &format!("{}\n", serde_json::to_string(&names).expect("cron names serialize")),
     )
   }) {
@@ -593,8 +603,8 @@ mod tests {
   use serde_json::{Value, json};
 
   use super::{
-    TaskFileReadError, TaskFileWriteError, alert_message, fire_error_alert, load_snapshot, read_task_file,
-    validate_body, write_task_file,
+    TaskFileReadError, TaskFileWriteError, dispatch_alert_if_fingerprint_changed, fire_error_alert, load_snapshot,
+    read_task_file, validate_body, write_task_file,
   };
   use crate::test_support::feature_context;
 
@@ -785,27 +795,55 @@ mod tests {
     assert!(home.path().join("config.d/cron.d/synthetic-default.yaml").exists());
   }
 
-  #[tokio::test]
-  async fn alert_fingerprint_tracks_transitions_and_telegram_failures_stay_local() {
-    let (home, features) = feature_context();
-    let cfg = features.config.get().unwrap();
-    let error = |name: &str| crate::config::ScheduledTaskError {
-      name: name.to_string(),
-      path: home.path().join(format!("config.d/cron.d/{name}.yaml")).display().to_string(),
-      error: "synthetic load error".to_string(),
-      enabled: Some(true),
-    };
-    let state = cfg.charliebot_home.join("state/cron_alert_fingerprint.json");
+  #[test]
+  fn concurrent_alert_fingerprint_dispatches_once_per_error_set_transition() {
+    use std::sync::{Arc, Barrier, Mutex};
+    use std::thread;
 
-    fire_error_alert(&features, &cfg, &[error("alpha"), error("beta")]);
+    let home = tempfile::tempdir().unwrap();
+    let state = home.path().join("state/cron_alert_fingerprint.json");
+    let notifications = Arc::new(Mutex::new(Vec::new()));
+    let barrier = Arc::new(Barrier::new(3));
+    let names = vec!["alpha".to_string(), "beta".to_string()];
+    let mut threads = Vec::new();
+    for _ in 0..2 {
+      let state = state.clone();
+      let names = names.clone();
+      let notifications = Arc::clone(&notifications);
+      let barrier = Arc::clone(&barrier);
+      threads.push(thread::spawn(move || {
+        barrier.wait();
+        dispatch_alert_if_fingerprint_changed(&state, &names, |message| {
+          notifications.lock().unwrap().push(message);
+          true
+        });
+      }));
+    }
+    barrier.wait();
+    for thread in threads {
+      thread.join().unwrap();
+    }
+
+    assert_eq!(*notifications.lock().unwrap(), ["⚠️ cron tasks failed to load: alpha, beta".to_string()]);
     assert_eq!(std::fs::read_to_string(&state).unwrap(), "[\"alpha\",\"beta\"]\n");
-    fire_error_alert(&features, &cfg, &[error("alpha"), error("beta")]);
-    assert_eq!(std::fs::read_to_string(&state).unwrap(), "[\"alpha\",\"beta\"]\n");
-    fire_error_alert(&features, &cfg, &[]);
-    assert_eq!(std::fs::read_to_string(&state).unwrap(), "[]\n");
-    tokio::task::yield_now().await;
-    assert_eq!(alert_message(&["alpha".to_string(), "beta".to_string()]), "⚠️ cron tasks failed to load: alpha, beta");
-    assert_eq!(alert_message(&[]), "✅ all cron load failures resolved");
+
+    for names in
+      [vec!["beta".to_string(), "gamma".to_string()], Vec::new(), vec!["alpha".to_string(), "beta".to_string()]]
+    {
+      dispatch_alert_if_fingerprint_changed(&state, &names, |message| {
+        notifications.lock().unwrap().push(message);
+        true
+      });
+    }
+    assert_eq!(
+      *notifications.lock().unwrap(),
+      [
+        "⚠️ cron tasks failed to load: alpha, beta".to_string(),
+        "⚠️ cron tasks failed to load: beta, gamma".to_string(),
+        "✅ all cron load failures resolved".to_string(),
+        "⚠️ cron tasks failed to load: alpha, beta".to_string(),
+      ]
+    );
   }
 
   #[test]

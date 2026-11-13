@@ -9,7 +9,7 @@ use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{Request, StatusCode};
 use axum::response::Response;
-use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody};
+use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, RequestBody, text_field};
 use charliebot_compat::responses;
 use charliebot_compat::routing::{get_only, post_only};
 use charliebot_registry::FeatureContext;
@@ -183,9 +183,9 @@ impl PresentRequest {
       unreachable!("a required model validates a body to its fields")
     };
     Ok(Self {
-      session_id: take_string(&mut fields, "session_id"),
-      file: take_string(&mut fields, "file"),
-      title: take_string(&mut fields, "title"),
+      session_id: text_field(&fields, "session_id"),
+      file: text_field(&fields, "file"),
+      title: text_field(&fields, "title"),
       base: build_base(&mut fields),
     })
   }
@@ -203,8 +203,8 @@ impl AmendRequest {
     let Some(Value::Object(mut fields)) = body.validate(&AMEND_BODY)? else {
       unreachable!("a required model validates a body to its fields")
     };
-    let session_id = take_string(&mut fields, "session_id");
-    let file = take_string(&mut fields, "file");
+    let session_id = text_field(&fields, "session_id");
+    let file = text_field(&fields, "file");
     let plan_id = match fields.remove("plan_id") {
       None | Some(Value::Null) => None,
       Some(plan_id) => Some(plan_id),
@@ -214,8 +214,7 @@ impl AmendRequest {
       Some(Value::String(trigger)) => trigger,
       Some(_) => unreachable!("a validated trigger is one of the triggers"),
     };
-    let amendment =
-      Amendment { plan_id, trigger, note: take_string(&mut fields, "note"), base: build_base(&mut fields) };
+    let amendment = Amendment { plan_id, trigger, note: text_field(&fields, "note"), base: build_base(&mut fields) };
     Ok(Self { session_id, file, amendment })
   }
 }
@@ -261,7 +260,7 @@ impl ApproveRequest {
       None | Some(Value::Null) => None,
       Some(plan_id) => Some(plan_id),
     };
-    Ok(Self { session_id: take_string(&mut fields, "session_id"), plan_id })
+    Ok(Self { session_id: text_field(&fields, "session_id"), plan_id })
   }
 }
 
@@ -277,17 +276,9 @@ impl CloseRequest {
     let Some(Value::Object(mut fields)) = body.validate(&CLOSE_BODY)? else {
       unreachable!("a required model validates a body to its fields")
     };
-    let session_id = take_string(&mut fields, "session_id");
+    let session_id = text_field(&fields, "session_id");
     let plan_id = fields.remove("plan_id").unwrap_or_else(|| unreachable!("a validated plan_id is present"));
-    Ok(Self { session_id, plan_id, close_as: take_string(&mut fields, "close_as") })
-  }
-}
-
-/// A string field of a validated model.
-fn take_string(fields: &mut Map<String, Value>, name: &str) -> String {
-  match fields.remove(name) {
-    Some(Value::String(text)) => text,
-    _ => unreachable!("a validated {name} is a string"),
+    Ok(Self { session_id, plan_id, close_as: text_field(&fields, "close_as") })
   }
 }
 

@@ -8,7 +8,7 @@ use axum::extract::State;
 use axum::http::Request;
 use axum::response::Response;
 use charliebot_chat_threads::thread_entry::{self, ThreadAdapter, ThreadDetail, ThreadReplyError};
-use charliebot_compat::request_body::{self, BodyModel, Field, FieldType};
+use charliebot_compat::request_body::{self, BodyModel, Field, FieldType, text_field};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_registry::FeatureContext;
@@ -45,11 +45,11 @@ async fn reply(State(features): State<Arc<FeatureContext>>, request: Request<Bod
     Ok(model) => model,
     Err(response) => return *response,
   };
-  let Some(Value::Object(mut fields)) = model else {
+  let Some(Value::Object(fields)) = model else {
     unreachable!("a required Slack reply body validates to its declared fields")
   };
-  let session_id = take_text(&mut fields, "session_id");
-  let text = take_text(&mut fields, "text");
+  let session_id = text_field(&fields, "session_id");
+  let text = text_field(&fields, "text");
   let identity = match caller::resolve_caller(&parts.headers, &features) {
     Ok(identity) => identity,
     Err(response) => return response,
@@ -104,7 +104,7 @@ async fn ack(State(features): State<Arc<FeatureContext>>, request: Request<Body>
   let Some(Value::Object(mut fields)) = model else {
     unreachable!("a required Slack ack body validates to its declared fields")
   };
-  let session_id = take_text(&mut fields, "session_id");
+  let session_id = text_field(&fields, "session_id");
   let message_ids = take_string_list(&mut fields, "message_ids");
   let adapter: Arc<dyn ThreadAdapter> = Arc::new(slack_listener::SlackThreadAdapter::lazy(Arc::clone(&features)));
   answer(execute_ack(&features, &adapter, &session_id, &message_ids).await)
@@ -150,13 +150,6 @@ fn answer(result: Result<Value, ThreadReplyError>) -> Response {
       };
       responses::json(error.status, &json!({"detail": detail}))
     }
-  }
-}
-
-fn take_text(fields: &mut Map<String, Value>, name: &str) -> String {
-  match fields.remove(name) {
-    Some(Value::String(text)) => text,
-    _ => unreachable!("a validated {name} is a string"),
   }
 }
 

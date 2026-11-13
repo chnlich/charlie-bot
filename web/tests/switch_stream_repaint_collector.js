@@ -1,5 +1,5 @@
 'use strict';
-// M106 collector — switch-during-stream repaint. Times the synchronous paint a
+// Switch repaint collector — switch-during-stream repaint. Times the synchronous paint a
 // session switch performs on a mid-stream pending draft: hideStreaming (the
 // teardown path) then showStreaming past the coalesce window. The draft is grown
 // by one delta, as it is between two switches. The largest on-disk assistant

@@ -9,7 +9,7 @@ const { mulberry32 } = require('./mulberry32');
 // tokens, render — the behavior the incremental parse must reproduce byte for
 // byte on every paint. (marked.parse differs for a draft ending inside an
 // unterminated fence: the streaming paint deliberately renders that block
-// escaped-plain, the M54 skip.)
+// escaped-plain, the growing code block's skip.)
 function referenceStreamRender(context, draft) {
   context.streamPaintCodeTokens = [];
   const tokens = context.marked.lexer(context.fixNestedFences(draft));

@@ -1,11 +1,11 @@
 'use strict';
-// M54 collector — stream-draft paint work with the page's real highlight.js
-// build. The M33 collector stubs hljs, so the standing replay metric never sees
-// highlightAuto's cost. This one loads the highlight.js build index.html pins
-// (11.9.0 common, cdnjs) into the same harness. It replays the largest on-disk
-// assistant draft that contains a bare code fence, the corpus shape whose paint
-// cost highlightAuto dominates. CHECKOUT picks the code under test;
-// live state read-only.
+// Highlight replay collector — stream-draft paint work with the page's real
+// highlight.js build. The replay collector stubs hljs, so the standing replay
+// metric never sees highlightAuto's cost. This one loads the highlight.js build
+// index.html pins (11.9.0 common, cdnjs) into the same harness. It replays the
+// largest on-disk assistant draft that contains a bare code fence, the corpus
+// shape whose paint cost highlightAuto dominates. CHECKOUT picks the code under
+// test; live state read-only.
 const crypto = require('node:crypto');
 
 const { buildStreamHarness } = require('./stream_render_harness');

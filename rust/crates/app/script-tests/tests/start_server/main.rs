@@ -39,6 +39,10 @@ printf '{"CHARLIEBOT_REPO_ROOT":"%s"}\n' "$CHARLIEBOT_REPO_ROOT" > "$here/run.js
 printf '%s\n' "fake_release_ready"
 "#;
 
+// The server waits in `wait`, not in a foreground `sleep`. Bash runs a trap only after its foreground child ends, and a
+// sleep forked but not yet exec'd when the group's SIGINT arrives keeps bash's handler, misses the signal, and runs
+// for an hour. `wait` returns on the trapped signal whatever the child did. The sleep's output goes to /dev/null, so
+// the pipe to tee closes when the server exits.
 const SIGINT_RELEASE_BINARY: &str = r#"#!/usr/bin/env bash
 if [ "${1:-}" = "--check-config" ]; then
   exit 0
@@ -46,7 +50,8 @@ fi
 trap 'printf "%s\n" "fake_server_shutdown_marker"; exit 0' INT
 printf '%s\n' "fake_server_ready"
 while :; do
-  sleep 3600
+  sleep 3600 >/dev/null 2>&1 &
+  wait "$!"
 done
 "#;
 

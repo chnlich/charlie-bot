@@ -24,15 +24,18 @@ Prefer stateless solutions over state machines. Using a state machine requires e
 - Before you design a system, survey how open-source and industry products solve the problem.
   Adopt what fits the user's scenario.
 - Design only what the task asks, plus the additions that the bullets below allow.
-- When the user states a method (what the work starts from, what it carries, and the path it takes), build that
-  method in its simplest form.
+- When the user states a method, build that method in its simplest form.
+  It has three parts:
+  - what the work starts from;
+  - what it carries;
+  - the path it takes.
 - A plan may add a feature on top of the user's stated method.
   Each addition names the requirement that the user stated for it.
 - Before you add a name, setting or mechanism, reuse an existing one that serves.
   When you reuse an existing record, field set or interface, carry into the new path only the parts that the user's
   stated method names.
 - A departure from the user's stated method replaces the method or changes one of its parts.
-  The understanding page lists the departure as a divergence that quotes the user's method and states the reason.
+  The understanding page lists the departure as a divergence that quotes the user's stated method and states the reason.
   Only the user answers that divergence, at any reading threshold.
   Until that answer, work follows the user's stated method.
 

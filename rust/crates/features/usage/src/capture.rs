@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, anyhow, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types::{
-  USAGE_CACHE_CREATION_INPUT_TOKENS, USAGE_CACHE_READ_INPUT_TOKENS, USAGE_INPUT_TOKENS, USAGE_OUTPUT_TOKENS,
+  USAGE_CACHE_CREATION_INPUT_TOKENS, USAGE_CACHE_READ_INPUT_TOKENS, USAGE_CACHED_INPUT_TOKENS, USAGE_INPUT_TOKENS,
+  USAGE_OUTPUT_TOKENS,
 };
 use charliebot_core::metadata_slot::METADATA_FILE_NAME;
 use charliebot_core::timefmt;
@@ -536,7 +537,7 @@ fn turn_sums(objects: &[Value]) -> anyhow::Result<Option<(Count, Count, Count)>>
     }
     seen = true;
     let usage = usage_object(object.get("usage"))?;
-    let cached = count(usage, "cached_input_tokens")?;
+    let cached = count(usage, USAGE_CACHED_INPUT_TOKENS)?;
     let fresh = count(usage, USAGE_INPUT_TOKENS)?.sub(cached, "Codex cached tokens")?;
     totals.0 = totals.0.add(fresh, "Codex input tokens")?;
     totals.1 = totals.1.add(cached, "Codex cached tokens")?;

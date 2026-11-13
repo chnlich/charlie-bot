@@ -176,6 +176,8 @@ pub const USAGE_INPUT_TOKENS: &str = "input_tokens";
 pub const USAGE_OUTPUT_TOKENS: &str = "output_tokens";
 pub const USAGE_CACHE_READ_INPUT_TOKENS: &str = "cache_read_input_tokens";
 pub const USAGE_CACHE_CREATION_INPUT_TOKENS: &str = "cache_creation_input_tokens";
+/// The share of the input tokens that the provider served from its cache.
+pub const USAGE_CACHED_INPUT_TOKENS: &str = "cached_input_tokens";
 pub const RESULT_TOTAL_COST_USD: &str = "total_cost_usd";
 /// The native session a result event names: the backend's own session id, such as Claude Code's session or a Codex
 /// thread. Its `total_cost_usd` is that session's running total, so the usage fold counts only the increase.

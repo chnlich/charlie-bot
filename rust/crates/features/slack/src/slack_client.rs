@@ -41,7 +41,7 @@ pub struct SlackClient {
 }
 
 impl SlackClient {
-  /// Build the process client from the current feature credentials.
+  /// The process client, built from the current feature credentials.
   pub fn from_features(features: &FeatureContext) -> Result<Self> {
     let credentials = features.credentials.get().context("load Slack credentials")?;
     let app_token = credentials
@@ -60,7 +60,7 @@ impl SlackClient {
     Self { http, api_base, bot_token, app_token, channel_name_cache: Mutex::new(HashMap::new()) }
   }
 
-  /// POST `apps.connections.open` and return the Socket Mode URL.
+  /// The Socket Mode URL, from a POST of `apps.connections.open`.
   pub(crate) async fn open_connection(&self) -> Result<String> {
     let payload = checked_payload(
       self.request(Method::POST, APPS_CONNECTIONS_OPEN, &self.app_token).send().await?,
@@ -74,7 +74,7 @@ impl SlackClient {
       .context(format!("{APPS_CONNECTIONS_OPEN} response has no string url"))
   }
 
-  /// POST one thread reply and return Slack's response payload.
+  /// Slack's response payload to a POST of one thread reply.
   pub(crate) async fn post_message(&self, channel: &str, text: &str, thread_ts: &str, post_key: &str) -> Result<Value> {
     let body = json!({
       "channel": channel,
@@ -86,7 +86,7 @@ impl SlackClient {
     checked_payload(response, CHAT_POST_MESSAGE).await
   }
 
-  /// POST one bot DM and return the message timestamp.
+  /// The message timestamp, from a POST of one bot DM.
   pub(crate) async fn post_dm(&self, channel: &str, text: &str) -> Result<String> {
     let body = json!({
       "channel": channel,
@@ -103,13 +103,13 @@ impl SlackClient {
     Ok(ts)
   }
 
-  /// Read the authenticated bot identity used to recognize its metadata-keyed posts.
+  /// The authenticated bot identity, which recognizes its metadata-keyed posts.
   pub(crate) async fn auth_test(&self) -> Result<Value> {
     let response = self.request(Method::POST, AUTH_TEST, &self.bot_token).send().await?;
     checked_payload(response, AUTH_TEST).await
   }
 
-  /// Add the summon's `eyes` reaction.
+  /// The summon's `eyes` reaction, added through `reactions.add`.
   pub(crate) async fn add_reaction(&self, channel: &str, name: &str, ts: &str) -> Result<Value> {
     let body = json!({"channel": channel, "name": name, "timestamp": ts});
     let response = self.json_request(REACTIONS_ADD, &self.bot_token, body)?.send().await?;
@@ -129,7 +129,7 @@ impl SlackClient {
     Ok(payload)
   }
 
-  /// Read one thread's messages in Slack order.
+  /// One thread's messages, in Slack order.
   pub(crate) async fn get_thread_replies(&self, channel: &str, thread_ts: &str) -> Result<Vec<Value>> {
     let mut messages = Vec::new();
     let mut cursor = None;
@@ -167,7 +167,7 @@ impl SlackClient {
     }
   }
 
-  /// Resolve and cache a channel name, logging the two failure classes the listener watches.
+  /// The cached channel name or a fresh lookup; a failed lookup is logged in the two classes the listener watches.
   pub(crate) async fn get_channel_name(&self, channel_id: &str) -> Option<String> {
     if let Some(name) =
       self.channel_name_cache.lock().expect("the Slack channel-name cache is never poisoned").get(channel_id)

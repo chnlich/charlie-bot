@@ -1,4 +1,4 @@
-//! Store-backed Slack test fixtures and a local Slack Web API and Socket Mode fake.
+//! Slack test fixtures backed by the store, and a local Slack Web API and Socket Mode fake.
 
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -31,7 +31,7 @@ use tokio::sync::Notify;
 
 use crate::slack_client::SlackClient;
 
-/// Records the pending inputs every manager wake hands to an agent executor.
+/// The pending inputs that every manager wake hands to an agent executor.
 #[derive(Default)]
 pub(crate) struct RecordingExecutor {
   pub launches: Mutex<Vec<(String, Vec<Value>)>>,

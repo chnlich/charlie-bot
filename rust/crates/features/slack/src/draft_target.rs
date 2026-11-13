@@ -5,7 +5,8 @@
 
 use serde_json::{Map, Value, json};
 
-/// Validate one Slack target and return it in canonical form: `{channel, thread}` or `{users}`.
+/// The canonical form of one Slack target, `{channel, thread}` or `{users}`. The failure is the sentence that names
+/// why the target is refused.
 pub fn validate_target(target: &Value) -> Result<Value, String> {
   let Some(object) = target.as_object() else {
     return Err("the Slack target must be an object".to_string());

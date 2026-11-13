@@ -26,7 +26,7 @@ pub struct SlackDraftSender {
 }
 
 impl SlackDraftSender {
-  /// Build the sender from the live Slack user token with a fresh HTTP client.
+  /// The sender built from the live Slack user token, over a fresh HTTP client.
   pub fn from_context(context: &DraftContext) -> anyhow::Result<Self> {
     let credentials = context.credentials.get()?;
     let token = credentials.require("slack", "user_token")?;
@@ -34,12 +34,12 @@ impl SlackDraftSender {
     Ok(Self::with_client(http, API_BASE.to_string(), token, REQUEST_TIMEOUT))
   }
 
-  /// Build the sender over an injected client and base URL.
+  /// The sender built over an injected client and base URL.
   pub fn with_client(http: reqwest::Client, api_base: String, token: String, timeout: Duration) -> Self {
     Self { http, api_base, token, timeout }
   }
 
-  /// Send `body` to the target exactly as registered.
+  /// The send of `body` to the target exactly as registered.
   ///
   /// `auth.test` runs first, so a missing or refused user-token scope fails before a DM is opened or a message posts.
   pub async fn send(&self, target: &Value, body: &str) -> Result<DraftSent, DraftSendFailure> {

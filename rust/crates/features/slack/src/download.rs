@@ -17,7 +17,8 @@ use crate::token::TokenKind;
 /// The longest body prefix inspected for an HTML sign-in page, in bytes.
 const HTML_SNIFF_BYTES: usize = 15;
 
-/// Fetch `url` with `token` and write the body to `output`. Return the number of bytes written.
+/// The Slack file at `url`, written to `output`: the body is fetched with `token`, and the result is the number of
+/// bytes written.
 pub fn download(url: &str, output: &Path, kind: TokenKind, token: &str) -> Result<usize, CliExit> {
   let request = Request::new(reqwest::Method::GET, url);
   let response = request::send(&request.bearer(token), &[token])?;

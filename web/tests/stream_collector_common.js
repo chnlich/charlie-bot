@@ -1,8 +1,8 @@
 'use strict';
 // Shared plumbing for the stream-render collectors: the CDN fetch, the
-// live-corpus scan, and the streamed-draft replay scaffolding the M33 and M54
-// metrics share. One cadence, one replay loop, one timed fleet and one parity
-// check keep their numbers comparable. Read-only over
+// live-corpus scan, and the streamed-draft replay scaffolding the replay and
+// highlight replay metrics share. One cadence, one replay loop, one timed fleet
+// and one parity check keep their numbers comparable. Read-only over
 // ~/.charliebot/sessions; the collectors keep their own metric definitions
 // (corpus filter, harness options, reporting).
 const fs = require('node:fs');
@@ -164,7 +164,8 @@ const TIMED_REPLAYS = 5;
 // clock, so wall time covers only render work. options.leadEmptyPaint opens
 // with one empty paint, which consumes the harness's immediate first paint
 // (usage.js paints a stream's first call outright). So delta one paints from
-// the coalesced flush instead, M54's call sequence. M33 has no leading paint.
+// the coalesced flush instead, the highlight replay's call sequence. The replay
+// collector has no leading paint.
 function replayDraft(markedSrc, text, { harnessOptions, leadEmptyPaint = false } = {}) {
   const h = buildStreamHarness(markedSrc, harnessOptions);
   h.flushIdle(); // the page's idle warm (hljs grammar pre-compile) fires before any streamed turn

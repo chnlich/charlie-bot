@@ -1,5 +1,5 @@
 'use strict';
-// M60 collector — chat message-body markdown parse, repeat page render.
+// Message render collector — chat message-body markdown parse, repeat page render.
 //
 // Every session switch rebuilds the turn engine, so the same page's message
 // bodies re-run the parse (marked + fence fix) on every re-entry and every

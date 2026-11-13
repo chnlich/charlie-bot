@@ -31,8 +31,9 @@ const CUTTING_MARKED_SRC =
   '[{ type: "paragraph", raw: l, text: l }, { type: "space", raw: "\\n" }]), ' +
   'parser: (tokens) => tokens.map((t) => t.type === "space" ? "" : `<p>${t.text}</p>`).join("") };';
 
-// CHECKOUT overrides the code under test (the M33 A/B protocol); the default is
-// this harness's own repo root so behavior tests exercise their own checkout.
+// CHECKOUT overrides the code under test (the replay collectors' A/B protocol);
+// the default is this harness's own repo root so behavior tests exercise their
+// own checkout.
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..', '..');
 const read = (name) => fs.readFileSync(path.join(CHECKOUT, 'web/static/js', name), 'utf8');
 
@@ -87,7 +88,7 @@ function buildStreamHarness(markedSource, options = {}) {
     cancelIdleCallback() {},
   };
   // options.hljsSource loads the page's real highlight.js build; without it the
-  // stub keeps the M33 metric on the marked-parse cost alone.
+  // stub keeps the replay collector's metric on the marked-parse cost alone.
   if (!options.hljsSource) {
     context.hljs = hljsStub;
   }

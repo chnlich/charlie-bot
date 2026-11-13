@@ -5,7 +5,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::event_types::{MESSAGE_CONTENT_POINTER, RATE_LIMIT_EVENT, RATE_LIMIT_INFO};
+use charliebot_core::event_types::{
+  ASSISTANT, MESSAGE_CONTENT_POINTER, RATE_LIMIT_EVENT, RATE_LIMIT_INFO, TOOL_RESULT, USER,
+};
 use charliebot_registry::backend::{LaunchRefused, LaunchWatch as LaunchWatchTrait, MemberFailure};
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Value, json};
@@ -95,7 +97,7 @@ impl LaunchWatchTrait for RelayWatch {
         }
         false
       }
-      Some("assistant") if is_lost_login_event(event) => {
+      Some(ASSISTANT) if is_lost_login_event(event) => {
         self.auth_failed = true;
         false
       }
@@ -127,15 +129,15 @@ impl LaunchWatchTrait for RelayWatch {
 }
 
 fn is_tool_result_event(event: &Value) -> bool {
-  event.get("type").and_then(Value::as_str) == Some("user")
+  event.get("type").and_then(Value::as_str) == Some(USER)
     && event
       .pointer(MESSAGE_CONTENT_POINTER)
       .and_then(Value::as_array)
-      .is_some_and(|blocks| blocks.iter().any(|block| block.get("type").and_then(Value::as_str) == Some("tool_result")))
+      .is_some_and(|blocks| blocks.iter().any(|block| block.get("type").and_then(Value::as_str) == Some(TOOL_RESULT)))
 }
 
 fn is_lost_login_event(event: &Value) -> bool {
-  if event.get("type").and_then(Value::as_str) != Some("assistant")
+  if event.get("type").and_then(Value::as_str) != Some(ASSISTANT)
     || event.get("is_api_error_message").and_then(Value::as_bool) != Some(true)
     || event.get("error").and_then(Value::as_str) != Some("authentication_failed")
   {

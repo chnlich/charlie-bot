@@ -212,10 +212,11 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* The composer's attach and overflow controls draw the same bordered box as the microphone beside them.
    Their slate-600 boundary draws 2.36:1 on the input area's slate-900, under the 3:1 floor a control's
    boundary meets; slate-500 draws 3.75:1, the tone the microphone and the message box rest at. The hover
-   step takes slate-400, as the microphone's does. */
-#input-area #overflow-menu > button,
+   step takes slate-400, as the microphone's does. The attach button is the menu's first child: a package
+   appends its own entries after it, and those keep the border their own sheet sets. */
+#input-area #overflow-menu > button:first-child,
 #input-area .overflow-toggle { border-color: #64748b; }
-#input-area #overflow-menu > button:hover,
+#input-area #overflow-menu > button:first-child:hover,
 #input-area .overflow-toggle:hover { border-color: #94a3b8; }
 /* The Set Group dialog's field sits on a slate-700 fill. slate-500 renders 2.18:1 there and slate-400
    4.04:1, both under the 4.5:1 floor for the 14 px hint; slate-300 renders 6.97:1. */

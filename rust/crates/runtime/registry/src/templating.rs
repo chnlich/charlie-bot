@@ -293,8 +293,10 @@ impl Templating {
   /// [`Self::render_page`] serves for it.
   pub fn page_response(&self, name: &str, html: String, request: &Parts) -> Response {
     let deflate = accepts_gzip(request) && html.len() >= MINIMUM_DEFLATE_BYTES;
-    // `no-store` sends every back navigation and tab restore to the server, so the page never runs
-    // JavaScript from a cached copy that references an older static asset version.
+    // `no-store` names this body as a page: a page must never come out of a cache, because it names the static asset
+    // version it was built against and an older body runs an older script. The transport's entity-tag layer, outside
+    // this one, replaces the marker with `no-cache` and the body's tag, so every navigation still reaches the server
+    // and an unchanged body costs a `304` instead of a transfer.
     let mut response =
       if deflate { compressed_html(self.page_gzip(name, html.as_bytes())) } else { responses::html(html) };
     response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));

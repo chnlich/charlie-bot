@@ -77,6 +77,7 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - Then run `charliebot artifact wrap --genre waiting --output artifacts/waiting_<slug>.html <fragment>`.
   The command adds the head and style of the decision-page template.
 - On that page, show the options as one `div.fork` block whose option lines sit outside every folded block.
+- The page takes the Source Check of the `file-server` skill.
 - The status set refuses a failing page before any cold read starts (the Cold-Read Gate in the `file-server` skill).
 - When the user acts on another page, such as a login page, link that page from the item's page.
   The item's page then holds the context, and the user reaches the action from it.

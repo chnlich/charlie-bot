@@ -89,9 +89,8 @@ An understanding page lists the divergences of a request that admits several rea
   that follows the page.
 - External system writes follow the master prompt's External System Writes rule.
 - Before sharing, the page passes the mechanical assertions with
-  `--genre understanding`. Its cold read runs after sharing, with the originating request as the
-  trigger, per the Cold-Read Gate of the file-server skill. The page author or the worker that built it
-  verifies each cited `path:line` and derived number before the page goes out.
+  `--genre understanding`, and it takes the Source Check of the file-server skill. Its cold read runs after sharing,
+  with the originating request as the trigger, per the Cold-Read Gate of the file-server skill.
 - The plan carries the understanding page's file path as a header meta chip;
   section 1 states the goal in its own words.
 - Page layers follow the canonical first-draft contract in `prompts/master.md` under

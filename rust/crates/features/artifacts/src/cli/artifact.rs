@@ -287,15 +287,15 @@ fn delegate_cold_read(
   let request_id = format!("cold-read:{session_id}:{}:{timestamp}", &digest[..12]);
   let description = format!("cold read of {}", paths::display(artifact));
   let payload = json!({
-    "session_id": session_id,
-    "description": description,
+    (task_routes::DELEGATE_SESSION_ID_FIELD): session_id,
+    (task_routes::DELEGATE_DESCRIPTION_FIELD): description,
     (TASK_TYPE_FIELD): COLD_READ_TASK_TYPE,
     "cold_read": {
       "page_path": paths::display(artifact),
       "genre": args.genre,
       "trigger": args.trigger,
     },
-    "request_id": request_id,
+    (task_routes::DELEGATE_REQUEST_ID_FIELD): request_id,
   });
   let home = inputs.home.clone();
   let parent = session_id.to_string();

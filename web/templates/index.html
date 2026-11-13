@@ -221,6 +221,15 @@
              class="hidden flex-1 min-h-0 min-w-0 overflow-y-auto bg-slate-900 p-4 text-xs space-y-1"></div>
 
         <!-- Scroll-to-bottom floating button -->
+        <style>
+          /* The control floats over the message list, so its boundary must read over both the page's
+             slate-900 and a blue-600 message bubble. slate-600 draws 2.36:1 on the page and 1.47:1 on the
+             bubble, under the 3:1 floor a control's boundary meets; the slate-700 fill differs from the
+             bubble by 2.00:1, so the border is the only mark of the circle. slate-300, the arrow's tone,
+             draws 12.02:1 on the page and 3.48:1 on the bubble. The fill, size, position and hover tone
+             stay unchanged. */
+          #scroll-to-bottom { border-color: #cbd5e1; }
+        </style>
         <button id="scroll-to-bottom"
                 onclick="scrollToBottom()"
                 class="hidden absolute right-6 bottom-24 z-10 p-2 rounded-full bg-slate-700 border border-slate-600 text-slate-300 hover:bg-slate-600 hover:text-white shadow-lg transition-all"

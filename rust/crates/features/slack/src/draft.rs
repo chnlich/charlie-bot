@@ -13,7 +13,9 @@ use http::header;
 use serde_json::{Value, json};
 
 use crate::draft_target;
-use crate::slack_client::{API_BASE, AUTH_TEST, CHAT_POST_MESSAGE, CONVERSATIONS_OPEN};
+use crate::slack_client::{
+  API_BASE, AUTH_TEST, CHANNEL, CHAT_POST_MESSAGE, CONVERSATIONS_OPEN, TEXT, THREAD_TS, USERS,
+};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -51,9 +53,9 @@ impl SlackDraftSender {
       .ok_or_else(|| DraftSendFailure::rejected(format!("{AUTH_TEST}: no user_id")))?
       .to_string();
     let channel = self.channel(target).await?;
-    let mut payload = json!({"channel": channel, "text": body});
+    let mut payload = json!({(CHANNEL): channel, (TEXT): body});
     if let Some(thread) = target.get("thread").and_then(Value::as_str) {
-      payload["thread_ts"] = json!(thread);
+      payload[THREAD_TS] = json!(thread);
     }
     let posted = self.post(CHAT_POST_MESSAGE, payload).await?;
     let ts = posted
@@ -81,7 +83,7 @@ impl SlackDraftSender {
     if users.is_empty() {
       return Err(DraftSendFailure::rejected("the Slack target names no channel and no users"));
     }
-    let opened = self.post(CONVERSATIONS_OPEN, json!({"users": users.join(",")})).await?;
+    let opened = self.post(CONVERSATIONS_OPEN, json!({(USERS): users.join(",")})).await?;
     opened
       .pointer("/channel/id")
       .and_then(Value::as_str)

@@ -15,6 +15,7 @@ use charliebot_registry::templating::Templating;
 use charliebot_registry::{FeatureContext, Registry, store_hooks};
 use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+use charliebot_tasks::spawner_prompt::PLAN_TEMPLATE_PATH;
 use serde_json::{Value, json};
 
 use crate::headless_render;
@@ -32,14 +33,14 @@ pub(crate) fn chrome_program(directory: &Path, steps: Value) -> PathBuf {
   program
 }
 
-/// The charlie-bot checkout, which holds `prompts/plan_template.html` and the page packages, from the shell harness
-/// that owns the repository-root lookup.
+/// The charlie-bot checkout, which holds the genre templates and the page packages, from the shell harness that owns
+/// the repository-root lookup.
 pub(crate) use charliebot_shell_harness::repo_root;
 
 /// A plan page that passes every plan assertion except the ones its tests break: the genre template's style block
 /// verbatim, six numbered sections, a 4.1 Schema declaration with a dropped-features line, and a footer.
 pub(crate) fn plan_page(goal: &str) -> String {
-  let template = fs::read_to_string(repo_root().join("prompts/plan_template.html")).unwrap();
+  let template = fs::read_to_string(repo_root().join(PLAN_TEMPLATE_PATH)).unwrap();
   let style_start = template.find("<style>").unwrap();
   let style_end = template.find("</style>").unwrap() + "</style>".len();
   let style = &template[style_start..style_end];

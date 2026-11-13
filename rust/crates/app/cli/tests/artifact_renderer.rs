@@ -8,6 +8,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use charliebot_shell_harness as harness;
+use charliebot_tasks::spawner_prompt::PLAN_TEMPLATE_PATH;
 use futures_util::{SinkExt, StreamExt};
 use nix::errno::Errno;
 use nix::sys::signal::{self, Signal};
@@ -23,7 +24,7 @@ const CDP_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
 #[test]
 #[ignore = "integration"]
 fn artifact_check_closes_the_fake_chrome_process_group_before_exit() {
-  let page = fs::read_to_string(harness::repo_root().join("prompts/plan_template.html")).unwrap();
+  let page = fs::read_to_string(harness::repo_root().join(PLAN_TEMPLATE_PATH)).unwrap();
   let run = run_check(&page, false);
 
   assert_eq!(run.code, 0, "stderr: {}", run.stderr);
@@ -44,7 +45,7 @@ fn artifact_check_closes_the_fake_chrome_process_group_after_assertion_failures(
 #[test]
 #[ignore = "integration"]
 fn artifact_check_closes_the_fake_chrome_process_group_after_assertion_errors() {
-  let page = fs::read_to_string(harness::repo_root().join("prompts/plan_template.html")).unwrap();
+  let page = fs::read_to_string(harness::repo_root().join(PLAN_TEMPLATE_PATH)).unwrap();
   let run = run_check(&page, true);
   let error: Value = serde_json::from_str(&run.stderr).unwrap();
 

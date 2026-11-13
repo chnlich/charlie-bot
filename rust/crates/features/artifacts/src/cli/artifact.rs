@@ -402,17 +402,17 @@ mod tests {
   #[test]
   #[ignore = "integration"]
   fn test_cli_assertions_only_passes_a_page_over_the_height_target() {
-    // The fake Chrome is the chrome-stub helper; its measured height is
-    // injected, as `test_support::plan_session` does, so no renderer runs.
+    // The fake Chrome is the chrome-stub helper; inject its measured height so no renderer runs.
     let home = tempfile::tempdir().unwrap();
     let chrome = crate::test_support::chrome_program(home.path(), json!([{"exit": 0}]));
     crate::headless_render::set_test_height(&chrome, 2600);
     std::fs::write(home.path().join("config.yaml"), format!("headless_chrome_bin: {}\n", chrome.display())).unwrap();
     let artifact = home.path().join("page.html");
-    std::fs::write(&artifact, plan_page("Ship the fix.")).unwrap();
+    let waiting_page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/waiting_page.html");
+    std::fs::copy(waiting_page, &artifact).unwrap();
     let args = CheckArgs {
       file: artifact.display().to_string(),
-      genre: "plan".to_string(),
+      genre: "waiting".to_string(),
       trigger: None,
       assertions_only: true,
     };
@@ -429,7 +429,11 @@ mod tests {
     };
 
     assert_eq!(output.exit, 0, "{}", output.stdout);
-    assert!(output.stdout.contains("ok page-height 2600 px: 600 px over the 2000 px target"), "{}", output.stdout);
+    assert!(
+      output.stdout.contains("ok page-height 2600 px: 600 px over the 2000 px target; fold secondary material"),
+      "{}",
+      output.stdout
+    );
   }
 
   #[test]

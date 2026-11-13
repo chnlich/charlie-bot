@@ -180,6 +180,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       FACT_ANCHORED,
       REQ_CHIPS,
       RUN_STATED,
+      PAGE_HEIGHT,
       ORDINAL_NAMED,
       TRACKER_ID_NEARBY,
       SESSION_LINKED,
@@ -193,6 +194,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       FORK_OPTIONS,
       FORK_DEMOS,
       FACT_ANCHORED,
+      PAGE_HEIGHT,
       ORDINAL_NAMED,
       TRACKER_ID_NEARBY,
       SESSION_LINKED,
@@ -209,6 +211,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       FORK_OPEN_SHAPE,
       FORK_OPTIONS,
       FORK_DEMOS,
+      PAGE_HEIGHT,
       ORDINAL_NAMED,
       TRACKER_ID_NEARBY,
       SESSION_LINKED,
@@ -221,6 +224,7 @@ fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
       FORK_OPTIONS,
       FORK_DEMOS,
       FORK_EXPLAINER,
+      PAGE_HEIGHT,
       ORDINAL_NAMED,
       TRACKER_ID_NEARBY,
       SESSION_LINKED,
@@ -1012,7 +1016,10 @@ fn check_page_height(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutco
     } else {
       match measure_page_height(&chrome_bin, context.artifact)? {
         Ok(height) if height > PAGE_HEIGHT_TARGET => {
-          format!("{height} px: {} px over the {PAGE_HEIGHT_TARGET} px target", height - PAGE_HEIGHT_TARGET)
+          format!(
+            "{height} px: {} px over the {PAGE_HEIGHT_TARGET} px target; fold secondary material",
+            height - PAGE_HEIGHT_TARGET
+          )
         }
         Ok(height) => format!("{height} px (target {PAGE_HEIGHT_TARGET})"),
         Err(message) => format!("not measured: {message}"),
@@ -1924,7 +1931,10 @@ mod tests {
     let page = write_page(directory.path(), "plan.html", &plan_page("Ship the fix."));
     let chrome = stub_chrome(directory.path(), 2600);
     let outcomes = run_plan_with_height(&page, chrome.to_str().unwrap(), 2600);
-    assert_eq!(by_name(&outcomes, PAGE_HEIGHT)[0].detail, "2600 px: 600 px over the 2000 px target");
+    assert_eq!(
+      by_name(&outcomes, PAGE_HEIGHT)[0].detail,
+      "2600 px: 600 px over the 2000 px target; fold secondary material"
+    );
     assert!(by_name(&outcomes, PAGE_HEIGHT)[0].passed);
   }
 
@@ -2419,6 +2429,7 @@ mod tests {
         FORK_OPTIONS,
         FORK_DEMOS,
         FORK_EXPLAINER,
+        PAGE_HEIGHT,
         ORDINAL_NAMED,
         TRACKER_ID_NEARBY,
         SESSION_LINKED,
@@ -2429,10 +2440,11 @@ mod tests {
   }
 
   #[test]
-  fn every_genre_runs_the_three_shared_user_text_checks() {
+  fn every_genre_runs_shared_user_text_and_page_height_checks() {
     for genre in ARTIFACT_GENRES {
       let names = assertion_set(genre).expect("every artifact genre has an assertion set");
       assert!(user_text_checks::CHECK_NAMES.iter().all(|check| names.contains(check)), "{genre}: {names:?}");
+      assert!(names.contains(&PAGE_HEIGHT), "{genre}: {names:?}");
     }
   }
 
@@ -2531,7 +2543,6 @@ mod tests {
   }
 
   fn run_sitrep(directory: &Path, source: &str) -> Vec<AssertionOutcome> {
-    // The sitrep set holds no page-height assertion, so it needs no renderer.
     let page = write_page(directory, "page.html", source);
     run_assertions_sync("sitrep", &page, "", &repo_root()).unwrap()
   }
@@ -2761,7 +2772,7 @@ mod tests {
   fn test_shipped_explain_template_passes_its_explain_set() {
     let template = repo_root().join("prompts/explain_template.html");
     let outcomes = run_assertions_sync("explain", &template, "", &repo_root()).unwrap();
-    assert_eq!(outcomes.len(), 14, "{outcomes:#?}");
+    assert_eq!(outcomes.len(), 15, "{outcomes:#?}");
     assert!(outcomes.iter().all(|outcome| outcome.passed), "{outcomes:#?}");
   }
 

@@ -226,10 +226,14 @@ it does.
 - Answer at the length of the question. A request to understand something also gets its
   explain page (Rich HTML Output). The chat reply then stays short, and the page carries the depth.
 - The session status stays outside the answer's length.
-- Write debug, explain, plan, and understanding pages in layers from the first draft. The open part carries the
-  conclusion, one figure, one worked example the reader can check by hand, and every choice the reader must make with
-  its options and their consequences. Fold secondary background, extended evidence, data tables, and each option's full
-  rationale. Page length is unrestricted; measured height is informational.
+- Write debug, explain, plan, understanding, sitrep, and waiting pages in layers from the first draft. Aim for an
+  open-part height of 2000 px or less at the 1280 px probe width.
+  Keep the conclusion, one figure, one worked example the reader can check by hand, and every choice with its options,
+  demos, recommendation, and tradeoff open.
+  Use folding alone for an overage: fold secondary material until the page fits or only the required content remains
+  open, and keep all page text and the template style verbatim.
+  `charliebot artifact check` reports the measured height and overage; page sharing, plan registration, and
+  `web status set` accept any height.
 - Return a revision together with the intent of each change.
 
 ## Naming

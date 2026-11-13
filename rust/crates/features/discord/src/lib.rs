@@ -18,12 +18,19 @@ mod test_support;
 
 use std::sync::Arc;
 
-use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField, valid_origin};
+use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField, ThreadSlot, validate_thread_slot};
 use charliebot_registry::{Registry, RegistryError};
 use charliebot_store::metadata::SUCCESSOR_SESSION_ID;
-use serde_json::{Map, Value};
 use service::DiscordService;
 use turn_contribution::DiscordTurnContribution;
+
+/// The thread fields of a Discord session's metadata slot.
+const THREAD_SLOT: ThreadSlot = ThreadSlot {
+  origin_field: "discord_origin",
+  origin_type: "DiscordOrigin",
+  origin_keys: &["guild_id", "parent_channel_id", "thread_id"],
+  watermark_field: "discord_watermark_id",
+};
 
 /// `register`: the service, the routes and the package's other registrations, in server order.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
@@ -35,25 +42,13 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
       owner: "discord",
       on: MetadataFile::Session,
       after: Some(SUCCESSOR_SESSION_ID),
-      fields: ["discord_origin", "discord_watermark_id"]
+      fields: [THREAD_SLOT.origin_field, THREAD_SLOT.watermark_field]
         .into_iter()
         .map(|name| SlotField { name, default: serde_json::Value::Null })
         .collect(),
     },
-    validate_session_fields,
+    |values| validate_thread_slot(values, &THREAD_SLOT),
   )?;
-  registry.thread_origin_field("discord_origin")?;
+  registry.thread_origin_field(THREAD_SLOT.origin_field)?;
   registry.turn_contribution("discord", Arc::new(DiscordTurnContribution))
-}
-
-fn validate_session_fields(values: &mut Map<String, Value>) -> Option<String> {
-  if let Some(origin) = values.get_mut("discord_origin")
-    && !valid_origin(origin, &["guild_id", "parent_channel_id", "thread_id"])
-  {
-    return Some("discord_origin must be a DiscordOrigin or null".to_string());
-  }
-  if values.get("discord_watermark_id").is_some_and(|value| !value.is_null() && !value.is_string()) {
-    return Some("discord_watermark_id must be a string or null".to_string());
-  }
-  None
 }

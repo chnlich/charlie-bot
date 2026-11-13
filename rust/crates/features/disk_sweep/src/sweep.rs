@@ -589,8 +589,9 @@ fn mtime(metadata: &fs::Metadata) -> f64 {
   metadata.mtime() as f64 + metadata.mtime_nsec() as f64 / 1_000_000_000.0
 }
 
-fn worktree_preflight(row: &mut SweepRow) -> Result<()> {
-  let inspection = git::inspect_worktree(&row.path)?;
+/// Record what one worktree inspection says to do with the row: skip it with the inspection's reason, remove it
+/// outright, or archive its changes and then remove it.
+fn record_worktree_inspection(row: &mut SweepRow, inspection: &git::WorktreeInspection) {
   if let Some(reason) = inspection.skip_reason {
     mark_skipped(row, reason);
   } else if inspection.status.is_empty() {
@@ -600,6 +601,10 @@ fn worktree_preflight(row: &mut SweepRow) -> Result<()> {
     row.action = SweepAction::ArchiveDelete;
     row.reason = "uncommitted-changes".to_string();
   }
+}
+
+fn worktree_preflight(row: &mut SweepRow) -> Result<()> {
+  record_worktree_inspection(row, &git::inspect_worktree(&row.path)?);
   Ok(())
 }
 
@@ -644,21 +649,13 @@ fn prepare_apply(mut row: SweepRow, roots: SweepRoots, now: DateTime<Utc>) -> (R
   let result = (|| -> Result<PreparedApply> {
     if row.kind == SweepKind::Worktree {
       let inspection = git::inspect_worktree(&row.path)?;
-      if let Some(reason) = inspection.skip_reason {
-        mark_skipped(&mut row, reason);
+      record_worktree_inspection(&mut row, &inspection);
+      if row.action == SweepAction::Skip {
         return Ok(PreparedApply::Skip(row));
       }
-      let has_changes = !inspection.status.is_empty();
-      if !has_changes {
-        row.action = SweepAction::Delete;
-        row.reason = "closed-task".to_string();
-      } else {
-        row.action = SweepAction::ArchiveDelete;
-        row.reason = "uncommitted-changes".to_string();
+      if row.action == SweepAction::ArchiveDelete {
         let archive_path = row.archive_path.as_deref().context("worktree has no owning run archive path")?;
         archive::archive_worktree(&row.path, archive_path, &inspection.untracked)?;
-      }
-      if has_changes {
         let (used, unreadable_now) = process::in_use_paths(std::slice::from_ref(&row.path), &roots.proc_root)?;
         unreadable.extend(unreadable_now);
         if used.contains(&row.path) {

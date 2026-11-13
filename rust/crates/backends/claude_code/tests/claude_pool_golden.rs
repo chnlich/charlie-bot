@@ -259,7 +259,14 @@ fn relay_matrix() -> Value {
   let warning = json!({"type":"rate_limit_event", "rate_limit_info":{"status":"allowed_warning", "resetsAt":FUTURE_RESET, "unifiedWindows":{"five_hour":{"utilization":0.95}}}});
   let reading =
     |label, utilization| json!({"label":label, "info":{"unifiedWindows":{"five_hour":{"utilization":utilization}}}});
-  let auth = json!({"type":"assistant", "message":{"content":[{"type":"text", "text":"Failed to authenticate"}]}});
+  let auth = json!({
+    "type":"assistant",
+    "message":{"model":"<synthetic>","content":[{"type":"text", "text":"Failed to authenticate: API Error: 401 Unauthorized"}]},
+    "error":"authentication_failed",
+    "is_api_error_message":true,
+    "api_error_status":401,
+    "api_error_origin":"first_party"
+  });
   json!([
     {"now":NOW,"events":[rejected],"readings":[],"auth_failures":[],"exit_code":1,"stderr":"","session_id":"relay-0"},
     {"now":NOW,"events":[warning,tool_result],"readings":[reading("b",0.2)],"auth_failures":[],"exit_code":0,"stderr":"","session_id":"relay-1"},

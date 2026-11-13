@@ -16,7 +16,6 @@ use super::{claude_accounts, claude_config, event_types};
 pub const MAX_RELAYS_PER_TURN: usize = 3;
 pub const RELAY_MIN_RESET_AHEAD: Duration = charliebot_registry::usage::NEAR_EXHAUSTION_RESET_HORIZON;
 pub const CONTINUATION_PROMPT: &str = "The previous process was interrupted right after a tool call completed. Continue from where it stopped; do not redo the steps that are already done.";
-pub const AUTH_FAILURE_MARKER: &str = "Failed to authenticate";
 pub const RELAY_REJECTED: &str = "rejected";
 pub const RELAY_WARNING: &str = "warning";
 pub const LOGIN_FAILED: &str = "login_failed";
@@ -67,12 +66,8 @@ impl RelayWatch {
     Self { label, model, cfg, state, account_pool, now: None, reason: None, armed: false, auth_failed: false, decision }
   }
 
-  fn decision(&self, exit_code: i32, stderr: &str) -> Option<Decision> {
-    if exit_code != 0 && (self.auth_failed || stderr.contains(AUTH_FAILURE_MARKER)) {
-      Some(Decision::LoginFailed)
-    } else {
-      self.reason
-    }
+  fn decision(&self, exit_code: i32) -> Option<Decision> {
+    if exit_code != 0 && self.auth_failed { Some(Decision::LoginFailed) } else { self.reason }
   }
 }
 
@@ -100,7 +95,7 @@ impl LaunchWatchTrait for RelayWatch {
         }
         false
       }
-      Some("assistant") if assistant_texts(event).iter().any(|text| text.contains(AUTH_FAILURE_MARKER)) => {
+      Some("assistant") if is_lost_login_event(event) => {
         self.auth_failed = true;
         false
       }
@@ -124,8 +119,8 @@ impl LaunchWatchTrait for RelayWatch {
     }
   }
 
-  fn wants_next(&self, exit_code: i32, stderr: &str) -> bool {
-    let decision = self.decision(exit_code, stderr).map(Decision::as_str).map(str::to_string);
+  fn wants_next(&self, exit_code: i32, _stderr: &str) -> bool {
+    let decision = self.decision(exit_code).map(Decision::as_str).map(str::to_string);
     *self.decision.lock().expect("Claude relay decision is not poisoned") = decision.clone();
     decision.is_some()
   }
@@ -139,14 +134,18 @@ fn is_tool_result_event(event: &Value) -> bool {
       .is_some_and(|blocks| blocks.iter().any(|block| block.get("type").and_then(Value::as_str) == Some("tool_result")))
 }
 
-fn assistant_texts(event: &Value) -> Vec<&str> {
-  event
-    .pointer(MESSAGE_CONTENT_POINTER)
-    .and_then(Value::as_array)
-    .into_iter()
-    .flatten()
-    .filter_map(|block| block.get("text").and_then(Value::as_str))
-    .collect()
+fn is_lost_login_event(event: &Value) -> bool {
+  if event.get("type").and_then(Value::as_str) != Some("assistant")
+    || event.get("is_api_error_message").and_then(Value::as_bool) != Some(true)
+    || event.get("error").and_then(Value::as_str) != Some("authentication_failed")
+  {
+    return false;
+  }
+  match event.get("api_error_status") {
+    None | Some(Value::Null) => true,
+    Some(Value::Number(status)) => status.as_u64() == Some(401),
+    Some(_) => false,
+  }
 }
 
 fn reset_far_enough(info: &Value, now: UtcDateTime) -> bool {
@@ -294,7 +293,6 @@ mod tests {
 
   use charliebot_core::config::CharlieBotConfig;
   use charliebot_registry::Registry;
-  use charliebot_store::metadata::UtcDateTime;
 
   use crate::login_dirs;
 
@@ -309,6 +307,76 @@ mod tests {
     let mut registry = Registry::new();
     registry.register_package("backends.claude_code", crate::register).unwrap();
     Arc::new(registry.load_config(home).unwrap())
+  }
+
+  #[test]
+  fn login_loss_requires_structured_api_error_fields_and_a_missing_or_401_status() {
+    let cloudflare_403 = json!({
+      "type":"assistant",
+      "message":{"model":"<synthetic>","content":[{"type":"text","text":"Failed to authenticate. API Error: 403 Attention Required! | Cloudflare"}]},
+      "error":"authentication_failed",
+      "is_api_error_message":true,
+      "api_error_status":403,
+      "api_error_origin":"first_party"
+    });
+    assert!(!is_lost_login_event(&cloudflare_403));
+
+    let mut unauthorized = cloudflare_403.clone();
+    unauthorized["api_error_status"] = json!(401);
+    assert!(is_lost_login_event(&unauthorized));
+
+    let renewal_failure = json!({
+      "type":"assistant",
+      "message":{"model":"<synthetic>","content":[{"type":"text","text":"Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again, or use `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs"}]},
+      "error":"authentication_failed",
+      "is_api_error_message":true
+    });
+    assert!(is_lost_login_event(&renewal_failure));
+
+    for status in [403, 429, 500, 503] {
+      let mut api_error = cloudflare_403.clone();
+      api_error["api_error_status"] = json!(status);
+      assert!(!is_lost_login_event(&api_error), "HTTP {status} is an ordinary API error");
+    }
+
+    let model_authored_text = json!({
+      "type":"assistant",
+      "message":{"model":"claude-fable-5-1","content":[{"type":"text","text":"Failed to authenticate"}]}
+    });
+    assert!(!is_lost_login_event(&model_authored_text));
+  }
+
+  #[test]
+  fn a_403_api_error_exit_keeps_the_account_healthy_and_does_not_relay() {
+    let home = tempfile::tempdir().unwrap();
+    let login = home.path().join("login");
+    std::fs::create_dir_all(&login).unwrap();
+    std::fs::write(login.join(login_dirs::CREDENTIALS_FILE), r#"{"claudeAiOauth":{"accessToken":"synthetic"}}"#)
+      .unwrap();
+    let cfg = pooled_config(home.path(), &[("synthetic", login.as_path())]);
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let decision = Arc::new(Mutex::new(None));
+    let mut watch = RelayWatch::new(
+      "synthetic".to_string(),
+      Some("claude-fable-5-1".to_string()),
+      Arc::new(cfg.clone()),
+      Arc::clone(&state),
+      Some("alpha".to_string()),
+      decision.clone(),
+    );
+
+    assert!(!watch.observe(&json!({
+      "type":"assistant",
+      "message":{"model":"<synthetic>","content":[{"type":"text","text":"Failed to authenticate. API Error: 403 Attention Required! | Cloudflare"}]},
+      "error":"authentication_failed",
+      "is_api_error_message":true,
+      "api_error_status":403,
+      "api_error_origin":"first_party"
+    })));
+    assert!(!watch.wants_next(1, ""));
+    assert_eq!(decision.lock().unwrap().as_deref(), None);
+    let account = claude_accounts::account_by_label(&cfg, Some("synthetic")).unwrap().unwrap();
+    assert!(claude_accounts::healthy(&state, &account, None));
   }
 
   #[test]
@@ -330,9 +398,6 @@ mod tests {
     })));
     assert!(watch.wants_next(1, ""));
     assert_eq!(decision.lock().unwrap().as_deref(), Some(RELAY_REJECTED));
-    assert!(watch.wants_next(1, "Failed to authenticate"));
-    assert_eq!(decision.lock().unwrap().as_deref(), Some(LOGIN_FAILED));
-    let _ = UtcDateTime::now();
   }
 
   fn pooled_config(home: &std::path::Path, accounts: &[(&str, &std::path::Path)]) -> CharlieBotConfig {

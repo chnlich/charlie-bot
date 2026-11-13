@@ -81,7 +81,7 @@ impl IntoResponse for Reply {
   }
 }
 
-/// Serve `responder` on a loopback port and return the Discord API base it answers (`http://127.0.0.1:<port>/api/v10`).
+/// The Discord API base (`http://127.0.0.1:<port>/api/v10`) of a loopback server that answers with `responder`.
 pub async fn serve(responder: impl Fn(&Recorded) -> Reply + Send + Sync + 'static) -> String {
   let responder = Arc::new(responder);
   let app = Router::new().fallback(move |request: Request<Body>| {
@@ -373,7 +373,7 @@ impl Home {
     self.features.store.persist_and_broadcast(session_id, event).await.expect("the chat event appends").to_value()
   }
 
-  /// Writes the manager run record the order rule reads: `run_id` received `input_event_ids` at `started_at`.
+  /// The manager run record the order rule reads: `run_id` received `input_event_ids` at `started_at`.
   pub fn launch_run(&self, session_id: &str, run_id: &str, input_event_ids: &[&str], started_at: &str) {
     let run_path = self.features.store.run_metadata_path(session_id, run_id);
     fs::create_dir_all(run_path.parent().expect("run directory")).expect("run directory");

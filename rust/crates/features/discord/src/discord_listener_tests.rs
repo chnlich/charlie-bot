@@ -40,8 +40,8 @@ struct GatewayScript {
   close_after_identify: Option<u16>,
   acknowledge_heartbeats: bool,
   close_after_heartbeats: Option<(usize, u16)>,
-  /// Close with this code at the first heartbeat that carries a sequence number, which the client sends only
-  /// after it has read a sequenced dispatch.
+  /// The close code for the first heartbeat that carries a sequence number, which the client sends only after it
+  /// has read a sequenced dispatch.
   close_after_sequenced_heartbeat: Option<u16>,
 }
 

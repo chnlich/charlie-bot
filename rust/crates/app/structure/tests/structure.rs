@@ -2091,6 +2091,10 @@ const UI_TEXT_EXEMPTIONS: &[UiTextExemption] = &[
     file: "rust/crates/features/taste/src/store.rs",
     reason: "The default reason stored for a taste row, which a model reads back; no browser shows it.",
   },
+  UiTextExemption {
+    file: "web/features/approval/templates/approval_day.html",
+    reason: "The Approvals day page's Chinese tier labels (decision, needs-recheck), the approved plan's UI text the user reads.",
+  },
 ];
 
 /// One line of a surface that holds a Han, kana or Hangul letter.

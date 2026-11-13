@@ -2334,7 +2334,7 @@ mod tests {
       ("session-linked", id.as_str(), id.as_str(), "write the id as"),
       (
         "link-renderable",
-        r#"<a href="https://example.invalid/export.tsv">the raw table</a>"#,
+        r#"<a href="https://example.invalid/files/export.tsv">the raw table</a>"#,
         "export.tsv",
         "link an HTML page, or the directory that holds the file",
       ),

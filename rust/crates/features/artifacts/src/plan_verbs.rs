@@ -705,9 +705,9 @@ mod tests {
 
   #[tokio::test]
   #[ignore = "integration"]
-  async fn present_refuses_a_page_with_a_raw_tsv_link_before_registering_it() {
+  async fn present_refuses_a_page_with_a_retired_prefix_link_before_registering_it() {
     let (_home, features) = plan_session("sess", None);
-    let page = plan_page(r#"The result is <a href="https://example.invalid/result.tsv">here</a>."#);
+    let page = plan_page(r#"The result is <a href="https://example.invalid/files/result.tsv">here</a>."#);
     write_plan_artifact(&features, "sess", "plan_01.html", &page);
 
     let error = present_p1(&features, "sess", "artifacts/plan_01.html").await.unwrap_err();

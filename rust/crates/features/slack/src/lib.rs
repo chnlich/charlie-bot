@@ -18,13 +18,20 @@ mod turn_contribution;
 use std::sync::Arc;
 
 use anyhow::Context;
-use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField, valid_origin};
+use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField, ThreadSlot, validate_thread_slot};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 use charliebot_store::metadata::SUCCESSOR_SESSION_ID;
 use futures_util::future::BoxFuture;
-use serde_json::{Map, Value};
 use service::SlackService;
 use turn_contribution::SlackTurnContribution;
+
+/// The thread fields of a Slack session's metadata slot.
+const THREAD_SLOT: ThreadSlot = ThreadSlot {
+  origin_field: "slack_origin",
+  origin_type: "SlackOrigin",
+  origin_keys: &["team_id", "channel_id", "thread_ts"],
+  watermark_field: "slack_watermark_ts",
+};
 
 /// `register`: the service, the routes and the package's other registrations, in server order.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
@@ -37,14 +44,14 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
       owner: "slack",
       on: MetadataFile::Session,
       after: Some(SUCCESSOR_SESSION_ID),
-      fields: ["slack_origin", "slack_watermark_ts"]
+      fields: [THREAD_SLOT.origin_field, THREAD_SLOT.watermark_field]
         .into_iter()
         .map(|name| SlotField { name, default: serde_json::Value::Null })
         .collect(),
     },
-    validate_session_fields,
+    |values| validate_thread_slot(values, &THREAD_SLOT),
   )?;
-  registry.thread_origin_field("slack_origin")?;
+  registry.thread_origin_field(THREAD_SLOT.origin_field)?;
   registry.turn_contribution("slack", Arc::new(SlackTurnContribution))?;
   registry.user_dm(post_user_dm)?;
   registry.owner_dm(post_owner_dm)
@@ -75,18 +82,6 @@ fn post_owner_dm<'a>(features: &'a FeatureContext, text: &'a str) -> BoxFuture<'
     let client = slack_client::SlackClient::from_features(features)?;
     client.post_dm(&owner, text).await
   })
-}
-
-fn validate_session_fields(values: &mut Map<String, Value>) -> Option<String> {
-  if let Some(origin) = values.get_mut("slack_origin")
-    && !valid_origin(origin, &["team_id", "channel_id", "thread_ts"])
-  {
-    return Some("slack_origin must be a SlackOrigin or null".to_string());
-  }
-  if values.get("slack_watermark_ts").is_some_and(|value| !value.is_null() && !value.is_string()) {
-    return Some("slack_watermark_ts must be a string or null".to_string());
-  }
-  None
 }
 
 #[cfg(test)]

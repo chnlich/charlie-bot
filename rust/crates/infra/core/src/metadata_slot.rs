@@ -40,6 +40,37 @@ pub fn valid_origin(value: &mut serde_json::Value, fields: &[&str]) -> bool {
   valid
 }
 
+/// The two thread fields a chat platform's session slot carries, under the platform's own key names: the origin
+/// object, and the follow watermark beside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ThreadSlot {
+  /// The origin key: [`valid_origin`]'s object of `origin_keys` strings, or null.
+  pub origin_field: &'static str,
+  /// The origin type as a refusal names it, such as `DiscordOrigin`.
+  pub origin_type: &'static str,
+  /// The origin's own keys. [`valid_origin`] drops every other key the stored object carries.
+  pub origin_keys: &'static [&'static str],
+  /// The follow watermark key: a string or null.
+  pub watermark_field: &'static str,
+}
+
+/// The refusal when `values` carries an origin that is not an object of its keys' strings, or a watermark that is
+/// neither null nor a string; `None` when both hold.
+pub fn validate_thread_slot(
+  values: &mut serde_json::Map<String, serde_json::Value>,
+  slot: &ThreadSlot,
+) -> Option<String> {
+  if let Some(origin) = values.get_mut(slot.origin_field)
+    && !valid_origin(origin, slot.origin_keys)
+  {
+    return Some(format!("{} must be a {} or null", slot.origin_field, slot.origin_type));
+  }
+  if values.get(slot.watermark_field).is_some_and(|value| !value.is_null() && !value.is_string()) {
+    return Some(format!("{} must be a string or null", slot.watermark_field));
+  }
+  None
+}
+
 #[cfg(test)]
 mod tests {
   use serde_json::json;
@@ -63,5 +94,32 @@ mod tests {
     let mut origin = json!({"guild_id": "g", "thread_id": "t", "extra": "x"});
     assert!(valid_origin(&mut origin, &["guild_id", "thread_id"]));
     assert_eq!(origin, json!({"guild_id": "g", "thread_id": "t"}));
+  }
+
+  #[test]
+  fn validate_thread_slot_refuses_a_bad_origin_or_watermark_and_keeps_the_origin_keys() {
+    const SLOT: ThreadSlot = ThreadSlot {
+      origin_field: "discord_origin",
+      origin_type: "DiscordOrigin",
+      origin_keys: &["guild_id", "thread_id"],
+      watermark_field: "discord_watermark_id",
+    };
+
+    let sample = json!({"discord_origin": {"guild_id": "g", "thread_id": "t", "extra": "x"}});
+    let mut values = sample.as_object().expect("the sample slot is an object").clone();
+    assert_eq!(validate_thread_slot(&mut values, &SLOT), None);
+    assert_eq!(values, *json!({"discord_origin": {"guild_id": "g", "thread_id": "t"}}).as_object().unwrap());
+
+    let mut missing_key = json!({"discord_origin": {"guild_id": "g"}});
+    assert_eq!(
+      validate_thread_slot(missing_key.as_object_mut().expect("the sample slot is an object"), &SLOT),
+      Some("discord_origin must be a DiscordOrigin or null".to_string())
+    );
+
+    let mut bad_watermark = json!({"discord_watermark_id": 7});
+    assert_eq!(
+      validate_thread_slot(bad_watermark.as_object_mut().expect("the sample slot is an object"), &SLOT),
+      Some("discord_watermark_id must be a string or null".to_string())
+    );
   }
 }

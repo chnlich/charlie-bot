@@ -26,9 +26,10 @@ const BACKEND_OPTIONS = {
   'claude-opus-5': 'CC · Opus 5',
   'opencode-glm52': 'OC · GLM-5.2',
   'codex-gpt-5.3-codex-spark': 'Codex · GPT-5.3 Codex Spark xHigh (personal)',
+  'codex-gpt-luna': 'Codex GPT Luna',
 };
 
-const BACKEND_POOLS = [{id: 'auto', label: 'Auto'}];
+const BACKEND_POOLS = [{id: 'auto', label: 'Auto'}, {id: 'cheap', label: 'Cheap'}];
 
 // The status.js members the suites stub out: status.js defines them for real,
 // so they go back to their fakes after its load.

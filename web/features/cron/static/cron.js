@@ -236,13 +236,31 @@ const LAST_RUN_STATUS = {
   SKIPPED: 'skipped',
 };
 
+// The backend text a bound node's schedule lines name: a pool-bound task shows the pool label with the
+// member and model its session's records carry ("Cheap → Codex GPT Luna · gpt-6-luna"), and a plain-bound
+// task shows the recorded model alone. A session whose records name neither renders '' — the row keeps
+// only its schedule lines, which is the true state of a task that has not run on a plain backend.
+function scheduledBackendText(s) {
+  const pool = typeof BACKEND_POOLS !== 'undefined' && BACKEND_POOLS.find((candidate) => candidate.id === s.backend);
+  if (pool) {
+    const label = Sidebar.sessionBackendLabel(s);
+    return label ? label.full : '';
+  }
+  return s.native_model || '';
+}
+
 // A bound node's schedule lines, in every view: the next run (or Disabled),
-// then the truncated cron · timezone line, then the Last line from the firing
+// then the truncated cron · timezone line, then the backend line naming the
+// member and model the records hold, then the Last line from the firing
 // bookkeeping. One markup home for every view's row.
 function renderSessionScheduleLine(s) {
   const disabled = s.schedule_enabled === false;
   let html = `<span class="block text-xs ${disabled ? 'text-slate-500' : 'text-blue-300'}">${disabled ? 'Disabled' : 'Next: ' + relativeTime(s.schedule_next_run)}</span>`
     + `<span class="block truncate text-xs text-slate-500" title="${escapeHtmlAttr(s.schedule_cron)} (${escapeHtmlAttr(s.schedule_timezone || '')})">${escapeHtml(s.schedule_cron)} · ${escapeHtml(s.schedule_timezone || '')}</span>`;
+  const backend = scheduledBackendText(s);
+  if (backend) {
+    html += `<span class="session-backend block truncate text-xs text-slate-500" title="${escapeHtmlAttr(backend)}">${escapeHtml(backend)}</span>`;
+  }
   if (s.last_run_status) {
     const lastClass = s.last_run_status === LAST_RUN_STATUS.SUCCESS ? 'text-green-400'
       : s.last_run_status === LAST_RUN_STATUS.RUNNING ? 'text-yellow-400'

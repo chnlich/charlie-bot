@@ -526,7 +526,8 @@ function expandSessionGroup(key) {
 // Model label for a session row: BACKEND_OPTIONS carries the config-authored
 // label ("CC · Opus 5"). The row shows it without the backend-family prefix
 // because the 320px sidebar leaves only ~67px next to the timestamp. A pool
-// session shows its pool label and its current member ("Auto → CC · Opus 5").
+// session shows its pool label and its current member, with the model the
+// session's records carry ("Auto → CC · Opus 5 · claude-opus-5").
 // Returns null when the session carries no backend id.
 function sessionBackendLabel(session) {
   const backendId = (session && session.backend) || '';
@@ -537,7 +538,9 @@ function sessionBackendLabel(session) {
     : null;
   if (pool) {
     const member = session.pool_member;
-    const full = member ? pool.label + ' → ' + ((options && options[member]) || member) : pool.label;
+    if (!member) return { full: pool.label, display: pool.label };
+    let full = pool.label + ' → ' + ((options && options[member]) || member);
+    if (session.native_model) full += ' · ' + session.native_model;
     return { full, display: full };
   }
   const full = (options && options[backendId]) || backendId;
@@ -1007,6 +1010,7 @@ const GLOBALS = {
 };
 const SIDEBAR_ONLY = {
   sessionMenuItemSources,
+  sessionBackendLabel,
   groupMenuItems,
   filterPillClass,
   starButtonOnclick,

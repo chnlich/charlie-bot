@@ -473,6 +473,48 @@ fn test_failed_readback_kills_the_process_group() {
 }
 
 // ---------------------------------------------------------------------------
+// The wait cap: refused before anything is posted or started, and named in --help
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "integration"]
+fn test_max_wait_past_the_cap_exits_2_and_posts_nothing() {
+  let sandbox = Sandbox::new();
+  let stub = StubApi::start(Box::new(accept_any));
+  sandbox.write_config(stub.port);
+
+  let run = sandbox.run(&["--session", "s1", "--max-wait", "43200", "--message", "m", "--cmd", "exit 0"]);
+
+  assert_eq!(run.code, Some(2), "stderr: {}", run.stderr);
+  assert!(run.stderr.contains("14400"), "stderr names the cap: {}", run.stderr);
+  assert!(stub.bodies().is_empty(), "a refused wait posts nothing");
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_max_wait_at_the_cap_registers() {
+  let sandbox = Sandbox::new();
+  let stub = StubApi::start(Box::new(accept_any));
+  sandbox.write_config(stub.port);
+
+  let run = sandbox.run(&["--session", "s1", "--max-wait", "14400", "--message", "m"]);
+
+  assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+  assert_eq!(stub.bodies()[0]["delay_seconds"], 14400);
+}
+
+#[test]
+#[ignore = "integration"]
+fn test_help_names_the_wait_cap() {
+  let sandbox = Sandbox::new();
+
+  let run = sandbox.run(&["--help"]);
+
+  assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+  assert!(run.stdout.contains("14400"), "--help names the cap: {}", run.stdout);
+}
+
+// ---------------------------------------------------------------------------
 // ssh start failures: exit 3, nothing registered (the usage errors are golden cases)
 // ---------------------------------------------------------------------------
 

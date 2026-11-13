@@ -180,7 +180,10 @@ pub fn command() -> Command {
           .allow_negative_numbers(true)
           .value_parser(parse_max_wait)
           .overrides_with("max-wait")
-          .help("Max wait in seconds before the trigger fires"),
+          .help(format!(
+            "Max wait in seconds before the trigger fires, at most {} (four hours); a longer wait is refused",
+            triggers::MAX_TRIGGER_DELAY_SECONDS
+          )),
       )
       .arg(
         Arg::new("message")
@@ -428,8 +431,17 @@ fn parse_int(text: &str) -> Option<i64> {
   Some(if negative { -magnitude } else { magnitude })
 }
 
+/// Refuses a wait past the trigger cap here, before `--cmd` starts anything the registration would have to kill.
 fn parse_max_wait(text: &str) -> Result<i64, String> {
-  parse_int(text).ok_or_else(|| format!("argument --max-wait: invalid int value: {}", text_repr::str_repr(text)))
+  let seconds =
+    parse_int(text).ok_or_else(|| format!("argument --max-wait: invalid int value: {}", text_repr::str_repr(text)))?;
+  if seconds > triggers::MAX_TRIGGER_DELAY_SECONDS {
+    return Err(format!(
+      "argument --max-wait: {seconds} exceeds the {} second limit",
+      triggers::MAX_TRIGGER_DELAY_SECONDS
+    ));
+  }
+  Ok(seconds)
 }
 
 /// `--message` is a short label: `_validate_message` counts characters, not bytes.

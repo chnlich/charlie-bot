@@ -173,6 +173,10 @@ pub const WATCH_TARGETS_FIELD: &str = "watch_targets";
 /// the `session trigger` command, so neither crate spells the name on its own.
 pub const DELAY_SECONDS_FIELD: &str = "delay_seconds";
 
+/// The longest wait, in seconds, that a scheduled-trigger registration accepts, for every trigger kind. The
+/// `session trigger` command checks `--max-wait` against the same limit, so neither crate spells it on its own.
+pub const MAX_TRIGGER_DELAY_SECONDS: i64 = 14_400;
+
 /// The longest `message` a scheduled-trigger registration accepts, counted in characters. The `session trigger`
 /// command checks `--message` against the same limit, so neither crate spells it on its own.
 pub const MAX_TRIGGER_MESSAGE_CHARS: usize = 200;
@@ -842,7 +846,7 @@ impl TriggerManager {
     trigger_id: &str,
     probe: &PidProbeOutcome,
     seen_gone_at: time::OffsetDateTime,
-  ) -> (String, RemoteTargetEnd) {
+  ) -> (Finish, RemoteTargetEnd) {
     let base = format!("{}:{}", target.host, target.pid);
     if target.exit_file.is_none() {
       let end = match (probe.read.end_ns, probe.read.now_ns, probe.local_mid_ns) {
@@ -861,7 +865,7 @@ impl TriggerManager {
           seen_gone_only(seen_gone_at)
         }
       };
-      return (base, end);
+      return (Finish { label: base, failed: false }, end);
     }
     let (read, local_mid_ns) = self.remote_exit_read(target, trigger_id).await;
     let end = match (read.mtime_ns, read.now_ns, local_mid_ns) {
@@ -874,12 +878,14 @@ impl TriggerManager {
         seen_gone_only(seen_gone_at)
       }
     };
-    (exit_state_label(&base, read.code.as_deref(), target.log.as_deref()), end)
+    let failed = failed_watch_end(target.exit_file.as_deref(), read.code.as_deref());
+    (Finish { label: exit_state_label(&base, read.code.as_deref(), target.log.as_deref()), failed }, end)
   }
 
-  async fn local_finished_label(&self, target: &LocalPid, gone_at_start: bool) -> String {
+  async fn local_finished_label(&self, target: &LocalPid, gone_at_start: bool) -> Finish {
     if target.exit_file.is_none() {
-      return if gone_at_start { format!("{} (gone at start)", target.pid) } else { target.pid.to_string() };
+      let label = if gone_at_start { format!("{} (gone at start)", target.pid) } else { target.pid.to_string() };
+      return Finish { label, failed: false };
     }
     let exit_file = target.exit_file.as_deref().expect("an exit file was checked");
     let code = match tokio::fs::read_to_string(exit_file).await {
@@ -892,7 +898,10 @@ impl TriggerManager {
         None
       }
     };
-    exit_state_label(&target.pid.to_string(), code.as_deref(), target.log.as_deref())
+    Finish {
+      label: exit_state_label(&target.pid.to_string(), code.as_deref(), target.log.as_deref()),
+      failed: failed_watch_end(Some(exit_file), code.as_deref()),
+    }
   }
 
   async fn wait_for_trigger(&self, trigger: &PendingTrigger) -> anyhow::Result<WaitOutcome> {
@@ -913,18 +922,9 @@ impl TriggerManager {
     for group in groups {
       waits.push(async move {
         match group {
-          WaitGroup::Local(targets) => {
-            let (finished, still_alive) = self.wait_with_pidfd(trigger, &targets).await?;
-            Ok::<_, anyhow::Error>((finished, still_alive, Vec::new(), Vec::new()))
-          }
-          WaitGroup::Remote(targets) => {
-            let (finished, still_alive, remote_ends) = self.wait_with_remote_probe(trigger, &targets).await?;
-            Ok::<_, anyhow::Error>((finished, still_alive, Vec::new(), remote_ends))
-          }
-          WaitGroup::Slurm(targets) => {
-            let group = self.wait_with_sacct(trigger, &targets).await?;
-            Ok::<_, anyhow::Error>((group.finished, group.still_alive, group.held, group.remote_ends))
-          }
+          WaitGroup::Local(targets) => self.wait_with_pidfd(trigger, &targets).await,
+          WaitGroup::Remote(targets) => self.wait_with_remote_probe(trigger, &targets).await,
+          WaitGroup::Slurm(targets) => self.wait_with_sacct(trigger, &targets).await,
         }
       });
     }
@@ -932,12 +932,14 @@ impl TriggerManager {
     let mut still_alive = Vec::new();
     let mut held = Vec::new();
     let mut remote_ends = Vec::new();
+    let mut watch_failed = false;
     while let Some(result) = waits.next().await {
-      let (group_finished, group_alive, group_held, group_ends) = result?;
-      finished.extend(group_finished);
-      still_alive.extend(group_alive);
-      held.extend(group_held);
-      remote_ends.extend(group_ends);
+      let group = result?;
+      finished.extend(group.finished);
+      still_alive.extend(group.still_alive);
+      held.extend(group.held);
+      remote_ends.extend(group.remote_ends);
+      watch_failed |= group.watch_failed;
       if !held.is_empty() {
         for label in unsettled_target_labels(&trigger.watch_targets, &finished, &held) {
           if !still_alive.contains(&label) {
@@ -947,7 +949,11 @@ impl TriggerManager {
         return Ok(WaitOutcome { reason: WaitReason::Held, finished, held, still_alive, remote_ends });
       }
     }
-    let reason = if still_alive.is_empty() { WaitReason::Completed } else { WaitReason::Timeout };
+    let reason = match (still_alive.is_empty(), watch_failed) {
+      (false, _) => WaitReason::Timeout,
+      (true, true) => WaitReason::WatchFailed,
+      (true, false) => WaitReason::Completed,
+    };
     Ok(WaitOutcome { reason, finished, held, still_alive, remote_ends })
   }
 
@@ -1082,12 +1088,9 @@ impl TriggerManager {
     Ok(())
   }
 
-  async fn wait_with_pidfd(
-    &self,
-    trigger: &PendingTrigger,
-    targets: &[LocalPid],
-  ) -> anyhow::Result<(Vec<String>, Vec<String>)> {
+  async fn wait_with_pidfd(&self, trigger: &PendingTrigger, targets: &[LocalPid]) -> anyhow::Result<WaitGroupOutcome> {
     let mut finished = Vec::new();
+    let mut watch_failed = false;
     let mut waiting = Vec::new();
     let mut join_set = JoinSet::new();
     let targets_by_pid = targets.iter().map(|target| (target.pid, target.clone())).collect::<HashMap<_, _>>();
@@ -1106,7 +1109,9 @@ impl TriggerManager {
           });
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH) => {
-          finished.push(self.local_finished_label(&targets_by_pid[&target.pid], true).await);
+          let finish = self.local_finished_label(&targets_by_pid[&target.pid], true).await;
+          watch_failed |= finish.failed;
+          finished.push(finish.label);
         }
         Err(error) => return Err(error).with_context(|| format!("pidfd_open {}", target.pid)),
       }
@@ -1120,7 +1125,9 @@ impl TriggerManager {
           let index = result.context("pidfd waiter task failed")?.context("pidfd readiness failed")?;
           let pid = waiting[index].take().expect("each pidfd waiter completes once");
           let target = &targets_by_pid[&pid];
-          finished.push(self.local_finished_label(target, false).await);
+          let finish = self.local_finished_label(target, false).await;
+          watch_failed |= finish.failed;
+          finished.push(finish.label);
         }
       }
     }
@@ -1140,14 +1147,14 @@ impl TriggerManager {
         still_alive_label(&target.pid.to_string(), target.log.as_deref())
       })
       .collect();
-    Ok((finished, still_alive))
+    Ok(WaitGroupOutcome { finished, still_alive, watch_failed, ..WaitGroupOutcome::default() })
   }
 
   async fn wait_with_remote_probe(
     &self,
     trigger: &PendingTrigger,
     targets: &[RemotePid],
-  ) -> anyhow::Result<(Vec<String>, Vec<String>, Vec<RemoteTargetEnd>)> {
+  ) -> anyhow::Result<WaitGroupOutcome> {
     let mut remaining: Vec<(String, i64, RemotePid)> = Vec::new();
     for target in targets {
       if let Some((_, _, previous)) =
@@ -1161,6 +1168,7 @@ impl TriggerManager {
     let keys = remaining.iter().map(|(host, pid, _)| HeldTarget::Pid { host: host.clone(), pid: *pid }).collect();
     let mut held = self.held.watch(&trigger.id, keys);
     let mut finished = Vec::new();
+    let mut watch_failed = false;
     let mut remote_ends = Vec::new();
     let mut step = 0;
     // The next interval probe keeps the schedule it has without a held session: a held end never moves it.
@@ -1184,9 +1192,10 @@ impl TriggerManager {
           let mut keep = Vec::new();
           for ((host, pid, target), outcome) in remaining.into_iter().zip(results) {
             if outcome.status == ProbeStatus::Dead {
-              let (label, end) =
+              let (finish, end) =
                 self.remote_finish(&target, &trigger.id, &outcome, time::OffsetDateTime::now_utc()).await;
-              finished.push(label);
+              watch_failed |= finish.failed;
+              finished.push(finish.label);
               remote_ends.push(end);
             } else {
               if outcome.status != ProbeStatus::Alive {
@@ -1221,8 +1230,9 @@ impl TriggerManager {
           let target = remaining[index].2.clone();
           let outcome = self.held_readback_pid(&target, &trigger.id).await;
           if outcome.status == ProbeStatus::Dead {
-            let (label, end) = self.remote_finish(&target, &trigger.id, &outcome, time::OffsetDateTime::now_utc()).await;
-            finished.push(label);
+            let (finish, end) = self.remote_finish(&target, &trigger.id, &outcome, time::OffsetDateTime::now_utc()).await;
+            watch_failed |= finish.failed;
+            finished.push(finish.label);
             remote_ends.push(end);
             remaining.remove(index);
             if remaining.is_empty() {
@@ -1248,7 +1258,7 @@ impl TriggerManager {
       .iter()
       .map(|(_, _, target)| still_alive_label(&format!("{}:{}", target.host, target.pid), target.log.as_deref()))
       .collect();
-    Ok((finished, still_alive, remote_ends))
+    Ok(WaitGroupOutcome { finished, still_alive, remote_ends, watch_failed, ..WaitGroupOutcome::default() })
   }
 
   async fn wait_with_sacct(&self, trigger: &PendingTrigger, targets: &[SlurmJob]) -> anyhow::Result<WaitGroupOutcome> {
@@ -1473,13 +1483,14 @@ impl TriggerManager {
   }
 }
 
-/// Why a trigger's wait ended: every watched target finished, a watched Slurm job is held and will not start on its
-/// own, or the deadline came first.
+/// Why a trigger's wait ended: every watched target finished, a `--cmd` watch ended without exit 0, a watched Slurm
+/// job is held and will not start on its own, or the deadline came first.
 ///
-/// `Display` writes the word that `fire_reason` carries in the trigger file.
+/// `Display` writes the words that `fire_reason` carries in the trigger file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WaitReason {
   Completed,
+  WatchFailed,
   Held,
   Timeout,
 }
@@ -1488,6 +1499,7 @@ impl std::fmt::Display for WaitReason {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.write_str(match self {
       Self::Completed => "completed",
+      Self::WatchFailed => "watch failed",
       Self::Held => "held",
       Self::Timeout => "timeout",
     })
@@ -1504,14 +1516,27 @@ struct WaitOutcome {
   remote_ends: Vec<RemoteTargetEnd>,
 }
 
-/// One Slurm wait group's answer: what it settled, what it still waits on, the held jobs that end the wait, and the
-/// remote ends it recorded.
+/// One Slurm wait group's answer: what it settled, what it still waits on, the held jobs that end the wait, the
+/// remote ends it recorded, and whether a settled `--cmd` target ended without exit 0.
 #[derive(Default)]
 struct WaitGroupOutcome {
   finished: Vec<String>,
   still_alive: Vec<String>,
   held: Vec<String>,
   remote_ends: Vec<RemoteTargetEnd>,
+  watch_failed: bool,
+}
+
+/// One watched target that finished: its label, and whether that end failed the watch.
+struct Finish {
+  label: String,
+  failed: bool,
+}
+
+/// Whether a finished target failed its watch. Only a `--cmd` target (one with an exit file) can fail: its command must
+/// exit 0, and an unreadable exit code counts as a failure. A pid-only target's end is its completion.
+fn failed_watch_end(exit_file: Option<&str>, code: Option<&str>) -> bool {
+  exit_file.is_some() && code != Some("0")
 }
 
 /// One Slurm probe's answer: the sacct rows and squeue pending reasons the fire decision reads, plus the clock and
@@ -2173,6 +2198,7 @@ fn format_suffix(reason: WaitReason, finished: &[String], held: &[String], still
   let alive_part = still_alive.join(", ");
   match reason {
     WaitReason::Completed => format!(" (finished: {finished_part})"),
+    WaitReason::WatchFailed => format!(" (watch failed: {finished_part})"),
     WaitReason::Held => {
       let mut parts = Vec::new();
       if !finished_part.is_empty() {
@@ -2289,6 +2315,17 @@ async fn schedule_trigger(State(features): State<Arc<FeatureContext>>, request: 
     Ok(request) => request,
     Err(error) => return responses::internal_error("OverflowError", error.to_string()),
   };
+  if request.delay_seconds > MAX_TRIGGER_DELAY_SECONDS {
+    return responses::json(
+      StatusCode::UNPROCESSABLE_ENTITY,
+      &json!({
+        "detail": format!(
+          "delay_seconds {} exceeds the {MAX_TRIGGER_DELAY_SECONDS} second limit",
+          request.delay_seconds
+        )
+      }),
+    );
+  }
   if let Some(targets) = &request.watch_targets {
     if targets.is_empty() {
       return responses::json(
@@ -2882,6 +2919,27 @@ mod tests {
     manager.cancel_trigger(SESSION_ID, "synthetic-recovery-pending").await.expect("cancel recovered waiter");
   }
 
+  /// The registration cap applies only when a trigger is registered. A trigger stored with a longer wait keeps its
+  /// deadline and its waiter when the next boot recovers it.
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn recovery_keeps_a_wait_longer_than_the_registration_cap() {
+    let (_home, features) = feature_context();
+    let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
+    let registered =
+      pending_trigger("synthetic-registered-long", SESSION_ID, near_future(2 * MAX_TRIGGER_DELAY_SECONDS), Vec::new());
+    manager.save_trigger(&registered).await.expect("save the registered trigger");
+    manager.recover_pending().await.expect("recover pending triggers");
+    assert!(
+      manager.tasks.lock().expect("trigger task map is not poisoned").contains_key(&registered.id),
+      "the recovered trigger starts its waiter"
+    );
+    let stored = manager.load_trigger(SESSION_ID, &registered.id).await.expect("read the recovered trigger");
+    assert_eq!(stored.status, TriggerStatus::Pending);
+    assert_eq!(stored.fire_at, registered.fire_at);
+    manager.cancel_trigger(SESSION_ID, &registered.id).await.expect("cancel the recovered waiter");
+  }
+
   /// The walk records the non-pending trigger files it read, and a later boot serves those rows instead of opening the
   /// files. A file rewritten after its row was written no longer matches the row, so the boot reads it and starts it.
   #[tokio::test]
@@ -2930,7 +2988,8 @@ mod tests {
     let manager = TriggerManager::new(features);
     let trigger = pending_trigger("synthetic-gone", SESSION_ID, near_future(10), Vec::new());
     let target = LocalPid { kind: "local_pid".to_string(), pid: 1_000_000_000, exit_file: None, log: None };
-    let (finished, still_alive) = manager.wait_with_pidfd(&trigger, &[target]).await.expect("pidfd wait");
+    let WaitGroupOutcome { finished, still_alive, .. } =
+      manager.wait_with_pidfd(&trigger, &[target]).await.expect("pidfd wait");
     assert_eq!(finished, ["1000000000 (gone at start)"]);
     assert!(still_alive.is_empty());
   }
@@ -2941,7 +3000,7 @@ mod tests {
     let manager = TriggerManager::new(features);
     let trigger = pending_trigger("synthetic-live", SESSION_ID, near_future(0), Vec::new());
     let target = LocalPid { kind: "local_pid".to_string(), pid: std::process::id() as i64, exit_file: None, log: None };
-    let (finished, still_alive) =
+    let WaitGroupOutcome { finished, still_alive, .. } =
       manager.wait_with_pidfd(&trigger, std::slice::from_ref(&target)).await.expect("pidfd wait");
     assert!(finished.is_empty());
     assert_eq!(still_alive, [target.pid.to_string()]);
@@ -2959,7 +3018,7 @@ mod tests {
       exit_file: Some(exit_file.display().to_string()),
       log: Some("/synthetic/log".to_string()),
     };
-    assert_eq!(manager.local_finished_label(&target, false).await, "42: exit 0, log /synthetic/log");
+    assert_eq!(manager.local_finished_label(&target, false).await.label, "42: exit 0, log /synthetic/log");
   }
 
   #[tokio::test]
@@ -2972,7 +3031,7 @@ mod tests {
       exit_file: Some("/synthetic/missing-exit".to_string()),
       log: Some("/synthetic/log".to_string()),
     };
-    assert_eq!(manager.local_finished_label(&target, false).await, "42: exit file missing, log /synthetic/log");
+    assert_eq!(manager.local_finished_label(&target, false).await.label, "42: exit file missing, log /synthetic/log");
   }
 
   #[tokio::test]
@@ -2980,7 +3039,7 @@ mod tests {
     let (_home, features) = feature_context();
     let manager = TriggerManager::new(features);
     let target = LocalPid { kind: "local_pid".to_string(), pid: 42, exit_file: None, log: None };
-    assert_eq!(manager.local_finished_label(&target, false).await, "42");
+    assert_eq!(manager.local_finished_label(&target, false).await.label, "42");
   }
 
   #[test]
@@ -3084,9 +3143,9 @@ mod tests {
       exit_file: Some("/synthetic/exit file".to_string()),
       log: Some("/synthetic/remote log".to_string()),
     };
-    let (label, end) =
+    let (finish, end) =
       manager.remote_finish(&target, "synthetic-trigger", &dead_probe(), time::OffsetDateTime::now_utc()).await;
-    assert_eq!(label, "synthetic-host:41: exit 7, log /synthetic/remote log");
+    assert_eq!(finish.label, "synthetic-host:41: exit 7, log /synthetic/remote log");
     assert_eq!(end.end_at, None, "a static-output fake prints no date or mtime line");
   }
 
@@ -3103,9 +3162,9 @@ mod tests {
       exit_file: Some("/synthetic/missing-exit".to_string()),
       log: None,
     };
-    let (label, _) =
+    let (finish, _) =
       manager.remote_finish(&target, "synthetic-trigger", &dead_probe(), time::OffsetDateTime::now_utc()).await;
-    assert_eq!(label, "synthetic-host:41: exit file missing");
+    assert_eq!(finish.label, "synthetic-host:41: exit file missing");
   }
 
   #[tokio::test]
@@ -3120,9 +3179,9 @@ mod tests {
       exit_file: None,
       log: None,
     };
-    let (label, end) =
+    let (finish, end) =
       manager.remote_finish(&target, "synthetic-trigger", &dead_probe(), time::OffsetDateTime::now_utc()).await;
-    assert_eq!(label, "synthetic-host:41");
+    assert_eq!(finish.label, "synthetic-host:41");
     assert_eq!(end.end_at, None, "a pid-only target without an end file records no end");
   }
 
@@ -3150,7 +3209,7 @@ mod tests {
       exit_file: None,
       log: Some("/synthetic/remote log".to_string()),
     };
-    let (finished, still_alive, _ends) =
+    let WaitGroupOutcome { finished, still_alive, .. } =
       manager.wait_with_remote_probe(&trigger, &[target]).await.expect("remote wait");
     assert!(finished.is_empty());
     assert_eq!(still_alive, ["synthetic-host:41, log /synthetic/remote log"]);
@@ -3201,7 +3260,7 @@ mod tests {
     };
     let targets = [held_pid_target(pid)];
     let (waited, ()) = tokio::join!(manager.wait_with_remote_probe(&trigger, &targets), killer);
-    let (finished, still_alive, _ends) = waited.expect("remote wait");
+    let WaitGroupOutcome { finished, still_alive, .. } = waited.expect("remote wait");
     assert!(still_alive.is_empty());
     assert_eq!(finished, [format!("synthetic-host:{pid}")]);
     assert!(held_session_starts(home.path()) >= 1, "a held session carried the end");
@@ -3229,7 +3288,7 @@ mod tests {
     };
     let targets = [held_pid_target(pid)];
     let (waited, ()) = tokio::join!(manager.wait_with_remote_probe(&trigger, &targets), killer);
-    let (finished, _still_alive, _ends) = waited.expect("remote wait");
+    let WaitGroupOutcome { finished, .. } = waited.expect("remote wait");
     assert_eq!(finished.len(), 1, "an end that both paths report wakes the wait once");
   }
 
@@ -3429,7 +3488,7 @@ mod tests {
     };
     let targets = [held_pid_target(pid)];
     let (waited, ()) = tokio::join!(manager.wait_with_remote_probe(&trigger, &targets), killer);
-    let (finished, _still_alive, _ends) = waited.expect("remote wait");
+    let WaitGroupOutcome { finished, .. } = waited.expect("remote wait");
     assert_eq!(finished.len(), 1);
     assert_eq!(held_session_starts(home.path()), 0, "no held session opens with the switch off");
     assert!(pid_probe_runs(home.path()) >= 1, "the interval probes carried the wait");
@@ -4034,6 +4093,76 @@ mod tests {
         "session {SESSION_ID} has 5 pending triggers (limit 5); watch several targets with one trigger: --watch A --watch B"
       )
     );
+  }
+
+  /// Register and fire one `--cmd` watch whose command left `exit_code` in its exit file. Its pid is gone, so the wake
+  /// reads the exit file at once. Returns the fired record and the wake text admitted to the session.
+  async fn fire_cmd_watch(exit_code: &str, trigger_id: &str) -> (PendingTrigger, String) {
+    let (home, features) = feature_context();
+    add_task_node(&features, SESSION_ID).await;
+    install_dispatcher(&features);
+    let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
+    let exit_file = home.path().join("cmd-exit");
+    std::fs::write(&exit_file, format!("{exit_code}\n")).expect("exit code");
+    let target = WatchTarget::LocalPid {
+      pid: 1_000_000_000,
+      exit_file: Some(exit_file.display().to_string()),
+      log: Some("/synthetic/cmd.log".to_string()),
+    };
+    let trigger = pending_trigger(trigger_id, SESSION_ID, near_future(-1), vec![target]);
+    manager.save_trigger(&trigger).await.expect("save trigger");
+    manager.wait_and_fire(trigger.clone(), false).await.expect("fire trigger");
+    let fired = manager.load_trigger(SESSION_ID, &trigger.id).await.expect("read fired trigger");
+    let events = features.store.load_all_facts(SESSION_ID).expect("read task events");
+    let content = events
+      .iter()
+      .find(|event| event.get("type").and_then(CompactValue::as_str) == Some(event_types::SCHEDULED_TRIGGER))
+      .and_then(|event| event.get("content"))
+      .and_then(CompactValue::as_str)
+      .expect("the wake is admitted to the session")
+      .to_string();
+    (fired, content)
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_cmd_watch_exiting_nonzero_wakes_as_watch_failed() {
+    let (fired, content) = fire_cmd_watch("2", "synthetic-cmd-exit-2").await;
+    assert_eq!(fired.fire_reason.as_deref(), Some("watch failed"));
+    assert!(content.contains("[Scheduled trigger fired | watch failed]"), "{content}");
+    assert!(content.contains("exit 2"), "the wake names the exit code: {content}");
+    assert!(!content.contains("completed"), "a failed watch never reads as a completed job: {content}");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_cmd_watch_exiting_zero_wakes_as_completed() {
+    let (fired, content) = fire_cmd_watch("0", "synthetic-cmd-exit-0").await;
+    assert_eq!(fired.fire_reason.as_deref(), Some("completed"));
+    assert!(content.contains("[Scheduled trigger fired | completed]"), "{content}");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn schedule_route_refuses_a_wait_past_the_cap() {
+    let (_home, features) = feature_context();
+    add_session(&features, SESSION_ID);
+    let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
+    features.startup.insert(Arc::clone(&manager)).expect("insert trigger manager");
+    let response = send(
+      &routes(&features),
+      Method::POST,
+      "/api/internal/schedule-trigger",
+      &format!(
+        r#"{{"session_id":"{SESSION_ID}","delay_seconds":{},"message":"too long"}}"#,
+        MAX_TRIGGER_DELAY_SECONDS + 1
+      ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let detail = response_json(response).await["detail"].as_str().expect("detail text").to_string();
+    assert!(detail.contains(&MAX_TRIGGER_DELAY_SECONDS.to_string()), "{detail}");
+    assert!(manager.list_triggers(SESSION_ID).await.expect("trigger list").is_empty());
   }
 
   #[tokio::test]
@@ -4832,7 +4961,8 @@ mod tests {
       exit_file: Some("/synthetic/exit".to_string()),
       log: None,
     };
-    let (finished, still_alive, ends) = manager.wait_with_remote_probe(&trigger, &[target]).await.expect("remote wait");
+    let WaitGroupOutcome { finished, still_alive, remote_ends: ends, .. } =
+      manager.wait_with_remote_probe(&trigger, &[target]).await.expect("remote wait");
     assert_eq!(finished, ["synthetic-host:41: exit 7"]);
     assert!(still_alive.is_empty());
     // ssh processes per wake: the same 3 the before build starts (2 probe rounds + 1 exit read).

@@ -156,10 +156,11 @@ delegations to those backends, attach the verified patch file so the worker can 
   `charliebot session trigger --cmd '...' --host HOST --cwd DIR --max-wait N --message "..."` starts a command and
   registers a wake.
   `--host` selects its host; `--cwd` names its working directory, and both require `--cmd`. The `--cmd` and `--watch`
-  forms are mutually exclusive. `--max-wait` bounds the wait.
+  forms are mutually exclusive. `--max-wait` bounds the wait; it takes at most 14400 seconds, and a longer value
+  exits 2 before anything starts.
   SSH start failure exits 3 without registration; registration rejection exits 2 and kills the started command.
   Registration prints one JSON object with `trigger_id`, `fire_at`, and the launch record (`launch_id`, `host`, `pid`,
-  `log`, `exit_file`); the wake carries the exit status and log path.
+  `log`, `exit_file`); the wake carries the exit status and log path, and a non-zero exit wakes as `watch failed`.
   Normal master calls use the server's session; explicit mismatches in `--session` are rejected.
 
 - **One trigger watches many targets — a single trigger covers every parallel job.** When master is waiting on N parallel runs, pass all targets to one `charliebot session trigger --watch <spec> <spec> ...` where each spec self-describes its kind (`PID`, `host:pid`, `slurm:jobid`, `host:slurm:jobid`) and kinds may be freely mixed. The trigger fires when ALL listed targets have finished or `--max-wait` elapses. Spawning N triggers wastes the trigger machinery and produces N wake-ups for one logical event. The per-session pending-trigger cap and the sixth registration's exit-2 behavior are contract in `prompts/master.md`, section Delayed Triggers.
@@ -386,10 +387,12 @@ Keep `--message` a short label (capped at `MAX_TRIGGER_MESSAGE_CHARS`): the wake
 
 The fired message is prefixed with the reason; per-target detail is in the suffix:
 - `[Scheduled trigger fired | completed] <msg> (exited: 12345, host:6789; slurm:91038: COMPLETED 0:0)` — all targets finished
+- `[Scheduled trigger fired | watch failed] <msg> (watch failed: 12345: exit 2, log /path)` — a `--cmd` command exited non-zero, or its exit code could not be read
 - `[Scheduled trigger fired | timeout]  <msg> (exited: 12345; still alive: slurm:91039: RUNNING)` — `--max-wait` elapsed
 - `[Scheduled trigger fired | timeout] <msg> (still alive: neptune:slurm:122111 (unreachable 18m: ssh timeout after 60.0s))` — the remote host stopped answering sacct, leaving the job's true state unknown
 
-`completed` means all targets finished; success/failure is in the suffix (a SLURM `FAILED 2:0` is a failed job).
+`completed` means all targets finished and every `--cmd` exited 0; success/failure of a SLURM job is in the suffix (a SLURM `FAILED 2:0` is a failed job).
+`watch failed` means the watch itself did not succeed: the wake does not report its job as completed.
 
 ---
 

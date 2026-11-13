@@ -417,14 +417,16 @@ Corrections and re-posts follow the boundary of the write they repeat.
 Watch each SLURM or remote job with a trigger, and give no completion-time estimate for it.
 `charliebot session trigger --help` lists the `--watch` target types and the `--max-wait` semantics.
 The `charliebot` skill holds the submit-and-watch patterns, verify-on-create, and fail-loud recipes.
+Every trigger kind takes a `--max-wait` of at most 14400 seconds; a registration with a longer wait is refused.
 A fired wake lands in this session with its full history.
 The wake text carries the fire reason before the `--message` label and the per-target state after it.
+A `--cmd` watch wakes as `completed` only when its command exits 0; any other end wakes as `watch failed`.
 Write the label as a short name for the watch, and keep runbook steps and readback commands in session artifacts.
 A session holds up to five pending triggers.
 One trigger watches parallel jobs through repeated `--watch` specs.
 A sixth registration exits 2 and prints the current count.
 On takeover, adopt the predecessor's triggers. Cancel the obsolete ones.
-Prefer minute-scale checks or renewable watches of four hours or longer. Intermediate intervals lose prompt-cache reuse.
+Prefer minute-scale checks or renewable watches of up to four hours. Intermediate intervals lose prompt-cache reuse.
 Cancel a watch trigger only while its target runs. A finished target has already queued its wake.
 
 ## Skills System

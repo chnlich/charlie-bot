@@ -813,6 +813,26 @@ fn an_open_pull_requests_files_appear_in_the_in_flight_list() {
 
 #[test]
 #[ignore = "integration"]
+fn a_failing_pull_request_files_api_call_stops_the_list_with_an_error() {
+  let world = World::new();
+  let pull_requests = world.sandbox.root().join("open-pull-requests.tsv");
+  fs::write(&pull_requests, "12\tcharliebot/task-open\tpr-only.md\n").expect("the open pull requests");
+  let mut env = world.env();
+  env.insert("FAKE_GH_PRS".to_string(), pull_requests.display().to_string());
+  env.insert("FAKE_GH_FAIL_FILES".to_string(), "1".to_string());
+
+  let run = run_inflight_list_with_env(&world, &env);
+
+  assert_ne!(run.code, 0, "{}", run.describe());
+  assert!(
+    run.stderr.contains("cannot read the open pull request condition for PR 12"),
+    "the error does not name the PR condition:\n{}",
+    run.describe()
+  );
+}
+
+#[test]
+#[ignore = "integration"]
 fn a_squash_merged_branch_of_an_unowned_worktree_stays_claimed() {
   let world = World::new();
   // A leftover branch of a round that already landed, checked out in its worktree as the host leaves it.

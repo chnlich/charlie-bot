@@ -271,7 +271,7 @@ list_open_pull_requests() {
       continue
     fi
     open_pr_branches["$head"]=1
-    files=$(gh pr diff "$number" --name-only) || {
+    files=$(gh api --paginate "repos/{owner}/{repo}/pulls/$number/files" --jq '.[].filename') || {
       printf 'cannot read the open pull request condition for PR %s\n' "$number" >&2
       exit 1
     }

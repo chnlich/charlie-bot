@@ -220,15 +220,19 @@ case " $* " in
       printf '%s\t%s\n' "$number" "$head"
     done <"$FAKE_GH_PRS"
     ;;
-  *" pr diff "*)
+  *" api "*)
+    if [[ ${FAKE_GH_FAIL_FILES:-0} == 1 ]]; then
+      exit 1
+    fi
     number=
-    previous=
     for argument in "$@"; do
-      if [[ $previous == diff ]]; then
-        number=$argument
-        break
-      fi
-      previous=$argument
+      case $argument in
+        *"/pulls/"*"/files"*)
+          number=${argument#*/pulls/}
+          number=${number%/files}
+          break
+          ;;
+      esac
     done
     while IFS=$'\t' read -r pr head file; do
       [[ $pr == "$number" ]] && printf '%s\n' "$file"

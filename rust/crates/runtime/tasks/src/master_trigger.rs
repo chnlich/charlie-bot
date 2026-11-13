@@ -22,7 +22,7 @@ pub struct TriggerMasterRequest<'a> {
 }
 
 impl<'a> TriggerMasterRequest<'a> {
-  /// Set the required source session and summary; the optional fields take the defaults set here.
+  /// The request with the required source session and summary set; the optional fields take the defaults set here.
   pub fn new(session_id: &'a str, summary: &'a str) -> TriggerMasterRequest<'a> {
     TriggerMasterRequest {
       session_id,
@@ -37,7 +37,7 @@ impl<'a> TriggerMasterRequest<'a> {
   }
 }
 
-/// Resolve a task's successor tail and admit then dispatch one wake there.
+/// The admission and dispatch of one wake at a task's resolved successor tail.
 pub async fn trigger_master(features: &FeatureContext, request: TriggerMasterRequest<'_>) -> StoreResult<()> {
   let Some(resolved) = features.store.resolve_successor_chain(request.session_id)?.last().cloned() else {
     tracing::error!(target: "charliebot_tasks", session = request.session_id, "trigger_master_session_not_found");

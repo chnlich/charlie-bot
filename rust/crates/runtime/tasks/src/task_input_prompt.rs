@@ -12,7 +12,7 @@ use serde_json::{Map, Value};
 
 use crate::event_text::{truthy_string, value_str};
 
-/// Format a child report as the parent's typed task input (`session_dispatch.child_report_text` before it moved here).
+/// The parent's typed task input for a child report (`session_dispatch.child_report_text` names it).
 pub fn child_report_text(report: &Value, provenance: Option<&str>) -> String {
   let mut header = format!("[Report from task {}", value_str(report.get("child_session_id")));
   if let Some(provenance) = provenance {

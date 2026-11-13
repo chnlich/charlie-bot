@@ -154,16 +154,17 @@ The cold-reader instructions and the eight questions live in `prompts/cold_read.
 
 ### Source Check
 
-A page that states a cause, a mechanism, or a derived number carries facts
-that the user acts on. A derived number is a sum, a ratio, or a difference
-that the page computes. The cold read judges readability, and the source
-check judges the facts.
+A page carries facts that the user acts on when it states:
+- a cause;
+- a mechanism;
+- a derived number, a sum, a ratio, or a difference that the page computes;
+- a current system value, a count, a time, or a status that a system holds now.
 
-- The page author or the worker that built the page verifies every cited `path:line` and derived number before
-  sharing, and corrects the page or labels the claim Open.
+The cold read judges readability, and the source check judges the facts.
+
 - A plan page takes the verify round of the plan-approval skill in place of this check.
-- A page whose every statement reads a current value back from a system (a count, a time, a status) keeps its genre
-  checks only.
-- When a separate fact-check worker is wanted, `source_check_spec.md` in this skill's directory is an optional
-  reference template. Start the cold read and that worker in the same turn, and fold both reports into one
-  revision; delegating it never blocks sharing the page.
+- A page with an open fork is shared only after a separate read-only fact-check worker checks its claims and the page
+  author folds the findings into the page, correcting each claim or labeling it Open.
+- A page without an open fork is shared at once; the same worker starts its check in the turn that shares it, and the
+  author corrects the page in place.
+- `source_check_spec.md` in this skill's directory is the task spec for the fact-check worker.

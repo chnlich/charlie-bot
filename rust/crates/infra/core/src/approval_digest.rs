@@ -100,7 +100,8 @@ pub struct DigestCall<'a> {
 /// Record one digest entry (`add`). The step names its policy. A standing policy id checks the table's scope
 /// gates. The policy must exist, must not have expired, and must have cap room in the Pacific day `now` falls in.
 /// That id also requires the caller's `scope_check`; `t2` records a decision without either. Every refusal names
-/// the reason and tells the caller to ask for the step as a T0 Waiting on you item instead.
+/// the reason and the tier: the step is T0 (skills/plan-approval/SKILL.md, Execution), and a step that no standing
+/// policy covers is T0 (skills/plan-approval/SKILL.md, Execution).
 pub fn add(home: &Path, call: DigestCall<'_>) -> Result<DigestEntry, DigestError> {
   let loaded = approval_policy::load(home).map_err(|error| DigestError(error.to_string()))?;
   let DigestCall { session, policy, step, undo, scope_check, link, now } = call;
@@ -117,7 +118,7 @@ pub fn add(home: &Path, call: DigestCall<'_>) -> Result<DigestEntry, DigestError
     // the expiry day itself still admits uses.
     if today_text.as_str() > standing.expires.as_str() {
       return Err(DigestError(format!(
-        "standing policy {policy:?} expired on {}; ask for the step as a T0 Waiting on you item",
+        "standing policy {policy:?} expired on {}; the step is T0 (skills/plan-approval/SKILL.md, Execution)",
         standing.expires
       )));
     }
@@ -134,8 +135,8 @@ pub fn add(home: &Path, call: DigestCall<'_>) -> Result<DigestEntry, DigestError
         .count();
       if used >= usize::try_from(cap).map_err(|error| DigestError(format!("cap_per_pt_day {cap}: {error}")))? {
         return Err(DigestError(format!(
-          "standing policy {policy:?} reached its cap of {cap} uses in PT day {today_text}; ask for the step as a T0 \
-           Waiting on you item"
+          "standing policy {policy:?} reached its cap of {cap} uses in PT day {today_text}; the step is T0 \
+           (skills/plan-approval/SKILL.md, Execution)"
         )));
       }
     }
@@ -159,7 +160,7 @@ fn unknown_policy(policy: &str, table: &approval_policy::ApprovalPolicyTable) ->
   DigestError(format!(
     "unknown standing policy {policy:?}; the table names {}{}",
     if known.is_empty() { "no standing policies".to_string() } else { known.join(", ") },
-    "; ask for the step as a T0 Waiting on you item"
+    "; a step that no standing policy covers is T0 (skills/plan-approval/SKILL.md, Execution)"
   ))
 }
 
@@ -278,7 +279,13 @@ enable_ask_tier_refusal: false
 
     assert!(error.to_string().contains("unknown standing policy \"chaos-policy\""), "{error}");
     assert!(error.to_string().contains("shared-repo-landing"), "{error}");
-    assert!(error.to_string().contains("ask for the step as a T0 Waiting on you item"), "{error}");
+    assert!(
+      error.to_string().contains(
+        "a step that no standing policy covers is T0 (skills/plan-approval/SKILL.md, \
+       Execution)"
+      ),
+      "{error}"
+    );
     assert!(read_entries(home.path()).expect("the store reads").is_empty());
   }
 
@@ -289,7 +296,7 @@ enable_ask_tier_refusal: false
     let error = added(home.path(), "past-policy", Some("Inside nothing any more."))
       .expect_err("a use after the expiry is refused");
     assert!(error.to_string().contains("expired on 2026-10-15"), "{error}");
-    assert!(error.to_string().contains("ask for the step as a T0 Waiting on you item"), "{error}");
+    assert!(error.to_string().contains("the step is T0 (skills/plan-approval/SKILL.md, Execution)"), "{error}");
 
     let on_expiry_day = add(
       home.path(),
@@ -340,7 +347,7 @@ enable_ask_tier_refusal: false
     let error = added(home.path(), "shared-repo-landing", Some("Only Chao uses this repo."))
       .expect_err("the 17th use of the day is refused");
     assert!(error.to_string().contains("cap of 16 uses in PT day 2026-10-30"), "{error}");
-    assert!(error.to_string().contains("ask for the step as a T0 Waiting on you item"), "{error}");
+    assert!(error.to_string().contains("the step is T0 (skills/plan-approval/SKILL.md, Execution)"), "{error}");
 
     // The next Pacific day starts a new count.
     add(

@@ -24,8 +24,9 @@ inherited rules above define your task.
   Direct Work in `prompts/master.md` states what a lead reads.
 - Create the children before you present any page to the user. When the split itself is unclear,
   split by your recommended reading, and ask about it on this node's page only above the reading threshold.
-- Write in each child's first message its approver, what the child decides, and what it delivers.
-  The child's Goal keeps those three and its completion conditions. A child presents its deliverables
+- Write in each child's first message its approver, what the child decides, what it delivers, and the source user
+  message plus e2e handover that covers it. The child's Goal keeps these and its completion conditions.
+  A child presents its deliverables
   in its own session.
   A child sends this node the messages that Between Agents lists.
 - Choose each child's approver: the user or this node. The approver answers the child's understanding page
@@ -35,8 +36,8 @@ inherited rules above define your task.
   A user approver holds the child until the user has seen its result.
   The approver reviews the child's delivered product. `skills/plan-approval/SKILL.md` (The principle) states who
   judges each step by its tier and each reading. Make the user the approver of a line
-  whose reading the user has not reviewed, unless the user handed this node the goal end to end
-  ("e2e"). This node approves every child's plan.
+  whose reading the user has not reviewed, unless an e2e handover covers this node (`prompts/master.md`).
+  This node approves every child's plan.
   A child that this node approves follows Between Agents. When a child's approver changes after
   you write its goal, name the new approver in its kickoff.
 - Put a decision in a child's goal when only that line's material answers it. A child owns only

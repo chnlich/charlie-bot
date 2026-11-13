@@ -11,6 +11,7 @@
   let editorRow = null;
   let editorSpacerRow = null;
   let editorResizeObserver = null;
+  let editorPaneObserver = null;
   let editorBody = null;
   let drag = null;
   let sending = false;
@@ -417,7 +418,13 @@
     const editor = document.createElement('div');
     editor.className = `${PREFIX}-editor`;
     const scrollPane = targetRow.closest('.d2h-file-side-diff, .d2h-file-diff');
-    editor.style.width = `${scrollPane.clientWidth - 20}px`;
+    // The pane's width changes under an open editor: a narrowed window or a rotated phone
+    // leaves a one-shot width wider than the pane's clip, which puts the footer's right-aligned
+    // Cancel and Add past the screen edge. The observer keeps the box on the pane.
+    const sizeEditorToPane = () => { editor.style.width = `${scrollPane.clientWidth - 20}px`; };
+    sizeEditorToPane();
+    editorPaneObserver = new ResizeObserver(sizeEditorToPane);
+    editorPaneObserver.observe(scrollPane);
     const textarea = document.createElement('textarea');
     textarea.placeholder = 'Add a comment (Ctrl+Enter)';
     const footer = document.createElement('div');
@@ -485,9 +492,11 @@
 
   function closeEditor() {
     if (editorResizeObserver) editorResizeObserver.disconnect();
+    if (editorPaneObserver) editorPaneObserver.disconnect();
     if (editorSpacerRow) editorSpacerRow.remove();
     if (editorRow) editorRow.remove();
     editorResizeObserver = null;
+    editorPaneObserver = null;
     editorSpacerRow = null;
     editorRow = null;
     editorBody = null;

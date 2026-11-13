@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use charliebot_core::{RepoRoot, fsutil, str_methods, text_repr, timefmt};
+use charliebot_core::{RepoRoot, fsutil, posix_path, str_methods, text_repr, timefmt};
 use charliebot_registry::FeatureContext;
 use charliebot_store::sidebar_state;
 use serde_json::{Map, Value, json};
@@ -255,7 +255,7 @@ async fn validate_new_version_file(
   file: &str,
   registry: &Value,
 ) -> Result<String, VerbError> {
-  let file = plan_paths::posix_normpath(file);
+  let file = posix_path::normpath(file);
   let file_relative = validate_file_in_session_dir(features, session_id, &file)?;
   let artifact = features.store.session_dir(session_id).join(&file_relative);
   let config =
@@ -324,7 +324,7 @@ fn find_binding_by_file(plans: &[Value], file: &str) -> Result<Option<(Value, Va
       let Value::String(bound) = bound else {
         return Err(type_error(format!("normpath() argument must be str, not {}", plans::type_name(bound))));
       };
-      if plan_paths::posix_normpath(bound) == file {
+      if posix_path::normpath(bound) == file {
         let v = plan_map(version)?.get("v").ok_or_else(|| key_error("v"))?;
         return Ok(Some((id_of(plan_fields)?.clone(), v.clone())));
       }
@@ -626,8 +626,7 @@ mod tests {
     } else {
       present(&features, &locks, "sess", second, "P2".to_string(), Value::Null).await
     };
-    let message =
-      format!("file {} already bound to plan 1 v1", text_repr::str_repr(&plan_paths::posix_normpath(second)));
+    let message = format!("file {} already bound to plan 1 v1", text_repr::str_repr(&posix_path::normpath(second)));
     assert!(matches!(&error, Err(VerbError::Refused(detail)) if *detail == message), "{error:?}");
   }
 
@@ -662,7 +661,7 @@ mod tests {
     let outside = home.path().join("outside.html");
     fs::write(&outside, plan_page("Ship the fix.")).expect("the file is written");
     let error = present_p1(&features, "sess", &outside.to_string_lossy()).await.unwrap_err();
-    let file = plan_paths::posix_normpath(&outside.to_string_lossy());
+    let file = posix_path::normpath(&outside.to_string_lossy());
     assert!(
       matches!(&error, VerbError::Refused(detail) if *detail == format!("file {} resolves outside the session directory", text_repr::str_repr(&file))),
       "{error:?}"

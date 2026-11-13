@@ -145,8 +145,19 @@ fn valid_repo_char(character: char) -> bool {
   character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
 }
 
-/// A branch ref: non-empty, no whitespace, and free of the characters git refuses.
+/// A head or base: a branch ref, or `<owner>:<branch>` for a branch of another owner's fork. The owner is non-empty and
+/// made of repository-name characters; the branch is a branch ref.
 fn valid_branch(branch: &str) -> bool {
+  match branch.split_once(':') {
+    Some((owner, branch_ref)) => {
+      !owner.is_empty() && owner.chars().all(valid_repo_char) && valid_branch_ref(branch_ref)
+    }
+    None => valid_branch_ref(branch),
+  }
+}
+
+/// A branch ref: non-empty, no whitespace, and free of the characters git refuses.
+fn valid_branch_ref(branch: &str) -> bool {
   !branch.is_empty()
     && !branch.chars().any(char::is_whitespace)
     && !branch.chars().any(|character| matches!(character, '~' | '^' | ':' | '?' | '*' | '[' | '\\'))
@@ -155,6 +166,15 @@ fn valid_branch(branch: &str) -> bool {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_branch_may_name_another_owners_branch_but_not_a_malformed_owner_or_ref() {
+    assert!(valid_branch("chnlich:fix/okta-429-tryagain"));
+    assert!(valid_branch("fix/okta-429-tryagain"));
+    for branch in [":branch", "owner:", "a:b:c"] {
+      assert!(!valid_branch(branch), "{branch}");
+    }
+  }
 
   #[test]
   fn a_pull_request_target_canonicalizes_its_four_fields() {

@@ -17,11 +17,15 @@
   h2 .n { display:inline-flex; width:22px; height:22px; border-radius:6px; background:var(--acc); color:var(--panel);
     font-size:12px; font-weight:700; align-items:center; justify-content:center; margin-right:8px }
   h2 .hint { margin-left:auto; font-size:11.5px; font-weight:400; color:var(--mut) }
-  /* The digest heading folds the day's record. The whole heading is the pointer target, and its hint carries the
-     keyboard target and the expanded state. */
-  h2.digest-heading { cursor:pointer }
-  h2.digest-heading .hint { cursor:pointer }
+  /* A heading folds the day's record only when the day has one: over an empty record the fold hides the one sentence
+     that answers whether silence accepted anything. The fold mark is the queue card's own, so both folds on the day
+     read alike; it follows the word it marks rather than the hint, which holds the row's right end.
+     The whole heading is the pointer target, and its hint carries the keyboard target and the expanded state. */
+  h2.digest-heading.foldable { cursor:pointer }
+  h2.digest-heading .hint[role="button"] { cursor:pointer }
   h2.digest-heading .hint:focus-visible { outline:2px solid var(--acc); outline-offset:2px }
+  h2.digest-heading .fold { margin-left:0 }
+  h2.digest-heading.open .fold::after { content:"\25BE" }
   p { margin:8px 0 }
   ul { list-style:none; margin:8px 0 0; padding:0 }
   li { margin:6px 0; padding:9px 12px; background:var(--panel); border:1px solid var(--bd); border-radius:9px }
@@ -58,8 +62,9 @@
   @media (max-width:640px) {
     .queue li { grid-template-columns:minmax(0,1fr) }
     .queue li .openlink { grid-column:1; grid-row:auto; margin-top:6px; text-align:right }
-    /* At the phone width the fold marker holds the card's corner, so it never takes a line of its own. */
-    .fold { position:absolute; top:11px; right:12px; margin:0 }
+    /* At the phone width the queue card's fold marker holds the card's corner, so it never takes a line of its own.
+       The heading's mark stays inline with the word it marks. */
+    .queue li .fold { position:absolute; top:11px; right:12px; margin:0 }
   }
   /* A day reads as one value: the hyphens in 2026-11-02 are not break opportunities. */
   .day { white-space:nowrap }
@@ -140,7 +145,7 @@
 </ul>
 {% endif %}
 
-<h2 class="digest-heading"><span class="n">3</span>Digest<span class="hint" role="button" tabindex="0" aria-expanded="false" aria-controls="approval-digest-content">Silence accepts the step.</span></h2>
+<h2 class="digest-heading"><span class="n">3</span>Digest{% if ctx.digest %}<span class="fold" aria-hidden="true"></span>{% endif %}<span class="hint"{% if ctx.digest %} role="button" tabindex="0" aria-expanded="false" aria-controls="approval-digest-content"{% endif %}>Silence accepts the step.</span></h2>
 {% if not ctx.digest %}
 <p class="none" id="approval-digest-content">No digest entries and no policy table changes on <span class="day">{{ ctx.date }}</span>.</p>
 {% else %}
@@ -192,24 +197,29 @@
     });
   }
 
-  // The Digest section starts folded. A click on its heading, or Enter or Space on the heading's hint, shows or
-  // hides the day's record; the hint carries the expanded state.
+  // The Digest section starts folded when the day has a record, and the heading carries the fold mark and the
+  // hint's button role only then. A click on the heading, or Enter or Space on the hint, shows or hides the
+  // record; the hint carries the expanded state and the heading carries the mark's direction.
   const digestHeading = document.querySelector('h2.digest-heading');
-  const digestHint = digestHeading.querySelector('.hint');
-  const digestContent = document.getElementById('approval-digest-content');
-  digestContent.hidden = true;
-  const toggleDigest = () => {
-    const open = digestContent.hidden;
-    digestContent.hidden = !open;
-    digestHint.setAttribute('aria-expanded', String(open));
-  };
-  digestHeading.addEventListener('click', toggleDigest);
-  digestHint.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      toggleDigest();
-    }
-  });
+  const digestHint = digestHeading.querySelector('.hint[role="button"]');
+  if (digestHint) {
+    const digestContent = document.getElementById('approval-digest-content');
+    digestHeading.classList.add('foldable');
+    digestContent.hidden = true;
+    const toggleDigest = () => {
+      const open = digestContent.hidden;
+      digestContent.hidden = !open;
+      digestHint.setAttribute('aria-expanded', String(open));
+      digestHeading.classList.toggle('open', open);
+    };
+    digestHeading.addEventListener('click', toggleDigest);
+    digestHint.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        toggleDigest();
+      }
+    });
+  }
 </script>
 {% if ctx.is_today %}
 <script>

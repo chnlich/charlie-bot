@@ -163,10 +163,15 @@
       .${PREFIX}-editor textarea:focus, .${PREFIX}-tray textarea:focus {
         border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37, 99, 235, .15);
       }
+      /* In the side-by-side format a phone's half pane is 157 px wide. The suggestion toggle and the
+         two buttons cannot share one row there: without the wrap the row overflows past the screen's
+         left edge and the table clips the toggle. */
       .${PREFIX}-editor-footer, .${PREFIX}-tray-actions {
-        display: flex; align-items: center; justify-content: flex-end; gap: 7px;
+        display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap;
       }
-      .${PREFIX}-suggestion { display: flex; align-items: center; gap: 5px; margin-right: auto; font-size: 12px; }
+      /* The suggestion toggle's label is its target. Its 13 px box and 12 px text draw 18 px tall on
+         their own, under the 24 px pointer floor the editor's other controls keep. */
+      .${PREFIX}-suggestion { display: flex; align-items: center; gap: 5px; margin-right: auto; font-size: 12px; min-height: 24px; }
       .${PREFIX}-editor button, .${PREFIX}-tray button {
         border: 1px solid #cbd5e1; border-radius: 6px; padding: 5px 9px;
         background: white; color: #334155; font: 12px system-ui, sans-serif; cursor: pointer;

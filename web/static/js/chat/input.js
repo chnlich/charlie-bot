@@ -74,16 +74,111 @@ function waitForSendRetry(delay) {
   return new Promise((resolve) => setTimeout(resolve, delay));
 }
 
+// ---------------------------------------------------------------------------
+// The pending-send store: the texts this browser has not proved the server holds
+// ---------------------------------------------------------------------------
+// A send records its text and request id under charliebot-pending-send-<session> before the composer
+// clears, and its entry leaves the list on the first proof the server holds the message: the POST
+// response, the socket echo of its request id, or a loaded history that carries the id. Until then
+// the record is the only copy the browser keeps — the composer and the bubble live in the tab, so a
+// reload, a closed tab or a crash in between loses the text. When a session renders
+// (charliebot:session-rendered), the entries the loaded history holds are dropped, the entries this
+// page instance recorded stay (its POST is still carrying them; a switch away and back must not put
+// one back), and the rest go into the composer in click order, ahead of the draft, and become the
+// draft. Attachments of an unsent message are not stored: the record is text only.
+const PENDING_SEND_KEY_PREFIX = 'charliebot-pending-send-';
+
+// The request ids this page instance recorded. A page instance never puts its own sends back into the
+// composer: while the POST is unresolved the text is still leaving, and one refused 4xx shows its bubble.
+const pendingSendsRecordedHere = new Set();
+
+function pendingSendKey(sessionId) {
+  return PENDING_SEND_KEY_PREFIX + sessionId;
+}
+
+function readPendingSends(sessionId) {
+  const key = pendingSendKey(sessionId);
+  const raw = localStorage.getItem(key);
+  if (raw === null) return [];
+  let list;
+  try {
+    list = JSON.parse(raw);
+  } catch (error) {
+    console.error('Pending-send store ' + key + ' is malformed, treated as empty: ' + error);
+    return [];
+  }
+  const wellFormed = Array.isArray(list) &&
+    list.every((entry) => entry && typeof entry.request_id === 'string' && typeof entry.content === 'string');
+  if (!wellFormed) {
+    console.error('Pending-send store ' + key + ' is malformed, treated as empty: expected a list of {request_id, content}');
+    return [];
+  }
+  return list;
+}
+
+function writePendingSends(sessionId, entries) {
+  const key = pendingSendKey(sessionId);
+  if (entries.length) localStorage.setItem(key, JSON.stringify(entries));
+  else localStorage.removeItem(key);
+}
+
+function recordPendingSend(sessionId, requestId, content) {
+  const entries = readPendingSends(sessionId);
+  entries.push({request_id: requestId, content});
+  writePendingSends(sessionId, entries);
+  pendingSendsRecordedHere.add(requestId);
+}
+
+function removePendingSend(sessionId, requestId) {
+  const entries = readPendingSends(sessionId);
+  const remaining = entries.filter((entry) => entry.request_id !== requestId);
+  if (remaining.length !== entries.length) writePendingSends(sessionId, remaining);
+}
+
+// A session render's reconciliation: an entry the loaded history carries is proof the server took it,
+// an entry this page instance recorded is still in flight in this tab, and the rest return to the
+// composer in click order, ahead of the draft, and become the draft.
+function reconcilePendingSends(sessionId, messages) {
+  const entries = readPendingSends(sessionId);
+  if (!entries.length) return;
+  const historyIds = new Set(messages.filter((msg) => msg.request_id).map((msg) => msg.request_id));
+  const kept = entries.filter((entry) => !historyIds.has(entry.request_id));
+  const returned = kept.filter((entry) => !pendingSendsRecordedHere.has(entry.request_id));
+  if (returned.length) {
+    const input = document.getElementById('msg-input');
+    const draft = input.value || (DRAFT_KEY ? localStorage.getItem(DRAFT_KEY) : null) || '';
+    input.value = returned.map((entry) => entry.content).join('\n') + (draft ? '\n' + draft : '');
+    autoResize(input);
+    saveDraftNow();
+  }
+  writePendingSends(sessionId, kept.filter((entry) => pendingSendsRecordedHere.has(entry.request_id)));
+}
+
+// The socket echo of a send's request id (websocket-handlers.js) is the first proof of receipt: it ends
+// the bubble's Sending… before the POST response does and clears the store entry.
+document.addEventListener('charliebot:client-send-echo', (event) => {
+  setMessageDeliveryStatus({request_id: event.detail.request_id}, 'Sent');
+  removePendingSend(SESSION_ID, event.detail.request_id);
+});
+
+// A session render is where the loaded history exists beside the composer: the reconciliation runs here
+// (sidebar/session-view.js announces it).
+document.addEventListener('charliebot:session-rendered', (event) => {
+  reconcilePendingSends(event.detail.sessionId, event.detail.messages || []);
+});
+
 // Resolves true when the server accepted the message and false when it refused it with a 4xx.
 // The session is the one the message was typed in: a retry after a view switch still lands there.
 async function submitUserMessage(sessionId, content, extra, requestId, optimisticMessage) {
   try {
     const response = await postChatMessageWithRetry(sessionId, content, extra, requestId);
     setMessageDeliveryStatus(optimisticMessage, 'Sent');
+    removePendingSend(sessionId, requestId);
     if (response.dispatch_error) appendMessage('system', response.dispatch_error);
     return true;
   } catch (error) {
     if (!(error.status >= 400 && error.status < 500)) throw error;
+    // A refused send keeps its store entry: the server never took the text, so the reload puts it back.
     pendingUserRequestIds.delete(requestId);
     setMessageDeliveryStatus(optimisticMessage, 'Failed');
     appendMessage('system', 'Failed to send message');
@@ -104,6 +199,9 @@ async function sendMessage() {
 
   const inputMode = composerInputMode;
   const requestId = crypto.randomUUID();
+  // The record lands before the composer clears: until a proof of receipt, it is the only copy the
+  // browser keeps of this text (the store comment above).
+  if (content) recordPendingSend(target.id, requestId, content);
   reportSendStep('click', requestId);
 
   // The send belongs to the session the page displays at press: the composer

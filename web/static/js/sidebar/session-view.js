@@ -871,6 +871,11 @@ function renderSessionView(data) {
   setWorkerTranscriptMode(isWorker ? {sessionId: session.id} : null);
   setInputAreaVisible(!isWorker);
 
+  // The loaded history now exists beside the composer: the moment the page's per-session state
+  // reconciles (chat/input.js puts a session's pending sends back into the composer here).
+  document.dispatchEvent(new CustomEvent('charliebot:session-rendered',
+      {detail: {sessionId: session.id, messages}}));
+
   // Initialize streaming preview from pending draft (in-progress assistant
   // response carried over from a tail-loaded session). The draft's tool rows
   // seed the accumulation in every mode: they are the base the socket's

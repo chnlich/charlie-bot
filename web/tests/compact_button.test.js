@@ -14,6 +14,10 @@ const { FakeElement } = require('./fake_dom');
 const { createElement } = require('./dom_element_stub');
 
 function makeDocument(elements) {
+  // The chat control layer registers document listeners at load (the pending-send store's echo
+  // listener, chat/input.js); the harness document calls each listener of an event's type in
+  // registration order, as the page's document does.
+  const listeners = new Map();
   return {
     getElementById(id) {
       if (elements.has(id)) return elements.get(id);
@@ -32,7 +36,25 @@ function makeDocument(elements) {
     querySelector() {
       return null;
     },
-    dispatchEvent: () => true,
+    addEventListener(type, handler) {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push(handler);
+    },
+    dispatchEvent(event) {
+      for (const handler of listeners.get(event.type) || []) handler(event);
+      return true;
+    },
+  };
+}
+
+// The browser's localStorage, as far as the chat module's draft and pending-send keys use it.
+function makeStorage() {
+  const items = new Map();
+  return {
+    items,
+    getItem: (key) => (items.has(key) ? items.get(key) : null),
+    setItem: (key, value) => { items.set(key, String(value)); },
+    removeItem: (key) => { items.delete(key); },
   };
 }
 
@@ -50,6 +72,7 @@ function loadChatContext(elements) {
   const context = {
     CustomEvent,
     document: makeDocument(elements),
+    localStorage: makeStorage(),
     console: { error: () => {}, log: () => {} },
     marked: { parse: (v) => String(v || '') },
     fixNestedFences: (v) => String(v || ''),

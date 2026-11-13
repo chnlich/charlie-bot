@@ -63,6 +63,8 @@
 //
 //     charliebot:active-session-changed
 //                                 web/static/js/sidebar/session-view.js (SESSION_ID names another session)
+//     charliebot:session-rendered
+//                                 web/static/js/sidebar/session-view.js (a session's history landed beside the composer)
 //     charliebot:session-data-load
 //                                 web/static/js/sidebar/session-view.js (the idle load of the session's per-session data)
 //     charliebot:session-switch-phase

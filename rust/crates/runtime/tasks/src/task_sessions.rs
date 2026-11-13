@@ -4,7 +4,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_store::run_records::{RetryRunFields, RunKind, RunRecord, run_not_found_in_task_text};
 use charliebot_store::{Store, StoreError, StoreResult};
 
-/// Create a stable retry record while holding the task tree's control lock.
+/// The stable retry record, created while holding the task tree's control lock.
 pub async fn create_retry(
   store: &Store,
   cfg: &CharlieBotConfig,

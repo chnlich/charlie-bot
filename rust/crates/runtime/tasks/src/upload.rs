@@ -17,7 +17,7 @@ use tokio::io::{AsyncWriteExt, BufReader};
 const UPLOAD_FIELDS: &[Field] = &[Field::file("file")];
 const UPLOAD_FORM: FormModel = FormModel::new(UPLOAD_FIELDS);
 
-/// Parse the body before session lookup, then validate and save the required file.
+/// The upload request's body, parsed before session lookup, then validated and saved as the required file.
 pub async fn upload_file(State(features): State<Arc<FeatureContext>>, request: axum::extract::Request) -> Response {
   let (mut parts, stream) = request.into_parts();
   let form = match form_body::read(&parts.headers, stream).await {

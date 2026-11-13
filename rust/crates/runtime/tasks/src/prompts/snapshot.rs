@@ -107,7 +107,7 @@ fn block_value(block: &PromptBlock) -> Value {
   })
 }
 
-/// Turns the ordered rule segments into a snapshot. Identical text dedups at its first position, and every source of
+/// The snapshot built from the ordered rule segments. Identical text dedups at its first position, and every source of
 /// each repeat merges there in first-seen order. Only byte-identical text dedups; similar rules stay apart.
 pub fn assemble_snapshot(segments: &[RuleSegment]) -> PromptSnapshot {
   let mut blocks: Vec<PromptBlock> = Vec::new();
@@ -147,8 +147,8 @@ pub fn assemble_snapshot(segments: &[RuleSegment]) -> PromptSnapshot {
   PromptSnapshot { blocks }
 }
 
-/// Parses the stored blocks. A missing key reports the key quoted, and a value of the
-/// wrong shape names its type.
+/// The blocks stored in the snapshot data. A missing key reports the key quoted, and a value of the wrong shape names
+/// its type.
 fn parse_blocks(data: &Value) -> Result<Vec<PromptBlock>, String> {
   let blocks = subscript(data, "blocks")?;
   let items = blocks.as_array().ok_or_else(|| not_iterable(blocks))?;
@@ -201,7 +201,7 @@ fn parse_source(value: &Value) -> Result<PromptSource, String> {
   })
 }
 
-/// Looks up *key* in a stored JSON value: an object by key, and each other type with its own error text.
+/// The lookup of *key* in a stored JSON value: an object by key, and each other type with its own error text.
 fn subscript<'a>(value: &'a Value, key: &str) -> Result<&'a Value, String> {
   match value {
     Value::Object(members) => members.get(key).ok_or_else(|| format!("'{key}'")),

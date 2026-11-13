@@ -41,8 +41,8 @@ fn commit(dir: &Path, file: &str) -> String {
   git(dir, &["rev-parse", "HEAD"])
 }
 
-/// One landing venue: a bare origin, the main checkout, a task worktree with one commit on the task branch, the
-/// task's session in a synthetic profile home, and the gh stand-in's state.
+/// One landing venue: a bare origin, the main checkout, and a task worktree with one commit on the task branch.
+/// The venue also holds the task's session in a synthetic profile home and the gh stand-in's state.
 struct Venue {
   _root: TempDir,
   origin: PathBuf,
@@ -190,9 +190,9 @@ impl Venue {
   }
 }
 
-/// The path that left rebase-landed PRs open: a worker pushes the task branch and opens a PR, main moves before the
-/// base push, and the landing rebases and pushes a patch-equivalent copy under a new sha. GitHub never marks that PR
-/// merged, so the landing closes it.
+/// The path that left rebase-landed PRs open: a worker pushes the task branch and opens a PR, then main moves
+/// before the base push. The landing rebases and pushes a patch-equivalent copy under a new sha. GitHub never
+/// marks that PR merged, so the landing closes it.
 #[test]
 #[ignore = "integration"]
 fn a_rebased_landing_closes_the_pr_whose_head_it_never_pushed() {
@@ -218,7 +218,7 @@ fn a_rebased_landing_closes_the_pr_whose_head_it_never_pushed() {
   assert!(comment.contains(&landed), "the closing comment names the landed sha: {comment}");
 }
 
-/// Under the gate, main moves between the task-branch push and the base push: the landing rebases, pushes the task
+/// Under the gate, main moves between the task-branch push and the base push. The landing rebases, pushes the task
 /// branch again, and lands that head, so GitHub marks the PR merged and the landing closes nothing.
 #[test]
 #[ignore = "integration"]

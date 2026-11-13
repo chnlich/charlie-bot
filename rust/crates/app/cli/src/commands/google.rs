@@ -356,7 +356,7 @@ fn duplicate_google_section(raw_text: &str) -> Option<String> {
 }
 
 /// A repeated key keeps its last value, and `exchange-code` relies on that when it refuses a
-/// repeated `refresh_token` line with its own message; serde_yaml refuses every repeated key, so
+/// repeated `refresh_token` line with its own message. serde_yaml refuses every repeated key, so
 /// repeated key lines inside Google sections are dropped (last wins) before the parse. Keys in the
 /// other sections keep serde_yaml's refusal.
 fn drop_repeated_google_keys(raw_text: &str) -> String {
@@ -952,7 +952,7 @@ fn section_edit_plan(raw_text: &str, section_name: &str, keys: &[&str]) -> Resul
     last_content = cursor;
     cursor += 1;
   }
-  // A scalar value ends on its own content line, so the insertion goes one line past it; a nested
+  // A scalar value ends on its own content line, so the insertion goes one line past it. A nested
   // block ends at the next token, and blank or comment lines above that token stay above the
   // insertion, matching the script's node end marks.
   let insert_line = if last_value_inline {
@@ -971,11 +971,11 @@ fn section_edit_plan(raw_text: &str, section_name: &str, keys: &[&str]) -> Resul
 // The block-mapping scalar renderings
 // ---------------------------------------------------------------------------
 
-/// Render one string as a block mapping's value: plain when the text reads back as a string,
-/// single-quoted when plain style would change the value, double-quoted with escapes when the text
-/// needs them. `start_column` is the column the value starts at; `fold_indent` folds long values at
-/// single spaces once the column passes the 80-column width (the `width=1_000_000` dumps pass
-/// `None` and stay on one line).
+/// Render one string as a block mapping's value. Plain style applies when the text reads back as a
+/// string, single-quoted when plain would change the value, and double-quoted with escapes when the
+/// text needs them. `start_column` is the column the value starts at. `fold_indent` folds long
+/// values at single spaces once the column passes the 80-column width (the `width=1_000_000` dumps
+/// pass `None` and stay on one line).
 fn dump_scalar(value: &str, start_column: usize, allow_unicode: bool, fold_indent: Option<&str>) -> String {
   let analysis = analyze_scalar(value, allow_unicode);
   if !analysis.special && !analysis.edge_space && !analysis.block_indicators && !plain_resolves_to_non_string(value) {
@@ -1078,9 +1078,9 @@ fn plain_resolves_to_non_string(value: &str) -> bool {
   })
 }
 
-/// `Emitter.write_plain` and `Emitter.write_single_quoted` over one line: chunks between spaces,
-/// with a single interior space replaced by a line break plus the fold indent once the column
-/// passes the emitter's 80-column fold width. `single_quoted` doubles each quote, counts the
+/// `Emitter.write_plain` and `Emitter.write_single_quoted` write one line. A chunk between spaces
+/// keeps its text. A single interior space becomes a line break plus the fold indent once the
+/// column passes the emitter's 80-column fold width. `single_quoted` doubles each quote, counts the
 /// value's opening quote and skips folding at a leading or trailing space.
 fn write_folded(value: &str, start_column: usize, fold_indent: Option<&str>, single_quoted: bool) -> String {
   const FOLD_WIDTH: usize = 80;

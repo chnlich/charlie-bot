@@ -18,9 +18,10 @@ use charliebot_core::paths::realpath;
 use charliebot_core::str_methods;
 use charliebot_core::text_repr;
 use charliebot_registry::usage::{
-  CLAUDE_TRANSCRIPTS_CATEGORY, CODEX_ROLLOUTS_CATEGORY, CategoryResult, SWEEP_DIR_SCAN_FAILED_EVENT,
-  SWEEP_FILE_DELETE_FAILED_EVENT, SWEEP_FILE_STAT_FAILED_EVENT, SessionFacts, SweepScope,
+  CLAUDE_TRANSCRIPTS_CATEGORY, CODEX_ROLLOUTS_CATEGORY, CategoryResult, SWEEP_DIR_SCAN_FAILED_EVENT, SessionFacts,
+  SweepScope,
 };
+use charliebot_registry::usage_sweep::SweepCounter;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_store::metadata::{CC_SESSION_ID_FIELD, UtcDateTime, read_metadata};
 use charliebot_store::run_identity::SESSION_METADATA_NAME;
@@ -72,7 +73,7 @@ pub fn run_cool_sweep(
   capture_into_default_ledger(&cfg, registry)?;
   let facts = scan_sessions(&cfg.sessions_dir(), now)?;
   let references = scan_references(&facts);
-  let mut transport = TransportCounter::default();
+  let mut transport = SweepCounter::default();
   let mut cold: Vec<&str> = facts.values().filter(|owner| owner.cold).map(|owner| owner.id.as_str()).collect();
   cold.sort_unstable();
   for session_id in cold {
@@ -89,7 +90,7 @@ pub fn run_cool_sweep(
     vacuum: false,
     force: false,
   };
-  let mut categories = vec![transport.result()];
+  let mut categories = vec![transport.category("raw-transport", "files")];
   for swept in registry.sweep_all(&scope)? {
     categories.extend(swept.categories);
   }
@@ -198,7 +199,7 @@ fn scan_references(facts: &HashMap<String, SessionFacts>) -> HashMap<String, Vec
 
 /// Deletes the reserved transport names inside one cold session's managed run directories.
 /// A file that a v2 run record references is kept.
-fn sweep_raw_transport(session_dir: &Path, counter: &mut TransportCounter) -> anyhow::Result<()> {
+fn sweep_raw_transport(session_dir: &Path, counter: &mut SweepCounter) -> anyhow::Result<()> {
   let referenced = run_referenced_transport(session_dir)?;
   for root in managed_transport_dirs(session_dir) {
     for entry in sorted_scan(&root).unwrap_or_default() {
@@ -208,7 +209,7 @@ fn sweep_raw_transport(session_dir: &Path, counter: &mut TransportCounter) -> an
       if referenced.contains(&realpath(&entry)) {
         continue;
       }
-      counter.delete_file(&entry);
+      counter.delete_file(&entry, false, true);
     }
   }
   Ok(())
@@ -309,36 +310,6 @@ fn is_file(path: &Path) -> bool {
 /// metadata is a directory only when the path is not a link, and a failed lstat reads as false.
 fn is_real_dir(path: &Path) -> bool {
   fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
-}
-
-/// The raw-transport category: files deleted, and their bytes, counted with the `files` unit.
-#[derive(Default)]
-struct TransportCounter {
-  count: u64,
-  bytes: u64,
-}
-
-impl TransportCounter {
-  /// Deletes one file, best effort: a failed stat or unlink logs, and the run goes on.
-  fn delete_file(&mut self, path: &Path) {
-    let size = match fs::metadata(path) {
-      Ok(metadata) => metadata.len(),
-      Err(error) => {
-        tracing::warn!(path = %path.display(), error = %error, "{}", SWEEP_FILE_STAT_FAILED_EVENT);
-        return;
-      }
-    };
-    if let Err(error) = fs::remove_file(path) {
-      tracing::warn!(path = %path.display(), error = %error, "{}", SWEEP_FILE_DELETE_FAILED_EVENT);
-      return;
-    }
-    self.count += 1;
-    self.bytes += size;
-  }
-
-  fn result(&self) -> CategoryResult {
-    CategoryResult { name: "raw-transport", unit: "files", count: self.count, bytes: self.bytes }
-  }
 }
 
 #[cfg(test)]

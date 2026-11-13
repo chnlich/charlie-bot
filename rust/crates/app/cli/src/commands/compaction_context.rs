@@ -354,24 +354,12 @@ fn newlines(text: &str) -> String {
 // Error text: the OS error string and the JSON parser's message.
 // ---------------------------------------------------------------------------
 
-/// An OS error with a filename: `[Errno N] <strerror>: '<path>'`. Rust's `io::Error` carries no
-/// filename, so `os_error` is the one place the failing path is supplied; here it is always the one
-/// the command opened.
-fn os_error(path: &str, error: &std::io::Error) -> String {
-  match error.raw_os_error() {
-    Some(errno) => {
-      let text = error.to_string();
-      let strerror = text.strip_suffix(&format!(" (os error {errno})")).unwrap_or(&text);
-      format!("[Errno {errno}] {strerror}: {}", str_repr(path))
-    }
-    None => format!("{error}: {}", str_repr(path)),
-  }
-}
-
 /// The error text of a chat log that could not be read: the OS error sentence with the failing path.
 fn log_read_error(events_path: &Path, error: LogReadError) -> String {
   match error {
-    LogReadError::Io(error) | LogReadError::Line { error, .. } => os_error(&paths::display(events_path), &error),
+    LogReadError::Io(error) | LogReadError::Line { error, .. } => {
+      charliebot_core::os_error::text(&error, &str_repr(&paths::display(events_path)))
+    }
     LogReadError::Utf8(error) => utf8_error(error.as_bytes(), &error.utf8_error()),
   }
 }
@@ -677,7 +665,8 @@ fn is_file(path: &Path) -> bool {
 }
 
 fn read_text(path: &Path) -> Result<String, String> {
-  let bytes = std::fs::read(path).map_err(|error| os_error(&paths::display(path), &error))?;
+  let bytes =
+    std::fs::read(path).map_err(|error| charliebot_core::os_error::text(&error, &str_repr(&paths::display(path))))?;
   let text = decode_utf8(&bytes)?;
   Ok(newlines(&text))
 }

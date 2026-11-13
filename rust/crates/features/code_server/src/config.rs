@@ -11,7 +11,6 @@ use charliebot_core::json_loads::codec_error_text;
 use charliebot_core::paths;
 use charliebot_core::repo_root::CONFIGS_DIR_NAME;
 use charliebot_core::text_repr;
-use nix::errno::Errno;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 
@@ -86,11 +85,7 @@ fn read_document(path: &Path) -> Result<Value, String> {
 
 /// The failure text: `[Errno 13] Permission denied: '<path>'`.
 fn os_error_text(error: &io::Error, path: &Path) -> String {
-  let path = text_repr::str_repr(&paths::display(path));
-  match error.raw_os_error() {
-    Some(code) => format!("[Errno {code}] {}: {path}", Errno::from_raw(code).desc()),
-    None => format!("{error}: {path}"),
-  }
+  charliebot_core::os_error::text(error, &text_repr::str_repr(&paths::display(path)))
 }
 
 /// The decode-failure text: the first byte that cannot start or continue a sequence, and the reason.

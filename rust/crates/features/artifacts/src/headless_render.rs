@@ -563,14 +563,12 @@ fn decimal_integer(text: &str) -> Result<i32, String> {
 }
 
 fn os_error(error: &std::io::Error, path: &Path) -> String {
-  let (number, description) = match error.kind() {
-    ErrorKind::NotFound => (2, "No such file or directory"),
-    ErrorKind::PermissionDenied => (13, "Permission denied"),
-    ErrorKind::AlreadyExists => (17, "File exists"),
-    ErrorKind::InvalidInput => (22, "Invalid argument"),
-    _ => return error.to_string(),
-  };
-  format!("[Errno {number}] {description}: {}", text_repr::str_repr(&path.to_string_lossy()))
+  match error.kind() {
+    ErrorKind::NotFound | ErrorKind::PermissionDenied | ErrorKind::AlreadyExists | ErrorKind::InvalidInput => {
+      charliebot_core::os_error::text(error, &text_repr::str_repr(&path.to_string_lossy()))
+    }
+    _ => error.to_string(),
+  }
 }
 
 fn charliebot_whitespace(character: char) -> bool {

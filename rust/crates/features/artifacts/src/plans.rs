@@ -300,10 +300,8 @@ pub(crate) fn os_escape(error: &io::Error, path: &Path) -> EscapedError {
 
 /// The failure text for a failed call on `path`: `[Errno N] strerror: 'path'`.
 fn os_error_text(error: &io::Error, path: &Path) -> String {
-  let errno = error.raw_os_error().expect("a filesystem call fails with an errno");
-  let message = error.to_string();
-  let strerror = message.strip_suffix(&format!(" (os error {errno})")).unwrap_or(message.as_str());
-  format!("[Errno {errno}] {strerror}: {}", text_repr::str_repr(&path.to_string_lossy()))
+  let filename = text_repr::str_repr(&path.to_string_lossy());
+  charliebot_core::os_error::errno_text(error, &filename).expect("a filesystem call fails with an errno")
 }
 
 /// The decode-failure text for the UTF-8 failure at `error` in `bytes`.

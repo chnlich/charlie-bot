@@ -180,43 +180,41 @@ rewrite_command() {
   REWRITTEN=("${rewritten[@]}")
 }
 
-# The other directions' clones are standalone repositories on this host, so the list that the
-# launcher computed there cannot see their work, and two directions pick topics in rust/. Every
-# file that those clones change therefore joins the round's list before the clone check: each
-# committed path whose branch version origin/main's history does not hold, for a branch whose commits
-# do not all land, plus the uncommitted and untracked paths of the checkout — each side under the
-# same landed-version and landed-removal rules the sourced functions carry. The directions start in a
-# burst after a release, so two runners read one clone at once, and a clone's own origin/main is a ref
-# its owner fetches too: this runner fetches into the ref its direction owns, writes no shared
-# FETCH_HEAD, and compares against that ref, so the clones' refs/remotes/origin/main stay with their
-# owners. A branch without a merge base is skipped with a note. The runner's own checkout is no
-# direction's clone and contributes nothing.
+# The other directions' clones are standalone repositories, so the host list cannot see their worktrees. The
+# sourced in-flight rule supplies the same claimant and path functions. No task names these remote clone paths, so
+# each clone keeps its branch and dirty paths under the no-task rule.
 other_inflight_files() {
-  # The rule is inflight-files.sh's alone: the launch directory carries the copy the launcher's
-  # list was made with, and sourcing it defines the rule functions this scan calls.
   source "$LAUNCH_DIR/inflight-files.sh"
-  local clone other branch merge_base main_ref origin_url
+  local clone other branch merge_base main_ref origin_url current_branch
   main_ref="refs/improve/inflight/$direction"
   for clone in "$HOME_DIR"/improve/*/charlie-bot; do
     [[ -d $clone ]] || continue
     [[ $clone == "$RUNNER_ROOT/charlie-bot" ]] && continue
     other=$(basename -- "$(dirname -- "$clone")")
     [[ $other == "$direction" ]] && continue
-    # The fetch names the URL instead of the remote, because a named remote's fetch also updates
-    # the remote's tracking ref, and that update is the shared write this fetch must not make.
+    task_state_by_worktree["$clone"]=no_task
     origin_url=$(git -C "$clone" remote get-url origin) || fail 1 "cannot read the origin of $clone"
     git -C "$clone" fetch --quiet --no-tags --no-write-fetch-head "$origin_url" \
       +refs/heads/main:"$main_ref" || fail 1 "cannot fetch origin/main in $clone"
     while IFS= read -r branch; do
       if merge_base=$(git -C "$clone" merge-base "$main_ref" "$branch" 2>/dev/null); then
-        if ! commits_landed "$clone" "$main_ref" "$merge_base" "$branch"; then
-          list_unlanded_paths "$clone" "$main_ref" "$merge_base" "$branch"
+        if worktree_has_live_claimant "$clone" "$branch"; then
+          list_committed_paths "$clone" "$merge_base" "$branch"
         fi
       else
         printf 'improve runner: skip branch %s in %s: no merge base with origin/main\n' "$branch" "$clone" >&2
       fi
     done < <(git -C "$clone" for-each-ref --format='%(refname:short)' refs/heads/)
-    list_worktree_directory_paths "$clone" "$main_ref" "$clone"
+    if ! current_branch=$(git -C "$clone" symbolic-ref --quiet --short HEAD); then
+      current_branch=detached
+    fi
+    if git -C "$clone" merge-base "$main_ref" HEAD >/dev/null 2>&1; then
+      if worktree_has_live_claimant "$clone" "$current_branch"; then
+        list_dirty_paths "$clone"
+      fi
+    else
+      printf 'improve runner: skip worktree %s: no merge base with origin/main\n' "$clone" >&2
+    fi
   done
 }
 

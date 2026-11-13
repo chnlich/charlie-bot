@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use charliebot_shell_harness as harness;
 use sha2::{Digest as _, Sha256};
-use world::{DIRECTION, GATEWAY_TOKEN, SESSION_ID, World};
+use world::{DIRECTION, GATEWAY_TOKEN, World};
 
 /// The prompt the server writes to the launcher's standard input for a plain-text run.
 const PROMPT: &str = "Improve one topic in the performance direction.\nReply with the word OK.\n";
@@ -742,16 +742,12 @@ fn the_other_directions_clone_adds_its_files_to_the_rounds_in_flight_list() {
   assert_eq!(run.code, 0, "{}", run.describe());
   assert!(world.claude_ran(), "the fake claude did not run:\n{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
-  for changed in ["committed.md", "base.md", "untracked.md"] {
+  for changed in ["committed.md", "base.md", "dropped.md", "untracked.md"] {
     assert!(
       list.lines().any(|line| line == changed),
       "the in-flight list misses the {changed} change of the ux clone:\n{list}"
     );
   }
-  assert!(
-    !list.lines().any(|line| line == "dropped.md"),
-    "the in-flight list names the path whose removal main landed:\n{list}"
-  );
 }
 
 #[test]
@@ -775,7 +771,7 @@ fn an_open_pull_requests_files_appear_in_the_in_flight_list() {
 
 #[test]
 #[ignore = "integration"]
-fn a_squash_merged_worktree_branch_contributes_no_files() {
+fn a_squash_merged_branch_of_an_unowned_worktree_stays_claimed() {
   let world = World::new();
   // A leftover branch of a round that already landed, checked out in its worktree as the host leaves it.
   let checkout = world.sandbox.root().join("stale-checkout");
@@ -798,7 +794,7 @@ fn a_squash_merged_worktree_branch_contributes_no_files() {
 
   assert_eq!(run.code, 0, "{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
-  assert!(!list.lines().any(|line| line == "stale.md"), "the in-flight list names a landed branch's file:\n{list}");
+  assert!(list.lines().any(|line| line == "stale.md"), "the unowned worktree drops its landed branch file:\n{list}");
 }
 
 #[test]
@@ -812,7 +808,7 @@ fn an_unlanded_branch_names_its_file_even_when_origin_main_has_changed_it() {
   fs::write(checkout.join("shared.md"), "topic\n").expect("the topic's file");
   world.git(&checkout, &["add", "-A"]);
   world.git(&checkout, &["commit", "-q", "-m", "synthetic unlanded topic"]);
-  // origin/main changes the same file with another change, so the branch's version never reached it.
+  // Main changes the same file after the branch, while the unowned worktree keeps its committed path.
   fs::write(world.repo.join("shared.md"), "another change\n").expect("the other change");
   world.git(&world.repo, &["add", "-A"]);
   world.git(&world.repo, &["commit", "-q", "-m", "change the shared file on main"]);
@@ -832,10 +828,9 @@ fn an_unlanded_branch_names_its_file_even_when_origin_main_has_changed_it() {
 
 #[test]
 #[ignore = "integration"]
-fn a_worktree_branch_names_only_the_paths_whose_versions_did_not_land() {
+fn an_unowned_worktree_branch_keeps_all_changed_paths() {
   let world = World::new();
-  // The base carries the two files the branch deletes, so each deletion has a version that origin/main may or may
-  // not hold: main drops `together.md` too, and keeps `base.md`.
+  // The branch changes four paths: two additions and two deletions.
   fs::write(world.repo.join("base.md"), "base\n").expect("the base file");
   fs::write(world.repo.join("together.md"), "together\n").expect("the together file");
   world.git(&world.repo, &["add", "-A"]);
@@ -843,15 +838,14 @@ fn a_worktree_branch_names_only_the_paths_whose_versions_did_not_land() {
   world.git(&world.repo, &["branch", "charliebot/partial"]);
   let checkout = world.sandbox.root().join("partial-checkout");
   world.git(&world.repo, &["worktree", "add", "-q", &checkout.display().to_string(), "charliebot/partial"]);
-  // The branch changes four paths: two additions, one deletion whose version lands, one whose version never lands.
+  // Main later lands one added path and one deletion, but the unowned worktree keeps all four changes.
   fs::write(checkout.join("landed.md"), "landed\n").expect("the landed topic's file");
   fs::write(checkout.join("unlanded.md"), "unlanded\n").expect("the unlanded topic's file");
   fs::remove_file(checkout.join("base.md")).expect("remove the base file");
   fs::remove_file(checkout.join("together.md")).expect("remove the together file");
   world.git(&checkout, &["add", "-A"]);
   world.git(&checkout, &["commit", "-q", "-m", "synthetic partial topic"]);
-  // origin/main receives the branch's version of `landed.md`, then moves the same path on, and drops `together.md`.
-  // The launcher's tracking ref still points behind all of it, so only the script's fetch sees it.
+  // Main later lands the added path, changes it again, and deletes one path from the branch.
   fs::write(world.repo.join("landed.md"), "landed\n").expect("the landed version");
   world.git(&world.repo, &["add", "-A"]);
   world.git(&world.repo, &["commit", "-q", "-m", "land the partial topic's file"]);
@@ -869,12 +863,16 @@ fn a_worktree_branch_names_only_the_paths_whose_versions_did_not_land() {
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
   let mut listed: Vec<&str> = list.lines().collect();
   listed.sort_unstable();
-  assert_eq!(listed, ["base.md", "unlanded.md"], "the in-flight list is not the branch's unlanded paths:\n{list}");
+  assert_eq!(
+    listed,
+    ["base.md", "landed.md", "together.md", "unlanded.md"],
+    "the unowned branch loses a changed path:\n{list}"
+  );
 }
 
 #[test]
 #[ignore = "integration"]
-fn a_rebased_branch_whose_resolved_copy_differs_names_nothing() {
+fn an_unowned_rebased_branch_keeps_its_committed_path() {
   let world = World::new();
   // A leftover branch of a round that a rebase landed, checked out in its worktree as the host leaves it.
   let checkout = world.sandbox.root().join("rebased-checkout");
@@ -883,7 +881,7 @@ fn a_rebased_branch_whose_resolved_copy_differs_names_nothing() {
   fs::write(checkout.join("rebased.md"), "topic\n").expect("the topic's file");
   world.git(&checkout, &["add", "-A"]);
   world.git(&checkout, &["commit", "-q", "-m", "synthetic rebased topic"]);
-  // The rebase keeps the commit's subject, and its conflict resolution changes the file's content.
+  // Main commits the same subject with a resolved file value.
   fs::write(world.repo.join("rebased.md"), "topic, resolved\n").expect("the resolved file");
   world.git(&world.repo, &["add", "-A"]);
   world.git(&world.repo, &["commit", "-q", "-m", "synthetic rebased topic"]);
@@ -895,15 +893,15 @@ fn a_rebased_branch_whose_resolved_copy_differs_names_nothing() {
 
   assert_eq!(run.code, 0, "{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
-  assert!(!list.lines().any(|line| line == "rebased.md"), "the in-flight list names a rebased branch's file:\n{list}");
+  assert!(list.lines().any(|line| line == "rebased.md"), "the unowned worktree drops its committed path:\n{list}");
 }
 
 #[test]
 #[ignore = "integration"]
-fn an_other_directions_clone_is_read_after_its_origin_main_is_fetched() {
+fn an_unowned_other_directions_clone_keeps_a_landed_branch_path() {
   let world = World::new();
   let clone = world.other_direction_clone("ux");
-  // The topic lands on the remote's main as a squash merge, as a closed round's pull request does.
+  // The topic lands on the remote's main as a squash merge, but no task names the clone.
   world.git(&clone, &["switch", "-q", "-c", "improve/ux/stale"]);
   fs::write(clone.join("stale.md"), "landed\n").expect("the landed topic's file");
   world.git(&clone, &["add", "-A"]);
@@ -924,14 +922,14 @@ fn an_other_directions_clone_is_read_after_its_origin_main_is_fetched() {
   assert_eq!(run.code, 0, "{}", run.describe());
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
   assert!(
-    !list.lines().any(|line| line == "stale.md"),
-    "the in-flight list names a branch that a stale origin/main made look live:\n{list}"
+    list.lines().any(|line| line == "stale.md"),
+    "the unowned clone drops a committed path after main lands it:\n{list}"
   );
 }
 
 #[test]
 #[ignore = "integration"]
-fn an_other_directions_branch_names_only_the_paths_whose_versions_did_not_land() {
+fn an_unowned_other_directions_branch_keeps_all_changed_paths() {
   let world = World::new();
   let clone = world.other_direction_clone("ux");
   // The topic adds two files and deletes `base.md`, which origin/main never drops.
@@ -941,7 +939,7 @@ fn an_other_directions_branch_names_only_the_paths_whose_versions_did_not_land()
   fs::remove_file(clone.join("base.md")).expect("remove the base file");
   world.git(&clone, &["add", "-A"]);
   world.git(&clone, &["commit", "-q", "-m", "synthetic partial topic"]);
-  // origin/main receives the topic's version of `landed.md`, then moves the same path on.
+  // Main later lands the added path, then changes it again.
   let origin = world.other_direction_origin("ux").display().to_string();
   let landing = world.sandbox.dir("landing/ux");
   world.git(&world.sandbox.dir("landing"), &["clone", "-q", &origin, "ux"]);
@@ -958,7 +956,7 @@ fn an_other_directions_branch_names_only_the_paths_whose_versions_did_not_land()
   let list = fs::read_to_string(&world.claude_inflight).expect("the round recorded its in-flight list");
   let mut listed: Vec<&str> = list.lines().collect();
   listed.sort_unstable();
-  assert_eq!(listed, ["base.md", "unlanded.md"], "the in-flight list is not the ux clone's unlanded paths:\n{list}");
+  assert_eq!(listed, ["base.md", "landed.md", "unlanded.md"], "the unowned clone loses a changed path:\n{list}");
 }
 
 #[test]
@@ -1239,7 +1237,7 @@ fn a_locked_origin_main_ref_does_not_stop_the_launchers_in_flight_list() {
 
 #[test]
 #[ignore = "integration"]
-fn a_path_whose_removal_main_landed_is_not_named_by_the_in_flight_list() {
+fn an_unowned_worktree_keeps_a_path_that_main_deleted() {
   let world = World::new();
   // Two tracked files on main, as a live repository's paths are.
   fs::write(world.repo.join("old.md"), "old\n").expect("the old path's file");
@@ -1272,62 +1270,47 @@ fn a_path_whose_removal_main_landed_is_not_named_by_the_in_flight_list() {
   let run = harness::run(&mut command);
 
   assert_eq!(run.code, 0, "{}", run.describe());
-  // The old path carries only landed work: main's own deletion. The live path's unlanded branch
-  // version, its uncommitted change, the untracked file and the open pull request's file stay.
+  // No task names this worktree, so its committed and dirty paths stay alongside the open pull request's file.
   let mut listed: Vec<&str> = run.stdout.lines().collect();
   listed.sort_unstable();
   assert_eq!(
     listed,
-    ["fresh.md", "live.md", "pr-only.md"],
-    "the in-flight list does not follow the landed-removal rule:\n{}",
+    ["fresh.md", "live.md", "old.md", "pr-only.md"],
+    "the in-flight list drops a path from an unowned worktree:\n{}",
     run.describe()
   );
 }
 
-#[test]
-#[ignore = "integration"]
-fn a_branch_landed_by_a_squash_merge_names_no_committed_file() {
-  let world = World::new();
-  // A branch whose one commit reaches main through a squash merge: main's commit carries the
-  // branch's content under a retitled subject, so neither git cherry's patch id nor the subject
-  // finds the landing, and the blob rule must.
-  world.git(&world.repo, &["switch", "-q", "-c", "charliebot/squashed"]);
-  fs::write(world.repo.join("topic.md"), "topic\n").expect("the topic's file");
-  world.git(&world.repo, &["add", "-A"]);
-  world.git(&world.repo, &["commit", "-q", "-m", "synthetic topic"]);
-  world.git(&world.repo, &["switch", "-q", "main"]);
-  fs::write(world.repo.join("topic.md"), "topic\n").expect("the squash commit's content");
-  world.git(&world.repo, &["add", "-A"]);
-  world.git(&world.repo, &["commit", "-q", "-m", "synthetic topic, retitled (#12)"]);
-  world.git(&world.repo, &["push", "-q", "origin", "main"]);
-
-  let mut command = harness::command("bash", &world.env());
-  command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg("improve/perf/");
-  let run = harness::run(&mut command);
-
-  assert_eq!(run.code, 0, "{}", run.describe());
-  assert!(
-    !run.stdout.lines().any(|line| line == "topic.md"),
-    "the in-flight list names the squash-merged branch's file:\n{}",
-    run.describe()
-  );
+/// Writes one task lifecycle state to the profile home's task store.
+fn write_task_state(world: &World, task_id: &str, open: bool) -> std::path::PathBuf {
+  let session_dir = world.profile_home.join(format!("sessions/{task_id}"));
+  fs::create_dir_all(session_dir.join("data")).expect("the task session directory");
+  let metadata = serde_json::json!({"id": task_id});
+  fs::write(session_dir.join("metadata.json"), format!("{metadata:#}\n")).expect("the task metadata");
+  let event = if open {
+    serde_json::json!({"id": format!("{task_id}-state"), "type": "task_reopened"})
+  } else {
+    serde_json::json!({"id": format!("{task_id}-state"), "type": "task_closed", "outcome": "completed"})
+  };
+  let events = session_dir.join("data/chat_events.jsonl");
+  fs::write(&events, format!("{event}\n")).expect("the task lifecycle event");
+  events
 }
 
-/// Writes one run record into the world's profile home, whose `ended_at` is set only when `ended` is.
-fn write_run_record(world: &World, run_id: &str, worktree: &std::path::Path, ended: Option<&str>) {
-  let run_dir = world.profile_home.join(format!("sessions/{SESSION_ID}/data/runs/{run_id}"));
+/// Writes a run record that links one task to its worktree. Its end time does not set the task state.
+fn write_run_record(world: &World, task_id: &str, run_id: &str, worktree: &std::path::Path) {
+  let run_dir = world.profile_home.join(format!("sessions/{task_id}/data/runs/{run_id}"));
   fs::create_dir_all(&run_dir).expect("the run record directory");
   let record = serde_json::json!({
     "id": run_id,
     "worktree_path": worktree.display().to_string(),
     "started_at": "2026-11-10T01:00:00.000000Z",
-    "ended_at": ended,
+    "ended_at": "2026-11-10T02:00:00.000000Z",
   });
   fs::write(run_dir.join("metadata.json"), format!("{record:#}\n")).expect("the run record");
 }
 
-/// One worktree on a branch whose commit has landed, holding an uncommitted change, a staged
-/// change and an untracked file, as a kept task worktree does after its run ended.
+/// One landed branch with dirty, staged and untracked paths, as a task worktree can hold after its commits land.
 fn landed_worktree_with_uncommitted_state(world: &World, name: &str) -> std::path::PathBuf {
   let checkout = world.sandbox.root().join(name);
   world
@@ -1346,20 +1329,76 @@ fn landed_worktree_with_uncommitted_state(world: &World, name: &str) -> std::pat
   checkout
 }
 
+/// One unlanded branch with both a committed path and a dirty path.
+fn unlanded_worktree_with_uncommitted_state(world: &World, name: &str) -> std::path::PathBuf {
+  let checkout = world.sandbox.root().join(name);
+  world
+    .git(&world.repo, &["worktree", "add", "-q", &checkout.display().to_string(), "-b", &format!("charliebot/{name}")]);
+  fs::write(checkout.join("topic.md"), "topic\n").expect("the topic's file");
+  world.git(&checkout, &["add", "-A"]);
+  world.git(&checkout, &["commit", "-q", "-m", &format!("synthetic {name} topic")]);
+  fs::write(checkout.join("dirty.md"), "uncommitted\n").expect("the uncommitted change");
+  checkout
+}
+
 /// Runs the in-flight list out of its checkout, as the launcher does.
-fn run_inflight_list(world: &World) -> harness::Run {
-  let mut command = harness::command("bash", &world.env());
+fn run_inflight_list_with_env(world: &World, env: &harness::Env) -> harness::Run {
+  let mut command = harness::command("bash", env);
   command.arg(world.repo.join("dev/improve/inflight-files.sh")).arg("improve/perf/");
   harness::run(&mut command)
 }
 
+fn run_inflight_list(world: &World) -> harness::Run {
+  run_inflight_list_with_env(world, &world.env())
+}
+
 #[test]
 #[ignore = "integration"]
-fn a_landed_process_free_worktree_whose_run_closed_names_no_uncommitted_path() {
+fn an_open_task_keeps_an_unlanded_worktrees_paths_claimed_after_its_run_ends() {
   let world = World::new();
-  let checkout = landed_worktree_with_uncommitted_state(&world, "closed-run");
-  // The newest run record naming the worktree carries an ended_at, as a closed task run does.
-  write_run_record(&world, "11111111-0000-0000-0000-000000000001", &checkout, Some("2026-11-10T02:00:00.000000Z"));
+  let checkout = unlanded_worktree_with_uncommitted_state(&world, "open-task");
+  write_task_state(&world, "task-open", true);
+  write_run_record(&world, "task-open", "run-open-ended", &checkout);
+
+  let run = run_inflight_list(&world);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  for listed in ["topic.md", "dirty.md"] {
+    assert!(
+      run.stdout.lines().any(|line| line == listed),
+      "the in-flight list drops the open task's path {listed} after its run ended:\n{}",
+      run.describe()
+    );
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_closed_task_without_other_claimants_drops_an_unlanded_worktrees_paths() {
+  let world = World::new();
+  let checkout = unlanded_worktree_with_uncommitted_state(&world, "closed-task");
+  write_task_state(&world, "task-closed", false);
+  write_run_record(&world, "task-closed", "run-closed", &checkout);
+
+  let run = run_inflight_list(&world);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  for listed in ["topic.md", "dirty.md"] {
+    assert!(
+      !run.stdout.lines().any(|line| line == listed),
+      "the in-flight list keeps the closed task's path {listed}:\n{}",
+      run.describe()
+    );
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_closed_task_drops_a_landed_worktrees_paths() {
+  let world = World::new();
+  let checkout = landed_worktree_with_uncommitted_state(&world, "closed-landed-task");
+  write_task_state(&world, "task-closed-landed", false);
+  write_run_record(&world, "task-closed-landed", "run-closed-landed", &checkout);
 
   let run = run_inflight_list(&world);
 
@@ -1367,7 +1406,7 @@ fn a_landed_process_free_worktree_whose_run_closed_names_no_uncommitted_path() {
   for listed in ["topic.md", "staged.md", "untracked.md"] {
     assert!(
       !run.stdout.lines().any(|line| line == listed),
-      "the in-flight list names the closed run's worktree path {listed}:\n{}",
+      "the in-flight list keeps the closed landed task's path {listed}:\n{}",
       run.describe()
     );
   }
@@ -1375,11 +1414,33 @@ fn a_landed_process_free_worktree_whose_run_closed_names_no_uncommitted_path() {
 
 #[test]
 #[ignore = "integration"]
-fn an_open_run_keeps_a_landed_worktrees_uncommitted_paths_named() {
+fn an_open_pull_request_keeps_a_closed_tasks_worktree_paths_claimed() {
   let world = World::new();
-  let checkout = landed_worktree_with_uncommitted_state(&world, "open-run");
-  // The newest run record naming the worktree carries no ended_at, as a live task run does.
-  write_run_record(&world, "11111111-0000-0000-0000-000000000002", &checkout, None);
+  let checkout = unlanded_worktree_with_uncommitted_state(&world, "closed-pr");
+  write_task_state(&world, "task-closed-pr", false);
+  write_run_record(&world, "task-closed-pr", "run-closed-pr", &checkout);
+  let pull_requests = world.sandbox.root().join("open-pull-requests.tsv");
+  fs::write(&pull_requests, "17\tcharliebot/closed-pr\tpr-only.md\n").expect("the open pull request");
+  let mut env = world.env();
+  env.insert("FAKE_GH_PRS".to_string(), pull_requests.display().to_string());
+
+  let run = run_inflight_list_with_env(&world, &env);
+
+  assert_eq!(run.code, 0, "{}", run.describe());
+  for listed in ["topic.md", "dirty.md", "pr-only.md"] {
+    assert!(
+      run.stdout.lines().any(|line| line == listed),
+      "the open pull request does not keep its worktree path {listed}:\n{}",
+      run.describe()
+    );
+  }
+}
+
+#[test]
+#[ignore = "integration"]
+fn a_worktree_without_a_task_name_keeps_its_committed_and_uncommitted_paths() {
+  let world = World::new();
+  landed_worktree_with_uncommitted_state(&world, "no-task");
 
   let run = run_inflight_list(&world);
 
@@ -1387,7 +1448,7 @@ fn an_open_run_keeps_a_landed_worktrees_uncommitted_paths_named() {
   for listed in ["topic.md", "staged.md", "untracked.md"] {
     assert!(
       run.stdout.lines().any(|line| line == listed),
-      "the in-flight list drops the open run's worktree path {listed}:\n{}",
+      "the in-flight list drops the unowned worktree path {listed}:\n{}",
       run.describe()
     );
   }
@@ -1395,55 +1456,11 @@ fn an_open_run_keeps_a_landed_worktrees_uncommitted_paths_named() {
 
 #[test]
 #[ignore = "integration"]
-fn an_unlanded_branch_keeps_its_worktrees_uncommitted_paths_named() {
+fn a_process_in_a_closed_tasks_worktree_keeps_its_paths_claimed() {
   let world = World::new();
-  // The branch holds a commit origin/main does not carry, so its worktree's uncommitted state
-  // stays named even though the run record is closed.
-  let checkout = world.sandbox.root().join("unlanded");
-  world.git(&world.repo, &["worktree", "add", "-q", &checkout.display().to_string(), "-b", "charliebot/unlanded"]);
-  fs::write(checkout.join("topic.md"), "topic\n").expect("the topic's file");
-  world.git(&checkout, &["add", "-A"]);
-  world.git(&checkout, &["commit", "-q", "-m", "synthetic unlanded topic"]);
-  fs::write(checkout.join("dirty.md"), "uncommitted\n").expect("the uncommitted change");
-  write_run_record(&world, "11111111-0000-0000-0000-000000000003", &checkout, Some("2026-11-10T02:00:00.000000Z"));
-
-  let run = run_inflight_list(&world);
-
-  assert_eq!(run.code, 0, "{}", run.describe());
-  assert!(
-    run.stdout.lines().any(|line| line == "dirty.md"),
-    "the in-flight list drops the unlanded branch's worktree path:\n{}",
-    run.describe()
-  );
-}
-
-#[test]
-#[ignore = "integration"]
-fn a_worktree_no_run_record_names_keeps_its_uncommitted_paths_named() {
-  let world = World::new();
-  // The worktree is not any run's worktree_path, so the run-record condition cannot hold, and
-  // the rule that drops a claim only when all three conditions hold keeps the paths named.
-  let _checkout = landed_worktree_with_uncommitted_state(&world, "no-record");
-
-  let run = run_inflight_list(&world);
-
-  assert_eq!(run.code, 0, "{}", run.describe());
-  for listed in ["topic.md", "staged.md", "untracked.md"] {
-    assert!(
-      run.stdout.lines().any(|line| line == listed),
-      "the in-flight list drops the unrecorded worktree path {listed}:\n{}",
-      run.describe()
-    );
-  }
-}
-
-#[test]
-#[ignore = "integration"]
-fn a_process_in_a_landed_worktree_keeps_its_uncommitted_paths_named() {
-  let world = World::new();
-  let checkout = landed_worktree_with_uncommitted_state(&world, "with-process");
-  // The run is closed, so only the process keeps the claim.
-  write_run_record(&world, "11111111-0000-0000-0000-000000000004", &checkout, Some("2026-11-10T02:00:00.000000Z"));
+  let checkout = unlanded_worktree_with_uncommitted_state(&world, "with-process");
+  write_task_state(&world, "task-with-process", false);
+  write_run_record(&world, "task-with-process", "run-with-process", &checkout);
   let mut process = std::process::Command::new("bash")
     .arg("-c")
     .arg("exec sleep 30")
@@ -1461,32 +1478,32 @@ fn a_process_in_a_landed_worktree_keeps_its_uncommitted_paths_named() {
   process.kill().expect("stop the worktree process");
   process.wait().expect("reap the worktree process");
   assert_eq!(run.code, 0, "{}", run.describe());
-  assert!(
-    run.stdout.lines().any(|line| line == "topic.md"),
-    "the in-flight list drops the worked-in worktree's uncommitted path:\n{}",
-    run.describe()
-  );
+  for listed in ["topic.md", "dirty.md"] {
+    assert!(
+      run.stdout.lines().any(|line| line == listed),
+      "the in-flight list drops the process-held worktree path {listed}:\n{}",
+      run.describe()
+    );
+  }
 }
 
 #[test]
 #[ignore = "integration"]
-fn an_unreadable_run_record_stops_the_list_with_an_error() {
+fn an_unreadable_task_state_stops_the_list_with_an_error() {
   use std::os::unix::fs::PermissionsExt;
   let world = World::new();
-  let checkout = landed_worktree_with_uncommitted_state(&world, "unreadable-record");
-  let run_id = "11111111-0000-0000-0000-000000000005";
-  write_run_record(&world, run_id, &checkout, Some("2026-11-10T02:00:00.000000Z"));
-  let record = world.profile_home.join(format!("sessions/{SESSION_ID}/data/runs/{run_id}/metadata.json"));
-  fs::set_permissions(&record, fs::Permissions::from_mode(0o000)).expect("the unreadable run record");
-  assert!(fs::File::open(&record).is_err(), "the test needs a run record this user cannot read");
+  let checkout = unlanded_worktree_with_uncommitted_state(&world, "unreadable-task");
+  let events = write_task_state(&world, "task-unreadable", false);
+  write_run_record(&world, "task-unreadable", "run-unreadable", &checkout);
+  fs::set_permissions(&events, fs::Permissions::from_mode(0o000)).expect("the unreadable task state");
+  assert!(fs::File::open(&events).is_err(), "the test needs task state this user cannot read");
 
   let run = run_inflight_list(&world);
 
-  // A record skipped as unreadable could be the newest one, so the list must stop rather than read the older record.
   assert_ne!(run.code, 0, "{}", run.describe());
   assert!(
-    run.stderr.contains(&format!("{} is unreadable", record.display())),
-    "the in-flight list does not name the unreadable run record:\n{}",
+    run.stderr.contains("cannot read the task-state condition") && run.stderr.contains(&events.display().to_string()),
+    "the in-flight list does not name the unreadable task state:\n{}",
     run.describe()
   );
 }

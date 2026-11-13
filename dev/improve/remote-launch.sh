@@ -226,8 +226,8 @@ pattern_file="$PROFILE_HOME/skills_leak_patterns.local.txt"
 [[ -r $pattern_file ]] || fail 1 "the leak pattern file is missing: $pattern_file"
 cp -- "$pattern_file" "$payload/skills_leak_patterns.local.txt"
 cp -- "$SCRIPT_DIR/remote-runner.sh" "$payload/remote-runner.sh"
-# The runner sources the in-flight rule from this copy, so its clone scan applies
-# the same landed-version and landed-removal rules the list above was made with.
+# The runner sources the in-flight rule from this copy, so its clone scan uses
+# the same claimant and path functions as the list above.
 cp -- "$SCRIPT_DIR/inflight-files.sh" "$payload/inflight-files.sh"
 # The runner clones its own checkout from this origin, so the round tools are built from the
 # runtime clone's repository and not from the direction clone's configuration.

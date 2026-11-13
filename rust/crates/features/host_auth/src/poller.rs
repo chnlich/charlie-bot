@@ -93,7 +93,8 @@ where
   }
 }
 
-/// Run the startup round after the gate, then let the caller continue its periodic loop.
+/// The startup round after the gate, then the caller's go-ahead for its periodic loop; false when the gate reports a
+/// stop.
 async fn first_round<F, Fut>(stop: &StartupStop, round: F) -> bool
 where
   F: FnOnce() -> Fut,
@@ -115,7 +116,7 @@ where
 /// past that census's visit.
 const FIRST_ROUND_DELAY: Duration = Duration::from_millis(300);
 
-/// Wait for readiness, then the startup tail; false when stopping instead.
+/// The wait for readiness and then the startup tail; false when stopping instead.
 async fn first_round_gate(stop: &StartupStop) -> bool {
   if !stop.ready().await {
     return false;

@@ -428,10 +428,10 @@ async fn test_apply_archives_worktree_changes_before_removing_it() {
         reopened: false,
       },
     );
-    if change == "tracked" {
-      fs::write(worktree.join("tracked.txt"), b"changed\n").unwrap();
-    } else {
-      fs::write(worktree.join("new.txt"), b"untracked contents\n").unwrap();
+    match change {
+      "tracked" => fs::write(worktree.join("tracked.txt"), b"changed\n").unwrap(),
+      "untracked" => fs::write(worktree.join("new.txt"), b"untracked contents\n").unwrap(),
+      other => panic!("unknown change {other}"),
     }
     let report = run(&roots, SweepMode::Apply, utc("2026-01-20T00:00:00Z")).await;
     let row = row_by_path(&report, &worktree);
@@ -441,12 +441,16 @@ async fn test_apply_archives_worktree_changes_before_removing_it() {
     assert!(archive.is_file());
     let files = tar_files(&archive);
     assert!(files.contains_key("tracked.patch"));
-    if change == "tracked" {
-      assert!(files["tracked.patch"].windows(b"changed".len()).any(|bytes| bytes == b"changed"));
-      assert!(!files.contains_key("untracked/new.txt"));
-    } else {
-      assert!(files["tracked.patch"].is_empty());
-      assert_eq!(files["untracked/new.txt"], b"untracked contents\n");
+    match change {
+      "tracked" => {
+        assert!(files["tracked.patch"].windows(b"changed".len()).any(|bytes| bytes == b"changed"));
+        assert!(!files.contains_key("untracked/new.txt"));
+      }
+      "untracked" => {
+        assert!(files["tracked.patch"].is_empty());
+        assert_eq!(files["untracked/new.txt"], b"untracked contents\n");
+      }
+      other => panic!("unknown change {other}"),
     }
   }
 }
@@ -521,8 +525,11 @@ async fn test_process_cwd_and_cmdline_paths_protect_a_worktree() {
     );
     let outside = leg.join("outside");
     fs::write(&outside, b"open file\n").unwrap();
-    let cwd = if source == "cwd" { worktree.as_path() } else { leg.as_path() };
-    let target = if source == "cmdline" { worktree.join("tracked.txt") } else { outside.clone() };
+    let (cwd, target) = match source {
+      "cwd" => (worktree.as_path(), outside.clone()),
+      "cmdline" => (leg.as_path(), worktree.join("tracked.txt")),
+      other => panic!("unknown source {other}"),
+    };
     let mut cmdline = b"python\0".to_vec();
     cmdline.extend_from_slice(target.to_str().unwrap().as_bytes());
     cmdline.push(0);
@@ -572,13 +579,17 @@ async fn test_process_root_exe_fd_and_maps_paths_protect_a_worktree() {
     let outside = leg.join("outside");
     fs::write(&outside, b"open file\n").unwrap();
     let target = worktree.join("tracked.txt");
-    let exe = if source == "exe" { target.as_path() } else { Path::new("/bin/sh") };
-    let fd = if source == "fd" { target.as_path() } else { outside.as_path() };
-    let process_root = if source == "root" { worktree.as_path() } else { Path::new("/") };
-    let maps = if source == "maps" {
-      format!("1000-2000 r-xp 00000000 08:01 123 {}\n", target.display())
-    } else {
-      String::new()
+    let (exe, fd, process_root, maps) = match source {
+      "exe" => (target.as_path(), outside.as_path(), Path::new("/"), String::new()),
+      "fd" => (Path::new("/bin/sh"), target.as_path(), Path::new("/"), String::new()),
+      "root" => (Path::new("/bin/sh"), outside.as_path(), worktree.as_path(), String::new()),
+      "maps" => (
+        Path::new("/bin/sh"),
+        outside.as_path(),
+        Path::new("/"),
+        format!("1000-2000 r-xp 00000000 08:01 123 {}\n", target.display()),
+      ),
+      other => panic!("unknown source {other}"),
     };
     fake_process(
       &roots.proc_root,

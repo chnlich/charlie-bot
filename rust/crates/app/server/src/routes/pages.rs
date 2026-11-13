@@ -488,8 +488,10 @@ fn page_response(body: Bytes, gzip: Option<Bytes>) -> Response {
     }
   };
   let mut response = builder.body(Body::from(served)).expect("a page response builds");
-  // `no-store` sends every back navigation and tab restore to the server, so the page never runs JavaScript from
-  // a cached copy that references an older static asset version.
+  // `no-store` names this body as a page: a page must never come out of a cache, because it names the static asset
+  // version it was built against and an older body runs an older script. The transport's entity-tag layer, outside
+  // this one, replaces the marker with `no-cache` and the body's tag, so every navigation still reaches the server and
+  // an unchanged body costs a `304` instead of a transfer.
   response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
   response
 }

@@ -4,3 +4,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script>
+    // A page answer revalidates instead of forbidding a cache, so the browser may keep the page in its back/forward
+    // cache. A restored page carries the DOM and the scripts it froze, so a restore reloads: the reload revalidates
+    // with the stored body's tag, costs one round trip when nothing changed, and never runs a script older than the
+    // server's static asset version.
+    addEventListener('pageshow', (event) => {
+      if (event.persisted) location.reload();
+    });
+  </script>

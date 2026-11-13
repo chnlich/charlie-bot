@@ -8,8 +8,8 @@
 //!
 //! A page marks its own body `no-store`, because a page must never come out of a cache: it names the static asset
 //! version it was built against, and an older body runs an older script. The layer replaces that marker with
-//! `no-cache` and the body's tag, so every navigation still reaches the server, and a body the browser already holds
-//! unchanged costs a `304` instead of a transfer.
+//! `no-cache` and the body's tag, so every navigation still reaches the server — a back/forward-cache restore reloads
+//! from the page prologue — and a body the browser already holds unchanged costs a `304` instead of a transfer.
 //!
 //! A handler that answers its own `ETag` has named the body's version, so the layer keeps that tag and skips the hash.
 //! The tag makes the same promise either way: two bodies share it only when they are the same body.

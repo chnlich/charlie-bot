@@ -39,7 +39,7 @@ printf '{"CHARLIEBOT_REPO_ROOT":"%s"}\n' "$CHARLIEBOT_REPO_ROOT" > "$here/run.js
 printf '%s\n' "fake_release_ready"
 "#;
 
-// The server waits in `wait`, not in a foreground `sleep`. Bash runs a trap only after its foreground child ends, and a
+// The server waits in `wait`, not in a foreground `sleep`. Bash runs a trap only after its foreground child ends. A
 // sleep forked but not yet exec'd when the group's SIGINT arrives keeps bash's handler, misses the signal, and runs
 // for an hour. `wait` returns on the trapped signal whatever the child did. The sleep's output goes to /dev/null, so
 // the pipe to tee closes when the server exits.
@@ -89,7 +89,7 @@ fn launcher_tee_outlives_sigint_and_records_the_exit_line() {
     log_text.find(MARKER_LINE).expect("the shutdown marker") < log_text.find(EXIT_LINE).expect("the exit line"),
     "the exit line must follow the shutdown marker: {log_text:?}"
   );
-  // The launcher's exit leaves the group to the guard's drop: closing the pipe's write end makes the watchdog kill
+  // The launcher's exit leaves the group to the guard's drop. Closing the pipe's write end makes the watchdog kill
   // what is left of the group, itself included, and wait reaps it.
   let group_id = child.group_id();
   drop(child);
@@ -101,7 +101,7 @@ fn launcher_tee_outlives_sigint_and_records_the_exit_line() {
   assert!(hold::all_ended_within(hold::END_WAIT, &[group_id]), "the watchdog still runs: {group_id}");
 }
 
-/// The launcher's whole group ends with its test process, which is killed here with SIGKILL: no guard runs, and the
+/// The launcher's whole group ends with its test process, which is killed here with SIGKILL. No guard runs, and the
 /// watchdog kills the group when the pipe's write end closes.
 #[test]
 #[ignore = "integration"]
@@ -610,7 +610,7 @@ fn replace_text(path: &Path, old: &str, new: &str) {
 }
 
 /// Starts the launcher in a process group of its own, under a watchdog that reads a pipe. The watchdog kills the
-/// group when the pipe's write end closes, which happens when this process ends however it ends, and it is the only
+/// group when the pipe's write end closes, which happens when this process ends however it ends. It is the only
 /// cleanup when this process is killed and no guard runs. The launcher gets SIGINT's default action, because the
 /// test sends SIGINT to the whole group.
 fn start_launcher(env: &Env) -> ProcessGroup {

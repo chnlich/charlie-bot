@@ -1,6 +1,6 @@
 //! The release's test world: one throwaway repository, release root, log root, stub directory and artifact fixture
 //! under a sandbox of stub commands. Each test builds its own, so nothing touches ~/charliebot-releases or the live
-//! home. A stub `gh` answers the authentication, repository, run and artifact queries from files beside it, and a stub
+//! home. A stub `gh` answers the authentication, repository, run and artifact queries from files beside it. A stub
 //! `systemctl` keeps the user manager untouched, so the preflight refusals and the stage verdicts run without
 //! downloading a real binary.
 

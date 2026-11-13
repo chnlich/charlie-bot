@@ -1,4 +1,4 @@
-//! The `mock-home` program's generator, run for real: one seed gives byte-identical output, the event-log sizes of a
+//! The `mock-home` program's generator, run for real. One seed gives byte-identical output, the event-log sizes of a
 //! mid-size run follow the production shape, and every finished turn ends with a separator. Each test writes its own
 //! output into a sandbox it owns. The served checks of the same generator run in the release tests, against a trial
 //! server.

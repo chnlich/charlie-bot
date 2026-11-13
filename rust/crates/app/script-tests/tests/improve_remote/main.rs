@@ -1,6 +1,6 @@
 //! One improve run: `dev/improve/remote-launch.sh` on this host, and `dev/improve/remote-runner.sh` on the
 //! remote host for a round or this host's local claude for a cron session's own turn. A fake `ssh` records its
-//! arguments and runs the remote side locally, and fake `claude`, `systemd-run`, `systemctl` and `cargo` record what
+//! arguments and runs the remote side locally. Fake `claude`, `systemd-run`, `systemctl` and `cargo` record what
 //! they receive, so each test checks the run's contract without a network, a server or a real remote host.
 //!
 //! The tests that assert a bound on time measure it: the approval preflight and the heartbeat stop must both finish
@@ -153,7 +153,7 @@ fn a_cron_sessions_own_turn_without_a_local_claude_exits_1_and_names_it() {
 fn a_round_worker_whose_parent_is_a_cron_session_still_runs_over_ssh() {
   let world = World::new();
   // The worker's metadata names PARENT_ID as its task_parent_id, and the cron task file binds
-  // PARENT_ID, so this run is a round even though a cron session is one link away.
+  // PARENT_ID. This run is therefore a round even though a cron session is one link away.
   let approval = world.sandbox.root().join("approval-needed");
   fs::write(&approval, "1\n").expect("the approval marker");
   let mut env = world.env();
@@ -624,9 +624,9 @@ fn an_active_scope_whose_round_is_over_is_stopped_and_the_round_starts() {
 #[ignore = "integration"]
 fn an_active_scope_with_a_launch_directory_but_no_leader_is_stopped_and_the_round_starts() {
   let world = World::new();
-  // A launch directory alone is not a live round: its wrapper removes it when it exits, and the
-  // leader that would name it is gone, so the scope's round is over and only a leftover process
-  // keeps the unit loaded.
+  // A launch directory alone is not a live round. Its wrapper removes it when it exits, and the
+  // leader that would name it is gone. The scope's round is therefore over, and only a leftover
+  // process keeps the unit loaded.
   let launch = world.remote_home.join("improve/launch/20261101T083100Z-1-100");
   fs::create_dir_all(&launch).expect("the finished round's launch directory");
   let mut env = world.env();
@@ -1126,8 +1126,8 @@ fn two_concurrent_runners_build_tools_once_and_preserve_one_shared_mock_home() {
     "synthetic-gateway:\n  api_key: synthetic-token\n",
   )
   .expect("the round's credentials file");
-  // The round home keeps the pattern file of the previous round, as the host's does, so both
-  // runners' copies take the in-place path instead of racing on a fresh file.
+  // The round home keeps the pattern file of the previous round, as the host's does. Both
+  // runners' copies therefore take the in-place path instead of racing on a fresh file.
   fs::write(world.remote_home.join("improve/home/skills_leak_patterns.local.txt"), "").expect("the pattern file");
 
   // Two directions start in the same second, and both need the commit that the runner bin lacks.

@@ -1,7 +1,7 @@
 //! The switch command's tests (scripts/switch-server.sh), run for real against stub commands and the stand-in servers.
 //!
 //! Every parametrized case is its own test. Each asserts the
-//! output lines and the exit code: the main module holds the preflight, readback and pane tests, `probe` the
+//! output lines and the exit code. The main module holds the preflight, readback and pane tests, `probe` the
 //! probe-turn tests, and `delegation` the delegation-check tests and the switch back they drive.
 
 mod cleanup;
@@ -271,8 +271,8 @@ fn test_backend_registration_reads_the_layout_of_each_build_split_back_to_pre_gr
   );
 }
 
-/// A switch between builds reads each build's registration where that build's tree keeps it: the backend's own crate
-/// after the split, the runtime/agents module before it, the agents crate before the grouping.
+/// A switch between builds reads each build's registration where that build's tree keeps it. The order is the
+/// backend's own crate after the split, the runtime/agents module before it, and the agents crate before the grouping.
 fn backend_registration_reads_the_layout_of_each_build(running: &str, target: &str, reported: &str, detail: &str) {
   let mut world = World::new();
   world.seed_live_run("run-layout", Some("agy-gemini-flash"));
@@ -310,7 +310,7 @@ fn test_pre_grouping_build_passes_the_preflight_with_a_live_run_split_layout() {
   pre_grouping_build_passes_the_preflight_with_a_live_run("rust");
 }
 
-/// A live switch from the build before the crate grouping passes: the preflight finds the live run's re-attachable
+/// A live switch from the build before the crate grouping passes. The preflight finds the live run's re-attachable
 /// backend type in the agents crate registration, then in the target build's own, grouped or split per backend.
 fn pre_grouping_build_passes_the_preflight_with_a_live_run(target: &str) {
   let mut world = World::new();
@@ -832,7 +832,7 @@ fn scan_blocks(world: &World) -> Vec<String> {
 }
 
 /// A loop that `charliebot improve stop` marked stopped keeps its controller and its active lock while the current
-/// iteration runs: the scan still blocks the restart, and the block line names the loop, its status and its signal.
+/// iteration runs. The scan still blocks the restart, and the block line names the loop, its status and its signal.
 #[test]
 #[ignore = "integration"]
 fn test_scan_blocks_a_stopped_loop_whose_controller_still_runs() {
@@ -862,8 +862,8 @@ fn test_scan_passes_a_loop_whose_lock_its_end_removed() {
   assert!(scan_blocks(&world).is_empty(), "{}", world.home_helper("scan").stdout);
 }
 
-/// A lock the end path leaked while the server kept running — the failure and completion leaks — still blocks, because
-/// the scan cannot tell it from a live controller.
+/// A lock the end path leaked while the server kept running — the failure and completion leaks — still blocks. The
+/// scan cannot tell it from a live controller.
 #[test]
 #[ignore = "integration"]
 fn test_scan_blocks_a_lock_leaked_in_the_same_server_lifetime() {

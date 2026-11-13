@@ -8,7 +8,8 @@
 # browser lives there too. Steps, in order:
 #
 #   1. build rust/target/release/{charliebot,charliebot-server,mock-home} when they are missing;
-#   2. write the fabricated session home with `mock-home generate` (240 sessions, view shape, seed 1);
+#   2. write the fabricated session home with `mock-home generate` (240 sessions, view shape, seed 1, English
+#      prose), so every seeded sentence, title and label reads in one language in the public README;
 #   3. start the isolated server through `scripts/release/trial.sh --serve` — the trial's own tree, its
 #      own home and a port from the trial range; the live server's port and home stay untouched — and
 #      hand the served command to this script's --inner mode, which fabricates the plan pages, waiting
@@ -334,21 +335,34 @@ class Cdp {
 }
 
 async function launchBrowser(binary) {
-  // The trial points TMPDIR into its own tree, whose path grows with the caller's scratch; the short
-  // caller TMPDIR comes back in README_CAPTURE_TMPDIR, so Chrome's singleton socket stays short.
+  // Chrome places its process-singleton socket under TMPDIR, and the trial points TMPDIR into its own
+  // tree, which is too long for the socket's 108-byte path. The caller's short TMPDIR comes back in
+  // README_CAPTURE_TMPDIR, so the profile goes there and the browser takes it as its TMPDIR.
   const shortTmp = process.env.README_CAPTURE_TMPDIR || process.env.TMPDIR || '/tmp';
   const userDataDir = fs.mkdtempSync(path.join(shortTmp, 'shoot-profile.'));
-  const log = fs.openSync(path.join(process.env.SHOOT_LOG || shortTmp, 'chrome.log'), 'a');
+  const logPath = path.join(process.env.SHOOT_LOG || shortTmp, 'chrome.log');
+  const log = fs.openSync(logPath, 'a');
   const child = spawn(binary, [
     '--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
     '--disable-background-networking', '--disable-component-update', '--disable-sync',
     '--metrics-recording-only', '--password-store=basic', '--use-mock-keychain',
     \`--user-data-dir=\${userDataDir}\`, '--remote-debugging-pipe', 'about:blank',
-  ], { detached: true, stdio: ['ignore', log, log, 'pipe', 'pipe'] });
+  ], {
+    detached: true,
+    stdio: ['ignore', log, log, 'pipe', 'pipe'],
+    env: { ...process.env, TMPDIR: shortTmp, TMP: shortTmp, TEMP: shortTmp },
+  });
+  // A browser that closes the pipe still has to reach the exit race below, which reports its log; the
+  // socket's own error would otherwise throw before that message is printed.
+  child.stdio[4].on('error', () => {});
   const exited = new Promise((resolve) => { child.once('exit', resolve); child.once('error', resolve); });
   const cdp = new Cdp(child.stdio[3], child.stdio[4]);
   const failed = new Promise((_, reject) => {
-    child.once('exit', (code, signal) => reject(new Error(\`the browser exited (\${code ?? signal}) before its DevTools pipe answered\`)));
+    child.once('exit', (code, signal) => {
+      let tail = '';
+      try { tail = fs.readFileSync(logPath, 'utf8').slice(-3000); } catch (error) { tail = \`(no browser log: \${error.message})\`; }
+      reject(new Error(\`the browser exited (\${code ?? signal}) before its DevTools pipe answered\n\${tail}\`));
+    });
   });
   failed.catch(() => {});
   await Promise.race([cdp.send('Browser.getVersion'), failed]);
@@ -447,6 +461,9 @@ const views = [
   ['ui-approval-desktop.png', async (page) => {
     await openUrl(page, \`\${baseUrl}/approval\`);
     await waitTruthy(page, "document.body && document.body.innerText.includes('Digest')", 'the approval page body');
+    // The day's digest starts folded, and the README caption names its entries and their undos, so the
+    // shot opens the fold when the page carries one.
+    await evaluate(page, "(() => { const h = document.querySelector('h2.digest-heading'); if (h && h.querySelector('.hint[role=button]')) h.click(); })()");
     await sleep(800);
   }],
   ['ui-chat-mobile.png', async (page) => {
@@ -510,40 +527,9 @@ cleanup() {
 }
 trap 'status=$?; cleanup "$status"' EXIT
 
-printf 'mock home: generating %s sessions (seed %s, view shape)\n' "$SESSIONS" "$SEED"
-"$BIN/mock-home" generate "$SCRATCH/mock-home" --sessions "$SESSIONS" --seed "$SEED" --shape view
-# The mock corpus draws some session titles from a non-English pool; the README screenshots read
-# better with one language, so the seed's non-ASCII titles take fabricated English ones.
-NAME_TITLES=('release notes draft' 'session list paging' 'backup and restore' 'diff viewer colors'
-  'scheduler timeout audit' 'metrics panel' 'trace merge cache' 'worktree sweep'
-  'cron seed refresh' 'trigger backlog' 'sidebar grouping' 'draft card lock'
-  'usage ledger sweep' 'voice preview relay' 'terminal resize' 'plan diff view'
-  'memory lint pass' 'taste index build' 'digest day view' 'actions only you can do poll')
-
-# A name is non-ASCII when a byte above 0x7f appears; the test runs in the C locale, where bytes are characters.
-is_ascii() {
-  local LC_ALL=C
-  [[ $1 != *[$'\x80'-$'\xff']* ]]
-}
-
-# The sessions are visited in byte order of their directory names, which fixes the title each non-ASCII
-# session takes. A sort on whole paths would put session "a-b" before session "a".
-mapfile -t session_dirs < <(find "$SCRATCH/mock-home" -mindepth 2 -maxdepth 2 -name metadata.json -printf '%h\n' \
-  | sed 's|.*/||' | LC_ALL=C sort)
-count=0
-for dir in "${session_dirs[@]}"; do
-  meta="$SCRATCH/mock-home/$dir/metadata.json"
-  name=$(jq -r '.name // ""' "$meta")
-  if ! is_ascii "$name"; then
-    # The suffix is the session's " / #..." tag at the end of the name, kept on the fabricated title.
-    suffix=''
-    if [[ $name =~ ' / #'[^[:space:]]+$ ]]; then suffix=${BASH_REMATCH[0]}; fi
-    title=${NAME_TITLES[count % ${#NAME_TITLES[@]}]}
-    rewrite_json "$meta" --arg name "$title$suffix" '.name = $name'
-    count=$((count + 1))
-  fi
-done
-printf 'renamed %s sessions\n' "$count"
+printf 'mock home: generating %s sessions (seed %s, view shape, English prose)\n' "$SESSIONS" "$SEED"
+"$BIN/mock-home" generate "$SCRATCH/mock-home" --sessions "$SESSIONS" --seed "$SEED" --shape view \
+  --language english
 
 printf 'trial: starting the isolated server for commit %s\n' "$COMMIT"
 mkdir -p "$SCRATCH/tree"

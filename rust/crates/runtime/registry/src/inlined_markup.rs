@@ -5,16 +5,26 @@
 //! module gives the markup outside a tag the same treatment. On the mock home's chat page the 33 markup comments are
 //! 3.0 KB of the document's 403,518 B and 1,203 B of its 100,778 B gzip form.
 //!
-//! The strip is textual and keeps every other byte. A tag keeps its attributes, which may spell `<!--`; the element
-//! whose text the browser takes whole keeps that text, which is code or a title rather than markup; and a `<!--` that
-//! never closes keeps the bytes after it, because only the author knows where that text ends.
+//! A stylesheet a template writes inline, rather than including from a file, holds the comments its author wrote too;
+//! those leave the served form as well, through the owner of that language's inline form. On the mock home's pages that
+//! is 1,346 B of the chat document's 400,559 B and 635 B of its 99,577 B gzip form, 3,366 B of the events viewer's
+//! 35,657 B and 1,269 B of its 10,356 B, and 2,721 B of the home page's 12,551 B and 1,092 B of its 4,590 B.
+//!
+//! An inline script keeps its bytes. The script minifier reads a `/` after a brace as a division, so a regular
+//! expression that follows a statement-ending brace (`if (ok) {} /a  b/.test(v)`) would lose the whitespace it
+//! requires; and a script element whose type is not JavaScript holds opaque data.
+//!
+//! The strip is textual and keeps every other byte. A tag keeps its attributes, which may spell `<!--`; a title or a
+//! text area keeps its text, which is not code; and a `<!--` that never closes keeps the bytes after it, because only
+//! the author knows where that text ends.
 
 /// The HTML `markup` with its markup comments removed.
 ///
 /// A comment's bytes leave the text where markup outside a tag holds `<!--` through `-->`. A tag is copied whole,
-/// quotes and all, so a `<!--` inside an attribute value stays. A `<script>` or `<style>` element is copied whole
-/// through its close tag, so the code it holds keeps its bytes. The close tag matches its open tag's spelling without
-/// regard to case, as the browser's does.
+/// quotes and all, so a `<!--` inside an attribute value stays. A `<style>` element keeps its open and close tags and
+/// holds the form its language's owner gives its content, so the comments and the delimiter whitespace an inline style
+/// block carries leave it. Every script and every other element the browser takes whole keeps its text. The close tag
+/// matches its open tag's spelling without regard to case, as the browser's does.
 pub fn without_comments(markup: &str) -> String {
   let bytes = markup.as_bytes();
   let mut out = String::with_capacity(markup.len());
@@ -41,9 +51,11 @@ pub fn without_comments(markup: &str) -> String {
     out.push_str(&markup[i..end]);
     i = end;
     if let Some(name) = raw {
-      let close = close_tag_end(markup, i, name);
-      out.push_str(&markup[i..close]);
-      i = close;
+      let close = close_tag_start(markup, i, name);
+      let after = if close < markup.len() { tag_end(markup, close) } else { markup.len() };
+      out.push_str(&inline_form(name, &markup[i..close]));
+      out.push_str(&markup[close..after]);
+      i = after;
     }
   }
   out
@@ -106,6 +118,20 @@ fn char_end(markup: &str, start: usize) -> usize {
   end
 }
 
+/// The served form of one raw-text element's content, by the owner of that language's inline form.
+///
+/// A style element's content is CSS, so it takes the strip its language's owner gives an included file. A script's
+/// content keeps its bytes: the script minifier reads a `/` after a brace as a division, so a regular expression that
+/// follows a statement-ending brace would lose the whitespace it requires; and a script element whose type is not
+/// JavaScript holds opaque data. A title, a text area and the elements the browser takes whole without running them
+/// are text the author wrote, and each keeps its bytes.
+fn inline_form(name: &str, content: &str) -> String {
+  match name {
+    "style" => crate::inlined_style::without_comments(content),
+    _ => content.to_string(),
+  }
+}
+
 /// The element a tag opens whose text the browser takes whole, if any: a raw-text element, an RCDATA one, or the
 /// `plaintext` element, whose text is the rest of the document. Its text is code or a title, so a comment-shaped run
 /// inside it is not markup.
@@ -128,9 +154,9 @@ fn name_follows(rest: &str, name: &str) -> bool {
     )
 }
 
-/// The byte index after the close tag of raw-text element `name` at or after `from`, or the end of `markup` when the
-/// element never closes.
-fn close_tag_end(markup: &str, from: usize, name: &str) -> usize {
+/// The byte index where the close tag of raw-text element `name` starts at or after `from`, or the end of `markup`
+/// when the element never closes.
+fn close_tag_start(markup: &str, from: usize, name: &str) -> usize {
   let bytes = markup.as_bytes();
   let name = name.as_bytes();
   let mut i = from;
@@ -144,7 +170,7 @@ fn close_tag_end(markup: &str, from: usize, name: &str) -> usize {
         None | Some(b'>') | Some(b'/') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\x0c') | Some(b'\r')
       )
     {
-      return tag_end(markup, at);
+      return at;
     }
     i = at + 2;
   }
@@ -168,11 +194,22 @@ mod tests {
   }
 
   #[test]
-  fn a_script_or_style_keeps_the_comments_of_its_code() {
-    let script = "<script>const url = '<!-- keep -->'; // <!-- js</script>";
-    let style = "<style>/* <!-- keep --> */</style>";
-    let markup = format!("{script}<!-- gone -->{style}");
-    assert_eq!(without_comments(&markup), format!("{script}{style}"));
+  fn an_inline_style_drops_the_comments_of_its_code_and_an_inline_script_keeps_its_bytes() {
+    let markup =
+      "<script>const url = '<!-- keep -->'; // <!-- js</script><!-- gone --><style>/* <!-- keep --> */</style>";
+    assert_eq!(without_comments(markup), "<script>const url = '<!-- keep -->'; // <!-- js</script><style></style>");
+  }
+
+  #[test]
+  fn an_inline_script_keeps_a_regular_expression_that_follows_a_statement_brace() {
+    let script = "<script>if (ok) {} /a  b/.test(value)</script>";
+    assert_eq!(without_comments(&format!("{script}<!-- gone -->")), script);
+  }
+
+  #[test]
+  fn an_inline_script_keeps_a_body_whose_type_is_not_javascript() {
+    let data = "<script type=\"text/template\"><p>  keep  //  this</p></script>";
+    assert_eq!(without_comments(&format!("{data}<!-- gone -->")), data);
   }
 
   #[test]

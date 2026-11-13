@@ -9,12 +9,15 @@
     letter-spacing:.4px; padding:10px 14px; background:var(--panel2); border-bottom:1px solid var(--bd) }
   td { padding:12px 14px; border-bottom:1px solid var(--bd); vertical-align:top; font-size:13px }
   tr:last-child td { border-bottom:0 }
-  .when { font-variant-numeric:tabular-nums; white-space:nowrap; font-weight:600 }
-  .sess { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
-  .sess a { color:var(--acc); text-decoration:none }
-  .sess a:hover { text-decoration:underline }
-  .sess .id { display:block; font-family:var(--mono); font-size:11px; color:var(--mut2); overflow:hidden;
-    text-overflow:ellipsis }
+  .when { font-variant-numeric:tabular-nums; font-weight:600 }
+  .when .stamp { display:block; white-space:nowrap }
+  .when .session { display:flex; align-items:baseline; gap:6px; min-width:0; margin-top:4px; font-weight:400 }
+  .when .session a { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    color:var(--acc); text-decoration:none }
+  .when .session a:hover { text-decoration:underline }
+  .when .session .none { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .when .id { flex:0 1 auto; max-width:9em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    font-family:var(--mono); font-size:11px; color:var(--mut2) }
   .levels { font-variant-numeric:tabular-nums; white-space:nowrap }
   .mono { font-family:var(--mono); font-size:11.5px }
   .fail { color:#c2342b; font-weight:600 }
@@ -22,6 +25,11 @@
   .startup { color:var(--mut); font-size:12px; line-height:1.5 }
   .startup .bad { color:#c2342b }
   .startup .ok { color:#1b7f4d }
+  .run .backend { display:block }
+  .run .startup { display:block; margin-top:3px }
+  .playback { display:flex; align-items:center; gap:6px; white-space:nowrap }
+  .playback audio { width:130px; flex:none }
+  .playback .duration { font-variant-numeric:tabular-nums }
   audio { width:180px; height:32px; vertical-align:middle }
   /* Every cell that states a missing value is read, not decoration. On the white card, --mut2 draws
      3.70:1, under the 4.5:1 floor for this 13 px text. The body muted tone draws 5.77:1 there. */
@@ -33,10 +41,6 @@
     table.data td { border-bottom:1px solid var(--bd) }
     table.data td::before { content:attr(data-l); display:block; min-width:118px; color:var(--mut);
       font-size:11.5px; text-transform:uppercase; letter-spacing:.4px; margin-bottom:2px }
-    /* The block layout gives every cell the card's width, so the Session row drops the table column's
-       220 px cap: the name and id show whole, and the row's divider meets the card's edge like the
-       other rows'. */
-    table.data td.sess { max-width:none }
   }
 </style>
 </head>
@@ -48,22 +52,18 @@
   <table class="data">
     <thead>
       <tr>
-        <th>Recorded</th><th>Session</th><th>Duration</th><th>Peak / RMS</th><th>Input device</th>
-        <th>Backend</th><th>Transcript or failure</th><th>Startup</th><th>Playback</th>
+        <th>Recorded</th><th>Peak / RMS</th><th>Input device</th><th>Transcript or failure</th><th>Run</th><th>Playback</th>
       </tr>
     </thead>
     <tbody>
       {% for row in recordings %}
       <tr>
-        <td data-l="Recorded" class="when">{{ row.recorded_at }}</td>
-        <td data-l="Session" class="sess">
-          {% if row.session_name %}<a href="/?session={{ row.session_id }}">{{ row.session_name }}</a>
+        <td data-l="Recorded" class="when">
+          <span class="stamp">{{ row.recorded_at }}</span>
+          <span class="session">{% if row.session_name %}<a href="/?session={{ row.session_id }}">{{ row.session_name }}</a>
           {% else %}<span class="none">unnamed</span>{% endif %}
           <span class="id">{{ row.session_id }}</span>
-        </td>
-        <td data-l="Duration" class="levels">
-          {% if row.duration_s is not none %}{{ "%.1f"|format(row.duration_s) }} s
-          {% else %}<span class="none">no audio</span>{% endif %}
+          </span>
         </td>
         <td data-l="Peak / RMS" class="levels">
           {% if row.digital_silence %}<span class="fail">digital silence</span>
@@ -75,10 +75,6 @@
           {% elif row.startup_error %}<span class="none">—</span>
           {% else %}<span class="none">not recorded</span>{% endif %}
         </td>
-        <td data-l="Backend">
-          {% if row.backend %}<span class="mono">{{ row.backend }}</span>
-          {% else %}<span class="none">—</span>{% endif %}
-        </td>
         <td data-l="Transcript or failure">
           {% if row.failure %}
             <span class="fail"><span class="stage">{{ row.failure.stage }}</span>
@@ -87,21 +83,27 @@
           {% elif row.startup_error %}<span class="fail">{{ row.startup_error }}</span>
           {% else %}<span class="none">no transcript</span>{% endif %}
         </td>
-        <td data-l="Startup" class="startup">
-          {% if row.reached %}
-            <span class="{{ 'bad' if row.startup_error else 'ok' }}">{{ row.reached }}</span>
-            · end {{ row.end }}
-            {% if row.mic_permission %}· mic {{ row.mic_permission }}{% endif %}
-            {% if row.startup_error %}<br>{{ row.startup_error }}{% endif %}
-          {% else %}<span class="none">—</span>{% endif %}
+        <td data-l="Run" class="run">
+          <span class="backend">{% if row.backend %}<span class="mono">{{ row.backend }}</span>
+          {% else %}<span class="none">—</span>{% endif %}</span>
+          <span class="startup">
+            {% if row.reached %}
+              <span class="{{ 'bad' if row.startup_error else 'ok' }}">{{ row.reached }}</span>
+              · end {{ row.end }}
+              {% if row.mic_permission %}· mic {{ row.mic_permission }}{% endif %}
+              {% if row.startup_error %}<br>{{ row.startup_error }}{% endif %}
+            {% else %}<span class="none">—</span>{% endif %}
+          </span>
         </td>
-        <td data-l="Playback">
+        <td data-l="Playback" class="playback">
+          <span class="duration">{% if row.duration_s is not none %}{{ "%.1f"|format(row.duration_s) }} s
+          {% else %}<span class="none">no audio</span>{% endif %}</span>
           {% if row.audio_url %}<audio controls preload="none" src="{{ row.audio_url }}"></audio>
           {% else %}<span class="none">no player</span>{% endif %}
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="9" class="none">No recordings yet. Record one with the microphone button.</td></tr>
+      <tr><td colspan="6" class="none">No recordings yet. Record one with the microphone button.</td></tr>
       {% endfor %}
     </tbody>
   </table>

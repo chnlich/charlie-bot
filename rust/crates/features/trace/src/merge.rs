@@ -10,7 +10,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
 
 use charliebot_compat::json::fast_json_bytes;
-use charliebot_core::text_repr::is_truthy;
+use charliebot_core::text_repr::{is_truthy, type_name, value_str};
 use charliebot_core::timefmt;
 use charliebot_registry::FeatureContext;
 use flate2::{Compression, GzBuilder};
@@ -383,7 +383,7 @@ impl IdSequencer {
   }
 
   fn admit(&mut self, original: &Value) -> (u64, bool) {
-    let key = value_text(original);
+    let key = value_str(original);
     match self.seen.entry(key) {
       Entry::Occupied(entry) => (*entry.get(), false),
       Entry::Vacant(entry) => {
@@ -449,7 +449,7 @@ fn merge_one_trace(
         }
       }
     }
-    let pid_key = value_text(event.get("pid").unwrap_or(&Value::Null));
+    let pid_key = value_str(event.get("pid").unwrap_or(&Value::Null));
     let synthetic_pid = pid_label_lookup
       .get(&pid_key)
       .map(|label| if label == "CPU" { rank_label.clone() } else { format!("{rank_label}/{label}") })
@@ -511,9 +511,9 @@ fn collect_pid_labels(events: &[Value]) -> Result<(PidLabelOrder, PidLabelLookup
       continue;
     }
     let args = args_value.as_object().ok_or_else(|| attribute_failure(args_value, "get"))?;
-    let key = value_text(event.get("pid").unwrap_or(&Value::Null));
+    let key = value_str(event.get("pid").unwrap_or(&Value::Null));
     let raw_label = args.get("labels").cloned().unwrap_or(Value::Null);
-    let label = if is_truthy(&raw_label) { value_text(&raw_label) } else { String::new() };
+    let label = if is_truthy(&raw_label) { value_str(&raw_label) } else { String::new() };
     if let Some(index) = positions.get(&key).copied() {
       ordered[index].1 = label.clone();
     } else {
@@ -569,49 +569,11 @@ fn gpu_index(label: &str) -> Option<u64> {
 }
 
 fn attribute_failure(value: &Value, attribute: &str) -> BuildFailure {
-  let type_name = match value {
-    Value::Null => "NoneType",
-    Value::Bool(_) => "bool",
-    Value::Number(number) if number.is_f64() => "float",
-    Value::Number(_) => "int",
-    Value::String(_) => "str",
-    Value::Array(_) => "list",
-    Value::Object(_) => "dict",
-  };
-  BuildFailure::Failed(format!("'{type_name}' object has no attribute '{attribute}'"))
-}
-
-fn value_text(value: &Value) -> String {
-  match value {
-    Value::Null => "None".to_string(),
-    Value::Bool(true) => "True".to_string(),
-    Value::Bool(false) => "False".to_string(),
-    Value::String(value) => value.clone(),
-    Value::Number(number) if number.is_f64() => {
-      charliebot_core::text_repr::float_repr(number.as_f64().expect("a float number has an f64 value"))
-    }
-    Value::Number(number) => number.to_string(),
-    Value::Array(values) => format!("[{}]", values.iter().map(value_repr).collect::<Vec<_>>().join(", ")),
-    Value::Object(values) => format!(
-      "{{{}}}",
-      values
-        .iter()
-        .map(|(key, value)| format!("{}: {}", charliebot_core::text_repr::str_repr(key), value_repr(value)))
-        .collect::<Vec<_>>()
-        .join(", ")
-    ),
-  }
-}
-
-fn value_repr(value: &Value) -> String {
-  match value {
-    Value::String(value) => charliebot_core::text_repr::str_repr(value),
-    _ => value_text(value),
-  }
+  BuildFailure::Failed(format!("'{}' object has no attribute '{attribute}'", type_name(value)))
 }
 
 fn thread_name_event(pid: &str, tid: u64, raw: &Value, rank_label: &str) -> Value {
-  serde_json::json!({"ph":"M","pid":pid,"tid":tid,"name":"thread_name","args":{"name":format!("{rank_label}/{}", value_text(raw))}})
+  serde_json::json!({"ph":"M","pid":pid,"tid":tid,"name":"thread_name","args":{"name":format!("{rank_label}/{}", value_str(raw))}})
 }
 
 fn metadata_event(pid: &str, tid: u64, name: &str, args: Value) -> Value {

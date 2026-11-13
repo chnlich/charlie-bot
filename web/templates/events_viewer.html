@@ -56,6 +56,15 @@
        3.07:1 on the fill, the tone the diff page's fields draw; the blue focus border still wins. */
     #type-filter:not(:focus) { border-color: #64748b; }
 
+    /* The Download, Clear and Load earlier controls draw their box with a slate-700 outline:
+       rgb(51, 65, 85) draws 1.72:1 on the slate-900 bar and 1.57:1 on the header's slate-850,
+       under the 3:1 boundary floor WCAG 1.4.11 sets for a control, and the outline is the only
+       mark of each box. slate-500 draws 3.75:1 there and 3.42:1 on the header, the tone the
+       type filter's outline keeps. The hover takes slate-400, 6.96:1 and 6.34:1, so the pointer
+       still reads the state change. */
+    .events-secondary { border-color: #64748b; }
+    .events-secondary:hover { border-color: #94a3b8; }
+
     /* A phone cannot fit these two rows at their desktop width. The header gives
        the title a row of its own so a whole session name shows, and keeps the
        icon-only download action and the count on its first row. The divider that
@@ -104,7 +113,7 @@
         <span class="text-slate-400 mr-1">Events:</span>{{ session.name }}
       </h1>
       <a href="{{ events_url }}" download aria-label="Download JSONL"
-         class="events-download flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-300 transition-colors px-2 py-1 rounded border border-slate-700 hover:border-slate-600">
+         class="events-download events-secondary flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-300 transition-colors px-2 py-1 rounded border">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                 d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
@@ -128,14 +137,14 @@
         Expand all
       </label>
       <button onclick="clearFilter()"
-              class="text-xs text-slate-400 hover:text-slate-200 transition-colors px-2 py-1 rounded border border-slate-700 hover:border-slate-600">Clear</button>
+              class="events-secondary text-xs text-slate-400 hover:text-slate-200 transition-colors px-2 py-1 rounded border">Clear</button>
     </div>
   </div>
 
   <!-- Earlier events: the page loads the log's tail first, so a large log does not hold the first screen -->
   <div id="earlier-bar" class="hidden px-4 py-2 border-b border-slate-800">
     <button id="load-earlier"
-            class="text-xs text-slate-400 hover:text-slate-200 transition-colors px-2 py-1 rounded border border-slate-700 hover:border-slate-600">
+            class="events-secondary text-xs text-slate-400 hover:text-slate-200 transition-colors px-2 py-1 rounded border">
       Load earlier events
     </button>
   </div>

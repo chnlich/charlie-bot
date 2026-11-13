@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use charliebot_backup::backup::{forget, restic_program, restore, run_backup};
+use charliebot_backup::backup::restic_program;
 use charliebot_backup::config::ResticSettings;
 use tempfile::TempDir;
 
@@ -68,7 +68,7 @@ fn backup_and_restore_round_trip() {
   fs::write(home.join("credentials.yaml"), "credentials:\n  access_key: secret\n").unwrap();
   fs::write(home.join("sessions/s1/threads/t1/meta.json"), "{}\n").unwrap();
 
-  run_backup(&fixture.settings, &home).expect("the snapshot is created");
+  fixture.settings.backup(&home).expect("the snapshot is created");
 
   // Move the live home past the snapshot: the restore must bring back the snapshot's content, not this state.
   fs::write(home.join("config.yaml"), "changed: true\n").unwrap();
@@ -76,7 +76,7 @@ fn backup_and_restore_round_trip() {
   let target = fixture.root.path().join("target");
   fs::create_dir(&target).unwrap();
 
-  restore(&fixture.settings, &home, "latest", &target).expect("the snapshot restores");
+  fixture.settings.restore(&home, "latest", &target).expect("the snapshot restores");
 
   assert_eq!(fs::read_to_string(target.join("config.yaml")).unwrap(), "server: {}\n");
   assert_eq!(fs::read_to_string(target.join("sessions/s1/metadata.json")).unwrap(), "{}\n");
@@ -97,7 +97,7 @@ fn an_unreachable_repository_fails_with_the_reason_and_writes_nothing() {
     ResticSettings { repository: root.path().join("absent/repo").display().to_string(), password_file: key };
 
   let before = tree(root.path());
-  let error = run_backup(&settings, &home).expect_err("the repository does not exist");
+  let error = settings.backup(&home).expect_err("the repository does not exist");
 
   assert!(error.to_string().contains("restic exit 10"), "{error:#}");
   assert!(error.to_string().contains("repository does not exist"), "{error:#}");
@@ -118,7 +118,7 @@ fn a_missing_password_file_fails_with_the_reason_and_writes_nothing() {
   };
 
   let before = tree(fixture.root.path());
-  let error = run_backup(&settings, &home).expect_err("the password file does not exist");
+  let error = settings.backup(&home).expect_err("the password file does not exist");
 
   assert!(error.to_string().contains("backup.password_file"), "{error:#}");
   assert!(error.to_string().contains("is not readable"), "{error:#}");
@@ -144,7 +144,7 @@ fn retention_keeps_the_last_three_days_and_one_snapshot_of_each_recent_week() {
     assert!(status.success(), "the {day} snapshot is created");
   }
 
-  forget(&fixture.settings).expect("the retention pass runs");
+  fixture.settings.forget().expect("the retention pass runs");
 
   let output = restic_command(&fixture.settings).arg("snapshots").arg("--json").output().unwrap();
   assert!(output.status.success(), "the snapshot list reads");

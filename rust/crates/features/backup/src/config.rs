@@ -30,6 +30,17 @@ pub struct ResticSettings {
   pub password_file: PathBuf,
 }
 
+impl ResticSettings {
+  /// A check that the password file is readable: the file is opened and closed, and the error names its path when the
+  /// open fails.
+  pub fn check_password_file(&self) -> anyhow::Result<()> {
+    let file = std::fs::File::open(&self.password_file)
+      .with_context(|| format!("backup.password_file {} is not readable", self.password_file.display()))?;
+    drop(file);
+    Ok(())
+  }
+}
+
 impl BackupConfig {
   /// The settings a run needs, failing with the config key that is missing. `home` expands `$CHARLIEBOT_HOME` and `~`.
   pub fn settings(&self, home: &Path) -> anyhow::Result<ResticSettings> {
@@ -71,12 +82,4 @@ fn parse_section(raw: &serde_yaml::Value) -> Result<SectionValue, String> {
 /// `value` with `~` and `$CHARLIEBOT_HOME` expanded.
 fn expand(value: &str, home: &Path) -> String {
   paths::expanduser(value).replace(DISPLAY_HOME, &home.to_string_lossy())
-}
-
-/// The password file, opened and closed to check it is readable; the error names its path when it is not.
-pub fn read_password_file(settings: &ResticSettings) -> anyhow::Result<()> {
-  let file = std::fs::File::open(&settings.password_file)
-    .with_context(|| format!("backup.password_file {} is not readable", settings.password_file.display()))?;
-  drop(file);
-  Ok(())
 }

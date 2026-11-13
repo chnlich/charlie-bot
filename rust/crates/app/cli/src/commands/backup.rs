@@ -46,8 +46,7 @@ pub fn main(args: &[OsString], lazy_host: &LazyHost) -> Result<(), CliExit> {
     .section::<BackupConfig>(NAME)
     .settings(&cfg.charliebot_home)
     .map_err(|error| CliExit::error(format!("{error:#}")))?;
-  charliebot_backup::backup::restore(&settings, &cfg.charliebot_home, &snapshot, &target)
-    .map_err(|error| CliExit::error(format!("{error:#}")))?;
+  settings.restore(&cfg.charliebot_home, &snapshot, &target).map_err(|error| CliExit::error(format!("{error:#}")))?;
   println!("Restored snapshot {snapshot} into {}", target.display());
   Ok(())
 }

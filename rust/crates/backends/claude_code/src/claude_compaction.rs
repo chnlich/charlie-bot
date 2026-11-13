@@ -9,7 +9,8 @@ use std::time::Duration as StdDuration;
 use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{
-  EDIT_TOOL, GLOB_TOOL, GREP_TOOL, MODEL_USAGE, NOTEBOOK_EDIT_TOOL, READ_TOOL, SKILL_TOOL, WRITE_TOOL,
+  COMPACT_BOUNDARY, COMPACT_POST_TOKENS, COMPACT_PRE_TOKENS, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, MODEL_USAGE,
+  NOTEBOOK_EDIT_TOOL, READ_TOOL, SKILL_TOOL, WRITE_TOOL,
 };
 use charliebot_core::subagent::AGENT_TOOL;
 use charliebot_core::text_repr::is_truthy;
@@ -35,9 +36,14 @@ pub const COMPACTION_MODEL: &str = "claude-sonnet-5";
 pub const FABLE_FAMILY: &str = "fable";
 const COMPACTION_FAMILY: &str = "sonnet";
 const COMPACT_PROMPT: &[u8] = b"/compact\n";
-const BOUNDARY_MARKER: &str = "\"compact_boundary\"";
 const COST_STATE_MARKER: &str = "\"cost-state\"";
 const USAGE_COUNTERS: [&str; 4] = ["inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens"];
+
+/// The quoted `COMPACT_BOUNDARY` word that selects a transcript line carrying a compaction boundary, so
+/// `read_transcript_rows` parses only those lines.
+fn boundary_marker() -> String {
+  format!("\"{COMPACT_BOUNDARY}\"")
+}
 
 /// The tools the compaction command disallows in addition to `HEADLESS_DISALLOWED_TOOLS`.
 fn extra_compaction_tools() -> String {
@@ -135,9 +141,9 @@ fn read_transcript_rows(path: &Path, marker: &str) -> anyhow::Result<Vec<Value>>
 
 pub fn count_compact_boundaries(path: &Path) -> anyhow::Result<usize> {
   Ok(
-    read_transcript_rows(path, BOUNDARY_MARKER)?
+    read_transcript_rows(path, &boundary_marker())?
       .into_iter()
-      .filter(|row| row.get("subtype").and_then(Value::as_str) == Some("compact_boundary"))
+      .filter(|row| row.get("subtype").and_then(Value::as_str) == Some(COMPACT_BOUNDARY))
       .count(),
   )
 }
@@ -173,8 +179,8 @@ fn snake_case_keys(meta: &Map<String, Value>) -> Map<String, Value> {
 }
 
 fn newest_boundary_compact_metadata(path: &Path) -> anyhow::Result<Option<Value>> {
-  let rows = read_transcript_rows(path, BOUNDARY_MARKER)?;
-  let Some(row) = rows.into_iter().rfind(|row| row.get("subtype").and_then(Value::as_str) == Some("compact_boundary"))
+  let rows = read_transcript_rows(path, &boundary_marker())?;
+  let Some(row) = rows.into_iter().rfind(|row| row.get("subtype").and_then(Value::as_str) == Some(COMPACT_BOUNDARY))
   else {
     return Ok(None);
   };
@@ -520,13 +526,14 @@ async fn run_compaction_inner(run: CompactionRun<'_>) -> anyhow::Result<Compacti
   if let Some(pre_tokens) = pre_tokens {
     let object =
       metadata.get_or_insert_with(|| Value::Object(Map::new())).as_object_mut().expect("compact metadata is an object");
-    object.insert("pre_tokens".to_string(), json!(pre_tokens));
+    object.insert(COMPACT_PRE_TOKENS.to_string(), json!(pre_tokens));
   }
-  outcome.post_tokens = metadata.as_ref().and_then(|metadata| metadata.get("post_tokens")).and_then(Value::as_i64);
+  outcome.post_tokens =
+    metadata.as_ref().and_then(|metadata| metadata.get(COMPACT_POST_TOKENS)).and_then(Value::as_i64);
   tracing::info!(
     target: "charliebot_agents",
     cc_session_id = session_id,
-    pre_tokens = ?metadata.as_ref().and_then(|value| value.get("pre_tokens")),
+    pre_tokens = ?metadata.as_ref().and_then(|value| value.get(COMPACT_PRE_TOKENS)),
     post_tokens = ?outcome.post_tokens,
     cache_read_tokens = ?outcome.cache_read_tokens,
     models = ?outcome.models,

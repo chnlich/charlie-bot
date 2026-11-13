@@ -1,7 +1,7 @@
 //! Publish an artifact through the configured program or directory lane.
 
 use std::ffi::OsString;
-use std::io::{self, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -176,7 +176,8 @@ fn publish_through_command(artifact: &Path, command: &[String], lane_options: &[
   let artifact_absolute = std::path::absolute(artifact).map_err(|error| CliExit::error(error.to_string()))?;
   let done = Command::new(&command[0]).args(&command[1..]).arg(artifact_absolute).args(lane_options).output().map_err(
     |error| {
-      CliExit::error(format!("publish.command could not start {}: {}", command[0], os_error_text(&error, &command[0])))
+      let failure = charliebot_core::os_error::text(&error, &text_repr::str_repr(&command[0]));
+      CliExit::error(format!("publish.command could not start {}: {failure}", command[0]))
     },
   )?;
   let stdout = String::from_utf8(done.stdout)
@@ -196,14 +197,6 @@ fn publish_through_command(artifact: &Path, command: &[String], lane_options: &[
     )));
   }
   Ok(lines[0].to_string())
-}
-
-fn os_error_text(error: &io::Error, path: &str) -> String {
-  let path = text_repr::str_repr(path);
-  match error.raw_os_error() {
-    Some(code) => format!("[Errno {code}] {}: {path}", nix::errno::Errno::from_raw(code).desc()),
-    None => format!("{error}: {path}"),
-  }
 }
 
 #[cfg(unix)]

@@ -64,15 +64,8 @@ impl TextReadError {
   /// The text of the exception for a read of `path`.
   pub fn error_text(&self, path: &Path) -> String {
     match self {
-      Self::Io(error) => match error.raw_os_error() {
-        Some(errno) => {
-          // Rust's Display appends " (os error N)" to the strerror text, so the suffix is stripped here.
-          let rendered = error.to_string();
-          let strerror = rendered.strip_suffix(&format!(" (os error {errno})")).unwrap_or(&rendered);
-          format!("[Errno {errno}] {strerror}: {}", str_repr(&path.display().to_string()))
-        }
-        None => error.to_string(),
-      },
+      Self::Io(error) => charliebot_core::os_error::errno_text(error, &str_repr(&path.display().to_string()))
+        .unwrap_or_else(|| error.to_string()),
       Self::Decode(message) => message.clone(),
     }
   }

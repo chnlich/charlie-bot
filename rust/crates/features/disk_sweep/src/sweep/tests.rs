@@ -161,7 +161,7 @@ fn newest_entry(path: &Path) -> (f64, PathBuf) {
 
 /// The assertion that one fixture tree is older than the sweep's scratch cutoff, naming the entry that keeps it fresh.
 fn assert_scratch_aged(path: &Path, now: DateTime<Utc>) {
-  let cutoff = now.timestamp() as f64 - (super::SCRATCH_DAYS * 24 * 60 * 60) as f64;
+  let cutoff = super::scratch_cutoff(now);
   let (newest, freshest) = newest_entry(path);
   assert!(
     newest < cutoff,

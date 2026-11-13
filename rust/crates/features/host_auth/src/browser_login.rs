@@ -20,6 +20,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::ExitStatusExt;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
@@ -33,6 +34,7 @@ use tokio::process::{Child, ChildStdout};
 use tokio::sync::watch;
 
 use crate::config::BrowserLoginConfig;
+use crate::host_auth;
 use crate::timestamps;
 use time::OffsetDateTime;
 
@@ -60,6 +62,7 @@ pub enum Outcome {
   Replaced,
   HoldLimit,
   StartFailed,
+  RenewalRecordFailed,
 }
 
 impl Outcome {
@@ -72,6 +75,7 @@ impl Outcome {
       Outcome::Replaced => "replaced",
       Outcome::HoldLimit => "hold limit",
       Outcome::StartFailed => "start failure",
+      Outcome::RenewalRecordFailed => "renewal record failed",
     }
   }
 }
@@ -139,10 +143,11 @@ struct AttemptCore {
   link: watch::Sender<LinkState>,
   approval_url_matcher: Regex,
   user_code_matcher: Option<Regex>,
+  renewal_state_path: Option<PathBuf>,
 }
 
 impl AttemptCore {
-  fn new(login: &BrowserLoginConfig, link: watch::Sender<LinkState>) -> Self {
+  fn new(login: &BrowserLoginConfig, link: watch::Sender<LinkState>, renewal_state_path: Option<PathBuf>) -> Self {
     AttemptCore {
       login: login.clone(),
       started_at: timestamps::utc_now(),
@@ -162,6 +167,7 @@ impl AttemptCore {
         .user_code_pattern
         .as_deref()
         .map(|pattern| Regex::new(pattern).expect("the config validated the user-code pattern")),
+      renewal_state_path,
     }
   }
 
@@ -244,9 +250,25 @@ pub fn last_attempt(name: &str) -> Option<AttemptSnapshot> {
 /// `start_login`: start an attempt of *login* and return its approval link; a click during a start joins that start.
 ///
 /// The attempt is registered before the first await, so a click that arrives while this start waits joins it rather
-/// than starting a second process. Fails with the 502 body when the login gives no link.
+/// than starting a second process. Fails with the 502 body when the login gives no link or its state path is invalid.
 pub async fn start_login(login: &BrowserLoginConfig) -> Result<String, StartFailed> {
-  let mut link = match claim_slot(login) {
+  let renewal_state_path = if login.host.is_some() {
+    Some(
+      host_auth::default_state_path()
+        .map_err(|error| StartFailed(format!("could not resolve the host-auth state path: {error}")))?,
+    )
+  } else {
+    None
+  };
+  start_login_with_state_path(login, renewal_state_path).await
+}
+
+/// `start_login_with_state_path`: start an attempt with the state file used by a confirmed host renewal.
+async fn start_login_with_state_path(
+  login: &BrowserLoginConfig,
+  renewal_state_path: Option<PathBuf>,
+) -> Result<String, StartFailed> {
+  let mut link = match claim_slot(login, renewal_state_path) {
     Slot::Join(link) => link,
     Slot::Started { link, replaced } => {
       if let Some(core) = replaced {
@@ -267,14 +289,14 @@ enum Slot {
 
 /// The click's slot: the login's start in progress to join, or a new attempt registered in its slot. The check and the
 /// registration share one lock hold, so two clicks that arrive together cannot both start a process.
-fn claim_slot(login: &BrowserLoginConfig) -> Slot {
+fn claim_slot(login: &BrowserLoginConfig, renewal_state_path: Option<PathBuf>) -> Slot {
   let mut live = LIVE.lock().expect("the live-attempt map lock is never poisoned");
   if let Some(entry) = live.get(&login.name).filter(|entry| matches!(&*entry.link.borrow(), LinkState::Pending)) {
     return Slot::Join(entry.link.clone());
   }
   let replaced = live.remove(&login.name).map(|entry| entry.core);
   let (link, link_rx) = watch::channel(LinkState::Pending);
-  let core = Arc::new(Mutex::new(AttemptCore::new(login, link)));
+  let core = Arc::new(Mutex::new(AttemptCore::new(login, link, renewal_state_path)));
   let driver = tokio::spawn(drive(Arc::clone(&core)));
   live.insert(login.name.clone(), LiveEntry { core, link: link_rx.clone(), driver });
   Slot::Started { link: link_rx, replaced }
@@ -462,7 +484,7 @@ async fn drain_and_wait(
   Ok(exit_code(child.wait().await?))
 }
 
-/// The readback: its command's run, and APPROVED or READBACK_FAILED recorded on its exit.
+/// The readback: its command's run, and the confirmed renewal baseline recorded after a successful exit.
 async fn read_back(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
   core.lock().expect("the attempt record lock is never poisoned").phase = Phase::ReadingBack;
   let readback_command = core.lock().expect("the attempt record lock is never poisoned").login.readback_command.clone();
@@ -483,8 +505,22 @@ async fn read_back(core: &Arc<Mutex<AttemptCore>>) -> io::Result<()> {
     state.readback_output = readback_output;
     state.child_pid = None;
   }
-  if core.lock().expect("the attempt record lock is never poisoned").outcome.is_some() {
+  let (already_ended, login_name, host, state_path) = {
+    let state = core.lock().expect("the attempt record lock is never poisoned");
+    (state.outcome.is_some(), state.login.name.clone(), state.login.host.clone(), state.renewal_state_path.clone())
+  };
+  if already_ended {
     return Ok(());
+  }
+  if readback_exit == 0
+    && let Some(alias) = host
+  {
+    let state_path = state_path.expect("a host renewal has a resolved host-auth state path");
+    if let Err(error) = host_auth::record_host_renewal(&state_path, &alias, timestamps::utc_now()).await {
+      tracing::error!(error = %format!("{error:#}"), login = %login_name, host = %alias, "browser_login_renewal_record_failed");
+      end(core, Outcome::RenewalRecordFailed);
+      return Ok(());
+    }
   }
   end(core, if readback_exit == 0 { Outcome::Approved } else { Outcome::ReadbackFailed });
   Ok(())
@@ -914,6 +950,12 @@ mod tests {
     }
   }
 
+  fn state_with_host_baseline(path: &Path, baseline: &str) {
+    let mut state = host_auth::empty_state();
+    state.insert("hosts".to_string(), serde_json::json!([{"alias": "host1", "enrolled_observed_at": baseline}]));
+    host_auth::save_state(&state, path).expect("the host-auth state writes");
+  }
+
   #[test]
   fn user_code_reads_the_query_and_the_fragment_and_defaults_to_empty() {
     assert_eq!(user_code_of(LINK), "7f3c9d21");
@@ -973,6 +1015,66 @@ mod tests {
     let (exit, output) = page_readback(&stub.login).await.expect("the readback runs");
     assert_eq!(exit, 0);
     assert_eq!(output.trim(), "valid\nbroken", "the child's own stderr reaches the same capture");
+  }
+
+  #[tokio::test]
+  async fn a_successful_host_renewal_moves_the_estimated_expiry() {
+    let _serial = SERIAL.lock().await;
+    let stub = LoginStub::new("renewal-recorded", PRINT_LINK, "echo valid\n");
+    let mut login = stub.login.clone();
+    login.host = Some("host1".to_string());
+    let state_path = stub._dir.path().join("host_auth.json");
+    let old_baseline = "2026-09-15T07:00:00+00:00";
+    state_with_host_baseline(&state_path, old_baseline);
+
+    assert_eq!(
+      start_login_with_state_path(&login, Some(state_path.clone())).await.expect("the login gives its link"),
+      LINK
+    );
+    until(|| matches!(last_attempt("renewal-recorded"), Some(snapshot) if snapshot.outcome == Some(Outcome::Approved)))
+      .await;
+
+    let attempt = last_attempt("renewal-recorded").expect("the attempt ended");
+    let state = host_auth::read_state(&state_path).expect("the host-auth state reads");
+    let entry = host_auth::host_entries(&state).expect("the host entries read")[0];
+    let baseline = host_auth::opt_str(entry, "enrolled_observed_at").expect("the baseline field reads").unwrap();
+    assert_ne!(baseline, old_baseline, "the successful renewal replaces the stale baseline");
+    let renewed_at = timestamps::parse(baseline).expect("the recorded baseline parses");
+    assert!(renewed_at >= attempt.started_at, "the baseline follows the renewal start");
+    assert!(renewed_at <= attempt.finished_at.expect("the attempt has an end time"));
+    let estimate = host_auth::derive_estimate(entry, renewed_at).expect("the renewed estimate derives");
+    assert_eq!(estimate.remaining_sec, Some(host_auth::TRUST_CACHE_TTL_SEC as f64));
+  }
+
+  #[tokio::test]
+  async fn a_failed_host_renewal_keeps_the_estimated_expiry() {
+    let _serial = SERIAL.lock().await;
+    let stub = LoginStub::new("renewal-failed", PRINT_LINK, "echo login expired; exit 1\n");
+    let mut login = stub.login.clone();
+    login.host = Some("host1".to_string());
+    let state_path = stub._dir.path().join("host_auth.json");
+    let old_baseline = "2026-09-15T07:00:00+00:00";
+    state_with_host_baseline(&state_path, old_baseline);
+
+    start_login_with_state_path(&login, Some(state_path.clone())).await.expect("the login gives its link");
+    until(
+      || matches!(last_attempt("renewal-failed"), Some(snapshot) if snapshot.outcome == Some(Outcome::ReadbackFailed)),
+    )
+    .await;
+
+    let state = host_auth::read_state(&state_path).expect("the host-auth state reads");
+    let entry = host_auth::host_entries(&state).expect("the host entries read")[0];
+    assert_eq!(
+      host_auth::opt_str(entry, "enrolled_observed_at").expect("the baseline field reads"),
+      Some(old_baseline),
+      "a failed readback leaves the baseline unchanged"
+    );
+    let old_expiry = host_auth::derive_estimate(entry, timestamps::utc_now()).expect("the old estimate derives");
+    assert_eq!(
+      old_expiry.expires_at.as_deref(),
+      Some("2026-09-22T07:00:00+00:00"),
+      "the failed renewal leaves the previous expiry estimate"
+    );
   }
 
   #[tokio::test]

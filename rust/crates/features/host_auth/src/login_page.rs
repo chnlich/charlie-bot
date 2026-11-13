@@ -60,7 +60,7 @@ fn live_view(attempt: AttemptSnapshot) -> anyhow::Result<Value> {
 /// The last ended attempt; only the two outcomes that ran a readback carry its output.
 fn last_view(attempt: AttemptSnapshot) -> anyhow::Result<Value> {
   let outcome = attempt.outcome.context("an ended attempt records its outcome")?;
-  let shows_readback = matches!(outcome, Outcome::Approved | Outcome::ReadbackFailed);
+  let shows_readback = matches!(outcome, Outcome::Approved | Outcome::ReadbackFailed | Outcome::RenewalRecordFailed);
   Ok(json!({
     "outcome": outcome.label(),
     "finished_at": local_text(attempt.finished_at)?,
@@ -134,6 +134,10 @@ mod tests {
     assert_eq!(login_failed["last"]["readback_exit"], Value::Null);
     assert_eq!(login_failed["last"]["readback_output"], Value::Null);
     assert_eq!(login_failed["live"], Value::Null);
+    let record_failed =
+      row(&login(), None, Some(snapshot(Some(Outcome::RenewalRecordFailed))), None).expect("the row builds");
+    assert_eq!(record_failed["last"]["readback_exit"], json!(0));
+    assert_eq!(record_failed["last"]["readback_output"], json!("valid"));
   }
 
   #[test]

@@ -134,8 +134,13 @@ pub fn apply_probe_result(entry: &mut Map<String, Value>, status: &str, detail: 
     entry.insert("last_change_at".to_string(), json!(probed));
   }
   if previous.as_deref() == Some(STATUS_NEEDS_OKTA) && status == STATUS_OK {
-    entry.insert("enrolled_observed_at".to_string(), json!(probed));
+    record_renewal(entry, probed);
   }
+}
+
+/// `record_renewal`: the owner of the baseline read by [`derive_estimate`].
+fn record_renewal(entry: &mut Map<String, Value>, renewed_at: &str) {
+  entry.insert("enrolled_observed_at".to_string(), json!(renewed_at));
 }
 
 /// The estimate of one host, derived at read time and never stored.
@@ -388,6 +393,22 @@ where
   let login = host_login(host_entries(&state)?[index])?.context("the probed host holds no verdict")?;
   save_state(&state, state_path)?;
   Ok(login)
+}
+
+/// Record a confirmed renewal for the named host without changing its probe verdict.
+pub async fn record_host_renewal(state_path: &Path, alias: &str, renewed_at: OffsetDateTime) -> anyhow::Result<()> {
+  let _slot = RoundSlot::wait().await;
+  let mut state = read_state(state_path)?;
+  let mut index = None;
+  for (index_in_state, entry) in host_entries(&state)?.into_iter().enumerate() {
+    if alias_of(entry)? == alias {
+      index = Some(index_in_state);
+      break;
+    }
+  }
+  let index = index.with_context(|| format!("host alias {alias:?} has no host-auth state entry"))?;
+  record_renewal(host_entry_mut(&mut state, index)?, &isoformat(renewed_at));
+  save_state(&state, state_path)
 }
 
 /// The process-wide round slot: a manual round, the poller's tick and the cron gate's write-back never change the state

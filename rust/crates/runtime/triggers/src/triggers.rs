@@ -29,6 +29,7 @@ use charliebot_store::trigger_files::{
 };
 use charliebot_store::{StoreError, layout};
 use futures_util::future::join_all;
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use time::format_description::well_known::Rfc3339;
@@ -189,6 +190,31 @@ const SCHEDULE_TRIGGER_BODY: BodyModel = BodyModel::required(SCHEDULE_TRIGGER_BO
 
 const SLURM_ACTIVE_STATES: [&str; 7] =
   ["PENDING", "RUNNING", "CONFIGURING", "COMPLETING", "REQUEUED", "RESIZING", "SUSPENDED"];
+
+/// The Slurm states a held job can report while it waits: a held job stays PENDING, and a job whose launch failed is
+/// requeued and then held. The reason decides the hold; these states keep a held reason on a running job from firing.
+const SLURM_HELD_STATES: [&str; 2] = ["PENDING", "REQUEUED"];
+
+/// The line between the sacct rows and the squeue rows of one probe's output. The remote ssh runs both queries so one
+/// probe measures the state and the pending reason, and the marker tells the parser where one ends and the other
+/// begins.
+const SQUEUE_SECTION_MARKER: &str = "@@charliebot-squeue@@";
+
+/// The line squeue's exit status follows its rows on, so a failed reason query is loud instead of looking like a job
+/// with no reason. Its one tolerated code is 1: `squeue -j` answers it for a job id the controller no longer holds.
+const SQUEUE_STATUS_PREFIX: &str = "@@charliebot-squeue-exit ";
+const SQUEUE_STATUS_SUFFIX: &str = "@@";
+
+/// The status `squeue -j` answers for a job id the controller no longer knows. A terminal job's row still comes from
+/// sacct, so that status alone never hides a finished job.
+const SQUEUE_UNKNOWN_JOB_EXIT: i32 = 1;
+
+/// Whether one pending reason is Slurm's hold: a user, admin or system hold carries a `JobHeld` reason, and a job
+/// whose launch failed is requeued and held under `JobLaunchFailure`. Every other pending reason waits for the
+/// scheduler to start the job.
+fn is_slurm_hold_reason(reason: &str) -> bool {
+  reason.starts_with("JobHeld") || reason == "JobLaunchFailure"
+}
 
 /// The request body for `POST /api/internal/schedule-trigger`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -446,8 +472,19 @@ impl TriggerManager {
       ids.sort_unstable();
       for job_id in ids {
         let key = slurm_label(Some(host), job_id);
-        let state = reading.states.get(&job_id).map_or("not-yet-registered", |row| row.state.as_str());
-        observed.insert(key, Value::String(state.to_string()));
+        // A held job is already stuck at registration: name Slurm's hold reason so the caller learns it now instead of
+        // reading a plain PENDING as a job that will start on its own.
+        let state = match reading.states.get(&job_id) {
+          Some(row) => {
+            let state_key = row.state.split_whitespace().next().unwrap_or_default();
+            match reading.held_reason(job_id, state_key) {
+              Some(reason) => format!("{} ({reason})", row.state),
+              None => row.state.clone(),
+            }
+          }
+          None => "not-yet-registered".to_string(),
+        };
+        observed.insert(key, Value::String(state));
       }
     }
     if bad.is_empty() {
@@ -684,9 +721,10 @@ impl TriggerManager {
     remote_ssh_argv(&self.probe_programs.ssh, self.ssh_control_dir.as_deref(), host, remote)
   }
 
-  /// Run one sacct query, locally or over ssh, and read the states it answers. The remote ssh also prints the
-  /// clock and zone lines that convert a terminal row's `End` column, so a remote end readback measures its offset
-  /// in the ssh that read the end back.
+  /// Run one Slurm probe, locally or over ssh, and read the job states and pending reasons it answers. The query
+  /// pairs the sacct row that decides a finish with the squeue reason that decides a hold, because sacct reports no
+  /// pending reason. The remote ssh also prints the clock and zone lines that convert a terminal row's `End` column,
+  /// so a remote end readback measures its offset in the ssh that read the end back.
   async fn probe_sacct(
     &self,
     job_ids: &[i64],
@@ -695,11 +733,20 @@ impl TriggerManager {
     purpose: SshPurpose,
   ) -> SacctReading {
     let ids = job_ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
-    let format = format!("--format={}", end_record::SACCT_FORMAT_COLUMNS.join(","));
-    let sacct_args = ["sacct", "-j", &ids, "-X", "-n", "-P", &format];
+    let sacct_args = format!("-j {ids} -X -n -P --format={}", end_record::SACCT_FORMAT_COLUMNS.join(","));
+    let squeue_args = format!("-j {ids} -h -o {}", sh_word("%A|%T|%r"));
+    let script = |sacct: &str, squeue: &str| {
+      format!(
+        "{sacct} {sacct_args}; s=$?; [ $s -eq 0 ] || exit $s; printf '%s\\n' {marker}; \
+         {squeue} {squeue_args}; q=$?; printf '{status_prefix}%s{status_suffix}\\n' \"$q\"; exit 0",
+        marker = sh_word(SQUEUE_SECTION_MARKER),
+        status_prefix = SQUEUE_STATUS_PREFIX,
+        status_suffix = SQUEUE_STATUS_SUFFIX,
+      )
+    };
     let (output, local_mid_ns) = match host {
       Some(host) => {
-        let remote = format!("{}; {}", end_record::SACCT_REMOTE_CLOCK_PREFIX, sacct_args.join(" "));
+        let remote = format!("{}; {}", end_record::SACCT_REMOTE_CLOCK_PREFIX, script("sacct", "squeue"));
         let run = self.run_remote_ssh(host, &remote, trigger_id, purpose).await;
         match run.result {
           Ok(output) => (output, run.local_mid_ns),
@@ -707,9 +754,15 @@ impl TriggerManager {
         }
       }
       None => {
-        let command = std::iter::once(self.probe_programs.sacct.clone())
-          .chain(sacct_args.iter().skip(1).map(|arg| arg.to_string()))
-          .collect();
+        // A local probe resolves squeue beside the configured sacct, so a test or operator path reaches both queries
+        // of the one probe.
+        let sacct_program = sh_word(&self.probe_programs.sacct);
+        let path_prefix = Path::new(&self.probe_programs.sacct)
+          .parent()
+          .filter(|dir| !dir.as_os_str().is_empty())
+          .map_or_else(String::new, |dir| format!("PATH={}:$PATH; export PATH; ", sh_word(&dir.to_string_lossy())));
+        let command =
+          vec!["sh".to_string(), "-c".to_string(), format!("{path_prefix}{}", script(&sacct_program, "squeue"))];
         match run_probe_command(command, None, "sacct").await {
           Ok(output) => (output, None),
           Err(error) => return SacctReading::error(error),
@@ -732,23 +785,16 @@ impl TriggerManager {
       ));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut states = HashMap::new();
-    for line in stdout.lines() {
-      let fields = line.trim().split('|').collect::<Vec<_>>();
-      if fields.len() < 3 {
-        continue;
+    let SlurmProbe { states, reasons } = match read_slurm_probe(&stdout) {
+      Ok(parsed) => parsed,
+      Err(error) => {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let message = if stderr.is_empty() { error } else { format!("{error}: {stderr}") };
+        tracing::warn!(target: "charliebot_triggers", trigger_id, host = host.unwrap_or(""), %message, "slurm_probe_unreadable");
+        return SacctReading::error(message);
       }
-      let Ok(job_id) = fields[0].parse::<i64>() else {
-        // The date and zone lines the remote command leads with parse as no job id and fall through here.
-        continue;
-      };
-      let end_raw = fields.get(3).map(|field| field.trim()).filter(|end| !end.is_empty()).map(str::to_string);
-      states.insert(
-        job_id,
-        SlurmRow { state: fields[1].trim().to_string(), exit_code: fields[2].trim().to_string(), end_raw },
-      );
-    }
-    SacctReading { states, error: None, prefix: end_record::sacct_probe_prefix(&stdout), local_mid_ns }
+    };
+    SacctReading { states, reasons, error: None, prefix: end_record::sacct_probe_prefix(&stdout), local_mid_ns }
   }
 
   /// Read one `--cmd` target's exit file back over ssh: the exit code, the file's mtime as the launch's end
@@ -856,33 +902,53 @@ impl TriggerManager {
       return Ok(WaitOutcome {
         reason: WaitReason::Timeout,
         finished: Vec::new(),
+        held: Vec::new(),
         still_alive: Vec::new(),
         remote_ends: Vec::new(),
       });
     }
-    let waits = groups.into_iter().map(|group| async move {
-      let (group_finished, group_alive, group_ends) = match group {
-        WaitGroup::Local(targets) => {
-          let (finished, still_alive) = self.wait_with_pidfd(trigger, &targets).await?;
-          (finished, still_alive, Vec::new())
+    // A held job ends the wait on its own: it never starts without an operator, so the wake must not wait for the
+    // other groups. The groups run unordered, and the first group that reports a hold abandons the rest.
+    let mut waits = FuturesUnordered::new();
+    for group in groups {
+      waits.push(async move {
+        match group {
+          WaitGroup::Local(targets) => {
+            let (finished, still_alive) = self.wait_with_pidfd(trigger, &targets).await?;
+            Ok::<_, anyhow::Error>((finished, still_alive, Vec::new(), Vec::new()))
+          }
+          WaitGroup::Remote(targets) => {
+            let (finished, still_alive, remote_ends) = self.wait_with_remote_probe(trigger, &targets).await?;
+            Ok::<_, anyhow::Error>((finished, still_alive, Vec::new(), remote_ends))
+          }
+          WaitGroup::Slurm(targets) => {
+            let group = self.wait_with_sacct(trigger, &targets).await?;
+            Ok::<_, anyhow::Error>((group.finished, group.still_alive, group.held, group.remote_ends))
+          }
         }
-        WaitGroup::Remote(targets) => self.wait_with_remote_probe(trigger, &targets).await?,
-        WaitGroup::Slurm(targets) => self.wait_with_sacct(trigger, &targets).await?,
-      };
-      Ok::<_, anyhow::Error>((group_finished, group_alive, group_ends))
-    });
-    let results = join_all(waits).await;
+      });
+    }
     let mut finished = Vec::new();
     let mut still_alive = Vec::new();
+    let mut held = Vec::new();
     let mut remote_ends = Vec::new();
-    for result in results {
-      let (group_finished, group_alive, group_ends) = result?;
+    while let Some(result) = waits.next().await {
+      let (group_finished, group_alive, group_held, group_ends) = result?;
       finished.extend(group_finished);
       still_alive.extend(group_alive);
+      held.extend(group_held);
       remote_ends.extend(group_ends);
+      if !held.is_empty() {
+        for label in unsettled_target_labels(&trigger.watch_targets, &finished, &held) {
+          if !still_alive.contains(&label) {
+            still_alive.push(label);
+          }
+        }
+        return Ok(WaitOutcome { reason: WaitReason::Held, finished, held, still_alive, remote_ends });
+      }
     }
     let reason = if still_alive.is_empty() { WaitReason::Completed } else { WaitReason::Timeout };
-    Ok(WaitOutcome { reason, finished, still_alive, remote_ends })
+    Ok(WaitOutcome { reason, finished, held, still_alive, remote_ends })
   }
 
   async fn watch_dormancy(&self, session_id: &str) -> anyhow::Result<String> {
@@ -915,7 +981,7 @@ impl TriggerManager {
         "[Scheduled trigger fired | {}] {}{}",
         outcome.reason,
         fresh.message,
-        format_suffix(outcome.reason, &outcome.finished, &outcome.still_alive)
+        format_suffix(outcome.reason, &outcome.finished, &outcome.held, &outcome.still_alive)
       )
     };
     if self.features.store.load_meta(&fresh.session_id).await?.is_none() {
@@ -1185,11 +1251,7 @@ impl TriggerManager {
     Ok((finished, still_alive, remote_ends))
   }
 
-  async fn wait_with_sacct(
-    &self,
-    trigger: &PendingTrigger,
-    targets: &[SlurmJob],
-  ) -> anyhow::Result<(Vec<String>, Vec<String>, Vec<RemoteTargetEnd>)> {
+  async fn wait_with_sacct(&self, trigger: &PendingTrigger, targets: &[SlurmJob]) -> anyhow::Result<WaitGroupOutcome> {
     // One wait group per host, in first-seen order; a job id repeated under a host joins its group once.
     let mut groups: Vec<(Option<String>, Vec<i64>, HashSet<i64>)> = Vec::new();
     let mut group_indexes: HashMap<Option<String>, usize> = HashMap::new();
@@ -1207,16 +1269,15 @@ impl TriggerManager {
     }
     let results =
       join_all(groups.iter().map(|(host, ids, _)| self.wait_sacct_group(trigger, host.as_deref(), ids.clone()))).await;
-    let mut finished = Vec::new();
-    let mut still_alive = Vec::new();
-    let mut remote_ends = Vec::new();
+    let mut outcome = WaitGroupOutcome::default();
     for result in results {
-      let (group_finished, group_alive, group_ends) = result?;
-      finished.extend(group_finished);
-      still_alive.extend(group_alive);
-      remote_ends.extend(group_ends);
+      let group = result?;
+      outcome.finished.extend(group.finished);
+      outcome.still_alive.extend(group.still_alive);
+      outcome.held.extend(group.held);
+      outcome.remote_ends.extend(group.remote_ends);
     }
-    Ok((finished, still_alive, remote_ends))
+    Ok(outcome)
   }
 
   async fn wait_sacct_group(
@@ -1224,12 +1285,15 @@ impl TriggerManager {
     trigger: &PendingTrigger,
     host: Option<&str>,
     mut remaining: Vec<i64>,
-  ) -> anyhow::Result<(Vec<String>, Vec<String>, Vec<RemoteTargetEnd>)> {
+  ) -> anyhow::Result<WaitGroupOutcome> {
     remaining.sort_unstable();
     if host.is_none() && !program_available(&self.probe_programs.sacct) {
       tracing::warn!(target: "charliebot_triggers", trigger_id = %trigger.id, job_ids = ?remaining, "slurm_watch_no_sacct_skip");
       sleep(remaining_until(trigger.fire_at)).await;
-      return Ok((Vec::new(), remaining.iter().map(|job_id| slurm_label(None, *job_id)).collect(), Vec::new()));
+      return Ok(WaitGroupOutcome {
+        still_alive: remaining.iter().map(|job_id| slurm_label(None, *job_id)).collect(),
+        ..WaitGroupOutcome::default()
+      });
     }
     let keys = match host {
       Some(host) => {
@@ -1237,9 +1301,8 @@ impl TriggerManager {
       }
       None => Vec::new(),
     };
-    let mut held = self.held.watch(&trigger.id, keys);
-    let mut finished = Vec::new();
-    let mut remote_ends = Vec::new();
+    let mut session_watch = self.held.watch(&trigger.id, keys);
+    let mut outcome = WaitGroupOutcome::default();
     let mut step = 0;
     let mut last_success = Instant::now();
     let mut next_probe = Instant::now();
@@ -1260,26 +1323,26 @@ impl TriggerManager {
                 "slurm_watch_host_unreachable"
               );
               let note = error.lines().next().unwrap_or_default().chars().take(120).collect::<String>();
-              let alive = remaining
+              outcome.still_alive = remaining
                 .iter()
                 .map(|job_id| {
                   format!("{} (unreachable {}m: {})", slurm_label(host, *job_id), dark_for.as_secs() / 60, note)
                 })
                 .collect();
-              return Ok((finished, alive, remote_ends));
+              return Ok(outcome);
             }
           } else {
             last_success = Instant::now();
           }
-          remaining = self.settle_sacct(trigger, host, &reading, remaining, &mut finished, &mut remote_ends);
-          if remaining.is_empty() || remaining_until(trigger.fire_at).is_zero() {
+          remaining = self.settle_sacct(trigger, host, &reading, remaining, &mut outcome);
+          if remaining.is_empty() || !outcome.held.is_empty() || remaining_until(trigger.fire_at).is_zero() {
             break;
           }
           let sleep_for = if host.is_none() { self.timing.sacct_interval } else { self.remote_interval(step) };
           next_probe = Instant::now() + sleep_for.min(remaining_until(trigger.fire_at));
           step += 1;
         }
-        end = held.recv() => {
+        end = session_watch.recv() => {
           let HeldEnd::Slurm { job_id, state, .. } = end else {
             unreachable!("a Slurm wait watches only Slurm ends");
           };
@@ -1298,32 +1361,32 @@ impl TriggerManager {
           if let Some(error) = &reading.error {
             tracing::debug!(target: "charliebot_triggers", trigger_id = %trigger.id, host = host.unwrap_or(""), %error, "held_readback_failed");
           }
-          remaining = self.settle_sacct(trigger, host, &reading, remaining, &mut finished, &mut remote_ends);
-          if remaining.is_empty() {
+          remaining = self.settle_sacct(trigger, host, &reading, remaining, &mut outcome);
+          if remaining.is_empty() || !outcome.held.is_empty() {
             break;
           }
           // A job the readback could not settle stays in the wait, and the registry dropped it when it dispatched
           // the end, so the watch takes it back; otherwise only the interval probe watches it.
           if let (Some(host), true) = (host, remaining.contains(&job_id)) {
-            held.resubscribe(HeldTarget::Slurm { host: host.to_string(), job_id });
+            session_watch.resubscribe(HeldTarget::Slurm { host: host.to_string(), job_id });
           }
         }
       }
     }
-    let still_alive = remaining.iter().map(|job_id| slurm_label(host, *job_id)).collect();
-    Ok((finished, still_alive, remote_ends))
+    outcome.still_alive = remaining.iter().map(|job_id| slurm_label(host, *job_id)).collect();
+    Ok(outcome)
   }
 
-  /// Apply one sacct reading to the jobs a wait still watches: a terminal row finishes its job with the end reading
-  /// the same ssh answered, and every other job stays. Returns the jobs that still wait.
+  /// Apply one Slurm probe reading to the jobs a wait still watches: a terminal row finishes its job with the end
+  /// reading the same ssh answered, a held job is reported as needing attention, and every other job stays. Returns
+  /// the jobs that still wait.
   fn settle_sacct(
     &self,
     trigger: &PendingTrigger,
     host: Option<&str>,
     reading: &SacctReading,
     remaining: Vec<i64>,
-    finished: &mut Vec<String>,
-    remote_ends: &mut Vec<RemoteTargetEnd>,
+    outcome: &mut WaitGroupOutcome,
   ) -> Vec<i64> {
     let mut keep = Vec::new();
     for job_id in remaining {
@@ -1332,15 +1395,24 @@ impl TriggerManager {
         continue;
       };
       let state_key = row.state.split_whitespace().next().unwrap_or_default();
-      if SLURM_ACTIVE_STATES.contains(&state_key) {
-        keep.push(job_id);
-      } else if SLURM_TERMINAL_STATES.contains(&state_key) {
+      if SLURM_TERMINAL_STATES.contains(&state_key) {
         let label = format!("{}: {} {}", slurm_label(host, job_id), row.state, row.exit_code);
-        finished.push(label);
+        outcome.finished.push(label);
         // The sacct readback ssh that answered this row is also the ssh the end conversion measures.
         if let Some(host) = host {
-          remote_ends.push(self.sacct_end_reading(&trigger.id, host, job_id, reading, time::OffsetDateTime::now_utc()));
+          outcome.remote_ends.push(self.sacct_end_reading(
+            &trigger.id,
+            host,
+            job_id,
+            reading,
+            time::OffsetDateTime::now_utc(),
+          ));
         }
+      } else if let Some(reason) = reading.held_reason(job_id, state_key) {
+        // A held job never starts without an operator, so it is reported now instead of at the deadline.
+        outcome.held.push(format!("{}: {} ({reason})", slurm_label(host, job_id), row.state));
+      } else if SLURM_ACTIVE_STATES.contains(&state_key) {
+        keep.push(job_id);
       } else {
         tracing::warn!(target: "charliebot_triggers", trigger_id = %trigger.id, job_id, state = %row.state, "slurm_unknown_state");
         keep.push(job_id);
@@ -1396,12 +1468,14 @@ impl TriggerManager {
   }
 }
 
-/// Why a trigger's wait ended: every watched target finished, or the deadline came first.
+/// Why a trigger's wait ended: every watched target finished, a watched Slurm job is held and will not start on its
+/// own, or the deadline came first.
 ///
 /// `Display` writes the word that `fire_reason` carries in the trigger file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WaitReason {
   Completed,
+  Held,
   Timeout,
 }
 
@@ -1409,6 +1483,7 @@ impl std::fmt::Display for WaitReason {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.write_str(match self {
       Self::Completed => "completed",
+      Self::Held => "held",
       Self::Timeout => "timeout",
     })
   }
@@ -1417,15 +1492,28 @@ impl std::fmt::Display for WaitReason {
 struct WaitOutcome {
   reason: WaitReason,
   finished: Vec<String>,
+  /// The watched Slurm jobs Slurm reports as held, with the state and reason it reports.
+  held: Vec<String>,
   still_alive: Vec<String>,
   /// One entry per remote target the server saw gone during the wait.
   remote_ends: Vec<RemoteTargetEnd>,
 }
 
-/// One sacct query's answer: the rows the fire decision reads, plus the clock and zone lines that convert a
-/// terminal row's `End` column, and the readback ssh's local midpoint.
+/// One Slurm wait group's answer: what it settled, what it still waits on, the held jobs that end the wait, and the
+/// remote ends it recorded.
+#[derive(Default)]
+struct WaitGroupOutcome {
+  finished: Vec<String>,
+  still_alive: Vec<String>,
+  held: Vec<String>,
+  remote_ends: Vec<RemoteTargetEnd>,
+}
+
+/// One Slurm probe's answer: the sacct rows and squeue pending reasons the fire decision reads, plus the clock and
+/// zone lines that convert a terminal row's `End` column, and the readback ssh's local midpoint.
 struct SacctReading {
   states: HashMap<i64, SlurmRow>,
+  reasons: HashMap<i64, String>,
   error: Option<String>,
   prefix: end_record::SacctProbePrefix,
   local_mid_ns: Option<i128>,
@@ -1435,14 +1523,23 @@ impl SacctReading {
   fn error(error: String) -> Self {
     SacctReading {
       states: HashMap::new(),
+      reasons: HashMap::new(),
       error: Some(error),
       prefix: end_record::SacctProbePrefix { now_ns: None, zone_seconds: None },
       local_mid_ns: None,
     }
   }
+
+  /// The hold reason of one job whose state still waits: set when Slurm reports the job in a held state with a hold
+  /// reason. An ordinary pending job has a reason like `Priority` and answers `None`.
+  fn held_reason(&self, job_id: i64, state_key: &str) -> Option<&str> {
+    let reason = self.reasons.get(&job_id)?;
+    (SLURM_HELD_STATES.contains(&state_key) && is_slurm_hold_reason(reason)).then_some(reason.as_str())
+  }
 }
 
 /// One sacct row: the state and exit code the fire decision reads, and the `End` column the end readback reads.
+#[derive(Debug)]
 struct SlurmRow {
   state: String,
   exit_code: String,
@@ -1748,6 +1845,98 @@ struct ProbeOutput {
   status: std::process::ExitStatus,
 }
 
+/// One word as a POSIX shell reads it literally.
+fn sh_word(word: &str) -> String {
+  format!("'{}'", word.replace('\'', "'\\''"))
+}
+
+/// Whether a line is a `date +%z` output, `+HHMM` or `-HHMM`. The probe's zone line reads like a signed integer, so
+/// the sacct section tells it apart from a job row by this shape alone.
+fn is_zone_line(line: &str) -> bool {
+  let bytes = line.as_bytes();
+  bytes.len() == 5 && matches!(bytes[0], b'+' | b'-') && bytes[1..].iter().all(u8::is_ascii_digit)
+}
+
+/// Read one Slurm probe's output: the sacct rows before the squeue marker, then the squeue rows and the status line
+/// that follows them. An unreadable line is an error, not a skipped row, because a dropped pending row would look
+/// like a job that simply has not started. An empty section is fine: a query can answer no rows.
+fn read_slurm_probe(stdout: &str) -> Result<SlurmProbe, String> {
+  let mut states = HashMap::new();
+  let mut reasons = HashMap::new();
+  let mut in_squeue = false;
+  let mut status_seen = false;
+  for line in stdout.lines() {
+    let line = line.trim();
+    if line.is_empty() {
+      continue;
+    }
+    if !in_squeue {
+      if line == SQUEUE_SECTION_MARKER {
+        in_squeue = true;
+        continue;
+      }
+      // A remote probe leads with the epoch line that carries a decimal and the zone line that reads like a signed
+      // integer; neither is a job row, and a job row names four columns.
+      if line.split('|').next().is_some_and(|first| first.parse::<i64>().is_err()) || is_zone_line(line) {
+        continue;
+      }
+      let fields = line.split('|').collect::<Vec<_>>();
+      let Ok(job_id) = fields[0].parse::<i64>() else {
+        continue;
+      };
+      if fields.len() != end_record::SACCT_FORMAT_COLUMNS.len() {
+        return Err(format!(
+          "sacct row is not {}: {}",
+          end_record::SACCT_FORMAT_COLUMNS.join("|"),
+          text_repr::str_repr(line)
+        ));
+      }
+      let end_raw = fields[3].trim();
+      let end_raw = (!end_raw.is_empty()).then(|| end_raw.to_string());
+      states.insert(
+        job_id,
+        SlurmRow { state: fields[1].trim().to_string(), exit_code: fields[2].trim().to_string(), end_raw },
+      );
+      continue;
+    }
+    if let Some(code) = line.strip_prefix(SQUEUE_STATUS_PREFIX).and_then(|rest| rest.strip_suffix(SQUEUE_STATUS_SUFFIX))
+    {
+      let code =
+        code.parse::<i32>().map_err(|_| format!("squeue status is not a number: {}", text_repr::str_repr(line)))?;
+      if code != 0 && code != SQUEUE_UNKNOWN_JOB_EXIT {
+        return Err(format!("squeue exit {code}"));
+      }
+      status_seen = true;
+      continue;
+    }
+    if status_seen {
+      return Err(format!("squeue row after its status line: {}", text_repr::str_repr(line)));
+    }
+    let fields = line.split('|').collect::<Vec<_>>();
+    let Ok(job_id) = fields[0].parse::<i64>() else {
+      return Err(format!("squeue row is not JobID|State|Reason: {}", text_repr::str_repr(line)));
+    };
+    if fields.len() != 3 {
+      return Err(format!("squeue row is not JobID|State|Reason: {}", text_repr::str_repr(line)));
+    }
+    reasons.insert(job_id, fields[2].trim().to_string());
+  }
+  if !in_squeue {
+    return Err(format!("slurm probe output has no {SQUEUE_SECTION_MARKER} marker"));
+  }
+  if !status_seen {
+    return Err("slurm probe output has no squeue status line".to_string());
+  }
+  Ok(SlurmProbe { states, reasons })
+}
+
+/// One Slurm probe's parsed answer: the sacct row of each job and the squeue pending reason of each job.
+#[derive(Debug)]
+struct SlurmProbe {
+  states: HashMap<i64, SlurmRow>,
+  reasons: HashMap<i64, String>,
+}
+
 async fn run_probe_command(argv: Vec<String>, deadline: Option<Duration>, kind: &str) -> Result<ProbeOutput, String> {
   let (program, args) = argv.split_first().expect("probe argv has an executable");
   let mut command = Command::new(program);
@@ -1830,6 +2019,31 @@ fn still_alive_label(pid_label: &str, log: Option<&str>) -> String {
 
 fn slurm_label(host: Option<&str>, job_id: i64) -> String {
   host.map_or_else(|| format!("slurm:{job_id}"), |host| format!("{host}:slurm:{job_id}"))
+}
+
+/// The still-alive label of one watch target whose group had not answered when a hold ended the wait. The label takes
+/// the same shape the wait itself would report for that target.
+fn target_label(target: &WatchTarget) -> String {
+  match target {
+    WatchTarget::LocalPid { pid, .. } => pid.to_string(),
+    WatchTarget::RemotePid { host, pid, .. } => format!("{host}:{pid}"),
+    WatchTarget::SlurmJob { host, job_id } => slurm_label(host.as_deref(), *job_id),
+  }
+}
+
+/// The targets a held wake does not name as finished or held: their group had not answered, so they still wait.
+fn unsettled_target_labels(targets: &[WatchTarget], finished: &[String], held: &[String]) -> Vec<String> {
+  let settled = |label: &str| {
+    finished.iter().chain(held.iter()).any(|entry| entry.strip_prefix(label).is_some_and(|rest| rest.starts_with(':')))
+  };
+  let mut labels = Vec::new();
+  for target in targets {
+    let label = target_label(target);
+    if !settled(&label) && !labels.contains(&label) {
+      labels.push(label);
+    }
+  }
+  labels
 }
 
 /// The per-session trigger-recovery time over which the boot logs, so a slow boot names the session whose trigger
@@ -1946,12 +2160,24 @@ fn read_one_session_triggers(
   Ok(Some(SessionTriggers { dir: entry.path(), triggers, index_rows, read_time: started.elapsed() }))
 }
 
-fn format_suffix(reason: WaitReason, finished: &[String], still_alive: &[String]) -> String {
+fn format_suffix(reason: WaitReason, finished: &[String], held: &[String], still_alive: &[String]) -> String {
   let finished_part = finished.join(", ");
+  let held_part = held.join(", ");
+  let alive_part = still_alive.join(", ");
   match reason {
     WaitReason::Completed => format!(" (finished: {finished_part})"),
+    WaitReason::Held => {
+      let mut parts = Vec::new();
+      if !finished_part.is_empty() {
+        parts.push(format!("finished: {finished_part}"));
+      }
+      parts.push(format!("held: {held_part}"));
+      if !alive_part.is_empty() {
+        parts.push(format!("still alive: {alive_part}"));
+      }
+      format!(" ({})", parts.join("; "))
+    }
     WaitReason::Timeout => {
-      let alive_part = still_alive.join(", ");
       if finished_part.is_empty() {
         format!(" (still alive: {alive_part})")
       } else {
@@ -2354,26 +2580,50 @@ mod tests {
     ssh_behavior: Value,
     sacct_behavior: Value,
   ) -> Arc<TriggerManager> {
-    Arc::new(fake_probe_manager(features, root, ssh_behavior, sacct_behavior, Duration::from_millis(2)))
+    fake_manager_with_squeue(features, root, ssh_behavior, sacct_behavior, probe_behavior("", "", 0))
   }
 
-  /// A manager whose probe programs are the fake helper. The remote `sacct` of a held script finds the same fake by
-  /// name on the helper's `PATH`, and the probes' interval is `interval`.
+  /// A manager with a scripted squeue, whose rows answer the pending reasons a hold test needs.
+  fn fake_manager_with_squeue(
+    features: Arc<FeatureContext>,
+    root: &Path,
+    ssh_behavior: Value,
+    sacct_behavior: Value,
+    squeue_behavior: Value,
+  ) -> Arc<TriggerManager> {
+    Arc::new(fake_probe_manager(
+      features,
+      root,
+      ssh_behavior,
+      sacct_behavior,
+      squeue_behavior,
+      Duration::from_millis(2),
+    ))
+  }
+
+  /// A manager whose probe programs are the fake helper. The remote `sacct` and `squeue` of a probe find the same
+  /// fakes by name on the helper's `PATH`, and the probes' interval is `interval`.
   fn fake_probe_manager(
     features: Arc<FeatureContext>,
     root: &Path,
     ssh_behavior: Value,
     sacct_behavior: Value,
+    squeue_behavior: Value,
     interval: Duration,
   ) -> TriggerManager {
     let bin = root.join("fake-bin");
     std::fs::create_dir_all(&bin).expect("fake bin directory");
     let helper = fake_probe_bin();
-    for role in ["fake-ssh", "fake-sacct", "sacct"] {
+    for role in ["fake-ssh", "fake-sacct", "sacct", "squeue"] {
       std::os::unix::fs::symlink(&helper, bin.join(role))
         .unwrap_or_else(|error| panic!("link fake program {role}: {error}"));
     }
-    let behavior = json!({ "fake-ssh": ssh_behavior, "fake-sacct": sacct_behavior.clone(), "sacct": sacct_behavior });
+    let behavior = json!({
+      "fake-ssh": ssh_behavior,
+      "fake-sacct": sacct_behavior.clone(),
+      "sacct": sacct_behavior,
+      "squeue": squeue_behavior,
+    });
     std::fs::write(bin.join("probe.json"), serde_json::to_vec(&behavior).expect("serialize probe behavior"))
       .expect("write probe behavior");
     TriggerManager::new(features).test_probe_setup(
@@ -2742,8 +2992,12 @@ mod tests {
   async fn schedule_route_accepts_mixed_watch_target_kinds() {
     let (home, features) = feature_context();
     add_session(&features, SESSION_ID);
-    let manager =
-      fake_manager(Arc::clone(&features), home.path(), probe_behavior("ALIVE\n", "", 0), probe_behavior("", "", 0));
+    // The remote pid verify answers ALIVE first, then the remote Slurm verify answers its own probe.
+    let ssh = json!({ "sequence": [
+      probe_behavior("ALIVE\n", "", 0),
+      probe_behavior("789|PENDING|0:0|\n@@charliebot-squeue@@\n@@charliebot-squeue-exit 0@@\n", "", 0),
+    ] });
+    let manager = fake_manager(Arc::clone(&features), home.path(), ssh, probe_behavior("", "", 0));
     features.startup.insert(Arc::clone(&manager)).expect("insert trigger manager");
     let body = json!({
       "session_id": SESSION_ID,
@@ -2915,6 +3169,8 @@ mod tests {
 
   const SACCT_RUNNING_ROW: &str = "473328|RUNNING|0:0|\n";
   const SACCT_COMPLETED_ROW: &str = "473328|COMPLETED|0:0|2026-11-08T01:00:00\n";
+  /// The empty squeue section a scripted probe output carries after its sacct rows.
+  const SQUEUE_EMPTY_TRAILER: &str = "@@charliebot-squeue@@\n@@charliebot-squeue-exit 0@@\n";
 
   #[tokio::test]
   #[ignore = "integration"]
@@ -2924,6 +3180,7 @@ mod tests {
       Arc::clone(&features),
       home.path(),
       json!({ "run_remote": true }),
+      probe_behavior("", "", 0),
       probe_behavior("", "", 0),
       Duration::from_secs(3600),
     )
@@ -2951,6 +3208,7 @@ mod tests {
       Arc::clone(&features),
       home.path(),
       json!({ "run_remote": true }),
+      probe_behavior("", "", 0),
       probe_behavior("", "", 0),
       Duration::from_millis(2),
     )
@@ -2984,13 +3242,15 @@ mod tests {
       home.path(),
       json!({ "run_remote": true }),
       sacct,
+      probe_behavior("", "", 0),
       Duration::from_secs(3600),
     )
     .with_held_session(true, PRODUCTION_TIMING);
     let trigger = pending_trigger("synthetic-held-slurm", SESSION_ID, near_future(3600), Vec::new());
     let targets =
       [SlurmJob { kind: SLURM_JOB_KIND.to_string(), host: Some("synthetic-host".to_string()), job_id: 473328 }];
-    let (finished, still_alive, _ends) = manager.wait_with_sacct(&trigger, &targets).await.expect("slurm wait");
+    let outcome = manager.wait_with_sacct(&trigger, &targets).await.expect("slurm wait");
+    let (finished, still_alive) = (outcome.finished, outcome.still_alive);
     assert!(still_alive.is_empty());
     assert_eq!(finished.len(), 1, "{finished:?}");
     assert!(finished[0].starts_with("synthetic-host:slurm:473328: COMPLETED"), "{finished:?}");
@@ -3006,6 +3266,7 @@ mod tests {
       Arc::clone(&features),
       home.path(),
       json!({ "run_remote": true }),
+      probe_behavior("", "", 0),
       probe_behavior("", "", 0),
       Duration::from_secs(3600),
     )
@@ -3027,6 +3288,7 @@ mod tests {
       Arc::clone(&features),
       home.path(),
       json!({ "run_remote": true }),
+      probe_behavior("", "", 0),
       probe_behavior("", "", 0),
       Duration::from_secs(3600),
     )
@@ -3057,6 +3319,7 @@ mod tests {
       Arc::clone(&features),
       home.path(),
       json!({ "run_remote": true }),
+      probe_behavior("", "", 0),
       probe_behavior("", "", 0),
       Duration::from_secs(3600),
     )
@@ -3091,6 +3354,7 @@ mod tests {
       home.path(),
       json!({ "run_remote": true }),
       probe_behavior("", "", 0),
+      probe_behavior("", "", 0),
       Duration::from_secs(3600),
     )
     .with_held_session(true, PRODUCTION_TIMING);
@@ -3120,6 +3384,7 @@ mod tests {
         home.path(),
         json!({ "run_remote": true }),
         probe_behavior("", "", 0),
+        probe_behavior("", "", 0),
         Duration::from_secs(3600),
       )
       .with_held_session(true, PRODUCTION_TIMING),
@@ -3143,6 +3408,7 @@ mod tests {
       Arc::clone(&features),
       home.path(),
       json!({ "run_remote": true }),
+      probe_behavior("", "", 0),
       probe_behavior("", "", 0),
       Duration::from_millis(2),
     )
@@ -3169,12 +3435,13 @@ mod tests {
     let manager = fake_manager(
       Arc::clone(&features),
       home.path(),
-      probe_behavior("123|COMPLETED|0:0\n", "", 0),
+      probe_behavior(&format!("123|COMPLETED|0:0|\n{SQUEUE_EMPTY_TRAILER}"), "", 0),
       probe_behavior("", "", 0),
     );
     let trigger = pending_trigger("synthetic-slurm", SESSION_ID, near_future(10), Vec::new());
     let target = SlurmJob { kind: "slurm_job".to_string(), host: Some("synthetic-host".to_string()), job_id: 123 };
-    let (finished, still_alive, _ends) = manager.wait_with_sacct(&trigger, &[target]).await.expect("remote SLURM wait");
+    let outcome = manager.wait_with_sacct(&trigger, &[target]).await.expect("remote SLURM wait");
+    let (finished, still_alive) = (outcome.finished, outcome.still_alive);
     assert_eq!(finished, ["synthetic-host:slurm:123: COMPLETED 0:0"]);
     assert!(still_alive.is_empty());
   }
@@ -3191,7 +3458,8 @@ mod tests {
     );
     let trigger = pending_trigger("synthetic-slurm-dark", SESSION_ID, near_future(10), Vec::new());
     let target = SlurmJob { kind: "slurm_job".to_string(), host: Some("synthetic-host".to_string()), job_id: 123 };
-    let (finished, still_alive, _ends) = manager.wait_with_sacct(&trigger, &[target]).await.expect("remote SLURM wait");
+    let outcome = manager.wait_with_sacct(&trigger, &[target]).await.expect("remote SLURM wait");
+    let (finished, still_alive) = (outcome.finished, outcome.still_alive);
     assert!(finished.is_empty());
     assert_eq!(still_alive, ["synthetic-host:slurm:123 (unreachable 0m: sacct exit 255: synthetic ssh refusal)"]);
   }
@@ -3204,13 +3472,205 @@ mod tests {
       Arc::clone(&features),
       home.path(),
       probe_behavior("", "", 0),
-      probe_behavior("123|COMPLETED|0:0\n", "", 0),
+      probe_behavior("123|COMPLETED|0:0|\n", "", 0),
     );
     let trigger = pending_trigger("synthetic-local-slurm", SESSION_ID, near_future(10), Vec::new());
     let target = SlurmJob { kind: "slurm_job".to_string(), host: None, job_id: 123 };
-    let (finished, still_alive, _ends) = manager.wait_with_sacct(&trigger, &[target]).await.expect("local SLURM wait");
+    let outcome = manager.wait_with_sacct(&trigger, &[target]).await.expect("local SLURM wait");
+    let (finished, still_alive) = (outcome.finished, outcome.still_alive);
     assert_eq!(finished, ["slurm:123: COMPLETED 0:0"]);
     assert!(still_alive.is_empty());
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn held_pending_job_fires_with_slurms_reason() {
+    let (home, features) = feature_context();
+    let manager = fake_manager_with_squeue(
+      Arc::clone(&features),
+      home.path(),
+      probe_behavior("", "", 0),
+      probe_behavior("123|PENDING|0:0|\n", "", 0),
+      probe_behavior("123|PENDING|JobHeldUser\n", "", 0),
+    );
+    let trigger = pending_trigger("synthetic-held-pending", SESSION_ID, near_future(3600), Vec::new());
+    let target = SlurmJob { kind: "slurm_job".to_string(), host: None, job_id: 123 };
+    let outcome = manager.wait_with_sacct(&trigger, &[target]).await.expect("local SLURM wait");
+    let (finished, still_alive, held) = (outcome.finished, outcome.still_alive, outcome.held);
+    assert!(finished.is_empty(), "a held job is not a finished job: {finished:?}");
+    assert!(still_alive.is_empty(), "the wait ends on the hold: {still_alive:?}");
+    assert_eq!(held, ["slurm:123: PENDING (JobHeldUser)"]);
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn requeued_launch_failure_reports_the_remote_hold_reason() {
+    let (home, features) = feature_context();
+    let manager = fake_manager(
+      Arc::clone(&features),
+      home.path(),
+      probe_behavior(
+        "123|PENDING|0:0|\n@@charliebot-squeue@@\n123|PENDING|JobLaunchFailure\n@@charliebot-squeue-exit 0@@\n",
+        "",
+        0,
+      ),
+      probe_behavior("", "", 0),
+    );
+    let trigger = pending_trigger("synthetic-launch-failure", SESSION_ID, near_future(3600), Vec::new());
+    let target = SlurmJob { kind: "slurm_job".to_string(), host: Some("synthetic-host".to_string()), job_id: 123 };
+    let outcome = manager.wait_with_sacct(&trigger, &[target]).await.expect("remote SLURM wait");
+    let (finished, still_alive, held) = (outcome.finished, outcome.still_alive, outcome.held);
+    assert!(finished.is_empty());
+    assert!(still_alive.is_empty());
+    assert_eq!(held, ["synthetic-host:slurm:123: PENDING (JobLaunchFailure)"]);
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn ordinary_pending_reason_keeps_waiting() {
+    let (home, features) = feature_context();
+    let manager = fake_manager_with_squeue(
+      Arc::clone(&features),
+      home.path(),
+      probe_behavior("", "", 0),
+      probe_behavior("123|PENDING|0:0|\n", "", 0),
+      probe_behavior("123|PENDING|Priority\n", "", 0),
+    );
+    // The deadline is already here, so the one probe runs and the wait reports what it saw.
+    let trigger = pending_trigger("synthetic-pending-priority", SESSION_ID, near_future(0), Vec::new());
+    let target = SlurmJob { kind: "slurm_job".to_string(), host: None, job_id: 123 };
+    let outcome = manager.wait_with_sacct(&trigger, &[target]).await.expect("local SLURM wait");
+    let (finished, still_alive, held) = (outcome.finished, outcome.still_alive, outcome.held);
+    assert!(finished.is_empty());
+    assert!(held.is_empty(), "an ordinary pending reason is not a hold: {held:?}");
+    assert_eq!(still_alive, ["slurm:123"]);
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn held_job_keeps_a_running_job_in_the_wake() {
+    let (home, features) = feature_context();
+    let manager = fake_manager_with_squeue(
+      Arc::clone(&features),
+      home.path(),
+      probe_behavior("", "", 0),
+      probe_behavior("123|PENDING|0:0|\n124|RUNNING|0:0|\n", "", 0),
+      probe_behavior("123|PENDING|JobHeldAdmin\n", "", 0),
+    );
+    let trigger = pending_trigger("synthetic-held-and-running", SESSION_ID, near_future(3600), Vec::new());
+    let targets = [
+      SlurmJob { kind: "slurm_job".to_string(), host: None, job_id: 123 },
+      SlurmJob { kind: "slurm_job".to_string(), host: None, job_id: 124 },
+    ];
+    let outcome = manager.wait_with_sacct(&trigger, &targets).await.expect("local SLURM wait");
+    let (finished, still_alive, held) = (outcome.finished, outcome.still_alive, outcome.held);
+    assert!(finished.is_empty());
+    assert_eq!(held, ["slurm:123: PENDING (JobHeldAdmin)"]);
+    assert_eq!(still_alive, ["slurm:124"]);
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn held_job_at_registration_is_reported() {
+    let (home, features) = feature_context();
+    let manager = fake_manager(
+      Arc::clone(&features),
+      home.path(),
+      probe_behavior(
+        "123|PENDING|0:0|\n@@charliebot-squeue@@\n123|PENDING|JobHeldUser\n@@charliebot-squeue-exit 0@@\n",
+        "",
+        0,
+      ),
+      probe_behavior("", "", 0),
+    );
+    let targets = [SlurmJob { kind: "slurm_job".to_string(), host: Some("synthetic-host".to_string()), job_id: 123 }];
+    let observed = manager.verify_remote_slurm(&targets, "synthetic-verify").await.expect("verify held job");
+    assert_eq!(observed.get("synthetic-host:slurm:123").and_then(Value::as_str), Some("PENDING (JobHeldUser)"));
+  }
+
+  #[test]
+  fn slurm_hold_reasons_are_named() {
+    for reason in ["JobHeldUser", "JobHeldAdmin", "JobLaunchFailure"] {
+      assert!(is_slurm_hold_reason(reason), "{reason}");
+    }
+    for reason in ["Priority", "Resources", "Dependency", "None", ""] {
+      assert!(!is_slurm_hold_reason(reason), "{reason}");
+    }
+  }
+
+  #[test]
+  fn a_held_reason_fires_only_a_job_that_still_waits() {
+    let reading = SacctReading {
+      states: HashMap::new(),
+      reasons: HashMap::from([(1, "JobHeldUser".to_string())]),
+      error: None,
+      prefix: end_record::SacctProbePrefix { now_ns: None, zone_seconds: None },
+      local_mid_ns: None,
+    };
+    assert_eq!(reading.held_reason(1, "PENDING"), Some("JobHeldUser"));
+    assert_eq!(reading.held_reason(1, "REQUEUED"), Some("JobHeldUser"));
+    assert_eq!(reading.held_reason(1, "RUNNING"), None, "a running job is still watched");
+    assert_eq!(reading.held_reason(2, "PENDING"), None, "a job without a reason waits");
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_held_job_ends_a_mixed_wait_before_the_live_pid() {
+    let (home, features) = feature_context();
+    let manager = fake_manager_with_squeue(
+      Arc::clone(&features),
+      home.path(),
+      probe_behavior("", "", 0),
+      probe_behavior("123|PENDING|0:0|\n", "", 0),
+      probe_behavior("123|PENDING|JobHeldUser\n", "", 0),
+    );
+    let child = spawn_sleeper();
+    let pid = i64::from(child.id());
+    let trigger = pending_trigger(
+      "synthetic-mixed-hold",
+      SESSION_ID,
+      near_future(3600),
+      vec![
+        WatchTarget::LocalPid { pid, exit_file: None, log: None },
+        WatchTarget::SlurmJob { host: None, job_id: 123 },
+      ],
+    );
+    let outcome = manager.wait_for_trigger(&trigger).await.expect("mixed wait");
+    end_sleeper(child);
+    assert_eq!(outcome.reason, WaitReason::Held);
+    assert_eq!(outcome.held, ["slurm:123: PENDING (JobHeldUser)"]);
+    assert_eq!(outcome.still_alive, [pid.to_string()], "the live pid still waits when the hold wakes the trigger");
+  }
+
+  #[test]
+  fn slurm_probe_reads_rows_and_reasons() {
+    // The remote probe leads with an epoch line and a zone line; the zone reads like a signed integer.
+    let stdout = "1794574841.298676920\n-0800\n1|PENDING|0:0|Unknown\n2|RUNNING|0:0|\n@@charliebot-squeue@@\n\
+                  1|PENDING|JobHeldUser\n@@charliebot-squeue-exit 0@@\n";
+    let probe = read_slurm_probe(stdout).expect("the probe parses");
+    assert_eq!(probe.states[&1].state, "PENDING");
+    assert_eq!(probe.reasons[&1], "JobHeldUser");
+    assert!(!probe.reasons.contains_key(&2), "a running job states no reason");
+    assert!(is_zone_line("-0800") && is_zone_line("+0530"));
+    assert!(!is_zone_line("1234") && !is_zone_line("+05300"));
+  }
+
+  #[test]
+  fn slurm_probe_fails_loud_on_unreadable_output() {
+    let no_marker = read_slurm_probe("1|PENDING|0:0|Unknown\n@@charliebot-squeue-exit 0@@\n").expect_err("no marker");
+    assert!(no_marker.contains("marker"), "{no_marker}");
+    let short_row = read_slurm_probe("1|PENDING|0:0\n@@charliebot-squeue@@\n@@charliebot-squeue-exit 0@@\n")
+      .expect_err("a sacct row names four columns");
+    assert!(short_row.contains("sacct row"), "{short_row}");
+    let short_squeue = read_slurm_probe("@@charliebot-squeue@@\n1|PENDING\n@@charliebot-squeue-exit 0@@\n")
+      .expect_err("a squeue row names three columns");
+    assert!(short_squeue.contains("squeue row"), "{short_squeue}");
+    let squeue_failure = read_slurm_probe("@@charliebot-squeue@@\n@@charliebot-squeue-exit 127@@\n")
+      .expect_err("a failed squeue is not an empty reason list");
+    assert!(squeue_failure.contains("squeue exit 127"), "{squeue_failure}");
+    assert!(read_slurm_probe("@@charliebot-squeue@@\n@@charliebot-squeue-exit 1@@\n").is_ok());
+    let no_status = read_slurm_probe("@@charliebot-squeue@@\n").expect_err("no status line");
+    assert!(no_status.contains("status line"), "{no_status}");
   }
 
   #[test]
@@ -3270,14 +3730,27 @@ mod tests {
   #[test]
   fn fire_suffix_matches_outcomes() {
     assert_eq!(
-      format_suffix(WaitReason::Completed, &["slurm:123: COMPLETED 0:0".to_string()], &[]),
+      format_suffix(WaitReason::Completed, &["slurm:123: COMPLETED 0:0".to_string()], &[], &[]),
       " (finished: slurm:123: COMPLETED 0:0)"
     );
     assert_eq!(
-      format_suffix(WaitReason::Timeout, &["42".to_string()], &["synthetic-host:43".to_string()]),
+      format_suffix(WaitReason::Timeout, &["42".to_string()], &[], &["synthetic-host:43".to_string()]),
       " (finished: 42; still alive: synthetic-host:43)"
     );
-    assert_eq!(format_suffix(WaitReason::Timeout, &[], &["42".to_string()]), " (still alive: 42)");
+    assert_eq!(format_suffix(WaitReason::Timeout, &[], &[], &["42".to_string()]), " (still alive: 42)");
+    assert_eq!(
+      format_suffix(WaitReason::Held, &[], &["host2:slurm:537333: PENDING (JobLaunchFailure)".to_string()], &[]),
+      " (held: host2:slurm:537333: PENDING (JobLaunchFailure))"
+    );
+    assert_eq!(
+      format_suffix(
+        WaitReason::Held,
+        &["42".to_string()],
+        &["slurm:123: PENDING (JobHeldUser)".to_string()],
+        &["43".to_string()]
+      ),
+      " (finished: 42; held: slurm:123: PENDING (JobHeldUser); still alive: 43)"
+    );
   }
 
   struct NoopCompletion;
@@ -3789,7 +4262,7 @@ mod tests {
     let manager = fake_manager(
       Arc::clone(&features),
       home.path(),
-      probe_behavior("123|RUNNING|0:0\n", "", 0),
+      probe_behavior(&format!("123|RUNNING|0:0|\n{SQUEUE_EMPTY_TRAILER}"), "", 0),
       probe_behavior("", "", 0),
     );
     features.startup.insert(Arc::clone(&manager)).expect("insert trigger manager");
@@ -4265,15 +4738,20 @@ mod tests {
     let (home, features) = feature_context();
     let end_raw = "2026-11-03T09:12:29";
     let ssh_sequence = json!([
-      { "stdout": "$NOW_NS\n+0000\n123|RUNNING|0:0|\n", "stderr": "", "exit": 0 },
-      { "stdout": format!("$NOW_NS\n+0000\n123|COMPLETED|0:0|{end_raw}\n"), "stderr": "", "exit": 0 },
+      { "stdout": format!("$NOW_NS\n+0000\n123|RUNNING|0:0|\n{SQUEUE_EMPTY_TRAILER}"), "stderr": "", "exit": 0 },
+      {
+        "stdout": format!("$NOW_NS\n+0000\n123|COMPLETED|0:0|{end_raw}\n{SQUEUE_EMPTY_TRAILER}"),
+        "stderr": "",
+        "exit": 0
+      },
     ]);
     let manager = scripted_manager(Arc::clone(&features), home.path(), ssh_sequence, json!([]));
     let trigger = pending_trigger("synthetic-scripted-slurm", SESSION_ID, near_future(10), Vec::new());
     let log = LogCapture::default();
     let _capture = log.install();
     let target = SlurmJob { kind: "slurm_job".to_string(), host: Some("synthetic-host".to_string()), job_id: 123 };
-    let (finished, still_alive, ends) = manager.wait_with_sacct(&trigger, &[target]).await.expect("remote SLURM wait");
+    let outcome = manager.wait_with_sacct(&trigger, &[target]).await.expect("remote SLURM wait");
+    let (finished, still_alive, ends) = (outcome.finished, outcome.still_alive, outcome.remote_ends);
     assert_eq!(finished, ["synthetic-host:slurm:123: COMPLETED 0:0"]);
     assert!(still_alive.is_empty());
     assert_eq!(fake_calls(home.path(), "fake-ssh"), 2, "one ssh per probe round, as the before build starts");

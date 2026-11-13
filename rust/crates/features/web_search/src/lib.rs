@@ -3,7 +3,7 @@
 //!
 //! The endpoint backends disallow Claude Code's built-in web search, because their endpoint either refuses it or
 //! answers without a search. This endpoint serves the search instead: Google's `google_search` grounding over
-//! `gemini-3.8-flash`, with each grounding redirect resolved to its real URL. The endpoint sits under the server's
+//! `gemini-4-hydrogen`, with each grounding redirect resolved to its real URL. The endpoint sits under the server's
 //! access gate, and the `--mcp-config` that mounts it carries a run token, so no credential travels in an argument.
 
 mod endpoint;

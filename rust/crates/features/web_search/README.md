@@ -11,7 +11,7 @@ argument. The endpoint sits under the server's access gate.
 
 ## The search
 
-`tools/call` with a query runs one Google `generateContent` request on `models/gemini-3.8-flash` with
+`tools/call` with a query runs one Google `generateContent` request on `models/gemini-4-hydrogen` with
 `tools: [{"google_search": {}}]`, authenticated by the `gemini.api_key` credential. The answer is the candidate's
 text, and the sources are `groundingMetadata.groundingChunks`.
 

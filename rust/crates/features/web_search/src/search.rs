@@ -6,7 +6,7 @@ use futures_util::future::join_all;
 use serde_json::{Value, json};
 
 /// The model that serves `google_search`. It is the model this path was measured on.
-pub const SEARCH_MODEL: &str = "gemini-3.8-flash";
+pub const SEARCH_MODEL: &str = "gemini-4-hydrogen";
 
 /// How many characters of an upstream body an error text carries.
 const BODY_EXCERPT_CHARS: usize = 500;

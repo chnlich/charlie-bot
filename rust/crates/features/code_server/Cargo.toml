@@ -14,7 +14,6 @@ charliebot-registry.workspace = true
 http.workspace = true
 libc.workspace = true
 minijinja.workspace = true
-nix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
@@ -24,4 +23,5 @@ which.workspace = true
 
 [dev-dependencies]
 charliebot-shell-harness.workspace = true
+nix.workspace = true
 tempfile.workspace = true

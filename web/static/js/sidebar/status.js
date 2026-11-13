@@ -115,12 +115,40 @@ function statusRequestUrls(path, ids, query = '', since = '') {
 // The status poll's URLs. A list the server can scope by filter names the filter, and the sessions the list does not
 // paint (the open chat, a delegate card's child) travel as ids. The archive view and a search answer their own row
 // sets, so they name every session by id.
+//
+// A page that carried only its first screen names those rows, while they fit one URL, and asks for `answer=ids`: the
+// server then answers those rows alone while the filter still names the set membership follows. Its first poll
+// otherwise downloads every row of the view, though the page paints only its first screen. Once a full listing or a
+// view change moves the poll's row set, the filter form answers it again, so a row entering the view still rides a
+// poll.
 function sidebarStatusUrls(path, ids, since) {
   if (!sidebarRowsRefreshable()) return statusRequestUrls(path, ids);
+  const query = 'filter=' + encodeURIComponent(currentFilter);
+  if (pageLeftRowsOut() && firstScreenPollIds === null && ids.length) {
+    firstScreenPollIds = [...ids].sort().join(',');
+  }
+  if (firstScreenPollIds !== null && [...ids].sort().join(',') === firstScreenPollIds) {
+    const named = statusRequestUrls(path, ids, query, since);
+    if (named.length === 1 && named[0].length + ANSWER_QUERY.length <= STATUS_QUERY_MAX_BYTES) {
+      return [named[0] + ANSWER_QUERY];
+    }
+  }
   const painted = new Set(Array.from(document.querySelectorAll('a[id^="session-"]'),
       el => el.id.slice('session-'.length)));
   const unpainted = ids.filter(sid => !painted.has(sid));
-  return statusRequestUrls(path, unpainted, 'filter=' + encodeURIComponent(currentFilter), since);
+  return statusRequestUrls(path, unpainted, query, since);
+}
+
+// The row set the poll named on the page's first poll, while the page carried only its first screen.
+let firstScreenPollIds = null;
+
+// The query that asks the server for the rows the request names rather than every row of the filter's set.
+const ANSWER_QUERY = '&answer=ids';
+
+// Whether the page carried only its first screen: the sidebar's `$screen` marks a page that left a group's rows out.
+function pageLeftRowsOut() {
+  return typeof INITIAL_SESSIONS !== 'undefined'
+    && Boolean(INITIAL_SESSIONS && INITIAL_SESSIONS.$screen && INITIAL_SESSIONS.$screen.partial);
 }
 
 // The status answers: the token to send back, the rows that moved, and the ids that left the filter's set.

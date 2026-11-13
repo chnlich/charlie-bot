@@ -1267,15 +1267,20 @@ impl TriggerManager {
         groups.push((target.host.clone(), vec![target.job_id], HashSet::from([target.job_id])));
       }
     }
-    let results =
-      join_all(groups.iter().map(|(host, ids, _)| self.wait_sacct_group(trigger, host.as_deref(), ids.clone()))).await;
+    let mut waits = FuturesUnordered::new();
+    for (host, ids, _) in &groups {
+      waits.push(self.wait_sacct_group(trigger, host.as_deref(), ids.clone()));
+    }
     let mut outcome = WaitGroupOutcome::default();
-    for result in results {
+    while let Some(result) = waits.next().await {
       let group = result?;
       outcome.finished.extend(group.finished);
       outcome.still_alive.extend(group.still_alive);
       outcome.held.extend(group.held);
       outcome.remote_ends.extend(group.remote_ends);
+      if !outcome.held.is_empty() {
+        return Ok(outcome);
+      }
     }
     Ok(outcome)
   }
@@ -2034,7 +2039,9 @@ fn target_label(target: &WatchTarget) -> String {
 /// The targets a held wake does not name as finished or held: their group had not answered, so they still wait.
 fn unsettled_target_labels(targets: &[WatchTarget], finished: &[String], held: &[String]) -> Vec<String> {
   let settled = |label: &str| {
-    finished.iter().chain(held.iter()).any(|entry| entry.strip_prefix(label).is_some_and(|rest| rest.starts_with(':')))
+    finished.iter().chain(held.iter()).any(|entry| {
+      entry.strip_prefix(label).is_some_and(|rest| rest.is_empty() || rest.starts_with(':') || rest.starts_with(" ("))
+    })
   };
   let mut labels = Vec::new();
   for target in targets {
@@ -3640,6 +3647,45 @@ mod tests {
     assert_eq!(outcome.reason, WaitReason::Held);
     assert_eq!(outcome.held, ["slurm:123: PENDING (JobHeldUser)"]);
     assert_eq!(outcome.still_alive, [pid.to_string()], "the live pid still waits when the hold wakes the trigger");
+  }
+
+  #[test]
+  fn unsettled_target_labels_distinguishes_settled_and_waiting() {
+    let targets = vec![
+      WatchTarget::LocalPid { pid: 42, exit_file: None, log: None },
+      WatchTarget::LocalPid { pid: 43, exit_file: None, log: None },
+      WatchTarget::RemotePid { host: "neptune".to_string(), pid: 10, exit_file: None, log: None },
+      WatchTarget::RemotePid { host: "neptune".to_string(), pid: 11, exit_file: None, log: None },
+      WatchTarget::SlurmJob { host: None, job_id: 12 },
+      WatchTarget::SlurmJob { host: None, job_id: 123 },
+    ];
+    let finished = vec!["42".to_string(), "neptune:10".to_string(), "slurm:123: COMPLETED 0:0".to_string()];
+    let held = vec!["slurm:12: PENDING (JobHeldUser)".to_string()];
+    let unsettled = unsettled_target_labels(&targets, &finished, &held);
+    assert_eq!(unsettled, ["43", "neptune:11"]);
+  }
+
+  #[tokio::test]
+  #[ignore = "integration"]
+  async fn a_held_job_ends_a_multi_host_slurm_wait() {
+    let (home, features) = feature_context();
+    let manager = fake_manager(
+      Arc::clone(&features),
+      home.path(),
+      probe_behavior(
+        "123|PENDING|0:0|\n@@charliebot-squeue@@\n123|PENDING|JobHeldUser\n@@charliebot-squeue-exit 0@@\n",
+        "",
+        0,
+      ),
+      probe_behavior("456|RUNNING|0:0|\n", "", 0),
+    );
+    let trigger = pending_trigger("synthetic-multi-host-hold", SESSION_ID, near_future(3600), Vec::new());
+    let targets = [
+      SlurmJob { kind: "slurm_job".to_string(), host: Some("synthetic-host".to_string()), job_id: 123 },
+      SlurmJob { kind: "slurm_job".to_string(), host: None, job_id: 456 },
+    ];
+    let outcome = manager.wait_with_sacct(&trigger, &targets).await.expect("slurm wait");
+    assert_eq!(outcome.held, ["synthetic-host:slurm:123: PENDING (JobHeldUser)"]);
   }
 
   #[test]

@@ -2,7 +2,15 @@
       <!-- The panel's secondary actions draw as bordered controls 26 px tall: as bare text they stood 16 px tall,
            under the 24 px pointer floor. One class serves the toolbar's Refresh and Open in tab and the empty
            state's Refresh, the control a session without plans shows. -->
-      {% set plan_secondary = "text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded border border-gray-600 hover:border-gray-500 whitespace-nowrap" %}
+      <style>
+        /* The 1 px border is the only mark of each of these controls. gray-600 draws 2.35:1 on the gray-900 empty
+           state and 1.94:1 on the gray-800 toolbar, under the 3:1 floor WCAG 1.4.11 sets for a control boundary.
+           The resting gray-500 border draws 3.67:1 and 3.04:1; the gray-400 hover draws 6.99:1 and 5.78:1, so
+           the pointer still reads the state change. */
+        .plan-secondary { border-color: #6b7280; }
+        .plan-secondary:hover { border-color: #9ca3af; }
+      </style>
+      {% set plan_secondary = "plan-secondary text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded border whitespace-nowrap" %}
       <div id="tab-plans" class="flex-1 flex flex-col min-h-0 min-w-0 bg-gray-900 overflow-hidden hidden">
         <div id="plan-toolbar" class="flex items-center justify-between gap-2 px-4 py-2 border-b border-gray-700 bg-gray-800">
           <select id="plan-selector" onchange="planPanel.selectPlan(this.value)"

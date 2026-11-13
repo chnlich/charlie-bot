@@ -112,18 +112,33 @@ pub struct SweepFailure {
 #[derive(Clone, Debug, Default)]
 pub struct SweepReport {
   pub rows: Vec<SweepRow>,
-  pub deleted_count: usize,
-  pub freed_bytes: u64,
-  pub skipped_count: usize,
   pub unreadable_proc_count: usize,
   pub failures: Vec<SweepFailure>,
 }
 
 impl SweepReport {
+  /// The number of rows a sweep removes or archives: the rows whose action is not [`SweepAction::Skip`].
+  pub fn deleted_count(&self) -> usize {
+    self.rows.iter().filter(|row| row.action != SweepAction::Skip).count()
+  }
+
+  /// The bytes a sweep frees: the `freed_bytes` of every row it removes or archives, summed.
+  pub fn freed_bytes(&self) -> u64 {
+    self.rows.iter().filter(|row| row.action != SweepAction::Skip).map(|row| row.freed_bytes).sum()
+  }
+
+  /// The number of rows a sweep leaves in place: the rows whose action is [`SweepAction::Skip`].
+  pub fn skipped_count(&self) -> usize {
+    self.rows.iter().filter(|row| row.action == SweepAction::Skip).count()
+  }
+
   pub fn total_line(&self) -> String {
     format!(
       "total\t{}\t{}\t{}\t{}",
-      self.deleted_count, self.freed_bytes, self.skipped_count, self.unreadable_proc_count
+      self.deleted_count(),
+      self.freed_bytes(),
+      self.skipped_count(),
+      self.unreadable_proc_count
     )
   }
 }
@@ -135,8 +150,6 @@ pub async fn run_sweep(roots: SweepRoots, apply: bool, now: DateTime<Utc>) -> Re
   let mut report = scanned.report;
   let mut unreadable = scanned.unreadable;
   if apply {
-    report.deleted_count = 0;
-    report.freed_bytes = 0;
     for index in 0..report.rows.len() {
       if report.rows[index].action == SweepAction::Skip {
         continue;
@@ -159,17 +172,9 @@ pub async fn run_sweep(roots: SweepRoots, apply: bool, now: DateTime<Utc>) -> Re
       unreadable.extend(unreadable_now);
       match prepared {
         Ok(PreparedApply::Skip(row)) => report.rows[index] = row,
-        Ok(PreparedApply::ScratchRemoved(row)) => {
-          report.freed_bytes += row.freed_bytes;
-          report.deleted_count += 1;
-          report.rows[index] = row;
-        }
+        Ok(PreparedApply::ScratchRemoved(row)) => report.rows[index] = row,
         Ok(PreparedApply::RemoveWorktree(row)) => match remove_worktree(&row, &roots).await {
-          Ok(()) => {
-            report.freed_bytes += row.freed_bytes;
-            report.deleted_count += 1;
-            report.rows[index] = row;
-          }
+          Ok(()) => report.rows[index] = row,
           Err(error) => record_apply_failure(&mut report, index, row, error.to_string()),
         },
         Err(error) => {
@@ -178,7 +183,6 @@ pub async fn run_sweep(roots: SweepRoots, apply: bool, now: DateTime<Utc>) -> Re
         }
       }
     }
-    report.skipped_count = report.rows.iter().filter(|row| row.action == SweepAction::Skip).count();
   }
   report.unreadable_proc_count = unreadable.len();
   Ok(report)
@@ -224,18 +228,8 @@ fn scan(roots: SweepRoots, now: DateTime<Utc>) -> Result<ScanResult> {
       row.freed_bytes = freed.get(&row.path).copied().unwrap_or_default();
     }
   }
-  let deleted_count = rows.iter().filter(|row| row.action != SweepAction::Skip).count();
-  let freed_bytes = rows.iter().filter(|row| row.action != SweepAction::Skip).map(|row| row.freed_bytes).sum();
-  let skipped_count = rows.iter().filter(|row| row.action == SweepAction::Skip).count();
   Ok(ScanResult {
-    report: SweepReport {
-      rows,
-      deleted_count,
-      freed_bytes,
-      skipped_count,
-      unreadable_proc_count: unreadable.len(),
-      failures: Vec::new(),
-    },
+    report: SweepReport { rows, unreadable_proc_count: unreadable.len(), failures: Vec::new() },
     unreadable,
   })
 }

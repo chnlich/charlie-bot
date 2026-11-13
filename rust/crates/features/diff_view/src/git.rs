@@ -8,6 +8,7 @@ use std::time::Duration;
 use axum::response::Response;
 use charliebot_compat::responses;
 use charliebot_core::git::object_exists_args;
+use charliebot_core::str_methods::universal_newlines;
 use http::StatusCode;
 use serde_json::json;
 
@@ -114,7 +115,7 @@ pub(crate) fn count_lines(bytes: &[u8]) -> usize {
 pub(crate) fn decode(bytes: &[u8]) -> Result<String, Response> {
   let text = std::str::from_utf8(bytes)
     .map_err(|error| responses::internal_error("UnicodeDecodeError", format!("git output is not UTF-8: {error}")))?;
-  Ok(text.replace("\r\n", "\n").replace('\r', "\n"))
+  Ok(universal_newlines(text))
 }
 
 /// The argument list as the timeout-failure message carries it.

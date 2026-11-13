@@ -12,6 +12,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail};
 use charliebot_core::json_loads::codec_error_text;
+use charliebot_core::str_methods::universal_newlines;
 use charliebot_core::text_repr::str_repr;
 use charliebot_store::metadata::{TaskSpec, TaskType};
 
@@ -79,7 +80,7 @@ pub fn read_text(path: &Path) -> Result<String, TextReadError> {
   let bytes = fs::read(path).map_err(TextReadError::Io)?;
   let text = String::from_utf8(bytes)
     .map_err(|error| TextReadError::Decode(utf8_decode_error_text(error.as_bytes(), &error.utf8_error())))?;
-  Ok(text.replace("\r\n", "\n").replace('\r', "\n"))
+  Ok(universal_newlines(&text))
 }
 
 /// The text of a `UnicodeDecodeError` for the bad bytes of a UTF-8 decode.

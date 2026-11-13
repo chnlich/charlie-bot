@@ -199,7 +199,7 @@ pub fn load_store(memory_dir: &Path) -> anyhow::Result<Store> {
 /// Reads a text file with universal newlines: `\r\n` and a lone `\r` turn into `\n`.
 fn read_text(path: &Path) -> anyhow::Result<String> {
   let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-  Ok(text.replace("\r\n", "\n").replace('\r', "\n"))
+  Ok(str_methods::universal_newlines(&text))
 }
 
 /// Parses one entry file.

@@ -439,7 +439,7 @@ async fn review_context_skips_malformed_tail_lines() -> anyhow::Result<()> {
 
 #[tokio::test]
 #[ignore = "integration"]
-async fn reviewer_avoids_every_member_the_worker_node_used() -> anyhow::Result<()> {
+async fn reviewer_prefers_a_member_the_worker_node_has_not_used() -> anyhow::Result<()> {
   let stack = Stack::start_with(
     vec![script_option("fake", "exit 0"), script_option("fake2", "exit 0"), script_option("fake3", "exit 0")],
     vec!["fake2".to_string(), "fake3".to_string()],
@@ -450,7 +450,6 @@ async fn reviewer_avoids_every_member_the_worker_node_used() -> anyhow::Result<(
   let selection = review::select_reviewer_backend(
     &stack.cfg,
     &pool.selector(&stack.cfg),
-    CallClass::Review,
     review::ReviewScope {
       route: None,
       worker_backend: "fake",
@@ -459,16 +458,19 @@ async fn reviewer_avoids_every_member_the_worker_node_used() -> anyhow::Result<(
       used_backends: &used,
     },
   )?;
-  assert_eq!(selection, Some(("fake3".to_string(), Some("fake3-model".to_string()), vec!["fake3".to_string()])));
+  assert!(matches!(
+    selection,
+    review::ReviewerBackendDecision::Selected((backend, Some(model), _)) if backend == "fake3" && model == "fake3-model"
+  ));
   Ok(())
 }
 
 #[tokio::test]
 #[ignore = "integration"]
-async fn reviewer_never_falls_back_to_a_member_the_worker_node_used() -> anyhow::Result<()> {
+async fn reviewer_uses_the_writer_when_it_is_the_only_selectable_pool_member() -> anyhow::Result<()> {
   let stack = Stack::start_with(
     vec![script_option("fake", "exit 0"), script_option("fake2", "exit 0")],
-    vec!["fake2".to_string()],
+    vec!["fake".to_string(), "fake2".to_string()],
   )
   .await?;
   let pool = test_pool();
@@ -477,36 +479,39 @@ async fn reviewer_never_falls_back_to_a_member_the_worker_node_used() -> anyhow:
     .record("fake2", None, charliebot_agents::backend_availability::REASON_QUOTA_ERROR, "synthetic quota error")
     .unwrap();
   let used = HashSet::from(["fake".to_string()]);
-  assert!(
-    review::select_reviewer_backend(
-      &stack.cfg,
-      &pool.selector(&stack.cfg),
-      CallClass::Review,
-      review::ReviewScope {
-        route: None,
-        worker_backend: "fake",
-        worker_model: Some("fake-model"),
-        tried_backends: &[],
-        used_backends: &used,
-      }
-    )?
-    .is_none()
-  );
-  assert!(
-    review::select_reviewer_backend(
-      &stack.cfg,
-      &pool.selector(&stack.cfg),
-      CallClass::Review,
-      review::ReviewScope {
-        route: None,
-        worker_backend: "fake",
-        worker_model: Some("fake-model"),
-        tried_backends: &[],
-        used_backends: &HashSet::from(["fake".to_string(), "fake2".to_string()]),
-      },
-    )?
-    .is_none()
-  );
+  let selection = review::select_reviewer_backend(
+    &stack.cfg,
+    &pool.selector(&stack.cfg),
+    review::ReviewScope {
+      route: None,
+      worker_backend: "fake",
+      worker_model: Some("fake-model"),
+      tried_backends: &[],
+      used_backends: &used,
+    },
+  )?;
+  assert!(matches!(
+    selection,
+    review::ReviewerBackendDecision::Selected((backend, Some(model), _)) if backend == "fake" && model == "fake-model"
+  ));
+
+  let tried = vec!["fake".to_string()];
+  let unavailable = review::select_reviewer_backend(
+    &stack.cfg,
+    &pool.selector(&stack.cfg),
+    review::ReviewScope {
+      route: None,
+      worker_backend: "fake",
+      worker_model: Some("fake-model"),
+      tried_backends: &tried,
+      used_backends: &HashSet::from(["fake".to_string(), "fake2".to_string()]),
+    },
+  )?;
+  let review::ReviewerBackendDecision::Unavailable { reason } = unavailable else {
+    anyhow::bail!("a failed reviewer remained selectable")
+  };
+  assert!(reason.contains("- fake: failed reviewer (writer backend)"), "{reason}");
+  assert!(reason.contains("- fake2: quota_error"), "{reason}");
   Ok(())
 }
 
@@ -521,7 +526,7 @@ async fn check_without_used_members_keeps_the_session_backend_fallback() -> anyh
   let pool = test_pool();
   let tried = vec!["fake2".to_string()];
   let selector = pool.selector(&stack.cfg);
-  let selection = review::select_reviewer_backend(
+  let selection = review::select_checker_backend(
     &stack.cfg,
     &selector,
     CallClass::Verify,
@@ -542,14 +547,13 @@ async fn check_without_used_members_keeps_the_session_backend_fallback() -> anyh
 
 #[tokio::test]
 #[ignore = "integration"]
-async fn empty_pool_reuses_the_worker_backend_on_every_attempt() -> anyhow::Result<()> {
+async fn an_empty_review_pool_uses_the_writer_once() -> anyhow::Result<()> {
   let stack = Stack::start_with(vec![script_option("fake", "exit 0")], Vec::new()).await?;
   let pool = test_pool();
   let selector = pool.selector(&stack.cfg);
-  let first = review::select_reviewer_backend(
+  let review::ReviewerBackendDecision::Selected(first) = review::select_reviewer_backend(
     &stack.cfg,
     &selector,
-    CallClass::Review,
     review::ReviewScope {
       route: None,
       worker_backend: "fake",
@@ -558,11 +562,12 @@ async fn empty_pool_reuses_the_worker_backend_on_every_attempt() -> anyhow::Resu
       used_backends: &HashSet::new(),
     },
   )?
-  .expect("an empty pool falls back to the worker backend");
-  let second = review::select_reviewer_backend(
+  else {
+    anyhow::bail!("the available writer backend was not selected")
+  };
+  let review::ReviewerBackendDecision::Unavailable { reason } = review::select_reviewer_backend(
     &stack.cfg,
     &selector,
-    CallClass::Review,
     review::ReviewScope {
       route: None,
       worker_backend: "fake",
@@ -571,10 +576,11 @@ async fn empty_pool_reuses_the_worker_backend_on_every_attempt() -> anyhow::Resu
       used_backends: &HashSet::from(["fake".to_string()]),
     },
   )?
-  .expect("an empty pool keeps the legacy worker-backend fallback on retries");
+  else {
+    anyhow::bail!("the failed reviewer was selected again")
+  };
   assert_eq!(first.0, "fake");
-  assert_eq!(second.0, "fake");
-  assert_eq!(second.2, ["fake", "fake"]);
+  assert!(reason.contains("- fake: failed reviewer (writer backend)"), "{reason}");
   Ok(())
 }
 
@@ -591,7 +597,6 @@ async fn exhausted_route_falls_back_to_the_worker_backend() -> anyhow::Result<()
   let selection = review::select_reviewer_backend(
     &stack.cfg,
     &selector,
-    CallClass::Review,
     review::ReviewScope {
       route: Some(&route),
       worker_backend: "fake",
@@ -600,7 +605,10 @@ async fn exhausted_route_falls_back_to_the_worker_backend() -> anyhow::Result<()
       used_backends: &HashSet::from(["fake2".to_string()]),
     },
   )?;
-  assert_eq!(selection, Some(("fake".to_string(), Some("fake-model".to_string()), vec!["fake".to_string()])));
+  assert!(matches!(
+    selection,
+    review::ReviewerBackendDecision::Selected((backend, Some(model), _)) if backend == "fake" && model == "fake-model"
+  ));
   Ok(())
 }
 
@@ -622,7 +630,6 @@ async fn a_review_route_model_and_singleton_pool_select_the_same_backend() -> an
   let model = review::select_reviewer_backend(
     &cfg,
     &selector,
-    CallClass::Review,
     review::ReviewScope {
       route: Some(&model_route),
       worker_backend: "fake2",
@@ -634,7 +641,6 @@ async fn a_review_route_model_and_singleton_pool_select_the_same_backend() -> an
   let pool = review::select_reviewer_backend(
     &cfg,
     &selector,
-    CallClass::Review,
     review::ReviewScope {
       route: Some(&pool_route),
       worker_backend: "fake2",
@@ -643,9 +649,31 @@ async fn a_review_route_model_and_singleton_pool_select_the_same_backend() -> an
       used_backends: &used,
     },
   )?;
+  let mut direct_cfg = cfg.clone();
+  direct_cfg.backends.calls = [(CallClass::Review, CallTarget::Backend("fake".to_string()))].into_iter().collect();
+  let direct = review::select_reviewer_backend(
+    &direct_cfg,
+    &selector,
+    review::ReviewScope {
+      route: None,
+      worker_backend: "fake2",
+      worker_model: Some("fake2-model"),
+      tried_backends: &[],
+      used_backends: &used,
+    },
+  )?;
 
+  assert!(matches!(model, review::ReviewerBackendDecision::Selected(_)));
   assert_eq!(model, pool);
-  assert_eq!(model, Some(("fake".to_string(), Some("fake-model".to_string()), Vec::new())));
+  assert_eq!(direct, model);
+  assert_eq!(
+    model,
+    review::ReviewerBackendDecision::Selected((
+      "fake".to_string(),
+      Some("fake-model".to_string()),
+      vec!["fake".to_string()]
+    ))
+  );
   Ok(())
 }
 
@@ -852,10 +880,10 @@ async fn reviewer_reuses_the_worker_route_and_avoids_its_backend() -> anyhow::Re
   Ok(())
 }
 
-/// A route whose only member is the worker's backend leaves the reviewer to today's pool selection.
+/// An explicit review pool takes precedence over the worker route and prefers its selectable non-writer member.
 #[tokio::test]
 #[ignore = "integration"]
-async fn a_fully_avoided_route_falls_back_to_todays_reviewer_selection() -> anyhow::Result<()> {
+async fn an_explicit_review_pool_precedes_the_worker_route_fallback() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
     vec![script_option("fake", &result_script("worker done")), script_option("fake2", &result_script("pool reviewer"))],
@@ -883,7 +911,7 @@ async fn a_fully_avoided_route_falls_back_to_todays_reviewer_selection() -> anyh
 
   queue_and_launch_work(&stack, &worker.id, "run-avoided-work", "ship it").await?;
   let review_run = wait_for_review(&stack, &worker.id, "run-avoided-work").await?;
-  assert_eq!(review_run.backend.as_deref(), Some("fake2"), "today's pool selection picks the other member");
+  assert_eq!(review_run.backend.as_deref(), Some("fake2"));
   Ok(())
 }
 
@@ -981,6 +1009,13 @@ async fn repo_less_implement_review_failure_takes_the_failure_report() -> anyhow
   let worker =
     stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_task("write a report", None))).await?;
   stack.dispatch.set_executor(None);
+  let pool = charliebot_agents::backend_pool::backend_pool(&stack.features)?;
+  pool.availability().record(
+    "fake",
+    None,
+    charliebot_agents::backend_availability::REASON_QUOTA_ERROR,
+    "synthetic quota error",
+  )?;
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-work", "write a report").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
@@ -989,7 +1024,11 @@ async fn repo_less_implement_review_failure_takes_the_failure_report() -> anyhow
   let reports = wait_for_child_reports(&stack, &manager.id, 1).await?;
   assert_eq!(reports.len(), 1);
   assert_eq!(reports[0]["outcome"], "blocked");
-  assert!(reports[0]["summary"].as_str().unwrap_or_default().contains("failed on every configured reviewer backend"));
+  let summary = reports[0]["summary"].as_str().context("blocked report has a summary")?;
+  assert!(summary.contains("failed and no reviewer backend is selectable"), "{summary}");
+  assert!(summary.contains("- fake2: failed reviewer"), "{summary}");
+  assert!(summary.contains("- fake: writer backend; quota_error"), "{summary}");
+  assert_eq!(stack.run_records(&worker.id)?.iter().filter(|run| run.kind == RunKind::Review).count(), 1);
   Ok(())
 }
 
@@ -1033,22 +1072,31 @@ async fn review_ending_on_a_spent_quota_moves_to_the_next_reviewer() -> anyhow::
 
 #[tokio::test]
 #[ignore = "integration"]
-async fn successful_worker_with_no_available_reviewer_reports_blocked() -> anyhow::Result<()> {
-  let stack =
-    Stack::start_with(vec![script_option("fake", &result_script("implemented"))], vec!["fake".to_string()]).await?;
+async fn successful_worker_uses_the_writer_when_it_is_the_only_selectable_reviewer() -> anyhow::Result<()> {
+  let stack = Stack::start_with(
+    vec![script_option("fake", &result_script("implemented")), script_option("fake2", "exit 0")],
+    vec!["fake".to_string(), "fake2".to_string()],
+  )
+  .await?;
   set_access_key(&stack)?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
   let worker =
     stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_task("write a report", None))).await?;
   stack.dispatch.set_executor(None);
+  let pool = charliebot_agents::backend_pool::backend_pool(&stack.features)?;
+  pool.availability().record(
+    "fake2",
+    None,
+    charliebot_agents::backend_availability::REASON_QUOTA_ERROR,
+    "synthetic quota error",
+  )?;
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-work", "write a report").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
-  let reports = wait_for_child_reports(&stack, &manager.id, 1).await?;
-  assert_eq!(reports.len(), 1);
-  assert_eq!(reports[0]["outcome"], "blocked");
-  assert!(reports[0]["summary"].as_str().unwrap_or_default().contains("found no available reviewer backend"));
-  assert!(stack.run_records(&worker.id)?.iter().all(|run| run.kind != RunKind::Review));
+  let review_run = wait_for_review(&stack, &worker.id, "run-work").await?;
+  assert_eq!(review_run.backend.as_deref(), Some("fake"));
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &review_run.id).await?, RunOutcomeKind::Success);
+  assert!(child_reports(&stack, &manager.id)?.iter().all(|report| report["outcome"] != "blocked"));
   Ok(())
 }
 

@@ -1591,7 +1591,7 @@ async fn recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_task() 
 
 #[tokio::test]
 #[ignore = "integration"]
-async fn recovery_reports_blocked_when_the_pool_has_no_reviewer_member() -> anyhow::Result<()> {
+async fn recovery_uses_the_writer_when_it_is_the_only_selectable_reviewer() -> anyhow::Result<()> {
   let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
@@ -1601,12 +1601,14 @@ async fn recovery_reports_blocked_when_the_pool_has_no_reviewer_member() -> anyh
   finished_work_run(&stack, &worker.id, "run-work", &repo, &branch, &worktree, None).await?;
 
   stack.node_pass(&worker.id).await?;
-  assert!(run_ids_of_kind(&stack, &worker.id, RunKind::Review)?.is_empty());
+  let reviews = run_ids_of_kind(&stack, &worker.id, RunKind::Review)?;
+  assert_eq!(reviews.len(), 1);
+  let review = stack.store().read_run_sync(&worker.id, &reviews[0])?.expect("writer fallback review is recorded");
+  assert_eq!(review.review_of_run_id.as_deref(), Some("run-work"));
+  assert_eq!(review.backend.as_deref(), Some(BACKEND_ID));
   let reports = child_reports(&stack, &manager.id)?;
-  assert_eq!(reports.len(), 1);
-  assert_eq!(reports[0]["outcome"], "blocked");
-  assert!(reports[0]["summary"].as_str().unwrap_or_default().contains("found no available reviewer backend"));
-  assert_eq!(stack.store().task_state(&worker.id)?, "archived");
+  assert!(reports.is_empty());
+  assert_eq!(stack.store().task_state(&worker.id)?, "open");
   Ok(())
 }
 

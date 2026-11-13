@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, anyhow, bail};
 use charliebot_agents::runs::run_alive_probe;
 use charliebot_agents::transport::{identity, recovery as transport_recovery};
-use charliebot_core::config::{BackendOption, CallClass};
+use charliebot_core::config::BackendOption;
 use charliebot_core::home::boot_recovery_marker_path;
 use charliebot_core::parallel_walk;
 use charliebot_registry::context::{FeatureContext, StartupStop};
@@ -1250,11 +1250,9 @@ async fn replay_followups_with_records(
           if let Some(reason) = completion.pause_reason(session_id)? {
             tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");
           } else if review_facts.owes_review(task_facts.task_state == "open", run)
-            && adapter.maybe_spawn_review(session_id, run).await?.is_none()
+            && let crate::execution::ReviewSpawnOutcome::NoReviewer(reason) =
+              adapter.maybe_spawn_review(session_id, run).await?
           {
-            let cfg = features.config.get()?;
-            let reason =
-              adapter.no_member_reason(&cfg, crate::spawner_backends::class_pool_id(&cfg, CallClass::Review))?;
             let summary = format!("review of work run {} found no available reviewer backend; {reason}", run.id);
             adapter.report_failure_to_parent(session_id, run, "blocked", Some(&summary)).await?;
           }

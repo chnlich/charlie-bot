@@ -153,6 +153,11 @@ impl<'a> Selector<'a> {
     all_exhausted_message(self.cfg, self.registry, &self.availability, &pool)
   }
 
+  /// The current availability reason for one concrete backend option.
+  pub fn member_state_reason(&self, backend_id: &str) -> anyhow::Result<String> {
+    member_state_reason(self.cfg, self.registry, &self.availability, backend_id, UtcDateTime::now())
+  }
+
   /// The option a selected member names. Every member is checked against `backends.options` at selection.
   fn option(&self, member: Option<PoolMember>) -> Option<BackendOption> {
     member.map(|member| {
@@ -663,20 +668,7 @@ pub fn all_exhausted_message(
   let now = UtcDateTime::now();
   let mut lines = Vec::new();
   for member in &pool.members {
-    let state = match availability.row(&member.backend).filter(|row| row.out_until.into_inner() > now.into_inner()) {
-      Some(row) => {
-        let detail = row.detail.lines().next().unwrap_or_default().trim();
-        let recovery = format!("{}, recovers at {}", row.reason, format_minutes(row.out_until));
-        if detail.is_empty() { recovery } else { format!("{recovery} ({detail})") }
-      }
-      None => match member_reading(cfg, registry, &member.backend, now)? {
-        Some(reading) if reading.exhausted => reading.earliest_reset().map_or_else(
-          || "quota exhausted".to_string(),
-          |reset| format!("quota exhausted, resets at {}", format_minutes(reset)),
-        ),
-        _ => "not selectable".to_string(),
-      },
-    };
+    let state = member_state_reason(cfg, registry, availability, &member.backend, now)?;
     let label = match (pool.rule, member_billing(cfg, member)) {
       (PoolRule::Priority, Some(billing)) => format!(" ({})", billing_label(billing)),
       _ => String::new(),
@@ -684,6 +676,29 @@ pub fn all_exhausted_message(
     lines.push(format!("- {}{label}: {state}", member.backend));
   }
   Ok(format!("pool '{}' has no selectable member:\n{}", pool.id, lines.join("\n")))
+}
+
+fn member_state_reason(
+  cfg: &CharlieBotConfig,
+  registry: &Registry,
+  availability: &BackendAvailability,
+  backend_id: &str,
+  now: UtcDateTime,
+) -> anyhow::Result<String> {
+  match availability.row(backend_id).filter(|row| row.out_until.into_inner() > now.into_inner()) {
+    Some(row) => {
+      let detail = row.detail.lines().next().unwrap_or_default().trim();
+      let recovery = format!("{}, recovers at {}", row.reason, format_minutes(row.out_until));
+      Ok(if detail.is_empty() { recovery } else { format!("{recovery} ({detail})") })
+    }
+    None => match member_reading(cfg, registry, backend_id, now)? {
+      Some(reading) if reading.exhausted => Ok(reading.earliest_reset().map_or_else(
+        || "quota exhausted".to_string(),
+        |reset| format!("quota exhausted, resets at {}", format_minutes(reset)),
+      )),
+      _ => Ok("not selectable".to_string()),
+    },
+  }
 }
 
 /// The billing of the `backends.options` entry a member names: the option owns it, so every pool reads it there.

@@ -7,6 +7,7 @@ use std::str::Utf8Error;
 use std::sync::Arc;
 
 use charliebot_core::config::{ConfigSection, SectionValue};
+use charliebot_core::json_loads::codec_error_text;
 use charliebot_core::paths;
 use charliebot_core::repo_root::CONFIGS_DIR_NAME;
 use charliebot_core::text_repr;
@@ -103,7 +104,7 @@ fn decode_error_text(error: Utf8Error, bytes: &[u8]) -> String {
   } else {
     "invalid continuation byte"
   };
-  format!("'utf-8' codec can't decode byte 0x{byte:02x} in position {position}: {reason}")
+  codec_error_text("utf-8", bytes, position, position + 1, reason)
 }
 
 /// A port literal: surrounding whitespace, an optional sign, and digits with single underscores between them.

@@ -498,14 +498,19 @@ fn decode(body: &[u8]) -> Result<Vec<u32>, LoadError> {
   }
 }
 
-/// The decode-error text: a one-byte range names the byte, a longer range names `start-end` (end inclusive).
-fn codec_error(codec: &str, body: &[u8], start: usize, end: usize, reason: &str) -> LoadError {
-  let text = if end == start + 1 {
+/// The decode-error text the readers below report and a text reader outside this module reuses: a one-byte range
+/// names the byte, a longer range names `start-end` (end inclusive). `codec` is Python's codec name, such as `utf-8`.
+pub fn codec_error_text(codec: &str, body: &[u8], start: usize, end: usize, reason: &str) -> String {
+  if end == start + 1 {
     format!("'{codec}' codec can't decode byte 0x{:02x} in position {start}: {reason}", body[start])
   } else {
     format!("'{codec}' codec can't decode bytes in position {start}-{}: {reason}", end - 1)
-  };
-  LoadError::Value(text)
+  }
+}
+
+/// The decode-error text as a load failure.
+fn codec_error(codec: &str, body: &[u8], start: usize, end: usize, reason: &str) -> LoadError {
+  LoadError::Value(codec_error_text(codec, body, start, end, reason))
 }
 
 /// UTF-8 decoded with surrogatepass semantics: a surrogate encoded in three bytes is a code point.

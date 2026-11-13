@@ -12,13 +12,16 @@ use charliebot_registry::FeatureContext;
 use charliebot_registry::templating::{STATIC_ASSET_VERSION_KEY, Templating};
 use serde_json::json;
 
+/// The page's path: its router mounts it, its matcher claims it, and the home card links to it.
+pub(crate) const PAGE_PATH: &str = "/diff";
+
 /// The page's router, with the feature context as its state.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
-  Router::new().route("/diff", get_only(diff_viewer)).with_state(Arc::clone(features))
+  Router::new().route(PAGE_PATH, get_only(diff_viewer)).with_state(Arc::clone(features))
 }
 
 pub(crate) fn matches(path: &str) -> bool {
-  path == "/diff"
+  path == PAGE_PATH
 }
 
 /// `diff.html` with the host name and the static asset version.

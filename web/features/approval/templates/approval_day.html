@@ -109,7 +109,7 @@
   <li>
     <div class="row1">
       <span class="tag tier">user-act</span>
-      {% if item.needs_recheck %}<span class="tag tier needs-recheck">需重读</span>{% endif %}
+      {% if item.needs_recheck %}<span class="tag tier needs-recheck">Needs re-read</span>{% endif %}
       <span class="age">{{ item.age }}</span>
       <span class="text">{{ item.text }}</span>
       <span class="openlink">{% if item.link %}<a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">Open page</a> &middot; {% endif %}<a href="/?session={{ item.session_id }}">{{ item.session_name }}</a></span>
@@ -129,17 +129,17 @@
   <li{% if item.context %} data-fold="1"{% endif %}>
     <div class="row1">
       {% if item.tier == 't0' %}
-      <span class="tag t0 decision">决定 &middot; T0{% if item.rank is not none %} &middot; rank {{ item.rank }}{% endif %}{% if item.rule %} &middot; {{ item.rule }}{% endif %}</span>
+      <span class="tag t0 decision">Decision &middot; T0{% if item.rank is not none %} &middot; rank {{ item.rank }}{% endif %}{% if item.rule %} &middot; {{ item.rule }}{% endif %}</span>
       {% elif item.tier == 'review' %}
       <span class="tag review">review</span>
       {% elif item.tier_label == 'decision' %}
-      <span class="tag tier decision">决定</span>
+      <span class="tag tier decision">Decision</span>
       {% elif item.tier == 'user-act' %}
       <span class="tag tier">user-act</span>
       {% else %}
       <span class="tag tier">{{ item.tier_label }}</span>
       {% endif %}
-      {% if item.needs_recheck %}<span class="tag tier needs-recheck">需重读</span>{% endif %}
+      {% if item.needs_recheck %}<span class="tag tier needs-recheck">Needs re-read</span>{% endif %}
       <span class="age">{{ item.age }}</span>
       <span class="text">{{ item.text }}</span>
       {% if item.context %}<span class="fold" aria-hidden="true"></span>{% endif %}

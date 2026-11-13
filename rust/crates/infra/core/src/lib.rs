@@ -24,6 +24,7 @@ pub mod ndjson;
 pub mod pacific;
 pub mod parallel_walk;
 pub mod paths;
+pub mod posix_path;
 mod printable_table;
 pub mod proc_identity;
 pub mod proxy_env;

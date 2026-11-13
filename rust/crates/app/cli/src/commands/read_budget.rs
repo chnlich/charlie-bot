@@ -38,6 +38,7 @@ use charliebot_core::event_types::{
   self, EDIT_TOOL, MULTI_EDIT_TOOL, NOTEBOOK_EDIT_TOOL, READ_TOOL, SKILL_TOOL, TOOL_INPUT_FILE_PATH, WRITE_TOOL,
 };
 use charliebot_core::home;
+use charliebot_core::posix_path;
 use charliebot_core::subagent::SUBAGENT_TOOL_NAMES;
 use charliebot_store::layout;
 use charliebot_store::run_records::{RAW_LOG_NAME, RUN_EVENTS_NAME};
@@ -533,32 +534,6 @@ fn validate_pipeline_filters(stages: &[&str], cwd: Option<&str>) -> bool {
   true
 }
 
-fn posix_normpath(path: &str) -> String {
-  if path.is_empty() {
-    return ".".to_string();
-  }
-  let initial_slashes = if path.starts_with("//") && !path.starts_with("///") {
-    2
-  } else if path.starts_with('/') {
-    1
-  } else {
-    0
-  };
-  let mut parts: Vec<&str> = Vec::new();
-  for part in path.split('/') {
-    if part.is_empty() || part == "." {
-      continue;
-    }
-    if part != ".." || (initial_slashes == 0 && parts.is_empty()) || parts.last() == Some(&"..") {
-      parts.push(part);
-    } else {
-      parts.pop();
-    }
-  }
-  let normalized = format!("{}{}", "/".repeat(initial_slashes), parts.join("/"));
-  if normalized.is_empty() { ".".to_string() } else { normalized }
-}
-
 fn resolve_token(tok: &str, base: Option<&str>) -> Option<String> {
   let home = std::env::var("HOME").unwrap_or_default();
   let cb_home = std::env::var(home::CHARLIEBOT_HOME_ENV).unwrap_or_default();
@@ -583,7 +558,7 @@ fn resolve_token(tok: &str, base: Option<&str>) -> Option<String> {
     let base = base?;
     s = format!("{base}/{s}");
   }
-  Some(posix_normpath(&s))
+  Some(posix_path::normpath(&s))
 }
 
 fn is_decision_path(path: &str) -> bool {

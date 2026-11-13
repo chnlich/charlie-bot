@@ -14,12 +14,12 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_core::paths;
+use charliebot_core::posix_path;
 use charliebot_store::metadata::BASE_BRANCH_FIELD;
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
 
 use crate::plan_diff;
-use crate::plan_paths;
 use crate::plans;
 
 /// The next step `present` prints: a new lineage takes an Improve round before its checks.
@@ -278,7 +278,7 @@ fn readback_plan(session_id: &str, readback: impl FnOnce(&[Value]) -> Option<Val
 /// Path-string equality tolerant of normalization (`./` prefixes, duplicate slashes).
 fn same_file(left: Option<&str>, right: Option<&str>) -> bool {
   match (left, right) {
-    (Some(left), Some(right)) => plan_paths::posix_normpath(left) == plan_paths::posix_normpath(right),
+    (Some(left), Some(right)) => posix_path::normpath(left) == posix_path::normpath(right),
     _ => false,
   }
 }

@@ -452,6 +452,17 @@ host_auth:
   #[ignore = "integration"]
   async fn a_pty_login_answers_the_enter_prompt_and_the_start_route_redirects_to_the_code_link() {
     let home = home("pty", false);
+    // The renewal records through the state file the server home names, so this process's home is the fixture's and
+    // holds a host1 entry. Nextest runs each test in its own process, and no other test of this binary reads it.
+    let dir = home._dir.path();
+    // SAFETY: a nextest test owns its process, and the tests of this binary that could run alongside read no
+    // environment variable.
+    unsafe { std::env::set_var(charliebot_core::home::CHARLIEBOT_HOME_ENV, dir) };
+    let state_path = dir.join(host_auth::STATE_FILENAME);
+    let mut state = host_auth::empty_state();
+    state.insert("hosts".to_string(), json!([{ "alias": "host1", "hostname": "host1.example.internal" }]));
+    host_auth::save_state(&state, &state_path).expect("the state seeds");
+
     let path = format!("/api/host-auth/logins/{}/start", home.router_name);
     let (status, headers, body) = call(home.router, Method::POST, &path).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
@@ -461,6 +472,11 @@ host_auth:
     );
     assert_eq!(body, "", "the redirect carries an empty body");
     assert_eq!(ended_outcome(&home.router_name).await, browser_login::Outcome::Approved);
+
+    let state = host_auth::read_state(&state_path).expect("the state reads");
+    let entry = host_auth::host_entries(&state).expect("the hosts read")[0];
+    let baseline = host_auth::opt_str(entry, "enrolled_observed_at").expect("the baseline field reads");
+    assert!(baseline.is_some(), "the approved renewal recorded the baseline");
   }
 
   #[tokio::test]

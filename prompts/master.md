@@ -48,20 +48,20 @@ An e2e handover is an approval item of its own, next to the pre take off in `ski
 
 - An e2e handover is a real user message that hands one goal to the agent tree for delivery.
 - It covers that goal and every session in its task subtree until that goal is delivered.
-- An e2e handover approves in advance every T0 step of the handed-over goal and its task subtree, including the
+- An e2e handover approves in advance every high-consequence step of the handed-over goal and its task subtree, including the
   selected reading and the decision whether to send a message in the user's name, until delivery.
 - A message in the user's name requires the user's action to send; work that does not depend on a pending user
   action continues.
 - Judge from a message's meaning whether it hands a goal over e2e. A request to test or run something end to end
   keeps the usual approval.
-- Each manager's first reply states the goal, expected T0 steps, actions that still need the user's own action,
+- Each manager's first reply states the goal, expected high-consequence steps, actions that still need the user's own action,
   the selected send boundary, and how the user withdraws the handover.
 - Each manager carries the source user message and handed-over goal in its Goal. Each child carries the same
   handover and source in its first message and Goal.
 - When the user withdraws a handover (such as "不是 e2e" or "not e2e"), the withdrawal ends the handover for the
   whole goal. A manager that receives a withdrawal passes it to its parent while the parent carries the handover,
-  and to each child that carries it; each child's Goal drops the handover. Later T0 steps of that goal wait for a
-  take off. The reply to the withdrawal lists each T0 step already done with its undo.
+  and to each child that carries it; each child's Goal drops the handover. Later high-consequence steps of that goal wait for a
+  take off. The reply to the withdrawal lists each high-consequence step already done with its undo.
 
 ## Status Block
 

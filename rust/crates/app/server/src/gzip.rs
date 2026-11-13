@@ -1,7 +1,7 @@
 //! Transport gzip.
 //!
-//! A request whose first `Accept-Encoding` value contains `gzip` takes the gzip responder; any other
-//! takes the identity responder. Both pass a response through untouched when it already sets
+//! A request whose first `Accept-Encoding` value weights `gzip` above zero takes the gzip responder; any
+//! other takes the identity responder, `gzip;q=0` included. Both pass a response through untouched when it already sets
 //! `Content-Encoding` or its type is excluded: the gzip responder excludes the media types of
 //! [`SKIP_MEDIA_PREFIXES`], the identity responder only `text/event-stream`. Otherwise the first body
 //! message decides: shorter than [`MINIMUM_SIZE`] and complete passes untouched; complete and longer
@@ -54,10 +54,35 @@ pub enum Responder {
   Identity,
 }
 
+/// The weight a request's `Accept-Encoding` gives *coding*, or `None` when the header names no positive weight for it.
+///
+/// A coding named without a weight has full weight and `q=0` forbids it, so `gzip;q=0` is not acceptable. The wildcard
+/// is not consulted: a request that names no coding of its own takes the identity body, as it did before this
+/// negotiation existed. The first `Accept-Encoding` value is the one read, as [`header_text`] returns it.
+pub fn accepted_weight(headers: &HeaderMap, coding: &str) -> Option<f32> {
+  let accept = header_text(headers, &header::ACCEPT_ENCODING);
+  let mut weight = None;
+  for form in accept.split(',') {
+    let mut parameters = form.split(';');
+    let name = parameters.next().unwrap_or_default().trim();
+    if !name.eq_ignore_ascii_case(coding) {
+      continue;
+    }
+    let mut value = 1.0f32;
+    for parameter in parameters {
+      if let Some(weight) = parameter.trim().strip_prefix("q=") {
+        value = weight.trim().parse().unwrap_or(0.0);
+      }
+    }
+    weight = Some(value);
+  }
+  weight.filter(|value| *value > 0.0)
+}
+
 impl Responder {
   /// The responder for a request with these headers.
   pub fn for_request(headers: &HeaderMap) -> Responder {
-    if header_text(headers, &header::ACCEPT_ENCODING).contains("gzip") { Responder::Gzip } else { Responder::Identity }
+    if accepted_weight(headers, "gzip").is_some() { Responder::Gzip } else { Responder::Identity }
   }
 
   /// Whether this responder leaves a response with these headers untouched before reading its body.
@@ -318,6 +343,24 @@ mod tests {
     let mut headers = HeaderMap::new();
     headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("gzip, deflate"));
     assert_eq!(Responder::for_request(&headers), Responder::Gzip);
+  }
+
+  #[test]
+  fn a_zero_weight_forbids_a_coding_the_header_still_names() {
+    let headers = |value: &'static str| {
+      let mut headers = HeaderMap::new();
+      headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static(value));
+      headers
+    };
+    let weight =
+      |value: &'static str| (accepted_weight(&headers(value), "gzip"), accepted_weight(&headers(value), "zstd"));
+    assert_eq!(weight("gzip"), (Some(1.0), None));
+    assert_eq!(weight("GZIP;q=0.5"), (Some(0.5), None));
+    assert_eq!(weight("gzip;q=0"), (None, None));
+    assert_eq!(weight("gzip;q=0, zstd;q=1"), (None, Some(1.0)));
+    assert_eq!(weight("br"), (None, None));
+    assert_eq!(Responder::for_request(&headers("gzip;q=0")), Responder::Identity);
+    assert_eq!(Responder::for_request(&headers("gzip;q=0.2")), Responder::Gzip);
   }
 
   async fn run(responder: Responder, content_type: &str, body: Body) -> (HeaderMap, Vec<u8>) {

@@ -15,6 +15,7 @@ use chrono::{NaiveDate, NaiveDateTime, TimeDelta};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::Language;
 use crate::rng::Rng;
 use crate::text::{self, SyntheticText};
 
@@ -74,9 +75,9 @@ fn planned_sizes(count: usize, rng: &mut Rng) -> Vec<u64> {
 
 /// The seeded stream of a home of `sessions` sessions, after it draws the text pools and the event-log sizes.
 /// The tuple holds the stream, the pools and the sizes in session order.
-pub(crate) fn planned_home(sessions: usize, seed: u64) -> (Rng, SyntheticText, Vec<u64>) {
+pub(crate) fn planned_home(sessions: usize, seed: u64, language: Language) -> (Rng, SyntheticText, Vec<u64>) {
   let mut rng = Rng::new(seed);
-  let text = SyntheticText::new(&mut rng);
+  let text = SyntheticText::new(&mut rng, language);
   let sizes = planned_sizes(sessions, &mut rng);
   (rng, text, sizes)
 }
@@ -89,7 +90,7 @@ pub(crate) fn final_event(final_text: &str, timestamp: &str) -> Value {
 fn next_event(rng: &mut Rng, text: &SyntheticText, timestamp: &str, budget: u64) -> Value {
   let kind = rng.unit();
   if kind < 0.12 {
-    let content = text::paragraph(rng);
+    let content = text::paragraph(rng, text.language());
     return json!({"type": event_types::USER, "content": content, "timestamp": timestamp});
   }
   if kind < 0.52 {
@@ -107,7 +108,7 @@ fn next_event(rng: &mut Rng, text: &SyntheticText, timestamp: &str, budget: u64)
     let id = text::tool_id(rng);
     let tool_use = json!({"type": event_types::TOOL_USE, "id": id, "name": tool_name, "input": tool_input});
     let content = if rng.unit() < 0.5 {
-      vec![json!({"type": "text", "text": text::phrase(rng)}), tool_use]
+      vec![json!({"type": "text", "text": text::phrase(rng, text.language())}), tool_use]
     } else {
       vec![tool_use]
     };

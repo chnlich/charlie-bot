@@ -4,6 +4,7 @@
 use charliebot_core::event_types::{EDIT_TOOL, GLOB_TOOL, GREP_TOOL, READ_TOOL, TOOL_INPUT_FILE_PATH};
 use serde_json::{Value, json};
 
+use crate::Language;
 use crate::rng::Rng;
 
 /// The number of composed blocks and tool-output lines of one run.
@@ -112,15 +113,21 @@ const TOOL_NAMES: &[&str] = &[READ_TOOL, "Bash", GREP_TOOL, EDIT_TOOL, GLOB_TOOL
 
 /// The composed pools of one run. Events pick from them, so the pools hold the text's whole variety.
 pub struct SyntheticText {
+  language: Language,
   blocks: Vec<String>,
   output_lines: Vec<String>,
 }
 
 impl SyntheticText {
-  pub fn new(rng: &mut Rng) -> Self {
-    let blocks = (0..BLOCK_POOL_SIZE).map(|_| compose_block(rng)).collect();
-    let output_lines = (0..OUTPUT_LINE_POOL_SIZE).map(|_| compose_output_line(rng)).collect();
-    Self { blocks, output_lines }
+  pub fn new(rng: &mut Rng, language: Language) -> Self {
+    let blocks = (0..BLOCK_POOL_SIZE).map(|_| compose_block(rng, language)).collect();
+    let output_lines = (0..OUTPUT_LINE_POOL_SIZE).map(|_| compose_output_line(rng, language)).collect();
+    Self { language, blocks, output_lines }
+  }
+
+  /// The language every sentence of the pools reads in.
+  pub fn language(&self) -> Language {
+    self.language
   }
 
   /// One assistant block, drawn from the pool.
@@ -140,30 +147,32 @@ pub fn filler_source() -> String {
   EN_SENTENCES.join(" ")
 }
 
-/// One sentence, in Chinese or English with equal odds.
-pub fn phrase(rng: &mut Rng) -> &'static str {
-  if rng.unit() < 0.5 { rng.choose(ZH_SENTENCES) } else { rng.choose(EN_SENTENCES) }
+/// One sentence: Chinese or English with equal odds under `Mixed`, English only under `English`.
+pub fn phrase(rng: &mut Rng, language: Language) -> &'static str {
+  let chinese = rng.unit() < 0.5 && language == Language::Mixed;
+  if chinese { rng.choose(ZH_SENTENCES) } else { rng.choose(EN_SENTENCES) }
 }
 
 /// Two to four sentences of one language: Chinese runs together, English is joined by spaces.
-pub fn paragraph(rng: &mut Rng) -> String {
-  if rng.unit() < 0.5 {
-    let count = rng.range(2, 4);
+pub fn paragraph(rng: &mut Rng, language: Language) -> String {
+  let chinese = rng.unit() < 0.5 && language == Language::Mixed;
+  let count = rng.range(2, 4);
+  if chinese {
     (0..count).map(|_| *rng.choose(ZH_SENTENCES)).collect()
   } else {
-    let count = rng.range(2, 4);
     let sentences: Vec<&str> = (0..count).map(|_| *rng.choose(EN_SENTENCES)).collect();
     sentences.join(" ")
   }
 }
 
 /// A session title: a topic and a number, and rarely a long run of sentences.
-pub fn title(rng: &mut Rng) -> String {
-  let topic = if rng.unit() < 0.5 { *rng.choose(ZH_TOPICS) } else { *rng.choose(EN_TOPICS) };
+pub fn title(rng: &mut Rng, language: Language) -> String {
+  let chinese = rng.unit() < 0.5 && language == Language::Mixed;
+  let topic = if chinese { *rng.choose(ZH_TOPICS) } else { *rng.choose(EN_TOPICS) };
   let mut parts = vec![topic.to_string(), format!("#{}", rng.range(1, 999))];
   if rng.unit() < 0.015 {
     let count = rng.range(10, 30);
-    parts.extend((0..count).map(|_| phrase(rng).to_string()));
+    parts.extend((0..count).map(|_| phrase(rng, language).to_string()));
   }
   parts.join(" / ")
 }
@@ -195,39 +204,45 @@ pub fn tool_id(rng: &mut Rng) -> String {
 }
 
 /// One block of one of five shapes: a paragraph, a heading with a list, a table, a code fence or a numbered list.
-fn compose_block(rng: &mut Rng) -> String {
+fn compose_block(rng: &mut Rng, language: Language) -> String {
   let kind = rng.unit();
   if kind < 0.55 {
-    return paragraph(rng);
+    return paragraph(rng, language);
   }
   if kind < 0.7 {
-    let heading = *rng.choose(ZH_TOPICS);
+    let topics = if language == Language::Mixed { ZH_TOPICS } else { EN_TOPICS };
+    let heading = *rng.choose(topics);
     let count = rng.range(2, 5);
-    let items: Vec<String> = (0..count).map(|_| format!("- {}", phrase(rng))).collect();
+    let items: Vec<String> = (0..count).map(|_| format!("- {}", phrase(rng, language))).collect();
     return format!("## {heading}\n\n{}", items.join("\n"));
   }
   if kind < 0.8 {
+    let (header, status) = if language == Language::Mixed {
+      ("| 项目 | 状态 | 说明 |", "完成")
+    } else {
+      ("| Item | Status | Note |", "done")
+    };
     let topic = *rng.choose(EN_TOPICS);
-    let row = format!("| {topic} | 完成 | {} |", phrase(rng));
-    return format!("| 项目 | 状态 | 说明 |\n| --- | --- | --- |\n{row}");
+    let row = format!("| {topic} | {status} | {} |", phrase(rng, language));
+    return format!("{header}\n| --- | --- | --- |\n{row}");
   }
   if kind < 0.92 {
-    let (language, code) = *rng.choose(CODE_SNIPPETS);
-    return format!("```{language}\n{code}\n```");
+    let (snippet_language, code) = *rng.choose(CODE_SNIPPETS);
+    return format!("```{snippet_language}\n{code}\n```");
   }
   let items: Vec<String> = (1..=3)
     .map(|index| {
       let topic = *rng.choose(EN_TOPICS);
-      format!("{index}. **{topic}**: {}", phrase(rng))
+      format!("{index}. **{topic}**: {}", phrase(rng, language))
     })
     .collect();
   items.join("\n")
 }
 
 /// One tool-output line: a source location and a sentence.
-fn compose_output_line(rng: &mut Rng) -> String {
+fn compose_output_line(rng: &mut Rng, language: Language) -> String {
   let module = format!("module_{:02}", rng.range(1, 40));
   let file = rng.range(1, 300);
   let line = rng.range(1, 900);
-  format!("src/{module}/file_{file:03}.rs:{line}: {}", phrase(rng))
+  format!("src/{module}/file_{file:03}.rs:{line}: {}", phrase(rng, language))
 }

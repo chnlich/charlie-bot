@@ -48,3 +48,22 @@ impl Shape {
     *self == Shape::Default
   }
 }
+
+/// The language of the seeded prose, titles and table labels that `generate` writes.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum Language {
+  /// Each sentence and topic takes Chinese or English with equal odds: the home of the hourly improve rounds, whose
+  /// bytes stay those of the data version.
+  #[default]
+  Mixed,
+  /// Every sentence, title and label is English. The README screenshots use it, because a public README shows one
+  /// language.
+  English,
+}
+
+impl Language {
+  fn is_mixed(&self) -> bool {
+    *self == Language::Mixed
+  }
+}

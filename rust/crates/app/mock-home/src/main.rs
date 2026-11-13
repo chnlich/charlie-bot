@@ -11,7 +11,7 @@ use charliebot_mock_home::check::{CheckOutcome, check};
 use charliebot_mock_home::generate::generate;
 use charliebot_mock_home::recovery_check::{digest, seed};
 use charliebot_mock_home::task_tree::{append_growth, reset};
-use charliebot_mock_home::{DATA_VERSION, DEFAULT_SEED, PRODUCTION_SESSIONS, Shape};
+use charliebot_mock_home::{DATA_VERSION, DEFAULT_SEED, Language, PRODUCTION_SESSIONS, Shape};
 use clap::{Parser, Subcommand};
 
 /// Generate a synthetic session home, or read one back from a running server.
@@ -37,6 +37,10 @@ enum Action {
     /// session a task spec sized to a live view's rows.
     #[arg(long, value_enum, default_value_t = Shape::Default)]
     shape: Shape,
+    /// The language of the seeded prose, titles and table labels. `mixed` takes Chinese or English per sentence; the
+    /// README screenshots use `english` so every rendered line reads in one language.
+    #[arg(long, value_enum, default_value_t = Language::Mixed)]
+    language: Language,
   },
   /// Read a served session home back against the manifest in OUTPUT.
   Check {
@@ -105,8 +109,8 @@ fn print(digest: anyhow::Result<String>) -> anyhow::Result<ExitCode> {
 
 fn main() -> ExitCode {
   let result = match Cli::parse().command {
-    Action::Generate { output, sessions, seed, shape } => {
-      generate(&output, sessions, seed, shape).map(|()| ExitCode::SUCCESS)
+    Action::Generate { output, sessions, seed, shape, language } => {
+      generate(&output, sessions, seed, shape, language).map(|()| ExitCode::SUCCESS)
     }
     Action::Check { output, base_url } => check(&output, &base_url).map(check_exit_code),
     Action::Reset { output, allow_growth } => reset(&output, allow_growth).map(|()| ExitCode::SUCCESS),

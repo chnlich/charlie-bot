@@ -12,6 +12,7 @@ use charliebot_store::{layout, metadata, run_records};
 use chrono::{NaiveDateTime, TimeDelta};
 use serde_json::{Value, json};
 
+use crate::Language;
 use crate::Shape;
 use crate::manifest::{MANIFEST_NAME, Manifest, ManifestSession, SessionMetadata};
 use crate::rng::Rng;
@@ -22,12 +23,13 @@ use crate::session::{
 use crate::task_tree;
 use crate::text::{self, SyntheticText};
 
-/// Writes a home of `shape` with `sessions` sessions for `seed` into `output`, which must be absent or empty.
+/// Writes a home of `shape` with `sessions` sessions for `seed` into `output`, which must be absent or empty. Every
+/// seeded sentence, title and label reads in `language`.
 ///
 /// The home is built in a staging directory beside `output` and renamed into place when it is complete, so no reader
 /// sees a partial home. Two runs that finish together yield the same bytes; the one that comes second keeps the first's
-/// home when the manifest matches its seed, session count and shape.
-pub fn generate(output: &Path, sessions: usize, seed: u64, shape: Shape) -> Result<()> {
+/// home when the manifest matches its seed, session count, shape and language.
+pub fn generate(output: &Path, sessions: usize, seed: u64, shape: Shape, language: Language) -> Result<()> {
   if output.exists() && fs::read_dir(output)?.next().is_some() {
     bail!("output directory is not empty: {}", output.display());
   }
@@ -41,12 +43,12 @@ pub fn generate(output: &Path, sessions: usize, seed: u64, shape: Shape) -> Resu
   fs::create_dir(&staging).with_context(|| format!("cannot create the staging directory {}", staging.display()))?;
 
   let written = match shape {
-    Shape::Default | Shape::View => write_home(&staging, sessions, seed, shape),
+    Shape::Default | Shape::View => write_home(&staging, sessions, seed, shape, language),
     Shape::TaskTree => {
       let home = fs::canonicalize(parent)
         .with_context(|| format!("cannot resolve {}", parent.display()))
         .map(|parent| parent.join(name.as_ref()));
-      home.and_then(|home| task_tree::write_home(&staging, &home, sessions, seed))
+      home.and_then(|home| task_tree::write_home(&staging, &home, sessions, seed, language))
     }
   };
   let total = match written {
@@ -58,7 +60,7 @@ pub fn generate(output: &Path, sessions: usize, seed: u64, shape: Shape) -> Resu
   };
   if let Err(error) = fs::rename(&staging, output) {
     remove_staging(&staging);
-    if finished_by_another_run(output, sessions, seed, shape) {
+    if finished_by_another_run(output, sessions, seed, shape, language) {
       println!("{} already holds this home: seed {seed}, {sessions} sessions", output.display());
       return Ok(());
     }
@@ -75,11 +77,15 @@ fn remove_staging(staging: &Path) {
   }
 }
 
-/// Whether `output` holds a finished home for this seed, session count and shape. A home is renamed into place only when
-/// it is complete, so its manifest is the last file a run leaves there.
-fn finished_by_another_run(output: &Path, sessions: usize, seed: u64, shape: Shape) -> bool {
-  Manifest::read(output)
-    .is_ok_and(|manifest| manifest.seed == seed && manifest.session_count == sessions && manifest.shape == shape)
+/// Whether `output` holds a finished home for this seed, session count, shape and language. A home is renamed into place
+/// only when it is complete, so its manifest is the last file a run leaves there.
+fn finished_by_another_run(output: &Path, sessions: usize, seed: u64, shape: Shape, language: Language) -> bool {
+  Manifest::read(output).is_ok_and(|manifest| {
+    manifest.seed == seed
+      && manifest.session_count == sessions
+      && manifest.shape == shape
+      && manifest.language == language
+  })
 }
 
 /// The count of acceptance criteria and of context references of a view session, each drawn from these bounds.
@@ -129,8 +135,9 @@ fn write_event_log(
 /// The acceptance criteria and context references of a view session: counts drawn from the stream, each item a sentence
 /// or a path of the synthetic pool. The spread of the counts gives the rows a spread of sizes; their median sets the
 /// view's median row.
-fn view_task(rng: &mut Rng) -> Value {
-  let acceptance: Vec<&str> = (0..rng.range(VIEW_ITEMS_MIN, VIEW_ITEMS_MAX)).map(|_| text::phrase(rng)).collect();
+fn view_task(rng: &mut Rng, language: Language) -> Value {
+  let acceptance: Vec<&str> =
+    (0..rng.range(VIEW_ITEMS_MIN, VIEW_ITEMS_MAX)).map(|_| text::phrase(rng, language)).collect();
   let context_refs: Vec<String> = (0..rng.range(VIEW_ITEMS_MIN, VIEW_ITEMS_MAX))
     .map(|_| format!("workspace/synthetic/{:04x}/{:08x}.md", rng.below(65_536), rng.next_u64() as u32))
     .collect();
@@ -140,9 +147,9 @@ fn view_task(rng: &mut Rng) -> Value {
 
 /// Writes the sessions and the manifest into `home`, and returns the total event-log bytes. The view shape adds a task
 /// spec to each session; the other shapes write the same bytes.
-fn write_home(home: &Path, sessions: usize, seed: u64, shape: Shape) -> Result<u64> {
+fn write_home(home: &Path, sessions: usize, seed: u64, shape: Shape, language: Language) -> Result<u64> {
   let view = shape == Shape::View;
-  let (mut rng, text, sizes) = planned_home(sessions, seed);
+  let (mut rng, text, sizes) = planned_home(sessions, seed, language);
   let mut manifest_sessions = Vec::with_capacity(sessions);
   let mut total = 0;
   for size in sizes {
@@ -152,12 +159,12 @@ fn write_home(home: &Path, sessions: usize, seed: u64, shape: Shape) -> Result<u
       .with_context(|| format!("cannot create {}", session_dir.display()))?;
     let offset = rng.range(0, SESSION_START_SPREAD_SECONDS);
     let started_at = first_session_time() + TimeDelta::seconds(offset as i64);
-    let final_text = format!("Checkpoint {id}: {}", text::phrase(&mut rng));
+    let final_text = format!("Checkpoint {id}: {}", text::phrase(&mut rng, language));
     let log_path = layout::chat_events_path(&session_dir);
     let (log_bytes, event_count) = write_event_log(&log_path, size, &mut rng, &text, started_at, &final_text)?;
     let metadata = SessionMetadata {
       id: id.clone(),
-      name: text::title(&mut rng),
+      name: text::title(&mut rng, language),
       status: "active",
       profile: "manager",
       backend: "mock-backend",
@@ -166,13 +173,14 @@ fn write_home(home: &Path, sessions: usize, seed: u64, shape: Shape) -> Result<u
       schema_version: 2,
       has_unread: false,
       starred: false,
-      task: view.then(|| view_task(&mut rng)),
+      task: view.then(|| view_task(&mut rng, language)),
     };
     write_json(&layout::metadata_path(&session_dir), &metadata, b"  ")?;
     manifest_sessions.push(ManifestSession { id, event_log_bytes: log_bytes, last_message: final_text });
     total += log_bytes;
   }
-  let manifest = Manifest { seed, session_count: sessions, event_log_bytes: total, sessions: manifest_sessions, shape };
+  let manifest =
+    Manifest { seed, session_count: sessions, event_log_bytes: total, sessions: manifest_sessions, shape, language };
   write_json(&home.join(MANIFEST_NAME), &manifest, b" ")?;
   Ok(total)
 }

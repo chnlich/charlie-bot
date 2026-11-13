@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::Language;
 use crate::Shape;
 
 pub const MANIFEST_NAME: &str = "manifest.json";
@@ -29,9 +30,9 @@ pub struct SessionMetadata {
   pub task: Option<Value>,
 }
 
-/// The home's `manifest.json`: the seed, count and shape that produced it, and each session's log size and newest
-/// message, in the order `generate` wrote the sessions. A default home's manifest has no `shape` key, so its bytes stay
-/// those of the data version.
+/// The home's `manifest.json`: the seed, count, shape and language that produced it, and each session's log size and
+/// newest message, in the order `generate` wrote the sessions. A default home's manifest has no `shape` or `language`
+/// key, so its bytes stay those of the data version.
 #[derive(Serialize, Deserialize)]
 pub struct Manifest {
   pub seed: u64,
@@ -40,6 +41,8 @@ pub struct Manifest {
   pub sessions: Vec<ManifestSession>,
   #[serde(default, skip_serializing_if = "Shape::is_default")]
   pub shape: Shape,
+  #[serde(default, skip_serializing_if = "Language::is_mixed")]
+  pub language: Language,
 }
 
 #[derive(Serialize, Deserialize)]

@@ -45,6 +45,7 @@ use chrono::{NaiveDate, NaiveDateTime, TimeDelta};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
+use crate::Language;
 use crate::Shape;
 use crate::manifest::{MANIFEST_NAME, Manifest, ManifestSession, SessionMetadata};
 use crate::rng::Rng;
@@ -306,7 +307,7 @@ fn plan_id(rng: &mut Rng) -> String {
 
 impl HomePlan {
   /// The plan for sessions whose event logs take `sizes` bytes, in session order.
-  fn new(sizes: &[u64], seed: u64) -> Self {
+  fn new(sizes: &[u64], seed: u64, language: Language) -> Self {
     let count = sizes.len();
     let mut rng = Rng::new(seed ^ PLAN_STREAM);
     let mut id_rng = Rng::new(seed ^ ID_STREAM);
@@ -336,7 +337,7 @@ impl HomePlan {
     // the tree.
     Self::plant_tree(&mut sessions, sizes, &mut rng);
     Self::type_workers(&mut sessions, &mut rng);
-    Self::plan_closes(&mut sessions, &mut rng);
+    Self::plan_closes(&mut sessions, &mut rng, language);
     Self::plan_archives(&mut sessions, sizes);
     Self::plant_live_runs(&mut sessions);
     let reports = Self::reports(&sessions);
@@ -437,10 +438,10 @@ impl HomePlan {
   /// Plans the `task_closed` fact of every session that is not open. A worker whose last run finished closes on that
   /// run's automatic request and reports to its parent with odds `AUTO_CLOSE_SHARE`; the user archived the other
   /// workers, with no report. The user archived a manager, and an archived manager reports to its parent.
-  fn plan_closes(sessions: &mut [SessionPlan], rng: &mut Rng) {
+  fn plan_closes(sessions: &mut [SessionPlan], rng: &mut Rng, language: Language) {
     for session in sessions.iter_mut().filter(|session| session.reason != Some(KeepReason::StateOpen)) {
       let auto_odds = rng.unit();
-      let summary = text::phrase(rng);
+      let summary = text::phrase(rng, language);
       let archived_id = plan_id(rng);
       let last_finished = session.runs.last().filter(|run| run.end == RunEnd::Finished && run.kind == RunKind::Work);
       session.close = Some(match (session.profile, last_finished) {
@@ -790,11 +791,11 @@ struct NodeMetadata {
   archive_offset: usize,
 }
 
-fn task_spec(profile: TaskProfile, task_type: Option<TaskType>, rng: &mut Rng) -> TaskSpec {
+fn task_spec(profile: TaskProfile, task_type: Option<TaskType>, rng: &mut Rng, language: Language) -> TaskSpec {
   match profile {
-    TaskProfile::Manager => TaskSpec { goal: text::phrase(rng).to_string(), ..TaskSpec::default() },
+    TaskProfile::Manager => TaskSpec { goal: text::phrase(rng, language).to_string(), ..TaskSpec::default() },
     TaskProfile::Worker => TaskSpec {
-      goal: text::phrase(rng).to_string(),
+      goal: text::phrase(rng, language).to_string(),
       repo_path: Some(LAB_REPO.to_string()),
       base_branch: Some("main".to_string()),
       task_type,
@@ -847,7 +848,13 @@ fn stamp_firing(moment: NaiveDateTime) -> String {
   moment.format("%Y%m%dT%H%M").to_string()
 }
 
-fn trigger(session_id: &str, session: &SessionPlan, status: TriggerStatus, rng: &mut Rng) -> PendingTrigger {
+fn trigger(
+  session_id: &str,
+  session: &SessionPlan,
+  status: TriggerStatus,
+  rng: &mut Rng,
+  language: Language,
+) -> PendingTrigger {
   let created = session.started_at;
   let (fire_at, fired_at, fire_reason) = match status {
     TriggerStatus::Pending => (pending_fire_time(), None, None),
@@ -862,7 +869,7 @@ fn trigger(session_id: &str, session: &SessionPlan, status: TriggerStatus, rng: 
     id: plan_id(rng),
     session_id: session_id.to_string(),
     fire_at: utc(fire_at),
-    message: text::phrase(rng).to_string(),
+    message: text::phrase(rng, language).to_string(),
     created_at: utc(created),
     status,
     fired_at,
@@ -903,9 +910,9 @@ fn write_marker_seed(home: &Path, plan: &HomePlan) -> Result<()> {
 
 /// Writes a task-tree home of `sessions` sessions for `seed` into `staging`, whose final path is `home`. Returns the
 /// total event-log bytes.
-pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64) -> Result<u64> {
-  let (mut rng, text, sizes) = session::planned_home(sessions, seed);
-  let plan = HomePlan::new(&sizes, seed);
+pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64, language: Language) -> Result<u64> {
+  let (mut rng, text, sizes) = session::planned_home(sessions, seed, language);
+  let plan = HomePlan::new(&sizes, seed, language);
   let worktrees = home.join(WORKTREES_DIR);
   fs::create_dir(staging.join(WORKTREES_DIR)).context("cannot create the worktree directory")?;
   let mut manifest_sessions = Vec::with_capacity(sessions);
@@ -915,7 +922,7 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
     let session_dir = staging.join(&id);
     fs::create_dir_all(layout::data_dir(&session_dir))
       .with_context(|| format!("cannot create {}", session_dir.display()))?;
-    let final_text = format!("Checkpoint {id}: {}", text::phrase(&mut rng));
+    let final_text = format!("Checkpoint {id}: {}", text::phrase(&mut rng, language));
     let log_path = layout::chat_events_path(&session_dir);
     let log = write_task_log(&log_path, &plan, index, *size, &mut rng, &text, &final_text)?;
     let (archive_offset, live_bytes) =
@@ -923,7 +930,7 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
     let metadata = NodeMetadata {
       session: SessionMetadata {
         id: id.clone(),
-        name: text::title(&mut rng),
+        name: text::title(&mut rng, language),
         status: "active",
         profile: session.profile.as_str(),
         backend: "mock-backend",
@@ -935,7 +942,7 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
         task: None,
       },
       task_parent_id: session.parent.map(|parent| plan.sessions[parent].id.clone()),
-      task: session.has_task.then(|| task_spec(session.profile, session.task_type, &mut rng)),
+      task: session.has_task.then(|| task_spec(session.profile, session.task_type, &mut rng, language)),
       archive_offset,
     };
     session::write_json(&layout::metadata_path(&session_dir), &metadata, b"  ")?;
@@ -953,7 +960,7 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
     let statuses = std::iter::repeat_n(TriggerStatus::Pending, session.pending_triggers)
       .chain(std::iter::repeat_n(TriggerStatus::Fired, session.fired_triggers));
     for status in statuses {
-      trigger_files::write_trigger(&session_dir, &trigger(&id, session, status, &mut rng))?;
+      trigger_files::write_trigger(&session_dir, &trigger(&id, session, status, &mut rng, language))?;
     }
     set_session_times(&session_dir, session.modified_at)?;
     manifest_sessions.push(ManifestSession { id, event_log_bytes: live_bytes, last_message: final_text });
@@ -968,6 +975,7 @@ pub(crate) fn write_home(staging: &Path, home: &Path, sessions: usize, seed: u64
     event_log_bytes: total,
     sessions: manifest_sessions,
     shape: Shape::TaskTree,
+    language,
   };
   session::write_json(&staging.join(MANIFEST_NAME), &manifest, b" ")?;
   Ok(total)
@@ -1032,8 +1040,8 @@ pub fn reset(home: &Path, allow_growth: bool) -> Result<()> {
   if manifest.shape != Shape::TaskTree {
     bail!("{} holds a {:?} home; only a task-tree home has a generated state to reset", home.display(), manifest.shape);
   }
-  let (_, _, sizes) = session::planned_home(manifest.session_count, manifest.seed);
-  let plan = HomePlan::new(&sizes, manifest.seed);
+  let (_, _, sizes) = session::planned_home(manifest.session_count, manifest.seed, manifest.language);
+  let plan = HomePlan::new(&sizes, manifest.seed, manifest.language);
   let worktrees = fs::canonicalize(home)?.join(WORKTREES_DIR);
   let mut restored_worktrees = 0;
   for (session, listed) in plan.sessions.iter().zip(&manifest.sessions) {
@@ -1086,8 +1094,8 @@ pub fn append_growth(home: &Path, bytes: u64) -> Result<()> {
   if manifest.shape != Shape::TaskTree {
     bail!("{} holds a {:?} home; only a task-tree home has a generated state", home.display(), manifest.shape);
   }
-  let (_, _, sizes) = session::planned_home(manifest.session_count, manifest.seed);
-  let plan = HomePlan::new(&sizes, manifest.seed);
+  let (_, _, sizes) = session::planned_home(manifest.session_count, manifest.seed, manifest.language);
+  let plan = HomePlan::new(&sizes, manifest.seed, manifest.language);
   let kept: Vec<(usize, u64)> = plan
     .sessions
     .iter()
@@ -1145,8 +1153,8 @@ mod tests {
   #[test]
   fn a_scaled_plan_deals_each_keep_reason_its_scaled_count() {
     let sessions = 1_200;
-    let (_, _, sizes) = session::planned_home(sessions, 1);
-    let plan = HomePlan::new(&sizes, 1);
+    let (_, _, sizes) = session::planned_home(sessions, 1, Language::Mixed);
+    let plan = HomePlan::new(&sizes, 1, Language::Mixed);
     for (reason, reference) in REFERENCE_KEEPS {
       let dealt = plan.sessions.iter().filter(|session| session.reason == Some(reason)).count();
       assert_eq!(dealt, scaled(reference, sessions).round() as usize, "{reason:?}");
@@ -1184,7 +1192,7 @@ mod tests {
       assert!(parents.contains(&index) && band.contains(&sizes[index]), "session {index}");
     }
     let band_sizes = vec![30_000_000_u64; 500];
-    let band_plan = HomePlan::new(&band_sizes, 1);
+    let band_plan = HomePlan::new(&band_sizes, 1, Language::Mixed);
     let band_archived = band_plan.sessions.iter().filter(|session| session.archived).count();
     assert!(band_archived >= 5, "{band_archived} archived sessions");
   }

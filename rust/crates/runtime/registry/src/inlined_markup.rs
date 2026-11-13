@@ -12,11 +12,12 @@
 //!
 //! A script a template writes inline takes that strip too, unless the script minifier would misread it. The minifier
 //! reads a `/` after a statement-ending brace as a division, so a regular expression a new statement starts there
-//! (`if (ok) {} /a  b/.test(v)`) would lose the whitespace it requires; a script holding that shape keeps its bytes,
-//! because only the author knows whether the slash starts a regular expression. A script element whose type is not
-//! JavaScript holds opaque data and keeps its bytes as well. On the mock home the inline scripts carry 4,062 B of the
-//! chat document's 399,213 B and 1,645 B of its 98,942 B gzip form, 4,924 B of the events viewer's 32,310 B and
-//! 1,159 B of its 9,097 B, and 515 B of the home page's 9,830 B and 261 B of its 3,498 B.
+//! (`if (ok) {} /a  b/.test(v)`, comments between the brace and the slash included) would lose the whitespace it
+//! requires; a script holding that shape keeps its bytes, because only the author knows whether the slash starts a
+//! regular expression. A script element the browser does not run as JavaScript is a data block, and a page can read
+//! its bytes from the element, so it keeps them as well. On the mock home the inline scripts carry 4,062 B of the chat
+//! document's 399,213 B and 1,645 B of its 98,942 B gzip form, 4,924 B of the events viewer's 32,310 B and 1,159 B of
+//! its 9,097 B, and 515 B of the home page's 9,830 B and 261 B of its 3,498 B.
 //!
 //! The strip is textual and keeps every other byte. A tag keeps its attributes, which may spell `<!--`; a title or a
 //! text area keeps its text, which is not code; and a `<!--` that never closes keeps the bytes after it, because only
@@ -140,21 +141,53 @@ fn inline_form(name: &str, tag: &str, content: &str) -> String {
   }
 }
 
-/// The JavaScript types a `type` attribute names, in the spelling the browser compares without regard to case.
+/// The `type` values the browser runs a script for, compared without regard to case after trimming.
 ///
-/// An element with no `type` attribute, or with an empty one, is a JavaScript block. The browser runs a script written
-/// in any of these; another type, such as `application/json` or `text/template`, holds data it never runs.
-const JAVASCRIPT_TYPES: [&str; 6] =
-  ["", "module", "text/javascript", "application/javascript", "text/ecmascript", "application/ecmascript"];
+/// The list is the HTML standard's `module` keyword and its JavaScript MIME type essence strings. An element with an
+/// empty `type` is a classic script. Any other value, such as `application/json`, `text/template` or a parameterized
+/// `text/javascript; charset=utf-8`, makes the element a data block the browser never runs.
+const JAVASCRIPT_TYPES: [&str; 17] = [
+  "module",
+  "application/ecmascript",
+  "application/javascript",
+  "application/x-ecmascript",
+  "application/x-javascript",
+  "text/ecmascript",
+  "text/javascript",
+  "text/javascript1.0",
+  "text/javascript1.1",
+  "text/javascript1.2",
+  "text/javascript1.3",
+  "text/javascript1.4",
+  "text/javascript1.5",
+  "text/jscript",
+  "text/livescript",
+  "text/x-ecmascript",
+  "text/x-javascript",
+];
 
-/// Whether a script element's `type` attribute names JavaScript.
+/// The `language` values that name JavaScript when a script element has no `type` attribute, compared without regard
+/// to case after trimming.
+const JAVASCRIPT_LANGUAGES: [&str; 4] = ["javascript", "jscript", "ecmascript", "livescript"];
+
+/// Whether the browser runs a script element's content as JavaScript.
 ///
-/// A type outside [`JAVASCRIPT_TYPES`], a space-separated type list whose first item names something else, and an
-/// element the browser never runs all answer false, so their bytes stay whole.
+/// A `type` attribute decides on its own: empty names a classic script, a [`JAVASCRIPT_TYPES`] value names a script,
+/// and any other value names a data block. Without `type`, a `language` attribute decides the same way, and an element
+/// that names neither is a classic script. A data block's bytes stay whole: a page can read them from the element, so
+/// they are data rather than code the browser folds away.
 fn javascript_type(tag: &str) -> bool {
-  let Some(value) = attribute(tag, "type") else { return true };
-  let first = value.trim().split(';').next().unwrap_or("").trim();
-  JAVASCRIPT_TYPES.iter().any(|known| first.eq_ignore_ascii_case(known))
+  if let Some(value) = attribute(tag, "type") {
+    let value = value.trim();
+    return value.is_empty() || JAVASCRIPT_TYPES.iter().any(|known| value.eq_ignore_ascii_case(known));
+  }
+  match attribute(tag, "language") {
+    Some(language) => {
+      let language = language.trim();
+      language.is_empty() || JAVASCRIPT_LANGUAGES.iter().any(|known| language.eq_ignore_ascii_case(known))
+    }
+    None => true,
+  }
 }
 
 /// The value of attribute `name` in `tag`, or `None` when the tag names it not.
@@ -212,21 +245,35 @@ fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
 /// Whether a `/` that starts a new statement after a statement-ending brace could sit in `content`.
 ///
 /// The script minifier reads a `/` after a `}` as a division, so a regular expression a new statement starts there
-/// would lose the whitespace it requires. A `//` or `/*` after the brace starts a comment, which the minifier reads
-/// whichever byte precedes it, so that shape is not ambiguous. The scan is textual: a string holding the ambiguous
-/// shape costs the script its strip and never changes the page's bytes.
+/// would lose the whitespace it requires. A comment between the brace and the slash changes nothing: the minifier
+/// removes it and still reads the slash as a division, so this scan skips the whitespace and the comments that follow
+/// each brace and asks what byte comes next. A string holding the ambiguous shape costs the script its strip and never
+/// changes the page's bytes.
 fn regex_may_follow_brace(content: &str) -> bool {
   let bytes = content.as_bytes();
-  let mut i = 0;
-  while let Some(found) = content[i..].find('}') {
-    let mut at = i + found + 1;
-    while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
-      at += 1;
+  let mut from = 0;
+  while let Some(found) = content[from..].find('}') {
+    let mut at = from + found + 1;
+    loop {
+      while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
+        at += 1;
+      }
+      match bytes.get(at) {
+        Some(b'/') => match bytes.get(at + 1) {
+          Some(b'/') => {
+            let Some(newline) = content[at..].find('\n') else { break };
+            at += newline + 1;
+          }
+          Some(b'*') => {
+            let Some(end) = content[at + 2..].find("*/") else { break };
+            at += end + 4;
+          }
+          _ => return true,
+        },
+        _ => break,
+      }
     }
-    if bytes.get(at) == Some(&b'/') && !matches!(bytes.get(at + 1), Some(b'/') | Some(b'*')) {
-      return true;
-    }
-    i = i + found + 1;
+    from = from + found + 1;
   }
   false
 }
@@ -321,6 +368,39 @@ mod tests {
   fn an_inline_script_keeps_its_code_when_a_line_comment_follows_a_statement_brace() {
     let script = "<script>function f() {} // explains the step\n</script>";
     assert_eq!(without_comments(&format!("{script}<!-- gone -->")), "<script>function f(){}\n</script>");
+  }
+
+  #[test]
+  fn an_inline_script_keeps_a_regular_expression_behind_a_comment_after_a_statement_brace() {
+    let block = "<script>if (ok) {} /* gone */ /a  b/.test(value)</script>";
+    let line = "<script>if (ok) {} // gone\n/a  b/.test(value)</script>";
+    assert_eq!(without_comments(&format!("{block}{line}<!-- gone -->")), format!("{block}{line}"));
+  }
+
+  #[test]
+  fn an_inline_script_whose_type_names_data_keeps_its_bytes() {
+    let parameterized = "<script type=\"text/javascript; charset=utf-8\">  x  //  keep</script>";
+    assert_eq!(without_comments(&format!("{parameterized}<!-- gone -->")), parameterized);
+  }
+
+  #[test]
+  fn an_inline_script_without_a_type_follows_a_language_attribute() {
+    let other = "<script language=\"VBScript\">  x  //  keep</script>";
+    assert_eq!(without_comments(&format!("{other}<!-- gone -->")), other);
+    let javascript = "<script language=\"JavaScript\">\n  x(); // gone\n</script>";
+    assert_eq!(
+      without_comments(&format!("{javascript}<!-- gone -->")),
+      "<script language=\"JavaScript\">\nx();\n</script>"
+    );
+  }
+
+  #[test]
+  fn an_inline_script_whose_type_is_a_legacy_javascript_mime_type_drops_them() {
+    let script = "<script type=\"text/x-javascript\">\n  x(); // gone\n</script>";
+    assert_eq!(
+      without_comments(&format!("{script}<!-- gone -->")),
+      "<script type=\"text/x-javascript\">\nx();\n</script>"
+    );
   }
 
   #[test]

@@ -1,7 +1,7 @@
 //! A harness that runs the repository's shell scripts for real, against stub commands, for the Rust integration tests.
 //!
 //! A test makes a `Sandbox`: a temporary root whose `bin/` holds its stubs and comes first on PATH. The test adds
-//! stubs with `Sandbox::stub`, builds a command with `command` and runs it with `run`; `spawn` starts a background
+//! stubs with `Sandbox::stub`, builds a command with `command` and runs it with `run`. `spawn` starts a background
 //! process. The README section "Shell-script tests" shows the calls.
 
 use std::collections::BTreeMap;
@@ -125,7 +125,7 @@ impl Sandbox {
     &self.bin
   }
 
-  /// The path of `relative` under the root; the directory and its parents are created.
+  /// The path of `relative` under the root. The directory and its parents are created.
   pub fn dir(&self, relative: &str) -> PathBuf {
     let path = self.root().join(relative);
     fs::create_dir_all(&path).unwrap_or_else(|error| panic!("create {}: {error}", path.display()));
@@ -283,7 +283,7 @@ pub fn write_executable(to: &Path, contents: impl AsRef<[u8]>) {
   let mut staged = tempfile::NamedTempFile::new_in(directory)
     .unwrap_or_else(|error| panic!("stage {} in {}: {error}", to.display(), directory.display()));
   staged.write_all(contents.as_ref()).unwrap_or_else(|error| panic!("write {}: {error}", to.display()));
-  // Closes the staged file's write descriptor; `copy_file` reads it by path.
+  // Closes the staged file's write descriptor. `copy_file` reads it by path.
   let staged = staged.into_temp_path();
   copy_file(&staged, to);
   fs::set_permissions(to, fs::Permissions::from_mode(0o755))

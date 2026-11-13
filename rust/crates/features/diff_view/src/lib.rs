@@ -26,7 +26,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(page::routes, page::matches)?;
   registry.home_card(HomeCard {
     name: "Diff viewer",
-    url: "/diff",
+    url: page::PAGE_PATH,
     description: "Browse a repository diff between two refs.",
   })
 }

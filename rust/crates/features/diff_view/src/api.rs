@@ -26,6 +26,14 @@ use crate::params::{self, Params, take};
 use crate::refs::{self, FileStamp, Signature};
 use crate::repos;
 
+/// The `/api/git` route paths: `router` mounts each, and `matches` claims each for the server's trailing-slash
+/// redirect.
+const BRANCHES_PATH: &str = "/api/git/branches";
+const REPOS_PATH: &str = "/api/git/repos";
+const DIFF_FILES_PATH: &str = "/api/git/diff/files";
+const DIFF_FILE_PATH: &str = "/api/git/diff/file";
+const DIFF_LINES_PATH: &str = "/api/git/diff/lines";
+
 /// A per-file diff above this many bytes answers a stub unless `force` is set.
 pub(crate) const DIFF_MAX_BYTES: usize = 5 * 1024 * 1024;
 /// The ranges a /diff page watches across its tabs.
@@ -93,19 +101,16 @@ pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
 
 pub(crate) fn router(state: Arc<GitState>) -> Router {
   Router::new()
-    .route("/api/git/branches", get_only(list_branches))
-    .route("/api/git/repos", get_only(list_repos))
-    .route("/api/git/diff/files", get_only(diff_files))
-    .route("/api/git/diff/file", get_only(diff_file))
-    .route("/api/git/diff/lines", get_only(diff_lines))
+    .route(BRANCHES_PATH, get_only(list_branches))
+    .route(REPOS_PATH, get_only(list_repos))
+    .route(DIFF_FILES_PATH, get_only(diff_files))
+    .route(DIFF_FILE_PATH, get_only(diff_file))
+    .route(DIFF_LINES_PATH, get_only(diff_lines))
     .with_state(state)
 }
 
 pub(crate) fn matches(path: &str) -> bool {
-  matches!(
-    path,
-    "/api/git/branches" | "/api/git/repos" | "/api/git/diff/files" | "/api/git/diff/file" | "/api/git/diff/lines"
-  )
+  matches!(path, BRANCHES_PATH | REPOS_PATH | DIFF_FILES_PATH | DIFF_FILE_PATH | DIFF_LINES_PATH)
 }
 
 /// `list_branches`: the repo's branch names, `HEAD` first, most recent commit first, at most 50.

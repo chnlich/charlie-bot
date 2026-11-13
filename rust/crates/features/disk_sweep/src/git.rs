@@ -82,10 +82,9 @@ fn run_git(path: &Path, arguments: &[&str], input: Option<Vec<u8>>) -> Result<Ou
       };
       let mut stdin = stdin.expect("git stdin is piped when input is present");
       match stdin.write_all(&bytes).await {
-        Err(error) if error.kind() != std::io::ErrorKind::BrokenPipe => {
-          Err(anyhow::Error::new(error).context("writing git stdin"))
-        }
-        _ => Ok(()),
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(error) => Err(anyhow::Error::new(error).context("writing git stdin")),
       }
     };
     let finished = async { tokio::join!(write, child.wait_with_output()) };

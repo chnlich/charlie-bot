@@ -637,36 +637,39 @@ fn collect_inodes(
 fn prepare_apply(mut row: SweepRow, roots: SweepRoots, now: DateTime<Utc>) -> (Result<PreparedApply>, HashSet<u32>) {
   let mut unreadable = HashSet::new();
   let result = (|| -> Result<PreparedApply> {
-    if row.kind == SweepKind::Worktree {
-      let inspection = git::inspect_worktree(&row.path)?;
-      record_worktree_inspection(&mut row, &inspection);
-      if row.action == SweepAction::Skip {
-        return Ok(PreparedApply::Skip(row));
+    match row.kind {
+      SweepKind::Worktree => {
+        let inspection = git::inspect_worktree(&row.path)?;
+        record_worktree_inspection(&mut row, &inspection);
+        if row.action == SweepAction::Skip {
+          return Ok(PreparedApply::Skip(row));
+        }
+        if row.action == SweepAction::ArchiveDelete {
+          let archive_path = row.archive_path(&roots.sessions_root)?;
+          archive::archive_worktree(&row.path, &archive_path, &inspection.untracked)?;
+          let (used, unreadable_now) = process::in_use_paths(std::slice::from_ref(&row.path), &roots.proc_root)?;
+          unreadable.extend(unreadable_now);
+          if used.contains(&row.path) {
+            mark_skipped(&mut row, "in-use");
+            return Ok(PreparedApply::Skip(row));
+          }
+        }
+        Ok(PreparedApply::RemoveWorktree(row))
       }
-      if row.action == SweepAction::ArchiveDelete {
-        let archive_path = row.archive_path(&roots.sessions_root)?;
-        archive::archive_worktree(&row.path, &archive_path, &inspection.untracked)?;
-        let (used, unreadable_now) = process::in_use_paths(std::slice::from_ref(&row.path), &roots.proc_root)?;
+      SweepKind::Scratch => {
+        scratch_preflight(&mut row, now)?;
+        if row.action == SweepAction::Skip {
+          return Ok(PreparedApply::Skip(row));
+        }
+        let (used, unreadable_now) = process::in_use_paths(&[row.path.clone()], &roots.proc_root)?;
         unreadable.extend(unreadable_now);
         if used.contains(&row.path) {
           mark_skipped(&mut row, "in-use");
           return Ok(PreparedApply::Skip(row));
         }
+        fs::remove_dir_all(&row.path).with_context(|| format!("removing scratch directory {}", row.path.display()))?;
+        Ok(PreparedApply::ScratchRemoved(row))
       }
-      Ok(PreparedApply::RemoveWorktree(row))
-    } else {
-      scratch_preflight(&mut row, now)?;
-      if row.action == SweepAction::Skip {
-        return Ok(PreparedApply::Skip(row));
-      }
-      let (used, unreadable_now) = process::in_use_paths(&[row.path.clone()], &roots.proc_root)?;
-      unreadable.extend(unreadable_now);
-      if used.contains(&row.path) {
-        mark_skipped(&mut row, "in-use");
-        return Ok(PreparedApply::Skip(row));
-      }
-      fs::remove_dir_all(&row.path).with_context(|| format!("removing scratch directory {}", row.path.display()))?;
-      Ok(PreparedApply::ScratchRemoved(row))
     }
   })();
   (result, unreadable)

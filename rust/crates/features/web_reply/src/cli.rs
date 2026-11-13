@@ -18,7 +18,7 @@ use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
 use charliebot_cli_common::response::field;
 use charliebot_compat::file_urls;
-use charliebot_core::approval_policy;
+use charliebot_core::approval_policy::{self, ApprovalRuleRef, AskTier};
 use charliebot_core::event_types;
 use charliebot_core::str_methods::splitlines;
 use charliebot_core::text_repr;
@@ -216,6 +216,9 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
   let text = files::read_reply_text(&args.file)?;
   let request = json!({ "session_id": session_id, "text": text });
   let unread = client::post("/api/internal/web/status/unread", request.clone(), None, &[])?;
+  for stale in list(field(&unread, "stale_assessments")?)? {
+    eprintln!("Stale assessment: {}", text_repr::value_str(stale));
+  }
   let unread = list(field(&unread, "unread")?)?;
   if unread.is_empty() {
     let result = client::post("/api/internal/web/status", request, None, &[])?;
@@ -226,6 +229,7 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
   let host = lazy_host.get().map_err(anyhow_exit)?;
   gate_fork_assertions(host, unread)?;
   let (system_prompt, questions) = cold_read::load_ask_texts(&host.repo_root).map_err(anyhow_exit)?;
+  let session_rules = current_session_approval_rules(&session_id)?;
   let policy_section = cold_read::ask_policy_section(&host.cfg.charliebot_home).map_err(anyhow_exit)?;
   for item in unread {
     let link = item.get("link").and_then(Value::as_str);
@@ -234,7 +238,8 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
       Some(path) => Some(files::read_text_mode(&path)?),
     };
     let probe_prompt =
-      cold_read::ask_probe_input(item, linked_page.as_deref(), &policy_section, &questions).map_err(anyhow_exit)?;
+      cold_read::ask_probe_input(item, linked_page.as_deref(), &session_rules, &policy_section, &questions)
+        .map_err(anyhow_exit)?;
     let probe = block_on(cold_read::run_probe(host, &probe_prompt, &system_prompt))?.map_err(anyhow_exit)?;
     let Some(backend) = probe.backend_id else {
       for (backend, error) in &probe.attempts {
@@ -258,8 +263,8 @@ fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit>
   std::process::exit(3);
 }
 
-/// Re-grade this session's stored Waiting items and print the original tier beside the cold read. This path only
-/// reads the status endpoint and the policy table; it does not record an ask-check or set a status.
+/// Re-grade this session's stored Waiting items and print the original tier beside the cold read. This path reads
+/// current rules, status and the policy table without recording an ask-check, setting a status or cooling a backend.
 fn status_recheck(lazy_host: &LazyHost) -> Result<(), CliExit> {
   let session_id = resolve::resolve_from_env(None)?;
   let result = client::get("/api/internal/web/status", Some(vec![("session_id".to_string(), session_id.clone())]))?;
@@ -273,64 +278,158 @@ fn status_recheck(lazy_host: &LazyHost) -> Result<(), CliExit> {
   let (system_prompt, questions) = cold_read::load_ask_texts(&host.repo_root).map_err(anyhow_exit)?;
   let loaded = approval_policy::load(&host.cfg.charliebot_home).map_err(|error| CliExit::error(error.to_string()))?;
   let policy_section = approval_policy::prompt_section(&loaded.table);
-  let mut rows = Vec::with_capacity(items.len());
-  for item in items {
-    let text = text_repr::value_str(field(&item, "text")?);
-    let stored_tier = item.get("tier").and_then(Value::as_str).unwrap_or("untiered").to_string();
+  let session_rules = current_session_approval_rules(&session_id)?;
+  let rows = collect_recheck_rows(&items, |item| {
     let probe_item = json!({
-      "text": field(&item, "text")?,
+      "text": field(item, "text").map_err(|error| text_repr::value_str(&error.body))?,
       "context": item.get("context").filter(|value| !value.is_null()),
       "link": item.get("link").filter(|value| !value.is_null()),
     });
     let mut linked_page = None;
     let mut link_refusal = None;
     match user_text_checks::check_page_link(item.get("link").and_then(Value::as_str)) {
-      Ok(PageLinkTarget::HostFile(path)) => linked_page = Some(files::read_text_mode(&path)?),
+      Ok(PageLinkTarget::HostFile(path)) => {
+        linked_page = Some(files::read_text_mode(&path).map_err(|error| text_repr::value_str(&error.body))?);
+      }
       Ok(PageLinkTarget::NoLink | PageLinkTarget::ApplicationRoute | PageLinkTarget::External) => {}
       Err(reason) => link_refusal = Some(reason),
     }
-    let probe_prompt = cold_read::ask_probe_input(&probe_item, linked_page.as_deref(), &policy_section, &questions)
-      .map_err(anyhow_exit)?;
-    let probe = block_on(cold_read::run_probe(host, &probe_prompt, &system_prompt))?.map_err(anyhow_exit)?;
-    let Some(_backend) = probe.backend_id else {
-      for (backend, error) in &probe.attempts {
-        eprintln!("attempt {backend} failed: {error}");
-      }
-      if probe.attempts.is_empty() {
-        eprintln!("No light backend was available for this item.");
-      }
-      std::process::exit(1);
-    };
+    let probe_prompt =
+      cold_read::ask_probe_input(&probe_item, linked_page.as_deref(), &session_rules, &policy_section, &questions)
+        .map_err(|error| format!("{error:#}"))?;
+    let probe = block_on(cold_read::run_probe_read_only(host, &probe_prompt, &system_prompt))
+      .map_err(|error| text_repr::value_str(&error.body))?
+      .map_err(|error| format!("{error:#}"))?;
+    if probe.backend_id.is_none() {
+      let attempts =
+        probe.attempts.iter().map(|(backend, error)| format!("attempt {backend} failed: {error}")).collect::<Vec<_>>();
+      return Err(if attempts.is_empty() {
+        "No light backend was available for this item.".to_string()
+      } else {
+        attempts.join("\n")
+      });
+    }
     let answer = probe.answer.expect("a successful ask probe has the answering backend's response");
-    let grade =
-      approval_policy::parse_ask_tier(&answer, &loaded.table).map_err(|error| CliExit::error(error.to_string()))?;
-    rows.push((text, stored_tier, grade.tier, grade.rule, link_refusal));
-  }
+    let backend = probe.backend_id.expect("a successful probe names its backend");
+    let raw_tier_line = answer.lines().rev().find(|line| !line.trim().is_empty()).map(str::to_string);
+    let grade = approval_policy::parse_ask_tier(&answer, &loaded.table);
+    let (grade, error, citation_check) = match grade {
+      Ok(grade) => {
+        let citation_check =
+          approval_policy::verify_ask_tier(&grade, &session_id, &session_rules).err().map(|error| error.to_string());
+        (Some(grade), None, citation_check)
+      }
+      Err(error) => (None, Some(error.to_string()), None),
+    };
+    Ok(RecheckOutcome { backend: Some(backend), raw_tier_line, grade, error, link_refusal, citation_check })
+  })?;
 
-  println!("Session: {session_id}");
-  for (text, stored_tier, new_tier, rule, link_refusal) in &rows {
-    let rule = rule.as_deref().unwrap_or("none");
-    println!("Item: {text}\nStored tier: {stored_tier}\nNew grade: {new_tier} (rule: {rule})");
-    if let Some(reason) = link_refusal {
-      println!("Link: refused: {reason}");
-    }
-    println!();
-  }
-  let downgraded = rows
-    .iter()
-    .filter(|(_, stored, new, _, _)| {
-      matches!(stored.as_str(), "t0" | "user-act") && matches!(new.as_str(), "t1" | "t2")
-    })
-    .collect::<Vec<_>>();
-  println!("Downgrades from t0 or user-act to t1 or t2:");
-  if downgraded.is_empty() {
-    println!("None");
-  } else {
-    for (text, stored_tier, new_tier, _, _) in downgraded {
-      println!("- {session_id}: {text} ({stored_tier} → {new_tier})");
-    }
+  println!("Session: {session_id}\n{}", render_recheck_rows(&rows));
+  let failed = rows.iter().filter(|row| recheck_failed(&row.outcome)).count();
+  if failed > 0 {
+    return Err(CliExit::error(format!("{failed} Waiting item recheck(s) failed; see each row's error above")));
   }
   Ok(())
+}
+
+#[derive(Clone)]
+struct RecheckOutcome {
+  backend: Option<String>,
+  raw_tier_line: Option<String>,
+  grade: Option<AskTier>,
+  error: Option<String>,
+  link_refusal: Option<String>,
+  citation_check: Option<String>,
+}
+
+/// A row fails the readback when it has no grade, cites a stale rule, or names a non-renderable link.
+fn recheck_failed(outcome: &RecheckOutcome) -> bool {
+  outcome.error.is_some() || outcome.citation_check.is_some() || outcome.link_refusal.is_some()
+}
+
+struct RecheckRow {
+  number: usize,
+  text: String,
+  stored_tier: String,
+  outcome: RecheckOutcome,
+}
+
+/// Run every row callback independently so one failed grade remains visible beside the rest of the session's output.
+fn collect_recheck_rows<F>(items: &[Value], mut grade: F) -> Result<Vec<RecheckRow>, CliExit>
+where
+  F: FnMut(&Value) -> Result<RecheckOutcome, String>,
+{
+  items
+    .iter()
+    .enumerate()
+    .map(|(index, item)| {
+      let text = text_repr::value_str(field(item, "text")?);
+      let stored_tier = item.get("tier").and_then(Value::as_str).unwrap_or("untiered").to_string();
+      let outcome = grade(item).unwrap_or_else(|error| RecheckOutcome {
+        backend: None,
+        raw_tier_line: None,
+        grade: None,
+        error: Some(error),
+        link_refusal: None,
+        citation_check: None,
+      });
+      Ok(RecheckRow { number: index + 1, text, stored_tier, outcome })
+    })
+    .collect()
+}
+
+/// Render the recheck evidence one row at a time, keeping a row with no parsable grade alongside all other grades.
+fn render_recheck_rows(rows: &[RecheckRow]) -> String {
+  let mut blocks = Vec::with_capacity(rows.len());
+  for row in rows {
+    let (new_grade, policy_rule, executor, citations) = match row.outcome.grade.as_ref() {
+      Some(grade) => (
+        grade.tier.as_str(),
+        grade.rule.as_deref().unwrap_or("none"),
+        grade.executor.as_str(),
+        serde_json::to_string(&grade.approval_rule_refs).expect("the rule citations serialize"),
+      ),
+      None => ("unavailable", "unavailable", "unavailable", "unavailable".to_string()),
+    };
+    let mut lines = vec![
+      format!("Row: {}", row.number),
+      format!("Item: {}", row.text),
+      format!("Stored tier: {}", row.stored_tier),
+      format!("New grade: {new_grade}"),
+      format!("Policy rule: {policy_rule}"),
+      format!("Executor: {executor}"),
+      format!("Rule citations: {citations}"),
+      format!("Backend: {}", row.outcome.backend.as_deref().unwrap_or("unavailable")),
+      format!("Raw tier line: {}", row.outcome.raw_tier_line.as_deref().unwrap_or("unavailable")),
+    ];
+    if let Some(error) = &row.outcome.error {
+      lines.push(format!("Grade error: {error}"));
+    }
+    if let Some(error) = &row.outcome.citation_check {
+      lines.push(format!("Citation check: {error}"));
+    }
+    if let Some(reason) = &row.outcome.link_refusal {
+      lines.push(format!("Link: refused: {reason}"));
+    }
+    blocks.push(lines.join("\n"));
+  }
+  blocks.join("\n\n")
+}
+
+/// Read the exact current rule citations the server assembled for `session_id`.
+fn current_session_approval_rules(session_id: &str) -> Result<Vec<ApprovalRuleRef>, CliExit> {
+  let result =
+    client::get("/api/internal/web/approval-rules", Some(vec![("session_id".to_string(), session_id.to_string())]))?;
+  let response_session = field(&result, "session_id")?
+    .as_str()
+    .ok_or_else(|| CliExit::error("the approval-rules response carries a non-string session_id"))?;
+  if response_session != session_id {
+    return Err(CliExit::error(format!(
+      "the approval-rules response names session {response_session}, expected {session_id}"
+    )));
+  }
+  serde_json::from_value(field(&result, "approval_rules")?.clone())
+    .map_err(|error| CliExit::error(format!("the approval-rules response is invalid: {error}")))
 }
 
 /// The current session's stored Waiting items, excluding closed sessions and the derived rows in the status response.
@@ -520,13 +619,96 @@ fn anyhow_exit(error: anyhow::Error) -> CliExit {
 
 #[cfg(test)]
 mod tests {
+  use charliebot_core::approval_policy::ApprovalRuleRef;
   use serde_json::json;
 
-  use super::render_status;
+  use super::{RecheckOutcome, collect_recheck_rows, recheck_failed, render_recheck_rows, render_status};
 
   /// A GET result for a status that carries `status` and no descendant, child or derived rows.
   fn status_result(status: serde_json::Value) -> serde_json::Value {
     json!({"web_status": status, "descendants": [], "children": [], "derived_waiting": []})
+  }
+
+  #[test]
+  fn one_grade_parse_error_does_not_hide_other_rows() {
+    let items = [json!({"text": "Bad tier line", "tier": "t1"}), json!({"text": "Current rule applies", "tier": "t2"})];
+    let mut calls = 0;
+    let rows = collect_recheck_rows(&items, |_| {
+      calls += 1;
+      if calls == 1 {
+        return Ok(RecheckOutcome {
+          backend: Some("probe-one".to_string()),
+          raw_tier_line: Some("no machine tier line".to_string()),
+          grade: None,
+          error: Some("no parsable tier line".to_string()),
+          link_refusal: None,
+          citation_check: None,
+        });
+      }
+      let citation = ApprovalRuleRef {
+        session_id: "session".to_string(),
+        scope: "session".to_string(),
+        source_ref: "goal".to_string(),
+        source_session_id: Some("session".to_string()),
+        text: "Only Chao may change the goal.".to_string(),
+      };
+      let refs = vec![citation.clone()];
+      let raw_tier_line = format!(
+        "tier: t0 rule: rule-named executor: agent approval_rule_refs: {}",
+        serde_json::to_string(&refs).expect("citations serialize")
+      );
+      Ok(RecheckOutcome {
+        backend: Some("probe-two".to_string()),
+        raw_tier_line: Some(raw_tier_line.clone()),
+        grade: Some(charliebot_core::approval_policy::AskTier {
+          tier: "t0".to_string(),
+          rule: Some("rule-named".to_string()),
+          executor: "agent".to_string(),
+          approval_rule_refs: refs,
+          raw_tier_line,
+        }),
+        error: None,
+        link_refusal: None,
+        citation_check: None,
+      })
+    })
+    .expect("the rows collect independently");
+
+    let output = render_recheck_rows(&rows);
+
+    assert_eq!(rows.len(), 2);
+    assert!(output.contains("Row: 1\nItem: Bad tier line\nStored tier: t1"), "{output}");
+    assert!(
+      output.contains("Backend: probe-one\nRaw tier line: no machine tier line\nGrade error: no parsable tier line"),
+      "{output}"
+    );
+    assert!(output.contains("Row: 2\nItem: Current rule applies\nStored tier: t2\nNew grade: t0"), "{output}");
+    assert!(output.contains("Executor: agent\nRule citations:"), "{output}");
+    assert!(output.contains("Backend: probe-two\nRaw tier line: tier: t0 rule: rule-named"), "{output}");
+  }
+
+  #[test]
+  fn recheck_fails_for_a_stale_rule_citation_or_non_renderable_link() {
+    for outcome in [
+      RecheckOutcome {
+        backend: Some("probe".to_string()),
+        raw_tier_line: Some("tier: t0 rule: rule-named executor: agent approval_rule_refs: []".to_string()),
+        grade: None,
+        error: None,
+        link_refusal: None,
+        citation_check: Some("the cited rule is stale".to_string()),
+      },
+      RecheckOutcome {
+        backend: Some("probe".to_string()),
+        raw_tier_line: Some("tier: t0 rule: irreversible executor: agent approval_rule_refs: []".to_string()),
+        grade: None,
+        error: None,
+        link_refusal: Some("the local file is not a rendered page".to_string()),
+        citation_check: None,
+      },
+    ] {
+      assert!(recheck_failed(&outcome));
+    }
   }
 
   #[test]

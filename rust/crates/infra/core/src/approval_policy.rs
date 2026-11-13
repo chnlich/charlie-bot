@@ -57,11 +57,15 @@ pub const TIER_USER_ACT: &str = "user-act";
 /// The review ask tier (`review`).
 pub const TIER_REVIEW: &str = "review";
 
+/// The person who carries out an approval step (`EXECUTOR_AGENT` or `EXECUTOR_CHAO`).
+pub const EXECUTOR_AGENT: &str = "agent";
+pub const EXECUTOR_CHAO: &str = "chao";
+
 /// The tier values a cold-read answer's machine-readable line may give (`ASK_TIERS`).
 pub const ASK_TIERS: [&str; 5] = [TIER_T0, TIER_T1, TIER_T2, TIER_USER_ACT, TIER_REVIEW];
 
 /// The exact form of the machine-readable line the ask cold read ends with (`TIER_LINE_FORM`).
-pub const TIER_LINE_FORM: &str = "tier: <tier> rule: <rule>";
+pub const TIER_LINE_FORM: &str = "tier: <tier> rule: <rule> executor: <agent|chao> approval_rule_refs: <JSON array>";
 
 /// The host-level record store of table changes, next to the other host-level state records.
 pub const CHANGES_RELATIVE_PATH: &str = "state/policy_table_changes.jsonl";
@@ -357,12 +361,26 @@ fn write_recorded(path: &Path, raw: &str) -> Result<(), PolicyError> {
 /// tokio workers, so one mutex makes a changed read append exactly one record.
 static RECORD_LOCK: Mutex<()> = Mutex::new(());
 
-/// One tiered ask cold read: the tier and the rule that names it, `None` for no rule
+/// One exact current rule from a session's next manager prompt (`ApprovalRuleRef`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalRuleRef {
+  pub session_id: String,
+  pub scope: String,
+  pub source_ref: String,
+  pub source_session_id: Option<String>,
+  pub text: String,
+}
+
+/// One ask cold read: the consequence tier, policy rule, executor, exact session-rule citations and raw tier line
 /// (`AskTier`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AskTier {
   pub tier: String,
   pub rule: Option<String>,
+  pub executor: String,
+  pub approval_rule_refs: Vec<ApprovalRuleRef>,
+  pub raw_tier_line: String,
 }
 
 /// Parse the machine-readable tier line the ask cold read ends with (`parse_ask_tier`). The line is
@@ -377,7 +395,9 @@ pub fn parse_ask_tier(answer: &str, table: &ApprovalPolicyTable) -> Result<AskTi
   };
   let line = answer.lines().rev().find(|line| !line.trim().is_empty()).ok_or_else(missing)?;
   let rest = line.trim().strip_prefix("tier: ").ok_or_else(missing)?;
-  let (tier, rule) = rest.split_once(" rule: ").ok_or_else(missing)?;
+  let (tier, rest) = rest.split_once(" rule: ").ok_or_else(missing)?;
+  let (rule, rest) = rest.split_once(" executor: ").ok_or_else(missing)?;
+  let (executor, refs) = rest.split_once(" approval_rule_refs: ").ok_or_else(missing)?;
   if !ASK_TIERS.contains(&tier) {
     return Err(PolicyError(format!(
       "the cold-read answer's tier line names the unknown tier {tier:?}; the tier is one of {}",
@@ -396,7 +416,55 @@ pub fn parse_ask_tier(answer: &str, table: &ApprovalPolicyTable) -> Result<AskTi
       Some(rule.to_string())
     }
   };
-  Ok(AskTier { tier: tier.to_string(), rule })
+  if ![EXECUTOR_AGENT, EXECUTOR_CHAO].contains(&executor) {
+    return Err(PolicyError(format!(
+      "the cold-read answer's executor is {executor:?}; it must be {EXECUTOR_AGENT} or {EXECUTOR_CHAO}"
+    )));
+  }
+  if tier == TIER_USER_ACT && executor != EXECUTOR_CHAO {
+    return Err(PolicyError(format!("a user-act tier requires executor {EXECUTOR_CHAO}")));
+  }
+  let approval_rule_refs = serde_json::from_str::<Vec<ApprovalRuleRef>>(refs).map_err(|error| {
+    PolicyError(format!(
+      "the cold-read answer's approval_rule_refs is not a JSON array of exact rule citations: {error}"
+    ))
+  })?;
+  Ok(AskTier {
+    tier: tier.to_string(),
+    rule,
+    executor: executor.to_string(),
+    approval_rule_refs,
+    raw_tier_line: line.to_string(),
+  })
+}
+
+/// Verify the grade's executor and its exact references against the current rules of `session_id`.
+pub fn verify_ask_tier(
+  grade: &AskTier,
+  session_id: &str,
+  current_rules: &[ApprovalRuleRef],
+) -> Result<(), PolicyError> {
+  if grade.tier == TIER_USER_ACT && grade.executor != EXECUTOR_CHAO {
+    return Err(PolicyError(format!("a user-act item must have executor {EXECUTOR_CHAO}")));
+  }
+  if grade.approval_rule_refs.is_empty() {
+    if grade.rule.as_deref() == Some("rule-named") {
+      return Err(PolicyError("a rule-named grade must cite an exact current session rule".to_string()));
+    }
+    return Ok(());
+  }
+  if grade.tier != TIER_T0 || grade.rule.as_deref() != Some("rule-named") {
+    return Err(PolicyError("a verified session-rule citation requires t0 / rule-named".to_string()));
+  }
+  for citation in &grade.approval_rule_refs {
+    if citation.session_id != session_id || !current_rules.contains(citation) {
+      return Err(PolicyError(format!(
+        "approval rule citation is not an exact current rule of session {session_id:?}: source {:?} in session {:?}",
+        citation.source_ref, citation.session_id
+      )));
+    }
+  }
+  Ok(())
 }
 
 /// The rank of a tier line's rule in `table`: the rule's own consequence test rank, or the rank of the
@@ -686,6 +754,23 @@ enable_ask_tier_refusal: false
     loaded_valid(home.path()).table
   }
 
+  fn tier_line(tier: &str, rule: &str, executor: &str, refs: &[ApprovalRuleRef]) -> String {
+    format!(
+      "tier: {tier} rule: {rule} executor: {executor} approval_rule_refs: {}",
+      serde_json::to_string(refs).expect("citations serialize")
+    )
+  }
+
+  fn current_rule() -> ApprovalRuleRef {
+    ApprovalRuleRef {
+      session_id: "session".to_string(),
+      scope: "session".to_string(),
+      source_ref: "goal".to_string(),
+      source_session_id: Some("session".to_string()),
+      text: "Only Chao may change the long-term goal.".to_string(),
+    }
+  }
+
   #[test]
   fn each_tier_value_parses_with_its_rule() {
     let table = table_with_refusal(false);
@@ -697,12 +782,49 @@ enable_ask_tier_refusal: false
       ("user-act", "none", None),
       ("review", "none", None),
     ] {
-      let answer = format!("(1) Decide.\n(5) tiered.\ntier: {tier} rule: {rule}");
+      let executor = if tier == TIER_USER_ACT { EXECUTOR_CHAO } else { EXECUTOR_AGENT };
+      let answer = format!("(1) Decide.\n(5) tiered.\n{}", tier_line(tier, rule, executor, &[]));
 
       let parsed = parse_ask_tier(&answer, &table).expect("the tier line parses");
 
-      assert_eq!(parsed, AskTier { tier: tier.to_string(), rule: expected }, "{tier} {rule}");
+      assert_eq!(
+        parsed,
+        AskTier {
+          tier: tier.to_string(),
+          rule: expected,
+          executor: executor.to_string(),
+          approval_rule_refs: vec![],
+          raw_tier_line: tier_line(tier, rule, executor, &[]),
+        },
+        "{tier} {rule}"
+      );
     }
+  }
+
+  #[test]
+  fn verified_approval_rule_cannot_be_t1_or_t2() {
+    let table = table_with_refusal(false);
+    let citation = current_rule();
+    let current = [citation.clone()];
+    let answer =
+      format!("The current Goal applies.\n{}", tier_line("t0", "rule-named", "agent", std::slice::from_ref(&citation)));
+    let verified = parse_ask_tier(&answer, &table).expect("the t0 citation parses");
+    verify_ask_tier(&verified, "session", &current).expect("the exact current citation verifies");
+
+    for tier in ["t1", "t2"] {
+      let answer = tier_line(tier, "rule-named", "agent", std::slice::from_ref(&citation));
+      let parsed = parse_ask_tier(&answer, &table).expect("the contradictory tier parses");
+      let error = verify_ask_tier(&parsed, "session", &current).expect_err("a verified approval rule cannot be t1/t2");
+      assert!(error.to_string().contains("requires t0 / rule-named"), "{error}");
+    }
+  }
+
+  #[test]
+  fn user_act_requires_the_chao_executor() {
+    let table = table_with_refusal(false);
+    let answer = tier_line("user-act", "none", "agent", &[]);
+    let error = parse_ask_tier(&answer, &table).expect_err("user-act cannot name agent as executor");
+    assert!(error.to_string().contains("requires executor chao"), "{error}");
   }
 
   #[test]
@@ -726,12 +848,12 @@ enable_ask_tier_refusal: false
   fn an_unknown_tier_or_rule_is_refused() {
     let table = table_with_refusal(false);
     for answer in [
-      "tier: t3 rule: none",
-      "tier: t0 rule: chaos",
-      "tier: t1 rule: out-of-scope:chaos",
-      "tier: t0 rule: out-of-scope:out-of-scope:shared-repo-landing",
+      tier_line("t3", "none", "agent", &[]),
+      tier_line("t0", "chaos", "agent", &[]),
+      tier_line("t1", "out-of-scope:chaos", "agent", &[]),
+      tier_line("t0", "out-of-scope:out-of-scope:shared-repo-landing", "agent", &[]),
     ] {
-      let error = parse_ask_tier(answer, &table).expect_err("the line is refused");
+      let error = parse_ask_tier(&answer, &table).expect_err("the line is refused");
       assert!(error.to_string().contains("unknown"), "{answer:?}: {error}");
     }
   }

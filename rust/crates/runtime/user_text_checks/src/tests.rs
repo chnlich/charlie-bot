@@ -222,7 +222,7 @@ fn link_other_forms_refused() {
 }
 
 #[test]
-fn link_single_renderability_owner() {
+fn link_check_has_one_owner() {
   let directory = tempfile::tempdir().expect("the linked page directory exists");
   let mut links = Vec::new();
   for extension in ["md", "diff", "patch"] {

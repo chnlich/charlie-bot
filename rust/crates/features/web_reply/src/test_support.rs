@@ -1,6 +1,7 @@
 //! Fixtures for the web reply tests: store-backed feature contexts over temporary homes with registrations for each
 //! route the tests exercise.
 
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -12,6 +13,7 @@ use charliebot_core::config::{BackendOption, CREDENTIALS_FILENAME};
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
+use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::registry::OpenWaitingRow;
 use charliebot_registry::store_hooks::store_hooks;
 use charliebot_registry::{FeatureContext, Registry, RegistryError, StartupState};
@@ -172,6 +174,13 @@ impl Home {
       Box::new(move || load_credentials(&credential_home)),
     ));
     let startup = StartupState::default();
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+      .ancestors()
+      .nth(4)
+      .expect("the web-reply crate sits four directories below the checkout");
+    startup
+      .insert(RepoRoot::new(Some(OsString::from(checkout.as_os_str()))).expect("the test checkout path is set"))
+      .expect("the test startup state accepts the checkout");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
     Self { _dir: dir, features }
   }

@@ -12,7 +12,7 @@ use std::collections::HashSet;
 
 use anyhow::Context;
 use charliebot_agents::model_pool;
-use charliebot_core::approval_policy::TIER_USER_ACT;
+use charliebot_core::approval_policy::{EXECUTOR_CHAO, TIER_USER_ACT};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::registry::{HostLogin, OpenWaitingRow};
@@ -148,6 +148,8 @@ fn wait_row(holder_id: String, holder_name: String, login: &HostLogin) -> anyhow
     link: Some(HOST_AUTH_LINK.to_string()),
     tier: Some(TIER_USER_ACT.to_string()),
     rule: None,
+    executor: Some(EXECUTOR_CHAO.to_string()),
+    approval_rule_refs: None,
     since: UtcDateTime::parse(&login.last_change_at)?,
     is_derived: true,
   })
@@ -247,6 +249,7 @@ mod tests {
     assert_eq!(row.context.as_deref(), Some("Synthetic login check"));
     assert_eq!(row.link.as_deref(), Some("/host-auth"));
     assert_eq!(row.tier.as_deref(), Some("user-act"));
+    assert_eq!(row.executor.as_deref(), Some("chao"));
     assert_eq!(row.rule, None);
     assert_eq!(row.since.to_str(), UtcDateTime::parse(SINCE).unwrap().to_str());
 

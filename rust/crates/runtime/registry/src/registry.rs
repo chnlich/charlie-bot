@@ -548,6 +548,8 @@ pub struct OpenWaitingRow {
   pub link: Option<String>,
   pub tier: Option<String>,
   pub rule: Option<String>,
+  pub executor: Option<String>,
+  pub approval_rule_refs: Option<Vec<charliebot_core::approval_policy::ApprovalRuleRef>>,
   pub since: UtcDateTime,
   pub is_derived: bool,
 }

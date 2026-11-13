@@ -2,6 +2,7 @@
 //! tests make. The context carries this package's registrations and the web reply slot the seeded statuses write
 //! through.
 
+use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,6 +12,7 @@ use axum::body::Body;
 use charliebot_core::config::CREDENTIALS_FILENAME;
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
+use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::registry::OpenWaitingRow;
 use charliebot_registry::store_hooks::store_hooks;
 use charliebot_registry::{FeatureContext, Registry, StartupState};
@@ -84,8 +86,14 @@ impl Home {
       "approval_test_credentials_reload_failed",
       Box::new(move || load_credentials(&credential_home)),
     ));
-    let features =
-      Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(StartupState::default()) });
+    let startup = StartupState::default();
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let checkout =
+      manifest_dir.ancestors().nth(4).expect("the approval crate sits four directories below the checkout");
+    startup
+      .insert(RepoRoot::new(Some(OsString::from(checkout.as_os_str()))).expect("the test checkout path is set"))
+      .expect("the test startup state accepts the checkout");
+    let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
     Self { _dir: dir, features }
   }
 

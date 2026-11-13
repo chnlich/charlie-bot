@@ -270,7 +270,7 @@ impl HeldWatch {
   }
 
   /// Watch one target again after a readback found it still alive. The script dropped the target when it reported
-  /// that end, and the registry dropped it from this watch's set with the end, so without this call only the
+  /// that end, and the registry dropped it from this watch's set with the end. Without this call only the
   /// interval probe watches the target. The reopened session checks the target on its first pass.
   pub fn resubscribe(&mut self, target: HeldTarget) {
     let host = match &target {
@@ -442,7 +442,7 @@ async fn run_once(
     Ok(child) => child,
     Err(error) => return format!("spawn failed: {error}"),
   };
-  // The last stderr line names the failure ssh printed. A reader task keeps it and is never awaited: a script that
+  // The last stderr line names the failure ssh printed. A reader task keeps it and is never awaited. A script that
   // outlives its killed session keeps the stderr pipe open, so the session must not wait for the pipe to close.
   let last_stderr = Arc::new(StdMutex::new(None::<String>));
   let stderr_lines = BufReader::new(child.stderr.take().expect("stderr is piped")).lines();

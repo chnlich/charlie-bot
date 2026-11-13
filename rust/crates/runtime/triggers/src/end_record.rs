@@ -79,7 +79,7 @@ pub fn end_source_label(source: Option<EndSource>) -> &'static str {
 
 /// One remote target's end reading, taken when the server learned the target had ended. `end_at` is set exactly
 /// when the readback produced an end instant on the server clock, and `source` and `clock_offset_ms` are then set
-/// with it; a target the server saw gone without a readable end carries none of the three.
+/// with it. A target the server saw gone without a readable end carries none of the three.
 #[derive(Clone, Debug)]
 pub struct RemoteTargetEnd {
   /// The end instant on the server clock, when the readback produced one.
@@ -107,7 +107,7 @@ pub fn reading(
   Some(RemoteTargetEnd { end_at: Some(end_at), source: Some(source), clock_offset_ms: Some(offset_ms), seen_gone_at })
 }
 
-/// The end-file path of one watched pid, as a remote shell word: double quotes keep `$HOME` expandable while the
+/// The end-file path of one watched pid, as a remote shell word. Double quotes keep `$HOME` expandable while the
 /// rest of the path, a UUID and a pid, survives any remote home with spaces in it.
 pub fn end_file_word(trigger_id: &str, pid: i64) -> String {
   format!("\"{WATCH_DIR_WORD_PREFIX}{trigger_id}/{pid}.end\"")
@@ -117,7 +117,7 @@ pub fn end_file_word(trigger_id: &str, pid: i64) -> String {
 ///
 /// The recorder detaches like the `--cmd` launcher: `setsid`, with stdin, stdout and stderr redirected, so the
 /// verify ssh still returns within its limit. It is bounded by the trigger's max wait and writes one epoch.ns line
-/// to the end file only when the watched pid died first; an expiry of the timeout writes nothing.
+/// to the end file only when the watched pid died first. An expiry of the timeout writes nothing.
 pub fn recorder_command(pid: i64, trigger_id: &str, max_wait_seconds: i64) -> String {
   let dir = format!("\"{WATCH_DIR_WORD_PREFIX}{trigger_id}\"");
   let end_file = end_file_word(trigger_id, pid);
@@ -140,7 +140,7 @@ pub fn exit_read_command(exit_file: &str) -> Result<String, shlex::QuoteError> {
 }
 
 /// The date and zone lines a pid probe's stdout carries between its first line and the verdict word. The date line
-/// is the probe command's first output and the end-file line follows it; a probe without the read prefix, such as
+/// is the probe command's first output and the end-file line follows it. A probe without the read prefix, such as
 /// one from a static-output fake, parses to no reading.
 pub struct PidProbeRead {
   /// The remote clock at the probe, in epoch ns.
@@ -189,8 +189,8 @@ pub struct ExitRead {
 }
 
 /// Parse one exit-read ssh's stdout. A stdout that starts with an epoch.ns date line carries the content and the
-/// mtime after it; any other shape, such as a static-output fake that prints only the exit file, keeps the whole
-/// stdout as the code, which is what the exit read printed before the readback existed.
+/// mtime after it. Any other shape, such as a static-output fake that prints only the exit file, keeps the whole
+/// stdout as the code. That is what the exit read printed before the readback existed.
 pub fn exit_read(stdout: &str) -> ExitRead {
   let lines: Vec<&str> = stdout.trim().lines().collect();
   if let Some(now_ns) = lines.first().and_then(|line| parse_epoch_ns(line)) {

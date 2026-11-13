@@ -377,6 +377,21 @@ test('a page that painted its whole view names the filter alone', async () => {
       'every row the page holds rides in the filter answer, so it names no ids');
 });
 
+test('a full listing after the first screen moves the poll back to the filter form', async () => {
+  const page = buildPage({painted: ['session-b']});
+  vm.runInContext('pollSessionStatus()', page.context);
+  page.requests.forEach((request) => request.respond({token: 'test-1', rows: {}, gone: []}));
+  await flush();
+
+  // "Show all" paints the whole view, so the poll now holds a row the first screen did not carry.
+  page.document.querySelectorAll = (selector) => selector === 'a[id^="session-"]'
+    ? ['session-a', 'session-b', 'session-c'].map((sid) => ({id: 'session-' + sid})) : [];
+  vm.runInContext('pollSessionStatus()', page.context);
+
+  assert.deepEqual(page.urlsStarting('/api/sessions/status').slice(1), ['/api/sessions/status?filter=all'],
+      'the filter answer carries every row the page paints once a full listing moved the row set');
+});
+
 test('a status poll falls back to the filter when the held rows outgrow one URL', async () => {
   const painted = Array.from({length: 400}, (_, index) => '00000000-0000-0000-0000-' + String(index).padStart(12, '0'));
   const page = buildPage({painted});

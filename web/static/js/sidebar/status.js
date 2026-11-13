@@ -116,14 +116,18 @@ function statusRequestUrls(path, ids, query = '', since = '') {
 // paint (the open chat, a delegate card's child) travel as ids. The archive view and a search answer their own row
 // sets, so they name every session by id.
 //
-// A page that left rows out names the rows it holds, when they fit one URL, and asks for `answer=ids`: the server then
-// answers those rows alone while the filter still names the set membership follows. Its first poll otherwise
-// downloads every row of the view, though the page paints only its first screen. A page that painted its whole view
-// names the filter alone, because that answer carries the rows it holds.
+// A page that carried only its first screen names those rows, while they fit one URL, and asks for `answer=ids`: the
+// server then answers those rows alone while the filter still names the set membership follows. Its first poll
+// otherwise downloads every row of the view, though the page paints only its first screen. Once a full listing or a
+// view change moves the poll's row set, the filter form answers it again, so a row entering the view still rides a
+// poll.
 function sidebarStatusUrls(path, ids, since) {
   if (!sidebarRowsRefreshable()) return statusRequestUrls(path, ids);
   const query = 'filter=' + encodeURIComponent(currentFilter);
-  if (ids.length && pageLeftRowsOut()) {
+  if (pageLeftRowsOut() && firstScreenPollIds === null && ids.length) {
+    firstScreenPollIds = [...ids].sort().join(',');
+  }
+  if (firstScreenPollIds !== null && [...ids].sort().join(',') === firstScreenPollIds) {
     const named = statusRequestUrls(path, ids, query, since);
     if (named.length === 1 && named[0].length + ANSWER_QUERY.length <= STATUS_QUERY_MAX_BYTES) {
       return [named[0] + ANSWER_QUERY];
@@ -134,6 +138,9 @@ function sidebarStatusUrls(path, ids, since) {
   const unpainted = ids.filter(sid => !painted.has(sid));
   return statusRequestUrls(path, unpainted, query, since);
 }
+
+// The row set the poll named on the page's first poll, while the page carried only its first screen.
+let firstScreenPollIds = null;
 
 // The query that asks the server for the rows the request names rather than every row of the filter's set.
 const ANSWER_QUERY = '&answer=ids';

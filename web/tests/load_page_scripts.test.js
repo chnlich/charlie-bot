@@ -21,6 +21,9 @@ function buildContext() {
       createElement: () => ({}),
       head: {appendChild(script) { appended.push(script); }},
     },
+    // markdown-renderer.js defines this before utils.js runs on the page; the math renderer's own download is the
+    // one registration here.
+    registerChatMathLoader() {},
   };
   context.globalThis = context;
   vm.createContext(context);
@@ -48,6 +51,26 @@ test('a failed page-script load retries from the failed file, never re-running a
     'the retry asks for the failed file only');
   appended[2].onload();
   await second;
+});
+
+test('a file on another origin keeps its own URL; a same-origin one takes the page version', async () => {
+  const {context, appended} = buildContext();
+
+  const scripts = context.loadPageScripts('feature', ['https://cdn.example.com/lib@1.0.0/x.js', '/b.js']);
+  await settle();
+  appended[0].onload();
+  await settle();
+  appended[1].onload();
+  await scripts;
+  const styles = context.loadPageStyles('feature', ['https://cdn.example.com/lib@1.0.0/x.css']);
+  await settle();
+  appended[2].onload();
+  await styles;
+  assert.deepEqual(appended.map((node) => node.src || node.href), [
+    'https://cdn.example.com/lib@1.0.0/x.js',
+    '/b.js?v=v1',
+    'https://cdn.example.com/lib@1.0.0/x.css',
+  ]);
 });
 
 test('a featured stylesheet loads once per key, and a failed link retries', async () => {

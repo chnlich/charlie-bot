@@ -1,10 +1,71 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
 const { readPackageStatic } = require('./read_static');
 
 const TERMINAL_MOUNT_JS = readPackageStatic('features', 'terminal', 'terminal_mount.js');
+const PACKAGE_SCRIPTS_HTML =
+    fs.readFileSync(path.join(__dirname, '..', 'features', 'terminal', 'templates', 'terminal', 'page_scripts.html'),
+        'utf8');
+
+// The first-click loader the terminal's page part carries: the tab button runs it, and it must load xterm before
+// the module that mounts it.
+function loadOpenTerminalTab() {
+  const inline = /<script>([\s\S]*?)<\/script>/.exec(PACKAGE_SCRIPTS_HTML);
+  assert.ok(inline, 'page_scripts.html carries its loader in an inline script');
+  const calls = [];
+  const context = {
+    console: {error(...args) { calls.push(['error', ...args]); }},
+    loadPageStyles(key, paths) {
+      calls.push(['styles', key, paths]);
+      return Promise.resolve();
+    },
+    loadPageScripts(key, paths) {
+      calls.push(['scripts', key, paths]);
+      return Promise.resolve();
+    },
+    switchTab(tab) {
+      calls.push(['switch', tab]);
+    },
+  };
+  context.globalThis = context;
+  vm.createContext(context);
+  vm.runInContext(inline[1], context, {filename: 'terminal/page_scripts.html'});
+  return {context, calls};
+}
+
+test('openTerminalTab loads xterm before the module that mounts it', async () => {
+  const {context, calls} = loadOpenTerminalTab();
+  context.openTerminalTab();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // JSON round-trips: deepStrictEqual rejects the vm realm's Array.prototype.
+  const styles = calls.filter(([kind]) => kind === 'styles');
+  const scripts = calls.filter(([kind]) => kind === 'scripts');
+  assert.deepEqual(JSON.parse(JSON.stringify(styles.map(([, , paths]) => paths))),
+    [['https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css']],
+    'the terminal takes the xterm stylesheet with its scripts');
+  const loaded = scripts.map(([, , paths]) => paths)[0];
+  assert.equal(loaded[0], 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js');
+  assert.equal(loaded[1], 'https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js');
+  assert.equal(loaded[loaded.length - 1], '/static/features/terminal/terminal_panel.js');
+  assert.ok(loaded.indexOf('/static/features/terminal/terminal_mount.js') > loaded.indexOf(
+    'https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js'), 'the mount follows xterm');
+  assert.deepEqual(calls.filter(([kind]) => kind === 'switch'), [['switch', 'terminal']],
+    'the tab switches once the files are in');
+});
+
+test('openTerminalTab reports a failed load instead of switching the tab', async () => {
+  const {context, calls} = loadOpenTerminalTab();
+  context.loadPageScripts = () => Promise.reject(new Error('the page script did not load: xterm.js'));
+  context.openTerminalTab();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls.filter(([kind]) => kind === 'switch'), [], 'the switch waits for the files');
+  assert.equal(calls.filter(([kind]) => kind === 'error').length, 1, 'the failure is reported once');
+});
 
 function loadHelpers() {
   const constructed = [];

@@ -915,6 +915,66 @@ function hasMathDelimiter(text) {
     || MATH_ENTITY_RE.test(text);
 }
 
+// The four delimiter pairs and the tags the walk leaves alone. One object, because the walk runs either at the
+// render that asked for it or once the renderer lands for a render that asked too early.
+const CHAT_MATH_WALK = Object.freeze({
+  delimiters: [
+    {left: '$$', right: '$$', display: true},
+    {left: '\\[', right: '\\]', display: true},
+    {left: '\\(', right: '\\)', display: false},
+    {left: '$', right: '$', display: false},
+  ],
+  ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'],
+  ignoredClasses: ['code-block'],
+  // Stray dollar amounts ("$5 ... $10") render as red inline text instead of breaking the whole bubble.
+  throwOnError: false,
+});
+
+// The math renderer's files, on the pinned KaTeX release. A message with no math never walks, so a page whose
+// messages carry none never downloads them; the first message that does starts the three together.
+const CHAT_MATH_FILES = Object.freeze({
+  styles: ['https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css'],
+  scripts: [
+    'https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js',
+    'https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/contrib/auto-render.min.js',
+  ],
+});
+
+let chatMathLoad = null;
+// The first-use loaders (utils.js), which this module takes by registration: it loads before them.
+let chatMathLoaders = null;
+// The elements that asked for the walk before the renderer arrived. The walk runs on the element's own bytes, so a
+// body re-rendered while it waited keeps one entry and walks its newest paint once.
+const chatMathPending = new Set();
+
+// The page's loaders for the two files. A queue that filled before the registration walks as soon as it lands.
+function registerChatMathLoader(loadStyles, loadScripts) {
+  chatMathLoaders = {loadStyles, loadScripts};
+  if (chatMathPending.size) startChatMathDownload();
+}
+
+// One download for every waiting body. A failure drops the entry and the queue — the body keeps its source on screen —
+// so the next math message retries it.
+function startChatMathDownload() {
+  if (chatMathLoad !== null || chatMathLoaders === null || chatMathPending.size === 0) return chatMathLoad;
+  chatMathLoad = Promise.all([
+    chatMathLoaders.loadStyles('chat-math', CHAT_MATH_FILES.styles),
+    chatMathLoaders.loadScripts('chat-math', CHAT_MATH_FILES.scripts),
+  ]).then(walkChatMathQueue, (error) => {
+    chatMathLoad = null;
+    chatMathPending.clear();
+    console.error('the math renderer did not load: ' + error.message);
+  });
+  return chatMathLoad;
+}
+
+// The walk replay: each element walks on the bytes it holds now.
+function walkChatMathQueue() {
+  const pending = Array.from(chatMathPending);
+  chatMathPending.clear();
+  for (const el of pending) renderChatMath(el);
+}
+
 function renderChatMath(el, sourceText) {
   // The walk's source: the streamed paint passes the draft text; message
   // renders fall to data-raw, the message's own source. An element with
@@ -943,19 +1003,14 @@ function renderChatMath(el, sourceText) {
       return;
     }
   }
-  // throwOnError:false keeps stray dollar amounts ("$5 ... $10") from
-  // breaking the whole bubble — invalid math renders as red inline text.
-  renderMathInElement(el, {
-    delimiters: [
-      {left: '$$', right: '$$', display: true},
-      {left: '\\[', right: '\\]', display: true},
-      {left: '\\(', right: '\\)', display: false},
-      {left: '$', right: '$', display: false},
-    ],
-    ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'],
-    ignoredClasses: ['code-block'],
-    throwOnError: false,
-  });
+  // The renderer travels until the first message that needs it. This element keeps its source until the walk
+  // runs, which the download's arrival starts.
+  if (typeof renderMathInElement !== 'function') {
+    chatMathPending.add(el);
+    startChatMathDownload();
+    return;
+  }
+  renderMathInElement(el, CHAT_MATH_WALK);
   if (cacheable) {
     const walked = el.innerHTML;
     proseMathCache.set(raw, { pre, walked });

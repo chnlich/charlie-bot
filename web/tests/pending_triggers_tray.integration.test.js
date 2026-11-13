@@ -73,6 +73,9 @@ function buildTrayContext({elements = new Map(), initialTriggers = null} = {}) {
 
   // The page loads utils.js before the chat/sidebar modules (index.html); the
   // harness mirrors that so the tray's time helpers are the real ones.
+  // markdown-renderer.js lands before utils.js and supplies the math loader's
+  // registration entry; the tray never asks for math.
+  context.registerChatMathLoader = () => {};
   vm.createContext(context);
   vm.runInContext(readStatic('utils.js'), context, {filename: 'utils.js'});
   createChatSidebarContext(context);

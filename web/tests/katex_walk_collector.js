@@ -27,16 +27,19 @@ const { buildStreamHarness } = require('./stream_render_harness');
 const { MARKED_URL } = require('./marked_renderer_harness');
 
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..', '..');
-// The katex build the checkout's chat page serves (web/templates/index.html).
-// The walk under test is that page's walk, so the build reads from the same
-// page instead of a second pin here. No match is a loud preflight failure.
-const INDEX_HTML = fs.readFileSync(path.join(CHECKOUT, 'web', 'templates', 'index.html'), 'utf8');
-const katexScript = /<script defer src="(https:\/\/cdn\.jsdelivr\.net\/npm\/katex@[^"]+\/dist\/katex\.min\.js)"><\/script>/.exec(INDEX_HTML);
-if (!katexScript) {
-  throw new Error('web/templates/index.html carries no katex.min.js script tag; the collector lost its build pin');
+// The katex build the checkout's chat page serves: the two files
+// markdown-renderer.js downloads at the first message that carries math. The
+// walk under test is that module's walk, so the build reads from the same
+// module instead of a second pin here. No match is a loud preflight failure.
+const RENDERER_JS = fs.readFileSync(path.join(CHECKOUT, 'web', 'static', 'js', 'markdown-renderer.js'), 'utf8');
+const katexScript = /'(https:\/\/cdn\.jsdelivr\.net\/npm\/katex@[^']+\/dist\/katex\.min\.js)'/.exec(RENDERER_JS);
+const autoRenderScript =
+    /'(https:\/\/cdn\.jsdelivr\.net\/npm\/katex@[^']+\/dist\/contrib\/auto-render\.min\.js)'/.exec(RENDERER_JS);
+if (!katexScript || !autoRenderScript) {
+  throw new Error('web/static/js/markdown-renderer.js names no katex build; the collector lost its build pin');
 }
 const KATEX_URL = katexScript[1];
-const AUTO_URL = KATEX_URL.replace('katex.min.js', 'contrib/auto-render.min.js');
+const AUTO_URL = autoRenderScript[1];
 const KATEX_LABEL = /katex@([^/]+)\//.exec(KATEX_URL)[1];
 const PAGE_MESSAGES = 40;
 

@@ -121,6 +121,79 @@ test('foreign markup falls through to the walk and stays out of the parse memo',
   assert.equal(c.renderProseMarkdown(src), '<p>math $a+b$ end</p>', 'the parse memo was poisoned');
 });
 
+test('a math body waits for the renderer, then walks when it lands', async () => {
+  const c = loadRenderer();
+  const requests = [];
+  let land;
+  c.registerChatMathLoader((key, paths) => {
+    requests.push(['styles', key, paths]);
+    return Promise.resolve();
+  }, (key, paths) => {
+    requests.push(['scripts', key, paths]);
+    return new Promise((resolve) => {
+      land = resolve;
+    });
+  });
+  const src = 'math $a+b$ end';
+  const waiting = el(c, src);
+  c.renderChatMath(waiting);
+  assert.deepEqual(requests.map(([kind]) => kind), ['styles', 'scripts'],
+    'the first math body asked for the stylesheet and the scripts');
+  assert.equal(waiting.innerHTML, c.renderProseMarkdown(src),
+    'the source stays on screen while the renderer travels');
+
+  const w = stubWalk(c);
+  land();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(w.walks, 1, 'the waiting body walked once the renderer landed');
+  assert.match(waiting.innerHTML, /katex-walked/);
+});
+
+test('another math body while the renderer travels asks for nothing new', async () => {
+  const c = loadRenderer();
+  const requests = [];
+  let land;
+  c.registerChatMathLoader(() => Promise.resolve(), (key, paths) => {
+    requests.push(paths);
+    return new Promise((resolve) => {
+      land = resolve;
+    });
+  });
+  const first = el(c, 'one $a$ end');
+  const second = el(c, 'two $b$ end');
+  c.renderChatMath(first);
+  c.renderChatMath(second);
+  assert.equal(requests.length, 1, 'the second body joined the download in flight');
+
+  const w = stubWalk(c);
+  land();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(w.walks, 2, 'both waiting bodies walked');
+});
+
+test('a failed renderer download lets the next math body retry it', async () => {
+  const c = loadRenderer();
+  const errors = [];
+  c.console = {error: (...args) => errors.push(args.join(' '))};
+  let attempts = 0;
+  let fail;
+  c.registerChatMathLoader(() => Promise.resolve(), () => {
+    attempts += 1;
+    if (attempts > 1) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      fail = reject;
+    });
+  });
+  c.renderChatMath(el(c, 'math $a$ end'));
+  fail(new Error('the page script did not load: katex'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(errors.length, 1, 'the failure is logged, not swallowed');
+  c.renderChatMath(el(c, 'math $b$ end'));
+  assert.equal(attempts, 2, 'the next math body retried the download');
+  stubWalk(c);
+  await new Promise((resolve) => setImmediate(resolve));
+});
+
 test('the LRU cap evicts the least recently walked body', () => {
   const c = loadRenderer();
   const w = stubWalk(c);

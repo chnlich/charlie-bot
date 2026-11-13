@@ -32,6 +32,7 @@ use std::time::Duration;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::source_chain;
 use charliebot_cli_common::json_out;
+use charliebot_core::config;
 use charliebot_core::credentials;
 use charliebot_core::home;
 use charliebot_core::paths;
@@ -53,7 +54,7 @@ const THREAD_ROLE: &str = "thread";
 /// Keys of the rules-file form that this router no longer reads. A file that still has one is refused.
 const OLD_FORM_FIELDS: &[&str] = &["routine", "design", "strong"];
 const TOP_LEVEL_FIELDS: &[&str] = &["jev", "instructions", "classes", "roles"];
-const JEV_FIELDS: &[&str] = &["url", "model", "credential"];
+const JEV_FIELDS: &[&str] = &["url", "model", config::CREDENTIAL_KEY];
 const CLASS_FIELDS: &[&str] = &["when", "run_on"];
 
 /// The `run_on` keyword that sends a class to the delegating session's backend. Any other `run_on` value is one
@@ -261,7 +262,7 @@ fn load_rules(path: &Path, backend_ids: &[String]) -> Result<RouterRules, String
   reject_unknown_fields(jev, JEV_FIELDS, &path_text, "jev.")?;
   let url = required_text(jev, "url", &path_text, "jev.")?;
   let model = required_text(jev, "model", &path_text, "jev.")?;
-  let credential = required_text(jev, "credential", &path_text, "jev.")?;
+  let credential = required_text(jev, config::CREDENTIAL_KEY, &path_text, "jev.")?;
   let instructions = required_text(document, "instructions", &path_text, "")?;
   let classes = classes_of(document, backend_ids, &path_text)?;
   let roles = roles_of(document, &classes, &path_text)?;

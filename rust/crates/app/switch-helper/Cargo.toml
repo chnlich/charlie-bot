@@ -14,6 +14,7 @@ charliebot-cli-common.workspace = true
 charliebot-core.workspace = true
 charliebot-improve.workspace = true
 charliebot-store.workspace = true
+charliebot-tasks.workspace = true
 chrono.workspace = true
 regex.workspace = true
 serde_json.workspace = true

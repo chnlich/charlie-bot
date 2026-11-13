@@ -1442,6 +1442,7 @@ dependencies = [
  "charliebot-improve",
  "charliebot-packages",
  "charliebot-store",
+ "charliebot-tasks",
  "chrono",
  "regex",
  "serde_json",

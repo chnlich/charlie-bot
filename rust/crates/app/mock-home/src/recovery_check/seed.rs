@@ -16,7 +16,7 @@ use charliebot_store::metadata::{
 use charliebot_store::run_records::{
   OBSERVATION_BASE_BRANCH, OBSERVATION_BRANCH_NAME, OBSERVATION_EVENTS_REF, OBSERVATION_MODEL,
   OBSERVATION_NATIVE_SESSION_ID, OBSERVATION_PROMPT_SNAPSHOT_REF, OBSERVATION_RAW_LOG_REF, OBSERVATION_REPO_PATH,
-  OBSERVATION_RESULT_REF, OBSERVATION_WORKTREE_PATH, RAW_LOG_NAME, RUN_METADATA_NAME,
+  OBSERVATION_RESULT_REF, OBSERVATION_WORKTREE_PATH, RAW_LOG_NAME, RUN_METADATA_NAME, RunKind,
 };
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -213,7 +213,7 @@ fn run_record(run: RunRecord) -> Value {
 struct RunRecord<'a> {
   session_id: &'a str,
   run_id: &'a str,
-  kind: &'a str,
+  kind: RunKind,
   inputs: Vec<String>,
   pid: usize,
   started_at: String,
@@ -279,7 +279,7 @@ pub fn seed(sessions: &Path, live_runs: &Path) -> Result<()> {
         let record = run_record(RunRecord {
           session_id: &session_id,
           run_id: &first_run,
-          kind: "manager_turn",
+          kind: RunKind::ManagerTurn,
           inputs: vec![message_id],
           pid: DEAD_PID,
           started_at: stamp(index, 2),
@@ -287,9 +287,9 @@ pub fn seed(sessions: &Path, live_runs: &Path) -> Result<()> {
         });
         write_json(&runs_dir.join(&first_run).join(RUN_METADATA_NAME), &record)?;
         write_lines(&runs_dir.join(&first_run).join(RAW_LOG_NAME), &raw_log(&format!("{label}/turn-1"), true))?;
-        (uid(&format!("{label}/turn-2")), "manager_turn")
+        (uid(&format!("{label}/turn-2")), RunKind::ManagerTurn)
       }
-      Profile::Worker => (uid(&format!("{label}/work")), "work"),
+      Profile::Worker => (uid(&format!("{label}/work")), RunKind::Work),
     };
     if case.state == RunState::Landed {
       events.push(control(

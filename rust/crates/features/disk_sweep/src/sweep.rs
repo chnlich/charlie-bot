@@ -87,11 +87,7 @@ pub struct SweepRow {
   pub freed_bytes: u64,
   pub action: SweepAction,
   pub reason: String,
-  repo_path: Option<String>,
-  branch_name: Option<String>,
   owner_run: Option<RunRecord>,
-  owner_session_id: Option<String>,
-  archive_path: Option<PathBuf>,
 }
 
 impl SweepRow {
@@ -107,6 +103,17 @@ impl SweepRow {
     .map(|field| field.replace(['\t', '\r', '\n'], " "))
     .collect::<Vec<_>>()
     .join("\t")
+  }
+
+  /// The run that owns this row's worktree, or the reason a worktree row without one cannot be removed.
+  fn owner(&self) -> Result<&RunRecord> {
+    self.owner_run.as_ref().context("worktree has no owner run")
+  }
+
+  /// The file that receives this worktree's uncommitted changes, inside its owning run's directory.
+  fn archive_path(&self, sessions_root: &Path) -> Result<PathBuf> {
+    let run = self.owner()?;
+    Ok(layout::runs_dir(&sessions_root.join(&run.session_id)).join(&run.id).join("worktree-changes.tar"))
   }
 }
 
@@ -310,11 +317,7 @@ fn worktree_rows(sessions_root: &Path, worktree_root: &Path, now: DateTime<Utc>)
       freed_bytes: 0,
       action: SweepAction::Skip,
       reason: String::new(),
-      repo_path: None,
-      branch_name: None,
       owner_run: None,
-      owner_session_id: None,
-      archive_path: None,
     };
     if fs::symlink_metadata(&path)?.file_type().is_symlink() {
       row.reason = "worktree-symlink".to_string();
@@ -362,16 +365,11 @@ fn worktree_rows(sessions_root: &Path, worktree_root: &Path, now: DateTime<Utc>)
     if age_days < wait_days as f64 {
       continue;
     }
-    let Some((owner_session_id, run)) = choose_owner_run(&owners) else {
+    let Some(run) = choose_owner_run(&owners) else {
       row.reason = "unknown-owner".to_string();
       rows.push(row);
       continue;
     };
-    row.owner_session_id = Some(owner_session_id.clone());
-    row.repo_path = run.repo_path.clone();
-    row.branch_name = run.branch_name.clone();
-    row.archive_path =
-      Some(layout::runs_dir(&sessions_root.join(owner_session_id)).join(&run.id).join("worktree-changes.tar"));
     row.owner_run = Some(run);
     row.action = SweepAction::Delete;
     row.reason = "closed-task".to_string();
@@ -446,20 +444,16 @@ fn latest_closed_at(session_dir: &Path) -> Result<Option<DateTime<Utc>>> {
   Ok(Some(closed_at))
 }
 
-fn choose_owner_run(owners: &BTreeMap<String, Vec<RunRecord>>) -> Option<(String, RunRecord)> {
+fn choose_owner_run(owners: &BTreeMap<String, Vec<RunRecord>>) -> Option<RunRecord> {
   owners
-    .iter()
-    .flat_map(|(session_id, records)| {
-      records.iter().filter_map(|record| {
-        record
-          .repo_path
-          .as_deref()
-          .filter(|path| !path.is_empty())
-          .zip(record.branch_name.as_deref().filter(|branch| !branch.is_empty()))
-          .map(|_| (session_id.clone(), record.clone()))
-      })
+    .values()
+    .flatten()
+    .filter(|record| {
+      record.repo_path.as_deref().is_some_and(|path| !path.is_empty())
+        && record.branch_name.as_deref().is_some_and(|branch| !branch.is_empty())
     })
-    .min_by(|(_, left), (_, right)| left.started_at.cmp(&right.started_at).then_with(|| left.id.cmp(&right.id)))
+    .min_by(|left, right| left.started_at.cmp(&right.started_at).then_with(|| left.id.cmp(&right.id)))
+    .cloned()
 }
 
 fn scratch_rows(scratch_root: &Path, now: DateTime<Utc>) -> Result<Vec<SweepRow>> {
@@ -479,11 +473,7 @@ fn scratch_rows(scratch_root: &Path, now: DateTime<Utc>) -> Result<Vec<SweepRow>
       freed_bytes: 0,
       action: SweepAction::Skip,
       reason: String::new(),
-      repo_path: None,
-      branch_name: None,
       owner_run: None,
-      owner_session_id: None,
-      archive_path: None,
     };
     if fs::symlink_metadata(&path)?.file_type().is_symlink() {
       row.reason = "scratch-symlink".to_string();
@@ -654,8 +644,8 @@ fn prepare_apply(mut row: SweepRow, roots: SweepRoots, now: DateTime<Utc>) -> (R
         return Ok(PreparedApply::Skip(row));
       }
       if row.action == SweepAction::ArchiveDelete {
-        let archive_path = row.archive_path.as_deref().context("worktree has no owning run archive path")?;
-        archive::archive_worktree(&row.path, archive_path, &inspection.untracked)?;
+        let archive_path = row.archive_path(&roots.sessions_root)?;
+        archive::archive_worktree(&row.path, &archive_path, &inspection.untracked)?;
         let (used, unreadable_now) = process::in_use_paths(std::slice::from_ref(&row.path), &roots.proc_root)?;
         unreadable.extend(unreadable_now);
         if used.contains(&row.path) {
@@ -707,12 +697,12 @@ enum PreparedApply {
 }
 
 async fn remove_worktree(row: &SweepRow, roots: &SweepRoots) -> Result<()> {
-  let run = row.owner_run.as_ref().context("worktree has no owner run")?;
-  let repo_path = row.repo_path.as_deref().context("worktree owner run has no repository path")?;
-  let branch_name = row.branch_name.as_deref().context("worktree owner run has no branch name")?;
+  let run = row.owner()?;
+  let repo_path = run.repo_path.as_deref().context("worktree owner run has no repository path")?;
+  let branch_name = run.branch_name.as_deref().context("worktree owner run has no branch name")?;
   let worktree_path = paths::display(&row.path);
   let run_id = run.id.clone();
-  let owner_session_id = row.owner_session_id.clone().context("worktree has no owner session")?;
+  let owner_session_id = run.session_id.clone();
   let worktree_root = roots.worktree_root.clone();
   let repo_path = repo_path.to_string();
   let branch_name = branch_name.to_string();

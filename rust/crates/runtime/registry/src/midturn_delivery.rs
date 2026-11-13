@@ -320,7 +320,7 @@ pub async fn on_backend_event(run_id: Option<String>, event: &Value) -> anyhow::
   Ok(())
 }
 
-/// Release process state after the Run's terminal fact is recorded.
+/// The release of process state after the Run's terminal fact is recorded.
 pub fn release_run(run_id: &str) {
   let Some(state) = runs().lock().expect("mid-turn delivery registry is not poisoned").remove(run_id) else {
     return;

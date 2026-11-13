@@ -20,7 +20,7 @@ use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_core::config;
-use charliebot_core::event_types::{READ_TOOL, SKILL_TOOL, TOOL_INPUT_FILE_PATH};
+use charliebot_core::event_types::{ASSISTANT, READ_TOOL, SKILL_TOOL, TOOL_INPUT_FILE_PATH, TOOL_USE};
 use charliebot_core::home;
 use charliebot_core::paths;
 use charliebot_core::regex_classes::compile_regex;
@@ -146,7 +146,7 @@ fn latest_skill_reads(events_path: &Path) -> Result<Vec<SkillRead>, String> {
     let Some(content) = message.get("content").and_then(Value::as_array) else { continue };
     for block in content {
       let Some(block) = block.as_object() else { continue };
-      if block.get("type").and_then(Value::as_str) != Some("tool_use") {
+      if block.get("type").and_then(Value::as_str) != Some(TOOL_USE) {
         continue;
       }
       for (name, named_path, command_cwd) in reads_from_tool(block) {
@@ -168,7 +168,7 @@ fn latest_skill_reads(events_path: &Path) -> Result<Vec<SkillRead>, String> {
 
 /// The event's `message` when the event is an assistant message with a mapping payload.
 fn assistant_message(event: &Value) -> Option<&Value> {
-  if event.get("type").and_then(Value::as_str) != Some("assistant") {
+  if event.get("type").and_then(Value::as_str) != Some(ASSISTANT) {
     return None;
   }
   let message = event.get("message")?;

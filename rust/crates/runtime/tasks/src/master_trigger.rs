@@ -106,13 +106,13 @@ async fn wake_task_node(
 fn input_fields(input_id: Option<&str>, from_session: Option<&str>, from_session_name: Option<&str>) -> Value {
   let mut fields = Map::new();
   if let Some(input_id) = input_id {
-    fields.insert("input_id".to_string(), Value::String(input_id.to_string()));
+    fields.insert(event_types::INPUT_ID.to_string(), Value::String(input_id.to_string()));
   }
   if let Some(from_session) = from_session {
-    fields.insert("from_session".to_string(), Value::String(from_session.to_string()));
+    fields.insert(event_types::FROM_SESSION.to_string(), Value::String(from_session.to_string()));
   }
   if let Some(from_session_name) = from_session_name {
-    fields.insert("from_session_name".to_string(), Value::String(from_session_name.to_string()));
+    fields.insert(event_types::FROM_SESSION_NAME.to_string(), Value::String(from_session_name.to_string()));
   }
   Value::Object(fields)
 }

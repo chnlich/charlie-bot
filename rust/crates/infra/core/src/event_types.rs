@@ -62,6 +62,12 @@ pub const SCHEDULED_TRIGGER: &str = "scheduled_trigger";
 pub const SCHEDULED_RUN_SKIPPED: &str = "scheduled_run_skipped";
 pub const SESSION_ATTACHED: &str = "session_attached";
 pub const AGENT_MESSAGE: &str = "agent_message";
+/// The id of one pending input: a task's queued message that a wake admits.
+pub const INPUT_ID: &str = "input_id";
+/// The session an `agent_message` came from.
+pub const FROM_SESSION: &str = "from_session";
+/// The display name of the session an `agent_message` came from.
+pub const FROM_SESSION_NAME: &str = "from_session_name";
 /// The key of an `agent_message` block that marks the message as a nudge and names the event it nudges.
 pub const NUDGE_OF: &str = "nudge_of";
 pub const WEB_REPLY: &str = "web_reply";

@@ -742,8 +742,8 @@ fn render_builtin<E: EventFields>(event_type: &str, event: &E) -> StoreResult<Op
       let mut obj = json!({
         "role": event_types::AGENT_MESSAGE,
         "content": event.field("content").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
-        "from_session": event.field("from_session").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
-        "from_session_name": event.field("from_session_name").map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
+        (event_types::FROM_SESSION): event.field(event_types::FROM_SESSION).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
+        (event_types::FROM_SESSION_NAME): event.field(event_types::FROM_SESSION_NAME).map(EventFields::to_owned_value).unwrap_or_else(|| json!("")),
       });
       for key in event_types::THREAD_PLATFORM_KEYS {
         if let Some(block) = event.field(key) {

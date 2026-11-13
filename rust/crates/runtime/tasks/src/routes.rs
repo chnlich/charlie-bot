@@ -658,8 +658,8 @@ async fn send_message(
   let fields = json!({
     "request_id": request.request_id.clone(),
     (event_types::UPLOADED_FILES): files,
-    "from_session": from_session,
-    "from_session_name": from_session_name,
+    (event_types::FROM_SESSION): from_session,
+    (event_types::FROM_SESSION_NAME): from_session_name,
     (event_types::INPUT_MODE): input_mode,
   });
   let dispatch = match dispatch::dispatcher(&features) {
@@ -809,8 +809,8 @@ async fn session_message(State(features): State<Arc<FeatureContext>>, request: a
   });
   let fields = json!({
     "request_id": request_id,
-    "from_session": caller.id,
-    "from_session_name": caller.name,
+    (event_types::FROM_SESSION): caller.id,
+    (event_types::FROM_SESSION_NAME): caller.name,
   });
   if let Err(error) = dispatch
     .admit_input(

@@ -23,6 +23,7 @@ use charliebot_compat::request_body::{
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_compat::validation::Bound;
+use charliebot_core::event_types;
 use charliebot_registry::FeatureContext;
 use http::StatusCode;
 use serde_json::{Map, Value, json};
@@ -117,7 +118,7 @@ const ENVELOPE_BODY: BodyModel = BodyModel::required(ENVELOPE_FIELDS);
 const SWITCH_FIELDS: &[Field] = &[
   Field::required("kind", FieldType::Literal(&[EventKind::Switch.as_str()])),
   Field::required("phase", FieldType::Literal(PHASES)),
-  Field::required("from_session", FieldType::NullableString),
+  Field::required(event_types::FROM_SESSION, FieldType::NullableString),
   Field::required("to_session", FieldType::String),
   Field::required("generation", FieldType::Integer),
   Field::required("winner_generation", FieldType::NullableInteger),
@@ -326,7 +327,7 @@ fn log_switch(values: &Map<String, Value>, forwarded_for: &str) {
   tracing::info!(
     kind = EventKind::Switch.as_str(),
     phase = %text_field(values, "phase"),
-    from_session = %LogValue::of(optional_text_field_ref(values, "from_session")),
+    from_session = %LogValue::of(optional_text_field_ref(values, event_types::FROM_SESSION)),
     to_session = %text_field(values, "to_session"),
     generation = %integer_field(values, "generation").expect("a required integer validates to a value"),
     winner_generation = %LogValue::of_int(integer_field(values, "winner_generation")),

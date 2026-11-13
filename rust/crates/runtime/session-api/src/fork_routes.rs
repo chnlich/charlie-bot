@@ -230,7 +230,7 @@ async fn start_successor_run(
   let (from_session, from_session_name) =
     if event_type == event_types::USER { (None, None) } else { dispatch::agent_provenance(caller) };
   let actor = if event_type == event_types::USER { ACTOR_USER } else { ACTOR_AGENT };
-  let fields = json!({"from_session": from_session, "from_session_name": from_session_name});
+  let fields = json!({(event_types::FROM_SESSION): from_session, (event_types::FROM_SESSION_NAME): from_session_name});
   dispatch.admit_input(&meta.id, event_type, &prompt, actor, fields).await?;
   dispatch.dispatch_pending(&meta.id).await?;
   Ok(())

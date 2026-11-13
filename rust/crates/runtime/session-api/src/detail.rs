@@ -934,7 +934,7 @@ fn pending_input_value(event: &Value) -> StoreResult<Value> {
     "timestamp": timestamp,
     "actor": event.get("actor").cloned().unwrap_or(Value::Null),
     "source_session_id": event.get("source_session_id").cloned().unwrap_or(Value::Null),
-    "from_session_name": event.get("from_session_name").cloned().unwrap_or(Value::Null),
+    (event_types::FROM_SESSION_NAME): event.get(event_types::FROM_SESSION_NAME).cloned().unwrap_or(Value::Null),
     "text": text,
   }))
 }

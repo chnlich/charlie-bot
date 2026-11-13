@@ -2722,12 +2722,14 @@ fn imported_pending_input_ids(event: &ChatEvent) -> StoreResult<Vec<&str>> {
   pending
     .iter()
     .map(|entry| {
-      entry.get("input_id").and_then(CompactValue::as_str).filter(|value| !value.is_empty()).ok_or_else(|| {
-        StoreError::new(format!(
-          "task_imported event {:?} lists a pending input without a stable input_id",
-          event.get("id")
-        ))
-      })
+      entry.get(event_types::INPUT_ID).and_then(CompactValue::as_str).filter(|value| !value.is_empty()).ok_or_else(
+        || {
+          StoreError::new(format!(
+            "task_imported event {:?} lists a pending input without a stable input_id",
+            event.get("id")
+          ))
+        },
+      )
     })
     .collect()
 }

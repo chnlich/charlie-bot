@@ -25,12 +25,12 @@ use crate::event_text::{truthy_string, value_str};
 const INPUT_EVENT_TYPES: [&str; 4] =
   [event_types::USER, event_types::AGENT_MESSAGE, event_types::SCHEDULED_TRIGGER, event_types::CHILD_REPORT];
 const ADMIT_FIELDS: [&str; 8] = [
-  "input_id",
+  event_types::INPUT_ID,
   "request_id",
   event_types::UPLOADED_FILES,
   "timestamp",
-  "from_session",
-  "from_session_name",
+  event_types::FROM_SESSION,
+  event_types::FROM_SESSION_NAME,
   event_types::INPUT_MODE,
   "fields",
 ];
@@ -156,10 +156,10 @@ impl Dispatcher {
         payload.push((event_types::UPLOADED_FILES.to_string(), Value::Array(uploaded_files.clone())));
       }
       if let Some(from_session) = fields.from_session.as_deref() {
-        payload.push(("from_session".to_string(), Value::String(from_session.to_string())));
+        payload.push((event_types::FROM_SESSION.to_string(), Value::String(from_session.to_string())));
       }
       if let Some(from_session_name) = fields.from_session_name.as_deref() {
-        payload.push(("from_session_name".to_string(), Value::String(from_session_name.to_string())));
+        payload.push((event_types::FROM_SESSION_NAME.to_string(), Value::String(from_session_name.to_string())));
       }
       if let Some(input_mode) = fields.input_mode.as_deref() {
         payload.push((event_types::INPUT_MODE.to_string(), Value::String(input_mode.to_string())));
@@ -1025,12 +1025,12 @@ fn admit_fields(fields: &Value) -> StoreResult<AdmitFields> {
     Some(_) => return Err(StoreError::invalid("task input field fields must be an object or null")),
   };
   Ok(AdmitFields {
-    input_id: optional_string("input_id")?,
+    input_id: optional_string(event_types::INPUT_ID)?,
     request_id: optional_string("request_id")?,
     uploaded_files,
     timestamp: optional_string("timestamp")?,
-    from_session: optional_string("from_session")?,
-    from_session_name: optional_string("from_session_name")?,
+    from_session: optional_string(event_types::FROM_SESSION)?,
+    from_session_name: optional_string(event_types::FROM_SESSION_NAME)?,
     input_mode: optional_string(event_types::INPUT_MODE)?,
     extra_fields,
   })

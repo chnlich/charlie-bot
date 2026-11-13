@@ -32,8 +32,8 @@ pub fn build_agent_message_event(text: &str, provenance: MessageProvenance) -> C
   json!({
     "type": "agent_message",
     "content": text,
-    "from_session": provenance.from_session,
-    "from_session_name": provenance.from_session_name,
+    (event_types::FROM_SESSION): provenance.from_session,
+    (event_types::FROM_SESSION_NAME): provenance.from_session_name,
     "timestamp": charliebot_core::timefmt::utc_now_iso(),
   })
   .into()

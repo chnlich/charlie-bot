@@ -1193,8 +1193,8 @@ pub async fn audit_round(
         "agent",
         json!({
           "request_id": format!("{}-nudge:{summon_id}", platform.name),
-          "from_session": session_id,
-          "from_session_name": platform.display_name,
+          (event_types::FROM_SESSION): session_id,
+          (event_types::FROM_SESSION_NAME): platform.display_name,
           "fields": {(platform.name): Value::Object(block)},
         }),
       )
@@ -1694,8 +1694,8 @@ pub async fn accept_summon(
       "agent",
       json!({
         "request_id": request_id,
-        "from_session": session_id,
-        "from_session_name": platform.display_name,
+        (event_types::FROM_SESSION): session_id,
+        (event_types::FROM_SESSION_NAME): platform.display_name,
         "fields": {(platform.name): summon.block},
       }),
     )

@@ -353,102 +353,68 @@ test('descendant items group by session with the id cut to eight characters and 
   assert.equal(link[0].href, '/?session=' + CHILD_ID, 'the item links to its child session page');
 });
 
-test('the panel counts its user-act items, own and descendant, in one line that opens the same scope', async () => {
+test('every Waiting on you item of the session shows in its panel, the user-act ones included', async () => {
+  const rig = panelRig();
+  await openSession(rig, {web_status: {
+    ...STATUS,
+    waiting: [
+      {text: 'Decide the size', link: null},
+      {text: 'Log into the admin console', link: null},
+    ],
+  }});
+  selectStatus(rig);
+  const items = viewWaitingItems(rig.panel).map((el) => el.textContent);
+  assert.equal(items.length, 2);
+  assert.ok(items[1].includes('Log into the admin console'), items[1]);
+  assert.deepEqual(viewKinds(rig.panel), ['goal', 'now', 'waiting']);
+  assert.equal(rig.badge.textContent, '2');
+});
+
+test('descendant items show in their session group, the user-act ones included', async () => {
   const rig = panelRig();
   rig.page.descendants = [{
     session_id: CHILD_ID,
     name: 'Child one',
     updated_at: '2026-10-16T20:30:00Z',
     waiting: [
-      {text: 'Log into the release console', link: null, tier: 'user-act'},
-      {text: 'Decide the size', link: null, tier: 't0', rule: 'money'},
+      {text: 'Log into the release console', link: null},
+      {text: 'Decide the size', link: null},
     ],
-  }, {
-    session_id: OTHER_CHILD_ID,
-    name: 'Child two',
-    updated_at: '2026-10-16T20:30:00Z',
-    waiting: [{text: 'Child two item', link: null, since: '2026-10-20T18:00:00Z', tier: 'user-act'}],
   }];
-  await openSession(rig, {web_status: {
-    ...STATUS,
-    waiting: [
-      {text: 'Approve the deploy', link: null},
-      {text: 'Log into the admin console', link: null, tier: 'user-act'},
-    ],
-  }});
+  await openSession(rig, {web_status: STATUS});
   selectStatus(rig);
-  // The one line covers own and descendant items. Its link opens today's approval page for this session, and the
-  // page's section lists the same three items the count names.
-  const actions = viewRow(rig.panel, 'actions-only-you-can-do');
-  assert.ok(actions, 'the actions-only-you-can-do line shows when user-act items exist');
-  const text = allElements(actions).find((el) => el.textContent === '3 actions only you can do today');
-  assert.ok(text, 'the line counts both sessions\' items, an item judged earlier included');
-  const link = allElements(actions).filter((el) => el.tagName === 'A');
-  assert.deepEqual(link.map((el) => el.href),
-    ['/approval?date=' + new Intl.DateTimeFormat('en-CA', {timeZone: 'America/Los_Angeles'}).format(new Date()) +
-      '&session=session-a']);
-  // The user-act items stay out of the item rows; the child group whose items
-  // all moved shows no header.
-  assert.deepEqual(viewWaitingItems(rig.panel).map((el) => el.textContent.includes('Approve the deploy')), [true]);
-  assert.deepEqual(viewChildItems(rig.panel).map((el) => el.textContent.includes('Decide the size')), [true]);
-  assert.deepEqual(viewRow(rig.panel, 'children').querySelectorAll('[data-child-group]').map((el) => el.textContent),
-    ['Child one · ' + CHILD_ID.slice(0, 8)]);
-  // The badge counts what the panel shows, so the user-act item stays out of it.
-  assert.equal(rig.badge.textContent, '1');
+  const items = viewChildItems(rig.panel).map((el) => el.textContent);
+  assert.equal(items.length, 2);
+  assert.ok(items[0].includes('Log into the release console'), items[0]);
+  assert.ok(items[1].includes('Decide the size'), items[1]);
 });
 
-test('a closed own task leaves its stored user-act items out of the count and keeps the descendants\'', async () => {
+test('a derived item shows under its holder: the session\'s own in Waiting on you, a child\'s in its group', async () => {
   const rig = panelRig();
-  rig.page.own_task_state = 'archived';
-  rig.page.descendants = [{
-    session_id: CHILD_ID,
-    name: 'Child one',
-    updated_at: '2026-10-16T20:30:00Z',
-    waiting: [{text: 'Log into the release console', link: null, tier: 'user-act'}],
-  }];
-  await openSession(rig, {web_status: {
-    ...STATUS,
-    waiting: [{text: 'Log into the admin console', link: null, tier: 'user-act'}],
-  }});
-  selectStatus(rig);
-  // The approval page lists a closed session's stored items nowhere, so the
-  // count covers the descendants' item alone and still opens the scope.
-  const actions = viewRow(rig.panel, 'actions-only-you-can-do');
-  assert.ok(actions, 'the descendants\' item keeps the line showing');
-  assert.ok(allElements(actions).find((el) => el.textContent === '1 action only you can do today'));
-  const link = allElements(actions).filter((el) => el.tagName === 'A');
-  assert.deepEqual(link.map((el) => el.href),
-    ['/approval?date=' + new Intl.DateTimeFormat('en-CA', {timeZone: 'America/Los_Angeles'}).format(new Date()) +
-      '&session=session-a']);
-});
-
-test('a derived user-act item the server holds counts in the actions-only-you-can-do line and stays out of the item rows', async () => {
-  const rig = panelRig();
+  rig.page.descendants = [{session_id: OTHER_CHILD_ID, name: 'Child two', updated_at: '2026-10-16T20:30:00Z', waiting: []}];
   rig.page.derived_waiting = [{
-    session_id: OTHER_CHILD_ID,
+    session_id: 'session-a',
     text: 'Approve the ssh login to synthetic-login-host on /host-auth',
     context: 'Synthetic login check',
     link: '/host-auth',
-    tier: 'user-act',
-    rule: null,
+    since: '2026-11-01T21:43:00-07:00',
+  }, {
+    session_id: OTHER_CHILD_ID,
+    text: 'Approve the ssh login to synthetic-other-host on /host-auth',
+    context: 'Synthetic login check',
+    link: '/host-auth',
     since: '2026-11-01T21:43:00-07:00',
   }];
   await openSession(rig, {web_status: STATUS});
   selectStatus(rig);
-  const actions = viewRow(rig.panel, 'actions-only-you-can-do');
-  assert.ok(actions, 'the derived user-act item shows in the actions-only-you-can-do line');
-  assert.ok(allElements(actions).find((el) => el.textContent === '1 action only you can do today'));
-  assert.equal(viewWaitingItems(rig.panel).some((el) => el.textContent.includes('Approve the ssh login')), false);
-  // The badge counts only the session's stored waiting items.
+  const own = viewWaitingItems(rig.panel).map((el) => el.textContent);
+  assert.equal(own.length, 3, 'the two stored items and the derived one');
+  assert.ok(own[2].includes('synthetic-login-host'), own[2]);
+  const child = viewChildItems(rig.panel).map((el) => el.textContent);
+  assert.equal(child.length, 1);
+  assert.ok(child[0].includes('synthetic-other-host'), child[0]);
+  // The badge counts the stored items only, as before.
   assert.equal(rig.badge.textContent, '2');
-});
-
-test('without user-act items the Status view shows no actions-only-you-can-do line', async () => {
-  const rig = panelRig();
-  await openSession(rig, {web_status: STATUS});
-  selectStatus(rig);
-  assert.equal(viewRow(rig.panel, 'actions-only-you-can-do'), undefined);
-  assert.deepEqual(viewKinds(rig.panel), ['goal', 'now', 'waiting']);
 });
 
 test('the child Now rows list each open child with its Now, update time and Open link', async () => {

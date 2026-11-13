@@ -27,11 +27,6 @@
   // panelSessionId means the page shows none of the surfaces.
   let panelSessionId = null;
   let panelStatus = null;
-  // The panel session's task is open. The approval page lists a closed
-  // session's stored items nowhere, so the actions line counts them no more.
-  // True until the status read says otherwise, so an open session, the usual
-  // case, draws no wrong first frame.
-  let panelOwnOpen = true;
   let panelDescendants = [];
   let panelChildren = [];
   let panelDerived = [];
@@ -216,59 +211,15 @@
     return el;
   }
 
-  // ---- Actions only you can do ---------------------------------------------
-
-  // A user-act item: an action that only the user's own hands can do. The
-  // cold read writes the tier; items stored before the tier existed carry
-  // none and stay where they are.
-  function isUserAct(item) {
-    return item.tier === 'user-act';
-  }
-
-  // The panel's user-act items: this session's own while its task is open, every open descendant's, and the derived
-  // ones the server holds for this session's tree. The server's descendant rows hold only open descendants, and the
-  // approval page lists a closed session's own stored items nowhere, so a closed session's own items stay out.
-  function userActItems() {
-    const own = panelOwnOpen && panelStatus ? panelStatus.waiting.filter(isUserAct) : [];
-    const descendant = panelDescendants.flatMap((child) => child.waiting.filter(isUserAct));
-    return own.concat(descendant, panelDerived.filter(isUserAct));
-  }
-
-  // The Pacific-day date the approval page reads by, as its day navigation names it.
-  function pacificToday() {
-    return new Intl.DateTimeFormat('en-CA', {timeZone: 'America/Los_Angeles'}).format(new Date());
-  }
-
-  // The one actions-only-you-can-do line counts the panel's user-act items,
-  // own and descendant. Its link opens today's approval page scoped to this
-  // session, which lists the same items. No items, no row. The panel body
-  // renders only while panelSessionId is set, so the link always names it.
-  function actionsOnlyYouCanDoRow() {
-    const items = userActItems();
-    if (!items.length) return null;
-    const row = statusRow('actions-only-you-can-do');
-    row.appendChild(labelSpan('Actions only you can do'));
-    const value = document.createElement('div');
-    value.className = 'min-w-0 break-words text-amber-200';
-    const line = document.createElement('div');
-    line.className = 'flex gap-2';
-    line.appendChild(textSpan('min-w-0',
-      items.length + ' action' + (items.length === 1 ? '' : 's') + ' only you can do today'));
-    const a = document.createElement('a');
-    a.className = 'shrink-0 whitespace-nowrap text-blue-400 hover:text-blue-300';
-    a.href = '/approval?date=' + pacificToday() + '&session=' + encodeURIComponent(panelSessionId);
-    a.textContent = 'Open actions only you can do ›';
-    line.appendChild(a);
-    value.appendChild(line);
-    row.appendChild(value);
-    return row;
+  // The derived Waiting on you items the server holds for one session of the tree, such as a host login it awaits.
+  function derivedFor(sessionId) {
+    return panelDerived.filter((item) => item.session_id === sessionId);
   }
 
   // ---- Status panel --------------------------------------------------------
 
   // The descendants' items, grouped by session: one header per session, its
-  // items under it with their contexts folded. A session whose items all
-  // moved to actions only you can do shows no group.
+  // items under it with their contexts folded. A session with no items shows no group.
   function childrenRow() {
     const row = statusRow('children');
     row.appendChild(labelSpan('In child sessions'));
@@ -280,13 +231,9 @@
       const header = textSpan('text-slate-400', child.name + ' · ' + child.session_id.slice(0, 8));
       header.dataset.childGroup = child.session_id;
       group.appendChild(header);
-      let shown = 0;
-      for (const item of child.waiting) {
-        if (isUserAct(item)) continue;
-        group.appendChild(childItem(item, child.session_id));
-        shown++;
-      }
-      if (shown) column.appendChild(group);
+      const items = child.waiting.concat(derivedFor(child.session_id));
+      for (const item of items) group.appendChild(childItem(item, child.session_id));
+      if (items.length) column.appendChild(group);
     }
     row.appendChild(column);
     return row;
@@ -315,32 +262,34 @@
     return row;
   }
 
+  // The Waiting on you row: the session's items, each with its context open.
+  function waitingRow(items) {
+    const waiting = statusRow('waiting');
+    waiting.appendChild(labelSpan('Waiting on you'));
+    const column = document.createElement('div');
+    column.className = 'min-w-0 flex-1 space-y-1';
+    if (!items.length) {
+      const nothing = textSpan('text-slate-400', 'Nothing');
+      nothing.dataset.waitingEmpty = 'true';
+      column.appendChild(nothing);
+    }
+    for (const item of items) column.appendChild(waitingItem(item, true));
+    waiting.appendChild(column);
+    return waiting;
+  }
+
   function statusPanelBody(el) {
     if (!panelStatus) {
       const none = statusRow('none');
       none.appendChild(textSpan('text-slate-400', 'No status yet'));
       el.appendChild(none);
+      const held = derivedFor(panelSessionId);
+      if (held.length) el.appendChild(waitingRow(held));
     } else {
       el.appendChild(goalRow(panelStatus.goal));
       el.appendChild(nowRow(panelStatus));
-      const waiting = statusRow('waiting');
-      waiting.appendChild(labelSpan('Waiting on you'));
-      const column = document.createElement('div');
-      column.className = 'min-w-0 flex-1 space-y-1';
-      if (!panelStatus.waiting.length) {
-        const nothing = textSpan('text-slate-400', 'Nothing');
-        nothing.dataset.waitingEmpty = 'true';
-        column.appendChild(nothing);
-      }
-      for (const item of panelStatus.waiting) {
-        if (isUserAct(item)) continue;
-        column.appendChild(waitingItem(item, true));
-      }
-      waiting.appendChild(column);
-      el.appendChild(waiting);
+      el.appendChild(waitingRow(panelStatus.waiting.concat(derivedFor(panelSessionId))));
     }
-    const actions = actionsOnlyYouCanDoRow();
-    if (actions) el.appendChild(actions);
     if (panelDescendants.length) el.appendChild(childrenRow());
     if (panelChildren.length) el.appendChild(childrenNowRow());
   }
@@ -357,14 +306,13 @@
     renderWaitingBadge();
   }
 
-  // The toggle option's waiting count holds this session's own Waiting on you
-  // items only, less the ones the actions-only-you-can-do line carries. A child session's
-  // waiting items show in the Status view's child rows. Hidden at 0 and when
+  // The toggle option's waiting count holds this session's own stored Waiting on you
+  // items. A child session's waiting items show in the Status view's child rows. Hidden at 0 and when
   // the page shows no web session.
   function renderWaitingBadge() {
     const badge = document.getElementById(BADGE_ID);
     if (!badge) return;
-    const count = panelSessionId && panelStatus ? panelStatus.waiting.filter((item) => !isUserAct(item)).length : 0;
+    const count = panelSessionId && panelStatus ? panelStatus.waiting.length : 0;
     badge.textContent = count ? String(count) : '';
     badge.classList.toggle('hidden', !count);
   }
@@ -398,7 +346,6 @@
     if (body.web_status && (!panelStatus || Date.parse(body.web_status.updated_at) >= Date.parse(panelStatus.updated_at))) {
       panelStatus = body.web_status;
     }
-    panelOwnOpen = body.own_task_state === 'open';
     panelDescendants = body.descendants;
     panelChildren = body.children;
     panelDerived = body.derived_waiting;
@@ -416,7 +363,6 @@
     }
     panelSessionId = session.id;
     panelStatus = session.web_status || null;
-    panelOwnOpen = true;
     panelDescendants = [];
     panelChildren = [];
     panelDerived = [];
@@ -428,7 +374,6 @@
   function clearSessionStatusPanel() {
     panelSessionId = null;
     panelStatus = null;
-    panelOwnOpen = true;
     panelDescendants = [];
     panelChildren = [];
     panelDerived = [];

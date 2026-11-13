@@ -19,13 +19,13 @@ pub fn section() -> ConfigSection {
   ConfigSection { key: "discord", legacy_keys: &[], parse: parse_section, dump: dump_section }
 }
 
-/// Render the section as its model dumps it (`charliebot config get discord`).
+/// The section's value as its model dumps it, which `charliebot config get discord` prints.
 fn dump_section(value: &SectionValue) -> Result<serde_json::Value, String> {
   let settings = value.downcast_ref::<DiscordConfig>().ok_or("the discord section holds an unexpected value")?;
   serde_json::to_value(settings).map_err(|error| error.to_string())
 }
 
-/// Parse the section, naming the retired `allowed_user_ids` list as its successor does.
+/// The parsed section. A retired `allowed_user_ids` list fails with the message that names its successor.
 fn parse_section(raw: &serde_yaml::Value) -> Result<SectionValue, String> {
   if raw.as_mapping().is_some_and(|mapping| mapping.contains_key("allowed_user_ids")) {
     return Err(

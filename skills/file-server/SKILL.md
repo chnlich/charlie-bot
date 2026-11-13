@@ -114,10 +114,10 @@ Before you share a page or register a plan version, run the assertions:
 
 When an assertion fails, fix the page and run the assertions again.
 Plan registration runs the same assertions.
-The page-height line reports the measured height against the 2000 px target when available; when it cannot measure,
-the line reports why.
-Page height and measurement availability never block page sharing or plan registration.
-When a gloss puts the page over the target, keep the gloss.
+`charliebot artifact check` reports page height against the target in `prompts/master.md` under
+"Explaining to the user" → "Length". An overage names folding as the fix, and an unmeasured result reports why.
+Page height and measurement availability never block page sharing, plan registration, or `web status set`.
+Apply the canonical Length contract when a gloss contributes to an overage.
 
 The cold read is one model pass without context. It reads only the page and answers the eight questions in
 `prompts/cold_read.md`.
